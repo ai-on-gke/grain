@@ -950,7 +950,11 @@ func (rt *Router) handleOfflineOrWait(w http.ResponseWriter, r *http.Request, en
 	now := rt.now()
 	tc, _ := rt.tunnelCache.Get(entry.Name)
 	if allowWait && rt.opts.ReconnectGrace > 0 && tc.DisconnectedRecently(now, DefaultReconnectWindow) {
-		_, ok, err := rt.tunnelCache.WaitForReconnect(r.Context(), entry.Name, rt.opts.ReconnectGrace)
+		deadline := time.Now().Add(rt.opts.ReconnectGrace)
+		cur, ok, err := rt.tunnelCache.WaitForReconnect(r.Context(), entry.Name, rt.opts.ReconnectGrace)
+		if err == nil && ok && cur.ReplicaID == rt.replicaID {
+			ok = rt.waitForLocalTunnel(r.Context(), entry.Name, deadline)
+		}
 		if err == nil && ok {
 			rt.routeConnectedEntry(w, r, entry, isManager, false)
 			return
@@ -958,6 +962,36 @@ func (rt *Router) handleOfflineOrWait(w http.ResponseWriter, r *http.Request, en
 		tc, _ = rt.tunnelCache.Get(entry.Name)
 	}
 	WriteOfflineConnectedState(w, r, rt.enrichOfflineEntry(r.Context(), entry), tc, rt.now(), isManager)
+}
+
+// waitForLocalTunnel waits, until deadline, for this replica's own tunnel for
+// name to become routable. A reconnect that lands on this replica acquires its
+// session in PostgreSQL -- whose NOTIFY refreshes the tunnel cache and wakes
+// the reconnect_grace waiters -- before its WebSocket handshake completes and
+// registerActiveTunnel registers the local tunnel. A waiter woken in between
+// finds the session its own replica's but no local tunnel, and routing it then
+// would take the tunnel for gone and answer 503 inside the grace it was
+// promised. It reports whether to route the request now: the local tunnel
+// registered, or the session moved to another replica.
+func (rt *Router) waitForLocalTunnel(ctx context.Context, name string, deadline time.Time) bool {
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if rt.GetLocalTunnel(name) != nil {
+			return true
+		}
+		if cur, ok := rt.tunnelCache.Get(name); ok && cur.ReplicaID != rt.replicaID && cur.HasActiveSession(rt.now(), rt.opts.ReplicaTTL) {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-tick.C:
+		}
+	}
 }
 
 func (rt *Router) enrichOfflineEntry(ctx context.Context, entry *store.EntryRow) *store.EntryRow {
