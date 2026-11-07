@@ -33,9 +33,14 @@ const PAGES = 3;
 const DEEP_ID = "990001";
 const base = Date.parse("2026-11-01T00:00:00Z");
 
+// template is a real closed row from the demo, so the synthetic ones
+// carry every field the views read.
+let template = {};
+
 function closedTask(n) {
   const at = new Date(base - n * 60_000).toISOString();
   return {
+    ...template,
     id: String(900000 + n),
     title: `walk closed ${String(n).padStart(4, "0")}`,
     state: "closed",
@@ -45,14 +50,23 @@ function closedTask(n) {
   };
 }
 
-const deepTask = {
+const deepTask = () => ({
   ...closedTask(5000),
   id: DEEP_ID,
   title: "walk closed zephyrquill needle",
   externalRef: "CA-9012",
-};
+});
 
 async function routeClosed(page) {
+  const res = await page.request.get("/api/tasks?state=closed&limit=1&cursor=");
+  expect(res.ok()).toBe(true);
+  const real = (await res.json()).tasks?.[0];
+  expect(real, "the demo holds a closed task to copy").toBeTruthy();
+  template = { ...real };
+  delete template.externalRef;
+  delete template.prMergedAt;
+  delete template.consoleSession;
+  template.interactive = false;
   const asked = [];
   await page.route(/\/api\/tasks\?.*state=closed/, (route) => {
     const url = new URL(route.request().url());
@@ -63,7 +77,7 @@ async function routeClosed(page) {
     if (search) {
       const hit = "zephyrquill needle".includes(search) || search === "ca-9012";
       body = {
-        tasks: hit ? [deepTask] : [],
+        tasks: hit ? [deepTask()] : [],
         nextCursor: "",
         total: hit ? 1 : 0,
       };

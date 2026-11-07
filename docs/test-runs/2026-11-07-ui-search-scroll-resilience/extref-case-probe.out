@@ -1,0 +1,4 @@
+{"query":"f=externalRef:any:CA-100","rows":13,"sample":["3000","2952"],"closedPagesRead":3}
+{"query":"f=externalRef:any:ca-100","rows":0,"sample":[],"closedPagesRead":15}
+{"query":"f=state:any:closed&f=externalRef:any:CA-9012","rows":1,"sample":["12"],"closedPagesRead":15}
+{"query":"f=state:any:closed&f=owner:any:deepowner@example.com","rows":1,"sample":["12"],"closedPagesRead":15}

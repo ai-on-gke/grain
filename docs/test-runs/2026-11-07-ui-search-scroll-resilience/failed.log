@@ -1,0 +1,33 @@
+cold outage list (1440) {"cold":{"failedText":2,"retry":1,"noTasksClaim":0,"rail":"tasks could not be loaded","rows":0},"recoveredWithoutClick":{"failedText":0,"retry":0,"noTasksClaim":0,"rail":"tasks 18","rows":16}}
+cold outage kanban (1440) {"cold":{"failedText":2,"retry":1,"noTasksClaim":0,"rail":"tasks could not be loaded","rows":0},"recoveredWithoutClick":{"failedText":0,"retry":0,"noTasksClaim":1,"rail":"tasks 18","rows":16}}
+cold outage tree (1440) {"cold":{"failedText":2,"retry":1,"noTasksClaim":0,"rail":"tasks could not be loaded","rows":0},"recoveredWithoutClick":{"failedText":0,"retry":0,"noTasksClaim":0,"rail":"tasks 18","rows":19}}
+cold outage panels (1440) {"cold":{"failedText":3,"retry":2,"noTasksClaim":0,"rail":"tasks could not be loaded","rows":0},"recoveredWithoutClick":{"failedText":0,"retry":0,"noTasksClaim":0,"rail":"tasks 18","rows":0}}
+mid-session outage list (1440) {"before":{"failedText":0,"retry":0,"noTasksClaim":0,"rail":"tasks 18","rows":16},"during":{"failedText":0,"retry":0,"noTasksClaim":0,"rail":"tasks 18","rows":16},"recovered":{"failedText":0,"retry":0,"noTasksClaim":0,"rail":"tasks 18","rows":16}}
+mid-session outage kanban (1440) {"before":{"failedText":0,"retry":0,"noTasksClaim":1,"rail":"tasks 18","rows":16},"during":{"failedText":0,"retry":0,"noTasksClaim":1,"rail":"tasks 18","rows":16},"recovered":{"failedText":0,"retry":0,"noTasksClaim":1,"rail":"tasks 18","rows":16}}
+mid-session outage tree (1440) {"before":{"failedText":0,"retry":0,"noTasksClaim":0,"rail":"tasks 18","rows":19},"during":{"failedText":0,"retry":0,"noTasksClaim":0,"rail":"tasks 18","rows":19},"recovered":{"failedText":0,"retry":0,"noTasksClaim":0,"rail":"tasks 18","rows":19}}
+mid-session outage panels (1440) {"before":{"failedText":0,"retry":0,"noTasksClaim":0,"rail":"tasks 18","rows":0},"during":{"failedText":0,"retry":0,"noTasksClaim":0,"rail":"tasks 18","rows":0},"recovered":{"failedText":0,"retry":0,"noTasksClaim":0,"rail":"tasks 18","rows":0}}
+cold outage list (390) {"cold":{"failedText":1,"retry":1,"noTasksClaim":0,"rail":"error: locator.innerText: Timeout 30000ms exceeded.","rows":0},"recoveredWithoutClick":{"failedText":0,"retry":0,"noTasksClaim":0,"rail":"error: locator.innerText: Timeout 30000ms exceeded.","rows":16}}
+cold outage kanban (390) {"cold":{"failedText":1,"retry":1,"noTasksClaim":0,"rail":"error: locator.innerText: Timeout 30000ms exceeded.","rows":0},"recoveredWithoutClick":{"failedText":0,"retry":0,"noTasksClaim":1,"rail":"error: locator.innerText: Timeout 30000ms exceeded.","rows":16}}
+cold outage tree (390) {"cold":{"failedText":1,"retry":1,"noTasksClaim":0,"rail":"error: locator.innerText: Timeout 30000ms exceeded.","rows":0},"recoveredWithoutClick":{"failedText":0,"retry":0,"noTasksClaim":0,"rail":"error: locator.innerText: Timeout 30000ms exceeded.","rows":19}}
+failed error 390 {"r":"error: apiRequestContext.post: connect ECONNREFUSED 127.0.0.1:4390"}
+node:internal/deps/undici/undici:13502
+      Error.captureStackTrace(err);
+            ^
+
+TypeError: fetch failed
+    at node:internal/deps/undici/undici:13502:13
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async api (file:///home/debian/work/docs/test-runs/2026-11-07-ui-search-scroll-resilience/controls-walk.mjs:38:15)
+    at async file:///home/debian/work/docs/test-runs/2026-11-07-ui-search-scroll-resilience/controls-walk.mjs:374:39 {
+  [cause]: Error: connect ECONNREFUSED 127.0.0.1:4390
+      at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1611:16)
+      at TCPConnectWrap.callbackTrampoline (node:internal/async_hooks:130:17) {
+    errno: -111,
+    code: 'ECONNREFUSED',
+    syscall: 'connect',
+    address: '127.0.0.1',
+    port: 4390
+  }
+}
+
+Node.js v20.19.0
