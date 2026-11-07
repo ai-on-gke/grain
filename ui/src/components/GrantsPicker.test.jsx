@@ -16,6 +16,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import GrantsPicker from "./GrantsPicker.jsx";
+import Overlay from "./Overlay.jsx";
 import {
   capabilityMethods,
   invalidateCapabilityMethods,
@@ -796,5 +797,116 @@ describe("GrantsPicker", () => {
       expect(api).toHaveBeenCalledWith("/api/capability-methods"),
     );
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  // grain/task-3527: Escape inside an open "Add grant…" popover must close
+  // only the popover and return focus to "Add grant…", without asking
+  // DISCARD_PROMPT or closing the surrounding template/schedule Overlay pane
+  // until a second Escape is pressed.
+  it("closes only the Add grant… popover on Escape inside an Overlay pane, then lets the next Escape close the pane", async () => {
+    const denied = {
+      ...hostScript,
+      policyRefusal: "denied by capability policy rule 1",
+    };
+    serve({ current: [denied, gcpKey] });
+    const onClose = vi.fn();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const user = userEvent.setup();
+    let dirty = false;
+
+    render(
+      <Overlay
+        label="Edit template"
+        onClose={onClose}
+        pane
+        animate={false}
+        isDirty={() => dirty}
+      >
+        <GrantsPicker
+          grants={[]}
+          config={{
+            capabilityMethods: 2,
+            capabilities: [
+              {
+                id: "api:tasks:read",
+                area: "tasks",
+                summary: "Read tasks",
+              },
+            ],
+            targetRepos: ["acme/widgets"],
+          }}
+          onApiChange={vi.fn()}
+          onSubmit={vi.fn()}
+          onRemove={vi.fn()}
+          runKind="process"
+        />
+      </Overlay>,
+    );
+
+    // 1. Clean pane: first Escape closes only the popover and focuses Add grant…;
+    // second Escape closes the pane.
+    const addBtn = await screen.findByRole("button", { name: "Add grant…" });
+    await user.click(addBtn);
+    expect(
+      await screen.findByRole("menu", { name: "Grants to add" }),
+    ).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu", { name: "Grants to add" })).toBeNull();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(addBtn).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledTimes(1);
+    onClose.mockClear();
+
+    // 2. Dirty pane with nested SearchSelect listbox open: first Escape closes
+    // the repo listbox, second Escape closes Add grant… without prompting,
+    // third Escape asks DISCARD_PROMPT.
+    dirty = true;
+    await user.click(addBtn);
+    expect(
+      await screen.findByRole("menu", { name: "Grants to add" }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByLabelText("Grain API grants apply to"));
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(
+      screen.getByRole("menu", { name: "Grants to add" }),
+    ).toBeInTheDocument();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu", { name: "Grants to add" })).toBeNull();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(addBtn).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+    confirm.mockClear();
+
+    // 3. Focus on the policy link inside a disabled MenuItem: Escape still
+    // closes the popover and restores focus to Add grant… without prompting.
+    await user.click(addBtn);
+    const menu = await screen.findByRole("menu", { name: "Grants to add" });
+    const policyLink = within(menu).getByRole("link", {
+      name: "Settings → Capabilities",
+    });
+    policyLink.focus();
+    expect(policyLink).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu", { name: "Grants to add" })).toBeNull();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(addBtn).toHaveFocus();
+
+    confirm.mockRestore();
   });
 });

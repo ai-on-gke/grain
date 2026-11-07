@@ -12,7 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Alert,
   Box,
@@ -183,6 +190,8 @@ export default function GrantsPicker({
   const [drafts, setDrafts] = useState([]);
   const [error, setError] = useState("");
   const listRef = useRef(null);
+  const addButtonRef = useRef(null);
+  const restoreFocus = useRef(false);
 
   // The method listing is fetched only where there is something in it --
   // /api/config's count says so -- or a grant to show. A change in that
@@ -342,6 +351,34 @@ export default function GrantsPicker({
       apiHeld.includes(id) ? apiHeld.filter((s) => s !== id) : [...apiHeld, id],
     );
   };
+
+  const closeMenu = useCallback((focusButton = false) => {
+    if (focusButton) restoreFocus.current = true;
+    setAnchor(null);
+  }, []);
+
+  useEffect(() => {
+    if (!anchor && restoreFocus.current) {
+      restoreFocus.current = false;
+      addButtonRef.current?.focus();
+    }
+  }, [anchor]);
+
+  // Keep Escape for the open popover even before MUI's ModalManager effect
+  // has promoted it above the surrounding Overlay/SidePanel, or when focus
+  // slipped off the menu's items onto body. Bubble phase so an open
+  // SearchSelect listbox inside the popover still takes the first Escape.
+  const menuOpen = Boolean(anchor);
+  useLayoutEffect(() => {
+    if (!menuOpen) return undefined;
+    const onKeyDown = (e) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      e.preventDefault();
+      closeMenu(true);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [menuOpen, closeMenu]);
 
   const openMenu = (evt) => {
     setQuery("");
@@ -757,7 +794,10 @@ export default function GrantsPicker({
                       ? { target: "_blank", rel: "noreferrer" }
                       : {})}
                     onClick={(e) => e.stopPropagation()}
-                    onKeyDown={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ")
+                        e.stopPropagation();
+                    }}
                   >
                     {isCIOnly
                       ? REPO_ACCESS_DOC_LABEL
@@ -836,10 +876,18 @@ export default function GrantsPicker({
       </Box>
       {!disabled && (
         <Button
+          ref={addButtonRef}
           size="small"
           variant="outlined"
           sx={{ mt: 0.75 }}
           onClick={openMenu}
+          onKeyDown={(e) => {
+            if (e.key === "Escape" && anchor) {
+              e.preventDefault();
+              e.stopPropagation();
+              closeMenu(true);
+            }
+          }}
           aria-haspopup="menu"
           aria-controls={anchor ? `${regionId}-menu` : undefined}
         >
@@ -847,9 +895,17 @@ export default function GrantsPicker({
         </Button>
       )}
       <Popover
-        open={Boolean(anchor)}
+        open={menuOpen}
         anchorEl={anchor}
-        onClose={() => setAnchor(null)}
+        data-open-popover={menuOpen ? "" : undefined}
+        onClose={(_event, reason) => closeMenu(reason === "escapeKeyDown")}
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && !e.defaultPrevented) {
+            e.preventDefault();
+            e.stopPropagation();
+            closeMenu(true);
+          }
+        }}
         anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
         slotProps={{
           paper: {
