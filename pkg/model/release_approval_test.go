@@ -130,6 +130,43 @@ func TestReleaseApprovalDecisionStoreRoundTrip(t *testing.T) {
 			if len(list) != 2 || list[0] != want || list[1] != second {
 				t.Fatalf("ListReleaseApprovalDecisions = %+v, want [%+v %+v]", list, want, second)
 			}
+
+			// Repo-case reconciliation rewrites divergent rows and folds a
+			// colliding (version, commit) onto the canonical spelling.
+			canonical := model.RepoRef{Owner: "acme", Name: "widgets"}
+			shouted := model.RepoRef{Owner: "ACME", Name: "Widgets"}
+			c3 := strings.Repeat("c", 40)
+			if err := store.PutReleaseApprovalDecision(ctx, model.ReleaseApprovalDecision{
+				Repo: canonical, Version: "v2.6.0", Commit: c1,
+				Decision: "approve", Workflow: "promote-release.yml", DecidedBy: "alice@example.com", DecidedAt: t0,
+			}); err != nil {
+				t.Fatalf("PutReleaseApprovalDecision(canonical): %v", err)
+			}
+			if err := store.PutReleaseApprovalDecision(ctx, model.ReleaseApprovalDecision{
+				Repo: shouted, Version: "v2.6.0", Commit: c1,
+				Decision: "approve", Workflow: "promote-release.yml", DecidedBy: "bob@example.com", DecidedAt: t0.Add(time.Minute),
+			}); err != nil {
+				t.Fatalf("PutReleaseApprovalDecision(shouted colliding): %v", err)
+			}
+			if err := store.PutReleaseApprovalDecision(ctx, model.ReleaseApprovalDecision{
+				Repo: shouted, Version: "v2.7.0", Commit: c3,
+				Decision: "approve", Workflow: "promote-release.yml", DecidedBy: "bob@example.com", DecidedAt: t0.Add(2 * time.Minute),
+			}); err != nil {
+				t.Fatalf("PutReleaseApprovalDecision(shouted distinct): %v", err)
+			}
+			if _, err := store.ApplyRepoCase(ctx, []model.RepoRef{canonical}); err != nil {
+				t.Fatalf("ApplyRepoCase: %v", err)
+			}
+			folded, err := store.ListReleaseApprovalDecisions(ctx, canonical)
+			if err != nil {
+				t.Fatalf("ListReleaseApprovalDecisions(canonical): %v", err)
+			}
+			if len(folded) != 2 || folded[0].Version != "v2.6.0" || folded[0].DecidedBy != "alice@example.com" || folded[1].Version != "v2.7.0" {
+				t.Fatalf("after ApplyRepoCase, canonical = %+v, want v2.6.0 (alice) and v2.7.0", folded)
+			}
+			if leftover, err := store.ListReleaseApprovalDecisions(ctx, shouted); err != nil || len(leftover) != 0 {
+				t.Fatalf("after ApplyRepoCase, shouted = %+v (%v), want empty", leftover, err)
+			}
 		})
 	}
 }
