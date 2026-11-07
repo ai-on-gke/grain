@@ -23,11 +23,29 @@
 import { expect, test } from "./fixtures.js";
 import { chooseOption } from "./searchSelect.js";
 
+// A /api/config request still in flight when the test navigates or ends
+// is cancelled with its page, and the response the handler was reading
+// is disposed under it ("Response has been disposed"). Nobody is waiting
+// for that answer any more, so the handler lets it go rather than
+// failing the test (the same guard as settings-config-modes-walkthrough).
+const gone = (err) =>
+  /disposed|closed|cancel|Target page|already handled/i.test(String(err));
+
 async function serveForm(page, newTaskForm) {
   await page.route("**/api/config", async (route) => {
-    const response = await route.fetch();
-    const body = await response.json();
-    await route.fulfill({ response, json: { ...body, newTaskForm } });
+    let response, body;
+    try {
+      response = await route.fetch();
+      body = await response.json();
+    } catch (err) {
+      if (gone(err)) return;
+      throw err;
+    }
+    await route
+      .fulfill({ response, json: { ...body, newTaskForm } })
+      .catch((err) => {
+        if (!gone(err)) throw err;
+      });
   });
 }
 
