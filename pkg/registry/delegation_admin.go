@@ -386,6 +386,11 @@ func (s *Server) handleRevokeDelegationGrant(w http.ResponseWriter, r *http.Requ
 			writeInternalError(w, err)
 			return
 		}
+		// Drop this replica's cached assertions minted under the grant now,
+		// rather than letting them live out the 30s cache (REG-22 item 4).
+		if inv, ok := s.signer.(interface{ InvalidateGrant(string) }); ok {
+			inv.InvalidateGrant(grant.ID)
+		}
 		_ = s.store.RecordAudit(r.Context(), caller.Email, "delegation_grant_revoke", "", "", map[string]any{
 			"app":      grant.App,
 			"grant_id": grant.ID,

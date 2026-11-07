@@ -2065,6 +2065,10 @@ func TestStep18DocsRegistryAndAccessCode(t *testing.T) {
 		"grain registry register",
 		"grain registry scopes",
 		"primary_conflict",
+		"/api/admin/delegating-apps",
+		"/api/delegation-grants",
+		"grain registry delegating-apps",
+		"grain registry grants",
 	} {
 		if !strings.Contains(regDoc, want) {
 			t.Errorf("docs/registry.md missing %q", want)

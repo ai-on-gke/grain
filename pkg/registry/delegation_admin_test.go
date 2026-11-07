@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/registry/api"
 	"github.com/ai-on-gke/grain/pkg/registry/store"
@@ -31,7 +32,7 @@ import (
 // newDelegationAdminTestServer starts a Postgres-backed registry Server with
 // `delegation_policy: consent` wired to the same store, so a test can drive
 // the admin and grant endpoints and then ask the policy what they changed.
-func newDelegationAdminTestServer(t *testing.T) (http.Handler, *store.Store, *ConsentDelegationPolicy) {
+func newDelegationAdminTestServer(t *testing.T) (http.Handler, *store.Store, *ConsentDelegationPolicy, *CachingSigner) {
 	t.Helper()
 	pgURL := startEphemeralPostgresForRegistryTest(t)
 	ctx := context.Background()
@@ -60,10 +61,11 @@ func newDelegationAdminTestServer(t *testing.T) (http.Handler, *store.Store, *Co
 	if err != nil {
 		t.Fatalf("NewConsentDelegationPolicy: %v", err)
 	}
-	signer, err := NewEphemeralLocalSigner("dlg-admin-k1")
+	local, err := NewEphemeralLocalSigner("dlg-admin-k1")
 	if err != nil {
 		t.Fatalf("NewEphemeralLocalSigner: %v", err)
 	}
+	signer := NewCachingSigner(local, 30*time.Second)
 	cfg, err := ParseConfig([]byte(validTestYAML()))
 	if err != nil {
 		t.Fatalf("ParseConfig: %v", err)
@@ -79,7 +81,7 @@ func newDelegationAdminTestServer(t *testing.T) (http.Handler, *store.Store, *Co
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
-	return srv.Handler(), st, pol
+	return srv.Handler(), st, pol, signer
 }
 
 func doDelegationJSON(t *testing.T, h http.Handler, method, path, email string, body any) (int, []byte) {
@@ -121,7 +123,7 @@ func refusalReason(err error) string {
 // apps, nobody (admins included) can grant for someone else, and one
 // person cannot see or revoke another's grant.
 func TestDelegatingAppAdminAPIAndPersonGrants(t *testing.T) {
-	h, st, pol := newDelegationAdminTestServer(t)
+	h, st, pol, signer := newDelegationAdminTestServer(t)
 	ctx := context.Background()
 	const (
 		admin   = "admin@example.com"
@@ -303,13 +305,29 @@ func TestDelegatingAppAdminAPIAndPersonGrants(t *testing.T) {
 		t.Fatalf("admin enabling app = %d %s", code, body)
 	}
 
-	// 7. Alice revokes her own grant by app name; it shows only with include_revoked.
+	// 7. Alice revokes her own grant by app name; it shows only with include_revoked,
+	// and this replica's cached assertions minted under it are dropped at once.
+	claims := RegistryClaims{
+		Audience: "https://alice-vm.instances.example.com",
+		Subject:  alice, Email: alice, Kind: "human",
+		Actor: &DelegationActor{Sub: planner, Kind: "service", App: "planner", Grant: grant.ID, Access: "read"},
+	}
+	cachedTok, err := signer.SignAssertion(ctx, claims)
+	if err != nil {
+		t.Fatalf("SignAssertion: %v", err)
+	}
+	if again, _ := signer.SignAssertion(ctx, claims); again != cachedTok {
+		t.Fatal("expected a cache hit before revoke")
+	}
 	code, body = doDelegationJSON(t, h, http.MethodDelete, "/api/delegation-grants/planner", alice, nil)
 	if code != http.StatusOK || !bytes.Contains(body, []byte(`"revoked_at"`)) {
 		t.Fatalf("alice revoking her grant = %d %s", code, body)
 	}
 	if _, err := pol.AuthorizeOnBehalfOf(ctx, planner, alice, "alice-vm"); refusalReason(err) != "no_grant" {
 		t.Fatalf("after revoke: err=%v, want no_grant", err)
+	}
+	if after, _ := signer.SignAssertion(ctx, claims); after == cachedTok {
+		t.Fatal("revoking the grant left its cached assertion in place")
 	}
 	var mine api.ListDelegationGrantsResponse
 	_, body = doDelegationJSON(t, h, http.MethodGet, "/api/delegation-grants", alice, nil)

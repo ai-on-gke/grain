@@ -1620,7 +1620,7 @@ _No flags._
 | `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/registry_test.go`: `TestRegistryCLIRegisterStatusUnregister`, `TestRegistryCLISubcommands`, `TestDaemonRegistryFlags`.
+**Pinned by:** `pkg/cli/registry_test.go`: `TestRegistryCLIRegisterStatusUnregister`, `TestRegistryCLISubcommands`, `TestDaemonRegistryFlags`; `pkg/cli/registry_delegation_test.go`: `TestRegistryCLIDelegatingAppsAndGrants`.
 
 ---
 
