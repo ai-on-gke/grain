@@ -285,7 +285,7 @@ func (DefaultConnectDialer) DialConnect(ctx context.Context, cfg ConnectConfig) 
 		return ConnectResult{}, err
 	}
 	regToken := strings.TrimSpace(cfg.RegistrationToken)
-	if regToken == "" {
+	if regToken == "" && strings.TrimSpace(cfg.BearerToken) == "" && cfg.IDToken == nil {
 		return ConnectResult{}, errors.New("registration token is required for grain connect")
 	}
 

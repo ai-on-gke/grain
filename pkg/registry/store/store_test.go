@@ -767,3 +767,275 @@ func TestStep17StopStartAutoWakeAndUpgradeAvailable(t *testing.T) {
 		t.Fatalf("BeginStartEntry = (%+v, %v), want creating", started, err)
 	}
 }
+
+func TestStep16TwoStepTransfer7DayExpiryRestoreHardPurgeAndAdminRecovery(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	st.SetNow(func() time.Time { return now })
+
+	if err := st.SeedShapes(ctx, []ShapeRow{
+		{Name: "small", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
+		{Name: "large", MachineType: "n2-standard-8", BootDiskGB: 100, QuotaUnits: 2},
+	}); err != nil {
+		t.Fatalf("SeedShapes: %v", err)
+	}
+	if err := st.SeedSQLInstances(ctx, []SQLInstanceRow{
+		{Name: "sql-pool-01", ConnectionName: "proj:us-central1:sql-pool-01", PrivateIP: "10.8.0.5", MaxDatabases: 50},
+	}); err != nil {
+		t.Fatalf("SeedSQLInstances: %v", err)
+	}
+	if err := st.UpsertReplica(ctx, "replica-a", "10.0.0.1:8082"); err != nil {
+		t.Fatalf("UpsertReplica: %v", err)
+	}
+
+	// 1. Create a connected entry with owner_group, active credential, and active tunnel.
+	connEntry, err := st.CreateEntry(ctx, CreateEntryInput{
+		Name:       "platform-bridge",
+		Kind:       api.KindConnected,
+		OwnerEmail: "alice@example.com",
+		OwnerGroup: "platform-team@example.com",
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry platform-bridge: %v", err)
+	}
+	tok, credMeta, err := st.IssueCredentialWithMeta(ctx, connEntry.ID, "initial", "alice@example.com")
+	if err != nil || tok == "" {
+		t.Fatalf("IssueCredentialWithMeta: %v", err)
+	}
+	if _, err := st.AcquireTunnelSessionWithCred(ctx, connEntry.ID, "replica-a", "192.0.2.10:55111", credMeta.CredentialID); err != nil {
+		t.Fatalf("AcquireTunnelSessionWithCred: %v", err)
+	}
+
+	// 2. Offer transfer to bob@example.com without specifying ownerGroup -> preserves owner_group and sets 7-day expiry.
+	offered, err := st.OfferEntryTransfer(ctx, connEntry.ID, connEntry.Version, "bob@example.com", nil)
+	if err != nil {
+		t.Fatalf("OfferEntryTransfer: %v", err)
+	}
+	if offered.PendingOwner != "bob@example.com" || offered.OwnerGroup != "platform-team@example.com" {
+		t.Fatalf("expected pending_owner=bob and preserved owner_group=platform-team, got %+v", offered)
+	}
+	wantExp := now.Add(DefaultTransferWindow)
+	if offered.TransferExpiresAt == nil || !offered.TransferExpiresAt.Equal(wantExp) {
+		t.Fatalf("TransferExpiresAt = %v, want %v", offered.TransferExpiresAt, wantExp)
+	}
+
+	// Non-recipient (even an owner_group peer) cannot accept on bob's behalf.
+	if _, err := st.AcceptEntryTransfer(ctx, offered.ID, offered.Version, "peer@example.com"); err == nil {
+		t.Fatalf("expected non-recipient AcceptEntryTransfer to fail")
+	}
+
+	// Advance clock past 7 days -> transfer offer expired.
+	now = now.Add(7*24*time.Hour + time.Minute)
+	if _, err := st.AcceptEntryTransfer(ctx, offered.ID, offered.Version, "bob@example.com"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected expired AcceptEntryTransfer to fail with ErrConflict, got %v", err)
+	}
+
+	// Cancel transfer offer.
+	cancelled, err := st.OfferEntryTransfer(ctx, offered.ID, offered.Version, "", nil)
+	if err != nil {
+		t.Fatalf("cancel OfferEntryTransfer: %v", err)
+	}
+	if cancelled.PendingOwner != "" || cancelled.TransferExpiresAt != nil {
+		t.Fatalf("expected cancelled transfer to clear pending_owner and transfer_expires_at, got %+v", cancelled)
+	}
+
+	// Re-offer transfer to bob@example.com and verify quota enforcement on accept.
+	if err := st.SetQuota(ctx, "bob@example.com", 2, 0, "admin@example.com"); err != nil {
+		t.Fatalf("SetQuota bob: %v", err)
+	}
+	reoffered, err := st.OfferEntryTransfer(ctx, cancelled.ID, cancelled.Version, "bob@example.com", nil)
+	if err != nil {
+		t.Fatalf("re-offer transfer: %v", err)
+	}
+	if _, err := st.AcceptEntryTransfer(ctx, reoffered.ID, reoffered.Version, "bob@example.com"); !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("expected ErrQuotaExceeded when bob has max_connected=0, got %v", err)
+	}
+
+	// Reset bob's quota override so bob reverts to defaults and accepts the transfer.
+	if err := st.DeleteQuota(ctx, "bob@example.com"); err != nil {
+		t.Fatalf("DeleteQuota bob: %v", err)
+	}
+	accepted, err := st.AcceptEntryTransfer(ctx, reoffered.ID, reoffered.Version, "bob@example.com")
+	if err != nil {
+		t.Fatalf("AcceptEntryTransfer: %v", err)
+	}
+	if accepted.OwnerEmail != "bob@example.com" || accepted.PendingOwner != "" || accepted.TransferExpiresAt != nil {
+		t.Fatalf("unexpected accepted entry state: %+v", accepted)
+	}
+	if accepted.Tunnel != nil {
+		t.Fatalf("expected active tunnel session to be terminated on ownership transfer")
+	}
+	if _, err := st.AuthenticateCredential(ctx, tok); !errors.Is(err, ErrInvalidCredential) {
+		t.Fatalf("expected previous grc_ credential to be revoked on ownership transfer, got %v", err)
+	}
+
+	// 3. Admin force-transfer (`TransferEntryOwner`) immediately transfers ownership, clears pending_owner, and revokes credentials.
+	tok2, _, err := st.IssueCredentialWithMeta(ctx, accepted.ID, "bob-token", "bob@example.com")
+	if err != nil {
+		t.Fatalf("IssueCredentialWithMeta bob: %v", err)
+	}
+	forced, err := st.TransferEntryOwner(ctx, accepted.ID, accepted.Version, "carol@example.com", "sre-team@example.com")
+	if err != nil {
+		t.Fatalf("TransferEntryOwner: %v", err)
+	}
+	if forced.OwnerEmail != "carol@example.com" || forced.OwnerGroup != "sre-team@example.com" {
+		t.Fatalf("unexpected forced entry state: %+v", forced)
+	}
+	if _, err := st.AuthenticateCredential(ctx, tok2); !errors.Is(err, ErrInvalidCredential) {
+		t.Fatalf("expected previous credential to be revoked on admin force-transfer, got %v", err)
+	}
+
+	// 4. Disabling an owner releases tombstone reservations and blocks mutations.
+	deletedConn, err := st.SoftDeleteEntry(ctx, forced.ID, forced.Version)
+	if err != nil {
+		t.Fatalf("SoftDeleteEntry platform-bridge: %v", err)
+	}
+	availBefore, err := st.CheckNameAvailability(ctx, deletedConn.Name, "dave@example.com")
+	if err != nil || availBefore.Status != api.NameReserved {
+		t.Fatalf("expected name to be reserved for carol before disable, got %+v (err=%v)", availBefore, err)
+	}
+	if err := st.SetOwnerDisabled(ctx, "carol@example.com", true); err != nil {
+		t.Fatalf("SetOwnerDisabled carol: %v", err)
+	}
+	availAfter, err := st.CheckNameAvailability(ctx, deletedConn.Name, "dave@example.com")
+	if err != nil || availAfter.Status != api.NameFree {
+		t.Fatalf("expected disabled owner to hold no reservation, got %+v (err=%v)", availAfter, err)
+	}
+	if _, err := st.CreateEntry(ctx, CreateEntryInput{
+		Name:       "carol-blocked",
+		Kind:       api.KindConnected,
+		OwnerEmail: "carol@example.com",
+	}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected disabled owner CreateEntry to fail with ErrConflict, got %v", err)
+	}
+
+	// 5. Hosted instance retention restore and immediate hard purge.
+	inst, err := st.CreateEntry(ctx, CreateEntryInput{
+		Name:       "restore-vm",
+		Kind:       api.KindInstance,
+		OwnerEmail: "alice@example.com",
+		Shape:      "small",
+		Zone:       "us-central1-a",
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry restore-vm: %v", err)
+	}
+	inst, err = st.UpdateInstancePlacement(ctx, inst.ID, inst.Version, "gce-restore-1", "10.8.0.25", "http://10.8.0.25:8080", "grain-sa-restore@proj.iam.gserviceaccount.com", "sql-pool-01", "grain_restore_vm", "grain-inst-restore-vm-")
+	if err != nil {
+		t.Fatalf("UpdateInstancePlacement: %v", err)
+	}
+	inst, err = st.TransitionEntryState(ctx, inst.ID, inst.Version, api.StateRunning, "")
+	if err != nil {
+		t.Fatalf("TransitionEntryState: %v", err)
+	}
+
+	// Soft-delete (retaining DB for restore window).
+	inst, err = st.BeginDeleteEntry(ctx, inst.ID, inst.Version, false)
+	if err != nil {
+		t.Fatalf("BeginDeleteEntry: %v", err)
+	}
+	inst, err = st.CompleteDeleteEntry(ctx, inst.ID, inst.Version, false)
+	if err != nil {
+		t.Fatalf("CompleteDeleteEntry: %v", err)
+	}
+	if inst.DBName != "grain_restore_vm" || inst.SQLInstance != "sql-pool-01" || inst.PurgedAt != nil {
+		t.Fatalf("expected retained DB state on soft-deleted instance, got %+v", inst)
+	}
+
+	// SQL pool status shows 1 retained database.
+	sqlStatuses, err := st.ListSQLInstanceStatuses(ctx)
+	if err != nil || len(sqlStatuses) != 1 || sqlStatuses[0].RetainedDatabases != 1 || sqlStatuses[0].UsedDatabases != 1 {
+		t.Fatalf("ListSQLInstanceStatuses = (%+v, %v), want 1 retained database", sqlStatuses, err)
+	}
+
+	// Restore within db_purge_after transitions back to creating with preserved externalized state.
+	restored, err := st.RestoreEntry(ctx, inst.ID, inst.Version)
+	if err != nil {
+		t.Fatalf("RestoreEntry: %v", err)
+	}
+	if restored.LifecycleState != api.StateCreating || restored.DeletedAt != nil || restored.DBName != "grain_restore_vm" || restored.SQLInstance != "sql-pool-01" {
+		t.Fatalf("unexpected restored instance state: %+v", restored)
+	}
+
+	// Delete again and perform immediate hard purge -> subsequent RestoreEntry fails with ErrConflict.
+	delAgain, err := st.SoftDeleteEntry(ctx, restored.ID, restored.Version)
+	if err != nil {
+		t.Fatalf("SoftDeleteEntry restore-vm: %v", err)
+	}
+	purged, err := st.HardPurgeEntry(ctx, delAgain.ID, true, false)
+	if err != nil {
+		t.Fatalf("HardPurgeEntry: %v", err)
+	}
+	if purged.PurgedAt == nil || purged.DBName != "" || purged.SQLInstance != "" {
+		t.Fatalf("expected HardPurgeEntry to set PurgedAt and clear DB columns, got %+v", purged)
+	}
+	if _, err := st.RestoreEntry(ctx, purged.ID, purged.Version); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected RestoreEntry after HardPurgeEntry to fail with ErrConflict, got %v", err)
+	}
+
+	// 6. Admin scope conflict listing and resolution (demoting incumbent promotes waiting contender).
+	inc, err := st.CreateEntry(ctx, CreateEntryInput{
+		Name:       "incumbent-entry",
+		Kind:       api.KindConnected,
+		OwnerEmail: "alice@example.com",
+		DeclaredScopes: []ScopeClaim{
+			{Repo: "acme/monorepo", PathPrefix: "services/payments", Primary: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry incumbent-entry: %v", err)
+	}
+	contender, err := st.CreateEntry(ctx, CreateEntryInput{
+		Name:       "contender-entry",
+		Kind:       api.KindConnected,
+		OwnerEmail: "bob@example.com",
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry contender-entry: %v", err)
+	}
+	if _, err := st.RecordHeartbeat(ctx, contender.ID, api.HeartbeatRequest{
+		GrainVersion: "v1.2.0",
+		Health:       api.HealthOK,
+		Scopes: []api.HeartbeatScope{
+			{Repo: "acme/monorepo", PathPrefix: "services/payments/api", Role: api.RolePrimary},
+		},
+	}); err != nil {
+		t.Fatalf("RecordHeartbeat contender: %v", err)
+	}
+
+	conflicts, err := st.ListAllScopeConflicts(ctx)
+	if err != nil || len(conflicts) != 1 || conflicts[0].EntryName != "contender-entry" || conflicts[0].ConflictWith != "incumbent-entry" {
+		t.Fatalf("ListAllScopeConflicts = (%+v, %v), want 1 conflict with incumbent-entry", conflicts, err)
+	}
+
+	// Admin resolves conflict by demoting incumbent-entry to secondary -> contender-entry promotes to active primary!
+	if err := st.ResolveScopeConflict(ctx, inc.Name, "acme/monorepo", "services/payments", "demote"); err != nil {
+		t.Fatalf("ResolveScopeConflict: %v", err)
+	}
+	conflictsAfter, err := st.ListAllScopeConflicts(ctx)
+	if err != nil || len(conflictsAfter) != 0 {
+		t.Fatalf("expected 0 scope conflicts after resolution, got (%+v, %v)", conflictsAfter, err)
+	}
+	contenderAfter, err := st.GetEntryByID(ctx, contender.ID)
+	if err != nil {
+		t.Fatalf("GetEntryByID contender: %v", err)
+	}
+	comb := CombinedAPIScopes(contenderAfter.Scopes)
+	if len(comb) != 1 || !comb[0].Active || comb[0].Role != api.RolePrimary {
+		t.Fatalf("expected contender scope to promote to active primary after incumbent demotion, got %+v", comb)
+	}
+
+	// 7. Reconciler lease status and owner quota summaries.
+	if ok, err := st.AcquireOrRenewLease(ctx, "reconciler", "holder-1", 15*time.Second); err != nil || !ok {
+		t.Fatalf("AcquireOrRenewLease = (%v, %v)", ok, err)
+	}
+	leaseSt, err := st.GetLeaseStatus(ctx, "reconciler")
+	if err != nil || !leaseSt.Active || leaseSt.HolderID != "holder-1" {
+		t.Fatalf("GetLeaseStatus = (%+v, %v)", leaseSt, err)
+	}
+	owners, err := st.ListOwnerQuotaSummaries(ctx)
+	if err != nil || len(owners) < 3 {
+		t.Fatalf("ListOwnerQuotaSummaries = (%+v, %v)", owners, err)
+	}
+}

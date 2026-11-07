@@ -581,7 +581,15 @@ import "strconv"
 // `default_capabilities`, `ci_capabilities`, `console_sessions` and
 // `capability_policy` become
 // `https://grain.dev/capabilities/github#read-issues={}`.
-const SchemaVersion = 121
+// 122 adds `admission` to `task`, `template` and `schedule` and
+// `default_admission` to `grain_config` and `repo_config`, moving stored
+// `priority-dispatch` and `durable` grants into the setting and dropping
+// catalogue and policy entries for both names.
+// 123 adds `hosting` to `task`, `template` and `schedule` and
+// `default_hosting` to `grain_config` and `repo_config`, moving stored
+// `console` grants into the setting (ConsoleSession.Hosting included) and
+// dropping catalogue and policy entries for `console`.
+const SchemaVersion = 123
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -1009,6 +1017,8 @@ var Tables = []string{
   ` + "`proposer_task_id`" + `      TEXT     NOT NULL DEFAULT '',
   ` + "`proposer_run_id`" + `       TEXT     NOT NULL DEFAULT '',
   ` + "`external_ref`" + `          TEXT     NOT NULL DEFAULT '',
+  ` + "`admission`" + `             TEXT     NOT NULL DEFAULT 'standard',
+  ` + "`hosting`" + `               TEXT     NOT NULL DEFAULT 'unattended',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_external_ref`" + ` ON ` + "`task`" + ` (` + "`external_ref`" + `, ` + "`id`" + `)`,
@@ -2002,6 +2012,8 @@ var Tables = []string{
   ` + "`created_at`" + `            DATETIME NOT NULL,
   ` + "`every_n_minutes`" + `       INTEGER  NULL,
   ` + "`keep_running`" + `          INTEGER  NOT NULL DEFAULT 0,
+  ` + "`admission`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`hosting`" + `               TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2120,6 +2132,8 @@ var Tables = []string{
   ` + "`reviewers`" + `          TEXT NOT NULL DEFAULT '',
   ` + "`priority`" + `           INTEGER NOT NULL DEFAULT 0,
   ` + "`keep_running`" + `       INTEGER NOT NULL DEFAULT 0,
+  ` + "`admission`" + `          TEXT NOT NULL DEFAULT '',
+  ` + "`hosting`" + `            TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2606,6 +2620,8 @@ var Tables = []string{
   ` + "`owner_trust`" + `                  TEXT    NOT NULL DEFAULT '',
   ` + "`auto_grant_context_reads`" + `     TEXT    NOT NULL DEFAULT '',
   ` + "`registry`" + `                     TEXT    NOT NULL DEFAULT '',
+  ` + "`default_admission`" + `            TEXT    NOT NULL DEFAULT '',
+  ` + "`default_hosting`" + `              TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -3359,6 +3375,8 @@ var Tables = []string{
   ` + "`issue_import_approved`" + `    INTEGER NOT NULL DEFAULT 0,
   ` + "`issue_import_interval_seconds`" + ` INTEGER NOT NULL DEFAULT 0,
   ` + "`upstream_repo`" + `            TEXT NOT NULL DEFAULT '',
+  ` + "`default_admission`" + `        TEXT NOT NULL DEFAULT '',
+  ` + "`default_hosting`" + `          TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `)
 )`,
 
@@ -3668,6 +3686,26 @@ var Tables = []string{
   ` + "`updated_by_id`" + `   TEXT NOT NULL DEFAULT '',
   ` + "`updated_by_source`" + ` TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`period`" + `)
+)`,
+
+	// The promote-release.yml dispatch a person started for a pending GitHub
+	// Actions release (model.ReleaseApprovalDecision), keyed by
+	// (owner, name, version, commit) so the release-pending watcher does not
+	// re-raise release.pending for a commit already approved from the CLI or
+	// API, and DecideRelease refuses a second dispatch while the first is
+	// outstanding. Grain's own runtime record, like base_branch_release.
+	// Needs no SchemaVersion bump: Init's CREATE TABLE IF NOT EXISTS creates
+	// it on every database.
+	`CREATE TABLE IF NOT EXISTS ` + "`release_approval`" + ` (
+  ` + "`owner`" + `      TEXT     NOT NULL,
+  ` + "`name`" + `       TEXT     NOT NULL,
+  ` + "`version`" + `    TEXT     NOT NULL,
+  ` + "`commit`" + `     TEXT     NOT NULL,
+  ` + "`decision`" + `   TEXT     NOT NULL,
+  ` + "`workflow`" + `   TEXT     NOT NULL,
+  ` + "`decided_by`" + ` TEXT     NOT NULL,
+  ` + "`decided_at`" + ` DATETIME NOT NULL,
+  PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `, ` + "`version`" + `, ` + "`commit`" + `)
 )`,
 
 	// A repo's qualification setup -- bwsalmon/agents#518's two switches:

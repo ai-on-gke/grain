@@ -1899,6 +1899,11 @@ export function AutoUpgradeSettings({ settings, onSave }) {
                 onSave({ autoUpgradeTime: time });
               }
             }}
+            // A text box in Settings commits on blur or Enter; this one
+            // only did on blur (2026-11-07 settings walkthrough).
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.target.blur();
+            }}
             fullWidth
             margin="normal"
             slotProps={{

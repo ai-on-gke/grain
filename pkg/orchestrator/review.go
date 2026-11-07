@@ -492,11 +492,18 @@ func newReview(ctx context.Context, store *model.Store, task model.Task,
 		log.Printf("orchestrator: review of %s: dropped %s from template %s, dangerous grants %s does not hold",
 			task.ID, strings.Join(dropped, ", "), tmpl.ID, task.ID)
 	}
+	admission, admCapped := model.ReviewAdmission(tmpl.Admission, task)
+	if admCapped {
+		log.Printf("orchestrator: review of %s: capped admission %s from template %s to %s",
+			task.ID, tmpl.Admission, tmpl.ID, admission)
+	}
 	reviewTask := model.Task{
-		ID:     id,
-		Intent: model.IntentImplement,
-		Title:  title,
-		Body:   body,
+		ID:        id,
+		Intent:    model.IntentImplement,
+		Title:     title,
+		Body:      body,
+		Admission: admission,
+		Hosting:   model.NormalizeHosting(tmpl.Hosting),
 		Origin: model.Origin{
 			Attribution: model.Attribution{Actor: reviewer},
 			Reason:      model.ReasonReview,

@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
-	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
@@ -207,7 +206,7 @@ func TestInteractiveInitialStartupAndAcrossRunLatencyEndToEnd(t *testing.T) {
 		CycleTimes: cycleTimes,
 		Config: orchestrator.Config{
 			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities:          model.NewCapabilityRegistry(durable.New()),
+			Capabilities:          model.NewCapabilityRegistry(),
 			SessionSandboxIdleTTL: 30 * time.Minute,
 			WaitForSessionReply:   false,
 		},

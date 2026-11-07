@@ -43,7 +43,7 @@ const (
 var NewTaskFormFieldIDs = []string{
 	"title", "description", "attachments", "customFields", "repo", "newBranch", "base",
 	"writes", "reads", "autoMerge", "noPort", "fixesBaseBranch", "grants", "legacyCapabilities",
-	"model", "dependsOn", "agentBackendId", "networkAccess", "nothingNeededAction",
+	"admission", "hosting", "model", "dependsOn", "agentBackendId", "networkAccess", "nothingNeededAction",
 	"reviewTemplateId", "promptExtension", "sandboxShape", "approved", "atFront",
 }
 

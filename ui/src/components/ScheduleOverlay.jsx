@@ -64,6 +64,7 @@ import {
   targetableRepos,
 } from "../state.js";
 import AccessGate from "./AccessGate.jsx";
+import AdmissionField from "./AdmissionField.jsx";
 
 const WEEKDAYS = [
   "sunday",
@@ -408,6 +409,12 @@ function ScheduleOverlay({
   const [description, setDescription] = useState(schedule?.description || "");
   const [autoMerge, setAutoMerge] = useState(!!schedule?.autoMerge);
   const [keepRunning, setKeepRunning] = useState(!!schedule?.keepRunning);
+  // The admission every firing files at (model.Schedule.Admission); ""
+  // on the wire is standard. Editable on a schedule with content of its
+  // own -- a template's admission is the template's -- but always
+  // previewed: a repository's declared schedule may raise its
+  // template's (docs/declarations.md).
+  const [admission, setAdmission] = useState(schedule?.admission || "standard");
   const [networkAccess, setNetworkAccess] = useState(
     schedule?.networkAccess || "",
   );
@@ -490,6 +497,10 @@ function ScheduleOverlay({
       req.description = description;
       req.autoMerge = autoMerge;
       req.keepRunning = keepRunning;
+      // Only when it changed, for the model's reason above.
+      if (admission !== (schedule?.admission || "standard")) {
+        req.admission = admission;
+      }
       req.networkAccess = networkAccess;
       req.nothingNeededAction = nothingNeededAction;
       req.reads = reads;
@@ -506,10 +517,23 @@ function ScheduleOverlay({
   // previewed as no model at all -- an edit pane on a schedule that asks
   // for gemini-2.5-flash said "the deployment's default model". The model
   // in force is always sent here; the save still sends it only on a change.
+  //
+  // The admission in force is always sent too, for the same reason: a
+  // declared schedule that raises its template's admission (template
+  // bypass, schedule durable) was previewed as the template's alone.
   const previewRequest = () =>
     firesSuite
       ? scheduleRequest()
-      : { ...scheduleRequest(), model: chosenModel };
+      : {
+          ...scheduleRequest(),
+          model: chosenModel,
+          admission:
+            templateId === ""
+              ? admission
+              : templateId === schedule?.templateId
+                ? schedule?.admission || ""
+                : "",
+        };
 
   // Whether leaving now would lose an edit: the form's own fields (the
   // cadence's number and time boxes are read off it, not state) plus
@@ -1072,6 +1096,11 @@ function ScheduleOverlay({
                 label="Keep running"
                 title="Immediately restart every task this schedule files when its run exits, instead of completing or parking it."
                 sx={{ display: "flex" }}
+              />
+              <AdmissionField
+                value={admission}
+                onChange={setAdmission}
+                noun="schedule"
               />
               <TextField
                 select

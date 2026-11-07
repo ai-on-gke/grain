@@ -346,7 +346,7 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
         res.request().method() === "PUT" &&
         /\/api\/repos\/acme\/widgets\/capabilities(\?|$)/.test(res.url()),
     );
-    await page.getByRole("option", { name: /Priority dispatch/i }).click();
+    await page.getByRole("option", { name: /GitHub sandbox/i }).click();
     expect((await defCapsSaved).ok()).toBeTruthy();
     await page.keyboard.press("Escape");
     await expect(page.locator(".MuiAlert-filledError")).not.toBeVisible();
@@ -355,11 +355,17 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
     await page.reload();
     await deploymentWide("CI");
     await expect(
-      page.locator(".MuiChip-root").filter({ hasText: /GitHub sandbox/i }),
+      page
+        .getByRole("tabpanel", { name: "CI" })
+        .locator(".MuiChip-root")
+        .filter({ hasText: /GitHub sandbox/i }),
     ).toBeVisible();
     await page.getByRole("tab", { name: "Agents" }).click();
     await expect(
-      page.locator(".MuiChip-root").filter({ hasText: /Priority dispatch/i }),
+      page
+        .getByRole("tabpanel", { name: "Agents" })
+        .locator(".MuiChip-root")
+        .filter({ hasText: /GitHub sandbox/i }),
     ).toBeVisible();
 
     // 2.5 Prompt Extension and Setup Command

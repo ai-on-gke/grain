@@ -143,15 +143,20 @@ towards.
 qualification, or that a person rejects, is dropped and a later run cuts
 `vX.Y.0-rc.(N+1)` of the same minor from a newer LKG commit:
 
-- **Holding `rc.(N+1)` until blockers land (`grain/rc-hold`).** When
-  `vX.Y.0-rc.N` is confirmed red, the release reconciler raises
-  `pipeline.rc-failed:vX.Y.0-rc.N` to wake the pipeline steward
-  (`docs/pipeline-steward.md`), which titles its fix and revert tasks
-  `[rc-blocker vX.Y.0-rc.N] ...`. While any open task carries that marker,
-  the reconciler keeps check run `grain/rc-hold` (`in_progress`) on the red
-  rc's commit — the floor Phase 2 cuts `rc.(N+1)` after — and completes it
-  (`success`) once every blocker has landed (`neutral` if superseded). Before
-  cutting `rc.(N+1)` (`next_n > 1`), Phase 2 reads
+- **Holding `rc.(N+1)` until triage and blockers complete (`grain/rc-hold`).** When
+  `vX.Y.0-rc.N` (`N < RELEASE_MAX_RC_ATTEMPTS`) is confirmed red, the release
+  reconciler raises `pipeline.rc-failed:vX.Y.0-rc.N` to wake the pipeline steward
+  (`docs/pipeline-steward.md`) and immediately posts check run `grain/rc-hold`
+  (`in_progress`, "triage pending") on the red rc's commit — the floor Phase 2
+  cuts `rc.(N+1)` after — before posting the completed
+  `grain/release-qualification` failure. The steward titles its fix and revert
+  tasks `[rc-blocker vX.Y.0-rc.N] ...`. While triage is pending (up to `1h`,
+  `model.ReleaseHoldTriageGrace` / `GRAIN_RC_HOLD_GRACE`) or any open task
+  carries that marker, the reconciler keeps `grain/rc-hold` `in_progress`, and
+  completes it once every blocker has landed (`success`), when the steward
+  triages `vX.Y.0-rc.N` with no blocker or a person clears the notification
+  (`success`), when the triage window elapses with no blocker (`neutral`), or if
+  superseded (`neutral`). Before cutting `rc.(N+1)` (`next_n > 1`), Phase 2 reads
   `commits/<floor>/check-runs?check_name=grain%2Frc-hold&filter=all` (or
   `RELEASE_HOLD_CHECKS_JSON` in tests): if `RELEASE_QUALIFICATION_APP` is unset
   it refuses rather than trust another app's check run, and if the newest check

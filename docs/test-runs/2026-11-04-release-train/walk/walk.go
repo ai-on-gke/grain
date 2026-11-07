@@ -107,7 +107,37 @@ func (w *world) item1() {
 	expect(status == 0 && !strings.Contains(outs, "pending_version=") && !strings.Contains(outs, "promoted_version="),
 		"no -pending and no release off github-actions' check run")
 
-	w.section("item 1: the scripted agent passes every gate; grain files the final item; it passes")
+	w.section("item 1: Stage 2 stalls on infrastructure (neutral), waits for repair, then re-qualifies on attempt #2")
+	for _, item := range []string{"qualification-mergequeue", "qualification-base-triage"} {
+		w.tick(5 * time.Minute)
+		w.finish(w.latest(rc, item), footer("PASS", rc, rcSHA))
+	}
+	for i := 0; i <= model.DefaultQualificationPolicy.MaxInfraReruns; i++ {
+		w.tick(5 * time.Minute)
+		w.finish(w.latest(rc, "qualification-ci-diagnostics"), footer("INFRA", rc, rcSHA))
+		w.tick(time.Minute)
+		w.reconcile()
+	}
+	w.checks("stage2-stalled-neutral", rcSHA)
+	stalled := w.openNotification(model.FamilyReleaseInfraStalled, rc)
+	expect(stalled != nil && stalled.AckedAt == nil, "pipeline.release-infra-stalled:%s raised and unacknowledged", rc)
+	status, outs = w.train("tick 5b (Stage 2 neutral)")
+	expect(status == 0 && outputHas(outs, "qualification=infra") && outputHas(outs, "qualification_stalled="+rc) &&
+		!strings.Contains(outs, "discarded_rc="), "train reports qualification=infra and qualification_stalled=%s without dropping it", rc)
+	w.actions("actions after tick 5b", outs)
+	w.tick(5 * time.Minute)
+	w.reconcile()
+	if err := w.store.AckNotification(w.ctx, stalled.ID, "human:walkthrough", w.now); err != nil {
+		panic(err)
+	}
+	w.tick(time.Minute)
+	w.reconcile()
+	w.checks("stage2-attempt2-started", rcSHA)
+	status, outs = w.train("tick 5c (Stage 2 attempt #2 in progress)")
+	expect(status == 0 && outputHas(outs, "qualification=pending") && !strings.Contains(outs, "qualification_stalled="),
+		"train waits on Stage 2 attempt #2 (qualification=pending)")
+
+	w.section("item 1: the scripted agent passes every gate on attempt #2; grain files the final item; it passes")
 	for _, item := range []string{"qualification-mergequeue", "qualification-ci-diagnostics", "qualification-base-triage"} {
 		w.tick(10 * time.Minute)
 		w.finish(w.latest(rc, item), footer("PASS", rc, rcSHA))

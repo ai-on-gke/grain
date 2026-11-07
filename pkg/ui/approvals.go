@@ -62,7 +62,8 @@ func approvalViews(t model.Task) []ApprovalView {
 // of, and auto-merge comes back only when none is left. A caller who
 // approves none of them is refused, and told who can.
 func (c *Client) submitWithApprovals(ctx context.Context, task model.Task, pending []model.ApprovalRequirement) error {
-	actor := c.requestActor(ctx).Actor
+	who := c.requestActor(ctx)
+	actor := who.Actor
 	user := ""
 	if actor.Kind == model.PrincipalHuman {
 		user = actor.ID
@@ -90,7 +91,7 @@ func (c *Client) submitWithApprovals(ctx context.Context, task model.Task, pendi
 	}
 	var remaining []model.ApprovalRequirement
 	now, head := c.now(), c.submittedHead(ctx, task)
-	released := model.WithAutoMergeChange(ctx, c.requestActor(ctx).Actor, "approved by "+user)
+	released := model.WithAutoMergeChange(ctx, actor, "approved by "+user)
 	var heldFor []model.HumanReviewReason
 	if err := c.Store.UpdateTask(released, task.ID, func(t *model.Task) error {
 		heldFor = nil
@@ -111,7 +112,7 @@ func (c *Client) submitWithApprovals(ctx context.Context, task model.Task, pendi
 		return err
 	}
 	if len(remaining) == 0 {
-		if err := c.Store.RecordHumanReviewRelease(ctx, task.ID, c.requestActor(ctx).Actor, "approved", heldFor); err != nil {
+		if err := c.Store.RecordHumanReviewRelease(ctx, task.ID, actor, "approved", heldFor); err != nil {
 			return err
 		}
 		if err := c.unblockSubmitted(ctx, task.ID, now); err != nil {
@@ -122,7 +123,7 @@ func (c *Client) submitWithApprovals(ctx context.Context, task model.Task, pendi
 	}
 	_, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID: task.ID,
-		Author: model.Attribution{Actor: actor},
+		Author: who,
 		Body: fmt.Sprintf("Approved by %s. This change still waits for:\n%s", user,
 			describePending(remaining)),
 		CreatedAt: c.now(),

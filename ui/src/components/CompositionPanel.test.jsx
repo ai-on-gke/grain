@@ -116,6 +116,29 @@ describe("CompositionPanel", () => {
     expect(screen.getByText("leave for acknowledgement")).toBeInTheDocument();
   });
 
+  // The admission row (ui.ComposedField "admission") reads the way the
+  // task pane's Admission select does, not as its wire name (2026-11-07
+  // walkthrough: "admission bypass").
+  it("names the admission row and its value in words", async () => {
+    api.mockResolvedValue({
+      kind: "task",
+      tasks: [
+        {
+          templateId: "template-1",
+          templateName: "Bump",
+          title: "Bump",
+          fields: [field("admission", "template", ["bypass"])],
+        },
+      ],
+    });
+    render(<CompositionPanel path="/api/templates/template-1/composition" />);
+
+    expect(await screen.findByText("Admission")).toBeInTheDocument();
+    expect(screen.queryByText("admission")).not.toBeInTheDocument();
+    expect(screen.getByText("bypass queue")).toBeInTheDocument();
+    expect(screen.queryByText("bypass")).not.toBeInTheDocument();
+  });
+
   it("pairs each capability group with its own source when values come from multiple layers", async () => {
     api.mockResolvedValue({
       kind: "task",
