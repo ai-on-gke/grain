@@ -24,7 +24,9 @@
 //     event-gated by the reference itself (model.IsRepoAccessGrant,
 //     model.RepoAccessAdmitsCIEvent). #write's other value,
 //     GitPushAnyRefGrant (formerly git-push-any-ref), the git proxy reads
-//     off the live task (model.Store.GitPushAnyRef).
+//     off the live task (model.Store.GitPushAnyRef). #credential {credential}
+//     selects a named git credential under secrets/github for a task
+//     (formerly github-credential:<name>).
 //   - https://grain.dev/capabilities/github: GitHub operations answered by
 //     grain itself with the run's team git credential (#read-issues,
 //     formerly read-issues).
@@ -35,11 +37,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability"
+	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
@@ -137,20 +141,59 @@ const (
 
 	// LegacyReadIssues is the retired in-process capability name for ReadIssuesGrant.
 	LegacyReadIssues = "read-issues"
+
+	// RepoCredentialMethod selects a named git credential under secrets/github
+	// for a task's git proxy, PR opener, and git identity (formerly github-credential:<name>).
+	RepoCredentialMethod = model.RepoCredentialMethod
+	RepoCredentialRef    = model.RepoCredentialRef
 )
 
 var (
 	serverOnce sync.Once
 	serverInst *protocol.Server
 
-	repoOnce sync.Once
-	repoInst *protocol.Server
+	repoMu            sync.RWMutex
+	repoCredentialsFn func() []string
 
 	githubOnce    sync.Once
 	githubInst    *protocol.Server
 	configMapOnce sync.Once
 	configMapInst *protocol.Server
 )
+
+// RepoCredentialGrant returns the canonical repo#credential grant for name.
+func RepoCredentialGrant(name string) string { return model.RepoCredentialGrant(name) }
+
+// ParseRepoCredentialGrant parses a canonical repo#credential grant.
+func ParseRepoCredentialGrant(grant string) (string, bool) {
+	return model.ParseRepoCredentialGrant(grant)
+}
+
+// ConfigureRepoCredentials sets the callback returning the deployment's
+// configured named git credentials under secrets/github (empty non-nil slice
+// when a credential directory is configured with no named credentials; nil when
+// unconfigured). It returns a restore function for tests.
+func ConfigureRepoCredentials(fn func() []string) func() {
+	repoMu.Lock()
+	prev := repoCredentialsFn
+	repoCredentialsFn = fn
+	repoMu.Unlock()
+	return func() {
+		repoMu.Lock()
+		repoCredentialsFn = prev
+		repoMu.Unlock()
+	}
+}
+
+func configuredRepoCredentials() []string {
+	repoMu.RLock()
+	fn := repoCredentialsFn
+	repoMu.RUnlock()
+	if fn == nil {
+		return nil
+	}
+	return fn()
+}
 
 // callerClock is the in-process methods' clock. An external server
 // holds a pass's deadline to its own clock; this one runs inside grain,
@@ -284,7 +327,56 @@ func repoAccessArgs() map[string]any {
 	}
 }
 
+func validSortedCredentialNames(names []string) []string {
+	seen := make(map[string]bool, len(names))
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if !githubtoken.ValidName(n) || seen[n] {
+			continue
+		}
+		seen[n] = true
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func repoCredentialArgs(configured []string) (map[string]any, []string) {
+	prop := map[string]any{
+		"type":        "string",
+		"pattern":     githubtoken.NamePattern,
+		"not":         map[string]any{"const": "anonymous"},
+		"description": "Named GitHub credential under secrets/github (<name>.token, <name>.app.json, or <name>.ssh.json) to authenticate this task's git operations with.",
+	}
+	var valid []string
+	if configured != nil {
+		valid = validSortedCredentialNames(configured)
+		enum := make([]any, len(valid))
+		for i, n := range valid {
+			enum[i] = n
+		}
+		prop["enum"] = enum
+	}
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"credential"},
+		"properties":           map[string]any{"credential": prop},
+	}, valid
+}
+
 func buildRepoServer() *protocol.Server {
+	return buildRepoServerFor(configuredRepoCredentials())
+}
+
+// RepoServerForCredentials builds an in-process https://grain.dev/capabilities/repo
+// server validating #credential against the given configured credential names
+// (when non-nil).
+func RepoServerForCredentials(configured []string) *protocol.Server {
+	return buildRepoServerFor(configured)
+}
+
+func buildRepoServerFor(configured []string) *protocol.Server {
 	read, err := protocol.NewMethod(protocol.MethodSpec{
 		Name: RepoReadMethod,
 		Description: "Let a CI job fetch one other repository, read-only, through the git proxy with the " +
@@ -342,7 +434,41 @@ func buildRepoServer() *protocol.Server {
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: building repo#%s: %v", RepoWriteMethod, err))
 	}
-	cs, err := protocol.NewCapabilityServer("repo", read, write)
+	credArgs, validCreds := repoCredentialArgs(configured)
+	hasConfiguredList := configured != nil
+	credentialMethod, err := protocol.NewMethod(protocol.MethodSpec{
+		Name: RepoCredentialMethod,
+		Description: "Authenticate this task's git proxy operations, pull request creation, and commit identity " +
+			"with the named credential under secrets/github instead of the deployment's default git connection " +
+			"(formerly github-credential:<name>).",
+		Args: credArgs,
+		// Nothing is placed in the sandbox: the git proxy, PR opener, and git
+		// identity read the grant off the live task (Store.TaskGitCredentialOn).
+		Mint: func(_ context.Context, _ string, _ time.Time, args map[string]any) (*protocol.MintResponse, error) {
+			name, _ := args["credential"].(string)
+			if !githubtoken.ValidName(name) {
+				return &protocol.MintResponse{
+					Status: protocol.StatusRefused,
+					Reason: fmt.Sprintf("invalid git credential name %q", name),
+				}, nil
+			}
+			if hasConfiguredList && !slices.Contains(validCreds, name) {
+				return &protocol.MintResponse{
+					Status: protocol.StatusRefused,
+					Reason: fmt.Sprintf("git credential %q is not configured under secrets/github", name),
+				}, nil
+			}
+			return &protocol.MintResponse{
+				Status:        protocol.StatusOK,
+				PromptSection: githubtoken.PromptSection(name),
+			}, nil
+		},
+		Now: callerClock,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("grainserver: building repo#%s: %v", RepoCredentialMethod, err))
+	}
+	cs, err := protocol.NewCapabilityServer("repo", read, write, credentialMethod)
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: building repo capability server: %v", err))
 	}
@@ -388,12 +514,10 @@ func Server() *protocol.Server {
 	return serverInst
 }
 
-// RepoServer returns the singleton in-process https://grain.dev/capabilities/repo server.
+// RepoServer returns the in-process https://grain.dev/capabilities/repo server
+// reflecting the currently configured named git credentials (if any).
 func RepoServer() *protocol.Server {
-	repoOnce.Do(func() {
-		repoInst = buildRepoServer()
-	})
-	return repoInst
+	return buildRepoServer()
 }
 
 // GitHubServer returns the singleton in-process https://grain.dev/capabilities/github server.
@@ -414,6 +538,12 @@ func RepoStatus() servers.Status { return statusOf(RepoID, RepoServer()) }
 
 // GitHubStatus is Status for the in-process github server.
 func GitHubStatus() servers.Status { return statusOf(GitHubID, GitHubServer()) }
+
+// RepoStatusForCredentials is RepoStatus validating #credential against the
+// given configured credential names (when non-nil).
+func RepoStatusForCredentials(configured []string) servers.Status {
+	return statusOf(RepoID, RepoServerForCredentials(configured))
+}
 
 // Statuses is every in-process server's Status: core's own, then one for
 // each server a build outside core contributed methods to
@@ -490,11 +620,21 @@ func defaultConfigMapServer() *protocol.Server {
 // unconfigured in-process config-map server so built-in bootstrap playbook
 // grants work without a subprocess registry.
 func Lookup(fallback protocol.Lookup) protocol.Lookup {
+	return LookupWithRepoCredentials(fallback, nil)
+}
+
+// LookupWithRepoCredentials is Lookup, overriding the configured #credential
+// names on RepoID when repoCredentials is non-nil (otherwise falling back to
+// ConfigureRepoCredentials).
+func LookupWithRepoCredentials(fallback protocol.Lookup, repoCredentials []string) protocol.Lookup {
 	return func(capabilityID string) (*protocol.Server, error) {
 		switch capabilityID {
 		case ID:
 			return buildServer(), nil
 		case RepoID:
+			if repoCredentials != nil {
+				return buildRepoServerFor(repoCredentials), nil
+			}
 			return buildRepoServer(), nil
 		case GitHubID:
 			return buildGitHubServer(), nil

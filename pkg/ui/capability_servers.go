@@ -99,16 +99,32 @@ type CapabilityInProcessServer struct {
 // inProcessSummaries are what core's in-process servers give a task.
 var inProcessSummaries = map[string]string{
 	grainserver.ID:       "grain's own host and database: its journal, health probes, SQL against its database and confirmed shell commands on its host.",
-	grainserver.RepoID:   "Access to repositories beyond a run's own: a CI job's read or write access to another repository, or pushing any ref of a repository a task may write.",
+	grainserver.RepoID:   "Access to repositories and git credentials: a CI job's read or write access to another repository, pushing any ref of a repository a task may write, or selecting a named git credential under secrets/github.",
 	grainserver.GitHubID: "GitHub operations answered with the run's team git credential: reading issues and comments on the repositories it may reach.",
+}
+
+// inProcessStatuses returns grainserver.Statuses() with RepoID's #credential
+// schema scoped to c.configuredGitCredentials() when configured.
+func (c *Client) inProcessStatuses() []servers.Status {
+	statuses := grainserver.Statuses()
+	creds := c.configuredGitCredentials()
+	if creds == nil {
+		return statuses
+	}
+	for i := range statuses {
+		if statuses[i].ID == grainserver.RepoID {
+			statuses[i] = grainserver.RepoStatusForCredentials(creds)
+		}
+	}
+	return statuses
 }
 
 // inProcessServers are the in-process servers' rows, by capability_id,
 // leaving out any id configured mcp_servers also hold (which the
 // in-process server shadows; that entry is listed as configured).
-func inProcessServers(configured map[string]protocol.ServerConfig) []CapabilityServer {
+func (c *Client) inProcessServers(configured map[string]protocol.ServerConfig) []CapabilityServer {
 	var out []CapabilityServer
-	for _, s := range grainserver.Statuses() {
+	for _, s := range c.inProcessStatuses() {
 		if _, ok := configured[s.ID]; ok {
 			continue
 		}
@@ -328,7 +344,7 @@ func (c *Client) ListCapabilityServers(ctx context.Context) ([]CapabilityServer,
 		}
 		out = append(out, row)
 	}
-	out = append(out, inProcessServers(configured)...)
+	out = append(out, c.inProcessServers(configured)...)
 	// Built-ins first, then the in-process servers, then the operator's
 	// own, each by capability_id.
 	rank := func(s CapabilityServer) int {

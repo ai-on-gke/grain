@@ -413,6 +413,23 @@ func sanitizeAttachmentFilename(name string) string {
 	return name
 }
 
+// configuredGitCredentials returns the named GitHub credentials configured on
+// this Client (non-nil when a credential set or startup list is configured;
+// nil when unconfigured).
+func (c *Client) configuredGitCredentials() []string {
+	if c.Config.OfferedGitCredentials != nil {
+		return c.Config.OfferedGitCredentials
+	}
+	if c.Config.Credentials != nil {
+		names := c.Config.Credentials.ExtraNames()
+		if names == nil {
+			return []string{}
+		}
+		return names
+	}
+	return nil
+}
+
 // capabilityLookup is the attached capability servers a capability
 // reference is normalized against (design/spec/capabilities/capabilities.spec.md §4.2.1),
 // or nil in a process that attaches none -- where only a reference's
@@ -421,7 +438,7 @@ func (c *Client) capabilityLookup() protocol.Lookup {
 	if l, ok := c.Config.CapabilityServers.(interface {
 		Lookup(string) (*protocol.Server, error)
 	}); ok && l != nil {
-		return grainserver.Lookup(l.Lookup)
+		return grainserver.LookupWithRepoCredentials(l.Lookup, c.configuredGitCredentials())
 	}
 	return nil
 }
@@ -439,7 +456,7 @@ func (c *Client) normalizeCapabilityID(id string) (string, error) {
 	}
 	lookup := c.capabilityLookup()
 	if lookup == nil && grainserver.IsInProcessGrant(id) {
-		lookup = grainserver.Lookup(nil)
+		lookup = grainserver.LookupWithRepoCredentials(nil, c.configuredGitCredentials())
 	}
 	if orig != id && model.CapabilityGrantRef(id) == model.GCPKeyRef {
 		if lookup == nil {
@@ -5635,6 +5652,9 @@ func (c *Client) SetCapability(ctx context.Context, id, capabilityID string, att
 		if attach {
 			for _, nid := range targetIDs {
 				kept = append(kept, model.Grant{Capability: nid, Via: model.GrantByLabel})
+			}
+			if _, _, err := model.GitCredentialOverride(kept); err != nil {
+				return validationErrorf("%w", err)
 			}
 		}
 		task.Grants = kept

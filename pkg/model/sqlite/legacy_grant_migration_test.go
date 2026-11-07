@@ -118,7 +118,8 @@ var retiredGrants = []struct {
 	{103, "gemini-key", []string{model.GCPGeminiKeyGrant}},
 	{115, "self-debug", []string{"api:self-debug", model.GrainSourceGrant}},
 	{118, "bootstrap-playbooks", []string{model.BootstrapPlaybooksGrant}},
-	{120, "read-issues", []string{model.GitHubReadIssuesGrant}},
+	{120, "github-credential:release-bot", []string{model.RepoCredentialGrant("release-bot")}},
+	{121, "read-issues", []string{model.GitHubReadIssuesGrant}},
 }
 
 // retiredAs is what a store migration rewrote name to: retiredGrants'
@@ -962,7 +963,7 @@ func TestMigration96HandlesPreexistingAdminConfigShapes(t *testing.T) {
 	})
 }
 
-func TestMigration120RewritesReadIssuesPolicy(t *testing.T) {
+func TestMigration121RewritesReadIssuesPolicy(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 
@@ -1001,19 +1002,19 @@ func TestMigration120RewritesReadIssuesPolicy(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 119 WHERE `id` = 1"); err != nil {
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 120 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	exportDir := t.TempDir()
 	if err := staterepo.Export(ctx, db, exportDir); err != nil {
-		t.Fatalf("staterepo.Export at schema 119: %v", err)
+		t.Fatalf("staterepo.Export at schema 120: %v", err)
 	}
-	if err := staterepo.WriteSchemaVersion(exportDir, 119); err != nil {
+	if err := staterepo.WriteSchemaVersion(exportDir, 120); err != nil {
 		t.Fatal(err)
 	}
 
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating 119 -> 120: %v", err)
+		t.Fatalf("migrating 120 -> 120: %v", err)
 	}
 
 	assertPolicy := func(t *testing.T, s *model.Store) {
@@ -1052,18 +1053,136 @@ func TestMigration120RewritesReadIssuesPolicy(t *testing.T) {
 
 	assertPolicy(t, store)
 
-	// Re-running migration 120 is idempotent.
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 119 WHERE `id` = 1"); err != nil {
+	// Re-running migration 121 is idempotent.
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 120 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("re-running migration 120: %v", err)
+		t.Fatalf("re-running migration 121: %v", err)
 	}
 	assertPolicy(t, store)
 
 	importedStore, importedDB, _ := openStore(t)
 	if err := staterepo.Import(ctx, importedDB, exportDir); err != nil {
-		t.Fatalf("staterepo.Import of schema-119 export: %v", err)
+		t.Fatalf("staterepo.Import of schema-120 export: %v", err)
 	}
 	assertPolicy(t, importedStore)
+}
+
+func TestMigrate120GitHubCredentialToRepoServer(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	cfg := model.Config{
+		DefaultCapabilities: []string{"github-credential:release-bot", "durable"},
+		ConsoleSessions: []model.ConsoleSession{
+			{
+				ID:           "director",
+				Title:        "Director",
+				Capabilities: []string{"github-credential:ops-bot", "durable"},
+			},
+		},
+		CapabilityPolicy: model.CapabilityPolicy{
+			Rules: []model.CapabilityPolicyRule{
+				{Capability: "github-credential:release-bot", Deny: false, AllowUntrusted: true},
+				{Capability: "github-credential:*", Deny: true, AllowUntrusted: true},
+			},
+			Catalogue: &model.CapabilityCatalogue{
+				Defaults: model.CatalogueDefaults{
+					Task: []string{"github-credential:release-bot"},
+					CI:   []string{"github-credential:ci-bot"},
+					Repos: map[string]model.CatalogueRepoDefaults{
+						"acme/widgets": {
+							Task: []string{"github-credential:widgets-bot"},
+							CI:   []string{"github-credential:ci-bot"},
+						},
+					},
+				},
+			},
+		},
+	}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:                widgets,
+		DefaultCapabilities: []string{"github-credential:widgets-bot", "durable"},
+		CICapabilities:      []string{"github-credential:ci-bot"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, ins := range []struct{ table, col, id, cap string }{
+		{"task_grant", "task_id", "t1", "github-credential:release-bot"},
+		{"task_grant", "task_id", "t1", "durable"},
+		{"template_grant", "template_id", "rel-tmpl", "github-credential:release-bot"},
+		{"schedule_grant", "schedule_id", "rel-sched", "github-credential:ops-bot"},
+	} {
+		if _, err := db.ExecContext(ctx, "INSERT INTO `"+ins.table+"` (`"+ins.col+"`, `capability`, `via`) VALUES (?, ?, 'label')", ins.id, ins.cap); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 119 WHERE `id` = 1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.New(db).Init(ctx); err != nil {
+		t.Fatalf("migrating 119 -> 120: %v", err)
+	}
+
+	releaseGrant := model.RepoCredentialGrant("release-bot")
+	opsGrant := model.RepoCredentialGrant("ops-bot")
+	widgetsGrant := model.RepoCredentialGrant("widgets-bot")
+	ciGrant := model.RepoCredentialGrant("ci-bot")
+
+	gotCfg, err := store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{releaseGrant, "durable"}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
+		t.Errorf("DefaultCapabilities = %v, want %v", gotCfg.DefaultCapabilities, want)
+	}
+	if want := []string{opsGrant, "durable"}; !slices.Equal(gotCfg.ConsoleSessions[0].Capabilities, want) {
+		t.Errorf("ConsoleSessions[0].Capabilities = %v, want %v", gotCfg.ConsoleSessions[0].Capabilities, want)
+	}
+	if len(gotCfg.CapabilityPolicy.Rules) != 2 ||
+		gotCfg.CapabilityPolicy.Rules[0].Capability != model.RepoCredentialRef ||
+		gotCfg.CapabilityPolicy.Rules[0].AllowUntrusted ||
+		gotCfg.CapabilityPolicy.Rules[1].Capability != model.RepoCredentialRef ||
+		!gotCfg.CapabilityPolicy.Rules[1].Deny {
+		t.Errorf("CapabilityPolicy.Rules = %+v", gotCfg.CapabilityPolicy.Rules)
+	}
+	if want := []string{releaseGrant}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.Task, want) {
+		t.Errorf("Catalogue.Defaults.Task = %v, want %v", gotCfg.CapabilityPolicy.Catalogue.Defaults.Task, want)
+	}
+	if want := []string{ciGrant}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.CI, want) {
+		t.Errorf("Catalogue.Defaults.CI = %v, want %v", gotCfg.CapabilityPolicy.Catalogue.Defaults.CI, want)
+	}
+	if want := []string{widgetsGrant}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.Repos["acme/widgets"].Task, want) {
+		t.Errorf("Catalogue.Defaults.Repos.Task = %v, want %v", gotCfg.CapabilityPolicy.Catalogue.Defaults.Repos["acme/widgets"].Task, want)
+	}
+
+	gotRepo, err := store.GetRepoConfig(ctx, widgets)
+	if err != nil || gotRepo == nil {
+		t.Fatalf("GetRepoConfig: %v, %+v", err, gotRepo)
+	}
+	if want := []string{widgetsGrant, "durable"}; !slices.Equal(gotRepo.DefaultCapabilities, want) {
+		t.Errorf("repo DefaultCapabilities = %v, want %v", gotRepo.DefaultCapabilities, want)
+	}
+	if want := []string{ciGrant}; !slices.Equal(gotRepo.CICapabilities, want) {
+		t.Errorf("repo CICapabilities = %v, want %v", gotRepo.CICapabilities, want)
+	}
+
+	wantTask := []string{releaseGrant, "durable"}
+	sort.Strings(wantTask)
+	if got := grantRows(t, ctx, db, "task_grant", "task_id")["t1"]; !slices.Equal(got, wantTask) {
+		t.Errorf("task_grant = %v, want %v", got, wantTask)
+	}
+	if got := grantRows(t, ctx, db, "template_grant", "template_id")["rel-tmpl"]; !slices.Equal(got, []string{releaseGrant}) {
+		t.Errorf("template_grant = %v, want [%s]", got, releaseGrant)
+	}
+	if got := grantRows(t, ctx, db, "schedule_grant", "schedule_id")["rel-sched"]; !slices.Equal(got, []string{opsGrant}) {
+		t.Errorf("schedule_grant = %v, want [%s]", got, opsGrant)
+	}
 }

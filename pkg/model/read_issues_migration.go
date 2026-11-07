@@ -19,15 +19,15 @@ import (
 	"database/sql"
 )
 
-// readIssuesRenames is migration 120's renames: the retired bare read-issues
+// readIssuesRenames is migration 121's renames: the retired bare read-issues
 // capability to the in-process github server's read-issues method. Kept as
 // the migration's own copy so later alias additions do not alter what
-// migration 120 rewrote.
+// migration 121 rewrote.
 var readIssuesRenames = map[string][]string{
 	"read-issues": {GitHubReadIssuesGrant},
 }
 
-// migrateReadIssuesGrants is schema migration 120's Up: rewrites stored
+// migrateReadIssuesGrants is schema migration 121's Up: rewrites stored
 // read-issues grants across the three grant tables, deployment and repository
 // default_capabilities, repo_config.ci_capabilities, standing console_sessions
 // and capability_policy rules/catalogue defaults to

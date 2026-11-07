@@ -94,7 +94,11 @@ refused without it. The reason is written to the controller log
     would otherwise refuse every exchange. A build that registers a
     `DefaultOn` capability with `SandboxEgress` set ships it
     `NetworkOpen` (§3.1.6).
-  - `TasksApproved` is unset (`false`). `Reads` is empty and `Writes`
+  - `TasksApproved: true` (G2, done); a deployment that saved its own
+    `ConsoleSessions` row keeps what it saved (`ConsoleSessionsOr`), and
+    `ConsoleSessionTasksApprovedTag` / `ConsoleSessionTasksUnapprovedTag`
+    preserve an operator's override on the active task. `Reads` is empty
+    and `Writes`
     is `[{Repo: grain/config}]` (`model.ConfigRepo`), which offers
     `propose_config_change` (G5); `ReadsAll` is unset (`nil`, meaning `true`: `model.ConsoleSessionAutoReads`
     adds every active working repository in `repo_config` and `target_repos`).
@@ -343,7 +347,8 @@ asking for `durable` or `priority-dispatch` is held for a person.
 
 The shipped director MUST file its proposals approved
 (`QueuesProposals`) unless the operator turns this off, either with
-`ConsoleSessionTasksApprovedTag` or in the session row. Rationale:
+`ConsoleSessionTasksUnapprovedTag` (paired with `ConsoleSessionTasksApprovedTag`)
+or in the session row. Rationale:
 
 - The director's job is filing work (design §1), and in a single-tenant
   deployment its proposals are ones the operator asked for in the rail.
@@ -582,7 +587,7 @@ deployment's `default_capabilities`.
 | # | Area | `main` today | This spec | Change |
 |---|---|---|---|---|
 | G1 | `DefaultConsoleSessions().Capabilities` | **done**: `model.DefaultConsoleSessions` (`pkg/model/console_session.go`) ships all 16 Tier 1 grants plus build `DefaultOn`; saved rows stay sticky on existing deployments (`ConsoleSessionsOr`, [Task #2126](/tasks/2126)), with `model.MissingShippedConsoleSessionCapabilities` / `ui.ConsoleSessionSetting.MissingShippedDefaults` surfacing a one-click "Adopt shipped defaults" banner in `ui/src/components/ConsoleSessionPage.jsx` (`pkg/ui/console_sessions.go`); pinned by `pkg/model/console_session_test.go`, `pkg/ui/console_sessions_test.go` and `ui/src/components/ConsoleSessionPage.test.jsx` | Tier 1 list (§3.1) | None. |
-| G2 | `TasksApproved` | `false` | `true` | Set in `DefaultConsoleSessions`. `ConsoleSessionTasksApprovedTag` / its opposite keep an operator's override. Add tests in `pkg/model`. |
+| G2 | `TasksApproved` | **done**: `model.DefaultConsoleSessions` (`pkg/model/console_session.go`) ships `TasksApproved: true` on `director`; saved `ConsoleSessions` rows (`ConsoleSessionsOr`) and active-task overrides (`ConsoleSessionTasksApprovedTag` / `ConsoleSessionTasksUnapprovedTag`) stay sticky across reconciles and active-session edits; pinned by `pkg/model/console_session_test.go` and `pkg/orchestrator/consolesessions_test.go` | `true` (§3.1.5) | None. |
 | G3 | `NetworkAccess` | **done**: `NetworkNone` with the `ConsoleSessionNetworkAccess` fallback, and `NetworkOpen` on a build registering a `SandboxEgress` `DefaultOn` capability | `NetworkNone` with the `ConsoleSessionNetworkAccess` fallback | None. The verification is recorded in §3.1.6. |
 | G4 | State repo read | **done**: implicit via `StateRepo`; the checkout is read-only for a session without `grain/config` in `Writes`, pinned by `consolesessions_test.go` and `director_state_internal_test.go` | Unchanged | None. |
 | G5 | `propose_config_change` & config-repo proposal rail | **done**: `model.ConfigRepoProposalHold` holds every child whose `Target` or `Writes` names `IsConfigRepo` (first in `AutoApprovalRefusal`, and as a grain hold in `ui.Client.CreateTask` and `orchestrator.relayProposedTasks`); `DefaultConsoleSessions` ships the director with `Writes: [grain/config]` | Shipped on the director, while child `propose_task` calls targeting or writing `IsConfigRepo` always wait for a person (§3.1.3) | None. Pinned by the `director_proposal_rails` tests in `pkg/model`, `pkg/ui` and `pkg/orchestrator`. |
@@ -591,10 +596,10 @@ deployment's `default_capabilities`.
 | G8 | Self-approval | **done**: `agentFilingEscalation` refuses `approved: true` for every in-grain task agent, and `agentRails` (`agentApprovalRail` in `pkg/ui/agent_api_gate.go`) refuses an agent's `POST /api/tasks/{id}/approve` (and `POST /api/tasks/{id}/run-now` on an unapproved task) on a task in its own proposal or `Origin` lineage or held for a person (`HeldForApprovalTag`, `ConfigRepoProposalHold`, `ChangeTargetNeedsPersonApproval`, declared `push:` sets, ungranted `AutoMerge`, catalogue `requires_person`, person-only grants, `KeepRunning`, and `EscalatedCapabilities` / `UngrantedWrites` / `UngrantedReads` / `PersonOnlyProposalSettings` against the task's proposer), pinned by `pkg/ui/agent_approval_rail_test.go` | Unchanged | None. |
 | G9 | Seeded repo defaults on director proposals | **done**: admitted under §4.2 by `model.ProposalEscalations` (`pkg/model/proposal_seeding.go`), which `AutoApprovalRefusal` (`hold_for_approval.go`), `ui.Client.CreateTask` and `orchestrator.relayProposedTasks` take the seeding source (`model.ProposalSeeding`) for; §4.4 note is `model.SeededDefaultsNote`; each excluded case pinned by `proposal_seeding_test.go`, `director_seeded_defaults_test.go` and `consolesessions_test.go` | Admitted under §4.2 | None. |
 | G10 | `DirectorSessionBody` | **done**: `model.DirectorSessionBody` (`pkg/model/console_session.go`) instructs passing `expect` state preconditions and explicit reasons on stop/close calls, and passing `hold_for_approval: true` on destructive, irreversible, or surprising `propose_task` calls; pinned by `pkg/model/console_session_test.go` | Tells the director to use `expect` on stop/close, `hold_for_approval` for destructive proposals, and give reasons | None. |
-| G11 | Docs | Retired capability names updated in [Task #3185](/tasks/3185). The `NetworkAccess` row of `docs/director.md`'s envelope table, and `docs/local-policy.md`, match G3 ([Task #3312](/tasks/3312)). The `Capabilities` row matches G1 ([Task #3320](/tasks/3320)). The `TasksApproved` row still shows the pre-G2 default | Matches §3 | Update `docs/director.md` alongside G2 when `TasksApproved` flips. |
+| G11 | Docs | **done**: retired capability names updated in [Task #3185](/tasks/3185); `NetworkAccess` row of `docs/director.md`'s envelope table and `docs/local-policy.md` updated in [Task #3312](/tasks/3312) (G3); `Capabilities` row updated in [Task #3320](/tasks/3320) (G1); `TasksApproved` row and prose in `docs/director.md` and §2 W3 table in `design/design/director.design.md` updated in [Task #3323](/tasks/3323) (G2) | Matches §3 | None. |
 | G12 | Capacity bound on session-queued proposals | **done**: `AutoSubmitLimits.TurnFanOut` (default 10), checked by `Store.ExceededSessionTurnLimit` beside `ExceededAutoSubmitLimit` in `ui.Client.CreateTask` and `orchestrator.relayProposedTasks`; over it, filed for a person with `AutoSubmitLimitNote` | Per-turn fan-out bound; over it, filed for a person (§3.1.5) | None. The bound has no settings knob yet. |
 
-Ordering: G1, G3, G4, G5, G6, G7, G8, G9, G10 and G12 are done (G3's verification is recorded
-in §3.1.6). The Tier 3
-rails (G5's `IsConfigRepo` proposal hold, G7's built-in floor, G8's approval
-rail and G12's fan-out bound) are all in place ahead of G2.
+Ordering: G1–G12 are all done (G3's verification is recorded in §3.1.6). G2
+landed last, after the Tier 3 rails (G5's `IsConfigRepo` proposal hold, G7's
+built-in floor, G8's approval rail and G12's fan-out bound) and G1/G10
+(`DirectorSessionBody` guidance) were in place.
