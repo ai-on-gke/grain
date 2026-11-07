@@ -256,6 +256,10 @@ for name in "${targets[@]}"; do
   echo "    Entry '${name}': status=${status} version=${ver:-unknown} heartbeat_age_s=${hb_age} active_tasks=${active_tasks} awaiting_reply=${awaiting_reply} queue_depth=${queue_depth}"
 
   if [[ "${status}" != "online" ]]; then
+    if [[ -z "${ENTRY_NAME}" && "${hb_age}" == "null" ]]; then
+      echo "    NOTE: Entry '${name}' is registered but awaiting its first daemon heartbeat; skipping route/tunnel check (pass --entry ${name} to require online)."
+      continue
+    fi
     echo "verify.sh: expected entry '${name}' status=online, got '${status}'" >&2
     exit 1
   fi

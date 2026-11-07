@@ -57,7 +57,7 @@ Options:
   --project <id>             GCP sandbox project ID (required)
   --admin <email>            Primary admin/owner email admitted through Cloud IAP (required)
   --extra-user <email>       Additional human email admitted through Cloud IAP (repeatable)
-  --entry <name>             Connected entry name to pre-declare on managed TLS and register (repeatable)
+  --entry <name[:owner]>     Connected entry to pre-declare on managed TLS and register (repeatable; owner defaults to --admin)
   --prefix <prefix>          Resource name prefix, 3-12 chars (default: grain-reg)
   --region <region>          GCP region for subnet/NAT/KMS (default: us-central1)
   --zone <zone>              GCP zone for the test VM (default: us-central1-a)
@@ -340,7 +340,12 @@ fi
 
 entries_json="[]"
 if [[ "${#ENTRIES[@]}" -gt 0 ]]; then
-  entries_json="$(printf '%s\n' "${ENTRIES[@]}" | jq -R . | jq -s .)"
+  entry_names=()
+  for spec in "${ENTRIES[@]}"; do
+    ename="${spec%%:*}"
+    entry_names+=("${ename}")
+  done
+  entries_json="$(printf '%s\n' "${entry_names[@]}" | jq -R . | jq -s 'unique')"
 fi
 
 log "Checking IAM permissions for ${active_acct} in ${PROJECT_ID}..."
@@ -537,19 +542,36 @@ if [[ -n "${TOKEN_OUT_DIR}" ]]; then
   install -d -m 0700 "${TOKEN_OUT_DIR}"
 fi
 
+all_humans=("${ADMIN_EMAIL}")
+for u in "${EXTRA_USERS[@]}"; do
+  if [[ -n "${u}" ]]; then
+    all_humans+=("${u}")
+  fi
+done
+
 if [[ "${#ENTRIES[@]}" -gt 0 ]]; then
   if [[ "${has_iap_ssh}" -eq 1 ]]; then
-    for entry in "${ENTRIES[@]}"; do
-      log "Registering connected entry '${entry}' owned by ${ADMIN_EMAIL}..."
+    for spec in "${ENTRIES[@]}"; do
+      entry="${spec%%:*}"
+      entry_owner="${ADMIN_EMAIL}"
+      if [[ "${spec}" == *:* && -n "${spec#*:}" ]]; then
+        entry_owner="${spec#*:}"
+      fi
+      log "Registering connected entry '${entry}' owned by ${entry_owner}..."
       reg_args=(
         --project "${PROJECT_ID}"
         --prefix "${NAME_PREFIX}"
         --zone "${ZONE}"
         --entry "${entry}"
-        --owner "${ADMIN_EMAIL}"
+        --owner "${entry_owner}"
         --registry-host "${registry_host}"
         --instance-domain "${instance_domain}"
       )
+      for h in "${all_humans[@]}"; do
+        if [[ "${h,,}" != "${entry_owner,,}" ]]; then
+          reg_args+=(--allow-principal "user:${h,,}")
+        fi
+      done
       if [[ "${ALLOW_VERIFIER_ON_ENTRIES}" -eq 1 ]]; then
         reg_args+=(--allow-verifier-sa)
       fi
@@ -561,10 +583,20 @@ if [[ "${#ENTRIES[@]}" -gt 0 ]]; then
   else
     log "Skipping IAP SSH entry bootstrap (missing roles/iap.tunnelResourceAccessor on ${active_acct})."
     log "Run register-entry.sh from an IAP-authorized workstation (or grant roles/iap.tunnelResourceAccessor + roles/compute.osAdminLogin):"
-    for entry in "${ENTRIES[@]}"; do
-      log "  ./deploy/test/registry-sandbox/register-entry.sh --project ${PROJECT_ID} --prefix ${NAME_PREFIX} --zone ${ZONE} --entry ${entry} --owner ${ADMIN_EMAIL} --allow-verifier-sa"
+    for spec in "${ENTRIES[@]}"; do
+      entry="${spec%%:*}"
+      entry_owner="${ADMIN_EMAIL}"
+      if [[ "${spec}" == *:* && -n "${spec#*:}" ]]; then
+        entry_owner="${spec#*:}"
+      fi
+      log "  ./deploy/test/registry-sandbox/register-entry.sh --project ${PROJECT_ID} --prefix ${NAME_PREFIX} --zone ${ZONE} --entry ${entry} --owner ${entry_owner} --allow-verifier-sa"
     done
   fi
+fi
+
+admitted_summary="${ADMIN_EMAIL}"
+if [[ "${#EXTRA_USERS[@]}" -gt 0 ]]; then
+  admitted_summary="${ADMIN_EMAIL}, $(IFS=', '; echo "${EXTRA_USERS[*]}")"
 fi
 
 cat <<SUMMARY
@@ -578,7 +610,7 @@ Grain Registry Sandbox Instance Ready
   JWKS URL:         ${jwks_url}
   Load Balancer IP: ${lb_ip}
   TLS Mode:         ${TLS_MODE}
-  Admitted Owner:   ${ADMIN_EMAIL}
+  Admitted Users:   ${admitted_summary}
 
 Sign in (browser):
   Open ${registry_url}/api/directory (or ${registry_url}/) and sign in with
