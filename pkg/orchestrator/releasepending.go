@@ -43,6 +43,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -74,6 +75,10 @@ var releaseTagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 // -count iterations -- never hold each other's poll back.
 var releasePendingPolled sync.Map // store id | repo string -> time.Time
 
+func releasePendingKey(store *model.Store, repo model.RepoRef) string {
+	return fmt.Sprintf("%d|%s", store.ID(), strings.ToLower(repo.String()))
+}
+
 // reconcileReleasePending reads, at most every
 // releasePendingPollInterval, the tags of every repository this
 // deployment releases from GitHub Actions, and raises or clears
@@ -91,24 +96,58 @@ func reconcileReleasePending(ctx context.Context, deps Deps, now time.Time) erro
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading repo configs: %w", err)
 	}
+	targets, err := deps.Store.TargetRepos(ctx)
+	if err != nil {
+		return fmt.Errorf("orchestrator: reading target repos: %w", err)
+	}
+	byRepo := make(map[string]*model.RepoConfig, len(configs))
+	var repos []model.RepoRef
+	add := func(r model.RepoRef) {
+		if r.Owner == "" || r.Name == "" {
+			return
+		}
+		if slices.ContainsFunc(repos, func(e model.RepoRef) bool { return e.Same(r) }) {
+			return
+		}
+		repos = append(repos, r)
+	}
+	for i := range configs {
+		cfg := &configs[i]
+		byRepo[strings.ToLower(cfg.Repo.String())] = cfg
+		add(cfg.Repo)
+	}
+	for _, raw := range targets {
+		t := strings.TrimSpace(raw)
+		if t == "" || strings.ContainsAny(t, "*?[") {
+			continue
+		}
+		if r, err := model.ParseRepo(t); err == nil {
+			add(r)
+		}
+	}
 	var errs []error
-	for _, cfg := range configs {
-		if !model.RunsWorkItem(&cfg, model.ReleaseItem) {
+	for _, repo := range repos {
+		cfg := byRepo[strings.ToLower(repo.String())]
+		if !model.RunsWorkItem(cfg, model.ReleaseItem) {
 			continue
 		}
-		if allowed, err := repoAllowedForAnyTeam(ctx, deps.Store, cfg.Repo); err != nil || !allowed {
+		if allowed, err := repoAllowedForAnyTeam(ctx, deps.Store, repo); err != nil || !allowed {
 			continue
 		}
-		eff, err := deps.Store.EffectiveRepoConfig(ctx, cfg.Repo)
-		if err != nil || eff.CIMode != model.CIModeGitHub {
+		actions, err := deps.Store.ReleasesFromGitHubActions(ctx, repo)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("orchestrator: %w", err))
 			continue
 		}
-		key := fmt.Sprintf("%d|%s", deps.Store.ID(), cfg.Repo.String())
+		if !actions {
+			continue
+		}
+		key := releasePendingKey(deps.Store, repo)
 		if last, ok := releasePendingPolled.Load(key); ok && now.Sub(last.(time.Time)) < releasePendingPollInterval {
 			continue
 		}
 		releasePendingPolled.Store(key, now)
-		if err := watchPendingReleases(ctx, deps.Store, tags, files, cfg.Repo, now); err != nil {
+		if err := watchPendingReleases(ctx, deps.Store, tags, files, repo, now); err != nil {
 			errs = append(errs, err)
 		}
 	}
