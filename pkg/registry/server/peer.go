@@ -197,8 +197,12 @@ func (rt *Router) handlePeerTunnelRequest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// 4. Look up local active tunnel session.
+	// 4. Look up local active tunnel session, waiting out a handshake that has
+	// acquired the session here but not yet registered the tunnel.
 	local := rt.GetLocalTunnel(entryName)
+	if local == nil && rt.awaitHandshake(r.Context(), entryName) {
+		local = rt.GetLocalTunnel(entryName)
+	}
 	if local == nil {
 		w.Header().Set(HeaderTunnelGone, "1")
 		writeJSONError(w, http.StatusServiceUnavailable, "tunnel_gone", "tunnel session is not active on this replica")
@@ -334,8 +338,7 @@ func (rt *Router) forwardToPeer(w http.ResponseWriter, r *http.Request, entry *s
 			var goneErr *tunnelGoneError
 			if errors.As(proxyErr, &goneErr) {
 				rt.tunnelCache.InvalidatePeerGone(entry.Name)
-				canReplay := r.Body == nil || r.Body == http.NoBody || r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions
-				if canReplay {
+				if isReplayableRequest(r) {
 					rt.handleOfflineOrWait(rw, r, entry, isManager, graceDeadline)
 					return
 				}

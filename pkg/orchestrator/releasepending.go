@@ -20,9 +20,10 @@ package orchestrator
 // On a repository that releases from grain CI, the release train's own
 // run raises release.pending:vX.Y.Z through the CI API
 // (scripts/release-from-trunk.sh raise_pending). On one that releases
-// from GitHub Actions (ci_mode: github) the train runs on a hosted
-// runner, which cannot reach this deployment -- on 11-01/02 that is why
-// the Inbox never showed an Approve button. So the deployment looks,
+// from GitHub Actions (model.Store.ReleasesFromGitHubActions: ci_mode:
+// github, or no CI Mode set and no grain CI in effect) the train runs on a
+// hosted runner, which cannot reach this deployment -- on 11-01/02 that is
+// why the Inbox never showed an Approve button. So the deployment looks,
 // outbound: the vX.Y.Z-pending tag is the state, and this reconciler
 // reads the repository's tags and raises the notification for every
 // release staged and not yet promoted, with the -pending tag's message
@@ -49,6 +50,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -79,6 +81,17 @@ func releasePendingKey(store *model.Store, repo model.RepoRef) string {
 	return fmt.Sprintf("%d|%s", store.ID(), strings.ToLower(repo.String()))
 }
 
+// isGitOnlyRepo reports whether this deployment reaches repo over plain
+// git only (SSH-only credentials, or a host with no forge API), asking
+// the client -- or the wrapper around it, such as the daemon's
+// StateRepoPullRequestClient -- through github.GitOnlySource.
+func isGitOnlyRepo(client github.Client, repo model.RepoRef) bool {
+	if src, ok := client.(github.GitOnlySource); ok {
+		return src.GitOnly(repo.StoredOwner(), repo.Name) != ""
+	}
+	return false
+}
+
 // reconcileReleasePending reads, at most every
 // releasePendingPollInterval, the tags of every repository this
 // deployment releases from GitHub Actions, and raises or clears
@@ -103,7 +116,9 @@ func reconcileReleasePending(ctx context.Context, deps Deps, now time.Time) erro
 	byRepo := make(map[string]*model.RepoConfig, len(configs))
 	var repos []model.RepoRef
 	add := func(r model.RepoRef) {
-		if r.Owner == "" || r.Name == "" {
+		// grain/config-<team> repositories (and their retired aliases) live
+		// in this deployment, not on a forge: never send their tag reads out.
+		if r.Owner == "" || r.Name == "" || model.IsConfigRepo(r) || gitproxy.RetiredConfigRepo(r.Host, r.Owner, r.Name) {
 			return
 		}
 		if slices.ContainsFunc(repos, func(e model.RepoRef) bool { return e.Same(r) }) {
@@ -134,6 +149,9 @@ func reconcileReleasePending(ctx context.Context, deps Deps, now time.Time) erro
 		if allowed, err := repoAllowedForAnyTeam(ctx, deps.Store, repo); err != nil || !allowed {
 			continue
 		}
+		if isGitOnlyRepo(deps.Client, repo) {
+			continue // SSH-only credentials or a plain-git host: no forge API to poll
+		}
 		actions, err := deps.Store.ReleasesFromGitHubActions(ctx, repo)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("orchestrator: %w", err))
@@ -158,7 +176,7 @@ func reconcileReleasePending(ctx context.Context, deps Deps, now time.Time) erro
 // its tags as they stand now.
 func watchPendingReleases(ctx context.Context, store *model.Store, tags github.ReleaseTagReader,
 	files github.FileReader, repo model.RepoRef, now time.Time) error {
-	refs, err := tags.ListMatchingTags(repo.Owner, repo.Name, "v")
+	refs, err := tags.ListMatchingTags(repo.StoredOwner(), repo.Name, "v")
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading %s's release tags: %w", repo, github.Readable(err))
 	}
@@ -258,7 +276,7 @@ func peelPendingTag(tags github.ReleaseTagReader, repo model.RepoRef, tag github
 	if tag.ObjectType != "tag" {
 		return tag.ObjectSHA, "", nil
 	}
-	at, err := tags.GetAnnotatedTag(repo.Owner, repo.Name, tag.ObjectSHA)
+	at, err := tags.GetAnnotatedTag(repo.StoredOwner(), repo.Name, tag.ObjectSHA)
 	if err != nil {
 		return "", "", err
 	}
@@ -353,7 +371,7 @@ func pendingReleaseBody(files github.FileReader, repo model.RepoRef, version, ta
 	var notes []byte
 	found := false
 	if files != nil {
-		notes, found, _ = files.ReadFile(repo.Owner, repo.Name, "main", notesPath)
+		notes, found, _ = files.ReadFile(repo.StoredOwner(), repo.Name, "main", notesPath)
 	}
 	if !found {
 		fmt.Fprintf(&b, "Release notes: %s has not merged yet; merge the release-notes task's pull request before approving.\n", notesPath)
