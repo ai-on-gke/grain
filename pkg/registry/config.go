@@ -19,9 +19,11 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/registry/api"
 	"gopkg.in/yaml.v3"
 )
 
@@ -135,23 +137,27 @@ type DatabaseConfig struct {
 
 // ComputeConfig configures hosted VM provisioning.
 type ComputeConfig struct {
-	Provider           string            `yaml:"provider"`
-	Project            string            `yaml:"project"`
-	Region             string            `yaml:"region"`
-	Zones              []string          `yaml:"zones"`
-	Network            string            `yaml:"network"`
-	Subnetwork         string            `yaml:"subnetwork"`
-	BootImage          string            `yaml:"boot_image"`
-	VMPrefix           string            `yaml:"vm_prefix"`
-	SAPrefix           string            `yaml:"sa_prefix"`
-	RegistryID         string            `yaml:"registry_id,omitempty"`
-	SSHBreakGlass      *bool             `yaml:"ssh_break_glass"`
-	Labels             map[string]string `yaml:"labels"`
-	DefaultShape       string            `yaml:"default_shape"`
-	Shapes             []Shape           `yaml:"shapes"`
-	DrainTimeout       time.Duration     `yaml:"drain_timeout,omitempty"`
-	HealthTimeout      time.Duration     `yaml:"health_timeout,omitempty"`
-	StatusPollInterval time.Duration     `yaml:"status_poll_interval,omitempty"`
+	Provider              string            `yaml:"provider"`
+	Project               string            `yaml:"project"`
+	Region                string            `yaml:"region"`
+	Zones                 []string          `yaml:"zones"`
+	Network               string            `yaml:"network"`
+	Subnetwork            string            `yaml:"subnetwork"`
+	BootImage             string            `yaml:"boot_image"`
+	VMPrefix              string            `yaml:"vm_prefix"`
+	SAPrefix              string            `yaml:"sa_prefix"`
+	RegistryID            string            `yaml:"registry_id,omitempty"`
+	SSHBreakGlass         *bool             `yaml:"ssh_break_glass"`
+	Labels                map[string]string `yaml:"labels"`
+	DefaultShape          string            `yaml:"default_shape"`
+	Shapes                []Shape           `yaml:"shapes"`
+	DrainTimeout          time.Duration     `yaml:"drain_timeout,omitempty"`
+	HealthTimeout         time.Duration     `yaml:"health_timeout,omitempty"`
+	StatusPollInterval    time.Duration     `yaml:"status_poll_interval,omitempty"`
+	AutoUpgrade           string            `yaml:"auto_upgrade,omitempty"`
+	TargetVersion         string            `yaml:"target_version,omitempty"`
+	MaintenanceWindow     string            `yaml:"maintenance_window,omitempty"`
+	MaxConcurrentUpgrades int               `yaml:"max_concurrent_upgrades,omitempty"`
 }
 
 // SQLInstanceConfig describes a shared Cloud SQL instance in the registry's pool.
@@ -324,6 +330,12 @@ func (c *Config) ApplyDefaults() {
 	if c.Compute.StatusPollInterval == 0 {
 		c.Compute.StatusPollInterval = DefaultComputeStatusPollInterval
 	}
+	if strings.TrimSpace(c.Compute.AutoUpgrade) == "" {
+		c.Compute.AutoUpgrade = string(api.AutoUpgradeOff)
+	}
+	if c.Compute.MaxConcurrentUpgrades == 0 {
+		c.Compute.MaxConcurrentUpgrades = 1
+	}
 	if c.InstanceState.DBRetentionPeriod == 0 {
 		c.InstanceState.DBRetentionPeriod = DefaultDBRetentionPeriod
 	}
@@ -480,6 +492,19 @@ func (c *Config) ValidateWithResolver(resolver any) error {
 	if !prefixRe.MatchString(c.Compute.SAPrefix) {
 		return fmt.Errorf("config: compute.sa_prefix %q must match %s", c.Compute.SAPrefix, prefixRe.String())
 	}
+	policy := api.AutoUpgradePolicy(strings.ToLower(strings.TrimSpace(c.Compute.AutoUpgrade)))
+	if !policy.Valid() {
+		return fmt.Errorf("config: compute.auto_upgrade %q must be one of off, notify, or minor", c.Compute.AutoUpgrade)
+	}
+	c.Compute.AutoUpgrade = string(policy)
+	if c.Compute.MaxConcurrentUpgrades <= 0 {
+		return errors.New("config: compute.max_concurrent_upgrades must be > 0")
+	}
+	if strings.TrimSpace(c.Compute.MaintenanceWindow) != "" {
+		if _, _, err := ParseMaintenanceWindow(c.Compute.MaintenanceWindow); err != nil {
+			return fmt.Errorf("config: compute.maintenance_window: %w", err)
+		}
+	}
 	if c.Compute.Provider != "none" {
 		if strings.TrimSpace(c.Compute.Project) == "" {
 			return errors.New("config: compute.project is required when compute.provider != \"none\"")
@@ -622,4 +647,67 @@ func isValidEmail(email string) bool {
 	}
 	domain := email[at+1:]
 	return !strings.Contains(domain, "@") && strings.Contains(domain, ".")
+}
+
+// ParseMaintenanceWindow parses a UTC maintenance window in "HH:MM-HH:MM" format
+// into start and end minutes since 00:00 UTC. End may be <= start for windows
+// wrapping across midnight (or equal to 24:00 as 1440).
+func ParseMaintenanceWindow(spec string) (startMinute, endMinute int, err error) {
+	spec = strings.TrimSpace(spec)
+	parts := strings.Split(spec, "-")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("invalid maintenance window %q: expected HH:MM-HH:MM", spec)
+	}
+	startMinute, err = parseClockHHMM(parts[0], false)
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid maintenance window start %q: %w", parts[0], err)
+	}
+	endMinute, err = parseClockHHMM(parts[1], true)
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid maintenance window end %q: %w", parts[1], err)
+	}
+	return startMinute, endMinute, nil
+}
+
+func parseClockHHMM(s string, allow2400 bool) (int, error) {
+	s = strings.TrimSpace(s)
+	if allow2400 && s == "24:00" {
+		return 24 * 60, nil
+	}
+	hm := strings.Split(s, ":")
+	if len(hm) != 2 || len(hm[0]) != 2 || len(hm[1]) != 2 {
+		return 0, fmt.Errorf("expected HH:MM")
+	}
+	h, err := strconv.Atoi(hm[0])
+	if err != nil || h < 0 || h > 23 {
+		return 0, fmt.Errorf("hour out of range 00..23")
+	}
+	m, err := strconv.Atoi(hm[1])
+	if err != nil || m < 0 || m > 59 {
+		return 0, fmt.Errorf("minute out of range 00..59")
+	}
+	return h*60 + m, nil
+}
+
+// InMaintenanceWindow reports whether UTC timestamp t falls inside the
+// "HH:MM-HH:MM" window spec. An empty spec matches all times.
+func InMaintenanceWindow(spec string, t time.Time) bool {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return true
+	}
+	startMin, endMin, err := ParseMaintenanceWindow(spec)
+	if err != nil {
+		return false
+	}
+	if startMin == endMin {
+		return true
+	}
+	u := t.UTC()
+	cur := u.Hour()*60 + u.Minute()
+	if startMin < endMin {
+		return cur >= startMin && cur < endMin
+	}
+	// Overnight window wrapping past 00:00 UTC (for example "22:00-04:00").
+	return cur >= startMin || cur < endMin
 }

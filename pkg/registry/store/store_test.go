@@ -611,3 +611,111 @@ func TestStep12RandomNameScopesCombinationSyncAndAsyncConflictsAndPromotion(t *t
 		t.Fatalf("expected active tunnel session for revoked cred to be deleted immediately, got %v", err)
 	}
 }
+
+func TestStep17StopStartAutoWakeAndUpgradeAvailable(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 7, 2, 0, 0, 0, time.UTC)
+	st.SetNow(func() time.Time { return now })
+
+	if err := st.SeedShapes(ctx, []ShapeRow{
+		{Name: "standard", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
+	}); err != nil {
+		t.Fatalf("SeedShapes: %v", err)
+	}
+	if err := st.SeedSQLInstances(ctx, []SQLInstanceRow{
+		{Name: "sql-pool-01", ConnectionName: "proj:us-central1:sql-pool-01", PrivateIP: "10.8.0.5", MaxDatabases: 50},
+	}); err != nil {
+		t.Fatalf("SeedSQLInstances: %v", err)
+	}
+
+	e, err := st.CreateEntry(ctx, CreateEntryInput{
+		Name:        "wake-vm",
+		Kind:        api.KindInstance,
+		OwnerEmail:  "alice@example.com",
+		Shape:       "standard",
+		Zone:        "us-central1-a",
+		AutoUpgrade: string(api.AutoUpgradeMinor),
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry wake-vm: %v", err)
+	}
+	if e.AutoUpgrade != "minor" || !e.AutoWake {
+		t.Fatalf("expected auto_upgrade=minor and auto_wake=true, got %q/%v", e.AutoUpgrade, e.AutoWake)
+	}
+
+	e, err = st.UpdateInstancePlacement(ctx, e.ID, e.Version, "gce-wake-vm", "10.8.0.21", "http://10.8.0.21:8080", "grain-sa-wake-vm@proj.iam.gserviceaccount.com", "sql-pool-01", "grain_wake_vm", "grain-inst-wake-vm-")
+	if err != nil {
+		t.Fatalf("UpdateInstancePlacement: %v", err)
+	}
+	e, err = st.TransitionEntryState(ctx, e.ID, e.Version, api.StateRunning, "")
+	if err != nil {
+		t.Fatalf("TransitionEntryState running: %v", err)
+	}
+
+	// Set upgrade_available notification.
+	e, err = st.SetEntryUpgradeAvailable(ctx, e.ID, "v1.4.0")
+	if err != nil || e.UpgradeAvailable != "v1.4.0" {
+		t.Fatalf("SetEntryUpgradeAvailable = (%+v, %v)", e, err)
+	}
+
+	// Stop lifecycle: running -> stopping -> stopped (clears VM placement while keeping externalized state).
+	e, err = st.BeginStopEntry(ctx, e.ID, e.Version, "stopping instance")
+	if err != nil || e.LifecycleState != api.StateStopping || st.DeriveStatus(e) != api.StatusOffline {
+		t.Fatalf("BeginStopEntry = (%+v, %v)", e, err)
+	}
+	now = now.Add(5 * time.Second)
+	e, err = st.CompleteStopEntry(ctx, e.ID, e.Version)
+	if err != nil {
+		t.Fatalf("CompleteStopEntry: %v", err)
+	}
+	if e.LifecycleState != api.StateStopped || e.GCEInstanceID != "" || e.BackendURL != "" || e.StoppedAt == nil {
+		t.Fatalf("expected stopped with cleared VM placement and StoppedAt set, got %+v", e)
+	}
+	if e.ServiceAccount == "" || e.SQLInstance == "" || e.DBName == "" || e.SecretPrefix == "" {
+		t.Fatalf("expected externalized state to be preserved while stopped, got %+v", e)
+	}
+
+	// Auto-wake on visit transitions stopped -> creating once and is idempotent on concurrent second visit.
+	woken, didWake, err := st.WakeStoppedEntry(ctx, e.ID, "bob@example.com")
+	if err != nil || !didWake || woken.LifecycleState != api.StateCreating || woken.StoppedAt != nil {
+		t.Fatalf("WakeStoppedEntry = (%+v, %v, %v), want creating/didWake=true/StoppedAt=nil", woken, didWake, err)
+	}
+	_, didWakeAgain, err := st.WakeStoppedEntry(ctx, e.ID, "carol@example.com")
+	if err != nil || didWakeAgain {
+		t.Fatalf("second WakeStoppedEntry = (didWake=%v, err=%v), want didWake=false", didWakeAgain, err)
+	}
+
+	// Disable auto_wake via UpdateEntryCatalog and verify WakeStoppedEntry does not wake when auto_wake=false.
+	woken, err = st.TransitionEntryState(ctx, woken.ID, woken.Version, api.StateRunning, "")
+	if err != nil {
+		t.Fatalf("TransitionEntryState running: %v", err)
+	}
+	autoWakeFalse := false
+	autoUpgradeNotify := string(api.AutoUpgradeNotify)
+	woken, err = st.UpdateEntryCatalog(ctx, woken.ID, woken.Version, UpdateEntryCatalogInput{
+		AutoWake:    &autoWakeFalse,
+		AutoUpgrade: &autoUpgradeNotify,
+	})
+	if err != nil || woken.AutoWake || woken.AutoUpgrade != "notify" {
+		t.Fatalf("UpdateEntryCatalog auto_wake=false: (%+v, %v)", woken, err)
+	}
+	woken, err = st.BeginStopEntry(ctx, woken.ID, woken.Version, "stopping")
+	if err != nil {
+		t.Fatalf("BeginStopEntry: %v", err)
+	}
+	woken, err = st.CompleteStopEntry(ctx, woken.ID, woken.Version)
+	if err != nil {
+		t.Fatalf("CompleteStopEntry: %v", err)
+	}
+	stillStopped, didWakeDisabled, err := st.WakeStoppedEntry(ctx, woken.ID, "alice@example.com")
+	if err != nil || didWakeDisabled || stillStopped.LifecycleState != api.StateStopped {
+		t.Fatalf("expected WakeStoppedEntry with auto_wake=false to leave entry stopped, got (%+v, %v, %v)", stillStopped, didWakeDisabled, err)
+	}
+
+	// Explicit StartEntry works even when auto_wake=false.
+	started, err := st.BeginStartEntry(ctx, stillStopped.ID, stillStopped.Version, "starting instance")
+	if err != nil || started.LifecycleState != api.StateCreating {
+		t.Fatalf("BeginStartEntry = (%+v, %v), want creating", started, err)
+	}
+}

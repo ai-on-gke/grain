@@ -311,6 +311,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/entries/{name}/credentials", s.admitter.RequireHuman(http.HandlerFunc(s.handleListCredentials)))
 	mux.Handle("POST /api/entries/{name}/upgrade", s.admitter.RequireHuman(http.HandlerFunc(s.handleUpgradeEntry)))
 	mux.Handle("POST /api/entries/{name}/replace", s.admitter.RequireHuman(http.HandlerFunc(s.handleReplaceEntry)))
+	mux.Handle("POST /api/entries/{name}/stop", s.admitter.RequireHuman(http.HandlerFunc(s.handleStopEntry)))
+	mux.Handle("POST /api/entries/{name}/start", s.admitter.RequireHuman(http.HandlerFunc(s.handleStartEntry)))
 	mux.Handle("POST /api/entries/{name}/restore", s.admitter.RequireHuman(http.HandlerFunc(s.handleRestoreEntry)))
 	mux.Handle("POST /api/entries/{name}/transfer", s.admitter.RequireHuman(http.HandlerFunc(s.handleOfferTransfer)))
 	mux.Handle("POST /api/entries/{name}/transfer/accept", s.admitter.RequireHuman(http.HandlerFunc(s.handleAcceptTransfer)))
@@ -745,6 +747,8 @@ func (s *Server) handleCreateEntry(w http.ResponseWriter, r *http.Request) {
 		Zone:               req.Zone,
 		AllowSSH:           req.AllowSSH,
 		ShipLogs:           req.ShipLogs,
+		AutoUpgrade:        req.AutoUpgrade,
+		AutoWake:           req.AutoWake,
 		DeclaredScopes:     scopeInputsToClaims(req.Scopes),
 	})
 	if err != nil {
@@ -887,6 +891,8 @@ func (s *Server) handleUpdateEntry(w http.ResponseWriter, r *http.Request) {
 		Shape:              req.Shape,
 		AllowSSH:           req.AllowSSH,
 		ShipLogs:           req.ShipLogs,
+		AutoUpgrade:        req.AutoUpgrade,
+		AutoWake:           req.AutoWake,
 	})
 	if err != nil {
 		s.writeStoreError(w, err)
@@ -1186,6 +1192,84 @@ func (s *Server) handleReplaceEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.store.RecordAudit(r.Context(), caller.Email, "entry_replace", updated.ID, updated.Name, map[string]any{"quota_owner": updated.OwnerEmail})
+	if s.router != nil {
+		s.router.HostCache().Put(updated)
+	}
+	writeJSON(w, http.StatusAccepted, s.enrichAPIEntry(r.Context(), updated, caller.IsAdmin))
+}
+
+func (s *Server) handleStopEntry(w http.ResponseWriter, r *http.Request) {
+	caller := webauth.AdmittedFromContext(r.Context())
+	if !s.checkCallerEnabled(w, r, caller) {
+		return
+	}
+	if s.store == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "unavailable", "store is not configured")
+		return
+	}
+	if !s.checkMutationRateLimit(w, caller) {
+		return
+	}
+
+	name := strings.ToLower(strings.TrimSpace(r.PathValue("name")))
+	entry, ok := s.loadAndAuthorizeManagedEntry(w, r, caller, name, false)
+	if !ok {
+		return
+	}
+	if entry.Kind != api.KindInstance {
+		writeJSONError(w, http.StatusBadRequest, "invalid_entry_kind", "only kind=\"instance\" entries can be stopped")
+		return
+	}
+	if entry.LifecycleState == api.StateStopping || entry.LifecycleState == api.StateStopped {
+		writeJSON(w, http.StatusOK, s.enrichAPIEntry(r.Context(), entry, caller.IsAdmin))
+		return
+	}
+
+	updated, err := s.store.BeginStopEntry(r.Context(), entry.ID, entry.Version, "stopping instance")
+	if err != nil {
+		s.writeStoreError(w, err)
+		return
+	}
+	_ = s.store.RecordAudit(r.Context(), caller.Email, "entry_stop", updated.ID, updated.Name, nil)
+	if s.router != nil {
+		s.router.HostCache().Put(updated)
+	}
+	writeJSON(w, http.StatusAccepted, s.enrichAPIEntry(r.Context(), updated, caller.IsAdmin))
+}
+
+func (s *Server) handleStartEntry(w http.ResponseWriter, r *http.Request) {
+	caller := webauth.AdmittedFromContext(r.Context())
+	if !s.checkCallerEnabled(w, r, caller) {
+		return
+	}
+	if s.store == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "unavailable", "store is not configured")
+		return
+	}
+	if !s.checkMutationRateLimit(w, caller) {
+		return
+	}
+
+	name := strings.ToLower(strings.TrimSpace(r.PathValue("name")))
+	entry, ok := s.loadAndAuthorizeManagedEntry(w, r, caller, name, false)
+	if !ok {
+		return
+	}
+	if entry.Kind != api.KindInstance {
+		writeJSONError(w, http.StatusBadRequest, "invalid_entry_kind", "only kind=\"instance\" entries can be started")
+		return
+	}
+	if entry.LifecycleState == api.StateCreating || entry.LifecycleState == api.StateRunning {
+		writeJSON(w, http.StatusOK, s.enrichAPIEntry(r.Context(), entry, caller.IsAdmin))
+		return
+	}
+
+	updated, err := s.store.BeginStartEntry(r.Context(), entry.ID, entry.Version, "starting instance")
+	if err != nil {
+		s.writeStoreError(w, err)
+		return
+	}
+	_ = s.store.RecordAudit(r.Context(), caller.Email, "entry_start", updated.ID, updated.Name, nil)
 	if s.router != nil {
 		s.router.HostCache().Put(updated)
 	}

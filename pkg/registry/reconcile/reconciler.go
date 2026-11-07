@@ -279,6 +279,7 @@ func (r *Reconciler) RunOnce(ctx context.Context) error {
 	recordErr(r.reconcileEntries(ctx))
 	recordErr(r.reconcilePurge(ctx))
 	recordErr(r.PollRunningInstances(ctx))
+	recordErr(r.reconcileFleetUpgrades(ctx))
 	recordErr(r.ReconcileOrphans(ctx))
 
 	return firstErr
@@ -313,6 +314,10 @@ func (r *Reconciler) reconcileEntries(ctx context.Context) error {
 		case api.StateReplacing:
 			if entry.DeletedAt == nil {
 				stepErr = r.reconcileReplacingEntry(ctx, entry)
+			}
+		case api.StateStopping, "STOPPING":
+			if entry.DeletedAt == nil {
+				stepErr = r.reconcileStoppingEntry(ctx, entry)
 			}
 		case api.StateDeleting, "DEPROVISIONING":
 			stepErr = r.reconcileDeletingEntry(ctx, entry)
@@ -572,6 +577,220 @@ func (r *Reconciler) reconcileReplacingEntry(ctx context.Context, entry *store.E
 	return nil
 }
 
+func (r *Reconciler) reconcileStoppingEntry(ctx context.Context, entry *store.EntryRow) error {
+	// Wait for active tasks to drain up to drainTimeout before halting the VM.
+	if entry.BackendURL != "" && r.now().Sub(entry.UpdatedAt) < r.drainTimeout {
+		if stResp, err := r.fetchInstanceStatus(ctx, entry.Name, entry.BackendURL); err == nil && stResp != nil {
+			_, _ = r.recordStatusHeartbeat(ctx, entry.ID, stResp)
+			if stResp.ActiveTasks > 0 {
+				return nil
+			}
+		}
+	}
+
+	zone, vmID := r.resolveZoneAndVMName(entry)
+	if r.compute != nil && vmID != "" && zone != "" {
+		if err := r.compute.StopInstance(ctx, zone, vmID); err != nil {
+			r.failEntry(ctx, entry, fmt.Sprintf("stopping GCE instance %s failed: %v", vmID, err))
+			return err
+		}
+		if err := r.compute.DeleteInstance(ctx, zone, vmID); err != nil {
+			r.failEntry(ctx, entry, fmt.Sprintf("deleting stopped GCE instance %s failed: %v", vmID, err))
+			return err
+		}
+	}
+
+	stopped, err := r.store.CompleteStopEntry(ctx, entry.ID, entry.Version)
+	if err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			return nil
+		}
+		return err
+	}
+	if r.hostCache != nil && stopped != nil {
+		r.hostCache.Put(stopped)
+	}
+	_ = r.store.RecordAudit(ctx, "system:reconciler", "entry_stopped", stopped.ID, stopped.Name, map[string]any{
+		"gce_instance_id": vmID,
+		"zone":            zone,
+	})
+	return nil
+}
+
+func (r *Reconciler) reconcileFleetUpgrades(ctx context.Context) error {
+	targetVer := strings.TrimSpace(r.cfg.Compute.TargetVersion)
+	if targetVer == "" {
+		return nil
+	}
+	entries, err := r.store.ListEntriesFiltered(ctx, false)
+	if err != nil {
+		return err
+	}
+
+	replacingCount := 0
+	for _, e := range entries {
+		if e.Kind == api.KindInstance && e.DeletedAt == nil && e.LifecycleState == api.StateReplacing {
+			replacingCount++
+		}
+	}
+	maxConcurrent := r.cfg.Compute.MaxConcurrentUpgrades
+	if maxConcurrent <= 0 {
+		maxConcurrent = 1
+	}
+
+	var firstErr error
+	for _, entry := range entries {
+		if entry.Kind != api.KindInstance || entry.DeletedAt != nil || entry.LifecycleState != api.StateRunning {
+			continue
+		}
+		curVer := strings.TrimSpace(entry.GrainVersion)
+		if curVer == "" {
+			continue
+		}
+		if curVer == targetVer {
+			if entry.UpgradeAvailable != "" {
+				_, _ = r.store.SetEntryUpgradeAvailable(ctx, entry.ID, "")
+			}
+			continue
+		}
+
+		policy := api.AutoUpgradePolicy(strings.ToLower(strings.TrimSpace(entry.AutoUpgrade)))
+		if policy == "" {
+			policy = api.AutoUpgradePolicy(strings.ToLower(strings.TrimSpace(r.cfg.Compute.AutoUpgrade)))
+		}
+		if policy == "" {
+			policy = api.AutoUpgradeOff
+		}
+
+		switch policy {
+		case api.AutoUpgradeOff:
+			continue
+
+		case api.AutoUpgradeNotify:
+			if !isNewerSemver(curVer, targetVer) {
+				continue
+			}
+			if entry.UpgradeAvailable != targetVer {
+				if _, err := r.store.SetEntryUpgradeAvailable(ctx, entry.ID, targetVer); err == nil {
+					_ = r.store.RecordAudit(ctx, "system:reconciler", "entry_upgrade_available", entry.ID, entry.Name, map[string]any{
+						"current_version": curVer,
+						"target_version":  targetVer,
+						"policy":          string(policy),
+					})
+				}
+			}
+
+		case api.AutoUpgradeMinor:
+			if !isNewerSemver(curVer, targetVer) {
+				continue
+			}
+			if !isMinorOrPatchSemverUpgrade(curVer, targetVer) {
+				// Major version bump under `minor` policy: notify without auto-replacing.
+				if entry.UpgradeAvailable != targetVer {
+					if _, err := r.store.SetEntryUpgradeAvailable(ctx, entry.ID, targetVer); err == nil {
+						_ = r.store.RecordAudit(ctx, "system:reconciler", "entry_upgrade_available", entry.ID, entry.Name, map[string]any{
+							"current_version": curVer,
+							"target_version":  targetVer,
+							"policy":          string(policy),
+							"skipped_reason":  "major_version_change",
+						})
+					}
+				}
+				continue
+			}
+
+			// Mark upgrade_available while waiting on maintenance window, idle state, or concurrency cap.
+			if !registry.InMaintenanceWindow(r.cfg.Compute.MaintenanceWindow, r.now()) ||
+				entry.ActiveTasks > 0 || entry.ActiveSessions > 0 ||
+				replacingCount >= maxConcurrent {
+				if entry.UpgradeAvailable != targetVer {
+					_, _ = r.store.SetEntryUpgradeAvailable(ctx, entry.ID, targetVer)
+				}
+				continue
+			}
+
+			replacing, err := r.store.RequestEntryReplace(ctx, entry.ID, entry.Version, entry.Shape, targetVer)
+			if err != nil {
+				if !errors.Is(err, store.ErrConflict) && firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			replacingCount++
+			if r.hostCache != nil && replacing != nil {
+				r.hostCache.Put(replacing)
+			}
+			_ = r.store.RecordAudit(ctx, "system:reconciler", "entry_auto_upgrade", replacing.ID, replacing.Name, map[string]any{
+				"from_version":   curVer,
+				"target_version": targetVer,
+				"policy":         string(policy),
+			})
+			if stepErr := r.reconcileReplacingEntry(ctx, replacing); stepErr != nil && firstErr == nil {
+				firstErr = stepErr
+			}
+		}
+	}
+	return firstErr
+}
+
+func parseSemver(v string) (major, minor, patch int, ok bool) {
+	v = strings.TrimSpace(v)
+	v = strings.TrimPrefix(strings.TrimPrefix(v, "v"), "V")
+	if idx := strings.IndexAny(v, "-+"); idx >= 0 {
+		v = v[:idx]
+	}
+	parts := strings.Split(v, ".")
+	if len(parts) < 2 || len(parts) > 3 {
+		return 0, 0, 0, false
+	}
+	maj, err := strconv.Atoi(parts[0])
+	if err != nil || maj < 0 {
+		return 0, 0, 0, false
+	}
+	minVer, err := strconv.Atoi(parts[1])
+	if err != nil || minVer < 0 {
+		return 0, 0, 0, false
+	}
+	pat := 0
+	if len(parts) == 3 {
+		pat, err = strconv.Atoi(parts[2])
+		if err != nil || pat < 0 {
+			return 0, 0, 0, false
+		}
+	}
+	return maj, minVer, pat, true
+}
+
+func isNewerSemver(current, target string) bool {
+	cMaj, cMin, cPat, okC := parseSemver(current)
+	tMaj, tMin, tPat, okT := parseSemver(target)
+	if !okC || !okT {
+		return strings.TrimSpace(current) != strings.TrimSpace(target)
+	}
+	if tMaj != cMaj {
+		return tMaj > cMaj
+	}
+	if tMin != cMin {
+		return tMin > cMin
+	}
+	return tPat > cPat
+}
+
+func isMinorOrPatchSemverUpgrade(current, target string) bool {
+	cMaj, cMin, cPat, okC := parseSemver(current)
+	tMaj, tMin, tPat, okT := parseSemver(target)
+	if !okC || !okT {
+		return false
+	}
+	if cMaj != tMaj {
+		return false
+	}
+	if tMin != cMin {
+		return tMin > cMin
+	}
+	return tPat > cPat
+}
+
 func (r *Reconciler) reconcileDeletingEntry(ctx context.Context, entry *store.EntryRow) error {
 	zone, vmID := r.resolveZoneAndVMName(entry)
 	if r.compute != nil && vmID != "" && zone != "" {
@@ -759,6 +978,16 @@ func (r *Reconciler) ReconcileOrphans(ctx context.Context) error {
 		}
 
 		if active, ok := activeByName[entryName]; ok {
+			if active.LifecycleState == api.StateStopped || active.LifecycleState == "STOPPED" {
+				if err := r.compute.DeleteInstance(ctx, vm.Zone, vm.InstanceID); err == nil {
+					_ = r.store.RecordAudit(ctx, "system:reconciler", "orphan_vm_deleted", active.ID, active.Name, map[string]any{
+						"instance_id": vm.InstanceID,
+						"zone":        vm.Zone,
+						"reason":      "stopped_entry_straggler",
+					})
+				}
+				continue
+			}
 			// Check whether the VM is from a stale generation that was already replaced.
 			if vmGenStr := vm.Labels["grain-generation"]; vmGenStr != "" {
 				if vmGen, pErr := strconv.ParseInt(vmGenStr, 10, 64); pErr == nil {
