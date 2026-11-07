@@ -361,6 +361,17 @@ var repoCaseTables = []repoCaseTable{
 		values: []string{"commit", "run_id", "started_at", "finished_at", "conclusion", "detail"},
 		merge:  mergeDeclarationSyncRow,
 	},
+	// The promote-release.yml dispatch a person started for a pending
+	// GitHub Actions release (model.ReleaseApprovalDecision). Keyed by
+	// (version, commit) as well as the repository, and folded by keeping
+	// the canonical row: both rows record that this commit's promotion
+	// has already been answered, and the hold ages out on its own.
+	{
+		name: "release_approval", owner: "owner", repo: "name", keyed: true,
+		rest:   []string{"version", "commit"},
+		values: []string{"decision", "workflow", "decided_by", "decided_at"},
+		merge:  mergeDeclarationSyncRow,
+	},
 	// The speculative merge in flight for a base branch
 	// (model.MergeBatch, grain/task-294). Keyed by the branch as well as
 	// the repository, like base_branch_ci above, and folded by keeping
