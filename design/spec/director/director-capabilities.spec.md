@@ -35,7 +35,7 @@ only when, they appear in all capitals.
 
 - The **current** spelling, which `Task.Grants`,
   `ConsoleSession.Capabilities` and `settings/capabilities.yml` store
-  today. That is a bare capability id (`self-debug`), `api:<scope>`
+  today. That is a bare capability id (`github-sandbox`), `api:<scope>`
   (`api:ci:read`), `api:<preset>` (`api:task-admin`), or either api form
   narrowed with `@owner/name`.
 - The **canonical** unified-grant spelling of
@@ -122,8 +122,11 @@ refused without it. The reason is written to the controller log
   `DefaultConsoleSessions()` ships `Writes: [grain/config]`, so the
   shipped director's checkout pushes candidate branches; a deployment
   that saved its own session list keeps whatever `Writes` it saved.
-- The `self-debug` alias also grants the `api:self-debug` preset
-  (`tasks:read`, `deployment:read`).
+- `self-debug` is retired (schema migration 115): the director holds
+  what it became, the `api:self-debug` preset (`tasks:read`,
+  `deployment:read`) and `…/grain#source={}`. The bare name is a
+  one-release alias that `model.CanonicalLegacyGrants` expands to both
+  wherever a grant is recorded.
 - `CatalogueKindDirector` carries a **built-in Tier 3 floor**
   (`pkg/model/director_floor.go`, G7). `model.DirectorFloorRefusal`
   refuses any grant reaching `merge:force`, `settings:write`,
@@ -175,7 +178,7 @@ to. *Implicit* means the grant comes with the task rather than from
 
 | Surface (tool / CLI / route) | Current grant | Canonical reference | Tier |
 |---|---|---|---|
-| Source checkout, metrics tools, `grain task list\|read\|prompt\|transcript`, `task://`, `src://` | `self-debug` (alias → `api:self-debug` = `tasks:read` + `deployment:read`) | `…/api#self-debug` + `…/grain#source` *(proposed)* | 1 |
+| Source checkout, metrics tools, `grain task list\|read\|prompt\|transcript`, `task://`, `src://` | `api:self-debug` (`tasks:read` + `deployment:read`) + `…/grain#source` (formerly `self-debug`, retired in schema migration 115) | `…/api#self-debug` + `…/grain#source` | 1 |
 | Daemon journal (formerly `grain-log`) | `…/grain#journal` | `…/grain#journal` | 1 |
 | Host / sandbox probes; `GET /api/deployment/*` reads | `api:deployment:read` + `…/grain#health` (formerly `deployment-health`) | `…/api#deployment:read` + `…/grain#health` | 1 |
 | Bring-up runbooks | `…/config-map#config-map={"config_maps":["bootstrap"]}` (formerly `bootstrap-playbooks`) | `…/config-map#config-map` `{"config_maps":["bootstrap"]}` | 1 |

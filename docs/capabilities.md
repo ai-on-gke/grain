@@ -5,7 +5,7 @@
 Capabilities are how Grain equips an isolated sandbox VM or CI container with external access and tools for the duration of a single attempt: your server mints what the run needs, Grain materializes it into the sandbox before the agent or CI steps start, and every stateful resource is revoked on `release_<method>` when the attempt ends (or expires at `deadline` if that call never arrives). A capability can provide any mix of:
 
 - **Temporary credentials & files** (`placements`) — a short-lived cloud key, an API token, a `.git-credentials` entry, or a static skill/playbook written into the sandbox filesystem (spec §6.1 `#gcp-key`, §6.4 `#skill`);
-- **Attempt-scoped MCP toolsets** (`mcp_endpoint`) — custom MCP tools served at `/runs/<attempt_id>/mcp` and proxied to the agent CLI and CI container (spec §6.2 `#self-debug`);
+- **Attempt-scoped MCP toolsets** (`mcp_endpoint`) — custom MCP tools served at `/runs/<attempt_id>/mcp` and proxied to the agent CLI and CI container (spec §6.2 `#diagnostics`);
 - **Local services, proxies & tunnels** (`ports`) — an authenticated host-side proxy or tunnel (a Git proxy, a model proxy, a database tunnel) forwarded into sandbox loopback (spec §6.3 `#git-repo`, `#model-proxy`);
 - **Working-tree and sandbox setup** (`setup_root`, `setup`) — a command Grain runs in the sandbox before the agent starts: `setup_root`, from the one grant per attempt that initializes an otherwise empty root working directory when the run has no task `Target` checkout of its own (a `#git-repo` with `root: true` cloning a standalone primary repository into it; for tasks with a `Target`, Grain clones `Target` into `work/` itself), and `setup`, from any number of grants, for everything after it (a `root: false` `#git-repo` cloning an additional repository beside the root, a credential capability signing its CLI in) (spec §5.5, §6.3);
 - **Agent instructions** (`prompt_section`) — a note telling the agent what was provisioned and how to use it.
@@ -212,7 +212,7 @@ A grant's ports are forwarded into the sandbox through the deployment's capabili
 
 ## In-process methods contributed by a build (`capability.Register`)
 
-Some grants are answered inside grain itself rather than by an MCP server subprocess: core's own `https://grain.dev/capabilities/grain` server (`grain#journal`, `grain#health`, `grain#sql`, `grain#host-exec`) is one. A build that imports core, such as a wrapper distribution, can add methods of its own in-process server through [`capability.Register`](../pkg/capability/methods.go), from `init()`, without core naming it:
+Some grants are answered inside grain itself rather than by an MCP server subprocess: core's own `https://grain.dev/capabilities/grain` server (`grain#journal`, `grain#health`, `grain#sql`, `grain#host-exec`, `grain#ci`, `grain#source`) is one. A build that imports core, such as a wrapper distribution, can add methods of its own in-process server through [`capability.Register`](../pkg/capability/methods.go), from `init()`, without core naming it:
 
 ```go
 capability.Register(capability.Method{
