@@ -904,7 +904,8 @@ func inGrainAgentTaskID(p model.Principal) string {
 //     priority-dispatch;
 //   - carrying a repository-declared push set (declaredPushOf) or
 //     auto-merge that acting could not have inherited itself;
-//   - keep_running on any task, and against proposer when there is one:
+//   - keep_running or admission above standard on any task, and against
+//     proposer when there is one:
 //     capabilities, write targets or reads it does not hold
 //     (model.EscalatedCapabilities, UngrantedWrites, UngrantedReads), and
 //     keep_running or a priority above its own
@@ -950,7 +951,12 @@ func (s *Server) proposalPersonHolds(ctx context.Context, task model.Task, propo
 		holds = append(holds, "it has auto-merge enabled, which would land its change without review")
 	}
 	if proposer == nil {
-		if why := model.PersonOnlyProposalSettings(model.Task{KeepRunning: task.KeepRunning}, model.Task{}); why != "" {
+		// Admission above standard is asked here too, not only of a
+		// proposal: it replaced the priority-dispatch and durable grants,
+		// which the person-only check above held whoever filed the task,
+		// so a held task an external credential or a person filed with
+		// admission bypass or durable still waits for a person.
+		if why := model.PersonOnlyProposalSettings(model.Task{KeepRunning: task.KeepRunning, Admission: task.Admission}, model.Task{}); why != "" {
 			holds = append(holds, why)
 		}
 		return holds, nil
