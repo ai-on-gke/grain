@@ -53,7 +53,6 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -153,10 +152,11 @@ func (c *Client) DecideRelease(ctx context.Context, repo, version string, approv
 	if onGitHub, err := c.publishesFromGitHub(ctx, parsed); err != nil {
 		return ReleaseDecision{}, err
 	} else if onGitHub {
-		d, err := c.dispatchGitHubRelease(ctx, parsed, version, actor, approve, answers)
+		d, err := c.dispatchGitHubRelease(ctx, parsed, version, actor.ID, approve, answers)
 		if err != nil {
 			return ReleaseDecision{}, err
 		}
+		c.clearReleasePending(ctx, version, actor, verb)
 		return ReleaseDecision{Version: version, Approve: approve, ShortSoakOK: answers.ShortSoakOK,
 			AllowBreaking: answers.AllowBreaking, Dispatched: &d}, nil
 	}
@@ -183,22 +183,20 @@ func (c *Client) DecideRelease(ctx context.Context, repo, version string, approv
 	if err != nil {
 		return ReleaseDecision{}, &ValidationError{err: err}
 	}
-	c.recordReleaseAnswer(ctx, parsed, version, actor, verb, c.now().UTC())
+	c.clearReleasePending(ctx, version, actor, verb)
 	return ReleaseDecision{Version: version, Approve: approve,
 		ShortSoakOK: answers.ShortSoakOK, AllowBreaking: answers.AllowBreaking, Run: run}, nil
 }
 
-// recordReleaseAnswer records actor's answer on version's "ready to
-// promote" notification -- clearing the open one, or writing a cleared
-// one when the person answered before release-watch raised it -- once a
-// person's answer is on its way.
-func (c *Client) recordReleaseAnswer(ctx context.Context, repo model.RepoRef, version string, actor model.Principal, verb string, at time.Time) {
+// clearReleasePending clears version's "ready to promote" notification
+// once a person's answer is on its way.
+func (c *Client) clearReleasePending(ctx context.Context, version string, actor model.Principal, verb string) {
 	if c.Store == nil {
 		return
 	}
-	if err := c.Store.RecordReleaseAnswer(ctx, repo, version, actor, verb, at); err != nil {
-		subject := model.NotificationSubject(model.FamilyReleasePending, version)
-		log.Printf("grain: recording %s after %s's %s: %v", subject, actor.ID, verb, err)
+	subject := model.NotificationSubject(model.FamilyReleasePending, version)
+	if _, err := c.Store.ClearNotification(ctx, subject, model.PrincipalString(actor)); err != nil {
+		log.Printf("grain: clearing %s after %s's %s: %v", subject, actor.ID, verb, err)
 	}
 }
 

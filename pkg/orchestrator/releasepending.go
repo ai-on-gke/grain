@@ -29,13 +29,14 @@ package orchestrator
 // and the release notes in its body, and clears it once vX.Y.Z is tagged
 // or the -pending tag is gone (approved or rejected).
 //
-// A person's answer records a cleared notification at once (ui.DecideRelease,
-// model.Store.RecordReleaseAnswer) -- even when they answered from the CLI
-// or API before this watcher raised it -- while the -pending tag is still
-// there and the promotion run has only just started. So a release a person
-// answered within releasePendingAnswerHold is not raised again; one still
-// pending after that (its run failed) is, as the daily train run would
-// raise it again on grain CI.
+// A person's answer records the dispatched decision in the store and clears
+// any open notification at once (ui.DecideRelease) while the -pending tag is
+// still there -- the promotion run has only just started. So a release
+// commit a person answered within releasePendingAnswerHold is not raised
+// again even when approved from the CLI or API before the first poll; one
+// still pending at the same commit after that (its run failed) is, as the
+// daily train run would raise it again on grain CI, and a re-cut candidate
+// staged at a new commit is raised immediately.
 
 import (
 	"context"
@@ -57,7 +58,7 @@ const (
 	releasePendingPollInterval = 10 * time.Minute
 	// releasePendingAnswerHold is how long a person's answer keeps the
 	// notification down while the -pending tag outlives it.
-	releasePendingAnswerHold = 24 * time.Hour
+	releasePendingAnswerHold = model.ReleaseApprovalHold
 	// releasePendingNotesLimit bounds the release notes quoted in the body.
 	releasePendingNotesLimit = 3000
 )
@@ -135,15 +136,27 @@ func watchPendingReleases(ctx context.Context, store *model.Store, tags github.R
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading release notifications: %w", err)
 	}
+	decisions, err := store.ListReleaseApprovalDecisions(ctx, repo)
+	if err != nil {
+		return fmt.Errorf("orchestrator: reading %s's release decisions: %w", repo, err)
+	}
 	var errs []error
 	// Clear what is answered: an open notification about this repository
-	// whose release is tagged, or whose -pending tag is gone.
+	// whose release is tagged, whose -pending tag is gone, or whose staged
+	// commit already has an active dispatched decision.
 	for _, n := range all {
 		if n.ClearedAt != nil || n.Repo != repo.String() {
 			continue
 		}
 		version := strings.TrimPrefix(n.Subject, model.FamilyReleasePending+":")
-		if _, still := pending[version]; still && !released[version] {
+		tag, still := pending[version]
+		if still && !released[version] {
+			if d := activeDecisionForTag(tags, repo, version, tag, decisions, now); d != nil {
+				by := model.PrincipalString(model.Principal{Kind: model.PrincipalHuman, ID: d.DecidedBy})
+				if _, err := store.ClearNotification(ctx, n.Subject, by); err != nil {
+					errs = append(errs, err)
+				}
+			}
 			continue
 		}
 		if _, err := store.ClearNotification(ctx, n.Subject, releasePendingNotifier); err != nil {
@@ -152,21 +165,37 @@ func watchPendingReleases(ctx context.Context, store *model.Store, tags github.R
 	}
 	// Raise what waits.
 	for version, tag := range pending {
-		if released[version] || releaseAnswered(all, repo, version, now) {
+		if released[version] {
 			continue
 		}
 		subject := model.NotificationSubject(model.FamilyReleasePending, version)
 		if open := openBySubject(all, subject); open != nil {
 			continue // raised already, by this or by the train's own run
 		}
+		commit, message, err := peelPendingTag(tags, repo, tag)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("orchestrator: reading %s's %s tag: %w", repo, tag.Name, github.Readable(err)))
+			continue
+		}
+		if releaseCommitAnswered(decisions, all, repo, version, commit, now) {
+			continue
+		}
 		n := model.Notification{
 			Subject:  subject,
 			Severity: model.NotificationWarning,
 			Title:    version + " is ready to promote",
-			Body:     pendingReleaseBody(tags, files, repo, version, tag),
+			Body:     pendingReleaseBody(files, repo, version, message),
 			Repo:     repo.String(),
 			RaisedBy: releasePendingNotifier,
 			Actions:  model.ReleasePendingActions,
+		}
+		// Re-check right before raising in case DecideRelease recorded a
+		// decision while we read tag objects or release notes.
+		if d, err := store.GetReleaseApprovalDecision(ctx, repo, version, commit); err != nil {
+			errs = append(errs, err)
+			continue
+		} else if d != nil && d.ActiveAt(now) {
+			continue
 		}
 		if _, err := raisePipelineNotification(ctx, store, n, now); err != nil {
 			errs = append(errs, err)
@@ -184,20 +213,87 @@ func openBySubject(all []model.Notification, subject string) *model.Notification
 	return nil
 }
 
-// releaseAnswered reports whether a person answered version's
-// notification on repo -- approved or rejected it -- within
-// releasePendingAnswerHold, whether by clearing an open notification or
-// by answering from the CLI or API before one was raised.
-func releaseAnswered(all []model.Notification, repo model.RepoRef, version string, now time.Time) bool {
+// peelPendingTag resolves the commit tag points at and, for an annotated
+// tag, its message.
+func peelPendingTag(tags github.ReleaseTagReader, repo model.RepoRef, tag github.TagRef) (commit, message string, err error) {
+	if tag.ObjectType != "tag" {
+		return tag.ObjectSHA, "", nil
+	}
+	at, err := tags.GetAnnotatedTag(repo.Owner, repo.Name, tag.ObjectSHA)
+	if err != nil {
+		return "", "", err
+	}
+	if at == nil {
+		return tag.ObjectSHA, "", nil
+	}
+	return at.Commit, at.Message, nil
+}
+
+// activeDecisionForTag returns an active stored decision matching tag's
+// commit, peeling tag only when version has an active decision on repo.
+func activeDecisionForTag(tags github.ReleaseTagReader, repo model.RepoRef, version string, tag github.TagRef,
+	decisions []model.ReleaseApprovalDecision, now time.Time) *model.ReleaseApprovalDecision {
+	hasActiveForVersion := false
+	for i := range decisions {
+		if decisions[i].Version == version && decisions[i].ActiveAt(now) {
+			hasActiveForVersion = true
+			break
+		}
+	}
+	if !hasActiveForVersion {
+		return nil
+	}
+	commit, _, err := peelPendingTag(tags, repo, tag)
+	if err != nil {
+		return nil
+	}
+	for i := range decisions {
+		if decisions[i].Version == version && decisions[i].Commit == commit && decisions[i].ActiveAt(now) {
+			return &decisions[i]
+		}
+	}
+	return nil
+}
+
+// releaseCommitAnswered reports whether (repo, version, commit) was already
+// answered within releasePendingAnswerHold -- either recorded in
+// release_approval (CLI, API, or Inbox Approve/Reject) or dismissed directly
+// on the notification row by a person after any earlier recorded decision.
+func releaseCommitAnswered(decisions []model.ReleaseApprovalDecision, all []model.Notification,
+	repo model.RepoRef, version, commit string, now time.Time) bool {
+	var latestDecisionAt time.Time
+	for _, d := range decisions {
+		if d.Version != version {
+			continue
+		}
+		if d.Commit == commit && d.ActiveAt(now) {
+			return true
+		}
+		if d.DecidedAt.After(latestDecisionAt) {
+			latestDecisionAt = d.DecidedAt
+		}
+	}
+	return releaseAnsweredAfter(all, repo, version, latestDecisionAt, now)
+}
+
+// releaseAnsweredAfter reports whether a person cleared repo's version
+// notification within releasePendingAnswerHold on a raise younger than after.
+// When after is non-zero (an earlier commit or expired hold recorded a
+// decision), a clear from before the subsequent raise belonged to that earlier
+// decision rather than to what is staged now.
+func releaseAnsweredAfter(all []model.Notification, repo model.RepoRef, version string, after, now time.Time) bool {
 	subject := model.NotificationSubject(model.FamilyReleasePending, version)
 	for _, n := range all {
-		if n.Subject != subject {
+		if n.Subject != subject || n.ClearedAt == nil {
 			continue
 		}
-		if n.Repo != "" && repo.String() != "" && n.Repo != repo.String() {
+		if n.Repo != "" && n.Repo != repo.String() {
 			continue
 		}
-		if _, at, ok := n.ReleaseAnswerBy(); ok && now.Sub(at) < releasePendingAnswerHold {
+		if !after.IsZero() && !n.LastRaisedAt.After(after) {
+			continue
+		}
+		if strings.HasPrefix(n.ClearedBy, string(model.PrincipalHuman)+":") && now.Sub(*n.ClearedAt) < releasePendingAnswerHold {
 			return true
 		}
 	}
@@ -207,17 +303,12 @@ func releaseAnswered(all []model.Notification, repo model.RepoRef, version strin
 // pendingReleaseBody is what the notification says: what the -pending
 // tag says of itself, and the release notes, from docs/releases/<v>.md
 // on trunk when they have merged.
-func pendingReleaseBody(tags github.ReleaseTagReader, files github.FileReader, repo model.RepoRef,
-	version string, tag github.TagRef) string {
+func pendingReleaseBody(files github.FileReader, repo model.RepoRef, version, tagMessage string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s is staged as %s-pending on %s and waits for a person: Approve tags %s, moves latest onto it "+
 		"and publishes its images (GitHub Actions promote-release.yml); Reject drops it.\n\n", version, version, repo, version)
-	if tag.ObjectType == "tag" {
-		if at, err := tags.GetAnnotatedTag(repo.Owner, repo.Name, tag.ObjectSHA); err == nil && at != nil {
-			if msg := strings.TrimSpace(at.Message); msg != "" {
-				b.WriteString(msg + "\n\n")
-			}
-		}
+	if msg := strings.TrimSpace(tagMessage); msg != "" {
+		b.WriteString(msg + "\n\n")
 	}
 	notesPath := "docs/releases/" + version + ".md"
 	var notes []byte
