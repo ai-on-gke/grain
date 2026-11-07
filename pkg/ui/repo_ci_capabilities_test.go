@@ -113,7 +113,7 @@ func TestConfigIncludesCICapabilitiesCatalogWithCIOnlyCapabilities(t *testing.T)
 	}
 
 	// CI capabilities catalog must include CI-only capabilities with their names and descriptions
-	for _, id := range []string{model.PackagePublishRef + "={}", model.RegistryPushRef + "={}"} {
+	for _, id := range []string{model.PackagePublishRef + "={}", model.RegistryPushRef + "={}", model.GitHubSandboxRepoGrant} {
 		idx := slices.IndexFunc(cfg.CICapabilities, func(c ui.Capability) bool { return c.ID == id })
 		if idx < 0 {
 			t.Fatalf("ciCapabilities does not offer %q: %+v", id, cfg.CICapabilities)
