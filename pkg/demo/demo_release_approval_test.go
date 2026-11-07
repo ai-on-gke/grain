@@ -73,11 +73,9 @@ func TestDemoGitHubSimApprovesAPendingReleaseThroughTheSim(t *testing.T) {
 	if err := store.PutConfig(ctx, model.Config{TargetRepos: []string{repo.String()}}); err != nil {
 		t.Fatalf("PutConfig: %v", err)
 	}
-	// The release watch reads the tags of a repository whose CI Mode is
-	// GitHub Actions'.
-	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: repo, CIMode: model.CIModeGitHub}); err != nil {
-		t.Fatalf("PutRepoConfig: %v", err)
-	}
+	// Left on every default -- no repo_config row at all -- which the repo
+	// page already reports as ciMode: github, and which the release watch
+	// must poll without requiring an explicit ciMode write (F1b).
 	const code = "demo-release-approval-code"
 	cfg.LocalAPIToken = code
 	simClient := cfg.GitHubBranches.(github.Client)
