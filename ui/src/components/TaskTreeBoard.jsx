@@ -14,7 +14,11 @@
 
 import { isNarrowed, narrowTasks } from "../taskFilters.js";
 import { forestFromTasks } from "../workTree.js";
-import { ListEmpty } from "./ListPrimitives.jsx";
+import {
+  ListEmpty,
+  TasksLoadError,
+  tasksLoadFailed,
+} from "./ListPrimitives.jsx";
 import NarrowingBar from "./NarrowingBar.jsx";
 import TaskTree from "./TaskTree.jsx";
 
@@ -41,12 +45,18 @@ import TaskTree from "./TaskTree.jsx";
 // first would be one landmark too many (grain/task-1253).
 export default function TaskTreeBoard({
   tasks,
+  tasksLoaded = true,
+  tasksError = null,
+  onRetry,
   config,
   narrowing,
   onNarrow,
   onOpenTask,
   landmark = true,
 }) {
+  const tasksFailed = tasksLoadFailed(tasks, tasksLoaded, tasksError, {
+    keepSessions: true,
+  });
   const narrowed = narrowTasks(tasks, narrowing, config, {
     keepSessions: true,
   });
@@ -55,7 +65,7 @@ export default function TaskTreeBoard({
     <Root
       className={`main-column task-tree-board${landmark ? "" : " task-view"}`}
     >
-      {tasks.length > 0 && (
+      {!tasksFailed && tasks.length > 0 && (
         <NarrowingBar
           tasks={tasks}
           config={config}
@@ -65,7 +75,9 @@ export default function TaskTreeBoard({
           orderNote="The newest task first, with each task's follow-ups under it in the order they were filed."
         />
       )}
-      {tasks.length === 0 ? (
+      {tasksFailed ? (
+        <TasksLoadError error={tasksError} onRetry={onRetry} />
+      ) : tasks.length === 0 ? (
         <ListEmpty>No tasks yet.</ListEmpty>
       ) : narrowed.length === 0 ? (
         <ListEmpty>

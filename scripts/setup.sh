@@ -589,6 +589,7 @@ if [ "${GRAIN_ALLOWED_PRINCIPALS+set}" = set ]; then
   GRAIN_ALLOWED_PRINCIPALS_GIVEN=1
 fi
 GRAIN_ALLOWED_PRINCIPALS="${GRAIN_ALLOWED_PRINCIPALS:-}"
+GRAIN_DEPLOYMENT_OWNER="${GRAIN_DEPLOYMENT_OWNER:-}"
 
 # --- the config repository (pkg/staterepo) ------------------------------
 #
@@ -4367,6 +4368,9 @@ if [ -S /var/run/docker.sock ]; then
   [ -n "\$docker_gid" ] && args+=(--group-add "\$docker_gid")
 fi
 [ -d /var/lib/granule ] && args+=(--volume /var/lib/granule:/var/lib/granule)
+[ -d /cloudsql ] && args+=(--volume /cloudsql:/cloudsql)
+[ -r /etc/grain/daemon.env ] && args+=(--env-file /etc/grain/daemon.env)
+[ -d /run/grain-secrets ] && args+=(--volume /run/grain-secrets:/run/grain-secrets:ro)
 # The local PostgreSQL server's DSN (setup.sh's database block), for a
 # caller that may read it -- root. Anyone else's CLI finds the store the
 # way the daemon recorded it, in db-config.json.
@@ -7026,6 +7030,7 @@ write_systemd_units() {
   [ -n "$GRAIN_GCP_SERVICE_ACCOUNT_EMAIL" ] && daemon_args+=(-gcp-agent-service-account "$GRAIN_GCP_SERVICE_ACCOUNT_EMAIL")
   [ -n "$GRAIN_IAP_RESOURCE" ] && daemon_args+=(-iap-resource "$GRAIN_IAP_RESOURCE")
   [ -n "$GRAIN_ALLOWED_PRINCIPALS" ] && daemon_args+=(-ui-allowed-principals "$GRAIN_ALLOWED_PRINCIPALS")
+  [ -n "$GRAIN_DEPLOYMENT_OWNER" ] && daemon_args+=(-deployment-owner "$GRAIN_DEPLOYMENT_OWNER")
   [ -n "$GRAIN_TARGET_REPO" ] && daemon_args+=(-default-target-repo "$GRAIN_TARGET_REPO")
   if [ -n "$GRAIN_SANDBOX_CPUS" ]; then
     daemon_args+=(-sandbox-cpus "$GRAIN_SANDBOX_CPUS")
@@ -7227,11 +7232,12 @@ Requires=docker.service${POSTGRES_DAEMON_REQUIRES}
 Type=simple
 EnvironmentFile=${UNIT_IMAGE_REF_FILE}
 ${POSTGRES_DAEMON_ENV}
+EnvironmentFile=-/etc/grain/daemon.env
 EnvironmentFile=-/etc/default/grain-daemon
 ExecStartPre=${IMAGE_REF_PROMOTER}
 ${hostd_extract}
 ExecStartPre=-$DOCKER_BIN rm -f grain-daemon
-ExecStart=$DOCKER_BIN run --name grain-daemon ${DOCKER_ARGS[*]} \$GRAIN_EXTRA_DOCKER_RUN_ARGS \${GRAIN_IMAGE} ${daemon_args[*]}
+ExecStart=$DOCKER_BIN run --name grain-daemon ${DOCKER_ARGS[*]} \$GRAIN_EXTRA_DOCKER_RUN_ARGS \${GRAIN_IMAGE} ${daemon_args[*]} \$GRAIN_EXTRA_DAEMON_ARGS
 ExecStop=-$DOCKER_BIN stop --time 300 grain-daemon
 Restart=on-failure
 RestartSec=5
@@ -7411,6 +7417,8 @@ docker_run_args() {
   fi
 
   [ -d /cloudsql ] && DOCKER_ARGS+=(--volume /cloudsql:/cloudsql)
+  [ -f /etc/grain/daemon.env ] && DOCKER_ARGS+=(--env-file /etc/grain/daemon.env)
+  [ -d /run/grain-secrets ] && DOCKER_ARGS+=(--volume /run/grain-secrets:/run/grain-secrets:ro)
 
   # GRAIN_DB_DRIVER and GRAIN_DB_DSN, by name, out of the local server's
   # environment file (postgres_daemon_unit): never their values here.

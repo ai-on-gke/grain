@@ -98,8 +98,8 @@ func TestTheDirectorIsFiledOnTheFirstCycleAndParkedOnItsOwnOpening(t *testing.T)
 	if len(director.Reads) != 1 || director.Reads[0].Name != "grain-home" {
 		t.Errorf("Reads = %v, want the state repository", director.Reads)
 	}
-	if director.NetworkAccess != model.NetworkOpen {
-		t.Errorf("NetworkAccess = %q, want open by default", director.NetworkAccess)
+	if director.NetworkAccess != model.NetworkNone {
+		t.Errorf("NetworkAccess = %q, want none by default on a deployment whose sandboxes isolate (director-capabilities.spec.md §3.1.6)", director.NetworkAccess)
 	}
 	var grants []string
 	for _, g := range director.Grants {
@@ -2685,5 +2685,82 @@ func TestConsoleSessionSnapshotSurvivesARestart(t *testing.T) {
 	}
 	if hasWrite(synced.Writes, "acme", "infra") {
 		t.Errorf("Writes = %v after a restart, kept acme/infra the declaration dropped while the daemon was down", synced.Writes)
+	}
+}
+
+// director-capabilities.spec.md §4.2 (G9), for a proposal replayed at the
+// end of the director's run: one carrying its target repository's
+// default capability reference unchanged is queued on the director's
+// permission, with a note naming the default and its repository; one
+// where the director typed that reference with other arguments still
+// waits for a person -- ui.CreateTask's rule for the identical call
+// filed live.
+func TestDirectorProposalCarryingItsTargetsDefaultReferenceIsQueuedAtTheEndOfARun(t *testing.T) {
+	t.Parallel()
+	const seeded = `https://caps.example/host-script#host-script={"script":"autoscaler"}`
+	const typed = `https://caps.example/host-script#host-script={"script":"elsewhere"}`
+	for _, tc := range []struct {
+		name string
+		caps []any
+		want model.State
+		note string
+	}{
+		{"seeded unchanged", nil, model.StateQueued, "from the default capabilities of `acme/widgets`"},
+		{"typed with other arguments", []any{typed}, model.StateProposed, "this proposal asked for `https://caps.example/host-script"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store, ctx := openStore(t)
+			_, client := newSim(t, "acme", "widgets", "main")
+			settings(t, store, func(cfg *model.Config) {
+				sessions := model.DefaultConsoleSessions()
+				sessions[0].TasksApproved = true
+				cfg.ConsoleSessions = sessions
+			})
+			repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+			if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: repo, DefaultCapabilities: []string{seeded}}); err != nil {
+				t.Fatal(err)
+			}
+			runSessions(t, store, baseTime)
+			director := sessionTasks(t, store)[0]
+
+			args := map[string]any{"title": "follow-up on widgets", "body": "as discussed", "repo": "acme/widgets"}
+			if tc.caps != nil {
+				args["capabilities"] = tc.caps
+			}
+			result := toolResult(agent.ToolCall{Name: "propose_task", Arguments: args})
+			if err := orchestrator.ProcessResult(ctx, store, client, director, result,
+				director.ID+"-1", baseTime); err != nil {
+				t.Fatalf("ProcessResult: %v", err)
+			}
+			all, err := store.ListTasks(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var proposal *model.Task
+			for i := range all {
+				if all[i].ID != director.ID {
+					proposal = &all[i]
+				}
+			}
+			if proposal == nil {
+				t.Fatal("the director proposed a task and nothing was filed")
+			}
+			state, err := store.State(ctx, proposal.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state != tc.want {
+				t.Errorf("the proposal reads %q, want %q (body: %q)", state, tc.want, proposal.Body)
+			}
+			if !strings.Contains(proposal.Body, tc.note) {
+				t.Errorf("body = %q, want it to say %q", proposal.Body, tc.note)
+			}
+			if !slices.ContainsFunc(proposal.Grants, func(g model.Grant) bool {
+				return g.Via == model.GrantByDefault && strings.Contains(g.Capability, "autoscaler")
+			}) {
+				t.Errorf("grants = %+v, want the repository's default kept", proposal.Grants)
+			}
+		})
 	}
 }

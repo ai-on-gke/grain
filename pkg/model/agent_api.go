@@ -1105,6 +1105,40 @@ func apiGrantsOf(names []string, sandboxChannel bool) APIGrantSet {
 // Empty reports whether the set grants nothing.
 func (s APIGrantSet) Empty() bool { return len(s.all) == 0 && len(s.scopes) == 0 }
 
+// Intersect returns the grant set holding only scopes and repositories that
+// both s and other allow (AU-25.1).
+func (s APIGrantSet) Intersect(other APIGrantSet) APIGrantSet {
+	out := APIGrantSet{scopes: map[APIScope][]string{}, all: map[APIScope]bool{}}
+	for _, info := range APIScopes() {
+		sc := info.Scope
+		if !s.Has(sc) || !other.Has(sc) {
+			continue
+		}
+		if s.Allows(sc, "") && other.Allows(sc, "") {
+			out.all[sc] = true
+			continue
+		}
+		if s.Allows(sc, "") {
+			out.scopes[sc] = other.Repos(sc)
+			continue
+		}
+		if other.Allows(sc, "") {
+			out.scopes[sc] = s.Repos(sc)
+			continue
+		}
+		var common []string
+		for _, r := range s.Repos(sc) {
+			if other.Allows(sc, r) {
+				common = append(common, r)
+			}
+		}
+		if len(common) > 0 {
+			out.scopes[sc] = common
+		}
+	}
+	return out
+}
+
 // Has reports whether the set grants scope for at least one repository.
 func (s APIGrantSet) Has(scope APIScope) bool {
 	return s.all[scope] || len(s.scopes[scope]) > 0

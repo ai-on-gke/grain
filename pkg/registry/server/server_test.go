@@ -52,13 +52,21 @@ import (
 
 type testDelegationAuthorizer struct {
 	allowedActor string
+	access       string
 }
 
 func (d testDelegationAuthorizer) AuthorizeOnBehalfOf(_ context.Context, servicePrincipal, targetUserEmail, _ string) (*AssertionActor, error) {
 	if strings.EqualFold(servicePrincipal, d.allowedActor) || strings.EqualFold("serviceAccount:"+servicePrincipal, d.allowedActor) {
+		access := d.access
+		if access == "" {
+			access = "write"
+		}
 		return &AssertionActor{
-			Sub:  d.allowedActor,
-			Kind: "service",
+			Sub:    d.allowedActor,
+			Kind:   "service",
+			App:    "board",
+			Grant:  "dlg_board_1",
+			Access: access,
 		}, nil
 	}
 	return nil, errors.New("on-behalf-of delegation is not permitted")
@@ -1232,7 +1240,7 @@ func TestReconnectWaiterCap32AndDelegationAndSIGTERMDrain(t *testing.T) {
 	cancel()
 	wg.Wait()
 
-	// 2. Test X-Grain-On-Behalf-Of delegation (human caller -> 400; unauthorized service principal -> 403 delegation_refused).
+	// 2. Test X-Grain-On-Behalf-Of delegation (registry host -> 400 delegation_not_supported; human caller -> 400 delegation_requires_service_caller; browser headers -> 403 delegation_from_browser; upgrade -> 403 not_delegable; unauthorized service principal -> 403 delegation_refused; read_only_grant POST -> 403 read_only_grant).
 	rt, err := NewRouter(RouterOptions{
 		RegistryHost:   "registry.example.com",
 		InstanceDomain: "instances.example.com",
@@ -1255,14 +1263,47 @@ func TestReconnectWaiterCap32AndDelegationAndSIGTERMDrain(t *testing.T) {
 	})
 	h := rt.WrapMainHandler(http.NotFoundHandler())
 
+	reqRegistryOBO := httptest.NewRequest(http.MethodGet, "https://registry.example.com/api/directory", nil)
+	reqRegistryOBO.Host = "registry.example.com"
+	reqRegistryOBO.Header.Set("X-Test-Email", "board@proj.iam.gserviceaccount.com")
+	reqRegistryOBO.Header.Set(HeaderOnBehalfOf, "alice@example.com")
+	recRegistryOBO := httptest.NewRecorder()
+	h.ServeHTTP(recRegistryOBO, reqRegistryOBO)
+	if recRegistryOBO.Code != http.StatusBadRequest || !strings.Contains(recRegistryOBO.Body.String(), "delegation_not_supported") {
+		t.Fatalf("expected 400 delegation_not_supported on registry host, got %d %s", recRegistryOBO.Code, recRegistryOBO.Body.String())
+	}
+
 	reqHumanOBO := httptest.NewRequest(http.MethodGet, "https://alice-vm.instances.example.com/", nil)
 	reqHumanOBO.Host = "alice-vm.instances.example.com"
 	reqHumanOBO.Header.Set("X-Test-Email", "alice@example.com")
 	reqHumanOBO.Header.Set(HeaderOnBehalfOf, "bob@example.com")
 	recHumanOBO := httptest.NewRecorder()
 	h.ServeHTTP(recHumanOBO, reqHumanOBO)
-	if recHumanOBO.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 when human sends X-Grain-On-Behalf-Of, got %d", recHumanOBO.Code)
+	if recHumanOBO.Code != http.StatusBadRequest || !strings.Contains(recHumanOBO.Body.String(), "delegation_requires_service_caller") {
+		t.Fatalf("expected 400 delegation_requires_service_caller when human sends X-Grain-On-Behalf-Of, got %d %s", recHumanOBO.Code, recHumanOBO.Body.String())
+	}
+
+	reqBrowserOBO := httptest.NewRequest(http.MethodGet, "https://alice-vm.instances.example.com/", nil)
+	reqBrowserOBO.Host = "alice-vm.instances.example.com"
+	reqBrowserOBO.Header.Set("X-Test-Email", "board@proj.iam.gserviceaccount.com")
+	reqBrowserOBO.Header.Set(HeaderOnBehalfOf, "alice@example.com")
+	reqBrowserOBO.Header.Set("Origin", "https://evil.example.com")
+	recBrowserOBO := httptest.NewRecorder()
+	h.ServeHTTP(recBrowserOBO, reqBrowserOBO)
+	if recBrowserOBO.Code != http.StatusForbidden || !strings.Contains(recBrowserOBO.Body.String(), "delegation_from_browser") {
+		t.Fatalf("expected 403 delegation_from_browser when browser headers accompany X-Grain-On-Behalf-Of, got %d %s", recBrowserOBO.Code, recBrowserOBO.Body.String())
+	}
+
+	reqUpgradeOBO := httptest.NewRequest(http.MethodGet, "https://alice-vm.instances.example.com/api/hostd/connect", nil)
+	reqUpgradeOBO.Host = "alice-vm.instances.example.com"
+	reqUpgradeOBO.Header.Set("X-Test-Email", "board@proj.iam.gserviceaccount.com")
+	reqUpgradeOBO.Header.Set(HeaderOnBehalfOf, "alice@example.com")
+	reqUpgradeOBO.Header.Set("Connection", "Upgrade")
+	reqUpgradeOBO.Header.Set("Upgrade", "websocket")
+	recUpgradeOBO := httptest.NewRecorder()
+	h.ServeHTTP(recUpgradeOBO, reqUpgradeOBO)
+	if recUpgradeOBO.Code != http.StatusForbidden || !strings.Contains(recUpgradeOBO.Body.String(), "not_delegable") {
+		t.Fatalf("expected 403 not_delegable on upgrade with X-Grain-On-Behalf-Of, got %d %s", recUpgradeOBO.Code, recUpgradeOBO.Body.String())
 	}
 
 	reqServiceOBO := httptest.NewRequest(http.MethodGet, "https://alice-vm.instances.example.com/", nil)
@@ -1275,10 +1316,32 @@ func TestReconnectWaiterCap32AndDelegationAndSIGTERMDrain(t *testing.T) {
 		t.Fatalf("expected 403 delegation_refused, got %d %s", recServiceOBO.Code, recServiceOBO.Body.String())
 	}
 
+	// Read-only grant refuses POST with 403 read_only_grant.
+	rt.delegation = testDelegationAuthorizer{
+		allowedActor: "serviceAccount:board@proj.iam.gserviceaccount.com",
+		access:       "read",
+	}
+	reqReadOnlyPost := httptest.NewRequest(http.MethodPost, "https://alice-vm.instances.example.com/api/tasks", strings.NewReader(`{}`))
+	reqReadOnlyPost.Host = "alice-vm.instances.example.com"
+	reqReadOnlyPost.Header.Set("X-Test-Email", "board@proj.iam.gserviceaccount.com")
+	reqReadOnlyPost.Header.Set(HeaderOnBehalfOf, "alice@example.com")
+	recReadOnlyPost := httptest.NewRecorder()
+	h.ServeHTTP(recReadOnlyPost, reqReadOnlyPost)
+	if recReadOnlyPost.Code != http.StatusForbidden || !strings.Contains(recReadOnlyPost.Body.String(), "read_only_grant") {
+		t.Fatalf("expected 403 read_only_grant on POST with read grant, got %d %s", recReadOnlyPost.Code, recReadOnlyPost.Body.String())
+	}
+
 	// Authorized service principal delegation (DelegationAuthorizer permits board@proj.iam.gserviceaccount.com, target user is owner):
-	// Mints X-Grain-Registry-Assertion with `sub = "user:alice@example.com"` and `act.sub = "serviceAccount:board@proj.iam.gserviceaccount.com"`.
-	rt.delegation = testDelegationAuthorizer{allowedActor: "serviceAccount:board@proj.iam.gserviceaccount.com"}
+	// Mints X-Grain-Registry-Assertion with `sub = "alice@example.com"` and `act.sub = "serviceAccount:board@proj.iam.gserviceaccount.com"`,
+	// and strips X-Grain-On-Behalf-Of and X-Grain-Subject-Token before forwarding.
+	rt.delegation = testDelegationAuthorizer{
+		allowedActor: "serviceAccount:board@proj.iam.gserviceaccount.com",
+		access:       "write",
+	}
+	var gotBackendOBO, gotBackendSubjectToken string
 	delegatedBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBackendOBO = r.Header.Get(HeaderOnBehalfOf)
+		gotBackendSubjectToken = r.Header.Get(HeaderSubjectToken)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer delegatedBackend.Close()
@@ -1297,10 +1360,14 @@ func TestReconnectWaiterCap32AndDelegationAndSIGTERMDrain(t *testing.T) {
 	reqValidOBO.Host = "alice-vm.instances.example.com"
 	reqValidOBO.Header.Set("X-Test-Email", "board@proj.iam.gserviceaccount.com")
 	reqValidOBO.Header.Set(HeaderOnBehalfOf, "alice@example.com")
+	reqValidOBO.Header.Set(HeaderSubjectToken, "subject-jwt-should-be-stripped")
 	recValidOBO := httptest.NewRecorder()
 	h.ServeHTTP(recValidOBO, reqValidOBO)
 	if recValidOBO.Code != http.StatusOK {
 		t.Fatalf("expected 200 OK on authorized X-Grain-On-Behalf-Of, got %d %s", recValidOBO.Code, recValidOBO.Body.String())
+	}
+	if gotBackendOBO != "" || gotBackendSubjectToken != "" {
+		t.Fatalf("expected X-Grain-On-Behalf-Of and X-Grain-Subject-Token stripped, got obo=%q subjectToken=%q", gotBackendOBO, gotBackendSubjectToken)
 	}
 	signer.mu.Lock()
 	var lastClaims AssertionClaims

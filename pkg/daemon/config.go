@@ -251,6 +251,7 @@ type Config struct {
 	// UiRequireVerifier = "iap".
 	UiRequireIAP            bool
 	UiAllowedPrincipals     []string
+	DeploymentOwner         string
 	UiCloudIdentityEndpoint string
 	UiOpen                  bool
 	Actor                   string

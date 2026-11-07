@@ -838,6 +838,14 @@ var Migrations = []Migration{
 		Description: "rewrite stored bootstrap-playbooks grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/config-map#config-map={\"config_maps\":[\"bootstrap\"]} (the in-process bootstrap-playbooks is retired)",
 		Up:          migrateBootstrapPlaybooksGrants,
 	},
+	{
+		Version:     119,
+		Description: "add allowed_principal.label and allowed_principal.last_used_at for delegate: entries (design/design/authentication.design.md §6)",
+		Statements: []string{
+			"ALTER TABLE `allowed_principal` ADD COLUMN `label` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `allowed_principal` ADD COLUMN `last_used_at` DATETIME NULL",
+		},
+	},
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as

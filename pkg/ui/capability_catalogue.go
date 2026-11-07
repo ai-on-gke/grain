@@ -16,6 +16,7 @@ package ui
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -135,6 +136,9 @@ func (c *Client) catalogueEditRefusal(ctx context.Context, task model.Task, gran
 	if err != nil {
 		return validationErrorf("%v", err)
 	}
+	if isDelegatedRequest(ctx) && (len(verdict.RequiresPerson) > 0 || model.IsPersonOnlyGrant(grant) || model.IsAdminOnlyGrant(grant)) {
+		return forbiddenCodeErrorf("requires_person", "capability %s requires a person acting directly (not via a delegating app)", grant)
+	}
 	if len(verdict.RequiresPerson) > 0 && c.requestActor(ctx).Actor.Kind != model.PrincipalHuman {
 		return forbiddenErrorf("capability %s requires human approval (settings/capabilities.yml marks it requires_person)", grant)
 	}
@@ -150,6 +154,24 @@ func (c *Client) catalogueEditRefusal(ctx context.Context, task model.Task, gran
 // A grant the catalogue refuses outright is not this check's business:
 // dispatch holds that task whoever approves it (orchestrator.catalogueHold).
 func (c *Client) catalogueApprovalRefusal(ctx context.Context, task model.Task) error {
+	if isDelegatedRequest(ctx) {
+		var personOnly []string
+		for _, g := range task.Grants {
+			if (model.IsPersonOnlyGrant(g.Capability) || model.IsAdminOnlyGrant(g.Capability)) && !slices.Contains(personOnly, g.Capability) {
+				personOnly = append(personOnly, g.Capability)
+			}
+		}
+		if len(personOnly) > 0 {
+			return forbiddenCodeErrorf("requires_person", "task %s holds %s, which only a person acting directly may approve",
+				task.ID, strings.Join(personOnly, ", "))
+		}
+		needsPerson, err := c.catalogueRequiresPerson(ctx, task)
+		if err != nil || len(needsPerson) == 0 {
+			return err
+		}
+		return forbiddenCodeErrorf("requires_person", "task %s holds %s, which settings/capabilities.yml marks as a person's decision (requires_person): only a person acting directly may approve it",
+			task.ID, strings.Join(needsPerson, ", "))
+	}
 	if c.requestActor(ctx).Actor.Kind == model.PrincipalHuman {
 		return nil
 	}
