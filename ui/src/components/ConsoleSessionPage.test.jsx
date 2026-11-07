@@ -973,4 +973,69 @@ describe("ConsoleSessionPage", () => {
       screen.queryByRole("button", { name: "Apply now" }),
     ).not.toBeInTheDocument();
   });
+
+  it("offers a one-click Adopt shipped defaults action when a saved session lacks shipped defaults", async () => {
+    api.mockClear();
+    const onSaved = vi.fn();
+    const { rerender } = render(
+      <ConsoleSessionPage
+        session={session({
+          capabilities: ["self-debug", "api:tasks:admin"],
+          missingShippedDefaults: ["api:task-admin", "api:settings:read"],
+        })}
+        task={task()}
+        capabilities={capabilities}
+        act={vi.fn()}
+        onSaved={onSaved}
+        showError={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /Director capabilities/ }),
+    );
+    const banner = screen.getByTestId("adopt-shipped-defaults-banner");
+    expect(banner).toHaveTextContent("api:task-admin");
+    expect(banner).toHaveTextContent("api:settings:read");
+
+    await userEvent.click(
+      within(banner).getByRole("button", { name: "Adopt shipped defaults" }),
+    );
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith("/api/console-sessions/director", {
+        method: "PUT",
+        body: JSON.stringify({
+          capabilities: [
+            "self-debug",
+            "api:tasks:admin",
+            "api:task-admin",
+            "api:settings:read",
+          ],
+        }),
+      }),
+    );
+    expect(onSaved).toHaveBeenCalled();
+
+    rerender(
+      <ConsoleSessionPage
+        session={session({
+          capabilities: [
+            "self-debug",
+            "api:tasks:admin",
+            "api:task-admin",
+            "api:settings:read",
+          ],
+          missingShippedDefaults: [],
+        })}
+        task={task()}
+        capabilities={capabilities}
+        act={vi.fn()}
+        onSaved={onSaved}
+        showError={vi.fn()}
+      />,
+    );
+    expect(
+      screen.queryByTestId("adopt-shipped-defaults-banner"),
+    ).not.toBeInTheDocument();
+  });
 });

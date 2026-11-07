@@ -430,3 +430,92 @@ func TestIsConsoleSessionMatchesDirectorTaskSQL(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultConsoleSessionsShipsTier1Capabilities(t *testing.T) {
+	sessions := model.DefaultConsoleSessions()
+	if len(sessions) != 1 || sessions[0].ID != model.DirectorSessionID {
+		t.Fatalf("DefaultConsoleSessions() = %v, want single director session", sessions)
+	}
+	director := sessions[0]
+	wantTier1 := []string{
+		"api:self-debug",
+		model.GrainSourceGrant,
+		model.GrainJournalGrant,
+		"api:deployment:read",
+		model.GrainHealthGrant,
+		model.BootstrapPlaybooksGrant,
+		"api:task-admin",
+		"api:capabilities:read",
+		"api:capabilities:detach",
+		"api:settings:read",
+		"api:repos:read",
+		"api:releases:read",
+		"api:schedules:read",
+		"api:templates:read",
+		"api:suites:read",
+		"api:dispatch:read",
+	}
+	for _, want := range wantTier1 {
+		if !slices.Contains(director.Capabilities, want) {
+			t.Errorf("DefaultConsoleSessions()[0].Capabilities = %v, missing Tier 1 grant %q", director.Capabilities, want)
+		}
+	}
+	for _, capID := range director.Capabilities {
+		if model.IsPersonOnlyGrant(capID) {
+			t.Errorf("DefaultConsoleSessions() ships person-only grant %q", capID)
+		}
+		if refusal := model.DirectorFloorRefusal(capID, model.CatalogueKindDirector); refusal != nil {
+			t.Errorf("DefaultConsoleSessions() ships grant %q refused by director floor: %v", capID, refusal)
+		}
+	}
+	if err := model.ValidateConsoleSessions(sessions); err != nil {
+		t.Errorf("ValidateConsoleSessions(DefaultConsoleSessions()) = %v, want nil", err)
+	}
+
+	if missing := model.MissingShippedConsoleSessionCapabilities(model.DirectorSessionID, director.Capabilities); len(missing) != 0 {
+		t.Errorf("MissingShippedConsoleSessionCapabilities(complete director) = %v, want empty", missing)
+	}
+	legacySaved := []string{
+		"api:self-debug",
+		model.GrainSourceGrant,
+		model.GrainJournalGrant,
+		"api:deployment:read",
+		model.GrainHealthGrant,
+		model.BootstrapPlaybooksGrant,
+	}
+	missing := model.MissingShippedConsoleSessionCapabilities(model.DirectorSessionID, legacySaved)
+	wantMissing := wantTier1[len(legacySaved):]
+	for _, want := range wantMissing {
+		if !slices.Contains(missing, want) {
+			t.Errorf("MissingShippedConsoleSessionCapabilities(legacy saved) = %v, missing %q", missing, want)
+		}
+	}
+	if other := model.MissingShippedConsoleSessionCapabilities("chat-1", nil); other != nil {
+		t.Errorf("MissingShippedConsoleSessionCapabilities(non-shipped session) = %v, want nil", other)
+	}
+}
+
+func TestDirectorSessionBodyInstructsExpectReasonsAndHoldForApproval(t *testing.T) {
+	repo := model.RepoRef{Owner: "acme", Name: "grain-home"}
+	for _, tasksApproved := range []bool{false, true} {
+		session := model.ConsoleSession{
+			ID:            model.DirectorSessionID,
+			TasksApproved: tasksApproved,
+		}
+		body := model.DirectorSessionBody(repo, session)
+		for _, want := range []string{
+			"`expect`",
+			`{"state": "running"}`,
+			"`reason`",
+			"`--reason`",
+			"`hold_for_approval: true`",
+			"destructive",
+			"irreversible",
+			"surprising",
+		} {
+			if !strings.Contains(body, want) {
+				t.Errorf("TasksApproved=%v: DirectorSessionBody missing %q:\n%s", tasksApproved, want, body)
+			}
+		}
+	}
+}
