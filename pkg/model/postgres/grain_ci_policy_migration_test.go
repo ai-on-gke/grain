@@ -21,10 +21,10 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// Migration 120 on PostgreSQL: a capability policy whose rules and
+// Migration 121 on PostgreSQL: a capability policy whose rules and
 // catalogue defaults name the retired grain-ci -- which migration 96 left
 // alone -- names grain#ci afterwards, once.
-func TestMigration120RewritesGrainCIInThePolicy(t *testing.T) {
+func TestMigration121RewritesGrainCIInThePolicy(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 	cfg := model.DefaultConfig()
@@ -41,9 +41,9 @@ func TestMigration120RewritesGrainCIInThePolicy(t *testing.T) {
 	if err := store.PutConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
-	rewindSchemaTo(t, ctx, db, 119)
+	rewindSchemaTo(t, ctx, db, 120)
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating a version-119 store: %v", err)
+		t.Fatalf("migrating a version-120 store: %v", err)
 	}
 	got, err := store.GetConfig(ctx)
 	if err != nil {

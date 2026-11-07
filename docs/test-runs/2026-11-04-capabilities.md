@@ -2,7 +2,7 @@
 
 - **Plan:** `docs/test-plans/2026-11-04.md` §8 (PRs #493, #613, #625, #614, #471, #631, #647, #594, #645, #643). Starts from [`2026-11-03-capabilities-ci-repo.md`](2026-11-03-capabilities-ci-repo.md).
 - **Date:** 2026-11-07, from 03:10 UTC.
-- **Task:** 3074, branch `grain/049f1e09/task-3074-walkthrough-capability` on `ai-on-gke/grain`, base `main` at `c6004bc9` (schema 119 when the walk started; 120 with the fix below).
+- **Task:** 3074, branch `grain/049f1e09/task-3074-walkthrough-capability` on `ai-on-gke/grain`, base `main` at `c6004bc9` (schema 119 when the walk started; 120 with the fix below). **Renumbered after the walk:** `main` then took schema 120 for the `github-credential:<name>` rewrite, so F1's migration is now **121** (`TestMigration121RewritesGrainCIInThePolicy`). Where this record says "migration 120" or "schema 120" for F1 below, read 121. The dumps were taken at the time and keep their file names.
 - **Environment:**
   - Debian 12 sandbox, `linux/amd64`, 7 vCPU / 30 GiB, Docker on the host. Go `go1.26.10`, Node 20.19.
   - `cd ui && npm ci && npm run build`, then `go build -o /home/debian/bin/grain ./cmd/grain` (rebuilt after the fix).

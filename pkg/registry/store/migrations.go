@@ -287,6 +287,27 @@ ALTER TABLE registry.audit_log
     ADD COLUMN IF NOT EXISTS grant_id TEXT NOT NULL DEFAULT '';
 `,
 	},
+	{
+		version: 5,
+		name:    "fleet_upgrades_and_stop_start",
+		upSQL: `
+ALTER TABLE registry.entries
+    DROP CONSTRAINT IF EXISTS entries_lifecycle_state_check;
+
+ALTER TABLE registry.entries
+    ADD CONSTRAINT entries_lifecycle_state_check
+    CHECK (lifecycle_state IN (
+        'creating', 'running', 'replacing', 'stopping', 'stopped', 'deleting', 'deleted', 'failed',
+        'PROVISIONING', 'ACTIVE', 'STOPPING', 'STOPPED', 'DEPROVISIONING', 'DELETED', 'FAILED'
+    ));
+
+ALTER TABLE registry.entries
+    ADD COLUMN IF NOT EXISTS auto_upgrade TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS auto_wake BOOLEAN NOT NULL DEFAULT TRUE,
+    ADD COLUMN IF NOT EXISTS upgrade_available TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS stopped_at TIMESTAMPTZ;
+`,
+	},
 }
 
 // Migrate applies all pending registry schema migrations inside the `registry` PostgreSQL schema.

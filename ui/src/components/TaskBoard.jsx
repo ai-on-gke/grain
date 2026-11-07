@@ -117,6 +117,13 @@ export default function TaskBoard({
   onShownChange,
   fixedColumns = null,
   landmark = true,
+  // countFloor: as TaskList's -- closed tasks still to be paged in make
+  // the board's count, and a closed column's, a floor.
+  countFloor = false,
+  // footer is the closed-tasks pager (ClosedTasksMore), drawn only on a
+  // board with a column closed tasks land in: on any other, paging them
+  // in on scroll would read every page for cards nobody can see.
+  footer = null,
 }) {
   // The columns this browser last saved, or the default board
   // (board.js). Held here rather than in App: nothing outside this view
@@ -155,6 +162,8 @@ export default function TaskBoard({
   // so a board with no "Closed" column never offers a repo only closed
   // tasks carry.
   const covered = new Set(boardStates(columns));
+  // Only a board with a column closed tasks land in counts any of them.
+  const boardFloor = countFloor && covered.has("closed");
   const onBoardTasks = tasks.filter((t) => covered.has(t.state));
 
   const attributes = attributesFor(config);
@@ -342,7 +351,7 @@ export default function TaskBoard({
     <Root className={landmark ? "board" : "board task-view"}>
       <ListHeader
         title="Board"
-        count={tasksFailed ? null : shown}
+        count={tasksFailed ? null : boardFloor ? `${shown}+` : shown}
         action={
           fixedColumns ? null : (
             <Button
@@ -434,7 +443,10 @@ export default function TaskBoard({
                       />
                     )}
                     <span className="board-column-title">{c.title}</span>
-                    <span className="count">{columnCards.length}</span>
+                    <span className="count">
+                      {columnCards.length}
+                      {countFloor && c.states.includes("closed") ? "+" : ""}
+                    </span>
                   </header>
                   <ul className="board-column-cards">
                     {columnCards.map((t) => (
@@ -564,6 +576,7 @@ export default function TaskBoard({
           )}
         </>
       )}
+      {covered.has("closed") && footer}
 
       {editing && (
         <BoardColumnsOverlay

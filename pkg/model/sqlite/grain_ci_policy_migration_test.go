@@ -62,9 +62,9 @@ func checkGrainCIPolicyRewritten(t *testing.T, pol model.CapabilityPolicy) {
 
 // Migration 96 rewrote stored grain-ci grants everywhere but the
 // capability policy, so a catalogue naming grain-ci kept the bare alias
-// through every upgrade. Migration 120 finishes the rewrite there, and a
+// through every upgrade. Migration 121 finishes the rewrite there, and a
 // second run changes nothing.
-func TestMigration120RewritesGrainCIInThePolicy(t *testing.T) {
+func TestMigration121RewritesGrainCIInThePolicy(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 	cfg := testConfig()
@@ -88,7 +88,7 @@ func TestMigration120RewritesGrainCIInThePolicy(t *testing.T) {
 	if err := db.QueryRowContext(ctx, "SELECT `capability_policy` FROM `grain_config` WHERE `id` = 1").Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 119 WHERE `id` = 1"); err != nil {
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 120 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.New(db).Init(ctx); err != nil {

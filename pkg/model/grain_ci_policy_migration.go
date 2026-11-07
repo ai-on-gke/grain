@@ -19,13 +19,13 @@ import (
 	"database/sql"
 )
 
-// grainCIPolicyRenames is migration 120's renames: the retired bare grain-ci
+// grainCIPolicyRenames is migration 121's renames: the retired bare grain-ci
 // to grain#ci. The migration's own copy, as rewriteLegacyGrants asks.
 var grainCIPolicyRenames = map[string][]string{
 	GrainCICapability: {GrainCIGrant},
 }
 
-// migrateGrainCIPolicy is schema migration 120's Up. Migration 96 retired
+// migrateGrainCIPolicy is schema migration 121's Up. Migration 96 retired
 // the in-process grain-ci onto grain#ci and rewrote the grant tables, the
 // default capability lists, the standing sessions and
 // repo_config.ci_capabilities, but not grain_config.capability_policy: a

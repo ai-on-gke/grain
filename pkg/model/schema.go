@@ -572,12 +572,16 @@ import "strconv"
 // entries (model.AllowedPrincipal.Label and LastUsedAt,
 // design/design/authentication.design.md §6).
 //
-// 120 changes no table: it rewrites `grain-ci` in
+// 120 rewrites stored `github-credential:<name>` grants across the grant
+// tables, deployment and repository default/CI capabilities, console sessions,
+// and capability_policy to `https://grain.dev/capabilities/repo#credential={"credential":"<name>"}`.
+//
+// 121 changes no table: it rewrites `grain-ci` in
 // `grain_config`.`capability_policy` -- its rules and its catalogue's task,
 // CI and per-repository defaults -- to
 // `https://grain.dev/capabilities/grain#ci={}`, which migration 96 did
 // everywhere else a grant is stored (grain_ci_policy_migration.go).
-const SchemaVersion = 120
+const SchemaVersion = 121
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
