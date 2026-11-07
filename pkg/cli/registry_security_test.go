@@ -98,14 +98,28 @@ func TestRegistryTargetFlagsRejectInsecureURLBeforeOIDCMint(t *testing.T) {
 		registryOIDCToken = prevOIDC
 	})
 
-	err := cmdRegistry(ctx, nil, &printer{}, []string{
-		"list",
-		"-registry-url", "http://registry.example.com",
-	})
-	if err == nil || !strings.Contains(err.Error(), "insecure http://") {
-		t.Fatalf("cmdRegistry(list -registry-url http://...) = %v, want insecure http:// refusal", err)
+	for _, args := range [][]string{
+		{"list", "-registry-url", "http://registry.example.com"},
+		{"unregister", "-standalone", "-registry-url", "http://registry.example.com", "workstation-1"},
+	} {
+		err := cmdRegistry(ctx, nil, &printer{}, args)
+		if err == nil || !strings.Contains(err.Error(), "insecure http://") {
+			t.Fatalf("cmdRegistry(%v) = %v, want insecure http:// refusal", args, err)
+		}
+		if oidcCalled {
+			t.Fatalf("registryOIDCToken was called before validating -registry-url for %v", args)
+		}
 	}
-	if oidcCalled {
-		t.Fatalf("registryOIDCToken was called before validating -registry-url")
+}
+
+func TestPrintConnectedConfigSnippetQuotesShellMetacharacters(t *testing.T) {
+	out := captureStdout(t, func() {
+		printConnectedConfigSnippet("https://registry.example.com/$(id)", "bad;rm -rf /'x")
+	})
+	if !strings.Contains(out, "'https://registry.example.com/$(id)'") {
+		t.Fatalf("snippet did not single-quote URL metacharacters: %s", out)
+	}
+	if !strings.Contains(out, `'bad;rm -rf /'\''x'`) {
+		t.Fatalf("snippet did not single-quote entry metacharacters: %s", out)
 	}
 }

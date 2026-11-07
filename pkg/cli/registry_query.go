@@ -152,9 +152,17 @@ func parseScopeInputs(rawSpecs []string) ([]api.ScopeInput, error) {
 	return out, nil
 }
 
+func shellQuoteArg(s string) string {
+	if s != "" && !strings.ContainsAny(s, " \t\r\n'\"\\$`!&|;<>()*?[]{}#~") {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 func printConnectedConfigSnippet(registryURL, entryName string) {
 	fmt.Printf("outbound tunnel config snippet:\n")
-	fmt.Printf("  grain daemon -registry-url %s -registry-entry %s -registry-connect -ui-require-verifier=registry\n", registryURL, entryName)
+	fmt.Printf("  grain daemon -registry-url %s -registry-entry %s -registry-connect -ui-require-verifier=registry\n",
+		shellQuoteArg(registryURL), shellQuoteArg(entryName))
 }
 
 func cmdRegistryList(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {

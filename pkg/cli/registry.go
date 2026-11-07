@@ -586,6 +586,12 @@ func cmdRegistryUnregister(ctx context.Context, c *ui.HTTPClient, out *printer, 
 			return errors.New("-standalone unregister requires -registry-url and <entry>")
 		}
 		if regURL != "" && entryName != "" {
+			normURL, urlErr := api.ValidateRegistryURL(regURL, false)
+			if urlErr != nil {
+				return urlErr
+			}
+			regURL = normURL
+			aud = firstNonEmptyTrimmed(*oidcAudFlag, existingCfg.OIDCAudience, regURL)
 			bearer, bErr := resolveRegistryCLIBearer(ctx, regURL, aud, *regTokenFlag)
 			if bErr != nil && (*standalone || *oidcFlag || *regTokenFlag != "") {
 				return bErr
