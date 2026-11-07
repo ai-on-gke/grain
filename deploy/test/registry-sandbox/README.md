@@ -132,10 +132,38 @@ client itself stays in the project until you delete it in the Console.
 
 ### 2. Connect a `grain` daemon
 
+**Option A — Provision a disposable test `grain daemon` VM inside the sandbox (`daemon-up.sh`):**
+
+```bash
+./deploy/test/registry-sandbox/daemon-up.sh \
+  --project my-gcp-sandbox \
+  --owner alice@example.com \
+  --entry sandbox-daemon \
+  --allow-principal user:colleague@example.com
+```
+
+`daemon-up.sh` builds a lightweight `grain-daemon` runtime image, creates a
+private-IP `e2-small` GCE VM on the sandbox subnet running `grain daemon` in
+control-plane test mode (`-disable-native-sandboxes`) with
+`GRAIN_REGISTRY_CONNECT=true`, `GRAIN_REGISTRY_ISSUER=grain-registry`,
+`GRAIN_REGISTRY_AUDIENCE=https://<entry>.<instance_domain>`,
+`GRAIN_REGISTRY_KEYS_URL=https://<registry_host>/.well-known/jwks.json`, and
+`GRAIN_ALLOWED_PRINCIPALS`, registers the entry via `register-entry.sh`, runs
+`grain registry register` on the VM, and verifies end-to-end tunnel routing via
+`verify.sh`.
+
+Tear down just the test daemon (keeping the sandbox registry running):
+
+```bash
+./deploy/test/registry-sandbox/daemon-down.sh \
+  --project my-gcp-sandbox \
+  --entry sandbox-daemon
+```
+
+**Option B — Connect an existing `setup.sh`-installed `grain-daemon.service` host:**
+
 Using the `grc_...` registration token printed by `up.sh` (or minted later via
 `register-entry.sh`):
-
-**On a `setup.sh`-installed `grain-daemon.service` host:**
 
 ```bash
 sudo tee -a /etc/default/grain-daemon >/dev/null <<'EOF'
@@ -148,7 +176,7 @@ GRAIN_REGISTRY_TOKEN="grc_<token>" grain registry register \
   "<entry>"
 ```
 
-**To connect another daemon later:**
+**To register another external daemon entry directly:**
 
 ```bash
 ./deploy/test/registry-sandbox/register-entry.sh \

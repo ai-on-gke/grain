@@ -214,6 +214,25 @@ else
   fi
 fi
 
+# Tear down any disposable test daemon GCE VMs attached to <prefix>-subnet first
+# so `terraform destroy` can cleanly delete the subnet and VPC network.
+daemon_down_args=(
+  --project "${PROJECT_ID}"
+  --prefix "${NAME_PREFIX}"
+  --zone "${ZONE}"
+  --all
+  --keep-entry
+)
+if [[ "${LOCAL_STATE}" -eq 1 ]]; then
+  daemon_down_args+=(--local-state)
+else
+  daemon_down_args+=(--state-bucket "${STATE_BUCKET}")
+fi
+if [[ "${KEEP_IMAGES}" -eq 1 ]]; then
+  daemon_down_args+=(--keep-images)
+fi
+"${SCRIPT_DIR}/daemon-down.sh" "${daemon_down_args[@]}"
+
 if [[ "${have_state}" -eq 1 ]]; then
   jq -n \
     --arg project_id "${PROJECT_ID}" \

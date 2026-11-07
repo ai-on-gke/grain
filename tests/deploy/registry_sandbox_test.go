@@ -95,7 +95,7 @@ func TestRegistrySandboxScriptsAndTerraform(t *testing.T) {
 		t.Errorf("network.tf should restrict allow-iap-tcp firewall to port 22 only")
 	}
 
-	for _, s := range []string{"up.sh", "verify.sh", "down.sh"} {
+	for _, s := range []string{"up.sh", "verify.sh", "down.sh", "daemon-up.sh", "daemon-down.sh"} {
 		body, err := os.ReadFile(filepath.Join(sandboxDir, s))
 		if err != nil {
 			t.Fatalf("reading %s: %v", s, err)
@@ -209,6 +209,66 @@ func TestRegistrySandboxScriptFlagValidation(t *testing.T) {
 			script: "configure-oauth.sh",
 			args:   []string{"--project"},
 		},
+		{
+			name:   "daemon-up rejects malformed project",
+			script: "daemon-up.sh",
+			args:   []string{"--project", "../bad", "--owner", "alice@example.com"},
+		},
+		{
+			name:   "daemon-up rejects malformed entry",
+			script: "daemon-up.sh",
+			args:   []string{"--project", "my-sandbox", "--owner", "alice@example.com", "--entry", "../bad"},
+		},
+		{
+			name:   "daemon-up rejects shell-expanding owner",
+			script: "daemon-up.sh",
+			args:   []string{"--project", "my-sandbox", "--owner", "alice$(id)@example.com"},
+		},
+		{
+			name:   "daemon-up rejects malformed allow-principal",
+			script: "daemon-up.sh",
+			args:   []string{"--project", "my-sandbox", "--owner", "alice@example.com", "--allow-principal", "domain:example.com"},
+		},
+		{
+			name:   "daemon-up rejects malformed repo",
+			script: "daemon-up.sh",
+			args:   []string{"--project", "my-sandbox", "--owner", "alice@example.com", "--repo", "bad/repo/extra"},
+		},
+		{
+			name:   "daemon-up rejects wildcard state-bucket",
+			script: "daemon-up.sh",
+			args:   []string{"--project", "my-sandbox", "--owner", "alice@example.com", "--state-bucket", "bucket-*"},
+		},
+		{
+			name:   "daemon-up rejects shell-expanding image ref",
+			script: "daemon-up.sh",
+			args:   []string{"--project", "my-sandbox", "--owner", "alice@example.com", "--image", "us-docker.pkg.dev/my-sandbox/grain/grain-daemon:tag;id"},
+		},
+		{
+			name:   "daemon-up rejects missing option value",
+			script: "daemon-up.sh",
+			args:   []string{"--project"},
+		},
+		{
+			name:   "daemon-down rejects malformed project",
+			script: "daemon-down.sh",
+			args:   []string{"--project", "-bad-flag"},
+		},
+		{
+			name:   "daemon-down rejects malformed entry",
+			script: "daemon-down.sh",
+			args:   []string{"--project", "my-sandbox", "--entry", "../bad"},
+		},
+		{
+			name:   "daemon-down rejects --all combined with --entry",
+			script: "daemon-down.sh",
+			args:   []string{"--project", "my-sandbox", "--all", "--entry", "sandbox-daemon"},
+		},
+		{
+			name:   "daemon-down rejects wildcard state-bucket",
+			script: "daemon-down.sh",
+			args:   []string{"--project", "my-sandbox", "--state-bucket", "*"},
+		},
 	}
 
 	for _, tc := range cases {
@@ -255,7 +315,7 @@ case "$*" in
   *"storage buckets describe"*)
     echo "222222222222"
     ;;
-  *"storage rm"*|*"storage buckets create"*|*"storage buckets update"*)
+  *"storage rm"*|*"storage buckets create"*|*"storage buckets update"*|*"compute instances create"*|*"compute instances delete"*)
     touch "`+marker+`"
     exit 99
     ;;
@@ -290,6 +350,14 @@ exit 0
 		},
 		{
 			script: "down.sh",
+			args:   []string{"--project", "my-sandbox"},
+		},
+		{
+			script: "daemon-up.sh",
+			args:   []string{"--project", "my-sandbox", "--owner", "alice@example.com", "--skip-image-build", "--image", "us-docker.pkg.dev/my-sandbox/grain/grain-daemon:test"},
+		},
+		{
+			script: "daemon-down.sh",
 			args:   []string{"--project", "my-sandbox"},
 		},
 	} {
