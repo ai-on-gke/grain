@@ -303,22 +303,32 @@ func TestActionsJobLogFollowsAnEnterpriseServersRedirect(t *testing.T) {
 }
 
 func TestActionsJobLogRefusedByTheBlobHostNamesStatusAndHost(t *testing.T) {
-	api, _ := ghesLogForge(t, func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-		io.WriteString(w, "<Error>AuthenticationFailed</Error>")
-	})
-	transport := &RealTransport{Host: strings.TrimPrefix(api.URL, "http://"), PathPrefix: "/api/v3",
-		ledger: &callerLedger{logf: func(string, ...any) {}}}
-	_, err := NewClient(transport, StaticToken{strPtr("t")}).ActionsJobLog("acme", "widgets", 19190336)
-	var gh *Error
-	if !errors.As(err, &gh) || gh.Status != http.StatusForbidden {
-		t.Fatalf("ActionsJobLog error = %v; want a 403 *Error", err)
-	}
-	if !strings.Contains(err.Error(), "localhost") || !strings.Contains(err.Error(), api.URL) {
-		t.Errorf("error %q should name both the API host and the blob host it was redirected to", err)
-	}
-	if strings.Contains(err.Error(), "sig=secret") {
-		t.Errorf("error %q leaks the signed URL's query", err)
+	for _, stop := range []bool{false, true} {
+		t.Run(fmt.Sprintf("transportFollows=%v", !stop), func(t *testing.T) {
+			api, _ := ghesLogForge(t, func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusForbidden)
+				io.WriteString(w, "<Error>AuthenticationFailed</Error>")
+			})
+			hc := &http.Client{}
+			if stop {
+				// Followed here rather than by the transport: the error
+				// must still name the blob host and not its signed URL.
+				hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+			}
+			transport := &RealTransport{Host: strings.TrimPrefix(api.URL, "http://"), PathPrefix: "/api/v3", Client: hc,
+				ledger: &callerLedger{logf: func(string, ...any) {}}}
+			_, err := NewClient(transport, StaticToken{strPtr("t")}).ActionsJobLog("acme", "widgets", 19190336)
+			var gh *Error
+			if !errors.As(err, &gh) || gh.Status != http.StatusForbidden {
+				t.Fatalf("ActionsJobLog error = %v; want a 403 *Error", err)
+			}
+			if !strings.Contains(err.Error(), "localhost") || !strings.Contains(err.Error(), api.URL) {
+				t.Errorf("error %q should name both the API host and the blob host it was redirected to", err)
+			}
+			if strings.Contains(err.Error(), "sig=secret") || strings.Contains(err.Error(), "/logs/19190336.txt") {
+				t.Errorf("error %q leaks the signed URL", err)
+			}
+		})
 	}
 }
 
@@ -345,6 +355,43 @@ func TestActionsJobLogUnreachableBlobHostKeepsTheSignedQueryOut(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), "localhost") {
 				t.Errorf("error %q should still name the blob host", err)
+			}
+		})
+	}
+}
+
+// A job log the blob store answers 200 with no body is ErrEmptyJobLog,
+// naming the status, both hosts and who the headers say answered, so the
+// hop that lost the log can be told -- not a log that is just empty.
+func TestActionsJobLogAnsweredEmptyNamesStatusHostsAndServer(t *testing.T) {
+	for _, stop := range []bool{false, true} {
+		t.Run(fmt.Sprintf("transportFollows=%v", !stop), func(t *testing.T) {
+			api, _ := ghesLogForge(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/plain")
+				w.Header().Set("Server", "blobstore")
+				w.WriteHeader(http.StatusOK)
+			})
+			hc := &http.Client{}
+			if stop {
+				hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+			}
+			transport := &RealTransport{Host: strings.TrimPrefix(api.URL, "http://"), PathPrefix: "/api/v3", Client: hc,
+				ledger: &callerLedger{logf: func(string, ...any) {}}}
+			got, err := NewClient(transport, StaticToken{strPtr("t")}).ActionsJobLog("acme", "widgets", 19190336)
+			if !errors.Is(err, ErrEmptyJobLog) {
+				t.Fatalf("ActionsJobLog = %q, %v; want ErrEmptyJobLog", got, err)
+			}
+			var gh *Error
+			if !errors.As(err, &gh) || gh.Status != http.StatusOK {
+				t.Fatalf("error %v should carry the 200 *Error", err)
+			}
+			for _, want := range []string{"localhost", "content-type text/plain", "server blobstore"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q should name %q", err, want)
+				}
+			}
+			if strings.Contains(err.Error(), "sig=secret") {
+				t.Errorf("error %q leaks the signed URL's query", err)
 			}
 		})
 	}

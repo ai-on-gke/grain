@@ -327,6 +327,109 @@ func WriteProvisioningState(w http.ResponseWriter, r *http.Request, registryHost
 	})
 }
 
+// WriteStoppingState writes the 503 state page (or JSON) with `Retry-After: 5`
+// when a hosted instance is in `stopping`.
+func WriteStoppingState(w http.ResponseWriter, r *http.Request, registryHost string, entry *store.EntryRow) {
+	w.Header().Set("Retry-After", "5")
+	detailURL := ""
+	if registryHost != "" {
+		detailURL = fmt.Sprintf("https://%s/entries/%s", NormalizeHost(registryHost), url.PathEscape(entry.Name))
+	}
+
+	if WantsHTML(r) {
+		var body strings.Builder
+		fmt.Fprintf(&body, `<p>Instance <code>%s</code> is currently <strong>stopping</strong> while draining active tasks.</p>`,
+			html.EscapeString(entry.Name))
+		body.WriteString(`<dl>`)
+		fmt.Fprintf(&body, `<dt>Entry</dt><dd>%s</dd>`, html.EscapeString(entry.Name))
+		fmt.Fprintf(&body, `<dt>State</dt><dd>stopping</dd>`)
+		fmt.Fprintf(&body, `<dt>Owner</dt><dd>%s</dd>`, html.EscapeString(entry.OwnerEmail))
+		if entry.OwnerGroup != "" {
+			fmt.Fprintf(&body, `<dt>Owner group</dt><dd>%s</dd>`, html.EscapeString(entry.OwnerGroup))
+		}
+		body.WriteString(`</dl>`)
+		if detailURL != "" {
+			fmt.Fprintf(&body, `<div class="actions"><a class="btn btn-secondary" href="%s">View status in registry</a></div>`, html.EscapeString(detailURL))
+		}
+		writeHTMLStatePage(w, http.StatusServiceUnavailable, "503 STOPPING", fmt.Sprintf("%s is stopping", entry.Name), body.String())
+		return
+	}
+	writeJSONStateResponse(w, http.StatusServiceUnavailable, map[string]any{
+		"code":    "service_unavailable",
+		"error":   "entry_stopping",
+		"message": fmt.Sprintf("entry %q is currently stopping", entry.Name),
+		"entry":   entry.Name,
+		"state":   "stopping",
+	})
+}
+
+// WriteStoppedOrWakingState writes the 503 state page (or JSON) with `Retry-After: 5`
+// when an authorized user visits a `stopped` hosted instance (waking it automatically when `waking == true`).
+func WriteStoppedOrWakingState(w http.ResponseWriter, r *http.Request, registryHost string, entry *store.EntryRow, waking bool) {
+	w.Header().Set("Retry-After", "5")
+	detailURL := ""
+	if registryHost != "" {
+		detailURL = fmt.Sprintf("https://%s/entries/%s", NormalizeHost(registryHost), url.PathEscape(entry.Name))
+	}
+
+	if waking {
+		if WantsHTML(r) {
+			var body strings.Builder
+			fmt.Fprintf(&body, `<p>Instance <code>%s</code> was stopped while idle and is now <strong>waking up automatically</strong>. This page will begin serving traffic as soon as the VM is ready.</p>`,
+				html.EscapeString(entry.Name))
+			body.WriteString(`<dl>`)
+			fmt.Fprintf(&body, `<dt>Entry</dt><dd>%s</dd>`, html.EscapeString(entry.Name))
+			fmt.Fprintf(&body, `<dt>State</dt><dd>creating (auto-waking)</dd>`)
+			fmt.Fprintf(&body, `<dt>Owner</dt><dd>%s</dd>`, html.EscapeString(entry.OwnerEmail))
+			if entry.OwnerGroup != "" {
+				fmt.Fprintf(&body, `<dt>Owner group</dt><dd>%s</dd>`, html.EscapeString(entry.OwnerGroup))
+			}
+			body.WriteString(`</dl>`)
+			if detailURL != "" {
+				fmt.Fprintf(&body, `<div class="actions"><a class="btn btn-secondary" href="%s">View status in registry</a></div>`, html.EscapeString(detailURL))
+			}
+			writeHTMLStatePage(w, http.StatusServiceUnavailable, "503 WAKING", fmt.Sprintf("%s is waking up", entry.Name), body.String())
+			return
+		}
+		writeJSONStateResponse(w, http.StatusServiceUnavailable, map[string]any{
+			"code":      "service_unavailable",
+			"error":     "entry_waking",
+			"message":   fmt.Sprintf("entry %q was stopped and is waking up automatically", entry.Name),
+			"entry":     entry.Name,
+			"state":     "creating",
+			"auto_wake": true,
+		})
+		return
+	}
+
+	if WantsHTML(r) {
+		var body strings.Builder
+		fmt.Fprintf(&body, `<p>Instance <code>%s</code> is currently <strong>stopped</strong> and auto-wake on visit is disabled.</p>`,
+			html.EscapeString(entry.Name))
+		body.WriteString(`<dl>`)
+		fmt.Fprintf(&body, `<dt>Entry</dt><dd>%s</dd>`, html.EscapeString(entry.Name))
+		fmt.Fprintf(&body, `<dt>State</dt><dd>stopped</dd>`)
+		fmt.Fprintf(&body, `<dt>Owner</dt><dd>%s</dd>`, html.EscapeString(entry.OwnerEmail))
+		if entry.OwnerGroup != "" {
+			fmt.Fprintf(&body, `<dt>Owner group</dt><dd>%s</dd>`, html.EscapeString(entry.OwnerGroup))
+		}
+		body.WriteString(`</dl>`)
+		if detailURL != "" {
+			fmt.Fprintf(&body, `<div class="actions"><a class="btn" href="%s">Start in registry</a></div>`, html.EscapeString(detailURL))
+		}
+		writeHTMLStatePage(w, http.StatusServiceUnavailable, "503 STOPPED", fmt.Sprintf("%s is stopped", entry.Name), body.String())
+		return
+	}
+	writeJSONStateResponse(w, http.StatusServiceUnavailable, map[string]any{
+		"code":      "service_unavailable",
+		"error":     "entry_stopped",
+		"message":   fmt.Sprintf("entry %q is currently stopped", entry.Name),
+		"entry":     entry.Name,
+		"state":     "stopped",
+		"auto_wake": false,
+	})
+}
+
 // WriteDeletingState writes the 410 Gone state page (or JSON) when an entry is in `deleting`.
 func WriteDeletingState(w http.ResponseWriter, r *http.Request, entry *store.EntryRow) {
 	if WantsHTML(r) {
