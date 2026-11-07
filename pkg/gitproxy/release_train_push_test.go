@@ -71,6 +71,25 @@ func TestTheReleaseTrainsGrantReachesOnlyItsOwnRefs(t *testing.T) {
 		model.Limits{}); err != nil {
 		t.Fatal(err)
 	}
+	// Regression for task 3060: on a ci_mode: github repository (the default
+	// here, and ai-on-gke/grain in production), firing the release-train
+	// schedule must leave the sandbox able to read its own repository's CI
+	// (`grain ci list`, `grain ci checks`) without holding grain#ci or
+	// opening other repositories' CI.
+	var grantNames []string
+	for _, g := range task.Grants {
+		grantNames = append(grantNames, g.Capability)
+	}
+	if model.HasGrainCI(grantNames) {
+		t.Errorf("scheduled release-train task on a ci_mode: github repo holds grain#ci: %+v", task.Grants)
+	}
+	scope, ok, err := store.SandboxNamespaceScope(ctx, "sandbox-train")
+	if err != nil || !ok {
+		t.Fatalf("SandboxNamespaceScope: ok=%v err=%v", ok, err)
+	}
+	if !scope.MayReadCI || scope.MayReadAllCI || !scope.AllowedRepos[repo.String()] || scope.AllowedRepos["other/repo"] {
+		t.Errorf("SandboxNamespaceScope = %+v, want MayReadCI=true MayReadAllCI=false AllowedRepos[%s]=true", scope, repo)
+	}
 	authorize := func(u RefUpdate) string {
 		t.Helper()
 		reason, err := (&ModelAuthorizer{Store: store}).AuthorizeRefUpdates(withPushCheck(ctx, historyOnMain(oidB)),

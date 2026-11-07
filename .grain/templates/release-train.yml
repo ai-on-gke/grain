@@ -9,7 +9,10 @@ base: main
 # The api:release-gate-read preset and package-publish are CI-only
 # (model.CapabilitySpec.CIOnly), so a task holds neither: this train pushes
 # git refs and nothing else, and its images are a CI job's to publish.
-capabilities: [grain-ci]
+# On a ci_mode: github repository, grain-ci (grain#ci) is stripped by
+# applyGrainCIGrant and refused by CreateTask; repo-scoped api:ci-read opens
+# `grain ci list` and `grain ci checks` for ai-on-gke/grain alone.
+capabilities: ["api:ci-read@ai-on-gke/grain"]
 # The release train's tag grant (design/playbook/releases.playbook.md §0.4):
 # the refs the train owns, and no more. Read from main by the declaration
 # sync, scoped to ai-on-gke/grain and to tasks filed from this template,
