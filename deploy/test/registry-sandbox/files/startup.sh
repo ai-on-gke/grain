@@ -139,6 +139,23 @@ database:
   url: "postgres://grain:${pgpass}@127.0.0.1:5432/grain_registry?sslmode=disable"
 compute:
   provider: "none"
+  default_shape: "medium"
+  shapes:
+    - name: "small"
+      machine_type: "e2-small"
+      boot_disk_gb: 20
+      quota_units: 1
+      description: "1 vCPU, 2 GB RAM, 20 GB disk"
+    - name: "medium"
+      machine_type: "e2-medium"
+      boot_disk_gb: 50
+      quota_units: 2
+      description: "2 vCPU, 4 GB RAM, 50 GB disk"
+    - name: "large"
+      machine_type: "e2-standard-4"
+      boot_disk_gb: 100
+      quota_units: 4
+      description: "4 vCPU, 16 GB RAM, 100 GB disk"
 config_repos:
   provider: "none"
 YAML_EOF

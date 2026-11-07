@@ -193,14 +193,24 @@ else
   fi
   terraform -chdir="${SCRIPT_DIR}" init -reconfigure -input=false \
     -backend-config="bucket=${STATE_BUCKET}" \
-    -backend-config="prefix=registry-sandbox/${NAME_PREFIX}" >/dev/null
+    -backend-config="prefix=registry-sandbox/${NAME_PREFIX}" >/dev/null 2>&1 || true
 fi
 
-registry_host="$(terraform -chdir="${SCRIPT_DIR}" output -raw registry_host)"
-instance_domain="$(terraform -chdir="${SCRIPT_DIR}" output -raw instance_domain)"
-lb_ip="$(terraform -chdir="${SCRIPT_DIR}" output -raw lb_ip)"
-verifier_sa="$(terraform -chdir="${SCRIPT_DIR}" output -raw verifier_service_account)"
-tls_mode="$(terraform -chdir="${SCRIPT_DIR}" output -raw tls_mode)"
+get_tf_output() {
+  local out_name="$1"
+  local val
+  val="$(terraform -chdir="${SCRIPT_DIR}" output -raw "${out_name}" 2>/dev/null || true)"
+  if [[ -z "${val}" && "${LOCAL_STATE}" -eq 0 ]]; then
+    val="$(gcloud storage cat "gs://${STATE_BUCKET}/registry-sandbox/${NAME_PREFIX}/default.tfstate" 2>/dev/null | jq -r ".outputs.${out_name}.value // empty" 2>/dev/null || true)"
+  fi
+  printf '%s' "${val}"
+}
+
+registry_host="$(get_tf_output registry_host)"
+instance_domain="$(get_tf_output instance_domain)"
+lb_ip="$(get_tf_output lb_ip)"
+verifier_sa="$(get_tf_output verifier_service_account)"
+tls_mode="$(get_tf_output tls_mode)"
 
 if ! [[ "${registry_host}" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]]; then
   echo "verify.sh: invalid registry_host '${registry_host}' in Terraform outputs" >&2
@@ -224,7 +234,7 @@ fi
 # its own: the self-signed wildcard certificate Terraform generated (public
 # `selfsigned_cert_pem` output) is trusted alongside the system roots instead.
 # `--insecure-tls` remains an explicit operator opt-in.
-selfsigned_pem="$(terraform -chdir="${SCRIPT_DIR}" output -raw selfsigned_cert_pem 2>/dev/null || true)"
+selfsigned_pem="$(get_tf_output selfsigned_cert_pem)"
 
 curl_tls_flags=()
 if [[ "${INSECURE_TLS}" -eq 1 ]]; then
