@@ -625,6 +625,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # RELEASES comes from $GITHUB_ENV, written by the step before.
+          # shellcheck disable=SC2153
           read -r -a releases <<< "$RELEASES"
           args=()
           if [ "${DRY_RUN}" = "true" ]; then
