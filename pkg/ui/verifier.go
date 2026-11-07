@@ -66,11 +66,18 @@ func verifierUnavailable(err error) bool {
 	return errors.As(err, &u) && u.Unavailable()
 }
 
+// DelegatingApp describes the service principal that forwarded a request on
+// behalf of a person through the registry (`act` claim in a registry JWT,
+// design/design/authentication.design.md §6, AU-22).
+type DelegatingApp = webauth.DelegatingApp
+
 // VerifiedIdentity is the authenticated caller an IdentityVerifier extracted
 // from a signed proxy header.
 type VerifiedIdentity struct {
 	Email string              // the principal's ID
+	Sub   string              // normalized subject, when distinct or verified
 	Kind  model.PrincipalKind // human or service
+	Via   *DelegatingApp      // non-nil when the request is delegated on behalf of Email
 }
 
 type registeredVerifier struct {
@@ -313,9 +320,19 @@ func (v *registryVerifier) Verify(r *http.Request) (VerifiedIdentity, bool, erro
 	if err != nil || !ok {
 		return VerifiedIdentity{}, ok, err
 	}
+	var via *DelegatingApp
+	if id.Via != nil {
+		cp := *id.Via
+		if cp.RequestID == "" {
+			cp.RequestID = strings.TrimSpace(r.Header.Get("X-Grain-Request-Id"))
+		}
+		via = &cp
+	}
 	return VerifiedIdentity{
 		Email: id.Email,
+		Sub:   id.Sub,
 		Kind:  model.PrincipalKind(id.Kind),
+		Via:   via,
 	}, true, nil
 }
 
@@ -470,7 +487,7 @@ func verifyWithVerifier(r *http.Request, v IdentityVerifier, header string) (cal
 	return callerVerification{
 		present:        true,
 		verifier:       v,
-		id:             VerifiedIdentity{Email: email, Kind: kind},
+		id:             VerifiedIdentity{Email: email, Sub: id.Sub, Kind: kind, Via: id.Via},
 		method:         AuthMethod(v.Name()),
 		accessCodeWins: verifierAccessCodeWins(v),
 	}, true

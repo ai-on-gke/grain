@@ -418,14 +418,16 @@ type CachingSigner struct {
 // Only the time claims (iat/nbf/exp) and jti, which the signer fills in,
 // are left out; RequestID/JWTID bypass the cache altogether.
 type signerCacheKey struct {
-	issuer     string
-	email      string
-	sub        string
-	audience   string
-	kind       string
-	hasActor   bool
-	actorSub   string
-	actorGrant string
+	issuer      string
+	email       string
+	sub         string
+	audience    string
+	kind        string
+	hasActor    bool
+	actorSub    string
+	actorApp    string
+	actorGrant  string
+	actorAccess string
 }
 
 type cachedAssertion struct {
@@ -474,20 +476,24 @@ func (c *CachingSigner) SignAssertion(ctx context.Context, claims RegistryClaims
 	if c.nowFn != nil {
 		now = c.nowFn()
 	}
-	var actorSub, actorGrant string
+	var actorSub, actorApp, actorGrant, actorAccess string
 	if claims.Actor != nil {
 		actorSub = claims.Actor.Sub
+		actorApp = claims.Actor.App
 		actorGrant = claims.Actor.Grant
+		actorAccess = claims.Actor.Access
 	}
 	key := signerCacheKey{
-		issuer:     claims.Issuer,
-		hasActor:   claims.Actor != nil,
-		email:      strings.ToLower(strings.TrimSpace(claims.Email)),
-		sub:        claims.Subject,
-		audience:   claims.Audience,
-		kind:       claims.Kind,
-		actorSub:   actorSub,
-		actorGrant: actorGrant,
+		issuer:      claims.Issuer,
+		hasActor:    claims.Actor != nil,
+		email:       strings.ToLower(strings.TrimSpace(claims.Email)),
+		sub:         claims.Subject,
+		audience:    claims.Audience,
+		kind:        claims.Kind,
+		actorSub:    actorSub,
+		actorApp:    actorApp,
+		actorGrant:  actorGrant,
+		actorAccess: actorAccess,
 	}
 
 	c.mu.Lock()
@@ -527,6 +533,36 @@ func (c *CachingSigner) SignAssertion(ctx context.Context, claims RegistryClaims
 // JWKS delegates to the underlying Signer.
 func (c *CachingSigner) JWKS(ctx context.Context) (*JSONWebKeySet, error) {
 	return c.inner.JWKS(ctx)
+}
+
+// InvalidateGrant removes all cached assertions issued under grantID.
+func (c *CachingSigner) InvalidateGrant(grantID string) {
+	grantID = strings.TrimSpace(grantID)
+	if c == nil || grantID == "" {
+		return
+	}
+	c.mu.Lock()
+	for k := range c.entries {
+		if k.hasActor && k.actorGrant == grantID {
+			delete(c.entries, k)
+		}
+	}
+	c.mu.Unlock()
+}
+
+// InvalidateActor removes all cached assertions issued for actorSub.
+func (c *CachingSigner) InvalidateActor(actorSub string) {
+	actorSub = strings.ToLower(strings.TrimSpace(actorSub))
+	if c == nil || actorSub == "" {
+		return
+	}
+	c.mu.Lock()
+	for k := range c.entries {
+		if k.hasActor && strings.EqualFold(k.actorSub, actorSub) {
+			delete(c.entries, k)
+		}
+	}
+	c.mu.Unlock()
 }
 
 // VerifyRegistryAssertion verifies a JWS ES256 registry assertion against a JWKS

@@ -167,6 +167,11 @@ func NewServer(opts ServerOptions) (*Server, error) {
 
 	var delChecker server.DelegationChecker
 	if opts.Delegation != nil {
+		if opts.Store != nil {
+			if sa, ok := opts.Delegation.(interface{ SetStore(*store.Store) }); ok {
+				sa.SetStore(opts.Store)
+			}
+		}
 		delChecker = delegationAdapter{policy: opts.Delegation}
 	}
 

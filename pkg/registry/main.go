@@ -248,6 +248,9 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 			return err
 		}
 		isDisabled = st.IsOwnerDisabled
+		if sa, ok := delegation.(interface{ SetStore(*store.Store) }); ok {
+			sa.SetStore(st)
+		}
 	}
 
 	admitter, err := webauth.NewAdmitter(webauth.AdmissionConfig{

@@ -338,7 +338,7 @@ Every normative requirement below is derived from the implementation on `main` a
 
 ## 11. Delegated (On-Behalf-Of) Identity via the Registry
 
-**Status: proposed (task 3130).** Nothing in this section is on `main` yet. Every clause is **untested**, and the named tests are the ones the implementation (`registry.design.md` implementation plan step 19) MUST add. Design: [`authentication.design.md`](../../design/authentication.design.md) §6 and [`registry.design.md`](../../design/registry.design.md) *Delegated identity*.
+Design: [`authentication.design.md`](../../design/authentication.design.md) §6 and [`registry.design.md`](../../design/registry.design.md) *Delegated identity*.
 
 ### 11.1 `act` claim parsing and `VerifiedIdentity.Via` {#AU-22}
 
@@ -352,7 +352,7 @@ Every normative requirement below is derived from the implementation on `main` a
 3. Any other present `act` MUST fail verification with `401` (`writeAssertionRefused`), with no fallback to the access code, a `gma_…` token, a session cookie or an open route (`AU-2`).
 4. All other `registry` verifier checks MUST be unchanged for delegated assertions: `iss`, a single `aud` equal to `-ui-registry-audience`, `ES256`, `exp - iat <= 5 min` and 30 s skew.
 
-**Pinned by (proposed):** `pkg/ui/registry_verifier_test.go`: `TestRegistryVerifierExposesPersonAndDelegatingApp`, `TestRegistryVerifierRefusesMalformedOrNestedAct`.
+**Pinned by:** `pkg/ui/registry_verifier_test.go`: `TestRegistryVerifierExposesPersonAndDelegatingApp`, `TestRegistryVerifierRefusesMalformedOrNestedAct`.
 
 ### 11.2 `delegate:` allowlist entries {#AU-23}
 
@@ -366,7 +366,7 @@ Every normative requirement below is derived from the implementation on `main` a
 5. `MigrateAllowedPrincipals` MUST never import `delegate:` entries from `-ui-allowed-principals`.
 6. A `delegate:` entry naming a `gcp-key` pool account MUST be refused (`422`) and never match (`AU-8`).
 
-**Pinned by (proposed):** `pkg/ui/access_principals_test.go`: `TestDelegateEntriesNeedAReasonAndAPerson`, `TestDelegateEntryRoleRefusesDangerousScopes`, `TestDelegateEntryNeverAdmitsADirectCaller`; `pkg/cli/access_test.go`: `TestAccessAllowDelegateCLI`.
+**Pinned by:** `pkg/ui/access_principals_test.go`: `TestDelegateEntriesNeedAReasonAndAPerson`, `TestDelegateEntryRoleRefusesDangerousScopes`, `TestDelegateEntryNeverAdmitsADirectCaller`; `pkg/cli/access_test.go`: `TestAccessAllowDelegateCLI`.
 
 ### 11.3 Dual admission and refusals {#AU-24}
 
@@ -377,7 +377,7 @@ Every normative requirement below is derived from the implementation on `main` a
 3. When the person passes but no `delegate:` entry matches, the response MUST be `403`. A browser navigation gets a page stating that `<label>` is not allowed to act for people on this grain. JSON callers get `{"code": "delegate_not_allowed", "delegatingApp": "<email>"}`.
 4. A refused delegated request MUST be logged once per `(person, app)` under the `AU-19` bound.
 
-**Pinned by (proposed):** `pkg/ui/delegation_test.go`: `TestDelegatedRequestNeedsPersonAndDelegateEntry`, `TestDelegateNotAllowedRefusalNamesTheApp`.
+**Pinned by:** `pkg/ui/delegation_test.go`: `TestDelegatedRequestNeedsPersonAndDelegateEntry`, `TestDelegateNotAllowedRefusalNamesTheApp`.
 
 ### 11.4 Role intersection and person-only operations {#AU-25}
 
@@ -393,7 +393,7 @@ Every normative requirement below is derived from the implementation on `main` a
    - `POST /api/hostds`.
 4. `hostdConnectIdentity` MUST refuse with `403` any connection whose verified identity has `Via != nil` (`AU-17`, `AU-18`).
 
-**Pinned by (proposed):** `pkg/ui/delegation_test.go`: `TestDelegatedRoleIsPersonIntersectDelegate`, `TestDemotingThePersonStopsDelegatedWrites`, `TestReadOnlyDelegationRefusesWrites`, `TestPersonOnlyOperationsRefuseDelegation`; `pkg/hostd/connect_identity_test.go`: `TestDelegatedIdentityNeverOwnsAHostd`.
+**Pinned by:** `pkg/ui/delegation_test.go`: `TestDelegatedRoleIsPersonIntersectDelegate`, `TestDemotingThePersonStopsDelegatedWrites`, `TestReadOnlyDelegationRefusesWrites`, `TestPersonOnlyOperationsRefuseDelegation`; `pkg/hostd/connect_identity_test.go`: `TestDelegatedIdentityNeverOwnsAHostd`.
 
 ### 11.5 Attribution, labels, and trailers {#AU-26}
 
@@ -406,7 +406,7 @@ Every normative requirement below is derived from the implementation on `main` a
 4. `GET /api/auth/user` (and `GET /api/whoami` when it ships) MUST report `actor: "service:<app email>"`, `onBehalfOf: "user:<person>"` and `via: "<label>"`.
 5. The grain's request log MUST record `registry_rid`, `registry_jti` and `delegation_grant` (`act.grant`) for each delegated request.
 
-**Pinned by (proposed):** `pkg/ui/principal_label_test.go`: `TestPrincipalLabelRendersPersonViaApp`; `pkg/ui/delegation_test.go`: `TestDelegatedWriteRecordsAppAndPerson`; `pkg/orchestrator/worktree_test.go`: `TestDelegatedTaskTrailersNameThePerson`.
+**Pinned by:** `pkg/ui/principal_label_test.go`: `TestPrincipalLabelRendersPersonViaApp`; `pkg/ui/delegation_test.go`: `TestDelegatedWriteRecordsAppAndPerson`; `pkg/orchestrator/worktree_test.go`: `TestDelegatedTaskTrailersNameThePerson`.
 
 ### 11.6 Unchanged CSRF, access-code, break-glass, and plain-service rules {#AU-27}
 
@@ -415,7 +415,7 @@ Every normative requirement below is derived from the implementation on `main` a
 3. Unproxied-loopback break-glass (`AU-13`) and the mandatory tunnel-ingress gate on `connected` grains MUST be unchanged. The latter requires a valid assertion on every tunnelled request and never accepts access codes over the tunnel.
 4. A `registry` assertion with `kind: "service"` and no `act` MUST be admitted only by an explicit `serviceAccount:` entry (`AU-6`, `AU-7`), and MUST be attributed to the service principal alone with no `OnBehalfOf`.
 
-**Pinned by (proposed):** `pkg/ui/delegation_test.go`: `TestDelegationLeavesCSRFAndBreakGlassUnchanged`, `TestPlainRegistryServicePrincipalNeedsServiceAccountEntry`.
+**Pinned by:** `pkg/ui/delegation_test.go`: `TestDelegationLeavesCSRFAndBreakGlassUnchanged`, `TestPlainRegistryServicePrincipalNeedsServiceAccountEntry`.
 
 ---
 
@@ -444,12 +444,12 @@ Every normative requirement below is derived from the implementation on `main` a
 | `AU-19` | Bounded deduplicated logging of refused assertions and principals | Implemented | `TestRefusedAssertionLoggedOncePerKindNotOncePerAudience`, `TestRefusedAssertionForOwnAudienceDoesNotSayToSetTheAudience`, `TestRefusedPrincipalsAreLoggedOnce` (*64-cap saturation, unconfigured-audience warning, and `logRefusedVerifierHeader` untested*) |
 | `AU-20` | Plaintext identity headers never trusted | Implemented | `TestExtractPrincipalNamesNobodyFromAnIdentityHeader`, `TestPlaintextIdentityHeadersIgnoredFromUntrustedSource`, `TestIAPModeIgnoresPlaintextIdentityHeaders`, `TestASingleTenantDaemonRefusesWhoeverAProxyNames` (*`logIgnoredIdentityHeader` dedup untested*) |
 | `AU-21` | In-sandbox listeners isolated from proxy assertions | Implemented | `TestGitProxyScopesEachSandboxToItsOwnRepositories`, `TestSandboxGrainLogReadIsAuditedAsItsTask`, `TestSandboxTokenMintedAfterGitProxyStartsAuthenticates` |
-| `AU-22` | Registry `act` claim parsing and `VerifiedIdentity.Via` | Proposed (task 3130) | *untested*: `TestRegistryVerifierExposesPersonAndDelegatingApp`, `TestRegistryVerifierRefusesMalformedOrNestedAct` |
-| `AU-23` | `delegate:` allowlist entries (reason, person-only, no dangerous scopes) | Proposed (task 3130) | *untested*: `TestDelegateEntriesNeedAReasonAndAPerson`, `TestDelegateEntryRoleRefusesDangerousScopes`, `TestDelegateEntryNeverAdmitsADirectCaller`, `TestAccessAllowDelegateCLI` |
-| `AU-24` | Dual admission (person and `delegate:` entry) and refusals | Proposed (task 3130) | *untested*: `TestDelegatedRequestNeedsPersonAndDelegateEntry`, `TestDelegateNotAllowedRefusalNamesTheApp` |
-| `AU-25` | Person ∩ delegate role intersection, read-only grants, person-only operations, `hostd` refusal | Proposed (task 3130) | *untested*: `TestDelegatedRoleIsPersonIntersectDelegate`, `TestDemotingThePersonStopsDelegatedWrites`, `TestReadOnlyDelegationRefusesWrites`, `TestPersonOnlyOperationsRefuseDelegation`, `TestDelegatedIdentityNeverOwnsAHostd` |
-| `AU-26` | `Actor` = app, `OnBehalfOf` = person, `(via <app>)` label, trailers, request log | Proposed (task 3130) | *untested*: `TestPrincipalLabelRendersPersonViaApp`, `TestDelegatedWriteRecordsAppAndPerson`, `TestDelegatedTaskTrailersNameThePerson` |
-| `AU-27` | CSRF, access-code, break-glass, and plain-service rules unchanged under delegation | Proposed (task 3130) | *untested*: `TestDelegationLeavesCSRFAndBreakGlassUnchanged`, `TestPlainRegistryServicePrincipalNeedsServiceAccountEntry` |
+| `AU-22` | Registry `act` claim parsing and `VerifiedIdentity.Via` | Implemented | `TestRegistryVerifierExposesPersonAndDelegatingApp`, `TestRegistryVerifierRefusesMalformedOrNestedAct` |
+| `AU-23` | `delegate:` allowlist entries (reason, person-only, no dangerous scopes) | Implemented | `TestDelegateEntriesNeedAReasonAndAPerson`, `TestDelegateEntryRoleRefusesDangerousScopes`, `TestDelegateEntryNeverAdmitsADirectCaller`, `TestAccessAllowDelegateCLI` |
+| `AU-24` | Dual admission (person and `delegate:` entry) and refusals | Implemented | `TestDelegatedRequestNeedsPersonAndDelegateEntry`, `TestDelegateNotAllowedRefusalNamesTheApp` |
+| `AU-25` | Person ∩ delegate role intersection, read-only grants, person-only operations, `hostd` refusal | Implemented | `TestDelegatedRoleIsPersonIntersectDelegate`, `TestDemotingThePersonStopsDelegatedWrites`, `TestReadOnlyDelegationRefusesWrites`, `TestPersonOnlyOperationsRefuseDelegation`, `TestDelegatedIdentityNeverOwnsAHostd` |
+| `AU-26` | `Actor` = app, `OnBehalfOf` = person, `(via <app>)` label, trailers, request log | Implemented | `TestPrincipalLabelRendersPersonViaApp`, `TestDelegatedWriteRecordsAppAndPerson`, `TestDelegatedTaskTrailersNameThePerson` |
+| `AU-27` | CSRF, access-code, break-glass, and plain-service rules unchanged under delegation | Implemented | `TestDelegationLeavesCSRFAndBreakGlassUnchanged`, `TestPlainRegistryServicePrincipalNeedsServiceAccountEntry` |
 
 ---
 

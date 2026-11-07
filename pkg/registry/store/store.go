@@ -276,6 +276,8 @@ type AuditEntry struct {
 	ID         int64          `json:"id"`
 	At         time.Time      `json:"at"`
 	ActorEmail string         `json:"actor_email"`
+	Via        string         `json:"via,omitempty"`
+	GrantID    string         `json:"grant_id,omitempty"`
 	Action     string         `json:"action"`
 	EntryID    string         `json:"entry_id,omitempty"`
 	EntryName  string         `json:"entry_name,omitempty"`
@@ -3983,6 +3985,11 @@ WHERE registry.leases.holder_id = EXCLUDED.holder_id
 
 // RecordAudit writes an audit log row to `registry.audit_log`.
 func (s *Store) RecordAudit(ctx context.Context, actorEmail, action, entryID, entryName string, detail map[string]any) error {
+	return s.RecordAuditWithDelegation(ctx, actorEmail, "", "", action, entryID, entryName, detail)
+}
+
+// RecordAuditWithDelegation writes an audit log row with optional delegating app (`via`) and `grant_id`.
+func (s *Store) RecordAuditWithDelegation(ctx context.Context, actorEmail, via, grantID, action, entryID, entryName string, detail map[string]any) error {
 	if detail == nil {
 		detail = map[string]any{}
 	}
@@ -3995,9 +4002,9 @@ func (s *Store) RecordAudit(ctx context.Context, actorEmail, action, entryID, en
 		idParam = entryID
 	}
 	_, err = s.db.ExecContext(ctx, `
-INSERT INTO registry.audit_log (at, actor_email, action, entry_id, entry_name, detail)
-VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6::jsonb)`,
-		s.now(), actorEmail, action, idParam, entryName, string(detailJSON))
+INSERT INTO registry.audit_log (at, actor_email, via, grant_id, action, entry_id, entry_name, detail)
+VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), $8::jsonb)`,
+		s.now(), actorEmail, strings.TrimSpace(via), strings.TrimSpace(grantID), action, idParam, entryName, string(detailJSON))
 	return err
 }
 
@@ -4007,7 +4014,7 @@ func (s *Store) ListAuditLog(ctx context.Context, limit int) ([]AuditEntry, erro
 		limit = 100
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, at, actor_email, action, COALESCE(entry_id::text, ''), COALESCE(entry_name, ''), detail
+SELECT id, at, actor_email, COALESCE(via, ''), COALESCE(grant_id, ''), action, COALESCE(entry_id::text, ''), COALESCE(entry_name, ''), detail
 FROM registry.audit_log
 ORDER BY id DESC
 LIMIT $1`, limit)
@@ -4019,7 +4026,7 @@ LIMIT $1`, limit)
 	for rows.Next() {
 		var a AuditEntry
 		var detailBytes []byte
-		if err := rows.Scan(&a.ID, &a.At, &a.ActorEmail, &a.Action, &a.EntryID, &a.EntryName, &detailBytes); err != nil {
+		if err := rows.Scan(&a.ID, &a.At, &a.ActorEmail, &a.Via, &a.GrantID, &a.Action, &a.EntryID, &a.EntryName, &detailBytes); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(detailBytes, &a.Detail)

@@ -232,6 +232,63 @@ ALTER TABLE registry.entry_credentials
 	},
 	{
 		version: 4,
+		name:    "delegating_apps_and_grants",
+		upSQL: `
+CREATE TABLE IF NOT EXISTS registry.delegating_apps (
+    name                  TEXT PRIMARY KEY,
+    principal             TEXT NOT NULL UNIQUE,
+    display_name          TEXT NOT NULL,
+    description           TEXT NOT NULL DEFAULT '',
+    homepage              TEXT NOT NULL DEFAULT '',
+    owner                 TEXT NOT NULL REFERENCES registry.owners(email),
+    owner_group           TEXT NOT NULL DEFAULT '',
+    max_access            TEXT NOT NULL DEFAULT 'write' CHECK (max_access IN ('read', 'write')),
+    max_grant_ttl_seconds BIGINT NOT NULL DEFAULT 7776000,
+    require_subject_token BOOLEAN NOT NULL DEFAULT FALSE,
+    redirect_uris         JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_by            TEXT NOT NULL,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    disabled_at           TIMESTAMPTZ,
+    disabled_by           TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS registry.delegation_grants (
+    id           TEXT PRIMARY KEY,
+    app          TEXT NOT NULL REFERENCES registry.delegating_apps(name) ON DELETE CASCADE,
+    person       TEXT NOT NULL,
+    entries      JSONB NOT NULL DEFAULT '[]'::jsonb,
+    access       TEXT NOT NULL CHECK (access IN ('read', 'write')),
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at   TIMESTAMPTZ NOT NULL,
+    revoked_at   TIMESTAMPTZ,
+    revoked_by   TEXT NOT NULL DEFAULT '',
+    last_used_at TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS delegation_grants_live_idx
+    ON registry.delegation_grants (app, person) WHERE revoked_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS delegation_grants_person_idx
+    ON registry.delegation_grants (person) WHERE revoked_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS registry.delegation_usage (
+    grant_id TEXT NOT NULL REFERENCES registry.delegation_grants(id) ON DELETE CASCADE,
+    name     TEXT NOT NULL,
+    day      DATE NOT NULL,
+    reads    BIGINT NOT NULL DEFAULT 0,
+    writes   BIGINT NOT NULL DEFAULT 0,
+    last_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (grant_id, name, day)
+);
+
+ALTER TABLE registry.audit_log
+    ADD COLUMN IF NOT EXISTS via TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS grant_id TEXT NOT NULL DEFAULT '';
+`,
+	},
+	{
+		version: 5,
 		name:    "fleet_upgrades_and_stop_start",
 		upSQL: `
 ALTER TABLE registry.entries
