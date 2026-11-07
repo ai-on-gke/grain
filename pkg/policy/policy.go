@@ -620,7 +620,13 @@ func deniesCapability(patterns []string, capability string) bool {
 		(matchesCapability(patterns, "bootstrap-playbooks") || matchesCapability(patterns, model.BootstrapPlaybooksGrant)) {
 		return true
 	}
+	if cred, ok := model.ParseRepoCredentialGrant(capability); ok {
+		if matchesCapability(patterns, model.GitCredentialCapabilityPrefix+cred) {
+			return true
+		}
+	}
 	unnamedGCPKey := model.GCPKeySetUnnamed(capability)
+	unnamedRepoCred := repoCredentialUnnamed(capability)
 	if to, ok := retiredAs(capability); ok {
 		capability = to
 	}
@@ -631,6 +637,15 @@ func deniesCapability(patterns []string, capability string) bool {
 			// The server, not the policy, picks the set of a grant that
 			// names none, so any gcp-key:<set> deny may be the one it picks.
 			if unnamedGCPKey {
+				return true
+			}
+			if to, ok := retiredAs(trimmedPattern); ok && strings.EqualFold(to, strings.TrimSpace(capability)) {
+				return true
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmedPattern, model.GitCredentialCapabilityPrefix) {
+			if unnamedRepoCred {
 				return true
 			}
 			if to, ok := retiredAs(trimmedPattern); ok && strings.EqualFold(to, strings.TrimSpace(capability)) {
@@ -682,6 +697,21 @@ func becameCapability(to, capability string) bool {
 	return strings.EqualFold(strings.TrimSpace(to), strings.TrimSpace(capability))
 }
 
+// repoCredentialUnnamed reports whether capability is a repo#credential or
+// methodless repo server reference that does not name a valid credential
+// argument yet.
+func repoCredentialUnnamed(capability string) bool {
+	s := strings.TrimSpace(capability)
+	if !model.IsCapabilityRef(s) {
+		return false
+	}
+	if _, ok := model.ParseRepoCredentialGrant(s); ok {
+		return false
+	}
+	ref := strings.ToLower(model.CapabilityGrantRef(s))
+	return ref == strings.ToLower(model.RepoCredentialRef) || ref == strings.ToLower(model.RepoCapabilityServerID)
+}
+
 // allowsCapability is matchesCapability for Allow, which also admits
 // exactly the grant (or each of the grants) a retired bare name in it
 // became -- arguments and all, so an allow written for git-push-any-ref admits its repo#write
@@ -700,6 +730,11 @@ func allowsCapability(patterns []string, capability string) bool {
 				return true
 			}
 		} else if matchesCapability(patterns, "gcp-key:"+set) {
+			return true
+		}
+	}
+	if cred, ok := model.ParseRepoCredentialGrant(capability); ok {
+		if matchesCapability(patterns, model.GitCredentialCapabilityPrefix+cred) {
 			return true
 		}
 	}

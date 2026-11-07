@@ -33,10 +33,40 @@ export const CLOSED_PAGE_SIZE = 200;
 // CLOSED_REFRESH_MS is how often the newest page is asked again.
 export const CLOSED_REFRESH_MS = 60_000;
 
+// SEARCH_DEBOUNCE_MS is how long the search box has to sit still before
+// the server is asked to search closed work for it: one request for a
+// word, not one per keystroke.
+export const SEARCH_DEBOUNCE_MS = 300;
+
 // closedPagePath is the request for the page after cursor ("" for the
-// newest).
-export function closedPagePath(cursor = "") {
-  return `/api/tasks?state=closed&limit=${CLOSED_PAGE_SIZE}&cursor=${encodeURIComponent(cursor)}`;
+// newest). search narrows it to the closed tasks whose title,
+// description or id holds that text (pkg/ui's taskListQuery), repo to
+// one repository's, and limit sets the page's size -- a caller that
+// wants only the totals asks for a page of one.
+export function closedPagePath(
+  cursor = "",
+  { search = "", repo = "", limit = CLOSED_PAGE_SIZE } = {},
+) {
+  let path = `/api/tasks?state=closed&limit=${limit}&cursor=${encodeURIComponent(cursor)}`;
+  if (search) path += `&search=${encodeURIComponent(search)}`;
+  if (repo) path += `&repo=${encodeURIComponent(repo)}`;
+  return path;
+}
+
+// searchKey is the search box's text as matchesFilters compares it:
+// trimmed and lower-cased (taskFilters.js's narrowTasks).
+export function searchKey(text) {
+  return String(text || "")
+    .trim()
+    .toLowerCase();
+}
+
+// markSearchHits is a server-searched page's tasks marked with the text
+// that found them (searchHit), which is what lets taskFilters.js's
+// matchesFilters keep a task the server matched on its description --
+// a listed task carries none for the client to match itself.
+export function markSearchHits(tasks, key) {
+  return tasks.map((t) => ({ ...t, searchHit: key }));
 }
 
 // readPage is a page's {tasks, nextCursor}, whatever came back: an answer
@@ -120,9 +150,17 @@ export function mergeClosedPage(held, page) {
     const i = byId.get(String(t.id));
     if (i === undefined) {
       added.push(t);
-    } else if (JSON.stringify(held[i]) !== JSON.stringify(t)) {
+      continue;
+    }
+    // A refresh's row knows nothing of the search that found the held
+    // one (markSearchHits), and must not make it unfindable again.
+    const row =
+      t.searchHit === undefined && held[i].searchHit !== undefined
+        ? { ...t, searchHit: held[i].searchHit }
+        : t;
+    if (JSON.stringify(held[i]) !== JSON.stringify(row)) {
       next = next || held.slice();
-      next[i] = t;
+      next[i] = row;
     }
   }
   if (added.length === 0) return next || held;
@@ -139,22 +177,59 @@ export function mergeTaskLists(live, closed) {
   return extra.length === 0 ? live : [...live, ...extra];
 }
 
+// stateFilterAdmitsClosed is whether the rail's state filter (App's
+// stateFilter, TaskList's inState) lets a closed task into the list:
+// every task, the blocked ones, and the Closed and Merged entries do;
+// any other state is one a closed task is not in.
+export function stateFilterAdmitsClosed(filter) {
+  return ["all", "blocked", "closed", "merged"].includes(filter || "all");
+}
+
+// closedPartial is whether the closed tasks held are fewer than there
+// are: true until the newest page has answered, then while the server's
+// totals count closed work no page read so far holds (or, from a server
+// that sends no totals, while there is a next page). A view counting
+// closed work says its count is a floor ("200+") while this is true,
+// rather than presenting what was paged in as the whole.
+export function closedPartial({ answered, totals, held, nextCursor }) {
+  if (!answered) return true;
+  if (totals) return totals.total > held.length;
+  return nextCursor !== "";
+}
+
 // useClosedTasks holds the closed tasks paged in so far. refresh asks the
-// newest page again; loadMore asks the page after the oldest held;
-// hasMore says whether there is one. Nothing is asked until enabled --
-// App's first live list having answered -- so the closed page never
+// newest page again; loadMore asks the next page -- of the server's
+// search for `search` while there is one, else after the oldest held --
+// and hasMore says whether there is one. Nothing is asked until enabled
+// -- App's first live list having answered -- so the closed page never
 // queues ahead of what the first screen needs.
-export function useClosedTasks(enabled = true) {
+//
+// search is the task views' search box, when they could show closed
+// work at all (App passes "" otherwise). Searching the pages already
+// held would miss every task closed before them, so the server is asked
+// instead (GET /api/tasks?state=closed&search=, which also matches
+// descriptions), SEARCH_DEBOUNCE_MS after the box goes quiet, and what
+// it finds is merged in beside the rest, marked with the text that
+// found it (markSearchHits).
+export function useClosedTasks(enabled = true, search = "") {
   const [closed, setClosed] = useState([]);
   const [nextCursor, setNextCursor] = useState("");
   const [loading, setLoading] = useState(false);
+  // answered is whether the newest page has answered once.
+  const [answered, setAnswered] = useState(false);
   // totals is the newest page's counts of every closed task (readPage),
   // null until a page has answered with them.
   const [totals, setTotals] = useState(null);
+  // searched is the server search for the box's text: q the text it was
+  // asked for, nextCursor its next page, loading while a page of it is
+  // on its way.
+  const [searched, setSearched] = useState(NO_SEARCH);
   // deep is whether a page past the first has been read, whose cursor a
   // refresh of the first must not overwrite.
   const deep = useRef(false);
   const inFlight = useRef(false);
+  const searchInFlight = useRef(false);
+  const q = searchKey(search);
 
   const refresh = useCallback(async () => {
     if (inFlight.current) return;
@@ -163,6 +238,7 @@ export function useClosedTasks(enabled = true) {
       const page = readPage(await api(closedPagePath("")));
       setClosed((prev) => mergeClosedPage(prev, page.tasks));
       setTotals(page.totals);
+      setAnswered(true);
       if (!deep.current) setNextCursor(page.nextCursor);
     } catch (err) {
       console.warn("grain: reading closed tasks failed", err);
@@ -171,7 +247,55 @@ export function useClosedTasks(enabled = true) {
     }
   }, []);
 
+  // searchPage asks the server's search for key after cursor and merges
+  // what it finds. Each ask takes the next generation, and an answer
+  // that is no longer the newest -- the box has moved on, or emptied --
+  // is dropped rather than recorded as the current search's page.
+  const searchGen = useRef(0);
+  const searchPage = useCallback(async (key, cursor) => {
+    const gen = ++searchGen.current;
+    searchInFlight.current = true;
+    setSearched((prev) => ({
+      q: key,
+      nextCursor: prev.q === key ? prev.nextCursor : "",
+      loading: true,
+    }));
+    try {
+      const page = readPage(await api(closedPagePath(cursor, { search: key })));
+      if (gen !== searchGen.current) return;
+      // Not the page's totals: they count the search's matches, and the
+      // rail's counts are of every closed task.
+      setClosed((prev) =>
+        mergeClosedPage(prev, markSearchHits(page.tasks, key)),
+      );
+      setSearched({ q: key, nextCursor: page.nextCursor, loading: false });
+    } catch (err) {
+      console.warn("grain: searching closed tasks failed", err);
+      if (gen === searchGen.current) setSearched({ ...NO_SEARCH, q: key });
+    } finally {
+      if (gen === searchGen.current) searchInFlight.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!enabled || q === "") {
+      searchGen.current += 1;
+      searchInFlight.current = false;
+      setSearched(NO_SEARCH);
+      return undefined;
+    }
+    const timer = setTimeout(() => searchPage(q, ""), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [enabled, q, searchPage]);
+
+  const searching = q !== "";
   const loadMore = useCallback(async () => {
+    if (searching) {
+      if (!searchInFlight.current && searched.q === q && searched.nextCursor) {
+        await searchPage(q, searched.nextCursor);
+      }
+      return;
+    }
     if (!nextCursor || inFlight.current) return;
     inFlight.current = true;
     setLoading(true);
@@ -187,7 +311,7 @@ export function useClosedTasks(enabled = true) {
       inFlight.current = false;
       setLoading(false);
     }
-  }, [nextCursor]);
+  }, [nextCursor, searching, q, searched, searchPage]);
 
   useEffect(() => {
     if (!enabled) return undefined;
@@ -211,12 +335,71 @@ export function useClosedTasks(enabled = true) {
   }, [enabled, refresh]);
 
   const unseen = useMemo(() => unseenClosed(totals, closed), [totals, closed]);
+  const partial = closedPartial({ answered, totals, held: closed, nextCursor });
   return {
     closed,
-    hasMore: nextCursor !== "",
-    loading,
+    hasMore: searching
+      ? searched.q === q && searched.nextCursor !== ""
+      : nextCursor !== "",
+    loading: searching ? searched.loading : loading,
+    searching,
     refresh,
     loadMore,
     unseen,
+    partial,
   };
 }
+
+// repoClosedCount is the closed tasks a page's totals count that the
+// repo pages count -- every one but a session's own (state.js's
+// repoRows leaves sessions out) -- or null from a server that sends no
+// totals.
+export function repoClosedCount(totals) {
+  if (!totals) return null;
+  return Math.max(0, totals.total - totals.sessions);
+}
+
+// withClosedCount is a repoRows row with its closed count taken from the
+// server (repoClosedCount) rather than from the closed tasks paged in so
+// far, and its total moved by the difference; the row as it is when
+// there is no server count to put in.
+export function withClosedCount(row, closed) {
+  if (closed === null || closed === undefined) return row;
+  const held = row.counts.closed || 0;
+  if (closed === held) return row;
+  const counts = { ...row.counts };
+  if (closed > 0) counts.closed = closed;
+  else delete counts.closed;
+  return { ...row, counts, total: Math.max(0, row.total + closed - held) };
+}
+
+// useRepoClosedCount is how many closed tasks repo has, asked of the
+// server -- a page of one of GET /api/tasks?state=closed&repo=, read for
+// its totals -- while `enabled`: App's closed pages are the newest
+// across every repo, so a repo's page counting only those would present
+// a floor as its total. null until it answers, and when it cannot.
+export function useRepoClosedCount(repo, enabled) {
+  const [count, setCount] = useState(null);
+  useEffect(() => {
+    if (!enabled || !repo) {
+      setCount(null);
+      return undefined;
+    }
+    let live = true;
+    api(closedPagePath("", { repo, limit: 1 }))
+      .then((body) => {
+        if (live) setCount(repoClosedCount(readPage(body).totals));
+      })
+      .catch((err) => {
+        console.warn("grain: counting a repo's closed tasks failed", err);
+        if (live) setCount(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [repo, enabled]);
+  return count;
+}
+
+// NO_SEARCH is useClosedTasks' search state with nothing searched.
+const NO_SEARCH = Object.freeze({ q: "", nextCursor: "", loading: false });

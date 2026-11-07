@@ -23,6 +23,7 @@ import { STATE_LABELS } from "../state.js";
 import { attributesFor } from "../taskAttributes.js";
 import {
   NO_NARROWING,
+  admitsState,
   defaultFilters,
   describeUnknownConditions,
   narrowTasks,
@@ -239,12 +240,16 @@ const GANTT_PANEL_ROWS = 10;
 // draw the same shape of the same series.
 const METRICS_BUCKETS = 24;
 
+// PARTIAL_COUNT_TITLE is what a count marked "+" says when pointed at.
+const PARTIAL_COUNT_TITLE =
+  "Counts the closed tasks loaded so far; older closed tasks are not counted yet.";
+
 // ListPanel is the flat list, cut to the top few rows. The rows are the
 // list view's own (TaskRow), without the checkbox and the drag handle:
 // selecting and reordering are gestures the list view offers over the
 // same tasks, and a panel is a window onto them rather than a second
 // place to act on them.
-function ListPanel({ tasks, config, narrowing, onOpenTask }) {
+function ListPanel({ tasks, config, narrowing, onOpenTask, partial = false }) {
   if (tasks.length === 0) return <ListEmpty>Nothing here right now.</ListEmpty>;
   // A panel carries its own sort, saved with the panel rather than
   // picked in a toolbar, so a panel that says "the backlog by priority"
@@ -264,7 +269,8 @@ function ListPanel({ tasks, config, narrowing, onOpenTask }) {
           component="p"
           className="panel-list-more"
         >
-          Showing {shown.length} of {tasks.length}.
+          Showing {shown.length} of {tasks.length}
+          {partial ? "+" : ""}.
         </Typography>
       )}
       <ul className="task-list">
@@ -296,7 +302,7 @@ function ListPanel({ tasks, config, narrowing, onOpenTask }) {
 // Each count is a link into the list narrowed to that column's states,
 // on top of whatever the panel is already narrowed to: "eleven waiting"
 // is a number worth clicking, and what it opens should be those eleven.
-function StatesPanel({ tasks, narrowing, onOpen }) {
+function StatesPanel({ tasks, narrowing, onOpen, partial = false }) {
   const columns = useMemo(() => loadColumns() || defaultColumns(), []);
   const { cards, hidden } = groupIntoColumns(tasks, columns);
   return (
@@ -332,7 +338,17 @@ function StatesPanel({ tasks, narrowing, onOpen }) {
               onOpen({ view: "tasks", narrowing: asked });
             }}
           >
-            <span className="panel-state-count">{held.length}</span>
+            <span
+              className="panel-state-count"
+              title={
+                partial && c.states.includes("closed")
+                  ? PARTIAL_COUNT_TITLE
+                  : undefined
+              }
+            >
+              {held.length}
+              {partial && c.states.includes("closed") ? "+" : ""}
+            </span>
             <span className="panel-state-title">
               {/* The dot the rest of the UI draws for the first state
                   this column collects: a column is recognised by its
@@ -509,6 +525,7 @@ function Panel({
   tasksFailed = false,
   tasksError = null,
   onRetryTasks,
+  closedPartial = false,
   config,
   onOpenTask,
   onOpen,
@@ -516,6 +533,11 @@ function Panel({
   now,
 }) {
   const narrowing = panelNarrowing(panel, asked);
+  // Whether this panel's counts are a floor rather than a total: the
+  // closed tasks are paged in (closedTasks.js), and while some are not
+  // held yet a panel whose question lets closed work through counts
+  // only the ones that are -- so it says "200+" rather than "200".
+  const partial = closedPartial && admitsState(narrowing, config, "closed");
   // The tasks a panel is about: the same resolve/sort/match every task
   // view does, from the one place that does it (taskFilters.js's
   // narrowTasks). Worked out here even though only three of the four
@@ -573,7 +595,12 @@ function Panel({
         body = <TasksLoadError error={tasksError} onRetry={onRetryTasks} />;
       } else {
         body = (
-          <StatesPanel tasks={narrowed} narrowing={narrowing} onOpen={onOpen} />
+          <StatesPanel
+            tasks={narrowed}
+            narrowing={narrowing}
+            onOpen={onOpen}
+            partial={partial}
+          />
         );
         count = narrowed.length;
       }
@@ -594,6 +621,7 @@ function Panel({
             config={config}
             narrowing={narrowing}
             onOpenTask={onOpenTask}
+            partial={partial}
           />
         );
         count = narrowed.length;
@@ -646,7 +674,15 @@ function Panel({
             (ReorderPickup.jsx). */}
         {handle}
         <h3 className="panel-title">{panelTitle(panel)}</h3>
-        {count !== null && <span className="count">{count}</span>}
+        {count !== null && (
+          <span
+            className="count"
+            title={partial ? PARTIAL_COUNT_TITLE : undefined}
+          >
+            {count}
+            {partial ? "+" : ""}
+          </span>
+        )}
         {keepable && (
           <button
             type="button"
@@ -723,6 +759,9 @@ export default function PanelBoard({
   tasksLoaded = true,
   tasksError = null,
   onRetryTasks,
+  // closedPartial is useClosedTasks' partial: some closed tasks are not
+  // paged in yet, so a count over closed work is a floor.
+  closedPartial = false,
   config,
   narrowing = NO_NARROWING,
   // A dashboard rendered without one is a dashboard whose toolbar
@@ -908,6 +947,7 @@ export default function PanelBoard({
                 tasksFailed={tasksFailed}
                 tasksError={tasksError}
                 onRetryTasks={onRetryTasks}
+                closedPartial={closedPartial}
                 config={config}
                 onOpenTask={onOpenTask}
                 onOpen={onOpen}
