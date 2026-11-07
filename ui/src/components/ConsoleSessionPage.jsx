@@ -218,6 +218,15 @@ export default function ConsoleSessionPage({
     await save({ capabilities: next }, id);
   };
 
+  const missingShipped = session?.missingShippedDefaults || [];
+  const adoptShippedDefaults = async () => {
+    const next = [...(session.capabilities || [])];
+    for (const id of missingShipped) {
+      if (!next.includes(id)) next.push(id);
+    }
+    await save({ capabilities: next }, "adoptShippedDefaults");
+  };
+
   const restart = async (carryHandover = false) => {
     setRestarting(true);
     try {
@@ -366,6 +375,44 @@ export default function ConsoleSessionPage({
             ? "A run is open on this session now. Capabilities, repository access, network access and the model are fixed when a run starts, so a change saved here reaches the agent when its next run starts -- after this one ends, or once you stop it."
             : "No run is open on this session, so a change saved here takes effect on the next message you send."}
         </Typography>
+        {missingShipped.length > 0 && (
+          <Alert
+            severity="info"
+            data-testid="adopt-shipped-defaults-banner"
+            sx={{
+              mb: 1.5,
+              alignItems: "flex-start",
+              flexWrap: { xs: "wrap", sm: "nowrap" },
+              "& .MuiAlert-message": {
+                minWidth: 0,
+                flex: "1 1 14rem",
+                overflowWrap: "anywhere",
+              },
+              "& .MuiAlert-action": {
+                pt: { xs: 0.5, sm: 0 },
+                pl: { xs: 0, sm: 2 },
+                ml: { xs: 0, sm: "auto" },
+              },
+            }}
+            action={
+              <Button
+                size="small"
+                variant="outlined"
+                color="inherit"
+                disabled={saving === "adoptShippedDefaults"}
+                onClick={adoptShippedDefaults}
+              >
+                Adopt shipped defaults
+              </Button>
+            }
+          >
+            Saved session lacks{" "}
+            {missingShipped.length === 1
+              ? "1 shipped Tier 1 grant"
+              : `${missingShipped.length} shipped Tier 1 grants`}{" "}
+            ({missingShipped.join(", ")}).
+          </Alert>
+        )}
         {/* Only what this deployment has configured, plus whatever this
         session already holds -- a box that cannot be reached by
         ticking it is not an offer, and one already ticked has to

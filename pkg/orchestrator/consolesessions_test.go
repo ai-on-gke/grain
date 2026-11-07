@@ -106,7 +106,26 @@ func TestTheDirectorIsFiledOnTheFirstCycleAndParkedOnItsOwnOpening(t *testing.T)
 		grants = append(grants, g.Capability)
 	}
 	slices.Sort(grants)
-	wantGrants := []string{model.ConsoleSessionCIReadGrant, "api:deployment:read", "api:self-debug", model.BootstrapPlaybooksGrant, "durable", model.GrainHealthGrant, model.GrainJournalGrant, model.GrainSourceGrant}
+	wantGrants := []string{
+		model.ConsoleSessionCIReadGrant,
+		"api:deployment:read",
+		"api:self-debug",
+		"api:task-admin",
+		"api:capabilities:read",
+		"api:capabilities:detach",
+		"api:settings:read",
+		"api:repos:read",
+		"api:releases:read",
+		"api:schedules:read",
+		"api:templates:read",
+		"api:suites:read",
+		"api:dispatch:read",
+		model.BootstrapPlaybooksGrant,
+		"durable",
+		model.GrainHealthGrant,
+		model.GrainJournalGrant,
+		model.GrainSourceGrant,
+	}
 	slices.Sort(wantGrants)
 	if !slices.Equal(grants, wantGrants) {
 		t.Errorf("Grants = %v, want the shipped default set plus durable (%v)", grants, wantGrants)
