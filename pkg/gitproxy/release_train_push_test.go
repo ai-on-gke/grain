@@ -138,3 +138,57 @@ func mustRead(t *testing.T, name string) []byte {
 	}
 	return b
 }
+
+// The release train task reads its verdicts with `grain ci list` and
+// `grain ci checks` (scripts/release-train-task.sh). ai-on-gke/grain's CI
+// is GitHub Actions, and a task filed for a repository grain CI does not
+// judge has its grain-ci grant stripped (model.applyGrainCIGrant), so the
+// template has to grant the read itself: without api:ci-read every tick
+// was refused at its first `grain ci list` and ended
+// RELEASE_TRAIN_RESULT=failed (docs/test-runs/2026-11-04-release-train.md,
+// finding 2).
+func TestTheReleaseTrainTaskMayReadItsRepositorysCI(t *testing.T) {
+	t.Parallel()
+	repo := model.GrainSourceRepo()
+	declared, err := repodecl.Load(fstest.MapFS{
+		".grain/templates/release-train.yml": {Data: mustRead(t, filepath.Join("..", "..", ".grain", "templates", "release-train.yml"))},
+		".grain/schedules/release-train.yml": {Data: mustRead(t, filepath.Join("..", "..", ".grain", "schedules", "release-train.yml"))},
+	}, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []model.CIMode{model.CIModeGitHub, model.CIModeGrain} {
+		t.Run(string(mode), func(t *testing.T) {
+			store, ctx := openStoreForTest(t)
+			if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: repo, CIMode: mode}); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Date(2026, 11, 4, 4, 15, 0, 0, time.UTC)
+			if _, err := store.SyncRepoDeclarations(ctx, repo, strings.Repeat("d", 40), declared, now, time.UTC); err != nil {
+				t.Fatal(err)
+			}
+			sched, err := store.GetSchedule(ctx, model.RepoDeclaredID(model.DeclaredSchedule, repo, "release-train"))
+			if err != nil || sched == nil {
+				t.Fatalf("reading the schedule: %v, %v", sched, err)
+			}
+			fired, err := store.FireScheduleNow(ctx, *sched, now, model.RepoRef{})
+			if err != nil || fired.TaskID == "" {
+				t.Fatalf("firing the schedule: %+v, %v", fired, err)
+			}
+			if err := store.StartRun(ctx, model.Run{ID: "r1", TaskID: fired.TaskID, Sandbox: "sandbox-train", Attempt: 1, StartedAt: now},
+				model.Limits{}); err != nil {
+				t.Fatal(err)
+			}
+			scope, live, err := store.SandboxNamespaceScope(ctx, "sandbox-train")
+			if err != nil || !live {
+				t.Fatalf("scope: live %v, %v", live, err)
+			}
+			if !scope.MayReadCI {
+				t.Fatalf("ci_mode %s: the release train's run may not read CI (grants %v): grain ci list would be refused", mode, scope.Grants)
+			}
+			if !scope.MayReadAllCI && !strings.EqualFold(scope.TaskRepo, repo.String()) && !scope.AllowedRepos[repo.String()] {
+				t.Fatalf("ci_mode %s: the run may read CI, but not %s's (grants %v)", mode, repo, scope.Grants)
+			}
+		})
+	}
+}

@@ -25,7 +25,7 @@ import (
 
 const (
 	mq = "qualification-mergequeue"
-	ci = "qualification-ci-diagnostics"
+	cd = "qualification-ci-diagnostics"
 	bt = "qualification-base-triage"
 	ss = "qualification-system-smoke"
 )
@@ -88,13 +88,13 @@ func (w *world) item2and3() {
 
 	w.section("item 2: first attempts on " + rc1 + ": a pull request, a follow-up on main, an INFRA footer")
 	w.agent(rc1, h1, mq, "pr")
-	w.agent(rc1, h1, ci, "followup")
+	w.agent(rc1, h1, cd, "followup")
 	w.agent(rc1, h1, bt, "infra")
 	w.tick(time.Minute)
 	w.reconcile()
 	w.showItems(rc1)
 	its := w.items(rc1)
-	for _, item := range []string{mq, ci, bt} {
+	for _, item := range []string{mq, cd, bt} {
 		got := len(its[model.RepoDeclaredID(model.DeclaredTemplate, w.repo, item)])
 		expect(got == 2, "%s re-run once (%d attempts)", item, got)
 	}
@@ -103,7 +103,7 @@ func (w *world) item2and3() {
 
 	w.section("item 2: second attempts: the same pull request and follow-up again; the infra re-run passes")
 	w.agent(rc1, h1, mq, "pr")
-	w.agent(rc1, h1, ci, "followup")
+	w.agent(rc1, h1, cd, "followup")
 	w.agent(rc1, h1, bt, "pass")
 
 	// Stage 1 is still busy on rc.1 (a manual re-run), and main's own
@@ -163,13 +163,13 @@ func (w *world) item2and3() {
 
 	w.section("item 2/3: " + rc2 + ": a footer naming another commit, and a leftover scratch branch, twice each")
 	w.agent(rc2, h2, mq, "wrongcommit")
-	w.agent(rc2, h2, ci, "scratch")
+	w.agent(rc2, h2, cd, "scratch")
 	w.agent(rc2, h2, bt, "pass")
 	w.tick(time.Minute)
 	w.reconcile()
 	w.showItems(rc2)
 	w.agent(rc2, h2, mq, "wrongcommit")
-	w.agent(rc2, h2, ci, "scratch")
+	w.agent(rc2, h2, cd, "scratch")
 	w.tick(time.Minute)
 	w.reconcile()
 	w.checks("rc2-red", h2)
@@ -200,7 +200,7 @@ func (w *world) item2and3() {
 
 	w.section("item 3: " + rc3 + " is red too: pipeline.release-escalated, and the train cuts no rc.4")
 	w.agent(rc3, h3, mq, "fail")
-	w.agent(rc3, h3, ci, "pass")
+	w.agent(rc3, h3, cd, "pass")
 	w.agent(rc3, h3, bt, "pass")
 	w.tick(time.Minute)
 	w.reconcile()

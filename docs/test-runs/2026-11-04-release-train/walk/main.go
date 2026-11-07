@@ -122,9 +122,20 @@ func main() {
 	src := flag.String("src", "", "the grain checkout")
 	dir := flag.String("dir", "", "a scratch directory (emptied)")
 	out := flag.String("out", "", "where to write JSON snapshots (default: none)")
+	proxy := flag.Bool("proxy", false, "walk items 4 and 5 (the task train through the scoped proxy) instead")
+	grainBin := flag.String("grain", "grain", "with -proxy, the grain binary the sandbox runs")
 	flag.Parse()
 	if *src == "" || *dir == "" {
-		log.Fatal("usage: walk -src <checkout> -dir <scratch> [-out <dir>]")
+		log.Fatal("usage: walk -src <checkout> -dir <scratch> [-out <dir>] [-proxy -grain <binary>]")
+	}
+	if *proxy {
+		bin, err := exec.LookPath(*grainBin)
+		if err != nil {
+			log.Fatal(err)
+		}
+		bin, _ = filepath.Abs(bin)
+		proxyWalk(*src, *dir, *out, bin)
+		return
 	}
 	w, err := setup(*src, *dir, *out)
 	if err != nil {
