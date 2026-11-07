@@ -1842,6 +1842,9 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 				ids = append(ids, id)
 			}
 		}
+		if err := validateCatalogueTaskDefaults(&cfg, ids); err != nil {
+			return model.Config{}, err
+		}
 		cfg.DefaultCapabilities = ids
 	}
 	if req.NewestFirst != nil {

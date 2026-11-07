@@ -748,6 +748,9 @@ func (c *Client) SetDeploymentRepoConfigWithUser(ctx context.Context, repo strin
 			}
 		}
 		cfg.DefaultCapabilities = clean
+		if err := c.validateCatalogueRepoDefaults(ctx, parsedRepo, clean, nil); err != nil {
+			return DeploymentRepoConfigResponse{}, err
+		}
 	}
 	if req.CICapabilities != nil {
 		// Capabilities not supported for CI (not in the CI catalogue) are
@@ -792,6 +795,9 @@ func (c *Client) SetDeploymentRepoConfigWithUser(ctx context.Context, repo strin
 			}
 		}
 		cfg.CICapabilities = clean
+		if err := c.validateCatalogueRepoDefaults(ctx, parsedRepo, nil, clean); err != nil {
+			return DeploymentRepoConfigResponse{}, err
+		}
 	}
 	if req.CIMode != nil {
 		mode := strings.ToLower(strings.TrimSpace(*req.CIMode))
