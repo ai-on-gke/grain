@@ -278,7 +278,9 @@ func writeRedRCSection(b *strings.Builder) {
 		"(a quarantine entry is a person's review), unless one is already open. " +
 		"`pipeline.release-infra-stalled:<rc_tag>` is a candidate still qualifying while an item keeps " +
 		"failing on infrastructure. Read that item's last runs, name the runner, quota or credential " +
-		"that is failing in a `grain notify` a person can act on, and file no code fix for it.\n\n")
+		"that is failing in a `grain notify` a person can act on, and file no code fix for it; once " +
+		"the infrastructure is repaired, acknowledging or clearing `pipeline.release-infra-stalled:<rc_tag>` " +
+		"starts a fresh Stage 2 qualification attempt if Stage 2 had concluded `neutral`.\n\n")
 }
 
 // UsesToolBudget reports whether t's runs are durable judgement wakes,

@@ -393,7 +393,21 @@ qualify "$green1" "$(checks_file q-c-red failure failure)"
 check "check-qualification: Stage 2 failing twice is red" 1 "FAIL grain/release-qualification: failed (failure,failure)"
 qualify "$green1" "$(checks_file q-c-infra neutral)"
 check "check-qualification: a neutral (INFRA) Stage 2 verdict is re-run" 3 \
+  "stalled after Stage 2's infra re-runs" \
   "RERUN qualification grain/release-qualification infra" "Qualification: INFRA"
+qualify "$green1" "$(checks_file q-c-infra-retry neutral in_progress)"
+check "check-qualification: a fresh Stage 2 attempt in progress after neutral is pending" 2 \
+  "PENDING grain/release-qualification: still running (infra,pending)" "Qualification: PENDING"
+lacks "check-qualification: a running Stage 2 retry is neither stalled nor asking for a re-run" "RERUN qualification"
+qualify "$green1" "$(checks_file q-c-infra-pass neutral success)"
+check "check-qualification: a fresh Stage 2 attempt passing after neutral qualifies the RC" 0 \
+  "PASS grain/release-qualification: passed (infra,success)" "Qualification: PASS"
+qualify "$green1" "$(checks_file q-c-infra-fail neutral failure)"
+check "check-qualification: a fresh Stage 2 attempt failing after neutral is confirmed red" 1 \
+  "FAIL grain/release-qualification: failed (infra,failure)" "Qualification: FAIL"
+qualify "$green1" "$(checks_file q-c-prior-red-pending failure failure in_progress)"
+check "check-qualification: Stage 2's newest attempt is pending even after earlier check runs on the commit failed" 2 \
+  "PENDING grain/release-qualification: still running (failure,failure,pending)" "Qualification: PENDING"
 
 # Only grain's own app's check run qualifies: a same-named one from an
 # Actions workflow (checks: write), another app, or no app at all is
