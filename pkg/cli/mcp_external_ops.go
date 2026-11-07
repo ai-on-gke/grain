@@ -31,6 +31,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/nsclient"
+	"github.com/ai-on-gke/grain/pkg/safepath"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -479,32 +480,30 @@ func loadMCPAttachments(paths []string) ([]ui.AttachmentUpload, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolving workspace root %s: %w", root, err)
 	}
-	var blockedDirs []string
-	if cfgDir, err := grainConfigDir(); err == nil && cfgDir != "" {
-		blockedDirs = append(blockedDirs, filepath.Clean(cfgDir))
-		if realCfg, err := filepath.EvalSymlinks(cfgDir); err == nil && realCfg != "" {
-			blockedDirs = append(blockedDirs, realCfg)
-		}
-	}
+	cfgDir, _ := grainConfigDir()
 
 	resolved := make([]string, 0, len(paths))
 	for _, p := range paths {
-		absP, err := filepath.Abs(p)
-		if err != nil {
-			return nil, fmt.Errorf("reading attachment %s: %w", p, err)
+		absP := p
+		if !filepath.IsAbs(absP) {
+			absP = filepath.Join(root, p)
 		}
-		realP, err := filepath.EvalSymlinks(absP)
-		if err != nil {
-			return nil, fmt.Errorf("reading attachment %s: %w", p, err)
+		if cfgDir != "" {
+			if _, cerr := safepath.Within(cfgDir, absP); cerr == nil {
+				return nil, fmt.Errorf("refusing attachment %s inside grain config directory", p)
+			}
 		}
-		for _, bd := range blockedDirs {
-			if realP == bd || strings.HasPrefix(realP, bd+string(filepath.Separator)) ||
-				absP == bd || strings.HasPrefix(absP, bd+string(filepath.Separator)) {
+		realP, err := safepath.Within(realRoot, absP)
+		if err != nil {
+			return nil, fmt.Errorf("refusing attachment %s outside workspace %s: %w", p, root, err)
+		}
+		if cfgDir != "" {
+			if _, cerr := safepath.Within(cfgDir, realP); cerr == nil {
 				return nil, fmt.Errorf("refusing attachment %s inside grain config directory", p)
 			}
 		}
 		rel, err := filepath.Rel(realRoot, realP)
-		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		if err != nil || rel == "." {
 			return nil, fmt.Errorf("refusing attachment %s outside workspace %s", p, root)
 		}
 		for _, seg := range strings.Split(rel, string(filepath.Separator)) {
