@@ -306,7 +306,11 @@ func cmdRegistryRotateCredential(ctx context.Context, c *ui.HTTPClient, out *pri
 		}
 	}
 	if out.json {
-		out.encode(resp)
+		outResp := *resp
+		if *tokenFile != "" {
+			outResp.RegistrationToken = ""
+		}
+		out.encode(outResp)
 		return nil
 	}
 	fmt.Printf("rotated credential %s for %s\n", resp.Credential.CredentialID, name)

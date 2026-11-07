@@ -70,6 +70,19 @@ function makeRandomEntryName() {
   return `grain-${suffix}`;
 }
 
+function safeExternalUrl(raw) {
+  if (!raw || typeof raw !== "string") return "";
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol === "https:" || parsed.protocol === "http:") {
+      return parsed.toString();
+    }
+  } catch {
+    // Reject malformed or non-HTTP(S) URLs.
+  }
+  return "";
+}
+
 function buildConnectedSnippet(registryHost, instanceDomain, entryName, token) {
   const regOrigin = registryHost
     ? registryHost.startsWith("http")
@@ -305,17 +318,19 @@ function DirectoryView({ onNavigateEntry }) {
                 {
                   key: "open",
                   header: "Action",
-                  render: (r) =>
-                    r.url ? (
+                  render: (r) => {
+                    const href = safeExternalUrl(r.url);
+                    return href ? (
                       <a
                         className="gs-btn gs-btn-sm gs-btn-primary"
-                        href={r.url}
+                        href={href}
                         target="_blank"
-                        rel="noreferrer"
+                        rel="noopener noreferrer"
                       >
                         Open grain
                       </a>
-                    ) : null,
+                    ) : null;
+                  },
                 },
               ]}
             />
@@ -459,12 +474,12 @@ function DirectoryView({ onNavigateEntry }) {
               </div>
 
               <div className="reg-actions-row">
-                {entry.url ? (
+                {safeExternalUrl(entry.url) ? (
                   <a
                     className="gs-btn gs-btn-sm gs-btn-primary"
-                    href={entry.url}
+                    href={safeExternalUrl(entry.url)}
                     target="_blank"
-                    rel="noreferrer"
+                    rel="noopener noreferrer"
                   >
                     Open grain
                   </a>
@@ -749,12 +764,12 @@ function MyEntriesView({ me, onNavigateEntry, onNavigateNew, onRefreshMe }) {
               header: "Quick Actions",
               render: (e) => (
                 <div className="reg-actions-row">
-                  {e.url && e.state !== "deleted" ? (
+                  {safeExternalUrl(e.url) && e.state !== "deleted" ? (
                     <a
                       className="gs-btn gs-btn-sm gs-btn-primary"
-                      href={e.url}
+                      href={safeExternalUrl(e.url)}
                       target="_blank"
-                      rel="noreferrer"
+                      rel="noopener noreferrer"
                     >
                       Open
                     </a>
@@ -1583,12 +1598,12 @@ function EntryDetailView({
             <button type="button" className="gs-btn" onClick={onBack}>
               Back
             </button>
-            {entry.url && entry.state !== "deleted" ? (
+            {safeExternalUrl(entry.url) && entry.state !== "deleted" ? (
               <a
                 className="gs-btn gs-btn-primary"
-                href={entry.url}
+                href={safeExternalUrl(entry.url)}
                 target="_blank"
-                rel="noreferrer"
+                rel="noopener noreferrer"
               >
                 Open grain
               </a>
@@ -2830,17 +2845,19 @@ export default function App() {
               >
                 Status
               </button>
-              <button
-                type="button"
-                className={
-                  route.page === "admin"
-                    ? "reg-nav-link reg-nav-link-active"
-                    : "reg-nav-link"
-                }
-                onClick={() => navigate("/admin")}
-              >
-                Admin
-              </button>
+              {me?.is_registry_admin || me?.is_admin ? (
+                <button
+                  type="button"
+                  className={
+                    route.page === "admin"
+                      ? "reg-nav-link reg-nav-link-active"
+                      : "reg-nav-link"
+                  }
+                  onClick={() => navigate("/admin")}
+                >
+                  Admin
+                </button>
+              ) : null}
             </nav>
           </div>
 

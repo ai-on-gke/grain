@@ -270,9 +270,13 @@ function createFetchMock(overrides = {}) {
   return vi.fn(async (input, init = {}) => {
     const url = typeof input === "string" ? input : input.url;
     const method = (init.method || "GET").toUpperCase();
+    const pathOnly = url.split("?")[0];
 
     if (overrides[`${method} ${url}`]) {
       return overrides[`${method} ${url}`](url, init);
+    }
+    if (overrides[`${method} ${pathOnly}`]) {
+      return overrides[`${method} ${pathOnly}`](url, init);
     }
 
     if (url === "/api/me") {
@@ -665,5 +669,42 @@ describe("Grain Registry UI", () => {
     });
     expect(screen.getByText("*.grain.example.com")).toBeInTheDocument();
     expect(screen.getAllByText("v0.14.2").length).toBeGreaterThan(0);
+  });
+
+  it("hides Admin nav button for non-admin users and blocks non-http(s) external entry URLs", async () => {
+    const unsafeEntries = [
+      {
+        ...sampleEntries[0],
+        url: "javascript:alert(1)",
+      },
+    ];
+    globalThis.fetch = createFetchMock({
+      "GET /api/me": async () =>
+        new Response(
+          JSON.stringify({
+            ...sampleMe,
+            is_registry_admin: false,
+          }),
+          { status: 200 },
+        ),
+      "GET /api/entries": async () =>
+        new Response(JSON.stringify({ entries: unsafeEntries }), {
+          status: 200,
+        }),
+    });
+    renderApp("/");
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: "My Entries" }),
+      ).toBeInTheDocument();
+    });
+
+    expect(
+      screen.queryByRole("button", { name: "Admin" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: /^Open$/i }),
+    ).not.toBeInTheDocument();
   });
 });

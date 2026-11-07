@@ -1397,6 +1397,117 @@ func TestStep12CatalogCRUDGroupAuthHeartbeatsDirectoryAndRouteEndToEnd(t *testin
 	if err != nil || accepted.Owner != "bob@example.com" || accepted.OwnerGroup != "group:team-alpha@example.com" {
 		t.Fatalf("AcceptTransfer by bob failed: %+v (err=%v)", accepted, err)
 	}
+
+	// 10. Status privacy for unlisted entries and replica heartbeat health checks.
+	listedFalse := false
+	createSecret, err := aliceCli.CreateEntry(ctx, api.CreateEntryRequest{
+		Name:     "secret-unlisted",
+		Kind:     api.KindConnected,
+		HostKind: api.HostKindWorkstation,
+		Listed:   &listedFalse,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry secret-unlisted: %v", err)
+	}
+	secretRow, _ := st.GetEntryByName(ctx, "secret-unlisted")
+	if _, err := st.AcquireTunnelSessionWithCred(ctx, secretRow.ID, "rep-step12", "198.51.100.99:5000", createSecret.Credential.CredentialID); err != nil {
+		t.Fatalf("AcquireTunnelSessionWithCred secret-unlisted: %v", err)
+	}
+	_, _ = srv.Router().TunnelCache().RefreshEntry(ctx, "secret-unlisted")
+	secretHbCli, err := api.NewClient(api.ClientConfig{
+		BaseURL:           pubTS.URL,
+		AllowInsecureHTTP: true,
+		RegistrationToken: createSecret.RegistrationToken,
+	})
+	if err != nil {
+		t.Fatalf("NewClient secretHbCli: %v", err)
+	}
+	if _, err := secretHbCli.Heartbeat(ctx, "secret-unlisted", api.HeartbeatRequest{
+		GrainVersion: "v9.9.9-private",
+		HostKind:     api.HostKindWorkstation,
+		Health:       api.HealthOK,
+	}); err != nil {
+		t.Fatalf("Heartbeat secret-unlisted: %v", err)
+	}
+
+	// Register a second replica and advance clock past 2*replicaTTL so rep-stale becomes unhealthy
+	// while keeping rep-step12 fresh.
+	_ = st.UpsertReplica(ctx, "rep-stale", "127.0.0.1:18083")
+	now = now.Add(2 * time.Minute)
+	_ = st.UpsertReplica(ctx, "rep-step12", "127.0.0.1:18082")
+
+	getStatusAs := func(email string) api.StatusResponse {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "https://registry.example.com/api/status", nil)
+		req.Header.Set("X-Test-Email", email)
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /api/status as %s: %d %s", email, rec.Code, rec.Body.String())
+		}
+		var out api.StatusResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("decode StatusResponse: %v", err)
+		}
+		return out
+	}
+
+	nonAdminStatus := getStatusAs("bob@example.com")
+	if nonAdminStatus.TotalEntries != 2 {
+		t.Fatalf("non-admin TotalEntries = %d, want 2 listed entries only", nonAdminStatus.TotalEntries)
+	}
+	if _, leaked := nonAdminStatus.VersionCounts["v9.9.9-private"]; leaked {
+		t.Fatalf("non-admin VersionCounts leaked unlisted version: %+v", nonAdminStatus.VersionCounts)
+	}
+	if nonAdminStatus.ActiveTunnels != 2 {
+		t.Fatalf("non-admin ActiveTunnels = %d, want 2 listed tunnels only", nonAdminStatus.ActiveTunnels)
+	}
+	for _, rep := range nonAdminStatus.Replicas {
+		if rep.PeerAddr != "" {
+			t.Fatalf("non-admin replica leaked PeerAddr: %+v", rep)
+		}
+		if rep.ReplicaID == "rep-stale" && rep.Healthy {
+			t.Fatalf("stale replica reported Healthy=true in /api/status: %+v", rep)
+		}
+		if rep.ReplicaID == "rep-step12" && (!rep.Healthy || rep.ActiveTunnels != 2) {
+			t.Fatalf("fresh replica unexpected status for non-admin: %+v", rep)
+		}
+	}
+
+	adminStatus := getStatusAs("admin@example.com")
+	if adminStatus.TotalEntries != 3 {
+		t.Fatalf("admin TotalEntries = %d, want 3 (listed + unlisted)", adminStatus.TotalEntries)
+	}
+	if adminStatus.VersionCounts["v9.9.9-private"] != 1 {
+		t.Fatalf("admin VersionCounts missing unlisted version: %+v", adminStatus.VersionCounts)
+	}
+	if adminStatus.ActiveTunnels != 3 {
+		t.Fatalf("admin ActiveTunnels = %d, want 3", adminStatus.ActiveTunnels)
+	}
+
+	reqAdminSum := httptest.NewRequest(http.MethodGet, "https://registry.example.com/api/admin/summary", nil)
+	reqAdminSum.Header.Set("X-Test-Email", "admin@example.com")
+	recAdminSum := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recAdminSum, reqAdminSum)
+	if recAdminSum.Code != http.StatusOK {
+		t.Fatalf("GET /api/admin/summary: %d %s", recAdminSum.Code, recAdminSum.Body.String())
+	}
+	var adminSummary api.AdminSummaryResponse
+	if err := json.Unmarshal(recAdminSum.Body.Bytes(), &adminSummary); err != nil {
+		t.Fatalf("decode AdminSummaryResponse: %v", err)
+	}
+	sawStaleUnhealthy := false
+	for _, rep := range adminSummary.Replicas {
+		if rep.ReplicaID == "rep-stale" {
+			if rep.Healthy {
+				t.Fatalf("stale replica reported Healthy=true in /api/admin/summary: %+v", rep)
+			}
+			sawStaleUnhealthy = true
+		}
+	}
+	if !sawStaleUnhealthy {
+		t.Fatalf("rep-stale missing from /api/admin/summary replicas: %+v", adminSummary.Replicas)
+	}
 }
 
 func startEphemeralPostgresForRegistryTest(t *testing.T) string {
