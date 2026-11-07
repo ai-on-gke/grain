@@ -174,8 +174,8 @@ func TestCapabilitiesDetachNarrowsRepoLists(t *testing.T) {
 	if err != nil || rc == nil {
 		t.Fatalf("reading repo config: %+v, %v", rc, err)
 	}
-	if !slices.Equal(rc.DefaultCapabilities, []string{"github-sandbox"}) {
-		t.Errorf("defaultCapabilities = %v, want [github-sandbox]", rc.DefaultCapabilities)
+	if !slices.Equal(rc.DefaultCapabilities, []string{model.GitHubSandboxRepoGrant}) {
+		t.Errorf("defaultCapabilities = %v, want [%s]", rc.DefaultCapabilities, model.GitHubSandboxRepoGrant)
 	}
 	if slices.Contains(rc.CICapabilities, "gcp-key") || len(rc.CICapabilities) != 2 {
 		t.Errorf("ciCapabilities = %v, want github-sandbox and package-publish", rc.CICapabilities)

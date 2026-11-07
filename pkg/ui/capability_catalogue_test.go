@@ -130,8 +130,8 @@ func TestCatalogueRequiresPersonRefusesAnAgentsApproval(t *testing.T) {
 			err := approve(callerCtx, held.ID)
 			var ferr *ui.ForbiddenError
 			if !errors.As(err, &ferr) || !strings.Contains(err.Error(), "requires_person") ||
-				!strings.Contains(err.Error(), "github-sandbox") {
-				t.Errorf("%s %s = %v, want a 403 naming github-sandbox and requires_person", who.Kind, name, err)
+				!strings.Contains(err.Error(), "sandbox-repo") {
+				t.Errorf("%s %s = %v, want a 403 naming github#sandbox-repo and requires_person", who.Kind, name, err)
 			}
 			if state, err := store.State(ctx, held.ID); err != nil || state != model.StateProposed {
 				t.Errorf("after %s %s: state = %s (%v), want proposed", who.Kind, name, state, err)

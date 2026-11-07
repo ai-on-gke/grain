@@ -23,6 +23,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -74,7 +75,7 @@ func TestCreateTemplateAcceptsCapabilitiesAndReads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tmpl.Capabilities) != 1 || tmpl.Capabilities[0] != "github-sandbox" {
+	if len(tmpl.Capabilities) != 1 || tmpl.Capabilities[0] != model.GitHubSandboxRepoGrant {
 		t.Errorf("capabilities = %v, want [gemini-key]", tmpl.Capabilities)
 	}
 	if len(tmpl.Reads) != 1 || tmpl.Reads[0] != "acme/shared-lib" {

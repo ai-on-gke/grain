@@ -185,16 +185,17 @@ func NewServer(opts ServerOptions) (*Server, error) {
 	}
 
 	rt, err := server.NewRouter(server.RouterOptions{
-		RegistryHost:     opts.Config.Host,
-		InstanceDomain:   opts.Config.InstanceDomain,
-		IAPAudience:      opts.Config.Auth.IAPAudience,
-		ReplicaID:        opts.ReplicaID,
-		PeerAddr:         peerAddr,
-		DatabaseURL:      opts.Config.Database.URL,
-		ReplicaHeartbeat: opts.Config.Tunnel.ReplicaHeartbeat,
-		ReplicaTTL:       opts.Config.Tunnel.ReplicaTTL,
-		ReconnectGrace:   opts.Config.Tunnel.ReconnectGrace,
-		CatalogTTL:       opts.Config.Catalog.CacheTTL,
+		RegistryHost:      opts.Config.Host,
+		InstanceDomain:    opts.Config.InstanceDomain,
+		IAPAudience:       opts.Config.Auth.IAPAudience,
+		ReplicaID:         opts.ReplicaID,
+		PeerAddr:          peerAddr,
+		DatabaseURL:       opts.Config.Database.URL,
+		ReplicaHeartbeat:  opts.Config.Tunnel.ReplicaHeartbeat,
+		ReplicaTTL:        opts.Config.Tunnel.ReplicaTTL,
+		ReconnectGrace:    opts.Config.Tunnel.ReconnectGrace,
+		CatalogTTL:        opts.Config.Catalog.CacheTTL,
+		HeartbeatInterval: opts.Config.Catalog.HeartbeatInterval,
 		TunnelOptions: server.TunnelOptions{
 			MaxConcurrentStreams: opts.Config.Tunnel.MaxConcurrentStreams,
 			MaxBufferedBytes:     opts.Config.Tunnel.MaxBufferedBytes,
@@ -2275,7 +2276,9 @@ func (s *Server) handleInternalHeartbeat(w http.ResponseWriter, r *http.Request)
 	}
 	s.metrics.IncHeartbeats()
 	writeJSON(w, http.StatusOK, api.HeartbeatResponse{
-		Status: s.store.DeriveStatus(updated),
+		Status:               s.store.DeriveStatus(updated),
+		NextIntervalSeconds:  server.HeartbeatIntervalSeconds(s.cfg.Catalog.HeartbeatInterval),
+		NextHeartbeatSeconds: server.HeartbeatIntervalSeconds(s.cfg.Catalog.HeartbeatInterval),
 	})
 }
 

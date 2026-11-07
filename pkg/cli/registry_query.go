@@ -159,10 +159,28 @@ func shellQuoteArg(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-func printConnectedConfigSnippet(registryURL, entryName string) {
+// registryAssertionIssuer mirrors registry.RegistryAssertionIssuer, the fixed
+// `iss` every registry-minted X-Grain-Registry-Assertion carries.
+const registryAssertionIssuer = "grain-registry"
+
+// printConnectedConfigSnippet prints a `grain daemon` command line that
+// actually starts the outbound tunnel: `-registry-connect` refuses to start
+// without the three -ui-registry-* verifier flags, so the snippet carries
+// them (audience = the entry's own URL, keys = the registry's JWKS) along
+// with where the registration token lives.
+func printConnectedConfigSnippet(registryURL, entryName, entryURL, tokenFile string) {
 	fmt.Printf("outbound tunnel config snippet:\n")
-	fmt.Printf("  grain daemon -registry-url %s -registry-entry %s -registry-connect -ui-require-verifier=registry\n",
-		shellQuoteArg(registryURL), shellQuoteArg(entryName))
+	if strings.TrimSpace(tokenFile) == "" {
+		tokenFile = "<file holding the grc_... token>"
+	}
+	keysURL := strings.TrimRight(registryURL, "/") + "/.well-known/jwks.json"
+	fmt.Printf("  grain daemon -registry-url %s -registry-entry %s -registry-token-file %s -registry-connect \\\n",
+		shellQuoteArg(registryURL), shellQuoteArg(entryName), shellQuoteArg(tokenFile))
+	if strings.TrimSpace(entryURL) == "" {
+		entryURL = "<https://" + entryName + ".<instance-domain>>"
+	}
+	fmt.Printf("    -ui-require-verifier=registry -ui-registry-issuer=%s -ui-registry-audience=%s -ui-registry-keys-url=%s\n",
+		registryAssertionIssuer, shellQuoteArg(entryURL), shellQuoteArg(keysURL))
 }
 
 func cmdRegistryList(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {

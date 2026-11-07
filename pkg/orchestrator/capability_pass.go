@@ -652,6 +652,9 @@ func capabilityAdmitterFor(deps Deps, admit dispatch.Admitter, connectionOf func
 		mintDeps.CapabilityServers = servers
 		deadline := capabilityDeadline(at, deps.Config.maxRunRuntime())
 		mintCtx := model.WithMintRunID(ctx, candidate.RunID)
+		if deps.Config.Credentials != nil {
+			mintCtx = model.WithMintCredentials(mintCtx, deps.Config.Credentials)
+		}
 		if connectionOf != nil {
 			mintCtx = model.WithRunConnection(mintCtx, connectionOf(candidate.RunID))
 		}
@@ -719,7 +722,7 @@ func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candida
 		if model.IsRepoAccessGrant(g.Capability) {
 			return nil, &grainRefusalError{Reason: model.CIOnlyRefusal(g.Capability)}
 		}
-		if rule, ok := model.CIGrantRuleFor(g.Capability); ok {
+		if rule, ok := model.CIGrantRuleFor(g.Capability); ok && rule.IsCIOnly() {
 			return nil, &grainRefusalError{Reason: model.CIGrantRuleCIOnlyRefusal(g.Capability, rule)}
 		}
 	}

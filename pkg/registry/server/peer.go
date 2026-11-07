@@ -251,7 +251,12 @@ func (rt *Router) handlePeerTunnelRequest(w http.ResponseWriter, r *http.Request
 	proxy.ServeHTTP(w, r)
 }
 
-func (rt *Router) forwardToPeer(w http.ResponseWriter, r *http.Request, entry *store.EntryRow, isManager bool, peerAddr string, allowRetry bool) {
+// forwardToPeer proxies a request for entry to the peer replica at peerAddr
+// that holds its tunnel. If that peer reports the tunnel gone, a replayable
+// request goes back to handleOfflineOrWait to wait for the reconnect, within
+// graceDeadline when it is already inside a reconnect_grace (see
+// routeConnectedEntry).
+func (rt *Router) forwardToPeer(w http.ResponseWriter, r *http.Request, entry *store.EntryRow, isManager bool, peerAddr string, graceDeadline time.Time) {
 	// Refuse if request already carries X-Registry-Hop (single-hop guard).
 	if strings.TrimSpace(r.Header.Get(HeaderRegistryHop)) != "" {
 		writeJSONError(w, http.StatusLoopDetected, "loop_detected", "single-hop X-Registry-Hop limit exceeded")
@@ -267,7 +272,7 @@ func (rt *Router) forwardToPeer(w http.ResponseWriter, r *http.Request, entry *s
 	targetHost := NormalizePeerAddr(peerAddr)
 	if targetHost == "" {
 		rt.tunnelCache.InvalidatePeerGone(entry.Name)
-		rt.handleOfflineOrWait(w, r, entry, isManager, allowRetry)
+		rt.handleOfflineOrWait(w, r, entry, isManager, graceDeadline)
 		return
 	}
 
@@ -329,9 +334,9 @@ func (rt *Router) forwardToPeer(w http.ResponseWriter, r *http.Request, entry *s
 			var goneErr *tunnelGoneError
 			if errors.As(proxyErr, &goneErr) {
 				rt.tunnelCache.InvalidatePeerGone(entry.Name)
-				canReplay := allowRetry && (r.Body == nil || r.Body == http.NoBody || r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions)
+				canReplay := r.Body == nil || r.Body == http.NoBody || r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions
 				if canReplay {
-					rt.handleOfflineOrWait(rw, r, entry, isManager, true)
+					rt.handleOfflineOrWait(rw, r, entry, isManager, graceDeadline)
 					return
 				}
 				tc, _ := rt.tunnelCache.Get(entry.Name)

@@ -111,7 +111,7 @@ exact same reverse-proxy authentication pipeline:
    (cached per `(caller, entry)` on the serving replica for **30
    seconds**) and public verification keys published at
    `https://<registry-host>/.well-known/jwks.json`:
-   - `iss`: `https://<registry-host>`
+   - `iss`: the fixed string `grain-registry` (not the registry's URL)
    - `aud`: `["https://<name>.<instance-domain>"]` (strictly one
      entry's origin, so a token captured on `alice.<instance-domain>` is
      rejected by `bob.<instance-domain>`)
@@ -123,7 +123,7 @@ exact same reverse-proxy authentication pipeline:
    `registry` `IdentityVerifier`
    ([`docs/access-code.md`](access-code.md#three-modes)) configured with:
    ```text
-   -ui-registry-issuer=https://grain.example.com
+   -ui-registry-issuer=grain-registry
    -ui-registry-audience=https://<name>.grain-user.com
    -ui-registry-keys-url=https://grain.example.com/.well-known/jwks.json
    -ui-require-verifier=registry
@@ -378,7 +378,8 @@ grain daemon \
   -registry-url https://grain.example.com \
   -registry-entry my-workstation \
   -registry-connect \
-  -ui-registry-issuer https://grain.example.com \
+  -registry-token-file /etc/grain/registry.token \
+  -ui-registry-issuer grain-registry \
   -ui-registry-audience https://my-workstation.grain-user.com \
   -ui-registry-keys-url https://grain.example.com/.well-known/jwks.json \
   -ui-require-verifier=registry
@@ -992,7 +993,7 @@ auth:
     - serviceAccount:lifecycle-router@example-prod.iam.gserviceaccount.com
 
 groups:
-  provider: gcp
+  provider: cloud-identity   # or "static" with static_members
   cache_ttl: 5m
 
 signing:

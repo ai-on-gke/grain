@@ -28,8 +28,10 @@
 //     selects a named git credential under secrets/github for a task
 //     (formerly github-credential:<name>).
 //   - https://grain.dev/capabilities/github: GitHub operations answered by
-//     grain itself with the run's team git credential (#read-issues,
-//     formerly read-issues).
+//     grain itself: reading issues and comments with the run's team git
+//     credential (#read-issues, formerly read-issues), and provisioning a
+//     private single-use sandbox repository via the deployment's GitHub App
+//     (#sandbox-repo, formerly github-sandbox).
 package grainserver
 
 import (
@@ -43,6 +45,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability"
+	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
@@ -141,6 +144,13 @@ const (
 
 	// LegacyReadIssues is the retired in-process capability name for ReadIssuesGrant.
 	LegacyReadIssues = "read-issues"
+
+	// SandboxRepoMethod provisions a private, single-use GitHub sandbox
+	// repository for a run via this deployment's GitHub App (formerly github-sandbox).
+	SandboxRepoMethod   = model.GitHubSandboxRepoMethod
+	SandboxRepoRef      = model.GitHubSandboxRepoRef
+	SandboxRepoGrant    = model.GitHubSandboxRepoGrant
+	LegacyGitHubSandbox = model.LegacyGitHubSandboxCapability
 
 	// RepoCredentialMethod selects a named git credential under secrets/github
 	// for a task's git proxy, PR opener, and git identity (formerly github-credential:<name>).
@@ -495,7 +505,11 @@ func buildGitHubServer() *protocol.Server {
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: building github#%s: %v", ReadIssuesMethod, err))
 	}
-	cs, err := protocol.NewCapabilityServer("github", readIssues)
+	sandboxRepo, err := protocol.NewMethod(githubsandbox.MethodSpec())
+	if err != nil {
+		panic(fmt.Sprintf("grainserver: building github#%s: %v", SandboxRepoMethod, err))
+	}
+	cs, err := protocol.NewCapabilityServer("github", readIssues, sandboxRepo)
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: building github capability server: %v", err))
 	}
@@ -717,6 +731,13 @@ func IsReadIssuesGrant(grant string) bool { return model.IsGitHubReadIssuesGrant
 
 // HasReadIssues reports whether any grant in grants opens github#read-issues.
 func HasReadIssues(grants []string) bool { return model.HasGitHubReadIssues(grants) }
+
+// IsSandboxRepoGrant reports whether grant names github#sandbox-repo (recorded
+// or bare) or the retired bare github-sandbox alias.
+func IsSandboxRepoGrant(grant string) bool { return model.IsGitHubSandboxRepoGrant(grant) }
+
+// HasSandboxRepo reports whether any grant in grants opens github#sandbox-repo.
+func HasSandboxRepo(grants []string) bool { return model.HasGitHubSandboxRepo(grants) }
 
 // CheckSourceReadable reports whether this process's own account can
 // actually read srcDir, grain's own source checkout grain#source serves

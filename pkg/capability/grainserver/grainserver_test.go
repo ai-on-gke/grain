@@ -310,8 +310,19 @@ func TestGitHubServerNormalizesAndMintsReadIssues(t *testing.T) {
 	pass.Release(context.Background())
 
 	st := grainserver.GitHubStatus()
-	if want := []string{grainserver.ReadIssuesMethod}; st.ID != grainserver.GitHubID || !slices.Equal(st.Methods, want) {
+	if want := []string{grainserver.ReadIssuesMethod, grainserver.SandboxRepoMethod}; st.ID != grainserver.GitHubID || !slices.Equal(st.Methods, want) {
 		t.Fatalf("GitHubStatus() = %+v, want %s with %v", st, grainserver.GitHubID, want)
+	}
+	sandboxNames, err := model.NormalizeCapabilityNames([]string{grainserver.SandboxRepoRef, grainserver.SandboxRepoGrant, model.CanonicalLegacyGrant(grainserver.LegacyGitHubSandbox)}, lookup)
+	if err != nil || !slices.Equal(sandboxNames, []string{grainserver.SandboxRepoGrant}) {
+		t.Fatalf("NormalizeCapabilityNames(sandbox-repo) = %v, %v; want [%s]", sandboxNames, err, grainserver.SandboxRepoGrant)
+	}
+	if !grainserver.IsSandboxRepoGrant(grainserver.SandboxRepoGrant) ||
+		!grainserver.IsSandboxRepoGrant(grainserver.SandboxRepoRef) ||
+		!grainserver.IsSandboxRepoGrant(grainserver.LegacyGitHubSandbox) ||
+		!grainserver.HasSandboxRepo([]string{grainserver.SandboxRepoGrant}) ||
+		!grainserver.HasSandboxRepo([]string{grainserver.LegacyGitHubSandbox}) {
+		t.Fatal("IsSandboxRepoGrant/HasSandboxRepo missed canonical grant, bare ref, or legacy alias")
 	}
 }
 
