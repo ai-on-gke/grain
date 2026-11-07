@@ -102,7 +102,9 @@ func TestSchema122MigratesPriorityDispatchAndDurableToAdmission(t *testing.T) {
 			Defaults: model.CatalogueDefaults{
 				Task: []string{"read-issues", model.PriorityDispatchCapability},
 				Repos: map[string]model.CatalogueRepoDefaults{
-					"acme/widgets": {Task: []string{"self-debug", model.DurableCapability}},
+					"acme/widgets":      {Task: []string{"self-debug", model.DurableCapability}},
+					"Acme/Unconfigured": {Task: []string{model.PriorityDispatchCapability}},
+					"acme/unconfigured": {Task: []string{model.DurableCapability}},
 				},
 			},
 		},
@@ -224,6 +226,18 @@ func TestSchema122MigratesPriorityDispatchAndDurableToAdmission(t *testing.T) {
 	}
 	if !slices.Equal(afterRepo.CICapabilities, []string{"github-sandbox"}) {
 		t.Errorf("RepoConfig.CICapabilities = %v, want [github-sandbox]", afterRepo.CICapabilities)
+	}
+
+	unconfigured := model.RepoRef{Owner: "acme", Name: "unconfigured"}
+	afterUnconfigured, err := store.GetRepoConfig(ctx, unconfigured)
+	if err != nil || afterUnconfigured == nil {
+		t.Fatalf("GetRepoConfig(acme/unconfigured): %v, %v", afterUnconfigured, err)
+	}
+	if afterUnconfigured.DefaultAdmission != model.AdmissionDurable {
+		t.Errorf("unconfigured RepoConfig.DefaultAdmission = %q, want durable", afterUnconfigured.DefaultAdmission)
+	}
+	if len(afterUnconfigured.DefaultCapabilities) != 0 {
+		t.Errorf("unconfigured RepoConfig.DefaultCapabilities = %v, want empty", afterUnconfigured.DefaultCapabilities)
 	}
 }
 

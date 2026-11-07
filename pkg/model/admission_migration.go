@@ -328,20 +328,72 @@ func MigrateAdmissionFromGrants(ctx context.Context, tx *sql.Tx, warn bool) erro
 			remainingKeys = append(remainingKeys, k)
 		}
 	}
-	sort.Strings(remainingKeys)
-	for _, k := range remainingKeys {
-		parsed, err := ParseRepo(k)
+	if len(remainingKeys) > 0 {
+		targetRepoNames, err := targetReposIn(ctx, tx)
 		if err != nil {
-			continue
+			return fmt.Errorf("admission migration: reading target_repos: %w", err)
 		}
-		adm := repoPolicyAdmissions[k]
-		if adm == "" {
-			continue
+		var targetRefs []RepoRef
+		for _, tr := range targetRepoNames {
+			if ref, err := ParseRepo(tr); err == nil {
+				targetRefs = append(targetRefs, ref)
+			}
 		}
-		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO `repo_config` (`owner`, `name`, `default_admission`) VALUES (?, ?, ?)",
-			parsed.StoredOwner(), parsed.Name, string(adm)); err != nil {
-			return fmt.Errorf("admission migration: inserting repo_config %s: %w", parsed, err)
+		canonicalRepo := func(r RepoRef) (RepoRef, bool) {
+			for _, tr := range targetRefs {
+				if tr.Same(r) {
+					return tr, true
+				}
+			}
+			return r, false
+		}
+
+		sort.Strings(remainingKeys)
+		type pendingRepoAdmission struct {
+			repo      RepoRef
+			canonical bool
+			adm       Admission
+		}
+		var pendingRepos []pendingRepoAdmission
+		for _, k := range remainingKeys {
+			parsed, err := ParseRepo(k)
+			if err != nil {
+				continue
+			}
+			adm := repoPolicyAdmissions[k]
+			if adm == "" {
+				continue
+			}
+			resolved, isCanonical := canonicalRepo(parsed)
+			merged := false
+			for i := range pendingRepos {
+				if pendingRepos[i].repo.Same(resolved) {
+					pendingRepos[i].adm = MaxAdmission(pendingRepos[i].adm, adm)
+					if !pendingRepos[i].canonical {
+						s := resolved.String()
+						if isCanonical || s == strings.ToLower(s) {
+							pendingRepos[i].repo = resolved
+							pendingRepos[i].canonical = isCanonical
+						}
+					}
+					merged = true
+					break
+				}
+			}
+			if !merged {
+				pendingRepos = append(pendingRepos, pendingRepoAdmission{
+					repo:      resolved,
+					canonical: isCanonical,
+					adm:       adm,
+				})
+			}
+		}
+		for _, pr := range pendingRepos {
+			if _, err := tx.ExecContext(ctx,
+				"INSERT INTO `repo_config` (`owner`, `name`, `default_capabilities`, `default_admission`) VALUES (?, ?, '', ?)",
+				pr.repo.StoredOwner(), pr.repo.Name, string(pr.adm)); err != nil {
+				return fmt.Errorf("admission migration: inserting repo_config %s: %w", pr.repo, err)
+			}
 		}
 	}
 
