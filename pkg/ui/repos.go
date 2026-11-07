@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability"
 	"github.com/ai-on-gke/grain/pkg/forge"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -1672,6 +1673,29 @@ func (c *Client) ciCapabilityIDs() []string {
 			}
 			ids = append(ids, spec.Name)
 		}
+	}
+	// A capability-server method declaring a CI grant rule with no
+	// provider left in the catalog (github#sandbox-repo, retired from
+	// github-sandbox by schema migration 120) is offered as its own grant:
+	// the repository's list is what grants it to a CI job, so dropping it
+	// here would leave no picker that can.
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		seen[id] = true
+	}
+	for _, m := range capability.Methods() {
+		if m.CI == nil || !m.CI.RepoGranted {
+			continue
+		}
+		grant := m.Grant()
+		if seen[grant] {
+			continue
+		}
+		if _, offered := c.capabilityByID(grant); !offered && !m.CI.IsCIOnly() {
+			continue
+		}
+		seen[grant] = true
+		ids = append(ids, grant)
 	}
 	return ids
 }
