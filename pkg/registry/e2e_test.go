@@ -1990,7 +1990,7 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 		pubLB.SetTargetURL(repB.pubSrv.URL)
 
 		var (
-			drainWG   sync.WaitGroup
+			drainWG     sync.WaitGroup
 			stopTraffic atomic.Bool
 			totalReqs   atomic.Int64
 			count503s   atomic.Int64
@@ -2869,5 +2869,3 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 		}
 	})
 }
-
-
