@@ -74,6 +74,9 @@ import (
 // cannot find later.
 const DefaultBranch = "main"
 
+// SSHKeyFileEnv is the environment variable fallback for Config.SSHKeyFile.
+const SSHKeyFileEnv = "GRAIN_STATE_REPO_SSH_KEY"
+
 // Config says where the state repository lives and, optionally, which
 // remote it is a clone of.
 type Config struct {
@@ -101,6 +104,10 @@ type Config struct {
 	// a token that expires (a GitHub App installation token lasts an
 	// hour) is re-read rather than cached until it fails.
 	Token func(ctx context.Context) (string, error)
+	// SSHKeyFile is an optional path to an SSH private key (or
+	// $GRAIN_STATE_REPO_SSH_KEY when empty) used when talking to an SSH
+	// Remote.
+	SSHKeyFile string
 	// CheckImage is the container image the CI workflow grain installs
 	// runs `grain state check` from; DefaultCheckImage when empty. The
 	// check refuses a dump stamped with any other schema, so what belongs
@@ -568,6 +575,12 @@ func ValidateBranch(branch string) error {
 		return fmt.Errorf("staterepo: invalid branch name %q", branch)
 	}
 	return nil
+}
+
+// SetSSHKeyFile updates the SSH private key path used for git operations
+// against an SSH remote.
+func (r *Repo) SetSSHKeyFile(path string) {
+	r.cfg.SSHKeyFile = strings.TrimSpace(path)
 }
 
 // ConfigureMirror updates an already-opened repository's remote URL, tracked
@@ -1222,6 +1235,11 @@ func (r *Repo) run(ctx context.Context, extraEnv []string, args ...string) (stri
 		cmd.Dir = r.cfg.Dir
 	}
 	cmd.Env = append(os.Environ(), extraEnv...)
+	if keyFile := strings.TrimSpace(r.cfg.SSHKeyFile); keyFile != "" {
+		cmd.Env = append(cmd.Env, "GIT_SSH_COMMAND=ssh -i "+shellQuote(keyFile)+" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new")
+	} else if envKey := strings.TrimSpace(os.Getenv(SSHKeyFileEnv)); envKey != "" {
+		cmd.Env = append(cmd.Env, "GIT_SSH_COMMAND=ssh -i "+shellQuote(envKey)+" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new")
+	}
 	if args[0] == "clone" || args[0] == "init" {
 		// The files ref backend whatever git this is and whatever its
 		// config defaults to: a reftable repository made by a newer git

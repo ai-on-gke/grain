@@ -381,6 +381,7 @@ func TestEveryVariableTheInstallerReadsHasADefault(t *testing.T) {
 	// out of the unit's own EnvironmentFile, and the other by the `sh`
 	// inside the deployment image that image_run hands a script to.
 	elsewhere := map[string]bool{
+		"GRAIN_EXTRA_DAEMON_ARGS":     true,
 		"GRAIN_EXTRA_DOCKER_RUN_ARGS": true,
 		"GRAIN_TARGET_URL":            true,
 	}
