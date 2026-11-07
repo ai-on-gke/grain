@@ -3043,7 +3043,28 @@ func writeClientError(w http.ResponseWriter, err error) {
 	}
 	var fe *ForbiddenError
 	if errors.As(err, &fe) {
+		if len(fe.body) > 0 {
+			out := make(map[string]any, len(fe.body)+2)
+			for k, v := range fe.body {
+				out[k] = v
+			}
+			out["error"] = fe.Error()
+			if fe.code != "" {
+				out["code"] = fe.code
+			}
+			writeJSON(w, http.StatusForbidden, out)
+			return
+		}
+		if fe.code != "" {
+			writeJSON(w, http.StatusForbidden, apierror.Response{Error: fe.Error(), Code: fe.code})
+			return
+		}
 		writeError(w, http.StatusForbidden, err)
+		return
+	}
+	var ue *UnprocessableError
+	if errors.As(err, &ue) {
+		writeError(w, http.StatusUnprocessableEntity, err)
 		return
 	}
 	var ecre *externalConfigRepoError

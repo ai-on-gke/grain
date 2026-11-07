@@ -42,6 +42,7 @@ func wirePrincipal(p model.Principal) WirePrincipal {
 type WhoamiResponse struct {
 	Actor      WirePrincipal  `json:"actor"`
 	OnBehalfOf *WirePrincipal `json:"onBehalfOf"`
+	Via        string         `json:"via,omitempty"`
 	// Source duplicates Actor.Source for the UI's convenience.
 	Source string `json:"source"`
 	// Verified is model.Principal.Verified for Actor (spec §1.1.4).
@@ -56,8 +57,12 @@ type WhoamiResponse struct {
 // whoami is who the request in r acts as, as GET /api/whoami reports it.
 func whoami(r *http.Request) WhoamiResponse {
 	who := RequestActor(r.Context())
+	actor := wirePrincipal(who.Actor)
+	if who.OnBehalfOf != nil {
+		actor.Label = PrincipalLabel(who.Actor, who.OnBehalfOf)
+	}
 	resp := WhoamiResponse{
-		Actor:    wirePrincipal(who.Actor),
+		Actor:    actor,
 		Source:   string(who.Actor.Source),
 		Verified: who.Actor.Verified(),
 		Allowed:  true,
@@ -65,6 +70,9 @@ func whoami(r *http.Request) WhoamiResponse {
 	if b := who.OnBehalfOf; b != nil {
 		w := wirePrincipal(*b)
 		resp.OnBehalfOf = &w
+	}
+	if del := delegatedIdentityFromContext(r.Context()); del != nil {
+		resp.Via = del.ViaLabel
 	}
 	return resp
 }
@@ -82,7 +90,7 @@ func (c Comment) Who() string {
 	if who == "" {
 		who, behalf = c.Author, c.OnBehalfOf
 	}
-	if behalf != "" && !strings.HasSuffix(who, " for "+behalf) {
+	if behalf != "" && !strings.HasSuffix(who, " for "+behalf) && !strings.HasPrefix(who, behalf+" (via ") {
 		who += " on behalf of " + behalf
 	}
 	return who

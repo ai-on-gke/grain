@@ -170,6 +170,9 @@ func hostdState(h model.Hostd, conn *hostd.RemoteStatus) string {
 
 // CreateHostd adds a remote hostd and mints its first token.
 func (c *Client) CreateHostd(ctx context.Context, req CreateHostdRequest) (IssuedHostdToken, error) {
+	if isDelegatedRequest(ctx) {
+		return IssuedHostdToken{}, forbiddenCodeErrorf("requires_person", "enrolling a hostd requires a person acting directly")
+	}
 	name := strings.TrimSpace(req.Name)
 	if err := model.ValidateHostdName(name); err != nil {
 		return IssuedHostdToken{}, validationErrorf("%v", err)

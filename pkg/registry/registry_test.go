@@ -828,6 +828,234 @@ func isAPIStatus(err error, code int) bool {
 	return false
 }
 
+func TestConsentDelegationPolicyAuthorizeOnBehalfOf(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+
+	pol, err := NewConsentDelegationPolicy(AuthConfig{
+		AllowedDomains:    []string{"example.com"},
+		ServicePrincipals: []string{"serviceAccount:scanner@proj.iam.gserviceaccount.com"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewConsentDelegationPolicy: %v", err)
+	}
+	pol.SetNow(func() time.Time { return now })
+
+	assertRefusedReason := func(t *testing.T, err error, wantReason string) {
+		t.Helper()
+		if !errors.Is(err, ErrDelegationDenied) {
+			t.Fatalf("expected ErrDelegationDenied, got %v", err)
+		}
+		var refErr *DelegationRefusedError
+		if !errors.As(err, &refErr) {
+			t.Fatalf("expected *DelegationRefusedError, got %T (%v)", err, err)
+		}
+		if refErr.Reason != wantReason {
+			t.Fatalf("reason = %q, want %q (err=%v)", refErr.Reason, wantReason, err)
+		}
+	}
+
+	// 1. Unregistered app -> app_not_registered.
+	_, err = pol.AuthorizeOnBehalfOf(ctx, "planning-app@proj.iam.gserviceaccount.com", "alice@example.com", "alice-vm")
+	assertRefusedReason(t, err, "app_not_registered")
+
+	// Register planning-app.
+	pol.RegisterApp(store.DelegatingAppRow{
+		Name:        "planning-app",
+		Principal:   "serviceAccount:planning-app@proj.iam.gserviceaccount.com",
+		DisplayName: "Planning App",
+		Owner:       "alice@example.com",
+		MaxAccess:   "write",
+	})
+	if ok, err := pol.IsServicePrincipalReader(ctx, "planning-app@proj.iam.gserviceaccount.com"); err != nil || !ok {
+		t.Fatalf("expected registered delegating app to be admitted as catalog reader, got ok=%v err=%v", ok, err)
+	}
+
+	// 2. Disabled app -> app_disabled.
+	disabledAt := now
+	pol.RegisterApp(store.DelegatingAppRow{
+		Name:        "planning-app",
+		Principal:   "serviceAccount:planning-app@proj.iam.gserviceaccount.com",
+		DisplayName: "Planning App",
+		Owner:       "alice@example.com",
+		MaxAccess:   "write",
+		DisabledAt:  &disabledAt,
+	})
+	_, err = pol.AuthorizeOnBehalfOf(ctx, "planning-app@proj.iam.gserviceaccount.com", "alice@example.com", "alice-vm")
+	assertRefusedReason(t, err, "app_disabled")
+	if ok, _ := pol.IsServicePrincipalReader(ctx, "planning-app@proj.iam.gserviceaccount.com"); ok {
+		t.Fatalf("expected disabled delegating app to be refused as catalog reader")
+	}
+
+	// Re-enable planning-app.
+	pol.RegisterApp(store.DelegatingAppRow{
+		Name:        "planning-app",
+		Principal:   "serviceAccount:planning-app@proj.iam.gserviceaccount.com",
+		DisplayName: "Planning App",
+		Owner:       "alice@example.com",
+		MaxAccess:   "write",
+	})
+
+	// 3. Target not in allowed domain -> person_not_admitted.
+	_, err = pol.AuthorizeOnBehalfOf(ctx, "planning-app@proj.iam.gserviceaccount.com", "outsider@other.org", "alice-vm")
+	assertRefusedReason(t, err, "person_not_admitted")
+
+	// 4. No grant -> no_grant.
+	_, err = pol.AuthorizeOnBehalfOf(ctx, "planning-app@proj.iam.gserviceaccount.com", "alice@example.com", "alice-vm")
+	assertRefusedReason(t, err, "no_grant")
+
+	// 5. Expired grant -> grant_expired.
+	pol.UpsertGrant(store.DelegationGrantRow{
+		ID:        "dlg_expired",
+		App:       "planning-app",
+		Person:    "alice@example.com",
+		Entries:   []string{"*"},
+		Access:    "write",
+		ExpiresAt: now.Add(-time.Minute),
+	})
+	_, err = pol.AuthorizeOnBehalfOf(ctx, "planning-app@proj.iam.gserviceaccount.com", "alice@example.com", "alice-vm")
+	assertRefusedReason(t, err, "grant_expired")
+
+	// 6. Entry out of reach -> entry_out_of_reach.
+	pol.UpsertGrant(store.DelegationGrantRow{
+		ID:        "dlg_scoped",
+		App:       "planning-app",
+		Person:    "alice@example.com",
+		Entries:   []string{"other-vm"},
+		Access:    "write",
+		ExpiresAt: now.Add(time.Hour),
+	})
+	_, err = pol.AuthorizeOnBehalfOf(ctx, "planning-app@proj.iam.gserviceaccount.com", "alice@example.com", "alice-vm")
+	assertRefusedReason(t, err, "entry_out_of_reach")
+
+	// 7. Live grant covering alice-vm -> returns DelegationActor with App, Grant, Access.
+	pol.UpsertGrant(store.DelegationGrantRow{
+		ID:        "dlg_live",
+		App:       "planning-app",
+		Person:    "alice@example.com",
+		Entries:   []string{"alice-vm"},
+		Access:    "write",
+		ExpiresAt: now.Add(time.Hour),
+	})
+	act, err := pol.AuthorizeOnBehalfOf(ctx, "planning-app@proj.iam.gserviceaccount.com", "alice@example.com", "alice-vm")
+	if err != nil {
+		t.Fatalf("AuthorizeOnBehalfOf valid: %v", err)
+	}
+	if act.Sub != "planning-app@proj.iam.gserviceaccount.com" || act.Kind != "service" || act.App != "planning-app" || act.Grant != "dlg_live" || act.Access != "write" {
+		t.Fatalf("unexpected DelegationActor: %+v", act)
+	}
+}
+
+func TestCachingSignerActClaimAndInvalidation(t *testing.T) {
+	ctx := context.Background()
+	local, err := NewEphemeralLocalSigner("k1")
+	if err != nil {
+		t.Fatalf("NewEphemeralLocalSigner: %v", err)
+	}
+	caching := NewCachingSigner(local, 30*time.Second)
+
+	plainTok, err := caching.SignAssertion(ctx, RegistryClaims{
+		Audience: "https://alice-vm.instances.example.com",
+		Subject:  "alice@example.com",
+		Email:    "alice@example.com",
+		Kind:     "human",
+	})
+	if err != nil {
+		t.Fatalf("SignAssertion plain: %v", err)
+	}
+
+	delTok1, err := caching.SignAssertion(ctx, RegistryClaims{
+		Audience: "https://alice-vm.instances.example.com",
+		Subject:  "alice@example.com",
+		Email:    "alice@example.com",
+		Kind:     "human",
+		Actor: &DelegationActor{
+			Sub:    "planning-app@proj.iam.gserviceaccount.com",
+			Kind:   "service",
+			App:    "planning-app",
+			Grant:  "dlg_1",
+			Access: "write",
+		},
+	})
+	if err != nil {
+		t.Fatalf("SignAssertion delTok1: %v", err)
+	}
+	if delTok1 == plainTok {
+		t.Fatalf("expected delegated assertion not to alias plain assertion in cache")
+	}
+
+	// Repeat with same grant -> cache hit.
+	delTok1Hit, err := caching.SignAssertion(ctx, RegistryClaims{
+		Audience: "https://alice-vm.instances.example.com",
+		Subject:  "alice@example.com",
+		Email:    "alice@example.com",
+		Kind:     "human",
+		Actor: &DelegationActor{
+			Sub:    "planning-app@proj.iam.gserviceaccount.com",
+			Kind:   "service",
+			App:    "planning-app",
+			Grant:  "dlg_1",
+			Access: "write",
+		},
+	})
+	if err != nil || delTok1Hit != delTok1 {
+		t.Fatalf("expected cache hit for same (sub, act.sub, act.grant, aud)")
+	}
+
+	// Different grant -> different token.
+	delTok2, err := caching.SignAssertion(ctx, RegistryClaims{
+		Audience: "https://alice-vm.instances.example.com",
+		Subject:  "alice@example.com",
+		Email:    "alice@example.com",
+		Kind:     "human",
+		Actor: &DelegationActor{
+			Sub:    "planning-app@proj.iam.gserviceaccount.com",
+			Kind:   "service",
+			App:    "planning-app",
+			Grant:  "dlg_2",
+			Access: "read",
+		},
+	})
+	if err != nil || delTok2 == delTok1 {
+		t.Fatalf("expected distinct cached assertion for dlg_2")
+	}
+
+	// InvalidateGrant("dlg_1") evicts dlg_1 while preserving dlg_2.
+	caching.InvalidateGrant("dlg_1")
+	delTok1After, err := caching.SignAssertion(ctx, RegistryClaims{
+		Audience: "https://alice-vm.instances.example.com",
+		Subject:  "alice@example.com",
+		Email:    "alice@example.com",
+		Kind:     "human",
+		Actor: &DelegationActor{
+			Sub:    "planning-app@proj.iam.gserviceaccount.com",
+			Kind:   "service",
+			App:    "planning-app",
+			Grant:  "dlg_1",
+			Access: "write",
+		},
+	})
+	if err != nil || delTok1After == delTok1 {
+		t.Fatalf("expected fresh token after InvalidateGrant(dlg_1)")
+	}
+	delTok2Hit, err := caching.SignAssertion(ctx, RegistryClaims{
+		Audience: "https://alice-vm.instances.example.com",
+		Subject:  "alice@example.com",
+		Email:    "alice@example.com",
+		Kind:     "human",
+		Actor: &DelegationActor{
+			Sub:    "planning-app@proj.iam.gserviceaccount.com",
+			Kind:   "service",
+			App:    "planning-app",
+			Grant:  "dlg_2",
+			Access: "read",
+		},
+	})
+	if err != nil || delTok2Hit != delTok2 {
+		t.Fatalf("expected dlg_2 to remain cached after InvalidateGrant(dlg_1)")
+	}
+}
+
 func TestStep12CatalogCRUDGroupAuthHeartbeatsDirectoryAndRouteEndToEnd(t *testing.T) {
 	pgURL := startEphemeralPostgresForRegistryTest(t)
 	ctx := context.Background()
