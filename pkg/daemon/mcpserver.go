@@ -1984,8 +1984,9 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 	var grants GrantNames
 	fs.Var(&grants, "grant",
 		"name of a capability grant this run's task holds, whose tools this server should serve; "+
-			"repeat the flag for each. \"self-debug\" serves the four task readers and read_grain_metrics "+
-			"over -server, along with the api:self-debug preset tools (api:tasks:read and api:deployment:read); "+
+			"repeat the flag for each. \"api:self-debug\" (api:tasks:read and api:deployment:read; the retired "+
+			"\"self-debug\" reads as it) serves the four task readers, read_pipeline_changes and read_grain_metrics "+
+			"over -server; "+
 			"\"grain-log\" serves read_grain_log over this host's journal, "+
 			"redacted with -grain-secrets-dir. Passed "+
 			"by a Framework from the grants on the run's own task (agent.RunConfig.Grants, "+
