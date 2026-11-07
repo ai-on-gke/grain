@@ -284,6 +284,12 @@ func Run(opts Options) error {
 		RequireVerifier:   opts.RequireVerifier,
 		RequireIAP:        opts.RequireIAP,
 		AllowedPrincipals: opts.AllowedPrincipals,
+		// The co-located host reports agent CLI logins of its own, as a
+		// real one's hello does (hostd.Hello.Logins), so the host
+		// pickers in Settings show what an ambient connection spends.
+		LocalHostdLogins: func(context.Context) ([]string, bool) {
+			return []string{hostd.LoginAntigravity, hostd.LoginClaude}, true
+		},
 	}
 	if opts.CloudIdentityEndpoint != "" {
 		cfg.GroupChecker = ui.NewCloudIdentityGroupChecker(ui.WithCloudIdentityEndpoint(opts.CloudIdentityEndpoint))

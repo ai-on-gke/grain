@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { MenuItem, Stack, TextField } from "@mui/material";
+import { Alert, MenuItem, Stack, TextField } from "@mui/material";
 import { useEffect, useState } from "react";
 import api from "../../api.js";
 
@@ -20,8 +20,27 @@ import api from "../../api.js";
 // whose selector is typed beside it.
 const LABELS = "\u0000labels";
 
+// LOGIN_CLI is the CLI login (hostd.Hello.Logins) a connection of each
+// framework spends when its credentials are ambient.
+export const LOGIN_CLI = {
+  antigravity: "antigravity",
+  claude: "claude",
+  codex: "codex",
+};
+
+// hostdLogins is what a registry row says about the agent CLI logins on
+// its machine (GET /api/hostds' logins, loginsKnown): "logins: codex,
+// claude", "no CLI logins", or "" for a host that has not said -- one
+// offline, or too old to report them.
+export function hostdLogins(h) {
+  if (!h.loginsKnown) return "";
+  const logins = h.logins || [];
+  return logins.length ? `logins: ${logins.join(", ")}` : "no CLI logins";
+}
+
 // hostdOption is how one registry row reads in the picker: its name,
-// whether it is connected, its owner and the host user it runs as.
+// whether it is connected, its owner, the host user it runs as, its
+// machine and the agent CLI logins there.
 export function hostdOption(h) {
   const parts = [h.name];
   const c = h.connection;
@@ -31,7 +50,19 @@ export function hostdOption(h) {
   if (h.owner) parts.push(`owner ${h.owner}`);
   if (c?.principal) parts.push(`runs as ${c.principal}`);
   if (c?.host) parts.push(`on ${c.host}`);
+  const logins = hostdLogins(h);
+  if (logins) parts.push(logins);
   return parts.join(" · ");
+}
+
+// missingLogin is, for a connection with ambient credentials placed on
+// h, the CLI login it would spend that h says it does not have; "" when
+// h has it, has not said, or the connection is not ambient.
+export function missingLogin(backend, h) {
+  if (!h || !h.loginsKnown || backend.authMode !== "ambient") return "";
+  const cli = LOGIN_CLI[backend.framework];
+  if (!cli || (h.logins || []).includes(cli)) return "";
+  return cli;
 }
 
 // ConnectionHostdField is a connection's placement (model.AgentBackend.
@@ -73,6 +104,8 @@ export default function ConnectionHostdField({
   const selector = backend.hostd || "";
   const listed = (hostds || []).filter((h) => !h.revoked_at);
   const named = listed.some((h) => h.name === selector);
+  const picked = listed.find((h) => h.name === selector);
+  const missing = missingLogin(backend, picked);
   const [labelled, setLabelled] = useState(
     () => selector !== "" && selector.includes("="),
   );
@@ -109,7 +142,9 @@ export default function ConnectionHostdField({
       >
         <MenuItem value="">{emptyLabel}</MenuItem>
         {listed.map((h) => (
-          <MenuItem key={h.name} value={h.name}>
+          // Wrapped rather than clipped: a row naming its owner, machine
+          // and logins runs past a phone's width.
+          <MenuItem key={h.name} value={h.name} sx={{ whiteSpace: "normal" }}>
             host {hostdOption(h)}
           </MenuItem>
         ))}
@@ -118,6 +153,14 @@ export default function ConnectionHostdField({
         )}
         <MenuItem value={LABELS}>A host selected by label…</MenuItem>
       </TextField>
+      {missing && (
+        <Alert severity="warning" data-testid={`${testId}-missing-login`}>
+          Host {selector} reports no {missing} login, and this connection spends
+          the CLI&apos;s own login there: run{" "}
+          <code>{missing === "antigravity" ? "agy" : missing}</code> and sign in
+          on that machine as the host&apos;s user, or pick another host.
+        </Alert>
+      )}
       {labelled && (
         <TextField
           size={noFallback ? "small" : undefined}
