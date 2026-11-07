@@ -25,10 +25,6 @@ Keep SQLite when:
 - **The deployment already runs on SQLite and works.** Nothing breaks on
   SQLite. Move to PostgreSQL when it suits you, not because a newer
   installer came out.
-- **You rely on `grain backup`.** It snapshots SQLite with `VACUUM INTO`
-  and refuses a PostgreSQL store. Run by hand, it also refuses while the
-  daemon is running. The daemon's own scheduled backups run while it is up. On PostgreSQL, use `pg_dump` (see
-  [Backups](#backups)).
 
 To get SQLite on a new install, pass `--db-driver sqlite` (or set
 `GRAIN_DB_DRIVER=sqlite`).
@@ -87,8 +83,8 @@ unit changed, for example a new `GRAIN_POSTGRES_IMAGE` or
 `GRAIN_POSTGRES_PORT`. Restarting `grain-postgres.service` restarts the
 daemon with it, because of the `Requires=` dependency.
 
-`grain health`, `grain state …` and the rest of the CLI work the same on
-either store. `setup.sh`'s schema-upgrade step (`grain state
+`grain backup`, `grain health`, `grain state …` and the rest of the CLI work
+the same on either store. `setup.sh`'s schema-upgrade step (`grain state
 prepare-upgrade`) runs against the local server when that is the store.
 
 ## Upgrading the PostgreSQL image
@@ -144,8 +140,19 @@ server, the cluster in `$GRAIN_DATA_DIR/postgres` is part of it. A live
 server's files copied while it is writing are not a consistent copy, so
 use one of these:
 
-- **`pg_dump`, online.** This is the simplest consistent copy. Restore it
-  with `pg_restore`.
+- **`grain backup` and `-backup-interval` (Google Drive or GCS).** Snapshots a
+  PostgreSQL store online with `pg_dump -Fc` into `database/grain.dump`
+  alongside a restorable `config/config-repo.bundle`, and uploads the ZIP to
+  Google Drive or GCS (see the README's [Backups](../README.md#backups)).
+  Run it by hand with `grain-daemon.service` stopped (`sudo grain backup
+  -data-dir /var/lib/grain/data …`), or schedule `-backup-interval` on the
+  running daemon. The archive excludes `$GRAIN_DATA_DIR/secrets` and database
+  passwords, so back up `secrets/secrets.key` and `secrets/postgres-password`
+  separately. The `grain` container image carries `postgresql-client-16`; a
+  host-only binary needs a `pg_dump` on `PATH` (or under
+  `/usr/lib/postgresql/*/bin`) whose major version is at least the server's.
+- **`pg_dump` by hand, online.** Writes a standalone custom-format dump to
+  local disk. Restore it with `pg_restore`.
 
   ```bash
   sudo docker exec grain-postgres sh -c 'PGPASSWORD=$(cat /run/grain/postgres-password) exec pg_dump -U grain -d grain -Fc' > grain-$(date -u +%Y%m%dT%H%M%SZ).dump
@@ -166,11 +173,10 @@ use one of these:
 
 To restore a cold copy, stop the daemon, put the data directory back in
 place and re-run `setup.sh`. The installer finds the password and the cluster and keeps
-using them. To restore a dump, run `pg_restore` into the running server
-(`--clean --if-exists`) with the daemon stopped.
-
-`grain backup` (the README's [Backups](../README.md#backups)) supports
-SQLite only.
+using them. To restore a dump (either a standalone `.dump` or
+`database/grain.dump` unpacked from a `grain backup` archive), run
+`pg_restore` into the running server (`--clean --if-exists --no-owner`) with
+`grain-daemon.service` stopped.
 
 ## Moving a store
 
@@ -297,3 +303,14 @@ sudo ./scripts/setup.sh --db-dsn "postgres://grain:secret@db.internal:5432/grain
 
 [cloudsql-postgres.md](cloudsql-postgres.md) covers Cloud SQL and the Cloud
 SQL Auth Proxy.
+
+## Migrating to GKE
+
+`scripts/migrate-local-to-gke.sh` refuses a host whose store is the local
+server. The controller in the cluster can't reach this host's 127.0.0.1,
+and the server's files aren't a consistent copy while it runs. First move
+the store to a server the cluster can reach, as described in
+[Moving a store](#moving-a-store). Then run the script again. The refusal
+prints the commands to run.
+[grain-init-platforms.md](grain-init-platforms.md#migrating-a-local-install-to-gke)
+covers the rest of the migration.

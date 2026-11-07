@@ -150,18 +150,14 @@ async function expectCapabilityDisclosure(page) {
   await expect(
     page.getByRole("heading", { name: "What it may reach" }),
   ).toBeVisible();
-  await expect(
-    page.getByRole("checkbox", { name: /Read issues/ }),
-  ).toBeVisible();
+  await expect(page.getByRole("button", { name: /Add grant/ })).toBeVisible();
   await expect(
     page.getByLabel(/What it may reach on the internet/),
   ).toBeVisible();
   await page
     .getByRole("button", { name: "Hide Director capabilities" })
     .click();
-  await expect(
-    page.getByRole("checkbox", { name: /Read issues/ }),
-  ).toBeHidden();
+  await expect(page.getByRole("button", { name: /Add grant/ })).toBeHidden();
 }
 
 // Sections 1 and 7 of docs/test-plans/2026-09-13.md. This is deliberately
@@ -835,4 +831,86 @@ test("Console session lifecycle controls, backing-task redirects, and session Wo
   expect(recreatedDirectorTask.comments.some((c) => Boolean(c.handover))).toBe(
     false,
   );
+});
+
+test("Saved Director row offers one-click Adopt shipped defaults cleanly on desktop and phone", async ({
+  page,
+}) => {
+  // Seed a pre-G1 saved director row lacking the newly shipped Tier 1 grants.
+  const seedRes = await page.request.put("/api/console-sessions/director", {
+    data: {
+      capabilities: ["api:self-debug", "api:deployment:read"],
+    },
+  });
+  expect(seedRes.ok()).toBeTruthy();
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/session/director");
+  await expect(page).toHaveURL(/\/session\/director$/);
+
+  await page
+    .getByRole("button", { name: "Edit Director capabilities" })
+    .click();
+
+  const fieldset = page.locator("fieldset", {
+    has: page.locator("legend", { hasText: "What it may reach" }),
+  });
+  const banner = page.getByTestId("adopt-shipped-defaults-banner");
+  const adoptBtn = banner.getByRole("button", {
+    name: "Adopt shipped defaults",
+  });
+  await expect(banner).toBeVisible();
+  await expect(adoptBtn).toBeVisible();
+
+  // Verify layout containment at desktop (1440x900) and phone (390x844).
+  for (const viewport of [
+    { width: 1440, height: 900 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await adoptBtn.scrollIntoViewIfNeeded();
+    const fsBox = await fieldset.boundingBox();
+    const bannerBox = await banner.boundingBox();
+    const btnBox = await adoptBtn.boundingBox();
+    expect(fsBox).not.toBeNull();
+    expect(bannerBox).not.toBeNull();
+    expect(btnBox).not.toBeNull();
+    expect(bannerBox.x).toBeGreaterThanOrEqual(fsBox.x - 1);
+    expect(bannerBox.x + bannerBox.width).toBeLessThanOrEqual(
+      fsBox.x + fsBox.width + 2,
+    );
+    expect(btnBox.x).toBeGreaterThanOrEqual(bannerBox.x - 1);
+    expect(btnBox.x + btnBox.width).toBeLessThanOrEqual(
+      bannerBox.x + bannerBox.width + 2,
+    );
+    expect(btnBox.y).toBeGreaterThanOrEqual(bannerBox.y - 1);
+    expect(btnBox.y + btnBox.height).toBeLessThanOrEqual(
+      bannerBox.y + bannerBox.height + 2,
+    );
+  }
+
+  // Click "Adopt shipped defaults" and verify Tier 1 grants are persisted and banner disappears.
+  await adoptBtn.click();
+  await expect(banner).toHaveCount(0);
+
+  const res = await page.request.get("/api/console-sessions");
+  expect(res.ok()).toBeTruthy();
+  const body = await res.json();
+  const director = body.sessions.find((s) => s.id === "director");
+  expect(director).toBeTruthy();
+  expect(director.missingShippedDefaults || []).toEqual([]);
+  for (const grant of [
+    "api:task-admin",
+    "api:capabilities:read",
+    "api:capabilities:detach",
+    "api:settings:read",
+    "api:repos:read",
+    "api:releases:read",
+    "api:schedules:read",
+    "api:templates:read",
+    "api:suites:read",
+    "api:dispatch:read",
+  ]) {
+    expect(director.capabilities).toContain(grant);
+  }
 });

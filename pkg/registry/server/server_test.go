@@ -571,12 +571,14 @@ func TestReverseProxyHeadersCookiesCSRFStreamingAndUpgrades(t *testing.T) {
 		}
 	}
 
-	// C. Verify gma_ bearer token is preserved across proxy sanitization.
+	// C. Verify gma_ bearer token (and X-Grain-Tunnel-Token) is preserved while
+	// Google-managed IAP ya29. access tokens and custom OAuth client ID tokens are stripped.
 	{
 		req := httptest.NewRequest(http.MethodGet, "https://alice-vm.instances.example.com/echo", nil)
 		req.Host = "alice-vm.instances.example.com"
 		req.Header.Set("X-Test-Email", "alice@example.com")
 		req.Header.Set("Authorization", "Bearer gma_live_token_123")
+		req.Header.Set("X-Grain-Tunnel-Token", "gma_live_token_123")
 		rec := httptest.NewRecorder()
 		mainHandler.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
@@ -584,9 +586,76 @@ func TestReverseProxyHeadersCookiesCSRFStreamingAndUpgrades(t *testing.T) {
 		}
 		lastReceivedReq.mu.Lock()
 		gotAuth := lastReceivedReq.Headers.Get("Authorization")
+		gotTun := lastReceivedReq.Headers.Get("X-Grain-Tunnel-Token")
 		lastReceivedReq.mu.Unlock()
 		if gotAuth != "Bearer gma_live_token_123" {
 			t.Fatalf("expected gma_ token preserved, got %q", gotAuth)
+		}
+		if gotTun != "gma_live_token_123" {
+			t.Fatalf("expected gma_ X-Grain-Tunnel-Token preserved, got %q", gotTun)
+		}
+
+		for _, tc := range []struct {
+			name    string
+			authHdr string
+			tunHdr  string
+		}{
+			{
+				name:    "google-managed-iap-ya29",
+				authHdr: "Bearer ya29.a0AfB_byC_live_iap_access_token",
+				tunHdr:  "ya29.a0AfB_byC_live_iap_access_token",
+			},
+			{
+				name:    "bearer-tab-ya29",
+				authHdr: "Bearer\tya29.a0AfB_byC_tab_delimited",
+				tunHdr:  "Bearer\tya29.a0AfB_byC_tab_delimited",
+			},
+			{
+				name:    "custom-iap-oauth-client",
+				authHdr: "Bearer " + makeFakeOIDCToken("123456789-abcdef.apps.googleusercontent.com"),
+				tunHdr:  makeFakeOIDCToken("123456789-abcdef.apps.googleusercontent.com"),
+			},
+			{
+				name:    "cloud-run-direct-iap-wildcard-registry-aud",
+				authHdr: "Bearer " + makeFakeOIDCToken("https://registry.example.com/*"),
+				tunHdr:  makeFakeOIDCToken("https://registry.example.com/*"),
+			},
+			{
+				name:    "adc-entry-host-aud",
+				authHdr: "Bearer " + makeFakeOIDCToken("https://alice-vm.instances.example.com"),
+				tunHdr:  makeFakeOIDCToken("https://alice-vm.instances.example.com"),
+			},
+			{
+				name:    "adc-entry-host-wildcard-aud",
+				authHdr: "Bearer " + makeFakeOIDCToken("https://alice-vm.instances.example.com/*"),
+				tunHdr:  makeFakeOIDCToken("https://alice-vm.instances.example.com/*"),
+			},
+			{
+				name:    "registry-cred-token",
+				authHdr: "Bearer grc_ accidental_entry_token",
+				tunHdr:  "grc_ accidental_entry_token",
+			},
+		} {
+			edgeReq := httptest.NewRequest(http.MethodGet, "https://alice-vm.instances.example.com/echo", nil)
+			edgeReq.Host = "alice-vm.instances.example.com"
+			edgeReq.Header.Set("X-Test-Email", "alice@example.com")
+			edgeReq.Header.Set("Authorization", tc.authHdr)
+			edgeReq.Header.Set("X-Grain-Tunnel-Token", tc.tunHdr)
+			edgeRec := httptest.NewRecorder()
+			mainHandler.ServeHTTP(edgeRec, edgeReq)
+			if edgeRec.Code != http.StatusOK {
+				t.Fatalf("%s: expected 200 OK, got %d", tc.name, edgeRec.Code)
+			}
+			lastReceivedReq.mu.Lock()
+			leakedAuth := lastReceivedReq.Headers.Get("Authorization")
+			leakedTun := lastReceivedReq.Headers.Get("X-Grain-Tunnel-Token")
+			lastReceivedReq.mu.Unlock()
+			if leakedAuth != "" {
+				t.Fatalf("%s: expected Authorization stripped before reaching backend, got %q", tc.name, leakedAuth)
+			}
+			if leakedTun != "" {
+				t.Fatalf("%s: expected X-Grain-Tunnel-Token stripped before reaching backend, got %q", tc.name, leakedTun)
+			}
 		}
 	}
 
@@ -922,7 +991,7 @@ func TestOutboundTunnelConnectPeerForwardingReconnectGraceAndImmediateRevocation
 			InstanceDomain: "instances.example.com",
 			ReplicaID:      id,
 			DatabaseURL:    pgURL,
-			ReconnectGrace: 1500 * time.Millisecond,
+			ReconnectGrace: 2 * time.Second,
 			TunnelOptions: TunnelOptions{
 				MaxConcurrentStreams: 4,
 				OnPeerStreamRejected: func(_ string, _ uint32) {
@@ -1204,6 +1273,177 @@ func TestOutboundTunnelConnectPeerForwardingReconnectGraceAndImmediateRevocation
 	}
 }
 
+// TestReconnectGraceSurvivesAStaleWake pins down the race behind the
+// reconnect_grace flake in
+// TestOutboundTunnelConnectPeerForwardingReconnectGraceAndImmediateRevocation.
+// The tunnel cache is refreshed from PostgreSQL asynchronously, so a refresh
+// that read the old session before its replica released it can re-mark that
+// dead session active while a request is waiting out reconnect_grace, waking
+// it. The woken request forwards to the old replica, which says the tunnel is
+// gone; it must go back to waiting for the real reconnect within the same
+// grace rather than answer 503 entry_offline at once.
+func TestReconnectGraceSurvivesAStaleWake(t *testing.T) {
+	admitter, err := webauth.NewAdmitter(webauth.AdmissionConfig{
+		Verifier:       testIdentityVerifier{},
+		AllowedDomains: []string{"example.com"},
+	})
+	if err != nil {
+		t.Fatalf("NewAdmitter: %v", err)
+	}
+	const grace = 10 * time.Second
+	rt, err := NewRouter(RouterOptions{
+		RegistryHost:   "registry.example.com",
+		InstanceDomain: "instances.example.com",
+		ReplicaID:      "replica-a",
+		ReconnectGrace: grace,
+		Admitter:       admitter,
+		Signer:         newTestAssertionSigner(t),
+	})
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	defer rt.Close()
+
+	// The old replica no longer holds the tunnel: every forward to it is told the tunnel is gone.
+	var goneForwards atomic.Int64
+	oldPeer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		goneForwards.Add(1)
+		w.Header().Set(HeaderTunnelGone, "1")
+		writeJSONError(w, http.StatusServiceUnavailable, "tunnel_gone", "tunnel session is not active on this replica")
+	}))
+	defer oldPeer.Close()
+	// The replica the tunnel reconnects to.
+	newPeer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "reconnected")
+	}))
+	defer newPeer.Close()
+
+	tc := rt.TunnelCache()
+	oldSession := TunnelCacheEntry{Name: "alice-tunnel", SessionEpoch: 1, ReplicaID: "replica-b", PeerAddr: oldPeer.Listener.Addr().String()}
+	tc.SetActive(oldSession)
+
+	entry := &store.EntryRow{Name: "alice-tunnel", Kind: api.KindConnected, OwnerEmail: "alice@example.com"}
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	start := time.Now()
+	go func() {
+		defer close(done)
+		req := httptest.NewRequest(http.MethodGet, "https://alice-tunnel.instances.example.com/hello", nil)
+		req.Host = "alice-tunnel.instances.example.com"
+		rt.routeConnectedEntry(rec, req, entry, false, time.Time{})
+	}()
+
+	waitForWaiter := func(forwards int64) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for (tc.ActiveWaiters("alice-tunnel") == 0 || goneForwards.Load() < forwards) && time.Now().Before(deadline) {
+			select {
+			case <-done:
+				t.Fatalf("request finished before its reconnect_grace ran out: %d %s", rec.Code, rec.Body.String())
+			case <-time.After(5 * time.Millisecond):
+			}
+		}
+		if tc.ActiveWaiters("alice-tunnel") == 0 {
+			t.Fatalf("request never entered reconnect_grace (forwards to old replica: %d)", goneForwards.Load())
+		}
+	}
+
+	// The request forwards to the old replica, learns the tunnel is gone and waits.
+	waitForWaiter(1)
+	// A stale refresh re-marks the dead session active and wakes the waiter; the
+	// old replica says gone again, and the request must keep waiting.
+	tc.SetActive(oldSession)
+	waitForWaiter(2)
+	// The tunnel really reconnects, on another replica.
+	tc.SetActive(TunnelCacheEntry{Name: "alice-tunnel", SessionEpoch: 2, ReplicaID: "replica-c", PeerAddr: newPeer.Listener.Addr().String()})
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("request still waiting after the tunnel reconnected")
+	}
+	if rec.Code != http.StatusOK || rec.Body.String() != "reconnected" {
+		t.Fatalf("expected request held across a stale wake to reach the reconnected tunnel, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if elapsed := time.Since(start); elapsed >= grace {
+		t.Fatalf("request took %s, longer than its %s reconnect_grace", elapsed, grace)
+	}
+}
+
+// TestReconnectGraceIsOneWindowAcrossStaleWakes checks the other half of the
+// fix: a request woken by stale refreshes waits out what is left of the grace
+// it started, never a fresh grace per wake.
+func TestReconnectGraceIsOneWindowAcrossStaleWakes(t *testing.T) {
+	admitter, err := webauth.NewAdmitter(webauth.AdmissionConfig{
+		Verifier:       testIdentityVerifier{},
+		AllowedDomains: []string{"example.com"},
+	})
+	if err != nil {
+		t.Fatalf("NewAdmitter: %v", err)
+	}
+	const grace = 400 * time.Millisecond
+	rt, err := NewRouter(RouterOptions{
+		RegistryHost:   "registry.example.com",
+		InstanceDomain: "instances.example.com",
+		ReplicaID:      "replica-a",
+		ReconnectGrace: grace,
+		Admitter:       admitter,
+		Signer:         newTestAssertionSigner(t),
+	})
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	defer rt.Close()
+
+	oldPeer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(HeaderTunnelGone, "1")
+		writeJSONError(w, http.StatusServiceUnavailable, "tunnel_gone", "tunnel session is not active on this replica")
+	}))
+	defer oldPeer.Close()
+
+	tc := rt.TunnelCache()
+	oldSession := TunnelCacheEntry{Name: "alice-tunnel", SessionEpoch: 1, ReplicaID: "replica-b", PeerAddr: oldPeer.Listener.Addr().String()}
+	tc.SetActive(oldSession)
+
+	// Keep re-marking the dead session active, as a stream of stale refreshes would.
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(20 * time.Millisecond):
+				tc.SetActive(oldSession)
+			}
+		}
+	}()
+	defer func() {
+		close(stop)
+		wg.Wait()
+	}()
+
+	entry := &store.EntryRow{Name: "alice-tunnel", Kind: api.KindConnected, OwnerEmail: "alice@example.com"}
+	req := httptest.NewRequest(http.MethodGet, "https://alice-tunnel.instances.example.com/hello", nil)
+	req.Host = "alice-tunnel.instances.example.com"
+	rec := httptest.NewRecorder()
+	start := time.Now()
+	rt.routeConnectedEntry(rec, req, entry, false, time.Time{})
+	elapsed := time.Since(start)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 once reconnect_grace ran out with no reconnect, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if elapsed < grace-50*time.Millisecond {
+		t.Fatalf("request answered after %s, inside its %s reconnect_grace", elapsed, grace)
+	}
+	if elapsed > 4*grace {
+		t.Fatalf("request held %s across stale wakes; reconnect_grace is %s", elapsed, grace)
+	}
+}
+
 func TestReconnectWaiterCap32AndDelegationAndSIGTERMDrain(t *testing.T) {
 	admitter, err := webauth.NewAdmitter(webauth.AdmissionConfig{
 		Verifier:          testIdentityVerifier{},
@@ -1399,5 +1639,267 @@ func TestReconnectWaiterCap32AndDelegationAndSIGTERMDrain(t *testing.T) {
 	rt.HandleConnect(recDrainConnect, reqDrainConnect, "alice-vm", true)
 	if recDrainConnect.Code != http.StatusServiceUnavailable || recDrainConnect.Header().Get("Retry-After") != "2" {
 		t.Fatalf("expected 503 with Retry-After: 2 on /connect while draining, got %d", recDrainConnect.Code)
+	}
+}
+
+func TestStopStartStatePagesAndAutoWakeOnVisit(t *testing.T) {
+	pgURL := startEphemeralPostgres(t)
+	ctx := context.Background()
+	st, err := store.Open(ctx, pgURL, store.DefaultThresholds())
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer st.Close()
+
+	if err := st.SeedShapes(ctx, []store.ShapeRow{
+		{Name: "small", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
+	}); err != nil {
+		t.Fatalf("SeedShapes: %v", err)
+	}
+
+	autoWakeFalse := false
+	autoWakeTrue := true
+
+	vmStopping, err := st.CreateEntry(ctx, store.CreateEntryInput{
+		Name:       "vm-stopping",
+		Kind:       api.KindInstance,
+		OwnerEmail: "alice@example.com",
+		Visibility: store.VisibilityPublic,
+		Shape:      "small",
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry vm-stopping: %v", err)
+	}
+	vmStopping, err = st.TransitionEntryState(ctx, vmStopping.ID, vmStopping.Version, api.StateRunning, "")
+	if err != nil {
+		t.Fatalf("TransitionEntryState vm-stopping running: %v", err)
+	}
+	if _, err := st.BeginStopEntry(ctx, vmStopping.ID, vmStopping.Version, "stopping by alice"); err != nil {
+		t.Fatalf("BeginStopEntry vm-stopping: %v", err)
+	}
+
+	vmStoppedNoWake, err := st.CreateEntry(ctx, store.CreateEntryInput{
+		Name:       "vm-stopped-nowake",
+		Kind:       api.KindInstance,
+		OwnerEmail: "carol@example.com",
+		Visibility: store.VisibilityPublic,
+		Shape:      "small",
+		AutoWake:   &autoWakeFalse,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry vm-stopped-nowake: %v", err)
+	}
+	vmStoppedNoWake, err = st.TransitionEntryState(ctx, vmStoppedNoWake.ID, vmStoppedNoWake.Version, api.StateRunning, "")
+	if err != nil {
+		t.Fatalf("TransitionEntryState vm-stopped-nowake: %v", err)
+	}
+	vmStoppedNoWake, err = st.BeginStopEntry(ctx, vmStoppedNoWake.ID, vmStoppedNoWake.Version, "stopping by alice")
+	if err != nil {
+		t.Fatalf("BeginStopEntry vm-stopped-nowake: %v", err)
+	}
+	if _, err := st.CompleteStopEntry(ctx, vmStoppedNoWake.ID, vmStoppedNoWake.Version); err != nil {
+		t.Fatalf("CompleteStopEntry vm-stopped-nowake: %v", err)
+	}
+
+	vmStoppedWake, err := st.CreateEntry(ctx, store.CreateEntryInput{
+		Name:       "vm-stopped-wake",
+		Kind:       api.KindInstance,
+		OwnerEmail: "alice@example.com",
+		Visibility: store.VisibilityOwner,
+		Shape:      "small",
+		AutoWake:   &autoWakeTrue,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry vm-stopped-wake: %v", err)
+	}
+	vmStoppedWake, err = st.TransitionEntryState(ctx, vmStoppedWake.ID, vmStoppedWake.Version, api.StateRunning, "")
+	if err != nil {
+		t.Fatalf("TransitionEntryState vm-stopped-wake: %v", err)
+	}
+	vmStoppedWake, err = st.BeginStopEntry(ctx, vmStoppedWake.ID, vmStoppedWake.Version, "stopping by alice")
+	if err != nil {
+		t.Fatalf("BeginStopEntry vm-stopped-wake: %v", err)
+	}
+	if _, err := st.CompleteStopEntry(ctx, vmStoppedWake.ID, vmStoppedWake.Version); err != nil {
+		t.Fatalf("CompleteStopEntry vm-stopped-wake: %v", err)
+	}
+
+	admitter, err := webauth.NewAdmitter(webauth.AdmissionConfig{
+		Verifier:       testIdentityVerifier{},
+		AllowedDomains: []string{"example.com"},
+		Admins:         []string{"user:admin@example.com"},
+	})
+	if err != nil {
+		t.Fatalf("NewAdmitter: %v", err)
+	}
+	rt, err := NewRouter(RouterOptions{
+		RegistryHost:   "registry.example.com",
+		InstanceDomain: "instances.example.com",
+		ReplicaID:      "replica-step17",
+		Store:          st,
+		Admitter:       admitter,
+		Signer:         newTestAssertionSigner(t),
+	})
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	defer rt.Close()
+
+	h := rt.WrapMainHandler(http.NotFoundHandler())
+
+	// 1. Stopping entry returns 503 + Retry-After: 5 (both HTML and JSON).
+	{
+		req := httptest.NewRequest(http.MethodGet, "https://vm-stopping.instances.example.com/", nil)
+		req.Host = "vm-stopping.instances.example.com"
+		req.Header.Set("X-Test-Email", "bob@example.com")
+		req.Header.Set("Accept", "application/json")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "5" || !strings.Contains(rec.Body.String(), "entry_stopping") {
+			t.Fatalf("expected 503 entry_stopping for vm-stopping, got %d %s", rec.Code, rec.Body.String())
+		}
+	}
+
+	// 2. Stopped entry with auto_wake=false returns 503 entry_stopped and stays stopped.
+	{
+		req := httptest.NewRequest(http.MethodGet, "https://vm-stopped-nowake.instances.example.com/", nil)
+		req.Host = "vm-stopped-nowake.instances.example.com"
+		req.Header.Set("X-Test-Email", "bob@example.com")
+		req.Header.Set("Accept", "application/json")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "entry_stopped") {
+			t.Fatalf("expected 503 entry_stopped for vm-stopped-nowake, got %d %s", rec.Code, rec.Body.String())
+		}
+		got, err := st.GetEntryByName(ctx, "vm-stopped-nowake")
+		if err != nil || got.LifecycleState != api.StateStopped {
+			t.Fatalf("expected vm-stopped-nowake to stay stopped, got %+v (err=%v)", got, err)
+		}
+	}
+
+	// 3. Stopped entry with auto_wake=true and visibility=owner:
+	// Unauthorized visitor (bob) gets 403 Forbidden and does NOT wake the instance.
+	{
+		reqBob := httptest.NewRequest(http.MethodGet, "https://vm-stopped-wake.instances.example.com/", nil)
+		reqBob.Host = "vm-stopped-wake.instances.example.com"
+		reqBob.Header.Set("X-Test-Email", "bob@example.com")
+		reqBob.Header.Set("Accept", "text/html")
+		recBob := httptest.NewRecorder()
+		h.ServeHTTP(recBob, reqBob)
+		if recBob.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 Forbidden for bob on owner-private stopped instance, got %d", recBob.Code)
+		}
+		gotAfterBob, err := st.GetEntryByName(ctx, "vm-stopped-wake")
+		if err != nil || gotAfterBob.LifecycleState != api.StateStopped {
+			t.Fatalf("expected vm-stopped-wake to remain stopped after unauthorized visit, got %+v (err=%v)", gotAfterBob, err)
+		}
+
+		// Authorized owner (alice) visits -> atomically wakes stopped -> creating and serves 503 Waking state page!
+		reqAlice := httptest.NewRequest(http.MethodGet, "https://vm-stopped-wake.instances.example.com/", nil)
+		reqAlice.Host = "vm-stopped-wake.instances.example.com"
+		reqAlice.Header.Set("X-Test-Email", "alice@example.com")
+		reqAlice.Header.Set("Accept", "text/html")
+		recAlice := httptest.NewRecorder()
+		h.ServeHTTP(recAlice, reqAlice)
+		if recAlice.Code != http.StatusServiceUnavailable || recAlice.Header().Get("Retry-After") != "5" {
+			t.Fatalf("expected 503 with Retry-After: 5 on auto-wake visit, got %d", recAlice.Code)
+		}
+		if !strings.Contains(recAlice.Body.String(), "waking up") {
+			t.Fatalf("expected waking up state page on auto-wake visit, got %s", recAlice.Body.String())
+		}
+		gotAfterAlice, err := st.GetEntryByName(ctx, "vm-stopped-wake")
+		if err != nil || gotAfterAlice.LifecycleState != api.StateCreating {
+			t.Fatalf("expected vm-stopped-wake to transition stopped -> creating on owner visit, got %+v (err=%v)", gotAfterAlice, err)
+		}
+	}
+}
+
+func TestServeInstanceHostAssertionAcceptedByWebauthRegistryVerifier(t *testing.T) {
+	signer := newTestAssertionSigner(t)
+	jwksSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		pub := signer.priv.PublicKey
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"keys": []map[string]any{{
+				"kty": "EC",
+				"crv": "P-256",
+				"alg": "ES256",
+				"use": "sig",
+				"kid": signer.kid,
+				"x":   base64.RawURLEncoding.EncodeToString(pub.X.FillBytes(make([]byte, 32))),
+				"y":   base64.RawURLEncoding.EncodeToString(pub.Y.FillBytes(make([]byte, 32))),
+			}},
+		})
+	}))
+	defer jwksSrv.Close()
+
+	var gotAssertion string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAssertion = r.Header.Get(api.HeaderRegistryAssertion)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	admitter, err := webauth.NewAdmitter(webauth.AdmissionConfig{
+		Verifier:       testIdentityVerifier{},
+		AllowedDomains: []string{"example.com"},
+		Creators:       []string{"user:alice@example.com"},
+	})
+	if err != nil {
+		t.Fatalf("NewAdmitter: %v", err)
+	}
+	rt, err := NewRouter(RouterOptions{
+		RegistryHost:   "registry.example.com",
+		InstanceDomain: "instances.example.com",
+		IAPAudience:    "/projects/123/global/backendServices/456",
+		Admitter:       admitter,
+		Signer:         signer,
+	})
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	defer rt.Close()
+
+	rt.HostCache().Put(&store.EntryRow{
+		ID:             "entry-iap-sub",
+		Name:           "alice-vm",
+		Kind:           api.KindInstance,
+		LifecycleState: api.StateRunning,
+		OwnerEmail:     "alice@example.com",
+		Visibility:     store.VisibilityOwner,
+		BackendURL:     backend.URL,
+	})
+
+	h := rt.WrapMainHandler(http.NotFoundHandler())
+	req := httptest.NewRequest(http.MethodGet, "https://alice-vm.instances.example.com/api/tasks", nil)
+	req.Host = "alice-vm.instances.example.com"
+	req.Header.Set("X-Test-Email", "alice@example.com")
+	// Cloud IAP puts a numeric Gaia ID in `sub`, not the user's email address.
+	req.Header.Set("X-Test-Sub", "accounts.google.com:10492837492837492")
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK from routed request, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if gotAssertion == "" {
+		t.Fatal("expected non-empty X-Grain-Registry-Assertion")
+	}
+
+	verifyCtx := webauth.WithRegistryConfig(context.Background(), webauth.RegistryConfig{
+		Issuer:   "grain-registry",
+		Audience: "https://alice-vm.instances.example.com",
+		KeysURL:  jwksSrv.URL,
+	})
+	claims, err := webauth.ValidateRegistryToken(verifyCtx, gotAssertion, "https://alice-vm.instances.example.com")
+	if err != nil {
+		t.Fatalf("ValidateRegistryToken: %v", err)
+	}
+	id, err := webauth.IdentityFromRegistryClaims(claims)
+	if err != nil {
+		t.Fatalf("IdentityFromRegistryClaims failed on IAP numeric sub: %v", err)
+	}
+	if id.Email != "alice@example.com" || id.Kind != webauth.PrincipalHuman {
+		t.Fatalf("unexpected verified identity: %+v", id)
 	}
 }

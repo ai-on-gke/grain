@@ -254,7 +254,7 @@ var routeDocs = map[string]string{
 	"PUT /api/gcp-keys/{name}":                                             "Create or replace a named GCP key.",
 	"DELETE /api/gcp-keys/{name}":                                          "Delete a named GCP key.",
 	"PUT /api/github-tokens/{name}":                                        "Set a named GitHub token.",
-	"DELETE /api/github-tokens/{name}":                                     "Delete a named GitHub token; refused while a git connection still names it.",
+	"DELETE /api/github-tokens/{name}":                                     "Delete a named GitHub token; refused while a git connection or capability grant still names it.",
 	"PUT /api/secrets/{secret}/{key}":                                      "Set one key of a secret; the value is stored and never shown back.",
 	"DELETE /api/secrets/{secret}/{key}":                                   "Delete one key of a secret.",
 	"DELETE /api/secrets/{secret}":                                         "Delete a secret and every key in it.",
@@ -504,7 +504,7 @@ var routeQueries = map[string]map[string]string{
 	},
 	"GET /api/capability-servers/gchat-usage": {"id": "The gchat capability server's capability_id."},
 	"GET /api/capability-methods":             {"kind": "The run kind the grants are for (task, process or ci): each method then carries policyRefusal, why the capability policy denies it that run.", "repo": "With kind, the repository (owner/name) the run is on."},
-	"GET /api/notifications":                  {"open": "1 for only notifications not yet cleared.", "after": "Only notifications after this id.", "family": "Only this family (the subject before its first ':')."},
+	"GET /api/notifications":                  {"open": "1 for only notifications not yet cleared.", "after": "Only notifications after this id.", "family": "Only this family (the subject before its first ':').", "fields": "list for each body cut to its first line, as the UI's lists draw it (a pending release's is kept whole)."},
 	"GET /api/memory/documents/{name}":        {"repo": "The repository (owner/name) whose document to read; the deployment's without one."},
 	"GET /api/release-notes/stats":            {"period": "The week whose figures to read; the week just ended without one."},
 	"POST /api/repos":                         {"team": "The team whose targets to add to; the default team without one."},
@@ -1148,14 +1148,18 @@ func (r APIRoute) externalTool(s *Server, tok *model.ExternalAgentToken) mcp.Too
 }
 
 // externalCall dispatches r in-process on s on behalf of the external agent
-// credential tok, running through s.ServeHTTP and agentAPIGate so the same
-// scope, repository, rail, and audit checks apply as on HTTP requests.
+// credential tok, running through s.ServeHTTP, roleGate, and agentAPIGate so
+// the same role, scope, repository, rail, and audit checks apply as on HTTP
+// requests.
 func (r APIRoute) externalCall(ctx context.Context, s *Server, tok *model.ExternalAgentToken, args map[string]any) (string, error) {
 	if s == nil {
 		return "", fmt.Errorf("this server is not initialized")
 	}
 	if tok == nil {
 		return "", fmt.Errorf("missing external agent credential")
+	}
+	if err := s.authorizeMCPRoleScope(ctx, r.Pattern); err != nil {
+		return "", err
 	}
 	rc, err := r.buildCall(args)
 	if err != nil {
@@ -1167,6 +1171,9 @@ func (r APIRoute) externalCall(ctx context.Context, s *Server, tok *model.Extern
 		return "", fmt.Errorf("reason is required: %s is destructive", r.Pattern)
 	}
 	if expect, ok := expectation(args); ok && r.takesExpect() {
+		if err := s.authorizeMCPRoleCall(ctx, r.Pattern, rc); err != nil {
+			return "", err
+		}
 		id := rc.params["id"]
 		detail, err := getTaskAsExternal(ctx, s, tok, id)
 		if err != nil {

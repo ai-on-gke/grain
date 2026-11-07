@@ -31,12 +31,16 @@ package orchestrator
 //   - pipeline.flake-budget:<repo>:<item> when one item spent
 //     FlakeBudgetRetries flake retries inside FlakeBudgetWindow.
 //
-// and, every cycle, syncRedRCHolds keeps the hold: check run
-// grain/rc-hold on a red candidate's commit is in progress while any
-// blocker linked to it is open, and completes when they have all landed
-// -- the train cuts rc.(N+1) after that commit, so that is where it reads
-// the hold. Each notification is cleared by the same code once its
-// condition is gone: a newer candidate cut, or the version promoted.
+// and, as soon as qualification fails (before grain/release-qualification
+// is posted completed) and every cycle thereafter, syncRedRCHolds keeps the
+// hold: check run grain/rc-hold on a red candidate's commit starts in
+// progress ("triage pending") for up to ReleaseHoldTriageGrace, stays in
+// progress while any blocker linked to it is open, and completes when the
+// pipeline steward triages with no blocker, the triage window elapses, or
+// every blocker has landed -- the train cuts rc.(N+1) after that commit, so
+// that is where it reads the hold. Each notification is cleared by the same
+// code once its condition is gone: a newer candidate cut, or the version
+// promoted.
 //
 // What is judgement -- which commit broke it, fix or revert, whether
 // rc.2 broke on trunk churn -- is the steward's, never this file's.
@@ -45,6 +49,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -68,7 +73,7 @@ var (
 )
 
 func redRCKey(store *model.Store, parts ...string) string {
-	return fmt.Sprintf("%p|%s", store, strings.ToLower(strings.Join(parts, "|")))
+	return fmt.Sprintf("%d|%s", store.ID(), strings.ToLower(strings.Join(parts, "|")))
 }
 
 func tagCommits(tags []github.Tag) map[string]string {
@@ -94,17 +99,20 @@ func superseded(tags map[string]string, rc model.RCTag) bool {
 	return false
 }
 
-// raiseRCFailed raises pipeline.rc-failed for q's candidate, and
-// pipeline.release-escalated for its version when it was the last
-// attempt. lines are the failing summary.
+// raiseRCFailed raises pipeline.rc-failed for q's candidate, posts the
+// initial triage-pending grain/rc-hold check run on q's commit before the
+// completed qualification verdict goes up, and raises
+// pipeline.release-escalated for its version when it was the last attempt.
+// lines are the failing summary.
 func (q *rcQualification) raiseRCFailed(ctx context.Context, tags map[string]string, rc model.RCTag, lines []string) error {
 	subject := model.NotificationSubject(model.FamilyRCFailed, q.rcTag)
 	escalate := rc.RC >= model.ReleaseMaxRCAttempts
+	grace := releaseHoldGrace()
 	if err := ensurePipelineNotification(ctx, q.store, model.Notification{
 		Subject:  subject,
 		Severity: model.NotificationWarning,
 		Title:    fmt.Sprintf("Release candidate %s of %s failed qualification", q.rcTag, q.repo),
-		Body:     rcFailedBody(q.repo, tags, rc, q.sha, lines, escalate),
+		Body:     rcFailedBody(q.repo, q.check, tags, rc, q.sha, lines, escalate, grace),
 		Repo:     q.repo.String(),
 		RaisedBy: releaseQualificationNotifier,
 		Actions:  []string{"investigate"},
@@ -112,7 +120,11 @@ func (q *rcQualification) raiseRCFailed(ctx context.Context, tags map[string]str
 		return err
 	}
 	if !escalate {
-		return nil
+		n, err := q.store.OpenNotification(ctx, subject)
+		if err != nil {
+			return err
+		}
+		return syncRCHold(ctx, q.store, q.forge, q.repo, tags, q.rcTag, n, q.now)
 	}
 	body, err := releaseEscalatedBody(ctx, q.store, q.repo, rc)
 	if err != nil {
@@ -129,10 +141,10 @@ func (q *rcQualification) raiseRCFailed(ctx context.Context, tags map[string]str
 	}, q.now)
 }
 
-func rcFailedBody(repo model.RepoRef, tags map[string]string, rc model.RCTag, sha string, lines []string, escalate bool) string {
+func rcFailedBody(repo model.RepoRef, check string, tags map[string]string, rc model.RCTag, sha string, lines []string, escalate bool, grace time.Duration) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "`%s` (%s) of %s failed Stage 2 qualification (%s): attempt %d of RELEASE_MAX_RC_ATTEMPTS (%d).\n\n",
-		rc, shortSHA(sha), repo, model.ReleaseQualificationCheckName, rc.RC, model.ReleaseMaxRCAttempts)
+		rc, shortSHA(sha), repo, check, rc.RC, model.ReleaseMaxRCAttempts)
 	if name, floor, ok := model.ReleaseFloor(tags, rc); ok {
 		fmt.Fprintf(&b, "Commits to triage: `%s..%s` (everything since %s).\n", floor, sha, name)
 	} else {
@@ -152,9 +164,17 @@ func rcFailedBody(repo model.RepoRef, tags map[string]string, rc model.RCTag, sh
 	}
 	next := rc
 	next.RC++
-	fmt.Fprintf(&b, "\nThe train tags %s-discarded and cuts %s from the next known-good commit after it. Title each "+
-		"fix or revert that must land first `%s ...`: while any such task is open, check run %s on %s holds %s.",
-		rc, next, model.RCBlockerMarker(rc.String()), model.ReleaseHoldCheckName, shortSHA(sha), next)
+	marker := model.RCBlockerMarker(rc.String())
+	if grace > 0 {
+		fmt.Fprintf(&b, "\nThe train tags %s-discarded and cuts %s from the next known-good commit after it. Check run %s "+
+			"on %s is in progress and holds %s while triage is pending (up to %s, or until the pipeline steward triages %s "+
+			"with no blocker) and while any task titled `%s ...` is open: title each fix or revert that must land first `%s ...`.",
+			rc, next, model.ReleaseHoldCheckName, shortSHA(sha), next, humanDuration(grace), rc, marker, marker)
+	} else {
+		fmt.Fprintf(&b, "\nThe train tags %s-discarded and cuts %s from the next known-good commit after it. Title each "+
+			"fix or revert that must land first `%s ...`: while any such task is open, check run %s on %s holds %s.",
+			rc, next, marker, model.ReleaseHoldCheckName, shortSHA(sha), next)
+	}
 	return b.String()
 }
 
@@ -202,20 +222,63 @@ func failedCandidates(ctx context.Context, store *model.Store, repo model.RepoRe
 }
 
 // raiseInfraStalled raises pipeline.release-infra-stalled for q's
-// candidate.
-func (q *rcQualification) raiseInfraStalled(ctx context.Context, why string) error {
-	return ensurePipelineNotification(ctx, q.store, model.Notification{
-		Subject:  model.NotificationSubject(model.FamilyReleaseInfraStalled, q.rcTag),
+// candidate. When concluded is true, Stage 2 has used all of an item's
+// infrastructure re-runs and is posting a completed neutral check run: any
+// earlier acknowledgement from a mid-run 2-hour warning is cleared so the
+// candidate waits for a person to repair the infrastructure and acknowledge
+// or clear the stall before starting a fresh Stage 2 attempt.
+func (q *rcQualification) raiseInfraStalled(ctx context.Context, why string, concluded bool) error {
+	subject := model.NotificationSubject(model.FamilyReleaseInfraStalled, q.notifyKey)
+	body := fmt.Sprintf("`%s` (%s) is still qualifying, and is not discarded: %s.\n\nAn infrastructure verdict "+
+		"never counts against a candidate, so nothing here is the release's fault. Repair the runner, quota or "+
+		"credential the item keeps failing on; this clears once the candidate qualifies, fails, or is "+
+		"superseded.", q.rcTag, shortSHA(q.sha), why)
+	if concluded {
+		q.clearInfraSince()
+		body = fmt.Sprintf("`%s` (%s) is left in qualification (not discarded) with a `neutral` Stage 2 check run: %s.\n\n"+
+			"An infrastructure verdict never counts against a candidate, so nothing here is the release's fault. "+
+			"Repair the runner, quota or credential the item kept failing on, then acknowledge or clear this "+
+			"notification to start a fresh Stage 2 qualification attempt on `%s` (or this clears if `%s` is superseded).",
+			q.rcTag, shortSHA(q.sha), why, q.rcTag, q.rcTag)
+	}
+	n := model.Notification{
+		Subject:  subject,
 		Severity: model.NotificationWarning,
 		Title:    fmt.Sprintf("Qualification of %s on %s is stalled on infrastructure", q.rcTag, q.repo),
-		Body: fmt.Sprintf("`%s` (%s) is still qualifying, and is not discarded: %s.\n\nAn infrastructure verdict "+
-			"never counts against a candidate, so nothing here is the release's fault. Repair the runner, quota or "+
-			"credential the item keeps failing on; this clears once the candidate qualifies, fails, or is "+
-			"superseded.", q.rcTag, shortSHA(q.sha), why),
+		Body:     body,
 		Repo:     q.repo.String(),
 		RaisedBy: releaseQualificationNotifier,
 		Actions:  []string{"investigate"},
-	}, q.now)
+	}
+	if !concluded {
+		return ensurePipelineNotification(ctx, q.store, n, q.now)
+	}
+	open, err := q.store.OpenNotification(ctx, subject)
+	if err != nil {
+		return err
+	}
+	if open != nil && open.AckedAt != nil {
+		if err := clearPipelineNotification(ctx, q.store, subject, releaseQualificationNotifier); err != nil {
+			return err
+		}
+		open = nil
+	}
+	if open != nil && open.Severity.Rank() >= n.Severity.Rank() && open.Body == n.Body {
+		return nil
+	}
+	_, err = raisePipelineNotification(ctx, q.store, n, q.now)
+	return err
+}
+
+func (q *rcQualification) clearInfraSince() {
+	prefix := redRCKey(q.store, q.tag, "")
+	redRCMu.Lock()
+	for k := range redRCInfraSince {
+		if strings.HasPrefix(k, prefix) {
+			delete(redRCInfraSince, k)
+		}
+	}
+	redRCMu.Unlock()
 }
 
 // trackInfra raises pipeline.release-infra-stalled once an item has been
@@ -226,7 +289,7 @@ func (q *rcQualification) trackInfra(ctx context.Context, items []string, attemp
 	redRCMu.Lock()
 	var stalled []string
 	for _, item := range items {
-		key := redRCKey(q.store, q.repo.String()+"@"+q.rcTag, item)
+		key := redRCKey(q.store, q.tag, item)
 		if !infraBlocked(attempts[item]) {
 			delete(redRCInfraSince, key)
 			continue
@@ -244,9 +307,9 @@ func (q *rcQualification) trackInfra(ctx context.Context, items []string, attemp
 	redRCMu.Unlock()
 	if len(stalled) == 0 {
 		return clearPipelineNotification(ctx, q.store,
-			model.NotificationSubject(model.FamilyReleaseInfraStalled, q.rcTag), releaseQualificationNotifier)
+			model.NotificationSubject(model.FamilyReleaseInfraStalled, q.notifyKey), releaseQualificationNotifier)
 	}
-	return q.raiseInfraStalled(ctx, strings.Join(stalled, "; "))
+	return q.raiseInfraStalled(ctx, strings.Join(stalled, "; "), false)
 }
 
 func infraBlocked(history []model.ItemVerdict) bool {
@@ -301,6 +364,18 @@ func (q *rcQualification) noteFlakeRetries(ctx context.Context, rerun []string, 
 	return errors.Join(errs...)
 }
 
+// releaseHoldGrace is how long grain/rc-hold waits for triage before any
+// [rc-blocker <rc>] task exists: model.ReleaseHoldTriageGrace (1h) unless
+// GRAIN_RC_HOLD_GRACE sets a non-negative duration.
+func releaseHoldGrace() time.Duration {
+	if raw := strings.TrimSpace(os.Getenv("GRAIN_RC_HOLD_GRACE")); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil && d >= 0 {
+			return d
+		}
+	}
+	return model.ReleaseHoldTriageGrace
+}
+
 // syncRedRCHolds keeps every open red-candidate notification of repo
 // current: the hold check run on each red candidate's commit, and
 // clearing what a newer candidate or a promotion has made moot. current
@@ -313,6 +388,7 @@ func syncRedRCHolds(ctx context.Context, store *model.Store, forge ReleaseQualif
 		return err
 	}
 	var errs []error
+	seenRC := map[string]bool{}
 	for _, n := range open {
 		if !strings.EqualFold(n.Repo, repo.String()) {
 			continue
@@ -320,9 +396,14 @@ func syncRedRCHolds(ctx context.Context, store *model.Store, forge ReleaseQualif
 		family, key, _ := strings.Cut(n.Subject, ":")
 		switch family {
 		case model.FamilyRCFailed:
-			errs = append(errs, syncRCHold(ctx, store, forge, repo, tags, key, now))
+			seenRC[key] = true
+			nCopy := n
+			errs = append(errs, syncRCHold(ctx, store, forge, repo, tags, key, &nCopy, now))
 		case model.FamilyReleaseInfraStalled:
-			if key != current {
+			// Only an rc tag's: a synced-release gate's are keyed
+			// <stem>@<release>, and cleared by that gate itself
+			// (clearStaleInfraStalled).
+			if _, isRC := model.ParseRCTag(key); isRC && key != current {
 				errs = append(errs, clearPipelineNotification(ctx, store, n.Subject, releaseQualificationNotifier))
 			}
 		case model.FamilyReleaseEscalated:
@@ -334,31 +415,76 @@ func syncRedRCHolds(ctx context.Context, store *model.Store, forge ReleaseQualif
 			}
 		}
 	}
+	// An operator acknowledging pipeline.rc-failed:<rc> in the Inbox closes
+	// the notification before a newer candidate is cut: visit any
+	// non-superseded candidate whose rc-failed notification was already
+	// cleared so its triage-pending hold is completed too (or kept while
+	// blockers remain open).
+	var activeRCs []string
+	for name := range tags {
+		if rc, ok := model.ParseRCTag(name); ok && !seenRC[name] && !superseded(tags, rc) {
+			activeRCs = append(activeRCs, name)
+		}
+	}
+	if len(activeRCs) > 0 {
+		closed, err := store.ListNotifications(ctx, model.NotificationFilter{Family: model.FamilyRCFailed, Limit: 100})
+		if err != nil {
+			errs = append(errs, err)
+		} else {
+			byKey := map[string]model.Notification{}
+			for _, n := range closed {
+				if !strings.EqualFold(n.Repo, repo.String()) {
+					continue
+				}
+				_, key, _ := strings.Cut(n.Subject, ":")
+				if prev, ok := byKey[key]; !ok || n.ID > prev.ID {
+					byKey[key] = n
+				}
+			}
+			sort.Strings(activeRCs)
+			for _, rcTag := range activeRCs {
+				if n, ok := byKey[rcTag]; ok {
+					nCopy := n
+					errs = append(errs, syncRCHold(ctx, store, forge, repo, tags, rcTag, &nCopy, now))
+				}
+			}
+		}
+	}
 	return errors.Join(errs...)
 }
 
-// syncRCHold posts grain/rc-hold on rcTag's commit while blockers linked
-// to it are open, completes it when they are not, and clears
-// pipeline.rc-failed once a newer candidate is cut or the version is
-// promoted.
+// syncRCHold posts grain/rc-hold on rcTag's commit while triage is pending or
+// blockers linked to it are open, completes it once triage needs no blocker,
+// the triage window elapses, or every blocker has landed, and clears
+// pipeline.rc-failed once a newer candidate is cut or the version is promoted.
 func syncRCHold(ctx context.Context, store *model.Store, forge ReleaseQualificationForge, repo model.RepoRef,
-	tags map[string]string, rcTag string, now time.Time) error {
+	tags map[string]string, rcTag string, n *model.Notification, now time.Time) error {
 
 	rc, ok := model.ParseRCTag(rcTag)
 	sha := tags[rcTag]
 	if !ok || sha == "" {
 		return nil
 	}
-	blockers, err := store.OpenTasksTitled(ctx, model.RCBlockerMarker(rcTag))
+	marker := model.RCBlockerMarker(rcTag)
+	blockers, err := store.OpenTasksTitled(ctx, marker)
+	if err != nil {
+		return err
+	}
+	hadBlockers, err := store.HasTasksTitled(ctx, marker)
 	if err != nil {
 		return err
 	}
 	done := superseded(tags, rc)
 	clear := func() error {
-		if !done {
+		if !done || (n != nil && n.ClearedAt != nil) {
 			return nil
 		}
 		return clearPipelineNotification(ctx, store, model.NotificationSubject(model.FamilyRCFailed, rcTag), releaseQualificationNotifier)
+	}
+	// An escalated version's last attempt cuts no next candidate (Phase 2
+	// stops at RELEASE_MAX_RC_ATTEMPTS), so no hold is posted for it.
+	if rc.RC >= model.ReleaseMaxRCAttempts {
+		return clear()
 	}
 	// Only a hold grain's own App posted is grain's, as with the verdict
 	// (latestCheckRun); a connection grain cannot name posts none.
@@ -373,27 +499,75 @@ func syncRCHold(ctx context.Context, store *model.Store, forge ReleaseQualificat
 	extID := "rc-hold:" + rcTag
 	hold := latestCheckRun(checks, model.ReleaseHoldCheckName, app, extID)
 	held := hold != nil && hold.Status != "completed"
+
+	grace := releaseHoldGrace()
+	nOpen := n != nil && n.ClearedAt == nil
+	withinGrace := nOpen && grace > 0 && now.Sub(n.RaisedAt) < grace
+	stewardDone := false
+	if !done && len(blockers) == 0 && !hadBlockers && n != nil {
+		stewardDone, err = stewardTriagedCandidate(ctx, store, rcTag, n.RaisedAt)
+		if err != nil {
+			return err
+		}
+	}
+	triagePending := !done && len(blockers) == 0 && !hadBlockers && !stewardDone && withinGrace
+
 	next := rc
 	next.RC++
+	subject := model.NotificationSubject(model.FamilyRCFailed, rcTag)
 	run := github.CheckRunWrite{Name: model.ReleaseHoldCheckName, HeadSHA: sha, ExternalID: extID}
 	stamp := now.UTC()
+	updateExisting := false
 	switch {
 	case done && held:
+		updateExisting = true
 		run.Status, run.Conclusion, run.CompletedAt = "completed", model.ConclusionNeutral, &stamp
 		run.Output = &github.CheckRunOutput{Title: "Superseded",
 			Summary: fmt.Sprintf("A newer candidate than %s is cut, or %s is promoted; nothing is held.", rcTag, rc.Version())}
-	case !done && len(blockers) > 0 && !held:
-		run.Status, run.StartedAt = "in_progress", &stamp
-		run.Output = &github.CheckRunOutput{Title: fmt.Sprintf("Holding %s", next),
-			Summary: fmt.Sprintf("%s is held until these blockers of %s land: task %s.", next, rcTag,
-				strings.Join(blockers, ", task "))}
-	case !done && len(blockers) == 0 && held:
-		run.Status, run.Conclusion, run.CompletedAt = "completed", model.ConclusionSuccess, &stamp
-		run.Output = &github.CheckRunOutput{Title: "Blockers landed",
-			Summary: fmt.Sprintf("Every task titled %s has landed; %s may be cut.", model.RCBlockerMarker(rcTag), next)}
+	case !done && len(blockers) > 0:
+		summary := fmt.Sprintf("%s is held until these blockers of %s land: task %s.", next, rcTag,
+			strings.Join(blockers, ", task "))
+		if !held || !strings.Contains(hold.Output, summary) {
+			updateExisting = held
+			run.Status = "in_progress"
+			if !held {
+				run.StartedAt = &stamp
+			}
+			run.Output = &github.CheckRunOutput{Title: fmt.Sprintf("Holding %s", next), Summary: summary}
+		}
+	case triagePending && !held:
+		if hold == nil {
+			run.Status, run.StartedAt = "in_progress", &stamp
+			run.Output = &github.CheckRunOutput{
+				Title: fmt.Sprintf("Holding %s (triage pending)", next),
+				Summary: fmt.Sprintf("%s failed qualification; %s is held while %s awaits triage (up to %s) or tasks titled %s remain open.",
+					rcTag, next, subject, humanDuration(grace), marker),
+			}
+		}
+	case !done && len(blockers) == 0 && !triagePending && held:
+		updateExisting = true
+		switch {
+		case hadBlockers:
+			run.Status, run.Conclusion, run.CompletedAt = "completed", model.ConclusionSuccess, &stamp
+			run.Output = &github.CheckRunOutput{Title: "Blockers landed",
+				Summary: fmt.Sprintf("Every task titled %s has landed; %s may be cut.", marker, next)}
+		case stewardDone:
+			run.Status, run.Conclusion, run.CompletedAt = "completed", model.ConclusionSuccess, &stamp
+			run.Output = &github.CheckRunOutput{Title: "Triaged with no blocker",
+				Summary: fmt.Sprintf("The pipeline steward triaged %s with no task titled %s; %s may be cut.", rcTag, marker, next)}
+		case !nOpen:
+			run.Status, run.Conclusion, run.CompletedAt = "completed", model.ConclusionSuccess, &stamp
+			run.Output = &github.CheckRunOutput{Title: "Triage acknowledged",
+				Summary: fmt.Sprintf("%s was cleared with no open task titled %s; %s may be cut.", subject, marker, next)}
+		default:
+			run.Status, run.Conclusion, run.CompletedAt = "completed", model.ConclusionNeutral, &stamp
+			run.Output = &github.CheckRunOutput{Title: "Triage window elapsed",
+				Summary: fmt.Sprintf("No task titled %s was filed within %s of %s failing; %s may be cut.",
+					marker, humanDuration(grace), rcTag, next)}
+		}
 	}
 	if run.Status != "" {
-		if run.Status == "completed" {
+		if updateExisting {
 			err = forge.UpdateCheckRun(repo.Owner, repo.Name, hold.ID, run)
 		} else {
 			_, err = forge.CreateCheckRun(repo.Owner, repo.Name, run)
@@ -403,6 +577,44 @@ func syncRCHold(ctx context.Context, store *model.Store, forge ReleaseQualificat
 		}
 	}
 	return clear()
+}
+
+// stewardTriagedCandidate reports whether the pipeline steward's own run
+// posted a closing report naming rcTag at or after since: triage that ended
+// with no blocker filed, lifting the triage-pending hold early. An earlier
+// wake finishing an unrelated report after since does not name rcTag and
+// leaves the hold in place.
+func stewardTriagedCandidate(ctx context.Context, store *model.Store, rcTag string, since time.Time) (bool, error) {
+	ids, err := store.OpenTasksWithTag(ctx, model.ScheduleFiringTag(model.PipelineStewardTemplateID))
+	if err != nil {
+		return false, err
+	}
+	for _, id := range ids {
+		comments, err := store.Comments(ctx, id)
+		if err != nil {
+			return false, err
+		}
+		for _, c := range comments {
+			if !c.CreatedAt.Before(since) && ownRunComment(c, id) && mentionsRCTag(c.Body, rcTag) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func mentionsRCTag(body, rcTag string) bool {
+	for s := body; ; {
+		i := strings.Index(s, rcTag)
+		if i < 0 {
+			return false
+		}
+		rest := s[i+len(rcTag):]
+		if len(rest) == 0 || rest[0] < '0' || rest[0] > '9' {
+			return true
+		}
+		s = rest
+	}
 }
 
 // escalationLifted reports whether a person has reset or advanced the

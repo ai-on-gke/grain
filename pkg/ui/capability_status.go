@@ -20,15 +20,11 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability"
 	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
-	consolecap "github.com/ai-on-gke/grain/pkg/capability/console"
-	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/imagesigning"
 	modelproxycap "github.com/ai-on-gke/grain/pkg/capability/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
-	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
-	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
 	// The release server's methods and the CI rules they declare
 	// (model.CIGrantRule), which the pickers' CI-only refusals read.
@@ -279,19 +275,18 @@ const defaultSecretKey = secrets.AgentCredentialKey
 // "Gemini proxy") are the vendor's own -- see modelProxyDisplayNames
 // below, which folds them in.
 var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
-	"gcp-key":               "GCP key",
-	"gemini-key":            "Gemini key",
-	"github-sandbox":        "GitHub sandbox",
-	"bootstrap-playbooks":   "Bootstrap playbooks",
-	model.GrainCIGrant:      "grain CI",
-	model.GrainCICapability: "grain CI",
-	"registry-push":         "Registry push",
-	"package-publish":       "Package publish",
-	"image-signing":         "Image signing",
-	"console":               "Interactive console",
-	"priority-dispatch":     "Priority dispatch",
-	"durable":               "Durable",
-	"read-issues":           "Read issues",
+	"gcp-key":                    "GCP key",
+	"gemini-key":                 "Gemini key",
+	"github-sandbox":             "GitHub sandbox",
+	"bootstrap-playbooks":        "Bootstrap playbooks",
+	model.GrainCIGrant:           "grain CI",
+	model.GrainCICapability:      "grain CI",
+	"registry-push":              "Registry push",
+	"package-publish":            "Package publish",
+	"image-signing":              "Image signing",
+	"read-issues":                "Read issues",
+	model.GitHubReadIssuesGrant:  "Read issues",
+	model.GitHubSandboxRepoGrant: "GitHub sandbox",
 })
 
 // withModelProxyDisplayNames adds one row per vendor's proxy capability
@@ -365,10 +360,6 @@ func capabilityProviderCatalog() []model.CapabilityProvider {
 		registrypush.NewWithConfig(registrypush.Config{}),
 		packagepublish.New(packagepublish.Config{}),
 		imagesigning.New(imagesigning.Config{}),
-		consolecap.New(),
-		readissues.New(),
-		prioritydispatch.New(),
-		durable.New(),
 	)
 	return providers
 }
@@ -406,7 +397,7 @@ func ciOnlyCapability(name string) bool {
 	if _, ok := model.RepoWriteTarget(name); ok {
 		return true
 	}
-	if _, ok := model.CIGrantRuleFor(name); ok {
+	if rule, ok := model.CIGrantRuleFor(name); ok && rule.IsCIOnly() {
 		return true
 	}
 	for _, spec := range capabilityCatalog() {
@@ -485,10 +476,6 @@ func capabilityCheckable(name string) bool {
 // an operator's files, read at startup into Config.Capabilities, not a
 // property of this build.
 func (c *Client) checkable(id string) bool {
-	if _, ok := model.GitCredentialName(id); ok {
-		_, offered := c.capabilityByID(id)
-		return offered
-	}
 	return capabilityCheckable(id)
 }
 
@@ -731,7 +718,17 @@ func (c *Client) capabilityStatuses(cfg model.Config, repoConfigs []model.RepoCo
 	buildDefaults := capability.DefaultOn()
 	out := make([]CapabilityStatus, 0, len(catalog))
 	for _, spec := range catalog {
+		canonical := model.CanonicalLegacyGrant(spec.Name)
 		_, grantable := c.capabilityByID(spec.Name)
+		defaultRepos := slices.Clone(reposByCapability[spec.Name])
+		if canonical != spec.Name {
+			for _, r := range reposByCapability[canonical] {
+				if !slices.Contains(defaultRepos, r) {
+					defaultRepos = append(defaultRepos, r)
+				}
+			}
+			slices.Sort(defaultRepos)
+		}
 		status := CapabilityStatus{
 			ID:            spec.Name,
 			Name:          capabilityDisplayName(spec.Name),
@@ -739,8 +736,8 @@ func (c *Client) capabilityStatuses(cfg model.Config, repoConfigs []model.RepoCo
 			Grantable:     grantable,
 			CIOnly:        spec.CIOnly,
 			Checkable:     c.Config.CapabilityChecks != nil && c.checkable(spec.Name),
-			Default:       slices.Contains(cfg.DefaultCapabilities, spec.Name),
-			DefaultRepos:  reposByCapability[spec.Name],
+			Default:       slices.Contains(cfg.DefaultCapabilities, spec.Name) || slices.Contains(cfg.DefaultCapabilities, canonical),
+			DefaultRepos:  defaultRepos,
 			BuildDefault:  slices.Contains(buildDefaults, spec.Name),
 			MissingConfig: missingConfigFor(spec.Name, cfg),
 		}
@@ -759,54 +756,6 @@ func (c *Client) capabilityStatuses(cfg model.Config, repoConfigs []model.RepoCo
 			len(status.PendingConfig) == 0 &&
 			len(status.MissingSecrets) == 0
 		out = append(out, status)
-	}
-	return append(out, c.githubTokenStatuses(cfg, reposByCapability)...)
-}
-
-// githubTokenStatuses is one row per named GitHub token this deployment
-// offers as a capability of its own (grain/task-117) -- read off
-// c.Config.Capabilities rather than capabilityCatalog above, because
-// unlike every other row here these are not a property of this build at
-// all: they are whatever tokens an operator has placed under
-// secrets/github, which pkg/cli/daemon.go turned into picker rows and
-// providers at startup.
-//
-// Ready and Grantable are both true by construction, and that stays the
-// honest answer to what those two fields ask: a row exists here only
-// because a credential file of that name exists (gitproxy.CredentialSet.
-// ExtraNames), and it exists in the picker only because the same startup
-// pass put it there beside the matching provider. There is no
-// deployment setting and no secrets-store entry either could be waiting
-// on -- MissingConfig and MissingSecrets ask about the two gates a
-// GitHub token has neither of.
-//
-// What that answer never covered is the way these credentials actually
-// fail: a token revoked, expired or rotated at GitHub's end, or one
-// whose access to a repo was withdrawn, changes nothing about the file,
-// so this row went on saying **Ready** while every push through it was
-// refused (grain/task-189). Checkable is where that is answered now, and
-// deliberately not folded into Ready -- the same rule grain/task-172
-// landed on for every other standing credential: Ready means configured,
-// a check is a point-in-time answer somebody asked for, and a badge that
-// silently meant both would be a worse answer than two fields that each
-// mean one thing.
-func (c *Client) githubTokenStatuses(cfg model.Config, reposByCapability map[string][]string) []CapabilityStatus {
-	var out []CapabilityStatus
-	for _, capability := range c.Config.Capabilities {
-		name, ok := model.GitCredentialName(capability.ID)
-		if !ok {
-			continue
-		}
-		out = append(out, CapabilityStatus{
-			ID:           capability.ID,
-			Name:         GitHubTokenDisplayName(name),
-			Description:  capability.Description,
-			Ready:        true,
-			Grantable:    true,
-			Checkable:    c.Config.CapabilityChecks != nil && c.checkable(capability.ID),
-			Default:      slices.Contains(cfg.DefaultCapabilities, capability.ID),
-			DefaultRepos: reposByCapability[capability.ID],
-		})
 	}
 	return out
 }

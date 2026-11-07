@@ -381,6 +381,7 @@ func TestEveryVariableTheInstallerReadsHasADefault(t *testing.T) {
 	// out of the unit's own EnvironmentFile, and the other by the `sh`
 	// inside the deployment image that image_run hands a script to.
 	elsewhere := map[string]bool{
+		"GRAIN_EXTRA_DAEMON_ARGS":     true,
 		"GRAIN_EXTRA_DOCKER_RUN_ARGS": true,
 		"GRAIN_TARGET_URL":            true,
 	}
@@ -1950,7 +1951,14 @@ func TestTheInstallerNeedsNothingOnTheHostButDockerAndSystemd(t *testing.T) {
 	// optional rather than required -- host_git_version answers nothing
 	// on a host with no git, and the conversion then says what to run
 	// instead -- so it adds nothing to what a host must have.
-	hostGitFuncs := map[string]bool{"host_git_version": true, "rewrite_refs_as_files": true, "convert_reftable_repo": true}
+	//
+	// And installing from release assets (docs/release-assets.md) is a
+	// download from github.com before any image exists to run one in. It
+	// is optional too: with no curl on the host install_release_assets
+	// falls back to pulling the registry image, and manifest_field reads
+	// images.json with awk where there is no jq.
+	hostGitFuncs := map[string]bool{"host_git_version": true, "rewrite_refs_as_files": true, "convert_reftable_repo": true,
+		"install_release_assets": true, "manifest_field": true}
 	inHostGit := false
 
 	inImage := false

@@ -153,6 +153,10 @@ type Schedule struct {
 	// the default, means close.
 	NothingNeededAction NothingNeededAction
 	KeepRunning         bool
+	// Admission is the optional admission setting for tasks this schedule files.
+	Admission Admission
+	// Hosting is the optional hosting setting for tasks this schedule files.
+	Hosting Hosting
 
 	// Model is the model every task this schedule files asks for
 	// (Task.Model, docs/connections-and-models.md). Empty means this

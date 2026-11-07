@@ -141,7 +141,7 @@ func TestAgentMessageReachesTheTargetsAgentWithoutParkingIt(t *testing.T) {
 		t.Fatalf("comments = %+v, want the message alone (no second audit note)", comments)
 	}
 	c := comments[0]
-	if c.Author.Actor != (model.Principal{Kind: model.PrincipalAgent, ID: "768"}) || c.Author.OnBehalfOf != nil {
+	if c.Author.Actor != (model.Principal{Kind: model.PrincipalAgent, ID: "768", Source: model.SourceSandbox}) || c.Author.OnBehalfOf != nil {
 		t.Errorf("author = %+v, want task 768's own agent", c.Author)
 	}
 	if !strings.HasPrefix(c.Body, "Message from task 768 (task 768)") ||

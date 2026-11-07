@@ -694,7 +694,7 @@ After IAP verifies, the registry signs a JWT for the single target instance and 
 
 | Claim | Value |
 |---|---|
-| `iss` | The registry's issuer URL, `https://<registry-host>` (configured, never taken from the request) |
+| `iss` | The fixed issuer `grain-registry` (`registry.RegistryAssertionIssuer`; never taken from the request). Earlier drafts named `https://<registry-host>`; the shipped signer and verifier both pin `grain-registry`. |
 | `aud` | The instance's origin URL, `https://<name>.<instance-domain>`. Exactly one audience. |
 | `sub` | The verified email, lower-cased. On a delegated request, the **person** named in `X-Grain-On-Behalf-Of` once `DelegationPolicy` has allowed it |
 | `email` | The same email, reusing `pkg/webauth`'s `NormalizeIdentityEmail` (extracted from `pkg/ui/principal.go`) |
@@ -714,7 +714,7 @@ After IAP verifies, the registry signs a JWT for the single target instance and 
 Both hosted `instance` VMs and outbound-tunnelled `connected` grains run the **exact same** `ui.IdentityVerifier` in core, `registry`, registered via `ui.RegisterIdentityVerifier` on the seam [`authentication.design.md`](authentication.design.md) §1 ([`authentication.spec.md`](../spec/authentication/authentication.spec.md) `{#AU-1}`–`{#AU-2}`) defines:
 
 ```
--ui-registry-issuer=https://grain.example.com
+-ui-registry-issuer=grain-registry
 -ui-registry-audience=https://calm-otter-7f3a.grain-user.com
 -ui-registry-keys-url=https://grain.example.com/.well-known/jwks.json
 -ui-require-verifier=registry
@@ -1077,7 +1077,7 @@ A `connected` grain runs on infrastructure the registry does not control (an eng
    - Pod-to-pod `:8082` forwarding is protected both by Kubernetes `NetworkPolicy` (ingress from `app = grain-registry` pods only) and by `X-Registry-Peer-Auth` (`aud = "urn:grain:registry:peer"`), and tunnel stream bytes are parsed solely as HTTP responses to registry-initiated requests.
 
 4. **Grain-side verification (identical to hosted instances, with loopback-bypass protection):**
-   - The connected grain configures the **exact same `registry` `IdentityVerifier`** (`-ui-registry-issuer=https://<registry-host> -ui-registry-audience=https://<name>.<instance-domain> -ui-registry-keys-url=https://<registry-host>/.well-known/jwks.json`) and validates ES256 signature, `iss`, single `aud`, `exp`/`iat`/`nbf` (`<= 90 s` lifetime, `30 s` skew), `email_verified: true`, and absence of `act` on every proxied request.
+   - The connected grain configures the **exact same `registry` `IdentityVerifier`** (`-ui-registry-issuer=grain-registry -ui-registry-audience=https://<name>.<instance-domain> -ui-registry-keys-url=https://<registry-host>/.well-known/jwks.json`) and validates ES256 signature, `iss`, single `aud`, `exp`/`iat`/`nbf` (`<= 90 s` lifetime, `30 s` skew), `email_verified: true`, and absence of `act` on every proxied request.
    - Tunnel streams are served **in-process via `MuxListener`** (`Stream.RemoteAddr()` = `"stream-<id>-remote"`, never `127.0.0.1`) rather than dialing `127.0.0.1:8080` over TCP, and wrap `ui.Server` in a mandatory tunnel-ingress gate requiring `X-Grain-Registry-Assertion` (`Source == "registry"`) and rejecting `grain_access` cookies / `X-Grain-Access-Code` headers—so workstation grains can keep local loopback CLI access on `127.0.0.1:8080` without ever exposing unauthenticated loopback or access-code shortcuts to tunnel traffic.
 
 5. **Rate limits and per-entry resource caps:**

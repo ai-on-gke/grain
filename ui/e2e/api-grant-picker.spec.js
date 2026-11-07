@@ -13,6 +13,11 @@
 // limitations under the License.
 
 import { expect, test } from "./fixtures.js";
+
+// -legacy-capability registers example-legacy, a made-up provider with
+// nothing to mint, so the Legacy capabilities pickers have a row: every
+// legacy provider core shipped has been retired onto a server method.
+test.use({ demoArgs: ["-legacy-capability"] });
 import { chooseOption } from "./searchSelect.js";
 
 // The grain API half of the task pane's Grants picker (GrantsPicker.jsx)
@@ -311,6 +316,113 @@ test("exercises Grain API picker across NewTaskOverlay, ConsoleSessionPage, Sche
     .locator('.process-row[data-kind="template"]', { hasText: tmplName })
     .click();
   await expectSelfDebugAndRepoCIWrite(page.getByTestId("template-grants"));
+});
+
+test("Escape in Add grant… closes only the popover in template and schedule panes", async ({
+  page,
+}) => {
+  const dialogs = [];
+  page.on("dialog", async (d) => {
+    if (d.type() === "beforeunload") {
+      await d.accept();
+      return;
+    }
+    dialogs.push(d.message());
+    await d.dismiss();
+  });
+
+  // 1. Clean template pane (/processes/templates/template-2): first Escape
+  // closes only the Add grant… popover and returns focus to Add grant…;
+  // second Escape closes the template pane back to /processes.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/processes/templates/template-2");
+  await expect(
+    page.getByRole("heading", { name: "Edit template" }),
+  ).toBeVisible();
+
+  const tmplGrants = page.getByTestId("template-grants");
+  const tmplAddBtn = tmplGrants.getByRole("button", { name: "Add grant…" });
+  await tmplAddBtn.click();
+  const menu = page.getByRole("menu", { name: "Grants to add" });
+  await expect(menu).toBeVisible();
+
+  // Rendered layout check: popover sits cleanly inside the viewport with no overflow.
+  const menuBox = await menu.boundingBox();
+  expect(menuBox.x).toBeGreaterThanOrEqual(0);
+  expect(menuBox.y).toBeGreaterThanOrEqual(0);
+  expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(1440);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  expect(dialogs).toEqual([]);
+  await expect(
+    page.getByRole("heading", { name: "Edit template" }),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/\/processes\/templates\/template-2$/);
+  await expect(tmplAddBtn).toBeFocused();
+
+  await page.keyboard.press("Escape");
+  await expect(
+    page.getByRole("heading", { name: "Edit template" }),
+  ).toHaveCount(0);
+  await expect(page).toHaveURL(/\/processes$/);
+  expect(dialogs).toEqual([]);
+
+  // 2. Edited schedule pane (/processes/schedules/sched-2): Escape closes an
+  // open repo listbox first, then the Add grant… popover without asking to
+  // discard, and only asks DISCARD_PROMPT on the next Escape.
+  await page.goto("/processes/schedules/sched-2");
+  await expect(
+    page.getByRole("heading", { name: "Edit schedule" }),
+  ).toBeVisible();
+  const titleInput = page.getByLabel("Title", { exact: true });
+  await titleInput.fill(`${await titleInput.inputValue()} (edited)`);
+
+  const schedGrants = page.getByTestId("schedule-grants");
+  const schedAddBtn = schedGrants.getByRole("button", { name: "Add grant…" });
+  await schedAddBtn.click();
+  await expect(menu).toBeVisible();
+
+  await page.getByLabel("Grain API grants apply to").click();
+  await expect(page.getByRole("listbox")).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("listbox")).toHaveCount(0);
+  await expect(menu).toBeVisible();
+  expect(dialogs).toEqual([]);
+
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  expect(dialogs).toEqual([]);
+  await expect(
+    page.getByRole("heading", { name: "Edit schedule" }),
+  ).toBeVisible();
+  await expect(schedAddBtn).toBeFocused();
+
+  // Reopen Add grant… and focus a policy/CI-only link inside a disabled row:
+  // Escape still closes only the popover and returns focus to Add grant….
+  await schedAddBtn.click();
+  await expect(menu).toBeVisible();
+  const policyLink = menu.getByRole("link").first();
+  await policyLink.focus();
+  await expect(policyLink).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  expect(dialogs).toEqual([]);
+  await expect(schedAddBtn).toBeFocused();
+
+  await page.keyboard.press("Escape");
+  expect(dialogs).toEqual([
+    "You have unsaved changes here. Leave and discard them?",
+  ]);
+  await expect(
+    page.getByRole("heading", { name: "Edit schedule" }),
+  ).toBeVisible();
 });
 
 // Ticks api:self-debug for every repo and api:ci:write limited to

@@ -271,6 +271,25 @@ const (
 	ConfigMapMethod             = "config-map"
 	ConfigMapRef                = ConfigMapCapabilityServerID + "#" + ConfigMapMethod
 	BootstrapPlaybooksGrant     = ConfigMapRef + `={"config_maps":["bootstrap"]}`
+
+	// GitHubCapabilityServerID is the canonical capability_id of the
+	// in-process github server (design/design/unified-grants.design.md §1, §4),
+	// answered by grain itself with the run's team git credential.
+	GitHubCapabilityServerID = "https://grain.dev/capabilities/github"
+
+	// GitHubReadIssuesMethod lets a task read GitHub issues and comments on
+	// the repositories its run may reach (formerly read-issues).
+	GitHubReadIssuesMethod = "read-issues"
+	GitHubReadIssuesRef    = GitHubCapabilityServerID + "#" + GitHubReadIssuesMethod
+	GitHubReadIssuesGrant  = GitHubReadIssuesRef + "={}"
+
+	// GitHubSandboxRepoMethod provisions a private, single-use GitHub sandbox
+	// repository for a run via this deployment's GitHub App and places a token
+	// scoped to only that repository (formerly github-sandbox).
+	LegacyGitHubSandboxCapability = "github-sandbox"
+	GitHubSandboxRepoMethod       = "sandbox-repo"
+	GitHubSandboxRepoRef          = GitHubCapabilityServerID + "#" + GitHubSandboxRepoMethod
+	GitHubSandboxRepoGrant        = GitHubSandboxRepoRef + "={}"
 )
 
 // ModelProxyVendors are the vendors the model-proxy server proxies, in
@@ -468,6 +487,38 @@ func IsGrainCIGrant(grant string) bool {
 // HasGrainCI reports whether any grant in grants opens grain#ci.
 func HasGrainCI(grants []string) bool {
 	return slices.ContainsFunc(grants, IsGrainCIGrant)
+}
+
+// IsGitHubReadIssuesGrant reports whether grant names github#read-issues
+// (recorded or bare) or the retired bare read-issues alias.
+func IsGitHubReadIssuesGrant(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if s == "read-issues" {
+		return true
+	}
+	return CapabilityGrantRef(s) == GitHubReadIssuesRef
+}
+
+// HasGitHubReadIssues reports whether any grant in grants opens
+// github#read-issues.
+func HasGitHubReadIssues(grants []string) bool {
+	return slices.ContainsFunc(grants, IsGitHubReadIssuesGrant)
+}
+
+// IsGitHubSandboxRepoGrant reports whether grant names github#sandbox-repo
+// (recorded or bare) or the retired bare github-sandbox alias.
+func IsGitHubSandboxRepoGrant(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if s == LegacyGitHubSandboxCapability {
+		return true
+	}
+	return CapabilityGrantRef(s) == GitHubSandboxRepoRef
+}
+
+// HasGitHubSandboxRepo reports whether any grant in grants opens
+// github#sandbox-repo.
+func HasGitHubSandboxRepo(grants []string) bool {
+	return slices.ContainsFunc(grants, IsGitHubSandboxRepoGrant)
 }
 
 // ParseGrainSQLGrant reports whether grant names grain#sql (recorded or bare)
@@ -731,6 +782,13 @@ var legacyGrantReplacements = map[string]string{
 	// Retired by schema migration 118 onto the built-in config-map server's
 	// bootstrap map.
 	"bootstrap-playbooks": BootstrapPlaybooksGrant,
+	// Retired by schema migration 121 onto the in-process github server's
+	// read-issues method, which reads with the same team git credential.
+	"read-issues": GitHubReadIssuesGrant,
+	// Retired by schema migration 124 onto the in-process github server's
+	// sandbox-repo method, which provisions the same private sandbox repo
+	// and scoped installation token via this deployment's GitHub App.
+	LegacyGitHubSandboxCapability: GitHubSandboxRepoGrant,
 }
 
 // legacyGrantMultiReplacements maps retired bare capabilities that split into
@@ -787,6 +845,9 @@ func legacyGrantReplacement(name string) (string, bool) {
 		if validLegacyGCPKeyParam(keyName) {
 			return GCPKeyServerGrant(keyName), true
 		}
+	}
+	if credName, ok := LegacyGitCredentialName(name); ok && ValidGitCredentialName(credName) {
+		return RepoCredentialGrant(credName), true
 	}
 	registeredLegacyAliasesMu.RLock()
 	defer registeredLegacyAliasesMu.RUnlock()

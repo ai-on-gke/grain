@@ -62,6 +62,7 @@ func TestClassifyEveryCategoryTheIssueNames(t *testing.T) {
 		"Dockerfile.relay":                "sandbox-images",
 		"tools/build/dockerfile":          "sandbox-images",
 		"scripts/setup.sh":                "setup-scripts",
+		"scripts/install-grain.sh":        "setup-scripts",
 		"./pkg/gitproxy/../gitproxy/a.go": "credential-proxy",
 	}
 	for p, want := range cases {
@@ -251,6 +252,8 @@ var knownBoundaryFiles = []string{
 	"pkg/daemon/ci_capability_pass.go", "pkg/daemon/capabilities.go",
 	"pkg/playbooks/", "pkg/model/capability_ref.go",
 	"pkg/model/capability_catalogue.go", "pkg/model/template_grants.go",
+	"pkg/model/owner_trust.go", "pkg/model/external_agent_token.go",
+	"pkg/ui/external_agents.go",
 }
 
 // Entries ending in "/" are directories: every .go file under them, as it
@@ -470,6 +473,9 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 		".grain/workflows/release.yml", ".github/workflows/release.yml",
 		".grain/workflows/promote.yml", ".github/workflows/promote.yml",
 		".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",
+		// v21: the release-asset publisher and the workflow that runs it
+		// on the train's tag pushes.
+		"scripts/release-assets.sh", ".github/workflows/release-train-assets.yml",
 	}
 	for _, p := range reviewed {
 		got := Classify([]string{p})
@@ -501,8 +507,8 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 // reach, the approval-callback tokens and the daemon's UI listeners. v16
 // classified none of them, so a change to any merged itself.
 func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v19" {
-		t.Errorf("Version = %q, want trust-boundary/v19", Version)
+	if Version != "trust-boundary/v21" {
+		t.Errorf("Version = %q, want trust-boundary/v21", Version)
 	}
 	for _, p := range []string{
 		"pkg/ui/access_roles.go",
@@ -551,8 +557,8 @@ func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
 // reference/policy, catalogue and template-grant admission files in
 // pkg/model/ classify under capabilities-secrets.
 func TestPlaybooksAndCapabilityAdmissionFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v19" {
-		t.Errorf("Version = %q, want trust-boundary/v19", Version)
+	if Version != "trust-boundary/v21" {
+		t.Errorf("Version = %q, want trust-boundary/v21", Version)
 	}
 	for _, p := range []string{
 		"pkg/playbooks/playbooks.go",
@@ -579,6 +585,63 @@ func TestPlaybooksAndCapabilityAdmissionFilesAreClassified(t *testing.T) {
 		}
 		if got := categoryIDs(Classify([]string{file})); !reflect.DeepEqual(got, []string{"capabilities-secrets"}) {
 			t.Errorf("%s is defined in %s, Classify = %v, want [capabilities-secrets]", name, file, got)
+		}
+	}
+}
+
+// v20 (task 3026): the external-agent owner-trust policy and the gma_
+// bearer token model and lifecycle handlers classify under auth-routes, while
+// the provenance-only X-Grain-Client / FiledVia helpers stay unclassified.
+func TestOwnerTrustAndExternalAgentTokenFilesAreClassified(t *testing.T) {
+	if Version != "trust-boundary/v21" {
+		t.Errorf("Version = %q, want trust-boundary/v21", Version)
+	}
+	for _, p := range []string{
+		"pkg/model/owner_trust.go",
+		"pkg/model/external_agent_token.go",
+		"pkg/ui/external_agents.go",
+	} {
+		if got := categoryIDs(Classify([]string{p})); !reflect.DeepEqual(got, []string{"auth-routes"}) {
+			t.Errorf("Classify(%q) = %v, want [auth-routes]", p, got)
+		}
+	}
+
+	// Control: X-Grain-Client / FiledVia is provenance-only (XC-15) and
+	// consulted by no scope, repository, approval or owner-trust decision.
+	for _, p := range []string{
+		"pkg/model/grain_client.go",
+		"pkg/ui/grain_client.go",
+	} {
+		if got := Classify([]string{p}); got != nil {
+			t.Errorf("Classify(%q) = %v, want nothing", p, categoryIDs(got))
+		}
+	}
+
+	// The gates by name, as in TestNewAuthorizationFilesAreClassified.
+	gates := map[string][]string{
+		"pkg/model": {
+			"NormalizeOwnerTrust", "OwnerTrusted", "OwnerTrustedForTask",
+			"OwnerPrincipal", "AllowsRepo", "NormalizeExternalAgentSpec",
+			"ResolveExternalAgentGrants", "GetExternalAgentTokenByHash",
+			"RotateExternalAgentToken", "RevokeExternalAgentToken", "RevokeAllExternalAgentTokens",
+		},
+		"pkg/ui": {
+			"canIssuePersonExternalAgentToken", "externalAgentTokenOwner", "selfServiceLimits",
+			"CreateExternalAgentToken", "RotateExternalAgentToken",
+			"authenticateExternalAgent", "ExternalAgentAPITools", "handleMCP",
+		},
+	}
+	for dir, names := range gates {
+		defined := funcFiles(t, dir)
+		for _, name := range names {
+			file, ok := defined[name]
+			if !ok {
+				t.Errorf("%s: no func or method %s -- update this test to where it went", dir, name)
+				continue
+			}
+			if got := categoryIDs(Classify([]string{file})); !reflect.DeepEqual(got, []string{"auth-routes"}) {
+				t.Errorf("%s is defined in %s, Classify = %v, want [auth-routes]", name, file, got)
+			}
 		}
 	}
 }

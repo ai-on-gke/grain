@@ -237,6 +237,11 @@ var notSettings = []string{
 	"suite_run_task",
 	"release",
 	"release_candidate",
+	// Which promote-release.yml dispatch a person started for a pending
+	// GitHub Actions release (model.ReleaseApprovalDecision): grain's runtime
+	// note of what was answered so the watcher does not re-raise it and
+	// Approve does not dispatch twice, never a setting a PR proposes.
+	"release_approval",
 	// Whether this deployment is picking new work up
 	// (model.PipelinePause). It is a decision somebody made -- an
 	// operator taking the deployment out of service, or grain holding
@@ -389,6 +394,8 @@ var notSettings = []string{
 	// of row again: re-read from the repository's default branch by every
 	// sync, and never a setting anybody proposes.
 	"repo_declaration_push",
+	// A declared suite's `qualification:` stanza, for the same reason.
+	"repo_declaration_qualification",
 	// A repository's path triggers (grain/task-1712) are the same kind
 	// of row as repo_declaration -- re-read from the repository by the
 	// next poll -- and the cursor beside them is grain's note of how far

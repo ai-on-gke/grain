@@ -192,6 +192,16 @@ func composedTaskFrom(c model.Composition, modelFallbackSource string, modelFall
 			Name: "keepRunning", Values: []string{onOff(true)}, Source: string(c.Sources.KeepRunning),
 		})
 	}
+	if adm := model.NormalizeAdmission(c.Admission); adm != model.AdmissionStandard {
+		fields = append(fields, ComposedField{
+			Name: "admission", Values: []string{string(adm)}, Source: string(c.Sources.Admission),
+		})
+	}
+	if hosting := model.NormalizeHosting(c.Hosting); hosting != model.HostingUnattended {
+		fields = append(fields, ComposedField{
+			Name: "hosting", Values: []string{string(hosting)}, Source: string(c.Sources.Hosting),
+		})
+	}
 	// Only a template sets a priority other than the default
 	// (model.Template.Priority; an inline schedule's firing always takes
 	// model.DefaultTaskPriority), and only one that does is worth a row:
@@ -293,6 +303,23 @@ func (c *Client) DraftScheduleComposition(ctx context.Context, req CreateSchedul
 	sched, _, _, err := c.scheduleFromRequest(ctx, req)
 	if err != nil {
 		return Composition{}, err
+	}
+	// A template-backed schedule may carry an admission of its own that
+	// raises its template's -- a repository's declared schedule can say
+	// `admission:` beside `template:` (docs/declarations.md), and its
+	// firings are composed with it (model.ComposeScheduleTask).
+	// scheduleFromRequest copies the template's content and nothing
+	// else, so the schedule pane's preview of such a schedule said
+	// "bypass, from the template" over a firing that files "durable,
+	// from the schedule" (2026-11-07 walkthrough). Applied here, to the
+	// preview alone: CreateSchedule still refuses an admission sent
+	// alongside a template (refuseIgnoredScheduleContent).
+	if sched.TemplateID != nil && sched.SuiteID == nil {
+		adm, err := model.ParseOptionalAdmission(req.Admission)
+		if err != nil {
+			return Composition{}, validationErrorf("%v", err)
+		}
+		sched.Admission = model.MaxAdmission(sched.Admission, adm)
 	}
 	return c.compositionOfSchedule(ctx, sched, "this schedule")
 }

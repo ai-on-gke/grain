@@ -138,9 +138,12 @@ func (w *holdWorld) clearedAtA(task model.Task) string {
 	// pairing-code join handshake and the request-actor check to
 	// auth-routes, task 3287; v19 only adds pkg/playbooks/ and the
 	// capability policy/catalogue/template-grant files to
-	// capabilities-secrets, task 3388).
-	if trustboundary.Version != "trust-boundary/v19" {
-		w.t.Fatalf("this walkthrough is about trust-boundary/v19, the build has %s", trustboundary.Version)
+	// capabilities-secrets, task 3388; v20 only adds the external-agent
+	// owner-trust policy and the gma_ token model and handlers to
+	// auth-routes, task 3026; v21 only adds the release-asset publisher,
+	// its train workflow and install-grain.sh, task 2990).
+	if trustboundary.Version != "trust-boundary/v21" {
+		w.t.Fatalf("this walkthrough is about trust-boundary/v21, the build has %s", trustboundary.Version)
 	}
 	if w.merged(branch) {
 		w.t.Fatal("merged before the pull request read mergeable")

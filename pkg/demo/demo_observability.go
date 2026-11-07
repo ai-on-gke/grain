@@ -22,12 +22,14 @@ package demo
 // browser can observe each state instead of racing a short shell command.
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -541,14 +543,21 @@ func (d *demoActionsCache) ActionsCacheStats() (int, int64, int64, []ui.ActionsC
 	defer d.mu.Unlock()
 	var totalBytes int64
 	var entries int
+	res := make([]ui.ActionsCacheRepoStats, 0, len(d.repos))
 	for _, r := range d.repos {
-		totalBytes += r.Bytes
-		if r.Bytes > 0 {
-			entries += 10
+		if r.Bytes <= 0 {
+			continue
 		}
+		totalBytes += r.Bytes
+		entries += 10
+		res = append(res, r)
 	}
-	res := make([]ui.ActionsCacheRepoStats, len(d.repos))
-	copy(res, d.repos)
+	slices.SortFunc(res, func(a, b ui.ActionsCacheRepoStats) int {
+		if c := cmp.Compare(b.Bytes, a.Bytes); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Repo, b.Repo)
+	})
 	return entries, totalBytes, d.maxBytes, res
 }
 
@@ -569,14 +578,17 @@ func (d *demoActionsCache) FlushActionsCache(repo string) (int, int64) {
 	defer d.mu.Unlock()
 	var freedEntries int
 	var freedBytes int64
-	for i := range d.repos {
-		if repo == "" || d.repos[i].Repo == repo {
-			if d.repos[i].Bytes > 0 {
+	kept := d.repos[:0]
+	for _, r := range d.repos {
+		if repo == "" || r.Repo == repo {
+			if r.Bytes > 0 {
 				freedEntries += 10
+				freedBytes += r.Bytes
 			}
-			freedBytes += d.repos[i].Bytes
-			d.repos[i].Bytes = 0
+			continue
 		}
+		kept = append(kept, r)
 	}
+	d.repos = kept
 	return freedEntries, freedBytes
 }

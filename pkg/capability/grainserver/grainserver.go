@@ -24,7 +24,14 @@
 //     event-gated by the reference itself (model.IsRepoAccessGrant,
 //     model.RepoAccessAdmitsCIEvent). #write's other value,
 //     GitPushAnyRefGrant (formerly git-push-any-ref), the git proxy reads
-//     off the live task (model.Store.GitPushAnyRef).
+//     off the live task (model.Store.GitPushAnyRef). #credential {credential}
+//     selects a named git credential under secrets/github for a task
+//     (formerly github-credential:<name>).
+//   - https://grain.dev/capabilities/github: GitHub operations answered by
+//     grain itself: reading issues and comments with the run's team git
+//     credential (#read-issues, formerly read-issues), and provisioning a
+//     private single-use sandbox repository via the deployment's GitHub App
+//     (#sandbox-repo, formerly github-sandbox).
 package grainserver
 
 import (
@@ -32,11 +39,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability"
+	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
+	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
@@ -122,18 +132,78 @@ const (
 
 	// LegacyGitPushAnyRef is the retired in-process capability name for GitPushAnyRefGrant.
 	LegacyGitPushAnyRef = model.GitPushAnyRefCapability
+
+	// GitHubID is the canonical capability_id of the in-process github server.
+	GitHubID = model.GitHubCapabilityServerID
+
+	// ReadIssuesMethod lets a task read GitHub issues and comments on the
+	// repositories its run may reach (formerly read-issues).
+	ReadIssuesMethod = model.GitHubReadIssuesMethod
+	ReadIssuesRef    = model.GitHubReadIssuesRef
+	ReadIssuesGrant  = model.GitHubReadIssuesGrant
+
+	// LegacyReadIssues is the retired in-process capability name for ReadIssuesGrant.
+	LegacyReadIssues = "read-issues"
+
+	// SandboxRepoMethod provisions a private, single-use GitHub sandbox
+	// repository for a run via this deployment's GitHub App (formerly github-sandbox).
+	SandboxRepoMethod   = model.GitHubSandboxRepoMethod
+	SandboxRepoRef      = model.GitHubSandboxRepoRef
+	SandboxRepoGrant    = model.GitHubSandboxRepoGrant
+	LegacyGitHubSandbox = model.LegacyGitHubSandboxCapability
+
+	// RepoCredentialMethod selects a named git credential under secrets/github
+	// for a task's git proxy, PR opener, and git identity (formerly github-credential:<name>).
+	RepoCredentialMethod = model.RepoCredentialMethod
+	RepoCredentialRef    = model.RepoCredentialRef
 )
 
 var (
 	serverOnce sync.Once
 	serverInst *protocol.Server
 
-	repoOnce sync.Once
-	repoInst *protocol.Server
+	repoMu            sync.RWMutex
+	repoCredentialsFn func() []string
 
+	githubOnce    sync.Once
+	githubInst    *protocol.Server
 	configMapOnce sync.Once
 	configMapInst *protocol.Server
 )
+
+// RepoCredentialGrant returns the canonical repo#credential grant for name.
+func RepoCredentialGrant(name string) string { return model.RepoCredentialGrant(name) }
+
+// ParseRepoCredentialGrant parses a canonical repo#credential grant.
+func ParseRepoCredentialGrant(grant string) (string, bool) {
+	return model.ParseRepoCredentialGrant(grant)
+}
+
+// ConfigureRepoCredentials sets the callback returning the deployment's
+// configured named git credentials under secrets/github (empty non-nil slice
+// when a credential directory is configured with no named credentials; nil when
+// unconfigured). It returns a restore function for tests.
+func ConfigureRepoCredentials(fn func() []string) func() {
+	repoMu.Lock()
+	prev := repoCredentialsFn
+	repoCredentialsFn = fn
+	repoMu.Unlock()
+	return func() {
+		repoMu.Lock()
+		repoCredentialsFn = prev
+		repoMu.Unlock()
+	}
+}
+
+func configuredRepoCredentials() []string {
+	repoMu.RLock()
+	fn := repoCredentialsFn
+	repoMu.RUnlock()
+	if fn == nil {
+		return nil
+	}
+	return fn()
+}
 
 // callerClock is the in-process methods' clock. An external server
 // holds a pass's deadline to its own clock; this one runs inside grain,
@@ -267,7 +337,56 @@ func repoAccessArgs() map[string]any {
 	}
 }
 
+func validSortedCredentialNames(names []string) []string {
+	seen := make(map[string]bool, len(names))
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if !githubtoken.ValidName(n) || seen[n] {
+			continue
+		}
+		seen[n] = true
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func repoCredentialArgs(configured []string) (map[string]any, []string) {
+	prop := map[string]any{
+		"type":        "string",
+		"pattern":     githubtoken.NamePattern,
+		"not":         map[string]any{"const": "anonymous"},
+		"description": "Named GitHub credential under secrets/github (<name>.token, <name>.app.json, or <name>.ssh.json) to authenticate this task's git operations with.",
+	}
+	var valid []string
+	if configured != nil {
+		valid = validSortedCredentialNames(configured)
+		enum := make([]any, len(valid))
+		for i, n := range valid {
+			enum[i] = n
+		}
+		prop["enum"] = enum
+	}
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"credential"},
+		"properties":           map[string]any{"credential": prop},
+	}, valid
+}
+
 func buildRepoServer() *protocol.Server {
+	return buildRepoServerFor(configuredRepoCredentials())
+}
+
+// RepoServerForCredentials builds an in-process https://grain.dev/capabilities/repo
+// server validating #credential against the given configured credential names
+// (when non-nil).
+func RepoServerForCredentials(configured []string) *protocol.Server {
+	return buildRepoServerFor(configured)
+}
+
+func buildRepoServerFor(configured []string) *protocol.Server {
 	read, err := protocol.NewMethod(protocol.MethodSpec{
 		Name: RepoReadMethod,
 		Description: "Let a CI job fetch one other repository, read-only, through the git proxy with the " +
@@ -325,13 +444,78 @@ func buildRepoServer() *protocol.Server {
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: building repo#%s: %v", RepoWriteMethod, err))
 	}
-	cs, err := protocol.NewCapabilityServer("repo", read, write)
+	credArgs, validCreds := repoCredentialArgs(configured)
+	hasConfiguredList := configured != nil
+	credentialMethod, err := protocol.NewMethod(protocol.MethodSpec{
+		Name: RepoCredentialMethod,
+		Description: "Authenticate this task's git proxy operations, pull request creation, and commit identity " +
+			"with the named credential under secrets/github instead of the deployment's default git connection " +
+			"(formerly github-credential:<name>).",
+		Args: credArgs,
+		// Nothing is placed in the sandbox: the git proxy, PR opener, and git
+		// identity read the grant off the live task (Store.TaskGitCredentialOn).
+		Mint: func(_ context.Context, _ string, _ time.Time, args map[string]any) (*protocol.MintResponse, error) {
+			name, _ := args["credential"].(string)
+			if !githubtoken.ValidName(name) {
+				return &protocol.MintResponse{
+					Status: protocol.StatusRefused,
+					Reason: fmt.Sprintf("invalid git credential name %q", name),
+				}, nil
+			}
+			if hasConfiguredList && !slices.Contains(validCreds, name) {
+				return &protocol.MintResponse{
+					Status: protocol.StatusRefused,
+					Reason: fmt.Sprintf("git credential %q is not configured under secrets/github", name),
+				}, nil
+			}
+			return &protocol.MintResponse{
+				Status:        protocol.StatusOK,
+				PromptSection: githubtoken.PromptSection(name),
+			}, nil
+		},
+		Now: callerClock,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("grainserver: building repo#%s: %v", RepoCredentialMethod, err))
+	}
+	cs, err := protocol.NewCapabilityServer("repo", read, write, credentialMethod)
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: building repo capability server: %v", err))
 	}
 	srv, err := protocol.NewServer(context.Background(), RepoID, cs.InProcessCaller())
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: attaching in-process repo server: %v", err))
+	}
+	return srv
+}
+
+func buildGitHubServer() *protocol.Server {
+	readIssues, err := protocol.NewMethod(protocol.MethodSpec{
+		Name: ReadIssuesMethod,
+		Description: "Let this task read issues and comments from GitHub on the repositories its run may " +
+			"reach, read-only, with the team's own git credential (formerly read-issues).",
+		// Nothing is placed in the sandbox: the git proxy (/cli/issues) and
+		// grain mcpserver (list_issues, read_issue) read the grant off the
+		// task and answer with the run's team git credential.
+		Mint: func(_ context.Context, _ string, _ time.Time, _ map[string]any) (*protocol.MintResponse, error) {
+			return &protocol.MintResponse{Status: protocol.StatusOK}, nil
+		},
+		Now: callerClock,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("grainserver: building github#%s: %v", ReadIssuesMethod, err))
+	}
+	sandboxRepo, err := protocol.NewMethod(githubsandbox.MethodSpec())
+	if err != nil {
+		panic(fmt.Sprintf("grainserver: building github#%s: %v", SandboxRepoMethod, err))
+	}
+	cs, err := protocol.NewCapabilityServer("github", readIssues, sandboxRepo)
+	if err != nil {
+		panic(fmt.Sprintf("grainserver: building github capability server: %v", err))
+	}
+	srv, err := protocol.NewServer(context.Background(), GitHubID, cs.InProcessCaller())
+	if err != nil {
+		panic(fmt.Sprintf("grainserver: attaching in-process github server: %v", err))
 	}
 	return srv
 }
@@ -344,12 +528,18 @@ func Server() *protocol.Server {
 	return serverInst
 }
 
-// RepoServer returns the singleton in-process https://grain.dev/capabilities/repo server.
+// RepoServer returns the in-process https://grain.dev/capabilities/repo server
+// reflecting the currently configured named git credentials (if any).
 func RepoServer() *protocol.Server {
-	repoOnce.Do(func() {
-		repoInst = buildRepoServer()
+	return buildRepoServer()
+}
+
+// GitHubServer returns the singleton in-process https://grain.dev/capabilities/github server.
+func GitHubServer() *protocol.Server {
+	githubOnce.Do(func() {
+		githubInst = buildGitHubServer()
 	})
-	return repoInst
+	return githubInst
 }
 
 // Status reports the in-process grain server's method details in the same shape
@@ -360,11 +550,20 @@ func Status() servers.Status { return statusOf(ID, Server()) }
 // RepoStatus is Status for the in-process repo server.
 func RepoStatus() servers.Status { return statusOf(RepoID, RepoServer()) }
 
+// GitHubStatus is Status for the in-process github server.
+func GitHubStatus() servers.Status { return statusOf(GitHubID, GitHubServer()) }
+
+// RepoStatusForCredentials is RepoStatus validating #credential against the
+// given configured credential names (when non-nil).
+func RepoStatusForCredentials(configured []string) servers.Status {
+	return statusOf(RepoID, RepoServerForCredentials(configured))
+}
+
 // Statuses is every in-process server's Status: core's own, then one for
 // each server a build outside core contributed methods to
 // (capability.Register), ordered by ID.
 func Statuses() []servers.Status {
-	out := []servers.Status{Status(), RepoStatus()}
+	out := []servers.Status{Status(), RepoStatus(), GitHubStatus()}
 	for _, id := range capability.MethodServers() {
 		srv, ok, err := capability.MethodServer(id)
 		if !ok {
@@ -383,7 +582,7 @@ func Statuses() []servers.Status {
 // servers: core's own, or one a build contributed methods to
 // (capability.Register).
 func IsInProcessID(capabilityID string) bool {
-	return capabilityID == ID || capabilityID == RepoID || capability.IsMethodServer(capabilityID)
+	return capabilityID == ID || capabilityID == RepoID || capabilityID == GitHubID || capability.IsMethodServer(capabilityID)
 }
 
 func statusOf(id string, srv *protocol.Server) servers.Status {
@@ -427,7 +626,7 @@ func defaultConfigMapServer() *protocol.Server {
 	return configMapInst
 }
 
-// Lookup wraps fallback so ID and RepoID always resolve to the in-process
+// Lookup wraps fallback so ID, RepoID and GitHubID always resolve to the in-process
 // servers, and a server with methods contributed through capability.Register
 // to the in-process server built from them, even when fallback is nil or
 // comes from a registry that only tracks mcp_servers. When fallback is nil,
@@ -435,12 +634,24 @@ func defaultConfigMapServer() *protocol.Server {
 // unconfigured in-process config-map server so built-in bootstrap playbook
 // grants work without a subprocess registry.
 func Lookup(fallback protocol.Lookup) protocol.Lookup {
+	return LookupWithRepoCredentials(fallback, nil)
+}
+
+// LookupWithRepoCredentials is Lookup, overriding the configured #credential
+// names on RepoID when repoCredentials is non-nil (otherwise falling back to
+// ConfigureRepoCredentials).
+func LookupWithRepoCredentials(fallback protocol.Lookup, repoCredentials []string) protocol.Lookup {
 	return func(capabilityID string) (*protocol.Server, error) {
 		switch capabilityID {
 		case ID:
 			return buildServer(), nil
 		case RepoID:
+			if repoCredentials != nil {
+				return buildRepoServerFor(repoCredentials), nil
+			}
 			return buildRepoServer(), nil
+		case GitHubID:
+			return buildGitHubServer(), nil
 		}
 		if srv, ok, err := capability.MethodServer(capabilityID); ok {
 			return srv, err
@@ -513,6 +724,20 @@ func IsCIGrant(grant string) bool { return model.IsGrainCIGrant(grant) }
 // IsGitPushAnyRefGrant reports whether grant is GitPushAnyRefGrant or the
 // retired bare git-push-any-ref alias.
 func IsGitPushAnyRefGrant(grant string) bool { return model.IsGitPushAnyRefGrant(grant) }
+
+// IsReadIssuesGrant reports whether grant names github#read-issues (recorded
+// or bare) or the retired bare read-issues alias.
+func IsReadIssuesGrant(grant string) bool { return model.IsGitHubReadIssuesGrant(grant) }
+
+// HasReadIssues reports whether any grant in grants opens github#read-issues.
+func HasReadIssues(grants []string) bool { return model.HasGitHubReadIssues(grants) }
+
+// IsSandboxRepoGrant reports whether grant names github#sandbox-repo (recorded
+// or bare) or the retired bare github-sandbox alias.
+func IsSandboxRepoGrant(grant string) bool { return model.IsGitHubSandboxRepoGrant(grant) }
+
+// HasSandboxRepo reports whether any grant in grants opens github#sandbox-repo.
+func HasSandboxRepo(grants []string) bool { return model.HasGitHubSandboxRepo(grants) }
 
 // CheckSourceReadable reports whether this process's own account can
 // actually read srcDir, grain's own source checkout grain#source serves

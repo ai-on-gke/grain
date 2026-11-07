@@ -55,6 +55,8 @@ import {
   NO_CAPABILITIES_HINT,
   targetableRepos,
 } from "../state.js";
+import AccessGate from "./AccessGate.jsx";
+import AdmissionField from "./AdmissionField.jsx";
 
 // TemplateOverlay is a template's own sub page (bwsalmon/agents#545):
 // "+ New" on the Processes page (ProcessesList) opens this blank, and clicking
@@ -158,6 +160,9 @@ function TemplateOverlay({
   // (ui.CreateTemplateRequest.Model); "" leaves it to the deployment's
   // default.
   const [chosenModel, setChosenModel] = useState(template?.model || "");
+  // The admission every task this template files starts at
+  // (model.Template.Admission); "" on the wire is standard.
+  const [admission, setAdmission] = useState(template?.admission || "standard");
 
   // Whether leaving now would lose an edit: the text boxes are read off
   // the form, and the pickers above keep their answers in state.
@@ -168,6 +173,7 @@ function TemplateOverlay({
     customFields,
     fields,
     chosenModel,
+    admission,
   });
   const [stale, setStale] = useState(null);
   // Held from when the pane opened, ScheduleOverlay's openedRevision.
@@ -208,6 +214,12 @@ function TemplateOverlay({
       // the same as saying nothing.
       ...(chosenModel !== (template?.model || "")
         ? { model: chosenModel }
+        : {}),
+      // Only when it changed, for the model's reason above: raising it
+      // is gated for a limited role (ui's grant gate reads `admission`),
+      // so a save that only resends the saved value must not ask.
+      ...(admission !== (template?.admission || "standard")
+        ? { admission }
         : {}),
       reads,
       writes,
@@ -456,6 +468,11 @@ function TemplateOverlay({
             title="Immediately restart every task this template files when its run exits, instead of completing or parking it."
             sx={{ display: "flex" }}
           />
+          <AdmissionField
+            value={admission}
+            onChange={setAdmission}
+            noun="template"
+          />
           <TextField
             select
             name="networkAccess"
@@ -545,20 +562,26 @@ function TemplateOverlay({
           sx={{ mt: 2 }}
         >
           {!isNew && (
-            <Button color="error" onClick={remove} disabled={locked}>
-              Delete
-            </Button>
+            <AccessGate scope="templates:write" repo={repo}>
+              <Button color="error" onClick={remove} disabled={locked}>
+                Delete
+              </Button>
+            </AccessGate>
           )}
           <Stack direction="row" spacing={1}>
             {!isNew && onNewTask && (
-              <Button onClick={() => onNewTask(template)}>
-                New task from this template
-              </Button>
+              <AccessGate scope="tasks:write" repo={repo}>
+                <Button onClick={() => onNewTask(template)}>
+                  New task from this template
+                </Button>
+              </AccessGate>
             )}
             <Button onClick={onClose}>{locked ? "Close" : "Cancel"}</Button>
-            <Button type="submit" variant="contained" disabled={locked}>
-              {isNew ? "Add template" : "Save"}
-            </Button>
+            <AccessGate scope="templates:write" repo={repo}>
+              <Button type="submit" variant="contained" disabled={locked}>
+                {isNew ? "Add template" : "Save"}
+              </Button>
+            </AccessGate>
           </Stack>
         </Stack>
       </form>

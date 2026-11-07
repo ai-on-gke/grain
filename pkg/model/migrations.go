@@ -846,6 +846,49 @@ var Migrations = []Migration{
 			"ALTER TABLE `allowed_principal` ADD COLUMN `last_used_at` DATETIME NULL",
 		},
 	},
+	{
+		Version:     120,
+		Description: "rewrite stored github-credential:<name> grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/repo#credential={\"credential\":\"<name>\"} (the in-process github-credential:<name> providers are retired)",
+		Up:          migrateGitHubCredentialGrants,
+	},
+	{
+		Version:     121,
+		Description: "rewrite stored read-issues grants, repo_config.ci_capabilities and capability_policy included, to https://grain.dev/capabilities/github#read-issues={} (the in-process capability is retired)",
+		Up:          migrateReadIssuesGrants,
+	},
+	{
+		Version:     122,
+		Description: "replace priority-dispatch and durable grants with the admission setting on tasks, templates, schedules and defaults",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `admission` TEXT NOT NULL DEFAULT 'standard'",
+			"ALTER TABLE `template` ADD COLUMN `admission` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `schedule` ADD COLUMN `admission` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `grain_config` ADD COLUMN `default_admission` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `repo_config` ADD COLUMN `default_admission` TEXT NOT NULL DEFAULT ''",
+		},
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			return MigrateAdmissionFromGrants(ctx, tx, false)
+		},
+	},
+	{
+		Version:     123,
+		Description: "replace console grants with the hosting setting on tasks, templates, schedules, console sessions and defaults",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `hosting` TEXT NOT NULL DEFAULT 'unattended'",
+			"ALTER TABLE `template` ADD COLUMN `hosting` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `schedule` ADD COLUMN `hosting` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `grain_config` ADD COLUMN `default_hosting` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `repo_config` ADD COLUMN `default_hosting` TEXT NOT NULL DEFAULT ''",
+		},
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			return MigrateHostingFromGrants(ctx, tx, false)
+		},
+	},
+	{
+		Version:     124,
+		Description: "rewrite stored github-sandbox grants, repo_config.ci_capabilities and capability_policy included, to https://grain.dev/capabilities/github#sandbox-repo={} (the in-process capability is retired)",
+		Up:          migrateGitHubSandboxGrants,
+	},
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as

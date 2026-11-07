@@ -264,6 +264,36 @@ describe("CachesPage", () => {
       expect(btn).toHaveTextContent("Flush the whole cache");
     }
   });
+
+  it("disables per-repository Actions cache flush when a repository row holds 0 B", async () => {
+    api
+      .mockResolvedValueOnce({ enabled: true, cache: [] })
+      .mockResolvedValueOnce({
+        enabled: true,
+        usedByJobs: true,
+        entries: 10,
+        bytes: 2 * (1 << 30),
+        maxBytes: 20 * (1 << 30),
+        repos: [
+          { repo: "acme/widgets", bytes: 2 * (1 << 30) },
+          { repo: "acme/gadgets", bytes: 0 },
+        ],
+      });
+
+    render(<CachesPage showError={() => {}} />);
+    await screen.findByText("acme/widgets: 2.0 GiB");
+
+    expect(
+      screen.getByRole("button", {
+        name: "Flush the Actions cache of acme/widgets",
+      }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("button", {
+        name: "Flush the Actions cache of acme/gadgets",
+      }),
+    ).toBeDisabled();
+  });
 });
 
 // A first read that failed used to spin "Loading caches" for as long as

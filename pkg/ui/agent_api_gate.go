@@ -144,6 +144,9 @@ type agentCall struct {
 	// session is whether the acting task is a console session, whose
 	// calls are recorded with source session rather than sandbox.
 	session bool
+	// onBehalfOf is the person the call is made for, from grain's own
+	// records (agentOnBehalfOf), and nil for nobody.
+	onBehalfOf *model.Principal
 }
 
 // source is how the gate established the agent principal it runs this
@@ -266,7 +269,8 @@ func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.Handle
 			return
 		}
 		agent := model.Principal{Kind: model.PrincipalAgent, ID: taskID, Source: call.source()}
-		callCtx := withAgentCall(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), call)
+		ctx := withOnBehalfOf(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), call.onBehalfOf)
+		callCtx := withAgentCall(ctx, call)
 		r = r.WithContext(model.WithEventActor(callCtx, RequestActor(callCtx)))
 		s.serveAgentCall(w, r, next, call)
 	}
@@ -325,6 +329,7 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 		return call, fmt.Errorf("acting task %s could not be read: %v", taskID, err)
 	}
 	call.session = acting.IsConsoleSession()
+	call.onBehalfOf = agentOnBehalfOf(ctx, s.tasks.Store, *acting)
 	held := grantNames(acting.Grants)
 	var set APIGrantSet
 	if call.channel == SandboxCLIChannel {
@@ -904,7 +909,8 @@ func inGrainAgentTaskID(p model.Principal) string {
 //     priority-dispatch;
 //   - carrying a repository-declared push set (declaredPushOf) or
 //     auto-merge that acting could not have inherited itself;
-//   - keep_running on any task, and against proposer when there is one:
+//   - keep_running or admission above standard on any task, and against
+//     proposer when there is one:
 //     capabilities, write targets or reads it does not hold
 //     (model.EscalatedCapabilities, UngrantedWrites, UngrantedReads), and
 //     keep_running or a priority above its own
@@ -950,7 +956,12 @@ func (s *Server) proposalPersonHolds(ctx context.Context, task model.Task, propo
 		holds = append(holds, "it has auto-merge enabled, which would land its change without review")
 	}
 	if proposer == nil {
-		if why := model.PersonOnlyProposalSettings(model.Task{KeepRunning: task.KeepRunning}, model.Task{}); why != "" {
+		// Admission above standard is asked here too, not only of a
+		// proposal: it replaced the priority-dispatch and durable grants,
+		// which the person-only check above held whoever filed the task,
+		// so a held task an external credential or a person filed with
+		// admission bypass or durable still waits for a person.
+		if why := model.PersonOnlyProposalSettings(model.Task{KeepRunning: task.KeepRunning, Admission: task.Admission}, model.Task{}); why != "" {
 			holds = append(holds, why)
 		}
 		return holds, nil
@@ -1072,6 +1083,9 @@ func (s *Server) storedRepoConfig(ctx context.Context, repo string) *model.RepoC
 func agentGrantRefusal(held []string, name string, normalize func(string) (string, error)) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
+		return nil
+	}
+	if _, ok := model.LegacyHostingAlias(name); ok {
 		return nil
 	}
 	if expanded := model.CanonicalLegacyGrants(name); len(expanded) > 1 {
@@ -1290,6 +1304,7 @@ func fieldTouchesTaskGrants(key string, raw json.RawMessage) bool {
 		return json.Unmarshal(raw, &on) == nil
 	}
 	return strings.Contains(lower, "capabilit") || lower == "grants" ||
+		lower == "admission" ||
 		lower == "keeprunning" || lower == "keep_running" ||
 		lower == "prioritydispatch" || lower == "priority_dispatch"
 }
@@ -1318,6 +1333,29 @@ type grantField struct {
 
 func grantNamesFromField(pattern string, f jsonField, stored map[string][]string, normalize func(string) (string, error)) []string {
 	lower := gateKey(f.key)
+	if lower == "admission" || lower == "defaultadmission" || lower == "default_admission" {
+		// Raising admission above standard is what the retired
+		// priority-dispatch (bypass) and durable grants gave, and is gated
+		// under their names; on a task PATCH any change at all is.
+		trimmed := strings.TrimSpace(string(f.raw))
+		if trimmed == "" || trimmed == "null" {
+			return nil
+		}
+		var v string
+		if json.Unmarshal(f.raw, &v) != nil {
+			return []string{model.PriorityDispatchCapability}
+		}
+		adm, err := model.ParseOptionalAdmission(v)
+		switch {
+		case err != nil:
+			return []string{model.PriorityDispatchCapability}
+		case adm == model.AdmissionDurable:
+			return []string{model.DurableCapability}
+		case adm.AtLeast(model.AdmissionBypass) || pattern == "PATCH /api/tasks/{id}":
+			return []string{model.PriorityDispatchCapability}
+		}
+		return nil
+	}
 	if lower == "priority" || lower == "prioritydispatch" || lower == "priority_dispatch" {
 		var on bool
 		if json.Unmarshal(f.raw, &on) == nil && (on || pattern == "PATCH /api/tasks/{id}") {
@@ -2562,9 +2600,15 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	// GET /api/inbox and GET /api/events without ?repo= answer only the
 	// repositories the token reads (Server.inboxReadable,
 	// Server.eventsReadable), so a token held to some of them is let
-	// through rather than refused for naming none.
+	// through rather than refused for naming none. GET /api/config and
+	// GET /api/templates answer board-level metadata (`grain skill
+	// install`, `grain list`, `grain create`) under deployment:read and
+	// templates:read even when the credential is narrowed to specific
+	// repositories.
 	fsAllowed := fsMergeQueueByCI(set, pattern, r) ||
-		((pattern == "GET /api/inbox" || pattern == "GET /api/events") && set.Has(scope) && strings.TrimSpace(r.URL.Query().Get("repo")) == "")
+		((pattern == "GET /api/inbox" || pattern == "GET /api/events") && set.Has(scope) && strings.TrimSpace(r.URL.Query().Get("repo")) == "") ||
+		(pattern == "GET /api/config" && (set.Has(scope) || set.Has("deployment:read"))) ||
+		(pattern == "GET /api/templates" && set.Has(scope))
 	if !set.Has(scope) && !adminPatch && !fsAllowed && !detach {
 		return call, fmt.Errorf("%s holds no api grant for scope %s, which %s needs", principal, scope, pattern)
 	}
@@ -2903,6 +2947,9 @@ func externalTemplateWithin(tok *model.ExternalAgentToken, held []string, tmpl m
 	}
 	if len(tmpl.Reviewers) > 0 {
 		return fmt.Errorf("template %s sets reviewers, which only a person may set", tmpl.ID)
+	}
+	if model.NormalizeAdmission(tmpl.Admission).AtLeast(model.AdmissionBypass) {
+		return fmt.Errorf("template %s sets admission %s, which only a person may give", tmpl.ID, tmpl.Admission)
 	}
 	return nil
 }
@@ -3251,6 +3298,8 @@ func editedPatchResponseKeys(body []byte) []string {
 	add(req.ExternalRef != nil, "externalRef")
 	add(req.Priority != nil, "priority")
 	add(req.PriorityDispatch != nil, "priorityDispatch")
+	add(req.Admission != nil, "admission")
+	add(req.Hosting != nil, "hosting")
 	add(req.Issue != nil, "issue")
 	add(req.AutoMerge != nil, "autoMerge")
 	add(req.AutoApproveProposals != nil, "autoApproveProposals")

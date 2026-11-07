@@ -27,6 +27,7 @@ import { parsePath } from "./paths.js";
 import {
   NO_NARROWING,
   NONE,
+  admitsState,
   defaultFilters,
   defaultNarrowing,
   defaultSortFor,
@@ -1936,5 +1937,37 @@ describe("defaultSortFor", () => {
         config,
       ),
     ).toBe(false);
+  });
+});
+
+describe("closed work the server searched", () => {
+  it("matches a task the server found for this very text, and only that text", () => {
+    const t = {
+      id: "41",
+      title: "Fix the parser",
+      state: "closed",
+      searchHit: "deadlock",
+    };
+    expect(matchesFilters(t, [], "deadlock", null)).toBe(true);
+    expect(matchesFilters(t, [], "livelock", null)).toBe(false);
+    expect(
+      matchesFilters({ ...t, searchHit: undefined }, [], "deadlock", null),
+    ).toBe(false);
+  });
+
+  it("says whether a narrowing's State conditions let a closed task through", () => {
+    expect(admitsState(defaultNarrowing(null), null, "closed")).toBe(false);
+    expect(admitsState(NO_NARROWING, null, "closed")).toBe(true);
+    const repoOnly = {
+      ...NO_NARROWING,
+      filters: [{ attr: "repo", op: "any", values: ["acme/widgets"] }],
+    };
+    expect(admitsState(repoOnly, null, "closed")).toBe(true);
+    const closedOnly = {
+      ...NO_NARROWING,
+      filters: [{ attr: "state", op: "any", values: ["closed"] }],
+    };
+    expect(admitsState(closedOnly, null, "closed")).toBe(true);
+    expect(admitsState(closedOnly, null, "queued")).toBe(false);
   });
 });

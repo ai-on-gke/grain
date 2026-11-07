@@ -40,13 +40,13 @@ func TestRepoCICapabilitiesAPIKeepsTaskDefaultsIndependent(t *testing.T) {
 		t.Fatalf("PUT: %d %s", rec.Code, rec.Body)
 	}
 	got := decode[ui.RepoDefaults](t, rec)
-	if !reflect.DeepEqual(got.CICapabilities, []string{"github-sandbox"}) || !reflect.DeepEqual(got.DefaultCapabilities, original.DefaultCapabilities) || got.PromptExtension != original.PromptExtension || got.SetupCommand != original.SetupCommand {
+	if !reflect.DeepEqual(got.CICapabilities, []string{model.GitHubSandboxRepoGrant}) || !reflect.DeepEqual(got.DefaultCapabilities, original.DefaultCapabilities) || got.PromptExtension != original.PromptExtension || got.SetupCommand != original.SetupCommand {
 		t.Fatalf("saved: %+v", got)
 	}
 	// package-publish is here beside gcp-key because it is the grant a
 	// release workflow is turned on with, and a capability the picker
 	// does not offer is one SetRepoCICapabilities refuses to save.
-	for _, id := range []string{"github-sandbox", model.PackagePublishRef + "={}"} {
+	for _, id := range []string{model.GitHubSandboxRepoGrant, model.PackagePublishRef + "={}"} {
 		if !slices.Contains(got.AvailableCICapabilities, id) {
 			t.Fatalf("CI picker does not offer %q: %v", id, got.AvailableCICapabilities)
 		}
@@ -66,7 +66,7 @@ func TestRepoCICapabilitiesAPIKeepsTaskDefaultsIndependent(t *testing.T) {
 	if gotRepoReadWrite := decode[ui.RepoDefaults](t, rec); !reflect.DeepEqual(gotRepoReadWrite.CICapabilities, []string{model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "tools"}), model.RepoWriteGrant(model.RepoRef{Owner: "acme", Name: "tools"})}) {
 		t.Fatalf("saved repo-read/write: %+v", gotRepoReadWrite)
 	}
-	for _, id := range []string{"self-debug", "unknown", "github-credential:default", "repo-read:invalid", "repo-write:invalid"} {
+	for _, id := range []string{"self-debug", "unknown", "github-credential:default", model.RepoCredentialGrant("default"), "repo-read:invalid", "repo-write:invalid"} {
 		rec = do(t, srv, http.MethodPut, path, `{"ciCapabilities":["`+id+`"]}`)
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("%s accepted: %d", id, rec.Code)

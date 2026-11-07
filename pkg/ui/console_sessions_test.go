@@ -326,10 +326,14 @@ func TestUpdatingASessionThisDeploymentDoesNotHaveIsRefused(t *testing.T) {
 func TestConsoleSessionCapabilitiesSayWhichOnesThisDeploymentCanHonour(t *testing.T) {
 	t.Parallel()
 	_, store, _ := testClient(t)
+	sec := secrets.New(t.TempDir())
 	srv := ui.NewServer(ui.Config{
-		Actor:        ui.DefaultActor("alice"),
-		Capabilities: ui.OfferedCapabilities(),
-		Secrets:      secrets.New(t.TempDir()),
+		Actor: ui.DefaultActor("alice"),
+		Capabilities: append(ui.OfferedCapabilities(), ui.Capability{
+			ID:   "github-sandbox",
+			Name: "GitHub sandbox",
+		}),
+		Secrets: sec,
 	}, store)
 
 	rec := do(t, srv, http.MethodGet, "/api/console-sessions", "")
@@ -354,13 +358,28 @@ func TestConsoleSessionCapabilitiesSayWhichOnesThisDeploymentCanHonour(t *testin
 	if len(sandbox.Needs) == 0 {
 		t.Error("github-sandbox says it is not ready without naming a single thing it needs")
 	}
-	// One that needs no configuration at all stays on offer.
-	debug, ok := byID["read-issues"]
-	if !ok {
-		t.Fatalf("read-issues is missing from %v", resp.Capabilities)
+	// Once configured, that same capability reports ready on offer.
+	if err := sec.Set("github-app", "app-id", []byte("123")); err != nil {
+		t.Fatal(err)
 	}
-	if debug.Ready == nil || !*debug.Ready {
-		t.Errorf("read-issues ready = %v, want true: it needs nothing configured", debug.Ready)
+	if err := sec.Set("github-app", "private-key", []byte("-----BEGIN KEY-----")); err != nil {
+		t.Fatal(err)
+	}
+	rec = do(t, srv, http.MethodGet, "/api/console-sessions", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
+	}
+	resp = decode[ui.ConsoleSessionSettingsResponse](t, rec)
+	byID = make(map[string]ui.Capability, len(resp.Capabilities))
+	for _, capability := range resp.Capabilities {
+		byID[capability.ID] = capability
+	}
+	readySandbox, ok := byID["github-sandbox"]
+	if !ok {
+		t.Fatalf("github-sandbox is missing from %v", resp.Capabilities)
+	}
+	if readySandbox.Ready == nil || !*readySandbox.Ready {
+		t.Errorf("github-sandbox ready = %v, want true after App secrets set", readySandbox.Ready)
 	}
 }
 
@@ -1151,7 +1170,7 @@ func TestActiveConsoleSessionEditableWhenStateRepoConfigured(t *testing.T) {
 		t.Fatalf("len(listed.Sessions) = %d, want 1", len(listed.Sessions))
 	}
 	dir := listed.Sessions[0]
-	for _, wantCap := range []string{"read-issues", "api:tasks:admin", "api:release-manager"} {
+	for _, wantCap := range []string{model.GitHubReadIssuesGrant, "api:tasks:admin", "api:release-manager"} {
 		if !slices.Contains(dir.Capabilities, wantCap) {
 			t.Errorf("GET /api/console-sessions Capabilities = %v, missing %q", dir.Capabilities, wantCap)
 		}
@@ -1359,5 +1378,88 @@ func TestConsoleSessionsOnIsolatedUnshapedBackendKeepNetworkNone(t *testing.T) {
 	}
 	if createdTask.NetworkAccess != model.NetworkNone {
 		t.Errorf("created session task NetworkAccess = %q, want %q", createdTask.NetworkAccess, model.NetworkNone)
+	}
+}
+
+func TestSavedDirectorRowKeepsOperatorRemovalsAndOffersShippedDefaults(t *testing.T) {
+	t.Parallel()
+	client, store, ctx := testClient(t)
+
+	// 1. Fresh/unsaved deployment (cfg.ConsoleSessions == nil) already has all shipped defaults; nothing missing.
+	initial, err := client.ListConsoleSessions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(initial) != 1 || len(initial[0].MissingShippedDefaults) != 0 {
+		t.Fatalf("unsaved deployment MissingShippedDefaults = %v, want empty", initial[0].MissingShippedDefaults)
+	}
+
+	// 2. Existing deployment with a saved pre-G1 director row plus an operator-granted Tier 2 scope.
+	savedCaps := []string{
+		"api:self-debug",
+		model.GrainSourceGrant,
+		model.GrainJournalGrant,
+		"api:deployment:read",
+		model.GrainHealthGrant,
+		model.BootstrapPlaybooksGrant,
+		"api:tasks:admin",
+	}
+	if err := store.PutConfig(ctx, model.Config{
+		ApprovedByDefault: true,
+		ConsoleSessions: []model.ConsoleSession{{
+			ID:            model.DirectorSessionID,
+			Title:         "Director",
+			Capabilities:  savedCaps,
+			NetworkAccess: model.NetworkOpen,
+			Writes:        []model.WriteTarget{{Repo: model.ConfigRepo()}},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	listed, err := client.ListConsoleSessions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("len(listed) = %d, want 1", len(listed))
+	}
+	// Saved capabilities are preserved verbatim (no silent rewrite).
+	if !slices.Equal(listed[0].Capabilities, savedCaps) {
+		t.Fatalf("saved director Capabilities = %v, want preserved %v", listed[0].Capabilities, savedCaps)
+	}
+	for _, wantMissing := range []string{
+		"api:task-admin",
+		"api:capabilities:read",
+		"api:capabilities:detach",
+		"api:settings:read",
+		"api:repos:read",
+		"api:releases:read",
+		"api:schedules:read",
+		"api:templates:read",
+		"api:suites:read",
+		"api:dispatch:read",
+	} {
+		if !slices.Contains(listed[0].MissingShippedDefaults, wantMissing) {
+			t.Errorf("MissingShippedDefaults = %v, missing %q", listed[0].MissingShippedDefaults, wantMissing)
+		}
+	}
+
+	// 3. Adopting shipped defaults merges them while preserving the operator's Tier 2 grant.
+	adopted := append(slices.Clone(listed[0].Capabilities), listed[0].MissingShippedDefaults...)
+	afterAdopt, err := client.UpdateConsoleSession(ctx, model.DirectorSessionID, ui.UpdateConsoleSessionRequest{
+		Capabilities: &adopted,
+	})
+	if err != nil {
+		t.Fatalf("UpdateConsoleSession(adopt shipped defaults) failed: %v", err)
+	}
+	if len(afterAdopt) != 1 {
+		t.Fatalf("len(afterAdopt) = %d, want 1", len(afterAdopt))
+	}
+	if len(afterAdopt[0].MissingShippedDefaults) != 0 {
+		t.Errorf("after adopting defaults, MissingShippedDefaults = %v, want empty", afterAdopt[0].MissingShippedDefaults)
+	}
+	if !slices.Contains(afterAdopt[0].Capabilities, "api:tasks:admin") || !slices.Contains(afterAdopt[0].Capabilities, "api:task-admin") {
+		t.Errorf("after adopting defaults, Capabilities = %v, want both Tier 2 grant and Tier 1 defaults", afterAdopt[0].Capabilities)
 	}
 }

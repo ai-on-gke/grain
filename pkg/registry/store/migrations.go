@@ -287,10 +287,70 @@ ALTER TABLE registry.audit_log
     ADD COLUMN IF NOT EXISTS grant_id TEXT NOT NULL DEFAULT '';
 `,
 	},
+	{
+		version: 5,
+		name:    "fleet_upgrades_and_stop_start",
+		upSQL: `
+ALTER TABLE registry.entries
+    DROP CONSTRAINT IF EXISTS entries_lifecycle_state_check;
+
+ALTER TABLE registry.entries
+    ADD CONSTRAINT entries_lifecycle_state_check
+    CHECK (lifecycle_state IN (
+        'creating', 'running', 'replacing', 'stopping', 'stopped', 'deleting', 'deleted', 'failed',
+        'PROVISIONING', 'ACTIVE', 'STOPPING', 'STOPPED', 'DEPROVISIONING', 'DELETED', 'FAILED'
+    ));
+
+ALTER TABLE registry.entries
+    ADD COLUMN IF NOT EXISTS auto_upgrade TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS auto_wake BOOLEAN NOT NULL DEFAULT TRUE,
+    ADD COLUMN IF NOT EXISTS upgrade_available TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS stopped_at TIMESTAMPTZ;
+`,
+	},
+	{
+		version: 6,
+		name:    "transfer_expiry_and_admin_recovery",
+		upSQL: `
+ALTER TABLE registry.entries
+    ADD COLUMN IF NOT EXISTS transfer_expires_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS purged_at           TIMESTAMPTZ;
+
+ALTER TABLE registry.leases
+    ADD COLUMN IF NOT EXISTS acquired_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ADD COLUMN IF NOT EXISTS renewed_at  TIMESTAMPTZ NOT NULL DEFAULT now();
+`,
+	},
 }
 
+// migrateLockKey is the pg_advisory_lock key every grain-registry replica takes
+// before touching the registry schema ("grnreg" in ASCII), so replicas that
+// start together against one database apply each migration exactly once.
+const migrateLockKey int64 = 0x67726e726567
+
 // Migrate applies all pending registry schema migrations inside the `registry` PostgreSQL schema.
+//
+// Replicas of one registry share a database and normally start at the same
+// time (a Deployment rollout), so Migrate holds a session-level advisory lock
+// for its whole run: without it two replicas both see a migration as pending
+// and race on CREATE ... IF NOT EXISTS, and the loser exits with
+// `duplicate key value violates unique constraint "pg_type_typname_nsp_index"`.
 func Migrate(ctx context.Context, db *sql.DB) error {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquiring migration connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, migrateLockKey); err != nil {
+		return fmt.Errorf("taking registry migration lock: %w", err)
+	}
+	defer func() {
+		_, _ = conn.ExecContext(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, migrateLockKey)
+	}()
+	return migrateLocked(ctx, conn)
+}
+
+func migrateLocked(ctx context.Context, db *sql.Conn) error {
 	if _, err := db.ExecContext(ctx, `CREATE SCHEMA IF NOT EXISTS registry`); err != nil {
 		return fmt.Errorf("creating registry schema: %w", err)
 	}

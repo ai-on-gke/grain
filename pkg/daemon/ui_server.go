@@ -36,10 +36,24 @@ import (
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
+// CheckDeploymentOwner validates -deployment-owner (or $GRAIN_DEPLOYMENT_OWNER
+// when the flag is unset).
+func CheckDeploymentOwner(cfg Config) error {
+	raw := strings.TrimSpace(cfg.DeploymentOwner)
+	if raw == "" {
+		raw = strings.TrimSpace(os.Getenv(ui.DeploymentOwnerEnv))
+	}
+	_, err := ui.NormalizeDeploymentOwner(raw)
+	return err
+}
+
 // CheckUIAllowedPrincipals validates -ui-allowed-principals (or
 // $GRAIN_ALLOWED_PRINCIPALS when the flag is unset), including refusing any
 // serviceAccount: entry that names a gcp-key agent pool account.
 func CheckUIAllowedPrincipals(cfg Config) error {
+	if err := CheckDeploymentOwner(cfg); err != nil {
+		return err
+	}
 	return checkUIAllowedPrincipalsWithPool(cfg, ui.GCPKeyPoolEmails(cfg.GcpServiceAccountEmail, cfg.GcpServiceAccountCount, cfg.GcpProject))
 }
 
@@ -240,6 +254,13 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 	var localAPIToken, localAPITokenFile string
 	if cfg.DataDir != "" {
 		path := ui.LocalAPITokenPath(cfg.DataDir)
+		if envFile := strings.TrimSpace(os.Getenv(ui.LocalAPITokenFileEnv)); envFile != "" && envFile != path {
+			if b, err := os.ReadFile(envFile); err == nil {
+				if tok := strings.TrimSpace(string(b)); tok != "" {
+					_ = os.WriteFile(path, []byte(tok+"\n"), 0o600)
+				}
+			}
+		}
 		tok, err := ui.EnsureLocalAPIToken(path)
 		if err != nil {
 			log.Printf("grain daemon: WARNING: writing the local API token %s: %v -- "+
@@ -276,6 +297,9 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		keys, _ := store.ListGCPKeys(ctx)
 		combinedPoolSAs = append(combinedPoolSAs, ui.ConfigGCPKeyServiceAccounts(mc, keys)...)
 	}
+	if err := CheckDeploymentOwner(cfg); err != nil {
+		return nil, err
+	}
 	if err := checkUIAllowedPrincipalsWithPool(cfg, combinedPoolSAs); err != nil {
 		return nil, err
 	}
@@ -310,25 +334,24 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		RequireVerifier:            cfg.UiRequireVerifier,
 		RequireIAP:                 cfg.UiRequireIAP,
 		AllowedPrincipals:          cfg.UiAllowedPrincipals,
+		DeploymentOwner:            cfg.DeploymentOwner,
 		ProvisionedServiceAccounts: provisionedSAs,
 		GCPKeyServiceAccounts:      gcpPoolSAs,
 		DBDriver:                   cfg.DbDriver,
 		DBDSN:                      cfg.DbDSN,
 		DataDir:                    cfg.DataDir,
 		SourceDB:                   db,
-		// The fixed set grain ships providers for, plus one row per named
-		// GitHub token this deployment has beyond its default one
-		// (grain/task-117) -- the same names capabilityProviders builds
-		// the matching providers from, so every id the picker offers is
-		// one a dispatch can actually resolve. The api rows appended last
-		// are only a marker that this picker offers the agent API: the
-		// Client reads them again per request (pickerCapabilities), so a
-		// scope set declared after startup is offered too.
-		Capabilities: append(append(ui.OfferedCapabilities(), ui.GitHubTokenCapabilities(live.GitHubTokens())...),
-			ui.APICapabilities()...),
-		Consoles:             consoleSessions,
-		Secrets:              uiSecrets,
-		LocalScriptApprovals: localScriptApprovals,
+		// The fixed set grain ships providers for, plus the api rows appended
+		// last as a marker that this picker offers the agent API (pickerCapabilities).
+		// Named GitHub credentials are served on the in-process repo server
+		// (repo#credential) rather than as legacy checklist rows; OfferedGitCredentials
+		// records the startup credential list for Settings -> GitHub tokens and
+		// per-client repo#credential validation.
+		Capabilities:          append(ui.OfferedCapabilities(), ui.APICapabilities()...),
+		OfferedGitCredentials: live.GitHubTokens(),
+		Consoles:              consoleSessions,
+		Secrets:               uiSecrets,
+		LocalScriptApprovals:  localScriptApprovals,
 		// The registry run() attaches capability servers into, for the
 		// status column of Settings' Capability servers pane.
 		CapabilityServers: capabilityServerStatuses(live),
@@ -750,6 +773,8 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 	} else if cfg.HostdRemote != nil {
 		uiCfg.HostdRemote = cfg.HostdRemote
 	}
+	uiCfg.LocalHostdLogins = cfg.localHostdLogins
+	uiCfg.AmbientNeedsHost = cfg.CLIRunsThroughHostd
 	branchGate := repoBranchGate{remote: githubTokens}
 	if lister, ok := stateRepo.(configRepoBranchLister); ok {
 		branchGate.local = lister

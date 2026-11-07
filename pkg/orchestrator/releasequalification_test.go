@@ -86,15 +86,27 @@ func (f *fakeQualificationForge) DefaultBranch(owner, repo string) (string, erro
 	return "main", nil
 }
 
+func fakeCheckOutput(out *github.CheckRunOutput) string {
+	if out == nil {
+		return ""
+	}
+	return strings.TrimSpace(out.Title + "\n\n" + out.Summary)
+}
+
 func (f *fakeQualificationForge) CreateCheckRun(owner, repo string, run github.CheckRunWrite) (int64, error) {
 	f.nextID++
-	f.checks = append(f.checks, github.CheckRun{
+	c := github.CheckRun{
 		ID:         f.nextID,
 		Name:       run.Name,
 		Status:     run.Status,
 		App:        f.app,
 		ExternalID: run.ExternalID,
-	})
+		Output:     fakeCheckOutput(run.Output),
+	}
+	if run.Output != nil {
+		c.FailureReason = run.Output.Summary
+	}
+	f.checks = append(f.checks, c)
 	if f.heads == nil {
 		f.heads = map[int64]string{}
 	}
@@ -115,6 +127,7 @@ func (f *fakeQualificationForge) UpdateCheckRun(owner, repo string, id int64, ru
 			}
 			if run.Output != nil {
 				f.checks[i].FailureReason = run.Output.Summary
+				f.checks[i].Output = fakeCheckOutput(run.Output)
 			}
 		}
 	}
@@ -123,10 +136,16 @@ func (f *fakeQualificationForge) UpdateCheckRun(owner, repo string, id int64, ru
 
 func (f *fakeQualificationForge) check(t *testing.T) github.CheckRun {
 	t.Helper()
-	if len(f.checks) != 1 {
-		t.Fatalf("got %d check runs %+v, want exactly one %s", len(f.checks), f.checks, model.ReleaseQualificationCheckName)
+	var matches []github.CheckRun
+	for _, c := range f.checks {
+		if c.Name != model.ReleaseHoldCheckName {
+			matches = append(matches, c)
+		}
 	}
-	return f.checks[0]
+	if len(matches) != 1 {
+		t.Fatalf("got %d qualification check runs in %+v, want exactly one", len(matches), f.checks)
+	}
+	return matches[0]
 }
 
 func newQualificationRepo(t *testing.T) (*model.Store, context.Context, model.RepoRef, *fakeQualificationForge) {

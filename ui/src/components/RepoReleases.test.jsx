@@ -1009,6 +1009,152 @@ describe("RepoReleases", () => {
     );
   });
 
+  // 2026-11-07 walkthrough: after Save, a blank row and a cleared Repeat
+  // stayed on screen as typed, though the plan saved without the row and
+  // with Repeat 1 -- so the form disagreed with what a reload showed.
+  it("shows the saved plan after Save, not the rows as typed", async () => {
+    setupApi({ releases: [activeRelease], candidates: [activeCandidate] });
+    const user = userEvent.setup();
+    render(
+      <RepoReleases
+        repo="acme/widgets"
+        templates={[smokeTemplate, unrelatedTemplate]}
+        onBack={() => {}}
+        showError={() => {}}
+      />,
+    );
+    await screen.findByRole("button", { name: "Add item" });
+
+    await user.click(screen.getByRole("button", { name: "Add item" }));
+    await user.click(screen.getByLabelText("Template"));
+    await user.click(screen.getByRole("option", { name: "Smoke test" }));
+    await user.clear(screen.getByLabelText("Repeat"));
+    await user.click(screen.getByRole("button", { name: "Add item" }));
+    expect(document.querySelectorAll(".qualification-item-row")).toHaveLength(
+      2,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Save qualification plan" }),
+    );
+
+    await waitFor(() =>
+      expect(document.querySelectorAll(".qualification-item-row")).toHaveLength(
+        1,
+      ),
+    );
+    expect(screen.getByLabelText("Repeat")).toHaveValue(1);
+  });
+
+  // 2026-11-07 walkthrough: "← acme/widgets" left the page with a
+  // half-edited plan and said nothing.
+  it("asks before leaving with an unsaved qualification plan edit", async () => {
+    setupApi({ releases: [activeRelease], candidates: [activeCandidate] });
+    const user = userEvent.setup();
+    const onBack = vi.fn();
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm);
+    render(
+      <RepoReleases
+        repo="acme/widgets"
+        templates={[smokeTemplate]}
+        onBack={onBack}
+        showError={() => {}}
+      />,
+    );
+    await screen.findByRole("button", { name: "Add item" });
+
+    // Clean: leaving does not ask.
+    await user.click(screen.getByRole("button", { name: /acme\/widgets/ }));
+    expect(confirm).not.toHaveBeenCalled();
+    expect(onBack).toHaveBeenCalledTimes(1);
+
+    await user.click(
+      screen.getByLabelText(
+        "Promote automatically once qualification succeeds",
+      ),
+    );
+    await user.click(screen.getByRole("button", { name: /acme\/widgets/ }));
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(onBack).toHaveBeenCalledTimes(1);
+
+    confirm.mockReturnValue(true);
+    await user.click(screen.getByRole("button", { name: /acme\/widgets/ }));
+    expect(onBack).toHaveBeenCalledTimes(2);
+
+    // Saved: clean again, so leaving no longer asks.
+    confirm.mockClear();
+    await user.click(
+      screen.getByRole("button", { name: "Save qualification plan" }),
+    );
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith(
+        "/api/repos/acme/widgets/qualification-plan",
+        expect.objectContaining({ method: "PUT" }),
+      ),
+    );
+    await user.click(screen.getByRole("button", { name: /acme\/widgets/ }));
+    expect(confirm).not.toHaveBeenCalled();
+    expect(onBack).toHaveBeenCalledTimes(3);
+  });
+
+  it("draws the qualification plan read-only, under the config repo notice, when settings are config-repo only", async () => {
+    setupApi({
+      releases: [activeRelease],
+      candidates: [activeCandidate],
+      qualificationPlan: {
+        configured: true,
+        repo: "acme/widgets",
+        requireApproval: true,
+        autoPromote: false,
+        items: [{ templateId: "template-1", repeat: 2, dependsOn: [] }],
+      },
+    });
+    render(
+      <RepoReleases
+        repo="acme/widgets"
+        config={{ configRepoOnly: true }}
+        templates={[smokeTemplate]}
+        onBack={() => {}}
+        showError={() => {}}
+      />,
+    );
+    await screen.findByRole("button", { name: "Save qualification plan" });
+
+    const notice = screen.getByTestId("config-managed-notice");
+    expect(notice).toHaveTextContent("tables/qualification_config.json");
+    expect(
+      screen.getByLabelText(
+        "Require approval before running qualification tasks",
+      ),
+    ).toBeDisabled();
+    expect(screen.getByLabelText("Repeat")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add item" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Remove" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Save qualification plan" }),
+    ).toBeDisabled();
+  });
+
+  it("draws the qualification plan read-only for a caller who is not one of the repo's admins", async () => {
+    setupApi({ releases: [activeRelease], candidates: [activeCandidate] });
+    render(
+      <RepoReleases
+        repo="acme/widgets"
+        config={{ adminScoped: true, adminRepos: ["acme/other"] }}
+        templates={[smokeTemplate]}
+        onBack={() => {}}
+        showError={() => {}}
+      />,
+    );
+    await screen.findByRole("button", { name: "Save qualification plan" });
+    expect(screen.queryByTestId("config-managed-notice")).toBeNull();
+    expect(screen.getByRole("button", { name: "Add item" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Save qualification plan" }),
+    ).toBeDisabled();
+  });
+
   it("keeps a dependency another item still names, and drops one nobody does", () => {
     expect(
       withoutDanglingDependencies([

@@ -1224,6 +1224,52 @@ _No flags._
 
 **Pinned by:** `pkg/cli/context_test.go`: `TestContextConfigXDGMode0600AndNoRawSecrets`; `pkg/cli/cliconn_test.go`: `TestContextCommandsAndServerPrecedence`; `pkg/cli/credentials_test.go`: `TestCredentialStoreKeyringFallbackAndRefusesWorldReadableFile`; `pkg/cli/login_test.go`: `TestGrainLoginIssueTokenSelfServiceNonAdminAndLogoutRevokes`; `pkg/cli/credsource_test.go`: `TestRegisterCredentialSourceAndHTTPClientRefusesLoginRedirectAndHTML`.
 
+### 4.16a `grain skill install|status` and `grain mcp` {#CLI-110}
+
+Installs and checks the workstation coding-agent skill guide (`SKILL.md`) and serves the optional local stdio 13-tool external coordination MCP server ([external-cli #XC-30](../external-cli/external-cli.spec.md#XC-30) and [#XC-31](../external-cli/external-cli.spec.md#XC-31)).
+- `grain skill install` combines the embedded `pkg/cli/skill/SKILL.md.tmpl` static CLI guide with live deployment metadata from `GET /api/auth/whoami`, `GET /api/config`, and `GET /api/templates`, embeds the CLI version and SHA-256 deployment digest, refuses to write any bearer token or secret, and with `-mcp` registers `grain mcp` in the target agent's MCP configuration file.
+- `grain skill status` checks recorded or standard skill paths for the active context and reports `installed`, `stale` (`version_mismatch` or `deployment_digest_mismatch`), or `missing`. Ordinary CLI calls emit at most a single-line notice on `stderr` when the recorded skill is stale, never touching `stdout`.
+- `grain mcp [-context <name>]` speaks JSON-RPC 2.0 over `stdin`/`stdout` (distinct from in-sandbox `grain mcpserver`) exposing the 13 external coordination tools (`propose_task`, `read_grain_task`, `list_grain_tasks`, `wait_for_task`, `reply_to_task`, `comment_on_task`, `grain_inbox`, `ci_runs`, `ci_log`, `merge_queue`, `fs_read`, `fs_grep`, and `adopt_pull_request`) over the CLI's shared `ui.HTTPClient` and context credentials, slicing `wait_for_task` below MCP client tool timeouts.
+
+#### `grain skill`
+
+<!-- BEGIN GENERATED FLAGS: grain skill -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+#### `grain skill install`
+
+<!-- BEGIN GENERATED FLAGS: grain skill install -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-claude` | bool |  |  | install for Claude Code (~/.claude/skills/grain/SKILL.md, or .claude/skills/grain/SKILL.md with -project) |
+| `-codex` | bool |  |  | install for Codex CLI (~/.codex/skills/grain/SKILL.md, or .agents/skills/grain/SKILL.md with -project) |
+| `-dir` | string |  |  | write SKILL.md into this directory |
+| `-gemini` | bool |  |  | install for Gemini CLI (~/.gemini/skills/grain/SKILL.md, or .gemini/skills/grain/SKILL.md with -project) |
+| `-jetski` | bool |  |  | install for Jetski (~/.gemini/jetski/skills/grain/SKILL.md, or .agents/skills/grain/SKILL.md with -project) |
+| `-json` | bool |  |  | print installation summary as JSON |
+| `-mcp` | bool |  |  | register grain mcp in the target agent's MCP server configuration |
+| `-project` | bool |  |  | write into the current repository/project skill directory instead of the user home directory |
+<!-- END GENERATED FLAGS -->
+
+#### `grain skill status`
+
+<!-- BEGIN GENERATED FLAGS: grain skill status -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-json` | bool |  |  | print status as JSON |
+<!-- END GENERATED FLAGS -->
+
+#### `grain mcp`
+
+<!-- BEGIN GENERATED FLAGS: grain mcp -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-context` | value |  | $GRAIN_CONTEXT | the named context to use ($GRAIN_CONTEXT; see grain context list) |
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/skill_test.go`: `TestGrainSkillInstallTargetPathsIdempotencyAndContainsNoSecrets`, `TestGrainSkillStatusDetectsVersionAndDeploymentDigestStaleness`, `TestStaleSkillStderrNoticeNeverCorruptsJSONStdout`; `pkg/cli/mcp_external_test.go`: `TestGrainMCPStdioToolsCallSharedClientAndSliceWaitForTask`.
+
 ---
 
 ### 4.17 `grain registry <subcommand>` {#CLI-109}
@@ -1543,6 +1589,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-db-driver` | string | `"sqlite"` |  | database backend driver ("sqlite" or "postgres"); defaults to sqlite |
 | `-db-dsn` | string |  |  | database connection string / DSN or path; for sqlite defaults to <data-dir>/store |
 | `-default-target-repo` | string |  |  | owner/name a task created through the UI/API with no repo of its own targets |
+| `-deployment-owner` | string |  | $GRAIN_DEPLOYMENT_OWNER | human email address that owns this deployment for RBAC (IsDeploymentOwner) and holds an immutable grain/operator floor on the access allowlist regardless of the OS user the daemon runs as ($GRAIN_DEPLOYMENT_OWNER when unset) |
 | `-disable-native-sandboxes` | bool |  |  | select sandbox backend "none": run the control plane only -- no sandbox is created, so no task runs (for tests and walkthroughs) |
 | `-disable-self-upgrade` | bool |  | $GRAIN_DISABLE_SELF_UPGRADE | disable in-VM self-upgrade actions (pkg/upgrade, automatic/scheduled upgrades, and SQLite-to-PostgreSQL cutover) and hide in-VM upgrade controls in the UI in favour of external lifecycle management ($GRAIN_DISABLE_SELF_UPGRADE when unset) |
 | `-docker-root-dir` | value |  |  | path to the local docker engine's own data root, for the UI's host disk figures only (grain/task-148): the sandbox image and every granule VM's disk overlay are written there rather than under -sandbox-dir, so on a deployment that gives sandboxes a volume of their own it is a disk worth a figure. Empty asks docker info for it once at startup, which is right whenever the daemon can reach the docker socket and sees that path where dockerd does; name it here when it cannot, or when this process sees the same directory at a path of its own. A path this process cannot stat is logged once and left out, not reported as a broken figure -- a containerised daemon is usually shown docker's socket and not the tree behind it |
@@ -1745,6 +1792,7 @@ Serves the task UI on localhost over a throwaway store of fake tasks. Every call
 | `-host-executor` | string |  |  | resolve Settings' run locations (Models and Capability servers) as this deployment would: empty for a development daemon on the bare machine, "kubernetes" (no host executor), "none" (a container with no host agent), "hostd-down" (a container whose host agent is configured but not answering), "hostd" (a container with a real host agent on a throwaway allowlist offering agy and corp-search), "hostd-remote" (a Kubernetes daemon with a real host agent dialed in) or "hostd-remote-down" (none dialed in) |
 | `-host-mode-install` | bool |  |  | show the notice an unmigrated host-mode install shows (banner, System -> Health, Upgrade), with the CLIs the default bare-machine run locations leave nowhere to run |
 | `-human-review` | bool |  |  | seed a change a review held for a person's decision (request_human_review), waiting for Submit or Release hold |
+| `-legacy-capability` | bool |  |  | register a made-up legacy capability with nothing to mint, as an edition would, so the Legacy capabilities pickers have a row (every legacy provider core shipped is retired) |
 | `-management-url` | string |  |  | as on grain daemon: optional external http:// or https:// URL shown where upgrades are managed externally |
 | `-mechanical-port` | bool |  |  | seed a change merged onto main and the port grain cherry-picked to candidate itself, with no agent run |
 | `-merge-queue-states` | bool |  |  | also seed two pull requests the merge queue is waiting on: one for its base branch to go green, one for an approval GitHub requires |
@@ -1797,7 +1845,7 @@ Speaks MCP over stdin/stdout against the sandbox tools. A running daemon forks i
 | `-grain-secrets-dir` | string |  |  | directory holding this deployment's own secrets (cmd/grain's secretsDir: -data-dir/secrets), read on this host so that read_grain_log can redact those values out of the journal before returning any of it. Only used with -grant grain-log, and never served to a run -- what it buys is the ability to recognize a credential in a log line and remove it. Unset, or unreadable, read_grain_log refuses every call rather than answering with an unredacted journal. |
 | `-grain-src-dir` | string |  |  | directory holding grain's own source, read-only (pkg/cli/daemon.go's sourceDir: the copy baked into the deployment image, or -upgrade-src-dir's checkout). |
 | `-grain-state-dir` | string |  |  | controller-local synchronized deployment state repository; only used with -grant deployment-health |
-| `-grant` | value |  |  | name of a capability grant this run's task holds, whose tools this server should serve; repeat the flag for each. "self-debug" serves the four task readers and read_grain_metrics over -server, along with the api:self-debug preset tools (api:tasks:read and api:deployment:read); "grain-log" serves read_grain_log over this host's journal, redacted with -grain-secrets-dir. Passed by a Framework from the grants on the run's own task (agent.RunConfig.Grants, agent.GrantArgs). |
+| `-grant` | value |  |  | name of a capability grant this run's task holds, whose tools this server should serve; repeat the flag for each. "api:self-debug" (api:tasks:read and api:deployment:read; the retired "self-debug" reads as it) serves the four task readers, read_pipeline_changes and read_grain_metrics over -server; "grain-log" serves read_grain_log over this host's journal, redacted with -grain-secrets-dir. Passed by a Framework from the grants on the run's own task (agent.RunConfig.Grants, agent.GrantArgs). |
 | `-granule-vm` | string |  |  | name of a granule-managed VM (bwsalmon/granule) to run the sandbox tools against over SSH, instead of a local directory (mutually exclusive with -sandbox-root) |
 | `-interactive` | bool |  |  | this run's task is a live chat somebody is sitting with (model.Task.Interactive, passed on by the Framework that forked this process -- agent.InteractiveArgs). With -server/-task it adds the chat tool: the run says something in the task's own conversation and blocks until a person answers, inside one tool call. It is gated because the tool promises somebody is there: on a background run every call would stand still for an hour before finding out nobody was. |
 | `-k8s-granule` | value |  |  | reach -k8s-pod's guest VM through granule exec -- over 'kubectl exec' |
@@ -2422,4 +2470,3 @@ _No flags._
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/sandboximage_test.go`: `TestSandboxImageCommandPrintsDefaultAndBase`, `TestSandboxImageContractSubcommand`, `TestSandboxImageCheckSubcommand`.
-

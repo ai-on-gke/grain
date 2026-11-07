@@ -18,15 +18,15 @@ The director (`ConsoleSessionTag("director")`) is an ordinary task with three st
 
 | Workflow | Primary surfaces | Key guardrail |
 |---|---|---|
-| **W1** Bootstrap & onboarding | `bootstrap-playbooks`, `api:deployment:read` + `…/grain#health` (formerly `deployment-health`, retired in schema migration 81), `request_secret` | Secrets write straight to `<data-dir>/secrets`; never read back |
-| **W2** Live triage & observability | `self-debug` (`task://`), `ci://`, `api:ci-read`, `…/grain#journal` (formerly `grain-log`, retired in schema migration 80), `grain metrics` | Read-only diagnostics; no product-repo edits in session |
-| **W3** Decomposition & queue hygiene | `propose_task`, `api:task-admin`, `api:dispatch-control` | `TasksApproved` off by default; `hold_for_approval` & `expect` rails |
+| **W1** Bootstrap & onboarding | `…/config-map#config-map={"config_maps":["bootstrap"]}` (formerly `bootstrap-playbooks`, retired in schema migration 118), `api:deployment:read` + `…/grain#health` (formerly `deployment-health`, retired in schema migration 81), `request_secret` | Secrets write straight to `<data-dir>/secrets`; never read back |
+| **W2** Live triage & observability | `api:self-debug` + `…/grain#source` (formerly `self-debug`, retired in schema migration 115; `task://`, `src://`), `ci://`, `api:ci-read`, `…/grain#journal` (formerly `grain-log`, retired in schema migration 80), `grain metrics` | Read-only diagnostics; no product-repo edits in session |
+| **W3** Decomposition & queue hygiene | `propose_task`, `api:task-admin`, `api:dispatch-control` | `TasksApproved` on by default (per-turn `TurnFanOut` bound, escalation & `grain/config` holds, `hold_for_approval` & `expect` rails) |
 | **W4** Config & capability hygiene | `/home/debian/grain-state` (`grain/config`), `propose_config_change` | Human approval via `pkg/trustboundary` & `settings_locked` |
 | **W5** CI, merge queue & releases | `ci:write`, `merge:write`, `api:release-manager`, `api:self-upgrade` | Never `autoMerge`, `submit`, or `merge:force`; honours upgrade holds |
 
 ### W1 — Bootstrap and onboarding
 
-Guides first-time bring-up and incremental expansion of a deployment (`bootstrap-playbooks`):
+Guides first-time bring-up and incremental expansion of a deployment (`…/config-map#config-map={"config_maps":["bootstrap"]}`, formerly `bootstrap-playbooks`):
 
 - **Infrastructure readiness.** Verifies model backend connections, agent CLI placement, `grain hostd` connectivity, and sandbox backend health (`granule` / Kubernetes pods, resource ceilings) via `api:deployment:read`, `…/grain#health`, and read scopes.
 - **Repository onboarding.** Configures target repositories, branch bases, merge strategies, and CI modes (`github`, `grain`, or `none`), and wires repository git credentials by reference.
@@ -36,7 +36,7 @@ Guides first-time bring-up and incremental expansion of a deployment (`bootstrap
 
 Answers "why did task X fail?", "why is the merge queue stuck?", and "how full or slow has this deployment been?" from recorded state rather than guesswork:
 
-- **Task and run forensics (`self-debug`).** Reads task records, attempt outcomes, rendered prompts, and tool-by-tool transcripts (`grain task list|read|prompt|transcript`, `task://`) to separate prompt gaps, agent mistakes, capability refusals, and sandbox setup faults.
+- **Task and run forensics (`api:self-debug`).** Reads task records, attempt outcomes, rendered prompts, and tool-by-tool transcripts (`grain task list|read|prompt|transcript`, `task://`) to separate prompt gaps, agent mistakes, capability refusals, and sandbox setup faults.
 - **CI and merge-queue diagnostics.** Reads CI runs, step logs, shared cross-branch infrastructure faults, and test flake history (`ci://`, `api:ci-read`, `grain ci list|log|test-history`), alongside held merge-queue batches and security or review gates (`grain merge-queue`).
 - **Controller and fleet telemetry.** Inspects daemon journals (`…/grain#journal`), sandbox utilization, queue wait times, prompt token budgets, and tool-error censuses (`grain metrics`, `api:deployment:read`, `…/grain#health`).
 
@@ -75,7 +75,7 @@ Regardless of operator prompts or untrusted repository text read during triage, 
 
 An operator opening the director rail expects an immediate reply even when `max_workers` is saturated or the pipeline is paused, without the session hoarding worker slots while idle or waiting:
 
-- **Priority admission (`durable` / console-session dispatch).** `ConsoleSessionGrants` always attaches `durable` (`DurableCapability`), which implies `priority-dispatch` (`design/design/durable-tasks.design.md`). Director turns are admitted outside `max_workers` (under `max_durable_runs`), bypass pipeline pauses and red-base repair holds, and survive controller restarts via session adoption or CLI `--resume`.
+- **Priority admission (`durable` / console-session dispatch).** `FileConsoleSessionTask` files every console session with the task setting `admission: durable` (`AdmissionDurable`, which replaced the `durable` and `priority-dispatch` grants and includes `bypass`; `design/design/durable-tasks.design.md`, `unified-grants.design.md` §4.1). Director turns are admitted outside `max_workers` (under `max_durable_runs`), bypass pipeline pauses and red-base repair holds, and survive controller restarts via session adoption or CLI `--resume`.
 - **Releasing the active slot when waiting or idle.** Priority admission requires strict slot discipline: the director never polls inside a live run waiting on asynchronous tasks or CI runs. Once it replies, files work, or asks for input, it records standing context via `grain handover write` when needed (carried across `"Start a fresh chat"` resets by `CarryConsoleSessionHandover`) and releases its active run by calling `ask_question` (`request_secret`, `propose_config_change`) or ending its turn to rest on `person-closes` (`GoalPersonCloses`).
 - **Two-layer warm idle pool.** Between turns, `continueSessionTurns` and `session_sandboxes.go` keep the CLI session and sandbox warm up to `session_sandbox_idle_ttl_ms` (default `30m`) for sub-second follow-ups. Held VMs appear as `"idle session"` on **System → Sandboxes** and are evicted oldest-first whenever queued worker runs need sandbox capacity.
 

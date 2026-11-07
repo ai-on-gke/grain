@@ -125,6 +125,13 @@ type RemotePeer struct {
 	Build    string `json:"build,omitempty"`
 	Protocol string `json:"protocol,omitempty"`
 	Addr     string `json:"addr,omitempty"`
+	// Logins are the agent CLI logins on the hostd's machine, from the
+	// hello the daemon asks it for once it has connected (Hello.Logins,
+	// learnLogins). LoginsKnown says that hello was answered, so an
+	// empty list reads as "none" rather than "not asked yet" or "a hostd
+	// too old to say".
+	Logins      []string `json:"logins,omitempty"`
+	LoginsKnown bool     `json:"loginsKnown,omitempty"`
 }
 
 // RemoteStatus is Settings' view of a hostd that dials in.
@@ -289,6 +296,7 @@ func (r *Remote) serveWithKey(ctx context.Context, conn net.Conn, peer RemotePee
 	}
 	r.logf("grain daemon: grain hostd %s on %s (build %s) connected from %s", peer.Name, peer.Host, peer.Build, peer.Addr)
 	go sess.acceptCarries()
+	go r.learnLogins(ctx, sess)
 	if r.OnCheckin != nil {
 		r.OnCheckin(ctx, peer)
 	}
@@ -605,4 +613,33 @@ func (r *Remote) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		Protocol:  req.Header.Get(ProtocolHeader),
 		Addr:      req.RemoteAddr,
 	}, cred.PublicKey)
+}
+
+// learnLoginsTimeout bounds the hello learnLogins asks.
+const learnLoginsTimeout = 10 * time.Second
+
+// learnLogins asks the hostd that just connected over sess for its hello
+// and keeps the agent CLI logins it reports (Hello.Logins) in its
+// status, for Settings' host pickers. It changes nothing a run reads,
+// and a hostd that does not answer -- or one too old to say -- simply
+// shows none known.
+func (r *Remote) learnLogins(ctx context.Context, sess *remoteSession) {
+	ctx, cancel := context.WithTimeout(ctx, learnLoginsTimeout)
+	defer cancel()
+	c := Client{Dial: func(ctx context.Context) (net.Conn, error) { return sess.m.OpenStream(ctx) }}
+	h, err := c.Hello(ForDisplay(ctx))
+	if err != nil || h.Protocol < 2 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// Under the lock: a rename (RenameSession) moves the session to its
+	// new name, and a newer session from the same hostd replaces it.
+	name := sess.peer.Name
+	if r.cur[name] != sess {
+		return
+	}
+	st := r.last[name]
+	st.Logins, st.LoginsKnown = append([]string(nil), h.Logins...), true
+	r.last[name] = st
 }

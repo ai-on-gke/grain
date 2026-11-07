@@ -98,16 +98,33 @@ type CapabilityInProcessServer struct {
 
 // inProcessSummaries are what core's in-process servers give a task.
 var inProcessSummaries = map[string]string{
-	grainserver.ID:     "grain's own host and database: its journal, health probes, SQL against its database and confirmed shell commands on its host.",
-	grainserver.RepoID: "Access to repositories beyond a run's own: a CI job's read or write access to another repository, or pushing any ref of a repository a task may write.",
+	grainserver.ID:       "grain's own host and database: its journal, health probes, SQL against its database and confirmed shell commands on its host.",
+	grainserver.RepoID:   "Access to repositories and git credentials: a CI job's read or write access to another repository, pushing any ref of a repository a task may write, or selecting a named git credential under secrets/github.",
+	grainserver.GitHubID: "GitHub operations answered in-process: reading issues and comments on the repositories the run may reach with its team git credential, or provisioning a private single-use sandbox repository via the deployment's GitHub App.",
+}
+
+// inProcessStatuses returns grainserver.Statuses() with RepoID's #credential
+// schema scoped to c.configuredGitCredentials() when configured.
+func (c *Client) inProcessStatuses() []servers.Status {
+	statuses := grainserver.Statuses()
+	creds := c.configuredGitCredentials()
+	if creds == nil {
+		return statuses
+	}
+	for i := range statuses {
+		if statuses[i].ID == grainserver.RepoID {
+			statuses[i] = grainserver.RepoStatusForCredentials(creds)
+		}
+	}
+	return statuses
 }
 
 // inProcessServers are the in-process servers' rows, by capability_id,
 // leaving out any id configured mcp_servers also hold (which the
 // in-process server shadows; that entry is listed as configured).
-func inProcessServers(configured map[string]protocol.ServerConfig) []CapabilityServer {
+func (c *Client) inProcessServers(configured map[string]protocol.ServerConfig) []CapabilityServer {
 	var out []CapabilityServer
-	for _, s := range grainserver.Statuses() {
+	for _, s := range c.inProcessStatuses() {
 		if _, ok := configured[s.ID]; ok {
 			continue
 		}
@@ -327,7 +344,7 @@ func (c *Client) ListCapabilityServers(ctx context.Context) ([]CapabilityServer,
 		}
 		out = append(out, row)
 	}
-	out = append(out, inProcessServers(configured)...)
+	out = append(out, c.inProcessServers(configured)...)
 	// Built-ins first, then the in-process servers, then the operator's
 	// own, each by capability_id.
 	rank := func(s CapabilityServer) int {
@@ -380,7 +397,12 @@ func (c *Client) updateCapabilityServers(ctx context.Context, mutate func(map[st
 	if err := c.checkSettingsWritable(ctx, "grain_config"); err != nil {
 		return err
 	}
+	repoConfigs, err := c.Store.ListRepoConfigs(ctx)
+	if err != nil {
+		return err
+	}
 	return c.Store.UpdateConfig(ctx, func(cfg *model.Config) error {
+		before, _ := intree.EnsureBuiltins(cfg.MCPServers)
 		next, _ := intree.EnsureBuiltins(cfg.MCPServers)
 		if err := mutate(next); err != nil {
 			return err
@@ -391,6 +413,27 @@ func (c *Client) updateCapabilityServers(ctx context.Context, mutate func(map[st
 		}
 		if _, err := protocol.ParseServers(data); err != nil {
 			return validationErrorf("%s", err)
+		}
+		if cfg.CapabilityPolicy.Catalogue != nil {
+			newlyDisabled := false
+			for id, sc := range next {
+				if sc.Disabled && !before[id].Disabled {
+					newlyDisabled = true
+					break
+				}
+			}
+			if newlyDisabled {
+				merged := mergedCapabilityCatalogue(
+					cfg.CapabilityPolicy.Catalogue,
+					next,
+					cfg.DefaultCapabilities,
+					cfg.CapabilityPolicy.Catalogue.Defaults.CI,
+					repoDefaultsMap(repoConfigs),
+				)
+				if err := merged.Validate(); err != nil {
+					return fieldValidationError("disabled", err)
+				}
+			}
 		}
 		cfg.MCPServers = next
 		return nil

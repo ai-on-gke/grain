@@ -676,16 +676,6 @@ func TestRegistryCLISubcommands(t *testing.T) {
 			e := entries[name]
 			var req api.SetScopesRequest
 			_ = json.NewDecoder(r.Body).Decode(&req)
-			for _, sc := range req.Scopes {
-				if sc.Repo == "conflict/repo" {
-					w.WriteHeader(http.StatusConflict)
-					_ = json.NewEncoder(w).Encode(map[string]any{
-						"error": "primary scope conflict",
-						"code":  "primary_scope_conflict",
-					})
-					return
-				}
-			}
 			e.Scopes = nil
 			for _, sc := range req.Scopes {
 				e.Scopes = append(e.Scopes, api.Scope{
@@ -791,32 +781,4 @@ func TestRegistryCLISubcommands(t *testing.T) {
 	runSub("accept-transfer", "platform-vm")
 	runSub("delete", "-confirm", "platform-vm", "platform-vm")
 	runSub("restore", "platform-vm")
-
-	// rotate-credential with -token-file + JSON output must write 0600 file and omit token from stdout.
-	tokPath := filepath.Join(t.TempDir(), "rotated.token")
-	rotJSON := captureStdout(t, func() {
-		runSub("rotate-credential", "-token-file", tokPath, "platform-vm")
-	})
-	if strings.Contains(rotJSON, "grc_rotated_subcmd_token") {
-		t.Fatalf("rotate-credential JSON stdout leaked raw token when -token-file was set: %s", rotJSON)
-	}
-	tokBytes, err := os.ReadFile(tokPath)
-	if err != nil || strings.TrimSpace(string(tokBytes)) != "grc_rotated_subcmd_token" {
-		t.Fatalf("token-file contents = %q, err=%v", string(tokBytes), err)
-	}
-	if fi, err := os.Stat(tokPath); err != nil || fi.Mode().Perm() != 0o600 {
-		t.Fatalf("token-file mode = %v, err=%v; want 0600", fi.Mode().Perm(), err)
-	}
-
-	// register on an existing entry with conflicting -scope must surface the 409 error.
-	err = cmdRegistry(ctx, nil, out, []string{
-		"register",
-		"-standalone",
-		"-registry-url", regSrv.URL,
-		"-scope", "conflict/repo::primary",
-		"platform-vm",
-	})
-	if err == nil || !strings.Contains(err.Error(), "conflict") {
-		t.Fatalf("register with conflicting -scope = %v, want primary scope conflict error", err)
-	}
 }

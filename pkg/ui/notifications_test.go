@@ -20,6 +20,8 @@ package ui_test
 // another task's run without changing that task's state.
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -218,7 +220,7 @@ func TestMessageTaskWakesARestingDurableParent(t *testing.T) {
 	parent := create(t, client, ctx)
 	child := create(t, client, ctx)
 	grantTask(t, store, parent.ID, func(m *model.Task) {
-		m.Grants = append(m.Grants, model.Grant{Capability: model.DurableCapability})
+		m.Admission = model.AdmissionDurable
 	})
 	grantTask(t, store, child.ID, func(m *model.Task) {
 		m.Links = append(m.Links, model.Link{Kind: model.LinkProposedBy, Target: parent.ID})
@@ -341,5 +343,51 @@ func TestMessageTaskToConsoleSessionWakesWithoutSyntheticWakeComment(t *testing.
 	}
 	if sawSyntheticWake {
 		t.Errorf("director comments = %+v, want no synthetic _Woken early:_ comment on console session", comments)
+	}
+}
+
+// The open list the UI polls asks fields=list and is answered each body's
+// first line -- all its bell and Inbox draw -- except a pending release's,
+// whose soak lines the UI reads (grain task 3051).
+func TestListNotificationsFieldsListCutsBodies(t *testing.T) {
+	t.Parallel()
+	srv, client := testServer(t)
+	ctx := context.Background()
+	long := "the base is red\n\nlog tail:\n" + strings.Repeat("x", 4096)
+	release := "Qualification: PASS\nSoak: soaked 1h00m of 24h\nSHORT SOAK: under the minimum"
+	for _, req := range []ui.RaiseNotificationRequest{
+		{Subject: "pipeline.base-red:acme/widgets@main", Title: "main is red", Body: long},
+		{Subject: "release.pending:v1.2.3", Title: "approve v1.2.3", Body: release, Actions: []string{"approve-release"}},
+	} {
+		if _, err := client.RaiseNotification(ctx, req); err != nil {
+			t.Fatalf("RaiseNotification(%s): %v", req.Subject, err)
+		}
+	}
+	read := func(path string) map[string]string {
+		t.Helper()
+		rec := do(t, srv, http.MethodGet, path, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d %s", path, rec.Code, rec.Body)
+		}
+		var list []model.Notification
+		if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+			t.Fatal(err)
+		}
+		bodies := map[string]string{}
+		for _, n := range list {
+			bodies[n.Subject] = n.Body
+		}
+		return bodies
+	}
+	full := read("/api/notifications?open=1")
+	if full["pipeline.base-red:acme/widgets@main"] != long {
+		t.Errorf("open=1 cut a body without being asked: %q", full["pipeline.base-red:acme/widgets@main"])
+	}
+	cut := read("/api/notifications?open=1&fields=list")
+	if got := cut["pipeline.base-red:acme/widgets@main"]; got != "the base is red" {
+		t.Errorf("fields=list body = %q, want its first line", got)
+	}
+	if got := cut["release.pending:v1.2.3"]; got != release {
+		t.Errorf("fields=list pending-release body = %q, want it whole", got)
 	}
 }

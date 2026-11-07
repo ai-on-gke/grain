@@ -957,7 +957,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: /var/cache/playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-registry/package-lock.json') }}
+          key: playwright-${{ runner.os }}-${{ hashFiles('ui/package-lock.json') }}
 
       - name: Disable unused third-party apt sources
         run: |
@@ -985,9 +985,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: playwright-test-results
-          path: |
-            ui/test-results
-            ui-registry/test-results
+          path: ui/test-results
           if-no-files-found: ignore
           retention-days: 7
 

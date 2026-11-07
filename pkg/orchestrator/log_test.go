@@ -197,10 +197,12 @@ func logToTest(t *testing.T) *testClaim {
 }
 
 // LogToTest is logToTest for orchestrator_test, whose own helpers claim
-// the log for the tests over there. Nothing there reads the lines back
-// yet, so it hands nothing back; the journal is one exported method away
-// if that changes.
-func LogToTest(t *testing.T) {
+// the log for the tests over there. It hands back the claim's String, for
+// the tests there that assert on what was said: reading the journal is
+// safe while a straggling goroutine is still logging into it, where a
+// bytes.Buffer swapped in with log.SetOutput is a data race -race reports
+// against whichever test happens to be running.
+func LogToTest(t *testing.T) fmt.Stringer {
 	t.Helper()
-	logToTest(t)
+	return logToTest(t)
 }

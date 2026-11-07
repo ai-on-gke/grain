@@ -1,0 +1,11 @@
+{
+  "mode": "off",
+  "pickerBefore": "On each release (recommended)",
+  "writes": [
+    "PUT /api/settings {\"autoUpgradeOn\":\"off\"}"
+  ],
+  "pickerAfterReload": "Off (manual only)",
+  "autoUpgradeOn": "off",
+  "autoUpgradeChannel": "latest",
+  "ok": true
+}

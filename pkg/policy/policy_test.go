@@ -470,3 +470,58 @@ func TestAllowNamedSandboxAgentPatternRefusesUnnamedGCPKey(t *testing.T) {
 		t.Errorf("account=default CheckClaims = %v, want refusal naming permission_set", err)
 	}
 }
+
+func TestGitHubCredentialLegacyRulesMatchRepoCredential(t *testing.T) {
+	releaseGrant := model.RepoCredentialGrant("release-bot")
+	docsGrant := model.RepoCredentialGrant("docs-bot")
+
+	denyOne := mustParse(t, "capabilities:\n  deny: [github-credential:release-bot]\n")
+	if err := denyOne.CheckClaims(model.Task{Grants: []model.Grant{{Capability: releaseGrant}}}, ""); err == nil {
+		t.Errorf("deny [github-credential:release-bot] admitted %s", releaseGrant)
+	}
+	if err := denyOne.CheckClaims(model.Task{Grants: []model.Grant{{Capability: docsGrant}}}, ""); err != nil {
+		t.Errorf("deny [github-credential:release-bot] refused unrelated %s: %v", docsGrant, err)
+	}
+	if err := denyOne.CheckClaims(model.Task{Grants: []model.Grant{{Capability: model.RepoCredentialRef}}}, ""); err == nil {
+		t.Errorf("deny [github-credential:release-bot] admitted unnamed %s", model.RepoCredentialRef)
+	}
+
+	denyWild := mustParse(t, "capabilities:\n  deny: ['github-credential:*']\n")
+	if err := denyWild.CheckClaims(model.Task{Grants: []model.Grant{{Capability: docsGrant}}}, ""); err == nil {
+		t.Errorf("deny [github-credential:*] admitted %s", docsGrant)
+	}
+
+	allowOne := mustParse(t, "capabilities:\n  allow: [github-credential:release-bot]\n")
+	if err := allowOne.CheckClaims(model.Task{Grants: []model.Grant{{Capability: releaseGrant}}}, ""); err != nil {
+		t.Errorf("allow [github-credential:release-bot] refused %s: %v", releaseGrant, err)
+	}
+	if err := allowOne.CheckClaims(model.Task{Grants: []model.Grant{{Capability: docsGrant}}}, ""); err == nil {
+		t.Errorf("allow [github-credential:release-bot] admitted unrelated %s", docsGrant)
+	}
+	for _, unnamed := range []string{model.RepoCredentialRef, model.RepoCredentialRef + "={}"} {
+		if err := allowOne.CheckClaims(model.Task{Grants: []model.Grant{{Capability: unnamed}}}, ""); err == nil {
+			t.Errorf("allow [github-credential:release-bot] admitted unnamed %s", unnamed)
+		}
+	}
+}
+
+func TestGitHubSandboxLegacyRulesMatchSandboxRepo(t *testing.T) {
+	sandboxGrant := model.GitHubSandboxRepoGrant
+	readIssuesGrant := model.GitHubReadIssuesGrant
+
+	denySandbox := mustParse(t, "capabilities:\n  deny: [github-sandbox]\n")
+	if err := denySandbox.CheckClaims(model.Task{Grants: []model.Grant{{Capability: sandboxGrant}}}, ""); err == nil {
+		t.Errorf("deny [github-sandbox] admitted %s", sandboxGrant)
+	}
+	if err := denySandbox.CheckClaims(model.Task{Grants: []model.Grant{{Capability: readIssuesGrant}}}, ""); err != nil {
+		t.Errorf("deny [github-sandbox] refused unrelated %s: %v", readIssuesGrant, err)
+	}
+
+	allowSandbox := mustParse(t, "capabilities:\n  allow: [github-sandbox]\n")
+	if err := allowSandbox.CheckClaims(model.Task{Grants: []model.Grant{{Capability: sandboxGrant}}}, ""); err != nil {
+		t.Errorf("allow [github-sandbox] refused %s: %v", sandboxGrant, err)
+	}
+	if err := allowSandbox.CheckClaims(model.Task{Grants: []model.Grant{{Capability: readIssuesGrant}}}, ""); err == nil {
+		t.Errorf("allow [github-sandbox] admitted unrelated %s", readIssuesGrant)
+	}
+}

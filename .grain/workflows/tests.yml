@@ -998,8 +998,6 @@ jobs:
     artifacts:
       - name: playwright-test-results
         path: ui/test-results
-      - name: ui-registry-playwright-test-results
-        path: ui-registry/test-results
     env:
       npm_config_offline: "true"
       PLAYWRIGHT_BROWSERS: chromium

@@ -606,6 +606,8 @@ type SetDeploymentRepoConfigRequest struct {
 	SetupCommand                 *string   `json:"setupCommand,omitempty"`
 	PromptExtension              *string   `json:"promptExtension,omitempty"`
 	DefaultCapabilities          *[]string `json:"defaultCapabilities,omitempty"`
+	DefaultAdmission             *string   `json:"defaultAdmission,omitempty"`
+	DefaultHosting               *string   `json:"defaultHosting,omitempty"`
 	CICapabilities               *[]string `json:"ciCapabilities,omitempty"`
 	CIMode                       *string   `json:"ciMode,omitempty"`
 	RepairTemplateID             *string   `json:"repairTemplateId,omitempty"`
@@ -716,13 +718,35 @@ func (c *Client) SetDeploymentRepoConfigWithUser(ctx context.Context, repo strin
 	if req.PromptExtension != nil {
 		cfg.PromptExtension = strings.TrimSpace(*req.PromptExtension)
 	}
+	if req.DefaultAdmission != nil {
+		adm, err := model.ParseOptionalAdmission(*req.DefaultAdmission)
+		if err != nil {
+			return DeploymentRepoConfigResponse{}, validationErrorf("defaultAdmission: %v", err)
+		}
+		cfg.DefaultAdmission = adm
+	}
+	if req.DefaultHosting != nil {
+		h, err := model.ParseOptionalHosting(*req.DefaultHosting)
+		if err != nil {
+			return DeploymentRepoConfigResponse{}, validationErrorf("defaultHosting: %v", err)
+		}
+		cfg.DefaultHosting = h
+	}
 	if req.DefaultCapabilities != nil {
 		// Unknown capabilities and hand-attached grain-ci are refused
 		// with capabilityRefusal, matching repo and settings defaults.
 		// Ids already stored are let through, as for ciCapabilities below.
-		clean := make([]string, 0, len(*req.DefaultCapabilities))
-		seen := make(map[string]bool, len(*req.DefaultCapabilities))
-		for _, capID := range *req.DefaultCapabilities {
+		capsWithoutLegacy, legacyAdm, hadLegacyAdm := extractLegacyAdmissionCaps("repo "+parsedRepo.String()+" defaultCapabilities", *req.DefaultCapabilities)
+		capsWithoutLegacy, legacyHost, hadLegacyHost := extractLegacyHostingCaps("repo "+parsedRepo.String()+" defaultCapabilities", capsWithoutLegacy)
+		if hadLegacyAdm {
+			cfg.DefaultAdmission = model.MaxAdmission(cfg.DefaultAdmission, legacyAdm)
+		}
+		if hadLegacyHost {
+			cfg.DefaultHosting = model.MaxHosting(cfg.DefaultHosting, legacyHost)
+		}
+		clean := make([]string, 0, len(capsWithoutLegacy))
+		seen := make(map[string]bool, len(capsWithoutLegacy))
+		for _, capID := range capsWithoutLegacy {
 			t := strings.TrimSpace(capID)
 			if t != "" {
 				if slices.Contains(cfg.DefaultCapabilities, t) {
@@ -748,6 +772,9 @@ func (c *Client) SetDeploymentRepoConfigWithUser(ctx context.Context, repo strin
 			}
 		}
 		cfg.DefaultCapabilities = clean
+		if err := c.validateCatalogueRepoDefaults(ctx, parsedRepo, clean, nil); err != nil {
+			return DeploymentRepoConfigResponse{}, err
+		}
 	}
 	if req.CICapabilities != nil {
 		// Capabilities not supported for CI (not in the CI catalogue) are
@@ -770,6 +797,11 @@ func (c *Client) SetDeploymentRepoConfigWithUser(ctx context.Context, repo strin
 					if err != nil {
 						return DeploymentRepoConfigResponse{}, err
 					}
+					if model.CapabilityGrantRef(normalized) == model.RepoCredentialRef {
+						if !slices.Contains(cfg.CICapabilities, normalized) && !slices.Contains(cfg.CICapabilities, t) {
+							return DeploymentRepoConfigResponse{}, validationErrorf("ciCapabilities: capability %q is not supported for CI", t)
+						}
+					}
 					canonicalID = normalized
 				} else if target, ok := model.RepoReadTarget(t); ok {
 					canonicalID = model.RepoReadCapability(target)
@@ -787,6 +819,9 @@ func (c *Client) SetDeploymentRepoConfigWithUser(ctx context.Context, repo strin
 			}
 		}
 		cfg.CICapabilities = clean
+		if err := c.validateCatalogueRepoDefaults(ctx, parsedRepo, nil, clean); err != nil {
+			return DeploymentRepoConfigResponse{}, err
+		}
 	}
 	if req.CIMode != nil {
 		mode := strings.ToLower(strings.TrimSpace(*req.CIMode))

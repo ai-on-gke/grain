@@ -87,7 +87,7 @@ func TestMigration109RewritesGCPKeyAccountAndActivateEverywhere(t *testing.T) {
 	cfg.MCPServers = gcpServerWithSets("sandbox-agent", "iap-test", "ci-runner")
 	cfg.DefaultCapabilities = []string{
 		`https://grain.dev/capabilities/gcp#gcp-key={"account":"default","activate":true}`,
-		"read-issues",
+		"release-gate-read",
 	}
 	cfg.ConsoleSessions = []model.ConsoleSession{{
 		ID:    "ops",
@@ -225,7 +225,7 @@ func TestMigration109RewritesGCPKeyAccountAndActivateEverywhere(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{wantSandboxDefault, "read-issues"}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
+	if want := []string{wantSandboxDefault, "release-gate-read"}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
 		t.Errorf("config default_capabilities = %v, want %v", gotCfg.DefaultCapabilities, want)
 	}
 	if got := gotCfg.ConsoleSessions[0].Capabilities; !slices.Equal(got, []string{wantIAPSecondary}) {

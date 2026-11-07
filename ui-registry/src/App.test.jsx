@@ -255,11 +255,73 @@ const sampleAdminSummary = {
       cred_id: "cred-alice-ws-01",
     },
   ],
+  owners: [
+    {
+      email: "alice@example.com",
+      disabled: false,
+      max_instance_units: 12,
+      used_instance_units: 2,
+      max_connected: 20,
+      used_connected: 1,
+      has_override: true,
+    },
+    {
+      email: "bob@example.com",
+      disabled: false,
+      max_instance_units: 10,
+      used_instance_units: 0,
+      max_connected: 20,
+      used_connected: 1,
+      has_override: false,
+    },
+  ],
+  scope_conflicts: [
+    {
+      entry_name: "alice-workstation",
+      owner: "alice@example.com",
+      repo: "acme/infra",
+      path_prefix: "clusters/prod",
+      source: "reported",
+      conflict_with: "platform-vm",
+      incumbent_owner: "alice@example.com",
+      claimed_at: "2026-11-06T21:30:00Z",
+    },
+  ],
+  sql_instances: [
+    {
+      name: "grain-fleet-sql-01",
+      connection_name: "acme-prod:us-central1:grain-fleet-sql-01",
+      private_ip: "10.128.0.51",
+      max_databases: 40,
+      used_databases: 3,
+      active_databases: 2,
+      retained_databases: 1,
+      draining: false,
+    },
+  ],
+  orphans: [
+    {
+      instance_id: "grain-legacy-worker-09",
+      zone: "us-central1-a",
+      state: "RUNNING",
+      internal_ip: "10.128.15.99",
+      entry_name: "legacy-worker-09",
+      detected_at: "2026-11-06T22:45:00Z",
+    },
+  ],
+  reconciler_lease: {
+    lease_name: "reconciler",
+    holder_id: "registry-us-central1-a-01",
+    active: true,
+    lag_seconds: 3,
+    expires_at: "2026-11-06T23:30:27Z",
+  },
   audit_log: [
     {
       id: 101,
       at: "2026-11-06T23:18:00Z",
       actor_email: "alice@example.com",
+      via: "admin_override",
       action: "entry_scopes_update",
       entry_name: "alice-workstation",
     },
@@ -270,13 +332,9 @@ function createFetchMock(overrides = {}) {
   return vi.fn(async (input, init = {}) => {
     const url = typeof input === "string" ? input : input.url;
     const method = (init.method || "GET").toUpperCase();
-    const pathOnly = url.split("?")[0];
 
     if (overrides[`${method} ${url}`]) {
       return overrides[`${method} ${url}`](url, init);
-    }
-    if (overrides[`${method} ${pathOnly}`]) {
-      return overrides[`${method} ${pathOnly}`](url, init);
     }
 
     if (url === "/api/me") {
@@ -441,6 +499,29 @@ function createFetchMock(overrides = {}) {
             ...found,
             owner: sampleMe.email,
             pending_owner: "",
+            transfer_expires_at: null,
+          }),
+          { status: 200 },
+        );
+      }
+      if (parts[1] === "transfer" && parts.length === 2 && method === "POST") {
+        const body = JSON.parse(init.body || "{}");
+        if (body.cancel) {
+          return new Response(
+            JSON.stringify({
+              ...found,
+              pending_owner: "",
+              transfer_expires_at: null,
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            ...found,
+            pending_owner: body.to,
+            transfer_expires_at: "2026-11-13T23:30:00Z",
+            owner_group: body.clear_owner_group ? "" : found.owner_group,
           }),
           { status: 200 },
         );
@@ -562,9 +643,12 @@ describe("Grain Registry UI", () => {
       );
     });
 
-    // Verify -registry-connect snippet updates with entry name
+    // Verify -registry-connect snippet updates with entry name and fixed grain-registry issuer
     expect(
       screen.getByText(/-registry-entry my-workstation/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/-ui-registry-issuer grain-registry/i),
     ).toBeInTheDocument();
 
     fireEvent.click(
@@ -576,6 +660,9 @@ describe("Grain Registry UI", () => {
         "grc_test_secret_token_12345",
       );
     });
+    expect(
+      screen.getByText(/registry_issuer: grain-registry/i),
+    ).toBeInTheDocument();
   });
 
   it("renders Entry detail view with tunnel status, last_seen_at, scopes, conflict banner, and credential rotation", async () => {
@@ -671,40 +758,150 @@ describe("Grain Registry UI", () => {
     expect(screen.getAllByText("v0.14.2").length).toBeGreaterThan(0);
   });
 
-  it("hides Admin nav button for non-admin users and blocks non-http(s) external entry URLs", async () => {
-    const unsafeEntries = [
-      {
-        ...sampleEntries[0],
-        url: "javascript:alert(1)",
-      },
-    ];
+  it("hides Admin nav for non-admin callers, blocks non-http entry URLs, and handles malformed routes", async () => {
     globalThis.fetch = createFetchMock({
-      "GET /api/me": async () =>
+      "GET /api/me": () =>
         new Response(
           JSON.stringify({
             ...sampleMe,
+            is_admin: false,
             is_registry_admin: false,
           }),
           { status: 200 },
         ),
-      "GET /api/entries": async () =>
-        new Response(JSON.stringify({ entries: unsafeEntries }), {
-          status: 200,
-        }),
+      "GET /api/entries?mine=1&include_deleted=true": () =>
+        new Response(
+          JSON.stringify({
+            entries: [
+              {
+                ...sampleEntries[0],
+                url: "javascript:alert(1)",
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
     });
-    renderApp("/");
+
+    renderApp("/entries/%E0%A4%A");
 
     await waitFor(() => {
       expect(
         screen.getByRole("heading", { name: "My Entries" }),
       ).toBeInTheDocument();
+      expect(screen.getAllByText("alice@example.com").length).toBeGreaterThan(
+        0,
+      );
+      expect(
+        screen.getByText("Platform Core VM (platform-vm)"),
+      ).toBeInTheDocument();
     });
-
     expect(
       screen.queryByRole("button", { name: "Admin" }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("link", { name: /^Open$/i }),
+      screen.queryByRole("link", { name: "Open" }),
     ).not.toBeInTheDocument();
+
+    // Verify /new snippet strips URL paths, queries, and shell metacharacters from registry_host.
+    globalThis.fetch = createFetchMock({
+      "GET /api/me": () =>
+        new Response(
+          JSON.stringify({
+            ...sampleMe,
+            registry_host: "https://registry.grain.example.com/evil/$(id)?x=1",
+          }),
+          { status: 200 },
+        ),
+    });
+    renderApp("/new");
+    await waitFor(() => {
+      expect(
+        screen.getAllByText(
+          /-registry-url https:\/\/registry\.grain\.example\.com \\/,
+        ).length,
+      ).toBeGreaterThan(0);
+    });
+    expect(screen.queryByText(/\$\(id\)/)).not.toBeInTheDocument();
+  });
+
+  it("supports two-step ownership transfer offer with expiry and cancel in Entry detail view, and admin recovery actions in Admin view", async () => {
+    const fetchMock = createFetchMock({
+      "POST /api/admin/conflicts/resolve": async () =>
+        new Response(
+          JSON.stringify({ status: "resolved", resolution: "demote" }),
+          { status: 200 },
+        ),
+      "DELETE /api/admin/orphans/us-central1-a/grain-legacy-worker-09":
+        async () =>
+          new Response(JSON.stringify({ status: "deleted" }), { status: 200 }),
+      "POST /api/admin/sql-instances/grain-fleet-sql-01": async () =>
+        new Response(
+          JSON.stringify({
+            ...sampleAdminSummary.sql_instances[0],
+            draining: true,
+          }),
+          { status: 200 },
+        ),
+    });
+    globalThis.fetch = fetchMock;
+
+    // 1. Entry detail two-step transfer offer & cancel
+    renderApp("/entries/platform-vm");
+    await waitFor(() => {
+      expect(screen.getByLabelText("New owner email")).toBeInTheDocument();
+    });
+    fireEvent.change(screen.getByLabelText("New owner email"), {
+      target: { value: "bob@example.com" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Offer ownership transfer" }),
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("pending-transfer-banner")).toHaveTextContent(
+        "bob@example.com",
+      );
+      expect(screen.getByTestId("pending-transfer-banner")).toHaveTextContent(
+        "2026-11-13T23:30:00Z",
+      );
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Cancel transfer offer" }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("pending-transfer-banner"),
+      ).not.toBeInTheDocument();
+    });
+
+    // 2. Navigate to Admin view and verify reconciler lease, conflict resolution, SQL draining, and orphan deletion
+    fireEvent.click(screen.getByRole("button", { name: "Admin" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("reconciler-lease-card")).toHaveTextContent(
+        "Active leader",
+      );
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Demote to secondary" }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Resolved conflict on acme\/infra\/clusters\/prod/i),
+      ).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Drain instance" }));
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /Set Cloud SQL instance grain-fleet-sql-01 draining=true/i,
+        ),
+      ).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Delete orphan VM" }));
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Deleted orphan VM grain-legacy-worker-09/i),
+      ).toBeInTheDocument();
+    });
   });
 });

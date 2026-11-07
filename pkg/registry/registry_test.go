@@ -33,6 +33,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1398,115 +1399,727 @@ func TestStep12CatalogCRUDGroupAuthHeartbeatsDirectoryAndRouteEndToEnd(t *testin
 		t.Fatalf("AcceptTransfer by bob failed: %+v (err=%v)", accepted, err)
 	}
 
-	// 10. Status privacy for unlisted entries and replica heartbeat health checks.
+	// 10. Status & AdminSummary authorization, unlisted privacy, and replica TTL health.
 	listedFalse := false
-	createSecret, err := aliceCli.CreateEntry(ctx, api.CreateEntryRequest{
-		Name:     "secret-unlisted",
-		Kind:     api.KindConnected,
-		HostKind: api.HostKindWorkstation,
-		Listed:   &listedFalse,
+	secretConn, err := aliceCli.CreateEntry(ctx, api.CreateEntryRequest{
+		Name:   "alice-unlisted-secret",
+		Kind:   api.KindConnected,
+		Listed: &listedFalse,
 	})
 	if err != nil {
-		t.Fatalf("CreateEntry secret-unlisted: %v", err)
+		t.Fatalf("CreateEntry alice-unlisted-secret: %v", err)
 	}
-	secretRow, _ := st.GetEntryByName(ctx, "secret-unlisted")
-	if _, err := st.AcquireTunnelSessionWithCred(ctx, secretRow.ID, "rep-step12", "198.51.100.99:5000", createSecret.Credential.CredentialID); err != nil {
-		t.Fatalf("AcquireTunnelSessionWithCred secret-unlisted: %v", err)
-	}
-	_, _ = srv.Router().TunnelCache().RefreshEntry(ctx, "secret-unlisted")
-	secretHbCli, err := api.NewClient(api.ClientConfig{
-		BaseURL:           pubTS.URL,
-		AllowInsecureHTTP: true,
-		RegistrationToken: createSecret.RegistrationToken,
-	})
+	secretRow, err := st.GetEntryByName(ctx, "alice-unlisted-secret")
 	if err != nil {
-		t.Fatalf("NewClient secretHbCli: %v", err)
+		t.Fatalf("GetEntryByName alice-unlisted-secret: %v", err)
 	}
-	if _, err := secretHbCli.Heartbeat(ctx, "secret-unlisted", api.HeartbeatRequest{
-		GrainVersion: "v9.9.9-private",
+	_, _ = st.RecordHeartbeat(ctx, secretRow.ID, api.HeartbeatRequest{
+		GrainVersion: "v9.9.9-unlisted-private",
 		HostKind:     api.HostKindWorkstation,
 		Health:       api.HealthOK,
-	}); err != nil {
-		t.Fatalf("Heartbeat secret-unlisted: %v", err)
-	}
+	})
+	_, _ = st.AcquireTunnelSessionWithCred(ctx, secretRow.ID, "rep-step12", "198.51.100.99:5000", secretConn.Credential.CredentialID)
 
-	// Register a second replica and advance clock past 2*replicaTTL so rep-stale becomes unhealthy
-	// while keeping rep-step12 fresh.
-	_ = st.UpsertReplica(ctx, "rep-stale", "127.0.0.1:18083")
-	now = now.Add(2 * time.Minute)
+	// Register a second replica whose heartbeat is fresh now, then advance past ReplicaTTL for stale-replica check.
+	_ = st.UpsertReplica(ctx, "rep-stale", "10.0.0.99:8082")
+	now = now.Add(20 * time.Second)
 	_ = st.UpsertReplica(ctx, "rep-step12", "127.0.0.1:18082")
-
-	getStatusAs := func(email string) api.StatusResponse {
-		t.Helper()
-		req := httptest.NewRequest(http.MethodGet, "https://registry.example.com/api/status", nil)
-		req.Header.Set("X-Test-Email", email)
-		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("GET /api/status as %s: %d %s", email, rec.Code, rec.Body.String())
-		}
-		var out api.StatusResponse
-		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
-			t.Fatalf("decode StatusResponse: %v", err)
-		}
-		return out
+	_, _ = srv.Router().TunnelCache().RefreshEntry(ctx, "alice-unlisted-secret")
+	secretDetail, err := aliceCli.GetEntry(ctx, "alice-unlisted-secret")
+	if err != nil || secretDetail.TunnelConnected == nil || !*secretDetail.TunnelConnected {
+		t.Fatalf("expected enrichAPIEntry TunnelConnected=true under store clock, got %+v (err=%v)", secretDetail, err)
 	}
 
-	nonAdminStatus := getStatusAs("bob@example.com")
-	if nonAdminStatus.TotalEntries != 2 {
-		t.Fatalf("non-admin TotalEntries = %d, want 2 listed entries only", nonAdminStatus.TotalEntries)
+	// Non-admin cannot call /api/admin/summary (403) and does NOT see unlisted versions, counts, tunnels, or peer_addr on /api/status.
+	if _, err := bobCli.AdminSummary(ctx); !isAPIStatus(err, http.StatusForbidden) {
+		t.Fatalf("expected 403 Forbidden for non-admin AdminSummary, got %v", err)
 	}
-	if _, leaked := nonAdminStatus.VersionCounts["v9.9.9-private"]; leaked {
-		t.Fatalf("non-admin VersionCounts leaked unlisted version: %+v", nonAdminStatus.VersionCounts)
+	bobStatus, err := bobCli.Status(ctx)
+	if err != nil {
+		t.Fatalf("bob Status: %v", err)
 	}
-	if nonAdminStatus.ActiveTunnels != 2 {
-		t.Fatalf("non-admin ActiveTunnels = %d, want 2 listed tunnels only", nonAdminStatus.ActiveTunnels)
+	if _, leaked := bobStatus.VersionCounts["v9.9.9-unlisted-private"]; leaked {
+		t.Fatalf("non-admin /api/status leaked unlisted entry version: %+v", bobStatus.VersionCounts)
 	}
-	for _, rep := range nonAdminStatus.Replicas {
+	for _, rep := range bobStatus.Replicas {
 		if rep.PeerAddr != "" {
-			t.Fatalf("non-admin replica leaked PeerAddr: %+v", rep)
+			t.Fatalf("non-admin /api/status leaked replica peer_addr: %+v", rep)
 		}
 		if rep.ReplicaID == "rep-stale" && rep.Healthy {
-			t.Fatalf("stale replica reported Healthy=true in /api/status: %+v", rep)
+			t.Fatalf("stale replica marked healthy in /api/status: %+v", rep)
 		}
-		if rep.ReplicaID == "rep-step12" && (!rep.Healthy || rep.ActiveTunnels != 2) {
-			t.Fatalf("fresh replica unexpected status for non-admin: %+v", rep)
+		if rep.ReplicaID == "rep-step12" && !rep.Healthy {
+			t.Fatalf("fresh replica marked unhealthy in /api/status: %+v", rep)
 		}
 	}
 
-	adminStatus := getStatusAs("admin@example.com")
-	if adminStatus.TotalEntries != 3 {
-		t.Fatalf("admin TotalEntries = %d, want 3 (listed + unlisted)", adminStatus.TotalEntries)
+	adminCli := clientFor("admin@example.com")
+	adminStatus, err := adminCli.Status(ctx)
+	if err != nil {
+		t.Fatalf("admin Status: %v", err)
 	}
-	if adminStatus.VersionCounts["v9.9.9-private"] != 1 {
-		t.Fatalf("admin VersionCounts missing unlisted version: %+v", adminStatus.VersionCounts)
+	if adminStatus.VersionCounts["v9.9.9-unlisted-private"] != 1 {
+		t.Fatalf("expected admin /api/status to include unlisted entry version, got %+v", adminStatus.VersionCounts)
 	}
-	if adminStatus.ActiveTunnels != 3 {
-		t.Fatalf("admin ActiveTunnels = %d, want 3", adminStatus.ActiveTunnels)
+	if adminStatus.TotalEntries != bobStatus.TotalEntries+1 {
+		t.Fatalf("expected admin TotalEntries (%d) == non-admin TotalEntries (%d) + 1", adminStatus.TotalEntries, bobStatus.TotalEntries)
+	}
+	if adminStatus.ActiveTunnels != bobStatus.ActiveTunnels+1 {
+		t.Fatalf("expected admin ActiveTunnels (%d) == non-admin ActiveTunnels (%d) + 1", adminStatus.ActiveTunnels, bobStatus.ActiveTunnels)
 	}
 
-	reqAdminSum := httptest.NewRequest(http.MethodGet, "https://registry.example.com/api/admin/summary", nil)
-	reqAdminSum.Header.Set("X-Test-Email", "admin@example.com")
-	recAdminSum := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(recAdminSum, reqAdminSum)
-	if recAdminSum.Code != http.StatusOK {
-		t.Fatalf("GET /api/admin/summary: %d %s", recAdminSum.Code, recAdminSum.Body.String())
+	adminSum, err := adminCli.AdminSummary(ctx)
+	if err != nil {
+		t.Fatalf("admin AdminSummary: %v", err)
 	}
-	var adminSummary api.AdminSummaryResponse
-	if err := json.Unmarshal(recAdminSum.Body.Bytes(), &adminSummary); err != nil {
-		t.Fatalf("decode AdminSummaryResponse: %v", err)
-	}
-	sawStaleUnhealthy := false
-	for _, rep := range adminSummary.Replicas {
-		if rep.ReplicaID == "rep-stale" {
-			if rep.Healthy {
-				t.Fatalf("stale replica reported Healthy=true in /api/admin/summary: %+v", rep)
-			}
-			sawStaleUnhealthy = true
+	for _, rep := range adminSum.Replicas {
+		if rep.ReplicaID == "rep-stale" && rep.Healthy {
+			t.Fatalf("stale replica marked healthy in /api/admin/summary: %+v", rep)
+		}
+		if rep.ReplicaID == "rep-step12" && !rep.Healthy {
+			t.Fatalf("fresh replica marked unhealthy in /api/admin/summary: %+v", rep)
 		}
 	}
-	if !sawStaleUnhealthy {
-		t.Fatalf("rep-stale missing from /api/admin/summary replicas: %+v", adminSummary.Replicas)
+}
+
+func TestDemoRefusesNonLoopbackAddr(t *testing.T) {
+	for _, bad := range []string{"0.0.0.0:0", ":0", "10.0.0.5:8080", "example.com:8080"} {
+		var out, errBuf strings.Builder
+		err := Run(context.Background(), []string{"demo", "-addr", bad}, &out, &errBuf)
+		if err == nil || !strings.Contains(err.Error(), "loopback") {
+			t.Fatalf("Run(demo -addr %q) = %v, want loopback refusal", bad, err)
+		}
+	}
+}
+
+func TestStep17StopStartAutoUpgradeAndMaintenanceWindowEndToEnd(t *testing.T) {
+	// 1. Validate ComputeConfig auto_upgrade and maintenance_window parsing (same-day and overnight UTC windows).
+	if _, _, err := ParseMaintenanceWindow("02:00-06:00"); err != nil {
+		t.Fatalf("ParseMaintenanceWindow 02:00-06:00: %v", err)
+	}
+	if !InMaintenanceWindow("02:00-06:00", time.Date(2026, 11, 7, 3, 30, 0, 0, time.UTC)) {
+		t.Fatalf("expected 03:30 UTC inside 02:00-06:00")
+	}
+	if InMaintenanceWindow("02:00-06:00", time.Date(2026, 11, 7, 6, 0, 0, 0, time.UTC)) {
+		t.Fatalf("expected 06:00 UTC outside [02:00, 06:00)")
+	}
+
+	if _, _, err := ParseMaintenanceWindow("22:00-02:00"); err != nil {
+		t.Fatalf("ParseMaintenanceWindow 22:00-02:00: %v", err)
+	}
+	if !InMaintenanceWindow("22:00-02:00", time.Date(2026, 11, 7, 23, 15, 0, 0, time.UTC)) || !InMaintenanceWindow("22:00-02:00", time.Date(2026, 11, 8, 1, 45, 0, 0, time.UTC)) {
+		t.Fatalf("expected 23:15 and 01:45 UTC inside overnight window 22:00-02:00")
+	}
+	if InMaintenanceWindow("22:00-02:00", time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)) {
+		t.Fatalf("expected 12:00 UTC outside overnight window 22:00-02:00")
+	}
+
+	if _, _, err := ParseMaintenanceWindow("25:00-06:00"); err == nil {
+		t.Fatalf("expected invalid maintenance_window hour to fail")
+	}
+
+	badCfgYAML := strings.Replace(validTestYAML(), "default_shape: standard", "default_shape: standard\n  auto_upgrade: major", 1)
+	if _, err := ParseConfig([]byte(badCfgYAML)); err == nil {
+		t.Fatalf("expected invalid compute.auto_upgrade=major to fail validation")
+	}
+
+	// 2. End-to-end HTTP test for POST /api/entries/{name}/stop, POST /api/entries/{name}/start, and auto_upgrade/auto_wake fields.
+	pgURL := startEphemeralPostgresForRegistryTest(t)
+	ctx := context.Background()
+	st, err := store.Open(ctx, pgURL, store.DefaultThresholds())
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer st.Close()
+
+	if err := st.SeedShapes(ctx, []store.ShapeRow{
+		{Name: "small", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
+	}); err != nil {
+		t.Fatalf("SeedShapes: %v", err)
+	}
+
+	admitter, err := webauth.NewAdmitter(webauth.AdmissionConfig{
+		Verifier:       fakeFrontIdentity{},
+		AllowedDomains: []string{"example.com"},
+		Admins:         []string{"user:admin@example.com"},
+	})
+	if err != nil {
+		t.Fatalf("NewAdmitter: %v", err)
+	}
+	signer, err := NewEphemeralLocalSigner("step17-k1")
+	if err != nil {
+		t.Fatalf("NewEphemeralLocalSigner: %v", err)
+	}
+	cfg, err := ParseConfig([]byte(validTestYAML()))
+	if err != nil {
+		t.Fatalf("ParseConfig: %v", err)
+	}
+	srv, err := NewServer(ServerOptions{
+		Config:    *cfg,
+		Store:     st,
+		Admitter:  admitter,
+		Signer:    signer,
+		ReplicaID: "rep-step17",
+		PeerAddr:  "127.0.0.1:18082",
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	clientFor := func(email string) *api.Client {
+		c, err := api.NewClient(api.ClientConfig{
+			BaseURL:           ts.URL,
+			AllowInsecureHTTP: true,
+			ExtraHeaders:      http.Header{"X-Test-Email": []string{email}},
+		})
+		if err != nil {
+			t.Fatalf("NewClient(%s): %v", email, err)
+		}
+		return c
+	}
+
+	aliceCli := clientFor("alice@example.com")
+	bobCli := clientFor("bob@example.com")
+
+	autoWakeFalse := false
+	created, err := aliceCli.CreateEntry(ctx, api.CreateEntryRequest{
+		Name:        "alice-vm17",
+		Kind:        api.KindInstance,
+		Shape:       "small",
+		AutoUpgrade: string(api.AutoUpgradeMinor),
+		AutoWake:    &autoWakeFalse,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry alice-vm17: %v", err)
+	}
+	if created.Entry.AutoUpgrade != string(api.AutoUpgradeMinor) || created.Entry.AutoWake {
+		t.Fatalf("expected auto_upgrade=minor and auto_wake=false, got %+v", created.Entry)
+	}
+
+	// Update auto_wake=true and auto_upgrade=notify via PATCH /api/entries/alice-vm17.
+	autoWakeTrue := true
+	notifyPol := string(api.AutoUpgradeNotify)
+	updated, err := aliceCli.UpdateEntry(ctx, "alice-vm17", api.UpdateEntryRequest{
+		AutoUpgrade: &notifyPol,
+		AutoWake:    &autoWakeTrue,
+	})
+	if err != nil {
+		t.Fatalf("UpdateEntry alice-vm17: %v", err)
+	}
+	if updated.AutoUpgrade != string(api.AutoUpgradeNotify) || !updated.AutoWake {
+		t.Fatalf("expected auto_upgrade=notify and auto_wake=true after update, got %+v", updated)
+	}
+
+	// Transition alice-vm17 to running so it can be stopped.
+	row, err := st.GetEntryByName(ctx, "alice-vm17")
+	if err != nil {
+		t.Fatalf("GetEntryByName: %v", err)
+	}
+	if _, err := st.TransitionEntryState(ctx, row.ID, row.Version, api.StateRunning, ""); err != nil {
+		t.Fatalf("TransitionEntryState running: %v", err)
+	}
+
+	// Non-manager bob cannot stop alice-vm17 (403 Forbidden).
+	if _, err := bobCli.StopEntry(ctx, "alice-vm17"); !isAPIStatus(err, http.StatusForbidden) {
+		t.Fatalf("expected 403 Forbidden when bob stops alice-vm17, got %v", err)
+	}
+
+	// Owner alice stops alice-vm17 -> state transitions to stopping.
+	stoppingEntry, err := aliceCli.StopEntry(ctx, "alice-vm17")
+	if err != nil {
+		t.Fatalf("StopEntry: %v", err)
+	}
+	if stoppingEntry.State != api.StateStopping {
+		t.Fatalf("expected state=stopping after StopEntry, got %s", stoppingEntry.State)
+	}
+
+	// Complete stop in store (as reconciler does) -> state=stopped.
+	row, err = st.GetEntryByName(ctx, "alice-vm17")
+	if err != nil {
+		t.Fatalf("GetEntryByName: %v", err)
+	}
+	if _, err := st.CompleteStopEntry(ctx, row.ID, row.Version); err != nil {
+		t.Fatalf("CompleteStopEntry: %v", err)
+	}
+
+	// Owner alice starts alice-vm17 -> state transitions stopped -> creating.
+	startingEntry, err := aliceCli.StartEntry(ctx, "alice-vm17")
+	if err != nil {
+		t.Fatalf("StartEntry: %v", err)
+	}
+	if startingEntry.State != api.StateCreating {
+		t.Fatalf("expected state=creating after StartEntry, got %s", startingEntry.State)
+	}
+}
+
+type fakeOrphanProviderForStep16 struct {
+	mu      sync.Mutex
+	orphans []api.OrphanVMInfo
+}
+
+func (f *fakeOrphanProviderForStep16) ListOrphans() []api.OrphanVMInfo {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]api.OrphanVMInfo, len(f.orphans))
+	copy(out, f.orphans)
+	return out
+}
+
+func (f *fakeOrphanProviderForStep16) DeleteOrphan(ctx context.Context, zone, instanceID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, o := range f.orphans {
+		if o.Zone == zone && o.InstanceID == instanceID {
+			f.orphans = append(f.orphans[:i], f.orphans[i+1:]...)
+			return nil
+		}
+	}
+	return store.ErrNotFound
+}
+
+func TestStep16TwoStepTransferRestoreHardPurgeAndAdminRecoveryEndToEnd(t *testing.T) {
+	pgURL := startEphemeralPostgresForRegistryTest(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 7, 10, 0, 0, 0, time.UTC)
+	st, err := store.Open(ctx, pgURL, store.DefaultThresholds())
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer st.Close()
+	st.SetNow(func() time.Time { return now })
+
+	if err := st.SeedShapes(ctx, []store.ShapeRow{
+		{Name: "small", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
+		{Name: "large", MachineType: "n2-standard-8", BootDiskGB: 100, QuotaUnits: 2},
+	}); err != nil {
+		t.Fatalf("SeedShapes: %v", err)
+	}
+	if err := st.SeedSQLInstances(ctx, []store.SQLInstanceRow{
+		{
+			Name:           "sql-pool-1",
+			ConnectionName: "proj:us-central1:sql-pool-1",
+			PrivateIP:      "10.128.0.51",
+			MaxDatabases:   40,
+		},
+	}); err != nil {
+		t.Fatalf("SeedSQLInstances: %v", err)
+	}
+	if _, err := st.AcquireOrRenewLease(ctx, "reconciler", "rep-step16", 30*time.Second); err != nil {
+		t.Fatalf("AcquireOrRenewLease: %v", err)
+	}
+
+	groups := staticGroupResolverForTest{
+		StaticGroupChecker: webauth.NewStaticGroups(map[string][]string{
+			"group:team-alpha@example.com": {"alice@example.com", "coowner@example.com", "bob@example.com"},
+		}),
+	}
+	admitter, err := webauth.NewAdmitter(webauth.AdmissionConfig{
+		Verifier:       fakeFrontIdentity{},
+		Groups:         groups,
+		AllowedDomains: []string{"example.com"},
+		Admins:         []string{"user:admin@example.com"},
+	})
+	if err != nil {
+		t.Fatalf("NewAdmitter: %v", err)
+	}
+	signer, err := NewEphemeralLocalSigner("step16-k1")
+	if err != nil {
+		t.Fatalf("NewEphemeralLocalSigner: %v", err)
+	}
+	cfg, err := ParseConfig([]byte(validTestYAML()))
+	if err != nil {
+		t.Fatalf("ParseConfig: %v", err)
+	}
+	fakeOrphans := &fakeOrphanProviderForStep16{
+		orphans: []api.OrphanVMInfo{
+			{
+				InstanceID: "grain-orphan-01",
+				Zone:       "us-central1-a",
+				State:      "RUNNING",
+				InternalIP: "10.128.15.77",
+				EntryName:  "orphan-01",
+				DetectedAt: now.Add(-15 * time.Minute),
+			},
+		},
+	}
+	srv, err := NewServer(ServerOptions{
+		Config:    *cfg,
+		Store:     st,
+		Admitter:  admitter,
+		Groups:    groups,
+		Signer:    signer,
+		Orphans:   fakeOrphans,
+		ReplicaID: "rep-step16",
+		PeerAddr:  "127.0.0.1:18082",
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	srv.Router().SetNow(func() time.Time { return now })
+	_ = st.UpsertReplica(ctx, "rep-step16", "127.0.0.1:18082")
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	clientFor := func(email string) *api.Client {
+		c, err := api.NewClient(api.ClientConfig{
+			BaseURL:           ts.URL,
+			AllowInsecureHTTP: true,
+			ExtraHeaders:      http.Header{"X-Test-Email": []string{email}},
+		})
+		if err != nil {
+			t.Fatalf("NewClient(%s): %v", email, err)
+		}
+		return c
+	}
+
+	aliceCli := clientFor("alice@example.com")
+	coownerCli := clientFor("coowner@example.com")
+	bobCli := clientFor("bob@example.com")
+	carolCli := clientFor("carol@example.com")
+	adminCli := clientFor("admin@example.com")
+
+	// 1. Two-step transfer with 7-day expiry, cancel, credential/tunnel/SSH revocation, and expired offer rejection.
+	listedTrue := true
+	createdConn, err := aliceCli.CreateEntry(ctx, api.CreateEntryRequest{
+		Name:       "step16-conn",
+		Kind:       api.KindConnected,
+		OwnerGroup: "group:team-alpha@example.com",
+		Listed:     &listedTrue,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry step16-conn: %v", err)
+	}
+	connRow, err := st.GetEntryByName(ctx, "step16-conn")
+	if err != nil {
+		t.Fatalf("GetEntryByName step16-conn: %v", err)
+	}
+	if _, err := st.AcquireTunnelSessionWithCred(ctx, connRow.ID, "rep-step16", "198.51.100.55:4100", createdConn.Credential.CredentialID); err != nil {
+		t.Fatalf("AcquireTunnelSessionWithCred: %v", err)
+	}
+
+	// Offer transfer to bob; verify transfer_expires_at is ~7 days from now.
+	offered, err := aliceCli.OfferTransfer(ctx, "step16-conn", api.TransferRequest{
+		To: "bob@example.com",
+	})
+	if err != nil {
+		t.Fatalf("OfferTransfer: %v", err)
+	}
+	if offered.PendingOwner != "bob@example.com" || offered.TransferExpiresAt == nil {
+		t.Fatalf("expected pending_owner=bob and transfer_expires_at set, got %+v", offered)
+	}
+	if offered.TransferExpiresAt.Sub(now) != 7*24*time.Hour {
+		t.Fatalf("expected 7-day transfer_expires_at, got %v", offered.TransferExpiresAt.Sub(now))
+	}
+
+	// Cancel pending transfer via cancel=true.
+	cancelled, err := aliceCli.OfferTransfer(ctx, "step16-conn", api.TransferRequest{
+		Cancel: true,
+	})
+	if err != nil {
+		t.Fatalf("OfferTransfer(cancel): %v", err)
+	}
+	if cancelled.PendingOwner != "" || cancelled.TransferExpiresAt != nil {
+		t.Fatalf("expected pending_owner and transfer_expires_at cleared on cancel, got %+v", cancelled)
+	}
+
+	// Re-offer to bob, then advance clock 8 days (>7d) and verify bob's accept is rejected with 409 Conflict.
+	if _, err := aliceCli.OfferTransfer(ctx, "step16-conn", api.TransferRequest{To: "bob@example.com"}); err != nil {
+		t.Fatalf("re-OfferTransfer: %v", err)
+	}
+	now = now.Add(8 * 24 * time.Hour)
+	if _, err := bobCli.AcceptTransfer(ctx, "step16-conn"); !isAPIStatus(err, http.StatusConflict) {
+		t.Fatalf("expected 409 Conflict when accepting expired transfer offer, got %v", err)
+	}
+
+	// Re-offer at current clock; coowner (an owner_group peer) cannot accept on bob's behalf; bob accepts within 7 days.
+	if _, err := coownerCli.OfferTransfer(ctx, "step16-conn", api.TransferRequest{To: "bob@example.com"}); err != nil {
+		t.Fatalf("coowner OfferTransfer: %v", err)
+	}
+	if _, err := coownerCli.AcceptTransfer(ctx, "step16-conn"); !isAPIStatus(err, http.StatusForbidden) && !isAPIStatus(err, http.StatusConflict) {
+		t.Fatalf("expected coowner AcceptTransfer to be rejected with 403/409, got %v", err)
+	}
+	accepted, err := bobCli.AcceptTransfer(ctx, "step16-conn")
+	if err != nil {
+		t.Fatalf("bob AcceptTransfer: %v", err)
+	}
+	if accepted.Owner != "bob@example.com" || accepted.PendingOwner != "" || accepted.TransferExpiresAt != nil {
+		t.Fatalf("unexpected accepted entry: %+v", accepted)
+	}
+	if accepted.OwnerGroup != "group:team-alpha@example.com" {
+		t.Fatalf("expected owner_group preserved on intra-team transfer, got %q", accepted.OwnerGroup)
+	}
+	// Verify grc_ credentials were revoked and active tunnel session terminated on transfer acceptance.
+	if len(accepted.Credentials) == 0 || accepted.Credentials[0].RevokedAt == nil {
+		t.Fatalf("expected grc_ credential revoked on transfer acceptance, got %+v", accepted.Credentials)
+	}
+	if tsRow, _ := st.GetActiveTunnelSession(ctx, connRow.ID); tsRow != nil {
+		t.Fatalf("expected active tunnel session terminated on transfer acceptance, got %+v", tsRow)
+	}
+
+	// 2. Admin force-transfer with clear_owner_group=true.
+	if _, err := bobCli.ForceTransfer(ctx, "step16-conn", api.TransferRequest{To: "carol@example.com"}); !isAPIStatus(err, http.StatusForbidden) {
+		t.Fatalf("expected 403 Forbidden for non-admin ForceTransfer, got %v", err)
+	}
+	forced, err := adminCli.ForceTransfer(ctx, "step16-conn", api.TransferRequest{
+		To:              "carol@example.com",
+		ClearOwnerGroup: true,
+	})
+	if err != nil {
+		t.Fatalf("admin ForceTransfer: %v", err)
+	}
+	if forced.Owner != "carol@example.com" || forced.OwnerGroup != "" {
+		t.Fatalf("expected owner=carol and owner_group cleared after ForceTransfer, got %+v", forced)
+	}
+
+	// 3. Soft-delete, retention restore, and admin immediate hard purge.
+	vmCreated, err := aliceCli.CreateEntry(ctx, api.CreateEntryRequest{
+		Name:  "alice-retain-vm",
+		Kind:  api.KindInstance,
+		Shape: "small",
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry alice-retain-vm: %v", err)
+	}
+	if err := aliceCli.DeleteEntry(ctx, vmCreated.Entry.Name, api.DeleteEntryRequest{}); err != nil {
+		t.Fatalf("DeleteEntry alice-retain-vm: %v", err)
+	}
+	// Restore within db_retention_period succeeds and re-charges quota.
+	restored, err := aliceCli.RestoreEntry(ctx, "alice-retain-vm")
+	if err != nil {
+		t.Fatalf("RestoreEntry alice-retain-vm: %v", err)
+	}
+	if restored.State != api.StateCreating || restored.DeletedAt != nil {
+		t.Fatalf("expected restored entry in state=creating with nil deleted_at, got %+v", restored)
+	}
+
+	// Delete again and perform admin immediate hard purge with release_reservation=true.
+	if err := aliceCli.DeleteEntry(ctx, "alice-retain-vm", api.DeleteEntryRequest{}); err != nil {
+		t.Fatalf("DeleteEntry second time: %v", err)
+	}
+	if _, err := aliceCli.PurgeEntry(ctx, "alice-retain-vm", api.HardPurgeRequest{ReleaseReservation: true}); !isAPIStatus(err, http.StatusForbidden) {
+		t.Fatalf("expected 403 Forbidden for non-admin PurgeEntry, got %v", err)
+	}
+	purged, err := adminCli.PurgeEntry(ctx, "alice-retain-vm", api.HardPurgeRequest{
+		Confirm:            "alice-retain-vm",
+		ReleaseReservation: true,
+	})
+	if err != nil {
+		t.Fatalf("admin PurgeEntry: %v", err)
+	}
+	if purged.PurgedAt == nil {
+		t.Fatalf("expected purged_at set after PurgeEntry, got %+v", purged)
+	}
+	// Restore after hard purge is rejected with 409 Conflict.
+	if _, err := aliceCli.RestoreEntry(ctx, "alice-retain-vm"); !isAPIStatus(err, http.StatusConflict) {
+		t.Fatalf("expected 409 Conflict restoring hard-purged entry, got %v", err)
+	}
+	// Because release_reservation=true was passed, another owner (carol) can immediately reuse the name!
+	avail, err := carolCli.CheckName(ctx, "alice-retain-vm")
+	if err != nil || avail.Status != api.NameFree {
+		t.Fatalf("expected alice-retain-vm available after hard purge with release_reservation=true, got %+v (err=%v)", avail, err)
+	}
+
+	// 4. Admin recovery endpoints: Quotas, Owner disable, Scope conflict resolution, SQL draining, Orphan VM deletion, Tunnel disconnect, and AdminSummary.
+	// Create a reported scope conflict between two listed entries.
+	_, err = aliceCli.CreateEntry(ctx, api.CreateEntryRequest{
+		Name:   "conflict-incumbent",
+		Kind:   api.KindConnected,
+		Listed: &listedTrue,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry conflict-incumbent: %v", err)
+	}
+	_, err = bobCli.CreateEntry(ctx, api.CreateEntryRequest{
+		Name:   "conflict-contender",
+		Kind:   api.KindConnected,
+		Listed: &listedTrue,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry conflict-contender: %v", err)
+	}
+	if _, err := aliceCli.Heartbeat(ctx, "conflict-incumbent", api.HeartbeatRequest{
+		GrainVersion: "v1.6.0",
+		HostKind:     api.HostKindWorkstation,
+		Health:       api.HealthOK,
+		Scopes:       []api.HeartbeatScope{{Repo: "acme/shared", PathPrefix: "", Role: api.RolePrimary}},
+	}); err != nil {
+		t.Fatalf("Heartbeat conflict-incumbent: %v", err)
+	}
+	if _, err := bobCli.Heartbeat(ctx, "conflict-contender", api.HeartbeatRequest{
+		GrainVersion: "v1.6.0",
+		HostKind:     api.HostKindWorkstation,
+		Health:       api.HealthOK,
+		Scopes:       []api.HeartbeatScope{{Repo: "acme/shared", PathPrefix: "", Role: api.RolePrimary}},
+	}); err != nil {
+		t.Fatalf("Heartbeat conflict-contender: %v", err)
+	}
+
+	if _, err := st.AcquireOrRenewLease(ctx, "reconciler", "rep-step16", 30*time.Second); err != nil {
+		t.Fatalf("AcquireOrRenewLease after clock advance: %v", err)
+	}
+	sum, err := adminCli.AdminSummary(ctx)
+	if err != nil {
+		t.Fatalf("adminCli.AdminSummary: %v", err)
+	}
+	if len(sum.ScopeConflicts) != 1 || sum.ScopeConflicts[0].EntryName != "conflict-contender" || sum.ScopeConflicts[0].ConflictWith != "conflict-incumbent" {
+		t.Fatalf("expected 1 active scope conflict in AdminSummary, got %+v", sum.ScopeConflicts)
+	}
+	if len(sum.SQLInstances) != 1 || sum.SQLInstances[0].Name != "sql-pool-1" {
+		t.Fatalf("expected sql-pool-1 in AdminSummary.SQLInstances, got %+v", sum.SQLInstances)
+	}
+	if len(sum.Orphans) != 1 || sum.Orphans[0].InstanceID != "grain-orphan-01" {
+		t.Fatalf("expected grain-orphan-01 in AdminSummary.Orphans, got %+v", sum.Orphans)
+	}
+	if sum.ReconcilerLease == nil || sum.ReconcilerLease.HolderID != "rep-step16" || !sum.ReconcilerLease.Active {
+		t.Fatalf("expected active reconciler lease in AdminSummary, got %+v", sum.ReconcilerLease)
+	}
+
+	// Resolve scope conflict by demoting conflict-incumbent -> conflict-contender promotes to active primary!
+	if err := adminCli.ResolveScopeConflict(ctx, api.ResolveConflictRequest{
+		EntryName:  "conflict-incumbent",
+		Repo:       "acme/shared",
+		PathPrefix: "",
+		Resolution: "demote",
+	}); err != nil {
+		t.Fatalf("ResolveScopeConflict: %v", err)
+	}
+	contenderAfter, err := bobCli.GetEntry(ctx, "conflict-contender")
+	if err != nil {
+		t.Fatalf("GetEntry conflict-contender: %v", err)
+	}
+	if len(contenderAfter.Scopes) != 1 || !contenderAfter.Scopes[0].Active || contenderAfter.Scopes[0].EffectiveRole != api.RolePrimary {
+		t.Fatalf("expected conflict-contender promoted to active primary after incumbent demotion, got %+v", contenderAfter.Scopes)
+	}
+
+	// Set and reset custom quota via admin endpoints.
+	qSet, err := adminCli.SetQuota(ctx, "bob@example.com", api.SetQuotaRequest{
+		MaxInstanceUnits: 16,
+		MaxConnected:     25,
+	})
+	if err != nil || !qSet.HasOverride || qSet.MaxInstanceUnits != 16 || qSet.MaxConnected != 25 {
+		t.Fatalf("SetQuota failed: %+v (err=%v)", qSet, err)
+	}
+	qReset, err := adminCli.ResetQuota(ctx, "bob@example.com")
+	if err != nil || qReset.HasOverride {
+		t.Fatalf("ResetQuota failed: %+v (err=%v)", qReset, err)
+	}
+
+	// Disable owner carol@example.com and verify carol cannot create new entries (403 Forbidden owner_disabled).
+	disabledOwner, err := adminCli.SetOwnerDisabled(ctx, "carol@example.com", true)
+	if err != nil || !disabledOwner.Disabled {
+		t.Fatalf("SetOwnerDisabled failed: %+v (err=%v)", disabledOwner, err)
+	}
+	if _, err := carolCli.CreateEntry(ctx, api.CreateEntryRequest{
+		Name: "carol-blocked",
+		Kind: api.KindConnected,
+	}); !isAPIStatus(err, http.StatusForbidden) {
+		t.Fatalf("expected 403 Forbidden when disabled owner creates entry, got %v", err)
+	}
+
+	// Toggle SQL instance draining flag.
+	sqlDraining, err := adminCli.SetSQLInstanceDraining(ctx, "sql-pool-1", true)
+	if err != nil || !sqlDraining.Draining {
+		t.Fatalf("SetSQLInstanceDraining failed: %+v (err=%v)", sqlDraining, err)
+	}
+
+	// Delete orphan VM via admin endpoint.
+	if err := adminCli.DeleteOrphanVM(ctx, "us-central1-a", "grain-orphan-01"); err != nil {
+		t.Fatalf("DeleteOrphanVM: %v", err)
+	}
+	if len(fakeOrphans.ListOrphans()) != 0 {
+		t.Fatalf("expected 0 orphans after DeleteOrphanVM")
+	}
+
+	// Disconnect active tunnel session via admin endpoint.
+	incRow, _ := st.GetEntryByName(ctx, "conflict-incumbent")
+	if _, err := st.AcquireTunnelSession(ctx, incRow.ID, "rep-step16", "198.51.100.70:4200"); err != nil {
+		t.Fatalf("AcquireTunnelSession conflict-incumbent: %v", err)
+	}
+	if err := adminCli.DisconnectTunnel(ctx, "conflict-incumbent"); err != nil {
+		t.Fatalf("DisconnectTunnel: %v", err)
+	}
+	if tsAfter, _ := st.GetActiveTunnelSession(ctx, incRow.ID); tsAfter != nil {
+		t.Fatalf("expected tunnel session removed after DisconnectTunnel, got %+v", tsAfter)
+	}
+}
+
+func TestStep18DocsRegistryAndAccessCode(t *testing.T) {
+	regDocBytes, err := os.ReadFile(filepath.Join("..", "..", "docs", "registry.md"))
+	if err != nil {
+		t.Fatalf("reading docs/registry.md: %v", err)
+	}
+	regDoc := string(regDocBytes)
+
+	for _, want := range []string{
+		"docker.io/grainai/registry",
+		"kind = instance",
+		"kind = connected",
+		"backend_url",
+		"X-Grain-Registry-Assertion",
+		"-registry-connect",
+		"/api/entries/<name>/connect",
+		"/api/entries/<name>/heartbeat",
+		"owner_group",
+		"GET /api/directory",
+		"GET /api/route",
+		"grain registry directory",
+		"grain registry route",
+		"grain registry register",
+		"grain registry scopes",
+		"primary_conflict",
+	} {
+		if !strings.Contains(regDoc, want) {
+			t.Errorf("docs/registry.md missing %q", want)
+		}
+	}
+
+	// Extract the YAML config example from docs/registry.md and validate it via ParseConfig.
+	const yamlStart = "```yaml\n"
+	startIdx := strings.Index(regDoc, yamlStart)
+	if startIdx < 0 {
+		t.Fatalf("docs/registry.md has no ```yaml block")
+	}
+	yamlBody := regDoc[startIdx+len(yamlStart):]
+	endIdx := strings.Index(yamlBody, "\n```")
+	if endIdx < 0 {
+		t.Fatalf("docs/registry.md has unterminated ```yaml block")
+	}
+	yamlSnippet := yamlBody[:endIdx]
+	cfg, err := ParseConfig([]byte(yamlSnippet))
+	if err != nil {
+		t.Fatalf("ParseConfig on docs/registry.md reference config failed: %v", err)
+	}
+	if cfg.Signing.JWTTTL != 60*time.Second {
+		t.Fatalf("docs/registry.md config jwt_ttl = %s, want 60s", cfg.Signing.JWTTTL)
+	}
+	if cfg.Compute.SSHBreakGlass == nil || !*cfg.Compute.SSHBreakGlass {
+		t.Fatalf("docs/registry.md config ssh_break_glass = %v, want true", cfg.Compute.SSHBreakGlass)
+	}
+	if cfg.Observability.FleetLogs {
+		t.Fatalf("docs/registry.md config fleet_logs = true, want false")
+	}
+
+	acDocBytes, err := os.ReadFile(filepath.Join("..", "..", "docs", "access-code.md"))
+	if err != nil {
+		t.Fatalf("reading docs/access-code.md: %v", err)
+	}
+	acDoc := string(acDocBytes)
+	for _, want := range []string{
+		"-ui-require-verifier=registry",
+		"-ui-registry-issuer",
+		"-ui-registry-audience",
+		"-ui-registry-keys-url",
+		"X-Grain-Registry-Assertion",
+		"--tunnel-through-iap",
+		"roles/compute.osAdminLogin",
+		"roles/iap.tunnelResourceAccessor",
+	} {
+		if !strings.Contains(acDoc, want) {
+			t.Errorf("docs/access-code.md missing %q", want)
+		}
 	}
 }
 

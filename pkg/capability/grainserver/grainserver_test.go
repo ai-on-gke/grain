@@ -16,7 +16,9 @@ package grainserver_test
 
 import (
 	"context"
+	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -211,7 +213,7 @@ func TestRepoServerNormalizesGitPushAnyRef(t *testing.T) {
 	pass.Release(context.Background())
 
 	st := grainserver.RepoStatus()
-	if want := []string{grainserver.RepoReadMethod, grainserver.RepoWriteMethod}; st.ID != grainserver.RepoID || !slices.Equal(st.Methods, want) {
+	if want := []string{grainserver.RepoCredentialMethod, grainserver.RepoReadMethod, grainserver.RepoWriteMethod}; st.ID != grainserver.RepoID || !slices.Equal(st.Methods, want) {
 		t.Fatalf("RepoStatus() = %+v, want %s with %v", st, grainserver.RepoID, want)
 	}
 }
@@ -260,5 +262,137 @@ func TestRepoServerNormalizesRepoAccess(t *testing.T) {
 		if _, err := model.NormalizeCapabilityNames([]string{bad}, lookup); err == nil {
 			t.Errorf("NormalizeCapabilityNames(%s) validated; want it refused", bad)
 		}
+	}
+}
+
+func TestGitHubServerNormalizesAndMintsReadIssues(t *testing.T) {
+	t.Parallel()
+
+	lookup := grainserver.Lookup(nil)
+	names, err := model.NormalizeCapabilityNames([]string{grainserver.ReadIssuesRef, grainserver.ReadIssuesGrant}, lookup)
+	if err != nil {
+		t.Fatalf("NormalizeCapabilityNames: %v", err)
+	}
+	if !slices.Equal(names, []string{grainserver.ReadIssuesGrant}) {
+		t.Fatalf("normalized = %v, want [%s]", names, grainserver.ReadIssuesGrant)
+	}
+	if _, err := model.NormalizeCapabilityNames([]string{grainserver.ReadIssuesRef + `={"repo":"acme/widgets"}`}, lookup); err == nil {
+		t.Errorf("NormalizeCapabilityNames accepted unexpected args on %s", grainserver.ReadIssuesRef)
+	}
+	if got := model.CanonicalLegacyGrant(grainserver.LegacyReadIssues); got != grainserver.ReadIssuesGrant {
+		t.Fatalf("CanonicalLegacyGrant(read-issues) = %q, want %q", got, grainserver.ReadIssuesGrant)
+	}
+	if !grainserver.IsReadIssuesGrant(grainserver.ReadIssuesGrant) ||
+		!grainserver.IsReadIssuesGrant(grainserver.ReadIssuesRef) ||
+		!grainserver.IsReadIssuesGrant(grainserver.LegacyReadIssues) {
+		t.Fatal("IsReadIssuesGrant missed canonical grant, bare ref, or legacy alias")
+	}
+	if !grainserver.HasReadIssues([]string{grainserver.ReadIssuesGrant}) || !grainserver.HasReadIssues([]string{grainserver.LegacyReadIssues}) {
+		t.Fatal("HasReadIssues missed canonical grant or legacy alias")
+	}
+	if model.IsDangerousGrant(grainserver.ReadIssuesGrant) || model.IsPersonOnlyGrant(grainserver.ReadIssuesGrant) {
+		t.Error("ReadIssuesGrant should not be dangerous or person-only")
+	}
+	if !grainserver.IsInProcessGrant(grainserver.ReadIssuesGrant) {
+		t.Error("ReadIssuesGrant is not read as an in-process grant")
+	}
+
+	grants, err := model.CapabilityGrants([]model.Grant{{Capability: grainserver.ReadIssuesGrant, Via: model.GrantByLabel}}, lookup)
+	if err != nil {
+		t.Fatalf("CapabilityGrants: %v", err)
+	}
+	pass, err := protocol.MintPass(context.Background(), grants, func(id string) (protocol.Minter, error) {
+		return lookup(id)
+	}, protocol.PassOptions{Deployment: "test", Task: "1", Attempt: 1, Deadline: time.Now().Add(time.Hour)})
+	if err != nil {
+		t.Fatalf("MintPass: %v", err)
+	}
+	pass.Release(context.Background())
+
+	st := grainserver.GitHubStatus()
+	if want := []string{grainserver.ReadIssuesMethod, grainserver.SandboxRepoMethod}; st.ID != grainserver.GitHubID || !slices.Equal(st.Methods, want) {
+		t.Fatalf("GitHubStatus() = %+v, want %s with %v", st, grainserver.GitHubID, want)
+	}
+	sandboxNames, err := model.NormalizeCapabilityNames([]string{grainserver.SandboxRepoRef, grainserver.SandboxRepoGrant, model.CanonicalLegacyGrant(grainserver.LegacyGitHubSandbox)}, lookup)
+	if err != nil || !slices.Equal(sandboxNames, []string{grainserver.SandboxRepoGrant}) {
+		t.Fatalf("NormalizeCapabilityNames(sandbox-repo) = %v, %v; want [%s]", sandboxNames, err, grainserver.SandboxRepoGrant)
+	}
+	if !grainserver.IsSandboxRepoGrant(grainserver.SandboxRepoGrant) ||
+		!grainserver.IsSandboxRepoGrant(grainserver.SandboxRepoRef) ||
+		!grainserver.IsSandboxRepoGrant(grainserver.LegacyGitHubSandbox) ||
+		!grainserver.HasSandboxRepo([]string{grainserver.SandboxRepoGrant}) ||
+		!grainserver.HasSandboxRepo([]string{grainserver.LegacyGitHubSandbox}) {
+		t.Fatal("IsSandboxRepoGrant/HasSandboxRepo missed canonical grant, bare ref, or legacy alias")
+	}
+}
+
+func TestRepoServerCredentialValidatesConfiguredNamesAndConflicts(t *testing.T) {
+	restore := grainserver.ConfigureRepoCredentials(func() []string {
+		return []string{"release-bot", "docs-bot"}
+	})
+	t.Cleanup(restore)
+
+	lookup := grainserver.Lookup(nil)
+	want := grainserver.RepoCredentialGrant("release-bot")
+
+	names, err := model.NormalizeCapabilityNames([]string{model.CanonicalLegacyGrant("github-credential:release-bot")}, lookup)
+	if err != nil || !slices.Equal(names, []string{want}) {
+		t.Fatalf("NormalizeCapabilityNames(release-bot) = %v, %v; want [%s]", names, err, want)
+	}
+
+	// Enumerates configured names on RepoStatus.
+	st := grainserver.RepoStatus()
+	var foundEnum bool
+	for _, md := range st.MethodDetails {
+		if md.Name == grainserver.RepoCredentialMethod {
+			props, _ := md.Args["properties"].(map[string]any)
+			credProp, _ := props["credential"].(map[string]any)
+			enum, _ := credProp["enum"].([]any)
+			if slices.Equal(enum, []any{"docs-bot", "release-bot"}) {
+				foundEnum = true
+			}
+		}
+	}
+	if !foundEnum {
+		t.Fatalf("RepoStatus() did not enumerate configured credentials [docs-bot release-bot]: %+v", st.MethodDetails)
+	}
+
+	// Rejects invalid and unconfigured names.
+	for _, bad := range []string{
+		grainserver.RepoCredentialRef,
+		grainserver.RepoCredentialRef + `={}`,
+		grainserver.RepoCredentialRef + `={"credential":"anonymous"}`,
+		grainserver.RepoCredentialRef + `={"credential":"../escape"}`,
+		grainserver.RepoCredentialRef + `={"credential":"not-configured"}`,
+	} {
+		if _, err := model.NormalizeCapabilityNames([]string{bad}, lookup); err == nil {
+			t.Errorf("NormalizeCapabilityNames(%s) validated; want it refused", bad)
+		}
+	}
+
+	// Refuses tasks holding more than one #credential grant with ErrConflictingGitCredentials.
+	other := grainserver.RepoCredentialGrant("docs-bot")
+	if _, err := model.NormalizeCapabilityNames([]string{want, other}, lookup); !errors.Is(err, model.ErrConflictingGitCredentials) {
+		t.Errorf("NormalizeCapabilityNames(conflicting) = %v, want ErrConflictingGitCredentials", err)
+	}
+	if _, err := model.CapabilityGrants([]model.Grant{{Capability: want}, {Capability: other}}, lookup); !errors.Is(err, model.ErrConflictingGitCredentials) {
+		t.Errorf("CapabilityGrants(conflicting) = %v, want ErrConflictingGitCredentials", err)
+	}
+
+	// Mints PromptSection for a single configured credential.
+	grants, err := model.CapabilityGrants([]model.Grant{{Capability: want, Via: model.GrantByLabel}}, lookup)
+	if err != nil {
+		t.Fatalf("CapabilityGrants: %v", err)
+	}
+	pass, err := protocol.MintPass(context.Background(), grants, func(id string) (protocol.Minter, error) {
+		return lookup(id)
+	}, protocol.PassOptions{Deployment: "test", Task: "1", Attempt: 1, Deadline: time.Now().Add(time.Hour)})
+	if err != nil {
+		t.Fatalf("MintPass: %v", err)
+	}
+	defer pass.Release(context.Background())
+	prompts := pass.PromptSections([]string{want})
+	if !strings.Contains(prompts, `"release-bot"`) {
+		t.Errorf("PromptSections = %q, want prompt naming release-bot", prompts)
 	}
 }

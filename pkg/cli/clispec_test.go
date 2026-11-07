@@ -81,6 +81,7 @@ var hostSpecSubcommands = map[string][]string{
 	"sandbox-image": {"check", "contract"},
 	"secrets":       {"set", "delete", "list", "mint-gemini-key", "repo"},
 	"setup":         {"gcp"},
+	"skill":         {"install", "status"},
 	"state": {"status", "repo", "sync", "resets clear", "reformat", "restore-snapshot", "prepare-upgrade",
 		"check", "key show", "key path", "key import"},
 }
@@ -226,10 +227,20 @@ func parseDefaults(out string) []specFlag {
 // hostSpecHelp runs grain <path> -h in a child of this test binary.
 func hostSpecHelp(t *testing.T, dir string, path []string) string {
 	t.Helper()
+	key := strings.Join(path, " ")
+	hostSpecHelpCache.Lock()
+	cached, ok := hostSpecHelpCache.m[key]
+	hostSpecHelpCache.Unlock()
+	if ok {
+		return cached
+	}
 	argv, _ := json.Marshal(append(slices.Clone(path), "-h"))
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestHostCLISpecHelper$")
+	// Anything the child left holding its output open must not keep
+	// CombinedOutput waiting past the deadline.
+	cmd.WaitDelay = 5 * time.Second
 	cmd.Dir = dir
 	cmd.Env = []string{
 		"GRAIN_CLISPEC_ARGV=" + string(argv),
@@ -241,8 +252,27 @@ func hostSpecHelp(t *testing.T, dir string, path []string) string {
 		"XDG_CONFIG_HOME=" + filepath.Join(dir, "config"),
 	}
 	out, _ := cmd.CombinedOutput()
-	return strings.ReplaceAll(strings.ReplaceAll(string(out), filepath.Join(dir, "data"), "$GRAIN_DATA_DIR"), dir, "<tmp>")
+	if ctx.Err() != nil {
+		// Say so, rather than leave a cut-off help to read as missing flags.
+		t.Errorf("grain %s -h did not finish within 30s; it printed:\n%s", key, out)
+		return string(out)
+	}
+	help := strings.ReplaceAll(strings.ReplaceAll(string(out), filepath.Join(dir, "data"), "$GRAIN_DATA_DIR"), dir, "<tmp>")
+	hostSpecHelpCache.Lock()
+	hostSpecHelpCache.m[key] = help
+	hostSpecHelpCache.Unlock()
+	return help
 }
+
+// hostSpecHelpCache keeps each command's -h, which hostSpecHelp has
+// already made independent of the directory it ran in, so the spec test
+// and the help-wording test (host_wording_test.go) start every child once
+// between them rather than once each: under -race on a loaded machine the
+// children are most of either test's time.
+var hostSpecHelpCache = struct {
+	sync.Mutex
+	m map[string]string
+}{m: map[string]string{}}
 
 // TestHostCLISpecHelper is the child hostSpecHelp runs: grain itself.
 func TestHostCLISpecHelper(t *testing.T) {

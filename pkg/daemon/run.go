@@ -48,6 +48,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/sandboxaddr"
 	"github.com/ai-on-gke/grain/pkg/sandboximage"
 	"github.com/ai-on-gke/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
@@ -257,6 +258,15 @@ func Run(ctx context.Context, cfg Config) error {
 		log.Printf("grain daemon: %v", err)
 	}
 	cfg.HostdHub = newHostdHub(cfg, store)
+	// Host work nothing places goes to the default host; where that is
+	// the only host there is, it is written down -- now, and on every
+	// grain/config import (model.MigrateImplicitHostPlacement).
+	if p, ok := cfg.implicitHostPlacement(); ok {
+		staterepo.SetImplicitHostPlacement(&p)
+		if _, err := store.MigrateImplicitHostPlacement(ctx, p); err != nil {
+			log.Printf("grain daemon: placing host work on the only host: %v", err)
+		}
+	}
 
 	// Run hosts (pkg/runhost), when this deployment asks for them. Built
 	// here, as soon as the store is, because every framework built below
@@ -624,6 +634,9 @@ func Run(ctx context.Context, cfg Config) error {
 		k8sInstance := k8sInstanceLabel(ctx, store)
 		k8sKubeconfig := EffectiveK8sKubeconfig(cfg)
 		k8sImage := startImage
+		if err := refuseLocalOnlyPodImage(k8sImage, "-k8s-sandbox-image"); err != nil {
+			return err
+		}
 		k8sWorkspace := EffectiveK8sWorkspace(cfg)
 		cpuOvercommit, memOvercommit := cfg.overcommitRatios()
 		sandboxes = orchestrator.NewK8sSandboxes(orchestrator.K8sConfig{
@@ -662,6 +675,9 @@ func Run(ctx context.Context, cfg Config) error {
 		k8sInstance := k8sInstanceLabel(ctx, store)
 		k8sKubeconfig := EffectiveK8sKubeconfig(cfg)
 		k8sGranuleImage := startImage
+		if err := refuseLocalOnlyPodImage(k8sGranuleImage, "-k8s-granule-image"); err != nil {
+			return err
+		}
 		k8sWorkspace := EffectiveK8sWorkspace(cfg)
 		var forwardedPortsFunc func() []int
 		if EffectiveK8sGitProxyHost(cfg) == "127.0.0.1" {
@@ -882,7 +898,6 @@ func Run(ctx context.Context, cfg Config) error {
 		},
 	})
 	live.WithRegistry(registryMgr)
-	go registryMgr.Run(ctx)
 	if cfg.ObjectStore != nil && cfg.ciArtifacts == nil {
 		cfg.ciArtifacts = CiArtifactStore(cfg, live.ciStorageBounds)
 	}
@@ -1086,6 +1101,7 @@ func Run(ctx context.Context, cfg Config) error {
 			cfg.restartGaps.Down(upgrade.ServiceAPI)
 			stopWithGrace(stopUI)
 		}()
+		go registryMgr.Run(ctx)
 
 		done := make(chan struct{})
 		go func() {
@@ -1128,6 +1144,7 @@ func Run(ctx context.Context, cfg Config) error {
 		return nil
 	}
 
+	go registryMgr.Run(ctx)
 	err = runDaemon(ctx, cfg, store, sandboxes, transcriptDir, live, sandboxFabric, pkgCache, actionsCache, forbidden,
 		stateRepoHooksFor(stateManager), upgrader, secretStore)
 	if lost := writerLockLost.Load(); lost != nil {

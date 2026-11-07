@@ -304,13 +304,10 @@ func cmdRegistryRotateCredential(ctx context.Context, c *ui.HTTPClient, out *pri
 		if err := writeTokenFile(*tokenFile, resp.RegistrationToken); err != nil {
 			return fmt.Errorf("writing -token-file: %w", err)
 		}
+		resp.RegistrationToken = ""
 	}
 	if out.json {
-		outResp := *resp
-		if *tokenFile != "" {
-			outResp.RegistrationToken = ""
-		}
-		out.encode(outResp)
+		out.encode(resp)
 		return nil
 	}
 	fmt.Printf("rotated credential %s for %s\n", resp.Credential.CredentialID, name)
@@ -319,7 +316,11 @@ func cmdRegistryRotateCredential(ctx context.Context, c *ui.HTTPClient, out *pri
 	} else {
 		fmt.Printf("registration token (shown once): %s\n", resp.RegistrationToken)
 	}
-	printConnectedConfigSnippet(regURL, name)
+	entryURL := ""
+	if e, err := regClient.GetEntry(ctx, name); err == nil && e != nil {
+		entryURL = e.URL
+	}
+	printConnectedConfigSnippet(regURL, name, entryURL, *tokenFile)
 	return nil
 }
 

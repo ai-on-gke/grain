@@ -1375,6 +1375,35 @@ func (c *HTTPClient) CustomFields(ctx context.Context) ([]CustomFieldDeclaration
 	return resp.CustomFields, nil
 }
 
+// SkillDeploymentConfig is the deployment metadata `grain skill install` and
+// `grain skill status` read from GET /api/config (#XC-30).
+type SkillDeploymentConfig struct {
+	EnvironmentName    string                   `json:"environmentName,omitempty"`
+	DefaultTarget      string                   `json:"defaultTarget,omitempty"`
+	TargetRepos        []string                 `json:"targetRepos,omitempty"`
+	ConfigRepo         string                   `json:"configRepo,omitempty"`
+	CustomFields       []CustomFieldDeclaration `json:"customFields,omitempty"`
+	ReposWithWorkflows []string                 `json:"reposWithWorkflows,omitempty"`
+}
+
+// SkillDeploymentConfig reads GET /api/config for `grain skill`.
+func (c *HTTPClient) SkillDeploymentConfig(ctx context.Context) (SkillDeploymentConfig, error) {
+	var cfg SkillDeploymentConfig
+	if err := c.do(ctx, http.MethodGet, "/api/config", nil, &cfg); err != nil {
+		return SkillDeploymentConfig{}, err
+	}
+	return cfg, nil
+}
+
+// ListTemplates reads GET /api/templates.
+func (c *HTTPClient) ListTemplates(ctx context.Context) ([]Template, error) {
+	var list []Template
+	if err := c.do(ctx, http.MethodGet, "/api/templates", nil, &list); err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
 func (c *HTTPClient) GetSettings(ctx context.Context) (Settings, error) {
 	var settings Settings
 	if err := c.do(ctx, http.MethodGet, "/api/settings", nil, &settings); err != nil {

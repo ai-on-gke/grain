@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
@@ -62,7 +63,14 @@ func ReapCapabilitiesBefore(ctx context.Context, registry *model.CapabilityRegis
 	if registry == nil {
 		return
 	}
-	for _, p := range registry.Providers() {
+	// github#sandbox-repo's provider is no longer in the registry (schema
+	// migration 124), so leaked grain-sandbox-* repositories are swept
+	// through githubsandbox.Current().
+	providers := registry.Providers()
+	if _, has := registry.Lookup(model.LegacyGitHubSandboxCapability); !has && creds != nil {
+		providers = append(providers, githubsandbox.Current())
+	}
+	for _, p := range providers {
 		reaper, ok := p.(model.Reaper)
 		if !ok {
 			continue

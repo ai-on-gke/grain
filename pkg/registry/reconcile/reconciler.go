@@ -216,6 +216,51 @@ func (r *Reconciler) Orphans() []OrphanInstance {
 	return out
 }
 
+// ListOrphans implements `registry.OrphanProvider`, converting `Orphans()` to `[]api.OrphanVMInfo`.
+func (r *Reconciler) ListOrphans() []api.OrphanVMInfo {
+	raw := r.Orphans()
+	out := make([]api.OrphanVMInfo, 0, len(raw))
+	for _, o := range raw {
+		out = append(out, api.OrphanVMInfo{
+			InstanceID: o.InstanceID,
+			Zone:       o.Zone,
+			State:      o.State,
+			InternalIP: o.InternalIP,
+			EntryName:  o.Labels["grain-entry"],
+			Labels:     o.Labels,
+			DetectedAt: o.DetectedAt,
+		})
+	}
+	return out
+}
+
+// DeleteOrphan implements `registry.OrphanProvider`, deleting an unmatched GCE VM
+// via `Compute.DeleteInstance` and removing it from the cached orphan snapshot.
+func (r *Reconciler) DeleteOrphan(ctx context.Context, zone, instanceID string) error {
+	zone = strings.TrimSpace(zone)
+	instanceID = strings.TrimSpace(instanceID)
+	if zone == "" || instanceID == "" {
+		return errors.New("reconcile: zone and instanceID are required")
+	}
+	if r.compute != nil {
+		if err := r.compute.DeleteInstance(ctx, zone, instanceID); err != nil {
+			return err
+		}
+	}
+	r.orphanMu.Lock()
+	filtered := r.orphans[:0]
+	for _, o := range r.orphans {
+		if o.Zone == zone && o.InstanceID == instanceID {
+			continue
+		}
+		filtered = append(filtered, o)
+	}
+	r.orphans = filtered
+	delete(r.reportedOrphans, zone+"/"+instanceID)
+	r.orphanMu.Unlock()
+	return nil
+}
+
 // Start launches the background leader-election, reconciliation, and status-polling loops
 // until `ctx` is canceled.
 func (r *Reconciler) Start(ctx context.Context) {
@@ -279,6 +324,7 @@ func (r *Reconciler) RunOnce(ctx context.Context) error {
 	recordErr(r.reconcileEntries(ctx))
 	recordErr(r.reconcilePurge(ctx))
 	recordErr(r.PollRunningInstances(ctx))
+	recordErr(r.reconcileFleetUpgrades(ctx))
 	recordErr(r.ReconcileOrphans(ctx))
 
 	return firstErr
@@ -313,6 +359,10 @@ func (r *Reconciler) reconcileEntries(ctx context.Context) error {
 		case api.StateReplacing:
 			if entry.DeletedAt == nil {
 				stepErr = r.reconcileReplacingEntry(ctx, entry)
+			}
+		case api.StateStopping, "STOPPING":
+			if entry.DeletedAt == nil {
+				stepErr = r.reconcileStoppingEntry(ctx, entry)
 			}
 		case api.StateDeleting, "DEPROVISIONING":
 			stepErr = r.reconcileDeletingEntry(ctx, entry)
@@ -385,7 +435,7 @@ func (r *Reconciler) reconcileCreatingEntry(ctx context.Context, entry *store.En
 	}
 
 	// Phase 2: Probe `<backend_url>/healthz` and `<backend_url>/api/registry/status`.
-	statusResp, probeErr := r.probeInstanceHealthAndStatus(ctx, entry.Name, entry.BackendURL)
+	statusResp, probeErr := r.probeInstanceHealthAndStatus(ctx, entry.Name, entry.OwnerEmail, entry.BackendURL)
 	if probeErr != nil {
 		if r.now().Sub(entry.UpdatedAt) >= r.healthTimeout {
 			r.failEntry(ctx, entry, fmt.Sprintf("instance health check timed out after %s: %v", r.healthTimeout, probeErr))
@@ -432,7 +482,7 @@ func (r *Reconciler) reconcileReplacingEntry(ctx context.Context, entry *store.E
 	case api.ReplaceStepDraining:
 		// If the old VM is reachable and still running active tasks within drain_timeout, wait before stopping.
 		if entry.BackendURL != "" && r.now().Sub(entry.UpdatedAt) < r.drainTimeout {
-			if stResp, err := r.fetchInstanceStatus(ctx, entry.Name, entry.BackendURL); err == nil && stResp != nil {
+			if stResp, err := r.fetchInstanceStatus(ctx, entry.Name, entry.OwnerEmail, entry.BackendURL); err == nil && stResp != nil {
 				_, _ = r.recordStatusHeartbeat(ctx, entry.ID, stResp)
 				if stResp.ActiveTasks > 0 {
 					return nil
@@ -523,7 +573,7 @@ func (r *Reconciler) reconcileReplacingEntry(ctx context.Context, entry *store.E
 		fallthrough
 
 	case api.ReplaceStepProbing:
-		statusResp, probeErr := r.probeInstanceHealthAndStatus(ctx, entry.Name, entry.BackendURL)
+		statusResp, probeErr := r.probeInstanceHealthAndStatus(ctx, entry.Name, entry.OwnerEmail, entry.BackendURL)
 		if probeErr != nil {
 			if r.now().Sub(entry.UpdatedAt) >= r.healthTimeout {
 				r.failEntry(ctx, entry, fmt.Sprintf("replacement VM health check timed out after %s: %v", r.healthTimeout, probeErr))
@@ -570,6 +620,220 @@ func (r *Reconciler) reconcileReplacingEntry(ctx context.Context, entry *store.E
 		})
 	}
 	return nil
+}
+
+func (r *Reconciler) reconcileStoppingEntry(ctx context.Context, entry *store.EntryRow) error {
+	// Wait for active tasks to drain up to drainTimeout before halting the VM.
+	if entry.BackendURL != "" && r.now().Sub(entry.UpdatedAt) < r.drainTimeout {
+		if stResp, err := r.fetchInstanceStatus(ctx, entry.Name, entry.OwnerEmail, entry.BackendURL); err == nil && stResp != nil {
+			_, _ = r.recordStatusHeartbeat(ctx, entry.ID, stResp)
+			if stResp.ActiveTasks > 0 {
+				return nil
+			}
+		}
+	}
+
+	zone, vmID := r.resolveZoneAndVMName(entry)
+	if r.compute != nil && vmID != "" && zone != "" {
+		if err := r.compute.StopInstance(ctx, zone, vmID); err != nil {
+			r.failEntry(ctx, entry, fmt.Sprintf("stopping GCE instance %s failed: %v", vmID, err))
+			return err
+		}
+		if err := r.compute.DeleteInstance(ctx, zone, vmID); err != nil {
+			r.failEntry(ctx, entry, fmt.Sprintf("deleting stopped GCE instance %s failed: %v", vmID, err))
+			return err
+		}
+	}
+
+	stopped, err := r.store.CompleteStopEntry(ctx, entry.ID, entry.Version)
+	if err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			return nil
+		}
+		return err
+	}
+	if r.hostCache != nil && stopped != nil {
+		r.hostCache.Put(stopped)
+	}
+	_ = r.store.RecordAudit(ctx, "system:reconciler", "entry_stopped", stopped.ID, stopped.Name, map[string]any{
+		"gce_instance_id": vmID,
+		"zone":            zone,
+	})
+	return nil
+}
+
+func (r *Reconciler) reconcileFleetUpgrades(ctx context.Context) error {
+	targetVer := strings.TrimSpace(r.cfg.Compute.TargetVersion)
+	if targetVer == "" {
+		return nil
+	}
+	entries, err := r.store.ListEntriesFiltered(ctx, false)
+	if err != nil {
+		return err
+	}
+
+	replacingCount := 0
+	for _, e := range entries {
+		if e.Kind == api.KindInstance && e.DeletedAt == nil && e.LifecycleState == api.StateReplacing {
+			replacingCount++
+		}
+	}
+	maxConcurrent := r.cfg.Compute.MaxConcurrentUpgrades
+	if maxConcurrent <= 0 {
+		maxConcurrent = 1
+	}
+
+	var firstErr error
+	for _, entry := range entries {
+		if entry.Kind != api.KindInstance || entry.DeletedAt != nil || entry.LifecycleState != api.StateRunning {
+			continue
+		}
+		curVer := strings.TrimSpace(entry.GrainVersion)
+		if curVer == "" {
+			continue
+		}
+		if curVer == targetVer {
+			if entry.UpgradeAvailable != "" {
+				_, _ = r.store.SetEntryUpgradeAvailable(ctx, entry.ID, "")
+			}
+			continue
+		}
+
+		policy := api.AutoUpgradePolicy(strings.ToLower(strings.TrimSpace(entry.AutoUpgrade)))
+		if policy == "" {
+			policy = api.AutoUpgradePolicy(strings.ToLower(strings.TrimSpace(r.cfg.Compute.AutoUpgrade)))
+		}
+		if policy == "" {
+			policy = api.AutoUpgradeOff
+		}
+
+		switch policy {
+		case api.AutoUpgradeOff:
+			continue
+
+		case api.AutoUpgradeNotify:
+			if !isNewerSemver(curVer, targetVer) {
+				continue
+			}
+			if entry.UpgradeAvailable != targetVer {
+				if _, err := r.store.SetEntryUpgradeAvailable(ctx, entry.ID, targetVer); err == nil {
+					_ = r.store.RecordAudit(ctx, "system:reconciler", "entry_upgrade_available", entry.ID, entry.Name, map[string]any{
+						"current_version": curVer,
+						"target_version":  targetVer,
+						"policy":          string(policy),
+					})
+				}
+			}
+
+		case api.AutoUpgradeMinor:
+			if !isNewerSemver(curVer, targetVer) {
+				continue
+			}
+			if !isMinorOrPatchSemverUpgrade(curVer, targetVer) {
+				// Major version bump under `minor` policy: notify without auto-replacing.
+				if entry.UpgradeAvailable != targetVer {
+					if _, err := r.store.SetEntryUpgradeAvailable(ctx, entry.ID, targetVer); err == nil {
+						_ = r.store.RecordAudit(ctx, "system:reconciler", "entry_upgrade_available", entry.ID, entry.Name, map[string]any{
+							"current_version": curVer,
+							"target_version":  targetVer,
+							"policy":          string(policy),
+							"skipped_reason":  "major_version_change",
+						})
+					}
+				}
+				continue
+			}
+
+			// Mark upgrade_available while waiting on maintenance window, idle state, or concurrency cap.
+			if !registry.InMaintenanceWindow(r.cfg.Compute.MaintenanceWindow, r.now()) ||
+				entry.ActiveTasks > 0 || entry.ActiveSessions > 0 ||
+				replacingCount >= maxConcurrent {
+				if entry.UpgradeAvailable != targetVer {
+					_, _ = r.store.SetEntryUpgradeAvailable(ctx, entry.ID, targetVer)
+				}
+				continue
+			}
+
+			replacing, err := r.store.RequestEntryReplace(ctx, entry.ID, entry.Version, entry.Shape, targetVer)
+			if err != nil {
+				if !errors.Is(err, store.ErrConflict) && firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			replacingCount++
+			if r.hostCache != nil && replacing != nil {
+				r.hostCache.Put(replacing)
+			}
+			_ = r.store.RecordAudit(ctx, "system:reconciler", "entry_auto_upgrade", replacing.ID, replacing.Name, map[string]any{
+				"from_version":   curVer,
+				"target_version": targetVer,
+				"policy":         string(policy),
+			})
+			if stepErr := r.reconcileReplacingEntry(ctx, replacing); stepErr != nil && firstErr == nil {
+				firstErr = stepErr
+			}
+		}
+	}
+	return firstErr
+}
+
+func parseSemver(v string) (major, minor, patch int, ok bool) {
+	v = strings.TrimSpace(v)
+	v = strings.TrimPrefix(strings.TrimPrefix(v, "v"), "V")
+	if idx := strings.IndexAny(v, "-+"); idx >= 0 {
+		v = v[:idx]
+	}
+	parts := strings.Split(v, ".")
+	if len(parts) < 2 || len(parts) > 3 {
+		return 0, 0, 0, false
+	}
+	maj, err := strconv.Atoi(parts[0])
+	if err != nil || maj < 0 {
+		return 0, 0, 0, false
+	}
+	minVer, err := strconv.Atoi(parts[1])
+	if err != nil || minVer < 0 {
+		return 0, 0, 0, false
+	}
+	pat := 0
+	if len(parts) == 3 {
+		pat, err = strconv.Atoi(parts[2])
+		if err != nil || pat < 0 {
+			return 0, 0, 0, false
+		}
+	}
+	return maj, minVer, pat, true
+}
+
+func isNewerSemver(current, target string) bool {
+	cMaj, cMin, cPat, okC := parseSemver(current)
+	tMaj, tMin, tPat, okT := parseSemver(target)
+	if !okC || !okT {
+		return strings.TrimSpace(current) != strings.TrimSpace(target)
+	}
+	if tMaj != cMaj {
+		return tMaj > cMaj
+	}
+	if tMin != cMin {
+		return tMin > cMin
+	}
+	return tPat > cPat
+}
+
+func isMinorOrPatchSemverUpgrade(current, target string) bool {
+	cMaj, cMin, cPat, okC := parseSemver(current)
+	tMaj, tMin, tPat, okT := parseSemver(target)
+	if !okC || !okT {
+		return false
+	}
+	if cMaj != tMaj {
+		return false
+	}
+	if tMin != cMin {
+		return tMin > cMin
+	}
+	return tPat > cPat
 }
 
 func (r *Reconciler) reconcileDeletingEntry(ctx context.Context, entry *store.EntryRow) error {
@@ -698,7 +962,7 @@ func (r *Reconciler) PollRunningInstances(ctx context.Context) error {
 		if entry.BackendURL == "" {
 			continue
 		}
-		statusResp, err := r.fetchInstanceStatus(ctx, entry.Name, entry.BackendURL)
+		statusResp, err := r.fetchInstanceStatus(ctx, entry.Name, entry.OwnerEmail, entry.BackendURL)
 		if err != nil {
 			continue
 		}
@@ -759,6 +1023,16 @@ func (r *Reconciler) ReconcileOrphans(ctx context.Context) error {
 		}
 
 		if active, ok := activeByName[entryName]; ok {
+			if active.LifecycleState == api.StateStopped || active.LifecycleState == "STOPPED" {
+				if err := r.compute.DeleteInstance(ctx, vm.Zone, vm.InstanceID); err == nil {
+					_ = r.store.RecordAudit(ctx, "system:reconciler", "orphan_vm_deleted", active.ID, active.Name, map[string]any{
+						"instance_id": vm.InstanceID,
+						"zone":        vm.Zone,
+						"reason":      "stopped_entry_straggler",
+					})
+				}
+				continue
+			}
 			// Check whether the VM is from a stale generation that was already replaced.
 			if vmGenStr := vm.Labels["grain-generation"]; vmGenStr != "" {
 				if vmGen, pErr := strconv.ParseInt(vmGenStr, 10, 64); pErr == nil {
@@ -991,7 +1265,7 @@ func (r *Reconciler) resolveZoneAndVMName(entry *store.EntryRow) (string, string
 	return zone, vmID
 }
 
-func (r *Reconciler) probeInstanceHealthAndStatus(ctx context.Context, entryName, backendURL string) (*api.InstanceStatusResponse, error) {
+func (r *Reconciler) probeInstanceHealthAndStatus(ctx context.Context, entryName, ownerEmail, backendURL string) (*api.InstanceStatusResponse, error) {
 	backendURL = strings.TrimRight(strings.TrimSpace(backendURL), "/")
 	if backendURL == "" {
 		return nil, errors.New("empty backend_url")
@@ -1000,22 +1274,22 @@ func (r *Reconciler) probeInstanceHealthAndStatus(ctx context.Context, entryName
 	if err != nil {
 		return nil, err
 	}
-	r.attachRegistryAssertion(ctx, healthReq, entryName)
+	r.attachRegistryAssertion(ctx, healthReq, entryName, ownerEmail)
 	resp, err := r.httpClient.Do(healthReq)
 	if err != nil {
 		return nil, err
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
 		return nil, fmt.Errorf("/healthz returned HTTP %d", resp.StatusCode)
 	}
 
-	statusResp, statusErr := r.fetchInstanceStatus(ctx, entryName, backendURL)
+	statusResp, statusErr := r.fetchInstanceStatus(ctx, entryName, ownerEmail, backendURL)
 	if statusErr != nil {
 		// If `/healthz` returned 200 OK and `/api/registry/status` returned 404 on a minimal stub,
 		// synthesize a basic OK status response; otherwise return the error so probing continues until ready.
-		if strings.Contains(statusErr.Error(), "HTTP 404") {
+		if resp.StatusCode == http.StatusOK && strings.Contains(statusErr.Error(), "HTTP 404") {
 			return &api.InstanceStatusResponse{Health: api.HealthOK}, nil
 		}
 		return nil, statusErr
@@ -1023,7 +1297,7 @@ func (r *Reconciler) probeInstanceHealthAndStatus(ctx context.Context, entryName
 	return statusResp, nil
 }
 
-func (r *Reconciler) fetchInstanceStatus(ctx context.Context, entryName, backendURL string) (*api.InstanceStatusResponse, error) {
+func (r *Reconciler) fetchInstanceStatus(ctx context.Context, entryName, ownerEmail, backendURL string) (*api.InstanceStatusResponse, error) {
 	backendURL = strings.TrimRight(strings.TrimSpace(backendURL), "/")
 	if backendURL == "" {
 		return nil, errors.New("empty backend_url")
@@ -1032,7 +1306,7 @@ func (r *Reconciler) fetchInstanceStatus(ctx context.Context, entryName, backend
 	if err != nil {
 		return nil, err
 	}
-	r.attachRegistryAssertion(ctx, req, entryName)
+	r.attachRegistryAssertion(ctx, req, entryName, ownerEmail)
 	resp, err := r.httpClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -1052,15 +1326,30 @@ func (r *Reconciler) fetchInstanceStatus(ctx context.Context, entryName, backend
 	return &statusResp, nil
 }
 
-func (r *Reconciler) attachRegistryAssertion(ctx context.Context, req *http.Request, entryName string) {
+func (r *Reconciler) attachRegistryAssertion(ctx context.Context, req *http.Request, entryName, ownerEmail string) {
+	instDom := strings.TrimPrefix(strings.TrimSpace(r.cfg.InstanceDomain), ".")
+	aud := "grain-instance:" + entryName
+	if instDom != "" {
+		entryHost := entryName + "." + instDom
+		aud = "https://" + entryHost
+		req.Host = entryHost
+	}
 	if r.signer == nil {
 		return
 	}
+	sub := "serviceAccount:grain-registry"
+	email := "grain-registry@system.local"
+	kind := "service"
+	if owner := strings.ToLower(strings.TrimSpace(ownerEmail)); owner != "" {
+		sub = owner
+		email = owner
+		kind = "human"
+	}
 	tok, err := r.signer.SignAssertion(ctx, registry.RegistryClaims{
-		Audience: "grain-instance:" + entryName,
-		Subject:  "serviceAccount:grain-registry",
-		Email:    "grain-registry@system.local",
-		Kind:     "service",
+		Audience: aud,
+		Subject:  sub,
+		Email:    email,
+		Kind:     kind,
 	})
 	if err == nil && tok != "" {
 		req.Header.Set(api.HeaderRegistryAssertion, tok)
