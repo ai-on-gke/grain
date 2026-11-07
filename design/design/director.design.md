@@ -18,7 +18,7 @@ The director (`ConsoleSessionTag("director")`) is an ordinary task with three st
 
 | Workflow | Primary surfaces | Key guardrail |
 |---|---|---|
-| **W1** Bootstrap & onboarding | `bootstrap-playbooks`, `api:deployment:read` + `…/grain#health` (formerly `deployment-health`, retired in schema migration 81), `request_secret` | Secrets write straight to `<data-dir>/secrets`; never read back |
+| **W1** Bootstrap & onboarding | `…/config-map#config-map={"config_maps":["bootstrap"]}` (formerly `bootstrap-playbooks`, retired in schema migration 118), `api:deployment:read` + `…/grain#health` (formerly `deployment-health`, retired in schema migration 81), `request_secret` | Secrets write straight to `<data-dir>/secrets`; never read back |
 | **W2** Live triage & observability | `self-debug` (`task://`), `ci://`, `api:ci-read`, `…/grain#journal` (formerly `grain-log`, retired in schema migration 80), `grain metrics` | Read-only diagnostics; no product-repo edits in session |
 | **W3** Decomposition & queue hygiene | `propose_task`, `api:task-admin`, `api:dispatch-control` | `TasksApproved` off by default; `hold_for_approval` & `expect` rails |
 | **W4** Config & capability hygiene | `/home/debian/grain-state` (`grain/config`), `propose_config_change` | Human approval via `pkg/trustboundary` & `settings_locked` |
@@ -26,7 +26,7 @@ The director (`ConsoleSessionTag("director")`) is an ordinary task with three st
 
 ### W1 — Bootstrap and onboarding
 
-Guides first-time bring-up and incremental expansion of a deployment (`bootstrap-playbooks`):
+Guides first-time bring-up and incremental expansion of a deployment (`…/config-map#config-map={"config_maps":["bootstrap"]}`, formerly `bootstrap-playbooks`):
 
 - **Infrastructure readiness.** Verifies model backend connections, agent CLI placement, `grain hostd` connectivity, and sandbox backend health (`granule` / Kubernetes pods, resource ceilings) via `api:deployment:read`, `…/grain#health`, and read scopes.
 - **Repository onboarding.** Configures target repositories, branch bases, merge strategies, and CI modes (`github`, `grain`, or `none`), and wires repository git credentials by reference.
