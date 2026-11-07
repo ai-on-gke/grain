@@ -237,6 +237,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 			DefaultUnitsQuota: cfg.Quotas.DefaultInstanceUnits,
 			DefaultConnQuota:  cfg.Quotas.DefaultConnected,
 			ReservationPeriod: cfg.Quotas.ReservationPeriod,
+			DBRetentionPeriod: cfg.InstanceState.DBRetentionPeriod,
 		})
 		if err != nil {
 			return err
