@@ -482,3 +482,276 @@ func TestIsDockerAuthEndpoint(t *testing.T) {
 		}
 	}
 }
+
+func TestDockerArtifactRegistryBlobUploadDirectProxy(t *testing.T) {
+	ca, err := NewCA()
+	if err != nil {
+		t.Fatalf("NewCA: %v", err)
+	}
+
+	const (
+		registryHost      = "us-central1-docker.pkg.dev"
+		uploadPath        = "/artifacts-uploads/namespaces/acme-proj/repositories/containers/uploads/upload-123"
+		escapedUploadPath = "/artifacts-uploads/namespaces/acme-proj/repositories/containers/uploads/upload-123%2Fpart"
+		uploadURL         = "https://" + registryHost + uploadPath
+		blobBytes         = "artifact-registry-layer-bytes"
+	)
+	wantDigest := digestOf(blobBytes)
+
+	var chunkedBytes []byte
+	var finalBytes []byte
+	var sawEscapedUploadPath bool
+	var sawSecretV1 bool
+	var leakedInternalHeader string
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/secret" || strings.Contains(r.URL.Path, "..") {
+			sawSecretV1 = true
+		}
+		for _, hdr := range []string{"Grit-Job-Token", "Grit-Cache-Trust", "X-Hop-Secret"} {
+			if v := r.Header.Get(hdr); v != "" {
+				leakedInternalHeader = hdr + "=" + v
+			}
+		}
+		if r.Host != registryHost {
+			http.Error(w, "unexpected host: "+r.Host, http.StatusBadRequest)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer ar-push-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v2/acme-proj/containers/widgets/blobs/uploads/":
+			w.Header().Set("Location", uploadURL)
+			w.WriteHeader(http.StatusAccepted)
+		case r.Method == http.MethodPatch && r.URL.EscapedPath() == escapedUploadPath:
+			sawEscapedUploadPath = true
+			w.Header().Set("Location", "https://"+registryHost+escapedUploadPath)
+			w.WriteHeader(http.StatusAccepted)
+		case r.Method == http.MethodPatch && r.URL.Path == uploadPath:
+			b, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			chunkedBytes = append(chunkedBytes, b...)
+			w.Header().Set("Location", uploadURL)
+			w.WriteHeader(http.StatusAccepted)
+		case r.Method == http.MethodPut && r.URL.Path == uploadPath:
+			if got := r.URL.Query().Get("digest"); got != wantDigest {
+				http.Error(w, "unexpected digest: "+got, http.StatusBadRequest)
+				return
+			}
+			b, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			finalBytes = append(chunkedBytes, b...)
+			w.Header().Set("Docker-Content-Digest", wantDigest)
+			w.WriteHeader(http.StatusCreated)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstreamServer.Close()
+
+	upstreamClient := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "tcp", upstreamServer.Listener.Addr().String())
+			},
+		},
+	}
+
+	srv, _ := newTestServer(t, Config{
+		Client:         upstreamClient,
+		DockerRegistry: "http://registry-1.docker.io",
+		GHCRRegistry:   "http://ghcr.io",
+	})
+
+	proxyServer := httptest.NewUnstartedServer(srv)
+	proxyServer.TLS = ca.TLSConfig()
+	proxyServer.StartTLS()
+	defer proxyServer.Close()
+
+	rootPool := x509.NewCertPool()
+	rootPool.AppendCertsFromPEM(ca.RootCertPEM())
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "tcp", proxyServer.Listener.Addr().String())
+			},
+			TLSClientConfig: &tls.Config{
+				RootCAs: rootPool,
+			},
+		},
+	}
+
+	doReq := func(method, rawURL, body string) *http.Response {
+		t.Helper()
+		var bodyReader io.Reader
+		if body != "" {
+			bodyReader = strings.NewReader(body)
+		}
+		req, err := http.NewRequest(method, rawURL, bodyReader)
+		if err != nil {
+			t.Fatalf("http.NewRequest(%s, %s): %v", method, rawURL, err)
+		}
+		req.Header.Set("Authorization", "Bearer ar-push-token")
+		req.Header.Set("Grit-Job-Token", "internal-job-secret")
+		req.Header.Set("Grit-Cache-Trust", "trusted")
+		req.Header.Set("Connection", "X-Hop-Secret")
+		req.Header.Set("X-Hop-Secret", "hop-secret")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("client.Do(%s %s): %v", method, rawURL, err)
+		}
+		return resp
+	}
+
+	// Step 1: Start blob upload under /v2/.../blobs/uploads/.
+	postResp := doReq(http.MethodPost, "https://"+registryHost+"/v2/acme-proj/containers/widgets/blobs/uploads/", "")
+	postResp.Body.Close()
+	if postResp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST blobs/uploads status = %d, want 202", postResp.StatusCode)
+	}
+	loc := postResp.Header.Get("Location")
+	if loc != uploadURL {
+		t.Fatalf("POST blobs/uploads Location = %q, want %q", loc, uploadURL)
+	}
+
+	// Step 2: Follow Location to /artifacts-uploads/... with PATCH chunk.
+	patchResp := doReq(http.MethodPatch, loc, blobBytes[:10])
+	patchResp.Body.Close()
+	if patchResp.StatusCode != http.StatusAccepted {
+		t.Fatalf("PATCH %s status = %d, want 202", loc, patchResp.StatusCode)
+	}
+	if got := patchResp.Header.Get(cacheStatusHeader); got != "pass" {
+		t.Errorf("PATCH cacheStatus = %q, want pass", got)
+	}
+	loc = patchResp.Header.Get("Location")
+	if loc != uploadURL {
+		t.Fatalf("PATCH Location = %q, want %q", loc, uploadURL)
+	}
+
+	// Step 3: Complete upload with PUT /artifacts-uploads/...?digest=...
+	putResp := doReq(http.MethodPut, loc+"?digest="+url.QueryEscape(wantDigest), blobBytes[10:])
+	putResp.Body.Close()
+	if putResp.StatusCode != http.StatusCreated {
+		t.Fatalf("PUT %s status = %d, want 201", loc, putResp.StatusCode)
+	}
+	if got := putResp.Header.Get(cacheStatusHeader); got != "pass" {
+		t.Errorf("PUT cacheStatus = %q, want pass", got)
+	}
+	if got := putResp.Header.Get("Docker-Content-Digest"); got != wantDigest {
+		t.Errorf("Docker-Content-Digest = %q, want %q", got, wantDigest)
+	}
+	if string(finalBytes) != blobBytes {
+		t.Errorf("uploaded bytes = %q, want %q", string(finalBytes), blobBytes)
+	}
+	if leakedInternalHeader != "" {
+		t.Errorf("internal/hop-by-hop header leaked to upstream: %s", leakedInternalHeader)
+	}
+
+	// Percent-encoded characters in upload session IDs are preserved untouched.
+	escResp := doReq(http.MethodPatch, "https://"+registryHost+escapedUploadPath, "chunk")
+	escResp.Body.Close()
+	if escResp.StatusCode != http.StatusAccepted || !sawEscapedUploadPath {
+		t.Errorf("PATCH escaped upload path status = %d (sawEscaped=%v), want 202 and preserved %%2F", escResp.StatusCode, sawEscapedUploadPath)
+	}
+
+	// Non-*.pkg.dev registries and bare pkg.dev still reject /artifacts-uploads/,
+	// even when auth-looking query strings or /token suffixes are added.
+	for _, host := range []string{"ghcr.io", "registry-1.docker.io", "pkg.dev"} {
+		for _, suffix := range []string{
+			uploadPath + "?digest=" + url.QueryEscape(wantDigest),
+			uploadPath + "?scope=repository:acme/widgets:pull",
+			uploadPath + "/token",
+		} {
+			resp := doReq(http.MethodPut, "https://"+host+suffix, blobBytes)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusNotFound {
+				t.Errorf("PUT https://%s%s status = %d, want 404", host, suffix, resp.StatusCode)
+			}
+		}
+	}
+
+	// Other non-/v2/ paths (including /v2beta1/...) on *.pkg.dev remain 404,
+	// and both single- and double-encoded dot-dot traversals cannot reach /v1/secret.
+	for _, nonV2 := range []string{"/v1/projects/acme-proj", "/v2beta1/projects/acme-proj"} {
+		otherResp := doReq(http.MethodPut, "https://"+registryHost+nonV2, blobBytes)
+		otherResp.Body.Close()
+		if otherResp.StatusCode != http.StatusNotFound {
+			t.Errorf("PUT %s on %s status = %d, want 404", nonV2, registryHost, otherResp.StatusCode)
+		}
+	}
+
+	badResp := doReq(http.MethodPut, "https://"+registryHost+"/artifacts-uploads/../v1/secret", blobBytes)
+	badResp.Body.Close()
+	if badResp.StatusCode != http.StatusBadRequest {
+		t.Errorf("PUT dot-dot on %s status = %d, want 400", registryHost, badResp.StatusCode)
+	}
+
+	doubleBadResp := doReq(http.MethodPut, "https://"+registryHost+"/artifacts-uploads/%252e%252e/v1/secret", blobBytes)
+	doubleBadResp.Body.Close()
+	if sawSecretV1 {
+		t.Errorf("double-encoded dot-dot reached /v1/secret on upstream")
+	}
+}
+
+func TestDockerNeverForwardsCredentialsToNonGHCRHosts(t *testing.T) {
+	creds := writeTestCredentialLadder(t, map[string]string{
+		"*": "global",
+	}, map[string]string{
+		"global": "daemon-secret-gh-pat",
+	})
+
+	var leakedAuth string
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if auth := r.Header.Get("Authorization"); auth != "" && auth != "Bearer anon" {
+			leakedAuth = r.Host + " " + r.URL.RequestURI() + " -> " + auth
+		}
+		if r.URL.Path == "/v2/acmecorp/widgets/manifests/latest" && r.Header.Get("Authorization") == "" {
+			w.Header().Set("Www-Authenticate", `Bearer realm="https://ghcr-mirror-docker.pkg.dev/token",service="ghcr.io",scope="repository:acmecorp/widgets:pull"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"token":"anon"}`))
+	}))
+	defer upstreamServer.Close()
+
+	upURL, err := url.Parse(upstreamServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, _ := newTestServer(t, Config{
+		Client:            &http.Client{Transport: roundTripTo{base: upURL}},
+		Credentials:       creds,
+		AllowRegistryPush: true,
+	})
+
+	for _, c := range []struct {
+		method, host, target string
+	}{
+		{http.MethodGet, "us-central1-docker.pkg.dev", "/artifacts-uploads/namespaces/p/repositories/r/uploads/u1?service=ghcr.io&scope=repository:acmecorp/widgets:pull"},
+		{http.MethodPut, "us-central1-docker.pkg.dev", "/artifacts-uploads/namespaces/p/repositories/r/uploads/u1?ns=ghcr.io&scope=repository:acmecorp/widgets:pull"},
+		{http.MethodGet, "us-central1-docker.pkg.dev", "/token?service=ghcr.io&scope=repository:acmecorp/widgets:pull"},
+		{http.MethodPost, "us-central1-docker.pkg.dev", "/v2/ghcr/acmecorp/widgets/blobs/uploads/"},
+		{http.MethodGet, "ghcr-mirror-docker.pkg.dev", "/v2/acmecorp/widgets/manifests/latest"},
+		{http.MethodGet, "auth.docker.io", "/token?service=ghcr.io&scope=repository:acmecorp/widgets:pull"},
+	} {
+		req := httptest.NewRequest(c.method, c.target, nil)
+		req.Host = c.host
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if leakedAuth != "" {
+			t.Fatalf("daemon GitHub credential forwarded to non-GHCR host: %s", leakedAuth)
+		}
+	}
+}
