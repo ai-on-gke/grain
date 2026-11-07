@@ -965,7 +965,7 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 					"type": "string",
 					"enum": []any{"close", "ack"},
 				},
-				"keep_running":      map[string]any{"type": "boolean"},
+				"keep_running": map[string]any{"type": "boolean"},
 				"admission": map[string]any{
 					"type": "string",
 					"enum": []any{"standard", "bypass", "durable"},

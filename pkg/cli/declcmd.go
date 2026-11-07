@@ -407,15 +407,15 @@ func (v *declarationsView) fill(declared model.RepoDeclarations, now time.Time, 
 			// two are the same for a `.grain/schedules` file, and for one
 			// translated out of a workflow cron the id is the one that
 			// says which schedule this is (`workflow.nightly`).
-			Stem:    declaredStem(s.Schedule.ID),
-			ID:      s.Schedule.ID,
-			Name:    s.Schedule.Title,
-			Fires:   declaredTrigger(stems, s.Schedule),
+			Stem:      declaredStem(s.Schedule.ID),
+			ID:        s.Schedule.ID,
+			Name:      s.Schedule.Title,
+			Fires:     declaredTrigger(stems, s.Schedule),
 			Cadence:   declaredCadence(s.Schedule.Recurrence),
 			Base:      s.Schedule.Base,
 			Admission: nonStandardAdmission(s.Schedule.Admission),
 			Overlap:   overlapWording(s.Schedule.Overlap),
-			Enabled: s.Schedule.Enabled,
+			Enabled:   s.Schedule.Enabled,
 		}
 		at := now
 		schedLoc := s.Schedule.Location()

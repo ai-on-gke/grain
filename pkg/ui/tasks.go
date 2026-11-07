@@ -2114,8 +2114,8 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		TargetRepos:      allTargetRepos,
 		DefaultAdmission: model.AdmissionStandard.String(),
 		CustomFields:     customFieldDeclarations(customFields),
-		Deployment:   &deployment,
-		Version:      versionResponseFrom(version.Get()),
+		Deployment:       &deployment,
+		Version:          versionResponseFrom(version.Get()),
 	}
 	if s.tasks.Config.Sandboxes != nil {
 		resp.SandboxCount = s.tasks.Config.Sandboxes.SandboxCount()
