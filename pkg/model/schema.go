@@ -3444,6 +3444,23 @@ var Tables = []string{
   PRIMARY KEY (` + "`id`" + `, ` + "`pattern`" + `)
 )`,
 
+	// A declared suite's `qualification:` stanza (model.SuiteQualification):
+	// one row per suite whose file has one, keyed by the declaration's id,
+	// written by the same sync that writes repo_declaration and deleted
+	// with it -- beside the provenance rather than on the suite row, for
+	// repo_declaration_push's reason: it is only ever what the
+	// repository's default branch says. Grain's own record, not settings.
+	// Needs no SchemaVersion bump, for repo_workflow's own reason.
+	`CREATE TABLE IF NOT EXISTS ` + "`repo_declaration_qualification`" + ` (
+  ` + "`id`" + `              TEXT NOT NULL,
+  ` + "`check_name`" + `      TEXT NOT NULL DEFAULT '',
+  ` + "`candidate`" + `       TEXT NOT NULL DEFAULT '',
+  ` + "`stage1_workflow`" + ` TEXT NOT NULL DEFAULT '',
+  ` + "`stage1_status`" + `   TEXT NOT NULL DEFAULT '',
+  ` + "`upstream`" + `        TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (` + "`id`" + `)
+)`,
+
 	// One row per repository grain reads declarations from
 	// (model.RepoDeclarationSync): the commit its live declarations came
 	// from, when it was last looked at, and the error if the last look

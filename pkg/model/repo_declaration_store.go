@@ -171,6 +171,9 @@ func (s *Store) SyncRepoDeclarations(ctx context.Context, repo RepoRef, commit s
 			if err := write(DeclaredSuite, suite.ID, file.Path); err != nil {
 				return err
 			}
+			if err := putDeclarationQualification(ctx, tx, suite.ID, file.Qualification); err != nil {
+				return err
+			}
 		}
 		for _, file := range declared.Schedules {
 			sched := file.Schedule
@@ -308,6 +311,9 @@ func deleteDeclared(ctx context.Context, tx *sql.Tx, row RepoDeclaration) error 
 		}
 		table = "template"
 	case DeclaredSuite:
+		if _, err := tx.ExecContext(ctx, "DELETE FROM `repo_declaration_qualification` WHERE `id` = ?", row.ID); err != nil {
+			return fmt.Errorf("removing withdrawn suite %s's qualification: %w", row.ID, err)
+		}
 		table = "suite"
 	case DeclaredSchedule:
 		table = "schedule"

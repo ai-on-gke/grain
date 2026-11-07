@@ -319,6 +319,59 @@ func TestASuiteCannotNameATemplateThisRepoDoesNotDeclare(t *testing.T) {
 	}
 }
 
+// A suite's `qualification:` stanza travels beside it to the sync,
+// as the file wrote it; a suite without one has none.
+func TestASuiteDeclaresItselfAReleaseGate(t *testing.T) {
+	declared := load(t, map[string]string{
+		".grain/templates/smoke.yml": "title: Smoke the edition\n",
+		".grain/suites/edition-qualification.yml": `
+templates: [smoke]
+mode: until-clean
+max-passes: 1
+qualification:
+  check: grain/edition-qualification
+  candidate: synced-release
+  stage1: { status: grain/edition-qualification }
+`,
+		".grain/suites/sweep.yml": "templates: [smoke]\n",
+	})
+	if len(declared.Suites) != 2 {
+		t.Fatalf("declared %d suites, want 2", len(declared.Suites))
+	}
+	byPath := map[string]model.DeclaredSuiteFile{}
+	for _, f := range declared.Suites {
+		byPath[f.Path] = f
+	}
+	got := byPath[".grain/suites/edition-qualification.yml"].Qualification
+	want := model.SuiteQualification{Check: "grain/edition-qualification", Candidate: model.CandidateSyncedRelease,
+		Stage1Status: "grain/edition-qualification"}
+	if got == nil || *got != want {
+		t.Errorf("qualification = %+v, want %+v", got, want)
+	}
+	if q := byPath[".grain/suites/sweep.yml"].Qualification; q != nil {
+		t.Errorf("a suite with no stanza has qualification %+v, want none", q)
+	}
+}
+
+func TestABadQualificationStanzaIsRefused(t *testing.T) {
+	for stanza, want := range map[string]string{
+		"qualification:\n  candidate: nightly-tags\n":                     "candidate",
+		"qualification:\n  stage1: { workflow: nightly, status: ci }\n":   "not both",
+		"qualification:\n  stage1: {}\n":                                  "stage1",
+		"qualification:\n  checks: grain/x\n":                             "checks",
+		"qualification:\n  upstream: example.com/acme/core\n":             "only read",
+		"qualification:\n  candidate: synced-release\n  upstream: nope\n": "upstream",
+	} {
+		msg := loadErr(t, map[string]string{
+			".grain/templates/smoke.yml": "title: Smoke\n",
+			".grain/suites/gate.yml":     "templates: [smoke]\n" + stanza,
+		})
+		if !strings.Contains(msg, want) {
+			t.Errorf("%q: error = %q, want it to mention %q", stanza, msg, want)
+		}
+	}
+}
+
 func TestScheduleFiresADeclaredTemplateOnACadence(t *testing.T) {
 	declared := load(t, map[string]string{
 		".grain/templates/nightly.yml": "title: Bump dependencies\n",
