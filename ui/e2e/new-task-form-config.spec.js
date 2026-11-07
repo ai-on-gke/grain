@@ -43,6 +43,19 @@ async function serveForm(page, newTaskForm) {
   return served;
 }
 
+// The app reads /api/config again on its own, so a test can end with one
+// of those fetches still inside serveForm's handler (or a template
+// route's). Closing the page then disposes the response the handler is
+// about to read, and Playwright reports that handler's rejection --
+// "apiResponse.json: Response has been disposed" -- against whichever
+// test is running when it lands: the next one, a few milliseconds in
+// (rc.2's nightly failed the board test that way, 8ms after it started).
+// Dropping every route before the page goes, with the in-flight handlers'
+// errors ignored, keeps a test's routes from failing its successor.
+test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});
+
 async function openForm(page) {
   await page.goto("/new");
   await expect(page.getByRole("heading", { name: "New task" })).toBeVisible();
