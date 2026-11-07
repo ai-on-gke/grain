@@ -104,11 +104,12 @@
 // that remains forks a CLI and ignores agent.RunConfig.Tools, so a
 // capability granted tools no running agent could call.
 //
-// -grant self-debug adds that capability's own read-only tools:
-// read_grain_source and list_grain_source, reading the checkout
-// -grain-src-dir names (pkg/capability/selfdebug).
+// -grant https://grain.dev/capabilities/grain#source={} (once the
+// source half of self-debug) names grain's own checkout, -grain-src-dir,
+// which the run reads as grain-src/ and src://.
 //
-// That grant turns on a second half as well -- list_grain_tasks,
+// -grant api:self-debug (the REST half of self-debug, which the retired
+// bare name still reads as) turns on list_grain_tasks,
 // read_grain_task, read_grain_task_prompt and read_grain_task_transcript,
 // reading grain's *other* tasks over -server, plus read_grain_metrics,
 // reading what this deployment measures about itself over that same
@@ -136,7 +137,7 @@
 // roster and refuses every call, rather than answering with a journal it
 // could not clean.
 //
-// Both self-debug and grain#journal are read-only, which is why both can be
+// Both api:self-debug and grain#journal are read-only, which is why both can be
 // served from here with no further hop. pkg/capability/selfrepair's
 // run_host_command is served
 // too, but only beside chat (see -interactive above), because its one
