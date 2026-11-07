@@ -124,5 +124,9 @@ address (`127.0.0.1:24576`), so the bind error quotes a secret.
 ## Verification
 
 - `go test ./pkg/cli -count=1` ✅, `go test ./tests/hygiene/... ./pkg/ports/...` ✅, `go vet ./pkg/cli ./ui/e2e/consolerestserver` ✅
+- Every Playwright spec that runs on consolerestserver, after the harness change (`access-request-walkthrough`,
+  `console-resting-notes-walkthrough`, `console-session-wake-inbox-walkthrough`, `interactive-session-chat`,
+  `stopped-turn-retry`, `task-chat-optimistic-sends`): 17 passed ✅
+- Follow-ups proposed for F5 and F6, both depending on this task.
 - No command or flag changed, so `design/spec/cli/*.spec.md` needed no regeneration. No `ui/` source changed (screenshots were taken
   of the unchanged UI only to check the condition's text).
