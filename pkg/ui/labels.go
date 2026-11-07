@@ -211,7 +211,7 @@ func OfferedCapabilities() []Capability {
 		// doc). Every place a capability is chosen refuses it with
 		// grainci.Refusal, by way of capabilityRefusal.
 		// Not read-issues: retired onto the in-process github server's
-		// read-issues method (schema migration 122), offered with the
+		// read-issues method (schema migration 121), offered with the
 		// other capability-server methods.
 	}...)
 	// No row for the model proxies: claude-proxy, openai-proxy and
