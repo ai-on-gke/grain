@@ -461,6 +461,43 @@ expect "rc-hold, completed" "moves candidate onto rc.2" eq "$(remote_candidate)"
 expect "rc-hold, completed" "publishes rc.2" images_were "rc v2.3.0-rc.2"
 expect "rc-hold, completed" "emits no rc_held" no_line '^rc_held=' "$work/train.out"
 
+# Stage 2 failure with triage-pending grain/rc-hold: grain posts grain/rc-hold
+# in progress as soon as it concludes failure, before any [rc-blocker] task
+# exists, so the next 20-minute tick drops rc.1 in Phase 1 and holds rc.2 in
+# Phase 2 instead of cutting rc.2 off an unfixed main; once triage completes
+# (or its grace window elapses, completing neutral), a later tick cuts rc.2.
+setup ""
+tag_remote v2.3.0-rc.1 "$c2" 3
+git -C "$work/seed" push -q --force origin "$c2:refs/heads/candidate"
+qualification stage2-fail "$c2"
+jq -cn --arg sha "$c2" --arg t "$(iso $((now - 60)))" \
+  '{check_runs:[{id:1,name:"grain/rc-hold",head_sha:$sha,status:"in_progress",started_at:$t,
+    output:{title:"Holding v2.3.0-rc.2 (triage pending)",summary:"v2.3.0-rc.1 failed qualification; v2.3.0-rc.2 is held while pipeline.rc-failed:v2.3.0-rc.1 awaits triage (up to 1h) or tasks titled [rc-blocker v2.3.0-rc.1] remain open."},
+    app:{id:42,slug:"grain-test"}}]}' > "$work/hold-checks.json"
+runs "$c2" "$c3"
+: > "$work/images.log"
+: > "$work/train.out"
+train RELEASE_TRAIN_OUTPUT="$work/train.out" RELEASE_PUSH_GRANT=train
+expect "rc-hold, triage pending" "exits 0" eq "$status" 0
+expect "rc-hold, triage pending" "drops rc.1 in phase 1" eq "$(remote_tag v2.3.0-rc.1-discarded)" "$c2"
+expect "rc-hold, triage pending" "says rc.2 is held while triage is pending" \
+  has "phase 2: v2.3.0-rc.2 is held by grain/rc-hold on ${c2:0:12}: v2.3.0-rc.1 failed qualification; v2.3.0-rc.2 is held while pipeline.rc-failed:v2.3.0-rc.1 awaits triage"
+expect "rc-hold, triage pending" "emits discarded_rc=v2.3.0-rc.1" grep -qxF "discarded_rc=v2.3.0-rc.1" "$work/train.out"
+expect "rc-hold, triage pending" "emits rc_held=v2.3.0-rc.2" grep -qxF "rc_held=v2.3.0-rc.2" "$work/train.out"
+expect "rc-hold, triage pending" "cuts no rc.2 onto unfixed main" eq "$(remote_tag v2.3.0-rc.2)" ""
+expect "rc-hold, triage pending" "leaves candidate on rc.1" eq "$(remote_candidate)" "$c2"
+
+jq -cn --arg sha "$c2" --arg t1 "$(iso $((now - 3660)))" --arg t2 "$(iso $((now - 60)))" \
+  '{check_runs:[{id:1,name:"grain/rc-hold",head_sha:$sha,status:"completed",conclusion:"neutral",started_at:$t1,completed_at:$t2,
+    output:{title:"Triage window elapsed",summary:"No task titled [rc-blocker v2.3.0-rc.1] was filed within 1h of v2.3.0-rc.1 failing; v2.3.0-rc.2 may be cut."},
+    app:{id:42,slug:"grain-test"}}]}' > "$work/hold-checks.json"
+: > "$work/images.log"
+: > "$work/train.out"
+train RELEASE_TRAIN_OUTPUT="$work/train.out" RELEASE_PUSH_GRANT=train
+expect "rc-hold, triage elapsed" "exits 0" eq "$status" 0
+expect "rc-hold, triage elapsed" "cuts rc.2 once triage window completes" eq "$(remote_tag v2.3.0-rc.2)" "$c3"
+expect "rc-hold, triage elapsed" "emits no rc_held" no_line '^rc_held=' "$work/train.out"
+
 # Absent: no grain/rc-hold check run at all means no hold.
 setup ""
 tag_remote v2.3.0-rc.1 "$c2" 3
