@@ -112,6 +112,13 @@ if [[ -z "${STATE_BUCKET}" ]]; then
   STATE_BUCKET="${PROJECT_ID}-${NAME_PREFIX}-tfstate"
 fi
 
+if [[ -z "${GOOGLE_APPLICATION_CREDENTIALS:-}" && -r "${HOME}/.gcp-service-account.json" ]]; then
+  export GOOGLE_APPLICATION_CREDENTIALS="${HOME}/.gcp-service-account.json"
+elif [[ -z "${GOOGLE_APPLICATION_CREDENTIALS:-}" && -z "${GOOGLE_OAUTH_ACCESS_TOKEN:-}" && ! -r "${HOME}/.config/gcloud/application_default_credentials.json" ]]; then
+  GOOGLE_OAUTH_ACCESS_TOKEN="$(gcloud auth print-access-token)"
+  export GOOGLE_OAUTH_ACCESS_TOKEN
+fi
+
 log() {
   printf '[registry-sandbox/down] %s\n' "$*"
 }

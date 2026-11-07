@@ -58,13 +58,17 @@ sandbox project (`deploy/test/registry-sandbox/`).
 
 - Tools on the operator/deployer machine: `gcloud`, `terraform` (>= 1.5),
   `docker`, `jq`, `curl`, `openssl`.
-- Active `gcloud` credentials with sandbox project permissions to manage
-  Compute Engine,IAP (`roles/iap.admin`), Cloud KMS (`roles/cloudkms.admin`),
-  Artifact Registry (`roles/artifactregistry.admin`), Service Accounts / IAM
-  (`roles/iam.serviceAccountAdmin`, `roles/iam.serviceAccountTokenCreator`,
-  `roles/resourcemanager.projectIamAdmin`), and GCS state buckets
-  (`roles/storage.admin`) — e.g. `roles/owner` or equivalent sandbox admin roles
-  on the target sandbox project.
+- Active `gcloud` credentials with sandbox project permissions:
+  - Minimum with a service-account deployer (`roles/editor` + IAP/KMS):
+    `roles/editor`, `roles/iap.admin`, and `roles/cloudkms.admin` (plus
+    `roles/iap.tunnelResourceAccessor` and `roles/compute.osAdminLogin` if
+    running `register-entry.sh` over IAP SSH from the deployer machine). When
+    `resourcemanager.projects.setIamPolicy` or `iam.serviceAccounts.signJwt` is
+    absent, `up.sh` automatically reuses the project's default Compute Engine
+    service account for the VM and the deployer's service account for IAP
+    verification.
+  - Or `roles/owner` (plus `roles/iap.tunnelResourceAccessor` for IAP SSH) on
+    the target sandbox project.
 
 ## Quick Start
 

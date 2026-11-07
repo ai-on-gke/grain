@@ -47,7 +47,7 @@ locals {
 
   iap_members = distinct(concat(
     [for e in local.human_emails : "user:${e}"],
-    var.create_verifier_sa ? ["serviceAccount:${google_service_account.verifier[0].email}"] : []
+    local.effective_verifier_sa != "" ? ["serviceAccount:${local.effective_verifier_sa}"] : []
   ))
 
   iap_audience = "/projects/${data.google_project.this.number}/global/backendServices/${google_compute_backend_service.iap.generated_id}"

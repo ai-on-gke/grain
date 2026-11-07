@@ -17,6 +17,7 @@ data "google_project" "this" {
 }
 
 resource "google_service_account" "vm" {
+  count        = var.create_vm_service_account ? 1 : 0
   account_id   = "${var.name_prefix}-vm"
   display_name = "Grain Registry Sandbox VM (${var.name_prefix})"
 
@@ -24,19 +25,21 @@ resource "google_service_account" "vm" {
 }
 
 resource "google_project_iam_member" "vm_ar_reader" {
+  count   = var.create_vm_service_account ? 1 : 0
   project = var.project_id
   role    = "roles/artifactregistry.reader"
-  member  = "serviceAccount:${google_service_account.vm.email}"
+  member  = "serviceAccount:${google_service_account.vm[0].email}"
 }
 
 resource "google_project_iam_member" "vm_log_writer" {
+  count   = var.create_vm_service_account ? 1 : 0
   project = var.project_id
   role    = "roles/logging.logWriter"
-  member  = "serviceAccount:${google_service_account.vm.email}"
+  member  = "serviceAccount:${google_service_account.vm[0].email}"
 }
 
 resource "google_service_account" "verifier" {
-  count        = var.create_verifier_sa ? 1 : 0
+  count        = var.create_verifier_sa && trimspace(var.verifier_service_account_email) == "" ? 1 : 0
   account_id   = "${var.name_prefix}-ver"
   display_name = "Grain Registry Sandbox Verifier (${var.name_prefix})"
 
@@ -68,6 +71,10 @@ resource "google_kms_crypto_key" "signing" {
 }
 
 locals {
+  vm_sa_email = length(google_service_account.vm) > 0 ? google_service_account.vm[0].email : "${data.google_project.this.number}-compute@developer.gserviceaccount.com"
+  effective_verifier_sa = trimspace(var.verifier_service_account_email) != "" ? trimspace(var.verifier_service_account_email) : (
+    length(google_service_account.verifier) > 0 ? google_service_account.verifier[0].email : ""
+  )
   kms_key_id = var.existing_kms_key_id != "" ? var.existing_kms_key_id : google_kms_crypto_key.signing[0].id
 }
 
@@ -76,11 +83,11 @@ locals {
 resource "google_kms_crypto_key_iam_member" "vm_signer" {
   crypto_key_id = local.kms_key_id
   role          = "roles/cloudkms.signerVerifier"
-  member        = "serviceAccount:${google_service_account.vm.email}"
+  member        = "serviceAccount:${local.vm_sa_email}"
 }
 
 resource "google_kms_crypto_key_iam_member" "vm_viewer" {
   crypto_key_id = local.kms_key_id
   role          = "roles/cloudkms.viewer"
-  member        = "serviceAccount:${google_service_account.vm.email}"
+  member        = "serviceAccount:${local.vm_sa_email}"
 }

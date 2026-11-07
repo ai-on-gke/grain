@@ -137,20 +137,15 @@ if ! [[ "${ENTRY_NAME}" =~ ^[a-z][a-z0-9-]{1,30}[a-z0-9]$ ]]; then
   exit 2
 fi
 
-if [[ "${ALLOW_VERIFIER_SA}" -eq 1 ]]; then
-  ALLOW_PRINCIPALS+=("serviceAccount:${NAME_PREFIX}-ver@${PROJECT_ID}.iam.gserviceaccount.com")
-fi
-
 access_list_json="[]"
-visibility="owner"
 if [[ "${#ALLOW_PRINCIPALS[@]}" -gt 0 ]]; then
   access_list_json="$(printf '%s\n' "${ALLOW_PRINCIPALS[@]}" | jq -R . | jq -s 'unique')"
-  visibility="shared"
 fi
 
 token="grc_$(openssl rand -hex 32)"
 token_sha256_hex="$(printf '%s' "${token}" | sha256sum | awk '{print $1}')"
 vm_name="${NAME_PREFIX}-vm"
+default_ver_principal="serviceAccount:${NAME_PREFIX}-ver@${PROJECT_ID}.iam.gserviceaccount.com"
 
 payload_json="$(jq -n \
   --arg entry_name "${ENTRY_NAME}" \
@@ -158,7 +153,8 @@ payload_json="$(jq -n \
   --arg display_name "${DISPLAY_NAME}" \
   --arg purpose "${PURPOSE}" \
   --arg host_kind "${HOST_KIND}" \
-  --arg visibility "${visibility}" \
+  --arg default_ver "${default_ver_principal}" \
+  --argjson allow_verifier "${ALLOW_VERIFIER_SA}" \
   --argjson access_list "${access_list_json}" \
   --arg token_sha256_hex "${token_sha256_hex}" \
   '{
@@ -167,8 +163,9 @@ payload_json="$(jq -n \
     display_name: $display_name,
     purpose: $purpose,
     host_kind: $host_kind,
-    visibility: $visibility,
-    access_list: ($access_list | tostring),
+    default_ver: $default_ver,
+    allow_verifier: $allow_verifier,
+    access_list: $access_list,
     token_sha256_hex: $token_sha256_hex
   }')"
 
@@ -185,9 +182,21 @@ owner_email="\$(jq -r '.owner_email' <<<"\${payload}")"
 display_name="\$(jq -r '.display_name' <<<"\${payload}")"
 purpose="\$(jq -r '.purpose' <<<"\${payload}")"
 host_kind="\$(jq -r '.host_kind' <<<"\${payload}")"
-visibility="\$(jq -r '.visibility' <<<"\${payload}")"
-access_list="\$(jq -r '.access_list' <<<"\${payload}")"
+allow_verifier="\$(jq -r '.allow_verifier' <<<"\${payload}")"
+default_ver="\$(jq -r '.default_ver' <<<"\${payload}")"
 token_sha256_hex="\$(jq -r '.token_sha256_hex' <<<"\${payload}")"
+meta_cfg="\$(curl -fsSL -H 'Metadata-Flavor: Google' 'http://metadata.google.internal/computeMetadata/v1/instance/attributes/grain-registry-config' 2>/dev/null || echo '{}')"
+access_list="\$(jq -cn --argjson base "\$(jq -c '.access_list' <<<"\${payload}")" --argjson meta "\${meta_cfg}" --argjson av "\${allow_verifier}" --arg dv "\${default_ver}" '
+  if \$av == 1 then
+    (\$base + (if ((\$meta.service_principals // []) | length) > 0 then \$meta.service_principals else [\$dv] end)) | unique
+  else
+    \$base | unique
+  end
+')"
+visibility="owner"
+if [[ "\$(jq -r 'length' <<<"\${access_list}")" -gt 0 ]]; then
+  visibility="shared"
+fi
 entry_uuid="\$(cat /proc/sys/kernel/random/uuid)"
 cred_uuid="\$(cat /proc/sys/kernel/random/uuid)"
 

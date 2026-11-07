@@ -31,7 +31,7 @@ locals {
     allowed_domains    = local.effective_allowed_domains
     admins             = ["user:${lower(trimspace(var.admin_email))}"]
     creators           = [for e in local.human_emails : "user:${e}"]
-    service_principals = var.create_verifier_sa ? ["serviceAccount:${google_service_account.verifier[0].email}"] : []
+    service_principals = local.effective_verifier_sa != "" ? ["serviceAccount:${local.effective_verifier_sa}"] : []
   })
 }
 
@@ -57,7 +57,7 @@ resource "google_compute_instance" "registry" {
   }
 
   service_account {
-    email  = google_service_account.vm.email
+    email  = local.vm_sa_email
     scopes = ["cloud-platform"]
   }
 

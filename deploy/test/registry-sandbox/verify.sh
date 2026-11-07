@@ -103,6 +103,13 @@ if [[ -z "${STATE_BUCKET}" ]]; then
   STATE_BUCKET="${PROJECT_ID}-${NAME_PREFIX}-tfstate"
 fi
 
+if [[ -z "${GOOGLE_APPLICATION_CREDENTIALS:-}" && -r "${HOME}/.gcp-service-account.json" ]]; then
+  export GOOGLE_APPLICATION_CREDENTIALS="${HOME}/.gcp-service-account.json"
+elif [[ -z "${GOOGLE_APPLICATION_CREDENTIALS:-}" && -z "${GOOGLE_OAUTH_ACCESS_TOKEN:-}" && ! -r "${HOME}/.config/gcloud/application_default_credentials.json" ]]; then
+  GOOGLE_OAUTH_ACCESS_TOKEN="$(gcloud auth print-access-token)"
+  export GOOGLE_OAUTH_ACCESS_TOKEN
+fi
+
 tmp_dir="$(mktemp -d)"
 tmp_override=""
 cleanup() {
@@ -143,9 +150,38 @@ fi
 
 sign_iap_jwt() {
   local target_host="$1"
-  local now exp claim_file jwt_file
+  local now exp claim_file jwt_file key_file key_email kid hdr_b64 pay_b64 sig_b64
   now="$(date +%s)"
   exp=$(( now + 300 ))
+
+  # If running with a local service-account JSON key file matching verifier_sa
+  # (such as grain's gcp#gcp-key capability), sign the RS256 IAP assertion
+  # locally with openssl so roles/iam.serviceAccountTokenCreator is not needed.
+  key_file="${GOOGLE_APPLICATION_CREDENTIALS:-}"
+  if [[ -z "${key_file}" && -f "${HOME}/.gcp-service-account.json" ]]; then
+    key_file="${HOME}/.gcp-service-account.json"
+  fi
+  if [[ -n "${key_file}" && -r "${key_file}" ]]; then
+    key_email="$(jq -r '.client_email // empty' "${key_file}" 2>/dev/null || true)"
+    if [[ "${key_email}" == "${verifier_sa}" ]]; then
+      kid="$(jq -r '.private_key_id // empty' "${key_file}")"
+      jq -r '.private_key' "${key_file}" > "${tmp_dir}/sa.pem"
+      chmod 0600 "${tmp_dir}/sa.pem"
+      hdr_b64="$(jq -cn --arg kid "${kid}" '{alg:"RS256",typ:"JWT"} + (if $kid != "" then {kid:$kid} else {} end)' | openssl base64 -e -A | tr '+/' '-_' | tr -d '=')"
+      pay_b64="$(jq -cn \
+        --arg iss "${verifier_sa}" \
+        --arg sub "${verifier_sa}" \
+        --arg aud "https://${target_host}/*" \
+        --argjson iat "${now}" \
+        --argjson exp "${exp}" \
+        '{iss:$iss,sub:$sub,aud:$aud,iat:$iat,exp:$exp}' | openssl base64 -e -A | tr '+/' '-_' | tr -d '=')"
+      sig_b64="$(printf '%s.%s' "${hdr_b64}" "${pay_b64}" | openssl dgst -sha256 -sign "${tmp_dir}/sa.pem" -binary | openssl base64 -e -A | tr '+/' '-_' | tr -d '=')"
+      rm -f "${tmp_dir}/sa.pem"
+      printf '%s.%s.%s' "${hdr_b64}" "${pay_b64}" "${sig_b64}"
+      return 0
+    fi
+  fi
+
   claim_file="${tmp_dir}/claim.json"
   jwt_file="${tmp_dir}/token.jwt"
   jq -n \

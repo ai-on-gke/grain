@@ -191,6 +191,13 @@ if [[ -z "${active_acct}" ]]; then
   exit 1
 fi
 
+if [[ -z "${GOOGLE_APPLICATION_CREDENTIALS:-}" && -r "${HOME}/.gcp-service-account.json" ]]; then
+  export GOOGLE_APPLICATION_CREDENTIALS="${HOME}/.gcp-service-account.json"
+elif [[ -z "${GOOGLE_APPLICATION_CREDENTIALS:-}" && -z "${GOOGLE_OAUTH_ACCESS_TOKEN:-}" && ! -r "${HOME}/.config/gcloud/application_default_credentials.json" ]]; then
+  GOOGLE_OAUTH_ACCESS_TOKEN="$(gcloud auth print-access-token)"
+  export GOOGLE_OAUTH_ACCESS_TOKEN
+fi
+
 if [[ -z "${STATE_BUCKET}" ]]; then
   STATE_BUCKET="${PROJECT_ID}-${NAME_PREFIX}-tfstate"
 fi
@@ -220,6 +227,23 @@ gcloud services enable \
   --project="${PROJECT_ID}" \
   --quiet
 
+ensure_gcs_bucket() {
+  local bucket="$1"
+  if ! gcloud storage buckets describe "gs://${bucket}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+    gcloud storage buckets create "gs://${bucket}" \
+      --project="${PROJECT_ID}" \
+      --location="${REGION}" \
+      --uniform-bucket-level-access \
+      --public-access-prevention \
+      --quiet
+  fi
+}
+
+if [[ "${LOCAL_STATE}" -eq 0 ]]; then
+  log "Ensuring GCS Terraform state bucket gs://${STATE_BUCKET}..."
+  ensure_gcs_bucket "${STATE_BUCKET}"
+fi
+
 if [[ "${SKIP_IMAGE_BUILD}" -eq 0 ]]; then
   log "Ensuring Artifact Registry repository ${AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}..."
   if ! gcloud artifacts repositories describe "${AR_REPO}" \
@@ -247,21 +271,33 @@ if [[ "${SKIP_IMAGE_BUILD}" -eq 0 ]]; then
   fi
 
   log "Pushing ${REGISTRY_IMAGE}..."
-  docker push "${REGISTRY_IMAGE}"
-fi
-
-if [[ "${LOCAL_STATE}" -eq 0 ]]; then
-  log "Ensuring GCS Terraform state bucket gs://${STATE_BUCKET}..."
-  if ! gcloud storage buckets describe "gs://${STATE_BUCKET}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
-    gcloud storage buckets create "gs://${STATE_BUCKET}" \
+  if ! docker push "${REGISTRY_IMAGE}"; then
+    log "Direct docker push failed (for example due to a sandbox OCI pull-cache proxy on *.pkg.dev); publishing runtime image via Cloud Build..."
+    gcloud services enable cloudbuild.googleapis.com --project="${PROJECT_ID}" --quiet
+    ensure_gcs_bucket "${STATE_BUCKET}"
+    cb_dir="$(mktemp -d)"
+    cid="$(docker create "${REGISTRY_IMAGE}")"
+    docker cp "${cid}:/usr/local/bin/grain-registry" "${cb_dir}/grain-registry"
+    docker rm -f "${cid}" >/dev/null
+    chmod 0755 "${cb_dir}/grain-registry"
+    awk '
+      /^ARG RUNTIME_IMAGE=/ { print; next }
+      /^FROM \$\{RUNTIME_IMAGE\}/ { in_runtime=1 }
+      in_runtime {
+        sub(/^COPY --from=build \/out\/grain-registry /, "COPY grain-registry ")
+        print
+      }
+    ' "${REPO_ROOT}/Dockerfile.registry" > "${cb_dir}/Dockerfile"
+    gcloud builds submit "${cb_dir}" \
       --project="${PROJECT_ID}" \
-      --location="${REGION}" \
-      --uniform-bucket-level-access \
-      --public-access-prevention \
+      --gcs-source-staging-dir="gs://${STATE_BUCKET}/cloudbuild/source" \
+      --gcs-log-dir="gs://${STATE_BUCKET}/cloudbuild/logs" \
+      --tag="${REGISTRY_IMAGE}" \
       --quiet
+    rm -rf "${cb_dir}"
   fi
 
-  if [[ "${SKIP_IMAGE_BUILD}" -eq 0 ]]; then
+  if [[ "${LOCAL_STATE}" -eq 0 ]]; then
     tmp_manifest="$(mktemp)"
     gcloud storage cp "gs://${STATE_BUCKET}/pushed-images.txt" "${tmp_manifest}" 2>/dev/null || true
     if ! grep -Fxq "${REGISTRY_IMAGE}" "${tmp_manifest}" 2>/dev/null; then
@@ -307,6 +343,61 @@ if [[ "${#ENTRIES[@]}" -gt 0 ]]; then
   entries_json="$(printf '%s\n' "${ENTRIES[@]}" | jq -R . | jq -s .)"
 fi
 
+log "Checking IAM permissions for ${active_acct} in ${PROJECT_ID}..."
+access_tok="$(gcloud auth print-access-token)"
+perm_resp="$(curl -fsSL -X POST \
+  -H "Authorization: Bearer ${access_tok}" \
+  -H "Content-Type: application/json" \
+  "https://cloudresourcemanager.googleapis.com/v1/projects/${PROJECT_ID}:testIamPermissions" \
+  -d '{
+    "permissions": [
+      "cloudkms.cryptoKeys.setIamPolicy",
+      "iap.webServices.setIamPolicy",
+      "resourcemanager.projects.setIamPolicy",
+      "iam.serviceAccounts.signJwt",
+      "iap.tunnelInstances.accessViaIAP"
+    ]
+  }')"
+
+has_perm() {
+  jq -e --arg p "$1" '(.permissions // []) | index($p) != null' <<<"${perm_resp}" >/dev/null 2>&1
+}
+
+missing_roles=()
+if ! has_perm "cloudkms.cryptoKeys.setIamPolicy"; then
+  missing_roles+=("roles/cloudkms.admin (missing cloudkms.cryptoKeys.setIamPolicy)")
+fi
+if ! has_perm "iap.webServices.setIamPolicy"; then
+  missing_roles+=("roles/iap.admin (missing iap.webServices.setIamPolicy)")
+fi
+if [[ "${#missing_roles[@]}" -gt 0 ]]; then
+  echo "up.sh: ${active_acct} is missing required IAM roles in ${PROJECT_ID}:" >&2
+  for r in "${missing_roles[@]}"; do
+    echo "  - ${r}" >&2
+  done
+  echo "Grant those roles (plus roles/iap.tunnelResourceAccessor and roles/compute.osAdminLogin for IAP SSH entry registration) and re-run up.sh." >&2
+  exit 1
+fi
+
+create_vm_sa_json="true"
+if ! has_perm "resourcemanager.projects.setIamPolicy"; then
+  log "Note: resourcemanager.projects.setIamPolicy not held; using default Compute Engine service account for the VM."
+  create_vm_sa_json="false"
+fi
+
+create_verifier_sa_json="true"
+verifier_sa_email=""
+if ! has_perm "iam.serviceAccounts.signJwt" && [[ "${active_acct}" == *.gserviceaccount.com ]]; then
+  log "Note: iam.serviceAccounts.signJwt not held; admitting active service account ${active_acct} as verifier."
+  create_verifier_sa_json="false"
+  verifier_sa_email="${active_acct}"
+fi
+
+has_iap_ssh=0
+if has_perm "iap.tunnelInstances.accessViaIAP"; then
+  has_iap_ssh=1
+fi
+
 jq -n \
   --arg project_id "${PROJECT_ID}" \
   --arg region "${REGION}" \
@@ -315,6 +406,9 @@ jq -n \
   --arg registry_image "${REGISTRY_IMAGE}" \
   --arg admin_email "${ADMIN_EMAIL}" \
   --arg tls_mode "${TLS_MODE}" \
+  --arg verifier_sa_email "${verifier_sa_email}" \
+  --argjson create_vm_sa "${create_vm_sa_json}" \
+  --argjson create_verifier_sa "${create_verifier_sa_json}" \
   --argjson extra_users "${extra_users_json}" \
   --argjson managed_entry_names "${entries_json}" \
   '{
@@ -325,6 +419,9 @@ jq -n \
     registry_image: $registry_image,
     admin_email: $admin_email,
     tls_mode: $tls_mode,
+    create_vm_service_account: $create_vm_sa,
+    create_verifier_sa: $create_verifier_sa,
+    verifier_service_account_email: $verifier_sa_email,
     extra_users: $extra_users,
     managed_entry_names: $managed_entry_names
   }' > "${tmp_tfvars}"
@@ -379,39 +476,44 @@ lb_ip="$(terraform -chdir="${SCRIPT_DIR}" output -raw lb_ip)"
 vm_name="$(terraform -chdir="${SCRIPT_DIR}" output -raw vm_name)"
 managed_cert_name="$(terraform -chdir="${SCRIPT_DIR}" output -raw managed_cert_name)"
 
-log "Waiting for VM ${vm_name} startup & reconciling grain-registry..."
-reconciled=0
-for attempt in $(seq 1 36); do
-  if gcloud compute ssh "${vm_name}" \
-    --project="${PROJECT_ID}" \
-    --zone="${ZONE}" \
-    --tunnel-through-iap \
-    --quiet \
-    --command="test -x /usr/local/sbin/grain-registry-reconcile && sudo /usr/local/sbin/grain-registry-reconcile" >/dev/null 2>&1; then
-    reconciled=1
-    break
+if [[ "${has_iap_ssh}" -eq 1 ]]; then
+  log "Waiting for VM ${vm_name} startup & reconciling grain-registry over IAP SSH..."
+  reconciled=0
+  for attempt in $(seq 1 36); do
+    if gcloud compute ssh "${vm_name}" \
+      --project="${PROJECT_ID}" \
+      --zone="${ZONE}" \
+      --tunnel-through-iap \
+      --quiet \
+      --command="test -x /usr/local/sbin/grain-registry-reconcile && sudo /usr/local/sbin/grain-registry-reconcile" >/dev/null 2>&1; then
+      reconciled=1
+      break
+    fi
+    log "  [attempt ${attempt}/36] VM startup still in progress; retrying in 10s..."
+    sleep 10
+  done
+  if [[ "${reconciled}" -ne 1 ]]; then
+    echo "up.sh: timed out waiting for ${vm_name} to reconcile over IAP SSH" >&2
+    exit 1
   fi
-  log "  [attempt ${attempt}/36] VM startup still in progress; retrying in 10s..."
-  sleep 10
-done
-if [[ "${reconciled}" -ne 1 ]]; then
-  echo "up.sh: timed out waiting for ${vm_name} to become healthy" >&2
-  exit 1
+else
+  log "Note: iap.tunnelInstances.accessViaIAP not held by ${active_acct}; relying on GCE startup script reconciliation."
 fi
 
 log "Waiting for Global HTTPS Load Balancer (${lb_ip}) to serve ${jwks_url}..."
 lb_ready=0
-for attempt in $(seq 1 36); do
+for attempt in $(seq 1 48); do
   jwks_resp="$(curl -skf --max-time 10 --resolve "${registry_host}:443:${lb_ip}" "${jwks_url}" 2>/dev/null || true)"
   if [[ -n "${jwks_resp}" ]] && [[ "$(jq -r '.keys | length' <<<"${jwks_resp}" 2>/dev/null || echo 0)" -ge 1 ]]; then
     lb_ready=1
     break
   fi
-  log "  [attempt ${attempt}/36] LB backend/forwarding rule propagating; retrying in 10s..."
+  log "  [attempt ${attempt}/48] LB/VM startup propagating; retrying in 10s..."
   sleep 10
 done
 if [[ "${lb_ready}" -ne 1 ]]; then
   echo "up.sh: timed out waiting for HTTPS LB to serve /.well-known/jwks.json" >&2
+  gcloud compute instances get-serial-port-output "${vm_name}" --zone="${ZONE}" --project="${PROJECT_ID}" 2>/dev/null | tail -n 60 >&2 || true
   exit 1
 fi
 
@@ -435,25 +537,35 @@ if [[ -n "${TOKEN_OUT_DIR}" ]]; then
   install -d -m 0700 "${TOKEN_OUT_DIR}"
 fi
 
-for entry in "${ENTRIES[@]}"; do
-  log "Registering connected entry '${entry}' owned by ${ADMIN_EMAIL}..."
-  reg_args=(
-    --project "${PROJECT_ID}"
-    --prefix "${NAME_PREFIX}"
-    --zone "${ZONE}"
-    --entry "${entry}"
-    --owner "${ADMIN_EMAIL}"
-    --registry-host "${registry_host}"
-    --instance-domain "${instance_domain}"
-  )
-  if [[ "${ALLOW_VERIFIER_ON_ENTRIES}" -eq 1 ]]; then
-    reg_args+=(--allow-verifier-sa)
+if [[ "${#ENTRIES[@]}" -gt 0 ]]; then
+  if [[ "${has_iap_ssh}" -eq 1 ]]; then
+    for entry in "${ENTRIES[@]}"; do
+      log "Registering connected entry '${entry}' owned by ${ADMIN_EMAIL}..."
+      reg_args=(
+        --project "${PROJECT_ID}"
+        --prefix "${NAME_PREFIX}"
+        --zone "${ZONE}"
+        --entry "${entry}"
+        --owner "${ADMIN_EMAIL}"
+        --registry-host "${registry_host}"
+        --instance-domain "${instance_domain}"
+      )
+      if [[ "${ALLOW_VERIFIER_ON_ENTRIES}" -eq 1 ]]; then
+        reg_args+=(--allow-verifier-sa)
+      fi
+      if [[ -n "${TOKEN_OUT_DIR}" ]]; then
+        reg_args+=(--token-file "${TOKEN_OUT_DIR}/${entry}.token")
+      fi
+      "${SCRIPT_DIR}/register-entry.sh" "${reg_args[@]}"
+    done
+  else
+    log "Skipping IAP SSH entry bootstrap (missing roles/iap.tunnelResourceAccessor on ${active_acct})."
+    log "Run register-entry.sh from an IAP-authorized workstation (or grant roles/iap.tunnelResourceAccessor + roles/compute.osAdminLogin):"
+    for entry in "${ENTRIES[@]}"; do
+      log "  ./deploy/test/registry-sandbox/register-entry.sh --project ${PROJECT_ID} --prefix ${NAME_PREFIX} --zone ${ZONE} --entry ${entry} --owner ${ADMIN_EMAIL} --allow-verifier-sa"
+    done
   fi
-  if [[ -n "${TOKEN_OUT_DIR}" ]]; then
-    reg_args+=(--token-file "${TOKEN_OUT_DIR}/${entry}.token")
-  fi
-  "${SCRIPT_DIR}/register-entry.sh" "${reg_args[@]}"
-done
+fi
 
 cat <<SUMMARY
 

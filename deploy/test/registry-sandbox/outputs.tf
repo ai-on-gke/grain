@@ -69,5 +69,5 @@ output "managed_cert_name" {
 
 output "verifier_service_account" {
   description = "Service account email admitted to IAP and registry service_principals for verify.sh."
-  value       = var.create_verifier_sa ? google_service_account.verifier[0].email : ""
+  value       = local.effective_verifier_sa
 }

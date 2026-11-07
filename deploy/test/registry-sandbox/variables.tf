@@ -125,10 +125,22 @@ variable "boot_disk_gb" {
   default     = 20
 }
 
+variable "create_vm_service_account" {
+  description = "Create a dedicated least-privilege VM service account and bind project-level Artifact Registry/Logging roles (requires roles/resourcemanager.projectIamAdmin). Set false to run the VM as the default Compute Engine service account (<number>-compute@developer.gserviceaccount.com)."
+  type        = bool
+  default     = true
+}
+
 variable "create_verifier_sa" {
   description = "Create a dedicated service account granted IAP access and registry service_principals reader access for non-interactive verification (verify.sh)."
   type        = bool
   default     = true
+}
+
+variable "verifier_service_account_email" {
+  description = "Optional existing service account email (such as the deployer service account) to admit to IAP and registry service_principals instead of creating a separate verifier SA."
+  type        = string
+  default     = ""
 }
 
 variable "existing_kms_key_id" {
