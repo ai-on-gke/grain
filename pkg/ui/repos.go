@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability"
 	"github.com/ai-on-gke/grain/pkg/forge"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -1673,6 +1674,29 @@ func (c *Client) ciCapabilityIDs() []string {
 			ids = append(ids, spec.Name)
 		}
 	}
+	// A capability-server method declaring a CI grant rule with no
+	// provider left in the catalog (github#sandbox-repo, retired from
+	// github-sandbox by schema migration 122) is offered as its own grant:
+	// the repository's list is what grants it to a CI job, so dropping it
+	// here would leave no picker that can.
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		seen[id] = true
+	}
+	for _, m := range capability.Methods() {
+		if m.CI == nil || !m.CI.RepoGranted {
+			continue
+		}
+		grant := m.Grant()
+		if seen[grant] {
+			continue
+		}
+		if _, offered := c.capabilityByID(grant); !offered && !m.CI.IsCIOnly() {
+			continue
+		}
+		seen[grant] = true
+		ids = append(ids, grant)
+	}
 	return ids
 }
 
@@ -1695,9 +1719,14 @@ func (c *Client) cleanRepoCICapabilities(ids []string) ([]string, error) {
 	for _, id := range ids {
 		canonicalID := id
 		if _, ok := model.CIGrantRuleFor(id); ok {
-			// The release server's methods, in either spelling: granted
-			// by this list, recorded as the method (schema 101).
-			canonicalID = model.CanonicalLegacyGrant(strings.TrimSpace(id))
+			// Methods declaring a CI grant rule (the release server's and
+			// github#sandbox-repo), in either their canonical or legacy alias
+			// spelling: granted by this list, recorded as <ref>={}.
+			normalized, err := c.normalizeCapabilityID(id)
+			if err != nil {
+				return nil, err
+			}
+			canonicalID = normalized
 		} else if target, ok := model.RepoReadTarget(id); ok {
 			canonicalID = model.RepoReadCapability(target)
 		} else if target, ok := model.RepoWriteTarget(id); ok {

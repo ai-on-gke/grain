@@ -433,7 +433,7 @@ func TestCLICapabilityAttachAndDetachControlWhatARealDispatchMaterializes(t *tes
 	sandboxes := credentialed(t, remote)
 
 	storeDir := t.TempDir()
-	cap := &countingCapability{name: "github-sandbox"}
+	cap := &countingCapability{name: "priority-dispatch"}
 	cfg := orchestrator.Config{Capabilities: model.NewCapabilityRegistry(cap)}
 
 	// Task A: attached through the real CLI verb, left attached, and
@@ -445,13 +445,13 @@ func TestCLICapabilityAttachAndDetachControlWhatARealDispatchMaterializes(t *tes
 	if err := json.Unmarshal([]byte(createdA), &taskA); err != nil {
 		t.Fatalf("parsing grain create -json output: %v\n%s", err, createdA)
 	}
-	attached := runCLIStore(t, bin, storeDir, "-json", "capability", taskA.ID, "github-sandbox", "attach")
+	attached := runCLIStore(t, bin, storeDir, "-json", "capability", taskA.ID, "priority-dispatch", "attach")
 	var attachedTask ui.Task
 	if err := json.Unmarshal([]byte(attached), &attachedTask); err != nil {
 		t.Fatalf("parsing grain capability attach -json output: %v\n%s", err, attached)
 	}
-	if len(attachedTask.Capabilities) != 1 || attachedTask.Capabilities[0] != "github-sandbox" {
-		t.Fatalf("capabilities after attach = %+v, want [github-sandbox]", attachedTask.Capabilities)
+	if len(attachedTask.Capabilities) != 1 || attachedTask.Capabilities[0] != "priority-dispatch" {
+		t.Fatalf("capabilities after attach = %+v, want [priority-dispatch]", attachedTask.Capabilities)
 	}
 
 	deps := orchestrator.Deps{
@@ -486,8 +486,8 @@ func TestCLICapabilityAttachAndDetachControlWhatARealDispatchMaterializes(t *tes
 	if err := json.Unmarshal([]byte(createdB), &taskB); err != nil {
 		t.Fatalf("parsing grain create -json output: %v\n%s", err, createdB)
 	}
-	runCLIStore(t, bin, storeDir, "-json", "capability", taskB.ID, "github-sandbox", "attach")
-	detached := runCLIStore(t, bin, storeDir, "-json", "capability", taskB.ID, "github-sandbox", "detach")
+	runCLIStore(t, bin, storeDir, "-json", "capability", taskB.ID, "priority-dispatch", "attach")
+	detached := runCLIStore(t, bin, storeDir, "-json", "capability", taskB.ID, "priority-dispatch", "detach")
 	var detachedTask ui.Task
 	if err := json.Unmarshal([]byte(detached), &detachedTask); err != nil {
 		t.Fatalf("parsing grain capability detach -json output: %v\n%s", err, detached)

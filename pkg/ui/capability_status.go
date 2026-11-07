@@ -22,6 +22,8 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
 	consolecap "github.com/ai-on-gke/grain/pkg/capability/console"
 	"github.com/ai-on-gke/grain/pkg/capability/durable"
+	// The github server's #sandbox-repo method, its model.CIGrantRule and
+	// the secrets its mint resolves (ciMethodRequires).
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/imagesigning"
@@ -357,9 +359,7 @@ func capabilityDisplayName(id string) string {
 // built the way cmd/grain's capabilityProviders builds them for
 // dispatch, so their specs can be read back out.
 func capabilityProviderCatalog() []model.CapabilityProvider {
-	providers := []model.CapabilityProvider{
-		githubsandbox.NewProvider(githubsandbox.Config{}),
-	}
+	var providers []model.CapabilityProvider
 	providers = append(providers, admincaps.Providers()...)
 	providers = append(providers,
 		registrypush.NewWithConfig(registrypush.Config{}),
@@ -405,8 +405,8 @@ func ciOnlyCapability(name string) bool {
 	if _, ok := model.RepoWriteTarget(name); ok {
 		return true
 	}
-	if _, ok := model.CIGrantRuleFor(name); ok {
-		return true
+	if rule, ok := model.CIGrantRuleFor(name); ok {
+		return rule.IsCIOnly()
 	}
 	for _, spec := range capabilityCatalog() {
 		if spec.Name == name {
@@ -672,9 +672,46 @@ func (c *Client) ciCapabilitiesWithReadiness(cfg *model.Config, repoConfigs []mo
 				row.Needs = nil
 			}
 			out = append(out, row)
+			continue
+		}
+		if row, ok := c.ciMethodCapability(id); ok {
+			out = append(out, row)
 		}
 	}
 	return out
+}
+
+// ciMethodCapability is the CI picker's row for a capability-server
+// method that declares a CI grant rule but has no provider in the catalog
+// to read a status from (github#sandbox-repo, which the retired
+// github-sandbox provider became in schema migration 122): named and
+// described by the method itself, and ready when the secrets its mint
+// resolves are in this deployment's store.
+func (c *Client) ciMethodCapability(id string) (Capability, bool) {
+	for _, m := range capability.Methods() {
+		if m.CI == nil || id != m.Grant() {
+			continue
+		}
+		row := Capability{ID: id, Name: m.Name, Description: m.Spec.Description}
+		if requires := ciMethodRequires(m.Ref()); len(requires) > 0 && c.Config.Secrets != nil {
+			if list, err := c.Config.Secrets.List(); err == nil {
+				row.Needs = missingSecretsFor(requires, list)
+				ready := len(row.Needs) == 0
+				row.Ready = &ready
+			}
+		}
+		return row, true
+	}
+	return Capability{}, false
+}
+
+// ciMethodRequires is the standing secrets an in-process method's mint
+// resolves, for the readiness ciMethodCapability reports.
+func ciMethodRequires(ref string) []string {
+	if ref == model.GitHubSandboxRepoRef {
+		return githubsandbox.NewProvider(githubsandbox.Config{}).Spec().Requires
+	}
+	return nil
 }
 
 // capabilityStatuses builds every CapabilityStatus for cfg -- the

@@ -24,8 +24,8 @@
 // the real gcpkey/geminikey providers -- those need real GCP/Gemini
 // credentials this sandbox should not assume it has. It is attached to the
 // task through the real CLI's `capability <id> <cap> attach`, under the one
-// capability ID (github-sandbox) cmd/grain/main.go's ui.OfferedCapabilities
-// allow-list accepts, exactly the way an operator would toggle it on -- the orchestrator.Config.Capabilities
+// capability ID (priority-dispatch) cmd/grain/main.go's ui.OfferedCapabilities
+// allow-list accepts that is still a bare legacy name rather than an alias, exactly the way an operator would toggle it on -- the orchestrator.Config.Capabilities
 // registry that actually resolves and materializes it, by contrast, is
 // this test's own, so nothing here ever calls out to GCP or Gemini.
 package e2e
@@ -153,12 +153,13 @@ func TestCLIAttachedCapabilityIsMaterializedAppliedAndRevokedThroughRunCycle(t *
 
 	// Step 1: file the task, then attach a capability to it, both through
 	// the real CLI binary -- not a seeded store row and not a hand-built
-	// Grant -- the way an operator actually would. github-sandbox is the
-	// capability ID because it is on cmd/grain/main.go's own
-	// ui.OfferedCapabilities allow-list; the GitHub App credential its real
-	// provider needs is never asked for, because the registry that actually
-	// resolves and materializes it below is this test's own, never the real
-	// one a deployment would wire up for it.
+	// Grant -- the way an operator actually would. priority-dispatch is
+	// the capability ID because it is on cmd/grain/main.go's own
+	// ui.OfferedCapabilities allow-list and still a bare legacy name (not an
+	// alias rewritten to a capability-server reference, as read-issues and
+	// github-sandbox now are); the registry that actually resolves and
+	// materializes it below is this test's own, never the real one a
+	// deployment would wire up for it.
 	storeDir := t.TempDir()
 	created := runCLIStore(t, bin, storeDir,
 		"-json",
@@ -176,7 +177,7 @@ func TestCLIAttachedCapabilityIsMaterializedAppliedAndRevokedThroughRunCycle(t *
 		t.Fatalf("grain create did not return a task id: %s", created)
 	}
 
-	const capabilityID = "github-sandbox"
+	const capabilityID = "priority-dispatch"
 	attached := runCLIStore(t, bin, storeDir, "-json", "capability", task.ID, capabilityID, "attach")
 	var afterAttach ui.Task
 	if err := json.Unmarshal([]byte(attached), &afterAttach); err != nil {
@@ -201,7 +202,7 @@ func TestCLIAttachedCapabilityIsMaterializedAppliedAndRevokedThroughRunCycle(t *
 	remote := "http://" + githubHost + "/" + owner + "/" + repoName + ".git"
 	sandboxes := credentialed(t, remote)
 
-	const placementPath = "/secrets/github-sandbox-token"
+	const placementPath = "/secrets/priority-dispatch-token"
 	const placementContent = "sh-sh-sh-e2e"
 	provider := &testCapabilityProvider{name: capabilityID, path: placementPath, content: placementContent}
 

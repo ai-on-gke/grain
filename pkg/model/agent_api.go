@@ -761,6 +761,9 @@ var legacyGrantReplacements = map[string]string{
 	// Retired by schema migration 121 onto the in-process github server's
 	// read-issues method, which reads with the same team git credential.
 	"read-issues": GitHubReadIssuesGrant,
+	// Retired by schema migration 122 onto the in-process github server's
+	// sandbox-repo method.
+	"github-sandbox": GitHubSandboxRepoGrant,
 }
 
 // legacyGrantMultiReplacements maps retired bare capabilities that split into

@@ -29,7 +29,9 @@
 //     (formerly github-credential:<name>).
 //   - https://grain.dev/capabilities/github: GitHub operations answered by
 //     grain itself with the run's team git credential (#read-issues,
-//     formerly read-issues).
+//     formerly read-issues), plus the methods a build contributes to it
+//     through capability.Register (#sandbox-repo, pkg/capability/githubsandbox,
+//     formerly github-sandbox), served from capability.ContributedMethods.
 package grainserver
 
 import (
@@ -155,8 +157,6 @@ var (
 	repoMu            sync.RWMutex
 	repoCredentialsFn func() []string
 
-	githubOnce    sync.Once
-	githubInst    *protocol.Server
 	configMapOnce sync.Once
 	configMapInst *protocol.Server
 )
@@ -495,7 +495,17 @@ func buildGitHubServer() *protocol.Server {
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: building github#%s: %v", ReadIssuesMethod, err))
 	}
-	cs, err := protocol.NewCapabilityServer("github", readIssues)
+	// Methods a build contributed to the github server
+	// (capability.Register: #sandbox-repo) are served beside core's own
+	// #read-issues. ContributedMethods hands back the same protocol.Methods
+	// every time, so a contributed method's leases -- which its release_
+	// and deadline sweep revoke -- outlive this server, built afresh on
+	// every Lookup.
+	contributed, err := capability.ContributedMethods(GitHubID)
+	if err != nil {
+		panic(fmt.Sprintf("grainserver: building github capability server: %v", err))
+	}
+	cs, err := protocol.NewCapabilityServer("github", append([]*protocol.Method{readIssues}, contributed...)...)
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: building github capability server: %v", err))
 	}
@@ -520,12 +530,10 @@ func RepoServer() *protocol.Server {
 	return buildRepoServer()
 }
 
-// GitHubServer returns the singleton in-process https://grain.dev/capabilities/github server.
+// GitHubServer returns the in-process https://grain.dev/capabilities/github
+// server: core's #read-issues and the methods contributed to it now.
 func GitHubServer() *protocol.Server {
-	githubOnce.Do(func() {
-		githubInst = buildGitHubServer()
-	})
-	return githubInst
+	return buildGitHubServer()
 }
 
 // Status reports the in-process grain server's method details in the same shape
@@ -551,6 +559,10 @@ func RepoStatusForCredentials(configured []string) servers.Status {
 func Statuses() []servers.Status {
 	out := []servers.Status{Status(), RepoStatus(), GitHubStatus()}
 	for _, id := range capability.MethodServers() {
+		if id == GitHubID {
+			// Its contributed methods are in GitHubStatus already.
+			continue
+		}
 		srv, ok, err := capability.MethodServer(id)
 		if !ok {
 			continue

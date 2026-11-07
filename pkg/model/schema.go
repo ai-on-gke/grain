@@ -575,13 +575,18 @@ import "strconv"
 // 120 rewrites stored `github-credential:<name>` grants across the grant
 // tables, deployment and repository default/CI capabilities, console sessions,
 // and capability_policy to `https://grain.dev/capabilities/repo#credential={"credential":"<name>"}`.
+//
 // 121 changes no table: it retires the in-process `read-issues` provider
 // onto the in-process `github` server's `#read-issues` method: stored
 // `read-issues` grants across tasks, templates, schedules,
 // `default_capabilities`, `ci_capabilities`, `console_sessions` and
 // `capability_policy` become
 // `https://grain.dev/capabilities/github#read-issues={}`.
-const SchemaVersion = 121
+//
+// 122 rewrites stored `github-sandbox` grants across the grant tables,
+// deployment and repository default/CI capabilities, console sessions, and
+// capability_policy to `https://grain.dev/capabilities/github#sandbox-repo={}`.
+const SchemaVersion = 122
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or

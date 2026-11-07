@@ -100,7 +100,7 @@ type CapabilityInProcessServer struct {
 var inProcessSummaries = map[string]string{
 	grainserver.ID:       "grain's own host and database: its journal, health probes, SQL against its database and confirmed shell commands on its host.",
 	grainserver.RepoID:   "Access to repositories and git credentials: a CI job's read or write access to another repository, pushing any ref of a repository a task may write, or selecting a named git credential under secrets/github.",
-	grainserver.GitHubID: "GitHub operations answered with the run's team git credential: reading issues and comments on the repositories it may reach.",
+	grainserver.GitHubID: "GitHub operations answered by grain itself: reading issues and comments on the repositories a run may reach with its team git credential, and ephemeral private scratch repositories minted for a single run and deleted when it ends.",
 }
 
 // inProcessStatuses returns grainserver.Statuses() with RepoID's #credential

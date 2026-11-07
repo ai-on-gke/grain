@@ -32,15 +32,30 @@ const (
 	PackagePublishRef         = ReleaseCapabilityServerID + "#package-publish"
 )
 
+// The in-process github server's (GitHubCapabilityServerID) sandbox-repo
+// method: the ephemeral scratch repository the retired github-sandbox
+// provider minted (schema migration 122).
+const (
+	GitHubSandboxRepoMethod = "sandbox-repo"
+	GitHubSandboxRepoRef    = GitHubCapabilityServerID + "#" + GitHubSandboxRepoMethod
+	GitHubSandboxRepoGrant  = GitHubSandboxRepoRef + "={}"
+)
+
 // CIGrantRule is when a CI job may be handed a capability reference, as
 // the in-process server that answers it declares (capability.Method.CI):
 // what a retired provider's CapabilitySpec.CIOnly, SupportsCIEvent and
 // SupportsTrustedSchedule decided, carried by the reference now that no
 // provider stands behind it.
 //
-// It is grain's rule, not the deployment's. A reference with one is
-// CI-only -- no task or process run is ever granted it, whatever the
-// capability policy says -- and handed to a CI job only on Events (and
+// It is grain's rule, not the deployment's. A rule is CI-only unless it
+// sets TaskGrantable: no task or process run is ever granted it, whatever
+// the capability policy says. That default is fail-closed on purpose --
+// before TaskGrantable existed, declaring any rule at all made a method
+// CI-only, so a rule written to that contract (in core or a layer built on
+// it) stays CI-only rather than silently becoming a task grant. A rule that
+// gates on CI Events or TrustedSchedule is CI-only even with TaskGrantable
+// set, since a task has no event for the gate to admit. When Events or
+// TrustedSchedule is set, it is handed to a CI job only on Events (and
 // on the schedule run grain itself fired, when TrustedSchedule); a job
 // of any other event is not handed it at all, as the provider's gate
 // skipped it. CapabilityPolicy.Permits refuses it beyond the rule before
@@ -52,15 +67,34 @@ const (
 // narrows every other deployment grant -- rather than the declaration
 // granting it, as it does other capability references.
 type CIGrantRule struct {
+	// TaskGrantable opts the method in to task and process runs as well
+	// as CI jobs (github#sandbox-repo). Unset, the method is CI-only.
+	TaskGrantable   bool
 	Events          []string
 	TrustedSchedule bool
 	RepoGranted     bool
+}
+
+// IsEventGated reports whether r restricts which CI trigger events may
+// receive the grant.
+func (r CIGrantRule) IsEventGated() bool {
+	return len(r.Events) > 0 || r.TrustedSchedule
+}
+
+// IsCIOnly reports whether r restricts the grant to CI jobs alone: every
+// rule that does not opt in with TaskGrantable, and every event-gated rule,
+// because tasks have no CI trigger event.
+func (r CIGrantRule) IsCIOnly() bool {
+	return !r.TaskGrantable || r.IsEventGated()
 }
 
 // Admits reports whether a CI job of event, trustedSchedule being
 // whether it is the schedule run grain fired from a workflow's cron
 // (ci.Request.TrustedSchedule), is handed the grant.
 func (r CIGrantRule) Admits(event string, trustedSchedule bool) bool {
+	if !r.IsEventGated() {
+		return true
+	}
 	if slices.Contains(r.Events, event) {
 		return true
 	}
@@ -107,19 +141,71 @@ func RegisterCIGrantRule(ref string, rule CIGrantRule) (unregister func()) {
 	}
 }
 
-// CIGrantRuleFor is the rule declared for the reference grant names, in
-// any spelling: recorded, bare reference, or a retired name an alias
-// rewrites to one (CanonicalLegacyGrant). False when none is.
-func CIGrantRuleFor(grant string) (CIGrantRule, bool) {
-	c := CanonicalLegacyGrant(grant)
+func ciGrantRuleLookup(grant string) (string, CIGrantRule, bool) {
+	trimmed := strings.TrimSpace(grant)
+	c := CanonicalLegacyGrant(trimmed)
+	if c == trimmed && !IsCapabilityRef(c) {
+		c = CanonicalLegacyGrant(strings.ToLower(trimmed))
+	}
 	if !IsCapabilityRef(c) {
-		return CIGrantRule{}, false
+		return "", CIGrantRule{}, false
 	}
 	ref := CapabilityGrantRef(c)
 	ciGrantRulesMu.RLock()
 	defer ciGrantRulesMu.RUnlock()
-	rule, ok := ciGrantRules[ref]
+	if rule, ok := ciGrantRules[ref]; ok {
+		return ref, rule, true
+	}
+	if serverID, method, hasFrag := strings.Cut(ref, "#"); hasFrag {
+		for k, rule := range ciGrantRules {
+			kServer, kMethod, ok := strings.Cut(k, "#")
+			if ok && strings.EqualFold(kServer, serverID) && kMethod == method {
+				return k, rule, true
+			}
+		}
+		return "", CIGrantRule{}, false
+	}
+	var matchedRef string
+	var matched CIGrantRule
+	count := 0
+	for k, rule := range ciGrantRules {
+		kServer, _, ok := strings.Cut(k, "#")
+		if ok && strings.EqualFold(kServer, ref) {
+			matchedRef = k
+			matched = rule
+			count++
+		}
+	}
+	if count == 1 {
+		return matchedRef, matched, true
+	}
+	return "", CIGrantRule{}, false
+}
+
+// CIGrantRuleFor is the rule declared for the reference grant names, in
+// any spelling: recorded, bare reference, methodless shorthand on a
+// single-method server, or a retired name an alias rewrites to one
+// (CanonicalLegacyGrant). False when none is.
+func CIGrantRuleFor(grant string) (CIGrantRule, bool) {
+	_, rule, ok := ciGrantRuleLookup(grant)
 	return rule, ok
+}
+
+// CanonicalCIGrant normalizes a CI capability spelling for workflow matching
+// (workflows.CapabilitySyntax.Canonical): retired bare aliases are rewritten
+// via CanonicalLegacyGrant, and bare or methodless references to a registered
+// CIGrantRule method with empty arguments normalize to <ref>={}.
+func CanonicalCIGrant(grant string) string {
+	c := CanonicalLegacyGrant(grant)
+	ref, _, ok := ciGrantRuleLookup(c)
+	if !ok {
+		return c
+	}
+	_, args, hasArgs := strings.Cut(strings.TrimSpace(c), "=")
+	if !hasArgs || strings.TrimSpace(args) == "{}" {
+		return ref + "={}"
+	}
+	return c
 }
 
 // IsRepoGrantedCIGrant reports whether grant is a capability reference a
@@ -138,7 +224,10 @@ func CIGrantRuleRefusal(grant string, s CapabilitySubject) string {
 		return ""
 	}
 	if s.Kind != CapabilityRunCI {
-		return CIGrantRuleCIOnlyRefusal(grant, rule)
+		if rule.IsCIOnly() {
+			return CIGrantRuleCIOnlyRefusal(grant, rule)
+		}
+		return ""
 	}
 	if !rule.Admits(s.Event, s.TrustedSchedule) {
 		event := s.Event
