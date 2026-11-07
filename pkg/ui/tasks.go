@@ -1799,10 +1799,33 @@ type configResponse struct {
 	// Only ever the form's starting state, like ApprovedByDefault and
 	// AutoMergeByDefault above. What is filed is what the request names;
 	// this is only what it names when nobody has said otherwise.
-	DefaultCapabilities     []string            `json:"defaultCapabilities"`
+	DefaultCapabilities []string `json:"defaultCapabilities"`
+	// RepoDefaultCapabilities is the per-repo layer of the same thing
+	// (model.RepoConfig.DefaultCapabilities, grain/task-24): what each
+	// repo adds to DefaultCapabilities above, keyed by "owner/name". Only
+	// repos that add something appear -- Store.ListRepoConfigs keeps no
+	// row for a repo that says nothing -- so an absent key and an empty
+	// list mean the same thing here.
+	//
+	// Sent with the config rather than fetched per repo because the
+	// new-task form needs it the moment the repo picker changes, on a
+	// form that has not been submitted yet: this is one small map for a
+	// deployment's whole repo list, and re-seeding the capability picker
+	// from a round trip per keystroke would be a request for every
+	// character typed into a repo field. The repos pane, which edits one
+	// repo at a time and has somewhere to show a save failing, reads and
+	// writes GET/PUT /api/repos/{owner}/{name}/capabilities instead.
+	//
+	// Filtered to what this build offers, the same as DefaultCapabilities
+	// above and for the same reason.
 	RepoDefaultCapabilities map[string][]string `json:"repoDefaultCapabilities,omitempty"`
-	DefaultAdmission        string              `json:"defaultAdmission,omitempty"`
-	RepoDefaultAdmissions   map[string]string   `json:"repoDefaultAdmissions,omitempty"`
+	// DefaultAdmission and RepoDefaultAdmissions are the same two layers
+	// for the admission setting (model.Config.DefaultAdmission,
+	// model.RepoConfig.DefaultAdmission): the new-task form's starting
+	// admission, the higher of the two winning. Only repos that set one
+	// appear in the map.
+	DefaultAdmission      string            `json:"defaultAdmission,omitempty"`
+	RepoDefaultAdmissions map[string]string `json:"repoDefaultAdmissions,omitempty"`
 	// PromptExtension mirrors model.Config.PromptExtension -- this
 	// deployment's own standing instructions for every run -- read from
 	// the store the same way AgentFramework above is.
