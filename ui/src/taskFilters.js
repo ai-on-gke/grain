@@ -488,8 +488,10 @@ export function describeUnknownConditions(unknown) {
 // matchesFilters is whether one task survives every condition currently
 // set plus the search box -- the second half of every view's own
 // `matches`, whose first half is that view's own question about state.
-// The search is over the title and the id, which is what somebody
-// typing "287" or "kanban" is reaching for.
+// The search is over the title, the id and the external reference,
+// which is what somebody typing "287", "kanban" or "CA-204" is reaching
+// for (pkg/ui's taskListQuery searches closed work the same way, and
+// descriptions too).
 //
 // `searchIn` is what a list of something other than tasks searches
 // instead: the CI pane narrows runs with these same conditions
@@ -505,6 +507,9 @@ export function matchesFilters(t, conditions, q, config, searchIn = null) {
   return (
     t.title.toLowerCase().includes(q) ||
     String(t.id).toLowerCase().includes(q) ||
+    String(t.externalRef || "")
+      .toLowerCase()
+      .includes(q) ||
     // A closed task the server's search found for this very text
     // (closedTasks.js's markSearchHits): GET /api/tasks?search= matches
     // a description too, and a listed task carries none to match here.

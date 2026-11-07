@@ -188,6 +188,17 @@ describe("operatorsFor", () => {
 });
 
 describe("matchesFilters", () => {
+  it("searches the external reference beside the title and id", () => {
+    // 2026-11-07 walkthrough: typing a ticket's reference found nothing.
+    const ref = task({ title: "deep work", externalRef: "CA-9012" });
+    const other = task({ title: "other work", externalRef: "CA-77" });
+    expect(matchesFilters(ref, [], "ca-9012", config)).toBe(true);
+    expect(matchesFilters(other, [], "ca-9012", config)).toBe(false);
+    expect(matchesFilters(task({ title: "no ref" }), [], "ca-", config)).toBe(
+      false,
+    );
+  });
+
   it("matches any of the values named, and none of them", () => {
     const widgets = task({ repo: "acme/widgets" });
     const gadgets = task({ repo: "acme/gadgets" });

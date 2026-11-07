@@ -320,3 +320,33 @@ func TestTaskListNarrowsToStateSearchAndLimit(t *testing.T) {
 		t.Errorf("?limit=1 without fields lost the description: %v", full[0])
 	}
 }
+
+// TestTaskListSearchMatchesExternalRef: the search box's text reaches a
+// task by its external reference, so a closed task filed against
+// "CA-9012" -- however many pages deep -- is found by typing that
+// reference, as the UI's own search box finds a held one
+// (2026-11-07 walkthrough §10 item 1).
+func TestTaskListSearchMatchesExternalRef(t *testing.T) {
+	t.Parallel()
+	srv, _ := testServer(t)
+	do(t, srv, http.MethodPost, "/api/tasks", `{"title":"unrelated","approved":true}`)
+	do(t, srv, http.MethodPost, "/api/tasks", `{"title":"deep closed work","externalRef":"CA-9012","approved":true}`)
+	do(t, srv, http.MethodPost, "/api/tasks", `{"title":"other ref","externalRef":"CA-77","approved":true}`)
+	do(t, srv, http.MethodPost, "/api/tasks/2/close", ``)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/tasks?state=closed&limit=200&cursor=&search=ca-9012", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var page struct {
+		Tasks []struct {
+			ID string `json:"id"`
+		} `json:"tasks"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Tasks) != 1 || page.Tasks[0].ID != "2" {
+		t.Errorf("closed search for ca-9012 = %+v, want only task 2", page.Tasks)
+	}
+}

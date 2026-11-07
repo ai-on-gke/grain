@@ -2049,6 +2049,28 @@ describe("Sidebar sections this browser hides", () => {
     );
     for (const btn of screen.getAllByRole("button", { name: /^Tasks/ })) {
       expect(btn).not.toHaveTextContent("could not be loaded");
+      // A mid-session outage: the last list stays drawn and counted, and
+      // the rail says it is no longer being refreshed (2026-11-07
+      // walkthrough §10 item 4).
+      expect(btn).toHaveTextContent("not refreshing");
+      expect(btn).toHaveAttribute(
+        "title",
+        "Tasks could not be refreshed (synthetic tasks 500); showing the last list read — click to retry",
+      );
+    }
+
+    rerender(
+      <Sidebar
+        {...baseProps}
+        config={null}
+        tasks={tasks}
+        tasksLoaded={true}
+        tasksError={null}
+      />,
+    );
+    for (const btn of screen.getAllByRole("button", { name: /^Tasks/ })) {
+      expect(btn).not.toHaveTextContent("not refreshing");
+      expect(btn).not.toHaveAttribute("title");
     }
   });
 });
