@@ -62,6 +62,7 @@ func TestClassifyEveryCategoryTheIssueNames(t *testing.T) {
 		"Dockerfile.relay":                "sandbox-images",
 		"tools/build/dockerfile":          "sandbox-images",
 		"scripts/setup.sh":                "setup-scripts",
+		"scripts/install-grain.sh":        "setup-scripts",
 		"./pkg/gitproxy/../gitproxy/a.go": "credential-proxy",
 	}
 	for p, want := range cases {
@@ -401,6 +402,9 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 		".grain/workflows/release.yml", ".github/workflows/release.yml",
 		".grain/workflows/promote.yml", ".github/workflows/promote.yml",
 		".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",
+		// v15: the release-asset publisher and the workflow that runs it
+		// on the train's tag pushes.
+		"scripts/release-assets.sh", ".github/workflows/release-train-assets.yml",
 	}
 	for _, p := range reviewed {
 		got := Classify([]string{p})

@@ -370,6 +370,13 @@ resolve_local_daemon() {
     # daemon subcommand is the container's image.
     IMAGE="$(awk '{ for (i = 1; i <= NF; i++) if ($i == "daemon") { print $(i-1); exit } }' <<<"${exec}")"
     [[ "${IMAGE}" == */* ]] || IMAGE=""
+    # setup.sh's unit runs ${GRAIN_IMAGE} out of its EnvironmentFile, so
+    # the image is that file's last GRAIN_IMAGE= line -- which on a host
+    # installed from release assets is a local grain/* ref only it has.
+    if [[ -z "${IMAGE}" && -f "${GRAIN_ETC_DIR}/image.env" ]]; then
+      IMAGE="$(sed -n 's/^[[:space:]]*GRAIN_IMAGE=//p' "${GRAIN_ETC_DIR}/image.env" | tail -n1 | tr -d "\"'")"
+      [[ "${IMAGE}" =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ && "${IMAGE}" == */* ]] || IMAGE=""
+    fi
   fi
   IMAGE="${IMAGE:-${DEFAULT_IMAGE}}"
   TRANSFER_IMAGE="${TRANSFER_IMAGE:-${IMAGE}}"
@@ -393,7 +400,9 @@ mirror_release_refs() {
         [[ -n "${MIRROR}" ]] ||
           die "${var} is ${ref}, a release-asset image only this host has: pass --mirror <registry/path> the cluster can pull from"
         printf -v "${var}" '%s' "${MIRROR%/}/${ref#grain/}"
-        MIRROR_PUSHES+=("${ref}=${!var}")
+        # IMAGE and TRANSFER_IMAGE are usually the same ref: push it once.
+        [[ " ${MIRROR_PUSHES[*]+"${MIRROR_PUSHES[*]}"} " == *" ${ref}=${!var} "* ]] ||
+          MIRROR_PUSHES+=("${ref}=${!var}")
         ;;
     esac
   done

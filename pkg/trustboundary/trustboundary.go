@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v14"
+const Version = "trust-boundary/v15"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -81,6 +81,13 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v15 added what release assets brought onto the boundary (grain/task-2990,
+// reviewed by task 3039): scripts/release-assets.sh, which publishes and
+// re-points every release's images, and the workflow that runs it on the
+// train's tag pushes (release-machinery), and scripts/install-grain.sh,
+// which loads a release's image and installs the binary out of it
+// (setup-scripts).
 //
 // v13 added the GitHub Actions Inbox approval (grain/task-2666,
 // design/playbook/releases.playbook.md §0.2) to release-promotion: the
@@ -270,7 +277,7 @@ var Categories = []Category{
 			"in scripts/release.conf, it does not raise `RELEASE_MAJOR`, which only a person may do",
 		},
 		files: []string{
-			"scripts/release-images.sh", "scripts/release-from-trunk.sh",
+			"scripts/release-images.sh", "scripts/release-assets.sh", "scripts/release-from-trunk.sh",
 			"scripts/release-notes.sh", "scripts/candidate-gate.sh", "scripts/release.conf",
 			// What the release jobs run besides: the patch-tag guard
 			// that refuses a vX.Y.Z not cut from its release branch, the
@@ -283,6 +290,7 @@ var Categories = []Category{
 			".grain/workflows/release.yml", ".github/workflows/release.yml",
 			".grain/workflows/promote.yml", ".github/workflows/promote.yml",
 			".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",
+			".github/workflows/release-train-assets.yml",
 		},
 	},
 	{
@@ -347,7 +355,7 @@ var Categories = []Category{
 	{
 		ID:          "setup-scripts",
 		Description: "setup scripts run with the deployment's own privileges",
-		files:       []string{"scripts/setup.sh"},
+		files:       []string{"scripts/setup.sh", "scripts/install-grain.sh"},
 	},
 }
 

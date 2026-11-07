@@ -10,6 +10,7 @@
 on: pull_request
 paths:
   - scripts/release-images.sh
+  - scripts/release-assets.sh
   - scripts/release-from-trunk.sh
   - scripts/release-notes.sh
   - scripts/candidate-gate.sh
@@ -25,5 +26,6 @@ paths:
   - .github/workflows/promote.yml
   - .grain/workflows/release-train.yml
   - .github/workflows/release-train.yml
+  - .github/workflows/release-train-assets.yml
 gate: true
 sensitive: true
