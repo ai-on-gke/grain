@@ -1676,7 +1676,7 @@ func (c *Client) ciCapabilityIDs() []string {
 	}
 	// A capability-server method declaring a CI grant rule with no
 	// provider left in the catalog (github#sandbox-repo, retired from
-	// github-sandbox by schema migration 120) is offered as its own grant:
+	// github-sandbox by schema migration 121) is offered as its own grant:
 	// the repository's list is what grants it to a CI job, so dropping it
 	// here would leave no picker that can.
 	seen := make(map[string]bool, len(ids))
@@ -1743,6 +1743,9 @@ func (c *Client) cleanRepoCICapabilities(ids []string) ([]string, error) {
 			}
 			if _, ok := c.capabilityByID(normalized); !ok {
 				return nil, validationErrorf("ciCapabilities: %s", capabilityRefusal(normalized))
+			}
+			if model.CapabilityGrantRef(normalized) == model.RepoCredentialRef {
+				return nil, validationErrorf("ciCapabilities: capability %q is not supported for CI", id)
 			}
 			canonicalID = normalized
 		} else if !slices.Contains(allowed, id) {

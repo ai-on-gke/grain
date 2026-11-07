@@ -19,7 +19,11 @@ import { repoApiRoot } from "./repoApi.js";
 // notifications.js is operator notifications in the UI
 // (design/design/durable-tasks.design.md, DT-5): the open ones, read from
 // GET /api/notifications?open=1, joining the alerts bell's list
-// (notificationAlerts) and the Inbox's Notifications section.
+// (notificationAlerts) and the Inbox's Notifications section. The poll
+// asks fields=list, which cuts each body to the first line
+// notificationSentence draws (a pending release's is kept whole, for
+// pendingReleaseOf's soak lines), rather than carrying every open
+// notification's whole body every POLL_MS.
 //
 // Acknowledging hides a notification from the bell and nothing else: it
 // stays on the Inbox until whatever raised it clears it.
@@ -36,7 +40,7 @@ export function useOpenNotifications() {
   const [list, setList] = useState([]);
   const reload = useCallback(async () => {
     try {
-      const next = await api("/api/notifications?open=1");
+      const next = await api("/api/notifications?open=1&fields=list");
       setList(Array.isArray(next) ? next : []);
     } catch {
       // The daemon being unreachable is DisconnectedBanner's to say.

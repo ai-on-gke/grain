@@ -271,29 +271,21 @@ func TestGitHubCredentialLadderNamesTheExtraTokens(t *testing.T) {
 	}
 }
 
-// A named GitHub token is a capability of its own (grain/task-117), and
-// the two ends of that -- the picker row a human ticks and the provider
-// a dispatch resolves it against -- are built from the same list of
-// names in startUIServer and capabilityProviders. This is that pairing:
-// the ids have to match exactly, or granting a token would be refused at
-// dispatch as a capability no provider is registered for.
-func TestCapabilityProvidersRegistersEachNamedGitHubToken(t *testing.T) {
+// Named GitHub credentials under secrets/github are served on the in-process
+// https://grain.dev/capabilities/repo#credential method rather than registered
+// as dynamic in-process providers in CapabilityProviders (schema migration 120).
+func TestCapabilityProvidersRetiresGitHubCredentialProviders(t *testing.T) {
 	t.Parallel()
 	names := []string{"release-bot", "docs-bot"}
 	var registered []string
 	for _, p := range CapabilityProviders(Config{}, nil, NewModelProxies(), names, nil) {
 		registered = append(registered, p.Spec().Name)
-	}
-	for _, capability := range ui.GitHubTokenCapabilities(names) {
-		if !slices.Contains(registered, capability.ID) {
-			t.Errorf("the picker offers %q but no provider is registered for it (registered: %v)",
-				capability.ID, registered)
+		if strings.HasPrefix(p.Spec().Name, model.GitCredentialCapabilityPrefix) {
+			t.Errorf("CapabilityProviders still registered legacy github-credential provider %q", p.Spec().Name)
 		}
 	}
-	// And nothing extra: a deployment with no named tokens registers
-	// exactly what it did before this existed (TestCapabilityProviders).
-	if len(registered) != len(CapabilityProviders(Config{}, nil, NewModelProxies(), nil, nil))+len(names) {
-		t.Errorf("registered %v, want the fixed set plus one provider per name %v", registered, names)
+	if len(registered) != len(CapabilityProviders(Config{}, nil, NewModelProxies(), nil, nil)) {
+		t.Errorf("registered %v, want the fixed provider set without per-token providers", registered)
 	}
 }
 

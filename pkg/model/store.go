@@ -5347,7 +5347,11 @@ func (s *Store) TaskGitCredentialOn(ctx context.Context, taskID, host, owner, re
 	if err != nil {
 		return "", fmt.Errorf("reading grants of task %s: %w", taskID, err)
 	}
-	if name, ok := gitCredentialOverride(grants); ok {
+	name, ok, err := GitCredentialOverride(grants)
+	if err != nil {
+		return "", err
+	}
+	if ok {
 		return name, nil
 	}
 	// The task's team chooses nothing: every task resolves through the

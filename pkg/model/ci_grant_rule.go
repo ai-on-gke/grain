@@ -34,7 +34,7 @@ const (
 
 // The in-process github server and its sandbox-repo method: the ephemeral
 // scratch repository the retired github-sandbox provider minted
-// (schema migration 120).
+// (schema migration 121).
 const (
 	GitHubCapabilityServerID = "https://grain.dev/capabilities/github"
 	GitHubSandboxRepoMethod  = "sandbox-repo"
