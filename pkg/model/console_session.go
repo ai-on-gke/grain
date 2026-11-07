@@ -98,12 +98,15 @@ type ConsoleSession struct {
 	NetworkAccess NetworkAccess
 	// TasksApproved is whether a task this session proposes is filed
 	// approved (queued, dispatchable by the next cycle) or proposed
-	// (waiting for a person). False -- approval required -- is the
-	// default and the shipped answer: a chat is a fast way to ask for a
-	// lot of work, and a director that could queue its own tasks would
-	// be one conversation away from spending a day of this deployment's
-	// capacity on a misunderstanding. An operator who trusts theirs can
-	// turn it on.
+	// (waiting for a person). False -- approval required -- is the zero
+	// value for a newly created session; the shipped director
+	// (DefaultConsoleSessions) turns it on by default
+	// (director-capabilities.spec.md §3.1.5), bounded per conversation
+	// turn by AutoSubmitLimits.TurnFanOut and held whenever a proposal
+	// escalates grants/repos, targets grain/config, or asks for
+	// hold_for_approval. An operator can turn it off or on in the session
+	// row or on the active task (ConsoleSessionTasksUnapprovedTag /
+	// ConsoleSessionTasksApprovedTag).
 	TasksApproved bool
 	// KeepRunning restarts the session's underlying task immediately when
 	// its run exits without asking a question, rather than parking it to
@@ -418,6 +421,18 @@ func defaultConsoleSessionCapabilities() []string {
 // grain/config always waits for a person (ConfigRepoProposalHold),
 // whatever TasksApproved says (director-capabilities spec §3.1.3).
 //
+// TasksApproved is true (director-capabilities.spec.md §3.1.5): the
+// director's job is filing the work the operator asked for in the rail, and
+// what auto-queueing may set going is bounded per conversation turn by
+// AutoSubmitLimits.TurnFanOut, held by AutoApprovalRefusal whenever a
+// proposal asks for ungranted capabilities/reads/writes, person-only grants
+// or grain/config (ConfigRepoProposalHold), subject to catalogue
+// requires_person rules and hold_for_approval: true, and never given
+// autoMerge. Existing deployments with a saved ConsoleSessions row keep what
+// they saved (ConsoleSessionsOr), and an operator override on the active
+// task (ConsoleSessionTasksUnapprovedTag / ConsoleSessionTasksApprovedTag)
+// stays sticky across reconciles.
+//
 // NetworkNone (director-capabilities.spec.md §3.1.6): the director reads
 // untrusted text -- repository bodies, CI logs, transcripts -- and
 // everything it needs is reached through grain itself rather than the
@@ -473,6 +488,7 @@ func DefaultConsoleSessions() []ConsoleSession {
 		// own CapabilityName: those packages import this one.
 		Capabilities:  caps,
 		NetworkAccess: network,
+		TasksApproved: true,
 		Writes:        []WriteTarget{{Repo: ConfigRepo()}},
 	}}
 }

@@ -847,7 +847,12 @@ var Migrations = []Migration{
 		},
 	},
 	{
-		Version: 120,
+		Version:     120,
+		Description: "rewrite stored github-credential:<name> grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/repo#credential={\"credential\":\"<name>\"} (the in-process github-credential:<name> providers are retired)",
+		Up:          migrateGitHubCredentialGrants,
+	},
+	{
+		Version: 121,
 		Description: "add admission to task, template and schedule and default_admission to grain_config and repo_config, " +
 			"moving stored priority-dispatch and durable grants into them (design/design/unified-grants.design.md §4.1)",
 		Statements: []string{

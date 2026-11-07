@@ -73,6 +73,7 @@ import {
   repoUrl,
   unionCapabilities,
 } from "../state.js";
+import { useRepoClosedCount, withClosedCount } from "../closedTasks.js";
 import AppIcon from "./AppIcon.jsx";
 import BranchField from "./BranchField.jsx";
 import ItemGlyph, { GlyphLabel } from "./ItemGlyph.jsx";
@@ -364,6 +365,9 @@ function RepoOverview({ upToDate, branches, gates, onShowTab }) {
 export default function RepoPage({
   repo,
   tasks,
+  // closedPartial is useClosedTasks' partial: some closed tasks are not
+  // paged in, so this repo's closed count is asked of the server.
+  closedPartial = false,
   config,
   baseBranchGates = [],
   // onOpenComparison opens one comparison of two of this repo's refs --
@@ -573,14 +577,24 @@ export default function RepoPage({
   // open -- has no row, and gets an empty one rather than crashing the
   // page: its forms still work, since none of them needs the repo to be
   // known first.
-  const row = repoRows(config, tasks).find((r) => r.repo === repo) || {
-    repo,
-    total: 0,
-    counts: {},
-    blocked: 0,
-    configured: false,
-    defaults: false,
-  };
+  //
+  // The closed count is the server's while some closed tasks are not
+  // paged in (closedPartial): the pages held are the newest across every
+  // repo, and counting only those would present a floor as this repo's
+  // total. Until it answers the count says it is a floor ("12+").
+  const closedCount = useRepoClosedCount(repo, closedPartial);
+  const row = withClosedCount(
+    repoRows(config, tasks).find((r) => r.repo === repo) || {
+      repo,
+      total: 0,
+      counts: {},
+      blocked: 0,
+      configured: false,
+      defaults: false,
+    },
+    closedCount,
+  );
+  const countFloor = closedPartial && closedCount === null;
 
   const loadBranches = useCallback(async () => {
     try {
@@ -1436,7 +1450,7 @@ export default function RepoPage({
                 key={s}
                 size="small"
                 className={`badge badge-${s}`}
-                label={`${STATE_LABELS[s] || s} ${count}`}
+                label={`${STATE_LABELS[s] || s} ${count}${countFloor && s === "closed" ? "+" : ""}`}
               />
             ))}
             {row.blocked > 0 && (
@@ -1460,7 +1474,8 @@ export default function RepoPage({
               },
             })}
           >
-            {row.total} task{row.total === 1 ? "" : "s"} filed here
+            {row.total}
+            {countFloor ? "+" : ""} task{row.total === 1 ? "" : "s"} filed here
           </Link>
           <Box sx={{ flex: 1 }} />
           <Button

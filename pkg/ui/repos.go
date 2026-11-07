@@ -1753,6 +1753,9 @@ func (c *Client) cleanRepoCICapabilities(ids []string) ([]string, error) {
 			if _, ok := c.capabilityByID(normalized); !ok {
 				return nil, validationErrorf("ciCapabilities: %s", capabilityRefusal(normalized))
 			}
+			if model.CapabilityGrantRef(normalized) == model.RepoCredentialRef {
+				return nil, validationErrorf("ciCapabilities: capability %q is not supported for CI", id)
+			}
 			canonicalID = normalized
 		} else if !slices.Contains(allowed, id) {
 			return nil, validationErrorf("ciCapabilities: capability %q is not supported for CI", id)

@@ -37,6 +37,7 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -845,30 +846,33 @@ func AutoSubmits(child, parent Task) bool {
 		LandsWhereGranted(child, parent)
 }
 
-// GitCredentialCapabilityPrefix marks a capability id as a per-task git
-// credential override: the named credential (gitproxy's
-// CredentialSet.Get) a sandbox's git proxy requests should use in place
-// of the owner/repo ladder, for a scope the ladder's own credentials
-// deliberately withhold (docs/design.md, "Scopes to withhold" --
-// `workflow`, most notably).
-//
-// One id per named credential a deployment has configured beyond its
-// default one, which is what makes each of those tokens a capability of
-// its own -- offered by ui.GitHubTokenCapabilities, provided by
-// pkg/capability/githubtoken, and attached to a task like any other.
+// GitCredentialCapabilityPrefix is the retired one-release alias prefix for a
+// per-task git credential override (now RepoCredentialGrant on the in-process
+// repo server, https://grain.dev/capabilities/repo#credential).
 const GitCredentialCapabilityPrefix = "github-credential:"
 
-// GitCredentialCapability is the capability id standing for "use the
-// GitHub token named name instead of this deployment's default one".
+// GitCredentialCapability is the canonical capability grant standing for "use
+// the GitHub credential named name instead of this deployment's default one":
+// RepoCredentialGrant(name).
 func GitCredentialCapability(name string) string {
-	return GitCredentialCapabilityPrefix + name
+	return RepoCredentialGrant(name)
 }
 
-// GitCredentialName is the credential a GitCredentialCapability id
-// names, and false for any other capability id.
-func GitCredentialName(capability string) (name string, ok bool) {
-	name, ok = strings.CutPrefix(capability, GitCredentialCapabilityPrefix)
+// LegacyGitCredentialName returns the credential name a retired
+// github-credential:<name> capability id names, and false for any other string.
+func LegacyGitCredentialName(capability string) (name string, ok bool) {
+	name, ok = strings.CutPrefix(strings.TrimSpace(capability), GitCredentialCapabilityPrefix)
 	return name, ok && name != ""
+}
+
+// GitCredentialName returns the credential name a git credential override grant
+// selects -- canonical RepoCredentialGrant or the one-release legacy
+// github-credential:<name> prefix -- and false for any other capability string.
+func GitCredentialName(capability string) (name string, ok bool) {
+	if name, ok := ParseRepoCredentialGrant(capability); ok {
+		return name, true
+	}
+	return LegacyGitCredentialName(capability)
 }
 
 // ReleaseGateReadCapability is the CI capability a release workflow's job
@@ -953,25 +957,51 @@ func GCPKeyGrant(name string) Grant {
 	return Grant{Capability: GCPKeyCapability(name), Via: GrantByLabel}
 }
 
-// gitCredentialOverride returns the credential name a GitCredentialGrant
-// among grants asks for, if any.
-//
-// A task holding more than one of these gets the first in grants' own
-// order -- which, coming from Store.GitCredentialOverride, is the
-// capability id sorted ascending, so the same task resolves to the same
-// token on every request rather than to whichever row was read first.
-// Picking a winner rather than refusing is deliberate: two named tokens
-// on one task is an odd thing to ask for, not a dangerous one (both are
-// credentials this deployment already trusts a task with), and failing
-// the run over it would be a worse answer than quietly using one of
-// them.
-func gitCredentialOverride(grants []Grant) (name string, ok bool) {
+// ErrConflictingGitCredentials is returned when a task holds more than one
+// distinct git credential override grant (repo#credential or legacy
+// github-credential:<name>).
+var ErrConflictingGitCredentials = errors.New("task holds conflicting git credential grants")
+
+// GitCredentialOverride returns the credential name a repo#credential (or
+// legacy github-credential:<name>) grant among grants selects, if any. If
+// grants hold more than one distinct git credential override, it returns
+// ErrConflictingGitCredentials rather than picking a winner silently.
+func GitCredentialOverride(grants []Grant) (name string, ok bool, err error) {
 	for _, g := range grants {
-		if n, isOverride := GitCredentialName(g.Capability); isOverride {
-			return n, true
+		n, isOverride := GitCredentialName(g.Capability)
+		if !isOverride {
+			if IsCapabilityRef(g.Capability) && CapabilityGrantRef(g.Capability) == RepoCredentialRef {
+				return "", false, fmt.Errorf("invalid %s grant %q", RepoCredentialRef, g.Capability)
+			}
+			continue
 		}
+		if !ValidGitCredentialName(n) {
+			return "", false, fmt.Errorf("invalid git credential name %q in grant %q", n, g.Capability)
+		}
+		if ok && n != name {
+			return "", false, fmt.Errorf("%w: %q and %q", ErrConflictingGitCredentials, name, n)
+		}
+		name = n
+		ok = true
 	}
-	return "", false
+	return name, ok, nil
+}
+
+// CheckConflictingGitCredentialNames refuses a capability list that names more
+// than one distinct git credential override with ErrConflictingGitCredentials.
+func CheckConflictingGitCredentialNames(names []string) error {
+	var first string
+	for _, raw := range names {
+		n, ok := GitCredentialName(raw)
+		if !ok {
+			continue
+		}
+		if first != "" && n != first {
+			return fmt.Errorf("%w: %q and %q", ErrConflictingGitCredentials, first, n)
+		}
+		first = n
+	}
+	return nil
 }
 
 // Lease is something minted for a task that must be given back.

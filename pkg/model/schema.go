@@ -572,13 +572,17 @@ import "strconv"
 // entries (model.AllowedPrincipal.Label and LastUsedAt,
 // design/design/authentication.design.md §6).
 //
-// 120 adds `admission` to `task`, `template` and `schedule`
+// 120 rewrites stored `github-credential:<name>` grants across the grant
+// tables, deployment and repository default/CI capabilities, console sessions,
+// and capability_policy to `https://grain.dev/capabilities/repo#credential={"credential":"<name>"}`.
+//
+// 121 adds `admission` to `task`, `template` and `schedule`
 // (model.Task.Admission, design/design/unified-grants.design.md §4.1) and
 // `default_admission` to `grain_config` and `repo_config`, moves every
 // stored `priority-dispatch` and `durable` grant into them -- the grant
 // tables, default capabilities and standing sessions -- and drops the
 // capability policy's entries for the two names.
-const SchemaVersion = 120
+const SchemaVersion = 121
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
