@@ -53,6 +53,8 @@ import {
   ListEmpty,
   ListHeader,
   RowLink,
+  TasksLoadError,
+  tasksLoadFailed,
 } from "./ListPrimitives.jsx";
 import NarrowingBar from "./NarrowingBar.jsx";
 import StateDot from "./StateDot.jsx";
@@ -122,6 +124,9 @@ import StateDot from "./StateDot.jsx";
 // grain/task-1253).
 export default function GanttChart({
   tasks,
+  tasksLoaded = true,
+  tasksError = null,
+  onRetry,
   config,
   narrowing,
   onNarrow,
@@ -198,6 +203,7 @@ export default function GanttChart({
   // what its blocker is doing even when the blocker is off the chart.
   const byId = new Map(tasks.map((t) => [t.id, t]));
 
+  const tasksFailed = tasksLoadFailed(tasks, tasksLoaded, tasksError);
   const Root = embedded || !landmark ? "div" : "main";
   return (
     <Root
@@ -206,7 +212,7 @@ export default function GanttChart({
       {!embedded && (
         <ListHeader
           title="Timeline"
-          count={shownTasks.length}
+          count={tasksFailed ? null : shownTasks.length}
           action={
             // Wraps: side by side the two pickers are wider than a
             // phone's header has room for, and .gantt clips its
@@ -255,7 +261,7 @@ export default function GanttChart({
           }
         />
       )}
-      {!embedded && tasks.length > 0 && (
+      {!tasksFailed && !embedded && tasks.length > 0 && (
         <NarrowingBar
           tasks={tasks}
           config={config}
@@ -264,91 +270,97 @@ export default function GanttChart({
         />
       )}
 
-      {notes.length > 0 && (
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          component="p"
-          className="gantt-off-note"
-        >
-          {notes.join(" ")}
-        </Typography>
-      )}
+      {tasksFailed ? (
+        <TasksLoadError error={tasksError} onRetry={onRetry} />
+      ) : (
+        <>
+          {notes.length > 0 && (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              component="p"
+              className="gantt-off-note"
+            >
+              {notes.join(" ")}
+            </Typography>
+          )}
 
-      <div className="gantt-body">
-        {/* The axis is drawn once, above the lanes, and the same tick
-            positions are re-used by the rules behind them -- so a label
-            and the line it names cannot drift apart. */}
-        <div className="gantt-scale">
-          <div className="gantt-scale-label">
-            {formatDateTime(chartWindow.from, zone)}
-          </div>
-          <div className="gantt-scale-track">
-            {ticks.map((tick) => (
-              <span
-                key={tick.at}
-                className={`gantt-tick${tick.day ? " gantt-tick-day" : ""}`}
-                style={{ left: `${tick.left}%` }}
-              >
-                {tick.label}
-              </span>
-            ))}
-          </div>
-        </div>
+          <div className="gantt-body">
+            {/* The axis is drawn once, above the lanes, and the same tick
+                positions are re-used by the rules behind them -- so a label
+                and the line it names cannot drift apart. */}
+            <div className="gantt-scale">
+              <div className="gantt-scale-label">
+                {formatDateTime(chartWindow.from, zone)}
+              </div>
+              <div className="gantt-scale-track">
+                {ticks.map((tick) => (
+                  <span
+                    key={tick.at}
+                    className={`gantt-tick${tick.day ? " gantt-tick-day" : ""}`}
+                    style={{ left: `${tick.left}%` }}
+                  >
+                    {tick.label}
+                  </span>
+                ))}
+              </div>
+            </div>
 
-        <div className="gantt-lanes">
-          {/* One rule per tick and the "now" line, behind every row at
-              once: a chart of 200 rows would otherwise draw 200 copies
-              of the same grid, and they are decoration a screen reader
-              has no use for. */}
-          <div className="gantt-grid" aria-hidden="true">
-            {ticks.map((tick) => (
-              <span
-                key={tick.at}
-                className={`gantt-rule${tick.day ? " gantt-rule-day" : ""}`}
-                style={{ left: `${tick.left}%` }}
-              />
-            ))}
-            {marker !== null && (
-              <span className="gantt-now" style={{ left: `${marker}%` }} />
-            )}
-          </div>
-
-          {lanes.map((lane) => (
-            <section key={lane.key || "all"} className="gantt-lane">
-              {lane.label && (
-                <header className="gantt-lane-header">
-                  <span className="gantt-lane-title">{lane.label}</span>
-                  <span className="count">{lane.tasks.length}</span>
-                </header>
-              )}
-              <ul className="gantt-rows">
-                {lane.tasks.map((t) => (
-                  <GanttRow
-                    key={t.id}
-                    task={t}
-                    span={spans.get(t.id)}
-                    window={chartWindow}
-                    now={now}
-                    zone={zone}
-                    byId={byId}
-                    onOpenTask={onOpenTask}
+            <div className="gantt-lanes">
+              {/* One rule per tick and the "now" line, behind every row at
+                  once: a chart of 200 rows would otherwise draw 200 copies
+                  of the same grid, and they are decoration a screen reader
+                  has no use for. */}
+              <div className="gantt-grid" aria-hidden="true">
+                {ticks.map((tick) => (
+                  <span
+                    key={tick.at}
+                    className={`gantt-rule${tick.day ? " gantt-rule-day" : ""}`}
+                    style={{ left: `${tick.left}%` }}
                   />
                 ))}
-              </ul>
-            </section>
-          ))}
-        </div>
-      </div>
+                {marker !== null && (
+                  <span className="gantt-now" style={{ left: `${marker}%` }} />
+                )}
+              </div>
 
-      {tasks.length > 0 && shownTasks.length === 0 && (
-        <ListEmpty>
-          {isNarrowed(narrowing)
-            ? "No tasks match this search and these filters in this range."
-            : "No tasks in this range. Try a wider one."}
-        </ListEmpty>
+              {lanes.map((lane) => (
+                <section key={lane.key || "all"} className="gantt-lane">
+                  {lane.label && (
+                    <header className="gantt-lane-header">
+                      <span className="gantt-lane-title">{lane.label}</span>
+                      <span className="count">{lane.tasks.length}</span>
+                    </header>
+                  )}
+                  <ul className="gantt-rows">
+                    {lane.tasks.map((t) => (
+                      <GanttRow
+                        key={t.id}
+                        task={t}
+                        span={spans.get(t.id)}
+                        window={chartWindow}
+                        now={now}
+                        zone={zone}
+                        byId={byId}
+                        onOpenTask={onOpenTask}
+                      />
+                    ))}
+                  </ul>
+                </section>
+              ))}
+            </div>
+          </div>
+
+          {tasks.length > 0 && shownTasks.length === 0 && (
+            <ListEmpty>
+              {isNarrowed(narrowing)
+                ? "No tasks match this search and these filters in this range."
+                : "No tasks in this range. Try a wider one."}
+            </ListEmpty>
+          )}
+          {tasks.length === 0 && <ListEmpty>No tasks yet.</ListEmpty>}
+        </>
       )}
-      {tasks.length === 0 && <ListEmpty>No tasks yet.</ListEmpty>}
     </Root>
   );
 }
