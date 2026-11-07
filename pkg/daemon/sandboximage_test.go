@@ -428,9 +428,7 @@ if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
 fi
 exit 0
 `
-	if err := os.WriteFile(dockerScript, []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake docker: %v", err)
-	}
+	writeExecutableStub(t, dockerScript, script)
 	savedDocker := sandboxMirrorDockerCmd
 	savedToken := sandboxMirrorTokenSource
 	sandboxMirrorDockerCmd = []string{dockerScript}
@@ -506,9 +504,7 @@ if [ "$1" = push ]; then
 fi
 exit 0
 `
-	if err := os.WriteFile(dir+"/docker", []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake docker: %v", err)
-	}
+	writeExecutableStub(t, dir+"/docker", script)
 	savedDocker, savedToken, savedRemote := sandboxMirrorDockerCmd, sandboxMirrorTokenSource, sandboxMirrorRegistryDigest
 	sandboxMirrorDockerCmd = []string{dir + "/docker"}
 	sandboxMirrorTokenSource = nil
