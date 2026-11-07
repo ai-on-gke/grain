@@ -112,10 +112,16 @@ func TestViewerRoleReadsButIsRefusedWrites(t *testing.T) {
 	if rec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPatch, "/api/tasks/1", `{"title":"renamed"}`, hdr); rec.Code != http.StatusForbidden {
 		t.Fatalf("viewer PATCH as task 2: %d %s, want 403", rec.Code, rec.Body)
 	}
-	// Limited roles never reach the MCP endpoint, whose tools dispatch to
-	// many routes.
-	if code, _ := h.call("viv@example.com", http.MethodPost, "/api/mcp", `{}`); code != http.StatusForbidden {
-		t.Fatalf("viewer POST /api/mcp: %d, want 403", code)
+	// Over POST /api/mcp, a viewer can call read tools and is refused write
+	// tools with the missing scope named.
+	if out, isErr := callControllerTool(t, h.srv, h.as("viv@example.com"), ui.ToolGrainListTasks, nil); isErr || !strings.Contains(out, `"id":"1"`) {
+		t.Fatalf("viewer grain_list_tasks: isErr=%v out=%s", isErr, out)
+	}
+	if out, isErr := callControllerTool(t, h.srv, h.as("viv@example.com"), ui.ToolGrainInvoke, map[string]any{
+		"tool":      "api_add_comment",
+		"arguments": map[string]any{"id": "1", "body": map[string]any{"body": "nope"}},
+	}); !isErr || !strings.Contains(out, "tasks:write") || !strings.Contains(out, "role grain/viewer") {
+		t.Fatalf("viewer grain_invoke api_add_comment: isErr=%v out=%s, want refusal naming tasks:write and role grain/viewer", isErr, out)
 	}
 
 	got := h.access(t, "viv@example.com")
@@ -633,5 +639,221 @@ func TestStandingWorkAndFromTemplateHoldLimitedRolesToTheirScopes(t *testing.T) 
 	if code, body := h.call("vetoed@example.com", http.MethodPost, "/api/tasks",
 		`{"repo":"acme/widgets","title":"leak","capabilities":["api:secrets:read"]}`); code != http.StatusForbidden || !strings.Contains(body, "capabilities") {
 		t.Fatalf("vetoed role granting denied scope = %d %s, want 403 naming capabilities", code, body)
+	}
+}
+
+func TestMCPPerToolRoleChecks(t *testing.T) {
+	ctx := context.Background()
+	installScopeSets(t,
+		model.APIScopeSet{
+			Name:    "widgets-contrib",
+			Scopes:  []string{"tasks:read", "tasks:write", "templates:read"},
+			Repos:   []string{"acme/widgets"},
+			Version: 1,
+		},
+		model.APIScopeSet{
+			Name:    "ci-only",
+			Scopes:  []string{"ci:read"},
+			Version: 1,
+		},
+	)
+
+	h := newRoleHarness(t)
+	h.allow(t, "user:viv@example.com", "grain/viewer")
+	h.allow(t, "user:connie@example.com", "grain/contributor")
+	h.allow(t, "user:walt@example.com", "widgets-contrib")
+	h.allow(t, "user:ned@example.com", "ci-only")
+
+	seedAPITask(t, h.client, "1", "acme/widgets")
+	seedAPITask(t, h.client, "2", "acme/gadgets")
+	seedAPITask(t, h.client, "3", "acme/widgets", "api:task-admin")
+
+	if err := h.client.Store.PutTemplate(ctx, model.Template{
+		ID:     "tmpl-widgets",
+		Name:   "widgets-tmpl",
+		Title:  "widgets",
+		Target: &model.RepoRef{Owner: "acme", Name: "widgets"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.client.Store.PutTemplate(ctx, model.Template{
+		ID:     "tmpl-gadgets",
+		Name:   "gadgets-tmpl",
+		Title:  "gadgets",
+		Target: &model.RepoRef{Owner: "acme", Name: "gadgets"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. grain/viewer on POST /api/mcp: read tools succeed, write/admin tools
+	// are omitted from discovery and refused on invocation naming the missing scope.
+	exploreOut, isErr := callControllerTool(t, h.srv, h.as("viv@example.com"), ui.ToolGrainExploreScope, map[string]any{
+		"scope": "all",
+		"view":  "index",
+	})
+	if isErr {
+		t.Fatalf("viewer grain_explore_scope: %s", exploreOut)
+	}
+	if !strings.Contains(exploreOut, "api_list_tasks") || !strings.Contains(exploreOut, "api_get_settings") {
+		t.Fatalf("viewer explore missing read tools: %s", exploreOut)
+	}
+	for _, writeTool := range []string{"api_add_comment", "api_create_task", "api_update_settings", "api_approve", "api_delete_board"} {
+		if strings.Contains(exploreOut, writeTool) {
+			t.Errorf("viewer explore leaked unauthorized tool %q: %s", writeTool, exploreOut)
+		}
+	}
+
+	if out, isErr := callControllerTool(t, h.srv, h.as("viv@example.com"), ui.ToolGrainGetTask, map[string]any{"id": "1"}); isErr || !strings.Contains(out, "Task 1") {
+		t.Fatalf("viewer grain_get_task: isErr=%v out=%s", isErr, out)
+	}
+	if out, isErr := callControllerTool(t, h.srv, h.as("viv@example.com"), ui.ToolGrainFilingContext, nil); isErr || !strings.Contains(out, "templates") {
+		t.Fatalf("viewer grain_filing_context: isErr=%v out=%s", isErr, out)
+	}
+	if out, isErr := callControllerTool(t, h.srv, h.as("viv@example.com"), ui.ToolGrainInvoke, map[string]any{
+		"tool": "api_get_settings",
+	}); isErr {
+		t.Fatalf("viewer grain_invoke api_get_settings: %s", out)
+	}
+
+	if out, isErr := callControllerTool(t, h.srv, h.as("viv@example.com"), ui.ToolGrainSubmitTask, map[string]any{
+		"title": "attempt write",
+		"repo":  "acme/widgets",
+	}); !isErr || !strings.Contains(out, "tasks:write") || !strings.Contains(out, "role grain/viewer") {
+		t.Fatalf("viewer grain_submit_task: isErr=%v out=%s, want refusal naming tasks:write and role grain/viewer", isErr, out)
+	}
+
+	for _, tc := range []struct {
+		tool      string
+		args      map[string]any
+		wantScope string
+	}{
+		{
+			tool: "api_add_comment",
+			args: map[string]any{
+				"id":     "1",
+				"body":   map[string]any{"body": "hello"},
+				"expect": map[string]any{"state": "closed"},
+			},
+			wantScope: "tasks:write",
+		},
+		{
+			tool:      "api_update_settings",
+			args:      map[string]any{"body": map[string]any{}},
+			wantScope: "settings:write",
+		},
+		{
+			tool:      "api_approve",
+			args:      map[string]any{"id": "1"},
+			wantScope: "tasks:admin",
+		},
+		{
+			tool:      "api_delete_board",
+			args:      map[string]any{"id": "b1"},
+			wantScope: "boards:write",
+		},
+	} {
+		out, isErr := callControllerTool(t, h.srv, h.as("viv@example.com"), ui.ToolGrainInvoke, map[string]any{
+			"tool":      tc.tool,
+			"arguments": tc.args,
+		})
+		if !isErr || !strings.Contains(out, tc.wantScope) || !strings.Contains(out, "role grain/viewer") {
+			t.Errorf("viewer grain_invoke %s: isErr=%v out=%s, want refusal naming %s and role grain/viewer", tc.tool, isErr, out, tc.wantScope)
+		}
+		if strings.Contains(out, "expect:") {
+			t.Errorf("viewer grain_invoke %s leaked expect check before role check: %s", tc.tool, out)
+		}
+	}
+
+	// X-Grain-Acting-Task cannot widen a viewer's role on POST /api/mcp.
+	actingHdr := h.as("viv@example.com")
+	actingHdr[ui.ActingTaskHeader] = "3"
+	if out, isErr := callControllerTool(t, h.srv, actingHdr, ui.ToolGrainInvoke, map[string]any{
+		"tool":      "api_add_comment",
+		"arguments": map[string]any{"id": "1", "body": map[string]any{"body": "escalate"}},
+	}); !isErr || !strings.Contains(out, "tasks:write") || !strings.Contains(out, "role grain/viewer") {
+		t.Fatalf("viewer + acting task 3 api_add_comment: isErr=%v out=%s", isErr, out)
+	}
+
+	// 2. Repo-limited and contributor escalations over POST /api/mcp.
+	if out, isErr := callControllerTool(t, h.srv, h.as("walt@example.com"), ui.ToolGrainGetTask, map[string]any{"id": "1"}); isErr {
+		t.Fatalf("widgets-contrib grain_get_task(1): %s", out)
+	}
+	if out, isErr := callControllerTool(t, h.srv, h.as("walt@example.com"), ui.ToolGrainGetTask, map[string]any{"id": "2"}); !isErr || !strings.Contains(out, "acme/gadgets") {
+		t.Fatalf("widgets-contrib grain_get_task(2): isErr=%v out=%s, want 403 naming acme/gadgets", isErr, out)
+	}
+	if out, isErr := callControllerTool(t, h.srv, h.as("walt@example.com"), ui.ToolGrainInvoke, map[string]any{
+		"tool": "api_add_comment",
+		"arguments": map[string]any{
+			"id":     "2",
+			"body":   map[string]any{"body": "wrong repo"},
+			"expect": map[string]any{"state": "closed"},
+		},
+	}); !isErr || !strings.Contains(out, "acme/gadgets") || strings.Contains(out, "expect:") {
+		t.Fatalf("widgets-contrib api_add_comment on acme/gadgets with expect: isErr=%v out=%s", isErr, out)
+	}
+	fcOut, isErr := callControllerTool(t, h.srv, h.as("walt@example.com"), ui.ToolGrainFilingContext, nil)
+	if isErr {
+		t.Fatalf("widgets-contrib grain_filing_context: %s", fcOut)
+	}
+	if !strings.Contains(fcOut, "tmpl-widgets") || strings.Contains(fcOut, "tmpl-gadgets") || strings.Contains(fcOut, `"boards"`) || strings.Contains(fcOut, `"capabilities"`) {
+		t.Fatalf("widgets-contrib grain_filing_context leaked out-of-scope sections/repos: %s", fcOut)
+	}
+
+	if out, isErr := callControllerTool(t, h.srv, h.as("ned@example.com"), ui.ToolGrainFilingContext, nil); !isErr || !strings.Contains(out, "tasks:read") || !strings.Contains(out, "role ci-only") {
+		t.Fatalf("ci-only grain_filing_context: isErr=%v out=%s, want refusal naming tasks:read and role ci-only", isErr, out)
+	}
+
+	if out, isErr := callControllerTool(t, h.srv, h.as("connie@example.com"), ui.ToolGrainSubmitTask, map[string]any{
+		"title":   "approved task",
+		"repo":    "acme/widgets",
+		"approve": true,
+	}); !isErr || !strings.Contains(out, "tasks:admin") {
+		t.Fatalf("contributor grain_submit_task(approve=true): isErr=%v out=%s, want tasks:admin refusal", isErr, out)
+	}
+	if out, isErr := callControllerTool(t, h.srv, h.as("connie@example.com"), ui.ToolGrainSubmitTask, map[string]any{
+		"title":   "proposed task",
+		"repo":    "acme/widgets",
+		"approve": false,
+	}); isErr || !strings.Contains(out, `"approved":false`) {
+		t.Fatalf("contributor grain_submit_task(approve=false): isErr=%v out=%s", isErr, out)
+	}
+
+	// 3. POST /mcp behind IAP with a viewer session and a wider gma_ token:
+	// tools/list filters out write tools, read calls succeed, write calls fail
+	// naming the missing scope and role.
+	enableExternalAgentAPI(t, h.client.Store)
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	issued, err := h.client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+		Name:     "contrib-bot",
+		ScopeSet: "grain/contributor",
+		Owner:    "operator@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mcpHeaders := h.as("viv@example.com")
+	mcpHeaders["Authorization"] = "Bearer " + issued.Token
+
+	listRec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, "/mcp",
+		`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`, mcpHeaders)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("viewer POST /mcp tools/list: %d %s", listRec.Code, listRec.Body.String())
+	}
+	listBody := listRec.Body.String()
+	if !strings.Contains(listBody, "api_list_tasks") || strings.Contains(listBody, "api_add_comment") {
+		t.Fatalf("viewer POST /mcp tools/list = %s, want api_list_tasks without api_add_comment", listBody)
+	}
+
+	readRec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, "/mcp",
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"api_list_tasks","arguments":{}}}`, mcpHeaders)
+	if readRec.Code != http.StatusOK || strings.Contains(readRec.Body.String(), `"isError":true`) || !strings.Contains(readRec.Body.String(), `\"id\":\"2\"`) {
+		t.Fatalf("viewer POST /mcp api_list_tasks: %d %s", readRec.Code, readRec.Body.String())
+	}
+
+	writeRec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, "/mcp",
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"api_add_comment","arguments":{"id":"1","body":{"body":"nope"}}}}`, mcpHeaders)
+	if writeRec.Code != http.StatusOK || !strings.Contains(writeRec.Body.String(), `"isError":true`) ||
+		!strings.Contains(writeRec.Body.String(), "tasks:write") || !strings.Contains(writeRec.Body.String(), "role grain/viewer") {
+		t.Fatalf("viewer POST /mcp api_add_comment: %d %s, want tool error naming tasks:write and role grain/viewer", writeRec.Code, writeRec.Body.String())
 	}
 }

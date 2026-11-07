@@ -853,7 +853,11 @@ Who the caller is decides what `grain_explore_scope` shows and
 - A person, or a BYO harness on their behalf, authenticates as for any
   other route -- the IAP identity, the access code as a bearer token, or
   the access code in `X-Grain-Access-Code` when an upstream proxy owns
-  `Authorization` -- and reaches every route that is not internal.
+  `Authorization` -- and reaches every non-internal route their role
+  allows (every non-internal route for the access code or
+  `grain/operator`; limited roles see and invoke only the scopes and
+  repositories their role covers, with refusals naming the missing
+  scope).
 
 Every `grain_invoke` re-enters the route table through the same gate
 the REST call would, so the attribution, audit row and rails are the

@@ -686,6 +686,10 @@ func (s *Server) handleRevokeAllExternalAgentTokens(w http.ResponseWriter, r *ht
 // ExternalAgentAPITools returns the MCP tools of every agent API route that tok's
 // resolved scopes reach and that does not depend on a calling task context.
 func ExternalAgentAPITools(s *Server, tok *model.ExternalAgentToken) ([]mcp.Tool, error) {
+	return externalAgentAPITools(s, tok, nil)
+}
+
+func externalAgentAPITools(s *Server, tok *model.ExternalAgentToken, role *accessRole) ([]mcp.Tool, error) {
 	if tok == nil {
 		return nil, nil
 	}
@@ -702,6 +706,9 @@ func ExternalAgentAPITools(s *Server, tok *model.ExternalAgentToken) ([]mcp.Tool
 			continue
 		}
 		if !set.Has(route.Scope) && !tasksAdminAllowsTaskPatch(set, route.Pattern) && !capabilitiesDetachAllowsRoute(set, route.Pattern) {
+			continue
+		}
+		if !roleAllowsMCPRoute(role, route) {
 			continue
 		}
 		tools = append(tools, route.externalTool(s, tok))
@@ -770,7 +777,11 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tools, err := ExternalAgentAPITools(s, tok)
+	var listRole *accessRole
+	if probe.Method == "tools/list" {
+		listRole = accessRoleFromContext(r.Context())
+	}
+	tools, err := externalAgentAPITools(s, tok, listRole)
 	if err != nil {
 		writeError(w, http.StatusForbidden, err)
 		return
