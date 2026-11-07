@@ -251,9 +251,7 @@ func TestAgyModelListerUsesHostdWhenAgyRunsOnHostAndContainerOtherwise(t *testin
 		"--help) echo '  --effort  Reasoning effort for the current CLI session (low|medium|high)' ;;\n" +
 		"models) printf 'Fetching available models...\\ngemini-3.1-pro-high\\tGemini 3.1 Pro (High)\\n' ;;\n" +
 		"esac\n"
-	if err := os.WriteFile(hostAgy, []byte(hostScript), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	writeExecutableStub(t, hostAgy, hostScript)
 
 	// The container's own agy has no ambient corp login: when asked under
 	// ambient auth it refuses with "Please sign in", and when given an API
@@ -273,9 +271,7 @@ func TestAgyModelListerUsesHostdWhenAgyRunsOnHostAndContainerOtherwise(t *testin
 		"  printf 'Fetching available models...\\ngemini-3.8-flash-low\\tGemini 3.8 Flash (Low)\\n'\n" +
 		"  ;;\n" +
 		"esac\n"
-	if err := os.WriteFile(containerAgy, []byte(containerScript), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	writeExecutableStub(t, containerAgy, containerScript)
 
 	allowPath := filepath.Join(dir, "hostd.yaml")
 	allowYAML := fmt.Sprintf("clis:\n  agy:\n    path: %s\n    paths_under: [%s]\n    cwd_under: [%s]\n    env: [HOME, AGY_CLI_DISABLE_AUTO_UPDATE, GEMINI_API_KEY, GOOGLE_API_KEY]\n",
@@ -593,9 +589,7 @@ func TestBuildCodexFrameworkDetachedSharesAuthFileAndDefersMCPServer(t *testing.
 		t.Fatal(err)
 	}
 	fakeCodex := filepath.Join(t.TempDir(), "codex")
-	if err := os.WriteFile(fakeCodex, []byte("#!/bin/sh\n"+`if [ "$1 $2" = "debug models" ]; then echo '{"models":[{"slug":"gpt-test"}]}'; exit 0; fi`+"\necho 'codex-cli "+codex.ReviewedCLIVersion+"'\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeExecutableStub(t, fakeCodex, "#!/bin/sh\n"+`if [ "$1 $2" = "debug models" ]; then echo '{"models":[{"slug":"gpt-test"}]}'; exit 0; fi`+"\necho 'codex-cli "+codex.ReviewedCLIVersion+"'\n")
 	allowlist := fmt.Sprintf("clis:\n  codex-detached:\n    path: %s\n    env: [CODEX_HOME, CODEX_EXEC_SERVER_URL, OPENAI_API_KEY]\n    paths_under: [%%[2]s, %s, %s]\n    cwd_under: [%%[2]s, %s]\n# %%[1]s\n", fakeCodex, dataDir, os.TempDir(), os.TempDir())
 	socket := startTestHostd(t, allowlist)
 	t.Setenv("TMPDIR", t.TempDir())
