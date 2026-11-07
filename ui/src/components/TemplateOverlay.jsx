@@ -55,6 +55,7 @@ import {
   NO_CAPABILITIES_HINT,
   targetableRepos,
 } from "../state.js";
+import AccessGate from "./AccessGate.jsx";
 
 // TemplateOverlay is a template's own sub page (bwsalmon/agents#545):
 // "+ New" on the Processes page (ProcessesList) opens this blank, and clicking
@@ -545,20 +546,26 @@ function TemplateOverlay({
           sx={{ mt: 2 }}
         >
           {!isNew && (
-            <Button color="error" onClick={remove} disabled={locked}>
-              Delete
-            </Button>
+            <AccessGate scope="templates:write" repo={repo}>
+              <Button color="error" onClick={remove} disabled={locked}>
+                Delete
+              </Button>
+            </AccessGate>
           )}
           <Stack direction="row" spacing={1}>
             {!isNew && onNewTask && (
-              <Button onClick={() => onNewTask(template)}>
-                New task from this template
-              </Button>
+              <AccessGate scope="tasks:write" repo={repo}>
+                <Button onClick={() => onNewTask(template)}>
+                  New task from this template
+                </Button>
+              </AccessGate>
             )}
             <Button onClick={onClose}>{locked ? "Close" : "Cancel"}</Button>
-            <Button type="submit" variant="contained" disabled={locked}>
-              {isNew ? "Add template" : "Save"}
-            </Button>
+            <AccessGate scope="templates:write" repo={repo}>
+              <Button type="submit" variant="contained" disabled={locked}>
+                {isNew ? "Add template" : "Save"}
+              </Button>
+            </AccessGate>
           </Stack>
         </Stack>
       </form>
