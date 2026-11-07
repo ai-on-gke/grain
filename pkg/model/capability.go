@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/secrets"
@@ -66,6 +67,22 @@ func (p Placement) EffectiveMode() string {
 		return "600"
 	}
 	return p.Mode
+}
+
+// ProtocolMode is EffectiveMode as the four octal digits a capability
+// protocol placement carries (protocol.Placement.Mode, "0600"), whichever
+// form the provider wrote it in: "600" and "0600" are the same mode, and
+// both are written, so prefixing a "0" is not enough (package-publish's
+// docker credential helper is "0755", which became "00755" and failed the
+// whole mint -- docs/test-runs/2026-11-04-capabilities.md, F5). A mode that
+// does not parse is passed on with the "0" prefix, for the protocol's own
+// validation to refuse as before.
+func (p Placement) ProtocolMode() string {
+	m := p.EffectiveMode()
+	if v, err := strconv.ParseUint(m, 8, 32); err == nil && v <= 0o7777 {
+		return fmt.Sprintf("%04o", v)
+	}
+	return "0" + m
 }
 
 // Resolution is Resolve's answer. The zero value is Honoured, because

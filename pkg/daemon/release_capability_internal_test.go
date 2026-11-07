@@ -280,7 +280,12 @@ func TestReleaseServerRulesCannotBeLoosenedByPolicy(t *testing.T) {
 func TestCIJobMintsAnInProcessReleaseGrantWithOnlyTheAttachedRegistry(t *testing.T) {
 	t.Cleanup(func() { release.Configure(packagepublish.Config{}) })
 	ladder := releaseTestLadder{}
-	release.Configure(packagepublish.Config{Credentials: ladder})
+	// As the daemon configures it (configureCapabilities): with the
+	// refresh route, whose docker credential helper is placed "0755" --
+	// the four-digit form a "0" prefix turned into "00755", which the
+	// protocol refused for the whole mint (F5).
+	release.Configure(packagepublish.Config{Credentials: ladder, Refresh: packagepublish.NewRefresher(),
+		RefreshURL: func() string { return "http://10.0.0.1:4242" }})
 	registry := servers.New(servers.Options{})
 	t.Cleanup(registry.Close)
 	g := &CiGrantReservations{
@@ -301,6 +306,16 @@ func TestCIJobMintsAnInProcessReleaseGrantWithOnlyTheAttachedRegistry(t *testing
 	pass := g.Pass(req.Name)
 	if pass == nil || len(pass.Placements()) == 0 {
 		t.Fatalf("pass = %+v, want the package-publish files", pass)
+	}
+	modes := map[string]string{}
+	for _, p := range pass.Placements() {
+		modes[p.Path] = p.Mode
+	}
+	if got := modes[packagepublish.HelperPath]; got != "0755" {
+		t.Errorf("%s mode = %q, want 0755 (placements %v)", packagepublish.HelperPath, got, modes)
+	}
+	if got := modes[packagepublish.RefreshTokenPath]; got != "0600" {
+		t.Errorf("%s mode = %q, want 0600", packagepublish.RefreshTokenPath, got)
 	}
 
 	// With no registry at all, an in-process grant still mints, and an
