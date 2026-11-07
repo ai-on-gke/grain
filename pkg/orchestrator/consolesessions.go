@@ -700,6 +700,7 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 	configTitle := model.ConsoleSessionTitle(session)
 	configNetwork := consoleSessionNetworkAccess(deps, session)
 	configModel := strings.TrimSpace(session.Model)
+	configHosting := model.NormalizeHosting(session.Hosting)
 	stateRepo := deps.Config.settingsRepo()
 
 	if !hasPrev {
@@ -712,6 +713,7 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 			Title:           configTitle,
 			TasksApproved:   session.TasksApproved,
 			KeepRunning:     session.KeepRunning,
+			Hosting:         session.Hosting,
 			GoogleChatSpace: session.GoogleChatSpace,
 		}
 	}
@@ -723,6 +725,10 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 	keepRunning := task.KeepRunning
 	if !hasPrev || session.KeepRunning != prev.KeepRunning {
 		keepRunning = session.KeepRunning
+	}
+	hosting := model.NormalizeHosting(task.Hosting)
+	if !hasPrev || configHosting != model.NormalizeHosting(prev.Hosting) {
+		hosting = configHosting
 	}
 	effectiveSession := session
 	effectiveSession.Title = title
@@ -798,6 +804,7 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 		Title:           configTitle,
 		TasksApproved:   session.TasksApproved,
 		KeepRunning:     session.KeepRunning,
+		Hosting:         session.Hosting,
 		GoogleChatSpace: session.GoogleChatSpace,
 		OfferedDefaults: offeredDefaults,
 		AutoReads:       autoReads,
@@ -831,6 +838,7 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 	}
 	if task.Title == title && task.Body == body && task.NetworkAccess == network &&
 		task.Admission == model.AdmissionDurable &&
+		model.NormalizeHosting(task.Hosting) == hosting &&
 		task.Model == chosenModel && task.KeepRunning == keepRunning &&
 		slices.Equal(task.Grants, grants) &&
 		slices.Equal(taskReads, reads) &&
@@ -863,6 +871,7 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 		t.Title = title
 		t.Body = body
 		t.Admission = model.AdmissionDurable
+		t.Hosting = hosting
 		t.Grants = grants
 		t.NetworkAccess = network
 		t.KeepRunning = keepRunning
@@ -897,6 +906,7 @@ func consoleSessionTaskMoved(fresh, read model.Task) bool {
 		fresh.NetworkAccess != read.NetworkAccess ||
 		fresh.Model != read.Model ||
 		fresh.KeepRunning != read.KeepRunning ||
+		model.NormalizeHosting(fresh.Hosting) != model.NormalizeHosting(read.Hosting) ||
 		fresh.AutoApproveProposals != read.AutoApproveProposals ||
 		!slices.EqualFunc(fresh.Grants, read.Grants, sameConsoleSessionGrant) ||
 		!slices.Equal(fresh.Reads, read.Reads) ||
@@ -944,6 +954,7 @@ func consoleSessionEqual(a, b model.ConsoleSession) bool {
 		a.NetworkAccess == b.NetworkAccess &&
 		a.TasksApproved == b.TasksApproved &&
 		a.KeepRunning == b.KeepRunning &&
+		model.NormalizeHosting(a.Hosting) == model.NormalizeHosting(b.Hosting) &&
 		a.GoogleChatSpace == b.GoogleChatSpace &&
 		a.Model == b.Model &&
 		(a.ReadsAll == nil) == (b.ReadsAll == nil) &&
@@ -960,6 +971,7 @@ func consoleSessionSnapshotEqual(a, b model.ConsoleSessionConfigSnapshot) bool {
 		a.Title == b.Title &&
 		a.TasksApproved == b.TasksApproved &&
 		a.KeepRunning == b.KeepRunning &&
+		model.NormalizeHosting(a.Hosting) == model.NormalizeHosting(b.Hosting) &&
 		a.GoogleChatSpace == b.GoogleChatSpace &&
 		slices.Equal(a.Capabilities, b.Capabilities) &&
 		slices.Equal(a.Reads, b.Reads) &&
@@ -985,6 +997,9 @@ func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSessi
 
 	for _, g := range current {
 		if _, isLegacyAdm := model.LegacyAdmissionAlias(g.Capability); isLegacyAdm {
+			continue
+		}
+		if _, isLegacyHost := model.LegacyHostingAlias(g.Capability); isLegacyHost {
 			continue
 		}
 		if g.Capability == "" || seen[g.Capability] {
@@ -1025,6 +1040,9 @@ func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSessi
 	for _, name := range session.Capabilities {
 		name = strings.TrimSpace(name)
 		if _, isLegacyAdm := model.LegacyAdmissionAlias(name); isLegacyAdm {
+			continue
+		}
+		if _, isLegacyHost := model.LegacyHostingAlias(name); isLegacyHost {
 			continue
 		}
 		if name == "" || seen[name] {

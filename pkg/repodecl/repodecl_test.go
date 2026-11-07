@@ -896,6 +896,53 @@ func TestDeclaredAdmissionAndLegacyCapabilityAliases(t *testing.T) {
 	}
 }
 
+func TestDeclaredHostingAndLegacyCapabilityAlias(t *testing.T) {
+	declared := load(t, map[string]string{
+		".grain/templates/shell.yml":  "title: Shell\nhosting: console\n",
+		".grain/templates/legacy.yml": "title: Legacy\ncapabilities:\n  - console\n",
+		".grain/schedules/shell.yml":  "template: shell\nevery:\n  hours: 2\nhosting: console\n",
+		".grain/schedules/legacy.yml": "template: legacy\nevery:\n  hours: 4\ncapabilities:\n  - console\n",
+	})
+	tmpls := map[string]model.Template{}
+	for _, f := range declared.Templates {
+		tmpls[f.Template.Name] = f.Template
+	}
+	if tmpls["shell"].Hosting != model.HostingConsole {
+		t.Errorf("shell template Hosting = %q, want %q", tmpls["shell"].Hosting, model.HostingConsole)
+	}
+	if tmpls["legacy"].Hosting != model.HostingConsole || len(tmpls["legacy"].Grants) != 0 {
+		t.Errorf("legacy template = (%q, %+v), want (console, empty grants)", tmpls["legacy"].Hosting, tmpls["legacy"].Grants)
+	}
+	scheds := map[string]model.Schedule{}
+	for _, f := range declared.Schedules {
+		scheds[f.Schedule.Title] = f.Schedule
+	}
+	if scheds["shell"].Hosting != model.HostingConsole {
+		t.Errorf("shell schedule Hosting = %q, want %q", scheds["shell"].Hosting, model.HostingConsole)
+	}
+	if scheds["legacy"].Hosting != model.HostingConsole || len(scheds["legacy"].Grants) != 0 {
+		t.Errorf("legacy schedule = (%q, %+v), want (console, empty grants)", scheds["legacy"].Hosting, scheds["legacy"].Grants)
+	}
+
+	if msg := loadErr(t, map[string]string{
+		".grain/templates/bad.yml": "title: Bad\nhosting: ssh\n",
+	}); !strings.Contains(msg, "hosting") {
+		t.Errorf("invalid template hosting error = %q, want mention of hosting", msg)
+	}
+	if msg := loadErr(t, map[string]string{
+		".grain/suites/nightly.yml":  "name: Nightly\ntemplates: [shell]\n",
+		".grain/templates/shell.yml": "title: Shell\n",
+		".grain/schedules/bad.yml":   "suite: nightly\nbase: main\nevery:\n  hours: 24\nhosting: console\n",
+	}); !strings.Contains(msg, "hosting") {
+		t.Errorf("suite schedule hosting error = %q, want refusal of hosting", msg)
+	}
+	if msg := loadErr(t, map[string]string{
+		".grain/settings.yml": "default-hosting: console\n",
+	}); !strings.Contains(msg, "default-hosting") {
+		t.Errorf("repo default-hosting error = %q, want refusal of default-hosting", msg)
+	}
+}
+
 // A .grain template or schedule that declares `capabilities: [grain-ci]` (or
 // its canonical grain#ci ref) wants read-only CI access to its own declaring
 // repository: grain#ci itself is stripped by applyGrainCIGrant on a

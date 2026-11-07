@@ -337,6 +337,8 @@ func MergeTaskEvents(ts []Transition, events []TaskEvent) []Transition {
 			state = TransitionOwnerChanged
 		case TaskEventAdmissionChanged:
 			state = TransitionAdmissionChanged
+		case TaskEventHostingChanged:
+			state = TransitionHostingChanged
 		case TaskEventHumanReviewRequested:
 			state = TransitionHumanReviewRequested
 		case TaskEventHumanReviewReleased:

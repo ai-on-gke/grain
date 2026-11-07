@@ -247,16 +247,20 @@ func writeRedRCSection(b *strings.Builder) {
 	b.WriteString("1. **Triage `<floor>..<rc_sha>`.** Read the failing items' tasks and logs the " +
 		"notification names, then `git log --first-parent` over the range it gives (from `rc.2` on, " +
 		"start with its \"new since\" range). Name the merge you suspect and the evidence for it. A " +
-		"failure that reads as infrastructure or a flake is not a regression, so file nothing for it.\n")
-	b.WriteString("2. **File the fix or the revert, high priority.** For each suspect, `propose_task` a " +
+		"failure that reads as infrastructure or a flake is not a regression, so file nothing for it " +
+		"and name `<rc_tag>` in your closing report so grain completes the triage hold.\n")
+	b.WriteString("2. **File the fix or the revert, high priority.** As soon as qualification fails, " +
+		"grain posts check run `" + ReleaseHoldCheckName + "` in progress on the red candidate's commit " +
+		"while triage is pending, so `rc.(N+1)` is not cut before your wake finishes. For each suspect, `propose_task` a " +
 		"revert, or a fix where a revert would lose more than it saves. Target `main`, pass " +
 		"`at_front: true` (a priority above your own waits for a person), and start the title with `" +
-		marker + "` exactly. That title is the hold. While any task with it is open, grain keeps check " +
+		marker + "` exactly. That title keeps the hold. While any task with it is open, grain keeps check " +
 		"run `" + ReleaseHoldCheckName + "` in progress on the red candidate's commit, so `rc.(N+1)` is " +
-		"not cut onto a tree you know is broken. It completes by itself once they have all landed, so " +
+		"not cut onto a tree you know is broken. It completes by itself once they have all landed (or when " +
+		"your closing report names `<rc_tag>` with no blocker filed, or the triage window elapses), so " +
 		"there is nothing to lift. An open task that already fixes the cause holds nothing unless its " +
 		"title has the marker: message it and name it in your report. If `main` is red too, the " +
-		"base-branch repair is the fix. Do not file another; a red `main` already stops the train " +
+		"base-branch repair is the fix. Do not file another; name `<rc_tag>` in your report, since a red `main` already stops the train " +
 		"cutting.\n")
 	b.WriteString("3. **`rc.2` red: decide whether trunk churn broke it.** Compare its failure with " +
 		"`rc.1`'s (`pipeline.rc-failed:vX.Y.Z-rc.1`). The train cuts `rc.3` from `release/vX.Y.Z`, " +
@@ -278,7 +282,9 @@ func writeRedRCSection(b *strings.Builder) {
 		"(a quarantine entry is a person's review), unless one is already open. " +
 		"`pipeline.release-infra-stalled:<rc_tag>` is a candidate still qualifying while an item keeps " +
 		"failing on infrastructure. Read that item's last runs, name the runner, quota or credential " +
-		"that is failing in a `grain notify` a person can act on, and file no code fix for it.\n\n")
+		"that is failing in a `grain notify` a person can act on, and file no code fix for it; once " +
+		"the infrastructure is repaired, acknowledging or clearing `pipeline.release-infra-stalled:<rc_tag>` " +
+		"starts a fresh Stage 2 qualification attempt if Stage 2 had concluded `neutral`.\n\n")
 }
 
 // UsesToolBudget reports whether t's runs are durable judgement wakes,

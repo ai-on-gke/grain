@@ -562,6 +562,42 @@ describe("DetailOverlay timeline", () => {
     ).toBeInTheDocument();
   });
 
+  // model.TaskEventHostingChanged (unified-grants.design.md §4.1): every
+  // change to the hosting setting is on the timeline with its old and new
+  // values and who made it.
+  it("shows who changed a task's hosting, from what to what", () => {
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          transitions: [
+            { state: "queued", at: "2026-08-28T09:00:00Z" },
+            {
+              state: "hosting_changed",
+              at: "2026-08-28T10:00:00Z",
+              by: "human bob@example.com",
+              reason: "unattended -> console",
+              oldHosting: "unattended",
+              newHosting: "console",
+            },
+          ],
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Hosting changed")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "by human bob@example.com · from Unattended to Interactive console",
+      ),
+    ).toBeInTheDocument();
+  });
+
   // bwsalmon/agents#503: a pull request re-linked to a reopened task keeps
   // its own original open time, which can predate this lifecycle's first
   // transition -- it should not sort ahead of everything else. Under the

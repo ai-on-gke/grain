@@ -318,10 +318,11 @@ func (d *capabilitiesDoc) validateWithGCPSets(configuredSets []string, gcpServer
 	// One-release compatibility (schema 109): accept old-form gcp#gcp-key
 	// arguments in settings/capabilities.yml during state-repo import/check.
 	model.RewriteGCPKeyCatalogue(cat, configuredSets, gcpServerIDs, nil)
-	// One-release compatibility (schema 122): strip retired priority-dispatch
-	// and durable entries from settings/capabilities.yml with a deprecation
+	// One-release compatibility (schema 122-123): strip retired priority-dispatch,
+	// durable and console entries from settings/capabilities.yml with a deprecation
 	// warning so check passes before the next export rewrites them.
 	stripRetiredAdmissionFromCatalogue(cat)
+	stripRetiredHostingFromCatalogue(cat)
 	if err := cat.Validate(); err != nil {
 		errs = append(errs, err.Error())
 	}
@@ -362,6 +363,44 @@ func stripRetiredAdmissionFromCatalogue(cat *model.CapabilityCatalogue) {
 		if kept, adm, matched := model.ExtractLegacyAdmissionStrings(rd.CI); len(matched) > 0 {
 			log.Printf("staterepo: %s: defaults.repos[%s].ci contains deprecated admission capability (%s -> %q), which does not apply to CI",
 				CapabilitiesPath, r, strings.Join(matched, ", "), adm)
+			rd.CI = kept
+			changed = true
+		}
+		if changed {
+			cat.Defaults.Repos[r] = rd
+		}
+	}
+}
+
+func stripRetiredHostingFromCatalogue(cat *model.CapabilityCatalogue) {
+	if cat == nil {
+		return
+	}
+	if _, has := cat.InProcess[model.ConsoleCapability]; has {
+		delete(cat.InProcess, model.ConsoleCapability)
+		log.Printf("staterepo: %s: in_process.%s is deprecated and ignored; hosting is now a task setting", CapabilitiesPath, model.ConsoleCapability)
+	}
+	if kept, host, matched := model.ExtractLegacyHostingStrings(cat.Defaults.Task); len(matched) > 0 {
+		log.Printf("staterepo: %s: defaults.task contains deprecated hosting capability (%s); set default_hosting to %q instead",
+			CapabilitiesPath, strings.Join(matched, ", "), host)
+		cat.Defaults.Task = kept
+	}
+	if kept, host, matched := model.ExtractLegacyHostingStrings(cat.Defaults.CI); len(matched) > 0 {
+		log.Printf("staterepo: %s: defaults.ci contains deprecated hosting capability (%s -> %q), which does not apply to CI",
+			CapabilitiesPath, strings.Join(matched, ", "), host)
+		cat.Defaults.CI = kept
+	}
+	for r, rd := range cat.Defaults.Repos {
+		changed := false
+		if kept, host, matched := model.ExtractLegacyHostingStrings(rd.Task); len(matched) > 0 {
+			log.Printf("staterepo: %s: defaults.repos[%s].task contains deprecated hosting capability (%s); set repo default_hosting to %q instead",
+				CapabilitiesPath, r, strings.Join(matched, ", "), host)
+			rd.Task = kept
+			changed = true
+		}
+		if kept, host, matched := model.ExtractLegacyHostingStrings(rd.CI); len(matched) > 0 {
+			log.Printf("staterepo: %s: defaults.repos[%s].ci contains deprecated hosting capability (%s -> %q), which does not apply to CI",
+				CapabilitiesPath, r, strings.Join(matched, ", "), host)
 			rd.CI = kept
 			changed = true
 		}

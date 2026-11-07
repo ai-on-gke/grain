@@ -75,6 +75,20 @@ PROJECT="${PROJECT:-grain-host}"
 MACHINE_TYPE="${MACHINE_TYPE:-n2-standard-8}"
 IMAGE_TYPE="${IMAGE_TYPE:-UBUNTU_CONTAINERD}"
 NAMESPACE="${NAMESPACE:-grain}"
+# The guest image comes from release assets (docs/release-assets.md):
+# RELEASE's (default channel-main) is loaded and pushed into IMAGE_MIRROR,
+# a registry the cluster pulls from, by scripts/release-assets.sh mirror.
+# With no IMAGE_MIRROR there is nowhere to push it, and the last image
+# published to Docker Hub is used instead; GUEST_IMAGE always wins.
+RELEASE="${RELEASE:-channel-main}"
+IMAGE_MIRROR="${IMAGE_MIRROR:-}"
+if [ -z "${GUEST_IMAGE:-}" ] && [ -n "$IMAGE_MIRROR" ]; then
+  GUEST_IMAGE="$(bash "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/release-assets.sh" mirror "$RELEASE" "$IMAGE_MIRROR" guest | sed -n 's/^guest=//p')"
+  [ -n "$GUEST_IMAGE" ] || { echo "could not mirror $RELEASE's guest image into $IMAGE_MIRROR" >&2; exit 1; }
+fi
+if [ -z "${GUEST_IMAGE:-}" ]; then
+  echo "GUEST_IMAGE and IMAGE_MIRROR unset: using docker.io/grainai/sandbox:main" >&2
+fi
 GUEST_IMAGE="${GUEST_IMAGE:-docker.io/grainai/sandbox:main}"
 GRAIN="${GRAIN:-}"
 UI_ADDR="${UI_ADDR:-127.0.0.1:8440}"

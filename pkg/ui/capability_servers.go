@@ -397,7 +397,12 @@ func (c *Client) updateCapabilityServers(ctx context.Context, mutate func(map[st
 	if err := c.checkSettingsWritable(ctx, "grain_config"); err != nil {
 		return err
 	}
+	repoConfigs, err := c.Store.ListRepoConfigs(ctx)
+	if err != nil {
+		return err
+	}
 	return c.Store.UpdateConfig(ctx, func(cfg *model.Config) error {
+		before, _ := intree.EnsureBuiltins(cfg.MCPServers)
 		next, _ := intree.EnsureBuiltins(cfg.MCPServers)
 		if err := mutate(next); err != nil {
 			return err
@@ -408,6 +413,27 @@ func (c *Client) updateCapabilityServers(ctx context.Context, mutate func(map[st
 		}
 		if _, err := protocol.ParseServers(data); err != nil {
 			return validationErrorf("%s", err)
+		}
+		if cfg.CapabilityPolicy.Catalogue != nil {
+			newlyDisabled := false
+			for id, sc := range next {
+				if sc.Disabled && !before[id].Disabled {
+					newlyDisabled = true
+					break
+				}
+			}
+			if newlyDisabled {
+				merged := mergedCapabilityCatalogue(
+					cfg.CapabilityPolicy.Catalogue,
+					next,
+					cfg.DefaultCapabilities,
+					cfg.CapabilityPolicy.Catalogue.Defaults.CI,
+					repoDefaultsMap(repoConfigs),
+				)
+				if err := merged.Validate(); err != nil {
+					return fieldValidationError("disabled", err)
+				}
+			}
 		}
 		cfg.MCPServers = next
 		return nil

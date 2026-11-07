@@ -38,11 +38,15 @@ body: |
   `main`, `candidate` or this task's own branch:
 
   - Create it: `git push origin {{rc_sha}}:refs/heads/qualification/<this task id>`.
-  - File any fixture task (a change for the merge queue to merge, a staged
-    failure, its repair) with `propose_task` and
-    `branch: qualification/<this task id>`. Fixtures on that branch are the
-    experiment. Anything you propose on any other branch is a defect report,
-    and fails qualification.
+  - File any fixture task (a change for the merge queue to merge or a staged
+    failure — repairs run on the fixture task itself, not as new proposals)
+    with `propose_task` and `branch: qualification/<this task id>`. Fixtures on
+    that branch are the experiment. Anything you propose on any other branch is
+    a defect report, and fails qualification.
+  - Self-approval allows at most five fixture proposals over this task's whole
+    life (`DefaultAutoSubmitFanOut`, 5): a sixth waits for a person and fails
+    qualification as an open child. Keep the whole run within five fixtures by
+    reusing §1's fixtures across §2–§4 below.
   - Before you finish, close or finish every fixture task you filed, then
     delete the branch: `git push origin :refs/heads/qualification/<this task id>`.
     A scratch branch or a live fixture task left behind fails qualification.
@@ -50,26 +54,34 @@ body: |
   ## 1. Independent clean-and-green merges
 
   - File three non-conflicting fixture changes against the scratch branch at
-    once.
-  - Confirm each merges on its own as soon as it is clean, green on its own
-    head and reviewed, and that none waits on another's state. Use
-    `query_merge_queue` and `list_grain_tasks` to see each pull request's own
-    blocker. There should be no queue position.
-  - Make one of the three slow or red (a failing test in that fixture only).
-    Confirm the other two still merge, and that the red one gets its normal
-    repair and is then closed unmerged.
+    once (fixtures 1–3 of 5): two clean and green on `{{rc_sha}}`, and one slow
+    or red (a failing test in that fixture only). Make the two green fixtures
+    an incompatible pair (`merging.design.md`: each green on `{{rc_sha}}` in
+    different files, failing post-merge CI once both merge), placing the first
+    green fixture's half on the lines of the target file that §3's conflict
+    cluster will overwrite.
+  - Confirm the two green fixtures each merge on their own as soon as clean,
+    green on their own head and reviewed, and that none waits on another's
+    state. Use `query_merge_queue` and `list_grain_tasks` to see each pull
+    request's own blocker. There should be no queue position.
+  - Confirm the red fixture does not hold the other two, gets its normal repair,
+    and finishes or is closed.
   - Confirm `max_merges_per_repo` throttles merges without ordering them.
 
   ## 2. Gates hold only their own pull request
 
-  - Confirm a fixture still awaiting its second-agent review does not merge,
-    and does not hold any other fixture.
+  - Reuse the §1 fixtures rather than filing another: while one of them is still
+    awaiting its second-agent review, confirm it does not merge and does not
+    hold any other fixture.
 
   ## 3. Conflict clusters
 
-  - File three fixtures that each edit the same lines of one file on the
-    scratch branch, so that once the first lands the other two conflict with
-    it.
+  - Reuse the first green §1 fixture as the landed first member of the cluster,
+    and file two more fixtures (fixtures 4–5 of 5), branched from `{{rc_sha}}`
+    (or filed before that §1 fixture lands), that each edit those same lines of
+    the target file (replacing the §1 fixture's incompatible change so resolving
+    the conflict restores a green tree) — so that once the §1 fixture has
+    landed, the other two conflict with it.
   - Confirm the two conflicting pull requests form one cluster with at most
     one repair in flight, given to the oldest member. When that repair lands,
     the last pull request should be judged again against the new tip.
@@ -77,8 +89,12 @@ body: |
 
   ## 4. Base-branch CI after the merge
 
-  - Confirm the scratch branch's post-merge CI runs on the tips the merges
-    left, and that a red scratch branch does not stop green fixtures merging
+  - Without filing a sixth fixture (and without pushing commits directly to
+    `refs/heads/qualification/<this task id>`, which `gitproxy` refuses on
+    declared non-default branches), confirm the scratch branch's post-merge CI
+    runs on the tips the merges left, turns red once both green §1 fixtures
+    have merged, and does not stop a subsequent clean, green fixture (§1's
+    repaired fixture or §3's first conflict-resolved fixture) from merging
     there.
 
   ## 5. Report

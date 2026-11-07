@@ -239,18 +239,6 @@ func unprocessableErrorf(format string, a ...any) error {
 	return &UnprocessableError{err: fmt.Errorf(format, a...)}
 }
 
-// approvalAttribution returns the Attribution to record on task.Approval:
-// for a delegated registry request (service actor + human OnBehalfOf, both
-// verified by the registry), it preserves OnBehalfOf (AU-26.2); for other
-// callers it records Actor alone.
-func approvalAttribution(a model.Attribution) model.Attribution {
-	if a.Actor.Kind == model.PrincipalService && a.Actor.Source == model.SourceRegistry &&
-		a.OnBehalfOf != nil && a.OnBehalfOf.Kind == model.PrincipalHuman && a.OnBehalfOf.Source == model.SourceRegistry {
-		return a
-	}
-	return model.Attribution{Actor: a.Actor}
-}
-
 // NotFoundError marks a task ID with no task behind it. Server maps this
 // to a 404 -- the one case where the caller's mistake and the store's own
 // trouble need telling apart, which github.Error's status used to answer.
@@ -1380,6 +1368,7 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 		}
 		detail.Transitions = append(detail.Transitions, transitionFromWithAttempt(tr, proposingAttempt))
 	}
+	c.nameSessions(ctx, &detail, *t, comments, transitions)
 	detail.PullRequestEvents = pullRequestEventsFrom(obs)
 	if obs != nil {
 		detail.RunNowAt = obs.RunNowAt
@@ -1822,6 +1811,7 @@ type CreateTaskRequest struct {
 	KeepRunning      bool   `json:"keepRunning,omitempty"`
 	KeepRunningSnake *bool  `json:"keep_running,omitempty"`
 	Admission        string `json:"admission,omitempty"`
+	Hosting          string `json:"hosting,omitempty"`
 	// Goal declares the task's goal (model.TaskGoal,
 	// design/design/durable-tasks.design.md#DT-4) as it is filed; nil for none, or
 	// for the goal of the template it is filed from.
@@ -2276,6 +2266,30 @@ func (c *Client) defaultTaskAdmission(ctx context.Context, target *model.RepoRef
 	return model.NormalizeAdmission(adm), nil
 }
 
+func (c *Client) defaultTaskHosting(ctx context.Context, target *model.RepoRef) (model.Hosting, error) {
+	if c.Store == nil {
+		return model.HostingUnattended, nil
+	}
+	var h model.Hosting
+	cfg, err := c.Store.GetConfig(ctx)
+	if err != nil {
+		return "", err
+	}
+	if cfg != nil && cfg.DefaultHosting != "" {
+		h = cfg.DefaultHosting
+	}
+	if target != nil {
+		rc, err := c.Store.GetRepoConfig(ctx, *target)
+		if err != nil {
+			return "", err
+		}
+		if rc != nil {
+			h = model.MaxHosting(h, rc.DefaultHosting)
+		}
+	}
+	return model.NormalizeHosting(h), nil
+}
+
 // No GitHub issue is created, and none is needed: Store.NewTaskID
 // allocates identity, so a task exists the moment this returns. That is
 // the whole inversion in one method -- this used to open an issue and let
@@ -2636,11 +2650,18 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if err != nil {
 		return Task{}, validationErrorf("%v", err)
 	}
+	explicitHosting, err := model.ParseOptionalHosting(req.Hosting)
+	if err != nil {
+		return Task{}, validationErrorf("%v", err)
+	}
 	var legacyAdmission model.Admission
 	var hadLegacyAdmission bool
+	var legacyHosting model.Hosting
+	var hadLegacyHosting bool
 	if req.Capabilities != nil {
 		var capsWithoutLegacy []string
 		capsWithoutLegacy, legacyAdmission, hadLegacyAdmission = extractLegacyAdmissionCaps("task", *req.Capabilities)
+		capsWithoutLegacy, legacyHosting, hadLegacyHosting = extractLegacyHostingCaps("task", capsWithoutLegacy)
 		req.Capabilities = &capsWithoutLegacy
 	}
 	grants, droppedRefusals, err := c.creationGrants(ctx, req, target, teamID)
@@ -2659,6 +2680,17 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		}
 	}
 	taskAdmission = model.NormalizeAdmission(taskAdmission)
+	taskHosting := explicitHosting
+	if hadLegacyHosting {
+		taskHosting = model.MaxHosting(taskHosting, legacyHosting)
+	}
+	if taskHosting == "" {
+		taskHosting, err = c.defaultTaskHosting(ctx, target)
+		if err != nil {
+			return Task{}, err
+		}
+	}
+	taskHosting = model.NormalizeHosting(taskHosting)
 	// The template a person filed this from, which is how the task's runs
 	// find that template's declared push set (model.Task.TemplateID) and how
 	// the catalogue judges its template restrictions. An agent's proposal
@@ -3094,6 +3126,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		NothingNeededAction:  nothingNeeded,
 		KeepRunning:          keepRunning,
 		Admission:            taskAdmission,
+		Hosting:              taskHosting,
 		NoPort:               req.NoPort,
 		WorkOrigin:           explicitOrigin,
 		AgentFramework:       agentFramework,
@@ -3156,8 +3189,8 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	case catalogueHold:
 		task.Body += "\n\n_Filed for a person to approve: " + needsPersonWhy + "._"
 	case req.Approved || (req.Interactive && proposedBy == nil && c.requestActor(ctx).Actor.Kind != model.PrincipalAgent):
-		attr := approvalAttribution(c.requestActor(ctx))
-		task.Approval = &attr
+		approval := c.requestActor(ctx)
+		task.Approval = &approval
 		task.ApprovedAt = &now
 	case sessionQueued:
 		task.Approval = &model.Attribution{Actor: model.ConsoleSessionPrincipal}
@@ -3235,7 +3268,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			// whoever reads the pair will find it.
 			if _, err := c.Store.AddComment(ctx, model.Comment{
 				TaskID:    id,
-				Author:    model.Attribution{Actor: c.requestActor(ctx).Actor},
+				Author:    c.requestActor(ctx),
 				Body:      model.SupersedeRefusedLine(supersedes, refusal),
 				CreatedAt: now,
 			}); err != nil {
@@ -4583,6 +4616,8 @@ type UpdateTaskRequest struct {
 	Capabilities *[]string `json:"capabilities,omitempty"`
 	// Admission sets model.Task.Admission ("standard", "bypass", or "durable").
 	Admission *string `json:"admission,omitempty"`
+	// Hosting sets model.Task.Hosting ("unattended" or "console").
+	Hosting *string `json:"hosting,omitempty"`
 	// PriorityDispatch is a deprecated one-release alias that maps true to
 	// bypass admission and false back to standard admission.
 	PriorityDispatch *bool `json:"priorityDispatch,omitempty"`
@@ -4798,7 +4833,7 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	// sent as agentBackendId as the model choice it was.
 	var editModel *string
 	var isConsoleSessionTask bool
-	if req.Model != nil || req.AgentBackendID != nil || req.Capabilities != nil || req.Admission != nil || req.PriorityDispatch != nil || req.KeepRunning != nil {
+	if req.Model != nil || req.AgentBackendID != nil || req.Capabilities != nil || req.Admission != nil || req.Hosting != nil || req.PriorityDispatch != nil || req.KeepRunning != nil {
 		if existing, err := c.Store.GetTask(ctx, id); err == nil && existing != nil {
 			isConsoleSessionTask = existing.IsConsoleSession()
 		}
@@ -4984,15 +5019,27 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		norm := model.NormalizeAdmission(adm)
 		chosenAdmission = &norm
 	}
+	var chosenHosting *model.Hosting
+	if req.Hosting != nil {
+		h, err := model.ParseOptionalHosting(*req.Hosting)
+		if err != nil {
+			return Task{}, validationErrorf("%v", err)
+		}
+		norm := model.NormalizeHosting(h)
+		chosenHosting = &norm
+	}
 	if req.PriorityDispatch != nil {
 		log.Printf("task %s: priorityDispatch is deprecated; set admission instead", id)
 	}
 	var normalizedCaps []string
 	var legacyAdmission model.Admission
 	var hadLegacyAdmission bool
+	var legacyHosting model.Hosting
+	var hadLegacyHosting bool
 	if req.Capabilities != nil {
 		var capsWithoutLegacy []string
 		capsWithoutLegacy, legacyAdmission, hadLegacyAdmission = extractLegacyAdmissionCaps("task "+id, *req.Capabilities)
+		capsWithoutLegacy, legacyHosting, hadLegacyHosting = extractLegacyHostingCaps("task "+id, capsWithoutLegacy)
 		seen := map[string]bool{}
 		normalizedCaps = make([]string, 0, len(capsWithoutLegacy))
 		for _, rawCap := range capsWithoutLegacy {
@@ -5306,6 +5353,12 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		if hadLegacyAdmission {
 			task.Admission = model.MaxAdmission(model.NormalizeAdmission(task.Admission), legacyAdmission)
 		}
+		if chosenHosting != nil {
+			task.Hosting = *chosenHosting
+		}
+		if hadLegacyHosting {
+			task.Hosting = model.MaxHosting(model.NormalizeHosting(task.Hosting), legacyHosting)
+		}
 		if req.PriorityDispatch != nil {
 			if *req.PriorityDispatch {
 				task.Admission = model.MaxAdmission(model.NormalizeAdmission(task.Admission), model.AdmissionBypass)
@@ -5614,7 +5667,7 @@ func (c *Client) noteEdit(ctx context.Context, id string, titleChanged bool, tit
 	}
 	_, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID:    id,
-		Author:    model.Attribution{Actor: c.requestActor(ctx).Actor},
+		Author:    c.requestActor(ctx),
 		Body:      body,
 		CreatedAt: c.now(),
 	})
@@ -5634,6 +5687,7 @@ func (c *Client) mutate(ctx context.Context, id string, apply func(*model.Task) 
 	}
 	c.ensureConsoleSessionSnapshot(ctx, *task)
 	ctx = model.WithAdmissionChange(ctx, c.requestActor(ctx))
+	ctx = model.WithHostingChange(ctx, c.requestActor(ctx))
 	actor := c.requestActor(ctx).Actor
 	var released []model.HumanReviewReason
 	if err := c.Store.UpdateTask(ctx, id, func(t *model.Task) error {
@@ -5713,6 +5767,23 @@ func (c *Client) SetCapability(ctx context.Context, id, capabilityID string, att
 			}
 			if cur == aliasAdm {
 				task.Admission = model.AdmissionStandard
+			}
+			return nil
+		})
+	}
+	if aliasHosting, ok := model.LegacyHostingAlias(capabilityID); ok {
+		log.Printf("task %s: capability %q is deprecated; set hosting instead", id, capabilityID)
+		return c.mutate(ctx, id, func(task *model.Task) error {
+			task.Grants = slices.DeleteFunc(task.Grants, func(g model.Grant) bool {
+				return g.Capability == capabilityID
+			})
+			cur := model.NormalizeHosting(task.Hosting)
+			if attach {
+				task.Hosting = model.MaxHosting(cur, aliasHosting)
+				return nil
+			}
+			if cur == aliasHosting {
+				task.Hosting = model.HostingUnattended
 			}
 			return nil
 		})
@@ -5897,7 +5968,7 @@ func (c *Client) Approve(ctx context.Context, id string) error {
 	if err := c.catalogueApprovalRefusal(ctx, *task); err != nil {
 		return err
 	}
-	if err := c.Store.Approve(ctx, id, approvalAttribution(c.requestActor(ctx)), c.now()); err != nil {
+	if err := c.Store.Approve(ctx, id, c.requestActor(ctx), c.now()); err != nil {
 		return err
 	}
 	if task.Interactive && task.DeferredAt == nil && c.Config.Wake != nil {
@@ -6318,7 +6389,7 @@ func (c *Client) commentWithAuthor(ctx context.Context, id, body string, uploads
 	// An author naming the request's own principal keeps its kind: a
 	// verified *.gserviceaccount.com caller is a service principal, as it
 	// is on the tasks it files and closes, not a human.
-	if trimmed := strings.TrimSpace(author); trimmed != "" && trimmed != by.Actor.ID {
+	if trimmed := strings.TrimSpace(author); trimmed != "" && trimmed != by.Actor.ID && (by.OnBehalfOf == nil || trimmed != by.OnBehalfOf.ID) {
 		by = model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: trimmed}}
 	}
 	return c.addAttributedComment(ctx, id, body, attachments, by, now, reopenAck)
@@ -6369,14 +6440,15 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 			return err
 		}
 	}
-	if reopenAck && by.Actor.Kind == model.PrincipalHuman {
+	isPerson := attributedHuman(by) != nil
+	if reopenAck && isPerson {
 		reopened, err := c.reopenAcknowledgeable(ctx, id, now)
 		if err != nil || reopened {
 			return err
 		}
 	}
 	if obs == nil || obs.PendingQuestionCommentID == nil {
-		if (wokeOnMessage || (task.Interactive && by.Actor.Kind == model.PrincipalHuman)) && c.Config.Wake != nil {
+		if (wokeOnMessage || (task.Interactive && isPerson)) && c.Config.Wake != nil {
 			c.Config.Wake()
 		}
 		return nil
@@ -6499,7 +6571,7 @@ func (c *Client) Stop(ctx context.Context, id string) error {
 
 	commentID, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID:    id,
-		Author:    model.Attribution{Actor: c.requestActor(ctx).Actor},
+		Author:    c.requestActor(ctx),
 		Body:      model.TurnStoppedComment,
 		CreatedAt: now,
 	})
@@ -6832,7 +6904,7 @@ func (c *Client) RetryMerge(ctx context.Context, id string) error {
 	// later has no other way to see happened.
 	_, err = c.Store.AddComment(ctx, model.Comment{
 		TaskID: id,
-		Author: model.Attribution{Actor: c.requestActor(ctx).Actor},
+		Author: c.requestActor(ctx),
 		Body: fmt.Sprintf(
 			"Asked the merge queue to try %s again. It takes its place in the queue "+
 				"as if it had never been given up on: the checks are read afresh -- and "+
@@ -7021,7 +7093,7 @@ func (c *Client) ForceMerge(ctx context.Context, id, reason, head string) error 
 		"forced again."
 	if _, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID:    id,
-		Author:    model.Attribution{Actor: c.requestActor(ctx).Actor},
+		Author:    c.requestActor(ctx),
 		Body:      body,
 		CreatedAt: now,
 	}); err != nil {
@@ -7247,7 +7319,7 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 		if err := c.agentMayApprove(ctx, *task); err != nil {
 			return err
 		}
-		if err := c.Store.Approve(ctx, id, approvalAttribution(c.requestActor(ctx)), now); err != nil {
+		if err := c.Store.Approve(ctx, id, c.requestActor(ctx), now); err != nil {
 			return err
 		}
 	}
@@ -7275,7 +7347,7 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 	// thread), so it names the branch that work belongs on.
 	if _, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID:    id,
-		Author:    model.Attribution{Actor: c.requestActor(ctx).Actor},
+		Author:    c.requestActor(ctx),
 		Body:      runNowComment(state, pullRequestRefOf(*task)),
 		CreatedAt: now,
 	}); err != nil {
@@ -7465,7 +7537,8 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 		return &NotFoundError{ID: id}
 	}
 	now := c.now()
-	by := c.requestActor(ctx).Actor
+	who := c.requestActor(ctx)
+	by := who.Actor
 	eventReason := strings.TrimSpace(opts.Reason)
 	if eventReason == "" {
 		if call, ok := agentCallFromContext(ctx); ok {
@@ -7507,7 +7580,7 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 	if !closed {
 		if changed {
 			c.recordTaskEvent(ctx, model.TaskEvent{TaskID: id, Kind: model.TaskEventReopened, At: now,
-				By: by, Reason: eventReason})
+				By: by, OnBehalfOf: who.OnBehalfOf, Reason: eventReason})
 		}
 		return nil
 	}
@@ -7535,7 +7608,7 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 	}
 	if changed {
 		c.recordTaskEvent(ctx, model.TaskEvent{TaskID: id, Kind: model.TaskEventClosed, At: now,
-			By: by, Reason: eventReason, Detail: closeCancelled(liveRun, cancelledCI)})
+			By: by, OnBehalfOf: who.OnBehalfOf, Reason: eventReason, Detail: closeCancelled(liveRun, cancelledCI)})
 	}
 	// After the close is written, not before: the note says the task *is*
 	// closed, and a note left in front of a close that then failed would

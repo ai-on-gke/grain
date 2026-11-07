@@ -33,7 +33,10 @@
 #      release and tagged :vX.Y.0, and :latest when the git tag latest is on
 #      it;
 #   3. the GitHub Release, its body written by scripts/release-notes.sh
-#      from the newest earlier vX.Y.Z.
+#      from the newest earlier vX.Y.Z;
+#   4. scripts/release-assets.sh promote vX.Y.0: that release's assets --
+#      copies of the commit's sha-<12 hex> tarballs and images.json
+#      (docs/release-assets.md).
 #
 # It runs on nothing but that tag push: no dispatch, no schedule.
 
@@ -199,3 +202,16 @@ jobs:
           fi
           gh release create "${RELEASE_VERSION}" --verify-tag --title "${RELEASE_VERSION}" \
             --notes-file "${RUNNER_TEMP}/body.md" --latest="$latest"
+
+      # The same release as GitHub release assets (scripts/release-assets.sh,
+      # release-asset contract v2, docs/release-assets.md): copies of the
+      # commit's sha-<12 hex> tarballs and an images.json on the vX.Y.0
+      # release just written, marked GitHub's latest release when the git
+      # tag latest names it. A release missing any asset fails the run.
+      - name: Publish the release's assets
+        if: steps.verify.outputs.train == 'true'
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_ASSETS_DIR: ${{ runner.temp }}/release-assets
+        run: bash ./scripts/release-assets.sh promote "${RELEASE_VERSION}"

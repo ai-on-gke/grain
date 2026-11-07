@@ -870,6 +870,20 @@ var Migrations = []Migration{
 			return MigrateAdmissionFromGrants(ctx, tx, false)
 		},
 	},
+	{
+		Version:     123,
+		Description: "replace console grants with the hosting setting on tasks, templates, schedules, console sessions and defaults",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `hosting` TEXT NOT NULL DEFAULT 'unattended'",
+			"ALTER TABLE `template` ADD COLUMN `hosting` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `schedule` ADD COLUMN `hosting` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `grain_config` ADD COLUMN `default_hosting` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `repo_config` ADD COLUMN `default_hosting` TEXT NOT NULL DEFAULT ''",
+		},
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			return MigrateHostingFromGrants(ctx, tx, false)
+		},
+	},
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as

@@ -19,11 +19,12 @@ from IAP's signed assertion instead
 (`design/design/authentication.design.md`). Which credentials the
 network listener takes depends on two settings:
 
-| Mode | Set | The access code | An IAP assertion |
+| Mode | Set | The access code | A signed proxy assertion |
 | --- | --- | --- | --- |
 | **No IAP** | neither | accepted from anywhere, as below | not checked (logged and ignored) |
 | **IAP, code still accepted** | `-ui-iap-audience` | accepted from anywhere | verified, and its person is signed in |
 | **IAP required** | `-ui-iap-audience` and `-ui-require-iap` | only over loopback with no forwarding headers ([break-glass](#break-glass-over-loopback)) | verified, and its person is signed in |
+| **Registry required** | `-ui-registry-{issuer,audience,keys-url}` and `-ui-require-verifier=registry` | only over loopback with no forwarding headers ([break-glass SSH](#break-glass-ssh-on-registry-hosted-instances)) | `X-Grain-Registry-Assertion` verified, and its person is signed in |
 
 - **No IAP.** Local and standalone deployments. Everything on this page
   applies as written.
@@ -54,8 +55,38 @@ network listener takes depends on two settings:
   two together with a name other than `iap` are refused. It closes the
   network listener to the access code the same way, and the daemon
   refuses to start unless an `IdentityVerifier` of that name is active
-  (for `iap`, an IAP audience; otherwise one a wrapper build registered).
+  (for `iap`, an IAP audience; for `registry`, all three of
+  `-ui-registry-issuer`, `-ui-registry-audience` and
+  `-ui-registry-keys-url`; otherwise one a wrapper build registered).
   Any active verifier's assertion still signs its caller in.
+- **Behind the grain registry (`-ui-require-verifier=registry`).**
+  Core ships a built-in `registry` verifier ([`docs/registry.md`](registry.md))
+  alongside `iap`, active when `-ui-registry-issuer`
+  (`GRAIN_REGISTRY_ISSUER`), `-ui-registry-audience`
+  (`GRAIN_REGISTRY_AUDIENCE`) and `-ui-registry-keys-url`
+  (`GRAIN_REGISTRY_KEYS_URL`) are all set. It verifies the short-lived
+  ES256 `X-Grain-Registry-Assertion` JWT that `grain-registry` signs on
+  every proxied request to `https://<name>.<instance-domain>/`, checking
+  the signature against the registry's JWKS
+  (`https://<registry-host>/.well-known/jwks.json`), exact `iss`
+  equality, single-audience `aud` equality
+  (`https://<name>.<instance-domain>`), and `exp`/`iat`/`nbf` bounds.
+  Its `AccessCodeWins()` is `false`: a verified registry assertion always
+  takes precedence over the access code, and an invalid assertion fails
+  closed with `401`. Hosted VM instances created by the registry run with
+  `-ui-require-verifier=registry`, closing the network listener to the
+  access code while keeping unforwarded loopback open for break-glass SSH
+  ([Break-glass SSH on registry-hosted instances](#break-glass-ssh-on-registry-hosted-instances)).
+  On external `connected` grains running `-registry-connect`, streams
+  arriving over the outbound `/api/entries/<name>/connect` tunnel are
+  served in-process over a `MuxListener` (`RemoteAddr` is
+  `stream-<id>-remote`, never `127.0.0.1`) behind a mandatory
+  tunnel-ingress gate that unconditionally requires a valid
+  `X-Grain-Registry-Assertion` and never accepts `grain_access` cookies,
+  `X-Grain-Access-Code` or bearer access codes over the tunnel -- even if
+  a workstation daemon omits `-ui-require-verifier=registry` on its local
+  `127.0.0.1` TCP listener so local CLI commands can still use the access
+  code directly.
 
 Neither flag stops a wrapper build's own `IdentityVerifier` that declares
 the access code wins over it (`AccessCodeWins()`, as a verifier behind an
@@ -68,15 +99,71 @@ sandbox (the git and API proxy, `grain mcpserver`) work as before.
 
 ### Break-glass over loopback
 
-With `-ui-require-iap` the code is still accepted from `127.0.0.1` or
-`::1` when the request carries none of `X-Forwarded-For`, `Forwarded`,
-`X-Real-Ip`, IAP's headers or any registered verifier's headers. A proxy
-on the same host therefore cannot relay somebody's code in. That leaves
-a way in which does not depend on IAP, from the daemon's own host:
+With `-ui-require-iap` or `-ui-require-verifier=<name>` (including
+`-ui-require-verifier=registry`) the code is still accepted from
+`127.0.0.1` or `::1` when the request carries none of `X-Forwarded-For`,
+`Forwarded`, `X-Real-Ip`, IAP's headers (`X-Goog-IAP-JWT-Assertion`),
+`X-Grain-Registry-Assertion` or any registered verifier's headers. A
+proxy on the same host therefore cannot relay somebody's code in. That
+leaves a way in which does not depend on IAP or the registry proxy, from
+the daemon's own host:
 
 ```bash
 kubectl -n grain exec deploy/grain -- env GRAIN_SERVER=http://127.0.0.1:8080 GRAIN_DATA_DIR=/data grain list
 ```
+
+### Break-glass SSH on registry-hosted instances
+
+Hosted VM instances provisioned by `grain-registry` (`kind = instance`,
+[`docs/registry.md`](registry.md)) run with
+`-ui-require-verifier=registry` and have no external IP address, so the
+access code is never accepted over `https://<name>.<instance-domain>/` or
+over the VPC listener when proxy headers are present.
+
+When break-glass SSH is enabled (`compute.ssh_break_glass: true` in the
+registry configuration, the default, and `-allow-ssh` on the entry), the
+registry grants the entry's accountable human `owner` (`user:<owner>`)
+conditional OS Login administrator and IAP TCP-forwarding bindings
+(`roles/compute.osAdminLogin` and `roles/iap.tunnelResourceAccessor`) on
+that instance VM (`<vm-prefix><name>`). The owner can open a shell on the
+VM through IAP TCP forwarding without exposing a public SSH port:
+
+```bash
+gcloud compute ssh <vm-name> \
+  --project <instances-project> \
+  --zone <zone> \
+  --tunnel-through-iap
+```
+
+From inside that SSH session (or over an unforwarded local SSH port
+tunnel `-L 8080:127.0.0.1:8080`), requests hit `http://127.0.0.1:8080`
+directly over loopback with no proxy or verifier headers, where the
+daemon accepts the access code:
+
+```bash
+# On the instance VM:
+grain access-code
+grain access list
+grain access allow user:alice@example.com --reason "restore owner sign-in"
+```
+
+Because hosted VMs are disposable and replaced on upgrades, shape
+resizes and VM recoveries, `grain-instance-init` persists the instance's
+break-glass access code (`local-api-token`) in Google Cloud Secret
+Manager under the instance's isolated secret prefix
+(`grain-inst-<name>-local-api-token`) and materializes it into
+`/run/grain-secrets` (`0700` `tmpfs`) before `grain-daemon` starts.
+Replacing the VM therefore preserves the break-glass access code until
+you rotate it.
+
+Break-glass SSH stays bound to the entry's individual accountable
+`owner` (not pooled across `owner_group` by default) so root shell access
+remains individually attributable; when ownership is transferred
+(`grain registry transfer` / `grain registry accept-transfer`), the
+registry revokes the previous owner's SSH bindings and grants them to the
+new owner. Deployments that forbid shell access to hosted VMs can disable
+break-glass SSH across the registry (`compute.ssh_break_glass: false`) or
+per entry (`grain registry update -allow-ssh=false <name>`).
 
 ## Who is let in
 
