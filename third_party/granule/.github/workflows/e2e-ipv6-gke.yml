@@ -99,8 +99,5 @@ jobs:
 
       - name: test/e2e-ipv6.sh gke
         env:
-          GKE_PROJECT: ${{ vars.GCP_PROJECT_ID || 'grain-sandbox-dev' }}
-        run: |
-          set -euo pipefail
-          gcloud config set project "$GKE_PROJECT"
-          test/e2e-ipv6.sh gke
+          GKE_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+        run: test/e2e-ipv6.sh gke
