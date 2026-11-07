@@ -571,7 +571,13 @@ import "strconv"
 // 119 adds `label` and `last_used_at` to `allowed_principal` for `delegate:`
 // entries (model.AllowedPrincipal.Label and LastUsedAt,
 // design/design/authentication.design.md §6).
-const SchemaVersion = 119
+//
+// 120 changes no table: it rewrites `grain-ci` in
+// `grain_config`.`capability_policy` -- its rules and its catalogue's task,
+// CI and per-repository defaults -- to
+// `https://grain.dev/capabilities/grain#ci={}`, which migration 96 did
+// everywhere else a grant is stored (grain_ci_policy_migration.go).
+const SchemaVersion = 120
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or

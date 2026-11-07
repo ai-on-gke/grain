@@ -846,6 +846,11 @@ var Migrations = []Migration{
 			"ALTER TABLE `allowed_principal` ADD COLUMN `last_used_at` DATETIME NULL",
 		},
 	},
+	{
+		Version:     120,
+		Description: "rewrite grain-ci in the capability policy's rules and catalogue defaults to https://grain.dev/capabilities/grain#ci={} (migration 96 rewrote every other stored grain-ci grant)",
+		Up:          migrateGrainCIPolicy,
+	},
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as
