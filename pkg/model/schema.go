@@ -572,10 +572,14 @@ import "strconv"
 // entries (model.AllowedPrincipal.Label and LastUsedAt,
 // design/design/authentication.design.md §6).
 //
-// 120 rewrites stored `github-sandbox` grants across the grant tables,
+// 120 rewrites stored `github-credential:<name>` grants across the grant
+// tables, deployment and repository default/CI capabilities, console sessions,
+// and capability_policy to `https://grain.dev/capabilities/repo#credential={"credential":"<name>"}`.
+//
+// 121 rewrites stored `github-sandbox` grants across the grant tables,
 // deployment and repository default/CI capabilities, console sessions, and
 // capability_policy to `https://grain.dev/capabilities/github#sandbox-repo={}`.
-const SchemaVersion = 120
+const SchemaVersion = 121
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or

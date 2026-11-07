@@ -731,7 +731,7 @@ var legacyGrantReplacements = map[string]string{
 	// Retired by schema migration 118 onto the built-in config-map server's
 	// bootstrap map.
 	"bootstrap-playbooks": BootstrapPlaybooksGrant,
-	// Retired by schema migration 120 onto the in-process github server's
+	// Retired by schema migration 121 onto the in-process github server's
 	// sandbox-repo method.
 	"github-sandbox": GitHubSandboxRepoGrant,
 }
@@ -790,6 +790,9 @@ func legacyGrantReplacement(name string) (string, bool) {
 		if validLegacyGCPKeyParam(keyName) {
 			return GCPKeyServerGrant(keyName), true
 		}
+	}
+	if credName, ok := LegacyGitCredentialName(name); ok && ValidGitCredentialName(credName) {
+		return RepoCredentialGrant(credName), true
 	}
 	registeredLegacyAliasesMu.RLock()
 	defer registeredLegacyAliasesMu.RUnlock()

@@ -29,7 +29,7 @@ import (
 // ServerID is the canonical capability_id of the in-process GitHub capability
 // server, and MethodName its sandbox-repo method, which the retired
 // github-sandbox provider became (design/design/unified-grants.design.md §4,
-// schema migration 120).
+// schema migration 121).
 const (
 	ServerID   = model.GitHubCapabilityServerID
 	MethodName = model.GitHubSandboxRepoMethod

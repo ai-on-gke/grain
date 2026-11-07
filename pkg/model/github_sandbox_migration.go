@@ -19,15 +19,15 @@ import (
 	"database/sql"
 )
 
-// githubSandboxRenames is migration 120's rename: the retired bare
+// githubSandboxRenames is migration 121's rename: the retired bare
 // github-sandbox capability to the in-process github server's sandbox-repo
 // method. Kept as the migration's own copy so later alias changes do not
-// alter what migration 120 rewrote.
+// alter what migration 121 rewrote.
 var githubSandboxRenames = map[string][]string{
 	"github-sandbox": {GitHubSandboxRepoGrant},
 }
 
-// migrateGitHubSandboxGrants is schema migration 120's Up: the in-process
+// migrateGitHubSandboxGrants is schema migration 121's Up: the in-process
 // github-sandbox provider is retired onto the in-process github server's
 // sandbox-repo method, rewriting every stored grant across the three grant
 // tables, deployment and repository default capabilities, standing console

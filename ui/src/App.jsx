@@ -31,6 +31,7 @@ import { useIsPhone } from "./phone.js";
 import { keepIfSame, UNCHANGED } from "./poll.js";
 import {
   NO_NARROWING,
+  admitsState,
   defaultFilters,
   defaultNarrowing,
   defaultSortFor,
@@ -50,6 +51,8 @@ import { boardMoves } from "./boardOrder.js";
 import { panelMove } from "./panelOrder.js";
 import { sectionMove } from "./sectionOrder.js";
 import { TimeZoneProvider } from "./TimeZoneContext.jsx";
+import { AccessConfigProvider } from "./AccessContext.jsx";
+import { canAccess } from "./access.js";
 import Sidebar from "./components/Sidebar.jsx";
 import { useSidebarCollapsed } from "./sidebarCollapse.js";
 import { SIDEBAR_COLLAPSED_WIDTH, SIDEBAR_WIDTH } from "./theme.js";
@@ -115,7 +118,11 @@ import NewSessionPage, {
 } from "./components/NewSessionPage.jsx";
 import { PreferencesProvider, usePreferences } from "./PreferencesContext.jsx";
 import { PinnedNavProvider, usePinnedNav } from "./PinnedNavContext.jsx";
-import { mergeTaskLists, useClosedTasks } from "./closedTasks.js";
+import {
+  mergeTaskLists,
+  stateFilterAdmitsClosed,
+  useClosedTasks,
+} from "./closedTasks.js";
 import ClosedTasksMore from "./components/ClosedTasksMore.jsx";
 import {
   notificationsEnabled,
@@ -359,7 +366,11 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // and a page that would say nothing is waiting must not say it.
   const [tasksListed, setTasksListed] = useState(false);
   const [tasksError, setTasksError] = useState(null);
-  const closedTasks = useClosedTasks(tasksListed);
+  // closedSearch is the search box's text while the task views could
+  // show closed work, "" otherwise: what useClosedTasks asks the server
+  // to search closed tasks for (set below, once the narrowing is known).
+  const [closedSearch, setClosedSearch] = useState("");
+  const closedTasks = useClosedTasks(tasksListed, closedSearch);
   const tasks = useMemo(
     () => mergeTaskLists(liveTasks, closedTasks.closed),
     [liveTasks, closedTasks.closed],
@@ -499,6 +510,26 @@ function AppContent({ onReload = () => window.location.reload() }) {
     () => askedNarrowing || listDefault(),
     [askedNarrowing, listDefault],
   );
+  // closedInView is whether the narrowing lets a closed task through at
+  // all: the default one sets them aside, and a view that cannot show
+  // one neither pages older ones in nor has the server search them
+  // (closedTasks.js).
+  const closedInView = useMemo(
+    () => admitsState(narrowing, config, "closed"),
+    [narrowing, config],
+  );
+  const closedSearchWanted =
+    closedInView && stateFilterAdmitsClosed(stateFilter)
+      ? (narrowing.search || "").trim()
+      : "";
+  useEffect(() => {
+    setClosedSearch(closedSearchWanted);
+  }, [closedSearchWanted]);
+  // closedFloor is whether closed tasks a view could show are still to
+  // be read -- a next page of the newest-closed list, or of the server's
+  // search while the box is set -- so a count over that view is a floor.
+  const closedFloor =
+    closedTasks.hasMore || (closedTasks.searching && closedTasks.loading);
   // narrow takes a patch rather than a whole narrowing, so a toolbar
   // control only has to name what it changed. A patch over the default
   // is a patch over what is on screen: the first thing anybody changes
@@ -1842,6 +1873,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // snapped back on the next refresh would be worse than a drag that
   // takes a moment. A refresh follows a failure too, so a half-applied
   // renumber shows what actually landed rather than what was asked for.
+  // Moving a board, a panel or a report section is a PATCH
+  // /api/boards/{id} (boards:write): a role without it is not offered the
+  // drag handles at all (access.js).
+  const canMoveBoards = canAccess(config, "boards:write");
   const moveBoard = useCallback(
     async (id, place) => {
       const moves = boardMoves(boards, id, place);
@@ -3111,7 +3146,15 @@ function AppContent({ onReload = () => window.location.reload() }) {
         onShownChange={setShownIds}
         onRefresh={refreshList}
         showError={showError}
-        footer={<ClosedTasksMore closed={closedTasks} />}
+        footer={
+          <ClosedTasksMore
+            closed={closedTasks}
+            active={closedInView && stateFilterAdmitsClosed(filter)}
+          />
+        }
+        countFloor={
+          closedInView && stateFilterAdmitsClosed(filter) && closedFloor
+        }
       />
       <BatchActionsBar
         selection={selectedTasks}
@@ -3155,10 +3198,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
         onSelectAll={setSelection}
         onReorder={reorderTasks}
         onShownChange={setShownIds}
+        countFloor={closedInView && closedFloor}
+        footer={<ClosedTasksMore closed={closedTasks} active={closedInView} />}
       />
-      {list.some((t) => t.state === "closed") && (
-        <ClosedTasksMore closed={closedTasks} />
-      )}
       <BatchActionsBar
         selection={selectedTasks}
         shownIds={shownIds}
@@ -3216,9 +3258,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
         onNarrow={narrow}
         onOpenTask={openTask}
       />
-      {list.some((t) => t.state === "closed") && (
-        <ClosedTasksMore closed={closedTasks} />
-      )}
+      <ClosedTasksMore
+        closed={closedTasks}
+        active={closedInView && list.some((t) => t.state === "closed")}
+      />
     </>
   );
 
@@ -3267,6 +3310,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       tasksLoaded={tasksListed}
       tasksError={tasksError}
       onRetryTasks={retryTasks}
+      closedPartial={closedTasks.partial}
       config={config}
       narrowing={narrowing}
       onNarrow={narrow}
@@ -3274,7 +3318,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       onOpen={openPanelView}
       onAddPanel={openAddPanelTask}
       onKeepPanelQuery={openKeepPanelQueryTask}
-      onMovePanel={movePanel}
+      onMovePanel={canMoveBoards ? movePanel : undefined}
     />
   );
 
@@ -3295,7 +3339,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       onOpenTask={openTask}
       onOpen={openPanelView}
       showError={showError}
-      onMoveSection={moveSection}
+      onMoveSection={canMoveBoards ? moveSection : undefined}
       pickedWindow={boardWindow}
       onPickWindow={setBoardWindow}
     />
@@ -3621,7 +3665,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
     stateFilter,
   ]);
 
-  return (
+  // The shell, under the caller's resolved access (AccessContext.jsx):
+  // every write control below it is drawn for what the signed-in
+  // person's role covers.
+  const shell = (
     <TimeZoneProvider zone={preferredTimeZone || config?.timeZone}>
       <div className="app-shell">
         {/* The one standing banner left (grain/task-4008): while
@@ -3745,6 +3792,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
                             repoTab={repoTab}
                             onShowTab={setRepoTab}
                             tasks={tasks}
+                            closedPartial={closedTasks.partial}
                             config={config}
                             baseBranchGates={baseBranchGates}
                             onOpenComparison={setRepoComparison}
@@ -3764,6 +3812,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
                         ) : view === "repos" ? (
                           <RepoList
                             tasks={tasks}
+                            closedPartial={closedTasks.partial}
                             config={config}
                             onOpenRepo={openRepoPage}
                             onOpenSettings={openDeploymentSettings}
@@ -4025,7 +4074,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
                               if (board) openBoard(board);
                             }}
                             onNewBoard={openNewBoardTask}
-                            onMoveBoard={moveBoard}
+                            onMoveBoard={canMoveBoards ? moveBoard : undefined}
                           />
                         ) : (
                           <div className="main-column">
@@ -4158,6 +4207,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       </div>
     </TimeZoneProvider>
   );
+  return <AccessConfigProvider config={config}>{shell}</AccessConfigProvider>;
 }
 
 // DEPLOYMENT_SETTINGS_TAB maps a Team settings tab an older link or

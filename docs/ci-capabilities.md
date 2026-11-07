@@ -30,7 +30,7 @@ an empty list. State/settings exports preserve it with the other repo settings.
 What this list grants today is the repository-granted methods of grain's
 in-process `github` (`https://grain.dev/capabilities/github#sandbox-repo`, a
 temporary GitHub repository, rewritten from `github-sandbox` by schema
-migration 120) and `release` servers described below
+migration 121) and `release` servers described below
 (`model.CIGrantRule.RepoGranted`). Ordinary capability references are not granted
 here: GCP keys (`https://grain.dev/capabilities/gcp#gcp-key`), Gemini keys
 (`…/gcp#gemini-key`) and the model proxies

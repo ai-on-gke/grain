@@ -190,7 +190,7 @@ A credential for several specific repos is several connections.
 
 **Resolution** (`Store.TeamGitCredentialOn(team, host, owner, repo)`):
 
-1. the task's own `github-credential:` grant, unchanged;
+1. the task's own `https://grain.dev/capabilities/repo#credential` grant (or the one-release `github-credential:<name>` alias);
 2. the most specific connection **on that host**: `owner/repo`, then
    `owner`, then the host default. If two match equally, the earlier one
    in the list wins.

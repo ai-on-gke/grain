@@ -160,7 +160,8 @@ var retiredGrants = []struct {
 	{103, "gemini-key", []string{model.GCPGeminiKeyGrant}},
 	{115, "self-debug", []string{"api:self-debug", model.GrainSourceGrant}},
 	{118, "bootstrap-playbooks", []string{model.BootstrapPlaybooksGrant}},
-	{120, "github-sandbox", []string{model.GitHubSandboxRepoGrant}},
+	{120, "github-credential:release-bot", []string{model.RepoCredentialGrant("release-bot")}},
+	{121, "github-sandbox", []string{model.GitHubSandboxRepoGrant}},
 }
 
 // retiredAs is what a store migration rewrote name to: retiredGrants'
@@ -639,7 +640,58 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 	assertMigrated(t, importedStore, importedDB)
 }
 
-func TestMigration120RewritesGitHubSandboxGrantsAndPolicy(t *testing.T) {
+func TestMigrate120GitHubCredentialToRepoServer(t *testing.T) {
+	store, db, ctx := openStore(t)
+
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := store.PutConfig(ctx, model.Config{
+		DefaultCapabilities: []string{"github-credential:release-bot", "read-issues"},
+		ConsoleSessions: []model.ConsoleSession{
+			{ID: "director", Title: "Director", Capabilities: []string{"github-credential:ops-bot"}},
+		},
+		CapabilityPolicy: model.CapabilityPolicy{
+			Rules: []model.CapabilityPolicyRule{
+				{Capability: "github-credential:release-bot", AllowUntrusted: true},
+			},
+			Catalogue: &model.CapabilityCatalogue{
+				Defaults: model.CatalogueDefaults{
+					Task: []string{"github-credential:release-bot"},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:                widgets,
+		DefaultCapabilities: []string{"github-credential:widgets-bot"},
+		CICapabilities:      []string{"github-credential:ci-bot"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, "INSERT INTO `task_grant` (`task_id`, `capability`, `via`) VALUES (?, ?, 'label')", "t1", "github-credential:release-bot"); err != nil {
+		t.Fatal(err)
+	}
+
+	rewindSchemaTo(t, ctx, db, 119)
+	if err := model.New(db).Init(ctx); err != nil {
+		t.Fatalf("migrating 119 -> 120: %v", err)
+	}
+
+	releaseGrant := model.RepoCredentialGrant("release-bot")
+	if got := grantRows(t, ctx, db, "task_grant", "task_id")["t1"]; !slices.Equal(got, []string{releaseGrant}) {
+		t.Errorf("task_grant = %v, want [%s]", got, releaseGrant)
+	}
+	gotCfg, err := store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{releaseGrant, "read-issues"}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
+		t.Errorf("DefaultCapabilities = %v, want %v", gotCfg.DefaultCapabilities, want)
+	}
+}
+
+func TestMigration121RewritesGitHubSandboxGrantsAndPolicy(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 
@@ -692,17 +744,17 @@ func TestMigration120RewritesGitHubSandboxGrantsAndPolicy(t *testing.T) {
 		}
 	}
 
-	rewindSchemaTo(t, ctx, db, 119)
+	rewindSchemaTo(t, ctx, db, 120)
 	exportDir := t.TempDir()
 	if err := staterepo.Export(ctx, db, exportDir); err != nil {
-		t.Fatalf("exporting version-119 store: %v", err)
+		t.Fatalf("exporting version-120 store: %v", err)
 	}
-	if err := staterepo.WriteSchemaVersion(exportDir, 119); err != nil {
-		t.Fatalf("stamping version-119 export: %v", err)
+	if err := staterepo.WriteSchemaVersion(exportDir, 120); err != nil {
+		t.Fatalf("stamping version-120 export: %v", err)
 	}
 
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating version-119 store to 120: %v", err)
+		t.Fatalf("migrating version-120 store to 121: %v", err)
 	}
 
 	assertMigrated := func(t *testing.T, s *model.Store, sqlDB *sql.DB) {
@@ -766,15 +818,15 @@ func TestMigration120RewritesGitHubSandboxGrantsAndPolicy(t *testing.T) {
 
 	assertMigrated(t, store, db)
 
-	rewindSchemaTo(t, ctx, db, 119)
+	rewindSchemaTo(t, ctx, db, 120)
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("re-running migration 120: %v", err)
+		t.Fatalf("re-running migration 121: %v", err)
 	}
 	assertMigrated(t, store, db)
 
 	importedStore, importedDB, _ := openStore(t)
 	if err := staterepo.Import(ctx, importedDB, exportDir); err != nil {
-		t.Fatalf("staterepo.Import of schema-119 export: %v", err)
+		t.Fatalf("staterepo.Import of schema-120 export: %v", err)
 	}
 	assertMigrated(t, importedStore, importedDB)
 }

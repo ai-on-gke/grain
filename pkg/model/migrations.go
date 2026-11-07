@@ -848,6 +848,11 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     120,
+		Description: "rewrite stored github-credential:<name> grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/repo#credential={\"credential\":\"<name>\"} (the in-process github-credential:<name> providers are retired)",
+		Up:          migrateGitHubCredentialGrants,
+	},
+	{
+		Version:     121,
 		Description: "rewrite stored github-sandbox grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/github#sandbox-repo={} (the in-process github-sandbox is retired)",
 		Up:          migrateGitHubSandboxGrants,
 	},

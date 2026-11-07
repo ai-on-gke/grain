@@ -59,7 +59,7 @@ the chat is in:
 | `DeclinedDefaults` | none | which of the defaults every session holds (`api:ci-read`) it opts out of |
 | `NetworkAccess` | none (`model.DefaultConsoleSessions`, `director-capabilities.spec.md` §3.1.6). On a backend that cannot isolate a sandbox's network (host directory, container, plain Kubernetes pods), `model.ConsoleSessionNetworkAccess` files the director open instead, since that backend would refuse every exchange. A build that registers a default-on capability needing egress from the sandbox itself (`capability.Registration.SandboxEgress`) ships it open | whether its sandbox reaches the internet. The director's state-repository checkout, its `ReadsAll` clones and the in-sandbox `grain` CLI all go through the git proxy, and its `api_*` tools run on grain's side, so closing its network takes away nothing it uses |
 | `Writes` | `grain/config` (the director; other sessions none) | where it may push: for the director, candidate `grain/config/<task-id>/*` branches for `propose_config_change` |
-| `TasksApproved` | false | whether the tasks it files are queued or wait for a person |
+| `TasksApproved` | true (the director, `director-capabilities.spec.md` §3.1.5; other sessions false) | whether the tasks it files are queued or wait for a person |
 | `Title` | "Director" | what the rail calls it |
 
 **How a chat gets its name.** The director's title is the one above. A
@@ -145,9 +145,13 @@ write is not passed on: any proposal whose repo or `writes` names
 `grain/config` is filed for a person whatever the session's permission
 (`model.ConfigRepoProposalHold`).
 
-`TasksApproved` is false because a chat is a fast way to ask for a lot of
-work: a director that could queue its own tasks would be one
-misunderstanding away from spending a day of this deployment's capacity.
+`TasksApproved` ships `true` on the director (`director-capabilities.spec.md`
+§3.1.5) and `false` on other sessions; a deployment that saved its own
+`console_sessions` row keeps what it saved (`model.ConsoleSessionsOr`), and
+unticking the box (or setting `model.ConsoleSessionTasksUnapprovedTag` on the
+active task) turns it off. Because a chat is a fast way to ask for a lot of
+work, what auto-queueing may set going is bounded per turn and held whenever a
+proposal widens reach or targets `grain/config`.
 
 Ticked, it is one predicate — `ConsoleSession.QueuesProposals` — and
 three readers: the prompt the session is given

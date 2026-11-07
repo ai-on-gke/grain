@@ -1,0 +1,34 @@
+[
+  {
+    "Name": "grain/release-qualification",
+    "Status": "completed",
+    "Conclusion": "failure",
+    "HTMLURL": "",
+    "FailureReason": "Release qualification of v3.3.0-rc.1: failure",
+    "StepsExecuted": 0,
+    "ID": 8002,
+    "CheckSuiteID": 0,
+    "HeadSHA": "55cf8c54caeca60a735d96d360c58c63c18be29a",
+    "App": "grain-walkthrough",
+    "ExternalID": "release-qualification:ai-on-gke/grain@v3.3.0-rc.1",
+    "StartedAt": "2026-11-07T15:19:31Z",
+    "CompletedAt": "2026-11-07T15:51:31Z",
+    "Output": "repo:template:ai-on-gke:grain:qualification-mergequeue: fail (task 9, attempt 2) -- task 9 opened a pull request\nrepo:template:ai-on-gke:grain:qualification-ci-diagnostics: fail (task 10, attempt 2) -- task 10 proposed a follow-up task\nrepo:template:ai-on-gke:grain:qualification-base-triage: pass (task 11, attempt 2)\nrepo:template:ai-on-gke:grain:qualification-system-smoke: not started\nconfirmed red after 1 retry: repo:template:ai-on-gke:grain:qualification-mergequeue, repo:template:ai-on-gke:grain:qualification-ci-diagnostics"
+  },
+  {
+    "Name": "grain/rc-hold",
+    "Status": "completed",
+    "Conclusion": "success",
+    "HTMLURL": "",
+    "FailureReason": "Blockers landed",
+    "StepsExecuted": 0,
+    "ID": 8003,
+    "CheckSuiteID": 0,
+    "HeadSHA": "55cf8c54caeca60a735d96d360c58c63c18be29a",
+    "App": "grain-walkthrough",
+    "ExternalID": "rc-hold:v3.3.0-rc.1",
+    "StartedAt": "2026-11-07T16:02:31Z",
+    "CompletedAt": "2026-11-07T16:12:31Z",
+    "Output": "Every task titled [rc-blocker v3.3.0-rc.1] has landed; v3.3.0-rc.2 may be cut."
+  }
+]
