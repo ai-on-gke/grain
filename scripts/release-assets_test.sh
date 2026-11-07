@@ -202,6 +202,14 @@ run bash "$assets" --dry-run train-tag v3.5.0-pending
 check "a pushed -pending tag publishes vX.Y.Z-pending with version vX.Y.Z" \
   '[ "$status" = 0 ] && grep -q "published v3.5.0-pending" <<< "$out" && [ "$(jq -r .version "$m")" = v3.5.0 ]'
 run bash "$assets" --dry-run train-tag v3.5.0-rc.2-discarded
+check "train-tag refuses a marker tag nobody pushed (publishing it would create the tag)" \
+  '[ "$status" != 0 ] && grep -q "not a tag the release train has pushed" <<< "$out" && ! grep -q "published" <<< "$out"'
+run bash "$assets" --dry-run train-tag v3.4.0-retracted
+check "train-tag refuses an unpushed -retracted marker" \
+  '[ "$status" != 0 ] && grep -q "not a tag the release train has pushed" <<< "$out" && ! grep -q "published" <<< "$out"'
+git tag -a v3.5.0-rc.2-discarded -m discarded "$commit"
+git push -q origin v3.5.0-rc.2-discarded
+run bash "$assets" --dry-run train-tag v3.5.0-rc.2-discarded
 check "a pushed -discarded tag publishes the discarded marker" '[ "$status" = 0 ] && grep -q "published v3.5.0-rc.2-discarded" <<< "$out"'
 for promoted in v3.4.0 latest; do
   run bash "$assets" --dry-run train-tag "$promoted"

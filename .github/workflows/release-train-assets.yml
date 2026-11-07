@@ -27,6 +27,9 @@
 # only images.json's version and createdAt changed: nothing is built here.
 # vX.Y.Z and latest are promote.yml's and promote-release.yml's: train-tag
 # refuses them, so neither a tag push nor a dispatch here promotes a release.
+# It also refuses a tag that has not been pushed -- publishing a release on
+# a missing tag creates it -- so a dispatch cannot plant the -discarded or
+# -retracted markers release-from-trunk.sh reads.
 
 name: release-train-assets
 

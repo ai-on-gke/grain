@@ -918,6 +918,17 @@ train_phase() {
 train_tag() {
   local tag="${1:?train-tag needs a tag}"
   case "$tag" in
+    v*-rc.* | v*-pending | v*-retracted)
+      # The release of a tag the train has pushed, never a tag of its own:
+      # publishing a release on a tag that does not exist creates it, and
+      # release-from-trunk.sh reads -discarded and -retracted tags to drop
+      # an rc or skip a release. A dispatch of release-train-assets.yml
+      # naming a marker nobody pushed must not plant one.
+      [[ "$(remote_commit_of_tag "$tag")" =~ ^[0-9a-f]{40}$ ]] ||
+        die "$tag is not a tag the release train has pushed to $remote: train-tag publishes a pushed tag's release, never creates the tag"
+      ;;
+  esac
+  case "$tag" in
     v*-rc.*-discarded) train_phase discard-rc "${tag%-discarded}" ;;
     v*-rc.*) train_phase rc "$tag" ;;
     v*-pending) train_phase pending "${tag%-pending}" ;;
