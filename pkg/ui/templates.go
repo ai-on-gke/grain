@@ -1209,6 +1209,16 @@ func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
+	if call, ok := agentCallFromContext(r.Context()); ok && call.external != nil && len(call.external.Repos) > 0 {
+		filtered := make([]Template, 0, len(list))
+		for _, t := range list {
+			if t.Repo != "" && !call.grants.Allows("templates:read", t.Repo) {
+				continue
+			}
+			filtered = append(filtered, t)
+		}
+		list = filtered
+	}
 	writeJSON(w, http.StatusOK, list)
 }
 

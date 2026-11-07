@@ -2592,9 +2592,15 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	// GET /api/inbox and GET /api/events without ?repo= answer only the
 	// repositories the token reads (Server.inboxReadable,
 	// Server.eventsReadable), so a token held to some of them is let
-	// through rather than refused for naming none.
+	// through rather than refused for naming none. GET /api/config and
+	// GET /api/templates answer board-level metadata (`grain skill
+	// install`, `grain list`, `grain create`) under deployment:read and
+	// templates:read even when the credential is narrowed to specific
+	// repositories.
 	fsAllowed := fsMergeQueueByCI(set, pattern, r) ||
-		((pattern == "GET /api/inbox" || pattern == "GET /api/events") && set.Has(scope) && strings.TrimSpace(r.URL.Query().Get("repo")) == "")
+		((pattern == "GET /api/inbox" || pattern == "GET /api/events") && set.Has(scope) && strings.TrimSpace(r.URL.Query().Get("repo")) == "") ||
+		(pattern == "GET /api/config" && (set.Has(scope) || set.Has("deployment:read"))) ||
+		(pattern == "GET /api/templates" && set.Has(scope))
 	if !set.Has(scope) && !adminPatch && !fsAllowed && !detach {
 		return call, fmt.Errorf("%s holds no api grant for scope %s, which %s needs", principal, scope, pattern)
 	}

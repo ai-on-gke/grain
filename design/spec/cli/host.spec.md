@@ -1224,6 +1224,52 @@ _No flags._
 
 **Pinned by:** `pkg/cli/context_test.go`: `TestContextConfigXDGMode0600AndNoRawSecrets`; `pkg/cli/cliconn_test.go`: `TestContextCommandsAndServerPrecedence`; `pkg/cli/credentials_test.go`: `TestCredentialStoreKeyringFallbackAndRefusesWorldReadableFile`; `pkg/cli/login_test.go`: `TestGrainLoginIssueTokenSelfServiceNonAdminAndLogoutRevokes`; `pkg/cli/credsource_test.go`: `TestRegisterCredentialSourceAndHTTPClientRefusesLoginRedirectAndHTML`.
 
+### 4.16a `grain skill install|status` and `grain mcp` {#CLI-110}
+
+Installs and checks the workstation coding-agent skill guide (`SKILL.md`) and serves the optional local stdio 13-tool external coordination MCP server ([external-cli #XC-30](../external-cli/external-cli.spec.md#XC-30) and [#XC-31](../external-cli/external-cli.spec.md#XC-31)).
+- `grain skill install` combines the embedded `pkg/cli/skill/SKILL.md.tmpl` static CLI guide with live deployment metadata from `GET /api/auth/whoami`, `GET /api/config`, and `GET /api/templates`, embeds the CLI version and SHA-256 deployment digest, refuses to write any bearer token or secret, and with `-mcp` registers `grain mcp` in the target agent's MCP configuration file.
+- `grain skill status` checks recorded or standard skill paths for the active context and reports `installed`, `stale` (`version_mismatch` or `deployment_digest_mismatch`), or `missing`. Ordinary CLI calls emit at most a single-line notice on `stderr` when the recorded skill is stale, never touching `stdout`.
+- `grain mcp [-context <name>]` speaks JSON-RPC 2.0 over `stdin`/`stdout` (distinct from in-sandbox `grain mcpserver`) exposing the 13 external coordination tools (`propose_task`, `read_grain_task`, `list_grain_tasks`, `wait_for_task`, `reply_to_task`, `comment_on_task`, `grain_inbox`, `ci_runs`, `ci_log`, `merge_queue`, `fs_read`, `fs_grep`, and `adopt_pull_request`) over the CLI's shared `ui.HTTPClient` and context credentials, slicing `wait_for_task` below MCP client tool timeouts.
+
+#### `grain skill`
+
+<!-- BEGIN GENERATED FLAGS: grain skill -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+#### `grain skill install`
+
+<!-- BEGIN GENERATED FLAGS: grain skill install -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-claude` | bool |  |  | install for Claude Code (~/.claude/skills/grain/SKILL.md, or .claude/skills/grain/SKILL.md with -project) |
+| `-codex` | bool |  |  | install for Codex CLI (~/.codex/skills/grain/SKILL.md, or .agents/skills/grain/SKILL.md with -project) |
+| `-dir` | string |  |  | write SKILL.md into this directory |
+| `-gemini` | bool |  |  | install for Gemini CLI (~/.gemini/skills/grain/SKILL.md, or .gemini/skills/grain/SKILL.md with -project) |
+| `-jetski` | bool |  |  | install for Jetski (~/.gemini/jetski/skills/grain/SKILL.md, or .agents/skills/grain/SKILL.md with -project) |
+| `-json` | bool |  |  | print installation summary as JSON |
+| `-mcp` | bool |  |  | register grain mcp in the target agent's MCP server configuration |
+| `-project` | bool |  |  | write into the current repository/project skill directory instead of the user home directory |
+<!-- END GENERATED FLAGS -->
+
+#### `grain skill status`
+
+<!-- BEGIN GENERATED FLAGS: grain skill status -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-json` | bool |  |  | print status as JSON |
+<!-- END GENERATED FLAGS -->
+
+#### `grain mcp`
+
+<!-- BEGIN GENERATED FLAGS: grain mcp -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-context` | value |  | $GRAIN_CONTEXT | the named context to use ($GRAIN_CONTEXT; see grain context list) |
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/skill_test.go`: `TestGrainSkillInstallTargetPathsIdempotencyAndContainsNoSecrets`, `TestGrainSkillStatusDetectsVersionAndDeploymentDigestStaleness`, `TestStaleSkillStderrNoticeNeverCorruptsJSONStdout`; `pkg/cli/mcp_external_test.go`: `TestGrainMCPStdioToolsCallSharedClientAndSliceWaitForTask`.
+
 ---
 
 ### 4.17 `grain registry <subcommand>` {#CLI-109}
@@ -2423,4 +2469,3 @@ _No flags._
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/sandboximage_test.go`: `TestSandboxImageCommandPrintsDefaultAndBase`, `TestSandboxImageContractSubcommand`, `TestSandboxImageCheckSubcommand`.
-

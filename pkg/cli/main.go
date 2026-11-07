@@ -394,6 +394,8 @@ Global flags (before or after the command; -flag and --flag are the same):
 Commands:
   login <url> [flags] / logout [<ctx>] / whoami   sign in to a deployment as a named context, and say as whom
   context list|use|show|delete         the named contexts ($XDG_CONFIG_HOME/grain/config.json)
+  skill install|status [flags]         install or check the workstation SKILL.md guide (and with -mcp, register grain mcp)
+  mcp [--context <name>]               speak external coordination MCP over stdin/stdout (13 tools; see mcp_external.go)
   list [flags]                         list the tasks in play -- closed and deferred ones are left
                                        out unless -closed/-deferred or a filter naming that state
                                        asks for them (-filter attribute:comparison:value narrows the
@@ -650,7 +652,15 @@ func runCLI(args []string) error {
 		connect:     *connectTimeout,
 		call:        *callTimeout,
 	}
-	return explainDaemonError(dispatchCLI(ctx, c, out, fs, sel, rest), target)
+	err = explainDaemonError(dispatchCLI(ctx, c, out, fs, sel, rest), target)
+	if err == nil {
+		switch canonicalCommand(rest[0]) {
+		case "skill", "mcp", "context", "login", "logout":
+		default:
+			warnIfSkillStale(os.Stderr, sel)
+		}
+	}
+	return err
 }
 
 // dispatchCLI runs one task-CLI command against c.
@@ -659,6 +669,10 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 	switch cmd {
 	case "context", "whoami", "login", "logout":
 		return dispatchSignIn(ctx, c, out, sel, cmd, cmdArgs)
+	case "skill":
+		return cmdSkill(ctx, c, out, sel, cmdArgs)
+	case "mcp":
+		return cmdMCP(ctx, c, sel, cmdArgs)
 	case "list":
 		return cmdList(ctx, c, out, cmdArgs)
 	case "get", "show":

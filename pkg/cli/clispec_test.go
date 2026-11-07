@@ -81,6 +81,7 @@ var hostSpecSubcommands = map[string][]string{
 	"sandbox-image": {"check", "contract"},
 	"secrets":       {"set", "delete", "list", "mint-gemini-key", "repo"},
 	"setup":         {"gcp"},
+	"skill":         {"install", "status"},
 	"state": {"status", "repo", "sync", "resets clear", "reformat", "restore-snapshot", "prepare-upgrade",
 		"check", "key show", "key path", "key import"},
 }

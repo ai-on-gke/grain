@@ -1,0 +1,79 @@
+---
+name: grain
+description: Coordinate tasks, CI runs, code reviews, and pull requests on Grain via the grain CLI.
+---
+<!-- grain-skill: {{.MetadataJSON}} -->
+
+# Grain External CLI Guide
+
+Use the `grain` CLI to file and monitor engineering tasks, inspect CI runs and shared faults, read the Grain namespace, and coordinate reviews and merge-queue gates.
+
+## 1. Attribution & Session Setup
+
+Before running `grain` commands in an agent session, export your client identifier and session ID so tasks and comments record `filed_via` provenance (`X-Grain-Client`):
+
+```sh
+export GRAIN_CLIENT="<tool>/<version>"
+export GRAIN_CLIENT_SESSION="<session-id>"
+```
+
+Verify your active context, identity, scopes, and repository limits first:
+
+```sh
+grain whoami --json
+```
+
+{{if .ContextFlag}}Pass `--context {{.ContextFlag}}` (or `export GRAIN_CONTEXT={{.ContextFlag}}`) when targeting this deployment explicitly.
+{{end}}
+## 2. Output Format (`--json`) and Exit Codes `0..5`
+
+Always pass `--json` when parsing results programmatically:
+- With `--json`, `stdout` contains a single valid JSON document using `/api` wire field names (`camelCase`). Human notes and staleness notices go exclusively to `stderr`.
+- When `--json` fails non-zero, `stderr` emits `{"error": {"code": "...", "message": "...", "fix": "..."}}` (except exit `1` on completed `wait` / `ci wait` / `ci show` queries, which emit the failed entity's JSON result on `stdout`).
+
+| Exit code | Meaning |
+|---:|---|
+| `0` | Success (for `wait` / `ci wait`, the wake condition was met cleanly). |
+| `1` | Target entity failed (e.g. CI concluded `failure`/`cancelled`, task closed unmerged/failed) or daemon `5xx`. |
+| `2` | CLI usage error, invalid flag/argument, state precondition conflict (`400`/`409`/`422`), or unknown context. |
+| `3` | Authentication or authorization failure (`401`/`403`, expired external token, login redirect, or bad file mode). |
+| `4` | Daemon unreachable (DNS/TLS error, connection refused, or HTTP connect/response timeout). |
+| `5` | Blocking `grain wait` or `grain ci wait` timed out (`--timeout` elapsed) before its wake condition was met. |
+
+## 3. Core CLI Verbs
+
+- **Tasks & Inbox:**
+  - `grain inbox [--repo <owner/name>] [--kind question|secret|notification|merge-held|proposal] --json`
+  - `grain list [--repo <owner/name>] [--state <state>] [--filter filed_via:has:session=<id>] [--filter derived_from:eq:<owner/name#n>] --json`
+  - `grain get <id> [--comments-since <RFC3339>] --json`
+  - `grain create --repo <owner/name> --title "<title>" [--body "<md>" | --body-file <path|->] [--design <design/...>] [--depends-on <id>] [--field <k=v>] --json`
+  - `grain reply <id> "<answer>" --json` (or `--body-file <path|->`)
+  - `grain comment <id> "<note>" --json`
+  - `grain logs <id> [--attempt <N>] [--tail <N>] [--follow] --json`
+- **Blocking Waits:**
+  - `grain wait <id...> --until=awaiting-reply,ci-done,closed [--timeout=30m] --json`
+  - `grain wait <id...> --until=merged [--timeout=30m] --json`
+  - If `grain wait` exits `5` (timeout), inspect current task states in the output and re-run the printed `grain wait ...` command to continue waiting.
+- **Namespace (`ci://`, `task://`, `deploy://`, `config://`, `memory://`):**
+  - `grain fs ls <uri> [--glob <pattern>] --json`
+  - `grain fs read <uri> [--tail <bytes>] [--lines <N>]`
+  - `grain fs grep <regex> <uri> [-i] [-C <N>] [--glob <pattern>] --json`
+- **CI, Pull Requests & Merge Queue:**
+  - `grain ci list [--repo <owner/name>] [--branch <ref>] --json`
+  - `grain ci show <run-id> --json`
+  - `grain ci wait (<run-id> | --pr <owner/name#n> | --ref <branch> --repo <owner/name>) [--timeout 30m] --json`
+  - `grain ci faults [--repo <owner/name>] --json` and `grain ci test-history <test-name> [--repo <owner/name>] --json` (check shared faults and flake history before blaming your change)
+  - `grain ci retrigger <run-id> [--jobs <j1,j2>] --json`
+  - `grain merge-queue [--repo <owner/name>] --json`
+  - `grain pr adopt <owner/name#n> [--mode review-only|finish] [--spec <design/spec/...>] [--design <design/design/...>] --json`
+  - `grain pr review <owner/name#n> [--design] [--spec <design/spec/...>] --json`
+  - `grain pr status <owner/name#n> [--threads] --json`
+
+## 4. Mandatory Safety Rules
+
+1. **Answer parked questions with `grain reply`, NEVER `grain comment`:** When a task is parked in `awaiting-reply` on an `ask_question` prompt, run `grain reply <id> "<answer>"` so Grain records the answer and re-queues the task. `grain comment` only appends a general note and leaves the task parked.
+2. **Never pass secrets through `grain reply` or `grain comment`:** When a task is parked on a secret request (`request_secret`), `grain reply` will refuse (`409` / exit `2`). Never ask the human to paste secret material into chat or CLI arguments; direct them to enter it in the encrypted input on the root-relative task page `[Task #<id>](/tasks/<id>)`.
+3. **Never call `grain force-merge`:** Force-merging bypasses merge predicates and is strictly a human operator override (`merge:force`). Inspect held gates with `grain merge-queue` and `grain pr status`, or re-enqueue a dropped change with `grain retry-merge <id>`.
+4. **Root-relative UI links:** Format all Grain UI references as root-relative paths such as `[Task #42](/tasks/42)` or `[Inbox](/inbox)`, never `http://localhost:...` URLs.
+
+{{.DeploymentSection}}
