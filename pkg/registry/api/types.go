@@ -446,6 +446,8 @@ type Entry struct {
 	Owner               string           `json:"owner"`
 	OwnerGroup          string           `json:"owner_group,omitempty"`
 	PendingOwner        string           `json:"pending_owner,omitempty"`
+	TransferExpiresAt   *time.Time       `json:"transfer_expires_at,omitempty"`
+	OwnerDisabled       bool             `json:"owner_disabled,omitempty"`
 	ConnectedPrincipal  string           `json:"connected_principal,omitempty"`
 	Listed              bool             `json:"listed"`
 	Tags                []string         `json:"tags,omitempty"`
@@ -485,6 +487,8 @@ type Entry struct {
 	DeletedAt           *time.Time       `json:"deleted_at,omitempty"`
 	ReservedUntil       *time.Time       `json:"reserved_until,omitempty"`
 	PurgeAfter          *time.Time       `json:"purge_after,omitempty"`
+	DBPurgeAfter        *time.Time       `json:"db_purge_after,omitempty"`
+	PurgedAt            *time.Time       `json:"purged_at,omitempty"`
 	Generation          int              `json:"generation,omitempty"`
 }
 
@@ -647,12 +651,15 @@ type DeleteEntryRequest struct {
 	DeleteDisk  bool   `json:"delete_disk,omitempty"`
 }
 
-// TransferRequest offers ownership transfer via POST /api/entries/<name>/transfer.
+// TransferRequest offers ownership transfer via POST /api/entries/<name>/transfer
+// (or performs an audited admin force-transfer when Force is true).
 type TransferRequest struct {
 	To              string `json:"to,omitempty"`
 	NewOwner        string `json:"new_owner,omitempty"`
 	OwnerGroup      string `json:"owner_group,omitempty"`
 	ClearOwnerGroup bool   `json:"clear_owner_group,omitempty"`
+	Force           bool   `json:"force,omitempty"`
+	Cancel          bool   `json:"cancel,omitempty"`
 }
 
 // ListEntriesQuery filters GET /api/entries.
@@ -848,10 +855,107 @@ type AuditLogEntry struct {
 	ID         int64          `json:"id"`
 	At         time.Time      `json:"at"`
 	ActorEmail string         `json:"actor_email"`
+	Via        string         `json:"via,omitempty"`
+	GrantID    string         `json:"grant_id,omitempty"`
 	Action     string         `json:"action"`
 	EntryID    string         `json:"entry_id,omitempty"`
 	EntryName  string         `json:"entry_name,omitempty"`
 	Detail     map[string]any `json:"detail,omitempty"`
+}
+
+// OwnerQuotaSummary describes an owner row joined with their effective quota and active usage.
+type OwnerQuotaSummary struct {
+	Email             string     `json:"email"`
+	Disabled          bool       `json:"disabled"`
+	MaxInstanceUnits  int        `json:"max_instance_units"`
+	UsedInstanceUnits int        `json:"used_instance_units"`
+	MaxConnected      int        `json:"max_connected"`
+	UsedConnected     int        `json:"used_connected"`
+	HasOverride       bool       `json:"has_override,omitempty"`
+	UpdatedBy         string     `json:"updated_by,omitempty"`
+	UpdatedAt         *time.Time `json:"updated_at,omitempty"`
+	CreatedAt         *time.Time `json:"created_at,omitempty"`
+	LastSeenAt        *time.Time `json:"last_seen_at,omitempty"`
+}
+
+// SetOwnerDisabledRequest is the body for POST/PATCH /api/admin/owners/<email>.
+type SetOwnerDisabledRequest struct {
+	Disabled bool `json:"disabled"`
+}
+
+// SetQuotaRequest is the body for PUT/POST /api/admin/quotas/<email>.
+type SetQuotaRequest struct {
+	MaxInstanceUnits int `json:"max_instance_units"`
+	MaxConnected     int `json:"max_connected"`
+}
+
+// AdminScopeConflict describes an active primary-prefix conflict across the registry.
+type AdminScopeConflict struct {
+	EntryName           string    `json:"entry_name"`
+	Owner               string    `json:"owner"`
+	OwnerGroup          string    `json:"owner_group,omitempty"`
+	Repo                string    `json:"repo"`
+	PathPrefix          string    `json:"path_prefix"`
+	Source              string    `json:"source"`
+	ConflictWith        string    `json:"conflict_with"`
+	IncumbentOwner      string    `json:"incumbent_owner,omitempty"`
+	IncumbentOwnerGroup string    `json:"incumbent_owner_group,omitempty"`
+	IncumbentPathPrefix string    `json:"incumbent_path_prefix,omitempty"`
+	ClaimedAt           time.Time `json:"claimed_at"`
+}
+
+// ResolveConflictRequest is the body for POST /api/admin/conflicts/resolve.
+type ResolveConflictRequest struct {
+	EntryName  string `json:"entry_name"`
+	Repo       string `json:"repo"`
+	PathPrefix string `json:"path_prefix"`
+	Resolution string `json:"resolution,omitempty"`
+}
+
+// SQLInstanceStatus describes a shared Cloud SQL instance in the registry pool.
+type SQLInstanceStatus struct {
+	Name              string `json:"name"`
+	ConnectionName    string `json:"connection_name"`
+	PrivateIP         string `json:"private_ip"`
+	MaxDatabases      int    `json:"max_databases"`
+	UsedDatabases     int    `json:"used_databases"`
+	ActiveDatabases   int    `json:"active_databases"`
+	RetainedDatabases int    `json:"retained_databases"`
+	Draining          bool   `json:"draining"`
+}
+
+// SetSQLInstanceDrainingRequest is the body for POST/PATCH /api/admin/sql-instances/<name>.
+type SetSQLInstanceDrainingRequest struct {
+	Draining bool `json:"draining"`
+}
+
+// OrphanVMInfo describes an unmatched GCE VM discovered during an orphan sweep.
+type OrphanVMInfo struct {
+	InstanceID string            `json:"instance_id"`
+	Zone       string            `json:"zone"`
+	State      string            `json:"state"`
+	InternalIP string            `json:"internal_ip,omitempty"`
+	EntryName  string            `json:"entry_name,omitempty"`
+	Labels     map[string]string `json:"labels,omitempty"`
+	DetectedAt time.Time         `json:"detected_at"`
+}
+
+// LeaseStatus describes the single-leader reconciler lease in GET /api/admin/summary.
+type LeaseStatus struct {
+	LeaseName  string    `json:"lease_name"`
+	HolderID   string    `json:"holder_id"`
+	AcquiredAt time.Time `json:"acquired_at"`
+	RenewedAt  time.Time `json:"renewed_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	Active     bool      `json:"active"`
+	LagSeconds int       `json:"lag_seconds"`
+}
+
+// HardPurgeRequest is the optional body for POST /api/admin/entries/<name>/purge.
+type HardPurgeRequest struct {
+	Confirm            string `json:"confirm,omitempty"`
+	Force              bool   `json:"force,omitempty"`
+	ReleaseReservation bool   `json:"release_reservation,omitempty"`
 }
 
 // StatusResponse is returned by GET /api/status for the Status page.
@@ -877,7 +981,15 @@ type StatusResponse struct {
 
 // AdminSummaryResponse is returned by GET /api/admin/summary for registry admins.
 type AdminSummaryResponse struct {
-	Replicas       []ReplicaStatus     `json:"replicas"`
-	TunnelSessions []TunnelSessionInfo `json:"tunnel_sessions"`
-	AuditLog       []AuditLogEntry     `json:"audit_log"`
+	Replicas        []ReplicaStatus      `json:"replicas"`
+	TunnelSessions  []TunnelSessionInfo  `json:"tunnel_sessions"`
+	Owners          []OwnerQuotaSummary  `json:"owners"`
+	Quotas          []OwnerQuotaSummary  `json:"quotas"`
+	ScopeConflicts  []AdminScopeConflict `json:"scope_conflicts"`
+	SQLInstances    []SQLInstanceStatus  `json:"sql_instances"`
+	Orphans         []OrphanVMInfo       `json:"orphans"`
+	DeletedEntries  []Entry              `json:"deleted_entries,omitempty"`
+	VersionCounts   map[string]int       `json:"version_counts,omitempty"`
+	ReconcilerLease *LeaseStatus         `json:"reconciler_lease,omitempty"`
+	AuditLog        []AuditLogEntry      `json:"audit_log"`
 }

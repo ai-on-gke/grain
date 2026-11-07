@@ -639,3 +639,81 @@ func (c *Client) AdminSummary(ctx context.Context) (*AdminSummaryResponse, error
 	}
 	return &out, nil
 }
+
+// SetOwnerDisabled sends POST /api/admin/owners/<email>.
+func (c *Client) SetOwnerDisabled(ctx context.Context, email string, disabled bool) (*OwnerQuotaSummary, error) {
+	var out OwnerQuotaSummary
+	path := "/api/admin/owners/" + url.PathEscape(email)
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, SetOwnerDisabledRequest{Disabled: disabled}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SetQuota sends PUT /api/admin/quotas/<email>.
+func (c *Client) SetQuota(ctx context.Context, email string, req SetQuotaRequest) (*OwnerQuotaSummary, error) {
+	var out OwnerQuotaSummary
+	path := "/api/admin/quotas/" + url.PathEscape(email)
+	if err := c.doJSON(ctx, http.MethodPut, path, nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ResetQuota sends DELETE /api/admin/quotas/<email> to remove a custom quota override.
+func (c *Client) ResetQuota(ctx context.Context, email string) (*OwnerQuotaSummary, error) {
+	var out OwnerQuotaSummary
+	path := "/api/admin/quotas/" + url.PathEscape(email)
+	if err := c.doJSON(ctx, http.MethodDelete, path, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ResolveScopeConflict sends POST /api/admin/conflicts/resolve.
+func (c *Client) ResolveScopeConflict(ctx context.Context, req ResolveConflictRequest) error {
+	return c.doJSON(ctx, http.MethodPost, "/api/admin/conflicts/resolve", nil, req, nil)
+}
+
+// SetSQLInstanceDraining sends POST /api/admin/sql-instances/<name>.
+func (c *Client) SetSQLInstanceDraining(ctx context.Context, name string, draining bool) (*SQLInstanceStatus, error) {
+	var out SQLInstanceStatus
+	path := "/api/admin/sql-instances/" + url.PathEscape(name)
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, SetSQLInstanceDrainingRequest{Draining: draining}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// DeleteOrphanVM sends DELETE /api/admin/orphans/<zone>/<instanceID>.
+func (c *Client) DeleteOrphanVM(ctx context.Context, zone, instanceID string) error {
+	path := "/api/admin/orphans/" + url.PathEscape(zone) + "/" + url.PathEscape(instanceID)
+	return c.doJSON(ctx, http.MethodDelete, path, nil, nil, nil)
+}
+
+// DisconnectTunnel sends DELETE /api/admin/tunnels/<name>.
+func (c *Client) DisconnectTunnel(ctx context.Context, name string) error {
+	path := "/api/admin/tunnels/" + url.PathEscape(name)
+	return c.doJSON(ctx, http.MethodDelete, path, nil, nil, nil)
+}
+
+// PurgeEntry sends POST /api/admin/entries/<name>/purge.
+func (c *Client) PurgeEntry(ctx context.Context, name string, req HardPurgeRequest) (*Entry, error) {
+	var out Entry
+	path := "/api/admin/entries/" + url.PathEscape(name) + "/purge"
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ForceTransfer sends POST /api/admin/entries/<name>/transfer.
+func (c *Client) ForceTransfer(ctx context.Context, name string, req TransferRequest) (*Entry, error) {
+	req.Force = true
+	var out Entry
+	path := "/api/admin/entries/" + url.PathEscape(name) + "/transfer"
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}

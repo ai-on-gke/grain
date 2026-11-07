@@ -182,6 +182,13 @@ export function offerTransfer(name, payload) {
   });
 }
 
+export function cancelTransfer(name) {
+  return requestJSON(`/api/entries/${encodeURIComponent(name)}/transfer`, {
+    method: "POST",
+    body: JSON.stringify({ cancel: true }),
+  });
+}
+
 export function acceptTransfer(name) {
   return requestJSON(
     `/api/entries/${encodeURIComponent(name)}/transfer/accept`,
@@ -190,4 +197,70 @@ export function acceptTransfer(name) {
       body: JSON.stringify({}),
     },
   );
+}
+
+export function forceTransferEntry(name, payload) {
+  return requestJSON(
+    `/api/admin/entries/${encodeURIComponent(name)}/transfer`,
+    {
+      method: "POST",
+      body: JSON.stringify({ ...payload, force: true }),
+    },
+  );
+}
+
+export function purgeEntry(name, payload = {}) {
+  return requestJSON(`/api/admin/entries/${encodeURIComponent(name)}/purge`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function setOwnerDisabled(email, disabled) {
+  return requestJSON(`/api/admin/owners/${encodeURIComponent(email)}`, {
+    method: "POST",
+    body: JSON.stringify({ disabled: Boolean(disabled) }),
+  });
+}
+
+export function setQuota(email, payload) {
+  return requestJSON(`/api/admin/quotas/${encodeURIComponent(email)}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function resetQuota(email) {
+  return requestJSON(`/api/admin/quotas/${encodeURIComponent(email)}`, {
+    method: "DELETE",
+  });
+}
+
+export function resolveScopeConflict(payload) {
+  return requestJSON("/api/admin/conflicts/resolve", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function setSQLInstanceDraining(name, draining) {
+  return requestJSON(`/api/admin/sql-instances/${encodeURIComponent(name)}`, {
+    method: "POST",
+    body: JSON.stringify({ draining: Boolean(draining) }),
+  });
+}
+
+export function deleteOrphanVM(zone, instanceId) {
+  return requestJSON(
+    `/api/admin/orphans/${encodeURIComponent(zone)}/${encodeURIComponent(instanceId)}`,
+    {
+      method: "DELETE",
+    },
+  );
+}
+
+export function disconnectTunnel(name) {
+  return requestJSON(`/api/admin/tunnels/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
 }

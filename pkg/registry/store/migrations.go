@@ -308,6 +308,19 @@ ALTER TABLE registry.entries
     ADD COLUMN IF NOT EXISTS stopped_at TIMESTAMPTZ;
 `,
 	},
+	{
+		version: 6,
+		name:    "transfer_expiry_and_admin_recovery",
+		upSQL: `
+ALTER TABLE registry.entries
+    ADD COLUMN IF NOT EXISTS transfer_expires_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS purged_at           TIMESTAMPTZ;
+
+ALTER TABLE registry.leases
+    ADD COLUMN IF NOT EXISTS acquired_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ADD COLUMN IF NOT EXISTS renewed_at  TIMESTAMPTZ NOT NULL DEFAULT now();
+`,
+	},
 }
 
 // Migrate applies all pending registry schema migrations inside the `registry` PostgreSQL schema.
