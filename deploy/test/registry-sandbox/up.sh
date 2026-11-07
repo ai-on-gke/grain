@@ -360,7 +360,7 @@ perm_resp="$(curl -fsSL -X POST \
       "cloudkms.cryptoKeys.setIamPolicy",
       "iap.webServices.setIamPolicy",
       "resourcemanager.projects.setIamPolicy",
-      "iam.serviceAccounts.signJwt",
+      "iam.serviceAccounts.getAccessToken",
       "iap.tunnelInstances.accessViaIAP"
     ]
   }')"
@@ -393,8 +393,8 @@ fi
 
 create_verifier_sa_json="true"
 verifier_sa_email=""
-if ! has_perm "iam.serviceAccounts.signJwt" && [[ "${active_acct}" == *.gserviceaccount.com ]]; then
-  log "Note: iam.serviceAccounts.signJwt not held; admitting active service account ${active_acct} as verifier."
+if ! has_perm "iam.serviceAccounts.getAccessToken" && [[ "${active_acct}" == *.gserviceaccount.com ]]; then
+  log "Note: iam.serviceAccounts.getAccessToken not held; admitting active service account ${active_acct} as verifier."
   create_verifier_sa_json="false"
   verifier_sa_email="${active_acct}"
 fi

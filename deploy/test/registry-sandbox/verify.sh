@@ -16,7 +16,7 @@
 # Verify a live GCP sandbox grain-registry deployment end-to-end:
 #   1. Public /healthz and /.well-known/jwks.json on the HTTPS Load Balancer
 #   2. Unauthenticated front-door rejection by Cloud IAP
-#   3. Programmatic IAP authentication via IAM Credentials signJwt (zero SA keys)
+#   3. Programmatic IAP authentication with an openid+email service-account access token
 #   4. Catalog inspection via GET /api/directory (version, health/status, queue counts)
 #   5. Repository route resolution via GET /api/route
 #   6. End-to-end HTTP request routed through <entry>.<instance_domain> over the
@@ -148,55 +148,21 @@ if [[ "${INSECURE_TLS}" -eq 1 ]]; then
   curl_tls_flags+=(-k)
 fi
 
-sign_iap_jwt() {
-  local target_host="$1"
-  local now exp claim_file jwt_file key_file key_email kid hdr_b64 pay_b64 sig_b64
-  now="$(date +%s)"
-  exp=$(( now + 300 ))
-
-  # If running with a local service-account JSON key file matching verifier_sa
-  # (such as grain's gcp#gcp-key capability), sign the RS256 IAP assertion
-  # locally with openssl so roles/iam.serviceAccountTokenCreator is not needed.
-  key_file="${GOOGLE_APPLICATION_CREDENTIALS:-}"
-  if [[ -z "${key_file}" && -f "${HOME}/.gcp-service-account.json" ]]; then
-    key_file="${HOME}/.gcp-service-account.json"
+mint_iap_bearer_token() {
+  local active_acct
+  active_acct="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null | head -n1 || true)"
+  # Cloud IAP with its Google-managed OAuth client accepts a service-account
+  # OAuth2 access token carrying the `openid` and `userinfo.email` scopes when
+  # that SA holds roles/iap.httpsResourceAccessor on the backend service.
+  # (Self-signed JWTs and ID tokens are rejected: the managed client's
+  # audience is not ours to mint for.)
+  if [[ "${active_acct}" == "${verifier_sa}" ]]; then
+    gcloud auth print-access-token --scopes="openid,https://www.googleapis.com/auth/userinfo.email"
+    return 0
   fi
-  if [[ -n "${key_file}" && -r "${key_file}" ]]; then
-    key_email="$(jq -r '.client_email // empty' "${key_file}" 2>/dev/null || true)"
-    if [[ "${key_email}" == "${verifier_sa}" ]]; then
-      kid="$(jq -r '.private_key_id // empty' "${key_file}")"
-      jq -r '.private_key' "${key_file}" > "${tmp_dir}/sa.pem"
-      chmod 0600 "${tmp_dir}/sa.pem"
-      hdr_b64="$(jq -cn --arg kid "${kid}" '{alg:"RS256",typ:"JWT"} + (if $kid != "" then {kid:$kid} else {} end)' | openssl base64 -e -A | tr '+/' '-_' | tr -d '=')"
-      pay_b64="$(jq -cn \
-        --arg iss "${verifier_sa}" \
-        --arg sub "${verifier_sa}" \
-        --arg aud "https://${target_host}/*" \
-        --argjson iat "${now}" \
-        --argjson exp "${exp}" \
-        '{iss:$iss,sub:$sub,aud:$aud,iat:$iat,exp:$exp}' | openssl base64 -e -A | tr '+/' '-_' | tr -d '=')"
-      sig_b64="$(printf '%s.%s' "${hdr_b64}" "${pay_b64}" | openssl dgst -sha256 -sign "${tmp_dir}/sa.pem" -binary | openssl base64 -e -A | tr '+/' '-_' | tr -d '=')"
-      rm -f "${tmp_dir}/sa.pem"
-      printf '%s.%s.%s' "${hdr_b64}" "${pay_b64}" "${sig_b64}"
-      return 0
-    fi
-  fi
-
-  claim_file="${tmp_dir}/claim.json"
-  jwt_file="${tmp_dir}/token.jwt"
-  jq -n \
-    --arg iss "${verifier_sa}" \
-    --arg sub "${verifier_sa}" \
-    --arg aud "https://${target_host}/*" \
-    --argjson iat "${now}" \
-    --argjson exp "${exp}" \
-    '{iss: $iss, sub: $sub, aud: $aud, iat: $iat, exp: $exp}' > "${claim_file}"
-  gcloud iam service-accounts sign-jwt \
-    --iam-account="${verifier_sa}" \
-    --project="${PROJECT_ID}" \
-    "${claim_file}" \
-    "${jwt_file}" >/dev/null
-  tr -d '\r\n' < "${jwt_file}"
+  gcloud auth print-access-token \
+    --impersonate-service-account="${verifier_sa}" \
+    --scopes="openid,https://www.googleapis.com/auth/userinfo.email"
 }
 
 echo "==> [1/5] Checking public /healthz and /.well-known/jwks.json on https://${registry_host}..."
@@ -224,9 +190,9 @@ if [[ -z "${verifier_sa}" ]]; then
 fi
 
 echo "==> [3/5] Querying GET /api/directory through Cloud IAP as ${verifier_sa}..."
-reg_jwt="$(sign_iap_jwt "${registry_host}")"
+iap_tok="$(mint_iap_bearer_token)"
 dir_json="$(curl -fsS "${curl_tls_flags[@]}" \
-  -H "Authorization: Bearer ${reg_jwt}" \
+  -H "Authorization: Bearer ${iap_tok}" \
   "https://${registry_host}/api/directory")"
 jq . <<<"${dir_json}"
 
@@ -267,42 +233,50 @@ for name in "${targets[@]}"; do
   echo "==> [4/5] Checking GET /api/route for entry '${name}'..."
   scope_repo="$(jq -r '.scopes[0].repo // "ai-on-gke/grain"' <<<"${entry_obj}")"
   route_json="$(curl -fsS "${curl_tls_flags[@]}" \
-    -H "Authorization: Bearer ${reg_jwt}" \
+    -H "Authorization: Bearer ${iap_tok}" \
     "https://${registry_host}/api/route?repo=${scope_repo}")"
   jq . <<<"${route_json}"
 
   entry_host="${name}.${instance_domain}"
-  echo "==> [5/5] Routing HTTP request through https://${entry_host}/api/auth/user over outbound tunnel..."
+  echo "==> [5/5] Routing HTTP request through https://${entry_host}/api/auth/whoami over outbound tunnel..."
   # When tls_mode=hybrid and <name> was not pre-listed in managed_entry_names,
   # *.instance_domain uses the self-signed wildcard fallback certificate.
   entry_curl_flags=("${curl_tls_flags[@]}")
   if [[ "${tls_mode}" == "hybrid" && "${#entry_curl_flags[@]}" -eq 0 ]]; then
-    if ! curl -fsS --max-time 5 "https://${entry_host}/api/auth/user" >/dev/null 2>&1; then
+    if ! curl -fsS --max-time 5 -o /dev/null "https://${entry_host}/healthz" 2>/dev/null && \
+       ! curl -sS --max-time 5 -o /dev/null "https://${entry_host}/" 2>/dev/null; then
       entry_curl_flags+=(-k)
     fi
   fi
-  entry_jwt="$(sign_iap_jwt "${entry_host}")"
-  auth_user_json="$(curl -fsS "${entry_curl_flags[@]}" \
-    -H "Authorization: Bearer ${entry_jwt}" \
-    "https://${entry_host}/api/auth/user")"
-  jq . <<<"${auth_user_json}"
-
-  auth_method="$(jq -r '.authMethod // empty' <<<"${auth_user_json}")"
-  if [[ "${auth_method}" != "registry" ]]; then
-    echo "verify.sh: expected connected daemon authMethod='registry' on routed request, got '${auth_method}'" >&2
+  whoami_json="$(curl -fsS "${entry_curl_flags[@]}" \
+    -H "Authorization: Bearer ${iap_tok}" \
+    "https://${entry_host}/api/auth/whoami")"
+  jq . <<<"${whoami_json}"
+  # /api/auth/whoami is answered by the daemon itself, so the version it
+  # reports must match the grain_version its heartbeat put in the catalog.
+  whoami_ver="$(jq -r '.version // empty' <<<"${whoami_json}")"
+  if [[ -z "${whoami_ver}" || ( -n "${ver}" && "${whoami_ver}" != "${ver}" ) ]]; then
+    echo "verify.sh: /api/auth/whoami via '${entry_host}' reported version '${whoami_ver}', catalog says '${ver}'" >&2
     exit 1
   fi
 
-  # Also verify that the connected daemon's own operator allowlist refuses the
-  # read-only verifier service account on operator-scoped endpoints (/api/tasks).
-  tasks_code="$(curl -sS "${entry_curl_flags[@]}" -o /dev/null -w '%{http_code}' \
-    -H "Authorization: Bearer ${entry_jwt}" \
+  # The connected daemon evaluates the verified registry assertion against its
+  # own allowlist: the read-only verifier SA must get the daemon's 403 on
+  # operator-scoped /api/tasks (which proves the request reached the daemon).
+  tasks_body="${tmp_dir}/tasks-${name}.body"
+  tasks_code="$(curl -sS "${entry_curl_flags[@]}" -o "${tasks_body}" -w '%{http_code}' \
+    -H "Authorization: Bearer ${iap_tok}" \
+    -H "Accept: application/json" \
     "https://${entry_host}/api/tasks")"
   if [[ "${tasks_code}" != "403" ]]; then
-    echo "verify.sh: expected HTTP 403 for non-operator verifier SA on /api/tasks, got ${tasks_code}" >&2
+    echo "verify.sh: expected HTTP 403 for non-operator verifier SA on /api/tasks, got ${tasks_code} ($(cat "${tasks_body}"))" >&2
     exit 1
   fi
-  echo "    PASS: Routed request reached '${name}' daemon (authMethod=registry) and enforced operator allowlist (403 on /api/tasks for verifier SA)."
+  if ! grep -Fq "allowed users and groups" "${tasks_body}"; then
+    echo "verify.sh: 403 on /api/tasks did not come from the connected daemon's allowlist: $(cat "${tasks_body}")" >&2
+    exit 1
+  fi
+  echo "    PASS: Routed request reached '${name}' daemon over its outbound tunnel (/api/auth/whoami 200; /api/tasks refused by the daemon's allowlist)."
 done
 
 echo "All sandbox verification checks passed."

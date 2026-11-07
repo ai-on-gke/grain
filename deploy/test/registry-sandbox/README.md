@@ -63,7 +63,7 @@ sandbox project (`deploy/test/registry-sandbox/`).
     `roles/editor`, `roles/iap.admin`, and `roles/cloudkms.admin` (plus
     `roles/iap.tunnelResourceAccessor` and `roles/compute.osAdminLogin` if
     running `register-entry.sh` over IAP SSH from the deployer machine). When
-    `resourcemanager.projects.setIamPolicy` or `iam.serviceAccounts.signJwt` is
+    `resourcemanager.projects.setIamPolicy` or `iam.serviceAccounts.getAccessToken` is
     absent, `up.sh` automatically reuses the project's default Compute Engine
     service account for the VM and the deployer's service account for IAP
     verification.
