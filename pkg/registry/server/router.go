@@ -779,6 +779,20 @@ func (rt *Router) ServeInstanceHost(w http.ResponseWriter, r *http.Request, name
 	case "creating", "replacing", "provisioning":
 		WriteProvisioningState(w, r, rt.opts.RegistryHost, entry)
 		return
+	case "stopping":
+		WriteStoppingState(w, r, rt.opts.RegistryHost, entry)
+		return
+	case "stopped":
+		waking := false
+		if entry.Kind == api.KindInstance && entry.AutoWake && rt.store != nil {
+			if updated, _, wErr := rt.store.WakeStoppedEntry(r.Context(), entry.ID, effectiveCaller.Email); wErr == nil && updated != nil {
+				rt.hostCache.Put(updated)
+				entry = updated
+				waking = entry.LifecycleState == api.StateCreating
+			}
+		}
+		WriteStoppedOrWakingState(w, r, rt.opts.RegistryHost, entry, waking)
+		return
 	case "deleting", "deprovisioning":
 		WriteDeletingState(w, r, entry)
 		return

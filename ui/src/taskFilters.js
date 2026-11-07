@@ -503,8 +503,28 @@ export function matchesFilters(t, conditions, q, config, searchIn = null) {
   if (q === "") return true;
   if (searchIn) return String(searchIn(t)).toLowerCase().includes(q);
   return (
-    t.title.toLowerCase().includes(q) || String(t.id).toLowerCase().includes(q)
+    t.title.toLowerCase().includes(q) ||
+    String(t.id).toLowerCase().includes(q) ||
+    // A closed task the server's search found for this very text
+    // (closedTasks.js's markSearchHits): GET /api/tasks?search= matches
+    // a description too, and a listed task carries none to match here.
+    t.searchHit === q
   );
+}
+
+// admitsState is whether narrowing's State conditions let a task in
+// `state` through -- the question a view asks before it pages closed
+// work in for a list that could show it (closedTasks.js): the default
+// narrowing sets closed tasks aside, and a list that cannot show one
+// has no use for older pages or a server search of them. Only the State
+// conditions are asked, since every other one is about a task this
+// question does not have.
+export function admitsState(narrowing, config, state) {
+  const conditions = resolveConditions(
+    narrowing?.filters || [],
+    attributesFor(config),
+  ).filter(({ attr }) => attr.id === "state");
+  return matchesFilters({ id: "", title: "", state }, conditions, "", config);
 }
 
 // unknownValues is the values a condition names that its attribute's
