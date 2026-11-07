@@ -333,3 +333,61 @@ func TestCIJobMintsAnInProcessReleaseGrantWithOnlyTheAttachedRegistry(t *testing
 		t.Fatalf("an external reference with no registry: %v, want the no-servers refusal", err)
 	}
 }
+
+// Serving in-process servers to CI grant admission (F4) opens every
+// in-process server to a CI job, not only the release server: grain's own
+// methods are minted for a job whose repository's CI capabilities name them.
+// They stay behind the same gates an external reference is: a run triggered
+// by untrusted input is refused one the policy has not opted in with
+// allowUntrusted, and a policy rule's deny holds, with or without an attached
+// registry.
+func TestCIJobInProcessGrantsStayBehindThePolicy(t *testing.T) {
+	health := model.GrainHealthGrant
+	for _, tc := range []struct {
+		name    string
+		servers bool
+		policy  model.CapabilityPolicy
+		event   ci.Event
+		untrust bool
+		wantErr string
+	}{
+		{name: "untrusted pull request, attached registry", servers: true, event: ci.EventPullRequest, untrust: true,
+			wantErr: "not granted to runs triggered by untrusted input"},
+		{name: "untrusted pull request, no registry", event: ci.EventPullRequest, untrust: true,
+			wantErr: "not granted to runs triggered by untrusted input"},
+		{name: "a deny rule on a trusted push", servers: true, event: ci.EventPush,
+			policy:  model.CapabilityPolicy{Rules: []model.CapabilityPolicyRule{{Capability: model.GrainHealthRef, Deny: true}}},
+			wantErr: "capability policy denies"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			policy := tc.policy
+			g := &CiGrantReservations{
+				Capabilities: func() *model.CapabilityRegistry { return model.NewCapabilityRegistry() },
+				Credentials:  releaseTestSecrets(),
+				Config: func(context.Context) (*model.Config, error) {
+					return &model.Config{DeploymentID: "dep1", CapabilityPolicy: policy}, nil
+				},
+			}
+			if tc.servers {
+				registry := servers.New(servers.Options{})
+				t.Cleanup(registry.Close)
+				g.Servers = func() orchestrator.CapabilityServers { return registry }
+			}
+			req := ci.SandboxRequest{
+				Name: "c0123abcd-1", Repo: "acme/widgets", Ref: "main", Event: tc.event,
+				RunID: "0123abcd", JobAttempt: 1, Capabilities: []string{health}, Untrusted: tc.untrust,
+			}
+			done, err := g.Acquire(context.Background(), req, nil)
+			if err == nil {
+				done()
+				t.Fatalf("%s was admitted, want %q", health, tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error = %v, want %q", err, tc.wantErr)
+			}
+			if pass := g.Pass(req.Name); pass != nil {
+				t.Fatalf("a refused job holds a pass: %+v", pass)
+			}
+		})
+	}
+}
