@@ -588,6 +588,28 @@ func TestStandingWorkAndFromTemplateHoldLimitedRolesToTheirScopes(t *testing.T) 
 		t.Fatal(err)
 	}
 
+	// Admission above standard replaced the priority-dispatch and durable
+	// grants, which a limited role could not hand out: a template or
+	// schedule carrying the setting is refused it the same way.
+	bypassID := model.RepoDeclaredID(model.DeclaredTemplate, model.RepoRef{Owner: "acme", Name: "widgets"}, "urgent")
+	if err := h.client.Store.PutTemplate(ctx, model.Template{
+		ID:        bypassID,
+		Name:      "urgent",
+		Title:     "urgent",
+		Admission: model.AdmissionBypass,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.client.Store.PutSchedule(ctx, model.Schedule{
+		ID:         "sched-durable",
+		Title:      "durable",
+		Target:     model.RepoRef{Owner: "acme", Name: "widgets"},
+		Admission:  model.AdmissionDurable,
+		Recurrence: model.Recurrence{Kind: model.RecurrenceEveryNHours, EveryNHours: 24},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	for _, tc := range []struct {
 		name    string
 		method  string
@@ -595,6 +617,9 @@ func TestStandingWorkAndFromTemplateHoldLimitedRolesToTheirScopes(t *testing.T) 
 		body    string
 		wantKey string
 	}{
+		{"fromTemplateBypassAdmission", http.MethodPost, "/api/tasks/from-template", `{"repo":"acme/widgets","template":"urgent"}`, model.PriorityDispatchCapability},
+		{"runDurableSchedule", http.MethodPost, "/api/schedules/sched-durable/run", `{}`, model.DurableCapability},
+		{"createTemplateAdmission", http.MethodPost, "/api/templates", `{"name":"t","title":"t","admission":"durable"}`, "admission"},
 		{"fromTemplateApproved", http.MethodPost, "/api/tasks/from-template", `{"repo":"acme/widgets","template":"deploy","approved":true}`, "template"},
 		{"fromTemplatePrivGrant", http.MethodPost, "/api/tasks/from-template", `{"repo":"acme/widgets","template":"deploy"}`, "template"},
 		{"createTemplateAutoMerge", http.MethodPost, "/api/templates", `{"name":"t","title":"t","autoMerge":true}`, "autoMerge"},

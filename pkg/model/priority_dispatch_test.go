@@ -21,10 +21,10 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// One predicate: a console session (which holds durable) and a holder of
-// priority-dispatch both have priority dispatch, and nothing else does --
-// not an interactive task, not a title, and not a bare session tag without
-// the grant.
+// One predicate: a console session (admission: durable) and a task with
+// admission: bypass or durable both have priority dispatch, and nothing else
+// does -- not an interactive task, not a title, and not a bare session tag
+// without the admission setting.
 func TestHasPriorityDispatchIsSessionsAndHoldersOfTheGrant(t *testing.T) {
 	t.Parallel()
 	session := model.Task{
@@ -32,13 +32,14 @@ func TestHasPriorityDispatchIsSessionsAndHoldersOfTheGrant(t *testing.T) {
 		Interactive: true,
 		Tags:        []string{model.ConsoleSessionTag(model.DirectorSessionID)},
 		Grants:      model.ConsoleSessionGrants(model.ConsoleSession{ID: model.DirectorSessionID}),
+		Admission:   model.AdmissionDurable,
 	}
 	bareSession := model.Task{
 		Origin:      model.Origin{Reason: model.ReasonConsoleSession},
 		Interactive: true,
 		Tags:        []string{model.ConsoleSessionTag(model.DirectorSessionID)},
 	}
-	holder := model.Task{Grants: []model.Grant{{Capability: model.PriorityDispatchCapability}}}
+	holder := model.Task{Admission: model.AdmissionBypass}
 	for name, c := range map[string]struct {
 		task model.Task
 		want bool
@@ -47,6 +48,7 @@ func TestHasPriorityDispatchIsSessionsAndHoldersOfTheGrant(t *testing.T) {
 		"bare session":     {bareSession, false},
 		"holder":           {holder, true},
 		"ordinary":         {model.Task{}, false},
+		"standard":         {model.Task{Admission: model.AdmissionStandard}, false},
 		"interactive":      {model.Task{Interactive: true, Title: "Director"}, false},
 		"other capability": {model.Task{Grants: []model.Grant{{Capability: "self-debug"}}}, false},
 	} {
@@ -56,28 +58,37 @@ func TestHasPriorityDispatchIsSessionsAndHoldersOfTheGrant(t *testing.T) {
 	}
 }
 
-// Only a person may grant priority-dispatch: a proposal naming it is an
-// escalation even when its proposer holds it, and a template carrying it
-// is refused to an agent that holds it too.
+// Only a person may raise admission above standard: a proposal asking for
+// bypass or durable waits for a person even when its proposer holds it, and a
+// template carrying bypass is refused to an agent that holds it too.
 func TestPriorityDispatchIsAPersonsToGrant(t *testing.T) {
 	t.Parallel()
 	if !model.IsPersonOnlyGrant(model.PriorityDispatchCapability) {
-		t.Fatal("priority-dispatch is not a person-only grant")
+		t.Fatal("priority-dispatch input alias is not a person-only grant")
 	}
 	if model.IsPersonOnlyGrant("self-debug") {
 		t.Fatal("self-debug reads as a person-only grant")
 	}
-	parent := model.Task{ID: "steward", Grants: []model.Grant{
-		{Capability: model.PriorityDispatchCapability, Via: model.GrantByGrain},
-		{Capability: "self-debug", Via: model.GrantByGrain}}}
-	child := model.Task{Grants: []model.Grant{
+	parent := model.Task{
+		ID:        "steward",
+		Admission: model.AdmissionBypass,
+		Grants:    []model.Grant{{Capability: "self-debug", Via: model.GrantByGrain}},
+	}
+	child := model.Task{
+		Admission: model.AdmissionBypass,
+		Grants:    []model.Grant{{Capability: "self-debug", Via: model.GrantByLabel}},
+	}
+	if why := model.PersonOnlyProposalSettings(child, parent); why == "" {
+		t.Error("PersonOnlyProposalSettings(bypass) = empty, want person-only hold")
+	}
+	legacyChild := model.Task{Grants: []model.Grant{
 		{Capability: model.PriorityDispatchCapability, Via: model.GrantByLabel},
 		{Capability: "self-debug", Via: model.GrantByLabel}}}
-	if got := model.EscalatedCapabilities(child, parent); !slices.Equal(got, []string{model.PriorityDispatchCapability}) {
+	if got := model.EscalatedCapabilities(legacyChild, parent); !slices.Equal(got, []string{model.PriorityDispatchCapability}) {
 		t.Errorf("EscalatedCapabilities = %v, want priority-dispatch alone", got)
 	}
-	tmpl := model.Template{ID: "jumper", Grants: []model.Grant{{Capability: model.PriorityDispatchCapability}}}
+	tmpl := model.Template{ID: "jumper", Admission: model.AdmissionBypass}
 	if err := model.TemplateWithinTask(parent, tmpl); err == nil {
-		t.Error("an agent holding priority-dispatch may file from a template granting it")
+		t.Error("an agent holding bypass admission may file from a template setting bypass")
 	}
 }

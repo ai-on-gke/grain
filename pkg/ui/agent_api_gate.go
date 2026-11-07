@@ -904,7 +904,8 @@ func inGrainAgentTaskID(p model.Principal) string {
 //     priority-dispatch;
 //   - carrying a repository-declared push set (declaredPushOf) or
 //     auto-merge that acting could not have inherited itself;
-//   - keep_running on any task, and against proposer when there is one:
+//   - keep_running or admission above standard on any task, and against
+//     proposer when there is one:
 //     capabilities, write targets or reads it does not hold
 //     (model.EscalatedCapabilities, UngrantedWrites, UngrantedReads), and
 //     keep_running or a priority above its own
@@ -950,7 +951,12 @@ func (s *Server) proposalPersonHolds(ctx context.Context, task model.Task, propo
 		holds = append(holds, "it has auto-merge enabled, which would land its change without review")
 	}
 	if proposer == nil {
-		if why := model.PersonOnlyProposalSettings(model.Task{KeepRunning: task.KeepRunning}, model.Task{}); why != "" {
+		// Admission above standard is asked here too, not only of a
+		// proposal: it replaced the priority-dispatch and durable grants,
+		// which the person-only check above held whoever filed the task,
+		// so a held task an external credential or a person filed with
+		// admission bypass or durable still waits for a person.
+		if why := model.PersonOnlyProposalSettings(model.Task{KeepRunning: task.KeepRunning, Admission: task.Admission}, model.Task{}); why != "" {
 			holds = append(holds, why)
 		}
 		return holds, nil
@@ -1290,6 +1296,7 @@ func fieldTouchesTaskGrants(key string, raw json.RawMessage) bool {
 		return json.Unmarshal(raw, &on) == nil
 	}
 	return strings.Contains(lower, "capabilit") || lower == "grants" ||
+		lower == "admission" ||
 		lower == "keeprunning" || lower == "keep_running" ||
 		lower == "prioritydispatch" || lower == "priority_dispatch"
 }
@@ -1318,6 +1325,29 @@ type grantField struct {
 
 func grantNamesFromField(pattern string, f jsonField, stored map[string][]string, normalize func(string) (string, error)) []string {
 	lower := gateKey(f.key)
+	if lower == "admission" || lower == "defaultadmission" || lower == "default_admission" {
+		// Raising admission above standard is what the retired
+		// priority-dispatch (bypass) and durable grants gave, and is gated
+		// under their names; on a task PATCH any change at all is.
+		trimmed := strings.TrimSpace(string(f.raw))
+		if trimmed == "" || trimmed == "null" {
+			return nil
+		}
+		var v string
+		if json.Unmarshal(f.raw, &v) != nil {
+			return []string{model.PriorityDispatchCapability}
+		}
+		adm, err := model.ParseOptionalAdmission(v)
+		switch {
+		case err != nil:
+			return []string{model.PriorityDispatchCapability}
+		case adm == model.AdmissionDurable:
+			return []string{model.DurableCapability}
+		case adm.AtLeast(model.AdmissionBypass) || pattern == "PATCH /api/tasks/{id}":
+			return []string{model.PriorityDispatchCapability}
+		}
+		return nil
+	}
 	if lower == "priority" || lower == "prioritydispatch" || lower == "priority_dispatch" {
 		var on bool
 		if json.Unmarshal(f.raw, &on) == nil && (on || pattern == "PATCH /api/tasks/{id}") {
@@ -2904,6 +2934,9 @@ func externalTemplateWithin(tok *model.ExternalAgentToken, held []string, tmpl m
 	if len(tmpl.Reviewers) > 0 {
 		return fmt.Errorf("template %s sets reviewers, which only a person may set", tmpl.ID)
 	}
+	if model.NormalizeAdmission(tmpl.Admission).AtLeast(model.AdmissionBypass) {
+		return fmt.Errorf("template %s sets admission %s, which only a person may give", tmpl.ID, tmpl.Admission)
+	}
 	return nil
 }
 
@@ -3251,6 +3284,7 @@ func editedPatchResponseKeys(body []byte) []string {
 	add(req.ExternalRef != nil, "externalRef")
 	add(req.Priority != nil, "priority")
 	add(req.PriorityDispatch != nil, "priorityDispatch")
+	add(req.Admission != nil, "admission")
 	add(req.Issue != nil, "issue")
 	add(req.AutoMerge != nil, "autoMerge")
 	add(req.AutoApproveProposals != nil, "autoApproveProposals")

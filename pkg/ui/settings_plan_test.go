@@ -242,6 +242,7 @@ func everySettingChanged() ui.UpdateSettingsRequest {
 		TaskBranchTemplate:          ptr("alice/grain/task-{id}"),
 		DeploymentID:                ptr("prod"),
 		DefaultCapabilities:         ptr([]string{ui.OfferedCapabilities()[0].ID}),
+		DefaultAdmission:            ptr("bypass"),
 		SettingsLocked:              ptr(true),
 		Registry: &model.RegistryConfig{
 			URL:         "https://registry.example.com",

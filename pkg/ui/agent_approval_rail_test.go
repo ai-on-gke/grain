@@ -180,6 +180,18 @@ func TestAgentApprovalRailRefusesTasksHeldForAPerson(t *testing.T) {
 		{name: "keep_running filed by a person", id: "37",
 			edit: func(t *model.Task) { t.KeepRunning = true },
 			want: "keep_running"},
+		// Admission above standard replaced the person-only
+		// priority-dispatch and durable grants, which held a task for a
+		// person whoever filed it; the setting has to as well.
+		{name: "admission bypass proposed", id: "38", proposedBy: "9",
+			edit: func(t *model.Task) { t.Admission = model.AdmissionBypass },
+			want: "admission to `bypass`"},
+		{name: "admission bypass filed by a person", id: "39",
+			edit: func(t *model.Task) { t.Admission = model.AdmissionBypass },
+			want: "admission to `bypass`"},
+		{name: "admission durable filed by a person", id: "40",
+			edit: func(t *model.Task) { t.Admission = model.AdmissionDurable },
+			want: "admission to `durable`"},
 		{name: "person-only grant filed by a person", id: "25",
 			grants: []string{"api:merge:force"}, want: "which only a person may grant"},
 		{name: "requires_person grant filed by a person", id: "26",
