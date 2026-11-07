@@ -38,8 +38,9 @@ const (
 // SandboxRepoRule declares that a CI job receives #sandbox-repo only when the
 // repository's CI capabilities list grants it (repo_config.ci_capabilities),
 // narrowed by the job's own declaration -- while keeping #sandbox-repo
-// available to task runs too (CIOnly is false).
-var SandboxRepoRule = model.CIGrantRule{RepoGranted: true}
+// available to task runs too (TaskGrantable), as the retired github-sandbox
+// provider was.
+var SandboxRepoRule = model.CIGrantRule{RepoGranted: true, TaskGrantable: true}
 
 var configuredProvider atomic.Pointer[Provider]
 

@@ -20,12 +20,13 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// TestCIGrantRuleEventGateIsAlwaysCIOnly holds the invariant the CIOnly
-// field was added under (github#sandbox-repo, schema migration 121): a
-// rule that gates on CI trigger events or grain's own schedule is CI-only
-// whether or not CIOnly is set, because a task has no event for the gate
-// to admit. Only a rule with no event gate and CIOnly unset (RepoGranted
-// alone, as github#sandbox-repo declares) is also a task grant.
+// TestCIGrantRuleEventGateIsAlwaysCIOnly holds the invariants of the
+// TaskGrantable field (added for github#sandbox-repo, schema migration
+// 121): a rule is CI-only unless it opts in with TaskGrantable -- the
+// contract every rule was written to before the field existed, so a rule
+// that predates it never silently becomes a task grant -- and a rule that
+// gates on CI trigger events or grain's own schedule is CI-only even when
+// it opts in, because a task has no event for the gate to admit.
 func TestCIGrantRuleEventGateIsAlwaysCIOnly(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -33,10 +34,13 @@ func TestCIGrantRuleEventGateIsAlwaysCIOnly(t *testing.T) {
 		ciOnly     bool
 		eventGated bool
 	}{
-		{"events without CIOnly", model.CIGrantRule{Events: []string{"release"}, RepoGranted: true}, true, true},
-		{"trusted schedule without CIOnly", model.CIGrantRule{TrustedSchedule: true}, true, true},
-		{"CIOnly alone", model.CIGrantRule{CIOnly: true}, true, false},
-		{"repo-granted alone", model.CIGrantRule{RepoGranted: true}, false, false},
+		{"zero rule", model.CIGrantRule{}, true, false},
+		{"repo-granted alone", model.CIGrantRule{RepoGranted: true}, true, false},
+		{"events", model.CIGrantRule{Events: []string{"release"}, RepoGranted: true}, true, true},
+		{"trusted schedule", model.CIGrantRule{TrustedSchedule: true}, true, true},
+		{"events with TaskGrantable", model.CIGrantRule{TaskGrantable: true, Events: []string{"release"}}, true, true},
+		{"trusted schedule with TaskGrantable", model.CIGrantRule{TaskGrantable: true, TrustedSchedule: true}, true, true},
+		{"task-grantable repo-granted", model.CIGrantRule{TaskGrantable: true, RepoGranted: true}, false, false},
 	}
 	for _, tc := range cases {
 		if got := tc.rule.IsCIOnly(); got != tc.ciOnly {
@@ -72,7 +76,7 @@ func TestCIGrantRuleBindsEverySpelling(t *testing.T) {
 		openRef     = openServer + "#scratch"
 	)
 	t.Cleanup(model.RegisterCIGrantRule(gatedRef, model.CIGrantRule{Events: []string{"release"}, RepoGranted: true}))
-	t.Cleanup(model.RegisterCIGrantRule(openRef, model.CIGrantRule{RepoGranted: true}))
+	t.Cleanup(model.RegisterCIGrantRule(openRef, model.CIGrantRule{RepoGranted: true, TaskGrantable: true}))
 
 	task := model.CapabilitySubject{Kind: model.CapabilityRunTask}
 	var policy model.CapabilityPolicy
@@ -121,5 +125,34 @@ func TestCIGrantRuleBindsEverySpelling(t *testing.T) {
 	// A different method on the same server is not the registered one.
 	if _, ok := model.CIGrantRuleFor(openServer + "#other"); ok {
 		t.Errorf("CIGrantRuleFor(%s#other) found a rule declared for %s", openServer, openRef)
+	}
+}
+
+// TestCIGrantRuleWithoutTaskGrantableRefusedToTasks: a method declaring a
+// rule with no event gate and no TaskGrantable -- the shape a rule written
+// before TaskGrantable existed would have, when declaring any rule made a
+// method CI-only -- is still refused to task and process runs in every
+// spelling, by CIGrantRuleRefusal and by the capability policy alike.
+func TestCIGrantRuleWithoutTaskGrantableRefusedToTasks(t *testing.T) {
+	const (
+		server = "https://example.test/capabilities/ci-grant-rule-ci-only"
+		ref    = server + "#mint"
+	)
+	t.Cleanup(model.RegisterCIGrantRule(ref, model.CIGrantRule{RepoGranted: true}))
+	var policy model.CapabilityPolicy
+	for _, kind := range []string{model.CapabilityRunTask, model.CapabilityRunProcess} {
+		s := model.CapabilitySubject{Kind: kind}
+		for _, g := range []string{ref + "={}", ref, server} {
+			if model.CIGrantRuleRefusal(g, s) == "" {
+				t.Errorf("CIGrantRuleRefusal(%q, %s) admitted a CI-only method", g, kind)
+			}
+			if err := policy.Permits(g, s); err == nil {
+				t.Errorf("Permits(%q, %s) admitted a CI-only method", g, kind)
+			}
+		}
+	}
+	ci := model.CapabilitySubject{Kind: model.CapabilityRunCI, Event: "push"}
+	if reason := model.CIGrantRuleRefusal(ref+"={}", ci); reason != "" {
+		t.Errorf("CIGrantRuleRefusal(ci push) = %q, want a CI grant", reason)
 	}
 }

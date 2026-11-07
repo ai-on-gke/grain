@@ -73,8 +73,9 @@ type Method struct {
 	// migration rewriting rows already stored is core's (pkg/model).
 	Aliases []string
 	// CI, when set, is the rule that decides how a CI job is handed the
-	// method (model.CIGrantRule): whether it is CI-only, which events it
-	// answers, and whether repo_config.ci_capabilities must grant it.
+	// method (model.CIGrantRule): which events it answers, whether
+	// repo_config.ci_capabilities must grant it, and whether task runs may
+	// hold it too (TaskGrantable; without it the method is CI-only).
 	// Register declares it to grain, which enforces it ahead of the
 	// deployment's capability policy, so a policy can narrow the method
 	// but never widen it.
