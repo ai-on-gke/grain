@@ -13,6 +13,11 @@
 // limitations under the License.
 
 import { expect, test } from "./fixtures.js";
+
+// -legacy-capability registers example-legacy, a made-up provider with
+// nothing to mint, so the Legacy capabilities pickers have a row: every
+// legacy provider core shipped has been retired onto a server method.
+test.use({ demoArgs: ["-legacy-capability"] });
 import { chooseOption } from "./searchSelect.js";
 
 // The grain API half of the task pane's Grants picker (GrantsPicker.jsx)

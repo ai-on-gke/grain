@@ -13,6 +13,11 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+
+// -legacy-capability registers example-legacy, a made-up provider with
+// nothing to mint, so the Legacy capabilities pickers have a row: every
+// legacy provider core shipped has been retired onto a server method.
+test.use({ demoArgs: ["-legacy-capability"] });
 import { chooseOption } from "./searchSelect.js";
 import { execFileSync } from "node:child_process";
 
@@ -346,7 +351,9 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
         res.request().method() === "PUT" &&
         /\/api\/repos\/acme\/widgets\/capabilities(\?|$)/.test(res.url()),
     );
-    await page.getByRole("option", { name: /GitHub sandbox/i }).click();
+    await page
+      .getByRole("option", { name: /Example legacy capability/i })
+      .click();
     expect((await defCapsSaved).ok()).toBeTruthy();
     await page.keyboard.press("Escape");
     await expect(page.locator(".MuiAlert-filledError")).not.toBeVisible();
@@ -365,7 +372,7 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
       page
         .getByRole("tabpanel", { name: "Agents" })
         .locator(".MuiChip-root")
-        .filter({ hasText: /GitHub sandbox/i }),
+        .filter({ hasText: /Example legacy capability/i }),
     ).toBeVisible();
 
     // 2.5 Prompt Extension and Setup Command
