@@ -82,10 +82,13 @@ refused without it. The reason is written to the controller log
     (`RegisterDefaultConsoleSessionCapability`, which `capability.Register`
     calls for a `DefaultOn` method, e.g. `…/corp#research={}` on the
     wrapper distribution's build, formerly `corp-research`).
-  - `NetworkAccess: NetworkOpen`. This is **not** `none`, which
-    `docs/director.md` and the task that filed this spec both say. Its
-    doc comment explains why: the host-directory sandbox cannot honour
-    `none`.
+  - `NetworkAccess: NetworkNone` (G3, done). `model.ConsoleSessionNetworkAccess`
+    resolves it to `NetworkOpen` when the session's task is filed or
+    synced on a backend that cannot isolate a sandbox's network
+    (`HostSandboxes`, `ContainerSandboxes`, plain `K8sSandboxes`), which
+    would otherwise refuse every exchange. A build that registers a
+    `DefaultOn` capability with `SandboxEgress` set ships it
+    `NetworkOpen` (§3.1.6).
   - `TasksApproved` is unset (`false`). `Reads` is empty and `Writes`
     is `[{Repo: grain/config}]` (`model.ConfigRepo`), which offers
     `propose_config_change` (G5); `ReadsAll` is unset (`nil`, meaning `true`: `model.ConsoleSessionAutoReads`
@@ -382,7 +385,45 @@ already resolves `none` to `open`. That fallback is the honest answer
 requires defaulting everyone to `open`. A build `DefaultOn` capability
 that needs egress from the sandbox (rather than from the controller)
 MUST say so in its registration, and the director's default then MUST
-remain `open` on that build.
+remain `open` on that build. The registration field is
+`capability.Registration.SandboxEgress` / `capability.Method.SandboxEgress`,
+which registers the grant through
+`model.RegisterDefaultConsoleSessionEgressCapability`. While one is
+registered, `DefaultConsoleSessions` ships `NetworkOpen`.
+
+What the verification behind G3 found, path by path:
+
+- **State repository.** `prepareDirectorStateWithReuse` runs `git clone`
+  inside the sandbox against `CloneURL(proxyBase, repo)`, the per-attempt
+  git proxy. The `NetworkNone` chain accepts the proxy's address
+  (`granuleIsolationRuleset`'s `allow(gitProxy)`) and the gateway's
+  published service ports (`daemon.SandboxServicePorts`: every endpoint
+  the fabric serves, the git proxy among them).
+- **`ReadsAll` working repositories.** They are task `Reads` cloned the
+  same way as any `NetworkNone` worker's, through the same proxy.
+- **`grain` CLI.** `sandboxcli.detectSandboxProxy` takes its base URL
+  and token from `GRAIN_SANDBOX_PROXY` or the sandbox's git credentials.
+  Both name the git proxy, so the CLI needs nothing the chain refuses.
+- **`api_*` tools.** They are served by `grain mcpserver` to the agent
+  framework on grain's side of the boundary, so the sandbox's network
+  does not enter into them.
+- **Build `DefaultOn` capabilities.** Core registers none. The wrapper
+  distribution's `…/corp#research={}` is a run grant whose tools run on
+  the session host. Capability servers a sandbox does reach are published
+  on the fabric and are therefore among the gateway's service ports.
+- **Off-cluster `K8sGranuleSandboxes`.** The guest reaches controller
+  ports through `granule forward` tunnels (`EndpointPorts`), not the
+  network.
+
+`TestGranuleSandboxNetworkNoneIsolationOutsideGuestVM` (nightly "real
+KVM sandboxes") is the end-to-end proof that a `NetworkNone` guest still
+reaches a service port at the gateway while the internet, the host's
+other addresses and neighbouring containers stay unreachable.
+
+A local policy (`grain_policy.yml`) whose `network` allows only `open`
+holds a `none` director on granule. `grain init workstation` therefore
+writes `network: [open, none]` for its default `-network open`.
+`docs/local-policy.md` tells the owner of an older policy what to add.
 
 ### 3.2 Tier 2 — Opt-in, person-granted {#DC-4}
 
@@ -537,7 +578,7 @@ deployment's `default_capabilities`.
 |---|---|---|---|---|
 | G1 | `DefaultConsoleSessions().Capabilities` | 5 grants (§1.4) + build `DefaultOn` | Tier 1 list (§3.1) | Append the api grants in `pkg/model/console_session.go`, and update its doc comment and `docs/director.md`. Existing deployments keep their saved row: surface the new defaults as a one-click "adopt shipped defaults" in the session pane, not a silent rewrite (grain/task-2126 keeps operator removals sticky). |
 | G2 | `TasksApproved` | `false` | `true` | Set in `DefaultConsoleSessions`. `ConsoleSessionTasksApprovedTag` / its opposite keep an operator's override. Add tests in `pkg/model`. |
-| G3 | `NetworkAccess` | `NetworkOpen` | `NetworkNone` with the `ConsoleSessionNetworkAccess` fallback | Change the default. First verify on granule that the state-repo clone, `grain` CLI and `api_*` tools work under `none`, and that no build `DefaultOn` capability needs sandbox egress. |
+| G3 | `NetworkAccess` | **done**: `NetworkNone` with the `ConsoleSessionNetworkAccess` fallback, and `NetworkOpen` on a build registering a `SandboxEgress` `DefaultOn` capability | `NetworkNone` with the `ConsoleSessionNetworkAccess` fallback | None. The verification is recorded in §3.1.6. |
 | G4 | State repo read | **done**: implicit via `StateRepo`; the checkout is read-only for a session without `grain/config` in `Writes`, pinned by `consolesessions_test.go` and `director_state_internal_test.go` | Unchanged | None. |
 | G5 | `propose_config_change` & config-repo proposal rail | **done**: `model.ConfigRepoProposalHold` holds every child whose `Target` or `Writes` names `IsConfigRepo` (first in `AutoApprovalRefusal`, and as a grain hold in `ui.Client.CreateTask` and `orchestrator.relayProposedTasks`); `DefaultConsoleSessions` ships the director with `Writes: [grain/config]` | Shipped on the director, while child `propose_task` calls targeting or writing `IsConfigRepo` always wait for a person (§3.1.3) | None. Pinned by the `director_proposal_rails` tests in `pkg/model`, `pkg/ui` and `pkg/orchestrator`. |
 | G6 | `capabilities:detach` | **done**: in `model.apiScopes` (not dangerous) and `IsSandboxDeniedAPIScope`; admitted by `capabilitiesDetachRoutes` (`route_scopes.go`) and `capabilitiesDetachAllowed` / `capabilitiesDetachBodyAllowed` (`agent_api_gate.go`); pinned by `pkg/ui/capabilities_detach_test.go`; documented in `docs/agent-api.md` | New non-dangerous, MCP-only scope (§3.1.2) | Add `api:capabilities:detach` to G1. |
@@ -545,10 +586,10 @@ deployment's `default_capabilities`.
 | G8 | Self-approval | **done**: `agentFilingEscalation` refuses `approved: true` for every in-grain task agent, and `agentRails` (`agentApprovalRail` in `pkg/ui/agent_api_gate.go`) refuses an agent's `POST /api/tasks/{id}/approve` (and `POST /api/tasks/{id}/run-now` on an unapproved task) on a task in its own proposal or `Origin` lineage or held for a person (`HeldForApprovalTag`, `ConfigRepoProposalHold`, `ChangeTargetNeedsPersonApproval`, declared `push:` sets, ungranted `AutoMerge`, catalogue `requires_person`, person-only grants, `KeepRunning`, and `EscalatedCapabilities` / `UngrantedWrites` / `UngrantedReads` / `PersonOnlyProposalSettings` against the task's proposer), pinned by `pkg/ui/agent_approval_rail_test.go` | Unchanged | None. |
 | G9 | Seeded repo defaults on director proposals | **done**: admitted under §4.2 by `model.ProposalEscalations` (`pkg/model/proposal_seeding.go`), which `AutoApprovalRefusal` (`hold_for_approval.go`), `ui.Client.CreateTask` and `orchestrator.relayProposedTasks` take the seeding source (`model.ProposalSeeding`) for; §4.4 note is `model.SeededDefaultsNote`; each excluded case pinned by `proposal_seeding_test.go`, `director_seeded_defaults_test.go` and `consolesessions_test.go` | Admitted under §4.2 | None. |
 | G10 | `DirectorSessionBody` | — | Tells the director to use `expect` on stop/close, `hold_for_approval` for destructive proposals, and give reasons | Update the reviewed body text. |
-| G11 | Docs | Retired capability names and the `NetworkAccess: open` note in `docs/director.md` updated in [Task #3185](/tasks/3185); envelope table still reflects pre-G1–G3 defaults | Matches §3 | Update `docs/director.md` alongside G1–G3 as each default flips. |
+| G11 | Docs | Retired capability names updated in [Task #3185](/tasks/3185). The `NetworkAccess` row of `docs/director.md`'s envelope table, and `docs/local-policy.md`, match G3 ([Task #3312](/tasks/3312)). The `Capabilities` and `TasksApproved` rows still show the pre-G1/G2 defaults | Matches §3 | Update `docs/director.md` alongside G1 and G2 as each default flips. |
 | G12 | Capacity bound on session-queued proposals | **done**: `AutoSubmitLimits.TurnFanOut` (default 10), checked by `Store.ExceededSessionTurnLimit` beside `ExceededAutoSubmitLimit` in `ui.Client.CreateTask` and `orchestrator.relayProposedTasks`; over it, filed for a person with `AutoSubmitLimitNote` | Per-turn fan-out bound; over it, filed for a person (§3.1.5) | None. The bound has no settings knob yet. |
 
-Ordering: G4, G5, G6, G7, G8, G9 and G12 are done, and G10 can land with G1. G6 preceded
-the detach part of G1, and G3's verification precedes its default change. The Tier 3
+Ordering: G3, G4, G5, G6, G7, G8, G9 and G12 are done (G3's verification is recorded
+in §3.1.6), and G10 can land with G1. G6 preceded the detach part of G1. The Tier 3
 rails (G5's `IsConfigRepo` proposal hold, G7's built-in floor, G8's approval
 rail and G12's fan-out bound) are all in place ahead of G2.
