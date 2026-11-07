@@ -33,24 +33,47 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
-const registryUsage = `usage: grain registry <status|register|unregister> [args]
+const registryUsage = `usage: grain registry <subcommand> [args]
 
   status
-  register [-registry-url <url>] [-entry <name>] [-registry-token <tok>]
-           [-oidc] [-oidc-audience <aud>] [-rotate-token]
-           [-display-name <name>] [-purpose <text>] [-host-kind <kind>]
-           [-listed] [-owner-group <group>]
-           [-standalone] [-token-file <path>] [<entry>]
-  unregister [-registry-url <url>] [-entry <name>] [-registry-token <tok>]
-             [-oidc] [-oidc-audience <aud>] [-keep-remote] [-standalone] [<entry>]
+  list              [-registry-url <url>] [-all] [-owner <email>] [-owner-group <group>]
+                    [-kind <instance|connected>] [-status <online|degraded|offline>]
+                    [-listed] [-conflict] [-include-deleted]
+  directory         [-registry-url <url>] [-q <text>] [-repo <owner/name>] [-tag <tag>]
+                    [-status <online|degraded|offline>] [-kind <kind>] [-host-kind <kind>]
+                    [-owner <email>] [-limit <n>]
+  route             [-registry-url <url>] [-repo <owner/name>] [-path <subpath>]
+                    [-include-offline] [<repo> [<path>]]
+  show              [-registry-url <url>] <name>
+  create            [-registry-url <url>] [-name <name>] [-shape <shape>] [-zone <zone>]
+                    [-display-name <text>] [-purpose <text>] [-owner-group <group>]
+                    [-listed] [-tags <t1,t2>] [-allow-ssh] [-ship-logs]
+                    [-scope <repo[:prefix[:role]]>]... [<name>]
+  register          [-registry-url <url>] [-entry <name>] [-registry-token <tok>]
+                    [-oidc] [-oidc-audience <aud>] [-mint-token] [-rotate-token]
+                    [-display-name <name>] [-purpose <text>] [-host-kind <kind>]
+                    [-connected-principal <email>] [-listed] [-owner-group <group>]
+                    [-tags <t1,t2>] [-scope <repo[:prefix[:role]]>]...
+                    [-standalone] [-token-file <path>] [<entry>]
+  unregister        [-registry-url <url>] [-entry <name>] [-registry-token <tok>]
+                    [-oidc] [-oidc-audience <aud>] [-keep-remote] [-standalone] [<entry>]
+  update            [-registry-url <url>] [-display-name <text>] [-purpose <text>]
+                    [-host-kind <kind>] [-connected-principal <email>]
+                    [-owner-group <group>] [-listed] [-unlisted] [-tags <t1,t2>]
+                    [-shape <shape>] [-allow-ssh] [-ship-logs] <name>
+  scopes            [-registry-url <url>] [-set <repo[:prefix[:role]]>]... [-clear] <name>
+  rotate-credential [-registry-url <url>] [-label <label>] [-cred-id <uuid>]
+                    [-revoke-previous] [-overlap <duration>] [-token-file <path>] <name>
+  upgrade           [-registry-url <url>] [-version <vX.Y.Z>] <name>
+  resize            [-registry-url <url>] -shape <shape> [-version <vX.Y.Z>] <name>
+  delete            [-registry-url <url>] [-confirm <name>] [-yes] [-delete-disk] <name>
+  restore           [-registry-url <url>] <name>
+  transfer          [-registry-url <url>] -to <email> [-owner-group <group>]
+                    [-clear-owner-group] <name>
+  accept-transfer   [-registry-url <url>] <name>
 
-Self-registration and background heartbeats to a grain registry
-(Settings -> Registry; design/design/registry.design.md).
-
-register creates or updates a connected entry in the registry, stores any
-minted grc_... registration credential in the daemon's secret store under
-registry-registration-token, saves the registry configuration in Settings,
-and sends an immediate heartbeat.`
+Self-registration, directory discovery, path routing, and control-plane management
+for a grain registry (Settings -> Registry; design/design/registry.design.md).`
 
 // registryHTTPClient and registryOIDCToken are seams for unit tests so tests
 // never touch the network or host gcloud/ADC credentials.
@@ -146,7 +169,7 @@ func checkRegistryConfig(cfg daemon.Config) error {
 	return nil
 }
 
-// cmdRegistry implements `grain registry <status|register|unregister>`.
+// cmdRegistry implements `grain registry <subcommand>`.
 func cmdRegistry(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	if len(args) == 0 {
 		args = []string{"status"}
@@ -158,10 +181,38 @@ func cmdRegistry(ctx context.Context, c *ui.HTTPClient, out *printer, args []str
 		return nil
 	case "status":
 		return cmdRegistryStatus(ctx, c, out, subArgs)
+	case "list":
+		return cmdRegistryList(ctx, c, out, subArgs)
+	case "directory":
+		return cmdRegistryDirectory(ctx, c, out, subArgs)
+	case "route":
+		return cmdRegistryRoute(ctx, c, out, subArgs)
+	case "show":
+		return cmdRegistryShow(ctx, c, out, subArgs)
+	case "create":
+		return cmdRegistryCreate(ctx, c, out, subArgs)
 	case "register":
 		return cmdRegistryRegister(ctx, c, out, subArgs)
 	case "unregister":
 		return cmdRegistryUnregister(ctx, c, out, subArgs)
+	case "update":
+		return cmdRegistryUpdate(ctx, c, out, subArgs)
+	case "scopes":
+		return cmdRegistryScopes(ctx, c, out, subArgs)
+	case "rotate-credential":
+		return cmdRegistryRotateCredential(ctx, c, out, subArgs)
+	case "upgrade":
+		return cmdRegistryUpgrade(ctx, c, out, subArgs)
+	case "resize":
+		return cmdRegistryResize(ctx, c, out, subArgs)
+	case "delete":
+		return cmdRegistryDelete(ctx, c, out, subArgs)
+	case "restore":
+		return cmdRegistryRestore(ctx, c, out, subArgs)
+	case "transfer":
+		return cmdRegistryTransfer(ctx, c, out, subArgs)
+	case "accept-transfer":
+		return cmdRegistryAcceptTransfer(ctx, c, out, subArgs)
 	default:
 		return fmt.Errorf("unknown registry subcommand %q\n%s", sub, registryUsage)
 	}
@@ -191,12 +242,17 @@ func cmdRegistryRegister(ctx context.Context, c *ui.HTTPClient, out *printer, ar
 	regTokenFlag := fs.String("registry-token", "", "bearer token for authenticating to the registry ($"+daemon.RegistryTokenEnv+")")
 	oidcFlag := fs.Bool("oidc", false, "use OIDC ID tokens for registration and daemon heartbeats instead of minting a grc_... token")
 	oidcAudFlag := fs.String("oidc-audience", "", "OIDC ID token audience for the registry (defaults to -registry-url)")
+	mintToken := fs.Bool("mint-token", false, "mint a fresh grc_... registration credential for this connected entry")
 	rotateToken := fs.Bool("rotate-token", false, "rotate an existing connected entry's grc_... registration credential")
 	displayName := fs.String("display-name", "", "human-readable display name in the registry directory")
 	purpose := fs.String("purpose", "", "short description of this grain's purpose")
 	hostKind := fs.String("host-kind", "", "connected entry host kind: \"workstation\", \"kubernetes\", or \"other\"")
+	connectedPrincipal := fs.String("connected-principal", "", "optional workload service account email authorized to connect on behalf of this entry")
 	listed := fs.Bool("listed", true, "include this entry in default registry directory listings")
 	ownerGroup := fs.String("owner-group", "", "optional group principal that co-owns this entry")
+	tagsFlag := fs.String("tags", "", "comma-separated catalog tags")
+	var scopeFlags multiStringFlag
+	fs.Var(&scopeFlags, "scope", "declared repository scope <owner/repo>[:<path_prefix>[:<primary|secondary>]] (repeatable)")
 	standalone := fs.Bool("standalone", false, "register on the registry without writing settings or secrets to a local grain daemon")
 	tokenFile := fs.String("token-file", "", "with -standalone, write a minted grc_... token to this file (mode 0600) instead of printing it")
 
@@ -268,6 +324,17 @@ func cmdRegistryRegister(ctx context.Context, c *ui.HTTPClient, out *printer, ar
 	if passed["owner-group"] {
 		newCfg.OwnerGroup = strings.TrimSpace(*ownerGroup)
 	}
+	if passed["tags"] {
+		newCfg.Tags = parseCommaTags(*tagsFlag)
+	}
+	var explicitScopes []api.ScopeInput
+	if len(scopeFlags) > 0 {
+		var scErr error
+		explicitScopes, scErr = parseScopeInputs(scopeFlags)
+		if scErr != nil {
+			return scErr
+		}
+	}
 	normCfg, err := model.NormalizeRegistryConfig(newCfg, false)
 	if err != nil {
 		return err
@@ -309,10 +376,13 @@ func cmdRegistryRegister(ctx context.Context, c *ui.HTTPClient, out *printer, ar
 			return clientErr
 		}
 		scopes := model.ToScopeInputs(existingSnap.AdvertisedScopes)
-		wantMint := normCfg.EffectiveAuthMode() == model.RegistryAuthToken
+		if len(explicitScopes) > 0 {
+			scopes = explicitScopes
+		}
+		wantMint := normCfg.EffectiveAuthMode() == model.RegistryAuthToken || *mintToken
 		retargeting := (existingCfg.URL != "" && existingCfg.URL != normCfg.URL) ||
 			(existingCfg.Entry != "" && !strings.EqualFold(existingCfg.Entry, normCfg.Entry))
-		remoteEntry, mintedToken, err = upsertConnectedEntry(ctx, regClient, normCfg, effectiveHostKind, scopes, wantMint, *rotateToken || *standalone || !daemonHasSecret || retargeting)
+		remoteEntry, mintedToken, err = upsertConnectedEntry(ctx, regClient, normCfg, effectiveHostKind, strings.TrimSpace(*connectedPrincipal), scopes, wantMint, *rotateToken || *mintToken || *standalone || !daemonHasSecret || retargeting)
 		if err != nil {
 			return err
 		}
@@ -340,6 +410,7 @@ func cmdRegistryRegister(ctx context.Context, c *ui.HTTPClient, out *printer, ar
 				fmt.Printf("registration token (shown once): %s\n", mintedToken)
 			}
 		}
+		printConnectedConfigSnippet(normCfg.URL, normCfg.Entry)
 		return nil
 	}
 
@@ -392,6 +463,7 @@ func upsertConnectedEntry(
 	client *api.Client,
 	cfg model.RegistryConfig,
 	hostKind api.HostKind,
+	connectedPrincipal string,
 	scopes []api.ScopeInput,
 	wantToken bool,
 	needFreshToken bool,
@@ -407,16 +479,17 @@ func upsertConnectedEntry(
 			credLabel = "grain-cli"
 		}
 		created, createErr := client.CreateEntry(ctx, api.CreateEntryRequest{
-			Name:            cfg.Entry,
-			Kind:            api.KindConnected,
-			HostKind:        hostKind,
-			DisplayName:     cfg.DisplayName,
-			Purpose:         cfg.Purpose,
-			OwnerGroup:      cfg.OwnerGroup,
-			Listed:          &listed,
-			Tags:            slices.Clone(cfg.Tags),
-			Scopes:          scopes,
-			CredentialLabel: credLabel,
+			Name:               cfg.Entry,
+			Kind:               api.KindConnected,
+			HostKind:           hostKind,
+			ConnectedPrincipal: connectedPrincipal,
+			DisplayName:        cfg.DisplayName,
+			Purpose:            cfg.Purpose,
+			OwnerGroup:         cfg.OwnerGroup,
+			Listed:             &listed,
+			Tags:               slices.Clone(cfg.Tags),
+			Scopes:             scopes,
+			CredentialLabel:    credLabel,
 		})
 		if createErr != nil {
 			return nil, "", createErr
@@ -432,16 +505,26 @@ func upsertConnectedEntry(
 	purp := cfg.Purpose
 	group := cfg.OwnerGroup
 	hk := hostKind
-	updated, updErr := client.UpdateEntry(ctx, cfg.Entry, api.UpdateEntryRequest{
+	updReq := api.UpdateEntryRequest{
 		DisplayName: &disp,
 		Purpose:     &purp,
 		HostKind:    &hk,
 		OwnerGroup:  &group,
 		Listed:      &listed,
 		Tags:        &cfg.Tags,
-	})
+	}
+	if connectedPrincipal != "" {
+		cp := connectedPrincipal
+		updReq.ConnectedPrincipal = &cp
+	}
+	updated, updErr := client.UpdateEntry(ctx, cfg.Entry, updReq)
 	if updErr != nil {
 		return nil, "", updErr
+	}
+	if len(scopes) > 0 {
+		if scResp, scErr := client.SetScopes(ctx, cfg.Entry, scopes); scErr == nil && scResp != nil {
+			updated.Scopes = scResp.Scopes
+		}
 	}
 	var minted string
 	if wantToken && needFreshToken {
@@ -503,6 +586,12 @@ func cmdRegistryUnregister(ctx context.Context, c *ui.HTTPClient, out *printer, 
 			return errors.New("-standalone unregister requires -registry-url and <entry>")
 		}
 		if regURL != "" && entryName != "" {
+			normURL, urlErr := api.ValidateRegistryURL(regURL, false)
+			if urlErr != nil {
+				return urlErr
+			}
+			regURL = normURL
+			aud = firstNonEmptyTrimmed(*oidcAudFlag, existingCfg.OIDCAudience, regURL)
 			bearer, bErr := resolveRegistryCLIBearer(ctx, regURL, aud, *regTokenFlag)
 			if bErr != nil && (*standalone || *oidcFlag || *regTokenFlag != "") {
 				return bErr
@@ -635,19 +724,4 @@ func printRegistrySnapshot(out *printer, snap model.RegistrySnapshot) {
 		}
 		fmt.Printf("  %-28s %-18s %-10s (%s)\n", s.Repo, prefix, s.Role, s.Origin)
 	}
-}
-
-func visitedFlags(fs *flag.FlagSet) map[string]bool {
-	m := map[string]bool{}
-	fs.Visit(func(f *flag.Flag) { m[f.Name] = true })
-	return m
-}
-
-func firstNonEmptyTrimmed(vals ...string) string {
-	for _, v := range vals {
-		if t := strings.TrimSpace(v); t != "" {
-			return t
-		}
-	}
-	return ""
 }

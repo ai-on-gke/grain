@@ -2,6 +2,7 @@ name: Release watchdog
 title: Verify latest base branch release status and health
 base: main
 auto-merge: true
+capabilities: ["api:ci-read@ai-on-gke/grain"]
 body: |
   Inspect the release pipeline status for base branches (particularly `main`), verifying that
   the latest base-branch release succeeded and is not lagging behind `main` or stalled.

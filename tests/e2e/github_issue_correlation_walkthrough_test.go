@@ -173,8 +173,8 @@ func TestGitHubIssueCorrelationAndAutoCloseWalkthrough(t *testing.T) {
 		if createdTask.Issue != issueNumber {
 			t.Fatalf("createdTask.Issue = %d, want %d", createdTask.Issue, issueNumber)
 		}
-		if len(createdTask.Capabilities) != 1 || createdTask.Capabilities[0] != "read-issues" {
-			t.Fatalf("createdTask.Capabilities = %v, want ['read-issues']", createdTask.Capabilities)
+		if len(createdTask.Capabilities) != 1 || createdTask.Capabilities[0] != model.GitHubReadIssuesGrant {
+			t.Fatalf("createdTask.Capabilities = %v, want [%q]", createdTask.Capabilities, model.GitHubReadIssuesGrant)
 		}
 
 		// Verify Prompt Injection for Issue Correlation
@@ -282,12 +282,12 @@ func TestGitHubIssueCorrelationAndAutoCloseWalkthrough(t *testing.T) {
 		}
 
 		_, err = mcpNoGrantProc.CallTool(ctx, "list_issues", map[string]any{})
-		if err == nil || !strings.Contains(err.Error(), `does not hold the "read-issues" capability`) {
+		if err == nil || !strings.Contains(err.Error(), `does not hold the "https://grain.dev/capabilities/github#read-issues" capability`) {
 			t.Errorf("expected capability denial RPC error for list_issues, got: %v", err)
 		}
 
 		_, err = mcpNoGrantProc.CallTool(ctx, "read_issue", map[string]any{"issue_number": issueNumber})
-		if err == nil || !strings.Contains(err.Error(), `does not hold the "read-issues" capability`) {
+		if err == nil || !strings.Contains(err.Error(), `does not hold the "https://grain.dev/capabilities/github#read-issues" capability`) {
 			t.Errorf("expected capability denial RPC error for read_issue, got: %v", err)
 		}
 
@@ -378,14 +378,14 @@ func TestGitHubIssueCorrelationAndAutoCloseWalkthrough(t *testing.T) {
 			t.Errorf("expected issue #%d to transition to closed after PR merge, got %s", issueNumber, sim.Issues[issueNumber].State)
 		}
 
-		// Verify read_issue reflects closed state
+		// Verify read_issue reflects closed state (using canonical github#read-issues grant)
 		mcpPostMergeProc := startMCPServer(t, bin,
 			"-sandbox-root", t.TempDir(),
 			"-data-dir", dataDir,
 			"-github-host", githubHost,
 			"-github-insecure-http",
 			"-pr-repo", targetRepo,
-			"-grant", "read-issues",
+			"-grant", model.GitHubReadIssuesGrant,
 		)
 		closedReadRes, err := mcpPostMergeProc.CallTool(ctx, "read_issue", map[string]any{
 			"issue_number": issueNumber,

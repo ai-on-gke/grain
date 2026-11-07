@@ -28,7 +28,6 @@ import (
 	modelproxycap "github.com/ai-on-gke/grain/pkg/capability/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
-	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
 	// The release server's methods and the CI rules they declare
 	// (model.CIGrantRule), which the pickers' CI-only refusals read.
@@ -279,19 +278,20 @@ const defaultSecretKey = secrets.AgentCredentialKey
 // "Gemini proxy") are the vendor's own -- see modelProxyDisplayNames
 // below, which folds them in.
 var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
-	"gcp-key":               "GCP key",
-	"gemini-key":            "Gemini key",
-	"github-sandbox":        "GitHub sandbox",
-	"bootstrap-playbooks":   "Bootstrap playbooks",
-	model.GrainCIGrant:      "grain CI",
-	model.GrainCICapability: "grain CI",
-	"registry-push":         "Registry push",
-	"package-publish":       "Package publish",
-	"image-signing":         "Image signing",
-	"console":               "Interactive console",
-	"priority-dispatch":     "Priority dispatch",
-	"durable":               "Durable",
-	"read-issues":           "Read issues",
+	"gcp-key":                   "GCP key",
+	"gemini-key":                "Gemini key",
+	"github-sandbox":            "GitHub sandbox",
+	"bootstrap-playbooks":       "Bootstrap playbooks",
+	model.GrainCIGrant:          "grain CI",
+	model.GrainCICapability:     "grain CI",
+	"registry-push":             "Registry push",
+	"package-publish":           "Package publish",
+	"image-signing":             "Image signing",
+	"console":                   "Interactive console",
+	"priority-dispatch":         "Priority dispatch",
+	"durable":                   "Durable",
+	"read-issues":               "Read issues",
+	model.GitHubReadIssuesGrant: "Read issues",
 })
 
 // withModelProxyDisplayNames adds one row per vendor's proxy capability
@@ -366,7 +366,6 @@ func capabilityProviderCatalog() []model.CapabilityProvider {
 		packagepublish.New(packagepublish.Config{}),
 		imagesigning.New(imagesigning.Config{}),
 		consolecap.New(),
-		readissues.New(),
 		prioritydispatch.New(),
 		durable.New(),
 	)

@@ -14,7 +14,11 @@
 
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import ConnectionHostdField, { hostdOption } from "./ConnectionHostdField.jsx";
+import ConnectionHostdField, {
+  hostdLogins,
+  hostdOption,
+  missingLogin,
+} from "./ConnectionHostdField.jsx";
 import api from "../../api.js";
 
 vi.mock("../../api.js", () => ({ default: vi.fn() }));
@@ -90,5 +94,26 @@ describe("ConnectionHostdField", () => {
 
   it("says a hostd's line as the picker shows it", () => {
     expect(hostdOption({ name: "local" })).toBe("local · connected");
+  });
+
+  it("says which agent CLI logins a host reports, and which one it lacks", () => {
+    expect(hostdLogins({ name: "ws-a" })).toBe("");
+    expect(hostdLogins({ name: "ws-a", loginsKnown: true })).toBe(
+      "no CLI logins",
+    );
+    const wsA = {
+      name: "ws-a",
+      connection: { connected: true },
+      logins: ["claude", "codex"],
+      loginsKnown: true,
+    };
+    expect(hostdOption(wsA)).toBe("ws-a · connected · logins: claude, codex");
+    const ambient = (framework) => ({ framework, authMode: "ambient" });
+    expect(missingLogin(ambient("codex"), wsA)).toBe("");
+    expect(missingLogin(ambient("antigravity"), wsA)).toBe("antigravity");
+    expect(
+      missingLogin({ framework: "antigravity", authMode: "api_key" }, wsA),
+    ).toBe("");
+    expect(missingLogin(ambient("antigravity"), { name: "old" })).toBe("");
   });
 });

@@ -284,6 +284,12 @@ func Run(opts Options) error {
 		RequireVerifier:   opts.RequireVerifier,
 		RequireIAP:        opts.RequireIAP,
 		AllowedPrincipals: opts.AllowedPrincipals,
+		// The co-located host reports agent CLI logins of its own, as a
+		// real one's hello does (hostd.Hello.Logins), so the host
+		// pickers in Settings show what an ambient connection spends.
+		LocalHostdLogins: func(context.Context) ([]string, bool) {
+			return []string{hostd.LoginAntigravity, hostd.LoginClaude}, true
+		},
 	}
 	if opts.CloudIdentityEndpoint != "" {
 		cfg.GroupChecker = ui.NewCloudIdentityGroupChecker(ui.WithCloudIdentityEndpoint(opts.CloudIdentityEndpoint))
@@ -293,6 +299,9 @@ func Run(opts Options) error {
 	if err != nil {
 		return err
 	}
+	// An ambient connection whose CLI goes through the demo's grain
+	// hostd names its host, as on a deployment.
+	cfg.AmbientNeedsHost = runCfg.CLIRunsThroughHostd
 	demoSandboxCfg := runCfg
 	if demoSandboxCfg.SandboxBackend() == "" {
 		demoSandboxCfg.ContainerSandboxes = true
@@ -325,6 +334,11 @@ func Run(opts Options) error {
 	}
 	defer db.Close()
 	cfg.SourceDB, cfg.DBDriver = db, "sqlite"
+	// The release-approval signing key: a deployment keeps it in its
+	// data directory, which a demo has none of, so an Inbox Approve or a
+	// rollback over -github-sim answered 500
+	// (docs/test-runs/2026-11-04-release-approval.md, F3).
+	cfg.ReleaseApprovalDir = dir
 
 	// The one piece of this demo that is not a row in the store: the
 	// System pane's Logs tab, which reads ui.Config.Logs rather than
@@ -405,7 +419,7 @@ func Run(opts Options) error {
 	storedCfg.DefaultModel = "gemini-2.5-pro"
 	storedCfg.GCPProject = "grain-sandbox-dev"
 	storedCfg.GCPServiceAccountEmail = "grain-sb-agent-0@grain-sandbox-dev.iam.gserviceaccount.com"
-	storedCfg.DefaultCapabilities = append(model.SelfDebugGrants(), "read-issues")
+	storedCfg.DefaultCapabilities = append(model.SelfDebugGrants(), model.GitHubReadIssuesGrant)
 	storedCfg.TargetRepos = []string{"acme/widgets"}
 	// The deployment's git connection to the fake credential above, as
 	// `grain connections import` would record it.

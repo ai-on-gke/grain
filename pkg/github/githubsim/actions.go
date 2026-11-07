@@ -28,11 +28,11 @@ import (
 // WorkflowDispatch is one POST .../actions/workflows/{workflow}/dispatches
 // the sim accepted: the workflow file, the ref it runs on and its inputs.
 type WorkflowDispatch struct {
-	Workflow string
-	Ref      string
-	Inputs   map[string]string
+	Workflow string            `json:"workflow"`
+	Ref      string            `json:"ref"`
+	Inputs   map[string]string `json:"inputs,omitempty"`
 	// RunID is the queued run the dispatch started.
-	RunID int64
+	RunID int64 `json:"runId,omitempty"`
 }
 
 // freezeRunIDs gives every seeded run without an ID the one it has been

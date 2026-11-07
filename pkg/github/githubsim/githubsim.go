@@ -56,6 +56,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -450,6 +451,11 @@ type Sim struct {
 	// WorkflowRuns is explicit workflow runs seeded for GET .../actions/runs
 	// and GET .../actions/runs/{id}/jobs.
 	WorkflowRuns []WorkflowRun
+	// WorkflowFiles names workflow files the repository has under
+	// .github/workflows that have not run yet, so a workflow_dispatch of
+	// one (promote-release.yml from an Inbox Approve or a rollback,
+	// pkg/ui/release_approval_github.go) is accepted rather than 404ed.
+	WorkflowFiles []string
 	// RerunFailedJobs is every run id POST .../rerun-failed-jobs was
 	// asked about, in order. The sim starts no new attempt: a test that
 	// wants one moves the seeded run's RunAttempt and Jobs on itself.
@@ -1460,6 +1466,23 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 		return s.reachableRepos(p, qs, headers), nil
 	}
 	if method == "GET" {
+		// A GET of the dispatches path, which GitHub does not serve, lists
+		// the dispatches the sim accepted for that workflow -- the sim's own
+		// way for a walkthrough to read back what grain dispatched.
+		if m := workflowDispatchRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			workflow, err := url.PathUnescape(m[3])
+			if err != nil {
+				workflow = m[3]
+			}
+			out := make([]WorkflowDispatch, 0)
+			for _, d := range s.Dispatches {
+				if d.Workflow == workflow {
+					out = append(out, d)
+				}
+			}
+			return jsonResponse(200, out), nil
+		}
 		if m := pullReviewsRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
 			var reviews []map[string]any
@@ -3490,6 +3513,9 @@ func mustAtoi(s string) int {
 // name (or numeric id) the way GitHub's workflow_id takes one: the
 // per-workflow endpoint is a 404 for a workflow the repository lacks.
 func (s *Sim) hasWorkflowFile(workflow string) bool {
+	if workflow != "" && slices.Contains(s.WorkflowFiles, workflow) {
+		return true
+	}
 	for _, wr := range s.WorkflowRuns {
 		if workflowFileMatches(wr.Path, wr.ID, workflow) {
 			return true

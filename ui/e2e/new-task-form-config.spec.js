@@ -23,12 +23,24 @@
 import { expect, test } from "./fixtures.js";
 import { chooseOption } from "./searchSelect.js";
 
+// serveForm answers /api/config with the demo's config plus newTaskForm,
+// and hands back the object it reads that from: a test that goes on to a
+// second layout sets `served.newTaskForm` rather than unrouting and
+// routing again. Unrouting while the page still has an /api/config fetch
+// in flight (the app reads it again on its own) disposed that fetch's
+// response under the old handler, which then failed the test with
+// "Response has been disposed" -- seen once the machine is busy.
 async function serveForm(page, newTaskForm) {
+  const served = { newTaskForm };
   await page.route("**/api/config", async (route) => {
     const response = await route.fetch();
     const body = await response.json();
-    await route.fulfill({ response, json: { ...body, newTaskForm } });
+    await route.fulfill({
+      response,
+      json: { ...body, newTaskForm: served.newTaskForm },
+    });
   });
+  return served;
 }
 
 async function openForm(page) {
@@ -297,7 +309,7 @@ test("New task from a template takes its layer, switches layers, and files its t
 test("a /new link names what a tucked-away or hidden custom field leaves out", async ({
   page,
 }) => {
-  await serveForm(page, {
+  const served = await serveForm(page, {
     default: { fields: { customFields: { visibility: "more" } } },
   });
   await page.goto("/new?field.priority=bogus");
@@ -307,11 +319,10 @@ test("a /new link names what a tucked-away or hidden custom field leaves out", a
   await expect(notice).toContainText("“bogus” is not one of its values");
   const title = await dialog.getByLabel(/^Title/).boundingBox();
   expect((await notice.boundingBox()).y).toBeLessThan(title.y);
-  await page.unroute("**/api/config");
 
-  await serveForm(page, {
+  served.newTaskForm = {
     default: { fields: { customFields: { visibility: "hidden" } } },
-  });
+  };
   await page.goto("/new?field.priority=high");
   await expect(notice).toBeVisible();
   await expect(notice).toContainText(
@@ -360,7 +371,7 @@ for (const scheme of ["light", "dark"]) {
         "atFront",
       ].map((id) => [id, { visibility: "more" }]),
     );
-    await serveForm(page, { default: { fields: more } });
+    const served = await serveForm(page, { default: { fields: more } });
     await openForm(page);
     const dialog = page.getByRole("dialog");
     const advanced = dialog.getByRole("button", { name: "Advanced options" });
@@ -381,7 +392,6 @@ for (const scheme of ["light", "dark"]) {
       expect(b.x).toBeGreaterThanOrEqual(box.x - 0.5);
       expect(b.x + b.width).toBeLessThanOrEqual(box.x + box.width + 0.5);
     }
-    await page.unroute("**/api/config");
 
     const hidden = Object.fromEntries(
       [
@@ -397,7 +407,7 @@ for (const scheme of ["light", "dark"]) {
         "attachments",
       ].map((id) => [id, { visibility: "hidden" }]),
     );
-    await serveForm(page, { default: { fields: hidden } });
+    served.newTaskForm = { default: { fields: hidden } };
     await openForm(page);
     await expect(advanced).toHaveCount(0);
     await expect(dialog.getByLabel(/^Title/)).toBeVisible();

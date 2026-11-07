@@ -57,6 +57,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 			return runValidate(ctx, args[1:], stdout, stderr)
 		case "serve":
 			return runServe(ctx, args[1:], stdout, stderr)
+		case "demo":
+			return runDemo(ctx, args[1:], stdout, stderr)
 		case "help", "--help", "-h":
 			printUsage(stdout)
 			return nil

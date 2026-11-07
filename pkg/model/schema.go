@@ -575,7 +575,13 @@ import "strconv"
 // 120 rewrites stored `github-credential:<name>` grants across the grant
 // tables, deployment and repository default/CI capabilities, console sessions,
 // and capability_policy to `https://grain.dev/capabilities/repo#credential={"credential":"<name>"}`.
-const SchemaVersion = 120
+// 121 changes no table: it retires the in-process `read-issues` provider
+// onto the in-process `github` server's `#read-issues` method: stored
+// `read-issues` grants across tasks, templates, schedules,
+// `default_capabilities`, `ci_capabilities`, `console_sessions` and
+// `capability_policy` become
+// `https://grain.dev/capabilities/github#read-issues={}`.
+const SchemaVersion = 121
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -3446,6 +3452,23 @@ var Tables = []string{
   ` + "`allow_force`" + `  INTEGER NOT NULL DEFAULT 0,
   ` + "`allow_delete`" + ` INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `, ` + "`pattern`" + `)
+)`,
+
+	// A declared suite's `qualification:` stanza (model.SuiteQualification):
+	// one row per suite whose file has one, keyed by the declaration's id,
+	// written by the same sync that writes repo_declaration and deleted
+	// with it -- beside the provenance rather than on the suite row, for
+	// repo_declaration_push's reason: it is only ever what the
+	// repository's default branch says. Grain's own record, not settings.
+	// Needs no SchemaVersion bump, for repo_workflow's own reason.
+	`CREATE TABLE IF NOT EXISTS ` + "`repo_declaration_qualification`" + ` (
+  ` + "`id`" + `              TEXT NOT NULL,
+  ` + "`check_name`" + `      TEXT NOT NULL DEFAULT '',
+  ` + "`candidate`" + `       TEXT NOT NULL DEFAULT '',
+  ` + "`stage1_workflow`" + ` TEXT NOT NULL DEFAULT '',
+  ` + "`stage1_status`" + `   TEXT NOT NULL DEFAULT '',
+  ` + "`upstream`" + `        TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (` + "`id`" + `)
 )`,
 
 	// One row per repository grain reads declarations from

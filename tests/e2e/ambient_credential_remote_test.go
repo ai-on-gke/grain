@@ -52,7 +52,7 @@ import (
 )
 
 const (
-	ambientSSHCapabilityName = "read-issues"
+	ambientSSHCapabilityName = "github-sandbox"
 	ambientSSHCredentialName = "ambient-ssh-key"
 )
 
