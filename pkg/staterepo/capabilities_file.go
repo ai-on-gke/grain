@@ -44,6 +44,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -317,6 +318,10 @@ func (d *capabilitiesDoc) validateWithGCPSets(configuredSets []string, gcpServer
 	// One-release compatibility (schema 109): accept old-form gcp#gcp-key
 	// arguments in settings/capabilities.yml during state-repo import/check.
 	model.RewriteGCPKeyCatalogue(cat, configuredSets, gcpServerIDs, nil)
+	// One-release compatibility (schema 122): strip retired priority-dispatch
+	// and durable entries from settings/capabilities.yml with a deprecation
+	// warning so check passes before the next export rewrites them.
+	stripRetiredAdmissionFromCatalogue(cat)
 	if err := cat.Validate(); err != nil {
 		errs = append(errs, err.Error())
 	}
@@ -324,6 +329,46 @@ func (d *capabilitiesDoc) validateWithGCPSets(configuredSets []string, gcpServer
 		return nil, fmt.Errorf("staterepo: %s: %s", CapabilitiesPath, strings.Join(errs, "; "))
 	}
 	return cat, nil
+}
+
+func stripRetiredAdmissionFromCatalogue(cat *model.CapabilityCatalogue) {
+	if cat == nil {
+		return
+	}
+	for _, retired := range []string{model.PriorityDispatchCapability, model.DurableCapability} {
+		if _, has := cat.InProcess[retired]; has {
+			delete(cat.InProcess, retired)
+			log.Printf("staterepo: %s: in_process.%s is deprecated and ignored; admission is now a task setting", CapabilitiesPath, retired)
+		}
+	}
+	if kept, adm, matched := model.ExtractLegacyAdmissionStrings(cat.Defaults.Task); len(matched) > 0 {
+		log.Printf("staterepo: %s: defaults.task contains deprecated admission capability (%s); set default_admission to %q instead",
+			CapabilitiesPath, strings.Join(matched, ", "), adm)
+		cat.Defaults.Task = kept
+	}
+	if kept, adm, matched := model.ExtractLegacyAdmissionStrings(cat.Defaults.CI); len(matched) > 0 {
+		log.Printf("staterepo: %s: defaults.ci contains deprecated admission capability (%s -> %q), which does not apply to CI",
+			CapabilitiesPath, strings.Join(matched, ", "), adm)
+		cat.Defaults.CI = kept
+	}
+	for r, rd := range cat.Defaults.Repos {
+		changed := false
+		if kept, adm, matched := model.ExtractLegacyAdmissionStrings(rd.Task); len(matched) > 0 {
+			log.Printf("staterepo: %s: defaults.repos[%s].task contains deprecated admission capability (%s); set repo default_admission to %q instead",
+				CapabilitiesPath, r, strings.Join(matched, ", "), adm)
+			rd.Task = kept
+			changed = true
+		}
+		if kept, adm, matched := model.ExtractLegacyAdmissionStrings(rd.CI); len(matched) > 0 {
+			log.Printf("staterepo: %s: defaults.repos[%s].ci contains deprecated admission capability (%s -> %q), which does not apply to CI",
+				CapabilitiesPath, r, strings.Join(matched, ", "), adm)
+			rd.CI = kept
+			changed = true
+		}
+		if changed {
+			cat.Defaults.Repos[r] = rd
+		}
+	}
 }
 
 // mcpServers is the servers section as grain_config.mcp_servers.

@@ -160,8 +160,20 @@ const AUTO_MERGE_STEPS = {
   human_review_released: "Human-review hold released",
 };
 
+// ADMISSION_LABELS names each admission value the way the task pane's
+// Admission select does (detail/Actions.jsx).
+const ADMISSION_LABELS = {
+  standard: "Standard",
+  bypass: "Bypass queue",
+  durable: "Durable",
+};
+
 function isSettingOrAuditStep(state) {
-  return Boolean(AUTO_MERGE_STEPS[state]) || state === "owner_changed";
+  return (
+    Boolean(AUTO_MERGE_STEPS[state]) ||
+    state === "owner_changed" ||
+    state === "admission_changed"
+  );
 }
 
 function renderTaskRefLink(taskId, label, onOpenTask, testId) {
@@ -329,8 +341,18 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
       tr.state === "owner_changed" && (tr.oldOwner || tr.newOwner)
         ? `from ${tr.oldOwner || "?"} to ${tr.newOwner || "?"}`
         : "";
-    const shownDetail = ownerTransferDetail || tr.detail || "";
-    const shownReason = tr.state === "owner_changed" ? "" : tr.reason || "";
+    // A change to the admission setting (model.TaskEventAdmissionChanged,
+    // unified-grants.design.md §4.1) says the old and new values.
+    const admissionDetail =
+      tr.state === "admission_changed" && (tr.oldAdmission || tr.newAdmission)
+        ? `from ${ADMISSION_LABELS[tr.oldAdmission] || tr.oldAdmission || "?"} to ${ADMISSION_LABELS[tr.newAdmission] || tr.newAdmission || "?"}`
+        : "";
+    const shownDetail =
+      ownerTransferDetail || admissionDetail || tr.detail || "";
+    const shownReason =
+      tr.state === "owner_changed" || tr.state === "admission_changed"
+        ? ""
+        : tr.reason || "";
     return {
       key: `transition-${tr.state}-${i}`,
       at,
@@ -359,9 +381,11 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
               ? "Reopened"
               : tr.state === "owner_changed"
                 ? "Owner changed"
-                : AUTO_MERGE_STEPS[tr.state] ||
-                  STATE_LABELS[tr.state] ||
-                  tr.state}
+                : tr.state === "admission_changed"
+                  ? "Admission changed"
+                  : AUTO_MERGE_STEPS[tr.state] ||
+                    STATE_LABELS[tr.state] ||
+                    tr.state}
           </div>
           {/* Who proposed, closed, reopened, or transferred it, why, and
               what the step did (model.TaskEvent). */}

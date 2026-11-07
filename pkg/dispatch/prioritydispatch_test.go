@@ -31,7 +31,7 @@ import (
 
 func priorityTask(id string) model.Task {
 	tk := task(id, true)
-	tk.Grants = []model.Grant{{Capability: model.PriorityDispatchCapability, Via: model.GrantByLabel}}
+	tk.Admission = model.AdmissionBypass
 	return tk
 }
 
