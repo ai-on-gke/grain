@@ -379,17 +379,21 @@ func defaultConsoleSessionCapabilities() []string {
 // DefaultConsoleSessions is what a deployment that has never configured
 // any gets: the director, and nothing else.
 //
-// Its capabilities are the "look at this deployment and explain it"
-// set -- the source checkout this host runs from and every task's record
-// (grain#source and api:self-debug, once self-debug), the
-// journal it writes (grain-log), bounded host and state diagnostics
-// (deployment-health), and the runbooks for setting a
-// deployment up (bootstrap-playbooks), which is the capability whose own
-// description already says it is for walking whoever is on the other end
-// of a chat through one -- plus whatever capabilities this build
-// registers as on by default (RegisterDefaultConsoleSessionCapability,
-// e.g. corp-research on the Google build). Read access to the state
-// repository comes with
+// Its capabilities are the Tier 1 day-to-day set
+// (design/spec/director/director-capabilities.spec.md §3.1): the source
+// checkout this host runs from and every task's record (grain#source and
+// api:self-debug, once self-debug), the journal it writes (grain#journal,
+// once grain-log), bounded host and state diagnostics (api:deployment:read
+// and grain#health, once deployment-health), the runbooks for setting a
+// deployment up (config-map#config-map={"config_maps":["bootstrap"]}, once
+// bootstrap-playbooks), and the non-dangerous agent API grants for backlog,
+// CI, merge-queue and read-only configuration/hygiene work (api:task-admin,
+// api:capabilities:read, api:capabilities:detach, api:settings:read,
+// api:repos:read, api:releases:read, api:schedules:read, api:templates:read,
+// api:suites:read, api:dispatch:read) -- plus whatever capabilities this
+// build registers as on by default
+// (RegisterDefaultConsoleSessionCapability, e.g. corp#research on wrapper
+// builds). Read access to the state repository comes with
 // the task rather than from a grant (orchestrator.consoleSessionTask),
 // since that is grain's own database as text and it is what "what is
 // this deployment actually doing" is answered out of. So, for every
@@ -397,11 +401,12 @@ func defaultConsoleSessionCapabilities() []string {
 // the deployment works in, and CI read (ConsoleSessionDefaultGrants) --
 // see console_session_reach.go.
 //
-// Deliberately not granted, and both are one tick away in the UI for an
-// operator who wants them: self-repair, which lets a run change things
-// on grain's own host, and which is the one capability here that can
-// break the deployment it is holding a conversation with; and memory,
-// which writes the standing instructions every later run is given.
+// Deliberately not granted, and left as opt-in Tier 2 grants in the UI for
+// an operator who wants them: dangerous scopes (api:tasks:admin,
+// api:capabilities:admin, api:self-upgrade, api:deployment-ops), grain#host-exec
+// (once self-repair), which lets a run change things on grain's own host,
+// and api:memory, which writes the standing instructions every later run is
+// given.
 //
 // Writes names grain/config (ConfigRepo), and nothing else, so the
 // director is offered propose_config_change: its /home/debian/grain-state
@@ -433,7 +438,24 @@ func defaultConsoleSessionCapabilities() []string {
 // instead. An operator can reopen the director in the same pane the
 // capabilities are in.
 func DefaultConsoleSessions() []ConsoleSession {
-	caps := []string{APIGrantPrefix + "self-debug", GrainSourceGrant, GrainJournalGrant, "api:deployment:read", GrainHealthGrant, BootstrapPlaybooksGrant}
+	caps := []string{
+		APIGrantPrefix + "self-debug",
+		GrainSourceGrant,
+		GrainJournalGrant,
+		APIGrantPrefix + "deployment:read",
+		GrainHealthGrant,
+		BootstrapPlaybooksGrant,
+		APIGrantPrefix + "task-admin",
+		APIGrantPrefix + "capabilities:read",
+		APIGrantPrefix + "capabilities:detach",
+		APIGrantPrefix + "settings:read",
+		APIGrantPrefix + "repos:read",
+		APIGrantPrefix + "releases:read",
+		APIGrantPrefix + "schedules:read",
+		APIGrantPrefix + "templates:read",
+		APIGrantPrefix + "suites:read",
+		APIGrantPrefix + "dispatch:read",
+	}
 	for _, id := range defaultConsoleSessionCapabilities() {
 		if !slices.Contains(caps, id) {
 			caps = append(caps, id)
@@ -453,6 +475,25 @@ func DefaultConsoleSessions() []ConsoleSession {
 		NetworkAccess: network,
 		Writes:        []WriteTarget{{Repo: ConfigRepo()}},
 	}}
+}
+
+// MissingShippedConsoleSessionCapabilities returns the capabilities in
+// DefaultConsoleSessions for session id that are absent from held, in their
+// shipped order. It returns nil for any session id that grain does not ship
+// by default, or when every shipped default is already in held.
+func MissingShippedConsoleSessionCapabilities(id string, held []string) []string {
+	def, ok := ConsoleSessionByID(DefaultConsoleSessions(), id)
+	if !ok {
+		return nil
+	}
+	var missing []string
+	for _, capID := range def.Capabilities {
+		if capID == "" || slices.Contains(held, capID) || slices.Contains(missing, capID) {
+			continue
+		}
+		missing = append(missing, capID)
+	}
+	return missing
 }
 
 // ConsoleSessionsOr is how every reader takes Config.ConsoleSessions:
@@ -895,6 +936,10 @@ func DirectorSessionBody(stateRepo RepoRef, session ConsoleSession) string {
 		"(docs/agent-api.md) -- `api:task-admin` " +
 		"to edit, reorder, retry and close tasks and re-run their CI, `api:ci-read` to read CI " +
 		"logs, `api:release-manager` to run schedules and cut and promote release candidates. " +
+		"When stopping or closing a task, pass an `expect` state precondition (such as " +
+		"`expect: {\"state\": \"running\"}`) so a task whose state moved since you read it is " +
+		"left alone, and always pass an explicit `reason` (`reason` on `grain_invoke` and the " +
+		"close body, `--reason` on `grain api`) saying why. " +
 		"When you need one you do not hold, ask the person for that grant by name; never try to " +
 		"grant it yourself. Scopes marked dangerous (secrets, settings, connections, capability " +
 		"admin, force-merge, task admin, deployment) only a person can grant, and every call " +
@@ -903,14 +948,16 @@ func DirectorSessionBody(stateRepo RepoRef, session ConsoleSession) string {
 	b.WriteString("**File work rather than doing it.** propose_task is your main instrument: " +
 		"anything that means changing a repository, running a long job, or spending a sandbox " +
 		"belongs in a task, described well enough that whoever picks it up needs nothing from " +
-		"this conversation. ")
+		"this conversation. Always pass `hold_for_approval: true` on destructive, irreversible, " +
+		"or surprising `propose_task` calls so a person reviews them before they run. ")
 	if session.QueuesProposals() {
 		b.WriteString("This deployment has said your tasks are filed approved, so what you " +
-			"file is queued and will be dispatched -- file carefully, and say in the chat what " +
-			"you have just set going. That is a ceiling, not an order: pass hold_for_approval " +
-			"on any proposal the person should look at before it runs, and it is filed " +
-			"unapproved for them instead. Say in the chat which you held and which you let " +
-			"queue -- propose_task's result tells you which happened.\n\n")
+			"file without `hold_for_approval: true` is queued and will be dispatched -- file " +
+			"carefully, and say in the chat what you have just set going. That is a ceiling, " +
+			"not an order: pass `hold_for_approval: true` on any other proposal the person " +
+			"should look at before it runs, and it is filed unapproved for them instead. Say in " +
+			"the chat which you held and which you let queue -- propose_task's result tells you " +
+			"which happened.\n\n")
 	} else {
 		b.WriteString("What you file waits for a person to approve it, which is the point: " +
 			"say in the chat what you filed and why, so they can decide.\n\n")
