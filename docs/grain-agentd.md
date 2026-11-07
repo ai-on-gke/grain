@@ -1,16 +1,16 @@
 # grain-agentd: agent CLIs on a machine that is not the daemon's
 
-`grain-agentd` is a small, rootless grain hostd that runs **agent CLIs and
+`grain-agentd` is a small, rootless host agent that runs **agent CLIs and
 nothing else** (agy, claude, codex) for a grain daemon somewhere else: a
 workstation whose agy login a model connection should use, say, while the
 daemon runs on a server or in Kubernetes. It runs as the user who starts it,
 dials out to the daemon, and starts the CLIs the daemon asks for, as that
 user, under its allowlist.
 
-It is `grain hostd -server` cut down to that one job (`cmd/grain-agentd`,
+It is `grain host -server` cut down to that one job (`cmd/grain-agentd`,
 `pkg/agentd`):
 
-| | `grain hostd` | `grain-agentd` |
+| | `grain host` | `grain-agentd` |
 | --- | --- | --- |
 | Runs as | root, or the daemon's user | the user who starts it; refuses root |
 | Capability servers | yes (`capabilities:`, built-ins) | none: an allowlist naming any is refused |
@@ -32,24 +32,49 @@ make grain-agentd        # bin/grain-agentd, static
 
 `make build` does not build it, and no release ships it yet.
 
-## Register it
+## Enroll and install it (`--join`, recommended)
 
-On the daemon, register a hostd for the machine and keep its token: **Settings
-→ Hostds**, or
+Copy the shared enrollment command from **Settings → Hosts → Invite hosts** (or run `grain host invite` as the deployment owner), or pass `-join <enrollment-code>` directly to `grain-agentd install`:
 
 ```sh
-grain hostds register ws-1                       # a daemon reached directly
-grain hostds register -owner you@example.com ws-1   # a daemon behind IAP
+./bin/grain-agentd install -server https://grain.example.com -join <enrollment-code>
+# or from the hosted installer:
+curl -fsSL https://grain.example.com/hostd/install | sh -s -- --agentd --join <enrollment-code>
 ```
 
-A hostd that dials in through IAP or another identity-verifying proxy must be
+With `-join`:
+
+1. `grain-agentd` generates `~/.config/grain/agentd-key` (Ed25519 private key, mode `0600`) if absent;
+2. authenticates your enrolling identity (through your identity proxy / `-iap-audience`, or via an interactive GitHub device-flow prompt on deployments without a proxy verifier);
+3. files a join request naming you and the host, and waits for the deployment owner to click **Accept** in **Settings → Hosts** (or run `grain host accept <id>`);
+4. writes the issued 30-day key-bound credential to `~/.config/grain/agentd-token` (`0600`), installs `~/.config/grain/agentd.yaml` and `~/.config/systemd/user/grain-agentd.service`, and starts `grain-agentd`, which signs every `/api/hostd/connect` upgrade with its Ed25519 key and renews its 30-day credential silently while connected.
+
+Then point a model connection at the accepted host name (**Settings → Models** → the connection → **Run on** `<host>`); see [host-placement.md](host-placement.md).
+
+### Migrating an existing per-host token (`-rekey`)
+
+If `grain-agentd` was previously installed with a legacy per-host token, bind an Ed25519 key to the existing host entry in place:
+
+```sh
+grain-agentd install -server https://grain.example.com -name ws-1 -rekey
+```
+
+Accept the request in **Settings → Hosts** (`rekey: ws-1`); `grain-agentd` replaces `~/.config/grain/agentd-token` with a 30-day key-bound credential without changing the host's name.
+
+## Legacy per-host token registration
+
+For non-interactive setups that cannot wait for the owner to accept them, register a per-host token on the daemon (**Settings → Hosts → Add a host (legacy token)**, or `grain host register`):
+
+```sh
+grain host register ws-1                             # a daemon reached directly
+grain host register -owner you@example.com ws-1      # a daemon behind IAP
+```
+
+A host that dials in through IAP or another identity-verifying proxy must be
 registered with its owner, the identity it dials in as; see
-[access-code.md](access-code.md#a-grain-hostd-dialing-in).
+[access-code.md](access-code.md#a-host-dialing-in).
 
-Then point a model connection at it (Settings → Models → the connection →
-**Run on** `ws-1`); see [hostd-placement.md](hostd-placement.md).
-
-## Install it
+## Install with a legacy token
 
 As yourself, on the machine the CLIs should run on:
 
@@ -85,8 +110,8 @@ Running `install` again replaces the binary and the unit and keeps the token
 
 `-server` is the daemon's URL as this machine reaches it --
 `https://grain.example.com`, or `http://127.0.0.1:4242` through a
-`kubectl port-forward` or an SSH tunnel. The hostd token alone names the
-hostd.
+`kubectl port-forward` or an SSH tunnel. The host token alone names the
+host.
 
 ### A daemon behind IAP
 
@@ -99,8 +124,8 @@ grain-agentd install -server https://grain.example.com -name ws-1 \
 
 grain-agentd then sends an ID token for that audience from your Application
 Default Credentials (`gcloud auth application-default login`) or the
-machine's service account, with the hostd token beside it, exactly as
-`grain hostd -server -iap-audience` does. The identity must be the hostd's
+machine's service account, with the host token beside it, exactly as
+`grain host -server -iap-audience` does. The identity must be the host's
 registered owner.
 
 ## Run it by hand
@@ -108,8 +133,9 @@ registered owner.
 Without systemd, run what the unit runs, e.g. in tmux:
 
 ```sh
-grain-agentd -server https://grain.example.com -name ws-1 \
+grain-agentd -server https://grain.example.com [-name ws-1] \
   [-iap-audience <client id>] [-token-file ~/.config/grain/agentd-token] \
+  [-key-file ~/.config/grain/agentd-key] \
   [-allowlist ~/.config/grain/agentd.yaml] [-state-dir ~/.local/state/grain-agentd]
 ```
 
@@ -120,7 +146,7 @@ grain-agentd -server https://grain.example.com -name ws-1 \
 
 ## The allowlist
 
-The same format as `grain hostd`'s, with `clis:` only:
+The same format as `grain host`'s, with `clis:` only:
 
 ```yaml
 clis:
@@ -134,14 +160,14 @@ capabilities: {}
 ```
 
 grain-agentd refuses to start on an allowlist that names a capability, has no
-CLI, is missing, or is writable by anyone but its owner. hostd re-reads it on
+CLI, is missing, or is writable by anyone but its owner. The host agent re-reads it on
 every request.
 
 ## Hooks
 
 A run's agent CLI forks hooks -- agy's pre-tool hook (`agy-tool-hook`) and
-Claude Code's Stop hook (`claude-stop-hook`) -- and a run on a remote hostd
-names that hostd's own binary for them. grain-agentd answers both, from the
+Claude Code's Stop hook (`claude-stop-hook`) -- and a run on a remote host
+names that host's own binary for them. grain-agentd answers both, from the
 leaf packages `pkg/agent/antigravity/hook` and `pkg/agent/claude/stophook`
 that `cmd/grain` uses too, so the hook decides the same way wherever the CLI
 runs.

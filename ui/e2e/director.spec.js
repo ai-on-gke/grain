@@ -151,7 +151,7 @@ async function expectCapabilityDisclosure(page) {
     page.getByRole("heading", { name: "What it may reach" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("checkbox", { name: /Bootstrap playbooks/ }),
+    page.getByRole("checkbox", { name: /Priority dispatch/ }),
   ).toBeVisible();
   await expect(
     page.getByLabel(/What it may reach on the internet/),
@@ -160,7 +160,7 @@ async function expectCapabilityDisclosure(page) {
     .getByRole("button", { name: "Hide Director capabilities" })
     .click();
   await expect(
-    page.getByRole("checkbox", { name: /Bootstrap playbooks/ }),
+    page.getByRole("checkbox", { name: /Priority dispatch/ }),
   ).toBeHidden();
 }
 
@@ -233,11 +233,19 @@ test("follows a live Director task through its durable exchange", async ({
     .getByRole("button", { name: "Edit Director capabilities" })
     .click();
   await page.getByRole("button", { name: "Add grant…" }).click();
+  const grantMenu = page.getByRole("menu", { name: "Grants to add" });
+  await expect(grantMenu).toBeVisible();
   await page
+    .getByRole("textbox", { name: "Search grants" })
+    .fill("grain#health");
+  await grantMenu
     .locator('[data-method="https://grain.dev/capabilities/grain#health"]')
     .click();
+  await expect(grantMenu).toBeHidden();
   await expect
-    .poll(async () => (await task(page, firstTask)).capabilities)
+    .poll(async () => (await task(page, firstTask)).capabilities, {
+      timeout: 30_000,
+    })
     .toContain("https://grain.dev/capabilities/grain#health={}");
   await page
     .getByRole("button", { name: "Hide Director capabilities" })

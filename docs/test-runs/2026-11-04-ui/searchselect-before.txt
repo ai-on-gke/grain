@@ -1,0 +1,55 @@
+## New Task @1440 found=6
+  [0] area opts=4 axe=- search=frontend->1 pick="" chips=frontend listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+  [1] repos the first is the one this task's o opts=4 axe=- search=—->1(target missing) pick="" chips=self debug|read issues listClosed=true formOpen=true writes=- | esc opened=false closed=true formOpen=false | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+## Schedule @1440 found=6
+  [0] template opts=3 axe=- search=audit->1 pick="security-audit" listClosed=true formOpen=true writes=POST /api/schedules/composition | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+  [1] model opts=3 axe=- search=pro->0(target missing) pick=null listClosed=true formOpen=false writes=POST /api/schedules | esc opened=false closed=true formOpen=false | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+## Template @1440 found=4
+  [0] repos optional -- leave the first empty  opts=3 axe=- search=—->1(target missing) pick="Deployment default (gemini-2.5-pro)" listClosed=true formOpen=true writes=- | esc opened=false closed=true formOpen=false | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+## Suite run @1440 found=2
+  [0] suite opts=1 axe=- search=Suite->1 pick="Release Qualification Suite" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+  [1] repo owner/name opts=2 axe=- search=Other…->2 pick="acme/widgets" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+## Bulk edit @1440 found=5
+  [0] :r8h: opts=3 axe=- search=—->1(target missing) pick="Deployment default (gemini-2.5-pro)" listClosed=true formOpen=true writes=- | esc opened=false closed=true formOpen=true | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+  [1] specific connection opts=2 axe=- search=Antigravity->1 pick="Gemini 2.5 Pro · Antigravity" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+  [2] review opts=4 axe=- search=audit->1 pick="security-audit" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+## Settings → Models @1440 found=undefined ERR locator.waitFor: Timeout 8000ms exceeded.
+## Git connections @1440 found=undefined ERR locator.waitFor: Timeout 8000ms exceeded.
+## Preferences time zone @1440 found=undefined ERR locator.waitFor: Timeout 8000ms exceeded.
+## Repo releases @1440 found=0
+## NarrowingBar @1440 found=2
+  [0] Attribute for filter 2 opts=31 axe=- search=State->1 pick="State" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+  [1] Value for filter 2 opts=7 axe=label(critical) x7,nested-interactive(serious) x7 search=Proposed->1 pick="" chips=proposed listClosed=false formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+## Logs @1440 found=undefined ERR locator.waitFor: Timeout 8000ms exceeded.
+## CI @1440 found=0
+## Customize sidebar @1440 found=2
+  [0] item opts=36 axe=- search=Inbox->1 pick="Inbox" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+  [1] icon (optional) opts=20 axe=- search=(Tray)->1 pick="Inbox (Tray)" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+## New Task @390 found=6
+  [0] area opts=4 axe=- search=frontend->1 pick="" chips=frontend listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+  [1] repos the first is the one this task's o opts=4 axe=- search=—->1(target missing) pick="" chips=self debug|read issues listClosed=true formOpen=true writes=- | esc opened=false closed=true formOpen=false | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+## Schedule @390 found=6
+  [0] template opts=3 axe=- search=audit->1 pick="security-audit" listClosed=true formOpen=true writes=POST /api/schedules/composition | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+  [1] model opts=3 axe=- search=pro->3 pick="The template's model" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+  [2] time zone opts=420 axe=- search=Abidjan->1 pick="Africa/Abidjan" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+## Template @390 found=4
+  [0] repos optional -- leave the first empty  opts=3 axe=- search=—->1(target missing) pick="Deployment default (gemini-2.5-pro)" listClosed=true formOpen=true writes=- | esc opened=false closed=true formOpen=false | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+## Suite run @390 found=2
+  [0] suite opts=1 axe=- search=Suite->1 pick="Release Qualification Suite" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+  [1] repo owner/name opts=2 axe=- search=Other…->2 pick="acme/widgets" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+## Bulk edit @390 found=5
+  [0] :r8b: opts=3 axe=- search=—->1(target missing) pick="Deployment default (gemini-2.5-pro)" listClosed=true formOpen=true writes=- | esc opened=false closed=true formOpen=true | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+  [1] specific connection opts=2 axe=- search=Antigravity->1 pick="Gemini 2.5 Pro · Antigravity" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+  [2] review opts=4 axe=- search=audit->1 pick="security-audit" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+## Settings → Models @390 found=undefined ERR locator.waitFor: Timeout 8000ms exceeded.
+## Git connections @390 found=undefined ERR locator.waitFor: Timeout 8000ms exceeded.
+## Preferences time zone @390 found=undefined ERR locator.waitFor: Timeout 8000ms exceeded.
+## Repo releases @390 found=0
+## NarrowingBar @390 found=2
+  [0] Attribute for filter 2 opts=31 axe=- search=State->1 pick="State" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+  [1] Value for filter 2 opts=7 axe=label(critical) x7,nested-interactive(serious) x7 search=Proposed->1 pick="" chips=proposed listClosed=false formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+## Logs @390 found=undefined ERR locator.waitFor: Timeout 8000ms exceeded.
+## CI @390 found=0
+## Customize sidebar @390 found=2
+  [0] item opts=36 axe=- search=Inbox->1 pick="Inbox" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 
+  [1] icon (optional) opts=20 axe=- search=(Tray)->1 pick="Inbox (Tray)" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- 

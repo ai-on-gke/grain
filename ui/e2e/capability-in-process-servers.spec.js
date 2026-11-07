@@ -143,15 +143,19 @@ test("lists the in-process grain and repo servers with their methods and holders
         const card = page.locator(`[data-capability-server="${GRAIN}"]`);
         await expect(card).toHaveAttribute("data-in-process", "grain");
         const methods = card.getByTestId("capability-server-methods");
-        for (const m of ["health", "host-exec", "journal", "sql"])
+        for (const m of ["health", "host-exec", "journal", "source", "sql"])
           await expect(methods).toContainText(m);
         const usage = card.getByTestId("capability-server-usage");
-        await expect(
-          usage.locator('[data-holder="default:deployment"]'),
-        ).toContainText(HOST_EXEC);
-        await expect(
-          usage.locator('[data-holder="default:deployment"] a'),
-        ).toHaveAttribute("href", "/settings/tasks#task-defaults");
+        // The demo's own deployment defaults hold grain#source (once
+        // self-debug) too, so this picks the host-exec one out.
+        const hostExecDefault = usage
+          .locator('[data-holder="default:deployment"]')
+          .filter({ hasText: HOST_EXEC });
+        await expect(hostExecDefault).toHaveCount(1);
+        await expect(hostExecDefault.locator("a")).toHaveAttribute(
+          "href",
+          "/settings/tasks#task-defaults",
+        );
         await expect(
           usage.locator(`[data-holder="template:${made.template}"]`),
         ).toContainText(SQL_WRITE);

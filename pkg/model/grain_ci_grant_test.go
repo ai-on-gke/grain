@@ -55,7 +55,7 @@ func TestDefaultGrainCIGrantIsNotAParentEscalation(t *testing.T) {
 	if got := model.EscalatedCapabilities(child, director); len(got) != 0 {
 		t.Errorf("EscalatedCapabilities with default grain#ci = %v, want none", got)
 	}
-	if refusal := model.AutoApprovalRefusal(child, director, true); refusal != "" {
+	if refusal := model.AutoApprovalRefusal(child, director, true, nil); refusal != "" {
 		t.Errorf("AutoApprovalRefusal with default grain#ci = %q, want none", refusal)
 	}
 

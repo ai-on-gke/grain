@@ -749,3 +749,77 @@ func TestTaskRecordAndConversationShowOwnerAttributionAndFiledVia(t *testing.T) 
 		t.Errorf("renderTaskConversationFile missing %q in:\n%s", wantConv, gotConvFile)
 	}
 }
+
+func TestTaskRecordAndNamespaceRecordShowDependencies(t *testing.T) {
+	now := at("2026-11-06T02:00:00Z")
+	withDeps := TaskRecord{
+		TaskSummary: TaskSummary{
+			ID:              "3145",
+			Title:           "Follow-up change",
+			State:           "queued",
+			Repo:            "ai-on-gke/grain",
+			DependsOn:       []string{"3144", "3140"},
+			DependsOnStates: map[string]string{"3144": "queued", "3140": "closed"},
+			BlockedBy:       []string{"3144"},
+		},
+	}
+	got := renderTaskRecord(withDeps, now)
+	want := "Depends on: 3144 (queued), 3140 (closed)\n"
+	if !strings.Contains(got, want) {
+		t.Fatalf("renderTaskRecord missing %q in:\n%s", want, got)
+	}
+
+	// Also verify task://<id>/record.md via NamespaceTasks.ReadTaskView,
+	// including a finished dependency and a task with no dependencies.
+	finishedDep := TaskRecord{
+		TaskSummary: TaskSummary{
+			ID:              "3146",
+			Title:           "Ready after dependency closed",
+			State:           "queued",
+			DependsOn:       []string{"3144"},
+			DependsOnStates: map[string]string{"3144": "closed"},
+		},
+	}
+	noDeps := TaskRecord{
+		TaskSummary: TaskSummary{
+			ID:    "3144",
+			Title: "Independent change",
+			State: "queued",
+		},
+	}
+	ns := NamespaceTasks{
+		Reader: &fakeTasks{
+			records: map[string]TaskRecord{
+				"3144": noDeps,
+				"3145": withDeps,
+				"3146": finishedDep,
+			},
+			prompts: map[string]TaskPromptRecord{},
+		},
+		Now: func() time.Time { return now },
+	}
+
+	view3145, err := ns.ReadTaskView(context.Background(), "3145")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(view3145.Record, want) {
+		t.Errorf("task://3145/record.md missing %q:\n%s", want, view3145.Record)
+	}
+
+	view3146, err := ns.ReadTaskView(context.Background(), "3146")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wantClosed := "Depends on: 3144 (closed)\n"; !strings.Contains(view3146.Record, wantClosed) {
+		t.Errorf("task://3146/record.md missing %q:\n%s", wantClosed, view3146.Record)
+	}
+
+	view3144, err := ns.ReadTaskView(context.Background(), "3144")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(view3144.Record, "Depends on:") {
+		t.Errorf("task://3144/record.md with no dependencies printed Depends on:\n%s", view3144.Record)
+	}
+}

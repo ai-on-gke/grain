@@ -205,6 +205,37 @@ func TestReleasingTheSameCommitAgainRepublishesIt(t *testing.T) {
 	}
 }
 
+// A release run whose GRAIN_CI_REF is a release/rc/pending/latest git tag
+// must never overwrite that tag in `push` -- even when the registry image
+// already holds the same revision label (which would otherwise match the
+// same-commit shortcut before refs/heads/$ref is checked).
+func TestReleaseTagIsNeverMovedByMayMove(t *testing.T) {
+	h := newForwardHistory(t)
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("no git here")
+	}
+	bin := t.TempDir()
+	stub := "#!/bin/sh\nif [ \"$1 $2\" = 'buildx version' ]; then echo 'github.com/docker/buildx v0.17.1'; exit 0; fi\nprintf '%s\\n' \"" + h.released + "\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range []string{"v1.5.0", "v1.5.0-rc.1", "v1.5.0-pending", "latest"} {
+		cmd := exec.Command("bash", filepath.Join(repoRoot(t), "scripts", "release-images.sh"),
+			"may-move", "docker.io/grainai/grain:"+ref, h.released, ref)
+		cmd.Dir = h.dir
+		cmd.Env = []string{
+			"PATH=" + bin + ":" + filepath.Dir(gitPath) + ":/usr/bin:/bin",
+			"HOME=" + t.TempDir(),
+		}
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Errorf("may-move allowed moving release tag %s:\n%s", ref, out)
+		}
+		containsRun(t, string(out), "is a release tag, not a branch")
+	}
+}
+
 // release-images.sh's push asks the forward rule, and no longer reads the
 // tip itself.
 func TestReleaseImagesMovesTagsThroughTheForwardRule(t *testing.T) {

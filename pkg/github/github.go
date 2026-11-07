@@ -3897,6 +3897,9 @@ type WorkflowRun struct {
 	RunAttempt int        `json:"run_attempt"`
 	StartedAt  *time.Time `json:"run_started_at"`
 	UpdatedAt  *time.Time `json:"updated_at"`
+	// DisplayTitle is the run's own name (a workflow's `run-name`), which
+	// is how an on-demand release build of one commit names itself.
+	DisplayTitle string `json:"display_title,omitempty"`
 }
 
 // WorkflowRunJob is one job of a GitHub Actions workflow run returned by

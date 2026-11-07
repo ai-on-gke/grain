@@ -46,6 +46,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/registry/api"
 )
 
 // HTTPClient is Client's method surface (bwsalmon/agents#363) spoken over
@@ -213,6 +214,13 @@ func (c *HTTPClient) shouldAttemptCloudRunAuth() bool {
 // address (*.run.app).
 func isCloudRunHost(host string) bool {
 	return strings.HasSuffix(strings.ToLower(strings.TrimSuffix(host, ".")), ".run.app")
+}
+
+// GoogleIDToken returns an OIDC ID token for Audience (or BaseURL if Audience
+// is empty) using the same ADC / gcloud / Cloud Run Direct IAP resolution this
+// client uses for HTTPS Cloud Run services.
+func (c *HTTPClient) GoogleIDToken(ctx context.Context) (string, error) {
+	return c.getGoogleIDToken(ctx)
 }
 
 func (c *HTTPClient) getGoogleIDToken(ctx context.Context) (string, error) {
@@ -1904,6 +1912,50 @@ func (c *HTTPClient) MergeBatches(ctx context.Context, repo string) (MergeBatche
 		return MergeBatches{}, err
 	}
 	return resp, nil
+}
+
+// GetRegistry fetches the deployment's current connected-entry registry
+// status, heartbeat timings, and advertised scopes -- GET /api/registry.
+func (c *HTTPClient) GetRegistry(ctx context.Context) (model.RegistrySnapshot, error) {
+	var snap model.RegistrySnapshot
+	if err := c.do(ctx, http.MethodGet, "/api/registry", nil, &snap); err != nil {
+		return model.RegistrySnapshot{}, err
+	}
+	return snap, nil
+}
+
+// TriggerRegistryHeartbeat triggers an immediate registration/heartbeat step
+// against the configured grain registry -- POST /api/registry/heartbeat.
+func (c *HTTPClient) TriggerRegistryHeartbeat(ctx context.Context) (model.RegistrySnapshot, error) {
+	var snap model.RegistrySnapshot
+	if err := c.do(ctx, http.MethodPost, "/api/registry/heartbeat", nil, &snap); err != nil {
+		return model.RegistrySnapshot{}, err
+	}
+	return snap, nil
+}
+
+// GetRegistryInstanceStatus fetches the wire api.InstanceStatusResponse from
+// GET /api/registry/status.
+func (c *HTTPClient) GetRegistryInstanceStatus(ctx context.Context) (api.InstanceStatusResponse, error) {
+	var status api.InstanceStatusResponse
+	if err := c.do(ctx, http.MethodGet, "/api/registry/status", nil, &status); err != nil {
+		return api.InstanceStatusResponse{}, err
+	}
+	return status, nil
+}
+
+// SetSecret writes one secret key in the daemon's secrets store --
+// PUT /api/secrets/{secret}/{key}.
+func (c *HTTPClient) SetSecret(ctx context.Context, secret, key, value string) error {
+	path := "/api/secrets/" + url.PathEscape(secret) + "/" + url.PathEscape(key)
+	return c.do(ctx, http.MethodPut, path, setSecretRequest{Value: value}, nil)
+}
+
+// DeleteSecret deletes a secret and all of its keys from the daemon's secrets
+// store -- DELETE /api/secrets/{secret}.
+func (c *HTTPClient) DeleteSecret(ctx context.Context, secret string) error {
+	path := "/api/secrets/" + url.PathEscape(secret)
+	return c.do(ctx, http.MethodDelete, path, nil, nil)
 }
 
 // --- grain CI ------------------------------------------------------------

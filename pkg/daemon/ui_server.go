@@ -36,10 +36,24 @@ import (
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
+// CheckDeploymentOwner validates -deployment-owner (or $GRAIN_DEPLOYMENT_OWNER
+// when the flag is unset).
+func CheckDeploymentOwner(cfg Config) error {
+	raw := strings.TrimSpace(cfg.DeploymentOwner)
+	if raw == "" {
+		raw = strings.TrimSpace(os.Getenv(ui.DeploymentOwnerEnv))
+	}
+	_, err := ui.NormalizeDeploymentOwner(raw)
+	return err
+}
+
 // CheckUIAllowedPrincipals validates -ui-allowed-principals (or
 // $GRAIN_ALLOWED_PRINCIPALS when the flag is unset), including refusing any
 // serviceAccount: entry that names a gcp-key agent pool account.
 func CheckUIAllowedPrincipals(cfg Config) error {
+	if err := CheckDeploymentOwner(cfg); err != nil {
+		return err
+	}
 	return checkUIAllowedPrincipalsWithPool(cfg, ui.GCPKeyPoolEmails(cfg.GcpServiceAccountEmail, cfg.GcpServiceAccountCount, cfg.GcpProject))
 }
 
@@ -55,12 +69,90 @@ func checkUIAllowedPrincipalsWithPool(cfg Config, gcpPoolEmails []string) error 
 	return nil
 }
 
+// CheckUIRegistryVerifier validates -ui-registry-issuer, -ui-registry-audience,
+// and -ui-registry-keys-url (or $GRAIN_REGISTRY_ISSUER,
+// $GRAIN_REGISTRY_AUDIENCE, and $GRAIN_REGISTRY_KEYS_URL): if any is set, all
+// three must be set, and neither issuer nor audience may contain commas.
+func CheckUIRegistryVerifier(cfg Config) error {
+	ctx := ui.WithIAPConfig(context.Background(), ui.IAPConfig{
+		RegistryIssuer:   cfg.UiRegistryIssuer,
+		RegistryAudience: cfg.UiRegistryAudience,
+		RegistryKeysURL:  cfg.UiRegistryKeysURL,
+	})
+	iss := strings.TrimSpace(ui.GetRegistryIssuer())
+	aud := strings.TrimSpace(ui.GetRegistryAudience())
+	keysURL := strings.TrimSpace(ui.GetRegistryKeysURL())
+	if rc, ok := ui.RegistryConfigFromContext(ctx); ok {
+		if v := strings.TrimSpace(rc.Issuer); v != "" {
+			iss = v
+		}
+		if v := strings.TrimSpace(rc.Audience); v != "" {
+			aud = v
+		}
+		if v := strings.TrimSpace(rc.KeysURL); v != "" {
+			keysURL = v
+		}
+	}
+	if iss == "" && aud == "" && keysURL == "" {
+		return nil
+	}
+	var missing []string
+	if iss == "" {
+		missing = append(missing, "-ui-registry-issuer")
+	}
+	if aud == "" {
+		missing = append(missing, "-ui-registry-audience")
+	}
+	if keysURL == "" {
+		missing = append(missing, "-ui-registry-keys-url")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("incomplete registry verifier configuration: missing %s (set all three of -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url, or none)", strings.Join(missing, ", "))
+	}
+	if strings.Contains(iss, ",") {
+		return errors.New("-ui-registry-issuer must be a single issuer URL, not a comma-separated list")
+	}
+	if strings.Contains(aud, ",") {
+		return errors.New("-ui-registry-audience must be a single URL (https://<name>.<instance-domain>), not a comma-separated list")
+	}
+	return nil
+}
+
+// CheckRegistryConnect validates -registry-connect: starting with
+// -registry-connect requires an active "registry" IdentityVerifier
+// (-ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url, or a
+// registered "registry" IdentityVerifier) so incoming tunnel streams can never
+// be served without X-Grain-Registry-Assertion verification.
+func CheckRegistryConnect(cfg Config) error {
+	if err := CheckUIRegistryVerifier(cfg); err != nil {
+		return err
+	}
+	if !cfg.RegistryConnect {
+		return nil
+	}
+	ctx := ui.WithIAPConfig(context.Background(), ui.IAPConfig{
+		Audience:         cfg.UiIAPAudience,
+		Issuer:           cfg.UiIAPIssuer,
+		KeysURL:          cfg.UiIAPKeysURL,
+		RegistryIssuer:   cfg.UiRegistryIssuer,
+		RegistryAudience: cfg.UiRegistryAudience,
+		RegistryKeysURL:  cfg.UiRegistryKeysURL,
+	})
+	if ui.HasActiveVerifier(ctx, string(ui.AuthMethodRegistry)) {
+		return nil
+	}
+	return errors.New("-registry-connect requires -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url")
+}
+
 // CheckUIRequireVerifier validates -ui-require-verifier (and its
 // -ui-require-iap alias): it refuses conflicting flags and refuses to start
 // when the named IdentityVerifier is not active, because with no assertion
 // able to verify and no access code accepted over the network, nobody could
 // reach the UI except from the daemon's own host.
 func CheckUIRequireVerifier(cfg Config) error {
+	if err := CheckRegistryConnect(cfg); err != nil {
+		return err
+	}
 	req := strings.TrimSpace(cfg.UiRequireVerifier)
 	if cfg.UiRequireIAP && req != "" && req != string(ui.AuthMethodIAP) {
 		return fmt.Errorf("cannot set both -ui-require-iap and -ui-require-verifier=%q: -ui-require-iap is an alias for -ui-require-verifier=iap", req)
@@ -74,9 +166,12 @@ func CheckUIRequireVerifier(cfg Config) error {
 		return nil
 	}
 	ctx := ui.WithIAPConfig(context.Background(), ui.IAPConfig{
-		Audience: cfg.UiIAPAudience,
-		Issuer:   cfg.UiIAPIssuer,
-		KeysURL:  cfg.UiIAPKeysURL,
+		Audience:         cfg.UiIAPAudience,
+		Issuer:           cfg.UiIAPIssuer,
+		KeysURL:          cfg.UiIAPKeysURL,
+		RegistryIssuer:   cfg.UiRegistryIssuer,
+		RegistryAudience: cfg.UiRegistryAudience,
+		RegistryKeysURL:  cfg.UiRegistryKeysURL,
 	})
 	if ui.HasActiveVerifier(ctx, req) {
 		return nil
@@ -88,6 +183,9 @@ func CheckUIRequireVerifier(cfg Config) error {
 		}
 		return errors.New("-ui-require-verifier=iap needs an IAP audience: set -ui-iap-audience (or $GRAIN_IAP_AUDIENCE) to the IAP backend's " +
 			"/projects/NUMBER/global/backendServices/ID, or drop -ui-require-verifier to keep accepting the access code over the network")
+	}
+	if req == string(ui.AuthMethodRegistry) {
+		return fmt.Errorf("-ui-require-verifier=%q names no active IdentityVerifier: set -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url first, or drop -ui-require-verifier to keep accepting the access code over the network", req)
 	}
 	return fmt.Errorf("-ui-require-verifier=%q names no active IdentityVerifier: configure that verifier first, or drop -ui-require-verifier to keep accepting the access code over the network", req)
 }
@@ -156,6 +254,13 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 	var localAPIToken, localAPITokenFile string
 	if cfg.DataDir != "" {
 		path := ui.LocalAPITokenPath(cfg.DataDir)
+		if envFile := strings.TrimSpace(os.Getenv(ui.LocalAPITokenFileEnv)); envFile != "" && envFile != path {
+			if b, err := os.ReadFile(envFile); err == nil {
+				if tok := strings.TrimSpace(string(b)); tok != "" {
+					_ = os.WriteFile(path, []byte(tok+"\n"), 0o600)
+				}
+			}
+		}
 		tok, err := ui.EnsureLocalAPIToken(path)
 		if err != nil {
 			log.Printf("grain daemon: WARNING: writing the local API token %s: %v -- "+
@@ -174,6 +279,16 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 	if reader, ok := stateRepo.(ui.SettingsHistoryReader); ok {
 		settingsHistory = reader
 	}
+	var (
+		registryStatus           func(context.Context) (model.RegistrySnapshot, error)
+		triggerRegistryHeartbeat func(context.Context) (model.RegistrySnapshot, error)
+		triggerRegistrySync      func()
+	)
+	if reg := live.Registry(); reg != nil {
+		registryStatus = reg.Snapshot
+		triggerRegistryHeartbeat = reg.TriggerHeartbeat
+		triggerRegistrySync = reg.Trigger
+	}
 	gcpPoolSAs := ui.GCPKeyPoolEmails(cfg.GcpServiceAccountEmail, cfg.GcpServiceAccountCount, cfg.GcpProject)
 	combinedPoolSAs := append([]string(nil), gcpPoolSAs...)
 	if store != nil {
@@ -182,7 +297,13 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		keys, _ := store.ListGCPKeys(ctx)
 		combinedPoolSAs = append(combinedPoolSAs, ui.ConfigGCPKeyServiceAccounts(mc, keys)...)
 	}
+	if err := CheckDeploymentOwner(cfg); err != nil {
+		return nil, err
+	}
 	if err := checkUIAllowedPrincipalsWithPool(cfg, combinedPoolSAs); err != nil {
+		return nil, err
+	}
+	if err := CheckRegistryConnect(cfg); err != nil {
 		return nil, err
 	}
 	var provisionedSAs []string
@@ -207,9 +328,13 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		IAPAudience:                cfg.UiIAPAudience,
 		IAPIssuer:                  cfg.UiIAPIssuer,
 		IAPKeysURL:                 cfg.UiIAPKeysURL,
+		RegistryIssuer:             cfg.UiRegistryIssuer,
+		RegistryAudience:           cfg.UiRegistryAudience,
+		RegistryKeysURL:            cfg.UiRegistryKeysURL,
 		RequireVerifier:            cfg.UiRequireVerifier,
 		RequireIAP:                 cfg.UiRequireIAP,
 		AllowedPrincipals:          cfg.UiAllowedPrincipals,
+		DeploymentOwner:            cfg.DeploymentOwner,
 		ProvisionedServiceAccounts: provisionedSAs,
 		GCPKeyServiceAccounts:      gcpPoolSAs,
 		DBDriver:                   cfg.DbDriver,
@@ -265,7 +390,10 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		Stall: orchestrator.TaskStallNote,
 		// And the sub-case of that state, with its control
 		// (ui.Config.Reasons) -- joined here for the same reason.
-		Reasons: ReasonClassifier{PolicyFile: cfg.PolicyFile},
+		// With the deployment's own dispatch conditions, so a queued
+		// task says why nothing is dispatching rather than that it is
+		// ready (DispatchConditions).
+		Reasons: ReasonClassifier{PolicyFile: cfg.PolicyFile, DispatchBlocked: DispatchConditions.Why},
 		// The same action for the other kind of credential this
 		// deployment holds (ui.Config.AgentKeyChecks): the key each agent
 		// framework runs as, which the Agents tab can otherwise only
@@ -461,6 +589,10 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		// reconcilerDown (daemon.go), the same way AutoMergeDegraded above
 		// mirrors orchestrator.ChecksUnavailable -- bwsalmon/agents#576.
 		ReconcilerDown: func() bool { return ReconcilerDown.Load() },
+		// And why, with the error and since when: the same fact as
+		// named conditions, for the health route, the config response
+		// and the pipeline feed.
+		DispatchConditions: DispatchConditions,
 		// And the store switched underneath it (storeswitch.go).
 		StoreSwitch: CurrentStoreSwitch,
 		// Restarting: this process has been told to stop, or the
@@ -475,10 +607,13 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		// unconditionally, since a wake written before that loop starts
 		// (this server is up first, deliberately) sits in the buffer and
 		// is read when it does.
-		Wake:                  wakeCycle,
-		TriggerIAPSync:        TriggerIAPSync,
-		SandboxBackends:       cfg.availableSandboxBackends(),
-		SandboxBackendOptions: cfg.sandboxBackendOptions(),
+		Wake:                     wakeCycle,
+		TriggerIAPSync:           TriggerIAPSync,
+		RegistryStatus:           registryStatus,
+		TriggerRegistryHeartbeat: triggerRegistryHeartbeat,
+		TriggerRegistrySync:      triggerRegistrySync,
+		SandboxBackends:          cfg.availableSandboxBackends(),
+		SandboxBackendOptions:    cfg.sandboxBackendOptions(),
 		// And whether a merged settings change reset something on this
 		// deployment that grain had nowhere to say out loud -- the same
 		// marker, for a fact that reaches nobody without one
@@ -701,6 +836,9 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		log.Print("grain daemon: upgrading from the UI is off -- neither -upgrade-image nor -upgrade-src-dir is set")
 	}
 
+	if ep := strings.TrimSpace(cfg.UiCloudIdentityEndpoint); ep != "" {
+		uiCfg.GroupChecker = ui.NewCloudIdentityGroupChecker(ui.WithCloudIdentityEndpoint(ep))
+	}
 	uiClient := ui.NewClient(uiCfg, store)
 	if err := uiClient.MigrateAllowedPrincipals(context.Background()); err != nil {
 		log.Printf("grain daemon: WARNING: migrating allowed principals: %v", err)
@@ -709,6 +847,14 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 	// client (sandbox_cli.go).
 	liveSandboxCLI.Store(uiClient)
 	srv := ui.NewServerWithClient(uiClient)
+	if cfg.RegistryConnect {
+		if reg := live.Registry(); reg != nil && !reg.HasTunnelConnector() {
+			reg.SetTunnelConnector(NewRegistryTunnelSupervisor(RegistryTunnelSupervisorOptions{
+				Handler:        srv.RegistryTunnelHandler(),
+				OnUnauthorized: reg.InvalidateOIDCCache,
+			}))
+		}
+	}
 	// A CI job's api token is answered by this same handler, in process,
 	// held to its route table (pkg/capability/ciapi).
 	CIAPI.SetUpstream(srv)

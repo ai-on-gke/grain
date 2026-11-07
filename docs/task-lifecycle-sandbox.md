@@ -989,11 +989,13 @@ What is left, and what each piece needs:
 - **A lifecycle now depends on grain CI being on for the repository.**
   This is the one real cost of building in a release job rather than in
   grain, and it should be stated in the declaration's own error rather
-  than discovered: `grain-ci` is a capability an operator attaches per
-  repository, and with it off there is no release run, so there is no
+  than discovered: `https://grain.dev/capabilities/grain#ci` (formerly
+  `grain-ci`, retired in schema migration 96) is granted per repository
+  by its CI Mode, and with it off there is no release run, so there is no
   image and the repository's tasks cannot move to a declared lifecycle at
   all. Declaring a lifecycle therefore requires two operator grants
-  (`grain-ci`, and one of `package-publish`/`registry-push`) plus a
+  (`…/grain#ci`, and one of `…/release#package-publish`/`…/release#registry-push`,
+  formerly `package-publish`/`registry-push`, retired in schema migration 101) plus a
   registry. Acceptable -- it is the same gate publishing already has --
   but it means a repository cannot adopt this on its own, which the
   earlier grain-side build would have allowed.

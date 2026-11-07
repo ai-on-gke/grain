@@ -186,7 +186,7 @@ func TestARunWaitsForItsDisconnectedHostdAndItsCLIIsReattached(t *testing.T) {
 	ws.away.Store(true)
 	ws.drop()
 	waitFor(t, func() bool { return !cfg.HostdHub.HostdStatus("ws-a").Connected })
-	if why := pool.Availability(ctx, choice); !strings.Contains(why, "waiting for hostd ws-a") {
+	if why := pool.Availability(ctx, choice); !strings.Contains(why, "waiting for host ws-a") {
 		t.Errorf("ws-a away: availability %q, want the task parked waiting for hostd ws-a", why)
 	}
 	select {
@@ -240,14 +240,14 @@ func TestARunFailsAsLostWhenItsHostdIsAwayPastTheReattachTimeout(t *testing.T) {
 		if !errors.Is(r.err, agent.ErrHostdLost) {
 			t.Fatalf("the run with ws-a away past the timeout = %v, want ErrHostdLost", r.err)
 		}
-		if !strings.Contains(r.err.Error(), "grain hostd ws-a") {
+		if !strings.Contains(r.err.Error(), "host ws-a") {
 			t.Errorf("error %q does not name ws-a", r.err)
 		}
 	case <-time.After(30 * time.Second):
 		t.Fatal("the run kept waiting for ws-a past the reattach timeout")
 	}
 	choice := orchestrator.AgentChoice{TaskID: "pinned", BackendID: pinnedConnection.ID, Model: "m", Framework: model.AgentFrameworkAntigravity}
-	if why := pool.Availability(context.Background(), choice); !strings.Contains(why, "waiting for hostd ws-a") {
+	if why := pool.Availability(context.Background(), choice); !strings.Contains(why, "waiting for host ws-a") {
 		t.Errorf("after the lost run: availability %q, want the task parked waiting for hostd ws-a", why)
 	}
 }

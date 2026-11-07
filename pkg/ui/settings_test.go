@@ -311,23 +311,23 @@ func TestUpdateSettingsRoundTripsDefaultCapabilities(t *testing.T) {
 
 	// Repeated deliberately: a picker can produce a duplicate, and this
 	// is a set.
-	defaults := []string{"self-debug", "self-debug"}
+	defaults := []string{"console", "console"}
 	saved, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &defaults})
 	if err != nil {
 		t.Fatalf("setting default capabilities: %v", err)
 	}
-	if !reflect.DeepEqual(saved.DefaultCapabilities, []string{"self-debug"}) {
+	if !reflect.DeepEqual(saved.DefaultCapabilities, []string{"console"}) {
 		t.Fatalf("DefaultCapabilities = %v, want [self-debug] with the repeat dropped", saved.DefaultCapabilities)
 	}
 	read, err = c.GetSettings(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"self-debug"}) {
+	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"console"}) {
 		t.Fatalf("DefaultCapabilities = %v after a re-read, want [self-debug]", read.DefaultCapabilities)
 	}
 	for _, status := range read.Capabilities {
-		if want := status.ID == "self-debug"; status.Default != want {
+		if want := status.ID == "console"; status.Default != want {
 			t.Errorf("capability %s: Default = %t, want %t", status.ID, status.Default, want)
 		}
 	}
@@ -392,30 +392,30 @@ func TestUpdateSettingsAcceptsDroppingARetiredDefaultCapability(t *testing.T) {
 	// it can only be one that had a row when it was chosen and lost it to
 	// an upgrade since (OfferedCapabilities' own "scratch-repo", now
 	// github-sandbox).
-	putDefaultCapabilities(t, ctx, store, "self-debug", "scratch-repo")
+	putDefaultCapabilities(t, ctx, store, "console", "scratch-repo")
 
 	read, err := c.GetSettings(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"self-debug", "scratch-repo"}) {
+	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"console", "scratch-repo"}) {
 		t.Fatalf("DefaultCapabilities = %v, want it reported as stored: an operator can only clear one they can see",
 			read.DefaultCapabilities)
 	}
 
-	kept := []string{"self-debug"}
+	kept := []string{"console"}
 	saved, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &kept})
 	if err != nil {
 		t.Fatalf("dropping a retired default capability: %v", err)
 	}
-	if !reflect.DeepEqual(saved.DefaultCapabilities, []string{"self-debug"}) {
+	if !reflect.DeepEqual(saved.DefaultCapabilities, []string{"console"}) {
 		t.Fatalf("DefaultCapabilities = %v, want [self-debug] with the retired id gone", saved.DefaultCapabilities)
 	}
 	read, err = c.GetSettings(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"self-debug"}) {
+	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"console"}) {
 		t.Fatalf("DefaultCapabilities = %v after a re-read, want [self-debug]: the retired id is gone for good",
 			read.DefaultCapabilities)
 	}
@@ -432,14 +432,14 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
 		t.Fatal(err)
 	}
-	deployment := []string{"bootstrap-playbooks"}
+	deployment := []string{"console"}
 	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &deployment}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"self-debug"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"priority-dispatch"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/gadgets", []string{"self-debug", "bootstrap-playbooks"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/gadgets", []string{"priority-dispatch", "console"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -451,20 +451,20 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 	for _, status := range read.Capabilities {
 		byID[status.ID] = status
 	}
-	if got := byID["bootstrap-playbooks"]; !got.Default {
-		t.Errorf("gemini-key Default = false, want true: the deployment defaults it")
+	if got := byID["console"]; !got.Default {
+		t.Errorf("console Default = false, want true: the deployment defaults it")
 	}
 	// Reported even though the deployment already defaults it: dropping
 	// the deployment-wide entry leaves acme/gadgets' own standing.
-	if got := byID["bootstrap-playbooks"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets"}) {
-		t.Errorf("gemini-key DefaultRepos = %v, want [acme/gadgets]", got)
+	if got := byID["console"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets"}) {
+		t.Errorf("console DefaultRepos = %v, want [acme/gadgets]", got)
 	}
-	if got := byID["self-debug"]; got.Default {
-		t.Errorf("self-debug Default = true, want false: no task outside those two repos is filed with it")
+	if got := byID["priority-dispatch"]; got.Default {
+		t.Errorf("priority-dispatch Default = true, want false: no task outside those two repos is filed with it")
 	}
 	// Sorted by repo, the order Store.ListRepoConfigs returns.
-	if got := byID["self-debug"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets", "acme/widgets"}) {
-		t.Errorf("self-debug DefaultRepos = %v, want [acme/gadgets acme/widgets]", got)
+	if got := byID["priority-dispatch"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets", "acme/widgets"}) {
+		t.Errorf("priority-dispatch DefaultRepos = %v, want [acme/gadgets acme/widgets]", got)
 	}
 	if got := byID["github-sandbox"].DefaultRepos; len(got) != 0 {
 		t.Errorf("github-sandbox DefaultRepos = %v, want none", got)
@@ -478,7 +478,7 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 func TestSettingsReportsRepoDefaultsBeforeAnythingIsSaved(t *testing.T) {
 	t.Parallel()
 	c, _, ctx := testClient(t)
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"self-debug"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"console"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -490,7 +490,7 @@ func TestSettingsReportsRepoDefaultsBeforeAnythingIsSaved(t *testing.T) {
 		t.Fatalf("Configured = true, want false: no settings row was ever saved")
 	}
 	for _, status := range read.Capabilities {
-		if status.ID != "self-debug" {
+		if status.ID != "console" {
 			continue
 		}
 		if !reflect.DeepEqual(status.DefaultRepos, []string{"acme/widgets"}) {

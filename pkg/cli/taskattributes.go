@@ -15,6 +15,7 @@
 package cli
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -188,11 +189,12 @@ var taskStates = []model.State{
 // taskOrigins is every way a task can come to exist, and what the origin
 // attribute calls each -- the same set the UI's own Origin menu offers,
 // read off the same fields. A task carrying more than one marker is
-// reported as the most specific of them, which is why the order below is
-// the order taskOrigin tests them in: a merge fix is always generated
-// from another task, so calling it "proposed" would say the less
-// specific of two true things.
-var taskOrigins = []string{"hand", "external", "proposed", "schedule", "suite", "fix", "review"}
+// reported as the most specific of them, which is why the order below
+// runs from least to most specific (with schedule and suite together),
+// the reverse of the order taskOrigin tests them in: a merge fix is
+// always generated from another task, so calling it "proposed" would say
+// the less specific of two true things.
+var taskOrigins = []string{"hand", "external", "proposed", "imported", "schedule", "suite", "fix", "review"}
 
 func taskOrigin(t ui.Task) string {
 	switch {
@@ -206,6 +208,8 @@ func taskOrigin(t ui.Task) string {
 		return "schedule"
 	case t.SuiteRun:
 		return "suite"
+	case t.Imported:
+		return "imported"
 	case t.GeneratedFrom != "":
 		return "proposed"
 	// An external agent's credential files as the deployment's person
@@ -355,6 +359,28 @@ var builtinAttributes = attributeSet{
 			return []string{"off"}
 		},
 		order: []string{"on", "off"},
+	},
+	{
+		// Held for a person's decision (ui.Task.HumanReviewHold), by the
+		// categories of the reasons it is held for:
+		// `-filter humanReview:filled` is every held change.
+		id:  "humanReview",
+		typ: typeEnum,
+		values: func(t ui.Task) []string {
+			var out []string
+			for _, r := range t.HumanReviewHold {
+				c := r.Category
+				if c == "" {
+					c = "other"
+				}
+				if !slices.Contains(out, c) {
+					out = append(out, c)
+				}
+			}
+			return out
+		},
+		order:     []string{"product-decision", "risk", "security", "intent-unclear", "other"},
+		noneLabel: "Not held",
 	},
 	{
 		id:  "blocked",

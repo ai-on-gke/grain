@@ -147,4 +147,34 @@ describe("TaskTreeBoard", () => {
     expect(onOpenTask).toHaveBeenCalledWith("11");
     expect(document.activeElement).toBe(link);
   });
+
+  it("tells failed task reads from an empty tree and keeps held tasks across transient failures", async () => {
+    const onRetry = vi.fn();
+    const user = userEvent.setup();
+    renderTree({ tasks: [] });
+    expect(screen.getByText("No tasks yet.")).toBeInTheDocument();
+
+    document.body.innerHTML = "";
+    renderTree({
+      tasks: [],
+      tasksLoaded: false,
+      tasksError: "synthetic tasks 500",
+      onRetry,
+    });
+    expect(screen.queryByText("No tasks yet.")).toBeNull();
+    expect(
+      screen.getByText("The tasks could not be loaded (synthetic tasks 500)."),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+
+    document.body.innerHTML = "";
+    renderTree({
+      tasks,
+      tasksLoaded: true,
+      tasksError: "synthetic tasks 500",
+    });
+    expect(screen.queryByText(/The tasks could not be loaded/)).toBeNull();
+    expect(shownIds()).toEqual(["12", "3", "8", "11", "2"]);
+  });
 });

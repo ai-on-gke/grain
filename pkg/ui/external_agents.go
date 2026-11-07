@@ -240,6 +240,13 @@ func (c *Client) CreateExternalAgentToken(ctx context.Context, req CreateExterna
 		return IssuedExternalAgentToken{}, validationErrorf("%v", err)
 	}
 	actor := c.requestActor(ctx).Actor
+	if needsPerson && isDelegatedRequest(ctx) {
+		return IssuedExternalAgentToken{}, forbiddenCodeErrorf(
+			"requires_person",
+			"external agent credential %q includes a dangerous scope or a requires_person scope set: only a person acting directly may issue it",
+			name,
+		)
+	}
 	if needsPerson && !c.canIssuePersonExternalAgentToken(ctx, actor) {
 		return IssuedExternalAgentToken{}, forbiddenErrorf(
 			"external agent credential %q includes a dangerous scope or a requires_person scope set: only a person may issue it",
@@ -336,6 +343,13 @@ func (c *Client) RotateExternalAgentToken(ctx context.Context, id string) (Issue
 		return IssuedExternalAgentToken{}, validationErrorf("%v", err)
 	}
 	actor := c.requestActor(ctx).Actor
+	if needsPerson && isDelegatedRequest(ctx) {
+		return IssuedExternalAgentToken{}, forbiddenCodeErrorf(
+			"requires_person",
+			"external agent credential %q includes a dangerous scope or a requires_person scope set: only a person acting directly may rotate it",
+			existing.Name,
+		)
+	}
 	if needsPerson && !c.canIssuePersonExternalAgentToken(ctx, actor) {
 		return IssuedExternalAgentToken{}, forbiddenErrorf(
 			"external agent credential %q includes a dangerous scope or a requires_person scope set: only a person may rotate it",
@@ -687,7 +701,7 @@ func ExternalAgentAPITools(s *Server, tok *model.ExternalAgentToken) ([]mcp.Tool
 		if _, blocked := isNoTaskContextRoute(route.Pattern); blocked {
 			continue
 		}
-		if !set.Has(route.Scope) && !tasksAdminAllowsTaskPatch(set, route.Pattern) {
+		if !set.Has(route.Scope) && !tasksAdminAllowsTaskPatch(set, route.Pattern) && !capabilitiesDetachAllowsRoute(set, route.Pattern) {
 			continue
 		}
 		tools = append(tools, route.externalTool(s, tok))

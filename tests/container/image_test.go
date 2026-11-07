@@ -203,7 +203,7 @@ func TestTheImagesReleaseLabelIsTheReleaseItReports(t *testing.T) {
 // the tree actually arrived, that it is grain's own and not some other
 // checkout, and that the three things deliberately left behind stayed
 // behind. .git is the one worth naming: it is 6MB of history no reader
-// wants (selfdebug is os.ReadFile and os.ReadDir), and a `cp -a` that
+// wants (grain#source is os.ReadFile and os.ReadDir), and a `cp -a` that
 // stopped excluding it would be invisible except in the image's size.
 func TestTheImageCarriesItsOwnSource(t *testing.T) {
 	requireImage(t)
@@ -213,7 +213,7 @@ func TestTheImageCarriesItsOwnSource(t *testing.T) {
 test -f ` + root + `/go.mod
 grep -q "^module github.com/ai-on-gke/grain$" ` + root + `/go.mod
 test -d ` + root + `/cmd/grain
-test -d ` + root + `/pkg/capability/selfdebug
+test -d ` + root + `/pkg/capability/grainserver
 for excluded in .git bin ui/node_modules; do
   if [ -e ` + root + `/$excluded ]; then echo "LEAKED $excluded"; exit 1; fi
 done
@@ -251,7 +251,7 @@ func TestAnUnprivilegedAccountCanReadTheImagesSource(t *testing.T) {
 	script := `set -e
 ls ` + root + ` >/dev/null
 ls ` + root + `/pkg >/dev/null
-cat ` + root + `/pkg/capability/selfdebug/selfdebug.go >/dev/null
+cat ` + root + `/pkg/capability/grainserver/grainserver.go >/dev/null
 cat ` + root + `/go.mod >/dev/null
 denied=$(find ` + root + ` \( \( -type d \( ! -readable -o ! -executable \) \) -o \( ! -type d ! -readable \) \) -print 2>/dev/null | head -20 || true)
 if [ -n "$denied" ]; then echo "DENIED:"; echo "$denied"; exit 1; fi

@@ -115,13 +115,26 @@ type TaskSummary struct {
 	// from a title.
 	Kinds []string
 	// DependsOn is every task this one names in depends_on, open or not;
+	// DependsOnStates carries each named dependency's current state; and
 	// BlockedBy above is the still-open part of it.
-	DependsOn []string
+	DependsOn       []string
+	DependsOnStates map[string]string
 	// ChangedAt is the latest moment the record stamps a change of this
 	// task's -- filed, a run starting or ending, closed, merged, or a move
 	// of the merge queue's -- which is what list_grain_tasks'
 	// changed_since compares. nil for a record that stamps none.
 	ChangedAt *time.Time
+	// Reason is why the task sits in State (ui.Task.Reason): "queued/ready"
+	// while waiting for a worker vs "queued/dispatch_blocked" with the
+	// deployment's blocking condition in Resource.
+	Reason *TaskReason
+}
+
+// TaskReason is why a task sits in State (ui.Reason, orchestrator's
+// TaskReason): the named sub-case and what it waits on.
+type TaskReason struct {
+	Reason   string
+	Resource string
 }
 
 // TaskMergeQueue is the merge queue's own account of one task, as the
@@ -828,6 +841,13 @@ func renderTaskRecord(t TaskRecord, now time.Time) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Task %s: %s\n", t.ID, singleLine(t.Title))
 	fmt.Fprintf(&b, "State: %s\n", t.State)
+	if r := t.Reason; r != nil && r.Reason != "" {
+		if r.Resource != "" {
+			fmt.Fprintf(&b, "Reason: %s (%s)\n", r.Reason, singleLine(r.Resource))
+		} else {
+			fmt.Fprintf(&b, "Reason: %s\n", r.Reason)
+		}
+	}
 	// Immediately under the state, because it is about that word and
 	// nothing else: the state says what this task is waiting for and
 	// this says that the wait has gone on longer than it should have.
@@ -867,6 +887,9 @@ func renderTaskRecord(t TaskRecord, now time.Time) string {
 		b.WriteString("Kind: configuration agent\n")
 	} else if t.Interactive {
 		b.WriteString("Kind: interactive\n")
+	}
+	if len(t.DependsOn) > 0 {
+		fmt.Fprintf(&b, "Depends on: %s\n", formatDependencies(t.DependsOn, t.DependsOnStates))
 	}
 	if len(t.Capabilities) > 0 {
 		fmt.Fprintf(&b, "Capabilities: %s\n", strings.Join(t.Capabilities, ", "))
@@ -1338,6 +1361,18 @@ func blankAsNone(s, none string) string {
 		return none
 	}
 	return s
+}
+
+func formatDependencies(deps []string, states map[string]string) string {
+	parts := make([]string, len(deps))
+	for i, id := range deps {
+		if st := states[id]; st != "" {
+			parts[i] = fmt.Sprintf("%s (%s)", id, st)
+		} else {
+			parts[i] = id
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 // indent shifts a block of prose in by two spaces, so a description or a

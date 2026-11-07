@@ -589,6 +589,7 @@ if [ "${GRAIN_ALLOWED_PRINCIPALS+set}" = set ]; then
   GRAIN_ALLOWED_PRINCIPALS_GIVEN=1
 fi
 GRAIN_ALLOWED_PRINCIPALS="${GRAIN_ALLOWED_PRINCIPALS:-}"
+GRAIN_DEPLOYMENT_OWNER="${GRAIN_DEPLOYMENT_OWNER:-}"
 
 # --- the config repository (pkg/staterepo) ------------------------------
 #
@@ -969,8 +970,8 @@ Recognized variables:
 
   GRAIN_INSTALL_MODE        only "container" (the default) is accepted. "host" is
                              refused: host mode is gone, and a re-run moves a
-                             host-mode install to container mode plus grain hostd
-  GRAIN_HOSTD               1 (default; "auto" means the same) or 0: grain hostd runs
+                             host-mode install to container mode plus the host agent
+  GRAIN_HOSTD               1 (default; "auto" means the same) or 0: the host agent runs
                              allowlisted CLIs (agy) and `run: host` capability servers
                              on this machine, as GRAIN_USER. Writes grain-hostd.service
                              and, once, /etc/grain/hostd.yaml (the allowlist:
@@ -2453,7 +2454,7 @@ hostd on this machine for the CLIs that have to run as you (agy) and
 
   sudo ./scripts/setup.sh
 
-A host-mode install is moved to container mode plus grain hostd, keeping its
+A host-mode install is moved to container mode plus the host agent, keeping its
 data directory and grain-daemon.service. GRAIN_HOSTD=0 leaves hostd out.
 EOF2
       return 1
@@ -2466,10 +2467,10 @@ EOF2
   GRAIN_INSTALL_MODE=container
   if [ "$installed" = host ]; then
     GRAIN_MIGRATED_FROM_HOST_MODE=1
-    log "Install mode: moving this host-mode install to container mode plus grain hostd,"
+    log "Install mode: moving this host-mode install to container mode plus the host agent,"
     log "  keeping its data directory and $unit (host mode was removed)."
     log "  The grain CLI now acts as \"operator\" rather than as ${GRAIN_USER:-grain}, and agent CLIs"
-    log "  on this host's PATH are no longer used: the image's are, and agy runs through hostd."
+    log "  on this host's PATH are no longer used: the image's are, and agy runs through the host agent."
   else
     log "Install mode: container"
   fi
@@ -3570,24 +3571,24 @@ resolve_hostd() {
     auto)
       if [ "$GRAIN_USER" = root ]; then
         GRAIN_HOSTD=0
-        log "grain hostd: not installing it -- GRAIN_USER is root, and hostd refuses to run as root"
+        log "host agent: not installing it -- GRAIN_USER is root, and the host agent refuses to run as root"
       else
         GRAIN_HOSTD=1
-        log "grain hostd: installing it (the default; GRAIN_HOSTD=0 leaves it out)"
+        log "host agent: installing it (the default; GRAIN_HOSTD=0 leaves it out)"
       fi
       ;;
     1)
-      log "grain hostd: installing it (GRAIN_HOSTD=1, as given)"
+      log "host agent: installing it (GRAIN_HOSTD=1, as given)"
       ;;
     0)
-      log "grain hostd: not installing it (GRAIN_HOSTD=0): every agent CLI runs in the daemon's"
+      log "host agent: not installing it (GRAIN_HOSTD=0): every agent CLI runs in the daemon's"
       log "  container, nothing runs as $GRAIN_USER on this machine, and \"host\" is not offered"
       # The daemon refuses a -<cli>-run=host it has no host executor for
       # (daemon.CheckCLIRunFlags), so one is dropped rather than written.
       local var
       for var in GRAIN_CLAUDE_RUN GRAIN_CODEX_RUN GRAIN_AGY_RUN; do
         if [ "${!var}" = host ] || [ "${!var}" = detached ]; then
-          log "  ignoring $var=${!var}: there is no grain hostd to run it through"
+          log "  ignoring $var=${!var}: there is no host agent to run it through"
           printf -v "$var" '%s' ""
         fi
       done
@@ -3601,7 +3602,7 @@ resolve_hostd() {
   # hostd refuses to start as root (pkg/hostd), and everything it starts
   # runs as the account it runs as.
   if [ "$GRAIN_USER" = root ]; then
-    echo "setup.sh: GRAIN_HOSTD=1 runs grain hostd as GRAIN_USER, and hostd refuses to run as root; name another account, or set GRAIN_HOSTD=0" >&2
+    echo "setup.sh: GRAIN_HOSTD=1 runs the host agent as GRAIN_USER, and the host agent refuses to run as root; name another account, or set GRAIN_HOSTD=0" >&2
     return 1
   fi
   # claude detached by default: the image's claude, with the deployment's
@@ -3611,7 +3612,7 @@ resolve_hostd() {
   # (GRAIN_CLAUDE_PATH), which only a container run mounts in.
   if [ -z "${GRAIN_CLAUDE_RUN:-}" ] && [ -z "${GRAIN_CLAUDE_PATH:-}" ]; then
     GRAIN_CLAUDE_RUN=detached
-    log "  claude runs detached through hostd (the default with hostd; GRAIN_CLAUDE_RUN=container keeps it in the daemon's container)"
+    log "  claude runs detached through the host agent (the default with the host agent; GRAIN_CLAUDE_RUN=container keeps it in the daemon's container)"
   fi
   if [ -n "$GRAIN_AGY_PATH" ]; then
     HOSTD_AGY_PATH="$GRAIN_AGY_PATH"
@@ -3620,11 +3621,11 @@ resolve_hostd() {
     case "$HOSTD_AGY_PATH" in
       /*) ;;
       *)
-        echo "setup.sh: GRAIN_AGY_PATH must be an absolute path on this host for grain hostd's allowlist: $HOSTD_AGY_PATH" >&2
+        echo "setup.sh: GRAIN_AGY_PATH must be an absolute path on this host for the host agent's allowlist: $HOSTD_AGY_PATH" >&2
         return 1
         ;;
     esac
-    log "  agy runs on this host through hostd: $HOSTD_AGY_PATH (not mounted into the daemon's container)"
+    log "  agy runs on this host through the host agent: $HOSTD_AGY_PATH (not mounted into the daemon's container)"
   fi
   GRAIN_AGY_PATH=""
   return 0
@@ -4367,6 +4368,9 @@ if [ -S /var/run/docker.sock ]; then
   [ -n "\$docker_gid" ] && args+=(--group-add "\$docker_gid")
 fi
 [ -d /var/lib/granule ] && args+=(--volume /var/lib/granule:/var/lib/granule)
+[ -d /cloudsql ] && args+=(--volume /cloudsql:/cloudsql)
+[ -r /etc/grain/daemon.env ] && args+=(--env-file /etc/grain/daemon.env)
+[ -d /run/grain-secrets ] && args+=(--volume /run/grain-secrets:/run/grain-secrets:ro)
 # The local PostgreSQL server's DSN (setup.sh's database block), for a
 # caller that may read it -- root. Anyone else's CLI finds the store the
 # way the daemon recorded it, in db-config.json.
@@ -4404,7 +4408,7 @@ CLI
   chmod 0755 /usr/local/bin/granule
 
   if [ "${GRAIN_HOSTD:-0}" = "1" ]; then
-    log "Installed /usr/local/bin/grain ($GRAIN_IMAGE_REF's own binary, for grain hostd) and /usr/local/bin/granule (runs $GRAIN_IMAGE_REF)"
+    log "Installed /usr/local/bin/grain ($GRAIN_IMAGE_REF's own binary, for the host agent) and /usr/local/bin/granule (runs $GRAIN_IMAGE_REF)"
   else
     log "Installed /usr/local/bin/grain and /usr/local/bin/granule (both run $GRAIN_IMAGE_REF)"
   fi
@@ -6671,20 +6675,20 @@ report_agent_cli() {
     if [ -z "$path" ]; then
       printf 'container: MISSING its detached entry (%s has no cli entry "%s-detached", so it runs in the daemon'"'"'s container and an upgrade interrupts it)\n' "$HOSTD_ALLOWLIST" "$name"
     elif [ ! -x "$path" ]; then
-      printf 'detached, through grain hostd: MISSING (its allowlist entry "%s-detached" names %s, not an executable file on this host)\n' "$name" "$path"
+      printf 'detached, through the host agent: MISSING (its allowlist entry "%s-detached" names %s, not an executable file on this host)\n' "$name" "$path"
     else
-      printf 'detached, through grain hostd: %s (the image'"'"'s, as its allowlist entry "%s-detached")\n' "$path" "$name"
+      printf 'detached, through the host agent: %s (the image'"'"'s, as its allowlist entry "%s-detached")\n' "$path" "$name"
     fi
     return
   fi
   if [ "$(cli_run_location "$name")" = host ]; then
     path="$(hostd_cli_path "$name")"
     if [ -z "$path" ]; then
-      printf 'host, through grain hostd: MISSING (%s has no cli entry "%s")\n' "$HOSTD_ALLOWLIST" "$name"
+      printf 'host, through the host agent: MISSING (%s has no cli entry "%s")\n' "$HOSTD_ALLOWLIST" "$name"
     elif [ ! -x "$path" ]; then
-      printf 'host, through grain hostd: MISSING (its allowlist entry "%s" names %s, not an executable file on this host)\n' "$name" "$path"
+      printf 'host, through the host agent: MISSING (its allowlist entry "%s" names %s, not an executable file on this host)\n' "$name" "$path"
     else
-      printf 'host, through grain hostd: %s (its allowlist entry "%s")\n' "$path" "$name"
+      printf 'host, through the host agent: %s (its allowlist entry "%s")\n' "$path" "$name"
     fi
     return
   fi
@@ -7026,6 +7030,7 @@ write_systemd_units() {
   [ -n "$GRAIN_GCP_SERVICE_ACCOUNT_EMAIL" ] && daemon_args+=(-gcp-agent-service-account "$GRAIN_GCP_SERVICE_ACCOUNT_EMAIL")
   [ -n "$GRAIN_IAP_RESOURCE" ] && daemon_args+=(-iap-resource "$GRAIN_IAP_RESOURCE")
   [ -n "$GRAIN_ALLOWED_PRINCIPALS" ] && daemon_args+=(-ui-allowed-principals "$GRAIN_ALLOWED_PRINCIPALS")
+  [ -n "$GRAIN_DEPLOYMENT_OWNER" ] && daemon_args+=(-deployment-owner "$GRAIN_DEPLOYMENT_OWNER")
   [ -n "$GRAIN_TARGET_REPO" ] && daemon_args+=(-default-target-repo "$GRAIN_TARGET_REPO")
   if [ -n "$GRAIN_SANDBOX_CPUS" ]; then
     daemon_args+=(-sandbox-cpus "$GRAIN_SANDBOX_CPUS")
@@ -7227,11 +7232,12 @@ Requires=docker.service${POSTGRES_DAEMON_REQUIRES}
 Type=simple
 EnvironmentFile=${UNIT_IMAGE_REF_FILE}
 ${POSTGRES_DAEMON_ENV}
+EnvironmentFile=-/etc/grain/daemon.env
 EnvironmentFile=-/etc/default/grain-daemon
 ExecStartPre=${IMAGE_REF_PROMOTER}
 ${hostd_extract}
 ExecStartPre=-$DOCKER_BIN rm -f grain-daemon
-ExecStart=$DOCKER_BIN run --name grain-daemon ${DOCKER_ARGS[*]} \$GRAIN_EXTRA_DOCKER_RUN_ARGS \${GRAIN_IMAGE} ${daemon_args[*]}
+ExecStart=$DOCKER_BIN run --name grain-daemon ${DOCKER_ARGS[*]} \$GRAIN_EXTRA_DOCKER_RUN_ARGS \${GRAIN_IMAGE} ${daemon_args[*]} \$GRAIN_EXTRA_DAEMON_ARGS
 ExecStop=-$DOCKER_BIN stop --time 300 grain-daemon
 Restart=on-failure
 RestartSec=5
@@ -7411,6 +7417,8 @@ docker_run_args() {
   fi
 
   [ -d /cloudsql ] && DOCKER_ARGS+=(--volume /cloudsql:/cloudsql)
+  [ -f /etc/grain/daemon.env ] && DOCKER_ARGS+=(--env-file /etc/grain/daemon.env)
+  [ -d /run/grain-secrets ] && DOCKER_ARGS+=(--volume /run/grain-secrets:/run/grain-secrets:ro)
 
   # GRAIN_DB_DRIVER and GRAIN_DB_DSN, by name, out of the local server's
   # environment file (postgres_daemon_unit): never their values here.
@@ -7674,9 +7682,9 @@ while :; do
   if [ "\$running" = "\$current" ]; then
     continue
   fi
-  echo "grain hostd (pid \$pid) runs \${running:-an unknown binary}; draining it onto \$current"
+  echo "the host agent (pid \$pid) runs \${running:-an unknown binary}; draining it onto \$current"
   if ! runuser -u "${GRAIN_USER}" -- "\$current" hostd -drain -socket "${HOSTD_SOCKET}"; then
-    echo "grain hostd did not take a drain (it predates draining); restarting it onto \$current"
+    echo "the host agent did not take a drain (it predates draining); restarting it onto \$current"
     systemctl restart grain-hostd.service
   fi
 done
@@ -7700,7 +7708,7 @@ write_hostd_env() {
   local tmp
   tmp="$(mktemp "$HOSTD_ENV_FILE.XXXXXX")"
   {
-    echo "# Written by scripts/setup.sh (write_hostd_env): the proxy grain hostd's"
+    echo "# Written by scripts/setup.sh (write_hostd_env): the proxy the host agent's"
     echo "# children may be given, by an allowlist entry's pass_env."
     printf '%s' "$lines"
   } > "$tmp"
@@ -7736,13 +7744,13 @@ write_hostd_env() {
 write_hostd_allowlist() {
   install -d -m0755 -o root -g root "$(dirname "$HOSTD_ALLOWLIST")"
   if [ -L "$HOSTD_ALLOWLIST" ]; then
-    echo "setup.sh: $HOSTD_ALLOWLIST is a symlink; grain hostd refuses one, and this script will not write through it" >&2
+    echo "setup.sh: $HOSTD_ALLOWLIST is a symlink; the host agent refuses one, and this script will not write through it" >&2
     return 1
   fi
   if [ -e "$HOSTD_ALLOWLIST" ]; then
     chown root:root "$HOSTD_ALLOWLIST"
     chmod 0644 "$HOSTD_ALLOWLIST"
-    log "  grain hostd allowlist: keeping $HOSTD_ALLOWLIST as it is (edit it to change what hostd runs)"
+    log "  the host agent allowlist: keeping $HOSTD_ALLOWLIST as it is (edit it to change what the host agent runs)"
     # The same entries grain-hostd-allowlist.service adds from the
     # binary's own list at hostd's next start (write_hostd_allowlist_unit);
     # tests/deploy holds these functions' entries equal to that list.
@@ -7756,7 +7764,7 @@ write_hostd_allowlist() {
     chown root:root "$tmp"
     chmod 0644 "$tmp"
     mv -fT "$tmp" "$HOSTD_ALLOWLIST"
-    log "  grain hostd allowlist: wrote $HOSTD_ALLOWLIST${HOSTD_AGY_PATH:+ (agy: $HOSTD_AGY_PATH)}"
+    log "  the host agent allowlist: wrote $HOSTD_ALLOWLIST${HOSTD_AGY_PATH:+ (agy: $HOSTD_AGY_PATH)}"
   fi
   # This run's default, beside it and never loaded by hostd: what the
   # readiness report's suggestion points to, for an operator to copy from.
@@ -7769,7 +7777,7 @@ write_hostd_allowlist() {
   # parse, so a broken edit is a host run that fails: said now, not fatal.
   local checked
   if ! checked="$(as_grain "$HOST_GRAIN_BIN" hostd -check -allowlist "$HOSTD_ALLOWLIST" 2>&1)"; then
-    log "WARNING: grain hostd will refuse $HOSTD_ALLOWLIST: $checked"
+    log "WARNING: the host agent will refuse $HOSTD_ALLOWLIST: $checked"
   fi
 }
 
@@ -7929,7 +7937,7 @@ ensure_hostd_builtin_capabilities() {
       chown root:root "$tmp"
       chmod 0644 "$tmp"
       mv -fT "$tmp" "$HOSTD_ALLOWLIST"
-      log "  grain hostd allowlist: added the built-in capability server entries for ${absent[*]} (run: host)"
+      log "  the host agent allowlist: added the built-in capability server entries for ${absent[*]} (run: host)"
       ;;
     *)
       log "WARNING: $HOSTD_ALLOWLIST has no entry for the built-in capability servers ${absent[*]}, and its shape is not one"
@@ -7981,7 +7989,7 @@ ensure_hostd_host_git() {
       chown root:root "$tmp"
       chmod 0644 "$tmp"
       mv -fT "$tmp" "$HOSTD_ALLOWLIST"
-      log "  grain hostd allowlist: added the host-git capability entry (an ambient git connection's gh/git)"
+      log "  the host agent allowlist: added the host-git capability entry (an ambient git connection's gh/git)"
       ;;
     *)
       rm -f "$tmp"
@@ -8031,7 +8039,7 @@ ensure_hostd_detached_clis() {
     chown root:root "$tmp"
     chmod 0644 "$tmp"
     mv -fT "$tmp" "$HOSTD_ALLOWLIST"
-    log "  grain hostd allowlist: added the container-equivalent cli entries ${missing// /, } (a run set to detached)"
+    log "  the host agent allowlist: added the container-equivalent cli entries ${missing// /, } (a run set to detached)"
   else
     log "WARNING: $HOSTD_ALLOWLIST has no cli entries ${missing// /, }, and its shape is not one this script edits."
     log "         A CLI set to run detached needs them (it runs in the container, and an upgrade interrupts it,"
@@ -8081,7 +8089,7 @@ report_hostd_versions() {
   exe="${exe#"$HOSTD_VERSIONS_DIR"/}"
   exe="${exe%/grain*}"
   if [ -z "$exe" ]; then
-    echo "                       version: current is ${current:-none}; hostd is not running"
+    echo "                       version: current is ${current:-none}; the host agent is not running"
   elif [ "$exe" = "$current" ]; then
     echo "                       version: $current (the current link's)"
   else

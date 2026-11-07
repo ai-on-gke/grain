@@ -8,6 +8,17 @@ arguments and nothing else. It is ported from Silo v2's local executor
 narrow local reach"). This document is the design note for the port and
 the reference for the declaration.
 
+> [!NOTE]
+> The `local-scripts:<name>` capability is retired (tasks 2366 and 3077).
+> A declaration is now served by the `host-script` capability server:
+> each of its scripts becomes one
+> `https://grain.dev/capabilities/host-script#host-script` `{script}`
+> grant, and the daemon rewrites stored `local-scripts:<name>` grants to
+> those at every start ([Moving to host-script](#moving-to-host-script)).
+> The declaration format below is still what an operator writes. Where
+> this note describes a `local_<name>` MCP tool, it records the original
+> port; the script is now run as `grain host-script <name>`.
+
 ## What carries over from Silo
 
 Silo ran scripts on the invoking machine, outside the sandbox, because
@@ -86,7 +97,7 @@ lines are read too, so a script written for Silo carries over unchanged.
 
 ## Moving to host-script
 
-`local-scripts:<name>` is retiring onto the `host-script` capability
+`local-scripts:<name>` has retired onto the `host-script` capability
 server ([capabilities.md](capabilities.md#host-scripts-grain-capability-host-script),
 [host-scripts.md](host-scripts.md)). Each script of a declaration becomes
 one host-script script, and a grant of the declaration becomes one
@@ -187,10 +198,12 @@ of two places, and a host-managed one wins:
 The snapshot's ownership and permission checks apply to the copy on the
 node host. A name is lowercase letters, digits, `-` and `_`.
 
-**Opt-in and trust.** A declaration is granted to work by a
-`local-scripts:<name>` capability, in a repository's default
-capabilities or on a template, as other capabilities are. A task that
-does not hold it is served no local tool. Like the other write-scoped
+**Opt-in and trust.** A declaration's scripts are granted to work by
+`…/host-script#host-script` `{script}` grants, one per script, in a
+repository's default capabilities or on a template, as other
+capabilities are (formerly one `local-scripts:<name>` capability per
+declaration, which still expands to those grants). A task that does
+not hold one is served no script. Like the other write-scoped
 capabilities (`repo-write:*`, `package-publish`, `github-sandbox`), it is
 never granted to an untrusted run. A task a schedule filed is refused it
 when its grants are resolved, so it does not dispatch, and the

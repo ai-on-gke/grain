@@ -20,7 +20,6 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability"
 	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
-	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	consolecap "github.com/ai-on-gke/grain/pkg/capability/console"
 	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
@@ -282,7 +281,6 @@ var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
 	"gcp-key":                   "GCP key",
 	"gemini-key":                "Gemini key",
 	"github-sandbox":            "GitHub sandbox",
-	"self-debug":                "Self debug",
 	"bootstrap-playbooks":       "Bootstrap playbooks",
 	model.GrainCIGrant:          "grain CI",
 	model.GrainCICapability:     "grain CI",
@@ -364,7 +362,6 @@ func capabilityProviderCatalog() []model.CapabilityProvider {
 	}
 	providers = append(providers, admincaps.Providers()...)
 	providers = append(providers,
-		bootstrap.New(),
 		registrypush.NewWithConfig(registrypush.Config{}),
 		packagepublish.New(packagepublish.Config{}),
 		imagesigning.New(imagesigning.Config{}),

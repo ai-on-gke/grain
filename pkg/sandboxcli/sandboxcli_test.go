@@ -30,7 +30,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability/bootstrap/playbooks"
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -38,6 +37,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/namespace"
+	"github.com/ai-on-gke/grain/pkg/playbooks"
 	"github.com/ai-on-gke/grain/pkg/redact"
 )
 
@@ -211,8 +211,8 @@ func TestSandboxCLIAgainstTheProxy(t *testing.T) {
 	}
 	// Refusals come back in unknownToolMessage's words.
 	_, errOut, code := run("read", "src://pkg/ci/engine.go")
-	if code != 1 || !strings.Contains(errOut, `does not hold the "self-debug" capability`) || !strings.Contains(errOut, "a human attaches it to the task") {
-		t.Errorf("src without self-debug: %d %s", code, errOut)
+	if code != 1 || !strings.Contains(errOut, `does not hold the "https://grain.dev/capabilities/grain#source" capability`) || !strings.Contains(errOut, "a human attaches it to the task") {
+		t.Errorf("src without grain#source: %d %s", code, errOut)
 	}
 	_, errOut, code = run("db", "query", "SELECT 1")
 	if code != 1 || !strings.Contains(errOut, `"https://grain.dev/capabilities/grain#sql"`) {
@@ -382,6 +382,13 @@ func TestSandboxLogAndMetricsFlagsBecomeTheirQuery(t *testing.T) {
 	}
 	if got, want := grainLogQuery(p, time.Now()).Encode(), "max_lines=50&min_priority=warning"; got != want {
 		t.Errorf("grain log query = %s, want %s", got, want)
+	}
+	p, err = parseSandboxArgs([]string{"--unit", "grain-daemon.service", "--lines", "25"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := grainLogQuery(p, time.Now()).Encode(), "max_lines=25&unit=grain-daemon.service"; got != want {
+		t.Errorf("grain log --unit query = %s, want %s", got, want)
 	}
 	p, err = parseSandboxArgs([]string{"summary", "--since", "2026-10-28", "--until", "2026-10-29"})
 	if err != nil {

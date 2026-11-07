@@ -207,9 +207,19 @@ func DialConnect(ctx context.Context, cfg ConnectConfig) (ConnectResult, error) 
 type DefaultConnectDialer struct{}
 
 func normalizeConnectURL(raw string, allowInsecure bool) (*url.URL, bool, error) {
-	u, err := url.Parse(strings.TrimSpace(raw))
+	trimmed := strings.TrimSpace(raw)
+	if len(trimmed) > 2048 {
+		return nil, false, fmt.Errorf("connect URL exceeds 2048 bytes")
+	}
+	u, err := url.Parse(trimmed)
 	if err != nil {
 		return nil, false, fmt.Errorf("invalid registry URL %q: %w", raw, err)
+	}
+	if u.User != nil {
+		return nil, false, fmt.Errorf("connect URL must not include userinfo credentials")
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return nil, false, fmt.Errorf("connect URL must not include query parameters or fragments")
 	}
 	scheme := strings.ToLower(u.Scheme)
 	useTLS := false
@@ -225,12 +235,15 @@ func normalizeConnectURL(raw string, allowInsecure bool) (*url.URL, bool, error)
 	default:
 		return nil, false, fmt.Errorf("connect URL %q must use https:// or wss:// (or http:// on loopback)", raw)
 	}
-	if strings.TrimSpace(u.Host) == "" {
+	host := u.Hostname()
+	if host == "" {
 		return nil, false, fmt.Errorf("connect URL %q is missing host", raw)
 	}
+	if isForbiddenMetadataHost(host) {
+		return nil, false, fmt.Errorf("connect URL host %q is not permitted", host)
+	}
 	u.Path = strings.TrimRight(u.Path, "/")
-	u.RawQuery = ""
-	u.Fragment = ""
+	u.RawPath = ""
 	return u, useTLS, nil
 }
 
@@ -520,8 +533,11 @@ func (a muxListenerAddr) String() string  { return string(a) }
 // "stream-<id>-remote", ensuring loopback trust checks never match tunneled
 // requests.
 type MuxListener struct {
-	m      *mux.Mux
-	closed atomic.Bool
+	m         *mux.Mux
+	ctx       context.Context
+	cancel    context.CancelFunc
+	closed    atomic.Bool
+	closeOnce sync.Once
 }
 
 // NewMuxListener wraps m in a net.Listener.
@@ -529,7 +545,12 @@ func NewMuxListener(m *mux.Mux) *MuxListener {
 	if m == nil {
 		panic("registry/api: NewMuxListener called with nil *mux.Mux")
 	}
-	return &MuxListener{m: m}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &MuxListener{
+		m:      m,
+		ctx:    ctx,
+		cancel: cancel,
+	}
 }
 
 // Accept waits for and returns the next incoming mux stream as a net.Conn.
@@ -537,20 +558,40 @@ func (l *MuxListener) Accept() (net.Conn, error) {
 	if l.closed.Load() {
 		return nil, net.ErrClosed
 	}
-	stream, err := l.m.AcceptStream()
+	stream, err := l.m.AcceptStreamContext(l.ctx)
 	if err != nil {
-		if l.closed.Load() || errors.Is(err, mux.ErrSessionClosed) || errors.Is(err, io.EOF) {
+		if l.closed.Load() || errors.Is(err, context.Canceled) || errors.Is(err, mux.ErrSessionClosed) || errors.Is(err, io.EOF) {
 			return nil, net.ErrClosed
 		}
 		return nil, err
 	}
+	if l.closed.Load() {
+		_ = stream.Reset()
+		return nil, net.ErrClosed
+	}
 	return stream, nil
 }
 
-// Close closes the underlying mux so blocked Accept calls return net.ErrClosed.
+// Close stops accepting new streams so blocked Accept calls return
+// net.ErrClosed while allowing in-flight streams on the underlying *mux.Mux to
+// drain (for http.Server.Shutdown during graceful session rotation) until
+// TunnelSession.Close closes the mux. Any new stream opened by the peer after
+// Close is immediately reset.
 func (l *MuxListener) Close() error {
 	l.closed.Store(true)
-	return l.m.Close()
+	l.closeOnce.Do(func() {
+		l.cancel()
+		go func() {
+			for {
+				s, err := l.m.AcceptStream()
+				if err != nil {
+					return
+				}
+				_ = s.Reset()
+			}
+		}()
+	})
+	return nil
 }
 
 // Addr returns a non-IP net.Addr with Network() == "mux".

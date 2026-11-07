@@ -72,6 +72,15 @@ type Registration struct {
 	// unticked it on the director keeps it out. Core grain registers
 	// nothing with it set.
 	DefaultOn bool
+	// SandboxEgress says the capability only works when the sandbox it
+	// is materialized in can reach the internet itself -- not through
+	// the controller, the session host or a port grain publishes to
+	// sandboxes. Set with DefaultOn, it keeps the shipped director
+	// session's NetworkAccess open on this build rather than none
+	// (model.RegisterDefaultConsoleSessionEgressCapability,
+	// director-capabilities.spec.md §3.1.6). Without DefaultOn it has no
+	// effect.
+	SandboxEgress bool
 }
 
 var (
@@ -96,7 +105,7 @@ func RegisterProvider(r Registration) (unregister func()) {
 	registered[r.ID] = r
 	var unregisterSession func()
 	if r.DefaultOn {
-		unregisterSession = model.RegisterDefaultConsoleSessionCapability(r.ID)
+		unregisterSession = registerDefaultConsoleSessionCapability(r.ID, r.SandboxEgress)
 	}
 	return func() {
 		mu.Lock()
@@ -106,6 +115,15 @@ func RegisterProvider(r Registration) (unregister func()) {
 			unregisterSession()
 		}
 	}
+}
+
+// registerDefaultConsoleSessionCapability seeds id into the shipped
+// director's capabilities, saying whether it needs sandbox egress.
+func registerDefaultConsoleSessionCapability(id string, sandboxEgress bool) (unregister func()) {
+	if sandboxEgress {
+		return model.RegisterDefaultConsoleSessionEgressCapability(id)
+	}
+	return model.RegisterDefaultConsoleSessionCapability(id)
 }
 
 // Registered returns every registered capability, ordered by ID so that

@@ -622,8 +622,8 @@ var Migrations = []Migration{
 		Version:     92,
 		Description: "add the hostd registry (hostd, hostd_token), with the co-located hostd as local",
 		Statements: []string{
-			hostdTable,
-			hostdTokenTable,
+			schema92HostdTable,
+			schema92HostdTokenTable,
 		},
 		Up: ensureLocalHostd,
 	},
@@ -801,27 +801,79 @@ var Migrations = []Migration{
 		},
 	},
 	{
-		Version:     115,
+		Version: 115,
+		Description: "rewrite stored self-debug grants, repo_config.ci_capabilities and the capability policy's catalogue " +
+			"included, to api:self-debug and https://grain.dev/capabilities/grain#source={} (the in-process capability is retired)",
+		Up: migrateSelfDebugGrants,
+	},
+	{
+		Version:     116,
+		Description: "add grain_config.registry for connected-entry self-registration and heartbeat settings (design/design/registry.design.md)",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `registry` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     117,
+		Description: "add host enrollment codes, pending join requests, key-bound host metadata and 30-day credential expiry",
+		Statements: []string{
+			"ALTER TABLE `hostd` ADD COLUMN `public_key` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `key_fingerprint` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `enrollment_code` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `capacity` INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE `hostd` ADD COLUMN `hostname` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `os` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `arch` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `clis` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `version` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `local_user` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `last_seen_at` DATETIME NULL",
+			"ALTER TABLE `hostd_token` ADD COLUMN `expires_at` DATETIME NULL",
+			hostEnrollmentCodeTable,
+			hostJoinRequestTable,
+		},
+	},
+	{
+		Version:     118,
+		Description: "rewrite stored bootstrap-playbooks grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/config-map#config-map={\"config_maps\":[\"bootstrap\"]} (the in-process bootstrap-playbooks is retired)",
+		Up:          migrateBootstrapPlaybooksGrants,
+	},
+	{
+		Version:     119,
+		Description: "add allowed_principal.label and allowed_principal.last_used_at for delegate: entries (design/design/authentication.design.md §6)",
+		Statements: []string{
+			"ALTER TABLE `allowed_principal` ADD COLUMN `label` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `allowed_principal` ADD COLUMN `last_used_at` DATETIME NULL",
+		},
+	},
+	{
+		Version:     120,
 		Description: "rewrite stored read-issues grants, repo_config.ci_capabilities and capability_policy included, to https://grain.dev/capabilities/github#read-issues={} (the in-process capability is retired)",
 		Up:          migrateReadIssuesGrants,
 	},
 }
 
-// migrateReadIssuesGrants is schema migration 115's Up: rewrites stored
-// read-issues grants across the three grant tables, deployment and repository
-// default_capabilities, repo_config.ci_capabilities, standing console_sessions
-// and capability_policy rules/catalogue defaults to
-// https://grain.dev/capabilities/github#read-issues={}.
-func migrateReadIssuesGrants(ctx context.Context, tx *sql.Tx) error {
-	renames := map[string][]string{"read-issues": {GitHubReadIssuesGrant}}
-	if err := rewriteLegacyGrantsMulti(renames)(ctx, tx); err != nil {
-		return err
-	}
-	if err := rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities", renames); err != nil {
-		return err
-	}
-	return rewritePolicyRenames(ctx, tx, renames, GitHubReadIssuesRef)
-}
+// schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as
+// schema 92 created them, frozen so migration 92 followed by migration 117's
+// ALTER TABLE statements runs cleanly from any earlier baseline.
+const schema92HostdTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd`" + ` (
+  ` + "`name`" + `       TEXT     NOT NULL,
+  ` + "`owner`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`labels`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`created_by`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`created_at`" + ` DATETIME NOT NULL,
+  ` + "`revoked_at`" + ` DATETIME NULL,
+  PRIMARY KEY (` + "`name`" + `)
+)`
+
+const schema92HostdTokenTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd_token`" + ` (
+  ` + "`token_hash`" + ` TEXT     NOT NULL,
+  ` + "`hostd`" + `      TEXT     NOT NULL,
+  ` + "`prefix`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`created_at`" + ` DATETIME NOT NULL,
+  ` + "`revoked_at`" + ` DATETIME NULL,
+  PRIMARY KEY (` + "`token_hash`" + `)
+)`
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as
 // schemas before 95 wrote it, with the default captured for replacing.

@@ -78,9 +78,9 @@ type AccessRequestView struct {
 	Items     []AccessRequestItemView `json:"items"`
 	CreatedAt string                  `json:"createdAt"`
 	Holds     AccessHolds             `json:"holds"`
-	// Earlier is what people answered earlier requests on this task for
-	// exactly the same items, latest first: a request repeating one
-	// already denied shows the denial.
+	// Earlier is what people answered earlier requests on this task that
+	// asked for any of these items, latest first: a request repeating an
+	// item already denied or declined shows the earlier answer.
 	Earlier []model.AccessDecision `json:"earlier,omitempty"`
 }
 
@@ -153,17 +153,18 @@ func (c *Client) checkAccessItem(ctx context.Context, task model.Task, it model.
 			return fail(fmt.Errorf("%s", check.Error))
 		}
 		view.Grant = check.Recorded
-		if marked, err := c.markCatalogueRefusals(ctx, checks, task.Target); err == nil && marked[0].CatalogueRefusal != "" {
-			return fail(fmt.Errorf("%s", marked[0].CatalogueRefusal))
+		if ciOnlyCapability(view.Grant) {
+			return fail(fmt.Errorf("%s", model.CIOnlyRefusal(view.Grant)))
+		}
+		// A nil catalogue still applies the built-in director floor.
+		if cat, err := c.capabilityCatalogue(ctx); err == nil {
+			verdict, err := cat.ValidateGrants(c.taskGrantContext(ctx, task, []string{view.Grant}))
+			if err != nil {
+				return fail(err)
+			}
+			view.RequiresPerson = len(verdict.RequiresPerson) > 0
 		}
 		view.Dangerous = model.IsDangerousGrant(view.Grant)
-		if cat, err := c.capabilityCatalogue(ctx); err == nil && cat != nil {
-			gc := model.TaskGrantContext(task)
-			gc.Grants = []string{view.Grant}
-			if verdict, err := cat.ValidateGrants(gc); err == nil && len(verdict.RequiresPerson) > 0 {
-				view.RequiresPerson = true
-			}
-		}
 		view.Held = slices.ContainsFunc(task.Grants, func(g model.Grant) bool { return g.Capability == view.Grant })
 		return view
 	}
@@ -236,10 +237,17 @@ func (c *Client) pendingAccessFor(ctx context.Context, task model.Task, obs *mod
 	for _, it := range req.Items {
 		view.Items = append(view.Items, c.checkAccessItem(ctx, task, it))
 	}
-	key := req.Key()
+	asked := make(map[string]bool, len(req.Items))
+	for _, it := range req.Items {
+		asked[it.Key()] = true
+	}
 	for i := len(obs.AccessDecisions) - 1; i >= 0; i-- {
-		if d := obs.AccessDecisions[i]; d.Request.Key() == key {
-			view.Earlier = append(view.Earlier, d)
+		d := obs.AccessDecisions[i]
+		for _, it := range d.Request.Items {
+			if asked[it.Key()] {
+				view.Earlier = append(view.Earlier, d)
+				break
+			}
 		}
 	}
 	return view
@@ -248,6 +256,9 @@ func (c *Client) pendingAccessFor(ctx context.Context, task model.Task, obs *mod
 // pendingAccessToDecide is the request task id is parked on, refusing a
 // caller that is not a person.
 func (c *Client) pendingAccessToDecide(ctx context.Context, id, verb string) (*model.Task, *model.Observation, error) {
+	if isDelegatedRequest(ctx) {
+		return nil, nil, forbiddenCodeErrorf("requires_person", "only a person acting directly may %s an access request", verb)
+	}
 	if c.requestActor(ctx).Actor.Kind != model.PrincipalHuman {
 		return nil, nil, forbiddenErrorf("only a person may %s an access request", verb)
 	}

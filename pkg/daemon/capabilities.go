@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
-	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	"github.com/ai-on-gke/grain/pkg/capability/ciapi"
 	consolecap "github.com/ai-on-gke/grain/pkg/capability/console"
 	"github.com/ai-on-gke/grain/pkg/capability/durable"
@@ -89,10 +88,12 @@ func CapabilityProviders(cfg Config, store *model.Store, _ map[string]*modelprox
 		Host: cfg.GithubHost, InsecureHTTP: cfg.GithubInsecureHTTP,
 	}))
 	providers = append(providers, admincaps.Providers()...)
+	// bootstrap-playbooks is no longer a provider here: it was retired onto
+	// the config-map server's config-map {"config_maps":["bootstrap"]}
+	// (schema migration 118), which places the same embedded playbooks.
 	// read-issues is no longer a provider here: it was retired onto the
-	// in-process github server's read-issues method (schema migration 115).
+	// in-process github server's read-issues method (schema migration 120).
 	providers = append(providers,
-		bootstrap.New(),
 		consolecap.New(),
 		prioritydispatch.New(),
 		durable.New(),
@@ -263,9 +264,6 @@ func grantTools(srcDir, secretsDir string, secretStore *secrets.Store) map[strin
 				TaskID:   taskID,
 				Redactor: grainLogRedactorFor(secretsDir, secretStore),
 			})
-		},
-		bootstrap.CapabilityName: func(*model.Store, string) []mcp.Tool {
-			return bootstrap.PlaybookTools()
 		},
 	}
 }

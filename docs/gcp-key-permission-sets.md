@@ -7,7 +7,7 @@ This is the operator's walk-through. What the capability does, and why, is in [c
 An admin is the identity grain uses to create service accounts, bind their roles and mint their keys. Its credential has one of two sources:
 
 - **configured** — a secret you give grain: a service-account key JSON, or a workload-identity external-account config. Use this when the `gcp` server runs in grain's container and the container's own identity should not be the admin.
-- **ambient** — whatever identity the server already has where it runs. With `"run": "host"` (through `grain hostd`) that is your own `gcloud auth application-default login` identity on the host; in a container it is the container's ADC (`GOOGLE_APPLICATION_CREDENTIALS`) or the metadata server's service account.
+- **ambient** — whatever identity the server already has where it runs. With `"run": "host"` (through `grain host`) that is your own `gcloud auth application-default login` identity on the host; in a container it is the container's ADC (`GOOGLE_APPLICATION_CREDENTIALS`) or the metadata server's service account.
 
 Give the admin the custom role in [capabilities.md](capabilities.md#gcp-gcp-key) on every project it acts in:
 
@@ -80,7 +80,7 @@ GCP allows 6–30 characters. When the full name is longer, the set's name is cu
 
 Ownership does not rest on the name. Every account grain creates is described with the marker `[grain-gcp-key deployment=<deployment id> instance=<installation id prefix> set=<set>]`, and listing, minting, the reaper, Test and `delete_orphans` consider only accounts whose marker carries **this installation's** id. That has these effects:
 
-- **Several deployments in one project** — or the in-tree `gcp` server running beside the old in-process `gcp-key` — each create and use their own accounts, even with the same set names, and even if two admins chose the same deployment id. Another deployment's accounts are never leased, reaped, rebound or offered as orphans; Test reports only how many there are (`project P: N service account(s) of other grain deployments, left alone`).
+- **Several deployments in one project** each create and use their own accounts, even with the same set names, and even if two admins chose the same deployment id. Another deployment's accounts are never leased, reaped, rebound or offered as orphans; Test reports only how many there are (`project P: N service account(s) of other grain deployments, left alone`).
 - **Renaming the deployment id** in Settings renames the branches of new tasks, and re-attaches the `gcp` server with the new id. The set's existing accounts keep working — their marker carries the same installation id — and accounts created afterwards are named under the new id, so a set can hold `grain-old-ci-1` and `grain-new-ci-2`. Nothing is renamed or deleted. To drop old-named accounts, wait until Test shows no keys held, then delete them by hand (`gcloud iam service-accounts delete <email>`); the set creates new ones as it needs them.
 - A **new installation** (a fresh database) is a different deployment even under the same deployment id: it does not inherit the old installation's accounts. They show up in Test as another deployment's; delete them by hand.
 

@@ -843,7 +843,22 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 	if stale, err := sessionStale(); err != nil || stale {
 		return err
 	}
+	// Checked again inside the write, against the task as it stands
+	// there: sessionStale above reads the configuration in a transaction
+	// of its own, so an operator's edit (ui.UpdateConsoleSession) landing
+	// between that check and this write -- its configuration first, then
+	// the task, then the snapshot -- would otherwise be overwritten here
+	// with grants worked out from the task before it. And once that edit
+	// has recorded its snapshot, the next sync reads the capability the
+	// task lost as one an operator removed from the task and never puts
+	// it back. A task that moved since it was read is left for the next
+	// cycle to work out again from what it holds now.
+	moved := false
 	if err := deps.Store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+		if consoleSessionTaskMoved(*t, task) {
+			moved = true
+			return errConsoleSessionTaskMoved
+		}
 		t.Title = title
 		t.Body = body
 		t.Grants = grants
@@ -858,9 +873,41 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 		}
 		return nil
 	}); err != nil {
+		if moved && errors.Is(err, errConsoleSessionTaskMoved) {
+			return nil
+		}
 		return err
 	}
 	return record()
+}
+
+// errConsoleSessionTaskMoved aborts syncConsoleSessionTask's task write
+// when the task changed after the sync read it (consoleSessionTaskMoved).
+var errConsoleSessionTaskMoved = errors.New("console session task changed since it was read")
+
+// consoleSessionTaskMoved reports whether fresh -- the session task as
+// read inside syncConsoleSessionTask's write -- differs from read, the
+// task that sync worked its grants, reads, writes and the rest out
+// from, in anything the sync reads or writes.
+func consoleSessionTaskMoved(fresh, read model.Task) bool {
+	return fresh.Title != read.Title ||
+		fresh.Body != read.Body ||
+		fresh.NetworkAccess != read.NetworkAccess ||
+		fresh.Model != read.Model ||
+		fresh.KeepRunning != read.KeepRunning ||
+		fresh.AutoApproveProposals != read.AutoApproveProposals ||
+		!slices.EqualFunc(fresh.Grants, read.Grants, sameConsoleSessionGrant) ||
+		!slices.Equal(fresh.Reads, read.Reads) ||
+		!slices.Equal(fresh.Writes, read.Writes) ||
+		!slices.Equal(fresh.Links, read.Links) ||
+		!slices.Equal(fresh.Tags, read.Tags)
+}
+
+func sameConsoleSessionGrant(a, b model.Grant) bool {
+	if a.Capability != b.Capability || a.Via != b.Via || (a.Folder == nil) != (b.Folder == nil) {
+		return false
+	}
+	return a.Folder == nil || slices.Equal(a.Folder.Path, b.Folder.Path)
 }
 
 func storedConsoleSession(ctx context.Context, store *model.Store, id string) (model.ConsoleSession, bool, error) {

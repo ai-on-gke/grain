@@ -279,7 +279,9 @@ func TestAHandEditOfASettingsDocumentIsApplied(t *testing.T) {
 	if tmpl.Title != "Run the nightly sweep, twice" {
 		t.Errorf("the title did not land: %q", tmpl.Title)
 	}
-	if len(tmpl.Grants) != 2 || tmpl.Grants[0].Capability != "api:memory" || tmpl.Grants[1].Capability != "self-debug" {
+	// self-debug lands as what it became (model.SelfDebugGrants).
+	if len(tmpl.Grants) != 3 || tmpl.Grants[0].Capability != "api:memory" || tmpl.Grants[1].Capability != "api:self-debug" ||
+		tmpl.Grants[2].Capability != model.GrainSourceGrant {
 		t.Errorf("the grants did not land: %+v", tmpl.Grants)
 	}
 	if len(tmpl.Fields) != 1 || tmpl.Fields[0].Name != "area" || tmpl.Fields[0].Default != "ui" {

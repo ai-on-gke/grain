@@ -110,6 +110,9 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/settings/plan":           trusted,
 	"GET /api/settings/cli-run":         trusted,
 	"PUT /api/settings/cli-run":         trusted,
+	"GET /api/registry":                 trusted,
+	"POST /api/registry/heartbeat":      trusted,
+	"GET /api/registry/status":          trusted,
 	"POST /api/capabilities/{id}/check": trusted,
 
 	// Tasks.
@@ -151,6 +154,8 @@ var routeAuthorization = map[string]authLevel{
 	"DELETE /api/tasks/{id}/goal":                                   trusted,
 	"POST /api/tasks/{id}/reopen":                                   trusted,
 	"POST /api/tasks/{id}/retry":                                    trusted,
+	"POST /api/tasks/{id}/human-review":                             trusted,
+	"POST /api/tasks/{id}/human-review/release":                     trusted,
 	"POST /api/tasks/{id}/retry-merge":                              trusted,
 	"POST /api/tasks/{id}/force-merge":                              trusted,
 	"POST /api/tasks/{id}/run-now":                                  trusted,
@@ -323,28 +328,38 @@ var routeAuthorization = map[string]authLevel{
 
 	// Deployment-wide credentials: external agent tokens, model keys, GitHub
 	// tokens, secrets.
-	"GET /api/external-agents/tokens":              trusted,
-	"POST /api/external-agents/tokens":             trusted,
-	"GET /api/hostds":                              trusted,
-	"POST /api/hostds":                             trusted,
-	"PATCH /api/hostds/{name}":                     trusted,
-	"GET /api/hostds/{name}/install":               trusted,
-	"POST /api/hostds/{name}/rotate":               trusted,
-	"POST /api/hostds/{name}/revoke":               trusted,
-	"GET /api/access/principals":                   trusted,
-	"POST /api/access/principals":                  trusted,
-	"PATCH /api/access/principals/{entry}":         trusted,
-	"DELETE /api/access/principals/{entry}":        trusted,
-	"POST /api/external-agents/tokens/{id}/rotate": trusted,
-	"POST /api/external-agents/tokens/{id}/revoke": trusted,
-	"DELETE /api/external-agents/tokens/{id}":      trusted,
-	"POST /api/external-agents/tokens/revoke-all":  trusted,
-	"POST /api/mcp":                                trusted,
-	"POST /mcp":                                    trusted,
-	"GET /api/agent-keys":                          trusted,
-	"PUT /api/agent-keys/{framework}":              trusted,
-	"DELETE /api/agent-keys/{framework}":           trusted,
-	"POST /api/agent-keys/{framework}/check":       trusted,
+	"GET /api/external-agents/tokens":                 trusted,
+	"POST /api/external-agents/tokens":                trusted,
+	"GET /api/hostds":                                 trusted,
+	"POST /api/hostds":                                trusted,
+	"GET /api/hostds/enrollment-codes":                trusted,
+	"POST /api/hostds/enrollment-codes":               trusted,
+	"POST /api/hostds/enrollment-codes/{name}/rotate": trusted,
+	"POST /api/hostds/enrollment-codes/{name}/revoke": trusted,
+	"GET /api/hostds/pending":                         trusted,
+	"POST /api/hostds/pending/{id}/accept":            trusted,
+	"POST /api/hostds/pending/{id}/reject":            trusted,
+	"PATCH /api/hostds/{name}":                        trusted,
+	"DELETE /api/hostds/{name}":                       trusted,
+	"POST /api/hostds/delete-revoked":                 trusted,
+	"GET /api/hostds/{name}/install":                  trusted,
+	"POST /api/hostds/{name}/rename":                  trusted,
+	"POST /api/hostds/{name}/rotate":                  trusted,
+	"POST /api/hostds/{name}/revoke":                  trusted,
+	"GET /api/access/principals":                      trusted,
+	"POST /api/access/principals":                     trusted,
+	"PATCH /api/access/principals/{entry}":            trusted,
+	"DELETE /api/access/principals/{entry}":           trusted,
+	"POST /api/external-agents/tokens/{id}/rotate":    trusted,
+	"POST /api/external-agents/tokens/{id}/revoke":    trusted,
+	"DELETE /api/external-agents/tokens/{id}":         trusted,
+	"POST /api/external-agents/tokens/revoke-all":     trusted,
+	"POST /api/mcp":                                   trusted,
+	"POST /mcp":                                       trusted,
+	"GET /api/agent-keys":                             trusted,
+	"PUT /api/agent-keys/{framework}":                 trusted,
+	"DELETE /api/agent-keys/{framework}":              trusted,
+	"POST /api/agent-keys/{framework}/check":          trusted,
 	// A connection's key (grain/task-1601).
 	"PUT /api/agent-backends/{id}/credential":    trusted,
 	"DELETE /api/agent-backends/{id}/credential": trusted,
@@ -471,9 +486,14 @@ var routeAuthorization = map[string]authLevel{
 	// A grain hostd dialing in authenticates with the hostd token in
 	// its upgrade (hostd.Remote.ServeHTTP), not with a principal.
 	"GET /api/hostd/connect": public,
+	// Ed25519-signed host enrollment and silent credential renewal protocol.
+	"POST /api/hostd/join":           public,
+	"POST /api/hostd/join/{id}/poll": public,
+	"POST /api/hostd/renew":          public,
 	// The script that installs one: grain's own, with no token in it
 	// (TestHostdInstallScriptIsPublicAndHoldsNoSecret).
 	"GET /api/hostd/install.sh": public,
+	"GET /hostd/install":        public,
 }
 
 // The people the fixtures name. On the single-tenant daemon
@@ -1143,4 +1163,107 @@ func (r *statusRecorder) snapshot() *statusRecorder {
 		out.code = http.StatusOK
 	}
 	return out
+}
+
+// TestLimitedRoleCannotEscalateThroughTaskOrTemplateWriteRoutes walks every
+// non-GET route whose role scope is tasks:write or templates:write and asserts
+// that, as a limited role, a body carrying capabilities, autoMerge, approved
+// or writes outside the role is refused with 403 before the handler runs.
+func TestLimitedRoleCannotEscalateThroughTaskOrTemplateWriteRoutes(t *testing.T) {
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
+	t.Setenv("GRAIN_ALLOWED_PRINCIPALS", "")
+
+	if err := model.InstallAPIScopeSets([]model.APIScopeSet{
+		{
+			Name:     "contrib-and-templates",
+			Includes: []string{"grain/contributor"},
+			Scopes:   []string{"templates:write"},
+			Version:  1,
+		},
+		{
+			Name:    "widgets-tasks",
+			Scopes:  []string{"tasks:read", "tasks:write"},
+			Repos:   []string{"acme/widgets"},
+			Version: 1,
+		},
+		{
+			Name:     "widgets-writer",
+			Includes: []string{"widgets-tasks"},
+			Scopes:   []string{"templates:read", "templates:write"},
+			Version:  1,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = model.InstallAPIScopeSets(nil) })
+
+	f := newRouteFixtureWith(t, true, true)
+	f.from = publicAddr
+	f.accessCookie = ""
+
+	ctx := context.Background()
+	now := time.Now()
+	if _, _, err := f.store.AddAllowedPrincipalWithRole(ctx, "user:global@example.com", "test", "test", "contrib-and-templates", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.store.AddAllowedPrincipalWithRole(ctx, "user:scoped@example.com", "test", "test", "widgets-writer", now); err != nil {
+		t.Fatal(err)
+	}
+
+	escalatingBodies := []struct {
+		key      string
+		fragment string
+	}{
+		{"capabilities", `"capabilities":["api:secrets:write"]`},
+		{"autoMerge", `"autoMerge":true`},
+		{"approved", `"approved":true`},
+		{"writes", `"writes":[{"repo":"acme/other"}]`},
+	}
+
+	bodyFor := func(pattern, fragment string) string {
+		prefix := `"repo":"acme/widgets",`
+		if pattern == "POST /api/pull-requests/review" {
+			prefix += `"pr":"acme/widgets#1",`
+		}
+		return `{` + prefix + fragment + `}`
+	}
+
+	checked := 0
+	for _, pattern := range f.server.Routes() {
+		method, _, ok := strings.Cut(pattern, " ")
+		if !ok || method == http.MethodGet {
+			continue
+		}
+		scope := ui.RoleScopeOf(pattern)
+		if scope != "tasks:write" && scope != "templates:write" {
+			continue
+		}
+		checked++
+		target := f.path(pattern)
+
+		// A deployment-wide limited role passes the route and repository checks on
+		// every tasks:write and templates:write route, so capabilities, autoMerge
+		// and approved must be caught by the escalation gate itself.
+		for _, probe := range escalatingBodies[:3] {
+			rec := f.send(t, method, target, bodyFor(pattern, probe.fragment), "global@example.com")
+			if rec.code != http.StatusForbidden || !strings.Contains(rec.body.String(), "contrib-and-templates") || !strings.Contains(rec.body.String(), probe.key) {
+				t.Errorf("%s as contrib-and-templates with %s: got %d %s, want 403 naming contrib-and-templates and %s",
+					pattern, probe.key, rec.code, rec.excerpt(), probe.key)
+			}
+		}
+
+		// A repository-limited role must refuse all four -- including writes to
+		// acme/other -- with 403 on every tasks:write and templates:write route.
+		for _, probe := range escalatingBodies {
+			rec := f.send(t, method, target, bodyFor(pattern, probe.fragment), "scoped@example.com")
+			if rec.code != http.StatusForbidden || !strings.Contains(rec.body.String(), "widgets-writer") {
+				t.Errorf("%s as widgets-writer with %s: got %d %s, want 403 naming widgets-writer",
+					pattern, probe.key, rec.code, rec.excerpt())
+			}
+		}
+	}
+	if checked < 20 {
+		t.Fatalf("checked %d non-GET tasks:write/templates:write routes, want at least 20", checked)
+	}
 }

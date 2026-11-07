@@ -146,8 +146,8 @@ func TestACheckDoesNotChangeTheReadyBadge(t *testing.T) {
 		t.Fatalf("settings status = %d, want 200", rec.Code)
 	}
 	settings := decode[ui.Settings](t, rec)
-	if !capabilityStatus(t, settings.Capabilities, "self-debug").Ready {
-		t.Error("self-debug stopped being Ready because a check was run")
+	if !capabilityStatus(t, settings.Capabilities, "durable").Ready {
+		t.Error("durable stopped being Ready because a check was run")
 	}
 }
 
@@ -166,7 +166,7 @@ func TestCheckCapabilityRejectsOneWithNoStandingCredential(t *testing.T) {
 	t.Parallel()
 	checker := &fakeChecker{}
 	srv := testServerWithChecker(t, checker)
-	rec := do(t, srv, http.MethodPost, "/api/capabilities/bootstrap-playbooks/check", "")
+	rec := do(t, srv, http.MethodPost, "/api/capabilities/self-debug/check", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body)
 	}
@@ -204,7 +204,7 @@ func TestCapabilityStatusReportsWhichCapabilitiesCanBeChecked(t *testing.T) {
 			t.Errorf("%s: Checkable = false, but it holds a standing credential that can go stale", id)
 		}
 	}
-	for _, id := range []string{"self-debug", "bootstrap-playbooks"} {
+	for _, id := range []string{"durable"} {
 		if capabilityStatus(t, settings.Capabilities, id).Checkable {
 			t.Errorf("%s: Checkable = true, but it holds no standing credential", id)
 		}

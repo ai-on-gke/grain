@@ -2644,6 +2644,19 @@ describe("liveness sub-cases", () => {
       "usage limit paused",
     );
     expect(reasonLabel(null)).toBe(null);
+    // awaiting_reply's sub-cases name the ask (orchestrator's
+    // awaitingReplyReasonOf), so a finished report's chip says
+    // "answered" beside its "Answered in a comment" badge rather than
+    // "question".
+    expect(reasonLabel({ reason: "awaiting_reply/answered" })).toBe("answered");
+    expect(reasonLabel({ reason: "awaiting_reply/question" })).toBe("question");
+    expect(reasonLabel({ reason: "awaiting_reply/your_message" })).toBe(
+      "your message",
+    );
+    expect(reasonLabel({ reason: "awaiting_reply/access_request" })).toBe(
+      "access request",
+    );
+    expect(reasonLabel({ reason: "awaiting_reply/stopped" })).toBe("stopped");
   });
 
   it("explains which condition a sub-case is in and why", () => {
@@ -2825,6 +2838,28 @@ describe("askedCase", () => {
     expect(
       askedCase({ state: "awaiting_reply", consoleSession: "s1" }).kind,
     ).toBe("message");
+    expect(
+      askedCase({
+        state: "awaiting_reply",
+        interactive: true,
+        awaitingAccess: true,
+      }),
+    ).toEqual({
+      kind: "access",
+      title: "Asked for access",
+      action: "grant",
+    });
+    expect(
+      askedCase({
+        state: "awaiting_reply",
+        consoleSession: "director",
+        awaitingAccess: true,
+      }),
+    ).toEqual({
+      kind: "access",
+      title: "Asked for access",
+      action: "grant",
+    });
     expect(
       askedCase({
         state: "awaiting_reply",

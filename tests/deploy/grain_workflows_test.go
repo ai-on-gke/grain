@@ -975,7 +975,7 @@ func TestTheGoJobDeclaresEveryFileItsOwnTestsRead(t *testing.T) {
 		"pkg/ci/paths.go",
 		"ui/package.json",
 		"go.mod",
-		"pkg/capability/bootstrap/playbooks/gcp-capabilities.md",
+		"pkg/playbooks/gcp-capabilities.md",
 	} {
 		if !selectsPath(goJob, path) {
 			t.Errorf("the `go` job does not declare %s, which something it runs reads: "+
@@ -1011,7 +1011,7 @@ func TestTheGoJobDeclaresEveryFileItsOwnTestsRead(t *testing.T) {
 			"docs/claude-surface.md",
 			"docs/codex-surface.md",
 			"docs/agy-surface.md",
-			"pkg/capability/bootstrap/playbooks/gcp-capabilities.md",
+			"pkg/playbooks/gcp-capabilities.md",
 		} {
 			if !selectsPath(job, path) {
 				t.Errorf("the %q job does not declare %s, which something it runs reads", id, path)
@@ -1663,7 +1663,8 @@ func TestTheReleaseDoesNotRequireImageSigning(t *testing.T) {
 
 // third_party/granule is a module of its own, so the main module's shards
 // never reach it: the `granule` job is the only thing in the gate that runs
-// its tests, pkg/forward's refusal of out-of-spec Open frames among them.
+// its tests, pkg/guestforward's -- the port-forward mux grain runs into
+// every kubernetes-granule guest -- among them.
 // It has to stay the whole module, under -race, in that directory, off the
 // vendor tree, and with no credential.
 func TestTheGranuleJobRunsTheVendoredModulesOwnTests(t *testing.T) {
@@ -1697,7 +1698,7 @@ func TestTheGranuleJobRunsTheVendoredModulesOwnTests(t *testing.T) {
 	if !found {
 		t.Errorf("%s: the granule job has no Test step", path)
 	}
-	if _, err := os.Stat(filepath.Join(repoRoot(t), "third_party", "granule", "pkg", "forward", "forward_test.go")); err != nil {
+	if _, err := os.Stat(filepath.Join(repoRoot(t), "third_party", "granule", "pkg", "guestforward", "forward_test.go")); err != nil {
 		t.Errorf("the test this job exists to run is gone: %v", err)
 	}
 }

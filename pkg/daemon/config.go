@@ -236,17 +236,26 @@ type Config struct {
 	UiIAPAudience string
 	UiIAPIssuer   string
 	UiIAPKeysURL  string
+	// UiRegistryIssuer, UiRegistryAudience and UiRegistryKeysURL are
+	// -ui-registry-issuer, -ui-registry-audience and -ui-registry-keys-url:
+	// what a signed X-Grain-Registry-Assertion must carry, and where the
+	// registry's ES256 JWKS is published (ui.Config.RegistryIssuer and the rest).
+	UiRegistryIssuer   string
+	UiRegistryAudience string
+	UiRegistryKeysURL  string
 	// UiRequireVerifier is -ui-require-verifier (ui.Config.RequireVerifier):
 	// network callers must sign in through the named IdentityVerifier, and
 	// the access code works over unforwarded loopback only.
 	UiRequireVerifier string
 	// UiRequireIAP is -ui-require-iap (ui.Config.RequireIAP), an alias for
 	// UiRequireVerifier = "iap".
-	UiRequireIAP        bool
-	UiAllowedPrincipals []string
-	UiOpen              bool
-	Actor               string
-	DefaultTargetRepo   string
+	UiRequireIAP            bool
+	UiAllowedPrincipals     []string
+	DeploymentOwner         string
+	UiCloudIdentityEndpoint string
+	UiOpen                  bool
+	Actor                   string
+	DefaultTargetRepo       string
 	// PolicyFile is -policy: this workstation's local policy
 	// (grain_policy.yml, pkg/policy), which every task's claims are
 	// checked against before it is given a sandbox. Empty enforces none.
@@ -883,6 +892,16 @@ type Config struct {
 	// deployment that has never chosen gets model.NetworkOpen, which is
 	// the network its sandboxes already had.
 	networkAccess model.NetworkAccess
+
+	// Registry configures self-registration and background heartbeats to a
+	// grain registry (model.Config.Registry, design/design/registry.design.md).
+	// RegistryTokenFile is the optional flags-only path to a registration
+	// credential file when secret registry-registration-token is not set.
+	// RegistryConnect (-registry-connect / $GRAIN_REGISTRY_CONNECT) enables
+	// the outbound tunnel supervisor dialing wss://<registry-host>/api/entries/<name>/connect.
+	Registry          model.RegistryConfig
+	RegistryTokenFile string
+	RegistryConnect   bool
 }
 
 // limits is the sandbox pool this deployment is rationing right now --
@@ -983,6 +1002,7 @@ func (c Config) ChangesFrom(prev Config) []string {
 	note("k8s-priority-class-interactive", prev.K8sPriorityClasses.Interactive, c.K8sPriorityClasses.Interactive)
 	note("k8s-priority-class-agent", prev.K8sPriorityClasses.Agent, c.K8sPriorityClasses.Agent)
 	note("k8s-priority-class-ci", prev.K8sPriorityClasses.CI, c.K8sPriorityClasses.CI)
+	note("registry", prev.Registry, c.Registry)
 	return changes
 }
 
@@ -1256,6 +1276,8 @@ func (c Config) logStoreOverrides(mc model.Config) {
 	warn("k8s-priority-class-interactive", c.K8sPriorityClasses.Interactive, mc.K8sPriorityClassInteractive)
 	warn("k8s-priority-class-agent", c.K8sPriorityClasses.Agent, mc.K8sPriorityClassAgent)
 	warn("k8s-priority-class-ci", c.K8sPriorityClasses.CI, mc.K8sPriorityClassCI)
+	warn("registry-url", c.Registry.URL, mc.Registry.URL)
+	warn("registry-entry", c.Registry.Entry, mc.Registry.Entry)
 }
 
 // limits is this configuration's whole sandbox pool, as everything that
@@ -1557,6 +1579,7 @@ func (c Config) ToModelConfig() model.Config {
 	mc.K8sPriorityClassInteractive = c.K8sPriorityClasses.Interactive
 	mc.K8sPriorityClassAgent = c.K8sPriorityClasses.Agent
 	mc.K8sPriorityClassCI = c.K8sPriorityClasses.CI
+	mc.Registry = c.Registry
 	return mc
 }
 
@@ -1721,6 +1744,7 @@ func (c Config) WithModelConfig(mc model.Config) Config {
 		Agent:       mc.K8sPriorityClassAgent,
 		CI:          mc.K8sPriorityClassCI,
 	}
+	c.Registry = mc.Registry
 	return c
 }
 

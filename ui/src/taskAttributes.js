@@ -134,11 +134,11 @@ export const NONE_LABEL_FALLBACK = "Not set";
 
 const ORIGIN_LABELS = {
   hand: "Filed by hand",
+  external: "Filed by an external agent",
   proposed: "Proposed by an agent",
+  imported: "Imported issue",
   schedule: "Scheduled",
   suite: "Suite run",
-  imported: "Imported issue",
-  external: "Filed by an external agent",
   fix: "Merge fix",
   review: "Review",
 };
@@ -412,11 +412,15 @@ export const ATTRIBUTES = [
       "hand",
       "external",
       "proposed",
+      "imported",
       "schedule",
       "suite",
       "fix",
       "review",
     ],
+    // Every value originOf returns, so `origin:any:robot` says it
+    // matches nothing rather than reading as a real origin.
+    closed: true,
     labelOf: (v) => ORIGIN_LABELS[v] || v,
     // The same two figures the rows carry: a task filed by a schedule
     // wears the hourglass on its own chip (TaskList/TaskBoard), so the
@@ -434,7 +438,27 @@ export const ATTRIBUTES = [
     type: TYPE_ENUM,
     values: (t) => [t.autoMerge ? "on" : "off"],
     order: ["on", "off"],
+    // Every value there is, so `autoMerge:any:yes` says it matches
+    // nothing rather than reading as "Off" (labelOf's other branch).
+    closed: true,
     labelOf: (v) => (v === "on" ? "On" : "Off"),
+  },
+  {
+    // Held for a person's decision (humanReviewHold), by the categories
+    // of the reasons it is held for: `humanReview:filled` is every
+    // held change, `humanReview:any:security` the security ones.
+    id: "humanReview",
+    label: "Human review",
+    type: TYPE_ENUM,
+    values: (t) => [
+      ...new Set((t.humanReviewHold || []).map((r) => r.category || "other")),
+    ],
+    order: ["product-decision", "risk", "security", "intent-unclear", "other"],
+    // model.HumanReviewCategories, every category request_human_review
+    // accepts: `humanReview:any:product_decision` matches nothing, and
+    // its chip says so rather than reading like the real one.
+    closed: true,
+    noneLabel: "Not held",
   },
   {
     id: "blocked",
@@ -442,6 +466,10 @@ export const ATTRIBUTES = [
     type: TYPE_ENUM,
     values: (t) => [t.blocked ? "yes" : "no"],
     order: ["yes", "no"],
+    // Every value there is. Without it `blocked:any:true` was worded
+    // "Blocked is any of Not blocked" (labelOf's other branch) over a
+    // list matching nothing.
+    closed: true,
     labelOf: (v) => (v === "yes" ? "Blocked" : "Not blocked"),
   },
   {

@@ -494,14 +494,14 @@ func TestCompositionCreditsGrainCIToTheRepo(t *testing.T) {
 	draft, err := c.DraftScheduleComposition(ctx, ui.CreateScheduleRequest{
 		Title:        "Weekly Dependency & Vulnerability Audit",
 		Repo:         "acme/widgets",
-		Capabilities: []string{"self-debug"},
+		Capabilities: []string{"read-issues"},
 	})
 	if err != nil {
 		t.Fatalf("composing draft schedule: %v", err)
 	}
 	caps := field(t, draft.Tasks[0], "capabilities")
-	if !slices.Equal(caps.Values, []string{"self-debug", model.GrainCIGrant}) {
-		t.Errorf("values = %v, want [self-debug grain-ci]", caps.Values)
+	if !slices.Equal(caps.Values, []string{model.GitHubReadIssuesGrant, model.GrainCIGrant}) {
+		t.Errorf("values = %v, want [github#read-issues grain-ci]", caps.Values)
 	}
 	if !slices.Equal(caps.Sources, []string{"schedule", "repo"}) {
 		t.Errorf("sources = %v, want [schedule repo]", caps.Sources)

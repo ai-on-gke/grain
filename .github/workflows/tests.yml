@@ -541,7 +541,7 @@ jobs:
         run: |
           set +e
           GRAIN_GOTEST_LOG=/tmp/go-unit.log ./scripts/run-go-tests.sh go test -race -timeout 25m \
-            ./cmd/checkpost/... ./cmd/ghcr-prune/... ./cmd/github-webhook/... ./cmd/grain-agentd/... ./cmd/grain-connect/... ./cmd/grain-sandbox/... ./cmd/grit/... \
+            ./cmd/checkpost/... ./cmd/ghcr-prune/... ./cmd/github-webhook/... ./cmd/grain-agentd/... ./cmd/grain-connect/... ./cmd/grain-registry/... ./cmd/grain-sandbox/... ./cmd/grit/... \
             ./docs/releases/... ./tests/hygiene/... ./tests/container/... ./tests/installer/... \
             ./pkg/access/... ./pkg/actionscache/... ./pkg/agent/... ./pkg/agentd/... ./pkg/apierror/... ./pkg/attest/... \
             ./pkg/authfix/... ./pkg/backup/... ./pkg/capability/... ./pkg/change/... ./pkg/checkpost/... \
@@ -551,7 +551,7 @@ jobs:
             ./pkg/granule/... ./pkg/grit/... ./pkg/gritapi/... ./pkg/hostd/... ./pkg/hostinit/... ./pkg/hostscriptcli/... ./pkg/whererun/... ./pkg/workflows/... \
             ./pkg/hosttop/... ./pkg/iapreconciler/... ./pkg/installtrack/... ./pkg/jwks/... \
             ./pkg/k8s/... ./pkg/kubectlgate/... ./pkg/lifecycle/... ./pkg/localexec/... ./pkg/mcp/... \
-            ./pkg/metrics/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/nsclient/... ./pkg/objectstore/... ./pkg/pkgcache/... \
+            ./pkg/metrics/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/nsclient/... ./pkg/objectstore/... ./pkg/pkgcache/... ./pkg/playbooks/... \
             ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/redact/... ./pkg/registry/... ./pkg/registryauth/... \
             ./pkg/releaseapproval/... ./pkg/releasenotes/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
             ./pkg/sandboxaccess/... ./pkg/sandboxaddr/... ./pkg/sandboxcli/... ./pkg/sandboximage/... ./pkg/schedulefilter/... ./pkg/secrets/... \
@@ -749,7 +749,7 @@ jobs:
       - name: Test
         env:
           GRAIN_REQUIRE_POSTGRES: "1"
-        run: ./scripts/run-go-tests.sh go test -count=1 -timeout 15m -exec "$PWD/scripts/exec-unprivileged.sh" ./pkg/model/postgres/... ./pkg/model/
+        run: ./scripts/run-go-tests.sh go test -count=1 -timeout 15m -exec "$PWD/scripts/exec-unprivileged.sh" ./pkg/model/postgres/... ./pkg/model/ ./pkg/registry/store/...
 
   run-host:
     name: run host

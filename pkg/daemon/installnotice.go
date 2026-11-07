@@ -118,7 +118,7 @@ func unitExecStartBinary(unit string) string {
 // hostModeMessage is the notice's sentence, the same in the log, the
 // banner and the Upgrade pane.
 const hostModeMessage = "this install is still host mode, which v2.3.0 no longer supports: re-run scripts/setup.sh " +
-	"to migrate it to container mode plus grain hostd (keeps the data directory and unit name)"
+	"to migrate it to container mode plus the host agent (keeps the data directory and unit name)"
 
 // hostModeInstallNotice is the notice for a host-mode install, nil for
 // any other. Affected names the CLIs that cannot run because of it.

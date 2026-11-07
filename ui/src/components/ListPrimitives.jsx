@@ -14,6 +14,7 @@
 
 import { Fragment, useEffect, useRef, useState } from "react";
 import {
+  Button,
   FormControl,
   IconButton,
   InputAdornment,
@@ -24,6 +25,7 @@ import {
   Typography,
 } from "@mui/material";
 import AppIcon from "./AppIcon.jsx";
+import { isSessionTask } from "../taskFilters.js";
 import {
   MoveHandle,
   MoveSlot,
@@ -316,6 +318,42 @@ export function focusRowLink(e) {
 
 export function ListEmpty({ children }) {
   return <p className="empty">{children}</p>;
+}
+
+// tasksLoadFailed tells an empty task view from one whose task list could
+// not be loaded: either GET /api/tasks has never succeeded yet, or the
+// latest fetch failed while no tasks are held in memory (when tasks from an
+// earlier poll are held, views keep showing them rather than blanking the
+// screen on a transient error).
+export function tasksLoadFailed(
+  tasks,
+  tasksLoaded = true,
+  tasksError = null,
+  { keepSessions = false } = {},
+) {
+  if (!tasksLoaded) return true;
+  if (!tasksError) return false;
+  const list = Array.isArray(tasks) ? tasks : [];
+  return keepSessions
+    ? list.length === 0
+    : !list.some((t) => !isSessionTask(t));
+}
+
+export function TasksLoadError({ error, onRetry }) {
+  return (
+    <div className="empty tasks-load-error" role="alert">
+      <span className="tasks-load-error-text">
+        {error
+          ? `The tasks could not be loaded (${error}).`
+          : "The tasks could not be loaded."}
+      </span>
+      {onRetry && (
+        <Button size="small" variant="outlined" onClick={onRetry}>
+          Retry
+        </Button>
+      )}
+    </div>
+  );
 }
 
 // ReorderableList is TaskList's own drag-to-reorder gesture -- a handle

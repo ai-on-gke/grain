@@ -16,6 +16,7 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -56,7 +57,11 @@ var humanRouteScopes = map[string]APIScope{
 	"GET /api/whoami":                                               scopeSignedIn,
 	"GET /api/auth/whoami":                                          scopeSignedIn,
 	"GET /api/hostd/connect":                                        scopeSignedIn,
+	"POST /api/hostd/join":                                          scopeSignedIn,
+	"POST /api/hostd/join/{id}/poll":                                scopeSignedIn,
+	"POST /api/hostd/renew":                                         scopeSignedIn,
 	"GET /api/hostd/install.sh":                                     scopeSignedIn,
+	"GET /hostd/install":                                            scopeSignedIn,
 	"POST /api/tasks/{id}/config-change/approve":                    "settings:write",
 	"POST /api/tasks/{id}/config-change/reject":                     "settings:write",
 	"POST /api/tasks/{id}/access-request/check":                     "capabilities:read",
@@ -87,6 +92,13 @@ var operatorOnlyRoutes = map[string]bool{
 	"POST /api/tasks/{id}/local-script-approvals":                   true,
 	"POST /api/tasks/{id}/local-script-approvals/{approval}/wait":   true,
 	"POST /api/tasks/{id}/local-script-approvals/{approval}/expire": true,
+	"GET /api/hostds/enrollment-codes":                              true,
+	"POST /api/hostds/enrollment-codes":                             true,
+	"POST /api/hostds/enrollment-codes/{name}/rotate":               true,
+	"POST /api/hostds/enrollment-codes/{name}/revoke":               true,
+	"GET /api/hostds/pending":                                       true,
+	"POST /api/hostds/pending/{id}/accept":                          true,
+	"POST /api/hostds/pending/{id}/reject":                          true,
 	"/staging/{name}/{path...}":                                     true,
 	"POST /api/mcp":                                                 true,
 	"POST /mcp":                                                     true,
@@ -102,12 +114,20 @@ type accessRole struct {
 	// Missing are Roles that name no scope set in effect, which grant
 	// nothing.
 	Missing []string
+	grants  []string
 	set     APIGrantSet
 	deny    map[APIScope]bool
 	// Full is true for a session holding every scope on every
 	// repository with nothing denied: grain/operator, as everybody was
 	// before roles.
 	Full bool
+	// Delegated is true when the request is a delegated (on-behalf-of) call
+	// carrying a verified Via identity (AU-25).
+	Delegated     bool
+	DelegatedFrom string
+	DelegatingApp string
+	ViaLabel      string
+	ViaAccess     string
 }
 
 // allows reports whether the role grants scope on repo.
@@ -205,7 +225,8 @@ func resolveAccessRoles(who string, roles []string) *accessRole {
 		}
 	}
 	sort.Strings(a.Roles)
-	a.set = model.APIGrantsOf(grants)
+	a.set = model.APIGrantsOf(grants).Without(a.deny)
+	a.grants = roleGrantList(grants, a.set, a.deny)
 	a.Full = len(a.deny) == 0
 	for _, info := range model.APIScopes() {
 		if !a.set.Allows(info.Scope, "") {
@@ -214,6 +235,27 @@ func resolveAccessRoles(who string, roles []string) *accessRole {
 		}
 	}
 	return a
+}
+
+// roleGrantList is the api:<role> list resolveAccessRoles built, or -- when a
+// role's deny vetoed a scope -- the remaining per-scope grants from set so
+// grant-escalation checks cannot pass on a vetoed scope.
+func roleGrantList(grants []string, set APIGrantSet, deny map[APIScope]bool) []string {
+	if len(deny) == 0 {
+		return grants
+	}
+	var out []string
+	for _, sc := range set.Scopes() {
+		repos := set.Repos(sc)
+		if len(repos) == 0 {
+			out = append(out, model.APIGrantPrefix+string(sc))
+			continue
+		}
+		for _, r := range repos {
+			out = append(out, model.APIGrantPrefix+string(sc)+"@"+r)
+		}
+	}
+	return out
 }
 
 // roleDenies is every scope the set named role, or any set it includes,
@@ -250,9 +292,52 @@ func roleDenies(role string) map[APIScope]bool {
 
 type accessRoleKey struct{}
 
-// accessRoleSlot is where singleTenantGate leaves the role of the verified
-// session it admitted, for serveHTTP to put on the request's context.
-type accessRoleSlot struct{ role *accessRole }
+// delegatedIdentity records the verified delegating app and person for an
+// admitted on-behalf-of request (AU-22..AU-26).
+type delegatedIdentity struct {
+	PersonEmail string
+	AppEmail    string
+	ViaLabel    string
+	Grant       string
+	Access      string
+	JTI         string
+	RequestID   string
+}
+
+type delegatedIdentityKey struct{}
+
+func withDelegatedIdentity(ctx context.Context, d *delegatedIdentity) context.Context {
+	if d == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, delegatedIdentityKey{}, d)
+}
+
+func delegatedIdentityFromContext(ctx context.Context) *delegatedIdentity {
+	if ctx == nil {
+		return nil
+	}
+	d, _ := ctx.Value(delegatedIdentityKey{}).(*delegatedIdentity)
+	return d
+}
+
+func isDelegatedRequest(ctx context.Context) bool {
+	if delegatedIdentityFromContext(ctx) != nil {
+		return true
+	}
+	if a := accessRoleFromContext(ctx); a != nil && a.Delegated {
+		return true
+	}
+	return false
+}
+
+// accessRoleSlot is where singleTenantGate leaves the role (and optional
+// delegation) of the verified session it admitted, for serveHTTP to put on
+// the request's context.
+type accessRoleSlot struct {
+	role       *accessRole
+	delegation *delegatedIdentity
+}
 
 type accessRoleSlotKey struct{}
 
@@ -264,13 +349,120 @@ func withAccessRole(ctx context.Context, a *accessRole) context.Context {
 // for every other caller: the access code, loopback, in-process callers
 // and agents (whose own gate holds them to their grants).
 func accessRoleFromContext(ctx context.Context) *accessRole {
+	if ctx == nil {
+		return nil
+	}
 	a, _ := ctx.Value(accessRoleKey{}).(*accessRole)
 	return a
+}
+
+func grantListFromSet(set APIGrantSet) []string {
+	var out []string
+	for _, sc := range set.Scopes() {
+		repos := set.Repos(sc)
+		if len(repos) == 0 {
+			out = append(out, model.APIGrantPrefix+string(sc))
+			continue
+		}
+		for _, r := range repos {
+			out = append(out, model.APIGrantPrefix+string(sc)+"@"+r)
+		}
+	}
+	return out
+}
+
+// intersectAccessRoles computes the effective role for a delegated request:
+// personAR intersected with delegateAR (person_scopes ∩ delegate_scopes,
+// per-repository limits intersected per scope, union of deny lists, Full: false)
+// per AU-25.1.
+func intersectAccessRoles(personEmail, appEmail, viaLabel, viaAccess string, personAR, delegateAR *accessRole) *accessRole {
+	deny := make(map[APIScope]bool, len(personAR.deny)+len(delegateAR.deny))
+	for sc := range personAR.deny {
+		deny[sc] = true
+	}
+	for sc := range delegateAR.deny {
+		deny[sc] = true
+	}
+	set := personAR.set.Intersect(delegateAR.set).Without(deny)
+	grants := grantListFromSet(set)
+	var roles []string
+	for _, r := range personAR.Roles {
+		if !slices.Contains(roles, r) {
+			roles = append(roles, r)
+		}
+	}
+	for _, r := range delegateAR.Roles {
+		if !slices.Contains(roles, r) {
+			roles = append(roles, r)
+		}
+	}
+	sort.Strings(roles)
+	missing := append(slices.Clone(personAR.Missing), delegateAR.Missing...)
+	return &accessRole{
+		Who:           fmt.Sprintf("%s (via %s)", personEmail, viaLabel),
+		Roles:         roles,
+		Missing:       missing,
+		grants:        grants,
+		set:           set,
+		deny:          deny,
+		Full:          false,
+		Delegated:     true,
+		DelegatedFrom: personEmail,
+		DelegatingApp: appEmail,
+		ViaLabel:      viaLabel,
+		ViaAccess:     viaAccess,
+	}
 }
 
 // admitVerifiedPrincipal is checkAllowedPrincipal that also resolves the
 // admitted session's role, and leaves it in the request's slot.
 func (s *Server) admitVerifiedPrincipal(ctx context.Context, id VerifiedIdentity) error {
+	if id.Via != nil {
+		personID := VerifiedIdentity{Email: id.Email, Sub: id.Sub, Kind: id.Kind}
+		personRoles, err := s.allowedPrincipalRoles(ctx, personID, true)
+		if err != nil {
+			logRefusedPrincipal(personID, err)
+			return err
+		}
+		personEmail := normalizeIdentityEmail(id.Email)
+		appEmail := normalizeIdentityEmail(id.Via.Email)
+		delEntry, ok, err := s.delegateEntryFor(ctx, appEmail)
+		if err != nil {
+			return fmt.Errorf("delegating app %q cannot be authorized: %w", id.Via.Email, err)
+		}
+		if !ok {
+			de := &delegateNotAllowedError{
+				personEmail: personEmail,
+				appEmail:    appEmail,
+				label:       delegateDisplayLabel(id.Via),
+				verifier:    string(AuthMethodRegistry),
+			}
+			logRefusedDelegate(personEmail, appEmail)
+			return de
+		}
+		s.touchDelegateLastUsed(ctx, "delegate:"+appEmail)
+		viaLabel := strings.TrimSpace(delEntry.Label)
+		if viaLabel == "" {
+			viaLabel = model.DelegateLabelForEmail(appEmail)
+		} else {
+			model.RegisterDelegateLabel(appEmail, viaLabel)
+		}
+		if slot, ok := ctx.Value(accessRoleSlotKey{}).(*accessRoleSlot); ok && slot != nil {
+			personAR := resolveAccessRoles(personEmail, personRoles)
+			delegateAR := resolveAccessRoles("delegate:"+appEmail, []string{delEntry.Role})
+			slot.role = intersectAccessRoles(personEmail, appEmail, viaLabel, id.Via.Access, personAR, delegateAR)
+			slot.delegation = &delegatedIdentity{
+				PersonEmail: personEmail,
+				AppEmail:    appEmail,
+				ViaLabel:    viaLabel,
+				Grant:       id.Via.Grant,
+				Access:      id.Via.Access,
+				JTI:         id.Via.JTI,
+				RequestID:   id.Via.RequestID,
+			}
+		}
+		return nil
+	}
 	roles, err := s.allowedPrincipalRoles(ctx, id, true)
 	if err != nil {
 		logRefusedPrincipal(id, err)
@@ -288,12 +480,47 @@ func (s *Server) admitVerifiedPrincipal(ctx context.Context, id VerifiedIdentity
 func (s *Server) roleGate(pattern string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		a := accessRoleFromContext(r.Context())
-		if a == nil || a.Full {
+		if a == nil {
+			next(w, r)
+			return
+		}
+		if a.Delegated {
+			if a.ViaAccess == "read" && r.Method != http.MethodGet && r.Method != http.MethodHead {
+				err := fmt.Errorf("%s holds read-only delegation (act.access=read) and cannot call %s", a.label(), pattern)
+				log.Printf("grain api: refused {delegated, %s via %s} %s: %v", a.DelegatedFrom, a.DelegatingApp, pattern, err)
+				writeJSON(w, http.StatusForbidden, map[string]any{
+					"error":         err.Error(),
+					"code":          "read_only_delegation",
+					"delegatedFrom": a.DelegatedFrom,
+					"delegatingApp": a.DelegatingApp,
+				})
+				return
+			}
+			if err := s.checkDelegatedPersonOnly(r, pattern, a); err != nil {
+				log.Printf("grain api: refused {delegated, %s via %s} %s: %v", a.DelegatedFrom, a.DelegatingApp, pattern, err)
+				writeJSON(w, http.StatusForbidden, map[string]any{
+					"error":         err.Error(),
+					"code":          "requires_person",
+					"delegatedFrom": a.DelegatedFrom,
+					"delegatingApp": a.DelegatingApp,
+				})
+				return
+			}
+		}
+		if a.Full {
 			next(w, r)
 			return
 		}
 		if err := s.authorizeRoleCall(r, pattern, a); err != nil {
 			log.Printf("grain api: refused {human, %s} %s: %v", a.Who, pattern, err)
+			if a.Delegated {
+				writeJSON(w, agentRefusalStatus(err), map[string]any{
+					"error":         err.Error(),
+					"delegatedFrom": a.DelegatedFrom,
+					"delegatingApp": a.DelegatingApp,
+				})
+				return
+			}
 			writeError(w, agentRefusalStatus(err), err)
 			return
 		}
@@ -301,8 +528,70 @@ func (s *Server) roleGate(pattern string, next http.HandlerFunc) http.HandlerFun
 	}
 }
 
-// roleScopeOf is the scope pattern needs of a person's role: "" for a
+func (s *Server) checkDelegatedPersonOnly(r *http.Request, pattern string, a *accessRole) error {
+	switch pattern {
+	case "POST /api/access/principals",
+		"PATCH /api/access/principals/{entry}",
+		"DELETE /api/access/principals/{entry}":
+		return fmt.Errorf("%s cannot call %s: modifying the allowed users, groups and delegating apps list requires a person acting directly", a.label(), pattern)
+	case "POST /api/hostds",
+		"POST /api/hostds/enrollment-codes",
+		"POST /api/hostds/pending/{id}/accept":
+		return fmt.Errorf("%s cannot call %s: enrolling a hostd requires a person acting directly", a.label(), pattern)
+	case "POST /api/tasks/{id}/access-request/grant",
+		"POST /api/tasks/{id}/access-request/deny":
+		return fmt.Errorf("%s cannot call %s: deciding an access request requires a person acting directly", a.label(), pattern)
+	case "POST /api/external-agents/tokens":
+		body, err := peekBody(r)
+		if err == nil && len(body) > 0 {
+			var req CreateExternalAgentTokenRequest
+			if json.Unmarshal(body, &req) == nil {
+				if _, _, _, _, _, needsPerson, nerr := model.NormalizeExternalAgentSpec(req.ScopeSet, req.Scopes, req.Repos); nerr == nil && needsPerson {
+					return fmt.Errorf("%s cannot call %s: minting an external agent token with a dangerous or requires_person scope requires a person acting directly", a.label(), pattern)
+				}
+			}
+		}
+	case "POST /api/external-agents/tokens/{id}/rotate":
+		if s.tasks != nil && s.tasks.Store != nil {
+			if tok, err := s.tasks.Store.GetExternalAgentToken(r.Context(), strings.TrimSpace(r.PathValue("id"))); err == nil && tok != nil {
+				if _, _, needsPerson, rerr := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos); rerr == nil && needsPerson {
+					return fmt.Errorf("%s cannot call %s: rotating an external agent token with a dangerous or requires_person scope requires a person acting directly", a.label(), pattern)
+				}
+			}
+		}
+	case "POST /api/tasks/{id}/approve", "POST /api/tasks/{id}/run-now":
+		if s.tasks != nil && s.tasks.Store != nil {
+			if task, err := s.tasks.Store.GetTask(r.Context(), model.NormalizeTaskID(r.PathValue("id"))); err == nil && task != nil {
+				if err := s.tasks.catalogueApprovalRefusal(r.Context(), *task); err != nil {
+					return err
+				}
+			}
+		}
+	case "POST /api/tasks/{id}/capabilities", "PATCH /api/tasks/{id}", "POST /api/tasks/{id}/capability-grants":
+		body, err := peekBody(r)
+		if err == nil && len(body) > 0 {
+			var stored map[string][]string
+			if s.tasks != nil && s.tasks.Store != nil {
+				stored = s.storedFieldGrants(r.Context(), pattern, "")
+			}
+			normalize := s.normalizeCapFn()
+			for _, gf := range addedGrantFieldsInBody(pattern, body, stored, normalize) {
+				trimmed := strings.TrimSpace(gf.name)
+				if model.IsPersonOnlyGrant(trimmed) || model.IsAdminOnlyGrant(trimmed) || grantNamesPersonScopeSet(trimmed) {
+					return fmt.Errorf("%s cannot set %s: %s requires a person acting directly", a.label(), gf.key, trimmed)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// RoleScopeOf is the scope pattern needs of a person's role: "" for a
 // route only a role holding every scope reaches.
+func RoleScopeOf(pattern string) APIScope {
+	return roleScopeOf(pattern)
+}
+
 func roleScopeOf(pattern string) APIScope {
 	if sc, ok := humanRouteScopes[pattern]; ok {
 		return sc
@@ -332,38 +621,228 @@ func (s *Server) authorizeRoleCall(r *http.Request, pattern string, a *accessRol
 		}
 		return fmt.Errorf("%s holds no scope %s, which %s needs: %s", a.label(), scope, pattern, ask)
 	}
-	if a.allows(scope, "") || s.tasks == nil || s.tasks.Store == nil {
+	mutating := r.Method != http.MethodGet && !strings.HasSuffix(string(scope), ":read")
+	if a.allows(scope, "") && !mutating {
+		return nil
+	}
+	if !mutating && (s.tasks == nil || s.tasks.Store == nil) {
 		return nil
 	}
 	body, err := peekBody(r)
 	if err != nil {
 		return err
 	}
-	var target string
-	if id := r.PathValue("id"); id != "" && strings.HasPrefix(pathOf(pattern), "/api/tasks/{id}") {
-		target = id
+	var repo string
+	if s.tasks != nil && s.tasks.Store != nil {
+		var target string
+		if id := r.PathValue("id"); id != "" && strings.HasPrefix(pathOf(pattern), "/api/tasks/{id}") {
+			target = id
+		}
+		callRepo, callErr := s.agentCallRepo(r.Context(), r, pattern, target, body, nil, a.set, scope, false)
+		if callErr != nil {
+			if !a.allows(scope, "") {
+				return callErr
+			}
+		} else {
+			repo = callRepo
+		}
+		if repo == "" && pattern == "POST /api/tasks" && len(body) > 0 {
+			var req struct {
+				TemplateID string `json:"templateId"`
+			}
+			if json.Unmarshal(body, &req) == nil && strings.TrimSpace(req.TemplateID) != "" {
+				if tmpl := s.gateTemplate(r.Context(), req.TemplateID); tmpl != nil && tmpl.Target != nil {
+					repo = tmpl.Target.String()
+				}
+			}
+		}
 	}
-	repo, err := s.agentCallRepo(r.Context(), r, pattern, target, body, nil, a.set, scope, false)
-	if err != nil {
+	if !a.allows(scope, "") {
+		if _, fs := fsRoutes[pattern]; (fs || pattern == "GET /api/events") && repo == "" {
+			// A namespace read or event stream naming no repository is narrowed
+			// to the ones the role reaches by fsScope / eventsReadable, as an
+			// agent's is.
+			return nil
+		}
+		if (pattern == "GET /api/inbox" && strings.TrimSpace(r.URL.Query().Get("repo")) == "") || (isRepoNarrowedTasksRead(pattern, r) && repo == "") {
+			return nil
+		}
+		if !a.allows(scope, repo) {
+			if repo == "" {
+				return fmt.Errorf("%s holds %s only on %s, and %s does not name one of them",
+					a.label(), scope, strings.Join(a.set.Repos(scope), ", "), pattern)
+			}
+			return fmt.Errorf("%s holds %s, but not on %s: %s", a.label(), scope, repo, ask)
+		}
+		if !mutating {
+			return nil
+		}
+	}
+	ctx := r.Context()
+	stored := s.storedFieldGrants(ctx, pattern, repo)
+	normalize := s.normalizeCapFn()
+	if _, isGrantBody := grantBodies[pattern]; isGrantBody {
+		if err := roleGrantEscalation(a, pattern, body, stored, normalize); err != nil {
+			return err
+		}
+	}
+	allowedRepo := func(need APIScope, targetRepo string) bool {
+		targetRepo = strings.TrimSpace(targetRepo)
+		if targetRepo == "" {
+			return true
+		}
+		return a.allows(need, targetRepo)
+	}
+	if err := s.filingEscalation(ctx, a.grants, a.set, allowedRepo, pattern, scope, repo, body, filingEscalationOpts{
+		role:      a,
+		stored:    stored,
+		normalize: normalize,
+	}); err != nil {
 		return err
 	}
-	if _, fs := fsRoutes[pattern]; (fs || pattern == "GET /api/events") && repo == "" {
-		// A namespace read or event stream naming no repository is narrowed
-		// to the ones the role reaches by fsScope / eventsReadable, as an
-		// agent's is.
+	if err := roleGrantEscalation(a, pattern, body, stored, normalize); err != nil {
+		return err
+	}
+	return s.roleStandingTargetEscalation(ctx, r, pattern, scope, repo, a, allowedRepo, normalize)
+}
+
+// roleGrantEscalation refuses a body that grants a capability outside a's own
+// scopes, a dangerous grant, or a person-only scope set.
+func roleGrantEscalation(a *accessRole, pattern string, body []byte, stored map[string][]string, normalize func(string) (string, error)) error {
+	for _, gf := range addedGrantFieldsInBody(pattern, body, stored, normalize) {
+		if err := roleGrantRefusal(a, gf.key, gf.name, normalize); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func roleGrantRefusal(a *accessRole, key, name string, normalize func(string) (string, error)) error {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
 		return nil
 	}
-	if (pattern == "GET /api/inbox" && strings.TrimSpace(r.URL.Query().Get("repo")) == "") || (isRepoNarrowedTasksRead(pattern, r) && repo == "") {
-		return nil
+	if grantNamesPersonScopeSet(trimmed) {
+		return fmt.Errorf("%s cannot set %s: %s names a person-only scope set, which requires an unlimited role (grain/operator)",
+			a.label(), key, trimmed)
 	}
-	if a.allows(scope, repo) {
-		return nil
+	if err := agentGrantRefusal(a.grants, trimmed, normalize); err != nil {
+		if slices.ContainsFunc(APIGrantsOf([]string{trimmed}).Scopes(), IsDangerousAPIScope) ||
+			model.IsDangerousAPIGrant(trimmed) || model.IsDangerousGrant(trimmed) ||
+			trimmed == model.PriorityDispatchCapability || trimmed == model.DurableCapability {
+			return fmt.Errorf("%s cannot set %s: %s requires an unlimited role (grain/operator)", a.label(), key, trimmed)
+		}
+		return fmt.Errorf("%s cannot set %s: cannot grant %s, which the role does not hold", a.label(), key, trimmed)
 	}
-	if repo == "" {
-		return fmt.Errorf("%s holds %s only on %s, and %s does not name one of them",
-			a.label(), scope, strings.Join(a.set.Repos(scope), ", "), pattern)
+	return nil
+}
+
+func roleTemplateWithin(a *accessRole, key string, tmpl model.Template, allowedRepo func(APIScope, string) bool, normalize func(string) (string, error)) error {
+	for _, g := range tmpl.Grants {
+		if err := roleGrantRefusal(a, key, g.Capability, normalize); err != nil {
+			return err
+		}
 	}
-	return fmt.Errorf("%s holds %s, but not on %s: %s", a.label(), scope, repo, ask)
+	for _, w := range tmpl.Writes {
+		if !allowedRepo("tasks:write", w.Repo.String()) {
+			return fmt.Errorf("%s cannot set %s: template %s grants push access to %s, which role's tasks:write does not reach",
+				a.label(), key, tmpl.ID, w.Repo)
+		}
+	}
+	for _, r := range tmpl.Reads {
+		if !allowedRepo("tasks:read", r.String()) {
+			return fmt.Errorf("%s cannot set %s: template %s grants read access to %s, which role's tasks:read does not reach",
+				a.label(), key, tmpl.ID, r)
+		}
+	}
+	return nil
+}
+
+// roleStandingTargetEscalation holds indirect filings and edits of stored
+// templates, schedules and suites to a's own scopes even when the request body
+// leaves their grants untouched.
+func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Request, pattern string, scope APIScope, repo string,
+	a *accessRole, allowedRepo func(APIScope, string) bool, normalize func(string) (string, error)) error {
+	opts := filingEscalationOpts{role: a, normalize: normalize}
+	switch pattern {
+	case "POST /api/notifications/{id}/investigate":
+		if tmpl := model.SystemTemplate(model.InvestigateNotificationTemplateID, model.RepoRef{}); tmpl != nil {
+			return roleTemplateWithin(a, "capabilities", *tmpl, allowedRepo, normalize)
+		}
+	case "PATCH /api/templates/{id}":
+		if s.tasks != nil && s.tasks.Store != nil {
+			if existing, err := s.tasks.Store.GetTemplate(ctx, r.PathValue("id")); err == nil && existing != nil {
+				return s.checkFilingTemplate(ctx, *existing, "template", a.grants, a.set, allowedRepo, scope, repo, opts)
+			}
+		}
+	case "PATCH /api/schedules/{id}", "POST /api/schedules/{id}/run":
+		if s.tasks != nil && s.tasks.Store != nil {
+			sched, err := s.tasks.Store.GetSchedule(ctx, r.PathValue("id"))
+			if err != nil || sched == nil {
+				return nil
+			}
+			schedRepo := ""
+			if sched.Target.Owner != "" {
+				schedRepo = sched.Target.String()
+				if !a.allows("tasks:write", schedRepo) {
+					return fmt.Errorf("%s cannot modify or run schedule %s: role does not hold tasks:write on %s",
+						a.label(), sched.ID, schedRepo)
+				}
+			}
+			if sched.AutoMerge {
+				return fmt.Errorf("%s cannot modify or run schedule %s (autoMerge): auto-merge requires an unlimited role (grain/operator)",
+					a.label(), sched.ID)
+			}
+			if sched.KeepRunning {
+				return fmt.Errorf("%s cannot modify or run schedule %s (keepRunning): keepRunning requires an unlimited role (grain/operator)",
+					a.label(), sched.ID)
+			}
+			if sched.AutoApproveProposals && !a.allows("tasks:admin", schedRepo) {
+				return fmt.Errorf("%s cannot modify or run schedule %s (autoApproveProposals): needs tasks:admin",
+					a.label(), sched.ID)
+			}
+			for _, g := range sched.Grants {
+				if err := roleGrantRefusal(a, "capabilities", g.Capability, normalize); err != nil {
+					return err
+				}
+			}
+			for _, w := range sched.Writes {
+				if !allowedRepo("tasks:write", w.Repo.String()) {
+					return fmt.Errorf("%s cannot modify or run schedule %s (writes): role does not hold tasks:write on %s",
+						a.label(), sched.ID, w.Repo)
+				}
+			}
+			for _, rd := range sched.Reads {
+				if !allowedRepo("tasks:read", rd.String()) {
+					return fmt.Errorf("%s cannot modify or run schedule %s (reads): role does not hold tasks:read on %s",
+						a.label(), sched.ID, rd)
+				}
+			}
+			if sched.TemplateID != nil && *sched.TemplateID != "" {
+				if tmpl := s.gateTemplate(ctx, *sched.TemplateID); tmpl != nil {
+					if err := s.checkFilingTemplate(ctx, *tmpl, "templateId", a.grants, a.set, allowedRepo, scope, schedRepo, opts); err != nil {
+						return err
+					}
+				}
+			}
+			if sched.SuiteID != nil && *sched.SuiteID != "" {
+				if suite, err := s.tasks.Store.GetSuite(ctx, *sched.SuiteID); err == nil && suite != nil {
+					if err := s.checkRoleSuite(ctx, *suite, "suiteId", a.grants, a.set, allowedRepo, scope, schedRepo, opts); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	case "PATCH /api/suites/{id}":
+		if s.tasks != nil && s.tasks.Store != nil {
+			if suite, err := s.tasks.Store.GetSuite(ctx, r.PathValue("id")); err == nil && suite != nil {
+				return s.checkRoleSuite(ctx, *suite, "suite", a.grants, a.set, allowedRepo, scope, repo, opts)
+			}
+		}
+	case "POST /api/suite-runs":
+		// suiteId in the body is already checked by filingEscalation.
+	}
+	return nil
 }
 
 // AccessRoleInfo is a verified session's resolved access, as

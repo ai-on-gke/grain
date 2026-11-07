@@ -296,58 +296,66 @@ any remote source.
 Codes are compared in constant time (hashed first). A wrong code gets the
 same answer as any other wrong code.
 
-### A grain hostd dialing in
+### A host dialing in
 
 The daemon serves `GET /api/hostd/connect` without the access code. A
-`grain hostd -server` on another machine upgrades it and presents its
-hostd token, which says which hostd it is (the hostd registry,
-`/api/hostds`, or the deprecated shared `-hostd-token-file`). A bearer
-on that route (the hostd token, or an IAP token) is never counted as an
-access-code guess.
+`grain host -server` or `grain-agentd -server` on another machine upgrades
+it and presents its host credential (`ghd_...`), which says which host it is
+(the host registry in **Settings → Hosts** / `/api/hostds`, or the deprecated
+shared `-hostd-token-file`). Hosts enrolled via `--join` or migrated with
+`rekey` also sign every `/api/hostd/connect` request with their Ed25519
+private key (`X-Grain-Hostd-Timestamp`, `X-Grain-Hostd-Nonce`,
+`X-Grain-Hostd-Signature`, bounded to a 5-minute replay cache), so a copied
+credential without the host's private key is refused; their 30-day credentials
+renew silently while connected (`OpRenew` and `POST /api/hostd/renew`). A
+bearer on that route (the host credential, or an IAP token) is never counted
+as an access-code guess.
 
-What else the hostd needs depends on how it reaches the daemon:
+What else the host needs depends on how it reaches the daemon:
 
 - **Remote**: it dials in through the IAP Gateway or another registered
   identity verifier's proxy, so the request carries a verified identity.
   The daemon records that identity as the connection's principal and
   checks that it is admitted (either on the database allowlist in
   **Settings → Access**, a daemon-provisioned non-pool service account,
-  or the non-pool service account registered as an active hostd's owner
-  in **Settings → Hostds**). The
-  identity must also equal the hostd row's owner, compared as full,
-  lowercased emails. A stolen hostd token is no use without its
-  owner's identity. Service accounts may be owners, so a hostd running
+  or the non-pool service account registered as an active host's owner
+  in **Settings → Hosts**). The
+  identity must also equal the host row's owner, compared as full,
+  lowercased emails. A stolen host token is no use without its
+  owner's identity. Service accounts may be owners, so a host running
   under Workload Identity or a key needs its service account as the
-  owner. The daemon refuses, and logs, a remote hostd that connects as
-  somebody else, a remote hostd whose row has no owner, and a request
+  owner. The daemon refuses, and logs, a remote host that connects as
+  somebody else, a remote host whose row has no owner, and a request
   that came through a proxy, or from another host to a daemon with a
   verifier configured, with no verified identity. It never falls back to
   the token alone.
 - **Local**: over loopback with no forwarding headers and no assertion,
   such as through `kubectl port-forward`. The token alone names it, as
-  it always has, and it needs no owner. The same goes for every hostd
+  it always has, and it needs no owner. The same goes for every host
   of a daemon that has no identity verifier configured. The co-located
-  hostd at `/run/grain-hostd/hostd.sock` does not dial in at all.
+  host at `/run/grain-hostd/hostd.sock` does not dial in at all.
 
-Set the owner when you register the hostd (Settings → Hostds,
-`grain hostds register -owner <email> <name>`, or `POST /api/hostds`),
-or later (`grain hostds set-owner <name> <email>`, or `PATCH
-/api/hostds/{name}`). For the shared token, use `-hostd-token-owner`.
-Start the hostd with `-iap-audience <IAP client ID>` so that it sends an
-ID token from its service account or its user's login. At startup it
-logs the email that token names, which is the owner the daemon expects.
+Set the owner automatically by enrolling with `--join <enrollment-code>` from
+**Settings → Hosts → Invite hosts** (the verified enrolling identity becomes
+the host's owner once the deployment owner accepts its join request), or set it on a legacy per-host token (**Settings → Hosts**,
+`grain host register -owner <email> <name>`, `POST /api/hostds`,
+`grain host set-owner <name> <email>`, or `PATCH /api/hostds/{name}`). For
+the shared token, use `-hostd-token-owner`. Start the host with
+`-iap-audience <IAP client ID>` so that it sends an ID token from its service
+account or its user's login. At startup it logs the email that token names,
+which is the owner the daemon expects.
 
-`GET /api/hostd/install.sh`, the script that sets such a hostd up
-(Settings → Hostds shows the command when it issues a token), is served
-without the access code too: the machine fetching it holds no credential
-yet, and the script carries none. It holds the daemon's URL as the
-request reached it, and reads the hostd token on the machine itself, from
-stdin or `$GRAIN_HOSTD_TOKEN`. The daemon's release and the image it runs
-are filled in only for a caller the gate would let through elsewhere (the
-access code or its session, or an admitted identity); anybody else's copy
-leaves them blank and refuses to guess a version. The command Settings →
-Hostds shows passes them as `--release` and `--image`; add
-`--iap-audience` for a hostd that dials in through IAP.
+`GET /hostd/install` (and `GET /api/hostd/install.sh`), `POST /api/hostd/join`,
+`POST /api/hostd/join/{id}/poll`, and `POST /api/hostd/renew` are served
+without the access code too: an enrolling host signs its join and poll
+requests with its generated Ed25519 keypair, presents a shared `ghe_...`
+enrollment code (which grants nothing except filing a pending join request)
+plus a verified enrolling identity (from the proxy `IdentityVerifier`,
+`ui.RegisterHostJoinVerifier`, or a GitHub device-flow token verified
+server-side), and waits for the deployment owner to accept it. For
+legacy per-host token installs, the script reads the token on the machine
+itself from stdin or `$GRAIN_HOSTD_TOKEN`; `--release` and `--image` are
+filled in only for an admitted caller or passed on the command line.
 
 The remote executor routes that were open the same way, including the
 executor bootstrap routes (`executorBootstrapRoute`), were removed with

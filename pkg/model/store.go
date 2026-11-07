@@ -29,6 +29,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/ai-on-gke/grain/pkg/redact"
 )
 
 // Store is the model's read and write surface over any database/sql
@@ -566,6 +568,8 @@ func branchForTask(ctx context.Context, q interface {
 // putTask is PutTask's body, against whatever transaction it is running
 // in -- so UpdateTask can read and write in the same one.
 func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
+	t.Title = redact.RedactHostEnrollmentCodes(t.Title)
+	t.Body = redact.RedactHostEnrollmentCodes(t.Body)
 	var existing int
 	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM `task` WHERE `id` = ?", t.ID).Scan(&existing); err != nil {
 		return err
@@ -1001,6 +1005,8 @@ func (s *Store) signalCommentAdded(taskID string) {
 }
 
 func addComment(ctx context.Context, tx *sql.Tx, c Comment) (int64, error) {
+	c.Body = redact.RedactHostEnrollmentCodes(c.Body)
+	c.Summary = redact.RedactHostEnrollmentCodes(c.Summary)
 	// Every comment carries the moment it was written: a caller that left
 	// CreatedAt unset would otherwise store year one, which the timeline
 	// can only place before everything else on the task.
@@ -5120,36 +5126,37 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 		name := strings.TrimSpace(g.Capability)
 		grantNames = append(grantNames, name)
 		switch name {
-		case "self-debug":
-			mayReadCI = true
-			mayReadAllCI = true
-			mayReadSrc = true
-			// What self-debug opens and no more
-			// (design/design/sandbox-first-agent-surface.design.md, and the
-			// tools pkg/mcp/toolnames.go gates on it): memory,
-			// issues and SQL each keep a grant of their own, as their
-			// MCP tools do. Health comes with its api:self-debug
-			// preset's deployment:read, below.
-			mayReadAllTasks = true
-			mayReadFullConfig = true
-			mayReadMetrics = true
-			mayReadPipeline = true
 		case "grain-log", GrainJournalRef, GrainJournalGrant:
 			mayReadGrainLog = true
 		case "deployment-health", GrainHealthRef, GrainHealthGrant:
 			mayReadHealth = true
-		case "bootstrap-playbooks":
-			mayReadPlaybooks = true
 		case "read-issues":
 			mayReadIssues = true
 		case "db-read", "db-write":
 			mayReadDB = true
+		}
+		if IsBootstrapPlaybooksGrant(name) {
+			mayReadPlaybooks = true
 		}
 		if IsGitHubReadIssuesGrant(name) {
 			mayReadIssues = true
 		}
 		if IsGrainSQLGrant(name) {
 			mayReadDB = true
+		}
+		// grain#source (or the retired bare self-debug): grain's own
+		// source, and -- for the reason pkg/mcp/ci_repo_scope.go gives --
+		// every repository's CI and the whole of config://. The task
+		// records, metrics, pipeline and health self-debug also opened
+		// are its api:self-debug preset's, below (a bare self-debug is
+		// still read as that preset, apiAliasCapabilities); memory,
+		// issues and SQL each keep a grant of their own, as their MCP
+		// tools do.
+		if IsGrainSourceGrant(name) {
+			mayReadCI = true
+			mayReadAllCI = true
+			mayReadSrc = true
+			mayReadFullConfig = true
 		}
 		if IsGrainCIGrant(name) {
 			mayReadCI = true
@@ -5742,7 +5749,7 @@ const configColumns = "`poll_interval_ms`,`max_workers`,`max_mergers`,`max_merge
 	"`k8s_privileged`,`k8s_network_policy`,`k8s_deployment`,`k8s_container`," +
 	"`mcp_servers`,`capability_policy`,`cli_run`,`sandbox_overcommit`,`base_ci_red_streak`," +
 	"`k8s_priority_class_interactive`,`k8s_priority_class_agent`,`k8s_priority_class_ci`,`sandbox_disk_overcommit`," +
-	"`auto_upgrade_channel`,`auto_upgrade_time`,`judgement_model`,`external_agent_api`,`sandbox_image_mirror`,`session_sandbox_idle_ttl_ms`,`settings_locked`,`new_task_form`,`auto_upgrade_on`,`owner_trust`,`auto_grant_context_reads`"
+	"`auto_upgrade_channel`,`auto_upgrade_time`,`judgement_model`,`external_agent_api`,`sandbox_image_mirror`,`session_sandbox_idle_ttl_ms`,`settings_locked`,`new_task_form`,`auto_upgrade_on`,`owner_trust`,`auto_grant_context_reads`,`registry`"
 
 func scanConfig(scan func(...any) error) (Config, error) {
 	var c Config
@@ -5769,6 +5776,7 @@ func scanConfig(scan func(...any) error) (Config, error) {
 	var newTaskForm string
 	var ownerTrust string
 	var autoGrantContextReads string
+	var registry string
 	var cliRun string
 	var sandboxOvercommit string
 	// The sign-in settings (password_auth_enabled, open_registration,
@@ -5804,7 +5812,7 @@ func scanConfig(scan func(...any) error) (Config, error) {
 		&c.K8sPrivileged, &c.K8sNetworkPolicy, &c.K8sDeployment, &c.K8sContainer,
 		&mcpServers, &capabilityPolicy, &cliRun, &sandboxOvercommit, &c.BaseCIRedStreak,
 		&c.K8sPriorityClassInteractive, &c.K8sPriorityClassAgent, &c.K8sPriorityClassCI, &c.SandboxDiskOvercommit,
-		&c.AutoUpgradeChannel, &c.AutoUpgradeTime, &c.JudgementModel, &c.ExternalAgentAPI, &c.SandboxImageMirror, &sessionIdleTTLMS, &c.SettingsLocked, &newTaskForm, &c.AutoUpgradeOn, &ownerTrust, &autoGrantContextReads); err != nil {
+		&c.AutoUpgradeChannel, &c.AutoUpgradeTime, &c.JudgementModel, &c.ExternalAgentAPI, &c.SandboxImageMirror, &sessionIdleTTLMS, &c.SettingsLocked, &newTaskForm, &c.AutoUpgradeOn, &ownerTrust, &autoGrantContextReads, &registry); err != nil {
 		return Config{}, err
 	}
 	backends, err := DecodeAgentBackends(agentBackends)
@@ -5838,6 +5846,9 @@ func scanConfig(scan func(...any) error) (Config, error) {
 		return Config{}, err
 	}
 	if c.AutoGrantContextReads, err = DecodeAutoGrantContextReads(autoGrantContextReads); err != nil {
+		return Config{}, err
+	}
+	if c.Registry, err = DecodeRegistryConfig(registry); err != nil {
 		return Config{}, err
 	}
 	if c.CLIRun, err = DecodeCLIRun(cliRun); err != nil {
@@ -5922,6 +5933,10 @@ func putConfigTx(ctx context.Context, tx *sql.Tx, c Config) error {
 	if err != nil {
 		return err
 	}
+	registry, err := EncodeRegistryConfig(c.Registry)
+	if err != nil {
+		return err
+	}
 	cliRun, err := EncodeCLIRun(c.CLIRun)
 	if err != nil {
 		return err
@@ -5935,7 +5950,7 @@ func putConfigTx(ctx context.Context, tx *sql.Tx, c Config) error {
 		return err
 	}
 	_, err = tx.ExecContext(ctx,
-		"REPLACE INTO `grain_config` (`id`, "+configColumns+") VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+		"REPLACE INTO `grain_config` (`id`, "+configColumns+") VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
 		c.PollInterval.Milliseconds(), c.MaxWorkers, c.MaxMergers, c.MaxMergesPerRepo, c.MergeBatchSize,
 		c.MergeGatherWindow.Milliseconds(), c.MaxCIJobs, c.MaxAgentTurns,
 		c.GitHubHost, c.GitHubInsecureHTTP, c.GCPProject, c.GCPServiceAccountEmail,
@@ -5971,7 +5986,7 @@ func putConfigTx(ctx context.Context, tx *sql.Tx, c Config) error {
 		strings.TrimSpace(c.K8sPriorityClassCI), c.SandboxDiskOvercommit,
 		strings.TrimSpace(c.AutoUpgradeChannel), strings.TrimSpace(c.AutoUpgradeTime),
 		strings.TrimSpace(c.JudgementModel), c.ExternalAgentAPI, strings.TrimSpace(c.SandboxImageMirror),
-		c.SessionSandboxIdleTTL.Milliseconds(), c.SettingsLocked, newTaskForm, strings.TrimSpace(c.AutoUpgradeOn), ownerTrust, autoGrantContextReads)
+		c.SessionSandboxIdleTTL.Milliseconds(), c.SettingsLocked, newTaskForm, strings.TrimSpace(c.AutoUpgradeOn), ownerTrust, autoGrantContextReads, registry)
 	return err
 }
 

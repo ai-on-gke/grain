@@ -21,6 +21,7 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -188,6 +189,10 @@ const (
 	MaxPurposeRunes = 280
 	// MaxTagsPerEntry bounds the number of catalog tags on an entry.
 	MaxTagsPerEntry = 10
+	// DefaultHeartbeatInterval is the default connected-entry heartbeat cadence (~15s).
+	DefaultHeartbeatInterval = 15 * time.Second
+	// RegistrationTokenPrefix identifies registry-minted connected-entry credentials.
+	RegistrationTokenPrefix = "grc_"
 )
 
 var (
@@ -372,10 +377,13 @@ type Scope struct {
 	Repo           string         `json:"repo"`
 	PathPrefix     string         `json:"path_prefix"`
 	Role           ScopeRole      `json:"role"`
+	EffectiveRole  ScopeRole      `json:"effective_role,omitempty"`
 	Source         ScopeSource    `json:"source"`
 	Branch         string         `json:"branch,omitempty"`
 	Active         bool           `json:"active"`
 	InactiveReason InactiveReason `json:"inactive_reason,omitempty"`
+	ConflictWith   string         `json:"conflict_with,omitempty"`
+	ClaimedAt      *time.Time     `json:"claimed_at,omitempty"`
 	UpdatedAt      time.Time      `json:"updated_at,omitempty"`
 }
 
@@ -403,60 +411,73 @@ type CredentialMeta struct {
 
 // Entry is the full wire representation of a registry entry.
 type Entry struct {
-	Name            string           `json:"name"`
-	URL             string           `json:"url"`
-	Kind            EntryKind        `json:"kind"`
-	State           EntryState       `json:"state"`
-	Status          EntryStatus      `json:"status"`
-	StatusDetail    string           `json:"status_detail,omitempty"`
-	ReplaceStep     ReplaceStep      `json:"replace_step,omitempty"`
-	DisplayName     string           `json:"display_name,omitempty"`
-	Purpose         string           `json:"purpose,omitempty"`
-	Owner           string           `json:"owner"`
-	OwnerGroup      string           `json:"owner_group,omitempty"`
-	PendingOwner    string           `json:"pending_owner,omitempty"`
-	Listed          bool             `json:"listed"`
-	Tags            []string         `json:"tags,omitempty"`
-	Shape           string           `json:"shape,omitempty"`
-	Zone            string           `json:"zone,omitempty"`
-	MachineType     string           `json:"machine_type,omitempty"`
-	BootDiskGB      int              `json:"boot_disk_gb,omitempty"`
-	DataDiskGB      int              `json:"data_disk_gb,omitempty"`
-	AllowSSH        bool             `json:"allow_ssh"`
-	ShipLogs        bool             `json:"ship_logs"`
-	BackendURL      string           `json:"backend_url,omitempty"`
-	GrainVersion    string           `json:"grain_version,omitempty"`
-	GrainCommit     string           `json:"grain_commit,omitempty"`
-	TargetVersion   string           `json:"target_version,omitempty"`
-	HostKind        HostKind         `json:"host_kind,omitempty"`
-	ActiveTasks     int              `json:"active_tasks"`
-	QueueDepth      int              `json:"queue_depth"`
-	ActiveSessions  int              `json:"active_sessions"`
-	ConnectedSince  *time.Time       `json:"connected_since,omitempty"`
-	TunnelSessionID string           `json:"tunnel_session_id,omitempty"`
-	LastHeartbeatAt *time.Time       `json:"last_heartbeat_at,omitempty"`
-	Scopes          []Scope          `json:"scopes,omitempty"`
-	Credentials     []CredentialMeta `json:"credentials,omitempty"`
-	CreatedAt       time.Time        `json:"created_at"`
-	UpdatedAt       time.Time        `json:"updated_at"`
-	DeletedAt       *time.Time       `json:"deleted_at,omitempty"`
+	Name                string           `json:"name"`
+	URL                 string           `json:"url"`
+	Kind                EntryKind        `json:"kind"`
+	State               EntryState       `json:"state"`
+	Status              EntryStatus      `json:"status"`
+	StatusDetail        string           `json:"status_detail,omitempty"`
+	Health              HealthState      `json:"health,omitempty"`
+	HealthDetail        string           `json:"health_detail,omitempty"`
+	ReplaceStep         ReplaceStep      `json:"replace_step,omitempty"`
+	DisplayName         string           `json:"display_name,omitempty"`
+	Purpose             string           `json:"purpose,omitempty"`
+	Owner               string           `json:"owner"`
+	OwnerGroup          string           `json:"owner_group,omitempty"`
+	PendingOwner        string           `json:"pending_owner,omitempty"`
+	ConnectedPrincipal  string           `json:"connected_principal,omitempty"`
+	Listed              bool             `json:"listed"`
+	Tags                []string         `json:"tags,omitempty"`
+	Shape               string           `json:"shape,omitempty"`
+	Zone                string           `json:"zone,omitempty"`
+	MachineType         string           `json:"machine_type,omitempty"`
+	BootDiskGB          int              `json:"boot_disk_gb,omitempty"`
+	DataDiskGB          int              `json:"data_disk_gb,omitempty"`
+	AllowSSH            bool             `json:"allow_ssh"`
+	ShipLogs            bool             `json:"ship_logs"`
+	BackendURL          string           `json:"backend_url,omitempty"`
+	GrainVersion        string           `json:"grain_version,omitempty"`
+	GrainCommit         string           `json:"grain_commit,omitempty"`
+	TargetVersion       string           `json:"target_version,omitempty"`
+	HostKind            HostKind         `json:"host_kind,omitempty"`
+	ActiveTasks         int              `json:"active_tasks"`
+	AwaitingReplyTasks  int              `json:"awaiting_reply_tasks"`
+	QueueDepth          int              `json:"queue_depth"`
+	ActiveSessions      int              `json:"active_sessions"`
+	TunnelConnected     *bool            `json:"tunnel_connected,omitempty"`
+	ConnectedSince      *time.Time       `json:"connected_since,omitempty"`
+	TunnelSessionID     string           `json:"tunnel_session_id,omitempty"`
+	LastHeartbeatAt     *time.Time       `json:"last_heartbeat_at,omitempty"`
+	LastSeenAt          *time.Time       `json:"last_seen_at,omitempty"`
+	HeartbeatAgeSeconds *int             `json:"heartbeat_age_seconds,omitempty"`
+	Scopes              []Scope          `json:"scopes,omitempty"`
+	ScopeConflicts      []ScopeConflict  `json:"scope_conflicts,omitempty"`
+	Credentials         []CredentialMeta `json:"credentials,omitempty"`
+	CreatedAt           time.Time        `json:"created_at"`
+	UpdatedAt           time.Time        `json:"updated_at"`
+	DeletedAt           *time.Time       `json:"deleted_at,omitempty"`
+	ReservedUntil       *time.Time       `json:"reserved_until,omitempty"`
+	PurgeAfter          *time.Time       `json:"purge_after,omitempty"`
+	Generation          int              `json:"generation,omitempty"`
 }
 
 // CreateEntryRequest is the request body for POST /api/entries.
 type CreateEntryRequest struct {
-	Name            string       `json:"name"`
-	Kind            EntryKind    `json:"kind"`
-	DisplayName     string       `json:"display_name,omitempty"`
-	Purpose         string       `json:"purpose,omitempty"`
-	OwnerGroup      string       `json:"owner_group,omitempty"`
-	Listed          *bool        `json:"listed,omitempty"`
-	Tags            []string     `json:"tags,omitempty"`
-	Shape           string       `json:"shape,omitempty"`
-	Zone            string       `json:"zone,omitempty"`
-	AllowSSH        *bool        `json:"allow_ssh,omitempty"`
-	ShipLogs        *bool        `json:"ship_logs,omitempty"`
-	Scopes          []ScopeInput `json:"scopes,omitempty"`
-	CredentialLabel string       `json:"credential_label,omitempty"`
+	Name               string       `json:"name"`
+	Kind               EntryKind    `json:"kind"`
+	HostKind           HostKind     `json:"host_kind,omitempty"`
+	ConnectedPrincipal string       `json:"connected_principal,omitempty"`
+	DisplayName        string       `json:"display_name,omitempty"`
+	Purpose            string       `json:"purpose,omitempty"`
+	OwnerGroup         string       `json:"owner_group,omitempty"`
+	Listed             *bool        `json:"listed,omitempty"`
+	Tags               []string     `json:"tags,omitempty"`
+	Shape              string       `json:"shape,omitempty"`
+	Zone               string       `json:"zone,omitempty"`
+	AllowSSH           *bool        `json:"allow_ssh,omitempty"`
+	ShipLogs           *bool        `json:"ship_logs,omitempty"`
+	Scopes             []ScopeInput `json:"scopes,omitempty"`
+	CredentialLabel    string       `json:"credential_label,omitempty"`
 }
 
 // CreateEntryResponse is returned by POST /api/entries. RegistrationToken is
@@ -469,13 +490,16 @@ type CreateEntryResponse struct {
 
 // UpdateEntryRequest is the PATCH /api/entries/<name> payload for mutable catalog and VM flags.
 type UpdateEntryRequest struct {
-	DisplayName *string   `json:"display_name,omitempty"`
-	Purpose     *string   `json:"purpose,omitempty"`
-	OwnerGroup  *string   `json:"owner_group,omitempty"`
-	Listed      *bool     `json:"listed,omitempty"`
-	Tags        *[]string `json:"tags,omitempty"`
-	AllowSSH    *bool     `json:"allow_ssh,omitempty"`
-	ShipLogs    *bool     `json:"ship_logs,omitempty"`
+	DisplayName        *string   `json:"display_name,omitempty"`
+	Purpose            *string   `json:"purpose,omitempty"`
+	HostKind           *HostKind `json:"host_kind,omitempty"`
+	ConnectedPrincipal *string   `json:"connected_principal,omitempty"`
+	OwnerGroup         *string   `json:"owner_group,omitempty"`
+	Listed             *bool     `json:"listed,omitempty"`
+	Tags               *[]string `json:"tags,omitempty"`
+	Shape              *string   `json:"shape,omitempty"`
+	AllowSSH           *bool     `json:"allow_ssh,omitempty"`
+	ShipLogs           *bool     `json:"ship_logs,omitempty"`
 }
 
 // SetScopesRequest replaces an entry's declared scopes via PUT /api/entries/<name>/scopes.
@@ -491,48 +515,79 @@ type SetScopesResponse struct {
 
 // HeartbeatScope is a single repository checkout or workspace reported by a running daemon.
 type HeartbeatScope struct {
-	Repo       string `json:"repo"`
-	PathPrefix string `json:"path_prefix,omitempty"`
-	Branch     string `json:"branch,omitempty"`
+	Repo       string    `json:"repo"`
+	PathPrefix string    `json:"path_prefix,omitempty"`
+	Role       ScopeRole `json:"role,omitempty"`
+	Branch     string    `json:"branch,omitempty"`
 }
 
-// HeartbeatRequest is sent to POST /api/entries/<name>/heartbeat by a connected daemon.
+// HeartbeatRequest is sent to PUT /api/entries/<name>/heartbeat by a connected daemon.
 type HeartbeatRequest struct {
-	GrainVersion   string           `json:"grain_version,omitempty"`
-	GrainCommit    string           `json:"grain_commit,omitempty"`
-	HostKind       HostKind         `json:"host_kind,omitempty"`
-	Health         HealthState      `json:"health,omitempty"`
-	ActiveTasks    int              `json:"active_tasks"`
-	QueueDepth     int              `json:"queue_depth"`
-	ActiveSessions int              `json:"active_sessions"`
-	Scopes         []HeartbeatScope `json:"scopes,omitempty"`
+	GrainVersion       string           `json:"grain_version,omitempty"`
+	GrainCommit        string           `json:"grain_commit,omitempty"`
+	HostKind           HostKind         `json:"host_kind,omitempty"`
+	Health             HealthState      `json:"health,omitempty"`
+	HealthDetail       string           `json:"health_detail,omitempty"`
+	ActiveTasks        int              `json:"active_tasks"`
+	AwaitingReplyTasks int              `json:"awaiting_reply_tasks"`
+	QueueDepth         int              `json:"queue_depth"`
+	ActiveSessions     int              `json:"active_sessions"`
+	Scopes             []HeartbeatScope `json:"scopes,omitempty"`
 }
 
-// HeartbeatResponse is returned by POST /api/entries/<name>/heartbeat.
+// HeartbeatResponse is returned by PUT /api/entries/<name>/heartbeat.
 type HeartbeatResponse struct {
-	Status              EntryStatus     `json:"status"`
-	ActiveScopes        []Scope         `json:"active_scopes,omitempty"`
-	Conflicts           []ScopeConflict `json:"conflicts,omitempty"`
-	NextIntervalSeconds int             `json:"next_interval_seconds,omitempty"`
+	Status               EntryStatus     `json:"status"`
+	ActiveScopes         []Scope         `json:"active_scopes,omitempty"`
+	Conflicts            []ScopeConflict `json:"conflicts,omitempty"`
+	ScopeConflicts       []ScopeConflict `json:"scope_conflicts,omitempty"`
+	NextIntervalSeconds  int             `json:"next_interval_seconds,omitempty"`
+	NextHeartbeatSeconds int             `json:"next_heartbeat_seconds,omitempty"`
+}
+
+// UnmarshalJSON accepts both "conflicts" and "scope_conflicts" as well as both
+// "next_interval_seconds" and "next_heartbeat_seconds".
+func (r *HeartbeatResponse) UnmarshalJSON(data []byte) error {
+	type alias HeartbeatResponse
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*r = HeartbeatResponse(a)
+	if len(r.Conflicts) == 0 && len(r.ScopeConflicts) > 0 {
+		r.Conflicts = r.ScopeConflicts
+	} else if len(r.ScopeConflicts) == 0 && len(r.Conflicts) > 0 {
+		r.ScopeConflicts = r.Conflicts
+	}
+	if r.NextIntervalSeconds == 0 && r.NextHeartbeatSeconds > 0 {
+		r.NextIntervalSeconds = r.NextHeartbeatSeconds
+	} else if r.NextHeartbeatSeconds == 0 && r.NextIntervalSeconds > 0 {
+		r.NextHeartbeatSeconds = r.NextIntervalSeconds
+	}
+	return nil
 }
 
 // InstanceStatusResponse is the read-only payload served by a hosted daemon's
 // GET /api/registry/status endpoint when probed by the registry reconciler.
 type InstanceStatusResponse struct {
-	GrainVersion   string           `json:"grain_version"`
-	GrainCommit    string           `json:"grain_commit,omitempty"`
-	HostKind       HostKind         `json:"host_kind,omitempty"`
-	Health         HealthState      `json:"health"`
-	ActiveTasks    int              `json:"active_tasks"`
-	QueueDepth     int              `json:"queue_depth"`
-	ActiveSessions int              `json:"active_sessions"`
-	Scopes         []HeartbeatScope `json:"scopes,omitempty"`
+	GrainVersion       string           `json:"grain_version"`
+	GrainCommit        string           `json:"grain_commit,omitempty"`
+	HostKind           HostKind         `json:"host_kind,omitempty"`
+	Health             HealthState      `json:"health"`
+	HealthDetail       string           `json:"health_detail,omitempty"`
+	ActiveTasks        int              `json:"active_tasks"`
+	AwaitingReplyTasks int              `json:"awaiting_reply_tasks"`
+	QueueDepth         int              `json:"queue_depth"`
+	ActiveSessions     int              `json:"active_sessions"`
+	Scopes             []HeartbeatScope `json:"scopes,omitempty"`
 }
 
 // RotateCredentialRequest is the request body for POST /api/entries/<name>/credentials/rotate.
 type RotateCredentialRequest struct {
 	Label          string `json:"label,omitempty"`
+	CredID         string `json:"cred_id,omitempty"`
 	RevokePrevious bool   `json:"revoke_previous,omitempty"`
+	OverlapSeconds int    `json:"overlap_seconds,omitempty"`
 }
 
 // RotateCredentialResponse returns the newly minted grc_... token once.
@@ -554,22 +609,29 @@ type ReplaceEntryRequest struct {
 
 // DeleteEntryRequest deletes an entry via DELETE /api/entries/<name>.
 type DeleteEntryRequest struct {
+	Confirm     string `json:"confirm,omitempty"`
 	ConfirmName string `json:"confirm_name,omitempty"`
 	DeleteDisk  bool   `json:"delete_disk,omitempty"`
 }
 
 // TransferRequest offers ownership transfer via POST /api/entries/<name>/transfer.
 type TransferRequest struct {
-	NewOwner   string `json:"new_owner"`
-	OwnerGroup string `json:"owner_group,omitempty"`
+	To              string `json:"to,omitempty"`
+	NewOwner        string `json:"new_owner,omitempty"`
+	OwnerGroup      string `json:"owner_group,omitempty"`
+	ClearOwnerGroup bool   `json:"clear_owner_group,omitempty"`
 }
 
 // ListEntriesQuery filters GET /api/entries.
 type ListEntriesQuery struct {
 	Owner          string
+	OwnerGroup     string
 	Kind           EntryKind
 	Status         EntryStatus
+	Listed         *bool
+	Conflict       *bool
 	IncludeDeleted bool
+	All            bool
 }
 
 // ListEntriesResponse wraps the entries returned by GET /api/entries.
@@ -579,35 +641,40 @@ type ListEntriesResponse struct {
 
 // DirectoryQuery filters GET /api/directory.
 type DirectoryQuery struct {
-	Query  string
-	Repo   string
-	Tag    string
-	Status EntryStatus
-	Kind   EntryKind
-	Owner  string
-	Limit  int
-	Cursor string
+	Query    string
+	Repo     string
+	Tag      string
+	Status   EntryStatus
+	Kind     EntryKind
+	HostKind HostKind
+	Owner    string
+	Limit    int
+	Cursor   string
 }
 
 // DirectoryEntry is the public catalog summary returned for listed entries (and
 // entries owned by the caller) on GET /api/directory. Internal infrastructure
 // fields (VM IPs, disk sizes, credentials, tunnel session IDs) are omitted.
 type DirectoryEntry struct {
-	Name         string      `json:"name"`
-	URL          string      `json:"url"`
-	Kind         EntryKind   `json:"kind"`
-	Status       EntryStatus `json:"status"`
-	DisplayName  string      `json:"display_name,omitempty"`
-	Purpose      string      `json:"purpose,omitempty"`
-	Owner        string      `json:"owner"`
-	OwnerGroup   string      `json:"owner_group,omitempty"`
-	Tags         []string    `json:"tags,omitempty"`
-	GrainVersion string      `json:"grain_version,omitempty"`
-	HostKind     HostKind    `json:"host_kind,omitempty"`
-	Scopes       []Scope     `json:"scopes,omitempty"`
-	ActiveTasks  int         `json:"active_tasks"`
-	QueueDepth   int         `json:"queue_depth"`
-	UpdatedAt    time.Time   `json:"updated_at"`
+	Name                string      `json:"name"`
+	URL                 string      `json:"url"`
+	Kind                EntryKind   `json:"kind"`
+	State               EntryState  `json:"state,omitempty"`
+	Status              EntryStatus `json:"status"`
+	HeartbeatAgeSeconds *int        `json:"heartbeat_age_seconds,omitempty"`
+	DisplayName         string      `json:"display_name,omitempty"`
+	Purpose             string      `json:"purpose,omitempty"`
+	Owner               string      `json:"owner"`
+	OwnerGroup          string      `json:"owner_group,omitempty"`
+	Tags                []string    `json:"tags,omitempty"`
+	GrainVersion        string      `json:"grain_version,omitempty"`
+	GrainCommit         string      `json:"grain_commit,omitempty"`
+	HostKind            HostKind    `json:"host_kind,omitempty"`
+	Scopes              []Scope     `json:"scopes,omitempty"`
+	ActiveTasks         int         `json:"active_tasks"`
+	AwaitingReplyTasks  int         `json:"awaiting_reply_tasks"`
+	QueueDepth          int         `json:"queue_depth"`
+	UpdatedAt           time.Time   `json:"updated_at"`
 }
 
 // DirectoryResponse is returned by GET /api/directory.
@@ -634,15 +701,19 @@ type MatchedScope struct {
 
 // RouteCandidate is one matching entry returned by GET /api/route.
 type RouteCandidate struct {
-	Name         string       `json:"name"`
-	URL          string       `json:"url"`
-	Kind         EntryKind    `json:"kind"`
-	Status       EntryStatus  `json:"status"`
-	DisplayName  string       `json:"display_name,omitempty"`
-	Purpose      string       `json:"purpose,omitempty"`
-	Owner        string       `json:"owner"`
-	OwnerGroup   string       `json:"owner_group,omitempty"`
-	MatchedScope MatchedScope `json:"matched_scope"`
+	Name                string       `json:"name"`
+	URL                 string       `json:"url"`
+	Kind                EntryKind    `json:"kind"`
+	State               EntryState   `json:"state,omitempty"`
+	Status              EntryStatus  `json:"status"`
+	HeartbeatAgeSeconds *int         `json:"heartbeat_age_seconds,omitempty"`
+	DisplayName         string       `json:"display_name,omitempty"`
+	Purpose             string       `json:"purpose,omitempty"`
+	Owner               string       `json:"owner"`
+	OwnerGroup          string       `json:"owner_group,omitempty"`
+	ActiveTasks         int          `json:"active_tasks"`
+	AwaitingReplyTasks  int          `json:"awaiting_reply_tasks"`
+	MatchedScope        MatchedScope `json:"matched_scope"`
 }
 
 // RouteResponse is returned by GET /api/route.

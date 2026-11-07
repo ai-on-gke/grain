@@ -571,7 +571,7 @@ func TestCapabilityEscalatedProposalsWalkthrough(t *testing.T) {
 		w := newHoldWorld(t, false)
 		parent := w.create("auto-merging parent", true, []string{})
 		if holds(parent, model.GitHubReadIssuesGrant) {
-			t.Fatalf("the parent holds bootstrap-playbooks already: %+v", parent.Grants)
+			t.Fatalf("the parent holds github#read-issues already: %+v", parent.Grants)
 		}
 		w.setScript(func(task model.Task) []antigravity.Step {
 			if task.ID != parent.ID {

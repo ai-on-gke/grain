@@ -115,10 +115,12 @@ approvers: [me@example.com, lead@example.com]
 # Capability patterns, compared without regard to case. A bare family
 # (gcp-key) matches it and every grant of it (gcp-key:team-a);
 # family:* matches every parameterised grant (repo-write:acme/widgets);
-# otherwise both halves are glob patterns (repo-write:acme/*).
+# otherwise both halves are glob patterns (repo-write:acme/*). A
+# capability reference without = (https://...#method) matches the method
+# regardless of arguments; one with =<json> matches only those arguments.
 capabilities:
   # When set, every capability a task may be granted.
-  allow: [self-debug, gcp-key:team-*]
+  allow: [api:self-debug, gcp-key:team-*]
   # Refused whatever allow says.
   deny: [gcp-key:team-secret, repo-write:*]
 
@@ -143,11 +145,17 @@ names: a `repo-read:owner/name` or `repo-write:owner/name` grant answers
 to `repos` exactly like the task's own target and reads, so
 `repos: [acme/*]` refuses `repo-read:bwsalmon/grain`.
 
-`self-debug` reaches no repository. A self-debug run's `grain-src/` is
-the deployment's own baked-in copy of grain's source, placed in its
-sandbox; grain no longer clones bwsalmon/grain for it, and the git proxy
-does not let it fetch that repository. So a policy that does not list
-bwsalmon/grain admits a self-debug task (`model.CapabilityRepos`).
+`https://grain.dev/capabilities/grain#source` (formerly the source half
+of `self-debug`) reaches no repository. Its `grain-src/` is the
+deployment's own baked-in copy of grain's source, placed in its sandbox;
+grain does not clone ai-on-gke/grain for it, and the git proxy does not
+let it fetch that repository. So a policy that does not list
+ai-on-gke/grain admits a grain#source task (`model.CapabilityRepos`).
+
+A policy file is not rewritten by the schema migrations that retire a
+capability. A retired name in it still binds what the name became: an
+`allow` or `deny` naming `self-debug` admits or refuses both
+`api:self-debug` and `https://grain.dev/capabilities/grain#source={}`.
 
 ### The Director and grain/config
 
@@ -159,17 +167,34 @@ all of these holds it, and the Director never runs:
   which the Director reads, and which any chat proposing a config change
   writes.
 - Every grant the Director is given in `capabilities.allow`: `durable`,
-  `self-debug`, `https://grain.dev/capabilities/grain#journal`,
+  `api:self-debug`, `https://grain.dev/capabilities/grain#source={}`,
+  `https://grain.dev/capabilities/grain#journal`,
   `api:deployment:read`, `https://grain.dev/capabilities/grain#health`,
-  `bootstrap-playbooks` and `api:ci-read`, plus any your build adds.
+  `https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}` and `api:ci-read`, plus any your build adds.
   A held task's log line names the one that refused it.
-- `open` in `network`, unless the Director's own network has been closed.
+- The Director's network in `network`. It asks for `none`, which a
+  granule sandbox honours. A host or container sandbox cannot withhold a
+  network, so grain files the Director `open` there. A Director whose
+  network was set in its console-session settings asks for that one.
+
+Allowing a grant here does not get it past grain's built-in floor for
+the Director. The Director is never given a grant that reaches
+`merge:force`, `settings:write`, `secrets:write`, `connections:write` or
+`repos:write`, whatever this file or `settings/capabilities.yml` says
+([director.md](director.md#acting-through-grains-api)). Writing one of
+those into the Director's session holds it the same way a refusal here
+would, and the hold names the grant.
 
 `grain init workstation` writes `grain/config` and the Director's grants
 into the starter policy. It names each grant exactly, so you can see
 what it allows and remove any of them. Any task may be granted those
-grants, not only the Director. With `-network none`, init says the
-Director is held for its network.
+grants, not only the Director. Its default `-network open` writes
+`network: [open, none]`, since `none` is less reach than `open` and is
+what the Director asks for on granule. With `-network none` on a
+container sandbox, init says the Director is held for its network.
+A policy written by an older init that allows only `open` holds the
+Director on granule: add `none` to `network`, or set the Director's
+network to open in its console-session settings.
 
 A re-run keeps an existing policy file. A workstation set up by an older
 `grain init workstation` therefore still has a policy without

@@ -1,12 +1,16 @@
 # GitHub Actions CI
 
-`.github/workflows/` holds a GitHub Actions port of every workflow in
-`.grain/workflows/`, on GitHub-hosted `ubuntu-latest` runners. Grain CI
-reads only `.grain/workflows/` while that directory has workflows in it,
-so the two run side by side. Grain CI stays the merge gate until the
-deployment's per-repo setting (`ci_mode`, in grain/config) moves this
-repository to GitHub Actions. Until then, a change to a workflow belongs
-in both copies.
+This repository's CI is GitHub Actions: the workflows in
+`.github/workflows/`, on GitHub-hosted `ubuntu-latest` runners. The
+deployment's per-repo setting (`ci_mode: github`, in grain/config) makes
+the Actions checks the merge gate. They replaced grain CI's
+`.grain/workflows/`, which has been deleted; a workflow change belongs in
+`.github/workflows/` only.
+
+Grain still reviews the scheduled workflows. Each one has a declaration in
+`.grain/schedules/` that files a review task when a run of it on `main`
+ends in `failure`, `timed_out` or `startup_failure` (see "Review of failed
+scheduled runs" below).
 
 ## Operator checklist
 
@@ -64,9 +68,9 @@ in both copies.
    linux, x64, kontur-image-builder`) is registered. They also need the
    `AZURE_*` variables the workflow already reads.
 7. **Then flip the CI setting** in grain/config (`ci_mode: github` for
-   `gke-labs/granule`), and drop the `gcp#gcp-key` and `package-publish`
-   capabilities from the repository's CI jobs once nothing on grain CI
-   uses them.
+   `gke-labs/granule`; done), and drop the `gcp#gcp-key` and
+   `package-publish` entries from the repository's `ci_capabilities`
+   there. With `.grain/workflows/` gone, no grain CI job uses them.
 
 ## Secrets and variables
 
@@ -78,7 +82,7 @@ own `GITHUB_TOKEN`.
 | :--- | :--- | :--- | :--- | :--- |
 | `GCP_WIF_PROVIDER` | Variable | For the GCP workflows | `gce-build.yml`, `storage-benchmark.yml`, `disk-direct-benchmark.yml`, `e2e-ipv6-gke.yml` | Full provider resource name: `projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>`. |
 | `GCP_SA_EMAIL` | Variable | For the GCP workflows | same | The service account the provider impersonates. It replaces the `gcp#gcp-key` key file. |
-| `GCP_PROJECT_ID` | Variable | Recommended | same | The project the VMs and cluster are created in (`GCE_PROJECT` / `GKE_PROJECT`). Without it, `test/gce-build.sh` and `gce-bench.sh` use gcloud's configured project, and `e2e-ipv6-gke.yml` uses `grain-sandbox-dev`. |
+| `GCP_PROJECT_ID` | Variable | Recommended | same | The project the VMs and cluster are created in (`GCE_PROJECT` / `GKE_PROJECT`). Without it, `test/gce-build.sh`, `gce-bench.sh` and `test/e2e-ipv6.sh` use gcloud's configured project. |
 | `GHCR_TOKEN` | Secret | Optional | `release.yml` | A token with `write:packages`, used instead of `GITHUB_TOKEN` when the packages cannot grant this repository write access. |
 | `GHCR_USERNAME` | Variable | With `GHCR_TOKEN` | `release.yml` | The account `GHCR_TOKEN` belongs to. |
 | `ENABLE_GUEST_IMAGE_TESTS` | Variable | Once GHCR access is granted | `ci.yml` (`rootless-vm`, `sandbox-access-vm`) | `true` once `ghcr.io/gke-labs/granule/alpine` grants this repository read access. Until then both jobs are skipped with a notice. |
@@ -110,7 +114,7 @@ and the udev rule opens it.
 
 ### `ci.yml`: per pull request and push to `main`
 
-Ports `.grain/workflows/ci.yml`, `rootless-vm.yml` and
+Replaced grain CI's `.grain/workflows/ci.yml`, `rootless-vm.yml` and
 `sandbox-access-vm.yml`. Those last two were separate files only because
 grain gives a job that names a runner no `/dev/kvm`.
 
@@ -245,13 +249,28 @@ The organisation scans workflows on every pull request with zizmor (the
 don't persist credentials, and no expression is spliced into a `run:`
 script. Keep it that way when editing.
 
+## Review of failed scheduled runs
+
+Grain used to file a review task from the schedule triggers in
+`.grain/workflows/`. Now each scheduled Actions workflow has a
+`.grain/schedules/<name>-review.yml` declaration with a
+`github_workflow_run` trigger instead. It fires when a run of that
+workflow on `main` concludes `failure`, `timed_out` or `startup_failure`,
+and the review task reads the run's logs from grain.
+
+| Declaration | Workflow | Its schedule |
+| :--- | :--- | :--- |
+| `e2e-ipv6-review.yml` | `e2e-ipv6.yml` | daily, 03:30 UTC |
+| `base-images-review.yml` | `base-images.yml` | Mondays |
+| `guest-suites-review.yml` | `guest-suites.yml` | Mondays |
+| `github-runner-images-review.yml` | `github-runner-images.yml` | weekly (gated on the self-hosted builder) |
+
+A new scheduled workflow needs a declaration of its own to be reviewed.
+
 ## Reading Actions runs from grain
 
-While this repository is `ci_mode: grain`, grain shows the Actions
-checks on a pull request (`grain pr open` lists every check by name with
-its conclusion). It doesn't list or log the runs themselves:
-`grain ci list --provider github-actions`, `grain ci show` and `grain ci
-log` read Actions runs only for a `ci_mode: github` repository, and
-`grain pr status` and `grain ci wait` report grain CI only. Once the
-setting flips, those commands read the Actions runs, and `grain ci wait`
-waits on the GitHub checks that gate the branch.
+With `ci_mode: github`, `grain ci list --provider github-actions`,
+`grain ci show` and `grain ci log` read this repository's Actions runs,
+and `grain ci wait` waits on the GitHub checks that gate the branch.
+`grain ci retrigger` and `grain ci run-job` are grain-CI-only and don't
+apply here.
