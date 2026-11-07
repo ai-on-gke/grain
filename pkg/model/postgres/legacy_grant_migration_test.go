@@ -160,6 +160,7 @@ var retiredGrants = []struct {
 	{103, "gemini-key", []string{model.GCPGeminiKeyGrant}},
 	{115, "self-debug", []string{"api:self-debug", model.GrainSourceGrant}},
 	{118, "bootstrap-playbooks", []string{model.BootstrapPlaybooksGrant}},
+	{120, "github-credential:release-bot", []string{model.RepoCredentialGrant("release-bot")}},
 }
 
 // retiredAs is what a store migration rewrote name to: retiredGrants'
@@ -636,4 +637,55 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 		t.Fatalf("staterepo.Import of schema-96 export: %v", err)
 	}
 	assertMigrated(t, importedStore, importedDB)
+}
+
+func TestMigrate120GitHubCredentialToRepoServer(t *testing.T) {
+	store, db, ctx := openStore(t)
+
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := store.PutConfig(ctx, model.Config{
+		DefaultCapabilities: []string{"github-credential:release-bot", "read-issues"},
+		ConsoleSessions: []model.ConsoleSession{
+			{ID: "director", Title: "Director", Capabilities: []string{"github-credential:ops-bot"}},
+		},
+		CapabilityPolicy: model.CapabilityPolicy{
+			Rules: []model.CapabilityPolicyRule{
+				{Capability: "github-credential:release-bot", AllowUntrusted: true},
+			},
+			Catalogue: &model.CapabilityCatalogue{
+				Defaults: model.CatalogueDefaults{
+					Task: []string{"github-credential:release-bot"},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:                widgets,
+		DefaultCapabilities: []string{"github-credential:widgets-bot"},
+		CICapabilities:      []string{"github-credential:ci-bot"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, "INSERT INTO `task_grant` (`task_id`, `capability`, `via`) VALUES (?, ?, 'label')", "t1", "github-credential:release-bot"); err != nil {
+		t.Fatal(err)
+	}
+
+	rewindSchemaTo(t, ctx, db, 119)
+	if err := model.New(db).Init(ctx); err != nil {
+		t.Fatalf("migrating 119 -> 120: %v", err)
+	}
+
+	releaseGrant := model.RepoCredentialGrant("release-bot")
+	if got := grantRows(t, ctx, db, "task_grant", "task_id")["t1"]; !slices.Equal(got, []string{releaseGrant}) {
+		t.Errorf("task_grant = %v, want [%s]", got, releaseGrant)
+	}
+	gotCfg, err := store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{releaseGrant, "read-issues"}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
+		t.Errorf("DefaultCapabilities = %v, want %v", gotCfg.DefaultCapabilities, want)
+	}
 }

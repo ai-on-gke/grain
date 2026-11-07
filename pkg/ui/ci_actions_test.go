@@ -17,6 +17,7 @@ package ui_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -685,5 +686,23 @@ func TestCIRunLogSaysWhyTheForgeServedNoLog(t *testing.T) {
 	code, body = asAgent(t, srv2, "reader", http.MethodGet, "/api/ci/runs/gha:acme:widgets:42/log?job=publish", "", "")
 	if code != http.StatusBadGateway || !strings.Contains(body, "no bytes") {
 		t.Errorf("empty log = %d %s; want 502 saying it came back empty", code, body)
+	}
+	// Nothing back is not cached as the log: the next read asks again.
+	before := forge2.count("log")
+	asAgent(t, srv2, "reader", http.MethodGet, "/api/ci/runs/gha:acme:widgets:42/log?job=publish", "", "")
+	if after := forge2.count("log"); after != before+1 {
+		t.Errorf("a second read of an empty log asked the forge %d more times; want 1 (not served from cache)", after-before)
+	}
+
+	// The REST client's own empty answer names the status, the hosts and
+	// who the headers say sent it.
+	forge3 := newFakeActions(now)
+	forge3.logErr = fmt.Errorf("%w: %w", github.ErrEmptyJobLog, &github.Error{Status: http.StatusOK,
+		URL:  "GET https://ghe.example.test/api/v3/repos/acme/widgets/actions/jobs/701/logs -> https://blobs.example.test",
+		Note: "content-type text/plain, server blobstore"})
+	srv3, _, _ := actionsServer(t, forge3, now)
+	code, body = asAgent(t, srv3, "reader", http.MethodGet, "/api/ci/runs/gha:acme:widgets:42/log?job=publish", "", "")
+	if code != http.StatusBadGateway || !strings.Contains(body, "no bytes at all, HTTP 200 from ghe.example.test, redirected to blobs.example.test (content-type text/plain, server blobstore)") {
+		t.Errorf("empty log from the REST client = %d %s; want 502 naming the status, both hosts and the server", code, body)
 	}
 }

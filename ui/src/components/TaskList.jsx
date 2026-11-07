@@ -131,6 +131,10 @@ export default function TaskList({
   showError,
   landmark = true,
   footer = null,
+  // countFloor is whether closed tasks this list could show are still
+  // to be paged in (App's closed pager has more), which makes the count
+  // over its rows a floor ("200+") rather than a total.
+  countFloor = false,
 }) {
   const [notifyOpen, setNotifyOpen] = useState(false);
   // A row's own sub-case control (state.js's reasonControl), pressed from
@@ -385,7 +389,13 @@ export default function TaskList({
           is showing. */}
       <ListHeader
         title={title}
-        count={tasksFailed ? null : visibleIds.length}
+        count={
+          tasksFailed
+            ? null
+            : countFloor
+              ? `${visibleIds.length}+`
+              : visibleIds.length
+        }
         icon={<ItemGlyph kind="tasks" size={20} />}
       />
       {!tasksFailed && tasks.length > 0 && (
@@ -559,10 +569,12 @@ export default function TaskList({
                   : "No tasks in this state."}
             </ListEmpty>
           )}
-          {/* The closed-tasks pager only where closed work is showing. */}
-          {(stateFilter === "closed" ||
-            topLevel.some((t) => t.state === "closed")) &&
-            footer}
+          {/* The closed-tasks pager, which decides for itself whether
+              this list could show closed work (App's showsClosed) --
+              not whether rows of it are showing yet: a list narrowed to
+              a repo or a search whose closed tasks are all older than
+              the pages held shows none until the pager reaches them. */}
+          {footer}
         </>
       )}
     </Root>

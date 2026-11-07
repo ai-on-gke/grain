@@ -535,6 +535,12 @@ func retiredInProcessNames(g string) []string {
 	if IsBootstrapPlaybooksGrant(grant) && !slices.Contains(out, "bootstrap-playbooks") {
 		out = append(out, "bootstrap-playbooks")
 	}
+	if cred, ok := ParseRepoCredentialGrant(grant); ok {
+		legacy := GitCredentialCapabilityPrefix + cred
+		if !slices.Contains(out, legacy) {
+			out = append(out, legacy)
+		}
+	}
 	sort.Strings(out)
 	return out
 }
