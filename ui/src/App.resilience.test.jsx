@@ -20,7 +20,7 @@
 //
 // Part of the App suite -- see App.test.jsx for why it is several files.
 
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App, { POLL_INTERVAL_MS } from "./App.jsx";
@@ -317,5 +317,97 @@ describe("App resilience", () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/something that isn't grain/)).toBeInTheDocument();
     expect(document.querySelector(".loading-screen")).toBeNull();
+  });
+
+  it("says tasks could not be loaded on dashboards and the rail when /api/tasks fails, then replaces the message when a retry succeeds", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    window.history.replaceState(null, "", "/boards/ops");
+    setupApi(
+      initialTasks,
+      [],
+      [],
+      [],
+      [
+        {
+          id: "ops",
+          name: "Operations",
+          kind: "panels",
+          folder: "",
+          orderKey: 1,
+          panels: [
+            { id: "p1", kind: "states", title: "States", orderKey: 1 },
+            { id: "p2", kind: "list", title: "Queue", orderKey: 2 },
+            { id: "p3", kind: "gantt", title: "Timeline", orderKey: 3 },
+          ],
+        },
+      ],
+    );
+    const base = api.getMockImplementation();
+    let failTasks = true;
+    api.mockImplementation((p, opts) => {
+      if (failTasks && p === "/api/tasks") {
+        const err = new Error("synthetic tasks 500");
+        err.status = 500;
+        return Promise.reject(err);
+      }
+      return base(p, opts);
+    });
+
+    render(<App />);
+    await runTimers();
+
+    // Advance past the 5-second error banner timeout: the page and rail
+    // must still explain that tasks failed to load rather than claiming 0.
+    await runTimers(6000);
+    expect(document.querySelector(".error-banner")).toBeNull();
+    expect(screen.queryByText("Nothing here right now.")).toBeNull();
+    expect(screen.queryByText("No tasks yet.")).toBeNull();
+    expect(document.querySelectorAll(".panel-state")).toHaveLength(0);
+    expect(
+      screen.getAllByText(
+        "The tasks could not be loaded (synthetic tasks 500).",
+      ),
+    ).toHaveLength(3);
+    const railTasks = screen.getByRole("button", { name: /^Tasks/ });
+    expect(railTasks).toHaveTextContent("could not be loaded");
+    expect(railTasks).not.toHaveTextContent("0");
+
+    // Once /api/tasks answers, Retry replaces the failure with the tasks.
+    failTasks = false;
+    fireEvent.click(screen.getAllByRole("button", { name: "Retry" })[0]);
+    await runTimers();
+
+    expect(screen.queryByText(/The tasks could not be loaded/)).toBeNull();
+    expect(screen.getAllByText("Fix bug").length).toBeGreaterThan(0);
+    expect(railTasks).not.toHaveTextContent("could not be loaded");
+  });
+
+  it("replaces the load failure with tasks on the next successful poll", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    setupApi(initialTasks);
+    const base = api.getMockImplementation();
+    let failTasks = true;
+    api.mockImplementation((p, opts) => {
+      if (failTasks && p === "/api/tasks") {
+        const err = new Error("synthetic tasks 500");
+        err.status = 500;
+        return Promise.reject(err);
+      }
+      return base(p, opts);
+    });
+
+    render(<App />);
+    await runTimers();
+    expect(
+      screen.getByText("The tasks could not be loaded (synthetic tasks 500)."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("No tasks in this state.")).toBeNull();
+
+    failTasks = false;
+    await runTimers(POLL_INTERVAL_MS * 4);
+    expect(screen.queryByText(/The tasks could not be loaded/)).toBeNull();
+    expect(screen.getByText("Fix bug")).toBeInTheDocument();
   });
 });

@@ -594,12 +594,16 @@ func hostNameOnly(h string) string {
 // ReleaseTagsForBranch returns the GitHub release tag candidate(s) for a target
 // branch, channel, or version, ordered from preferred to legacy fallback.
 //
-// Moving branch channels map to `channel-<tag>` (for example `channel-main` and
-// `channel-candidate`), avoiding the git ref ambiguity created when a release
-// tag named `main` shadows branch `main`. If `channel-<tag>` is 404 on a
-// repository still using pre-channel tag names, the caller may query `<tag>`
-// through the same REST `/releases/tags/<tag>` endpoint (never via git ref
-// resolution).
+// Moving branch channels map to `channel-<relTag>` (for example `channel-main`,
+// `channel-candidate`, and `channel-rc-v3.2`), avoiding the git ref ambiguity
+// created when a release tag named `main` shadows branch `main`. Slashes in
+// branch names map to `-` rather than TagForBranch's `..` because GitHub / GHES
+// release tags are backed by git refs (`refs/tags/<tag>`), where
+// `git-check-ref-format` forbids `..`; local Docker tags still use
+// TagForBranch's `..` so ChannelForRef can invert them. If `channel-<relTag>`
+// is 404 on a repository still using pre-channel tag names, the caller may
+// query `<relTag>` through the same REST `/releases/tags/<tag>` endpoint (never
+// via git ref resolution).
 func ReleaseTagsForBranch(branch string) ([]string, error) {
 	branch = strings.TrimSpace(branch)
 	if err := validateBranch(branch); err != nil {
@@ -615,10 +619,11 @@ func ReleaseTagsForBranch(branch string) ([]string, error) {
 	if len(tag) > maxTagLen {
 		return nil, fmt.Errorf("branch %q makes a %d-character tag, over the %d-character limit", branch, len(tag), maxTagLen)
 	}
-	if strings.HasPrefix(tag, "channel-") {
-		return []string{tag}, nil
+	if !strings.Contains(branch, "/") && strings.HasPrefix(branch, "channel-") {
+		return []string{branch}, nil
 	}
-	return []string{"channel-" + tag, tag}, nil
+	relTag := strings.ReplaceAll(branch, "/", "-")
+	return []string{"channel-" + relTag, relTag}, nil
 }
 
 // ReleaseRepositoryForImage maps a container image repository to the GitHub
