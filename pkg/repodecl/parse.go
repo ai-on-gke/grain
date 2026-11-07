@@ -430,6 +430,25 @@ func parseCapabilities(f file, repo model.RepoRef, caps []string) ([]model.RepoR
 				target, _ = model.RepoWriteTarget(c)
 				write = true
 			}
+		case model.IsGrainCIGrant(c):
+			// grain#ci (and its retired grain-ci alias) is the merge-gate grant
+			// a repository's CI Mode attaches automatically -- never a hand-held
+			// task capability: applyGrainCIGrant strips it on a ci_mode: github
+			// repository, and CreateTask refuses it when copied from a template.
+			// A .grain template or schedule that names it wants read-only CI
+			// access to its own declaring repository.
+			if model.IsCapabilityRef(c) {
+				if err := model.CheckCapabilityGrantSyntax(c); err != nil {
+					errs = append(errs, fmt.Errorf("%s: capabilities: %v", f.path, err))
+					continue
+				}
+			}
+			ciRead := model.APIGrantPrefix + "ci-read@" + repo.String()
+			if !seenGrants[ciRead] {
+				seenGrants[ciRead] = true
+				grants = append(grants, model.Grant{Capability: ciRead, Via: model.GrantSource(f.path)})
+			}
+			continue
 		case model.IsCapabilityRef(c):
 			// A capability reference (design/spec/capabilities/capabilities.spec.md §2.2):
 			// its grammar is checked here; its with: arguments against

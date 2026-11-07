@@ -500,8 +500,8 @@ func TestCompositionCreditsGrainCIToTheRepo(t *testing.T) {
 		t.Fatalf("composing draft schedule: %v", err)
 	}
 	caps := field(t, draft.Tasks[0], "capabilities")
-	if !slices.Equal(caps.Values, []string{"read-issues", model.GrainCIGrant}) {
-		t.Errorf("values = %v, want [read-issues grain-ci]", caps.Values)
+	if !slices.Equal(caps.Values, []string{model.GitHubReadIssuesGrant, model.GrainCIGrant}) {
+		t.Errorf("values = %v, want [github#read-issues grain-ci]", caps.Values)
 	}
 	if !slices.Equal(caps.Sources, []string{"schedule", "repo"}) {
 		t.Errorf("sources = %v, want [schedule repo]", caps.Sources)

@@ -72,7 +72,7 @@ Before capability servers, grain had a registry of in-process providers, each gr
 
 `daemon.CapabilityProviders` still registers these:
 
-- `github-sandbox` and `read-issues` (becoming `#sandbox-repo` and `#read-issues` on an in-process `…/github` server);
+- `github-sandbox` (becoming `#sandbox-repo` on the in-process `…/github` server, which already answers `#read-issues`);
 - the CI alias `release-gate-read` (retiring with `…/api` references in unified-grants slices 2–4);
 - `console`, `priority-dispatch` and `durable`, which are decided to become the task settings `hosting` and `admission` (§4.1).
 

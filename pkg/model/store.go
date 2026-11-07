@@ -5138,6 +5138,9 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 		if IsBootstrapPlaybooksGrant(name) {
 			mayReadPlaybooks = true
 		}
+		if IsGitHubReadIssuesGrant(name) {
+			mayReadIssues = true
+		}
 		if IsGrainSQLGrant(name) {
 			mayReadDB = true
 		}
