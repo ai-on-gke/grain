@@ -22,6 +22,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -32,6 +33,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/releaseapproval"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -410,5 +412,156 @@ func TestAnActionsRepoThatNeverSetACIModeIsApprovedThroughActions(t *testing.T) 
 	}
 	if d := forge.dispatched(); len(d) != 1 {
 		t.Fatalf("dispatched %d times, want once", len(d))
+	}
+}
+
+// Approving a staged release from the CLI or API before the watcher has
+// raised release.pending records the decision in the store, keyed by
+// (repo, version, commit): the next watcher poll does not raise
+// release.pending for that commit, and a second Approve past the signed
+// record's 15-minute expiry (or after a restart) is still refused while the
+// dispatch is outstanding (docs/test-runs/2026-11-04-release-approval.md, F5).
+// Re-staging the same version at a new commit raises and dispatches at once;
+// a commit still pending past ReleaseApprovalHold (its promote run failed)
+// raises and can be dispatched again.
+func TestACLIApprovalBeforeTheWatcherPollsNeitherRaisesNorDispatchesAgain(t *testing.T) {
+	resetReleaseWatch(t)
+	ctx := context.Background()
+	store := openTestStoreForOrchestrator(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	cfg := model.DefaultConfig()
+	cfg.TargetRepos = []string{repo.String()}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: repo, CIMode: model.CIModeGitHub}); err != nil {
+		t.Fatal(err)
+	}
+
+	commit1 := strings.Repeat("1", 40)
+	forge := &fixtureForge{repo: repo.String(), tags: map[string]fixtureTag{
+		"v2.6.0-pending": {commit: commit1, message: "Release v2.6.0 pending approval\n\nQualification: PASS"},
+	}}
+	client := github.NewClient(forge, nil)
+	deps := Deps{Store: store, Client: client}
+
+	now := time.Now().UTC().Truncate(time.Second).Add(-50 * time.Hour)
+	dataDir := t.TempDir()
+	person := model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com"}
+	uic := ui.NewClient(ui.Config{Actor: person, DataDir: dataDir, GitHubPullRequests: client}, store)
+	uic.Now = func() time.Time { return now }
+
+	subject := model.NotificationSubject(model.FamilyReleasePending, "v2.6.0")
+
+	// 1. Approve-then-poll: approve before reconcileReleasePending has ever
+	// seen v2.6.0-pending, then run the watcher poll.
+	decision, err := uic.DecideRelease(ui.WithPrincipal(ctx, person), repo.String(), "v2.6.0", true,
+		ui.ReleaseApproval{AllowBreaking: true})
+	if err != nil {
+		t.Fatalf("CLI/API approval before watcher poll: %v", err)
+	}
+	if decision.Dispatched == nil || decision.Dispatched.Commit != commit1 || !decision.AllowBreaking {
+		t.Fatalf("decision = %+v, want a dispatch for %s with allow_breaking", decision, commit1)
+	}
+	if d := forge.dispatched(); len(d) != 1 {
+		t.Fatalf("dispatched %d times, want 1", len(d))
+	}
+
+	now = now.Add(releasePendingPollInterval)
+	if err := reconcileReleasePending(ctx, deps, now); err != nil {
+		t.Fatalf("reconcileReleasePending after CLI approval: %v", err)
+	}
+	if forge.reads == 0 {
+		t.Fatal("watcher did not poll repository tags")
+	}
+	if open, err := store.OpenNotification(ctx, subject); err != nil || open != nil {
+		t.Fatalf("watcher raised %s for an already-approved commit: %+v (err %v)", subject, open, err)
+	}
+
+	// 2. Approve-after-15-minutes (and across a fresh Client / restart):
+	// past releaseapproval.Lifetime while promote-release.yml still has
+	// v2.6.0-pending at commit1, neither the watcher raises nor Approve
+	// dispatches a second time.
+	now = now.Add(releaseapproval.Lifetime) // 25m after the approval (> 15m)
+	if err := reconcileReleasePending(ctx, deps, now); err != nil {
+		t.Fatalf("reconcileReleasePending after 25m: %v", err)
+	}
+	if open, err := store.OpenNotification(ctx, subject); err != nil || open != nil {
+		t.Fatalf("watcher raised %s 25m after approval: %+v (err %v)", subject, open, err)
+	}
+
+	restarted := ui.NewClient(ui.Config{Actor: person, DataDir: dataDir, GitHubPullRequests: client}, store)
+	restarted.Now = func() time.Time { return now }
+	for name, c := range map[string]*ui.Client{"same client": uic, "restarted client": restarted} {
+		_, err := c.DecideRelease(ui.WithPrincipal(ctx, person), repo.String(), "v2.6.0", true,
+			ui.ReleaseApproval{AllowBreaking: true})
+		var valErr *ui.ValidationError
+		if !errors.As(err, &valErr) || !strings.Contains(err.Error(), "v2.6.0 was already answered") {
+			t.Errorf("%s after 25m: err = %v, want ValidationError saying v2.6.0 was already answered", name, err)
+		}
+	}
+	if d := forge.dispatched(); len(d) != 1 {
+		t.Fatalf("dispatched %d times after >15m retries, want 1", len(d))
+	}
+
+	// 3. Re-staging v2.6.0-pending at a new commit raises and allows
+	// approving immediately without waiting out ReleaseApprovalHold.
+	commit2 := strings.Repeat("2", 40)
+	forge.setTag("v2.6.0-pending", commit2, "Release v2.6.0 re-staged\n\nQualification: PASS")
+	now = now.Add(releasePendingPollInterval)
+	if err := reconcileReleasePending(ctx, deps, now); err != nil {
+		t.Fatalf("reconcileReleasePending for re-staged commit: %v", err)
+	}
+	if open, err := store.OpenNotification(ctx, subject); err != nil || open == nil {
+		t.Fatalf("re-staged commit did not raise %s: %+v (err %v)", subject, open, err)
+	}
+	if _, err := restarted.DecideRelease(ui.WithPrincipal(ctx, person), repo.String(), "v2.6.0", true,
+		ui.ReleaseApproval{AllowBreaking: true}); err != nil {
+		t.Fatalf("approving re-staged commit: %v", err)
+	}
+	if open, _ := store.OpenNotification(ctx, subject); open != nil {
+		t.Errorf("%s still open after approving re-staged commit", subject)
+	}
+	if d := forge.dispatched(); len(d) != 2 {
+		t.Fatalf("dispatched %d times after re-staged commit, want 2", len(d))
+	}
+
+	// 4. If the promote run failed and v2.6.0-pending still points at
+	// commit2 past ReleaseApprovalHold, the watcher re-raises and a person
+	// may dispatch again.
+	now = now.Add(model.ReleaseApprovalHold)
+	if err := reconcileReleasePending(ctx, deps, now); err != nil {
+		t.Fatalf("reconcileReleasePending after ReleaseApprovalHold: %v", err)
+	}
+	if open, err := store.OpenNotification(ctx, subject); err != nil || open == nil {
+		t.Fatalf("expired hold did not re-raise %s: %+v (err %v)", subject, open, err)
+	}
+	if _, err := restarted.DecideRelease(ui.WithPrincipal(ctx, person), repo.String(), "v2.6.0", true,
+		ui.ReleaseApproval{AllowBreaking: true}); err != nil {
+		t.Fatalf("re-approving after ReleaseApprovalHold: %v", err)
+	}
+	if d := forge.dispatched(); len(d) != 3 {
+		t.Fatalf("dispatched %d times after ReleaseApprovalHold retry, want 3", len(d))
+	}
+
+	// 5. If the hold expires again and a person dismisses the re-raised
+	// notification directly without dispatching, the watcher honours that
+	// dismissal rather than re-raising on the next 10-minute poll.
+	now = now.Add(model.ReleaseApprovalHold)
+	if err := reconcileReleasePending(ctx, deps, now); err != nil {
+		t.Fatalf("reconcileReleasePending after second ReleaseApprovalHold: %v", err)
+	}
+	if open, err := store.OpenNotification(ctx, subject); err != nil || open == nil {
+		t.Fatalf("second expired hold did not re-raise %s: %+v (err %v)", subject, open, err)
+	}
+	if _, err := store.ClearNotification(ctx, subject, model.PrincipalString(person)); err != nil {
+		t.Fatalf("ClearNotification (human dismiss): %v", err)
+	}
+	now = time.Now().UTC().Add(releasePendingPollInterval)
+	if err := reconcileReleasePending(ctx, deps, now); err != nil {
+		t.Fatalf("reconcileReleasePending after human dismiss: %v", err)
+	}
+	if open, err := store.OpenNotification(ctx, subject); err != nil || open != nil {
+		t.Fatalf("watcher re-raised %s after human dismiss: %+v (err %v)", subject, open, err)
 	}
 }
