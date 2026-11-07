@@ -607,7 +607,7 @@ func (p CapabilityPolicy) VerdictForKind(ref, kind string, servers ...map[string
 	if kind != "" && kind != CapabilityRunCI && ref == RepoReadRef {
 		return CapabilityPolicyCIOnly
 	}
-	if _, ok := CIGrantRuleFor(ref); ok && kind != "" && kind != CapabilityRunCI {
+	if rule, ok := CIGrantRuleFor(ref); ok && rule.IsCIOnly() && kind != "" && kind != CapabilityRunCI {
 		return CapabilityPolicyCIOnly
 	}
 	refs := equivalentCapabilityRefs(ref, servers)

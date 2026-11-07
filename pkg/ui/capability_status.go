@@ -22,7 +22,8 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
 	consolecap "github.com/ai-on-gke/grain/pkg/capability/console"
 	"github.com/ai-on-gke/grain/pkg/capability/durable"
-	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
+	// The github server's #sandbox-repo method and its model.CIGrantRule.
+	_ "github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/imagesigning"
 	modelproxycap "github.com/ai-on-gke/grain/pkg/capability/modelproxy"
@@ -357,9 +358,7 @@ func capabilityDisplayName(id string) string {
 // built the way cmd/grain's capabilityProviders builds them for
 // dispatch, so their specs can be read back out.
 func capabilityProviderCatalog() []model.CapabilityProvider {
-	providers := []model.CapabilityProvider{
-		githubsandbox.NewProvider(githubsandbox.Config{}),
-	}
+	var providers []model.CapabilityProvider
 	providers = append(providers, admincaps.Providers()...)
 	providers = append(providers,
 		registrypush.NewWithConfig(registrypush.Config{}),
@@ -406,8 +405,8 @@ func ciOnlyCapability(name string) bool {
 	if _, ok := model.RepoWriteTarget(name); ok {
 		return true
 	}
-	if _, ok := model.CIGrantRuleFor(name); ok {
-		return true
+	if rule, ok := model.CIGrantRuleFor(name); ok {
+		return rule.IsCIOnly()
 	}
 	for _, spec := range capabilityCatalog() {
 		if spec.Name == name {

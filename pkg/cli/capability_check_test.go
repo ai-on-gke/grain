@@ -27,13 +27,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/daemon"
 
-	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -70,21 +68,15 @@ func TestCapabilityCheckOfRetiredGeminiKeyFindsNoProvider(t *testing.T) {
 	}
 }
 
-// A registered provider answers -- and its answer is carried back as it
-// stands, including the names of the credentials it tried to
-// authenticate as, which is what the pane reporting a refusal tells an
-// operator to replace.
-func TestCapabilityCheckCarriesTheProvidersOwnAnswer(t *testing.T) {
+// github-sandbox was retired onto the in-process github server's
+// github#sandbox-repo (schema migration 120), so no deployment registers a
+// provider for the bare name any more.
+func TestCapabilityCheckOfRetiredGitHubSandboxFindsNoProvider(t *testing.T) {
 	t.Parallel()
 	adapter := daemon.CapabilityCheckAdapter{Live: testLiveConfig(daemon.Config{}), Creds: noCredentials{}}
 
-	result, err := adapter.CheckCapability(context.Background(), "github-sandbox")
-	if err == nil {
-		t.Fatal("expected a check with no App secrets stored to fail")
-	}
-	want := []string{githubsandbox.DefaultAppIDCredential, githubsandbox.DefaultPrivateKeyCredential}
-	if !slices.Equal(result.Credentials, want) {
-		t.Errorf("Credentials = %v, want %v named even on the failure path", result.Credentials, want)
+	if _, err := adapter.CheckCapability(context.Background(), "github-sandbox"); err == nil || !strings.Contains(err.Error(), `registers no provider for "github-sandbox"`) {
+		t.Fatalf("err = %v, want no provider for github-sandbox", err)
 	}
 }
 

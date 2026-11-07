@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -71,12 +72,17 @@ type Method struct {
 	// .grain, an older grain/config, a capability policy entry). The store
 	// migration rewriting rows already stored is core's (pkg/model).
 	Aliases []string
-	// CI, when set, is the rule that decides which CI jobs the method is
-	// handed to (model.CIGrantRule): it is CI-only, and given to a job
-	// only on the events the rule names. Register declares it to grain,
-	// which enforces it ahead of the deployment's capability policy, so
-	// a policy can narrow the method but never widen it.
+	// CI, when set, is the rule that decides how a CI job is handed the
+	// method (model.CIGrantRule): whether it is CI-only, which events it
+	// answers, and whether repo_config.ci_capabilities must grant it.
+	// Register declares it to grain, which enforces it ahead of the
+	// deployment's capability policy, so a policy can narrow the method
+	// but never widen it.
 	CI *model.CIGrantRule
+	// Reap, when set, sweeps leaked external resources minted by this
+	// in-process method created strictly before the daemon's shared reaper
+	// boundary (daemon.ReapCapabilitiesBefore), matching model.Reaper.
+	Reap func(ctx context.Context, creds model.CredentialResolver, before time.Time) ([]string, error)
 }
 
 // Ref is the method's capability reference: <Server>#<method>.

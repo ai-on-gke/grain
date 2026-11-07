@@ -199,7 +199,7 @@ func TestCapabilityStatusReportsWhichCapabilitiesCanBeChecked(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	settings := decode[ui.Settings](t, rec)
-	for _, id := range []string{"github-sandbox"} {
+	for _, id := range []string{"image-signing"} {
 		if !capabilityStatus(t, settings.Capabilities, id).Checkable {
 			t.Errorf("%s: Checkable = false, but it holds a standing credential that can go stale", id)
 		}
@@ -219,8 +219,8 @@ func TestCapabilityStatusIsUncheckableWithNoCheckerWired(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	settings := decode[ui.Settings](t, rec)
-	if capabilityStatus(t, settings.Capabilities, "github-sandbox").Checkable {
-		t.Error("github-sandbox: Checkable = true on a UI with nothing to run a check through")
+	if capabilityStatus(t, settings.Capabilities, "image-signing").Checkable {
+		t.Error("image-signing: Checkable = true on a UI with nothing to run a check through")
 	}
 }
 

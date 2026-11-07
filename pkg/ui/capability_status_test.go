@@ -30,7 +30,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
+	"github.com/ai-on-gke/grain/pkg/capability/imagesigning"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -47,7 +47,7 @@ func capabilityStatus(t *testing.T, statuses []ui.CapabilityStatus, id string) u
 	return ui.CapabilityStatus{}
 }
 
-// The per-task picker (GET /api/config) and Settings' Capabilities tab
+// The per-task and CI pickers (GET /api/config) and Settings' Capabilities tab
 // used to be entirely independent listings, so a deployment could report
 // a capability as "Not ready -- Needs: ..." on one pane while the
 // other offered it as an ordinary tickable row. Ticking it filed a
@@ -63,18 +63,19 @@ func TestConfigPickerReportsACapabilityThisDeploymentCannotHonour(t *testing.T) 
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	cfg := decode[struct {
-		Capabilities []ui.Capability `json:"capabilities"`
+		Capabilities   []ui.Capability `json:"capabilities"`
+		CICapabilities []ui.Capability `json:"ciCapabilities"`
 	}](t, rec)
 
-	sandbox := pickerRow(t, cfg.Capabilities, "github-sandbox")
-	if sandbox.Ready == nil {
-		t.Fatal("github-sandbox: Ready is nil -- the picker was told nothing about readiness")
+	signing := pickerRow(t, cfg.CICapabilities, model.ImageSigningRef+"={}")
+	if signing.Ready == nil {
+		t.Fatal("image-signing: Ready is nil -- the picker was told nothing about readiness")
 	}
-	if *sandbox.Ready {
-		t.Error("github-sandbox: Ready = true with no App secrets stored on this deployment")
+	if *signing.Ready {
+		t.Error("image-signing: Ready = true with no cosign secrets stored on this deployment")
 	}
-	if want := []string{githubsandbox.DefaultAppIDCredential, githubsandbox.DefaultPrivateKeyCredential}; !reflect.DeepEqual(sandbox.Needs, want) {
-		t.Errorf("github-sandbox: Needs = %v, want %v", sandbox.Needs, want)
+	if want := []string{imagesigning.KeyCredential, imagesigning.PasswordCredential}; !reflect.DeepEqual(signing.Needs, want) {
+		t.Errorf("image-signing: Needs = %v, want %v", signing.Needs, want)
 	}
 
 	// A capability that needs no deployment configuration at all is
@@ -112,7 +113,7 @@ func TestCapabilitiesListsEveryKnownCapabilityOnAFreshStore(t *testing.T) {
 		ids = append(ids, s.ID)
 	}
 	sort.Strings(ids)
-	want := []string{"console", "durable", "github-sandbox", "image-signing", "package-publish", "priority-dispatch", "read-issues", "registry-push"}
+	want := []string{"console", "durable", "image-signing", "package-publish", "priority-dispatch", "read-issues", "registry-push"}
 	if !reflect.DeepEqual(ids, want) {
 		t.Fatalf("capability ids = %v, want %v", ids, want)
 	}
@@ -160,7 +161,7 @@ func TestCapabilitiesReportNothingPendingWithNoRunningConfig(t *testing.T) {
 	}
 }
 
-func TestCapabilitiesGithubSandboxFlagsMissingSecretsWhenColocatedWithAStore(t *testing.T) {
+func TestCapabilitiesImageSigningFlagsMissingSecretsWhenColocatedWithAStore(t *testing.T) {
 	t.Parallel()
 	c, _, ctx := testClient(t)
 	c.Config.Secrets = secrets.New(t.TempDir())
@@ -169,31 +170,31 @@ func TestCapabilitiesGithubSandboxFlagsMissingSecretsWhenColocatedWithAStore(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	status := capabilityStatus(t, got.Capabilities, "github-sandbox")
+	status := capabilityStatus(t, got.Capabilities, "image-signing")
 	if status.Ready {
-		t.Fatalf("github-sandbox: Ready = true with no secrets set, want false")
+		t.Fatalf("image-signing: Ready = true with no secrets set, want false")
 	}
-	want := []string{githubsandbox.DefaultAppIDCredential, githubsandbox.DefaultPrivateKeyCredential}
+	want := []string{imagesigning.KeyCredential, imagesigning.PasswordCredential}
 	sort.Strings(want)
 	got2 := append([]string(nil), status.MissingSecrets...)
 	sort.Strings(got2)
 	if !reflect.DeepEqual(got2, want) {
-		t.Fatalf("github-sandbox: MissingSecrets = %v, want %v", status.MissingSecrets, want)
+		t.Fatalf("image-signing: MissingSecrets = %v, want %v", status.MissingSecrets, want)
 	}
 
-	if err := c.Config.Secrets.Set("github-app", "app-id", []byte("123")); err != nil {
+	if err := c.Config.Secrets.Set("image-signing", "key", []byte("-----BEGIN KEY-----")); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Config.Secrets.Set("github-app", "private-key", []byte("-----BEGIN KEY-----")); err != nil {
+	if err := c.Config.Secrets.Set("image-signing", "password", []byte("secret")); err != nil {
 		t.Fatal(err)
 	}
 	got, err = c.GetSettings(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	status = capabilityStatus(t, got.Capabilities, "github-sandbox")
+	status = capabilityStatus(t, got.Capabilities, "image-signing")
 	if !status.Ready {
-		t.Fatalf("github-sandbox: Ready = false once both secrets are set (status: %+v)", status)
+		t.Fatalf("image-signing: Ready = false once both secrets are set (status: %+v)", status)
 	}
 }
 
@@ -207,15 +208,15 @@ func TestCapabilitiesReportNothingMissingWithNoSecretsStoreColocated(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	status := capabilityStatus(t, got.Capabilities, "github-sandbox")
+	status := capabilityStatus(t, got.Capabilities, "image-signing")
 	if len(status.MissingSecrets) != 0 {
-		t.Fatalf("github-sandbox: MissingSecrets = %v, want none reported with no store to check", status.MissingSecrets)
+		t.Fatalf("image-signing: MissingSecrets = %v, want none reported with no store to check", status.MissingSecrets)
 	}
 	// Nothing to offer either: with no store colocated there is nowhere
 	// to write a value, so the pane gets no field to write it in rather
 	// than one whose every use would 404 (grain/task-110).
 	if len(status.Secrets) != 0 {
-		t.Fatalf("github-sandbox: Secrets = %+v, want none offered with no store to write to", status.Secrets)
+		t.Fatalf("image-signing: Secrets = %+v, want none offered with no store to write to", status.Secrets)
 	}
 }
 
@@ -227,7 +228,7 @@ func TestCapabilitiesReportWhereEachRequiredSecretIsWritten(t *testing.T) {
 	t.Parallel()
 	c, _, ctx := testClient(t)
 	c.Config.Secrets = secrets.New(t.TempDir())
-	if err := c.Config.Secrets.Set("github-app", "app-id", []byte("123")); err != nil {
+	if err := c.Config.Secrets.Set("image-signing", "key", []byte("-----BEGIN KEY-----")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -238,13 +239,13 @@ func TestCapabilitiesReportWhereEachRequiredSecretIsWritten(t *testing.T) {
 
 	// The "<secret>/<key>" form is split exactly as written: one set,
 	// one not, both offered.
-	status := capabilityStatus(t, got.Capabilities, "github-sandbox")
+	status := capabilityStatus(t, got.Capabilities, "image-signing")
 	want := []ui.CapabilitySecret{
-		{Name: githubsandbox.DefaultAppIDCredential, Secret: "github-app", Key: "app-id", Set: true},
-		{Name: githubsandbox.DefaultPrivateKeyCredential, Secret: "github-app", Key: "private-key", Set: false},
+		{Name: imagesigning.KeyCredential, Secret: "image-signing", Key: "key", Set: true},
+		{Name: imagesigning.PasswordCredential, Secret: "image-signing", Key: "password", Set: false},
 	}
 	if !reflect.DeepEqual(status.Secrets, want) {
-		t.Fatalf("github-sandbox: Secrets = %+v, want %+v", status.Secrets, want)
+		t.Fatalf("image-signing: Secrets = %+v, want %+v", status.Secrets, want)
 	}
 
 }
@@ -276,7 +277,7 @@ func TestCapabilityStatusReportsWhetherATaskCanBeGrantedIt(t *testing.T) {
 	for id, want := range map[string]bool{
 		"priority-dispatch": true,
 		"read-issues":       true,
-		"github-sandbox":    false,
+		"console":           false,
 	} {
 		if status := capabilityStatus(t, got.Capabilities, id); status.Grantable != want {
 			t.Errorf("%s: Grantable = %t, want %t (status: %+v)", id, status.Grantable, want, status)

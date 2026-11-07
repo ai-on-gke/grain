@@ -342,17 +342,10 @@ func TestConsoleSessionCapabilitiesSayWhichOnesThisDeploymentCanHonour(t *testin
 	for _, capability := range resp.Capabilities {
 		byID[capability.ID] = capability
 	}
-	// Nothing is configured on this deployment: no App secret pasted, so
-	// github-sandbox, which needs them, is not ready and says so.
-	sandbox, ok := byID["github-sandbox"]
-	if !ok {
-		t.Fatalf("github-sandbox is missing from %v", resp.Capabilities)
-	}
-	if sandbox.Ready == nil || *sandbox.Ready {
-		t.Errorf("github-sandbox ready = %v, want false on a deployment with no App secrets", sandbox.Ready)
-	}
-	if len(sandbox.Needs) == 0 {
-		t.Error("github-sandbox says it is not ready without naming a single thing it needs")
+	// github-sandbox was retired onto github#sandbox-repo, so it is no
+	// longer listed among the legacy task capabilities.
+	if _, ok := byID["github-sandbox"]; ok {
+		t.Errorf("retired github-sandbox is still offered in %v", resp.Capabilities)
 	}
 	// One that needs no configuration at all stays on offer.
 	debug, ok := byID["read-issues"]

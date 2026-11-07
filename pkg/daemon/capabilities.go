@@ -85,9 +85,13 @@ func CapabilityProviders(cfg Config, store *model.Store, _ map[string]*modelprox
 	// gemini-key is no longer a provider here: it was retired onto the
 	// gcp server's gemini-key (schema migration 103), which mints with
 	// the same gcp-key-minter secret and reaps keys older than 24h.
-	providers = append(providers, githubsandbox.NewProvider(githubsandbox.Config{
+	// github-sandbox is no longer a provider here either: it was retired
+	// onto the in-process github server's #sandbox-repo method
+	// (pkg/capability/githubsandbox, schema migration 120), configured here
+	// with the deployment's GitHub API host and transport settings.
+	githubsandbox.Configure(githubsandbox.Config{
 		Host: cfg.GithubHost, InsecureHTTP: cfg.GithubInsecureHTTP,
-	}))
+	})
 	providers = append(providers, admincaps.Providers()...)
 	// bootstrap-playbooks is no longer a provider here: it was retired onto
 	// the config-map server's config-map {"config_maps":["bootstrap"]}

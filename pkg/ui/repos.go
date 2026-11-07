@@ -1695,9 +1695,14 @@ func (c *Client) cleanRepoCICapabilities(ids []string) ([]string, error) {
 	for _, id := range ids {
 		canonicalID := id
 		if _, ok := model.CIGrantRuleFor(id); ok {
-			// The release server's methods, in either spelling: granted
-			// by this list, recorded as the method (schema 101).
-			canonicalID = model.CanonicalLegacyGrant(strings.TrimSpace(id))
+			// Methods declaring a CI grant rule (the release server's and
+			// github#sandbox-repo), in either their canonical or legacy alias
+			// spelling: granted by this list, recorded as <ref>={}.
+			normalized, err := c.normalizeCapabilityID(id)
+			if err != nil {
+				return nil, err
+			}
+			canonicalID = normalized
 		} else if target, ok := model.RepoReadTarget(id); ok {
 			canonicalID = model.RepoReadCapability(target)
 		} else if target, ok := model.RepoWriteTarget(id); ok {

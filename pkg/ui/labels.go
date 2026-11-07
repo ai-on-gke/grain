@@ -202,8 +202,9 @@ func OfferedCapabilities() []Capability {
 		// No bootstrap-playbooks row: it was retired onto the config-map
 		// server's config-map {"config_maps":["bootstrap"]} (schema migration
 		// 118), which is offered with the other capability-server methods.
-		{ID: "github-sandbox", Name: "GitHub sandbox",
-			Description: "Create a private, single-use GitHub sandbox repo for this task to work in instead of /repo"},
+		// No github-sandbox row: it was retired onto the in-process github
+		// server's github#sandbox-repo (schema migration 120), which is
+		// offered with the other capability-server methods.
 		{ID: "console", Name: "Interactive console",
 			Description: "Run this task's agent CLI on a terminal in the UI, and keep it running until somebody closes it -- everything else about the task is unchanged, including the pull request its branch becomes"},
 		// Not grain#ci: nobody attaches it by hand. A repository's CI

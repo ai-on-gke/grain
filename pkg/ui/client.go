@@ -513,8 +513,10 @@ func (c *Client) capabilityByID(id string) (Capability, bool) {
 		if model.CheckCapabilityGrantSyntax(id) != nil {
 			return Capability{}, false
 		}
-		// A method with a CI rule (the release server's) is CI-only.
-		if _, ok := model.CIGrantRuleFor(id); ok {
+		// A method whose CI rule marks it CI-only (the release server's)
+		// cannot be granted to tasks; methods that only declare RepoGranted
+		// (github#sandbox-repo) are valid task grants as well.
+		if rule, ok := model.CIGrantRuleFor(id); ok && rule.IsCIOnly() {
 			return Capability{}, false
 		}
 		ref := model.CapabilityGrantRef(id)

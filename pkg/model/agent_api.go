@@ -731,6 +731,9 @@ var legacyGrantReplacements = map[string]string{
 	// Retired by schema migration 118 onto the built-in config-map server's
 	// bootstrap map.
 	"bootstrap-playbooks": BootstrapPlaybooksGrant,
+	// Retired by schema migration 120 onto the in-process github server's
+	// sandbox-repo method.
+	"github-sandbox": GitHubSandboxRepoGrant,
 }
 
 // legacyGrantMultiReplacements maps retired bare capabilities that split into

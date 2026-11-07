@@ -846,6 +846,11 @@ var Migrations = []Migration{
 			"ALTER TABLE `allowed_principal` ADD COLUMN `last_used_at` DATETIME NULL",
 		},
 	},
+	{
+		Version:     120,
+		Description: "rewrite stored github-sandbox grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/github#sandbox-repo={} (the in-process github-sandbox is retired)",
+		Up:          migrateGitHubSandboxGrants,
+	},
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as
