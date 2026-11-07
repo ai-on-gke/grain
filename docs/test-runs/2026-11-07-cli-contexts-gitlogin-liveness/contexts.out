@@ -1,0 +1,203 @@
+== whoami, unauthenticated
+### whoami A no credential
+$ /home/debian/bin/grain --server http://127.0.0.1:4291 whoami
+    grain: not signed in to http://127.0.0.1:4291 (it accepts access-code): run grain login http://127.0.0.1:4291
+    -> exit=3
+### whoami A no credential --json
+$ /home/debian/bin/grain --server http://127.0.0.1:4291 -json whoami
+    {"error":{"code":"unauthenticated","message":"not signed in to http://127.0.0.1:4291 (it accepts access-code): run grain login http://127.0.0.1:4291","fix":"grain login http://127.0.0.1:4291"}}
+    -> exit=3
+== login A with the access code (stdin)
+### login A --token-stdin without --auth
+$ sh -c /home/debian/bin/grain login http://127.0.0.1:4291 --name a --token-stdin < /tmp/w/srv-a/code
+    grain: stdin did not hold a gma_ token; pass --auth access-code to store an access code
+    -> exit=2
+### login A --token-stdin --auth access-code
+$ sh -c /home/debian/bin/grain login http://127.0.0.1:4291 --name a --token-stdin --auth access-code < /tmp/w/srv-a/code
+    grain login: warning: the access code grants full operator authority over the deployment; turn on externalAgentApi in Settings and use `grain login --issue-token` for a scoped token
+    signed in to http://127.0.0.1:4291 as context a (access-code)
+    -> exit=0
+    -rw------- /tmp/grain-ctx.NoGgMi/.config/grain/config.json
+    -rw------- /tmp/grain-ctx.NoGgMi/.config/grain/credentials/a
+ok(config.json): secret absent from /tmp/grain-ctx.NoGgMi/.config/grain/config.json
+### whoami (current=a)
+$ /home/debian/bin/grain whoami
+    context: a
+    server: http://127.0.0.1:4291
+    principal: operator
+    -> exit=0
+== login B: access code in GRAIN_TOKEN, mint a gma_ token
+### login B refuses to keep the access code
+$ env GRAIN_TOKEN=WQC5-E7F7-OVSJ-4SRL-LPSK-5CTC-WCLH-6NU7 /home/debian/bin/grain login http://127.0.0.1:4292 --name b
+    grain: not storing the token -token gave: http://127.0.0.1:4292 accepts gma_ tokens, so mint one with --issue-token (or pass --auth access-code to keep the access code anyway)
+    -> exit=2
+### login B --issue-token
+$ env GRAIN_TOKEN=WQC5-E7F7-OVSJ-4SRL-LPSK-5CTC-WCLH-6NU7 /home/debian/bin/grain login http://127.0.0.1:4292 --name b --issue-token --expires 1d
+    signed in to http://127.0.0.1:4292 as context b (external-token)
+    -> exit=0
+    -rw------- /tmp/grain-ctx.NoGgMi/.config/grain/credentials/b
+    stored credential for b is a gma_ token
+ok(config.json): secret absent from /tmp/grain-ctx.NoGgMi/.config/grain/config.json
+### whoami (current=b, gma_)
+$ /home/debian/bin/grain whoami
+    context: b
+    server: http://127.0.0.1:4292
+    principal: agent:external:cli-debuerreotype-b-to5m53
+    owner: debian
+    scope set: grain/external-dev
+    scopes: ci:read, ci:write, deployment:read, merge:write, repos:read, sandboxes:read, tasks:read, tasks:write, templates:read
+    expires: 2026-11-08T22:51:03Z
+    -> exit=0
+### context list
+$ /home/debian/bin/grain context list
+      a	http://127.0.0.1:4291	access-code
+    * b	http://127.0.0.1:4292	external-token
+    -> exit=0
+### context show
+$ /home/debian/bin/grain context show
+    name: b
+    server: http://127.0.0.1:4292
+    auth: external-token
+    credential: file:b
+    tokenId: 2
+    -> exit=0
+== precedence: --server > GRAIN_SERVER > --context/GRAIN_CONTEXT > current
+### context use a
+$ /home/debian/bin/grain context use a
+    using context a (http://127.0.0.1:4291)
+    -> exit=0
+### whoami --context b (flag beats current)
+$ /home/debian/bin/grain --context b whoami
+    context: b
+    server: http://127.0.0.1:4292
+    principal: agent:external:cli-debuerreotype-b-to5m53
+    owner: debian
+    scope set: grain/external-dev
+    scopes: ci:read, ci:write, deployment:read, merge:write, repos:read, sandboxes:read, tasks:read, tasks:write, templates:read
+    expires: 2026-11-08T22:51:03Z
+    -> exit=0
+### GRAIN_CONTEXT=b whoami
+$ env GRAIN_CONTEXT=b /home/debian/bin/grain whoami
+    context: b
+    server: http://127.0.0.1:4292
+    principal: agent:external:cli-debuerreotype-b-to5m53
+    owner: debian
+    scope set: grain/external-dev
+    scopes: ci:read, ci:write, deployment:read, merge:write, repos:read, sandboxes:read, tasks:read, tasks:write, templates:read
+    expires: 2026-11-08T22:51:03Z
+    -> exit=0
+### GRAIN_CONTEXT=b --context a whoami (flag beats env)
+$ env GRAIN_CONTEXT=b /home/debian/bin/grain --context a whoami
+    context: a
+    server: http://127.0.0.1:4291
+    principal: operator
+    -> exit=0
+### GRAIN_SERVER=B with current=a: a's access code must not travel to B
+$ env GRAIN_SERVER=http://127.0.0.1:4292 /home/debian/bin/grain whoami
+    grain: not signed in to http://127.0.0.1:4292 (it accepts access-code, external-token): run grain login http://127.0.0.1:4292
+    -> exit=3
+### --server A with --context b: b's gma_ must not travel to A
+$ /home/debian/bin/grain --context b --server http://127.0.0.1:4291 whoami
+    grain: not signed in to http://127.0.0.1:4291 (it accepts access-code): run grain login http://127.0.0.1:4291
+    -> exit=3
+### GRAIN_TOKEN overrides the context credential (garbage token)
+$ env GRAIN_TOKEN=gma_not_a_real_token /home/debian/bin/grain --context b whoami
+    grain: the grain daemon at http://127.0.0.1:4292 (from context b) refused this CLI's credentials (grain server: invalid external agent bearer token (401 Unauthorized)): the token from $GRAIN_TOKEN was refused
+    -> exit=3
+### GRAIN_TOKEN=<A code> with --server A, no context
+$ env GRAIN_TOKEN=BEFD-5JHV-6FP4-34MX-SQ3Z-QJAF-LJMF-7LP4 /home/debian/bin/grain --server http://127.0.0.1:4291 whoami
+    context: a
+    server: http://127.0.0.1:4291
+    principal: operator
+    -> exit=0
+### --context nope
+$ /home/debian/bin/grain --context nope whoami
+    grain: no context named "nope" (from -context) in the grain config: `grain context list` shows the ones there are
+    -> exit=2
+== insecure credential file is refused
+### whoami --context a with 0644 credential
+$ /home/debian/bin/grain --context a whoami
+    grain: refusing to read /tmp/grain-ctx.NoGgMi/.config/grain/credentials/a: its mode is 0644, so other accounts can read it; run chmod 0600 /tmp/grain-ctx.NoGgMi/.config/grain/credentials/a
+    -> exit=3
+== argv: a long-running command's /proc/<pid>/cmdline holds no secret
+    argv: /home/debian/bin/grain --context b logs 3 -follow 
+ok(ps): gma_ token absent from ps auxww
+== keyring: DBUS set, secret-tool absent -> 0600 file
+### login A (no secret-tool on PATH)
+$ sh -c PATH=/usr/bin:/bin /home/debian/bin/grain login http://127.0.0.1:4291 --name a2 --token-stdin --auth access-code < /tmp/w/srv-a/code
+    grain login: warning: the access code grants full operator authority over the deployment; turn on externalAgentApi in Settings and use `grain login --issue-token` for a scoped token
+    signed in to http://127.0.0.1:4291 as context a2 (access-code)
+    -> exit=0
+== keyring: a fake secret-tool that records its argv (stdin is the secret)
+### login A into the keyring
+$ sh -c PATH=/tmp/grain-ctx.NoGgMi/fakebin:$PATH /home/debian/bin/grain login http://127.0.0.1:4291 --name k --token-stdin --auth access-code < /tmp/w/srv-a/code
+    grain login: warning: the access code grants full operator authority over the deployment; turn on externalAgentApi in Settings and use `grain login --issue-token` for a scoped token
+    signed in to http://127.0.0.1:4291 as context k (access-code)
+    -> exit=0
+    secret-tool argv: store --label=grain/k service grain account k
+ok(secret-tool-argv): secret absent from /tmp/grain-ctx.NoGgMi/fakekeyring/argv.log
+    credentials dir: a
+    credentials dir: a2
+    credentials dir: b
+### whoami --context k (keyring reachable)
+$ env PATH=/tmp/grain-ctx.NoGgMi/fakebin:/usr/bin:/bin /home/debian/bin/grain --context k whoami
+    context: k
+    server: http://127.0.0.1:4291
+    principal: operator
+    -> exit=0
+### whoami --context k (keyring unreachable: no DBUS)
+$ env -u DBUS_SESSION_BUS_ADDRESS /home/debian/bin/grain --context k whoami
+    grain: the credential for context k is in the OS keyring, which this session cannot reach
+    -> exit=3
+== keyring locked -> falls back to the 0600 file
+### login A with a locked keyring
+$ sh -c PATH=/tmp/grain-ctx.NoGgMi/fakebin:$PATH FAKE_KEYRING_LOCKED=1 /home/debian/bin/grain login http://127.0.0.1:4291 --name locked --token-stdin --auth access-code < /tmp/w/srv-a/code
+    grain login: warning: the access code grants full operator authority over the deployment; turn on externalAgentApi in Settings and use `grain login --issue-token` for a scoped token
+    signed in to http://127.0.0.1:4291 as context locked (access-code)
+    -> exit=0
+    -rw------- /tmp/grain-ctx.NoGgMi/.config/grain/credentials/locked
+== file -> keyring re-login leaves no stale file
+### login A as file context fk
+$ sh -c PATH=/usr/bin:/bin /home/debian/bin/grain login http://127.0.0.1:4291 --name fk --token-stdin --auth access-code < /tmp/w/srv-a/code
+    grain login: warning: the access code grants full operator authority over the deployment; turn on externalAgentApi in Settings and use `grain login --issue-token` for a scoped token
+    signed in to http://127.0.0.1:4291 as context fk (access-code)
+    -> exit=0
+### re-login fk with the keyring reachable
+$ sh -c PATH=/tmp/grain-ctx.NoGgMi/fakebin:$PATH /home/debian/bin/grain login http://127.0.0.1:4291 --name fk --token-stdin --auth access-code < /tmp/w/srv-a/code
+    grain login: warning: the access code grants full operator authority over the deployment; turn on externalAgentApi in Settings and use `grain login --issue-token` for a scoped token
+    signed in to http://127.0.0.1:4291 as context fk (access-code)
+    -> exit=0
+ok: no stale credential file for fk
+== logout scrubs
+### logout k while the keyring is unreachable
+$ env -u DBUS_SESSION_BUS_ADDRESS /home/debian/bin/grain logout k
+    grain: the credential for context k is in the OS keyring, which this session cannot reach, so signing out here would leave it there: run grain logout k from a session that reaches the keyring (or clear it with: secret-tool clear service grain account k)
+    -> exit=3
+keyring still holds k's secret (expected while logout was refused)
+### logout k with the keyring reachable
+$ env PATH=/tmp/grain-ctx.NoGgMi/fakebin:/usr/bin:/bin /home/debian/bin/grain logout k
+    signed out of context k
+    -> exit=0
+ok: keyring entry for k removed
+### logout b (revokes the gma_ token)
+$ /home/debian/bin/grain logout b
+    signed out of context b
+    -> exit=0
+ok: credentials/b removed
+### the revoked gma_ token no longer signs in
+$ env GRAIN_TOKEN=gma_f6a097aeb71e1c7b917d7f64beed9dee /home/debian/bin/grain --server http://127.0.0.1:4292 whoami
+    grain: the grain daemon at http://127.0.0.1:4292 refused this CLI's credentials (grain server: external agent bearer token has been revoked (401 Unauthorized)): the token from $GRAIN_TOKEN was refused
+    -> exit=3
+### logout a
+$ /home/debian/bin/grain logout a
+    signed out of context a
+    -> exit=0
+### whoami --context a after logout
+$ /home/debian/bin/grain --context a whoami
+    grain: not signed in to http://127.0.0.1:4291 (it accepts access-code): run grain login http://127.0.0.1:4291
+    -> exit=3
+    still holds A code: /tmp/grain-ctx.NoGgMi/.config/grain/credentials/locked
+    still holds A code: /tmp/grain-ctx.NoGgMi/.config/grain/credentials/a2
+    600 /tmp/grain-ctx.NoGgMi/.config/grain/config.json
+    600 /tmp/grain-ctx.NoGgMi/.config/grain/credentials/locked
+    600 /tmp/grain-ctx.NoGgMi/.config/grain/credentials/a2

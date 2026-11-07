@@ -53,6 +53,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
@@ -635,6 +636,9 @@ func run() error {
 		// directory"), so the request_secret -> set -> requeue loop
 		// went unexercised end to end.
 		Secrets: secrets.New(filepath.Join(root, "secrets")),
+		// The orchestrator's sub-cases, as on a daemon and grain demo,
+		// so a parked run's reason names its ask (#782) here too.
+		Reasons: daemon.ReasonClassifier{},
 	}, store)
 	// api grants resolve as on every grain daemon
 	// (ui.AgentAPIDynamicProvider): every console session holds
