@@ -204,10 +204,11 @@ var autoIncrementTables = map[string]string{
 
 type adaptedConnector struct {
 	inner driver.Connector
+	cfg   Config
 }
 
-func newAdaptedConnector(inner driver.Connector) driver.Connector {
-	return &adaptedConnector{inner: inner}
+func newAdaptedConnector(inner driver.Connector, cfg Config) driver.Connector {
+	return &adaptedConnector{inner: inner, cfg: cfg}
 }
 
 func (c *adaptedConnector) Connect(ctx context.Context) (driver.Conn, error) {
@@ -219,11 +220,12 @@ func (c *adaptedConnector) Connect(ctx context.Context) (driver.Conn, error) {
 }
 
 func (c *adaptedConnector) Driver() driver.Driver {
-	return &adaptedDriver{inner: c.inner.Driver()}
+	return &adaptedDriver{inner: c.inner.Driver(), cfg: c.cfg}
 }
 
 type adaptedDriver struct {
 	inner driver.Driver
+	cfg   Config
 }
 
 func (d *adaptedDriver) Open(name string) (driver.Conn, error) {

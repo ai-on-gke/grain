@@ -60,6 +60,9 @@ func startScheduledBackups(ctx context.Context, db *sql.DB, cfg Config) <-chan s
 				log.Printf("grain backup: scheduled backup failed: %v", err)
 				return
 			}
+			if cfg.DbDriver == "postgres" && cfg.DbDSN != "" {
+				service.PostgresDSN = cfg.DbDSN
+			}
 			result, err := service.Run(runCtx, db, StateRepoDir(cfg.DataDir))
 			if err != nil {
 				log.Printf("grain backup: scheduled backup failed: %v", err)
