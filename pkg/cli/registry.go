@@ -375,7 +375,7 @@ func cmdRegistryRegister(ctx context.Context, c *ui.HTTPClient, out *printer, ar
 		if clientErr != nil {
 			return clientErr
 		}
-		scopes := model.ToScopeInputs(existingSnap.AdvertisedScopes)
+		var scopes []api.ScopeInput
 		if len(explicitScopes) > 0 {
 			scopes = explicitScopes
 		}
@@ -522,7 +522,11 @@ func upsertConnectedEntry(
 		return nil, "", updErr
 	}
 	if len(scopes) > 0 {
-		if scResp, scErr := client.SetScopes(ctx, cfg.Entry, scopes); scErr == nil && scResp != nil {
+		scResp, scErr := client.SetScopes(ctx, cfg.Entry, scopes)
+		if scErr != nil {
+			return nil, "", scErr
+		}
+		if scResp != nil {
 			updated.Scopes = scResp.Scopes
 		}
 	}

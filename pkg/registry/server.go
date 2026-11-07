@@ -508,9 +508,16 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 		resp.Status = "draining"
 	}
 	if s.store != nil {
+		listedEntryIDs := make(map[string]bool)
 		entries, err := s.store.ListEntries(r.Context())
 		if err == nil {
 			for _, e := range entries {
+				if e.Listed {
+					listedEntryIDs[e.ID] = true
+				}
+				if !caller.IsAdmin && !e.Listed {
+					continue
+				}
 				apiEntry := s.enrichAPIEntry(r.Context(), e, caller.IsAdmin)
 				resp.TotalEntries++
 				switch apiEntry.Status {
@@ -536,23 +543,21 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		tunnels, _ := s.store.ListActiveTunnelSessions(r.Context())
 		tunnelsByReplica := make(map[string]int)
+		activeTunnels := 0
 		for _, ts := range tunnels {
+			if !s.replicaHealthy(ts.ReplicaLastSeen) {
+				continue
+			}
+			if !caller.IsAdmin && !listedEntryIDs[ts.EntryID] {
+				continue
+			}
 			tunnelsByReplica[ts.ReplicaID]++
+			activeTunnels++
 		}
-		resp.ActiveTunnels = len(tunnels)
+		resp.ActiveTunnels = activeTunnels
 
 		replicas, _ := s.store.ListReplicas(r.Context())
-		replicaTTL := s.cfg.Tunnel.ReplicaTTL
-		if replicaTTL <= 0 {
-			replicaTTL = DefaultTunnelReplicaTTL
-		}
-		now := s.store.Thresholds()
-		_ = now
 		for _, rep := range replicas {
-			healthy := time.Since(rep.HeartbeatAt) <= replicaTTL*2
-			if rep.HeartbeatAt.After(time.Now().Add(-24 * time.Hour)) {
-				healthy = true
-			}
 			peerAddr := rep.PeerAddr
 			if !caller.IsAdmin {
 				peerAddr = ""
@@ -562,7 +567,7 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 				PeerAddr:      peerAddr,
 				StartedAt:     rep.StartedAt,
 				HeartbeatAt:   rep.HeartbeatAt,
-				Healthy:       healthy,
+				Healthy:       s.replicaHealthy(rep.HeartbeatAt),
 				ActiveTunnels: tunnelsByReplica[rep.ReplicaID],
 			})
 		}
@@ -583,6 +588,24 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+func (s *Server) replicaHealthy(heartbeatAt time.Time) bool {
+	if heartbeatAt.IsZero() {
+		return false
+	}
+	replicaTTL := s.cfg.Tunnel.ReplicaTTL
+	if replicaTTL <= 0 && s.store != nil {
+		replicaTTL = s.store.Thresholds().ReplicaTTL
+	}
+	if replicaTTL <= 0 {
+		replicaTTL = DefaultTunnelReplicaTTL
+	}
+	now := time.Now().UTC()
+	if s.store != nil {
+		now = s.store.Now()
+	}
+	return now.Sub(heartbeatAt) <= replicaTTL*2
+}
+
 func (s *Server) handleGetAdminSummary(w http.ResponseWriter, r *http.Request) {
 	caller := webauth.AdmittedFromContext(r.Context())
 	if !s.checkCallerEnabled(w, r, caller) {
@@ -597,6 +620,9 @@ func (s *Server) handleGetAdminSummary(w http.ResponseWriter, r *http.Request) {
 		tunnels, _ := s.store.ListActiveTunnelSessions(r.Context())
 		tunnelsByReplica := make(map[string]int)
 		for _, ts := range tunnels {
+			if !s.replicaHealthy(ts.ReplicaLastSeen) {
+				continue
+			}
 			tunnelsByReplica[ts.ReplicaID]++
 			out.TunnelSessions = append(out.TunnelSessions, api.TunnelSessionInfo{
 				EntryName:    ts.EntryName,
@@ -617,7 +643,7 @@ func (s *Server) handleGetAdminSummary(w http.ResponseWriter, r *http.Request) {
 				PeerAddr:      rep.PeerAddr,
 				StartedAt:     rep.StartedAt,
 				HeartbeatAt:   rep.HeartbeatAt,
-				Healthy:       true,
+				Healthy:       s.replicaHealthy(rep.HeartbeatAt),
 				ActiveTunnels: tunnelsByReplica[rep.ReplicaID],
 			})
 		}
@@ -1539,6 +1565,9 @@ func (s *Server) enrichAPIEntry(ctx context.Context, e *store.EntryRow, isAdmin 
 	}
 	if s.router != nil && s.router.TunnelCache() != nil {
 		now := time.Now().UTC()
+		if s.store != nil {
+			now = s.store.Now()
+		}
 		replicaTTL := s.cfg.Tunnel.ReplicaTTL
 		if replicaTTL <= 0 {
 			replicaTTL = DefaultTunnelReplicaTTL
