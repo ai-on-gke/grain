@@ -119,6 +119,7 @@ var tablePrimaryKeys = map[string][]string{
 	"memory":                         {"owner", "name"},
 	"memory_document":                {"owner", "name", "document"},
 	"release_note":                   {"period"},
+	"release_approval":               {"owner", "name", "version", "commit"},
 	"qualification_config":           {"owner", "name"},
 	"qualification_item":             {"owner", "name", "template_id"},
 	"qualification_item_depends_on":  {"owner", "name", "template_id", "depends_on_template_id"},

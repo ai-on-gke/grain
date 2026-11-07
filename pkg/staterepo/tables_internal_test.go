@@ -237,6 +237,11 @@ var notSettings = []string{
 	"suite_run_task",
 	"release",
 	"release_candidate",
+	// Which promote-release.yml dispatch a person started for a pending
+	// GitHub Actions release (model.ReleaseApprovalDecision): grain's runtime
+	// note of what was answered so the watcher does not re-raise it and
+	// Approve does not dispatch twice, never a setting a PR proposes.
+	"release_approval",
 	// Whether this deployment is picking new work up
 	// (model.PipelinePause). It is a decision somebody made -- an
 	// operator taking the deployment out of service, or grain holding
