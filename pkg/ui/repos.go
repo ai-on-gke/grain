@@ -825,6 +825,9 @@ func (c *Client) SetRepoDefaultCapabilities(ctx context.Context, repo string, id
 	if err != nil {
 		return RepoDefaults{}, err
 	}
+	if err := c.validateCatalogueRepoDefaults(ctx, parsed, clean, nil); err != nil {
+		return RepoDefaults{}, err
+	}
 	return c.putRepoConfig(ctx, parsed, func(rc *model.RepoConfig) { rc.DefaultCapabilities = clean })
 }
 
@@ -1089,6 +1092,9 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 		if ciCaps, err = c.cleanRepoCICapabilities(*req.CICapabilities); err != nil {
 			return RepoDefaults{}, err
 		}
+	}
+	if err := c.validateCatalogueRepoDefaults(ctx, parsed, defaultCaps, ciCaps); err != nil {
+		return RepoDefaults{}, err
 	}
 	var unfixable []string
 	if req.UnfixableChecks != nil {
@@ -1684,6 +1690,9 @@ func (c *Client) SetRepoCICapabilities(ctx context.Context, repo string, ids []s
 	}
 	clean, err := c.cleanRepoCICapabilities(ids)
 	if err != nil {
+		return RepoDefaults{}, err
+	}
+	if err := c.validateCatalogueRepoDefaults(ctx, parsed, nil, clean); err != nil {
 		return RepoDefaults{}, err
 	}
 	return c.putRepoConfig(ctx, parsed, func(rc *model.RepoConfig) { rc.CICapabilities = clean })
