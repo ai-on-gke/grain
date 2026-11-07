@@ -2041,6 +2041,83 @@ func TestStep16TwoStepTransferRestoreHardPurgeAndAdminRecoveryEndToEnd(t *testin
 	}
 }
 
+func TestStep18DocsRegistryAndAccessCode(t *testing.T) {
+	regDocBytes, err := os.ReadFile(filepath.Join("..", "..", "docs", "registry.md"))
+	if err != nil {
+		t.Fatalf("reading docs/registry.md: %v", err)
+	}
+	regDoc := string(regDocBytes)
+
+	for _, want := range []string{
+		"docker.io/grainai/registry",
+		"kind = instance",
+		"kind = connected",
+		"backend_url",
+		"X-Grain-Registry-Assertion",
+		"-registry-connect",
+		"/api/entries/<name>/connect",
+		"/api/entries/<name>/heartbeat",
+		"owner_group",
+		"GET /api/directory",
+		"GET /api/route",
+		"grain registry directory",
+		"grain registry route",
+		"grain registry register",
+		"grain registry scopes",
+		"primary_conflict",
+	} {
+		if !strings.Contains(regDoc, want) {
+			t.Errorf("docs/registry.md missing %q", want)
+		}
+	}
+
+	// Extract the YAML config example from docs/registry.md and validate it via ParseConfig.
+	const yamlStart = "```yaml\n"
+	startIdx := strings.Index(regDoc, yamlStart)
+	if startIdx < 0 {
+		t.Fatalf("docs/registry.md has no ```yaml block")
+	}
+	yamlBody := regDoc[startIdx+len(yamlStart):]
+	endIdx := strings.Index(yamlBody, "\n```")
+	if endIdx < 0 {
+		t.Fatalf("docs/registry.md has unterminated ```yaml block")
+	}
+	yamlSnippet := yamlBody[:endIdx]
+	cfg, err := ParseConfig([]byte(yamlSnippet))
+	if err != nil {
+		t.Fatalf("ParseConfig on docs/registry.md reference config failed: %v", err)
+	}
+	if cfg.Signing.JWTTTL != 60*time.Second {
+		t.Fatalf("docs/registry.md config jwt_ttl = %s, want 60s", cfg.Signing.JWTTTL)
+	}
+	if cfg.Compute.SSHBreakGlass == nil || !*cfg.Compute.SSHBreakGlass {
+		t.Fatalf("docs/registry.md config ssh_break_glass = %v, want true", cfg.Compute.SSHBreakGlass)
+	}
+	if cfg.Observability.FleetLogs {
+		t.Fatalf("docs/registry.md config fleet_logs = true, want false")
+	}
+
+	acDocBytes, err := os.ReadFile(filepath.Join("..", "..", "docs", "access-code.md"))
+	if err != nil {
+		t.Fatalf("reading docs/access-code.md: %v", err)
+	}
+	acDoc := string(acDocBytes)
+	for _, want := range []string{
+		"-ui-require-verifier=registry",
+		"-ui-registry-issuer",
+		"-ui-registry-audience",
+		"-ui-registry-keys-url",
+		"X-Grain-Registry-Assertion",
+		"--tunnel-through-iap",
+		"roles/compute.osAdminLogin",
+		"roles/iap.tunnelResourceAccessor",
+	} {
+		if !strings.Contains(acDoc, want) {
+			t.Errorf("docs/access-code.md missing %q", want)
+		}
+	}
+}
+
 func startEphemeralPostgresForRegistryTest(t *testing.T) string {
 	t.Helper()
 	if envURL := strings.TrimSpace(os.Getenv("GRAIN_TEST_POSTGRES_URL")); envURL != "" {

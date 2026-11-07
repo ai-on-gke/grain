@@ -563,20 +563,32 @@ func TestPrepareCheckoutContinuesAnExistingBranchWhenTheBaseIsGone(t *testing.T)
 
 // And nothing is said about a base that is where it should be -- the
 // journal line above is a diagnosis, not a running commentary.
+//
+// What it listens for is lines about this checkout: every line
+// prepareCheckout logs names its task, and this task's id and repository
+// are this test's alone. The journal also collects whatever a goroutine
+// an earlier test left winding down happens to log while this test holds
+// it -- under the nightly -shuffle=on -count=2 shard that is often the
+// tail of the previous iteration's parallel tests, which mostly file
+// "t1" against acme/widgets -- and log.Printf says nothing about which
+// test a line came from.
 func TestPrepareCheckoutSaysNothingAboutABaseThatIsStillThere(t *testing.T) {
 	remoteBase := t.TempDir()
-	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	repo := model.RepoRef{Owner: "acme", Name: "base-still-there"}
 	seedRemote(t, remoteBase, repo)
 
 	journal := logToTest(t)
 
 	root := t.TempDir()
-	task := model.Task{ID: "t1", Target: &repo, Base: "main"}
+	task := model.Task{ID: "base-still-there-1", Target: &repo, Base: "main"}
 	if _, err := prepareCheckout(context.Background(), mcp.NewSandboxTools(root), remoteBase, task, "", setupNotes{}); err != nil {
 		t.Fatalf("prepareCheckout: %v", err)
 	}
-	if journal.String() != "" {
-		t.Errorf("journal = %q, want silence", journal.String())
+	for _, line := range strings.Split(journal.String(), "\n") {
+		if strings.Contains(line, task.ID) || strings.Contains(line, repo.Name) ||
+			strings.Contains(line, "does not exist") || strings.Contains(line, "default branch") {
+			t.Errorf("journal says %q about a base that is still there; want silence", line)
+		}
 	}
 }
 
