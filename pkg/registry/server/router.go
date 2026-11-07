@@ -193,6 +193,16 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 	limiters := opts.RateLimiters
 	if limiters == nil {
 		limiters = NewDefaultRateLimiters()
+		// The default per-entry heartbeat limit (12/min) fits the 15s
+		// default cadence. A registry that asks daemons to heartbeat
+		// faster must also let them: allow three heartbeats per
+		// configured interval (the regular one plus immediate ones a
+		// daemon sends on settings changes), never less than the default.
+		if hb := opts.HeartbeatInterval; hb > 0 {
+			if want := 3 / hb.Seconds(); want > DefaultHeartbeatPerEntryRate {
+				limiters.HeartbeatPerEntry = NewKeyedLimiter(want, DefaultHeartbeatPerEntryBurst)
+			}
+		}
 	}
 
 	tunnelCache := NewTunnelCache(opts.Store, opts.ReplicaTTL)

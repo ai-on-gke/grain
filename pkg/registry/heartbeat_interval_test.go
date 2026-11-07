@@ -20,6 +20,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/registry/api"
 	"github.com/ai-on-gke/grain/pkg/registry/store"
@@ -88,7 +89,17 @@ func TestHeartbeatResponseCarriesConfiguredCatalogInterval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateEntry: %v", err)
 	}
-	for name, base := range map[string]string{"main": mainTS.URL, "public": pubTS.URL} {
+	// Ten heartbeats two seconds apart on the router's clock (faster than
+	// the default 12/min limit refills, slower than three per 4s
+	// interval) also pin that the per-entry heartbeat limiter scales
+	// with the interval the registry asks for.
+	now := time.Now()
+	srv.Router().SetNow(func() time.Time { return now })
+	for i := 0; i < 10; i++ {
+		name, base := "main", mainTS.URL
+		if i%2 == 1 {
+			name, base = "public", pubTS.URL
+		}
 		c, err := api.NewClient(api.ClientConfig{
 			BaseURL:           base,
 			AllowInsecureHTTP: true,
@@ -99,10 +110,11 @@ func TestHeartbeatResponseCarriesConfiguredCatalogInterval(t *testing.T) {
 		}
 		resp, err := c.Heartbeat(ctx, "hb-conn", api.HeartbeatRequest{GrainVersion: "v1.0.0", Health: api.HealthOK})
 		if err != nil {
-			t.Fatalf("%s listener heartbeat: %v", name, err)
+			t.Fatalf("heartbeat %d (%s listener): %v", i, name, err)
 		}
 		if resp.NextIntervalSeconds != 4 || resp.NextHeartbeatSeconds != 4 {
 			t.Errorf("%s listener heartbeat next interval = %d/%d, want 4/4 (catalog.heartbeat_interval)", name, resp.NextIntervalSeconds, resp.NextHeartbeatSeconds)
 		}
+		now = now.Add(2 * time.Second)
 	}
 }
