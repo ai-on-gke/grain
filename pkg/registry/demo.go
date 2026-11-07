@@ -1289,12 +1289,29 @@ func (d *demoState) handleCreateEntry(w http.ResponseWriter, r *http.Request) {
 	state := api.StateRunning
 	status := api.StatusOnline
 	hostKind := req.HostKind
+	var machineType string
+	bootDiskGB := req.BootDiskGB
+	if req.BootDiskGB != 0 {
+		if err := api.ValidateBootDiskGB(req.BootDiskGB); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid_argument", err.Error())
+			return
+		}
+	}
 	if req.Kind == api.KindInstance {
 		state = api.StateCreating
 		status = api.StatusOffline
 		hostKind = api.HostKindRegistryVM
 		if req.Shape == "" {
 			req.Shape = "medium"
+		}
+		for _, sh := range d.shapes {
+			if sh.Name == req.Shape {
+				machineType = sh.MachineType
+				if bootDiskGB <= 0 {
+					bootDiskGB = sh.BootDiskGB
+				}
+				break
+			}
 		}
 	} else if hostKind == "" {
 		hostKind = api.HostKindWorkstation
@@ -1330,6 +1347,8 @@ func (d *demoState) handleCreateEntry(w http.ResponseWriter, r *http.Request) {
 		Listed:             listed,
 		Tags:               req.Tags,
 		Shape:              req.Shape,
+		MachineType:        machineType,
+		BootDiskGB:         bootDiskGB,
 		AllowSSH:           true,
 		Scopes:             scopes,
 		DeclaredScopes:     scopes,
@@ -1552,8 +1571,24 @@ func (d *demoState) handleReplaceEntry(w http.ResponseWriter, r *http.Request) {
 	}
 	var req api.ReplaceEntryRequest
 	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := api.ValidateBootDiskGB(req.BootDiskGB); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", err.Error())
+		return
+	}
+	shapeChanged := req.Shape != "" && req.Shape != e.Shape
 	if req.Shape != "" {
 		e.Shape = req.Shape
+	}
+	if req.BootDiskGB > 0 {
+		e.BootDiskGB = req.BootDiskGB
+	} else if shapeChanged {
+		for _, sh := range d.shapes {
+			if sh.Name == e.Shape {
+				e.BootDiskGB = sh.BootDiskGB
+				e.MachineType = sh.MachineType
+				break
+			}
+		}
 	}
 	if req.TargetVersion != "" {
 		e.TargetVersion = req.TargetVersion

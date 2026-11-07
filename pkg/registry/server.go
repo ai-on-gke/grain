@@ -1018,6 +1018,14 @@ func (s *Server) handleCreateEntry(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if req.Kind == api.KindInstance && strings.TrimSpace(req.Shape) == "" {
+		if ds := strings.TrimSpace(s.cfg.Compute.DefaultShape); ds != "" {
+			req.Shape = ds
+		} else if len(s.cfg.Compute.Shapes) > 0 {
+			req.Shape = s.cfg.Compute.Shapes[0].Name
+		}
+	}
+
 	created, err := s.store.CreateEntry(r.Context(), store.CreateEntryInput{
 		Name:               req.Name,
 		Kind:               req.Kind,
@@ -1030,6 +1038,7 @@ func (s *Server) handleCreateEntry(w http.ResponseWriter, r *http.Request) {
 		Purpose:            req.Purpose,
 		Tags:               req.Tags,
 		Shape:              req.Shape,
+		BootDiskGB:         req.BootDiskGB,
 		Zone:               req.Zone,
 		AllowSSH:           req.AllowSSH,
 		ShipLogs:           req.ShipLogs,
@@ -1474,7 +1483,7 @@ func (s *Server) handleReplaceEntry(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req)
 	}
 
-	updated, err := s.store.RequestEntryReplace(r.Context(), entry.ID, entry.Version, req.Shape, req.TargetVersion)
+	updated, err := s.store.RequestEntryReplaceWithDisk(r.Context(), entry.ID, entry.Version, req.Shape, req.TargetVersion, req.BootDiskGB)
 	if err != nil {
 		s.writeStoreError(w, err)
 		return

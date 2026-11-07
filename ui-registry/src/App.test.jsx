@@ -877,4 +877,80 @@ describe("Grain Registry UI", () => {
       ).toBeInTheDocument();
     });
   });
+
+  it("supports configurable boot disk size on Hosted VM create and resize", async () => {
+    let capturedCreateBody = null;
+    let capturedReplaceBody = null;
+
+    global.fetch = createFetchMock({
+      "POST /api/entries": async (_url, init) => {
+        capturedCreateBody = JSON.parse(init.body);
+        return new Response(
+          JSON.stringify({
+            entry: {
+              name: capturedCreateBody.name,
+              url: `https://${capturedCreateBody.name}.grain.example.com`,
+              kind: "instance",
+              state: "creating",
+              status: "offline",
+              owner: sampleMe.email,
+              shape: capturedCreateBody.shape,
+              boot_disk_gb: capturedCreateBody.boot_disk_gb,
+            },
+          }),
+          { status: 202 },
+        );
+      },
+      "POST /api/entries/platform-vm/replace": async (_url, init) => {
+        capturedReplaceBody = JSON.parse(init.body);
+        return new Response(
+          JSON.stringify({
+            ...sampleEntries[0],
+            state: "replacing",
+            replace_step: "draining",
+            shape: capturedReplaceBody.shape,
+            boot_disk_gb: capturedReplaceBody.boot_disk_gb,
+          }),
+          { status: 202 },
+        );
+      },
+    });
+
+    renderApp("/create");
+    await waitFor(() => {
+      expect(screen.getByText(/Hosted VM \(instance\)/i)).toBeInTheDocument();
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: /Hosted VM \(instance\)/i }),
+    );
+
+    const diskInput = await screen.findByLabelText("Boot disk size (GB)");
+    expect(diskInput).toHaveValue(100);
+
+    fireEvent.change(screen.getByLabelText("VM Shape"), {
+      target: { value: "small" },
+    });
+    expect(diskInput).toHaveValue(50);
+
+    fireEvent.change(diskInput, { target: { value: "150" } });
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Create hosted VM$/i }),
+    );
+    await waitFor(() => {
+      expect(capturedCreateBody).not.toBeNull();
+    });
+    expect(capturedCreateBody.shape).toBe("small");
+    expect(capturedCreateBody.boot_disk_gb).toBe(150);
+
+    renderApp("/entries/platform-vm");
+    const resizeDiskInput = await screen.findByLabelText("Boot Disk Size (GB)");
+    fireEvent.change(resizeDiskInput, { target: { value: "250" } });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Resize / Replace VM" }),
+    );
+    await waitFor(() => {
+      expect(capturedReplaceBody).not.toBeNull();
+    });
+    expect(capturedReplaceBody.boot_disk_gb).toBe(250);
+  });
 });

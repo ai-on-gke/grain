@@ -34,6 +34,7 @@ type Shape struct {
 	Name         string `yaml:"name" json:"name"`
 	MachineType  string `yaml:"machine_type" json:"machine_type"`
 	BootDiskGB   int    `yaml:"boot_disk_gb" json:"boot_disk_gb"`
+	BootDiskType string `yaml:"boot_disk_type,omitempty" json:"boot_disk_type,omitempty"`
 	BootDiskIOPS int    `yaml:"boot_disk_iops,omitempty" json:"boot_disk_iops,omitempty"`
 	QuotaUnits   int    `yaml:"quota_units" json:"quota_units"`
 	Description  string `yaml:"description,omitempty" json:"description,omitempty"`
@@ -45,6 +46,7 @@ type InstanceSpec struct {
 	Name           string
 	Zone           string
 	Shape          Shape
+	BootDiskGB     int
 	ServiceAccount string
 	BootImage      string
 	StartupEnv     map[string]string
@@ -97,6 +99,8 @@ type InstanceResourceBundle struct {
 	SQLConnectionName   string
 	SQLPrivateIP        string
 	DatabaseName        string
+	DatabaseUser        string
+	DatabasePassword    string
 	SecretPrefix        string
 	GCSBucket           string
 	GCSManagedFolder    string
@@ -571,6 +575,30 @@ type OrphanProvider interface {
 	DeleteOrphan(ctx context.Context, zone, instanceID string) error
 }
 
+// ReconcilerHostCache is notified when an entry's placement or lifecycle state changes.
+type ReconcilerHostCache interface {
+	Put(e *store.EntryRow)
+	Invalidate(name string)
+}
+
+// ReconcilerBuildOptions holds dependencies for constructing the background Reconciler.
+type ReconcilerBuildOptions struct {
+	Config      Config
+	Store       *store.Store
+	Compute     Compute
+	Resources   InstanceResources
+	ConfigRepos ConfigRepos
+	Signer      Signer
+	HostCache   ReconcilerHostCache
+	HolderID    string
+}
+
+// BackgroundReconciler drives hosted VM reconciliation and orphan sweeps in the background.
+type BackgroundReconciler interface {
+	OrphanProvider
+	Start(ctx context.Context)
+}
+
 // Factory types for extension hooks.
 type (
 	FrontIdentityFactory       func(ctx context.Context, cfg AuthConfig) (FrontIdentity, error)
@@ -581,6 +609,7 @@ type (
 	InstanceResourcesFactory   func(ctx context.Context, cfg Config) (InstanceResources, error)
 	ConfigReposProviderFactory func(ctx context.Context, cfg ConfigReposConfig) (ConfigRepos, error)
 	SignerProviderFactory      func(ctx context.Context, cfg SigningConfig) (Signer, error)
+	ReconcilerFactory          func(opts ReconcilerBuildOptions) (BackgroundReconciler, error)
 )
 
 var (
@@ -593,7 +622,29 @@ var (
 	instanceResFactories   = map[string]InstanceResourcesFactory{}
 	configReposFactories   = map[string]ConfigReposProviderFactory{}
 	signerFactories        = map[string]SignerProviderFactory{}
+	reconcilerFactory      ReconcilerFactory
 )
+
+// RegisterReconcilerFactory registers the background reconciler factory (registered by pkg/registry/reconcile).
+func RegisterReconcilerFactory(fn ReconcilerFactory) {
+	if fn == nil {
+		panic("registry: RegisterReconcilerFactory requires non-nil factory")
+	}
+	regMu.Lock()
+	defer regMu.Unlock()
+	reconcilerFactory = fn
+}
+
+// BuildReconciler constructs a BackgroundReconciler if a ReconcilerFactory has been registered.
+func BuildReconciler(opts ReconcilerBuildOptions) (BackgroundReconciler, error) {
+	regMu.RLock()
+	fn := reconcilerFactory
+	regMu.RUnlock()
+	if fn == nil {
+		return nil, nil
+	}
+	return fn(opts)
+}
 
 // RegisterFrontIdentity registers a named FrontIdentity provider factory (e.g. "iap").
 // Wrapper binaries call this from init() or before registry.Main().

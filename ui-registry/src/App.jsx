@@ -897,8 +897,15 @@ function CreateRegisterView({
   onCreated,
   onNavigateEntry,
 }) {
-  const [kind, setKind] = useState("connected");
-  const [useCustomName, setUseCustomName] = useState(true);
+  const initialKind =
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("kind") === "instance"
+      ? "instance"
+      : "connected";
+  const [kind, setKind] = useState(initialKind);
+  const [useCustomName, setUseCustomName] = useState(
+    initialKind !== "instance",
+  );
   const [name, setName] = useState(() => makeRandomEntryName());
   const [availability, setAvailability] = useState(null);
   const [displayName, setDisplayName] = useState("");
@@ -907,6 +914,13 @@ function CreateRegisterView({
   const [listed, setListed] = useState(true);
   const [tags, setTags] = useState("");
   const [shape, setShape] = useState(defaultShape || "medium");
+  const [bootDiskGb, setBootDiskGb] = useState(() => {
+    const initial = (shapes || []).find(
+      (s) => s.name === (defaultShape || "medium"),
+    );
+    return initial?.boot_disk_gb ? String(initial.boot_disk_gb) : "";
+  });
+  const [bootDiskDirty, setBootDiskDirty] = useState(false);
   const [hostKind, setHostKind] = useState("workstation");
   const [connectedPrincipal, setConnectedPrincipal] = useState("");
   const [scopeRepo, setScopeRepo] = useState("");
@@ -915,6 +929,33 @@ function CreateRegisterView({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [createdResult, setCreatedResult] = useState(null);
+
+  useEffect(() => {
+    if (!shapes || shapes.length === 0) return;
+    let effectiveShape = shape;
+    if (!shapes.some((s) => s.name === effectiveShape)) {
+      effectiveShape =
+        (defaultShape && shapes.some((s) => s.name === defaultShape)
+          ? defaultShape
+          : shapes[0].name) || shape;
+      setShape(effectiveShape);
+    }
+    if (!bootDiskDirty) {
+      const matched = shapes.find((s) => s.name === effectiveShape);
+      if (matched?.boot_disk_gb) {
+        setBootDiskGb(String(matched.boot_disk_gb));
+      }
+    }
+  }, [shapes, defaultShape, shape, bootDiskDirty]);
+
+  const handleShapeSelectChange = (nextShape) => {
+    setShape(nextShape);
+    setBootDiskDirty(false);
+    const matched = (shapes || []).find((s) => s.name === nextShape);
+    if (matched?.boot_disk_gb) {
+      setBootDiskGb(String(matched.boot_disk_gb));
+    }
+  };
 
   const handleKindChange = (nextKind) => {
     setKind(nextKind);
@@ -986,6 +1027,10 @@ function CreateRegisterView({
       };
       if (kind === "instance") {
         payload.shape = shape || defaultShape || "medium";
+        const parsedDisk = Number.parseInt(String(bootDiskGb).trim(), 10);
+        if (Number.isFinite(parsedDisk) && parsedDisk > 0) {
+          payload.boot_disk_gb = parsedDisk;
+        }
       } else {
         payload.host_kind = hostKind;
         payload.connected_principal = connectedPrincipal.trim();
@@ -1199,24 +1244,47 @@ function CreateRegisterView({
         </div>
 
         {kind === "instance" ? (
-          <div className="reg-field">
-            <label className="reg-label" htmlFor="shape-select">
-              VM Shape
-            </label>
-            <select
-              id="shape-select"
-              className="gs-select"
-              value={shape}
-              onChange={(e) => setShape(e.target.value)}
-            >
-              {(shapes || []).map((sh) => (
-                <option key={sh.name} value={sh.name}>
-                  {sh.display_name || sh.name} — {sh.machine_type},{" "}
-                  {sh.boot_disk_gb} GB disk ({sh.quota_units} quota unit
-                  {sh.quota_units === 1 ? "" : "s"})
-                </option>
-              ))}
-            </select>
+          <div className="reg-form-grid">
+            <div className="reg-field">
+              <label className="reg-label" htmlFor="shape-select">
+                VM Shape
+              </label>
+              <select
+                id="shape-select"
+                className="gs-select"
+                value={shape}
+                onChange={(e) => handleShapeSelectChange(e.target.value)}
+              >
+                {(shapes || []).map((sh) => (
+                  <option key={sh.name} value={sh.name}>
+                    {sh.display_name || sh.name} — {sh.machine_type},{" "}
+                    {sh.boot_disk_gb} GB disk ({sh.quota_units} quota unit
+                    {sh.quota_units === 1 ? "" : "s"})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="reg-field">
+              <label className="reg-label" htmlFor="boot-disk-gb-input">
+                Boot disk size (GB)
+              </label>
+              <input
+                id="boot-disk-gb-input"
+                type="number"
+                min={20}
+                max={4000}
+                className="gs-input"
+                value={bootDiskGb}
+                onChange={(e) => {
+                  setBootDiskGb(e.target.value);
+                  setBootDiskDirty(true);
+                }}
+                placeholder="100"
+              />
+              <div className="reg-hint">
+                20–4000 GB (defaults to shape&apos;s recommended size)
+              </div>
+            </div>
           </div>
         ) : (
           <div className="reg-form-grid">
@@ -1363,6 +1431,7 @@ function EntryDetailView({
   const [clearOwnerGroupOnTransfer, setClearOwnerGroupOnTransfer] =
     useState(false);
   const [resizeShape, setResizeShape] = useState("");
+  const [resizeDiskGb, setResizeDiskGb] = useState("");
   const [upgradeVersion, setUpgradeVersion] = useState("");
   const [rotateLabel, setRotateLabel] = useState("rotated-token");
   const [revokePrevOnRotate, setRevokePrevOnRotate] = useState(false);
@@ -1379,7 +1448,13 @@ function EntryDetailView({
     setOwnerGroup(data.owner_group || "");
     setTagsText((data.tags || []).join(", "));
     setListed(Boolean(data.listed));
-    setResizeShape(data.shape || "medium");
+    const nextShape = data.shape || "medium";
+    setResizeShape(nextShape);
+    const shapeDefaultDisk = (shapes || []).find(
+      (s) => s.name === nextShape,
+    )?.boot_disk_gb;
+    const effectiveDisk = data.boot_disk_gb || shapeDefaultDisk || "";
+    setResizeDiskGb(effectiveDisk ? String(effectiveDisk) : "");
     setUpgradeVersion(data.target_version || "");
     const rawDeclared =
       data.declared_scopes ||
@@ -1552,12 +1627,21 @@ function EntryDetailView({
     setError("");
     setNotice("");
     try {
-      const updated = await replaceEntry(entry.name, {
+      const payload = {
         shape: resizeShape,
         target_version: upgradeVersion.trim(),
-      });
+      };
+      const parsedDisk = Number.parseInt(String(resizeDiskGb).trim(), 10);
+      if (Number.isFinite(parsedDisk) && parsedDisk > 0) {
+        payload.boot_disk_gb = parsedDisk;
+      }
+      const updated = await replaceEntry(entry.name, payload);
       syncFromEntry(updated);
-      setNotice(`Initiated VM replacement (shape=${updated.shape}).`);
+      setNotice(
+        `Initiated VM replacement (shape=${updated.shape}${
+          updated.boot_disk_gb ? `, disk=${updated.boot_disk_gb} GB` : ""
+        }).`,
+      );
     } catch (err) {
       setError(err.message || "Failed to replace instance");
     }
@@ -1804,6 +1888,11 @@ function EntryDetailView({
               <div className="reg-kv-label">VM Shape & Zone</div>
               <div className="reg-kv-val">
                 {entry.shape || "default"} {entry.zone ? `(${entry.zone})` : ""}
+                {entry.boot_disk_gb ? (
+                  <div className="reg-hint">
+                    {entry.boot_disk_gb} GB boot disk
+                  </div>
+                ) : null}
               </div>
             </div>
           )}
@@ -2302,14 +2391,39 @@ function EntryDetailView({
                   id="detail-resize-shape"
                   className="gs-select"
                   value={resizeShape}
-                  onChange={(e) => setResizeShape(e.target.value)}
+                  onChange={(e) => {
+                    const nextShape = e.target.value;
+                    setResizeShape(nextShape);
+                    const matched = (shapes || []).find(
+                      (s) => s.name === nextShape,
+                    );
+                    if (matched?.boot_disk_gb) {
+                      setResizeDiskGb(String(matched.boot_disk_gb));
+                    }
+                  }}
                 >
                   {(shapes || []).map((sh) => (
                     <option key={sh.name} value={sh.name}>
-                      {sh.display_name || sh.name} ({sh.quota_units} units)
+                      {sh.display_name || sh.name} ({sh.quota_units} units,{" "}
+                      {sh.boot_disk_gb} GB)
                     </option>
                   ))}
                 </select>
+              </div>
+              <div className="reg-field">
+                <label className="reg-label" htmlFor="detail-resize-disk-gb">
+                  Boot Disk Size (GB)
+                </label>
+                <input
+                  id="detail-resize-disk-gb"
+                  type="number"
+                  min={20}
+                  max={4000}
+                  className="gs-input"
+                  value={resizeDiskGb}
+                  onChange={(e) => setResizeDiskGb(e.target.value)}
+                  placeholder="100"
+                />
               </div>
               <div className="reg-field">
                 <label className="reg-label" htmlFor="detail-upgrade-version">

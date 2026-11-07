@@ -23,6 +23,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -89,19 +91,45 @@ func WithOperationPollInterval(d time.Duration) ComputeOption {
 // enforcing project, zone, prefix (`vm_prefix`), and label (`grain-registry`, `grain-entry`,
 // `grain-generation`) scope checks on every operation.
 type GCECompute struct {
-	project      string
-	region       string
-	zones        []string
-	zoneSet      map[string]bool
-	network      string
-	subnetwork   string
-	bootImage    string
-	vmPrefix     string
-	registryID   string
-	labels       map[string]string
-	baseURL      string
-	httpClient   *http.Client
-	pollInterval time.Duration
+	project       string
+	region        string
+	zones         []string
+	zoneSet       map[string]bool
+	network       string
+	subnetwork    string
+	bootImage     string
+	startupScript string
+	vmPrefix      string
+	registryID    string
+	labels        map[string]string
+	baseURL       string
+	httpClient    *http.Client
+	pollInterval  time.Duration
+}
+
+var gceMachineTypeRe = regexp.MustCompile(`^[a-z][a-z0-9]*-(standard|highmem|highcpu|megamem|ultramem|custom)-[0-9]+(-[a-z0-9]+)*$|^e2-(micro|small|medium)$`)
+
+// BaseMachineType extracts the bare GCE machine type name (e.g. "n2-standard-4" or "c4-standard-8")
+// from either a bare name or a zonal/project resource path.
+func BaseMachineType(machineType string) string {
+	mt := strings.TrimSpace(machineType)
+	if idx := strings.LastIndex(mt, "/"); idx >= 0 {
+		mt = mt[idx+1:]
+	}
+	return mt
+}
+
+// ValidateMachineType checks that `machineType` is a valid GCE machine type (including
+// `n2-standard-*`, `c4-standard-*`, and standard E2/N2D/C3 series shapes).
+func ValidateMachineType(machineType string) error {
+	base := BaseMachineType(machineType)
+	if base == "" {
+		return errors.New("gcp compute: machine_type is required")
+	}
+	if !gceMachineTypeRe.MatchString(base) {
+		return fmt.Errorf("gcp compute: invalid machine_type %q", machineType)
+	}
+	return nil
 }
 
 // NewGCECompute constructs a GCECompute provider from `cfg`.
@@ -139,6 +167,22 @@ func NewGCECompute(ctx context.Context, cfg registry.ComputeConfig, opts ...Comp
 	if len(zones) == 0 {
 		return nil, errors.New("gcp compute: compute.zones must contain at least one valid zone")
 	}
+	for _, sh := range cfg.Shapes {
+		if strings.TrimSpace(sh.MachineType) != "" {
+			if err := ValidateMachineType(sh.MachineType); err != nil {
+				return nil, fmt.Errorf("gcp compute: shape %q: %w", sh.Name, err)
+			}
+		}
+	}
+
+	startupScript := cfg.StartupScript
+	if scriptFile := strings.TrimSpace(cfg.StartupScriptFile); scriptFile != "" {
+		b, err := os.ReadFile(scriptFile)
+		if err != nil {
+			return nil, fmt.Errorf("gcp compute: reading startup_script_file %s: %w", scriptFile, err)
+		}
+		startupScript = string(b)
+	}
 
 	regID := strings.TrimSpace(cfg.RegistryID)
 	if regID == "" && cfg.Labels != nil {
@@ -154,18 +198,19 @@ func NewGCECompute(ctx context.Context, cfg registry.ComputeConfig, opts ...Comp
 	}
 
 	c := &GCECompute{
-		project:      project,
-		region:       region,
-		zones:        zones,
-		zoneSet:      zoneSet,
-		network:      strings.TrimSpace(cfg.Network),
-		subnetwork:   strings.TrimSpace(cfg.Subnetwork),
-		bootImage:    strings.TrimSpace(cfg.BootImage),
-		vmPrefix:     vmPrefix,
-		registryID:   regID,
-		labels:       labelsCopy,
-		baseURL:      defaultComputeBaseURL,
-		pollInterval: 50 * time.Millisecond,
+		project:       project,
+		region:        region,
+		zones:         zones,
+		zoneSet:       zoneSet,
+		network:       strings.TrimSpace(cfg.Network),
+		subnetwork:    strings.TrimSpace(cfg.Subnetwork),
+		bootImage:     strings.TrimSpace(cfg.BootImage),
+		startupScript: startupScript,
+		vmPrefix:      vmPrefix,
+		registryID:    regID,
+		labels:        labelsCopy,
+		baseURL:       defaultComputeBaseURL,
+		pollInterval:  50 * time.Millisecond,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -241,18 +286,23 @@ func (c *GCECompute) verifyInstanceLabels(inst *gceInstance, expectedEntry strin
 }
 
 type gceInstance struct {
-	ID                     string                `json:"id,omitempty"`
-	Name                   string                `json:"name"`
-	Zone                   string                `json:"zone,omitempty"`
-	MachineType            string                `json:"machineType,omitempty"`
-	Status                 string                `json:"status,omitempty"`
-	Labels                 map[string]string     `json:"labels,omitempty"`
-	Tags                   *gceTags              `json:"tags,omitempty"`
-	Disks                  []gceAttachedDisk     `json:"disks,omitempty"`
-	NetworkInterfaces      []gceNetworkInterface `json:"networkInterfaces,omitempty"`
-	ServiceAccounts        []gceServiceAccount   `json:"serviceAccounts,omitempty"`
-	Metadata               *gceMetadata          `json:"metadata,omitempty"`
-	ShieldedInstanceConfig *gceShieldedConfig    `json:"shieldedInstanceConfig,omitempty"`
+	ID                      string                      `json:"id,omitempty"`
+	Name                    string                      `json:"name"`
+	Zone                    string                      `json:"zone,omitempty"`
+	MachineType             string                      `json:"machineType,omitempty"`
+	Status                  string                      `json:"status,omitempty"`
+	Labels                  map[string]string           `json:"labels,omitempty"`
+	Tags                    *gceTags                    `json:"tags,omitempty"`
+	Disks                   []gceAttachedDisk           `json:"disks,omitempty"`
+	NetworkInterfaces       []gceNetworkInterface       `json:"networkInterfaces,omitempty"`
+	ServiceAccounts         []gceServiceAccount         `json:"serviceAccounts,omitempty"`
+	Metadata                *gceMetadata                `json:"metadata,omitempty"`
+	ShieldedInstanceConfig  *gceShieldedConfig          `json:"shieldedInstanceConfig,omitempty"`
+	AdvancedMachineFeatures *gceAdvancedMachineFeatures `json:"advancedMachineFeatures,omitempty"`
+}
+
+type gceAdvancedMachineFeatures struct {
+	EnableNestedVirtualization bool `json:"enableNestedVirtualization,omitempty"`
 }
 
 type gceTags struct {
@@ -405,12 +455,31 @@ func (c *GCECompute) CreateInstance(ctx context.Context, spec registry.InstanceS
 	if machineType == "" {
 		machineType = "e2-standard-4"
 	}
+	if err := ValidateMachineType(machineType); err != nil {
+		return nil, err
+	}
+	baseMT := BaseMachineType(machineType)
 	if !strings.Contains(machineType, "/") {
 		machineType = fmt.Sprintf("zones/%s/machineTypes/%s", zone, machineType)
 	}
-	diskGB := int64(spec.Shape.BootDiskGB)
+	diskGB := int64(spec.BootDiskGB)
+	if diskGB <= 0 {
+		diskGB = int64(spec.Shape.BootDiskGB)
+	}
 	if diskGB <= 0 {
 		diskGB = 50
+	}
+	diskTypeName := strings.TrimSpace(spec.Shape.BootDiskType)
+	if diskTypeName == "" {
+		if strings.HasPrefix(baseMT, "c4-") {
+			diskTypeName = "hyperdisk-balanced"
+		} else {
+			diskTypeName = "pd-balanced"
+		}
+	}
+	diskType := diskTypeName
+	if !strings.Contains(diskType, "/") {
+		diskType = fmt.Sprintf("zones/%s/diskTypes/%s", zone, diskType)
 	}
 	bootImage := strings.TrimSpace(spec.BootImage)
 	if bootImage == "" {
@@ -433,10 +502,24 @@ func (c *GCECompute) CreateInstance(ctx context.Context, spec registry.InstanceS
 		{Key: "grain-generation", Value: gen},
 		{Key: "grain-config", Value: envJSON},
 	}
+	if c.startupScript != "" {
+		metaItems = append(metaItems, gceMetadataItem{
+			Key:   "startup-script",
+			Value: c.startupScript,
+		})
+	}
 
+	netName := c.network
+	if netName != "" && !strings.Contains(netName, "/") {
+		netName = fmt.Sprintf("projects/%s/global/networks/%s", c.project, netName)
+	}
+	subnetName := c.subnetwork
+	if subnetName != "" && !strings.Contains(subnetName, "/") {
+		subnetName = fmt.Sprintf("projects/%s/regions/%s/subnetworks/%s", c.project, c.region, subnetName)
+	}
 	netIface := gceNetworkInterface{
-		Network:       c.network,
-		Subnetwork:    c.subnetwork,
+		Network:       netName,
+		Subnetwork:    subnetName,
 		AccessConfigs: nil, // Hosted VMs never have external IPs.
 	}
 
@@ -466,7 +549,7 @@ func (c *GCECompute) CreateInstance(ctx context.Context, spec registry.InstanceS
 				InitializeParams: &gceDiskInitParams{
 					DiskName:        vmName,
 					DiskSizeGb:      diskGB,
-					DiskType:        fmt.Sprintf("zones/%s/diskTypes/pd-balanced", zone),
+					DiskType:        diskType,
 					ProvisionedIops: int64(spec.Shape.BootDiskIOPS),
 					SourceImage:     bootImage,
 					Labels:          labels,
@@ -480,6 +563,9 @@ func (c *GCECompute) CreateInstance(ctx context.Context, spec registry.InstanceS
 			EnableSecureBoot:          true,
 			EnableVtpm:                true,
 			EnableIntegrityMonitoring: true,
+		},
+		AdvancedMachineFeatures: &gceAdvancedMachineFeatures{
+			EnableNestedVirtualization: true,
 		},
 	}
 

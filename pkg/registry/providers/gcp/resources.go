@@ -17,6 +17,7 @@ package gcp
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
@@ -170,6 +171,8 @@ type GCPInstanceResources struct {
 	secretPrefix    string
 	gcsBucket       string
 	sshBreakGlass   bool
+	bindProjectIAM  bool
+	cloudSQLAdmin   bool
 	fleetLogs       bool
 	zoneSet         map[string]bool
 	sqlConfigs      map[string]registry.SQLInstanceConfig
@@ -183,6 +186,13 @@ type GCPInstanceResources struct {
 	secretBaseURL   string
 	computeBaseURL  string
 	nowFn           func() time.Time
+}
+
+// SetStore wires the registry catalog store as the SQL pool allocator when none was explicitly configured.
+func (r *GCPInstanceResources) SetStore(st *store.Store) {
+	if r != nil && st != nil && r.sqlAllocator == nil {
+		r.sqlAllocator = st
+	}
 }
 
 // NewGCPInstanceResources constructs a GCPInstanceResources provider from `cfg`.
@@ -211,6 +221,14 @@ func NewGCPInstanceResources(ctx context.Context, cfg registry.Config, opts ...R
 	if cfg.Compute.SSHBreakGlass != nil {
 		sshBreakGlass = *cfg.Compute.SSHBreakGlass
 	}
+	bindProjectIAM := true
+	if cfg.Compute.BindProjectIAM != nil {
+		bindProjectIAM = *cfg.Compute.BindProjectIAM
+	}
+	cloudSQLAdmin := true
+	if cfg.InstanceSQL.CloudSQLAdmin != nil {
+		cloudSQLAdmin = *cfg.InstanceSQL.CloudSQLAdmin
+	}
 	zoneSet := make(map[string]bool, len(cfg.Compute.Zones))
 	for _, z := range cfg.Compute.Zones {
 		if z = strings.TrimSpace(z); z != "" {
@@ -231,6 +249,8 @@ func NewGCPInstanceResources(ctx context.Context, cfg registry.Config, opts ...R
 		secretPrefix:    secretPrefix,
 		gcsBucket:       strings.TrimSpace(cfg.InstanceState.GCSBucket),
 		sshBreakGlass:   sshBreakGlass,
+		bindProjectIAM:  bindProjectIAM,
+		cloudSQLAdmin:   cloudSQLAdmin,
 		fleetLogs:       cfg.Observability.FleetLogs,
 		zoneSet:         zoneSet,
 		sqlConfigs:      sqlConfigs,
@@ -369,12 +389,22 @@ func (r *GCPInstanceResources) Provision(ctx context.Context, spec registry.Inst
 		return nil, err
 	}
 
-	// 2. Provision shared Cloud SQL IAM user + database + PostgreSQL ACLs (`REVOKE ... FROM PUBLIC`, `CONNECTION LIMIT 20`).
+	// 2. Provision shared SQL user + database + PostgreSQL ACLs (`REVOKE ... FROM PUBLIC`, `CONNECTION LIMIT 20`).
 	iamUser := IAMUserForServiceAccount(saEmail)
-	if err := r.ensureCloudSQLUserAndDB(ctx, sqlInstName, dbName, iamUser); err != nil {
-		return nil, err
+	var dbUser, dbPassword string
+	if r.cloudSQLAdmin {
+		if err := r.ensureCloudSQLUserAndDB(ctx, sqlInstName, dbName, iamUser); err != nil {
+			return nil, err
+		}
+	} else {
+		var pwBytes [24]byte
+		if _, err := rand.Read(pwBytes[:]); err != nil {
+			return nil, fmt.Errorf("gcp resources: generating database password: %w", err)
+		}
+		dbUser = iamUser
+		dbPassword = hex.EncodeToString(pwBytes[:])
 	}
-	if err := r.provisionPostgresACLs(ctx, sqlInstName, dbName, iamUser); err != nil {
+	if err := r.provisionPostgresACLs(ctx, sqlInstName, dbName, iamUser, dbPassword); err != nil {
 		return nil, err
 	}
 
@@ -388,9 +418,11 @@ func (r *GCPInstanceResources) Provision(ctx context.Context, spec registry.Inst
 	}
 
 	// 4. Configure conditional IAM bindings on the project (Secret Manager prefix, Cloud SQL instance, optional fleet logs).
-	enableLogs := r.fleetLogs || spec.ShipLogs
-	if err := r.ensureProjectIAMBindings(ctx, spec.Name, saEmail, sqlInstName, secPrefix, enableLogs); err != nil {
-		return nil, err
+	if r.bindProjectIAM {
+		enableLogs := r.fleetLogs || spec.ShipLogs
+		if err := r.ensureProjectIAMBindings(ctx, spec.Name, saEmail, sqlInstName, secPrefix, enableLogs); err != nil {
+			return nil, err
+		}
 	}
 
 	return &registry.InstanceResourceBundle{
@@ -399,6 +431,8 @@ func (r *GCPInstanceResources) Provision(ctx context.Context, spec registry.Inst
 		SQLConnectionName:   sqlConnName,
 		SQLPrivateIP:        sqlPrivateIP,
 		DatabaseName:        dbName,
+		DatabaseUser:        dbUser,
+		DatabasePassword:    dbPassword,
 		SecretPrefix:        secPrefix,
 		GCSBucket:           r.gcsBucket,
 		GCSManagedFolder:    managedFolder,
@@ -459,9 +493,11 @@ func (r *GCPInstanceResources) Teardown(ctx context.Context, spec registry.Insta
 	}
 	iamUser := IAMUserForServiceAccount(saEmail)
 
-	// Always remove project-level IAM bindings for the GSA first so it loses Cloud SQL and Secret Manager permissions.
-	if err := r.removeProjectIAMBindings(ctx, saEmail); err != nil {
-		return err
+	// Remove project-level IAM bindings for the GSA first when configured.
+	if r.bindProjectIAM {
+		if err := r.removeProjectIAMBindings(ctx, saEmail); err != nil {
+			return err
+		}
 	}
 
 	if retainDB {
@@ -486,8 +522,10 @@ func (r *GCPInstanceResources) Teardown(ctx context.Context, spec registry.Insta
 		if err := r.purgePostgresDatabase(ctx, sqlInstName, dbName, iamUser); err != nil {
 			return err
 		}
-		if err := r.deleteCloudSQLUserAndDB(ctx, sqlInstName, dbName, iamUser); err != nil {
-			return err
+		if r.cloudSQLAdmin {
+			if err := r.deleteCloudSQLUserAndDB(ctx, sqlInstName, dbName, iamUser); err != nil {
+				return err
+			}
 		}
 	}
 	if err := r.purgePrefixedSecrets(ctx, spec.Name, secPrefix); err != nil {
@@ -736,7 +774,7 @@ func (r *GCPInstanceResources) deleteCloudSQLUserAndDB(ctx context.Context, sqlI
 // - `REVOKE CONNECT ON DATABASE postgres FROM PUBLIC`
 // - `GRANT CONNECT, TEMPORARY ON DATABASE "<db_name>" TO "<iam_user>"`
 // - Schema `public` ownership and privilege isolation inside `<db_name>`.
-func (r *GCPInstanceResources) provisionPostgresACLs(ctx context.Context, sqlInstance, dbName, iamUser string) error {
+func (r *GCPInstanceResources) provisionPostgresACLs(ctx context.Context, sqlInstance, dbName, iamUser, dbPassword string) error {
 	if r.sqlOpener == nil || sqlInstance == "" {
 		return nil
 	}
@@ -751,6 +789,10 @@ func (r *GCPInstanceResources) provisionPostgresACLs(ctx context.Context, sqlIns
 
 	quotedRole := quotePGIdent(iamUser)
 	quotedDB := quotePGIdent(dbName)
+	pwClause := ""
+	if dbPassword != "" {
+		pwClause = fmt.Sprintf(" PASSWORD '%s'", strings.ReplaceAll(dbPassword, "'", "''"))
+	}
 
 	var roleExists bool
 	if err := adminDB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)`, iamUser).Scan(&roleExists); err != nil {
@@ -758,15 +800,15 @@ func (r *GCPInstanceResources) provisionPostgresACLs(ctx context.Context, sqlIns
 	}
 	if !roleExists {
 		createRoleSQL := fmt.Sprintf(
-			`CREATE ROLE %s WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT %d`,
-			quotedRole, DefaultRoleConnectionLimit)
+			`CREATE ROLE %s WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT %d%s`,
+			quotedRole, DefaultRoleConnectionLimit, pwClause)
 		if _, err := adminDB.ExecContext(ctx, createRoleSQL); err != nil {
 			return fmt.Errorf("gcp sql: creating role %s: %w", iamUser, err)
 		}
 	} else {
 		alterRoleSQL := fmt.Sprintf(
-			`ALTER ROLE %s WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS CONNECTION LIMIT %d`,
-			quotedRole, DefaultRoleConnectionLimit)
+			`ALTER ROLE %s WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS CONNECTION LIMIT %d%s`,
+			quotedRole, DefaultRoleConnectionLimit, pwClause)
 		if _, err := adminDB.ExecContext(ctx, alterRoleSQL); err != nil {
 			return fmt.Errorf("gcp sql: altering role %s: %w", iamUser, err)
 		}

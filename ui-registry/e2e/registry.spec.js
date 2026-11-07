@@ -97,6 +97,22 @@ test("serves embedded ui-registry under strict CSP and walks through all views w
   await page.getByRole("button", { name: "Rotate token" }).click();
   await expect(page.getByTestId("rotated-token-banner")).toContainText("grc_");
 
+  // 4b. Hosted VM creation with custom boot disk size (/new?kind=instance)
+  await page.goto(`${demo.url}/new?kind=instance`);
+  const createDiskInput = page.getByLabel(/Boot disk size \(GB\)/i);
+  await expect(createDiskInput).toHaveValue("100");
+  await page.getByRole("button", { name: "Choose custom name" }).click();
+  await page.getByLabel(/Entry subdomain name/i).fill("e2e-hosted-vm");
+  await expect(page.getByTestId("name-availability-status")).toHaveText("free");
+  await createDiskInput.fill("250");
+  await page.getByRole("button", { name: "Create hosted VM" }).click();
+  await expect(page.getByTestId("created-entry-banner")).toContainText(
+    "e2e-hosted-vm",
+  );
+  await page.goto(`${demo.url}/entries/e2e-hosted-vm`);
+  await expect(page.getByText("250 GB")).toBeVisible();
+  await expect(page.getByLabel(/Boot Disk Size \(GB\)/i)).toHaveValue("250");
+
   // 5. Admin (/admin)
   await page.getByRole("button", { name: "Admin" }).click();
   await expect(

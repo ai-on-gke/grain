@@ -144,10 +144,13 @@ type ComputeConfig struct {
 	Network               string            `yaml:"network"`
 	Subnetwork            string            `yaml:"subnetwork"`
 	BootImage             string            `yaml:"boot_image"`
+	StartupScript         string            `yaml:"startup_script,omitempty"`
+	StartupScriptFile     string            `yaml:"startup_script_file,omitempty"`
 	VMPrefix              string            `yaml:"vm_prefix"`
 	SAPrefix              string            `yaml:"sa_prefix"`
 	RegistryID            string            `yaml:"registry_id,omitempty"`
 	SSHBreakGlass         *bool             `yaml:"ssh_break_glass"`
+	BindProjectIAM        *bool             `yaml:"bind_project_iam,omitempty"`
 	Labels                map[string]string `yaml:"labels"`
 	DefaultShape          string            `yaml:"default_shape"`
 	Shapes                []Shape           `yaml:"shapes"`
@@ -172,6 +175,7 @@ type SQLInstanceConfig struct {
 type InstanceSQLConfig struct {
 	SQLInstances     []SQLInstanceConfig `yaml:"sql_instances"`
 	AdminDSNTemplate string              `yaml:"admin_dsn_template,omitempty"`
+	CloudSQLAdmin    *bool               `yaml:"cloud_sql_admin,omitempty"`
 }
 
 // InstanceStateConfig configures retention and GCS storage for hosted VMs.
@@ -320,6 +324,14 @@ func (c *Config) ApplyDefaults() {
 	if c.Compute.SSHBreakGlass == nil {
 		v := true
 		c.Compute.SSHBreakGlass = &v
+	}
+	if c.Compute.BindProjectIAM == nil {
+		v := true
+		c.Compute.BindProjectIAM = &v
+	}
+	if c.InstanceSQL.CloudSQLAdmin == nil {
+		v := true
+		c.InstanceSQL.CloudSQLAdmin = &v
 	}
 	if c.Compute.DrainTimeout == 0 {
 		c.Compute.DrainTimeout = DefaultComputeDrainTimeout
