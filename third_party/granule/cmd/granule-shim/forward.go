@@ -9,8 +9,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/bwsalmon/granule/pkg/execwire"
-	"github.com/bwsalmon/granule/pkg/guestexec"
+	"github.com/gke-labs/granule/pkg/execwire"
+	"github.com/gke-labs/granule/pkg/guestexec"
 )
 
 const forwardStdioUsage = `usage: granule forward-stdio

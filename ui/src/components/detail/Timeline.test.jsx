@@ -208,11 +208,47 @@ describe("DetailOverlay timeline", () => {
     const lines = document.querySelectorAll(".timeline-attempt-hostd");
     expect(lines).toHaveLength(1);
     expect(lines[0].textContent).toBe(
-      "hostd ws-a on cloudtop · alice@example.com",
+      "ran on host ws-a on cloudtop · alice@example.com",
     );
     expect(lines[0]).toHaveAttribute(
       "title",
-      "Host work on grain hostd ws-a, on cloudtop, owned by alice@example.com",
+      "The agent CLI ran on host ws-a, on cloudtop, owned by alice@example.com",
+    );
+  });
+
+  // A run on a hostd since deleted from the registry keeps the name it
+  // recorded, marked deleted.
+  it("marks an attempt's hostd that has since been deleted", () => {
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          attempts: [
+            {
+              number: 1,
+              startedAt: "2026-08-28T12:00:00Z",
+              finishedAt: "2026-08-28T12:10:00Z",
+              outcome: "failed",
+              hostd: {
+                hostd: "rarcea",
+                at: "2026-08-28T12:00:01Z",
+                deleted: true,
+              },
+            },
+          ],
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+    const lines = document.querySelectorAll(".timeline-attempt-hostd");
+    expect(lines).toHaveLength(1);
+    expect(lines[0].textContent).toBe("ran on host rarcea (deleted)");
+    expect(lines[0].getAttribute("title")).toContain(
+      "since deleted from the host registry",
     );
   });
 
@@ -486,6 +522,42 @@ describe("DetailOverlay timeline", () => {
     expect(
       screen.getByText(
         "by automation grain · orchestrator.settleSecurityHold (securityhold.go:548)",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  // model.TaskEventAdmissionChanged (unified-grants.design.md §4.1): every
+  // change to the admission setting is on the timeline with its old and new
+  // values and who made it.
+  it("shows who changed a task's admission, from what to what", () => {
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          transitions: [
+            { state: "queued", at: "2026-08-28T09:00:00Z" },
+            {
+              state: "admission_changed",
+              at: "2026-08-28T10:00:00Z",
+              by: "human bob@example.com",
+              reason: "standard -> bypass",
+              oldAdmission: "standard",
+              newAdmission: "bypass",
+            },
+          ],
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Admission changed")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "by human bob@example.com · from Standard to Bypass queue",
       ),
     ).toBeInTheDocument();
   });

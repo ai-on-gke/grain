@@ -124,6 +124,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent/antigravity/hook"
 	"github.com/ai-on-gke/grain/pkg/agent/sessionstore"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 )
@@ -595,8 +596,8 @@ func eagerToolNames() []string {
 // its pull request, are both independent of which backend its sandbox
 // runs on. So is agent.GrantArgs, which passes on the tool-granting
 // capabilities this run's task holds -- and so whether that server
-// serves the read-only tools for grain's own source (self-debug) or for
-// grain's own bootstrap playbooks (bootstrap-playbooks). So is
+// serves the read-only tools for grain's own source (self-debug) or
+// journal (grain#journal). So is
 // agent.ProposeRepoArgs, which passes on the repositories a proposal
 // this run makes may be filed against, so that propose_task's own
 // description can name them. So is agent.InteractiveArgs, which passes
@@ -702,6 +703,9 @@ func (f *Framework) pullRequestArgs(cfg agent.RunConfig) []string {
 	}
 	if cfg.PullRequestNumber > 0 {
 		args = append(args, "-pr-number", fmt.Sprintf("%d", cfg.PullRequestNumber))
+	}
+	if cfg.UpstreamRepo != "" {
+		args = append(args, "-pr-upstream-repo", cfg.UpstreamRepo)
 	}
 	// And the credential the branch is pushed with, by name, so the
 	// subprocess's own GitHub reads are made as the same account rather
@@ -1115,20 +1119,12 @@ func hookConfigJSON(grainBinaryPath string, args ...string) ([]byte, error) {
 	})
 }
 
-// HookName is what this run's hook is called in hooks.json. agy merges
-// hooks from every source it finds by name, so a name of grain's own
-// keeps this one distinct from anything a future agy ships built in.
-//
-// Exported because it is also how a real agy reports the hook back
-// (`agy -p /hooks` prints this name in the first field of the record it
-// loaded), and the live test that reads that output should match on this
-// constant rather than on a second copy of the string.
-const HookName = "grain-native-tool-denial"
+// HookName is what this run's hook is called in hooks.json (hook.Name).
+const HookName = hook.Name
 
-// HookSubcommand is the argv[1] cmd/grain matches to run HookDecision.
-// Named here rather than there because this package is what writes it
-// into agy's config, and the two must agree.
-const HookSubcommand = "agy-tool-hook"
+// HookSubcommand is the argv[1] cmd/grain matches to run the hook
+// (hook.Subcommand).
+const HookSubcommand = hook.Subcommand
 
 // shellQuote wraps a path for the `sh -c` agy runs a hook command
 // through. Deployments put grain in /usr/local/bin, but a path is not
@@ -1137,56 +1133,12 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// HookDecision answers one PreToolUse payload: it returns the JSON agy
-// reads back on stdout, and it is the whole of what cmd/grain's
-// "agy-tool-hook" subcommand does.
-//
-// This hook is the fail-closed half of the boundary. It sees every tool
-// call and allows only exact, eagerly registered tools published by
-// grain's private MCP server. AGY's native roster can grow independently
-// of this repository, so enumerating the native tools to deny would make
-// every newly added tool an unreviewed controller capability.
-//
-// Saying "allow" here would bypass the independent permission layer.
-// Grain's tools therefore receive no decision and continue through AGY's
-// normal permission check; every other name, and every malformed payload,
-// receives a hard denial.
-func HookDecision(payload []byte) []byte {
-	return HookDecisionFor(HookOptions{}, payload)
-}
+// HookDecision answers one PreToolUse payload for a run with no host-tool
+// grant (hook.Decision).
+func HookDecision(payload []byte) []byte { return hook.Decision(payload) }
 
-// HookOptions is what one run's hook is told about that run, from the
-// arguments hookConfigJSON wrote into its command (ParseHookArgs). The
-// zero value is every run without a host-tool grant, and decides
-// exactly what HookDecision always has.
-type HookOptions struct {
-	// Grants are the hook-relevant grants this run holds. Only a
-	// registered HostToolGrant's Capability means anything, and what it
-	// admits is that grant's Tools -- a list in code, never in these
-	// options, so no argument can name a host tool into the allowlist.
-	Grants []string
-	// RecordPath is the JSON-lines file every admitted host-tool call is
-	// appended to before it is allowed (HostToolCall). A call that cannot
-	// be recorded is denied: host-side calls must never go unrecorded.
-	RecordPath string
-	// TaskID and RunID are written into each record.
-	TaskID, RunID string
-	// CapabilityTools are the tools of this run's capability MCP servers
-	// (agent.RunConfig.CapabilityMCPServers), each "<server>/<tool>":
-	// admitted like grain's own, and nothing else is.
-	CapabilityTools []string
-}
-
-// The flags hookArgs writes and ParseHookArgs reads.
-const (
-	hookFlagGrant  = "-grant"
-	hookFlagRecord = "-record"
-	hookFlagTask   = "-task"
-	hookFlagRun    = "-run"
-	// hookFlagCapabilityTool names one "<server>/<tool>" a capability
-	// grant's MCP server reported.
-	hookFlagCapabilityTool = "-capability-tool"
-)
+// HookOptions is what one run's hook is told about that run (hook.Options).
+type HookOptions = hook.Options
 
 // hookArgs is the argument list a run's hook command carries after
 // HookSubcommand: nothing at all for a run without a host-tool grant
@@ -1198,7 +1150,7 @@ func hookArgs(cfg agent.RunConfig, home string) []string {
 	var args []string
 	for _, s := range cfg.CapabilityMCPServers {
 		for _, tool := range s.Tools {
-			args = append(args, hookFlagCapabilityTool, s.Name+"/"+tool)
+			args = append(args, hook.FlagCapabilityTool, s.Name+"/"+tool)
 		}
 	}
 	held := heldHostToolGrants(cfg.Grants)
@@ -1206,251 +1158,33 @@ func hookArgs(cfg agent.RunConfig, home string) []string {
 		return args
 	}
 	for _, g := range held {
-		args = append(args, hookFlagGrant, g.Capability)
+		args = append(args, hook.FlagGrant, g.Capability)
 	}
-	args = append(args, hookFlagRecord, filepath.Join(runScratchDir(home), hostToolCallsFilename))
+	args = append(args, hook.FlagRecord, filepath.Join(runScratchDir(home), hook.HostToolCallsFilename))
 	if cfg.TaskID != "" {
-		args = append(args, hookFlagTask, cfg.TaskID)
+		args = append(args, hook.FlagTask, cfg.TaskID)
 	}
 	if cfg.RunID != "" {
-		args = append(args, hookFlagRun, cfg.RunID)
+		args = append(args, hook.FlagRun, cfg.RunID)
 	}
 	return args
 }
 
-// ParseHookArgs reads what hookArgs wrote. An argument it does not
-// recognize is skipped rather than fatal, because the hook must answer
-// every call whatever it was started with (cmd/grain's agyToolHook), and
-// returned in ignored for the caller to report; an unrecognized grant is
-// kept but admits nothing.
-func ParseHookArgs(args []string) (opts HookOptions, ignored []string) {
-	for i := 0; i < len(args); i++ {
-		if i+1 >= len(args) {
-			ignored = append(ignored, args[i])
-			break
-		}
-		switch args[i] {
-		case hookFlagGrant:
-			opts.Grants = append(opts.Grants, args[i+1])
-		case hookFlagRecord:
-			opts.RecordPath = args[i+1]
-		case hookFlagTask:
-			opts.TaskID = args[i+1]
-		case hookFlagRun:
-			opts.RunID = args[i+1]
-		case hookFlagCapabilityTool:
-			opts.CapabilityTools = append(opts.CapabilityTools, args[i+1])
-		default:
-			ignored = append(ignored, args[i])
-			continue
-		}
-		i++
-	}
-	return opts, ignored
-}
+// ParseHookArgs reads what hookArgs wrote (hook.ParseArgs).
+func ParseHookArgs(args []string) (opts HookOptions, ignored []string) { return hook.ParseArgs(args) }
 
-// ServeHook is the whole of cmd/grain's HookSubcommand: it reads one
-// PreToolUse payload from stdin, writes HookDecisionFor's reply for the
-// options args carry (ParseHookArgs) to stdout, and says on stderr which
-// arguments it did not recognize.
-//
-// It never fails and writes nothing at all for a call it has no opinion
-// about, because agy takes a hook that exits non-zero, or writes
-// anything but a decision, as a failed tool call (noOpinion). So a
-// payload it cannot read is answered like any other unrecognized call,
-// and an argument it does not know is reported rather than fatal.
+// ServeHook is the whole of cmd/grain's HookSubcommand (hook.Run).
 func ServeHook(args []string, stdin io.Reader, stdout, stderr io.Writer) {
-	payload, err := io.ReadAll(stdin)
-	if err != nil {
-		payload = nil
-	}
-	opts, ignored := ParseHookArgs(args)
-	if len(ignored) > 0 {
-		fmt.Fprintf(stderr, "grain %s: ignoring unrecognized arguments %q\n", HookSubcommand, ignored)
-	}
-	stdout.Write(HookDecisionFor(opts, payload))
+	hook.Run(args, stdin, stdout, stderr)
 }
 
-// allowsHostTool returns the grant opts holds that admits the host tool
-// name, if there is one.
-func (opts HookOptions) allowsHostTool(name string) (HostToolGrant, bool) {
-	for _, g := range heldHostToolGrants(opts.Grants) {
-		if slices.Contains(g.Tools, name) {
-			return g, true
-		}
-	}
-	return HostToolGrant{}, false
-}
-
-// hostToolCallsFilename is where, inside a run's scratch directory, the
-// hook records the host-tool calls it admitted.
-const hostToolCallsFilename = "host-tool-calls.jsonl"
-
-// HostToolCall is one admitted host-tool call as the hook recorded it.
-type HostToolCall struct {
-	At    time.Time      `json:"at"`
-	Task  string         `json:"task,omitempty"`
-	Run   string         `json:"run,omitempty"`
-	Host  string         `json:"host,omitempty"`
-	Tool  string         `json:"tool"`
-	Query string         `json:"query,omitempty"`
-	Args  map[string]any `json:"args,omitempty"`
-}
-
-// recordHostToolCall appends call to path as one JSON line.
-func recordHostToolCall(path string, call HostToolCall) error {
-	if path == "" {
-		return fmt.Errorf("no record path")
-	}
-	line, err := json.Marshal(call)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	if _, err := f.Write(append(line, '\n')); err != nil {
-		f.Close()
-		return err
-	}
-	return f.Close()
-}
-
-// hostToolQuery is the part of a host tool's arguments worth a line in
-// the daemon log: its query, or the whole of its arguments when it names
-// none.
-func hostToolQuery(args map[string]any) string {
-	for _, key := range []string{"query", "Query", "q"} {
-		if q, ok := args[key].(string); ok {
-			return q
-		}
-	}
-	if len(args) == 0 {
-		return ""
-	}
-	b, _ := json.Marshal(args)
-	return string(b)
-}
+// HostToolCall is one admitted host-tool call as the hook recorded it
+// (hook.HostToolCall).
+type HostToolCall = hook.HostToolCall
 
 // HookDecisionFor is HookDecision for a run whose hook was started with
-// opts: grain's own MCP tools get no opinion, as always; for a run holding
-// a registered HostToolGrant, the host tools it names are recorded and
-// then get no opinion too; everything else is denied.
-func HookDecisionFor(opts HookOptions, payload []byte) []byte {
-	var in struct {
-		ToolCall struct {
-			Name string         `json:"name"`
-			Args map[string]any `json:"args"`
-		} `json:"toolCall"`
-	}
-	if err := json.Unmarshal(payload, &in); err != nil {
-		return denyNonGrainTool("unrecognized tool call")
-	}
-	for _, tool := range publishedTools() {
-		if in.ToolCall.Name == mcp.AgyQualifiedToolName(tool) {
-			return noOpinion
-		}
-	}
-	for _, st := range opts.CapabilityTools {
-		server, tool, ok := strings.Cut(st, "/")
-		if ok && server != "" && tool != "" && in.ToolCall.Name == capabilityToolName(server, tool) {
-			return noOpinion
-		}
-	}
-	if grant, ok := opts.allowsHostTool(in.ToolCall.Name); ok {
-		host, _ := os.Hostname()
-		call := HostToolCall{
-			At: time.Now().UTC(), Task: opts.TaskID, Run: opts.RunID, Host: host,
-			Tool: in.ToolCall.Name, Query: hostToolQuery(in.ToolCall.Args), Args: in.ToolCall.Args,
-		}
-		if err := recordHostToolCall(opts.RecordPath, call); err != nil {
-			return denyReason(in.ToolCall.Name + " is allowed by this task's " + grant.Capability +
-				" grant, but grain could not record the call (" + err.Error() + "), and an unrecorded call " +
-				"on the machine hosting this session is not one grain will let through.")
-		}
-		return noOpinion
-	}
-	switch in.ToolCall.Name {
-	case "exit_plan_mode":
-		// agy's own plan-mode handoff, not a tool that touches any
-		// machine: agy refuses edits until it is called, so denying it
-		// traps a run that started in plan mode in a read-only loop. It
-		// was 100% of its calls failing before this
-		// (design/design/sandbox-first-agent-surface.design.md §5).
-		return noOpinion
-	case "enter_plan_mode":
-		return denyReason("Plan mode is off in headless grain runs, and entering it would stop " +
-			"every edit: there is nobody to approve a plan. Carry out the steps directly with " +
-			joinNames(sandboxToolNames()) + ".")
-	case "schedule":
-		return denyReason("schedule's timers do not exist in a headless grain run: nothing wakes " +
-			"this session up again. To wait for CI, run `grain ci wait` with " +
-			mcp.AgyQualifiedToolName("run_command") + " (timeout 600000); to free the sandbox while " +
-			"something finishes, call " + mcp.AgyQualifiedToolName("resume_later") + ".")
-	}
-	name := in.ToolCall.Name
-	if name == "" {
-		name = "unrecognized tool call"
-	}
-	return denyNonGrainTool(name)
-}
-
-func denyNonGrainTool(name string) []byte {
-	return denyReason(name + " is not one of grain's sandbox-bound MCP tools and cannot run on the " +
-		"machine hosting this session. Use " + joinNames(sandboxToolNames()) +
-		" instead, or another " + mcp.AgyQualifiedToolName("") + "* tool.")
-}
-
-func denyReason(reason string) []byte {
-	reply, err := json.Marshal(map[string]any{
-		"decision": "deny",
-		"reason":   reason,
-	})
-	if err != nil {
-		// json.Marshal cannot fail for this string-only object. Preserve
-		// fail-closed behavior if that invariant ever changes.
-		return []byte(`{"decision":"deny","reason":"grain could not validate this tool call"}`)
-	}
-	return reply
-}
-
-// noOpinion leaves an exact grain MCP tool to AGY's permission engine:
-// nothing at all, written on stdout before the hook exits successfully.
-// Every other name and every unreadable payload is denied above.
-//
-// It used to be `{}`, on the reading that an object carrying no decision
-// carries no opinion. Against a real agy 1.1.26 driving a real model that
-// is precisely backwards, and it denied every tool call a run made --
-// grain's own included, so a run so configured could do nothing at all
-// except say why. The whole measured contract, since agy's own guide
-// documents only the four decision values and not what it does with
-// anything else:
-//
-//   - no output at all, exit 0: the call proceeds. This is "no opinion",
-//     and it is the only spelling of it that is not also something else.
-//   - {"decision":"allow"}: proceeds, skipping the permission prompt.
-//   - {"decision":"ask"}: proceeds, the prompt being auto-approved by
-//     Run's --dangerously-skip-permissions.
-//   - {"decision":"deny","reason":r}: "tool call denied by pre-tool hook:
-//     r", and the tool does not run. This is the one grain wants.
-//   - {} or any object with no "decision": denied, with an empty reason.
-//     An absent decision is not an abstention; it is a deny nobody
-//     explained.
-//   - output that is not JSON: the call fails with "failed to unmarshal
-//     result from hook ... via protojson".
-//   - a hook command that exits non-zero, or is not there at all: the
-//     call fails with "JSON hook ... failed: command failed: exit status
-//     N".
-//
-// The last two are why cmd/grain's subcommand exits 0 whatever happens
-// and writes only this or a decision: a hook that errors does not fail
-// open, it fails the tool call, so a broken grain binary would take the
-// run's tools with it.
-var noOpinion []byte
+// opts (hook.DecisionFor).
+func HookDecisionFor(opts HookOptions, payload []byte) []byte { return hook.DecisionFor(opts, payload) }
 
 // providerFor determines the "modelProvider" value that turns
 // GEMINI_API_KEY into a working credential.
@@ -2275,7 +2009,7 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 	turnVerdict := attempts.turnVerdict
 
 	recordedTools := loadRecordedTools(recordedToolsPath)
-	hostCalls := loadHostToolCalls(filepath.Join(runScratchDir(home), hostToolCallsFilename))
+	hostCalls := loadHostToolCalls(filepath.Join(runScratchDir(home), hook.HostToolCallsFilename))
 	result, parseErr := parseTranscriptWithRecorded(stdout, recordedTools)
 	// Whatever the retry loop had to say about itself travels back with
 	// the run whichever way it ended, so a transcript that appears to
@@ -2322,6 +2056,8 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 	// "come back in a moment, the model is overloaded". See capacity.go.
 	capacity := capacityFailure(events.resultText+"\n"+diagnostic, runErr)
 	switch {
+	case agent.IsHostdStop(runErr):
+		return annotate(partialResult(result, stdout, recordedTools)), agent.RunFailure("antigravity", "agy", nil, runErr)
 	case capWatch.tripped():
 		// The cap cancelled the subprocess, so runErr is that
 		// cancellation rather than a fault of agy's -- report the cap.
@@ -2401,6 +2137,8 @@ func (f *Framework) ParseResult(stdout string, runErr error) (*agent.Result, err
 	result, parseErr := parseTranscriptWithRecorded(stdout, nil)
 	events := parseEvents(stdout)
 	switch {
+	case agent.IsHostdStop(runErr):
+		return partialResult(result, stdout, nil), agent.RunFailure("antigravity", "agy", nil, runErr)
 	case runErr != nil && (!events.sawResult || events.resultErr != nil):
 		return partialResult(result, stdout, nil), agent.RunFailure("antigravity", "agy", events.resultErr, runErr)
 	case parseErr != nil:

@@ -138,6 +138,7 @@ func (s *Store) SyncRepoDeclarations(ctx context.Context, repo RepoRef, commit s
 
 		for _, file := range declared.Templates {
 			t := file.Template
+			t.Grants = canonicalizeDeclaredGrants(repo, t.Grants)
 			if existing, err := getTemplate(ctx, tx, t.ID); err != nil {
 				return err
 			} else if existing != nil {
@@ -170,9 +171,13 @@ func (s *Store) SyncRepoDeclarations(ctx context.Context, repo RepoRef, commit s
 			if err := write(DeclaredSuite, suite.ID, file.Path); err != nil {
 				return err
 			}
+			if err := putDeclarationQualification(ctx, tx, suite.ID, file.Qualification); err != nil {
+				return err
+			}
 		}
 		for _, file := range declared.Schedules {
 			sched := file.Schedule
+			sched.Grants = canonicalizeDeclaredGrants(repo, sched.Grants)
 			existing, err := getSchedule(ctx, tx, sched.ID)
 			if err != nil {
 				return err
@@ -240,6 +245,40 @@ func (s *Store) SyncRepoDeclarations(ctx context.Context, repo RepoRef, commit s
 	return changed, nil
 }
 
+// canonicalizeDeclaredGrants rewrites retired bare capability names (such as
+// bootstrap-playbooks or self-debug) on declared templates and schedules to
+// the canonical grant(s) they became, and maps a declared grain#ci / grain-ci
+// grant to repo-scoped api:ci-read@<repo> so applyGrainCIGrant does not strip
+// it on a ci_mode: github repository, deduplicating by capability so primary
+// keys on template_grant and schedule_grant never collide.
+func canonicalizeDeclaredGrants(repo RepoRef, grants []Grant) []Grant {
+	if len(grants) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(grants))
+	out := make([]Grant, 0, len(grants))
+	for _, g := range grants {
+		for _, cap := range CanonicalLegacyGrants(g.Capability) {
+			if cap == "" {
+				continue
+			}
+			if IsGrainCIGrant(cap) && !repo.IsZero() {
+				cap = APIGrantPrefix + "ci-read@" + repo.String()
+			}
+			if seen[cap] {
+				continue
+			}
+			seen[cap] = true
+			out = append(out, Grant{
+				Capability: cap,
+				Via:        g.Via,
+				Folder:     g.Folder,
+			})
+		}
+	}
+	return out
+}
+
 // deleteDeclared removes one withdrawn declaration: the row in whichever
 // table it lives in, and its provenance.
 //
@@ -280,6 +319,9 @@ func deleteDeclared(ctx context.Context, tx *sql.Tx, row RepoDeclaration) error 
 		}
 		table = "template"
 	case DeclaredSuite:
+		if _, err := tx.ExecContext(ctx, "DELETE FROM `repo_declaration_qualification` WHERE `id` = ?", row.ID); err != nil {
+			return fmt.Errorf("removing withdrawn suite %s's qualification: %w", row.ID, err)
+		}
 		table = "suite"
 	case DeclaredSchedule:
 		table = "schedule"

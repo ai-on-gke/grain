@@ -90,24 +90,38 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/auth/logout":               public,
 	"GET /api/auth/user":                 public,
 	"GET /api/auth/status":               public,
+	"GET /api/auth/whoami":               public,
 	"GET /api/whoami":                    trusted,
 
 	// The long poll that tells a signed-in page the daemon is going down
 	// for a restart before it stops answering (grain/task-3543).
 	"GET /api/restart-watch": trusted,
+	// grain's namespace (pkg/ui/api_fs.go): grain fs and external agents.
+	"GET /api/fs/ci/{path...}":     trusted,
+	"GET /api/fs/task/{path...}":   trusted,
+	"GET /api/fs/deploy/{path...}": trusted,
+	"GET /api/fs/config/{path...}": trusted,
+	"GET /api/fs/memory/{path...}": trusted,
+	"GET /api/fs/src/{path...}":    trusted,
 
-	"GET /api/settings":                         trusted,
-	"PUT /api/settings":                         trusted,
-	"POST /api/settings":                        trusted,
-	"POST /api/settings/plan":                   trusted,
-	"GET /api/settings/cli-run":                 trusted,
-	"PUT /api/settings/cli-run":                 trusted,
-	"POST /api/capabilities/{id}/check":         trusted,
-	"POST /api/settings/db/migrate-to-postgres": trusted,
+	"GET /api/settings":                 trusted,
+	"PUT /api/settings":                 trusted,
+	"POST /api/settings":                trusted,
+	"POST /api/settings/plan":           trusted,
+	"GET /api/settings/cli-run":         trusted,
+	"PUT /api/settings/cli-run":         trusted,
+	"GET /api/registry":                 trusted,
+	"POST /api/registry/heartbeat":      trusted,
+	"GET /api/registry/status":          trusted,
+	"POST /api/capabilities/{id}/check": trusted,
 
 	// Tasks.
 	"GET /api/tasks":                                                trusted,
+	"GET /api/refs/{ref}/summary":                                   trusted,
 	"GET /api/tasks/states":                                         trusted,
+	"GET /api/tasks/wait":                                           trusted,
+	"GET /api/inbox":                                                trusted,
+	"GET /api/events":                                               trusted,
 	"GET /api/states":                                               trusted,
 	"POST /api/tasks":                                               trusted,
 	"POST /api/tasks/from-template":                                 trusted,
@@ -122,10 +136,14 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/tasks/{id}/undefer":                                  trusted,
 	"POST /api/tasks/{id}/submit":                                   trusted,
 	"POST /api/tasks/{id}/comments":                                 trusted,
+	"POST /api/tasks/{id}/reply":                                    trusted,
 	"PUT /api/tasks/{id}/secret":                                    trusted,
 	"POST /api/tasks/{id}/config-change":                            trusted,
 	"POST /api/tasks/{id}/config-change/approve":                    trusted,
 	"POST /api/tasks/{id}/config-change/reject":                     trusted,
+	"POST /api/tasks/{id}/access-request/check":                     trusted,
+	"POST /api/tasks/{id}/access-request/grant":                     trusted,
+	"POST /api/tasks/{id}/access-request/deny":                      trusted,
 	"GET /api/tasks/{id}/attachments/{attachmentId}":                trusted,
 	"POST /api/tasks/{id}/close":                                    trusted,
 	"POST /api/tasks/{id}/stop":                                     trusted,
@@ -136,10 +154,15 @@ var routeAuthorization = map[string]authLevel{
 	"DELETE /api/tasks/{id}/goal":                                   trusted,
 	"POST /api/tasks/{id}/reopen":                                   trusted,
 	"POST /api/tasks/{id}/retry":                                    trusted,
+	"POST /api/tasks/{id}/human-review":                             trusted,
+	"POST /api/tasks/{id}/human-review/release":                     trusted,
 	"POST /api/tasks/{id}/retry-merge":                              trusted,
 	"POST /api/tasks/{id}/force-merge":                              trusted,
 	"POST /api/tasks/{id}/run-now":                                  trusted,
 	"POST /api/tasks/{id}/pull-request":                             trusted,
+	"POST /api/pull-requests/adopt":                                 trusted,
+	"POST /api/pull-requests/review":                                trusted,
+	"GET /api/pull-requests/status":                                 trusted,
 	"POST /api/tasks/{id}/sandbox/recreate":                         trusted,
 	"POST /api/tasks/{id}/activity":                                 trusted,
 	"PUT /api/tasks/{id}/session-title":                             trusted,
@@ -241,6 +264,8 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/repos/{owner}/{name}/releases/{release}/candidates/promote": trusted,
 	"POST /api/repos/{owner}/{name}/pending-releases/{version}/approve":    trusted,
 	"POST /api/repos/{owner}/{name}/pending-releases/{version}/reject":     trusted,
+	"POST /api/releases/{version}/rollback":                                trusted,
+	"GET /api/release-approval-key":                                        trusted,
 	"GET /api/repos/{owner}/{name}/branches":                               trusted,
 	"POST /api/repos/{owner}/{name}/branches":                              trusted,
 	"GET /api/repos/{owner}/{name}/github-branches":                        trusted,
@@ -303,26 +328,38 @@ var routeAuthorization = map[string]authLevel{
 
 	// Deployment-wide credentials: external agent tokens, model keys, GitHub
 	// tokens, secrets.
-	"GET /api/external-agents/tokens":              trusted,
-	"POST /api/external-agents/tokens":             trusted,
-	"GET /api/hostds":                              trusted,
-	"POST /api/hostds":                             trusted,
-	"PATCH /api/hostds/{name}":                     trusted,
-	"POST /api/hostds/{name}/rotate":               trusted,
-	"POST /api/hostds/{name}/revoke":               trusted,
-	"GET /api/access/principals":                   trusted,
-	"POST /api/access/principals":                  trusted,
-	"DELETE /api/access/principals/{entry}":        trusted,
-	"POST /api/external-agents/tokens/{id}/rotate": trusted,
-	"POST /api/external-agents/tokens/{id}/revoke": trusted,
-	"DELETE /api/external-agents/tokens/{id}":      trusted,
-	"POST /api/external-agents/tokens/revoke-all":  trusted,
-	"POST /api/mcp":                                trusted,
-	"POST /mcp":                                    trusted,
-	"GET /api/agent-keys":                          trusted,
-	"PUT /api/agent-keys/{framework}":              trusted,
-	"DELETE /api/agent-keys/{framework}":           trusted,
-	"POST /api/agent-keys/{framework}/check":       trusted,
+	"GET /api/external-agents/tokens":                 trusted,
+	"POST /api/external-agents/tokens":                trusted,
+	"GET /api/hostds":                                 trusted,
+	"POST /api/hostds":                                trusted,
+	"GET /api/hostds/enrollment-codes":                trusted,
+	"POST /api/hostds/enrollment-codes":               trusted,
+	"POST /api/hostds/enrollment-codes/{name}/rotate": trusted,
+	"POST /api/hostds/enrollment-codes/{name}/revoke": trusted,
+	"GET /api/hostds/pending":                         trusted,
+	"POST /api/hostds/pending/{id}/accept":            trusted,
+	"POST /api/hostds/pending/{id}/reject":            trusted,
+	"PATCH /api/hostds/{name}":                        trusted,
+	"DELETE /api/hostds/{name}":                       trusted,
+	"POST /api/hostds/delete-revoked":                 trusted,
+	"GET /api/hostds/{name}/install":                  trusted,
+	"POST /api/hostds/{name}/rename":                  trusted,
+	"POST /api/hostds/{name}/rotate":                  trusted,
+	"POST /api/hostds/{name}/revoke":                  trusted,
+	"GET /api/access/principals":                      trusted,
+	"POST /api/access/principals":                     trusted,
+	"PATCH /api/access/principals/{entry}":            trusted,
+	"DELETE /api/access/principals/{entry}":           trusted,
+	"POST /api/external-agents/tokens/{id}/rotate":    trusted,
+	"POST /api/external-agents/tokens/{id}/revoke":    trusted,
+	"DELETE /api/external-agents/tokens/{id}":         trusted,
+	"POST /api/external-agents/tokens/revoke-all":     trusted,
+	"POST /api/mcp":                                   trusted,
+	"POST /mcp":                                       trusted,
+	"GET /api/agent-keys":                             trusted,
+	"PUT /api/agent-keys/{framework}":                 trusted,
+	"DELETE /api/agent-keys/{framework}":              trusted,
+	"POST /api/agent-keys/{framework}/check":          trusted,
 	// A connection's key (grain/task-1601).
 	"PUT /api/agent-backends/{id}/credential":    trusted,
 	"DELETE /api/agent-backends/{id}/credential": trusted,
@@ -336,41 +373,44 @@ var routeAuthorization = map[string]authLevel{
 	// material, and is what a person granting gcp-key:<name> reads.
 	// Capability servers: the deployment's own configuration, and a
 	// bind that writes into the secrets store.
-	"GET /api/capability-servers":                 trusted,
-	"GET /api/capability-methods":                 trusted,
-	"POST /api/capability-grants/check":           trusted,
-	"PUT /api/capability-servers":                 trusted,
-	"POST /api/capability-servers/remove":         trusted,
-	"POST /api/capability-servers/enable":         trusted,
-	"POST /api/capability-servers/dismiss-notice": trusted,
-	"POST /api/capability-servers/rotate-managed": trusted,
-	"POST /api/capability-servers/disable":        trusted,
-	"POST /api/capability-servers/bind-secret":    trusted,
-	"POST /api/capability-servers/test":           trusted,
-	"POST /api/capability-servers/test-script":    trusted,
-	"POST /api/capability-servers/gchat-test":     trusted,
-	"GET /api/capability-servers/gchat-usage":     trusted,
-	"GET /api/capability-servers/host-entries":    trusted,
-	"GET /api/capability-servers/usage":           trusted,
-	"GET /api/capability-policy":                  trusted,
-	"PUT /api/capability-policy":                  trusted,
-	"POST /api/capability-policy/preview":         trusted,
-	"GET /api/api-scope-sets":                     trusted,
-	"GET /api/api-scope-sets/usage":               trusted,
-	"PUT /api/api-scope-sets":                     trusted,
-	"POST /api/api-scope-sets/delete":             trusted,
-	"GET /api/gcp-keys":                           trusted,
-	"POST /api/gcp-keys":                          trusted,
-	"GET /api/gcp-keys/{name}":                    trusted,
-	"PUT /api/gcp-keys/{name}":                    trusted,
-	"DELETE /api/gcp-keys/{name}":                 trusted,
-	"GET /api/github-tokens":                      trusted,
-	"PUT /api/github-tokens/{name}":               trusted,
-	"DELETE /api/github-tokens/{name}":            trusted,
-	"GET /api/secrets":                            trusted,
-	"PUT /api/secrets/{secret}/{key}":             trusted,
-	"DELETE /api/secrets/{secret}/{key}":          trusted,
-	"DELETE /api/secrets/{secret}":                trusted,
+	"GET /api/capability-servers":                        trusted,
+	"GET /api/capability-methods":                        trusted,
+	"POST /api/capability-grants/check":                  trusted,
+	"PUT /api/capability-servers":                        trusted,
+	"POST /api/capability-servers/remove":                trusted,
+	"POST /api/capability-servers/enable":                trusted,
+	"POST /api/capability-servers/dismiss-notice":        trusted,
+	"POST /api/capability-servers/rotate-managed":        trusted,
+	"POST /api/capability-servers/disable":               trusted,
+	"POST /api/capability-servers/bind-secret":           trusted,
+	"POST /api/capability-servers/test":                  trusted,
+	"POST /api/capability-servers/test-script":           trusted,
+	"POST /api/capability-servers/gchat-test":            trusted,
+	"POST /api/capability-servers/figma-test":            trusted,
+	"POST /api/capability-servers/figma-oauth-authorize": trusted,
+	"POST /api/capability-servers/figma-oauth-exchange":  trusted,
+	"GET /api/capability-servers/gchat-usage":            trusted,
+	"GET /api/capability-servers/host-entries":           trusted,
+	"GET /api/capability-servers/usage":                  trusted,
+	"GET /api/capability-policy":                         trusted,
+	"PUT /api/capability-policy":                         trusted,
+	"POST /api/capability-policy/preview":                trusted,
+	"GET /api/api-scope-sets":                            trusted,
+	"GET /api/api-scope-sets/usage":                      trusted,
+	"PUT /api/api-scope-sets":                            trusted,
+	"POST /api/api-scope-sets/delete":                    trusted,
+	"GET /api/gcp-keys":                                  trusted,
+	"POST /api/gcp-keys":                                 trusted,
+	"GET /api/gcp-keys/{name}":                           trusted,
+	"PUT /api/gcp-keys/{name}":                           trusted,
+	"DELETE /api/gcp-keys/{name}":                        trusted,
+	"GET /api/github-tokens":                             trusted,
+	"PUT /api/github-tokens/{name}":                      trusted,
+	"DELETE /api/github-tokens/{name}":                   trusted,
+	"GET /api/secrets":                                   trusted,
+	"PUT /api/secrets/{secret}/{key}":                    trusted,
+	"DELETE /api/secrets/{secret}/{key}":                 trusted,
+	"DELETE /api/secrets/{secret}":                       trusted,
 
 	// The deployment's own state, host, daemon and database.
 	"GET /api/state-repo":                trusted,
@@ -390,12 +430,10 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/upgrade":                   trusted,
 	"POST /api/upgrade":                  trusted,
 	"DELETE /api/upgrade/scheduled":      trusted,
+	"PUT /api/upgrade/source":            trusted,
 	"GET /api/upgrade/targets":           trusted,
 	"GET /api/upgrade/release-notes":     trusted,
 	"GET /api/database":                  trusted,
-	"POST /api/database/test":            trusted,
-	"POST /api/database/upgrade":         trusted,
-	"POST /api/upgrade/postgres":         trusted,
 	"GET /api/logs":                      trusted,
 	"GET /api/logs/{source}":             trusted,
 
@@ -448,6 +486,14 @@ var routeAuthorization = map[string]authLevel{
 	// A grain hostd dialing in authenticates with the hostd token in
 	// its upgrade (hostd.Remote.ServeHTTP), not with a principal.
 	"GET /api/hostd/connect": public,
+	// Ed25519-signed host enrollment and silent credential renewal protocol.
+	"POST /api/hostd/join":           public,
+	"POST /api/hostd/join/{id}/poll": public,
+	"POST /api/hostd/renew":          public,
+	// The script that installs one: grain's own, with no token in it
+	// (TestHostdInstallScriptIsPublicAndHoldsNoSecret).
+	"GET /api/hostd/install.sh": public,
+	"GET /hostd/install":        public,
 }
 
 // The people the fixtures name. On the single-tenant daemon
@@ -873,11 +919,10 @@ func newRouteFixtureWith(t *testing.T, singleTenant, withProxy bool, configure .
 		Secrets:       secrets.New(secDir),
 		Credentials:   credentials,
 		CodexAuthFile: filepath.Join(root, "codex-auth.json"),
-		// Where the embedded PostgreSQL goes when a
-		// POST /api/database/test or /upgrade names no DSN and the
-		// binaries are installed. Left empty, EnsureRunning initdb's a
-		// cluster in ./postgres -- tests/security/postgres/, which
-		// `git add -A` once committed.
+		// The data directory, under the test's own temporary root.
+		// Left empty, anything that falls back to the embedded
+		// PostgreSQL initdb's a cluster in ./postgres --
+		// tests/security/postgres/, which `git add -A` once committed.
 		DataDir:       dataDir,
 		LocalAPIToken: testAccessCode,
 	}
@@ -1118,4 +1163,107 @@ func (r *statusRecorder) snapshot() *statusRecorder {
 		out.code = http.StatusOK
 	}
 	return out
+}
+
+// TestLimitedRoleCannotEscalateThroughTaskOrTemplateWriteRoutes walks every
+// non-GET route whose role scope is tasks:write or templates:write and asserts
+// that, as a limited role, a body carrying capabilities, autoMerge, approved
+// or writes outside the role is refused with 403 before the handler runs.
+func TestLimitedRoleCannotEscalateThroughTaskOrTemplateWriteRoutes(t *testing.T) {
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
+	t.Setenv("GRAIN_ALLOWED_PRINCIPALS", "")
+
+	if err := model.InstallAPIScopeSets([]model.APIScopeSet{
+		{
+			Name:     "contrib-and-templates",
+			Includes: []string{"grain/contributor"},
+			Scopes:   []string{"templates:write"},
+			Version:  1,
+		},
+		{
+			Name:    "widgets-tasks",
+			Scopes:  []string{"tasks:read", "tasks:write"},
+			Repos:   []string{"acme/widgets"},
+			Version: 1,
+		},
+		{
+			Name:     "widgets-writer",
+			Includes: []string{"widgets-tasks"},
+			Scopes:   []string{"templates:read", "templates:write"},
+			Version:  1,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = model.InstallAPIScopeSets(nil) })
+
+	f := newRouteFixtureWith(t, true, true)
+	f.from = publicAddr
+	f.accessCookie = ""
+
+	ctx := context.Background()
+	now := time.Now()
+	if _, _, err := f.store.AddAllowedPrincipalWithRole(ctx, "user:global@example.com", "test", "test", "contrib-and-templates", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.store.AddAllowedPrincipalWithRole(ctx, "user:scoped@example.com", "test", "test", "widgets-writer", now); err != nil {
+		t.Fatal(err)
+	}
+
+	escalatingBodies := []struct {
+		key      string
+		fragment string
+	}{
+		{"capabilities", `"capabilities":["api:secrets:write"]`},
+		{"autoMerge", `"autoMerge":true`},
+		{"approved", `"approved":true`},
+		{"writes", `"writes":[{"repo":"acme/other"}]`},
+	}
+
+	bodyFor := func(pattern, fragment string) string {
+		prefix := `"repo":"acme/widgets",`
+		if pattern == "POST /api/pull-requests/review" {
+			prefix += `"pr":"acme/widgets#1",`
+		}
+		return `{` + prefix + fragment + `}`
+	}
+
+	checked := 0
+	for _, pattern := range f.server.Routes() {
+		method, _, ok := strings.Cut(pattern, " ")
+		if !ok || method == http.MethodGet {
+			continue
+		}
+		scope := ui.RoleScopeOf(pattern)
+		if scope != "tasks:write" && scope != "templates:write" {
+			continue
+		}
+		checked++
+		target := f.path(pattern)
+
+		// A deployment-wide limited role passes the route and repository checks on
+		// every tasks:write and templates:write route, so capabilities, autoMerge
+		// and approved must be caught by the escalation gate itself.
+		for _, probe := range escalatingBodies[:3] {
+			rec := f.send(t, method, target, bodyFor(pattern, probe.fragment), "global@example.com")
+			if rec.code != http.StatusForbidden || !strings.Contains(rec.body.String(), "contrib-and-templates") || !strings.Contains(rec.body.String(), probe.key) {
+				t.Errorf("%s as contrib-and-templates with %s: got %d %s, want 403 naming contrib-and-templates and %s",
+					pattern, probe.key, rec.code, rec.excerpt(), probe.key)
+			}
+		}
+
+		// A repository-limited role must refuse all four -- including writes to
+		// acme/other -- with 403 on every tasks:write and templates:write route.
+		for _, probe := range escalatingBodies {
+			rec := f.send(t, method, target, bodyFor(pattern, probe.fragment), "scoped@example.com")
+			if rec.code != http.StatusForbidden || !strings.Contains(rec.body.String(), "widgets-writer") {
+				t.Errorf("%s as widgets-writer with %s: got %d %s, want 403 naming widgets-writer",
+					pattern, probe.key, rec.code, rec.excerpt())
+			}
+		}
+	}
+	if checked < 20 {
+		t.Fatalf("checked %d non-GET tasks:write/templates:write routes, want at least 20", checked)
+	}
 }

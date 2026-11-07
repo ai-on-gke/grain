@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/granule/pkg/config"
+	"github.com/gke-labs/granule/pkg/config"
 )
 
 // newFakeAPIServer starts an HTTP server on a unix socket and points

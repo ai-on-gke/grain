@@ -319,3 +319,67 @@ func TestStoppingDuringRetrySandboxAcquireRecordsInterruptedInsteadOfErrored(t *
 		t.Fatalf("run.Jobs = %+v, want 1 cancelled job", run.Jobs)
 	}
 }
+
+type blockingGate struct {
+	acquired atomic.Int32
+}
+
+func (g *blockingGate) Acquire(ctx context.Context, req GateRequest) (func(), error) {
+	g.acquired.Add(1)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestBuiltinJobSkipsPerRunAndDeploymentSandboxGates(t *testing.T) {
+	jobsGate := &blockingGate{}
+	sb := &fakeSandboxes{
+		acquireFn: func(ctx context.Context, req gritsteps.SandboxRequest) (gritsteps.Sandbox, error) {
+			if req.Builtin != "grain-state-check" {
+				t.Errorf("req.Builtin = %q, want grain-state-check", req.Builtin)
+			}
+			return &fakeSandbox{name: "grain-state-check"}, nil
+		},
+	}
+	eng := &Engine{
+		Sandboxes:   sb,
+		Concurrency: 1,
+		// A zero ConcurrencyLimit function makes effectiveConcurrencyLimit return 0,
+		// so set ConcurrencyLimit to a negative or positive value? No: when
+		// ConcurrencyLimit returns <= 0, perRun is nil. With Concurrency: 1 and
+		// ConcurrencyLimit nil, perRun is a &runGate{limit: 1}.
+		Jobs: jobsGate,
+	}
+	plan := workflows.Plan{
+		Key: "plan-builtin",
+		Request: workflows.Request{
+			Repo:   "grain/config",
+			Ref:    "main",
+			Commit: "abc123",
+			Event:  workflows.EventPush,
+		},
+		Jobs: []workflows.PlannedJob{
+			{
+				ID:           "check",
+				Workflow:     "grain-state-check",
+				WorkflowPath: ".github/workflows/grain-state-check.yml",
+				Key:          "key-check",
+				Job: workflows.Job{
+					ID:      "check",
+					Name:    "grain can load this",
+					Builtin: "grain-state-check",
+					Steps: []workflows.Step{
+						{Name: "grain state check", Run: "grain state check /workspace"},
+					},
+				},
+			},
+		},
+	}
+
+	run := eng.Run(context.Background(), "run-builtin", plan, nil)
+	if run.Conclusion != workflows.ConclusionSuccess {
+		t.Fatalf("run = (Conclusion=%q, Error=%q), want success", run.Conclusion, run.Error)
+	}
+	if got := jobsGate.acquired.Load(); got != 0 {
+		t.Fatalf("Engine.Jobs.Acquire count = %d, want 0 for builtin job", got)
+	}
+}

@@ -17,9 +17,12 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import UpgradePanel, {
   AutoUpgradeSettings,
+  OFFLINE_MIGRATION_COMMANDS,
   resolvedImage,
+  safeManagementUrl,
 } from "./UpgradePanel.jsx";
 import api from "../api.js";
+import { optionValues } from "../searchSelectTesting.js";
 import { fetchUpgradeTargets } from "../upgradeTargets.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
@@ -51,6 +54,27 @@ describe("UpgradePanel", () => {
     ).toBeInTheDocument();
   });
 
+  // 2026-11-04 deployment-operations walkthrough: behind an unreachable
+  // hostd the first read takes seconds, and the tab stayed blank for all
+  // of them.
+  it("shows that the upgrade status is being read until the first read answers", async () => {
+    let answer;
+    api.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    render(<UpgradePanel showError={() => {}} />);
+
+    expect(
+      screen.getByRole("progressbar", { name: "Reading the upgrade status" }),
+    ).toBeInTheDocument();
+    answer({ enabled: false });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("progressbar", {
+          name: "Reading the upgrade status",
+        }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
   // grain/task-3689: the box starts on the channel the deployment
   // follows, so a deployment installed on latest is offered the next
   // release rather than main's head -- even when its last upgrade
@@ -64,7 +88,7 @@ describe("UpgradePanel", () => {
         enabled: true,
         mode: "image",
         channel: "latest",
-        running: { image: "ghcr.io/bwsalmon/grain/grain:latest@sha256:0123" },
+        running: { image: "docker.io/grainai/grain:latest@sha256:0123" },
         phase: "ok",
         branch: "main",
       });
@@ -137,7 +161,7 @@ describe("UpgradePanel", () => {
         enabled: true,
         mode: "image",
         channel: "candidate",
-        running: { image: "ghcr.io/bwsalmon/grain/grain:v2.3.0-rc.1" },
+        running: { image: "docker.io/grainai/grain:v2.3.0-rc.1" },
         discardedRc: {
           running: "v2.3.0-rc.1",
           latest: "v2.1.1",
@@ -183,7 +207,7 @@ describe("UpgradePanel", () => {
         enabled: true,
         mode: "image",
         channel: "candidate",
-        running: { image: "ghcr.io/bwsalmon/grain/grain:v2.3.0-rc.1" },
+        running: { image: "docker.io/grainai/grain:v2.3.0-rc.1" },
         discardedRc: {
           running: "v2.3.0-rc.1",
           latest: "v2.1.1",
@@ -225,7 +249,7 @@ describe("UpgradePanel", () => {
         enabled: true,
         mode: "image",
         channel: "latest",
-        running: { image: "ghcr.io/bwsalmon/grain/grain:v3.5.0" },
+        running: { image: "docker.io/grainai/grain:v3.5.0" },
         retractedRelease: {
           running: "v3.5.0",
           latest: "v3.4.0",
@@ -273,7 +297,7 @@ describe("UpgradePanel", () => {
         enabled: true,
         mode: "image",
         channel: "latest",
-        running: { image: "ghcr.io/bwsalmon/grain/grain:v3.5.0" },
+        running: { image: "docker.io/grainai/grain:v3.5.0" },
         phase: "",
       });
     });
@@ -488,6 +512,27 @@ describe("UpgradePanel", () => {
     expect(within(list).getByText("latest")).toBeInTheDocument();
   });
 
+  it("filters upgrade targets with searchFilter while keeping groups contiguous", async () => {
+    fetchUpgradeTargets.mockResolvedValueOnce({
+      targets: [
+        { name: "latest", kind: "channel", allowed: true },
+        { name: "candidate", kind: "channel", allowed: true },
+        { name: "release/v1.8", kind: "branch", allowed: true },
+        { name: "v1.8.0", kind: "version", allowed: true },
+        { name: "v1.7.0", kind: "version", allowed: true },
+      ],
+      allowedBranches: ["**"],
+    });
+    api.mockResolvedValue({ enabled: true, phase: "ok", branch: "" });
+    const user = userEvent.setup();
+    render(<UpgradePanel showError={() => {}} />);
+
+    const input = await screen.findByLabelText(/Branch/);
+    await user.click(input);
+    await user.type(input, "1.8");
+    expect(optionValues(input)).toEqual(["release/v1.8", "v1.8.0"]);
+  });
+
   it("claims neither pipeline when the API names no mode", async () => {
     // An older daemon serving this UI: better one sentence true of both
     // than a confident description of the wrong one.
@@ -512,12 +557,12 @@ describe("UpgradePanel", () => {
       enabled: true,
       mode: "image",
       phase: "",
-      running: { image: "ghcr.io/bwsalmon/grain/grain:main" },
+      running: { image: "docker.io/grainai/grain:main" },
     });
     render(<UpgradePanel showError={() => {}} />);
 
     expect(await screen.findByText(/Now running/)).toHaveTextContent(
-      "Now running ghcr.io/bwsalmon/grain/grain:main",
+      "Now running docker.io/grainai/grain:main",
     );
   });
 
@@ -726,7 +771,7 @@ describe("UpgradePanel", () => {
     const warning = await screen.findByText(/4 runs are in flight/);
     expect(warning).toHaveTextContent(/3 would be lost \(claude 2, setup 1\)/);
     expect(warning).toHaveTextContent(
-      /1 is in a run host or grain hostd and would be adopted/,
+      /1 is in a run host or the host agent and would be adopted/,
     );
   });
 
@@ -957,7 +1002,7 @@ describe("UpgradePanel", () => {
       enabled: true,
       phase: "ok",
       branch: "main",
-      detail: "pulled ghcr.io/bwsalmon/grain/grain:main; restarting",
+      detail: "pulled docker.io/grainai/grain:main; restarting",
     });
     render(<UpgradePanel showError={() => {}} />);
 
@@ -981,7 +1026,7 @@ describe("UpgradePanel", () => {
         enabled: true,
         phase: "ok",
         branch: "main",
-        detail: "pulled ghcr.io/bwsalmon/grain/grain:main; restarting",
+        detail: "pulled docker.io/grainai/grain:main; restarting",
       });
     // act() around each step, so the re-render an answer causes has
     // happened by the time the assertions below read the DOM. The fake
@@ -1006,9 +1051,7 @@ describe("UpgradePanel", () => {
       await poll();
       expect(screen.getByText("ok")).toBeInTheDocument();
       expect(
-        screen.getByText(
-          "pulled ghcr.io/bwsalmon/grain/grain:main; restarting",
-        ),
+        screen.getByText("pulled docker.io/grainai/grain:main; restarting"),
       ).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Upgrade" })).toBeEnabled();
 
@@ -1431,7 +1474,7 @@ describe("UpgradePanel scheduling", () => {
       phase: "",
       branch: "",
       running: {
-        image: "ghcr.io/bwsalmon/grain/grain:v1.7.0",
+        image: "docker.io/grainai/grain:v1.7.0",
         release: "v1.7.0",
       },
       inFlightRuns: 2,
@@ -1475,7 +1518,7 @@ describe("UpgradePanel scheduling", () => {
         phase: "",
         branch: "",
         running: {
-          image: "ghcr.io/bwsalmon/grain/grain:v1.7.0",
+          image: "docker.io/grainai/grain:v1.7.0",
           release: "v1.7.0",
         },
       });
@@ -1513,7 +1556,7 @@ describe("UpgradePanel scheduling", () => {
         phase: "",
         branch: "",
         running: {
-          image: "ghcr.io/bwsalmon/grain/grain:latest@sha256:abc",
+          image: "docker.io/grainai/grain:latest@sha256:abc",
         },
       })
       .mockResolvedValueOnce({
@@ -1532,7 +1575,7 @@ describe("UpgradePanel scheduling", () => {
         unchanged: true,
         branch: "latest",
         detail:
-          "the version on latest has not changed (already running ghcr.io/bwsalmon/grain/grain:latest@sha256:abc)",
+          "the version on latest has not changed (already running docker.io/grainai/grain:latest@sha256:abc)",
       });
 
     try {
@@ -1561,7 +1604,7 @@ describe("UpgradePanel scheduling", () => {
       ).toBeInTheDocument();
       expect(
         screen.getByText(
-          /already running ghcr\.io\/bwsalmon\/grain\/grain:latest@sha256:abc/,
+          /already running docker\.io\/grainai\/grain:latest@sha256:abc/,
         ),
       ).toBeInTheDocument();
 
@@ -1652,391 +1695,63 @@ describe("UpgradeCheckSettings", () => {
   });
 });
 
-describe("PostgresDatabaseUpgrade", () => {
+describe("DatabaseBackend", () => {
   afterEach(() => {
     api.mockReset();
   });
 
-  it("shows postgres active state when running on postgres", async () => {
+  const mockStore = (database) =>
     api.mockImplementation((path) => {
       if (path === "/api/upgrade") {
-        return Promise.resolve({
-          enabled: false,
-          database: {
-            driver: "postgres",
-            dsn: "postgres://user:******@localhost:5432/grain",
-            isSqlite: false,
-            postgresAvailable: true,
-          },
-        });
+        return Promise.resolve({ enabled: false, database });
       }
-      if (path === "/api/database") {
-        return Promise.resolve({
-          driver: "postgres",
-          dsn: "postgres://user:******@localhost:5432/grain",
-          isSqlite: false,
-          postgresAvailable: true,
-        });
-      }
+      if (path === "/api/database") return Promise.resolve(database);
       return Promise.resolve({ enabled: false });
     });
 
+  it("names the PostgreSQL store it runs on and offers no move", async () => {
+    mockStore({
+      driver: "postgres",
+      dsn: "postgres://user:******@localhost:5432/grain",
+      isSqlite: false,
+      postgresAvailable: true,
+    });
     render(<UpgradePanel showError={() => {}} />);
     expect(
-      await screen.findByText(/This deployment is running on/i),
+      await screen.findByText(/This deployment runs on/i),
     ).toBeInTheDocument();
-    expect(screen.getByText(/PostgreSQL/)).toBeInTheDocument();
+    expect(screen.getByText("PostgreSQL")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Migrate/i }),
+    ).not.toBeInTheDocument();
   });
 
-  it("allows testing postgres connection and upgrading from sqlite", async () => {
-    api.mockImplementation((path) => {
-      if (path === "/api/database") {
-        return Promise.resolve({
-          driver: "sqlite",
-          dsn: "/var/lib/grain/data/store",
-          isSqlite: true,
-          postgresAvailable: true,
-        });
-      }
-      if (path === "/api/database/test") {
-        return Promise.resolve({ ok: true, message: "Connection successful" });
-      }
-      if (path === "/api/database/upgrade") {
-        return Promise.resolve({
-          ok: true,
-          message: "Successfully migrated database to PostgreSQL",
-          tablesMigrated: 12,
-        });
-      }
-      return Promise.resolve({ enabled: false });
-    });
-
-    const user = userEvent.setup();
-    render(<UpgradePanel showError={() => {}} />);
-
-    expect(
-      await screen.findByText(/Currently running on/i),
-    ).toBeInTheDocument();
-
-    const dsnInput = screen.getByLabelText(/PostgreSQL DSN/i);
-    await user.type(dsnInput, "postgres://user:pass@localhost:5432/graindb");
-
-    const testBtn = screen.getByRole("button", { name: /Test Connection/i });
-    await user.click(testBtn);
-
-    expect(api).toHaveBeenCalledWith("/api/database/test", {
-      method: "POST",
-      body: JSON.stringify({
-        dsn: "postgres://user:pass@localhost:5432/graindb",
-      }),
-    });
-    expect(
-      await screen.findByText(/Connection successful/i),
-    ).toBeInTheDocument();
-
-    const upgradeBtn = screen.getByRole("button", {
-      name: /Migrate Database to PostgreSQL/i,
-    });
-    await user.click(upgradeBtn);
-
-    expect(api).toHaveBeenCalledWith("/api/database/upgrade", {
-      method: "POST",
-      body: JSON.stringify({
-        dsn: "postgres://user:pass@localhost:5432/graindb",
-        migrateData: true,
-      }),
-    });
-  });
-
-  it("allows migrating to local embedded postgres when no DSN is provided", async () => {
-    let dbStatus = {
+  // A store moves only with the daemon stopped (pkg/ui/database.go): the
+  // pane shows the commands and has nothing that would call a route to
+  // move it.
+  it("shows the offline commands on SQLite and calls no migration route", async () => {
+    mockStore({
       driver: "sqlite",
       dsn: "/var/lib/grain/data/store",
       isSqlite: true,
-      postgresAvailable: true,
-    };
-    api.mockImplementation((path) => {
-      if (path === "/api/database") {
-        return Promise.resolve(dbStatus);
-      }
-      if (path === "/api/database/test") {
-        return Promise.resolve({ ok: true, message: "Connection successful" });
-      }
-      if (path === "/api/database/upgrade") {
-        dbStatus = {
-          driver: "postgres",
-          dsn: "",
-          isSqlite: false,
-          postgresAvailable: true,
-        };
-        return Promise.resolve({
-          ok: true,
-          message: "Successfully migrated database to PostgreSQL",
-          tablesMigrated: 12,
-          driver: "postgres",
-          dsn: "",
-        });
-      }
-      return Promise.resolve({ enabled: false });
+      postgresAvailable: false,
     });
-
-    const user = userEvent.setup();
     render(<UpgradePanel showError={() => {}} />);
-
+    expect(await screen.findByText("SQLite")).toBeInTheDocument();
+    const commands = document.querySelector(".database-backend-commands");
+    expect(commands?.textContent).toBe(OFFLINE_MIGRATION_COMMANDS);
+    expect(commands?.textContent).toMatch(
+      /^sudo systemctl stop grain-daemon\.service\n/,
+    );
+    expect(screen.queryByLabelText(/DSN/i)).not.toBeInTheDocument();
     expect(
-      await screen.findByText(/Currently running on/i),
-    ).toBeInTheDocument();
-
-    const upgradeBtn = screen.getByRole("button", {
-      name: /Migrate Database to PostgreSQL/i,
-    });
-    // Click without entering any DSN (uses local embedded postgres)
-    await user.click(upgradeBtn);
-
-    expect(api).toHaveBeenCalledWith("/api/database/upgrade", {
-      method: "POST",
-      body: JSON.stringify({
-        dsn: "",
-        migrateData: true,
-      }),
-    });
-
-    expect(
-      await screen.findByText(/This deployment is running on/i),
-    ).toBeInTheDocument();
-  });
-
-  // The route answers a first request with 202 confirmationRequired and
-  // writes a single-use token to the daemon log (pkg/ui/
-  // database_confirm.go). The form has to take that token and send the
-  // same request back with it; it once showed the 202 as a red error
-  // with nowhere to type the token (2026-10-02 §6 walkthrough).
-  it("asks for the daemon-log confirmation token and resends the request with it", async () => {
-    const bodies = [];
-    api.mockImplementation((path, opts) => {
-      if (path === "/api/database") {
-        return Promise.resolve({
-          driver: "sqlite",
-          isSqlite: true,
-          postgresAvailable: false,
-        });
-      }
-      if (path === "/api/database/upgrade") {
-        const body = JSON.parse(opts.body);
-        bodies.push(body);
-        if (!body.confirmationToken) {
-          return Promise.resolve({
-            confirmationRequired: true,
-            message:
-              "Nothing has been changed yet. A confirmation token has been written to the daemon log.",
-            expiresAt: "2026-10-03T01:16:10Z",
-          });
-        }
-        return Promise.resolve({
-          ok: true,
-          message: "Successfully migrated SQLite database to PostgreSQL",
-          tablesMigrated: 88,
-        });
-      }
-      return Promise.resolve({ enabled: false });
-    });
-
-    const user = userEvent.setup();
-    render(<UpgradePanel showError={() => {}} />);
-    expect(
-      await screen.findByText(/Currently running on/i),
-    ).toBeInTheDocument();
-    const dsn = "postgres://user:pass@db:5432/grain";
-    await user.type(screen.getByLabelText(/PostgreSQL DSN/i), dsn);
-    expect(
-      screen.queryByLabelText(/Confirmation token/i),
+      screen.queryByRole("button", { name: /Migrate|Test connection/i }),
     ).not.toBeInTheDocument();
-
-    await user.click(
-      screen.getByRole("button", { name: /Migrate Database to PostgreSQL/i }),
-    );
-    expect(
-      await screen.findByText(/Nothing has been changed yet/i),
-    ).toBeInTheDocument();
-    expect(screen.queryByText(/Migration failed/i)).not.toBeInTheDocument();
-
-    // Editing the DSN drops the token: it was issued for the old one.
-    await user.type(screen.getByLabelText(/PostgreSQL DSN/i), "x");
-    expect(
-      screen.queryByLabelText(/Confirmation token/i),
-    ).not.toBeInTheDocument();
-    await user.type(screen.getByLabelText(/PostgreSQL DSN/i), "{Backspace}");
-    await user.click(
-      screen.getByRole("button", { name: /Migrate Database to PostgreSQL/i }),
-    );
-
-    await user.type(
-      await screen.findByLabelText(/Confirmation token/i),
-      "  abcdefghijklmnopqrstuvwx ",
-    );
-    await user.click(
-      screen.getByRole("button", { name: /Confirm Migration/i }),
-    );
-
-    expect(
-      await screen.findByText(/Successfully migrated SQLite database/i),
-    ).toBeInTheDocument();
-    expect(bodies).toEqual([
-      { dsn, migrateData: true },
-      { dsn, migrateData: true },
-      { dsn, migrateData: true, confirmationToken: "abcdefghijklmnopqrstuvwx" },
-    ]);
-    expect(
-      screen.queryByLabelText(/Confirmation token/i),
-    ).not.toBeInTheDocument();
-  });
-
-  it("displays error alert when migration fails", async () => {
-    api.mockImplementation((path) => {
-      if (path === "/api/database") {
-        return Promise.resolve({
-          driver: "sqlite",
-          dsn: "/var/lib/grain/data/store",
-          isSqlite: true,
-          postgresAvailable: true,
-        });
-      }
-      if (path === "/api/database/upgrade") {
-        return Promise.reject(
-          new Error(
-            "could not look up effective user ID 1000: user does not exist",
-          ),
-        );
-      }
-      return Promise.resolve({ enabled: false });
-    });
-
-    const user = userEvent.setup();
-    render(<UpgradePanel />);
-
-    expect(
-      await screen.findByText(/Currently running on/i),
-    ).toBeInTheDocument();
-
-    const upgradeBtn = screen.getByRole("button", {
-      name: /Migrate Database to PostgreSQL/i,
-    });
-    await user.click(upgradeBtn);
-
-    expect(
-      await screen.findByText(
-        /could not look up effective user ID 1000: user does not exist/i,
-      ),
-    ).toBeInTheDocument();
-  });
-  // grain/task-543: a track defaulted to a
-  // repository hosts could not pull from, and nothing on the pane said
-  // which image the button would pull or let an operator pick another.
-  describe("choosing the image", () => {
-    const GHCR = "registry.example/acme/acme-grain";
-    const AR = "mirror.example/acme/grain";
-    const imageStatus = {
-      enabled: true,
-      mode: "image",
-      channel: "main",
-      running: { image: `${AR}:main@sha256:0123` },
-      phase: "ok",
-      branch: "main",
-      imageRepo: AR,
-      defaultImageRepo: GHCR,
-      defaultImageRef: `${AR}:main`,
-      imageRepos: [GHCR, AR],
-    };
-
-    it("resolves the reference an upgrade would pull", () => {
-      expect(resolvedImage("", AR, "main")).toBe(`${AR}:main`);
-      expect(resolvedImage(GHCR, AR, "grain/task-1")).toBe(
-        `${GHCR}:grain..task-1`,
+    for (const [path] of api.mock.calls) {
+      expect(path).not.toMatch(
+        /database\/(upgrade|test)|upgrade\/postgres|migrate-to-postgres/,
       );
-      expect(resolvedImage(`${GHCR}:v2.1.0`, AR, "main")).toBe(
-        `${GHCR}:v2.1.0`,
-      );
-      expect(resolvedImage(`${GHCR}@sha256:abc`, AR, "main")).toBe(
-        `${GHCR}@sha256:abc`,
-      );
-      expect(resolvedImage("", AR, "")).toBe(AR);
-    });
-
-    it("shows what will be pulled and posts the repository chosen", async () => {
-      api.mockImplementation((url, opts) => {
-        if (String(url).includes("/api/upgrade/release-notes")) {
-          return Promise.resolve({ notes: [] });
-        }
-        if (opts?.method === "POST") {
-          return Promise.resolve({
-            ...imageStatus,
-            phase: "running",
-            branch: "main",
-          });
-        }
-        return Promise.resolve(imageStatus);
-      });
-      const user = userEvent.setup();
-      render(<UpgradePanel showError={() => {}} />);
-
-      expect(
-        await screen.findByText(`${AR}:main`, { selector: "code" }),
-      ).toBeInTheDocument();
-      await user.click(screen.getByText(`${GHCR} (default)`));
-      expect(screen.getByLabelText(/Image \(optional\)/)).toHaveValue(GHCR);
-      expect(
-        screen.getByText(`${GHCR}:main`, { selector: "code" }),
-      ).toBeInTheDocument();
-
-      await user.click(screen.getByRole("button", { name: "Upgrade" }));
-      expect(api).toHaveBeenLastCalledWith("/api/upgrade", {
-        method: "POST",
-        body: JSON.stringify({
-          branch: "main",
-          image: GHCR,
-          afterTasksFinish: false,
-        }),
-      });
-    });
-
-    it("takes an explicit reference as typed", async () => {
-      api.mockImplementation((url, opts) => {
-        if (String(url).includes("/api/upgrade/release-notes")) {
-          return Promise.resolve({ notes: [] });
-        }
-        if (opts?.method === "POST") {
-          return Promise.resolve({ ...imageStatus, phase: "running" });
-        }
-        return Promise.resolve(imageStatus);
-      });
-      const user = userEvent.setup();
-      render(<UpgradePanel showError={() => {}} />);
-
-      const field = await screen.findByLabelText(/Image \(optional\)/);
-      await user.type(field, `${GHCR}:candidate`);
-      expect(
-        screen.getByText(`${GHCR}:candidate`, { selector: "code" }),
-      ).toBeInTheDocument();
-      await user.click(screen.getByRole("button", { name: "Upgrade" }));
-      expect(api).toHaveBeenLastCalledWith("/api/upgrade", {
-        method: "POST",
-        body: JSON.stringify({
-          branch: "main",
-          image: `${GHCR}:candidate`,
-          afterTasksFinish: false,
-        }),
-      });
-    });
-
-    it("offers no image field on a deployment that does not pull images", async () => {
-      api.mockResolvedValue({ enabled: true, mode: "source", phase: "" });
-      render(<UpgradePanel showError={() => {}} />);
-
-      await screen.findByLabelText(/Branch/);
-      expect(
-        screen.queryByLabelText(/Image \(optional\)/),
-      ).not.toBeInTheDocument();
-    });
+    }
   });
 });
 
@@ -2172,5 +1887,196 @@ describe("AutoUpgradeSettings", () => {
     expect(
       screen.getByRole("option", { name: "release-2026" }),
     ).toBeInTheDocument();
+  });
+});
+
+describe("ImageSourceSettings on UpgradePanel", () => {
+  it("shows release-asset source, fallback note, and saves source changes when unlocked", async () => {
+    const baseStatus = {
+      enabled: true,
+      mode: "image",
+      channel: "main",
+      running: { image: "docker.io/grainai/grain:main" },
+      phase: "done",
+      branch: "main",
+      source: "registry",
+      fallbackNote:
+        "release has no image assets; pulled from docker.io/grainai/grain",
+      detail:
+        "release has no image assets; pulled from docker.io/grainai/grain",
+      imageRepo: "docker.io/grainai/grain",
+      defaultImageRepo: "docker.io/grainai/grain",
+      imageRepos: ["docker.io/grainai/grain"],
+      imageSource: {
+        source: "release-assets",
+        sourceDefault: true,
+        locked: false,
+        fallback: "registry",
+        releaseRepository: "github.com/ai-on-gke/grain",
+        manifestAsset: "images.json",
+        checksumSuffix: ".sha256",
+      },
+    };
+
+    let putBody = null;
+    api.mockImplementation((url, opts) => {
+      if (
+        String(url).includes("/api/upgrade/source") &&
+        opts?.method === "PUT"
+      ) {
+        putBody = JSON.parse(opts.body);
+        return Promise.resolve({
+          ...baseStatus,
+          imageSource: {
+            source: "registry",
+            sourceDefault: false,
+            locked: false,
+          },
+        });
+      }
+      if (String(url).includes("/api/upgrade/targets")) {
+        return Promise.resolve({
+          targets: [{ name: "main", kind: "channel", allowed: true }],
+          default: "main",
+        });
+      }
+      return Promise.resolve(baseStatus);
+    });
+
+    const user = userEvent.setup();
+    render(<UpgradePanel showError={() => {}} />);
+
+    expect(
+      await screen.findByText(/Last upgrade: release has no image assets/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByDisplayValue("github.com/ai-on-gke/grain"),
+    ).not.toBeDisabled();
+
+    await user.click(screen.getByRole("combobox", { name: /^source$/i }));
+    await user.click(
+      screen.getByRole("option", { name: /Container registry only/i }),
+    );
+    expect(putBody).toEqual({ mode: "registry", releaseRepository: "" });
+  });
+
+  it("renders read-only when locked by a daemon flag or environment variable", async () => {
+    const lockedStatus = {
+      enabled: true,
+      mode: "image",
+      channel: "main",
+      running: { image: "docker.io/grainai/grain:main" },
+      phase: "done",
+      branch: "main",
+      source: "release-assets",
+      detail: "loaded grain-image.tar.gz",
+      imageRepo: "docker.io/grainai/grain",
+      imageSource: {
+        source: "release-assets",
+        sourceDefault: false,
+        locked: true,
+        releaseRepository: "ghe.internal.example/platform/grain",
+        manifestAsset: "images.json",
+        checksumSuffix: ".sha256",
+      },
+    };
+
+    api.mockImplementation((url) => {
+      if (String(url).includes("/api/upgrade/targets")) {
+        return Promise.resolve({
+          targets: [{ name: "main", kind: "channel", allowed: true }],
+          default: "main",
+        });
+      }
+      return Promise.resolve(lockedStatus);
+    });
+
+    render(<UpgradePanel showError={() => {}} />);
+
+    expect(
+      await screen.findByText("Read-only (set by flag/env)"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByDisplayValue("ghe.internal.example/platform/grain"),
+    ).toBeDisabled();
+  });
+
+  it("replaces in-VM upgrade and SQLite migration controls with an external management notice when selfUpgradeDisabled is set", async () => {
+    api.mockResolvedValue({
+      enabled: false,
+      selfUpgradeDisabled: true,
+      managementUrl: "https://grain.example.com/entries/alice",
+      running: { commit: "abcdef1234567890" },
+      database: { driver: "sqlite", isSqlite: true, postgresAvailable: false },
+    });
+
+    render(
+      <UpgradePanel
+        showError={() => {}}
+        config={{
+          selfUpgradeDisabled: true,
+          managementUrl: "https://grain.example.com/entries/alice",
+        }}
+        settings={{ upgradeCheckMode: "auto" }}
+        onSaveSettings={() => {}}
+      />,
+    );
+
+    const notice = await screen.findByTestId("upgrade-externally-managed");
+    expect(notice).toHaveTextContent(
+      /In-VM self-upgrade is disabled on this deployment/,
+    );
+    expect(screen.getByText("abcdef1")).toBeInTheDocument();
+    const link = screen.getByTestId("upgrade-management-link");
+    expect(link).toHaveAttribute(
+      "href",
+      "https://grain.example.com/entries/alice",
+    );
+    expect(
+      screen.queryByText(/neither -upgrade-image nor -upgrade-src-dir/),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /^Upgrade$/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Migrate Database to PostgreSQL/ }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("After an upgrade")).not.toBeInTheDocument();
+  });
+
+  it("omits unsafe or empty managementUrl links while still showing PostgreSQL status when selfUpgradeDisabled is set", async () => {
+    api.mockResolvedValue({
+      enabled: false,
+      selfUpgradeDisabled: true,
+      managementUrl: "javascript:alert(1)",
+      database: {
+        driver: "postgres",
+        dsn: "postgres://localhost:5432/grain",
+        isSqlite: false,
+        postgresAvailable: true,
+      },
+    });
+
+    render(
+      <UpgradePanel
+        showError={() => {}}
+        config={{ selfUpgradeDisabled: true, managementUrl: "" }}
+      />,
+    );
+
+    await screen.findByTestId("upgrade-externally-managed");
+    expect(
+      screen.queryByTestId("upgrade-management-link"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/PostgreSQL/)).toBeInTheDocument();
+
+    expect(safeManagementUrl("https://grain.example.com/entries/alice")).toBe(
+      "https://grain.example.com/entries/alice",
+    );
+    expect(safeManagementUrl("javascript:alert(1)")).toBe("");
+    expect(
+      safeManagementUrl("https://user:secret@grain.example.com/entries/alice"),
+    ).toBe("");
+    expect(safeManagementUrl("https://:8080/entries/alice")).toBe("");
   });
 });

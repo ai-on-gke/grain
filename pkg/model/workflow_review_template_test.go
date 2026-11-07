@@ -176,3 +176,53 @@ func TestTheWorkflowReviewPromptEnforcesTriageGuards(t *testing.T) {
 		t.Error("the prompt does not specify the concrete code failure conditions (test assertion, compilation, lint)")
 	}
 }
+
+// A github_workflow_run schedule reviews a run GitHub Actions made, and its
+// prompt says so (docs/test-runs/2026-11-02-github-ghes-release-train.md,
+// F3): the file is `.github/workflows/<stem>.yml`, grain neither started
+// the run nor bypassed a cache, and the id is its own, so a stem that
+// names a grain CI cron as well keeps both prompts -- and the firing path,
+// which asks WorkflowReviewStem whether it has a grain CI run to start,
+// never takes one for the other.
+func TestTheGitHubWorkflowReviewPromptIsAboutGitHubsRun(t *testing.T) {
+	id := model.GitHubWorkflowReviewTemplateID("nightly")
+	if id == model.WorkflowReviewTemplateID("nightly") {
+		t.Fatalf("GitHub and grain CI reviews of the same stem share the id %q", id)
+	}
+	if _, ok := model.WorkflowReviewStem(id); ok {
+		t.Errorf("WorkflowReviewStem(%q) = true: the firing path would start a grain CI run for a GitHub one", id)
+	}
+	if stem, ok := model.GitHubWorkflowReviewStem(id); !ok || stem != "nightly" {
+		t.Errorf("GitHubWorkflowReviewStem(%q) = %q, %v; want nightly, true", id, stem, ok)
+	}
+	for _, review := range []string{id, model.WorkflowReviewTemplateID("nightly")} {
+		if !model.IsWorkflowReviewTemplateID(review) {
+			t.Errorf("IsWorkflowReviewTemplateID(%q) = false", review)
+		}
+	}
+	tmpl := model.SystemTemplate(id, model.RepoRef{Owner: "acme", Name: "widgets"})
+	if tmpl == nil {
+		t.Fatal("this build ships no review for a GitHub Actions workflow run")
+	}
+	for _, want := range []string{"GitHub Actions has run", "`.github/workflows/nightly.yml`", "grain ci log", "grain ci list"} {
+		if !strings.Contains(tmpl.Body, want) {
+			t.Errorf("the GitHub review prompt does not say %q", want)
+		}
+	}
+	for _, unwanted := range []string{".grain/workflows", "grain CI has run", "cache"} {
+		if strings.Contains(tmpl.Body, unwanted) {
+			t.Errorf("the GitHub review prompt says %q, which is about a run grain CI made", unwanted)
+		}
+	}
+	if !model.HasGrainCI(capabilityNames(tmpl.Grants)) {
+		t.Error("the GitHub review template carries no grain#ci grant for compose to turn into api:ci-read@<repo>")
+	}
+}
+
+func capabilityNames(grants []model.Grant) []string {
+	out := make([]string, len(grants))
+	for i, g := range grants {
+		out[i] = g.Capability
+	}
+	return out
+}

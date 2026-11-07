@@ -31,10 +31,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
-	"github.com/ai-on-gke/grain/pkg/capability/readissues"
-	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -67,7 +64,7 @@ var everyRunTool = map[string]string{
 	// Escape hatches: each is relayed to a person after the run, and
 	// grants nothing itself. request_secret is one of them -- what a
 	// person types goes to the secret store and never back to the agent.
-	"ask_question": "escape hatch", "request_secret": "escape hatch", "comment_on_issue": "escape hatch",
+	"ask_question": "escape hatch", "request_secret": "escape hatch", "request_access": "escape hatch", "comment_on_issue": "escape hatch",
 	"nothing_needed": "escape hatch",
 	"write_handover": "escape hatch", "propose_task": "escape hatch", "add_review_comment": "escape hatch",
 	// The run's own branch's CI, which it cannot leave.
@@ -138,12 +135,12 @@ var knownUngatedTools = map[string]bool{}
 // toolGrants is every grant `grain mcpserver` serves tools for without a
 // daemon -- tests/e2e's everyToolGrant.
 var toolGrants = []string{
-	selfdebug.CapabilityName,
+	"api:self-debug",
+	"https://grain.dev/capabilities/grain#source={}",
 	"https://grain.dev/capabilities/grain#journal",
 	"https://grain.dev/capabilities/grain#health",
-	bootstrap.CapabilityName,
 	grainci.Grant,
-	readissues.CapabilityName,
+	"https://grain.dev/capabilities/github#read-issues",
 	`https://grain.dev/capabilities/grain#sql={"write":false}`,
 	`https://grain.dev/capabilities/grain#sql={"write":true}`,
 }
@@ -388,8 +385,8 @@ func checkGrantPartition(t *testing.T, who string, bare map[string]bool, allowed
 	}
 	// Not vacuous: grants do turn tools on, so their absence above is
 	// a decision rather than a server that registers nothing.
-	if gated == 0 || !slices.Contains(own[selfdebug.CapabilityName], "read_grain_task") {
-		t.Fatalf("no grant turned on any tool (self-debug's: %v); the absences above prove nothing", own[selfdebug.CapabilityName])
+	if gated == 0 || !slices.Contains(own["api:self-debug"], "read_grain_task") {
+		t.Fatalf("no grant turned on any tool (api:self-debug's: %v); the absences above prove nothing", own["api:self-debug"])
 	}
 	// And none of what a grant turns on is allowed to a bare run.
 	for grant, names := range own {
@@ -570,7 +567,7 @@ func TestControlRoster(t *testing.T) {
 		return listTools(t, args, grants)
 	}
 	want := []string{"run_command", "read_file", "write_file", "edit_file",
-		"ask_question", "request_secret", "comment_on_issue", "nothing_needed",
+		"ask_question", "request_secret", "request_access", "comment_on_issue", "nothing_needed",
 		"propose_task", "wait_for_task", "resume_later", "recreate_sandbox"}
 	got := control(false, "grain-ci", "self-debug", "memory")
 	for _, name := range want {

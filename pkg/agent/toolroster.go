@@ -40,7 +40,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
@@ -111,6 +110,8 @@ func PublishedToolNames() []string {
 	// chat session, and listed unconditionally for the reason every
 	// daemon-gated tool above is.
 	add(mcp.NewRenameSessionTools(nil))
+	// request_human_review is registered only for a review run.
+	add(mcp.NewHumanReviewTools(nil))
 	add(mcp.NewProposeConfigChangeTools(nil, "", nil))
 	add(mcp.NewWaitForTaskTools(nil, nil))
 	add(mcp.NewResumeLaterTools(nil, nil))
@@ -137,7 +138,6 @@ func PublishedToolNames() []string {
 	// wants: the names.
 	add(grainlog.Tools(grainlog.Config{}))
 	add(deploymenthealth.Tools(deploymenthealth.Config{}))
-	add(bootstrap.PlaybookTools())
 	add(dbaccess.Tools(dbaccess.Config{AllowWrite: true}))
 	add(selfrepair.ConfirmedHostCommandTools(nil))
 
@@ -187,6 +187,7 @@ func dedupeToolNames(names []string) []string {
 var controlTools = map[string]bool{
 	"ask_question":          true,
 	"request_secret":        true,
+	"request_access":        true,
 	"propose_config_change": true,
 	"comment_on_issue":      true,
 	"nothing_needed":        true,
@@ -196,6 +197,7 @@ var controlTools = map[string]bool{
 	"recreate_sandbox":      true,
 	"chat":                  true,
 	"rename_session":        true,
+	"request_human_review":  true,
 }
 
 // SandboxToolNames is the four tools that cross from the agent CLI into

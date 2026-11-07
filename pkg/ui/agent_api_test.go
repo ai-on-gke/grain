@@ -30,6 +30,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -877,7 +878,7 @@ func TestAgentAPICanNarrowExistingCapabilityLists(t *testing.T) {
 	cfg.PollInterval = 30_000_000_000
 	cfg.GitHubHost = "github.com"
 	cfg.TargetRepos = []string{"acme/widgets", "git.forge.example/experimental/ggrain"}
-	cfg.DefaultCapabilities = []string{"gemini-key", "gcp-key"}
+	cfg.DefaultCapabilities = []string{"github-sandbox", "gcp-key"}
 	if err := client.Store.PutConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -885,15 +886,15 @@ func TestAgentAPICanNarrowExistingCapabilityLists(t *testing.T) {
 	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := client.Store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo:                widgets,
-		CICapabilities:      []string{"gemini-key", "gcp-key", "package-publish"},
-		DefaultCapabilities: []string{"gemini-key", "gcp-key"},
+		CICapabilities:      []string{"github-sandbox", "gcp-key", "package-publish"},
+		DefaultCapabilities: []string{"github-sandbox", "gcp-key"},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	ggrain := model.RepoRef{Host: "git.forge.example", Owner: "experimental", Name: "ggrain"}
 	if err := client.Store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo:           ggrain,
-		CICapabilities: []string{"package-publish", "gemini-key", "gcp-key"},
+		CICapabilities: []string{"package-publish", "github-sandbox", "gcp-key"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -906,17 +907,17 @@ func TestAgentAPICanNarrowExistingCapabilityLists(t *testing.T) {
 	// 1. Narrowing ciCapabilities via PUT /api/repos/{owner}/{name}/settings
 	// succeeds even though gemini-key and CI-only package-publish remain.
 	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/repos/acme/widgets/settings",
-		`{"ciCapabilities":["gemini-key","package-publish"]}`, "remove gcp-key"); code != http.StatusOK {
+		`{"ciCapabilities":["github-sandbox","package-publish"]}`, "remove gcp-key"); code != http.StatusOK {
 		t.Fatalf("PUT /api/repos/acme/widgets/settings narrowing ciCapabilities: %d %s", code, resp)
 	}
 	rc, err := client.Store.GetRepoConfig(ctx, widgets)
-	if err != nil || rc == nil || !slices.Equal(rc.CICapabilities, []string{"gemini-key", model.PackagePublishRef + "={}"}) {
-		t.Fatalf("stored ciCapabilities = %+v, %v, want [gemini-key %s={}]", rc, err, model.PackagePublishRef)
+	if err != nil || rc == nil || !slices.Equal(rc.CICapabilities, []string{"github-sandbox", model.PackagePublishRef + "={}"}) {
+		t.Fatalf("stored ciCapabilities = %+v, %v, want [github-sandbox %s={}]", rc, err, model.PackagePublishRef)
 	}
 
 	// 2. Adding back gcp-key (which is no longer stored and not held by task 1) is refused.
 	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/repos/acme/widgets/settings",
-		`{"ciCapabilities":["gemini-key","package-publish","gcp-key"]}`, "re-add gcp-key"); code != http.StatusForbidden ||
+		`{"ciCapabilities":["github-sandbox","package-publish","gcp-key"]}`, "re-add gcp-key"); code != http.StatusForbidden ||
 		!strings.Contains(resp, "gcp-key") {
 		t.Fatalf("re-adding unheld gcp-key: got %d %s, want 403 naming gcp-key", code, resp)
 	}
@@ -924,11 +925,11 @@ func TestAgentAPICanNarrowExistingCapabilityLists(t *testing.T) {
 	// 3. Narrowing defaultCapabilities via PUT /api/repos/{owner}/{name}/settings,
 	// PUT /api/repos/{owner}/{name}/capabilities, and PUT /api/deployment/repos/{owner}/{name}/config.
 	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/repos/acme/widgets/settings",
-		`{"defaultCapabilities":["gemini-key"]}`, "remove gcp-key from defaultCapabilities"); code != http.StatusOK {
+		`{"defaultCapabilities":["github-sandbox"]}`, "remove gcp-key from defaultCapabilities"); code != http.StatusOK {
 		t.Fatalf("PUT /api/repos/acme/widgets/settings narrowing defaultCapabilities: %d %s", code, resp)
 	}
 	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/repos/acme/widgets/capabilities",
-		`{"defaultCapabilities":["gemini-key"]}`, "keep gemini-key"); code != http.StatusOK {
+		`{"defaultCapabilities":["github-sandbox"]}`, "keep gemini-key"); code != http.StatusOK {
 		t.Fatalf("PUT /api/repos/acme/widgets/capabilities keeping stored gemini-key: %d %s", code, resp)
 	}
 	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/deployment/repos/acme/widgets/config",
@@ -946,21 +947,21 @@ func TestAgentAPICanNarrowExistingCapabilityLists(t *testing.T) {
 	// 5. Host-qualified repo via PUT /api/repos/{owner}/{name}/ci-capabilities and /settings.
 	if code, resp := asAgent(t, srv, "1", http.MethodPut,
 		"/api/repos/git.forge.example%2Fexperimental/ggrain/ci-capabilities",
-		`{"ciCapabilities":["package-publish","gemini-key"]}`, "remove gcp-key"); code != http.StatusOK {
+		`{"ciCapabilities":["package-publish","github-sandbox"]}`, "remove gcp-key"); code != http.StatusOK {
 		t.Fatalf("PUT host-qualified /ci-capabilities narrowing: %d %s", code, resp)
 	}
 	rcGgrain, err := client.Store.GetRepoConfig(ctx, ggrain)
-	if err != nil || rcGgrain == nil || !slices.Equal(rcGgrain.CICapabilities, []string{model.PackagePublishRef + "={}", "gemini-key"}) {
-		t.Fatalf("ggrain ciCapabilities = %+v, %v, want [%s={} gemini-key]", rcGgrain, err, model.PackagePublishRef)
+	if err != nil || rcGgrain == nil || !slices.Equal(rcGgrain.CICapabilities, []string{model.PackagePublishRef + "={}", "github-sandbox"}) {
+		t.Fatalf("ggrain ciCapabilities = %+v, %v, want [%s={} github-sandbox]", rcGgrain, err, model.PackagePublishRef)
 	}
 
 	// 6. Deployment-wide defaultCapabilities via PUT /api/settings.
 	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/settings",
-		`{"defaultCapabilities":["gemini-key"]}`, "remove gcp-key from deployment defaults"); code != http.StatusOK {
+		`{"defaultCapabilities":["github-sandbox"]}`, "remove gcp-key from deployment defaults"); code != http.StatusOK {
 		t.Fatalf("PUT /api/settings narrowing defaultCapabilities: %d %s", code, resp)
 	}
 	if code, _ := asAgent(t, srv, "1", http.MethodPut, "/api/settings",
-		`{"defaultCapabilities":["gemini-key","gcp-key"]}`, "re-add gcp-key"); code != http.StatusForbidden {
+		`{"defaultCapabilities":["github-sandbox","gcp-key"]}`, "re-add gcp-key"); code != http.StatusForbidden {
 		t.Fatalf("PUT /api/settings re-adding unheld gcp-key answered %d, want 403", code)
 	}
 }
@@ -1304,5 +1305,56 @@ func TestAgentAPIFilingTakesNoHiddenFormDefaults(t *testing.T) {
 	if task.AutoMerge || task.Approval != nil || len(task.Writes) != 0 || len(task.Reads) != 0 {
 		t.Errorf("agent-filed task took the form's hidden defaults: autoMerge=%v approval=%v writes=%v reads=%v",
 			task.AutoMerge, task.Approval, task.Writes, task.Reads)
+	}
+}
+
+// TestSessionRunCannotTurnOnReadsAll: a standing session's run that may
+// edit its own session cannot turn readsAll back on after a person opted
+// the session out of reading every working repository. That reaches the
+// same repositories naming them in reads does, and is held to the same
+// rule; edits that grant nothing still go through.
+func TestSessionRunCannotTurnOnReadsAll(t *testing.T) {
+	_, store, _ := testClient(t)
+	ctx := context.Background()
+	off := false
+	session := model.DefaultConsoleSessions()[0]
+	session.Capabilities = []string{"self-debug", "api:sessions:write"}
+	session.ReadsAll = &off
+	cfg := model.DefaultConfig()
+	cfg.TargetRepos = []string{"acme/widgets", "acme/docs", "acme/secret-repo"}
+	cfg.ConsoleSessions = []model.ConsoleSession{session}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	taskID, err := model.FileConsoleSessionTask(ctx, store, session, model.FileConsoleSessionOptions{Now: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := ui.NewServer(ui.Config{
+		Actor:        ui.DefaultActor("alice"),
+		Capabilities: ui.OfferedCapabilities(),
+		Secrets:      secrets.New(t.TempDir()),
+	}, store)
+	path := "/api/console-sessions/" + session.ID
+
+	for _, body := range []string{`{"readsAll":true}`, `{"reads_all":true}`, `{"ReadsAll":true}`} {
+		if code, resp := asAgent(t, srv, taskID, http.MethodPut, path, body, "testing"); code != http.StatusForbidden ||
+			!strings.Contains(resp, "cannot turn on readsAll") {
+			t.Errorf("%s from the session's own run answered %d: %s", body, code, resp)
+		}
+	}
+	if code, resp := asAgent(t, srv, taskID, http.MethodPut, path, `{"reads":["acme/secret-repo"]}`, "testing"); code != http.StatusForbidden ||
+		!strings.Contains(resp, "cannot grant read access to acme/secret-repo") {
+		t.Errorf("reads of acme/secret-repo from the session's own run answered %d: %s", code, resp)
+	}
+	if code, resp := asAgent(t, srv, taskID, http.MethodPut, path, `{"title":"renamed","readsAll":false}`, "testing"); code != http.StatusOK {
+		t.Fatalf("an own-session edit granting nothing answered %d: %s", code, resp)
+	}
+	got, err := store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s, ok := model.ConsoleSessionByID(model.ConsoleSessionsOr(got.ConsoleSessions), session.ID); !ok || s.ReadsAllRepos() {
+		t.Errorf("session after the edits = %+v, want readsAll still off", s)
 	}
 }

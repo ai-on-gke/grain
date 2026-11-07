@@ -19,6 +19,7 @@ import api from "../api.js";
 import SettingsPage, { SETTINGS_GROUPS } from "./SettingsPage.jsx";
 import { PHONE_QUERY } from "../phone.js";
 import { PreferencesProvider } from "../PreferencesContext.jsx";
+import { chooseOption, optionValues } from "../searchSelectTesting.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
 
@@ -81,11 +82,13 @@ describe("SettingsPage", () => {
       "Sandboxes",
       "Legacy capabilities",
       "Access",
-      "Hostds",
+      "Hosts",
+      "Audit",
       "Preferences",
       "Upgrade",
       "Caches",
       "Engine",
+      "Registry",
       "Config repo",
       "General",
       "Git",
@@ -365,6 +368,26 @@ describe("SettingsPage", () => {
     expect(screen.queryByTestId("settings-nav")).toBeNull();
     await user.click(screen.getByTestId("settings-back"));
     expect(again.onSection).toHaveBeenCalledWith("");
+  });
+
+  it("switches sections via the searchable Section picker on tablet widths", async () => {
+    window.matchMedia = (query) => ({
+      matches: query !== PHONE_QUERY && query.includes("899"),
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+    });
+    const user = userEvent.setup();
+    const { onSection } = setup({ section: "engine" });
+    const picker = screen.getByRole("combobox", { name: "Section" });
+    await user.click(picker);
+    await user.clear(picker);
+    await user.type(picker, "prefs");
+    expect(optionValues(picker)).toContain("preferences");
+    await chooseOption(user, picker, "preferences");
+    expect(onSection).toHaveBeenCalledWith("preferences");
   });
 
   it("edits max worker agents (10 by default) in the Engine section", async () => {

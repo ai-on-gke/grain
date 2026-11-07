@@ -16,6 +16,10 @@ package ui
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -74,16 +78,26 @@ const (
 // of it; the record that outlives it is the comment Answer posts.
 const localScriptKeep = 10 * time.Minute
 
+// approvalTokenPrefix identifies a per-attempt bearer token minted for a
+// host-script server to request, wait on, and expire approvals on one task.
+const approvalTokenPrefix = "ghsa_"
+
+type approvalCallbackToken struct {
+	taskID   string
+	deadline time.Time
+}
+
 // LocalScriptApprovals holds the approvals of every live run on this
-// daemon. In memory: a waiting call lives exactly as long as its run's
-// mcpserver, which is a child of this process, so an approval that
-// survived a restart would be one nothing is waiting on.
+// daemon. In memory: a waiting call lives at most until its grant is
+// released, so an approval that survived a restart would be one nothing is
+// waiting on.
 type LocalScriptApprovals struct {
 	mu      sync.Mutex
 	seq     int64
 	ver     int64
 	byID    map[string]*LocalScriptApproval
 	changed map[string]chan struct{}
+	tokens  map[string]approvalCallbackToken
 }
 
 func (a *LocalScriptApprovals) init() {
@@ -91,6 +105,62 @@ func (a *LocalScriptApprovals) init() {
 		a.byID = map[string]*LocalScriptApproval{}
 		a.changed = map[string]chan struct{}{}
 	}
+	if a.tokens == nil {
+		a.tokens = map[string]approvalCallbackToken{}
+	}
+}
+
+// MintToken issues a bearer token scoped to taskID's local-script approval
+// endpoints until deadline.
+func (a *LocalScriptApprovals) MintToken(taskID string, deadline time.Time) (string, error) {
+	var raw [32]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	tok := approvalTokenPrefix + hex.EncodeToString(raw[:])
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.init()
+	now := time.Now()
+	for k, entry := range a.tokens {
+		if now.After(entry.deadline) {
+			delete(a.tokens, k)
+		}
+	}
+	a.tokens[tok] = approvalCallbackToken{taskID: taskID, deadline: deadline}
+	return tok, nil
+}
+
+// RevokeToken invalidates a token issued by MintToken.
+func (a *LocalScriptApprovals) RevokeToken(tok string) {
+	if tok == "" {
+		return
+	}
+	a.mu.Lock()
+	delete(a.tokens, tok)
+	a.mu.Unlock()
+}
+
+// CheckToken reports the taskID tok authorizes at now, if it is valid.
+func (a *LocalScriptApprovals) CheckToken(tok string, now time.Time) (string, bool) {
+	if !strings.HasPrefix(tok, approvalTokenPrefix) {
+		return "", false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var matchedTask string
+	matched := false
+	for k, entry := range a.tokens {
+		if now.After(entry.deadline) {
+			delete(a.tokens, k)
+			continue
+		}
+		if subtle.ConstantTimeCompare([]byte(k), []byte(tok)) == 1 {
+			matchedTask = entry.taskID
+			matched = true
+		}
+	}
+	return matchedTask, matched
 }
 
 // Request records a new pending approval.
@@ -351,13 +421,74 @@ func localScriptsGranted(t model.Task) bool {
 		if _, ok := localScriptsName(g.Capability); ok {
 			return true
 		}
+		if strings.HasSuffix(model.CapabilityGrantRef(g.Capability), "#host-script") {
+			return true
+		}
 	}
 	return false
 }
 
-// localScriptsNamePattern is localscripts.Name's, restated because
-// pkg/capability/localscripts serves MCP tools and this package is what
-// the MCP server talks to.
+func presentsApprovalCallbackToken(r *http.Request) bool {
+	tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	return ok && strings.HasPrefix(strings.TrimSpace(tok), approvalTokenPrefix)
+}
+
+// approvalCallbackRouteTask extracts {id} if r is one of the three run-side
+// approval callback endpoints:
+//   - POST /api/tasks/{id}/local-script-approvals
+//   - POST /api/tasks/{id}/local-script-approvals/{approval}/wait
+//   - POST /api/tasks/{id}/local-script-approvals/{approval}/expire
+func approvalCallbackRouteTask(r *http.Request) (string, bool) {
+	if r.Method != http.MethodPost {
+		return "", false
+	}
+	rest, ok := strings.CutPrefix(r.URL.Path, "/api/tasks/")
+	if !ok {
+		return "", false
+	}
+	taskID, tail, ok := strings.Cut(rest, "/")
+	if !ok || taskID == "" {
+		return "", false
+	}
+	if tail == "local-script-approvals" {
+		return taskID, true
+	}
+	sub, ok := strings.CutPrefix(tail, "local-script-approvals/")
+	if !ok {
+		return "", false
+	}
+	approvalID, action, ok := strings.Cut(sub, "/")
+	if !ok || approvalID == "" || strings.Contains(action, "/") {
+		return "", false
+	}
+	if action == "wait" || action == "expire" {
+		return taskID, true
+	}
+	return "", false
+}
+
+func (s *Server) authenticateApprovalCallback(w http.ResponseWriter, r *http.Request) (string, bool) {
+	tok, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	tok = strings.TrimSpace(tok)
+	if s.tasks == nil {
+		writeError(w, http.StatusUnauthorized, errors.New("invalid approval callback token"))
+		return "", false
+	}
+	taskID, ok := s.tasks.localScriptApprovals().CheckToken(tok, s.tasks.now())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, errors.New("invalid or expired approval callback token"))
+		return "", false
+	}
+	routeTaskID, routeOK := approvalCallbackRouteTask(r)
+	if !routeOK || routeTaskID != taskID {
+		writeError(w, http.StatusForbidden, errors.New("approval callback token is scoped only to its task's local-script-approvals endpoints"))
+		return "", false
+	}
+	return taskID, true
+}
+
+// localScriptsNamePattern matches localscripts.Name without importing
+// pkg/capability/localscripts into pkg/ui.
 var localScriptsNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 
 // localScriptsName is the declaration a local-scripts:<name> capability
@@ -374,11 +505,16 @@ func localScriptsName(id string) (string, bool) {
 // or after at most ?wait= seconds (default and cap 25), whichever is
 // first -- a long poll the mcpserver repeats until the call's deadline.
 func (s *Server) handleWaitLocalScriptApproval(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if p, ok := PrincipalFromContext(r.Context()); ok && p.Kind == model.PrincipalAgent && p.ID != id {
+		writeClientError(w, forbiddenErrorf("task %s's run may not wait on approvals for task %s", p.ID, id))
+		return
+	}
 	max := 25 * time.Second
 	if v, err := strconv.Atoi(r.URL.Query().Get("wait")); err == nil && v >= 0 && time.Duration(v)*time.Second < max {
 		max = time.Duration(v) * time.Second
 	}
-	approval, ok := s.tasks.localScriptApprovals().Wait(r.Context(), r.PathValue("id"), r.PathValue("approval"), max)
+	approval, ok := s.tasks.localScriptApprovals().Wait(r.Context(), id, r.PathValue("approval"), max)
 	if !ok {
 		writeClientError(w, &NotFoundError{ID: r.PathValue("approval")})
 		return
@@ -393,9 +529,14 @@ func (s *Server) handleExpireLocalScriptApproval(w http.ResponseWriter, r *http.
 		writeClientError(w, errLocalScriptByPerson)
 		return
 	}
+	id := r.PathValue("id")
+	if p, ok := PrincipalFromContext(r.Context()); ok && p.Kind == model.PrincipalAgent && p.ID != id {
+		writeClientError(w, forbiddenErrorf("task %s's run may not expire approvals on task %s", p.ID, id))
+		return
+	}
 	reg := s.tasks.localScriptApprovals()
-	reg.Expire(r.PathValue("id"), r.PathValue("approval"), s.tasks.now())
-	approval, ok := reg.Get(r.PathValue("id"), r.PathValue("approval"))
+	reg.Expire(id, r.PathValue("approval"), s.tasks.now())
+	approval, ok := reg.Get(id, r.PathValue("approval"))
 	if !ok {
 		writeClientError(w, &NotFoundError{ID: r.PathValue("approval")})
 		return

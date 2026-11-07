@@ -44,8 +44,8 @@ func populate20kTasksAndObservations(tb testing.TB, totalTasks int) (*model.Stor
 
 		taskStmt, err := tx.Prepare(`INSERT INTO task (
 			id, intent, title, body, origin_actor_kind, origin_actor_id, origin_reason,
-			binding, auto_merge, order_key, created_at, approval_actor_kind, approval_actor_id, approved_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+			binding, auto_merge, order_key, created_at, approval_actor_kind, approval_actor_id, approved_at, owner
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 		if err != nil {
 			tx.Rollback()
 			tb.Fatalf("prepare task stmt: %v", err)
@@ -104,7 +104,7 @@ func populate20kTasksAndObservations(tb testing.TB, totalTasks int) (*model.Stor
 				taskID, "implement", title, "benchmark body",
 				"human", "operator", "direct",
 				"directive", autoMerge, orderKey, createdAt.Format(time.RFC3339Nano),
-				approvalKind, approvalID, approvedAt,
+				approvalKind, approvalID, approvedAt, "operator",
 			); err != nil {
 				taskStmt.Close()
 				obsStmt.Close()

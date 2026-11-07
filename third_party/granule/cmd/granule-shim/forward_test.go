@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/agent"
-	"github.com/bwsalmon/granule/pkg/guestforward"
+	"github.com/gke-labs/granule/pkg/agent"
+	"github.com/gke-labs/granule/pkg/guestforward"
 )
 
 // The caller-side transports run "granule <ShimMode>"; this binary has

@@ -732,6 +732,10 @@ func workflowReviewSchedule(ctx context.Context, deps Deps,
 		return *sched, nil
 	}
 	templateID := model.WorkflowReviewTemplateID(row.Stem)
+	if strings.HasPrefix(row.Workflow, ".github/") {
+		// A run GitHub Actions made (fireGitHubWorkflowRunSchedules's row).
+		templateID = model.GitHubWorkflowReviewTemplateID(row.Stem)
+	}
 	return model.Schedule{
 		ID:                   row.ScheduleID,
 		Target:               row.Repo,
@@ -950,13 +954,31 @@ func fireOneGitHubWorkflowRunSchedule(ctx context.Context, deps Deps, sched mode
 		finished = *run.CompletedAt
 	}
 
+	if existing, err := deps.Store.GetScheduledWorkflowRun(ctx, sched.ID); err == nil && existing != nil {
+		if existing.RunID == runIDStr && max(1, run.Attempt) <= existing.Attempts {
+			return nil
+		}
+		// A run that started before the one already recorded is stale only
+		// when it is the same workflow on the same branch: the row is one per
+		// schedule, and a schedule that watches several branches or
+		// workflows must still review a slow run on one of them that
+		// concludes after a faster, later-started run on another.
+		if existing.Branch == branch && existing.Workflow == wfPath &&
+			existing.AttemptedAt != nil && !existing.AttemptedAt.IsZero() && started.Before(*existing.AttemptedAt) {
+			return nil
+		}
+	}
+
 	hasSuite := sched.SuiteID != nil && *sched.SuiteID != ""
 	tmplID := ""
 	if sched.TemplateID != nil {
 		tmplID = *sched.TemplateID
 	}
+	// The legacy grain-CI id is still accepted for a schedule stored
+	// before GitHub runs had a template of their own.
 	usesWorkflowReviewTemplate := !hasSuite &&
-		(tmplID == "" || tmplID == model.WorkflowReviewTemplateID(stem))
+		(tmplID == "" || tmplID == model.GitHubWorkflowReviewTemplateID(stem) ||
+			tmplID == model.WorkflowReviewTemplateID(stem))
 
 	// When a schedule uses the default workflow-review template and has no
 	// explicit conclusions filter on the trigger, respect sched.WorkflowReview
@@ -1034,7 +1056,7 @@ func fireOneGitHubWorkflowRunSchedule(ctx context.Context, deps Deps, sched mode
 	summarySection := gitHubWorkflowRunSummarySection(run, jobs)
 	schedForFiling := sched
 	if usesWorkflowReviewTemplate && tmplID == "" && schedForFiling.Title == "" && schedForFiling.Body == "" {
-		defaultTmpl := model.WorkflowReviewTemplateID(stem)
+		defaultTmpl := model.GitHubWorkflowReviewTemplateID(stem)
 		schedForFiling.TemplateID = &defaultTmpl
 	}
 

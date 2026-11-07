@@ -41,7 +41,7 @@ type Method struct {
 	// on, such as https://grain.dev/capabilities/corp. Every method
 	// registered with one Server is served by the one in-process server.
 	// It may not be one of core's own (model.GrainCapabilityServerID,
-	// model.RepoCapabilityServerID).
+	// model.RepoCapabilityServerID, model.GitHubCapabilityServerID).
 	Server string
 	// Spec is the method: its name, arguments and Mint, as
 	// protocol.NewMethod takes them.
@@ -60,6 +60,10 @@ type Method struct {
 	// capabilities and the shipped director session's
 	// (Registration.DefaultOn).
 	DefaultOn bool
+	// SandboxEgress says the method needs the sandbox itself to reach the
+	// internet (Registration.SandboxEgress): with DefaultOn, the shipped
+	// director stays NetworkOpen on this build.
+	SandboxEgress bool
 	// Aliases are the retired bare capability names the method replaces,
 	// such as the provider it retires: model.CanonicalLegacyGrant rewrites
 	// each to Grant wherever a grant is recorded, and the bare name keeps
@@ -92,7 +96,7 @@ var registeredMethods = map[string]Method{}
 // which is already registered, since each is a programming error no
 // deployment could work around.
 func Register(m Method) (unregister func()) {
-	if m.Server == model.GrainCapabilityServerID || m.Server == model.RepoCapabilityServerID {
+	if m.Server == model.GrainCapabilityServerID || m.Server == model.RepoCapabilityServerID || m.Server == model.GitHubCapabilityServerID {
 		panic(fmt.Sprintf("capability: Register(%q): core's own in-process servers take no contributed methods", m.Ref()))
 	}
 	if _, err := protocol.ParseRef(m.Ref()); err != nil {
@@ -131,7 +135,7 @@ func Register(m Method) (unregister func()) {
 	registered = true
 	forgetMethodServer(m.Server)
 	if m.DefaultOn {
-		undo = append(undo, model.RegisterDefaultConsoleSessionCapability(m.Grant()))
+		undo = append(undo, registerDefaultConsoleSessionCapability(m.Grant(), m.SandboxEgress))
 	}
 	return func() {
 		mu.Lock()

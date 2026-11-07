@@ -219,7 +219,15 @@ func (o *PullRequestOpener) reviewTool(ctx context.Context, taskID, name string,
 		return "", false, fmt.Errorf("task %s has no repository of its own", taskID)
 	}
 	scope := mcp.PullRequestScope{Owner: task.Target.Owner, Repo: task.Target.Name, Branch: task.BranchName()}
-	if pr := model.TaskPullRequest(*task); pr != nil && pr.Repo == *task.Target {
+	if o.Store != nil {
+		if rc, err := o.Store.GetRepoConfig(ctx, *task.Target); err == nil && rc != nil {
+			if prRepo, cross, err := rc.PullRequestRepo(*task.Target); err == nil && cross {
+				scope.UpstreamOwner = prRepo.Owner
+				scope.UpstreamRepo = prRepo.Name
+			}
+		}
+	}
+	if pr := model.TaskPullRequest(*task); pr != nil && (pr.Repo.Same(*task.Target) || model.IsUpstreamRepoFor(*task.Target, pr.Repo)) {
 		scope.PullRequestNumber = pr.Number
 	}
 	for _, tool := range mcp.NewPullRequestTools(o.Client, nil, scope) {
@@ -301,6 +309,7 @@ type sandboxExternalCI struct{}
 var (
 	_ ci.ExternalRuns        = sandboxExternalCI{}
 	_ ci.ExternalRunsCounter = sandboxExternalCI{}
+	_ ci.ExternalAttempts    = sandboxExternalCI{}
 )
 
 func (sandboxExternalCI) FindExternalRuns(ctx context.Context, f ci.RunFilter, limit int) ([]ci.Run, string) {
@@ -325,6 +334,35 @@ func (sandboxExternalCI) ExternalRun(ctx context.Context, id string) (ci.Run, bo
 		return ci.Run{}, false, nil
 	}
 	return client.ExternalCIRuns().ExternalRun(ctx, id)
+}
+
+func (sandboxExternalCI) ExternalJobAttempts(ctx context.Context, id string) ([]ci.GitHubJob, error) {
+	attempts, err := sandboxExternalAttempts()
+	if err != nil {
+		return nil, err
+	}
+	return attempts.ExternalJobAttempts(ctx, id)
+}
+
+func (sandboxExternalCI) ExternalCheckRuns(ctx context.Context, repo, sha, name string) ([]ci.GitHubCheckRun, string, error) {
+	attempts, err := sandboxExternalAttempts()
+	if err != nil {
+		return nil, "", err
+	}
+	return attempts.ExternalCheckRuns(ctx, repo, sha, name)
+}
+
+// sandboxExternalAttempts is liveSandboxCLI's ci.ExternalAttempts.
+func sandboxExternalAttempts() (ci.ExternalAttempts, error) {
+	client := liveSandboxCLI.Load()
+	if client == nil {
+		return nil, errSandboxCLIUnwired
+	}
+	attempts, ok := client.ExternalCIRuns().(ci.ExternalAttempts)
+	if !ok {
+		return nil, errSandboxCLIUnwired
+	}
+	return attempts, nil
 }
 
 func (sandboxExternalCI) ExternalJobLog(ctx context.Context, id, job string) (string, error) {

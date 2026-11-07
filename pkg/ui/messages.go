@@ -542,6 +542,7 @@ func (c *Client) RecordDelivered(ctx context.Context, id string, through int64) 
 			if comment.ID > after && comment.ID <= through && comment.Author.Actor.Kind == model.PrincipalHuman {
 				o.PendingQuestionCommentID = nil
 				o.PendingSecret = ""
+				o.PendingAccess = nil
 				break
 			}
 		}

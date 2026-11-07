@@ -30,7 +30,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability/bootstrap/playbooks"
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -38,6 +37,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/namespace"
+	"github.com/ai-on-gke/grain/pkg/playbooks"
 	"github.com/ai-on-gke/grain/pkg/redact"
 )
 
@@ -211,8 +211,8 @@ func TestSandboxCLIAgainstTheProxy(t *testing.T) {
 	}
 	// Refusals come back in unknownToolMessage's words.
 	_, errOut, code := run("read", "src://pkg/ci/engine.go")
-	if code != 1 || !strings.Contains(errOut, `does not hold the "self-debug" capability`) || !strings.Contains(errOut, "a human attaches it to the task") {
-		t.Errorf("src without self-debug: %d %s", code, errOut)
+	if code != 1 || !strings.Contains(errOut, `does not hold the "https://grain.dev/capabilities/grain#source" capability`) || !strings.Contains(errOut, "a human attaches it to the task") {
+		t.Errorf("src without grain#source: %d %s", code, errOut)
 	}
 	_, errOut, code = run("db", "query", "SELECT 1")
 	if code != 1 || !strings.Contains(errOut, `"https://grain.dev/capabilities/grain#sql"`) {
@@ -334,8 +334,8 @@ func TestSandboxCLIIssuesAndDBAgainstTheProxy(t *testing.T) {
 	if len(queries) != 1 || queries[0] != "SELECT id FROM task" {
 		t.Errorf("queries that reached the database = %q, want only the SELECT", queries)
 	}
-	if _, errOut, code := runAs("tok-bare", "issue", "list"); code != 1 || !strings.Contains(errOut, `"read-issues"`) {
-		t.Errorf("issue list without read-issues: %d %s", code, errOut)
+	if _, errOut, code := runAs("tok-bare", "issue", "list"); code != 1 || !strings.Contains(errOut, `"https://grain.dev/capabilities/github#read-issues"`) {
+		t.Errorf("issue list without github#read-issues: %d %s", code, errOut)
 	}
 }
 
@@ -382,6 +382,13 @@ func TestSandboxLogAndMetricsFlagsBecomeTheirQuery(t *testing.T) {
 	}
 	if got, want := grainLogQuery(p, time.Now()).Encode(), "max_lines=50&min_priority=warning"; got != want {
 		t.Errorf("grain log query = %s, want %s", got, want)
+	}
+	p, err = parseSandboxArgs([]string{"--unit", "grain-daemon.service", "--lines", "25"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := grainLogQuery(p, time.Now()).Encode(), "max_lines=25&unit=grain-daemon.service"; got != want {
+		t.Errorf("grain log --unit query = %s, want %s", got, want)
 	}
 	p, err = parseSandboxArgs([]string{"summary", "--since", "2026-10-28", "--until", "2026-10-29"})
 	if err != nil {
@@ -655,5 +662,43 @@ func TestGrepExitsNonZeroWhenATruncatedWalkFoundNothing(t *testing.T) {
 				t.Errorf("stderr = %q", errOut.String())
 			}
 		})
+	}
+}
+
+// TestSandboxCLIDisambiguatesExplicitServerAndContext is
+// external-cli.spec.md#XC-3.4: inside a sandbox, a command that names a
+// daemon -- -server/--server, -context/--context, $GRAIN_SERVER or
+// $GRAIN_CONTEXT -- is pkg/cli's, and GRAIN_SANDBOX_CLI=0 turns the
+// sandbox CLI off whatever the command.
+func TestSandboxCLIDisambiguatesExplicitServerAndContext(t *testing.T) {
+	const creds = "http://x:t@127.0.0.1:9728\n"
+	for _, tc := range []struct {
+		name string
+		vars map[string]string
+		args []string
+	}{
+		{"-server", nil, []string{"ls", "-server", "http://d:1", "ci://a/b"}},
+		{"--server=", nil, []string{"ls", "--server=http://d:1", "ci://a/b"}},
+		{"-context", nil, []string{"-context", "team", "ls", "ci://a/b"}},
+		{"--context after the verb", nil, []string{"ci", "list", "--context", "team"}},
+		{"$GRAIN_SERVER", map[string]string{"GRAIN_SERVER": "http://d:1"}, []string{"ls", "ci://a/b"}},
+		{"$GRAIN_CONTEXT", map[string]string{"GRAIN_CONTEXT": "team"}, []string{"ls", "ci://a/b"}},
+		{"GRAIN_SANDBOX_CLI=0", map[string]string{"GRAIN_SANDBOX_CLI": "0"}, []string{"ls", "ci://a/b"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errOut strings.Builder
+			if code, handled := maybeRunSandboxCLI(tc.args, fakeSandboxEnv(tc.vars, creds), &out, &errOut); handled {
+				t.Fatalf("sandbox CLI answered %q (exit %d, %s); pkg/cli should have", tc.args, code, errOut.String())
+			}
+			if _, handled := unknownCommand(append([]string{"frobnicate"}, tc.args...), fakeSandboxEnv(tc.vars, creds), &errOut); handled {
+				t.Fatalf("sandbox CLI's help answered an unknown command naming a daemon (%q)", tc.args)
+			}
+		})
+	}
+	// Nothing naming a daemon, and a "--server" after "--" is an
+	// argument: the sandbox CLI still answers its own unknown command.
+	var errOut strings.Builder
+	if _, handled := unknownCommand([]string{"frobnicate", "--", "--server"}, fakeSandboxEnv(nil, creds), &errOut); !handled {
+		t.Fatal("sandbox CLI should still answer an unknown command that names no daemon")
 	}
 }

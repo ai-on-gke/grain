@@ -26,6 +26,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import NewTaskOverlay from "./NewTaskOverlay.jsx";
 import { resetCapabilityMethodsForTest } from "./capabilityMethods.js";
 import api from "../api.js";
+import { chips, chooseOption } from "../searchSelectTesting.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn().mockResolvedValue(null) }));
 
@@ -36,7 +37,10 @@ const filed = () =>
   JSON.parse(api.mock.calls.find(([path]) => path === "/api/tasks")[1].body);
 
 // ticked is what the Legacy capabilities picker shows as held.
-const ticked = () => screen.getByLabelText("Legacy capabilities").textContent;
+const ticked = () =>
+  chips(screen.getByLabelText("Legacy capabilities"))
+    .map((c) => c.textContent)
+    .join(", ");
 
 describe("NewTaskOverlay", () => {
   afterEach(() => {
@@ -68,7 +72,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Ship");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
 
     const dependsOnInput = screen.getByPlaceholderText(
       "Search tasks to depend on…",
@@ -78,8 +82,11 @@ describe("NewTaskOverlay", () => {
     await user.type(dependsOnInput, "15");
     await user.click(await screen.findByText("Add dark mode"));
 
-    await user.click(screen.getByLabelText("Legacy capabilities"));
-    await user.click(await screen.findByRole("option", { name: "Web search" }));
+    await chooseOption(
+      user,
+      screen.getByLabelText("Legacy capabilities"),
+      "Web search",
+    );
     await user.keyboard("{Escape}");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
@@ -116,7 +123,7 @@ describe("NewTaskOverlay", () => {
       />,
     );
     await user.type(screen.getByLabelText(/Title/), "Ship");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Create task" }));
     await vi.waitFor(() => expect(onCreated).toHaveBeenCalledWith(created));
   });
@@ -198,7 +205,7 @@ describe("NewTaskOverlay", () => {
 
     await user.keyboard("{Escape}");
     await user.type(screen.getByLabelText(/Title/), "Ship");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Create task" }));
     // Untouched, so left to the server's own defaults, which hold it.
     expect(ticked()).toMatch(/Gemini key/);
@@ -263,7 +270,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Key");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
     expect(ticked()).toMatch(/GCP key/);
@@ -289,9 +296,12 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "No key");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
-    await user.click(screen.getByLabelText("Legacy capabilities"));
-    await user.click(await screen.findByRole("option", { name: "GCP key" }));
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(
+      user,
+      screen.getByLabelText("Legacy capabilities"),
+      "GCP key",
+    );
     await user.keyboard("{Escape}");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
@@ -349,7 +359,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Key");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/widgets");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
     expect(ticked()).toMatch(/Gemini key.*GCP key/);
     await user.click(screen.getByRole("button", { name: "Create task" }));
     expect(filed()).not.toHaveProperty("capabilities");
@@ -379,8 +389,8 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Else");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/widgets");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/gadgets");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/gadgets");
     expect(ticked()).toMatch(/Gemini key/);
     expect(ticked()).not.toMatch(/GCP key/);
     await user.click(screen.getByRole("button", { name: "Create task" }));
@@ -411,10 +421,13 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Mine");
-    await user.click(screen.getByLabelText("Legacy capabilities"));
-    await user.click(await screen.findByRole("option", { name: "Gemini key" }));
+    await chooseOption(
+      user,
+      screen.getByLabelText("Legacy capabilities"),
+      "Gemini key",
+    );
     await user.keyboard("{Escape}");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/widgets");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
     expect(filed().capabilities).toEqual([]);
@@ -452,7 +465,7 @@ describe("NewTaskOverlay", () => {
     // Untick grain-ci
     await user.click(grainCIRow);
     await user.keyboard("{Escape}");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
     expect(filed().capabilities).toEqual(["self-debug"]);
@@ -551,7 +564,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Standalone");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     const note = await screen.findByTestId("new-task-catalogue-refused");
     expect(note).toHaveTextContent(
       "settings/capabilities.yml refuses gcp-key on a task with no repo, so that default is left off this task.",
@@ -561,9 +574,9 @@ describe("NewTaskOverlay", () => {
     );
     expect(JSON.parse(check.at(-1)[1].body).subject).toEqual({ repo: "" });
     expect(
-      screen
-        .getByLabelText("Legacy capabilities")
-        .querySelectorAll("[data-catalogue-refused]"),
+      chips(screen.getByLabelText("Legacy capabilities")).filter(
+        (c) => c.dataset.catalogueRefused,
+      ),
     ).toHaveLength(1);
 
     await user.click(screen.getByRole("button", { name: "Create task" }));
@@ -583,7 +596,7 @@ describe("NewTaskOverlay", () => {
       />,
     );
 
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByLabelText("Legacy capabilities"));
     await user.click(await screen.findByRole("option", { name: /Gemini key/ }));
     const gcp = screen.getByRole("option", { name: /GCP key/ });
@@ -598,7 +611,7 @@ describe("NewTaskOverlay", () => {
     );
 
     // On the repo it is restricted to, nothing is refused.
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/widgets");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
     await vi.waitFor(() =>
       expect(
         screen.queryByTestId("new-task-catalogue-refused"),

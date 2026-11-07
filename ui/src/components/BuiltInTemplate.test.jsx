@@ -33,7 +33,10 @@ const gke = {
   interactive: true,
   system: true,
   reads: [],
-  capabilities: ["bootstrap-playbooks", "self-repair"],
+  capabilities: [
+    'https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}',
+    "https://grain.dev/capabilities/grain#host-exec",
+  ],
   createdAt: "0001-01-01T00:00:00Z",
 };
 

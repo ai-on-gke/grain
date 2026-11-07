@@ -177,9 +177,10 @@ func baseBranchStatus(ctx context.Context, client PullRequestReader, grainCI Gra
 			gateIsGrainCINotice(grainCI != nil), scope.Branch, base, base), nil
 	}
 
-	head, err := client.GetBranchHead(scope.Owner, scope.Repo, base)
+	prOwner, prRepo := scope.prOwner(), scope.prRepo()
+	head, err := client.GetBranchHead(prOwner, prRepo, base)
 	if err != nil {
-		return "", fmt.Errorf("reading %s/%s's %s branch: %w", scope.Owner, scope.Repo, base, err)
+		return "", fmt.Errorf("reading %s/%s's %s branch: %w", prOwner, prRepo, base, err)
 	}
 	if head == nil {
 		// A base that does not exist is a real state and not this tool's
@@ -188,11 +189,14 @@ func baseBranchStatus(ctx context.Context, client PullRequestReader, grainCI Gra
 		// (orchestrator.pullRequestBase), and prepareCheckout refuses to
 		// start a run whose base is gone. Saying so plainly beats an
 		// empty check list, which would read as "the base is fine".
+		if err := confirmRepoReadable(client, prOwner, prRepo, base); err != nil {
+			return "", err
+		}
 		return fmt.Sprintf(
 			"Branch %s does not exist on %s/%s, so there is nothing to compare your branch's "+
 				"checks against. That is about this task's base, not your change -- say so "+
 				"in what you report.",
-			base, scope.Owner, scope.Repo), nil
+			base, prOwner, prRepo), nil
 	}
 
 	var b strings.Builder
@@ -239,16 +243,17 @@ func resolveBase(client PullRequestReader, scope PullRequestScope) (base string,
 	if scope.Base != "" {
 		return scope.Base, false, nil
 	}
-	def, err := client.DefaultBranch(scope.Owner, scope.Repo)
+	prOwner, prRepo := scope.prOwner(), scope.prRepo()
+	def, err := client.DefaultBranch(prOwner, prRepo)
 	if err != nil {
 		return "", false, fmt.Errorf(
 			"reading %s/%s's default branch, which is the base this task has: %w",
-			scope.Owner, scope.Repo, err)
+			prOwner, prRepo, err)
 	}
 	if def == "" {
 		return "", false, fmt.Errorf(
 			"%s/%s reports no default branch, so there is no base branch to read CI for",
-			scope.Owner, scope.Repo)
+			prOwner, prRepo)
 	}
 	return def, true, nil
 }
@@ -260,7 +265,7 @@ func resolveBase(client PullRequestReader, scope PullRequestScope) (base string,
 // worth reporting to a different person.
 func baseProvenance(defaulted bool, scope PullRequestScope) string {
 	if defaulted {
-		return fmt.Sprintf("%s/%s's default branch", scope.Owner, scope.Repo)
+		return fmt.Sprintf("%s/%s's default branch", scope.prOwner(), scope.prRepo())
 	}
 	return "the base branch this task was given"
 }

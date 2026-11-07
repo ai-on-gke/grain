@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/secretsrepo"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
@@ -181,6 +182,13 @@ func StartupSecretsRepoSync(ctx context.Context, dataDir string) *secretsrepo.Re
 			secretsRepoRemote(dataDir), err)
 	}
 	return repo
+}
+
+func startupSecretsRepoSyncFor(ctx context.Context, cfg Config) *secretsrepo.Repo {
+	if cfg.SecretsBackend == secrets.BackendSecretManager {
+		return nil
+	}
+	return StartupSecretsRepoSync(ctx, cfg.DataDir)
 }
 
 // secretsRepoRemote is what to call the repository in a message when

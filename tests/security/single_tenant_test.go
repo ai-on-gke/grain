@@ -658,8 +658,9 @@ var singleTenantStateRefusals = map[string]string{
 
 // singleTenantOpenRoutes are the public routes a single-tenant daemon
 // serves without its access code, and why: the "Enter access code"
-// page's own, logging out, and a grain hostd dialing in, which
-// authenticates in its own protocol (pkg/ui singleTenantOpenRoute). Every other
+// page's own, logging out, a grain hostd dialing in, which
+// authenticates in its own protocol, and the script that installs one
+// (pkg/ui singleTenantOpenRoute). Every other
 // public route is in singleTenantGatedPublicRoutes.
 // TestRouteAuthorizationSingleTenant holds every public route to one of
 // the two, so a gate change cannot
@@ -670,7 +671,13 @@ var singleTenantOpenRoutes = map[string]string{
 	"GET /api/auth/access-code/login.js": "the login page's script",
 	"POST /api/auth/logout":              "signing out",
 	"GET /api/auth/logout":               "signing out",
+	"GET /api/auth/whoami":               "a CLI asking how it may sign in, which names nobody (external-cli.spec.md#XC-8)",
 	"GET /api/hostd/connect":             "a grain hostd dialing in, with the hostd token",
+	"POST /api/hostd/join":               "an enrolling host submitting its Ed25519-signed join request",
+	"POST /api/hostd/join/{id}/poll":     "an enrolling host polling with its Ed25519 signature to claim its credential",
+	"POST /api/hostd/renew":              "a connected host renewing its 30-day key-bound credential",
+	"GET /api/hostd/install.sh":          "the script that installs a grain hostd, which holds no secret",
+	"GET /hostd/install":                 "the short URL for the host install script, which holds no secret",
 }
 
 // singleTenantGatedPublicRoutes are the public routes a single-tenant

@@ -81,12 +81,14 @@ describe("App", () => {
     window.history.replaceState(null, "", "/settings/credentials");
     render(<App />);
 
-    expect(await screen.findByText("Other secrets")).toBeInTheDocument();
     expect(
-      screen.getByText(
+      await screen.findByText(
         /this UI was not started with a local secrets directory/i,
       ),
     ).toBeInTheDocument();
+    expect(document.getElementById("other-secrets")).toHaveTextContent(
+      "Other secrets",
+    );
 
     await user.click(screen.getByTestId("settings-nav-upgrade"));
     expect(
@@ -388,7 +390,7 @@ describe("App", () => {
       const inner = api.getMockImplementation();
       let acked = false;
       api.mockImplementation((path, opts) => {
-        if (path === "/api/notifications?open=1") {
+        if (path === "/api/notifications?open=1&fields=list") {
           return Promise.resolve(
             acked
               ? [

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Grain PLC Studio</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="badge">PLC</span>
+      <h1>Grain PLC Studio</h1>
+    </div>
+    <div class="instance-picker">
+      <label for="instance-select">Grain Instance</label>
+      <select id="instance-select">
+        <option value="">Default Instance</option>
+      </select>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="panel" id="rollup-panel">
+      <h2>Project Rollup (ExternalRef)</h2>
+      <form id="rollup-form" class="inline-form">
+        <input id="external-ref-input" type="text" placeholder="plc:proj/alpha" required />
+        <button type="submit">Load Rollup</button>
+      </form>
+      <div id="rollup-summary" class="summary-grid"></div>
+      <div id="rollup-tasks" class="task-list"></div>
+    </section>
+
+    <section class="panel" id="playbook-panel">
+      <h2>Playbooks &amp; Committed Context Launch</h2>
+      <div id="playbooks-list" class="playbook-list"></div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

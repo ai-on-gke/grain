@@ -461,8 +461,9 @@ type Settings struct {
 	// sandboxing, and annotated by the same SandboxShapeIgnored: a
 	// directory on this host has the host's own network, and nothing
 	// here can take it away.
-	NetworkAccess   string   `json:"networkAccess"`
-	NetworkAccesses []string `json:"networkAccesses"`
+	NetworkAccess    string   `json:"networkAccess"`
+	NetworkAccesses  []string `json:"networkAccesses"`
+	DefaultAdmission string   `json:"defaultAdmission"`
 	// SandboxShapeIgnored is true when the three numbers above shape
 	// nothing on this deployment, because the sandbox backend it runs has
 	// no shape at all -- Config.SandboxShapeIgnored's own doc comment for
@@ -645,6 +646,17 @@ type Settings struct {
 	// vocabulary, in a picker's order.
 	AutoUpgradeOn    string   `json:"autoUpgradeOn"`
 	AutoUpgradeModes []string `json:"autoUpgradeModes"`
+	// OwnerTrust is the owner-trust proposal policy
+	// (model.Config.OwnerTrust): the (owner, repo) pairs -- repo "*" for
+	// every repository -- whose external agent credentials' unapproved
+	// filings queue without a person's approval. Never nil coming out of
+	// here.
+	OwnerTrust []model.OwnerTrustRule `json:"ownerTrust"`
+	// AutoGrantContextReads is model.Config.AutoGrantContextReads: the
+	// committed-context repositories ("*" or owner/name) for which filing a
+	// task with `-design owner/name:path@rev` auto-grants -read access. Never
+	// nil coming out of here.
+	AutoGrantContextReads []string `json:"autoGrantContextReads"`
 	// TimeZone is model.Config.TimeZone: the IANA zone every timestamp the
 	// frontend prints is shown in. Never empty coming out of here -- an
 	// unset stored value reads back as model.DefaultTimeZone.
@@ -746,6 +758,12 @@ type Settings struct {
 	// settings are locked in the UI and REST API in favour of config
 	// repository pull requests. False by default.
 	SettingsLocked bool `json:"settingsLocked"`
+	// Registry holds the deployment's connected-entry grain registry
+	// settings (model.Config.Registry). RegistryTokenSet reports whether
+	// the registration credential secret ("registry-registration-token") is
+	// populated in pkg/secrets.
+	Registry         model.RegistryConfig `json:"registry"`
+	RegistryTokenSet bool                 `json:"registryTokenSet"`
 	// ConfigRepoOnly is GET /api/config's configRepoOnly for this row:
 	// whether the API refuses its non-bootstrap writes in favour of a
 	// config pull request. Unlike SettingsLocked it is false without a
@@ -1153,6 +1171,7 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		SandboxDiskFloors:                  c.sandboxDiskFloors(cfg.SandboxDiskFloor()),
 		NetworkAccess:                      string(model.NormalizeNetworkAccess(cfg.NetworkAccess)),
 		NetworkAccesses:                    networkAccessNames(),
+		DefaultAdmission:                   string(model.NormalizeAdmission(cfg.DefaultAdmission)),
 		SandboxShapeIgnored:                c.Config.SandboxShapeIgnored,
 		SandboxCommitment:                  c.sandboxCommitment(cfg),
 		ShowClosedByDefault:                cfg.ShowClosedByDefault,
@@ -1174,6 +1193,8 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		AutoUpgradeTime:                    autoUpgradeTimeOrDefault(cfg.AutoUpgradeTime),
 		AutoUpgradeOn:                      cfg.AutoUpgradeMode(),
 		AutoUpgradeModes:                   model.AutoUpgradeModes(),
+		OwnerTrust:                         ownerTrustOrEmpty(cfg.OwnerTrust),
+		AutoGrantContextReads:              stringsOrEmpty(cfg.AutoGrantContextReads),
 		TimeZone:                           model.TimeZoneOrDefault(cfg.TimeZone),
 		AgentBackends:                      cfg.AgentBackends,
 		AgentCLIDefaults:                   c.Config.AgentCLIDefaults,
@@ -1187,6 +1208,8 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		RestartRequired:                    restartRequiredKeys(),
 		PendingRestart:                     c.pendingRestart(cfg, sandboxImgDefault, granuleImgDefault),
 		Unrunnable:                         unrunnable,
+		Registry:                           cfg.Registry,
+		RegistryTokenSet:                   c.registryTokenSet(),
 	}
 	c.resolveSandboxImageFields(ctx, cfg, sandboxImgDefault, granuleImgDefault).apply(&out)
 	out.K8sGranuleImageEffective = effectiveGranule
@@ -1452,10 +1475,15 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			AutoUpgradeTime:                    autoUpgradeTimeOrDefault(def.AutoUpgradeTime),
 			AutoUpgradeOn:                      def.AutoUpgradeMode(),
 			AutoUpgradeModes:                   model.AutoUpgradeModes(),
+			OwnerTrust:                         ownerTrustOrEmpty(def.OwnerTrust),
+			AutoGrantContextReads:              stringsOrEmpty(def.AutoGrantContextReads),
 			TimeZone:                           model.TimeZoneOrDefault(def.TimeZone),
 			NetworkAccess:                      string(model.NormalizeNetworkAccess(def.NetworkAccess)),
 			NetworkAccesses:                    networkAccessNames(),
+			DefaultAdmission:                   string(model.NormalizeAdmission(def.DefaultAdmission)),
 			SettingsLocked:                     def.SettingsLocked,
+			Registry:                           def.Registry,
+			RegistryTokenSet:                   c.registryTokenSet(),
 			RestartRequired:                    restartRequiredKeys(),
 		}
 		c.resolveSandboxImageFields(ctx, def, sandboxImgDefault, granuleImgDefault).apply(&out)
@@ -1542,6 +1570,7 @@ type UpdateSettingsRequest struct {
 	CIAgeBoost          *string `json:"ciAgeBoost"`
 	CIReserveAfter      *string `json:"ciReserveAfter"`
 	NetworkAccess       *string `json:"networkAccess"`
+	DefaultAdmission    *string `json:"defaultAdmission"`
 	ShowClosedByDefault *bool   `json:"showClosedByDefault"`
 	EnvironmentName     *string `json:"environmentName"`
 	// TimeZone is model.Config.TimeZone: the IANA zone every timestamp the
@@ -1557,15 +1586,22 @@ type UpdateSettingsRequest struct {
 	AutoUpgradeChannel *string `json:"autoUpgradeChannel"`
 	AutoUpgradeTime    *string `json:"autoUpgradeTime"`
 	// AutoUpgradeOn is "off", "daily" or "release" (Settings.AutoUpgradeOn).
-	AutoUpgradeOn       *string               `json:"autoUpgradeOn"`
-	AgentBackends       *[]model.AgentBackend `json:"agentBackends"`
-	DefaultModel        *string               `json:"defaultModel"`
-	PromptExtension     *string               `json:"promptExtension"`
-	RepairTemplateID    *string               `json:"repairTemplateID"`
-	TaskBranchTemplate  *string               `json:"taskBranchTemplate"`
-	DeploymentID        *string               `json:"deploymentId"`
-	DefaultCapabilities *[]string             `json:"defaultCapabilities"`
-	SettingsLocked      *bool                 `json:"settingsLocked"`
+	AutoUpgradeOn *string `json:"autoUpgradeOn"`
+	// OwnerTrust replaces the owner-trust proposal policy
+	// (Settings.OwnerTrust); an empty list turns it off.
+	OwnerTrust *[]model.OwnerTrustRule `json:"ownerTrust"`
+	// AutoGrantContextReads replaces Settings.AutoGrantContextReads; an empty
+	// list turns auto-granting off.
+	AutoGrantContextReads *[]string             `json:"autoGrantContextReads"`
+	AgentBackends         *[]model.AgentBackend `json:"agentBackends"`
+	DefaultModel          *string               `json:"defaultModel"`
+	PromptExtension       *string               `json:"promptExtension"`
+	RepairTemplateID      *string               `json:"repairTemplateID"`
+	TaskBranchTemplate    *string               `json:"taskBranchTemplate"`
+	DeploymentID          *string               `json:"deploymentId"`
+	DefaultCapabilities   *[]string             `json:"defaultCapabilities"`
+	SettingsLocked        *bool                 `json:"settingsLocked"`
+	Registry              *model.RegistryConfig `json:"registry"`
 }
 
 func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
@@ -1576,8 +1612,10 @@ func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
 	}
 	*r = UpdateSettingsRequest(p)
 	var snake struct {
-		SettingsLocked      *bool     `json:"settings_locked"`
-		DefaultCapabilities *[]string `json:"default_capabilities"`
+		SettingsLocked        *bool     `json:"settings_locked"`
+		DefaultCapabilities   *[]string `json:"default_capabilities"`
+		DefaultAdmission      *string   `json:"default_admission"`
+		AutoGrantContextReads *[]string `json:"auto_grant_context_reads"`
 	}
 	if err := json.Unmarshal(data, &snake); err == nil {
 		if r.SettingsLocked == nil && snake.SettingsLocked != nil {
@@ -1585,6 +1623,12 @@ func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
 		}
 		if r.DefaultCapabilities == nil && snake.DefaultCapabilities != nil {
 			r.DefaultCapabilities = snake.DefaultCapabilities
+		}
+		if r.DefaultAdmission == nil && snake.DefaultAdmission != nil {
+			r.DefaultAdmission = snake.DefaultAdmission
+		}
+		if r.AutoGrantContextReads == nil && snake.AutoGrantContextReads != nil {
+			r.AutoGrantContextReads = snake.AutoGrantContextReads
 		}
 	}
 	return nil
@@ -1600,6 +1644,9 @@ func (c *Client) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) 
 		if guard := c.checkGrainConfigWritable(ctx, current, nil); guard != nil {
 			return Settings{}, guard
 		}
+		return Settings{}, err
+	}
+	if err := c.checkRegistryAuthTargetWrite(ctx, current, cfg); err != nil {
 		return Settings{}, err
 	}
 	// A request changing only the Models and Sandboxes settings writes
@@ -1618,8 +1665,12 @@ func (c *Client) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) 
 		if changed := changedConfigFields(current, cfg); len(changed) > 0 {
 			log.Printf("grain ui: settings saved by %s: changed %s", writerName(ctx), strings.Join(changed, ", "))
 		}
+		if req.Registry != nil {
+			c.auditRegistryChanges(ctx, current, cfg)
+		}
 	}
 	c.triggerIAPSync()
+	c.triggerRegistrySync()
 	if req.AgentBackends != nil {
 		var before []model.AgentBackend
 		if current != nil {
@@ -1764,9 +1815,13 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		cfg.IAPResource = v
 	}
 	if req.DefaultCapabilities != nil {
+		capsWithoutLegacy, legacyAdm, hadLegacy := extractLegacyAdmissionCaps("defaultCapabilities", *req.DefaultCapabilities)
+		if hadLegacy {
+			cfg.DefaultAdmission = model.MaxAdmission(cfg.DefaultAdmission, legacyAdm)
+		}
 		seen := map[string]bool{}
-		ids := make([]string, 0, len(*req.DefaultCapabilities))
-		for _, rawID := range *req.DefaultCapabilities {
+		ids := make([]string, 0, len(capsWithoutLegacy))
+		for _, rawID := range capsWithoutLegacy {
 			normalizedIDs, err := c.normalizeCapabilityIDs(rawID)
 			if err != nil {
 				return model.Config{}, err
@@ -2172,11 +2227,28 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		}
 		cfg.NetworkAccess = access
 	}
+	if req.DefaultAdmission != nil {
+		adm, err := model.ParseOptionalAdmission(*req.DefaultAdmission)
+		if err != nil {
+			return model.Config{}, validationErrorf("defaultAdmission: %v", err)
+		}
+		if adm == model.AdmissionStandard {
+			adm = ""
+		}
+		cfg.DefaultAdmission = adm
+	}
 	if req.ShowClosedByDefault != nil {
 		cfg.ShowClosedByDefault = *req.ShowClosedByDefault
 	}
 	if req.SettingsLocked != nil {
 		cfg.SettingsLocked = *req.SettingsLocked
+	}
+	if req.Registry != nil {
+		normReg, err := model.NormalizeRegistryConfig(*req.Registry, c.Config.RegistryAllowInsecureHTTP)
+		if err != nil {
+			return model.Config{}, validationErrorf("%v", err)
+		}
+		cfg.Registry = normReg
 	}
 	if req.EnvironmentName != nil {
 		name := strings.TrimSpace(*req.EnvironmentName)
@@ -2276,6 +2348,20 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		}
 		cfg.AutoUpgradeOn = on
 	}
+	if req.OwnerTrust != nil {
+		rules, err := model.NormalizeOwnerTrust(*req.OwnerTrust)
+		if err != nil {
+			return model.Config{}, validationErrorf("%v", err)
+		}
+		cfg.OwnerTrust = rules
+	}
+	if req.AutoGrantContextReads != nil {
+		entries, err := model.NormalizeAutoGrantContextReads(*req.AutoGrantContextReads)
+		if err != nil {
+			return model.Config{}, validationErrorf("%v", err)
+		}
+		cfg.AutoGrantContextReads = entries
+	}
 	// A channel is a daily upgrade at some time; one saved without a
 	// time gets the default rather than a schedule that never fires.
 	if cfg.AutoUpgradeChannel != "" && strings.TrimSpace(cfg.AutoUpgradeTime) == "" {
@@ -2306,12 +2392,12 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 				}
 			}
 			backend.ExcludedModels = excluded
-			backend.Command = strings.TrimSpace(backend.Command)
 			backend.CredentialBackendID = strings.TrimSpace(backend.CredentialBackendID)
 			backend.Team = strings.TrimSpace(backend.Team)
 			if backend.AuthMode != "" {
 				valid := backend.Framework == model.AgentFrameworkCodex &&
-					(backend.AuthMode == model.CodexAuthAPIKey || backend.AuthMode == model.CodexAuthSubscription)
+					(backend.AuthMode == model.CodexAuthAPIKey || backend.AuthMode == model.CodexAuthSubscription ||
+						backend.AuthMode == model.AntigravityAuthAmbient)
 				valid = valid || backend.Framework == model.AgentFrameworkAntigravity &&
 					(backend.AuthMode == model.CodexAuthAPIKey || backend.AuthMode == model.AntigravityAuthAmbient)
 				valid = valid || backend.Framework == model.AgentFrameworkClaude &&
@@ -2326,17 +2412,31 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 			if seen[backend.ID] {
 				return model.Config{}, validationErrorf("agent backend id %q is duplicated", backend.ID)
 			}
+			if backend.IsRemovedCustomConnection() {
+				// A custom command connection the store already has is
+				// kept, disabled, exactly as stored until it is deleted:
+				// the Models page sends every connection back on a save.
+				// A new one is refused.
+				stored := findStoredBackend(cfg.AgentBackends, backend.ID)
+				if stored == nil || !stored.IsRemovedCustomConnection() {
+					return model.Config{}, validationErrorf("agentBackends[%d].framework: %s; "+
+						"use one of %s", i, removedCustomConnectionError, model.AgentFrameworkNames())
+				}
+				kept := *stored
+				kept.Disabled, kept.DisabledReason = true, model.RemovedCustomConnectionReason
+				seen[backend.ID] = true
+				(*req.AgentBackends)[i] = kept
+				continue
+			}
 			if !model.ValidAgentFramework(backend.Framework) {
 				return model.Config{}, validationErrorf("agentBackends[%d].framework must be %s", i, model.AgentFrameworkNames())
 			}
-			if backend.Framework == model.AgentFrameworkCustom && backend.Command == "" {
-				return model.Config{}, validationErrorf("agentBackends[%d].command is required for a custom backend", i)
-			}
+			backend.Command = ""
+			backend.DisabledReason = ""
 			backend.CLIPath = strings.TrimSpace(backend.CLIPath)
 			if backend.CLIPath != "" {
 				if model.AgentCLIBinary(backend.Framework) == "" {
-					return model.Config{}, validationErrorf("agentBackends[%d].cliPath is only for claude, codex and antigravity connections; "+
-						"a custom backend names its executable in command", i)
+					return model.Config{}, validationErrorf("agentBackends[%d].cliPath is only for claude, codex and antigravity connections", i)
 				}
 				// Checked only when it changes, so a binary removed after
 				// it was saved fails that connection's runs (naming it)
@@ -2366,6 +2466,9 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 						"a turn agy is retrying should not be allowed longer than a slow one", i, retryCutoff, turnTimeout)
 				}
 			}
+			if err := c.normalizeConnectionHostd(ctx, cfg.AgentBackends, &backend); err != nil {
+				return model.Config{}, validationErrorf("agentBackends[%d]: %v", i, err)
+			}
 			seen[backend.ID] = true
 			(*req.AgentBackends)[i] = backend
 		}
@@ -2381,6 +2484,18 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 			if !ok || source.ID == backend.ID || source.Framework != backend.Framework || source.CredentialBackendID != "" {
 				return model.Config{}, validationErrorf("agentBackends[%d].credentialBackendId must name a directly authenticated backend of the same type", i)
 			}
+		}
+		// Ambient credentials on a CLI that starts through grain hostd
+		// are a login on some host, so they need it named
+		// (model.CheckAmbientPlacement); a connection stored that way
+		// before the rule is refused only once it changes.
+		var needsHost func(string) bool
+		if c.Config.AmbientNeedsHost != nil {
+			runs := cfg.CLIRun
+			needsHost = func(fw string) bool { return c.Config.AmbientNeedsHost(fw, runs) }
+		}
+		if err := model.CheckAmbientPlacement(*req.AgentBackends, cfg.AgentBackends, needsHost); err != nil {
+			return model.Config{}, validationErrorf("%v", err)
 		}
 		stored := cfg.AgentBackends
 		cfg.AgentBackends = append([]model.AgentBackend(nil), (*req.AgentBackends)...)
@@ -2563,4 +2678,20 @@ func k8sPriorityClassName(key, raw string) (string, error) {
 		return "", validationErrorf("%s %q is not a Kubernetes PriorityClass name: lowercase letters, digits, '-' and '.', starting and ending with a letter or digit", key, name)
 	}
 	return name, nil
+}
+
+// ownerTrustOrEmpty is rules, or an empty list for none, so the settings
+// payload always carries the field.
+func ownerTrustOrEmpty(rules []model.OwnerTrustRule) []model.OwnerTrustRule {
+	if rules == nil {
+		return []model.OwnerTrustRule{}
+	}
+	return rules
+}
+
+func stringsOrEmpty(items []string) []string {
+	if items == nil {
+		return []string{}
+	}
+	return items
 }

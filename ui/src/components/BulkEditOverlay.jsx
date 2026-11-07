@@ -39,6 +39,7 @@ import {
 } from "../state.js";
 import { CUSTOM_PREFIX } from "../taskAttributes.js";
 import ModelSelect from "./ModelSelect.jsx";
+import SearchSelect from "./SearchSelect.jsx";
 import Overlay from "./Overlay.jsx";
 import BranchField from "./BranchField.jsx";
 import RepoField from "./RepoField.jsx";
@@ -456,30 +457,27 @@ export default function BulkEditOverlay({
                   )}
                   helperText="a run already dispatched keeps the model it started on"
                 />
-                <TextField
-                  select
+                <SearchSelect
                   label="Specific connection"
                   value={pinChoices.some((c) => c.id === pin) ? pin : ""}
-                  onChange={(e) => setAgentBackendId(e.target.value)}
+                  onChange={setAgentBackendId}
                   InputLabelProps={{ shrink: true }}
-                  SelectProps={{ displayEmpty: true }}
+                  options={[
+                    {
+                      value: "",
+                      label: "Any enabled connection serving the model",
+                    },
+                    ...pinChoices.map((backend) => ({
+                      value: backend.id,
+                      label: connectionLabel(backend),
+                    })),
+                  ]}
                   helperText={
                     effectiveModel
                       ? `connections that serve ${effectiveModel} -- pin one only if these tasks need that account`
                       : "pin these tasks to one connection -- leave them on any connection unless they need that account"
                   }
-                  fullWidth
-                  size="small"
-                >
-                  <MenuItem value="">
-                    Any enabled connection serving the model
-                  </MenuItem>
-                  {pinChoices.map((backend) => (
-                    <MenuItem key={backend.id} value={backend.id}>
-                      {connectionLabel(backend)}
-                    </MenuItem>
-                  ))}
-                </TextField>
+                />
               </Stack>
             </Row>
           );
@@ -516,7 +514,6 @@ export default function BulkEditOverlay({
             <MenuItem value="antigravity">Antigravity</MenuItem>
             <MenuItem value="claude">Claude</MenuItem>
             <MenuItem value="codex">Codex</MenuItem>
-            <MenuItem value="custom">Custom command</MenuItem>
           </TextField>
         </Row>
 
@@ -526,27 +523,22 @@ export default function BulkEditOverlay({
           onChange={tick("review")}
           mixed={mixed(initial.review)}
         >
-          <TextField
-            select
+          <SearchSelect
             label="Review"
             value={orEmpty(review)}
-            onChange={(e) => setReview(e.target.value)}
-            // displayEmpty and the shrink with it, for the reason above:
-            // "" is "no review", a line this select draws inside its own
-            // box, and the label has to be out of the way of it.
+            onChange={setReview}
+            // Shrunk: "" is "no review", a real choice with a name of its
+            // own, and the label has to be out of the way of it.
             InputLabelProps={{ shrink: true }}
-            SelectProps={{ displayEmpty: true }}
             helperText="attaching one reaches any review not yet filed; a task whose review task already exists keeps it"
-            fullWidth
-            size="small"
-          >
-            <MenuItem value="">No review</MenuItem>
-            {(templates || []).map((tmpl) => (
-              <MenuItem key={tmpl.id} value={tmpl.id}>
-                {tmpl.name}
-              </MenuItem>
-            ))}
-          </TextField>
+            options={[
+              { value: "", label: "No review" },
+              ...(templates || []).map((tmpl) => ({
+                value: tmpl.id,
+                label: tmpl.name,
+              })),
+            ]}
+          />
         </Row>
 
         <Row

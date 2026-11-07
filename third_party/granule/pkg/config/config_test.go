@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/containerspec"
-	"github.com/bwsalmon/granule/pkg/extents"
-	"github.com/bwsalmon/granule/pkg/guestimage"
-	"github.com/bwsalmon/granule/pkg/qcow2"
+	"github.com/gke-labs/granule/pkg/containerspec"
+	"github.com/gke-labs/granule/pkg/extents"
+	"github.com/gke-labs/granule/pkg/guestimage"
+	"github.com/gke-labs/granule/pkg/qcow2"
 )
 
 // clearEnv resets every env var this package reads, so tests don't leak

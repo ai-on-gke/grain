@@ -53,7 +53,10 @@ The cheapest source available is used first:
    ones in that answer are recorded with no call of their own. For concluded
    workflow runs on deployments whose webhook gateway GitHub cannot reach
    (such as a workstation behind an identity-aware reverse proxy), the `github-ci-tails` reconciler
-   also polls `GET /repos/{o}/{r}/actions/runs?status=completed` with ETag
+   also polls `GET /repos/{o}/{r}/actions/runs?status=completed` (plus
+   `?branch=<base>&status=completed` for each tracked base or schedule branch so
+   slow base-branch releases and scheduled workflows are not buried behind faster
+   PR runs) with ETag
    (`If-None-Match` / `304 Not Modified`) and skips polling when the hourly
    GitHub budget is low (`github.BudgetLow`). Concluded runs from webhooks
    and polling are deduplicated by `(repo, run_id, attempt)`.
@@ -90,10 +93,13 @@ tails are recorded in `github_ci_job` and then acts on the concluded run:
    When `branches:` is omitted, grain matches the schedule's `base` branch or
    the repository's default branch.
    When `template:` and `suite:` are omitted on a `.grain/schedules/` declaration,
-   grain defaults to the built-in `system:workflow-review:<stem>` ("Review last
-   night's `<stem>` run") template and records the firing in
-   `scheduled_workflow_run` (`model.ScheduledWorkflowRun`), matching grain CI's
-   scheduled workflow reviews. Both the filed task's prompt and its opening
+   grain defaults to the built-in `system:workflow-review-github:<stem>`
+   ("Review the `<stem>` GitHub Actions run") template and records the firing in
+   `scheduled_workflow_run` (`model.ScheduledWorkflowRun`), the way grain CI's
+   scheduled workflow reviews are recorded. The prompt is GitHub's own rather
+   than grain CI's `system:workflow-review:<stem>`: it sends the agent to
+   `.github/workflows/<stem>.yml` and to `grain ci log <run>` / `grain ci list`,
+   and makes no claim that grain started the run. Both the filed task's prompt and its opening
    comment include the GitHub run URL, conclusion, failing jobs and steps, and
    the stored failure tails from `github_ci_job`.
 2. **Release triage parity.** When a GitHub Actions release or publish workflow
@@ -102,8 +108,8 @@ tails are recorded in `github_ci_job` and then acts on the concluded run:
    just as it does for grain-CI release runs: a failure increments `Failures`
    and sets `FailingSince` (raising `pipeline.not-publishing` in the UI and
    metrics) and files a release-triage task with the run's failure details, while
-   a subsequent passing release run resets `Failures` and closes any open
-   release-triage task as superseded.
+   a passing release run at or after the failing commit on that branch resets
+   `Failures` and closes the open release-triage task as superseded.
 3. **Reading GitHub run logs (`grain ci log`).** `StoredRunStore.Get` and
    `GET /api/ci/runs/{id}` fall back to synthesizing a `ci.Run` from the
    `github_ci_job` rows for `{id}` (`ci.GitHubCIRun`), so a review or triage

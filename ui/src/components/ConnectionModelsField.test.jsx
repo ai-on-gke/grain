@@ -17,6 +17,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import api from "../api.js";
 import ConnectionModelsField from "./ConnectionModelsField.jsx";
+import { optionValues } from "../searchSelectTesting.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
 
@@ -59,5 +60,28 @@ describe("ConnectionModelsField", () => {
     expect(screen.queryByTestId("advertise-all-unavailable")).toBeNull();
     await user.click(all);
     expect(onChange).toHaveBeenCalledWith({ models: [], model: undefined });
+  });
+
+  it("filters discovered models with searchFilter in any word order", async () => {
+    const user = userEvent.setup();
+    api.mockResolvedValue({
+      available: true,
+      models: [
+        { id: "gemini-2.5-pro" },
+        { id: "gemini-2.5-flash" },
+        { id: "claude-opus-4-1" },
+      ],
+    });
+    render(<ConnectionModelsField backend={pinned} onChange={() => {}} />);
+    await screen.findByLabelText("Discovered models");
+
+    const input = screen.getByRole("combobox", { name: "Advertised models" });
+    await user.click(input);
+    await user.type(input, "4 opus");
+    expect(optionValues(input)).toEqual(["claude-opus-4-1"]);
+
+    await user.clear(input);
+    await user.type(input, "co41");
+    expect(optionValues(input)).toEqual(["claude-opus-4-1"]);
   });
 });

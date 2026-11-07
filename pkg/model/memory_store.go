@@ -139,6 +139,37 @@ func (s *Store) GetMemoryDocument(ctx context.Context, repo *RepoRef, name strin
 	return d, nil
 }
 
+// GetMemoryDocuments reads every named document in one scope -- repo nil
+// for the deployment's own -- including its text, ordered by document name.
+func (s *Store) GetMemoryDocuments(ctx context.Context, repo *RepoRef) ([]MemoryDocument, error) {
+	owner, scope := memoryKey(repo)
+	var out []MemoryDocument
+	err := each(ctx, s.db,
+		"SELECT `document`,`summary`,`text`,`updated_at`,`updated_by_kind`,`updated_by_id`,`updated_by_source` "+
+			"FROM `memory_document` WHERE `owner` = ? AND `name` = ? ORDER BY `document`",
+		[]any{owner, scope},
+		func(rows *sql.Rows) error {
+			var document, summary, text, byKind, byID, bySource string
+			var updated sql.NullTime
+			if err := rows.Scan(&document, &summary, &text, &updated, &byKind, &byID, &bySource); err != nil {
+				return err
+			}
+			d := MemoryDocument{
+				Repo: repo, Name: document, Summary: summary, Text: text, Length: len(text),
+				UpdatedBy: Principal{Kind: PrincipalKind(byKind), ID: byID, Source: AuthSource(bySource)},
+			}
+			if updated.Valid {
+				d.UpdatedAt = updated.Time
+			}
+			out = append(out, d)
+			return nil
+		})
+	if err != nil {
+		return nil, fmt.Errorf("reading memory documents for %s: %w", memoryScope(repo), err)
+	}
+	return out, nil
+}
+
 // ListMemoryDocuments returns what documents exist, without their text:
 // every scope's when called with no scopes at all, and otherwise only
 // the scopes named.

@@ -29,7 +29,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/secretsrepo"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
@@ -155,5 +157,21 @@ func TestForbiddenReposIsEmptyForALocalOnlyInstallation(t *testing.T) {
 	}
 	if len(forbidden) != 0 {
 		t.Fatalf("forbidden = %v, want nothing refused", forbidden)
+	}
+}
+
+func TestNewStateManagerPopulatesForbiddenSetImmediately(t *testing.T) {
+	t.Parallel()
+	dataDir := t.TempDir()
+	if err := secretsrepo.SaveSettings(dataDir, secretsrepo.Settings{
+		Remote: "https://github.com/acme/grain-secrets.git",
+		Branch: "main",
+	}); err != nil {
+		t.Fatalf("saving secretsrepo settings: %v", err)
+	}
+	forbidden := gitproxy.NewForbiddenSet()
+	NewStateManager(dataDir, nil, nil, nil, nil, forbidden)
+	if !forbidden.Forbids("acme", "grain-secrets") {
+		t.Fatalf("forbidden.Repos() = %v right after NewStateManager, want acme/grain-secrets populated before the UI serves", forbidden.Repos())
 	}
 }

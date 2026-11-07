@@ -124,9 +124,25 @@ func (w *holdWorld) clearedAtA(task model.Task) string {
 	// grain/task-2434; v11 only adds the hostd registry, host-exec
 	// confirmation and CI repository-access files to auth-routes and
 	// capabilities-secrets, grain/task-2723; v12 only splits the release
-	// jobs out of release-promotion into release-machinery, grain/task-2664).
-	if trustboundary.Version != "trust-boundary/v12" {
-		w.t.Fatalf("this walkthrough is about trust-boundary/v12, the build has %s", trustboundary.Version)
+	// jobs out of release-promotion into release-machinery, grain/task-2664;
+	// v13 only adds the GitHub Actions Inbox approval's files to
+	// release-promotion, grain/task-2666; v14 only adds the rc
+	// qualification housekeeping workflow and its Actions helper to
+	// release-machinery, grain/task-2584; v15 only adds the controller MCP
+	// endpoint, allowlist, access-decision, CI grant rule, auto-merge guard
+	// and hostd install files to existing categories, task 2977; v16 only adds connection_hostd
+	// and capability server hostd placement, grain/task-2165; v17 only
+	// adds the role gate, built-in scope sets, gma_ inbox reach,
+	// approval-callback tokens and the daemon's UI listeners to
+	// auth-routes, task 3168; v18 only adds host enrollment codes, the
+	// pairing-code join handshake and the request-actor check to
+	// auth-routes, task 3287; v19 only adds pkg/playbooks/ and the
+	// capability policy/catalogue/template-grant files to
+	// capabilities-secrets, task 3388; v20 only adds the external-agent
+	// owner-trust policy and the gma_ token model and handlers to
+	// auth-routes, task 3026).
+	if trustboundary.Version != "trust-boundary/v20" {
+		w.t.Fatalf("this walkthrough is about trust-boundary/v20, the build has %s", trustboundary.Version)
 	}
 	if w.merged(branch) {
 		w.t.Fatal("merged before the pull request read mergeable")

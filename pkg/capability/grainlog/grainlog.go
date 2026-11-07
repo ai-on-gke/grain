@@ -127,13 +127,53 @@ type Source struct {
 	// Read performs the read. A field rather than a systemlog value so a
 	// test can stand in for journalctl without a systemd on the runner.
 	Read func(ctx context.Context, q systemlog.Query) ([]string, error)
+	// Units, when non-empty, is every systemd unit this source may read,
+	// the running one first (systemlog.DaemonJournal.Units). The answer
+	// names the unit read, mentions any others installed on the host, and
+	// `unit` picks among them through ForUnit.
+	Units []systemlog.Unit
+	// ForUnit returns Read for one of Units by name, or an error naming
+	// the units there are.
+	ForUnit func(unit string) (func(ctx context.Context, q systemlog.Query) ([]string, error), error)
+}
+
+// DaemonSource is the "daemon" Source over dj: it reads dj.Running by
+// default, names the unit read in its answer, and -- when dj.Others is
+// non-empty -- mentions the other installed unit and lets `unit` pick it.
+func DaemonSource(dj systemlog.DaemonJournal) Source {
+	what := fmt.Sprintf("the grain daemon's own journal (%s) -- what this deployment logged", dj.Running)
+	if len(dj.Others) > 0 {
+		var others []string
+		for _, u := range dj.Others {
+			others = append(others, u.String())
+		}
+		what += fmt.Sprintf(" (also installed on this host: %s; pass unit to read it)", strings.Join(others, ", "))
+	}
+	return Source{
+		Name:  "daemon",
+		What:  what,
+		Read:  dj.Read,
+		Units: dj.Units(),
+		ForUnit: func(name string) (func(context.Context, systemlog.Query) ([]string, error), error) {
+			j, err := dj.Journal(name)
+			if err != nil {
+				return nil, err
+			}
+			return j.Read, nil
+		},
+	}
 }
 
 // DefaultSources is the allowlist a real deployment serves: the daemon's
 // own unit, and the kernel log underneath it.
 //
-// grain-daemon.service is scripts/setup.sh's own unit name, the same
-// string pkg/cli/daemon.go wires the UI's System pane to. dmesg is
+// The daemon's unit is the one this process runs under
+// (systemlog.DaemonUnit): scripts/setup.sh's grain-daemon.service on a
+// host deployment, `grain init-workstation`'s user unit grain.service
+// on a workstation -- and the same string pkg/daemon wires the UI's
+// System pane to. It used to be grain-daemon.service by name, which on
+// a workstation read a journal nothing was writing to, or worse, a
+// stale system unit's. dmesg is
 // here because the failures the daemon's own journal cannot describe are
 // the ones where the process that would have written them is the one
 // that stopped -- an agent CLI killed by the OOM killer during the very
@@ -145,13 +185,9 @@ type Source struct {
 // host rather than a line of plumbing. It is one entry when somebody
 // decides that.
 func DefaultSources() []Source {
-	daemon := systemlog.Journalctl{Unit: "grain-daemon.service"}
+	dj := systemlog.DetectDaemonJournal(systemlog.DaemonUnit(), nil)
 	return []Source{
-		{
-			Name: "daemon",
-			What: "the grain daemon's own journal (grain-daemon.service) -- what this deployment logged",
-			Read: daemon.Read,
-		},
+		DaemonSource(dj),
 		{
 			Name: "dmesg",
 			What: "the kernel log of the machine underneath it -- OOM kills, disk and network errors",
@@ -241,6 +277,11 @@ func inputSchema(sources []Source) map[string]any {
 				"description": "which log to read. " + strings.TrimSpace(what.String()) +
 					" These are the only logs readable here.",
 			},
+			"unit": map[string]any{
+				"type": "string",
+				"description": "for the daemon source on a host with both grain's system unit (grain-daemon.service) " +
+					"and its user unit (grain.service): which unit to read. Omit for the unit this daemon runs under.",
+			},
 			"since": map[string]any{
 				"type": "string",
 				"description": "start of the window, as an RFC3339 timestamp " +
@@ -294,6 +335,8 @@ func readLogTool(cfg Config) mcp.Tool {
 // request is one call's parameters, after parsing and bounding.
 type request struct {
 	source   Source
+	read     func(ctx context.Context, q systemlog.Query) ([]string, error)
+	unit     *systemlog.Unit
 	query    systemlog.Query
 	contains string
 	maxLines int
@@ -313,7 +356,7 @@ func readLog(ctx context.Context, cfg Config, args map[string]any) mcp.Result {
 		return mcp.Result{Text: noRedactor, IsError: true}
 	}
 
-	raw, err := req.source.Read(ctx, req.query)
+	raw, err := req.read(ctx, req.query)
 	if err != nil {
 		audit(cfg, req, 0, 0, "failed: "+err.Error())
 		return mcp.Result{
@@ -362,7 +405,25 @@ func filter(lines []string, contains string) []string {
 // rather than a failure.
 func answer(req request, shown []string, matched, dropped, redacted int, windowFull bool) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s log, %s", req.source.Name, describeWindow(req.query))
+	fmt.Fprintf(&b, "%s log", req.source.Name)
+	if req.unit != nil {
+		role := "running"
+		if len(req.source.Units) > 0 && *req.unit != req.source.Units[0] {
+			role = "not running"
+		}
+		fmt.Fprintf(&b, " (%s, %s", req.unit, role)
+		if len(req.source.Units) > 1 {
+			var others []string
+			for _, u := range req.source.Units {
+				if u != *req.unit {
+					others = append(others, u.Name)
+				}
+			}
+			fmt.Fprintf(&b, "; also installed: %s -- pass unit to read it", strings.Join(others, ", "))
+		}
+		b.WriteByte(')')
+	}
+	fmt.Fprintf(&b, ", %s", describeWindow(req.query))
 	if req.query.Priority != "" {
 		fmt.Fprintf(&b, ", priority %s and above", req.query.Priority)
 	}
@@ -450,6 +511,30 @@ func parseRequest(cfg Config, args map[string]any) (request, error) {
 	if !found {
 		return req, fmt.Errorf("source %q is not a log this run can read; the ones it can are: %s",
 			name, strings.Join(sourceNames(cfg.Sources), ", "))
+	}
+	req.read = req.source.Read
+	wantUnit, _ := args["unit"].(string)
+	wantUnit = strings.TrimSpace(wantUnit)
+	if len(req.source.Units) > 0 {
+		chosen := req.source.Units[0]
+		if wantUnit != "" {
+			if req.source.ForUnit == nil {
+				return req, fmt.Errorf("source %q does not support unit selection", req.source.Name)
+			}
+			picked, err := req.source.ForUnit(wantUnit)
+			if err != nil {
+				return req, err
+			}
+			req.read = picked
+			for _, u := range req.source.Units {
+				if u.Name == wantUnit {
+					chosen = u
+				}
+			}
+		}
+		req.unit = &chosen
+	} else if wantUnit != "" {
+		return req, fmt.Errorf("source %q is not a systemd journal: unit does not apply to it", req.source.Name)
 	}
 
 	since, err := parseTime(args, "since")

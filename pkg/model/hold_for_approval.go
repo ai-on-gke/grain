@@ -67,8 +67,21 @@ func HeldForApprovalNote(proposer string) string {
 // "" means the permission does cover it -- whether it was then filed
 // approved is AutoSubmitLimits' question, which this does not ask, since
 // it needs the store and has its own note (AutoSubmitLimitNote).
-func AutoApprovalRefusal(child, parent Task, sessionQueues bool) string {
-	if escalated := EscalatedCapabilities(child, parent); len(escalated) > 0 {
+//
+// seeding is where child's default grants came from when it was filed
+// (ProposalSeeding): a director proposal's defaults seeded unchanged
+// from its own target repository or the deployment are not escalations
+// (ProposalEscalations, director-capabilities.spec.md §4.2). nil
+// measures every default reference as EscalatedCapabilities does.
+//
+// A proposal that would land work in this deployment's configuration
+// repository (ConfigRepoProposalHold) is refused first and whatever
+// parent holds: see that function for why.
+func AutoApprovalRefusal(child, parent Task, sessionQueues bool, seeding *ProposalSeeding) string {
+	if why := ConfigRepoProposalHold(child); why != "" {
+		return why
+	}
+	if escalated, _ := ProposalEscalations(child, parent, sessionQueues, seeding); len(escalated) > 0 {
 		asked, seeded := SeededEscalations(child, escalated)
 		var why []string
 		if len(asked) > 0 {
@@ -81,6 +94,9 @@ func AutoApprovalRefusal(child, parent Task, sessionQueues bool) string {
 				"or remove it", "`"+strings.Join(seeded, "`, `")+"`"))
 		}
 		return strings.Join(why, "; and ")
+	}
+	if adm := NormalizeAdmission(child.Admission); adm.AtLeast(AdmissionBypass) {
+		return fmt.Sprintf("it sets admission to `%s`, which only a person may give a task", adm)
 	}
 	if writes := UngrantedWrites(child, parent); len(writes) > 0 {
 		names := make([]string, 0, len(writes))
@@ -106,6 +122,49 @@ func AutoApprovalRefusal(child, parent Task, sessionQueues bool) string {
 		"task lands on, holding no capability your task lacks"
 }
 
+// ConfigRepoProposalHold is why child, a proposal, must wait for a
+// person whatever its proposer's permission: it targets this
+// deployment's configuration repository (IsConfigRepo), or lists it
+// among its writes. Phrased, like AutoApprovalRefusal, to finish "filed
+// unapproved: your permission does not cover ..."; "" when it names the
+// repository nowhere.
+//
+// Unconditional, and so asked before anything the proposer holds.
+// grain/config holds this deployment's capability grants, schedules and
+// secrets configuration, and the one sanctioned way a run changes it is
+// propose_config_change: a candidate branch under
+// ConfigProposalBranchPrefix, validated, classified by the trust
+// boundary and landed only on a person's approval of its pinned head.
+// That tool is keyed on the run holding grain/config in its Writes, and
+// UngrantedWrites admits any child write its parent holds -- so without
+// this, the director given propose_config_change would also have been
+// given a way to queue, on its own permission (TasksApproved), a child
+// task that pushes to grain/config with nobody looking at the diff
+// first (director-capabilities spec §3.1.3, gap G5). The proposal is
+// still filed as asked; a person decides whether it goes ahead.
+//
+// Here rather than in either package that files a proposal, so the
+// end-of-run relay (orchestrator.relayProposedTasks) and the live call
+// (ui.CreateTask) hold it the same way.
+func ConfigRepoProposalHold(child Task) string {
+	targets := child.Target != nil && IsConfigRepo(*child.Target)
+	writes := slices.ContainsFunc(child.Writes, func(w WriteTarget) bool { return IsConfigRepo(w.Repo) })
+	var what string
+	switch {
+	case targets && writes:
+		what = "it targets and writes"
+	case targets:
+		what = "it targets"
+	case writes:
+		what = "it writes"
+	default:
+		return ""
+	}
+	return fmt.Sprintf("%s %s, this deployment's configuration repository, and a proposed task that "+
+		"may land work there always waits for a person (propose a configuration change with "+
+		"propose_config_change instead)", what, ConfigRepo())
+}
+
 // PersonOnlyProposalSettings is why child, a proposal parent filed, asks
 // for something only a person may give it, phrased to finish "filed for
 // a person to approve: ..." -- "" when it asks for nothing of the kind.
@@ -113,10 +172,11 @@ func AutoApprovalRefusal(child, parent Task, sessionQueues bool) string {
 // Two settings a person may give any task they file, and a run may not
 // give the work it files on its own permission:
 //
+//   - Admission above standard (`bypass` or `durable`), which lets the
+//     task bypass queue limits or run without a wall-clock deadline.
 //   - KeepRunning, which requeues the task every time its run exits and so
-//     holds a sandbox for as long as the deployment runs. Editing a task
-//     treats it as a grant of `durable` that no agent may make
-//     (ui.agentGrantRefusal); filing one is the same decision.
+//     holds a sandbox for as long as the deployment runs. Filing one is a
+//     person's decision just like editing an existing task.
 //   - A Priority above both its proposer's own and DefaultTaskPriority,
 //     which sorts it ahead of base-branch repairs and of the work people
 //     put at the front of the queue (Store's taskQueueOrderSQL). Filing at
@@ -132,6 +192,9 @@ func AutoApprovalRefusal(child, parent Task, sessionQueues bool) string {
 // (ui.CreateTask) apply it the same way.
 func PersonOnlyProposalSettings(child, parent Task) string {
 	var why []string
+	if adm := NormalizeAdmission(child.Admission); adm.AtLeast(AdmissionBypass) {
+		why = append(why, fmt.Sprintf("it sets admission to `%s`, which only a person may give a task", adm))
+	}
 	if child.KeepRunning {
 		why = append(why, "it asks to keep running (keep_running), restarting every time its run exits, "+
 			"which only a person may ask of a task")

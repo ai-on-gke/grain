@@ -319,6 +319,59 @@ func TestASuiteCannotNameATemplateThisRepoDoesNotDeclare(t *testing.T) {
 	}
 }
 
+// A suite's `qualification:` stanza travels beside it to the sync,
+// as the file wrote it; a suite without one has none.
+func TestASuiteDeclaresItselfAReleaseGate(t *testing.T) {
+	declared := load(t, map[string]string{
+		".grain/templates/smoke.yml": "title: Smoke the edition\n",
+		".grain/suites/edition-qualification.yml": `
+templates: [smoke]
+mode: until-clean
+max-passes: 1
+qualification:
+  check: grain/edition-qualification
+  candidate: synced-release
+  stage1: { status: grain/edition-qualification }
+`,
+		".grain/suites/sweep.yml": "templates: [smoke]\n",
+	})
+	if len(declared.Suites) != 2 {
+		t.Fatalf("declared %d suites, want 2", len(declared.Suites))
+	}
+	byPath := map[string]model.DeclaredSuiteFile{}
+	for _, f := range declared.Suites {
+		byPath[f.Path] = f
+	}
+	got := byPath[".grain/suites/edition-qualification.yml"].Qualification
+	want := model.SuiteQualification{Check: "grain/edition-qualification", Candidate: model.CandidateSyncedRelease,
+		Stage1Status: "grain/edition-qualification"}
+	if got == nil || *got != want {
+		t.Errorf("qualification = %+v, want %+v", got, want)
+	}
+	if q := byPath[".grain/suites/sweep.yml"].Qualification; q != nil {
+		t.Errorf("a suite with no stanza has qualification %+v, want none", q)
+	}
+}
+
+func TestABadQualificationStanzaIsRefused(t *testing.T) {
+	for stanza, want := range map[string]string{
+		"qualification:\n  candidate: nightly-tags\n":                     "candidate",
+		"qualification:\n  stage1: { workflow: nightly, status: ci }\n":   "not both",
+		"qualification:\n  stage1: {}\n":                                  "stage1",
+		"qualification:\n  checks: grain/x\n":                             "checks",
+		"qualification:\n  upstream: example.com/acme/core\n":             "only read",
+		"qualification:\n  candidate: synced-release\n  upstream: nope\n": "upstream",
+	} {
+		msg := loadErr(t, map[string]string{
+			".grain/templates/smoke.yml": "title: Smoke\n",
+			".grain/suites/gate.yml":     "templates: [smoke]\n" + stanza,
+		})
+		if !strings.Contains(msg, want) {
+			t.Errorf("%q: error = %q, want it to mention %q", stanza, msg, want)
+		}
+	}
+}
+
 func TestScheduleFiresADeclaredTemplateOnACadence(t *testing.T) {
 	declared := load(t, map[string]string{
 		".grain/templates/nightly.yml": "title: Bump dependencies\n",
@@ -756,5 +809,118 @@ func TestDeclaredRepoCapabilityRejectsMissingRepoAndScheduleAccess(t *testing.T)
 	})
 	if !strings.Contains(schedErr, "repository access belongs on the template it fires") {
 		t.Errorf("schedule with repo#write {repo}: got %q, want template-only refusal", schedErr)
+	}
+}
+
+// `trigger: {git_ref: ...}` fires a template when another repository's ref
+// moves (model.RecurrenceGitRef), and asks for a full ref name.
+func TestAScheduleFiresATemplateWhenAnotherRepositorysRefMoves(t *testing.T) {
+	files := map[string]string{
+		".grain/templates/sync.yml": "title: Sync the upstream release\n",
+		".grain/schedules/sync.yml": `
+template: sync
+trigger:
+  git_ref:
+    repo: upstream/core
+    ref: refs/tags/latest
+`,
+	}
+	declared := load(t, files)
+	if len(declared.Schedules) != 1 {
+		t.Fatalf("declared %d schedules, want 1", len(declared.Schedules))
+	}
+	r := declared.Schedules[0].Schedule.Recurrence
+	if r.Kind != model.RecurrenceGitRef || r.GitRef == nil ||
+		r.GitRef.Repo != "upstream/core" || r.GitRef.Ref != "refs/tags/latest" {
+		t.Fatalf("recurrence = %+v (git_ref %+v)", r, r.GitRef)
+	}
+
+	files[".grain/schedules/sync.yml"] = "template: sync\ntrigger:\n  git_ref:\n    repo: upstream/core\n    ref: latest\n"
+	if msg := loadErr(t, files); !strings.Contains(msg, "full `ref:`") {
+		t.Fatalf("short ref: error = %q", msg)
+	}
+	files[".grain/schedules/sync.yml"] = "template: sync\ntrigger:\n  git_ref:\n    ref: refs/tags/latest\n"
+	if msg := loadErr(t, files); !strings.Contains(msg, "repo: owner/name") {
+		t.Fatalf("no repo: error = %q", msg)
+	}
+	files[".grain/schedules/sync.yml"] = "template: sync\ntrigger:\n  git_ref:\n    repo: grain/config\n    ref: refs/heads/main\n"
+	if msg := loadErr(t, files); !strings.Contains(msg, "grain's own configuration") {
+		t.Fatalf("watching grain/config: error = %q", msg)
+	}
+	files[".grain/schedules/sync.yml"] = "trigger:\n  git_ref:\n    repo: upstream/core\n    ref: refs/tags/latest\n"
+	if msg := loadErr(t, files); !strings.Contains(msg, "needs a `template:`") {
+		t.Fatalf("no template: error = %q", msg)
+	}
+}
+
+func TestDeclaredAdmissionAndLegacyCapabilityAliases(t *testing.T) {
+	declared := load(t, map[string]string{
+		".grain/templates/urgent.yml": "title: Urgent\nadmission: bypass\n",
+		".grain/templates/legacy.yml": "title: Legacy\ncapabilities:\n  - priority-dispatch\n  - durable\n",
+		".grain/schedules/urgent.yml": "template: urgent\nevery:\n  hours: 2\nadmission: durable\n",
+		".grain/schedules/legacy.yml": "template: legacy\nevery:\n  hours: 4\ncapabilities:\n  - priority-dispatch\n",
+	})
+	tmpls := map[string]model.Template{}
+	for _, f := range declared.Templates {
+		tmpls[f.Template.Name] = f.Template
+	}
+	if tmpls["urgent"].Admission != model.AdmissionBypass {
+		t.Errorf("urgent template Admission = %q, want %q", tmpls["urgent"].Admission, model.AdmissionBypass)
+	}
+	if tmpls["legacy"].Admission != model.AdmissionDurable {
+		t.Errorf("legacy template Admission = %q, want %q", tmpls["legacy"].Admission, model.AdmissionDurable)
+	}
+	if len(tmpls["legacy"].Grants) != 0 {
+		t.Errorf("legacy template Grants = %+v, want none", tmpls["legacy"].Grants)
+	}
+	scheds := map[string]model.Schedule{}
+	for _, f := range declared.Schedules {
+		scheds[f.Schedule.Title] = f.Schedule
+	}
+	if scheds["urgent"].Admission != model.AdmissionDurable {
+		t.Errorf("urgent schedule Admission = %q, want %q", scheds["urgent"].Admission, model.AdmissionDurable)
+	}
+	if scheds["legacy"].Admission != model.AdmissionBypass || len(scheds["legacy"].Grants) != 0 {
+		t.Errorf("legacy schedule = (%q, %+v), want (bypass, empty grants)", scheds["legacy"].Admission, scheds["legacy"].Grants)
+	}
+
+	if msg := loadErr(t, map[string]string{
+		".grain/templates/bad.yml": "title: Bad\nadmission: turbo\n",
+	}); !strings.Contains(msg, "admission") {
+		t.Errorf("invalid template admission error = %q, want mention of admission", msg)
+	}
+	if msg := loadErr(t, map[string]string{
+		".grain/settings.yml": "default-admission: bypass\n",
+	}); !strings.Contains(msg, "default-admission") {
+		t.Errorf("repo default-admission error = %q, want refusal of default-admission", msg)
+	}
+}
+
+// A .grain template or schedule that declares `capabilities: [grain-ci]` (or
+// its canonical grain#ci ref) wants read-only CI access to its own declaring
+// repository: grain#ci itself is stripped by applyGrainCIGrant on a
+// ci_mode: github repository and refused by CreateTask.
+func TestDeclaredGrainCICapabilityMapsToRepoScopedCIRead(t *testing.T) {
+	want := model.APIGrantPrefix + "ci-read@" + repo.String()
+	for _, entry := range []string{"grain-ci", model.GrainCIRef, model.GrainCIGrant} {
+		declared := load(t, map[string]string{
+			".grain/templates/train.yml": "title: Run train\ncapabilities:\n  - '" + entry + "'\n",
+			".grain/schedules/train.yml": "template: train\nevery:\n  minutes: 20\ncapabilities:\n  - '" + entry + "'\n",
+		})
+		if len(declared.Templates) != 1 || len(declared.Templates[0].Template.Grants) != 1 ||
+			declared.Templates[0].Template.Grants[0].Capability != want {
+			t.Errorf("template(%q) grants = %+v, want [{Capability:%s}]", entry, declared.Templates[0].Template.Grants, want)
+		}
+		if len(declared.Schedules) != 1 || len(declared.Schedules[0].Schedule.Grants) != 1 ||
+			declared.Schedules[0].Schedule.Grants[0].Capability != want {
+			t.Errorf("schedule(%q) grants = %+v, want [{Capability:%s}]", entry, declared.Schedules[0].Schedule.Grants, want)
+		}
+	}
+
+	// Malformed capability-reference JSON is still rejected at parse time.
+	if msg := loadErr(t, map[string]string{
+		".grain/templates/train.yml": "title: Run train\ncapabilities:\n  - 'https://grain.dev/capabilities/grain#ci={bad'\n",
+	}); msg == "" {
+		t.Fatal("malformed grain#ci capability ref loaded without error")
 	}
 }

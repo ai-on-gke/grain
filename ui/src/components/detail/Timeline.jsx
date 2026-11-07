@@ -154,7 +154,92 @@ const AUTO_MERGE_STEPS = {
   auto_merge_on: "Auto-merge turned on",
   auto_merge_off: "Auto-merge turned off",
   auto_merge_kept_off: "Auto-merge kept off",
+  // A human-review hold raised and released (model.LinkHumanReviewHold):
+  // who raised it is the review task, who released it the person.
+  human_review_requested: "Held for a person's review",
+  human_review_released: "Human-review hold released",
 };
+
+// ADMISSION_LABELS names each admission value the way the task pane's
+// Admission select does (detail/Actions.jsx).
+const ADMISSION_LABELS = {
+  standard: "Standard",
+  bypass: "Bypass queue",
+  durable: "Durable",
+};
+
+function isSettingOrAuditStep(state) {
+  return (
+    Boolean(AUTO_MERGE_STEPS[state]) ||
+    state === "owner_changed" ||
+    state === "admission_changed"
+  );
+}
+
+function renderTaskRefLink(taskId, label, onOpenTask, testId) {
+  return (
+    <Link
+      href={`/tasks/${encodeURIComponent(taskId)}`}
+      data-testid={testId}
+      onClick={(ev) => {
+        if (
+          !onOpenTask ||
+          ev.button !== 0 ||
+          ev.metaKey ||
+          ev.ctrlKey ||
+          ev.shiftKey ||
+          ev.altKey
+        ) {
+          return;
+        }
+        ev.preventDefault();
+        ev.stopPropagation();
+        onOpenTask(taskId);
+      }}
+    >
+      {label}
+    </Link>
+  );
+}
+
+function renderProposedAttribution(tr, onOpenTask) {
+  if (tr.proposingTaskId) {
+    const noun = tr.actor?.source === "session" ? "session" : "task";
+    const runLabel =
+      tr.proposingRunAttempt > 0
+        ? `run #${tr.proposingRunAttempt}`
+        : tr.proposingRunId
+          ? `run ${tr.proposingRunId}`
+          : "";
+    const behalf = tr.onBehalfOfOwner || tr.onBehalfOf?.id || "";
+    return (
+      <>
+        by {noun}{" "}
+        {renderTaskRefLink(
+          tr.proposingTaskId,
+          `#${tr.proposingTaskId}`,
+          onOpenTask,
+          "proposing-task-link",
+        )}
+        {runLabel && (
+          <>
+            {" ("}
+            {renderTaskRefLink(
+              tr.proposingTaskId,
+              runLabel,
+              onOpenTask,
+              "proposing-run-link",
+            )}
+            {")"}
+          </>
+        )}
+        {behalf && <> on behalf of {behalf}</>}
+      </>
+    );
+  }
+  const actor = transitionActor(tr);
+  return actor ? <>by {actor}</> : null;
+}
 
 function transitionRank(tr) {
   if (tr.state === "queued" && tr.inferred) return RANK.requeue;
@@ -219,7 +304,7 @@ const CLOSE_SYNC_WINDOW_MS = 60 * 60 * 1000;
 // unrecoverable) -- so this can skip a state without that being a bug to
 // chase. One it could only place approximately comes flagged inferred,
 // and its time is shown as approximate.
-function timelineEvents(t, zone, now = Date.now()) {
+function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
   const events = [];
   const push = (e) => events.push({ ...e, seq: events.length });
   const transitions = t.transitions || [];
@@ -237,14 +322,37 @@ function timelineEvents(t, zone, now = Date.now()) {
       ? transitions.filter((tr) => tr.state !== "running")
       : transitions;
   // Only a lifecycle step can be the task's current state: an auto-merge
-  // change (model.TaskEventAutoMergeOn/Off/KeptOff) is a note about one
-  // setting, not a state the task moved into.
+  // change (model.TaskEventAutoMergeOn/Off/KeptOff) or ownership transfer
+  // (model.TaskEventOwnerChanged) is a note about one setting, not a state
+  // the task moved into.
   const lastTransitionIndex = shownTransitions.findLastIndex(
-    (tr) => !AUTO_MERGE_STEPS[tr.state],
+    (tr) => !isSettingOrAuditStep(tr.state),
   );
 
   const transitionEvents = shownTransitions.map((tr, i) => {
     const at = timelineTime(tr.at);
+    const actorNode =
+      tr.state === "proposed" ? (
+        renderProposedAttribution(tr, onOpenTask)
+      ) : transitionActor(tr) ? (
+        <>by {transitionActor(tr)}</>
+      ) : null;
+    const ownerTransferDetail =
+      tr.state === "owner_changed" && (tr.oldOwner || tr.newOwner)
+        ? `from ${tr.oldOwner || "?"} to ${tr.newOwner || "?"}`
+        : "";
+    // A change to the admission setting (model.TaskEventAdmissionChanged,
+    // unified-grants.design.md §4.1) says the old and new values.
+    const admissionDetail =
+      tr.state === "admission_changed" && (tr.oldAdmission || tr.newAdmission)
+        ? `from ${ADMISSION_LABELS[tr.oldAdmission] || tr.oldAdmission || "?"} to ${ADMISSION_LABELS[tr.newAdmission] || tr.newAdmission || "?"}`
+        : "";
+    const shownDetail =
+      ownerTransferDetail || admissionDetail || tr.detail || "";
+    const shownReason =
+      tr.state === "owner_changed" || tr.state === "admission_changed"
+        ? ""
+        : tr.reason || "";
     return {
       key: `transition-${tr.state}-${i}`,
       at,
@@ -253,13 +361,13 @@ function timelineEvents(t, zone, now = Date.now()) {
       // A reopen is not a state of its own (model.TransitionReopened):
       // the task is back to waiting on whatever its record implies, so it
       // takes the waiting dot.
-      badge: AUTO_MERGE_STEPS[tr.state]
+      badge: isSettingOrAuditStep(tr.state)
         ? "comment"
         : tr.state === "reopened"
           ? "queued"
           : tr.state,
       inferred: Boolean(tr.inferred),
-      lifecycle: true,
+      lifecycle: !isSettingOrAuditStep(tr.state),
       // Only the most recent transition can still be "now" -- a running
       // entry earlier in the list is over and done, so its dot should
       // read as static rather than keep spinning as if the task were
@@ -271,25 +379,29 @@ function timelineEvents(t, zone, now = Date.now()) {
           <div className="timeline-title">
             {tr.state === "reopened"
               ? "Reopened"
-              : AUTO_MERGE_STEPS[tr.state] ||
-                STATE_LABELS[tr.state] ||
-                tr.state}
+              : tr.state === "owner_changed"
+                ? "Owner changed"
+                : tr.state === "admission_changed"
+                  ? "Admission changed"
+                  : AUTO_MERGE_STEPS[tr.state] ||
+                    STATE_LABELS[tr.state] ||
+                    tr.state}
           </div>
-          {/* Who closed or reopened it, why, and what the close cancelled
-              (model.TaskEvent) -- set only on a step somebody asked for. */}
-          {(transitionActor(tr) || tr.reason || tr.detail) && (
+          {/* Who proposed, closed, reopened, or transferred it, why, and
+              what the step did (model.TaskEvent). */}
+          {(actorNode || shownReason || shownDetail) && (
             <div className="timeline-meta timeline-transition-by">
-              {transitionActor(tr) && <>by {transitionActor(tr)}</>}
-              {tr.reason && (
+              {actorNode}
+              {shownReason && (
                 <>
-                  {transitionActor(tr) ? " · " : ""}
-                  {tr.reason}
+                  {actorNode ? " · " : ""}
+                  {shownReason}
                 </>
               )}
-              {tr.detail && (
+              {shownDetail && (
                 <>
-                  {transitionActor(tr) || tr.reason ? " · " : ""}
-                  {tr.detail}
+                  {actorNode || shownReason ? " · " : ""}
+                  {shownDetail}
                 </>
               )}
             </div>
@@ -379,21 +491,31 @@ function timelineEvents(t, zone, now = Date.now()) {
               same overlay the entry opens (CapabilityAudit). A line of its
               own: on the meta line it pushed a phone's "finished" time
               onto two lines. */}
-          {/* Which grain hostd its host work went to, the machine that
-              hostd ran on and its owner (ui.Attempt.Hostd), on a line of
-              its own for the same reason. */}
+          {/* Which grain hostd its agent CLI ran on -- its model
+              connection's -- the machine that hostd ran on and its owner
+              (ui.Attempt.Hostd, read-only), on a line of its own for the
+              same reason. A capability server placed on a hostd of its
+              own says which on each of its audit records. */}
           {a.hostd?.hostd && (
             <div
               className="timeline-meta timeline-attempt-hostd"
               title={[
-                `Host work on grain hostd ${a.hostd.hostd}`,
+                `The agent CLI ran on host ${a.hostd.hostd}`,
+                a.hostd.deleted &&
+                  "since deleted from the host registry (Settings → Hosts)",
                 a.hostd.instance && `on ${a.hostd.instance}`,
                 a.hostd.owner && `owned by ${a.hostd.owner}`,
               ]
                 .filter(Boolean)
                 .join(", ")}
             >
-              hostd {a.hostd.hostd}
+              ran on host {a.hostd.hostd}
+              {a.hostd.deleted && (
+                <span className="timeline-attempt-hostd-deleted">
+                  {" "}
+                  (deleted)
+                </span>
+              )}
               {a.hostd.instance && <> on {a.hostd.instance}</>}
               {a.hostd.owner && <> · {a.hostd.owner}</>}
             </div>
@@ -521,6 +643,7 @@ function timelineEvents(t, zone, now = Date.now()) {
           <div className="timeline-meta timeline-comment-header">
             <span>
               {who} · {c.authorKind}
+              {c.filedVia ? ` · from ${c.filedVia}` : ""}
               {c.handover ? " · handover" : ""}
             </span>
             {c.body && (
@@ -600,7 +723,7 @@ export default function Timeline({ t, act, showError, onOpenTask }) {
   const zone = useTimeZone();
   const { order } = useTimelineOrder();
   const newestFirst = order === "newest";
-  const events = timelineEvents(t, zone);
+  const events = timelineEvents(t, zone, Date.now(), onOpenTask);
   const ordered = newestFirst ? [...events].reverse() : events;
   // openAttempt is the attempt (bwsalmon/agents#446's own Attempt shape,
   // off t.attempts) whose transcript is open, or null -- local to

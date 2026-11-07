@@ -26,6 +26,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/namespace"
 	"github.com/ai-on-gke/grain/pkg/redact"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
@@ -87,12 +88,23 @@ func BuildNamespaceRedactor(dataDir string) *redact.Redactor {
 }
 
 func buildNamespaceRedactor(dataDir string) *redact.Redactor {
+	return buildNamespaceRedactorFor(dataDir, nil)
+}
+
+func buildNamespaceRedactorFor(dataDir string, secretStore *secrets.Store) *redact.Redactor {
 	var known []redact.KnownValue
-	if dataDir != "" {
+	if secretStore != nil {
+		if vals, err := KnownSecretValuesFromStore(context.Background(), secretStore); err == nil {
+			known = append(known, vals...)
+		}
+	} else if dataDir != "" {
 		secretsDir := filepath.Join(dataDir, "secrets")
 		if vals, err := KnownSecretValues(secretsDir); err == nil {
 			known = append(known, vals...)
 		}
+	}
+	if dataDir != "" {
+		secretsDir := filepath.Join(dataDir, "secrets")
 		if set, err := gitproxy.LoadCredentialSet(filepath.Join(secretsDir, "github")); err == nil {
 			for _, name := range set.Names() {
 				if set.IsApp(name) {
@@ -142,10 +154,10 @@ func buildNamespaceRedactor(dataDir string) *redact.Redactor {
 // in when the process started. A nil set is a caller with nothing that
 // can change that answer, which gets one of its own.
 func StartGitProxy(dataDir string, store *model.Store, githubHost string, insecureHTTP bool, fabric Fabric, forbidden *gitproxy.ForbiddenSet) (url string, handler http.Handler, stop func(context.Context) error, err error) {
-	return startGitProxy(dataDir, store, githubHost, insecureHTTP, fabric, forbidden, nil)
+	return startGitProxy(dataDir, store, nil, githubHost, insecureHTTP, fabric, forbidden, nil, nil)
 }
 
-func startGitProxy(dataDir string, store *model.Store, githubHost string, insecureHTTP bool, fabric Fabric, forbidden *gitproxy.ForbiddenSet, shutdownStarted <-chan struct{}) (url string, handler http.Handler, stop func(context.Context) error, err error) {
+func startGitProxy(dataDir string, store *model.Store, secretStore *secrets.Store, githubHost string, insecureHTTP bool, fabric Fabric, forbidden *gitproxy.ForbiddenSet, shutdownStarted <-chan struct{}, artifacts ci.ArtifactStore) (url string, handler http.Handler, stop func(context.Context) error, err error) {
 	repos, err := ForbiddenRepos(context.Background(), dataDir)
 	if err != nil {
 		return "", nil, nil, err
@@ -164,19 +176,23 @@ func startGitProxy(dataDir string, store *model.Store, githubHost string, insecu
 		CIStore:     daemonNamespaceCIStore{fallback: fallbackCI},
 		ExternalCI:  sandboxExternalCI{},
 		ArtifactDir: ciArtifactDir(dataDir),
+		Artifacts:   artifacts,
 		SrcDir:      srcDir,
 		CoreSrcDir:  coreSrcDir,
 		CoreModule:  coreModule,
 		// Rebuilt per request, as grainlog's redactor is per run
 		// (capabilities.go), so a secret set after the daemon started
 		// is redacted over /fs/ without waiting for a restart.
-		NewRedactor: func() *redact.Redactor { return buildNamespaceRedactor(dataDir) },
+		NewRedactor: func() *redact.Redactor { return buildNamespaceRedactorFor(dataDir, secretStore) },
 	}
+	// The same namespace answers GET /api/fs/ on grain's own API
+	// (ui.Server.SetNamespace), for grain fs and external agents.
+	liveNamespace.Store(nsServer)
 	// task://, memory://, deploy:// and config://, and the /cli/ issue
 	// and database reads, answered by the backends of the MCP tools they
 	// stand in for (sandbox_namespace.go).
 	cliBackend := wireSandboxNamespace(nsServer, sandboxNamespaceConfig{
-		DataDir: dataDir, Store: store, GithubHost: githubHost, InsecureHTTP: insecureHTTP, API: LiveAPI,
+		DataDir: dataDir, Store: store, SecretStore: secretStore, GithubHost: githubHost, InsecureHTTP: insecureHTTP, API: LiveAPI,
 	})
 	proxy, err := gitproxy.BuildProxy(gitproxy.BuildConfig{
 		DataDir: dataDir, Store: store, ForwardHost: githubHost, ForwardTLS: !insecureHTTP,

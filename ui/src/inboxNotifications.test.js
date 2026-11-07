@@ -73,7 +73,7 @@ describe("inboxEntries", () => {
       "task:task-1:reply",
       "gate:o/r main",
     ]);
-    expect(entries[0].title).toBe("task-1 asked a question");
+    expect(entries[0].title).toBe("task-1 answered in a comment");
     expect(entries[0].body).toBe("Fix it");
   });
 
@@ -262,12 +262,29 @@ describe("a question's notification", () => {
     expect(entry.key).toBe("task:42:reply");
   });
 
-  it("falls back to saying that a task asked when there is no summary", () => {
+  it("falls back to saying that a task asked when parked on a secret without a summary", () => {
+    const [entry] = inboxEntries(
+      [
+        {
+          id: "42",
+          title: "Ship the exporter",
+          state: "awaiting_reply",
+          pendingSecret: { name: "deploy-key" },
+        },
+      ],
+      [],
+    );
+    expect(entry.title).toBe("42 asked a question");
+  });
+
+  it("says that a task answered in a comment when it finished with a report", () => {
     const [entry] = inboxEntries(
       [{ id: "42", title: "Ship the exporter", state: "awaiting_reply" }],
       [],
     );
-    expect(entry.title).toBe("42 asked a question");
+    expect(entry.title).toBe("42 answered in a comment");
+    expect(entry.body).toBe("Ship the exporter");
+    expect(entry.key).toBe("task:42:reply");
   });
 });
 

@@ -28,13 +28,13 @@ import (
 const hostModeUnit = `[Service]
 Environment=GRAIN_INSTALL_MODE=host
 ExecStartPre=+/usr/local/libexec/grain/extract-binary
-ExecStart=/usr/local/bin/grain daemon -upgrade-image ghcr.io/bwsalmon/grain/grain
+ExecStart=/usr/local/bin/grain daemon -upgrade-image docker.io/grainai/grain
 `
 
 // containerUnit is grain-daemon.service as this release's setup.sh
 // writes it.
 const containerUnit = `[Service]
-ExecStart=/usr/bin/docker run --rm --name grain-daemon ghcr.io/bwsalmon/grain/grain daemon
+ExecStart=/usr/bin/docker run --rm --name grain-daemon docker.io/grainai/grain daemon
 `
 
 // probe is a process: its environment, its unit file (none for ""),
@@ -58,7 +58,7 @@ func probe(env map[string]string, unit string, host bool) hostModeProbe {
 
 var (
 	hostEnv     = map[string]string{"INVOCATION_ID": "abc", "GRAIN_INSTALL_MODE": "host"}
-	imageConfig = Config{UpgradeImage: "ghcr.io/bwsalmon/grain/grain"}
+	imageConfig = Config{UpgradeImage: "docker.io/grainai/grain"}
 )
 
 // A host-mode install upgraded onto this build by its Upgrade button, or
@@ -66,7 +66,7 @@ var (
 // 5041); nothing else is refused.
 func TestOnlyALeftoverHostModeInstallRefusesUIUpgrades(t *testing.T) {
 	got := hostModeUpgradeRefusal(imageConfig, probe(hostEnv, hostModeUnit, true))
-	for _, want := range []string{"host mode", "sudo ./scripts/setup.sh", "container mode plus grain hostd", "expects container mode"} {
+	for _, want := range []string{"host mode", "sudo ./scripts/setup.sh", "container mode plus the host agent", "expects container mode"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("refusal %q does not say %q", got, want)
 		}

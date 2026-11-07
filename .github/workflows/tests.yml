@@ -178,7 +178,8 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json') }}
+            ui-registry/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-registry/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -198,7 +199,7 @@ jobs:
         run: make fmt
 
       - name: Fill the npm cache from the registry
-        run: ./scripts/warm-npm-cache.sh ui
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-registry
 
       - name: Build frontend
         run: make frontend
@@ -217,7 +218,7 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.go-e2e == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     concurrency:
       group: ${{ github.workflow }}-go-e2e-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -255,7 +256,8 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json') }}
+            ui-registry/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-registry/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -315,7 +317,7 @@ jobs:
           git config --global user.email "grain-ci@example.com"
 
       - name: Fill the npm cache from the registry
-        run: ./scripts/warm-npm-cache.sh ui
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-registry
 
       - name: Build frontend
         run: make frontend
@@ -323,7 +325,7 @@ jobs:
       - name: Test
         run: |
           set +e
-          GRAIN_GOTEST_LOG=/tmp/go-e2e.log ./scripts/run-go-tests.sh go test -race -timeout 25m ./tests/e2e/... ./tests/deploy/... | tee /tmp/go-e2e.out
+          GRAIN_GOTEST_LOG=/tmp/go-e2e.log ./scripts/run-go-tests.sh go test -race -timeout 40m ./tests/e2e/... ./tests/deploy/... | tee /tmp/go-e2e.out
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             python3 - /tmp/go-e2e.out go-e2e <<'PY'
@@ -541,9 +543,9 @@ jobs:
         run: |
           set +e
           GRAIN_GOTEST_LOG=/tmp/go-unit.log ./scripts/run-go-tests.sh go test -race -timeout 25m \
-            ./cmd/checkpost/... ./cmd/ghcr-prune/... ./cmd/github-webhook/... ./cmd/grain-connect/... ./cmd/grain-sandbox/... ./cmd/grit/... \
+            ./cmd/checkpost/... ./cmd/ghcr-prune/... ./cmd/github-webhook/... ./cmd/grain-agentd/... ./cmd/grain-connect/... ./cmd/grain-registry/... ./cmd/grain-sandbox/... ./cmd/grit/... \
             ./docs/releases/... ./tests/hygiene/... ./tests/container/... ./tests/installer/... \
-            ./pkg/access/... ./pkg/actionscache/... ./pkg/agent/... ./pkg/apierror/... ./pkg/attest/... \
+            ./pkg/access/... ./pkg/actionscache/... ./pkg/agent/... ./pkg/agentd/... ./pkg/apierror/... ./pkg/attest/... \
             ./pkg/authfix/... ./pkg/backup/... ./pkg/capability/... ./pkg/change/... ./pkg/checkpost/... \
             ./pkg/ci/... ./pkg/cifault/... ./pkg/cli/... ./pkg/console/... ./pkg/daemon/... \
             ./pkg/declschema/... ./pkg/demo/... ./pkg/designdoc/... ./pkg/dispatch/... \
@@ -551,13 +553,13 @@ jobs:
             ./pkg/granule/... ./pkg/grit/... ./pkg/gritapi/... ./pkg/hostd/... ./pkg/hostinit/... ./pkg/hostscriptcli/... ./pkg/whererun/... ./pkg/workflows/... \
             ./pkg/hosttop/... ./pkg/iapreconciler/... ./pkg/installtrack/... ./pkg/jwks/... \
             ./pkg/k8s/... ./pkg/kubectlgate/... ./pkg/lifecycle/... ./pkg/localexec/... ./pkg/mcp/... \
-            ./pkg/metrics/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/pkgcache/... \
-            ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/redact/... ./pkg/registryauth/... \
-            ./pkg/releasenotes/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
+            ./pkg/metrics/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/nsclient/... ./pkg/objectstore/... ./pkg/pkgcache/... ./pkg/playbooks/... \
+            ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/redact/... ./pkg/registry/... ./pkg/registryauth/... \
+            ./pkg/releaseapproval/... ./pkg/releasenotes/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
             ./pkg/sandboxaccess/... ./pkg/sandboxaddr/... ./pkg/sandboxcli/... ./pkg/sandboximage/... ./pkg/schedulefilter/... ./pkg/secrets/... \
             ./pkg/secretsrepo/... ./pkg/statemachine/... ./pkg/sysstat/... \
             ./pkg/systemlog/... ./pkg/treeid/... ./pkg/trustboundary/... ./pkg/tunnel/... ./pkg/upgrade/... \
-            ./pkg/version/... ./tests/bench/... | tee /tmp/go-unit.out
+            ./pkg/version/... ./pkg/webauth/... ./tests/bench/... | tee /tmp/go-unit.out
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             python3 - /tmp/go-unit.out go-unit <<'PY'
@@ -749,7 +751,7 @@ jobs:
       - name: Test
         env:
           GRAIN_REQUIRE_POSTGRES: "1"
-        run: ./scripts/run-go-tests.sh go test -count=1 -timeout 15m -exec "$PWD/scripts/exec-unprivileged.sh" ./pkg/model/postgres/... ./pkg/model/
+        run: ./scripts/run-go-tests.sh go test -count=1 -timeout 15m -exec "$PWD/scripts/exec-unprivileged.sh" ./pkg/model/postgres/... ./pkg/model/ ./pkg/registry/store/...
 
   run-host:
     name: run host
@@ -793,7 +795,7 @@ jobs:
       - name: Daemon restart acceptance test
         env:
           GRAIN_RUNHOST_DOCKER: "1"
-        run: ./scripts/run-go-tests.sh go test -count=1 -timeout 20m -run '^(TestDaemonRestartAdoptsTheRunAndItOpensItsPullRequest|TestDaemonRestartKeepsAWarmSessionSandboxOnlyUnderItsRecordedKeys)$' -v ./pkg/cli/
+        run: ./scripts/run-go-tests.sh go test -count=1 -timeout 20m -run '^(TestDaemonRestartAdoptsTheRunAndItOpensItsPullRequest|TestDaemonRestartKeepsAWarmSessionSandboxOnlyUnderItsRecordedKeys|TestRunHostAgentCannotReachAHostDirectorySandbox)$' -v ./pkg/cli/
 
   host-script-container:
     name: host-script container
@@ -871,12 +873,13 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json') }}
+            ui-registry/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-registry/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
       - name: Fill the npm cache from the registry
-        run: ./scripts/warm-npm-cache.sh ui
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-registry && ./scripts/warm-npm-cache.sh ui-registry
 
       - name: Build frontend
         run: make frontend
@@ -888,12 +891,19 @@ jobs:
         working-directory: ui
         run: npm test -- --maxWorkers=4
 
+      - name: Test registry frontend
+        working-directory: ui-registry
+        run: npm ci && npm test -- --maxWorkers=4
+
   ui-e2e:
     name: ui e2e
     needs: [changes]
     if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.ui-e2e == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    # The suite alone runs about 32 minutes now (887 tests, one worker per
+    # two cores), and the frontend build and browser download come on top:
+    # at 35 a slow runner was cancelled mid-suite with no verdict at all.
+    timeout-minutes: 50
     concurrency:
       group: ${{ github.workflow }}-ui-e2e-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -933,7 +943,8 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json') }}
+            ui-registry/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-registry/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -953,7 +964,7 @@ jobs:
           sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
 
       - name: Fill the npm cache from the registry
-        run: ./scripts/warm-npm-cache.sh ui
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-registry
 
       - name: Build frontend
         run: make frontend
@@ -1109,7 +1120,8 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json') }}
+            ui-registry/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-registry/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -1119,12 +1131,15 @@ jobs:
           sudo git config --system user.email "grain-ci@example.com"
           git config --global user.name "grain-ci"
           git config --global user.email "grain-ci@example.com"
-          ./scripts/warm-npm-cache.sh ui
+          ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-registry
+
+      - name: Configure authenticated Docker Hub pulls
+        env:
+          DOCKER_PAT: ${{ secrets.DOCKER_PAT }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+        run: ./scripts/configure-dockerhub-auth.sh --pull-only
 
       - name: Assemble the image to install
-        env:
-          GRAIN_INSTALLER_BASE_IMAGE: ghcr.io/bwsalmon/grain/grain:main
-          GRAIN_INSTALLER_SANDBOX_IMAGE: ghcr.io/bwsalmon/grain/k8s-sandbox:main
         run: |
           set +e
           ./scripts/installer-test-image.sh grain-installer:test 2>&1 | tee /tmp/installer-image.log

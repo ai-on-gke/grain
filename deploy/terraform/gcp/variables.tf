@@ -524,7 +524,7 @@ variable "grain_image" {
     that needs credentials also needs grain_image_pull_user and a token
     pushed by push-secrets.sh.
   EOT
-  default     = "ghcr.io/bwsalmon/grain/grain"
+  default     = "docker.io/grainai/grain"
 }
 
 variable "grain_image_tag" {
@@ -551,7 +551,7 @@ variable "grain_image_pull_user" {
     does for the GitHub PAT.
 
     Empty (the default) pulls anonymously, which is what
-    ghcr.io/bwsalmon/grain's own public package needs.
+    docker.io/grainai's own public repositories need.
   EOT
   default     = ""
 }

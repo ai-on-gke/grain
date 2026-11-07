@@ -60,6 +60,17 @@ servers:
           kinds: ["task", "ci", "session"]
           requires_person_when:
             project: ["grain-prod"]
+  - id: https://capabilities.internal/host-scripts-a
+    command: grain-host-scripts
+    run: hostd
+    hostd: ws-a
+  - id: https://capabilities.internal/host-scripts-gpu
+    command: grain-host-scripts
+    run: hostd
+    hostd:
+      labels:
+        zone: west
+        pool: gpu
 in_process:
   corp-research:
     enabled: true
@@ -174,6 +185,12 @@ func TestCapabilitiesFileImportsAndExports(t *testing.T) {
 	if !ok || srv.ServerURL != "https://capabilities.internal/gcp/mcp" || srv.Config["service_account"] != "$secret:gcp-keys/grain-deployer" {
 		t.Errorf("mcp_servers = %#v", cfg.MCPServers)
 	}
+	if a := cfg.MCPServers["https://capabilities.internal/host-scripts-a"]; a.Run != "hostd" || a.Hostd != "ws-a" {
+		t.Errorf("placed server by name = %+v, want run=hostd hostd=ws-a", a)
+	}
+	if g := cfg.MCPServers["https://capabilities.internal/host-scripts-gpu"]; g.Run != "hostd" || g.Hostd != "pool=gpu,zone=west" {
+		t.Errorf("placed server by labels = %+v, want run=hostd hostd=pool=gpu,zone=west", g)
+	}
 	cat := cfg.CapabilityPolicy.Catalogue
 	if cat == nil || cat.InProcess["self-debug"].Restrictions == nil {
 		t.Fatalf("catalogue not stored: %#v", cfg.CapabilityPolicy)
@@ -224,6 +241,12 @@ func TestCapabilitiesFileImportsAndExports(t *testing.T) {
 	if !slices.Equal(cfg3.DefaultCapabilities, cfg.DefaultCapabilities) || len(cfg3.MCPServers) != len(cfg.MCPServers) {
 		t.Errorf("re-import differs: %#v vs %#v", cfg3.DefaultCapabilities, cfg.DefaultCapabilities)
 	}
+	if a := cfg3.MCPServers["https://capabilities.internal/host-scripts-a"]; a.Run != "hostd" || a.Hostd != "ws-a" {
+		t.Errorf("export/re-import stripped placed server hostd: %+v", a)
+	}
+	if g := cfg3.MCPServers["https://capabilities.internal/host-scripts-gpu"]; g.Run != "hostd" || g.Hostd != "pool=gpu,zone=west" {
+		t.Errorf("export/re-import stripped label-selected server hostd: %+v", g)
+	}
 }
 
 // Check refuses a template whose grants the catalogue does not admit.
@@ -239,7 +262,11 @@ func TestCheckCapabilitiesJudgesTemplateGrants(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := checkCapabilities(dir)
-	if err == nil || !strings.Contains(err.Error(), "template template-1 grants self-debug") {
+	// A retired self-debug is read as what it became (schema migration
+	// 115), and in_process.self-debug still binds both halves.
+	if err == nil || !strings.Contains(err.Error(), "template template-1 grants api:self-debug") ||
+		!strings.Contains(err.Error(), "template template-1 grants https://grain.dev/capabilities/grain#source={}") ||
+		!strings.Contains(err.Error(), "in_process.self-debug") {
 		t.Fatalf("checkCapabilities = %v", err)
 	}
 }

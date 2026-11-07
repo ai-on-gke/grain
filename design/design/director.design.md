@@ -18,17 +18,17 @@ The director (`ConsoleSessionTag("director")`) is an ordinary task with three st
 
 | Workflow | Primary surfaces | Key guardrail |
 |---|---|---|
-| **W1** Bootstrap & onboarding | `bootstrap-playbooks`, `deployment-health`, `request_secret` | Secrets write straight to `<data-dir>/secrets`; never read back |
-| **W2** Live triage & observability | `self-debug` (`task://`), `ci://`, `api:ci-read`, `grain-log`, `grain metrics` | Read-only diagnostics; no product-repo edits in session |
-| **W3** Decomposition & queue hygiene | `propose_task`, `api:task-admin`, `api:dispatch-control` | `TasksApproved` off by default; `hold_for_approval` & `expect` rails |
+| **W1** Bootstrap & onboarding | `…/config-map#config-map={"config_maps":["bootstrap"]}` (formerly `bootstrap-playbooks`, retired in schema migration 118), `api:deployment:read` + `…/grain#health` (formerly `deployment-health`, retired in schema migration 81), `request_secret` | Secrets write straight to `<data-dir>/secrets`; never read back |
+| **W2** Live triage & observability | `api:self-debug` + `…/grain#source` (formerly `self-debug`, retired in schema migration 115; `task://`, `src://`), `ci://`, `api:ci-read`, `…/grain#journal` (formerly `grain-log`, retired in schema migration 80), `grain metrics` | Read-only diagnostics; no product-repo edits in session |
+| **W3** Decomposition & queue hygiene | `propose_task`, `api:task-admin`, `api:dispatch-control` | `TasksApproved` on by default (per-turn `TurnFanOut` bound, escalation & `grain/config` holds, `hold_for_approval` & `expect` rails) |
 | **W4** Config & capability hygiene | `/home/debian/grain-state` (`grain/config`), `propose_config_change` | Human approval via `pkg/trustboundary` & `settings_locked` |
-| **W5** CI, merge queue & releases | `ci:write`, `merge:write`, `api:release-manager`, `self-upgrade` | Never `autoMerge`, `submit`, or `merge:force`; honours upgrade holds |
+| **W5** CI, merge queue & releases | `ci:write`, `merge:write`, `api:release-manager`, `api:self-upgrade` | Never `autoMerge`, `submit`, or `merge:force`; honours upgrade holds |
 
 ### W1 — Bootstrap and onboarding
 
-Guides first-time bring-up and incremental expansion of a deployment (`bootstrap-playbooks`):
+Guides first-time bring-up and incremental expansion of a deployment (`…/config-map#config-map={"config_maps":["bootstrap"]}`, formerly `bootstrap-playbooks`):
 
-- **Infrastructure readiness.** Verifies model backend connections, agent CLI placement, `grain hostd` connectivity, and sandbox backend health (`granule` / Kubernetes pods, resource ceilings) via `deployment-health` and read scopes.
+- **Infrastructure readiness.** Verifies model backend connections, agent CLI placement, `grain hostd` connectivity, and sandbox backend health (`granule` / Kubernetes pods, resource ceilings) via `api:deployment:read`, `…/grain#health`, and read scopes.
 - **Repository onboarding.** Configures target repositories, branch bases, merge strategies, and CI modes (`github`, `grain`, or `none`), and wires repository git credentials by reference.
 - **Write-only credential intake.** Requests missing API keys, tokens, or cloud credentials with `request_secret` (always supplying a one-line `summary`), routing secret bytes straight from the operator's browser into `<data-dir>/secrets` without entering the conversation or prompt.
 
@@ -36,9 +36,9 @@ Guides first-time bring-up and incremental expansion of a deployment (`bootstrap
 
 Answers "why did task X fail?", "why is the merge queue stuck?", and "how full or slow has this deployment been?" from recorded state rather than guesswork:
 
-- **Task and run forensics (`self-debug`).** Reads task records, attempt outcomes, rendered prompts, and tool-by-tool transcripts (`grain task list|read|prompt|transcript`, `task://`) to separate prompt gaps, agent mistakes, capability refusals, and sandbox setup faults.
+- **Task and run forensics (`api:self-debug`).** Reads task records, attempt outcomes, rendered prompts, and tool-by-tool transcripts (`grain task list|read|prompt|transcript`, `task://`) to separate prompt gaps, agent mistakes, capability refusals, and sandbox setup faults.
 - **CI and merge-queue diagnostics.** Reads CI runs, step logs, shared cross-branch infrastructure faults, and test flake history (`ci://`, `api:ci-read`, `grain ci list|log|test-history`), alongside held merge-queue batches and security or review gates (`grain merge-queue`).
-- **Controller and fleet telemetry.** Inspects daemon journals (`grain-log`), sandbox utilization, queue wait times, prompt token budgets, and tool-error censuses (`grain metrics`, `deployment-health`).
+- **Controller and fleet telemetry.** Inspects daemon journals (`…/grain#journal`), sandbox utilization, queue wait times, prompt token budgets, and tool-error censuses (`grain metrics`, `api:deployment:read`, `…/grain#health`).
 
 ### W3 — Work decomposition and queue management
 
@@ -60,7 +60,7 @@ Maintains the deployment's declarative state in `grain/config` (`design/design/c
 Keeps delivery pipelines healthy and, when explicitly authorized, coordinates releases:
 
 - **Pipeline unblocking.** Cancels superseded or wedged CI runs, re-triggers failed CI jobs once transient infrastructure faults clear (`ci:write`), and puts stalled pull requests back into the merge queue (`grain retry-merge`, `merge:write`) or files targeted base-branch repair tasks when trunk is red.
-- **Release and upgrade coordination.** Inspects trunk and release-train health (`releases:read`), and—when granted opt-in release or upgrade scopes (`api:release-manager`, `self-upgrade`)—runs qualification schedules, cuts or promotes release candidates, and initiates drained controller upgrades while honouring active upgrade holds.
+- **Release and upgrade coordination.** Inspects trunk and release-train health (`releases:read`), and—when granted opt-in release or upgrade scopes (`api:release-manager`, `api:self-upgrade`)—runs qualification schedules, cuts or promotes release candidates, and initiates drained controller upgrades while honouring active upgrade holds.
 
 ## 3. Explicit non-goals and trust boundaries
 
@@ -69,13 +69,13 @@ Regardless of operator prompts or untrusted repository text read during triage, 
 1. **Never reads secret values.** No tool or namespace route exposes plaintext secrets from `<data-dir>/secrets` to the director. Credentials enter only via `request_secret` or bootstrap UI forms and are referenced solely as `$secret:<name>` handles.
 2. **Never enables `autoMerge` or lands unreviewed changes.** Letting a change merge unreviewed is always a person's decision. `agentAPIGate` refuses agent attempts to set `autoMerge`, call `POST /api/tasks/{id}/submit`, or invoke `merge:force`. Enabling `TasksApproved` lets the director queue proposals (approved as `ConsoleSessionPrincipal`) without granting `autoMerge` or allowing capability/repository escalation beyond the director's own grants (`ConsoleSessionGrants`).
 3. **Never bypasses `grain/config` human-approval gates.** When `settings_locked` is enabled, non-bootstrap UI/API mutations are refused in favour of `grain/config`. Every `grain/config` change—especially privileged tables and declarative settings (`StatePrivilege`, `NeverAutoMergePaths`)—is gated by `pkg/trustboundary.ClassifyState` (`RequiresHuman: true` by default, with `settings/config-policy.yml` read strictly from `main`). Neither PRs nor `propose_config_change` can land without a human approval on the exact validated commit.
-4. **Never executes unguarded host commands or self-escalates.** The sandbox holds only a per-attempt token barred from `model_only` control tools and self-mutation (`selfMutableTaskRoutes`). The director cannot grant itself capabilities, modify another standing session, or run arbitrary commands on the controller host without explicit operator-gated capability boundaries: `self-repair` is off by default, `grain hostd` runs only static allowlisted binaries, and dangerous `api:*` scopes require a human grant plus a logged `reason` on every call.
+4. **Never executes unguarded host commands or self-escalates.** The sandbox holds only a per-attempt token barred from `model_only` control tools and self-mutation (`selfMutableTaskRoutes`). The director cannot grant itself capabilities, modify another standing session, or run arbitrary commands on the controller host without explicit operator-gated capability boundaries: `…/grain#host-exec` (formerly `self-repair`, retired in schema migration 84) is off by default and person-only, `grain hostd` runs only static allowlisted binaries, and dangerous `api:*` scopes require a human grant plus a logged `reason` on every call.
 
 ## 4. Lifecycle, responsiveness, and worker-slot discipline
 
 An operator opening the director rail expects an immediate reply even when `max_workers` is saturated or the pipeline is paused, without the session hoarding worker slots while idle or waiting:
 
-- **Priority admission (`durable` / console-session dispatch).** `ConsoleSessionGrants` always attaches `durable` (`DurableCapability`), which implies `priority-dispatch` (`design/design/durable-tasks.design.md`). Director turns are admitted outside `max_workers` (under `max_durable_runs`), bypass pipeline pauses and red-base repair holds, and survive controller restarts via session adoption or CLI `--resume`.
+- **Priority admission (`durable` / console-session dispatch).** `FileConsoleSessionTask` files every console session with the task setting `admission: durable` (`AdmissionDurable`, which replaced the `durable` and `priority-dispatch` grants and includes `bypass`; `design/design/durable-tasks.design.md`, `unified-grants.design.md` §4.1). Director turns are admitted outside `max_workers` (under `max_durable_runs`), bypass pipeline pauses and red-base repair holds, and survive controller restarts via session adoption or CLI `--resume`.
 - **Releasing the active slot when waiting or idle.** Priority admission requires strict slot discipline: the director never polls inside a live run waiting on asynchronous tasks or CI runs. Once it replies, files work, or asks for input, it records standing context via `grain handover write` when needed (carried across `"Start a fresh chat"` resets by `CarryConsoleSessionHandover`) and releases its active run by calling `ask_question` (`request_secret`, `propose_config_change`) or ending its turn to rest on `person-closes` (`GoalPersonCloses`).
 - **Two-layer warm idle pool.** Between turns, `continueSessionTurns` and `session_sandboxes.go` keep the CLI session and sandbox warm up to `session_sandbox_idle_ttl_ms` (default `30m`) for sub-second follow-ups. Held VMs appear as `"idle session"` on **System → Sandboxes** and are evicted oldest-first whenever queued worker runs need sandbox capacity.
 

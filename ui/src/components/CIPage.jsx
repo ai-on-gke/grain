@@ -27,7 +27,6 @@ import {
   Collapse,
   FormControlLabel,
   Link,
-  MenuItem,
   Table,
   TableBody,
   TableCell,
@@ -45,6 +44,7 @@ import { ListHeader } from "./ListPrimitives.jsx";
 import NarrowingBar from "./NarrowingBar.jsx";
 import { formatBytes } from "./PackageCachePanel.jsx";
 import RepoField from "./RepoField.jsx";
+import SearchSelect from "./SearchSelect.jsx";
 import {
   CONCLUSION_LABELS,
   RUN_ATTRIBUTES,
@@ -73,6 +73,7 @@ import { knownRepos, pullRequestUrl } from "../state.js";
 import TaskLink from "./detail/TaskLink.jsx";
 import { useTimeZone } from "../TimeZoneContext.jsx";
 import { formatDateTime } from "../time.js";
+import AccessGate from "./AccessGate.jsx";
 
 // instantOf, hasStarted and spanOf live with the filter vocabulary now
 // (ciFilters.js), since narrowing and ordering runs by when they started
@@ -937,38 +938,44 @@ export function RunDetail({ run, zone, onBack, onCancel, onRetry }) {
           </Typography>
         )}
         {!run.conclusion && (
-          <Button
-            size="small"
-            color="error"
-            variant="outlined"
-            onClick={onCancel}
-          >
-            Cancel run
-          </Button>
+          <AccessGate scope="ci:write" repo={run.repo}>
+            <Button
+              size="small"
+              color="error"
+              variant="outlined"
+              onClick={onCancel}
+            >
+              Cancel run
+            </Button>
+          </AccessGate>
         )}
         {onRetry && retryableRun(run) && (
-          <Button
-            size="small"
-            variant="outlined"
-            title={
-              runTaskId(run)
-                ? "Run the complete suite again on this task's branch and record it as the task's grain CI verdict."
-                : "Run this again on the same repository, branch and commit."
-            }
-            onClick={() => onRetry(false)}
-          >
-            Retry
-          </Button>
+          <AccessGate scope="ci:write" repo={run.repo}>
+            <Button
+              size="small"
+              variant="outlined"
+              title={
+                runTaskId(run)
+                  ? "Run the complete suite again on this task's branch and record it as the task's grain CI verdict."
+                  : "Run this again on the same repository, branch and commit."
+              }
+              onClick={() => onRetry(false)}
+            >
+              Retry
+            </Button>
+          </AccessGate>
         )}
         {onRetry && retryableRun(run) && retryFailed && (
-          <Button
-            size="small"
-            variant="outlined"
-            title="Run only the jobs that did not pass again, bypassing the cache."
-            onClick={() => onRetry(true)}
-          >
-            Retry failed jobs
-          </Button>
+          <AccessGate scope="ci:write" repo={run.repo}>
+            <Button
+              size="small"
+              variant="outlined"
+              title="Run only the jobs that did not pass again, bypassing the cache."
+              onClick={() => onRetry(true)}
+            >
+              Retry failed jobs
+            </Button>
+          </AccessGate>
         )}
       </Box>
       <Typography
@@ -1201,21 +1208,18 @@ export function StartRunForm({
         {loadingWorkflows && <CircularProgress size={18} />}
       </Box>
       {workflows?.length > 0 && (
-        <TextField
-          select
-          fullWidth
-          size="small"
+        <SearchSelect
           margin="dense"
           label="Workflow"
           value={workflow}
-          onChange={(e) => setWorkflow(e.target.value)}
-        >
-          {workflows.map((option) => (
-            <MenuItem key={option.path} value={option.path}>
-              {option.name} — {option.path}
-            </MenuItem>
-          ))}
-        </TextField>
+          options={workflows.map((option) => ({
+            value: option.path,
+            label: `${option.name} — ${option.path}`,
+          }))}
+          onChange={(next) => {
+            if (next) setWorkflow(next);
+          }}
+        />
       )}
       {workflows?.length === 0 && (
         <Alert severity="info" sx={{ mt: 1 }}>
@@ -2076,13 +2080,15 @@ export default function CIPage({
                 overlay that may be open above it. The narrowing that
                 used to sit here -- a single "Repo filter" menu -- is the
                 toolbar over the runs table below (grain/task-231). */}
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={() => setStarting((v) => !v)}
-              >
-                {starting ? "Close" : "Start a run"}
-              </Button>
+              <AccessGate scope="ci:write">
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => setStarting((v) => !v)}
+                >
+                  {starting ? "Close" : "Start a run"}
+                </Button>
+              </AccessGate>
               <Button
                 size="small"
                 variant="outlined"

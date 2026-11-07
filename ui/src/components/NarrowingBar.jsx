@@ -15,7 +15,6 @@
 import { useState } from "react";
 import {
   Button,
-  Checkbox,
   Chip,
   IconButton,
   ListItemText,
@@ -53,6 +52,7 @@ import {
 } from "../taskFilters.js";
 import { GlyphLabel } from "./ItemGlyph.jsx";
 import { ListSearchField, ListToolbar } from "./ListPrimitives.jsx";
+import SearchSelect from "./SearchSelect.jsx";
 import { identifierField } from "../identifierField.js";
 
 // NarrowingBar is the toolbar every task view narrows itself with: the
@@ -374,21 +374,17 @@ function ConditionRow({
   const ops = operatorsFor(attr);
   return (
     <div className="narrowing-row">
-      <Select
-        size="small"
+      <SearchSelect
+        className="narrowing-attr"
+        fullWidth={false}
         value={attr.id}
+        options={attributes.map((a) => ({ value: a.id, label: a.label }))}
         inputProps={{ "aria-label": `Attribute for filter ${row}` }}
-        onChange={(e) => {
-          const next = attributes.find((a) => a.id === e.target.value);
+        onChange={(nextId) => {
+          const next = attributes.find((a) => a.id === nextId);
           if (next) onChange(conditionFor(next, cond));
         }}
-      >
-        {attributes.map((a) => (
-          <MenuItem key={a.id} value={a.id}>
-            {a.label}
-          </MenuItem>
-        ))}
-      </Select>
+      />
       <Select
         size="small"
         value={cond.op}
@@ -441,50 +437,53 @@ function ConditionValue({ row, attr, cond, tasks, config, onChange }) {
   const input = OPERATORS[cond.op]?.input;
   if (input === "none") return null;
   if (input === "choices") {
-    const options = optionsFor(attr, tasks, config, cond.values);
-    const glyphed = options.some((o) => o.glyph);
+    const rawOptions = optionsFor(attr, tasks, config, cond.values);
+    const glyphed = rawOptions.some((o) => o.glyph);
+    const seen = new Set(rawOptions.map((o) => o.value));
+    const fullOptions = [
+      ...rawOptions,
+      ...cond.values
+        .filter((v) => !seen.has(v))
+        .map((v) => ({
+          value: v,
+          label:
+            v === NONE
+              ? attr.noneLabel || NONE_LABEL_FALLBACK
+              : valueLabel(attr, v, config),
+          glyph: null,
+        })),
+    ];
     return (
-      <Select
-        size="small"
+      <SearchSelect
         multiple
-        displayEmpty
+        fullWidth={false}
         className="narrowing-values"
         value={cond.values}
+        placeholder="Any"
         inputProps={{ "aria-label": label }}
-        onChange={(e) => onChange(e.target.value)}
-        renderValue={(picked) =>
-          picked.length === 0
-            ? "Any"
-            : picked
-                .map((v) =>
-                  v === NONE
-                    ? attr.noneLabel || NONE_LABEL_FALLBACK
-                    : valueLabel(attr, v, config),
-                )
-                .join(", ")
+        noOptionsText={
+          rawOptions.length === 0 ? "No values to choose from" : "No matches"
         }
-      >
-        {options.length === 0 && (
-          <MenuItem disabled value="">
-            No values to choose from
-          </MenuItem>
-        )}
-        {options.map((o) => (
-          <MenuItem key={o.value} value={o.value}>
-            <Checkbox size="small" checked={cond.values.includes(o.value)} />
-            {/* The figure of the kind this value names, where it names
-                one -- a repo, a schedule, a suite (ItemGlyph.jsx,
-                grain/task-38). One glyphed option glyphs the whole menu,
-                so "No repo" holds the slot open and empty rather than
-                starting its label a figure's width to the left. */}
-            {glyphed ? (
-              <GlyphLabel kind={o.glyph || null}>{o.label}</GlyphLabel>
-            ) : (
-              <ListItemText primary={o.label} />
-            )}
-          </MenuItem>
-        ))}
-      </Select>
+        options={fullOptions.map((o) => ({
+          value: o.value,
+          label: o.label,
+          renderRow: (text) => (
+            <>
+              {/* The figure of the kind this value names, where it names
+                  one -- a repo, a schedule, a suite (ItemGlyph.jsx,
+                  grain/task-38). One glyphed option glyphs the whole menu,
+                  so "No repo" holds the slot open and empty rather than
+                  starting its label a figure's width to the left. */}
+              {glyphed ? (
+                <GlyphLabel kind={o.glyph || null}>{text}</GlyphLabel>
+              ) : (
+                <ListItemText primary={text} />
+              )}
+            </>
+          ),
+        }))}
+        onChange={onChange}
+      />
     );
   }
   const type = input === "date" ? "date" : input === "text" ? "text" : "number";
@@ -516,18 +515,16 @@ function SortRow({ row, sortKey, attributes, onChange, onRemove }) {
   const labels = directionLabels(attr);
   return (
     <div className="narrowing-row">
-      <Select
-        size="small"
+      <SearchSelect
+        className="narrowing-attr"
+        fullWidth={false}
         value={attr.id}
+        options={attributes.map((a) => ({ value: a.id, label: a.label }))}
         inputProps={{ "aria-label": `Attribute for sort ${row}` }}
-        onChange={(e) => onChange({ ...sortKey, attr: e.target.value })}
-      >
-        {attributes.map((a) => (
-          <MenuItem key={a.id} value={a.id}>
-            {a.label}
-          </MenuItem>
-        ))}
-      </Select>
+        onChange={(nextId) => {
+          if (nextId) onChange({ ...sortKey, attr: nextId });
+        }}
+      />
       <Select
         size="small"
         value={sortKey.dir}

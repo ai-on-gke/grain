@@ -35,13 +35,33 @@ import (
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/iapreconciler"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/objectstore"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 type Config struct {
-	DataDir  string
-	DbDriver string
-	DbDSN    string
+	DataDir         string
+	DbDriver        string
+	DbDSN           string
+	SecretsBackend  string
+	SecretsSMPrefix string
+	// WriterLockWaitTimeout, WriterLockKeepAlive, and WriterLockReacquireWindow
+	// configure the PostgreSQL session-level single-writer advisory lock
+	// acquired at daemon startup when DbDriver is "postgres". Zero values use
+	// pkg/model/postgres's defaults; negative values disable waiting or
+	// background keepalive in tests.
+	WriterLockWaitTimeout     time.Duration
+	WriterLockKeepAlive       time.Duration
+	WriterLockReacquireWindow time.Duration
+	ObjectStoreURI            string
+	ObjectStore               objectstore.Store
+	// transcriptObjects is the live/read-through transcript object store
+	// opened by run() when ObjectStore or ObjectStoreURI is configured.
+	transcriptObjects *TranscriptObjectStore
+	// ciArtifacts is the object-backed CI artifact store opened by run()
+	// when ObjectStore or ObjectStoreURI is configured, shared by the
+	// namespace server and embedded CI.
+	ciArtifacts ci.ArtifactStore
 	// unitFlags are the names of the flags this process was actually
 	// started with, undefined ones included -- which on a deployment
 	// scripts/setup.sh installed is what grain-daemon.service's ExecStart
@@ -199,6 +219,10 @@ type Config struct {
 	// ui.Config the old standalone "ui" subcommand's -as/-default-target-repo
 	// flags did.
 	UiAddr string
+	// UIAddrReady, when non-nil, is called with the bound UI/API listener's
+	// "host:port" address once Run has opened its TCP socket (supporting
+	// ephemeral bindings such as "127.0.0.1:0" in tests without TOCTOU races).
+	UIAddrReady func(addr string)
 	// uiAllowedHosts is -ui-allowed-hosts: the extra Host names
 	// ui.HostGuard lets through on the uiAddr listener.
 	UiAllowedHosts []string
@@ -212,13 +236,26 @@ type Config struct {
 	UiIAPAudience string
 	UiIAPIssuer   string
 	UiIAPKeysURL  string
-	// UiRequireIAP is -ui-require-iap (ui.Config.RequireIAP): the access
-	// code works over unforwarded loopback only.
-	UiRequireIAP        bool
-	UiAllowedPrincipals []string
-	UiOpen              bool
-	Actor               string
-	DefaultTargetRepo   string
+	// UiRegistryIssuer, UiRegistryAudience and UiRegistryKeysURL are
+	// -ui-registry-issuer, -ui-registry-audience and -ui-registry-keys-url:
+	// what a signed X-Grain-Registry-Assertion must carry, and where the
+	// registry's ES256 JWKS is published (ui.Config.RegistryIssuer and the rest).
+	UiRegistryIssuer   string
+	UiRegistryAudience string
+	UiRegistryKeysURL  string
+	// UiRequireVerifier is -ui-require-verifier (ui.Config.RequireVerifier):
+	// network callers must sign in through the named IdentityVerifier, and
+	// the access code works over unforwarded loopback only.
+	UiRequireVerifier string
+	// UiRequireIAP is -ui-require-iap (ui.Config.RequireIAP), an alias for
+	// UiRequireVerifier = "iap".
+	UiRequireIAP            bool
+	UiAllowedPrincipals     []string
+	DeploymentOwner         string
+	UiCloudIdentityEndpoint string
+	UiOpen                  bool
+	Actor                   string
+	DefaultTargetRepo       string
 	// PolicyFile is -policy: this workstation's local policy
 	// (grain_policy.yml, pkg/policy), which every task's claims are
 	// checked against before it is given a sandbox. Empty enforces none.
@@ -401,6 +438,19 @@ type Config struct {
 	// runs grain from a container (bwsalmon/agents#645).
 	UpgradeImage        string
 	UpgradeImageRefFile string
+	// UpgradeImageSource selects where ModeImage loads candidate images from
+	// ("release-assets" or "registry"; empty uses the track or default
+	// release-assets-with-registry-fallback behavior). UpgradeImageSourceLocked
+	// records that the setting came from a daemon flag or environment variable
+	// so Settings -> Upgrade renders it read-only.
+	UpgradeImageSource           string
+	UpgradeImageSourceLocked     bool
+	UpgradeImageFallback         string
+	UpgradeImageFallbackExplicit bool
+	UpgradeReleaseRepo           string
+	UpgradeReleaseAsset          string
+	UpgradeReleaseChecksum       string
+	UpgradeSandboxReleaseAssets  map[string]string
 	// upgradeVerifyCmd checks an image's signature before either image
 	// path runs it (upgrade.ImageConfig.VerifyCmd); empty verifies
 	// nothing and every upgrade says so.
@@ -411,6 +461,15 @@ type Config struct {
 	// UpgradeDrainWindow bounds how long a scheduled upgrade waits for active
 	// runs to finish before proceeding with the upgrade anyway.
 	UpgradeDrainWindow time.Duration
+	// DisableSelfUpgrade disables in-VM self-upgrade actions (pkg/upgrade,
+	// automatic/scheduled upgrades, and in-VM SQLite-to-PostgreSQL cutover)
+	// and hides in-VM upgrade controls in the UI in favour of an optional
+	// external management URL (-disable-self-upgrade / $GRAIN_DISABLE_SELF_UPGRADE).
+	DisableSelfUpgrade bool
+	// ManagementURL is an optional http:// or https:// URL where this
+	// deployment's lifecycle and upgrades are managed externally
+	// (-management-url / $GRAIN_MANAGEMENT_URL).
+	ManagementURL string
 
 	// rebootCmd is what the UI's reboot-host button runs; empty means
 	// rebootHost's own `sudo systemctl reboot` default.
@@ -565,6 +624,10 @@ type Config struct {
 	ContainerGitProxyHost string
 	ContainerNetwork      string
 	ContainerCapAdd       []string
+	// ContainerFence is -container-sandbox-fence: whether container
+	// sandboxes are fenced off from this host by nftables
+	// (orchestrator.ContainerConfig.Fence).
+	ContainerFence orchestrator.ContainerFenceMode
 	// sandboxCIDR and sandboxNetwork are the address pool every granule
 	// sandbox VM is given an address out of and the docker network those
 	// addresses are on -- see -granule-sandbox-cidr. An empty CIDR is every
@@ -829,6 +892,16 @@ type Config struct {
 	// deployment that has never chosen gets model.NetworkOpen, which is
 	// the network its sandboxes already had.
 	networkAccess model.NetworkAccess
+
+	// Registry configures self-registration and background heartbeats to a
+	// grain registry (model.Config.Registry, design/design/registry.design.md).
+	// RegistryTokenFile is the optional flags-only path to a registration
+	// credential file when secret registry-registration-token is not set.
+	// RegistryConnect (-registry-connect / $GRAIN_REGISTRY_CONNECT) enables
+	// the outbound tunnel supervisor dialing wss://<registry-host>/api/entries/<name>/connect.
+	Registry          model.RegistryConfig
+	RegistryTokenFile string
+	RegistryConnect   bool
 }
 
 // limits is the sandbox pool this deployment is rationing right now --
@@ -929,6 +1002,7 @@ func (c Config) ChangesFrom(prev Config) []string {
 	note("k8s-priority-class-interactive", prev.K8sPriorityClasses.Interactive, c.K8sPriorityClasses.Interactive)
 	note("k8s-priority-class-agent", prev.K8sPriorityClasses.Agent, c.K8sPriorityClasses.Agent)
 	note("k8s-priority-class-ci", prev.K8sPriorityClasses.CI, c.K8sPriorityClasses.CI)
+	note("registry", prev.Registry, c.Registry)
 	return changes
 }
 
@@ -1202,6 +1276,8 @@ func (c Config) logStoreOverrides(mc model.Config) {
 	warn("k8s-priority-class-interactive", c.K8sPriorityClasses.Interactive, mc.K8sPriorityClassInteractive)
 	warn("k8s-priority-class-agent", c.K8sPriorityClasses.Agent, mc.K8sPriorityClassAgent)
 	warn("k8s-priority-class-ci", c.K8sPriorityClasses.CI, mc.K8sPriorityClassCI)
+	warn("registry-url", c.Registry.URL, mc.Registry.URL)
+	warn("registry-entry", c.Registry.Entry, mc.Registry.Entry)
 }
 
 // limits is this configuration's whole sandbox pool, as everything that
@@ -1477,10 +1553,10 @@ func (c Config) ToModelConfig() model.Config {
 		mc.K8sKubectl = c.K8sKubectl
 	}
 	sandboxImg := firstNonEmpty(c.K8sSandboxImage, c.K8sImage)
-	if sandboxImg != DefaultK8sSandboxImage && sandboxImg != model.DefaultK8sSandboxImage {
+	if sandboxImg != DefaultK8sSandboxImage && !isUnpinnedDefaultK8sSandboxImage(sandboxImg) {
 		mc.K8sSandboxImage = sandboxImg
 	}
-	if c.K8sGranuleImage != DefaultSandboxImage && c.K8sGranuleImage != model.DefaultSandboxImage {
+	if c.K8sGranuleImage != DefaultSandboxImage && !isUnpinnedDefaultSandboxImage(c.K8sGranuleImage) {
 		mc.K8sGranuleImage = c.K8sGranuleImage
 	}
 	mc.SandboxImage = c.CustomSandboxImage
@@ -1503,6 +1579,7 @@ func (c Config) ToModelConfig() model.Config {
 	mc.K8sPriorityClassInteractive = c.K8sPriorityClasses.Interactive
 	mc.K8sPriorityClassAgent = c.K8sPriorityClasses.Agent
 	mc.K8sPriorityClassCI = c.K8sPriorityClasses.CI
+	mc.Registry = c.Registry
 	return mc
 }
 
@@ -1667,6 +1744,7 @@ func (c Config) WithModelConfig(mc model.Config) Config {
 		Agent:       mc.K8sPriorityClassAgent,
 		CI:          mc.K8sPriorityClassCI,
 	}
+	c.Registry = mc.Registry
 	return c
 }
 

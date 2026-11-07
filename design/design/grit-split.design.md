@@ -26,6 +26,19 @@
 > planning and execution in grit (GS-3), a `-grit-attestation-key` pin,
 > and a `-grit-reverse` mode serving `gritapi.SessionHub` behind its own
 > token check. Only then is the opt-in dropped.
+>
+> **Capability names.** This record names the in-process capabilities
+> grain had when it was written. Several have since been retired, and
+> stored grants (including `repo_config.ci_capabilities`) were rewritten
+> by schema migrations: `grain-ci` is now
+> `https://grain.dev/capabilities/grain#ci` (migration 96), `gcp-key` is
+> `https://grain.dev/capabilities/gcp#gcp-key` (migration 97),
+> `gemini-key` is `…/gcp#gemini-key` (migration 103), `claude-proxy`,
+> `openai-proxy` and `gemini-proxy` are
+> `https://grain.dev/capabilities/model-proxy#model-proxy` `{vendor}`
+> (migration 100), and `image-signing`/`package-publish` are
+> `…/release#image-signing`/`…/release#package-publish` (migration 101).
+> See [unified-grants.design.md §4](unified-grants.design.md#4-retiring-the-in-process-capabilities).
 
 Status (before it was superseded): proposed. Nothing in this document is built yet. Its requirements
 are the stages at the end (GS-1 to GS-5). Task 1327 has already filed
@@ -81,7 +94,7 @@ not reopen them:
    - the merge queue, base-branch gates, repair filing and auto-merge
      decisions;
    - the UI;
-   - the `grain-ci` capability;
+   - the `grain-ci` capability (now `…/grain#ci`);
    - every secret and every secret policy.
 3. **The package cache (`pkg/pkgcache`) and the Actions cache move into
    the cluster with grit, and serve grit's CI job pods only.** Grain's
@@ -308,12 +321,14 @@ brief's numbers differ, the measured ones are given.
   (`model.MergeBatchRef`), through the GitHub API, and merges the batch
   members into it there. Task branches reach GitHub when an agent pushes
   through grain's git proxy. CI is started only for pushed commits.
-- **`grain-ci` is a grant, not an executor.** The brief describes it as
+- **`grain-ci` is a grant, not an executor.** (It is now `…/grain#ci`,
+  formerly `grain-ci`, retired in schema migration 96.) The brief describes it as
   CI inside an agent's own sandbox, but `pkg/capability/grainci` mints
   nothing and places nothing. It records that grain CI judges a task's
   branch, and it registers the read-only CI tools. It stays in grain
   unchanged, and grit never sees it.
-- **Workflows on this repository ask for these capabilities:**
+- **Workflows on this repository ask for these capabilities** (by
+  their names at the time; see the note at the top for what each became):
   - required: `gemini-key`, `github-sandbox`, `package-publish` (3
     jobs) and `gcp-key`;
   - optional: `image-signing`, `claude-proxy` and `openai-proxy`.
@@ -573,8 +588,8 @@ the tree, one of them called grit and not being grit.
   modes. In remote mode the material goes into the request, sealed to
   grit's encryption key and addressed to the job that needs it
   (*Secrets and trust*). Grit holds no material of its own. The
-  model-proxy capabilities (`claude-proxy`, `openai-proxy`,
-  `gemini-proxy`) reach jobs through the model-proxy relay (*The
+  model-proxy capabilities (formerly `claude-proxy`, `openai-proxy`,
+  `gemini-proxy`, now `…/model-proxy#model-proxy` `{vendor}`) reach jobs through the model-proxy relay (*The
   model-proxy relay*). Until GS-4 lands it, workflows that ask for them
   run embedded.
 - **Requests that stay in grain.** Remote mode is therefore a *router*,
@@ -1067,7 +1082,8 @@ sandbox, with no cluster involved.
 ## The model-proxy relay
 
 `live-frameworks.yml` and similar workflows ask for `claude-proxy`,
-`openai-proxy` or `gemini-proxy`. Today those place a per-run token and
+`openai-proxy` or `gemini-proxy` (now
+`…/model-proxy#model-proxy` `{vendor}`, retired in schema migration 100). Today those place a per-run token and
 a base URL for grain's own model proxies (`pkg/modelproxy`), which run
 on the workstation and hold the real model credentials. The cluster cannot
 dial the workstation, so the calls travel back down grain's session.
@@ -1451,9 +1467,9 @@ copy of anything.
 |---|---|---|
 | `github-sandbox` | a GitHub App installation token, narrowed to the repository and the permissions the capability grants | at most 1 hour |
 | `package-publish` | an installation token from the git proxy's credential ladder (`PackageCredential`), when the repository's credential is App-backed | at most 1 hour |
-| `gemini-key` | a Gemini API key minted for the job, revoked when the job ends | the job |
-| `gcp-key` | a service-account key minted for the job from the minter credential (a lease), deleted when the job ends | the job, by revocation |
-| `claude-proxy`, `openai-proxy`, `gemini-proxy` | a per-run, per-job token for grain's own model proxy, used through the relay (*The model-proxy relay*) | the job |
+| `…/gcp#gemini-key` (formerly `gemini-key`, retired in schema migration 103) | a Gemini API key minted for the job, revoked when the job ends | the job |
+| `…/gcp#gcp-key` (formerly `gcp-key`, retired in schema migration 97) | a service-account key minted for the job from the minter credential (a lease), deleted when the job ends | the job, by revocation |
+| `…/model-proxy#model-proxy` `{vendor}` (formerly `claude-proxy`, `openai-proxy`, `gemini-proxy`, retired in schema migration 100) | a per-run, per-job token for grain's own model proxy, used through the relay (*The model-proxy relay*) | the job |
 
 **These cannot be minted short-lived today**, and are passed as their
 long-lived values, still sealed and job-addressed:
@@ -1689,7 +1705,7 @@ because its associated data binds it to them (*Secrets and trust*).
   Kubernetes service account with no Workload Identity binding, and the
   namespace's NetworkPolicy blocks the metadata server, so a pod has no
   ambient Google identity. The only Google credentials a job ever holds
-  are the ones grain minted for it (`gcp-key`), and those grant no KMS
+  are the ones grain minted for it (`…/gcp#gcp-key`), and those grant no KMS
   role. A job that escapes its guest still cannot sign or unseal.
 - **Published keys.** `GET /.well-known/grit-keys.json` is a JWK set
   holding every signing key version (`use: sig`, `alg: ES256`) and the

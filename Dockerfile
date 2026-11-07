@@ -49,6 +49,14 @@
 #                     collected those messages into that same mounted
 #                     journal, and dmesg(1) would want /dev/kmsg and
 #                     CAP_SYSLOG, neither of which this container is given
+#   postgresql-16,    `grain backup` and the daemon's scheduled backups run
+#   postgresql-client `pg_dump -Fc` against a PostgreSQL store (pkg/backup,
+#                     pkg/model/postgres), `grain upgrade-postgres` uses
+#                     `psql` and `pg_restore`, and embedded clusters run
+#                     `initdb`, `postgres` and `pg_ctl`. PostgreSQL 16 from
+#                     PGDG (rather than Debian 12's 15) so the client major
+#                     version is at least that of the `postgres:16-bookworm`
+#                     server scripts/setup.sh provisions by default
 #   docker CLI        pkg/granule talks to the *host's* docker daemon over
 #                     the socket setup.sh mounts, to inspect the
 #                     container each sandbox VM runs in, and pkg/mcp's
@@ -243,7 +251,7 @@ RUN make build BUILDVCS=${BUILDVCS} SANDBOX_IMAGE=${SANDBOX_IMAGE} K8S_SANDBOX_I
 # over it. Without this, a checkout the stage's git cannot read simply
 # moves the failed build four lines down.
 RUN vcs="$(./scripts/buildvcs.sh ${BUILDVCS})" && mkdir -p /out \
-	&& CGO_ENABLED=0 go build -buildvcs="$vcs" -o /out/granule github.com/bwsalmon/granule/cmd/granule \
+	&& CGO_ENABLED=0 go build -buildvcs="$vcs" -o /out/granule github.com/gke-labs/granule/cmd/granule \
 	&& CGO_ENABLED=0 go build -buildvcs="$vcs" -o /out/github-webhook ./cmd/github-webhook \
 	&& CGO_ENABLED=0 go build -buildvcs="$vcs" -trimpath -ldflags='-s -w' -o /out/grain-sandbox ./cmd/grain-sandbox
 
@@ -355,24 +363,40 @@ ENV GRAIN_IN_CONTAINER=1
 # header. --no-install-recommends keeps it to the binaries and their
 # libraries rather than dragging in a whole init the container never
 # runs.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+#
+# PostgreSQL 16 comes from PGDG (`bookworm-pgdg`), authenticated by the
+# PGDG keyring Debian 12's own `postgresql-common` package installs at
+# /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg, rather than
+# Debian 12's default PostgreSQL 15: scripts/setup.sh provisions a
+# `postgres:16-bookworm` local server by default, and `pg_dump` refuses
+# to dump a server whose major version is newer than its own.
+RUN set -eu; \
+	apt-get update -o Acquire::Retries=3 \
+	&& apt-get install -y --no-install-recommends -o Acquire::Retries=3 \
 		bash \
 		ca-certificates \
 		curl \
 		git \
 		nftables \
 		openssh-client \
-		postgresql \
-		postgresql-client \
-		postgresql-contrib \
+		postgresql-common \
 		procps \
 		systemd \
-		tini \
-	&& rm -rf /var/lib/apt/lists/* \
-	&& (useradd --system --uid 1000 --user-group --create-home --shell /bin/bash grain || true) \
-	&& chmod 0666 /etc/passwd /etc/group
+		tini; \
+	test -f /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg; \
+	echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+		> /etc/apt/sources.list.d/pgdg.list; \
+	apt-get update -o Acquire::Retries=3 \
+	&& apt-get install -y --no-install-recommends -o Acquire::Retries=3 \
+		postgresql-16 \
+		postgresql-client-16 \
+		postgresql-contrib-16; \
+	rm -f /etc/apt/sources.list.d/pgdg.list; \
+	rm -rf /var/lib/apt/lists/*; \
+	(useradd --system --uid 1000 --user-group --create-home --shell /bin/bash grain || true); \
+	chmod 0666 /etc/passwd /etc/group
 
-ENV PATH="/usr/lib/postgresql/15/bin:${PATH}"
+ENV PATH="/usr/lib/postgresql/16/bin:${PATH}"
 
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=build /src/bin/grain /usr/local/bin/grain

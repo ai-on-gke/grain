@@ -467,8 +467,8 @@ func newFramework(run runner, grainBinaryPath string, opts ...Option) *Framework
 // its pull request, are both independent of which backend its sandbox
 // runs on. So is agent.GrantArgs, which passes on the tool-granting
 // capabilities this run's task holds -- and so whether that server
-// serves the read-only tools for grain's own source (self-debug) or for
-// grain's own bootstrap playbooks (bootstrap-playbooks). So is
+// serves the read-only tools for grain's own source (self-debug) or
+// journal (grain#journal). So is
 // agent.ProposeRepoArgs, which passes on the repositories a proposal
 // this run makes may be filed against, so that propose_task's own
 // description can name them. So is agent.InteractiveArgs, which passes
@@ -574,6 +574,9 @@ func (f *Framework) pullRequestArgs(cfg agent.RunConfig) []string {
 	}
 	if cfg.PullRequestNumber > 0 {
 		args = append(args, "-pr-number", fmt.Sprintf("%d", cfg.PullRequestNumber))
+	}
+	if cfg.UpstreamRepo != "" {
+		args = append(args, "-pr-upstream-repo", cfg.UpstreamRepo)
 	}
 	// And the credential the branch is pushed with, by name, so the
 	// subprocess's own GitHub reads are made as the same account rather
@@ -1322,6 +1325,8 @@ func (f *Framework) endRun(stdout string, runErr error, notes []string, thread s
 		capacity = capacityFailure(events.failureText(), runErr)
 	}
 	switch {
+	case agent.IsHostdStop(runErr):
+		return annotate(partialResult(result, stdout)), agent.RunFailure("codex", "codex", nil, runErr)
 	case capped:
 		// The cap cancelled the subprocess, so runErr is that
 		// cancellation rather than a fault of codex's -- report the cap.

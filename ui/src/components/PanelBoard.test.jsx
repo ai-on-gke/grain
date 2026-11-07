@@ -246,6 +246,55 @@ describe("PanelBoard", () => {
     expect(within(waiting).getByText("1")).toBeInTheDocument();
   });
 
+  // Closed work is paged in (closedTasks.js, grain task 3051): while some
+  // of it is not held, a count over a question that lets closed tasks
+  // through is a floor, and says so, rather than reading as the total.
+  it("marks a count over closed work as a floor while closed tasks are still paged in", () => {
+    localStorage.setItem(
+      BOARD_STORAGE_KEY,
+      JSON.stringify([
+        { id: "c1", title: "Working", states: ["running"] },
+        { id: "c3", title: "Done", states: ["closed"] },
+      ]),
+    );
+    const done = task({ id: 4, title: "Done already", state: "closed" });
+    draw({
+      board: board([
+        { kind: "states", title: "Everything" },
+        { kind: "list", title: "Open work", query: "f=state:none:closed" },
+      ]),
+      tasks: [...tasks, done],
+      closedPartial: true,
+    });
+    const doneCol = screen.getByText("Done").closest(".panel-state");
+    expect(within(doneCol).getByText("1+")).toBeInTheDocument();
+    const working = screen.getByText("Working").closest(".panel-state");
+    expect(within(working).getByText("2")).toBeInTheDocument();
+    const everything = screen.getByText("Everything").closest(".panel");
+    expect(everything.querySelector(".panel-header .count")).toHaveTextContent(
+      /^4\+$/,
+    );
+    // A panel whose own question sets closed work aside counts it all.
+    const open = screen.getByText("Open work").closest(".panel");
+    expect(open.querySelector(".panel-header .count")).toHaveTextContent(/^3$/);
+  });
+
+  // 2026-11-04 boards walkthrough: the running column's grain mark is
+  // labelled "Running" for its tooltip, and read out beside the
+  // column's own title it named the count "2 Running Running".
+  it("names a running count by its column title alone", () => {
+    localStorage.setItem(
+      BOARD_STORAGE_KEY,
+      JSON.stringify([
+        { id: "c1", title: "Working", states: ["running"] },
+        { id: "c2", title: "Waiting", states: ["awaiting_reply"] },
+      ]),
+    );
+    draw({ board: board([{ kind: "states" }]) });
+    expect(screen.getByRole("link", { name: "2 Working" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "1 Waiting" })).toBeVisible();
+  });
+
   // Every panel is one click from the full view of the same kind asking
   // the same question -- as a real URL, so it can be copied and sent.
   // The full view of the tasks the panel is about, asking the panel's
@@ -996,6 +1045,78 @@ describe("PanelBoard", () => {
       // dashboard that had stopped narrowing anything at all.
       expect(one).toBeGreaterThan(0);
       expect(cost(6)).toBe(one);
+    });
+  });
+
+  describe("when tasks could not be loaded", () => {
+    const fourPanels = board([
+      { kind: "states", title: "States" },
+      { kind: "list", title: "Queue" },
+      { kind: "gantt", title: "Timeline" },
+      { kind: "metrics", title: "Throughput" },
+    ]);
+
+    it("tells failed task reads from an empty deployment, while leaving metrics up", async () => {
+      api.mockResolvedValue({
+        throughput: { tasksFiled: 7, tasksCompleted: 4, buckets: [] },
+      });
+      const onRetryTasks = vi.fn();
+      const user = userEvent.setup();
+      const { container } = draw({
+        board: fourPanels,
+        tasks: [],
+        tasksLoaded: false,
+        tasksError: "synthetic tasks 500",
+        onRetryTasks,
+      });
+
+      expect(screen.queryByText("Nothing here right now.")).toBeNull();
+      expect(screen.queryByText("No tasks yet.")).toBeNull();
+      expect(container.querySelectorAll(".panel-state")).toHaveLength(0);
+      expect(container.querySelectorAll(".panel-header .count")).toHaveLength(
+        0,
+      );
+      expect(
+        screen.getAllByText(
+          "The tasks could not be loaded (synthetic tasks 500).",
+        ),
+      ).toHaveLength(3);
+      expect(await screen.findByText("7")).toBeInTheDocument();
+
+      await user.click(screen.getAllByRole("button", { name: "Retry" })[0]);
+      expect(onRetryTasks).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows the load failure when a later fetch fails with no tasks held, and keeps held tasks when non-empty", () => {
+      const { rerender } = render(
+        <PanelBoard
+          board={board([{ kind: "list", title: "Queue" }])}
+          tasks={[]}
+          tasksLoaded={true}
+          tasksError="upstream 500"
+          config={config}
+          onOpenTask={() => {}}
+          now={NOW}
+        />,
+      );
+      expect(
+        screen.getByText("The tasks could not be loaded (upstream 500)."),
+      ).toBeInTheDocument();
+      expect(screen.queryByText("Nothing here right now.")).toBeNull();
+
+      rerender(
+        <PanelBoard
+          board={board([{ kind: "list", title: "Queue" }])}
+          tasks={tasks}
+          tasksLoaded={true}
+          tasksError="upstream 500"
+          config={config}
+          onOpenTask={() => {}}
+          now={NOW}
+        />,
+      );
+      expect(screen.queryByText(/The tasks could not be loaded/)).toBeNull();
+      expect(screen.getByText("Fix the flake")).toBeInTheDocument();
     });
   });
 });

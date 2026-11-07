@@ -5,11 +5,13 @@
 
 > **Superseded in part (2026-11, PR #511).** The model-only `api_*` tools this design keeps on `grain mcpserver`'s control roster (§1B's dangerous scopes, §4's proposed single `api_admin` tool, Stage 5's `ui.ModelOnlyAgentAPIToolNames`) are no longer served by `grain-sandbox` at all. A run holding any `api:*` grant has the `grain-controller` MCP server (`POST /api/mcp`, six fixed tools: `grain_explore_scope`, `grain_invoke`, `grain_filing_context`, `grain_submit_task`, `grain_list_tasks`, `grain_get_task`) attached beside `grain-sandbox` as a capability server, through which it reaches every route its grants allow -- the model-only channel this design asks for, at a fixed schema cost. The sandbox `grain` CLI and the per-sandbox proxy's scope ceiling are unchanged. See `docs/agent-api.md` ("The controller MCP server") and `docs/test-runs/2026-11-02-controller-mcp-token-cost.md`.
 
+> **Capability names (2026-11).** This design was written when grain's own tools were granted by in-process capabilities that have since been retired; their stored grants were rewritten by schema migrations. Where the tables below map a capability to its sandbox surface, they now name the current reference. The measurements in Context and Problem and in the tool-count table record the grant sets of that time and keep the old names. `grain-ci` is now `https://grain.dev/capabilities/grain#ci` (migration 96); `grain-log` is `…/grain#journal` (migration 80); `deployment-health` is `api:deployment:read` + `…/grain#health` (migration 81); `db-read`/`db-write` are `…/grain#sql` `{write: false|true}` (migration 82); `self-repair` is `…/grain#host-exec` (migration 84); `team-broadcast`, `dispatch-control`, `pipeline-control`, `memory`, `release-notes` and `test-quarantine` are the `api:` presets of the same names (migrations 67, 68, 69, 71, 72 and 76). [unified-grants.design.md §4](unified-grants.design.md#4-retiring-the-in-process-capabilities) lists every one.
+
 ---
 
 ## Context and Problem
 
-Grain currently exposes almost all of its agent-facing functionality as MCP tools registered by `grain mcpserver` (`pkg/daemon/mcpserver.go`). An ordinary coding task with `grain-ci` receives **35 MCP tools** (`56,635 bytes` of JSON schema, `~14,158 tokens`); a Pipeline Steward or Director session holding `self-debug`, `grain-log`, `deployment-health`, `memory`, `api:task-admin`, and `api:dispatch-control` receives **118 MCP tools** (`~138 KB`, `~34,500 tokens`); a run granted the full `api:*` vocabulary receives **334 MCP tools** (`~318 KB`, `~79,550 tokens`).
+Grain currently exposes almost all of its agent-facing functionality as MCP tools registered by `grain mcpserver` (`pkg/daemon/mcpserver.go`). An ordinary coding task with `grain-ci` (now `…/grain#ci`) receives **35 MCP tools** (`56,635 bytes` of JSON schema, `~14,158 tokens`); a Pipeline Steward or Director session holding `self-debug`, `grain-log`, `deployment-health`, `memory`, `api:task-admin`, and `api:dispatch-control` (the grant names of the time; see the note above) receives **118 MCP tools** (`~138 KB`, `~34,500 tokens`); a run granted the full `api:*` vocabulary receives **334 MCP tools** (`~318 KB`, `~79,550 tokens`).
 
 This MCP-heavy surface causes four recurring operational problems:
 
@@ -37,7 +39,7 @@ This design takes the next architectural step: **expose no Grain tools by defaul
 │             │                   wait_for_task (park), resume_later         │
 │             ├─ Work-filing / escalation: propose_task, recreate_sandbox    │
 │             └─ Dangerous grants (model-only): api:<dangerous>,             │
-│                dispatch-control, self-upgrade, self-repair, external caps  │
+│                api:dispatch-control, self-upgrade, grain#host-exec, caps   │
 └───────────────────────────────┬────────────────────────────────────────────┘
                                 │ `run_command` (SSH / container exec / host)
                                 ▼
@@ -85,7 +87,7 @@ Every sandbox credential is minted per attempt in `pkg/gitproxy/tokens.go` and c
 
 1. **Baseline Own-Task & Read Scopes (every run with a sandbox):**
    - **Namespace reads (`/fs/`):**
-     - `ci://<task-repo>/...` (when the task holds `grain-ci`)
+     - `ci://<task-repo>/...` (when the task holds `…/grain#ci`)
      - `task://<own-task-id>/...` (own task metadata, comments, handover, diff); another task's `task://<id>/` needs `self-debug` or `api:tasks:read@<its repo>`
      - `config://repos/<task-repo>`, `config://workflows/`
      - `memory://global/...`, `memory://repos/<task-repo>/...`
@@ -103,14 +105,14 @@ Every sandbox credential is minted per attempt in `pkg/gitproxy/tokens.go` and c
 
 2. **Non-Dangerous Granted Scopes (when attached to the task's `capabilities:`):**
    - `self-debug` / `api:self-debug` → widens `/fs/ci://`, `/fs/task://`, `/fs/src://`, `/fs/config://`, `/fs/deploy://metrics`, `/fs/deploy://pipeline-changes`, and `/cli/metrics`, `/cli/tasks` across the deployment.
-   - `grain-log` → enables `/fs/deploy://grain.log` and `grain log` (passing through `grainlog.Redactor` on the daemon before bytes ever enter the proxy response).
-   - `deployment-health` → enables `/fs/deploy://health` and `/fs/deploy://state` (redacted).
+   - `…/grain#journal` (formerly `grain-log`, retired in schema migration 80) → enables `/fs/deploy://grain.log` and `grain log` (passing through `grainlog.Redactor` on the daemon before bytes ever enter the proxy response).
+   - `api:deployment:read` + `…/grain#health` (formerly `deployment-health`, retired in schema migration 81) → enables `/fs/deploy://health` and `/fs/deploy://state` (redacted).
    - `bootstrap-playbooks` → enables `/fs/src://playbooks/` and `grain playbooks`.
-   - `memory` / `api:memory:write` → enables `grain memory write` / `grain memory doc write` (attributed to `Principal{Kind: PrincipalAgent, ID: taskID}`).
-   - `release-notes` → enables `grain release-notes stats` and `grain release-notes publish`.
+   - `api:memory` (formerly `memory`, retired in schema migration 71) / `api:memory:write` → enables `grain memory write` / `grain memory doc write` (attributed to `Principal{Kind: PrincipalAgent, ID: taskID}`).
+   - `api:release-notes` (formerly `release-notes`, retired in schema migration 72) → enables `grain release-notes stats` and `grain release-notes publish`.
    - `read-issues` → enables `grain issue list` and `grain issue read` (scoped to readable GitHub repos).
    - `quarantine-test` → enables `grain quarantine`.
-   - `db-read` → enables `grain db query` (read-only SQL queries).
+   - `…/grain#sql` `{write: false}` (formerly `db-read`, retired in schema migration 82) → enables `grain db query` (read-only SQL queries).
    - **Non-dangerous `api:<scope>` grants** (`pkg/model/agent_api.go` scopes where `Dangerous == false`, except escalation scopes noted below):
      - Read scopes: `tasks:read`, `ci:read`, `dispatch:read`, `schedules:read`, `templates:read`, `suites:read`, `releases:read`, `repos:read`, `boards:read`, `memory:read`, `sessions:read`, `caches:read`, `settings:read`, `connections:read`, `capabilities:read`, `secrets:read` (names only, never values), `deployment:read`.
      - Safe write scopes: `ci:write`, `notifications:write`, `schedules:write`, `templates:write`, `suites:write`, `releases:write`, `boards:write`, `memory:write`, `caches:write`, plus `tasks:write` and `merge:write` subject to the escalation guards in `pkg/ui/agent_api_gate.go` (see below).
@@ -126,7 +128,7 @@ The proxy **refuses** these operations on the sandbox credential (`403 Forbidden
 | **Sandbox Lifecycle** | `recreate_sandbox` | Destroys the running sandbox VM/container and reprovisions it while the MCP server holds the outer session open. Calling this from inside `run_command` kills the caller mid-flight and would let a rogue test wipe forensic state. |
 | **Work Filing & Approval Escalation** | `propose_task` (full contract with inherited `auto_merge` / auto-approval / `supersedes`) | For an `auto_merge: true` task or a session with `auto_approve_proposals`, `propose_task` files an **already-approved, auto-merging task** that dispatches with zero human review (`pkg/orchestrator/finish.go`). If reachable from the sandbox credential, a malicious test in a PR could spawn an autonomous auto-merging task with arbitrary instructions, or close queued tasks via `supersedes`. *(Note: `grain task propose` is also offered in the CLI for convenience, but when called over the sandbox credential the proxy hard-forces `hold_for_approval: true`, `auto_merge: false`, and rejects `supersedes`, so a sandbox process can at most file an unapproved draft subject to a per-attempt cap of 10 proposals. Only the model-only `propose_task` tool can inherit auto-approval, auto-merge, or `supersedes`.)* |
 | **Dangerous API Scopes (`Dangerous: true` in `pkg/model/agent_api.go`)** | `api:tasks:admin` (`approve`, `recreate`), `api:merge:force`, `api:settings:write`, `api:connections:write`, `api:secrets:write`, `api:capabilities:admin`, `api:deployment:upgrade`, `api:deployment:restart`, `api:deployment:reboot`, and any `RequiresPerson` scope set | These scopes approve unreviewed code, bypass merge gates, rewrite deployment settings/secrets, alter capability policies, or reboot the controller host. |
-| **Queue & Host Control Capabilities** | `dispatch-control` / `pipeline-control` (`api:dispatch:write`: `pause`, `resume`, `run-now`), `self-upgrade` (`upgrade_deployment`, `cancel_deployment_upgrade`), `self-repair` (`run_host_command`), `db-write` (`exec_db`), `team-broadcast` (`broadcast_team_message`), `repos:write`, `sessions:write` | Typing into other live sessions (`sessions:write`), adding/modifying repositories (`repos:write`), pausing/unpausing the deployment pipeline (`dispatch:write`), running commands on the controller host (`self-repair`), or mutating the database (`db-write`) are high-impact control-plane actions that must only be invoked by the model's explicit tool call. |
+| **Queue & Host Control Capabilities** | `api:dispatch-control` / `api:pipeline-control` (formerly `dispatch-control` / `pipeline-control`, retired in schema migrations 68 and 69; `api:dispatch:write`: `pause`, `resume`, `run-now`), `self-upgrade` (`upgrade_deployment`, `cancel_deployment_upgrade`), `…/grain#host-exec` (formerly `self-repair`, retired in schema migration 84; `run_host_command`), `…/grain#sql` `{write: true}` (formerly `db-write`, retired in schema migration 82; `exec_db`), `api:team-broadcast` (formerly `team-broadcast`, retired in schema migration 67; `broadcast_team_message`), `repos:write`, `sessions:write` | Typing into other live sessions (`sessions:write`), adding/modifying repositories (`repos:write`), pausing/unpausing the deployment pipeline (`dispatch:write`), running commands on the controller host (`…/grain#host-exec`), or mutating the database (`…/grain#sql` with `write: true`) are high-impact control-plane actions that must only be invoked by the model's explicit tool call. |
 | **Model-Only External Capability Tools** | External capability server tools with `model_only: true` (the default for external servers; see §7) | External capability servers (e.g., production cloud admin, chat posting, incident paging) may carry production side effects; keeping them model-only by default prevents sandbox processes from invoking them unless the capability author explicitly marks a tool `model_only: false`. |
 
 #### Self-Mutation and Escalation Guards on `tasks:write` and `merge:write`
@@ -353,7 +355,7 @@ GRANTED CAPABILITIES & AGENT API (shown based on this task's grants):
 Run 'grain <command> --help' for flags and examples.
 ```
 
-Every subcommand supports `--help` (and `-h`) with copy-pasteable examples, exact flag descriptions, and JSON output mode (`--json`) where applicable. If a run calls a subcommand whose capability or scope it does not hold (for example, `grain log` without `grain-log` or `grain read src://...` without `self-debug`), the proxy returns the same actionable refusal message `unknownToolMessage` in `pkg/mcp/toolnames.go` produces today:
+Every subcommand supports `--help` (and `-h`) with copy-pasteable examples, exact flag descriptions, and JSON output mode (`--json`) where applicable. If a run calls a subcommand whose capability or scope it does not hold (for example, `grain log` without `…/grain#journal` or `grain read src://...` without `self-debug`), the proxy returns the same actionable refusal message `unknownToolMessage` in `pkg/mcp/toolnames.go` produces today:
 > `grain read src://pkg/ci: this run does not hold the "self-debug" capability. Nothing you can do from inside this run will add it — a human attaches it to the task.`
 
 ### Short Prompt Section Replacing Tool Schemas
@@ -376,7 +378,7 @@ Inside your sandbox, the `grain` CLI (`run_command`) reaches this deployment's n
   Use `comment_on_issue`, `nothing_needed`, `ask_question`, `request_secret`, `wait_for_task` (`park: true`), `resume_later`, and `propose_task` directly as tool calls, not shell commands. Run `grain help` or `grain <subcommand> --help` for full flag details.
 ```
 
-When a task holds additional grants (`self-debug`, `grain-log`, `deployment-health`, `memory`, `api:<scope>`, or external capability servers), `capabilityPassPromptSection` (`pkg/orchestrator/capability_materialize.go`) appends one concise bullet per grant naming the unlocked `grain` commands (e.g., `- **self-debug:** \`grain ls/read/grep src://...\`, \`grain read task://<id>/...\`, \`grain metrics [--section <name>]\`, \`grain api GET /api/pipeline/changes\`.`).
+When a task holds additional grants (`self-debug`, `…/grain#journal`, `api:deployment:read` + `…/grain#health`, `api:memory`, `api:<scope>`, or external capability servers), `capabilityPassPromptSection` (`pkg/orchestrator/capability_materialize.go`) appends one concise bullet per grant naming the unlocked `grain` commands (e.g., `- **self-debug:** \`grain ls/read/grep src://...\`, \`grain read task://<id>/...\`, \`grain metrics [--section <name>]\`, \`grain api GET /api/pipeline/changes\`.`).
 
 ### Measured Prompt and Schema Size Reduction
 
@@ -485,23 +487,23 @@ Grain's built-in capabilities that previously existed only to add MCP tools in `
 
 | Built-in Capability | Classification | Sandbox CLI Surface Unlocked (`http://127.0.0.1:9728`) | Model-Only Control Tools |
 |---|---|---|---|
-| `grain-ci` | Safe (own-repo) | `grain ci {wait,run-job,retrigger,list,log,test-history,artifact}`, `grain ls/read/grep ci://<task-repo>/...` | None (`resume_later` is already in base control set) |
+| `…/grain#ci` (formerly `grain-ci`, retired in schema migration 96) | Safe (own-repo) | `grain ci {wait,run-job,retrigger,list,log,test-history,artifact}`, `grain ls/read/grep ci://<task-repo>/...` | None (`resume_later` is already in base control set) |
 | `self-debug` | Safe (read-only) | Widens `/fs/ci://`, `/fs/src://`, `/fs/task://`, `/fs/config://`, `/fs/deploy://{metrics,pipeline-changes}`; unlocks `grain metrics`, `grain task {list,read,prompt,transcript}`, `grain pipeline-changes` | None |
-| `grain-log` | Safe (redacted read) | `grain read deploy://grain.log`, `grain log [--since ...] [--grep ...]` (redacted by `grainlog.Redactor` on controller before proxy sends bytes) | None |
-| `deployment-health` | Safe (redacted read) | `grain read deploy://health`, `grain read deploy://state`, `grain health` | None |
+| `…/grain#journal` (formerly `grain-log`, retired in schema migration 80) | Safe (redacted read) | `grain read deploy://grain.log`, `grain log [--since ...] [--grep ...]` (redacted by `grainlog.Redactor` on controller before proxy sends bytes) | None |
+| `api:deployment:read` + `…/grain#health` (formerly `deployment-health`, retired in schema migration 81) | Safe (redacted read) | `grain read deploy://health`, `grain read deploy://state`, `grain health` | None |
 | `bootstrap-playbooks` | Safe (read-only) | `grain ls/read src://playbooks/...`, `grain playbooks` | None |
 | `read-issues` | Safe (read-only) | `grain issue list`, `grain issue read <number>` | None |
-| `memory` | Safe (attributed write) | `grain memory {list,read,write,doc-write}` (attributed to `agent:<taskID>`) | None |
-| `release-notes` | Safe (attributed write) | `grain release-notes {stats,publish}` (attributed to `agent:<taskID>`) | None |
+| `api:memory` (formerly `memory`, retired in schema migration 71) | Safe (attributed write) | `grain memory {list,read,write,doc-write}` (attributed to `agent:<taskID>`) | None |
+| `api:release-notes` (formerly `release-notes`, retired in schema migration 72) | Safe (attributed write) | `grain release-notes {stats,publish}` (attributed to `agent:<taskID>`) | None |
 | `quarantine-test` | Safe (workspace + proposal) | `grain quarantine <pkg> <test> --reason <why>` | None |
-| `db-read` | Safe (read-only SQL) | `grain db query "<sql>"` | None |
+| `…/grain#sql` `{write: false}` (formerly `db-read`, retired in schema migration 82) | Safe (read-only SQL) | `grain db query "<sql>"` | None |
 | `api:<non-dangerous>` | Safe (scoped API) | `grain api <METHOD> <path>` for routes in granted non-dangerous scopes (`tasks:read/write`, `merge:write`, `ci:read/write`, `notifications:write`, `schedules:*`, `templates:*`, `suites:*`, `releases:*`, `boards:*`, `memory:*`, `caches:*`, `repos:read`, `sessions:read`, `settings:read`, `connections:read`, `capabilities:read`, `secrets:read`, `deployment:read`) | None |
 | `api:<dangerous>` (`tasks:admin`, `merge:force`, `settings:write`, `connections:write`, `secrets:write`, `capabilities:admin`, `deployment:upgrade/restart/reboot`) | **Dangerous** | **None** (never on sandbox credential) | `api_<route>` (or `api_admin`) on host MCP server |
-| `dispatch-control` / `pipeline-control` (`api:dispatch:write`) | **Dangerous (queue control)** | Read-only pause status via `grain merge-queue` / `grain api GET /api/pipeline/pause` | `pause_pipeline`, `resume_pipeline`, `run_task_now`, `defer_task` on host MCP server |
+| `api:dispatch-control` / `api:pipeline-control` (formerly `dispatch-control` / `pipeline-control`, retired in schema migrations 68 and 69; `api:dispatch:write`) | **Dangerous (queue control)** | Read-only pause status via `grain merge-queue` / `grain api GET /api/pipeline/pause` | `pause_pipeline`, `resume_pipeline`, `run_task_now`, `defer_task` on host MCP server |
 | `self-upgrade` | **Dangerous** | `grain read deploy://upgrade` (status read only) | `upgrade_deployment`, `cancel_deployment_upgrade` on host MCP server |
-| `self-repair` | **Dangerous (host exec)** | **None** | `run_host_command` on host MCP server |
-| `db-write` | **Dangerous (DB mutation)** | `grain db query` (read-only) | `exec_db` on host MCP server |
-| `team-broadcast` | **Escalation (cross-task write)** | **None** | `broadcast_team_message` on host MCP server |
+| `…/grain#host-exec` (formerly `self-repair`, retired in schema migration 84) | **Dangerous (host exec)** | **None** | `run_host_command` on host MCP server |
+| `…/grain#sql` `{write: true}` (formerly `db-write`, retired in schema migration 82) | **Dangerous (DB mutation)** | `grain db query` (read-only) | `exec_db` on host MCP server |
+| `api:team-broadcast` (formerly `team-broadcast`, retired in schema migration 67) | **Escalation (cross-task write)** | **None** | `broadcast_team_message` on host MCP server |
 
 ### External Capability Servers: `mcp_endpoint`, `grain cap`, and `model_only`
 
@@ -617,7 +619,7 @@ We stage the migration across **five sequential phases** so that every phase is 
   - Add the Antigravity plan-mode/timer fixes in `pkg/agent/antigravity/antigravity.go` and split `PublishedToolNames()` in `pkg/agent/toolroster.go` / `pkg/metrics/tools.go`.
   - Add the compact `### Grain CLI (grain)` section to `BuildPrompt` (`pkg/orchestrator/run.go`) and update all built-in prompts and system templates that name migrated MCP tools:
     1. **Base coding & red-CI prompts (`pkg/orchestrator/run.go`, `pkg/orchestrator/sync.go`):** Update `redCIProcedureSection` and PR/CI instructions (`wait_for_checks` → `grain ci wait`, `get_ci_log` → `grain ci log`, `list_ci_runs` → `grain ci list`, `query_test_history` → `grain ci test-history`, `run_ci_job` → `grain ci run-job`, `pull_request_status` → `grain pr status`, `base_branch_status` → `grain pr base-status`).
-    2. **Pipeline Steward (`pkg/model/pipeline_steward_template.go`):** Update wake procedure to use `grain pipeline-changes` / `grain api`, `grain task read`, `grain merge-queue`, `grain ci list/log`, `grain health`, and `grain log` while keeping `resume_later`, `propose_task`, and `dispatch-control` tools as model tool calls.
+    2. **Pipeline Steward (`pkg/model/pipeline_steward_template.go`):** Update wake procedure to use `grain pipeline-changes` / `grain api`, `grain task read`, `grain merge-queue`, `grain ci list/log`, `grain health`, and `grain log` while keeping `resume_later`, `propose_task`, and `api:dispatch-control` tools as model tool calls.
     3. **Memory Agent (`pkg/model/system_template.go` — `memoryAgentTemplate`):** Update to use `grain task list/read/transcript`, `grain metrics`, and `grain memory`.
     4. **Infra / Workflow Review (`pkg/model/system_template.go` — `infraReviewTemplate` & `pkg/model/workflow_review_template.go`):** Update to use `grain ci list`, `grain ci log`, `grain metrics`, and `grain ls/read ci://...`.
     5. **Release Notes & Release Triage (`pkg/model/system_template.go` — `releaseNotesTemplate` & `pkg/orchestrator/releases.go`):** Update to use `grain release-notes`, `grain ci list/log`, and `grain api`.
@@ -627,10 +629,10 @@ We stage the migration across **five sequential phases** so that every phase is 
   - `grain mcpserver -mcp-surface control|full` (`pkg/daemon/mcp_surface.go`). Left empty, it is `control` whenever a sandbox flag is set. That covers every production run, since a sandbox flag is still required. The server builds its roster as before and then keeps only:
     - the sandbox tools;
     - the control tools;
-    - `ModelOnlyGrantToolNames` (dispatch-control, pipeline-control, self-upgrade, `execute_grain_db`, `broadcast_team_message`);
+    - `ModelOnlyGrantToolNames` (dispatch-control and pipeline-control, now the `api:` presets of those names, self-upgrade, `execute_grain_db`, `broadcast_team_message`);
     - the granted `api_*` routes the sandbox channel refuses, plus those whose sandbox guard depends on the body (`ui.ModelOnlyAgentAPIToolNames`), so the model keeps `park`, `supersedes` and capability attachment;
     - local scripts, which have no CLI command.
-  - Two exceptions keep MCP CI tools. A run without `grain-ci` keeps `pull_request_status`, `wait_for_checks` and `base_branch_status`, because `grain ci`/`grain pr` read grain CI only and its checks are GitHub's. A changelist task keeps `pull_request_status` and `wait_for_checks`, and also `open_pull_request`, `reply_to_pull_request_comment` and `resolve_review_thread`, which its review-thread wakes name: `grain pr open` cannot carry a CL's summary and body, and `grain pr reply`/`resolve` take a GitHub comment number rather than a `cl/<n>:<id>` thread. `BuildPrompt` names those tools for such runs and the `grain` commands for grain-ci runs.
+  - Two exceptions keep MCP CI tools. A run without `…/grain#ci` keeps `pull_request_status`, `wait_for_checks` and `base_branch_status`, because `grain ci`/`grain pr` read grain CI only and its checks are GitHub's. A changelist task keeps `pull_request_status` and `wait_for_checks`, and also `open_pull_request`, `reply_to_pull_request_comment` and `resolve_review_thread`, which its review-thread wakes name: `grain pr open` cannot carry a CL's summary and body, and `grain pr reply`/`resolve` take a GitHub comment number rather than a `cl/<n>:<id>` thread. `BuildPrompt` names those tools for such runs and the `grain` commands for grain-ci runs.
   - `agent.PublishedControlToolNames`, `agent.PublishedCLICommandNames` and `agent.ToolSurface` split the roster. `metrics.ToolUse.Surface` and `metrics.Tools.ControlCalls`/`CLICalls` carry the split into `read_grain_metrics`.
   - Antigravity:
     - the PreToolUse hook lets `exit_plan_mode` through, because it is agy's own plan-mode handoff;

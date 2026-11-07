@@ -73,7 +73,7 @@ ZONE="${ZONE:-us-east1-b}"
 PROJECT="${PROJECT:-grain-host}"
 MACHINE_TYPE="${MACHINE_TYPE:-e2-standard-4}"
 NAMESPACE="${NAMESPACE:-grain}"
-SANDBOX_IMAGE="${SANDBOX_IMAGE:-ghcr.io/bwsalmon/grain/k8s-sandbox:main}"
+SANDBOX_IMAGE="${SANDBOX_IMAGE:-docker.io/grainai/sandbox-k8s:main}"
 TARGET_REPO="${TARGET_REPO:-bwsalmon/grain}"
 # The repository this verifies is the one this script lives in, so the
 # root is two directories up rather than a sibling checkout. These ran

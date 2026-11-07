@@ -27,6 +27,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/model/postgres"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // DefaultSandboxImage is overwritten at link time. The value here is the
@@ -34,11 +35,11 @@ import (
 // on a laptop, or a `docker build` with no --build-arg -- and names the
 // tag CI keeps pointed at main rather than nothing at all, so an
 // unstamped binary still resolves to a real, if less precise, image.
-var DefaultSandboxImage = "ghcr.io/bwsalmon/grain/guest:latest"
+var DefaultSandboxImage = "docker.io/grainai/sandbox:latest"
 
 // DefaultK8sSandboxImage is the default container image for plain Kubernetes
 // sandbox pods ("kubernetes" backend).
-var DefaultK8sSandboxImage = "ghcr.io/bwsalmon/grain/k8s-sandbox:latest"
+var DefaultK8sSandboxImage = "docker.io/grainai/sandbox-k8s:latest"
 
 // timestampSuffix names an archived directory by when it was archived,
 // in a form that sorts and that a shell does not have to be quoted for.
@@ -93,6 +94,9 @@ func LoadDatabaseConfig(dataDir string) (*postgres.DatabaseConfig, error) {
 	saved, err := postgres.ReadDatabaseConfig(dataDir)
 	if err != nil || saved == nil {
 		return saved, err
+	}
+	if os.Getenv("GRAIN_SECRETS_BACKEND") == secrets.BackendSecretManager && saved.PasswordSecret == "" {
+		return saved, nil
 	}
 	if saved.HasPlaintextPassword() {
 		if _, err := postgres.MigrateDatabaseConfigPassword(dataDir, OpenSecrets(dataDir)); err != nil {

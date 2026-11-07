@@ -30,6 +30,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/hosttop"
 	"github.com/ai-on-gke/grain/pkg/k8s"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/sysstat"
 	"github.com/ai-on-gke/grain/pkg/systemlog"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -152,7 +153,13 @@ func LogSources(cfg Config) map[string]ui.LogSource {
 		return sources
 	}
 	return map[string]ui.LogSource{
-		"daemon":          systemlog.Journalctl{Unit: "grain-daemon.service"},
+		// The unit this process runs under, not a fixed name: a
+		// workstation daemon runs as the user unit grain.service, and
+		// reading grain-daemon.service there answered with the journal
+		// of a process that was not serving the request
+		// (systemlog.DaemonUnit). Where the host has both installed the
+		// other is offered through ?unit= (ui.UnitLogSource).
+		"daemon":          ui.DaemonJournal{DaemonJournal: systemlog.DetectDaemonJournal(systemlog.DaemonUnit(), nil)},
 		"git-proxy-audit": auditLog,
 		"config-sync":     systemlog.Journalctl{Unit: "grain-config-sync.service"},
 		"dmesg":           systemlog.Dmesg{},
@@ -165,9 +172,9 @@ func LogSources(cfg Config) map[string]ui.LogSource {
 // The Logs tab serves this same host's journal to a browser, so the
 // same refusal applies when the list cannot be built: an error, never
 // the lines as they are.
-func logRedactor(secretsDir string) func() (*grainlog.Redactor, error) {
+func logRedactor(secretsDir string, secretStore *secrets.Store) func() (*grainlog.Redactor, error) {
 	return func() (*grainlog.Redactor, error) {
-		if r := grainLogRedactor(secretsDir); r != nil {
+		if r := grainLogRedactorFor(secretsDir, secretStore); r != nil {
 			return r, nil
 		}
 		return nil, errors.New("this host's secrets could not be read (see the daemon's own log)")
@@ -211,8 +218,10 @@ func DaemonHealthFor(cfg Config, startedAt time.Time) *daemonHealth {
 		return newPodDaemonHealth(startedAt, cfg.UnknownFlags, pods, ownPodName(), container,
 			kubeShape(pods.NamespaceOrDefault(), deployment, container))
 	}
-	return newDaemonHealth(startedAt, cfg.UnknownFlags, systemlog.Journalctl{Unit: "grain-daemon.service"},
-		newRestartRequests(cfg.DataDir))
+	unit := systemlog.DaemonUnit()
+	h := newDaemonHealth(startedAt, cfg.UnknownFlags, unit.Journal(), newRestartRequests(cfg.DataDir))
+	h.shape = systemdShape(unit)
+	return h
 }
 
 // k8sSelfNames is which Deployment and container this process is a pod
@@ -243,6 +252,27 @@ func upgradeImageNote(cfg Config) string {
 		deployment, container := K8sSelfNames(cfg)
 		return fmt.Sprintf("grain daemon: upgrades health-check %s:<branch> in a throwaway pod and repoint "+
 			"container %s of deployment/%s at it; the rollout restarts this pod", cfg.UpgradeImage, container, deployment)
+	}
+	src := strings.ToLower(strings.TrimSpace(cfg.UpgradeImageSource))
+	if src == "" && len(cfg.UpgradeVerifyCmd) > 0 {
+		// A verifying deployment's default (upgrade.EffectiveImageSource).
+		src = string(upgrade.ImageSourceRegistry)
+	}
+	if src == string(upgrade.ImageSourceRegistry) {
+		return fmt.Sprintf("grain daemon: upgrades pull %s and rewrite %s%s",
+			cfg.UpgradeImage, cfg.UpgradeImageRefFile, restartNote(cfg.UpgradeRestartCmd))
+	}
+	relRepo := strings.TrimSpace(cfg.UpgradeReleaseRepo)
+	if relRepo == "" {
+		relRepo = upgrade.ReleaseRepositoryForImage(cfg.UpgradeImage)
+	}
+	if src == string(upgrade.ImageSourceReleaseAssets) && relRepo != "" {
+		return fmt.Sprintf("grain daemon: upgrades load release assets from %s into %s and rewrite %s%s",
+			relRepo, cfg.UpgradeImage, cfg.UpgradeImageRefFile, restartNote(cfg.UpgradeRestartCmd))
+	}
+	if relRepo != "" {
+		return fmt.Sprintf("grain daemon: upgrades load release assets from %s (falling back to %s when a release has no image assets) and rewrite %s%s",
+			relRepo, cfg.UpgradeImage, cfg.UpgradeImageRefFile, restartNote(cfg.UpgradeRestartCmd))
 	}
 	return fmt.Sprintf("grain daemon: upgrades pull %s and rewrite %s%s",
 		cfg.UpgradeImage, cfg.UpgradeImageRefFile, restartNote(cfg.UpgradeRestartCmd))

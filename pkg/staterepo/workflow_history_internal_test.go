@@ -31,7 +31,7 @@ import (
 // around it is not the text it thinks it is.
 func TestEveryRecordedTemplateIsRecognisedAndUnambiguous(t *testing.T) {
 	t.Parallel()
-	const image = "ghcr.io/bwsalmon/grain/grain:sha-abc1234"
+	const image = "docker.io/grainai/grain:sha-abc1234"
 	if len(grainWorkflows) != len(earlierWorkflows)+1 {
 		t.Fatalf("the template list is not this build's plus the retired ones: %d, %d",
 			len(grainWorkflows), len(earlierWorkflows))

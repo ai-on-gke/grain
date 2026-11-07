@@ -18,6 +18,17 @@ import { hasGitCredential } from "./gitConnections.js";
 import { redBaseRepairSentence, waitingBaseRepair } from "./state.js";
 import { forceMergeOffered } from "./taskWrites.js";
 
+// pauseConnectionLabel is a pause's connection key as a person reads it:
+// a pause scoped to one host is keyed "<connection>@hostd/<host>" on the
+// wire (pkg/daemon's hostdPauseOwner) and reads "<connection> on host
+// <host>".
+export function pauseConnectionLabel(key) {
+  if (typeof key !== "string") return key;
+  const at = key.indexOf("@hostd/");
+  if (at < 0) return key;
+  return `${key.slice(0, at)} on host ${key.slice(at + "@hostd/".length)}`;
+}
+
 // alerts.js is every standing warning about the deployment as rows of one
 // list, read from /api/config: what the alerts button in the top bar
 // counts and its panel lists (components/AlertsButton.jsx,
@@ -108,7 +119,7 @@ export function liftAgentPause(entry) {
 // no connection's key (the deployment-level credentials).
 export function pauseSubject(entry) {
   if (entry?.connection) {
-    const name = entry.connectionName || entry.connection;
+    const name = entry.connectionName || pauseConnectionLabel(entry.connection);
     if (entry.model) return `${entry.model} on ${name}`;
     return `connection ${name}`;
   }
@@ -253,10 +264,18 @@ export function pipelinePauseTitle(pause) {
     : "Deployment paused";
 }
 
+// admissionBypasses is Task.HasPriorityDispatch for the browser: a task
+// whose admission is bypass or durable (durable includes bypass).
+export function admissionBypasses(t) {
+  return t?.admission === "bypass" || t?.admission === "durable";
+}
+
 // heldForRunNow is whether task t is waiting only because of the pause:
 // the deployment is paused under a pause Run now passes, and t is queued
 // -- one the queue would otherwise pick up -- and not already asked for,
-// individually paused, exempt by priority-dispatch / standing session,
+// individually paused, exempt by its admission (bypass or durable, the
+// task setting that replaced the priority-dispatch and durable grants,
+// unified-grants.design.md §4.1) / standing session,
 // or the task the pause itself is waiting on. A blocked task is not
 // waiting only for the pause -- lifting it would not start the task
 // either -- so it says "blocked", not this.
@@ -267,7 +286,7 @@ export function heldForRunNow(pause, t) {
     t.paused ||
     t.blocked ||
     t.consoleSession ||
-    (t.capabilities || []).includes("priority-dispatch") ||
+    admissionBypasses(t) ||
     pause.untilTask === t.id
   ) {
     return false;
@@ -385,18 +404,49 @@ export function collectAlerts(config, zone = "", tasks = []) {
   const out = [...redBaseRepairAlerts(config, tasks)];
 
   if (config.reconcilerDown) {
+    // The conditions the daemon recorded against itself say why
+    // (config.dispatchBlocked, each with its error and since when); the
+    // boolean alone could only say that it stopped.
+    const conditions = config.dispatchBlocked || [];
+    const why = conditions
+      .map((c) => `${c.name.replaceAll("-", " ")}: ${c.error}`)
+      .join("; ");
+    const remedy = conditions.find((c) => c.remedy)?.remedy;
     out.push({
       id: "reconciler-down",
       severity: "critical",
       title: "Reconcile loop stopped",
       sentence:
-        "This deployment's reconcile loop has stopped -- no tasks are being dispatched or checked. Restart the daemon to recover.",
+        "This deployment's reconcile loop has stopped -- no tasks are being dispatched or checked." +
+        (why ? ` ${why}.` : "") +
+        ` ${remedy ? remedy.charAt(0).toUpperCase() + remedy.slice(1) : "Restart the daemon to recover"}.`,
       scope: { kind: "deployment" },
+      since: conditions[0]?.since || undefined,
       impact: "No task is dispatched or checked until the daemon restarts.",
       // The restart it asks for is System → Power's "Restart grain";
       // without this the alert named the fix and left the reader to
       // find where it lives.
       actions: [{ kind: "open-power", label: "Power" }],
+    });
+  }
+
+  // The store was switched underneath the daemon (pkg/daemon/
+  // storeswitch.go): db-config.json now selects a store other than the
+  // one it writes to, so everything written since lives only in the old
+  // one. It dispatches nothing until restarted, and a restart is not the
+  // fix by itself -- the new store has to be brought up to date first,
+  // which is what the sentence says.
+  const storeSwitch = config.storeSwitch;
+  if (storeSwitch) {
+    out.push({
+      id: "store-switched",
+      severity: "critical",
+      title: "Store switched while grain was running",
+      sentence: storeSwitch.message.replace(/[^.!?]$/, "$&."),
+      scope: { kind: "deployment" },
+      since: storeSwitch.since || undefined,
+      impact: "No task is dispatched until the daemon restarts.",
+      actions: [],
     });
   }
 
@@ -455,7 +505,8 @@ export function collectAlerts(config, zone = "", tasks = []) {
         ? {
             kind: "connection",
             connection: entry.connection,
-            connectionName: entry.connectionName || entry.connection,
+            connectionName:
+              entry.connectionName || pauseConnectionLabel(entry.connection),
           }
         : { kind: "deployment" };
       const actions = [];
@@ -576,5 +627,5 @@ export function alertSentence(alert, zone = "") {
 // "Connection Alpha's Claude".
 export function scopeLabel(scope) {
   if (!scope || scope.kind !== "connection") return "Deployment";
-  return `Connection ${scope.connectionName || scope.connection}`;
+  return `Connection ${scope.connectionName || pauseConnectionLabel(scope.connection)}`;
 }

@@ -102,6 +102,7 @@ func directorTask(id string) model.Task {
 	tk.Origin.Reason = model.ReasonConsoleSession
 	tk.Tags = []string{model.ConsoleSessionTag(model.DirectorSessionID)}
 	tk.Interactive = true
+	tk.Admission = model.AdmissionDurable
 	tk.Grants = model.ConsoleSessionGrants(model.ConsoleSession{ID: model.DirectorSessionID})
 	return tk
 }
@@ -190,6 +191,7 @@ func TestNewConsoleSessionDispatchesUnderSaturationAndOvercommit(t *testing.T) {
 	newSession := task("custom-session-1", true)
 	newSession.Origin.Reason = model.ReasonConsoleSession
 	newSession.Interactive = true
+	newSession.Admission = model.AdmissionDurable
 	newSession.Tags = []string{model.ConsoleSessionTag("support-ops")}
 	newSession.Grants = model.ConsoleSessionGrants(model.ConsoleSession{ID: "support-ops"})
 	newSession.OrderKey = 3

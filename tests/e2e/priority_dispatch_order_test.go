@@ -83,16 +83,8 @@ func TestRealDaemonDispatchesByPriorityThenFIFO(t *testing.T) {
 	// the task, and ends its turn without changing anything.
 	order := filepath.Join(home, "dispatch-order")
 	agentScript := filepath.Join(home, "fake-agent")
-	mustWriteFile(t, agentScript, fmt.Sprintf(`#!/bin/sh
-req="$(cat)"
-dir="$(printf '%%s' "$req" | sed -n 's/.*"working_directory":"\([^"]*\)".*/\1/p')"
-git -C "$dir/work" rev-parse --abbrev-ref HEAD >> %[1]s
-sleep 1
-printf '%%s\n' '{"protocol_version":2,"result":{"final_text":"Nothing to change.","transcript":"recorded the dispatch"}}'
-`, order))
-	if err := os.Chmod(agentScript, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeFakeAgy(t, agentScript, "git -C work rev-parse --abbrev-ref HEAD >> "+shellQuote(order)+"\nsleep 1",
+		"Nothing to change.")
 
 	var logs bytes.Buffer
 	daemonCmd := exec.Command(filepath.Join(dataDir, "daemon.sh"), "-github-host", githubHost, "-github-insecure-http",
@@ -142,10 +134,7 @@ printf '%%s\n' '{"protocol_version":2,"result":{"final_text":"Nothing to change.
 		t.Fatalf("pausing dispatch: %v", err)
 	}
 	one := 1
-	backends := []model.AgentBackend{{
-		ID: "fake", Name: "fake agent", Framework: model.AgentFrameworkCustom, Command: agentScript,
-		Models: []string{"fake-model"},
-	}}
+	backends := []model.AgentBackend{fakeAgyConnection(agentScript)}
 	if _, err := client.UpdateSettings(ctx, ui.UpdateSettingsRequest{AgentBackends: &backends, MaxWorkers: &one}); err != nil {
 		t.Fatalf("configuring the fake agent and one worker: %v", err)
 	}
@@ -160,7 +149,7 @@ printf '%%s\n' '{"protocol_version":2,"result":{"final_text":"Nothing to change.
 		p := f.priority
 		task, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 			Title: "Priority " + f.name, Description: "Record the dispatch order.",
-			Repo: owner + "/" + repoName, AgentFramework: model.AgentFrameworkCustom, Priority: &p,
+			Repo: owner + "/" + repoName, AgentFramework: model.AgentFrameworkAntigravity, Priority: &p,
 		})
 		if err != nil {
 			t.Fatalf("filing %q: %v", f.name, err)

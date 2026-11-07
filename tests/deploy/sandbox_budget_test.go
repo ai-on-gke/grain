@@ -68,4 +68,24 @@ func TestTheReadinessReportSaysWhenNoRunCanBeAdmitted(t *testing.T) {
 	// Single-tenant: there are no teams with counts of their own.
 	absent(t, readiness, "each team's own")
 	absent(t, readiness, "Team settings")
+
+	// A beefy machine whose small boot partition restricts concurrency to 1
+	// task at a time against max_workers=10 is flagged as CONSTRAINED in the
+	// summary and gets a !! block with the settings command and volume advice.
+	const underResourced = "under-resourced: one 8192 MiB sandbox fits in 57344 MiB of sandbox memory, " +
+		"but this host is configured for 10 workers (max_workers) while its sandbox budget restricts it to 1 task at a time: " +
+		"/var/lib/grain/data (30.0 GiB holding store, docker, 5.0 GiB floor, 50 GiB sandbox disk budget at 2.00x) " +
+		"can only admit 1 task at a time of 30 GiB once 1 is held back for repair. " +
+		"Move the grain data directory (GRAIN_DATA_DIR / -data-dir) and Docker's data-root onto a larger volume, " +
+		"or lower max_workers or the sandbox disk shape in Settings → Sandbox\n" +
+		"fix: grain settings -max-workers 1\n"
+	contains(t, runBash(t, summary+`sandbox_budget_summary "$BUDGET"`, "BUDGET="+underResourced), "CONSTRAINED -- ")
+	underBlock := runBash(t, shellFunction(t, "report_sandbox_budget_problem")+`report_sandbox_budget_problem "$BUDGET"`,
+		"BUDGET="+underResourced)
+	if !strings.HasPrefix(underBlock, "    !! one 8192 MiB sandbox fits") {
+		t.Errorf("under-resourced block = %q, want it to open with a !! line", underBlock)
+	}
+	contains(t, underBlock, "restricts it to 1 task at a time")
+	contains(t, underBlock, "To match the settings to this host, run: grain settings -max-workers 1\n")
+	contains(t, readiness, `if [[ "$budget" == under-resourced:* ]]; then`+"\n    report_sandbox_budget_problem \"$budget\"")
 }

@@ -39,12 +39,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/apierror"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -63,9 +65,7 @@ const ciActionsCaller = "ci-read"
 const MaxActionsLogBytes = ci.MaxStepOutput
 
 // ActionsRunID is the ci:read id of run runID of repo.
-func ActionsRunID(repo string, runID int64) string {
-	return ActionsRunIDPrefix + strings.ReplaceAll(repo, "/", ":") + ":" + strconv.FormatInt(runID, 10)
-}
+func ActionsRunID(repo string, runID int64) string { return ci.ActionsRunID(repo, runID) }
 
 // ParseActionsRunID reads an id ActionsRunID made back into its
 // repository and GitHub run id (ci.ParseActionsRunID).
@@ -82,6 +82,13 @@ func IsActionsRunID(id string) bool {
 // calls charged to ciActionsCaller, or nil when this deployment has none
 // that can.
 func (c *Client) actionsReader() github.ActionsReader {
+	reader, _ := forgeReader[github.ActionsReader](c)
+	return reader
+}
+
+// forgeReader is the first of this client's forge connections that is a
+// T, labelled as ci:read's caller.
+func forgeReader[T any](c *Client) (T, bool) {
 	var candidates []any
 	if c.Config.Actions != nil {
 		candidates = append(candidates, c.Config.Actions)
@@ -98,11 +105,12 @@ func (c *Client) actionsReader() github.ActionsReader {
 		if l, ok := cand.(github.CallerLabeler); ok {
 			cand = l.WithCaller(ciActionsCaller)
 		}
-		if reader, ok := cand.(github.ActionsReader); ok {
-			return reader
+		if reader, ok := cand.(T); ok {
+			return reader, true
 		}
 	}
-	return nil
+	var none T
+	return none, false
 }
 
 // actionsListedFor reports whether repo's Actions runs are listed: a
@@ -433,7 +441,7 @@ func actionsRunRow(repo model.RepoRef, r github.WorkflowRun) ci.Run {
 		Conclusion: actionsConclusion(r.Status, r.Conclusion),
 		Jobs:       []ci.JobRun{},
 		Actions: &ci.ActionsRun{
-			RunID: r.ID, RunAttempt: r.RunAttempt, Workflow: r.Path, WorkflowName: r.Name,
+			RunID: r.ID, RunAttempt: r.RunAttempt, Workflow: r.Path, WorkflowName: r.Name, HeadRepo: r.HeadRepo,
 			Status: r.Status, Conclusion: r.Conclusion, URL: r.HTMLURL,
 		},
 	}
@@ -673,7 +681,8 @@ func actionsRunWithJobs(repo model.RepoRef, r github.WorkflowRun, jobs []github.
 			Status:     j.Status,
 		}
 		for _, st := range j.Steps {
-			job.Steps = append(job.Steps, ci.StepRun{Name: st.Name, Conclusion: actionsConclusion(st.Status, st.Conclusion)})
+			job.Steps = append(job.Steps, ci.StepRun{Name: st.Name, Conclusion: actionsConclusion(st.Status, st.Conclusion),
+				StartedAt: st.StartedAt, FinishedAt: st.CompletedAt})
 		}
 		if job.Conclusion == ci.ConclusionFailure {
 			run.Actions.FailedJobs = append(run.Actions.FailedJobs, j.Name)
@@ -724,6 +733,11 @@ func (s *Server) handleGetCIRunLog(w http.ResponseWriter, r *http.Request) {
 			writeClientError(w, err)
 			return
 		}
+		if status == http.StatusBadGateway {
+			// Why the forge served no log is what the agent asking needs
+			// to act on, and it is already trusted with the log itself.
+			err = apierror.Expose(err)
+		}
 		writeError(w, status, err)
 		return
 	}
@@ -758,22 +772,66 @@ func (c *Client) actionsJobLog(ctx context.Context, repo model.RepoRef, runID in
 		}
 		return actionsLiveTTL
 	}, func() (string, error) {
-		return reader.ActionsJobLog(repo.StoredOwner(), repo.Name, job.ID)
+		text, err := reader.ActionsJobLog(repo.StoredOwner(), repo.Name, job.ID)
+		if err == nil && text == "" && job.Status == "completed" {
+			// An error rather than a log, so it is not cached: the next
+			// read asks the forge again instead of being handed the same
+			// nothing for actionsFinishedTTL.
+			return "", errEmptyActionsLog
+		}
+		return text, err
 	})
 	if err != nil {
 		var gh *github.Error
 		switch {
 		case errors.Is(err, errActionsBudgetLow):
 			return job, "", http.StatusServiceUnavailable, err
+		case errors.Is(err, errEmptyActionsLog), errors.Is(err, github.ErrEmptyJobLog):
+			// A finished job always wrote something; nothing back is a log
+			// that went missing on its way here, not one that is empty.
+			msg := fmt.Sprintf("the forge answered job %q's log (%d) with no bytes at all", job.Name, job.ID)
+			if errors.As(err, &gh) {
+				msg += ", " + forgeAnswer(gh)
+				if gh.Note != "" {
+					msg += " (" + gh.Note + ")"
+				}
+			}
+			return job, "", http.StatusBadGateway, errors.New(msg)
 		case errors.As(err, &gh) && (gh.Status == http.StatusNotFound || gh.Status == http.StatusGone):
-			return job, "", http.StatusNotFound, fmt.Errorf("the forge has no log for job %q (%d): it is past its retention window, or not written yet", job.Name, job.ID)
+			return job, "", http.StatusNotFound, fmt.Errorf("the forge has no log for job %q (%d), %s: it is past its retention window, or not written yet", job.Name, job.ID, forgeAnswer(gh))
 		case errors.As(err, &gh) && gh.Status == http.StatusForbidden:
-			return job, "", http.StatusForbidden, fmt.Errorf("the forge refused job %q's log to this deployment's credential (it needs actions:read)", job.Name)
+			return job, "", http.StatusForbidden, fmt.Errorf("the forge refused job %q's log to this deployment's credential (it needs actions:read), %s", job.Name, forgeAnswer(gh))
+		case errors.As(err, &gh):
+			// The status and hosts, not the body: that is whatever page
+			// the forge or its blob store answered with.
+			return job, "", http.StatusBadGateway, fmt.Errorf("reading job %q's log from the forge: %s", job.Name, forgeAnswer(gh))
 		default:
 			return job, "", http.StatusBadGateway, fmt.Errorf("reading job %q's log from the forge: %w", job.Name, err)
 		}
 	}
 	return job, text, http.StatusOK, nil
+}
+
+// errEmptyActionsLog is a finished job's log read back as nothing from a
+// reader that said no more than that.
+var errEmptyActionsLog = errors.New("the forge answered a finished job's log with no bytes at all")
+
+// forgeAnswer is gh's status and the host or hosts it came from ("HTTP
+// 404 from ghe.example.com"), for a sentence saying why a log is not
+// here. The URL's path and query are left out: a log's redirect target
+// is a signed URL.
+func forgeAnswer(gh *github.Error) string {
+	out := fmt.Sprintf("HTTP %d", gh.Status)
+	var hosts []string
+	for _, field := range strings.Fields(gh.URL) {
+		if u, err := url.Parse(field); err == nil && u.Host != "" && !slices.Contains(hosts, u.Host) {
+			hosts = append(hosts, u.Host)
+		}
+	}
+	if len(hosts) > 0 {
+		out += " from " + strings.Join(hosts, ", redirected to ")
+	}
+	return out
 }
 
 // ExternalCIRuns is this client's GitHub Actions runs as ci.ExternalRuns,
@@ -820,6 +878,76 @@ func (a actionsExternalRuns) ExternalRun(ctx context.Context, id string) (ci.Run
 		return ci.Run{}, false, err
 	}
 	return run, true, nil
+}
+
+var _ ci.ExternalAttempts = actionsExternalRuns{}
+
+func (a actionsExternalRuns) ExternalJobAttempts(ctx context.Context, id string) ([]ci.GitHubJob, error) {
+	repoText, runID, ok := ParseActionsRunID(id)
+	if !ok {
+		return nil, fmt.Errorf("%q is not a GitHub Actions run", id)
+	}
+	repo, err := a.c.parseRepo(repoText)
+	if err != nil {
+		return nil, err
+	}
+	if err := a.c.actionsRepoServed(ctx, repo); err != nil {
+		return nil, err
+	}
+	reader, ok := forgeReader[github.ActionsJobAttemptsReader](a.c)
+	if !ok {
+		return nil, errNoActionsReader
+	}
+	jobs, err := reader.ListActionsJobAttempts(repo.StoredOwner(), repo.Name, runID)
+	if err != nil {
+		return nil, fmt.Errorf("reading every attempt of the jobs of %s from the forge: %w", id, err)
+	}
+	out := make([]ci.GitHubJob, 0, len(jobs))
+	for _, j := range jobs {
+		out = append(out, ci.GitHubJob{
+			ID: j.ID, RunID: j.RunID, RunAttempt: j.RunAttempt, WorkflowName: j.WorkflowName, HeadSHA: j.HeadSHA,
+			Name: j.Name, Status: j.Status, Conclusion: ci.GitHubConclusion(j.Conclusion),
+			CreatedAt: j.CreatedAt, StartedAt: j.StartedAt, CompletedAt: j.CompletedAt, HTMLURL: j.HTMLURL,
+		})
+	}
+	return out, nil
+}
+
+func (a actionsExternalRuns) ExternalCheckRuns(ctx context.Context, repoText, sha, name string) ([]ci.GitHubCheckRun, string, error) {
+	repo, err := a.c.parseRepo(repoText)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := a.c.actionsRepoServed(ctx, repo); err != nil {
+		return nil, "", err
+	}
+	reader, ok := forgeReader[github.CheckRunAttemptsReader](a.c)
+	if !ok {
+		return nil, "", errors.New("this deployment's forge connection cannot list a commit's check runs")
+	}
+	runs, err := reader.ListCheckRunAttempts(repo.StoredOwner(), repo.Name, sha, name)
+	if err != nil {
+		return nil, "", fmt.Errorf("reading the check runs on %s of %s from the forge: %w", sha, repo, err)
+	}
+	app, err := reader.CheckRunApp(repo.StoredOwner(), repo.Name)
+	if err != nil {
+		app = ""
+	}
+	out := make([]ci.GitHubCheckRun, 0, len(runs))
+	for _, r := range runs {
+		run := ci.GitHubCheckRun{
+			ID: r.ID, Name: r.Name, HeadSHA: r.HeadSHA, ExternalID: r.ExternalID, Status: r.Status,
+			StartedAt: r.StartedAt, CompletedAt: r.CompletedAt, HTMLURL: r.HTMLURL,
+		}
+		if r.Conclusion != nil {
+			run.Conclusion = ci.GitHubConclusion(*r.Conclusion)
+		}
+		if r.App != "" {
+			run.App = &ci.GitHubApp{Slug: r.App}
+		}
+		out = append(out, run)
+	}
+	return out, app, nil
 }
 
 func (a actionsExternalRuns) ExternalJobLog(ctx context.Context, id, job string) (string, error) {

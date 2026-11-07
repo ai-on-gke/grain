@@ -69,6 +69,7 @@ import {
   repoUrl,
   unionCapabilities,
 } from "../state.js";
+import { useRepoClosedCount, withClosedCount } from "../closedTasks.js";
 import AppIcon from "./AppIcon.jsx";
 import BranchField from "./BranchField.jsx";
 import ItemGlyph, { GlyphLabel } from "./ItemGlyph.jsx";
@@ -95,6 +96,36 @@ import { repoApiRoot } from "../repoApi.js";
 export function sameWorkflowPath(path, typed) {
   const t = (typed || "").trim();
   return t !== "" && (path === t || path.endsWith(`/${t}`));
+}
+
+// issueImportDraftOf is the issue importer's text settings as the form
+// shows them: what was typed, or else what imp (the stored
+// issueImport) says, in the boxes' own shape -- the interval in whole
+// minutes, empty for the default.
+export function issueImportDraftOf(draft, imp) {
+  if (draft) return draft;
+  return {
+    repo: imp?.repo || "",
+    label: imp?.label || "",
+    interval: imp?.intervalSeconds
+      ? String(Math.round(imp.intervalSeconds / 60))
+      : "",
+  };
+}
+
+// issueImportDraftUnsaved reports whether the issue importer's source,
+// label or interval boxes hold something their Save has not stored.
+// Unlike the boxes that save when left, these wait for Save, so leaving
+// the page -- "← Repos", the rail, Back, a reload -- used to take a typed
+// label with it without asking (2026-11-07 repository walkthrough).
+export function issueImportDraftUnsaved(draft, imp) {
+  if (!draft || !imp) return false;
+  const stored = issueImportDraftOf(null, imp);
+  return (
+    draft.repo !== stored.repo ||
+    draft.label !== stored.label ||
+    draft.interval !== stored.interval
+  );
 }
 
 // workflowEditsUnsaved reports whether the CI tab's workflow rows hold
@@ -360,6 +391,9 @@ function RepoOverview({ upToDate, branches, gates, onShowTab }) {
 export default function RepoPage({
   repo,
   tasks,
+  // closedPartial is useClosedTasks' partial: some closed tasks are not
+  // paged in, so this repo's closed count is asked of the server.
+  closedPartial = false,
   config,
   baseBranchGates = [],
   // onOpenComparison opens one comparison of two of this repo's refs --
@@ -385,8 +419,37 @@ export default function RepoPage({
   repoTab = null,
   onShowTab,
   showError,
+  // dismissError takes the shell's error banner down if it still says the
+  // message given (App's dismissError), so a refusal can go the moment the
+  // save that answers it succeeds.
+  dismissError = () => {},
 }) {
   const root = repoApiRoot(repo);
+  // refuseSave and settleSave pair each box's refusal with its next good
+  // save. A refused value is put back or kept in the box, and the reason
+  // goes to the shell's banner, which stays up for five seconds whatever
+  // happens next -- so a workflow fixed and saved a second later still
+  // read, under the file that had just saved, as refused. Keyed by the
+  // box, so a save that succeeds takes down only its own refusal and never
+  // an unrelated one shown since.
+  const refusals = useRef(new Map());
+  // blurSaving names the boxes that save when they are left (upstream
+  // repository, prompt extension, setup command) whose save is in
+  // flight. Leaving the page by a click blurs the box first, so its
+  // save is already on its way and there is nothing to ask about; the
+  // leave guard below skips those, and asks only about an edit no save
+  // has been started for -- a reload or a closed tab, which blur nothing.
+  const blurSaving = useRef(new Set());
+  const refuseSave = (key, err) => {
+    refusals.current.set(key, String(err?.message || err));
+    showError(err);
+  };
+  const settleSave = (key) => {
+    const message = refusals.current.get(key);
+    if (message === undefined) return;
+    refusals.current.delete(key);
+    dismissError(message);
+  };
   // gateCheck counts the saves here that can change whether this repo's
   // base branch is judged; the release pane re-reads its own copy of
   // the gate when it moves.
@@ -424,9 +487,7 @@ export default function RepoPage({
   const [caps, setCaps] = useState(null);
   const [capsSelection, setCapsSelection] = useState([]);
   const [ciCapsSelection, setCICapsSelection] = useState([]);
-  // hostdText is the default hostd box as typed (ui.RepoDefaults.
-  // DefaultHostd, read with caps above), saved on blur.
-  const [hostdText, setHostdText] = useState("");
+  const [upstreamRepoText, setUpstreamRepoText] = useState("");
   // prompt/promptText are that same shape again, for this repo's own
   // prompt extension (grain/task-114): what GET /api/repos/{owner}/
   // {name}/prompt-extension last said -- the repo's own text, the
@@ -549,14 +610,24 @@ export default function RepoPage({
   // open -- has no row, and gets an empty one rather than crashing the
   // page: its forms still work, since none of them needs the repo to be
   // known first.
-  const row = repoRows(config, tasks).find((r) => r.repo === repo) || {
-    repo,
-    total: 0,
-    counts: {},
-    blocked: 0,
-    configured: false,
-    defaults: false,
-  };
+  //
+  // The closed count is the server's while some closed tasks are not
+  // paged in (closedPartial): the pages held are the newest across every
+  // repo, and counting only those would present a floor as this repo's
+  // total. Until it answers the count says it is a floor ("12+").
+  const closedCount = useRepoClosedCount(repo, closedPartial);
+  const row = withClosedCount(
+    repoRows(config, tasks).find((r) => r.repo === repo) || {
+      repo,
+      total: 0,
+      counts: {},
+      blocked: 0,
+      configured: false,
+      defaults: false,
+    },
+    closedCount,
+  );
+  const countFloor = closedPartial && closedCount === null;
 
   const loadBranches = useCallback(async () => {
     try {
@@ -581,7 +652,7 @@ export default function RepoPage({
       setCaps(loaded);
       setCapsSelection(loaded.defaultCapabilities || []);
       setCICapsSelection(loaded.ciCapabilities || []);
-      setHostdText(loaded.defaultHostd || "");
+      setUpstreamRepoText(loaded.upstreamRepo || "");
     } catch (err) {
       showError(err);
     }
@@ -676,7 +747,7 @@ export default function RepoPage({
   // a blur that changed something from one that did not.
   const storedPromptText = prompt?.promptExtension || "";
   const storedSetupText = setup?.setupCommand || "";
-  const storedHostd = caps?.defaultHostd || "";
+  const storedUpstreamRepo = caps?.upstreamRepo || "";
 
   // capsEffective is what a task filed against this repo would actually
   // start out holding -- the line the capabilities form ends on. The
@@ -822,6 +893,7 @@ export default function RepoPage({
         method: "POST",
         body: JSON.stringify({ name: branchName }),
       });
+      settleSave("branch");
       setBranchNote(
         added && added.alreadyRequested
           ? `${branchName} is already on this repo's list (${added.status}); nothing new was added.`
@@ -830,7 +902,7 @@ export default function RepoPage({
       form.reset();
       await loadBranches();
     } catch (err) {
-      showError(err);
+      refuseSave("branch", err);
     }
   };
 
@@ -849,11 +921,12 @@ export default function RepoPage({
         method: "PUT",
         body: JSON.stringify({ ciCapabilities: toSave }),
       });
+      settleSave("ciCapabilities");
       setCaps(updated);
       setCICapsSelection(updated.ciCapabilities || []);
       await onRefreshConfig();
     } catch (err) {
-      showError(err);
+      refuseSave("ciCapabilities", err);
     }
   };
 
@@ -867,31 +940,31 @@ export default function RepoPage({
         method: "PUT",
         body: JSON.stringify({ defaultCapabilities: toSave }),
       });
+      settleSave("capabilities");
       setCaps(updated);
       setCapsSelection(updated.defaultCapabilities || []);
       await onRefreshConfig();
     } catch (err) {
-      showError(err);
+      refuseSave("capabilities", err);
     }
   };
 
-  // saveDefaultHostd sets the hostd a task filed here starts pinned to
-  // when neither the filing nor its template names one
-  // (model.RepoConfig.DefaultHostd) through PUT .../settings, which leaves
-  // every field it is not sent alone. The server normalizes the selector
-  // and refuses one no hostd in the registry answers; a refused value is
-  // put back to the stored one rather than left looking saved.
-  const saveDefaultHostd = async (selector) => {
+  const saveUpstreamRepo = async (upstream) => {
+    blurSaving.current.add("upstream");
     try {
       const updated = await api(`${root}/settings`, {
         method: "PUT",
-        body: JSON.stringify({ defaultHostd: selector }),
+        body: JSON.stringify({ upstreamRepo: upstream }),
       });
+      settleSave("upstream");
       setCaps(updated);
-      setHostdText(updated.defaultHostd || "");
+      setUpstreamRepoText(updated.upstreamRepo || "");
+      await onRefreshConfig();
     } catch (err) {
-      setHostdText(storedHostd);
-      showError(err);
+      setUpstreamRepoText(storedUpstreamRepo);
+      refuseSave("upstream", err);
+    } finally {
+      blurSaving.current.delete("upstream");
     }
   };
 
@@ -910,16 +983,20 @@ export default function RepoPage({
   // that would go missing.
   const savePromptExtension = async (textToSave) => {
     const val = typeof textToSave === "string" ? textToSave : promptText.trim();
+    blurSaving.current.add("prompt");
     try {
       const updated = await api(`${root}/prompt-extension`, {
         method: "PUT",
         body: JSON.stringify({ promptExtension: val }),
       });
+      settleSave("prompt");
       setPrompt(updated);
       setPromptText(updated.promptExtension || "");
       await onRefreshConfig();
     } catch (err) {
-      showError(err);
+      refuseSave("prompt", err);
+    } finally {
+      blurSaving.current.delete("prompt");
     }
   };
 
@@ -932,16 +1009,20 @@ export default function RepoPage({
   // it reachable, and clearing the last one is what takes it away.
   const saveSetupCommand = async (cmdToSave) => {
     const val = typeof cmdToSave === "string" ? cmdToSave : setupText.trim();
+    blurSaving.current.add("setup");
     try {
       const updated = await api(`${root}/setup-command`, {
         method: "PUT",
         body: JSON.stringify({ setupCommand: val }),
       });
+      settleSave("setup");
       setSetup(updated);
       setSetupText(updated.setupCommand || "");
       await onRefreshConfig();
     } catch (err) {
-      showError(err);
+      refuseSave("setup", err);
+    } finally {
+      blurSaving.current.delete("setup");
     }
   };
 
@@ -1004,6 +1085,12 @@ export default function RepoPage({
   // (model.RepoConfig.IssueImport) through PUT .../settings, which
   // leaves every field it is not sent alone. The orchestrator's next
   // cycle reads the row; nothing is imported here.
+  //
+  // Only a save that carried the typed source, label and interval
+  // settles them. The two switches save on their own, and flipping
+  // "Queue imported tasks at once" used to clear a label typed and not
+  // yet saved beside it: the box went back to the stored one without a
+  // word (2026-11-07 repository walkthrough).
   const saveIssueImport = async (fields) => {
     try {
       setUpToDate(
@@ -1012,10 +1099,11 @@ export default function RepoPage({
           body: JSON.stringify(fields),
         }),
       );
-      setImportDraft(null);
+      settleSave("issueImport");
+      if ("issueImportLabel" in fields) setImportDraft(null);
       await onRefreshConfig();
     } catch (err) {
-      showError(err);
+      refuseSave("issueImport", err);
     }
   };
 
@@ -1114,12 +1202,13 @@ export default function RepoPage({
         method: "PUT",
         body: JSON.stringify({ unfixableChecks: checks }),
       });
+      settleSave("unfixable");
       setUnfixable(updated);
       setUnfixableError("");
       await onRefreshConfig();
       return true;
     } catch (err) {
-      showError(err);
+      refuseSave("unfixable", err);
       return false;
     }
   };
@@ -1209,6 +1298,7 @@ export default function RepoPage({
         method: "PUT",
         body: JSON.stringify({ workflows: body }),
       });
+      settleSave("workflows");
       setWorkflows(updated);
       setWorkflowEdits((current) =>
         settleWorkflowEdits(current, sent, updated.workflows || []),
@@ -1216,7 +1306,7 @@ export default function RepoPage({
       await onRefreshConfig();
       return true;
     } catch (err) {
-      showError(err);
+      refuseSave("workflows", err);
       return false;
     }
   };
@@ -1224,10 +1314,27 @@ export default function RepoPage({
   // Asked by "← Repos" and App's popstate (leavingLosesEdits) and by the
   // browser's beforeunload, like the Releases tab's job boxes. Read
   // through a ref, since guardLeaving holds the one function it is given.
+  //
+  // It asks about the issue importer's boxes too, which wait for their
+  // own Save, and about a box that saves when left but has not been left
+  // yet: a reload or a closed tab with the cursor still in the prompt
+  // extension used to drop what was typed there without a word
+  // (2026-11-07 repository walkthrough).
+  const blurBoxUnsaved = (key, loaded, text, stored) =>
+    loaded && !blurSaving.current.has(key) && text.trim() !== stored;
   const workflowsUnsaved = useRef(() => false);
   workflowsUnsaved.current = () =>
-    workflows !== null &&
-    workflowEditsUnsaved(workflowEdits, workflows.workflows);
+    (workflows !== null &&
+      workflowEditsUnsaved(workflowEdits, workflows.workflows)) ||
+    issueImportDraftUnsaved(importDraft, upToDate?.issueImport) ||
+    blurBoxUnsaved(
+      "upstream",
+      caps !== null,
+      upstreamRepoText,
+      storedUpstreamRepo,
+    ) ||
+    blurBoxUnsaved("prompt", prompt !== null, promptText, storedPromptText) ||
+    blurBoxUnsaved("setup", setup !== null, setupText, storedSetupText);
   useEffect(() => guardLeaving(() => workflowsUnsaved.current()), []);
 
   const editWorkflow = (index, field, value) => {
@@ -1394,7 +1501,7 @@ export default function RepoPage({
                 key={s}
                 size="small"
                 className={`badge badge-${s}`}
-                label={`${STATE_LABELS[s] || s} ${count}`}
+                label={`${STATE_LABELS[s] || s} ${count}${countFloor && s === "closed" ? "+" : ""}`}
               />
             ))}
             {row.blocked > 0 && (
@@ -1418,7 +1525,8 @@ export default function RepoPage({
               },
             })}
           >
-            {row.total} task{row.total === 1 ? "" : "s"} filed here
+            {row.total}
+            {countFloor ? "+" : ""} task{row.total === 1 ? "" : "s"} filed here
           </Link>
           <Box sx={{ flex: 1 }} />
           <Button
@@ -2333,37 +2441,37 @@ export default function RepoPage({
             )}
           </Box>
 
-          <Box data-testid="repo-default-hostd">
+          <Box data-testid="repo-upstream-repo">
             <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
-              Default hostd
+              Upstream pull-request repository
             </Typography>
             {caps === null ? (
               <Typography variant="body2" color="text.secondary">
-                Loading default hostd…
+                Loading upstream repository…
               </Typography>
             ) : (
               <Stack spacing={1}>
                 <TextField
-                  id={`${refusalId}-hostd`}
-                  name="repoDefaultHostd"
-                  label={`Default hostd for ${repo}`}
-                  placeholder="gpu=yes"
-                  helperText="Where the host work of a task filed against this repo runs when neither the task nor its template names a hostd: a hostd's name, or label=value[,label=value]. Leave empty for the default hostd."
-                  value={hostdText}
-                  onChange={(e) => setHostdText(e.target.value)}
+                  id={`${refusalId}-upstream-repo`}
+                  name="repoUpstreamRepo"
+                  label={`Upstream repository for ${repo}`}
+                  placeholder="upstream-owner/repo"
+                  helperText="When set (owner/name), tasks targeting this fork push branches to this repository while grain fetches base refs from and opens cross-repository pull requests against the upstream repository. Leave empty to open pull requests on this repository itself."
+                  value={upstreamRepoText}
+                  onChange={(e) => setUpstreamRepoText(e.target.value)}
                   onBlur={(e) => {
                     const trimmed = e.target.value.trim();
-                    if (trimmed !== storedHostd) {
-                      saveDefaultHostd(trimmed);
+                    if (trimmed !== storedUpstreamRepo) {
+                      saveUpstreamRepo(trimmed);
                     }
                   }}
                   autoComplete="off"
                   inputProps={{
                     ...identifierField,
-                    "data-testid": "repo-default-hostd-input",
+                    "data-testid": "repo-upstream-repo-input",
                     "aria-describedby": refusedBy(
                       readOnly,
-                      `${refusalId}-hostd-helper-text`,
+                      `${refusalId}-upstream-repo-helper-text`,
                     ),
                   }}
                   fullWidth
@@ -2373,19 +2481,15 @@ export default function RepoPage({
                 <Typography
                   variant="body2"
                   color="text.secondary"
-                  data-testid="repo-default-hostd-summary"
+                  data-testid="repo-upstream-repo-summary"
                 >
-                  A task filed against {repo} runs its host work on{" "}
-                  {storedHostd ? (
-                    <>
-                      hostd{" "}
-                      <code style={{ overflowWrap: "anywhere" }}>
-                        {storedHostd}
-                      </code>
-                      , unless it or its template names another
-                    </>
+                  Pull requests for tasks targeting {repo} open against{" "}
+                  {storedUpstreamRepo ? (
+                    <code style={{ overflowWrap: "anywhere" }}>
+                      {storedUpstreamRepo}
+                    </code>
                   ) : (
-                    "the default hostd, unless it or its template names one"
+                    <code style={{ overflowWrap: "anywhere" }}>{repo}</code>
                   )}
                   .
                 </Typography>
@@ -2564,21 +2668,8 @@ export default function RepoPage({
             ) : (
               (() => {
                 const imp = upToDate.issueImport;
-                const draft = importDraft || {
-                  repo: imp.repo || "",
-                  label: imp.label || "",
-                  interval: imp.intervalSeconds
-                    ? String(Math.round(imp.intervalSeconds / 60))
-                    : "",
-                };
-                const dirty =
-                  importDraft !== null &&
-                  (draft.repo !== (imp.repo || "") ||
-                    draft.label !== (imp.label || "") ||
-                    draft.interval !==
-                      (imp.intervalSeconds
-                        ? String(Math.round(imp.intervalSeconds / 60))
-                        : ""));
+                const draft = issueImportDraftOf(importDraft, imp);
+                const dirty = issueImportDraftUnsaved(importDraft, imp);
                 const edit = (field) => (e) =>
                   setImportDraft({ ...draft, [field]: e.target.value });
                 // The fields as typed, in the shape PUT .../settings takes.

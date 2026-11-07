@@ -99,7 +99,7 @@ func TestCheckConfigRefusesWhatCannotBeRepairedWithoutARestart(t *testing.T) {
 			c.UpgradeSrcDir = "/src"
 		}, "-upgrade-install-path is required"},
 		{"upgrade to an image with nowhere to record it", func(c *daemon.Config) {
-			c.UpgradeImage = "ghcr.io/bwsalmon/grain:latest"
+			c.UpgradeImage = "docker.io/grainai/grain:latest"
 		}, "-upgrade-image-ref-file is required"},
 		{"no workers", func(c *daemon.Config) { c.MaxWorkers = 0 }, "-max-workers must be at least 1"},
 		// Not merely a silly number: it is the value loadConfig falls
@@ -108,11 +108,9 @@ func TestCheckConfigRefusesWhatCannotBeRepairedWithoutARestart(t *testing.T) {
 		{"no interval to reconcile at", func(c *daemon.Config) { c.PollInterval = 0 }, "-poll-interval must be positive"},
 		{"a negative interval", func(c *daemon.Config) { c.PollInterval = -time.Second }, "-poll-interval must be positive"},
 		{"negative mergers", func(c *daemon.Config) { c.MaxMergers = -1 }, "-max-mergers cannot be negative"},
-		{"backup-interval on postgres", func(c *daemon.Config) {
-			c.DbDriver = "postgres"
-			c.DbDSN = "postgres://localhost/grain"
-			c.BackupInterval = time.Hour
-		}, "-backup-interval requires SQLite"},
+		{"negative backup-interval", func(c *daemon.Config) {
+			c.BackupInterval = -time.Minute
+		}, "-backup-interval cannot be negative"},
 		// The CI cache's bounds: 0 in any of them is "grain's own
 		// default" and is allowed (see below), so only a number that
 		// cannot mean a bound at all is refused.
@@ -176,6 +174,17 @@ func TestCheckConfigAllowsPostgresWithNoDSNWhenEmbeddedAvailable(t *testing.T) {
 	cfg.DbDSN = ""
 	if err := checkConfig(cfg); err != nil {
 		t.Fatalf("checkConfig should allow postgres with empty DSN when embedded postgres is available: %v", err)
+	}
+}
+
+func TestCheckConfigAllowsScheduledBackupsOnPostgres(t *testing.T) {
+	t.Parallel()
+	cfg := startable()
+	cfg.DbDriver = "postgres"
+	cfg.DbDSN = "postgres://localhost/grain"
+	cfg.BackupInterval = 24 * time.Hour
+	if err := checkConfig(cfg); err != nil {
+		t.Fatalf("checkConfig should allow -backup-interval on postgres: %v", err)
 	}
 }
 
@@ -274,6 +283,21 @@ func TestCheckConfigRefusesRunHostsWithContainerSandboxes(t *testing.T) {
 	cfg.GranuleSSHUser, cfg.GranuleWorkspace, cfg.GranuleGitProxyHost = "root", "/home/debian", "172.18.0.1"
 	if err := checkConfig(cfg); err != nil {
 		t.Fatalf("checkConfig(-run-host-image with -granule-sandboxes) = %v, want it to start", err)
+	}
+}
+
+func TestCheckConfigRefusesRunHostsWithHostSandboxes(t *testing.T) {
+	t.Parallel()
+	cfg, _, unknown, err := parseDaemonArgs([]string{
+		"-data-dir", "/var/lib/grain/data", "-sandbox-dir", "/var/lib/grain/data/scratches",
+		"-host-sandboxes", "-allow-unisolated-host-sandboxes", "-run-host-image", "example/grain",
+	})
+	if err != nil || len(unknown) > 0 {
+		t.Fatalf("parseDaemonArgs = %v, unknown %v", err, unknown)
+	}
+	err = checkConfig(cfg)
+	if err == nil || !strings.Contains(err.Error(), "-run-host-image") || !strings.Contains(err.Error(), "-host-sandboxes") {
+		t.Fatalf("checkConfig(-run-host-image with -host-sandboxes) = %v, want a refusal naming both flags", err)
 	}
 }
 

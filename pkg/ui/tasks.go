@@ -15,6 +15,7 @@
 package ui
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -62,7 +63,7 @@ type Task struct {
 	Goal        *model.TaskGoal `json:"goal,omitempty"`
 	ID          string          `json:"id"`
 	Title       string          `json:"title"`
-	Description string          `json:"description"`
+	Description string          `json:"description,omitempty"`
 	Author      string          `json:"author"`
 	// AuthorKind is that author's model.PrincipalKind -- "human",
 	// "agent" or "automation", Comment.AuthorKind's own vocabulary for
@@ -169,6 +170,8 @@ type Task struct {
 	// immediately restarts the task when its run exits rather than completing
 	// or parking it.
 	KeepRunning bool `json:"keepRunning,omitempty"`
+	// Admission is model.Task.Admission: "standard", "bypass" or "durable".
+	Admission string `json:"admission"`
 	// NoPort is model.Task.NoPort: this task's change is not ported to
 	// its repository's other paired branches.
 	NoPort bool `json:"noPort,omitempty"`
@@ -202,7 +205,14 @@ type Task struct {
 	// telling a reader apart from "no review".
 	ReviewTemplateID   string `json:"reviewTemplateId,omitempty"`
 	ReviewTemplateName string `json:"reviewTemplateName,omitempty"`
+	Owner              string `json:"owner"`
 	Creator            string `json:"creator,omitempty"`
+	// FiledVia is the X-Grain-Client label of the tool that filed the
+	// task (model.Task.FiledVia), and Provenance the line it reads as
+	// ("filed from jetski/1.4 by jane@example.com"); both "" for a task
+	// filed without one. A label only: it grants nothing.
+	FiledVia   string `json:"filedVia,omitempty"`
+	Provenance string `json:"provenance,omitempty"`
 	// ReviewTask is the ID of the task actually filed to review this one
 	// (model.LinkReviewTask), empty until orchestrator.SyncReviews has
 	// filed it. Paired with ReviewTemplateID it is what tells a reader
@@ -234,8 +244,13 @@ type Task struct {
 	// PathTriggerHold is the strictest `human` setting of the gating
 	// triggers holding this change (model.LinkPathTriggerHold), and
 	// PathTriggerTasks the tasks they filed, as "<trigger>=<task>".
-	PathTriggerHold  string   `json:"pathTriggerHold,omitempty"`
-	PathTriggerTasks []string `json:"pathTriggerTasks,omitempty"`
+	PathTriggerHold string `json:"pathTriggerHold,omitempty"`
+	// HumanReviewHold is every reason this change waits for a person's
+	// decision (model.LinkHumanReviewHold): a review's
+	// request_human_review, a security review's findings, a path only a
+	// human may release. Only Submit or Release hold ends it.
+	HumanReviewHold  []HumanReviewView `json:"humanReviewHold,omitempty"`
+	PathTriggerTasks []string          `json:"pathTriggerTasks,omitempty"`
 	// ReviewQuestions is the review task whose open questions this change
 	// waits on its owner's decision about (model.LinkReviewQuestions):
 	// a reply sends another run to carry the decision out, and Submit
@@ -271,7 +286,15 @@ type Task struct {
 	// PullRequest beside it is the one grain pushes to; these it only
 	// reads and comments on.
 	ExternalPullRequests []string `json:"externalPullRequests,omitempty"`
-	GeneratedFrom        string   `json:"generatedFrom,omitempty"`
+	// DerivedFrom is the pull requests ("owner/repo#number") the task's
+	// work was derived from (model.LinkDerivedFrom), and Designs the
+	// design or spec files it implements (model.LinkDesign, `grain create
+	// --design`): the provenance an external orchestrator filters and
+	// follows (external-cli spec #XC-18, #XC-19).
+	DerivedFrom   []string         `json:"derivedFrom,omitempty"`
+	Designs       []string         `json:"designs,omitempty"`
+	Context       []ContextRefView `json:"context,omitempty"`
+	GeneratedFrom string           `json:"generatedFrom,omitempty"`
 	// Origin is the pull request, issue or grain task this task's tree of
 	// work came from (model.WorkOrigin): "owner/repo#12" or "task:1766",
 	// empty for a task that has none.
@@ -329,6 +352,9 @@ type Task struct {
 	// GoogleChatSpace is the Google Chat space linked to this task
 	// (LinkGoogleChat), or "" when unlinked.
 	GoogleChatSpace string `json:"googleChatSpace,omitempty"`
+	// ExternalRef is the optional external work reference (e.g. "CA-204")
+	// carried by this task and inherited by tasks spawned from it.
+	ExternalRef string `json:"externalRef,omitempty"`
 	// Changelists are the changelists (CLs) that are this task's work, as
 	// cl/<number> (model.LinkChangelist).
 	Changelists []string `json:"changelists,omitempty"`
@@ -440,13 +466,17 @@ type Task struct {
 	// CreateTask only, like ApprovalNote.
 	ParkNote string `json:"parkNote,omitempty"`
 	// DependsOn is every task this one has declared a depends-on link to,
-	// resolved or not -- the definition. Blocked and BlockedBy are the
+	// resolved or not -- the definition. DependsOnStates carries each
+	// declared dependency's current state so text views (`grain get`,
+	// `task://<id>/record.md`) can report both the link and whether the
+	// target is still open. Blocked and BlockedBy are the
 	// signal: whether any of it (or a child-of link) is still open right
 	// now, re-derived on every read rather than pinned at creation, per
 	// docs/data-model.md's "blocked is not a state, it is derived from
 	// links" -- see model.IsBlocked.
-	DependsOn []string `json:"dependsOn,omitempty"`
-	Blocked   bool     `json:"blocked"`
+	DependsOn       []string               `json:"dependsOn,omitempty"`
+	DependsOnStates map[string]model.State `json:"dependsOnStates,omitempty"`
+	Blocked         bool                   `json:"blocked"`
 	// Parked is a blocked task whose last run parked it on those blockers
 	// through wait_for_task (model.ParkedOutcome), which the page words as
 	// "waiting on" rather than "blocked on". Set on a task's own detail.
@@ -477,6 +507,10 @@ type Task struct {
 	// sentence for one asked without a summary; "" when the task is not
 	// parked on a question, or is parked on a stopped turn.
 	QuestionSummary string `json:"questionSummary,omitempty"`
+	// AwaitingAccess is an awaiting_reply task parked on an access
+	// request (request_access) rather than a question: what it wants is
+	// a grant, which its card offers, not a reply.
+	AwaitingAccess bool `json:"awaitingAccess,omitempty"`
 	// MergeQueueBlockedAt mirrors model.Observation's own field: non-nil
 	// once the merge queue has stopped driving this task's pull request
 	// -- an automatic fix that did not take, or checks that never
@@ -661,6 +695,10 @@ type Comment struct {
 	// (model.Comment.Summary); "" on every other comment, and on a question
 	// stored before summaries existed.
 	Summary string `json:"summary,omitempty"`
+	// FiledVia and Provenance are Task.FiledVia and Task.Provenance for
+	// the comment: the X-Grain-Client label it was posted with.
+	FiledVia   string `json:"filedVia,omitempty"`
+	Provenance string `json:"provenance,omitempty"`
 	// Attachments is every file posted alongside this comment
 	// (bwsalmon/agents#522) -- metadata only, GET
 	// /api/tasks/{id}/attachments/{attachmentId} is what serves one's
@@ -696,9 +734,6 @@ func attachmentFrom(a model.AttachmentMeta) Attachment {
 // attempts, last failure: reason").
 type TaskDetail struct {
 	Task
-	// Hostd is the task's hostd pin or label selector
-	// (model.SetTaskHostd), "" for the default hostd.
-	Hostd    string    `json:"hostd,omitempty"`
 	Comments []Comment `json:"comments"`
 	// LocalScriptApprovals is the local-script calls this task's run is
 	// waiting on a person for, and the ones answered recently
@@ -755,6 +790,10 @@ type TaskDetail struct {
 	// proposed (propose_config_change, task_config_change.go): what the
 	// task pane renders as an inline diff with Approve and Reject.
 	PendingConfigChange *model.PendingConfigChange `json:"pendingConfigChange,omitempty"`
+	// PendingAccess is the access request a parked run made with
+	// request_access (task_access_request.go), each item judged against
+	// what the task holds now; nil for a task parked on none.
+	PendingAccess *AccessRequestView `json:"pendingAccess,omitempty"`
 	// CI is what grain's own CI last said about the branch this task
 	// pushed (model.Observation.CI), nil for the overwhelming majority of
 	// tasks -- one that does not hold the grain-ci capability, or whose
@@ -905,16 +944,60 @@ type Transition struct {
 	ActorLabel  string      `json:"actorLabel,omitempty"`
 	// ByLabel is ActorLabel again, under the name the frontend first
 	// read it by.
-	ByLabel string `json:"byLabel,omitempty"`
-	Reason  string `json:"reason,omitempty"`
-	Detail  string `json:"detail,omitempty"`
+	ByLabel             string `json:"byLabel,omitempty"`
+	OnBehalfOf          string `json:"onBehalfOf,omitempty"`
+	OnBehalfOfLabel     string `json:"onBehalfOfLabel,omitempty"`
+	ProposingTaskID     string `json:"proposingTaskId,omitempty"`
+	ProposingRunID      string `json:"proposingRunId,omitempty"`
+	ProposingRunAttempt int    `json:"proposingRunAttempt,omitempty"`
+	OnBehalfOfOwner     string `json:"onBehalfOfOwner,omitempty"`
+	OldOwner            string `json:"oldOwner,omitempty"`
+	NewOwner            string `json:"newOwner,omitempty"`
+	OldAdmission        string `json:"oldAdmission,omitempty"`
+	NewAdmission        string `json:"newAdmission,omitempty"`
+	Reason              string `json:"reason,omitempty"`
+	Detail              string `json:"detail,omitempty"`
 }
 
 func transitionFrom(t model.Transition) Transition {
-	out := Transition{State: t.State, At: t.At, Inferred: t.Inferred, Reason: t.Reason, Detail: t.Detail}
+	return transitionFromWithAttempt(t, 0)
+}
+
+func transitionFromWithAttempt(t model.Transition, proposingAttempt int) Transition {
+	out := Transition{
+		State:               t.State,
+		At:                  t.At,
+		Inferred:            t.Inferred,
+		Reason:              t.Reason,
+		Detail:              t.Detail,
+		ProposingTaskID:     t.ProposingTaskID,
+		ProposingRunID:      t.ProposingRunID,
+		ProposingRunAttempt: proposingAttempt,
+		OnBehalfOfOwner:     t.OnBehalfOfOwner,
+	}
+	if t.OnBehalfOf != nil {
+		out.OnBehalfOf = t.OnBehalfOf.ID
+		out.OnBehalfOfLabel = PrincipalLabel(*t.OnBehalfOf, nil)
+	}
+	if t.State == model.TransitionOwnerChanged {
+		if oldOwn, newOwn, ok := model.ParseOwnerChangeReason(t.Reason); ok {
+			out.OldOwner = oldOwn
+			out.NewOwner = newOwn
+		}
+	}
+	if t.State == model.TransitionAdmissionChanged {
+		if oldAdm, newAdm, ok := model.ParseAdmissionChangeReason(t.Reason); ok {
+			out.OldAdmission = string(oldAdm)
+			out.NewAdmission = string(newAdm)
+		}
+	}
 	if t.By != nil {
 		out.Actor, out.ActorKind, out.ActorSource = t.By.ID, string(t.By.Kind), string(t.By.Source)
-		out.ActorLabel = PrincipalLabel(*t.By, t.OnBehalfOf)
+		if t.State == model.StateProposed {
+			out.ActorLabel = ProposerLabel(t, proposingAttempt)
+		} else {
+			out.ActorLabel = PrincipalLabel(*t.By, t.OnBehalfOf)
+		}
 		out.By = out.ActorLabel
 		out.ByLabel = out.ActorLabel
 	}
@@ -1029,7 +1112,7 @@ type AttemptStartup struct {
 // because answering needs both the deployment's own deadlines, which
 // live in the orchestrator and arrive through Config.Stall, and a clock,
 // neither of which belongs in a projection.
-func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueueBlockedAt *time.Time,
+func taskFrom(t model.Task, state model.State, targetStates map[string]model.State, mergeQueueBlockedAt *time.Time,
 	repairing bool, mergeQueue model.MergeQueueActivity, activity *model.RunActivity,
 	reviewTemplateName string, span model.TaskSpan, stall string) Task {
 	priority := t.Priority
@@ -1062,13 +1145,18 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		NetworkAccess:        string(t.NetworkAccess),
 		NothingNeededAction:  string(t.NothingNeededAction),
 		KeepRunning:          t.KeepRunning,
+		Admission:            string(model.NormalizeAdmission(t.Admission)),
 		NoPort:               t.NoPort,
 		FixesBaseBranch:      model.FixesBaseBranch(t),
 		GrainBaseRepair:      model.GrainBaseRepair(t),
 		PromptExtension:      t.PromptExtension,
 		ReviewTemplateID:     t.ReviewTemplateID,
 		ReviewTemplateName:   reviewTemplateName,
+		Owner:                cmp.Or(strings.TrimSpace(t.Owner), strings.TrimSpace(t.Creator), model.DefaultTaskOwner),
 		Creator:              t.Creator,
+		FiledVia:             t.FiledVia,
+		ExternalRef:          t.ExternalRef,
+		Provenance:           provenanceLabel(t.FiledVia, cmp.Or(attributedPerson(t.Origin.Attribution), t.Creator)),
 		Capabilities:         []string{},
 		CustomFields:         customFieldValues(t.CustomFields),
 		Stacked:              t.Origin.Reason == model.ReasonFix || t.Origin.Reason == model.ReasonReview,
@@ -1131,6 +1219,12 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		if l.Kind == model.LinkExternalPR {
 			out.ExternalPullRequests = append(out.ExternalPullRequests, l.Target)
 		}
+		if l.Kind == model.LinkDerivedFrom {
+			out.DerivedFrom = append(out.DerivedFrom, l.Target)
+		}
+		if l.Kind == model.LinkDesign {
+			out.Designs = append(out.Designs, l.Target)
+		}
 		if l.Kind == model.LinkProposedBy {
 			out.GeneratedFrom = l.Target
 		}
@@ -1139,6 +1233,9 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		}
 		if l.Kind == model.LinkSecurityHold {
 			out.SecurityHold = l.Target
+		}
+		if l.Kind == model.LinkHumanReviewHold && out.HumanReviewHold == nil {
+			out.HumanReviewHold = humanReviewViews(model.HumanReviewReasons(t))
 		}
 		if l.Kind == model.LinkSecurityReviewTask {
 			out.SecurityReviewTask = l.Target
@@ -1199,14 +1296,21 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		}
 		if l.Kind == model.LinkDependsOn {
 			out.DependsOn = append(out.DependsOn, l.Target)
+			if st := targetStates[l.Target]; st != "" {
+				if out.DependsOnStates == nil {
+					out.DependsOnStates = make(map[string]model.State)
+				}
+				out.DependsOnStates[l.Target] = st
+			}
 		}
 		// A follow-up filed with its parent in depends_on carries both a
 		// child-of and a depends-on link to the same task; it is waiting
 		// on that task once, and says so once.
-		if l.Kind.Blocks() && !closed[l.Target] && !slices.Contains(out.BlockedBy, l.Target) {
+		if l.Kind.Blocks() && targetStates[l.Target] != model.StateClosed && !slices.Contains(out.BlockedBy, l.Target) {
 			out.BlockedBy = append(out.BlockedBy, l.Target)
 		}
 	}
+	out.Context = contextRefViews(t)
 	out.Blocked = len(out.BlockedBy) > 0
 	return out
 }
@@ -1224,6 +1328,8 @@ func commentFrom(c model.Comment, attachments []Attachment) Comment {
 		CreatedAt:   c.CreatedAt,
 		Handover:    c.Handover,
 		Summary:     c.Summary,
+		FiledVia:    c.FiledVia,
+		Provenance:  provenanceLabel(c.FiledVia, attributedPerson(c.Author)),
 		Attachments: attachments,
 	}
 	out.AuthorSource = string(c.Author.Actor.Source)
@@ -1340,10 +1446,15 @@ func attemptStartupFrom(r model.Run) *AttemptStartup {
 type configResponse struct {
 	Actor         string `json:"actor"`
 	ActorKind     string `json:"actorKind"`
+	ViewerOwner   string `json:"viewerOwner,omitempty"`
 	Authenticated bool   `json:"authenticated"`
 	// AuthMethod is AuthUserResponse's, so the frontend knows without a
 	// second request how the caller is signed in.
 	AuthMethod AuthMethod `json:"authMethod,omitempty"`
+	// Access is the caller's role and the scopes it resolves to, for a
+	// verified session (docs/design/access-rbac.md §6); absent for an
+	// unlimited caller such as the access code.
+	Access *AccessRoleInfo `json:"access,omitempty"`
 	// Allowed is always true: whoever holds the access code is the
 	// deployment's owner (docs/access-code.md), and nobody else gets
 	// past the gate to be refused. The frontend still reads it.
@@ -1506,6 +1617,14 @@ type configResponse struct {
 	// rather than an operator having to notice tasks have stopped moving
 	// and go searching logs to learn why (bwsalmon/agents#576).
 	ReconcilerDown bool `json:"reconcilerDown,omitempty"`
+	// DispatchBlocked is why, where the daemon recorded it
+	// (Config.DispatchConditions): the conditions holding dispatch,
+	// each with its error and since when. Absent while dispatching.
+	DispatchBlocked []DispatchCondition `json:"dispatchBlocked,omitempty"`
+	// StoreSwitch is Config.StoreSwitch: the data directory now selects a
+	// store other than the one this daemon writes to, and nothing is
+	// dispatched until it restarts. Absent when there is nothing to say.
+	StoreSwitch *StoreSwitch `json:"storeSwitch,omitempty"`
 	// InstallNotice is Config.InstallNotice: how this deployment is
 	// installed is something its operator has to fix. The frontend shows
 	// it as a standing banner and in System → Health. Absent when there
@@ -1700,6 +1819,13 @@ type configResponse struct {
 	// Filtered to what this build offers, the same as DefaultCapabilities
 	// above and for the same reason.
 	RepoDefaultCapabilities map[string][]string `json:"repoDefaultCapabilities,omitempty"`
+	// DefaultAdmission and RepoDefaultAdmissions are the same two layers
+	// for the admission setting (model.Config.DefaultAdmission,
+	// model.RepoConfig.DefaultAdmission): the new-task form's starting
+	// admission, the higher of the two winning. Only repos that set one
+	// appear in the map.
+	DefaultAdmission      string            `json:"defaultAdmission,omitempty"`
+	RepoDefaultAdmissions map[string]string `json:"repoDefaultAdmissions,omitempty"`
 	// PromptExtension mirrors model.Config.PromptExtension -- this
 	// deployment's own standing instructions for every run -- read from
 	// the store the same way AgentFramework above is.
@@ -1793,6 +1919,11 @@ type configResponse struct {
 	// repository, template and board it is filled in for; nil draws the
 	// form as built (design/design/config-repo-settings.design.md §6).
 	NewTaskForm *model.NewTaskForm `json:"newTaskForm,omitempty"`
+	// SelfUpgradeDisabled is true when -disable-self-upgrade is set, so the
+	// UI hides in-VM self-upgrade actions in favour of external lifecycle
+	// management (optionally linking to ManagementURL).
+	SelfUpgradeDisabled bool   `json:"selfUpgradeDisabled,omitempty"`
+	ManagementURL       string `json:"managementUrl,omitempty"`
 }
 
 // CustomFieldDeclaration is one declared field on the wire -- the JSON
@@ -1963,6 +2094,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	actor := s.tasks.requestActor(r.Context()).Actor
 	_, authenticated := PrincipalFromContext(r.Context())
+	viewerOwner := ""
+	if authenticated || singleTenantTrusted(r) {
+		viewerOwner = s.tasks.resolveOwnerFilter(r.Context(), "me")
+	}
 	// /api/config is served to callers nobody has vouched for, since it
 	// is what the sign-in page reads. Only a trusted source runs as the
 	// deployment's own actor (serveHTTP); anybody else who has not
@@ -1979,9 +2114,11 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	authMethod, _ := s.authMethod(r)
 	resp := configResponse{
+		Access:              accessRoleInfo(r.Context()),
 		AuthMethod:          authMethod,
 		Actor:               actor.ID,
 		ActorKind:           string(actor.Kind),
+		ViewerOwner:         viewerOwner,
 		Authenticated:       authenticated,
 		Allowed:             true,
 		IdentityNotAccepted: identityNotAccepted(r, authenticated),
@@ -1993,6 +2130,8 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		RebootEnabled:       s.tasks.Config.Reboot != nil,
 		ShutdownEnabled:     s.tasks.Config.Shutdown != nil,
 		RestartEnabled:      s.tasks.Config.Restart != nil,
+		SelfUpgradeDisabled: s.tasks.Config.DisableSelfUpgrade,
+		ManagementURL:       sanitizeManagementURL(s.tasks.Config.ManagementURL),
 		GitCredentialsConfigured: s.tasks.Config.Credentials != nil &&
 			len(s.tasks.Config.Credentials.Names()) > 0,
 		TargetRepos:  allTargetRepos,
@@ -2048,6 +2187,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		resp.DefaultModel = cfg.EffectiveDefaultModel()
 		resp.Models = allDistinctModels(*cfg)
 		resp.NetworkAccess = string(model.NormalizeNetworkAccess(cfg.NetworkAccess))
+		resp.DefaultAdmission = string(cfg.DefaultAdmission)
 		resp.PromptExtension = cfg.PromptExtension
 		// Filtered to what this build actually offers, the same way
 		// (*Client).defaultCapabilities filters before granting -- the
@@ -2069,6 +2209,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if !authenticated && !singleTenantTrusted(r) {
 		resp.Deployment = nil
 		resp.TargetRepos = []string{}
+		resp.ManagementURL = ""
 	}
 	// Outside the cfg != nil branch above: a repo can carry defaults of
 	// its own on a deployment that has never saved a settings row, the
@@ -2094,6 +2235,12 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		if !rc.Work.Empty() || len(rc.ReleaseSecrets) > 0 ||
 			len(rc.BaseBranchCIJobs) > 0 || len(rc.PostMergeDispatchJobs) > 0 {
 			resp.ReposWithReleaseSettings = append(resp.ReposWithReleaseSettings, rc.Repo.String())
+		}
+		if rc.DefaultAdmission != "" {
+			if resp.RepoDefaultAdmissions == nil {
+				resp.RepoDefaultAdmissions = make(map[string]string, len(repoConfigs))
+			}
+			resp.RepoDefaultAdmissions[rc.Repo.String()] = string(rc.DefaultAdmission)
 		}
 		var ids []string
 		for _, id := range rc.DefaultCapabilities {
@@ -2123,6 +2270,16 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.tasks.Config.ReconcilerDown != nil {
 		resp.ReconcilerDown = s.tasks.Config.ReconcilerDown()
+	}
+	// Why, with the daemon's own error text and remedy, is for a caller
+	// who has signed in: the sign-in page needs none of it, and the
+	// text names the host's ports, flags and paths. The boolean above
+	// stays, as it was.
+	if authenticated || singleTenantTrusted(r) {
+		resp.DispatchBlocked = s.tasks.dispatchBlocked()
+	}
+	if s.tasks.Config.StoreSwitch != nil {
+		resp.StoreSwitch = s.tasks.Config.StoreSwitch()
 	}
 	if s.tasks.Config.InstallNotice != nil {
 		resp.InstallNotice = s.tasks.Config.InstallNotice()
@@ -2174,18 +2331,27 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// handleListTasks answers the whole task list -- and answers a poller
-// that already has it with a 304 and no body at all. taskListCache is
-// where the reasoning for both lives, including why it cannot serve a
-// stale list. A caller who is not a system admin is answered only the
+// handleListTasks answers the live task list -- every task not closed,
+// without descriptions (taskListLive), or the whole list under
+// ?fields=full -- and answers a poller that already has it with a 304
+// and no body at all. taskListCache is where the reasoning for both
+// lives, including why it cannot serve a stale list. A caller who is not a system admin is answered only the
 // tasks of the teams they belong to (bwsalmon/grain#2415). ?repo=owner/name
 // answers only that repository's tasks.
 func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
-	if q, ok := parseTaskListQuery(r.URL.Query()); ok {
+	q, narrowed := parseTaskListQuery(r.URL.Query())
+	if q.owner != "" {
+		q.owner = s.tasks.resolveOwnerFilter(r.Context(), q.owner)
+	}
+	if narrowed {
 		s.handleFilteredTaskList(w, r, q)
 		return
 	}
-	body, etag, err := s.taskList.response(r.Context(), s.tasks, strings.TrimSpace(r.URL.Query().Get("repo")))
+	view := taskListLive
+	if q.full {
+		view = taskListFull
+	}
+	body, etag, err := s.taskList.response(r.Context(), s.tasks, q.repo, view)
 	if err != nil {
 		writeClientError(w, err)
 		return
@@ -2243,6 +2409,26 @@ func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
+	// ?comments_since= (external-cli spec #XC-18) is a polling loop's
+	// cursor: the same detail, with only the conversation items written
+	// strictly after it. Never answered 304 -- the cached ETag is the
+	// whole detail's.
+	if raw := strings.TrimSpace(r.URL.Query().Get("comments_since")); raw != "" {
+		since, perr := time.Parse(time.RFC3339Nano, raw)
+		if perr != nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("comments_since %q is not an RFC 3339 time", raw))
+			return
+		}
+		var detail TaskDetail
+		if err := json.Unmarshal(body, &detail); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		detail.Comments = commentsAfter(detail.Comments, since)
+		w.Header().Set("Cache-Control", "no-cache")
+		writeJSON(w, http.StatusOK, detail)
+		return
+	}
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("ETag", etag)
 	if etagMatches(r.Header.Get("If-None-Match"), etag) {
@@ -2286,6 +2472,7 @@ type CapabilityAuditEntry struct {
 	Grant     string          `json:"grant"`
 	AttemptID string          `json:"attemptId"`
 	At        time.Time       `json:"at"`
+	Hostd     string          `json:"hostd,omitempty"`
 	Record    json.RawMessage `json:"record,omitempty"`
 	Note      string          `json:"note,omitempty"`
 }
@@ -2331,7 +2518,13 @@ func (s *Server) handleGetTaskPrompt(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
+	r = withFiledVia(r)
 	user := s.tasks.requestPersonOrOperator(r.Context())
+	if user == "" {
+		if tok := externalTokenFromContext(r.Context()); tok != nil {
+			user = strings.TrimSpace(tok.Owner)
+		}
+	}
 	if user == "" {
 		writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
 		return
@@ -2355,16 +2548,28 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, fmt.Errorf("a signed-in user files tasks as themselves, not as %q", author))
 		return
 	}
+	if requestPerson(r.Context()) != "" && (strings.TrimSpace(req.ProposedBy) != "" || strings.TrimSpace(req.ProposalKey) != "") {
+		writeError(w, http.StatusForbidden, errors.New("proposedBy and proposalKey are daemon-internal fields"))
+		return
+	}
+	// An external agent credential files as the person who owns it
+	// (#XC-14): its requester is the owner, whatever the body says --
+	// agentAPIGate has already refused a body naming an author.
+	if tok := externalTokenFromContext(r.Context()); tok != nil {
+		req.Author = strings.TrimSpace(tok.Owner)
+	}
 	// The browser's zone when the body names none (TimeZoneHeader).
 	if strings.TrimSpace(req.TimeZone) == "" {
 		req.TimeZone = requestTimeZone(r)
 	}
 	// The fields settings/new-task-form.yml hides file as it says -- for
-	// a person's filing, never an agent's. agentAPIGate judged an agent's
-	// escalations (autoMerge, approved, writes, reads, grants, repo) on
-	// the body it sent, so a default put in after it would be a grant
-	// that gate never saw.
+	// an unlimited person's filing, never an agent's or a limited role's.
+	// agentAPIGate and roleGate judged their escalations (autoMerge,
+	// approved, writes, reads, grants, repo) on the body they sent, so a
+	// default put in after them would be a grant neither gate saw.
 	if p, ok := PrincipalFromContext(r.Context()); ok && p.Kind == model.PrincipalAgent {
+		// filed as the body says
+	} else if a := accessRoleFromContext(r.Context()); a != nil && !a.Full {
 		// filed as the body says
 	} else if cfg, err := s.tasks.Store.GetConfig(r.Context()); err == nil && cfg != nil {
 		if err := applyHiddenFormDefaults(&req, cfg.NewTaskForm); err != nil {
@@ -2372,7 +2577,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	task, err := s.tasks.CreateTask(r.Context(), req)
+	task, err := s.tasks.CreateTask(s.taskReadableContext(r), req)
 	if err != nil {
 		writeClientError(w, err)
 		return
@@ -2581,6 +2786,7 @@ type addCommentRequest struct {
 }
 
 func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
+	r = withFiledVia(r)
 	var req addCommentRequest
 	if !readAttachmentJSON(w, r, &req, func(req *addCommentRequest) []AttachmentUpload { return req.Attachments }) {
 		return
@@ -2862,7 +3068,28 @@ func writeClientError(w http.ResponseWriter, err error) {
 	}
 	var fe *ForbiddenError
 	if errors.As(err, &fe) {
+		if len(fe.body) > 0 {
+			out := make(map[string]any, len(fe.body)+2)
+			for k, v := range fe.body {
+				out[k] = v
+			}
+			out["error"] = fe.Error()
+			if fe.code != "" {
+				out["code"] = fe.code
+			}
+			writeJSON(w, http.StatusForbidden, out)
+			return
+		}
+		if fe.code != "" {
+			writeJSON(w, http.StatusForbidden, apierror.Response{Error: fe.Error(), Code: fe.code})
+			return
+		}
 		writeError(w, http.StatusForbidden, err)
+		return
+	}
+	var ue *UnprocessableError
+	if errors.As(err, &ue) {
+		writeError(w, http.StatusUnprocessableEntity, err)
 		return
 	}
 	var ecre *externalConfigRepoError
@@ -3083,4 +3310,15 @@ func readOptionalJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 		return false
 	}
 	return true
+}
+
+// commentsAfter is the comments created strictly after since, in order.
+func commentsAfter(comments []Comment, since time.Time) []Comment {
+	out := make([]Comment, 0, len(comments))
+	for _, c := range comments {
+		if c.CreatedAt.After(since) {
+			out = append(out, c)
+		}
+	}
+	return out
 }

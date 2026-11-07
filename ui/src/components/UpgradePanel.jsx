@@ -20,6 +20,7 @@ import {
   Button,
   Checkbox,
   Chip,
+  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
@@ -41,7 +42,9 @@ import {
   upgradeProgress,
 } from "../upgradeProgress.js";
 import { identifierField } from "../identifierField.js";
+import { searchFilter } from "../fuzzy.js";
 import { fetchUpgradeTargets } from "../upgradeTargets.js";
+import { HighlightedText } from "./SearchSelect.jsx";
 
 // STATUS_POLL_MS is how often this panel re-fetches /api/upgrade while
 // an upgrade is running -- fast enough that a restart landing (the
@@ -123,8 +126,27 @@ const MARK_SIZE = 96;
 // absent mode -- an older daemon serving this UI, or the shape a test
 // stubs -- gets the one sentence that is true of both rather than a
 // confident description of the wrong one.
-function ModeDescription({ mode }) {
+function ModeDescription({ mode, imageSource }) {
   if (mode === "image") {
+    if (imageSource?.source === "release-assets") {
+      const repoLabel =
+        imageSource.releaseRepository || "this deployment's release repository";
+      return (
+        <>
+          Loads the release-asset image tarball published on{" "}
+          <code>{repoLabel}</code> releases for the branch below
+          {imageSource.sourceDefault && imageSource.fallback === "registry"
+            ? " (falling back to pulling from the container registry if that release has no image assets)"
+            : imageSource.fallback === "registry"
+              ? " (with fallback to the container registry configured)"
+              : ""}
+          , verifies its SHA-256 checksum, runs it once to prove it works, and
+          then points this deployment at it and restarts. An image that fails
+          verification or the health check changes nothing, leaving this
+          deployment on the image it is already running.
+        </>
+      );
+    }
     return (
       <>
         Pulls the image CI published for the branch below, runs it once to prove
@@ -328,7 +350,7 @@ function inFlightSentence(count, atRisk) {
   if (atRisk.survive) {
     parts.push(
       `${atRisk.survive} ${atRisk.survive === 1 ? "is" : "are"} in a run ` +
-        "host or grain hostd and would be adopted by the new daemon.",
+        "host or the host agent and would be adopted by the new daemon.",
     );
   }
   return parts.join(" ");
@@ -747,7 +769,18 @@ function BranchPicker({
         if (q === "" || opts.some((o) => o.name.toLowerCase() === q)) {
           return opts;
         }
-        return opts.filter((o) => o.name.toLowerCase().includes(q));
+        const groupOrder = [];
+        for (const o of opts) {
+          const g = TARGET_GROUPS[o.kind] || "";
+          if (!groupOrder.includes(g)) groupOrder.push(g);
+        }
+        return searchFilter(opts, inputValue, (o) => o.name)
+          .map(({ item, ranges }) => ({ ...item, ranges }))
+          .sort(
+            (a, b) =>
+              groupOrder.indexOf(TARGET_GROUPS[a.kind] || "") -
+              groupOrder.indexOf(TARGET_GROUPS[b.kind] || ""),
+          );
       }}
       renderOption={(props, option) => {
         const { key, ...rest } = props;
@@ -755,9 +788,9 @@ function BranchPicker({
           ? "not allowed on this deployment"
           : CHANNEL_NOTES[option.name];
         return (
-          <li key={key} {...rest}>
+          <li key={key} {...rest} data-value={option.name}>
             <Box component="span" sx={{ fontFamily: "monospace" }}>
-              {option.name}
+              <HighlightedText text={option.name} ranges={option.ranges} />
             </Box>
             {note && (
               <Typography
@@ -889,8 +922,177 @@ function ImageChooser({
           className="upgrade-image-ref"
           sx={{ mt: 1, overflowWrap: "anywhere" }}
         >
-          Will pull <code>{will}</code>
+          {status.imageSource?.source === "release-assets" &&
+          !image.trim() &&
+          status.imageSource.releaseRepository ? (
+            <>
+              Will load release assets from{" "}
+              <code>{status.imageSource.releaseRepository}</code> as{" "}
+              <code className="upgrade-will-ref">{will}</code>
+              {status.imageSource.sourceDefault &&
+              status.imageSource.fallback === "registry"
+                ? " (or pull from the container registry if the release has no image assets)"
+                : ""}
+            </>
+          ) : (
+            <>
+              Will pull <code className="upgrade-will-ref">{will}</code>
+            </>
+          )}
         </Typography>
+      )}
+    </Box>
+  );
+}
+
+const IMAGE_SOURCE_MODE_OPTIONS = [
+  [
+    "default",
+    "Release assets (fall back to registry when release has no image assets)",
+  ],
+  ["release-assets", "Release assets only"],
+  ["registry", "Container registry only (docker pull)"],
+];
+
+function currentImageSourceMode(imageSource) {
+  if (!imageSource) return "default";
+  if (imageSource.sourceDefault) return "default";
+  if (imageSource.source === "registry") return "registry";
+  return "release-assets";
+}
+
+export function ImageSourceSettings({
+  status,
+  disabled,
+  onUpdated,
+  showError,
+}) {
+  const imageSource = status?.imageSource;
+  const [saving, setSaving] = useState(false);
+  const [repoDraft, setRepoDraft] = useState(
+    imageSource?.releaseRepository || "",
+  );
+
+  useEffect(() => {
+    setRepoDraft(imageSource?.releaseRepository || "");
+  }, [imageSource?.releaseRepository]);
+
+  if (status?.mode !== "image" || !imageSource) return null;
+
+  const modeValue = currentImageSourceMode(imageSource);
+  const locked = !!imageSource.locked;
+  const manifestSummary = imageSource.releaseAsset
+    ? `${imageSource.releaseAsset} (${imageSource.checksumAsset || `${imageSource.releaseAsset}${imageSource.checksumSuffix || ".sha256"}`})`
+    : `${imageSource.manifestAsset || "images.json"} (${imageSource.checksumSuffix || ".sha256"} checksums)`;
+
+  const saveSource = async (payload) => {
+    if (locked) return;
+    setSaving(true);
+    try {
+      const next = await api("/api/upgrade/source", {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      });
+      if (onUpdated) onUpdated(next);
+    } catch (err) {
+      if (showError) showError(err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Box
+      className="upgrade-image-source"
+      data-testid="upgrade-image-source"
+      sx={{
+        mb: 2,
+        p: 1.5,
+        border: 1,
+        borderColor: "divider",
+        borderRadius: 1,
+      }}
+    >
+      <Stack
+        direction="row"
+        alignItems="center"
+        justifyContent="space-between"
+        spacing={1}
+        sx={{ mb: 1 }}
+      >
+        <Typography variant="subtitle2">Image source</Typography>
+        {locked && (
+          <Chip
+            size="small"
+            variant="outlined"
+            label="Read-only (set by flag/env)"
+          />
+        )}
+      </Stack>
+      {status.fallbackNote && status.phase !== "running" && (
+        <Alert
+          severity="info"
+          className="upgrade-fallback-note"
+          sx={{ mb: 1.5 }}
+        >
+          Last upgrade: {status.fallbackNote}
+        </Alert>
+      )}
+      <TextField
+        select
+        name="upgradeImageSourceMode"
+        label="Source"
+        value={modeValue}
+        disabled={disabled || locked || saving}
+        onChange={(e) => {
+          const nextMode = e.target.value;
+          saveSource({
+            mode: nextMode,
+            releaseRepository: nextMode === "registry" ? "" : repoDraft.trim(),
+          });
+        }}
+        fullWidth
+        size="small"
+        margin="dense"
+        helperText={
+          locked
+            ? "Configured via -upgrade-image-source or GRAIN_UPGRADE_IMAGE_SOURCE; edit the daemon flags or environment to change it."
+            : modeValue === "default"
+              ? "Loads tarballs from repository releases when images.json is attached, and falls back to pulling from the container registry otherwise."
+              : modeValue === "release-assets"
+                ? `Loads release-asset tarballs verified against ${manifestSummary}${imageSource.fallback === "registry" ? " (with registry fallback enabled)" : ""}.`
+                : `Pulls ${status.imageRepo || "container images"} directly with docker pull.`
+        }
+      >
+        {IMAGE_SOURCE_MODE_OPTIONS.map(([val, label]) => (
+          <MenuItem key={val} value={val}>
+            {label}
+          </MenuItem>
+        ))}
+      </TextField>
+      {imageSource.source === "release-assets" && (
+        <TextField
+          name="upgradeReleaseRepository"
+          label="Release repository"
+          value={repoDraft}
+          disabled={disabled || locked || saving}
+          onChange={(e) => setRepoDraft(e.target.value)}
+          onBlur={() => {
+            const trimmed = repoDraft.trim();
+            if (!locked && trimmed !== (imageSource.releaseRepository || "")) {
+              saveSource({
+                mode: modeValue,
+                releaseRepository: trimmed,
+              });
+            }
+          }}
+          placeholder="github.com/ai-on-gke/grain"
+          inputProps={{ ...identifierField, autoComplete: "off" }}
+          fullWidth
+          size="small"
+          margin="dense"
+          helperText={`Manifest / checksums: ${manifestSummary}`}
+        />
       )}
     </Box>
   );
@@ -961,8 +1163,59 @@ function isSameRunningVersion(target, status, version, preview) {
   return false;
 }
 
+export function safeManagementUrl(raw) {
+  if (typeof raw !== "string") return "";
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  try {
+    const parsed = new URL(trimmed);
+    if (
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      parsed.hostname &&
+      !parsed.username &&
+      !parsed.password
+    ) {
+      return parsed.toString();
+    }
+  } catch {
+    // Reject malformed or relative URLs.
+  }
+  return "";
+}
+
+export function ExternallyManagedUpgradeNotice({
+  managementUrl,
+  testId = "upgrade-externally-managed",
+  linkTestId = "upgrade-management-link",
+  sx,
+}) {
+  const href = safeManagementUrl(managementUrl);
+  return (
+    <Alert severity="info" data-testid={testId} sx={sx}>
+      In-VM self-upgrade is disabled on this deployment; upgrades and instance
+      lifecycle are managed externally.
+      {href && (
+        <Box sx={{ mt: 1.25 }}>
+          <Button
+            component="a"
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            size="small"
+            variant="outlined"
+            data-testid={linkTestId}
+          >
+            Manage instance
+          </Button>
+        </Box>
+      )}
+    </Alert>
+  );
+}
+
 export default function UpgradePanel({
   showError = defaultShowError,
+  config,
   settings,
   onSaveSettings,
   version,
@@ -1146,47 +1399,83 @@ export default function UpgradePanel({
     }
   };
 
+  // Until the first read answers there is nothing to draw but that it is
+  // being read: GET /api/upgrade resolves every CLI's run location, which
+  // asks grain hostd what it offers, so behind an unreachable hostd it
+  // takes seconds, and a blank pane in the meantime reads as an empty one
+  // (2026-11-04 deployment-operations walkthrough).
   if (status === null) {
     return loadError ? (
       <Alert severity="error">
         This deployment&apos;s upgrade status could not be read ({loadError}).
         Reopen this tab to try again.
       </Alert>
-    ) : null;
+    ) : (
+      <Box sx={{ display: "flex", justifyContent: "center", py: 3 }}>
+        <CircularProgress size={28} aria-label="Reading the upgrade status" />
+      </Box>
+    );
   }
 
   const running = status.phase === "running";
   const progress = upgradeProgress(status.steps);
   const unchangedTarget =
     unchangedBranch || (!running && status.unchanged ? status.branch : "");
+  const selfUpgradeDisabled = Boolean(
+    status.selfUpgradeDisabled || config?.selfUpgradeDisabled,
+  );
+  const managementUrl = status.managementUrl || config?.managementUrl || "";
+  const fallbackRunning =
+    status.running ||
+    (version?.commit || (!version?.unversioned && version?.release)
+      ? {
+          release: version?.unversioned ? "" : version?.release || "",
+          commit: version?.commit || "",
+          modified: Boolean(version?.modified),
+        }
+      : null);
 
   return (
     <>
-      {!status.enabled && (
+      {selfUpgradeDisabled && (
+        <>
+          <RunningNow running={fallbackRunning} />
+          <ExternallyManagedUpgradeNotice
+            managementUrl={managementUrl}
+            testId="upgrade-externally-managed"
+            linkTestId="upgrade-management-link"
+            sx={{ mb: 2 }}
+          />
+        </>
+      )}
+      {!selfUpgradeDisabled && !status.enabled && (
         <Alert severity="info" sx={{ mb: 2 }}>
           Not available: this deployment was started with neither -upgrade-image
           nor -upgrade-src-dir configured (bwsalmon/agents#396, #645), so there
           is nothing here that can cut it over to another branch.
         </Alert>
       )}
-      {status.enabled && (
+      {!selfUpgradeDisabled && status.enabled && (
         <>
           <Typography
             variant="body2"
             color="text.secondary"
             sx={{ mt: -1, mb: 2 }}
           >
-            <ModeDescription mode={status.mode} /> One upgrade at a time; each
-            step below reports itself as it goes. A release that changes the
-            database schema is carried across rather than refused: this
-            deployment&rsquo;s rows are written out, the arriving build is asked
-            to import them before anything cuts over, and it rebuilds the store
-            from them at its first start &mdash; keeping the old one, moved
-            aside, for whatever the new schema has nowhere to put. The queue is
-            held for the duration &mdash; the banner will say this deployment is
-            paused, and the restart, or the upgrade failing, lifts it &mdash;
-            since a run started now would only be discarded by the restart this
-            ends in.
+            <ModeDescription
+              mode={status.mode}
+              imageSource={status.imageSource}
+            />{" "}
+            One upgrade at a time; each step below reports itself as it goes. A
+            release that changes the database schema is carried across rather
+            than refused: this deployment&rsquo;s rows are written out, the
+            arriving build is asked to import them before anything cuts over,
+            and it rebuilds the store from them at its first start &mdash;
+            keeping the old one, moved aside, for whatever the new schema has
+            nowhere to put. The queue is held for the duration &mdash; the
+            banner will say this deployment is paused, and the restart, or the
+            upgrade failing, lifts it &mdash; since a run started now would only
+            be discarded by the restart this ends in.
           </Typography>
           <RunningNow running={status.running} />
           <DiscardedRCAlert
@@ -1219,6 +1508,12 @@ export default function UpgradePanel({
             <InFlightRuns count={status.inFlightRuns} atRisk={status.atRisk} />
           )}
           <UpgradeInterrupts notes={status.upgradeInterrupts} />
+          <ImageSourceSettings
+            status={status}
+            disabled={running}
+            onUpdated={setStatus}
+            showError={reportError}
+          />
           <Dialog
             open={confirmOpen}
             onClose={() => setConfirmOpen(false)}
@@ -1328,6 +1623,18 @@ export default function UpgradePanel({
               <dd className={`upgrade-phase upgrade-phase-${status.phase}`}>
                 {status.phase}
               </dd>
+              {status.source && (
+                <>
+                  <dt>Image source</dt>
+                  <dd>{status.source}</dd>
+                </>
+              )}
+              {status.fallbackNote && (
+                <>
+                  <dt>Fallback</dt>
+                  <dd>{status.fallbackNote}</dd>
+                </>
+              )}
               {status.detail && (
                 <>
                   <dt>Detail</dt>
@@ -1341,15 +1648,15 @@ export default function UpgradePanel({
           )}
         </>
       )}
-      {settings && onSaveSettings && (
+      {!selfUpgradeDisabled && settings && onSaveSettings && (
         <UpgradeCheckSettings
           settings={settings}
           onSave={(payload) => onSaveSettings(payload, { close: false })}
         />
       )}
-      <PostgresDatabaseUpgrade
-        showError={showError}
+      <DatabaseBackend
         databaseStatus={status?.database}
+        selfUpgradeDisabled={selfUpgradeDisabled}
       />
     </>
   );
@@ -1677,270 +1984,77 @@ function UpgradeSteps({ steps, progress, now }) {
   );
 }
 
-// PostgresDatabaseUpgrade lets an operator upgrade an existing SQLite database
-// into PostgreSQL and migrate all tables and data.
-export function PostgresDatabaseUpgrade({
-  showError = defaultShowError,
+// DatabaseBackend says which store this deployment runs on, read-only,
+// and how to move it. There is no button that moves it: a store copied
+// or migrated while the daemon writes to it forks, and the daemon keeps
+// writing to the original after the copy is taken (pkg/ui/database.go).
+// A move is offline only -- stop, migrate, check, start -- and these are
+// the commands for it (docs/database.md).
+export const OFFLINE_MIGRATION_COMMANDS = [
+  "sudo systemctl stop grain-daemon.service",
+  "sudo ./scripts/setup.sh --db-driver postgres",
+  "sudo grain db check -data-dir /var/lib/grain/data",
+].join("\n");
+
+// databaseStatus is GET /api/upgrade's "database" (the same reading as
+// GET /api/database), so the pane asks nothing of its own.
+export function DatabaseBackend({
   databaseStatus,
+  selfUpgradeDisabled = false,
 }) {
-  const reportError =
-    typeof showError === "function" ? showError : defaultShowError;
-  const [dbStatus, setDbStatus] = useState(databaseStatus || null);
-  const [dsn, setDsn] = useState("");
-  const [migrateData, setMigrateData] = useState(true);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState(null);
-  const [upgrading, setUpgrading] = useState(false);
-  const [upgradeResult, setUpgradeResult] = useState(null);
-  // confirmation is the server's 202 answer to a first request: nothing
-  // has been done, and a single-use token bound to this DSN and these
-  // options has been written to the daemon's log (pkg/ui/
-  // database_confirm.go). The token is read there, on the daemon host,
-  // and typed back here; GET /api/logs blanks it out on purpose.
-  const [confirmation, setConfirmation] = useState(null);
-  const [confirmationToken, setConfirmationToken] = useState("");
-
-  // A token is bound to exactly the request it was issued for, so a
-  // changed DSN or option needs a new one rather than a doomed 403.
-  const forgetConfirmation = () => {
-    setConfirmation(null);
-    setConfirmationToken("");
-  };
-
-  useEffect(() => {
-    if (databaseStatus) {
-      setDbStatus(databaseStatus);
-    }
-  }, [databaseStatus]);
-
-  const fetchDbStatus = useCallback(async () => {
-    try {
-      const res = await api("/api/database");
-      setDbStatus(res);
-    } catch {
-      // Keep current state on fetch error
-    }
-  }, []);
-
-  const handleTestConnection = async () => {
-    setTesting(true);
-    setTestResult(null);
-    try {
-      const res = await api("/api/database/test", {
-        method: "POST",
-        body: JSON.stringify({ dsn }),
-      });
-      setTestResult({
-        ok: true,
-        message: res?.message || "PostgreSQL connection successful",
-      });
-    } catch (err) {
-      reportError(err);
-      setTestResult({
-        ok: false,
-        message: err?.message || "Connection failed",
-      });
-    } finally {
-      setTesting(false);
-    }
-  };
-
-  const handleUpgrade = async (e) => {
-    if (e) e.preventDefault();
-    setUpgrading(true);
-    setUpgradeResult(null);
-    const token = confirmation ? confirmationToken.trim() : "";
-    try {
-      const res = await api("/api/database/upgrade", {
-        method: "POST",
-        body: JSON.stringify(
-          token
-            ? { dsn, migrateData, confirmationToken: token }
-            : { dsn, migrateData },
-        ),
-      });
-      if (res && res.confirmationRequired) {
-        setConfirmation(res);
-        setConfirmationToken("");
-        return;
-      }
-      forgetConfirmation();
-      setUpgradeResult(res);
-      if (res && res.driver === "postgres") {
-        setDbStatus({
-          driver: "postgres",
-          dsn: res.dsn || dsn || "",
-          isSqlite: false,
-          postgresAvailable: true,
-        });
-      }
-      await fetchDbStatus();
-    } catch (err) {
-      reportError(err);
-      // Any attempt spends the token, right or wrong.
-      forgetConfirmation();
-      setUpgradeResult({
-        ok: false,
-        message: err?.message || "Migration failed",
-      });
-    } finally {
-      setUpgrading(false);
-    }
-  };
-
-  const currentStatus = dbStatus || {
-    driver: "sqlite",
-    isSqlite: true,
-    postgresAvailable: false,
-  };
+  const dbStatus = databaseStatus || null;
+  const postgres = dbStatus && dbStatus.driver === "postgres";
+  if (selfUpgradeDisabled && !postgres) {
+    return null;
+  }
 
   return (
-    <Box sx={{ mt: 4 }} className="database-upgrade-section">
+    <Box sx={{ mt: 4 }} className="database-backend-section">
       <Typography variant="subtitle2" sx={{ mb: 1 }}>
         Database Backend
       </Typography>
-
-      {!currentStatus.isSqlite && currentStatus.driver === "postgres" ? (
-        <Alert
-          severity="success"
-          sx={{ mb: 2 }}
-          className="database-postgres-active"
+      {dbStatus && (
+        <Typography
+          variant="body2"
+          sx={{ mb: 2, overflowWrap: "anywhere" }}
+          className="database-backend-current"
         >
-          This deployment is running on <strong>PostgreSQL</strong>
-          {currentStatus.dsn ? ` (${currentStatus.dsn})` : ""}.
+          This deployment runs on{" "}
+          <strong>{postgres ? "PostgreSQL" : "SQLite"}</strong>
+          {dbStatus.dsn ? ` (${dbStatus.dsn})` : ""}.
+        </Typography>
+      )}
+      {!selfUpgradeDisabled && (
+        <Alert
+          severity="info"
+          sx={{ mb: 2 }}
+          className="database-backend-offline"
+        >
+          The store is moved only with the daemon stopped, never from here: a
+          copy taken while grain is running loses everything written after it.
+          {postgres
+            ? " To move this PostgreSQL store to another server, stop the daemon, dump and restore it, check it with grain db check, and start the daemon again."
+            : " To move this SQLite store into PostgreSQL, run these on the daemon's host. setup.sh stops the daemon, migrates the store and starts it again once grain db check finds nothing missing."}{" "}
+          See docs/database.md.
         </Alert>
-      ) : (
-        <>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Currently running on <strong>SQLite</strong>. Upgrade this
-            deployment to a PostgreSQL database by migrating all tasks,
-            configurations, runs, and conversation history.
-          </Typography>
-
-          {upgradeResult && upgradeResult.ok && (
-            <Alert
-              severity="success"
-              sx={{ mb: 2 }}
-              className="database-upgrade-success"
-            >
-              {upgradeResult.message ||
-                `Successfully migrated database to PostgreSQL (${upgradeResult.tablesMigrated} tables migrated).`}
-            </Alert>
-          )}
-
-          {upgradeResult && !upgradeResult.ok && (
-            <Alert
-              severity="error"
-              sx={{ mb: 2 }}
-              className="database-upgrade-error"
-            >
-              {upgradeResult.message}
-            </Alert>
-          )}
-
-          {confirmation && (
-            <Alert
-              severity="info"
-              sx={{ mb: 2 }}
-              className="database-upgrade-confirm"
-            >
-              {confirmation.message ||
-                "A confirmation token has been written to the daemon log."}{" "}
-              Find the line on the daemon host (for example{" "}
-              <code>journalctl -u grain-daemon.service</code>) and enter its
-              token below.
-            </Alert>
-          )}
-
-          {testResult && (
-            <Alert
-              severity={testResult.ok ? "success" : "error"}
-              sx={{ mb: 2 }}
-              className={
-                testResult.ok ? "database-test-success" : "database-test-error"
-              }
-            >
-              {testResult.message}
-            </Alert>
-          )}
-
-          <form onSubmit={handleUpgrade}>
-            <TextField
-              name="postgresDSN"
-              label="PostgreSQL DSN / Connection URL"
-              value={dsn}
-              onChange={(e) => {
-                setDsn(e.target.value);
-                forgetConfirmation();
-              }}
-              placeholder="postgres://user:password@localhost:5432/grain?sslmode=disable"
-              autoComplete="off"
-              disabled={upgrading}
-              fullWidth
-              margin="normal"
-              helperText="Target PostgreSQL connection string (or leave blank if local embedded PostgreSQL is available)."
-            />
-
-            <FormControlLabel
-              control={
-                <Checkbox
-                  name="migrateData"
-                  checked={migrateData}
-                  disabled={upgrading}
-                  onChange={(e) => {
-                    setMigrateData(e.target.checked);
-                    forgetConfirmation();
-                  }}
-                />
-              }
-              label="Migrate existing SQLite data (tasks, runs, settings, and secrets)"
-              sx={{ display: "flex", mt: 1 }}
-            />
-
-            {confirmation && (
-              <TextField
-                name="confirmationToken"
-                label="Confirmation token"
-                value={confirmationToken}
-                onChange={(e) => setConfirmationToken(e.target.value)}
-                autoComplete="off"
-                disabled={upgrading}
-                required
-                fullWidth
-                margin="normal"
-                helperText="The token from the daemon log line that names this request."
-              />
-            )}
-
-            <Stack
-              direction="row"
-              spacing={2}
-              justifyContent="flex-end"
-              sx={{ mt: 2 }}
-            >
-              <Button
-                variant="outlined"
-                disabled={testing || upgrading}
-                onClick={handleTestConnection}
-                className="test-db-button"
-              >
-                {testing ? "Testing…" : "Test Connection"}
-              </Button>
-              <Button
-                type="submit"
-                variant="contained"
-                disabled={upgrading}
-                className="upgrade-db-button"
-              >
-                {upgrading
-                  ? "Migrating Database…"
-                  : confirmation
-                    ? "Confirm Migration"
-                    : "Migrate Database to PostgreSQL"}
-              </Button>
-            </Stack>
-          </form>
-        </>
+      )}
+      {!selfUpgradeDisabled && !postgres && (
+        <Box
+          component="pre"
+          className="database-backend-commands"
+          sx={{
+            m: 0,
+            p: 1.5,
+            borderRadius: 1,
+            bgcolor: "action.hover",
+            fontFamily: "monospace",
+            fontSize: "0.8125rem",
+            overflowX: "auto",
+            whiteSpace: "pre",
+          }}
+        >
+          {OFFLINE_MIGRATION_COMMANDS}
+        </Box>
       )}
     </Box>
   );

@@ -14,8 +14,8 @@
 
 import { test, expect } from "./fixtures.js";
 
-test.describe("IAP signed-in header badge and logout", () => {
-  test("aligns the email badge in the header rail, opens Access settings, and logs out to /_gcp_iap/clear_login_cookie", async ({
+test.describe("IAP signed-in sidebar footer and logout", () => {
+  test("omits any header user pill, shows the verified email in the sidebar footer, opens Access settings, and logs out to /_gcp_iap/clear_login_cookie", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -48,56 +48,42 @@ test.describe("IAP signed-in header badge and logout", () => {
 
     let clearedIAPCookie = false;
     await page.route("**/_gcp_iap/clear_login_cookie", async (route) => {
-      clearedIAPCookie = true;
       await route.fulfill({
         status: 200,
         contentType: "text/plain",
         body: "logged out of IAP",
       });
+      clearedIAPCookie = true;
     });
 
     await page.goto("/");
     const globals = page.getByTestId("page-header-globals");
-    const gear = page.getByTestId("top-bar-settings");
-    const badge = page.getByTestId("top-bar-user");
+    await expect(globals.getByTestId("top-bar-settings")).toBeVisible();
+    await expect(page.getByTestId("top-bar-user")).toHaveCount(0);
 
-    await expect(badge).toBeVisible();
-    await expect(badge).toHaveText("alice@example.com");
-
-    const globalsBox = await globals.boundingBox();
-    const gearBox = await gear.boundingBox();
-    const badgeBox = await badge.boundingBox();
-    expect(globalsBox).not.toBeNull();
-    expect(gearBox).not.toBeNull();
-    expect(badgeBox).not.toBeNull();
-
-    // Badge sits horizontally after Settings gear without overlapping,
-    // vertically centred with the gear icon within 2px, and inside globals.
-    expect(badgeBox.x).toBeGreaterThanOrEqual(gearBox.x + gearBox.width - 1);
-    const gearCenterY = gearBox.y + gearBox.height / 2;
-    const badgeCenterY = badgeBox.y + badgeBox.height / 2;
-    expect(Math.abs(gearCenterY - badgeCenterY)).toBeLessThanOrEqual(2);
-    expect(badgeBox.x + badgeBox.width).toBeLessThanOrEqual(
-      globalsBox.x + globalsBox.width + 1,
+    const aside = page.locator("aside");
+    const tile = aside.getByTestId("user-tile");
+    const sidebarLogout = aside.getByTestId("sidebar-logout");
+    await expect(tile).toBeVisible();
+    await expect(tile.getByTestId("user-tile-label")).toHaveText(
+      "alice@example.com",
     );
+    await expect(sidebarLogout).toBeVisible();
 
-    // Clicking the badge opens the menu; "Access settings" opens Settings → Access.
-    await badge.click();
-    await page.getByRole("menuitem", { name: "Access settings" }).click();
-
+    // Clicking the sidebar user tile opens Settings → Access.
+    await tile.click();
     await expect(
       page.getByText("Signed in through IAP as alice@example.com."),
     ).toBeVisible();
-    const logoutBtn = page.getByRole("button", { name: "Log out" });
-    await expect(logoutBtn).toBeVisible();
 
-    // Clicking "Log out" posts /api/auth/logout and navigates to /_gcp_iap/clear_login_cookie.
-    await logoutBtn.click();
+    // Clicking the sidebar's Log out button posts /api/auth/logout and
+    // navigates to /_gcp_iap/clear_login_cookie.
+    await sidebarLogout.click();
     await expect.poll(() => clearedIAPCookie).toBe(true);
-    expect(page.url()).toContain("/_gcp_iap/clear_login_cookie");
+    await expect(page).toHaveURL(/\/_gcp_iap\/clear_login_cookie/);
   });
 
-  test("truncates long service-account emails without wrapping the header rail", async ({
+  test("truncates long service-account emails in the sidebar footer without overflowing the rail", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
@@ -119,22 +105,28 @@ test.describe("IAP signed-in header badge and logout", () => {
     });
 
     await page.goto("/");
-    const badge = page.getByTestId("top-bar-user");
-    await expect(badge).toBeVisible();
+    await expect(page.getByTestId("top-bar-user")).toHaveCount(0);
 
-    const badgeBox = await badge.boundingBox();
-    expect(badgeBox).not.toBeNull();
-    expect(badgeBox.width).toBeLessThanOrEqual(201);
-    // The badge is one of the top tray's controls, so it takes their
-    // shared height (--header-control-size), and the email inside it
-    // stays on a single line rather than wrapping the rail taller.
-    const settingsBox = await page
-      .getByTestId("top-bar-settings")
-      .boundingBox();
-    expect(Math.abs(badgeBox.height - settingsBox.height)).toBeLessThanOrEqual(
-      1,
+    const aside = page.locator("aside");
+    const tile = aside.getByTestId("user-tile");
+    const logout = aside.getByTestId("sidebar-logout");
+    await expect(tile).toBeVisible();
+    await expect(logout).toBeVisible();
+
+    const [railBox, tileBox, logoutBox] = await Promise.all([
+      aside.boundingBox(),
+      tile.boundingBox(),
+      logout.boundingBox(),
+    ]);
+    expect(railBox).not.toBeNull();
+    expect(tileBox).not.toBeNull();
+    expect(logoutBox).not.toBeNull();
+    expect(tileBox.x).toBeGreaterThanOrEqual(railBox.x - 1);
+    expect(logoutBox.x + logoutBox.width).toBeLessThanOrEqual(
+      railBox.x + railBox.width + 1,
     );
-    const lines = await badge.locator(".MuiTypography-root").evaluate((el) => {
+
+    const lines = await tile.getByTestId("user-tile-label").evaluate((el) => {
       const lh = parseFloat(getComputedStyle(el).lineHeight) || 16;
       return Math.round(el.getBoundingClientRect().height / lh);
     });

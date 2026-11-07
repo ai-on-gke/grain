@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // docs/test-plans/2026-11-01.md §1 step 2, at desktop and phone widths in
 // both themes: tasks filed at priorities 1, 5 and 9 from New task, the
@@ -45,7 +46,7 @@ for (const size of sizes) {
           await dialog
             .getByLabel(/^Title/)
             .fill(`Priority walk ${stamp} P${priority}`);
-          await dialog.getByLabel(/^Repos/).selectOption("none");
+          await chooseOption(dialog.getByLabel(/^Repos/), "none");
           await dialog.getByLabel("Task priority").fill(String(priority));
           const created = page.waitForResponse(
             (r) =>

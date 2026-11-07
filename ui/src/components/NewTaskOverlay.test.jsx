@@ -68,6 +68,7 @@ import NewTaskOverlay from "./NewTaskOverlay.jsx";
 import api from "../api.js";
 import fileToAttachment from "../attachments.js";
 import { TASK_DRAFT_STORAGE_KEY } from "../taskDraft.js";
+import { chooseOption } from "../searchSelectTesting.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn().mockResolvedValue(null) }));
 // fileToAttachment reads a real File with FileReader -- mocked the same
@@ -95,7 +96,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Fix the thing");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
     expect(api).toHaveBeenCalledWith("/api/tasks", {
@@ -187,9 +188,9 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "De flake tests");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     expect(screen.queryByLabelText(/This fixes a red/)).toBeNull();
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/widgets");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
     await user.click(screen.getByLabelText(/This fixes a red main/));
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
@@ -217,7 +218,7 @@ describe("NewTaskOverlay", () => {
     expect(screen.getByLabelText(/Auto-merge once checks pass/)).toBeChecked();
 
     await user.type(screen.getByLabelText(/Title/), "Fix");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
     const payload = JSON.parse(api.mock.calls[0][1].body);
@@ -244,7 +245,7 @@ describe("NewTaskOverlay", () => {
     expect(screen.getByLabelText("Add to backlog")).toHaveTextContent(/^Front/);
 
     await user.type(screen.getByLabelText(/Title/), "Fix");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
     expect(JSON.parse(api.mock.calls[0][1].body).atFront).toBe(true);
@@ -262,7 +263,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Fix");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByLabelText("Add to backlog"));
     await user.click(screen.getByRole("option", { name: /^End/ }));
     await user.click(screen.getByRole("button", { name: "Create task" }));
@@ -283,7 +284,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Fix");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     const createButton = screen.getByRole("button", { name: "Create task" });
     await user.click(createButton);
 
@@ -326,13 +327,13 @@ describe("NewTaskOverlay", () => {
     expect(createButton).toBeDisabled();
     await user.type(screen.getByLabelText(/Title/), "Fix");
     expect(createButton).toBeDisabled();
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     expect(createButton).toBeEnabled();
 
     // Going back to the empty option reinstates the requirement to name
     // a repo: "no repo" is a choice made in this same list, not the
     // absence of one.
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "");
     expect(createButton).toBeDisabled();
   });
 
@@ -354,7 +355,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Fix");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     // grain/task-85: the paperclip sits inside the description box --
     // the same element the field itself is in -- rather than on a row of
     // its own beneath it.
@@ -390,7 +391,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Paste task");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
 
     const file = new File(["pasted"], "pasted.png", { type: "image/png" });
     const descriptionBox = screen.getByLabelText("Description");
@@ -429,7 +430,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "x");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
     expect(showError).toHaveBeenCalledWith(
@@ -453,7 +454,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "x");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     const file = new File(["fake"], "gone.png", { type: "image/png" });
     await user.upload(document.querySelector('input[type="file"]'), file);
     await user.click(screen.getByRole("button", { name: "Create task" }));
@@ -574,7 +575,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Draft created");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     expect(localStorage.getItem(TASK_DRAFT_STORAGE_KEY)).not.toBeNull();
 
     await user.click(screen.getByRole("button", { name: "Create task" }));
@@ -653,7 +654,7 @@ describe("NewTaskOverlay", () => {
       const user = userEvent.setup();
       const { unmount } = open("acme/widgets");
       await user.type(screen.getByLabelText(/Title/), "Gadgets draft");
-      await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/gadgets");
+      await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/gadgets");
       expect(
         JSON.parse(localStorage.getItem(TASK_DRAFT_STORAGE_KEY)).repoEdited,
       ).toBe(true);
@@ -694,7 +695,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "CL task");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.type(screen.getByLabelText("Reviewers"), "alice, bob");
     unmount();
 
@@ -728,7 +729,7 @@ describe("NewTaskOverlay", () => {
     expect(priorityInput).toHaveValue(5);
 
     await user.type(screen.getByLabelText(/Title/), "Urgent fix");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.clear(priorityInput);
     await user.type(priorityInput, "8");
     await user.click(screen.getByRole("button", { name: "Create task" }));
@@ -752,7 +753,7 @@ describe("NewTaskOverlay", () => {
 
     const priorityInput = screen.getByLabelText("Task priority");
     await user.type(screen.getByLabelText(/Title/), "Urgent fix");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.clear(priorityInput);
     await user.type(priorityInput, "1e3");
     await user.click(screen.getByRole("button", { name: "Create task" }));

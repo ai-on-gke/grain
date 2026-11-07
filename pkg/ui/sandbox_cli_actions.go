@@ -325,6 +325,7 @@ func (a SandboxCLIActions) ProposeTask(ctx context.Context, callerTaskID, runID 
 		DependsOn:       deps,
 		CustomFields:    fields,
 		Reads:           req.Reads,
+		Designs:         req.Designs,
 		ProposedBy:      callerTaskID,
 		ProposalKey:     key,
 		Capabilities:    caps,
@@ -478,7 +479,15 @@ func (a SandboxCLIActions) WaitForGitHubChecks(ctx context.Context, taskID strin
 		Branch: task.BranchName(),
 		Base:   task.Base,
 	}
-	if pr := model.TaskPullRequest(*task); pr != nil && pr.Repo.Same(*task.Target) {
+	if a.Client != nil && a.Client.Store != nil {
+		if rc, err := a.Client.Store.GetRepoConfig(ctx, *task.Target); err == nil && rc != nil {
+			if prRepo, cross, err := rc.PullRequestRepo(*task.Target); err == nil && cross {
+				scope.UpstreamOwner = prRepo.Owner
+				scope.UpstreamRepo = prRepo.Name
+			}
+		}
+	}
+	if pr := model.TaskPullRequest(*task); pr != nil && (pr.Repo.Same(*task.Target) || model.IsUpstreamRepoFor(*task.Target, pr.Repo)) {
 		scope.PullRequestNumber = pr.Number
 	}
 	return mcp.WaitForGitHubChecks(ctx, reader, scope, timeout, poll, 0, onPoll)

@@ -130,7 +130,8 @@ const LinkAutoMergeAwaitsPerson LinkKind = "auto-merge-awaits-person"
 // autoMergeHolds are the links grain's own holds put on a change that was
 // merging itself when they take its auto-merge away. The last of them
 // going is that change's hold clearing (restoreAfterHolds).
-var autoMergeHolds = []LinkKind{LinkSecurityHold, LinkBrokenRulesHold, LinkPathTriggerHold, LinkHumanOnlyHold}
+var autoMergeHolds = []LinkKind{LinkSecurityHold, LinkBrokenRulesHold, LinkPathTriggerHold, LinkHumanOnlyHold,
+	LinkHumanReviewHold}
 
 // AutoMergeAwaitsPerson reports whether a hold on t ended in a person's
 // decision (LinkAutoMergeAwaitsPerson).
@@ -195,6 +196,7 @@ func autoMergeChangeFrom(ctx context.Context) (Principal, string) {
 // and returns the event to record (nil for none). A new task records
 // nothing: what it was filed with is on the task itself.
 func guardAutoMerge(ctx context.Context, tx *sql.Tx, t *Task) (*TaskEvent, error) {
+	normalizeHumanReviewHold(t)
 	e, err := guardAutoMergeChange(ctx, tx, t)
 	if err == nil && t.AutoMerge {
 		// Whatever turned it on settled what a person was asked.
@@ -227,10 +229,16 @@ func guardAutoMergeChange(ctx context.Context, tx *sql.Tx, t *Task) (*TaskEvent,
 		Detail: autoMergeWriter()}
 	if t.AutoMerge {
 		e.Kind = TaskEventAutoMergeOn
-		if AutoMergeDeclined(*t) {
+		if held := HumanReviewHeld(*t); AutoMergeDeclined(*t) || held {
 			t.AutoMerge = false
 			e.Kind = TaskEventAutoMergeKeptOff
-			if e.Reason == "" {
+			if held && !AutoMergeDeclined(*t) {
+				// A human-review hold is released only by a person's
+				// Submit or Release, each of which drops it in the same
+				// write (human_review_hold.go).
+				e.Reason = "kept off: held for a person's review (" + HumanReviewSummary(*t) +
+					"), and only a person's Submit or Release ends that"
+			} else if e.Reason == "" {
 				e.Reason = "kept off: turned off explicitly, and only a person's Submit or PATCH turns it back on"
 			}
 			// A writer retrying every cycle (a hold whose release keeps

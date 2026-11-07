@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/bwsalmon/granule/pkg/granulefile"
-	"github.com/bwsalmon/granule/pkg/guestwrap"
-	"github.com/bwsalmon/granule/pkg/vmspec"
+	"github.com/gke-labs/granule/pkg/granulefile"
+	"github.com/gke-labs/granule/pkg/guestwrap"
+	"github.com/gke-labs/granule/pkg/vmspec"
 )
 
 // runGranule dispatches "granule granulefile <subcommand>".

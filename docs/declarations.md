@@ -105,7 +105,7 @@ four is a decision with a rule behind it (grain/task-340). The rule is
 
 The tempting rule -- "a repository may declare anything that only affects
 itself" -- is wrong, because by that test a repository could grant its own
-tasks `gcp-key`, which affects nothing but its own tasks and is exactly
+tasks `…/gcp#gcp-key`, which affects nothing but its own tasks and is exactly
 what must never happen. What makes the real rule safe is that a repository
 *already* decides what code runs: `.grain/workflows` is in the repository,
 its tests are in the repository, its setup script runs its own tree, and
@@ -293,6 +293,13 @@ network: none                      # optional; "open" or "none"
 model: claude-opus-5-5             # optional; the team's default model if left out
 interactive: true                  # optional; default false -- every task it files is a live chat
 keep-running: false                # optional; default false
+admission: standard                # optional; "standard", "bypass" or "durable" -- what the
+                                   #   retired priority-dispatch and durable grants gave
+                                   #   (capabilities.md); a bare priority-dispatch or durable
+                                   #   under capabilities: is read as this, with a warning.
+                                   #   Above standard it is a person's to give, as those grants
+                                   #   were: an agent filing from the template is refused, or
+                                   #   its proposal held for a person
 priority: 10                       # optional; positive integer (unset/0 files tasks at default 5)
 custom-fields:                     # optional; this deployment's declared fields
   team: infra
@@ -306,7 +313,9 @@ fields:                            # optional; the inputs it asks for when filed
 capabilities:                      # optional; capabilities and repository access
   - repo-read:acme/upstream        #   the filed task may fetch acme/upstream
   - repo-write:acme/downstream     #   ...and push its own branch to acme/downstream
-  - gcp-key                        #   capabilities bounded by the filing team
+  - 'https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent"}'
+                                   #   capabilities bounded by the filing team
+                                   #   (formerly gcp-key, retired in schema migration 97)
 ```
 
 #### Capabilities and repository access: `capabilities:` on a template or schedule
@@ -318,8 +327,9 @@ and `repo-write:<owner>/<repo>` on templates.
 **Team boundary.** A declared capability cannot grant what the filing team is not
 authorized to have. The team the task runs under is the bound: each capability's
 own `CapabilitySpec.AuthorizedTeams`, plus team-scoped capabilities (such as a
-team-scoped `self-debug` and `pipeline-control`). A named GCP key, `gcp-key:<name>`,
-is the deployment's since single-tenant reset stage 4e, and is dropped only when the
+team-scoped `self-debug` and `api:pipeline-control`). A named GCP key,
+`…/gcp#gcp-key` `{permission_set: <name>}` (formerly `gcp-key:<name>`, retired in
+schema migration 97), is the deployment's since single-tenant reset stage 4e, and is dropped only when the
 deployment has no key of that name ([GCP keys](team-gcp-keys.md)).
 An admin-only capability cannot be given to a non-admin team's task.
 When a task is filed (by hand, schedule firing, or path trigger) from a declaration
@@ -479,6 +489,7 @@ overlap: skip                      # optional; "skip" (default) or "allow"; "ski
                                    # when that closes; every skip is recorded (see "Skipped firings")
 review: on-failure                 # optional, workflow: only; "on-failure" (default) or "always"
 model: gemini-3.1-pro              # optional; beats the template's own; refused with suite:
+admission: bypass                  # optional; raises the template's own, never lowers it; refused with suite:
 
 # Exactly one cadence:
 every:                             # every N hours from the last firing
@@ -883,6 +894,56 @@ authority these keys hand out.
 Times of day are read against the deployment's own wall clock
 (`Config.TimeZone`); there is no per-schedule timezone here for the same
 reason there is none anywhere else (`model.Recurrence`).
+
+### `qualification:` on a suite -- a release gate
+
+A suite whose file carries a `qualification:` stanza is run by grain's
+release-qualification reconciler (`pkg/orchestrator/releasequalification.go`)
+as a release gate. The suite named `release-qualification` is one without
+the stanza, with every default below, which is how it always worked.
+
+```yaml
+# .grain/suites/edition-qualification.yml
+templates: [edition-smoke, edition-system]
+mode: until-clean
+max-passes: 1
+auto-merge: false
+qualification:
+  check: grain/edition-qualification              # default grain/release-qualification
+  candidate: synced-release                       # default rc-tags
+  stage1: { status: grain/edition-qualification } # or { workflow: nightly }, the default
+  upstream: github.com/ai-on-gke/grain            # synced-release only; this is the default
+```
+
+- `candidate: rc-tags` qualifies the newest `vX.Y.Z-rc.N` tag that is
+  neither discarded nor promoted. `candidate: synced-release` is for a
+  repository that cuts no rc tags because it builds on another module's
+  releases. It qualifies the newest commit on the default branch that
+  changed `go.mod` to pin a release (`vX.Y.Z`) of `upstream`, as long as
+  the repository has not tagged that release itself yet. The pin is either
+  the version itself or a pseudo-version of the commit the upstream tagged.
+  `upstream`'s repository, whose tags name its releases, is the module
+  path's second and third elements. A red verdict is retried by landing
+  another `go.mod` change that pins the same release.
+- `stage1` is what has to be green on the candidate before any item is
+  filed. It is either the newest run of a workflow (by its `name:`) or
+  the newest commit status of a context.
+- `check` is the check run the verdict is posted as, on the candidate's
+  commit.
+
+Every item gets `rc_tag` (the rc tag, or the release for a synced
+release), `rc_sha` (the candidate commit) and `release` (`vX.Y.Z`), and
+its closing note's `Qualified-Tag:` has to name `rc_tag`. The verdict
+works the same way in both modes: one flake re-run, infrastructure
+re-runs, and the suite's last item filed only after every other item has
+passed. The red-candidate notifications and `grain/rc-hold` are about rc
+tags, so a synced release doesn't raise them. Its failed check run is
+the signal.
+
+The stanza is kept beside the declaration's provenance
+(`repo_declaration_qualification`), as a template's `push:` is, so it
+is only ever what the default branch says. The settings export doesn't
+carry it, and it is accepted in a repository's files only.
 
 ### `.grain/workflows/<name>.yml` -- a workflow's own cron
 

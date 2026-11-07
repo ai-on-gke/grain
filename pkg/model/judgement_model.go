@@ -58,7 +58,11 @@ var JudgementModelRanking = []string{
 	"fable-5-1",
 	"claude-sonnet-5-5",
 	"sonnet-5-5",
+	"gemini-4-argon",
+	"gemini-4-argon-high",
+	"gemini-4-argon-medium",
 	"gemini-3-1-pro",
+	"gemini-3-1-pro-high",
 	"gpt-5",
 }
 

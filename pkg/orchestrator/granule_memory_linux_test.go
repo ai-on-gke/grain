@@ -19,7 +19,7 @@ package orchestrator
 import (
 	"testing"
 
-	"github.com/bwsalmon/granule/pkg/vmspec"
+	"github.com/gke-labs/granule/pkg/vmspec"
 )
 
 // GranuleMemoryLimitMB overrides granule's own derived container limit

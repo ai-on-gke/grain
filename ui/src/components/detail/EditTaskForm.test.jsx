@@ -17,6 +17,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import DetailOverlay from "../DetailOverlay.jsx";
 import api from "../../api.js";
+import { optionValues } from "../../searchSelectTesting.js";
 import { resetDetailMocks, baseTask, config } from "./testFixtures.js";
 
 vi.mock("../../api.js", () => ({ default: vi.fn().mockResolvedValue(null) }));
@@ -312,8 +313,8 @@ describe("DetailOverlay edit form", () => {
     await openEdit(user, { ...baseTask, agentBackendId: "claude-day" }, act);
 
     expect(
-      screen.getByText("Claude day · Claude (does not serve gpt-5.1)"),
-    ).toBeInTheDocument();
+      screen.getByRole("combobox", { name: "Specific connection" }),
+    ).toHaveValue("Claude day · Claude (does not serve gpt-5.1)");
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     act.mock.calls[0][0]();
@@ -347,6 +348,35 @@ describe("DetailOverlay edit form", () => {
       .closest(".MuiFormControl-root")
       .querySelector("label");
     expect(label).toHaveAttribute("data-shrink", "true");
+  });
+
+  // grain/task-2910: the review picker is searched rather than scrolled,
+  // so a word from anywhere in a template's name finds it.
+  it("finds a review template by any word of its name", async () => {
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={baseTask}
+        tasks={[]}
+        config={config}
+        templates={[
+          { id: "7", name: "Security pass" },
+          { id: "8", name: "Docs pass" },
+        ]}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const review = screen.getByRole("combobox", { name: "Review" });
+    await user.click(review);
+    await user.clear(review);
+    await user.type(review, "secur");
+    expect(optionValues(review)).toEqual(["7"]);
+    await user.keyboard("{Enter}");
+    expect(review).toHaveValue("Security pass");
   });
 
   // Once the review task exists there is nothing left to choose: exactly
@@ -598,4 +628,28 @@ describe("DetailOverlay edit form", () => {
       expect(JSON.parse(api.mock.calls[0][1].body).priority).toBe(3);
     },
   );
+
+  it("edits and clears externalRef via the PATCH endpoint", async () => {
+    const act = vi.fn().mockResolvedValue(true);
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={{ ...baseTask, externalRef: "CA-204" }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const refInput = screen.getByLabelText("External ref");
+    expect(refInput).toHaveValue("CA-204");
+    await user.clear(refInput);
+    await user.paste("CA-205");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    act.mock.calls[0][0]();
+    expect(JSON.parse(api.mock.calls[0][1].body).externalRef).toBe("CA-205");
+  });
 });

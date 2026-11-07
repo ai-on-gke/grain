@@ -246,13 +246,22 @@ type daemonShape struct {
 }
 
 // systemdShape is a deployment scripts/setup.sh installed: a unit, a
-// journal, and a script that rewrites the unit.
-func systemdShape() daemonShape {
+// journal, and a script that rewrites the unit -- or `grain
+// init-workstation`'s user unit, which is the same shape with the
+// journal read through --user and the unit written by that command.
+// unit is the one this process runs under (systemlog.DaemonUnit), so
+// the log command names the journal that actually holds this process's
+// lines.
+func systemdShape(unit systemlog.Unit) daemonShape {
+	flagFix := "Re-running scripts/setup.sh on the host rewrites the unit."
+	if unit.User {
+		flagFix = "Re-running `grain init-workstation` rewrites the unit."
+	}
 	return daemonShape{
 		startsScope: fmt.Sprintf("in the last %d minutes", int(restartWindow/time.Minute)),
-		flagSource:  "this host's grain-daemon.service",
-		flagFix:     "Re-running scripts/setup.sh on the host rewrites the unit.",
-		logCommand:  "journalctl -u grain-daemon.service",
+		flagSource:  "this host's " + unit.Name,
+		flagFix:     flagFix,
+		logCommand:  unit.LogCommand(),
 	}
 }
 
@@ -297,7 +306,7 @@ type daemonHealth struct {
 // recorded (restart_requests.go); nil is a deployment that has none, and
 // every start after the first then counts towards a loop.
 func newDaemonHealth(startedAt time.Time, unknownFlags []string, journal journalReader, requests restartRequestTimes) *daemonHealth {
-	h := &daemonHealth{startedAt: startedAt, unknownFlags: unknownFlags, shape: systemdShape(), window: restartWindow}
+	h := &daemonHealth{startedAt: startedAt, unknownFlags: unknownFlags, shape: systemdShape(systemlog.DefaultDaemonUnit), window: restartWindow}
 	h.count = func() (startCount, error) {
 		if journal == nil {
 			return startCount{}, fmt.Errorf("this deployment has no journal to count starts in")

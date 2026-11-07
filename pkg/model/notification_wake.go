@@ -17,19 +17,18 @@ package model
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 )
 
 // IsDurableTask reports whether t rests between wakes and is woken by a
-// note or a notification: it holds DurableCapability, or it is a standing
+// note or a notification: its admission is durable, or it is a standing
 // task (IsStandingTemplateID) -- the pipeline steward, today.
 func IsDurableTask(t Task) bool {
 	if IsStandingTemplateID(t.TemplateID) {
 		return true
 	}
-	return slices.ContainsFunc(t.Grants, func(g Grant) bool { return g.Capability == DurableCapability })
+	return t.IsDurable()
 }
 
 // WakeRestingTask re-queues id if it is resting -- awaiting_reply with
@@ -65,7 +64,7 @@ func (s *Store) WakeRestingTask(ctx context.Context, id, reason string, now time
 		}
 		obs = &Observation{}
 	}
-	if obs.PendingSecret != "" || obs.PendingConfigChange != nil {
+	if obs.PendingSecret != "" || obs.PendingConfigChange != nil || obs.PendingAccess != nil {
 		return false, nil
 	}
 	if obs.PendingQuestionCommentID != nil {
@@ -130,7 +129,8 @@ func investigateNotificationTemplate() *Template {
 			"whether it is still true, and what a person should do about it. Report that in your " +
 			"closing note.",
 		Grants: []Grant{
-			{Capability: "self-debug", Via: GrantByGrain},
+			{Capability: APIGrantPrefix + "self-debug", Via: GrantByGrain},
+			{Capability: GrainSourceGrant, Via: GrantByGrain},
 			{Capability: APIGrantPrefix + "ci-read", Via: GrantByGrain},
 		},
 	}

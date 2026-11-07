@@ -154,7 +154,7 @@ func TestARerunAddsTheDetachedEntriesToAnOlderAllowlist(t *testing.T) {
 // operator's own claude and an install without hostd keep what they had.
 func TestClaudeDefaultsToDetachedWithHostd(t *testing.T) {
 	out, _ := resolveHostd(t, "GRAIN_HOSTD=1", "GRAIN_CLAUDE_PATH=")
-	contains(t, out, "claude runs detached through hostd")
+	contains(t, out, "claude runs detached through the host agent")
 	got := func(env ...string) string {
 		out := runBash(t, logFn+shellFunction(t, "resolve_hostd")+`resolve_hostd; echo "RUN=$GRAIN_CLAUDE_RUN"`,
 			append([]string{"GRAIN_USER=grain", "GRAIN_AGY_PATH=", "HOSTD_AGY_PATH=",

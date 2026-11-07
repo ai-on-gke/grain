@@ -144,6 +144,55 @@ func (p *GitProxy) upstreamCommits(ctx context.Context, sandbox string, req GitR
 	return readUploadPackResult(io.LimitReader(stream, p.maxBodyBytes("git-receive-pack")), hashLen)
 }
 
+// upstreamRefs is the ref advertisement of the repository req pushes to,
+// and the branch its HEAD names: where a declared push's new tip has to
+// be found already (pushCheck.onHistory). Asked the way upstreamCommits
+// asks, with the credential the push would be forwarded with.
+func (p *GitProxy) upstreamRefs(ctx context.Context, sandbox string, req GitRequest) (map[string]string, string, error) {
+	var upstream UpstreamResponse
+	var err error
+	if p.Local != nil && req.Host == "" && p.Local.Matches(req.Owner, req.Repo) {
+		upstream, err = p.Local.ForwardRepo(req.Owner, req.Repo, "GET", "info/refs", "service=git-upload-pack", nil, nil)
+		if err != nil {
+			return nil, "", fmt.Errorf("asking the local repository: %w", err)
+		}
+	} else {
+		credential, notConfigured, err := p.selectCredential(ctx, sandbox, req.Host, req.Owner, req.Repo)
+		switch {
+		case err != nil:
+			return nil, "", err
+		case notConfigured != "":
+			return nil, "", errors.New(notConfigured)
+		case credential.SSH != nil:
+			return nil, "", errors.New("the remote is reached over SSH, which this check does not ask")
+		}
+		forwarder, err := p.forwarderFor(credential)
+		if err != nil {
+			return nil, "", err
+		}
+		upstream, err = forwarder.Forward("GET", fmt.Sprintf("/%s/%s.git/info/refs", req.Owner, req.Repo),
+			"service=git-upload-pack", nil, nil, credential.Token)
+		if err != nil {
+			return nil, "", fmt.Errorf("asking the remote: %w", err)
+		}
+		p.audit().Record(AuditEntry{
+			Time: p.now(), Sandbox: sandbox, Host: req.Host, Owner: req.Owner, Repo: req.Repo,
+			Action: "info/refs", Credential: credential.Name, Outcome: "declared push check: " + forwardedOutcome(credential, upstream.Status),
+		})
+	}
+	var stream io.Reader
+	if upstream.Stream != nil {
+		defer upstream.Stream.Close()
+		stream = upstream.Stream
+	} else {
+		stream = strings.NewReader(string(upstream.Body))
+	}
+	if upstream.Status != 200 {
+		return nil, "", fmt.Errorf("the remote answered %d", upstream.Status)
+	}
+	return readRefAdvertisementHead(io.LimitReader(stream, maxRefAdvertisementBytes))
+}
+
 // uploadPackRequest is a protocol-v0 upload-pack request for wants, with
 // have as the one commit the client already has. It asks for no
 // side-band and no thin pack, so the pack comes back raw and whole.

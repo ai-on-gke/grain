@@ -14,54 +14,76 @@
 
 package model
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
-func TestGitCredentialOverrideFindsItsOwnGrant(t *testing.T) {
+func TestGitCredentialOverrideFindsCanonicalAndLegacyGrant(t *testing.T) {
 	grants := []Grant{
 		{Capability: "gemini-key", Via: GrantByFolder},
 		GitCredentialGrant("workflow"),
 	}
-	name, ok := gitCredentialOverride(grants)
+	name, ok, err := GitCredentialOverride(grants)
+	if err != nil {
+		t.Fatalf("GitCredentialOverride canonical: %v", err)
+	}
 	if !ok || name != "workflow" {
 		t.Errorf("name=%q ok=%v, want %q true", name, ok, "workflow")
+	}
+
+	legacyGrants := []Grant{
+		{Capability: "github-credential:release-bot", Via: GrantByLabel},
+	}
+	name, ok, err = GitCredentialOverride(legacyGrants)
+	if err != nil {
+		t.Fatalf("GitCredentialOverride legacy: %v", err)
+	}
+	if !ok || name != "release-bot" {
+		t.Errorf("legacy name=%q ok=%v, want %q true", name, ok, "release-bot")
 	}
 }
 
 func TestGitCredentialOverrideIgnoresUnrelatedGrants(t *testing.T) {
 	grants := []Grant{{Capability: "gemini-key", Via: GrantByFolder}}
-	if _, ok := gitCredentialOverride(grants); ok {
-		t.Error("an unrelated capability should not be read as an override")
+	if _, ok, err := GitCredentialOverride(grants); err != nil || ok {
+		t.Errorf("an unrelated capability should not be read as an override (ok=%v err=%v)", ok, err)
 	}
 }
 
 func TestGitCredentialOverrideIsAbsentWithNoGrants(t *testing.T) {
-	if _, ok := gitCredentialOverride(nil); ok {
-		t.Error("no grants at all should not be read as an override")
+	if _, ok, err := GitCredentialOverride(nil); err != nil || ok {
+		t.Errorf("no grants at all should not be read as an override (ok=%v err=%v)", ok, err)
 	}
 }
 
-func TestGitCredentialOverridePicksOneWinnerDeterministically(t *testing.T) {
-	// Two named tokens on one task: the proxy uses one of them rather
-	// than refusing, and which one follows the order the grants arrive
-	// in -- Store.GitCredentialOverride reads them sorted by capability
-	// id, so the same task resolves the same way on every request.
-	grants := []Grant{
-		GitCredentialGrant("bot-two"),
-		GitCredentialGrant("release-bot"),
-	}
-	name, ok := gitCredentialOverride(grants)
-	if !ok || name != "bot-two" {
-		t.Errorf("name=%q ok=%v, want %q true", name, ok, "bot-two")
+func TestGitCredentialOverrideRefusesConflictingGrants(t *testing.T) {
+	for _, grants := range [][]Grant{
+		{GitCredentialGrant("bot-two"), GitCredentialGrant("release-bot")},
+		{{Capability: "github-credential:bot-two", Via: GrantByLabel}, GitCredentialGrant("release-bot")},
+		{{Capability: "github-credential:bot-two", Via: GrantByLabel}, {Capability: "github-credential:release-bot", Via: GrantByLabel}},
+	} {
+		_, _, err := GitCredentialOverride(grants)
+		if !errors.Is(err, ErrConflictingGitCredentials) {
+			t.Errorf("GitCredentialOverride(%v) = %v, want ErrConflictingGitCredentials", grants, err)
+		}
 	}
 }
 
 func TestGitCredentialCapabilityRoundTrips(t *testing.T) {
 	id := GitCredentialCapability("release-bot")
-	if id != "github-credential:release-bot" {
-		t.Errorf("GitCredentialCapability = %q, want %q", id, "github-credential:release-bot")
+	want := `https://grain.dev/capabilities/repo#credential={"credential":"release-bot"}`
+	if id != want {
+		t.Errorf("GitCredentialCapability = %q, want %q", id, want)
 	}
 	if name, ok := GitCredentialName(id); !ok || name != "release-bot" {
 		t.Errorf("GitCredentialName(%q) = %q, %v, want %q true", id, name, ok, "release-bot")
+	}
+	if name, ok := GitCredentialName("github-credential:release-bot"); !ok || name != "release-bot" {
+		t.Errorf("GitCredentialName(legacy) = %q, %v, want %q true", name, ok, "release-bot")
+	}
+	if got := CanonicalLegacyGrant("github-credential:release-bot"); got != want {
+		t.Errorf("CanonicalLegacyGrant(github-credential:release-bot) = %q, want %q", got, want)
 	}
 	if _, ok := GitCredentialName("gemini-key"); ok {
 		t.Error("an ordinary capability id should not read as a named GitHub token")

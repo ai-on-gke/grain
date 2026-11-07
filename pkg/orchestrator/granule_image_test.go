@@ -58,7 +58,7 @@ func TestSandboxImageReplacesTheImageInTheCreateArgs(t *testing.T) {
 
 	k := orchestrator.NewGranuleSandboxes(orchestrator.GranuleConfig{
 		StateDir:   stateDir,
-		CreateArgs: []string{"-disk-mode=overlay", "-kontur-image", "ghcr.io/bwsalmon/grain/guest:stock"},
+		CreateArgs: []string{"-disk-mode=overlay", "-kontur-image", "docker.io/grainai/sandbox:stock"},
 		SandboxImage: func(context.Context) (string, error) {
 			return "grain-sandbox-custom:abc123", nil
 		},

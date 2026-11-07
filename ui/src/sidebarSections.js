@@ -40,21 +40,25 @@ const KNOWN = new Set(SIDEBAR_SECTIONS.map((s) => s.id));
 
 // SIDEBAR_HIDDEN_STORAGE_KEY holds the ids of the sections this browser
 // hides, as a JSON array -- the same per-browser shape as grain.pinned.
-// Nothing stored means everything shown, and an id this build does not
+// Nothing stored means DEFAULT_HIDDEN_SECTIONS (CI hidden by default; an
+// explicit "[]" keeps everything shown), and an id this build does not
 // know is dropped on read, so a section added later is never hidden by
 // a list written before it existed.
 export const SIDEBAR_HIDDEN_STORAGE_KEY = "grain.sidebar.hidden";
+export const DEFAULT_HIDDEN_SECTIONS = ["ci"];
 
 export function parseHiddenSections(raw) {
-  if (!raw) return [];
+  if (raw === null || raw === undefined || raw === "") {
+    return DEFAULT_HIDDEN_SECTIONS;
+  }
   try {
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
+    if (!Array.isArray(parsed)) return DEFAULT_HIDDEN_SECTIONS;
     return SIDEBAR_SECTIONS.map((s) => s.id).filter((id) =>
       parsed.includes(id),
     );
   } catch {
-    return [];
+    return DEFAULT_HIDDEN_SECTIONS;
   }
 }
 
@@ -64,12 +68,12 @@ export function loadHiddenSections() {
       localStorage.getItem(SIDEBAR_HIDDEN_STORAGE_KEY),
     );
   } catch {
-    return [];
+    return DEFAULT_HIDDEN_SECTIONS;
   }
 }
 
 const listeners = new Set();
-let snapshot = [];
+let snapshot = DEFAULT_HIDDEN_SECTIONS;
 // memory stands in for storage that will not take a write, so the
 // choice still applies until the page reloads.
 let memory = null;
@@ -90,11 +94,7 @@ export function saveHiddenSections(ids) {
   const list = (Array.isArray(ids) ? ids : []).filter((id) => KNOWN.has(id));
   memory = null;
   try {
-    if (list.length === 0) {
-      localStorage.removeItem(SIDEBAR_HIDDEN_STORAGE_KEY);
-    } else {
-      localStorage.setItem(SIDEBAR_HIDDEN_STORAGE_KEY, JSON.stringify(list));
-    }
+    localStorage.setItem(SIDEBAR_HIDDEN_STORAGE_KEY, JSON.stringify(list));
   } catch {
     memory = list;
   }
@@ -102,7 +102,13 @@ export function saveHiddenSections(ids) {
 }
 
 export function resetHiddenSections() {
-  saveHiddenSections([]);
+  memory = null;
+  try {
+    localStorage.removeItem(SIDEBAR_HIDDEN_STORAGE_KEY);
+  } catch {
+    memory = DEFAULT_HIDDEN_SECTIONS;
+  }
+  publish();
 }
 
 function subscribe(fn) {

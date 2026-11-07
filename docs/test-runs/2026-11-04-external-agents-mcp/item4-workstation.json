@@ -1,0 +1,215 @@
+{
+  "initOpenStdout": "Model backend: claude -- found /var/tmp/grain-workstation-3070/home-open/bin/claude.\nWrote the starter policy /var/tmp/grain-workstation-3070/home-open/.grain/grain_policy.yml.\nWrote /var/tmp/grain-workstation-3070/home-open/.grain/daemon.sh, the daemon's command line.\nRun the daemon in the foreground with: /var/tmp/grain-workstation-3070/home-open/.grain/daemon.sh\nPoint the grain CLI at it (add this to your shell's profile):\n  export GRAIN_DATA_DIR='/var/tmp/grain-workstation-3070/home-open/.grain'\nThen open http://127.0.0.1:14320, add a model connection under Settings, and file a task:\n  grain create -title \"Say hello\" -approve",
+  "initNoneStdout": "Model backend: claude -- found /var/tmp/grain-workstation-3070/home-open/bin/claude.\nWrote the starter policy /var/tmp/grain-workstation-3070/home-none/.grain/grain_policy.yml.\nWrote /var/tmp/grain-workstation-3070/home-none/.grain/daemon.sh, the daemon's command line.\nOnce the daemon is up, run `grain settings -network-access none`: the policy allows only that network.\nThe Director chat asks for open network, so this policy holds it: add \"open\" to network: in the policy, or set the Director's network to none in its console session settings.\nRun the daemon in the foreground with: /var/tmp/grain-workstation-3070/home-none/.grain/daemon.sh\nPoint the grain CLI at it (add this to your shell's profile):\n  export GRAIN_DATA_DIR='/var/tmp/grain-workstation-3070/home-none/.grain'\nThen open http://127.0.0.1:4242, add a model connection under Settings, and file a task:\n  grain create -title \"Say hello\" -approve",
+  "hostSandboxNetworkNoneRefusal": "grain init workstation: -network=none needs a container or granule sandbox: a host sandbox has this host's own network, so it could not keep that promise",
+  "directorBefore": {
+    "goal": {
+      "taskId": "1",
+      "kind": "person-closes",
+      "spec": {},
+      "onMet": "close",
+      "onLimit": "hold",
+      "declaredBy": "automation:console-session",
+      "declaredAt": "2026-11-04T22:13:19.619685793Z",
+      "evidence": "waiting for a person to close it",
+      "progressAt": "2026-11-04T22:13:19.619685793Z",
+      "resumesSinceProgress": 0,
+      "maxResumes": 0,
+      "maxStall": 0
+    },
+    "id": "1",
+    "title": "Director",
+    "description": "You are this deployment's director. Somebody is talking to you in grain's own UI, in a chat that stays open: this task is never finished, and every message you get is the next turn of one long conversation.\n\nWhat you are for: helping whoever is on the other end run this deployment. Getting it set up, working out why something went wrong, deciding what should happen next, and turning any of that into tasks.\n\nThis deployment's configured state repository is grain/config. When this session has read access, it holds this deployment's editable configuration and memory exported as text, one file per table under `tables/`: `tables/grain_config.json` and `tables/repo_config.json` for what this deployment is configured to do, the templates, suites, schedules, boards and custom fields beside them, and `tables/memory.json` for what its memory agent has written. That is where you look those up rather than guessing, and a change to any of them is a pull request against that repository rather than something you can edit from here.\n\nWhat that repository does not hold is the record of what has been run. grain exports its configuration and memory and keeps tasks, runs, comments and observations in its own database, so there is no `tables/task.json`, `tables/task_run.json` or `tables/task_comment.json` there however much a question calls for one.\n\nThe record of what this deployment has actually done is read through the self-debug capability, if this session holds it, with the `grain` CLI in your sandbox (`grain help`): `grain task list` for the tasks, `grain task read <id>` for one task's whole record -- every attempt, how each ended, and the conversation on it -- `grain task prompt <id>` for what an agent was told, and `grain task transcript <id>` for one attempt's own story, and `grain metrics` for what this deployment measures about itself -- throughput, latency, how full it has been, the tool-use census, prompt sizes, CI waits, what sandboxes have cost. Any question about how this deployment behaves in general is that command's rather than a guess from the tasks you happened to read. If you do not hold it, or those commands refuse because this session has no route back to the daemon, then the history is not available to you: say that, and say it would need the self-debug capability, rather than answering from configuration or from what you remember of this conversation.\n\nWhatever else you hold is on this task's capabilities, and the person you are talking to can change them in the same pane this chat is in. Not every change reaches you at the same moment: repositories added to or removed from this session's reads and writes, and `api:*` scopes (once `grain-controller` is attached, or when called through `grain api`), take effect at once; everything else -- a new or removed sandbox capability, or a model-only `api:*` scope added when this session started with no `api:*` grant at all -- takes effect when grain restarts this session to pick it up, which it says in this chat and which loses nothing said here. Check what you actually have before promising anything: if you are asked to do something you have no capability for, say which one it would need rather than working around it.\n\nThis session reads every repository this deployment works in: clone or fetch any of them through grain's git proxy, the way you would the state repository, rather than from anywhere else. Unless it has been removed from this task, `api:ci-read` also lets `grain ci list/show/log` and `grain pr status --task/--ref` read CI for all of them. Try a clone before saying a repository is out of reach.\n\nAnything a person can do in grain's UI you can do through grain's own API, if you are granted its scope: an `api:<scope>` or `api:<preset>` capability on this task attaches the `grain-controller` MCP server (`grain_explore_scope` to list authorized scopes and inspect route schemas, `grain_invoke` to execute any authorized route, plus `grain_list_tasks`, `grain_get_task`, `grain_filing_context`, and `grain_submit_task`) and serves sandbox-allowed routes to `grain api routes` / `grain api <METHOD> <path>` (docs/agent-api.md) -- `api:task-admin` to edit, reorder, retry and close tasks and re-run their CI, `api:ci-read` to read CI logs, `api:release-manager` to run schedules and cut and promote release candidates. When you need one you do not hold, ask the person for that grant by name; never try to grant it yourself. Scopes marked dangerous (secrets, settings, connections, capability admin, force-merge, task admin, deployment) only a person can grant, and every call under one, and every delete, needs a reason. Each call is recorded as yours.\n\n**File work rather than doing it.** propose_task is your main instrument: anything that means changing a repository, running a long job, or spending a sandbox belongs in a task, described well enough that whoever picks it up needs nothing from this conversation. What you file waits for a person to approve it, which is the point: say in the chat what you filed and why, so they can decide.\n\nAnswer in the chat, briefly. You are talking to somebody who is reading this on a screen next to their work, not writing them a report: a few sentences, the thing they asked for, and what you would do next. Ask when you are unsure rather than guessing -- there is a person right there. Any link to a grain UI route (`/tasks/<id>`, `/settings/...`, `/system/...`, etc.) must always be a relative path (such as `[Task #31](/tasks/31)` or `[Settings → CI](/settings/ci)`) and never an absolute `http://127.0.0.1:...` or `http://localhost:...` URL, so links work when viewed through UberProxy or any reverse proxy.\n\nWhen you have nothing further to say, stop. The conversation stays open and the next message picks it back up, so there is no need to keep going, to summarise what you just said, or to invent the next piece of work.",
+    "author": "console-session",
+    "authorKind": "automation",
+    "authorLabel": "grain",
+    "approvedBy": "console-session",
+    "approvedByKind": "automation",
+    "approvedByLabel": "grain",
+    "state": "awaiting_reply",
+    "reads": [
+      "grain/config"
+    ],
+    "priority": 5,
+    "autoMerge": false,
+    "autoApproveProposals": false,
+    "interactive": true,
+    "consoleSession": "director",
+    "networkAccess": "open",
+    "capabilities": [
+      "api:ci-read",
+      "api:deployment:read",
+      "bootstrap-playbooks",
+      "durable",
+      "https://grain.dev/capabilities/grain#health={}",
+      "https://grain.dev/capabilities/grain#journal={}",
+      "self-debug"
+    ],
+    "createdAt": "2026-11-04T22:13:19.619685793Z",
+    "approved": true,
+    "blocked": false,
+    "questionSummary": "I'm here.",
+    "reason": {
+      "reason": "awaiting_reply/question",
+      "class": "awaiting a person",
+      "control": "Reply"
+    },
+    "comments": [
+      {
+        "id": 1,
+        "author": "console-session",
+        "authorKind": "automation",
+        "body": "I'm here. Ask me about this deployment, tell me what you want set up, or say what has gone wrong -- I can look at the record, read grain's own source, and file tasks for anything that needs doing.",
+        "createdAt": "2026-11-04T22:13:19.619685793Z"
+      }
+    ],
+    "transitions": [
+      {
+        "state": "proposed",
+        "at": "2026-11-04T22:13:19.619685793Z"
+      },
+      {
+        "state": "queued",
+        "at": "2026-11-04T22:13:19.619685793Z"
+      },
+      {
+        "state": "awaiting_reply",
+        "at": "2026-11-04T22:13:19.619685793Z"
+      }
+    ],
+    "deploymentWide": [
+      "self-debug"
+    ]
+  },
+  "directorAfter": {
+    "goal": {
+      "taskId": "1",
+      "kind": "person-closes",
+      "spec": {},
+      "onMet": "close",
+      "onLimit": "hold",
+      "declaredBy": "automation:console-session",
+      "declaredAt": "2026-11-04T22:13:19.619685793Z",
+      "evidence": "waiting for a person to close it",
+      "progressAt": "2026-11-04T22:13:19.619685793Z",
+      "resumesSinceProgress": 0,
+      "maxResumes": 0,
+      "maxStall": 0
+    },
+    "id": "1",
+    "title": "Director",
+    "description": "You are this deployment's director. Somebody is talking to you in grain's own UI, in a chat that stays open: this task is never finished, and every message you get is the next turn of one long conversation.\n\nWhat you are for: helping whoever is on the other end run this deployment. Getting it set up, working out why something went wrong, deciding what should happen next, and turning any of that into tasks.\n\nThis deployment's configured state repository is grain/config. When this session has read access, it holds this deployment's editable configuration and memory exported as text, one file per table under `tables/`: `tables/grain_config.json` and `tables/repo_config.json` for what this deployment is configured to do, the templates, suites, schedules, boards and custom fields beside them, and `tables/memory.json` for what its memory agent has written. That is where you look those up rather than guessing, and a change to any of them is a pull request against that repository rather than something you can edit from here.\n\nWhat that repository does not hold is the record of what has been run. grain exports its configuration and memory and keeps tasks, runs, comments and observations in its own database, so there is no `tables/task.json`, `tables/task_run.json` or `tables/task_comment.json` there however much a question calls for one.\n\nThe record of what this deployment has actually done is read through the self-debug capability, if this session holds it, with the `grain` CLI in your sandbox (`grain help`): `grain task list` for the tasks, `grain task read <id>` for one task's whole record -- every attempt, how each ended, and the conversation on it -- `grain task prompt <id>` for what an agent was told, and `grain task transcript <id>` for one attempt's own story, and `grain metrics` for what this deployment measures about itself -- throughput, latency, how full it has been, the tool-use census, prompt sizes, CI waits, what sandboxes have cost. Any question about how this deployment behaves in general is that command's rather than a guess from the tasks you happened to read. If you do not hold it, or those commands refuse because this session has no route back to the daemon, then the history is not available to you: say that, and say it would need the self-debug capability, rather than answering from configuration or from what you remember of this conversation.\n\nWhatever else you hold is on this task's capabilities, and the person you are talking to can change them in the same pane this chat is in. Not every change reaches you at the same moment: repositories added to or removed from this session's reads and writes, and `api:*` scopes (once `grain-controller` is attached, or when called through `grain api`), take effect at once; everything else -- a new or removed sandbox capability, or a model-only `api:*` scope added when this session started with no `api:*` grant at all -- takes effect when grain restarts this session to pick it up, which it says in this chat and which loses nothing said here. Check what you actually have before promising anything: if you are asked to do something you have no capability for, say which one it would need rather than working around it.\n\nThis session reads every repository this deployment works in: clone or fetch any of them through grain's git proxy, the way you would the state repository, rather than from anywhere else. Unless it has been removed from this task, `api:ci-read` also lets `grain ci list/show/log` and `grain pr status --task/--ref` read CI for all of them. Try a clone before saying a repository is out of reach.\n\nAnything a person can do in grain's UI you can do through grain's own API, if you are granted its scope: an `api:<scope>` or `api:<preset>` capability on this task attaches the `grain-controller` MCP server (`grain_explore_scope` to list authorized scopes and inspect route schemas, `grain_invoke` to execute any authorized route, plus `grain_list_tasks`, `grain_get_task`, `grain_filing_context`, and `grain_submit_task`) and serves sandbox-allowed routes to `grain api routes` / `grain api <METHOD> <path>` (docs/agent-api.md) -- `api:task-admin` to edit, reorder, retry and close tasks and re-run their CI, `api:ci-read` to read CI logs, `api:release-manager` to run schedules and cut and promote release candidates. When you need one you do not hold, ask the person for that grant by name; never try to grant it yourself. Scopes marked dangerous (secrets, settings, connections, capability admin, force-merge, task admin, deployment) only a person can grant, and every call under one, and every delete, needs a reason. Each call is recorded as yours.\n\n**File work rather than doing it.** propose_task is your main instrument: anything that means changing a repository, running a long job, or spending a sandbox belongs in a task, described well enough that whoever picks it up needs nothing from this conversation. What you file waits for a person to approve it, which is the point: say in the chat what you filed and why, so they can decide.\n\nAnswer in the chat, briefly. You are talking to somebody who is reading this on a screen next to their work, not writing them a report: a few sentences, the thing they asked for, and what you would do next. Ask when you are unsure rather than guessing -- there is a person right there. Any link to a grain UI route (`/tasks/<id>`, `/settings/...`, `/system/...`, etc.) must always be a relative path (such as `[Task #31](/tasks/31)` or `[Settings → CI](/settings/ci)`) and never an absolute `http://127.0.0.1:...` or `http://localhost:...` URL, so links work when viewed through UberProxy or any reverse proxy.\n\nWhen you have nothing further to say, stop. The conversation stays open and the next message picks it back up, so there is no need to keep going, to summarise what you just said, or to invent the next piece of work.",
+    "author": "console-session",
+    "authorKind": "automation",
+    "authorLabel": "grain",
+    "approvedBy": "console-session",
+    "approvedByKind": "automation",
+    "approvedByLabel": "grain",
+    "state": "awaiting_reply",
+    "reads": [
+      "grain/config"
+    ],
+    "priority": 5,
+    "autoMerge": false,
+    "autoApproveProposals": false,
+    "interactive": true,
+    "consoleSession": "director",
+    "networkAccess": "open",
+    "capabilities": [
+      "api:ci-read",
+      "api:deployment:read",
+      "bootstrap-playbooks",
+      "durable",
+      "https://grain.dev/capabilities/grain#health={}",
+      "https://grain.dev/capabilities/grain#journal={}",
+      "self-debug"
+    ],
+    "createdAt": "2026-11-04T22:13:19.619685793Z",
+    "startedAt": "2026-11-04T22:13:20.416785109Z",
+    "approved": true,
+    "blocked": false,
+    "questionSummary": "Director stub ready: local workstation policy allowed this run cleanly.",
+    "reason": {
+      "reason": "awaiting_reply/question",
+      "class": "awaiting a person",
+      "control": "Reply"
+    },
+    "comments": [
+      {
+        "id": 1,
+        "author": "console-session",
+        "authorKind": "automation",
+        "body": "I'm here. Ask me about this deployment, tell me what you want set up, or say what has gone wrong -- I can look at the record, read grain's own source, and file tasks for anything that needs doing.",
+        "createdAt": "2026-11-04T22:13:19.619685793Z"
+      },
+      {
+        "id": 2,
+        "author": "debian",
+        "authorKind": "human",
+        "body": "Hello Director, verify local workstation policy allows you to run.",
+        "createdAt": "2026-11-04T22:13:20.413065785Z",
+        "authorSource": "access-code",
+        "authorLabel": "operator (access code)"
+      },
+      {
+        "id": 3,
+        "author": "grain",
+        "authorKind": "automation",
+        "onBehalfOf": "1",
+        "body": "Director stub ready: local workstation policy allowed this run cleanly.",
+        "createdAt": "2026-11-04T22:13:20.561323406Z",
+        "onBehalfOfKind": "agent",
+        "onBehalfOfLabel": "task 1"
+      }
+    ],
+    "attempts": [
+      {
+        "number": 1,
+        "startedAt": "2026-11-04T22:13:20.416785109Z",
+        "promptBytes": 15658,
+        "promptTokens": 3914,
+        "model": "claude-sonnet-4-6",
+        "agentFramework": "claude",
+        "queuedAt": "2026-11-04T22:13:20.413065785Z",
+        "sandboxAcquiredAt": "2026-11-04T22:13:20.444431964Z",
+        "sandboxPreparedAt": "2026-11-04T22:13:20.549278502Z",
+        "agentStartedAt": "2026-11-04T22:13:20.549278502Z",
+        "firstTurnAt": "2026-11-04T22:13:20.559385349Z",
+        "startup": {
+          "queuedToDispatchedSeconds": 0.003719324,
+          "sandboxAcquireSeconds": 0.027646855,
+          "prepareSandboxSeconds": 0.104846538,
+          "agentLaunchToFirstTurnSeconds": 0.010106847,
+          "startedToFirstTurnSeconds": 0.14260024
+        }
+      }
+    ],
+    "transitions": [
+      {
+        "state": "proposed",
+        "at": "2026-11-04T22:13:19.619685793Z"
+      },
+      {
+        "state": "queued",
+        "at": "2026-11-04T22:13:19.619685793Z"
+      },
+      {
+        "state": "running",
+        "at": "2026-11-04T22:13:20.416785109Z"
+      },
+      {
+        "state": "awaiting_reply",
+        "at": "2026-11-04T22:13:20.561323406Z"
+      }
+    ],
+    "suspendedSession": {
+      "token": "director-stub-1",
+      "framework": "claude",
+      "runId": "1-1",
+      "at": "2026-11-04T22:13:20.558174757Z"
+    },
+    "deploymentWide": [
+      "self-debug"
+    ]
+  }
+}

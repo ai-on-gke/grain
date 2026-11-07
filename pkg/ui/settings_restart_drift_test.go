@@ -108,6 +108,7 @@ var settingsAppliedLive = map[string]string{
 	"promptExtension":     "the deployment-wide text RunCycle refreshes out of grain_config every cycle (orchestrator.resolvePromptExtension)",
 	"repairTemplateID":    "orchestrator resolves the repair template dynamically from the config row on each repair/triage filing",
 	"defaultCapabilities": "pkg/ui, which reads grain_config per request (CreateTask's own defaults)",
+	"defaultAdmission":    "pkg/ui, which reads grain_config per request (CreateTask's defaultTaskAdmission)",
 	"newestFirst":         "pkg/ui, which reads grain_config per request",
 	"showClosedByDefault": "pkg/ui, which reads grain_config per request",
 	"approvedByDefault":   "pkg/ui, which reads grain_config per request",
@@ -123,10 +124,13 @@ var settingsAppliedLive = map[string]string{
 		"(reconcileAutoUpgrade)",
 	"autoUpgradeOn": "orchestrator's auto-upgrade and release-upgrade reconcilers, which read grain_config every cycle " +
 		"(reconcileAutoUpgrade, reconcileReleaseUpgrade)",
-	"taskBranchTemplate": "model.Store.PutTask reads the current grain_config row when it freezes a new task's branch name",
-	"deploymentId":       "model.Store.PutTask reads the current grain_config row when it freezes a new task's branch name",
-	"externalAgentApi":   "pkg/ui, which reads grain_config per request (authenticateExternalAgent)",
-	"settingsLocked":     "pkg/ui, which reads grain_config per request (settingsLocked)",
+	"taskBranchTemplate":    "model.Store.PutTask reads the current grain_config row when it freezes a new task's branch name",
+	"deploymentId":          "model.Store.PutTask reads the current grain_config row when it freezes a new task's branch name",
+	"externalAgentApi":      "pkg/ui, which reads grain_config per request (authenticateExternalAgent)",
+	"ownerTrust":            "Client.CreateTask, which reads grain_config as each external agent filing is made (ownerTrustApproves)",
+	"autoGrantContextReads": "Client.CreateTask and Client.UpdateTask, which read grain_config on each task filing or edit (resolveContextLinksAndReads)",
+	"settingsLocked":        "pkg/ui, which reads grain_config per request (settingsLocked)",
+	"registry":              "the registry heartbeat manager (pkg/daemon's liveConfig.Refresh and TriggerRegistrySync)",
 }
 
 func TestEverySettingIsEitherAppliedLiveOrRestartOnly(t *testing.T) {

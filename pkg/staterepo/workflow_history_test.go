@@ -156,7 +156,7 @@ func TestAWorkflowAnEarlierGrainWroteIsAdopted(t *testing.T) {
 		t.Error("an earlier grain's rendering is read as this build's own")
 	}
 
-	const now = "ghcr.io/bwsalmon/grain/grain:sha-abc1234"
+	const now = "docker.io/grainai/grain:sha-abc1234"
 	wrote, err := staterepo.EnsureWorkflow(dir, now, false)
 	if err != nil {
 		t.Fatalf("ensuring the workflow: %v", err)
@@ -207,7 +207,7 @@ func TestAnEditedWorkflowAnEarlierGrainWroteIsStillLeftAlone(t *testing.T) {
 			}
 			dir := t.TempDir()
 			writeWorkflow(t, dir, tc.body)
-			wrote, err := staterepo.EnsureWorkflow(dir, "ghcr.io/bwsalmon/grain/grain:sha-abc1234", false)
+			wrote, err := staterepo.EnsureWorkflow(dir, "docker.io/grainai/grain:sha-abc1234", false)
 			if err != nil {
 				t.Fatalf("ensuring the workflow: %v", err)
 			}

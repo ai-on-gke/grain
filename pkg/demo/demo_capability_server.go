@@ -65,6 +65,24 @@ type fakeChat struct {
 	n  int
 }
 
+// fakeFigma is the Figma API the demo's figma server calls: /v1/me names
+// a demo designer for any credential, so an account's Test answers, and
+// anything else is a 404. Nothing is sent anywhere.
+type fakeFigma struct{}
+
+func (fakeFigma) RoundTrip(req *http.Request) (*http.Response, error) {
+	status, body := http.StatusNotFound, `{"status":404,"err":"Not found"}`
+	if req.Method == http.MethodGet && req.URL.Path == "/v1/me" {
+		status, body = http.StatusOK, `{"id":"demo-user","handle":"Demo Designer","email":"designer@demo.grain.example"}`
+	}
+	return &http.Response{
+		StatusCode: status,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Request:    req,
+	}, nil
+}
+
 var fakeChatPath = regexp.MustCompile(`^/v1/(spaces/[A-Za-z0-9_-]+)/messages$`)
 
 func (f *fakeChat) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -90,13 +108,19 @@ func (f *fakeChat) RoundTrip(req *http.Request) (*http.Response, error) {
 	}, nil
 }
 
-// demoGCPConfig is the demo gcp server's starting configuration: one
-// permission set using the default ambient admin.
+// demoGCPExistingAccount is the existing service account the demo's
+// org-deploy set acts as.
+const demoGCPExistingAccount = "deployer@demo-project.iam.gserviceaccount.com"
+
+// demoGCPConfig is the demo gcp server's starting configuration, using
+// the default ambient admin: a set whose accounts grain creates, and one
+// over an existing service account, impersonated for short-lived tokens.
 func demoGCPConfig() map[string]any {
 	return map[string]any{
-		"permission_sets": []any{map[string]any{
-			"name": "sandbox-agent", "project": "demo-project", "roles": []any{"roles/logging.viewer"},
-		}},
+		"permission_sets": []any{
+			map[string]any{"name": "sandbox-agent", "project": "demo-project", "roles": []any{"roles/logging.viewer"}},
+			map[string]any{"name": "org-deploy", "service_account": demoGCPExistingAccount, "roles": []any{"roles/run.admin"}},
+		},
 	}
 }
 
@@ -255,7 +279,9 @@ func configureCapabilityServerDemo(ctx context.Context, stored *model.Config, lo
 
 	cloud := gcpfake.New()
 	cloud.DefaultIdentity = "you@demo.grain.example"
-	gcp, err := intree.NewConfigurableGCP(intree.GCPConfig{Connector: cloud})
+	cloud.AddAccount("demo-project", demoGCPExistingAccount, "made by hand")
+	cloud.Bind("projects/demo-project", "roles/run.admin", "serviceAccount:"+demoGCPExistingAccount)
+	gcp, err := intree.NewConfigurableGCP(intree.GCPConfig{Connector: cloud, Listen: "127.0.0.1:0"})
 	if err != nil {
 		return nil, err
 	}
@@ -287,6 +313,28 @@ func configureCapabilityServerDemo(ctx context.Context, stored *model.Config, lo
 	}
 	gchatEntry.Builtin = "gchat"
 	stored.MCPServers[intree.CanonicalID("gchat")] = gchatEntry
+
+	// The figma server likewise: grain's own, unconfigured, with a data
+	// plane token of its own and fakeFigma for Figma's API, so Settings can
+	// add accounts and Test one.
+	figmaToken := make([]byte, intree.MinTokenBytes)
+	if _, err := rand.Read(figmaToken); err != nil {
+		return nil, err
+	}
+	figma, err := intree.NewFigma(intree.FigmaServerConfig{
+		Listen: "127.0.0.1:0",
+		Token:  hex.EncodeToString(figmaToken),
+		Client: &http.Client{Transport: fakeFigma{}, Timeout: 10 * time.Second},
+	})
+	if err != nil {
+		return nil, err
+	}
+	figmaEntry, err := serveDemoCapability(ctx, figma.CapabilityServer)
+	if err != nil {
+		return nil, err
+	}
+	figmaEntry.Builtin = intree.FigmaName
+	stored.MCPServers[intree.CanonicalID(intree.FigmaName)] = figmaEntry
 	opts := servers.Options{Secrets: lookup, Hostd: hostdClient}
 	if identity != nil {
 		opts.Identity = servers.StoreIdentity(identity, nil)

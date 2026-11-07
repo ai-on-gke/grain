@@ -160,7 +160,7 @@ func TestUpgradeRefusesABranchOutsideTheAllowlist(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	up := upgrade.New(upgrade.Config{
-		Image:      &upgrade.ImageConfig{Repository: "ghcr.io/bwsalmon/grain/grain", RefFile: filepath.Join(dir, "image.env")},
+		Image:      &upgrade.ImageConfig{Repository: "docker.io/grainai/grain", RefFile: filepath.Join(dir, "image.env")},
 		StatusFile: filepath.Join(dir, "upgrade-status.json"),
 	})
 	srv, store := serverAndStoreWithUpgrader(t, up)

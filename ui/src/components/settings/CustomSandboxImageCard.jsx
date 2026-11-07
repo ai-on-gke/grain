@@ -48,9 +48,9 @@ export default function CustomSandboxImageCard({ s }) {
   const baseImage =
     settings.sandboxBaseImage ||
     (vm
-      ? contract.guestBaseImage || "ghcr.io/bwsalmon/grain/guest-base:latest"
+      ? contract.guestBaseImage || "docker.io/grainai/sandbox-base:latest"
       : contract.k8sSandboxBaseImage ||
-        "ghcr.io/bwsalmon/grain/k8s-sandbox-base:latest");
+        "docker.io/grainai/sandbox-k8s-base:latest");
   const defaultImage = settings.sandboxImageDefault || "";
   const range = minimum === current ? `v${current}` : `v${minimum}–v${current}`;
   const check = settings.sandboxImageCheck;
@@ -181,8 +181,8 @@ export default function CustomSandboxImageCard({ s }) {
         data-testid="sandbox-image-inherits"
       >
         {vm
-          ? "Granule VM backends boot a packed guest. guest-base already satisfies the entire sandbox contract: user debian (uid 1000) with the /home/agent symlink, git, curl, ca-certificates, python3-minimal for port forwarding, passwordless sudo, systemd, grain-connect, the sandbox grain CLI at /usr/local/bin/grain and the contract version stamps."
-          : "Container and Kubernetes pod backends run a container image. k8s-sandbox-base already satisfies the entire sandbox contract: user debian (uid 1000) with the /home/agent symlink, git, curl, ca-certificates, python3-minimal for port forwarding, the sandbox grain CLI at /usr/local/bin/grain and the contract version stamps."}
+          ? "Granule VM backends boot a packed guest. sandbox-base already satisfies the entire sandbox contract: user debian (uid 1000) with the /home/agent symlink, git, curl, ca-certificates, python3-minimal for port forwarding, passwordless sudo, systemd, grain-connect, the sandbox grain CLI at /usr/local/bin/grain and the contract version stamps."
+          : "Container and Kubernetes pod backends run a container image. sandbox-k8s-base already satisfies the entire sandbox contract: user debian (uid 1000) with the /home/agent symlink, git, curl, ca-certificates, python3-minimal for port forwarding, the sandbox grain CLI at /usr/local/bin/grain and the contract version stamps."}
       </Typography>
       <Typography
         variant="body2"
@@ -237,7 +237,7 @@ export default function CustomSandboxImageCard({ s }) {
               {granuleLabel} = {granuleContract}
             </Box>{" "}
             <Typography component="span" variant="body2" color="text.secondary">
-              (Granule's own guest contract, carried by guest-base)
+              (Granule's own guest contract, carried by sandbox-base)
             </Typography>
           </li>
         )}

@@ -83,7 +83,17 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 	restore := orchestrator.SetCheckRegistrationWindow(0)
+	// No test reads the account's own named contexts or keyring
+	// (context.go, credentials.go): each that wants some makes its own.
+	configHome, err := os.MkdirTemp("", "grain-cli-config-")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("XDG_CONFIG_HOME", configHome)
+	os.Unsetenv(contextEnvVar)
+	systemKeyring = func() keyring { return nil }
 	code := m.Run()
 	restore()
+	os.RemoveAll(configHome)
 	os.Exit(code)
 }

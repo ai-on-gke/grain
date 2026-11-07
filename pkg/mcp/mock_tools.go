@@ -203,6 +203,11 @@ type ProposedTask struct {
 	// Reads is the list of repositories this proposal is allowed to read.
 	Reads []string
 
+	// Designs is the committed-context references ([owner/name:]path[@rev])
+	// requested for this proposal; when empty, the proposal inherits its
+	// parent task's committed context.
+	Designs []string
+
 	// Writes is the list of extra repositories and branches this proposal is allowed to write to.
 	Writes []WriteTarget
 
@@ -315,6 +320,8 @@ type MockSink struct {
 	comment        string
 	nothingNeeded  string
 	secretRequest  *SecretRequest
+	accessRequest  *AccessRequest
+	accessChecker  AccessRequestChecker
 	proposedTasks  []ProposedTask
 	reviewComments []ReviewComment
 	// files is how ask_question and comment_on_issue read and hold an
@@ -372,6 +379,28 @@ func (s *MockSink) SecretRequest() *SecretRequest {
 	return &req
 }
 
+// AccessRequest is the access this run asked a person for, or nil if it
+// asked for none.
+func (s *MockSink) AccessRequest() *AccessRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.accessRequest == nil {
+		return nil
+	}
+	req := *s.accessRequest
+	return &req
+}
+
+// SetAccessChecker gives request_access the daemon's check of what a
+// request names (AccessRequestChecker), set after the tools are
+// registered for SetAttachmentFiles' reason. Without one only the
+// request's shape is checked.
+func (s *MockSink) SetAccessChecker(checker AccessRequestChecker) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.accessChecker = checker
+}
+
 func (s *MockSink) ProposedTasks() []ProposedTask {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -394,8 +423,8 @@ func (s *MockSink) ReviewComments() []ReviewComment {
 	return out
 }
 
-// NewMockTools returns the seven escape-hatch tools -- ask_question,
-// request_secret, comment_on_issue, nothing_needed, write_handover, propose_task,
+// NewMockTools returns the eight escape-hatch tools -- ask_question,
+// request_secret, request_access, comment_on_issue, nothing_needed, write_handover, propose_task,
 // add_review_comment -- four of them under the names v1 gave them, which
 // is also the vocabulary orchestrator.ProcessResult matches against (see
 // toolnames.go).
@@ -438,6 +467,7 @@ func NewMockTools(sink *MockSink, proposeRepos []string) []Tool {
 	return []Tool{
 		askQuestionTool(sink),
 		requestSecretTool(sink),
+		requestAccessTool(sink),
 		commentOnIssueTool(sink),
 		nothingNeededTool(sink),
 		writeHandoverTool(),
@@ -895,6 +925,10 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 					"type":  "array",
 					"items": map[string]any{"type": "string"},
 				},
+				"designs": map[string]any{
+					"type":  "array",
+					"items": map[string]any{"type": "string"},
+				},
 				"writes": map[string]any{
 					"type": "array",
 					"items": map[string]any{
@@ -1026,6 +1060,17 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 			if err != nil {
 				return Result{Text: fmt.Sprintf("goal: %v", err), IsError: true}
 			}
+			var designs []string
+			for _, raw := range argStringSlice(args, "designs") {
+				raw = strings.TrimSpace(raw)
+				if raw == "" {
+					continue
+				}
+				if _, err := model.ParseContextRef(raw); err != nil {
+					return Result{Text: fmt.Sprintf("designs: %v", err), IsError: true}
+				}
+				designs = append(designs, raw)
+			}
 			model, _ := argString(args, "model")
 			agentFramework, _ := argString(args, "agent_framework")
 			var notBefore *time.Time
@@ -1065,6 +1110,7 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 				Capabilities:        capabilities,
 				CustomFields:        argCustomFields(args, "custom_fields"),
 				Reads:               argStringSlice(args, "reads"),
+				Designs:             designs,
 				Writes:              argWrites(args, "writes"),
 				ReviewTemplateID:    strings.TrimSpace(reviewTemplateID),
 				SandboxCPUs:         cpus,

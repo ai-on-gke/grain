@@ -48,17 +48,28 @@ func respond(ctx context.Context, c *ui.HTTPClient, out *printer, id string) err
 
 func cmdGet(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain get", flag.ContinueOnError)
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if err := atMostArgs(fs, fs.Args(), 1); err != nil {
-		return err
-	}
-	id, err := taskID(fs.Arg(0))
+	commentsSince := fs.String("comments-since", "", "only the conversation items created strictly after this RFC 3339 time -- a polling loop's cursor")
+	rest, err := parseArgs(fs, args)
 	if err != nil {
 		return err
 	}
-	detail, err := c.GetTask(ctx, id)
+	if err := atMostArgs(fs, rest, 1); err != nil {
+		return err
+	}
+	id, err := taskID(first(rest))
+	if err != nil {
+		return err
+	}
+	var detail ui.TaskDetail
+	if raw := strings.TrimSpace(*commentsSince); raw != "" {
+		since, perr := time.Parse(time.RFC3339Nano, raw)
+		if perr != nil {
+			return usageErrorf("-comments-since %q is not an RFC 3339 time (2026-11-04T06:58:00Z)", raw)
+		}
+		detail, err = c.GetTaskCommentsSince(ctx, id, since)
+	} else {
+		detail, err = c.GetTask(ctx, id)
+	}
 	if err != nil {
 		return err
 	}
@@ -101,16 +112,21 @@ func cmdCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 	fs := flag.NewFlagSet("grain create", flag.ContinueOnError)
 	title := fs.String("title", "", "task title (required)")
 	body := fs.String("body", "", "task description")
+	bodyFile := fs.String("body-file", "", "read the task description from this path (- for stdin) instead of -body")
+	var designs stringList
+	fs.Var(&designs, "design", "committed-context path ([owner/name:]path[@rev]) this task implements, pinned to a commit SHA (repeatable)")
 	repo := fs.String("repo", "", "owner/name of the repo this task's work targets")
 	// The requester (Task.Creator) of a task filed from this
 	// workstation's own CLI (ui.CreateTaskRequest.Author). Metadata
 	// only: the daemon still checks the filing against its own actor,
 	// and refuses it from a signed-in caller naming somebody else.
 	author := fs.String("author", "", "who asked for this task, recorded as its requester (defaults to the daemon's own actor)")
+	owner := fs.String("owner", "", "account responsible for this task (defaults to the caller)")
 	noRepo := fs.Bool("no-repo", false, "file this task with no repo at all, rather than falling back to the deployment default")
 	resolveChangeTarget := bindChangeTargetFlags(fs)
 	base := fs.String("base", "", "base branch, if not the target repo's default")
 	issue := fs.Int("issue", 0, "GitHub issue number associated with this task")
+	externalRef := fs.String("external-ref", "", "external work reference (e.g. CA-204), inherited by tasks spawned from this one")
 	var autoMerge bool
 	fs.BoolVar(&autoMerge, "auto-merge", false, "merge this task's pull request automatically once it reads clean")
 	var capabilities stringList
@@ -169,6 +185,10 @@ func cmdCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 		return err
 	}
 
+	description, err := bodyFromFlags(fs, *body, *bodyFile)
+	if err != nil {
+		return err
+	}
 	customFields, _, err := customFieldValues(ctx, c, fields)
 	if err != nil {
 		return err
@@ -198,14 +218,16 @@ func cmdCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 	})
 	req := ui.CreateTaskRequest{
 		ChangeTarget: changeTarget,
-		Title:        *title, Description: *body, Repo: *repo, NoRepo: *noRepo, Base: *base,
-		Issue:     *issue,
-		AutoMerge: autoMerge, Reads: reads, Writes: writeTargets, Approved: *approve, AtFront: atFront,
+		Title:        *title, Description: description, Repo: *repo, NoRepo: *noRepo, Base: *base,
+		Issue:       *issue,
+		ExternalRef: strings.TrimSpace(*externalRef),
+		AutoMerge:   autoMerge, Reads: reads, Writes: writeTargets, Approved: *approve, AtFront: atFront,
 		Priority:    priorityOpt,
 		Interactive: *interactive, Attachments: attachments,
 		ReviewTemplateID: *reviewTemplate, CustomFields: customFields,
 		NetworkAccess: *networkAccess, AgentBackendID: *agentBackend,
-		DependsOn: dependsOn, Author: strings.TrimSpace(*author),
+		DependsOn: dependsOn, Author: strings.TrimSpace(*author), Owner: strings.TrimSpace(*owner),
+		Designs: designs,
 	}
 	// Naming any -capability names the whole set (ui.CreateTaskRequest.
 	// Capabilities); naming none leaves the field unset, so the task is
@@ -280,12 +302,16 @@ func cmdUpdate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 	title := fs.String("title", "", "new task title")
 	body := fs.String("body", "", "new task description")
 	repo := fs.String("repo", "", "new target repo (owner/name)")
+	owner := fs.String("owner", "", "transfer task ownership to this account")
 	base := fs.String("base", "", "new base branch")
 	issue := fs.Int("issue", 0, "new associated GitHub issue number")
+	externalRef := fs.String("external-ref", "", "new external work reference (e.g. CA-204) -- empty clears it")
 	var autoMerge bool
 	fs.BoolVar(&autoMerge, "auto-merge", false, "whether the task auto-merges once clean")
 	var reads stringList
 	fs.Var(&reads, "read", "owner/name of a repo this task's run may read but never push to (repeatable) -- replaces the whole set")
+	var designs stringList
+	fs.Var(&designs, "design", "committed-context path ([owner/name:]path[@rev]) this task implements (repeatable) -- replaces the whole set; pass -design \"\" to clear")
 	var writes stringList
 	fs.Var(&writes, "write", "owner/name[@branch] of another repo this task may land work in (repeatable) -- replaces the whole set")
 	// Empty is a real value, not an unset one: it detaches whatever
@@ -365,18 +391,32 @@ func cmdUpdate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 		case "repo":
 			v := *repo
 			req.Repo = &v
+		case "owner":
+			v := strings.TrimSpace(*owner)
+			req.Owner = &v
 		case "base":
 			v := *base
 			req.Base = &v
 		case "issue":
 			v := *issue
 			req.Issue = &v
+		case "external-ref":
+			v := strings.TrimSpace(*externalRef)
+			req.ExternalRef = &v
 		case "auto-merge":
 			v := autoMerge
 			req.AutoMerge = &v
 		case "read":
 			v := []string(reads)
 			req.Reads = &v
+		case "design":
+			cleaned := make([]string, 0, len(designs))
+			for _, d := range designs {
+				if trimmed := strings.TrimSpace(d); trimmed != "" {
+					cleaned = append(cleaned, trimmed)
+				}
+			}
+			req.Designs = &cleaned
 		case "write":
 			v := writeTargets
 			req.Writes = &v
@@ -639,156 +679,4 @@ func loadAttachments(paths []string) ([]ui.AttachmentUpload, error) {
 		})
 	}
 	return out, nil
-}
-
-func cmdClose(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
-	fs := flag.NewFlagSet("grain close", flag.ContinueOnError)
-	// The same choice the UI puts in a checkbox beside its own Close
-	// button, and the same default: off. A task's pull request is real
-	// work, so closing it happens because somebody typed this and not
-	// because they closed a task (ui.CloseOptions).
-	closePR := fs.Bool("close-pull-request", false,
-		"close the task's pull request on GitHub too, without merging it "+
-			"(the branch and its commits are left untouched)")
-	reason := fs.String("reason", "", "why, kept with the close in the task's history")
-	rest, err := parseArgs(fs, args)
-	if err != nil {
-		return err
-	}
-	if err := atMostArgs(fs, rest, 1); err != nil {
-		return err
-	}
-	id, err := taskID(first(rest))
-	if err != nil {
-		return err
-	}
-	if err := c.Close(ctx, id, ui.CloseOptions{ClosePullRequest: *closePR, Reason: *reason}); err != nil {
-		return err
-	}
-	return respond(ctx, c, out, id)
-}
-
-func cmdReopen(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
-	fs := flag.NewFlagSet("grain reopen", flag.ContinueOnError)
-	reason := fs.String("reason", "", "why, kept with the reopen in the task's history")
-	rest, err := parseArgs(fs, args)
-	if err != nil {
-		return err
-	}
-	if err := atMostArgs(fs, rest, 1); err != nil {
-		return err
-	}
-	id, err := taskID(first(rest))
-	if err != nil {
-		return err
-	}
-	if err := c.ReopenBecause(ctx, id, *reason); err != nil {
-		return err
-	}
-	return respond(ctx, c, out, id)
-}
-
-// cmdRetry is `grain retry <id>`: the only way to clear a task's own
-// failure streak once it has reached model.MaxConsecutiveFailures and
-// state has stopped calling it "queued" at all (bwsalmon/agents#403).
-func cmdRetry(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
-	fs := flag.NewFlagSet("grain retry", flag.ContinueOnError)
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if err := atMostArgs(fs, fs.Args(), 1); err != nil {
-		return err
-	}
-	id, err := taskID(fs.Arg(0))
-	if err != nil {
-		return err
-	}
-	if err := c.Retry(ctx, id); err != nil {
-		return err
-	}
-	return respond(ctx, c, out, id)
-}
-
-// cmdRetryMerge is `grain retry-merge <id>`: the shell's half of the
-// UI's own "Retry merge" button, and the only way to ask the merge queue
-// for another attempt at a pull request it has already given up on (see
-// ui.Client.RetryMerge).
-func cmdRetryMerge(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
-	fs := flag.NewFlagSet("grain retry-merge", flag.ContinueOnError)
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if err := atMostArgs(fs, fs.Args(), 1); err != nil {
-		return err
-	}
-	id, err := taskID(fs.Arg(0))
-	if err != nil {
-		return err
-	}
-	if err := c.RetryMerge(ctx, id); err != nil {
-		return err
-	}
-	return respond(ctx, c, out, id)
-}
-
-// cmdForceMerge is `grain force-merge <id> <reason>`: the shell's half
-// of the UI's "Force merge" button, and the one sanctioned exception to
-// the merge predicate -- grain lands the change itself, on an operator's
-// say-so, with the reason recorded on the task and on the pull request
-// (see ui.Client.ForceMerge).
-//
-// The reason is an argument rather than a flag because it is not
-// optional: a force merge without one is refused at the other end, and a
-// required flag reads like something that could be left out.
-//
-// -head names the commit that was reviewed, and the override is for that
-// commit only: grain refuses it if the branch is somewhere else, and
-// withdraws it if anything is pushed before the merge. Without it the
-// override is for the pull request's head as it is when grain receives
-// the request.
-func cmdForceMerge(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
-	fs := flag.NewFlagSet("grain force-merge", flag.ContinueOnError)
-	head := fs.String("head", "", "the head commit you reviewed; the override is for it alone")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if err := atMostArgs(fs, fs.Args(), 2); err != nil {
-		return err
-	}
-	id, err := taskID(fs.Arg(0))
-	if err != nil {
-		return err
-	}
-	reason := strings.TrimSpace(strings.Join(fs.Args()[1:], " "))
-	if reason == "" {
-		return fmt.Errorf("say why: grain force-merge <id> \"the release is broken and this is the fix\"")
-	}
-	if err := c.ForceMerge(ctx, id, reason, *head); err != nil {
-		return err
-	}
-	return respond(ctx, c, out, id)
-}
-
-// cmdRunNow is `grain run-now <id>`: the shell's half of the UI's "Run
-// now" button. It jumps the queue and ignores the state machine -- a
-// blocked, deferred, failed or already-finished task is started all the
-// same -- which is the only way to hand a task whose work is over, its
-// pull request sitting on the merge queue, back to an agent for more of
-// it. See ui.Client.RunNow.
-func cmdRunNow(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
-	fs := flag.NewFlagSet("grain run-now", flag.ContinueOnError)
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if err := atMostArgs(fs, fs.Args(), 1); err != nil {
-		return err
-	}
-	id, err := taskID(fs.Arg(0))
-	if err != nil {
-		return err
-	}
-	if err := c.RunNow(ctx, id); err != nil {
-		return err
-	}
-	return respond(ctx, c, out, id)
 }

@@ -34,16 +34,61 @@ import (
 // full description -- 9.6 MB on a deployment with two thousand tasks --
 // whatever ?state= or ?limit= it asked for (grain task 1945). A request
 // naming any of state, limit, q (or search) or fields takes this path
-// instead; one naming none of them, or only repo, is answered exactly as
-// before.
+// instead; one naming none of them, or only repo, is answered from the
+// cache.
+//
+// What that cached answer holds changed in grain task 2983: it is the
+// live list -- every task that is not closed, without descriptions -- and
+// ?fields=full (alone, or with repo) is the whole list with every field,
+// as the route answered before. Closed tasks are paged in on demand with
+// ?state=closed&cursor= (and limit, search, closedSince, closedBefore),
+// newest-closed first.
 
 // taskListQuery is GET /api/tasks' narrowing.
 type taskListQuery struct {
 	repo    string
+	owner   string
 	states  []string
 	search  string
 	limit   int
 	summary bool
+	// derivedFrom and filedVia are the external-cli spec's provenance
+	// filters (#XC-18): ?derived_from=<owner/name#pr or its URL> and
+	// ?filed_via=<substring>.
+	derivedFrom string
+	filedVia    string
+	externalRef string
+	// list leaves descriptions out, as the live list does (fields=list).
+	list bool
+	// paged answers a taskListPage, newest-closed first, starting after
+	// cursor (empty for the first page).
+	paged  bool
+	cursor string
+	// closedSince and closedBefore keep only closed tasks, closed in
+	// [since, before) by closedTime.
+	closedSince, closedBefore *time.Time
+	// full is ?fields=full with nothing else narrowing it: the cached
+	// whole list rather than a filtered one.
+	full bool
+}
+
+// taskListPageDefault is a page's size when the caller names no limit.
+const taskListPageDefault = 100
+
+// taskListPage is a paged GET /api/tasks' answer: one page of tasks, the
+// cursor that asks for the next (empty on the last), and how many tasks
+// match across every page. The totals are what let a reader holding only
+// the first pages -- the UI's rail, counting closed work -- say how much
+// there is without reading it all: Total every matching task, Sessions
+// the console and interactive sessions' own (which the rail counts under
+// Sessions), and Merged the rest whose pull request merged (PrMergedAt;
+// the rail's Merged entry rather than Closed).
+type taskListPage struct {
+	Tasks      []Task `json:"tasks"`
+	NextCursor string `json:"nextCursor,omitempty"`
+	Total      int    `json:"total"`
+	Merged     int    `json:"merged"`
+	Sessions   int    `json:"sessions"`
 }
 
 // parseTaskListQuery reads q, and reports whether it asks for anything the
@@ -73,11 +118,55 @@ func parseTaskListQuery(q url.Values) (taskListQuery, bool) {
 			out.limit = n
 		}
 	}
+	if q.Has("derived_from") {
+		narrowed = true
+		out.derivedFrom = strings.TrimSpace(q.Get("derived_from"))
+	}
+	if q.Has("filed_via") {
+		narrowed = true
+		out.filedVia = strings.TrimSpace(q.Get("filed_via"))
+	}
+	if extRef := strings.TrimSpace(q.Get("externalRef")); extRef != "" {
+		narrowed = true
+		out.externalRef = extRef
+	}
+	if q.Has("owner") {
+		narrowed = true
+		out.owner = strings.TrimSpace(q.Get("owner"))
+	}
+	if q.Has("closedSince") {
+		narrowed = true
+		out.closedSince = parseListTime(q.Get("closedSince"))
+	}
+	if q.Has("closedBefore") {
+		narrowed = true
+		out.closedBefore = parseListTime(q.Get("closedBefore"))
+	}
+	if q.Has("cursor") {
+		narrowed = true
+		out.paged = true
+		out.cursor = strings.TrimSpace(q.Get("cursor"))
+	}
+	fields := strings.ToLower(strings.TrimSpace(q.Get("fields")))
+	out.summary = fields == "summary"
+	out.list = fields == "list"
+	if q.Has("fields") && !narrowed && fields == "full" {
+		out.full = true
+		return out, false
+	}
 	if q.Has("fields") {
 		narrowed = true
-		out.summary = strings.EqualFold(strings.TrimSpace(q.Get("fields")), "summary")
 	}
 	return out, narrowed
+}
+
+// parseListTime is an RFC 3339 time, or nil for anything else.
+func parseListTime(s string) *time.Time {
+	at, err := time.Parse(time.RFC3339, strings.TrimSpace(s))
+	if err != nil {
+		return nil
+	}
+	return &at
 }
 
 func (q taskListQuery) matches(t Task) bool {
@@ -96,22 +185,85 @@ func (q taskListQuery) matches(t Task) bool {
 			return false
 		}
 	}
-	if q.search != "" && !strings.Contains(strings.ToLower(t.Title), strings.ToLower(q.search)) {
+	if q.closedSince != nil || q.closedBefore != nil {
+		if t.State != model.StateClosed {
+			return false
+		}
+		at := closedTime(t)
+		if q.closedSince != nil && at.Before(*q.closedSince) {
+			return false
+		}
+		if q.closedBefore != nil && !at.Before(*q.closedBefore) {
+			return false
+		}
+	}
+	if q.search != "" {
+		// The title, the id and the description: the live list no longer
+		// carries descriptions, so this is where a search over them is
+		// answered.
+		needle := strings.ToLower(q.search)
+		if !strings.Contains(strings.ToLower(t.Title), needle) &&
+			!strings.Contains(strings.ToLower(t.Description), needle) &&
+			t.ID != strings.TrimPrefix(q.search, "#") {
+			return false
+		}
+	}
+	if q.derivedFrom != "" && !TaskDerivedFrom(t, q.derivedFrom) {
+		return false
+	}
+	if q.filedVia != "" && !strings.Contains(strings.ToLower(t.FiledVia), strings.ToLower(q.filedVia)) {
+		return false
+	}
+	if q.externalRef != "" && t.ExternalRef != q.externalRef {
+		return false
+	}
+	if q.owner != "" && !strings.EqualFold(t.Owner, q.owner) {
 		return false
 	}
 	return true
 }
 
+// TaskDerivedFrom reports whether t records that its work was derived
+// from the pull request ref names (owner/name#number or its URL): a
+// model.LinkDerivedFrom link, or a "Derived from: <ref>" line in its
+// description, which is how a task filed by hand says the same thing.
+// `grain list -filter derived_from:eq:<ref>` asks it of every task.
+func TaskDerivedFrom(t Task, ref string) bool {
+	want, ok := NormalizePullRequestRef(ref)
+	if !ok {
+		want = strings.TrimSpace(ref)
+	}
+	for _, d := range t.DerivedFrom {
+		if strings.EqualFold(d, want) {
+			return true
+		}
+	}
+	for _, line := range strings.Split(t.Description, "\n") {
+		rest, found := strings.CutPrefix(strings.TrimSpace(line), "Derived from:")
+		if !found {
+			continue
+		}
+		for _, word := range strings.FieldsFunc(rest, func(r rune) bool { return r == ' ' || r == ',' || r == '\t' }) {
+			word = strings.Trim(word, "()[]<>`*_.")
+			if got, ok := NormalizePullRequestRef(word); ok && strings.EqualFold(got, want) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // taskListSummary is one task under fields=summary: what picks a row out
 // of a list, and none of what is only worth reading once it is picked.
 type taskListSummary struct {
-	ID        string      `json:"id"`
-	Title     string      `json:"title"`
-	State     model.State `json:"state"`
-	Repo      string      `json:"repo,omitempty"`
-	CreatedAt *time.Time  `json:"createdAt,omitempty"`
-	BlockedBy []string    `json:"blockedBy,omitempty"`
-	Stall     string      `json:"stall,omitempty"`
+	ID          string      `json:"id"`
+	Title       string      `json:"title"`
+	State       model.State `json:"state"`
+	Repo        string      `json:"repo,omitempty"`
+	ExternalRef string      `json:"externalRef,omitempty"`
+	CreatedAt   *time.Time  `json:"createdAt,omitempty"`
+	BlockedBy   []string    `json:"blockedBy,omitempty"`
+	Stall       string      `json:"stall,omitempty"`
 }
 
 // handleFilteredTaskList answers a narrowed GET /api/tasks: the matching
@@ -122,17 +274,27 @@ func (s *Server) handleFilteredTaskList(w http.ResponseWriter, r *http.Request, 
 		writeClientError(w, err)
 		return
 	}
+	readable := s.taskReadable(r)
 	matched := make([]Task, 0, len(all))
 	for _, t := range all {
-		if q.matches(t) {
+		if readable(t.Repo) && q.matches(t) {
 			matched = append(matched, t)
 		}
+	}
+	w.Header().Set("Cache-Control", "no-cache")
+	if q.paged {
+		writeJSON(w, http.StatusOK, pageTasks(matched, q))
+		return
 	}
 	sortTasksByFiling(matched)
 	if q.limit > 0 && len(matched) > q.limit {
 		matched = matched[len(matched)-q.limit:]
 	}
-	w.Header().Set("Cache-Control", "no-cache")
+	if q.list {
+		for i := range matched {
+			matched[i] = listRow(matched[i])
+		}
+	}
 	if !q.summary {
 		writeJSON(w, http.StatusOK, matched)
 		return
@@ -140,11 +302,95 @@ func (s *Server) handleFilteredTaskList(w http.ResponseWriter, r *http.Request, 
 	out := make([]taskListSummary, 0, len(matched))
 	for _, t := range matched {
 		out = append(out, taskListSummary{
-			ID: t.ID, Title: t.Title, State: t.State, Repo: t.Repo,
+			ID: t.ID, Title: t.Title, State: t.State, Repo: t.Repo, ExternalRef: t.ExternalRef,
 			CreatedAt: t.CreatedAt, BlockedBy: t.BlockedBy, Stall: t.Stall,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// pageTasks is the page of matched that q's cursor and limit ask for,
+// newest-closed first. A task's place in that order is its closing time
+// (closedTime: its ending or filing time when it has none) and then its id, which is what the
+// cursor names: a cursor is the place of the last task a page held, so
+// the next page starts after it even when that task has since reopened
+// or been deleted.
+func pageTasks(matched []Task, q taskListQuery) taskListPage {
+	keys := make(map[string]taskPageKey, len(matched))
+	for _, t := range matched {
+		keys[t.ID] = pageKeyOf(t)
+	}
+	sort.SliceStable(matched, func(i, j int) bool {
+		return keys[matched[i].ID].before(keys[matched[j].ID])
+	})
+	start := 0
+	if after, ok := parsePageCursor(q.cursor); ok {
+		start = sort.Search(len(matched), func(i int) bool {
+			return after.before(keys[matched[i].ID])
+		})
+	}
+	limit := q.limit
+	if limit <= 0 {
+		limit = taskListPageDefault
+	}
+	end := min(start+limit, len(matched))
+	page := taskListPage{Tasks: make([]Task, 0, end-start), Total: len(matched)}
+	for _, t := range matched {
+		switch {
+		case t.ConsoleSession != "" || t.Interactive:
+			page.Sessions++
+		case t.PrMergedAt != nil:
+			page.Merged++
+		}
+	}
+	for _, t := range matched[start:end] {
+		if !q.summary {
+			t = listRow(t)
+		}
+		page.Tasks = append(page.Tasks, t)
+	}
+	if end < len(matched) && end > start {
+		page.NextCursor = keys[matched[end-1].ID].String()
+	}
+	return page
+}
+
+// taskPageKey is a task's place in a page's order.
+type taskPageKey struct {
+	at time.Time
+	id int64
+}
+
+func pageKeyOf(t Task) taskPageKey {
+	k := taskPageKey{at: closedTime(t)}
+	k.id, _ = strconv.ParseInt(t.ID, 10, 64)
+	return k
+}
+
+// before reports whether k comes before o: later times first, and at the
+// same time the higher id first.
+func (k taskPageKey) before(o taskPageKey) bool {
+	if !k.at.Equal(o.at) {
+		return k.at.After(o.at)
+	}
+	return k.id > o.id
+}
+
+func (k taskPageKey) String() string {
+	return strconv.FormatInt(k.at.UnixNano(), 10) + "." + strconv.FormatInt(k.id, 10)
+}
+
+func parsePageCursor(s string) (taskPageKey, bool) {
+	at, id, ok := strings.Cut(s, ".")
+	if !ok {
+		return taskPageKey{}, false
+	}
+	ns, err1 := strconv.ParseInt(at, 10, 64)
+	n, err2 := strconv.ParseInt(id, 10, 64)
+	if err1 != nil || err2 != nil {
+		return taskPageKey{}, false
+	}
+	return taskPageKey{at: time.Unix(0, ns), id: n}, true
 }
 
 // sortTasksByFiling orders tasks oldest first by CreatedAt, then by the

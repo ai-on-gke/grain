@@ -27,15 +27,15 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/daemon"
 
-	"github.com/ai-on-gke/grain/pkg/capability/gcpkey"
+	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
-	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -52,165 +52,39 @@ func testLiveConfig(cfg daemon.Config) *daemon.LiveConfig {
 	return daemon.NewLiveConfig(nil, nil, cfg, nil)
 }
 
-// The GCP providers are part of this build but deliberately absent from
-// gemini-key stays out of the active registry until its deployment GCP project
-// setting is filled in. Name that gate rather than sending an operator looking
-// for another binary.
-func TestCapabilityCheckNamesMissingProviderConfiguration(t *testing.T) {
+// gemini-key was retired onto the gcp server's gcp#gemini-key (schema
+// migration 103), so no deployment registers a provider for it any more,
+// with or without a GCP project: a check says so rather than naming a
+// setting that would not register one either.
+func TestCapabilityCheckOfRetiredGeminiKeyFindsNoProvider(t *testing.T) {
 	t.Parallel()
-	tests := []struct {
-		name     string
-		id       string
-		cfg      daemon.Config
-		want     []string
-		dontWant []string
-	}{
-		{
-			name:     "gemini-key needs only a project",
-			id:       "gemini-key",
-			want:     []string{"gemini-key", "GCP project ID", "blank", "Settings -> Capabilities"},
-			dontWant: []string{"service-account", "in this build"},
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			adapter := daemon.CapabilityCheckAdapter{Live: testLiveConfig(tc.cfg), Creds: noCredentials{}}
-			_, err := adapter.CheckCapability(context.Background(), tc.id)
-			if err == nil {
-				t.Fatal("expected a check against an inactive provider to say so")
-			}
-			for _, want := range tc.want {
-				if !strings.Contains(err.Error(), want) {
-					t.Errorf("error %q does not contain %q", err, want)
-				}
-			}
-			for _, unwanted := range tc.dontWant {
-				if strings.Contains(err.Error(), unwanted) {
-					t.Errorf("error %q unexpectedly contains %q", err, unwanted)
-				}
-			}
-		})
-	}
-}
-
-// Once it is configured, the provider answers -- and its answer is
-// carried back as it stands, including the name of the credential it
-// tried to authenticate as, which is what the pane reporting a refusal
-// tells an operator to replace.
-func TestCapabilityCheckCarriesTheProvidersOwnAnswer(t *testing.T) {
-	t.Parallel()
-	adapter := daemon.CapabilityCheckAdapter{
-		Live: testLiveConfig(daemon.Config{
-			GcpProject: "example-project",
-		}),
-		Creds: noCredentials{},
-	}
-
-	result, err := adapter.CheckCapability(context.Background(), "gemini-key")
-	if err == nil {
-		t.Fatal("expected a check with no minter secret stored to fail")
-	}
-	if !strings.Contains(err.Error(), gcpkey.DefaultMinterCredential) {
-		t.Errorf("error %q does not name the credential that could not be resolved", err)
-	}
-	if len(result.Credentials) != 1 || result.Credentials[0] != gcpkey.DefaultMinterCredential {
-		t.Errorf("Credentials = %v, want the credential named even on the failure path", result.Credentials)
-	}
-}
-
-// The registry is rebuilt per call out of the live configuration, so a
-// project set in Settings a moment ago is the project the next check
-// runs against -- a registry captured at startup would go on checking
-// one an operator has already replaced.
-func TestCapabilityCheckFollowsALaterSettingsChange(t *testing.T) {
-	t.Parallel()
-	live := testLiveConfig(daemon.Config{})
-	adapter := daemon.CapabilityCheckAdapter{Live: live, Creds: noCredentials{}}
-
-	if _, err := adapter.CheckCapability(context.Background(), "gemini-key"); err == nil ||
-		!strings.Contains(err.Error(), "GCP project ID") {
-		t.Fatalf("with no project set, err = %v, want the missing-project answer", err)
-	}
-
-	live.Mu.Lock()
-	live.Applied.GcpProject = "example-project"
-	live.Mu.Unlock()
-
-	_, err := adapter.CheckCapability(context.Background(), "gemini-key")
-	if err == nil {
-		t.Fatal("expected the check to reach gemini-key's provider once a project is set")
-	}
-	if strings.Contains(err.Error(), "not configured") {
-		t.Errorf("error %q still says the capability is unconfigured after the project was set", err)
-	}
-	if !strings.Contains(err.Error(), gcpkey.DefaultMinterCredential) {
-		t.Errorf("error %q is not the provider's own answer about its minter credential", err)
-	}
-}
-
-// The deployment this whole distinction exists for: a project saved in
-// Settings that the running process has not adopted. The pane reports
-// the stored row -- every field filled in, badge green -- while the
-// registry a check is made through is built out of what this process is
-// running with, so the check finds no provider. Answering "it is not
-// configured" there sends an operator back to a pane where it plainly
-// is; the answer has to name the gap between the two instead, and the
-// restart that closes it.
-func TestCapabilityCheckSaysWhenStoredSettingsAreNotApplied(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	store := testStore(t)
-	// What an operator just saved, against a process still running the
-	// configuration it started with -- exactly what a daemon whose
-	// reconcile loop never came up is left holding, since that loop is
-	// the only thing that ever applies a change (liveConfig.refresh).
-	stored := daemon.Config{}.ToModelConfig()
-	stored.GCPProject = "example-project"
-	putConfig(t, store, stored)
-	live := daemon.NewLiveConfig(store, nil, daemon.Config{}, nil)
-	adapter := daemon.CapabilityCheckAdapter{Live: live, Creds: noCredentials{}}
-
-	_, err := adapter.CheckCapability(ctx, "gemini-key")
-	if err == nil {
-		t.Fatal("expected a check with no provider registered to say so")
-	}
-	if strings.Contains(err.Error(), "not configured") {
-		t.Errorf("error %q says the capability is unconfigured, but the project is stored -- "+
-			"which is the pane the operator would be sent back to", err)
-	}
-	if strings.Contains(err.Error(), "blank") || strings.Contains(err.Error(), "Settings -> Capabilities") {
-		t.Errorf("error %q diagnoses blank configuration instead of preserving the unapplied-settings guidance", err)
-	}
-	for _, want := range []string{"gemini-key", "has not", "restarting"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q does not contain %q", err, want)
+	for _, cfg := range []daemon.Config{{}, {GcpProject: "example-project"}} {
+		adapter := daemon.CapabilityCheckAdapter{Live: testLiveConfig(cfg), Creds: noCredentials{}}
+		_, err := adapter.CheckCapability(context.Background(), "gemini-key")
+		if err == nil || !strings.Contains(err.Error(), `registers no provider for "gemini-key"`) {
+			t.Errorf("project %q: err = %v, want no provider for gemini-key", cfg.GcpProject, err)
+		}
+		if err != nil && strings.Contains(err.Error(), "blank") {
+			t.Errorf("project %q: err %q names a blank setting, which no longer registers it", cfg.GcpProject, err)
 		}
 	}
-
-	// Once the process adopts the row, the check reaches the provider and
-	// the answer is the provider's own again.
-	live.Refresh(ctx, &orchestrator.Deps{})
-	if _, err := adapter.CheckCapability(ctx, "gemini-key"); err == nil ||
-		!strings.Contains(err.Error(), gcpkey.DefaultMinterCredential) {
-		t.Errorf("after the setting was applied, err = %v, want the provider's own answer", err)
-	}
 }
 
-// A deployment with nothing stored gets the precise missing-setting
-// answer just like one without a store wired up.
-func TestCapabilityCheckNamesBlankSettingWithNothingStored(t *testing.T) {
+// A registered provider answers -- and its answer is carried back as it
+// stands, including the names of the credentials it tried to
+// authenticate as, which is what the pane reporting a refusal tells an
+// operator to replace.
+func TestCapabilityCheckCarriesTheProvidersOwnAnswer(t *testing.T) {
 	t.Parallel()
-	store := testStore(t)
-	putConfig(t, store, daemon.Config{}.ToModelConfig())
-	adapter := daemon.CapabilityCheckAdapter{
-		Live:  daemon.NewLiveConfig(store, nil, daemon.Config{}, nil),
-		Creds: noCredentials{},
-	}
+	adapter := daemon.CapabilityCheckAdapter{Live: testLiveConfig(daemon.Config{}), Creds: noCredentials{}}
 
-	_, err := adapter.CheckCapability(context.Background(), "gemini-key")
-	if err == nil || !strings.Contains(err.Error(), "GCP project ID") ||
-		!strings.Contains(err.Error(), "Settings -> Capabilities") {
-		t.Fatalf("err = %v, want the missing-project answer on a deployment with nothing stored", err)
+	result, err := adapter.CheckCapability(context.Background(), "github-sandbox")
+	if err == nil {
+		t.Fatal("expected a check with no App secrets stored to fail")
+	}
+	want := []string{githubsandbox.DefaultAppIDCredential, githubsandbox.DefaultPrivateKeyCredential}
+	if !slices.Equal(result.Credentials, want) {
+		t.Errorf("Credentials = %v, want %v named even on the failure path", result.Credentials, want)
 	}
 }
 
@@ -248,14 +122,10 @@ func writeLadder(t *testing.T, files map[string]string) string {
 	return dataDir
 }
 
-// A named token's material is not in the secrets store at all -- it is
-// an operator's file under secrets/github -- so its provider is built
-// holding the credential ladder instead, and the resolver every other
-// capability is checked through goes unused. This is that wiring, and it
-// stays offline by using a credential the ladder serves as anonymous: an
-// empty token file, which the provider has an answer for before it ever
-// reaches GitHub.
-func TestCapabilityCheckReachesANamedGitHubTokensLadder(t *testing.T) {
+// github-credential:<name> was retired onto repo#credential (schema
+// migration 120), so daemon.CapabilityProviders no longer registers an
+// in-process provider per named token in secrets/github.
+func TestCapabilityCheckOfRetiredGitHubCredentialFindsNoProvider(t *testing.T) {
 	t.Parallel()
 	dataDir := writeLadder(t, map[string]string{"bot.token": "tok\n", "release-bot.token": "\n"})
 	ladder, err := daemon.GitHubCredentialLadder(dataDir)
@@ -268,15 +138,10 @@ func TestCapabilityCheckReachesANamedGitHubTokensLadder(t *testing.T) {
 	}
 	adapter := daemon.CapabilityCheckAdapter{Live: live, Creds: noCredentials{}}
 
-	result, err := adapter.CheckCapability(context.Background(), model.GitCredentialCapability("release-bot"))
-	if err == nil {
-		t.Fatal("expected a credential file with no token in it to be reported")
-	}
-	if !strings.Contains(err.Error(), "secrets/github/release-bot.token") {
-		t.Errorf("error %q does not name the file that resolves to nothing", err)
-	}
-	if len(result.Credentials) != 1 || result.Credentials[0] != "secrets/github/release-bot.token" {
-		t.Errorf("Credentials = %v, want the file named even on the failure path", result.Credentials)
+	for _, id := range []string{"github-credential:release-bot", model.GitCredentialCapability("release-bot")} {
+		if _, err := adapter.CheckCapability(context.Background(), id); err == nil || !strings.Contains(err.Error(), "registers no provider") {
+			t.Errorf("CheckCapability(%q) = %v, want no provider registered", id, err)
+		}
 	}
 }
 

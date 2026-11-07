@@ -57,12 +57,25 @@ type APIRoute struct {
 	Scope       APIScope `json:"scope"`
 	Tool        string   `json:"tool"`
 	Description string   `json:"description"`
-	Params      []string `json:"params,omitempty"`
+	// Summary is Description's first line: what the route does, in the
+	// sentence routeDocs gives it (or its handler's name), without the
+	// boilerplate about the handler and scope that Description adds. It
+	// is what the compact explore listing shows and what the keyword
+	// filter searches.
+	Summary string   `json:"summary,omitempty"`
+	Params  []string `json:"params,omitempty"`
 	// NeedsReason says a call must carry a reason: a dangerous scope,
 	// or a DELETE.
 	NeedsReason bool `json:"needsReason,omitempty"`
-	body        any
-	query       map[string]string
+	// AliasOf names the whole-document route this one is a per-field
+	// alias of -- api_set_repo_ci_mode is api_set_repo_settings for the
+	// one field AliasField -- or is empty for a route that stands alone.
+	// grain_explore_scope folds aliases out of a listing unless asked
+	// for them (repoSettingsFieldRoutes).
+	AliasOf    string `json:"aliasOf,omitempty"`
+	AliasField string `json:"aliasField,omitempty"`
+	body       any
+	query      map[string]string
 }
 
 // APIToolPrefix begins every generated tool's name, so none can collide
@@ -77,15 +90,17 @@ var routeDocs = map[string]string{
 	"POST /api/settings":                                                   "Change deployment settings, as PUT /api/settings does: only the fields given are changed.",
 	"POST /api/settings/plan":                                              "Preview a settings change without saving it: what the given fields would change, and what it would take to apply.",
 	"PUT /api/settings/cli-run":                                            "Set the per-framework settings for agent CLI runs, keyed by framework.",
+	"POST /api/registry/heartbeat":                                         "Trigger an immediate registration and heartbeat step against the configured grain registry, returning the updated registry snapshot.",
 	"POST /api/capabilities/{id}/check":                                    "Check that a capability's credential works, by making one request to the service it is for; stores nothing.",
-	"GET /api/tasks":                                                       "List tasks, with their state, position in the queue and pull request; narrow with state, q, limit and fields=summary rather than reading every task's full record.",
-	"GET /api/pipeline/changes":                                            "Read what changed in the pipeline since a cursor: task transitions, merge-queue states, stalls, base-branch verdicts and merge-batch results, oldest first, with the cursor to read on from.",
+	"GET /api/tasks":                                                       "List tasks, with their state, position in the queue and pull request: with no parameters, every task that is not closed, without descriptions; narrow with state, q, limit and fields=summary, and page closed tasks with state=closed&cursor=.",
+	"GET /api/pipeline/changes":                                            "Read what changed in the pipeline since a cursor: task transitions, merge-queue states, stalls, base-branch verdicts, merge-batch results and the deployment's dispatch being blocked or unblocked (kind dispatch), oldest first, with the cursor to read on from.",
+	"GET /api/sandboxes":                                                   "Read the deployment's health: dispatchBlocked first -- every condition under which nothing is dispatched (a git proxy that failed to bind, a reconcile loop that died), each with its error, since when and a remedy; absent while dispatching -- then the sandbox pool, host pressure, daemon restarts, state-repo sync and the other checks.",
 	"POST /api/tasks":                                                      "File a new task: its title, description, repo and base branch, grants, dependencies and attachments.",
 	"POST /api/tasks/from-template":                                        "File a task from a repository's own declared template (.grain/templates/<template>.yml), by its stem, with its fields filled; an agent's call is also held to POST /api/tasks's rules.",
 	"POST /api/tasks/reorder":                                              "Move tasks in the queue: ids (in order) go after afterId and before beforeId; give only beforeId as the first queued task to move them to the front.",
 	"GET /api/tasks/{id}":                                                  "Read one task in full: its fields, grants, conversation and runs.",
 	"PATCH /api/tasks/{id}":                                                "Edit a task's title, description, priority, base branch, auto-merge or grants -- the same edit the task page makes.",
-	"POST /api/tasks/{id}/capabilities":                                    "Attach a capability to a task or detach one (attach false), with its arguments; replace swaps a grant out for another.",
+	"POST /api/tasks/{id}/capabilities":                                    "Attach a capability to a task or detach one (attach false), with its arguments; replace swaps a grant out for another. Under capabilities:detach alone, only attach false without replace, never on a standing session.",
 	"POST /api/tasks/{id}/depends-on":                                      "Make a task wait on another task (attach true), or stop waiting on it (attach false).",
 	"POST /api/tasks/{id}/approve":                                         "Approve a proposed task, which puts it in the queue.",
 	"POST /api/tasks/{id}/withdraw-approval":                               "Take a queued task back out of the queue, leaving it a proposal again without closing it.",
@@ -96,13 +111,18 @@ var routeDocs = map[string]string{
 	"POST /api/tasks/{id}/change-sync":                                     "Sync a task's CL to head. A person's call only: agents are refused, and it is refused while the task has a run going.",
 	"POST /api/tasks/{id}/change-publish":                                  "Publish the replies a task's runs left as drafts on its CLs. A person's call only: agents are refused.",
 	"POST /api/tasks/{id}/comments":                                        "Comment on a task's conversation.",
+	"POST /api/tasks/{id}/reply":                                           "Answer the question a task's run parked on (ask_question): refused with 409, posting nothing, when no question is parked or the task waits on a secret request, which is set on its page instead.",
+	"GET /api/tasks/wait":                                                  "Block up to timeout seconds (at most 60) until the tasks in ids reach an until condition: closed, merged, awaiting-reply, ci-done or any; re-issue it to wait longer.",
+	"GET /api/inbox":                                                       "The actionable items the Inbox surfaces: parked questions and secret requests, warning and critical notifications, merge-held pull requests and unapproved proposals, each with its UI path.",
+	"GET /api/refs/{ref}/summary":                                          "Roll up every readable task carrying an external work reference (externalRef): counts by state, CI checks passed and total, open awaiting_reply questions with their summaries and task ids, pull requests opened and merged, and the latest activity time.",
+	"GET /api/events":                                                      "Ordered task state transitions, questions, comments, and CI verdicts resumable from cursor since, as JSON (with optional wait long-poll) or Server-Sent Events (Accept: text/event-stream or stream=1).",
 	"PUT /api/tasks/{id}/secret":                                           "Answer a task's pending secret request with its value, which goes to the secret store and is never shown back.",
 	"POST /api/tasks/{id}/close":                                           "Close a task.",
 	"POST /api/tasks/{id}/stop":                                            "Stop a task's running attempt.",
 	"POST /api/tasks/{id}/pause":                                           "Pause a task in any open state, releasing everything it holds and keeping its place; immediate true skips a running task's grace period.",
 	"POST /api/tasks/{id}/resume":                                          "Resume a paused task, back to exactly the state and dispatch standing it had.",
-	"PUT /api/tasks/{id}/hostd":                                            "Pin a task's host work to one grain hostd by name, or to any hostd carrying label=value[,label=value]; \"\" is the default hostd.",
 	"PUT /api/tasks/{id}/goal":                                             "Set a task's goal -- {kind, spec, on_met, on_limit}, as propose_task's goal -- replacing any it had; grain closes or rests the task when it is met.",
+	"PUT /api/tasks/{id}/hostd":                                            "Refused: a task has no host. Which host host work runs on is set on the model connection or capability server, not the task.",
 	"DELETE /api/tasks/{id}/goal":                                          "Remove a task's goal, making it an ordinary task again.",
 	"POST /api/tasks/{id}/reopen":                                          "Reopen a closed task.",
 	"POST /api/tasks/{id}/retry":                                           "Queue a task for another attempt.",
@@ -110,10 +130,15 @@ var routeDocs = map[string]string{
 	"POST /api/tasks/{id}/force-merge":                                     "Merge a task's pull request even though the merge queue will not, recording reason; head pins the commit to merge.",
 	"POST /api/tasks/{id}/run-now":                                         "Dispatch a queued task now, ahead of the queue.",
 	"POST /api/tasks/{id}/pull-request":                                    "Open the pull request for a task's pushed branch now, rather than when its run ends.",
+	"POST /api/pull-requests/adopt":                                        "Adopt a pull request grain did not open (owner/name#n or its URL) as a shepherd task: review-only (the default) reviews and gates it without pushing; finish also pushes fixes, and upgrades a review-only shepherd in place. Needs merge:write and tasks:write on its repository.",
+	"POST /api/pull-requests/review":                                       "File a grain review of a pull request (owner/name#n or its URL); design: true checks design-folder conventions and overlapping designs. Needs tasks:write and repos:read on its repository.",
+	"GET /api/pull-requests/status":                                        "Where a pull request stands: its head, shepherd task and mode, latest grain CI run and failing jobs, grain reviews and findings, and its merge-queue gate. Needs ci:read and tasks:read on its repository.",
 	"POST /api/tasks/{id}/sandbox/recreate":                                "Destroy a task's sandbox and build a fresh one in its place; uncommitted work in it is lost.",
 	"POST /api/sandbox-probe":                                              "Build a throwaway sandbox named probe-<id>, run argv in it over the deployment's guest-access channel (access: dialout or kubectl), return its output and exit code, and delete it.",
 	"POST /api/tasks/{id}/messages":                                        "Say something to the human watching your own task and park it on their reply (the chat tool's write half); only your own task's id is accepted. Give summary too: one line of at most 100 characters naming the decision you need, which is all the inbox and task list show of it. To message another task's agent, use POST /api/tasks/{id}/agent-messages.",
 	"POST /api/tasks/{id}/agent-messages":                                  "Send a message to another task's agent, signed as your task: its live run gets it on its next tool result, or its next run reads it; the task is never parked or re-queued by it.",
+	"POST /api/tasks/{id}/human-review":                                    "From a review run, as your own task: hold the change you review for a person's decision (request_human_review) -- a product or design call, a risky migration, a security-sensitive behaviour change, an unclear brief. Turns its auto-merge off until a person submits or releases it. Code defects an agent can fix are findings, not this.",
+	"POST /api/tasks/{id}/human-review/release":                            "Release a task's human-review hold as a person, recorded with who released it. Refused for any agent: an agent may raise the hold, never release it.",
 	"POST /api/tasks/{id}/notes":                                           "Leave a note for your parent's or a child's agent (message_task): it never parks that task, reaches its live run, and wakes it if it is a resting durable task. Any other task needs api:task-admin.",
 	"POST /api/notifications":                                              "Raise an operator notification, or bump the open one with the same subject; it never parks anybody.",
 	"POST /api/notifications/{id}/clear":                                   "Clear an operator notification.",
@@ -125,16 +150,18 @@ var routeDocs = map[string]string{
 	"PUT /api/release-notes":                                               "Write the release notes for a week (period; the week just ended without one).",
 	"POST /api/repos":                                                      "Add a repository to the deployment's targets.",
 	"DELETE /api/repos/{owner}/{name}":                                     "Remove a repository from the deployment's targets.",
-	"PUT /api/repos/{owner}/{name}/ci-capabilities":                        "Set the capabilities a repository's grain CI jobs are granted.",
+	"PUT /api/repos/{owner}/{name}/ci-capabilities":                        "Set the capabilities a repository's grain CI jobs are granted. Under capabilities:detach alone, only a subset of the stored list.",
 	"PUT /api/repos/{owner}/{name}/release":                                "Turn a repository's release workflow on or off, and set the jobs that judge its base branches and are dispatched after a merge.",
 	"PUT /api/repos/{owner}/{name}/release-secrets/{secret}":               "Set the value of one of a repository's release secrets.",
 	"DELETE /api/repos/{owner}/{name}/release-secrets/{secret}":            "Delete one of a repository's release secrets.",
 	"POST /api/repos/{owner}/{name}/release-runs":                          "Start a release run of a repository, at a branch, ref or commit, optionally only some jobs.",
 	"POST /api/repos/{owner}/{name}/pending-releases/{version}/approve":    "Approve a pending trunk release (vX.Y.Z), making it official; short_soak_ok accepts a soak under the minimum and allow_breaking breaking changes outside a RELEASE_MAJOR release, each otherwise refused. Only a person may; an agent is refused.",
+	"GET /api/release-approval-key":                                        "The public key a GitHub Actions promote-release.yml verifies an Inbox approval with: the value for the repository variable GRAIN_RELEASE_APPROVAL_KEY.",
 	"POST /api/repos/{owner}/{name}/pending-releases/{version}/reject":     "Reject a pending trunk release (vX.Y.Z), dropping its release candidate. Only a person may; an agent is refused.",
+	"POST /api/releases/{version}/rollback":                                "Roll back a promoted trunk release (vX.Y.Z), tagging vX.Y.Z-retracted and re-pointing latest to an earlier release. Only a person may; an agent is refused.",
 	"POST /api/repos/{owner}/{name}/base-branch-runs":                      "Start a grain CI run of one of a repository's base branches.",
 	"PUT /api/repos/{owner}/{name}/work-ownership":                         "Set who owns a repository's work: its default, or one work item's override.",
-	"PUT /api/repos/{owner}/{name}/capabilities":                           "Set the capabilities every task on a repository is granted by default.",
+	"PUT /api/repos/{owner}/{name}/capabilities":                           "Set the capabilities every task on a repository is granted by default. Under capabilities:detach alone, only a subset of the stored list.",
 	"PUT /api/repos/{owner}/{name}/prompt-extension":                       "Set the text added to every agent prompt for work on a repository.",
 	"PUT /api/repos/{owner}/{name}/setup-command":                          "Set the command a sandbox runs to set up a repository's checkout.",
 	"PUT /api/repos/{owner}/{name}/declarations":                           "Set whether grain reads a repository's own declarations from its tree.",
@@ -179,16 +206,20 @@ var routeDocs = map[string]string{
 	"PUT /api/deployment":                                                  "Change the deployment's default model, per-model settings and target repositories.",
 	"POST /api/deployment/git-connections":                                 "Add a git connection to the deployment: the credential grain reaches a git host with.",
 	"DELETE /api/deployment/git-connections/{cred}":                        "Remove one of the deployment's git connections.",
-	"POST /api/deployment/git-connections/check":                           "Check a git connection works, without saving it.",
+	"POST /api/deployment/git-connections/check":                           "Check a git connection works, without saving it. To check an unsaved connection, leave credential empty and give what the editor would: type (pat with value, app with app, or ambient with nothing else) and host. To check a saved connection instead, name it in credential and give no value: credential is only ever a saved credential's name, never a type.",
 	"PUT /api/deployment/agent-backends/{backendId}":                       "Create or replace one of the deployment's model connections.",
 	"DELETE /api/deployment/agent-backends/{backendId}":                    "Delete one of the deployment's model connections.",
 	"PUT /api/deployment/repos/{owner}/{name}/config":                      "Set a repository's deployment-level configuration: only the fields given are changed.",
 	"PUT /api/deployment/repos/{owner}/{name}/git-connection":              "Set which git connection a repository is reached through.",
 	"POST /api/deployment/broadcast":                                       "Post a comment to every active task (running_only: only those with a run in flight).",
-	"POST /api/hostds":                                                     "Register a remote grain hostd; its token is shown once, in the answer.",
-	"PATCH /api/hostds/{name}":                                             "Set a hostd's owner or labels.",
-	"POST /api/hostds/{name}/rotate":                                       "Retire a hostd's token and mint a new one, shown once in the answer.",
-	"POST /api/hostds/{name}/revoke":                                       "Revoke a hostd and every token it has.",
+	"POST /api/hostds":                                                     "Register a remote host; its token is shown once, in the answer.",
+	"PATCH /api/hostds/{name}":                                             "Set a host's owner, labels, or capacity.",
+	"POST /api/hostds/{name}/rename":                                       "Rename a registered host.",
+	"GET /api/hostds/{name}/install":                                       "Show how to install a registered host on its machine again; never its token.",
+	"POST /api/hostds/{name}/rotate":                                       "Retire a host's token and mint a new one, shown once in the answer.",
+	"POST /api/hostds/{name}/revoke":                                       "Revoke a host and every token it has.",
+	"DELETE /api/hostds/{name}":                                            "Delete a revoked host from the registry, with its tokens; refused for a live host or one a model connection or capability server still names.",
+	"POST /api/hostds/delete-revoked":                                      "Delete every revoked host nothing still names; lists the ones skipped.",
 	"PUT /api/agent-keys/{framework}":                                      "Set an agent framework's credential.",
 	"DELETE /api/agent-keys/{framework}":                                   "Clear an agent framework's credential.",
 	"PUT /api/agent-backends/{id}/credential":                              "Set a model connection's credential.",
@@ -210,6 +241,9 @@ var routeDocs = map[string]string{
 	"POST /api/capability-servers/test-script":                             "Run a capability server's host script once, with argv, to test it.",
 	"POST /api/capability-servers/gchat-test":                              "Post a marked test message to one configured space of a gchat capability server.",
 	"GET /api/capability-servers/gchat-usage":                              "Read each configured space's post counts on a gchat capability server.",
+	"POST /api/capability-servers/figma-test":                              "Verify one configured account on a figma capability server against Figma /v1/me.",
+	"POST /api/capability-servers/figma-oauth-authorize":                   "Build a Figma OAuth 2.0 browser authorization URL for a configured oauth account.",
+	"POST /api/capability-servers/figma-oauth-exchange":                    "Exchange a Figma OAuth 2.0 authorization code and store its refresh token in the encrypted secrets store.",
 	"PUT /api/capability-policy":                                           "Set the deployment's capability policy.",
 	"GET /api/api-scope-sets":                                              "List the agent API's scope sets, built-in and declared, with the scopes each resolves to.",
 	"GET /api/api-scope-sets/usage":                                        "List every open task, template, schedule and workflow job holding each API scope set.",
@@ -220,7 +254,7 @@ var routeDocs = map[string]string{
 	"PUT /api/gcp-keys/{name}":                                             "Create or replace a named GCP key.",
 	"DELETE /api/gcp-keys/{name}":                                          "Delete a named GCP key.",
 	"PUT /api/github-tokens/{name}":                                        "Set a named GitHub token.",
-	"DELETE /api/github-tokens/{name}":                                     "Delete a named GitHub token; refused while a git connection still names it.",
+	"DELETE /api/github-tokens/{name}":                                     "Delete a named GitHub token; refused while a git connection or capability grant still names it.",
 	"PUT /api/secrets/{secret}/{key}":                                      "Set one key of a secret; the value is stored and never shown back.",
 	"DELETE /api/secrets/{secret}/{key}":                                   "Delete one key of a secret.",
 	"DELETE /api/secrets/{secret}":                                         "Delete a secret and every key in it.",
@@ -235,11 +269,8 @@ var routeDocs = map[string]string{
 	"POST /api/host/shutdown":                                              "Power off the machine grain runs on; it does not come back on its own.",
 	"POST /api/host/restart":                                               "Restart the grain service, without touching the machine it runs on.",
 	"POST /api/upgrade":                                                    "Start or schedule upgrading grain to a branch or image; set afterTasksFinish: true to drain running tasks and CI jobs first (your own run counts, so finish rather than polling), as false restarts grain immediately and discards in-flight work.",
+	"PUT /api/upgrade/source":                                              "Configure where container-image upgrades fetch candidate images from (release-assets or registry, plus optional release repository and fallback) when not locked by a daemon flag or environment variable.",
 	"DELETE /api/upgrade/scheduled":                                        "Cancel an upgrade waiting for running tasks to finish.",
-	"POST /api/database/test":                                              "Check grain can connect to a database DSN.",
-	"POST /api/database/upgrade":                                           "Move grain's store to a Postgres DSN; the first call answers with a confirmation token, which a second identical call must carry.",
-	"POST /api/upgrade/postgres":                                           "Move grain's store to a Postgres DSN, as POST /api/database/upgrade does.",
-	"POST /api/settings/db/migrate-to-postgres":                            "Move grain's store to a Postgres DSN, as POST /api/database/upgrade does.",
 	"POST /api/persistent-sandboxes/{name}/{action}":                       "Act on a persistent sandbox: action is stop, start, restart or rebuild.",
 	"DELETE /api/pause":                                                    "Lift agent pauses: those of a connection (query connection, and model), of a team (team, and framework), or every pause the caller may lift.",
 	"POST /api/console/{id}/input":                                         "Type input into an interactive console session.",
@@ -269,6 +300,7 @@ var routeDocs = map[string]string{
 	"POST /api/external-agents/tokens/revoke-all":                          "Emergency kill switch: revoke every active external agent credential immediately.",
 	"GET /api/access/principals":                                           "List the allowed users and groups admitted through verified-identity sign-in.",
 	"POST /api/access/principals":                                          "Add a user:<email> or group:<email> entry to the allowed users and groups list (idempotent when already present).",
+	"PATCH /api/access/principals/{entry}":                                 "Give an entry on the allowed users and groups list another role (a scope set).",
 	"DELETE /api/access/principals/{entry}":                                "Remove a user:<email> or group:<email> entry from the allowed users and groups list.",
 }
 
@@ -285,119 +317,125 @@ var routeBodies = map[string]any{
 	"POST /api/tasks/from-template": FromTemplateRequest{},
 	"POST /api/repos/{owner}/{name}/pending-releases/{version}/approve": ReleaseApproval{},
 	"POST /api/repos/{owner}/{name}/pending-releases/{version}/reject":  ReleaseApproval{},
-	"POST /api/tasks/reorder":                                        ReorderRequest{},
-	"PATCH /api/tasks/{id}":                                          UpdateTaskRequest{},
-	"POST /api/tasks/{id}/capabilities":                              setCapabilityRequest{},
-	"POST /api/tasks/{id}/depends-on":                                setDependencyRequest{},
-	"POST /api/tasks/{id}/defer":                                     deferRequest{},
-	"POST /api/sandbox-probe":                                        SandboxProbeRequest{},
-	"POST /api/tasks/{id}/pause":                                     pauseRequest{},
-	"PUT /api/tasks/{id}/goal":                                       setGoalRequest{},
-	"PUT /api/tasks/{id}/hostd":                                      setHostdRequest{},
-	"POST /api/tasks/{id}/run-now":                                   runNowRequest{},
-	"POST /api/tasks/{id}/comments":                                  addCommentRequest{},
-	"POST /api/tasks/{id}/change-mail":                               MailChangeRequest{},
-	"PUT /api/tasks/{id}/secret":                                     setPendingSecretRequest{},
-	"POST /api/tasks/{id}/close":                                     closeRequest{},
-	"POST /api/tasks/{id}/reopen":                                    reopenRequest{},
-	"POST /api/tasks/{id}/force-merge":                               forceMergeRequest{},
-	"POST /api/tasks/{id}/messages":                                  messageRequest{},
-	"POST /api/tasks/{id}/agent-messages":                            agentMessageRequest{},
-	"POST /api/tasks/{id}/notes":                                     NoteRequest{},
-	"POST /api/notifications":                                        RaiseNotificationRequest{},
-	"POST /api/tasks/{id}/wait-on":                                   waitOnRequest{},
-	"POST /api/tasks/{id}/park-until":                                parkUntilRequest{},
-	"POST /api/tasks/{id}/resume-later":                              resumeLaterRequest{},
-	"PUT /api/memory":                                                memoryRequest{},
-	"PUT /api/memory/documents":                                      memoryDocumentRequest{},
-	"PUT /api/release-notes":                                         releaseNoteRequest{},
-	"POST /api/repos":                                                AddRepoRequest{},
-	"PUT /api/repos/{owner}/{name}/ci-capabilities":                  setRepoCICapabilitiesRequest{},
-	"PUT /api/repos/{owner}/{name}/release":                          setRepoReleaseRequest{},
-	"PUT /api/repos/{owner}/{name}/release-secrets/{secret}":         setRepoReleaseSecretRequest{},
-	"POST /api/repos/{owner}/{name}/release-runs":                    RepoReleaseRunRequest{},
-	"POST /api/repos/{owner}/{name}/base-branch-runs":                BaseBranchRunRequest{},
-	"PUT /api/repos/{owner}/{name}/work-ownership":                   SetRepoWorkOwnershipRequest{},
-	"PUT /api/repos/{owner}/{name}/capabilities":                     SetRepoCapabilitiesRequest{},
-	"PUT /api/repos/{owner}/{name}/prompt-extension":                 SetRepoPromptExtensionRequest{},
-	"PUT /api/repos/{owner}/{name}/setup-command":                    SetRepoSetupCommandRequest{},
-	"PUT /api/repos/{owner}/{name}/declarations":                     SetRepoDeclarationsRequest{},
-	"PUT /api/repos/{owner}/{name}/require-branch-up-to-date":        SetRepoRequireBranchUpToDateRequest{},
-	"PUT /api/repos/{owner}/{name}/ignore-github-ci":                 SetRepoIgnoreGitHubCIRequest{},
-	"PUT /api/repos/{owner}/{name}/ci-mode":                          SetRepoCIModeRequest{},
-	"PUT /api/repos/{owner}/{name}/settings":                         SetRepoSettingsRequest{},
-	"PUT /api/repos/{owner}/{name}/watch-default-branch":             SetRepoWatchDefaultBranchRequest{},
-	"PUT /api/repos/{owner}/{name}/merge-on-green":                   SetRepoMergeOnGreenRequest{},
-	"PUT /api/repos/{owner}/{name}/base-repair-bypasses-human-gates": SetRepoBaseRepairBypassesHumanGatesRequest{},
-	"PUT /api/repos/{owner}/{name}/unfixable-checks":                 SetRepoUnfixableChecksRequest{},
-	"PUT /api/repos/{owner}/{name}/workflows":                        SetRepoWorkflowsRequest{},
-	"POST /api/repos/{owner}/{name}/releases":                        CreateReleaseRequest{},
-	"POST /api/repos/{owner}/{name}/branches":                        CreateBranchRequest{},
-	"PUT /api/repos/{owner}/{name}/qualification-plan":               PutQualificationPlanRequest{},
-	"POST /api/schedules":                                            CreateScheduleRequest{},
-	"PATCH /api/schedules/{id}":                                      UpdateScheduleRequest{},
-	"POST /api/schedules/composition":                                CreateScheduleRequest{},
-	"POST /api/templates":                                            CreateTemplateRequest{},
-	"PATCH /api/templates/{id}":                                      UpdateTemplateRequest{},
-	"POST /api/suites":                                               CreateSuiteRequest{},
-	"PATCH /api/suites/{id}":                                         UpdateSuiteRequest{},
-	"POST /api/suites/composition":                                   CreateSuiteRequest{},
-	"POST /api/suite-runs":                                           CreateSuiteRunRequest{},
-	"POST /api/boards":                                               CreateBoardRequest{},
-	"PATCH /api/boards/{id}":                                         UpdateBoardRequest{},
-	"PUT /api/deployment":                                            UpdateDeploymentRequest{},
-	"POST /api/deployment/git-connections":                           AddTeamGitConnectionRequest{},
-	"POST /api/deployment/git-connections/check":                     CheckTeamGitConnectionRequest{},
-	"PUT /api/deployment/agent-backends/{backendId}":                 putDeploymentAgentBackendRequest{},
-	"PUT /api/deployment/repos/{owner}/{name}/config":                SetDeploymentRepoConfigRequest{},
-	"PUT /api/deployment/repos/{owner}/{name}/git-connection":        SetTeamRepoGitConnectionRequest{},
-	"POST /api/deployment/broadcast":                                 BroadcastTeamRequest{},
-	"POST /api/hostds":                                               CreateHostdRequest{},
-	"PATCH /api/hostds/{name}":                                       UpdateHostdRequest{},
-	"PUT /api/agent-keys/{framework}":                                setAgentKeyRequest{},
-	"PUT /api/agent-backends/{id}/credential":                        setAgentKeyRequest{},
-	"PUT /api/agent-backends/{id}/codex-auth":                        setAgentKeyRequest{},
-	"PUT /api/codex-auth":                                            setAgentKeyRequest{},
-	"POST /api/capability-grants/check":                              checkGrantsRequest{},
-	"PUT /api/capability-servers":                                    SetCapabilityServerRequest{},
-	"POST /api/capability-servers/remove":                            CapabilityServerIDRequest{},
-	"POST /api/capability-servers/enable":                            CapabilityServerIDRequest{},
-	"POST /api/capability-servers/disable":                           CapabilityServerIDRequest{},
-	"POST /api/capability-servers/dismiss-notice":                    CapabilityServerIDRequest{},
-	"POST /api/capability-servers/rotate-managed":                    CapabilityServerIDRequest{},
-	"POST /api/capability-servers/bind-secret":                       BindCapabilityServerSecretRequest{},
-	"POST /api/capability-servers/test":                              TestCapabilityServerRequest{},
-	"POST /api/capability-servers/test-script":                       TestHostScriptRequest{},
-	"POST /api/capability-servers/gchat-test":                        TestGChatPostRequest{},
-	"PUT /api/capability-policy":                                     CapabilityPolicyBody{},
-	"PUT /api/api-scope-sets":                                        PutAPIScopeSetRequest{},
-	"POST /api/api-scope-sets/delete":                                DeleteAPIScopeSetRequest{},
-	"POST /api/capability-policy/preview":                            CapabilityPolicyBody{},
-	"POST /api/gcp-keys":                                             SetGCPKeyRequest{},
-	"PUT /api/gcp-keys/{name}":                                       SetGCPKeyRequest{},
-	"PUT /api/github-tokens/{name}":                                  setGitHubTokenRequest{},
-	"PUT /api/secrets/{secret}/{key}":                                setSecretRequest{},
-	"POST /api/state-repo/pull-requests":                             ConfigPullRequestRequest{},
-	"POST /api/state-repo/remote":                                    stateRepoRemoteRequest{},
-	"POST /api/state-repo/secrets-key":                               secretsKeyRequest{},
-	"POST /api/state-repo/import-key":                                secretsKeyRequest{},
-	"POST /api/state-repo/secrets-repo":                              secretsRepoRequest{},
-	"POST /api/upgrade":                                              startUpgradeRequest{},
-	"POST /api/database/test":                                        testDatabaseRequest{},
-	"POST /api/database/upgrade":                                     upgradeDatabaseRequest{},
-	"POST /api/upgrade/postgres":                                     upgradeDatabaseRequest{},
-	"POST /api/settings/db/migrate-to-postgres":                      upgradeDatabaseRequest{},
-	"POST /api/console/{id}/input":                                   consoleInputRequest{},
-	"POST /api/console/{id}/resize":                                  consoleResizeRequest{},
-	"POST /api/console-sessions":                                     CreateConsoleSessionRequest{},
-	"PUT /api/console-sessions/{id}":                                 UpdateConsoleSessionRequest{},
-	"POST /api/console-sessions/{id}/restart":                        RestartConsoleSessionRequest{},
-	"POST /api/ci/runs":                                              CIRunRequest{},
-	"DELETE /api/ci/runs/{id}":                                       CICancelRequest{},
-	"POST /api/tests/quarantine":                                     QuarantineTestRequest{},
-	"POST /api/pipeline-pause":                                       pausePipelineRequest{},
-	"POST /api/external-agents/tokens":                               CreateExternalAgentTokenRequest{},
-	"POST /api/access/principals":                                    AllowPrincipalRequest{},
+	"POST /api/releases/{version}/rollback":                             ReleaseRollback{},
+	"POST /api/tasks/reorder":                                           ReorderRequest{},
+	"PATCH /api/tasks/{id}":                                             UpdateTaskRequest{},
+	"POST /api/tasks/{id}/capabilities":                                 setCapabilityRequest{},
+	"POST /api/tasks/{id}/depends-on":                                   setDependencyRequest{},
+	"POST /api/tasks/{id}/defer":                                        deferRequest{},
+	"POST /api/sandbox-probe":                                           SandboxProbeRequest{},
+	"POST /api/tasks/{id}/pause":                                        pauseRequest{},
+	"PUT /api/tasks/{id}/goal":                                          setGoalRequest{},
+	"POST /api/tasks/{id}/run-now":                                      runNowRequest{},
+	"POST /api/tasks/{id}/comments":                                     addCommentRequest{},
+	"POST /api/tasks/{id}/reply":                                        addCommentRequest{},
+	"POST /api/tasks/{id}/change-mail":                                  MailChangeRequest{},
+	"PUT /api/tasks/{id}/secret":                                        setPendingSecretRequest{},
+	"POST /api/tasks/{id}/close":                                        closeRequest{},
+	"POST /api/tasks/{id}/reopen":                                       reopenRequest{},
+	"POST /api/tasks/{id}/force-merge":                                  forceMergeRequest{},
+	"POST /api/tasks/{id}/messages":                                     messageRequest{},
+	"POST /api/tasks/{id}/agent-messages":                               agentMessageRequest{},
+	"POST /api/tasks/{id}/notes":                                        NoteRequest{},
+	"POST /api/tasks/{id}/human-review":                                 HumanReviewRequestBody{},
+	"POST /api/notifications":                                           RaiseNotificationRequest{},
+	"POST /api/tasks/{id}/wait-on":                                      waitOnRequest{},
+	"POST /api/tasks/{id}/park-until":                                   parkUntilRequest{},
+	"POST /api/tasks/{id}/resume-later":                                 resumeLaterRequest{},
+	"PUT /api/memory":                                                   memoryRequest{},
+	"PUT /api/memory/documents":                                         memoryDocumentRequest{},
+	"PUT /api/release-notes":                                            releaseNoteRequest{},
+	"POST /api/repos":                                                   AddRepoRequest{},
+	"PUT /api/repos/{owner}/{name}/ci-capabilities":                     setRepoCICapabilitiesRequest{},
+	"PUT /api/repos/{owner}/{name}/release":                             setRepoReleaseRequest{},
+	"PUT /api/repos/{owner}/{name}/release-secrets/{secret}":            setRepoReleaseSecretRequest{},
+	"POST /api/repos/{owner}/{name}/release-runs":                       RepoReleaseRunRequest{},
+	"POST /api/repos/{owner}/{name}/base-branch-runs":                   BaseBranchRunRequest{},
+	"PUT /api/repos/{owner}/{name}/work-ownership":                      SetRepoWorkOwnershipRequest{},
+	"PUT /api/repos/{owner}/{name}/capabilities":                        SetRepoCapabilitiesRequest{},
+	"PUT /api/repos/{owner}/{name}/prompt-extension":                    SetRepoPromptExtensionRequest{},
+	"PUT /api/repos/{owner}/{name}/setup-command":                       SetRepoSetupCommandRequest{},
+	"PUT /api/repos/{owner}/{name}/declarations":                        SetRepoDeclarationsRequest{},
+	"PUT /api/repos/{owner}/{name}/require-branch-up-to-date":           SetRepoRequireBranchUpToDateRequest{},
+	"PUT /api/repos/{owner}/{name}/ignore-github-ci":                    SetRepoIgnoreGitHubCIRequest{},
+	"PUT /api/repos/{owner}/{name}/ci-mode":                             SetRepoCIModeRequest{},
+	"PUT /api/repos/{owner}/{name}/settings":                            SetRepoSettingsRequest{},
+	"PUT /api/repos/{owner}/{name}/watch-default-branch":                SetRepoWatchDefaultBranchRequest{},
+	"PUT /api/repos/{owner}/{name}/merge-on-green":                      SetRepoMergeOnGreenRequest{},
+	"PUT /api/repos/{owner}/{name}/base-repair-bypasses-human-gates":    SetRepoBaseRepairBypassesHumanGatesRequest{},
+	"PUT /api/repos/{owner}/{name}/unfixable-checks":                    SetRepoUnfixableChecksRequest{},
+	"PUT /api/repos/{owner}/{name}/workflows":                           SetRepoWorkflowsRequest{},
+	"POST /api/repos/{owner}/{name}/releases":                           CreateReleaseRequest{},
+	"POST /api/repos/{owner}/{name}/branches":                           CreateBranchRequest{},
+	"PUT /api/repos/{owner}/{name}/qualification-plan":                  PutQualificationPlanRequest{},
+	"POST /api/schedules":                                               CreateScheduleRequest{},
+	"PATCH /api/schedules/{id}":                                         UpdateScheduleRequest{},
+	"POST /api/schedules/composition":                                   CreateScheduleRequest{},
+	"POST /api/templates":                                               CreateTemplateRequest{},
+	"PATCH /api/templates/{id}":                                         UpdateTemplateRequest{},
+	"POST /api/suites":                                                  CreateSuiteRequest{},
+	"PATCH /api/suites/{id}":                                            UpdateSuiteRequest{},
+	"POST /api/suites/composition":                                      CreateSuiteRequest{},
+	"POST /api/suite-runs":                                              CreateSuiteRunRequest{},
+	"POST /api/boards":                                                  CreateBoardRequest{},
+	"PATCH /api/boards/{id}":                                            UpdateBoardRequest{},
+	"PUT /api/deployment":                                               UpdateDeploymentRequest{},
+	"POST /api/deployment/git-connections":                              AddTeamGitConnectionRequest{},
+	"POST /api/deployment/git-connections/check":                        CheckTeamGitConnectionRequest{},
+	"PUT /api/deployment/agent-backends/{backendId}":                    putDeploymentAgentBackendRequest{},
+	"PUT /api/deployment/repos/{owner}/{name}/config":                   SetDeploymentRepoConfigRequest{},
+	"PUT /api/deployment/repos/{owner}/{name}/git-connection":           SetTeamRepoGitConnectionRequest{},
+	"POST /api/deployment/broadcast":                                    BroadcastTeamRequest{},
+	"POST /api/hostds":                                                  CreateHostdRequest{},
+	"PATCH /api/hostds/{name}":                                          UpdateHostdRequest{},
+	"POST /api/hostds/{name}/rename":                                    RenameHostdRequest{},
+	"PUT /api/agent-keys/{framework}":                                   setAgentKeyRequest{},
+	"PUT /api/agent-backends/{id}/credential":                           setAgentKeyRequest{},
+	"PUT /api/agent-backends/{id}/codex-auth":                           setAgentKeyRequest{},
+	"PUT /api/codex-auth":                                               setAgentKeyRequest{},
+	"POST /api/capability-grants/check":                                 checkGrantsRequest{},
+	"PUT /api/capability-servers":                                       SetCapabilityServerRequest{},
+	"POST /api/capability-servers/remove":                               CapabilityServerIDRequest{},
+	"POST /api/capability-servers/enable":                               CapabilityServerIDRequest{},
+	"POST /api/capability-servers/disable":                              CapabilityServerIDRequest{},
+	"POST /api/capability-servers/dismiss-notice":                       CapabilityServerIDRequest{},
+	"POST /api/capability-servers/rotate-managed":                       CapabilityServerIDRequest{},
+	"POST /api/capability-servers/bind-secret":                          BindCapabilityServerSecretRequest{},
+	"POST /api/capability-servers/test":                                 TestCapabilityServerRequest{},
+	"POST /api/capability-servers/test-script":                          TestHostScriptRequest{},
+	"POST /api/capability-servers/gchat-test":                           TestGChatPostRequest{},
+	"POST /api/capability-servers/figma-test":                           TestFigmaAccountRequest{},
+	"POST /api/capability-servers/figma-oauth-authorize":                FigmaOAuthAuthorizeRequest{},
+	"POST /api/capability-servers/figma-oauth-exchange":                 FigmaOAuthExchangeRequest{},
+	"PUT /api/capability-policy":                                        CapabilityPolicyBody{},
+	"PUT /api/api-scope-sets":                                           PutAPIScopeSetRequest{},
+	"POST /api/api-scope-sets/delete":                                   DeleteAPIScopeSetRequest{},
+	"POST /api/capability-policy/preview":                               CapabilityPolicyBody{},
+	"POST /api/gcp-keys":                                                SetGCPKeyRequest{},
+	"PUT /api/gcp-keys/{name}":                                          SetGCPKeyRequest{},
+	"PUT /api/github-tokens/{name}":                                     setGitHubTokenRequest{},
+	"PUT /api/secrets/{secret}/{key}":                                   setSecretRequest{},
+	"POST /api/state-repo/pull-requests":                                ConfigPullRequestRequest{},
+	"POST /api/pull-requests/adopt":                                     AdoptPullRequestRequest{},
+	"POST /api/pull-requests/review":                                    ReviewPullRequestRequest{},
+	"POST /api/state-repo/remote":                                       stateRepoRemoteRequest{},
+	"POST /api/state-repo/secrets-key":                                  secretsKeyRequest{},
+	"POST /api/state-repo/import-key":                                   secretsKeyRequest{},
+	"POST /api/state-repo/secrets-repo":                                 secretsRepoRequest{},
+	"POST /api/upgrade":                                                 startUpgradeRequest{},
+	"PUT /api/upgrade/source":                                           updateUpgradeSourceRequest{},
+	"POST /api/console/{id}/input":                                      consoleInputRequest{},
+	"POST /api/console/{id}/resize":                                     consoleResizeRequest{},
+	"POST /api/console-sessions":                                        CreateConsoleSessionRequest{},
+	"PUT /api/console-sessions/{id}":                                    UpdateConsoleSessionRequest{},
+	"POST /api/console-sessions/{id}/restart":                           RestartConsoleSessionRequest{},
+	"POST /api/ci/runs":                                                 CIRunRequest{},
+	"DELETE /api/ci/runs/{id}":                                          CICancelRequest{},
+	"POST /api/tests/quarantine":                                        QuarantineTestRequest{},
+	"POST /api/pipeline-pause":                                          pausePipelineRequest{},
+	"POST /api/external-agents/tokens":                                  CreateExternalAgentTokenRequest{},
+	"POST /api/access/principals":                                       AllowPrincipalRequest{},
+	"PATCH /api/access/principals/{entry}":                              SetPrincipalRoleRequest{},
 }
 
 // routeQueries is the query parameters a route's handler reads, each
@@ -406,6 +444,10 @@ var routeBodies = map[string]any{
 // still carries any parameter a caller adds (such as a template
 // composition's field.<name>).
 var routeQueries = map[string]map[string]string{
+	"GET /api/pull-requests/status": {
+		"pr":      "The pull request: owner/name#n or its URL.",
+		"threads": "1 to include every inline review thread's file, line and body.",
+	},
 	"GET /api/restart-watch": {
 		"quick": "1 to answer at once with whether grain is restarting, rather than holding the request until it is or 25 s pass.",
 	},
@@ -415,12 +457,43 @@ var routeQueries = map[string]map[string]string{
 		"repo":  "Only this repository's tasks, base branches and merge batches (owner/name); a repository-scoped tasks:read grant must name its own.",
 	},
 	"GET /api/tasks": {
-		"repo":   "Only this repository's (owner/name) tasks; a repository-scoped tasks:read grant must name its own.",
-		"state":  "Only tasks in these states, repeated or comma-separated (proposed, queued, running, awaiting_reply, failed, awaiting_submit, completed, closed).",
-		"q":      "Only tasks whose title contains this text, case-insensitively.",
-		"search": "The same as q.",
-		"limit":  "At most this many tasks: the newest by filing time, listed oldest first.",
-		"fields": "summary for id, title, state, repo, createdAt, blockedBy and stall only -- no description; use it when the full records are not needed.",
+		"repo":         "Only this repository's (owner/name) tasks; a repository-scoped tasks:read grant must name its own.",
+		"state":        "Only tasks in these states, repeated or comma-separated (proposed, queued, running, awaiting_reply, failed, awaiting_submit, completed, closed).",
+		"q":            "Only tasks whose title or description contains this text (or whose id it is), case-insensitively.",
+		"search":       "The same as q.",
+		"limit":        "At most this many tasks: the newest by filing time, listed oldest first; with cursor, a page's size (default 100).",
+		"fields":       "summary for id, title, state, repo, createdAt, blockedBy and stall only -- no description; list for every field but the description; full, alone, for every task in every state with every field. Without any parameter the list is every task that is not closed, without descriptions.",
+		"cursor":       "Page through the matching tasks newest-closed first, starting after this cursor (empty for the first page); the answer is {tasks, nextCursor, total, merged, sessions}, without descriptions, the three counts taken across every page (merged: pull request merged; sessions: console or interactive sessions).",
+		"closedSince":  "Only tasks closed at or after this RFC 3339 time.",
+		"closedBefore": "Only tasks closed before this RFC 3339 time.",
+		"derived_from": "Only tasks whose provenance records being derived from this pull request (owner/name#number or its URL).",
+		"filed_via":    "Only tasks whose filedVia (the X-Grain-Client label they were filed with) contains this text, case-insensitively.",
+		"externalRef":  "Only tasks carrying this exact external work reference (for example CA-204).",
+		"owner":        "Only tasks owned by this account (or me for the caller's own).",
+	},
+	"GET /api/tasks/wait": {
+		"ids":     "The task ids to wait on, repeated or comma-separated; tasks:read must reach every one.",
+		"until":   "closed (every task closed), merged (every task merged; answers failed at once if one closes unmerged), awaiting-reply (any task parked on a question or secret), ci-done (any task's latest CI concluded) or any (any change after since); comma-separated for the first of several.",
+		"timeout": "How many seconds to hold the request, 1 to 60 (default 60).",
+		"since":   "The revision a previous answer returned, for until=any: wake on the next change after it.",
+	},
+	"GET /api/inbox": {
+		"repo": "Only this repository's (owner/name) items.",
+		"kind": "Only items of this kind: question, secret, notification, merge-held or proposal.",
+	},
+	"GET /api/refs/{ref}/summary": {
+		"repo": "Only this repository's (owner/name) tasks in the rollup.",
+	},
+	"GET /api/events": {
+		"since":  "Return events strictly after this event id cursor, or \"now\" to start from the current head.",
+		"wait":   "Long-poll up to this many seconds (at most 25) for a matching event when none is already waiting.",
+		"limit":  "At most this many events per JSON page, 1 to 500 (default 100).",
+		"repo":   "Only events for tasks targeting this repository (owner/name).",
+		"types":  "Comma-separated event types to include: task.state, task.question, task.comment, task.ci.",
+		"stream": "1 or true to stream Server-Sent Events (text/event-stream) instead of a JSON page.",
+	},
+	"GET /api/tasks/{id}": {
+		"comments_since": "An RFC 3339 time: answer only the conversation items created strictly after it.",
 	},
 	"GET /api/tasks/states": {"limit": "At most this many states (default 1000).", "cursor": "The nextCursor of the previous page.", "since": "An older spelling of cursor."},
 	"GET /api/states":       {"limit": "At most this many states (default 1000).", "cursor": "The nextCursor of the previous page.", "since": "An older spelling of cursor."},
@@ -429,24 +502,28 @@ var routeQueries = map[string]map[string]string{
 		"agents":  "true to include other tasks' runs' messages to this task's agent (POST /api/tasks/{id}/agent-messages).",
 		"wait_ms": "Block up to this many milliseconds (at most 5000) for a new message to arrive when none is already waiting after the cursor.",
 	},
-	"GET /api/capability-servers/gchat-usage":   {"id": "The gchat capability server's capability_id."},
-	"GET /api/capability-methods":               {"kind": "The run kind the grants are for (task, process or ci): each method then carries policyRefusal, why the capability policy denies it that run.", "repo": "With kind, the repository (owner/name) the run is on."},
-	"GET /api/notifications":                    {"open": "1 for only notifications not yet cleared.", "after": "Only notifications after this id.", "family": "Only this family (the subject before its first ':')."},
-	"GET /api/memory/documents/{name}":          {"repo": "The repository (owner/name) whose document to read; the deployment's without one."},
-	"GET /api/release-notes/stats":              {"period": "The week whose figures to read; the week just ended without one."},
-	"POST /api/repos":                           {"team": "The team whose targets to add to; the default team without one."},
-	"DELETE /api/repos/{owner}/{name}":          {"team": "The team whose targets to remove from; the default team without one."},
-	"GET /api/repos/{owner}/{name}/compare":     {"base": "The branch or commit to compare from.", "head": "The branch or commit to compare to."},
-	"GET /api/templates/{id}/composition":       {"repo": "The repository (owner/name) the composition is for.", "base": "The base branch the composition is for.", "approved": "false to compose the tasks unapproved."},
-	"GET /api/suites/{id}/composition":          {"repo": "The repository (owner/name) the composition is for.", "base": "The base branch the composition is for."},
-	"POST /api/suites/composition":              {"repo": "The repository (owner/name) the composition is for.", "base": "The base branch the composition is for."},
-	"GET /api/deployment/audit-logs":            {"limit": "At most this many entries."},
-	"GET /api/deployment/config-audit":          {"limit": "At most this many entries."},
-	"GET /api/agent-models":                     {"framework": "Only this framework's models.", "backend": "Only this model connection's models."},
-	"GET /api/state-repo/file":                  {"path": "The file's path in the state repository.", "limit": "At most this many bytes of it."},
-	"GET /api/host/top":                         {"lines": "At most this many processes."},
-	"GET /api/upgrade/release-notes":            {"branch": "The branch whose notes to read."},
-	"GET /api/logs/{source}":                    {"lines": "At most this many of the newest lines."},
+	"GET /api/capability-servers/gchat-usage": {"id": "The gchat capability server's capability_id."},
+	"GET /api/capability-methods":             {"kind": "The run kind the grants are for (task, process or ci): each method then carries policyRefusal, why the capability policy denies it that run.", "repo": "With kind, the repository (owner/name) the run is on."},
+	"GET /api/notifications":                  {"open": "1 for only notifications not yet cleared.", "after": "Only notifications after this id.", "family": "Only this family (the subject before its first ':').", "fields": "list for each body cut to its first line, as the UI's lists draw it (a pending release's is kept whole)."},
+	"GET /api/memory/documents/{name}":        {"repo": "The repository (owner/name) whose document to read; the deployment's without one."},
+	"GET /api/release-notes/stats":            {"period": "The week whose figures to read; the week just ended without one."},
+	"POST /api/repos":                         {"team": "The team whose targets to add to; the default team without one."},
+	"DELETE /api/repos/{owner}/{name}":        {"team": "The team whose targets to remove from; the default team without one."},
+	"GET /api/repos/{owner}/{name}/compare":   {"base": "The branch or commit to compare from.", "head": "The branch or commit to compare to."},
+	"GET /api/templates/{id}/composition":     {"repo": "The repository (owner/name) the composition is for.", "base": "The base branch the composition is for.", "approved": "false to compose the tasks unapproved."},
+	"GET /api/suites/{id}/composition":        {"repo": "The repository (owner/name) the composition is for.", "base": "The base branch the composition is for."},
+	"POST /api/suites/composition":            {"repo": "The repository (owner/name) the composition is for.", "base": "The base branch the composition is for."},
+	"GET /api/deployment/audit-logs":          {"limit": "At most this many entries."},
+	"GET /api/deployment/config-audit":        {"limit": "At most this many entries."},
+	"GET /api/agent-models":                   {"framework": "Only this framework's models.", "backend": "Only this model connection's models."},
+	"GET /api/state-repo/file":                {"path": "The file's path in the state repository.", "limit": "At most this many bytes of it."},
+	"GET /api/host/top":                       {"lines": "At most this many processes."},
+	"GET /api/upgrade/release-notes":          {"branch": "The branch whose notes to read."},
+	"GET /api/logs/{source}": {
+		"lines": "At most this many of the newest lines.",
+		"unit": "For the daemon source on a host with both grain's system unit (grain-daemon.service) and its user unit (grain.service): which to read. " +
+			"Default is the unit this daemon runs under; the response's unit says which that was, and units lists the choice when there is one.",
+	},
 	"GET /api/persistent-sandboxes/{name}/logs": {"format": "text for the logs as plain text rather than JSON."},
 	"GET /api/metrics": {
 		"window":  "How far back: a duration (36h) or a count of days or weeks (7d, 2w).",
@@ -457,6 +534,7 @@ var routeQueries = map[string]map[string]string{
 		"author":  "Only work by this author; comma-separated or repeated for several.",
 		"repo":    "Only work on this repository (owner/name); comma-separated or repeated for several.",
 	},
+	"GET /api/sandboxes":           {"section": "counters for only the counters layers registered (ui.RegisterHealthCounters), without the sandbox sweep the rest costs."},
 	"GET /api/unmatched-failures":  {"window": "How far back: a duration (36h) or a count of days or weeks (7d, 2w).", "limit": "At most this many failures."},
 	"DELETE /api/pause":            {"connection": "Lift this model connection's pauses.", "model": "With connection, only this model's pause on it.", "team": "Lift this team's pauses.", "framework": "With team, only this framework's pause."},
 	"GET /api/console/{id}/output": {"offset": "Only output after this byte offset."},
@@ -489,6 +567,71 @@ var (
 	apiRoutes     []APIRoute
 )
 
+// routeFieldDocs describes a body field whose meaning the field's name
+// and type do not carry: keyed by route pattern, then by the field's
+// JSON name, each sentence becomes the description of that property in
+// the route's input schema. Most bodies need none; the ones here are
+// where a caller working from the schema alone got it wrong.
+var routeFieldDocs = map[string]map[string]string{
+	"POST /api/deployment/git-connections/check": {
+		"credential": "The name of a SAVED credential to check (as listed by the deployment's git connections). Leave it empty to check an unsaved connection described by type, value, app and host; it is never a type such as \"ambient\".",
+		"type":       "The unsaved connection's kind: \"pat\" (a token in value), \"app\" (a GitHub App in app) or \"ambient\" (the host's own login -- nothing else needed; leave credential empty). Ignored when credential names a saved one.",
+		"value":      "The unsaved token (PAT) to check; empty when checking a saved credential or an ambient login.",
+		"app":        "The unsaved GitHub App to check: appId, installationId and privateKey.",
+		"host":       "The git host to check against, github.com when empty; a saved credential can only be checked on the host it is recorded for.",
+		"kind":       "The host's kind, \"github\" or \"git\" (a plain git host, checked by reading its repositories rather than its API).",
+		"scope":      "What to check access to: an owner/name repository, an owner (its target repositories on this host), or empty for every target repository on the host.",
+		"source":     "For an ambient login, which tool is asked for the token: \"gh\", \"git\" or \"auto\".",
+	},
+}
+
+// repoSettingsFieldRoutes names the per-field repository configuration
+// routes: GET and PUT /api/repos/{owner}/{name}/<suffix>, each reading
+// or writing the one field of the repository's settings named here --
+// the field GET /api/repos/{owner}/{name}/settings reports among the
+// rest and PUT .../settings (api_set_repo_settings) writes beside the
+// others. They stay for the UI, whose panes save one field at a time,
+// and run as any route does; grain_explore_scope folds them out of a
+// listing unless includeAliases is set, so a reader skimming the repos
+// group sees the one route that covers them all rather than twenty
+// that each cover a field.
+var repoSettingsFieldRoutes = map[string]string{
+	"ci-mode":                          "ciMode",
+	"ignore-github-ci":                 "ignoreGitHubCI",
+	"require-branch-up-to-date":        "requireBranchUpToDate",
+	"watch-default-branch":             "watchDefaultBranch",
+	"merge-on-green":                   "mergeOnGreen",
+	"base-repair-bypasses-human-gates": "baseRepairBypassesHumanGates",
+	"unfixable-checks":                 "unfixableChecks",
+	"prompt-extension":                 "promptExtension",
+	"setup-command":                    "setupCommand",
+	"capabilities":                     "defaultCapabilities",
+	"ci-capabilities":                  "ciCapabilities",
+}
+
+const repoSettingsPathPrefix = "/api/repos/{owner}/{name}/"
+
+// repoSettingsAlias is the whole-document route and the field a
+// per-field repository configuration route stands for, or "" for any
+// other route.
+func repoSettingsAlias(method, path string) (canonical, field string) {
+	suffix, ok := strings.CutPrefix(path, repoSettingsPathPrefix)
+	if !ok || strings.Contains(suffix, "/") {
+		return "", ""
+	}
+	field, ok = repoSettingsFieldRoutes[suffix]
+	if !ok {
+		return "", ""
+	}
+	switch method {
+	case http.MethodGet:
+		return APIToolPrefix + "get_repo_settings", field
+	case http.MethodPut:
+		return APIToolPrefix + "set_repo_settings", field
+	}
+	return "", ""
+}
+
 // AgentAPIRoutes is every route of the agent API, in registration order:
 // all of Server's routes but grain's internal plumbing, each with the
 // tool it is served as.
@@ -512,7 +655,9 @@ func AgentAPIRoutes() []APIRoute {
 				route.Params = append(route.Params, m[1])
 			}
 			route.Tool = uniqueToolName(toolNameFor(s.handlers[pattern], method, path), method, path, taken)
-			route.Description = routeDescription(route, s.handlers[pattern])
+			route.Summary = routeSummary(route, s.handlers[pattern])
+			route.Description = routeDescription(route)
+			route.AliasOf, route.AliasField = repoSettingsAlias(method, path)
 			apiRoutes = append(apiRoutes, route)
 		}
 	})
@@ -591,7 +736,9 @@ func snake(s string) string {
 	return b.String()
 }
 
-func routeDescription(r APIRoute, handler string) string {
+// routeSummary is the sentence a route is described by: routeDocs' for
+// the route, or, for a read with none, its handler's name as words.
+func routeSummary(r APIRoute, handler string) string {
 	doc := routeDocs[r.Pattern]
 	if doc == "" {
 		words := strings.ReplaceAll(snake(strings.TrimPrefix(handler, "handle")), "_", " ")
@@ -600,6 +747,13 @@ func routeDescription(r APIRoute, handler string) string {
 		}
 		doc = strings.ToUpper(words[:1]) + words[1:] + "."
 	}
+	return doc
+}
+
+// routeDescription is the route's tool's full description: its summary,
+// the route it calls and the scope it needs, and whether it is destructive.
+func routeDescription(r APIRoute) string {
+	doc := r.Summary
 	doc += fmt.Sprintf(" Calls %s through the same handler grain's UI uses (agent API scope %s).", r.Pattern, r.Scope)
 	if r.NeedsReason {
 		doc += " Destructive: reason is required and is recorded with the call."
@@ -634,6 +788,14 @@ func (r APIRoute) inputSchema() map[string]any {
 	if r.body != nil && r.Method != http.MethodGet {
 		body := jsonSchemaOf(reflect.TypeOf(r.body), 0)
 		body["description"] = "The JSON request body."
+		if docs := routeFieldDocs[r.Pattern]; len(docs) > 0 {
+			fields, _ := body["properties"].(map[string]any)
+			for name, doc := range docs {
+				if field, ok := fields[name].(map[string]any); ok {
+					field["description"] = doc
+				}
+			}
+		}
 		props["body"] = body
 	}
 	if r.takesExpect() {
@@ -737,7 +899,7 @@ func AgentAPITools(client *HTTPClient, taskID string, grants []string) []mcp.Too
 	}
 	var tools []mcp.Tool
 	for _, route := range AgentAPIRoutes() {
-		if !set.Has(route.Scope) && !tasksAdminAllowsTaskPatch(set, route.Pattern) {
+		if !set.Has(route.Scope) && !tasksAdminAllowsTaskPatch(set, route.Pattern) && !capabilitiesDetachAllowsRoute(set, route.Pattern) {
 			continue
 		}
 		tools = append(tools, route.tool(client, taskID))
@@ -986,14 +1148,18 @@ func (r APIRoute) externalTool(s *Server, tok *model.ExternalAgentToken) mcp.Too
 }
 
 // externalCall dispatches r in-process on s on behalf of the external agent
-// credential tok, running through s.ServeHTTP and agentAPIGate so the same
-// scope, repository, rail, and audit checks apply as on HTTP requests.
+// credential tok, running through s.ServeHTTP, roleGate, and agentAPIGate so
+// the same role, scope, repository, rail, and audit checks apply as on HTTP
+// requests.
 func (r APIRoute) externalCall(ctx context.Context, s *Server, tok *model.ExternalAgentToken, args map[string]any) (string, error) {
 	if s == nil {
 		return "", fmt.Errorf("this server is not initialized")
 	}
 	if tok == nil {
 		return "", fmt.Errorf("missing external agent credential")
+	}
+	if err := s.authorizeMCPRoleScope(ctx, r.Pattern); err != nil {
+		return "", err
 	}
 	rc, err := r.buildCall(args)
 	if err != nil {
@@ -1005,6 +1171,9 @@ func (r APIRoute) externalCall(ctx context.Context, s *Server, tok *model.Extern
 		return "", fmt.Errorf("reason is required: %s is destructive", r.Pattern)
 	}
 	if expect, ok := expectation(args); ok && r.takesExpect() {
+		if err := s.authorizeMCPRoleCall(ctx, r.Pattern, rc); err != nil {
+			return "", err
+		}
 		id := rc.params["id"]
 		detail, err := getTaskAsExternal(ctx, s, tok, id)
 		if err != nil {

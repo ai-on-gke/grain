@@ -1198,6 +1198,39 @@ func TestAddWorkflowRunSerialisesWithRequestsAndReplacesReRunAttempts(t *testing
 	if err != nil || len(jobs) != 1 || jobs[0].Conclusion != "success" {
 		t.Fatalf("ListWorkflowRunJobs(%d) = %+v, %v", first.ID, jobs, err)
 	}
+	single, err := client.GetActionsRun("acme", "widgets", first.ID)
+	if err != nil || single.ID != first.ID || single.RunAttempt != 2 || single.Conclusion != "success" {
+		t.Fatalf("GetActionsRun(%d) = %+v, %v", first.ID, single, err)
+	}
+	if missingResp, err := sim.Request("GET", "/repos/acme/widgets/actions/runs/999999999", nil, nil); err != nil || missingResp.Status != 404 {
+		t.Fatalf("GET unknown actions run = %+v, %v, want 404", missingResp, err)
+	}
+
+	sim.AddWorkflowRun(WorkflowRun{
+		Name:       "pr-ci",
+		HeadBranch: "feature-x",
+		Status:     "completed",
+		Conclusion: "success",
+	})
+	sim.AddWorkflowRun(WorkflowRun{
+		Name:       "in-flight-release",
+		HeadBranch: "main",
+		Status:     "in_progress",
+	})
+	branchRuns, err := client.CompletedBranchWorkflowRuns("acme", "widgets", "main", 50)
+	if err != nil || len(branchRuns) == 0 {
+		t.Fatalf("CompletedBranchWorkflowRuns(main) = %d runs, %v", len(branchRuns), err)
+	}
+	for _, r := range branchRuns {
+		if r.HeadBranch != "main" || r.Status != "completed" {
+			t.Fatalf("CompletedBranchWorkflowRuns(main) included %+v, want completed main runs only", r)
+		}
+	}
+	// Repeat branch poll with no changes must revalidate via ETag and return (nil, nil).
+	cachedBranchRuns, err := client.CompletedBranchWorkflowRuns("acme", "widgets", "main", 50)
+	if err != nil || cachedBranchRuns != nil {
+		t.Fatalf("unchanged CompletedBranchWorkflowRuns(main) = %+v, %v; want nil, nil (304)", cachedBranchRuns, err)
+	}
 
 	// Sim.Request itself still refuses POST .../actions/runs as an unhandled GitHub endpoint.
 	defer func() {
@@ -1206,4 +1239,133 @@ func TestAddWorkflowRunSerialisesWithRequestsAndReplacesReRunAttempts(t *testing
 		}
 	}()
 	_, _ = sim.Request("POST", "/repos/acme/widgets/actions/runs", nil, []byte(`{}`))
+}
+
+// reconcileReleasePending calls ListMatchingTags and GetAnnotatedTag on
+// every repository whose CI mode is GitHub; Sim answers both from the bare
+// repository's real lightweight and annotated tags instead of panicking on
+// /git/matching-refs/...
+func TestSimMatchingTagsAndAnnotatedTagObject(t *testing.T) {
+	sim, client := newSim(t, "main")
+
+	work := t.TempDir()
+	run(t, work, "git", "clone", "-q", sim.BareRepo, work)
+	run(t, work, "git", "config", "user.email", "release@example.com")
+	run(t, work, "git", "config", "user.name", "release")
+	run(t, work, "git", "tag", "v0.9.0")
+	run(t, work, "git", "tag", "-a", "-m", "v1.0.0 release", "v1.0.0")
+	run(t, work, "git", "tag", "unrelated")
+	run(t, work, "git", "push", "-q", "origin", "refs/tags/v0.9.0", "refs/tags/v1.0.0", "refs/tags/unrelated")
+
+	refs, err := client.ListMatchingTags("acme", "widgets", "v")
+	if err != nil {
+		t.Fatalf("ListMatchingTags: %v", err)
+	}
+	if len(refs) != 2 {
+		t.Fatalf("ListMatchingTags(v) = %+v, want v0.9.0 and v1.0.0", refs)
+	}
+	var annotatedSHA string
+	for _, r := range refs {
+		switch r.Name {
+		case "v0.9.0":
+			if r.ObjectType != "commit" {
+				t.Errorf("lightweight tag v0.9.0 object type = %q, want commit", r.ObjectType)
+			}
+		case "v1.0.0":
+			if r.ObjectType != "tag" {
+				t.Errorf("annotated tag v1.0.0 object type = %q, want tag", r.ObjectType)
+			}
+			annotatedSHA = r.ObjectSHA
+		default:
+			t.Errorf("unexpected tag ref %q", r.Name)
+		}
+	}
+	tagObj, err := client.GetAnnotatedTag("acme", "widgets", annotatedSHA)
+	if err != nil {
+		t.Fatalf("GetAnnotatedTag(%s): %v", annotatedSHA, err)
+	}
+	if tagObj == nil || tagObj.Commit == "" {
+		t.Fatalf("GetAnnotatedTag = %+v, want peeled commit", tagObj)
+	}
+	if !strings.Contains(tagObj.Message, "v1.0.0 release") {
+		t.Errorf("GetAnnotatedTag message = %q, want v1.0.0 release", tagObj.Message)
+	}
+}
+
+// FailedJobLogs and ListWorkflowRuns query /actions/runs?head_sha=<sha>;
+// runs seeded with AddWorkflowRun must be returned alongside ActionsRuns.
+func TestSimListWorkflowRunsByHeadSHAIncludesAddWorkflowRun(t *testing.T) {
+	sim, client := newSim(t, "main")
+	head, err := client.GetBranchHead("acme", "widgets", "main")
+	if err != nil || head == nil {
+		t.Fatalf("GetBranchHead: %+v, %v", head, err)
+	}
+
+	seeded := sim.AddWorkflowRun(WorkflowRun{
+		Name:       "CI",
+		Path:       ".github/workflows/ci.yml",
+		HeadBranch: "main",
+		HeadSHA:    head.SHA,
+		Event:      "pull_request",
+		Status:     "completed",
+		Conclusion: "failure",
+		Jobs: []WorkflowJob{{
+			Name:       "Tests / unit",
+			Conclusion: "failure",
+			Log:        "--- FAIL: TestController\n",
+		}},
+	})
+	_ = sim.AddWorkflowRun(WorkflowRun{
+		Name:       "CI",
+		Path:       ".github/workflows/ci.yml",
+		HeadBranch: "other",
+		HeadSHA:    "0000000000000000000000000000000000000000",
+		Status:     "completed",
+		Conclusion: "success",
+	})
+
+	runs, err := client.ListWorkflowRuns("acme", "widgets", head.SHA)
+	if err != nil {
+		t.Fatalf("ListWorkflowRuns(%s): %v", head.SHA, err)
+	}
+	if len(runs) != 1 || runs[0].Name != "CI" || !strings.HasSuffix(runs[0].HTMLURL, "/actions/runs/9500") {
+		t.Fatalf("ListWorkflowRuns(%s) = %+v, want seeded run %d", head.SHA, runs, seeded.ID)
+	}
+	logs, err := client.FailedJobLogs("acme", "widgets", head.SHA)
+	if err != nil || len(logs) != 1 || !strings.Contains(logs[0].Log, "--- FAIL: TestController") {
+		t.Fatalf("FailedJobLogs(%s) = %+v, %v, want seeded failing job log", head.SHA, logs, err)
+	}
+}
+
+// promote-release.yml's dispatch (github.RESTClient.DispatchWorkflow,
+// sent on an Inbox Approve or a rollback) is answered 204 and recorded
+// with its ref and inputs, and a GET of the same path lists what was
+// sent, so a walkthrough over `grain demo -github-sim` can read the
+// payload back (docs/test-runs/2026-11-04-release-approval.md, F2). A
+// workflow file named in WorkflowFiles is dispatchable before it has
+// ever run; a dispatch with no ref is GitHub's 422.
+func TestSimRecordsAWorkflowDispatchAndListsIt(t *testing.T) {
+	sim, _ := releaseSim(t)
+	sim.WorkflowFiles = []string{"promote-release.yml"}
+	client := github.NewClient(sim, nil)
+	inputs := map[string]string{"version": "v2.5.0", "decision": "approve", "approval": "cmVjb3Jk"}
+	if err := client.DispatchWorkflow("acme", "widgets", "promote-release.yml", "main", inputs); err != nil {
+		t.Fatalf("DispatchWorkflow: %v", err)
+	}
+	got := sim.Dispatches
+	if len(got) != 1 || got[0].Workflow != "promote-release.yml" || got[0].Ref != "main" || got[0].Inputs["approval"] != "cmVjb3Jk" {
+		t.Fatalf("Dispatches = %+v, want the one promote-release.yml dispatch on main with its inputs", got)
+	}
+	resp, err := sim.Request("GET", "/repos/acme/widgets/actions/workflows/promote-release.yml/dispatches", nil, nil)
+	if err != nil || resp.Status != 200 {
+		t.Fatalf("GET dispatches: %v %+v", err, resp)
+	}
+	var listed []WorkflowDispatch
+	if err := json.Unmarshal(resp.Body, &listed); err != nil || len(listed) != 1 || listed[0].Inputs["version"] != "v2.5.0" {
+		t.Errorf("GET dispatches = %s (%v), want the one dispatch", resp.Body, err)
+	}
+	resp, _ = sim.Request("POST", "/repos/acme/widgets/actions/workflows/promote-release.yml/dispatches", nil, []byte(`{"inputs":{}}`))
+	if resp.Status != 422 || len(sim.Dispatches) != 1 {
+		t.Errorf("a dispatch with no ref = %d (%d recorded), want 422 and nothing recorded", resp.Status, len(sim.Dispatches))
+	}
 }

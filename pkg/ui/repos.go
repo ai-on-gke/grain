@@ -121,6 +121,7 @@ func (c *Client) AddTargetRepoForTeam(ctx context.Context, teamID, repo, cloneUR
 			return Settings{}, err
 		}
 	}
+	c.triggerRegistrySync()
 
 	return c.GetSettings(ctx)
 }
@@ -276,6 +277,7 @@ func (c *Client) RemoveTargetRepoForTeam(ctx context.Context, teamID, repo strin
 	}); err != nil {
 		return Settings{}, err
 	}
+	c.triggerRegistrySync()
 	return c.GetSettings(ctx)
 }
 
@@ -321,6 +323,9 @@ type RepoDefaults struct {
 	// (*Client).defaultCapabilities' own answer, for this repo, rather
 	// than a second computation of it that could drift.
 	EffectiveDefaultCapabilities []string `json:"effectiveDefaultCapabilities"`
+	DefaultAdmission             string   `json:"defaultAdmission"`
+	DeploymentDefaultAdmission   string   `json:"deploymentDefaultAdmission"`
+	EffectiveDefaultAdmission    string   `json:"effectiveDefaultAdmission"`
 	// PromptExtension is this repo's own standing instructions for a run
 	// working in it -- model.RepoConfig.PromptExtension, exactly as
 	// stored, and the only one of the three fields below that a PUT to
@@ -483,11 +488,11 @@ type RepoDefaults struct {
 	// renamed. It is never covered by a declaration, whatever is stored
 	// (forge.Unfixable.Covers), and SetRepoUnfixableChecks refuses it.
 	GrainCICheckName string `json:"grainCICheckName"`
-	// DefaultHostd is the hostd pin or label selector a task filed
-	// against this repository starts with when neither the filing nor
-	// its template names one (model.RepoConfig.DefaultHostd), "" for
-	// the default hostd. Set through SetRepoSettings.
-	DefaultHostd string `json:"defaultHostd"`
+	// UpstreamRepo is the upstream owner/name repository that pull
+	// requests are opened and tracked against when tasks target this fork
+	// repository (model.RepoConfig.UpstreamRepo), "" when pull requests
+	// open against this repository itself.
+	UpstreamRepo string `json:"upstreamRepo"`
 }
 
 // RepoDeclarationsStatus is what grain has made of one repository's
@@ -602,14 +607,14 @@ type SetRepoSettingsRequest struct {
 	// default, observe.
 	MergeRecheck        *string   `json:"mergeRecheck,omitempty"`
 	DefaultCapabilities *[]string `json:"defaultCapabilities,omitempty"`
+	DefaultAdmission    *string   `json:"defaultAdmission,omitempty"`
 	CICapabilities      *[]string `json:"ciCapabilities,omitempty"`
 	PromptExtension     *string   `json:"promptExtension,omitempty"`
 	RepairTemplateID    *string   `json:"repairTemplateID,omitempty"`
 	SetupCommand        *string   `json:"setupCommand,omitempty"`
 	UnfixableChecks     *[]string `json:"unfixableChecks,omitempty"`
-	// DefaultHostd sets model.RepoConfig.DefaultHostd: a hostd name,
-	// label=value[,label=value], or "" to put this repository's tasks
-	// back on the default hostd.
+	// DefaultHostd is read only to be refused (TaskHostdRefusal): a
+	// repository's tasks have no hostd of their own any more.
 	DefaultHostd *string `json:"defaultHostd,omitempty"`
 	// The GitHub issue importer's settings (model.RepoConfig.IssueImport),
 	// each left alone when omitted. IssueImportRepo is owner/name, "" for
@@ -619,6 +624,11 @@ type SetRepoSettingsRequest struct {
 	IssueImportLabel           *string `json:"issueImportLabel,omitempty"`
 	IssueImportApproved        *bool   `json:"issueImportApproved,omitempty"`
 	IssueImportIntervalSeconds *int    `json:"issueImportIntervalSeconds,omitempty"`
+	// UpstreamRepo sets model.RepoConfig.UpstreamRepo: the upstream
+	// owner/name repository that pull requests for this fork repository
+	// are opened and tracked against, or "" to open pull requests on this
+	// repository itself.
+	UpstreamRepo *string `json:"upstreamRepo,omitempty"`
 }
 
 // SetRepoWatchDefaultBranchRequest is PUT /api/repos/{owner}/{name}/
@@ -718,6 +728,7 @@ func (c *Client) repoDefaults(ctx context.Context, repo model.RepoRef) (RepoDefa
 	if stored != nil {
 		out.IssueImport = repoIssueImportOf(stored.IssueImport)
 		out.DefaultCapabilities = stored.DefaultCapabilities
+		out.DefaultAdmission = string(stored.DefaultAdmission)
 		out.CICapabilities = stored.CICapabilities
 		out.PromptExtension = stored.PromptExtension
 		out.RepairTemplateID = stored.RepairTemplateID
@@ -732,7 +743,7 @@ func (c *Client) repoDefaults(ctx context.Context, repo model.RepoRef) (RepoDefa
 		out.MergeOnGreen = stored.MergeOnGreen
 		out.BaseRepairBypassesHumanGates = stored.BaseRepairBypassesHumanGates
 		out.UnfixableChecks = stored.UnfixableChecks
-		out.DefaultHostd = stored.DefaultHostd
+		out.UpstreamRepo = stored.UpstreamRepo
 		out.PortBranches = stored.PortBranches
 		out.DeclaredPortBranches = stored.DeclaredPortBranches
 		out.PairedBranches = stored.PairedBranches()
@@ -759,10 +770,18 @@ func (c *Client) repoDefaults(ctx context.Context, repo model.RepoRef) (RepoDefa
 	if err != nil {
 		return RepoDefaults{}, err
 	}
+	var deploymentAdmission model.Admission
 	if cfg != nil {
 		out.DeploymentDefaultCapabilities = cfg.DefaultCapabilities
 		out.DeploymentPromptExtension = cfg.PromptExtension
+		deploymentAdmission = cfg.DefaultAdmission
 	}
+	out.DeploymentDefaultAdmission = string(model.NormalizeAdmission(deploymentAdmission))
+	effAdm := model.NormalizeAdmission(deploymentAdmission)
+	if stored != nil {
+		effAdm = model.NormalizeAdmission(model.MaxAdmission(effAdm, stored.DefaultAdmission))
+	}
+	out.EffectiveDefaultAdmission = string(effAdm)
 	// The same composition dispatch itself applies, with no task layer:
 	// what a run here is told when nothing overrides it
 	// (model.PromptExtensionFor).
@@ -815,11 +834,17 @@ func (c *Client) SetRepoDefaultCapabilities(ctx context.Context, repo string, id
 	if err != nil {
 		return RepoDefaults{}, validationErrorf("repo: %v", err)
 	}
-	clean, err := c.cleanRepoDefaultCapabilities(ids)
+	capsWithoutLegacy, legacyAdm, hadLegacy := extractLegacyAdmissionCaps("repo "+parsed.String()+" defaultCapabilities", ids)
+	clean, err := c.cleanRepoDefaultCapabilities(capsWithoutLegacy)
 	if err != nil {
 		return RepoDefaults{}, err
 	}
-	return c.putRepoConfig(ctx, parsed, func(rc *model.RepoConfig) { rc.DefaultCapabilities = clean })
+	return c.putRepoConfig(ctx, parsed, func(rc *model.RepoConfig) {
+		rc.DefaultCapabilities = clean
+		if hadLegacy {
+			rc.DefaultAdmission = model.MaxAdmission(rc.DefaultAdmission, legacyAdm)
+		}
+	})
 }
 
 func (c *Client) cleanRepoDefaultCapabilities(ids []string) ([]string, error) {
@@ -1073,10 +1098,22 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 		}
 	}
 	var defaultCaps []string
+	var legacyAdmission model.Admission
+	var hadLegacyAdmission bool
 	if req.DefaultCapabilities != nil {
-		if defaultCaps, err = c.cleanRepoDefaultCapabilities(*req.DefaultCapabilities); err != nil {
+		var capsWithoutLegacy []string
+		capsWithoutLegacy, legacyAdmission, hadLegacyAdmission = extractLegacyAdmissionCaps("repo "+parsed.String()+" defaultCapabilities", *req.DefaultCapabilities)
+		if defaultCaps, err = c.cleanRepoDefaultCapabilities(capsWithoutLegacy); err != nil {
 			return RepoDefaults{}, err
 		}
+	}
+	var chosenDefaultAdmission *model.Admission
+	if req.DefaultAdmission != nil {
+		adm, err := model.ParseOptionalAdmission(*req.DefaultAdmission)
+		if err != nil {
+			return RepoDefaults{}, validationErrorf("defaultAdmission: %v", err)
+		}
+		chosenDefaultAdmission = &adm
 	}
 	var ciCaps []string
 	if req.CICapabilities != nil {
@@ -1090,12 +1127,8 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 			return RepoDefaults{}, err
 		}
 	}
-	var defaultHostd string
 	if req.DefaultHostd != nil {
-		if defaultHostd, err = model.NormalizeHostdSelector(*req.DefaultHostd); err != nil {
-			return RepoDefaults{}, validationErrorf("defaultHostd: %v", err)
-		}
-		if err := c.checkHostdSelector(ctx, defaultHostd); err != nil {
+		if err := refuseTaskHostd("defaultHostd", *req.DefaultHostd); err != nil {
 			return RepoDefaults{}, err
 		}
 	}
@@ -1103,6 +1136,19 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 	if req.IssueImportRepo != nil {
 		if importRepo, err = c.cleanIssueImportRepo(*req.IssueImportRepo); err != nil {
 			return RepoDefaults{}, err
+		}
+	}
+	var upstreamRepo string
+	if req.UpstreamRepo != nil {
+		raw := strings.TrimSpace(*req.UpstreamRepo)
+		if raw != "" {
+			up, err := model.ParseRepo(raw)
+			if err != nil {
+				return RepoDefaults{}, validationErrorf("upstreamRepo: %v", err)
+			}
+			if !up.Same(parsed) {
+				upstreamRepo = up.String()
+			}
 		}
 	}
 	if req.IssueImportIntervalSeconds != nil {
@@ -1133,14 +1179,17 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 		if req.DefaultCapabilities != nil {
 			rc.DefaultCapabilities = defaultCaps
 		}
+		if chosenDefaultAdmission != nil {
+			rc.DefaultAdmission = *chosenDefaultAdmission
+		}
+		if hadLegacyAdmission {
+			rc.DefaultAdmission = model.MaxAdmission(rc.DefaultAdmission, legacyAdmission)
+		}
 		if req.CICapabilities != nil {
 			rc.CICapabilities = ciCaps
 		}
 		if req.UnfixableChecks != nil {
 			rc.UnfixableChecks = unfixable
-		}
-		if req.DefaultHostd != nil {
-			rc.DefaultHostd = defaultHostd
 		}
 		if req.CIMode != nil {
 			mode := strings.ToLower(strings.TrimSpace(*req.CIMode))
@@ -1177,6 +1226,9 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 		}
 		if req.SetupCommand != nil {
 			rc.SetupCommand = strings.TrimSpace(*req.SetupCommand)
+		}
+		if req.UpstreamRepo != nil {
+			rc.UpstreamRepo = upstreamRepo
 		}
 	})
 }
@@ -1402,6 +1454,7 @@ func (c *Client) putRepoConfig(ctx context.Context, repo model.RepoRef, edit fun
 	if err := c.Store.PutRepoConfig(ctx, cfg); err != nil {
 		return RepoDefaults{}, err
 	}
+	c.triggerRegistrySync()
 	return c.repoDefaults(ctx, repo)
 }
 
@@ -1698,6 +1751,9 @@ func (c *Client) cleanRepoCICapabilities(ids []string) ([]string, error) {
 			}
 			if _, ok := c.capabilityByID(normalized); !ok {
 				return nil, validationErrorf("ciCapabilities: %s", capabilityRefusal(normalized))
+			}
+			if model.CapabilityGrantRef(normalized) == model.RepoCredentialRef {
+				return nil, validationErrorf("ciCapabilities: capability %q is not supported for CI", id)
 			}
 			canonicalID = normalized
 		} else if !slices.Contains(allowed, id) {

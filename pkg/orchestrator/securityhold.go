@@ -165,6 +165,14 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 	// (repoGuard): the effective list is both.
 	rules, guarded := repoGuard(ctx, store, client, *task.Target, files, known)
 	matches = append(matches, guarded...)
+	// A template's push set is a grant (trustboundary.TemplatePush), so a
+	// change to one waits for a person whatever else the change touches.
+	// Classified here, against the head just read, rather than in
+	// repoGuard: every other path that reads the list either comes back
+	// here or carries a clearance this gave (carryClearance).
+	if m, ok := guardTemplatePush(client, *task.Target, headSHA, files); ok {
+		matches = append(matches, m)
+	}
 	cleared := model.Link{Kind: model.LinkTrustBoundaryCleared, Target: clearedTarget(headSHA, rules)}
 	if known && len(matches) == 0 {
 		if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
@@ -248,6 +256,12 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 	}); err != nil {
 		return fmt.Errorf("orchestrator: withdrawing %s's auto-merge for a security review: %w", task.ID, err)
 	}
+	if !bypass && !releasable {
+		// The same hold, record and release as every other change handed
+		// to a person (model.LinkHumanReviewHold): the inbox, the banner,
+		// the timeline and the owner's notification all say why.
+		raiseHumanOnlyReview(ctx, store, task.ID, matches, known, now)
+	}
 
 	tmpl := model.SystemTemplate(model.SecurityReviewTemplateID, model.RepoRef{})
 	review, fileErr := putSecurityReview(ctx, store, *current, *tmpl,
@@ -323,7 +337,7 @@ func securityHoldNote(ctx context.Context, store *model.Store, client github.Cli
 // completed, so SyncSecurityHolds can never read the review as finished
 // while the hold it should have dropped is still there.
 func dropSecurityHoldOnFindings(ctx context.Context, store *model.Store, client github.Client,
-	review model.Task, now time.Time) error {
+	review model.Task, summary string, now time.Time) error {
 
 	if !isReviewTask(review) {
 		return nil
@@ -354,6 +368,9 @@ func dropSecurityHoldOnFindings(ctx context.Context, store *model.Store, client 
 	if !dropped {
 		return nil
 	}
+	// Handed to a person the way request_human_review hands a change to
+	// one: one hold, released only by Submit or an audited release.
+	raiseFindingsReview(ctx, store, review, reviewedID, summary, now)
 	body := fmt.Sprintf(
 		"Review task %s left findings on this change, so its security hold will not be released "+
 			"automatically: it waits for you. Press Submit once you have decided what the findings "+

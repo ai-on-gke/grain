@@ -36,6 +36,8 @@ func humanSubmit(t *testing.T, ctx context.Context, store *model.Store, id, show
 	t.Helper()
 	if err := store.UpdateTask(ctx, id, func(t *model.Task) error {
 		t.AutoMerge = true
+		// A Submit ends the human-review hold too (ui.humanSubmitted).
+		model.DropHumanReviewHold(t)
 		t.Links = slices.DeleteFunc(t.Links, func(l model.Link) bool {
 			return l.Kind == model.LinkSecurityHold || l.Kind == model.LinkReviewQuestions ||
 				l.Kind == model.LinkBrokenRulesHold

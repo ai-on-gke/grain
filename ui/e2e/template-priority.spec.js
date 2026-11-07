@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // A template's own task priority (model.Template.Priority) end to end,
 // from docs/test-runs/2026-11-01-recurring-composed-ui.md: set in the
@@ -42,10 +43,12 @@ test("a template's task priority is set, previewed, filed and cleared from the f
     await page.getByRole("button", { name: "+ New template" }).click();
     await page.locator('input[name="name"]').fill(name);
     await page.locator('input[name="title"]').fill("Urgent widget check");
-    await page
-      .locator('select[name="repo"]')
-      .first()
-      .selectOption("acme/widgets");
+    await chooseOption(
+      page
+        .locator('.repo-field:has(input[name="repo"]) [role="combobox"]')
+        .first(),
+      "acme/widgets",
+    );
     await priorityField().fill("8");
     await page.getByRole("button", { name: "Add template" }).click();
     await expect(

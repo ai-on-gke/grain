@@ -134,11 +134,11 @@ export const NONE_LABEL_FALLBACK = "Not set";
 
 const ORIGIN_LABELS = {
   hand: "Filed by hand",
+  external: "Filed by an external agent",
   proposed: "Proposed by an agent",
+  imported: "Imported issue",
   schedule: "Scheduled",
   suite: "Suite run",
-  imported: "Imported issue",
-  external: "Filed by an external agent",
   fix: "Merge fix",
   review: "Review",
 };
@@ -150,6 +150,46 @@ export const EXTERNAL_AGENT_PREFIX = "external:";
 
 export function isExternalAgent(author) {
   return typeof author === "string" && author.startsWith(EXTERNAL_AGENT_PREFIX);
+}
+
+export function normalizeOwnerValue(raw) {
+  const trimmed = String(raw || "").trim();
+  if (!trimmed) return "";
+  if (/^user:/i.test(trimmed)) return trimmed.slice(5).trim().toLowerCase();
+  if (trimmed.toLowerCase() === "operator") return "operator";
+  if (/^serviceAccount:/i.test(trimmed)) {
+    return (
+      "serviceAccount:" +
+      trimmed.slice("serviceAccount:".length).trim().toLowerCase()
+    );
+  }
+  return trimmed.includes("@") ? trimmed.toLowerCase() : trimmed;
+}
+
+export function viewerOwnerOf(config) {
+  const raw = config?.viewerOwner || config?.actor || "";
+  return raw ? normalizeOwnerValue(raw) : "";
+}
+
+function expandOwnerFilterValue(value, config) {
+  const trimmed = String(value || "").trim();
+  if (trimmed.toLowerCase() === "me") {
+    return [viewerOwnerOf(config) || "operator"];
+  }
+  const norm = normalizeOwnerValue(trimmed);
+  return norm ? [norm] : [trimmed];
+}
+
+function ownerValueLabel(value, config) {
+  if (
+    String(value || "")
+      .trim()
+      .toLowerCase() === "me"
+  ) {
+    const me = viewerOwnerOf(config);
+    return me ? `me (${me})` : "me";
+  }
+  return value;
 }
 
 // originOf is the one thing that put this task in the list -- what the
@@ -183,13 +223,24 @@ const one = (pick) => (t) => {
   return v === undefined || v === null || v === "" ? [] : [v];
 };
 
-// stateRank puts a task where STATE_ORDER -- the sidebar's own order,
-// proposed through closed -- says it goes. A state this build has never
-// heard of sorts after all of them instead of before, so a newer
-// daemon's unknown state doesn't quietly take over the top of the list.
+// SORT_STATE_ORDER is DISPLAY_STATE_ORDER -- the sidebar's and the
+// Kanban board's own order, proposed through closed -- with its one
+// "Asked" opened back out into the two states it stands for, side by
+// side. Not STATE_ORDER: that is model.StateOf's precedence, which puts
+// failed between the two asked states, so a list ordered by state split
+// the asked tasks the rest of the UI shows as one group with the failed
+// ones (gantt.js's lane order made the same mistake).
+const SORT_STATE_ORDER = DISPLAY_STATE_ORDER.flatMap((s) =>
+  s === "asked" ? ASKED_STATES : [s],
+);
+
+// stateRank puts a task where SORT_STATE_ORDER says it goes. A state
+// this build has never heard of sorts after all of them instead of
+// before, so a newer daemon's unknown state doesn't quietly take over
+// the top of the list.
 export function stateRank(t) {
-  const i = STATE_ORDER.indexOf(t.state);
-  return i === -1 ? STATE_ORDER.length : i;
+  const i = SORT_STATE_ORDER.indexOf(t.state);
+  return i === -1 ? SORT_STATE_ORDER.length : i;
 }
 
 // idKey sorts task ids as the numbers they are ("9" before "10"), while
@@ -311,6 +362,15 @@ export const ATTRIBUTES = [
     glyphOf: (v) => (v === NONE ? null : "repos"),
   },
   {
+    id: "owner",
+    label: "Owner",
+    type: TYPE_ENUM,
+    values: one((t) => t.owner),
+    expand: expandOwnerFilterValue,
+    labelOf: ownerValueLabel,
+    people: true,
+  },
+  {
     id: "author",
     label: "Author",
     type: TYPE_ENUM,
@@ -352,11 +412,15 @@ export const ATTRIBUTES = [
       "hand",
       "external",
       "proposed",
+      "imported",
       "schedule",
       "suite",
       "fix",
       "review",
     ],
+    // Every value originOf returns, so `origin:any:robot` says it
+    // matches nothing rather than reading as a real origin.
+    closed: true,
     labelOf: (v) => ORIGIN_LABELS[v] || v,
     // The same two figures the rows carry: a task filed by a schedule
     // wears the hourglass on its own chip (TaskList/TaskBoard), so the
@@ -374,7 +438,27 @@ export const ATTRIBUTES = [
     type: TYPE_ENUM,
     values: (t) => [t.autoMerge ? "on" : "off"],
     order: ["on", "off"],
+    // Every value there is, so `autoMerge:any:yes` says it matches
+    // nothing rather than reading as "Off" (labelOf's other branch).
+    closed: true,
     labelOf: (v) => (v === "on" ? "On" : "Off"),
+  },
+  {
+    // Held for a person's decision (humanReviewHold), by the categories
+    // of the reasons it is held for: `humanReview:filled` is every
+    // held change, `humanReview:any:security` the security ones.
+    id: "humanReview",
+    label: "Human review",
+    type: TYPE_ENUM,
+    values: (t) => [
+      ...new Set((t.humanReviewHold || []).map((r) => r.category || "other")),
+    ],
+    order: ["product-decision", "risk", "security", "intent-unclear", "other"],
+    // model.HumanReviewCategories, every category request_human_review
+    // accepts: `humanReview:any:product_decision` matches nothing, and
+    // its chip says so rather than reading like the real one.
+    closed: true,
+    noneLabel: "Not held",
   },
   {
     id: "blocked",
@@ -382,6 +466,10 @@ export const ATTRIBUTES = [
     type: TYPE_ENUM,
     values: (t) => [t.blocked ? "yes" : "no"],
     order: ["yes", "no"],
+    // Every value there is. Without it `blocked:any:true` was worded
+    // "Blocked is any of Not blocked" (labelOf's other branch) over a
+    // list matching nothing.
+    closed: true,
     labelOf: (v) => (v === "yes" ? "Blocked" : "Not blocked"),
   },
   {
@@ -454,6 +542,13 @@ export const ATTRIBUTES = [
     label: "Task priority",
     type: TYPE_NUMBER,
     values: (t) => [String(t.priority ?? 5)],
+  },
+  {
+    id: "externalRef",
+    label: "External ref",
+    type: TYPE_ENUM,
+    values: one((t) => t.externalRef),
+    noneLabel: "No external reference",
   },
 ];
 

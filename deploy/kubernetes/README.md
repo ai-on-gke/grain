@@ -45,7 +45,7 @@ cluster's rather than a number an operator sized by hand.
 
 Three things have to exist first.
 
-**A sandbox image.** CI publishes `ghcr.io/bwsalmon/grain/k8s-sandbox`
+**A sandbox image.** CI publishes `docker.io/grainai/sandbox-k8s`
 with all three supported agent CLIs (`claude`, `agy`, and `codex`), `git`,
 `bash`, `curl`, and a non-root user with a writable home. Each grain build
 has its same-commit image stamped in as the `-k8s-sandbox-image` default;
@@ -67,6 +67,30 @@ silently given a networked pod.
 
 **A storage class that gives ReadWriteOnce volumes.** grain's state is an
 embedded SQLite database on a filesystem, with one writer.
+
+**The store stays SQLite here, unless you name a PostgreSQL server.** A
+`scripts/setup.sh` host now defaults to a local PostgreSQL server
+([docs/database.md](../../docs/database.md)). This manifest does not, and
+ships no Postgres StatefulSet, for two reasons. Re-applying the manifest
+is how a deployment is upgraded, so changing its default would move every
+existing deployment onto an empty database. And a cluster usually has a
+managed PostgreSQL (Cloud SQL, AlloyDB) that is a better home than a pod
+beside the controller. To use one, put its DSN in a Secret and hand it to
+the `grain` container as `GRAIN_DB_DSN`, which the daemon reads when no
+`-db-dsn` flag is passed:
+
+```yaml
+        env:
+        - name: GRAIN_DB_DRIVER
+          value: postgres
+        - name: GRAIN_DB_DSN
+          valueFrom:
+            secretKeyRef: {name: grain-db, key: dsn}
+```
+
+On a deployment that already has a SQLite store on its volume, migrate it
+first with `grain upgrade-postgres -data-dir /data -dsn …` in the pod,
+with replicas at 0 or the daemon paused.
 
 ## The daemon does not run as root
 
@@ -116,7 +140,7 @@ spec:
         runAsUser: 0
       containers:
         - name: chown
-          image: ghcr.io/bwsalmon/grain/grain:main
+          image: docker.io/grainai/grain:main
           command: ["/bin/sh", "-c", "chown -R 1000:1000 /data"]
           volumeMounts:
             - name: data
@@ -245,7 +269,7 @@ this deployment owns, and under Kubernetes there is no such machine:
 
 For the same reason, **Settings → Models** does not offer **Host** as a
 run location for any agent CLI. Kubernetes has no host executor and no
-`grain hostd`. Every CLI (claude, codex, agy and custom commands) runs as
+`grain hostd`. Every CLI (claude, codex and agy) runs as
 a subprocess in the daemon pod's own container, which is what **Auto**
 and **Container** both mean here. `PUT /api/settings/cli-run` refuses
 `host` with a 400. The daemon refuses to start with `-claude-run=host`,
@@ -492,7 +516,7 @@ the granule runtime image either.** It names a self-contained image with
 its own guest disk and kernel already baked in — built from
 `third_party/granule`'s own `Dockerfile` (`docker build -t granule .` is
 the whole recipe; see `third_party/granule/deploy/k8s/gke.md`) — not
-`ghcr.io/bwsalmon/grain/k8s-sandbox`, which has no guest to boot at all,
+`docker.io/grainai/sandbox-k8s`, which has no guest to boot at all,
 and not `granule:vendored` either (`-granule-runtime-image`'s own
 default, what `scripts/granule/build-granule-image.sh` produces): that
 image carries no guest disk, so a pod running it exits immediately with

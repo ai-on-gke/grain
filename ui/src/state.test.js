@@ -17,6 +17,7 @@ import {
   ASKED_STATES,
   DISPLAY_STATE_ORDER,
   askedCase,
+  baseRepairWaitReason,
   displayCounts,
   displayState,
   statesOf,
@@ -2630,7 +2631,7 @@ describe("advertisedModels", () => {
       expect(advertisedModels({ framework })).toEqual([]);
     }
   });
-  it("never reads a discovered list for a custom command", () => {
+  it("never reads a discovered list for a removed custom command connection", () => {
     expect(
       advertisedModels({ framework: "custom", models: [], discovered }),
     ).toEqual([]);
@@ -2643,6 +2644,19 @@ describe("liveness sub-cases", () => {
       "usage limit paused",
     );
     expect(reasonLabel(null)).toBe(null);
+    // awaiting_reply's sub-cases name the ask (orchestrator's
+    // awaitingReplyReasonOf), so a finished report's chip says
+    // "answered" beside its "Answered in a comment" badge rather than
+    // "question".
+    expect(reasonLabel({ reason: "awaiting_reply/answered" })).toBe("answered");
+    expect(reasonLabel({ reason: "awaiting_reply/question" })).toBe("question");
+    expect(reasonLabel({ reason: "awaiting_reply/your_message" })).toBe(
+      "your message",
+    );
+    expect(reasonLabel({ reason: "awaiting_reply/access_request" })).toBe(
+      "access request",
+    );
+    expect(reasonLabel({ reason: "awaiting_reply/stopped" })).toBe("stopped");
   });
 
   it("explains which condition a sub-case is in and why", () => {
@@ -2791,9 +2805,29 @@ describe("askedCase", () => {
   });
 
   it("names each case with its tooltip and its action", () => {
-    expect(askedCase({ state: "awaiting_reply" })).toEqual({
+    expect(
+      askedCase({
+        state: "awaiting_reply",
+        questionSummary: "Which base branch?",
+      }),
+    ).toEqual({
       kind: "question",
       title: "Asked a question",
+      action: "reply",
+    });
+    expect(
+      askedCase({
+        state: "awaiting_reply",
+        pendingSecret: { name: "deploy-key" },
+      }),
+    ).toEqual({
+      kind: "question",
+      title: "Asked a question",
+      action: "reply",
+    });
+    expect(askedCase({ state: "awaiting_reply" })).toEqual({
+      kind: "answer",
+      title: "Answered in a comment",
       action: "reply",
     });
     expect(askedCase({ state: "awaiting_reply", interactive: true })).toEqual({
@@ -2808,6 +2842,28 @@ describe("askedCase", () => {
       askedCase({
         state: "awaiting_reply",
         interactive: true,
+        awaitingAccess: true,
+      }),
+    ).toEqual({
+      kind: "access",
+      title: "Asked for access",
+      action: "grant",
+    });
+    expect(
+      askedCase({
+        state: "awaiting_reply",
+        consoleSession: "director",
+        awaitingAccess: true,
+      }),
+    ).toEqual({
+      kind: "access",
+      title: "Asked for access",
+      action: "grant",
+    });
+    expect(
+      askedCase({
+        state: "awaiting_reply",
+        interactive: true,
         turnStopped: true,
       }),
     ).toEqual({ kind: "stopped", title: "Stopped by you", action: "reply" });
@@ -2818,6 +2874,28 @@ describe("askedCase", () => {
       title: "Asked you to submit acme/widgets#12",
       action: "submit",
     });
+  });
+
+  it("distinguishes a parked question from an answered report in baseRepairWaitReason", () => {
+    expect(
+      baseRepairWaitReason({
+        state: "awaiting_reply",
+        questionSummary: "Which base branch?",
+      }),
+    ).toBe("waiting for a reply to its question");
+    expect(
+      baseRepairWaitReason({
+        state: "awaiting_reply",
+        autoMerge: true,
+        questionSummary: "Which base branch?",
+      }),
+    ).toBe("waiting for a reply to its question");
+    expect(baseRepairWaitReason({ state: "awaiting_reply" })).toBe(
+      "answered in a comment",
+    );
+    expect(
+      baseRepairWaitReason({ state: "awaiting_reply", autoMerge: true }),
+    ).toBe("answered in a comment");
   });
 
   it("says what holds a change waiting on Submit", () => {

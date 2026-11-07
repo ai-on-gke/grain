@@ -94,13 +94,13 @@ test.describe("Repository Settings, Releases, and Memory Views Inputs Walkthroug
       name: /default capabilities/i,
     });
     await expect(defaultCapsSelect).toBeVisible();
-    // Toggle Self debug and toggle it back: every spec file a worker runs
+    // Toggle Interactive console and toggle it back: every spec file a worker runs
     // shares one demo store, and repository_release_memory_walkthrough.spec.js
     // turns this same capability on and expects its chip afterwards.
     const selfDebugChip = defaultCapsSelect
       .locator(".MuiChip-root")
-      .filter({ hasText: /Self debug/i });
-    const option = page.getByRole("option", { name: /Self debug/i });
+      .filter({ hasText: /Interactive console/i });
+    const option = page.getByRole("option", { name: /Interactive console/i });
     const toggleSelfDebug = async () => {
       await defaultCapsSelect.click();
       await option.click();
@@ -259,7 +259,7 @@ test.describe("Repository Settings, Releases, and Memory Views Inputs Walkthroug
     // Verify release picker combobox contains the release tag
     const releasePicker = page.getByRole("combobox", { name: "Release" });
     await expect(releasePicker).toBeVisible();
-    await expect(releasePicker).toContainText(releaseTag);
+    await expect(releasePicker).toHaveValue(new RegExp(`^${releaseTag} -- `));
 
     // 2.3 Qualification plan editor inputs
     const addPlanItemBtn = page.getByRole("button", { name: "Add item" });
@@ -295,9 +295,13 @@ test.describe("Repository Settings, Releases, and Memory Views Inputs Walkthroug
     const emptyAlert = page.getByText(
       new RegExp(`${repo} has no releases yet`, "i"),
     );
-    await expect(
-      emptyAlert.or(releasePicker.filter({ hasNotText: releaseTag })),
-    ).toBeVisible();
+    await expect
+      .poll(async () => {
+        if (await emptyAlert.isVisible()) return true;
+        if (!(await releasePicker.isVisible())) return false;
+        return !(await releasePicker.inputValue()).includes(releaseTag);
+      })
+      .toBe(true);
   });
 
   test("3. Repository Memory & Instructions: standing memory text, search filter, document editors, and dirty state tracking", async ({
@@ -385,7 +389,10 @@ test.describe("Repository Settings, Releases, and Memory Views Inputs Walkthroug
     });
 
     // Attempt to leave the Memory page from the rail
-    await page.getByRole("button", { name: /^CI\b/ }).first().click();
+    await page
+      .getByRole("button", { name: /^Inbox\b/ })
+      .first()
+      .click();
     await expect.poll(() => confirmDialogShown).toBe(true);
     await expect(page).toHaveURL(/\/memory$/);
 

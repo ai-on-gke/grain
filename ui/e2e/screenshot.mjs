@@ -44,10 +44,19 @@
 //                    loaded, before the shot -- to open a menu or expand
 //                    a collapsed group. Repeat it to click several in
 //                    order; one that matches nothing fails the run.
+//   --type   TYPE    text typed on the keyboard after the clicks -- into
+//                    a search box the last click focused, say, to shoot
+//                    a list as it narrows.
 //   --header HEADER  "Name: value" sent on every request the page makes
 //                    (Playwright's extraHTTPHeaders); repeat it for more.
 //                    For shooting a daemon as an identity-aware proxy's
 //                    caller: --header "X-Goog-IAP-JWT-Assertion: <jwt>".
+//   --access ACCESS  draw the UI as a signed-in person's role would see it:
+//                    GET /api/config's `access` (src/access.js) replaced
+//                    with this -- "viewer" for grain/viewer, or the JSON
+//                    object itself. Only the page is told; the server
+//                    still answers as the access code, so this shows
+//                    which controls a role is offered, not what it may do.
 //   --look[=Q] LOOK  send the screenshots to Gemini and print what it sees:
 //                    for an agent whose file reader shows a PNG as bytes.
 //                    Needs GEMINI_API_KEY or ~/.gemini-api-key; Q replaces
@@ -76,6 +85,27 @@ const THEMES = ["light", "dark"];
 // own theme setting is what changes rather than only the media query.
 const THEME_KEY = "grain.themeMode";
 
+// ACCESS_PRESETS are the roles --access names, as GET /api/config
+// reports them for a verified session (pkg/ui/access_roles.go's
+// AccessRoleInfo).
+const ACCESS_PRESETS = {
+  viewer: {
+    role: "grain/viewer",
+    roles: ["grain/viewer"],
+    full: false,
+    scopes: [
+      "boards:read",
+      "ci:read",
+      "repos:read",
+      "schedules:read",
+      "settings:read",
+      "suites:read",
+      "tasks:read",
+      "templates:read",
+    ],
+  },
+};
+
 const DEFAULT_LOOK =
   "These are screenshots of one web app, each labelled with its file name " +
   "(page-width-theme). For each one, list concrete visual defects: " +
@@ -97,7 +127,9 @@ function parseArgs(argv) {
     fullPage: false,
     look: process.env.LOOK ? DEFAULT_LOOK : null,
     click: process.env.CLICK ? [process.env.CLICK] : [],
+    type: process.env.TYPE || "",
     headers: process.env.HEADER ? [process.env.HEADER] : [],
+    access: process.env.ACCESS,
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -113,12 +145,16 @@ function parseArgs(argv) {
       opts.click.push(arg.startsWith("--click=") ? arg.slice(8) : argv[++i]);
       continue;
     }
+    if (arg === "--type" || arg.startsWith("--type=")) {
+      opts.type = arg.startsWith("--type=") ? arg.slice(7) : argv[++i];
+      continue;
+    }
     if (arg === "--header" || arg.startsWith("--header=")) {
       opts.headers.push(arg.startsWith("--header=") ? arg.slice(9) : argv[++i]);
       continue;
     }
     const m = arg.match(
-      /^--(pages|out|widths|themes|url|code|bin|demo-args)(?:=(.*))?$/,
+      /^--(pages|out|widths|themes|url|code|bin|demo-args|access)(?:=(.*))?$/,
     );
     if (!m) throw new Error(`unknown argument ${arg}; see this file's header`);
     opts[m[1] === "demo-args" ? "demoArgs" : m[1]] = m[2] ?? argv[++i];
@@ -147,6 +183,19 @@ function parseArgs(argv) {
     const at = h.indexOf(":");
     if (at <= 0) throw new Error(`--header ${h}: want "Name: value"`);
     opts.extraHTTPHeaders[h.slice(0, at).trim()] = h.slice(at + 1).trim();
+  }
+  if (opts.access) {
+    opts.access =
+      ACCESS_PRESETS[opts.access] ??
+      (() => {
+        try {
+          return JSON.parse(opts.access);
+        } catch {
+          throw new Error(
+            `--access ${opts.access}: want ${Object.keys(ACCESS_PRESETS).join(" or ")}, or a JSON object`,
+          );
+        }
+      })();
   }
   return opts;
 }
@@ -306,6 +355,19 @@ async function main() {
               extraHTTPHeaders: opts.extraHTTPHeaders,
             });
             await context.addCookies(cookies);
+            if (opts.access) {
+              await context.route(
+                (u) => u.pathname === "/api/config",
+                async (route) => {
+                  const response = await route.fetch();
+                  const json = {
+                    ...(await response.json()),
+                    access: opts.access,
+                  };
+                  await route.fulfill({ response, json });
+                },
+              );
+            }
             await context.addInitScript(
               ([key, value]) => localStorage.setItem(key, value),
               [THEME_KEY, theme],
@@ -322,6 +384,10 @@ async function main() {
             await tab.evaluate(() => document.fonts.ready);
             for (const selector of opts.click) {
               await tab.locator(selector).first().click({ timeout: 10_000 });
+              await tab.waitForTimeout(300);
+            }
+            if (opts.type) {
+              await tab.keyboard.type(opts.type);
               await tab.waitForTimeout(300);
             }
             // A page given as /path#anchor is shot with that element

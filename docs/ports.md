@@ -26,7 +26,9 @@ The range is split so that adding one kind of port never moves another:
 | 4280-4289 | persistent sandboxes' `host_port` (staging environments)   | 4280: the staging grain (`ports.StagingGrain`) |
 | 4290-4299 | dev and demo servers                                       | 4290: `grain demo` (`ports.Demo`)            |
 | 4251      | the gchat capability server's data plane (loopback) | `intree.DefaultGChatPort` (`pkg/capability/intree/gchat.go`) |
-| 4200-4241, 4252-4279 | unallocated                                     |                                              |
+| 4252      | the gcp capability server's token data plane (loopback) | `intree.DefaultGCPTokenPort` (`pkg/capability/intree/gcp_token.go`) |
+| 4253      | the figma capability server's data plane (loopback) | `ports.Figma`, `intree.DefaultFigmaPort` (`pkg/capability/intree/figma.go`) |
+| 4200-4241, 4254-4279 | unallocated                                     |                                              |
 
 The constants are in [`pkg/ports`](../pkg/ports/ports.go). Code names
 them rather than writing the number. Do not use `pkg/portpick` for this:
@@ -78,7 +80,9 @@ Class:
 | 4242 | operator | daemon UI/API | `grain daemon -ui-addr` default `0.0.0.0:4242` (`pkg/cli/daemon.go`), the CLI's `http://127.0.0.1:4242` (`pkg/cli/main.go`), `hostinit.DefaultUIAddr`, `scripts/setup.sh` and a wrapper distribution's own installer `GRAIN_UI_ADDR`, `scripts/client.sh`, `ui/vite.config.js` dev proxy |
 | 4244 | operator | sandbox-access acceptor: k8s-granule sandbox pods' wrappers dial out to it over mTLS | `ports.SandboxAccess`, `sandboxaccess.DefaultPort`; `-sandbox-access-addr=:4244` and the `grain-access` Service in `deploy/kubernetes/grain-granule.yaml` |
 | 4280 | operator | the staging grain persistent sandbox | a persistent sandbox's `host_port` (grain/config `tables/persistent_sandbox.json`); see [below](#persistent-sandboxes) |
-| 4251 | operator | gchat capability data plane (container, or on the host via hostd) | `-listen 127.0.0.1:4251`, `intree.DefaultGChatPort`; the built-in entry's args and hostd's `grain-gchat` entry |
+| 4251 | operator | gchat capability data plane (container, or on the host via host) | `-listen 127.0.0.1:4251`, `intree.DefaultGChatPort`; the built-in entry's args and host's `grain-gchat` entry |
+| 4252 | operator | gcp capability token data plane, for permission sets over an existing service account with `credential: token`; listens only once such a set is configured | `-listen 127.0.0.1:4252`, `intree.DefaultGCPTokenPort` |
+| 4253 | operator | figma capability data plane, serving attempt-scoped Figma MCP toolsets once configured | `-listen 127.0.0.1:4253`, `ports.Figma`, `intree.DefaultFigmaPort` |
 | 4290 | operator | `grain demo` | `-addr` default `127.0.0.1:4290` (`pkg/cli/demo.go`); was `127.0.0.1:8420` |
 | 4295, 4296 | developer | `tests/bench/tunnelbench` (tunnel-vs-direct benchmark) | endpoint server `-addr :4295` and the forward process's CPU stats; a throwaway benchmark, never part of a deployment |
 

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/granule/pkg/cli"
+	"github.com/gke-labs/granule/pkg/cli"
 )
 
 func TestGranuleCLI(t *testing.T) {

@@ -118,8 +118,8 @@ func TestDefaultModelResolution(t *testing.T) {
 	}
 }
 
-// A connection with no models -- a provider that never answered, a
-// custom command with an empty list -- is not given a made-up name: a
+// A connection with no models -- a provider that never answered -- is
+// not given a made-up name: a
 // task that would run on it waits, naming the connection.
 func TestNoModelsIsAWaitNotAGuess(t *testing.T) {
 	t.Parallel()
@@ -127,7 +127,7 @@ func TestNoModelsIsAWaitNotAGuess(t *testing.T) {
 	for name, b := range map[string]model.AgentBackend{
 		"provider never answered": {ID: "agy", Framework: model.AgentFrameworkAntigravity, AuthMode: model.AntigravityAuthAmbient,
 			Discovered: &model.DiscoveredModels{Error: "agy: no key"}},
-		"custom command with no list": {ID: "house", Framework: model.AgentFrameworkCustom, Command: "run-agent"},
+		"codex that never answered": {ID: "house", Framework: model.AgentFrameworkCodex},
 	} {
 		t.Run(name, func(t *testing.T) {
 			pool := providerDefaultPool(t, "", b)
@@ -145,8 +145,45 @@ func TestNoModelsIsAWaitNotAGuess(t *testing.T) {
 	}
 	// Once somebody picks a model, the same connection runs it.
 	pool := providerDefaultPool(t, "house-model",
-		model.AgentBackend{ID: "house", Framework: model.AgentFrameworkCustom, Command: "run-agent", Models: []string{"house-model"}})
+		model.AgentBackend{ID: "house", Framework: model.AgentFrameworkCodex, Models: []string{"house-model"}})
 	if reason := pool.Availability(ctx, orchestrator.AgentChoice{}); reason != "" {
 		t.Errorf("a connection with a model waits: %q", reason)
+	}
+}
+
+// A task pinned to a custom command connection -- the framework, the
+// connection, or a model only it served -- takes the default model
+// selection once migration 104 has disabled that connection, rather than
+// failing or waiting on something grain can no longer run.
+func TestTaskPinnedToARemovedCustomConnectionFallsBackToTheRotation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	pool := providerDefaultPool(t, "",
+		model.AgentBackend{ID: "house", Framework: model.RemovedAgentFrameworkCustom, Command: "run-agent", Models: []string{"house-model"}},
+		model.AgentBackend{ID: "agy", Framework: model.AgentFrameworkAntigravity, AuthMode: model.AntigravityAuthAmbient,
+			Models: []string{"gemini-3.1-pro"}})
+	live := DispatchConfig(ctx, pool.Store, pool.cfg)
+	if b := findBackendByID(live.AgentBackends, "house"); b == nil || !b.Disabled || b.DisabledReason != model.RemovedCustomConnectionReason {
+		t.Fatalf("stored custom connection = %+v, want it kept, disabled, saying why", b)
+	}
+	for name, choice := range map[string]orchestrator.AgentChoice{
+		"framework":  {Framework: model.RemovedAgentFrameworkCustom},
+		"connection": {BackendID: "house"},
+		"both":       {Framework: model.RemovedAgentFrameworkCustom, BackendID: "house"},
+		"its model":  {Model: "house-model"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			req, err := pool.resolve(ctx, live, choice)
+			if err != nil {
+				t.Fatalf("resolve(%+v) = %v, want the default selection", choice, err)
+			}
+			if req.pinned != nil || req.framework == model.RemovedAgentFrameworkCustom || req.model == "house-model" {
+				t.Errorf("resolve(%+v) = pinned %v, framework %q, model %q; want none of the custom pin kept",
+					choice, req.pinned, req.framework, req.model)
+			}
+			if reason := pool.Availability(ctx, choice); reason != "" {
+				t.Errorf("Availability(%+v) = %q, want it dispatchable on the rotation", choice, reason)
+			}
+		})
 	}
 }

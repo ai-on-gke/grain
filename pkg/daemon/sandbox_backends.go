@@ -29,6 +29,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/objectstore"
 	"github.com/ai-on-gke/grain/pkg/ui"
 	"github.com/ai-on-gke/grain/pkg/version"
 )
@@ -229,14 +230,22 @@ func EffectiveK8sGitProxyHost(cfg Config) string {
 	return cfg.ContainerGitProxyHost
 }
 
+func isUnpinnedDefaultK8sSandboxImage(ref string) bool {
+	return ref == model.DefaultK8sSandboxImage || ref == model.LegacyDefaultK8sSandboxImage
+}
+
+func isUnpinnedDefaultSandboxImage(ref string) bool {
+	return ref == model.DefaultSandboxImage || ref == model.LegacyDefaultSandboxImage
+}
+
 // EffectiveK8sSandboxImage resolves the container image for kubernetes sandbox
 // pods, falling back to DefaultK8sSandboxImage (or the version-pinned default)
 // when unset.
 func EffectiveK8sSandboxImage(cfg Config) string {
-	if cfg.K8sSandboxImage != "" && (cfg.K8sSandboxImage != model.DefaultK8sSandboxImage || DefaultK8sSandboxImage == model.DefaultK8sSandboxImage) {
+	if cfg.K8sSandboxImage != "" && (!isUnpinnedDefaultK8sSandboxImage(cfg.K8sSandboxImage) || (DefaultK8sSandboxImage == model.DefaultK8sSandboxImage && cfg.K8sSandboxImage != model.LegacyDefaultK8sSandboxImage)) {
 		return cfg.K8sSandboxImage
 	}
-	if cfg.K8sImage != "" && (cfg.K8sImage != model.DefaultK8sSandboxImage || DefaultK8sSandboxImage == model.DefaultK8sSandboxImage) {
+	if cfg.K8sImage != "" && (!isUnpinnedDefaultK8sSandboxImage(cfg.K8sImage) || (DefaultK8sSandboxImage == model.DefaultK8sSandboxImage && cfg.K8sImage != model.LegacyDefaultK8sSandboxImage)) {
 		return cfg.K8sImage
 	}
 	if DefaultK8sSandboxImage != model.DefaultK8sSandboxImage {
@@ -289,7 +298,7 @@ func effectiveK8sGranuleImage(cfg Config, mirror func(base, mirrorRepo string) s
 		// own arrives here with the stamp in K8sGranuleImage: that is
 		// the image to mirror, not a pin that opts out of the mirror.
 		pinned := cfg.K8sGranuleImage
-		if pinned == DefaultSandboxImage || pinned == model.DefaultSandboxImage || pinned == base {
+		if pinned == DefaultSandboxImage || isUnpinnedDefaultSandboxImage(pinned) || pinned == base {
 			pinned = ""
 		}
 		if pinned != "" && !isMirroredGuestRef(pinned, mirrorRepo) {
@@ -297,7 +306,7 @@ func effectiveK8sGranuleImage(cfg Config, mirror func(base, mirrorRepo string) s
 		}
 		return mirror(base, mirrorRepo)
 	}
-	if cfg.K8sGranuleImage != "" && (cfg.K8sGranuleImage != model.DefaultSandboxImage || DefaultSandboxImage == model.DefaultSandboxImage) {
+	if cfg.K8sGranuleImage != "" && (!isUnpinnedDefaultSandboxImage(cfg.K8sGranuleImage) || (DefaultSandboxImage == model.DefaultSandboxImage && cfg.K8sGranuleImage != model.LegacyDefaultSandboxImage)) {
 		return cfg.K8sGranuleImage
 	}
 	return base
@@ -483,22 +492,50 @@ var checkHostConfinement = mcp.CheckHostConfinement
 // namespaces) is refused at start-up rather than left with the code one
 // `cat` away from every agent.
 func hostSandboxHiddenPaths(ctx context.Context, cfg Config) ([]string, error) {
-	if cfg.DataDir == "" {
-		return nil, nil
+	var paths []string
+	if cfg.DataDir != "" {
+		dataDir, err := filepath.Abs(cfg.DataDir)
+		if err != nil {
+			return nil, err
+		}
+		paths = append(paths, dataDir)
 	}
-	dataDir, err := filepath.Abs(cfg.DataDir)
-	if err != nil {
-		return nil, err
+	var objectStoreDir string
+	if dirStore, ok := cfg.ObjectStore.(*objectstore.DirStore); ok && dirStore != nil {
+		objectStoreDir = dirStore.Root()
+	} else if cfg.ObjectStoreURI != "" {
+		if parsed, err := objectstore.ParseURI(cfg.ObjectStoreURI); err == nil && parsed.Scheme == "file" {
+			objectStoreDir = parsed.Dir
+		}
+	}
+	if objectStoreDir != "" {
+		absObj, err := filepath.Abs(objectStoreDir)
+		if err != nil {
+			return nil, err
+		}
+		alreadyCovered := false
+		for _, p := range paths {
+			if pathUnder(absObj, p) {
+				alreadyCovered = true
+				break
+			}
+		}
+		if !alreadyCovered {
+			paths = append(paths, absObj)
+		}
+	}
+	if len(paths) == 0 {
+		return nil, nil
 	}
 	if err := checkHostConfinement(ctx); err != nil {
 		return nil, fmt.Errorf("-host-sandboxes needs every run's commands to run with "+
 			"this daemon's data directory %s hidden, because its access code lives there and a run executes "+
 			"as this daemon's own account -- and that cannot be done on this host: %w. Install bubblewrap "+
 			"(apt-get install bubblewrap) and allow it unprivileged user namespaces, or use "+
-			"-container-sandboxes or -granule-sandboxes", dataDir, err)
+			"-container-sandboxes or -granule-sandboxes", strings.Join(paths, ", "), err)
 	}
-	log.Printf("grain daemon: host sandboxes run every command under bubblewrap with %s hidden", dataDir)
-	return []string{dataDir}, nil
+	log.Printf("grain daemon: host sandboxes run every command under bubblewrap with %s hidden", strings.Join(paths, ", "))
+	return paths, nil
 }
 
 // HostSandboxRunsDir is the directory -host-sandboxes creates each run's
@@ -625,6 +662,11 @@ func (c Config) sandboxBackendAvailability(backend model.SandboxBackend) (bool, 
 		// this daemon is a workstation's own.
 		if !c.HostSandboxes && !c.startupHostSandboxes {
 			return false, "needs -host-sandboxes at daemon startup"
+		}
+		// Nor with run hosts, which are not given a host sandbox
+		// (CheckRunHostBackend).
+		if c.RunHostImage != "" {
+			return false, "not available when run hosts (-run-host-image) are enabled"
 		}
 		if c.SandboxDir == "" {
 			return false, "needs a sandbox directory (-sandbox-dir)"

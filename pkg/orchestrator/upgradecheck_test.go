@@ -126,13 +126,14 @@ func TestUpgradeCheckFilesOneApprovedTaskAtTheHeadOfTheBacklog(t *testing.T) {
 	for _, g := range check.Grants {
 		grants = append(grants, g.Capability)
 	}
-	// Both, and separately: self-debug is the source this host runs,
+	// Both, and separately: grain#source is the source this host runs,
 	// grain-log is the journal it wrote. This task is the one that needs
 	// both, which is exactly why the second is not folded into the first
 	// -- every other self-debug task keeps only the source.
 	slices.Sort(grants)
-	if !slices.Equal(grants, []string{model.GrainJournalGrant, "self-debug"}) {
-		t.Errorf("Grants = %v, want self-debug and %s", grants, model.GrainJournalGrant)
+	if !slices.Equal(grants, []string{"api:self-debug", model.GrainJournalGrant, model.GrainSourceGrant}) {
+		t.Errorf("Grants = %v, want api:self-debug and %s (once self-debug) and %s", grants,
+			model.GrainSourceGrant, model.GrainJournalGrant)
 	}
 	if len(check.Reads) != 1 || check.Reads[0].Name != "grain-home" {
 		t.Errorf("Reads = %v, want the state repository", check.Reads)
@@ -1127,5 +1128,36 @@ func TestUpgradeCheckWaitsForTheRestartToComplete(t *testing.T) {
 				t.Fatalf("filed %d upgrade checks, want %d", len(got), c.want)
 			}
 		})
+	}
+}
+
+func TestUpgradeCheckBodyRecordsImageSourceAndFallback(t *testing.T) {
+	store, _ := openStore(t)
+	finished := baseTime.Add(-2 * time.Minute)
+	status := upgradeDone("main", finished)
+	status.Source = string(upgrade.ImageSourceRegistry)
+	status.FallbackNote = "release has no image assets; pulled from docker.io/grainai/grain"
+	deps := orchestrator.Deps{
+		Store: store,
+		Config: orchestrator.Config{
+			UpgradeStatus:    func() (upgrade.Status, error) { return status, nil },
+			ProcessStartedAt: finished.Add(10 * time.Second),
+			StateRepo:        func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+		},
+	}
+	if err := orchestrator.RunCycle(t.Context(), deps, baseTime); err != nil {
+		t.Fatalf("cycle: %v", err)
+	}
+	checks := upgradeChecks(t, store)
+	if len(checks) != 1 {
+		t.Fatalf("filed %d upgrade checks, want 1", len(checks))
+	}
+	for _, want := range []string{
+		"- Image source: registry",
+		"- Fallback: release has no image assets; pulled from docker.io/grainai/grain",
+	} {
+		if !strings.Contains(checks[0].Body, want) {
+			t.Fatalf("upgrade check body missing %q:\n%s", want, checks[0].Body)
+		}
 	}
 }

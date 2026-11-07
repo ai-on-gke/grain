@@ -34,7 +34,7 @@ Authentication and admission themselves ([`authentication.design.md`](authentica
 2. **Done** (task 2309): `extractPrincipal` (`pkg/ui/principal.go`) preserves verified `PrincipalHuman` and `PrincipalService` callers from `IdentityVerifier` implementations ([`authentication.design.md`](authentication.design.md) §2), and mutating routes record them.
 3. **Done** (task 2312): `GET /api/whoami` (`OA-5`) and full `PrincipalLabel` rendering across remaining UI surfaces.
 4. **Done** (task 2313): `OnBehalfOf` population for console sessions and API grants. The agent API gate derives it server-side (`agentOnBehalfOf`, `pkg/ui/on_behalf_of.go`) and `RequestActor` returns it, so every write the gate admits carries it. A task view names a session's agent by its title ("director for alice@example.com"). A wrapper distribution registers its signed-proxy `IdentityVerifier`, and attribution follows with no change here.
-5. **Remaining:** an external agent token's on-behalf-of (spec §2.4), which needs the minter's source recorded on the token row.
+5. **Done** (task 2797): an external agent token's on-behalf-of (`ExternalAgentToken.OwnerPrincipal`, spec §2.4).
 
 ## Open questions
 
