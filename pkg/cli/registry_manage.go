@@ -316,7 +316,11 @@ func cmdRegistryRotateCredential(ctx context.Context, c *ui.HTTPClient, out *pri
 	} else {
 		fmt.Printf("registration token (shown once): %s\n", resp.RegistrationToken)
 	}
-	printConnectedConfigSnippet(regURL, name)
+	entryURL := ""
+	if e, err := regClient.GetEntry(ctx, name); err == nil && e != nil {
+		entryURL = e.URL
+	}
+	printConnectedConfigSnippet(regURL, name, entryURL, *tokenFile)
 	return nil
 }
 

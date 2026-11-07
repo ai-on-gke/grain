@@ -133,6 +133,17 @@ export default function Overlay({
   // Cancel button calls onClose directly and is not asked: that is
   // already somebody saying "throw it away".
   const handleClose = (event, reason) => {
+    // An Escape from inside an open popover or popper (GrantsPicker's
+    // "Add grant…" menu, a Select's menu, an Autocomplete list) belongs to
+    // that popup, not the pane or dialog behind it.
+    if (
+      reason === "escapeKeyDown" &&
+      ((event?.target instanceof Element &&
+        event.target.closest(".MuiPopover-root, .MuiPopper-root")) ||
+        document.querySelector("[data-open-popover]"))
+    ) {
+      return;
+    }
     const blurred = reason === "escapeKeyDown" ? blurFocusedField() : null;
     if (isDirty?.() && !window.confirm(DISCARD_PROMPT)) {
       // Staying: put focus back in the field Escape blurred. Left on

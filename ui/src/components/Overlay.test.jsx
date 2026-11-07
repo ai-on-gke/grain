@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
+import { Popover } from "@mui/material";
 import { describe, expect, it, vi } from "vitest";
 import Overlay, { DISCARD_PROMPT } from "./Overlay.jsx";
 
@@ -309,6 +311,41 @@ describe("Overlay", () => {
       dirty = true;
       unmount();
       expect(unload().defaultPrevented).toBe(false);
+    });
+
+    it("ignores an Escape originating inside an open MUI Popover", async () => {
+      const onClose = vi.fn();
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+      function PaneWithPopover() {
+        const [anchor, setAnchor] = useState(null);
+        return (
+          <Overlay onClose={onClose} pane animate={false} isDirty={() => true}>
+            <button type="button" onClick={(e) => setAnchor(e.currentTarget)}>
+              Open popover
+            </button>
+            <Popover
+              open={Boolean(anchor)}
+              anchorEl={anchor}
+              onClose={() => setAnchor(null)}
+            >
+              <input aria-label="Popover search" autoFocus />
+            </Popover>
+          </Overlay>
+        );
+      }
+
+      render(<PaneWithPopover />);
+      await userEvent.click(
+        screen.getByRole("button", { name: "Open popover" }),
+      );
+      const popInput = await screen.findByLabelText("Popover search");
+      // Even if Escape bubbles out of the popover before ModalManager promotes
+      // it, Overlay leaves the keypress to the popover rather than asking
+      // DISCARD_PROMPT or closing the pane.
+      fireEvent.keyDown(popInput, { key: "Escape" });
+      expect(confirm).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
+      confirm.mockRestore();
     });
   });
 });

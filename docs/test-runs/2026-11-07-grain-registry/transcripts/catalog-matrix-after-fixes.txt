@@ -1,0 +1,80 @@
+################ alice@alpha.test via http://127.0.0.1:4251
+  list                       conn-alice               connected  running    online    listed=true  owner=alice@alpha.test         https://conn-alice.grain-user.test|
+  list -all                  grain: registry API 403 (forbidden): only admins may list all entries|
+  directory                  conn-alice                         online    other         owner=alice@alpha.test       https://conn-alice.grain-user.test|
+  directory -repo alpha/app  conn-alice                         online    other         owner=alice@alpha.test       https://conn-alice.grain-user.test|
+  directory -repo beta/svc   no listed directory entries matched|
+  route alpha/app            no matching grain entries for alpha/app |
+  route beta/svc             no matching grain entries for beta/svc |
+  show conn-alice            Name:        conn-alice|URL:         https://conn-alice.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=online, listed=true)|Owner:       alice@alpha.test|Version:     v0.0.0-2026110
+  show bob-ws                grain: registry API 403 (forbidden): caller does not have permission to view this entry|
+################ alice@alpha.test via http://127.0.0.1:4261
+  list                       conn-alice               connected  running    online    listed=true  owner=alice@alpha.test         https://conn-alice.grain-user.test|
+  list -all                  grain: registry API 403 (forbidden): only admins may list all entries|
+  directory                  conn-alice                         online    other         owner=alice@alpha.test       https://conn-alice.grain-user.test|
+  directory -repo alpha/app  conn-alice                         online    other         owner=alice@alpha.test       https://conn-alice.grain-user.test|
+  directory -repo beta/svc   no listed directory entries matched|
+  route alpha/app            no matching grain entries for alpha/app |
+  route beta/svc             no matching grain entries for beta/svc |
+  show conn-alice            Name:        conn-alice|URL:         https://conn-alice.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=online, listed=true)|Owner:       alice@alpha.test|Version:     v0.0.0-2026110
+  show bob-ws                grain: registry API 403 (forbidden): caller does not have permission to view this entry|
+################ carol@alpha.test via http://127.0.0.1:4251
+  list                       bob-ws                   connected  running    offline   listed=false owner=carol@alpha.test         https://bob-ws.grain-user.test|
+  list -all                  grain: registry API 403 (forbidden): only admins may list all entries|
+  directory                  conn-alice                         online    other         owner=alice@alpha.test       https://conn-alice.grain-user.test|
+  directory -repo alpha/app  conn-alice                         online    other         owner=alice@alpha.test       https://conn-alice.grain-user.test|
+  directory -repo beta/svc   no listed directory entries matched|
+  route alpha/app            no matching grain entries for alpha/app |
+  route beta/svc             no matching grain entries for beta/svc |
+  show conn-alice            Name:        conn-alice|URL:         https://conn-alice.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=online, listed=true)|Owner:       alice@alpha.test|Version:     v0.0.0-2026110
+  show bob-ws                Name:        bob-ws|URL:         https://bob-ws.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=offline, listed=false)|Display:     Bob WS|Purpose:     beta tenant|Owner:       carol
+################ carol@alpha.test via http://127.0.0.1:4261
+  list                       bob-ws                   connected  running    offline   listed=false owner=carol@alpha.test         https://bob-ws.grain-user.test|
+  list -all                  grain: registry API 403 (forbidden): only admins may list all entries|
+  directory                  conn-alice                         online    other         owner=alice@alpha.test       https://conn-alice.grain-user.test|
+  directory -repo alpha/app  conn-alice                         online    other         owner=alice@alpha.test       https://conn-alice.grain-user.test|
+  directory -repo beta/svc   no listed directory entries matched|
+  route alpha/app            no matching grain entries for alpha/app |
+  route beta/svc             no matching grain entries for beta/svc |
+  show conn-alice            Name:        conn-alice|URL:         https://conn-alice.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=online, listed=true)|Owner:       alice@alpha.test|Version:     v0.0.0-2026110
+  show bob-ws                Name:        bob-ws|URL:         https://bob-ws.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=offline, listed=false)|Display:     Bob WS|Purpose:     beta tenant|Owner:       carol
+################ bob@beta.test via http://127.0.0.1:4251
+  list                       no registry entries found|
+  list -all                  grain: registry API 403 (forbidden): only admins may list all entries|
+  directory                  conn-alice                         online    other         owner=alice@alpha.test       https://conn-alice.grain-user.test|
+  directory -repo alpha/app  conn-alice                         online    other         owner=alice@alpha.test       https://conn-alice.grain-user.test|
+  directory -repo beta/svc   no listed directory entries matched|
+  route alpha/app            no matching grain entries for alpha/app |
+  route beta/svc             no matching grain entries for beta/svc |
+  show conn-alice            Name:        conn-alice|URL:         https://conn-alice.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=online, listed=true)|Owner:       alice@alpha.test|Version:     v0.0.0-2026110
+  show bob-ws                grain: registry API 403 (forbidden): caller does not have permission to view this entry|
+################ bob@beta.test via http://127.0.0.1:4261
+  list                       no registry entries found|
+  list -all                  grain: registry API 403 (forbidden): only admins may list all entries|
+  directory                  conn-alice                         online    other         owner=alice@alpha.test       https://conn-alice.grain-user.test|
+  directory -repo alpha/app  conn-alice                         online    other         owner=alice@alpha.test       https://conn-alice.grain-user.test|
+  directory -repo beta/svc   no listed directory entries matched|
+  route alpha/app            no matching grain entries for alpha/app |
+  route beta/svc             no matching grain entries for beta/svc |
+  show conn-alice            Name:        conn-alice|URL:         https://conn-alice.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=online, listed=true)|Owner:       alice@alpha.test|Version:     v0.0.0-2026110
+  show bob-ws                grain: registry API 403 (forbidden): caller does not have permission to view this entry|
+################ root@alpha.test via http://127.0.0.1:4251
+  list                       no registry entries found|
+  list -all                  bob-ws                   connected  running    offline   listed=false owner=carol@alpha.test         https://bob-ws.grain-user.test|conn-alice               connected  running    online    listed=true  owner=alice@alpha.
+  directory                  conn-alice                         online    other         owner=alice@alpha.test       https://conn-alice.grain-user.test|
+  directory -repo alpha/app  conn-alice                         online    other         owner=alice@alpha.test       https://conn-alice.grain-user.test|
+  directory -repo beta/svc   no listed directory entries matched|
+  route alpha/app            no matching grain entries for alpha/app |
+  route beta/svc             no matching grain entries for beta/svc |
+  show conn-alice            Name:        conn-alice|URL:         https://conn-alice.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=online, listed=true)|Owner:       alice@alpha.test|Version:     v0.0.0-2026110
+  show bob-ws                Name:        bob-ws|URL:         https://bob-ws.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=offline, listed=false)|Display:     Bob WS|Purpose:     beta tenant|Owner:       carol
+################ root@alpha.test via http://127.0.0.1:4261
+  list                       no registry entries found|
+  list -all                  bob-ws                   connected  running    offline   listed=false owner=carol@alpha.test         https://bob-ws.grain-user.test|conn-alice               connected  running    online    listed=true  owner=alice@alpha.
+  directory                  conn-alice                         online    other         owner=alice@alpha.test       https://conn-alice.grain-user.test|
+  directory -repo alpha/app  conn-alice                         online    other         owner=alice@alpha.test       https://conn-alice.grain-user.test|
+  directory -repo beta/svc   no listed directory entries matched|
+  route alpha/app            no matching grain entries for alpha/app |
+  route beta/svc             no matching grain entries for beta/svc |
+  show conn-alice            Name:        conn-alice|URL:         https://conn-alice.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=online, listed=true)|Owner:       alice@alpha.test|Version:     v0.0.0-2026110
+  show bob-ws                Name:        bob-ws|URL:         https://bob-ws.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=offline, listed=false)|Display:     Bob WS|Purpose:     beta tenant|Owner:       carol
