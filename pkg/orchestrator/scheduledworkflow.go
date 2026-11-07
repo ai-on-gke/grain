@@ -958,7 +958,13 @@ func fireOneGitHubWorkflowRunSchedule(ctx context.Context, deps Deps, sched mode
 		if existing.RunID == runIDStr && max(1, run.Attempt) <= existing.Attempts {
 			return nil
 		}
-		if existing.AttemptedAt != nil && !existing.AttemptedAt.IsZero() && started.Before(*existing.AttemptedAt) {
+		// A run that started before the one already recorded is stale only
+		// when it is the same workflow on the same branch: the row is one per
+		// schedule, and a schedule that watches several branches or
+		// workflows must still review a slow run on one of them that
+		// concludes after a faster, later-started run on another.
+		if existing.Branch == branch && existing.Workflow == wfPath &&
+			existing.AttemptedAt != nil && !existing.AttemptedAt.IsZero() && started.Before(*existing.AttemptedAt) {
 			return nil
 		}
 	}

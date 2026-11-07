@@ -1544,3 +1544,92 @@ func TestRecordGitHubBaseBranchReleaseIgnoresOlderRunsAfterLaterVerdict(t *testi
 		t.Fatalf("older failure filed release triage after newer green release: %v", open)
 	}
 }
+
+// The stale-run guard in fireOneGitHubWorkflowRunSchedule is scoped to one
+// branch and workflow: a schedule that watches main and release-1 still
+// reviews a slow release-1 failure that started before a faster main failure
+// it recorded first, while an older run on main itself stays ignored.
+func TestGitHubWorkflowRunScheduleReviewsSlowRunOnAnotherBranch(t *testing.T) {
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	t.Cleanup(orchestrator.SetGitHubCIBudgetLow(false))
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+
+	tmplID := model.GitHubWorkflowReviewTemplateID("nightly")
+	sched := model.Schedule{
+		ID:         "sched-two-branch-nightly",
+		Title:      "Review nightly",
+		Target:     repo,
+		Enabled:    true,
+		Overlap:    model.OverlapAllow,
+		TemplateID: &tmplID,
+		Recurrence: model.Recurrence{
+			Kind: model.RecurrenceGitHubWorkflowRun,
+			GitHubWorkflowRun: &model.GitHubWorkflowRunTrigger{
+				Workflow:    "nightly.yml",
+				Conclusions: []string{"failure"},
+				Branches:    []string{"main", "release-1"},
+			},
+		},
+	}
+	if err := store.PutSchedule(ctx, sched); err != nil {
+		t.Fatal(err)
+	}
+	mainSHA := headSHA(t, client, repo, "main")
+	nightly := func(id int64, branch, sha, status, conclusion string, created time.Time) githubsim.WorkflowRun {
+		r := githubsim.WorkflowRun{
+			ID:         id,
+			Name:       "nightly",
+			Path:       ".github/workflows/nightly.yml",
+			HeadBranch: branch,
+			HeadSHA:    sha,
+			Event:      "schedule",
+			Status:     status,
+			Conclusion: conclusion,
+			RunAttempt: 1,
+			CreatedAt:  created,
+		}
+		if status == "completed" {
+			r.UpdatedAt = created.Add(10 * time.Minute)
+			r.Jobs = []githubsim.WorkflowJob{{Name: "go-long", Conclusion: conclusion}}
+		}
+		return r
+	}
+
+	// release-1's run started first but is still going; main's, started a
+	// minute later, has already failed.
+	sim.WorkflowRuns = []githubsim.WorkflowRun{
+		nightly(4002, "main", mainSHA, "completed", "failure", baseTime.Add(time.Minute)),
+		nightly(4001, "release-1", "feedfacefeedface", "in_progress", "", baseTime),
+	}
+	runGitHubCITails(t, ctx, orchestrator.Deps{Store: store, Client: client}, baseTime.Add(20*time.Minute))
+	if tasks, _ := store.ListTasks(ctx); len(tasks) != 1 {
+		t.Fatalf("filed %d tasks after main's nightly failed, want 1: %+v", len(tasks), tasks)
+	}
+
+	// release-1's slower run now fails too, and an older main run that was
+	// never seen concludes alongside it.
+	sim.WorkflowRuns = []githubsim.WorkflowRun{
+		nightly(4002, "main", mainSHA, "completed", "failure", baseTime.Add(time.Minute)),
+		nightly(4001, "release-1", "feedfacefeedface", "completed", "failure", baseTime),
+		nightly(4000, "main", mainSHA, "completed", "failure", baseTime.Add(-time.Minute)),
+	}
+	sim.WorkflowRuns[1].UpdatedAt = baseTime.Add(40 * time.Minute)
+	runGitHubCITails(t, ctx, orchestrator.Deps{Store: store, Client: client}, baseTime.Add(45*time.Minute))
+	tasks, err := store.ListTasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawRelease bool
+	for _, task := range tasks {
+		if strings.Contains(task.Body, "4001") {
+			sawRelease = true
+		}
+		if strings.Contains(task.Body, "4000") {
+			t.Errorf("filed a review for the stale main run 4000 that started before the recorded 4002:\n%s", task.Body)
+		}
+	}
+	if !sawRelease {
+		t.Fatalf("no review filed for release-1's slow nightly failure (run 4001); tasks: %+v", tasks)
+	}
+}
