@@ -168,6 +168,11 @@ func NewActiveTunnel(
 
 	t.transport = &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			if pre, ok := ctx.Value(preopenedStreamKey{}).(*preopenedStream); ok {
+				if c := pre.take(); c != nil {
+					return c, nil
+				}
+			}
 			return t.OpenStream(ctx)
 		},
 		DisableKeepAlives:      true,
@@ -202,6 +207,41 @@ func (t *ActiveTunnel) IsClosed() bool {
 	return t.closed.Load()
 }
 
+// Gone reports whether this tunnel can no longer take new streams: it was
+// closed, superseded or put into drain, or its mux session ended (the grain
+// hung up) before the lifecycle goroutine unregistered it.
+func (t *ActiveTunnel) Gone() bool {
+	if t.closed.Load() || t.superseded.Load() {
+		return true
+	}
+	select {
+	case <-t.mux.Done():
+		return true
+	default:
+		return false
+	}
+}
+
+// preopenedStreamKey carries a *preopenedStream in a request context so the
+// tunnel transport's DialContext hands the proxied request the stream that
+// serveLocalTunnel already opened, instead of opening a new one.
+type preopenedStreamKey struct{}
+
+type preopenedStream struct {
+	mu   sync.Mutex
+	conn net.Conn
+}
+
+// take returns the pre-opened stream the first time it is called and nil
+// afterwards.
+func (p *preopenedStream) take() net.Conn {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	c := p.conn
+	p.conn = nil
+	return c
+}
+
 // Done returns a channel closed when the underlying mux session terminates.
 func (t *ActiveTunnel) Done() <-chan struct{} {
 	return t.mux.Done()
@@ -221,6 +261,15 @@ func (t *ActiveTunnel) OpenStream(ctx context.Context) (net.Conn, error) {
 		if t.activeStreams.CompareAndSwap(cur, cur+1) {
 			break
 		}
+	}
+	// Check again now that this stream is counted. DrainAndClose marks the
+	// tunnel superseded and then reads ActiveStreams; counting first and
+	// checking second means either it sees this stream and waits for it, or
+	// this sees the drain and backs out -- never a stream it aborts by closing
+	// a tunnel it took for idle.
+	if t.closed.Load() || t.superseded.Load() {
+		t.activeStreams.Add(-1)
+		return nil, mux.ErrSessionClosed
 	}
 
 	st, err := t.mux.OpenStream(ctx)
@@ -546,6 +595,15 @@ func (rt *Router) HandleConnect(w http.ResponseWriter, r *http.Request, name str
 	}
 
 	// 7. Acquire fenced `session_epoch` in `registry.tunnel_sessions` (+ NOTIFY registry_tunnels).
+	//
+	// From the moment the acquire commits until registerActiveTunnel,
+	// PostgreSQL (and, through NOTIFY, every replica's tunnel cache) names
+	// this replica as the tunnel's holder while GetLocalTunnel still has
+	// nothing to serve it with. The handshake is recorded before the acquire,
+	// not after it, because a peer can act on the NOTIFY before the acquire
+	// has even returned here.
+	finishHandshake := rt.beginHandshake(entry.Name)
+	defer finishHandshake()
 	sessionEpoch := rt.nextLocalEpoch.Add(1)
 	if rt.store != nil {
 		_ = rt.store.UpsertReplica(ctx, rt.replicaID, rt.PeerAddr())
@@ -573,6 +631,7 @@ func (rt *Router) HandleConnect(w http.ResponseWriter, r *http.Request, name str
 
 	active := NewActiveTunnel(wsConn, entry, sessionEpoch, credID, authMode, rt.tunnelOpts)
 	rt.registerActiveTunnel(active, entry)
+	finishHandshake()
 
 	// 9. Block until the tunnel session terminates (keeping the hijacked connection alive
 	// and periodically updating `tunnel_sessions.last_seen_at`).
@@ -587,13 +646,81 @@ func (rt *Router) recordFailedAuthOrWrite429(w http.ResponseWriter, ip, msg stri
 	writeJSONError(w, http.StatusUnauthorized, "unauthenticated", msg)
 }
 
+// pendingHandshake counts the /connect handshakes for one entry that are
+// between acquiring their session and registering their tunnel; done is closed
+// when the last of them finishes.
+type pendingHandshake struct {
+	n    int
+	done chan struct{}
+}
+
+// beginHandshake records that a /connect handshake for name has acquired its
+// session in PostgreSQL and is about to register its tunnel. The returned
+// func, safe to call more than once, records that it has finished, whether
+// the tunnel registered or the handshake failed.
+func (rt *Router) beginHandshake(name string) func() {
+	name = strings.ToLower(strings.TrimSpace(name))
+	rt.handshakesMu.Lock()
+	p := rt.handshakes[name]
+	if p == nil {
+		p = &pendingHandshake{done: make(chan struct{})}
+		rt.handshakes[name] = p
+	}
+	p.n++
+	rt.handshakesMu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			rt.handshakesMu.Lock()
+			defer rt.handshakesMu.Unlock()
+			p.n--
+			if p.n == 0 {
+				close(p.done)
+				if rt.handshakes[name] == p {
+					delete(rt.handshakes, name)
+				}
+			}
+		})
+	}
+}
+
+// awaitHandshake waits, for at most ReconnectGrace, for a /connect handshake
+// for name that has acquired its session on this replica to finish, and
+// reports whether there was one. A peer that learns of the session through
+// NOTIFY can forward a request here before the handshake has registered the
+// tunnel; answering that request tunnel_gone would make the peer forget the
+// very session it was told about, and with no further NOTIFY coming, wait out
+// its whole reconnect_grace for nothing.
+func (rt *Router) awaitHandshake(ctx context.Context, name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	rt.handshakesMu.Lock()
+	p := rt.handshakes[name]
+	rt.handshakesMu.Unlock()
+	if p == nil {
+		return false
+	}
+	wait := rt.opts.ReconnectGrace
+	if wait <= 0 {
+		wait = 2 * time.Second
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-p.done:
+	case <-timer.C:
+	case <-ctx.Done():
+	}
+	return true
+}
+
 // GetLocalTunnel returns the active, non-superseded, non-closed tunnel on this replica for `name`.
 func (rt *Router) GetLocalTunnel(name string) *ActiveTunnel {
 	name = strings.ToLower(strings.TrimSpace(name))
 	rt.tunnelsMu.RLock()
 	t := rt.activeTunnels[name]
 	rt.tunnelsMu.RUnlock()
-	if t == nil || t.IsClosed() || t.IsSuperseded() {
+	if t == nil || t.Gone() {
 		return nil
 	}
 	return t
@@ -819,17 +946,19 @@ func (rt *Router) BeginDrain(ctx context.Context) {
 		wg.Add(1)
 		go func(tun *ActiveTunnel) {
 			defer wg.Done()
-			if tun.ActiveStreams() == 0 {
-				if staggerMax > 0 {
-					delay := time.Duration(rand.Int63n(int64(staggerMax) + 1))
-					select {
-					case <-ctx.Done():
-					case <-time.After(delay):
-					}
-				}
-				if tun.ActiveStreams() == 0 {
-					_ = tun.CloseWithReason("graceful shutdown")
-					return
+			// An idle tunnel keeps serving through its stagger delay, so a
+			// fleet of grains does not redial all at once. Either way it then
+			// goes through DrainAndClose, which stops new streams before it
+			// counts the in-flight ones: closing outright on "no active
+			// streams" raced a request that opened its stream just after the
+			// check and was aborted. A request that loses that race is not
+			// lost either: its stream never opens, and serveLocalTunnel hands
+			// it to reconnect_grace to follow the grain to its next replica.
+			if tun.ActiveStreams() == 0 && staggerMax > 0 {
+				delay := time.Duration(rand.Int63n(int64(staggerMax) + 1))
+				select {
+				case <-ctx.Done():
+				case <-time.After(delay):
 				}
 			}
 			tun.DrainAndClose(drainTimeout, "graceful shutdown")
