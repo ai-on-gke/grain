@@ -59,8 +59,9 @@ Options:
 Before running, create the client in the Cloud Console of the same project:
   1. Google Auth Platform > Branding: app name, support email. Audience:
      "External" (unless every admitted user is in the project's organization),
-     and add each admitted user as a test user, or publish the app (IAP asks
-     only for the non-sensitive openid/email scopes).
+     and keep Publishing status in "Testing" with only the admitted users added
+     as test users (avoid publishing the consent screen globally unless needed;
+     IAP still enforces roles/iap.httpsResourceAccessor either way).
   2. Google Auth Platform > Clients > Create client > "Web application".
   3. Run this script with the client ID and secret it shows.
   4. Edit the client and add the authorized redirect URI this script prints:
@@ -105,6 +106,16 @@ done
 if [[ -z "${PROJECT_ID}" ]]; then
   echo "configure-oauth.sh: --project is required" >&2
   usage >&2
+  exit 2
+fi
+
+if ! [[ "${PROJECT_ID}" =~ ^[a-z][a-z0-9.:-]*[a-z0-9]$ ]]; then
+  echo "configure-oauth.sh: invalid --project '${PROJECT_ID}'" >&2
+  exit 2
+fi
+
+if ! [[ "${NAME_PREFIX}" =~ ^[a-z][a-z0-9-]{1,10}[a-z0-9]$ ]]; then
+  echo "configure-oauth.sh: --prefix must match ^[a-z][a-z0-9-]{1,10}[a-z0-9]$" >&2
   exit 2
 fi
 
@@ -160,11 +171,13 @@ fi
 access_tok="$(gcloud auth print-access-token)"
 
 echo "Updating IAP on backend service ${BACKEND} in ${PROJECT_ID} to OAuth client ${CLIENT_ID}..." >&2
-# Body (with the secret) goes on stdin and the bearer token through a header
-# file descriptor, so neither appears in the process list.
+# Body (with the secret) goes on stdin via bash's builtin printf -> jq -Rs
+# (never --arg secret, which would put the secret in jq's argv) and the bearer
+# token goes through a header file descriptor, so neither appears in ps/argv.
 op_json="$(
-  jq -n --arg id "${CLIENT_ID}" --arg secret "${client_secret}" \
-    '{iap: {enabled: true, oauth2ClientId: $id, oauth2ClientSecret: $secret}}' |
+  printf '%s' "${client_secret}" |
+    jq -Rs --arg id "${CLIENT_ID}" \
+      '{iap: {enabled: true, oauth2ClientId: $id, oauth2ClientSecret: .}}' |
     curl -sS --fail-with-body -X PATCH \
       -H @<(printf 'Authorization: Bearer %s\nContent-Type: application/json\n' "${access_tok}") \
       --data-binary @- \

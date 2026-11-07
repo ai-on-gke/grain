@@ -31,6 +31,7 @@ REGISTRY_HOST=""
 INSTANCE_DOMAIN=""
 TOKEN_FILE=""
 ALLOW_VERIFIER_SA=0
+REVOKE_PREVIOUS=0
 ALLOW_PRINCIPALS=()
 
 usage() {
@@ -51,6 +52,7 @@ Options:
   --host-kind <kind>           workstation (default), kubernetes, or other
   --allow-principal <p>        Additional principal for entry access_list, e.g. user:peer@example.com (repeatable)
   --allow-verifier-sa          Also allow <prefix>-ver@<project>.iam.gserviceaccount.com on entry access_list
+  --revoke-previous            Revoke existing unrevoked credentials for this entry when minting the new token
   --prefix <prefix>            Resource name prefix (default: grain-reg)
   --zone <zone>                GCE VM zone (default: us-central1-a)
   --registry-host <host>       Optional registry hostname (auto-discovered from VM metadata if omitted)
@@ -92,6 +94,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --allow-verifier-sa)
       ALLOW_VERIFIER_SA=1
+      shift
+      ;;
+    --revoke-previous)
+      REVOKE_PREVIOUS=1
       shift
       ;;
     --prefix)
@@ -137,6 +143,14 @@ if ! [[ "${ENTRY_NAME}" =~ ^[a-z][a-z0-9-]{1,30}[a-z0-9]$ ]]; then
   exit 2
 fi
 
+case "${HOST_KIND}" in
+  workstation|kubernetes|other) ;;
+  *)
+    echo "register-entry.sh: invalid --host-kind '${HOST_KIND}' (must be workstation, kubernetes, or other)" >&2
+    exit 2
+    ;;
+esac
+
 access_list_json="[]"
 if [[ "${#ALLOW_PRINCIPALS[@]}" -gt 0 ]]; then
   access_list_json="$(printf '%s\n' "${ALLOW_PRINCIPALS[@]}" | jq -R . | jq -s 'unique')"
@@ -155,6 +169,7 @@ payload_json="$(jq -n \
   --arg host_kind "${HOST_KIND}" \
   --arg default_ver "${default_ver_principal}" \
   --argjson allow_verifier "${ALLOW_VERIFIER_SA}" \
+  --argjson revoke_previous "${REVOKE_PREVIOUS}" \
   --argjson access_list "${access_list_json}" \
   --arg token_sha256_hex "${token_sha256_hex}" \
   '{
@@ -165,6 +180,7 @@ payload_json="$(jq -n \
     host_kind: $host_kind,
     default_ver: $default_ver,
     allow_verifier: $allow_verifier,
+    revoke_previous: $revoke_previous,
     access_list: $access_list,
     token_sha256_hex: $token_sha256_hex
   }')"
@@ -188,6 +204,7 @@ display_name="\$(jq -r '.display_name' <<<"\${payload}")"
 purpose="\$(jq -r '.purpose' <<<"\${payload}")"
 host_kind="\$(jq -r '.host_kind' <<<"\${payload}")"
 allow_verifier="\$(jq -r '.allow_verifier' <<<"\${payload}")"
+revoke_previous="\$(jq -r '.revoke_previous' <<<"\${payload}")"
 default_ver="\$(jq -r '.default_ver' <<<"\${payload}")"
 token_sha256_hex="\$(jq -r '.token_sha256_hex' <<<"\${payload}")"
 meta_cfg="\$(curl -fsSL -H 'Metadata-Flavor: Google' 'http://metadata.google.internal/computeMetadata/v1/instance/attributes/grain-registry-config' 2>/dev/null || echo '{}')"
@@ -215,6 +232,7 @@ docker exec -i grain-registry-postgres psql -v ON_ERROR_STOP=1 -U grain -d grain
   -v host_kind="\${host_kind}" \
   -v visibility="\${visibility}" \
   -v access_list="\${access_list}" \
+  -v revoke_previous="\${revoke_previous}" \
   -v token_sha256_hex="\${token_sha256_hex}" >/dev/null <<'SQL'
 BEGIN;
 
@@ -259,6 +277,14 @@ target AS (
   SELECT id FROM updated
   UNION ALL
   SELECT id FROM inserted
+),
+revoked AS (
+  UPDATE registry.entry_credentials
+  SET revoked_at = now()
+  WHERE (:'revoke_previous')::int = 1
+    AND entry_id IN (SELECT id FROM updated)
+    AND revoked_at IS NULL
+  RETURNING id
 )
 INSERT INTO registry.entry_credentials (
   id, entry_id, token_sha256, label, created_by, created_at

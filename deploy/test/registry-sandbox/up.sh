@@ -173,6 +173,16 @@ if [[ -z "${PROJECT_ID}" || -z "${ADMIN_EMAIL}" ]]; then
   exit 2
 fi
 
+if ! [[ "${PROJECT_ID}" =~ ^[a-z][a-z0-9.:-]*[a-z0-9]$ ]]; then
+  echo "up.sh: invalid --project '${PROJECT_ID}'" >&2
+  exit 2
+fi
+
+if ! [[ "${NAME_PREFIX}" =~ ^[a-z][a-z0-9-]{1,10}[a-z0-9]$ ]]; then
+  echo "up.sh: --prefix must match ^[a-z][a-z0-9-]{1,10}[a-z0-9]$" >&2
+  exit 2
+fi
+
 for cmd in gcloud terraform jq curl; do
   if ! command -v "${cmd}" >/dev/null 2>&1; then
     echo "up.sh: required command '${cmd}' is not installed" >&2
@@ -247,10 +257,15 @@ fi
 # Only remove a .grain-ca.crt this script staged itself (never one the operator
 # placed in the checkout), including when the image build fails part-way.
 staged_grain_ca=0
+cb_dir=""
 remove_staged_grain_ca() {
   if [[ "${staged_grain_ca}" -eq 1 ]]; then
     rm -f "${REPO_ROOT}/.grain-ca.crt"
     staged_grain_ca=0
+  fi
+  if [[ -n "${cb_dir}" ]]; then
+    rm -rf "${cb_dir}"
+    cb_dir=""
   fi
 }
 trap remove_staged_grain_ca EXIT
@@ -361,8 +376,7 @@ fi
 log "Checking IAM permissions for ${active_acct} in ${PROJECT_ID}..."
 access_tok="$(gcloud auth print-access-token)"
 perm_resp="$(curl -fsSL -X POST \
-  -H "Authorization: Bearer ${access_tok}" \
-  -H "Content-Type: application/json" \
+  -H @<(printf 'Authorization: Bearer %s\nContent-Type: application/json\n' "${access_tok}") \
   "https://cloudresourcemanager.googleapis.com/v1/projects/${PROJECT_ID}:testIamPermissions" \
   -d '{
     "permissions": [
@@ -688,7 +702,8 @@ Register / rotate a connected daemon entry:
     --prefix ${NAME_PREFIX} \\
     --zone ${ZONE} \\
     --entry my-daemon \\
-    --owner ${ADMIN_EMAIL}
+    --owner ${ADMIN_EMAIL} \\
+    --revoke-previous
 
 Verify catalog, route resolution, and end-to-end tunnel reachability:
   ${SCRIPT_DIR}/verify.sh \\

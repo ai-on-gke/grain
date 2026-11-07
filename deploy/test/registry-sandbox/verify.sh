@@ -168,13 +168,27 @@ elif [[ "${tls_mode}" != "managed" ]]; then
 fi
 
 mint_iap_bearer_token() {
-  local active_acct
+  local active_acct iap_client_id
   active_acct="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null | head -n1 || true)"
-  # Cloud IAP with its Google-managed OAuth client accepts a service-account
-  # OAuth2 access token carrying the `openid` and `userinfo.email` scopes when
-  # that SA holds roles/iap.httpsResourceAccessor on the backend service.
-  # (Self-signed JWTs and ID tokens are rejected: the managed client's
-  # audience is not ours to mint for.)
+  iap_client_id="$(gcloud compute backend-services describe "${NAME_PREFIX}-iap-bs" \
+    --global --project="${PROJECT_ID}" --format='value(iap.oauth2ClientId)' 2>/dev/null || true)"
+
+  # When configure-oauth.sh has switched the backend service to a custom OAuth
+  # 2.0 client, Cloud IAP expects an OIDC ID token whose audience is that
+  # client ID. Otherwise (Google-managed IAP client), IAP accepts a
+  # service-account OAuth2 access token carrying `openid` and `userinfo.email`.
+  if [[ -n "${iap_client_id}" ]]; then
+    if [[ "${active_acct}" == "${verifier_sa}" ]]; then
+      gcloud auth print-identity-token --audiences="${iap_client_id}"
+      return 0
+    fi
+    gcloud auth print-identity-token \
+      --impersonate-service-account="${verifier_sa}" \
+      --audiences="${iap_client_id}" \
+      --include-email
+    return 0
+  fi
+
   if [[ "${active_acct}" == "${verifier_sa}" ]]; then
     gcloud auth print-access-token --scopes="openid,https://www.googleapis.com/auth/userinfo.email"
     return 0
@@ -211,7 +225,7 @@ fi
 echo "==> [3/5] Querying GET /api/directory through Cloud IAP as ${verifier_sa}..."
 iap_tok="$(mint_iap_bearer_token)"
 dir_json="$(curl -fsS "${curl_tls_flags[@]}" \
-  -H "Authorization: Bearer ${iap_tok}" \
+  -H @<(printf 'Authorization: Bearer %s\n' "${iap_tok}") \
   "https://${registry_host}/api/directory")"
 jq . <<<"${dir_json}"
 
@@ -252,7 +266,7 @@ for name in "${targets[@]}"; do
   echo "==> [4/5] Checking GET /api/route for entry '${name}'..."
   scope_repo="$(jq -r '.scopes[0].repo // "ai-on-gke/grain"' <<<"${entry_obj}")"
   route_json="$(curl -fsS "${curl_tls_flags[@]}" \
-    -H "Authorization: Bearer ${iap_tok}" \
+    -H @<(printf 'Authorization: Bearer %s\n' "${iap_tok}") \
     "https://${registry_host}/api/route?repo=${scope_repo}")"
   jq . <<<"${route_json}"
 
@@ -263,7 +277,7 @@ for name in "${targets[@]}"; do
   # curl_tls_flags already trusts (pinned, not -k).
   entry_curl_flags=("${curl_tls_flags[@]}")
   whoami_json="$(curl -fsS "${entry_curl_flags[@]}" \
-    -H "Authorization: Bearer ${iap_tok}" \
+    -H @<(printf 'Authorization: Bearer %s\n' "${iap_tok}") \
     "https://${entry_host}/api/auth/whoami")"
   jq . <<<"${whoami_json}"
   # /api/auth/whoami is answered by the daemon itself, so the version it
@@ -279,8 +293,7 @@ for name in "${targets[@]}"; do
   # operator-scoped /api/tasks (which proves the request reached the daemon).
   tasks_body="${tmp_dir}/tasks-${name}.body"
   tasks_code="$(curl -sS "${entry_curl_flags[@]}" -o "${tasks_body}" -w '%{http_code}' \
-    -H "Authorization: Bearer ${iap_tok}" \
-    -H "Accept: application/json" \
+    -H @<(printf 'Authorization: Bearer %s\nAccept: application/json\n' "${iap_tok}") \
     "https://${entry_host}/api/tasks")"
   if [[ "${tasks_code}" != "403" ]]; then
     echo "verify.sh: expected HTTP 403 for non-operator verifier SA on /api/tasks, got ${tasks_code} ($(cat "${tasks_body}"))" >&2

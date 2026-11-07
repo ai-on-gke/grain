@@ -106,9 +106,10 @@ The fix is a custom OAuth client. The IAP OAuth Admin API that could create
 one was shut down in March 2026, so a project owner creates it by hand once:
 
 1. Cloud Console > **Google Auth Platform > Branding**: set an app name and
-   support email. Under **Audience** choose **External**, then add each
-   admitted user as a test user (or publish the app; IAP requests only the
-   non-sensitive `openid` and `email` scopes).
+   support email. Under **Audience** choose **External**, and keep Publishing
+   status in **Testing** with only the admitted users added as test users (IAP
+   requests only the non-sensitive `openid` and `email` scopes and still
+   enforces `roles/iap.httpsResourceAccessor` at the edge).
 2. **Google Auth Platform > Clients > Create client**, type **Web
    application**. Copy the client ID and secret; keep the secret out of the
    repository.
