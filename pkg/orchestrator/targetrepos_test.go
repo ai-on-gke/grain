@@ -149,6 +149,7 @@ func TestTheDispatchTimeParkLiftsWhenTheRepoGoesBackOnTheList(t *testing.T) {
 
 	fw := newBlockingFramework()
 	deps, runs := asyncDeps(t, store, fw, 2)
+	_, deps.Client = newMultiSim(t, "main", model.RepoRef{Owner: "acme", Name: "widgets"}, gadgets)
 	client := settingsClient(store, "acme/widgets", "acme/gadgets")
 
 	narrowTo(t, ctx, client, "acme/widgets")
@@ -300,6 +301,7 @@ func TestAScheduleStopsFiringWhileItsRepoIsOffTheTargetRepoList(t *testing.T) {
 
 	fw := newBlockingFramework()
 	deps, runs := asyncDeps(t, store, fw, 2)
+	_, deps.Client = newMultiSim(t, "main", model.RepoRef{Owner: "acme", Name: "widgets"}, gadgets)
 	// Three of this schedule's own occurrences, a day apart, since the
 	// question is what a cadence does over time rather than what one
 	// firing does.
