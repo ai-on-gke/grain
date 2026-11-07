@@ -58,6 +58,7 @@ var routeScopes = map[string]APIScope{
 	"GET /api/auth/logout":                                                 "internal",
 	"GET /api/auth/user":                                                   "internal",
 	"GET /api/auth/status":                                                 "internal",
+	"GET /api/auth/whoami":                                                 "internal",
 	"GET /api/whoami":                                                      "internal",
 	"GET /api/settings":                                                    "settings:read",
 	"PUT /api/settings":                                                    "settings:write",
@@ -65,9 +66,16 @@ var routeScopes = map[string]APIScope{
 	"POST /api/settings/plan":                                              "settings:read",
 	"GET /api/settings/cli-run":                                            "settings:read",
 	"PUT /api/settings/cli-run":                                            "settings:write",
+	"GET /api/registry":                                                    "settings:read",
+	"POST /api/registry/heartbeat":                                         "settings:write",
+	"GET /api/registry/status":                                             "deployment:read",
 	"POST /api/capabilities/{id}/check":                                    "capabilities:read",
 	"GET /api/tasks":                                                       "tasks:read",
 	"GET /api/tasks/states":                                                "tasks:read",
+	"GET /api/tasks/wait":                                                  "tasks:read",
+	"GET /api/inbox":                                                       "tasks:read",
+	"GET /api/refs/{ref}/summary":                                          "tasks:read",
+	"GET /api/events":                                                      "tasks:read",
 	"GET /api/states":                                                      "tasks:read",
 	"POST /api/tasks":                                                      "tasks:write",
 	"POST /api/tasks/from-template":                                        "tasks:from-template",
@@ -84,6 +92,7 @@ var routeScopes = map[string]APIScope{
 	"POST /api/tasks/{id}/undefer":                                         "tasks:write",
 	"POST /api/tasks/{id}/submit":                                          "tasks:write",
 	"POST /api/tasks/{id}/comments":                                        "tasks:write",
+	"POST /api/tasks/{id}/reply":                                           "tasks:write",
 	"PUT /api/tasks/{id}/secret":                                           "secrets:write",
 	"POST /api/tasks/{id}/config-change":                                   "internal",
 	"POST /api/tasks/{id}/config-change/approve":                           "internal",
@@ -105,6 +114,9 @@ var routeScopes = map[string]APIScope{
 	"POST /api/tasks/{id}/force-merge":                                     "merge:force",
 	"POST /api/tasks/{id}/run-now":                                         "dispatch:write",
 	"POST /api/tasks/{id}/pull-request":                                    "merge:write",
+	"POST /api/pull-requests/adopt":                                        "merge:write",
+	"POST /api/pull-requests/review":                                       "tasks:write",
+	"GET /api/pull-requests/status":                                        "ci:read",
 	"POST /api/tasks/{id}/sandbox/recreate":                                "tasks:admin",
 	"POST /api/tasks/{id}/activity":                                        "internal",
 	"PUT /api/tasks/{id}/session-title":                                    "internal",
@@ -113,6 +125,8 @@ var routeScopes = map[string]APIScope{
 	"POST /api/tasks/{id}/db/execute":                                      "internal",
 	"POST /api/tasks/{id}/messages":                                        "tasks:write",
 	"POST /api/tasks/{id}/notes":                                           "tasks:write",
+	"POST /api/tasks/{id}/human-review":                                    "tasks:write",
+	"POST /api/tasks/{id}/human-review/release":                            "tasks:write",
 	"POST /api/tasks/{id}/notify":                                          "internal",
 	"POST /api/notifications":                                              "notifications:write",
 	"GET /api/notifications":                                               "tasks:read",
@@ -263,6 +277,9 @@ var routeScopes = map[string]APIScope{
 	"POST /api/capability-servers/test-script":                             "capabilities:admin",
 	"POST /api/capability-servers/gchat-test":                              "capabilities:admin",
 	"GET /api/capability-servers/gchat-usage":                              "capabilities:read",
+	"POST /api/capability-servers/figma-test":                              "capabilities:admin",
+	"POST /api/capability-servers/figma-oauth-authorize":                   "capabilities:admin",
+	"POST /api/capability-servers/figma-oauth-exchange":                    "capabilities:admin",
 	"GET /api/capability-servers/host-entries":                             "capabilities:read",
 	"GET /api/capability-servers/usage":                                    "capabilities:read",
 	"GET /api/capability-policy":                                           "capabilities:read",
@@ -300,14 +317,11 @@ var routeScopes = map[string]APIScope{
 	"GET /api/host/top":                                                    "deployment:read",
 	"GET /api/upgrade":                                                     "deployment:read",
 	"POST /api/upgrade":                                                    "deployment:upgrade",
+	"PUT /api/upgrade/source":                                              "deployment:upgrade",
 	"DELETE /api/upgrade/scheduled":                                        "deployment:upgrade",
 	"GET /api/upgrade/targets":                                             "deployment:read",
 	"GET /api/upgrade/release-notes":                                       "deployment:read",
 	"GET /api/database":                                                    "settings:read",
-	"POST /api/database/test":                                              "settings:write",
-	"POST /api/database/upgrade":                                           "deployment:upgrade",
-	"POST /api/upgrade/postgres":                                           "deployment:upgrade",
-	"POST /api/settings/db/migrate-to-postgres":                            "settings:write",
 	"GET /api/logs":                                                        "deployment:read",
 	"GET /api/logs/{source}":                                               "deployment:read",
 	"GET /api/sandboxes":                                                   "deployment:read",
@@ -360,15 +374,60 @@ var routeScopes = map[string]APIScope{
 	"DELETE /api/external-agents/tokens/{id}":                              "capabilities:admin",
 	"POST /api/external-agents/tokens/revoke-all":                          "capabilities:admin",
 	"GET /api/hostd/connect":                                               "internal",
+	"POST /api/hostd/join":                                                 "internal",
+	"POST /api/hostd/join/{id}/poll":                                       "internal",
+	"POST /api/hostd/renew":                                                "internal",
 	"GET /api/hostd/install.sh":                                            "internal",
+	"GET /hostd/install":                                                   "internal",
 	"GET /api/hostds":                                                      "capabilities:read",
 	"POST /api/hostds":                                                     "capabilities:admin",
+	"GET /api/hostds/enrollment-codes":                                     "internal",
+	"POST /api/hostds/enrollment-codes":                                    "internal",
+	"POST /api/hostds/enrollment-codes/{name}/rotate":                      "internal",
+	"POST /api/hostds/enrollment-codes/{name}/revoke":                      "internal",
+	"GET /api/hostds/pending":                                              "internal",
+	"POST /api/hostds/pending/{id}/accept":                                 "internal",
+	"POST /api/hostds/pending/{id}/reject":                                 "internal",
 	"PATCH /api/hostds/{name}":                                             "capabilities:admin",
+	"GET /api/hostds/{name}/install":                                       "capabilities:read",
+	"POST /api/hostds/{name}/rename":                                       "capabilities:admin",
 	"POST /api/hostds/{name}/rotate":                                       "capabilities:admin",
 	"POST /api/hostds/{name}/revoke":                                       "capabilities:admin",
+	"DELETE /api/hostds/{name}":                                            "capabilities:admin",
+	"POST /api/hostds/delete-revoked":                                      "capabilities:admin",
 	"GET /api/access/principals":                                           "access:read",
 	"POST /api/access/principals":                                          "access:write",
+	"PATCH /api/access/principals/{entry}":                                 "access:write",
 	"DELETE /api/access/principals/{entry}":                                "access:write",
 	"POST /api/mcp":                                                        "internal",
 	"POST /mcp":                                                            "internal",
+}
+
+// capabilitiesDetachRoutes are the capabilities:admin routes the narrower,
+// non-dangerous capabilities:detach scope also reaches -- but only for a
+// body that removes and never adds (capabilitiesDetachBodyAllowed), with a
+// reason, and never on a standing session's task
+// (director-capabilities.spec.md §3.1.2, gap G6):
+//
+//   - POST /api/tasks/{id}/capabilities with "attach": false and no
+//     "replace";
+//   - PUT /api/repos/{owner}/{name}/capabilities and
+//     PUT /api/repos/{owner}/{name}/ci-capabilities whose list is a subset
+//     of the one already stored (storedFieldGrants).
+//
+// The routes keep capabilities:admin in routeScopes: that is still the
+// scope that may attach, replace or widen through them.
+var capabilitiesDetachRoutes = map[string]bool{
+	"POST /api/tasks/{id}/capabilities":             true,
+	"PUT /api/repos/{owner}/{name}/capabilities":    true,
+	"PUT /api/repos/{owner}/{name}/ci-capabilities": true,
+}
+
+// capabilitiesDetachAllowsRoute reports whether set may reach pattern
+// through capabilities:detach alone: what lists the route as a tool for a
+// holder of capabilities:detach, and what the gate then holds to a
+// detach-only body. Which repository, and the body, are the gate's to
+// check once they are known (Server.capabilitiesDetachAllowed).
+func capabilitiesDetachAllowsRoute(set APIGrantSet, pattern string) bool {
+	return capabilitiesDetachRoutes[pattern] && set.Has("capabilities:detach")
 }

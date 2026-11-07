@@ -23,25 +23,24 @@ sandboxes.
 
 ## 1. Install the binary
 
-Releases are published as assets on the repository's GitHub releases
-([docs/release-assets.md](release-assets.md)): an `images.json` manifest and
-a `docker save` tarball of the core build's image (`./cmd/grain`),
-`grain-image.tar.gz`, with a `sha256sum` sidecar. Its `/usr/local/bin/grain`
-is a static Linux binary (`CGO_ENABLED=0`). Use a release tag (`vX.Y.Z`,
-listed in [docs/releases](releases)) rather than `latest`, and check the
-tarball against the manifest before loading it --
-`scripts/install-grain.sh -version vX.Y.Z` does all of this in one command:
+Releases are published as the signed container image
+`docker.io/grainai/grain:<version>`, the core build (`./cmd/grain`). A
+wrapper distribution's build (`pkg/installtrack`) is published under its own
+image repository with the same tags. Its `/usr/local/bin/grain` is a static Linux binary
+(`CGO_ENABLED=0`). Use a release tag (`vX.Y.Z`, listed
+in [docs/releases](releases)) rather than `latest`, and pin the digest you
+verified:
 
 ```sh
 VERSION=v1.9.0                       # the release you want
-BASE=https://github.com/ai-on-gke/grain/releases/download/$VERSION
-curl -fsSLO "$BASE/images.json"
-ASSET=$(jq -r .images.grain.asset images.json)
-curl -fsSLO "$BASE/$ASSET" -O "$BASE/$ASSET.sha256"
-grep -q "$(jq -r .images.grain.sha256 images.json)  $ASSET" "$ASSET.sha256"
-sha256sum -c "$ASSET.sha256"         # the tarball is the one the manifest names
-docker load -i "$ASSET"
-PINNED=$(jq -r .images.grain.ref images.json)   # grain/grain:sha-<12 hex>
+IMAGE=docker.io/grainai/grain:$VERSION
+docker pull "$IMAGE"
+PINNED=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE")
+echo "$PINNED"                       # docker.io/grainai/grain@sha256:...
+
+# Verify the release signature (docs/image-signing.md). cosign.pub is the
+# release public key your Grain operator publishes.
+cosign verify --key cosign.pub --insecure-ignore-tlog=true "$PINNED"
 
 mkdir -p ~/.local/bin
 id=$(docker create "$PINNED")
@@ -51,11 +50,18 @@ sha256sum ~/.local/bin/grain         # record it beside $PINNED
 grain version
 ```
 
-`scripts/install-grain.sh` does the same in one command, and refuses to
-install an image whose signature does not verify when you give it a key:
+`scripts/install-grain.sh` does it in one command. By default it installs
+from the release's GitHub release assets instead
+([docs/release-assets.md](release-assets.md)): it downloads `images.json` and
+the `grain-image.tar.gz` tarball it names, checks the tarball against the
+manifest's sha256 and its `.sha256` sidecar, `docker load`s it and checks the
+loaded image ID, so no registry is involved. With `-image` it pulls from the
+registry as above, and refuses an image whose signature does not verify when
+you give it a key:
 
 ```sh
-scripts/install-grain.sh -version v1.9.0 -key cosign.pub
+scripts/install-grain.sh -version v1.9.0                     # release assets
+scripts/install-grain.sh -version v1.9.0 -image docker.io/grainai/grain -key cosign.pub
 ```
 
 If `~/.local/bin` is not on your `PATH`, add it. Without docker, copy the
@@ -145,23 +151,46 @@ Flags it is not given take the detected default. `grain init workstation
 The starter policy fails closed:
 
 ```yaml
-repos: ["acme/widgets"]
+repos: ["acme/widgets", "grain/config"]
 local_requesters: ["me@example.com", "me"]
 approvers: ["me@example.com", "me"]
 allow_unapproved_external: false
 capabilities:
-  allow: ["grain-ci"]  # and the ones you named
+  allow:
+    - "grain-ci"  # and the ones you named
+    # The Director chat's own grants. Remove one and the Director is held for it.
+    - "durable"
+    - "self-debug"
+    - "https://grain.dev/capabilities/grain#journal"
+    - "api:deployment:read"
+    - "https://grain.dev/capabilities/grain#health"
+    - 'https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}'
+    - "api:ci-read"
 network: ["open"]
 allow_external_on_host_sandboxes: false
 ```
 
-A task naming any other repository, granted any capability you did not
-name, or asking for another network is refused before it gets a sandbox.
-`grain-ci` is the one capability allowed without being named: grain grants
-it to every task on a repository whose CI mode is grain, and it carries no
-credential -- it is the run's own `wait_for_checks` against the
-repository's `.grain/workflows`.
-So is one from anybody else that does not carry your approval.
+A task naming any other repository, granted any capability not listed, or
+asking for another network is refused before it gets a sandbox. So is one
+from anybody else that does not carry your approval.
+
+Init lists some things you did not name:
+
+- `grain-ci`: the retired bare name (schema migration 96) of
+  `https://grain.dev/capabilities/grain#ci`, which local policy reads as
+  that grant. Grain grants it to every task on a repository whose CI mode
+  is grain, and it carries no credential. It is the run's own
+  `wait_for_checks` against the repository's `.grain/workflows`.
+- `grain/config`: this deployment's own state repository, which the
+  Director reads.
+- The Director chat's own grants, named exactly so you can see each one
+  and remove it. They are names, not patterns, but any task may be granted
+  them, not only the Director.
+
+The Director asks for an open network. With `-network none` it is held
+until you add `open` to `network:` or close the Director's own network,
+and init says so.
+
 Edit the file, then `systemctl --user restart grain`.
 
 `daemon.sh` runs `grain daemon -policy ... -ui-addr

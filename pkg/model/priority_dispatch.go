@@ -98,6 +98,12 @@ func IsPersonOnlyGrant(name string) bool {
 	return name == PriorityDispatchCapability || name == DurableCapability || IsDangerousGrant(name)
 }
 
+// IsAdminOnlyGrant reports whether name is a grant only a direct human
+// operator may approve or assign (AU-25.3).
+func IsAdminOnlyGrant(name string) bool {
+	return IsPersonOnlyGrant(name)
+}
+
 // priorityDispatchTaskSQL is HasPriorityDispatch for the store's own
 // queries: a task holding PriorityDispatchCapability or DurableCapability.
 // It expects `t` bound to the task row and takes priorityDispatchArgs, in

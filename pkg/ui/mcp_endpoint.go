@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -73,8 +74,9 @@ const controllerMCPInstructions = `Grain Controller MCP workflow guide:
    - grain_submit_task(...) to file a task. approve defaults to false (filed as "proposed" awaiting human approval); only set approve=true when explicitly authorized.
 2. All other Grain controller operations (a few hundred routes across CI, merge queue, repos, releases, schedules, templates, settings, secrets, capabilities, deployment) use progressive discovery:
    - Call grain_explore_scope() with no arguments to list the scope groups you are authorized to use.
-   - Call grain_explore_scope(scope="<group>", tool="<word>") (e.g. scope="tasks", tool="comment") to get the exact JSON input schemas of just the routes you need; a whole group (scope alone) can run to tens of KB, so name the tool whenever you know what you are after.
-   - Call grain_invoke(tool="api_...", arguments={...}, reason?="...") to execute an authorized route.
+   - Call grain_explore_scope(scope="<group>", tool="<word>") (e.g. scope="tasks", tool="comment") to get the exact JSON input schemas of just the routes you need; tool matches words of tool names, paths and descriptions, and a word that matches nothing answers with the nearest tool names.
+   - A whole group (scope alone), or every route (scope="all" or view="index"), comes back in one answer: the tool drops from full schemas to compact lines to an index of tool names as needed to fit ~10 KB, or name view="full"|"compact"|"index" yourself. Per-field aliases of api_set_repo_settings are folded out unless includeAliases=true.
+   - Call grain_invoke(tool="api_...", arguments={...}, reason?="...") to execute an authorized route; a misspelled tool name is answered with the nearest real ones.
 3. Safety & authorization rules:
    - Destructive (DELETE) and dangerous-scope routes require a non-empty reason explaining why the change is being made.
    - Task mutations accept arguments.expect ({state?, title_prefix?, kind?}): the call reads the task first and refuses, changing nothing, if the record disagrees.
@@ -190,6 +192,7 @@ func (s *Server) resolveMCPCallerAccess(ctx context.Context) (mcpCallerAccess, e
 		} else {
 			set = APIGrantsOf(held)
 		}
+		set = model.WithinDirectorFloor(*acting, set)
 		return mcpCallerAccess{
 			actingTaskID: taskID,
 			grantSet:     set,
@@ -215,7 +218,8 @@ func (a mcpCallerAccess) allowsRoute(rt APIRoute) bool {
 		if _, blocked := isNoTaskContextRoute(rt.Pattern); blocked {
 			return false
 		}
-		return a.grantSet.Has(rt.Scope) || tasksAdminAllowsTaskPatch(a.grantSet, rt.Pattern)
+		return a.grantSet.Has(rt.Scope) || tasksAdminAllowsTaskPatch(a.grantSet, rt.Pattern) ||
+			capabilitiesDetachAllowsRoute(a.grantSet, rt.Pattern)
 	}
 	if a.channel == SandboxCLIChannel {
 		if IsSandboxDeniedScope(rt.Scope) || sandboxChannelGuard(rt.Pattern, nil) != nil {
@@ -224,6 +228,7 @@ func (a mcpCallerAccess) allowsRoute(rt APIRoute) bool {
 	}
 	return a.grantSet.Has(rt.Scope) ||
 		tasksAdminAllowsTaskPatch(a.grantSet, rt.Pattern) ||
+		capabilitiesDetachAllowsRoute(a.grantSet, rt.Pattern) ||
 		agentCapabilityAllowsRoute(a.heldGrants, a.grantSet, rt.Pattern, rt.Scope) ||
 		grainCIReadsRoute(a.heldGrants, rt.Pattern)
 }
@@ -251,7 +256,7 @@ var domainGuidance = map[string]string{
 	"tasks":        "Task lifecycle & mutations. Prefer grain_list_tasks, grain_get_task, grain_filing_context, and grain_submit_task for common reads/filing; use grain_invoke for comments, state transitions, dependencies, approvals, and task-admin edits. Pass arguments.expect on admin mutations to avoid clobbering concurrent changes.",
 	"ci":           "Grain CI workflows, runs, logs, faults, and artifacts. Filter list calls by repo/branch when possible before fetching full job logs.",
 	"merge":        "Pull request creation, merge-queue retries, and force-merges. Force-merge requires merge:force and an explicit reason.",
-	"repos":        "Target repository onboarding, branch configuration, CI mode, merge settings, and declarations.",
+	"repos":        "Target repository onboarding, branch configuration, CI mode, merge settings, and declarations. api_get_repo_settings / api_set_repo_settings read and write every per-repository setting together; the per-field routes (ci-mode, setup-command, ...) are aliases of them, listed only with includeAliases=true.",
 	"releases":     "Release branches, release candidates, qualification plans, and promotions.",
 	"schedules":    "Recurring task/suite schedules, composition previews, and immediate schedule triggers.",
 	"templates":    "Reusable task templates and template composition previews.",
@@ -344,21 +349,56 @@ func (s *Server) dispatchSubrequest(ctx context.Context, method, pathWithQuery s
 	return rec.Code, rec.Body.Bytes(), nil
 }
 
+// Explore views: what grain_explore_scope answers a route query with,
+// from most to least detail. The caller may name one; left to itself
+// the tool picks the most detailed view that fits maxExploreResultBytes,
+// so a whole group or the whole API comes back readable in one call
+// rather than elided in the middle.
+const (
+	exploreViewAuto    = ""
+	exploreViewFull    = "full"    // every route with its JSON input schema
+	exploreViewCompact = "compact" // tool, method, path, scope and a one-line summary per route
+	exploreViewIndex   = "index"   // tool names only, grouped by scope
+)
+
+// maxExploreResultBytes is how large an explore answer may grow before
+// the tool drops to a smaller view of the same routes: the ~10 KB a
+// harness shows a model whole, under pkg/mcp's own 16 KB cap. The index
+// of every route in the API fits under it; a group's compact listing
+// fits under it; a group's full schemas mostly do not.
+const maxExploreResultBytes = 10 << 10
+
+// maxExploreSummaryChars bounds the one-line summary the compact view
+// shows per route: the first sentence of the route's doc, cut at a word.
+const maxExploreSummaryChars = 120
+
 func (s *Server) exploreScopeTool() mcp.Tool {
 	return mcp.Tool{
-		Name:        ToolGrainExploreScope,
-		Description: "List authorized Grain controller API scope groups, or return domain guidance and JSON input schemas for one scope group or scope -- narrowed to the routes whose tool name or path matches tool, when given.",
-		Meta:        controllerAlwaysLoadMeta,
+		Name: ToolGrainExploreScope,
+		Description: "List authorized Grain controller API scope groups, or the routes of one scope group or scope (or of every group, with scope='all'), " +
+			"narrowed to the routes matching tool when given. The view shrinks to fit one answer: full JSON input schemas when they fit (~10 KB), " +
+			"else compact lines (tool, method, path, one-line summary), else an index of tool names by scope; name view to choose. " +
+			"Per-field aliases of api_set_repo_settings are folded out unless includeAliases is true.",
+		Meta: controllerAlwaysLoadMeta,
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"scope": map[string]any{
 					"type":        "string",
-					"description": "Optional scope group (e.g. 'tasks', 'ci', 'merge', 'repos', 'settings') or exact scope (e.g. 'ci:read'). Omit to list all authorized scope groups.",
+					"description": "Optional scope group (e.g. 'tasks', 'ci', 'merge', 'repos', 'settings'), exact scope (e.g. 'ci:read'), or 'all' for every authorized route. Omit to list the authorized scope groups.",
 				},
 				"tool": map[string]any{
 					"type":        "string",
-					"description": "Optional route tool name (e.g. 'api_add_comment') or a word of it or of its path (e.g. 'comment'): only matching routes' schemas are returned, which is far cheaper than a whole group's. With scope, searches that group; alone, every authorized route.",
+					"description": "Optional route tool name (e.g. 'api_add_comment') or one or more words to search for in tool names, paths, scopes and descriptions (e.g. 'comment', 'git connection'): only matching routes are returned, which is far cheaper than a whole group. With scope, searches that group; alone, every authorized route. A word that matches nothing answers with the nearest tool names.",
+				},
+				"view": map[string]any{
+					"type":        "string",
+					"enum":        []string{exploreViewFull, exploreViewCompact, exploreViewIndex},
+					"description": "How much of each route to return: 'full' (its JSON input schema), 'compact' (tool, method, path, scope, one-line summary; no schema) or 'index' (tool names grouped by scope). Omit to get the most detailed view that fits in one answer; then name one route in tool for its full schema.",
+				},
+				"includeAliases": map[string]any{
+					"type":        "boolean",
+					"description": "List the per-field repository configuration routes (GET/PUT /api/repos/{owner}/{name}/ci-mode, .../setup-command, ...) too. They are folded out by default: api_get_repo_settings and api_set_repo_settings read and write the same fields together. A tool query that matches one shows it regardless.",
 				},
 			},
 		},
@@ -372,11 +412,24 @@ func (s *Server) exploreScopeTool() mcp.Tool {
 			query := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(rawScope)), APIGrantPrefix)
 			rawTool, _ := args["tool"].(string)
 			toolQuery := strings.ToLower(strings.TrimSpace(rawTool))
+			rawView, _ := args["view"].(string)
+			view := strings.ToLower(strings.TrimSpace(rawView))
+			switch view {
+			case exploreViewAuto, exploreViewFull, exploreViewCompact, exploreViewIndex:
+			default:
+				return toolFailuref(ToolGrainExploreScope, "unknown view %q: use %s, %s or %s, or omit it", rawView, exploreViewFull, exploreViewCompact, exploreViewIndex)
+			}
+			includeAliases, _ := args["includeAliases"].(bool)
 
-			if query == "" && toolQuery == "" {
+			if query == "" && toolQuery == "" && view == exploreViewAuto {
 				return renderScopeOverview(access, authorized)
 			}
-			return renderScopeDetail(access, authorized, query, toolQuery)
+			if query == "all" || query == "*" {
+				query = ""
+			}
+			return renderScopeDetail(access, authorized, exploreQuery{
+				scope: query, tool: toolQuery, view: view, includeAliases: includeAliases,
+			})
 		},
 	}
 }
@@ -448,7 +501,7 @@ func renderScopeOverview(access mcpCallerAccess, authorized []APIRoute) mcp.Resu
 
 	payload := map[string]any{
 		"totalAuthorizedRoutes": len(authorized),
-		"hint":                  "Call grain_explore_scope(scope='<group>', tool='<word>') to view matching route tool names and JSON input schemas (scope alone lists a whole group, which is much larger), then grain_invoke(tool, arguments, reason?) to execute.",
+		"hint":                  "Call grain_explore_scope(scope='<group>', tool='<word>') to view matching route tool names and JSON input schemas; scope alone lists a whole group and scope='all' (or view='index') every route, each shrunk to fit one answer. Then grain_invoke(tool, arguments, reason?) to execute.",
 		"groups":                out,
 	}
 	encoded, _ := json.Marshal(payload)
@@ -461,8 +514,30 @@ type exploredRouteSchema struct {
 	Path        string         `json:"path"`
 	Scope       APIScope       `json:"scope"`
 	NeedsReason bool           `json:"needsReason,omitempty"`
+	AliasOf     string         `json:"aliasOf,omitempty"`
 	Description string         `json:"description"`
 	InputSchema map[string]any `json:"inputSchema"`
+}
+
+// exploredRouteLine is one route of the compact view: what the full
+// view says less the schema and the boilerplate, in ~150 bytes.
+type exploredRouteLine struct {
+	Tool        string   `json:"tool"`
+	Method      string   `json:"method"`
+	Path        string   `json:"path"`
+	Scope       APIScope `json:"scope"`
+	NeedsReason bool     `json:"needsReason,omitempty"`
+	AliasOf     string   `json:"aliasOf,omitempty"`
+	Summary     string   `json:"summary"`
+}
+
+// exploreQuery is one grain_explore_scope route query as its handler
+// read it: scope empty for every authorized route.
+type exploreQuery struct {
+	scope          string
+	tool           string
+	view           string
+	includeAliases bool
 }
 
 func routeMatchesScopeQuery(rt APIRoute, query string, presetScopes []APIScope) bool {
@@ -478,83 +553,93 @@ func routeMatchesScopeQuery(rt APIRoute, query string, presetScopes []APIScope) 
 	return false
 }
 
-// routeMatchesToolQuery reports whether rt is one a tool query names: its
-// tool name exactly, or a word of its tool name or path.
-func routeMatchesToolQuery(rt APIRoute, toolQuery string) bool {
-	if toolQuery == "" {
-		return true
+// routeOneLiner is a route's summary cut to one line: its first
+// sentence, and at most maxExploreSummaryChars of that, cut at a word.
+func routeOneLiner(rt APIRoute) string {
+	s := strings.TrimSpace(rt.Summary)
+	if i := strings.Index(s, ". "); i > 0 {
+		s = s[:i+1]
 	}
-	tool := strings.ToLower(rt.Tool)
-	return tool == toolQuery || tool == APIToolPrefix+toolQuery ||
-		strings.Contains(tool, toolQuery) || strings.Contains(strings.ToLower(rt.Path), toolQuery)
+	if len(s) <= maxExploreSummaryChars {
+		return s
+	}
+	cut := strings.LastIndex(s[:maxExploreSummaryChars-3], " ")
+	if cut < maxExploreSummaryChars/2 {
+		cut = maxExploreSummaryChars - 3
+	}
+	return strings.TrimRight(s[:cut], " ,;:") + "..."
 }
 
-func renderScopeDetail(access mcpCallerAccess, authorized []APIRoute, query, toolQuery string) mcp.Result {
+// aliasFieldOf is the field name an alias route's path ends in, for the
+// note that lists what was folded out.
+func aliasFieldOf(rt APIRoute) string {
+	return strings.TrimPrefix(rt.Path, repoSettingsPathPrefix)
+}
+
+// aliasNote says what a listing left out and how to see it.
+func aliasNote(hidden []APIRoute) string {
+	canonical := map[string]bool{}
+	fields := []string{}
+	for _, rt := range hidden {
+		canonical[rt.AliasOf] = true
+		if f := aliasFieldOf(rt); !slices.Contains(fields, f) {
+			fields = append(fields, f)
+		}
+	}
+	names := make([]string, 0, len(canonical))
+	for c := range canonical {
+		names = append(names, c)
+	}
+	sort.Strings(names)
+	sort.Strings(fields)
+	return fmt.Sprintf("%d per-field aliases of %s folded out (one GET/PUT pair each for %s): "+
+		"the whole-settings routes read and write the same fields together; pass includeAliases=true to list them.",
+		len(hidden), strings.Join(names, " and "), strings.Join(fields, ", "))
+}
+
+func renderScopeDetail(access mcpCallerAccess, authorized []APIRoute, q exploreQuery) mcp.Result {
+	query, toolQuery := q.scope, q.tool
 	presetScopes := ExpandAPIPreset(query)
 	inScope := func(rt APIRoute) bool {
 		return query == "" || routeMatchesScopeQuery(rt, query, presetScopes)
 	}
-	var matched []exploredRouteSchema
+	// An alias is folded out of a listing, never out of a search: a
+	// word that names one (ci_mode, say) is asking for it.
+	foldAliases := !q.includeAliases && toolQuery == ""
+	// A query that is exactly a tool's name finds that tool alone: the
+	// words of api_set_repo_settings are in a dozen other routes.
+	matches := routeMatchesToolQuery
+	if toolQuery != "" && slices.ContainsFunc(authorized, func(rt APIRoute) bool {
+		return inScope(rt) && routeNamedByToolQuery(rt, toolQuery)
+	}) {
+		matches = routeNamedByToolQuery
+	}
+	var matched, hidden []APIRoute
 	for _, rt := range authorized {
-		if !inScope(rt) || !routeMatchesToolQuery(rt, toolQuery) {
+		if !inScope(rt) || !matches(rt, toolQuery) {
 			continue
 		}
-		matched = append(matched, exploredRouteSchema{
-			Tool:        rt.Tool,
-			Method:      rt.Method,
-			Path:        rt.Path,
-			Scope:       rt.Scope,
-			NeedsReason: rt.NeedsReason,
-			Description: rt.Description,
-			InputSchema: rt.inputSchema(),
-		})
+		if foldAliases && rt.AliasOf != "" {
+			hidden = append(hidden, rt)
+			continue
+		}
+		matched = append(matched, rt)
 	}
 
-	if len(matched) == 0 {
-		// Distinguish "exists in Grain's API but caller lacks grant" from "unknown scope".
-		var missingScopes []string
-		for _, rt := range AgentAPIRoutes() {
-			if inScope(rt) && routeMatchesToolQuery(rt, toolQuery) {
-				s := string(rt.Scope)
-				if !slices.Contains(missingScopes, s) {
-					missingScopes = append(missingScopes, s)
-				}
-			}
-		}
-		sort.Strings(missingScopes)
-		what := fmt.Sprintf("Scope %q", query)
-		if toolQuery != "" {
-			what = fmt.Sprintf("Tool %q", toolQuery)
-			if query != "" {
-				what += fmt.Sprintf(" in scope %q", query)
-			}
-		}
-		if len(missingScopes) > 0 {
-			return mcp.Result{
-				Text:    fmt.Sprintf("%s is not authorized for this caller (requires grant for %s).", what, strings.Join(missingScopes, ", ")),
-				IsError: true,
-			}
-		}
-		if toolQuery != "" {
-			return mcp.Result{
-				Text:    fmt.Sprintf("No authorized route matches tool %q. Call %s with a scope and no tool to list a group's routes.", toolQuery, ToolGrainExploreScope),
-				IsError: true,
-			}
-		}
-		return mcp.Result{
-			Text:    fmt.Sprintf("Unknown scope %q. Call %s with no arguments to list available scope groups.", query, ToolGrainExploreScope),
-			IsError: true,
-		}
+	if len(matched) == 0 && len(hidden) == 0 {
+		return renderNoRouteMatched(access, authorized, query, toolQuery, inScope)
 	}
 
 	guidance := domainGuidance[scopeDomainGroup(APIScope(query))]
-	if guidance == "" {
+	if guidance == "" && query != "" && len(matched) > 0 {
 		guidance = domainGuidance[scopeDomainGroup(matched[0].Scope)]
 	}
 	payload := map[string]any{
 		"scope":      query,
 		"routeCount": len(matched),
-		"routes":     matched,
+	}
+	if query == "" {
+		payload["scope"] = "all"
 	}
 	if guidance != "" {
 		payload["guidance"] = guidance
@@ -562,12 +647,131 @@ func renderScopeDetail(access mcpCallerAccess, authorized []APIRoute, query, too
 	if toolQuery != "" {
 		payload["tool"] = toolQuery
 	}
+	if len(hidden) > 0 {
+		payload["aliases"] = aliasNote(hidden)
+	}
+
 	// Compact rather than indented: the schemas are read by a model, which
 	// pays for every byte of indentation, and the indented form of a
 	// scope's nested schemas was larger than the tools/list of the same
 	// routes it replaced (mcp_token_benchmark_test.go).
-	encoded, _ := json.Marshal(payload)
-	return mcp.Result{Text: string(encoded)}
+	render := func(view string) []byte {
+		p := maps.Clone(payload)
+		p["view"] = view
+		switch view {
+		case exploreViewFull:
+			routes := make([]exploredRouteSchema, 0, len(matched))
+			for _, rt := range matched {
+				routes = append(routes, exploredRouteSchema{
+					Tool: rt.Tool, Method: rt.Method, Path: rt.Path, Scope: rt.Scope,
+					NeedsReason: rt.NeedsReason, AliasOf: rt.AliasOf,
+					Description: rt.Description, InputSchema: rt.inputSchema(),
+				})
+			}
+			p["routes"] = routes
+		case exploreViewCompact:
+			routes := make([]exploredRouteLine, 0, len(matched))
+			for _, rt := range matched {
+				routes = append(routes, exploredRouteLine{
+					Tool: rt.Tool, Method: rt.Method, Path: rt.Path, Scope: rt.Scope,
+					NeedsReason: rt.NeedsReason, AliasOf: rt.AliasOf, Summary: routeOneLiner(rt),
+				})
+			}
+			p["routes"] = routes
+			p["hint"] = fmt.Sprintf("Schemas omitted: call %s(tool='<tool>') for one route's inputSchema, or view='full' for all of these.", ToolGrainExploreScope)
+		case exploreViewIndex:
+			// Scope -> tool names, as a map rather than a list of
+			// objects: every byte per route counts when all of them are
+			// listed, and json.Marshal writes a map's keys sorted.
+			index := map[string][]string{}
+			for _, rt := range matched {
+				index[string(rt.Scope)] = append(index[string(rt.Scope)], rt.Tool)
+			}
+			p["index"] = index
+			p["hint"] = fmt.Sprintf("Tool names by scope: %s(tool='<name>') gives one route's path and inputSchema.", ToolGrainExploreScope)
+			if len(hidden) > 0 {
+				p["aliases"] = fmt.Sprintf("%d per-field aliases of api_get/set_repo_settings folded out; includeAliases=true lists them.", len(hidden))
+			}
+		}
+		encoded, _ := json.Marshal(p)
+		return encoded
+	}
+
+	if q.view != exploreViewAuto {
+		return mcp.Result{Text: string(render(q.view))}
+	}
+	// Left to choose, the most detailed view that fits one answer; the
+	// index is the floor, whatever its size.
+	for _, view := range []string{exploreViewFull, exploreViewCompact} {
+		if encoded := render(view); len(encoded) <= maxExploreResultBytes {
+			return mcp.Result{Text: string(encoded)}
+		}
+	}
+	return mcp.Result{Text: string(render(exploreViewIndex))}
+}
+
+// renderNoRouteMatched is the answer to a route query nothing the caller
+// may call matches: that the routes exist but are not theirs, or what
+// comes nearest to the word they used.
+func renderNoRouteMatched(access mcpCallerAccess, authorized []APIRoute, query, toolQuery string, inScope func(APIRoute) bool) mcp.Result {
+	// Distinguish "exists in Grain's API but caller lacks grant" from "unknown scope".
+	var missingScopes []string
+	for _, rt := range AgentAPIRoutes() {
+		if inScope(rt) && routeMatchesToolQuery(rt, toolQuery) {
+			s := string(rt.Scope)
+			if !slices.Contains(missingScopes, s) {
+				missingScopes = append(missingScopes, s)
+			}
+		}
+	}
+	sort.Strings(missingScopes)
+	what := fmt.Sprintf("Scope %q", query)
+	if toolQuery != "" {
+		what = fmt.Sprintf("Tool %q", toolQuery)
+		if query != "" {
+			what += fmt.Sprintf(" in scope %q", query)
+		}
+	}
+	if len(missingScopes) > 0 {
+		return mcp.Result{
+			Text:    fmt.Sprintf("%s is not authorized for this caller (requires grant for %s).", what, strings.Join(missingScopes, ", ")),
+			IsError: true,
+		}
+	}
+	groups := authorizedGroups(authorized)
+	if toolQuery != "" {
+		var b strings.Builder
+		fmt.Fprintf(&b, "No authorized route matches tool %q.", toolQuery)
+		// Searched within a group, the nearest routes anywhere the
+		// caller may look are still worth naming: the word may be right
+		// and the group wrong.
+		if near := nearestTools(toolQuery, authorized, 5); len(near) > 0 {
+			fmt.Fprintf(&b, " Did you mean %s?", strings.Join(near, ", "))
+		}
+		if nearGroups := nearestGroups(toolQuery, groups); len(nearGroups) > 0 {
+			fmt.Fprintf(&b, " Scope groups near that word: %s.", strings.Join(nearGroups, ", "))
+		}
+		fmt.Fprintf(&b, " Call %s(scope='<group>') to list a group's routes, or (view='index') for every tool name.", ToolGrainExploreScope)
+		return mcp.Result{Text: b.String(), IsError: true}
+	}
+	msg := fmt.Sprintf("Unknown scope %q.", query)
+	if nearGroups := nearestGroups(query, groups); len(nearGroups) > 0 {
+		msg += fmt.Sprintf(" Did you mean %s?", strings.Join(nearGroups, ", "))
+	}
+	msg += fmt.Sprintf(" Call %s with no arguments to list available scope groups.", ToolGrainExploreScope)
+	return mcp.Result{Text: msg, IsError: true}
+}
+
+// authorizedGroups is the scope groups of routes, each once, sorted.
+func authorizedGroups(routes []APIRoute) []string {
+	var groups []string
+	for _, rt := range routes {
+		if g := scopeDomainGroup(rt.Scope); !slices.Contains(groups, g) {
+			groups = append(groups, g)
+		}
+	}
+	sort.Strings(groups)
+	return groups
 }
 
 func (s *Server) invokeRouteTool() mcp.Tool {
@@ -604,6 +808,11 @@ func (s *Server) invokeRouteTool() mcp.Tool {
 				toolName = APIToolPrefix + toolName
 			}
 
+			// Resolved before the route is looked up, so an unknown name
+			// can be answered with the nearest of the tools this caller
+			// can see; its error is reported as the route's, as before.
+			access, accessErr := s.resolveMCPCallerAccess(ctx)
+
 			var route *APIRoute
 			for _, candidate := range AgentAPIRoutes() {
 				if candidate.Tool == toolName {
@@ -613,12 +822,19 @@ func (s *Server) invokeRouteTool() mcp.Tool {
 				}
 			}
 			if route == nil {
-				return toolFailuref(ToolGrainInvoke, "unknown route tool %q (use %s to discover valid tool names)", rawTool, ToolGrainExploreScope)
+				// The nearest of the tools this caller can see: a guess at
+				// a name (api_get_logs) is usually a word or two off the
+				// real one (api_get_log_lines).
+				msg := fmt.Sprintf("unknown route tool %q", rawTool)
+				if accessErr == nil {
+					if near := nearestTools(toolName, access.authorizedRoutes(), 3); len(near) > 0 {
+						msg += fmt.Sprintf(": did you mean %s?", strings.Join(near, ", "))
+					}
+				}
+				return toolFailuref(ToolGrainInvoke, "%s (use %s(tool='<word>') to find a route, or (view='index') to list every tool name)", msg, ToolGrainExploreScope)
 			}
-
-			access, err := s.resolveMCPCallerAccess(ctx)
-			if err != nil {
-				return toolFailure(route.Tool, err)
+			if accessErr != nil {
+				return toolFailure(route.Tool, accessErr)
 			}
 			if !access.allowsRoute(*route) {
 				return toolFailuref(route.Tool, "HTTP 403: caller holds no grant for scope %s (%s)", route.Scope, route.Pattern)
@@ -720,7 +936,7 @@ func (a mcpCallerAccess) repoAllowedForContext(repo string) bool {
 func (s *Server) filingContextTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        ToolGrainFilingContext,
-		Description: "Return target repositories, templates, boards, custom fields, and grantable capabilities needed before calling grain_submit_task.",
+		Description: "Return what filing a task needs before calling grain_submit_task: targetRepos (always a list -- the repositories tasks may be filed into, or, when anyRepoAllowed, the ones the deployment already works in), defaultRepo (where a task filed with no repo goes, or \"\"), templates, boards, custom fields, and grantable capabilities. A key is absent only when the caller lacks the scope that reads it; a list it may read is [] when empty, never null.",
 		Meta:        controllerAlwaysLoadMeta,
 		InputSchema: map[string]any{
 			"type": "object",
@@ -755,8 +971,34 @@ func (s *Server) filingContextTool() mcp.Tool {
 				return toolFailure(ToolGrainFilingContext, err)
 			}
 
-			var targetRepos []string
-			for _, r := range team.TargetRepos {
+			// The repositories a task may be filed into. Config.TargetRepos
+			// bounds them when set; empty, the deployment accepts any
+			// owner/name, and what is listed is where its work already is
+			// -- the default target a task filed with no repo goes to, and
+			// the repositories it has tasks, templates or schedules in --
+			// so a caller with one obvious repository need not go through
+			// api_config to learn its name. Always a list, never null: an
+			// empty one means "none known", and anyRepoAllowed says whether
+			// it is also a bound.
+			anyRepoAllowed := len(team.TargetRepos) == 0
+			defaultRepo := ""
+			if s.tasks.Config.DefaultTarget != nil {
+				defaultRepo = s.tasks.Config.DefaultTarget.String()
+			}
+			var candidates []string
+			if !anyRepoAllowed {
+				candidates = team.TargetRepos
+			} else {
+				if defaultRepo != "" {
+					candidates = append(candidates, defaultRepo)
+				}
+				for _, assoc := range team.Repos {
+					candidates = append(candidates, assoc.Repo)
+				}
+				candidates = append(candidates, access.repoLimits...)
+			}
+			targetRepos := []string{}
+			for _, r := range candidates {
 				if !access.repoAllowedForContext(r) {
 					continue
 				}
@@ -766,6 +1008,9 @@ func (s *Server) filingContextTool() mcp.Tool {
 				if !slices.Contains(targetRepos, r) {
 					targetRepos = append(targetRepos, r)
 				}
+			}
+			if defaultRepo != "" && !access.repoAllowedForContext(defaultRepo) {
+				defaultRepo = ""
 			}
 
 			customFields, err := s.tasks.Store.ListCustomFields(ctx)
@@ -788,8 +1033,9 @@ func (s *Server) filingContextTool() mcp.Tool {
 				Interactive bool                   `json:"interactive,omitempty"`
 				Fields      []compactTemplateField `json:"fields,omitempty"`
 			}
-			var templates []compactTemplate
-			if listedTemplates, err := s.tasks.ListTemplates(ctx); err == nil && (access.reads("templates:read") || access.reads("tasks:from-template")) {
+			templates := []compactTemplate{}
+			readsTemplates := access.reads("templates:read") || access.reads("tasks:from-template")
+			if listedTemplates, err := s.tasks.ListTemplates(ctx); err == nil && readsTemplates {
 				for _, tmpl := range listedTemplates {
 					if !access.repoAllowedForContext(tmpl.Repo) {
 						continue
@@ -822,8 +1068,9 @@ func (s *Server) filingContextTool() mcp.Tool {
 				ID   string `json:"id"`
 				Name string `json:"name"`
 			}
-			var boards []compactBoard
-			if listedBoards, err := s.tasks.ListBoards(ctx); err == nil && access.reads("boards:read") {
+			boards := []compactBoard{}
+			readsBoards := access.reads("boards:read")
+			if listedBoards, err := s.tasks.ListBoards(ctx); err == nil && readsBoards {
 				for _, b := range listedBoards {
 					boards = append(boards, compactBoard{ID: b.ID, Name: b.Name})
 				}
@@ -832,16 +1079,24 @@ func (s *Server) filingContextTool() mcp.Tool {
 			// Each part is gated as the route serving the same data is
 			// (route_scopes.go); a caller without the scope gets the key
 			// absent rather than empty, so it can tell "none" from "not
-			// yours to read".
+			// yours to read". What is present is never null: a list the
+			// caller may read and that has nothing in it is [], so the
+			// two readings cannot be confused.
 			out := map[string]any{
-				"targetRepos":  targetRepos,
-				"customFields": customFieldDeclarations(customFields),
-				"templates":    templates,
-				"boards":       boards,
+				"targetRepos":    targetRepos,
+				"anyRepoAllowed": anyRepoAllowed,
+				"defaultRepo":    defaultRepo,
+				"customFields":   nonNilList(customFieldDeclarations(customFields)),
 				"submitDefaults": map[string]any{
 					"approve": false,
 					"note":    "grain_submit_task defaults approve=false so tasks land in 'proposed' state awaiting human approval unless approve=true is explicitly passed.",
 				},
+			}
+			if readsTemplates {
+				out["templates"] = templates
+			}
+			if readsBoards {
+				out["boards"] = boards
 			}
 			if access.reads("capabilities:read") {
 				repoConfigs, _ := s.tasks.Store.ListRepoConfigs(ctx)
@@ -868,13 +1123,22 @@ func (s *Server) filingContextTool() mcp.Tool {
 				}
 				out["defaultCapabilities"] = defaultCaps
 				out["defaultModel"] = cfg.EffectiveDefaultModel()
-				out["models"] = allDistinctModels(*cfg)
+				out["models"] = nonNilList(allDistinctModels(*cfg))
 				out["defaultNetwork"] = string(model.NormalizeNetworkAccess(cfg.NetworkAccess))
 			}
 			encoded, _ := json.Marshal(out)
 			return mcp.Result{Text: string(encoded)}
 		},
 	}
+}
+
+// nonNilList is list, or an empty one for nil: what a JSON reader sees
+// as [] rather than null.
+func nonNilList[T any](list []T) []T {
+	if list == nil {
+		return []T{}
+	}
+	return list
 }
 
 func (s *Server) submitTaskTool() mcp.Tool {
@@ -1247,6 +1511,13 @@ func taskDetailToMCPRecord(detail TaskDetail) mcp.TaskRecord {
 			latest = at
 		}
 	}
+	var depStates map[string]string
+	if len(t.DependsOnStates) > 0 {
+		depStates = make(map[string]string, len(t.DependsOnStates))
+		for id, st := range t.DependsOnStates {
+			depStates[id] = string(st)
+		}
+	}
 	summary := mcp.TaskSummary{
 		ID:          t.ID,
 		Title:       t.Title,
@@ -1265,21 +1536,29 @@ func taskDetailToMCPRecord(detail TaskDetail) mcp.TaskRecord {
 			StalledAt: t.MergeQueueStalledAt,
 			BlockedAt: t.MergeQueueBlockedAt,
 		},
-		Kinds:     TaskKindTags(t),
-		DependsOn: t.DependsOn,
-		ChangedAt: latest,
+		Kinds:           TaskKindTags(t),
+		DependsOn:       t.DependsOn,
+		DependsOnStates: depStates,
+		ChangedAt:       latest,
+	}
+	if t.Reason != nil {
+		summary.Reason = &mcp.TaskReason{Reason: t.Reason.Reason, Resource: t.Reason.Resource}
 	}
 	rec := mcp.TaskRecord{
-		TaskSummary:       summary,
-		Description:       detail.Description,
-		Author:            detail.Author,
-		AuthorKind:        detail.AuthorKind,
-		Base:              detail.Base,
-		Capabilities:      detail.Capabilities,
-		PullRequest:       detail.PullRequest,
-		FailedAttempts:    detail.FailedAttempts,
-		LastFailureAt:     detail.LastFailureAt,
-		LastFailureReason: detail.LastFailureReason,
+		TaskSummary:         summary,
+		Description:         detail.Description,
+		Author:              detail.Author,
+		AuthorKind:          detail.AuthorKind,
+		AuthorLabel:         detail.AuthorLabel,
+		Provenance:          detail.Provenance,
+		Base:                detail.Base,
+		Capabilities:        detail.Capabilities,
+		PullRequest:         detail.PullRequest,
+		PullRequestMergedAt: detail.PrMergedAt,
+		PullRequestClosedAt: detail.PrClosedAt,
+		FailedAttempts:      detail.FailedAttempts,
+		LastFailureAt:       detail.LastFailureAt,
+		LastFailureReason:   detail.LastFailureReason,
 		Activity: mcp.TaskActivity{
 			Note:    detail.Activity,
 			At:      detail.ActivityAt,
@@ -1311,12 +1590,14 @@ func taskDetailToMCPRecord(detail TaskDetail) mcp.TaskRecord {
 	}
 	for _, c := range detail.Comments {
 		rec.Comments = append(rec.Comments, mcp.TaskComment{
-			ID:         c.ID,
-			Author:     c.Author,
-			AuthorKind: c.AuthorKind,
-			Body:       c.Body,
-			CreatedAt:  c.CreatedAt,
-			Handover:   c.Handover,
+			ID:          c.ID,
+			Author:      c.Author,
+			AuthorKind:  c.AuthorKind,
+			AuthorLabel: c.Who(),
+			FiledVia:    c.FiledVia,
+			Body:        c.Body,
+			CreatedAt:   c.CreatedAt,
+			Handover:    c.Handover,
 		})
 	}
 	return rec

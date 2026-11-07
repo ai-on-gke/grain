@@ -56,7 +56,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
-	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
 	"github.com/ai-on-gke/grain/pkg/capability/portforward"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/console"
@@ -604,6 +603,11 @@ type Config struct {
 	// caller wants this, and RunDispatch leaves agent.RunConfig's own
 	// TranscriptPath empty (bwsalmon/agents#467).
 	TranscriptDir string
+	// TranscriptSink, when set, flushes each run's live event stream and
+	// finished narrative transcript to an external object store (for example
+	// gs://<bucket>/instances/<name>/transcripts/) before the local file in
+	// TranscriptDir is removed.
+	TranscriptSink TranscriptSink
 	// GrantTools maps a capability name to a function building the extra
 	// MCP tools a task holding that grant gets added to its own
 	// dispatched run -- runOne's own hook for a capability whose effect
@@ -702,11 +706,6 @@ type Config struct {
 	GrainSecretsDir string
 	// GrainStateDir is the controller-local synchronized state repository used by deployment-health.
 	GrainStateDir string
-	// LocalScripts is where this host finds local-scripts declarations
-	// (pkg/capability/localscripts): a run whose task holds
-	// local-scripts:<name> is told the declaration's path and handed its
-	// credentials in a 0600 file (agent.RunConfig.LocalScripts).
-	LocalScripts localscripts.Config
 	// SandboxGuestImage is the reference this deployment's sandboxes are
 	// really created from -- cmd/grain's chooseSandboxImage, the same
 	// value ui.SandboxImage.Image reports.
@@ -1010,6 +1009,15 @@ type Config struct {
 	// same reach and fork-head checks processResult gives the rest.
 	sessionReach  *gitproxy.Reach
 	sessionClient github.Client
+
+	// runCtx, cancelRun and stopCancelling carry runOneWithFramework's
+	// per-run cancellation context and TaskCancellers registration into
+	// RunDispatch so a cancellation (Stop, pause, pre-emption, capability
+	// restart) arriving during sandbox setup or checkout reaches the run
+	// rather than missing TaskCancellers until framework.Run begins.
+	runCtx         context.Context
+	cancelRun      context.CancelCauseFunc
+	stopCancelling func()
 }
 
 func (c Config) cancelPollInterval() time.Duration {
@@ -1114,6 +1122,20 @@ func (c Config) now() time.Time {
 		return c.Now().UTC()
 	}
 	return time.Now().UTC()
+}
+
+// TranscriptSink persists a run's live event stream and redacted final
+// narrative transcript to an external object store (for example
+// gs://<bucket>/instances/<name>/transcripts/).
+type TranscriptSink interface {
+	// FlushRunEnd uploads runID's raw live stream (at rawPath, if non-empty)
+	// and redacted narrative transcript. savedNarrative reports whether
+	// narrative was stored durably in the object store so the caller can skip
+	// duplicating it in model.Store.
+	FlushRunEnd(ctx context.Context, runID, rawPath, narrative string) (savedNarrative bool, err error)
+	// RestoreRaw populates destPath from the object store if a previous
+	// instance flushed runID's live stream before detaching or being replaced.
+	RestoreRaw(ctx context.Context, runID, destPath string) error
 }
 
 // HostSandboxes hands out one directory per run, on the host this process

@@ -59,6 +59,13 @@ func renderTaskSummary(t TaskRecord, now time.Time) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Task %s: %s\n", t.ID, singleLine(t.Title))
 	fmt.Fprintf(&b, "State: %s\n", t.State)
+	if r := t.Reason; r != nil && r.Reason != "" {
+		if r.Resource != "" {
+			fmt.Fprintf(&b, "Reason: %s (%s)\n", r.Reason, clipWords(singleLine(r.Resource), maxSummaryEventBytes*2))
+		} else {
+			fmt.Fprintf(&b, "Reason: %s\n", r.Reason)
+		}
+	}
 	if t.Stall != "" {
 		fmt.Fprintf(&b, "  Stalled: %s\n", clipWords(singleLine(t.Stall), maxSummaryEventBytes*2))
 	}
@@ -207,7 +214,11 @@ func renderTaskConversation(t TaskRecord, after int64) string {
 		if c.Handover {
 			kind += ", handover"
 		}
-		fmt.Fprintf(&b, "  #%d [%s] %s (%s):\n", c.ID, c.CreatedAt.UTC().Format(time.RFC3339), c.Who(), kind)
+		from := ""
+		if c.FiledVia != "" {
+			from = fmt.Sprintf(" (from %s)", c.FiledVia)
+		}
+		fmt.Fprintf(&b, "  #%d [%s] %s (%s)%s:\n", c.ID, c.CreatedAt.UTC().Format(time.RFC3339), c.Who(), kind, from)
 		b.WriteString(indent(clipNote(c.Body, maxConversationBodyBytes)))
 	}
 	if more {

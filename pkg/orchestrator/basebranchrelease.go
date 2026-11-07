@@ -507,18 +507,108 @@ func collectBaseBranchRelease(ctx context.Context, deps Deps, row model.BaseBran
 			baseBranchReleaseStreak(row))
 		return fileBaseBranchReleaseTriage(ctx, deps, row, now)
 	}
-	// A release that published is the end of every triage of this
-	// branch's releases, however it came about: close them as superseded,
-	// as a green base-branch run closes its repairs (baserepairlink.go).
-	ids, err := deps.Store.OpenTasksWithTag(ctx, BaseReleaseTriageBranchTag(row.Repo, row.Branch))
-	if err != nil {
-		return err
-	}
-	reason := fmt.Sprintf("superseded: release run %s published %s", row.RunID, row.Branch)
-	return closeSupersededTasks(ctx, deps.Store, ids, BaseReleaseTriager, reason, fmt.Sprintf(
+	// A release that published supersedes open triage tasks for this branch
+	// whose failing commit is this commit or an ancestor of it on the branch.
+	return closeSupersededReleaseTriage(ctx, deps, row.Repo, row.Branch, row.Commit, row.RunID, fmt.Sprintf(
 		"Closed as superseded: release run %s published `%s` on %s at %s, so its releases are "+
 			"working again and there is nothing left for this task to triage.",
 		row.RunID, row.Branch, row.Repo, shortSHA(row.Commit)), now)
+}
+
+// closeSupersededReleaseTriage closes open release-triage tasks for repo's
+// branch whose failing commit(s) are superseded by publishedCommit: either
+// publishedCommit is the failing commit itself (a successful re-run) or a
+// descendant of it on branch. If git ancestry or branch membership cannot be
+// determined, the task stays open.
+func closeSupersededReleaseTriage(ctx context.Context, deps Deps, repo model.RepoRef,
+	branch, publishedCommit, runID, note string, now time.Time) error {
+
+	ids, err := deps.Store.OpenTasksWithTag(ctx, BaseReleaseTriageBranchTag(repo, branch))
+	if err != nil || len(ids) == 0 {
+		return err
+	}
+	var candidates []model.Task
+	var errs []error
+	for _, id := range ids {
+		st, err := deps.Store.State(ctx, id)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if st == "" || st == model.StateClosed || st == model.StateRunning {
+			continue
+		}
+		task, err := deps.Store.GetTask(ctx, id)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if task != nil {
+			candidates = append(candidates, *task)
+		}
+	}
+	if len(candidates) == 0 {
+		return errors.Join(errs...)
+	}
+	publishedCommit = strings.TrimSpace(publishedCommit)
+	if publishedCommit == "" || deps.Client == nil {
+		log.Printf("orchestrator: keeping release triage open for %s %s: cannot verify git ancestry for run %s (commit %q)",
+			repo, branch, runID, shortSHA(publishedCommit))
+		return errors.Join(errs...)
+	}
+	onBranch, err := deps.Client.CompareRefs(repo.StoredOwner(), repo.Name, publishedCommit, branch)
+	if err != nil || (onBranch.Status != "identical" && onBranch.Status != "ahead") {
+		log.Printf("orchestrator: keeping release triage open for %s %s: release run %s at %s is not confirmed on %s (status=%q, err=%v)",
+			repo, branch, runID, shortSHA(publishedCommit), branch, onBranch.Status, err)
+		return errors.Join(errs...)
+	}
+
+	var superseded []string
+	for _, task := range candidates {
+		failing := releaseTriageFailingCommits(task, repo, branch)
+		if len(failing) == 0 {
+			log.Printf("orchestrator: keeping release triage task %s open: failing commit tag missing for %s %s",
+				task.ID, repo, branch)
+			continue
+		}
+		covered := true
+		for _, fc := range failing {
+			if len(fc) == len(publishedCommit) && strings.EqualFold(fc, publishedCommit) {
+				continue
+			}
+			cmp, err := deps.Client.CompareRefs(repo.StoredOwner(), repo.Name, fc, publishedCommit)
+			if err != nil || (cmp.Status != "identical" && cmp.Status != "ahead") {
+				log.Printf("orchestrator: keeping release triage task %s open: release run %s at %s does not supersede failing commit %s on %s %s (status=%q, err=%v)",
+					task.ID, runID, shortSHA(publishedCommit), shortSHA(fc), repo, branch, cmp.Status, err)
+				covered = false
+				break
+			}
+		}
+		if covered {
+			superseded = append(superseded, task.ID)
+		}
+	}
+	if len(superseded) == 0 {
+		return errors.Join(errs...)
+	}
+	reason := fmt.Sprintf("superseded: release run %s published %s", runID, branch)
+	if err := closeSupersededTasks(ctx, deps.Store, superseded, BaseReleaseTriager, reason, note, now); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+func releaseTriageFailingCommits(task model.Task, repo model.RepoRef, branch string) []string {
+	prefix := BaseReleaseTriageBranchTag(repo, branch) + ":"
+	var commits []string
+	for _, tag := range task.Tags {
+		if after, ok := strings.CutPrefix(tag, prefix); ok {
+			if c := strings.TrimSpace(after); c != "" {
+				commits = append(commits, c)
+			}
+		}
+	}
+	return commits
 }
 
 // retryInfraBaseBranchRelease is what happens to a release run that ended
@@ -968,6 +1058,11 @@ func recordGitHubBaseBranchRelease(ctx context.Context, deps Deps, run Concluded
 	if !isGitHubBaseBranch(deps, run.Repo, branch) {
 		return nil
 	}
+	if isOnDemandGitHubReleaseRun(deps, run, branch) {
+		log.Printf("orchestrator: GitHub release run %d on %s is an on-demand build of one commit, not a release of %s: not recording it",
+			run.RunID, run.Repo, branch)
+		return nil
+	}
 
 	existing, err := deps.Store.GetBaseBranchRelease(ctx, run.Repo, branch)
 	if err != nil {
@@ -998,6 +1093,13 @@ func recordGitHubBaseBranchRelease(ctx context.Context, deps Deps, run Concluded
 	row.FinishedAt = &finished
 	row.Conclusion = string(conclusion)
 	row.Detail = gitHubWorkflowRunDetail(run, jobs)
+	if conclusion == ci.ConclusionCancelled {
+		// Superseded by a newer merge's release: normal, not a failure
+		// (releasesuperseded.go).
+		if by, ok := supersedingGitHubReleaseRun(ctx, deps, run, branch); ok {
+			return recordSupersededGitHubRelease(ctx, deps, existing, row, run, by)
+		}
+	}
 	if conclusion == ci.ConclusionFailure {
 		if retried, err := retryInfraGitHubBaseBranchRelease(ctx, deps, &row, run, jobs); err != nil || retried {
 			return err
@@ -1011,12 +1113,7 @@ func recordGitHubBaseBranchRelease(ctx context.Context, deps Deps, run Concluded
 
 	switch conclusion {
 	case ci.ConclusionSuccess:
-		ids, err := deps.Store.OpenTasksWithTag(ctx, BaseReleaseTriageBranchTag(run.Repo, branch))
-		if err != nil {
-			return err
-		}
-		reason := fmt.Sprintf("superseded: release run %s published %s", row.RunID, branch)
-		return closeSupersededTasks(ctx, deps.Store, ids, BaseReleaseTriager, reason, fmt.Sprintf(
+		return closeSupersededReleaseTriage(ctx, deps, run.Repo, branch, row.Commit, row.RunID, fmt.Sprintf(
 			"Closed as superseded: GitHub Actions release workflow `%s` published `%s` on %s at %s (run `%s`), so its releases are working again and there is nothing left for this task to triage.",
 			run.WorkflowName, branch, run.Repo, shortSHA(row.Commit), row.RunID), now)
 	case ci.ConclusionFailure:

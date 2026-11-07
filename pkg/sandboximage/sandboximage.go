@@ -124,9 +124,9 @@ func (s *Source) currentLocked() string {
 // are from one commit.
 func BaseImageForBackend(backend, stockImage string) string {
 	if IsGranuleBackend(backend) {
-		return BaseImageFor(stockImage, "guest-base", DefaultGuestBaseImage)
+		return BaseImageFor(stockImage, "sandbox-base", DefaultGuestBaseImage)
 	}
-	return BaseImageFor(stockImage, "k8s-sandbox-base", DefaultK8sSandboxBaseImage)
+	return BaseImageFor(stockImage, "sandbox-k8s-base", DefaultK8sSandboxBaseImage)
 }
 
 // CustomImageCheck is the verdict on a configured custom sandbox image:
@@ -235,7 +235,7 @@ func StaleStockPin(image, stamped string, labels map[string]string) string {
 	if image == "" || stamped == "" || image == stamped {
 		return ""
 	}
-	if name := repositoryName(stamped); name == "" || repositoryName(image) != name {
+	if !sameStockSandboxRepo(image, stamped) {
 		return ""
 	}
 	want := imageTag(stamped)
@@ -260,6 +260,29 @@ func StaleStockPin(image, stamped string, labels map[string]string) string {
 		return ""
 	}
 	return staleStockPinWarning(image, "revision "+shortRev(rev), stamped, want)
+}
+
+func stockSandboxFlavour(repoName string) string {
+	switch repoName {
+	case "grainai/sandbox", "grain/sandbox", "grain/guest", "grain/granule-sandbox":
+		return "vm"
+	case "grainai/sandbox-k8s", "grain/sandbox-k8s", "grain/k8s-sandbox":
+		return "k8s"
+	default:
+		return ""
+	}
+}
+
+func sameStockSandboxRepo(image, stamped string) bool {
+	imgName, stampName := repositoryName(image), repositoryName(stamped)
+	if imgName == "" || stampName == "" {
+		return false
+	}
+	if imgName == stampName {
+		return true
+	}
+	imgFlavour, stampFlavour := stockSandboxFlavour(imgName), stockSandboxFlavour(stampName)
+	return imgFlavour != "" && imgFlavour == stampFlavour
 }
 
 func staleStockPinWarning(image, build, stamped, want string) string {

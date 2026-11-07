@@ -37,8 +37,8 @@
 // whose answer is its own older sandbox rather than today's.
 //
 // Users who build custom sandbox images FROM Grain's minimal base images
-// (`ghcr.io/bwsalmon/grain/guest-base:<tag>` or
-// `ghcr.io/bwsalmon/grain/k8s-sandbox-base:<tag>`) do NOT need to rebuild on
+// (`docker.io/grainai/sandbox-base:<tag>` or
+// `docker.io/grainai/sandbox-k8s-base:<tag>`) do NOT need to rebuild on
 // every Grain commit: they only need to rebuild when the integer contract
 // (`dev.grain.sandbox.contract`, or Granule's `dev.granule.guest.contract`)
 // bumps. `grain sandbox-image contract` prints the current contract and

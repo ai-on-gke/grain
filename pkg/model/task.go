@@ -97,6 +97,7 @@ type AuthSource string
 
 const (
 	SourceIAP           AuthSource = "iap"            // a verified IAP assertion
+	SourceRegistry      AuthSource = "registry"       // a verified registry assertion
 	SourceToken         AuthSource = "token"          // a per-user API token (future)
 	SourceAccessCode    AuthSource = "access-code"    // the shared access code or its session
 	SourceLoopback      AuthSource = "loopback"       // break-glass over loopback
@@ -226,6 +227,11 @@ type RepoRef struct {
 	// hosts existed, so their RepoRefs, and every form they are written
 	// down in, are unchanged.
 	Host string
+}
+
+// IsZero reports whether r names no repository.
+func (r RepoRef) IsZero() bool {
+	return r.Owner == "" && r.Name == "" && r.Host == ""
 }
 
 // String is r's one written form: owner/name, or host/owner/name off the
@@ -874,16 +880,19 @@ func GitCredentialName(capability string) (name string, ok bool) {
 // own event gate and repository list are what bound it.
 const ReleaseGateReadCapability = "release-gate-read"
 
-// SelfDebugCapability is the grant that lets a task's run read grain's
-// own source, tasks and metrics (pkg/capability/selfdebug). The source
-// is the deployment's own baked-in copy, placed in the sandbox at
-// grain-src/ (orchestrator's placeGrainSource) and read by
-// read_grain_source: the grant reaches no repository through the git
-// proxy, and implies none (CapabilityRepos).
+// SelfDebugCapability is the retired bare name of SelfDebugGrants: the
+// api:self-debug preset (every task's record, metrics, pipeline and
+// deployment status) and GrainSourceGrant, which places the deployment's
+// own baked-in source at grain-src/ in the sandbox (orchestrator's
+// placeGrainSource) and opens src://. Schema migration 115 rewrote the
+// stored grants; the bare name stays readable as an alias for one release
+// (CanonicalLegacyGrants, IsGrainSourceGrant, apiAliasCapabilities). The
+// source grant reaches no repository through the git proxy, and implies
+// none (CapabilityRepos).
 const SelfDebugCapability = "self-debug"
 
 // GrainSourceRepo is grain's own source repository. Nothing grants a
-// read of it implicitly: a self-debug run is given the deployment's
+// read of it implicitly: a grain#source run is given the deployment's
 // baked-in copy instead, and a task that wants the repository itself
 // names it in its reads or a repo-read: grant like any other.
 func GrainSourceRepo() RepoRef { return RepoRef{Owner: "ai-on-gke", Name: "grain"} }
@@ -891,7 +900,7 @@ func GrainSourceRepo() RepoRef { return RepoRef{Owner: "ai-on-gke", Name: "grain
 // CapabilityRepos returns the repositories a grant of capability lets a
 // run reach beyond its task's own Target, Writes and Reads: the
 // repository a repository access grant (IsRepoAccessGrant) names. Nil for
-// any other capability -- SelfDebugCapability included, whose grain-src/
+// any other capability -- GrainSourceGrant included, whose grain-src/
 // is the deployment's baked-in copy rather than a clone, so a local
 // policy never refuses a self-debug task over bwsalmon/grain. Anything
 // that judges a task by the repositories it touches -- a local policy's
@@ -1240,6 +1249,21 @@ const (
 	// itself (unlike LinkFixes). Provenance and PR-tool scoping only; never
 	// blocks dispatch and never places a task in awaiting_submit.
 	LinkExternalPR LinkKind = "external-pr"
+	// LinkDerivedFrom records the pull request ("owner/repo#number") a
+	// task's work was derived from -- the provenance an external
+	// orchestrator filters on with `grain list -filter
+	// derived_from:eq:<owner/name#pr>` (external-cli spec #XC-18).
+	// Provenance only: it blocks nothing.
+	LinkDerivedFrom LinkKind = "derived-from"
+	// LinkDesign records a committed-context specification folder or file
+	// (`[owner/name:]path[@rev]`, `grain create -design`, #XC-19) the task
+	// implements, either in its target repository or in a -read context
+	// repository, inherited by child tasks and reviews. Provenance only.
+	LinkDesign LinkKind = "design"
+	// LinkContextManifest records a parsed context.yml manifest discovered in
+	// one of a task's LinkDesign directories (model.ContextManifest). Display
+	// and prompt metadata only: it never blocks dispatch or enforces gates.
+	LinkContextManifest LinkKind = "context-manifest"
 	// LinkTakeover marks a shepherd task filed by the GitHub bot's
 	// "@<slug> take over" command (-> the pull request it took over,
 	// "owner/repo#number"). The task's own pull request is its LinkFixes
@@ -1737,6 +1761,14 @@ type Task struct {
 	// caller's own word about itself and grants nothing
 	// (design/spec/external-cli/external-cli.spec.md#XC-15).
 	FiledVia string
+	// ExternalRef is an optional free-text work reference owned by an
+	// external planning layer (for example "CA-204"), "" when unset. It is
+	// inherited automatically by tasks grain spawns from a task carrying
+	// one (proposals, reviews, fixes, ports, triggers and work-tree
+	// children) unless the child explicitly sets its own, and indexed so
+	// task listing and GET /api/refs/{ref}/summary aggregate all tasks
+	// behind one reference in a single indexed query.
+	ExternalRef string
 	// SandboxCPUs, SandboxMemoryMB and SandboxDiskGB
 	// (bwsalmon/agents#534, grain/task-41) override
 	// Config.SandboxCPUs/SandboxMemoryMB/SandboxDiskGB for this task's
@@ -1911,8 +1943,14 @@ type Task struct {
 	// may push (Store.GitDeclaredPush). Never inherited by a proposal: an
 	// agent cannot hand its own push set on to work it files.
 	TemplateID string
-	Creator    string
-	TimeZone   string
+	// Owner is the account responsible for this task (attribution.design.md):
+	// fixed at creation from the filer / on-behalf-of / schedule owner /
+	// deployment fallback, inherited along DerivedFrom, and reassignable by
+	// a person with task-edit access without altering historical Creator.
+	Owner    string
+	Creator  string
+	Proposer TaskProposer
+	TimeZone string
 	// Issue is the GitHub issue number associated with this task, or 0 if unassociated.
 	Issue int
 	// WorkOrigin is the pull request, issue or grain task this task's

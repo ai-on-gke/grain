@@ -51,7 +51,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/metrics"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/model/postgres"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 	"github.com/ai-on-gke/grain/pkg/version"
@@ -184,11 +183,13 @@ func OfferedCapabilities() []Capability {
 		// No gemini-key row: it was retired onto the gcp server's
 		// gcp#gemini-key (schema migration 103), which is offered with
 		// the other capability-server methods.
-		{ID: "self-debug", Name: "Self debug",
-			Description: "Let this task read grain's own source checkout, this deployment's own tasks and runs, and the measurements it keeps about itself -- throughput, latency, the tool-use census -- to help it debug or explain grain's own behavior. All read-only, and all of it is what anyone with this UI open can already see."},
+		// No self-debug row: it was retired onto the api:self-debug
+		// preset and the grain server's grain#source method (schema
+		// migration 115), which are offered with the other api presets
+		// and capability-server methods.
 	}
 	// Capabilities contributed from outside core
-	// (capability.RegisterProvider) follow self-debug, where the
+	// (capability.RegisterProvider) come first, where the
 	// deployment-level ones begin.
 	for _, r := range capability.Registered() {
 		offered = append(offered, Capability{ID: r.ID, Name: r.Name, Description: r.Description})
@@ -198,8 +199,9 @@ func OfferedCapabilities() []Capability {
 			Description: prioritydispatch.Description},
 		{ID: durable.CapabilityName, Name: "Durable",
 			Description: durable.Description},
-		{ID: "bootstrap-playbooks", Name: "Bootstrap playbooks",
-			Description: "Let this task read grain's own bootstrap playbooks -- the runbooks for setting up GCP service accounts, the primary GitHub connection, CloudRun-based IAP access, and test repos -- so it can walk whoever is on the other end of this chat through one of them"},
+		// No bootstrap-playbooks row: it was retired onto the config-map
+		// server's config-map {"config_maps":["bootstrap"]} (schema migration
+		// 118), which is offered with the other capability-server methods.
 		{ID: "github-sandbox", Name: "GitHub sandbox",
 			Description: "Create a private, single-use GitHub sandbox repo for this task to work in instead of /repo"},
 		{ID: "console", Name: "Interactive console",
@@ -397,6 +399,9 @@ type Config struct {
 	// GitHub is asked -- and the config repository, which GitHub has
 	// never heard of, answers that its branches cannot be listed here.
 	RepoBranches RepoBranchSource
+	// RepoRevs resolves committed-context git refs (`[owner/name:]path[@rev]`)
+	// to full commit SHAs when tasks are filed or updated.
+	RepoRevs RepoRevResolver
 	// GitHubPullRequestFiles is that same client asked a second question:
 	// which files an open pull request touches. It is what lets a shared
 	// CI fault name the change that already fixes it (cifault.go), and
@@ -512,6 +517,11 @@ type Config struct {
 	// there is none -- an honest answer for a deployment whose state is
 	// local-only, and for any UI not colocated with a daemon at all.
 	StateRepoRef func() model.RepoRef
+	// ForbiddenRepos is the live set of external repositories this
+	// deployment never reads or serves (such as the encrypted secrets backup
+	// repository), shared with the git proxy and declaration poller so
+	// schedule writes refuse forbidden git_ref watched repositories up front.
+	ForbiddenRepos *gitproxy.ForbiddenSet
 	// HostdRemote, when set, takes the upgrades of a grain hostd on
 	// another machine dialing in to /api/hostd/connect (hostd.Remote,
 	// which checks the hostd token itself); nil refuses them.
@@ -527,6 +537,16 @@ type Config struct {
 	// unavailable rather than erroring on every call, the same as a nil
 	// Secrets above.
 	Upgrader Upgrader
+	// DisableSelfUpgrade disables in-VM self-upgrade actions (pkg/upgrade,
+	// automatic/scheduled upgrades, and in-VM SQLite-to-PostgreSQL cutover)
+	// and hides in-VM upgrade controls in the UI in favour of an optional
+	// external management URL (-disable-self-upgrade).
+	DisableSelfUpgrade bool
+	// ManagementURL is an optional http:// or https:// URL where this
+	// deployment's lifecycle and upgrades are managed externally
+	// (-management-url), shown in place of in-VM self-upgrade controls when
+	// DisableSelfUpgrade is true.
+	ManagementURL string
 	// LastRestart is what the restart that started this daemon did to
 	// the runs in flight across it (orchestrator.UpgradeAdoption), for
 	// the upgrade pane, or nil when there is nothing to report. nil on a
@@ -565,6 +585,10 @@ type Config struct {
 	// attempt is read the way bwsalmon/agents#446 originally left it,
 	// nothing to show until it finishes (bwsalmon/agents#467).
 	LiveTranscripts LiveTranscript
+	// ArchivedTranscripts, when set, reads finished run transcripts from an
+	// object store (via a local read-through cache) when Store.RunTranscript
+	// holds none.
+	ArchivedTranscripts ArchivedTranscript
 	// Sandboxes, when set, is what GET /api/sandboxes calls to report
 	// every live run's own sandbox status -- pkg/cli/daemon.go's
 	// sandboxHealthAdapter over whichever of orchestrator.GranuleSandboxes/
@@ -771,6 +795,20 @@ type Config struct {
 	// ReconcilerDown always reports false, the same nil-means-
 	// unavailable-feature default AutoMergeDegraded above gives.
 	ReconcilerDown func() bool
+	// DispatchConditions, when set, is why this deployment is not
+	// dispatching, as named conditions with the error and the time each
+	// was set (pkg/dispatchcondition.Set, wired by pkg/daemon): what
+	// ReconcilerDown's boolean cannot say. GET /api/sandboxes lists the
+	// conditions in force as failing checks, GET /api/config carries
+	// them beside reconcilerDown, and GET /api/pipeline/changes shows
+	// each set and clear as an entry. nil reports none, the same
+	// nil-means-nothing-to-warn-about default ReconcilerDown has.
+	DispatchConditions DispatchConditionReader
+	// StoreSwitch, when set, is polled by GET /api/config and GET
+	// /api/sandbox-health (DaemonHealth.StoreSwitch) for the standing
+	// alert that the store was switched underneath this daemon
+	// (pkg/daemon/storeswitch.go). nil, or a nil answer, is no alert.
+	StoreSwitch func() *StoreSwitch
 	// InstallNotice, when set, is what GET /api/config reports as
 	// installNotice: something about how this deployment is installed
 	// that an operator has to fix, found once at start -- an unmigrated
@@ -814,6 +852,19 @@ type Config struct {
 	// TriggerIAPSync requests an immediate IAP IAM synchronization cycle when team
 	// memberships or admin access lists are modified.
 	TriggerIAPSync func()
+	// RegistryStatus, when set, returns the live RegistrySnapshot from the
+	// daemon's RegistryManager; nil falls back to reading stored settings and
+	// repo configurations directly.
+	RegistryStatus func(ctx context.Context) (model.RegistrySnapshot, error)
+	// TriggerRegistryHeartbeat, when set, runs an immediate registry
+	// registration/heartbeat step and returns the updated snapshot.
+	TriggerRegistryHeartbeat func(ctx context.Context) (model.RegistrySnapshot, error)
+	// TriggerRegistrySync wakes the daemon's RegistryManager after settings,
+	// secrets, or repository configurations change.
+	TriggerRegistrySync func()
+	// RegistryAllowInsecureHTTP permits non-loopback plain HTTP registry URLs
+	// in test setups.
+	RegistryAllowInsecureHTTP bool
 	// SandboxBackends names the backend methods this daemon has enough
 	// startup configuration to build. SandboxBackendOptions lists every backend
 	// in model.SandboxBackends() with Available and Reason so Settings never
@@ -1142,16 +1193,9 @@ type Config struct {
 	DBDSN string
 	// DataDir is the root data directory of the grain installation.
 	DataDir string
-	// SourceDB is the raw *sql.DB backing this store, used during migration exports.
+	// SourceDB is the raw *sql.DB backing this store, which a task's
+	// database access queries (task_db.go).
 	SourceDB *sql.DB
-	// UpgradePostgres, when set, is what POST /api/database/upgrade calls to upgrade
-	// SQLite to PostgreSQL.
-	UpgradePostgres func(ctx context.Context, dsn string, migrateData bool) (*postgres.UpgradeResult, error)
-	// DatabaseConfirm, when set, is handed each confirmation token POST
-	// /api/database/upgrade issues, with a sentence saying what it would
-	// confirm, instead of the daemon log. It must deliver them somewhere
-	// the HTTP caller cannot read; tests set it to catch the token.
-	DatabaseConfirm func(token, summary string)
 	// IAPAudience, when set, specifies the expected target audience for verifying
 	// Google Cloud IAP JWT assertions (X-Goog-IAP-JWT-Assertion), or
 	// several separated by commas. With none (here or in
@@ -1163,12 +1207,31 @@ type Config struct {
 	// IAPKeysURL is where the assertion's signing keys are published (a
 	// PEM map or JWK set); empty means GoogleIAPCertURL.
 	IAPKeysURL string
+	// RegistryIssuer is the expected iss claim for verifying grain-registry
+	// JWT assertions (X-Grain-Registry-Assertion) (-ui-registry-issuer /
+	// $GRAIN_REGISTRY_ISSUER). All three of RegistryIssuer,
+	// RegistryAudience, and RegistryKeysURL must be set to enable the
+	// built-in "registry" IdentityVerifier.
+	RegistryIssuer string
+	// RegistryAudience is the single expected aud URL for verifying
+	// grain-registry JWT assertions (-ui-registry-audience /
+	// $GRAIN_REGISTRY_AUDIENCE).
+	RegistryAudience string
+	// RegistryKeysURL is the JWKS endpoint URL publishing grain-registry's
+	// ES256 public keys (-ui-registry-keys-url / $GRAIN_REGISTRY_KEYS_URL).
+	RegistryKeysURL string
 	// AllowedPrincipals, when non-empty, is the allowlist of user:,
 	// serviceAccount:, group:, and domain: entries admitted when a request
 	// authenticates through IAP or another registered IdentityVerifier
 	// (-ui-allowed-principals). When empty, defaults to $GRAIN_ALLOWED_PRINCIPALS,
 	// or the deployment owner (Actor) plus provisioned service accounts.
 	AllowedPrincipals []string
+	// DeploymentOwner is -deployment-owner ($GRAIN_DEPLOYMENT_OWNER): the
+	// human email address that owns this deployment for RBAC
+	// (IsDeploymentOwner, requireDeploymentOwner) and holds an immutable
+	// grain/operator floor on the access allowlist, regardless of the OS
+	// account the daemon runs as.
+	DeploymentOwner string
 	// ProvisionedServiceAccounts lists daemon-owned GCP service accounts grain
 	// itself provisions for this deployment (never gcp-key sandbox agent
 	// accounts), included in the default allowlist when AllowedPrincipals is unset.
@@ -1181,12 +1244,15 @@ type Config struct {
 	// nil uses CloudIdentityGroupChecker lazily when at least one group: entry
 	// is configured.
 	GroupChecker GroupMemberChecker
-	// RequireIAP is -ui-require-iap: the access code, as a bearer token
-	// or the grain_access cookie, is accepted only from loopback with no
-	// forwarding or proxy headers (accessCodeAccepted), and the "Enter
-	// access code" page is not served, so a network caller signs in
-	// through IAP alone. A registered IdentityVerifier that declares
-	// AccessCodeWins still takes the code over its own proxy.
+	// RequireVerifier is -ui-require-verifier: when non-empty, names the
+	// IdentityVerifier (e.g. "iap", "registry", or a registered verifier)
+	// that network callers must sign in through. The access code, as a
+	// bearer token or the grain_access cookie, is accepted only from
+	// loopback with no forwarding or proxy headers (accessCodeAccepted),
+	// or through a registered IdentityVerifier that declares
+	// AccessCodeWins, and the "Enter access code" page is not served.
+	RequireVerifier string
+	// RequireIAP is -ui-require-iap, an alias for RequireVerifier = "iap".
 	RequireIAP bool
 	// LocalAPIToken is the secret in -data-dir/local-api-token
 	// (EnsureLocalAPIToken) that a loopback request presents as a bearer
@@ -1255,10 +1321,11 @@ type StallNoter func(state model.State, since, now time.Time) string
 // orchestrator.MergeReason, in this package's types.
 type ReasonClassifier interface {
 	// TaskReason is the sub-case of state t is in, given its observation
-	// (nil for none), the blocking tasks it is still waiting on, and the
-	// grant wait dispatch recorded for it (nil for none).
+	// (nil for none), the blocking tasks it is still waiting on, the
+	// grant wait dispatch recorded for it (nil for none), and, for an
+	// awaiting_reply task, which ask it is parked on (Task.replyFacts).
 	TaskReason(t model.Task, state model.State, obs *model.Observation, openDeps []string,
-		wait *model.GrantWait) Reason
+		wait *model.GrantWait, asked model.ReplyFacts) Reason
 	// MergeReason classifies a merge-queue sub-case the cycle recorded,
 	// or answers the zero Reason for one it does not know.
 	MergeReason(reason string) Reason
@@ -1353,6 +1420,19 @@ type LiveTranscript interface {
 	// should fall back to the store the same way it would if
 	// LiveTranscripts were nil.
 	Tail(runID string) (text string, ok bool, err error)
+}
+
+// ArchivedTranscript reads finished run transcripts stored outside model.Store
+// (for example in gs://<bucket>/instances/<name>/transcripts/ behind a local
+// read-through disk cache).
+type ArchivedTranscript interface {
+	Read(ctx context.Context, runID string) (text string, ok bool, err error)
+}
+
+// ArchivedTranscriptSizes is an optional extension of ArchivedTranscript that
+// reports byte sizes of stored transcripts for the metrics report.
+type ArchivedTranscriptSizes interface {
+	Sizes(ctx context.Context) ([]model.RunTranscript, error)
 }
 
 // Upgrader is the subset of *upgrade.Upgrader the UI needs -- an

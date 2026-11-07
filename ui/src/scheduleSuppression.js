@@ -48,6 +48,10 @@ export function describeSuppression(suppressed) {
       return suppressed.detail
         ? suppressed.detail
         : "skipped: this deployment doesn't run this repository's standing work";
+    case "watchedRepoOffTarget":
+      return suppressed.detail
+        ? suppressed.detail
+        : "watches a repository that is not on this deployment's target repo list";
     default:
       return "its last firing has not finished";
   }

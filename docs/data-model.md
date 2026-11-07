@@ -516,7 +516,7 @@ which is the trigger to revisit.**"
 
 [Folder capabilities](#attaching-capabilities-to-repos-and-folders) are
 that trigger, by construction. The entire point of a folder offering
-`gcp-key` is that tasks under it hold something tasks elsewhere do not.
+`gcp-key` (now `…/gcp#gcp-key`, retired in schema migration 97) is that tasks under it hold something tasks elsewhere do not.
 Two tasks under different folders are then, precisely, under different
 credential sets — mutually distrusting in exactly the sense that
 paragraph reserves. `/reads` pushes the same way: more repos cloned into
@@ -831,6 +831,21 @@ carries one later composes at the same point in the same function.
 
 ### Attaching capabilities to repos and folders
 
+> [!NOTE]
+> History. The capability names in this section and in
+> [`Capability`, `Grant`, `Lease`](#capability-grant-lease) below are the
+> in-process capabilities grain had when this was written. Several have
+> since been retired, and stored grants were rewritten to the current
+> references by schema migrations:
+> `gcp-key` → `https://grain.dev/capabilities/gcp#gcp-key` (migration 97),
+> `gemini-key` → `https://grain.dev/capabilities/gcp#gemini-key` (migration 103),
+> `self-repair` → `https://grain.dev/capabilities/grain#host-exec` (migration 84),
+> `grain-log` → `https://grain.dev/capabilities/grain#journal` (migration 80).
+> The examples are kept as written, because they record the reasoning;
+> [capabilities.md](capabilities.md) and
+> [unified-grants.design.md §4](../design/design/unified-grants.design.md#4-retiring-the-in-process-capabilities)
+> describe what is current.
+
 Yes. **v1 is floors only** — a node says what every task under it gets
 without asking, and there is no mechanism for saying what a node may
 *not* use:
@@ -889,7 +904,8 @@ that bounded, and all three are v1:
    lists it.** Not the capability's declaration —
    [a provider cannot make itself
    auto-grantable](#capabilities-are-an-extension-point-not-a-table) —
-   and the list stays empty of the mutating ones: `self-repair` and named
+   and the list stays empty of the mutating ones: `self-repair` (now
+   `…/grain#host-exec`, person-only) and named
    GitHub credentials are requested per task, by a human, or not at all.
 2. **A floor grant is recorded and visible.** It is pinned onto the task
    at dispatch like every other resolved value, written into the audit
@@ -2178,6 +2194,11 @@ class Provision(Enum):
     GRANT  = "grant"   # needs no credential at all
 ```
 
+(History: `gcp-key`, `gemini-key`, `self-repair` and `grain-log` below are
+the retired in-process names; see the note under
+[Attaching capabilities](#attaching-capabilities-to-repos-and-folders) for
+what each became.)
+
 - **MINT** — `gcp-key` mints a per-task service-account key from the host
   account's own key; `gemini-key` mints an API key. Both produce a
   `Lease`, both need revoking when the slot frees.
@@ -2344,11 +2365,11 @@ table, with nothing here or in git ever answering *what the value is*.
 
 | Capability | `Requires` |
 |---|---|
-| `gcp-key` | the minter credential (`gcp-key-minter` by default) — never the agent account's own key, see `gcpkey`'s doc comment |
+| `https://grain.dev/capabilities/gcp#gcp-key` `{permission_set}` (formerly `gcp-key`/`gcp-key:<name>`, retired in schema migration 97) | the `gcp` server admin the permission set mints with — migration 97 seeded them from the minter credential (`gcp-key-minter` by default) — never the agent account's own key |
 | `https://grain.dev/capabilities/gcp#gemini-key` (formerly `gemini-key`, rewritten by schema migration 103) | the `gcp` server admin its `gemini_key` names — migration 103 seeded one minting with `gcp-key-minter`, the secret the retired in-process provider minted under |
 | `github-sandbox` | a GitHub App's id and RSA private key (`github-app/app-id`, `github-app/private-key` by default) — the "PAT or GitHub App" section below's App path, finally built; see `githubsandbox`'s doc comment |
 | `https://grain.dev/capabilities/model-proxy#model-proxy` `{vendor}` (formerly `claude-proxy`, `openai-proxy`, `gemini-proxy`, rewritten by schema migration 100) | nothing: every forwarded request spends the key of the requesting run's own team connection for that vendor — the connection its own agent spends (`CapabilityContext.Connection`, resolved to the credential owner, so a `credentialBackendId` borrower spends its source) or else the team's own connection of that vendor — read per request from that connection's `agent-backend-<id>` secret, as an agent run on it reads it. A team with no connection for the vendor is refused the capability and every request; there is no fallback to the deployment-wide `claude-oauth-token`, `openai-api-key` or `gemini-api-key`, which reach the proxy only as the default team's connections they were migrated into. A usage limit met through the proxy pauses that whole connection, together with agent runs on it (the proxy does not key its pauses by model, and it holds back only for a pause on the whole connection, not for one model's). One grant per vendor (the `vendor` argument) rather than one covering all three, so a task is granted the vendor it needs. Served in-process by grain (`pkg/capability/modelproxy.Method`), which is what lets it read the run's connection; the external `grain capability model-proxy` server forwards with one key per vendor instead and is no longer registered as a built-in (`pkg/capability/modelproxy`, `pkg/modelproxy`) |
-| `self-debug`, `self-repair`, `self-upgrade`, `grain-log` | none — `GRANT`, no credential of any kind |
+| `self-debug`, `self-upgrade`, `https://grain.dev/capabilities/grain#host-exec` (formerly `self-repair`, retired in schema migration 84), `https://grain.dev/capabilities/grain#journal` (formerly `grain-log`, retired in schema migration 80) | none — `GRANT`, no credential of any kind |
 
 ### `TaskLink` — relationships, including sub-tasks
 
@@ -2436,7 +2457,7 @@ auto-merge, and says so on the child it files rather than downgrading it
 silently.
 
 Capabilities do *not* inherit either, and this is the load-bearing one:
-an agent granted `self-repair` once, whose children inherited it, would
+an agent granted `self-repair` (now `…/grain#host-exec`) once, whose children inherited it, would
 have converted a single human grant into an unbounded number of uses of
 that grant. Every child asks for its capabilities on its own issue,
 where a human can see the request and decide — which is the same reason

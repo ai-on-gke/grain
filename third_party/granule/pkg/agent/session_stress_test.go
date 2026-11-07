@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/execwire"
+	"github.com/gke-labs/granule/pkg/execwire"
 )
 
 // TestStress_ConcurrentSessions runs dozens of concurrent agent sessions

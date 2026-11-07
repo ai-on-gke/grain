@@ -5,8 +5,9 @@ servers** and **Capability policy**: adding a capability server, trying it
 before trusting it, configuring it, editing it, deciding who may use it, and
 removing it. What a capability server is, and the `mcpServers` shape these
 pages edit, is in [capabilities.md](capabilities.md#expose-it-in-grain-grainconfig-mcpservers--settings-ui--cli);
-the protocol is [capabilities-spec.md](../design/spec/capabilities/capabilities.spec.md) (§3.1 entries,
-§4.2.2 policy, §4.5 configuration).
+the protocol is [capabilities.spec.md](../design/spec/capabilities/capabilities.spec.md) (§3.1 entries,
+§4.2.2 policy, §4.5 configuration), and the design behind both is
+[capabilities.design.md](../design/design/capabilities.design.md).
 
 Everything on these pages is stored in `grain_config` and exported to
 `grain/config` as plain text, except secrets: a value typed into a secret
@@ -30,7 +31,7 @@ hovered or focused:
 - **built-in** or **custom** — part of grain itself, or added here.
 - where it runs — **beside grain** (a command grain starts in the daemon's own
   container or machine; run location `container`), **on the host** (a command
-  started on the bare machine through grain hostd; run location `host`), or
+  started on the bare machine through the host agent; run location `host`), or
   **remote (HTTP)** (a server grain reaches at its URL).
 - **granted by N** — how many open tasks, templates, schedules and
   Settings-declared workflow jobs grant one of its methods.
@@ -63,8 +64,8 @@ Settings does.
 
 ## Built-in servers
 
-grain's own in-tree capability servers (`gcp`, `git`, `model-proxy`,
-`self-debug`, `skill`, `host-script`, ...) are listed first on every deployment
+grain's own in-tree capability servers (`config-map`, `figma`, `gcp`, `gchat`,
+`git` and `host-script`) are listed first on every deployment
 without anyone adding them
 ([capabilities.md](capabilities.md#in-tree-capability-servers-grain-capability-name)).
 Each row carries the **built-in** chip; its page is titled `<name> server`,
@@ -79,14 +80,20 @@ with its canonical ID, `https://grain.dev/capabilities/<name>`.
 - When grain adopted a hand-added `grain capability <name>` entry, the page
   shows a one-time notice naming the old ID. Grants naming that old ID keep
   working through an alias. **Dismiss** clears the notice.
-- On the gcp server, **Test** warns when one of its permission sets mints
-  from accounts the in-process `gcp-key` also uses
-  ([gcp-key-permission-sets.md](gcp-key-permission-sets.md#running-alongside-the-built-in-gcp-key)).
+- The retired built-ins `self-debug` and `model-proxy` are no longer
+  registered. An unconfigured entry for one is dropped on upgrade, and one
+  an operator configured stays as a custom server (`intree.EnsureBuiltins`).
+  An old `skill` entry becomes `config-map`, keeping `…/skill` as an alias.
 
 After them come grain's **in-process** servers, which run inside the daemon
 rather than as a subprocess and have no `mcpServers` entry:
-`https://grain.dev/capabilities/grain` (`#health`, `#host-exec`, `#journal`,
-`#sql`) and `https://grain.dev/capabilities/repo` (`#read`, `#write`). Each row
+`https://grain.dev/capabilities/grain` (`#ci`, `#health`, `#host-exec`,
+`#journal`, `#sql`), `https://grain.dev/capabilities/repo` (`#read`,
+`#write`), `https://grain.dev/capabilities/release` (`#image-signing`,
+`#package-publish`, `#registry-push`; CI only),
+`https://grain.dev/capabilities/model-proxy` (`#model-proxy`), and any
+server an edition contributes methods to through `capability.Register`
+(`grainserver.Statuses`). Each row
 carries the **built-in** and **in-process** chips. Its page lists its methods
 and what grants them, and offers no connection, settings, **Test**,
 **Disable** or **Remove**: there is nothing to configure, and the
@@ -111,10 +118,10 @@ Select **+ Add server** above the list (it opens **Add a capability server**):
    Write a credential as `$secret:<name>`, or bind it after saving with
    **Bind a secret**, which stores the value and writes the reference.
 3. **Run location** (stdio only) — **container** runs the command beside
-   the daemon. **host** runs it on the bare machine through grain hostd,
-   and is offered only when hostd is running beside the daemon and its
+   the daemon. **host** runs it on the bare machine through the host agent,
+   and is offered only when the host agent is running beside the daemon and its
    allowlist has a `capabilities` entry for exactly this command. When it
-   is not offered, the field says why: no hostd (as on Kubernetes), or no
+   is not offered, the field says why: no host (as on Kubernetes), or no
    matching entry, with the entries it does have.
 4. **Test** — before saving, runs `initialize`, `tools/list` and
    `configure` against the unsaved values in a session of its own and saves
@@ -209,8 +216,12 @@ until they are changed or the server is added back under the same ID.
 
 **Settings → Legacy capabilities** is a different thing: the capabilities built
 into grain itself before capability servers, each granted by a bare name such
-as `gcp-key` or `self-debug` and handed over by grain directly rather than by a
-server ([ci-capabilities.md](ci-capabilities.md)). That tab lists them one
+as `github-sandbox` or `self-debug` and handed over by grain directly rather than by a
+server ([ci-capabilities.md](ci-capabilities.md)). Most have been retired onto
+server methods (`gcp-key` onto `…/gcp#gcp-key`, the model proxies onto
+`…/model-proxy`, `grain-log` onto `…/grain#journal`, and so on). What is
+left is listed in
+[unified-grants.design.md §4](../design/design/unified-grants.design.md#4-retiring-the-in-process-capabilities). That tab lists them one
 full-width row each, with **Ready** or **Not ready** and chips such as **CI
 only** and **Default**, each explaining itself as a tooltip. A row opens the
 capability's page: what it is short of, its own credentials, and **Test

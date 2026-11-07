@@ -1,5 +1,6 @@
 name: Granule Nightly Suite
 suite: nightly
+base: main
 enabled: true
 overlap: skip
 daily:

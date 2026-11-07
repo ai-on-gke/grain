@@ -170,7 +170,8 @@ func (s *Store) ObserveClose(ctx context.Context, taskID string, now time.Time, 
 			obs.ClosedAt = &before
 		}
 		obs.ObservedAt = &now
-		if err := observe(ctx, tx, *obs); err != nil {
+		observeCtx := WithEventActor(ctx, eventActorOr(ctx, Attribution{Actor: by}))
+		if err := observe(observeCtx, tx, *obs); err != nil {
 			return err
 		}
 		return recordCloseInTx(ctx, tx, taskID, before, obs.ClosedAt, by, reason)
@@ -332,6 +333,12 @@ func MergeTaskEvents(ts []Transition, events []TaskEvent) []Transition {
 			state = TransitionAutoMergeOff
 		case TaskEventAutoMergeKeptOff:
 			state = TransitionAutoMergeKeptOff
+		case TaskEventOwnerChanged:
+			state = TransitionOwnerChanged
+		case TaskEventHumanReviewRequested:
+			state = TransitionHumanReviewRequested
+		case TaskEventHumanReviewReleased:
+			state = TransitionHumanReviewReleased
 		default:
 			// A note about an action, not a step (TaskEventSubmitted, ...).
 			continue

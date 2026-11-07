@@ -78,7 +78,7 @@ DRY_RUN=false
 ROLLBACK=false
 PRINT_MANIFEST=false
 
-DEFAULT_IMAGE="ghcr.io/bwsalmon/grain/grain:main"
+DEFAULT_IMAGE="docker.io/grainai/grain:main"
 DAEMON_UNIT=grain-daemon.service
 # Where Stage 2 moves DAEMON_UNIT's file so that it can be masked:
 # systemctl mask refuses ("File ... already exists") a unit whose own
@@ -116,7 +116,7 @@ Where the cluster is:
 What runs there:
   --image <ref>             grain controller image (default: the image the
                             local grain-daemon.service runs, else
-                            ghcr.io/bwsalmon/grain/grain:main)
+                            docker.io/grainai/grain:main)
   --sandbox-image <ref>     Packed guest image for -k8s-granule-image (default:
                             the local daemon's -sandbox-image)
   --mirror <registry/path>  A registry the cluster pulls from. A host installed
@@ -580,7 +580,7 @@ render_manifest() {
     -v selector="${NODE_SELECTOR}" -v replicas="${replicas}" -v secret="${SECRET_NAME}" \
     -v mount="${SECRET_MOUNT}" -v owner="${HOSTD_OWNER}" '
     /^  replicas: [0-9]+$/ { print "  replicas: " replicas; next }
-    /^          image: ghcr\.io\/.*\/grain:/ { sub(/image: .*/, "image: " image) }
+    /^          image: (docker\.io|ghcr\.io)\/.*\/grain:/ { sub(/image: .*/, "image: " image) }
     /^            - -k8s-granule-image=CHANGEME$/ { sub(/CHANGEME/, sandbox) }
     /^            - -default-target-repo=CHANGEME\/CHANGEME$/ { sub(/CHANGEME\/CHANGEME/, repo) }
     /^            # - -k8s-node-selector=CHANGEME=CHANGEME$/ {

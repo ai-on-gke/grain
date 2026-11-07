@@ -67,6 +67,54 @@ func RemoteBranches(h CredentialHost, credential Credential, owner, repo string)
 	return names, nil
 }
 
+// RemoteRefSHA resolves ref ("" / "HEAD", a branch name, a tag name, or an
+// advertised commit SHA) in owner/repo on h using its smart-HTTP upload-pack
+// ref advertisement. It returns ("", nil) when the repository is reachable but
+// does not advertise ref.
+func RemoteRefSHA(h CredentialHost, credential Credential, owner, repo, ref string) (string, error) {
+	refs, err := remoteRefs(h, credential, owner, repo)
+	if err != nil {
+		return "", err
+	}
+	lookup := strings.TrimSpace(ref)
+	if lookup == "" || lookup == "HEAD" {
+		if sha := refs["HEAD"]; sha != "" {
+			return strings.ToLower(sha), nil
+		}
+		return "", nil
+	}
+	for _, candidate := range []string{
+		lookup,
+		"refs/heads/" + lookup,
+		"refs/tags/" + lookup + "^{}",
+		"refs/tags/" + lookup,
+	} {
+		if sha := refs[candidate]; sha != "" {
+			return strings.ToLower(sha), nil
+		}
+	}
+	lower := strings.ToLower(lookup)
+	if len(lower) >= 7 {
+		matched := ""
+		for _, sha := range refs {
+			ls := strings.ToLower(sha)
+			if ls == lower {
+				return ls, nil
+			}
+			if strings.HasPrefix(ls, lower) {
+				if matched != "" && matched != ls {
+					return "", nil
+				}
+				matched = ls
+			}
+		}
+		if matched != "" {
+			return matched, nil
+		}
+	}
+	return "", nil
+}
+
 // SmartHTTPAdvertises is whether owner/repo on h answers credential's
 // smart-HTTP ref advertisement for service ("git-upload-pack" for read,
 // "git-receive-pack" for push), asked through the same transport the git

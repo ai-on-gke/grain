@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/granule/pkg/vmspec"
+	"github.com/gke-labs/granule/pkg/vmspec"
 )
 
 // publishSpec is testSpec with the grant EXPOSE needs to mean anything.

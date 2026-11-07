@@ -115,6 +115,7 @@
 package sessionstore
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"os"
@@ -122,6 +123,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/ai-on-gke/grain/pkg/objectstore"
 )
 
 const (
@@ -181,6 +184,7 @@ type Store struct {
 	maxTasks     int
 	maxTaskBytes int64
 	now          func() time.Time
+	objects      objectstore.Store
 }
 
 // New builds a Store rooted at dir, which the daemon owns and this
@@ -244,11 +248,16 @@ func (s *Store) Open(framework, taskID string) (dir string, release func(), ok b
 	// itself subject to the same bounds as everybody else's.
 	s.prune(base)
 
-	release, ok = s.lock(base, taskID)
+	unlock, ok := s.lock(base, taskID)
 	if !ok {
 		return "", nil, false
 	}
 	dir = filepath.Join(base, taskID)
+	if s.objects != nil {
+		if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
+			_ = s.restoreTaskArchive(context.Background(), framework, taskID, dir)
+		}
+	}
 	if s.oversized(dir) {
 		// One task's store past the ceiling. Removed whole rather than
 		// trimmed: what is in there is a CLI's own layout, and picking
@@ -257,10 +266,17 @@ func (s *Store) Open(framework, taskID string) (dir string, release func(), ok b
 		os.RemoveAll(dir)
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		release()
+		unlock()
 		return "", nil, false
 	}
 	s.touch(dir)
+	release = unlock
+	if s.objects != nil {
+		release = func() {
+			defer unlock()
+			_ = s.syncTaskArchive(context.Background(), framework, taskID, dir)
+		}
+	}
 	return dir, release, true
 }
 

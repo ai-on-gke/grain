@@ -17,8 +17,10 @@ package model
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -77,13 +79,34 @@ const (
 	// nothing, and that is a statement about the repository rather than
 	// about a run.
 	BaseBranchPublishFailureRun = 3
-	// BaseBranchNotPublishingFor is how long a branch may fail to publish
-	// before the count stops mattering. It catches the repository the
-	// rule above cannot: one that merges once or twice a week, whose
-	// single failed release is the whole of the evidence there is and
-	// which has still shipped nothing for a day.
-	BaseBranchNotPublishingFor = 24 * time.Hour
+	// DefaultBaseBranchNotPublishingFor is BaseBranchNotPublishingFor's
+	// default.
+	DefaultBaseBranchNotPublishingFor = 3 * time.Hour
+	// BaseBranchNotPublishingForEnv overrides BaseBranchNotPublishingFor
+	// with a Go duration ("90m", "6h") read when the daemon starts.
+	BaseBranchNotPublishingForEnv = "GRAIN_RELEASE_NOT_PUBLISHING_AFTER"
 )
+
+// BaseBranchNotPublishingFor is how long a branch may go without
+// publishing before the count stops mattering. It catches what the rule
+// above cannot: a repository that merges once or twice a week, whose
+// single failed release is the whole of the evidence there is; and one
+// whose merges land so fast that each release is superseded by the next
+// before it finishes (grain/task-3334) -- every one of those is normal,
+// and none counts as a failure, but a branch on which nothing at all has
+// published for this long while merges keep landing is worth saying.
+// Three hours by default (a release run takes about one);
+// GRAIN_RELEASE_NOT_PUBLISHING_AFTER overrides it.
+var BaseBranchNotPublishingFor = baseBranchNotPublishingForFromEnv()
+
+func baseBranchNotPublishingForFromEnv() time.Duration {
+	if v := strings.TrimSpace(os.Getenv(BaseBranchNotPublishingForEnv)); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return DefaultBaseBranchNotPublishingFor
+}
 
 // BaseBranchPublishing is one base branch grain has published nothing
 // from for long enough to be worth telling somebody about.
@@ -199,8 +222,14 @@ func (s *Store) BaseBranchPublishingFindings(ctx context.Context, now time.Time)
 // whose releases are publishing -- and every branch whose releases have
 // only just started failing, which is the difference between a reading
 // people keep and an alarm they silence.
+//
+// A branch whose releases were only superseded (Failures zero, with
+// FailingSince set by the first superseded run since the last publish) is
+// a finding only once nothing has published for
+// BaseBranchNotPublishingFor: superseding is how a busy branch normally
+// works, and its newest release publishing clears it.
 func BaseBranchPublishingOf(row BaseBranchRelease, now time.Time) (BaseBranchPublishing, bool) {
-	if !row.Failing() || row.FailingSince == nil {
+	if row.FailingSince == nil {
 		return BaseBranchPublishing{}, false
 	}
 	failingFor := max(now.Sub(*row.FailingSince), 0)
@@ -257,6 +286,11 @@ func baseBranchPublishingDetail(p BaseBranchPublishing) string {
 // baseBranchPublishingCount is how many releases have published nothing
 // and, where there is one to name, what the last of them ended as.
 func baseBranchPublishingCount(p BaseBranchPublishing) string {
+	if p.Failures == 0 {
+		// Only superseded runs since: none failed, and none finished.
+		return "no release has failed, but every one started since was superseded by a newer merge" +
+			" before it could publish, and none has finished publishing"
+	}
 	count := "one release has been started since and it published nothing"
 	if p.Failures > 1 {
 		count = strconv.Itoa(p.Failures) + " releases have been started since and every one of" +

@@ -59,6 +59,30 @@ const postSplitDockerfile = "FROM scratch\nARG GRAIN_IMAGE_REF=\nARG RELEASE=\nA
 // given.
 func releaseRepoWithDockerfile(t *testing.T, dockerfile string) (string, map[string]string) {
 	t.Helper()
+	return releaseRepoWith(t, dockerfile, true)
+}
+
+// preDockerHubReleaseRepo is releaseRepo as it was before the switch to
+// Docker Hub (#739): its tree has no scripts/release-image-repos.sh, so
+// its release job published to ghcr.io/bwsalmon/grain/* alone.
+func preDockerHubReleaseRepo(t *testing.T) (string, map[string]string) {
+	t.Helper()
+	return releaseRepoWith(t, "FROM scratch\nARG GRAIN_IMAGE_REF=\n"+oldMakeBuild+"\n", false)
+}
+
+// releaseRepoWith builds releaseRepo's repository with the release's
+// Dockerfile given and, where dockerHub is set, the
+// scripts/release-image-repos.sh every release since the switch to Docker
+// Hub carries.
+func releaseRepoWith(t *testing.T, dockerfile string, dockerHub bool) (string, map[string]string) {
+	t.Helper()
+	return releaseRepoWithFiles(t, dockerfile, dockerHub, nil)
+}
+
+// releaseRepoWithFiles is releaseRepoWith with more files, by path, in
+// every release's tree.
+func releaseRepoWithFiles(t *testing.T, dockerfile string, dockerHub bool, extra map[string]string) (string, map[string]string) {
+	t.Helper()
 	dir := t.TempDir()
 	git := func(args ...string) string {
 		t.Helper()
@@ -80,11 +104,21 @@ func releaseRepoWithDockerfile(t *testing.T, dockerfile string) (string, map[str
 	// version is read out of (its toolchain line, not its lower `go`
 	// directive: GSA1-13), and the .gitignore entry that keeps the
 	// CA a build is handed out of `git status`, as grain's own does.
-	for name, body := range map[string]string{
+	files := map[string]string{
 		".gitignore": "/.grain-ca.crt\n",
 		"Dockerfile": dockerfile,
 		"go.mod":     "module example.com/release\n\ngo 1.26.6\n\ntoolchain go1.26.10\n",
-	} {
+	}
+	if dockerHub {
+		files["scripts/release-image-repos.sh"] = "RELEASE_IMAGE_REGISTRY_DEFAULT=\"docker.io\"\n"
+	}
+	for name, body := range extra {
+		files[name] = body
+	}
+	for name, body := range files {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
+			t.Fatalf("creating the directory of %s: %v", name, err)
+		}
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
 			t.Fatalf("writing %s: %v", name, err)
 		}
@@ -106,8 +140,8 @@ func releaseRepoWithDockerfile(t *testing.T, dockerfile string) (string, map[str
 }
 
 func retagLine(image, short, tag string) string {
-	return "buildx imagetools create --tag ghcr.io/bwsalmon/grain/" + image + ":" + tag +
-		" ghcr.io/bwsalmon/grain/" + image + ":sha-" + short
+	return "buildx imagetools create --tag docker.io/grainai/" + image + ":" + tag +
+		" docker.io/grainai/" + image + ":sha-" + short
 }
 
 func promoteRun(t *testing.T, remote string, args []string, env map[string]string) (string, string, error) {
@@ -133,10 +167,10 @@ func TestPromoteChoosesTheReleaseTheLatestGitTagNames(t *testing.T) {
 		if err != nil {
 			t.Fatalf("promote --dry-run failed: %v\n%s", err, out)
 		}
-		containsRun(t, out, "would retag ghcr.io/bwsalmon/grain/{guest,k8s-sandbox}:sha-"+released+" as v1.5.0 and latest")
-		containsRun(t, out, "and rebuild ghcr.io/bwsalmon/grain/grain:sha-"+released+" from "+commits["released"]+
-			" with RELEASE=v1.5.0 as v1.5.0 and latest, unless ghcr.io/bwsalmon/grain/grain:v1.5.0 already reports v1.5.0")
-		containsRun(t, out, "and point ghcr.io/bwsalmon/grain/grain:sha-"+released+" at the stamped ghcr.io/bwsalmon/grain/grain:v1.5.0")
+		containsRun(t, out, "would retag docker.io/grainai/{sandbox,sandbox-k8s}:sha-"+released+" as v1.5.0 and latest")
+		containsRun(t, out, "and rebuild docker.io/grainai/grain:sha-"+released+" from "+commits["released"]+
+			" with RELEASE=v1.5.0 as v1.5.0 and latest, unless docker.io/grainai/grain:v1.5.0 already reports v1.5.0")
+		containsRun(t, out, "and point docker.io/grainai/grain:sha-"+released+" at the stamped docker.io/grainai/grain:v1.5.0")
 		if docker != "" {
 			t.Errorf("a dry run asked docker for something:\n%s", docker)
 		}
@@ -148,8 +182,8 @@ func TestPromoteChoosesTheReleaseTheLatestGitTagNames(t *testing.T) {
 			t.Fatalf("promote --dry-run with GRAIN_CI_REPO=ai-on-gke/grain failed: %v\n%s", err, out)
 		}
 		containsRun(t, out, "repository: ai-on-gke/grain")
-		containsRun(t, out, "registry: ghcr.io, root: ghcr.io/bwsalmon/grain")
-		containsRun(t, out, "and rebuild ghcr.io/bwsalmon/grain/grain:sha-"+released)
+		containsRun(t, out, "registry: docker.io, root: docker.io/grainai")
+		containsRun(t, out, "and rebuild docker.io/grainai/grain:sha-"+released)
 	})
 
 	t.Run("a named release that latest agrees with moves latest", func(t *testing.T) {
@@ -252,10 +286,10 @@ func TestPromoteRefusesALatestNoReleaseNames(t *testing.T) {
 func stubAnswers(t *testing.T, short, label, release string) string {
 	t.Helper()
 	script := `case "$*" in
-  "buildx imagetools inspect ghcr.io/bwsalmon/grain/grain:"*" --format "*) [ -z "` + label + `" ] || echo "` + label + `" ;;
-  "run --rm "*" sandbox-image") echo "ghcr.io/bwsalmon/grain/guest:sha-` + short + `@sha256:1111" ;;
-  "run --rm "*" k8s-sandbox-image") echo "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-` + short + `@sha256:2222" ;;
-  "run --rm "*" image") echo "ghcr.io/bwsalmon/grain/grain:sha-` + short + `" ;;
+  "buildx imagetools inspect docker.io/grainai/grain:"*" --format "*) [ -z "` + label + `" ] || echo "` + label + `" ;;
+  "run --rm "*" sandbox-image") echo "docker.io/grainai/sandbox:sha-` + short + `@sha256:1111" ;;
+  "run --rm "*" k8s-sandbox-image") echo "docker.io/grainai/sandbox-k8s:sha-` + short + `@sha256:2222" ;;
+  "run --rm "*" image") echo "docker.io/grainai/grain:sha-` + short + `" ;;
   "run --rm "*" version --json") printf '{\n  "release": "%s"\n}\n' "` + release + `" ;;
   "build "*) cat Dockerfile >> "$DOCKER_STUB_LOG"; printf 'git status: [%s]\n' "$(git status --porcelain)" >> "$DOCKER_STUB_LOG" ;;
 esac
@@ -269,11 +303,9 @@ esac
 
 func publishEnv(answers string) map[string]string {
 	return map[string]string{
-		"GRAIN_CI":                 "true",
-		"PACKAGE_PUBLISH_REGISTRY": "ghcr.io",
-		"PACKAGE_PUBLISH_USERNAME": "x-access-token",
-		"PACKAGE_PUBLISH_TOKEN":    "a-token",
-		"DOCKER_STUB_ANSWERS":      answers,
+		"GRAIN_CI":            "true",
+		"DOCKER_PAT":          "a-token",
+		"DOCKER_STUB_ANSWERS": answers,
 		// No signing key: the release goes ahead unsigned, as it does
 		// wherever image-signing is not granted.
 		"IMAGE_SIGNING_KEY": "/nonexistent/image-signing-key",
@@ -281,8 +313,8 @@ func publishEnv(answers string) map[string]string {
 }
 
 // The promotion of a release whose grain image is still the one built
-// when its commit was the candidate (grain/task-3064): the guest and
-// k8s-sandbox images are retagged, and the grain image is rebuilt from
+// when its commit was the candidate (grain/task-3064): the sandbox and
+// sandbox-k8s images are retagged, and the grain image is rebuilt from
 // the release's own commit with RELEASE=vX.Y.Z, naming exactly the
 // sandbox images and image reference the candidate's build named, and
 // only then published as vX.Y.Z and latest.
@@ -293,28 +325,28 @@ func TestPromoteRebuildsTheGrainImageWithTheReleaseStamped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("promote failed: %v\n%s\ndocker was asked:\n%s", err, out, docker)
 	}
-	for _, image := range []string{"guest", "k8s-sandbox", "grain"} {
-		containsRun(t, docker, "buildx imagetools inspect ghcr.io/bwsalmon/grain/"+image+":sha-"+short)
+	for _, image := range []string{"sandbox", "sandbox-k8s", "grain"} {
+		containsRun(t, docker, "buildx imagetools inspect docker.io/grainai/"+image+":sha-"+short)
 	}
-	for _, image := range []string{"guest", "k8s-sandbox"} {
+	for _, image := range []string{"sandbox", "sandbox-k8s"} {
 		for _, tag := range []string{"v1.5.0", "latest"} {
 			containsRun(t, docker, retagLine(image, short, tag))
 		}
 	}
 	for _, want := range []string{
 		"--build-arg GO_VERSION=1.26.10",
-		"--build-arg SANDBOX_IMAGE=ghcr.io/bwsalmon/grain/guest:sha-" + short + "@sha256:1111",
-		"--build-arg K8S_SANDBOX_IMAGE=ghcr.io/bwsalmon/grain/k8s-sandbox:sha-" + short + "@sha256:2222",
-		"--build-arg GRAIN_IMAGE_REF=ghcr.io/bwsalmon/grain/grain:sha-" + short,
+		"--build-arg SANDBOX_IMAGE=docker.io/grainai/sandbox:sha-" + short + "@sha256:1111",
+		"--build-arg K8S_SANDBOX_IMAGE=docker.io/grainai/sandbox-k8s:sha-" + short + "@sha256:2222",
+		"--build-arg GRAIN_IMAGE_REF=docker.io/grainai/grain:sha-" + short,
 		"--build-arg GIT_REVISION=" + commits["released"],
-		"--build-arg RELEASE=v1.5.0 --label org.opencontainers.image.version=v1.5.0 -t ghcr.io/bwsalmon/grain/grain:v1.5.0",
+		"--build-arg RELEASE=v1.5.0 --label org.opencontainers.image.version=v1.5.0 -t docker.io/grainai/grain:v1.5.0",
 		// The release's own Dockerfile, given the ARG it predates.
 		"ARG RELEASE=\n" + oldMakeBuild + " RELEASE=${RELEASE}\n",
-		"push ghcr.io/bwsalmon/grain/grain:v1.5.0",
-		"buildx imagetools create --tag ghcr.io/bwsalmon/grain/grain:latest ghcr.io/bwsalmon/grain/grain:v1.5.0",
+		"push docker.io/grainai/grain:v1.5.0",
+		"buildx imagetools create --tag docker.io/grainai/grain:latest docker.io/grainai/grain:v1.5.0",
 		// The candidate's build is replaced under its sha- tag by the
 		// stamped release, so cmd/ghcr-prune keeps that tag with vX.Y.Z.
-		"buildx imagetools create --tag ghcr.io/bwsalmon/grain/grain:sha-" + short + " ghcr.io/bwsalmon/grain/grain:v1.5.0",
+		"buildx imagetools create --tag docker.io/grainai/grain:sha-" + short + " docker.io/grainai/grain:v1.5.0",
 	} {
 		containsRun(t, docker, want)
 	}
@@ -322,8 +354,8 @@ func TestPromoteRebuildsTheGrainImageWithTheReleaseStamped(t *testing.T) {
 	if strings.Contains(docker, "MAIN_GRAIN") || strings.Contains(docker, "google-grain") {
 		t.Errorf("promote of a release whose Dockerfile takes no MAIN_GRAIN asked for MAIN_GRAIN or touched google-grain:\n%s", docker)
 	}
-	if strings.Contains(docker, "--tag ghcr.io/bwsalmon/grain/grain:latest ghcr.io/bwsalmon/grain/grain:sha-") ||
-		strings.Contains(docker, "--tag ghcr.io/bwsalmon/grain/grain:v1.5.0 ") {
+	if strings.Contains(docker, "--tag docker.io/grainai/grain:latest docker.io/grainai/grain:sha-") ||
+		strings.Contains(docker, "--tag docker.io/grainai/grain:v1.5.0 ") {
 		t.Errorf("promote retagged the candidate's grain image, which reports its rc, as the release:\n%s", docker)
 	}
 }
@@ -383,8 +415,8 @@ func TestPromoteOfAnAlreadyStampedReleaseRebuildsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("promote failed: %v\n%s\ndocker was asked:\n%s", err, out, docker)
 	}
-	containsRun(t, out, "ghcr.io/bwsalmon/grain/grain:v1.5.0 already reports v1.5.0; nothing to rebuild")
-	containsRun(t, docker, "buildx imagetools create --tag ghcr.io/bwsalmon/grain/grain:latest ghcr.io/bwsalmon/grain/grain:v1.5.0")
+	containsRun(t, out, "docker.io/grainai/grain:v1.5.0 already reports v1.5.0; nothing to rebuild")
+	containsRun(t, docker, "buildx imagetools create --tag docker.io/grainai/grain:latest docker.io/grainai/grain:v1.5.0")
 	for _, line := range strings.Split(docker, "\n") {
 		for _, forbidden := range []string{"build ", "push ", "pull "} {
 			if strings.HasPrefix(line, forbidden) {
@@ -411,10 +443,10 @@ func TestPromoteOfARebuildThatDoesNotReportTheReleaseMovesNothing(t *testing.T) 
 
 // A release whose images were never published moves nothing, and says
 // which image is missing -- rather than leaving `latest` naming a grain
-// from one commit and a guest from another, or building anything.
+// from one commit and a sandbox from another, or building anything.
 func TestPromoteOfAReleaseWithAnImageMissingMovesNothing(t *testing.T) {
 	remote, commits := releaseRepo(t)
-	missing := "ghcr.io/bwsalmon/grain/guest:sha-" + commits["released"][:7]
+	missing := "docker.io/grainai/sandbox:sha-" + commits["released"][:7]
 	env := publishEnv(stubAnswers(t, commits["released"][:7], "", "v1.5.0"))
 	env["DOCKER_STUB_MISSING"] = missing
 	out, docker, err := promoteRun(t, remote, []string{"promote"}, env)
@@ -435,26 +467,26 @@ func TestPromoteOfAStampedReleaseWhoseGrainBuildWasPrunedStillMovesLatest(t *tes
 	remote, commits := releaseRepo(t)
 	short := commits["released"][:7]
 	env := publishEnv(stubAnswers(t, short, "v1.5.0", "v1.5.0"))
-	env["DOCKER_STUB_MISSING"] = "ghcr.io/bwsalmon/grain/grain:sha-" + short
+	env["DOCKER_STUB_MISSING"] = "docker.io/grainai/grain:sha-" + short
 	out, docker, err := promoteRun(t, remote, []string{"promote"}, env)
 	if err != nil {
 		t.Fatalf("promote failed: %v\n%s\ndocker was asked:\n%s", err, out, docker)
 	}
-	containsRun(t, out, "ghcr.io/bwsalmon/grain/grain:v1.5.0 already reports v1.5.0; nothing to rebuild")
-	containsRun(t, docker, retagLine("guest", short, "latest"))
-	containsRun(t, docker, "buildx imagetools create --tag ghcr.io/bwsalmon/grain/grain:latest ghcr.io/bwsalmon/grain/grain:v1.5.0")
+	containsRun(t, out, "docker.io/grainai/grain:v1.5.0 already reports v1.5.0; nothing to rebuild")
+	containsRun(t, docker, retagLine("sandbox", short, "latest"))
+	containsRun(t, docker, "buildx imagetools create --tag docker.io/grainai/grain:latest docker.io/grainai/grain:v1.5.0")
 	// And the pruned tag is put back, on the release's own version: a
 	// deployment that went onto this commit as the candidate names it as
 	// its image, and its config repo's state check pulls it
 	// (grain:sha-adea62d, grain/task-3926).
-	containsRun(t, docker, "buildx imagetools create --tag ghcr.io/bwsalmon/grain/grain:sha-"+short+" ghcr.io/bwsalmon/grain/grain:v1.5.0")
+	containsRun(t, docker, "buildx imagetools create --tag docker.io/grainai/grain:sha-"+short+" docker.io/grainai/grain:v1.5.0")
 }
 
 // The grain sha- build is still required while the release has not been
 // stamped: it is what the rebuild reads its sandbox images from.
 func TestPromoteOfAnUnstampedReleaseWithoutItsGrainBuildMovesNothing(t *testing.T) {
 	remote, commits := releaseRepo(t)
-	missing := "ghcr.io/bwsalmon/grain/grain:sha-" + commits["released"][:7]
+	missing := "docker.io/grainai/grain:sha-" + commits["released"][:7]
 	env := publishEnv(stubAnswers(t, commits["released"][:7], "", "v1.5.0"))
 	env["DOCKER_STUB_MISSING"] = missing
 	out, docker, err := promoteRun(t, remote, []string{"promote"}, env)
@@ -516,8 +548,8 @@ func pendingAnswers(t *testing.T, short, revision string) string {
 		t.Fatal(err)
 	}
 	pending := `case "$*" in
-  "buildx imagetools inspect ghcr.io/bwsalmon/grain/grain:v1.5.0-pending --format "*revision*) echo "` + revision + `" ;;
-  "buildx imagetools inspect ghcr.io/bwsalmon/grain/grain:v1.5.0-pending --format "*) echo "v1.5.0" ;;
+  "buildx imagetools inspect docker.io/grainai/grain:v1.5.0-pending --format "*revision*) echo "` + revision + `" ;;
+  "buildx imagetools inspect docker.io/grainai/grain:v1.5.0-pending --format "*) echo "v1.5.0" ;;
 `
 	script := strings.Replace(string(body), "case \"$*\" in\n", pending, 1)
 	if script == string(body) {
@@ -540,9 +572,9 @@ func TestPromoteOfAPendingReleaseRetagsTheStagedBuild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("promote failed: %v\n%s\ndocker was asked:\n%s", err, out, docker)
 	}
-	containsRun(t, out, "ghcr.io/bwsalmon/grain/grain:v1.5.0-pending is "+commits["released"]+" stamped v1.5.0; promoting it as built")
-	containsRun(t, docker, "buildx imagetools create --tag ghcr.io/bwsalmon/grain/grain:v1.5.0 ghcr.io/bwsalmon/grain/grain:v1.5.0-pending")
-	if strings.Contains(docker, "-t ghcr.io/bwsalmon/grain/grain:v1.5.0") {
+	containsRun(t, out, "docker.io/grainai/grain:v1.5.0-pending is "+commits["released"]+" stamped v1.5.0; promoting it as built")
+	containsRun(t, docker, "buildx imagetools create --tag docker.io/grainai/grain:v1.5.0 docker.io/grainai/grain:v1.5.0-pending")
+	if strings.Contains(docker, "-t docker.io/grainai/grain:v1.5.0") {
 		t.Errorf("promote rebuilt grain although its pending build was staged:\n%s", docker)
 	}
 }
@@ -558,16 +590,16 @@ func TestPromoteIgnoresAPendingBuildOfAnotherCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("promote failed: %v\n%s\ndocker was asked:\n%s", err, out, docker)
 	}
-	if strings.Contains(docker, "--tag ghcr.io/bwsalmon/grain/grain:v1.5.0 ghcr.io/bwsalmon/grain/grain:v1.5.0-pending") {
+	if strings.Contains(docker, "--tag docker.io/grainai/grain:v1.5.0 docker.io/grainai/grain:v1.5.0-pending") {
 		t.Errorf("promote shipped another commit's pending build:\n%s", docker)
 	}
-	containsRun(t, docker, "-t ghcr.io/bwsalmon/grain/grain:v1.5.0")
+	containsRun(t, docker, "-t docker.io/grainai/grain:v1.5.0")
 }
 
 // A release cut in the post-split single-daemon repository (ai-on-gke/grain)
 // has ARG MAIN_GRAIN=./cmd/grain in its Dockerfile and no google/cmd/grain
-// directory in its tree: promotion only requires and promotes grain, guest,
-// and k8s-sandbox, and never asks for, builds, or retags google-grain.
+// directory in its tree: promotion only requires and promotes grain, sandbox,
+// and sandbox-k8s, and never asks for, builds, or retags google-grain.
 func TestPromotePostSplitSingleDaemonRelease(t *testing.T) {
 	remote, commits := releaseRepoWithDockerfile(t, postSplitDockerfile)
 	short := commits["released"][:7]
@@ -576,8 +608,8 @@ func TestPromotePostSplitSingleDaemonRelease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("promote --dry-run failed: %v\n%s", err, out)
 	}
-	containsRun(t, out, "and rebuild ghcr.io/bwsalmon/grain/grain:sha-"+short+" from "+commits["released"]+" (./cmd/grain)")
-	containsRun(t, out, "and point ghcr.io/bwsalmon/grain/grain:sha-"+short+" at the stamped ghcr.io/bwsalmon/grain/grain:v1.5.0")
+	containsRun(t, out, "and rebuild docker.io/grainai/grain:sha-"+short+" from "+commits["released"]+" (./cmd/grain)")
+	containsRun(t, out, "and point docker.io/grainai/grain:sha-"+short+" at the stamped docker.io/grainai/grain:v1.5.0")
 	if strings.Contains(out, "google-grain:sha-"+short) || strings.Contains(out, "google-grain:v1.5.0") || strings.Contains(out, "predates the two daemon images") {
 		t.Errorf("dry-run promote of a post-split single-daemon release mentioned google-grain or pre-split retagging:\n%s", out)
 	}
@@ -586,20 +618,20 @@ func TestPromotePostSplitSingleDaemonRelease(t *testing.T) {
 	}
 
 	env := publishEnv(stubAnswers(t, short, "", "v1.5.0"))
-	env["DOCKER_STUB_MISSING"] = "ghcr.io/bwsalmon/grain/google-grain:sha-" + short
+	env["DOCKER_STUB_MISSING"] = "docker.io/grainai/google-grain:sha-" + short
 	out, docker, err = promoteRun(t, remote, []string{"promote"}, env)
 	if err != nil {
 		t.Fatalf("promote failed: %v\n%s\ndocker was asked:\n%s", err, out, docker)
 	}
-	for _, image := range []string{"guest", "k8s-sandbox", "grain"} {
-		containsRun(t, docker, "buildx imagetools inspect ghcr.io/bwsalmon/grain/"+image+":sha-"+short)
+	for _, image := range []string{"sandbox", "sandbox-k8s", "grain"} {
+		containsRun(t, docker, "buildx imagetools inspect docker.io/grainai/"+image+":sha-"+short)
 	}
 	containsRun(t, docker, "--build-arg MAIN_GRAIN=./cmd/grain ")
 	containsRun(t, docker, "--label org.opencontainers.image.source=https://github.com/bwsalmon/grain ")
-	containsRun(t, docker, "--build-arg RELEASE=v1.5.0 --label org.opencontainers.image.version=v1.5.0 -t ghcr.io/bwsalmon/grain/grain:v1.5.0")
-	containsRun(t, docker, "push ghcr.io/bwsalmon/grain/grain:v1.5.0")
-	containsRun(t, docker, "buildx imagetools create --tag ghcr.io/bwsalmon/grain/grain:latest ghcr.io/bwsalmon/grain/grain:v1.5.0")
-	containsRun(t, docker, "buildx imagetools create --tag ghcr.io/bwsalmon/grain/grain:sha-"+short+" ghcr.io/bwsalmon/grain/grain:v1.5.0")
+	containsRun(t, docker, "--build-arg RELEASE=v1.5.0 --label org.opencontainers.image.version=v1.5.0 -t docker.io/grainai/grain:v1.5.0")
+	containsRun(t, docker, "push docker.io/grainai/grain:v1.5.0")
+	containsRun(t, docker, "buildx imagetools create --tag docker.io/grainai/grain:latest docker.io/grainai/grain:v1.5.0")
+	containsRun(t, docker, "buildx imagetools create --tag docker.io/grainai/grain:sha-"+short+" docker.io/grainai/grain:v1.5.0")
 	if strings.Contains(docker, "google-grain") || strings.Contains(out, "google-grain") {
 		t.Errorf("promote of a post-split single-daemon release touched google-grain:\nout:\n%s\ndocker:\n%s", out, docker)
 	}
@@ -619,7 +651,7 @@ func TestPromoteSeedsMissingShaTagsFromMainForRootCutoverCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	seedCheck := `case "$*" in
-  "buildx imagetools inspect ghcr.io/bwsalmon/grain/"*":sha-` + short + `")
+  "buildx imagetools inspect docker.io/grainai/"*":sha-` + short + `")
     grep -qF -- "--tag $4 " "$DOCKER_STUB_LOG" || exit 1
     ;;
 `
@@ -633,12 +665,12 @@ func TestPromoteSeedsMissingShaTagsFromMainForRootCutoverCommit(t *testing.T) {
 		t.Fatalf("promote v1.4.0 failed: %v\n%s\ndocker was asked:\n%s", err, out, docker)
 	}
 	containsRun(t, out, "seeding from :main")
-	for _, image := range []string{"guest", "k8s-sandbox", "grain", "guest-base", "k8s-sandbox-base"} {
-		containsRun(t, docker, "buildx imagetools create --tag ghcr.io/bwsalmon/grain/"+image+":sha-"+short+" ghcr.io/bwsalmon/grain/"+image+":main")
+	for _, image := range []string{"sandbox", "sandbox-k8s", "grain", "sandbox-base", "sandbox-k8s-base"} {
+		containsRun(t, docker, "buildx imagetools create --tag docker.io/grainai/"+image+":sha-"+short+" docker.io/grainai/"+image+":main")
 	}
 	containsRun(t, docker, "--label org.opencontainers.image.source=https://github.com/bwsalmon/grain ")
-	containsRun(t, docker, "--build-arg RELEASE=v1.4.0 --label org.opencontainers.image.version=v1.4.0 -t ghcr.io/bwsalmon/grain/grain:v1.4.0")
-	containsRun(t, docker, "push ghcr.io/bwsalmon/grain/grain:v1.4.0")
+	containsRun(t, docker, "--build-arg RELEASE=v1.4.0 --label org.opencontainers.image.version=v1.4.0 -t docker.io/grainai/grain:v1.4.0")
+	containsRun(t, docker, "push docker.io/grainai/grain:v1.4.0")
 	if strings.Contains(docker, "google-grain") {
 		t.Errorf("promote of a post-split root cutover commit touched google-grain:\n%s", docker)
 	}

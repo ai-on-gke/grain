@@ -438,8 +438,8 @@ trigger:
 		parsedSched.Recurrence.GitHubWorkflowRun.Workflow != "nightly.yml" {
 		t.Fatalf("parsed recurrence = %+v", parsedSched.Recurrence)
 	}
-	if parsedSched.TemplateID == nil || *parsedSched.TemplateID != model.WorkflowReviewTemplateID("nightly") {
-		t.Fatalf("default template = %v, want %q", parsedSched.TemplateID, model.WorkflowReviewTemplateID("nightly"))
+	if parsedSched.TemplateID == nil || *parsedSched.TemplateID != model.GitHubWorkflowReviewTemplateID("nightly") {
+		t.Fatalf("default template = %v, want %q", parsedSched.TemplateID, model.GitHubWorkflowReviewTemplateID("nightly"))
 	}
 	// Allow multiple reviews in this test so we can observe attempt 2 firing while attempt 1's review is open.
 	parsedSched.Overlap = model.OverlapAllow
@@ -651,13 +651,15 @@ func TestGitHubReleaseWorkflowFailureFilesTriageAndRaisesNotPublishing(t *testin
 		t.Fatal(err)
 	}
 
+	commit1 := headSHA(t, client, repo, "main")
+
 	// Failed GitHub Actions release workflow on main.
 	sim.WorkflowRuns = []githubsim.WorkflowRun{{
 		ID:         1201,
 		Name:       "release",
 		Path:       ".github/workflows/release.yml",
 		HeadBranch: "main",
-		HeadSHA:    "deadbeef12345678",
+		HeadSHA:    commit1,
 		Event:      "push",
 		Status:     "completed",
 		Conclusion: "failure",
@@ -701,13 +703,16 @@ func TestGitHubReleaseWorkflowFailureFilesTriageAndRaisesNotPublishing(t *testin
 		}
 	}
 
-	// Now a subsequent release run on main succeeds: BaseBranchRelease resets and triage task is closed as superseded.
+	// Now a subsequent release run on a descendant commit on main succeeds:
+	// BaseBranchRelease resets and triage task is closed as superseded.
+	pushBranch(t, sim.BareRepo, "main")
+	commit2 := headSHA(t, client, repo, "main")
 	sim.WorkflowRuns = append(sim.WorkflowRuns, githubsim.WorkflowRun{
 		ID:         1202,
 		Name:       "release",
 		Path:       ".github/workflows/release.yml",
 		HeadBranch: "main",
-		HeadSHA:    "feedface87654321",
+		HeadSHA:    commit2,
 		Event:      "push",
 		Status:     "completed",
 		Conclusion: "success",
@@ -730,6 +735,193 @@ func TestGitHubReleaseWorkflowFailureFilesTriageAndRaisesNotPublishing(t *testin
 	if len(triageIDs) != 0 {
 		t.Errorf("expected release-triage task to be closed as superseded after green release, still open: %v", triageIDs)
 	}
+}
+
+func TestGitHubReleaseTriageSupersedeRequiresCommitAtOrAfterFailure(t *testing.T) {
+	t.Parallel()
+
+	// Build a real commit graph on main: older -> failing -> descendant -> tip,
+	// plus a diverged branch off older.
+	setupGraph := func(t *testing.T) (
+		*model.Store, context.Context, *githubsim.Sim, github.Client, model.RepoRef,
+		string, string, string, string,
+	) {
+		t.Helper()
+		store, ctx := openStore(t)
+		sim, client := newSim(t, "acme", "widgets", "main")
+		repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+		if err := store.PutBaseBranchCI(ctx, model.BaseBranchCI{Repo: repo, Branch: "main"}); err != nil {
+			t.Fatal(err)
+		}
+		older := headSHA(t, client, repo, "main")
+		pushBranch(t, sim.BareRepo, "diverged-side")
+		diverged := headSHA(t, client, repo, "diverged-side")
+		pushBranch(t, sim.BareRepo, "main")
+		failing := headSHA(t, client, repo, "main")
+		pushBranch(t, sim.BareRepo, "main")
+		descendant := headSHA(t, client, repo, "main")
+		pushBranch(t, sim.BareRepo, "main")
+		return store, ctx, sim, client, repo, older, failing, descendant, diverged
+	}
+
+	failAt := func(t *testing.T, ctx context.Context, deps orchestrator.Deps, sim *githubsim.Sim, sha string, at time.Time) string {
+		t.Helper()
+		sim.WorkflowRuns = append(sim.WorkflowRuns, githubsim.WorkflowRun{
+			ID:         42061264,
+			Name:       "release",
+			Path:       ".github/workflows/release.yml",
+			HeadBranch: "main",
+			HeadSHA:    sha,
+			Event:      "push",
+			Status:     "completed",
+			Conclusion: "failure",
+			RunAttempt: 1,
+			CreatedAt:  at.Add(-5 * time.Minute),
+			Jobs: []githubsim.WorkflowJob{{
+				Name:        "publish-image",
+				Conclusion:  "failure",
+				FailingStep: "push",
+			}},
+		})
+		runGitHubCITails(t, ctx, deps, at)
+		ids, err := deps.Store.OpenTasksWithTag(ctx, orchestrator.BaseReleaseTriageBranchTag(
+			model.RepoRef{Owner: "acme", Name: "widgets"}, "main"))
+		if err != nil || len(ids) != 1 {
+			t.Fatalf("open release-triage tasks = %v, %v; want 1", ids, err)
+		}
+		return ids[0]
+	}
+
+	t.Run("older commit finishing after failure keeps triage open", func(t *testing.T) {
+		t.Parallel()
+		store, ctx, sim, client, repo, older, failing, _, _ := setupGraph(t)
+		deps := orchestrator.Deps{Store: store, Client: client}
+
+		triageID := failAt(t, ctx, deps, sim, failing, baseTime)
+
+		// Older commit started before failing commit, finished long after it.
+		olderFinished := baseTime.Add(60 * time.Minute)
+		sim.WorkflowRuns = append(sim.WorkflowRuns, githubsim.WorkflowRun{
+			ID:         42060866,
+			Name:       "release",
+			Path:       ".github/workflows/release.yml",
+			HeadBranch: "main",
+			HeadSHA:    older,
+			Event:      "push",
+			Status:     "completed",
+			Conclusion: "success",
+			RunAttempt: 1,
+			CreatedAt:  baseTime.Add(-10 * time.Minute),
+			Jobs:       []githubsim.WorkflowJob{{Name: "publish-image", Conclusion: "success"}},
+		})
+		runGitHubCITails(t, ctx, deps, olderFinished)
+
+		open, err := store.OpenTasksWithTag(ctx, orchestrator.BaseReleaseTriageBranchTag(repo, "main"))
+		if err != nil || len(open) != 1 || open[0] != triageID {
+			t.Fatalf("open release-triage tasks after older commit's success = %v (%v), want [%s] still open",
+				open, err, triageID)
+		}
+	})
+
+	t.Run("re-run of the same failing commit closes triage", func(t *testing.T) {
+		t.Parallel()
+		store, ctx, sim, client, _, _, failing, _, _ := setupGraph(t)
+		deps := orchestrator.Deps{Store: store, Client: client}
+
+		triageID := failAt(t, ctx, deps, sim, failing, baseTime)
+
+		rerunFinished := baseTime.Add(15 * time.Minute)
+		sim.WorkflowRuns = append(sim.WorkflowRuns, githubsim.WorkflowRun{
+			ID:         42061264,
+			Name:       "release",
+			Path:       ".github/workflows/release.yml",
+			HeadBranch: "main",
+			HeadSHA:    failing,
+			Event:      "push",
+			Status:     "completed",
+			Conclusion: "success",
+			RunAttempt: 2,
+			CreatedAt:  baseTime.Add(5 * time.Minute),
+			Jobs:       []githubsim.WorkflowJob{{Name: "publish-image", Conclusion: "success"}},
+		})
+		runGitHubCITails(t, ctx, deps, rerunFinished)
+
+		if st, err := store.State(ctx, triageID); err != nil || st != model.StateClosed {
+			t.Fatalf("triage task %s state after green re-run of same commit = %q (%v), want closed",
+				triageID, st, err)
+		}
+	})
+
+	t.Run("descendant commit on branch closes triage", func(t *testing.T) {
+		t.Parallel()
+		store, ctx, sim, client, _, _, failing, descendant, _ := setupGraph(t)
+		deps := orchestrator.Deps{Store: store, Client: client}
+
+		triageID := failAt(t, ctx, deps, sim, failing, baseTime)
+
+		descFinished := baseTime.Add(20 * time.Minute)
+		sim.WorkflowRuns = append(sim.WorkflowRuns, githubsim.WorkflowRun{
+			ID:         42062000,
+			Name:       "release",
+			Path:       ".github/workflows/release.yml",
+			HeadBranch: "main",
+			HeadSHA:    descendant,
+			Event:      "push",
+			Status:     "completed",
+			Conclusion: "success",
+			RunAttempt: 1,
+			CreatedAt:  baseTime,
+			Jobs:       []githubsim.WorkflowJob{{Name: "publish-image", Conclusion: "success"}},
+		})
+		runGitHubCITails(t, ctx, deps, descFinished)
+
+		if st, err := store.State(ctx, triageID); err != nil || st != model.StateClosed {
+			t.Fatalf("triage task %s state after descendant green release = %q (%v), want closed",
+				triageID, st, err)
+		}
+	})
+
+	t.Run("unknown ancestry or diverged commit keeps triage open", func(t *testing.T) {
+		t.Parallel()
+		store, ctx, sim, client, repo, _, failing, _, diverged := setupGraph(t)
+		deps := orchestrator.Deps{Store: store, Client: client}
+
+		triageID := failAt(t, ctx, deps, sim, failing, baseTime)
+
+		// 1. Unknown commit SHA not present in git.
+		sim.WorkflowRuns = append(sim.WorkflowRuns, githubsim.WorkflowRun{
+			ID:         42063001,
+			Name:       "release",
+			Path:       ".github/workflows/release.yml",
+			HeadBranch: "main",
+			HeadSHA:    "9999999999999999999999999999999999999999",
+			Event:      "push",
+			Status:     "completed",
+			Conclusion: "success",
+			RunAttempt: 1,
+			Jobs:       []githubsim.WorkflowJob{{Name: "publish-image", Conclusion: "success"}},
+		})
+		// 2. Diverged commit not on main.
+		sim.WorkflowRuns = append(sim.WorkflowRuns, githubsim.WorkflowRun{
+			ID:         42063002,
+			Name:       "release",
+			Path:       ".github/workflows/release.yml",
+			HeadBranch: "main",
+			HeadSHA:    diverged,
+			Event:      "push",
+			Status:     "completed",
+			Conclusion: "success",
+			RunAttempt: 1,
+			Jobs:       []githubsim.WorkflowJob{{Name: "publish-image", Conclusion: "success"}},
+		})
+		runGitHubCITails(t, ctx, deps, baseTime.Add(10*time.Minute))
+
+		open, err := store.OpenTasksWithTag(ctx, orchestrator.BaseReleaseTriageBranchTag(repo, "main"))
+		if err != nil || len(open) != 1 || open[0] != triageID {
+			t.Fatalf("open release-triage tasks after unknown/diverged commits = %v (%v), want [%s] still open",
+				open, err, triageID)
+		}
+	})
 }
 
 func TestForkPullRequestWorkflowRunIsNotTheBaseBranch(t *testing.T) {

@@ -497,6 +497,38 @@ describe("sortTasks", () => {
     ).toEqual(["proposed", "running", "closed"]);
   });
 
+  it("keeps the two asked states together, ahead of failed", () => {
+    // The sidebar and the Kanban board show both asked states as one
+    // Asked, before Failed; model.StateOf's precedence (STATE_ORDER)
+    // puts failed between them, and a list ordered by state used to
+    // follow it and split the asked tasks in two.
+    const tasks = [
+      named("a", { state: "awaiting_submit" }),
+      named("b", { state: "failed" }),
+      named("c", { state: "completed" }),
+      named("d", { state: "awaiting_reply" }),
+      named("e", { state: "running" }),
+    ];
+    const by = (dir) =>
+      sortTasks(tasks, [{ attr: "state", dir }], attrs, config).map(
+        (t) => t.state,
+      );
+    expect(by("asc")).toEqual([
+      "running",
+      "awaiting_reply",
+      "awaiting_submit",
+      "failed",
+      "completed",
+    ]);
+    expect(by("desc")).toEqual([
+      "completed",
+      "failed",
+      "awaiting_submit",
+      "awaiting_reply",
+      "running",
+    ]);
+  });
+
   it("orders tasks by started and completed times", () => {
     const t1 = named("first", {
       startedAt: "2026-02-10T10:00:00Z",
@@ -824,15 +856,22 @@ describe("describing a narrowing", () => {
         values: ["asked", "awaiting_reply", NONE],
       }),
     ).toEqual([]);
-    // An origin's order is only how it sorts ("imported" is not in it),
-    // and an open vocabulary takes any value.
+    // Origin's order is every value originOf returns, so "imported" is
+    // known and a value outside it says so.
     expect(
       unknownValues(attr("origin"), {
         attr: "origin",
         op: "any",
-        values: ["imported"],
+        values: ["imported", "robot"],
       }),
-    ).toEqual([]);
+    ).toEqual(["robot"]);
+    expect(
+      describeCondition(
+        attr("origin"),
+        { attr: "origin", op: "any", values: ["imported", "robot"] },
+        config,
+      ),
+    ).toBe("Origin is any of Imported issue, “robot” (unknown)");
     expect(
       unknownValues(attr("repo"), {
         attr: "repo",
@@ -840,6 +879,40 @@ describe("describing a narrowing", () => {
         values: ["nope/nope"],
       }),
     ).toEqual([]);
+  });
+
+  it("marks a value a yes/no or held-category attribute does not have", () => {
+    // blocked:any:true read "Blocked is any of Not blocked" -- labelOf
+    // words everything but "yes" as the other answer -- over a board
+    // matching nothing; autoMerge:any:yes read "Off" the same way.
+    expect(
+      describeCondition(
+        attr("blocked"),
+        { attr: "blocked", op: "any", values: ["true"] },
+        config,
+      ),
+    ).toBe("Blocked is any of “true” (unknown)");
+    expect(
+      describeCondition(
+        attr("autoMerge"),
+        { attr: "autoMerge", op: "any", values: ["yes"] },
+        config,
+      ),
+    ).toBe("Auto-merge is any of “yes” (unknown)");
+    expect(
+      unknownValues(attr("humanReview"), {
+        attr: "humanReview",
+        op: "any",
+        values: ["product_decision", "product-decision", NONE],
+      }),
+    ).toEqual(["product_decision"]);
+    expect(
+      describeCondition(
+        attr("blocked"),
+        { attr: "blocked", op: "any", values: ["yes", "no"] },
+        config,
+      ),
+    ).toBe("Blocked is any of Blocked, Not blocked");
   });
 
   it("says a condition is still waiting rather than reading as a filter", () => {
@@ -1602,17 +1675,46 @@ describe("attributesFor", () => {
 });
 
 describe("originOf", () => {
-  it("names the one thing that put a task in the list", () => {
-    expect(originOf(task({}))).toBe("hand");
-    expect(originOf(task({ generatedFrom: "7" }))).toBe("proposed");
-    expect(originOf(task({ scheduled: true }))).toBe("schedule");
-    expect(originOf(task({ suiteRun: true }))).toBe("suite");
-    expect(originOf(task({ imported: true }))).toBe("imported");
-    expect(originOf(task({ author: "external:w", authorKind: "agent" }))).toBe(
+  it("names the one thing that put a task in the list, in the attribute's closed order", () => {
+    const cases = [
+      [task({}), "hand"],
+      [task({ author: "external:w", authorKind: "agent" }), "external"],
+      [task({ generatedFrom: "7" }), "proposed"],
+      [task({ imported: true }), "imported"],
+      [task({ imported: true, generatedFrom: "7" }), "imported"],
+      [task({ scheduled: true }), "schedule"],
+      [task({ suiteRun: true }), "suite"],
+      [task({ stacked: true, generatedFrom: "7" }), "fix"],
+      [task({ stacked: true, review: true }), "review"],
+    ];
+    for (const [t, want] of cases) {
+      expect(originOf(t)).toBe(want);
+      expect(attr("origin").order).toContain(want);
+    }
+    const oneOfEach = [
+      task({ id: "review", stacked: true, review: true }),
+      task({ id: "imported", imported: true }),
+      task({ id: "hand" }),
+      task({ id: "schedule", scheduled: true }),
+      task({ id: "proposed", generatedFrom: "7" }),
+      task({ id: "fix", stacked: true, generatedFrom: "7" }),
+      task({ id: "suite", suiteRun: true }),
+      task({ id: "external", author: "external:w", authorKind: "agent" }),
+    ];
+    expect(
+      sortTasks(oneOfEach, [{ attr: "origin", dir: "asc" }], attrs, config).map(
+        (t) => t.id,
+      ),
+    ).toEqual([
+      "hand",
       "external",
-    );
-    expect(originOf(task({ stacked: true, generatedFrom: "7" }))).toBe("fix");
-    expect(originOf(task({ stacked: true, review: true }))).toBe("review");
+      "proposed",
+      "imported",
+      "schedule",
+      "suite",
+      "fix",
+      "review",
+    ]);
   });
 });
 
@@ -1802,5 +1904,37 @@ describe("defaultSortFor", () => {
     expect(hit({ prMergedAt: "2026-10-05T00:00:00Z" })).toBe(true);
     expect(hit({ prMergedAt: "2026-09-05T00:00:00Z" })).toBe(false);
     expect(hit({ closedAt: "2026-10-05T00:00:00Z" })).toBe(false);
+  });
+
+  it("filters tasks by externalRef and empty externalRef", () => {
+    const matchRef = { attr: "externalRef", op: "any", values: ["CA-204"] };
+    const emptyRef = { attr: "externalRef", op: "empty", values: [] };
+    expect(
+      matchesFilters(
+        task({ externalRef: "CA-204" }),
+        conditions(matchRef),
+        "",
+        config,
+      ),
+    ).toBe(true);
+    expect(
+      matchesFilters(
+        task({ externalRef: "CA-999" }),
+        conditions(matchRef),
+        "",
+        config,
+      ),
+    ).toBe(false);
+    expect(matchesFilters(task({}), conditions(emptyRef), "", config)).toBe(
+      true,
+    );
+    expect(
+      matchesFilters(
+        task({ externalRef: "CA-204" }),
+        conditions(emptyRef),
+        "",
+        config,
+      ),
+    ).toBe(false);
   });
 });

@@ -66,6 +66,12 @@ type ConsoleSessionSetting struct {
 	// Capabilities are the capability ids this session's task is granted
 	// -- what the pane's own tick boxes read and write.
 	Capabilities []string `json:"capabilities"`
+	// MissingShippedDefaults lists the shipped Tier 1 capabilities
+	// (model.DefaultConsoleSessions) that a saved console_sessions row for
+	// this session lacks and that this deployment offers and permits on the
+	// session. Empty when console_sessions has never been saved or when all
+	// shipped defaults are already held.
+	MissingShippedDefaults []string `json:"missingShippedDefaults,omitempty"`
 	// NetworkAccess is "" for the deployment's own default, or one of
 	// model.NetworkAccesses().
 	NetworkAccess string `json:"networkAccess,omitempty"`
@@ -351,7 +357,7 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 					}
 				}
 				if openTask.NetworkAccess != "" || prev.NetworkAccess != openTask.NetworkAccess {
-					if !(s.NetworkAccess == model.NetworkNone && c.Config.SandboxShapeIgnored && openTask.NetworkAccess == model.NetworkOpen) {
+					if !(s.NetworkAccess == model.NetworkNone && !c.sandboxesIsolateNetwork() && openTask.NetworkAccess == model.NetworkOpen) {
 						networkAccess = string(openTask.NetworkAccess)
 					}
 				}
@@ -402,24 +408,74 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 		if team == "" {
 			team = model.DefaultTeamID
 		}
+		var missingShippedDefaults []string
+		if cfg.ConsoleSessions != nil {
+			missing, err := c.missingShippedSessionDefaults(ctx, s.ID, capabilities, openTask)
+			if err != nil {
+				return nil, err
+			}
+			missingShippedDefaults = missing
+		}
 		out = append(out, ConsoleSessionSetting{
-			ID:              s.ID,
-			Title:           title,
-			Team:            team,
-			TaskID:          taskID,
-			Capabilities:    capabilities,
-			NetworkAccess:   networkAccess,
-			TasksApproved:   tasksApproved,
-			KeepRunning:     keepRunning,
-			Reads:           reads,
-			ReadsAll:        s.ReadsAllRepos(),
-			AutoReads:       autoReads,
-			Writes:          writes,
-			GoogleChatSpace: googleChatSpace,
-			Model:           modelChoice,
-			Crowded:         crowded,
-			CrowdedNote:     note,
+			ID:                     s.ID,
+			Title:                  title,
+			Team:                   team,
+			TaskID:                 taskID,
+			Capabilities:           capabilities,
+			MissingShippedDefaults: missingShippedDefaults,
+			NetworkAccess:          networkAccess,
+			TasksApproved:          tasksApproved,
+			KeepRunning:            keepRunning,
+			Reads:                  reads,
+			ReadsAll:               s.ReadsAllRepos(),
+			AutoReads:              autoReads,
+			Writes:                 writes,
+			GoogleChatSpace:        googleChatSpace,
+			Model:                  modelChoice,
+			Crowded:                crowded,
+			CrowdedNote:            note,
 		})
+	}
+	return out, nil
+}
+
+// missingShippedSessionDefaults returns the shipped default capabilities
+// (model.DefaultConsoleSessions) missing from a saved console session's
+// held capabilities, filtered to grants this deployment actually offers
+// and permits on the session's task so "Adopt shipped defaults" never
+// proposes a grant UpdateConsoleSession would refuse.
+func (c *Client) missingShippedSessionDefaults(ctx context.Context, sessionID string, held []string, openTask *model.Task) ([]string, error) {
+	candidates := model.MissingShippedConsoleSessionCapabilities(sessionID, held)
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	var checkTask func(capID string) error
+	if openTask != nil {
+		policy, configured, err := c.capabilityPolicyFor(ctx)
+		if err != nil {
+			return nil, err
+		}
+		checkTask = func(capID string) error {
+			if model.IsCapabilityRef(capID) {
+				subject := model.CapabilitySubject{Repo: openTask.Target, Kind: model.CapabilityRunTask}
+				if err := policy.Permits(capID, subject, configured); err != nil {
+					return err
+				}
+			}
+			return c.catalogueEditRefusal(ctx, *openTask, capID)
+		}
+	}
+	var out []string
+	for _, capID := range candidates {
+		if _, ok := c.capabilityByID(capID); !ok {
+			continue
+		}
+		if checkTask != nil {
+			if err := checkTask(capID); err != nil {
+				continue
+			}
+		}
+		out = append(out, capID)
 	}
 	return out, nil
 }
@@ -667,39 +723,72 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 		return nil, validationErrorf("%v", err)
 	}
 	writable := !c.configRepoOnly(ctx)
+	var stateRepo model.RepoRef
+	var autoReads []model.RepoRef
+	// checkedCaps are the session capabilities vetted below against the
+	// task as read before the config write; the task update re-vets any
+	// other capability the task no longer holds by the time it runs, so
+	// a grant removed concurrently cannot come back unchecked.
+	checkedCaps := map[string]bool{}
+	var checkNewCapability func(t model.Task, capID string) error
 	if openTask != nil {
-		stateRepo := c.stateRepoRef()
-		var autoReads []model.RepoRef
+		stateRepo = c.stateRepoRef()
 		if req.Reads != nil || req.ReadsAll != nil {
 			autoReads, err = model.ConsoleSessionAutoReads(ctx, c.Store, session, stateRepo)
 			if err != nil {
 				return nil, err
 			}
 		}
+		if req.Capabilities != nil {
+			existingByCap := make(map[string]bool, len(openTask.Grants))
+			for _, g := range openTask.Grants {
+				existingByCap[g.Capability] = true
+			}
+			policy, configured, err := c.capabilityPolicyFor(ctx)
+			if err != nil {
+				return nil, err
+			}
+			checkNewCapability = func(t model.Task, capID string) error {
+				if model.IsCapabilityRef(capID) {
+					subject := model.CapabilitySubject{Repo: t.Target, Kind: model.CapabilityRunTask}
+					if err := policy.Permits(capID, subject, configured); err != nil {
+						return validationErrorf("%v", err)
+					}
+				}
+				return c.catalogueEditRefusal(ctx, t, capID)
+			}
+			for _, capID := range session.Capabilities {
+				if capID == "" || existingByCap[capID] {
+					continue
+				}
+				if err := checkNewCapability(*openTask, capID); err != nil {
+					return nil, err
+				}
+				checkedCaps[capID] = true
+			}
+		}
+	}
+	if writable {
+		cfg.ConsoleSessions = sessions
+		if err := c.Store.PutConfig(ctx, cfg); err != nil {
+			return nil, err
+		}
+	}
+	if openTask != nil {
 		if err := c.Store.UpdateTask(ctx, openTask.ID, func(t *model.Task) error {
 			if req.Title != nil {
 				t.Title = model.ConsoleSessionTitle(session)
 			}
 			if req.Capabilities != nil {
-				existingByCap := make(map[string]bool, len(t.Grants))
+				held := make(map[string]bool, len(t.Grants))
 				for _, g := range t.Grants {
-					existingByCap[g.Capability] = true
-				}
-				policy, configured, err := c.capabilityPolicyFor(ctx)
-				if err != nil {
-					return err
+					held[g.Capability] = true
 				}
 				for _, capID := range session.Capabilities {
-					if capID == "" || existingByCap[capID] {
+					if capID == "" || held[capID] || checkedCaps[capID] {
 						continue
 					}
-					if model.IsCapabilityRef(capID) {
-						subject := model.CapabilitySubject{Repo: t.Target, Kind: model.CapabilityRunTask}
-						if err := policy.Permits(capID, subject, configured); err != nil {
-							return validationErrorf("%v", err)
-						}
-					}
-					if err := c.catalogueEditRefusal(ctx, *t, capID); err != nil {
+					if err := checkNewCapability(*t, capID); err != nil {
 						return err
 					}
 				}
@@ -720,7 +809,7 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 				t.Grants = newGrants
 			}
 			if req.NetworkAccess != nil {
-				t.NetworkAccess = model.ConsoleSessionNetworkAccess(session, !c.Config.SandboxShapeIgnored)
+				t.NetworkAccess = model.ConsoleSessionNetworkAccess(session, c.sandboxesIsolateNetwork())
 			}
 			if req.TasksApproved != nil {
 				t.AutoApproveProposals = *req.TasksApproved
@@ -782,12 +871,13 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 				Capabilities:    session.Capabilities,
 				Reads:           session.Reads,
 				Writes:          session.Writes,
-				NetworkAccess:   model.ConsoleSessionNetworkAccess(session, !c.Config.SandboxShapeIgnored),
+				NetworkAccess:   model.ConsoleSessionNetworkAccess(session, c.sandboxesIsolateNetwork()),
 				Model:           strings.TrimSpace(session.Model),
 				Title:           model.ConsoleSessionTitle(session),
 				TasksApproved:   session.TasksApproved,
 				KeepRunning:     session.KeepRunning,
 				GoogleChatSpace: session.GoogleChatSpace,
+				OfferedDefaults: model.ConsoleSessionDefaultGrants(),
 				AutoReads:       autoReads,
 			}); err != nil {
 				return nil, err
@@ -817,7 +907,7 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 				Capabilities:    prevCaps,
 				Reads:           prevReads,
 				Writes:          prevWrites,
-				NetworkAccess:   model.ConsoleSessionNetworkAccess(origSession, !c.Config.SandboxShapeIgnored),
+				NetworkAccess:   model.ConsoleSessionNetworkAccess(origSession, c.sandboxesIsolateNetwork()),
 				Model:           strings.TrimSpace(origSession.Model),
 				Title:           model.ConsoleSessionTitle(origSession),
 				TasksApproved:   origSession.TasksApproved,
@@ -827,12 +917,6 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 			}); err != nil {
 				return nil, err
 			}
-		}
-	}
-	if writable {
-		cfg.ConsoleSessions = sessions
-		if err := c.Store.PutConfig(ctx, cfg); err != nil {
-			return nil, err
 		}
 	}
 	// An open session's edit went to its task without the settings guard
@@ -887,7 +971,7 @@ func (c *Client) ensureConsoleSessionSnapshot(ctx context.Context, task model.Ta
 		Capabilities:    prevCaps,
 		Reads:           task.Reads,
 		Writes:          task.Writes,
-		NetworkAccess:   model.ConsoleSessionNetworkAccess(session, !c.Config.SandboxShapeIgnored),
+		NetworkAccess:   model.ConsoleSessionNetworkAccess(session, c.sandboxesIsolateNetwork()),
 		Model:           strings.TrimSpace(session.Model),
 		Title:           model.ConsoleSessionTitle(session),
 		TasksApproved:   session.TasksApproved,
@@ -895,6 +979,21 @@ func (c *Client) ensureConsoleSessionSnapshot(ctx context.Context, task model.Ta
 		GoogleChatSpace: session.GoogleChatSpace,
 		OfferedDefaults: consoleSessionHeldDefaults(task.Grants),
 	})
+}
+
+// sandboxesIsolateNetwork reports whether this deployment's sandbox backend can
+// honour model.NetworkNone, matching orchestrator.sandboxesIsolateNetwork.
+// ContainerSandboxes and plain K8sSandboxes apply a shape (SandboxShapeIgnored
+// is false) yet still cannot withhold a network, while DisabledSandboxes skips
+// shape (SandboxShapeIgnored is true) yet preserves configured NetworkNone
+// (IsolatesNetwork is true), so Config.Sandboxes (daemon.SandboxHealthAdapter)
+// is asked first when it answers; !SandboxShapeIgnored is the fallback for
+// callers and tests that configure no Sandboxes handle.
+func (c *Client) sandboxesIsolateNetwork() bool {
+	if iso, ok := c.Config.Sandboxes.(interface{ IsolatesNetwork() bool }); ok {
+		return iso.IsolatesNetwork()
+	}
+	return !c.Config.SandboxShapeIgnored
 }
 
 // consoleSessionHeldDefaults is the model.ConsoleSessionDefaultGrants a
@@ -1123,7 +1222,7 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 	}
 	taskID, err := model.FileConsoleSessionTask(ctx, c.Store, newSession, model.FileConsoleSessionOptions{
 		StateRepo:       c.stateRepoRef(),
-		NetworkIsolates: !c.Config.SandboxShapeIgnored,
+		NetworkIsolates: c.sandboxesIsolateNetwork(),
 		Now:             now,
 	})
 	if err != nil {
@@ -1190,6 +1289,7 @@ func (c *Client) stopAndCloseConsoleSessionTask(ctx context.Context, taskID stri
 		if err != nil {
 			return err
 		}
+		finishedAny := false
 		for i := range runs {
 			if runs[i].FinishedAt != nil {
 				continue
@@ -1197,6 +1297,10 @@ func (c *Client) stopAndCloseConsoleSessionTask(ctx context.Context, taskID stri
 			if err := c.Store.FinishRun(ctx, runs[i].ID, now, "cancelled", "cancelled by user"); err != nil {
 				return err
 			}
+			finishedAny = true
+		}
+		if finishedAny && c.Config.TaskCanceller != nil {
+			c.Config.TaskCanceller.CancelTask(ctx, taskID)
 		}
 	}
 	obs, err := c.Store.GetObservation(ctx, taskID)
@@ -1255,7 +1359,7 @@ func (c *Client) RestartConsoleSession(ctx context.Context, id string, req Resta
 	}
 	if _, err := model.FileConsoleSessionTask(ctx, c.Store, session, model.FileConsoleSessionOptions{
 		StateRepo:            c.stateRepoRef(),
-		NetworkIsolates:      !c.Config.SandboxShapeIgnored,
+		NetworkIsolates:      c.sandboxesIsolateNetwork(),
 		PreviousTaskID:       previous,
 		CarryHandoverSummary: req.CarryHandover && previous != "",
 		Now:                  c.now(),

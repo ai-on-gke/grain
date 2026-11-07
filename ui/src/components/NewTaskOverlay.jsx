@@ -30,8 +30,6 @@ import {
   FormControl,
   FormControlLabel,
   FormHelperText,
-  InputLabel,
-  ListItemText,
   MenuItem,
   Select,
   Stack,
@@ -580,14 +578,9 @@ export default function NewTaskOverlay({
       ? draft.reviewers.join(", ")
       : (draft?.reviewers ?? ""),
   );
+  const [owner, setOwner] = useState(() => String(draft?.owner ?? ""));
   const [promptExtension, setPromptExtension] = useState(
     () => draft?.promptExtension ?? String(openingDefault("promptExtension")),
-  );
-  // hostd pins the task's host work to one grain hostd by name, or to
-  // any hostd carrying label=value[,label=value] (ui.CreateTaskRequest.
-  // Hostd); "" is the default hostd.
-  const [hostd, setHostd] = useState(
-    () => draft?.hostd ?? String(openingDefault("hostd")),
   );
   const openingShape = sandboxShapeDefault(openingForm.fields.sandboxShape);
   const [sandboxCpus, setSandboxCpus] = useState(
@@ -740,7 +733,6 @@ export default function NewTaskOverlay({
       String(openingDefault("promptExtension")).trim()
     )
       return true;
-    if (hostd.trim() !== String(openingDefault("hostd")).trim()) return true;
     const shapeDiffers = (v, d) => String(v || 0) !== String(d || 0);
     if (shapeDiffers(sandboxCpus, openingShape.cpus)) return true;
     if (shapeDiffers(sandboxMemoryMb, openingShape.memoryMb)) return true;
@@ -806,7 +798,6 @@ export default function NewTaskOverlay({
         reviewTemplateId,
         reviewers,
         promptExtension,
-        hostd,
         sandboxCpus,
         sandboxMemoryMb,
         sandboxDiskGb,
@@ -842,7 +833,6 @@ export default function NewTaskOverlay({
     reviewTemplateId,
     reviewers,
     promptExtension,
-    hostd,
     sandboxCpus,
     sandboxMemoryMb,
     sandboxDiskGb,
@@ -885,7 +875,6 @@ export default function NewTaskOverlay({
       nothingNeededAction: (v) => setNothingNeededAction(String(v ?? "")),
       reviewTemplateId: (v) => setReviewTemplateId(String(v ?? "")),
       promptExtension: (v) => setPromptExtension(String(v ?? "")),
-      hostd: (v) => setHostd(String(v ?? "")),
       approved: (v) => setApproved(!!v),
       atFront: (v) => setAtFront(!!v),
     };
@@ -930,7 +919,6 @@ export default function NewTaskOverlay({
       "nothingNeededAction",
       "reviewTemplateId",
       "promptExtension",
-      "hostd",
     ])
       if (hidden(id)) out[id] = String(d(id) ?? "");
     if (hidden("reads")) out.reads = asList(d("reads"));
@@ -975,8 +963,8 @@ export default function NewTaskOverlay({
     setNothingNeededAction(String(openingDefault("nothingNeededAction")));
     setReviewTemplateId(String(openingDefault("reviewTemplateId")));
     setReviewers("");
+    setOwner("");
     setPromptExtension(String(openingDefault("promptExtension")));
-    setHostd(String(openingDefault("hostd")));
     setSandboxCpus(openingShape.cpus);
     setSandboxMemoryMb(openingShape.memoryMb);
     setSandboxDiskGb(openingShape.diskGb);
@@ -1071,6 +1059,7 @@ export default function NewTaskOverlay({
       noRepo: none && !ct,
       ...(ct ? { changeTarget: { kind: ct } } : {}),
       ...(parsedReviewers.length > 0 ? { reviewers: parsedReviewers } : {}),
+      ...(owner.trim() ? { owner: owner.trim() } : {}),
       ...(creating
         ? {
             base: newBranchName.trim(),
@@ -1110,9 +1099,6 @@ export default function NewTaskOverlay({
       // it empty the run gets whatever the deployment and the repo say
       // (model.Task.PromptExtension).
       promptExtension: promptExtension || "",
-      // Sent only when set: "" is the default hostd
-      // (ui.CreateTaskRequest.Hostd).
-      ...(hostd.trim() ? { hostd: hostd.trim() } : {}),
       // "" is no review at all, which is what most tasks want and what
       // the picker below starts on (model.Task.ReviewTemplateID).
       reviewTemplateId: (templates || []).length === 0 ? "" : reviewTemplateId,
@@ -1212,7 +1198,6 @@ export default function NewTaskOverlay({
       setReviewTemplateId(String(openingDefault("reviewTemplateId")));
       setReviewers("");
       setPromptExtension(String(openingDefault("promptExtension")));
-      setHostd(String(openingDefault("hostd")));
       setSandboxCpus(openingShape.cpus);
       setSandboxMemoryMb(openingShape.memoryMb);
       setSandboxDiskGb(openingShape.diskGb);
@@ -1543,6 +1528,17 @@ export default function NewTaskOverlay({
   const reviewersNode = (
     <>
       <TextField
+        name="owner"
+        label="Owner"
+        placeholder="defaults to you"
+        helperText="optional -- account responsible for this task (defaults to the caller)"
+        fullWidth
+        margin="normal"
+        size="small"
+        value={owner}
+        onChange={(e) => setOwner(e.target.value)}
+      />
+      <TextField
         name="reviewers"
         label="Reviewers"
         placeholder="alice, bob"
@@ -1655,77 +1651,59 @@ export default function NewTaskOverlay({
   const grantsNode = (
     <>
       <FormControl fullWidth margin="normal" size="small">
-        <InputLabel id="new-task-capabilities-label">
-          Legacy capabilities
-        </InputLabel>
-        <Select
-          labelId="new-task-capabilities-label"
-          label="Legacy capabilities"
+        <SearchSelect
           multiple
+          label="Legacy capabilities"
+          inputProps={{ "data-testid": "new-task-capabilities" }}
           value={capabilityIds}
-          onChange={(e) => {
+          onChange={(next) => {
             capabilitiesEdited.current = true;
-            setCapabilities([...e.target.value, ...apiIds, ...capabilityRefs]);
+            setCapabilities([...next, ...apiIds, ...capabilityRefs]);
           }}
-          renderValue={(selected) => (
-            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-              {selected.map((id) => (
-                <GrantChip
-                  key={id}
-                  grant={id}
-                  config={config}
-                  tabIndex={-1}
-                  // Marked by its border and icon, its label left at
-                  // full contrast: warning-coloured text on a light
-                  // chip is too faint to read at this size.
-                  {...(catalogueRefusals[id]
-                    ? {
-                        note: catalogueRefusals[id],
-                        variant: "outlined",
-                        icon: (
-                          <WarningAmberIcon fontSize="small" color="warning" />
-                        ),
-                        sx: { borderColor: "warning.main" },
-                        ariaSuffix: " (refused here)",
-                        "data-catalogue-refused": "true",
-                      }
-                    : {})}
-                />
-              ))}
-            </Box>
-          )}
-        >
-          {capabilityOptions.length === 0 && (
-            <MenuItem disabled>{NO_CAPABILITIES_HINT}</MenuItem>
-          )}
-          {capabilityOptions.map((c) => {
+          noOptionsText={
+            capabilityOptions.length === 0 ? NO_CAPABILITIES_HINT : "No matches"
+          }
+          options={capabilityOptions.map((c) => {
             const refused = catalogueRefusals[c.id] || "";
             const unavailable = refused || capabilityUnavailableHint(c);
-            return (
-              <MenuItem
-                key={c.id}
-                value={c.id}
-                // One the catalogue refuses here is not offered, but
-                // one already ticked stays enabled: its own row is
-                // the only way to untick it.
-                disabled={Boolean(refused) && !capabilityIds.includes(c.id)}
-                data-catalogue-refused={refused ? "true" : undefined}
-                title={
-                  unavailable
-                    ? `${c.description}\n\n${unavailable}`
-                    : c.description
-                }
-              >
-                <Checkbox checked={capabilityIds.includes(c.id)} size="small" />
-                <ListItemText
-                  primary={c.name}
-                  secondary={unavailable || null}
-                  secondaryTypographyProps={{ color: "warning.main" }}
-                />
-              </MenuItem>
-            );
+            return {
+              value: c.id,
+              label: c.name,
+              // One the catalogue refuses here is not offered, but one
+              // already ticked stays enabled: its own row is the only
+              // way to untick it.
+              disabled: Boolean(refused) && !capabilityIds.includes(c.id),
+              title: unavailable
+                ? `${c.description}\n\n${unavailable}`
+                : c.description,
+              secondary: unavailable ? (
+                <Box component="span" sx={{ color: "warning.main" }}>
+                  {unavailable}
+                </Box>
+              ) : null,
+            };
           })}
-        </Select>
+          renderChip={(o, props) => (
+            <GrantChip
+              grant={o.value}
+              config={config}
+              {...props}
+              // Marked by its border and icon, its label left at full
+              // contrast: warning-coloured text on a light chip is too
+              // faint to read at this size.
+              {...(catalogueRefusals[o.value]
+                ? {
+                    note: catalogueRefusals[o.value],
+                    variant: "outlined",
+                    icon: <WarningAmberIcon fontSize="small" color="warning" />,
+                    sx: { borderColor: "warning.main" },
+                    ariaSuffix: " (refused here)",
+                    "data-catalogue-refused": "true",
+                  }
+                : {})}
+            />
+          )}
+        />
         {defaultCapabilitiesFor(config, noRepo ? "" : repo).length > 0 && (
           <FormHelperText>
             Pre-ticked ones are the defaults for this repo -- this
@@ -2052,26 +2030,6 @@ export default function NewTaskOverlay({
       )}
     </>
   );
-  const hostdNode = (
-    <TextField
-      name="hostd"
-      label={F.hostd.label || "Hostd"}
-      helperText={
-        F.hostd.helpText ||
-        "Where this task's host work runs: a hostd's name, or label=value[,label=value] for any hostd carrying them. It waits for that hostd rather than running anywhere else. Leave empty for the default hostd."
-      }
-      autoComplete="off"
-      fullWidth
-      margin="normal"
-      size="small"
-      value={hostd}
-      // Left empty, a task filed from a template takes the template's
-      // hostd (ui.Client.fromTemplate), so the box says which.
-      placeholder={pickedTemplate?.hostd || undefined}
-      InputLabelProps={pickedTemplate?.hostd ? { shrink: true } : undefined}
-      onChange={(e) => edit("hostd", setHostd)(e.target.value)}
-    />
-  );
   const sandboxShapeNode = (
     <>
       {/* grain/task-26: on a deployment whose sandboxes have no
@@ -2330,7 +2288,6 @@ export default function NewTaskOverlay({
     nothingNeededAction: nothingNeededActionNode,
     reviewTemplateId: reviewTemplateIdNode,
     promptExtension: promptExtensionNode,
-    hostd: hostdNode,
     sandboxShape: sandboxShapeNode,
     approved: approvedNode,
     atFront: atFrontNode,

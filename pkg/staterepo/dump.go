@@ -220,10 +220,13 @@ func Export(ctx context.Context, db *sql.DB, dir string) error {
 // per-call logs pruned locally after their retention window.
 var LocalTables = map[string]bool{
 	"task_run_api_call": true,
-	// The digests of each remote hostd's tokens (model.Hostd): the
-	// registry itself is exported, its credentials are not, and a store
-	// restored from the repository mints them again (Rotate).
-	"hostd_token": true,
+	// The digests of each remote hostd's tokens, shared enrollment codes,
+	// and pending pairing-code join requests (model.Hostd,
+	// model.HostEnrollmentCode, model.HostJoinRequest): the registry itself
+	// is exported, its credentials and in-flight handshakes are not.
+	"hostd_token":          true,
+	"host_enrollment_code": true,
+	"host_join_request":    true,
 }
 
 // exportAll is Export's body, against whatever is already reading: the
@@ -642,6 +645,9 @@ func importInto(ctx context.Context, db *sql.DB, dir string, tables []string, wi
 			return fmt.Errorf("staterepo: clearing %s: %w", t, err)
 		}
 	}
+	if err := model.SuspendTaskOwnerConstraintForImport(ctx, tx); err != nil {
+		return fmt.Errorf("staterepo: suspending task owner constraint: %w", err)
+	}
 	for _, t := range tables {
 		if err := importTable(ctx, tx, dir, t, withhold, found); err != nil {
 			return err
@@ -660,6 +666,18 @@ func importInto(ctx context.Context, db *sql.DB, dir string, tables []string, wi
 	// migration's own number: the rows were never in a store that ran them.
 	if found > 0 && found < model.SchemaVersion {
 		if err := model.ApplyDataMigrations(ctx, tx, found); err != nil {
+			return fmt.Errorf("staterepo: %w", err)
+		}
+	} else {
+		// One-release compatibility (schema 109): accept old-form gcp#gcp-key
+		// grants carrying "account" or "activate" in grain/config files at the
+		// current schema so applying them does not fail, and rewrite them in
+		// the database so the next export writes canonical permission_set
+		// grants. Remove in the next release's schema so old forms are refused.
+		if err := model.MigrateGCPKeyGrantArgs(ctx, tx); err != nil {
+			return fmt.Errorf("staterepo: %w", err)
+		}
+		if err := model.MigrateTaskOwnerAndProposer(ctx, tx); err != nil {
 			return fmt.Errorf("staterepo: %w", err)
 		}
 	}

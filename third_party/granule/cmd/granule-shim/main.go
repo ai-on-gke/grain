@@ -68,15 +68,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/config"
-	"github.com/bwsalmon/granule/pkg/extents"
-	"github.com/bwsalmon/granule/pkg/guestcp"
-	"github.com/bwsalmon/granule/pkg/guestexec"
-	"github.com/bwsalmon/granule/pkg/guestimage"
-	"github.com/bwsalmon/granule/pkg/hypervisor"
-	"github.com/bwsalmon/granule/pkg/memagent"
-	"github.com/bwsalmon/granule/pkg/netshim"
-	"github.com/bwsalmon/granule/pkg/workloadio"
+	"github.com/gke-labs/granule/pkg/config"
+	"github.com/gke-labs/granule/pkg/extents"
+	"github.com/gke-labs/granule/pkg/guestcp"
+	"github.com/gke-labs/granule/pkg/guestexec"
+	"github.com/gke-labs/granule/pkg/guestimage"
+	"github.com/gke-labs/granule/pkg/hypervisor"
+	"github.com/gke-labs/granule/pkg/memagent"
+	"github.com/gke-labs/granule/pkg/netshim"
+	"github.com/gke-labs/granule/pkg/workloadio"
 )
 
 func main() {
@@ -110,11 +110,6 @@ func main() {
 	case "cp":
 		log.SetPrefix("granule: cp: ")
 		if err := runCp(os.Args[2:]); err != nil {
-			log.Fatalf("%v", err)
-		}
-	case "forward":
-		log.SetPrefix("granule: forward: ")
-		if err := runForward(os.Args[2:]); err != nil {
 			log.Fatalf("%v", err)
 		}
 	case "forward-stdio":
@@ -725,26 +720,6 @@ func runExec(args []string) error {
 		}
 		return guestexec.Run(ctx, cfg, opts.Command, os.Stdin, os.Stdout, os.Stderr)
 	})
-}
-
-// runForward bridges a multiplexed TCP port-forwarding session between this
-// container's stdin/stdout and the guest agent over vsock.
-func runForward(args []string) error {
-	opts, err := guestexec.ParseForwardArgs(args)
-	if errors.Is(err, flag.ErrHelp) {
-		fmt.Println(guestexec.ForwardUsage)
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	cfg, err := guestexec.FromEnv()
-	if err != nil {
-		return err
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-	return guestexec.Forward(ctx, cfg, opts.Remotes, os.Stdin, os.Stdout)
 }
 
 // runReady answers one question about this container's own VM -- is the

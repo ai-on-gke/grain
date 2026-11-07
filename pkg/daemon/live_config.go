@@ -154,6 +154,9 @@ type LiveConfig struct {
 	// pinned task's run is routed to; Refresh hands it each mcp_servers
 	// too. Nil beside a nil capabilityServers.
 	hostdCapabilityServers *hostdCapabilityServers
+	// registry is the background grain registry manager (registry.go);
+	// Refresh notifies it whenever grain_config.registry or target_repos changes.
+	registry *RegistryManager
 
 	Mu      sync.Mutex
 	Applied Config
@@ -198,12 +201,28 @@ func (l *LiveConfig) WithCapabilityServers(r *servers.Registry) *LiveConfig {
 	return l
 }
 
+// WithRegistry hands Refresh the background registry manager to wake whenever
+// grain_config.registry or target_repos changes.
+func (l *LiveConfig) WithRegistry(r *RegistryManager) *LiveConfig {
+	l.registry = r
+	return l
+}
+
+// Registry returns the background registry manager attached to l, or nil.
+func (l *LiveConfig) Registry() *RegistryManager {
+	if l == nil {
+		return nil
+	}
+	return l.registry
+}
+
 // withHostdCapabilityServers hands Refresh the hostds' registries of run:
 // host servers (hostdCapabilityServers) beside the deployment's.
 func (l *LiveConfig) withHostdCapabilityServers(h *hostdCapabilityServers) *LiveConfig {
 	if h != nil {
 		// Each run routed by the configuration as it stands.
 		h.live = l.Current
+		go h.attachConnected()
 	}
 	l.hostdCapabilityServers = h
 	return l
@@ -452,8 +471,11 @@ func (l *LiveConfig) Refresh(ctx context.Context, deps *orchestrator.Deps) (poll
 	// goroutine (pkg/capability/servers).
 	if l.capabilityServers != nil {
 		configured := registerBuiltinCapabilityServers(ctx, l.store, now.DataDir, stored.MCPServers)
-		l.capabilityServers.Update(configured)
+		l.capabilityServers.Update(deploymentCapabilityServers(configured))
 		l.hostdCapabilityServers.update(configured)
+	}
+	if l.registry != nil {
+		l.registry.NotifyStoreConfig(stored.Registry, stored.TargetRepos)
 	}
 
 	wasCPUOvercommit, wasMemOvercommit := was.overcommitRatios()
@@ -494,7 +516,7 @@ func (l *LiveConfig) Refresh(ctx context.Context, deps *orchestrator.Deps) (poll
 		// resolving against it (deps is copied per cycle and per
 		// dispatch) rather than seeing one change underneath it.
 		deps.Config.Capabilities = newCapabilityRegistryWithStore(
-			l.store, now.LocalScriptsConfig(),
+			l.store,
 			CapabilityProviders(now, l.store, ModelProxies, l.githubTokens, l.gitHubCredentialSource())...)
 	}
 	if now.GcpProject != was.GcpProject || now.GcpServiceAccountEmail != was.GcpServiceAccountEmail || now.IapBackendService != was.IapBackendService ||

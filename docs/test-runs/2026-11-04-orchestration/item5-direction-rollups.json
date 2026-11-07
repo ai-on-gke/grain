@@ -1,0 +1,893 @@
+{
+  "invalidPeriodResponse": {
+    "body": "{\"error\":\"\\\"bogus-window\\\" is not a rollup period grain counts: write a day (\\\"2026-11-04\\\"), an ISO week (\\\"2026-W38\\\") or a month (\\\"2026-11\\\")\"}",
+    "status": 400
+  },
+  "referenceClockUTC": "2026-11-04T15:00:00Z",
+  "timezoneProbeLA": {
+    "actualPeriod": "2026-11-03",
+    "clockUTC": "2026-11-04T02:30:00Z",
+    "configTimeZone": "America/Los_Angeles",
+    "expectedPeriod": "2026-11-03",
+    "since": "2026-11-03T08:00:00Z",
+    "until": "2026-11-04T08:00:00Z"
+  },
+  "windows": {
+    "(default_empty)": {
+      "period": "2026-W44",
+      "since": "2026-10-26T00:00:00Z",
+      "until": "2026-11-02T00:00:00Z",
+      "pullRequestsMerged": 2,
+      "pullRequestsMeasured": 2,
+      "linesAdded": 275,
+      "linesDeleted": 52,
+      "tasksCompleted": 2,
+      "tasksFiled": 2,
+      "runs": 2,
+      "runsSucceeded": 2,
+      "agentHours": 1.25,
+      "repos": [
+        {
+          "repo": "acme/widgets",
+          "pullRequestsMerged": 2,
+          "pullRequestsMeasured": 2,
+          "linesAdded": 275,
+          "linesDeleted": 52,
+          "tasksCompleted": 2,
+          "tasksFiled": 2,
+          "runs": 2
+        }
+      ],
+      "directions": [
+        {
+          "taskId": "100",
+          "title": "Migrate storage layer to connection pooling",
+          "repo": "acme/widgets",
+          "origin": "task:100",
+          "author": "alice@example.com",
+          "authorKind": "human",
+          "pullRequestsMerged": 2,
+          "pullRequestsMeasured": 2,
+          "linesAdded": 275,
+          "linesDeleted": 52,
+          "tasksCompleted": 2,
+          "tasksFiled": 2,
+          "tasksSpawned": 1,
+          "runs": 2,
+          "runsSucceeded": 2,
+          "agentHours": 1.25
+        }
+      ]
+    },
+    "2026-10": {
+      "period": "2026-10",
+      "since": "2026-10-01T00:00:00Z",
+      "until": "2026-11-01T00:00:00Z",
+      "pullRequestsMerged": 1,
+      "pullRequestsMeasured": 1,
+      "linesAdded": 180,
+      "linesDeleted": 40,
+      "tasksCompleted": 1,
+      "tasksFiled": 1,
+      "runs": 1,
+      "runsSucceeded": 1,
+      "agentHours": 0.5,
+      "repos": [
+        {
+          "repo": "acme/widgets",
+          "pullRequestsMerged": 1,
+          "pullRequestsMeasured": 1,
+          "linesAdded": 180,
+          "linesDeleted": 40,
+          "tasksCompleted": 1,
+          "tasksFiled": 1,
+          "runs": 1
+        }
+      ],
+      "directions": [
+        {
+          "taskId": "100",
+          "title": "Migrate storage layer to connection pooling",
+          "repo": "acme/widgets",
+          "author": "alice@example.com",
+          "authorKind": "human",
+          "pullRequestsMerged": 1,
+          "pullRequestsMeasured": 1,
+          "linesAdded": 180,
+          "linesDeleted": 40,
+          "tasksCompleted": 1,
+          "tasksFiled": 1,
+          "tasksSpawned": 0,
+          "runs": 1,
+          "runsSucceeded": 1,
+          "agentHours": 0.5
+        }
+      ]
+    },
+    "2026-11": {
+      "period": "2026-11",
+      "since": "2026-11-01T00:00:00Z",
+      "until": "2026-12-01T00:00:00Z",
+      "pullRequestsMerged": 4,
+      "pullRequestsMeasured": 4,
+      "linesAdded": 229,
+      "linesDeleted": 44,
+      "tasksCompleted": 6,
+      "tasksFiled": 6,
+      "runs": 7,
+      "runsSucceeded": 6,
+      "agentHours": 2.55,
+      "repos": [
+        {
+          "repo": "acme/widgets",
+          "pullRequestsMerged": 3,
+          "pullRequestsMeasured": 3,
+          "linesAdded": 165,
+          "linesDeleted": 36,
+          "tasksCompleted": 3,
+          "tasksFiled": 3,
+          "runs": 3
+        },
+        {
+          "repo": "acme/docs",
+          "pullRequestsMerged": 1,
+          "pullRequestsMeasured": 1,
+          "linesAdded": 64,
+          "linesDeleted": 8,
+          "tasksCompleted": 2,
+          "tasksFiled": 2,
+          "runs": 3
+        }
+      ],
+      "directions": [
+        {
+          "taskId": "100",
+          "title": "Migrate storage layer to connection pooling",
+          "repo": "acme/widgets",
+          "origin": "task:100",
+          "author": "alice@example.com",
+          "authorKind": "human",
+          "pullRequestsMerged": 3,
+          "pullRequestsMeasured": 3,
+          "linesAdded": 181,
+          "linesDeleted": 25,
+          "tasksCompleted": 3,
+          "tasksFiled": 3,
+          "tasksSpawned": 3,
+          "runs": 4,
+          "runsSucceeded": 3,
+          "agentHours": 1.75
+        },
+        {
+          "taskId": "200",
+          "title": "Sync upstream v1.3.0 release tag",
+          "repo": "acme/widgets",
+          "origin": "task:200",
+          "author": "schedule:sched-ref-1",
+          "authorKind": "automation",
+          "pullRequestsMerged": 1,
+          "pullRequestsMeasured": 1,
+          "linesAdded": 48,
+          "linesDeleted": 19,
+          "tasksCompleted": 2,
+          "tasksFiled": 2,
+          "tasksSpawned": 1,
+          "runs": 2,
+          "runsSucceeded": 2,
+          "agentHours": 0.6
+        },
+        {
+          "taskId": "300",
+          "title": "Audit weekly flake budget across suites",
+          "author": "bob@example.com",
+          "authorKind": "human",
+          "pullRequestsMerged": 0,
+          "pullRequestsMeasured": 0,
+          "linesAdded": 0,
+          "linesDeleted": 0,
+          "tasksCompleted": 1,
+          "tasksFiled": 1,
+          "tasksSpawned": 0,
+          "runs": 1,
+          "runsSucceeded": 1,
+          "agentHours": 0.2
+        }
+      ]
+    },
+    "2026-11-03": {
+      "period": "2026-11-03",
+      "since": "2026-11-03T00:00:00Z",
+      "until": "2026-11-04T00:00:00Z",
+      "pullRequestsMerged": 1,
+      "pullRequestsMeasured": 1,
+      "linesAdded": 64,
+      "linesDeleted": 8,
+      "tasksCompleted": 1,
+      "tasksFiled": 1,
+      "runs": 2,
+      "runsSucceeded": 1,
+      "agentHours": 0.5,
+      "repos": [
+        {
+          "repo": "acme/docs",
+          "pullRequestsMerged": 1,
+          "pullRequestsMeasured": 1,
+          "linesAdded": 64,
+          "linesDeleted": 8,
+          "tasksCompleted": 1,
+          "tasksFiled": 1,
+          "runs": 2
+        }
+      ],
+      "directions": [
+        {
+          "taskId": "100",
+          "title": "Migrate storage layer to connection pooling",
+          "repo": "acme/widgets",
+          "origin": "task:100",
+          "author": "alice@example.com",
+          "authorKind": "human",
+          "pullRequestsMerged": 1,
+          "pullRequestsMeasured": 1,
+          "linesAdded": 64,
+          "linesDeleted": 8,
+          "tasksCompleted": 1,
+          "tasksFiled": 1,
+          "tasksSpawned": 1,
+          "runs": 2,
+          "runsSucceeded": 1,
+          "agentHours": 0.5
+        }
+      ]
+    },
+    "2026-11-04": {
+      "period": "2026-11-04",
+      "since": "2026-11-04T00:00:00Z",
+      "until": "2026-11-05T00:00:00Z",
+      "pullRequestsMerged": 2,
+      "pullRequestsMeasured": 2,
+      "linesAdded": 70,
+      "linesDeleted": 24,
+      "tasksCompleted": 4,
+      "tasksFiled": 4,
+      "runs": 4,
+      "runsSucceeded": 4,
+      "agentHours": 1.3,
+      "repos": [
+        {
+          "repo": "acme/widgets",
+          "pullRequestsMerged": 2,
+          "pullRequestsMeasured": 2,
+          "linesAdded": 70,
+          "linesDeleted": 24,
+          "tasksCompleted": 2,
+          "tasksFiled": 2,
+          "runs": 2
+        },
+        {
+          "repo": "acme/docs",
+          "pullRequestsMerged": 0,
+          "pullRequestsMeasured": 0,
+          "linesAdded": 0,
+          "linesDeleted": 0,
+          "tasksCompleted": 1,
+          "tasksFiled": 1,
+          "runs": 1
+        }
+      ],
+      "directions": [
+        {
+          "taskId": "200",
+          "title": "Sync upstream v1.3.0 release tag",
+          "repo": "acme/widgets",
+          "origin": "task:200",
+          "author": "schedule:sched-ref-1",
+          "authorKind": "automation",
+          "pullRequestsMerged": 1,
+          "pullRequestsMeasured": 1,
+          "linesAdded": 48,
+          "linesDeleted": 19,
+          "tasksCompleted": 2,
+          "tasksFiled": 2,
+          "tasksSpawned": 1,
+          "runs": 2,
+          "runsSucceeded": 2,
+          "agentHours": 0.6
+        },
+        {
+          "taskId": "100",
+          "title": "Migrate storage layer to connection pooling",
+          "repo": "acme/widgets",
+          "origin": "task:100",
+          "author": "alice@example.com",
+          "authorKind": "human",
+          "pullRequestsMerged": 1,
+          "pullRequestsMeasured": 1,
+          "linesAdded": 22,
+          "linesDeleted": 5,
+          "tasksCompleted": 1,
+          "tasksFiled": 1,
+          "tasksSpawned": 1,
+          "runs": 1,
+          "runsSucceeded": 1,
+          "agentHours": 0.5
+        },
+        {
+          "taskId": "300",
+          "title": "Audit weekly flake budget across suites",
+          "author": "bob@example.com",
+          "authorKind": "human",
+          "pullRequestsMerged": 0,
+          "pullRequestsMeasured": 0,
+          "linesAdded": 0,
+          "linesDeleted": 0,
+          "tasksCompleted": 1,
+          "tasksFiled": 1,
+          "tasksSpawned": 0,
+          "runs": 1,
+          "runsSucceeded": 1,
+          "agentHours": 0.2
+        }
+      ]
+    },
+    "2026-W43": {
+      "period": "2026-W43",
+      "since": "2026-10-19T00:00:00Z",
+      "until": "2026-10-26T00:00:00Z",
+      "pullRequestsMerged": 0,
+      "pullRequestsMeasured": 0,
+      "linesAdded": 0,
+      "linesDeleted": 0,
+      "tasksCompleted": 0,
+      "tasksFiled": 0,
+      "runs": 0,
+      "runsSucceeded": 0,
+      "agentHours": 0,
+      "repos": [],
+      "directions": []
+    },
+    "2026-W44": {
+      "period": "2026-W44",
+      "since": "2026-10-26T00:00:00Z",
+      "until": "2026-11-02T00:00:00Z",
+      "pullRequestsMerged": 2,
+      "pullRequestsMeasured": 2,
+      "linesAdded": 275,
+      "linesDeleted": 52,
+      "tasksCompleted": 2,
+      "tasksFiled": 2,
+      "runs": 2,
+      "runsSucceeded": 2,
+      "agentHours": 1.25,
+      "repos": [
+        {
+          "repo": "acme/widgets",
+          "pullRequestsMerged": 2,
+          "pullRequestsMeasured": 2,
+          "linesAdded": 275,
+          "linesDeleted": 52,
+          "tasksCompleted": 2,
+          "tasksFiled": 2,
+          "runs": 2
+        }
+      ],
+      "directions": [
+        {
+          "taskId": "100",
+          "title": "Migrate storage layer to connection pooling",
+          "repo": "acme/widgets",
+          "origin": "task:100",
+          "author": "alice@example.com",
+          "authorKind": "human",
+          "pullRequestsMerged": 2,
+          "pullRequestsMeasured": 2,
+          "linesAdded": 275,
+          "linesDeleted": 52,
+          "tasksCompleted": 2,
+          "tasksFiled": 2,
+          "tasksSpawned": 1,
+          "runs": 2,
+          "runsSucceeded": 2,
+          "agentHours": 1.25
+        }
+      ]
+    },
+    "2026-W45": {
+      "period": "2026-W45",
+      "since": "2026-11-02T00:00:00Z",
+      "until": "2026-11-09T00:00:00Z",
+      "pullRequestsMerged": 3,
+      "pullRequestsMeasured": 3,
+      "linesAdded": 134,
+      "linesDeleted": 32,
+      "tasksCompleted": 5,
+      "tasksFiled": 5,
+      "runs": 6,
+      "runsSucceeded": 5,
+      "agentHours": 1.8,
+      "repos": [
+        {
+          "repo": "acme/widgets",
+          "pullRequestsMerged": 2,
+          "pullRequestsMeasured": 2,
+          "linesAdded": 70,
+          "linesDeleted": 24,
+          "tasksCompleted": 2,
+          "tasksFiled": 2,
+          "runs": 2
+        },
+        {
+          "repo": "acme/docs",
+          "pullRequestsMerged": 1,
+          "pullRequestsMeasured": 1,
+          "linesAdded": 64,
+          "linesDeleted": 8,
+          "tasksCompleted": 2,
+          "tasksFiled": 2,
+          "runs": 3
+        }
+      ],
+      "directions": [
+        {
+          "taskId": "100",
+          "title": "Migrate storage layer to connection pooling",
+          "repo": "acme/widgets",
+          "origin": "task:100",
+          "author": "alice@example.com",
+          "authorKind": "human",
+          "pullRequestsMerged": 2,
+          "pullRequestsMeasured": 2,
+          "linesAdded": 86,
+          "linesDeleted": 13,
+          "tasksCompleted": 2,
+          "tasksFiled": 2,
+          "tasksSpawned": 2,
+          "runs": 3,
+          "runsSucceeded": 2,
+          "agentHours": 1
+        },
+        {
+          "taskId": "200",
+          "title": "Sync upstream v1.3.0 release tag",
+          "repo": "acme/widgets",
+          "origin": "task:200",
+          "author": "schedule:sched-ref-1",
+          "authorKind": "automation",
+          "pullRequestsMerged": 1,
+          "pullRequestsMeasured": 1,
+          "linesAdded": 48,
+          "linesDeleted": 19,
+          "tasksCompleted": 2,
+          "tasksFiled": 2,
+          "tasksSpawned": 1,
+          "runs": 2,
+          "runsSucceeded": 2,
+          "agentHours": 0.6
+        },
+        {
+          "taskId": "300",
+          "title": "Audit weekly flake budget across suites",
+          "author": "bob@example.com",
+          "authorKind": "human",
+          "pullRequestsMerged": 0,
+          "pullRequestsMeasured": 0,
+          "linesAdded": 0,
+          "linesDeleted": 0,
+          "tasksCompleted": 1,
+          "tasksFiled": 1,
+          "tasksSpawned": 0,
+          "runs": 1,
+          "runsSucceeded": 1,
+          "agentHours": 0.2
+        }
+      ]
+    },
+    "last-month": {
+      "period": "2026-10",
+      "since": "2026-10-01T00:00:00Z",
+      "until": "2026-11-01T00:00:00Z",
+      "pullRequestsMerged": 1,
+      "pullRequestsMeasured": 1,
+      "linesAdded": 180,
+      "linesDeleted": 40,
+      "tasksCompleted": 1,
+      "tasksFiled": 1,
+      "runs": 1,
+      "runsSucceeded": 1,
+      "agentHours": 0.5,
+      "repos": [
+        {
+          "repo": "acme/widgets",
+          "pullRequestsMerged": 1,
+          "pullRequestsMeasured": 1,
+          "linesAdded": 180,
+          "linesDeleted": 40,
+          "tasksCompleted": 1,
+          "tasksFiled": 1,
+          "runs": 1
+        }
+      ],
+      "directions": [
+        {
+          "taskId": "100",
+          "title": "Migrate storage layer to connection pooling",
+          "repo": "acme/widgets",
+          "author": "alice@example.com",
+          "authorKind": "human",
+          "pullRequestsMerged": 1,
+          "pullRequestsMeasured": 1,
+          "linesAdded": 180,
+          "linesDeleted": 40,
+          "tasksCompleted": 1,
+          "tasksFiled": 1,
+          "tasksSpawned": 0,
+          "runs": 1,
+          "runsSucceeded": 1,
+          "agentHours": 0.5
+        }
+      ]
+    },
+    "last-week": {
+      "period": "2026-W44",
+      "since": "2026-10-26T00:00:00Z",
+      "until": "2026-11-02T00:00:00Z",
+      "pullRequestsMerged": 2,
+      "pullRequestsMeasured": 2,
+      "linesAdded": 275,
+      "linesDeleted": 52,
+      "tasksCompleted": 2,
+      "tasksFiled": 2,
+      "runs": 2,
+      "runsSucceeded": 2,
+      "agentHours": 1.25,
+      "repos": [
+        {
+          "repo": "acme/widgets",
+          "pullRequestsMerged": 2,
+          "pullRequestsMeasured": 2,
+          "linesAdded": 275,
+          "linesDeleted": 52,
+          "tasksCompleted": 2,
+          "tasksFiled": 2,
+          "runs": 2
+        }
+      ],
+      "directions": [
+        {
+          "taskId": "100",
+          "title": "Migrate storage layer to connection pooling",
+          "repo": "acme/widgets",
+          "origin": "task:100",
+          "author": "alice@example.com",
+          "authorKind": "human",
+          "pullRequestsMerged": 2,
+          "pullRequestsMeasured": 2,
+          "linesAdded": 275,
+          "linesDeleted": 52,
+          "tasksCompleted": 2,
+          "tasksFiled": 2,
+          "tasksSpawned": 1,
+          "runs": 2,
+          "runsSucceeded": 2,
+          "agentHours": 1.25
+        }
+      ]
+    },
+    "this-month": {
+      "period": "2026-11",
+      "since": "2026-11-01T00:00:00Z",
+      "until": "2026-12-01T00:00:00Z",
+      "pullRequestsMerged": 4,
+      "pullRequestsMeasured": 4,
+      "linesAdded": 229,
+      "linesDeleted": 44,
+      "tasksCompleted": 6,
+      "tasksFiled": 6,
+      "runs": 7,
+      "runsSucceeded": 6,
+      "agentHours": 2.55,
+      "repos": [
+        {
+          "repo": "acme/widgets",
+          "pullRequestsMerged": 3,
+          "pullRequestsMeasured": 3,
+          "linesAdded": 165,
+          "linesDeleted": 36,
+          "tasksCompleted": 3,
+          "tasksFiled": 3,
+          "runs": 3
+        },
+        {
+          "repo": "acme/docs",
+          "pullRequestsMerged": 1,
+          "pullRequestsMeasured": 1,
+          "linesAdded": 64,
+          "linesDeleted": 8,
+          "tasksCompleted": 2,
+          "tasksFiled": 2,
+          "runs": 3
+        }
+      ],
+      "directions": [
+        {
+          "taskId": "100",
+          "title": "Migrate storage layer to connection pooling",
+          "repo": "acme/widgets",
+          "origin": "task:100",
+          "author": "alice@example.com",
+          "authorKind": "human",
+          "pullRequestsMerged": 3,
+          "pullRequestsMeasured": 3,
+          "linesAdded": 181,
+          "linesDeleted": 25,
+          "tasksCompleted": 3,
+          "tasksFiled": 3,
+          "tasksSpawned": 3,
+          "runs": 4,
+          "runsSucceeded": 3,
+          "agentHours": 1.75
+        },
+        {
+          "taskId": "200",
+          "title": "Sync upstream v1.3.0 release tag",
+          "repo": "acme/widgets",
+          "origin": "task:200",
+          "author": "schedule:sched-ref-1",
+          "authorKind": "automation",
+          "pullRequestsMerged": 1,
+          "pullRequestsMeasured": 1,
+          "linesAdded": 48,
+          "linesDeleted": 19,
+          "tasksCompleted": 2,
+          "tasksFiled": 2,
+          "tasksSpawned": 1,
+          "runs": 2,
+          "runsSucceeded": 2,
+          "agentHours": 0.6
+        },
+        {
+          "taskId": "300",
+          "title": "Audit weekly flake budget across suites",
+          "author": "bob@example.com",
+          "authorKind": "human",
+          "pullRequestsMerged": 0,
+          "pullRequestsMeasured": 0,
+          "linesAdded": 0,
+          "linesDeleted": 0,
+          "tasksCompleted": 1,
+          "tasksFiled": 1,
+          "tasksSpawned": 0,
+          "runs": 1,
+          "runsSucceeded": 1,
+          "agentHours": 0.2
+        }
+      ]
+    },
+    "this-week": {
+      "period": "2026-W45",
+      "since": "2026-11-02T00:00:00Z",
+      "until": "2026-11-09T00:00:00Z",
+      "pullRequestsMerged": 3,
+      "pullRequestsMeasured": 3,
+      "linesAdded": 134,
+      "linesDeleted": 32,
+      "tasksCompleted": 5,
+      "tasksFiled": 5,
+      "runs": 6,
+      "runsSucceeded": 5,
+      "agentHours": 1.8,
+      "repos": [
+        {
+          "repo": "acme/widgets",
+          "pullRequestsMerged": 2,
+          "pullRequestsMeasured": 2,
+          "linesAdded": 70,
+          "linesDeleted": 24,
+          "tasksCompleted": 2,
+          "tasksFiled": 2,
+          "runs": 2
+        },
+        {
+          "repo": "acme/docs",
+          "pullRequestsMerged": 1,
+          "pullRequestsMeasured": 1,
+          "linesAdded": 64,
+          "linesDeleted": 8,
+          "tasksCompleted": 2,
+          "tasksFiled": 2,
+          "runs": 3
+        }
+      ],
+      "directions": [
+        {
+          "taskId": "100",
+          "title": "Migrate storage layer to connection pooling",
+          "repo": "acme/widgets",
+          "origin": "task:100",
+          "author": "alice@example.com",
+          "authorKind": "human",
+          "pullRequestsMerged": 2,
+          "pullRequestsMeasured": 2,
+          "linesAdded": 86,
+          "linesDeleted": 13,
+          "tasksCompleted": 2,
+          "tasksFiled": 2,
+          "tasksSpawned": 2,
+          "runs": 3,
+          "runsSucceeded": 2,
+          "agentHours": 1
+        },
+        {
+          "taskId": "200",
+          "title": "Sync upstream v1.3.0 release tag",
+          "repo": "acme/widgets",
+          "origin": "task:200",
+          "author": "schedule:sched-ref-1",
+          "authorKind": "automation",
+          "pullRequestsMerged": 1,
+          "pullRequestsMeasured": 1,
+          "linesAdded": 48,
+          "linesDeleted": 19,
+          "tasksCompleted": 2,
+          "tasksFiled": 2,
+          "tasksSpawned": 1,
+          "runs": 2,
+          "runsSucceeded": 2,
+          "agentHours": 0.6
+        },
+        {
+          "taskId": "300",
+          "title": "Audit weekly flake budget across suites",
+          "author": "bob@example.com",
+          "authorKind": "human",
+          "pullRequestsMerged": 0,
+          "pullRequestsMeasured": 0,
+          "linesAdded": 0,
+          "linesDeleted": 0,
+          "tasksCompleted": 1,
+          "tasksFiled": 1,
+          "tasksSpawned": 0,
+          "runs": 1,
+          "runsSucceeded": 1,
+          "agentHours": 0.2
+        }
+      ]
+    },
+    "today": {
+      "period": "2026-11-04",
+      "since": "2026-11-04T00:00:00Z",
+      "until": "2026-11-05T00:00:00Z",
+      "pullRequestsMerged": 2,
+      "pullRequestsMeasured": 2,
+      "linesAdded": 70,
+      "linesDeleted": 24,
+      "tasksCompleted": 4,
+      "tasksFiled": 4,
+      "runs": 4,
+      "runsSucceeded": 4,
+      "agentHours": 1.3,
+      "repos": [
+        {
+          "repo": "acme/widgets",
+          "pullRequestsMerged": 2,
+          "pullRequestsMeasured": 2,
+          "linesAdded": 70,
+          "linesDeleted": 24,
+          "tasksCompleted": 2,
+          "tasksFiled": 2,
+          "runs": 2
+        },
+        {
+          "repo": "acme/docs",
+          "pullRequestsMerged": 0,
+          "pullRequestsMeasured": 0,
+          "linesAdded": 0,
+          "linesDeleted": 0,
+          "tasksCompleted": 1,
+          "tasksFiled": 1,
+          "runs": 1
+        }
+      ],
+      "directions": [
+        {
+          "taskId": "200",
+          "title": "Sync upstream v1.3.0 release tag",
+          "repo": "acme/widgets",
+          "origin": "task:200",
+          "author": "schedule:sched-ref-1",
+          "authorKind": "automation",
+          "pullRequestsMerged": 1,
+          "pullRequestsMeasured": 1,
+          "linesAdded": 48,
+          "linesDeleted": 19,
+          "tasksCompleted": 2,
+          "tasksFiled": 2,
+          "tasksSpawned": 1,
+          "runs": 2,
+          "runsSucceeded": 2,
+          "agentHours": 0.6
+        },
+        {
+          "taskId": "100",
+          "title": "Migrate storage layer to connection pooling",
+          "repo": "acme/widgets",
+          "origin": "task:100",
+          "author": "alice@example.com",
+          "authorKind": "human",
+          "pullRequestsMerged": 1,
+          "pullRequestsMeasured": 1,
+          "linesAdded": 22,
+          "linesDeleted": 5,
+          "tasksCompleted": 1,
+          "tasksFiled": 1,
+          "tasksSpawned": 1,
+          "runs": 1,
+          "runsSucceeded": 1,
+          "agentHours": 0.5
+        },
+        {
+          "taskId": "300",
+          "title": "Audit weekly flake budget across suites",
+          "author": "bob@example.com",
+          "authorKind": "human",
+          "pullRequestsMerged": 0,
+          "pullRequestsMeasured": 0,
+          "linesAdded": 0,
+          "linesDeleted": 0,
+          "tasksCompleted": 1,
+          "tasksFiled": 1,
+          "tasksSpawned": 0,
+          "runs": 1,
+          "runsSucceeded": 1,
+          "agentHours": 0.2
+        }
+      ]
+    },
+    "yesterday": {
+      "period": "2026-11-03",
+      "since": "2026-11-03T00:00:00Z",
+      "until": "2026-11-04T00:00:00Z",
+      "pullRequestsMerged": 1,
+      "pullRequestsMeasured": 1,
+      "linesAdded": 64,
+      "linesDeleted": 8,
+      "tasksCompleted": 1,
+      "tasksFiled": 1,
+      "runs": 2,
+      "runsSucceeded": 1,
+      "agentHours": 0.5,
+      "repos": [
+        {
+          "repo": "acme/docs",
+          "pullRequestsMerged": 1,
+          "pullRequestsMeasured": 1,
+          "linesAdded": 64,
+          "linesDeleted": 8,
+          "tasksCompleted": 1,
+          "tasksFiled": 1,
+          "runs": 2
+        }
+      ],
+      "directions": [
+        {
+          "taskId": "100",
+          "title": "Migrate storage layer to connection pooling",
+          "repo": "acme/widgets",
+          "origin": "task:100",
+          "author": "alice@example.com",
+          "authorKind": "human",
+          "pullRequestsMerged": 1,
+          "pullRequestsMeasured": 1,
+          "linesAdded": 64,
+          "linesDeleted": 8,
+          "tasksCompleted": 1,
+          "tasksFiled": 1,
+          "tasksSpawned": 1,
+          "runs": 2,
+          "runsSucceeded": 1,
+          "agentHours": 0.5
+        }
+      ]
+    }
+  }
+}

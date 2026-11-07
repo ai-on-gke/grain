@@ -28,6 +28,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/namespace"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -129,6 +130,50 @@ func TestDemoGitProxyServesNamespaceAndSandboxCLI(t *testing.T) {
 		code, body := getProxy(tc.path)
 		if code != http.StatusOK || !strings.Contains(body, tc.want) {
 			t.Errorf("GET %s = %d %q, want 200 containing %q", tc.path, code, body, tc.want)
+		}
+	}
+}
+
+func TestDemoUIServerServesAPIFsAndMergeQueueWithoutGitProxy(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sqlite.Open(sqlite.DefaultConfig(dir))
+	if err != nil {
+		t.Fatalf("opening embedded sqlite: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store := model.New(db)
+	ctx := context.Background()
+	if err := store.Init(ctx); err != nil {
+		t.Fatalf("applying schema: %v", err)
+	}
+	cfg := withAccessCode(ui.Config{
+		DataDir:  dir,
+		SourceDB: db,
+		DBDriver: "sqlite",
+		CI:       &demoFakeCI{},
+	})
+	cfg, err = configureSecretsDemo(dir, cfg)
+	if err != nil {
+		t.Fatalf("configureSecretsDemo: %v", err)
+	}
+	client := ui.NewClient(cfg, store)
+	uiSrv := ui.NewServerWithClient(client)
+	ns, nsCLI, nsAPI := newDemoNamespace(dir, store)
+	uiSrv.SetNamespace(func() *namespace.Server { return ns })
+	wireDemoNamespace(ns, nsCLI, nsAPI, uiSrv, client, cfg, store)
+
+	for _, tc := range []struct {
+		path string
+		want string
+	}{
+		{path: "/api/fs/config/settings/settings.yaml", want: "default_model: gemini-2.5-pro"},
+		{path: "/api/fs/deploy/merge-queue?format=json", want: "{"},
+	} {
+		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		rec := httptest.NewRecorder()
+		uiSrv.ServeHTTP(rec, presentAccessCode(req))
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), tc.want) {
+			t.Errorf("GET %s = %d %q, want 200 containing %q", tc.path, rec.Code, rec.Body.String(), tc.want)
 		}
 	}
 }

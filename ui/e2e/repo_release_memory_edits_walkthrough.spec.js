@@ -89,13 +89,13 @@ test.describe("Repository walkthrough regressions (2026-10-07)", () => {
     const original = await box.inputValue();
     await box.fill(`${original}\n- unsaved correction`);
 
-    const ci = page.getByRole("button", { name: /^CI\b/ }).first();
+    const inbox = page.getByRole("button", { name: /^Inbox\b/ }).first();
     let asked = "";
     page.once("dialog", (dialog) => {
       asked = dialog.message();
       dialog.dismiss();
     });
-    await ci.click();
+    await inbox.click();
     await expect.poll(() => asked).toContain("unsaved changes");
     await expect(page).toHaveURL(/\/memory$/);
     await expect(box).toHaveValue(`${original}\n- unsaved correction`);
@@ -120,8 +120,8 @@ test.describe("Repository walkthrough regressions (2026-10-07)", () => {
 
     // Saying yes leaves, and nothing was written.
     page.once("dialog", (dialog) => dialog.accept());
-    await ci.click();
-    await expect(page).toHaveURL(/\/ci$/);
+    await inbox.click();
+    await expect(page).toHaveURL(/\/inbox$/);
     await page.goto("/settings/memory");
     await expect(
       page.getByRole("textbox", {

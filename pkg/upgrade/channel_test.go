@@ -23,27 +23,27 @@ import (
 
 func TestChannelForRef(t *testing.T) {
 	for ref, want := range map[string]string{
-		"ghcr.io/bwsalmon/grain/grain:latest":                 "latest",
-		"ghcr.io/bwsalmon/grain/grain:latest@sha256:0123abcd": "latest",
-		"ghcr.io/bwsalmon/grain/grain:candidate":              "candidate",
-		"ghcr.io/bwsalmon/grain/grain:rc":                     "candidate",
-		"ghcr.io/bwsalmon/grain/grain:rc@sha256:0123abcd":     "candidate",
-		"ghcr.io/bwsalmon/grain/grain:main@sha256:0123abcd":   "main",
-		"ghcr.io/bwsalmon/grain/grain:v1.9.0":                 "latest",
-		"ghcr.io/bwsalmon/grain/grain:v2.0.0-google":          "latest",
-		"ghcr.io/bwsalmon/grain/grain:v2.0.0-oss":             "latest",
-		"ghcr.io/bwsalmon/grain/grain:v1.10.0-rc.1":           "candidate",
-		"ghcr.io/bwsalmon/grain/grain:v1.10.0-rc.1-discarded": "",
-		"ghcr.io/bwsalmon/grain/grain:v2.0.0-rc.1-google":     "candidate",
-		"ghcr.io/bwsalmon/grain/grain:v2.0.0-rc.1-oss":        "candidate",
-		"ghcr.io/bwsalmon/grain/grain:v2.0.0-google-rc.1":     "candidate",
-		"ghcr.io/bwsalmon/grain/grain:release..2.1":           "release/2.1",
-		"ghcr.io/bwsalmon/grain/grain:sha-1234567":            "",
-		"ghcr.io/bwsalmon/grain/grain@sha256:0123abcd":        "",
-		"localhost:5000/grain":                                "",
-		"localhost:5000/grain:candidate":                      "candidate",
-		"localhost:5000/grain:rc":                             "candidate",
-		"":                                                    "",
+		"docker.io/grainai/grain:latest":                 "latest",
+		"docker.io/grainai/grain:latest@sha256:0123abcd": "latest",
+		"docker.io/grainai/grain:candidate":              "candidate",
+		"docker.io/grainai/grain:rc":                     "candidate",
+		"docker.io/grainai/grain:rc@sha256:0123abcd":     "candidate",
+		"docker.io/grainai/grain:main@sha256:0123abcd":   "main",
+		"docker.io/grainai/grain:v1.9.0":                 "latest",
+		"docker.io/grainai/grain:v2.0.0-google":          "latest",
+		"docker.io/grainai/grain:v2.0.0-oss":             "latest",
+		"docker.io/grainai/grain:v1.10.0-rc.1":           "candidate",
+		"docker.io/grainai/grain:v1.10.0-rc.1-discarded": "",
+		"docker.io/grainai/grain:v2.0.0-rc.1-google":     "candidate",
+		"docker.io/grainai/grain:v2.0.0-rc.1-oss":        "candidate",
+		"docker.io/grainai/grain:v2.0.0-google-rc.1":     "candidate",
+		"docker.io/grainai/grain:release..2.1":           "release/2.1",
+		"docker.io/grainai/grain:sha-1234567":            "",
+		"docker.io/grainai/grain@sha256:0123abcd":        "",
+		"localhost:5000/grain":                           "",
+		"localhost:5000/grain:candidate":                 "candidate",
+		"localhost:5000/grain:rc":                        "candidate",
+		"":                                               "",
 	} {
 		if got := ChannelForRef(ref); got != want {
 			t.Errorf("ChannelForRef(%q) = %q, want %q", ref, got, want)
@@ -59,7 +59,7 @@ func TestChannelForRef(t *testing.T) {
 func TestTheOfferedUpgradeFollowsTheChannel(t *testing.T) {
 	refFile := filepath.Join(t.TempDir(), "image.env")
 	u := New(Config{
-		Image:    &ImageConfig{Repository: "ghcr.io/bwsalmon/grain/grain", RefFile: refFile},
+		Image:    &ImageConfig{Repository: "docker.io/grainai/grain", RefFile: refFile},
 		ListTags: func(context.Context, string) ([]string, error) { return []string{"latest", "v1.9.0"}, nil },
 	})
 
@@ -69,14 +69,14 @@ func TestTheOfferedUpgradeFollowsTheChannel(t *testing.T) {
 	}
 
 	for _, tc := range []struct{ ref, want string }{
-		{"ghcr.io/bwsalmon/grain/grain:latest@sha256:0123abcd", "latest"},
-		{"ghcr.io/bwsalmon/grain/grain:v1.9.0", "latest"},
-		{"ghcr.io/bwsalmon/grain/grain:v2.0.0-google", "latest"},
-		{"ghcr.io/bwsalmon/grain/grain:v2.0.0-rc.1-google", "candidate"},
-		{"ghcr.io/bwsalmon/grain/grain:candidate", "candidate"},
-		{"ghcr.io/bwsalmon/grain/grain:rc", "candidate"},
-		{"ghcr.io/bwsalmon/grain/grain:main", "main"},
-		{"ghcr.io/bwsalmon/grain/grain:sha-1234567", ""},
+		{"docker.io/grainai/grain:latest@sha256:0123abcd", "latest"},
+		{"docker.io/grainai/grain:v1.9.0", "latest"},
+		{"docker.io/grainai/grain:v2.0.0-google", "latest"},
+		{"docker.io/grainai/grain:v2.0.0-rc.1-google", "candidate"},
+		{"docker.io/grainai/grain:candidate", "candidate"},
+		{"docker.io/grainai/grain:rc", "candidate"},
+		{"docker.io/grainai/grain:main", "main"},
+		{"docker.io/grainai/grain:sha-1234567", ""},
 	} {
 		if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE="+tc.ref+"\n"), 0o644); err != nil {
 			t.Fatal(err)

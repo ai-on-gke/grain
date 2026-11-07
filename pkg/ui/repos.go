@@ -121,6 +121,7 @@ func (c *Client) AddTargetRepoForTeam(ctx context.Context, teamID, repo, cloneUR
 			return Settings{}, err
 		}
 	}
+	c.triggerRegistrySync()
 
 	return c.GetSettings(ctx)
 }
@@ -276,6 +277,7 @@ func (c *Client) RemoveTargetRepoForTeam(ctx context.Context, teamID, repo strin
 	}); err != nil {
 		return Settings{}, err
 	}
+	c.triggerRegistrySync()
 	return c.GetSettings(ctx)
 }
 
@@ -483,11 +485,6 @@ type RepoDefaults struct {
 	// renamed. It is never covered by a declaration, whatever is stored
 	// (forge.Unfixable.Covers), and SetRepoUnfixableChecks refuses it.
 	GrainCICheckName string `json:"grainCICheckName"`
-	// DefaultHostd is the hostd pin or label selector a task filed
-	// against this repository starts with when neither the filing nor
-	// its template names one (model.RepoConfig.DefaultHostd), "" for
-	// the default hostd. Set through SetRepoSettings.
-	DefaultHostd string `json:"defaultHostd"`
 	// UpstreamRepo is the upstream owner/name repository that pull
 	// requests are opened and tracked against when tasks target this fork
 	// repository (model.RepoConfig.UpstreamRepo), "" when pull requests
@@ -612,9 +609,8 @@ type SetRepoSettingsRequest struct {
 	RepairTemplateID    *string   `json:"repairTemplateID,omitempty"`
 	SetupCommand        *string   `json:"setupCommand,omitempty"`
 	UnfixableChecks     *[]string `json:"unfixableChecks,omitempty"`
-	// DefaultHostd sets model.RepoConfig.DefaultHostd: a hostd name,
-	// label=value[,label=value], or "" to put this repository's tasks
-	// back on the default hostd.
+	// DefaultHostd is read only to be refused (TaskHostdRefusal): a
+	// repository's tasks have no hostd of their own any more.
 	DefaultHostd *string `json:"defaultHostd,omitempty"`
 	// The GitHub issue importer's settings (model.RepoConfig.IssueImport),
 	// each left alone when omitted. IssueImportRepo is owner/name, "" for
@@ -742,7 +738,6 @@ func (c *Client) repoDefaults(ctx context.Context, repo model.RepoRef) (RepoDefa
 		out.MergeOnGreen = stored.MergeOnGreen
 		out.BaseRepairBypassesHumanGates = stored.BaseRepairBypassesHumanGates
 		out.UnfixableChecks = stored.UnfixableChecks
-		out.DefaultHostd = stored.DefaultHostd
 		out.UpstreamRepo = stored.UpstreamRepo
 		out.PortBranches = stored.PortBranches
 		out.DeclaredPortBranches = stored.DeclaredPortBranches
@@ -1101,12 +1096,8 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 			return RepoDefaults{}, err
 		}
 	}
-	var defaultHostd string
 	if req.DefaultHostd != nil {
-		if defaultHostd, err = model.NormalizeHostdSelector(*req.DefaultHostd); err != nil {
-			return RepoDefaults{}, validationErrorf("defaultHostd: %v", err)
-		}
-		if err := c.checkHostdSelector(ctx, defaultHostd); err != nil {
+		if err := refuseTaskHostd("defaultHostd", *req.DefaultHostd); err != nil {
 			return RepoDefaults{}, err
 		}
 	}
@@ -1162,9 +1153,6 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 		}
 		if req.UnfixableChecks != nil {
 			rc.UnfixableChecks = unfixable
-		}
-		if req.DefaultHostd != nil {
-			rc.DefaultHostd = defaultHostd
 		}
 		if req.CIMode != nil {
 			mode := strings.ToLower(strings.TrimSpace(*req.CIMode))
@@ -1429,6 +1417,7 @@ func (c *Client) putRepoConfig(ctx context.Context, repo model.RepoRef, edit fun
 	if err := c.Store.PutRepoConfig(ctx, cfg); err != nil {
 		return RepoDefaults{}, err
 	}
+	c.triggerRegistrySync()
 	return c.repoDefaults(ctx, repo)
 }
 

@@ -13,11 +13,11 @@
 // limitations under the License.
 
 import { expect, test } from "./fixtures.js";
-import { chooseOption } from "./searchSelect.js";
+import { chips, chooseOption } from "./searchSelect.js";
 
 // A deployment default the capability catalogue restricts to one repo,
 // on a task filed with No repo (2026-10-29 test run, Bug 3). The demo
-// defaults self-debug and read-issues; with read-issues restricted to
+// defaults api:self-debug, grain#source (once self-debug) and read-issues; with read-issues restricted to
 // acme/widgets, the form used to post all defaults and be refused with
 // a 400 for a grant nobody had picked. Now it marks read-issues as refused
 // where it is ticked, says it is left off, and files the task with the
@@ -43,7 +43,7 @@ async function openStandalone(page, title) {
   await expect(page.getByRole("heading", { name: "New task" })).toBeVisible();
   await page.getByLabel("Title").fill(title);
   await chooseOption(page.getByLabel(/^Repos/), "none");
-  const picker = page.getByLabel("Legacy capabilities");
+  const picker = page.getByRole("combobox", { name: "Legacy capabilities" });
   const note = page.getByTestId("new-task-catalogue-refused");
   await expect(note).toHaveText(
     "settings/capabilities.yml refuses read-issues on a task with no repo, so that default is left off this task.",
@@ -72,13 +72,17 @@ test("a No repo task leaves off a default the catalogue refuses there", async ({
 
       // Only gcp-key is marked, and it sits inside the picker; the note
       // sits inside the picker's own column, at either width.
-      const refused = picker.locator("[data-catalogue-refused]");
+      const refused = chips(picker).and(
+        page.locator("[data-catalogue-refused]"),
+      );
       await expect(refused).toHaveCount(1);
       await expect(refused).toHaveAccessibleName(/\(refused here\)$/);
-      const pickerBox = await picker.boundingBox();
+      const pickerBox = await picker
+        .locator("xpath=ancestor::div[contains(@class,'MuiInputBase-root')][1]")
+        .boundingBox();
       within(await refused.boundingBox(), pickerBox);
       const control = picker.locator(
-        "xpath=ancestor::div[contains(@class,'MuiFormControl-root')][1]",
+        "xpath=ancestor::div[contains(@class,'MuiFormControl-root')][.//*[@data-testid='new-task-catalogue-refused']][1]",
       );
       within(await note.boundingBox(), await control.boundingBox());
       const form = page.locator("form", {
@@ -136,7 +140,10 @@ test("a No repo task leaves off a default the catalogue refuses there", async ({
       const task = await res.json();
       const detail = await (await request.get(`/api/tasks/${task.id}`)).json();
       expect(detail.capabilities).toEqual(
-        expect.arrayContaining(["self-debug"]),
+        expect.arrayContaining([
+          "api:self-debug",
+          "https://grain.dev/capabilities/grain#source={}",
+        ]),
       );
       expect(detail.capabilities).not.toContain("read-issues");
     }
@@ -164,15 +171,16 @@ test("an edited picker is asked to untick a refused grant", async ({
       page,
       `E2E catalogue edited ${Date.now()}`,
     );
-    await picker.click();
-    await page.getByRole("option", { name: /Self debug/i }).click();
+    await chooseOption(picker, "priority-dispatch");
     await page.keyboard.press("Escape");
     await expect(note).toHaveText(
       "settings/capabilities.yml refuses read-issues on a task with no repo: untick it, or the task will not be filed.",
     );
     await chooseOption(page.getByLabel(/^Repos/), "acme/widgets");
     await expect(note).toHaveCount(0);
-    await expect(picker.locator("[data-catalogue-refused]")).toHaveCount(0);
+    await expect(
+      chips(picker).and(page.locator("[data-catalogue-refused]")),
+    ).toHaveCount(0);
     await page.getByRole("button", { name: "Discard draft" }).click();
   } finally {
     await request.put("/api/capability-policy", {

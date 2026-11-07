@@ -6,7 +6,7 @@
 
 **The core rule:** A cryptographic assertion verified by a registered `IdentityVerifier` authenticates the caller directly as a named human or service principal; a present assertion that fails verification refuses the request with `401` and never falls back to the access code, plaintext identity headers name nobody, and deployments with no active verifier keep the single-tenant access code unchanged.
 
-A grain controller on GKE sits behind Google Cloud Identity-Aware Proxy ([`grain-on-gke.design.md`](grain-on-gke.design.md), *UI and API ingress*). When IAP is configured (`-ui-iap-audience` / `$GRAIN_IAP_AUDIENCE`), `singleTenantGate` (`pkg/ui/accesscode.go`) admits verified, allowlisted callers directly from `X-Goog-IAP-JWT-Assertion` as named principals—for the browser UI, the `grain` CLI, external agents, and remote `grain hostd` instances—without a shared access code. Wrapper distributions fronted by a different signed-header proxy plug into the same gate through `ui.RegisterIdentityVerifier` (`pkg/ui/verifier.go`). Companion designs cover how verified principals are recorded on mutations ([`operator-attribution.design.md`](operator-attribution.design.md)), how multi-instance registry proxies sign assertions for replaceable VMs ([`registry.design.md`](registry.design.md)), how simplified configuration layers database-backed allowed users on top ([`simple-config.design.md`](simple-config.design.md)), and how fine-grained authorization roles (`admin`, `writer`, `reader`) layer on top (`rbac.design.md`, task 2764).
+A grain controller on GKE sits behind Google Cloud Identity-Aware Proxy ([`grain-on-gke.design.md`](grain-on-gke.design.md), *UI and API ingress*). When IAP is configured (`-ui-iap-audience` / `$GRAIN_IAP_AUDIENCE`), `singleTenantGate` (`pkg/ui/accesscode.go`) admits verified, allowlisted callers directly from `X-Goog-IAP-JWT-Assertion` as named principals—for the browser UI, the `grain` CLI, external agents, and remote `grain hostd` instances—without a shared access code. Wrapper distributions fronted by a different signed-header proxy plug into the same gate through `ui.RegisterIdentityVerifier` (`pkg/ui/verifier.go`). Companion designs cover how verified principals are recorded on mutations ([`operator-attribution.design.md`](operator-attribution.design.md)), how multi-instance registry proxies sign assertions for replaceable VMs, including delegated assertions in which an application acts for a signed-in person ([`registry.design.md`](registry.design.md); §6 here), how simplified configuration layers database-backed allowed users on top ([`simple-config.design.md`](simple-config.design.md)), and how fine-grained authorization roles (`admin`, `writer`, `reader`) layer on top (`rbac.design.md`, task 2764).
 
 ## 1. Verified assertions and the `IdentityVerifier` seam
 
@@ -88,6 +88,7 @@ group:grain-admins@example.com
 - **Entry kinds and seeding (`pkg/model/allowed_principals.go`, `pkg/ui/allowlist.go`):**
   - `user:<email>` — matches `model.PrincipalHuman` only (case-insensitive exact email; `*.gserviceaccount.com` addresses are rejected).
   - `group:<group-email>` — matches `model.PrincipalHuman` callers who are transitive members of `<group-email>` in Cloud Identity (`*.gserviceaccount.com` addresses are rejected and `model.PrincipalService` callers never resolve through `group:` entries).
+  - `serviceAccount:<sa-email>` — matches `model.PrincipalService` only, for `*.gserviceaccount.com` addresses. Added only explicitly (`POST /api/access/principals` / `grain access allow --reason`) with a required reason stored in `allowed_principal.reason` and `config_audit`; never imported from `-ui-allowed-principals`. Accounts in the `gcp-key` pool or the gcp capability's permission sets (`gcpKeyPoolSet`) are refused when added and at admission even if a row for one exists.
   - Daemon-provisioned service accounts (`Config.ProvisionedServiceAccounts` and `grain-daemon@<gcp-project>.iam.gserviceaccount.com`, excluding `gcp-key` sandbox pool accounts) remain admitted in memory (`serviceAccount:<email>`), and dedicated non-pool GCP service accounts registered as active `hostd` owners (`isRegisteredHostdServiceOwner`) are admitted on `GET /api/hostd/connect`.
   - Installers seed the installing operator with `grain access allow user:<email>` (idempotent). Keeping `allowed_principal` and `allowed_principal_migration` outside `staterepo.SettingsTables` preserves them in cold backups while preventing `grain/config` pull requests from locking operators out or granting sign-in access.
 - **One-time migration off `-ui-allowed-principals` (`pkg/ui/access_principals.go`, `pkg/model/allowed_principals.go`).** If `-ui-allowed-principals` / `$GRAIN_ALLOWED_PRINCIPALS` is set on start when `allowed_principal` is empty and has not yet migrated (`allowed_principal_migration`), grain imports its `user:` and `group:` entries once (excluding `*.gserviceaccount.com` and `gcp-key` pool accounts) and logs the import. Unsupported entries (`serviceAccount:`, `domain:`, or service-account emails) are dropped, logged individually, and surfaced in `Settings → Access` (`droppedFlagEntries`). Thereafter the flag and environment variable are deprecated: grain logs a warning when set and ignores them, even if all database entries are later removed.
@@ -100,13 +101,13 @@ group:grain-admins@example.com
 ### Three access modes (`pkg/ui/accesscode.go`, [`docs/access-code.md`](../../docs/access-code.md))
 
 1. **No verifier active (standalone / local default).** `local-api-token` (`$GRAIN_ACCESS_CODE`) is the sole credential: browsers exchange it at `POST /api/auth/access-code` for the `grain_access` cookie (`HttpOnly`, `SameSite=Strict`), and the CLI sends it as `Authorization: Bearer`.
-2. **Migration mode (`-ui-iap-audience` set, `-ui-require-iap` unset).** Verified, allowlisted IAP callers pass `singleTenantGate` without the access code; requests carrying no assertion may still authenticate with the access code.
-3. **IAP required (`-ui-require-iap` / `$GRAIN_REQUIRE_IAP`).** `daemon.CheckUIRequireIAP` (`pkg/cli/daemon.go`) refuses to start if `-ui-require-iap` is set without an IAP audience. Over the network—and over loopback whenever any proxy or verifier header is present (`relayedByProxy` in `pkg/ui/accesscode.go`)—neither the bearer access code, nor `grain_access`, nor `POST /api/auth/access-code` is accepted (`accessCodeAccepted` returns `false`). Over **unproxied loopback** (`127.0.0.0/8`, `::1`, or Unix socket with no forwarding headers), the access code remains accepted so `kubectl exec deploy/grain -- grain …` always works as break-glass recovery.
+2. **Migration mode (verifier active, `-ui-require-verifier` / `-ui-require-iap` unset).** Verified, allowlisted callers pass `singleTenantGate` without the access code; requests carrying no assertion may still authenticate with the access code.
+3. **Verifier required (`-ui-require-verifier=<name>` / `$GRAIN_REQUIRE_VERIFIER`, with `-ui-require-iap` / `$GRAIN_REQUIRE_IAP` kept as an alias for `-ui-require-verifier=iap`).** `daemon.CheckUIRequireVerifier` (`pkg/daemon/ui_server.go`, `pkg/cli/daemon.go`) refuses conflicting flags and refuses to start if the named `IdentityVerifier` is not active (for `"iap"`, when no IAP audience or registered `"iap"` verifier is configured; for `"registry"`, when `-ui-registry-issuer`, `-ui-registry-audience`, and `-ui-registry-keys-url` are not all configured and no `"registry"` verifier is registered). Over the network—and over loopback whenever any proxy or verifier header is present (`relayedByProxy` in `pkg/ui/accesscode.go`)—neither the bearer access code, nor `grain_access`, nor `POST /api/auth/access-code` is accepted (`accessCodeAccepted` returns `false`). Over **unproxied loopback** (`127.0.0.0/8`, `::1`, or Unix socket with no forwarding headers), the access code remains accepted so `kubectl exec deploy/grain -- grain …` and SSH tunnels always work as break-glass recovery.
 
 ### Per-verifier access-code precedence
 
 - **Verified identity wins by default (`AccessCodeWins() == false`, including IAP).** When a request carries both an IAP assertion and a bearer access code or `grain_access` cookie, the assertion governs: the caller must pass `checkAllowedPrincipal` and `checkVerifiedIdentityCSRF`, and acts as their named email rather than anonymous `operator`.
-- **Access code wins for always-attached wrapper proxies (`AccessCodeWins() == true`).** A wrapper distribution whose corporate proxy attaches a signed identity header to every proxied request may return `AccessCodeWins() == true`. When such a request also carries a valid access code (or a valid `gma_…` token), `singleTenantGate` and `accessCodeAccepted` honour that credential—even under `-ui-require-iap`—so an operator can still break glass through the corporate proxy when the allowlist or group directory is broken. A present header that fails cryptographic verification still returns `401` with no fallback.
+- **Access code wins for always-attached wrapper proxies (`AccessCodeWins() == true`).** A wrapper distribution whose corporate proxy attaches a signed identity header to every proxied request may return `AccessCodeWins() == true`. When such a request also carries a valid access code (or a valid `gma_…` token), `singleTenantGate` and `accessCodeAccepted` honour that credential—even under `-ui-require-verifier` / `-ui-require-iap`—so an operator can still break glass through the corporate proxy when the allowlist or group directory is broken. A present header that fails cryptographic verification still returns `401` with no fallback.
 
 ### CSRF protection (`pkg/ui/csrf.go`)
 
@@ -124,7 +125,7 @@ Browser navigations (`GET` or `HEAD` outside `/api/`) receive self-contained HTM
 
 - **`403` `"Not allowed on this grain"` (`writePrincipalRefusedPage`).** Rendered when a caller's assertion verifies (`cv.err == nil`) but `checkAllowedPrincipal` refuses admission. The page displays the verified email and verifier name, any underlying lookup error (for example a Cloud Identity timeout), remediation guidance from `ui.RegisterPrincipalAdvice` (defaulting to `Settings → Access` and `grain access allow user:<email>` for human callers, or `grain hostds register --owner <email>` for service accounts), and an `"Owner: sign in with the access code"` section that renders `<form method="post" action="/api/auth/access-code">` **only** when `AccessCodeWins()` is true—otherwise explaining that the verifier's identity takes precedence over the access code and instructing the owner to connect directly or over an SSH tunnel.
 - **`401` `"Sign-in could not be verified"` (`writeAssertionRefused`).** Rendered when a verifier header is present on a browser navigation but fails verification, naming the failure reason and configuration/clock checklist with no access-code fallback.
-- **`401` `"Sign in through IAP"` (`writeIAPRequiredPage`).** Rendered when `-ui-require-iap` refuses an unauthenticated network browser navigation, in place of the `"Enter access code"` login form.
+- **`401` `"Sign in through <verifier>"` / `"Sign in through IAP"` (`writeVerifierRequiredPage` / `writeIAPRequiredPage`).** Rendered when `-ui-require-verifier` (or `-ui-require-iap`) refuses an unauthenticated network browser navigation, in place of the `"Enter access code"` login form.
 
 ## 5. How each client signs in
 
@@ -152,7 +153,7 @@ External agents behind IAP authenticate with a scoped `gma_…` credential (`Aut
 
 ### Decision — `grain hostd` and owner matching (`pkg/hostd/`, `pkg/ui/hostd_connect.go`, `pkg/ui/hostds.go`)
 
-Operators register per-hostd credentials in the hostd registry (`POST /api/hostds`, `grain hostds register --owner <email>`, `grain hostds set-owner`, `pkg/ui/hostds.go`, `pkg/cli/hostds.go`), receiving a `ghd_…` token bound to that hostd row and its `owner` email (human or service account). A deprecated single-file fallback (`-hostd-token-file` paired with `-hostd-token-owner` / `$GRAIN_HOSTD_TOKEN_OWNER`) remains supported for legacy setups. Remote model executors (`pkg/modelexec`, `executorBootstrapRoute`) were removed (`docs/executors-removed.md`).
+Operators register per-hostd credentials in the hostd registry (`POST /api/hostds`, `grain hostds register --owner <email>`, `grain hostds set-owner`, `pkg/ui/hostds.go`, `pkg/cli/hostds.go`), receiving a `ghd_…` token bound to that hostd row and its `owner` email (human or service account). Revoking a hostd (`POST /api/hostds/{name}/revoke`) retires its tokens and drops its session; a revoked hostd can then be deleted (`DELETE /api/hostds/{name}`, `grain host delete`), which removes its row and token rows so the name can be registered again with a fresh token (`docs/host-placement.md`). A deprecated single-file fallback (`-hostd-token-file` paired with `-hostd-token-owner` / `$GRAIN_HOSTD_TOKEN_OWNER`) remains supported for legacy setups. Remote model executors (`pkg/modelexec`, `executorBootstrapRoute`) were removed (`docs/executors-removed.md`).
 
 `grain hostd` dials `GET /api/hostd/connect` (`pkg/hostd/dialout.go`) sending its hostd token in `X-Grain-Hostd-Token` (plus optional `X-Grain-Hostd-Name`). When `-iap-audience` (`$GRAIN_IAP_AUDIENCE`) is set on `grain hostd`, `hostd.NewIAPTokenProvider` (`pkg/hostd/iap_auth.go`) mints and caches an OIDC ID token from the GCE metadata server (`…/instance/service-accounts/default/identity?audience=<aud>&format=full`) with fallback to Application Default Credentials (`idtoken.NewTokenSource`), sending `Authorization: Bearer <id-token>` for IAP while `X-Grain-Hostd-Token` carries the hostd credential.
 
@@ -165,7 +166,103 @@ Although `/api/hostd/connect` is in `singleTenantOpenRoute` (requiring no deploy
 
 Agent calls from inside a task sandbox never traverse IAP and never carry a person's identity. Both the sandbox git/API proxy (`127.0.0.1:9728`) and `grain mcpserver` (`X-Grain-Acting-Task`) run off the Gateway using per-attempt scoped sandbox tokens, and proxy assertion headers never authenticate them.
 
-## 6. Rollout status
+## 6. Delegated identity through the registry (proposed)
+
+**Status: proposed (task 3130), not built.** Specified by [`authentication.spec.md`](../spec/authentication/authentication.spec.md) `{#AU-22}`–`{#AU-27}`. The registry side, covering which apps may delegate, people's consent grants, revocation and registry audit, is in [`registry.design.md`](registry.design.md) *Delegated identity*.
+
+A **delegating app** is a service principal registered with the registry, such as a planning board or a chat app. When a person has granted it consent, the app may send a request to `https://<name>.<instance-domain>/…` that names that person in `X-Grain-On-Behalf-Of`. The registry checks the registration and the grant, strips the header, and forwards the request with a registry JWT whose `sub` is the person (`kind: human`) and whose `act` is the app:
+
+```json
+"act": {"sub": "planning-app@example-prod.iam.gserviceaccount.com", "kind": "service", "app": "planning-app", "grant": "dlg_4f9c2a7e1b", "access": "write"}
+```
+
+The grain never trusts a header to name the person. It learns about delegation only from the signed `act`.
+
+### The verifier exposes both identities
+
+```go
+type VerifiedIdentity struct {
+	Email string              // the person (or the direct caller)
+	Kind  model.PrincipalKind
+	Via   *DelegatingApp      // set only by a verifier that carries delegation
+}
+
+// DelegatingApp is the application acting for VerifiedIdentity.Email.
+type DelegatingApp struct {
+	Email  string // act.sub, a service-account email; Kind is always PrincipalService
+	Name   string // act.app, informational (logs); labels come from the delegate: entry
+	Grant  string // act.grant, for joining grain and registry audit
+	Access string // act.access: "read" or "write"
+}
+```
+
+Only the `registry` verifier sets `Via`. IAP and wrapper verifiers leave it nil unless they adopt the same claim. A present `act` that is malformed refuses the request with `401` (`writeAssertionRefused`), with no fallback (§1). Malformed means any of:
+
+- a nested `act`;
+- `act.kind` other than `service`;
+- a top-level `kind` other than `human`;
+- an empty `act.sub`;
+- an `act.sub` that is not a service-account email.
+
+### Admission: the person, and an app allowed to delegate here
+
+1. **The person** must pass `allowed_principal` exactly as a direct caller would (§3: `user:` and `group:` entries, plus `domain:` once RBAC lands; group lookup; `gcp-key` pool exclusion), on `VerifiedIdentity.Email`.
+2. **The app** must match a **`delegate:<service-account-email>`** entry on the same allowlist.
+   - This is a new third prefix. It matches only `Via.Email`, never a direct caller.
+   - A `serviceAccount:` entry for the same account does not let it delegate, and a `delegate:` entry does not admit it as a plain caller.
+   - Like a service-account entry, a `delegate:` entry is added only explicitly, with a required reason (`grain access allow delegate:<email> --role <set> --reason "…" [--label planning-app]`). Only a verified human admin or an access-code admin may add it. Every agent, console session and `gma_…` token is refused, whatever it holds.
+   - It is never imported from `-ui-allowed-principals`, and stays outside `staterepo.SettingsTables` like the rest of `allowed_principal`.
+3. **Neither check alone is enough.** If the person is not allowed, the existing `403` *"Not allowed on this grain"* page names the person. If the app has no `delegate:` entry, a `403` names the app: *"planning-app is not allowed to act for people on this grain"*. The JSON form is `code: "delegate_not_allowed"`.
+
+### Roles: the person's, capped by the app's
+
+The request holds the **intersection** of two roles:
+
+- the person's current role: the union of their matching entries' scope sets (§3), or `rbac.design.md`'s `admin`/`writer`/`reader`;
+- the `delegate:` entry's role.
+
+This is the rule `rbac.design.md` §3 already applies to agents acting `OnBehalfOf` a person (`RB-13`), evaluated on every request, so demoting or removing the person stops their delegated writes at once.
+
+- A `delegate:` entry's role MUST NOT contain a dangerous scope (`model.IsDangerousAPIScope`), `access:write`, or an admin-only permission (`422` on add).
+- Core ships a `grain/delegated` scope set covering what integrations do for people: read what a writer reads, file and edit tasks, comment and reply, approve non-admin-only grants, and start or resume work.
+- When `Via.Access == "read"`, every method other than `GET` and `HEAD` is refused with `403`, as defence in depth behind the registry's own check.
+
+**Person-only operations.** Some operations require `Actor.Kind == human` and are refused to every delegated request with `403` (`requires_person`), whatever the roles allow:
+
+- `POST`/`PATCH`/`DELETE /api/access/principals`;
+- minting or rotating `gma_…` tokens with dangerous or `requires_person` scopes (§3, `AU-11`);
+- approving `IsAdminOnlyGrant` grants;
+- `POST /api/hostds`.
+
+A delegated identity never satisfies remote `hostd` owner matching (§5), and the registry refuses delegated protocol upgrades before they reach the grain.
+
+### Attribution: "Roman (via planning-app)"
+
+`ui.RequestActor(ctx)` returns:
+
+```go
+model.Attribution{
+	Actor:      model.Principal{Kind: model.PrincipalService, ID: "planning-app@example-prod.iam.gserviceaccount.com", Source: "registry"},
+	OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: "roman@example.com", Source: "registry"},
+}
+```
+
+This follows [`operator-attribution.design.md`](operator-attribution.design.md)'s rule that whoever made the call is the actor and says who it acts for. It is stored in the existing actor and on-behalf-of columns, with no new schema.
+
+- **Label.** `ui.PrincipalLabel` renders a verified `service` actor with a verified `human` on-behalf-of, both from the `registry` source, as **`roman@example.com (via planning-app)`**. That puts the person first, because the person is who the grain authorized. The app's label is the `delegate:` entry's `label`, or else the local part of its email. Agents acting for a person keep `<agent> for <person>`.
+- **Trailers.** `Requested-by:` (task creator) and `Approved-by:` (a delegated approval) name the person's email. A plain service principal never fills them with a person.
+- **Who am I.** `GET /api/auth/user` and `GET /api/whoami` report `actor: service:<app-email>`, `onBehalfOf: user:<email>` and `via: <label>`.
+- **Request log.** Each delegated request records `registry_rid`, `registry_jti` and `delegation_grant` in the grain's request log, joining the registry's `delegated_write` audit row.
+- **Settings → Access** lists `delegate:` entries with `added_by`, reason, role and last use.
+
+### What does not change
+
+- **CSRF (§4).** Delegated calls are server-to-server and cookie-less, so `checkVerifiedIdentityCSRF` passes them as programmatic callers, unchanged. The registry refuses `X-Grain-On-Behalf-Of` arriving with a `Cookie`, `Origin` or `Sec-Fetch-Site` header, so a browser cannot trigger delegation.
+- **Access code and break-glass (§4).** `registry` keeps `AccessCodeWins() == false`. The access code and delegation never combine. Unproxied-loopback break-glass under `-ui-require-verifier` / `-ui-require-iap` is untouched. The mandatory tunnel-ingress gate on `connected` grains applies to delegated assertions exactly as to direct ones.
+- **Plain service principals.** A `kind: service` assertion with no `act` is admitted only by an explicit `serviceAccount:` entry with a reason (§3) and attributed to the account alone. The recommended role for one is read-only (status, tasks, CI). Writes that represent a person's intent should arrive delegated.
+- **In-sandbox calls (§5).** These never carry a person's identity, delegated or not.
+
+## 7. Rollout status
 
 ### Done
 
@@ -183,3 +280,4 @@ Agent calls from inside a task sandbox never traverse IAP and never carry a pers
 - **Remaining operator-attribution items** ([`operator-attribution.design.md`](operator-attribution.design.md)): `GET /api/whoami` (`OA-5`) and `OnBehalfOf` dual-identity recording when an external or in-grain agent acts on a verified person's behalf (`OA-13`).
 - **Registry verifier and generalised verifier requirement** ([`registry.design.md`](registry.design.md)): core `registry` `IdentityVerifier` (`X-Grain-Registry-Assertion`) and generalising `-ui-require-iap` to `-ui-require-verifier`.
 - **Role-based access control** (`rbac.design.md`, task 2764): roles and scoped permissions beyond single-tenant operator equivalence.
+- **Delegated identity through the registry** (§6, `AU-22`–`AU-27`, task 3130; `registry.design.md` implementation plan step 19): `VerifiedIdentity.Via` from the registry JWT's `act` claim, `delegate:` allowlist entries, dual admission, person ∩ delegate role intersection, `requires_person` refusals, and `roman@example.com (via planning-app)` attribution. Depends on the `registry` verifier.

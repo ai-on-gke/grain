@@ -25,6 +25,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/policy"
 )
 
 const passTestCap = "https://github.com/bwsalmon/grain/capabilities/gcp"
@@ -315,6 +316,38 @@ func TestAdmissionRefusesGrantsOnHostDirectorySandboxes(t *testing.T) {
 	}
 	if comments, _ := store.Comments(ctx, "7"); len(comments) != 1 || !strings.Contains(comments[0].Body, "grain's own host") || strings.Contains(comments[0].Body, "untrusted text") {
 		t.Errorf("comments = %+v, want the host-sandbox refusal as grain's own", comments)
+	}
+}
+
+// A container sandbox that is not fenced off from grain's own host
+// (ContainerConfig.Fence) is refused external grants as a host
+// directory is, saying why; a fenced one is minted for.
+func TestAdmissionRefusesGrantsOnUnfencedContainerSandboxes(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mode  ContainerFenceMode
+		admit bool
+	}{
+		"unfenced": {ContainerFenceOff, false},
+		"fenced":   {ContainerFenceRequire, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			caller := &mintCaller{}
+			deps, store, ctx, _ := passHarness(t, caller)
+			deps.Sandboxes = NewContainerSandboxes(ContainerConfig{Image: "img", Workspace: "/w", Fence: tc.mode})
+			adm, _ := capabilityAdmitter(deps, admitAll)(ctx, dispatch.Candidate{TaskID: "7", RunID: "7-1", Attempt: 1})
+			if adm.Admitted != tc.admit {
+				t.Fatalf("admitted = %v, want %v", adm.Admitted, tc.admit)
+			}
+			if tc.admit {
+				return
+			}
+			if got := caller.called(); len(got) != 0 {
+				t.Errorf("calls = %q, want nothing minted", got)
+			}
+			if comments, _ := store.Comments(ctx, "7"); len(comments) != 1 || !strings.Contains(comments[0].Body, "unfenced") {
+				t.Errorf("comments = %+v, want the unfenced-container refusal", comments)
+			}
+		})
 	}
 }
 
@@ -739,4 +772,166 @@ func (b *blockingReleaseCaller) CallTool(ctx context.Context, name string, args 
 		})
 	}
 	return b.mintCaller.CallTool(ctx, name, args)
+}
+
+type placedDownableServer struct {
+	*downableServer
+	placedHostd string
+}
+
+func (p placedDownableServer) HostdOf(id string) (string, bool) {
+	if id == passTestCap {
+		return p.placedHostd, true
+	}
+	return "", false
+}
+
+// A grant minted from a placed capability server (CapabilityHostdOf) is
+// notified only when that placed server's hostd drops -- not the
+// deployment's default registry or another hostd -- and a release retried
+// after that hostd reconnects still stamps the placed hostd on its audit.
+func TestPlacedServerDropAndRetriedReleaseFollowGrantHostd(t *testing.T) {
+	caller := &mintCaller{releaseReply: `{"status":"ok","audit":[` +
+		`{"time":"2026-10-22T12:05:00Z","attempt_id":"grain-7-1-0","script":"deploy"}]}`}
+	deps, store, ctx, now := passHarness(t, caller)
+	down := &downableServer{oneServer: deps.CapabilityServers.(oneServer)}
+	deps.CapabilityServers = placedDownableServer{downableServer: down, placedHostd: "ws-a"}
+	deps.CapabilityHostd = "local"
+	deps.CapabilityPasses.now = func() time.Time { return *now }
+
+	if adm, err := capabilityAdmitter(deps, admitAll)(ctx, dispatch.Candidate{TaskID: "7", RunID: "7-1", Attempt: 1}); err != nil || !adm.Admitted {
+		t.Fatalf("admit = %+v, %v", adm, err)
+	}
+	// Neither a drop on the deployment's own registry nor a drop on ws-b
+	// touches a grant minted on ws-a; a drop on ws-a tells the run.
+	noteCapabilityServerDropped(ctx, store, deps.CapabilityPasses, passTestCap, "", "failed", "local down", false, *now)
+	noteCapabilityServerDropped(ctx, store, deps.CapabilityPasses, passTestCap, "ws-b", "failed", "ws-b down", false, *now)
+	if comments, _ := store.Comments(ctx, "7"); len(comments) != 0 {
+		t.Fatalf("unrelated hostd drops notified placed grant: %+v", comments)
+	}
+	noteCapabilityServerDropped(ctx, store, deps.CapabilityPasses, passTestCap, "ws-a", "failed", "ws-a down", false, *now)
+	if comments, _ := store.Comments(ctx, "7"); len(comments) != 1 || !strings.Contains(comments[0].Body, "ws-a down") {
+		t.Fatalf("placed hostd drop notice = %+v, want ws-a down", comments)
+	}
+
+	// Held while ws-a is down, then released when ws-a attaches again:
+	// the retried audit record carries ws-a, not local.
+	down.down = true
+	releaseRunCapabilities(ctx, deps, "7", "7-1")
+	down.down = false
+	retried := deps.CapabilityPasses.RetryReleases(ctx)
+	r, ok := retried["7-1"]
+	if !ok || len(r.Audits) != 1 {
+		t.Fatalf("retried = %+v, want 7-1's audit", retried)
+	}
+	records := capabilityAuditRecords(r.Audits, *now)
+	setAuditRecordHostds(records, r.Hostd, r.Servers)
+	if len(records) != 1 || records[0].Hostd != "ws-a" {
+		t.Fatalf("retried audit records = %+v, want Hostd=ws-a", records)
+	}
+}
+
+// What a local-scripts declaration became on host-script
+// (model.SetRuntimeGrantExpansions) is withheld from a scheduled run,
+// while the task's other grants still are minted and a task a person
+// filed holding the same grant is minted it.
+func TestAdmissionWithholdsWhatALocalScriptsDeclarationBecameFromAScheduledRun(t *testing.T) {
+	caller := &mintCaller{}
+	deps, store, ctx, _ := passHarness(t, caller)
+	t.Cleanup(model.SetRuntimeGrantExpansions(map[string][]string{
+		"local-scripts:ops": {passTestCap + `#gcp-key={"account":"staging"}`},
+	}))
+	if err := store.UpdateTask(ctx, "7", func(task *model.Task) error {
+		task.Origin.Reason = model.ReasonSchedule
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	admit := capabilityAdmitter(deps, admitAll)
+	cand := dispatch.Candidate{TaskID: "7", RunID: dispatch.RunID("7", 1), Attempt: 1}
+	adm, err := admit(ctx, cand)
+	if err != nil || !adm.Admitted {
+		t.Fatalf("admit = %+v, %v; want admitted", adm, err)
+	}
+	if got := caller.called(); len(got) != 0 {
+		t.Fatalf("calls = %q, want nothing minted for a scheduled run", got)
+	}
+	adm.Release()
+
+	if err := store.UpdateTask(ctx, "7", func(task *model.Task) error {
+		task.Origin.Reason = model.ReasonDirect
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cand = dispatch.Candidate{TaskID: "7", RunID: dispatch.RunID("7", 2), Attempt: 2}
+	adm, err = admit(ctx, cand)
+	if err != nil || !adm.Admitted {
+		t.Fatalf("admit = %+v, %v; want admitted", adm, err)
+	}
+	if got := caller.called(); len(got) != 1 || got[0] != "mint_gcp-key grain-7-2-0" {
+		t.Fatalf("calls = %q, want one mint for a task a person filed", got)
+	}
+	adm.Release()
+}
+
+// When server normalization populates default arguments on a bare capability
+// reference, admission re-checks local policy and settings/capabilities.yml
+// before minting and holds the task rather than minting or parking on a
+// server refusal comment.
+func TestAdmissionRejudgesNormalizedDefaultArgsAgainstPolicyAndCatalogue(t *testing.T) {
+	caller := &mintCaller{}
+	deps, store, ctx, _ := passHarness(t, caller)
+	pol, err := policy.Parse([]byte("repos: [acme/widgets]\ncapabilities:\n  deny: ['" + passTestCap + `#gcp-key={"account":"staging"}` + "']\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps.Policy = pol
+	admit := capabilityAdmitter(deps, admitAll)
+	cand := dispatch.Candidate{TaskID: "7", RunID: dispatch.RunID("7", 1), Attempt: 1}
+	adm, err := admit(ctx, cand)
+	if err != nil || adm.Admitted || adm.Gate != admissionGatePolicy {
+		t.Fatalf("admit under local policy deny = %+v, %v; want declined on %q", adm, err, admissionGatePolicy)
+	}
+	if got := caller.called(); len(got) != 0 {
+		t.Fatalf("calls = %q, want nothing minted when normalized grant is denied by local policy", got)
+	}
+	if wait, err := store.GrantWaitOf(ctx, "7"); err != nil || wait == nil || wait.Capability != model.PolicyWaitCapability {
+		t.Fatalf("grant wait = %+v, %v; want %s", wait, err, model.PolicyWaitCapability)
+	}
+
+	// Reset unnormalized grant and test catalogue refusal on normalized default args.
+	deps.Policy = nil
+	admit = capabilityAdmitter(deps, admitAll)
+	if err := store.UpdateTask(ctx, "7", func(tk *model.Task) error {
+		tk.Grants = []model.Grant{{Capability: passTestCap, Via: model.GrantByLabel}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutConfig(ctx, model.Config{
+		CapabilityPolicy: model.CapabilityPolicy{
+			Catalogue: &model.CapabilityCatalogue{
+				Servers: []model.CatalogueServer{{
+					ID: passTestCap,
+					Methods: []model.CatalogueMethod{{
+						Name: "gcp-key",
+						Args: map[string]model.CatalogueArg{"account": {Allowed: []string{"dev"}}},
+					}},
+				}},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	adm, err = admit(ctx, dispatch.Candidate{TaskID: "7", RunID: dispatch.RunID("7", 2), Attempt: 2})
+	if err != nil || adm.Admitted || adm.Gate != "capability catalogue" {
+		t.Fatalf("admit under catalogue restriction = %+v, %v; want declined on capability catalogue", adm, err)
+	}
+	if got := caller.called(); len(got) != 0 {
+		t.Fatalf("calls = %q, want nothing minted when normalized grant is refused by catalogue", got)
+	}
+	if wait, err := store.GrantWaitOf(ctx, "7"); err != nil || wait == nil || wait.Capability != model.CatalogueWaitCapability {
+		t.Fatalf("grant wait = %+v, %v; want %s", wait, err, model.CatalogueWaitCapability)
+	}
 }

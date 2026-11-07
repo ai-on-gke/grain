@@ -61,7 +61,7 @@ func (u *Upgrader) AlreadyRunning(ctx context.Context, branch string) (bool, err
 		if err != nil {
 			return false, fmt.Errorf("reading the image deployment/%s runs: %w", u.cfg.Kube.Deployment, err)
 		}
-		tag, err := u.imageRefIn(u.cfg.Kube.Repository, branch)
+		tag, err := u.imageRefIn(u.EffectiveKubeRepository(), branch)
 		if err != nil {
 			return false, err
 		}
@@ -86,15 +86,45 @@ func (u *Upgrader) AlreadyRunning(ctx context.Context, branch string) (bool, err
 		if err != nil {
 			return false, err
 		}
-		running, ok := digestRef(current)
-		if !ok || repositoryOf(current) != repositoryOf(tag) {
-			return false, nil
+		checkRegistry := func() (bool, error) {
+			running, ok := kubeDigestRef(current)
+			if !ok || !sameRepository(repositoryOf(current), repositoryOf(tag)) {
+				return false, nil
+			}
+			digest, err := u.manifestDigest(ctx, tag)
+			if err != nil {
+				return false, err
+			}
+			return running == normalizeRepository(repositoryOf(tag))+"@"+digest, nil
 		}
-		digest, err := u.manifestDigest(ctx, tag)
-		if err != nil {
-			return false, err
+		if u.EffectiveImageSource() == ImageSourceReleaseAssets && !u.shouldBypassDefaultReleaseAssets() {
+			same, relErr := u.alreadyRunningReleaseAssets(ctx, branch, current, tag)
+			if relErr == nil {
+				return same, nil
+			}
+			if errors.Is(relErr, errReleaseMidUpdate) {
+				// A channel caught between its publisher's images.json
+				// swap is nothing to install yet: the next poll retries.
+				return true, nil
+			}
+			if errors.Is(relErr, errReleaseNotPublished) {
+				// A version tagged without its image assets, on a
+				// deployment with no registry to pull it from, is nothing
+				// to install either: the upgrade would only refuse it.
+				return true, nil
+			}
+			if ok, _ := u.shouldFallbackToRegistry(relErr); ok {
+				return checkRegistry()
+			}
+			return false, relErr
 		}
-		return running == repositoryOf(tag)+"@"+digest, nil
+		same, regErr := checkRegistry()
+		if regErr != nil && u.EffectiveImageFallback() == ImageSourceReleaseAssets {
+			if relSame, relErr := u.alreadyRunningReleaseAssets(ctx, branch, current, tag); relErr == nil {
+				return relSame, nil
+			}
+		}
+		return same, regErr
 	}
 	running, err := u.Running()
 	if err != nil {
@@ -162,7 +192,7 @@ var manifestAccept = []string{
 }
 
 // RegistryManifestDigest reads the digest a tagged ref
-// ("ghcr.io/bwsalmon/grain/grain:main") names, with a HEAD request to the
+// ("docker.io/grainai/grain:main") names, with a HEAD request to the
 // registry's v2 API and anonymously, as ListRegistryTags does: nothing
 // is pulled. An image on Artifact Registry or GCR is asked with a Google
 // access token instead, when this host has one (registryauth.TokenFor).

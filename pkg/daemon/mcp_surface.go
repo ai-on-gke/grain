@@ -57,23 +57,18 @@ func ResolveMCPSurface(flag string, hasSandbox bool) string {
 // on a daemon to ask, so this only names what may stay; a name here that
 // was never registered costs nothing.
 //
-// Local scripts stay: they are the deployment's own tools, run on the
-// controller, with no sandbox command of their own. A changelist task
-// keeps pull_request_status and wait_for_checks, which answer from the
-// CL's presubmit rather than from grain CI, which is all `grain ci wait`
-// and `grain pr status` read. It keeps open_pull_request,
+// A changelist task keeps pull_request_status and wait_for_checks, which
+// answer from the CL's presubmit rather than from grain CI, which is all
+// `grain ci wait` and `grain pr status` read. It keeps open_pull_request,
 // reply_to_pull_request_comment and resolve_review_thread too, which its
 // thread wakes tell it to call: `grain pr open` cannot carry the CL's
 // summary and body, and `grain pr reply`/`resolve` take a GitHub comment
 // number, never a CL thread's cl/<n>:<id>. So does a run without
 // grain#ci keep the checks tools, for the same reason: its checks are
 // GitHub's, which only the MCP tools read.
-func controlRoster(sandbox, local []mcp.Tool, grants GrantNames, changelist bool) map[string]bool {
+func controlRoster(sandbox []mcp.Tool, grants GrantNames, changelist bool) map[string]bool {
 	keep := map[string]bool{}
 	for _, t := range sandbox {
-		keep[t.Name] = true
-	}
-	for _, t := range local {
 		keep[t.Name] = true
 	}
 	for _, name := range agent.PublishedToolNames() {

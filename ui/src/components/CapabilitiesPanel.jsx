@@ -26,9 +26,12 @@ import {
   Typography,
 } from "@mui/material";
 import { SecretFields } from "./SecretField.jsx";
+import { serverPath } from "./CapabilityServersPanel.jsx";
 import api from "../api.js";
 import { useTimeZone } from "../TimeZoneContext.jsx";
 import { formatDateTime } from "../time.js";
+
+const GCP_CAPABILITY_SERVER_ID = "https://grain.dev/capabilities/gcp";
 
 // The guide this tab and Settings → Capabilities share
 // (docs/capability-servers-ui.md), which says how the two differ.
@@ -552,6 +555,7 @@ export default function CapabilitiesPanel({
       )}
       {deploymentWide && (
         <Box
+          id="deployment-wide"
           component="section"
           aria-label="Deployment-wide settings"
           data-testid="legacy-capabilities-deployment-wide"
@@ -561,9 +565,14 @@ export default function CapabilitiesPanel({
             Deployment-wide settings
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-            Settings more than one capability above reads -- the GitHub host,
-            and the GCP project and service accounts gcp-key and gemini-key mint
-            from -- and the secrets no capability&apos;s own page claims.
+            Settings shared across the deployment -- the GitHub host
+            capabilities above read, and the GCP project and legacy
+            service-account pool seeded onto the{" "}
+            <Link href={serverPath(GCP_CAPABILITY_SERVER_ID)}>
+              gcp capability server&apos;s
+            </Link>{" "}
+            <code>gcp-key</code> and <code>gemini-key</code> methods -- and the
+            secrets no capability&apos;s own page claims.
           </Typography>
           {deploymentWide}
         </Box>

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
-import { chooseOption } from "./searchSelect.js";
+import { chooseOption, chosenValues } from "./searchSelect.js";
 
 // The first test triages the inbox rows `grain demo` seeds -- one in
 // each of its four groups -- and approves and answers two of them, so it
@@ -789,8 +789,8 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
   // Gemini key while saying it was not ready. Unticking it took its row
   // out of the open menu, so it could not be ticked again, and focus fell
   // out of the list. The row now stays for as long as the form is open.
-  // gemini-key is retired, so this uses the first row, self-debug, which
-  // this file's demo has ready: the real /api/config is read and only
+  // gemini-key, self-debug and bootstrap-playbooks are retired, so this uses read-issues,
+  // which this file's demo has ready: the real /api/config is read and only
   // that row's readiness is rewritten.
   test("keeps an unticked unready capability in the open menu", async ({
     page,
@@ -802,12 +802,12 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
         const response = await route.fetch();
         const config = JSON.parse(await response.text());
         config.capabilities = (config.capabilities || []).map((c) =>
-          c.id === "self-debug"
+          c.id === "read-issues"
             ? { ...c, ready: false, needs: ["a GCP project"] }
             : c,
         );
         config.defaultCapabilities = [
-          ...new Set([...(config.defaultCapabilities || []), "self-debug"]),
+          ...new Set([...(config.defaultCapabilities || []), "read-issues"]),
         ];
         await route.fulfill({ response, json: config });
       } catch {
@@ -835,25 +835,30 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     const capabilities = form.getByRole("combobox", {
       name: "Legacy capabilities",
     });
-    await expect(capabilities).toContainText("Self debug");
+    await expect
+      .poll(() => chosenValues(capabilities))
+      .toContain("read-issues");
     await capabilities.click();
-    const row = page.getByRole("option", { name: /Self debug/ });
+    const row = page.getByRole("option", { name: /Read issues/ });
     await expect(row).toContainText(/Not ready/);
     await row.click();
     await expect(row).toBeVisible();
     await expect(row).toHaveAttribute("aria-selected", "false");
-    await expect(row).toBeFocused();
+    // The list stays open, and the keys stay with the box.
+    await expect(capabilities).toBeFocused();
     await row.click();
     await expect(row).toHaveAttribute("aria-selected", "true");
     await page.keyboard.press("Escape");
     await expect(page.getByRole("listbox")).toBeHidden();
     await expect(form).toBeVisible();
-    await expect(capabilities).toContainText("Self debug");
+    await expect
+      .poll(() => chosenValues(capabilities))
+      .toContain("read-issues");
 
     await form.getByRole("button", { name: "Create task" }).click();
     await expect(form).toBeHidden();
     expect(filed).toHaveLength(1);
-    expect(filed[0].postDataJSON().capabilities).toContain("self-debug");
+    expect(filed[0].postDataJSON().capabilities).toContain("read-issues");
   });
 
   // grain/task-1625: a selection outlives the view it was made in.

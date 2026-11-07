@@ -62,6 +62,41 @@ describe("collectAlerts (grain/task-4008)", () => {
     expect(collectAlerts(null)).toEqual([]);
   });
 
+  // The daemon's own dispatch conditions say why the loop stopped
+  // (grain/task-58): the alert carries the error, the remedy and since
+  // when, where the boolean alone could only say that it stopped.
+  it("names the dispatch condition behind a stopped reconcile loop", () => {
+    const alert = byId(
+      collectAlerts({
+        ...base,
+        reconcilerDown: true,
+        dispatchBlocked: [
+          {
+            name: "git-proxy",
+            error: "listen tcp 127.0.0.1:30208: bind: address already in use",
+            since: "2026-11-04T15:00:00Z",
+            remedy: "free the port the git proxy binds and restart the daemon",
+          },
+        ],
+      }),
+      "reconciler-down",
+    );
+    expect(alert.sentence).toContain(
+      "git proxy: listen tcp 127.0.0.1:30208: bind: address already in use",
+    );
+    expect(alert.sentence).toContain(
+      "Free the port the git proxy binds and restart the daemon.",
+    );
+    expect(alert.since).toBe("2026-11-04T15:00:00Z");
+    // Without conditions the sentence is the one it always was.
+    const plain = byId(
+      collectAlerts({ ...base, reconcilerDown: true }),
+      "reconciler-down",
+    );
+    expect(plain.sentence).toContain("Restart the daemon to recover.");
+    expect(plain.since).toBeUndefined();
+  });
+
   // Each source the banners used to show, with the severity alerts.js
   // gives it and where it applies.
   it("gives every source its severity and scope", () => {
@@ -106,6 +141,28 @@ describe("collectAlerts (grain/task-4008)", () => {
       "state-sync-failing",
       "reconciler-down",
     ]);
+  });
+
+  // The store switched under a running daemon (pkg/daemon/storeswitch.go)
+  // is critical: nothing dispatches until a restart, and the sentence is
+  // the server's own, naming both stores.
+  it("raises a critical alert when the store is switched underneath the daemon", () => {
+    const alerts = collectAlerts({
+      ...base,
+      storeSwitch: {
+        since: "2026-11-04T03:32:00Z",
+        opened: "SQLite at /var/lib/grain/data/store",
+        selected: "PostgreSQL at postgres://grain@127.0.0.1:5432/grain",
+        message:
+          "the store this daemon writes to is no longer the one db-config.json selects",
+      },
+    });
+    const a = byId(alerts, "store-switched");
+    expect(a.severity).toBe("critical");
+    expect(scopeLabel(a.scope)).toBe("Deployment");
+    expect(a.sentence).toMatch(/db-config\.json selects\.$/);
+    expect(a.impact).toMatch(/No task is dispatched/);
+    expect(a.since).toBe("2026-11-04T03:32:00Z");
   });
 
   // One row per pause the server reports, so a per-connection pause

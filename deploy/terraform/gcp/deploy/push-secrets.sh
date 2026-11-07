@@ -107,7 +107,7 @@
 #                                      registry grain_image lives in, for a deployment
 #                                      running a private image (a GitHub PAT with
 #                                      read:packages, for a private GHCR package). Optional
-#                                      and normally unset: ghcr.io/bwsalmon/grain's own
+#                                      and normally unset: docker.io/grainai's own
 #                                      package is public, and the host pulls anonymously.
 #                                      The username half is not a secret and is a Terraform
 #                                      input instead (grain_image_pull_user)
@@ -169,7 +169,7 @@ push_secret "openai-api-key" "${GRAIN_OPENAI_API_KEY:-}"
 # costs a redeploy every secret it had.
 push_secret "secrets-key" "${GRAIN_SECRETS_KEY:-}"
 # Only for a deployment whose grain_image lives in a registry that needs
-# credentials -- ghcr.io/bwsalmon/grain's own package is public and pulls
+# credentials -- docker.io/grainai's own package is public and pulls
 # anonymously, so this is empty (and skipped) in the ordinary case. The
 # username half is not a secret and is a Terraform input
 # (grain_image_pull_user); this is the token.

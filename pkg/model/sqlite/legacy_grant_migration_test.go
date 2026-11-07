@@ -116,6 +116,8 @@ var retiredGrants = []struct {
 	{101, "registry-push", []string{model.RegistryPushRef + "={}"}},
 	{101, "package-publish", []string{model.PackagePublishRef + "={}"}},
 	{103, "gemini-key", []string{model.GCPGeminiKeyGrant}},
+	{115, "self-debug", []string{"api:self-debug", model.GrainSourceGrant}},
+	{118, "bootstrap-playbooks", []string{model.BootstrapPlaybooksGrant}},
 }
 
 // retiredAs is what a store migration rewrote name to: retiredGrants'
@@ -150,7 +152,7 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 	cfg := testConfig()
 	cfg.DefaultCapabilities = []string{legacy, "read-issues"}
 	cfg.ConsoleSessions = []model.ConsoleSession{
-		{ID: "director", Title: "Director", Capabilities: []string{"self-debug", legacy}},
+		{ID: "director", Title: "Director", Capabilities: []string{"read-issues", legacy}},
 		{ID: "steward", Title: "Steward", Capabilities: append(slices.Clone(replacements), legacy)},
 		{ID: "quiet", Title: "Quiet"},
 	}
@@ -158,13 +160,13 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 		t.Fatal(err)
 	}
 	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
-	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: widgets, DefaultCapabilities: []string{"self-debug", legacy},
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: widgets, DefaultCapabilities: []string{"read-issues", legacy},
 		CICapabilities: []string{"github-sandbox", legacy}}); err != nil {
 		t.Fatal(err)
 	}
 	fixture := map[string]map[string][]string{
 		"task_grant": {
-			"1": {legacy, "self-debug"},
+			"1": {legacy, "read-issues"},
 			"2": append([]string{legacy}, replacements...),
 			"3": {"api:tasks:write"},
 		},
@@ -226,7 +228,7 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := append([]string{"self-debug"}, replacements...); !slices.Equal(repo.DefaultCapabilities, want) {
+	if want := append([]string{"read-issues"}, replacements...); !slices.Equal(repo.DefaultCapabilities, want) {
 		t.Errorf("repo default capabilities = %v, want %v", repo.DefaultCapabilities, want)
 	}
 	// Migrations 83 to 86 rewrite retired names in repo_config.ci_capabilities as well.
@@ -278,10 +280,10 @@ func TestMigration86RewritesCorpResearchIdempotently(t *testing.T) {
 	store, db, ctx := openStore(t)
 
 	cfg := testConfig()
-	cfg.DefaultCapabilities = []string{"self-debug", "corp-research", "read-issues"}
+	cfg.DefaultCapabilities = []string{"priority-dispatch", "corp-research", "read-issues"}
 	cfg.ConsoleSessions = []model.ConsoleSession{
-		{ID: "director", Title: "Director", Capabilities: []string{"corp-research", "self-debug"}},
-		{ID: "quiet", Title: "Quiet", Capabilities: []string{"self-debug"}},
+		{ID: "director", Title: "Director", Capabilities: []string{"corp-research", "read-issues"}},
+		{ID: "quiet", Title: "Quiet", Capabilities: []string{"read-issues"}},
 	}
 	if err := store.PutConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
@@ -294,12 +296,12 @@ func TestMigration86RewritesCorpResearchIdempotently(t *testing.T) {
 	}
 	other := model.RepoRef{Owner: "acme", Name: "other"}
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: other,
-		DefaultCapabilities: []string{"self-debug"}, CICapabilities: []string{"github-sandbox"}}); err != nil {
+		DefaultCapabilities: []string{"read-issues"}, CICapabilities: []string{"github-sandbox"}}); err != nil {
 		t.Fatal(err)
 	}
 	for _, row := range []struct{ table, owner, id, capability string }{
 		{"task_grant", "task_id", "1", "corp-research"},
-		{"task_grant", "task_id", "1", "self-debug"},
+		{"task_grant", "task_id", "1", "read-issues"},
 		{"task_grant", "task_id", "2", "corp-research"},
 		{"task_grant", "task_id", "2", model.CorpResearchGrant},
 		{"task_grant", "task_id", "3", "api:tasks:write"},
@@ -323,7 +325,7 @@ func TestMigration86RewritesCorpResearchIdempotently(t *testing.T) {
 	after := storedGrantState(t, ctx, db)
 
 	corp := model.CorpResearchGrant
-	wantTasks := map[string][]string{"1": {corp, "self-debug"}, "2": {corp}, "3": {"api:tasks:write"}}
+	wantTasks := map[string][]string{"1": {corp, "read-issues"}, "2": {corp}, "3": {"api:tasks:write"}}
 	if got := after["task_grant"]; !equalRows(got.(map[string][]string), wantTasks) {
 		t.Errorf("task grants = %v, want %v", got, wantTasks)
 	}
@@ -337,10 +339,10 @@ func TestMigration86RewritesCorpResearchIdempotently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"self-debug", corp, "read-issues"}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
+	if want := []string{"priority-dispatch", corp, "read-issues"}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
 		t.Errorf("default capabilities = %v, want %v", gotCfg.DefaultCapabilities, want)
 	}
-	if got, want := gotCfg.ConsoleSessions[0].Capabilities, []string{corp, "self-debug"}; !slices.Equal(got, want) {
+	if got, want := gotCfg.ConsoleSessions[0].Capabilities, []string{corp, "read-issues"}; !slices.Equal(got, want) {
 		t.Errorf("director capabilities = %v, want %v", got, want)
 	}
 	gotRepo, err := store.GetRepoConfig(ctx, widgets)
@@ -497,7 +499,7 @@ func TestMigrationFoldsRetiredCatalogueInProcess(t *testing.T) {
 	cfg.CapabilityPolicy = model.CapabilityPolicy{
 		Catalogue: &model.CapabilityCatalogue{
 			Defaults: model.CatalogueDefaults{
-				Task: []string{"pipeline-control", "self-debug"},
+				Task: []string{"pipeline-control", "read-issues"},
 				Repos: map[string]model.CatalogueRepoDefaults{
 					"acme/widgets": {
 						Task: []string{"release-notes", "memory"},
@@ -515,7 +517,7 @@ func TestMigrationFoldsRetiredCatalogueInProcess(t *testing.T) {
 					Repos: model.Patterns{"acme/*"},
 					Kinds: model.Patterns{"task", "session"},
 				}},
-				"self-debug": {Restrictions: &model.CapabilityRestrictions{
+				"read-issues": {Restrictions: &model.CapabilityRestrictions{
 					Repos: model.Patterns{"ai-on-gke/grain"},
 				}},
 			},
@@ -555,8 +557,8 @@ func TestMigrationFoldsRetiredCatalogueInProcess(t *testing.T) {
 			t.Errorf("inProcess[%q] survived migration: %+v", retired, cat.InProcess)
 		}
 	}
-	if _, exists := cat.InProcess["self-debug"]; !exists {
-		t.Error("inProcess[self-debug] was dropped")
+	if _, exists := cat.InProcess["read-issues"]; !exists {
+		t.Error("inProcess[read-issues] was dropped")
 	}
 	mem, ok := cat.APIScopes.Presets["memory"]
 	if !ok || mem.Enabled == nil || *mem.Enabled {
@@ -571,7 +573,7 @@ func TestMigrationFoldsRetiredCatalogueInProcess(t *testing.T) {
 		!slices.Equal([]string(tq.Restrictions.Kinds), []string{"task"}) {
 		t.Fatalf("apiScopes.presets[test-quarantine] = %+v, want conservative intersection", tq)
 	}
-	if want := []string{"api:pipeline-control", "self-debug"}; !slices.Equal(cat.Defaults.Task, want) {
+	if want := []string{"api:pipeline-control", "read-issues"}; !slices.Equal(cat.Defaults.Task, want) {
 		t.Errorf("catalogue.defaults.task = %v, want %v", cat.Defaults.Task, want)
 	}
 	if want := []string{"api:release-notes", "api:memory"}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].Task, want) {
@@ -636,9 +638,9 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 	cfg.GCPProject = "acme-pool"
 	cfg.GCPServiceAccountEmail = "sandbox-agent@acme-pool.iam.gserviceaccount.com"
 	cfg.GCPServiceAccountCount = 3
-	cfg.DefaultCapabilities = []string{"self-debug", "gcp-key", "gcp-key:deploy"}
+	cfg.DefaultCapabilities = []string{"read-issues", "gcp-key", "gcp-key:deploy"}
 	cfg.ConsoleSessions = []model.ConsoleSession{
-		{ID: "director", Title: "Director", Capabilities: []string{"gcp-key", "gcp-key:staging", "self-debug"}},
+		{ID: "director", Title: "Director", Capabilities: []string{"gcp-key", "gcp-key:staging", "read-issues"}},
 	}
 	cfg.CapabilityPolicy = model.CapabilityPolicy{
 		Rules: []model.CapabilityPolicyRule{
@@ -647,11 +649,11 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 		},
 		Catalogue: &model.CapabilityCatalogue{
 			Defaults: model.CatalogueDefaults{
-				Task: []string{"self-debug", "gcp-key", "gcp-key:deploy"},
+				Task: []string{"read-issues", "gcp-key", "gcp-key:deploy"},
 				CI:   []string{"gcp-key:staging"},
 				Repos: map[string]model.CatalogueRepoDefaults{
 					"acme/widgets": {
-						Task: []string{"gcp-key", "gcp-key:deploy", "self-debug"},
+						Task: []string{"gcp-key", "gcp-key:deploy", "read-issues"},
 						CI:   []string{"github-sandbox", "gcp-key", "gcp-key:staging"},
 					},
 				},
@@ -686,7 +688,7 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo:                widgets,
-		DefaultCapabilities: []string{"gcp-key", "gcp-key:deploy", "self-debug"},
+		DefaultCapabilities: []string{"gcp-key", "gcp-key:deploy", "read-issues"},
 		CICapabilities:      []string{"github-sandbox", "gcp-key", "gcp-key:staging"},
 	}); err != nil {
 		t.Fatal(err)
@@ -695,7 +697,7 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 	for _, row := range []struct{ table, owner, id, capability string }{
 		{"task_grant", "task_id", "t1", "gcp-key"},
 		{"task_grant", "task_id", "t1", "gcp-key:deploy"},
-		{"task_grant", "task_id", "t1", "self-debug"},
+		{"task_grant", "task_id", "t1", "read-issues"},
 		{"template_grant", "template_id", "suite-tmpl", "gcp-key"},
 		{"template_grant", "template_id", "suite-tmpl", "gcp-key:staging"},
 		{"schedule_grant", "schedule_id", "sched-1", "gcp-key:deploy"},
@@ -785,10 +787,10 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 		deployGrant := model.GCPKeyServerGrant("deploy")
 		stagingGrant := model.GCPKeyServerGrant("staging")
 
-		if want := []string{"self-debug", sandboxGrant, deployGrant}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
+		if want := []string{"read-issues", sandboxGrant, deployGrant}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
 			t.Errorf("DefaultCapabilities = %v, want %v", gotCfg.DefaultCapabilities, want)
 		}
-		if want := []string{sandboxGrant, stagingGrant, "self-debug"}; !slices.Equal(gotCfg.ConsoleSessions[0].Capabilities, want) {
+		if want := []string{sandboxGrant, stagingGrant, "read-issues"}; !slices.Equal(gotCfg.ConsoleSessions[0].Capabilities, want) {
 			t.Errorf("ConsoleSessions[0].Capabilities = %v, want %v", gotCfg.ConsoleSessions[0].Capabilities, want)
 		}
 		if len(gotCfg.CapabilityPolicy.Rules) != 2 ||
@@ -799,13 +801,13 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 		if gotCfg.CapabilityPolicy.Catalogue == nil {
 			t.Fatalf("CapabilityPolicy.Catalogue nil")
 		}
-		if want := []string{"self-debug", sandboxGrant, deployGrant}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.Task, want) {
+		if want := []string{"read-issues", sandboxGrant, deployGrant}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.Task, want) {
 			t.Errorf("Catalogue.Defaults.Task = %v, want %v", gotCfg.CapabilityPolicy.Catalogue.Defaults.Task, want)
 		}
 		if want := []string{stagingGrant}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.CI, want) {
 			t.Errorf("Catalogue.Defaults.CI = %v, want %v", gotCfg.CapabilityPolicy.Catalogue.Defaults.CI, want)
 		}
-		if want := []string{sandboxGrant, deployGrant, "self-debug"}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.Repos["acme/widgets"].Task, want) {
+		if want := []string{sandboxGrant, deployGrant, "read-issues"}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.Repos["acme/widgets"].Task, want) {
 			t.Errorf("Catalogue.Defaults.Repos[acme/widgets].Task = %v, want %v", gotCfg.CapabilityPolicy.Catalogue.Defaults.Repos["acme/widgets"].Task, want)
 		}
 		if want := []string{"github-sandbox", sandboxGrant, stagingGrant}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.Repos["acme/widgets"].CI, want) {
@@ -816,14 +818,14 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 		if err != nil || gotRepo == nil {
 			t.Fatalf("GetRepoConfig: %v, %+v", err, gotRepo)
 		}
-		if want := []string{sandboxGrant, deployGrant, "self-debug"}; !slices.Equal(gotRepo.DefaultCapabilities, want) {
+		if want := []string{sandboxGrant, deployGrant, "read-issues"}; !slices.Equal(gotRepo.DefaultCapabilities, want) {
 			t.Errorf("repo DefaultCapabilities = %v, want %v", gotRepo.DefaultCapabilities, want)
 		}
 		if want := []string{"github-sandbox", sandboxGrant, stagingGrant}; !slices.Equal(gotRepo.CICapabilities, want) {
 			t.Errorf("repo CICapabilities = %v, want %v", gotRepo.CICapabilities, want)
 		}
 
-		wantTasks := map[string][]string{"t1": {deployGrant, sandboxGrant, "self-debug"}}
+		wantTasks := map[string][]string{"t1": {deployGrant, sandboxGrant, "read-issues"}}
 		if got := grantRows(t, ctx, sqlDB, "task_grant", "task_id"); !equalRows(got, wantTasks) {
 			t.Errorf("task_grant = %v, want %v", got, wantTasks)
 		}

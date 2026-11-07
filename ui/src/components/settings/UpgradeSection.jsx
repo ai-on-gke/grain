@@ -35,19 +35,21 @@ export default function UpgradeSection({ config, showError, onOpenUpdates }) {
   const [upgradeKey, setUpgradeKey] = useState(0);
   return (
     <Box id="upgrade" data-testid="upgrade-section">
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Automatic upgrades -- upgrading when a release is published is
-        recommended -- and what grain does after an upgrade lands are set in{" "}
-        <Link
-          component="button"
-          type="button"
-          onClick={() => onOpenUpdates?.()}
-          data-testid="upgrade-check-settings-link"
-        >
-          Settings → General → Updates
-        </Link>
-        .
-      </Typography>
+      {!config?.selfUpgradeDisabled && (
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Automatic upgrades -- upgrading when a release is published is
+          recommended -- and what grain does after an upgrade lands are set in{" "}
+          <Link
+            component="button"
+            type="button"
+            onClick={() => onOpenUpdates?.()}
+            data-testid="upgrade-check-settings-link"
+          >
+            Settings → General → Updates
+          </Link>
+          .
+        </Typography>
+      )}
       {/* Before any upgrade is picked: this build expects container
         mode, and the daemon refuses an in-place upgrade of a
         host-mode install until the installer has migrated it. */}

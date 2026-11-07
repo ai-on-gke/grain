@@ -60,6 +60,10 @@ type Method struct {
 	// capabilities and the shipped director session's
 	// (Registration.DefaultOn).
 	DefaultOn bool
+	// SandboxEgress says the method needs the sandbox itself to reach the
+	// internet (Registration.SandboxEgress): with DefaultOn, the shipped
+	// director stays NetworkOpen on this build.
+	SandboxEgress bool
 	// Aliases are the retired bare capability names the method replaces,
 	// such as the provider it retires: model.CanonicalLegacyGrant rewrites
 	// each to Grant wherever a grant is recorded, and the bare name keeps
@@ -131,7 +135,7 @@ func Register(m Method) (unregister func()) {
 	registered = true
 	forgetMethodServer(m.Server)
 	if m.DefaultOn {
-		undo = append(undo, model.RegisterDefaultConsoleSessionCapability(m.Grant()))
+		undo = append(undo, registerDefaultConsoleSessionCapability(m.Grant(), m.SandboxEgress))
 	}
 	return func() {
 		mu.Lock()

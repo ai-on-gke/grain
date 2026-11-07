@@ -119,7 +119,7 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "S
 1. `pkg/model` MUST define `IsAdminOnlyGrant(grant string) bool`, returning `true` if and only if any of the following holds:
    - `model.IsPersonOnlyGrant(grant)` is `true` (`priority-dispatch`, `durable`, any dangerous `api:*` scope—`tasks:admin`, `merge:force`, `settings:write`, `connections:write`, `capabilities:admin`, `secrets:write`, `deployment:upgrade`, `deployment:restart`, `deployment:reboot`—or any built-in/declared scope set with `requires_person: true`);
    - `grant` is an `api:*` grant (scope, preset, or declared scope set, with or without `@owner/name`) whose resolved `APIScope` set contains any scope whose route requirement is `RoleAdmin` (`repos:write`, `schedules:write`, `templates:write`, `suites:write`, `boards:write`, `memory:write`, `sessions:write`, `caches:write`, `teams:broadcast`, `secrets:read`, `connections:read`); or
-   - `grant` names a host-execution capability marked `AdminOnly` in the capability registry (`self-repair` and `local-script`).
+   - `grant` names a host-execution capability marked `AdminOnly` in the capability registry (`https://grain.dev/capabilities/grain#host-exec`, formerly `self-repair`, retired in schema migration 84; and `…/host-script#host-script`, formerly `local-scripts:<name>`, retired in tasks 2366 and 3077).
 2. Repository-seeded default capabilities (`repo_config.default_capabilities`, configured by an `admin`) that do not satisfy `IsAdminOnlyGrant` are `writer`-grantable; if an `admin` configures an `IsAdminOnlyGrant` capability in `repo_config.default_capabilities`, tasks inheriting it strictly via `GrantByDefault` (`director-capabilities.spec.md` §4.2) without caller-supplied argument overrides MAY be filed by a `writer` without holding for `admin` approval, because an `admin` authored that repository default.
 
 ### 2.2 Writer task filing, editing, capability attachment, and proposal approval {#RB-8}
@@ -222,7 +222,7 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 | `POST /api/tasks/{id}/resume` | `tasks:write` | `writer` | Resumes paused task. |
 | `PUT /api/tasks/{id}/goal` | `tasks:write` | `writer` | Sets task completion goal. |
 | `DELETE /api/tasks/{id}/goal` | `tasks:write` | `writer` | Clears task completion goal. |
-| `PUT /api/tasks/{id}/hostd` | `tasks:write` | `writer` | Selects registered `hostd` target on task. |
+| `PUT /api/tasks/{id}/hostd` | `tasks:write` | `writer` | Refused (400): a task has no `hostd`; it is set on the model connection or capability server (schema 111). |
 | `POST /api/tasks/{id}/reopen` | `tasks:write` | `writer` | Reopens closed task. |
 | `POST /api/tasks/{id}/retry` | `tasks:write` | `writer` | Retries failed/stopped task. |
 | `POST /api/tasks/{id}/retry-merge` | `merge:write` | `writer` | Re-queues PR into normal merge checks. |
@@ -251,7 +251,7 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 | `PUT /api/tasks/{id}/session-title` | `internal` | `daemon` | `grain mcpserver` session title update (`admin` token). |
 | `POST /api/tasks/{id}/staged-attachments` | `internal` | `daemon` | `grain mcpserver` attachment staging (`admin` token). |
 | `POST /api/tasks/{id}/db/query` | `internal` | `daemon` | `grain mcpserver` `self-debug` read-only SQL query (`admin` token). |
-| `POST /api/tasks/{id}/db/execute` | `internal` | `daemon` | `grain mcpserver` `self-repair` SQL execution (`admin` token). |
+| `POST /api/tasks/{id}/db/execute` | `internal` | `daemon` | `grain mcpserver` `…/grain#sql` `{write: true}` SQL execution (formerly `db-write`, retired in schema migration 82; `admin` token). |
 | `POST /api/tasks/{id}/notify` | `internal` | `daemon` | `grain mcpserver` notification relay (`admin` token). |
 | `POST /api/tasks/{id}/delivered` | `internal` | `daemon` | `grain mcpserver` message delivery cursor (`admin` token). |
 | `POST /api/tasks/{id}/wait-credit` | `internal` | `daemon` | `grain mcpserver` CI/task wait deadline credit (`admin` token). |
@@ -441,8 +441,11 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 | `GET /api/hostds` | `capabilities:read` | `admin` | Lists registered `grain hostd` instances. |
 | `POST /api/hostds` | `capabilities:admin` | `admin` | Registers `hostd` and mints `ghd_…` token (``RB-9`.4`, `RB-14`). |
 | `PATCH /api/hostds/{name}` | `capabilities:admin` | `admin` | Updates `hostd` owner/metadata. |
+| `GET /api/hostds/{name}/install` | `capabilities:read` | `admin` | Shows a registered `hostd`'s install instructions again (`ui.RegisterHostdInstall`); never its token. |
 | `POST /api/hostds/{name}/rotate` | `capabilities:admin` | `admin` | Rotates `ghd_…` token. |
 | `POST /api/hostds/{name}/revoke` | `capabilities:admin` | `admin` | Revokes `ghd_…` token. |
+| `DELETE /api/hostds/{name}` | `capabilities:admin` | `admin` | Deletes a revoked `hostd` and its `ghd_…` token rows; refuses a live one, `local`, and one a model connection or capability server still names. |
+| `POST /api/hostds/delete-revoked` | `capabilities:admin` | `admin` | Deletes every revoked `hostd` nothing still names; lists those skipped. |
 | `GET /api/hostd/connect` | `internal` | `protocol` | `hostd` dial-in upgrade; enforces `X-Grain-Hostd-Token` + verified owner (`AU-17`, `AU-18`). |
 | `POST /mcp` | `internal` | `protocol` | Streamable HTTP MCP; authenticates `gma_…` and enforces per-tool route role + `OnBehalfOf` intersection (§4). |
 
@@ -521,11 +524,7 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 | `POST /api/state-repo/import-key` | `secrets:write` | `admin` | Imports state-repo secrets encryption key. |
 | `POST /api/state-repo/secrets-repo` | `secrets:write` | `admin` | Configures encrypted secrets backup repository. |
 | `POST /api/state-repo/reset-notice` | `settings:write` | `admin` | Clears state-repo warning notice. |
-| `GET /api/database` | `settings:read` | `admin` | Reads database backend/migration status. |
-| `POST /api/database/test` | `settings:write` | `admin` | Tests target PostgreSQL connection. |
-| `POST /api/database/upgrade` | `deployment:upgrade` | `admin` | Migrates SQLite database to PostgreSQL. |
-| `POST /api/upgrade/postgres` | `deployment:upgrade` | `admin` | Legacy PostgreSQL upgrade alias. |
-| `POST /api/settings/db/migrate-to-postgres` | `settings:write` | `admin` | Settings PostgreSQL migration endpoint. |
+| `GET /api/database` | `settings:read` | `admin` | Reads which database backend is in use. No route migrates it: store moves are offline only (docs/database.md). |
 | `DELETE /api/ci/cache` | `caches:write` | `admin` | Flushes CI cache. |
 | `POST /api/package-cache/flush` | `caches:write` | `admin` | Flushes package cache. |
 | `POST /api/actions-cache/flush` | `caches:write` | `admin` | Flushes GitHub Actions cache. |
@@ -744,7 +743,7 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
      - `writer` succeeds on `public`, `reader`, and `writer` baseline routes and receives `403` (`code: "insufficient_role"`, `requiredRole: "admin"`, `actorRole: "writer"`) on every `admin` and `daemon` route;
      - `admin` and break-glass `access-code` pass `RequirePermission` on all routes.
    - Payload-conditional elevation cases MUST have dedicated subtests:
-     - `writer` calling `POST /api/tasks` (`approved: true`), `POST /api/tasks/{id}/approve`, or `POST /api/tasks/{id}/capabilities` with each class of `IsAdminOnlyGrant` (`api:settings:write`, `api:repos:write`, `priority-dispatch`, `durable`, `self-repair`) → `403` (`requiredRole: "admin"`), while `POST /api/tasks` (`approved: false`) holds in `proposed` with `CapabilityEscalationNote`;
+     - `writer` calling `POST /api/tasks` (`approved: true`), `POST /api/tasks/{id}/approve`, or `POST /api/tasks/{id}/capabilities` with each class of `IsAdminOnlyGrant` (`api:settings:write`, `api:repos:write`, `priority-dispatch`, `durable`, `…/grain#host-exec`) → `403` (`requiredRole: "admin"`), while `POST /api/tasks` (`approved: false`) holds in `proposed` with `CapabilityEscalationNote`;
      - `writer` calling `POST /api/tasks/{id}/submit` on an ordinary repo → `200`, vs. on `grain/config` (`state_repo`) → `403` (`requiredRole: "admin"`);
      - `writer` calling `/staging/web/ws` (`Upgrade: websocket`) → allowed, vs. `reader` calling `/staging/web/ws` → `403` before `101` upgrade.
 

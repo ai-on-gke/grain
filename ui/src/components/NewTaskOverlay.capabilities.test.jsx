@@ -26,7 +26,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import NewTaskOverlay from "./NewTaskOverlay.jsx";
 import { resetCapabilityMethodsForTest } from "./capabilityMethods.js";
 import api from "../api.js";
-import { chooseOption } from "../searchSelectTesting.js";
+import { chips, chooseOption } from "../searchSelectTesting.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn().mockResolvedValue(null) }));
 
@@ -37,7 +37,10 @@ const filed = () =>
   JSON.parse(api.mock.calls.find(([path]) => path === "/api/tasks")[1].body);
 
 // ticked is what the Legacy capabilities picker shows as held.
-const ticked = () => screen.getByLabelText("Legacy capabilities").textContent;
+const ticked = () =>
+  chips(screen.getByLabelText("Legacy capabilities"))
+    .map((c) => c.textContent)
+    .join(", ");
 
 describe("NewTaskOverlay", () => {
   afterEach(() => {
@@ -79,8 +82,11 @@ describe("NewTaskOverlay", () => {
     await user.type(dependsOnInput, "15");
     await user.click(await screen.findByText("Add dark mode"));
 
-    await user.click(screen.getByLabelText("Legacy capabilities"));
-    await user.click(await screen.findByRole("option", { name: "Web search" }));
+    await chooseOption(
+      user,
+      screen.getByLabelText("Legacy capabilities"),
+      "Web search",
+    );
     await user.keyboard("{Escape}");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
@@ -291,8 +297,11 @@ describe("NewTaskOverlay", () => {
 
     await user.type(screen.getByLabelText(/Title/), "No key");
     await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
-    await user.click(screen.getByLabelText("Legacy capabilities"));
-    await user.click(await screen.findByRole("option", { name: "GCP key" }));
+    await chooseOption(
+      user,
+      screen.getByLabelText("Legacy capabilities"),
+      "GCP key",
+    );
     await user.keyboard("{Escape}");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
@@ -412,8 +421,11 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Mine");
-    await user.click(screen.getByLabelText("Legacy capabilities"));
-    await user.click(await screen.findByRole("option", { name: "Gemini key" }));
+    await chooseOption(
+      user,
+      screen.getByLabelText("Legacy capabilities"),
+      "Gemini key",
+    );
     await user.keyboard("{Escape}");
     await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
     await user.click(screen.getByRole("button", { name: "Create task" }));
@@ -562,9 +574,9 @@ describe("NewTaskOverlay", () => {
     );
     expect(JSON.parse(check.at(-1)[1].body).subject).toEqual({ repo: "" });
     expect(
-      screen
-        .getByLabelText("Legacy capabilities")
-        .querySelectorAll("[data-catalogue-refused]"),
+      chips(screen.getByLabelText("Legacy capabilities")).filter(
+        (c) => c.dataset.catalogueRefused,
+      ),
     ).toHaveLength(1);
 
     await user.click(screen.getByRole("button", { name: "Create task" }));

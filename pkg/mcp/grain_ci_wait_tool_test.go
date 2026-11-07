@@ -1373,3 +1373,24 @@ func TestRetriedJobWithCancelledRetryReportsAttempt1FailureAndLogs(t *testing.T)
 		}
 	}
 }
+
+// TestCILogHeadingNamesAGitHubActionsRunAsOne: a GitHub Actions run grain
+// stored from a workflow_run webhook is not a grain CI run, and the
+// get_ci_log heading must not call it one.
+func TestCILogHeadingNamesAGitHubActionsRunAsOne(t *testing.T) {
+	job := ci.JobRun{Name: "go-long", Conclusion: ci.ConclusionFailure}
+	for _, tc := range []struct {
+		name string
+		run  ci.Run
+		want string
+	}{
+		{"grain", ci.Run{ID: "7"}, "grain CI run 7, job go-long (failure)"},
+		{"provider", ci.Run{ID: "2101", Provider: ci.ProviderGitHubActions}, "GitHub Actions run 2101, job go-long (failure)"},
+		{"actions", ci.Run{ID: "2101", Actions: &ci.ActionsRun{}}, "GitHub Actions run 2101, job go-long (failure)"},
+		{"event", ci.Run{ID: "2101", Event: "workflow_run"}, "GitHub Actions run 2101, job go-long (failure)"},
+	} {
+		if got := ciLogHeading(tc.run, job, "", false, 1, 1); !strings.HasPrefix(got, tc.want) {
+			t.Errorf("%s: heading = %q, want it to start %q", tc.name, got, tc.want)
+		}
+	}
+}

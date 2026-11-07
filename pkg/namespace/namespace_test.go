@@ -29,8 +29,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability/bootstrap/playbooks"
 	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/objectstore"
+	"github.com/ai-on-gke/grain/pkg/playbooks"
 	"github.com/ai-on-gke/grain/pkg/redact"
 )
 
@@ -231,13 +232,14 @@ func TestGrantScoping(t *testing.T) {
 		t.Errorf("other repo ci-read got status %d, want 403", rec.Code)
 	}
 
-	// 3. No self-debug -> 403 on src://, with self-debug -> 200
-	if rec := serveRequest(srv, repoCIScope, http.MethodGet, "/fs/src/main.go", nil); rec.Code != http.StatusForbidden {
-		t.Errorf("no self-debug on src:// got status %d, want 403", rec.Code)
+	// 3. No grain#source -> 403 on src:// naming it, with it -> 200
+	if rec := serveRequest(srv, repoCIScope, http.MethodGet, "/fs/src/main.go", nil); rec.Code != http.StatusForbidden ||
+		!strings.Contains(rec.Body.String(), `"https://grain.dev/capabilities/grain#source"`) {
+		t.Errorf("no grain#source on src:// got status %d %q, want 403 naming grain#source", rec.Code, rec.Body.String())
 	}
 	srcScope := Scope{MayReadSrc: true}
 	if rec := serveRequest(srv, srcScope, http.MethodGet, "/fs/src/main.go", nil); rec.Code != http.StatusOK {
-		t.Errorf("with self-debug on src:// got status %d, want 200", rec.Code)
+		t.Errorf("with grain#source on src:// got status %d, want 200", rec.Code)
 	}
 }
 
@@ -879,7 +881,7 @@ func TestTaskReadsTasksInTheScopesRepositories(t *testing.T) {
 	}
 	for _, id := range []string{"103", "104", "999"} {
 		if rec := serveRequest(srv, scope, http.MethodGet, "/fs/task/"+id+"/record.md", nil); rec.Code != http.StatusForbidden ||
-			!strings.Contains(rec.Body.String(), `"self-debug"`) {
+			!strings.Contains(rec.Body.String(), `"api:tasks:read"`) {
 			t.Errorf("task://%s outside the scope's repositories: %d %q", id, rec.Code, rec.Body.String())
 		}
 	}
@@ -923,7 +925,7 @@ func TestTaskReadsSiblingsOnlyWithATasksReadGrant(t *testing.T) {
 		if strings.Contains(body, "Task 101") {
 			t.Errorf("task://101/%s refusal leaks the sibling: %q", f, body)
 		}
-		if !strings.Contains(body, `"self-debug"`) || !strings.Contains(body, "api:tasks:read@") {
+		if !strings.Contains(body, `"api:tasks:read"`) || !strings.Contains(body, "api:tasks:read@") {
 			t.Errorf("task://101/%s refusal does not name the grants: %q", f, body)
 		}
 	}
@@ -1096,5 +1098,67 @@ func TestGrepOnCIRunSkipsAttemptsUnlessAsked(t *testing.T) {
 	}
 	if got, want := rec.Body.String(), "sub/deeper/note.txt:1:nested match\n"; got != want {
 		t.Errorf("bare glob grep = %q, want %q", got, want)
+	}
+}
+
+func TestCIArtifactsServedFromObjectStoreReadThroughCache(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	mem := objectstore.NewMemory()
+	artStore1, err := ci.OpenObjectArtifacts(objectstore.WithPrefix(mem, "ci-artifacts"), t.TempDir(), ci.DirArtifactsOptions{})
+	if err != nil {
+		t.Fatalf("OpenObjectArtifacts writer: %v", err)
+	}
+	ref := ci.ArtifactRef{Run: "runobj1", Job: "go", Name: "cover"}
+	if rec, err := artStore1.Save(ctx, ref, []byte("mode: count\n")); err != nil || !rec.Stored {
+		t.Fatalf("Save: %+v, %v", rec, err)
+	}
+
+	// Simulate a replacement VM whose local cache directory starts empty.
+	vm2CacheDir := t.TempDir()
+	artStore2, err := ci.OpenObjectArtifacts(objectstore.WithPrefix(mem, "ci-artifacts"), vm2CacheDir, ci.DirArtifactsOptions{})
+	if err != nil {
+		t.Fatalf("OpenObjectArtifacts reader: %v", err)
+	}
+
+	runStore := ci.NewRunStore(10)
+	now := time.Now().UTC()
+	runStore.Put(ci.Run{
+		ID:         "runobj1",
+		Repo:       "bwsalmon/grain",
+		Ref:        "main",
+		Conclusion: ci.ConclusionFailure,
+		StartedAt:  &now,
+		FinishedAt: &now,
+		Jobs: []ci.JobRun{
+			{
+				JobID:      "go",
+				Name:       "go",
+				Conclusion: ci.ConclusionFailure,
+				Artifacts: []ci.Artifact{
+					{Run: "runobj1", Job: "go", Name: "cover", Stored: true, Bytes: 12},
+				},
+			},
+		},
+	})
+
+	srv := newTestServer(t, runStore, "", nil)
+	srv.ArtifactDir = vm2CacheDir
+	srv.Artifacts = artStore2
+	scope := Scope{TaskRepo: "bwsalmon/grain", MayReadCI: true}
+
+	mem.ResetCounts()
+	for i := 0; i < 2; i++ {
+		rec := serveRequest(srv, scope, http.MethodGet, "/fs/ci/bwsalmon/grain/runobj1/artifacts/go/cover", nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("read #%d status = %d: %s", i, rec.Code, rec.Body.String())
+		}
+		if got := rec.Body.String(); got != "mode: count\n" {
+			t.Fatalf("read #%d body = %q, want %q", i, got, "mode: count\n")
+		}
+	}
+	if mem.GetCount() != 1 {
+		t.Fatalf("MemoryStore.GetCount = %d, want 1 (read-through cached after first miss)", mem.GetCount())
 	}
 }

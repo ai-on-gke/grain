@@ -129,7 +129,19 @@ export function buildProcessRows({
   suiteRuns = list(suiteRuns);
   const rows = [];
 
+  const eventNextLabel = (s) => {
+    const kind = s?.recurrence?.kind;
+    if (kind === "git_ref") {
+      return s?.suppressed?.reason === "watchedRepoOffTarget"
+        ? "suppressed"
+        : "on ref move";
+    }
+    if (kind === "github_workflow_run") return "on workflow run";
+    return null;
+  };
+
   for (const s of schedules) {
+    const evLabel = eventNextLabel(s);
     rows.push({
       key: `schedule:${s.id}`,
       kind: isWorkflowSchedule(s) ? "workflow" : "schedule",
@@ -139,8 +151,8 @@ export function buildProcessRows({
       targetRepos: s.repo ? [s.repo] : [],
       lastRunAt: s.lastRunAt || null,
       lastWorkflowRun: s.lastWorkflowRun || null,
-      nextRunAt: s.nextRunAt || null,
-      nextLabel: null,
+      nextRunAt: evLabel ? null : s.nextRunAt || null,
+      nextLabel: evLabel,
       enabled: !!s.enabled,
       system: !!s.system,
       declaredIn: s.declaredIn || null,
@@ -154,7 +166,7 @@ export function buildProcessRows({
   const nextThrough = (field, id) =>
     soonest(
       firedBy(field, id)
-        .filter((s) => s.enabled)
+        .filter((s) => s.enabled && !eventNextLabel(s))
         .map((s) => s.nextRunAt),
     );
 
@@ -302,6 +314,14 @@ export function describeRecurrence(r) {
       return `${capitalize(r.weekday)}s at ${r.timeOfDay}${zone}`;
     case "monthly":
       return `monthly on day ${r.dayOfMonth} at ${r.timeOfDay}${zone}`;
+    case "git_ref":
+      return r.gitRef?.repo && r.gitRef?.ref
+        ? `on ref ${r.gitRef.repo} ${r.gitRef.ref}`
+        : "on ref move";
+    case "github_workflow_run":
+      return r.githubWorkflowRun?.workflow
+        ? `on workflow ${r.githubWorkflowRun.workflow}`
+        : "on workflow run";
     default:
       return r.kind;
   }

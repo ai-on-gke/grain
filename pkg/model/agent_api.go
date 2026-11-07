@@ -99,6 +99,7 @@ var apiScopes = []APIScopeInfo{
 	{Scope: "connections:read", Description: "Read git connections and model backends"},
 	{Scope: "connections:write", Description: "Change git connections and model backends", Dangerous: true},
 	{Scope: "capabilities:read", Description: "Read capability servers and policy, and check grants"},
+	{Scope: "capabilities:detach", Description: "Remove grants from a task (never a standing session's) and narrow a repository's default or CI capabilities, with a reason"},
 	{Scope: "capabilities:admin", Description: "Change capability servers, policy and any task's or repository's grants", Dangerous: true},
 	{Scope: "secrets:read", Description: "List secrets, keys and tokens by name (never their values)"},
 	{Scope: "secrets:write", Description: "Set and delete secrets, keys and tokens", Dangerous: true},
@@ -145,7 +146,7 @@ var apiPresets = []APIPreset{
 	{Name: "release-manager", Description: "Cut, qualify and promote release candidates, run schedules, and drive their CI and merges",
 		Scopes: []APIScope{"tasks:read", "tasks:write", "merge:write", "ci:read", "ci:write",
 			"schedules:read", "schedules:write", "releases:read", "releases:write", "repos:read"}},
-	{Name: "self-debug", Description: "What the self-debug capability grants: read tasks, runs and deployment status",
+	{Name: "self-debug", Description: "What the self-debug capability granted over the REST API: read tasks, runs, metrics and deployment status (grain's source checkout is grain#source)",
 		Scopes: []APIScope{"tasks:read", "deployment:read"}},
 	{Name: "self-upgrade", Description: "What the self-upgrade capability granted: read and start upgrades",
 		Scopes: []APIScope{"deployment:read", "deployment:upgrade"}},
@@ -214,6 +215,16 @@ const (
 	GrainHostExecRef    = GrainCapabilityServerID + "#" + GrainHostExecMethod
 	GrainHostExecGrant  = GrainHostExecRef + "={}"
 
+	// GrainSourceMethod lets a run read grain's own baked-in source
+	// checkout -- grain-src/ in its sandbox and src:// (src://core/...)
+	// through the sandbox CLI -- and, held in its deployment-wide form
+	// (admincaps.TeamScoped), every repository's CI and the whole of
+	// config:// (formerly the source half of self-debug, whose REST half
+	// is the api:self-debug preset).
+	GrainSourceMethod = "source"
+	GrainSourceRef    = GrainCapabilityServerID + "#" + GrainSourceMethod
+	GrainSourceGrant  = GrainSourceRef + "={}"
+
 	// GCPCapabilityServerID is the canonical capability_id of the in-tree gcp
 	// server (design/design/unified-grants.design.md §1, §4).
 	GCPCapabilityServerID      = "https://grain.dev/capabilities/gcp"
@@ -250,6 +261,16 @@ const (
 	ModelProxyCapabilityServerID = "https://grain.dev/capabilities/model-proxy"
 	ModelProxyMethod             = "model-proxy"
 	ModelProxyRef                = ModelProxyCapabilityServerID + "#" + ModelProxyMethod
+
+	// ConfigMapCapabilityServerID is the canonical capability_id of the
+	// built-in config-map server (and SkillCapabilityServerID its legacy
+	// skill alias). BootstrapPlaybooksGrant selects its built-in bootstrap
+	// map (formerly bootstrap-playbooks).
+	ConfigMapCapabilityServerID = "https://grain.dev/capabilities/config-map"
+	SkillCapabilityServerID     = "https://grain.dev/capabilities/skill"
+	ConfigMapMethod             = "config-map"
+	ConfigMapRef                = ConfigMapCapabilityServerID + "#" + ConfigMapMethod
+	BootstrapPlaybooksGrant     = ConfigMapRef + `={"config_maps":["bootstrap"]}`
 )
 
 // ModelProxyVendors are the vendors the model-proxy server proxies, in
@@ -325,21 +346,20 @@ func ParseGCPKeyServerGrant(grant string) (permissionSet string, ok bool) {
 	if err != nil || spec.Capability != GCPKeyRef {
 		return "", false
 	}
-	set, _ := spec.With["permission_set"].(string)
-	if old, hasOld := spec.With["account"].(string); hasOld && old != "" {
-		set = old
+	if err := CheckGCPKeyGrantArgs(spec, ""); err != nil {
+		return "", false
 	}
-	if set == "" || set == "default" {
+	set, _ := spec.With["permission_set"].(string)
+	if set == "" {
 		set = GCPKeyDefaultPermissionSet
 	}
 	return set, true
 }
 
 // GCPKeySetUnnamed reports whether grant is a gcp#gcp-key capability-server
-// grant that leaves its permission set to the server's first configured set:
-// no permission_set, or "default" in permission_set or the deprecated account
-// field. (Bare "gcp-key" is false: CanonicalLegacyGrant rewrites it to
-// GCPKeySandboxAgentGrant.)
+// grant that leaves its permission set to the server's first configured set
+// (no permission_set). (Bare "gcp-key" is false: CanonicalLegacyGrant rewrites
+// it to GCPKeySandboxAgentGrant.)
 func GCPKeySetUnnamed(grant string) bool {
 	s := strings.TrimSpace(grant)
 	if !IsCapabilityRef(s) {
@@ -349,11 +369,11 @@ func GCPKeySetUnnamed(grant string) bool {
 	if err != nil || spec.Capability != GCPKeyRef {
 		return false
 	}
-	set, _ := spec.With["permission_set"].(string)
-	if old, _ := spec.With["account"].(string); old != "" {
-		set = old
+	if err := CheckGCPKeyGrantArgs(spec, ""); err != nil {
+		return false
 	}
-	return set == "" || set == "default"
+	set, _ := spec.With["permission_set"].(string)
+	return set == ""
 }
 
 func init() {
@@ -379,6 +399,30 @@ func IsGrainJournalGrant(grant string) bool {
 // HasGrainJournal reports whether any grant in grants opens grain#journal.
 func HasGrainJournal(grants []string) bool {
 	return slices.ContainsFunc(grants, IsGrainJournalGrant)
+}
+
+// IsGrainSourceGrant reports whether grant names grain#source (recorded or
+// bare) or the retired bare self-debug alias, which still grants it for
+// one release (SelfDebugCapability).
+func IsGrainSourceGrant(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if s == SelfDebugCapability {
+		return true
+	}
+	return CapabilityGrantRef(s) == GrainSourceRef
+}
+
+// HasGrainSource reports whether any grant in grants opens grain#source.
+func HasGrainSource(grants []string) bool {
+	return slices.ContainsFunc(grants, IsGrainSourceGrant)
+}
+
+// SelfDebugGrants is what the retired self-debug capability became, in
+// the order a grant list records them: the api:self-debug preset for the
+// REST half (every task's record, metrics, pipeline and deployment
+// status) and grain#source for grain's own source checkout.
+func SelfDebugGrants() []string {
+	return []string{APIGrantPrefix + "self-debug", GrainSourceGrant}
 }
 
 // IsGrainHealthGrant reports whether grant names grain#health (recorded or
@@ -471,6 +515,184 @@ func HasGrainSQLWrite(grants []string) bool {
 	return slices.ContainsFunc(grants, IsGrainSQLWriteGrant)
 }
 
+func stringSliceField(with map[string]any, key string) ([]string, bool) {
+	raw, ok := with[key]
+	if !ok {
+		return nil, false
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return nil, true
+	}
+	out := make([]string, 0, len(items))
+	for _, v := range items {
+		s, ok := v.(string)
+		if !ok {
+			return nil, true
+		}
+		out = append(out, s)
+	}
+	return out, true
+}
+
+func configMapSelectsBootstrap(with map[string]any) bool {
+	cms, hasCM := stringSliceField(with, "config_maps")
+	_, hasSec := with["secrets"]
+	keys, hasKeys := stringSliceField(with, "keys")
+	hasBootstrapKey := false
+	for _, k := range keys {
+		if strings.HasPrefix(k, "bootstrap/") {
+			hasBootstrapKey = true
+			break
+		}
+	}
+	if hasCM || hasSec {
+		return slices.Contains(cms, "bootstrap") && (!hasKeys || hasBootstrapKey)
+	}
+	return hasKeys && hasBootstrapKey
+}
+
+// IsBootstrapPlaybooksGrant reports whether grant names the bootstrap playbooks
+// via config-map#config-map (or its legacy skill alias, including methodless
+// shorthand before server normalization) or the retired bare
+// bootstrap-playbooks alias.
+func IsBootstrapPlaybooksGrant(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if strings.EqualFold(s, "bootstrap-playbooks") {
+		return true
+	}
+	if len(s) >= len("https://") && strings.EqualFold(s[:len("https://")], "https://") {
+		s = "https://" + s[len("https://"):]
+	}
+	if !IsCapabilityRef(s) {
+		return false
+	}
+	spec, err := CapabilityGrantSpec(s)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(spec.Capability) {
+	case ConfigMapRef, ConfigMapCapabilityServerID, SkillCapabilityServerID + "#" + ConfigMapMethod:
+		return configMapSelectsBootstrap(spec.With)
+	case ConfigMapCapabilityServerID + "#skill", SkillCapabilityServerID + "#skill":
+		skills, ok := stringSliceField(spec.With, "skills")
+		return ok && slices.Contains(skills, "bootstrap")
+	case SkillCapabilityServerID:
+		if _, hasSkills := spec.With["skills"]; hasSkills {
+			skills, ok := stringSliceField(spec.With, "skills")
+			return ok && slices.Contains(skills, "bootstrap")
+		}
+		return configMapSelectsBootstrap(spec.With)
+	}
+	return false
+}
+
+// BootstrapSkillSetUnnamed reports whether grant is an unnormalized #skill (or
+// methodless skill) capability-server grant that omits "skills", leaving its
+// selection to the server's default ("all", which includes "bootstrap" whenever
+// the server serves the bootstrap playbooks). Once normalized, "skills" is
+// explicit so unrelated skill directories are no longer flagged.
+func BootstrapSkillSetUnnamed(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if len(s) >= len("https://") && strings.EqualFold(s[:len("https://")], "https://") {
+		s = "https://" + s[len("https://"):]
+	}
+	if !IsCapabilityRef(s) {
+		return false
+	}
+	spec, err := CapabilityGrantSpec(s)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(spec.Capability) {
+	case ConfigMapCapabilityServerID + "#skill", SkillCapabilityServerID + "#skill":
+		_, hasSkills := spec.With["skills"]
+		return !hasSkills
+	case SkillCapabilityServerID:
+		for _, k := range []string{"skills", "config_maps", "secrets", "keys"} {
+			if _, ok := spec.With[k]; ok {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// IsEmbeddedBootstrapOnlyGrant reports whether grant is a config-map or skill
+// capability reference whose arguments select exclusively the stateless
+// embedded bootstrap playbooks (no operator config maps and no secrets).
+func IsEmbeddedBootstrapOnlyGrant(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if !IsCapabilityRef(s) {
+		return false
+	}
+	spec, err := CapabilityGrantSpec(s)
+	if err != nil {
+		return false
+	}
+	switch spec.Capability {
+	case ConfigMapRef, SkillCapabilityServerID + "#" + ConfigMapMethod:
+		// Anything but a well-formed config_maps/keys/secrets string list
+		// -- a field the classifier does not know, or a list holding a
+		// non-string the mint would skip past to the strings beside it --
+		// is not provably bootstrap-only.
+		for field := range spec.With {
+			switch field {
+			case "config_maps", "keys", "secrets":
+			default:
+				return false
+			}
+		}
+		secs, hasSecs := stringSliceField(spec.With, "secrets")
+		if hasSecs && (secs == nil || len(secs) > 0) {
+			return false
+		}
+		cms, hasCM := stringSliceField(spec.With, "config_maps")
+		keys, hasKeys := stringSliceField(spec.With, "keys")
+		if !hasCM && !hasKeys {
+			return false
+		}
+		if (hasCM && cms == nil) || (hasKeys && keys == nil) {
+			return false
+		}
+		for _, cm := range cms {
+			if cm != "bootstrap" {
+				return false
+			}
+		}
+		for _, k := range keys {
+			if !strings.HasPrefix(k, "bootstrap/") {
+				return false
+			}
+		}
+		return (hasCM && len(cms) > 0) || (hasKeys && len(keys) > 0)
+	case ConfigMapCapabilityServerID + "#skill", SkillCapabilityServerID + "#skill":
+		for field := range spec.With {
+			if field != "skills" {
+				return false
+			}
+		}
+		skills, hasSkills := stringSliceField(spec.With, "skills")
+		if !hasSkills || len(skills) == 0 {
+			return false
+		}
+		for _, sk := range skills {
+			if sk != "bootstrap" {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// HasBootstrapPlaybooks reports whether any grant in grants opens the bootstrap
+// playbooks.
+func HasBootstrapPlaybooks(grants []string) bool {
+	return slices.ContainsFunc(grants, IsBootstrapPlaybooksGrant)
+}
+
 // legacyGrantReplacements are the bare capabilities converted to api or
 // capability-server grants (design/design/unified-grants.design.md §4) whose
 // in-process provider is gone: each is written as its replacement wherever a
@@ -506,6 +728,9 @@ var legacyGrantReplacements = map[string]string{
 	// Retired by schema migration 103 onto the gcp server's gemini-key,
 	// which mints with the same gcp-key-minter secret.
 	"gemini-key": GCPGeminiKeyGrant,
+	// Retired by schema migration 118 onto the built-in config-map server's
+	// bootstrap map.
+	"bootstrap-playbooks": BootstrapPlaybooksGrant,
 }
 
 // legacyGrantMultiReplacements maps retired bare capabilities that split into
@@ -513,6 +738,9 @@ var legacyGrantReplacements = map[string]string{
 // grain server method).
 var legacyGrantMultiReplacements = map[string][]string{
 	"deployment-health": {APIGrantPrefix + "deployment:read", GrainHealthGrant},
+	// Retired by schema migration 115: the REST half of self-debug is its
+	// api preset, the source checkout the grain server's #source method.
+	SelfDebugCapability: SelfDebugGrants(),
 }
 
 var (
@@ -595,6 +823,9 @@ func CanonicalLegacyGrants(name string) []string {
 	if many, ok := legacyGrantMultiReplacements[trimmed]; ok {
 		return slices.Clone(many)
 	}
+	if many, ok := runtimeExpansion(trimmed); ok {
+		return many
+	}
 	return []string{CanonicalLegacyGrant(name)}
 }
 
@@ -608,7 +839,7 @@ func RetiredGrantNames() []string {
 	for name := range legacyGrantMultiReplacements {
 		names = append(names, name)
 	}
-	return names
+	return append(names, runtimeExpansionNames()...)
 }
 
 // APIAliasPreset returns the preset name that a bare capability name aliases,
@@ -658,17 +889,23 @@ func IsDangerousAPIScope(scope APIScope) bool {
 
 // sandboxModelOnlyScopes are non-dangerous scopes that remain model-only
 // (never reachable via the sandbox proxy credential / X-Grain-Channel: sandbox-cli).
+//
+// capabilities:detach is model-only so that removing a grant is always a
+// reasoned MCP tool call the transcript records, never something a script
+// in the sandbox does (director-capabilities.spec.md §3.1.2).
 var sandboxModelOnlyScopes = map[APIScope]bool{
-	"dispatch:write":  true,
-	"repos:write":     true,
-	"sessions:write":  true,
-	"teams:broadcast": true,
+	"capabilities:detach": true,
+	"dispatch:write":      true,
+	"repos:write":         true,
+	"sessions:write":      true,
+	"teams:broadcast":     true,
 }
 
 // IsSandboxDeniedAPIScope reports whether scope is refused on the sandbox
 // proxy channel (X-Grain-Channel: sandbox-cli): every Dangerous scope, plus
-// model-only scopes (dispatch:write, repos:write, sessions:write,
-// teams:broadcast, and any deployment:* scope other than deployment:read).
+// model-only scopes (capabilities:detach, dispatch:write, repos:write,
+// sessions:write, teams:broadcast, and any deployment:* scope other than
+// deployment:read).
 func IsSandboxDeniedAPIScope(scope APIScope) bool {
 	if scope == "" || scope == APIScopeInternal {
 		return true
@@ -868,6 +1105,40 @@ func apiGrantsOf(names []string, sandboxChannel bool) APIGrantSet {
 // Empty reports whether the set grants nothing.
 func (s APIGrantSet) Empty() bool { return len(s.all) == 0 && len(s.scopes) == 0 }
 
+// Intersect returns the grant set holding only scopes and repositories that
+// both s and other allow (AU-25.1).
+func (s APIGrantSet) Intersect(other APIGrantSet) APIGrantSet {
+	out := APIGrantSet{scopes: map[APIScope][]string{}, all: map[APIScope]bool{}}
+	for _, info := range APIScopes() {
+		sc := info.Scope
+		if !s.Has(sc) || !other.Has(sc) {
+			continue
+		}
+		if s.Allows(sc, "") && other.Allows(sc, "") {
+			out.all[sc] = true
+			continue
+		}
+		if s.Allows(sc, "") {
+			out.scopes[sc] = other.Repos(sc)
+			continue
+		}
+		if other.Allows(sc, "") {
+			out.scopes[sc] = s.Repos(sc)
+			continue
+		}
+		var common []string
+		for _, r := range s.Repos(sc) {
+			if other.Allows(sc, r) {
+				common = append(common, r)
+			}
+		}
+		if len(common) > 0 {
+			out.scopes[sc] = common
+		}
+	}
+	return out
+}
+
 // Has reports whether the set grants scope for at least one repository.
 func (s APIGrantSet) Has(scope APIScope) bool {
 	return s.all[scope] || len(s.scopes[scope]) > 0
@@ -913,6 +1184,25 @@ func (s APIGrantSet) Scopes() []APIScope {
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// Without returns s with every scope in deny removed.
+func (s APIGrantSet) Without(deny map[APIScope]bool) APIGrantSet {
+	if len(deny) == 0 {
+		return s
+	}
+	out := APIGrantSet{scopes: map[APIScope][]string{}, all: map[APIScope]bool{}}
+	for scope := range s.all {
+		if !deny[scope] {
+			out.all[scope] = true
+		}
+	}
+	for scope, repos := range s.scopes {
+		if !deny[scope] {
+			out.scopes[scope] = slices.Clone(repos)
+		}
+	}
 	return out
 }
 

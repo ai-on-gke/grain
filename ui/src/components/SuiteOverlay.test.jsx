@@ -17,6 +17,13 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import SuiteOverlay from "./SuiteOverlay.jsx";
 import api from "../api.js";
+import {
+  chips,
+  chooseOptions,
+  chosenValues,
+  optionValues,
+  removeOption,
+} from "../searchSelectTesting.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
 
@@ -110,5 +117,61 @@ describe("SuiteOverlay", () => {
 
     expect(screen.getByText("Run a fixed number of times")).toBeInTheDocument();
     expect(screen.getByLabelText("Number of times")).toHaveValue(3);
+  });
+
+  // A suite's templates are a list that grows with the deployment, so
+  // they are searched (SearchSelect, grain/task-2578): every word of a
+  // name, its title and repo shown beneath it, and a chip per pick that
+  // takes it back off.
+  it("searches, ticks and unticks templates", async () => {
+    const user = userEvent.setup();
+    render(
+      <SuiteOverlay
+        templates={[
+          {
+            id: "t-bump",
+            name: "bump-deps",
+            title: "Bump deps",
+            repo: "acme/widgets",
+          },
+          { id: "t-lint", name: "lint-all", title: "Lint" },
+          { id: "t-docs", name: "docs-check", title: "Docs" },
+        ]}
+        onSaved={() => Promise.resolve()}
+        onClose={() => {}}
+        showError={() => {}}
+      />,
+    );
+    const box = screen.getByRole("combobox", { name: "Templates" });
+
+    await user.click(box);
+    const bump = await screen.findByRole("option", { name: /bump-deps/ });
+    expect(bump).toHaveTextContent("Bump deps -- acme/widgets");
+    expect(bump).toHaveAttribute("aria-selected", "false");
+
+    await user.type(box, "deps bump");
+    expect(optionValues(box)).toEqual(["t-bump"]);
+    await user.clear(box);
+
+    await chooseOptions(user, box, ["t-lint", "docs-check"]);
+    expect(chosenValues(box)).toEqual(["t-lint", "t-docs"]);
+    // The list stays open while rows are ticked, and says which are.
+    expect(screen.getByRole("option", { name: /lint-all/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await user.keyboard("{Escape}");
+
+    await removeOption(user, box, "t-lint");
+    expect(chosenValues(box)).toEqual(["t-docs"]);
+    expect(chips(box).map((c) => c.textContent)).toEqual(["docs-check"]);
+
+    await user.type(screen.getByLabelText("Name"), "Gate");
+    await user.click(screen.getByRole("button", { name: "Add suite" }));
+    const post = api.mock.calls.find(
+      ([url, opts]) => url === "/api/suites" && opts?.method === "POST",
+    );
+    expect(post).toBeTruthy();
+    expect(JSON.parse(post[1].body).templateIds).toEqual(["t-docs"]);
   });
 });

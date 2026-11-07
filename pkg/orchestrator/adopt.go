@@ -235,11 +235,11 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 	stopCrediting := cfg.RunWaitCredits.register(task.ID, clock)
 	stopCancelling := cfg.TaskCancellers.register(task.ID, cancelRun)
 	defer stopCancelling()
-	checkTaskClosed(ctx, store, task.ID, cancelRun)
+	checkTaskClosed(ctx, store, task.ID, runID, cancelRun)
 	watcherDone := make(chan struct{})
 	go func() {
 		defer close(watcherDone)
-		watchForTaskClosed(runCtx, ctx, store, task.ID, cfg.cancelPollInterval(), cancelRun)
+		watchForTaskClosed(runCtx, ctx, store, task.ID, runID, cfg.cancelPollInterval(), cancelRun)
 	}()
 	scope := runPauseScope(framework, *task, cfg)
 	stopPause := cfg.Pause.register(runID, scope, cfg.now(), cancelRun)
@@ -273,6 +273,11 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 	var tee io.Writer
 	if cfg.TranscriptDir != "" {
 		transcriptPath = filepath.Join(cfg.TranscriptDir, runID)
+		if cfg.TranscriptSink != nil {
+			if _, err := os.Stat(transcriptPath); os.IsNotExist(err) {
+				_ = cfg.TranscriptSink.RestoreRaw(ctx, runID, transcriptPath)
+			}
+		}
 		live, _ = os.ReadFile(transcriptPath)
 		if f, err := os.OpenFile(transcriptPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err != nil {
 			log.Printf("orchestrator: adopted run %s: reopening its live transcript: %v", runID, err)
@@ -447,7 +452,7 @@ func adoptedSessionShape(ctx context.Context, deps Deps, tk model.Task) Shape {
 		MemoryMB:      tk.SandboxMemoryMB,
 		DiskGB:        tk.SandboxDiskGB,
 		NetworkAccess: tk.NetworkAccess,
-		GrainSource:   hasGrant(tk, model.SelfDebugCapability),
+		GrainSource:   hasGrainSource(tk),
 		Class:         sandboxClassFor(tk),
 	}
 	if isUnisolated(deps.Sandboxes) {

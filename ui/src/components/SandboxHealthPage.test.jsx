@@ -1511,15 +1511,15 @@ describe("SandboxHealthPage", () => {
       enabled: true,
       sandboxes: [],
       sandboxImage: {
-        image: "ghcr.io/bwsalmon/grain/guest:sha-e5544d6",
-        expected: "ghcr.io/bwsalmon/grain/guest:sha-e5544d6",
+        image: "docker.io/grainai/sandbox:sha-e5544d6",
+        expected: "docker.io/grainai/sandbox:sha-e5544d6",
         pinned: false,
       },
     });
     render(<SandboxHealthPage showError={() => {}} />);
 
     expect(
-      await screen.findByText(/ghcr\.io\/bwsalmon\/grain\/guest:sha-e5544d6/),
+      await screen.findByText(/docker\.io\/grainai\/sandbox:sha-e5544d6/),
     ).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
@@ -1534,13 +1534,13 @@ describe("SandboxHealthPage", () => {
       enabled: true,
       sandboxes: [],
       sandboxImage: {
-        image: "ghcr.io/bwsalmon/grain/guest:sha-7746d62",
-        expected: "ghcr.io/bwsalmon/grain/guest:sha-7746d62",
+        image: "docker.io/grainai/sandbox:sha-7746d62",
+        expected: "docker.io/grainai/sandbox:sha-7746d62",
         pinned: false,
       },
       sandboxGuest: {
         repo: "bwsalmon/grain",
-        image: "ghcr.io/bwsalmon/grain/guest:sha-7746d62",
+        image: "docker.io/grainai/sandbox:sha-7746d62",
         publishing: false,
         branch: "main",
         behind: true,
@@ -1563,13 +1563,13 @@ describe("SandboxHealthPage", () => {
       enabled: true,
       sandboxes: [],
       sandboxImage: {
-        image: "ghcr.io/bwsalmon/grain/guest:sha-7746d62",
-        expected: "ghcr.io/bwsalmon/grain/guest:sha-7746d62",
+        image: "docker.io/grainai/sandbox:sha-7746d62",
+        expected: "docker.io/grainai/sandbox:sha-7746d62",
         pinned: false,
       },
       sandboxGuest: {
         repo: "bwsalmon/grain",
-        image: "ghcr.io/bwsalmon/grain/guest:sha-7746d62",
+        image: "docker.io/grainai/sandbox:sha-7746d62",
         publishing: true,
         branch: "main",
         behind: true,
@@ -1579,7 +1579,7 @@ describe("SandboxHealthPage", () => {
     render(<SandboxHealthPage showError={() => {}} />);
 
     expect(
-      await screen.findByText(/ghcr\.io\/bwsalmon\/grain\/guest:sha-7746d62/),
+      await screen.findByText(/docker\.io\/grainai\/sandbox:sha-7746d62/),
     ).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
@@ -1595,13 +1595,13 @@ describe("SandboxHealthPage", () => {
       enabled: true,
       sandboxes: [],
       sandboxImage: {
-        image: "ghcr.io/bwsalmon/grain/guest:sha-7746d62",
-        expected: "ghcr.io/bwsalmon/grain/guest:sha-7746d62",
+        image: "docker.io/grainai/sandbox:sha-7746d62",
+        expected: "docker.io/grainai/sandbox:sha-7746d62",
         pinned: false,
       },
       sandboxGuest: {
         repo: "bwsalmon/grain",
-        image: "ghcr.io/bwsalmon/grain/guest:sha-7746d62",
+        image: "docker.io/grainai/sandbox:sha-7746d62",
         publishing: true,
         stalled: false,
         cacheDispatched: true,
@@ -1633,13 +1633,13 @@ describe("SandboxHealthPage", () => {
       enabled: true,
       sandboxes: [],
       sandboxImage: {
-        image: "ghcr.io/bwsalmon/grain/guest:sha-7746d62",
-        expected: "ghcr.io/bwsalmon/grain/guest:sha-7746d62",
+        image: "docker.io/grainai/sandbox:sha-7746d62",
+        expected: "docker.io/grainai/sandbox:sha-7746d62",
         pinned: false,
       },
       sandboxGuest: {
         repo: "bwsalmon/grain",
-        image: "ghcr.io/bwsalmon/grain/guest:sha-7746d62",
+        image: "docker.io/grainai/sandbox:sha-7746d62",
         publishing: true,
         stalled: true,
         lastPublish: "failure",
@@ -1805,16 +1805,16 @@ describe("SandboxHealthPage", () => {
       enabled: true,
       sandboxes: [],
       sandboxImage: {
-        image: "ghcr.io/bwsalmon/grain/guest:sha-2f89890",
-        expected: "ghcr.io/bwsalmon/grain/guest:sha-e5544d6",
+        image: "docker.io/grainai/sandbox:sha-2f89890",
+        expected: "docker.io/grainai/sandbox:sha-e5544d6",
         pinned: true,
       },
     });
     render(<SandboxHealthPage showError={() => {}} />);
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("guest:sha-2f89890");
-    expect(alert).toHaveTextContent("guest:sha-e5544d6");
+    expect(alert).toHaveTextContent("sandbox:sha-2f89890");
+    expect(alert).toHaveTextContent("sandbox:sha-e5544d6");
     expect(alert).toHaveTextContent(/-sandbox-image/);
   });
 
@@ -2689,7 +2689,7 @@ describe("StaleSandboxImageAlerts", () => {
       <StaleSandboxImageAlerts
         warnings={[
           "k8s_granule_image: Sandbox image us-docker.pkg.dev/p/grain/guest:sha-31d0973 is grain's stock sandbox image from another build.",
-          "sandbox_image: Sandbox image ghcr.io/bwsalmon/grain/guest:v2.1.0 is grain's stock sandbox image from another build.",
+          "sandbox_image: Sandbox image docker.io/grainai/sandbox:v2.1.0 is grain's stock sandbox image from another build.",
         ]}
       />,
     );

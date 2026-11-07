@@ -190,7 +190,7 @@ func TestTheWorkflowIsNotOverwrittenWithoutForce(t *testing.T) {
 func TestTheImageIsRepointedAndTheRestOfTheFileIsNot(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	const was = "ghcr.io/bwsalmon/grain/grain:sha-0000000"
+	const was = "docker.io/grainai/grain:sha-0000000"
 	if _, err := staterepo.Format(dir, was, false); err != nil {
 		t.Fatalf("formatting: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestTheImageIsRepointedAndTheRestOfTheFileIsNot(t *testing.T) {
 		t.Fatalf("grain does not recognise its own rendering: %q, %v", got, ok)
 	}
 
-	const now = "ghcr.io/bwsalmon/grain/grain:sha-abc1234"
+	const now = "docker.io/grainai/grain:sha-abc1234"
 	wrote, err := staterepo.EnsureWorkflow(dir, now, false)
 	if err != nil {
 		t.Fatalf("ensuring the workflow: %v", err)
@@ -224,7 +224,7 @@ func TestTheImageIsRepointedAndTheRestOfTheFileIsNot(t *testing.T) {
 	if _, ok := staterepo.RenderedImage([]byte(edited)); ok {
 		t.Error("a workflow somebody edited is still read as grain's own")
 	}
-	if wrote, err := staterepo.EnsureWorkflow(dir, "ghcr.io/bwsalmon/grain/grain:sha-9999999", false); err != nil || wrote {
+	if wrote, err := staterepo.EnsureWorkflow(dir, "docker.io/grainai/grain:sha-9999999", false); err != nil || wrote {
 		t.Errorf("grain rewrote a workflow somebody had edited (%v, %v)", wrote, err)
 	}
 	if got := read(t, workflowPath(dir)); got != edited {
@@ -254,8 +254,8 @@ func TestTheWorkflowRunsTheCheckAgainstTheCheckout(t *testing.T) {
 		t.Errorf("the workflow runs on pushes, which are grain's own:\n%s", body)
 	}
 
-	pinned := string(staterepo.Workflow("ghcr.io/bwsalmon/grain/grain:sha-abc1234"))
-	if !strings.Contains(pinned, "ghcr.io/bwsalmon/grain/grain:sha-abc1234") {
+	pinned := string(staterepo.Workflow("docker.io/grainai/grain:sha-abc1234"))
+	if !strings.Contains(pinned, "docker.io/grainai/grain:sha-abc1234") {
 		t.Errorf("a pinned image did not reach the workflow:\n%s", pinned)
 	}
 	if strings.Contains(pinned, staterepo.DefaultCheckImage) {

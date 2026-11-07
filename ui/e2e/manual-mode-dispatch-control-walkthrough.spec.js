@@ -59,7 +59,7 @@ async function queued(request, title, extra = {}) {
 }
 
 async function seededIn(request, state) {
-  const rows = await ok(await request.get("/api/tasks"), "list");
+  const rows = await ok(await request.get("/api/tasks?fields=full"), "list");
   const row = rows.find((t) => t.state === state);
   expect(row, `a seeded ${state} task`).toBeTruthy();
   return row;
@@ -153,7 +153,7 @@ test("Run now and Run selected now under a pause, and the rows that say so", asy
     expect(posted.every(([, status]) => status === 200)).toBe(true);
     await expect(chip(page, b.title)).toHaveCount(0);
     await expect(chip(page, c.title)).toHaveCount(0);
-    const rows = await ok(await request.get("/api/tasks"), "list");
+    const rows = await ok(await request.get("/api/tasks?fields=full"), "list");
     for (const t of [a, b, c])
       expect(rows.find((r) => r.id === t.id).runNowAt).toBeTruthy();
     expect(rows.find((r) => r.id === blocked.id).runNowAt).toBeFalsy();

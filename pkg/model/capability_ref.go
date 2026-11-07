@@ -113,6 +113,62 @@ func CheckCapabilityGrantSyntax(s string) error {
 	return err
 }
 
+// CheckGCPKeyGrantArgs refuses the removed "account" and "activate" grant
+// arguments on https://grain.dev/capabilities/gcp#gcp-key (and any server
+// alias whose canonical ID is GCPCapabilityServerID), directing callers to
+// "permission_set".
+func CheckGCPKeyGrantArgs(spec protocol.GrantSpec, resolvedServerID string) error {
+	if len(spec.With) == 0 {
+		return nil
+	}
+	ref, err := protocol.ParseRef(spec.Capability)
+	if err != nil {
+		return nil
+	}
+	if ref.CapabilityID != GCPCapabilityServerID && resolvedServerID != GCPCapabilityServerID {
+		return nil
+	}
+	if ref.Method != "" && ref.Method != GCPKeyMethod {
+		return nil
+	}
+	if _, hasAccount := spec.With["account"]; hasAccount {
+		return fmt.Errorf("capability %s: args.account: \"account\" was removed; use \"permission_set\"", spec.Capability)
+	}
+	if _, hasActivate := spec.With["activate"]; hasActivate {
+		return fmt.Errorf("capability %s: args.activate: \"activate\" was removed; a primary key is always activated (use \"permission_set\" and \"primary\")", spec.Capability)
+	}
+	return nil
+}
+
+// CheckCapabilityGrantArgsOffline runs CheckCapabilityGrantSyntax plus
+// offline argument checks for built-in methods whose deprecated arguments
+// have been removed.
+func CheckCapabilityGrantArgsOffline(s string) error {
+	spec, err := CapabilityGrantSpec(s)
+	if err != nil {
+		return err
+	}
+	if _, err := protocol.ParseRef(spec.Capability); err != nil {
+		return err
+	}
+	return CheckGCPKeyGrantArgs(spec, "")
+}
+
+func resolvedServerIDOf(capability string, lookup protocol.Lookup) string {
+	if lookup == nil {
+		return ""
+	}
+	ref, err := protocol.ParseRef(capability)
+	if err != nil {
+		return ""
+	}
+	srv, err := lookup(ref.CapabilityID)
+	if err != nil || srv == nil {
+		return ""
+	}
+	return srv.ID
+}
+
 // NormalizeCapabilityNames validates every reference among names against
 // its server (protocol.Normalize, §4.2.1) and returns names with each
 // reference replaced by its recorded form, duplicates dropped, first
@@ -141,13 +197,16 @@ func NormalizeCapabilityNames(names []string, lookup protocol.Lookup) ([]string,
 
 func normalizeCapabilityRef(s string, lookup protocol.Lookup) (string, error) {
 	if lookup == nil {
-		if err := CheckCapabilityGrantSyntax(s); err != nil {
+		if err := CheckCapabilityGrantArgsOffline(s); err != nil {
 			return "", err
 		}
 		return strings.TrimSpace(s), nil
 	}
 	spec, err := CapabilityGrantSpec(s)
 	if err != nil {
+		return "", err
+	}
+	if err := CheckGCPKeyGrantArgs(spec, resolvedServerIDOf(spec.Capability, lookup)); err != nil {
 		return "", err
 	}
 	grants, err := protocol.Normalize([]protocol.GrantSpec{spec}, lookup)
@@ -191,6 +250,9 @@ func CapabilityGrants(grants []Grant, lookup protocol.Lookup) ([]protocol.Grant,
 		}
 		spec, err := CapabilityGrantSpec(g.Capability)
 		if err != nil {
+			return nil, err
+		}
+		if err := CheckGCPKeyGrantArgs(spec, resolvedServerIDOf(spec.Capability, lookup)); err != nil {
 			return nil, err
 		}
 		specs = append(specs, spec)
@@ -490,8 +552,21 @@ func (p CapabilityPolicy) Permits(g string, s CapabilitySubject, servers ...map[
 		}
 	}
 	refs := equivalentCapabilityRefs(ref, servers)
+	denyRefs := slices.Clone(refs)
+	// Schema migration 118 rewrote a deny rule on bootstrap-playbooks to
+	// ConfigMapRef (https://grain.dev/capabilities/config-map#config-map).
+	// Bootstrap playbooks can also be requested via #skill (or an unnormalized
+	// unnamed #skill grant whose server default includes "bootstrap"); widen
+	// deny-only matching (never allow/allowUntrusted) so #skill cannot bypass it.
+	if IsBootstrapPlaybooksGrant(g) || BootstrapSkillSetUnnamed(g) {
+		for _, extra := range equivalentCapabilityRefs(ConfigMapRef, servers) {
+			if !slices.Contains(denyRefs, extra) {
+				denyRefs = append(denyRefs, extra)
+			}
+		}
+	}
 	for i, r := range p.Rules {
-		if !r.Deny || !r.namesAny(refs) {
+		if !r.Deny || !r.namesAny(denyRefs) {
 			continue
 		}
 		if r.covers(s) {
@@ -605,8 +680,16 @@ func (r CapabilityPolicyRule) coversAnyOfKind(kind string) bool {
 }
 
 func (r CapabilityPolicyRule) names(ref string) bool {
-	ok, _ := path.Match(r.Capability, ref)
-	return ok || r.Capability == ref
+	if ok, _ := path.Match(r.Capability, ref); ok || r.Capability == ref {
+		return true
+	}
+	if r.Deny && !strings.Contains(ref, "#") {
+		if rID, _, hasHash := strings.Cut(r.Capability, "#"); hasHash {
+			ok, _ := path.Match(rID, ref)
+			return ok || rID == ref
+		}
+	}
+	return false
 }
 
 func (r CapabilityPolicyRule) namesAny(refs []string) bool {
@@ -634,7 +717,22 @@ func equivalentCapabilityRefs(ref string, serverMaps []map[string]protocol.Serve
 		}
 		refs = append(refs, cand)
 	}
+	addImplicitSkillConfigMapAlias := func() {
+		switch id {
+		case ConfigMapCapabilityServerID:
+			add(SkillCapabilityServerID)
+		case SkillCapabilityServerID:
+			add(ConfigMapCapabilityServerID)
+		}
+	}
+	if len(serverMaps) == 0 {
+		addImplicitSkillConfigMapAlias()
+	}
 	for _, servers := range serverMaps {
+		_, hasSkill := servers[SkillCapabilityServerID]
+		if !hasSkill {
+			addImplicitSkillConfigMapAlias()
+		}
 		for entryID, cfg := range servers {
 			if entryID == id {
 				for _, a := range cfg.Aliases {

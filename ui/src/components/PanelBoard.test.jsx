@@ -246,6 +246,22 @@ describe("PanelBoard", () => {
     expect(within(waiting).getByText("1")).toBeInTheDocument();
   });
 
+  // 2026-11-04 boards walkthrough: the running column's grain mark is
+  // labelled "Running" for its tooltip, and read out beside the
+  // column's own title it named the count "2 Running Running".
+  it("names a running count by its column title alone", () => {
+    localStorage.setItem(
+      BOARD_STORAGE_KEY,
+      JSON.stringify([
+        { id: "c1", title: "Working", states: ["running"] },
+        { id: "c2", title: "Waiting", states: ["awaiting_reply"] },
+      ]),
+    );
+    draw({ board: board([{ kind: "states" }]) });
+    expect(screen.getByRole("link", { name: "2 Working" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "1 Waiting" })).toBeVisible();
+  });
+
   // Every panel is one click from the full view of the same kind asking
   // the same question -- as a real URL, so it can be copied and sent.
   // The full view of the tasks the panel is about, asking the panel's
@@ -996,6 +1012,78 @@ describe("PanelBoard", () => {
       // dashboard that had stopped narrowing anything at all.
       expect(one).toBeGreaterThan(0);
       expect(cost(6)).toBe(one);
+    });
+  });
+
+  describe("when tasks could not be loaded", () => {
+    const fourPanels = board([
+      { kind: "states", title: "States" },
+      { kind: "list", title: "Queue" },
+      { kind: "gantt", title: "Timeline" },
+      { kind: "metrics", title: "Throughput" },
+    ]);
+
+    it("tells failed task reads from an empty deployment, while leaving metrics up", async () => {
+      api.mockResolvedValue({
+        throughput: { tasksFiled: 7, tasksCompleted: 4, buckets: [] },
+      });
+      const onRetryTasks = vi.fn();
+      const user = userEvent.setup();
+      const { container } = draw({
+        board: fourPanels,
+        tasks: [],
+        tasksLoaded: false,
+        tasksError: "synthetic tasks 500",
+        onRetryTasks,
+      });
+
+      expect(screen.queryByText("Nothing here right now.")).toBeNull();
+      expect(screen.queryByText("No tasks yet.")).toBeNull();
+      expect(container.querySelectorAll(".panel-state")).toHaveLength(0);
+      expect(container.querySelectorAll(".panel-header .count")).toHaveLength(
+        0,
+      );
+      expect(
+        screen.getAllByText(
+          "The tasks could not be loaded (synthetic tasks 500).",
+        ),
+      ).toHaveLength(3);
+      expect(await screen.findByText("7")).toBeInTheDocument();
+
+      await user.click(screen.getAllByRole("button", { name: "Retry" })[0]);
+      expect(onRetryTasks).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows the load failure when a later fetch fails with no tasks held, and keeps held tasks when non-empty", () => {
+      const { rerender } = render(
+        <PanelBoard
+          board={board([{ kind: "list", title: "Queue" }])}
+          tasks={[]}
+          tasksLoaded={true}
+          tasksError="upstream 500"
+          config={config}
+          onOpenTask={() => {}}
+          now={NOW}
+        />,
+      );
+      expect(
+        screen.getByText("The tasks could not be loaded (upstream 500)."),
+      ).toBeInTheDocument();
+      expect(screen.queryByText("Nothing here right now.")).toBeNull();
+
+      rerender(
+        <PanelBoard
+          board={board([{ kind: "list", title: "Queue" }])}
+          tasks={tasks}
+          tasksLoaded={true}
+          tasksError="upstream 500"
+          config={config}
+          onOpenTask={() => {}}
+          now={NOW}
+        />,
+      );
+      expect(screen.queryByText(/The tasks could not be loaded/)).toBeNull();
+      expect(screen.getByText("Fix the flake")).toBeInTheDocument();
     });
   });
 });

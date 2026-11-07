@@ -622,8 +622,8 @@ var Migrations = []Migration{
 		Version:     92,
 		Description: "add the hostd registry (hostd, hostd_token), with the co-located hostd as local",
 		Statements: []string{
-			hostdTable,
-			hostdTokenTable,
+			schema92HostdTable,
+			schema92HostdTokenTable,
 		},
 		Up: ensureLocalHostd,
 	},
@@ -738,7 +738,137 @@ var Migrations = []Migration{
 			"ALTER TABLE `grain_config` ADD COLUMN `owner_trust` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version:     108,
+		Description: "add allowed_principal.reason, why an allowlist entry was added (required for serviceAccount: entries)",
+		Statements: []string{
+			"ALTER TABLE `allowed_principal` ADD COLUMN `reason` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     109,
+		Description: "rewrite stored gcp#gcp-key grants from deprecated account and activate arguments to permission_set",
+		Up:          MigrateGCPKeyGrantArgs,
+	},
+	{
+		Version:     110,
+		Description: "add allowed_principal.role, the scope set an allowlist entry's sessions are held to (existing entries become grain/operator)",
+		Statements: []string{
+			"ALTER TABLE `allowed_principal` ADD COLUMN `role` TEXT NOT NULL DEFAULT 'grain/operator'",
+		},
+	},
+	{
+		Version: 111,
+		Description: "drop the task, template and repository hostd selectors: a model connection or capability server " +
+			"chooses its hostd; task_run_hostd keeps where each run ran",
+		Statements: []string{
+			"DROP TABLE IF EXISTS `task_hostd`",
+			"ALTER TABLE `template` DROP COLUMN `hostd`",
+			"ALTER TABLE `repo_config` DROP COLUMN `default_hostd`",
+		},
+	},
+	{
+		Version:     112,
+		Description: "add grain_config.auto_grant_context_reads (operator-configured repositories auto-granted -read for committed context)",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `auto_grant_context_reads` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     113,
+		Description: "add task.owner and task.proposer_*, backfill existing tasks, and enforce non-empty task owner",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `owner` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_actor_kind` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_actor_id` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_actor_source` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_behalf_kind` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_behalf_id` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_behalf_source` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_task_id` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `proposer_run_id` TEXT NOT NULL DEFAULT ''",
+		},
+		Up: MigrateTaskOwnerAndProposer,
+	},
+	{
+		Version:     114,
+		Description: "add task.external_ref and indexes for external-reference filtering and per-reference rollups",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `external_ref` TEXT NOT NULL DEFAULT ''",
+			"CREATE INDEX IF NOT EXISTS `task_external_ref` ON `task` (`external_ref`, `id`)",
+			"CREATE INDEX IF NOT EXISTS `github_ci_job_repo_ref` ON `github_ci_job` (`repo`, `ref`)",
+			"CREATE INDEX IF NOT EXISTS `ci_run_repo_ref` ON `ci_run` (`repo`, `ref`, `started_at`)",
+		},
+	},
+	{
+		Version: 115,
+		Description: "rewrite stored self-debug grants, repo_config.ci_capabilities and the capability policy's catalogue " +
+			"included, to api:self-debug and https://grain.dev/capabilities/grain#source={} (the in-process capability is retired)",
+		Up: migrateSelfDebugGrants,
+	},
+	{
+		Version:     116,
+		Description: "add grain_config.registry for connected-entry self-registration and heartbeat settings (design/design/registry.design.md)",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `registry` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     117,
+		Description: "add host enrollment codes, pending join requests, key-bound host metadata and 30-day credential expiry",
+		Statements: []string{
+			"ALTER TABLE `hostd` ADD COLUMN `public_key` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `key_fingerprint` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `enrollment_code` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `capacity` INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE `hostd` ADD COLUMN `hostname` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `os` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `arch` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `clis` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `version` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `local_user` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `last_seen_at` DATETIME NULL",
+			"ALTER TABLE `hostd_token` ADD COLUMN `expires_at` DATETIME NULL",
+			hostEnrollmentCodeTable,
+			hostJoinRequestTable,
+		},
+	},
+	{
+		Version:     118,
+		Description: "rewrite stored bootstrap-playbooks grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/config-map#config-map={\"config_maps\":[\"bootstrap\"]} (the in-process bootstrap-playbooks is retired)",
+		Up:          migrateBootstrapPlaybooksGrants,
+	},
+	{
+		Version:     119,
+		Description: "add allowed_principal.label and allowed_principal.last_used_at for delegate: entries (design/design/authentication.design.md §6)",
+		Statements: []string{
+			"ALTER TABLE `allowed_principal` ADD COLUMN `label` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `allowed_principal` ADD COLUMN `last_used_at` DATETIME NULL",
+		},
+	},
 }
+
+// schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as
+// schema 92 created them, frozen so migration 92 followed by migration 117's
+// ALTER TABLE statements runs cleanly from any earlier baseline.
+const schema92HostdTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd`" + ` (
+  ` + "`name`" + `       TEXT     NOT NULL,
+  ` + "`owner`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`labels`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`created_by`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`created_at`" + ` DATETIME NOT NULL,
+  ` + "`revoked_at`" + ` DATETIME NULL,
+  PRIMARY KEY (` + "`name`" + `)
+)`
+
+const schema92HostdTokenTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd_token`" + ` (
+  ` + "`token_hash`" + ` TEXT     NOT NULL,
+  ` + "`hostd`" + `      TEXT     NOT NULL,
+  ` + "`prefix`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`created_at`" + ` DATETIME NOT NULL,
+  ` + "`revoked_at`" + ` DATETIME NULL,
+  PRIMARY KEY (` + "`token_hash`" + `)
+)`
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as
 // schemas before 95 wrote it, with the default captured for replacing.
@@ -972,13 +1102,16 @@ func (s *Store) migrateInPlace(ctx context.Context, from int) error {
 }
 
 // execMigrationStatement runs one of a migration's Statements, passing over
-// an ADD COLUMN whose column the store already has. That statement runs
+// an ADD COLUMN whose column the store already has, and a DROP COLUMN
+// whose column it does not. That statement runs
 // under a savepoint: Postgres aborts the whole transaction on any failed
 // statement (SQLSTATE 25P02 on everything after it), so without rolling
 // back to the savepoint the error it passes over would fail the next
 // statement instead, under that statement's name.
 func execMigrationStatement(ctx context.Context, tx *sql.Tx, stmt string) error {
-	if !strings.Contains(strings.ToUpper(stmt), " ADD COLUMN ") {
+	upper := strings.ToUpper(stmt)
+	adding, dropping := strings.Contains(upper, " ADD COLUMN "), strings.Contains(upper, " DROP COLUMN ")
+	if !adding && !dropping {
 		_, err := tx.ExecContext(ctx, stmt)
 		return err
 	}
@@ -986,8 +1119,12 @@ func execMigrationStatement(ctx context.Context, tx *sql.Tx, stmt string) error 
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, stmt); err != nil {
-		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column name:") &&
-			!strings.Contains(strings.ToLower(err.Error()), "already exists") {
+		msg := strings.ToLower(err.Error())
+		// The same for a DROP COLUMN whose column the store never had: a
+		// store built at a schema before the column was added.
+		passOver := adding && (strings.Contains(msg, "duplicate column name:") || strings.Contains(msg, "already exists"))
+		passOver = passOver || dropping && (strings.Contains(msg, "no such column") || strings.Contains(msg, "does not exist"))
+		if !passOver {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT grain_add_column")

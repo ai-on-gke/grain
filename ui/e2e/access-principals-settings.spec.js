@@ -34,6 +34,26 @@ for (const [name, viewport] of [
       page.getByTestId("principal-row-group:eng-oncall@example.com"),
     ).toContainText("group:eng-oncall@example.com");
 
+    // Service accounts sit in their own group, outside the people table,
+    // labelled as non-human callers with full operator access and with
+    // the reason they were added.
+    const sa =
+      "serviceAccount:release-bot@demo-project.iam.gserviceaccount.com";
+    const saGroup = page.getByTestId("allowed-service-accounts");
+    await expect(saGroup).toContainText("held to its role");
+    await expect(page.getByTestId(`principal-row-${sa}`)).toContainText(
+      "release pipeline files tasks through IAP",
+    );
+    await expect(table).not.toContainText(sa);
+
+    // Every entry shows its role.
+    await expect(
+      page.getByTestId("principal-row-group:eng-oncall@example.com"),
+    ).toContainText("grain/contributor");
+    await expect(page.getByTestId(`principal-row-${sa}`)).toContainText(
+      "grain/release-manager",
+    );
+
     // No horizontal page overflow at either desktop or phone width.
     const overflow = await page.evaluate(
       () =>
@@ -50,6 +70,10 @@ for (const [name, viewport] of [
     expect(addBtn.x + addBtn.width).toBeLessThanOrEqual(
       card.x + card.width + 1,
     );
+    const saBox = await saGroup.boundingBox();
+    expect(saBox.x).toBeGreaterThanOrEqual(card.x - 1);
+    expect(saBox.x + saBox.width).toBeLessThanOrEqual(card.x + card.width + 1);
+    expect(saBox.y).toBeGreaterThan((await table.boundingBox()).y);
 
     if (name === "desktop") {
       const row = page.getByTestId("principal-row-user:alice@example.com");
@@ -59,8 +83,25 @@ for (const [name, viewport] of [
         .boundingBox();
       expect(removeBtn.x).toBeGreaterThan(rowBox.x + rowBox.width / 2);
 
-      const inputBox = await page.getByLabel("User or group").boundingBox();
+      const inputBox = await page
+        .getByLabel("User, group or service account")
+        .boundingBox();
       expect(Math.abs(addBtn.y - inputBox.y)).toBeLessThan(16);
+      const reasonBox = await page
+        .getByTestId("access-reason-input")
+        .boundingBox();
+      expect(Math.abs(reasonBox.y - inputBox.y)).toBeLessThan(4);
+      expect(reasonBox.x).toBeGreaterThan(inputBox.x + inputBox.width - 1);
+      expect(addBtn.x).toBeGreaterThan(reasonBox.x + reasonBox.width - 1);
+      // The role picker sits on the same row, between the entry and the
+      // reason.
+      const roleBox = await page
+        .locator("#add-allowed-principal")
+        .getByRole("combobox")
+        .boundingBox();
+      expect(Math.abs(roleBox.y - inputBox.y)).toBeLessThan(4);
+      expect(roleBox.x).toBeGreaterThan(inputBox.x + inputBox.width - 1);
+      expect(reasonBox.x).toBeGreaterThan(roleBox.x + roleBox.width - 1);
     }
   });
 }
@@ -73,26 +114,53 @@ test("Settings → Access validates, adds, warns on last-entry removal, and rest
   const initialResp = await request.get("/api/access/principals");
   expect(initialResp.ok()).toBeTruthy();
   const initialData = await initialResp.json();
-  const initialEntries = (initialData.entries || []).map((e) => e.entry);
+  const initialEntries = initialData.entries || [];
 
   try {
     await page.goto("/settings/access");
     await expect(page.getByTestId("allowed-principals-table")).toBeVisible();
 
-    const input = page.getByLabel("User or group");
+    const input = page.getByLabel("User, group or service account");
     await input.fill("invalid-no-prefix");
     await page.getByRole("button", { name: "Add allowed principal" }).click();
     await expect(
-      page.getByText(/must start with user: or group:/),
+      page.getByText(/must start with user:, group: or serviceAccount:/),
     ).toBeVisible();
 
+    // A service account needs a reason before it is sent.
+    await input.fill("serviceAccount:ci@demo-project.iam.gserviceaccount.com");
+    await page.getByRole("button", { name: "Add allowed principal" }).click();
+    await expect(page.getByText(/Give a reason/)).toBeVisible();
+    await page.getByTestId("access-reason-input").fill("ci pipeline");
+    await page.getByRole("button", { name: "Add allowed principal" }).click();
+    await expect(
+      page.getByTestId(
+        "principal-row-serviceAccount:ci@demo-project.iam.gserviceaccount.com",
+      ),
+    ).toContainText("ci pipeline");
+
+    // The default role, grain/operator, holds dangerous scopes, so it is
+    // assigned only with a reason.
     await input.fill("user:new-member@example.com");
     await page.getByRole("button", { name: "Add allowed principal" }).click();
     await expect(
-      page.getByTestId("principal-row-user:new-member@example.com"),
+      page.getByText(/Give a reason: grain\/operator/),
     ).toBeVisible();
+    await page.getByTestId("access-reason-input").fill("new teammate");
+    await page.getByRole("button", { name: "Add allowed principal" }).click();
+    await expect(
+      page.getByTestId("principal-row-user:new-member@example.com"),
+    ).toContainText("grain/operator");
 
     // Remove until one entry remains, then verify removing the last entry warns first.
+    for (const sa of [
+      "serviceAccount:ci@demo-project.iam.gserviceaccount.com",
+      "serviceAccount:release-bot@demo-project.iam.gserviceaccount.com",
+    ]) {
+      await page.getByRole("button", { name: `Remove ${sa}` }).click();
+      await expect(page.getByTestId(`principal-row-${sa}`)).toHaveCount(0);
+    }
+
     await page
       .getByRole("button", { name: "Remove user:new-member@example.com" })
       .click();
@@ -127,8 +195,10 @@ test("Settings → Access validates, adds, warns on last-entry removal, and rest
         `/api/access/principals/${encodeURIComponent(e.entry)}`,
       );
     }
-    for (const entry of initialEntries) {
-      await request.post("/api/access/principals", { data: { entry } });
+    for (const { entry, reason, role } of initialEntries) {
+      await request.post("/api/access/principals", {
+        data: { entry, role, reason: reason || "restoring the demo" },
+      });
     }
   }
 });

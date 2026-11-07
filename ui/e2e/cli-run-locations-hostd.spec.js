@@ -47,7 +47,7 @@ test("behind hostd, host is offered only for what hostd's allowlist names, sayin
   // agy is on the allowlist and set to host: it runs through hostd, and
   // the row names the host binary hostd's allowlist entry runs.
   await expect(page.getByTestId("cli-run-antigravity-resolved")).toHaveText(
-    "host (/opt/agy/bin/agy, through grain hostd)",
+    "host (/opt/agy/bin/agy, through the host agent)",
   );
   await expect(
     page.getByTestId("cli-run-antigravity-host-unavailable"),
@@ -142,7 +142,7 @@ test("behind hostd, capability servers list hostd's entries and offer run: host 
 
   const runField = form.getByTestId("capability-server-run");
   await expect(runField).toContainText(
-    "name the command to see if hostd offers it",
+    "name the command to see if the host agent offers it",
   );
 
   const commandInput = form
@@ -150,16 +150,16 @@ test("behind hostd, capability servers list hostd's entries and offer run: host 
     .locator("input");
   await commandInput.fill("other-cap");
   await expect(runField).toContainText(
-    'grain hostd\'s allowlist has no capabilities entry for "other-cap" (it offers corp-search)',
+    'the host agent\'s allowlist has no capabilities entry for "other-cap" (it offers corp-search)',
   );
 
   await commandInput.fill("corp-search");
   await expect(runField).not.toContainText("host is not available");
   await runField.getByLabel("Run location").click();
   const hostOption = page.getByRole("option", {
-    name: "host (through grain hostd)",
+    name: "host (through the host agent)",
   });
   await expect(hostOption).toBeEnabled();
   await hostOption.click();
-  await expect(runField).toContainText("host (through grain hostd)");
+  await expect(runField).toContainText("host (through the host agent)");
 });

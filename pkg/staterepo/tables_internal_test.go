@@ -179,10 +179,9 @@ var notSettings = []string{
 	// record of what happened, written after the run finished.
 	"task_run_capability_audit",
 	"task_run_startup",
-	// Which hostd each run went to (model.TaskRunHostd), and a task's own
-	// hostd pin, written with the task like task_tag.
+	// Which hostd each run went to (model.TaskRunHostd), written with the
+	// task like task_tag.
 	"task_run_hostd",
-	"task_hostd",
 	"task_run_sandbox_key",
 	// A run's suspension (model.Suspension): grain's record of how a run
 	// stopped, written in the transaction that finished it.
@@ -220,6 +219,10 @@ var notSettings = []string{
 	// Who closed or reopened a task (model.TaskEvent): grain's record of
 	// what somebody did, written in the same breath as the closure.
 	"task_event",
+	// Ordered task state, comment/question, and CI verdict log backing
+	// GET /api/events (model.IntegrationEvent): runtime event history
+	// written by Store transactions, never settings a PR applies.
+	"integration_event",
 	// config_audit is the record of who changed the configuration
 	// (operator-attribution spec §4.4): grain's own history, not settings
 	// a merged pull request applies.
@@ -395,6 +398,10 @@ var notSettings = []string{
 	// Where each git_ref schedule last saw its ref
 	// (model.ScheduleRefCursor), for path_trigger_cursor's reason.
 	"git_ref_cursor",
+	// How far the daemon's GitHub webhook consumer has acknowledged webhook
+	// deliveries on PostgreSQL (model.GitHubWebhookCursor), for
+	// path_trigger_cursor's reason.
+	"github_webhook_cursor",
 	// And its merge rules (grain/task-1659), the same kind of row again.
 	"repo_merge_rules",
 	// The schema's own bookkeeping. Nothing proposes a change to the
@@ -408,12 +415,15 @@ var notSettings = []string{
 	// repo declarative settings.
 	"external_agent_token",
 	"external_agent_token_sequence",
-	// The hostd registry (model.Hostd) and its tokens' digests: hostds
-	// are created, rotated and revoked in Settings -> Hostds and minted
-	// a token there, not declared; hostd_token is never exported at all
-	// (LocalTables).
+	// The hostd registry (model.Hostd), its tokens' digests, shared
+	// enrollment codes and pending join requests: hosts are invited,
+	// accepted and revoked in Settings -> Hosts rather than declared in
+	// state, and hostd_token, host_enrollment_code and host_join_request
+	// are never exported at all (LocalTables).
 	"hostd",
 	"hostd_token",
+	"host_enrollment_code",
+	"host_join_request",
 	// Verified-identity sign-in access (model.AllowedPrincipal) and its
 	// one-time flag migration record: managed live in Settings -> Access
 	// and `grain access`, and intentionally kept out of `grain/config` so
@@ -425,6 +435,12 @@ var notSettings = []string{
 	// declarative settings.
 	"secret_resolution_audit",
 	"credential_access_audit",
+	// Non-secret catalogue of secret names and keys stored in Google Cloud
+	// Secret Manager (-secrets-backend=secretmanager, design/design/registry.design.md):
+	// written live by secrets.Store alongside Secret Manager mutations, and
+	// kept out of grain/config so a config-repo merge never overwrites or
+	// erases the instance's secret catalogue.
+	"secret_entries",
 	// Operator notifications (model.Notification) and the subscriptions
 	// that wake durable tasks on them: grain's own running record of
 	// what it raised and who has seen it, rewritten every cycle, and

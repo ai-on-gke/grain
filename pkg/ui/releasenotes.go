@@ -57,19 +57,20 @@ type ReleaseNote struct {
 // the week's merges, and the pane says the figure is partial rather
 // than showing a total that is quietly too small.
 type ClusterStats struct {
-	Period               string     `json:"period"`
-	Since                time.Time  `json:"since"`
-	Until                time.Time  `json:"until"`
-	PullRequestsMerged   int        `json:"pullRequestsMerged"`
-	PullRequestsMeasured int        `json:"pullRequestsMeasured"`
-	LinesAdded           int        `json:"linesAdded"`
-	LinesDeleted         int        `json:"linesDeleted"`
-	TasksCompleted       int        `json:"tasksCompleted"`
-	TasksFiled           int        `json:"tasksFiled"`
-	Runs                 int        `json:"runs"`
-	RunsSucceeded        int        `json:"runsSucceeded"`
-	AgentHours           float64    `json:"agentHours"`
-	Repos                []RepoWork `json:"repos"`
+	Period               string          `json:"period"`
+	Since                time.Time       `json:"since"`
+	Until                time.Time       `json:"until"`
+	PullRequestsMerged   int             `json:"pullRequestsMerged"`
+	PullRequestsMeasured int             `json:"pullRequestsMeasured"`
+	LinesAdded           int             `json:"linesAdded"`
+	LinesDeleted         int             `json:"linesDeleted"`
+	TasksCompleted       int             `json:"tasksCompleted"`
+	TasksFiled           int             `json:"tasksFiled"`
+	Runs                 int             `json:"runs"`
+	RunsSucceeded        int             `json:"runsSucceeded"`
+	AgentHours           float64         `json:"agentHours"`
+	Repos                []RepoWork      `json:"repos"`
+	Directions           []DirectionWork `json:"directions"`
 }
 
 // RepoWork is one repository's share of that week, most merged pull
@@ -83,6 +84,28 @@ type RepoWork struct {
 	TasksCompleted       int    `json:"tasksCompleted"`
 	TasksFiled           int    `json:"tasksFiled"`
 	Runs                 int    `json:"runs"`
+}
+
+// DirectionWork is one root direction's share of the window, most merged
+// pull requests first: the root task that started the work tree and what
+// that direction produced across itself and the follow-up tasks it spawned.
+type DirectionWork struct {
+	TaskID               string  `json:"taskId"`
+	Title                string  `json:"title,omitempty"`
+	Repo                 string  `json:"repo,omitempty"`
+	Origin               string  `json:"origin,omitempty"`
+	Author               string  `json:"author,omitempty"`
+	AuthorKind           string  `json:"authorKind,omitempty"`
+	PullRequestsMerged   int     `json:"pullRequestsMerged"`
+	PullRequestsMeasured int     `json:"pullRequestsMeasured"`
+	LinesAdded           int     `json:"linesAdded"`
+	LinesDeleted         int     `json:"linesDeleted"`
+	TasksCompleted       int     `json:"tasksCompleted"`
+	TasksFiled           int     `json:"tasksFiled"`
+	TasksSpawned         int     `json:"tasksSpawned"`
+	Runs                 int     `json:"runs"`
+	RunsSucceeded        int     `json:"runsSucceeded"`
+	AgentHours           float64 `json:"agentHours"`
 }
 
 // releaseNoteRequest is PUT /api/release-notes' body: which week, the
@@ -195,25 +218,18 @@ func (c *Client) PutReleaseNote(ctx context.Context, period, title, text string,
 	return c.GetReleaseNote(ctx, period)
 }
 
-// ClusterStats counts one week of this deployment's work. An empty
-// period is the week that just ended.
+// ClusterStats counts one day, week or month of this deployment's work.
+// An empty period is the week that just ended.
 //
-// The window comes from the period rather than from "the last seven
-// days", so that the numbers and the notes are demonstrably about the
-// same week however long after it either is read
-// (model.ReleaseNotePeriodRange).
+// The window comes from the period rather than from a sliding duration,
+// so that the numbers and the notes are demonstrably about the same
+// calendar window however long after it either is read
+// (model.StatsPeriodRange).
 func (c *Client) ClusterStats(ctx context.Context, period string) (ClusterStats, error) {
-	period, err := c.releaseNotePeriod(ctx, period)
+	loc := c.deploymentLocation(ctx)
+	period, since, until, err := c.statsPeriod(period, loc)
 	if err != nil {
 		return ClusterStats{}, err
-	}
-	loc, err := c.scheduleLocation(ctx)
-	if err != nil {
-		return ClusterStats{}, err
-	}
-	since, until, err := model.ReleaseNotePeriodRange(period, loc)
-	if err != nil {
-		return ClusterStats{}, validationErrorf("%s", err)
 	}
 	stats, err := c.Store.ClusterStats(ctx, since, until)
 	if err != nil {
@@ -231,6 +247,7 @@ func (c *Client) ClusterStats(ctx context.Context, period string) (ClusterStats,
 		RunsSucceeded:        stats.RunsSucceeded,
 		AgentHours:           stats.AgentTime.Hours(),
 		Repos:                make([]RepoWork, 0, len(stats.Repos)),
+		Directions:           make([]DirectionWork, 0, len(stats.Directions)),
 	}
 	for _, w := range stats.Repos {
 		out.Repos = append(out.Repos, RepoWork{
@@ -241,7 +258,65 @@ func (c *Client) ClusterStats(ctx context.Context, period string) (ClusterStats,
 			TasksCompleted:       w.TasksCompleted, TasksFiled: w.TasksFiled, Runs: w.Runs,
 		})
 	}
+	for _, d := range stats.Directions {
+		var repo string
+		if d.Repo != nil {
+			repo = d.Repo.String()
+		}
+		out.Directions = append(out.Directions, DirectionWork{
+			TaskID:               d.TaskID,
+			Title:                d.Title,
+			Repo:                 repo,
+			Origin:               string(d.Origin),
+			Author:               d.Author.ID,
+			AuthorKind:           string(d.Author.Kind),
+			PullRequestsMerged:   d.PullRequestsMerged,
+			PullRequestsMeasured: d.PullRequestsMeasured,
+			LinesAdded:           d.LinesAdded,
+			LinesDeleted:         d.LinesDeleted,
+			TasksCompleted:       d.TasksCompleted,
+			TasksFiled:           d.TasksFiled,
+			TasksSpawned:         d.TasksSpawned,
+			Runs:                 d.Runs,
+			RunsSucceeded:        d.RunsSucceeded,
+			AgentHours:           d.AgentTime.Hours(),
+		})
+	}
 	return out, nil
+}
+
+// statsPeriod resolves a rollup period -- an explicit calendar day
+// ("2026-11-04"), ISO week ("2026-W38"), calendar month ("2026-11"), or
+// one of the relative aliases ("today", "yesterday", "this-week",
+// "last-week", "this-month", "last-month") -- on the deployment's own
+// wall clock, defaulting an empty period to the week that just ended.
+func (c *Client) statsPeriod(period string, loc *time.Location) (string, time.Time, time.Time, error) {
+	if loc == nil {
+		loc = time.UTC
+	}
+	now := c.now().In(loc)
+	switch strings.TrimSpace(period) {
+	case "", "last-week":
+		period = model.LastCompleteReleaseNotePeriod(now, loc)
+	case "this-week":
+		period = model.ReleaseNotePeriod(now, loc)
+	case "today":
+		period = model.DayPeriod(now, loc)
+	case "yesterday":
+		period = model.DayPeriod(now.AddDate(0, 0, -1), loc)
+	case "this-month":
+		period = model.MonthPeriod(now, loc)
+	case "last-month":
+		firstOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, loc)
+		period = model.MonthPeriod(firstOfMonth.AddDate(0, -1, 0), loc)
+	default:
+		period = strings.TrimSpace(period)
+	}
+	since, until, err := model.StatsPeriodRange(period, loc)
+	if err != nil {
+		return "", time.Time{}, time.Time{}, validationErrorf("%s", err)
+	}
+	return period, since, until, nil
 }
 
 // releaseNotePeriod resolves the period a caller named, or the week that
@@ -256,16 +331,24 @@ func (c *Client) ClusterStats(ctx context.Context, period string) (ClusterStats,
 func (c *Client) releaseNotePeriod(ctx context.Context, period string) (string, error) {
 	period = strings.TrimSpace(period)
 	if period == "" {
-		loc, err := c.scheduleLocation(ctx)
-		if err != nil {
-			return "", err
-		}
-		return model.LastCompleteReleaseNotePeriod(c.now(), loc), nil
+		return model.LastCompleteReleaseNotePeriod(c.now(), c.deploymentLocation(ctx)), nil
 	}
 	if err := model.ValidateReleaseNotePeriod(period); err != nil {
 		return "", validationErrorf("%s", err)
 	}
 	return period, nil
+}
+
+// deploymentLocation is the deployment's configured wall clock
+// (Config.TimeZone), or UTC when none is configured.
+func (c *Client) deploymentLocation(ctx context.Context) *time.Location {
+	zone := ""
+	if c.Store != nil {
+		if cfg, err := c.Store.GetConfig(ctx); err == nil && cfg != nil {
+			zone = cfg.TimeZone
+		}
+	}
+	return model.LoadLocation(model.TimeZoneOrDefault(zone))
 }
 
 func releaseNoteFrom(n model.ReleaseNote) ReleaseNote {

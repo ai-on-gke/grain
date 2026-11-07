@@ -45,11 +45,15 @@ Flags:
   -no-save-config   do not persist the database configuration in <data-dir>/db-config.json
 `
 
-const dbUsage = "usage: grain db upgrade-postgres [flags]\n"
+const dbUsage = "usage: grain db upgrade-postgres [flags]\n       grain db check [-data-dir DIR]\n"
 
 func dbCmd(args []string) {
 	if len(args) > 0 && (args[0] == "upgrade-postgres" || args[0] == "upgrade-sqlite-to-postgres") {
 		upgradePostgresCmd(args[1:])
+		return
+	}
+	if len(args) > 0 && args[0] == "check" {
+		dbCheckCmd(args[1:])
 		return
 	}
 	if err := runDB(args, os.Stderr); err != nil {
@@ -61,14 +65,14 @@ func dbCmd(args []string) {
 func runDB(args []string, errOut io.Writer) error {
 	if len(args) == 0 {
 		fmt.Fprint(errOut, dbUsage)
-		return errors.New("a command is required (grain db upgrade-postgres [flags]; db query is the in-sandbox CLI's)")
+		return errors.New("a command is required (grain db upgrade-postgres [flags], grain db check; db query is the in-sandbox CLI's)")
 	}
 	switch args[0] {
 	case "-h", "-help", "--help":
 		fmt.Fprint(errOut, dbUsage)
 		return flag.ErrHelp
 	default:
-		return fmt.Errorf("unknown command %q (grain db upgrade-postgres [flags]; db query is the in-sandbox CLI's)", args[0])
+		return fmt.Errorf("unknown command %q (grain db upgrade-postgres [flags], grain db check; db query is the in-sandbox CLI's)", args[0])
 	}
 }
 
@@ -98,6 +102,16 @@ func runUpgradePostgres(ctx context.Context, args []string, out io.Writer) error
 		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
 	}
 
+	// Offline only: a copy taken under a running daemon loses every write
+	// it makes afterwards, and db-config.json rewritten under it switches
+	// the store at its next start (docs/database.md). This never stops
+	// the daemon itself; that is the operator's step, or setup.sh's.
+	if *dataDir != "" {
+		if err := daemon.RefuseWhileDaemonAttached(ctx, "grain upgrade-postgres", *dataDir, nil, false); err != nil {
+			return err
+		}
+	}
+
 	targetDSN := strings.TrimSpace(*dsn)
 	var pgCfg postgres.Config
 	if targetDSN != "" {
@@ -115,6 +129,14 @@ func runUpgradePostgres(ctx context.Context, args []string, out io.Writer) error
 		targetDSN = cfg.URL
 	} else {
 		return errors.New("-dsn is required (no embedded postgres found)")
+	}
+
+	if target, err := postgres.Open(pgCfg); err == nil {
+		err := daemon.RefuseWhileDaemonAttached(ctx, "grain upgrade-postgres", "", target, true)
+		target.Close()
+		if err != nil {
+			return err
+		}
 	}
 
 	srcPath := *sqlitePath

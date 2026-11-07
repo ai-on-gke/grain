@@ -286,8 +286,10 @@ trigger:
 
 When declared in `.grain/schedules/<name>.yml` without an explicit `template:`
 or `suite:`, a `github_workflow_run` schedule defaults to the built-in
-`system:workflow-review:<stem>` ("Review last night's `<stem>` run") template
-and records each firing in `scheduled_workflow_run` (`model.ScheduledWorkflowRun`),
+`system:workflow-review-github:<stem>` ("Review the `<stem>` GitHub Actions run")
+template -- a prompt about a run GitHub made, reading `.github/workflows/<stem>.yml`,
+kept apart from grain CI's `system:workflow-review:<stem>` so a stem used by both
+keeps both -- and records each firing in `scheduled_workflow_run` (`model.ScheduledWorkflowRun`),
 including the GitHub run URL, conclusion, failing jobs and steps, and the
 failure tails from `github_ci_job` in both the filed task's prompt and its
 opening comment. Concluded runs arrive via `workflow_run` webhooks or the

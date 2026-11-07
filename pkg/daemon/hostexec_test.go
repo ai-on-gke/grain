@@ -112,7 +112,7 @@ func TestDetectHostExecutorOffTheBareMachine(t *testing.T) {
 		t.Errorf("on the host: %+v, want local", e)
 	}
 	if e := DetectHostExecutor(Config{}, inContainer, func(string) bool { return false }); e.Kind != HostExecutorNone ||
-		!strings.Contains(e.Reason, "no grain hostd") {
+		!strings.Contains(e.Reason, "no host agent") {
 		t.Errorf("in a container with no hostd: %+v, want none, saying there is no hostd", e)
 	}
 	var asked string
@@ -123,6 +123,20 @@ func TestDetectHostExecutorOffTheBareMachine(t *testing.T) {
 	e = DetectHostExecutor(Config{HostdSocket: "/srv/hostd.sock"}, inContainer, func(string) bool { return false })
 	if e.Kind != HostExecutorHostd || e.Socket != "/srv/hostd.sock" {
 		t.Errorf("with -hostd-socket: %+v, want hostd at that socket", e)
+	}
+	// An explicit -hostd-socket on the bare machine is honoured too rather
+	// than silently discarded for HostExecutorLocal, so co-located hostd
+	// routing and run: host capability servers work when grain daemon is
+	// started outside a container with -hostd-socket.
+	onHost := whererun.Detection{Host: true, Signal: "no container marker found"}
+	e = DetectHostExecutor(Config{HostdSocket: "/srv/hostd.sock"}, onHost, noHostdLookup(t))
+	if e.Kind != HostExecutorHostd || e.Socket != "/srv/hostd.sock" {
+		t.Errorf("on the host with explicit -hostd-socket: %+v, want hostd at that socket", e)
+	}
+	cfg := Config{HostdSocket: "/srv/hostd.sock", HostExec: &e}
+	if cfg.capabilityHostd() == nil || capabilityHostdName(cfg) != model.LocalHostd {
+		t.Errorf("capabilityHostd with explicit -hostd-socket on host: client=%v name=%q, want non-nil %q",
+			cfg.capabilityHostd(), capabilityHostdName(cfg), model.LocalHostd)
 	}
 }
 
@@ -244,13 +258,13 @@ func TestHostdConfiguredButDownStillOffersHostAndFailsTheRunClearly(t *testing.T
 	}
 
 	// The run is refused before anything is staged, naming hostd's socket.
-	if _, err := cfg.cliHostdHost(agy); err == nil || !strings.Contains(err.Error(), "grain hostd is not reachable at "+socket) {
+	if _, err := cfg.cliHostdHost(agy); err == nil || !strings.Contains(err.Error(), "the host agent is not reachable at "+socket) {
 		t.Errorf("a host run with hostd down: %v, want it to fail naming hostd's socket", err)
 	}
 	// And a host that somehow got past that still fails the same way.
 	host := agent.HostdHost{Client: hostd.Client{Socket: socket}, Entry: "agy"}
 	_, err := host.Run(context.Background(), agent.Command{Path: "agy", Args: []string{"--version"}}, nil)
-	if err == nil || !strings.Contains(err.Error(), "grain hostd is not reachable at "+socket) {
+	if err == nil || !strings.Contains(err.Error(), "the host agent is not reachable at "+socket) {
 		t.Errorf("a host run with hostd down: %v, want it to fail naming hostd's socket", err)
 	}
 }

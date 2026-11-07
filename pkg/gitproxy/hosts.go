@@ -72,6 +72,11 @@ type CredentialHost struct {
 	// Empty means the daemon's own environment decides, as for any host.
 	// It never carries a login: the record is not a secret.
 	Proxy string `json:"proxy,omitempty"`
+	// Author is the human user's name or login recorded when a user
+	// delegates their credential to grain (`grain git-login`). When set,
+	// grain signs new pull requests and comments made with this credential
+	// as "Signed by <Author> (via Grain)".
+	Author string `json:"author,omitempty"`
 	// Recorded is false for a credential with no host file, whose host
 	// is the set's default.
 	Recorded bool `json:"-"`
@@ -114,7 +119,8 @@ func NormalizeCredentialHost(h CredentialHost) (CredentialHost, error) {
 	if err != nil {
 		return h, err
 	}
-	return CredentialHost{Host: host, Kind: kind, BaseURL: base, Proxy: proxy, Recorded: h.Recorded}, nil
+	author := oneLine(strings.TrimSpace(h.Author))
+	return CredentialHost{Host: host, Kind: kind, BaseURL: base, Proxy: proxy, Author: author, Recorded: h.Recorded}, nil
 }
 
 // NormalizeHostProxy checks a host record's proxy: empty, or an

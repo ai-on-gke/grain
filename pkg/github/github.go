@@ -270,7 +270,14 @@ func (t *RealTransport) sendOnce(method, path string, headers map[string]string,
 	case t.PathPrefix != "" && (path == t.PathPrefix || strings.HasPrefix(path, t.PathPrefix+"/")):
 		fullPath = path
 	}
-	req, err := http.NewRequest(method, scheme+"://"+t.Host+fullPath, bodyReader)
+	target := scheme + "://" + t.Host + fullPath
+	if strings.HasPrefix(path, "https://") || strings.HasPrefix(path, "http://") {
+		// A whole URL -- a redirect a caller follows itself, such as a
+		// job log's blob URL -- goes where it says, with only the
+		// headers the caller gave it.
+		target = path
+	}
+	req, err := http.NewRequest(method, target, bodyReader)
 	if err != nil {
 		return ApiResponse{}, err
 	}
@@ -338,6 +345,12 @@ func (t *RealTransport) sendOnce(method, path string, headers map[string]string,
 	respHeaders := headerMap(resp.Header)
 	out := ApiResponse{Status: resp.StatusCode, Headers: respHeaders, Body: data,
 		URL: method + " " + req.URL.String()}
+	if final := resp.Request; final != nil && final.URL != nil && final.URL.Host != req.URL.Host {
+		// Answered by wherever a redirect sent the request -- a job
+		// log's blob store, say -- so a refusal names that host too.
+		// Its path and query stay out: they are a signed URL.
+		out.URL += " -> " + final.URL.Scheme + "://" + final.URL.Host
+	}
 	// A caller that sent its own validator (CompletedWorkflowRuns keeps
 	// one per repository) and got a 304 back was revalidated all the
 	// same: GitHub does not charge it, so neither does Health's budget.
@@ -1993,6 +2006,43 @@ func (c *RESTClient) GetBranchHead(owner, repo, branch string) (*BranchHead, err
 	return &BranchHead{SHA: data.Commit.SHA, Message: data.Commit.Commit.Message}, nil
 }
 
+// ResolveCommitSHA resolves ref (a branch name, tag, abbreviated SHA, full SHA,
+// or "" / "HEAD" for the repository's default branch) in owner/repo to its full
+// commit SHA via GET /repos/{owner}/{repo}/commits/{ref}. It returns ("", nil)
+// when the repository or ref does not exist (404 / 422).
+func (c *RESTClient) ResolveCommitSHA(owner, repo, ref string) (string, error) {
+	lookup := strings.TrimSpace(ref)
+	if lookup == "" {
+		lookup = "HEAD"
+	}
+	resp, err := c.get(owner, repo, fmt.Sprintf("/repos/%s/%s/commits/%s", owner, repo, quoteAll(lookup)))
+	if err != nil {
+		return "", err
+	}
+	if (resp.Status == 404 || resp.Status == 422) && strings.TrimSpace(ref) == "" {
+		def, defErr := c.DefaultBranch(owner, repo)
+		if defErr == nil && def != "" {
+			resp, err = c.get(owner, repo, fmt.Sprintf("/repos/%s/%s/commits/%s", owner, repo, quoteAll(def)))
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+	if resp.Status == 404 || resp.Status == 422 {
+		return "", nil
+	}
+	if resp.Status != 200 {
+		return "", &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+	var data struct {
+		SHA string `json:"sha"`
+	}
+	if err := json.Unmarshal(resp.Body, &data); err != nil {
+		return "", err
+	}
+	return strings.ToLower(strings.TrimSpace(data.SHA)), nil
+}
+
 // CompareCommits returns the commits head carries that base does not,
 // oldest first -- git's own `base..head`, which is exactly the set of
 // commits a pull request from head into base would contain, and so
@@ -2268,6 +2318,7 @@ func (c *RESTClient) CreatePullRequest(owner, repo, head, base, title, body stri
 	if err := c.gitOnly(owner, repo); err != nil {
 		return PullRequest{}, err
 	}
+	body = c.signPullRequestBody(owner, repo, body)
 	payload, _ := json.Marshal(map[string]string{
 		"title": title, "head": head, "base": base, "body": body,
 	})
@@ -2302,6 +2353,7 @@ func (c *RESTClient) CreatePullRequest(owner, repo, head, base, title, body stri
 // then describes the commits that existed then, and the run's later
 // commits are the ones a reviewer needs to read about.
 func (c *RESTClient) UpdatePullRequestBody(owner, repo string, number int, body string) error {
+	body = c.signPullRequestBody(owner, repo, body)
 	payload, _ := json.Marshal(map[string]string{"body": body})
 	resp, err := c.request(
 		"PATCH", fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, number),
@@ -3845,6 +3897,9 @@ type WorkflowRun struct {
 	RunAttempt int        `json:"run_attempt"`
 	StartedAt  *time.Time `json:"run_started_at"`
 	UpdatedAt  *time.Time `json:"updated_at"`
+	// DisplayTitle is the run's own name (a workflow's `run-name`), which
+	// is how an on-demand release build of one commit names itself.
+	DisplayTitle string `json:"display_title,omitempty"`
 }
 
 // WorkflowRunJob is one job of a GitHub Actions workflow run returned by
@@ -4220,6 +4275,7 @@ func (c *RESTClient) ListComments(owner, repo string, number int) ([]Comment, er
 // trusted reply arrived after this," since a comment's own id is the one
 // thing that can't be spoofed by editing an earlier comment's body.
 func (c *RESTClient) CreateComment(owner, repo string, number int, body string) (int, error) {
+	body = c.signCommentBody(owner, repo, body)
 	payload, _ := json.Marshal(map[string]string{"body": body})
 	resp, err := c.request(
 		"POST", fmt.Sprintf("/repos/%s/%s/issues/%d/comments", owner, repo, number),
@@ -4246,6 +4302,7 @@ func (c *RESTClient) CreateComment(owner, repo string, number int, body string) 
 // files the reply under the thread's root either way. Returns the new
 // comment's id, as CreateComment does.
 func (c *RESTClient) ReplyToReviewComment(owner, repo string, pullNumber, commentID int, body string) (int, error) {
+	body = c.signCommentBody(owner, repo, body)
 	payload, _ := json.Marshal(map[string]string{"body": body})
 	resp, err := c.request(
 		"POST", fmt.Sprintf("/repos/%s/%s/pulls/%d/comments/%d/replies", owner, repo, pullNumber, commentID),
@@ -4437,6 +4494,7 @@ func (c *RESTClient) ResolveReviewThread(owner, repo, threadID string) error {
 // tree's origin (orchestrator.reconcileWorkTrees) rather than posting a
 // new one each time the tree moves.
 func (c *RESTClient) UpdateComment(owner, repo string, commentID int64, body string) error {
+	body = c.signCommentBody(owner, repo, body)
 	payload, _ := json.Marshal(map[string]string{"body": body})
 	resp, err := c.request(
 		"PATCH", fmt.Sprintf("/repos/%s/%s/issues/comments/%d", owner, repo, commentID),
@@ -4511,6 +4569,7 @@ func (c *RESTClient) MergePullRequestWithMessage(owner, repo string, number int,
 // review's id, kept for the same reason CreateComment returns one: cheap,
 // and the pattern every other creation call here already follows.
 func (c *RESTClient) CreateReview(owner, repo string, number int, body string, comments []NewReviewComment) (int, error) {
+	body = c.signCommentBody(owner, repo, body)
 	payloadComments := make([]map[string]any, len(comments))
 	for i, cm := range comments {
 		payloadComments[i] = map[string]any{"path": cm.Path, "line": cm.Line, "body": cm.Body}

@@ -14,12 +14,8 @@
 
 # GitHub Actions port of .grain/workflows/promote.yml.
 #
-# Keeps this repository's `vX.Y.Z` and `latest` GitHub releases aligned with
-# the git `latest` tag by running `scripts/release-assets.sh promote`: the
-# commit's `sha-<short>` release assets (the tarballs the release job built
-# and tested) are published again under the release's name, with only
-# images.json's version and createdAt changed (docs/release-assets.md).
-# Nothing is rebuilt and no registry is written to.
+# Keeps the `:latest` and `:vX.Y.Z` image tags on `docker.io/grainai/*`
+# aligned with the git `latest` tag by running `scripts/release-images.sh promote`.
 
 name: promote
 
@@ -35,23 +31,89 @@ on:
         default: ""
         type: string
       dry_run:
-        description: "Verify the promotion plan without writing any release (always true on non-main refs)"
+        description: "Verify promotion plan without pushing tags to the registry (always true on non-main refs)"
         required: false
         default: false
         type: boolean
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   GOFLAGS: -mod=readonly
-  RELEASE_ASSETS_DIR: /tmp/release-assets
+  RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO }}
 
 jobs:
+  # A promoted commit whose release run a newer merge superseded has no
+  # sha- images. On a tag or a dispatch -- which is when a release can
+  # name such a commit -- this job has release.yml build, test and
+  # publish it (`workflow_dispatch` with commit=<sha>) and waits, before
+  # `latest` promotes it (grain/task-3334). It is a job of its own so the
+  # token that can dispatch workflows (`actions: write`) is held only
+  # here: never on the push to main or candidate that runs this workflow
+  # on every merge, and never beside the registry credentials `latest`
+  # publishes with. It reads the registry anonymously and pushes nothing.
+  on-demand:
+    name: build the release on demand
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    # Room for release.yml's 120 minutes.
+    timeout-minutes: 180
+    permissions:
+      # actions: write dispatches release.yml for an on-demand build.
+      actions: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Refuse a patch tag that did not come from its release branch
+        env:
+          PROMOTE_VERSION: ${{ inputs.version }}
+        run: bash ./scripts/patch-tag-guard.sh --latest "${GITHUB_REF:-}" "${PROMOTE_VERSION:-}"
+
+      - name: Build the promoted commit on demand if it has no images
+        env:
+          PROMOTE_VERSION: ${{ inputs.version }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          GH_REF_NAME: ${{ github.head_ref || github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_PUBLISH_REGISTRY: ${{ vars.PACKAGE_PUBLISH_REGISTRY }}
+          RELEASE_ON_DEMAND_BUILD: dispatch
+        run: |
+          set -euo pipefail
+          export GRAIN_CI_REPO="${GITHUB_REPOSITORY}" GRAIN_CI_COMMIT="${GITHUB_SHA}" GRAIN_CI_REF="${GH_REF_NAME}"
+          args=(on-demand)
+          if [ -n "${PROMOTE_VERSION:-}" ]; then
+            args+=("${PROMOTE_VERSION}")
+          fi
+          # The same dry-run rule as `latest` below.
+          case "${GITHUB_REF:-}" in
+            refs/heads/main|refs/heads/candidate|refs/tags/v*) is_release_ref=true ;;
+            *) is_release_ref=false ;;
+          esac
+          if [ "${INPUT_DRY_RUN:-}" = "true" ] ||
+             { [ "$is_release_ref" != "true" ] && [ "${GITHUB_EVENT_NAME:-}" != "release" ]; }; then
+            bash ./scripts/release-images.sh --dry-run "${args[@]}"
+          else
+            bash ./scripts/release-images.sh "${args[@]}"
+          fi
+
   latest:
     name: promote release images
+    needs: on-demand
+    # On a push on-demand is skipped, and a commit with no images fails
+    # here naming what is missing, as it always did.
+    if: ${{ !cancelled() && (needs.on-demand.result == 'success' || needs.on-demand.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
     concurrency:
       group: ${{ github.workflow }}-latest-${{ github.ref }}
       cancel-in-progress: false
@@ -71,6 +133,41 @@ jobs:
         env:
           PROMOTE_VERSION: ${{ inputs.version }}
         run: bash ./scripts/patch-tag-guard.sh --latest "${GITHUB_REF:-}" "${PROMOTE_VERSION:-}"
+
+      - name: Cache Go modules and build cache
+        # zizmor: ignore[cache-poisoning]
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Node.js
+        # zizmor: ignore[cache-poisoning]
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+          package-manager-cache: false
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Cache npm and node_modules
+        # zizmor: ignore[cache-poisoning]
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.npm
+            ui/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
 
       - name: Resolve release context and dry-run mode
         env:
@@ -101,18 +198,65 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "Resolved GRAIN_CI_REF=${GH_REF_NAME} DRY_RUN=${dry_run}"
 
+      - name: Authenticate to Google Cloud (WIF)
+        if: vars.GCP_WIF_PROVIDER != '' && vars.GCP_SA_EMAIL != ''
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SA_EMAIL }}
+
+      - name: Configure Artifact Registry Docker authentication
+        if: vars.GCP_WIF_PROVIDER != '' && vars.GCP_SA_EMAIL != ''
+        run: gcloud auth configure-docker us-docker.pkg.dev --quiet
+
+      - name: Configure package-publish credentials
+        if: env.DRY_RUN != 'true'
+        env:
+          DOCKER_PAT: ${{ secrets.DOCKER_PAT }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          GHCR_PAT: ${{ secrets.GHCR_TOKEN }}
+          PUBLISH_REGISTRY: ${{ vars.PACKAGE_PUBLISH_REGISTRY }}
+        run: bash ./scripts/configure-dockerhub-auth.sh
+
+      - name: Configure optional image-signing key
+        if: env.DRY_RUN != 'true'
+        env:
+          SIGNING_KEY_PEM: ${{ secrets.IMAGE_SIGNING_KEY }}
+          SIGNING_KEY_PASS: ${{ secrets.IMAGE_SIGNING_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SIGNING_KEY_PEM:-}" ]; then
+            echo "WARNING: IMAGE_SIGNING_KEY secret is not set; promoted release images will be published unsigned." >&2
+            exit 0
+          fi
+          if ! command -v cosign >/dev/null 2>&1; then
+            cosign_version="v2.4.1"
+            curl -fsSL "https://github.com/sigstore/cosign/releases/download/${cosign_version}/cosign-linux-amd64" \
+              -o /usr/local/bin/cosign
+            chmod +x /usr/local/bin/cosign
+          fi
+          key_file="${RUNNER_TEMP}/image-signing.key"
+          printf '%s\n' "${SIGNING_KEY_PEM}" > "$key_file"
+          chmod 600 "$key_file"
+          pass_file="${RUNNER_TEMP}/image-signing.pass"
+          printf '%s' "${SIGNING_KEY_PASS:-}" > "$pass_file"
+          chmod 600 "$pass_file"
+          {
+            echo "IMAGE_SIGNING_KEY=${key_file}"
+            echo "IMAGE_SIGNING_PASSWORD_FILE=${pass_file}"
+          } >> "$GITHUB_ENV"
+
       - name: Publish the last promoted release as latest
         env:
           PROMOTE_VERSION: ${{ inputs.version }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          args=()
-          if [ "${DRY_RUN}" = "true" ]; then
-            args+=(--dry-run)
-          fi
-          args+=(promote)
+          args=(promote)
           if [ -n "${PROMOTE_VERSION:-}" ]; then
             args+=("${PROMOTE_VERSION}")
           fi
-          bash ./scripts/release-assets.sh "${args[@]}"
+          if [ "${DRY_RUN}" = "true" ]; then
+            bash ./scripts/release-images.sh --dry-run "${args[@]}"
+          else
+            bash ./scripts/release-images.sh "${args[@]}"
+          fi

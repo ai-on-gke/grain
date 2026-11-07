@@ -255,6 +255,9 @@ func TestGrainAuthoredRecognisesOnlyGrainsOwnBodies(t *testing.T) {
 		want bool
 	}{
 		{"a body grain wrote", pullRequestBody("Add the parser", "t1", 0), true},
+		{"a signed body grain wrote", github.SignPullRequestBody(pullRequestBody("Add the parser", "t1", 0), "Ada Lovelace"), true},
+		{"a signed bare body grain wrote", github.SignPullRequestBody(pullRequestBody("", "t1", 0), "Ada Lovelace"), true},
+		{"a signed body with lineage and images", withImages(withLineage(github.SignPullRequestBody(pullRequestBody("Add the parser", "t1", 0), "Ada Lovelace"), "<!-- grain:lineage -->\nOrigin: this task\n<!-- /grain:lineage -->"), "<!-- grain:images:1 -->\nimg\n<!-- /grain:images -->"), true},
 		{"a body grain wrote with issue", pullRequestBody("Add the parser", "t1", 42), true},
 		{"a bare issue body grain wrote", pullRequestBody("", "t1", 42), true},
 		{"the bare footer an older grain wrote", descriptionFooter("t1"), true},

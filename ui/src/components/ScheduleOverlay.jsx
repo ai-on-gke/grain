@@ -16,17 +16,15 @@ import { isApiGrant, withoutApiRows } from "../apiGrants.js";
 import GrantsPicker from "./GrantsPicker.jsx";
 import { localGrantHandlers } from "./capabilityMethods.js";
 import { isCapabilityRef } from "../capabilityArgs.js";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   Box,
   Button,
   Checkbox,
-  Chip,
   FormControl,
   FormControlLabel,
   FormHelperText,
   InputLabel,
-  ListItemText,
   MenuItem,
   Select,
   Stack,
@@ -65,6 +63,7 @@ import {
   defaultRepoChoice,
   targetableRepos,
 } from "../state.js";
+import AccessGate from "./AccessGate.jsx";
 
 const WEEKDAYS = [
   "sunday",
@@ -80,6 +79,7 @@ const WEEKDAYS = [
 // clock, so they take no time of day. Minutes have a floor
 // (model.MinEveryNMinutes) so nobody schedules a sandbox every minute.
 const INTERVAL_KINDS = ["everyNHours", "everyNMinutes"];
+const EVENT_KINDS = ["git_ref", "github_workflow_run"];
 const MIN_EVERY_N_MINUTES = 10;
 
 function capitalize(s) {
@@ -128,8 +128,37 @@ function RecurrenceFields({
           <MenuItem value="daily">Daily, at a time</MenuItem>
           <MenuItem value="weekly">Weekly, on a day and time</MenuItem>
           <MenuItem value="monthly">Monthly, on a day and time</MenuItem>
+          <MenuItem value="git_ref">When a git ref moves</MenuItem>
+          {kind === "github_workflow_run" && (
+            <MenuItem value="github_workflow_run">
+              When a GitHub workflow finishes
+            </MenuItem>
+          )}
         </Select>
       </FormControl>
+      {kind === "git_ref" && (
+        <>
+          <TextField
+            name="gitRefRepo"
+            label="Watched repository"
+            defaultValue={defaultValue?.gitRef?.repo || ""}
+            placeholder="owner/repo"
+            required
+            fullWidth
+            margin="dense"
+          />
+          <TextField
+            name="gitRefName"
+            label="Watched git ref"
+            defaultValue={defaultValue?.gitRef?.ref || "refs/heads/main"}
+            placeholder="refs/heads/main"
+            required
+            fullWidth
+            margin="dense"
+            helperText="Full ref name under refs/ (for example refs/heads/main or refs/tags/latest)"
+          />
+        </>
+      )}
       {kind === "everyNHours" && (
         <TextField
           name="everyNHours"
@@ -155,7 +184,7 @@ function RecurrenceFields({
           helperText={`At least ${MIN_EVERY_N_MINUTES}; counted from the last firing`}
         />
       )}
-      {!INTERVAL_KINDS.includes(kind) && (
+      {!INTERVAL_KINDS.includes(kind) && !EVENT_KINDS.includes(kind) && (
         <TextField
           name="timeOfDay"
           label={timeLabel}
@@ -197,7 +226,7 @@ function RecurrenceFields({
           helperText="1-31; a shorter month fires on its last day"
         />
       )}
-      {setTimeZone && (
+      {setTimeZone && !EVENT_KINDS.includes(kind) && (
         <SearchSelect
           label="Time zone"
           name="timeZone"
@@ -471,10 +500,21 @@ function ScheduleOverlay({
     return req;
   };
 
+  // previewRequest is scheduleRequest as the draft endpoint must see it.
+  // That endpoint composes a CreateScheduleRequest and has no saved row to
+  // fall back on, so a model left out because it did not change would be
+  // previewed as no model at all -- an edit pane on a schedule that asks
+  // for gemini-2.5-flash said "the deployment's default model". The model
+  // in force is always sent here; the save still sends it only on a change.
+  const previewRequest = () =>
+    firesSuite
+      ? scheduleRequest()
+      : { ...scheduleRequest(), model: chosenModel };
+
   // Whether leaving now would lose an edit: the form's own fields (the
   // cadence's number and time boxes are read off it, not state) plus
   // everything submit takes from state instead.
-  const { formRef, isDirty } = useUnsavedEdits({
+  const { formRef, isDirty: formIsDirty } = useUnsavedEdits({
     request: scheduleRequest(),
     kind,
     weekday,
@@ -482,6 +522,13 @@ function ScheduleOverlay({
     timeZone,
     fires,
   });
+  // Once somebody has said "discard" on the way out through a link drawn
+  // here (the suppressing task's), the pane is still mounted for a moment
+  // while it closes and the task opens -- and every guard asked in that
+  // moment (the pane's own, App's) reads this one. Without this the
+  // question already answered could be put a second time.
+  const discarded = useRef(false);
+  const isDirty = () => !discarded.current && formIsDirty();
 
   const submit = async (evt) => {
     evt.preventDefault();
@@ -493,6 +540,15 @@ function ScheduleOverlay({
       recurrence.everyNHours = Number(data.get("everyNHours"));
     } else if (kind === "everyNMinutes") {
       recurrence.everyNMinutes = Number(data.get("everyNMinutes"));
+    } else if (kind === "git_ref") {
+      recurrence.gitRef = {
+        repo: String(data.get("gitRefRepo") || "").trim(),
+        ref: String(data.get("gitRefName") || "").trim(),
+      };
+    } else if (kind === "github_workflow_run") {
+      if (schedule?.recurrence?.githubWorkflowRun) {
+        recurrence.githubWorkflowRun = schedule.recurrence.githubWorkflowRun;
+      }
     } else {
       recurrence.timeOfDay = data.get("timeOfDay");
       if (kind === "weekly") recurrence.weekday = weekday;
@@ -688,46 +744,60 @@ function ScheduleOverlay({
           className="schedule-overdue"
           sx={{ mt: 1, mb: 1 }}
         >
-          This schedule has come due and is not firing:{" "}
-          {describeSuppression(schedule.suppressed)}
-          {schedule.suppressed.taskId && (
+          {schedule.suppressed.reason === "watchedRepoOffTarget" ? (
             <>
-              {" ("}
-              <a
-                href={`/tasks/${schedule.suppressed.taskId}`}
-                onClick={(e) => {
-                  if (
-                    e.button !== 0 ||
-                    e.metaKey ||
-                    e.ctrlKey ||
-                    e.shiftKey ||
-                    e.altKey
-                  ) {
-                    return;
-                  }
-                  if (isDirty() && !window.confirm(DISCARD_PROMPT)) {
-                    e.preventDefault();
-                    return;
-                  }
-                  if (onOpenTask) {
-                    e.preventDefault();
-                    onClose?.();
-                    onOpenTask(schedule.suppressed.taskId);
-                  }
-                }}
-              >
-                task {schedule.suppressed.taskId}
-              </a>
-              {")"}
+              This schedule is suppressed and is not polling its watched ref:{" "}
+              {describeSuppression(schedule.suppressed)}. Add that repository to{" "}
+              <code>targetRepos</code> under Settings so grain polls it.
             </>
-          )}
-          . It is set to skip a firing that would overlap the last one, so the
-          next run below has not moved: it fires as soon as that finishes.
-          {schedule.suppressed.until && (
+          ) : (
             <>
-              {" "}
-              If nothing closes it first, grain stops waiting and fires anyway
-              at {formatDateTime(schedule.suppressed.until, zone)}.
+              This schedule has come due and is not firing:{" "}
+              {describeSuppression(schedule.suppressed)}
+              {schedule.suppressed.taskId && (
+                <>
+                  {" ("}
+                  <a
+                    href={`/tasks/${schedule.suppressed.taskId}`}
+                    onClick={(e) => {
+                      if (
+                        e.button !== 0 ||
+                        e.metaKey ||
+                        e.ctrlKey ||
+                        e.shiftKey ||
+                        e.altKey
+                      ) {
+                        return;
+                      }
+                      if (isDirty()) {
+                        if (!window.confirm(DISCARD_PROMPT)) {
+                          e.preventDefault();
+                          return;
+                        }
+                        discarded.current = true;
+                      }
+                      if (onOpenTask) {
+                        e.preventDefault();
+                        onClose?.();
+                        onOpenTask(schedule.suppressed.taskId);
+                      }
+                    }}
+                  >
+                    task {schedule.suppressed.taskId}
+                  </a>
+                  {")"}
+                </>
+              )}
+              . It is set to skip a firing that would overlap the last one, so
+              the next run below has not moved: it fires as soon as that
+              finishes.
+              {schedule.suppressed.until && (
+                <>
+                  {" "}
+                  If nothing closes it first, grain stops waiting and fires
+                  anyway at {formatDateTime(schedule.suppressed.until, zone)}.
+                </>
+              )}
             </>
           )}
         </Typography>
@@ -1037,47 +1107,24 @@ function ScheduleOverlay({
                 <MenuItem value="ack">Leave for acknowledgement</MenuItem>
               </TextField>
               <FormControl fullWidth margin="normal" size="small">
-                <InputLabel id="schedule-capabilities-label">
-                  Legacy capabilities
-                </InputLabel>
-                <Select
-                  labelId="schedule-capabilities-label"
-                  label="Legacy capabilities"
+                <SearchSelect
                   multiple
+                  label="Legacy capabilities"
                   value={capabilityIds}
-                  onChange={(e) =>
-                    setCapabilities([
-                      ...e.target.value,
-                      ...apiIds,
-                      ...capabilityRefs,
-                    ])
+                  onChange={(next) =>
+                    setCapabilities([...next, ...apiIds, ...capabilityRefs])
                   }
-                  renderValue={(selected) => (
-                    <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-                      {selected.map((id) => {
-                        const c = (config?.capabilities || []).find(
-                          (cap) => cap.id === id,
-                        );
-                        return (
-                          <Chip key={id} size="small" label={c ? c.name : id} />
-                        );
-                      })}
-                    </Box>
-                  )}
-                >
-                  {capabilityOptions.length === 0 && (
-                    <MenuItem disabled>{NO_CAPABILITIES_HINT}</MenuItem>
-                  )}
-                  {capabilityOptions.map((c) => (
-                    <MenuItem key={c.id} value={c.id} title={c.description}>
-                      <Checkbox
-                        checked={capabilityIds.includes(c.id)}
-                        size="small"
-                      />
-                      <ListItemText primary={c.name} />
-                    </MenuItem>
-                  ))}
-                </Select>
+                  noOptionsText={
+                    capabilityOptions.length === 0
+                      ? NO_CAPABILITIES_HINT
+                      : "No matches"
+                  }
+                  options={capabilityOptions.map((c) => ({
+                    value: c.id,
+                    label: c.name,
+                    title: c.description,
+                  }))}
+                />
                 <FormHelperText>{LEGACY_CAPABILITIES_HINT}</FormHelperText>
               </FormControl>
               <GrantsPicker
@@ -1130,23 +1177,31 @@ function ScheduleOverlay({
         >
           {!isNew && (
             <Stack direction="row" spacing={1}>
-              <Button color="error" onClick={remove} disabled={!!declaredIn}>
-                Delete
-              </Button>
-              <Button onClick={toggleEnabled} disabled={!!declaredIn}>
-                {schedule.enabled ? "Pause" : "Resume"}
-              </Button>
+              <AccessGate scope="schedules:write" repo={repo}>
+                <Button color="error" onClick={remove} disabled={!!declaredIn}>
+                  Delete
+                </Button>
+              </AccessGate>
+              <AccessGate scope="schedules:write" repo={repo}>
+                <Button onClick={toggleEnabled} disabled={!!declaredIn}>
+                  {schedule.enabled ? "Pause" : "Resume"}
+                </Button>
+              </AccessGate>
               {/* Offered on a paused schedule too: pausing stops the
                   cadence, and this is a human asking for one run, which
                   is not the cadence. */}
-              <Button onClick={runNow}>Run now</Button>
+              <AccessGate scope="schedules:write" repo={repo}>
+                <Button onClick={runNow}>Run now</Button>
+              </AccessGate>
             </Stack>
           )}
           <Stack direction="row" spacing={1} sx={{ ml: "auto" }}>
             <Button onClick={onClose}>{declaredIn ? "Close" : "Cancel"}</Button>
-            <Button type="submit" variant="contained" disabled={!!declaredIn}>
-              {isNew ? "Add schedule" : "Save"}
-            </Button>
+            <AccessGate scope="schedules:write" repo={repo}>
+              <Button type="submit" variant="contained" disabled={!!declaredIn}>
+                {isNew ? "Add schedule" : "Save"}
+              </Button>
+            </AccessGate>
           </Stack>
         </Stack>
       </form>
@@ -1171,7 +1226,7 @@ function ScheduleOverlay({
       ) : (
         <CompositionPanel
           path="/api/schedules/composition"
-          body={scheduleRequest()}
+          body={previewRequest()}
           heading="What this schedule files"
           note={isNew ? "as filled in above" : "as edited above, not as saved"}
         />

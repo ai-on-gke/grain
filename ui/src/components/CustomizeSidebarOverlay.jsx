@@ -57,6 +57,7 @@ import {
 } from "../pinnedNav.js";
 import { usePinnedNav } from "../PinnedNavContext.jsx";
 import {
+  DEFAULT_HIDDEN_SECTIONS,
   SIDEBAR_SECTIONS,
   saveHiddenSections,
   useHiddenSections,
@@ -223,7 +224,7 @@ export default function CustomizeSidebarOverlay({
 
   const handleReset = () => {
     setDraft(DEFAULT_PINNED_ITEMS);
-    setDraftHidden([]);
+    setDraftHidden(DEFAULT_HIDDEN_SECTIONS);
     setEditingIndex(null);
   };
 

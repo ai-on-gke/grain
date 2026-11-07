@@ -46,16 +46,18 @@ test("a person's close names them, and its long reason wraps inside its timeline
   expect(created.ok()).toBe(true);
   const { id } = await created.json();
 
-  // A person's Close, from the task page itself.
+  // A person's Close, from the task page itself. Proposed and Closed both
+  // carry attribution on their meta lines.
   await page.setViewportSize(VIEWPORTS[0]);
   await page.goto(`/tasks/${id}`);
   await page.getByRole("button", { name: "Close", exact: true }).click();
   const meta = page.locator(".timeline-transition-by");
-  await expect(meta).toHaveCount(1);
-  // The demo is signed into with its access code, so the close is the
-  // operator's, said as such rather than as the deployment's own address
-  // (docs/test-runs/2026-11-03-operator-attribution.md F3).
-  await expect(meta).toContainText(/^by operator \(access code\)/);
+  await expect(meta).toHaveCount(2);
+  // The demo is signed into with its access code, so the proposal and close
+  // are the operator's, said as such rather than as the deployment's own
+  // address (docs/test-runs/2026-11-03-operator-attribution.md F3).
+  await expect(meta.first()).toContainText(/^by operator \(access code\)/);
+  await expect(meta.nth(1)).toContainText(/^by operator \(access code\)/);
 
   // Reopened, then closed again with a reason the meta line has to wrap.
   expect(
@@ -82,9 +84,10 @@ test("a person's close names them, and its long reason wraps inside its timeline
     await page.goto(`/tasks/${id}`);
     const steps = page.locator(".timeline-item .timeline-title");
     await expect(steps.filter({ hasText: /^Reopened$/ })).toHaveCount(1);
-    // Two closes, both attributed: the no-op close added no third step.
+    // Two closes, both attributed (alongside Proposed and Reopened): the
+    // no-op close added no fifth step.
     await expect(steps.filter({ hasText: /^Closed$/ })).toHaveCount(2);
-    await expect(meta).toHaveCount(3);
+    await expect(meta).toHaveCount(4);
     await expect(page.getByText("closing again")).toHaveCount(0);
 
     const line = meta.filter({ hasText: "pull/104" });

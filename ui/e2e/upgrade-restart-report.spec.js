@@ -28,7 +28,7 @@ const STATUS = {
   branch: "main",
   phase: "ok",
   detail: "",
-  running: { image: "ghcr.io/bwsalmon/grain/grain:main" },
+  running: { image: "docker.io/grainai/grain:main" },
   inFlightRuns: 9,
   atRisk: {
     lost: 8,
@@ -55,7 +55,7 @@ const STATUS = {
         framework: "claude",
         reason:
           "its CLI ran inside the daemon's own container and stopped with it " +
-          "(not in a run host or grain hostd, so nothing was left to adopt)",
+          "(not in a run host or the host agent, so nothing was left to adopt)",
       },
       {
         run: "1121-1",
@@ -89,7 +89,7 @@ for (const width of [1280, 390]) {
     const risk = page.locator(".upgrade-in-flight");
     await expect(risk).toContainText("8 would be lost (claude 7, setup 1)");
     await expect(risk).toContainText(
-      "1 is in a run host or grain hostd and would be adopted",
+      "1 is in a run host or the host agent and would be adopted",
     );
 
     await last.locator("summary").click();

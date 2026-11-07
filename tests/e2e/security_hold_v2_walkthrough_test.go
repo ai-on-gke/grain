@@ -128,9 +128,19 @@ func (w *holdWorld) clearedAtA(task model.Task) string {
 	// v13 only adds the GitHub Actions Inbox approval's files to
 	// release-promotion, grain/task-2666; v14 only adds the rc
 	// qualification housekeeping workflow and its Actions helper to
-	// release-machinery, grain/task-2584).
-	if trustboundary.Version != "trust-boundary/v14" {
-		w.t.Fatalf("this walkthrough is about trust-boundary/v14, the build has %s", trustboundary.Version)
+	// release-machinery, grain/task-2584; v15 only adds the controller MCP
+	// endpoint, allowlist, access-decision, CI grant rule, auto-merge guard
+	// and hostd install files to existing categories, task 2977; v16 only adds connection_hostd
+	// and capability server hostd placement, grain/task-2165; v17 only
+	// adds the role gate, built-in scope sets, gma_ inbox reach,
+	// approval-callback tokens and the daemon's UI listeners to
+	// auth-routes, task 3168; v18 only adds host enrollment codes, the
+	// pairing-code join handshake and the request-actor check to
+	// auth-routes, task 3287; v19 only adds pkg/playbooks/ and the
+	// capability policy/catalogue/template-grant files to
+	// capabilities-secrets, task 3388).
+	if trustboundary.Version != "trust-boundary/v19" {
+		w.t.Fatalf("this walkthrough is about trust-boundary/v19, the build has %s", trustboundary.Version)
 	}
 	if w.merged(branch) {
 		w.t.Fatal("merged before the pull request read mergeable")

@@ -19,7 +19,7 @@ import ClChip from "./ClChip.jsx";
 import PresubmitBadge from "./PresubmitBadge.jsx";
 import ReviewBadge from "./ClReview.jsx";
 import { BehindBadge } from "./ClSubmit.jsx";
-import { processPath } from "../paths.js";
+import { buildPath, processPath } from "../paths.js";
 import LinkedNote from "../linkedNote.jsx";
 import {
   Alert,
@@ -34,6 +34,7 @@ import { branchRefs } from "../branchRefs.js";
 import {
   STATE_LABELS,
   activityTitle,
+  blockerState,
   completionPhase,
   mergeQueueBatching,
   mergeQueueStall,
@@ -47,6 +48,7 @@ import {
   taskBadgeModifier,
   taskBadgeState,
   isAgentRunning,
+  isTaskMerged,
   isTaskRepairing,
   taskPause,
 } from "../state.js";
@@ -61,6 +63,7 @@ import StateDot from "./StateDot.jsx";
 import TaskChat from "./TaskChat.jsx";
 import Actions from "./detail/Actions.jsx";
 import CapabilityToggles from "./detail/CapabilityToggles.jsx";
+import CommittedContext from "./detail/CommittedContext.jsx";
 import CustomFieldsSection from "./detail/CustomFieldsSection.jsx";
 import Declared from "./detail/Declared.jsx";
 import Dependencies from "./detail/Dependencies.jsx";
@@ -75,13 +78,13 @@ import LocalScriptApprovals from "./detail/LocalScriptApprovals.jsx";
 import ReadOnlyRepos from "./detail/ReadOnlyRepos.jsx";
 import SuspendedSession from "./detail/SuspendedSession.jsx";
 import GoalSection from "./detail/GoalSection.jsx";
-import HostdSection from "./detail/HostdSection.jsx";
 import Target from "./detail/Target.jsx";
 import MergePolicy from "./detail/MergePolicy.jsx";
 import TaskLink from "./detail/TaskLink.jsx";
 import Timeline from "./detail/Timeline.jsx";
 import WorkTree from "./detail/WorkTree.jsx";
 import WriteRepos from "./detail/WriteRepos.jsx";
+import AccessGate from "./AccessGate.jsx";
 
 // useBranchPushed reports whether branch is really on repo's remote --
 // false until GitHub's own refs say it is, and false too while nobody
@@ -179,6 +182,7 @@ export default function DetailOverlay({
   // pane. Optional, like onOpenCIRun: without it the link's href still
   // reaches the run by a page load.
   onOpenSuiteRun: rawOpenSuiteRun,
+  onFilterExternalRef: rawFilterExternalRef,
   act,
   showError,
   // animate: false when this pane takes the place of one already on
@@ -257,6 +261,14 @@ export default function DetailOverlay({
         rawOpenSuiteRun(runId);
       }
     : undefined;
+  const onFilterExternalRef = rawFilterExternalRef
+    ? (ref) => {
+        if (isDirty() && !window.confirm(DISCARD_PROMPT)) {
+          return;
+        }
+        rawFilterExternalRef(ref);
+      }
+    : undefined;
   const activeAttempt =
     t.state === "running"
       ? [...(t.attempts || [])].reverse().find((a) => !a.finishedAt)
@@ -312,13 +324,15 @@ export default function DetailOverlay({
                 <Button size="small" onClick={() => setShowPrompt(true)}>
                   Prompt
                 </Button>
-                <Button
-                  size="small"
-                  startIcon={<AppIcon name="edit" size={15} />}
-                  onClick={() => setEditing(true)}
-                >
-                  Edit
-                </Button>
+                <AccessGate scope="tasks:write" repo={t.repo}>
+                  <Button
+                    size="small"
+                    startIcon={<AppIcon name="edit" size={15} />}
+                    onClick={() => setEditing(true)}
+                  >
+                    Edit
+                  </Button>
+                </AccessGate>
               </div>
 
               <div className="freshness">
@@ -408,6 +422,45 @@ export default function DetailOverlay({
                       )}
                   </Fragment>
                 ))}
+                {t.externalRef && (
+                  <>
+                    {" "}
+                    · ref{" "}
+                    <Link
+                      href={buildPath({
+                        view: "tasks",
+                        stateFilter: "all",
+                        narrowing: {
+                          search: "",
+                          sort: [],
+                          filters: [
+                            {
+                              attr: "externalRef",
+                              op: "any",
+                              values: [t.externalRef],
+                            },
+                          ],
+                        },
+                      })}
+                      onClick={(e) => {
+                        if (!onFilterExternalRef) return;
+                        if (
+                          e.button !== 0 ||
+                          e.metaKey ||
+                          e.ctrlKey ||
+                          e.shiftKey ||
+                          e.altKey
+                        ) {
+                          return;
+                        }
+                        e.preventDefault();
+                        onFilterExternalRef(t.externalRef);
+                      }}
+                    >
+                      {t.externalRef}
+                    </Link>
+                  </>
+                )}
                 {/* Provenance links and the tree of work this task belongs
                     to (docs/work-trees.md) fold under a compact disclosure
                     that starts collapsed by default so long work trees do
@@ -415,6 +468,13 @@ export default function DetailOverlay({
                     page. */}
                 {(() => {
                   const items = [];
+                  if (t.provenance) {
+                    items.push(
+                      <span key="provenance" data-testid="task-provenance">
+                        {t.provenance}
+                      </span>,
+                    );
+                  }
                   if (t.generatedFrom) {
                     items.push(
                       <Fragment key="generated-from">
@@ -741,6 +801,28 @@ export default function DetailOverlay({
               label={`priority: ${t.priority ?? 5}`}
             />
           </div>
+          {t.blocked &&
+            t.blockedBy?.length > 0 &&
+            t.state !== "running" &&
+            !isTaskMerged(t) && (
+              <div className="detail-blocked">
+                {t.parked ? "Waiting on" : "Blocked on"}{" "}
+                {t.blockedBy.map((id, idx) => {
+                  const dep = byId.get(id) ?? byId.get(String(id));
+                  const state = blockerState(dep);
+                  return (
+                    <Fragment key={id}>
+                      {idx > 0 && ", "}
+                      <TaskLink id={id} onOpenTask={onOpenTask}>
+                        #{id}
+                        {dep?.title ? ` ${dep.title}` : ""}
+                      </TaskLink>
+                      {state && ` (${state})`}
+                    </Fragment>
+                  );
+                })}
+              </div>
+            )}
           {/* And the sentence itself, spelled out under the badge it is
               about, for the same reason the merge queue's note is
               spelled out below: the row has to make do with a chip and a
@@ -815,9 +897,6 @@ export default function DetailOverlay({
           {/* What grain checks to close this task, rather than its agent's
               word (design/design/durable-tasks.design.md#DT-4). */}
           <GoalSection t={t} act={act} config={config} tasks={tasks} />
-          {/* Which grain hostd its host work goes to, and the control
-              that changes it (PUT /api/tasks/{id}/hostd). */}
-          <HostdSection t={t} act={act} />
           {/* The repos this task may change, in one section
               (grain/task-202): the one it is filed against, then the
               others under it, rather than a "Target" pane and a second
@@ -844,6 +923,7 @@ export default function DetailOverlay({
             act={act}
             showError={showError}
           />
+          <CommittedContext t={t} config={config} />
           <Declared t={t} config={config} act={act} />
           {(t.interactive || t.consoleSession) && (
             <fieldset>

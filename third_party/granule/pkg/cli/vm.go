@@ -11,9 +11,9 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/dockercli"
-	"github.com/bwsalmon/granule/pkg/dockervm"
-	"github.com/bwsalmon/granule/pkg/vmspec"
+	"github.com/gke-labs/granule/pkg/dockercli"
+	"github.com/gke-labs/granule/pkg/dockervm"
+	"github.com/gke-labs/granule/pkg/vmspec"
 )
 
 // stringList collects a flag that may be repeated, in order. Used for
@@ -72,8 +72,6 @@ func runVM(ctx context.Context, args []string, stdin io.Reader, stdout, stderr i
 		return runVMDelete(ctx, rest, stdout, stderr)
 	case "list":
 		return runVMList(ctx, rest, stdout, stderr)
-	case "forward":
-		return runLegacyForward(ctx, rest, stderr)
 	default:
 		return fmt.Errorf("vm: unknown subcommand %q", cmd)
 	}

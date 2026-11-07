@@ -1420,7 +1420,7 @@ func (c *Client) Metrics(ctx context.Context, req MetricsRequest) (MetricsReport
 		// prompts are the largest thing in its database and a report
 		// wants none of the words.
 		{metricsPrompts, "run prompt sizes", into(&in.Prompts, c.Store.RunPrompts)},
-		{metricsTranscripts, "run transcript sizes", into(&in.Transcripts, c.Store.RunTranscripts)},
+		{metricsTranscripts, "run transcript sizes", into(&in.Transcripts, c.runTranscriptSizes)},
 		// Grain's own CI jobs, which are the one input here that is not a
 		// task's row: a job belongs to a repository and a branch, and
 		// this deployment runs CI for base branches and for operators as
@@ -1638,6 +1638,32 @@ func into[T any](dst *T, read func(context.Context) (T, error)) func(context.Con
 		}
 		return err
 	}
+}
+
+func (c *Client) runTranscriptSizes(ctx context.Context) ([]model.RunTranscript, error) {
+	rows, err := c.Store.RunTranscripts(ctx)
+	if err != nil || c.Config.ArchivedTranscripts == nil {
+		return rows, err
+	}
+	sized, ok := c.Config.ArchivedTranscripts.(ArchivedTranscriptSizes)
+	if !ok {
+		return rows, nil
+	}
+	extra, err := sized.Sizes(ctx)
+	if err != nil || len(extra) == 0 {
+		return rows, nil
+	}
+	seen := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		seen[r.RunID] = true
+	}
+	for _, r := range extra {
+		if !seen[r.RunID] {
+			seen[r.RunID] = true
+			rows = append(rows, r)
+		}
+	}
+	return rows, nil
 }
 
 // failedMetricsSections names every section an unreadable input cost a

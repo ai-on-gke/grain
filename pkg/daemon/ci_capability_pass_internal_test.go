@@ -29,6 +29,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/policy"
 )
 
 // These mirror pkg/orchestrator/capability_pass_internal_test.go, for a
@@ -438,5 +439,59 @@ func TestCIAdmissionEnforcesPolicyAndUntrustedOnRepoAccessGrants(t *testing.T) {
 		if _, err := h.acquire(req); err == nil || !strings.Contains(err.Error(), "capability policy denies") {
 			t.Fatalf("policy-denied %q: err = %v, want policy denial", grant, err)
 		}
+	}
+}
+
+// local-scripts was refused to every CI job, whatever the event; what a
+// declaration became on host-script (model.SetRuntimeGrantExpansions,
+// migrateLocalScripts) is refused to one as well, before anything is
+// minted.
+func TestCIAdmissionRefusesWhatALocalScriptsDeclarationBecame(t *testing.T) {
+	h := newCIPassHarness(t)
+	t.Cleanup(model.SetRuntimeGrantExpansions(map[string][]string{
+		"local-scripts:ops": {ciPassTestCap + `#gcp-key={"account":"staging"}`},
+	}))
+	if _, err := h.acquire(h.request(ci.EventPush)); err == nil || !strings.Contains(err.Error(), "never granted to a CI job") {
+		t.Fatalf("push: error = %v, want local-scripts' CI refusal", err)
+	}
+	if n := h.caller.mints(); n != 0 {
+		t.Fatalf("%d mints, want none", n)
+	}
+}
+
+// A CI job whose bare reference normalizes against its server's schema to
+// default arguments denied by local policy or settings/capabilities.yml is
+// refused before MintPass contacts the server.
+func TestCIAdmissionRejudgesNormalizedDefaultArgsAgainstPolicyAndCatalogue(t *testing.T) {
+	h := newCIPassHarness(t)
+	pol, err := policy.Parse([]byte("repos: [acme/widgets]\ncapabilities:\n  deny: ['" + ciPassTestCap + `#gcp-key={"account":"staging"}` + "']\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.grants.Policy = pol
+	req := h.request(ci.EventPush)
+	req.Capabilities = []string{ciPassTestCap + "#gcp-key"} // omits "account"; server schema defaults it to "staging"
+	if _, err := h.acquire(req); err == nil || !strings.Contains(err.Error(), "local policy refuses this CI job") {
+		t.Fatalf("acquire with policy-denied normalized default arg: err = %v, want local policy refusal", err)
+	}
+	if n := h.caller.mints(); n != 0 {
+		t.Fatalf("%d mints after local policy refusal, want none", n)
+	}
+
+	h.grants.Policy = nil
+	h.config.CapabilityPolicy.Catalogue = &model.CapabilityCatalogue{
+		Servers: []model.CatalogueServer{{
+			ID: ciPassTestCap,
+			Methods: []model.CatalogueMethod{{
+				Name: "gcp-key",
+				Args: map[string]model.CatalogueArg{"account": {Allowed: []string{"dev"}}},
+			}},
+		}},
+	}
+	if _, err := h.acquire(req); err == nil || !strings.Contains(err.Error(), "capability catalogue refuses this CI job") {
+		t.Fatalf("acquire with catalogue-disallowed normalized default arg: err = %v, want catalogue refusal", err)
+	}
+	if n := h.caller.mints(); n != 0 {
+		t.Fatalf("%d mints after catalogue refusal, want none", n)
 	}
 }

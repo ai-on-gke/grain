@@ -57,6 +57,8 @@ import {
   ListEmpty,
   ListHeader,
   RowLink,
+  TasksLoadError,
+  tasksLoadFailed,
 } from "./ListPrimitives.jsx";
 import NarrowingBar from "./NarrowingBar.jsx";
 import {
@@ -112,6 +114,9 @@ function groupByStack(tasks, matches) {
 // first would be one landmark too many (grain/task-1253).
 export default function TaskList({
   tasks,
+  tasksLoaded = true,
+  tasksError = null,
+  onRetry,
   stateFilter,
   config,
   narrowing,
@@ -125,6 +130,7 @@ export default function TaskList({
   onRefresh,
   showError,
   landmark = true,
+  footer = null,
 }) {
   const [notifyOpen, setNotifyOpen] = useState(false);
   // A row's own sub-case control (state.js's reasonControl), pressed from
@@ -359,6 +365,15 @@ export default function TaskList({
 
   const startDrag = (t) => setDragIds(blockFor(t));
 
+  const tasksFailed = tasksLoadFailed(tasks, tasksLoaded, tasksError);
+  const handleRetry =
+    onRetry ||
+    (onRefresh
+      ? () => {
+          Promise.resolve(onRefresh()).catch((err) => showError?.(err));
+        }
+      : undefined);
+
   const Root = landmark ? "main" : "div";
   return (
     <Root className={landmark ? undefined : "task-view"}>
@@ -370,10 +385,10 @@ export default function TaskList({
           is showing. */}
       <ListHeader
         title={title}
-        count={visibleIds.length}
+        count={tasksFailed ? null : visibleIds.length}
         icon={<ItemGlyph kind="tasks" size={20} />}
       />
-      {tasks.length > 0 && (
+      {!tasksFailed && tasks.length > 0 && (
         <NarrowingBar
           tasks={inStateTasks}
           config={config}
@@ -400,7 +415,7 @@ export default function TaskList({
         onSent={onRefresh}
         showError={showError}
       />
-      {visibleIds.length > 0 && (
+      {!tasksFailed && visibleIds.length > 0 && (
         <div className="select-all">
           <FormControlLabel
             control={
@@ -414,131 +429,141 @@ export default function TaskList({
           />
         </div>
       )}
-      {pickedIds && (
+      {!tasksFailed && pickedIds && (
         <MovingBar
           count={pickedIds.length}
           nowhere={gaps.size === 0}
           onCancel={cancelPickup}
         />
       )}
-      <ul className="task-list">
-        {topLevel.map((t) => (
-          <Fragment key={t.id}>
-            {/* The place this row's own position offers, drawn above it
+      {tasksFailed ? (
+        <TasksLoadError error={tasksError} onRetry={handleRetry} />
+      ) : (
+        <>
+          <ul className="task-list">
+            {topLevel.map((t) => (
+              <Fragment key={t.id}>
+                {/* The place this row's own position offers, drawn above it
                 -- so the slots read as the gaps between the rows, which
                 is what they are. A row that is itself picked up gets
                 none: its neighbours' slots already name every position
                 it could take. */}
-            {pickedIds &&
-              gapBefore.has(t.id) &&
-              gaps.has(gapBefore.get(t.id)) && (
-                <MoveSlot
-                  className="reorder-slot-gutter"
-                  label={`Move here, above ${t.title}`}
-                  onMove={() => {
-                    moveTo(pickedIds, kept, gapBefore.get(t.id));
-                    cancelPickup();
+                {pickedIds &&
+                  gapBefore.has(t.id) &&
+                  gaps.has(gapBefore.get(t.id)) && (
+                    <MoveSlot
+                      className="reorder-slot-gutter"
+                      label={`Move here, above ${t.title}`}
+                      onMove={() => {
+                        moveTo(pickedIds, kept, gapBefore.get(t.id));
+                        cancelPickup();
+                      }}
+                    />
+                  )}
+                <li
+                  className={
+                    overId === t.id && dragIds && !dragIds.includes(t.id)
+                      ? "task-drop-target"
+                      : undefined
+                  }
+                  draggable={movable(t)}
+                  onDragStart={() => movable(t) && startDrag(t)}
+                  onDragEnd={() => {
+                    setDragIds(null);
+                    setOverId(null);
                   }}
-                />
-              )}
-            <li
-              className={
-                overId === t.id && dragIds && !dragIds.includes(t.id)
-                  ? "task-drop-target"
-                  : undefined
-              }
-              draggable={movable(t)}
-              onDragStart={() => movable(t) && startDrag(t)}
-              onDragEnd={() => {
-                setDragIds(null);
-                setOverId(null);
-              }}
-              onDragOver={(e) => {
-                if (!dragIds || dragIds.includes(t.id)) return;
-                e.preventDefault();
-                setOverId(t.id);
-              }}
-              onDrop={(e) => {
-                e.preventDefault();
-                dropOn(t.id);
-              }}
-            >
-              <TaskRow
-                t={t}
-                byId={byId}
-                config={config}
-                fields={fields}
-                onOpenTask={onOpenTask}
-                onControl={control}
-                selected={selected}
-                onToggleSelect={handleToggleSelect}
-                draggable={movable(t)}
-                // Space for the handle a read-only row does not get, so
-                // its title lines up with the movable rows around it.
-                dragPlaceholder={reorderEnabled && !movable(t)}
-                dragging={dragIds?.includes(t.id) ?? false}
-                picked={pickedIds?.includes(t.id) ?? false}
-                // A list of one has nowhere to move its own row to.
-                canMove={topLevel.length > 1}
-                onPickUp={() => togglePickup(blockFor(t))}
-                showMergedAt={stateFilter === "merged"}
+                  onDragOver={(e) => {
+                    if (!dragIds || dragIds.includes(t.id)) return;
+                    e.preventDefault();
+                    setOverId(t.id);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    dropOn(t.id);
+                  }}
+                >
+                  <TaskRow
+                    t={t}
+                    byId={byId}
+                    config={config}
+                    fields={fields}
+                    onOpenTask={onOpenTask}
+                    onControl={control}
+                    selected={selected}
+                    onToggleSelect={handleToggleSelect}
+                    draggable={movable(t)}
+                    // Space for the handle a read-only row does not get, so
+                    // its title lines up with the movable rows around it.
+                    dragPlaceholder={reorderEnabled && !movable(t)}
+                    dragging={dragIds?.includes(t.id) ?? false}
+                    picked={pickedIds?.includes(t.id) ?? false}
+                    // A list of one has nowhere to move its own row to.
+                    canMove={topLevel.length > 1}
+                    onPickUp={() => togglePickup(blockFor(t))}
+                    showMergedAt={stateFilter === "merged"}
+                  />
+                  {children.has(t.id) && (
+                    <ul className="task-sublist">
+                      {children.get(t.id).map((c) => (
+                        <li key={c.id}>
+                          <TaskRow
+                            t={c}
+                            byId={byId}
+                            config={config}
+                            fields={fields}
+                            onOpenTask={onOpenTask}
+                            onControl={control}
+                            selected={selected}
+                            onToggleSelect={handleToggleSelect}
+                            dragPlaceholder={reorderEnabled}
+                            nested
+                            showMergedAt={stateFilter === "merged"}
+                          />
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </li>
+              </Fragment>
+            ))}
+            {pickedIds && gaps.has(kept.length) && (
+              <MoveSlot
+                className="reorder-slot-gutter"
+                label="Move here, to the end of the list"
+                onMove={() => {
+                  moveTo(pickedIds, kept, kept.length);
+                  cancelPickup();
+                }}
               />
-              {children.has(t.id) && (
-                <ul className="task-sublist">
-                  {children.get(t.id).map((c) => (
-                    <li key={c.id}>
-                      <TaskRow
-                        t={c}
-                        byId={byId}
-                        config={config}
-                        fields={fields}
-                        onOpenTask={onOpenTask}
-                        onControl={control}
-                        selected={selected}
-                        onToggleSelect={handleToggleSelect}
-                        dragPlaceholder={reorderEnabled}
-                        nested
-                        showMergedAt={stateFilter === "merged"}
-                      />
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </li>
-          </Fragment>
-        ))}
-        {pickedIds && gaps.has(kept.length) && (
-          <MoveSlot
-            className="reorder-slot-gutter"
-            label="Move here, to the end of the list"
-            onMove={() => {
-              moveTo(pickedIds, kept, kept.length);
-              cancelPickup();
-            }}
-          />
-        )}
-        {reorderEnabled && dragIds && (
-          <li
-            className={`task-drop-end${overId === "__end__" ? " task-drop-target" : ""}`}
-            onDragOver={(e) => {
-              e.preventDefault();
-              setOverId("__end__");
-            }}
-            onDrop={(e) => {
-              e.preventDefault();
-              dropOn(null);
-            }}
-          />
-        )}
-      </ul>
-      {topLevel.length === 0 && (
-        <ListEmpty>
-          {q
-            ? "No tasks match your search."
-            : narrowed
-              ? "No tasks match these filters."
-              : "No tasks in this state."}
-        </ListEmpty>
+            )}
+            {reorderEnabled && dragIds && (
+              <li
+                className={`task-drop-end${overId === "__end__" ? " task-drop-target" : ""}`}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setOverId("__end__");
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  dropOn(null);
+                }}
+              />
+            )}
+          </ul>
+          {topLevel.length === 0 && (
+            <ListEmpty>
+              {q
+                ? "No tasks match your search."
+                : narrowed
+                  ? "No tasks match these filters."
+                  : "No tasks in this state."}
+            </ListEmpty>
+          )}
+          {/* The closed-tasks pager only where closed work is showing. */}
+          {(stateFilter === "closed" ||
+            topLevel.some((t) => t.state === "closed")) &&
+            footer}
+        </>
       )}
     </Root>
   );
@@ -851,6 +876,16 @@ export function TaskRow({
           />
         )}
         {t.repo && <Chip size="small" label={t.repo} />}
+        {t.owner && (
+          <Chip
+            size="small"
+            variant="outlined"
+            className="chip-owner"
+            data-testid="task-owner-chip"
+            title={`Owner: ${t.owner}`}
+            label={t.owner}
+          />
+        )}
         {t.base && t.base !== "main" && (
           <Chip size="small" variant="outlined" label={t.base} />
         )}

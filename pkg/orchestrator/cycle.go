@@ -27,6 +27,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/cifault"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
@@ -54,6 +55,12 @@ import (
 // its own, and because zero means "no ceiling of mine" rather than "start
 // nothing".
 type Deps struct {
+	// DispatchHalted, when set and answering a non-empty reason, stops
+	// every new dispatch until the process restarts: the daemon sets it
+	// when db-config.json starts selecting a store other than the one
+	// it opened (pkg/daemon/storeguard.go). Everything else -- runs
+	// already going, pull request sync -- carries on.
+	DispatchHalted func() string
 	// CapabilityServers are the deployment's attached capability
 	// servers, which admission mints a task's capability references
 	// through (capabilityAdmitter). Nil refuses every task holding one.
@@ -61,6 +68,11 @@ type Deps struct {
 	// CapabilityPasses holds the passes minted for running attempts;
 	// nil shares one holder across the process.
 	CapabilityPasses *CapabilityPasses
+	// ApprovalCallback, when set, mints a task-scoped approval callback
+	// URL and bearer token for an attempt's capability grants (host-script
+	// approve: true) and returns a revoke function called when the pass is
+	// released.
+	ApprovalCallback func(taskID string, deadline time.Time) (protocol.ApprovalCallback, func(), error)
 	Store            *model.Store
 	Client           github.Client
 	Sandboxes        Sandboxes
@@ -642,8 +654,7 @@ type AgentChoice struct {
 	// back to the rest of the rotation only when unavailable or paused.
 	PreferFramework string
 	PreferModel     string
-	// TaskID is the task the run is for, whose hostd pin or selector
-	// (model.Store.TaskHostd) routes its host work.
+	// TaskID is the task the run is for.
 	TaskID string
 }
 
@@ -963,7 +974,10 @@ func reconcileReviews(ctx context.Context, deps Deps, now time.Time) error {
 // touching the trust boundary whose security review finished clean
 // (securityhold.go).
 func reconcileSecurityHolds(ctx context.Context, deps Deps, now time.Time) error {
-	return SyncSecurityHolds(ctx, deps.Store, deps.Client, now)
+	if err := SyncSecurityHolds(ctx, deps.Store, deps.Client, now); err != nil {
+		return err
+	}
+	return SyncHumanReviewHolds(ctx, deps.Store, now)
 }
 
 // reconcilePathTriggerHolds gives auto-merge back to every change held by
@@ -1129,6 +1143,12 @@ func reconcileDispatch(ctx context.Context, deps Deps, now time.Time) error {
 	// the deployment sets none (grain/task-28), so the invariant is
 	// stated here instead of being a side effect of an unset number.
 	if deps.Sandboxes == nil {
+		return nil
+	}
+	// Nor while the store this process opened is no longer the one its
+	// data dir selects (Deps.DispatchHalted): what it dispatched now would
+	// be written into a store the next start does not open.
+	if deps.DispatchHalted != nil && deps.DispatchHalted() != "" {
 		return nil
 	}
 
@@ -1887,10 +1907,15 @@ func untilMergedParkHold(ctx context.Context, deps Deps, now time.Time) func(str
 // capability or narrowed who may hold it, and the task waits, saying
 // which grant and why (model.CatalogueWaitCapability), rather than
 // running with it. A wait it recorded is cleared once the task passes.
-// nil when the deployment has no catalogue. Like policyHold it fails
-// closed: a catalogue that cannot be read holds every task this cycle,
-// and a task that cannot be read is held, rather than either being
-// dispatched unjudged.
+// Like policyHold it fails closed: a catalogue that cannot be read holds
+// every task this cycle, and a task that cannot be read is held, rather
+// than either being dispatched unjudged.
+//
+// A deployment with no catalogue still has grain's built-in director
+// floor (model.DirectorFloorRefusal, director-capabilities.spec.md G7):
+// there the hold judges the director session alone, against the floor
+// alone, and lets every other task -- including one it cannot read --
+// through as it always did.
 func catalogueHold(ctx context.Context, deps Deps) func(string) string {
 	cfg, err := deps.Store.GetConfig(ctx)
 	if err != nil {
@@ -1899,17 +1924,23 @@ func catalogueHold(ctx context.Context, deps Deps) func(string) string {
 			return "held by settings/capabilities.yml: the capability catalogue could not be read to check it"
 		}
 	}
-	if cfg == nil || cfg.CapabilityPolicy.Catalogue == nil {
-		return nil
+	var cat *model.CapabilityCatalogue
+	if cfg != nil {
+		cat = cfg.CapabilityPolicy.Catalogue
 	}
-	cat := cfg.CapabilityPolicy.Catalogue
 	return func(taskID string) string {
 		task, err := deps.Store.GetTask(ctx, taskID)
 		if err != nil || task == nil {
+			if cat == nil {
+				return ""
+			}
 			if err != nil {
 				log.Printf("orchestrator: reading %s to check it against the capability catalogue: %v", taskID, err)
 			}
 			return "held by settings/capabilities.yml: the task could not be read to check it"
+		}
+		if cat == nil && model.CatalogueKindOf(*task) != model.CatalogueKindDirector {
+			return ""
 		}
 		gc := model.TaskGrantContext(*task)
 		if gc.TemplateID != "" {
@@ -1922,6 +1953,10 @@ func catalogueHold(ctx context.Context, deps Deps) func(string) string {
 				TaskID: task.ID, Capability: model.CatalogueWaitCapability, Resource: err.Error(), WaitingAt: deps.Config.now(),
 			}); serr != nil {
 				log.Printf("orchestrator: recording why the capability catalogue holds %s: %v", taskID, serr)
+			}
+			var refusal *model.GrantRefusal
+			if errors.As(err, &refusal) && refusal.Builtin {
+				return "held by grain's built-in director floor: " + err.Error()
 			}
 			return "held by settings/capabilities.yml: " + err.Error()
 		}
@@ -2365,6 +2400,13 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	// one setup failure the guard did not cover. A panic is
 	// recoverRunOne's to finish (finishPanickedRun): err is still nil
 	// while one unwinds through here.
+	runCtx, cancelRun := context.WithCancelCause(context.WithoutCancel(ctx))
+	stopDaemonWatch := context.AfterFunc(ctx, func() { cancelRun(errDaemonStopped) })
+	defer stopDaemonWatch()
+	stopCancelling := deps.Config.TaskCancellers.register(d.TaskID, cancelRun)
+	defer stopCancelling()
+	checkRunCancelledElsewhere(ctx, deps.Store, d.TaskID, d.RunID, cancelRun)
+
 	ranAgent := false
 	defer func() {
 		if ranAgent || err == nil {
@@ -2382,6 +2424,16 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		}
 		finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runCleanupTimeout)
 		defer cancel()
+		finishAt := deps.Config.now()
+		if finishAt.Before(now) {
+			finishAt = now
+		}
+		if ok, ferr := finishSetupCancellation(finishCtx, deps.Store, d.TaskID, d.RunID, finishAt, context.Cause(runCtx)); ok {
+			if ferr != nil {
+				err = errors.Join(err, fmt.Errorf("orchestrator: finishing run %s cancelled in setup: %w", d.RunID, ferr))
+			}
+			return
+		}
 		// A durable task's setup failure is a suspension rather than a
 		// strike (finishSetupFailed); a full cluster is capacity for
 		// every task alike.
@@ -2510,7 +2562,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		// Read here, before the sandbox exists, because a backend that
 		// can mount grain-src/ has to know at create time
 		// (placeGrainSource).
-		GrainSource: hasGrant(*task, model.SelfDebugCapability),
+		GrainSource: hasGrainSource(*task),
 		Class:       sandboxClassFor(*task),
 	}
 	// The operator's ambient credentials (-host-sandbox-env) go to a run
@@ -2585,8 +2637,11 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		// A sandbox that never comes up is counted too, before this returns:
 		// the run fails either way, and a deployment whose sandboxes fail to
 		// start has spent real time and real machine on them.
+		if err := runCtx.Err(); err != nil && ctx.Err() == nil {
+			return err
+		}
 		meter := MeterFor(deps.Store)
-		sandbox, sandboxCounted, err = meter.Acquire(ctx, deps.Sandboxes, model.SandboxKindAgent, sandboxName, shape)
+		sandbox, sandboxCounted, err = meter.Acquire(runCtx, deps.Sandboxes, model.SandboxKindAgent, sandboxName, shape)
 		if err != nil {
 			return fmt.Errorf("orchestrator: acquiring a sandbox for run %s: %w", d.RunID, err)
 		}
@@ -2686,7 +2741,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		}
 		stopTokenRefresh = keepSandboxTokenFresh(ctx, deps.RefreshSandboxToken, sandboxName, deps.SandboxTokenRefreshInterval)
 		gitIdentity := runGitIdentity(ctx, deps.Store, deps.CredentialGitIdentity, task)
-		if err := sandbox.ConfigureGitCredentials(ctx,
+		if err := sandbox.ConfigureGitCredentials(runCtx,
 			deps.Config.GitRemoteBase+"/placeholder/placeholder.git", token, gitIdentity); err != nil {
 			return fmt.Errorf("orchestrator: configuring git credentials for run %s: %w", d.RunID, err)
 		}
@@ -2700,10 +2755,10 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	// be pointed at the cache downloads from the internet, as every
 	// sandbox did before the cache existed (applyPackageCache).
 	if !sandboxReused {
-		applyPackageCache(withSkipGoCacheProgBuild(ctx, task.Target == nil), deps.Config, sandbox, d.TaskID)
+		applyPackageCache(withSkipGoCacheProgBuild(runCtx, task.Target == nil), deps.Config, sandbox, d.TaskID)
 	}
 
-	tools, err := sandbox.Tools(ctx)
+	tools, err := sandbox.Tools(runCtx)
 	if err != nil {
 		return err
 	}
@@ -2818,7 +2873,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	if preBuilt.built {
 		framework, err = preBuilt.framework, preBuilt.err
 	} else {
-		framework, err = deps.Framework(ctx, deps.dispatchChoiceFor(ctx, *task))
+		framework, err = deps.Framework(runCtx, deps.dispatchChoiceFor(ctx, *task))
 		leasedFramework = framework
 	}
 	if err != nil {
@@ -2859,6 +2914,9 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	cfg.sessionLedger = deps.Ledger
 	cfg.sessionReach = deps.GitReach
 	cfg.sessionClient = deps.Client
+	cfg.runCtx = runCtx
+	cfg.cancelRun = cancelRun
+	cfg.stopCancelling = stopCancelling
 	framework, cfg, err = consoleDispatch(framework, *task, d.RunID, cfg)
 	if err != nil {
 		return err
@@ -2893,7 +2951,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	if pass, deadline := deps.capabilityPasses().held(d.RunID); pass != nil {
 		notes.say(ctx, capabilityGrantsNote)
 		passDeps := deps.capabilityPasses().heldDeps(d.RunID, deps)
-		mat, err := materializePass(ctx, cfg, sandbox, pass, deadline, passDeps.capabilityService)
+		mat, err := materializePass(runCtx, cfg, sandbox, pass, deadline, passDeps.capabilityService)
 		if err == nil {
 			// Then every grant's mcp_endpoint proxied, handshaken and
 			// named, and its prompt_section rendered (§5.2, §5.4), each
@@ -2901,7 +2959,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 			if deps.Store != nil {
 				mat.narrator = mcp.NewCapabilityNarrator(taskActivityReporter{store: deps.Store, taskID: d.TaskID, now: cfg.now})
 			}
-			if err = mat.wireEndpoints(ctx, passDeps.capabilityDataPlane); err != nil {
+			if err = mat.wireEndpoints(runCtx, passDeps.capabilityDataPlane); err != nil {
 				mat.Close()
 			}
 		}
@@ -3159,7 +3217,7 @@ func setupFailedEnding(err error) (outcome, detail string) {
 		// being built: nothing ran, and the task goes back to the queue,
 		// where admission holds it until that hostd reconnects
 		// (Deps.ModelAvailability). It never moves to another hostd.
-		return model.InterruptedOutcome, "this run's hostd is not connected: " + err.Error() +
+		return model.InterruptedOutcome, "this run's host is not connected: " + err.Error() +
 			"; the task is not counted as failed, and waits in the queue for it to reconnect"
 	}
 	return "setup-failed", "this run's sandbox could not be prepared: " + err.Error()

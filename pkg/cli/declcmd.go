@@ -432,6 +432,9 @@ func declaredTrigger(stems map[string]string, sched model.Schedule) string {
 			}
 			return "the " + stem + " workflow, and a review of the run"
 		}
+		if stem, ok := model.GitHubWorkflowReviewStem(*sched.TemplateID); ok {
+			return "a review of the GitHub Actions run of the " + stem + " workflow"
+		}
 		return "template " + declaredName(stems, *sched.TemplateID)
 	}
 	if sched.SuiteID != nil {

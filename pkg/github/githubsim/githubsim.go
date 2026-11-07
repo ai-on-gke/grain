@@ -76,6 +76,7 @@ var (
 	// (github.RESTClient.MergedPullRequestForCommit), answered from
 	// MergedPullRequestForCommit.
 	commitPullsRe  = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/commits/([^/]+)/pulls$`)
+	commitRe       = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/commits/([^/]+)$`)
 	issueCommentRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/issues/comments/(\d+)$`)
 	// repoRe: the target repo's own default branch, read once per
 	// dispatch so the PR base comes from the repo itself rather than a
@@ -124,6 +125,7 @@ var (
 	// job's log. actionsRunsRe is also what ListWorkflowRuns reads when a
 	// credential cannot reach the Checks API.
 	actionsRunsRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/runs$`)
+	actionsRunRe  = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/runs/(\d+)$`)
 	// workflowRunsRe is GET .../actions/workflows/{workflow_id}/runs, the
 	// per-workflow listing (github.RESTClient.ListActionsRunsPage with a
 	// Workflow): seeded WorkflowRuns whose Path is that file.
@@ -146,8 +148,10 @@ var (
 	// gitObjectsRe and gitOtherRefRe: the rest of the git-database API
 	// github.RESTClient.PublishFiles writes through -- blobs, a tree and a
 	// commit, and a ref outside refs/heads to keep the commit alive.
-	gitObjectsRe  = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/git/(blobs|trees|commits)$`)
-	gitOtherRefRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/git/(refs/.+)$`)
+	gitObjectsRe      = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/git/(blobs|trees|commits)$`)
+	gitOtherRefRe     = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/git/(refs/.+)$`)
+	gitMatchingRefsRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/git/matching-refs/(.*)$`)
+	gitTagObjectRe    = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/git/tags/([0-9a-f]+)$`)
 	// mergesRe: the branch-into-branch merge the merge queue makes to
 	// bring a stale head up to date with its base
 	// (github.RESTClient.MergeBranch, orchestrator.refreshStaleHead).
@@ -338,6 +342,8 @@ type WorkflowRun struct {
 	Conclusion string
 	RunAttempt int
 	HTMLURL    string
+	// DisplayTitle, when set, is served as display_title (a `run-name`).
+	DisplayTitle string
 	// CreatedAt, when set, is served as created_at and run_started_at and
 	// is what ?created=>=... filters on; a run without one always matches.
 	CreatedAt time.Time
@@ -1548,6 +1554,29 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			}
 			return jsonResponse(200, checkRunsJSON(s.checkRunsFor(ref))), nil
 		}
+		if m := commitRe.FindStringSubmatch(p); m != nil {
+			if m[1] != s.Owner || m[2] != s.Repo {
+				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
+			}
+			ref := unescapeRef(m[3])
+			if s.BareRepo == "" {
+				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
+			}
+			if ref == "HEAD" {
+				_ = s.defaultBranch()
+			}
+			sha := ""
+			for _, candidate := range []string{ref, "refs/heads/" + ref, "refs/tags/" + ref} {
+				if got := s.revSHA(candidate); got != "" {
+					sha = got
+					break
+				}
+			}
+			if sha == "" {
+				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"No commit found"}`)}, nil
+			}
+			return jsonResponse(200, map[string]any{"sha": sha}), nil
+		}
 		if m := actionsRunsRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
 			key := qs.Get("head_sha")
@@ -1576,8 +1605,35 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			if s.startupFailureFor(key) {
 				return jsonResponse(200, startupFailureRunJSON(m[1], m[2], s.runIDFor(key))), nil
 			}
+			if len(s.WorkflowRuns) > 0 {
+				if allRuns, ok := s.repoRunsJSON(m[1], m[2])["workflow_runs"].([]map[string]any); ok {
+					var matched []map[string]any
+					for _, wr := range allRuns[:len(s.WorkflowRuns)] {
+						if sha, _ := wr["head_sha"].(string); sha != "" && strings.EqualFold(sha, key) {
+							matched = append(matched, wr)
+						}
+					}
+					if len(matched) > 0 {
+						return jsonResponse(200, map[string]any{
+							"total_count":   len(matched),
+							"workflow_runs": matched,
+						}), nil
+					}
+				}
+			}
 			jobs := s.workflowJobsFor(key)
 			return jsonResponse(200, workflowRunsJSON(m[1], m[2], s.runIDFor(key), jobs)), nil
+		}
+		if m := actionsRunRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			runID := int64(mustAtoi(m[3]))
+			runs, _ := s.repoRunsJSON(m[1], m[2])["workflow_runs"].([]map[string]any)
+			for _, run := range runs {
+				if id, _ := run["id"].(int64); id == runID {
+					return jsonResponse(200, run), nil
+				}
+			}
+			return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
 		}
 		if m := workflowRunsRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
@@ -1788,6 +1844,68 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 				"type":     "file",
 				"encoding": "base64",
 				"content":  base64.StdEncoding.EncodeToString(data),
+			}), nil
+		}
+		if m := gitMatchingRefsRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			prefix := "refs/" + unescapeRef(m[3])
+			out := make([]map[string]any, 0)
+			if s.BareRepo != "" {
+				cmd := exec.Command("git", "--git-dir", s.BareRepo,
+					"for-each-ref", "--format=%(refname) %(objectname) %(objecttype)", "refs/")
+				cmd.Env = os.Environ()
+				raw, err := cmd.Output()
+				if err == nil {
+					for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+						fields := strings.Fields(line)
+						if len(fields) == 3 && strings.HasPrefix(fields[0], prefix) {
+							out = append(out, map[string]any{
+								"ref": fields[0],
+								"object": map[string]string{
+									"sha":  fields[1],
+									"type": fields[2],
+								},
+							})
+						}
+					}
+				}
+			}
+			return jsonResponse(200, out), nil
+		}
+		if m := gitTagObjectRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			sha := m[3]
+			if s.BareRepo == "" {
+				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
+			}
+			typCmd := exec.Command("git", "--git-dir", s.BareRepo, "cat-file", "-t", "--end-of-options", sha)
+			typCmd.Env = os.Environ()
+			typOut, err := typCmd.Output()
+			if err != nil || strings.TrimSpace(string(typOut)) != "tag" {
+				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
+			}
+			tagCmd := exec.Command("git", "--git-dir", s.BareRepo, "cat-file", "tag", "--end-of-options", sha)
+			tagCmd.Env = os.Environ()
+			raw, err := tagCmd.Output()
+			if err != nil {
+				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
+			}
+			header, msg, _ := strings.Cut(string(raw), "\n\n")
+			var objSHA, objType string
+			for _, line := range strings.Split(header, "\n") {
+				if v, ok := strings.CutPrefix(line, "object "); ok {
+					objSHA = strings.TrimSpace(v)
+				} else if v, ok := strings.CutPrefix(line, "type "); ok {
+					objType = strings.TrimSpace(v)
+				}
+			}
+			return jsonResponse(200, map[string]any{
+				"sha":     sha,
+				"message": msg,
+				"object": map[string]string{
+					"sha":  objSHA,
+					"type": objType,
+				},
 			}), nil
 		}
 	}
@@ -3111,6 +3229,9 @@ func (s *Sim) repoRunsJSON(owner, repo string) map[string]any {
 			"run_attempt":     attempt,
 			"html_url":        htmlURL,
 		})
+		if wr.DisplayTitle != "" {
+			runs[len(runs)-1]["display_title"] = wr.DisplayTitle
+		}
 		if !wr.CreatedAt.IsZero() {
 			at := wr.CreatedAt.UTC().Format(time.RFC3339)
 			runs[len(runs)-1]["created_at"] = at

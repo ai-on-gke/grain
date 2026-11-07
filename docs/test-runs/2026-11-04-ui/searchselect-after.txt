@@ -1,0 +1,68 @@
+## New Task @1440 found=6
+  [0] area opts=4 axe=- search=frontend->1 pick="" chips=frontend listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear={"value":"","chips":0} | enterNoMatch shown=false formOpen=true url=true writes=- 
+  [1] repos the first is the one this task's o opts=4 axe=- search=—->1(target missing) pick=null listClosed=true formOpen=true writes=- | esc opened=undefined closed=undefined formOpen=undefined | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- ERR locator.focus: Timeout 5000ms exceeded. 
+  [2] legacy capabilities opts=7 axe=- search=debug->1 pick="" chips=read issues listClosed=null formOpen=true writes=POST /api/capability-grants/check | esc opened=true closed=true formOpen=true | clear={"value":"","chips":0} | enterNoMatch shown=true formOpen=true url=true writes=- 
+## Schedule @1440 found=6
+  [0] template opts=3 axe=- search=audit->1 pick="security-audit" listClosed=true formOpen=true writes=POST /api/schedules/composition | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=true formOpen=true url=true writes=- 
+  [2] model opts=3 axe=- search=pro->1 pick="gemini-2.5-pro" listClosed=true formOpen=true writes=POST /api/schedules/composition | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=true formOpen=true url=true writes=- 
+## Template @1440 found=4
+  [0] repos optional -- leave the first empty  opts=3 axe=- search=—->1(target missing) pick=null listClosed=true formOpen=true writes=- | esc opened=undefined closed=undefined formOpen=undefined | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- ERR locator.focus: Timeout 5000ms exceeded. 
+  [1] model opts=3 axe=- search=pro->2 pick="Deployment default (gemini-2.5-pro)" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=true formOpen=true url=true writes=- 
+  [2] legacy capabilities opts=7 axe=- search=debug->1 pick="" chips=self debug listClosed=false formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear={"value":"","chips":0} | enterNoMatch shown=true formOpen=true url=true writes=- 
+## Suite run @1440 found=2
+  [0] suite opts=1 axe=- search=Suite->1 pick="Release Qualification Suite" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=true formOpen=true url=true writes=- 
+  [1] repo owner/name opts=2 axe=- search=Other…->1 pick=null listClosed=true formOpen=true writes=- | esc opened=undefined closed=undefined formOpen=undefined | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- ERR locator.focus: Timeout 5000ms exceeded. 
+## Bulk edit @1440 found=5
+  [0] :r17: opts=3 axe=- search=—->1(target missing) pick=null listClosed=true formOpen=true writes=- | esc opened=undefined closed=undefined formOpen=undefined | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- ERR locator.focus: Timeout 5000ms exceeded. 
+  [1] model opts=3 axe=- search=pro->2 pick="Deployment default (gemini-2.5-pro)" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=true formOpen=true url=true writes=- 
+  [2] specific connection opts=2 axe=- search=Antigravity->1 pick="Gemini 2.5 Pro · Antigravity" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=true formOpen=true url=true writes=- 
+## Settings → Models @1440 found=2
+  [0] default model opts=3 axe=- search=(unset)->1 pick="None — provider default (unset)" listClosed=true formOpen=true writes=PUT /api/deployment | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=true formOpen=true url=true writes=- 
+## Git connections @1440 found=1
+  [0] connection opts=2 axe=- search=(PAT)->1 pick="github.com default (PAT)" listClosed=true formOpen=true writes=PUT /api/deployment/repos/acme/widgets/git-connection | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=true formOpen=true url=true writes=- 
+## Preferences time zone @1440 found=1
+  [0] time zone opts=420 axe=- search=Abidjan->1 pick="Africa/Abidjan" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=true formOpen=true url=true writes=- 
+## Repo releases @1440 found=0
+## NarrowingBar @1440 found=2
+  [0] Attribute for filter 2 opts=31 axe=- search=State->1 pick="State" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=true formOpen=true url=true writes=- 
+  [1] Value for filter 2 opts=7 axe=- search=Proposed->1 pick="" chips=proposed listClosed=false formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear={"value":"","chips":0} | enterNoMatch shown=true formOpen=true url=true writes=- 
+## Logs @1440 found=1
+  [0] source opts=1 axe=- search=daemon->1 pick="daemon" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=true formOpen=true url=true writes=- 
+## CI @1440 found=0
+## Customize sidebar @1440 found=2
+  [0] item opts=36 axe=- search=Inbox->1 pick="Inbox" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=true formOpen=true url=true writes=- 
+  [1] icon (optional) opts=20 axe=- search=(Tray)->1 pick="Inbox (Tray)" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=true formOpen=true url=true writes=- 
+## New Task @390 found=6
+  [0] area opts=4 axe=- search=frontend->1 pick="" chips=frontend listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear={"value":"","chips":0} | enterNoMatch shown=false formOpen=true url=true writes=- 
+  [1] repos the first is the one this task's o opts=4 axe=- search=—->1(target missing) pick=null listClosed=true formOpen=true writes=- | esc opened=undefined closed=undefined formOpen=undefined | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- ERR locator.focus: Timeout 5000ms exceeded. 
+  [2] legacy capabilities opts=7 axe=- search=debug->1 pick="" chips=read issues listClosed=null formOpen=true writes=POST /api/capability-grants/check | esc opened=true closed=true formOpen=true | clear={"value":"","chips":0} | enterNoMatch shown=true formOpen=true url=true writes=- 
+## Schedule @390 found=6
+  [0] template opts=3 axe=- search=audit->1 pick="security-audit" listClosed=true formOpen=true writes=POST /api/schedules/composition | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=true formOpen=true url=true writes=- 
+  [2] model opts=3 axe=- search=pro->1 pick="gemini-2.5-pro" listClosed=true formOpen=true writes=POST /api/schedules/composition | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=true formOpen=true url=true writes=- 
+## Template @390 found=4
+  [0] repos optional -- leave the first empty  opts=3 axe=- search=—->1(target missing) pick=null listClosed=true formOpen=true writes=- | esc opened=undefined closed=undefined formOpen=undefined | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- ERR locator.focus: Timeout 5000ms exceeded. 
+  [1] model opts=3 axe=- search=pro->2 pick="Deployment default (provider default (unset))" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=true formOpen=true url=true writes=- 
+  [2] legacy capabilities opts=7 axe=- search=debug->7 pick="" chips=self debug listClosed=false formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear={"value":"","chips":0} | enterNoMatch shown=true formOpen=true url=true writes=- 
+## Suite run @390 found=2
+  [0] suite opts=1 axe=- search=Suite->1 pick="Release Qualification Suite" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=true formOpen=true url=true writes=- 
+  [1] repo owner/name opts=2 axe=- search=Other…->1 pick=null listClosed=true formOpen=true writes=- | esc opened=undefined closed=undefined formOpen=undefined | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- ERR locator.focus: Timeout 5000ms exceeded. 
+## Bulk edit @390 found=5
+  [0] :r11: opts=3 axe=- search=—->1(target missing) pick=null listClosed=true formOpen=true writes=- | esc opened=undefined closed=undefined formOpen=undefined | clear=n/a | enterNoMatch shown=undefined formOpen=undefined url=undefined writes=- ERR locator.focus: Timeout 5000ms exceeded. 
+  [1] model opts=3 axe=- search=pro->2 pick="Deployment default (provider default (unset))" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=true formOpen=true url=true writes=- 
+  [2] specific connection opts=2 axe=- search=Antigravity->1 pick="Gemini 2.5 Pro · Antigravity" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=true formOpen=true url=true writes=- 
+## Settings → Models @390 found=1
+  [0] default model opts=3 axe=- search=pro->2 pick="None — provider default (unset)" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=true formOpen=true url=true writes=- 
+## Git connections @390 found=1
+  [0] connection opts=2 axe=- search=Default->2 pick="github.com default (PAT)" listClosed=true formOpen=true writes=PUT /api/deployment/repos/acme/widgets/git-connection | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=true formOpen=true url=true writes=- 
+## Preferences time zone @390 found=1
+  [0] time zone opts=420 axe=- search=Abidjan->1 pick="Africa/Abidjan" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=true formOpen=true url=true writes=- 
+## Repo releases @390 found=0
+## NarrowingBar @390 found=2
+  [0] Attribute for filter 2 opts=31 axe=- search=State->1 pick="State" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=true formOpen=true url=true writes=- 
+  [1] Value for filter 2 opts=7 axe=- search=Proposed->1 pick="" chips=proposed listClosed=false formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear={"value":"","chips":0} | enterNoMatch shown=true formOpen=true url=true writes=- 
+## Logs @390 found=1
+  [0] source opts=1 axe=- search=daemon->1 pick="daemon" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=true formOpen=true url=true writes=- 
+## CI @390 found=0
+## Customize sidebar @390 found=2
+  [0] item opts=36 axe=- search=Inbox->1 pick="Inbox" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=true formOpen=true url=true writes=- 
+  [1] icon (optional) opts=20 axe=- search=(Tray)->1 pick="Inbox (Tray)" listClosed=true formOpen=true writes=- | esc opened=true closed=true formOpen=true | clear=n/a | enterNoMatch shown=true formOpen=true url=true writes=- 

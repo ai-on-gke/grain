@@ -46,7 +46,7 @@ export function HostdMissingNote({ problem, sx }) {
         sx={{ overflowWrap: "anywhere", ...sx }}
         data-testid="hostd-unreachable"
       >
-        grain hostd is not reachable, so no run: host server can start
+        The host agent is not reachable, so no run: host server can start
         {problem.reason ? `: ${problem.reason}` : "."}
       </Alert>
     );
@@ -58,15 +58,15 @@ export function HostdMissingNote({ problem, sx }) {
       sx={{ overflowWrap: "anywhere", minWidth: 0, ...sx }}
       data-testid="hostd-entry-missing"
     >
-      grain hostd&apos;s allowlist on the host has no capabilities entry{" "}
+      The host agent&apos;s allowlist on the host has no capabilities entry{" "}
       <code>{problem.name}</code>.{" "}
       {own ? (
         <>
           It is grain&apos;s own entry: grain adds it automatically the next
-          time hostd starts or is upgraded, and this server attaches by itself
-          once it is there. To add it now, run <code>{own.command}</code> on the
-          host (nothing restarts; on an install whose setup.sh predates that
-          service, re-run setup.sh once), or paste this under{" "}
+          time the host agent starts or is upgraded, and this server attaches by
+          itself once it is there. To add it now, run <code>{own.command}</code>{" "}
+          on the host (nothing restarts; on an install whose setup.sh predates
+          that service, re-run setup.sh once), or paste this under{" "}
           <code>capabilities:</code> in <code>{ALLOWLIST}</code>:
           <Box
             component="pre"

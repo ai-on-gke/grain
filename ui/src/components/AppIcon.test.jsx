@@ -48,6 +48,7 @@ const REQUIRED_STANDARD_MEANINGS = [
   "sort",
   "expand",
   "collapse",
+  "sidebar",
 ];
 
 describe("AppIcon and NavGlyph", () => {
@@ -120,24 +121,16 @@ describe("AppIcon and NavGlyph", () => {
     expect(svg).toHaveAttribute("aria-hidden", "true");
   });
 
-  it("renders standard icons across the header rail global tray", () => {
+  it("renders standard icons across the header rail and leading expand toggle", () => {
     const { container } = render(
       <PageHeader
         title="settings / models"
+        onExpandSidebar={() => {}}
         globals={
           <GlobalButtons
             alerts={<AlertsButton alerts={[]} />}
-            config={{
-              authenticated: true,
-              authMethod: "iap",
-              actor: "user:operator@example.com",
-            }}
             onOpenSystem={() => {}}
             onOpenSettings={() => {}}
-            onLogout={() => {}}
-            onOpenNewTask={() => {}}
-            onNewSession={() => {}}
-            onNewBoard={() => {}}
           />
         }
       />,
@@ -147,13 +140,11 @@ describe("AppIcon and NavGlyph", () => {
       el.getAttribute("data-icon"),
     );
     expect(icons).toEqual([
+      "sidebar",
       "settings",
       "alerts",
       "system",
       "settings",
-      "user",
-      "add",
-      "dropdown",
     ]);
   });
 });

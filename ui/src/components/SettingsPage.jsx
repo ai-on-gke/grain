@@ -53,7 +53,12 @@ import SandboxesSection from "./settings/SandboxesSection.jsx";
 import CachesSection from "./settings/CachesSection.jsx";
 import PreferencesSection from "./settings/PreferencesSection.jsx";
 import UpgradeSection from "./settings/UpgradeSection.jsx";
-import { SettingsReadOnlyContext } from "./settings/SettingsCard.jsx";
+import RegistrySection from "./settings/RegistrySection.jsx";
+import {
+  SettingsReadOnlyContext,
+  SettingsRoleRefusalContext,
+} from "./settings/SettingsCard.jsx";
+import { accessDeniedReason } from "../access.js";
 import {
   EditInConfigRepo,
   configRepoRefusal,
@@ -93,6 +98,32 @@ const NOT_CONFIG = new Set([
 ]);
 const NO_SAVE_STATE = new Set(["upgrade", "audit"]);
 
+// SECTION_WRITE_SCOPE is the scope a section's saves need
+// (pkg/ui/route_scopes.go): PUT /api/settings for the settings rows,
+// and the connection, repository, memory and capability routes for the
+// sections that write those. A section whose scope the signed-in
+// person's role lacks is drawn read-only, saying why (access.js).
+// Preferences (this browser's own), Access (which gates its own
+// controls), Upgrade and Audit are not listed.
+const SECTION_WRITE_SCOPE = {
+  general: "settings:write",
+  tasks: "settings:write",
+  agents: "settings:write",
+  ci: "settings:write",
+  engine: "settings:write",
+  registry: "settings:write",
+  sandboxes: "settings:write",
+  caches: "settings:write",
+  credentials: "settings:write",
+  "config-repo": "settings:write",
+  models: "connections:write",
+  git: "connections:write",
+  repositories: "repos:write",
+  memory: "memory:write",
+  capabilities: "capabilities:admin",
+  hostds: "capabilities:admin",
+};
+
 // Sections that read GET /api/settings, and so wait for it.
 const READS_SETTINGS = new Set([
   "general",
@@ -102,6 +133,7 @@ const READS_SETTINGS = new Set([
   "capabilities",
   "credentials",
   "engine",
+  "registry",
   "ci",
   "sandboxes",
   "caches",
@@ -149,7 +181,18 @@ export default function SettingsPage({
   const { settings, settingsError, reloadSettings } = s;
   const [filter, setFilter] = useState("");
   const filterRef = useRef(null);
-  const matches = useMemo(() => matchSettings(filter), [filter]);
+  const matches = useMemo(() => {
+    const raw = matchSettings(filter);
+    if (!config?.selfUpgradeDisabled) return raw;
+    return raw.filter(
+      (entry) =>
+        !(
+          !entry.card &&
+          entry.section === "general" &&
+          entry.anchor === "updates"
+        ),
+    );
+  }, [filter, config?.selfUpgradeDisabled]);
   const current = section || (isPhone ? "" : DEFAULT_SETTINGS_SECTION);
   const externalConfigRepo =
     (settings ? settings.externalConfigRepo : config?.externalConfigRepo) || "";
@@ -173,7 +216,10 @@ export default function SettingsPage({
       : Boolean(config?.configRepoOnly);
   const configRepoOnly = lockedInUI || Boolean(externalConfigRepo);
   const configManaged = configRepoOnly && isConfigRepoSection(current);
-  const readOnly = external || configManaged;
+  const roleRefusal = SECTION_WRITE_SCOPE[current]
+    ? accessDeniedReason(config, SECTION_WRITE_SCOPE[current])
+    : "";
+  const readOnly = external || configManaged || Boolean(roleRefusal);
   s.readOnly = readOnly;
   // configLocked is for the sections that mix bootstrap settings with
   // config-managed ones (Engine, Sandboxes, Legacy capabilities): the
@@ -638,6 +684,7 @@ export default function SettingsPage({
           <CredentialsSection
             s={s}
             claimedSecrets={[
+              "registry-registration-token",
               ...(settings?.agentBackends || []).map(
                 (backend) => `agent-backend-${backend.id}`,
               ),
@@ -650,6 +697,9 @@ export default function SettingsPage({
         break;
       case "engine":
         body = <EngineSection s={s} />;
+        break;
+      case "registry":
+        body = <RegistrySection s={s} />;
         break;
       case "ci":
         body = <CISection s={s} />;
@@ -728,9 +778,20 @@ export default function SettingsPage({
             </Box>
           </Alert>
         )}
-        <SettingsReadOnlyContext.Provider value={readOnly}>
-          {body}
-        </SettingsReadOnlyContext.Provider>
+        {roleRefusal && (
+          <Alert
+            severity="info"
+            sx={{ mb: 2 }}
+            data-testid="settings-role-read-only"
+          >
+            {`Read-only for you. ${roleRefusal} An operator can change your role in Settings → Access.`}
+          </Alert>
+        )}
+        <SettingsRoleRefusalContext.Provider value={roleRefusal}>
+          <SettingsReadOnlyContext.Provider value={readOnly}>
+            {body}
+          </SettingsReadOnlyContext.Provider>
+        </SettingsRoleRefusalContext.Provider>
       </Box>
     </Box>
   );

@@ -62,6 +62,10 @@ type taskQuery struct {
 	filters []condition
 	sort    []sortSpec
 
+	// provenance is the external-cli spec's two provenance predicates
+	// (#XC-18, provenanceFilter), which every task has to satisfy too.
+	provenance []provenanceFilter
+
 	// hidden is the states this listing leaves out before any condition
 	// is consulted -- closed and deferred, unless something asked for
 	// them (hiddenStates). It is a set of model.State values as strings,
@@ -85,6 +89,11 @@ func (q taskQuery) match(t ui.Task) bool {
 	}
 	for _, c := range q.filters {
 		if !c.match(t, now, zone) {
+			return false
+		}
+	}
+	for _, p := range q.provenance {
+		if !p.match(t) {
 			return false
 		}
 	}
@@ -306,13 +315,15 @@ func (l *conditionList) Set(raw string) error {
 // FlagSet.Visit, which is the only thing that can tell a flag left at
 // its default from one explicitly set to it.
 type listFlags struct {
-	state      string
-	repo       string
-	base       string
-	capability string
-	author     string
-	origin     string
-	search     string
+	state       string
+	repo        string
+	base        string
+	capability  string
+	owner       string
+	author      string
+	origin      string
+	externalRef string
+	search      string
 
 	blocked     *bool
 	autoMerge   *bool
@@ -344,8 +355,10 @@ func (f listFlags) query(attrs attributeSet) (taskQuery, error) {
 		{flag: "repo", attr: "repo", value: f.repo},
 		{flag: "base", attr: "base", value: f.base},
 		{flag: "capability", attr: "capability", value: f.capability},
+		{flag: "owner", attr: "owner", value: f.owner},
 		{flag: "author", attr: "author", value: f.author},
 		{flag: "origin", attr: "origin", value: f.origin},
+		{flag: "external-ref", attr: "externalRef", value: f.externalRef},
 		{flag: "blocked", attr: "blocked", value: pickValue(f.blocked, "yes", "no")},
 		{flag: "auto-merge", attr: "autoMerge", value: pickValue(f.autoMerge, "on", "off")},
 		{flag: "interactive", attr: "kind", value: pickValue(f.interactive, "interactive", "background")},
@@ -361,6 +374,13 @@ func (f listFlags) query(attrs attributeSet) (taskQuery, error) {
 		q.filters = append(q.filters, cond)
 	}
 	for _, raw := range f.filters {
+		if p, ok, err := parseProvenanceFilter(raw); ok {
+			if err != nil {
+				return taskQuery{}, err
+			}
+			q.provenance = append(q.provenance, p)
+			continue
+		}
 		cond, err := attrs.parseCondition(raw)
 		if err != nil {
 			return taskQuery{}, err
@@ -388,7 +408,7 @@ func (f listFlags) query(attrs attributeSet) (taskQuery, error) {
 func (f listFlags) namesAnUndeclaredAttribute() bool {
 	for _, raw := range f.filters {
 		name, _, _ := strings.Cut(raw, ":")
-		if name != "" && builtinAttributes.byID(name) == nil {
+		if name != "" && builtinAttributes.byID(name) == nil && !provenanceAttributes[name] {
 			return true
 		}
 	}
@@ -427,8 +447,10 @@ func cmdList(ctx context.Context, c *ui.HTTPClient, out *printer, args []string)
 	fs.StringVar(&f.repo, "repo", "", `shorthand for -filter repo:any:VALUE (owner/name, or "none" for the tasks with no target repo)`)
 	fs.StringVar(&f.base, "base", "", `shorthand for -filter base:any:VALUE (or "none" for the tasks taking the repo's default)`)
 	fs.StringVar(&f.capability, "capability", "", `shorthand for -filter capability:any:VALUE (or "none" for the tasks carrying none)`)
+	fs.StringVar(&f.owner, "owner", "", `shorthand for -filter owner:any:VALUE (or "me" for your own tasks)`)
 	fs.StringVar(&f.author, "author", "", "shorthand for -filter author:any:VALUE")
 	fs.StringVar(&f.origin, "origin", "", "shorthand for -filter origin:any:VALUE ("+strings.Join(taskOrigins, ", ")+")")
+	fs.StringVar(&f.externalRef, "external-ref", "", `shorthand for -filter externalRef:any:VALUE (e.g. CA-204, or "none" for tasks with no external reference)`)
 	// The three tri-state flags. Each asks for the tasks that have the
 	// attribute; "=false" asks for the ones that don't; leaving it off
 	// asks nothing -- which is why Visit, rather than the values
@@ -540,6 +562,7 @@ func cmdList(ctx context.Context, c *ui.HTTPClient, out *printer, args []string)
 	if needsHidden {
 		q.hidden = hiddenStates(q, show, settings)
 	}
+	normalizeOwnerConditions(ctx, c, &q, listConfig.ViewerOwner)
 	tasks, err := c.ListTasks(ctx)
 	if err != nil {
 		return err
@@ -648,7 +671,8 @@ func filterHelp(attrs attributeSet) string {
 	b.WriteString("\nConditions (-filter, repeatable) are written attribute:comparison:value, the\n")
 	b.WriteString("spelling the UI writes into a link, so a condition can be pasted between them:\n\n")
 	b.WriteString("  grain list -filter repo:any:acme/widgets,acme/gadgets -filter created:within:7\n")
-	b.WriteString("  grain list -filter capability:all:gh,gcp -sort state:asc,created:desc\n\n")
+	b.WriteString("  grain list -filter capability:all:gh,gcp -sort state:asc,created:desc\n")
+	b.WriteString("  grain list -filter derived_from:eq:acme/widgets#42 -filter filed_via:has:session=abc123\n\n")
 	b.WriteString("Several values in one condition are separated by \",\" or \"|\"; a value that has\n")
 	b.WriteString("to carry one is written %2C or %7C. \"none\" is \"has no value for this at all\".\n\n")
 	b.WriteString("The fields this deployment declares are attributes too, under custom.<name>,\n")
@@ -718,4 +742,47 @@ func declaredHelp(ctx context.Context, c *ui.HTTPClient) string {
 	}
 	return "\nFields this deployment declares, which are attributes like any other:\n" +
 		attributeLines(custom)
+}
+
+// provenanceAttributes are the two -filter attributes that are not in
+// the attribute table taskattributes.go shares with the frontend: they
+// are for an external orchestrator's own bookkeeping (external-cli spec
+// #XC-18), which the UI's filter menus have no use for, so they are read
+// here rather than added to a vocabulary both sides must keep in step.
+var provenanceAttributes = map[string]bool{"derived_from": true, "filed_via": true}
+
+// provenanceFilter is one of them, parsed: derived_from:eq:<owner/name#pr
+// or its URL> or filed_via:has:<substring>.
+type provenanceFilter struct {
+	attr  string
+	value string
+}
+
+// parseProvenanceFilter reads raw as a provenance condition. ok is false
+// for any other attribute, which parseCondition then reads.
+func parseProvenanceFilter(raw string) (provenanceFilter, bool, error) {
+	parts := strings.SplitN(raw, ":", 3)
+	if !provenanceAttributes[parts[0]] {
+		return provenanceFilter{}, false, nil
+	}
+	want := map[string]string{"derived_from": "eq", "filed_via": "has"}[parts[0]]
+	if len(parts) != 3 || parts[1] != want || strings.TrimSpace(parts[2]) == "" {
+		return provenanceFilter{}, true, usageErrorf("-filter %q: %s is written %s:%s:<value>", raw, parts[0], parts[0], want)
+	}
+	value := strings.TrimSpace(parts[2])
+	if parts[0] == "derived_from" {
+		ref, ok := ui.NormalizePullRequestRef(value)
+		if !ok {
+			return provenanceFilter{}, true, usageErrorf("-filter %q: %q is not a pull request -- write owner/name#number or its URL", raw, value)
+		}
+		value = ref
+	}
+	return provenanceFilter{attr: parts[0], value: value}, true, nil
+}
+
+func (p provenanceFilter) match(t ui.Task) bool {
+	if p.attr == "derived_from" {
+		return ui.TaskDerivedFrom(t, p.value)
+	}
+	return strings.Contains(strings.ToLower(t.FiledVia), strings.ToLower(p.value))
 }

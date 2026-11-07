@@ -123,7 +123,7 @@ func TestAnUpgradeToTheSameSchemaWritesNothingOut(t *testing.T) {
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			PullCmd:    []string{"true"},
 			RunCmd:     fakeImage(dir, "16", 0),
@@ -143,7 +143,7 @@ func TestAnUpgradeToTheSameSchemaWritesNothingOut(t *testing.T) {
 	if got := stepByName(t, status, stepSchema).Detail; !strings.Contains(got, "unchanged") {
 		t.Errorf("schema step detail = %q, want it to say the schema is unchanged", got)
 	}
-	if got, want := readFile(t, refFile), "GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:main@"+testDigest+"\n"; got != want {
+	if got, want := readFile(t, refFile), "GRAIN_IMAGE=docker.io/grainai/grain:main@"+testDigest+"\n"; got != want {
 		t.Errorf("ref file = %q, want %q", got, want)
 	}
 }
@@ -162,7 +162,7 @@ func TestAnUpgradeToANewSchemaWritesTheRowsOutAndHasTheNewBuildImportThem(t *tes
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			PullCmd:    []string{"true"},
 			RunCmd:     fakeImage(dir, "17", 0),
@@ -214,7 +214,7 @@ func TestAnUpgradeToANewSchemaWritesTheRowsOutAndHasTheNewBuildImportThem(t *tes
 
 	// And the cut-over happened, with the status saying what it is that
 	// the operator will find on the other side of the restart.
-	if got, want := readFile(t, refFile), "GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:grain..task-59@"+testDigest+"\n"; got != want {
+	if got, want := readFile(t, refFile), "GRAIN_IMAGE=docker.io/grainai/grain:grain..task-59@"+testDigest+"\n"; got != want {
 		t.Errorf("ref file = %q, want %q", got, want)
 	}
 	if !strings.Contains(status.Detail, "schema 16 to 17") {
@@ -235,14 +235,14 @@ func TestAnUpgradeIsRefusedWhenTheNewBuildCannotTakeTheRows(t *testing.T) {
 	restartMarker := filepath.Join(dir, "restarted")
 	prepare := &recordedPrepare{}
 
-	const previous = "GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:main\n"
+	const previous = "GRAIN_IMAGE=docker.io/grainai/grain:main\n"
 	if err := os.WriteFile(refFile, []byte(previous), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			PullCmd:    []string{"true"},
 			RunCmd:     fakeImage(dir, "17", 1),
@@ -291,14 +291,14 @@ func TestAFailedExportDoesNotDiscardWhatIsAlreadyOnTheHost(t *testing.T) {
 	restartMarker := filepath.Join(dir, "restarted")
 	prepare := &recordedPrepare{fail: errors.New("clearing /var/lib/grain/data/schema-upgrade: permission denied")}
 
-	const previous = "GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain:main\n"
+	const previous = "GRAIN_IMAGE=docker.io/grainai/grain:main\n"
 	if err := os.WriteFile(refFile, []byte(previous), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			PullCmd:    []string{"true"},
 			RunCmd:     fakeImage(dir, "17", 0),
@@ -339,7 +339,7 @@ func TestAnUpgradeIsRefusedWhenTheNewBuildWillNotSayWhichSchemaItKnows(t *testin
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			PullCmd:    []string{"true"},
 			// Answers the health check (it runs, and prints something)
@@ -443,7 +443,7 @@ func TestAFailedSchemaQuestionReportsWhatTheBuildPrinted(t *testing.T) {
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			PullCmd:    []string{"true"},
 			RunCmd:     fakeImageThatStopsAnsweringTheSchemaQuestion(dir, complaint),
@@ -482,7 +482,7 @@ func TestASilentFailedSchemaQuestionSaysTheBuildPrintedNothing(t *testing.T) {
 
 	u := newUpgrader(t, Config{
 		Image: &ImageConfig{
-			Repository: "ghcr.io/bwsalmon/grain/grain",
+			Repository: "docker.io/grainai/grain",
 			RefFile:    refFile,
 			PullCmd:    []string{"true"},
 			RunCmd: []string{"sh", "-c", `printf x >> ` + asks + `

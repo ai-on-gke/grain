@@ -48,6 +48,11 @@
 // did not (followCIRun and pkg/ci/cli's Follower), rather than one snapshot the
 // reader has to keep asking for.
 //
+// `grain ci wait`, `retrigger` and `test-history` are the sandbox CLI's
+// verbs of the same names from outside a sandbox (external-cli #XC-26):
+// a run named by id, pull request or branch rather than "this task's",
+// answered in the same shapes the in-sandbox commands read and print.
+//
 // The rendering of runs, listings and the cache is cicmd_print.go, and the
 // polling and following behind -watch and -follow is pkg/ci/cli.
 package cli
@@ -58,6 +63,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -96,8 +102,14 @@ func cmdCI(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) e
 		return cmdCIArtifact(ctx, c, out, args)
 	case "faults", "fault":
 		return cmdCIFaults(ctx, c, out, args)
+	case "wait":
+		return cmdCIWait(ctx, c, out, args)
+	case "retrigger":
+		return cmdCIRetrigger(ctx, c, out, args)
+	case "test-history":
+		return cmdCITestHistory(ctx, c, out, args)
 	default:
-		return fmt.Errorf("unknown \"grain ci\" subcommand %q: one of run, list, show, watch, cancel, cache, artifact, faults", sub)
+		return fmt.Errorf("unknown \"grain ci\" subcommand %q: one of run, list, show, watch, wait, retrigger, test-history, cancel, cache, artifact, faults", sub)
 	}
 }
 
@@ -570,4 +582,231 @@ func followCIRun(ctx context.Context, c *ui.HTTPClient, out *printer, id string,
 		}
 		f.Follow(run)
 	})
+}
+
+// ciWaitDefaultTimeout is how long `grain ci wait` waits when -timeout
+// does not say: long enough for a full suite, short enough that a run
+// wedged for an hour ends the command rather than the operator's patience.
+const ciWaitDefaultTimeout = 30 * time.Minute
+
+// ciWaitPoll is how often `grain ci wait` asks after the run it is
+// waiting on: the cadence grain publishes a run at (cicli.WatchInterval).
+// A var so that a test need not wait five seconds a poll.
+var ciWaitPoll = cicli.WatchInterval
+
+// cmdCIWait is `grain ci wait`: block until a run has a verdict, then
+// say what it is -- exit 0 green, 1 red, 5 if -timeout ran out first.
+//
+// It is the in-sandbox `grain ci wait` from a terminal, with two
+// differences that come of there being no sandbox around it. It names
+// the run it waits on (an id, a pull request, or a branch) rather than
+// meaning the task's own branch. And it waits the whole -timeout (30m
+// unless the global -timeout says otherwise) rather than a 9m slice:
+// there is no run_command ceiling to stay under and no attempt deadline
+// to accrue wait credit against, so nothing is credited either.
+func cmdCIWait(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+	fs := flag.NewFlagSet("grain ci wait", flag.ContinueOnError)
+	pr := fs.String("pr", "",
+		"wait on the newest run of this pull request's branch: a GitHub URL or owner/name#n")
+	ref := fs.String("ref", "", "wait on the newest run of this branch (needs -repo)")
+	repo := fs.String("repo", "", "the repository -ref is a branch of, as owner/name")
+	jobsFlag := fs.String("jobs", "",
+		"only these jobs, by name or id, comma-separated: the verdict is theirs alone")
+	pos, err := parseArgs(fs, args)
+	if err != nil {
+		return err
+	}
+	if err := atMostArgs(fs, pos, 1); err != nil {
+		return err
+	}
+	id := strings.TrimSpace(first(pos))
+	given := 0
+	for _, s := range []string{id, *pr, *ref} {
+		if strings.TrimSpace(s) != "" {
+			given++
+		}
+	}
+	if given != 1 {
+		return usageErrorf("say which run to wait on, once: %q, %q or %q",
+			"grain ci wait <run-id>", "grain ci wait -pr <url|owner/name#n>", "grain ci wait -ref <branch> -repo <owner/name>")
+	}
+	if strings.TrimSpace(*ref) != "" && strings.TrimSpace(*repo) == "" {
+		return usageErrorf("-ref needs -repo: which repository %q is a branch of", *ref)
+	}
+	jobs := cicli.SplitJobs(*jobsFlag)
+
+	limit := ciWaitDefaultTimeout
+	if d, ok := ctx.Value(waitLimitKey{}).(time.Duration); ok && d > 0 {
+		limit = d
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	start := time.Now()
+
+	if id == "" {
+		if id, err = resolveCIWaitRun(waitCtx, c, *pr, *ref, *repo); err != nil {
+			return waitResult(waitCtx, err)
+		}
+	}
+	run, err := cicli.PollWait(waitCtx, c, id, jobs, ciWaitPoll)
+	if err != nil {
+		return waitResult(waitCtx, err)
+	}
+	for _, name := range jobs {
+		if (len(run.Jobs) > 0 || run.Conclusion.Done()) && !slices.ContainsFunc(run.Jobs, func(job ci.JobRun) bool { return cicli.JobNamed(job, name) }) {
+			return usageErrorf("run %s has no job %q (\"grain ci show %s\" lists its jobs)", run.ID, name, run.ID)
+		}
+	}
+	res := cicli.WaitVerdict(run, jobs, time.Since(start))
+	if res.MayHaveSharedFault() {
+		// Asked on the command's own context rather than the wait's:
+		// a verdict that arrived on the last poll is still owed its
+		// annotations. A daemon that cannot answer costs the annotation,
+		// never the verdict.
+		if faults, err := c.CISharedFaults(ctx); err == nil {
+			res.AnnotateFaults(faults)
+		}
+	}
+	out.ciWait(res)
+	switch res.Status {
+	case "passed":
+		return nil
+	case "running":
+		return waitTimedOut(fmt.Errorf("run %s is still running after %s", run.ID, ciDuration(limit)))
+	default:
+		return targetFailed(fmt.Errorf("run %s: %s", run.ID, res.Conclusion))
+	}
+}
+
+// resolveCIWaitRun is the run a -pr or -ref wait attaches to: the newest
+// run on that branch still in flight, else the newest run on it at all.
+func resolveCIWaitRun(ctx context.Context, c *ui.HTTPClient, pr, ref, repo string) (string, error) {
+	ref, repo = strings.TrimSpace(ref), strings.TrimSpace(repo)
+	if pr = strings.TrimSpace(pr); pr != "" {
+		var err error
+		if repo, ref, err = pullRequestBranch(ctx, c, pr); err != nil {
+			return "", err
+		}
+	}
+	page, err := c.FindCIRuns(ctx, ci.RunFilter{Repo: repo, Ref: ref, Descending: true}, 50)
+	if err != nil {
+		return "", err
+	}
+	id, ok := cicli.NewestRunOn(page.Runs, repo, ref)
+	if !ok {
+		if page, err = c.FindCIRuns(ctx, ci.RunFilter{Repo: repo, Ref: ref, Provider: ci.ProviderGitHubActions, Descending: true}, 50); err != nil {
+			return "", err
+		}
+		id, ok = cicli.NewestRunOn(page.Runs, repo, ref)
+	}
+	if !ok {
+		return "", &cliError{exit: exitUsage, code: "not_found",
+			err: fmt.Errorf("no CI run on %s branch %s yet", repo, ref)}
+	}
+	return id, nil
+}
+
+// pullRequestBranch is the repository and branch of the pull request pr
+// names (https://github.com/owner/name/pull/n or owner/name#n): the
+// branch of the grain task that opened it or is tracking it.
+func pullRequestBranch(ctx context.Context, c *ui.HTTPClient, pr string) (repo, branch string, err error) {
+	ref, err := cicli.ParsePullRequest(pr)
+	if err != nil {
+		return "", "", usageErrorf("-pr: %v", err)
+	}
+	tasks, err := c.ListTasks(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	if branch, ok := cicli.TaskBranchFor(tasks, ref); ok {
+		return ref.Repo.String(), branch, nil
+	}
+	return "", "", &cliError{exit: exitUsage, code: "not_found",
+		err: fmt.Errorf("no grain task tracks %s, so its branch is not known here: wait on it with -ref <branch> -repo %s", ref, ref.Repo)}
+}
+
+// cmdCIRetrigger is `grain ci retrigger <run-id>`: run the jobs of a run
+// that failed again, once, with the job cache bypassed -- the in-sandbox
+// `grain ci retrigger` for a run named by id rather than a task's own
+// branch. -jobs names the jobs instead of taking the failed ones.
+func cmdCIRetrigger(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+	fs := flag.NewFlagSet("grain ci retrigger", flag.ContinueOnError)
+	jobsFlag := fs.String("jobs", "",
+		"rerun these jobs, by id, comma-separated, rather than the ones that failed")
+	pos, err := parseArgs(fs, args)
+	if err != nil {
+		return err
+	}
+	if err := atMostArgs(fs, pos, 1); err != nil {
+		return err
+	}
+	id := strings.TrimSpace(first(pos))
+	if id == "" {
+		return usageErrorf("a run id is required: %q (\"grain ci list\" prints them)", "grain ci retrigger <run-id>")
+	}
+	run, err := c.CIRun(ctx, id)
+	if err != nil {
+		return err
+	}
+	if ci.ProviderOf(run) != ci.ProviderGrain || run.Actions != nil {
+		return usageErrorf("run %s is a %s run: grain ci retrigger reruns grain CI's own jobs only", id, ci.ProviderOf(run))
+	}
+	jobs := cicli.SplitJobs(*jobsFlag)
+	if len(jobs) == 0 {
+		jobs = cicli.FailedJobIDs(run)
+	}
+	if len(jobs) == 0 {
+		return usageErrorf("run %s has no failed jobs to rerun: name the ones to run with -jobs", id)
+	}
+	req := ui.CIRunRequest{
+		Repo: run.Repo, Ref: run.Ref, Commit: run.Commit,
+		Jobs: jobs, Recheck: true,
+	}
+	// The run's own event, so that the jobs planned are the ones that
+	// ran -- but never a manual dispatch's, which would hand the rerun
+	// release secrets the run it repeats may not have had.
+	if run.Event == ci.EventPush || run.Event == ci.EventPullRequest {
+		req.Event = string(run.Event)
+	}
+	next, err := c.StartCIRun(ctx, req)
+	if err != nil {
+		return err
+	}
+	out.ciRetriggered(run, next, jobs)
+	return nil
+}
+
+// cmdCITestHistory is `grain ci test-history <test>`: how one test has
+// fared across a repository's recent runs -- passes, failures, flakes --
+// read and rendered by the same ci.QueryTestHistory the in-sandbox
+// command's answer comes from.
+//
+// Each run is read in full (cicli.TestHistory), since a listing carries
+// no step output and a pass is only ever found there.
+func cmdCITestHistory(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+	fs := flag.NewFlagSet("grain ci test-history", flag.ContinueOnError)
+	repo := fs.String("repo", "", "only this repository's runs, as owner/name (default: every repository's)")
+	limit := fs.Int("limit", 20, "how many of the newest runs to look through (at most 100)")
+	pos, err := parseArgs(fs, args)
+	if err != nil {
+		return err
+	}
+	if err := atMostArgs(fs, pos, 1); err != nil {
+		return err
+	}
+	test := strings.TrimSpace(first(pos))
+	if test == "" {
+		return usageErrorf("a test name is required: %q", "grain ci test-history <test-name>")
+	}
+	if *limit <= 0 {
+		return usageErrorf("-limit must be a positive number of runs, not %d", *limit)
+	}
+	n := min(*limit, 100)
+	page, err := c.FindCIRuns(ctx, ci.RunFilter{Repo: strings.TrimSpace(*repo), Descending: true}, n)
+	if err != nil {
+		return err
+	}
+	report := cicli.TestHistory(ctx, c, page.Runs, test, strings.TrimSpace(*repo))
+	out.ciTestHistory(report)
+	return nil
 }

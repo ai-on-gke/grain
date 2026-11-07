@@ -45,23 +45,22 @@ cluster's rather than a number an operator sized by hand.
 
 Three things have to exist first.
 
-**A registry the cluster pulls from, holding the release's images.** Grain
-publishes its images as GitHub release assets
+**Images from release assets, if you use them.** Grain also publishes its
+images as GitHub release assets
 ([docs/release-assets.md](../../docs/release-assets.md)), which a cluster
-cannot `docker load`. Load a release's `grain` and `k8s-sandbox` assets on a
-machine with Docker (`scripts/release-assets.sh fetch <release> DIR &&
-scripts/release-assets.sh load DIR`), tag the two manifest refs into a
-registry the cluster can pull from (the deployment's own
-`sandbox_image_mirror`, for example an Artifact Registry repository in the
-cluster's project) and push them; the Deployment's `image:` and
-`-k8s-sandbox-image` then name those pushed refs.
-Releases from before release assets are still at
-`ghcr.io/bwsalmon/grain/{grain,k8s-sandbox}`, which is what the manifests in
-this directory name until you replace those refs with your pushed ones;
-`scripts/migrate-local-to-gke.sh --mirror <registry/path>` does the push
-for a host that was installed from release assets.
+cannot `docker load`. To run a release from its assets rather than from
+`docker.io/grainai/*`, load and push it into a registry the cluster can pull
+from -- the deployment's own `sandbox_image_mirror`, for example an Artifact
+Registry repository in the cluster's project -- with
+`scripts/release-assets.sh mirror <release> <registry/prefix>`, and name the
+pushed refs in the Deployment's `image:` and `-k8s-sandbox-image`.
+`scripts/migrate-local-to-gke.sh --mirror <registry/path>` does the same push
+for a host that was installed from release assets. Never leave a
+`grain/<image>:sha-<12 hex>` manifest ref in a pod spec: it names no registry,
+so kubelet would look for it on Docker Hub, and the daemon refuses to hand it
+to a pod.
 
-**A sandbox image.** The release's `k8s-sandbox` image comes
+**A sandbox image.** CI publishes `docker.io/grainai/sandbox-k8s`
 with all three supported agent CLIs (`claude`, `agy`, and `codex`), `git`,
 `bash`, `curl`, and a non-root user with a writable home. Each grain build
 has its same-commit image stamped in as the `-k8s-sandbox-image` default;
@@ -83,6 +82,30 @@ silently given a networked pod.
 
 **A storage class that gives ReadWriteOnce volumes.** grain's state is an
 embedded SQLite database on a filesystem, with one writer.
+
+**The store stays SQLite here, unless you name a PostgreSQL server.** A
+`scripts/setup.sh` host now defaults to a local PostgreSQL server
+([docs/database.md](../../docs/database.md)). This manifest does not, and
+ships no Postgres StatefulSet, for two reasons. Re-applying the manifest
+is how a deployment is upgraded, so changing its default would move every
+existing deployment onto an empty database. And a cluster usually has a
+managed PostgreSQL (Cloud SQL, AlloyDB) that is a better home than a pod
+beside the controller. To use one, put its DSN in a Secret and hand it to
+the `grain` container as `GRAIN_DB_DSN`, which the daemon reads when no
+`-db-dsn` flag is passed:
+
+```yaml
+        env:
+        - name: GRAIN_DB_DRIVER
+          value: postgres
+        - name: GRAIN_DB_DSN
+          valueFrom:
+            secretKeyRef: {name: grain-db, key: dsn}
+```
+
+On a deployment that already has a SQLite store on its volume, migrate it
+first with `grain upgrade-postgres -data-dir /data -dsn …` in the pod,
+with replicas at 0 or the daemon paused.
 
 ## The daemon does not run as root
 
@@ -132,7 +155,7 @@ spec:
         runAsUser: 0
       containers:
         - name: chown
-          image: ghcr.io/bwsalmon/grain/grain:main
+          image: docker.io/grainai/grain:main
           command: ["/bin/sh", "-c", "chown -R 1000:1000 /data"]
           volumeMounts:
             - name: data
@@ -508,7 +531,7 @@ the granule runtime image either.** It names a self-contained image with
 its own guest disk and kernel already baked in — built from
 `third_party/granule`'s own `Dockerfile` (`docker build -t granule .` is
 the whole recipe; see `third_party/granule/deploy/k8s/gke.md`) — not
-`ghcr.io/bwsalmon/grain/k8s-sandbox`, which has no guest to boot at all,
+`docker.io/grainai/sandbox-k8s`, which has no guest to boot at all,
 and not `granule:vendored` either (`-granule-runtime-image`'s own
 default, what `scripts/granule/build-granule-image.sh` produces): that
 image carries no guest disk, so a pod running it exits immediately with

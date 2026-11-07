@@ -22,14 +22,10 @@ import {
   Box,
   Button,
   Checkbox,
-  Chip,
   FormControl,
   FormControlLabel,
   FormHelperText,
-  InputLabel,
-  ListItemText,
   MenuItem,
-  Select,
   Stack,
   TextField,
   Typography,
@@ -38,6 +34,7 @@ import api from "../api.js";
 import { useHeldIds } from "../useHeldIds.js";
 import { CustomFieldInputs, initialFieldValues } from "./CustomFields.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
+import SearchSelect from "./SearchSelect.jsx";
 import ModelPicker from "./ModelPicker.jsx";
 import { DeclaredFields, DeclaredNotice } from "./Declared.jsx";
 import Overlay from "./Overlay.jsx";
@@ -58,6 +55,7 @@ import {
   NO_CAPABILITIES_HINT,
   targetableRepos,
 } from "../state.js";
+import AccessGate from "./AccessGate.jsx";
 
 // TemplateOverlay is a template's own sub page (bwsalmon/agents#545):
 // "+ New" on the Processes page (ProcessesList) opens this blank, and clicking
@@ -206,9 +204,6 @@ function TemplateOverlay({
       // What a run ending on nothing_needed does to every task this
       // template files (model.Template.NothingNeededAction).
       nothingNeededAction: data.get("nothingNeededAction") || "close",
-      // The hostd every task this template files starts pinned to
-      // (model.Template.Hostd); "" is the default hostd.
-      hostd: String(data.get("hostd") || "").trim(),
       // Only when it changed: absent leaves the saved model alone
       // (ui.UpdateTemplateRequest.Model), and "" on a new template is
       // the same as saying nothing.
@@ -501,58 +496,25 @@ function TemplateOverlay({
             onChange={setChosenModel}
             helperText="the model every task this template files asks for. A task filed from it can still choose its own."
           />
-          <TextField
-            name="hostd"
-            label="Hostd"
-            defaultValue={template?.hostd || ""}
-            helperText="where the host work of every task this template files runs: a hostd's name, or label=value[,label=value]. Empty for the default hostd. A task filed from it can still choose its own."
-            autoComplete="off"
-            fullWidth
-            margin="normal"
-            size="small"
-          />
           <FormControl fullWidth margin="normal" size="small">
-            <InputLabel id="template-capabilities-label">
-              Legacy capabilities
-            </InputLabel>
-            <Select
-              labelId="template-capabilities-label"
-              label="Legacy capabilities"
+            <SearchSelect
               multiple
+              label="Legacy capabilities"
               value={capabilityIds}
-              onChange={(e) =>
-                setCapabilities([
-                  ...e.target.value,
-                  ...apiIds,
-                  ...capabilityRefs,
-                ])
+              onChange={(next) =>
+                setCapabilities([...next, ...apiIds, ...capabilityRefs])
               }
-              renderValue={(selected) => (
-                <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-                  {selected.map((id) => {
-                    const c = (config?.capabilities || []).find(
-                      (cap) => cap.id === id,
-                    );
-                    return (
-                      <Chip key={id} size="small" label={c ? c.name : id} />
-                    );
-                  })}
-                </Box>
-              )}
-            >
-              {capabilityOptions.length === 0 && (
-                <MenuItem disabled>{NO_CAPABILITIES_HINT}</MenuItem>
-              )}
-              {capabilityOptions.map((c) => (
-                <MenuItem key={c.id} value={c.id} title={c.description}>
-                  <Checkbox
-                    checked={capabilityIds.includes(c.id)}
-                    size="small"
-                  />
-                  <ListItemText primary={c.name} />
-                </MenuItem>
-              ))}
-            </Select>
+              noOptionsText={
+                capabilityOptions.length === 0
+                  ? NO_CAPABILITIES_HINT
+                  : "No matches"
+              }
+              options={capabilityOptions.map((c) => ({
+                value: c.id,
+                label: c.name,
+                title: c.description,
+              }))}
+            />
             <FormHelperText>{LEGACY_CAPABILITIES_HINT}</FormHelperText>
           </FormControl>
           <GrantsPicker
@@ -584,20 +546,26 @@ function TemplateOverlay({
           sx={{ mt: 2 }}
         >
           {!isNew && (
-            <Button color="error" onClick={remove} disabled={locked}>
-              Delete
-            </Button>
+            <AccessGate scope="templates:write" repo={repo}>
+              <Button color="error" onClick={remove} disabled={locked}>
+                Delete
+              </Button>
+            </AccessGate>
           )}
           <Stack direction="row" spacing={1}>
             {!isNew && onNewTask && (
-              <Button onClick={() => onNewTask(template)}>
-                New task from this template
-              </Button>
+              <AccessGate scope="tasks:write" repo={repo}>
+                <Button onClick={() => onNewTask(template)}>
+                  New task from this template
+                </Button>
+              </AccessGate>
             )}
             <Button onClick={onClose}>{locked ? "Close" : "Cancel"}</Button>
-            <Button type="submit" variant="contained" disabled={locked}>
-              {isNew ? "Add template" : "Save"}
-            </Button>
+            <AccessGate scope="templates:write" repo={repo}>
+              <Button type="submit" variant="contained" disabled={locked}>
+                {isNew ? "Add template" : "Save"}
+              </Button>
+            </AccessGate>
           </Stack>
         </Stack>
       </form>

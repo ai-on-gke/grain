@@ -22,10 +22,12 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/hostd"
+	"gopkg.in/yaml.v3"
 )
 
 // ServerConfig is one mcpServers entry (§3.1.1), keyed by capability_id in
@@ -46,6 +48,15 @@ type ServerConfig struct {
 	// binary: the daemon names an entry, and the allowlist says what that
 	// starts.
 	Run string `json:"run,omitempty"`
+	// Hostd pins a run: host server to one grain hostd: a registered
+	// hostd's name, or a label selector any connected hostd carrying
+	// every label satisfies ("k=v,k2=v2"; {"labels": {...}} in
+	// grain/config). Empty is the deployment's default hostd. It is the
+	// server's own placement, not a run's: every run that holds a grant
+	// of this server reaches it on this hostd, whatever hostd its agent
+	// CLI's connection runs on. Two entries of the same server type on
+	// two hostds are two entries, under two capability_ids.
+	Hostd HostdTarget `json:"hostd,omitempty"`
 	// Config is the server's own configuration, for a server that
 	// advertises the configure tool (§4.5): validated against that tool's
 	// config schema and sent to it after every initialize. A secret field
@@ -67,15 +78,166 @@ type ServerConfig struct {
 }
 
 // RunHost is the ServerConfig.Run of a stdio server started through grain
-// hostd.
-const RunHost = "host"
+// hostd. RunHostd is the same placement under the name Settings ->
+// Capabilities writes now; both are read alike.
+const (
+	RunHost  = "host"
+	RunHostd = "hostd"
+)
+
+// HostdTarget is ServerConfig.Hostd: a hostd's registry name, or a
+// label selector "k=v[,k=v]". It reads from a JSON or YAML string, or
+// from an object {"name": "ws-a"} or {"labels": {"pool": "gpu"}}, and is
+// always written back as the string.
+type HostdTarget string
+
+var hostdTargetNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// NormalizeHostdTarget validates s as a hostd registry name or k=v[,k=v]
+// label selector, sorting label keys so equivalent selectors compare equal.
+// Empty means the deployment's default hostd.
+func NormalizeHostdTarget(s string) (HostdTarget, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", nil
+	}
+	if strings.ContainsAny(s, " \t\n\r") {
+		return "", fmt.Errorf("host %q: a host name or k=v selector holds no spaces", s)
+	}
+	if !strings.Contains(s, "=") {
+		if !hostdTargetNameRE.MatchString(s) {
+			return "", fmt.Errorf("host name %q must be a lowercase DNS label: letters, digits and '-', at most 63", s)
+		}
+		return HostdTarget(s), nil
+	}
+	labels := map[string]string{}
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		k, v, ok := strings.Cut(part, "=")
+		if !ok || k == "" || v == "" || strings.ContainsAny(k+v, ",= \t\n\r") {
+			return "", fmt.Errorf("host selector %q: %q is not label=value", s, part)
+		}
+		labels[k] = v
+	}
+	if len(labels) == 0 {
+		return "", fmt.Errorf("host selector %q names no label", s)
+	}
+	return encodeHostdTargetLabels(labels)
+}
+
+func encodeHostdTargetObject(name string, labels map[string]string) (HostdTarget, error) {
+	name = strings.TrimSpace(name)
+	switch {
+	case name != "" && len(labels) > 0:
+		return "", fmt.Errorf("hostd: names both a host and labels; pick one")
+	case name == "" && len(labels) == 0:
+		return "", fmt.Errorf("hostd: names neither a host nor labels")
+	case name != "":
+		if !hostdTargetNameRE.MatchString(name) {
+			return "", fmt.Errorf("host name %q must be a lowercase DNS label: letters, digits and '-', at most 63", name)
+		}
+		return HostdTarget(name), nil
+	default:
+		return encodeHostdTargetLabels(labels)
+	}
+}
+
+func encodeHostdTargetLabels(labels map[string]string) (HostdTarget, error) {
+	keys := make([]string, 0, len(labels))
+	for k, v := range labels {
+		if k == "" || v == "" || strings.ContainsAny(k+v, ",= \t\n\r") {
+			return "", fmt.Errorf("host label %q=%q: keys and values may not be empty or hold ',', '=' or spaces", k, v)
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+labels[k])
+	}
+	return HostdTarget(strings.Join(parts, ",")), nil
+}
+
+// UnmarshalJSON reads a HostdTarget from either of its JSON forms.
+func (t *HostdTarget) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		norm, err := NormalizeHostdTarget(s)
+		if err != nil {
+			return err
+		}
+		*t = norm
+		return nil
+	}
+	var obj struct {
+		Name   string            `json:"name"`
+		Labels map[string]string `json:"labels"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&obj); err != nil {
+		return fmt.Errorf("hostd: want a host name, a k=v selector, or {\"name\": ...} / {\"labels\": {...}}: %v", err)
+	}
+	norm, err := encodeHostdTargetObject(obj.Name, obj.Labels)
+	if err != nil {
+		return err
+	}
+	*t = norm
+	return nil
+}
+
+// UnmarshalYAML reads a HostdTarget from either of its YAML forms
+// (settings/capabilities.yml in grain/config).
+func (t *HostdTarget) UnmarshalYAML(n *yaml.Node) error {
+	switch n.Kind {
+	case yaml.ScalarNode:
+		norm, err := NormalizeHostdTarget(n.Value)
+		if err != nil {
+			return err
+		}
+		*t = norm
+		return nil
+	case yaml.MappingNode:
+		var name string
+		var labels map[string]string
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			k, v := n.Content[i], n.Content[i+1]
+			switch k.Value {
+			case "name":
+				if err := v.Decode(&name); err != nil {
+					return fmt.Errorf("hostd.name: %v", err)
+				}
+			case "labels":
+				if err := v.Decode(&labels); err != nil {
+					return fmt.Errorf("hostd.labels: %v", err)
+				}
+			default:
+				return fmt.Errorf("hostd: unknown field %q; want name or labels", k.Value)
+			}
+		}
+		norm, err := encodeHostdTargetObject(name, labels)
+		if err != nil {
+			return err
+		}
+		*t = norm
+		return nil
+	default:
+		return fmt.Errorf("hostd: want a host name, a k=v selector, or {name: ...} / {labels: {...}}")
+	}
+}
+
+// RunsOnHost reports whether run is a placement through grain hostd.
+func RunsOnHost(run string) bool { return run == RunHost || run == RunHostd }
 
 // Stdio reports whether the entry is a stdio server.
 func (c ServerConfig) Stdio() bool { return c.Command != "" }
 
 // OnHost reports whether the entry is a stdio server started through
 // grain hostd.
-func (c ServerConfig) OnHost() bool { return c.Stdio() && c.Run == RunHost }
+func (c ServerConfig) OnHost() bool { return c.Stdio() && RunsOnHost(c.Run) }
 
 // ParseServers decodes an mcpServers object -- the value of the
 // "mcpServers" key, or a whole document holding one -- and validates every
@@ -126,14 +288,21 @@ func (c ServerConfig) Validate(id string) error {
 		return fmt.Errorf("mcpServers[%q]: args and env belong to a stdio server, not an HTTP one", id)
 	}
 	switch {
-	case c.Run != "" && c.Run != RunHost:
-		return fmt.Errorf("mcpServers[%q]: run %q: the only run is %q, through grain hostd", id, c.Run, RunHost)
-	case c.Run == RunHost && c.Command == "":
-		return fmt.Errorf("mcpServers[%q]: run: host is for a stdio server; an HTTP server on the host is reached at its serverUrl", id)
-	case c.Run == RunHost:
+	case c.Run != "" && !RunsOnHost(c.Run):
+		return fmt.Errorf("mcpServers[%q]: run %q: the only run is %q, through the host agent", id, c.Run, RunHostd)
+	case c.Hostd != "" && !RunsOnHost(c.Run):
+		return fmt.Errorf("mcpServers[%q]: hostd %q places a run: hostd server; set run: hostd beside it", id, c.Hostd)
+	case RunsOnHost(c.Run) && c.Command == "":
+		return fmt.Errorf("mcpServers[%q]: run: hostd is for a stdio server; an HTTP server on the host is reached at its serverUrl", id)
+	case RunsOnHost(c.Run):
 		if !validHostdEntryName(c.Command) {
-			return fmt.Errorf("mcpServers[%q]: with run: host, command names grain hostd's capability entry "+
+			return fmt.Errorf("mcpServers[%q]: with run: host, command names the host agent's capability entry "+
 				"(letters, digits, '-', '_' and '.'), not a path: got %q", id, c.Command)
+		}
+		if c.Hostd != "" {
+			if _, err := NormalizeHostdTarget(string(c.Hostd)); err != nil {
+				return fmt.Errorf("mcpServers[%q]: %v", id, err)
+			}
 		}
 	case c.Command != "":
 		if _, err := c.resolveCommand(""); err != nil {

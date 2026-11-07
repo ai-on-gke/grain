@@ -311,23 +311,23 @@ func TestUpdateSettingsRoundTripsDefaultCapabilities(t *testing.T) {
 
 	// Repeated deliberately: a picker can produce a duplicate, and this
 	// is a set.
-	defaults := []string{"self-debug", "self-debug"}
+	defaults := []string{"read-issues", "read-issues"}
 	saved, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &defaults})
 	if err != nil {
 		t.Fatalf("setting default capabilities: %v", err)
 	}
-	if !reflect.DeepEqual(saved.DefaultCapabilities, []string{"self-debug"}) {
+	if !reflect.DeepEqual(saved.DefaultCapabilities, []string{"read-issues"}) {
 		t.Fatalf("DefaultCapabilities = %v, want [self-debug] with the repeat dropped", saved.DefaultCapabilities)
 	}
 	read, err = c.GetSettings(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"self-debug"}) {
+	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"read-issues"}) {
 		t.Fatalf("DefaultCapabilities = %v after a re-read, want [self-debug]", read.DefaultCapabilities)
 	}
 	for _, status := range read.Capabilities {
-		if want := status.ID == "self-debug"; status.Default != want {
+		if want := status.ID == "read-issues"; status.Default != want {
 			t.Errorf("capability %s: Default = %t, want %t", status.ID, status.Default, want)
 		}
 	}
@@ -392,30 +392,30 @@ func TestUpdateSettingsAcceptsDroppingARetiredDefaultCapability(t *testing.T) {
 	// it can only be one that had a row when it was chosen and lost it to
 	// an upgrade since (OfferedCapabilities' own "scratch-repo", now
 	// github-sandbox).
-	putDefaultCapabilities(t, ctx, store, "self-debug", "scratch-repo")
+	putDefaultCapabilities(t, ctx, store, "read-issues", "scratch-repo")
 
 	read, err := c.GetSettings(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"self-debug", "scratch-repo"}) {
+	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"read-issues", "scratch-repo"}) {
 		t.Fatalf("DefaultCapabilities = %v, want it reported as stored: an operator can only clear one they can see",
 			read.DefaultCapabilities)
 	}
 
-	kept := []string{"self-debug"}
+	kept := []string{"read-issues"}
 	saved, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &kept})
 	if err != nil {
 		t.Fatalf("dropping a retired default capability: %v", err)
 	}
-	if !reflect.DeepEqual(saved.DefaultCapabilities, []string{"self-debug"}) {
+	if !reflect.DeepEqual(saved.DefaultCapabilities, []string{"read-issues"}) {
 		t.Fatalf("DefaultCapabilities = %v, want [self-debug] with the retired id gone", saved.DefaultCapabilities)
 	}
 	read, err = c.GetSettings(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"self-debug"}) {
+	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"read-issues"}) {
 		t.Fatalf("DefaultCapabilities = %v after a re-read, want [self-debug]: the retired id is gone for good",
 			read.DefaultCapabilities)
 	}
@@ -436,10 +436,10 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &deployment}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"self-debug"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"priority-dispatch"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/gadgets", []string{"self-debug", "read-issues"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/gadgets", []string{"priority-dispatch", "read-issues"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -452,19 +452,19 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 		byID[status.ID] = status
 	}
 	if got := byID["read-issues"]; !got.Default {
-		t.Errorf("gemini-key Default = false, want true: the deployment defaults it")
+		t.Errorf("read-issues Default = false, want true: the deployment defaults it")
 	}
 	// Reported even though the deployment already defaults it: dropping
 	// the deployment-wide entry leaves acme/gadgets' own standing.
 	if got := byID["read-issues"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets"}) {
-		t.Errorf("gemini-key DefaultRepos = %v, want [acme/gadgets]", got)
+		t.Errorf("read-issues DefaultRepos = %v, want [acme/gadgets]", got)
 	}
-	if got := byID["self-debug"]; got.Default {
-		t.Errorf("self-debug Default = true, want false: no task outside those two repos is filed with it")
+	if got := byID["priority-dispatch"]; got.Default {
+		t.Errorf("priority-dispatch Default = true, want false: no task outside those two repos is filed with it")
 	}
 	// Sorted by repo, the order Store.ListRepoConfigs returns.
-	if got := byID["self-debug"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets", "acme/widgets"}) {
-		t.Errorf("self-debug DefaultRepos = %v, want [acme/gadgets acme/widgets]", got)
+	if got := byID["priority-dispatch"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets", "acme/widgets"}) {
+		t.Errorf("priority-dispatch DefaultRepos = %v, want [acme/gadgets acme/widgets]", got)
 	}
 	if got := byID["github-sandbox"].DefaultRepos; len(got) != 0 {
 		t.Errorf("github-sandbox DefaultRepos = %v, want none", got)
@@ -478,7 +478,7 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 func TestSettingsReportsRepoDefaultsBeforeAnythingIsSaved(t *testing.T) {
 	t.Parallel()
 	c, _, ctx := testClient(t)
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"self-debug"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"read-issues"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -490,7 +490,7 @@ func TestSettingsReportsRepoDefaultsBeforeAnythingIsSaved(t *testing.T) {
 		t.Fatalf("Configured = true, want false: no settings row was ever saved")
 	}
 	for _, status := range read.Capabilities {
-		if status.ID != "self-debug" {
+		if status.ID != "read-issues" {
 			continue
 		}
 		if !reflect.DeepEqual(status.DefaultRepos, []string{"acme/widgets"}) {
@@ -1335,8 +1335,8 @@ func TestACustomSandboxImageWithoutAContractIsWarnedAbout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(saved.SandboxBaseImage, "k8s-sandbox-base") {
-		t.Fatalf("base image on kubernetes = %q, want k8s-sandbox-base", saved.SandboxBaseImage)
+	if !strings.Contains(saved.SandboxBaseImage, "sandbox-k8s-base") {
+		t.Fatalf("base image on kubernetes = %q, want sandbox-k8s-base", saved.SandboxBaseImage)
 	}
 	if !strings.Contains(saved.SandboxImageWarning, "needs rebuilding FROM "+saved.SandboxBaseImage) {
 		t.Fatalf("warning = %q, want it to name the base image to rebuild FROM", saved.SandboxImageWarning)
@@ -1615,8 +1615,8 @@ func TestK8sImageDefaultsFollowVersionAndTrack(t *testing.T) {
 			track:        installtrack.TrackOSS,
 			wantTag:      "v2.2.0",
 			wantBuildVer: "v2.2.0",
-			wantSandbox:  "ghcr.io/bwsalmon/grain/k8s-sandbox:v2.2.0",
-			wantGranule:  "ghcr.io/bwsalmon/grain/guest:v2.2.0",
+			wantSandbox:  "docker.io/grainai/sandbox-k8s:v2.2.0",
+			wantGranule:  "docker.io/grainai/sandbox:v2.2.0",
 		},
 		{
 			name:         "main build with +sha metadata pins to sha- tag",
@@ -1624,8 +1624,8 @@ func TestK8sImageDefaultsFollowVersionAndTrack(t *testing.T) {
 			track:        installtrack.TrackOSS,
 			wantTag:      "sha-8e1a209",
 			wantBuildVer: "v2.3.0-dev.114+8e1a209",
-			wantSandbox:  "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-8e1a209",
-			wantGranule:  "ghcr.io/bwsalmon/grain/guest:sha-8e1a209",
+			wantSandbox:  "docker.io/grainai/sandbox-k8s:sha-8e1a209",
+			wantGranule:  "docker.io/grainai/sandbox:sha-8e1a209",
 		},
 		{
 			name:         "candidate build with +sha metadata pins to sha- tag",
@@ -1633,8 +1633,8 @@ func TestK8sImageDefaultsFollowVersionAndTrack(t *testing.T) {
 			track:        installtrack.TrackOSS,
 			wantTag:      "sha-6f65669",
 			wantBuildVer: "v2.2.0-rc.1.48+6f65669",
-			wantSandbox:  "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-6f65669",
-			wantGranule:  "ghcr.io/bwsalmon/grain/guest:sha-6f65669",
+			wantSandbox:  "docker.io/grainai/sandbox-k8s:sha-6f65669",
+			wantGranule:  "docker.io/grainai/sandbox:sha-6f65669",
 		},
 		{
 			name:         "a registered track with its own image repository override picks that registry",
@@ -1643,8 +1643,18 @@ func TestK8sImageDefaultsFollowVersionAndTrack(t *testing.T) {
 			trackRepo:    "mirror.example/acme/grain",
 			wantTag:      "v2.2.0",
 			wantBuildVer: "v2.2.0",
-			wantSandbox:  "mirror.example/acme/k8s-sandbox:v2.2.0",
-			wantGranule:  "mirror.example/acme/guest:v2.2.0",
+			wantSandbox:  "mirror.example/acme/sandbox-k8s:v2.2.0",
+			wantGranule:  "mirror.example/acme/sandbox:v2.2.0",
+		},
+		{
+			name:         "legacy GHCR OSS image repository override preserves legacy image names",
+			info:         version.Info{Release: "v2.2.0"},
+			track:        installtrack.TrackOSS,
+			ossRepo:      "ghcr.io/bwsalmon/grain/grain",
+			wantTag:      "v2.2.0",
+			wantBuildVer: "v2.2.0",
+			wantSandbox:  "ghcr.io/bwsalmon/grain/k8s-sandbox:v2.2.0",
+			wantGranule:  "ghcr.io/bwsalmon/grain/guest:v2.2.0",
 		},
 		{
 			name:         "dev build (Unversioned) falls back to latest",
@@ -1652,8 +1662,8 @@ func TestK8sImageDefaultsFollowVersionAndTrack(t *testing.T) {
 			track:        installtrack.TrackOSS,
 			wantTag:      "latest",
 			wantBuildVer: "dev",
-			wantSandbox:  "ghcr.io/bwsalmon/grain/k8s-sandbox:latest",
-			wantGranule:  "ghcr.io/bwsalmon/grain/guest:latest",
+			wantSandbox:  "docker.io/grainai/sandbox-k8s:latest",
+			wantGranule:  "docker.io/grainai/sandbox:latest",
 		},
 		{
 			name:         "unstamped test binary falls back to latest",
@@ -1661,8 +1671,8 @@ func TestK8sImageDefaultsFollowVersionAndTrack(t *testing.T) {
 			track:        installtrack.TrackOSS,
 			wantTag:      "latest",
 			wantBuildVer: "dev",
-			wantSandbox:  "ghcr.io/bwsalmon/grain/k8s-sandbox:latest",
-			wantGranule:  "ghcr.io/bwsalmon/grain/guest:latest",
+			wantSandbox:  "docker.io/grainai/sandbox-k8s:latest",
+			wantGranule:  "docker.io/grainai/sandbox:latest",
 		},
 	}
 
@@ -1692,11 +1702,11 @@ func TestK8sImageDefaultsFollowVersionAndTrack(t *testing.T) {
 		missingOnGAR := func(ref string) bool {
 			return !strings.HasPrefix(ref, "mirror.example/")
 		}
-		if got := ui.ResolveDefaultK8sSandboxImage(installtracktest.Track, info, missingOnGAR); got != "ghcr.io/bwsalmon/grain/k8s-sandbox:v2.2.0" {
-			t.Errorf("ResolveDefaultK8sSandboxImage fallback = %q, want ghcr.io/bwsalmon/grain/k8s-sandbox:v2.2.0", got)
+		if got := ui.ResolveDefaultK8sSandboxImage(installtracktest.Track, info, missingOnGAR); got != "docker.io/grainai/sandbox-k8s:v2.2.0" {
+			t.Errorf("ResolveDefaultK8sSandboxImage fallback = %q, want docker.io/grainai/sandbox-k8s:v2.2.0", got)
 		}
-		if got := ui.ResolveDefaultSandboxImage(installtracktest.Track, info, missingOnGAR); got != "ghcr.io/bwsalmon/grain/guest:v2.2.0" {
-			t.Errorf("ResolveDefaultSandboxImage fallback = %q, want ghcr.io/bwsalmon/grain/guest:v2.2.0", got)
+		if got := ui.ResolveDefaultSandboxImage(installtracktest.Track, info, missingOnGAR); got != "docker.io/grainai/sandbox:v2.2.0" {
+			t.Errorf("ResolveDefaultSandboxImage fallback = %q, want docker.io/grainai/sandbox:v2.2.0", got)
 		}
 	})
 }
@@ -1719,8 +1729,8 @@ func TestK8sSettingsSourcesWarningsAndPendingRestart(t *testing.T) {
 	running := model.DefaultConfig()
 	running.K8sNamespace = model.DefaultK8sNamespace
 	running.K8sKubectl = model.DefaultK8sKubectl
-	running.K8sSandboxImage = "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-8e1a209"
-	running.K8sGranuleImage = "ghcr.io/bwsalmon/grain/guest:sha-8e1a209"
+	running.K8sSandboxImage = "docker.io/grainai/sandbox-k8s:sha-8e1a209"
+	running.K8sGranuleImage = "docker.io/grainai/sandbox:sha-8e1a209"
 	running.K8sWorkspace = model.DefaultK8sWorkspace
 	running.K8sDeployment = model.DefaultK8sDeployment
 	running.K8sContainer = model.DefaultK8sContainer
@@ -1737,10 +1747,10 @@ func TestK8sSettingsSourcesWarningsAndPendingRestart(t *testing.T) {
 	if s.DaemonBuildVersion != "v2.3.0-dev.114+8e1a209" {
 		t.Fatalf("DaemonBuildVersion = %q, want v2.3.0-dev.114+8e1a209", s.DaemonBuildVersion)
 	}
-	if s.K8sSandboxImageDefault != "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-8e1a209" {
+	if s.K8sSandboxImageDefault != "docker.io/grainai/sandbox-k8s:sha-8e1a209" {
 		t.Fatalf("K8sSandboxImageDefault = %q, want sha-8e1a209", s.K8sSandboxImageDefault)
 	}
-	if s.K8sGranuleImageDefault != "ghcr.io/bwsalmon/grain/guest:sha-8e1a209" {
+	if s.K8sGranuleImageDefault != "docker.io/grainai/sandbox:sha-8e1a209" {
 		t.Fatalf("K8sGranuleImageDefault = %q, want sha-8e1a209", s.K8sGranuleImageDefault)
 	}
 	if s.K8sKubectlDefault != "kubectl" {
@@ -1764,7 +1774,7 @@ func TestK8sSettingsSourcesWarningsAndPendingRestart(t *testing.T) {
 	}
 
 	// Customizing k8sSandboxImage to a missing tag marks source="custom", triggers a warning, and marks pendingRestart.
-	missingImg := "ghcr.io/bwsalmon/grain/k8s-sandbox:missing-tag"
+	missingImg := "docker.io/grainai/sandbox-k8s:missing-tag"
 	updated, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{
 		K8sSandboxImage: &missingImg,
 	})

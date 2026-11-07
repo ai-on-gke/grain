@@ -107,6 +107,14 @@ func classifyError(err error) (exit int, code, fix string) {
 		return exitUsage, "invalid_flag", ""
 	}
 
+	var login *ui.LoginRequiredError
+	if errors.As(err, &login) {
+		return exitAuth, "login_required", login.Fix
+	}
+	var expired *ui.TokenExpiredError
+	if errors.As(err, &expired) {
+		return exitAuth, "auth_expired", "grain login --refresh"
+	}
 	var notFound *ui.NotFoundError
 	var validation *ui.ValidationError
 	var forbidden *ui.ForbiddenError
@@ -199,7 +207,9 @@ func transportError(err error) bool {
 		return true
 	}
 	msg := err.Error()
-	return strings.Contains(msg, "connection reset by peer") || strings.Contains(msg, "tls: ")
+	return strings.Contains(msg, "connection reset by peer") ||
+		strings.Contains(msg, "tls: ") ||
+		strings.Contains(msg, "server gave HTTP response to HTTPS client")
 }
 
 // signInPage is a proxy in front of the daemon answering with its HTML
