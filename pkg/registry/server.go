@@ -39,32 +39,40 @@ const strictCSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-
 
 // ServerOptions configures a registry HTTP Server.
 type ServerOptions struct {
-	Config     Config
-	Store      *store.Store
-	Admitter   *webauth.Admitter
-	Groups     GroupResolver
-	Delegation DelegationPolicy
-	Signer     Signer
-	Transport  ConnectTransport
-	Metrics    *Metrics
-	ReplicaID  string
-	PeerAddr   string
+	Config      Config
+	Store       *store.Store
+	Admitter    *webauth.Admitter
+	Groups      GroupResolver
+	Delegation  DelegationPolicy
+	Signer      Signer
+	Transport   ConnectTransport
+	Compute     Compute
+	Resources   InstanceResources
+	ConfigRepos ConfigRepos
+	Orphans     OrphanProvider
+	Metrics     *Metrics
+	ReplicaID   string
+	PeerAddr    string
 }
 
 // Server serves the main registry HTTP listener (`:8080`), the public listener
 // (`:8081`), and the replica-to-replica peer listener (`:8082`).
 type Server struct {
-	cfg        Config
-	store      *store.Store
-	admitter   *webauth.Admitter
-	groups     GroupResolver
-	delegation DelegationPolicy
-	signer     Signer
-	transport  ConnectTransport
-	metrics    *Metrics
-	static     http.Handler
-	router     *server.Router
-	draining   atomic.Bool
+	cfg         Config
+	store       *store.Store
+	admitter    *webauth.Admitter
+	groups      GroupResolver
+	delegation  DelegationPolicy
+	signer      Signer
+	transport   ConnectTransport
+	compute     Compute
+	resources   InstanceResources
+	configRepos ConfigRepos
+	orphans     OrphanProvider
+	metrics     *Metrics
+	static      http.Handler
+	router      *server.Router
+	draining    atomic.Bool
 }
 
 type signerAdapter struct {
@@ -212,17 +220,33 @@ func NewServer(opts ServerOptions) (*Server, error) {
 	}
 
 	return &Server{
-		cfg:        opts.Config,
-		store:      opts.Store,
-		admitter:   opts.Admitter,
-		groups:     opts.Groups,
-		delegation: opts.Delegation,
-		signer:     opts.Signer,
-		transport:  opts.Transport,
-		metrics:    metrics,
-		static:     server.NewStaticHandler(),
-		router:     rt,
+		cfg:         opts.Config,
+		store:       opts.Store,
+		admitter:    opts.Admitter,
+		groups:      opts.Groups,
+		delegation:  opts.Delegation,
+		signer:      opts.Signer,
+		transport:   opts.Transport,
+		compute:     opts.Compute,
+		resources:   opts.Resources,
+		configRepos: opts.ConfigRepos,
+		orphans:     opts.Orphans,
+		metrics:     metrics,
+		static:      server.NewStaticHandler(),
+		router:      rt,
 	}, nil
+}
+
+// SetOrphanProvider attaches an OrphanProvider (such as a Reconciler) to the Server.
+func (s *Server) SetOrphanProvider(op OrphanProvider) {
+	s.orphans = op
+}
+
+// SetInstanceProviders attaches Compute, InstanceResources, and ConfigRepos providers to the Server.
+func (s *Server) SetInstanceProviders(compute Compute, resources InstanceResources, configRepos ConfigRepos) {
+	s.compute = compute
+	s.resources = resources
+	s.configRepos = configRepos
 }
 
 // Router returns the underlying subdomain/tunnel/peer Router.
@@ -298,6 +322,18 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/me", s.admitter.RequireHuman(http.HandlerFunc(s.handleGetMe)))
 	mux.Handle("GET /api/status", s.admitter.RequireHuman(http.HandlerFunc(s.handleGetStatus)))
 	mux.Handle("GET /api/admin/summary", s.admitter.RequireAdmin(http.HandlerFunc(s.handleGetAdminSummary)))
+	mux.Handle("POST /api/admin/owners/{email}", s.admitter.RequireAdmin(http.HandlerFunc(s.handleAdminSetOwnerDisabled)))
+	mux.Handle("PATCH /api/admin/owners/{email}", s.admitter.RequireAdmin(http.HandlerFunc(s.handleAdminSetOwnerDisabled)))
+	mux.Handle("PUT /api/admin/quotas/{email}", s.admitter.RequireAdmin(http.HandlerFunc(s.handleAdminSetQuota)))
+	mux.Handle("POST /api/admin/quotas/{email}", s.admitter.RequireAdmin(http.HandlerFunc(s.handleAdminSetQuota)))
+	mux.Handle("DELETE /api/admin/quotas/{email}", s.admitter.RequireAdmin(http.HandlerFunc(s.handleAdminResetQuota)))
+	mux.Handle("POST /api/admin/conflicts/resolve", s.admitter.RequireAdmin(http.HandlerFunc(s.handleAdminResolveConflict)))
+	mux.Handle("POST /api/admin/sql-instances/{name}", s.admitter.RequireAdmin(http.HandlerFunc(s.handleAdminSetSQLDraining)))
+	mux.Handle("PATCH /api/admin/sql-instances/{name}", s.admitter.RequireAdmin(http.HandlerFunc(s.handleAdminSetSQLDraining)))
+	mux.Handle("DELETE /api/admin/orphans/{zone}/{instance}", s.admitter.RequireAdmin(http.HandlerFunc(s.handleAdminDeleteOrphan)))
+	mux.Handle("DELETE /api/admin/tunnels/{name}", s.admitter.RequireAdmin(http.HandlerFunc(s.handleAdminDisconnectTunnel)))
+	mux.Handle("POST /api/admin/entries/{name}/purge", s.admitter.RequireAdmin(http.HandlerFunc(s.handleAdminPurgeEntry)))
+	mux.Handle("POST /api/admin/entries/{name}/transfer", s.admitter.RequireAdmin(http.HandlerFunc(s.handleAdminForceTransfer)))
 	// Service principals read the catalog (/api/directory, /api/route) and
 	// nothing else; shapes and control-plane endpoints are for humans
 	// (registry.design.md, "Plain service calls").
@@ -615,7 +651,19 @@ func (s *Server) handleGetAdminSummary(w http.ResponseWriter, r *http.Request) {
 	out := api.AdminSummaryResponse{
 		Replicas:       []api.ReplicaStatus{},
 		TunnelSessions: []api.TunnelSessionInfo{},
+		Owners:         []api.OwnerQuotaSummary{},
+		Quotas:         []api.OwnerQuotaSummary{},
+		ScopeConflicts: []api.AdminScopeConflict{},
+		SQLInstances:   []api.SQLInstanceStatus{},
+		Orphans:        []api.OrphanVMInfo{},
+		DeletedEntries: []api.Entry{},
+		VersionCounts:  map[string]int{},
 		AuditLog:       []api.AuditLogEntry{},
+	}
+	if s.orphans != nil {
+		if orph := s.orphans.ListOrphans(); len(orph) > 0 {
+			out.Orphans = orph
+		}
 	}
 	if s.store != nil {
 		replicaTTL := s.cfg.Tunnel.ReplicaTTL
@@ -662,6 +710,32 @@ func (s *Server) handleGetAdminSummary(w http.ResponseWriter, r *http.Request) {
 				ActiveTunnels: tunnelsByReplica[rep.ReplicaID],
 			})
 		}
+		if owners, err := s.store.ListOwnerQuotaSummaries(r.Context()); err == nil && len(owners) > 0 {
+			out.Owners = owners
+			out.Quotas = owners
+		}
+		if conflicts, err := s.store.ListAllScopeConflicts(r.Context()); err == nil && len(conflicts) > 0 {
+			out.ScopeConflicts = conflicts
+		}
+		if sqlInsts, err := s.store.ListSQLInstanceStatuses(r.Context()); err == nil && len(sqlInsts) > 0 {
+			out.SQLInstances = sqlInsts
+		}
+		if lease, err := s.store.GetLeaseStatus(r.Context(), "reconciler"); err == nil && lease != nil {
+			out.ReconcilerLease = lease
+		}
+		if allEntries, err := s.store.ListEntriesFiltered(r.Context(), true); err == nil {
+			for _, e := range allEntries {
+				if e.DeletedAt != nil {
+					out.DeletedEntries = append(out.DeletedEntries, s.enrichAPIEntry(r.Context(), e, true))
+					continue
+				}
+				ver := strings.TrimSpace(e.GrainVersion)
+				if ver == "" {
+					ver = "unreported"
+				}
+				out.VersionCounts[ver]++
+			}
+		}
 		audits, err := s.store.ListAuditLog(r.Context(), 100)
 		if err != nil {
 			writeInternalError(w, err)
@@ -672,6 +746,8 @@ func (s *Server) handleGetAdminSummary(w http.ResponseWriter, r *http.Request) {
 				ID:         a.ID,
 				At:         a.At,
 				ActorEmail: a.ActorEmail,
+				Via:        a.Via,
+				GrantID:    a.GrantID,
 				Action:     a.Action,
 				EntryID:    a.EntryID,
 				EntryName:  a.EntryName,
@@ -1547,9 +1623,16 @@ func (s *Server) handleOfferTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	targetOwner := strings.TrimSpace(req.To)
+	targetOwner := strings.ToLower(strings.TrimSpace(req.To))
 	if targetOwner == "" {
-		targetOwner = strings.TrimSpace(req.NewOwner)
+		targetOwner = strings.ToLower(strings.TrimSpace(req.NewOwner))
+	}
+	if req.Cancel {
+		targetOwner = ""
+	}
+	if targetOwner != "" && !strings.Contains(targetOwner, "@") {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", "valid target owner email is required")
+		return
 	}
 
 	var ownerGroupPtr *string
@@ -1574,14 +1657,68 @@ func (s *Server) handleOfferTransfer(w http.ResponseWriter, r *http.Request) {
 		ownerGroupPtr = &targetGroup
 	}
 
+	if req.Force {
+		if !caller.IsAdmin {
+			writeJSONError(w, http.StatusForbidden, "forbidden", "only registry admins may force-transfer entry ownership")
+			return
+		}
+		if targetOwner == "" {
+			writeJSONError(w, http.StatusBadRequest, "invalid_argument", "force transfer requires a non-empty target owner email")
+			return
+		}
+		s.performAdminForceTransfer(w, r, caller, entry, targetOwner, ownerGroupPtr)
+		return
+	}
+
+	if targetOwner == "" && !req.Cancel && ownerGroupPtr == nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", "transfer requires 'to' email (or 'cancel: true' to cancel a pending offer)")
+		return
+	}
+
 	updated, err := s.store.OfferEntryTransfer(r.Context(), entry.ID, entry.Version, targetOwner, ownerGroupPtr)
 	if err != nil {
 		s.writeStoreError(w, err)
 		return
 	}
-	_ = s.store.RecordAudit(r.Context(), caller.Email, "entry_transfer_offer", updated.ID, updated.Name, map[string]any{"to": updated.PendingOwner})
+	auditAction := "entry_transfer_offer"
+	if targetOwner == "" {
+		auditAction = "entry_transfer_cancel"
+	}
+	_ = s.store.RecordAudit(r.Context(), caller.Email, auditAction, updated.ID, updated.Name, map[string]any{
+		"from":        entry.OwnerEmail,
+		"to":          updated.PendingOwner,
+		"owner_group": updated.OwnerGroup,
+		"expires_at":  updated.TransferExpiresAt,
+	})
 	if s.router != nil {
 		s.router.HostCache().Put(updated)
+	}
+	writeJSON(w, http.StatusOK, s.enrichAPIEntry(r.Context(), updated, caller.IsAdmin))
+}
+
+func (s *Server) performAdminForceTransfer(w http.ResponseWriter, r *http.Request, caller *webauth.AdmittedCaller, entry *store.EntryRow, targetOwner string, ownerGroupPtr *string) {
+	nextGroup := entry.OwnerGroup
+	if ownerGroupPtr != nil {
+		nextGroup = *ownerGroupPtr
+	}
+	if entry.Kind == api.KindInstance && entry.SSHGrantedTo != "" && s.resources != nil {
+		_ = s.resources.RevokeSSH(r.Context(), entry.Zone, entry.GCEInstanceID, entry.SSHGrantedTo)
+	}
+	updated, err := s.store.TransferEntryOwner(r.Context(), entry.ID, entry.Version, targetOwner, nextGroup)
+	if err != nil {
+		s.writeStoreError(w, err)
+		return
+	}
+	_ = s.store.RecordAudit(r.Context(), caller.Email, "admin_entry_force_transfer", updated.ID, updated.Name, map[string]any{
+		"from":        entry.OwnerEmail,
+		"to":          updated.OwnerEmail,
+		"quota_owner": updated.OwnerEmail,
+		"owner_group": updated.OwnerGroup,
+		"forced":      true,
+	})
+	if s.router != nil {
+		s.router.HostCache().Put(updated)
+		s.router.ReconcileLocalTunnel(r.Context(), updated.Name)
 	}
 	writeJSON(w, http.StatusOK, s.enrichAPIEntry(r.Context(), updated, caller.IsAdmin))
 }
@@ -1613,18 +1750,399 @@ func (s *Server) handleAcceptTransfer(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusForbidden, "forbidden", "only the named pending transfer recipient may accept this transfer")
 		return
 	}
+	if entry.Kind == api.KindInstance && entry.SSHGrantedTo != "" && s.resources != nil {
+		_ = s.resources.RevokeSSH(r.Context(), entry.Zone, entry.GCEInstanceID, entry.SSHGrantedTo)
+	}
 
 	updated, err := s.store.AcceptEntryTransfer(r.Context(), entry.ID, entry.Version, caller.Email)
 	if err != nil {
 		s.writeStoreError(w, err)
 		return
 	}
-	_ = s.store.RecordAudit(r.Context(), caller.Email, "entry_transfer_accept", updated.ID, updated.Name, map[string]any{"from": entry.OwnerEmail, "to": updated.OwnerEmail})
+	_ = s.store.RecordAudit(r.Context(), caller.Email, "entry_transfer_accept", updated.ID, updated.Name, map[string]any{
+		"from":        entry.OwnerEmail,
+		"to":          updated.OwnerEmail,
+		"quota_owner": updated.OwnerEmail,
+		"owner_group": updated.OwnerGroup,
+	})
 	if s.router != nil {
 		s.router.HostCache().Put(updated)
 		s.router.ReconcileLocalTunnel(r.Context(), updated.Name)
 	}
 	writeJSON(w, http.StatusOK, s.enrichAPIEntry(r.Context(), updated, caller.IsAdmin))
+}
+
+func (s *Server) handleAdminForceTransfer(w http.ResponseWriter, r *http.Request) {
+	caller := webauth.AdmittedFromContext(r.Context())
+	if !s.checkCallerEnabled(w, r, caller) {
+		return
+	}
+	if s.store == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "unavailable", "store is not configured")
+		return
+	}
+	name := strings.ToLower(strings.TrimSpace(r.PathValue("name")))
+	entry, err := s.store.GetEntryByName(r.Context(), name)
+	if errors.Is(err, store.ErrNotFound) {
+		writeJSONError(w, http.StatusNotFound, "not_found", fmt.Sprintf("entry %q not found", name))
+		return
+	}
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	var req api.TransferRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", "invalid JSON body")
+		return
+	}
+	targetOwner := strings.ToLower(strings.TrimSpace(req.To))
+	if targetOwner == "" {
+		targetOwner = strings.ToLower(strings.TrimSpace(req.NewOwner))
+	}
+	if targetOwner == "" || !strings.Contains(targetOwner, "@") {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", "valid target owner email is required")
+		return
+	}
+	var ownerGroupPtr *string
+	if req.ClearOwnerGroup {
+		empty := ""
+		ownerGroupPtr = &empty
+	} else if strings.TrimSpace(req.OwnerGroup) != "" {
+		g := normalizeGroupSpec(req.OwnerGroup)
+		ownerGroupPtr = &g
+	}
+	s.performAdminForceTransfer(w, r, caller, entry, targetOwner, ownerGroupPtr)
+}
+
+func (s *Server) handleAdminSetOwnerDisabled(w http.ResponseWriter, r *http.Request) {
+	caller := webauth.AdmittedFromContext(r.Context())
+	if !s.checkCallerEnabled(w, r, caller) {
+		return
+	}
+	if s.store == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "unavailable", "store is not configured")
+		return
+	}
+	email := strings.ToLower(strings.TrimSpace(r.PathValue("email")))
+	if email == "" || !strings.Contains(email, "@") {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", "valid owner email is required")
+		return
+	}
+	var req api.SetOwnerDisabledRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", "invalid JSON body")
+		return
+	}
+	if err := s.store.SetOwnerDisabled(r.Context(), email, req.Disabled); err != nil {
+		s.writeStoreError(w, err)
+		return
+	}
+	if req.Disabled && s.router != nil {
+		if entries, err := s.store.ListEntries(r.Context()); err == nil {
+			for _, e := range entries {
+				if strings.EqualFold(e.OwnerEmail, email) {
+					s.router.HostCache().Put(e)
+					s.router.ReconcileLocalTunnel(r.Context(), e.Name)
+				}
+			}
+		}
+	}
+	action := "admin_owner_enable"
+	if req.Disabled {
+		action = "admin_owner_disable"
+	}
+	_ = s.store.RecordAudit(r.Context(), caller.Email, action, "", "", map[string]any{
+		"owner_email": email,
+		"disabled":    req.Disabled,
+	})
+	sum, err := s.store.GetOwnerQuotaSummary(r.Context(), email)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sum)
+}
+
+func (s *Server) handleAdminSetQuota(w http.ResponseWriter, r *http.Request) {
+	caller := webauth.AdmittedFromContext(r.Context())
+	if !s.checkCallerEnabled(w, r, caller) {
+		return
+	}
+	if s.store == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "unavailable", "store is not configured")
+		return
+	}
+	email := strings.ToLower(strings.TrimSpace(r.PathValue("email")))
+	if email == "" || !strings.Contains(email, "@") {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", "valid owner email is required")
+		return
+	}
+	var req api.SetQuotaRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", "invalid JSON body")
+		return
+	}
+	if req.MaxInstanceUnits < 0 || req.MaxConnected < 0 {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", "quota limits must be non-negative")
+		return
+	}
+	if err := s.store.SetQuota(r.Context(), email, req.MaxInstanceUnits, req.MaxConnected, caller.Email); err != nil {
+		s.writeStoreError(w, err)
+		return
+	}
+	_ = s.store.RecordAudit(r.Context(), caller.Email, "admin_quota_set", "", "", map[string]any{
+		"owner_email":        email,
+		"max_instance_units": req.MaxInstanceUnits,
+		"max_connected":      req.MaxConnected,
+	})
+	sum, err := s.store.GetOwnerQuotaSummary(r.Context(), email)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sum)
+}
+
+func (s *Server) handleAdminResetQuota(w http.ResponseWriter, r *http.Request) {
+	caller := webauth.AdmittedFromContext(r.Context())
+	if !s.checkCallerEnabled(w, r, caller) {
+		return
+	}
+	if s.store == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "unavailable", "store is not configured")
+		return
+	}
+	email := strings.ToLower(strings.TrimSpace(r.PathValue("email")))
+	if email == "" || !strings.Contains(email, "@") {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", "valid owner email is required")
+		return
+	}
+	if err := s.store.DeleteQuota(r.Context(), email); err != nil {
+		s.writeStoreError(w, err)
+		return
+	}
+	_ = s.store.RecordAudit(r.Context(), caller.Email, "admin_quota_reset", "", "", map[string]any{
+		"owner_email": email,
+	})
+	sum, err := s.store.GetOwnerQuotaSummary(r.Context(), email)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sum)
+}
+
+func (s *Server) handleAdminResolveConflict(w http.ResponseWriter, r *http.Request) {
+	caller := webauth.AdmittedFromContext(r.Context())
+	if !s.checkCallerEnabled(w, r, caller) {
+		return
+	}
+	if s.store == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "unavailable", "store is not configured")
+		return
+	}
+	var req api.ResolveConflictRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", "invalid JSON body")
+		return
+	}
+	if strings.TrimSpace(req.EntryName) == "" || strings.TrimSpace(req.Repo) == "" {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", "entry_name and repo are required")
+		return
+	}
+	if err := s.store.ResolveScopeConflict(r.Context(), req.EntryName, req.Repo, req.PathPrefix, req.Resolution); err != nil {
+		s.writeStoreError(w, err)
+		return
+	}
+	_ = s.store.RecordAudit(r.Context(), caller.Email, "admin_conflict_resolve", "", strings.ToLower(strings.TrimSpace(req.EntryName)), map[string]any{
+		"repo":        req.Repo,
+		"path_prefix": req.PathPrefix,
+		"resolution":  req.Resolution,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleAdminSetSQLDraining(w http.ResponseWriter, r *http.Request) {
+	caller := webauth.AdmittedFromContext(r.Context())
+	if !s.checkCallerEnabled(w, r, caller) {
+		return
+	}
+	if s.store == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "unavailable", "store is not configured")
+		return
+	}
+	name := strings.TrimSpace(r.PathValue("name"))
+	var req api.SetSQLInstanceDrainingRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", "invalid JSON body")
+		return
+	}
+	if err := s.store.SetSQLInstanceDraining(r.Context(), name, req.Draining); err != nil {
+		s.writeStoreError(w, err)
+		return
+	}
+	_ = s.store.RecordAudit(r.Context(), caller.Email, "admin_sql_instance_draining", "", "", map[string]any{
+		"sql_instance": name,
+		"draining":     req.Draining,
+	})
+	st, err := s.store.GetSQLInstanceStatus(r.Context(), name)
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
+func (s *Server) handleAdminDeleteOrphan(w http.ResponseWriter, r *http.Request) {
+	caller := webauth.AdmittedFromContext(r.Context())
+	if !s.checkCallerEnabled(w, r, caller) {
+		return
+	}
+	zone := strings.TrimSpace(r.PathValue("zone"))
+	instID := strings.TrimSpace(r.PathValue("instance"))
+	if zone == "" || instID == "" {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", "zone and instance are required")
+		return
+	}
+	if s.orphans != nil {
+		if err := s.orphans.DeleteOrphan(r.Context(), zone, instID); err != nil {
+			writeInternalError(w, err)
+			return
+		}
+	} else if s.compute != nil {
+		if err := s.compute.DeleteInstance(r.Context(), zone, instID); err != nil {
+			writeInternalError(w, err)
+			return
+		}
+	} else {
+		writeJSONError(w, http.StatusServiceUnavailable, "unavailable", "compute provider is not configured")
+		return
+	}
+	if s.store != nil {
+		_ = s.store.RecordAudit(r.Context(), caller.Email, "admin_orphan_delete", "", "", map[string]any{
+			"zone":        zone,
+			"instance_id": instID,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "zone": zone, "instance_id": instID})
+}
+
+func (s *Server) handleAdminDisconnectTunnel(w http.ResponseWriter, r *http.Request) {
+	caller := webauth.AdmittedFromContext(r.Context())
+	if !s.checkCallerEnabled(w, r, caller) {
+		return
+	}
+	if s.store == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "unavailable", "store is not configured")
+		return
+	}
+	name := strings.ToLower(strings.TrimSpace(r.PathValue("name")))
+	entry, err := s.store.GetEntryByName(r.Context(), name)
+	if errors.Is(err, store.ErrNotFound) {
+		writeJSONError(w, http.StatusNotFound, "not_found", fmt.Sprintf("entry %q not found", name))
+		return
+	}
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	if err := s.store.DisconnectEntryTunnel(r.Context(), entry.ID, entry.Name, "admin disconnected tunnel"); err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	if s.router != nil {
+		s.router.ReconcileLocalTunnel(r.Context(), entry.Name)
+	}
+	_ = s.store.RecordAudit(r.Context(), caller.Email, "admin_tunnel_disconnect", entry.ID, entry.Name, nil)
+	writeJSON(w, http.StatusOK, map[string]any{"disconnected": true, "entry_name": entry.Name})
+}
+
+func (s *Server) handleAdminPurgeEntry(w http.ResponseWriter, r *http.Request) {
+	caller := webauth.AdmittedFromContext(r.Context())
+	if !s.checkCallerEnabled(w, r, caller) {
+		return
+	}
+	if s.store == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "unavailable", "store is not configured")
+		return
+	}
+	name := strings.ToLower(strings.TrimSpace(r.PathValue("name")))
+	var req api.HardPurgeRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req)
+	}
+
+	entry, err := s.store.GetLatestDeletedEntryByName(r.Context(), name)
+	if errors.Is(err, store.ErrNotFound) && req.Force {
+		entry, err = s.store.GetEntryByName(r.Context(), name)
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		writeJSONError(w, http.StatusNotFound, "not_found", fmt.Sprintf("deleted entry %q not found", name))
+		return
+	}
+	if err != nil {
+		writeInternalError(w, err)
+		return
+	}
+	if entry.DeletedAt == nil && !req.Force {
+		writeJSONError(w, http.StatusConflict, "conflict", "entry is still active; delete it first or pass force=true")
+		return
+	}
+
+	clearCols := entry.Kind != api.KindInstance
+	if entry.Kind == api.KindInstance {
+		if s.compute != nil && entry.GCEInstanceID != "" && entry.Zone != "" {
+			if err := s.compute.DeleteInstance(r.Context(), entry.Zone, entry.GCEInstanceID); err != nil {
+				writeInternalError(w, err)
+				return
+			}
+		}
+		if s.configRepos != nil && s.cfg.ConfigRepos.Provider != "" && s.cfg.ConfigRepos.Provider != "none" {
+			if err := s.configRepos.ArchiveRepo(r.Context(), entry.Name); err != nil {
+				writeInternalError(w, err)
+				return
+			}
+		}
+		if s.resources != nil {
+			resSpec := InstanceResourceSpec{
+				EntryID:     entry.ID,
+				Name:        entry.Name,
+				OwnerEmail:  entry.OwnerEmail,
+				SQLInstance: entry.SQLInstance,
+				ShipLogs:    entry.ShipLogs,
+				AllowSSH:    entry.AllowSSH,
+			}
+			resBundle := InstanceResourceBundle{
+				ServiceAccountEmail: entry.ServiceAccount,
+				SQLInstance:         entry.SQLInstance,
+				DatabaseName:        entry.DBName,
+				SecretPrefix:        entry.SecretPrefix,
+			}
+			if err := s.resources.Teardown(r.Context(), resSpec, resBundle, false); err != nil {
+				writeInternalError(w, err)
+				return
+			}
+			clearCols = true
+		} else if entry.DBName == "" && entry.ServiceAccount == "" && entry.SecretPrefix == "" && entry.ConfigRepo == "" {
+			clearCols = true
+		}
+	}
+
+	purged, err := s.store.HardPurgeEntry(r.Context(), entry.ID, clearCols, req.ReleaseReservation)
+	if err != nil {
+		s.writeStoreError(w, err)
+		return
+	}
+	if s.router != nil {
+		s.router.HostCache().Invalidate(purged.Name)
+		s.router.ReconcileLocalTunnel(r.Context(), purged.Name)
+	}
+	_ = s.store.RecordAudit(r.Context(), caller.Email, "admin_entry_purge", purged.ID, purged.Name, map[string]any{
+		"quota_owner":         purged.OwnerEmail,
+		"release_reservation": req.ReleaseReservation,
+	})
+	writeJSON(w, http.StatusOK, s.enrichAPIEntry(r.Context(), purged, true))
 }
 
 func (s *Server) loadAndAuthorizeManagedEntry(w http.ResponseWriter, r *http.Request, caller *webauth.AdmittedCaller, name string, includeDeleted bool) (*store.EntryRow, bool) {
