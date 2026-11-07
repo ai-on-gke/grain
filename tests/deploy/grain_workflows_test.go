@@ -2067,13 +2067,16 @@ func TestTheReleaseTrainNeverPromotesARelease(t *testing.T) {
 	w := releaseTrainWorkflow(t)
 	forbidden := []string{
 		"release-from-trunk.sh approve", "release-from-trunk.sh reject", "release-from-trunk.sh rollback",
-		"release-images.sh promote", "promote-release.yml", "promote.yml",
+		"release-images.sh promote", "release-assets.sh promote", "promote-release.yml", "promote.yml",
 		"refs/tags/latest", "git tag", "git push",
 	}
 	for _, f := range []struct{ path, text string }{
 		{".github/workflows/release-train.yml", stripComments(read(t, ".github", "workflows", "release-train.yml"))},
 		{".github/workflows/rc-qualification.yml", stripComments(read(t, ".github", "workflows", "rc-qualification.yml"))},
 		{"scripts/release-train-actions.sh", stripComments(read(t, "scripts", "release-train-actions.sh"))},
+		// The train's release-asset publisher runs release-assets.sh
+		// train-tag on the tags the train pushes; promote is not its.
+		{".github/workflows/release-train-assets.yml", stripComments(read(t, ".github", "workflows", "release-train-assets.yml"))},
 	} {
 		for _, bad := range append(forbidden, "release-images.sh", "/git/refs", "/git/tags") {
 			if strings.Contains(f.text, bad) {
@@ -2090,6 +2093,12 @@ func TestTheReleaseTrainNeverPromotesARelease(t *testing.T) {
 				}
 			}
 		}
+	}
+	// And release-assets.sh's train-tag itself refuses vX.Y.Z and latest
+	// (release-assets_test.sh runs it), rather than promoting them.
+	trainTag := releaseScriptFunction(t, read(t, "scripts", "release-assets.sh"), "train_tag")
+	if strings.Contains(stripComments(trainTag), "promote ") {
+		t.Errorf("scripts/release-assets.sh's train_tag runs promote:\n%s", trainTag)
 	}
 	script := read(t, "scripts", "release-from-trunk.sh")
 	if !strings.Contains(script, `release-images.sh pending`) && !strings.Contains(script, `images pending`) {

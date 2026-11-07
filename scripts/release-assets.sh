@@ -393,6 +393,20 @@ point_tag() {
   ok "$status" || die "pointing tag $1 at $2 answered $status: $(head -c 300 "$scratch/body")"
 }
 
+# get_asset ASSET-ID OUT: one release asset's bytes, through the API.
+get_asset() {
+  local attempt status
+  for attempt in 1 2 3; do
+    status="$(curl -sSL -o "$2" -w '%{http_code}' ${token:+-H "Authorization: Bearer $token"} \
+      -H 'Accept: application/octet-stream' "$api_url/repos/$repo/releases/assets/$1" || echo 000)"
+    case "$status" in
+      000 | 5??) sleep $((5 * attempt)) ;;
+      *) break ;;
+    esac
+  done
+  ok "$status"
+}
+
 held_version() {
   jq -r '.version // empty' "$scratch/held.json" 2>/dev/null || true
 }
@@ -465,9 +479,13 @@ publish_one() {
     upload_base="$(jq -r '.upload_url | sub("\\{.*$"; "")' "$scratch/release")"
     asset_list "$id" > "$scratch/existing"
     if grep -q ' images.json$' "$scratch/existing"; then
-      curl -sSL ${token:+-H "Authorization: Bearer $token"} -H 'Accept: application/octet-stream' -o "$scratch/held.json" \
-        "$api_url/repos/$repo/releases/assets/$(awk '$2 == "images.json" {print $1; exit}' "$scratch/existing")" || true
+      # A manifest that is there but cannot be read is not "no manifest":
+      # taking it for one would let a channel move onto a commit its
+      # current one is not an ancestor of. Fail closed instead.
+      get_asset "$(awk '$2 == "images.json" {print $1; exit}' "$scratch/existing")" "$scratch/held.json" ||
+        die "could not read $release's images.json; refusing to publish over it"
       held="$(jq -r '.commit // empty' "$scratch/held.json" 2>/dev/null || true)"
+      [[ "$held" =~ ^[0-9a-f]{40}$ ]] || die "$release's images.json names no commit; refusing to publish over it"
     fi
   else
     : > "$scratch/existing"
@@ -582,19 +600,27 @@ prune() {
   while :; do
     status="$(api GET "/repos/$repo/releases?per_page=100&page=$page")"
     ok "$status" || die "listing releases answered $status"
-    jq -r '.[] | "\(.created_at) \(.id) \(.tag_name)"' "$scratch/body" >> "$scratch/releases"
+    jq -r '.[] | "\(.created_at) \(.id) \(.tag_name) \([.assets[]? | select(.name == "images.json" or .name == "images.json.prev") | .id] | join(","))"' \
+      "$scratch/body" >> "$scratch/releases"
     n="$(jq length "$scratch/body")"
     [ "$n" -lt 100 ] && break
     page=$((page + 1))
   done
   : > "$scratch/referenced"
-  while read -r _ id tag; do
+  # Every manifest a release carries -- images.json, and images.json.prev
+  # mid-swap -- is read, and one that cannot be read stops the prune: a
+  # holder left off this list for a transient error would be deleted
+  # while a channel or vX.Y.Z still points at it.
+  local manifests asset
+  while read -r _ id tag manifests; do
     case "$tag" in sha-*) continue ;; esac
-    if download "$server_url/$repo/releases/download/$tag" images.json "$scratch/ref.json"; then
-      jq -r '.images[]?.release // empty' "$scratch/ref.json" >> "$scratch/referenced" 2>/dev/null || true
-    fi
+    for asset in ${manifests//,/ }; do
+      get_asset "$asset" "$scratch/ref.json" || die "could not read $tag's manifest (asset $asset); pruning nothing"
+      jq -r '.images | to_entries | .[] | .value.release // empty' "$scratch/ref.json" >> "$scratch/referenced" ||
+        die "$tag's manifest (asset $asset) is not one this can read; pruning nothing"
+    done
   done < "$scratch/releases"
-  while read -r _ id tag; do
+  while read -r _ id tag _; do
     i=$((i + 1))
     [ "$i" -le "$keep" ] && continue
     if grep -qx "$tag" "$scratch/referenced"; then
@@ -606,7 +632,7 @@ prune() {
     status="$(write DELETE "/repos/$repo/git/refs/tags/$tag")"
     ok "$status" || [ "$status" = 422 ] || [ "$status" = 404 ] || die "deleting tag $tag answered $status"
     say "pruned $tag"
-  done < <(grep ' sha-' "$scratch/releases" | sort -r)
+  done < <(awk '$3 ~ /^sha-[0-9a-f]{12}$/' "$scratch/releases" | sort -r)
 }
 
 # --- reading releases -------------------------------------------------------
@@ -838,7 +864,8 @@ train_tag() {
     v*-rc.*) train_phase rc "$tag" ;;
     v*-pending) train_phase pending "${tag%-pending}" ;;
     v*-retracted) train_phase retract "${tag%-retracted}" ;;
-    v[0-9]*.[0-9]*.[0-9]* | latest) promote "${tag#latest}" ;;
+    # vX.Y.Z and latest are a person's approval (promote-release.yml's
+    # `release-assets.sh promote`), never the train's.
     *) die "$tag is not a tag the release train publishes" ;;
   esac
 }

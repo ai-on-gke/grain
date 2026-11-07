@@ -250,9 +250,11 @@ jobs:
     if: inputs.decision == 'approve' || inputs.decision == ''
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # release-assets.sh promote creates or updates the vX.Y.Z release and
+    # marks it latest: a release write, which is contents: write. It
+    # pushes no image and reaches no cloud, so it holds nothing else.
     permissions:
-      contents: read
-      id-token: write
+      contents: write
     concurrency:
       group: ${{ github.workflow }}-promote-${{ inputs.version }}
       cancel-in-progress: false
@@ -262,17 +264,6 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: "20"
-
-      - name: Setup Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
-        with:
-          go-version-file: go.mod
-          cache: false
 
       - name: Refuse anybody but a person
         env:
@@ -328,20 +319,10 @@ jobs:
             echo "DRY_RUN=${dry_run}"
           } >> "$GITHUB_ENV"
 
-      - name: Authenticate to Google Cloud (WIF)
-        if: vars.GCP_WIF_PROVIDER != '' && vars.GCP_SA_EMAIL != ''
-        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
-        with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
-          service_account: ${{ vars.GCP_SA_EMAIL }}
-
-      - name: Configure Artifact Registry Docker authentication
-        if: vars.GCP_WIF_PROVIDER != '' && vars.GCP_SA_EMAIL != ''
-        run: gcloud auth configure-docker us-docker.pkg.dev --quiet
-
       - name: Publish the last promoted release as latest
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ASSETS_DIR: ${{ runner.temp }}/release-assets
         run: |
           set -euo pipefail
           if [ "${DRY_RUN}" = "true" ]; then

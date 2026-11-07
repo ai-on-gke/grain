@@ -77,7 +77,21 @@ jobs:
           if [ -z "$tag" ]; then
             tag="${GITHUB_REF#refs/tags/}"
           fi
+          # Only the train's own names: never vX.Y.Z or latest, which are
+          # promote-release.yml's (release-assets.sh train-tag refuses
+          # them too).
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(rc\.[0-9]+(-discarded)?|pending|retracted)$ ]]; then
+            echo "release-train-assets: '$tag' is not a release-train tag" >&2
+            exit 1
+          fi
           args=()
+          # A dispatch from any ref but main (or a tag push) plans only, so
+          # trying a branch out never writes the repository's releases --
+          # the same rule release.yml and promote-release.yml keep.
+          case "${GITHUB_REF:-}" in
+            refs/heads/main | refs/tags/v*) ;;
+            *) INPUT_DRY_RUN=true ;;
+          esac
           if [ "${INPUT_DRY_RUN:-false}" = "true" ]; then
             args+=(--dry-run)
           fi

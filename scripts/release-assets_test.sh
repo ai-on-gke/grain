@@ -220,5 +220,64 @@ check "prune plans retention without writing anything" '[ "$status" = 0 ] && gre
 run bash "$assets" load
 check "load checks every image ID the manifest names" '[ "$status" = 0 ] && [ "$(grep -c "^release-assets.sh: loaded" <<< "$out")" = 3 ]'
 
+# The train publishes its own names only: vX.Y.Z and latest are a person's
+# approval (promote-release.yml), never a pushed train tag's.
+run bash "$assets" --dry-run train-tag v3.4.0
+check "train-tag refuses a release tag" '[ "$status" != 0 ] && grep -q "not a tag the release train publishes" <<< "$out" && ! grep -q "published v3.4.0" <<< "$out"'
+run bash "$assets" --dry-run train-tag latest
+check "train-tag refuses latest" '[ "$status" != 0 ] && grep -q "not a tag the release train publishes" <<< "$out"'
+
+# prune against a fake GitHub API: three sha- releases, the oldest of
+# which channel-main points at. A manifest that cannot be read stops the
+# prune before anything is deleted -- a holder missing from the referenced
+# list would otherwise be deleted while channel-main still points at it.
+mkdir -p "$work/fakeapi"
+cat > "$work/fakeapi/curl" <<'EOF'
+#!/usr/bin/env bash
+out=/dev/null method=GET url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift ;;
+    -X) method="$2"; shift ;;
+    -w | -H | --data-binary | -T) shift ;;
+    -*) ;;
+    *) url="$1" ;;
+  esac
+  shift
+done
+echo "$method $url" >> "$FAKE_LOG"
+case "$method $url" in
+  "GET "*"/releases?per_page=100&page=1")
+    cat > "$out" <<'JSON'
+[{"created_at":"2026-11-03T00:00:00Z","id":3,"tag_name":"sha-cccccccccccc","assets":[{"id":30,"name":"images.json"}]},
+ {"created_at":"2026-11-02T00:00:00Z","id":2,"tag_name":"sha-bbbbbbbbbbbb","assets":[{"id":20,"name":"images.json"}]},
+ {"created_at":"2026-11-01T00:00:00Z","id":1,"tag_name":"sha-aaaaaaaaaaaa","assets":[{"id":10,"name":"images.json"}]},
+ {"created_at":"2026-11-01T00:00:00Z","id":9,"tag_name":"channel-main","assets":[{"id":90,"name":"images.json"}]}]
+JSON
+    printf 200 ;;
+  "GET "*"/releases/assets/90")
+    if [ "${FAKE_MANIFEST_STATUS:-200}" = 200 ]; then
+      echo '{"schema":2,"images":{"grain":{"release":"sha-aaaaaaaaaaaa"}}}' > "$out"
+    else
+      echo '{"message":"Not Found"}' > "$out"
+    fi
+    printf '%s' "${FAKE_MANIFEST_STATUS:-200}" ;;
+  "DELETE "*) echo '' > "$out"; printf 204 ;;
+  *) echo "{}" > "$out"; printf 404 ;;
+esac
+EOF
+chmod +x "$work/fakeapi/curl"
+export FAKE_LOG="$work/fakeapi/log"
+: > "$FAKE_LOG"
+run env PATH="$work/fakeapi:$PATH" GITHUB_TOKEN=fake RELEASE_ASSETS_KEEP=1 FAKE_MANIFEST_STATUS=404 bash "$assets" prune
+check "prune deletes nothing when a pointer's manifest cannot be read" \
+  '[ "$status" != 0 ] && grep -q "pruning nothing" <<< "$out" && ! grep -q "^DELETE" "$FAKE_LOG"'
+: > "$FAKE_LOG"
+run env PATH="$work/fakeapi:$PATH" GITHUB_TOKEN=fake RELEASE_ASSETS_KEEP=1 bash "$assets" prune
+check "prune keeps the newest and every holder pointed at, and deletes the rest" \
+  '[ "$status" = 0 ] && grep -q "keeping sha-aaaaaaaaaaaa" <<< "$out" && grep -q "pruned sha-bbbbbbbbbbbb" <<< "$out" &&
+   [ "$(grep -c "^DELETE" "$FAKE_LOG")" = 2 ] && ! grep -q "^DELETE .*/releases/1$" "$FAKE_LOG" && ! grep -q "^DELETE .*/releases/3$" "$FAKE_LOG" &&
+   ! grep -q "^DELETE .*/releases/9$" "$FAKE_LOG"'
+
 echo "$((cases - failures)) of $cases passed"
 [ "$failures" = 0 ]

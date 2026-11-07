@@ -215,3 +215,19 @@ func containsString(list []string, s string) bool {
 	}
 	return false
 }
+
+// The promote job publishes vX.Y.Z as GitHub release assets
+// (release-assets.sh promote creates or updates the release and marks it
+// latest), which is a contents: write -- with contents: read every
+// approved promotion failed with a 403 (task 3039's review). It holds
+// nothing else: no OIDC token, no cloud login, since it pushes no image.
+func TestPromoteReleasePromoteJobCanWriteTheReleaseAndNothingElse(t *testing.T) {
+	job := namedJob(t, stripComments(read(t, ".github", "workflows", "promote-release.yml")), "promote")
+	contains(t, job, "bash ./scripts/release-assets.sh promote")
+	contains(t, job, "      contents: write")
+	for _, bad := range []string{"id-token:", "packages:", "google-github-actions/auth", "gcloud auth"} {
+		if strings.Contains(job, bad) {
+			t.Errorf("promote-release.yml's promote job holds %q, which publishing release assets does not need:\n%s", bad, job)
+		}
+	}
+}
