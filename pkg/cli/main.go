@@ -654,11 +654,7 @@ func runCLI(args []string) error {
 	}
 	err = explainDaemonError(dispatchCLI(ctx, c, out, fs, sel, rest), target)
 	if err == nil {
-		switch canonicalCommand(rest[0]) {
-		case "skill", "mcp", "context", "login", "logout":
-		default:
-			warnIfSkillStale(os.Stderr, sel)
-		}
+		warnIfCommandSkillStale(rest[0], sel)
 	}
 	return err
 }
