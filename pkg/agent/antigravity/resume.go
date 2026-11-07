@@ -526,6 +526,19 @@ func (f *Framework) runAttempts(ctx context.Context, cfg agent.RunConfig, s atte
 
 		events := parseEvents(stdout)
 		appendCapture(&capture, stdout)
+		if id := events.conversationID; id != "" {
+			conversation = id
+		}
+		if agent.IsHostdStop(runErr) {
+			// The hostd running agy is draining for its own upgrade or
+			// disconnected past -hostd-reattach-timeout: the run goes back
+			// to the queue without a strike, so nothing here reads the lost
+			// host's diagnostic log, treats an unopened resume as a bad
+			// flag, or sleeps a retry backoff before trying the same hostd.
+			out.runErr = runErr
+			out.events = events
+			break
+		}
 		if runErr != nil || events.resultErr != nil || !events.sawResult {
 			if logPath != "" {
 				diagnostic = readDiagnosticLog(ctx, f.host, logPath, s.diagnosticSecrets)
@@ -535,9 +548,6 @@ func (f *Framework) runAttempts(ctx context.Context, cfg agent.RunConfig, s atte
 		out.runErr = runErr
 		out.diagnostic = diagnostic
 		out.turnVerdict, out.turnTimedOut = s.deadline.trippedVerdict()
-		if id := events.conversationID; id != "" {
-			conversation = id
-		}
 
 		// A conversation carried in from a previous dispatch that agy did
 		// not join. Neither measured build refuses this invocation for a

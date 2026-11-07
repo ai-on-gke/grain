@@ -243,4 +243,114 @@ func TestClusterStatsRefusesAWindowThatEndsBeforeItStarts(t *testing.T) {
 	}
 }
 
+func TestClusterStatsRollsUpWorkByRootDirection(t *testing.T) {
+	store, ctx := open(t)
+	since := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
+	until := since.AddDate(0, 0, 7)
+	grain := model.RepoRef{Owner: "bwsalmon", Name: "grain"}
+
+	// Root direction #1: filed by sam before the window (a repo-less audit
+	// direction), which spawned follow-up #2 and grandchild follow-up #3
+	// inside the window, both landing pull requests on bwsalmon/grain.
+	before := since.Add(-12 * time.Hour)
+	if err := store.PutTask(ctx, model.Task{
+		ID: "1", Title: "Audit fork workflow", CreatedAt: &before,
+		Origin: model.Origin{Attribution: model.Attribution{
+			Actor: model.Principal{Kind: model.PrincipalHuman, ID: "sam"}}},
+		Binding: model.BindingDirective,
+	}); err != nil {
+		t.Fatalf("filing root 1: %v", err)
+	}
+	for _, child := range []struct {
+		id, parent     string
+		added, deleted int
+		hours          int
+	}{
+		{id: "2", parent: "1", added: 310, deleted: 40, hours: 2},
+		{id: "3", parent: "2", added: 190, deleted: 10, hours: 1},
+	} {
+		filed := since.Add(time.Hour)
+		merged := filed.Add(3 * time.Hour)
+		if err := store.PutTask(ctx, model.Task{
+			ID: child.id, Title: "follow-up " + child.id, Target: &grain, CreatedAt: &filed,
+			Origin: model.Origin{Attribution: model.Attribution{
+				Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
+				OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: child.parent}}},
+			Links:   []model.Link{{Kind: model.LinkProposedBy, Target: child.parent}},
+			Binding: model.BindingDirective,
+		}); err != nil {
+			t.Fatalf("filing child %s: %v", child.id, err)
+		}
+		if err := store.Observe(ctx, model.Observation{
+			TaskID: child.id, PrMergedAt: &merged, CompletedAt: &merged,
+			PrAdditions: ptr(child.added), PrDeletions: ptr(child.deleted), PrChangedFiles: ptr(2),
+		}); err != nil {
+			t.Fatalf("observing child %s: %v", child.id, err)
+		}
+		run := model.Run{ID: "r" + child.id, TaskID: child.id, Sandbox: "s" + child.id, Attempt: 1, StartedAt: filed}
+		if err := store.StartRun(ctx, run, model.Limits{Workers: 10}); err != nil {
+			t.Fatalf("starting run for %s: %v", child.id, err)
+		}
+		if err := store.FinishRun(ctx, run.ID, filed.Add(time.Duration(child.hours)*time.Hour), "succeeded", ""); err != nil {
+			t.Fatalf("finishing run for %s: %v", child.id, err)
+		}
+	}
+
+	// Root direction #4: standalone task filed by sam inside the window,
+	// landing one pull request with no follow-up tasks spawned.
+	filed4 := since.Add(10 * time.Hour)
+	merged4 := filed4.Add(time.Hour)
+	if err := store.PutTask(ctx, model.Task{
+		ID: "4", Title: "Standalone fix", Target: &grain, CreatedAt: &filed4,
+		Origin: model.Origin{Attribution: model.Attribution{
+			Actor: model.Principal{Kind: model.PrincipalHuman, ID: "sam"}}},
+		Binding: model.BindingDirective,
+	}); err != nil {
+		t.Fatalf("filing root 4: %v", err)
+	}
+	if err := store.Observe(ctx, model.Observation{
+		TaskID: "4", PrMergedAt: &merged4, CompletedAt: &merged4,
+		PrAdditions: ptr(45), PrDeletions: ptr(5), PrChangedFiles: ptr(1),
+	}); err != nil {
+		t.Fatalf("observing root 4: %v", err)
+	}
+
+	stats, err := store.ClusterStats(ctx, since, until)
+	if err != nil {
+		t.Fatalf("ClusterStats: %v", err)
+	}
+	if len(stats.Directions) != 2 {
+		t.Fatalf("directions = %+v, want the 2 root directions active in the window", stats.Directions)
+	}
+	first := stats.Directions[0]
+	if first.TaskID != "1" || first.Title != "Audit fork workflow" {
+		t.Errorf("first direction = %+v, want root #1 Audit fork workflow", first)
+	}
+	if first.Author.Kind != model.PrincipalHuman || first.Author.ID != "sam" {
+		t.Errorf("first direction author = %+v, want human:sam rather than the automation that filed the proposals", first.Author)
+	}
+	if first.Repo == nil || *first.Repo != grain {
+		t.Errorf("first direction repo = %v, want fallback to child repo %s", first.Repo, grain)
+	}
+	if first.PullRequestsMerged != 2 || first.PullRequestsMeasured != 2 {
+		t.Errorf("first direction merged/measured = %d/%d, want 2/2", first.PullRequestsMerged, first.PullRequestsMeasured)
+	}
+	if first.LinesAdded != 500 || first.LinesDeleted != 50 {
+		t.Errorf("first direction lines = +%d -%d, want +500 -50", first.LinesAdded, first.LinesDeleted)
+	}
+	if first.TasksCompleted != 2 || first.TasksFiled != 2 || first.TasksSpawned != 2 {
+		t.Errorf("first direction completed/filed/spawned = %d/%d/%d, want 2/2/2",
+			first.TasksCompleted, first.TasksFiled, first.TasksSpawned)
+	}
+	if first.Runs != 2 || first.RunsSucceeded != 2 || first.AgentTime != 3*time.Hour {
+		t.Errorf("first direction runs = %d (%d succeeded, %s), want 2 (2 succeeded, 3h)",
+			first.Runs, first.RunsSucceeded, first.AgentTime)
+	}
+
+	second := stats.Directions[1]
+	if second.TaskID != "4" || second.PullRequestsMerged != 1 || second.TasksSpawned != 0 {
+		t.Errorf("second direction = %+v, want root #4 with 1 merge and 0 spawned", second)
+	}
+}
+
 func ptr[T any](v T) *T { return &v }

@@ -1,58 +1,101 @@
 name: Release process review
 title: Weekly review of releases and release pipeline improvements
 base: main
+capabilities: ["api:ci-read@ai-on-gke/grain"]
 body: |
   Review the past week of release pipeline execution on `main` and suggest
-  concrete improvements to the release process. Releases are cut from
-  `main` (`design/design/release-from-trunk.design.md`). This run changes no code:
-  it reports what happened and files follow-up tasks for the fixes.
+  concrete improvements to the release process. Releases go out
+  continuously from `main` (`design/playbook/releases.playbook.md`,
+  `docs/release-candidate-management.md`): each rc is qualified by Stage 1
+  `nightly.yml` and Stage 2 `grain/release-qualification`, with no staging
+  soak. The train releases a qualified rc itself (`vX.Y.0` and `latest`);
+  a person's Approve is needed only for a release it stages as
+  `vX.Y.0-pending` (a major bump, breaking changes,
+  `RELEASE_AUTO_PROMOTE=false`).
+  This run changes no code: it reports what happened and files follow-up
+  tasks for the fixes.
 
   ## 1. Inspect the past 7 days of release activity
 
   Look across git tags, CI runs and tasks.
 
   - Tags: `git fetch origin --tags`, then list every `v*` tag (`vX.Y.Z`,
-    `vX.Y.0-rc.N`, `vX.Y.0-rc.N-discarded`, `vX.Y.0-pending`) created or
-    moved in the past 7 days
+    `vX.Y.0-rc.N`, `vX.Y.0-rc.N-discarded`, `vX.Y.0-pending`,
+    `vX.Y.Z-retracted`) created or moved in the past 7 days
     (`git for-each-ref --sort=-creatordate --format='%(refname:short) %(creatordate:iso) %(objectname:short)' 'refs/tags/v*'`),
     along with what `latest` and `refs/heads/candidate` point to.
-  - CI runs: inspect the past 7 days of runs on `main` for
-    `.grain/workflows/release.yml`, `.grain/workflows/release-train.yml`,
-    `.grain/workflows/promote-release.yml`, `.grain/workflows/promote.yml`
-    and `.grain/workflows/nightly.yml`. Use `grain ci list` / `grain ls ci://`
-    or `list_ci_runs` when available; otherwise reconstruct what you can from
-    git and task history, and say which source you used.
-  - Tasks: inspect recent `release-watchdog`, `release-notes` and soak
-    triage tasks (`grain task list` / `grain task read`, when `self-debug`
-    is granted) to see where human intervention was required, which RCs
-    were discarded or stalled, and why. If you cannot read tasks, say so
-    in the closing note.
+  - CI runs: inspect the past 7 days of runs of `release.yml`,
+    `release-train.yml`, `rc-qualification.yml`, `promote-release.yml`,
+    `promote.yml` and `nightly.yml` (on `main` and on each rc tag). This
+    repository's CI is GitHub Actions: use `list_ci_runs` / `grain ci list`
+    with `provider: github-actions` and `workflow: <file>`. For each rc,
+    read Stage 2 with `grain ci checks <rc sha> --name grain/release-qualification`.
+    Where a source is unavailable, reconstruct what you can from git and
+    task history, and say which source you used.
+  - Tasks: inspect recent `release-watchdog` tasks, the pipeline steward's
+    `pipeline.rc-failed` triage and `[rc-blocker <rc tag>]` tasks, and
+    the `release-qualification` suite runs (`grain task list` / `grain task
+    read`, when `self-debug` is granted) to see where a person had to act,
+    which rcs were discarded or stalled, and why. If you cannot read tasks,
+    say so in the closing note.
 
-  ## 2. Evaluate bottlenecks and failure modes
+  ## 2. Measure the pipeline
 
-  - Measure the lead time through each stage of the train, per release
-    and per RC: commit on `main` -> LKG selection -> `-rc.N` cut -> 24h
-    staging soak on `grain-candidate` (`:4280`) -> `-pending` staging ->
-    human promotion (`vX.Y.Z` / `latest`) -> downstream sync (the
-    repository that imports this module picking up the release). Name the
-    stage where most of the time went.
-  - Identify recurring friction, for example:
-    - capability or credential refusals;
-    - LKG starvation (`nightly.yml` or `release.yml` failing or timing
-      out, so no commit qualifies);
-    - false-positive soak failures in `scripts/candidate-gate.sh`;
-    - slow image builds in `scripts/release-images.sh`;
-    - manual steps that had to be pushed by hand.
+  Report each of these for the week, with the numbers you counted and how
+  you counted them:
+
+  - **Qualification lead time**, per rc: cut (`-rc.N` tag) -> Stage 1
+    `nightly.yml` started and concluded -> Stage 2
+    `grain/release-qualification` started and concluded -> `vX.Y.0`
+    tagged, `-pending` staged or `-discarded`. Then, per release: first commit after the
+    previous release landing on `main` -> `rc.1` cut -> `vX.Y.Z` /
+    `latest` (by the train, or by a person's Approve of a staged release)
+    -> `publish-release.yml` done -> downstream sync (the
+    repository that imports this module pinning the release). Give the
+    median and the slowest, and name the stage where most of the time went.
+    Time a qualified rc spent waiting out `RELEASE_MIN_INTERVAL_MINUTES`,
+    and time a staged release spent waiting for a person's Approve, are
+    reported separately: they are policy, not pipeline latency.
+  - **Release throughput**: releases promoted, rcs cut, and rcs per release
+    (how many `rc.N` attempts each version took; any `rc.3` that needed a
+    `release/vX.Y.Z` convergence branch; any `pipeline.release-escalated`).
+  - **Flake rate**: rc qualification jobs and items that failed once and
+    passed on their retry, as a share of all the jobs and items run on rcs
+    this week, broken down by `nightly.yml` job and qualification template.
+    Use `grain ci test-history <test>` for the tests behind them. Name any
+    target over the playbook's budget (more than 2% over 7 days, or two or
+    more rc retries in 24 hours) and whether `pipeline.flake-budget` was
+    raised and a de-flake or quarantine task filed.
+  - **Infra re-runs**: qualification runs that were cancelled, timed out,
+    capacity-starved or quota-paused and re-run as `infra`, and any
+    `pipeline.release-infra-stalled`.
+  - **Retracted releases**: every `vX.Y.Z-retracted` this week, why (the
+    tag's message), how long the bad release was `latest`, which
+    qualification stage should have caught it, and whether its fix-forward
+    landed in a later release.
+
+  Then identify recurring friction, for example:
+
+  - capability or credential refusals;
+  - LKG starvation (`tests.yml` or `release.yml` failing on `main`, so no
+    commit qualifies for an rc);
+  - qualification items that fail for reasons that are not the rc's
+    (false positives in `scripts/candidate-gate.sh check-qualification` or
+    a `qualification-*` template);
+  - slow image builds in `scripts/release-images.sh`;
+  - any step a person had to do by hand, other than approving a staged
+    release.
 
   ## 3. Suggest and file actionable improvements
 
   - Post a concise weekly release retrospective as the closing note
     (`comment_on_issue`) covering:
-    1. Releases promoted and RCs cut or discarded this week, with lead
-       times.
-    2. Every point where the release train stalled, failed or needed
-       manual intervention.
-    3. Ranked recommendations to improve release reliability, speed or
+    1. Releases promoted and rcs cut or discarded this week, with their
+       qualification lead times.
+    2. The flake rate and infra re-runs, and any retracted releases.
+    3. Every point where the release train stalled, failed or needed
+       a person beyond approving a staged release.
+    4. Ranked recommendations to improve release reliability, speed or
        automation.
   - Propose focused follow-up tasks (`propose_task` with
     `hold_for_approval: true`, `repo: "ai-on-gke/grain"` unless the fix

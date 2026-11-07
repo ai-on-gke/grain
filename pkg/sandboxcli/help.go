@@ -88,14 +88,17 @@ TASKS, CAPABILITIES & AGENT API (shown to every run; the proxy refuses what this
   grain cap list                         Capability tools this run's grants let the sandbox call
   grain cap <server> <tool> [flags | --json '<args>']
                                          Call one (--help lists its flags, generated from its input schema)
+  grain screenshot --url <app-url> [--pages /,/x] [--widths desktop,phone] [--reference design.png]
+                                         Screenshot the app you are working on (light and dark, desktop and phone)
+                                         plus a contact sheet to attach to the closing note, where grain shows it
   grain quarantine <pkg> <test> --reason <why> [--no-follow-up]
                                          Quarantine a flaky test in .grain/quarantine.yml and file a follow-up (api:test-quarantine)
   grain metrics [<section>] [--window 7d | --since <d> --until <d>]
-                                         grain's own measurements (self-debug)
+                                         grain's own measurements (api:self-debug)
   grain health                           This deployment's health (deployment-health)
   grain log [--source daemon|dmesg] [--since <t>] [--until <t>] [--priority <p>] [--contains <s>] [--lines N]
                                          grain's own log, redacted (grain-log)
-  grain playbooks [<name>]               Bootstrap playbooks (bootstrap-playbooks)
+  grain playbooks [<name>]               Bootstrap playbooks (config-map bootstrap)
   grain issue list | grain issue read <n>
                                          GitHub issues (read-issues)
   grain db query <sql>                   Read-only query on grain's database (db-read)
@@ -170,6 +173,9 @@ ARGUMENTS & FLAGS:
   --capability <cap>           Request a capability (repeatable). Naming a capability your own task
                                does not hold always files the proposal unapproved.
   --read <owner/name>          Extra repository this task may read (repeatable).
+  --design <[owner/name:]path[@rev]>
+                               Committed-context spec path (repeatable; 'designs' in propose_task).
+                               Omitted, the proposal inherits your task's committed context.
   --write <owner/name[:base]>  Extra repository this task may push to (repeatable).
   --custom-field <k=v>         Deployment custom field value (repeatable).
   --review-template-id <id>    Pre-merge code review template ID.
@@ -187,6 +193,33 @@ var sandboxCommandHelp = map[string]string{
 		"whose capability marks them sandbox-callable are here; a model-only tool is the agent's own MCP\n" +
 		"tool and the proxy refuses it. Each tool's flags are generated from its input schema.\n\n" +
 		"  grain cap list\n  grain cap widgets ping --help\n  grain cap widgets ping --host example.com --count 3\n  grain cap widgets ping --json '{\"host\":\"example.com\"}'\n",
+	"screenshot": "grain screenshot --url <app-url> [--pages /,/settings] [flags]\n\n" +
+		"Screenshot a web app -- the dev server this run started, a preview deployment -- in a real\n" +
+		"browser (Playwright's Chromium, which the sandbox image carries), at desktop and phone widths\n" +
+		"in light and dark, and lay every shot out on one contact sheet. Attach the contact sheet to the\n" +
+		"closing note (comment_on_issue attachments: [{\"path\": \"screenshots/contact-sheet.png\"}]) and\n" +
+		"grain shows it inline in the task's conversation and in the pull request's description.\n" +
+		"Playwright is the app's own if it has one, else playwright-core is installed once into\n" +
+		"~/.cache/grain/screenshot ($GRAIN_PLAYWRIGHT_VERSION picks the version).\n\n" +
+		"  --url URL          the app's base URL, e.g. http://127.0.0.1:5173 (required)\n" +
+		"  --pages P          comma-separated paths under --url (\"/\" if unset); a path's #anchor is\n" +
+		"                     scrolled to the top before the shot\n" +
+		"  --out DIR          directory for the PNGs (screenshots if unset)\n" +
+		"  --widths W         any of desktop, tablet, phone (\"desktop,phone\")\n" +
+		"  --themes T         any of light, dark (\"light,dark\"); sets prefers-color-scheme\n" +
+		"  --theme-key KEY    also set localStorage[KEY] to the theme's name\n" +
+		"  --storage K=V      a localStorage entry set before the page loads (repeat)\n" +
+		"  --cookie N=V       a cookie for --url's host (repeat)\n" +
+		"  --header \"N: v\"    a header sent on every request (repeat)\n" +
+		"  --click SEL        a Playwright selector clicked after load (repeat, in order)\n" +
+		"  --type TEXT        text typed after the clicks\n" +
+		"  --wait-for SEL     wait for this selector to be visible before the shot\n" +
+		"  --full-page        capture the whole scrollable page, not the viewport\n" +
+		"  --reference FILE   a design image (a Figma export) put first on the contact sheet (repeat)\n" +
+		"  --allow-errors     do not fail on uncaught page errors\n\n" +
+		"Files are <page>-<width>-<theme>.png, so a before and an after run line up file for file.\n\n" +
+		"  grain screenshot --url http://127.0.0.1:5173 --pages /,/checkout --out screenshots/after\n" +
+		"  grain screenshot --url http://127.0.0.1:3000 --pages /pricing --widths phone --reference figma/pricing.png\n",
 	"ls": "grain ls <uri> [--glob <pat>]\n\nList a namespace directory. --glob matches the directory's own entries; a\npattern with / or ** walks the subtree instead, and ends with a [truncated: ...]\nline if the walk was cut short. A trailing / matches directories only.\n\n  grain ls ci://<owner>/<repo>\n  grain ls task:// --glob '19*'\n  grain ls src://cmd --glob '**/*.go'\n\nsrc:// is the source this daemon was built from. A daemon whose own module builds on grain core (github.com/ai-on-gke/grain) serves core's source under src://core/, and for any src:// path its own module has no copy of.\n",
 	"read": "grain read <uri> [--tail N] [--offset N --limit N] [--lines N]\n" +
 		"grain read deploy://pipeline-changes [--cursor <c>] [--page N]\n\nPrint a namespace file to stdout, whole: there is no size cap.\n\n" +
@@ -208,7 +241,7 @@ var sandboxCommandHelp = map[string]string{
 	"ci list":   "grain ci list [--task <id> | --ref <branch>] [--conclusion failure,errored] [--job <j>] [--workflow <file>] [--since 24h] [--limit N] [--repo owner/name] [--provider grain|github-actions] [--format github|github-jobs]\n\nList recent CI runs, newest first: grain CI's, and for a repository whose CI is GitHub Actions\n(ci_mode github) its workflow runs too, read through grain's own forge connection. The second\ncolumn is the provider, and for an Actions run its workflow file; an Actions run's id is\ngha:<owner>:<name>:<run id>. --workflow keeps one workflow's runs (e.g. nightly.yml). --provider\nkeeps one provider's runs. --ref @branch is this task's own branch; --task <id> is that task's\nbranch, in any repository this task may read CI for.\n\n--format github writes the GitHub Actions runs as JSON in GitHub's own shape, GET\n/repos/{owner}/{repo}/actions/runs' answer ({\"workflow_runs\": [...]}, up to --limit 500), and\n--format github-jobs every attempt of every job of each of them (at most 50 runs), GET\n.../actions/runs/{id}/jobs?filter=all's answer ({\"jobs\": [...]}): what scripts/candidate-gate.sh\nreads without a GitHub token. Runs grain knows only from its record of their jobs are left out,\nand grain_note says how many.\n",
 	"ci checks": "grain ci checks <sha> [--repo owner/name] [--name <check>] [--format github]\n\nEvery check run on a commit (every attempt of each, GitHub's filter=all), or of one --name, read\nthrough grain's own forge connection, with the App that posted each; \"(grain)\" marks grain's own.\n--format github writes GitHub's GET /repos/{owner}/{repo}/commits/{sha}/check-runs answer\n({\"check_runs\": [...]}) plus grain_app, the slug of the App grain posts its check runs as: what\nscripts/candidate-gate.sh check-qualification reads as --checks-json, and its\nCHECK_QUALIFICATION_APP.\n",
 	"ci show":   "grain ci show <run-id>\n\nOne run: its line from grain ci list, then every job and its steps with their conclusions.\nWorks for grain CI runs and GitHub Actions runs (gha:<owner>:<name>:<run id>) alike.\n",
-	"ci log": "grain ci log [<run-id> | --task <id>] [--repo owner/name] [--job <j>] [--step <s>] [--attempt K] [--tail N | --lines N]\n\nWith no run, the latest run on this task's branch (or --task's). A run is found in whichever\nrepository it belongs to that this task may read CI for; --repo names it outright. With no job, list the run's jobs;\nwith a job and no step, list its step logs; with both, print that step's log. A GitHub Actions run\n(gha:...) keeps one log per job: --job prints it (--tail and --lines work on it as on any log).\n\n" +
+	"ci log": "grain ci log [<run-id> | --task <id>] [--repo owner/name] [--job <j>] [--step <s>] [--attempt K] [--tail N | --lines N]\n\nWith no run, the latest run on this task's branch (or --task's). A run is found in whichever\nrepository it belongs to that this task may read CI for; --repo names it outright. With no job, list the run's jobs;\nwith a job and no step, list its step logs; with both, print that step's log. A GitHub Actions run\n(gha:..., or its bare GitHub run id) keeps one log per job: --job prints it, and --step the lines that step\nwrote, found by the step's start and end times (--tail and --lines work on either as on any log).\n\n" +
 		byteRangeHelp + "\n" +
 		"  grain ci log --job go\n  grain ci log --job go --step Test --tail 8000\n  grain ci log --job go --step Test -n 50\n",
 	"ci test-history": "grain ci test-history <test-name> [--limit N] [--repo owner/name]\n\nPass, fail and flake history of one test across recent CI runs.\n",
@@ -281,20 +314,21 @@ var sandboxCommandHelp = map[string]string{
 	"release-notes publish": "grain release-notes publish --version <v> (<markdown> | --file <f>) [--period <p>] [--title <t>] [--reason <why>]\n\nPublish release notes for a version. Needs api:release-notes or api:release-notes:write.\n",
 	"quarantine":            "grain quarantine <package> <test-name> --reason <why> [--ttl 30d] [--no-follow-up] [-C <dir>]\n\nAdd a flaky test entry to .grain/quarantine.yml in the workspace and file a follow-up task.\nNeeds api:test-quarantine or api:tests:write.\n",
 	"metrics": "grain metrics [<section>] [--window 7d | --since <date> [--until <date>]] [--repo owner/name]... [--author <a>]...\n\n" +
-		"grain's own measurements (deploy://metrics). Needs self-debug.\n\n" +
+		"grain's own measurements (deploy://metrics). Needs api:self-debug or api:deployment:read.\n\n" +
 		"  --window   how far back to measure: 36h, 7d, 2w (default: the daemon's own)\n" +
 		"  --since, --until  an absolute span instead: a date or an RFC 3339 timestamp\n" +
 		"  --repo, --author  only tasks on these repositories / by these authors (repeat or comma-separate)\n",
 	"health": "grain health\n\nThis deployment's health (deploy://health). Needs deployment-health.\n",
-	"log": "grain log [<source> | --source daemon|dmesg] [--since <rfc3339>] [--until <rfc3339>] [--priority err|warning|...] [--contains <text>] [--lines N] [--tail N]\n\n" +
+	"log": "grain log [<source> | --source daemon|dmesg] [--unit <unit>] [--since <rfc3339>] [--until <rfc3339>] [--priority err|warning|...] [--contains <text>] [--lines N] [--tail N]\n\n" +
 		"grain's own log, redacted (deploy://grain.log). Needs grain-log.\n\n" +
 		"  --since, --until  the window, as RFC 3339 timestamps (default: the latest entries)\n" +
 		"  --source          which journal: daemon (the default) or dmesg (the kernel's)\n" +
+		"  --unit            for daemon when both grain-daemon.service and grain.service exist: which unit to read\n" +
 		"  --priority        least severe journald priority to return (err, warning, info, ...; alias --min-priority)\n" +
 		"  --contains        only entries containing this text (plain, case-insensitive)\n" +
 		"  --lines N, -n N   the latest N entries, one a line (alias --max-lines; default 200, at most 1000)\n" +
 		"  --tail N          the last N BYTES of what that returns\n",
-	"playbooks":  "grain playbooks [<name>]\n\nList the bootstrap playbooks by name, one per line, or print one (src://playbooks; the name\nis taken with or without its .md). Needs bootstrap-playbooks.\n",
+	"playbooks":  "grain playbooks [<name>]\n\nList the bootstrap playbooks by name, one per line, or print one (src://playbooks; the name\nis taken with or without its .md). Needs https://grain.dev/capabilities/config-map#config-map={\"config_maps\":[\"bootstrap\"]}.\n",
 	"issue list": "grain issue list [--repo owner/name] [--label <l>] [--limit N]\n\nGitHub issues. Needs read-issues.\n",
 	"issue read": "grain issue read <number> [--repo owner/name] [--comments]\n\nOne GitHub issue. Needs read-issues.\n",
 	"db query":   "grain db query <sql>\n\nA read-only SQL query on grain's database. Needs db-read.\n",
@@ -308,7 +342,7 @@ var sandboxCommandHelp = map[string]string{
 // sandboxTaskListHelp is grain task list --help.
 const sandboxTaskListHelp = "grain task list [--state <s>[,<s>...]] [--repo <owner/name>] [--search <title text>]\n" +
 	"                [--kind <k>] [--changed-since <30m|24h|7d|time>] [--stalled] [--limit N] [--json]\n\n" +
-	"The tasks this run may read (its own, or every task with self-debug), one line each:\n" +
+	"The tasks this run may read (its own, or every task with api:self-debug or api:tasks:read), one line each:\n" +
 	"id, state, repo, title, then \"(stopped by operator)\" or \"(stalled)\" and \"blocked on <ids>\" where they apply.\n" +
 	"Oldest first by filing; --limit (default 50) keeps the newest. The count, and how many\n" +
 	"were left out, go to stderr. --state may be repeated or comma-separated (proposed, queued,\n" +

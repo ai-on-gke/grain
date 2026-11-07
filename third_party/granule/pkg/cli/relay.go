@@ -13,7 +13,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/bwsalmon/granule/pkg/relay"
+	"github.com/gke-labs/granule/pkg/relay"
 )
 
 const relayUsage = `usage: granule relay [flags]

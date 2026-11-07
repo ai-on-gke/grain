@@ -59,12 +59,12 @@ Any other command, including `mcpserver`, `capability` and the agent hooks, runs
 
 | Scheme | Holds | Needs |
 |---|---|---|
-| `ci://<owner>/<repo>/<run>/<job>/[attempts/<k>/]<step>.log`, `…/artifacts/<job>/<name>` | grain CI runs and GitHub Actions runs (`gha:` ids; one `job.log` per job) | `grain-ci` for the task's own repo, `ci-read` for others |
-| `src://…` | the daemon's own source; `src://core/…` for core under a layered build; `src://playbooks/…` | `self-debug`, or `bootstrap-playbooks` for playbooks |
-| `task://<id>/record.md`, `prompt.md`, `transcript.md`, `attempts/<n>/…` | task records | the run's own task, or `self-debug`/`tasks:read` for others |
+| `ci://<owner>/<repo>/<run>/<job>/[attempts/<k>/]<step>.log`, `…/artifacts/<job>/<name>` | grain CI runs and GitHub Actions runs (`gha:` ids; one `job.log` per job) | `https://grain.dev/capabilities/grain#ci` (formerly `grain-ci`, retired in schema migration 96) for the task's own repo, `ci-read` for others |
+| `src://…` | the daemon's own source; `src://core/…` for core under a layered build; `src://playbooks/…` | `…/grain#source` (formerly `self-debug`), or `…/config-map#config-map={"config_maps":["bootstrap"]}` (formerly `bootstrap-playbooks`, retired in schema migration 118) for playbooks |
+| `task://<id>/record.md`, `prompt.md`, `transcript.md`, `attempts/<n>/…` | task records | the run's own task, or `tasks:read` (in `api:self-debug`) for others |
 | `config://…` | the deployment's state repository (grain/config) | as the namespace grants |
 | `memory://<key>` | memory documents | `memory` |
-| `deploy://grain.log[/<source>]`, `health`, `metrics[/<section>]`, `merge-queue`, `pipeline-changes` | deployment state | `grain-log`, `deployment-health`, `self-debug` |
+| `deploy://grain.log[/<source>]`, `health`, `metrics[/<section>]`, `merge-queue`, `pipeline-changes` | deployment state | `…/grain#journal` (formerly `grain-log`, retired in schema migration 80), `…/grain#health` (with `api:deployment:read`, formerly `deployment-health`, retired in schema migration 81), `api:deployment:read` (in `api:self-debug`) for metrics and pipeline changes |
 
 The schemes and their grants are the namespace's to define ([`grain-namespace.design.md`](../../design/grain-namespace.design.md)). This CLI only forwards.
 
@@ -136,7 +136,7 @@ Usage: `grain grep <pattern> <uri> [-i] [-C N] [--glob <pat>] [--max N]`
 
 ## 3. CI and pull request
 
-These are scoped by the proxy to the run's task repository and branch. **Needs** `grain-ci` (own repository) or `ci-read` (others). `ci retrigger` and `ci run-job` are grain-CI-only.
+These are scoped by the proxy to the run's task repository and branch. **Needs** `…/grain#ci` (own repository) or `ci-read` (others). `ci retrigger` and `ci run-job` are grain-CI-only.
 
 ### 3.1 `grain ci list` {#CLI-86}
 
@@ -224,6 +224,8 @@ Usage: `grain ci log [<run-id> | --task <id>] [--repo owner/name] [--job <j>] [-
 
 ### 3.4 `grain ci test-history` {#CLI-89}
 
+The external `grain ci test-history` is [host #CLI-62](host.spec.md#CLI-62), rendering the same report.
+
 `grain ci test-history <test-name>` sends `GET /cli/ci/test-history?test=<name>[&limit][&repo]`.
 
 <!-- BEGIN GENERATED FLAGS: grain ci test-history -->
@@ -255,6 +257,8 @@ Usage: `grain ci artifact <job> <name> [-o <dest>] [--run <run-id> | --task <id>
 **Pinned by:** `pkg/sandboxcli/actions_test.go`: `TestSandboxAPIInputModesAndCIArtifactDownload`.
 
 ### 3.6 `grain ci wait` and `grain ci run-job` {#CLI-91}
+
+The external `grain ci wait` is [host #CLI-62](host.spec.md#CLI-62): it names its run, waits up to 30m with no wait credit, and answers the same JSON shape.
 
 `grain ci wait` sends `POST /cli/ci/wait` with `{"timeout_seconds", "jobs"?, "resume_run_id"?}`. `grain ci run-job <job>` sends `POST /cli/ci/run-job` with `{"job", "timeout_seconds", "resume_run_id"?}`.
 
@@ -290,6 +294,8 @@ Usage: `grain ci run-job <job> [--timeout 9m] [--resume <run-id>]`
 **Pinned by:** `pkg/sandboxcli/actions_test.go`: `TestSandboxCIWaitReportsEachVerdict`, `TestParseWaitTimeout`.
 
 ### 3.7 `grain ci retrigger` {#CLI-92}
+
+The external `grain ci retrigger <run-id>` is [host #CLI-62](host.spec.md#CLI-62).
 
 `POST /cli/ci/retrigger` with `{"jobs"?, "all"?, "commit"?, "workflow"?}`. Reruns failed or named jobs fresh and uncached.
 
@@ -372,6 +378,8 @@ Usage: `grain pr review-comment <body|--file f> [--path <file> --line <N>]`
 **Pinned by:** `pkg/sandboxcli/actions_test.go`: `TestStage3SandboxCLICommands`; `pkg/sandboxcli/sandboxcli_test.go`: `TestSandboxCLIReadsOtherTasksCI`.
 
 ### 3.9 `grain merge-queue` {#CLI-95}
+
+The external `grain merge-queue` is [host #CLI-107](host.spec.md#CLI-107), reading the same file.
 
 Reads `deploy://merge-queue`.
 
@@ -458,7 +466,7 @@ Usage: `grain notify --subject <key> --title <one-line> [--body <md> | --file <f
 
 | Command | Behaviour |
 |---|---|
-| `task list` | `GET /cli/tasks` with the filters. Takes no positionals (`task list: unexpected argument "<x>": …`). `--limit` must be positive (`task list: --limit "<v>" is not a positive number`). **Needs** `tasks:read` or `self-debug` for tasks other than the run's own |
+| `task list` | `GET /cli/tasks` with the filters. Takes no positionals (`task list: unexpected argument "<x>": …`). `--limit` must be positive (`task list: --limit "<v>" is not a positive number`). **Needs** `tasks:read` (or the `api:self-debug` preset) for tasks other than the run's own |
 | `task read <id>` | reads `task://<id>/record.md` |
 | `task prompt <id>` / `task transcript <id>` | reads `task://<id>/[attempts/<n>/]prompt.md` / `transcript.md`. `transcript` reports the file's size on stderr |
 | `task wait <id>…` | `POST /cli/tasks/wait {"ids", "until", "timeout_seconds"}`. Prints `Task wait (<status>, waited <d>…):` and the summary. When not settled, it adds how to keep waiting and how to park. `--park` or `--resume-at` is refused: `parking a task ends the run and is a model-only control operation: call the wait_for_task (park: true) or resume_later MCP tool instead` |
@@ -552,6 +560,7 @@ Usage: `grain task propose --title <t> (--body <b> | --file <f>) [flags]`
 | `--keep-running` | bool |
 | `--origin` | string |
 | `--read` | string |
+| `--design` | string |
 | `--custom-field` | string |
 | `--not-before` | string |
 | `--priority` | string |
@@ -597,7 +606,7 @@ Usage: `grain api routes [--scope <s>]`
 - `memory write [<owner/name>] <text> | --file f [--repo r] [--reason]` sends `PUT /api/memory {"repo", "text"}`, which replaces the whole memory text. A leading `<key>` is refused: `grain memory write takes no <key>: …`.
 - `memory doc-write <name> …` sends `PUT /api/memory/documents`.
 
-**Needs** `memory`.
+**Needs** `api:memory` (formerly the `memory` capability, retired in schema migration 71).
 
 <!-- BEGIN GENERATED FLAGS: grain memory list -->
 Usage: `grain memory list`
@@ -684,10 +693,10 @@ Usage: `grain quarantine <package> <test-name> --reason <why> [--ttl 30d] [--no-
 
 ### 6.1 `grain metrics`, `grain health`, `grain log`, `grain playbooks` {#CLI-103}
 
-- `grain metrics [<section>]` reads `deploy://metrics[/<section>]` with `window`, `since` and `until`. `--repo` and `--author` may be repeated. **Needs** `self-debug`.
-- `grain health` reads `deploy://health`. **Needs** `deployment-health`.
-- `grain log [<source> | --source s]` reads `deploy://grain.log[/<source>]`. `--since`/`--until` spans are resolved to RFC 3339 instants relative to now. `--priority`/`--min-priority` become `min_priority`, and `--max-lines`/`--lines`/`-n` become `max_lines`. A zero count is refused: `grain log: <flag> "0" is not a count of entries: it takes a positive integer`. **Needs** `grain-log`.
-- `grain playbooks` prints one playbook name per line (`src://playbooks`, with `.md` dropped). `grain playbooks <name>` reads it. **Needs** `bootstrap-playbooks`.
+- `grain metrics [<section>]` reads `deploy://metrics[/<section>]` with `window`, `since` and `until`. `--repo` and `--author` may be repeated. **Needs** `api:deployment:read` (or the `api:self-debug` preset).
+- `grain health` reads `deploy://health`. **Needs** `…/grain#health` (formerly `deployment-health`).
+- `grain log [<source> | --source s]` reads `deploy://grain.log[/<source>]`. `--since`/`--until` spans are resolved to RFC 3339 instants relative to now. `--priority`/`--min-priority` become `min_priority`, and `--max-lines`/`--lines`/`-n` become `max_lines`. A zero count is refused: `grain log: <flag> "0" is not a count of entries: it takes a positive integer`. **Needs** `…/grain#journal` (formerly `grain-log`).
+- `grain playbooks` prints one playbook name per line (`src://playbooks`, with `.md` dropped). `grain playbooks <name>` reads it. **Needs** `…/config-map#config-map={"config_maps":["bootstrap"]}` (formerly `bootstrap-playbooks`).
 
 <!-- BEGIN GENERATED FLAGS: grain metrics -->
 Usage: `grain metrics [<section>] [--window 7d | --since <date> [--until <date>]] [--repo owner/name]... [--author <a>]...`
@@ -708,11 +717,12 @@ _No flags._
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain log -->
-Usage: `grain log [<source> | --source daemon|dmesg] [--since <rfc3339>] [--until <rfc3339>] [--priority err|warning|...] [--contains <text>] [--lines N] [--tail N]`
+Usage: `grain log [<source> | --source daemon|dmesg] [--unit <unit>] [--since <rfc3339>] [--until <rfc3339>] [--priority err|warning|...] [--contains <text>] [--lines N] [--tail N]`
 
 | Flag | Type |
 |---|---|
 | `--source` | string |
+| `--unit` | string |
 | `--since` | string |
 | `--until` | string |
 | `--priority` | string |
@@ -795,3 +805,19 @@ _No flags._
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/sandboxcli/flags_test.go`: `TestSandboxHelpSaysBytesAndHasLiveExamples`, `TestSandboxHelpLeavesOutTheProxyToken`.
+
+### 7.3 `grain screenshot` {#CLI-109}
+
+`grain screenshot --url <app-url> [flags]` screenshots a web app the run is working on -- a dev server it started in the sandbox, a preview deployment -- with Playwright's Chromium, at each of `--widths` (desktop 1440×900, tablet 820×1180, phone 390×844) and `--themes` (light, dark, via `prefers-color-scheme` and optionally `localStorage[--theme-key]`), into `--out` (default `screenshots/`) as `<page>-<width>-<theme>.png`, then writes `contact-sheet.png` with every shot (and any `--reference` design images first). It talks to no grain service: the sandbox CLI writes the embedded `pkg/sandboxcli/screenshot.mjs` to a temporary directory and runs it with `node`, so its flags are the script's own and are not in `sandboxCommandFlags`.
+
+- Playwright is resolved from the working directory's `node_modules`, then `~/.cache/grain/screenshot/node_modules`, then `npm root -g`. With none, the script exits 3 and the CLI installs `playwright-core@$GRAIN_PLAYWRIGHT_VERSION` (default the images' `PLAYWRIGHT_VERSION`) into the cache with `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`, and runs it once more.
+- An uncaught page error, or an HTTP status of 400 or more for a page, fails the run (status 1) unless `--allow-errors`.
+- The contact sheet is what a run attaches to its closing note by `path`; grain previews image attachments inline in the task's conversation and publishes them into the pull request's description (`docs/ui-screenshots.md`).
+
+<!-- BEGIN GENERATED FLAGS: grain screenshot -->
+Usage: `grain screenshot --url <app-url> [--pages /,/settings] [flags]`
+
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/sandboxcli/screenshot_test.go`: `TestGrainScreenshotInstallsPlaywrightOnceAndPassesFlagsThrough`, `TestGrainScreenshotHelp`.

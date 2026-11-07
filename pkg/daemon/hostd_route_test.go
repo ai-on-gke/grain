@@ -18,6 +18,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"net/http/httptest"
 	"slices"
 	"strings"
@@ -31,13 +32,14 @@ import (
 	"github.com/ai-on-gke/grain/pkg/whererun"
 )
 
-// A run's agent CLI goes to the hostd its task is pinned to by name or
-// selects by label -- its framework is built on that hostd's client --
-// an unpinned task's to the default, and a pinned hostd that is not
-// connected, or is at its allowlist's capacity, holds the task rather
-// than starting it anywhere else. A usage limit on an ambient credential
-// is that hostd's own.
-func TestRunsRouteToTheirTasksHostdWithCapacityAndPerHostdPauses(t *testing.T) {
+// A run's agent CLI goes to the hostd its model connection is placed on
+// by name or selects by label -- its framework is built on that hostd's
+// client -- a connection with no placement's to the default, and a
+// placed hostd that is not connected, or is at its allowlist's
+// capacity, holds a run on that connection rather than starting it
+// anywhere else, unless the connection lists a fallback. A usage limit
+// on an ambient credential is that hostd's own.
+func TestRunsRouteToTheirConnectionsHostdWithCapacityAndPerHostdPauses(t *testing.T) {
 	ctx := context.Background()
 	store, closeStore := openTestStore(t, t.TempDir())
 	t.Cleanup(closeStore)
@@ -67,40 +69,48 @@ func TestRunsRouteToTheirTasksHostdWithCapacityAndPerHostdPauses(t *testing.T) {
 		return cfg.HostdHub.HostdStatus("ws-a").Connected && cfg.HostdHub.HostdStatus("ws-b").Connected
 	})
 
-	for id, selector := range map[string]string{"by-name": "ws-a", "by-label": "zone=b", "waits": "ws-off"} {
-		if err := store.SetTaskHostd(ctx, id, selector); err != nil {
-			t.Fatal(err)
-		}
+	conn := func(id, hostd string, fallback ...string) model.AgentBackend {
+		return model.AgentBackend{ID: id, Framework: model.AgentFrameworkAntigravity, Models: []string{"m"},
+			AuthMode: model.AntigravityAuthAmbient, Hostd: hostd, HostdFallback: fallback}
+	}
+	byID := map[string]model.AgentBackend{}
+	for _, b := range []model.AgentBackend{
+		conn("unplaced", ""), conn("by-name", "ws-a"), conn("by-label", "zone=b"),
+		conn("waits", "ws-off"), conn("falls-back", "ws-off", "ws-b"),
+	} {
+		cfg.AgentBackends = append(cfg.AgentBackends, b)
+		byID[b.ID] = b
 	}
 	pool := NewAgentPool(cfg, store, nil)
 
-	for _, tc := range []struct{ task, hostd, only string }{
-		{"unpinned", model.LocalHostd, "only-local"},
+	for _, tc := range []struct{ conn, hostd, only string }{
+		{"unplaced", model.LocalHostd, "only-local"},
 		{"by-name", "ws-a", "only-a"},
 		{"by-label", "ws-b", "only-b"},
+		{"falls-back", "ws-b", "only-b"},
 	} {
-		route, err := pool.routeHostd(ctx, cfg, tc.task)
+		route, err := connectionHostdRoute(ctx, cfg, store, byID[tc.conn])
 		if err != nil {
-			t.Fatalf("%s: routeHostd = %v", tc.task, err)
+			t.Fatalf("%s: connectionHostdRoute = %v", tc.conn, err)
 		}
 		if route.Name != tc.hostd {
-			t.Errorf("%s: routed to %q, want %s", tc.task, route.Name, tc.hostd)
+			t.Errorf("%s: routed to %q, want %s", tc.conn, route.Name, tc.hostd)
 		}
-		live := route.apply(cfg)
+		live := route.apply(cfg, model.AgentFrameworkAntigravity)
 		r := live.ResolveCLIRun(ctx, model.AgentFrameworkAntigravity)
 		if r.Via != ViaHostd || r.Err != "" {
-			t.Fatalf("%s: agy resolves to %+v, want through its hostd", tc.task, r)
+			t.Fatalf("%s: agy resolves to %+v, want through its hostd", tc.conn, r)
 		}
 		// The host the run's CLI is started on is the routed hostd's.
 		host, err := live.cliHostdHost(r)
 		if err != nil {
-			t.Fatalf("%s: cliHostdHost = %v", tc.task, err)
+			t.Fatalf("%s: cliHostdHost = %v", tc.conn, err)
 		}
 		// A remote hostd's endpoints are carried to its own machine, not
 		// the default hostd's.
 		if tc.hostd != model.LocalHostd {
 			if c, ok := host.(agent.HostdHost).Remote.(*hostd.HostdCarrier); !ok || c.Name != tc.hostd {
-				t.Errorf("%s: the run's CLI host carries its endpoints over %#v, want %s's", tc.task, host.(agent.HostdHost).Remote, tc.hostd)
+				t.Errorf("%s: the run's CLI host carries its endpoints over %#v, want %s's", tc.conn, host.(agent.HostdHost).Remote, tc.hostd)
 			}
 		}
 		offers, err := host.(agent.HostdHost).Client.Offers(ctx)
@@ -112,24 +122,29 @@ func TestRunsRouteToTheirTasksHostdWithCapacityAndPerHostdPauses(t *testing.T) {
 			names = append(names, o.Name)
 		}
 		if !slices.Contains(names, tc.only) {
-			t.Errorf("%s: the run's CLI host reaches a hostd offering %v, want %s's", tc.task, names, tc.hostd)
+			t.Errorf("%s: the run's CLI host reaches a hostd offering %v, want %s's", tc.conn, names, tc.hostd)
 		}
 	}
 
-	if why := pool.Availability(ctx, orchestrator.AgentChoice{TaskID: "waits"}); why != "waiting for hostd ws-off" {
-		t.Errorf("a task pinned to a disconnected hostd: availability %q, want it to wait for ws-off", why)
+	pinned := func(id string) orchestrator.AgentChoice {
+		return orchestrator.AgentChoice{BackendID: id, Model: "m", Framework: model.AgentFrameworkAntigravity}
+	}
+	if why := pool.Availability(ctx, pinned("waits")); !strings.Contains(why, "waiting for host ws-off") {
+		t.Errorf("a run on a connection placed on a disconnected hostd: availability %q, want it to wait for ws-off", why)
+	}
+	if _, err := pool.Build(ctx, pinned("waits")); !errors.Is(err, agent.ErrHostdWaiting) {
+		t.Errorf("building a run on a connection whose hostd is away = %v, want a hostd wait", err)
 	}
 
 	// Capacity: ws-a takes one run at once.
-	routeA, err := pool.routeHostd(ctx, cfg, "by-name")
+	routeA, err := connectionHostdRoute(ctx, cfg, store, byID["by-name"])
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := pool.hostdCapacity(ctx, routeA); got != 1 {
 		t.Fatalf("ws-a's capacity = %d, want its allowlist's 1", got)
 	}
-	choice := orchestrator.AgentChoice{TaskID: "by-name", Framework: model.AgentFrameworkAntigravity}
-	if why := pool.Availability(ctx, choice); why != "" {
+	if why := pool.Availability(ctx, pinned("by-name")); why != "" {
 		t.Fatalf("ws-a with a free slot: availability %q, want none", why)
 	}
 	pool.mu.Lock()
@@ -137,56 +152,108 @@ func TestRunsRouteToTheirTasksHostdWithCapacityAndPerHostdPauses(t *testing.T) {
 	pool.inflight[lease.id] = append(pool.inflight[lease.id], lease)
 	pool.mu.Unlock()
 	lease.start()
-	if why := pool.Availability(ctx, choice); !strings.Contains(why, "hostd ws-a is at its capacity (1 of 1 runs)") {
+	if why := pool.Availability(ctx, pinned("by-name")); !strings.Contains(why, "host ws-a is at its capacity (1 of 1 runs)") {
 		t.Errorf("ws-a full: availability %q, want it to wait for ws-a's capacity", why)
 	}
-	if why := pool.Availability(ctx, orchestrator.AgentChoice{TaskID: "by-label", Framework: model.AgentFrameworkAntigravity}); why != "" {
+	if why := pool.Availability(ctx, pinned("by-label")); why != "" {
 		t.Errorf("ws-b while ws-a is full: availability %q, want none", why)
 	}
+	// The rotation passes over the connections whose hostd cannot take
+	// a run, and only those.
+	_, blocked := pool.connectionRoutes(ctx, cfg, cfg.AgentBackends, false)
+	if blocked["by-name"] == nil || blocked["waits"] == nil || blocked["by-label"] != nil || blocked["unplaced"] != nil || blocked["falls-back"] != nil {
+		t.Errorf("blocked connections = %v, want by-name (full) and waits (away) alone", blocked)
+	}
 	lease.Release()
-	if why := pool.Availability(ctx, choice); why != "" {
+	if why := pool.Availability(ctx, pinned("by-name")); why != "" {
 		t.Errorf("ws-a after its run ended: availability %q, want none", why)
 	}
 
-	// An ambient credential's usage limit is keyed to the hostd it was
-	// met on; a key grain holds, and the default hostd, keep the bare one.
-	ambient := model.AgentBackend{ID: "c1", AuthMode: model.AntigravityAuthAmbient}
-	keyed := model.AgentBackend{ID: "c2"}
-	reqA := poolRequest{}
-	if routeA.scopesPauses(cfg) {
-		reqA.pauseHostd = routeA.Name
+	// An ambient credential's usage limit is keyed to the hostd its
+	// connection runs on; a key grain holds, and the default hostd, keep
+	// the bare one.
+	routes, _ := pool.connectionRoutes(ctx, cfg, cfg.AgentBackends, true)
+	req := poolRequest{routes: routes}
+	ambient := byID["by-name"]
+	keyed := ambient
+	keyed.AuthMode = ""
+	if got := req.pauseOwner(cfg, ambient); got != "by-name@hostd/ws-a" {
+		t.Errorf("ambient on ws-a pauses %q, want by-name@hostd/ws-a", got)
 	}
-	if got := reqA.pauseOwner(cfg, ambient); got != "c1@hostd/ws-a" {
-		t.Errorf("ambient on ws-a pauses %q, want c1@hostd/ws-a", got)
+	if got := req.pauseOwner(cfg, keyed); got != "by-name" {
+		t.Errorf("an API key on ws-a pauses %q, want by-name", got)
 	}
-	if got := reqA.pauseOwner(cfg, keyed); got != "c2" {
-		t.Errorf("an API key on ws-a pauses %q, want c2", got)
+	if got := req.pauseOwner(cfg, byID["unplaced"]); got != "unplaced" {
+		t.Errorf("the default hostd's connection pauses %q, want its bare key", got)
 	}
 	// And a task waiting on such a pause says whose it is.
-	if got := reqA.pausedConnection(cfg, ambient); got != `connection "c1" on hostd ws-a` {
+	if got := req.pausedConnection(cfg, ambient); got != `connection "by-name" on host ws-a` {
 		t.Errorf("ambient on ws-a is named %q, want the hostd named beside the connection", got)
 	}
-	if got := reqA.pausedConnection(cfg, keyed); got != `connection "c2"` {
+	if got := req.pausedConnection(cfg, keyed); got != `connection "by-name"` {
 		t.Errorf("an API key on ws-a is named %q, want the connection alone", got)
 	}
-	routeLocal, _ := pool.routeHostd(ctx, cfg, "unpinned")
-	if routeLocal.scopesPauses(cfg) {
-		t.Error("the default hostd scopes its pauses; want the connection's bare key")
-	}
 	pool.Pause = &orchestrator.Pause{}
-	pool.Pause.Begin(time.Now(), orchestrator.PauseScope{Connection: "c1@hostd/ws-a", Model: "m", Team: model.DefaultTeamID},
+	pool.Pause.Begin(time.Now(), orchestrator.PauseScope{Connection: "by-name@hostd/ws-a", Model: "m", Team: model.DefaultTeamID},
 		&agent.UsageLimitError{Message: "out of quota"})
+	moved := poolRequest{routes: map[string]hostdRoute{"by-name": routes["by-label"]}}
 	pool.mu.Lock()
-	pausedOnA := pool.pausedLocked(cfg, reqA, ambient, "m", time.Now())
-	pausedElsewhere := pool.pausedLocked(cfg, poolRequest{pauseHostd: "ws-b"}, ambient, "m", time.Now())
+	pausedOnA := pool.pausedLocked(cfg, req, ambient, "m", time.Now())
+	pausedElsewhere := pool.pausedLocked(cfg, moved, ambient, "m", time.Now())
 	pool.mu.Unlock()
 	if !pausedOnA || pausedElsewhere {
 		t.Errorf("paused on ws-a = %v, on ws-b = %v; want only ws-a paused", pausedOnA, pausedElsewhere)
+	}
+
+	// Two connections sharing an offline hostd target each report their own
+	// connection ID in their wait reason.
+	twoAway := []model.AgentBackend{conn("away-one", "ws-off"), conn("away-two", "ws-off")}
+	_, awayBlocked := pool.connectionRoutes(ctx, cfg, twoAway, false)
+	if awayBlocked["away-one"] == nil || !strings.Contains(awayBlocked["away-one"].Error(), `"away-one"`) {
+		t.Errorf("away-one error = %v, want connection \"away-one\"", awayBlocked["away-one"])
+	}
+	if awayBlocked["away-two"] == nil || !strings.Contains(awayBlocked["away-two"].Error(), `"away-two"`) {
+		t.Errorf("away-two error = %v, want connection \"away-two\"", awayBlocked["away-two"])
 	}
 
 	// The audit: the hostd, its instance and its owner.
 	instance, owner := pool.hostdAudit(ctx, cfg, routeA)
 	if instance != "cloudtop" || owner != "alice@example.com" {
 		t.Errorf("ws-a's audit = %q, %q; want its instance and registry owner", instance, owner)
+	}
+
+	// Empty label values are rejected rather than matching unlabelled hostds.
+	for _, bad := range []string{"gpu=", "pool=gpu,zone=", "gpu=a=b"} {
+		if _, _, err := model.ParseHostdSelector(bad); err == nil {
+			t.Errorf("ParseHostdSelector(%q) succeeded; want error", bad)
+		}
+	}
+	if err := model.ValidateHostdLabels(map[string]string{"gpu": ""}); err == nil {
+		t.Error("ValidateHostdLabels accepted an empty label value")
+	}
+	if labelsMatch(nil, map[string]string{"gpu": ""}) {
+		t.Error("labelsMatch matched an empty label value against an unlabelled hostd")
+	}
+
+	// Fallback resilience: a revoked fallback does not turn a disconnected
+	// primary's wait into a setup failure, and a revoked primary falls back
+	// to a connected fallback in its explicit HostdFallback list.
+	if _, _, err := store.CreateHostd(ctx, model.Hostd{Name: "ws-revoked"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RevokeHostd(ctx, "ws-revoked"); err != nil {
+		t.Fatal(err)
+	}
+	offThenRevoked := conn("off-then-revoked", "ws-off", "ws-revoked")
+	if _, err := connectionHostdRoute(ctx, cfg, store, offThenRevoked); !errors.Is(err, agent.ErrHostdWaiting) {
+		t.Errorf("disconnected primary + revoked fallback = %v, want wait on ws-off", err)
+	}
+	revokedThenB := conn("revoked-then-b", "ws-revoked", "ws-b")
+	if r, err := connectionHostdRoute(ctx, cfg, store, revokedThenB); err != nil || r.Name != "ws-b" {
+		t.Errorf("revoked primary + connected fallback = %+v, %v; want ws-b", r, err)
+	}
+	revokedOnly := conn("revoked-only", "ws-revoked")
+	if _, err := connectionHostdRoute(ctx, cfg, store, revokedOnly); err == nil || errors.Is(err, agent.ErrHostdWaiting) {
+		t.Errorf("revoked primary with no fallback = %v, want fatal refusal", err)
 	}
 }

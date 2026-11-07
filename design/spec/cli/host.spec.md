@@ -20,10 +20,11 @@ The binary **MUST** register exactly the commands below. The guard compares this
 
 | Kind | Commands |
 |---|---|
-| Task CLI: tasks | `list`, `get`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `force-merge`, `run-now`, `pause`, `resume` |
-| Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|deny`, `git-ambient`, `git-connections`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `fs ls\|cat\|read\|grep`, `declarations check` |
+| Task CLI: tasks | `list`, `get`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `reply`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `force-merge`, `run-now`, `pause`, `resume`, `inbox`, `wait`, `logs` |
+| Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|role|deny`, `git-ambient`, `git-connections`, `git-login`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `fs ls\|cat\|read\|grep`, `pr adopt\|review\|status`, `declarations check` |
+| Task CLI: sign-in | `login`, `logout`, `whoami`, `context list\|use\|show\|delete` |
 | Modes: services | `daemon`, `demo`, `mcpserver`, `runhost exec`, `hostd`, `host-script`, `capability <server>` |
-| Modes: local administration | `access-code`, `secrets`, `connections import`, `state`, `backup`, `export`, `import`, `repo-case`, `upgrade-postgres` (= `upgrade-sqlite-to-postgres`, `db upgrade-postgres`), `controller bootstrap-github-app`, `setup gcp`, `init`, `init workstation`, `sync` |
+| Modes: local administration | `access-code`, `secrets`, `connections import`, `state`, `backup`, `export`, `import`, `repo-case`, `upgrade-postgres` (= `upgrade-sqlite-to-postgres`, `db upgrade-postgres`), `db check`, `controller bootstrap-github-app`, `setup gcp`, `init`, `init workstation`, `sync` |
 | Modes: build information | `version`, `schema-version`, `release-notes`, `sandbox-image`, `container-sandbox-image`, `k8s-sandbox-image`, `image` |
 | Modes: hooks forked by a run | `agy-tool-hook`, `claude-stop-hook`, `codex-detached` |
 
@@ -34,8 +35,9 @@ The binary **MUST** register exactly the commands below. The guard compares this
 ## 2. Task CLI global flags and connection {#CLI-21}
 
 `grain [global flags] <command> [args]`. Global flags **MUST** come before the command. Their behaviour is [#CLI-4](cli.spec.md#CLI-4), [#CLI-6](cli.spec.md#CLI-6) and [#CLI-7](cli.spec.md#CLI-7).
-- `-server` defaults to `$GRAIN_SERVER`, else cli.env, else `http://127.0.0.1:4242`.
-- `-token` falls back to `$GRAIN_TOKEN`, `$GRAIN_AUTH_TOKEN`, `$GRAIN_ID_TOKEN`, `$GRAIN_TUNNEL_TOKEN`.
+- `-server` defaults to `$GRAIN_SERVER`, else the active context's server, else cli.env, else `http://127.0.0.1:4242` ([#XC-3](../external-cli/external-cli.spec.md#XC-3)).
+- `-context` names the context to use; it defaults to `$GRAIN_CONTEXT`, else config.json's `current` ([#XC-2](../external-cli/external-cli.spec.md#XC-2)).
+- `-token` falls back to `$GRAIN_TOKEN`, `$GRAIN_AUTH_TOKEN`, `$GRAIN_ID_TOKEN`, `$GRAIN_TUNNEL_TOKEN`, then the active context's credential ([#XC-4](../external-cli/external-cli.spec.md#XC-4)).
 - `-audience` defaults to `$GRAIN_AUDIENCE`, else `$GRAIN_TUNNEL_AUDIENCE`.
 - `-as` defaults to `$GRAIN_USER`.
 - `-json` switches every task command to JSON ([#CLI-8](cli.spec.md#CLI-8)).
@@ -50,6 +52,7 @@ The binary **MUST** register exactly the commands below. The guard compares this
 | `-audience` | string |  |  |  |
 | `-as` | string |  |  |  |
 | `-json` | bool |  |  |  |
+| `-context` | string |  |  |  |
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/cli_flags_test.go`: `TestRunCLI_GlobalFlags`, `TestRunCLI_EnvVarDefaults`, `TestRunCLI_UsageIncludesNewFlags`.
@@ -62,10 +65,11 @@ Each command parses its own flags, with flags allowed after the task id ([#CLI-1
 
 ### 3.1 `grain list` {#CLI-22}
 
-`grain list [flags]` calls `GET /api/config` (the list's configuration and declared custom fields), then `GET /api/tasks`. When no `-filter`/shorthand is given and the deployment has no configured list default, it also reads `GET /api/settings` for the hidden-state settings (`deploymentSettings`), and treats a failed read as empty settings. It prints one aligned line per task. Closed and deferred tasks are left out unless `-closed`, `-deferred` or a filter naming that state asks for them, and the CLI says what it left out.
+`grain list [flags]` calls `GET /api/config` (the list's configuration and declared custom fields), then `GET /api/tasks`. When no `-filter`/shorthand is given and the deployment has no configured list default, it also reads `GET /api/settings` for the hidden-state settings (`deploymentSettings`), and treats a failed read as empty settings. It prints one aligned line per task, marking a queued task that waits on an unfinished dependency with `(waits on <ids>)` in the title column so the `id`, `state` and `repo` columns stay aligned. Closed and deferred tasks are left out unless `-closed`, `-deferred` or a filter naming that state asks for them, and the CLI says what it left out.
 - `-filter attribute:comparison:value` is repeatable, in the UI's link spelling. Shorthands such as `-state`, `-repo` and `-capability` are conditions too.
 - `-sort attribute[:asc|desc]` is repeatable, and the sort is stable.
 - `grain list -h` prints the attribute and comparison vocabulary, including declared custom fields.
+- Two provenance conditions sit outside the vocabulary the UI shares ([external-cli #XC-18](../external-cli/external-cli.spec.md#XC-18)): `derived_from:eq:<owner/name#pr or its URL>` (a `derived-from` link, or a `Derived from:` line in the body) and `filed_via:has:<substring>` (case-insensitive over `filedVia`). `GET /api/tasks` takes the same as `?derived_from=` and `?filed_via=`.
 - A value nobody can act on is refused before the daemon is asked.
 
 With `-json` it prints the `ui.Task` array.
@@ -80,23 +84,33 @@ With `-json` it prints the `ui.Task` array.
 | `-capability` | string |  |  | shorthand for -filter capability:any:VALUE (or "none" for the tasks carrying none) |
 | `-closed` | bool |  |  | list closed tasks too (-closed=false to leave them out where the deployment shows them by default) |
 | `-deferred` | bool |  |  | list deferred tasks too |
+| `-external-ref` | string |  |  | shorthand for -filter externalRef:any:VALUE (e.g. CA-204, or "none" for tasks with no external reference) |
 | `-filter` | value |  |  | only tasks matching this condition, written attribute:comparison:value -- repeatable, and every one of them has to hold |
 | `-interactive` | bool |  |  | only live chats (-interactive=false for only background tasks) |
-| `-origin` | string |  |  | shorthand for -filter origin:any:VALUE (hand, external, proposed, schedule, suite, fix, review) |
+| `-origin` | string |  |  | shorthand for -filter origin:any:VALUE (hand, external, proposed, imported, schedule, suite, fix, review) |
+| `-owner` | string |  |  | shorthand for -filter owner:any:VALUE (or "me" for your own tasks) |
 | `-repo` | string |  |  | shorthand for -filter repo:any:VALUE (owner/name, or "none" for the tasks with no target repo) |
 | `-search` | string |  |  | only tasks whose title or id contains this text, case-insensitively |
 | `-sort` | value |  |  | print in this order: attribute:asc or attribute:desc keys, comma-separated, the first deciding and the rest breaking its ties |
 | `-state` | string |  |  | shorthand for -filter state:any:VALUE (proposed, queued, running, awaiting_reply, failed, awaiting_submit, completed, deferred, closed, or asked for awaiting_reply and awaiting_submit both) |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/list_test.go`: `TestConditionsNarrowTheListing`, `TestShorthandFlagsAreConditions`, `TestSortKeysOrderTheListing`, `TestConditionsRejectWhatNobodyCanActOn`; `pkg/cli/list_hidden_test.go`: `TestListHidesClosedAndDeferredTasksUnlessAsked`; `pkg/cli/list_declared_test.go`: `TestListHelpNamesTheDeclaredFields`; `pkg/cli/list_vocabulary_test.go`.
+**Pinned by:** `pkg/cli/list_test.go`: `TestConditionsNarrowTheListing`, `TestShorthandFlagsAreConditions`, `TestSortKeysOrderTheListing`, `TestConditionsRejectWhatNobodyCanActOn`; `pkg/cli/list_hidden_test.go`: `TestListHidesClosedAndDeferredTasksUnlessAsked`; `pkg/cli/list_declared_test.go`: `TestListHelpNamesTheDeclaredFields`; `pkg/cli/list_vocabulary_test.go`; `pkg/cli/list_test.go`: `TestListDerivedFromAndFiledViaFiltersAndGetCommentsSince`.
 
-### 3.2 `grain get <id>` {#CLI-23}
+### 3.2 `grain get <id>` / `grain show <id>` {#CLI-23}
 
-Calls `GET /api/tasks/{id}` and prints the task block, the failure streak, a pending credential request and the conversation. `-json` prints `ui.TaskDetail`.
+Calls `GET /api/tasks/{id}` and prints the task block (including `owner:` and, when dependencies are declared, `depends on:` with each dependency's state), the failure streak, a pending credential request and the conversation. `grain show` is an alias for `grain get`. `-json` prints `ui.TaskDetail`. `-comments-since <RFC3339>` (`?comments_since=`) keeps only the conversation items created strictly after that time, for a polling loop ([external-cli #XC-18](../external-cli/external-cli.spec.md#XC-18)).
 
 <!-- BEGIN GENERATED FLAGS: grain get -->
-_No flags._
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-comments-since` | string |  |  | only the conversation items created strictly after this RFC 3339 time -- a polling loop's cursor |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain show -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-comments-since` | string |  |  | only the conversation items created strictly after this RFC 3339 time -- a polling loop's cursor |
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/args_test.go`: `TestCommandsRefuseArgumentsTheyHaveNoUseFor`.
@@ -109,6 +123,7 @@ Calls `POST /api/tasks` (`HTTPClient.CreateTask`) and prints the new task.
 - `-field name=value` sets a declared custom field and is repeatable; `grain create -h` lists the fields.
 - `-model` must be a model this deployment has (`TestCreateRefusesAModelThisDeploymentDoesNotHave`).
 - A task filed unapproved prints a note saying so.
+- `-body-file <path|->` reads the description from a file, or stdin for `-`; naming `-body` as well exits `2`. `-design <path>` (repeatable) records a design or spec file as a `design` provenance link (`ui.Task.Designs`) ([external-cli #XC-19](../external-cli/external-cli.spec.md#XC-19)).
 
 <!-- BEGIN GENERATED FLAGS: grain create -->
 | Flag | Type | Default | Env | Description |
@@ -119,14 +134,18 @@ Calls `POST /api/tasks` (`HTTPClient.CreateTask`) and prints the new task.
 | `-auto-merge` | bool |  |  | merge this task's pull request automatically once it reads clean |
 | `-base` | string |  |  | base branch, if not the target repo's default |
 | `-body` | string |  |  | task description |
+| `-body-file` | string |  |  | read the task description from this path (- for stdin) instead of -body |
 | `-capability` | value |  |  | capability to attach (repeatable): a capability ID, a capability reference (https://...[#method]), or a reference with its arguments as ref={json} |
 | `-depends-on` | value |  |  | task this one must wait on before it is dispatched -- 12, #12, task-12, grain/task-12 or the task's page URL (repeatable) |
+| `-design` | value |  |  | committed-context path ([owner/name:]path[@rev]) this task implements, pinned to a commit SHA (repeatable) |
+| `-external-ref` | string |  |  | external work reference (e.g. CA-204), inherited by tasks spawned from this one |
 | `-field` | value |  |  | name=value for one of the fields this deployment declares (repeatable; "name=" clears it, and a field holding a set takes the flag more than once or a comma-separated list) |
 | `-interactive` | bool |  |  | file this as a live chat rather than a change to run unattended (bwsalmon/agents#539); implies -approve and dispatches ahead of the backlog |
 | `-issue` | int |  |  | GitHub issue number associated with this task |
 | `-model` | string |  |  | ID of the model this task runs on (Settings -> Models), disabled ones included -- unset takes whichever model the rotation reaches |
 | `-network-access` | string |  |  | how much of the internet this task's sandbox may reach: "open" or "none" -- unset takes the deployment's own default |
 | `-no-repo` | bool |  |  | file this task with no repo at all, rather than falling back to the deployment default |
+| `-owner` | string |  |  | account responsible for this task (defaults to the caller) |
 | `-position` | string |  |  | which end of the backlog to file it at: "front" to run ahead of everything already queued, "end" to queue behind it. Unset files it wherever the last task added chose, and leaves that choice alone |
 | `-priority` | value |  |  | task priority, 1 or more (default 5; higher numbers mean higher priority) (default 5) |
 | `-read` | value |  |  | owner/name of a repo this task's run may read but never push to (repeatable) |
@@ -136,7 +155,7 @@ Calls `POST /api/tasks` (`HTTPClient.CreateTask`) and prints the new task.
 | `-write` | value |  |  | owner/name[@branch] of another repo this task may land work in, by proposing a task against it (repeatable) |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/create_position_test.go`: `TestBacklogPosition`; `pkg/cli/create_model_test.go`; `pkg/cli/create_author_test.go`: `TestCreateAuthorFilesTheTaskAsItsRequester`; `pkg/cli/create_unapproved_test.go`: `TestUnapprovedNote`; `pkg/cli/taskcmd_priority_test.go`: `TestPriorityFlagReadsTheAPIsSpellings`.
+**Pinned by:** `pkg/cli/create_position_test.go`: `TestBacklogPosition`; `pkg/cli/create_model_test.go`; `pkg/cli/create_author_test.go`: `TestCreateAuthorFilesTheTaskAsItsRequester`; `pkg/cli/create_unapproved_test.go`: `TestUnapprovedNote`; `pkg/cli/taskcmd_priority_test.go`: `TestPriorityFlagReadsTheAPIsSpellings`; `pkg/cli/taskcmd_test.go`: `TestCreateBodyFileStdinConflictAndDesignLink`.
 
 ### 3.4 `grain update <id> [flags]` {#CLI-25}
 
@@ -150,10 +169,13 @@ Calls `PATCH /api/tasks/{id}` (`UpdateTask`) and prints the task the `PATCH` ret
 | `-body` | string |  |  | new task description |
 | `-connection` | string |  |  | ID of the one connection this task's next run must use -- empty takes the pin off; pass it with -model when the pinned connection does not serve the new model |
 | `-depends-on` | value |  |  | task this one must wait on before it is dispatched -- 12, #12, task-12, grain/task-12 or the task's page URL (repeatable) |
+| `-design` | value |  |  | committed-context path ([owner/name:]path[@rev]) this task implements (repeatable) -- replaces the whole set; pass -design "" to clear |
+| `-external-ref` | string |  |  | new external work reference (e.g. CA-204) -- empty clears it |
 | `-field` | value |  |  | name=value for one of the fields this deployment declares (repeatable; "name=" clears it, and a field holding a set takes the flag more than once or a comma-separated list) |
 | `-issue` | int |  |  | new associated GitHub issue number |
 | `-model` | string |  |  | model this task's next run asks for (Settings -> Models) -- empty takes the deployment's default |
 | `-no-depends-on` | value |  |  | task this one should no longer wait on, in any form -depends-on takes (repeatable) |
+| `-owner` | string |  |  | transfer task ownership to this account |
 | `-priority` | value |  |  | new task priority, 1 or more (default 5; higher numbers mean higher priority) (default 5) |
 | `-read` | value |  |  | owner/name of a repo this task's run may read but never push to (repeatable) -- replaces the whole set |
 | `-repo` | string |  |  | new target repo (owner/name) |
@@ -289,6 +311,44 @@ The command has two forms:
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/pause_test.go`: `TestPrintAgentPause`, `TestPrintAgentPauseJSON`, `TestRunCLIPauseReadsAndLifts`, `TestRunCLIPausesAndResumesThePipeline`, `TestRunCLIPauseWithNoGateWired`; `pkg/cli/args_test.go`: `TestPauseRefusesAReasonWrittenWithoutItsFlag`.
+
+### 3.9 `grain reply`, `inbox`, `wait` and `logs` {#CLI-65}
+
+The external-agent workflow's answering and polling verbs ([external-cli #XC-20..#XC-23](../external-cli/external-cli.spec.md#XC-20)).
+- `reply <id> [<body...> | -body-file <path|->]` answers the question task `<id>`'s run parked on (`POST /api/tasks/{id}/reply`). It is refused with exit `2`, posting nothing, when no `ask_question` is parked and when the task waits on a `request_secret`, which names `/tasks/<id>` and its encrypted input instead; `comment` posts a general note either way.
+- `inbox [-repo R] [-kind question|secret|notification|merge-held|proposal]` lists what needs a person (`GET /api/inbox`) on the repositories the caller reads, one item per line with its root-relative UI path.
+- `wait <id...> [-until closed|merged|awaiting-reply|ci-done|any[,…]] [-timeout 30m]` re-issues `GET /api/tasks/wait` slices of at most 60 s. It exits `0` when a condition is met, `1` when `-until merged` (without `closed`) meets a task that closed unmerged or `-until closed` a failed one, and `5` when `-timeout` (the global flag, written after the verb; `30m` when unset) runs out, printing the `grain wait …` line that carries on.
+- `logs <id> [-attempt N] [-tail N] [-follow]` prints the latest (or `N`th) attempt's activity and transcript; `-follow` streams new lines until the attempt finishes, exiting `1` when it errored.
+
+<!-- BEGIN GENERATED FLAGS: grain reply -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-attach` | value |  |  | path to a local file to attach to the reply (repeatable) |
+| `-body-file` | string |  |  | read the reply from this path (- for stdin) instead of the words after the id |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain inbox -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-kind` | string |  |  | only items of this kind: question, secret, notification, merge-held, proposal |
+| `-repo` | string |  |  | only this repository's (owner/name) items |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain wait -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-until` | string | `"closed"` |  | what to wait for, comma-separated for the first of several: closed, merged, awaiting-reply, ci-done, any |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain logs -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-attempt` | int | `the latest` |  | the attempt to read, 1 for the first |
+| `-follow` | bool |  |  | stream new lines until the attempt finishes (exit 0 when it ends normally, 1 when it errored) |
+| `-tail` | int |  |  | only the last N lines of the transcript |
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/reply_test.go`: `TestGrainReplyAnswersQuestionRefusesIdleAndRefusesSecretRequest`; `pkg/cli/inbox_test.go`: `TestGrainInboxMatchesActionableCategoriesWithinRepoGrants`; `pkg/cli/wait_test.go`: `TestTasksWaitEndpointWakesOnConditionsEarnsNoWaitCreditAndExits5OnTimeout`; `pkg/cli/logs_test.go`: `TestGrainLogsStreamsAndExitsOnAttemptCompletion`.
 
 ---
 
@@ -585,41 +645,123 @@ _No flags._
 
 **Pinned by:** *untested*.
 
-### 4.7 `grain hostds list|register|set-owner` {#CLI-36}
+### 4.7 `grain host list|pending|accept|reject|codes|invite|rotate-code|revoke-code|rename|update|revoke|delete|delete-revoked|rekey|register|install|set-owner` {#CLI-36}
 
-This is the hostd registry. A hostd is registered with its owner, the identity it dials in as through IAP.
+This is the host registry and its enrollment handshake (Settings -> Hosts; docs/host-placement.md). A host joins with one shared enrollment code (`grain host -server <url> -join <code>`) as a verified person and waits for the deployment owner to accept it; a legacy host is registered with its owner, the identity it dials in as through IAP. `grain hostds` (and `grain hostd <verb>`) are hidden aliases that keep working; a bare `grain hostds` still lists.
+- `pending` calls `GET /api/hostds/pending` and prints each pending join request with its enrolling identity, host details and key fingerprint.
+- `accept [-name -labels -capacity] <id>` calls `POST /api/hostds/pending/{id}/accept`; `reject <id>` calls `POST /api/hostds/pending/{id}/reject`. Both are the deployment owner's alone and audited.
+- `codes` calls `GET /api/hostds/enrollment-codes`; `invite` creates one (`POST /api/hostds/enrollment-codes`) and prints the shared `--join` snippet; `rotate-code` and `revoke-code` call `.../{name}/rotate` and `.../{name}/revoke`. Revoking a code stops new joins and leaves accepted hosts alone.
+- `rename <old> <new>` calls `POST /api/hostds/{name}/rename`; `update` calls `PATCH /api/hostds/{name}` (owner, labels, capacity); `revoke` calls `POST /api/hostds/{name}/revoke` and drops a live connection; `delete` calls `DELETE /api/hostds/{name}` for a revoked host that no model connection or capability server still names, clearing the usage-limit pauses keyed to it; `delete-revoked` calls `POST /api/hostds/delete-revoked` and deletes every revoked host nothing still names, listing the ones it skipped.
+- `rekey <name>` moves a host registered with a legacy per-host token to a key-bound credential through the same owner-accepted join handshake.
 - `list` (`ls`) calls `GET /api/hostds`.
-- `register` (`create`) calls `POST /api/hostds`.
+- `register` (`create`) calls `POST /api/hostds`. It prints the token once, then the install instructions the daemon rendered (`install.lines`, `install.note`; `ui.RegisterHostdInstall`), which never carry the token.
+- `install <name>` calls `GET /api/hostds/{name}/install` and prints the same instructions again, without rotating the token.
 - `set-owner <name> <owner>` calls `PATCH /api/hostds/{name}`.
+- `delete <name>` (`rm`) calls `DELETE /api/hostds/{name}`. It removes a revoked host and its tokens from the registry, so the name can be registered again. The daemon refuses a live host ("revoke it first"), `local`, and a host a model connection's `hostd`/`hostdFallback` or a capability server's `hostd` still names by name, listing each; the CLI prints that refusal as its error. It prints the usage-limit pauses keyed to the host that were cleared with it.
+- `delete-revoked` calls `POST /api/hostds/delete-revoked`: it deletes every revoked host nothing still names and prints the ones it skipped, with why.
 
 **Scope:** admin.
 
-<!-- BEGIN GENERATED FLAGS: grain hostds -->
+<!-- BEGIN GENERATED FLAGS: grain host list -->
 _No flags._
 <!-- END GENERATED FLAGS -->
 
-<!-- BEGIN GENERATED FLAGS: grain hostds list -->
-_No flags._
-<!-- END GENERATED FLAGS -->
-
-<!-- BEGIN GENERATED FLAGS: grain hostds register -->
+<!-- BEGIN GENERATED FLAGS: grain host register -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
-| `-label` | value |  |  | k=v the hostd is selected by (repeatable) |
-| `-owner` | string |  |  | the hostd's owner: the email or service account it connects as through IAP |
-| `-token-file` | string |  |  | write the hostd's token to this file (mode 0600) rather than print it |
+| `-label` | value |  |  | k=v the host is selected by (repeatable) |
+| `-owner` | string |  |  | the host's owner: the email or service account it connects as through IAP |
+| `-token-file` | string |  |  | write the host's token to this file (mode 0600) rather than print it |
 <!-- END GENERATED FLAGS -->
 
-<!-- BEGIN GENERATED FLAGS: grain hostds set-owner -->
+<!-- BEGIN GENERATED FLAGS: grain host set-owner -->
 _No flags._
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/hostds_test.go`: `TestHostdsRegisterAndSetOwner`.
+<!-- BEGIN GENERATED FLAGS: grain host install -->
+_No flags._
+<!-- END GENERATED FLAGS -->
 
-### 4.8 `grain git-connections`, `grain git-ambient`, `grain default-model` {#CLI-37}
+<!-- BEGIN GENERATED FLAGS: grain host pending -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain host accept -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-capacity` | int | `-1` |  | maximum concurrent agent CLI runs on this host (0 for unlimited) |
+| `-label` | value |  |  | k=v label for the accepted host (repeatable) |
+| `-labels` | string |  |  | comma-separated k=v labels for the accepted host |
+| `-name` | string |  |  | name for the accepted host (defaults to sanitized hostname) |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain host reject -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain host codes -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain host invite -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-allow` | string |  |  | comma-separated allowed principals (user:<email>, group:<email>, github:<login>, org:<org>) |
+| `-capacity` | int |  |  | default capacity for hosts enrolled with this code |
+| `-expires` | string |  |  | expiry duration (e.g. 24h, 168h) or RFC3339 timestamp when creating a code |
+| `-label` | value |  |  | default k=v label for hosts enrolled with this code (repeatable) |
+| `-labels` | string |  |  | default comma-separated k=v labels for hosts enrolled with this code |
+| `-max-uses` | int |  |  | maximum number of join requests this code may file (0 for unlimited) |
+| `-name` | string |  |  | create a new enrollment code with this name (if omitted, shows the active snippet) |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain host rotate-code -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain host revoke-code -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain host rename -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain host update -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-capacity` | int | `-1` |  | set maximum concurrent agent CLI runs (0 for unlimited) |
+| `-label` | value |  |  | k=v label for the host (repeatable) |
+| `-labels` | string |  |  | replace labels with comma-separated k=v pairs |
+| `-owner` | string |  |  | update the host's owner email or service account |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain host revoke -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain host delete -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain host rekey -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-key-file` | string |  |  | file where the host's Ed25519 private key (mode 0600) will be generated or loaded |
+| `-token-file` | string |  | $GRAIN_HOSTD_TOKEN | file holding the host's current token, and where the new key-bound credential is saved ($GRAIN_HOSTD_TOKEN when unset) |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain host delete-revoked -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/hostds_test.go`: `TestHostdsRegisterAndSetOwner`, `TestHostdsDelete`.
+
+### 4.8 `grain git-connections`, `grain git-ambient`, `grain git-login`, `grain default-model` {#CLI-37}
 
 - `git-connections` reads `GET /api/deployment` and prints one `host credential` line per git connection.
 - `git-ambient [-host h] [-kind github|git] [-base-url u] [-proxy u] [-source gh|git|auto] [-if-none]` calls `POST /api/deployment/git-connections`. It adds an ambient connection that asks this host's own `gh`/`git` login for a token on demand. It is for a daemon on the bare machine only.
+- `git-login [-web|-from-gh|-with-token] [-host h] [-base-url u] [-proxy u] [-scope s] [-author name] [-client-id id] [-scopes list]` delegates the caller's own GitHub HTTPS token to the deployment and registers it with `POST /api/deployment/git-connections`, with signing on, so pull requests and comments made with it are signed `Signed by <Name> (via Grain)`. `-web` runs the GitHub OAuth Device Flow, `-from-gh` takes `gh auth token`, and `-with-token` reads the token from standard input; at most one may be given, and with none it uses an active `gh` login and falls back to the Device Flow. It has no `login` alias: `grain login` is the sign-in command ([#CLI-108](#CLI-108)). See `design/design/git-login.design.md`.
 - `default-model [-if-none|-if-unserved] <model>` sends `PUT /api/deployment {"defaultModel"}`. Without either flag that is its only call. With `-if-none` or `-if-unserved` it first reads `GET /api/deployment` and leaves a set default alone (`This deployment already runs on <m> by default: leaving it as it is.`). `-if-unserved` also reads `GET /api/settings` when a default is set, and replaces it when no enabled connection serves it.
 
 **Scope:** admin.
@@ -637,6 +779,21 @@ _No flags._
 | `-kind` | string | `"github"` |  | the host's kind: github (a forge API) or git (clone, fetch and push only) |
 | `-proxy` | string |  |  | the http(s)://host:port proxy the host is reached through, if any (read from the source's own tool when empty, for a registered source that has one) |
 | `-source` | string | `"auto"` |  | which of this host's tools to ask: gh, git, auto (auto: a registered source on its own hosts; gh, then git, elsewhere) |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain git-login -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-author` | string |  |  | explicit name to sign pull requests and comments with (defaults to your GitHub profile name or login) |
+| `-base-url` | string |  |  | the host's scheme://host[:port], when that is not https on the default port |
+| `-client-id` | string | `"178c6fc778ccc68e1d6a"` | $GRAIN_GITHUB_CLIENT_ID | GitHub OAuth Client ID for -web device flow ($GRAIN_GITHUB_CLIENT_ID) |
+| `-from-gh` | value |  |  | delegate the token from this machine's gh auth token login |
+| `-host` | string | `"github.com"` |  | git host to authenticate against |
+| `-proxy` | string |  |  | the http(s)://host:port proxy the host is reached through, if any |
+| `-scope` | string |  |  | optional owner or owner/repo scope (empty sets the deployment-wide default on -host) |
+| `-scopes` | string | `"repo,read:org,workflow"` |  | comma-separated OAuth scopes requested by -web |
+| `-web` | bool |  |  | authenticate in a web browser using GitHub OAuth Device Flow |
+| `-with-token` | bool |  |  | read the HTTPS token from standard input |
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain default-model -->
@@ -770,6 +927,9 @@ This is grain's own CI, from the operator's side.
 - `cache [clear]` calls `GET`/`DELETE /api/ci/cache`.
 - `faults [-repo r] [-source s]` calls `GET /api/ci/faults`.
 - `artifact` (`artifacts`) downloads from `/api/ci/runs/{id}/artifacts/{job}/{name}`.
+- `wait (<run-id> | -pr <url|owner/name#n> | -ref <branch> -repo <owner/name>) [-jobs j1,j2]` ([external-cli #XC-26](../external-cli/external-cli.spec.md#XC-26)) polls `GET /api/ci/runs/{id}` until the run, or every job `-jobs` names, has a verdict. `-pr` and `-ref` attach to the newest run on that branch still in flight, else the newest; `-pr` finds the branch from the grain task tracking the pull request (`GET /api/tasks`). It waits the global `-timeout` (default `30m`) as a whole and accrues no wait credit. It prints the sandbox's wait answer (`gitproxy.CLIWaitResponse`, as [`grain ci wait` in a sandbox](sandbox.spec.md#CLI-91) reads it) plus `repo`, `ref` and `failing` (each failing job's step, failing tests and any shared fault from `GET /api/ci/faults`). It exits `0` green, `1` on `failure`/`cancelled`/`timed_out`, and `5` when `-timeout` runs out while the run is still going.
+- `retrigger <run-id> [-jobs j1,j2]` (`ci:write`) reruns the run's failed jobs (or the named ones) once, uncached: `POST /api/ci/runs` with the run's repository, branch, commit and push/pull_request event, and `recheck`. GitHub Actions runs are refused. The sandbox's form is [#CLI-92](sandbox.spec.md#CLI-92).
+- `test-history <test-name> [-repo r] [-limit N]` reads up to `-limit` (at most 100) of the newest runs, each in full, and prints `ci.QueryTestHistory`'s report, the [sandbox's `grain ci test-history`](sandbox.spec.md#CLI-89) rendering (`-json`: the report).
 
 <!-- BEGIN GENERATED FLAGS: grain ci -->
 | Flag | Type | Default | Env | Description |
@@ -848,13 +1008,51 @@ _No flags._
 | `-source` | string |  |  | only faults from this CI source: grain, github, or all |
 <!-- END GENERATED FLAGS -->
 
+<!-- BEGIN GENERATED FLAGS: grain ci wait -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-jobs` | string |  |  | only these jobs, by name or id, comma-separated: the verdict is theirs alone |
+| `-pr` | string |  |  | wait on the newest run of this pull request's branch: a GitHub URL or owner/name#n |
+| `-ref` | string |  |  | wait on the newest run of this branch (needs -repo) |
+| `-repo` | string |  |  | the repository -ref is a branch of, as owner/name |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain ci retrigger -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-jobs` | string |  |  | rerun these jobs, by id, comma-separated, rather than the ones that failed |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain ci test-history -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-limit` | int | `20` |  | how many of the newest runs to look through (at most 100) |
+| `-repo` | string |  |  | only this repository's runs, as owner/name (default: every repository's) |
+<!-- END GENERATED FLAGS -->
+
 <!-- BEGIN GENERATED FLAGS: grain ci artifact -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-o` | string |  |  | where to write it: a path, or - for standard output (default: the artifact's own file name, in the working directory) |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/cicmd_test.go`: `TestCICommandDispatch`, `TestCIRunRecheckFlags`, `TestCIListSendsTheWholeFilterVocabularyToTheDaemon`, `TestCIListResolvesASpanBeforeSendingIt`, `TestCIListRefusesAWordItDoesNotKnow`, `TestPrintCIRunLeadsWithTheFailure`, `TestPrintCIRunsJSON`.
+**Pinned by:** `pkg/cli/cicmd_test.go`: `TestCICommandDispatch`, `TestCIRunRecheckFlags`, `TestCIListSendsTheWholeFilterVocabularyToTheDaemon`, `TestCIListResolvesASpanBeforeSendingIt`, `TestCIListRefusesAWordItDoesNotKnow`, `TestPrintCIRunLeadsWithTheFailure`, `TestPrintCIRunsJSON`, `TestExternalCIWaitVerdictsSharedFaultsZeroWaitCreditAndExitCodes`, `TestExternalCIRetriggerRunsUncachedFailedJobs`, `TestExternalCITestHistoryFormattingAndJSON`.
+
+### 4.12a `grain merge-queue [-repo owner/name]` {#CLI-107}
+
+The merge queue from a terminal ([external-cli #XC-27](../external-cli/external-cli.spec.md#XC-27)): queued pull requests, the batches and CI runs testing them, and held merge gates. It reads `deploy://merge-queue` over `GET /api/fs/deploy/merge-queue`, the file a [sandbox's `grain merge-queue`](sandbox.spec.md#CLI-95) reads over its proxy.
+- It needs `ci:read` or `deployment:read`. Under `ci:read` alone the daemon leaves out every repository the caller may not read.
+- `-repo` is sent as `?repo=` and narrows that further; it cannot widen it.
+- `-json` is sent as `?format=json` and prints the report the text is rendered from (`mcp.MergeQueueReport`).
+- It only reads. `grain force-merge` stays behind `merge:force`.
+
+<!-- BEGIN GENERATED FLAGS: grain merge-queue -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-repo` | string |  |  | only this repository's queue, as owner/name |
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/mergequeue_test.go`: `TestExternalMergeQueueFiltersByRepoAndJSON`.
 
 ### 4.13 `grain declarations check [dir]` {#CLI-42}
 
@@ -934,11 +1132,162 @@ _No flags._
 
 ---
 
+### 4.15 `grain pr adopt|review|status <pr>` {#CLI-65}
+
+The external half of pull-request coordination ([`external-cli.spec.md`](../external-cli/external-cli.spec.md) #XC-28, #XC-29). `<pr>` is `owner/name#n` or the pull request's GitHub URL; anything else **MUST** fail with a usage error before any request is sent. Every verb takes `-json` and the global `-json`. The in-sandbox `grain pr` ([`sandbox.spec.md`](sandbox.spec.md)) is a different command about the task's own branch.
+
+1. `grain pr adopt <pr> [-mode review-only|finish] [-spec <path>] [-design <path>]` calls `POST /api/pull-requests/adopt` (scope `merge:write`, and `tasks:write` on the pull request's repository) and prints the shepherd task's ID, state and mode. `-mode` defaults to `review-only`; `finish` on a pull request a review-only shepherd already holds upgrades that task in place. A filing that lands `proposed` says it waits for a person.
+2. `grain pr review <pr> [-design] [-spec <path>]` calls `POST /api/pull-requests/review` (scope `tasks:write`, and `repos:read` on the repository) and prints the review task. `-design` asks for a design review: `design/spec/contributions/contributions.spec.md` conventions and overlapping designs under `design/`.
+3. `grain pr status <pr> [-threads]` calls `GET /api/pull-requests/status` (scope `ci:read`, and `tasks:read` on the repository) and prints the head SHA, the shepherd task and mode, the latest grain CI run and its failing jobs, each grain review with its state and finding count, the merge-queue gate, and with `-threads` every inline review thread's file, line and body.
+
+#### `grain pr`
+
+<!-- BEGIN GENERATED FLAGS: grain pr -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+#### `grain pr adopt`
+
+<!-- BEGIN GENERATED FLAGS: grain pr adopt -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-design` | string |  |  | the design the change implements, as a repository path under design/design/ |
+| `-json` | bool |  |  | print the shepherd task as JSON |
+| `-mode` | string | `"review-only"` |  | review-only (grain reviews and gates the pull request without pushing) or finish (it also pushes fixes) |
+| `-spec` | string |  |  | the specification the change implements, as a repository path under design/spec/ |
+<!-- END GENERATED FLAGS -->
+
+#### `grain pr review`
+
+<!-- BEGIN GENERATED FLAGS: grain pr review -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-design` | bool |  |  | review the design: design-folder conventions (contributions.spec.md) and overlapping designs under design/ |
+| `-json` | bool |  |  | print the review task as JSON |
+| `-spec` | string |  |  | a specification to check the change's conformance against, as a repository path under design/ |
+<!-- END GENERATED FLAGS -->
+
+#### `grain pr status`
+
+<!-- BEGIN GENERATED FLAGS: grain pr status -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-json` | bool |  |  | print the status as JSON |
+| `-threads` | bool |  |  | list every inline review thread's file, line and body |
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/prcmd_test.go`, `pkg/ui/pull_requests_api_test.go`: `TestGrainPRReviewDesignAndPRStatusThreadsJSON`; `pkg/orchestrator/takeover_adopt_test.go`: `TestAdoptPullRequestReviewOnlyVsFinishUpgradeInPlace`, `TestAdoptPullRequestLinksSpecAndDesignIntoConformanceReviewAndProposalGate`, `TestPullRequestReviewDesignAndStatusThreads`.
+
+---
+
+### 4.16 `grain login`, `logout`, `whoami` and `grain context` {#CLI-108}
+
+These sign a workstation in to a deployment as a named context, and say who it is signed in as. Their behaviour is [#XC-1](../external-cli/external-cli.spec.md#XC-1), [#XC-2](../external-cli/external-cli.spec.md#XC-2), [#XC-7](../external-cli/external-cli.spec.md#XC-7), [#XC-8](../external-cli/external-cli.spec.md#XC-8) and [#XC-9](../external-cli/external-cli.spec.md#XC-9).
+- `grain context` needs no daemon. It reads and writes `$XDG_CONFIG_HOME/grain/config.json` and the credentials kept beside it.
+- `grain login` defaults `--scope-set` to `grain/external-dev` and `--expires` to `30d`. `--auth` names `access-code` or a source a wrapper registered with `cli.RegisterCredentialSource`.
+- `grain logout --local` forgets the credential without revoking its token on the server.
+
+#### `grain context list|use|show|delete`
+
+<!-- BEGIN GENERATED FLAGS: grain context -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+#### `grain login <url>`
+
+<!-- BEGIN GENERATED FLAGS: grain login -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-auth` | string |  |  | how to sign in: access-code, or a credential source this build registers |
+| `-expires` | string | `"30d"` |  | how long --issue-token's token lasts (30d, 12h, ...) |
+| `-issue-token` | bool |  |  | mint a scoped gma_ token for this workstation and keep it |
+| `-name` | string |  |  | the context's name (default: from the server's host name) |
+| `-refresh` | bool |  |  | re-mint the context's expired or expiring token |
+| `-repos` | string |  |  | comma-separated repositories --issue-token limits the token to |
+| `-scope-set` | string | `"grain/external-dev"` |  | the scope set --issue-token mints |
+| `-token-stdin` | bool |  |  | read a gma_ token (or, with --auth access-code, the access code) from stdin |
+<!-- END GENERATED FLAGS -->
+
+#### `grain logout [<ctx>]`
+
+<!-- BEGIN GENERATED FLAGS: grain logout -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-local` | bool |  |  | only forget the credential here; do not revoke the token on the server |
+<!-- END GENERATED FLAGS -->
+
+#### `grain whoami`
+
+<!-- BEGIN GENERATED FLAGS: grain whoami -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/context_test.go`: `TestContextConfigXDGMode0600AndNoRawSecrets`; `pkg/cli/cliconn_test.go`: `TestContextCommandsAndServerPrecedence`; `pkg/cli/credentials_test.go`: `TestCredentialStoreKeyringFallbackAndRefusesWorldReadableFile`; `pkg/cli/login_test.go`: `TestGrainLoginIssueTokenSelfServiceNonAdminAndLogoutRevokes`; `pkg/cli/credsource_test.go`: `TestRegisterCredentialSourceAndHTTPClientRefusesLoginRedirectAndHTML`.
+
+---
+
+### 4.17 `grain registry status|register|unregister` {#CLI-109}
+
+Self-registers a grain deployment as a `connected` entry in a grain registry (`design/design/registry.design.md`) and inspects its background heartbeats and self-reported scopes.
+- `status` (also bare `grain registry`) calls `GET /api/registry` and prints connection state, registry URL, entry metadata, last heartbeat, active and awaiting-reply task counts, any heartbeat error or scope conflicts, and advertised `(repo, path_prefix, role)` scopes.
+- `register` creates or updates the `connected` entry on the registry (`POST /api/entries` or `PATCH /api/entries/{name}` / `POST /api/entries/{name}/credentials/rotate`), updates `Registry` in `POST /api/settings` (clearing any previous registry URL before swapping credentials when retargeting), stores any minted `grc_...` registration credential in the daemon's secret store under `registry-registration-token` (`PUT /api/secrets/registry-registration-token/value`), and runs an immediate heartbeat via `POST /api/registry/heartbeat`. `-standalone` registers on the registry without contacting a local daemon.
+- `unregister` deletes the entry on the registry (`DELETE /api/entries/{name}` unless `-keep-remote` is given), clears `Registry` in `POST /api/settings`, and deletes `registry-registration-token` from the daemon's secret store.
+
+**Scope:** `status` requires `api:read`; `register` and `unregister` require `admin` (unless `-standalone` is set).
+
+<!-- BEGIN GENERATED FLAGS: grain registry -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+#### `grain registry status`
+
+<!-- BEGIN GENERATED FLAGS: grain registry status -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+#### `grain registry register`
+
+<!-- BEGIN GENERATED FLAGS: grain registry register -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-display-name` | string |  |  | human-readable display name in the registry directory |
+| `-entry` | string |  | $GRAIN_REGISTRY_ENTRY | entry name in the grain registry ($GRAIN_REGISTRY_ENTRY; or positional <entry>) |
+| `-host-kind` | string |  |  | connected entry host kind: "workstation", "kubernetes", or "other" |
+| `-listed` | bool | `true` |  | include this entry in default registry directory listings |
+| `-oidc` | bool |  |  | use OIDC ID tokens for registration and daemon heartbeats instead of minting a grc_... token |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-owner-group` | string |  |  | optional group principal that co-owns this entry |
+| `-purpose` | string |  |  | short description of this grain's purpose |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+| `-rotate-token` | bool |  |  | rotate an existing connected entry's grc_... registration credential |
+| `-standalone` | bool |  |  | register on the registry without writing settings or secrets to a local grain daemon |
+| `-token-file` | string |  |  | with -standalone, write a minted grc_... token to this file (mode 0600) instead of printing it |
+<!-- END GENERATED FLAGS -->
+
+#### `grain registry unregister`
+
+<!-- BEGIN GENERATED FLAGS: grain registry unregister -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-entry` | string |  | $GRAIN_REGISTRY_ENTRY | entry name in the grain registry ($GRAIN_REGISTRY_ENTRY; or positional <entry>) |
+| `-keep-remote` | bool |  |  | clear the daemon's local registry settings and credential without deleting the entry on the registry |
+| `-oidc` | bool |  |  | authenticate remote entry deletion with an OIDC ID token |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for deleting the entry on the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+| `-standalone` | bool |  |  | delete the entry on the registry without contacting a local grain daemon |
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/registry_test.go`: `TestRegistryCLIRegisterStatusUnregister`, `TestDaemonRegistryFlags`.
+
+---
+
 ## 5. Service modes
 
 ### 5.1 `grain daemon [flags]` {#CLI-43}
 
-This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (`-ui-addr`, default `0.0.0.0:4242`). It is the only process that opens the store. Its flags configure the store, sandboxes, frameworks, CI, auth (`-ui-require-iap`, `-ui-allowed-principals`; see [`authentication.spec.md`](../authentication/authentication.spec.md)) and the agent CLI run locations (`-claude-run`, `-codex-run`, `-agy-run`; see `cli-run-location.design.md`). `daemon postgres` selects the PostgreSQL store path. The help text is pinned byte for byte.
+This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (`-ui-addr`, default `0.0.0.0:4242`). It is the only process that opens the store. Its flags configure the store, sandboxes, frameworks, CI, auth (`-ui-require-verifier`, `-ui-require-iap`, `-ui-registry-issuer`, `-ui-registry-audience`, `-ui-registry-keys-url`, `-ui-allowed-principals`; see [`authentication.spec.md`](../authentication/authentication.spec.md)) and the agent CLI run locations (`-claude-run`, `-codex-run`, `-agy-run`; see `cli-run-location.design.md`). `daemon postgres` selects the PostgreSQL store path. The help text is pinned byte for byte.
 
 <!-- BEGIN GENERATED FLAGS: grain daemon -->
 | Flag | Type | Default | Env | Description |
@@ -946,7 +1295,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-actions-cache-dir` | string |  |  | root directory for the GitHub Actions cache -- defaults to <sandbox-dir>/cache/actions when -sandbox-dir is set, and <data-dir>/cache/actions otherwise |
 | `-actions-cache-size-gb` | int | `20` |  | how much disk, in GiB, this deployment's GitHub Actions cache may use before it starts evicting the entries nothing has read for longest. It is what makes a cache-from: type=gha build warm across CI runs, and every branch of a repository shares one. 0 seeds a deployment that keeps no such cache. Seeds a fresh database only: the stored setting (Settings -> Sandbox, 'Actions cache') wins from then on |
 | `-agy-path` | string |  |  | path to the Antigravity CLI binary (agy) agent/antigravity runs as a subprocess; empty resolves "agy" against $PATH instead. Only used by a run driven by the "antigravity" framework |
-| `-agy-run` | string |  |  | where the agy CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through grain hostd, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release |
+| `-agy-run` | string |  |  | where the agy CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through the host agent, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release |
 | `-allow-unisolated-host-sandboxes` | bool |  |  | let -host-sandboxes start on a daemon others can reach, accepting that everyone who can file a task there may run anything on this host as this daemon's user |
 | `-as` | string |  |  | principal the UI/API attributes tasks and comments it creates to (defaults to the OS user) |
 | `-backup-gcs-bucket` | string |  |  | GCS bucket for scheduled backups; when set, upload to GCS instead of Google Drive |
@@ -970,23 +1319,26 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-ci-step-output-mb` | value |  |  | ceiling on the step output grain CI keeps across its whole history, in MiB -- whole runs' output is swept, oldest first, until what is left fits, and the runs themselves stay where they are. This is the expensive half and the only one that makes a red run diagnosable rather than merely countable, so it is bounded by disk rather than by a count of runs: what one run prints is between nothing and the -ci-run-output-kb cap. 0 uses grain's own default, 64MiB, which is three or four days of a deployment starting 300 runs a day; a negative number keeps every byte forever. Stored on this deployment's config row the first time it starts; change it in Settings (or 'grain settings') after that, where it takes effect without a restart. |
 | `-claude-oauth-token-file` | string |  |  | file holding the Claude Code OAuth token the agent authenticates as, passed to the claude subprocess as CLAUDE_CODE_OAUTH_TOKEN. Optional, and the exact counterpart of -gemini-api-key-file above: the UI stores one as the "claude-oauth-token" secret and that wins over this file |
 | `-claude-path` | string |  |  | path to the claude CLI binary agent/claude runs as a subprocess; empty resolves "claude" against $PATH instead. Only used when the agent-framework setting is "claude" |
-| `-claude-run` | string |  |  | where the claude CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through grain hostd, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release. claude also takes "detached": the image's claude, through grain hostd's claude-detached entry, so a daemon upgrade does not interrupt it |
+| `-claude-run` | string |  |  | where the claude CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through the host agent, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release. claude also takes "detached": the image's claude, through the host agent's claude-detached entry, so a daemon upgrade does not interrupt it |
 | `-cli-container-engine` | string |  |  | deprecated and ignored: agent CLIs no longer run in a per-run container of an image |
 | `-cli-image` | string |  |  | deprecated and ignored: agent CLIs no longer run in a per-run container of an image |
 | `-cli-image-file` | string |  |  | deprecated and ignored: agent CLIs no longer run in a per-run container of an image |
 | `-codex-auth-file` | value |  |  | shared auth.json written by codex login for ChatGPT authentication. Used only when no OpenAI API key is configured. The file must be writable so Codex can persist refreshed tokens; Grain links it into each private per-run CODEX_HOME |
 | `-codex-path` | string |  |  | path to the codex CLI binary agent/codex runs as a subprocess; empty resolves "codex" against $PATH instead. Only used when the agent-framework setting is "codex" |
-| `-codex-run` | string |  |  | where the codex CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through grain hostd, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release. codex also takes "detached": the image's codex, through grain hostd's codex-detached entry, so a daemon upgrade does not interrupt it |
+| `-codex-run` | string |  |  | where the codex CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through the host agent, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release. codex also takes "detached": the image's codex, through the host agent's codex-detached entry, so a daemon upgrade does not interrupt it |
 | `-container-git-proxy-host` | string |  |  | host address grain services are reachable at from local sandbox containers |
 | `-container-sandbox-cap-add` | string |  |  | comma-separated Linux capabilities handed back to local sandbox containers, which otherwise run with every capability dropped and no-new-privileges set; the stock sandbox image needs none |
-| `-container-sandbox-image` | string | `"ghcr.io/bwsalmon/grain/k8s-sandbox:latest"` |  | image used by local container sandboxes |
+| `-container-sandbox-fence` | string | `"auto"` |  | auto, require or off: whether local sandbox containers are fenced off from this host, its networks and link-local (the metadata server) by a per-container nftables chain. auto fences when nft can be run and otherwise runs containers unfenced and refuses external capability grants; require refuses a container that cannot be fenced; off never fences and refuses external capability grants |
+| `-container-sandbox-image` | string | `"docker.io/grainai/sandbox-k8s:latest"` |  | image used by local container sandboxes |
 | `-container-sandbox-network` | string |  |  | Docker network local sandbox containers join. Empty uses grain-sandboxes, a bridge grain creates with inter-container traffic disabled; any other name must already exist ("bridge" is Docker's shared default network) |
 | `-container-sandboxes` | bool |  |  | dispatch each run into its own local Docker container |
 | `-data-dir` | string |  |  | root directory for the store and secrets -- the state a redeploy must not lose, and the one directory to back up (required; scripts/setup.sh installs it at /var/lib/grain/data) |
 | `-db-driver` | string | `"sqlite"` |  | database backend driver ("sqlite" or "postgres"); defaults to sqlite |
 | `-db-dsn` | string |  |  | database connection string / DSN or path; for sqlite defaults to <data-dir>/store |
 | `-default-target-repo` | string |  |  | owner/name a task created through the UI/API with no repo of its own targets |
+| `-deployment-owner` | string |  | $GRAIN_DEPLOYMENT_OWNER | human email address that owns this deployment for RBAC (IsDeploymentOwner) and holds an immutable grain/operator floor on the access allowlist regardless of the OS user the daemon runs as ($GRAIN_DEPLOYMENT_OWNER when unset) |
 | `-disable-native-sandboxes` | bool |  |  | select sandbox backend "none": run the control plane only -- no sandbox is created, so no task runs (for tests and walkthroughs) |
+| `-disable-self-upgrade` | bool |  | $GRAIN_DISABLE_SELF_UPGRADE | disable in-VM self-upgrade actions (pkg/upgrade, automatic/scheduled upgrades, and SQLite-to-PostgreSQL cutover) and hide in-VM upgrade controls in the UI in favour of external lifecycle management ($GRAIN_DISABLE_SELF_UPGRADE when unset) |
 | `-docker-root-dir` | value |  |  | path to the local docker engine's own data root, for the UI's host disk figures only (grain/task-148): the sandbox image and every granule VM's disk overlay are written there rather than under -sandbox-dir, so on a deployment that gives sandboxes a volume of their own it is a disk worth a figure. Empty asks docker info for it once at startup, which is right whenever the daemon can reach the docker socket and sees that path where dockerd does; name it here when it cannot, or when this process sees the same directory at a path of its own. A path this process cannot stat is logged once and left out, not reported as a broken figure -- a containerised daemon is usually shown docker's socket and not the tree behind it |
 | `-flag-names` | value |  |  | print every flag this build's grain daemon accepts, one per line -- the name, then "bool" or "value" for whether it takes an argument -- and exit. Not configuration: it is what an upgrade asks a newly pulled image before cutting over to it, so that a systemd unit passing a flag the new build dropped is reported then rather than discovered at the next start (pkg/upgrade/image.go) |
 | `-gcp-agent-account-count` | int |  |  | the number of agent service accounts to use for gcp-key (default 1) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default 1) |
@@ -1016,18 +1368,18 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-grit-url` | value |  |  | EXPERIMENTAL, refused without -grit-experimental: remote grit server base url (e.g. http://127.0.0.1:4244); when unset, CI runs in-process. It runs none of a repository's workflows yet (design/design/grit-split.design.md, GS-3 to GS-5 deferred) |
 | `-host-sandbox-env` | value |  |  | NAME or NAME=VALUE, repeatable, only with -host-sandboxes: an environment variable every host-sandbox run of this machine's own tasks (not anybody else's) gets on top of the default allowlist -- NAME alone passes this daemon's own value, NAME=VALUE sets that one. For ambient workstation credentials a run should use as you: SSH_AUTH_SOCK, HTTPS_PROXY/HTTP_PROXY/NO_PROXY, CLOUDSDK_CONFIG=$HOME/.config/gcloud. Every run then acts with that identity. HOME cannot be set (it stays pinned to the run's directory, which keeps its git credentials its own). Values reach runs through a 0600 file and are redacted from what run_command returns, but a NAME=VALUE entry sits on this daemon's own command line, so one with credentials in a URL (user:pass@) is refused: export it and pass NAME alone |
 | `-host-sandboxes` | bool |  |  | dispatch each run into its own plain directory under -sandbox-dir on this host, with NO isolation: runs execute as this daemon's user, with this host's tools and network. For a single-user workstation; refused on a daemon others can reach (a non-loopback -ui-addr, IAP, -run-host-image) unless -allow-unisolated-host-sandboxes is also passed |
-| `-hostd-reattach-timeout` | duration | `15m0s` |  | how long a run's agent CLI, running detached on a grain hostd whose connection drops, waits for that same hostd to reconnect before the run fails as an infrastructure failure (no strike against the task); re-attached in time, it carries on from where its output stood. Runs queued for a hostd that is not connected wait for it whatever this is. 0 fails at once |
-| `-hostd-socket` | string |  |  | grain hostd's unix socket, for a daemon in a container whose host CLIs run through hostd; empty uses /run/grain-hostd/hostd.sock when its directory is mounted into the container. Refused on Kubernetes, which has no host |
-| `-hostd-token-file` | string |  | $GRAIN_HOSTD_TOKEN | deprecated, for one release: file holding a shared token a grain hostd on another machine dials in to /api/hostd/connect with (grain hostd -server <this daemon's URL> -token-file ...), as the one hostd -hostd-token-name names: its host CLIs and run: host capability servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset. Register each hostd in the hostd registry (/api/hostds) instead, which gives it a token of its own |
-| `-hostd-token-name` | string | `"remote"` |  | the hostd name a hostd dialing in with -hostd-token-file's shared token is known by |
-| `-hostd-token-owner` | string |  |  | the owner of -hostd-token-name's hostd: the email or service account a hostd dialing in with the shared token through IAP (or another identity verifier's proxy) must be verified as. A remote hostd with no owner is refused; one over loopback is not |
+| `-hostd-reattach-timeout` | duration | `15m0s` |  | how long a run's agent CLI, running detached on a host whose connection drops, waits for that same host to reconnect before the run fails as an infrastructure failure (no strike against the task); re-attached in time, it carries on from where its output stood. Runs queued for a host that is not connected wait for it whatever this is. 0 fails at once |
+| `-hostd-socket` | string |  |  | the host agent's unix socket, for a daemon in a container whose host CLIs run through the host agent; empty uses /run/grain-hostd/hostd.sock when its directory is mounted into the container. Refused on Kubernetes, which has no host |
+| `-hostd-token-file` | string |  | $GRAIN_HOSTD_TOKEN | deprecated, for one release: file holding a shared token a host on another machine dials in to /api/hostd/connect with (grain host -server <this daemon's URL> -token-file ...), as the one host -hostd-token-name names: its host CLIs and run: host capability servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset. Register each host in the host registry (/api/hostds) instead, which gives it a token of its own |
+| `-hostd-token-name` | string | `"remote"` |  | the host name a host dialing in with -hostd-token-file's shared token is known by |
+| `-hostd-token-owner` | string |  |  | the owner of -hostd-token-name's host: the email or service account a host dialing in with the shared token through IAP (or another identity verifier's proxy) must be verified as. A remote host with no owner is refused; one over loopback is not |
 | `-iap-backend-service` | string |  |  | GCP Compute backend service name for dynamic IAP IAM reconciliation; empty disables IAP reconciliation (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) |
 | `-iap-resource` | string |  |  | IAP web resource whose IAP access is reconciled from the teams and access list too, e.g. projects/<NUMBER>/iap_web/compute/services/<SERVICE>; empty or "none" disables it (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) |
 | `-k8s-container` | string | `"grain"` |  | name of grain's own container within that Deployment (only used with -k8s-sandboxes and -upgrade-image) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) |
 | `-k8s-deployment` | string | `"grain"` |  | name of the Kubernetes Deployment running grain itself, which the Upgrade button repoints at a new image (only used with -k8s-sandboxes and -upgrade-image). deploy/kubernetes/grain.yaml calls it "grain" (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) |
 | `-k8s-git-proxy-host` | string |  | $GRAIN_POD_IP | address (no port) this daemon's git proxy and model proxies are reachable at from inside a sandbox pod, in place of the loopback address the proxy binds to by default -- required with -k8s-sandboxes, the same way -granule-git-proxy-host is required with -granule-sandboxes and for the same reason: a pod's 127.0.0.1 is its own. In-cluster this is grain's own pod IP, which every other pod can route to directly, so it defaults to $GRAIN_POD_IP when that is set -- deploy/kubernetes/deployment.yaml fills it from the downward API (status.podIP); see -k8s-sandbox-service (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) |
 | `-k8s-granule-access` | string | `"kubectl"` |  | k8s-granule only: how grain runs steps in a sandbox's guest -- "kubectl" (granule exec over kubectl exec) or "dialout" (the wrapper's channel to -sandbox-access-addr's acceptor; refused unless grain runs in-cluster). design/design/grain-on-gke.design.md#GKE-3 |
-| `-k8s-granule-image` | string | `"ghcr.io/bwsalmon/grain/guest:latest"` |  | the packed guest image every pod this backend creates runs: a self-contained image with its own guest disk and kernel already baked in -- the shape Granulefile's own build produces, not the thin exec target -k8s-sandbox-image names and, just as importantly, not "granule:vendored" either (grain init's own -granule-runtime-image default, what scripts/granule/build-granule-image.sh produces, which has no guest disk and cannot boot at all -- confirmed against a real cluster, where a pod running it exits immediately). Required with -k8s-granule-sandboxes; no context-free default to pick, since nothing publishes a packed guest image under a stable tag yet -- docs/k8s-granule-design.md §4 (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) |
+| `-k8s-granule-image` | string | `"docker.io/grainai/sandbox:latest"` |  | the packed guest image every pod this backend creates runs: a self-contained image with its own guest disk and kernel already baked in -- the shape Granulefile's own build produces, not the thin exec target -k8s-sandbox-image names and, just as importantly, not "granule:vendored" either (grain init's own -granule-runtime-image default, what scripts/granule/build-granule-image.sh produces, which has no guest disk and cannot boot at all -- confirmed against a real cluster, where a pod running it exits immediately). Required with -k8s-granule-sandboxes; no context-free default to pick, since nothing publishes a packed guest image under a stable tag yet -- docs/k8s-granule-design.md §4 (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) |
 | `-k8s-granule-reattach-timeout` | duration | `2m0s` |  | k8s-granule dialout only: how long a step waits for a dropped channel to reconnect before the sandbox is lost (a CI job errors with "infra: sandbox channel lost" and is re-run; an agent's tool call fails and its sandbox is rebuilt) |
 | `-k8s-granule-sandboxes` | bool |  |  | dispatch into privileged Kubernetes pods, each booting a real cloud-hypervisor VM over /dev/kvm (one per run), instead of -k8s-sandboxes' plain pods or -granule-sandboxes' single-host VMs. Reuses -k8s-namespace/-k8s-kubectl/-k8s-workspace/-k8s-node-selector/-k8s-git-proxy-host, which mean the same thing on either Kubernetes backend; see -k8s-granule-image for the one that does not. docs/k8s-granule-design.md |
 | `-k8s-kubeconfig` | string |  |  | kubeconfig path passed to kubectl for -k8s-sandboxes and -k8s-granule-sandboxes; when empty and KUBECONFIG is unset, defaults to <data-dir>/kubeconfig or /var/lib/grain/kubeconfig if present |
@@ -1041,7 +1393,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-k8s-run-host-rwx` | bool |  |  | the -k8s-run-host-volume claims are ReadWriteMany, so run pods may use any node; off, they are ReadWriteOnce and run pods are pinned to this pod's node |
 | `-k8s-run-host-service-account` | string | `"grain"` |  | the service account run pods run as |
 | `-k8s-run-host-volume` | value |  |  | CLAIM:PATH, repeatable: a claim this pod mounts at PATH; run pods get the spool, staging and credential directories as subPaths of these, at the same paths |
-| `-k8s-sandbox-image` | string | `"ghcr.io/bwsalmon/grain/k8s-sandbox:latest"` |  | container image every sandbox pod runs; defaults to the image stamped into this build. It is the whole of what a dispatched agent finds when it lands. It needs the agent framework's own CLI, git, and a shell; Dockerfile.k8s-sandbox in this repo builds the published one (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) |
+| `-k8s-sandbox-image` | string | `"docker.io/grainai/sandbox-k8s:latest"` |  | container image every sandbox pod runs; defaults to the image stamped into this build. It is the whole of what a dispatched agent finds when it lands. It needs the agent framework's own CLI, git, and a shell; Dockerfile.k8s-sandbox in this repo builds the published one (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) |
 | `-k8s-sandbox-privileged` | bool |  |  | run sandbox containers privileged (only used with -k8s-sandboxes). This gives every dispatched agent root on the node it lands on; it is here because a sandbox that has to run docker or kind cannot work without it, not because it is a reasonable default (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) |
 | `-k8s-sandbox-service` | string |  |  | name of a ClusterIP Service in -k8s-namespace that selects this daemon's pod and forwards the git proxy's and model proxies' ports from the -sandbox-port-base block (so it needs that block). When set, sandbox pods are handed the Service's cluster IP for those, in place of -k8s-git-proxy-host, so a sandbox that outlives this pod -- a run the next daemon pod adopts after a rollout -- can still push and still reach its model. The daemon resolves it at startup and refuses to start if it cannot. deploy/kubernetes/grain.yaml names its grain-sandbox Service. Only used with -k8s-sandboxes or -k8s-granule-sandboxes (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) |
 | `-k8s-sandbox-service-account` | string |  |  | ServiceAccount for sandbox pods (only used with -k8s-sandboxes). Normally left empty: nothing in a sandbox should be talking to the API server, and no token is mounted into one regardless (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) |
@@ -1057,6 +1409,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-kontur-state-dir` | string |  |  | former name of -granule-state-dir, still accepted so existing systemd unit files keep working |
 | `-kontur-workspace` | string |  |  | former name of -granule-workspace, still accepted so existing systemd unit files keep working |
 | `-local-scripts` | value |  |  | NAME=/absolute/path/local-scripts.yaml, repeatable: a host-managed local-scripts declaration a task holding local-scripts:NAME is served (docs/local-scripts.md). Every other declaration is read from the state repository's local-scripts/NAME/local-scripts.yaml |
+| `-management-url` | string |  | $GRAIN_MANAGEMENT_URL | optional external http:// or https:// URL where this deployment's lifecycle and upgrades are managed (for example its registry entry page), shown in place of in-VM self-upgrade controls when -disable-self-upgrade is set ($GRAIN_MANAGEMENT_URL when unset) |
 | `-max-agent-turns` | int |  |  | cap on model/tool round trips per run (0 = uncapped; runs are bounded by wall-clock runtime instead) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) |
 | `-max-ci-jobs` | int |  |  | deprecated and ignored; configure max CI jobs in Settings |
 | `-max-concurrent` | int |  |  | former name of -max-workers, still accepted so an existing unit file keeps working; pass one or the other, not both |
@@ -1067,6 +1420,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-model-proxy-slot-wait` | duration | `1m0s` |  | how long a request over -model-proxy-max-concurrent waits for a slot before its 429, so stock vendor clients ride out the cap. 0 means the default; a negative duration, such as -1s, refuses at once |
 | `-model-proxy-unrestricted` | bool |  |  | let the model proxies forward every method, path and query parameter of a vendor's API with this deployment's credential, rather than only its model-inference endpoints (messages, responses, chat completions, generateContent and the model listings). Off by default: a sandbox token then cannot reach a vendor's files, batch, fine-tuning or organization APIs. Turn it on only for a deployment whose runs deliberately need those |
 | `-native-sandboxes` | bool | `true` |  | enable native sandboxes on this host; set to false to disable native sandboxes |
+| `-object-store` | string |  | $GRAIN_OBJECT_STORE | object store URI (gs://<bucket>/instances/<name>/ or file:///abs/dir) for flushing run transcripts, uploaded CI artifacts, and durable agent-sessions archives with local read-through caching (defaults to $GRAIN_OBJECT_STORE) |
 | `-openai-api-key-file` | string |  |  | file holding the OpenAI API key the agent authenticates as, passed to the codex subprocess as OPENAI_API_KEY. Optional, and the exact counterpart of the two files above: the UI stores one as the "openai-api-key" secret and that wins over this file |
 | `-package-cache-apt-upstream` | value |  |  | fetch one intercepted archive from a mirror instead of from itself, as "archive-host=base-url" (deb.debian.org=http://mirror.internal/debian) -- repeat for each. The host is one this cache already serves, and is what sandboxes go on asking for; the URL is what this service fetches from, with the request's own path appended. An archive not named here is fetched from itself |
 | `-package-cache-dir` | string |  |  | root directory for the package cache -- defaults to <sandbox-dir>/cache/packages when -sandbox-dir is set, and <data-dir>/cache/packages otherwise |
@@ -1081,6 +1435,16 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-poll-interval` | duration | `10s` |  | how often to run a reconcile cycle (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) |
 | `-postgres-url` | string |  |  | PostgreSQL connection URL (alias for -db-driver=postgres -db-dsn=URL) |
 | `-reboot-cmd` | value |  |  | one argument of the command the UI's reboot-host button runs -- repeat for every argument. Defaults to sudo systemctl reboot. |
+| `-registry-auth-mode` | string |  | $GRAIN_REGISTRY_TOKEN | credential mode for registry heartbeats: "token" (secret registry-registration-token, -registry-token-file, or $GRAIN_REGISTRY_TOKEN) or "oidc" (ID token for -registry-oidc-audience) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
+| `-registry-connect` | bool |  | $GRAIN_REGISTRY_CONNECT | supervise an outbound wss://<registry-host>/api/entries/<name>/connect tunnel and serve accepted mux streams in-process behind the registry assertion verifier gate ($GRAIN_REGISTRY_CONNECT; requires -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url) |
+| `-registry-display-name` | string |  |  | human-readable display name advertised in the registry directory (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
+| `-registry-entry` | string |  | $GRAIN_REGISTRY_ENTRY | entry name this daemon registers and heartbeats as in the grain registry ($GRAIN_REGISTRY_ENTRY) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
+| `-registry-host-kind` | string |  |  | connected entry host kind advertised to the registry: "workstation", "kubernetes", or "other" (defaults to the active sandbox backend) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
+| `-registry-listed` | bool | `true` |  | include this connected entry in default registry directory listings (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
+| `-registry-oidc-audience` | string |  |  | OIDC ID token audience when -registry-auth-mode=oidc (defaults to -registry-url) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
+| `-registry-purpose` | string |  |  | short description of this grain deployment's purpose in the registry directory (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
+| `-registry-token-file` | string |  | $GRAIN_REGISTRY_TOKEN | fallback file holding a grc_... registration credential when secret registry-registration-token is unset ($GRAIN_REGISTRY_TOKEN is also consulted) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry this daemon self-registers with ($GRAIN_REGISTRY_URL; empty disables heartbeats) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) |
 | `-relay-audience` | string |  |  | removed: the rendezvous relay is gone. The daemon refuses to start with this set |
 | `-relay-auth-token-file` | string |  |  | removed: the rendezvous relay is gone. The daemon refuses to start with this set |
 | `-relay-iap-jwt-audience` | string |  |  | removed: the rendezvous relay is gone. The daemon refuses to start with this set |
@@ -1111,6 +1475,8 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-sandbox-memory-overcommit` | float | `1` |  | the same ratio for memory, and 1 by default rather than 2: the way a host finds memory it has already promised is to swap, and a deployment that swaps has lost more throughput than the extra sandbox was worth. 0 leaves memory bounded by the run counts alone (model.Budget) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) |
 | `-sandbox-memory-reserve-mb` | int | `-1` |  | memory kept back from that budget for everything on this host that is not a sandbox -- this daemon, the container runtime, each VM's own qemu overhead and the page cache they all read through. Taken off the top, before the overcommit ratio, so raising the ratio never eats into it. -1 takes an eighth of the machine, never less than 8 GiB and never more than half of it (model.DefaultReserveMemoryMB) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) |
 | `-sandbox-port-base` | int | `9728` |  | first port of the block every sandbox-facing service binds in: the git proxy, the model proxies, the package cache and the Actions cache each take a reserved offset within it (sandboxnet.go's own sandboxPortOffsets). It is one aligned range of 256 ports, so what has to reach these services -- a firewall rule, a security group, a VPN ACL -- is one rule that a seventh service does not change. Must be a multiple of 256, and should stay below the ephemeral range this host allocates from (/proc/sys/net/ipv4/ip_local_port_range, 32768 by default) so the block cannot collide with this daemon's own outbound connections. 0 restores the behaviour before the block existed: every service on whatever ephemeral port the kernel gives it, renumbered on every restart -- which is why a sandbox that outlives a restart holds addresses that have moved. Not used by the package cache's interception listeners or its resolver, whose ports (443, 80, 53) are fixed by their protocols. |
+| `-secrets-backend` | string | `"file"` | $GRAIN_SECRETS_BACKEND | secret store backend ("file" or "secretmanager"); defaults to $GRAIN_SECRETS_BACKEND, then "file" |
+| `-secrets-sm-prefix` | string |  | $GRAIN_SECRETS_SM_PREFIX | Secret Manager resource prefix (projects/<project>/secrets/<id-prefix>) when -secrets-backend=secretmanager; defaults to $GRAIN_SECRETS_SM_PREFIX |
 | `-shutdown-cmd` | value |  |  | one argument of the command the UI's shut-down-host button runs -- repeat for every argument. Defaults to sudo systemctl poweroff. |
 | `-tunnel-gateway-url` | string |  |  | removed: the tunnel gateway is gone. The daemon refuses to start with this set |
 | `-tunnel-token` | string |  |  | removed: the tunnel gateway is gone. The daemon refuses to start with this set |
@@ -1118,17 +1484,28 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-ui-addr` | string | `"0.0.0.0:4242"` |  | address to serve the UI/API on, in-process, over this same store -- empty disables it |
 | `-ui-allowed-hosts` | string |  |  | comma-separated host names the UI/API answers to besides IP literals, localhost and this machine's own hostname ("grain.example.com", "*.example.com"); a request with any other Host header is refused with 421, which is what stops a DNS-rebinding page reaching a loopback-bound API (grain#2380). Checked on every request when this is set or -ui-addr names a specific address; on an every-interface -ui-addr with this unset, on loopback requests only. "*" turns the check off |
 | `-ui-allowed-principals` | string |  |  | deprecated: imported once on first start when the database allowlist is empty (user:<email> and group:<email> only; serviceAccount: and domain: entries are logged and dropped), then ignored. Manage allowed users and groups in Settings -> Access or with 'grain access' |
+| `-ui-cloud-identity-endpoint` | string |  | $GRAIN_CLOUD_IDENTITY_ENDPOINT | resolve allowed group: entries against this Cloud Identity API base URL (a test stand-in) rather than https://cloudidentity.googleapis.com; defaults to $GRAIN_CLOUD_IDENTITY_ENDPOINT |
 | `-ui-iap-audience` | string |  | $GRAIN_IAP_AUDIENCE | the audience a signed X-Goog-IAP-JWT-Assertion must carry for the UI/API to accept the identity in it, or several separated by commas -- IAP's /projects/NUMBER/global/backendServices/ID or /projects/NUMBER/apps/PROJECT, or what a BeyondCorp tunnel's assertion names (the proxy's own docs); defaults to $GRAIN_IAP_AUDIENCE. With none, no assertion is accepted |
 | `-ui-iap-issuer` | string |  | $GRAIN_IAP_ISSUER | the issuer a signed assertion must carry; defaults to $GRAIN_IAP_ISSUER, then https://cloud.google.com/iap |
 | `-ui-iap-keys-url` | string |  | $GRAIN_IAP_KEYS_URL | where the signing keys for those assertions are published (IAP's PEM map or a JWK set); defaults to $GRAIN_IAP_KEYS_URL, then https://www.gstatic.com/iap/verify/public_key |
 | `-ui-open` | bool |  |  | open the UI in the system's default browser once it's listening |
+| `-ui-registry-audience` | string |  | $GRAIN_REGISTRY_AUDIENCE | the single audience URL a signed X-Grain-Registry-Assertion must carry (e.g. "https://<name>.<instance-domain>"); defaults to $GRAIN_REGISTRY_AUDIENCE |
+| `-ui-registry-issuer` | string |  | $GRAIN_REGISTRY_ISSUER | the exact issuer URL a signed X-Grain-Registry-Assertion must carry for the UI/API to accept the identity in it (e.g. "https://grain.example.com"); defaults to $GRAIN_REGISTRY_ISSUER. All three of -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url must be set to enable the "registry" IdentityVerifier |
+| `-ui-registry-keys-url` | string |  | $GRAIN_REGISTRY_KEYS_URL | where the registry's ES256 signing keys are published as a JWK set (e.g. "https://grain.example.com/.well-known/jwks.json"); defaults to $GRAIN_REGISTRY_KEYS_URL |
 | `-ui-require-iap` | bool |  | $GRAIN_IAP_AUDIENCE, $GRAIN_REQUIRE_IAP | accept the access code (bearer or grain_access cookie) only from loopback with no forwarding or proxy headers, and serve no "Enter access code" page, so network callers sign in through IAP alone (docs/access-code.md); needs -ui-iap-audience or $GRAIN_IAP_AUDIENCE. Defaults to $GRAIN_REQUIRE_IAP |
+| `-ui-require-verifier` | string |  | $GRAIN_REQUIRE_VERIFIER | require network callers to sign in through the named IdentityVerifier (e.g. "iap", "registry", or a registered verifier): accept the access code (bearer or grain_access cookie) only from loopback with no forwarding or proxy headers (or through a verifier that declares AccessCodeWins), and serve no "Enter access code" page (-ui-require-iap is an alias for -ui-require-verifier=iap). Defaults to $GRAIN_REQUIRE_VERIFIER |
 | `-upgrade-allowed-branches` | string | `"main,candidate,rc,latest,v[0-9]*.[0-9]*.[0-9]*"` |  | comma-separated branches the UI's Upgrade button, a scheduled upgrade or an agent may upgrade this deployment to, each a path.Match pattern ('*' never crosses a '/'; e.g. main,release/*), or ** for any branch at all; any other branch is refused. The default is grain's own release names -- main, candidate, latest and vX.Y.Z release tags -- which only grain's merge queue and release cut move; a task or feature branch needs listing here |
 | `-upgrade-drain-window` | duration |  |  | maximum time a scheduled upgrade waits for active tasks and CI runs to drain before proceeding with the upgrade (0 waits indefinitely for runs to complete normally) |
-| `-upgrade-image` | string |  |  | image repository, with no tag, that CI publishes a tag per branch to (e.g. ghcr.io/bwsalmon/grain/grain); set, the UI's Upgrade button pulls a branch's image instead of building one, and -upgrade-image-ref-file is required |
+| `-upgrade-image` | string |  |  | image repository, with no tag, that CI publishes a tag per branch to (e.g. docker.io/grainai/grain); set, the UI's Upgrade button pulls a branch's image instead of building one, and -upgrade-image-ref-file is required |
+| `-upgrade-image-fallback` | string |  |  | fallback image source when the primary source cannot fetch a candidate daemon image: "none", "registry", or "release-assets" (or GRAIN_UPGRADE_IMAGE_FALLBACK) |
 | `-upgrade-image-ref-file` | string |  |  | file a successful -upgrade-image upgrade rewrites with the image the service should run, as one GRAIN_IMAGE=<ref> line for grain-daemon.service to read as an EnvironmentFile (required with -upgrade-image) |
+| `-upgrade-image-source` | string |  |  | where -upgrade-image loads candidate container images from: "release-assets" (gzip tarballs on the repository's releases) or "registry" (docker pull); empty defaults to release-assets with registry fallback when a release has no image assets (or GRAIN_UPGRADE_IMAGE_SOURCE) |
 | `-upgrade-install-path` | string |  |  | where a successful upgrade's binary is installed to (required with -upgrade-src-dir) |
+| `-upgrade-release-asset` | string |  |  | daemon tarball asset name on releases when images.json is not used (e.g. grain-image.tar.gz, or GRAIN_UPGRADE_RELEASE_ASSET) |
+| `-upgrade-release-checksum` | string |  |  | checksum asset name or suffix (starting with '.') for release-asset tarballs; defaults to .sha256 (or GRAIN_UPGRADE_RELEASE_CHECKSUM) |
+| `-upgrade-release-repo` | string |  |  | host-qualified repository (<host>/<owner>/<name>) whose releases carry upgrade image assets; defaults to the repository mapped from -upgrade-image or registered by the edition (or GRAIN_UPGRADE_RELEASE_REPO) |
 | `-upgrade-restart-cmd` | value |  |  | one argument of the command run at the end of a successful upgrade to bring the new build up -- repeat for every argument, e.g. -upgrade-restart-cmd=sudo -upgrade-restart-cmd=systemctl -upgrade-restart-cmd=restart -upgrade-restart-cmd=grain-daemon.service. Omitted entirely, the upgrade still happens but nothing brings the new build up on its own. Used by both upgrade paths below. |
+| `-upgrade-sandbox-release-asset` | value |  |  | per-sandbox-image release asset mapping as <role-or-repo>=<asset> -- repeat for each image, e.g. -upgrade-sandbox-release-asset=guest=grain-guest.tar.gz (or comma-separated in GRAIN_UPGRADE_SANDBOX_RELEASE_ASSETS) |
 | `-upgrade-src-dir` | string |  |  | git checkout of bwsalmon/grain to fetch/build from when the UI's Upgrade button is used; empty disables the feature |
 | `-upgrade-verify-cmd` | value |  |  | one argument of the command that verifies an -upgrade-image image's signature before anything runs it -- repeat for every argument, e.g. -upgrade-verify-cmd=cosign -upgrade-verify-cmd=verify -upgrade-verify-cmd=--key=/etc/grain/cosign.pub -upgrade-verify-cmd=--insecure-ignore-tlog=true (docs/image-signing.md). The image is appended (by digest on a host, by tag in a cluster, where the command must print cosign's JSON); a non-zero exit refuses the upgrade. Omitted, upgrades go ahead unverified and say so. |
 <!-- END GENERATED FLAGS -->
@@ -1148,6 +1525,7 @@ Serves the task UI on localhost over a throwaway store of fake tasks. Every call
 | `-as` | string |  |  | principal to attribute the fake tasks to (defaults to the OS user) |
 | `-base-branch-ci` | bool |  |  | with -github-sim and -fake-ci, let POST /api/e2e/base-branch/{red,green} {"branch": ...} (loopback only) turn a branch red or green on a -fake-ci verdict, through grain's own base-branch reconciler and dispatch's linking step, dispatching nothing |
 | `-default-target-repo` | string | `"acme/widgets"` |  | owner/name the fake tasks target |
+| `-disable-self-upgrade` | bool |  |  | as on grain daemon: disable in-VM self-upgrade actions and hide in-VM upgrade controls in the UI |
 | `-external-config-branch` | string | `"main"` |  | with -external-config-repo, the branch of that repository configuration is read from |
 | `-external-config-repo` | string |  |  | serve a deployment whose configuration is managed in this external config repository (a remote URL): every configuration write is refused with 409 and the exact edit to commit there instead (docs/external-config-repo.md) |
 | `-fake-ci` | bool |  |  | wire a grain CI stub that accepts and reports runs but never executes anything |
@@ -1158,8 +1536,10 @@ Serves the task UI on localhost over a throwaway store of fake tasks. Every call
 | `-github-sim-public` | bool |  |  | with -git-proxy, let the simulated GitHub serve its repo to an anonymous fetch, as GitHub does a public repository; an anonymous push is still refused |
 | `-github-webhook-addr` | string |  |  | local address (e.g. :4244) to listen on directly for signed GitHub App webhooks using GITHUB_WEBHOOK_SECRET or a GitHub App credential's webhook_secret; mutually exclusive with -github-webhook-url |
 | `-github-webhook-url` | string |  |  | base URL of this deployment's github-webhook gateway service (e.g. http://grain-webhook:8080), signed with GITHUB_WEBHOOK_RELAY_SECRET; empty disables remote webhook long-polling |
-| `-host-executor` | string |  |  | resolve Settings' run locations (Models and Capability servers) as this deployment would: empty for a development daemon on the bare machine, "kubernetes" (no host executor), "none" (a container with no grain hostd), "hostd-down" (a container whose grain hostd is configured but not answering), "hostd" (a container with a real grain hostd on a throwaway allowlist offering agy and corp-search), "hostd-remote" (a Kubernetes daemon with a real grain hostd dialed in) or "hostd-remote-down" (none dialed in) |
+| `-host-executor` | string |  |  | resolve Settings' run locations (Models and Capability servers) as this deployment would: empty for a development daemon on the bare machine, "kubernetes" (no host executor), "none" (a container with no host agent), "hostd-down" (a container whose host agent is configured but not answering), "hostd" (a container with a real host agent on a throwaway allowlist offering agy and corp-search), "hostd-remote" (a Kubernetes daemon with a real host agent dialed in) or "hostd-remote-down" (none dialed in) |
 | `-host-mode-install` | bool |  |  | show the notice an unmigrated host-mode install shows (banner, System -> Health, Upgrade), with the CLIs the default bare-machine run locations leave nowhere to run |
+| `-human-review` | bool |  |  | seed a change a review held for a person's decision (request_human_review), waiting for Submit or Release hold |
+| `-management-url` | string |  |  | as on grain daemon: optional external http:// or https:// URL shown where upgrades are managed externally |
 | `-mechanical-port` | bool |  |  | seed a change merged onto main and the port grain cherry-picked to candidate itself, with no agent run |
 | `-merge-queue-states` | bool |  |  | also seed two pull requests the merge queue is waiting on: one for its base branch to go green, one for an approval GitHub requires |
 | `-merge-rules` | bool |  |  | seed acme/widgets' merge rules (the docs/declarations.md example) and two deploy/** changes the merge queue classified under them |
@@ -1178,11 +1558,15 @@ Serves the task UI on localhost over a throwaway store of fake tasks. Every call
 | `-staging` | bool |  |  | run two fake persistent sandboxes, one on a /staging/ sub-path and one on a host port, for the rail's Staging group |
 | `-stalled-tasks` | bool |  |  | hand the UI the orchestrator's stall deadlines and seed a queued task, a run and a deferral past them, for the Inbox's stuck-task group |
 | `-ui-allowed-principals` | string |  |  | deprecated: imported once on first start when the database allowlist is empty (user:<email> and group:<email> only; serviceAccount: and domain: entries are logged and dropped), then ignored. Manage allowed users and groups in Settings -> Access or with 'grain access' |
-| `-ui-cloud-identity-endpoint` | string |  |  | resolve -ui-allowed-principals' group: entries against this Cloud Identity API base URL (a test stand-in) rather than https://cloudidentity.googleapis.com |
+| `-ui-cloud-identity-endpoint` | string |  |  | as on grain daemon: resolve allowed group: entries against this Cloud Identity API base URL (a test stand-in) rather than https://cloudidentity.googleapis.com |
 | `-ui-iap-audience` | string |  |  | as on grain daemon: the audience a signed X-Goog-IAP-JWT-Assertion must carry for the demo to sign its caller in from it |
 | `-ui-iap-issuer` | string |  |  | as on grain daemon: the issuer a signed assertion must carry (default https://cloud.google.com/iap) |
 | `-ui-iap-keys-url` | string |  |  | as on grain daemon: where the assertions' signing keys are published (default https://www.gstatic.com/iap/verify/public_key) |
+| `-ui-registry-audience` | string |  |  | as on grain daemon: the single audience URL a signed X-Grain-Registry-Assertion must carry |
+| `-ui-registry-issuer` | string |  |  | as on grain daemon: the exact issuer URL a signed X-Grain-Registry-Assertion must carry |
+| `-ui-registry-keys-url` | string |  |  | as on grain daemon: where the registry's ES256 signing keys are published as a JWK set |
 | `-ui-require-iap` | bool |  |  | as on grain daemon: accept the access code only from loopback with no forwarding headers; needs -ui-iap-audience |
+| `-ui-require-verifier` | string |  |  | as on grain daemon: require network callers to sign in through the named IdentityVerifier (-ui-require-iap is an alias for -ui-require-verifier=iap) |
 | `-unconfigured` | bool |  |  | serve a deployment with no agent model and no git credential configured, as a fresh install has |
 | `-upgrade-allowed-branches` | string | `"main,candidate,rc,latest,v[0-9]*.[0-9]*.[0-9]*"` |  | comma-separated branches (path.Match patterns, or ** for any) -upgrade-image may upgrade to |
 | `-upgrade-image` | string |  |  | wire a real image-mode upgrader pulling from this repository (localhost:5000/x/grain): the Upgrade tab lists its tags and an upgrade really pulls, verifies and health-checks the image, but never restarts anything |
@@ -1207,15 +1591,13 @@ Speaks MCP over stdin/stdout against the sandbox tools. A running daemon forks i
 | `-grain-secrets-dir` | string |  |  | directory holding this deployment's own secrets (cmd/grain's secretsDir: -data-dir/secrets), read on this host so that read_grain_log can redact those values out of the journal before returning any of it. Only used with -grant grain-log, and never served to a run -- what it buys is the ability to recognize a credential in a log line and remove it. Unset, or unreadable, read_grain_log refuses every call rather than answering with an unredacted journal. |
 | `-grain-src-dir` | string |  |  | directory holding grain's own source, read-only (pkg/cli/daemon.go's sourceDir: the copy baked into the deployment image, or -upgrade-src-dir's checkout). |
 | `-grain-state-dir` | string |  |  | controller-local synchronized deployment state repository; only used with -grant deployment-health |
-| `-grant` | value |  |  | name of a capability grant this run's task holds, whose tools this server should serve; repeat the flag for each. "self-debug" serves the four task readers and read_grain_metrics over -server, along with the api:self-debug preset tools (api:tasks:read and api:deployment:read); "grain-log" serves read_grain_log over this host's journal, redacted with -grain-secrets-dir; "bootstrap-playbooks" serves list_bootstrap_playbooks/read_bootstrap_playbook off the playbooks embedded in this binary. Passed by a Framework from the grants on the run's own task (agent.RunConfig.Grants, agent.GrantArgs). |
+| `-grant` | value |  |  | name of a capability grant this run's task holds, whose tools this server should serve; repeat the flag for each. "api:self-debug" (api:tasks:read and api:deployment:read; the retired "self-debug" reads as it) serves the four task readers, read_pipeline_changes and read_grain_metrics over -server; "grain-log" serves read_grain_log over this host's journal, redacted with -grain-secrets-dir. Passed by a Framework from the grants on the run's own task (agent.RunConfig.Grants, agent.GrantArgs). |
 | `-granule-vm` | string |  |  | name of a granule-managed VM (bwsalmon/granule) to run the sandbox tools against over SSH, instead of a local directory (mutually exclusive with -sandbox-root) |
 | `-interactive` | bool |  |  | this run's task is a live chat somebody is sitting with (model.Task.Interactive, passed on by the Framework that forked this process -- agent.InteractiveArgs). With -server/-task it adds the chat tool: the run says something in the task's own conversation and blocks until a person answers, inside one tool call. It is gated because the tool promises somebody is there: on a background run every call would stand still for an hour before finding out nobody was. |
 | `-k8s-granule` | value |  |  | reach -k8s-pod's guest VM through granule exec -- over 'kubectl exec' |
 | `-k8s-kubeconfig` | string |  |  | kubeconfig path passed to kubectl when reaching -k8s-pod |
 | `-k8s-namespace` | string |  |  | namespace of -k8s-pod; empty is kubectl's own default |
 | `-k8s-pod` | value |  |  | name of a Kubernetes sandbox pod to run tools in, over kubectl exec (with -k8s-namespace and -workspace) |
-| `-local-scripts` | value |  |  | NAME=PATH, repeatable: a local-scripts declaration this run is served as local_<script> tools, snapshotted when this process starts (agent.RunConfig.LocalScripts, docs/local-scripts.md) |
-| `-local-scripts-env-file` | string |  |  | path of a 0600 JSON file of the secrets -local-scripts' scripts are delivered, by secret name (localscripts.WriteCredentialsFile); never the values themselves in argv |
 | `-mcp-surface` | value |  |  | which tools to serve: "control" (the sandbox tools, the run-ending and escalation tools and the model-only grants' tools; everything else is a grain CLI command inside the sandbox) or "full" (every tool, for a client that cannot shell out and for tests). Empty is control when a sandbox flag is set, full otherwise (design/design/sandbox-first-agent-surface.design.md §6) |
 | `-pr-base` | string |  |  | branch -pr-branch merges into, which base_branch_status reads CI for so a run can tell a failure its own change caused from one it inherited (model.Task's own Base). Unset -- what an ordinary task has -- that tool reads -pr-repo's default branch instead, which is the base such a task really has. |
 | `-pr-base-incident` | string |  |  | notice of an active incident on the base branch, if any |
@@ -1260,30 +1642,36 @@ _No flags._
 
 **Pinned by:** `pkg/runhost` tests.
 
-### 5.5 `grain hostd [flags]` {#CLI-47}
+### 5.5 `grain host [flags]` {#CLI-47}
 
-On the bare machine, `hostd` runs the allowlisted host CLIs and capability servers a containerised daemon asks for. The allowlist (`-allowlist`, default `/etc/grain/hostd.yaml`) must be root-owned and not group- or world-writable.
+On the bare machine, `grain host` runs the host agent: the allowlisted host CLIs and capability servers a containerised daemon asks for. The allowlist (`-allowlist`, default `/etc/grain/hostd.yaml`) must be root-owned and not group- or world-writable.
 
-<!-- BEGIN GENERATED FLAGS: grain hostd -->
+`grain hostd` is a hidden alias for it, kept for installed units and scripts. `grain host` followed by a registry verb (`list`, `register`, `install`, `set-owner`) is §4.7 instead.
+
+<!-- BEGIN GENERATED FLAGS: grain host -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-allowlist` | string | `"/etc/grain/hostd.yaml"` |  | the allowlist of what this host will run; must be root-owned and not group- or world-writable |
-| `-build` | bool |  |  | print this binary's build and exit: what a hostd asks of the version its current link names |
+| `-build` | bool |  |  | print this binary's build and exit: what a host agent asks of the version its current link names |
 | `-ca-file` | string |  |  | with -server: PEM file of the certificate authority to verify the daemon's certificate against. Implies -tls |
 | `-check` | bool |  |  | check the allowlist, print what it offers, and exit |
 | `-command` | string | `"/usr/local/bin/grain"` |  | with -ensure-builtins: the grain binary on the host the added entries run |
 | `-disconnect-grace` | duration | `10s` |  | how long a process may outlive the daemon connection that started it |
-| `-drain` | bool |  |  | ask the hostd serving -socket to drain for an upgrade, and exit: it refuses new starts, waits for what it runs (up to the allowlist's drain_cap), then exits for systemd to restart it on the new binary. A hostd speaking this build's protocol is asked for a cutover instead: it keeps taking starts and exits the first moment nothing runs, draining only if no such moment comes within drain_cap. SIGUSR1 to hostd drains |
-| `-ensure-builtins` | bool |  |  | add to -allowlist the capabilities entries grain's own servers need in this build (host-git, grain-gcp, ... and the edition's, registered by the build's edition) that it has no entry of that name for, print each one added, and exit. An entry already there is never changed, only reported when it differs from the default. Run as root on the host, by grain-hostd.service before each start and by the upgrade step; hostd re-reads the allowlist on every request, so nothing needs restarting |
+| `-drain` | bool |  |  | ask the host agent serving -socket to drain for an upgrade, and exit: it refuses new starts, waits for what it runs (up to the allowlist's drain_cap), then exits for systemd to restart it on the new binary. A host agent speaking this build's protocol is asked for a cutover instead: it keeps taking starts and exits the first moment nothing runs, draining only if no such moment comes within drain_cap. SIGUSR1 to the host agent drains |
+| `-ensure-builtins` | bool |  |  | add to -allowlist the capabilities entries grain's own servers need in this build (host-git, grain-gcp, ... and the edition's, registered by the build's edition) that it has no entry of that name for, print each one added, and exit. An entry already there is never changed, only reported when it differs from the default. Run as root on the host, by grain-hostd.service before each start and by the upgrade step; the host agent re-reads the allowlist on every request, so nothing needs restarting |
 | `-iap-audience` | string |  |  | with -server: the OAuth client ID of the GCP Identity-Aware Proxy in front of the daemon, to send its OIDC token |
-| `-name` | string |  |  | with -server: the registry name this hostd expects to be (/api/hostds). Optional: the daemon names it from its token, and refuses the connection when this says otherwise |
-| `-server` | string |  |  | the URL of a grain daemon this host cannot share a socket with (https://grain.example.com, http://127.0.0.1:4242): hostd keeps a connection open to its /api/hostd/connect and serves the daemon over it, as well as listening on -socket (set -socket= for no local listener) |
+| `-join` | string |  | $GRAIN_HOST_JOIN_CODE | with -server: enroll this host using an enrollment code from Settings -> Hosts -> Invite hosts ($GRAIN_HOST_JOIN_CODE), generating -key-file and waiting for the deployment owner to accept it |
+| `-join-only` | bool |  |  | with -join or -rekey: exit 0 once accepted and the credential is written to -token-file, without starting the server |
+| `-key-file` | string |  |  | with -server: the file holding this host's Ed25519 private key (mode 0600), generated by -join or -rekey |
+| `-name` | string |  |  | with -server: the registry name this host expects to be (/api/hostds). Optional: the daemon names it from its token, and refuses the connection when this says otherwise |
+| `-rekey` | string |  |  | with -server: migrate an existing per-host token for the named host to a key-bound credential (-key-file), accepted by the deployment owner |
+| `-server` | string |  |  | the URL of a grain daemon this host cannot share a socket with (https://grain.example.com, http://127.0.0.1:4242): the host agent keeps a connection open to its /api/hostd/connect and serves the daemon over it, as well as listening on -socket (set -socket= for no local listener) |
 | `-socket` | string | `"/run/grain-hostd/hostd.sock"` |  | the unix socket to listen on (mode 0600); bind mount it into the daemon's container at the same path |
-| `-state-dir` | string | `"<tmp>/home/.local/state/grain-hostd"` |  | where hostd records the process groups it started, so a restarted hostd reaps what the last one left |
-| `-status` | bool |  |  | ask the hostd serving -socket whether it answers and what it offers, print that on one line, then one line per process it holds (a detached run's id, run, task and pid), and exit: 1 when it does not answer. scripts/setup.sh's readiness report runs it |
+| `-state-dir` | string | `"<tmp>/home/.local/state/grain-hostd"` |  | where the host agent records the process groups it started, so a restarted host agent reaps what the last one left |
+| `-status` | bool |  |  | ask the host agent serving -socket whether it answers and what it offers, print that on one line, then one line per process it holds (a detached run's id, run, task and pid), and exit: 1 when it does not answer. scripts/setup.sh's readiness report runs it |
 | `-tls` | bool |  |  | with -server: dial over TLS even for an http:// URL (an https:// one always is) |
 | `-tls-server-name` | string |  |  | with -server: server name to verify the daemon's certificate against when it differs from the -server host. Implies -tls |
-| `-token-file` | string |  | $GRAIN_HOSTD_TOKEN, $GRAIN_TOKEN | with -server: the file holding this hostd's token -- the one the hostd registry (/api/hostds) answered with when it was registered, which names it to the daemon (or the daemon's deprecated shared -hostd-token-file); $GRAIN_HOSTD_TOKEN or $GRAIN_TOKEN when unset |
+| `-token-file` | string |  | $GRAIN_HOSTD_TOKEN, $GRAIN_TOKEN | with -server: the file holding this host's credential -- issued on acceptance or when registered in Settings -> Hosts (or the daemon's deprecated shared -hostd-token-file); $GRAIN_HOSTD_TOKEN or $GRAIN_TOKEN when unset |
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/hostd` tests; [`authentication.spec.md` §8](../authentication/authentication.spec.md).
@@ -1291,7 +1679,8 @@ On the bare machine, `hostd` runs the allowlisted host CLIs and capability serve
 ### 5.6 `grain host-script` {#CLI-48}
 
 In a sandbox, `host-script` runs a granted host script on grain's side (`pkg/hostscriptcli`):
-- `grain host-script <name> [args…]` runs it;
+- `grain host-script <name> [args…]` runs it without forwarding standard input;
+- `grain host-script --stdin <name> [args…]` runs it and forwards standard input;
 - `<name> --grain-help` or `--help <name>` prints the script's description and usage;
 - `--list` (also `-list`, `--grain-list`) lists the scripts granted to the sandbox.
 
@@ -1364,7 +1753,7 @@ This edits `<data-dir>/secrets` on disk. The usage is hand-written. Flags:
 
 | Command | Flags |
 |---|---|
-| `secrets` | `-data-dir` (string; default `$GRAIN_DATA_DIR`; required) |
+| `secrets` | `-data-dir` (string; default `$GRAIN_DATA_DIR`; required for `file` backend), `-secrets-backend` (string; `"file"` or `"secretmanager"`, default `$GRAIN_SECRETS_BACKEND`, then `"file"`), `-secrets-sm-prefix` (string; default `$GRAIN_SECRETS_SM_PREFIX`; `projects/<project>/secrets/<id-prefix>`, required when `-secrets-backend=secretmanager`), `-db-driver` (string; default `$GRAIN_DB_DRIVER`, then the data dir's record, then sqlite), `-db-dsn` (string; default `$GRAIN_DB_DSN`, then the data dir's record) |
 | `list` | none. Prints every secret and its keys, never values |
 | `set [-value-file F] <secret> <key>` | `-value-file` (string; default: read stdin) |
 | `delete <secret> [key]` | none |
@@ -1549,7 +1938,11 @@ _No flags._
 
 ### 6.7 `grain upgrade-postgres` (`upgrade-sqlite-to-postgres`, `db upgrade-postgres`) {#CLI-56}
 
-Copies an existing SQLite store into PostgreSQL and optionally writes `db-config.json`, so later daemon starts use PostgreSQL. `grain db upgrade-postgres` and `grain db upgrade-sqlite-to-postgres` are the same command, and report errors as `grain upgrade-postgres: …`. Positional arguments are refused (`unexpected argument "<x>"`). A bare `grain db` prints `usage: grain db upgrade-postgres [flags]` and `grain db: a command is required …`; `grain db -h` prints that usage and `grain db: flag: help requested`; any other first word after `db` (for example the sandbox CLI's `query`) is refused with `grain db: unknown command "<x>" (grain db upgrade-postgres [flags]; db query is the in-sandbox CLI's)`. All exit 1. The usage is hand-written. Flags:
+Copies an existing SQLite store into PostgreSQL and optionally writes `db-config.json`, so later daemon starts use PostgreSQL. `grain db upgrade-postgres` and `grain db upgrade-sqlite-to-postgres` are the same command, and report errors as `grain upgrade-postgres: …`. Positional arguments are refused (`unexpected argument "<x>"`). A bare `grain db` prints `usage: grain db upgrade-postgres [flags]` and `grain db: a command is required …`; `grain db -h` prints that usage and `grain db: flag: help requested`; any other first word after `db` (for example the sandbox CLI's `query`) is refused with `grain db: unknown command "<x>" (grain db upgrade-postgres [flags], grain db check; db query is the in-sandbox CLI's)`. All exit 1. The usage is hand-written.
+
+It runs only offline. While a daemon holds the data directory (the flock on `<data-dir>/daemon.lock`) or its lease on the target PostgreSQL store (a session advisory lock), it refuses before copying anything or writing `db-config.json`, with an error naming `sudo systemctl stop grain-daemon.service`. It never stops the daemon itself. `grain backup` refuses the same way.
+
+`grain db check [-data-dir DIR]` only reads. It prints the store a daemon started on DIR would open, what that store holds (last task id, last run), DIR's high-water mark (`store-highwater.json`) and any other store under DIR. It exits 1, naming how far behind and how to recover, when the store is behind the mark. `setup.sh` runs it before restarting the daemon. Flags:
 - `-data-dir` (default `$GRAIN_DATA_DIR`);
 - `-sqlite-path` (string): the source SQLite file;
 - `-dsn` (string): the target PostgreSQL DSN;
@@ -1568,7 +1961,7 @@ _No flags._
 _No flags._
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/upgrade_postgres_test.go`: `TestDBCmdRefusesUnknownSubcommand`, `TestUpgradePostgresRefusesStrayArguments`, `TestUpgradePostgresCLIValidation`, `TestUpgradePostgresCLIHelp`.
+**Pinned by:** `pkg/cli/upgrade_postgres_test.go`: `TestDBCmdRefusesUnknownSubcommand`, `TestUpgradePostgresRefusesStrayArguments`, `TestUpgradePostgresCLIValidation`, `TestUpgradePostgresCLIHelp`; `pkg/cli/store_offline_test.go`: `TestStoreToolsRefuseWhileADaemonHoldsTheStore`, `TestDBCheckSaysWhichStoreAndWhetherItIsBehind`.
 
 ### 6.8 `grain controller bootstrap-github-app` and `grain setup gcp` {#CLI-57}
 
@@ -1663,7 +2056,7 @@ _No flags._
 | `-install-claude-cli` | bool | `true` |  | install the claude CLI |
 | `-k8s-context` | string |  |  | k8s-container/k8s-granule: --context passed to every kubectl call this command makes (empty uses kubectl's own current context) |
 | `-k8s-deployment` | string | `"grain"` |  | k8s-container/k8s-granule: the Deployment the manifest creates |
-| `-k8s-granule-image` | string | `"ghcr.io/bwsalmon/grain/guest:latest"` |  | k8s-granule only: the packed guest image the preflight's throwaway pod boots and every real sandbox pod runs -- a self-contained image with its own guest disk and kernel already baked in (the shape Granulefile's own build produces), not a plain sandbox image and not "granule:vendored" either (-granule-runtime-image's own default, which has no guest disk and cannot boot at all). Defaults to defaultSandboxImage, the same per-commit guest CI publishes and -platform=linux-kvm's -sandbox-image pulls -- stamped in at build time the way -k8s-sandbox-image's own default is; override it for a guest of your own (a team layer, a different base) |
+| `-k8s-granule-image` | string | `"docker.io/grainai/sandbox:latest"` |  | k8s-granule only: the packed guest image the preflight's throwaway pod boots and every real sandbox pod runs -- a self-contained image with its own guest disk and kernel already baked in (the shape Granulefile's own build produces), not a plain sandbox image and not "granule:vendored" either (-granule-runtime-image's own default, which has no guest disk and cannot boot at all). Defaults to defaultSandboxImage, the same per-commit guest CI publishes and -platform=linux-kvm's -sandbox-image pulls -- stamped in at build time the way -k8s-sandbox-image's own default is; override it for a guest of your own (a team layer, a different base) |
 | `-k8s-granule-manifest` | string |  |  | k8s-granule only: path to grain-granule.yaml (default <repo-root>/deploy/kubernetes/grain-granule.yaml) |
 | `-k8s-kubeconfig` | string |  |  | k8s-container/k8s-granule: --kubeconfig passed to every kubectl call this command makes (empty uses kubectl's own default) |
 | `-k8s-manage-port-forward` | bool | `true` |  | k8s-container/k8s-granule: start a kubectl port-forward svc/<k8s-service> before provisioning and stop it after -- false if -ui-addr already reaches the Service some other way (an operator-managed port-forward, an Ingress, an internal route) |
@@ -1673,7 +2066,7 @@ _No flags._
 | `-k8s-node-selector` | value |  |  | k8s-granule only: one "key=value" nodeSelector entry pinning every sandbox pod -- and the preflight's own nested-virt check -- to a node pool, repeatable. Leave unset only on a single-pool cluster where every node offers nested virtualization |
 | `-k8s-require-network-policy` | bool |  |  | k8s-container only: this deployment will dispatch network:none tasks, so preflight must confirm the cluster's CNI actually enforces NetworkPolicy, and apply networkpolicy.yaml |
 | `-k8s-run-host-rwx-class` | string |  |  | k8s-container only: the ReadWriteMany StorageClass of the run hosts' shared volume (deploy/kubernetes/runhost-rwx.yaml); a gcsfuse-backed class is refused. Empty keeps them on grain-data, pinned to the daemon's node |
-| `-k8s-sandbox-image` | string |  |  | k8s-container only: the sandbox image the preflight's throwaway pod pulls -- must match -k8s-manifest's own -k8s-sandbox-image, which preflight refuses otherwise (default: the one -k8s-manifest names, else this build's own ghcr.io/bwsalmon/grain/k8s-sandbox:latest) |
+| `-k8s-sandbox-image` | string |  |  | k8s-container only: the sandbox image the preflight's throwaway pod pulls -- must match -k8s-manifest's own -k8s-sandbox-image, which preflight refuses otherwise (default: the one -k8s-manifest names, else this build's own docker.io/grainai/sandbox-k8s:latest) |
 | `-k8s-service` | string | `"grain"` |  | k8s-container/k8s-granule: the Service the manifest creates |
 | `-k8s-storage-class` | string |  |  | k8s-container only: the StorageClass the preflight's scratch PVC requests (empty tests the cluster's own default class) |
 | `-platform` | string | `"linux-kvm"` |  | deployment shape to bring up: linux-kvm (a Linux host with /dev/kvm, one VM per sandbox -- the default), linux-container (a Linux host with no /dev/kvm, one docker container per sandbox), k8s-container (a Kubernetes cluster, one plain pod per sandbox -- see the -k8s-* flags below), k8s-granule (a Kubernetes cluster, one privileged pod per sandbox booting a real VM over /dev/kvm -- see the -k8s-* and -k8s-granule-* flags below), or gke-sandboxes (an off-cluster GKE Standard sandbox cluster with nested virtualization and /var/lib/grain/kubeconfig -- see the -gke-* flags below); see docs/grain-init-platforms.md |
@@ -1691,7 +2084,7 @@ _No flags._
 <!-- BEGIN GENERATED FLAGS: grain init workstation -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
-| `-capability` | value |  |  | a capability pattern tasks may be granted (capabilities.allow); repeatable. None denies every capability |
+| `-capability` | value |  |  | a capability pattern tasks may be granted (capabilities.allow); repeatable. The Director's own and grain CI's are allowed without being named |
 | `-container-git-proxy-host` | string |  |  | with container sandboxes, the address a sandbox container reaches this host at (default: the gateway of docker network grain-sandboxes, which this creates if it is missing) |
 | `-data-dir` | string | `"$GRAIN_DATA_DIR"` | $GRAIN_DATA_DIR | the daemon's data directory ($GRAIN_DATA_DIR, else ~/.grain) |
 | `-force` | bool |  |  | rewrite grain_policy.yml even if one exists |
@@ -1728,14 +2121,15 @@ Reconciles a live deployment's settings (`GET /api/settings`, then `PUT /api/set
 
 ---
 
-### 6.11 `grain access <list|allow|deny> [args]` {#CLI-63}
+### 6.11 `grain access <list|allow|role|deny> [args]` {#CLI-63}
 
-<a id="CLI-107"></a>This manages the allowed users and groups list (Settings -> Access): who may sign in when authenticated by Cloud IAP or another registered IdentityVerifier. Unlike the rest of this section it calls the daemon's API. The agent API scopes are `access:read` for `list`, `access:write` for `allow` and `deny` (`pkg/ui/route_scopes.go`).
+<a id="CLI-107"></a>This manages the allowed users and groups list (Settings -> Access): who may sign in when authenticated by Cloud IAP or another registered IdentityVerifier. Unlike the rest of this section it calls the daemon's API. The routes' scopes are `access:read` for `list` and `access:write` for `allow`, `role` and `deny` (`pkg/ui/route_scopes.go`). Every entry has a role, an API scope set (`docs/design/access-rbac.md`), and agents never change the list.
 
 | Subcommand | Request |
 |---|---|
-| `list` (the default; also `ls`) | `GET /api/access/principals`. Prints each entry with who added it and when, or `No allowed users or groups.`, and warns about `-ui-allowed-principals` entries that were dropped on import |
-| `allow <user:<email>\|group:<email>>` (also `add`) | `POST /api/access/principals {"entry"}`. Adding an existing entry is a no-op |
+| `list` (the default; also `ls`) | `GET /api/access/principals`. Prints each entry with its role, who added it and when, or `No allowed users or groups.`, and warns about `-ui-allowed-principals` entries that were dropped on import |
+| `allow [--role <set>] [--reason <why>] <user:<email>\|group:<email>\|serviceAccount:<email>>` (also `add`) | `POST /api/access/principals {"entry","role","reason"}`. `--role` defaults to `grain/operator`, whose dangerous scopes need the access code and a `--reason`. Adding an existing entry is a no-op that keeps its role |
+| `role [--reason <why>] <entry> <set>` | `PATCH /api/access/principals/{entry} {"role","reason"}`. Prints `<entry>: role <old> -> <new>` |
 | `deny <user:<email>\|group:<email>>` (also `remove`, `rm`) | `DELETE /api/access/principals/{entry}` |
 
 Errors: an unknown subcommand gives `unknown access subcommand "<s>"` followed by the usage, and a wrong argument count gives that subcommand's own usage line (`usage: grain access allow <user:<email>|group:<email>>`). This replaces the deprecated `-ui-allowed-principals` flag on `grain daemon` and `grain demo`, which is now only imported once into an empty database allowlist.

@@ -22,7 +22,7 @@ release upgrades a 2.0 deployment in place.
 - **Run a backlog, not a prompt.** Queue tasks and let Grain dispatch them as
   capacity becomes available.
 - **Keep agents contained.** By default, every run gets its own
-  [Granule](https://github.com/bwsalmon/granule)-managed VM and scoped access to
+  [Granule](https://github.com/gke-labs/granule)-managed VM and scoped access to
   source repositories and credentials.
 - **Close the delivery loop.** Agents can push branches, open pull requests,
   wait for CI, fix failures, and hand clean changes to the merge queue.
@@ -81,11 +81,11 @@ sudo \
 ```
 
 A new deployment runs the last promoted release, the `latest` channel, the
-core build -- installed from the assets of GitHub's latest release
-(`images.json` and `docker save` tarballs, checksum-verified and
+core build -- installed from the assets of GitHub's latest release on this
+repository (`images.json` and `docker save` tarballs, checksum-verified and
 `docker load`ed; [docs/release-assets.md](docs/release-assets.md)), so the
 host needs no registry or registry credential. Set `GRAIN_IMAGE` to pull a
-registry image instead. On a machine an
+registry image instead (`docker.io/grainai/grain`). On a machine an
 edition's install track claims (`pkg/installtrack`, where an edition linked
 into grain registers its track) the installer pulls that edition's build
 instead. The images are published with the same tags, and
@@ -107,6 +107,15 @@ releases a branch's head until one publishes, and retries a failed release once.
 The tag only moves forward, so a release that finishes late never moves it
 back. To get one exact build, re-run setup once it has published, or pin
 `GRAIN_IMAGE_TAG=sha-<short sha>`.
+
+A new install keeps its task store in PostgreSQL. The installer provisions a
+local server for it, `grain-postgres.service`. It runs a pinned image from
+`mirror.gcr.io` (`GRAIN_POSTGRES_IMAGE` to override), listens on 127.0.0.1
+only, and keeps its data in `/var/lib/grain/data/postgres`. Pass
+`--db-driver sqlite` for embedded SQLite instead, or `--db-dsn` to use a
+server of your own. An existing install keeps the store it has. See
+[docs/database.md](docs/database.md), which also says when SQLite is the
+better choice.
 
 The GitHub token is the quickest bootstrap path. For ongoing use, configure a
 GitHub App so Grain can use installation tokens and read GitHub Checks. Run
@@ -168,7 +177,8 @@ session.
   and `-admin-user`, and `grain settings -add-admin`, are accepted and
   ignored -- see [docs/grain-init.md](docs/grain-init.md).
 
-**The CLI on the host.** `grain` finds its daemon through `$GRAIN_SERVER`, then
+**The CLI on the host.** `grain` finds its daemon through `-server`, then
+`$GRAIN_SERVER`, then the selected context's server (below), then
 `/etc/grain/cli.env` (which `setup.sh` writes, with
 `GRAIN_SERVER` and `GRAIN_DATA_DIR`), then `http://127.0.0.1:4242`, so it works
 in the shell that just ran the installer. It gives up after `-connect-timeout`
@@ -176,7 +186,18 @@ in the shell that just ran the installer. It gives up after `-connect-timeout`
 It authenticates with `<data-dir>/local-api-token`, the deployment's operator
 credential, which only the daemon's account can read: run the CLI with `sudo`
 (the `docker run` wrapper drops to that account), or as `sudo -u grain grain ...`
-beside grain hostd, where `/usr/local/bin/grain` is the image's own binary.
+beside the host agent, where `/usr/local/bin/grain` is the image's own binary.
+
+**The CLI on a workstation.** `grain login <url>` signs the CLI in to a
+deployment and records it as a named context in
+`$XDG_CONFIG_HOME/grain/config.json` (else `~/.config/grain/config.json`). The
+context holds where the credential is, never the credential itself: that goes
+to the OS keyring, or to a `0600` file in `credentials/` beside the config
+when there is no keyring.
+`grain context list|use|show|delete` manages contexts, and `-context` or
+`$GRAIN_CONTEXT` picks one for a single command. `grain whoami` says who the
+deployment takes you for, and `grain logout` revokes the login's token and
+forgets it. `design/spec/cli/host.spec.md` (CLI-108) has every flag.
 
 ### Building from source instead
 
@@ -210,10 +231,16 @@ exit codes, what each step does, and what to do when one is left manual.
 > **Sandboxing:** every run gets a sandbox of its own: a Granule VM on a host
 > with KVM, and a local Docker container (`GRAIN_CONTAINER_SANDBOXES=1`) on one
 > without. Running agents directly in host directories is no longer supported.
+> A container sandbox is fenced off from this host, its networks and the
+> metadata server by its own nftables chain when grain can run `nft`. Where it
+> cannot, containers run unfenced, and every task holding an external
+> capability grant (any capability server's method that grain does not serve
+> in-process, `gcp#…` included) is refused until it can. The daemon's
+> `-container-sandbox-fence` flag picks the mode: `auto`, `require` or `off`.
 
-> **One install shape: the release container, plus grain hostd.** Every
+> **One install shape: the release container, plus grain host.** Every
 > machine install runs the daemon as a `docker run` of the deployment image.
-> `setup.sh` also installs `grain-hostd.service` by default: `grain hostd`, run
+> `setup.sh` also installs `grain-hostd.service` by default: `grain host`, run
 > as `GRAIN_USER` outside the daemon's lifecycle. It starts the few programs
 > that must run on the bare machine (agy under the user's corp identity, or a
 > stdio capability server with `run: host`), and only those that the root-owned
@@ -221,7 +248,7 @@ exit codes, what each step does, and what to do when one is left manual.
 > add an entry. The installer writes that file once
 > and keeps your edits. Its socket directory, `/run/grain-hostd`, is mounted
 > into the daemon's container, and `/etc/grain` never is. **`GRAIN_HOSTD=0`
-> leaves hostd out** (and removes an installed one): everything then runs in
+> leaves the host agent out** (and removes an installed one): everything then runs in
 > the container, nothing runs as you on the machine, and "host" is not offered
 > as a run location, as on Kubernetes. The readiness report and Settings →
 > Models say which of the two an install is. See
@@ -231,7 +258,7 @@ exit codes, what each step does, and what to do when one is left manual.
 > **Host mode is gone.** `GRAIN_INSTALL_MODE=host` (the daemon as a plain
 > systemd service) was removed, and is refused with the command to run
 > instead. Re-running `sudo ./scripts/setup.sh` on a host-mode install moves it
-> to container mode plus hostd, keeping its data directory and
+> to container mode plus the host agent, keeping its data directory and
 > `grain-daemon.service`. A host-mode install upgraded with the Upgrade button,
 > or by hand, keeps running on the bare machine but refuses further UI upgrades
 > until that re-run, and says so: a `level=warning` line at start and a banner
@@ -244,7 +271,7 @@ exit codes, what each step does, and what to do when one is left manual.
 > `sudo systemctl disable --now grain-hostd.service` removes it. Each agent CLI runs
 > where `GRAIN_CLAUDE_RUN`, `GRAIN_CODEX_RUN` and `GRAIN_AGY_RUN` say:
 > `container` (a subprocess in the daemon's container) or `host` (through
-> grain hostd, for a CLI its allowlist names). **Settings → Models** overrides
+> the host agent, for a CLI its allowlist names). **Settings → Models** overrides
 > them for the next run.
 
 > **Which branches an upgrade may install:** the Upgrade button, a scheduled
@@ -269,7 +296,8 @@ Everything lives under one root, split in two:
 
 ```
 /var/lib/grain/           root:root 0755 -- nothing else lives here
-/var/lib/grain/data/      grain:grain 0750 -- GRAIN_DATA_DIR (-data-dir): the store, secrets,
+/var/lib/grain/data/      grain:grain 0750 -- GRAIN_DATA_DIR (-data-dir): the store (postgres/,
+                          the local PostgreSQL server's data; or store/, SQLite), secrets,
                           secrets.key, local-api-token, bin/ -- everything to back up
 /var/lib/grain/scratch/   grain:grain 0755 -- GRAIN_SANDBOX_DIR (-sandbox-dir): host-sandbox
                           run directories and the package, Actions and CI caches -- disposable
@@ -303,9 +331,10 @@ sudo ./scripts/setup.sh --purge       # or GRAIN_UNINSTALL_PURGE=1
 |---|---|---|
 | `grain-daemon.service`, the `grain-reboot`/`-shutdown`/`-restart` `.path`/`.service` watchers, `grain-block-metadata.service` and its iptables rule, and the `grain-daemon` container | stopped, disabled and removed | stopped, disabled and removed |
 | `/usr/local/bin/grain`, `/usr/local/bin/granule`, `/usr/local/lib/grain`, `/usr/local/share/grain` (left by host mode), `/etc/profile.d/grain.sh` | removed | removed |
-| `/etc/grain/{image.env,cli.env,cosign.pub}` (the directory too, once it is empty) | removed | removed |
+| `grain-postgres.service` and the `grain-postgres` container (the local PostgreSQL server; its data is in `GRAIN_DATA_DIR`) | stopped, disabled and removed | stopped, disabled and removed |
+| `/etc/grain/{image.env,cli.env,cosign.pub,postgres.env}` (the directory too, once it is empty) | removed | removed |
 | grain's sudoers drop-in (`/etc/sudoers.d/90-grain-nft`, left by host mode) and `/etc/modprobe.d/kvm-nested-grain.conf` | removed | removed |
-| the grain images (`ghcr.io/bwsalmon/grain/grain`, every tag) and every sandbox image those tags name | removed (`--keep-images` keeps them) | removed (`--keep-images` keeps them) |
+| the grain images (`docker.io/grainai/grain` and legacy `ghcr.io/bwsalmon/grain/grain`, every tag) and every sandbox image those tags name | removed (`--keep-images` keeps them) | removed (`--keep-images` keeps them) |
 | `sleep`/`suspend`/`hibernate`/`hybrid-sleep.target` masks and `/etc/systemd/logind.conf.d/10-grain-no-suspend.conf` | unmasked, drop-in removed | unmasked, drop-in removed |
 | `GRAIN_SANDBOX_DIR` (`/var/lib/grain/scratch`, caches) and `/var/lib/granule/vms` | removed | removed |
 | `GRAIN_DATA_DIR` (`/var/lib/grain/data`: the task store, the secrets and `secrets/secrets.key`) | **kept**; the path of the key is printed | removed |
@@ -326,28 +355,41 @@ up by `grain init` instead is removed by hand: see
 
 Back up `/var/lib/grain/data` (`GRAIN_DATA_DIR`), and never
 `/var/lib/grain/scratch` (`GRAIN_SANDBOX_DIR`): everything in it is a run's
-working space or a cache that grain rebuilds. Stop the daemon, or use
-`grain backup` below, for a consistent copy of the store.
+working space or a cache that grain rebuilds.
 
-Grain can also upload a credential-free backup of its SQLite database and
-controller-local `grain/config` repository to either Google Drive or a Google
-Cloud Storage (GCS) bucket. For Drive, enable the Drive API for the Google
-identity Grain runs as and share the destination folder with that identity.
-For GCS, grant that identity permission to create objects in the destination
-bucket (for example, `roles/storage.objectCreator`). Application Default
-Credentials are used unless a credential JSON file is named explicitly.
+On the local PostgreSQL server (the default for a new install), the cluster in
+`data/postgres` is part of that directory: copy it only with both
+`grain-daemon.service` and `grain-postgres.service` stopped, take a standalone
+online dump with
+`sudo docker exec grain-postgres sh -c 'PGPASSWORD=$(cat /run/grain/postgres-password) exec pg_dump -U grain -d grain -Fc' > grain.dump`,
+or use `grain backup` below. On a SQLite store, stop `grain-daemon.service`
+before copying `data/store`, or use `grain backup` below.
+[docs/database.md](docs/database.md#backups) has the restore steps, and covers
+upgrading the PostgreSQL image, which is a separate, explicit step.
 
-Run a backup immediately on the controller:
+Grain can also upload a credential-free backup of its database (PostgreSQL or
+SQLite) and controller-local `grain/config` repository to either Google Drive
+or a Google Cloud Storage (GCS) bucket. For Drive, enable the Drive API for the
+Google identity Grain runs as and share the destination folder with that
+identity. For GCS, grant that identity permission to create objects in the
+destination bucket (for example, `roles/storage.objectCreator`). Application
+Default Credentials are used unless a credential JSON file is named explicitly.
+
+Run a backup by hand on the controller, with the daemon stopped (use `sudo` on
+a `setup.sh` host so the CLI can read `/etc/grain/postgres.env` and the data
+directory). `grain backup` refuses while a daemon holds the data directory or
+database lock, and says so with the `sudo systemctl stop grain-daemon.service`
+to run first. A running daemon makes its own backups on the schedule below:
 
 ```bash
 # Google Drive
-grain backup \
+sudo grain backup \
   -data-dir /var/lib/grain/data \
   -google-drive-folder <folder-id> \
   -google-credentials-file /path/to/google-credentials.json
 
 # Google Cloud Storage
-grain backup \
+sudo grain backup \
   -data-dir /var/lib/grain/data \
   -gcs-bucket <bucket-name> \
   -google-credentials-file /path/to/google-credentials.json
@@ -360,45 +402,47 @@ To schedule the same operation in the daemon, add
 bucket is set it is used instead of Drive. An interval of `0`, the default,
 disables scheduled backups.
 
-Each ZIP contains an online-consistent `database/grain.db` snapshot and a
-restorable `config/config-repo.bundle` with the config repository's branches,
-tags, and history. It does not contain `data-dir/secrets`, Google credential
-files, Git remote configuration, or any historical `secrets.enc` object; the
-temporary bundle export removes that path from every commit.
+Each ZIP contains an online-consistent database snapshot (`database/grain.dump`
+from `pg_dump -Fc` on PostgreSQL, or `database/grain.db` from `VACUUM INTO` on
+SQLite), `manifest.json`, and a restorable `config/config-repo.bundle` with the
+config repository's branches, tags, and history. It does not contain
+`data-dir/secrets`, database passwords, Google credential files, Git remote
+configuration, or any historical `secrets.enc` object; the temporary bundle
+export removes that path from every commit.
 
 ## Remote hosts
 
-`grain hostd` is grain's only host agent. On the daemon's own machine it
+`grain host` is grain's only host agent. On the daemon's own machine it
 listens on `/run/grain-hostd/hostd.sock` and is the registry's `local`
-hostd. Any number of others dial in to the daemon alongside it, each
-registered in **Settings → Hostds** (or `POST /api/hostds`) with a name,
+host. Any number of others dial in to the daemon alongside it, each
+registered in **Settings → Hosts** (or `POST /api/hostds`) with a name,
 an owner and labels, and given a token of its own there, shown once:
 
 ```bash
-grain hostd -server https://<grain-host> -token-file /etc/grain/hostd.token -name <name>
+grain host -server https://<grain-host> -token-file /etc/grain/hostd.token -name <name>
 ```
 
 The daemon names a connection from its token alone; `-name` is optional
-and, when given, must be that token's hostd. Rotating a hostd's token
-takes effect on its next connection; revoking the hostd disconnects it
+and, when given, must be that token's host. Rotating a host's token
+takes effect on its next connection; revoking the host disconnects it
 at once. The single
 shared token of `grain daemon -hostd-token-file` still works for this
-release, as one hostd named by `-hostd-token-name` (default `remote`),
-and is removed in the next. A hostd's allowlist (`/etc/grain/hostd.yaml`)
+release, as one host named by `-hostd-token-name` (default `remote`),
+and is removed in the next. A host's allowlist (`/etc/grain/hostd.yaml`)
 may set `capacity:` and `labels:`, which it reports to the daemon.
 
-While a hostd is disconnected, tasks pinned to it wait in the queue
-(`waiting for hostd <name>`) and never move to another hostd; they
+While a host is disconnected, tasks pinned to it wait in the queue
+(`waiting for host <name>`) and never move to another host; they
 resume when it reconnects. An agent CLI already running there keeps
 running, and is re-attached from where its output stood if the same
-hostd reconnects within `grain daemon -hostd-reattach-timeout` (default
+host reconnects within `grain daemon -hostd-reattach-timeout` (default
 15m). Past that the run fails as an infrastructure failure, with no
 strike against the task.
 
 The remote model executors (`grain executor` / `grain model-server`,
 `scripts/run-remote-executor.sh`) were removed; see
 [docs/executors-removed.md](docs/executors-removed.md) for what a remote
-hostd does and does not do yet.
+host does and does not do yet.
 The `none` sandbox backend (`-disable-native-sandboxes`) that such
 deployments used remains only for a control-plane-only daemon in tests
 and walkthroughs; see
@@ -407,7 +451,7 @@ and walkthroughs; see
 ## Documentation
 
 - **[Architecture](design/design/architecture.design.md)** describes the
-  current design end to end: the control plane, sandboxes, `grain hostd`,
+  current design end to end: the control plane, sandboxes, `grain host`,
   agents, capabilities, CI and the merge queue, where state lives, and the
   security boundaries. Component designs live beside it in
   [`design/design/`](design/design), playbook designs in
@@ -420,12 +464,20 @@ and walkthroughs; see
   half: bringing up a GCE instance with nested virtualization to run it on
   -- sizing, verifying acceleration actually works, suspend/resume, and
   reaching its loopback-bound UI.
+- [The task store](docs/database.md): PostgreSQL (the default, on a local
+  server the installer provisions) or SQLite, when to keep SQLite, backups,
+  upgrading the PostgreSQL image, and moving a SQLite install.
 - [Data model](docs/data-model.md) describes tasks, runs, capabilities, leases,
   and their lifecycle.
 - [Composition](docs/composition.md) explains how Grain's components fit
   together.
 - [Agent ergonomics](docs/agent-ergonomics.md) covers the execution environment
   presented to coding agents.
+- [Capabilities](design/design/capabilities.design.md) is the one-page design
+  of what a task or CI job is granted and how: capability servers, grants,
+  policy and CI grant rules. The [author's guide](docs/capabilities.md), the
+  [Settings walkthrough](docs/capability-servers-ui.md) and the
+  [spec](design/spec/capabilities/capabilities.spec.md) sit beside it.
 - [CI capabilities](docs/ci-capabilities.md) describes Grain's built-in CI
   model and sandbox requirements.
 - [The proxy cache](docs/package-cache.md) explains the apt, PyPI, Docker

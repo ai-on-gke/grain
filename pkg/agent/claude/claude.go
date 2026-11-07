@@ -49,6 +49,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/agent/sessionstore"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
@@ -165,7 +166,14 @@ type Framework struct {
 	// agent/retry.go's own policy, which every framework that re-execs
 	// its CLI shares. A test overrides its Sleep so the retry loop costs
 	// the suite no wall clock.
-	retry agent.RetryPolicy
+	retry          agent.RetryPolicy
+	sessionArchive *sessionstore.ClaudeArchive
+}
+
+// WithSessionArchive syncs resumable Claude session transcripts to and from
+// archive at turn boundaries.
+func WithSessionArchive(archive *sessionstore.ClaudeArchive) Option {
+	return func(f *Framework) { f.sessionArchive = archive }
 }
 
 // Option configures a Framework at construction time.
@@ -610,8 +618,8 @@ func httpMCPConfigJSON(url, token string, servers ...agent.CapabilityMCPServer) 
 // its pull request, are both independent of which backend its sandbox
 // runs on. So is agent.GrantArgs, which passes on the tool-granting
 // capabilities this run's task holds -- and so whether that server
-// serves the read-only tools for grain's own source (self-debug) or for
-// grain's own bootstrap playbooks (bootstrap-playbooks). So is
+// serves the read-only tools for grain's own source (self-debug) or
+// journal (grain#journal). So is
 // agent.ProposeRepoArgs, which passes on the repositories a proposal
 // this run makes may be filed against, so that propose_task's own
 // description can name them. So is agent.InteractiveArgs, which passes
@@ -940,6 +948,9 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 	// prompt -- rather than costing a dispatch and a fresh clone. See
 	// retry.go, including what happens on a build that will not take the
 	// flag.
+	if f.sessionArchive != nil && cfg.ResumeSession != "" {
+		_ = f.sessionArchive.RestoreSession(ctx, cfg.ResumeSession)
+	}
 	attempts := f.runAttempts(ctx, attemptSetup{
 		args:          args,
 		env:           env,
@@ -965,13 +976,20 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 		detached = true
 		return nil, runErr
 	}
+	if f.sessionArchive != nil && attempts.session != "" {
+		syncCtx, cancelSync := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+		_ = f.sessionArchive.SaveSession(syncCtx, attempts.session)
+		cancelSync()
+	}
 	// The last attempt's own events, not a parse of the whole capture:
 	// one capture holds a stream per exec, and what the run ended as is
 	// what its last attempt said. See attemptsResult.events.
 	result, err := endRun(stdout, attempts.events, runErr, notes, attempts.session, maxTurns)
-	readCtx, cancelRead := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
-	defer cancelRead()
-	withStopBlocks(result, readStopBlocks(readCtx, f.host, stopRecord))
+	if !agent.IsHostdStop(runErr) {
+		readCtx, cancelRead := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+		defer cancelRead()
+		withStopBlocks(result, readStopBlocks(readCtx, f.host, stopRecord))
+	}
 	return result, err
 }
 
@@ -1119,6 +1137,8 @@ func runFailure(p *parsedEvents, maxTurns int, runErr error) error {
 	// but "come back in a moment, we are overloaded". See capacity.go.
 	capacity := capacityFailure(p.resultText, runErr)
 	switch {
+	case agent.IsHostdStop(runErr):
+		return agent.RunFailure("claude", "claude", nil, runErr)
 	case p.resultSubtype == maxTurnsSubtype && maxTurns > 0:
 		// Named in plain words rather than passed through as a subtype:
 		// this is not a fault of claude or of the model but a configured

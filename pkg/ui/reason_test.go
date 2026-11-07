@@ -25,6 +25,7 @@ package ui_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -38,8 +39,11 @@ import (
 type echoReasons struct{}
 
 func (echoReasons) TaskReason(t model.Task, state model.State, obs *model.Observation, openDeps []string,
-	wait *model.GrantWait) ui.Reason {
+	wait *model.GrantWait, asked model.ReplyFacts) ui.Reason {
 	r := ui.Reason{Reason: string(state) + "/echo", Class: "driven", Control: "Run now"}
+	if asked != (model.ReplyFacts{}) {
+		r.Resource = fmt.Sprintf("asked:%+v", asked)
+	}
 	if len(openDeps) > 0 {
 		r.Resource = "deps:" + openDeps[0]
 	}
@@ -111,6 +115,32 @@ func TestEveryTaskReadCarriesItsSubCase(t *testing.T) {
 	}
 	if listed.MergeQueueReason != nil {
 		t.Errorf("a task with no merge-queue state has a merge-queue reason: %+v", listed.MergeQueueReason)
+	}
+}
+
+// An awaiting_reply task's reads hand the classifier which ask it is
+// parked on (model.ReplyFacts) -- the list, the one-task read and the
+// detail read alike, each off what it has already resolved -- so its
+// sub-case can tell an access request from a question from an answer.
+func TestEveryTaskReadHandsTheClassifierTheAsk(t *testing.T) {
+	t.Parallel()
+	client, _, ctx := reasonClient(t, echoReasons{})
+	task := create(t, client, ctx)
+	parkOnAccess(t, client, ctx, task.ID, accessItems())
+	want := fmt.Sprintf("asked:%+v", model.ReplyFacts{Question: true, Access: true})
+	listed := listOne(t, client, ctx, task.ID)
+	one, err := client.Task(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := client.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, got := range map[string]*ui.Reason{"list": listed.Reason, "Task": one.Reason, "GetTask": detail.Reason} {
+		if got == nil || got.Reason != "awaiting_reply/echo" || got.Resource != want {
+			t.Errorf("%s Reason = %+v, want awaiting_reply/echo handed %s", name, got, want)
+		}
 	}
 }
 

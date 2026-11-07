@@ -47,7 +47,7 @@
 # cloud-hypervisor too. That self-containment is why an older packed guest is
 # fine here: the granule inside it and the guest contract it declares are one
 # build, so they agree with each other whatever this repository's vendored
-# granule has moved on to. (ghcr.io/bwsalmon/grain/guest:main declares
+# granule has moved on to. (docker.io/grainai/sandbox:main declares
 # `dev.granule.guest.contract=1` where the current vendored granule implements
 # 3; that is not a mismatch, because nothing outside the image reads it.)
 #
@@ -79,7 +79,7 @@ NAMESPACE="${NAMESPACE:-grain}"
 # RELEASE's (default channel-main) is loaded and pushed into IMAGE_MIRROR,
 # a registry the cluster pulls from, by scripts/release-assets.sh mirror.
 # With no IMAGE_MIRROR there is nowhere to push it, and the last image
-# published to GHCR is used instead; GUEST_IMAGE always wins.
+# published to Docker Hub is used instead; GUEST_IMAGE always wins.
 RELEASE="${RELEASE:-channel-main}"
 IMAGE_MIRROR="${IMAGE_MIRROR:-}"
 if [ -z "${GUEST_IMAGE:-}" ] && [ -n "$IMAGE_MIRROR" ]; then
@@ -87,9 +87,9 @@ if [ -z "${GUEST_IMAGE:-}" ] && [ -n "$IMAGE_MIRROR" ]; then
   [ -n "$GUEST_IMAGE" ] || { echo "could not mirror $RELEASE's guest image into $IMAGE_MIRROR" >&2; exit 1; }
 fi
 if [ -z "${GUEST_IMAGE:-}" ]; then
-  echo "GUEST_IMAGE and IMAGE_MIRROR unset: using ghcr.io/bwsalmon/grain/guest:main, published before release assets" >&2
+  echo "GUEST_IMAGE and IMAGE_MIRROR unset: using docker.io/grainai/sandbox:main" >&2
 fi
-GUEST_IMAGE="${GUEST_IMAGE:-ghcr.io/bwsalmon/grain/guest:main}"
+GUEST_IMAGE="${GUEST_IMAGE:-docker.io/grainai/sandbox:main}"
 GRAIN="${GRAIN:-}"
 UI_ADDR="${UI_ADDR:-127.0.0.1:8440}"
 # The repository this verifies is the one this script lives in, so the

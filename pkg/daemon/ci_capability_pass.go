@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
+	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
 	"github.com/ai-on-gke/grain/pkg/capability/portforward"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/ci"
@@ -305,11 +306,36 @@ func (g *CiGrantReservations) mintCIPass(ctx context.Context, req ci.SandboxRequ
 		}
 	}
 	configured, _ = intree.EnsureBuiltins(configured)
+	normalizedCaps := make([]string, 0, len(grants))
+	for _, grant := range grants {
+		normalizedCaps = append(normalizedCaps, model.RecordedCapabilityGrant(grant))
+	}
+	normalizedReq := req
+	if normalizedReq.Repo == "" && repo.Owner != "" {
+		normalizedReq.Repo = repo.String()
+	}
+	normalizedReq.Capabilities = normalizedCaps
+	if err := ciPolicyRefusal(g.Policy, normalizedReq, g.Log); err != nil {
+		return nil, time.Time{}, err
+	}
+	if err := CheckCIJobCatalogue(policy.Catalogue, normalizedReq); err != nil {
+		if g.Log != nil {
+			g.Log("grain ci: %s: %s job %s refused by settings/capabilities.yml: %v", normalizedReq.Repo, req.Event, req.Name, err)
+		}
+		return nil, time.Time{}, fmt.Errorf("the capability catalogue refuses this CI job: %w", err)
+	}
 	subject := model.CapabilitySubject{Repo: &repo, Kind: model.CapabilityRunCI, Event: string(req.Event), Untrusted: req.Untrusted,
 		TrustedSchedule: req.TrustedSchedule}
 	for _, grant := range grants {
 		if err := policy.Permits(model.RecordedCapabilityGrant(grant), subject, configured); err != nil {
 			return nil, time.Time{}, err
+		}
+		// local-scripts was never granted to a CI job, whose steps are
+		// whatever the pushed branch says; what a declaration became on
+		// host-script is not either.
+		if from, ok := localscripts.MigratedFrom(model.RecordedCapabilityGrant(grant)); ok {
+			return nil, time.Time{}, &protocol.RefusedError{Grant: grant.Ref.String(),
+				Reason: fmt.Sprintf("%s is what %s became, and local scripts are never granted to a CI job: they run on the node host", model.RecordedCapabilityGrant(grant), from)}
 		}
 	}
 	at := g.now()

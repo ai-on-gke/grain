@@ -139,7 +139,10 @@ func TestPromoteReleaseIsDeclaredHumanRequired(t *testing.T) {
 		// The Inbox approval on GitHub Actions repos (gap 4): the route that
 		// signs and dispatches it, the record it signs, and the script the
 		// workflow verifies it with.
-		"pkg/ui/release_approval_github.go", "pkg/releaseapproval/releaseapproval.go", "scripts/verify-release-approval.sh"} {
+		"pkg/ui/release_approval_github.go", "pkg/releaseapproval/releaseapproval.go", "scripts/verify-release-approval.sh",
+		// The continuous train's own promotion (playbook section 1).
+		"scripts/release-from-trunk.sh", "scripts/release.conf", "scripts/release-train-task.sh",
+		".grain/schedules/release-train.yml", ".github/workflows/publish-release.yml"} {
 		if !containsString(trigger.Paths, p) {
 			t.Errorf("the release-promotion trigger does not hold %s (paths %v)", p, trigger.Paths)
 		}
@@ -163,14 +166,13 @@ func TestReleaseMachineryClearsOnSecurityReview(t *testing.T) {
 	}
 	decl := declarations(t)
 	for _, p := range []string{
-		"scripts/release-images.sh", "scripts/release-from-trunk.sh", "scripts/release-notes.sh",
-		"scripts/candidate-gate.sh", "scripts/release.conf",
+		"scripts/release-images.sh", "scripts/release-notes.sh",
+		"scripts/candidate-gate.sh",
 		"scripts/patch-tag-guard.sh", "scripts/build-version.sh", "scripts/grain-ci-host.sh",
 		"scripts/release-train-actions.sh", ".github/workflows/rc-qualification.yml",
 		".grain/workflows/release.yml", ".github/workflows/release.yml",
 		".grain/workflows/promote.yml", ".github/workflows/promote.yml",
 		".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",
-		"scripts/release-assets.sh", ".github/workflows/release-train-assets.yml",
 	} {
 		if !containsString(trigger.Paths, p) {
 			t.Errorf("the release-machinery trigger does not hold %s (paths %v)", p, trigger.Paths)
@@ -216,18 +218,143 @@ func containsString(list []string, s string) bool {
 	return false
 }
 
-// The promote job publishes vX.Y.Z as GitHub release assets
-// (release-assets.sh promote creates or updates the release and marks it
-// latest), which is a contents: write -- with contents: read every
-// approved promotion failed with a 403 (task 3039's review). It holds
-// nothing else: no OIDC token, no cloud login, since it pushes no image.
-func TestPromoteReleasePromoteJobCanWriteTheReleaseAndNothingElse(t *testing.T) {
-	job := namedJob(t, stripComments(read(t, ".github", "workflows", "promote-release.yml")), "promote")
-	contains(t, job, "bash ./scripts/release-assets.sh promote")
-	contains(t, job, "      contents: write")
-	for _, bad := range []string{"id-token:", "packages:", "google-github-actions/auth", "gcloud auth"} {
-		if strings.Contains(job, bad) {
-			t.Errorf("promote-release.yml's promote job holds %q, which publishing release assets does not need:\n%s", bad, job)
+// The core release train runs continuously (operator decision, 2026-11-04;
+// design/playbook/releases.playbook.md §0.4): a schedule fires the
+// release-train template every 10-30 minutes, never over its own previous
+// tick, and the tick is the one wrapper command that ends a no-op cheaply.
+func TestTheReleaseTrainIsScheduledContinuously(t *testing.T) {
+	decl := declarations(t)
+	var sched *model.Schedule
+	for i := range decl.Schedules {
+		if decl.Schedules[i].Path == ".grain/schedules/release-train.yml" {
+			sched = &decl.Schedules[i].Schedule
+		}
+	}
+	if sched == nil {
+		t.Fatal(".grain/schedules/release-train.yml is not declared: nothing runs the release train")
+	}
+	if sched.TemplateID == nil || !strings.HasSuffix(*sched.TemplateID, "release-train") {
+		t.Errorf("the release-train schedule fires %v, want the release-train template", sched.TemplateID)
+	}
+	if r := sched.Recurrence; r.Kind != model.RecurrenceEveryNMinutes || r.EveryNMinutes < 10 || r.EveryNMinutes > 30 {
+		t.Errorf("the release-train schedule recurs %+v, want every 10-30 minutes", r)
+	}
+	if sched.Overlap != model.OverlapSkip {
+		t.Errorf("the release-train schedule's overlap is %q, want skip: two ticks would race for the same tags", sched.Overlap)
+	}
+	var body string
+	for _, tmpl := range decl.Templates {
+		if tmpl.Path == ".grain/templates/release-train.yml" {
+			body = tmpl.Template.Body
+		}
+	}
+	contains(t, body, "bash ~/work/scripts/release-train-task.sh")
+	contains(t, body, "RELEASE_TRAIN_RESULT=noop")
+	contains(t, body, "nothing_needed")
+}
+
+// The train's grant reaches the release now (playbook §1): vM.Y.0 created,
+// latest force-moved -- and nothing that would move or delete a release,
+// tag a patch or retract one. The script's own train_ref names the same.
+func TestTheReleaseTrainsGrantReachesTheReleaseAndNoMore(t *testing.T) {
+	decl := declarations(t)
+	var push model.RefPushSet
+	for _, tmpl := range decl.Templates {
+		if tmpl.Path == ".grain/templates/release-train.yml" {
+			push = tmpl.Push
+		}
+	}
+	for ref, want := range map[string][3]bool{ // matched, force, delete
+		"refs/tags/v3.2.0":           {true, false, false},
+		"refs/tags/v3.12.0":          {true, false, false},
+		"refs/tags/v10.100.0":        {true, false, false},
+		"refs/tags/latest":           {true, true, false},
+		"refs/tags/v3.2.0-rc.1":      {true, false, false},
+		"refs/tags/v3.1.1":           {false, false, false},
+		"refs/tags/v3.1.0-retracted": {false, false, false},
+		"refs/heads/main":            {false, false, false},
+	} {
+		matched, force, del := push.Allows(ref)
+		if got := [3]bool{matched, force, del}; got != want {
+			t.Errorf("the release train's grant on %s = (matched, force, delete) %v, want %v", ref, got, want)
+		}
+	}
+	script := read(t, "scripts", "release-from-trunk.sh")
+	contains(t, script, `refs/tags/latest) return 0 ;;`)
+	contains(t, script, `refs/tags/v*) [[ "$1" =~ ^refs/tags/v[0-9]{1,2}\.[0-9]{1,3}\.0$ ]] ;;`)
+	contains(t, script, `promotion_allowed "$dst"`)
+}
+
+// publish-release.yml publishes what the train released, and only after
+// release-from-trunk.sh verify has checked the tag is the train's, on its
+// qualified rc's own commit: it runs on that tag push alone.
+func TestPublishReleaseVerifiesBeforeItPublishes(t *testing.T) {
+	text := stripComments(read(t, ".github", "workflows", "publish-release.yml"))
+	on := upTo(t, text, "permissions:")
+	contains(t, on, `- "v[0-9]+.[0-9]+.0"`)
+	for _, bad := range []string{"workflow_dispatch", "schedule:", "pull_request", "workflow_run", "branches:"} {
+		if strings.Contains(on, bad) {
+			t.Errorf("publish-release.yml runs on %s; it publishes a release on its tag push alone", bad)
+		}
+	}
+	verify := strings.Index(text, `release-from-trunk.sh verify`)
+	promote := strings.Index(text, `release-images.sh promote`)
+	if verify < 0 || promote < 0 || verify > promote {
+		t.Errorf("publish-release.yml does not verify the release (at %d) before it publishes its images (at %d)", verify, promote)
+	}
+	contains(t, text, "if: steps.verify.outputs.train == 'true'")
+	contains(t, text, "RELEASE_QUALIFICATION_APP: ${{ vars.RELEASE_QUALIFICATION_APP }}")
+	contains(t, text, "scripts/release-notes.sh write")
+	contains(t, text, "gh release create")
+	// Every step that publishes -- images, credentials, the GitHub Release
+	// -- runs only for a tag verify passed as the train's: a vX.Y.0 with no
+	// Promoted-From (verify's exit 4) publishes nothing, since the train's
+	// grant can push one on any commit of main.
+	for _, step := range strings.Split(text, "- name: ")[1:] {
+		name := strings.SplitN(step, "\n", 2)[0]
+		switch name {
+		case "Checkout", "Setup Node.js", "Setup Go", "Verify the release is the train's, from a qualified rc":
+			continue
+		}
+		if !strings.Contains(step, "if: steps.verify.outputs.train == 'true'") {
+			t.Errorf("publish-release.yml step %q runs for a tag verify did not pass as the train's", name)
+		}
+	}
+}
+
+// Regression for task 3060: ai-on-gke/grain runs with ci_mode: github, where
+// applyGrainCIGrant strips grain#ci (`grain-ci`) from scheduled and suite
+// compositions and CreateTask refuses it when copied from a template. Every
+// release and qualification template whose body calls `grain ci` or
+// `list_ci_runs` / `get_ci_log` must carry repo-scoped api:ci-read@ai-on-gke/grain.
+func TestReleaseAndQualificationTemplatesHoldScopedCIRead(t *testing.T) {
+	decl := declarations(t)
+	want := model.APIGrantPrefix + "ci-read@" + model.GrainSourceRepo().String()
+	need := map[string]bool{
+		".grain/templates/release-train.yml":                false,
+		".grain/templates/release-watchdog.yml":             false,
+		".grain/templates/release-process-review.yml":       false,
+		".grain/templates/qualification-ci-diagnostics.yml": false,
+	}
+	for _, tmpl := range decl.Templates {
+		if _, ok := need[tmpl.Path]; !ok {
+			continue
+		}
+		need[tmpl.Path] = true
+		var caps []string
+		for _, g := range tmpl.Template.Grants {
+			caps = append(caps, g.Capability)
+			if model.IsGrainCIGrant(g.Capability) {
+				t.Errorf("%s carries %q, which applyGrainCIGrant strips on ci_mode: github", tmpl.Path, g.Capability)
+			}
+		}
+		if !containsString(caps, want) {
+			t.Errorf("%s grants = %v, want %q", tmpl.Path, caps, want)
+		}
+	}
+	for path, seen := range need {
+		if !seen {
+			t.Errorf("%s is not declared", path)
 		}
 	}
 }

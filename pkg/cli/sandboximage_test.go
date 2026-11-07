@@ -60,8 +60,8 @@ func TestSandboxImageContractSubcommand(t *testing.T) {
 		sandboximage.ContractFile,
 		"Granule guest contract:",
 		sandboximage.GranuleContractLabel,
-		"guest-base",
-		"k8s-sandbox-base",
+		"sandbox-base",
+		"sandbox-k8s-base",
 		"python3",
 		"/usr/local/bin/grain-connect",
 	} {

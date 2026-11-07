@@ -1,0 +1,21 @@
+== sizes
+/api/tasks?fields=full                           plain= 14323046 gzip= 1204711 ratio=11.9x
+/api/tasks                                       plain=   106360 gzip=    6065 ratio=17.5x
+/api/tasks?state=closed&limit=200&cursor=        plain=   156005 gzip=    7750 ratio=20.1x
+== ETag / 304 with gzip
+Content-Encoding: gzip
+Etag: W/"e247a64a716c41309ba9819685650b35"
+Vary: Accept-Encoding
+If-None-Match (gzip) -> 304 0 bytes
+If-None-Match (identity, gzip etag) -> 304 0 bytes
+== event stream
+HTTP/1.1 200 OK
+Content-Type: text/event-stream
+== websocket upgrade
+HTTP/1.1 404 Not Found
+== range request on a static asset
+HTTP/1.1 206 Partial Content
+Content-Length: 100
+Content-Range: bytes 0-99/2245191
+== range request on an API JSON response
+HTTP/1.1 200 OK

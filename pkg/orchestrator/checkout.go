@@ -190,6 +190,9 @@ type checkout struct {
 	// GrainSourceWhy is why placing it failed, for the prompt's note on
 	// why there is no grain-src/.
 	GrainSourceWhy string
+	// Context records any committed-context references verified in ./work
+	// or cloned into ./repos/<owner>/<repo> detached at their pinned SHA.
+	Context []ResolvedContextCheckout
 }
 
 // SetupResult is one run of a repo's setup command: what was run, how it
@@ -312,6 +315,11 @@ func prepareCheckoutWithUpstream(ctx context.Context, tools []mcp.Tool, remoteBa
 		// own script instead, rather than spending a second round trip
 		// (and a second entry in the narration setupNotes keeps) on it.
 		out := checkout{Root: sandboxWorkingDir(ctx, tools)}
+		if remoteBase != "" && len(task.ContextRefs()) > 0 {
+			if err := prepareCommittedContext(ctx, tools, remoteBase, task, &out, reused); err != nil {
+				return checkout{}, err
+			}
+		}
 		return out, nil
 	}
 	if reused {
@@ -320,11 +328,15 @@ func prepareCheckoutWithUpstream(ctx context.Context, tools []mcp.Tool, remoteBa
 				sandboxRootEcho(), CheckoutDir, CheckoutDir, stateRepoCheck())
 			res := run(ctx, map[string]any{"command": checkExisting})
 			if !res.IsError && strings.Contains(res.Text, "grain-reused-checkout:yes") {
-				return checkout{
+				out := checkout{
 					Dir:       CheckoutDir,
 					Root:      sandboxRootFrom(res.Text),
 					StateRepo: strings.Contains(res.Text, stateRepoMarker),
-				}, nil
+				}
+				if err := prepareCommittedContext(ctx, tools, remoteBase, task, &out, true); err != nil {
+					return checkout{}, err
+				}
+				return out, nil
 			}
 		}
 	}
@@ -439,6 +451,9 @@ fi
 		Dir:       CheckoutDir,
 		Root:      sandboxRootFrom(result.Text),
 		StateRepo: strings.Contains(result.Text, stateRepoMarker),
+	}
+	if err := prepareCommittedContext(ctx, tools, remoteBase, task, &out, false); err != nil {
+		return checkout{}, err
 	}
 	ran, err := runSetupCommand(ctx, run, task, setup, notes)
 	if err != nil {

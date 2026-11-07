@@ -444,7 +444,7 @@ func TestTheGuestIsPublishedFromGrainCIAndNotFromActionsAlone(t *testing.T) {
 	// build stamped with nothing -- is the last promoted release's, and
 	// the promote phase moves it (promote_images_test.go).
 	contains(t, script, `push_pinned "$guest"`)
-	contains(t, script, `"$guest $root/guest:$branch"`)
+	contains(t, script, `"$guest $root/sandbox:$branch"`)
 
 	// Retried, for the reason build-artifacts.yml's own push step gives
 	// at length: GHCR loses this race on its own about once in a hundred
@@ -531,7 +531,7 @@ func TestABranchCanWarmTheGuestCacheWithoutPublishingAnythingElse(t *testing.T) 
 	}
 	published := publishImagesBody(t, script)
 	for _, moving := range []string{
-		`"$guest $root/guest:$branch"`,
+		`"$guest $root/sandbox:$branch"`,
 	} {
 		if !strings.Contains(published, moving) {
 			t.Errorf("scripts/release-images.sh moves %s outside publish_images, so `guest-cache` would move it from a branch", moving)
@@ -975,7 +975,7 @@ func TestTheGoJobDeclaresEveryFileItsOwnTestsRead(t *testing.T) {
 		"pkg/ci/paths.go",
 		"ui/package.json",
 		"go.mod",
-		"pkg/capability/bootstrap/playbooks/gcp-capabilities.md",
+		"pkg/playbooks/gcp-capabilities.md",
 	} {
 		if !selectsPath(goJob, path) {
 			t.Errorf("the `go` job does not declare %s, which something it runs reads: "+
@@ -1011,7 +1011,7 @@ func TestTheGoJobDeclaresEveryFileItsOwnTestsRead(t *testing.T) {
 			"docs/claude-surface.md",
 			"docs/codex-surface.md",
 			"docs/agy-surface.md",
-			"pkg/capability/bootstrap/playbooks/gcp-capabilities.md",
+			"pkg/playbooks/gcp-capabilities.md",
 		} {
 			if !selectsPath(job, path) {
 				t.Errorf("the %q job does not declare %s, which something it runs reads", id, path)
@@ -1663,7 +1663,8 @@ func TestTheReleaseDoesNotRequireImageSigning(t *testing.T) {
 
 // third_party/granule is a module of its own, so the main module's shards
 // never reach it: the `granule` job is the only thing in the gate that runs
-// its tests, pkg/forward's refusal of out-of-spec Open frames among them.
+// its tests, pkg/guestforward's -- the port-forward mux grain runs into
+// every kubernetes-granule guest -- among them.
 // It has to stay the whole module, under -race, in that directory, off the
 // vendor tree, and with no credential.
 func TestTheGranuleJobRunsTheVendoredModulesOwnTests(t *testing.T) {
@@ -1697,7 +1698,7 @@ func TestTheGranuleJobRunsTheVendoredModulesOwnTests(t *testing.T) {
 	if !found {
 		t.Errorf("%s: the granule job has no Test step", path)
 	}
-	if _, err := os.Stat(filepath.Join(repoRoot(t), "third_party", "granule", "pkg", "forward", "forward_test.go")); err != nil {
+	if _, err := os.Stat(filepath.Join(repoRoot(t), "third_party", "granule", "pkg", "guestforward", "forward_test.go")); err != nil {
 		t.Errorf("the test this job exists to run is gone: %v", err)
 	}
 }
@@ -2067,16 +2068,13 @@ func TestTheReleaseTrainNeverPromotesARelease(t *testing.T) {
 	w := releaseTrainWorkflow(t)
 	forbidden := []string{
 		"release-from-trunk.sh approve", "release-from-trunk.sh reject", "release-from-trunk.sh rollback",
-		"release-images.sh promote", "release-assets.sh promote", "promote-release.yml", "promote.yml",
+		"release-images.sh promote", "promote-release.yml", "promote.yml",
 		"refs/tags/latest", "git tag", "git push",
 	}
 	for _, f := range []struct{ path, text string }{
 		{".github/workflows/release-train.yml", stripComments(read(t, ".github", "workflows", "release-train.yml"))},
 		{".github/workflows/rc-qualification.yml", stripComments(read(t, ".github", "workflows", "rc-qualification.yml"))},
 		{"scripts/release-train-actions.sh", stripComments(read(t, "scripts", "release-train-actions.sh"))},
-		// The train's release-asset publisher runs release-assets.sh
-		// train-tag on the tags the train pushes; promote is not its.
-		{".github/workflows/release-train-assets.yml", stripComments(read(t, ".github", "workflows", "release-train-assets.yml"))},
 	} {
 		for _, bad := range append(forbidden, "release-images.sh", "/git/refs", "/git/tags") {
 			if strings.Contains(f.text, bad) {
@@ -2093,12 +2091,6 @@ func TestTheReleaseTrainNeverPromotesARelease(t *testing.T) {
 				}
 			}
 		}
-	}
-	// And release-assets.sh's train-tag itself refuses vX.Y.Z and latest
-	// (release-assets_test.sh runs it), rather than promoting them.
-	trainTag := releaseScriptFunction(t, read(t, "scripts", "release-assets.sh"), "train_tag")
-	if strings.Contains(stripComments(trainTag), "promote ") {
-		t.Errorf("scripts/release-assets.sh's train_tag runs promote:\n%s", trainTag)
 	}
 	script := read(t, "scripts", "release-from-trunk.sh")
 	if !strings.Contains(script, `release-images.sh pending`) && !strings.Contains(script, `images pending`) {

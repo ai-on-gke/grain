@@ -301,8 +301,12 @@ func TestCLIGitHubShapesQualifyAnRCInCandidateGate(t *testing.T) {
 	}
 	// The other App's failing check run is the only one trusted when it is
 	// named instead: the gate judges what it is handed, nothing else.
-	if out, code := gate("github-actions"); code != 2 {
-		t.Errorf("check-qualification trusting the other App = exit %d, want 2 (a first failure gets a retry)\n%s", code, out)
+	// A completed failure of the trusted App's check run is confirmed red:
+	// grain posts failure only after an item failed its own retry, and
+	// never re-runs a completed candidate (docs/test-runs/2026-11-04-release-train.md,
+	// finding 1).
+	if out, code := gate("github-actions"); code != 1 || !strings.Contains(out, "FAIL grain/release-qualification") {
+		t.Errorf("check-qualification trusting the other App = exit %d, want 1 (its failure is confirmed red)\n%s", code, out)
 	}
 }
 

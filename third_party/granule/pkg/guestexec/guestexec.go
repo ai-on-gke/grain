@@ -61,8 +61,8 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/bwsalmon/granule/pkg/cgroupmem"
-	"github.com/bwsalmon/granule/pkg/execwire"
+	"github.com/gke-labs/granule/pkg/cgroupmem"
+	"github.com/gke-labs/granule/pkg/execwire"
 )
 
 const (

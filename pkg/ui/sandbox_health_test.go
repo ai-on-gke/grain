@@ -147,8 +147,8 @@ func TestGetSandboxHealthReportsTheSandboxImageAndTheStampItShouldMatch(t *testi
 	srv, client := testServer(t)
 	client.Config.Sandboxes = fakeSandboxHealth{}
 	client.Config.SandboxImage = &ui.SandboxImage{
-		Image:    "ghcr.io/bwsalmon/grain/guest:sha-2f89890",
-		Expected: "ghcr.io/bwsalmon/grain/guest:sha-e5544d6",
+		Image:    "docker.io/grainai/sandbox:sha-2f89890",
+		Expected: "docker.io/grainai/sandbox:sha-e5544d6",
 		Pinned:   true,
 	}
 
@@ -178,7 +178,7 @@ func TestGetSandboxHealthReportsTheSandboxImageAndTheStampItShouldMatch(t *testi
 	// custom sandbox image without a restart.
 	current := &ui.SandboxImage{
 		Image:    "registry.example/team/guest:v1",
-		Expected: "ghcr.io/bwsalmon/grain/guest:sha-e5544d6",
+		Expected: "docker.io/grainai/sandbox:sha-e5544d6",
 	}
 	client.Config.SandboxImageFunc = func() *ui.SandboxImage { return current }
 	got = decode[struct {
@@ -188,13 +188,13 @@ func TestGetSandboxHealthReportsTheSandboxImageAndTheStampItShouldMatch(t *testi
 		t.Fatalf("sandboxImage with custom set = %+v, want registry.example/team/guest:v1", got.SandboxImage)
 	}
 	current = &ui.SandboxImage{
-		Image:    "ghcr.io/bwsalmon/grain/guest:sha-e5544d6",
-		Expected: "ghcr.io/bwsalmon/grain/guest:sha-e5544d6",
+		Image:    "docker.io/grainai/sandbox:sha-e5544d6",
+		Expected: "docker.io/grainai/sandbox:sha-e5544d6",
 	}
 	got = decode[struct {
 		SandboxImage *ui.SandboxImage `json:"sandboxImage"`
 	}](t, do(t, srv, http.MethodGet, "/api/sandboxes", ""))
-	if got.SandboxImage == nil || got.SandboxImage.Image != "ghcr.io/bwsalmon/grain/guest:sha-e5544d6" {
+	if got.SandboxImage == nil || got.SandboxImage.Image != "docker.io/grainai/sandbox:sha-e5544d6" {
 		t.Fatalf("sandboxImage after clearing custom = %+v, want stamped default", got.SandboxImage)
 	}
 }

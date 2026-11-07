@@ -137,6 +137,14 @@ func Main() {
 	// still read it (pkg/gitrefs).
 	gitrefs.Pin()
 	args := os.Args[1:]
+	if len(args) == 1 && args[0] == "hostds" {
+		// A bare "grain hostds" listed the registry; "grain host" alone
+		// runs the host agent.
+		args = []string{"host", "list"}
+	}
+	if len(args) > 0 {
+		args[0] = canonicalCommand(args[0])
+	}
 	// Inside an agent's sandbox, the read commands of
 	// design/design/sandbox-first-agent-surface.design.md answer over the
 	// sandbox's own proxy (pkg/sandboxcli); anything else runs as it
@@ -169,9 +177,14 @@ func Main() {
 		case "runhost":
 			runHostCmd(args[1:])
 			return
-		case "hostd":
-			hostdCmd(args[1:])
-			return
+		case "host":
+			// grain host list|pending|accept|... is the host registry, a
+			// task-CLI command (cmdHostds); anything else runs the host
+			// agent on this machine.
+			if len(args) < 2 || !hostRegistryVerb(args[1]) {
+				hostdCmd(args[1:])
+				return
+			}
 		case "host-script":
 			os.Exit(hostscriptcli.Main(args[1:], os.Stdout, os.Stderr))
 		case "access-code":
@@ -253,6 +266,36 @@ func Main() {
 	}
 }
 
+// hiddenCommandAliases are command words grain still answers to but no
+// longer shows: "hostd" (the host agent) and "hostds" (the host
+// registry) are both "host" now, which users see. Neither is in usage
+// or the CLI spec; both keep working for scripts and installed units.
+var hiddenCommandAliases = map[string]string{
+	"hostd":  "host",
+	"hostds": "host",
+}
+
+// canonicalCommand is the command word cmd is spelled as now.
+func canonicalCommand(cmd string) string {
+	if c, ok := hiddenCommandAliases[cmd]; ok {
+		return c
+	}
+	return cmd
+}
+
+// hostRegistryVerb reports whether word, after "grain host", names one of
+// the host registry's subcommands (cmdHostds) rather than starting the
+// host agent, whose arguments are all flags.
+func hostRegistryVerb(word string) bool {
+	switch word {
+	case "list", "ls", "register", "create", "install", "set-owner", "help",
+		"pending", "accept", "reject", "rekey", "codes", "invite", "rotate-code", "revoke-code",
+		"rename", "update", "revoke", "delete":
+		return true
+	}
+	return false
+}
+
 // runTaskCLI runs the task CLI and says how it ended (errors.go): the
 // exit code, and on stderr either a sentence or, under -json, the one
 // {"error": ...} object -- with whatever the flag package or a command
@@ -310,7 +353,7 @@ const usage = `usage: grain [global flags] <command> [args]
        grain demo [flags]      serve the task UI on localhost over a throwaway store of fake tasks (see demo.go)
        grain mcpserver [flags] speak MCP over stdin/stdout against the sandbox tools (see mcpserver.go)
        grain runhost exec [flags] a run host's entrypoint: run one spooled agent CLI invocation (see pkg/runhost)
-       grain hostd [flags]     on the bare machine, run the allowlisted host CLIs and capability servers a containerised daemon asks for (see pkg/hostd)
+       grain host [flags]      on the bare machine, run the host agent: the allowlisted host CLIs and capability servers a containerised daemon asks for (see pkg/hostd)
        grain host-script <name> [args]  in a sandbox, run a granted host script on grain's side (see pkg/hostscriptcli)
        grain secrets [flags]   set/delete/list a colocated server's secrets on disk (see secrets.go)
        grain connections import FILE  record a seed file's git and model connections (see connections.go)
@@ -346,15 +389,19 @@ Global flags (before or after the command; -flag and --flag are the same):
   -audience string target audience for Google ID token authentication ($GRAIN_AUDIENCE, $GRAIN_TUNNEL_AUDIENCE)
   -as string      identity for request attribution / proxy headers ($GRAIN_USER)
   -json           print machine-readable JSON instead of a human-readable table
+  -context string the named context to use ($GRAIN_CONTEXT, else config.json's current)
 
 Commands:
+  login <url> [flags] / logout [<ctx>] / whoami   sign in to a deployment as a named context, and say as whom
+  context list|use|show|delete         the named contexts ($XDG_CONFIG_HOME/grain/config.json)
   list [flags]                         list the tasks in play -- closed and deferred ones are left
                                        out unless -closed/-deferred or a filter naming that state
                                        asks for them (-filter attribute:comparison:value narrows the
                                        list, repeatably, with -state/-repo/-capability and friends
                                        as shorthands; -sort attribute:asc orders it. "grain list -h"
                                        prints the attributes and comparisons -- see list.go)
-  get <id>                             show one task and its conversation
+  get <id> [-comments-since T]         show one task and its conversation (only what came after T)
+  show <id> [-comments-since T]        alias for get
   create -title T [flags]              file a new task (-position front|end picks which end of
                                        the backlog it joins, and is remembered for the next one;
                                        -field name=value sets one of the fields this deployment
@@ -369,6 +416,7 @@ Commands:
                                        queued its approval says
   capability <id> <cap> attach|detach  attach or detach a capability
   comment <id> <body...>               post a comment (and answer a parked question)
+  reply|inbox|wait|logs <id...>        answer a parked question, list what needs a person, block on tasks, read a run's log
   close [-close-pull-request] <id>     close a task (grain's "delete" -- see the package doc comment),
                                        and with the flag its open pull request too
   delete <id>                          alias for close
@@ -380,6 +428,8 @@ Commands:
                                        the pull request, and refused if the branch does not merge cleanly;
                                        -head <sha> names the commit you reviewed, and the override is
                                        withdrawn if anything else is pushed before the merge
+  pr adopt|review|status <pr>          adopt (-mode review-only|finish), review (-design) or report on
+                                       (-threads) a pull request grain did not open (see prcmd.go)
   run-now <id>                         start a run of this task next, ahead of the queue and whatever
                                        its state says -- including sending a finished or merging task
                                        back to an agent for more work on its own branch
@@ -416,6 +466,14 @@ Commands:
                                        "clear" to empty it (safe: a cached job simply runs again)
   ci faults [-repo r] [-source s]      shared CI faults across branches right now (grain CI and GitHub CI,
                                        labelled by source)
+  ci wait (<run-id> | -pr <url|owner/name#n> | -ref <branch> -repo <owner/name>) [-jobs j1,j2]
+                                       block until a run has a verdict (-timeout, default 30m), with each
+                                       failing job and any shared fault: exit 0 green, 1 red, 5 timed out
+  ci retrigger <run-id> [-jobs j1,j2]  rerun a run's failed jobs (or -jobs) once, bypassing the job cache
+  ci test-history <test> [-repo r] [-limit N]
+                                       pass, fail and flake history of one test across recent runs
+  merge-queue [-repo owner/name]       queued pull requests, the batches and CI testing them, and held
+                                       merge gates (deploy://merge-queue; see mergequeue.go)
   fs ls|cat|read|grep <uri>            read grain's namespace (ci://, task://, deploy://, config://,
                                        memory://, src://) over GET /api/fs/, as a sandbox's grain ls,
                                        read and grep do; read is cat (see fscmd.go)
@@ -426,6 +484,9 @@ Commands:
                                        that breaks a declaration (see declcmd.go, docs/declarations.md)
   git-connections                      list the git connections this deployment clones and pushes
                                        with, one "host credential" per line (see deployment.go)
+  git-login [-web|-from-gh|-with-token] [-host h] [-scope s] [-author name]
+                                       delegate your GitHub HTTPS token to this deployment and sign new
+                                       pull requests and comments in your name ("Signed by <Name> (via Grain)")
   git-ambient [-host h] [-kind github|git] [-base-url u] [-proxy u] [-source gh|git|auto] [-if-none]
                                        give this deployment an ambient git connection: this host's own
                                        gh / git login, asked for a token at the moment one is needed
@@ -436,8 +497,13 @@ Commands:
   gcp-key list|get|set|delete          manage this deployment's GCP service-account keys
   capability-servers list|add|remove|enable|disable|bind-secret
                                        manage this deployment's capability servers (mcpServers)
-  hostds list|register|set-owner       the hostd registry: register a hostd with its owner, the identity
-                                       it dials in through IAP as
+  host list|pending|accept|reject|invite|codes|rename|update|revoke|delete|delete-revoked|rekey
+                                       hosts (Settings -> Hosts): invite hosts with one shared enrollment
+                                       snippet, accept or reject the hosts that join, and manage hosts
+  host register|install|set-owner      the legacy host registry: register a host with its owner, the
+                                       identity it dials in through IAP as, and print how to install it
+  registry status|register|unregister  self-register this deployment with a grain registry and inspect
+                                       heartbeats and self-reported scopes (Settings -> Registry)
   access list|allow|deny               the allowed users and groups list (Settings -> Access): who may
                                        sign in through IAP or another identity verifier
   broadcast [-all] <message...>        send a notice to all running task agents (or with -all, all active tasks)
@@ -537,6 +603,7 @@ func runCLI(args []string) error {
 	connectTimeout := fs.Duration("connect-timeout", defaultConnectTimeout,
 		"how long to wait to connect to the daemon, and to wait out one that refuses connections (a restart)")
 	callTimeout := fs.Duration("timeout", defaultCallTimeout, "how long one call waits for the daemon to start answering")
+	contextName := fs.String("context", "", "the named context to use ($"+contextEnvVar+"; see `grain context list`)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -550,12 +617,10 @@ func runCLI(args []string) error {
 		return err
 	}
 	rest = append(rest[:1:1], cmdArgs...)
-	_, source := serverSource()
-	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "server" {
-			source = "-server"
-		}
-	})
+	sel, source, err := resolveTarget(fs, server, *contextName)
+	if err != nil {
+		return err
+	}
 	useCLIEnvDataDir()
 
 	c := ui.NewHTTPClient(*server)
@@ -581,20 +646,22 @@ func runCLI(args []string) error {
 	target := cliTarget{
 		server:      *server,
 		source:      source,
-		tokenSource: tokenSource(*token),
+		tokenSource: useContextCredential(c, sel, tokenSource(*token)),
 		connect:     *connectTimeout,
 		call:        *callTimeout,
 	}
-	return explainDaemonError(dispatchCLI(ctx, c, out, fs, rest), target)
+	return explainDaemonError(dispatchCLI(ctx, c, out, fs, sel, rest), target)
 }
 
 // dispatchCLI runs one task-CLI command against c.
-func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.FlagSet, rest []string) error {
-	cmd, cmdArgs := rest[0], rest[1:]
+func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.FlagSet, sel selectedContext, rest []string) error {
+	cmd, cmdArgs := canonicalCommand(rest[0]), rest[1:]
 	switch cmd {
+	case "context", "whoami", "login", "logout":
+		return dispatchSignIn(ctx, c, out, sel, cmd, cmdArgs)
 	case "list":
 		return cmdList(ctx, c, out, cmdArgs)
-	case "get":
+	case "get", "show":
 		return cmdGet(ctx, c, out, cmdArgs)
 	case "create":
 		return cmdCreate(ctx, c, out, cmdArgs)
@@ -612,6 +679,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdCapability(ctx, c, out, cmdArgs)
 	case "comment":
 		return cmdComment(ctx, c, out, cmdArgs)
+	case "reply", "inbox", "wait", "logs":
+		return externalCommands[cmd](ctx, c, out, cmdArgs)
 	case "close", "delete":
 		return cmdClose(ctx, c, out, cmdArgs)
 	case "reopen":
@@ -638,8 +707,12 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdResume(ctx, c, out, cmdArgs)
 	case "ci":
 		return cmdCI(ctx, c, out, cmdArgs)
+	case "pr":
+		return cmdPR(ctx, c, out, cmdArgs)
 	case "fs":
 		return cmdFS(ctx, c, out, cmdArgs)
+	case "merge-queue":
+		return cmdMergeQueue(ctx, c, out, cmdArgs)
 	case "declarations":
 		return cmdDeclarations(ctx, c, out, cmdArgs)
 	case "settings":
@@ -654,12 +727,16 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdGCPKey(ctx, c, out, cmdArgs)
 	case "capability-servers":
 		return cmdCapabilityServers(ctx, c, out, cmdArgs)
-	case "hostds":
+	case "host":
 		return cmdHostds(ctx, c, out, cmdArgs)
+	case "registry":
+		return cmdRegistry(ctx, c, out, cmdArgs)
 	case "access":
 		return cmdAccess(ctx, c, out, cmdArgs)
 	case "git-ambient":
 		return cmdGitAmbient(ctx, c, out, cmdArgs)
+	case "git-login":
+		return cmdGitLogin(ctx, c, out, cmdArgs)
 	case "git-connections":
 		return cmdGitConnections(ctx, c, out, cmdArgs)
 	case "default-model":
@@ -699,81 +776,6 @@ func (s *stringList) String() string { return strings.Join(*s, ",") }
 func (s *stringList) Set(v string) error {
 	*s = append(*s, v)
 	return nil
-}
-
-// parseArgs is flag.FlagSet.Parse for a command that takes positional
-// arguments as well as flags, and it exists because Go's own Parse stops
-// at the first word that is not a flag. Every usage line here is written
-// the way people type these commands -- `grain update <id> [flags]`,
-// `grain repo capabilities [-set a,b] <owner/name>` -- and with a plain
-// Parse the first of those forms silently did nothing at all: the id
-// ended parsing, -title was left among the leftover arguments, fs.Visit
-// saw no flag set, and the command sent an empty request and printed the
-// unchanged task as though it had worked. `grain repo capabilities
-// acme/widgets -set self-debug` was the same shape of quiet failure --
-// it printed the repo's capabilities instead of replacing them.
-//
-// So flags are parsed wherever they appear: Parse is called again on
-// what is left after each positional word, which is what a GNU-style
-// getopt does with permutation, and the positional words are returned in
-// the order they were written. A bare "--" still ends the flags, and
-// everything after it is positional verbatim -- which is how a value
-// that starts with a dash is passed to a command that takes one.
-//
-// `grain comment <id> <body...>` deliberately does not use this: its
-// body is free text, and a body word that happens to name a flag has to
-// stay a body word. misplacedFlag below is what that command says
-// instead of guessing.
-func parseArgs(fs *flag.FlagSet, args []string) ([]string, error) {
-	var terminated []string
-	for i, arg := range args {
-		if arg == "--" {
-			terminated = args[i+1:]
-			args = args[:i]
-			break
-		}
-	}
-	var positional []string
-	for {
-		if err := fs.Parse(args); err != nil {
-			return nil, err
-		}
-		rest := fs.Args()
-		if len(rest) == 0 {
-			break
-		}
-		positional = append(positional, rest[0])
-		args = rest[1:]
-	}
-	return append(positional, terminated...), nil
-}
-
-// first is args[0] or "", so a command missing its one positional
-// argument reports that through taskID's own error rather than panicking
-// on an empty slice -- flag.FlagSet.Arg's behaviour, which parseArgs'
-// callers no longer go through.
-func first(args []string) string {
-	if len(args) == 0 {
-		return ""
-	}
-	return args[0]
-}
-
-// misplacedFlag reports the first word in args that names a flag defined
-// on fs -- a flag written after the positional arguments, where
-// flag.Parse has already stopped looking at them.
-func misplacedFlag(fs *flag.FlagSet, args []string) (string, bool) {
-	for _, arg := range args {
-		name := strings.TrimLeft(arg, "-")
-		if name == arg || name == "" {
-			continue // not a flag-shaped word, or a bare "--"
-		}
-		name, _, _ = strings.Cut(name, "=")
-		if fs.Lookup(name) != nil {
-			return name, true
-		}
-	}
-	return "", false
 }
 
 // printer renders CLI output either as a human-readable table (the

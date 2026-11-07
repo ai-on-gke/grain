@@ -7,8 +7,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/dockervm"
-	"github.com/bwsalmon/granule/pkg/vmspec"
+	"github.com/gke-labs/granule/pkg/dockervm"
+	"github.com/gke-labs/granule/pkg/vmspec"
 )
 
 // defaultReadyTimeout is how long "vm create -wait", "vm wait" and "vm

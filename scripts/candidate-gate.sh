@@ -96,6 +96,12 @@
 #               failure once CHECK_QUALIFICATION_MAX_FLAKES (2) other
 #               jobs have already failed once -- three independent red
 #               jobs are systemic, not coincidence.
+#     except the check run, whose newest attempt is its verdict: grain
+#     posts failure only once an item has failed its own retry inside
+#     Stage 2 (model.DecideReleaseQualification), and never looks at a
+#     candidate again once its check run is completed, so a failure is
+#     confirmed red the first time -- waiting on a retry of it would hold
+#     the train on that rc for good.
 #
 #     Prints "<PASS|FAIL|PENDING|INFRA> <job>: ..." per job, a
 #     "RERUN <stage> <job> <flake|infra>" line for each job the train is to
@@ -315,12 +321,14 @@ job_names_json() {
   printf '%s\n' "$1" | jq -Rn '[inputs | select(test("\\S")) | capture("^\\s*(?<id>[^=]+?)\\s*=\\s*(?<name>.*?)\\s*$")]'
 }
 
-# from_app: a check run posted by the app $app names (its slug or id);
-# sha_ok: a sha that is $rc's.
+# from_app: a check run posted by the app $app names -- its id when $app
+# is all digits, so an app whose slug is that number cannot pass for it,
+# and its slug otherwise; sha_ok: a sha that is $rc's.
 # shellcheck disable=SC2016 # jq, not shell
 JQ_CHECK_RUN='
   def from_app: $app != "" and (.app | type == "object")
-    and ((.app.slug // "") == $app or ((.app.id // "") | tostring) == $app);
+    and (if ($app | test("^[0-9]+$")) then ((.app.id // "") | tostring) == $app
+         else (.app.slug // "") == $app end);
   def sha_ok: (. // "" | ascii_downcase) as $h | $h == "" or ($rc | startswith($h)) or ($h | startswith($rc));
 '
 # The attempts of every job in a listing, one line per job: stage, job
@@ -501,7 +509,15 @@ check_qualification() {
     else
       while IFS=$'\t' read -r stage job attempts; do
         [ -n "$job" ] || continue
-        judge "$stage" "$job" "$attempts"
+        case "${attempts##*,}" in
+          failure)
+            # grain already re-ran each failing item once before it
+            # concluded failure, and re-runs nothing after: confirmed.
+            fail "$job" "failed ($attempts): grain concludes failure only once an item has failed its own retry, so it is confirmed red"
+            ;;
+          success) pass "$job" "passed ($attempts)" ;;
+          *) judge "$stage" "$job" "$attempts" ;;
+        esac
       done <<< "$table"
     fi
   fi

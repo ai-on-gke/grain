@@ -40,8 +40,8 @@ const ContainerNamePrefix = "grain-sandbox-"
 // of grain's own, created on first use with inter-container traffic
 // disabled, so one run's container cannot reach another's -- nor
 // anything else a host runs on Docker's shared default bridge. Egress to
-// the internet and to the host itself (where grain's git proxy and
-// package cache listen) is unaffected.
+// the internet is unaffected; what else a container reaches on the host
+// and its networks is ContainerConfig.Fence's to narrow.
 const DefaultContainerNetwork = "grain-sandboxes"
 
 // DefaultContainerPidsLimit caps the processes one sandbox container may
@@ -78,6 +78,18 @@ type ContainerConfig struct {
 	// from a per-revision volume (grainSourceVolume); empty means none
 	// is, and placeGrainSource streams a copy in as it does elsewhere.
 	GrainSourceDir string
+	// Fence is whether each container is fenced off from this host, its
+	// networks and link-local by a per-container nftables chain
+	// (container_fence.go); empty is ContainerFenceAuto.
+	Fence ContainerFenceMode
+	// GitProxyHost is the address containers reach grain's services at
+	// (-container-git-proxy-host), which the fence accepts on the
+	// sandbox service ports alongside each network's gateway.
+	GitProxyHost string
+	// SandboxServicePorts are the only ports the fence accepts at the
+	// gateway and git proxy, as GranuleConfig's field of the same name;
+	// nil accepts every port there.
+	SandboxServicePorts func() []SandboxServicePort
 }
 
 // ContainerSandboxes builds one docker container per run and removes it
@@ -97,6 +109,11 @@ type ContainerSandboxes struct {
 	// ones this process has already seen filled.
 	srcMu    sync.Mutex
 	srcReady map[string]bool
+	// fenceMu guards fenceEnabled's one probe of nft under
+	// ContainerFenceAuto, and the answer it keeps.
+	fenceMu              sync.Mutex
+	fenceProbed, fenceOn bool
+	fenceWhy             string
 }
 
 // NewContainerSandboxes returns a ContainerSandboxes configured by cfg.
@@ -227,7 +244,25 @@ func (c *ContainerSandboxes) runArgs(name string, resolved Shape, srcVolume stri
 	if srcVolume != "" {
 		args = append(args, grainSourceMountArgs(srcVolume)...)
 	}
-	return append(args, "--workdir", c.cfg.Workspace, c.CurrentImage(), "sleep", "infinity")
+	image := c.CurrentImage()
+	if releaseAssetImageRef(image) {
+		// docker run pulls a missing image by default, and this name
+		// would be pulled from Docker Hub's grain/ namespace.
+		args = append(args, "--pull=never")
+	}
+	return append(args, "--workdir", c.cfg.Workspace, image, "sleep", "infinity")
+}
+
+// releaseAssetImageRef reports whether image is the local tag a release
+// asset's `docker load` leaves behind (images.json's "ref", such as
+// grain/guest:sha-0123456789ab; docs/release-assets.md). It names no
+// registry host, so Docker reads it as docker.io/grain/..., a Docker Hub
+// namespace this project does not control: such an image is only ever
+// loaded, never pulled, and a container is not started from it if it has
+// gone from the local image store.
+func releaseAssetImageRef(image string) bool {
+	first, _, ok := strings.Cut(strings.TrimSpace(image), "/")
+	return ok && first == "grain"
 }
 
 func (c *ContainerSandboxes) create(ctx context.Context, name string, shape Shape, srcVolume string) error {
@@ -239,6 +274,13 @@ func (c *ContainerSandboxes) create(ctx context.Context, name string, shape Shap
 	if _, err := c.run(ctx, args...); err != nil {
 		return fmt.Errorf("orchestrator: creating sandbox container %q: %w", name, err)
 	}
+	// Fenced before anything is run in it: a container whose chain
+	// cannot be installed is removed rather than left running unfenced
+	// for a Rebuild's caller to keep using.
+	if err := c.fence(ctx, name); err != nil {
+		c.removeQuietly(ctx, name)
+		return err
+	}
 	return nil
 }
 
@@ -246,7 +288,8 @@ func (c *ContainerSandboxes) create(ctx context.Context, name string, shape Shap
 // carries this run's name with a fresh one and hand back a handle that
 // removes it on Release. It refuses model.NetworkNone, since a container
 // on a docker bridge cannot be kept off the internet while still reaching
-// grain's git proxy on the host.
+// grain's git proxy on the host. A container create fences (fence) is not
+// handed over unless its fence is installed.
 func (c *ContainerSandboxes) Acquire(ctx context.Context, sandbox string, shape Shape) (Sandbox, error) {
 	if c.CurrentImage() == "" {
 		return nil, errors.New("orchestrator: container sandbox image is required")
@@ -310,6 +353,7 @@ func (c *ContainerSandboxes) removeQuietly(ctx context.Context, name string) {
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), containerCleanupTimeout)
 	defer cancel()
 	_, _ = c.run(cleanup, "rm", "-f", name)
+	c.unfence(cleanup, name)
 }
 
 // ReapOrphans removes every container carrying the grain.sandbox label
@@ -346,6 +390,7 @@ func (c *ContainerSandboxes) ReapOrphans(ctx context.Context) (int, error) {
 			errs = append(errs, err)
 		} else {
 			count++
+			c.unfence(ctx, strings.TrimPrefix(strings.TrimSpace(name), "/"))
 		}
 	}
 	return count, errors.Join(errs...)
@@ -423,15 +468,22 @@ func (s *containerSandbox) Release(ctx context.Context) error {
 	if _, err := s.owner.run(cleanup, "rm", "-f", s.container); err != nil {
 		return fmt.Errorf("orchestrator: deleting sandbox container %q: %w", s.container, err)
 	}
+	s.owner.unfence(cleanup, s.container)
 	return nil
 }
 
 // Readopt implements SandboxReadopter: the container a previous process
-// started for sandbox, claimed so ReapOrphans leaves it running.
+// started for sandbox, claimed so ReapOrphans leaves it running. Its
+// fence is installed again, since the process that started it may have
+// run unfenced or died before fencing it; one that cannot be fenced is
+// not readopted.
 func (c *ContainerSandboxes) Readopt(ctx context.Context, sandbox string) (Sandbox, error) {
 	name := ContainerNamePrefix + sandbox
 	if _, err := c.run(ctx, "inspect", "--type", "container", "--format", "{{.Name}}", name); err != nil {
 		return nil, fmt.Errorf("orchestrator: readopting sandbox container %q: %w", name, err)
+	}
+	if err := c.fence(ctx, name); err != nil {
+		return nil, err
 	}
 	sb := &containerSandbox{owner: c, name: sandbox, container: name, startedAt: time.Now(),
 		runner: &mcp.ContainerExecRunner{Docker: c.cfg.Docker, Container: name}}

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/guestexec"
+	"github.com/gke-labs/granule/pkg/guestexec"
 )
 
 // ExecOptions describes one command run inside a VM's guest.

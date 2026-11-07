@@ -40,7 +40,7 @@ const (
 	DefaultGKESandboxesNamespace       = DefaultK8sNamespace
 	DefaultGKESandboxesServiceAccount  = "grain"
 	DefaultGKESandboxesKubeconfig      = "/var/lib/grain/kubeconfig"
-	DefaultGKESandboxesGuestImage      = "ghcr.io/bwsalmon/grain/guest:main"
+	DefaultGKESandboxesGuestImage      = "docker.io/grainai/sandbox:main"
 	DefaultGKESandboxesGitProxyURL     = "http://127.0.0.1:9728"
 	DefaultGKESandboxesPackageCacheURL = "http://127.0.0.1:9729"
 	DefaultGKESandboxesVerifyRepo      = "https://github.com/ai-on-gke/grain.git"

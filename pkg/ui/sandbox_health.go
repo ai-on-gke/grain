@@ -312,6 +312,18 @@ type HostPressure struct {
 	NestedVirtDetail string `json:"nestedVirtDetail,omitempty"`
 }
 
+// StoreSwitch is the alert a daemon raises when its data directory
+// starts selecting a store other than the one it opened: Opened is the
+// store it writes to, Selected the one a restart would open, and
+// Message what to do about it. It stands until the daemon restarts, and
+// nothing is dispatched while it does.
+type StoreSwitch struct {
+	Since    time.Time `json:"since"`
+	Opened   string    `json:"opened"`
+	Selected string    `json:"selected"`
+	Message  string    `json:"message"`
+}
+
 // DaemonHealth is what the process serving this API can say about its
 // own life, as GET /api/sandboxes' own "daemon" object -- reported
 // beside the host reading because a restart loop is a fact about this
@@ -339,6 +351,9 @@ type HostPressure struct {
 // daemon is ignoring is `scripts/setup.sh` on one shape and an edit and
 // an apply on the other, and only the server knows which shape it is.
 type DaemonHealth struct {
+	// StoreSwitch is Config.StoreSwitch's alert, carried here too so
+	// `grain health` reports it beside the restart count.
+	StoreSwitch *StoreSwitch `json:"storeSwitch,omitempty"`
 	// StartedAt is when this process started. The pane turns it into an
 	// uptime, which is the form that reads as a restart loop: a
 	// deployment that has been up for four seconds at three in the
@@ -429,8 +444,15 @@ type DaemonHealth struct {
 // already establishes for the Logs pane the System overlay
 // (bwsalmon/agents#536) puts this one alongside.
 type SandboxHealthResponse struct {
-	Enabled   bool              `json:"enabled"`
-	Sandboxes []SandboxSnapshot `json:"sandboxes,omitempty"`
+	Enabled bool `json:"enabled"`
+	// DispatchBlocked is every condition holding this deployment's
+	// dispatch (Config.DispatchConditions): the failing checks of this
+	// response, first because nothing below them matters while one is
+	// in force -- a pool of healthy sandboxes is no use to a daemon
+	// whose git proxy never bound. Absent on a deployment that is
+	// dispatching, which is the ordinary day.
+	DispatchBlocked []DispatchCondition `json:"dispatchBlocked,omitempty"`
+	Sandboxes       []SandboxSnapshot   `json:"sandboxes,omitempty"`
 	// SandboxReading is how old those rows are, and whether they came
 	// from a sweep that has already been superseded by one still running
 	// (grain/task-262). nil on a deployment with no sandbox backend
@@ -513,6 +535,10 @@ type SandboxHealthResponse struct {
 	// (capabilityServersDown). Absent while every server is attached or
 	// only waiting to be configured for the first time.
 	CapabilityServers []CapabilityServerDown `json:"capabilityServers,omitempty"`
+	// Registry reports the deployment's connected-entry grain registry
+	// heartbeat status and any scope conflicts when registry self-registration
+	// is configured; nil when disabled.
+	Registry *RegistryHealth `json:"registry,omitempty"`
 	// Daemon is the health of the process answering this request
 	// (Config.Daemon). Absent where nothing can speak for it.
 	Daemon *DaemonHealth `json:"daemon,omitempty"`
@@ -1028,13 +1054,15 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 	// The same goes for a stale sandbox image pin: it is in the settings,
 	// and says so whether or not a pool is wired to report on.
 	if s.tasks.Config.Sandboxes == nil && s.tasks.Config.HostStats == nil && s.tasks.Config.Daemon == nil && s.tasks.Config.StandingSandboxes == nil && s.tasks.Config.PersistentSandboxes == nil && s.tasks.Config.Overcommit == nil {
-		writeJSON(w, http.StatusOK, SandboxHealthResponse{Enabled: false, StateRepoSync: syncFailure, HostCredentials: hostCredentials,
+		writeJSON(w, http.StatusOK, SandboxHealthResponse{Enabled: false, DispatchBlocked: s.tasks.dispatchBlocked(),
+			StateRepoSync: syncFailure, HostCredentials: hostCredentials,
 			SandboxImageWarnings: s.tasks.staleSandboxImagePins(r.Context()), Counters: healthCounterSections(),
-			CapabilityServers: s.tasks.capabilityServersDown()})
+			CapabilityServers: s.tasks.capabilityServersDown(), Registry: s.tasks.registryHealth(r.Context())})
 		return
 	}
 	resp := SandboxHealthResponse{
 		Enabled:              true,
+		DispatchBlocked:      s.tasks.dispatchBlocked(),
 		StateRepoSync:        syncFailure,
 		HostCredentials:      hostCredentials,
 		SandboxImage:         s.tasks.sandboxImage(),
@@ -1048,6 +1076,7 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 		StandingSandboxes:    s.tasks.standingSandboxes(),
 		Counters:             healthCounterSections(),
 		CapabilityServers:    s.tasks.capabilityServersDown(),
+		Registry:             s.tasks.registryHealth(r.Context()),
 	}
 	if ps := s.tasks.Config.PersistentSandboxes; ps != nil {
 		if list, err := ps.List(r.Context()); err == nil {
@@ -1061,6 +1090,14 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 	if s.tasks.Config.Daemon != nil {
 		daemon := s.tasks.Config.Daemon()
 		resp.Daemon = &daemon
+	}
+	if s.tasks.Config.StoreSwitch != nil {
+		if sw := s.tasks.Config.StoreSwitch(); sw != nil {
+			if resp.Daemon == nil {
+				resp.Daemon = &DaemonHealth{}
+			}
+			resp.Daemon.StoreSwitch = sw
+		}
 	}
 	if s.tasks.Config.Sandboxes != nil {
 		resp.Sandboxes, resp.SandboxReading = s.tasks.sandboxHealth(r.Context())

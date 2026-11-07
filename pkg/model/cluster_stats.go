@@ -17,6 +17,7 @@ package model
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -99,6 +100,12 @@ type ClusterStats struct {
 	// what keeps the per-repo rows adding up to something a reader can
 	// check.
 	Repos []RepoWork
+	// Directions is the same window partitioned by root direction --
+	// the root task a person, schedule or issue started, with every
+	// follow-up task proposed down its work tree (WorkOrigin,
+	// LinkProposedBy) rolled up into the root direction that produced
+	// it. Most merged pull requests first.
+	Directions []DirectionWork
 }
 
 // RepoWork is one repository's share of a window.
@@ -119,6 +126,43 @@ type RepoWork struct {
 	Runs                 int
 }
 
+// DirectionWork is one root direction's share of a window: what a
+// single root task and the follow-up tasks its work tree spawned
+// (WorkOrigin, LinkProposedBy) produced inside [Since, Until).
+type DirectionWork struct {
+	TaskID               string
+	Title                string
+	Repo                 *RepoRef
+	Origin               WorkOrigin
+	Author               Principal
+	PullRequestsMerged   int
+	PullRequestsMeasured int
+	LinesAdded           int
+	LinesDeleted         int
+	TasksCompleted       int
+	TasksFiled           int
+	// TasksSpawned is how many distinct follow-up tasks (tasks in this
+	// direction's tree other than the root task itself) were filed or
+	// active inside the window.
+	TasksSpawned  int
+	Runs          int
+	RunsSucceeded int
+	AgentTime     time.Duration
+}
+
+type taskWindowWork struct {
+	repo                 *RepoRef
+	pullRequestsMerged   int
+	pullRequestsMeasured int
+	linesAdded           int
+	linesDeleted         int
+	tasksCompleted       int
+	tasksFiled           int
+	runs                 int
+	runsSucceeded        int
+	agentTime            time.Duration
+}
+
 // ClusterStats counts one window. since is inclusive and until
 // exclusive, so consecutive windows neither double-count a moment nor
 // drop one.
@@ -129,6 +173,7 @@ func (s *Store) ClusterStats(ctx context.Context, since, until time.Time) (Clust
 	}
 	out := ClusterStats{Since: since.UTC(), Until: until.UTC()}
 	byRepo := map[RepoRef]*RepoWork{}
+	byTask := map[string]*taskWindowWork{}
 	// A repository is added to the map by whichever count reaches it
 	// first: a repo that only had a task filed this week is as much
 	// part of the week as one that merged five.
@@ -144,6 +189,18 @@ func (s *Store) ClusterStats(ctx context.Context, since, until time.Time) (Clust
 		byRepo[repo] = w
 		return w
 	}
+	taskWork := func(id string, owner, name sql.NullString) *taskWindowWork {
+		if tw, ok := byTask[id]; ok {
+			return tw
+		}
+		tw := &taskWindowWork{}
+		if owner.Valid && name.Valid && owner.String != "" && name.String != "" {
+			r := RepoRef{Owner: owner.String, Name: name.String}
+			tw.repo = &r
+		}
+		byTask[id] = tw
+		return tw
+	}
 	args := []any{since.UTC(), until.UTC()}
 
 	// Merged pull requests, and tasks completed, both off the
@@ -152,25 +209,38 @@ func (s *Store) ClusterStats(ctx context.Context, since, until time.Time) (Clust
 	// independently NULL and a single pass would have to carry both
 	// conditions anyway.
 	counts := []struct {
-		column string
-		total  *int
-		add    func(*RepoWork)
+		column  string
+		total   *int
+		add     func(*RepoWork)
+		addTask func(*taskWindowWork, int)
 	}{
-		{"`o`.`pr_merged_at`", &out.PullRequestsMerged, func(w *RepoWork) { w.PullRequestsMerged++ }},
-		{"`o`.`completed_at`", &out.TasksCompleted, func(w *RepoWork) { w.TasksCompleted++ }},
+		{
+			"`o`.`pr_merged_at`",
+			&out.PullRequestsMerged,
+			func(w *RepoWork) { w.PullRequestsMerged++ },
+			func(tw *taskWindowWork, n int) { tw.pullRequestsMerged += n },
+		},
+		{
+			"`o`.`completed_at`",
+			&out.TasksCompleted,
+			func(w *RepoWork) { w.TasksCompleted++ },
+			func(tw *taskWindowWork, n int) { tw.tasksCompleted += n },
+		},
 	}
 	for _, c := range counts {
-		query := "SELECT `t`.`target_owner`,`t`.`target_name`,COUNT(*) FROM `task_observation` `o` " +
+		query := "SELECT `t`.`id`,`t`.`target_owner`,`t`.`target_name`,COUNT(*) FROM `task_observation` `o` " +
 			"JOIN `task` `t` ON `t`.`id` = `o`.`task_id` " +
 			"WHERE " + c.column + " >= ? AND " + c.column + " < ? " +
-			"GROUP BY `t`.`target_owner`,`t`.`target_name`"
+			"GROUP BY `t`.`id`,`t`.`target_owner`,`t`.`target_name`"
 		if err := each(ctx, s.db, query, args, func(rows *sql.Rows) error {
+			var id string
 			var owner, name sql.NullString
 			var n int
-			if err := rows.Scan(&owner, &name, &n); err != nil {
+			if err := rows.Scan(&id, &owner, &name, &n); err != nil {
 				return err
 			}
 			*c.total += n
+			c.addTask(taskWork(id, owner, name), n)
 			if w := work(owner, name); w != nil {
 				for i := 0; i < n; i++ {
 					c.add(w)
@@ -191,21 +261,26 @@ func (s *Store) ClusterStats(ctx context.Context, since, until time.Time) (Clust
 	// doc comment on why that number is reported beside the sums rather
 	// than folded into them).
 	if err := each(ctx, s.db,
-		"SELECT `t`.`target_owner`,`t`.`target_name`,COUNT(`o`.`pr_additions`),"+
+		"SELECT `t`.`id`,`t`.`target_owner`,`t`.`target_name`,COUNT(`o`.`pr_additions`),"+
 			"COALESCE(SUM(`o`.`pr_additions`),0),COALESCE(SUM(`o`.`pr_deletions`),0) "+
 			"FROM `task_observation` `o` JOIN `task` `t` ON `t`.`id` = `o`.`task_id` "+
 			"WHERE `o`.`pr_merged_at` >= ? AND `o`.`pr_merged_at` < ? "+
-			"GROUP BY `t`.`target_owner`,`t`.`target_name`",
+			"GROUP BY `t`.`id`,`t`.`target_owner`,`t`.`target_name`",
 		args,
 		func(rows *sql.Rows) error {
+			var id string
 			var owner, name sql.NullString
 			var measured, added, deleted int
-			if err := rows.Scan(&owner, &name, &measured, &added, &deleted); err != nil {
+			if err := rows.Scan(&id, &owner, &name, &measured, &added, &deleted); err != nil {
 				return err
 			}
 			out.PullRequestsMeasured += measured
 			out.LinesAdded += added
 			out.LinesDeleted += deleted
+			tw := taskWork(id, owner, name)
+			tw.pullRequestsMeasured += measured
+			tw.linesAdded += added
+			tw.linesDeleted += deleted
 			if w := work(owner, name); w != nil {
 				w.PullRequestsMeasured += measured
 				w.LinesAdded += added
@@ -217,16 +292,18 @@ func (s *Store) ClusterStats(ctx context.Context, since, until time.Time) (Clust
 	}
 
 	if err := each(ctx, s.db,
-		"SELECT `target_owner`,`target_name`,COUNT(*) FROM `task` "+
-			"WHERE `created_at` >= ? AND `created_at` < ? GROUP BY `target_owner`,`target_name`",
+		"SELECT `id`,`target_owner`,`target_name`,COUNT(*) FROM `task` "+
+			"WHERE `created_at` >= ? AND `created_at` < ? GROUP BY `id`,`target_owner`,`target_name`",
 		args,
 		func(rows *sql.Rows) error {
+			var id string
 			var owner, name sql.NullString
 			var n int
-			if err := rows.Scan(&owner, &name, &n); err != nil {
+			if err := rows.Scan(&id, &owner, &name, &n); err != nil {
 				return err
 			}
 			out.TasksFiled += n
+			taskWork(id, owner, name).tasksFiled += n
 			if w := work(owner, name); w != nil {
 				w.TasksFiled += n
 			}
@@ -243,21 +320,25 @@ func (s *Store) ClusterStats(ctx context.Context, since, until time.Time) (Clust
 	// would be one whose per-repo rows quietly disagreed with the three
 	// counts above them -- which are all the task's.
 	if err := each(ctx, s.db,
-		"SELECT `t`.`target_owner`,`t`.`target_name`,`r`.`outcome`,"+
+		"SELECT `t`.`id`,`t`.`target_owner`,`t`.`target_name`,`r`.`outcome`,"+
 			"`r`.`started_at`,`r`.`finished_at` FROM `task_run` `r` "+
 			"JOIN `task` `t` ON `t`.`id` = `r`.`task_id` "+
 			"WHERE `r`.`started_at` >= ? AND `r`.`started_at` < ?",
 		args,
 		func(rows *sql.Rows) error {
+			var id string
 			var owner, name, outcome sql.NullString
 			var started time.Time
 			var finished sql.NullTime
-			if err := rows.Scan(&owner, &name, &outcome, &started, &finished); err != nil {
+			if err := rows.Scan(&id, &owner, &name, &outcome, &started, &finished); err != nil {
 				return err
 			}
 			out.Runs++
+			tw := taskWork(id, owner, name)
+			tw.runs++
 			if SucceededOutcome(outcome.String) {
 				out.RunsSucceeded++
+				tw.runsSucceeded++
 			}
 			// A run still going at the end of the window is credited
 			// with the part of it that is inside the window, which is
@@ -270,6 +351,7 @@ func (s *Store) ClusterStats(ctx context.Context, since, until time.Time) (Clust
 			}
 			if d := end.Sub(started.UTC()); d > 0 {
 				out.AgentTime += d
+				tw.agentTime += d
 			}
 			if w := work(owner, name); w != nil {
 				w.Runs++
@@ -296,5 +378,147 @@ func (s *Store) ClusterStats(ctx context.Context, since, until time.Time) (Clust
 		}
 		return a.Repo.String() < b.Repo.String()
 	})
+
+	directions, err := s.rollupDirections(ctx, byTask)
+	if err != nil {
+		return ClusterStats{}, fmt.Errorf("rolling up directions: %w", err)
+	}
+	out.Directions = directions
 	return out, nil
+}
+
+// rollupDirections groups the window's per-task work by the root task
+// that started each work tree (WorkOrigin, LinkProposedBy), loading the
+// root task's title, repository, origin and author once per tree.
+func (s *Store) rollupDirections(ctx context.Context, byTask map[string]*taskWindowWork) ([]DirectionWork, error) {
+	if len(byTask) == 0 {
+		return []DirectionWork{}, nil
+	}
+	rootCache := map[string]string{}
+	byDir := map[string]*DirectionWork{}
+	for taskID, tw := range byTask {
+		rootID, err := s.directionRootTaskID(ctx, taskID, rootCache)
+		if err != nil {
+			return nil, err
+		}
+		d, ok := byDir[rootID]
+		if !ok {
+			d = &DirectionWork{TaskID: rootID}
+			byDir[rootID] = d
+		}
+		if d.Repo == nil && tw.repo != nil {
+			r := *tw.repo
+			d.Repo = &r
+		}
+		d.PullRequestsMerged += tw.pullRequestsMerged
+		d.PullRequestsMeasured += tw.pullRequestsMeasured
+		d.LinesAdded += tw.linesAdded
+		d.LinesDeleted += tw.linesDeleted
+		d.TasksCompleted += tw.tasksCompleted
+		d.TasksFiled += tw.tasksFiled
+		if taskID != rootID {
+			d.TasksSpawned++
+		}
+		d.Runs += tw.runs
+		d.RunsSucceeded += tw.runsSucceeded
+		d.AgentTime += tw.agentTime
+	}
+
+	out := make([]DirectionWork, 0, len(byDir))
+	for _, d := range byDir {
+		var title, originRef, actorKind, actorID string
+		var owner, name sql.NullString
+		err := s.db.QueryRowContext(ctx,
+			"SELECT `title`,`target_owner`,`target_name`,`origin_ref`,`origin_actor_kind`,`origin_actor_id` "+
+				"FROM `task` WHERE `id` = ?", d.TaskID,
+		).Scan(&title, &owner, &name, &originRef, &actorKind, &actorID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		if err == nil {
+			d.Title = title
+			if owner.Valid && name.Valid && owner.String != "" && name.String != "" {
+				r := RepoRef{Owner: owner.String, Name: name.String}
+				d.Repo = &r
+			}
+			d.Origin = WorkOrigin(originRef)
+			d.Author = Principal{Kind: PrincipalKind(actorKind), ID: actorID}
+		}
+		if d.Origin == "" && d.TasksSpawned > 0 {
+			d.Origin = TaskOrigin(d.TaskID)
+		}
+		out = append(out, *d)
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.PullRequestsMerged != b.PullRequestsMerged {
+			return a.PullRequestsMerged > b.PullRequestsMerged
+		}
+		if a.TasksCompleted != b.TasksCompleted {
+			return a.TasksCompleted > b.TasksCompleted
+		}
+		if a.TasksSpawned != b.TasksSpawned {
+			return a.TasksSpawned > b.TasksSpawned
+		}
+		if a.TasksFiled != b.TasksFiled {
+			return a.TasksFiled > b.TasksFiled
+		}
+		if a.Runs != b.Runs {
+			return a.Runs > b.Runs
+		}
+		return a.TaskID < b.TaskID
+	})
+	return out, nil
+}
+
+// directionRootTaskID walks LinkProposedBy and task WorkOrigin pointers
+// from id up to the root task of its tree.
+func (s *Store) directionRootTaskID(ctx context.Context, id string, cache map[string]string) (string, error) {
+	if root, ok := cache[id]; ok {
+		return root, nil
+	}
+	seen := map[string]bool{}
+	var path []string
+	cur := id
+	for {
+		if root, ok := cache[cur]; ok {
+			cur = root
+			break
+		}
+		if seen[cur] {
+			break
+		}
+		seen[cur] = true
+		path = append(path, cur)
+		var origin, parent string
+		err := s.db.QueryRowContext(ctx,
+			"SELECT `t`.`origin_ref`, "+
+				"COALESCE((SELECT MIN(`target`) FROM `task_link` WHERE `task_id` = `t`.`id` AND `kind` = ?), '') "+
+				"FROM `task` `t` WHERE `t`.`id` = ?",
+			string(LinkProposedBy), cur,
+		).Scan(&origin, &parent)
+		if errors.Is(err, sql.ErrNoRows) {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+		o := WorkOrigin(origin)
+		switch {
+		case parent != "" && parent != cur:
+			cur = parent
+		case o.Task() != "" && o.Task() != cur:
+			cur = o.Task()
+		default:
+			for _, p := range path {
+				cache[p] = cur
+			}
+			return cur, nil
+		}
+	}
+	for _, p := range path {
+		cache[p] = cur
+	}
+	return cur, nil
 }

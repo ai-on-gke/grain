@@ -116,14 +116,42 @@ func TestContainerSandboxesGetNoAccessCode(t *testing.T) {
 }
 
 func TestSetImageReplacesTheContainerImageForTheNextCreate(t *testing.T) {
-	c := NewContainerSandboxes(ContainerConfig{Image: "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-1", Workspace: "/home/agent"})
+	c := NewContainerSandboxes(ContainerConfig{Image: "docker.io/grainai/sandbox-k8s:sha-1", Workspace: "/home/agent"})
 	c.SetImage("")
-	if got := c.CurrentImage(); got != "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-1" {
+	if got := c.CurrentImage(); got != "docker.io/grainai/sandbox-k8s:sha-1" {
 		t.Fatalf("SetImage(\"\") left %q, want the configured image kept", got)
 	}
 	c.SetImage("registry.example/team/sandbox:v2")
 	args := c.runArgs("grain-run", DefaultShape(), "")
 	if got := args[len(args)-3]; got != "registry.example/team/sandbox:v2" {
 		t.Fatalf("docker run image = %q, want the image SetImage named (%v)", got, args)
+	}
+}
+
+// A release-asset image (grain/guest:sha-..., loaded from a release's
+// tarball) is never pulled: Docker would look the name up on Docker Hub.
+// Every other image keeps Docker's default pull policy.
+func TestContainerSandboxesNeverPullAReleaseAssetImage(t *testing.T) {
+	for image, wantNever := range map[string]bool{
+		"grain/guest:sha-0123456789ab":                  true,
+		"docker.io/grainai/sandbox:latest":              false,
+		"docker.io/grain/guest:sha-0123456789ab":        false,
+		"registry.example/grain/guest:sha-0123456789ab": false,
+		"img": false,
+	} {
+		c := NewContainerSandboxes(ContainerConfig{Image: image, Workspace: "/home/agent"})
+		args := c.runArgs("grain-sandbox-x", DefaultShape(), "")
+		if got := args[len(args)-3]; got != image {
+			t.Fatalf("%s: docker run image = %q (%v)", image, got, args)
+		}
+		never := false
+		for _, a := range args {
+			if a == "--pull=never" {
+				never = true
+			}
+		}
+		if never != wantNever {
+			t.Errorf("%s: --pull=never in docker run args = %v, want %v (%v)", image, never, wantNever, args)
+		}
 	}
 }

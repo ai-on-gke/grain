@@ -1,0 +1,11 @@
+=== Repro 1: Second request_access after partial grant (2 of 3 granted) ===
+Run 2 re-check of all 3 items: err=requests[0] (read acme/docs): task 1 holds this already; requests[1] (network access open): task 1 holds this already
+GET /api/tasks/1 -> pendingAccess.earlier = null (len=0)
+
+=== Repro 3: requires_person capability vs non-person PrincipalService ===
+PrincipalService CreateTask(Approved:true, [self-debug]): err=<nil> state=queued
+PrincipalService SetCapabilityGrant(self-debug): err=<nil>
+PrincipalService Approve(proposed holding self-debug): err=<nil> state=queued
+
+=== Repro 2: askedCase on interactive task parked on request_access ===
+{"kind":"message","title":"Waiting for your message","action":"reply"}

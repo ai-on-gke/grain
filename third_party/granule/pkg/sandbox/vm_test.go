@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/relay"
-	"github.com/bwsalmon/granule/pkg/sandbox"
+	"github.com/gke-labs/granule/pkg/relay"
+	"github.com/gke-labs/granule/pkg/sandbox"
 )
 
 // TestVM_AccessOverTCPListen drives a real guest booted under

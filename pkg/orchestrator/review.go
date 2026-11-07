@@ -536,6 +536,7 @@ func newReview(ctx context.Context, store *model.Store, task model.Task,
 		reviewTask.Links = append(reviewTask.Links, model.Link{Kind: model.LinkPushesReviewedBranch, Target: task.ID})
 	}
 	model.InheritRequester(&reviewTask, task)
+	model.InheritContext(&reviewTask, task)
 	return reviewTask, nil
 }
 
@@ -598,8 +599,20 @@ func reviewTaskBody(tmpl model.Template, task model.Task, ref model.PullRequestR
 			"about, and put to the owner on task %s; any such call holds the change for "+
 			"their decision, and their reply sends another run to carry it out.",
 		task.ID, task.Title, branch, ref, branch, branch, task.ID, ref, task.ID)
+	b.WriteString("\n\n" + reviewHumanReviewNote)
 	return b.String()
 }
+
+// reviewHumanReviewNote is what every template review is told about
+// request_human_review (model/human_review_hold.go): when to use it rather
+// than a finding, and what it does.
+const reviewHumanReviewNote = "If the code is fine (or fixed) but a person must decide something about " +
+	"the change -- a product or design call, a risky migration, a security-sensitive behaviour change, " +
+	"or a brief whose intent is unclear -- call `request_human_review` with a one-line reason, the " +
+	"details and your recommendation, and a category, rather than dressing it up as a finding. It turns " +
+	"the change's auto-merge off until a person presses Submit or Release hold; nothing automatic -- a " +
+	"clean review, CI, a later push -- releases it, and your review still finishes normally. Code " +
+	"defects an agent can fix stay findings."
 
 // reviewComment records something the review machinery said about a
 // task, attributed to it rather than to grain generally -- queueComment's

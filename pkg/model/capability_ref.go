@@ -113,6 +113,103 @@ func CheckCapabilityGrantSyntax(s string) error {
 	return err
 }
 
+// CheckGCPKeyGrantArgs refuses the removed "account" and "activate" grant
+// arguments on https://grain.dev/capabilities/gcp#gcp-key (and any server
+// alias whose canonical ID is GCPCapabilityServerID), directing callers to
+// "permission_set".
+func CheckGCPKeyGrantArgs(spec protocol.GrantSpec, resolvedServerID string) error {
+	if len(spec.With) == 0 {
+		return nil
+	}
+	ref, err := protocol.ParseRef(spec.Capability)
+	if err != nil {
+		return nil
+	}
+	if ref.CapabilityID != GCPCapabilityServerID && resolvedServerID != GCPCapabilityServerID {
+		return nil
+	}
+	if ref.Method != "" && ref.Method != GCPKeyMethod {
+		return nil
+	}
+	if _, hasAccount := spec.With["account"]; hasAccount {
+		return fmt.Errorf("capability %s: args.account: \"account\" was removed; use \"permission_set\"", spec.Capability)
+	}
+	if _, hasActivate := spec.With["activate"]; hasActivate {
+		return fmt.Errorf("capability %s: args.activate: \"activate\" was removed; a primary key is always activated (use \"permission_set\" and \"primary\")", spec.Capability)
+	}
+	return nil
+}
+
+// CheckRepoCredentialGrantArgs validates repo#credential arguments offline so
+// callers without an attached Lookup still reject missing, unknown, or invalid
+// credential names.
+func CheckRepoCredentialGrantArgs(spec protocol.GrantSpec, resolvedServerID string) error {
+	ref, err := protocol.ParseRef(spec.Capability)
+	if err != nil {
+		return nil
+	}
+	if ref.CapabilityID != RepoCapabilityServerID && resolvedServerID != RepoCapabilityServerID {
+		return nil
+	}
+	if ref.Method != RepoCredentialMethod {
+		return nil
+	}
+	if len(spec.With) != 1 {
+		if _, ok := spec.With["credential"]; !ok {
+			return fmt.Errorf("capability %s: args.credential is required", spec.Capability)
+		}
+		for k := range spec.With {
+			if k != "credential" {
+				return fmt.Errorf("capability %s: args.%s: unknown argument", spec.Capability, k)
+			}
+		}
+	}
+	raw, exists := spec.With["credential"]
+	if !exists {
+		return fmt.Errorf("capability %s: args.credential is required", spec.Capability)
+	}
+	name, ok := raw.(string)
+	if !ok {
+		return fmt.Errorf("capability %s: args.credential: expected string", spec.Capability)
+	}
+	if !ValidGitCredentialName(name) {
+		return fmt.Errorf("capability %s: args.credential: invalid git credential name %q", spec.Capability, name)
+	}
+	return nil
+}
+
+// CheckCapabilityGrantArgsOffline runs CheckCapabilityGrantSyntax plus
+// offline argument checks for built-in methods whose deprecated arguments
+// have been removed.
+func CheckCapabilityGrantArgsOffline(s string) error {
+	spec, err := CapabilityGrantSpec(s)
+	if err != nil {
+		return err
+	}
+	if _, err := protocol.ParseRef(spec.Capability); err != nil {
+		return err
+	}
+	if err := CheckGCPKeyGrantArgs(spec, ""); err != nil {
+		return err
+	}
+	return CheckRepoCredentialGrantArgs(spec, "")
+}
+
+func resolvedServerIDOf(capability string, lookup protocol.Lookup) string {
+	if lookup == nil {
+		return ""
+	}
+	ref, err := protocol.ParseRef(capability)
+	if err != nil {
+		return ""
+	}
+	srv, err := lookup(ref.CapabilityID)
+	if err != nil || srv == nil {
+		return ""
+	}
+	return srv.ID
+}
+
 // NormalizeCapabilityNames validates every reference among names against
 // its server (protocol.Normalize, §4.2.1) and returns names with each
 // reference replaced by its recorded form, duplicates dropped, first
@@ -136,18 +233,28 @@ func NormalizeCapabilityNames(names []string, lookup protocol.Lookup) ([]string,
 		seen[name] = true
 		out = append(out, name)
 	}
+	if err := CheckConflictingGitCredentialNames(out); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
 func normalizeCapabilityRef(s string, lookup protocol.Lookup) (string, error) {
 	if lookup == nil {
-		if err := CheckCapabilityGrantSyntax(s); err != nil {
+		if err := CheckCapabilityGrantArgsOffline(s); err != nil {
 			return "", err
 		}
 		return strings.TrimSpace(s), nil
 	}
 	spec, err := CapabilityGrantSpec(s)
 	if err != nil {
+		return "", err
+	}
+	resolvedID := resolvedServerIDOf(spec.Capability, lookup)
+	if err := CheckGCPKeyGrantArgs(spec, resolvedID); err != nil {
+		return "", err
+	}
+	if err := CheckRepoCredentialGrantArgs(spec, resolvedID); err != nil {
 		return "", err
 	}
 	grants, err := protocol.Normalize([]protocol.GrantSpec{spec}, lookup)
@@ -176,6 +283,9 @@ func NormalizeCapabilityGrants(grants []Grant, lookup protocol.Lookup) ([]Grant,
 		seen[g.Capability] = true
 		out = append(out, g)
 	}
+	if _, _, err := GitCredentialOverride(out); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
@@ -184,6 +294,9 @@ func NormalizeCapabilityGrants(grants []Grant, lookup protocol.Lookup) ([]Grant,
 // declaration order (protocol.Normalize): the list a pass is minted from,
 // whose indexes are its attempt_ids' (§2.3.3).
 func CapabilityGrants(grants []Grant, lookup protocol.Lookup) ([]protocol.Grant, error) {
+	if _, _, err := GitCredentialOverride(grants); err != nil {
+		return nil, err
+	}
 	var specs []protocol.GrantSpec
 	for _, g := range grants {
 		if !IsCapabilityRef(g.Capability) {
@@ -193,12 +306,33 @@ func CapabilityGrants(grants []Grant, lookup protocol.Lookup) ([]protocol.Grant,
 		if err != nil {
 			return nil, err
 		}
+		resolvedID := resolvedServerIDOf(spec.Capability, lookup)
+		if err := CheckGCPKeyGrantArgs(spec, resolvedID); err != nil {
+			return nil, err
+		}
+		if err := CheckRepoCredentialGrantArgs(spec, resolvedID); err != nil {
+			return nil, err
+		}
 		specs = append(specs, spec)
 	}
 	if len(specs) == 0 {
 		return nil, nil
 	}
-	return protocol.Normalize(specs, lookup)
+	normalized, err := protocol.Normalize(specs, lookup)
+	if err != nil {
+		return nil, err
+	}
+	var credSeen string
+	for _, g := range normalized {
+		if g.Ref.CapabilityID == RepoCapabilityServerID && g.Ref.Method == RepoCredentialMethod {
+			cred, _ := g.Args["credential"].(string)
+			if credSeen != "" && cred != credSeen {
+				return nil, fmt.Errorf("%w: %q and %q", ErrConflictingGitCredentials, credSeen, cred)
+			}
+			credSeen = cred
+		}
+	}
+	return normalized, nil
 }
 
 // HasCapabilityRef reports whether any of grants is a reference.
@@ -490,8 +624,21 @@ func (p CapabilityPolicy) Permits(g string, s CapabilitySubject, servers ...map[
 		}
 	}
 	refs := equivalentCapabilityRefs(ref, servers)
+	denyRefs := slices.Clone(refs)
+	// Schema migration 118 rewrote a deny rule on bootstrap-playbooks to
+	// ConfigMapRef (https://grain.dev/capabilities/config-map#config-map).
+	// Bootstrap playbooks can also be requested via #skill (or an unnormalized
+	// unnamed #skill grant whose server default includes "bootstrap"); widen
+	// deny-only matching (never allow/allowUntrusted) so #skill cannot bypass it.
+	if IsBootstrapPlaybooksGrant(g) || BootstrapSkillSetUnnamed(g) {
+		for _, extra := range equivalentCapabilityRefs(ConfigMapRef, servers) {
+			if !slices.Contains(denyRefs, extra) {
+				denyRefs = append(denyRefs, extra)
+			}
+		}
+	}
 	for i, r := range p.Rules {
-		if !r.Deny || !r.namesAny(refs) {
+		if !r.Deny || !r.namesAny(denyRefs) {
 			continue
 		}
 		if r.covers(s) {
@@ -605,8 +752,16 @@ func (r CapabilityPolicyRule) coversAnyOfKind(kind string) bool {
 }
 
 func (r CapabilityPolicyRule) names(ref string) bool {
-	ok, _ := path.Match(r.Capability, ref)
-	return ok || r.Capability == ref
+	if ok, _ := path.Match(r.Capability, ref); ok || r.Capability == ref {
+		return true
+	}
+	if r.Deny && !strings.Contains(ref, "#") {
+		if rID, _, hasHash := strings.Cut(r.Capability, "#"); hasHash {
+			ok, _ := path.Match(rID, ref)
+			return ok || rID == ref
+		}
+	}
+	return false
 }
 
 func (r CapabilityPolicyRule) namesAny(refs []string) bool {
@@ -634,7 +789,22 @@ func equivalentCapabilityRefs(ref string, serverMaps []map[string]protocol.Serve
 		}
 		refs = append(refs, cand)
 	}
+	addImplicitSkillConfigMapAlias := func() {
+		switch id {
+		case ConfigMapCapabilityServerID:
+			add(SkillCapabilityServerID)
+		case SkillCapabilityServerID:
+			add(ConfigMapCapabilityServerID)
+		}
+	}
+	if len(serverMaps) == 0 {
+		addImplicitSkillConfigMapAlias()
+	}
 	for _, servers := range serverMaps {
+		_, hasSkill := servers[SkillCapabilityServerID]
+		if !hasSkill {
+			addImplicitSkillConfigMapAlias()
+		}
 		for entryID, cfg := range servers {
 			if entryID == id {
 				for _, a := range cfg.Aliases {

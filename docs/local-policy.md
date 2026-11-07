@@ -7,6 +7,7 @@ Every task carries claims about it:
 | Claim                  | Task field                      |
 |------------------------|---------------------------------|
 | `requester`            | `Task.Creator`                  |
+| `owner`                | `Task.Owner` (steward account)  |
 | `approved_by`          | `Task.Approval` (a human actor) |
 | `granted_capabilities` | `Task.Grants`                   |
 | network permission     | `Task.NetworkAccess`            |
@@ -114,10 +115,12 @@ approvers: [me@example.com, lead@example.com]
 # Capability patterns, compared without regard to case. A bare family
 # (gcp-key) matches it and every grant of it (gcp-key:team-a);
 # family:* matches every parameterised grant (repo-write:acme/widgets);
-# otherwise both halves are glob patterns (repo-write:acme/*).
+# otherwise both halves are glob patterns (repo-write:acme/*). A
+# capability reference without = (https://...#method) matches the method
+# regardless of arguments; one with =<json> matches only those arguments.
 capabilities:
   # When set, every capability a task may be granted.
-  allow: [self-debug, gcp-key:team-*]
+  allow: [api:self-debug, gcp-key:team-*]
   # Refused whatever allow says.
   deny: [gcp-key:team-secret, repo-write:*]
 
@@ -142,11 +145,104 @@ names: a `repo-read:owner/name` or `repo-write:owner/name` grant answers
 to `repos` exactly like the task's own target and reads, so
 `repos: [acme/*]` refuses `repo-read:bwsalmon/grain`.
 
-`self-debug` reaches no repository. A self-debug run's `grain-src/` is
-the deployment's own baked-in copy of grain's source, placed in its
-sandbox; grain no longer clones bwsalmon/grain for it, and the git proxy
-does not let it fetch that repository. So a policy that does not list
-bwsalmon/grain admits a self-debug task (`model.CapabilityRepos`).
+`https://grain.dev/capabilities/grain#source` (formerly the source half
+of `self-debug`) reaches no repository. Its `grain-src/` is the
+deployment's own baked-in copy of grain's source, placed in its sandbox;
+grain does not clone ai-on-gke/grain for it, and the git proxy does not
+let it fetch that repository. So a policy that does not list
+ai-on-gke/grain admits a grain#source task (`model.CapabilityRepos`).
+
+A policy file is not rewritten by the schema migrations that retire a
+capability. A retired name in it still binds what the name became: an
+`allow` or `deny` naming `self-debug` admits or refuses both
+`api:self-debug` and `https://grain.dev/capabilities/grain#source={}`.
+
+### The Director and grain/config
+
+The Director chat a deployment files for itself is a task like any
+other, so it answers to this policy too. A policy that does not allow
+all of these holds it, and the Director never runs:
+
+- `grain/config` in `repos`. It is the deployment's own state repository,
+  which the Director reads, and which any chat proposing a config change
+  writes.
+- Every grant the Director is given in `capabilities.allow`: `durable`,
+  `api:self-debug`, `https://grain.dev/capabilities/grain#source={}`,
+  `https://grain.dev/capabilities/grain#journal`,
+  `api:deployment:read`, `https://grain.dev/capabilities/grain#health`,
+  `https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}` and `api:ci-read`, plus any your build adds.
+  A held task's log line names the one that refused it.
+- The Director's network in `network`. It asks for `none`, which a
+  granule sandbox honours. A host or container sandbox cannot withhold a
+  network, so grain files the Director `open` there. A Director whose
+  network was set in its console-session settings asks for that one.
+
+Allowing a grant here does not get it past grain's built-in floor for
+the Director. The Director is never given a grant that reaches
+`merge:force`, `settings:write`, `secrets:write`, `connections:write` or
+`repos:write`, whatever this file or `settings/capabilities.yml` says
+([director.md](director.md#acting-through-grains-api)). Writing one of
+those into the Director's session holds it the same way a refusal here
+would, and the hold names the grant.
+
+`grain init workstation` writes `grain/config` and the Director's grants
+into the starter policy. It names each grant exactly, so you can see
+what it allows and remove any of them. Any task may be granted those
+grants, not only the Director. Its default `-network open` writes
+`network: [open, none]`, since `none` is less reach than `open` and is
+what the Director asks for on granule. With `-network none` on a
+container sandbox, init says the Director is held for its network.
+A policy written by an older init that allows only `open` holds the
+Director on granule: add `none` to `network`, or set the Director's
+network to open in its console-session settings.
+
+A re-run keeps an existing policy file. A workstation set up by an older
+`grain init workstation` therefore still has a policy without
+`grain/config` in `repos` and without the Director's grants. Add them by
+hand and restart the daemon, or re-run init with `-force` to rewrite the
+file. `-force` loses your edits.
+
+## Task owner and proposer attribution
+
+Every task has a non-empty **owner** (`Task.Owner`: a person's email address,
+`"serviceAccount:<email>"`, or `"operator"` on a single-tenant deployment;
+`"user:<email>"` and `"human:<email>"` are accepted as input shorthands and
+normalised).
+
+- **Default:** `Owner` defaults from the account that created the task: a
+  signed-in human or service account, the verified `OnBehalfOf` human on a
+  console session (the latest human sender) or an external agent token's owner,
+  `Task.Creator` when set, or `"operator"`.
+- **Derived tasks:** `model.InheritRequester` carries `Owner` alongside
+  `Creator` and `TeamID`, so proposals (`propose_task`), ports, reviews,
+  pull-request triggers and base-branch repairs inherit the owner of their
+  source task (or schedule/trigger) — never `"grain"` or a run/agent.
+- **Explicit owner & transfer:** a human operator or service account with
+  `tasks:write` can set `owner` at creation (`POST /api/tasks`,
+  `grain create -owner <account>`, or the New Task form) and transfer ownership
+  later (`PATCH /api/tasks/{id}`, `grain update -owner <account>`, or **Owner →
+  Change** / **Edit** on the task page). Agents and external tokens cannot set
+  or transfer `owner` (`403`). Every transfer records an `owner-changed` audit
+  event (`TaskEventOwnerChanged`) with the old owner, new owner, and who
+  changed it.
+- **Visibility & filtering:** `owner` is returned on task JSON, printed by
+  `grain get` / `grain show`, and shown on task detail pages and list rows.
+  `grain list -owner <account>` (`?owner=` on `GET /api/tasks`, and the UI
+  `owner:` filter) filters by owner, with `me` as a shorthand for the caller's
+  own account.
+- **Why `Owner` is distinct from `Creator`:** `Creator` remains the historical
+  requester claim checked by `policy.RequesterOf` (where an empty `Creator` on
+  a root task marks grain's own schedules and suites as local rather than an
+  external request) and written into `Requested-by:` commit trailers, whereas
+  `Owner` is always non-empty and can be reassigned without rewriting who
+  originally requested the change.
+- **Timeline "Proposed" attribution (`Task.Proposer`):** grain records who or
+  what proposed each task when it is created, so the timeline's **Proposed**
+  item attributes the actor: the person (or `operator (access code)` /
+  `operator (local)`) for UI/CLI/API tasks; the proposing task and run (linked
+  to `/tasks/<id>`) plus `on behalf of <owner>` for run-proposed tasks; or the
+  automation principal (`schedule`, `trigger`, `review`, `auto-submit`,
+  `issue-import`, …) for automation-filed tasks.
 
 ## Derived tasks
 
@@ -155,7 +251,7 @@ as grain's own just because it names nobody. That covers an agent's
 `propose_task` proposal (filed live or at the end of a run), a port, a
 stacked or pull-request-trigger review, a pull-request trigger's task
 and a base-branch repair of the change that turned the branch red. Each
-is filed with its source's requester and team
+is filed with its source's requester, owner and team
 (`model.InheritRequester`).
 
 At dispatch, grain walks the chain a task was derived from

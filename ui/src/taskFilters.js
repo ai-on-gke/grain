@@ -69,6 +69,7 @@ import {
   attributeById,
   attributesFor,
   valueLabel,
+  viewerOwnerOf,
 } from "./taskAttributes.js";
 // The zone reading behind "which day is this?" lives with the rest of
 // the zone handling (time.js) rather than here: the timeline asks the
@@ -224,6 +225,9 @@ export function optionsFor(attr, tasks, config, picked = []) {
     if (v === NONE) none = true;
     else seen.add(v);
   }
+  if (attr.id === "owner" && viewerOwnerOf(config)) {
+    seen.add("me");
+  }
   const option = (v) => ({
     value: v,
     label: valueLabel(attr, v, config),
@@ -238,9 +242,13 @@ export function optionsFor(attr, tasks, config, picked = []) {
         // it is filterable rather than invisible.
         ...[...seen].filter((v) => !order.includes(v)).sort(),
       ].map(option)
-    : [...seen]
-        .map(option)
-        .sort((a, b) => String(a.label).localeCompare(String(b.label)));
+    : [...seen].map(option).sort((a, b) => {
+        if (attr.id === "owner") {
+          if (a.value === "me" && b.value !== "me") return -1;
+          if (b.value === "me" && a.value !== "me") return 1;
+        }
+        return String(a.label).localeCompare(String(b.label));
+      });
   if (none && (attr.noneLabel || attr.type !== TYPE_ENUM))
     options.push({
       ...option(NONE),
@@ -262,9 +270,11 @@ const lower = (v) => String(v).toLowerCase();
 function matchesCondition(attr, cond, t, config) {
   if (needsValue(cond)) return true;
   const values = attr.values(t);
-  // A value that stands for several (the state attribute's "asked") is
-  // matched as all of them.
-  const wanted = attr.expand ? cond.values.flatMap(attr.expand) : cond.values;
+  // A value that stands for several (the state attribute's "asked") or
+  // resolves against the viewer ("owner"'s "me") is expanded first.
+  const wanted = attr.expand
+    ? cond.values.flatMap((v) => attr.expand(v, config))
+    : cond.values;
   switch (cond.op) {
     case "any":
       return values.length === 0
@@ -493,8 +503,28 @@ export function matchesFilters(t, conditions, q, config, searchIn = null) {
   if (q === "") return true;
   if (searchIn) return String(searchIn(t)).toLowerCase().includes(q);
   return (
-    t.title.toLowerCase().includes(q) || String(t.id).toLowerCase().includes(q)
+    t.title.toLowerCase().includes(q) ||
+    String(t.id).toLowerCase().includes(q) ||
+    // A closed task the server's search found for this very text
+    // (closedTasks.js's markSearchHits): GET /api/tasks?search= matches
+    // a description too, and a listed task carries none to match here.
+    t.searchHit === q
   );
+}
+
+// admitsState is whether narrowing's State conditions let a task in
+// `state` through -- the question a view asks before it pages closed
+// work in for a list that could show it (closedTasks.js): the default
+// narrowing sets closed tasks aside, and a list that cannot show one
+// has no use for older pages or a server search of them. Only the State
+// conditions are asked, since every other one is about a task this
+// question does not have.
+export function admitsState(narrowing, config, state) {
+  const conditions = resolveConditions(
+    narrowing?.filters || [],
+    attributesFor(config),
+  ).filter(({ attr }) => attr.id === "state");
+  return matchesFilters({ id: "", title: "", state }, conditions, "", config);
 }
 
 // unknownValues is the values a condition names that its attribute's

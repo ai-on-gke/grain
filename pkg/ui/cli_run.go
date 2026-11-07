@@ -40,18 +40,42 @@ type CLIRunSettings struct {
 	HostExecutor any `json:"hostExecutor,omitempty"`
 }
 
+// storedCLIRunSettings reads model.Config.CLIRun from the store as a fresh map.
+func (c *Client) storedCLIRunSettings(ctx context.Context) (map[string]model.CLIRunSetting, error) {
+	cfg, err := c.Store.GetConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]model.CLIRunSetting{}
+	if cfg != nil {
+		for k, v := range cfg.CLIRun {
+			out[k] = v
+		}
+	}
+	return out, nil
+}
+
+// resolvedCLIRuns resolves where each agent CLI runs from the stored setting
+// without asking Config.HostExecutor, for callers like GET /api/upgrade that
+// only read the per-CLI resolutions.
+func (c *Client) resolvedCLIRuns(ctx context.Context) (any, error) {
+	settings, err := c.storedCLIRunSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if c.Config.CLIRuns == nil {
+		return nil, nil
+	}
+	return c.Config.CLIRuns(hostd.ForDisplay(ctx), settings), nil
+}
+
 // cliRunSettings reads the stored setting and resolves it.
 func (c *Client) cliRunSettings(ctx context.Context) (CLIRunSettings, error) {
-	cfg, err := c.Store.GetConfig(ctx)
+	settings, err := c.storedCLIRunSettings(ctx)
 	if err != nil {
 		return CLIRunSettings{}, err
 	}
-	out := CLIRunSettings{Settings: map[string]model.CLIRunSetting{}}
-	if cfg != nil {
-		for k, v := range cfg.CLIRun {
-			out.Settings[k] = v
-		}
-	}
+	out := CLIRunSettings{Settings: settings}
 	// The pane shows a dialing-in hostd that is not connected at once,
 	// rather than after the wait a run would give it (hostd.ForDisplay).
 	ctx = hostd.ForDisplay(ctx)

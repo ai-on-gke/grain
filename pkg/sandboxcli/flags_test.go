@@ -53,7 +53,7 @@ func runIn(t *testing.T, env sandboxEnv, args ...string) (stdout, stderr string,
 // Every command a sandbox answers names the flags it reads, and has help.
 func TestEverySandboxCommandNamesItsFlags(t *testing.T) {
 	for cmd, subs := range sandboxCommands {
-		if isHelpFlag(cmd) || cmd == "cap" {
+		if isHelpFlag(cmd) || cmd == "cap" || cmd == "screenshot" {
 			continue
 		}
 		names := []string{cmd}

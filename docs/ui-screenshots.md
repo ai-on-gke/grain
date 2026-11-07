@@ -57,6 +57,17 @@ node e2e/screenshot.mjs --url http://127.0.0.1:4300 --code XXXX-... --pages /,/s
 (`docs/test-runs/2026-11-02-verified-identity/iapstub.go` signs one for a
 daemon whose `-ui-iap-keys-url` points at its JWKS server.)
 
+To see the controls a signed-in person's role is offered -- write buttons
+disabled with a tooltip naming the missing scope (`ui/src/access.js`) --
+pass `--access viewer` (`ACCESS=viewer` for the make target), or a JSON
+object shaped like `GET /api/config`'s `access`. Only the page is told:
+the demo still answers as the access code, so this shows what the UI
+offers a role, not what the server lets it do.
+
+```sh
+make ui-screenshots PAGES=/tasks/1,/settings/general ACCESS=viewer OUT=screenshots/viewer
+```
+
 An uncaught page error fails the run, because a blank pane is not a
 screenshot.
 
@@ -69,6 +80,22 @@ make ui-screenshots PAGES=/repos OUT=screenshots/before
 git stash pop
 make ui-screenshots PAGES=/repos OUT=screenshots/after
 ```
+
+## Another app's UI
+
+`make ui-screenshots` shoots grain itself. For the app a run is working
+on in any other repository, start its dev server in the sandbox and use
+the sandbox CLI's `grain screenshot`, which takes the same widths and
+themes, writes the same `<page>-<width>-<theme>.png` names and the same
+`contact-sheet.png`, and can put a Figma frame beside the render with
+`--reference`:
+
+```sh
+grain screenshot --url http://127.0.0.1:5173 --pages /,/settings --out screenshots/after
+```
+
+[figma.md](figma.md) covers it, and the figma capability server that
+gives a run the design it is implementing.
 
 ## Looking at them
 

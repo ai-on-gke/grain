@@ -36,7 +36,7 @@ async function sim(page, method, path, data) {
 }
 
 async function importedTasks(page) {
-  const res = await (await page.request.get("/api/tasks")).json();
+  const res = await (await page.request.get("/api/tasks?fields=full")).json();
   const list = Array.isArray(res) ? res : res.tasks || [];
   return list.filter((t) => t.imported);
 }

@@ -19,9 +19,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // What GET /api/tasks does when it is asked the same question again.
@@ -105,8 +108,8 @@ type taskListCache struct {
 	token string // the ChangeToken everything below was built at
 	// tasks is the whole list the body below was encoded from.
 	tasks []Task
-	// bodies holds the answers built at token: the whole list under
-	// taskListKey, and each ?repo= narrowing of it under taskListRepoKey.
+	// bodies holds the answers built at token, each view of the list and
+	// each ?repo= narrowing of one under its own taskListKey.
 	bodies map[string]taskListBody
 
 	// builds counts the times this went to the store, for the test that
@@ -119,14 +122,45 @@ type taskListBody struct {
 	etag string
 }
 
-// taskListKey is the key the whole list is kept under.
-const taskListKey = "*"
+// taskListView is which cut of the list a body holds.
+type taskListView int
 
-// taskListRepoKey is the key the list narrowed to one repository is kept
-// under. Repository names compare case-insensitively, as an agent's
-// repository grant does (model.APIGrantSet.Allows).
-func taskListRepoKey(repo string) string {
-	return "repo:" + strings.ToLower(repo)
+const (
+	// taskListLive is what the UI polls: every task that is not closed,
+	// without its description. Closed tasks are most of any deployment
+	// that has run for a while -- 2,864 of 2,981 on the one that measured
+	// this (grain task 2983) -- and they only grow, so a poll that
+	// carried them cost more every day for the same answer. A view that
+	// shows closed work pages them in from ?state=closed&cursor= instead
+	// (handleFilteredTaskList), and a task's description is the detail
+	// fetch's to carry: it was 81% of the list's bytes.
+	taskListLive taskListView = iota
+	// taskListFull is every task with every field, which is what this
+	// route answered before and what ?fields=full still asks for: the
+	// CLI's Client.ListTasks reads it (HTTPClient.ListTasks).
+	taskListFull
+)
+
+// taskListKey is the key a view of the whole list is kept under, narrowed
+// to one repository when repo is not empty. Repository names compare
+// case-insensitively, as an agent's repository grant does
+// (model.APIGrantSet.Allows).
+func taskListKey(view taskListView, repo string) string {
+	key := "live:"
+	if view == taskListFull {
+		key = "full:"
+	}
+	if repo != "" {
+		key += "repo:" + strings.ToLower(repo)
+	}
+	return key
+}
+
+// listRow is t as a list carries it: everything but its description,
+// which is GET /api/tasks/{id}'s to answer.
+func listRow(t Task) Task {
+	t.Description = ""
+	return t
 }
 
 // response is the body and ETag for one GET /api/tasks,
@@ -136,7 +170,7 @@ func taskListRepoKey(repo string) string {
 // repository-scoped caller on the strength of the ?repo= it names
 // (agentCallRepo, externalAgentCallRepo), so the list must hold no task
 // outside it.
-func (c *taskListCache) response(ctx context.Context, client *Client, repo string) ([]byte, string, error) {
+func (c *taskListCache) response(ctx context.Context, client *Client, repo string, view taskListView) ([]byte, string, error) {
 	// Before the build, never after -- see the type's own doc comment for
 	// what reading it afterwards would cost.
 	token := ""
@@ -151,10 +185,12 @@ func (c *taskListCache) response(ctx context.Context, client *Client, repo strin
 		// because it would be logged on every poll of every tab for as
 		// long as the condition lasted.
 	}
-	key := taskListKey
-	if repo != "" {
-		key = taskListRepoKey(repo)
+	// A dispatch condition changes every queued row's reason without a
+	// store write (dispatchConditionVersion), so it is part of the key.
+	if v := client.dispatchConditionVersion(); token != "" && v != 0 {
+		token = token + ":dc=" + strconv.FormatUint(v, 10)
 	}
+	key := taskListKey(view, repo)
 	var tasks []Task
 	if token != "" {
 		var body []byte
@@ -173,12 +209,19 @@ func (c *taskListCache) response(ctx context.Context, client *Client, repo strin
 		tasks = all
 	}
 	visible := tasks
-	if repo != "" {
+	if repo != "" || view == taskListLive {
 		visible = nil
 		for _, t := range tasks {
-			if strings.EqualFold(t.Repo, repo) {
-				visible = append(visible, t)
+			if repo != "" && !strings.EqualFold(t.Repo, repo) {
+				continue
 			}
+			if view == taskListLive {
+				if t.State == model.StateClosed {
+					continue
+				}
+				t = listRow(t)
+			}
+			visible = append(visible, t)
 		}
 	}
 	// An empty list is [], never null: the UI maps over the answer, and a

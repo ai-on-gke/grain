@@ -58,7 +58,7 @@ func (f *fakeDeploymentUpgrader) ValidateBranch(branch string) (string, error) {
 }
 func (f *fakeDeploymentUpgrader) Mode() upgrade.Mode { return upgrade.ModeImage }
 func (f *fakeDeploymentUpgrader) Running() (upgrade.Running, error) {
-	return upgrade.Running{Ref: "ghcr.io/bwsalmon/grain/grain:main"}, nil
+	return upgrade.Running{Ref: "docker.io/grainai/grain:main"}, nil
 }
 
 func upgradeToolDeployment(t *testing.T, up ui.Upgrader, grants ...string) (string, *model.Store) {

@@ -295,8 +295,9 @@ func TestCheckCapabilityGrants(t *testing.T) {
 		map[string]any{"grant": grantTestCap + `#key={"account":"dev","scopes":["all"]}`},
 		map[string]any{"grant": "https://capabilities.example.com/retired#old"},
 		map[string]any{"grant": "gcp-key"},
+		map[string]any{"grant": "read-issues"},
 	}}, &out)
-	if code != 200 || len(out) != 5 {
+	if code != 200 || len(out) != 6 {
 		t.Fatalf("%d %+v", code, out)
 	}
 	if out[0].Recorded != grantTestCap+`#key={"account":"prod","scopes":["all"]}` || out[0].Error != "" || out[0].Changed {
@@ -314,6 +315,44 @@ func TestCheckCapabilityGrants(t *testing.T) {
 	if out[4].Recorded != model.GCPKeySandboxAgentGrant || out[4].Error != "" {
 		t.Errorf("retired gcp-key alias: %+v", out[4])
 	}
+	if out[5].Recorded != model.GitHubReadIssuesGrant || out[5].Error != "" {
+		t.Errorf("retired read-issues alias: %+v", out[5])
+	}
+}
+
+func TestReadIssuesInputAliasRecordsGitHubReadIssuesGrant(t *testing.T) {
+	_, client := grantTestServer(t)
+	ctx := context.Background()
+	task, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title:        "with legacy read-issues alias",
+		Capabilities: &[]string{"read-issues"},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask with read-issues alias: %v", err)
+	}
+	if len(task.Capabilities) != 1 || task.Capabilities[0] != model.GitHubReadIssuesGrant {
+		t.Fatalf("CreateTask capabilities = %v, want [%s]", task.Capabilities, model.GitHubReadIssuesGrant)
+	}
+	if err := client.SetCapability(ctx, task.ID, "read-issues", false); err != nil {
+		t.Fatalf("detaching via read-issues alias: %v", err)
+	}
+	afterDetach, err := client.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(afterDetach.Capabilities) != 0 {
+		t.Fatalf("after detach via alias: %v, want empty", afterDetach.Capabilities)
+	}
+	if err := client.SetCapability(ctx, task.ID, "read-issues", true); err != nil {
+		t.Fatalf("attaching via read-issues alias: %v", err)
+	}
+	afterAttach, err := client.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(afterAttach.Capabilities) != 1 || afterAttach.Capabilities[0] != model.GitHubReadIssuesGrant {
+		t.Fatalf("after attach via alias: %v, want [%s]", afterAttach.Capabilities, model.GitHubReadIssuesGrant)
+	}
 }
 
 // With a subject, the check also says which grants the capability
@@ -324,7 +363,7 @@ func TestCheckCapabilityGrantsJudgesTheCatalogueForASubject(t *testing.T) {
 	setCatalogue(t, context.Background(), client.Store, &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
 		"gcp-key": {Restrictions: &model.CapabilityRestrictions{Repos: []string{"acme/widgets"}}},
 	}})
-	grants := []any{map[string]any{"grant": "gcp-key"}, map[string]any{"grant": "read-issues"}}
+	grants := []any{map[string]any{"grant": "gcp-key"}, map[string]any{"grant": "bootstrap-playbooks"}}
 	for _, tc := range []struct {
 		name    string
 		subject any

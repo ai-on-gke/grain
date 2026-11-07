@@ -31,14 +31,29 @@ import (
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
+
+// CheckDeploymentOwner validates -deployment-owner (or $GRAIN_DEPLOYMENT_OWNER
+// when the flag is unset).
+func CheckDeploymentOwner(cfg Config) error {
+	raw := strings.TrimSpace(cfg.DeploymentOwner)
+	if raw == "" {
+		raw = strings.TrimSpace(os.Getenv(ui.DeploymentOwnerEnv))
+	}
+	_, err := ui.NormalizeDeploymentOwner(raw)
+	return err
+}
 
 // CheckUIAllowedPrincipals validates -ui-allowed-principals (or
 // $GRAIN_ALLOWED_PRINCIPALS when the flag is unset), including refusing any
 // serviceAccount: entry that names a gcp-key agent pool account.
 func CheckUIAllowedPrincipals(cfg Config) error {
+	if err := CheckDeploymentOwner(cfg); err != nil {
+		return err
+	}
 	return checkUIAllowedPrincipalsWithPool(cfg, ui.GCPKeyPoolEmails(cfg.GcpServiceAccountEmail, cfg.GcpServiceAccountCount, cfg.GcpProject))
 }
 
@@ -54,19 +69,130 @@ func checkUIAllowedPrincipalsWithPool(cfg Config, gcpPoolEmails []string) error 
 	return nil
 }
 
-// CheckUIRequireIAP refuses -ui-require-iap without an IAP audience
-// (-ui-iap-audience or $GRAIN_IAP_AUDIENCE): with no assertion able to
-// verify and no access code accepted over the network, nobody could
+// CheckUIRegistryVerifier validates -ui-registry-issuer, -ui-registry-audience,
+// and -ui-registry-keys-url (or $GRAIN_REGISTRY_ISSUER,
+// $GRAIN_REGISTRY_AUDIENCE, and $GRAIN_REGISTRY_KEYS_URL): if any is set, all
+// three must be set, and neither issuer nor audience may contain commas.
+func CheckUIRegistryVerifier(cfg Config) error {
+	ctx := ui.WithIAPConfig(context.Background(), ui.IAPConfig{
+		RegistryIssuer:   cfg.UiRegistryIssuer,
+		RegistryAudience: cfg.UiRegistryAudience,
+		RegistryKeysURL:  cfg.UiRegistryKeysURL,
+	})
+	iss := strings.TrimSpace(ui.GetRegistryIssuer())
+	aud := strings.TrimSpace(ui.GetRegistryAudience())
+	keysURL := strings.TrimSpace(ui.GetRegistryKeysURL())
+	if rc, ok := ui.RegistryConfigFromContext(ctx); ok {
+		if v := strings.TrimSpace(rc.Issuer); v != "" {
+			iss = v
+		}
+		if v := strings.TrimSpace(rc.Audience); v != "" {
+			aud = v
+		}
+		if v := strings.TrimSpace(rc.KeysURL); v != "" {
+			keysURL = v
+		}
+	}
+	if iss == "" && aud == "" && keysURL == "" {
+		return nil
+	}
+	var missing []string
+	if iss == "" {
+		missing = append(missing, "-ui-registry-issuer")
+	}
+	if aud == "" {
+		missing = append(missing, "-ui-registry-audience")
+	}
+	if keysURL == "" {
+		missing = append(missing, "-ui-registry-keys-url")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("incomplete registry verifier configuration: missing %s (set all three of -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url, or none)", strings.Join(missing, ", "))
+	}
+	if strings.Contains(iss, ",") {
+		return errors.New("-ui-registry-issuer must be a single issuer URL, not a comma-separated list")
+	}
+	if strings.Contains(aud, ",") {
+		return errors.New("-ui-registry-audience must be a single URL (https://<name>.<instance-domain>), not a comma-separated list")
+	}
+	return nil
+}
+
+// CheckRegistryConnect validates -registry-connect: starting with
+// -registry-connect requires an active "registry" IdentityVerifier
+// (-ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url, or a
+// registered "registry" IdentityVerifier) so incoming tunnel streams can never
+// be served without X-Grain-Registry-Assertion verification.
+func CheckRegistryConnect(cfg Config) error {
+	if err := CheckUIRegistryVerifier(cfg); err != nil {
+		return err
+	}
+	if !cfg.RegistryConnect {
+		return nil
+	}
+	ctx := ui.WithIAPConfig(context.Background(), ui.IAPConfig{
+		Audience:         cfg.UiIAPAudience,
+		Issuer:           cfg.UiIAPIssuer,
+		KeysURL:          cfg.UiIAPKeysURL,
+		RegistryIssuer:   cfg.UiRegistryIssuer,
+		RegistryAudience: cfg.UiRegistryAudience,
+		RegistryKeysURL:  cfg.UiRegistryKeysURL,
+	})
+	if ui.HasActiveVerifier(ctx, string(ui.AuthMethodRegistry)) {
+		return nil
+	}
+	return errors.New("-registry-connect requires -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url")
+}
+
+// CheckUIRequireVerifier validates -ui-require-verifier (and its
+// -ui-require-iap alias): it refuses conflicting flags and refuses to start
+// when the named IdentityVerifier is not active, because with no assertion
+// able to verify and no access code accepted over the network, nobody could
 // reach the UI except from the daemon's own host.
+func CheckUIRequireVerifier(cfg Config) error {
+	if err := CheckRegistryConnect(cfg); err != nil {
+		return err
+	}
+	req := strings.TrimSpace(cfg.UiRequireVerifier)
+	if cfg.UiRequireIAP && req != "" && req != string(ui.AuthMethodIAP) {
+		return fmt.Errorf("cannot set both -ui-require-iap and -ui-require-verifier=%q: -ui-require-iap is an alias for -ui-require-verifier=iap", req)
+	}
+	fromRequireIAPAlias := false
+	if req == "" && cfg.UiRequireIAP {
+		req = string(ui.AuthMethodIAP)
+		fromRequireIAPAlias = true
+	}
+	if req == "" {
+		return nil
+	}
+	ctx := ui.WithIAPConfig(context.Background(), ui.IAPConfig{
+		Audience:         cfg.UiIAPAudience,
+		Issuer:           cfg.UiIAPIssuer,
+		KeysURL:          cfg.UiIAPKeysURL,
+		RegistryIssuer:   cfg.UiRegistryIssuer,
+		RegistryAudience: cfg.UiRegistryAudience,
+		RegistryKeysURL:  cfg.UiRegistryKeysURL,
+	})
+	if ui.HasActiveVerifier(ctx, req) {
+		return nil
+	}
+	if req == string(ui.AuthMethodIAP) {
+		if fromRequireIAPAlias {
+			return errors.New("-ui-require-iap needs an IAP audience: set -ui-iap-audience (or $GRAIN_IAP_AUDIENCE) to the IAP backend's " +
+				"/projects/NUMBER/global/backendServices/ID, or drop -ui-require-iap to keep accepting the access code over the network")
+		}
+		return errors.New("-ui-require-verifier=iap needs an IAP audience: set -ui-iap-audience (or $GRAIN_IAP_AUDIENCE) to the IAP backend's " +
+			"/projects/NUMBER/global/backendServices/ID, or drop -ui-require-verifier to keep accepting the access code over the network")
+	}
+	if req == string(ui.AuthMethodRegistry) {
+		return fmt.Errorf("-ui-require-verifier=%q names no active IdentityVerifier: set -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url first, or drop -ui-require-verifier to keep accepting the access code over the network", req)
+	}
+	return fmt.Errorf("-ui-require-verifier=%q names no active IdentityVerifier: configure that verifier first, or drop -ui-require-verifier to keep accepting the access code over the network", req)
+}
+
+// CheckUIRequireIAP is an alias for CheckUIRequireVerifier.
 func CheckUIRequireIAP(cfg Config) error {
-	if !cfg.UiRequireIAP {
-		return nil
-	}
-	if strings.TrimSpace(cfg.UiIAPAudience) != "" || strings.TrimSpace(os.Getenv("GRAIN_IAP_AUDIENCE")) != "" {
-		return nil
-	}
-	return errors.New("-ui-require-iap needs an IAP audience: set -ui-iap-audience (or $GRAIN_IAP_AUDIENCE) to the IAP backend's " +
-		"/projects/NUMBER/global/backendServices/ID, or drop -ui-require-iap to keep accepting the access code over the network")
+	return CheckUIRequireVerifier(cfg)
 }
 
 // startUIServer serves pkg/ui.Server -- the JSON API plus the static
@@ -93,7 +219,12 @@ func CheckUIRequireIAP(cfg Config) error {
 // mode is gone -- see this file's own doc comment), it always has that
 // directory to hand; there is no longer a cross-process case where it
 // would not.
-func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir string, sandboxes orchestrator.Sandboxes, live *LiveConfig, pkgCache *PackageCache, actionsCache *ActionsCache, stateRepo ui.StateRepoManager, settingsRepo func() model.RepoRef, upgrader *upgrade.Upgrader) (stop func(context.Context) error, err error) {
+func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB, transcriptDir string, sandboxes orchestrator.Sandboxes, live *LiveConfig, pkgCache *PackageCache, actionsCache *ActionsCache, stateRepo ui.StateRepoManager, settingsRepo func() model.RepoRef, forbidden *gitproxy.ForbiddenSet, upgrader *upgrade.Upgrader, secretStore *secrets.Store) (stop func(context.Context) error, err error) {
+	defer func() {
+		if err != nil && uiLn != nil {
+			_ = uiLn.Close()
+		}
+	}()
 	// The credential ladder run() already loaded, not a second copy of
 	// it: this is the one Settings checks targetRepos against to flag
 	// bwsalmon/agents#427's drift before a push ever reaches the proxy
@@ -108,11 +239,14 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 	// Charged to "ui" in the metrics' per-caller breakdown (github.WithCaller).
 	githubClient = githubClient.As("ui")
 	disks := cfg.hostVolumes()
-	// One open of this deployment's secrets, used twice below: the
-	// secrets fields on the Capabilities tab write into it, and the
-	// "test this credential" action on that same tab resolves the
-	// standing credential it is about to authenticate as out of it.
-	uiSecrets := OpenSecrets(cfg.DataDir)
+	// Shared with run(): the secrets fields on the Capabilities tab write
+	// into it, and the "test this credential" action on that same tab
+	// resolves the standing credential it is about to authenticate as out
+	// of it.
+	uiSecrets := secretStore
+	if uiSecrets == nil {
+		uiSecrets = OpenSecrets(cfg.DataDir)
+	}
 	// The local API token: how this host's grain CLI, and the `grain
 	// mcpserver` each run starts here, reach the API. Named in this
 	// process's environment so every child it starts can find it
@@ -120,6 +254,13 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 	var localAPIToken, localAPITokenFile string
 	if cfg.DataDir != "" {
 		path := ui.LocalAPITokenPath(cfg.DataDir)
+		if envFile := strings.TrimSpace(os.Getenv(ui.LocalAPITokenFileEnv)); envFile != "" && envFile != path {
+			if b, err := os.ReadFile(envFile); err == nil {
+				if tok := strings.TrimSpace(string(b)); tok != "" {
+					_ = os.WriteFile(path, []byte(tok+"\n"), 0o600)
+				}
+			}
+		}
 		tok, err := ui.EnsureLocalAPIToken(path)
 		if err != nil {
 			log.Printf("grain daemon: WARNING: writing the local API token %s: %v -- "+
@@ -138,6 +279,16 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 	if reader, ok := stateRepo.(ui.SettingsHistoryReader); ok {
 		settingsHistory = reader
 	}
+	var (
+		registryStatus           func(context.Context) (model.RegistrySnapshot, error)
+		triggerRegistryHeartbeat func(context.Context) (model.RegistrySnapshot, error)
+		triggerRegistrySync      func()
+	)
+	if reg := live.Registry(); reg != nil {
+		registryStatus = reg.Snapshot
+		triggerRegistryHeartbeat = reg.TriggerHeartbeat
+		triggerRegistrySync = reg.Trigger
+	}
 	gcpPoolSAs := ui.GCPKeyPoolEmails(cfg.GcpServiceAccountEmail, cfg.GcpServiceAccountCount, cfg.GcpProject)
 	combinedPoolSAs := append([]string(nil), gcpPoolSAs...)
 	if store != nil {
@@ -146,7 +297,13 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		keys, _ := store.ListGCPKeys(ctx)
 		combinedPoolSAs = append(combinedPoolSAs, ui.ConfigGCPKeyServiceAccounts(mc, keys)...)
 	}
+	if err := CheckDeploymentOwner(cfg); err != nil {
+		return nil, err
+	}
 	if err := checkUIAllowedPrincipalsWithPool(cfg, combinedPoolSAs); err != nil {
+		return nil, err
+	}
+	if err := CheckRegistryConnect(cfg); err != nil {
 		return nil, err
 	}
 	var provisionedSAs []string
@@ -171,26 +328,30 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		IAPAudience:                cfg.UiIAPAudience,
 		IAPIssuer:                  cfg.UiIAPIssuer,
 		IAPKeysURL:                 cfg.UiIAPKeysURL,
+		RegistryIssuer:             cfg.UiRegistryIssuer,
+		RegistryAudience:           cfg.UiRegistryAudience,
+		RegistryKeysURL:            cfg.UiRegistryKeysURL,
+		RequireVerifier:            cfg.UiRequireVerifier,
 		RequireIAP:                 cfg.UiRequireIAP,
 		AllowedPrincipals:          cfg.UiAllowedPrincipals,
+		DeploymentOwner:            cfg.DeploymentOwner,
 		ProvisionedServiceAccounts: provisionedSAs,
 		GCPKeyServiceAccounts:      gcpPoolSAs,
 		DBDriver:                   cfg.DbDriver,
 		DBDSN:                      cfg.DbDSN,
 		DataDir:                    cfg.DataDir,
 		SourceDB:                   db,
-		// The fixed set grain ships providers for, plus one row per named
-		// GitHub token this deployment has beyond its default one
-		// (grain/task-117) -- the same names capabilityProviders builds
-		// the matching providers from, so every id the picker offers is
-		// one a dispatch can actually resolve. The api rows appended last
-		// are only a marker that this picker offers the agent API: the
-		// Client reads them again per request (pickerCapabilities), so a
-		// scope set declared after startup is offered too.
-		Capabilities: append(append(ui.OfferedCapabilities(), ui.GitHubTokenCapabilities(live.GitHubTokens())...),
-			ui.APICapabilities()...),
-		Consoles: consoleSessions,
-		Secrets:  uiSecrets,
+		// The fixed set grain ships providers for, plus the api rows appended
+		// last as a marker that this picker offers the agent API (pickerCapabilities).
+		// Named GitHub credentials are served on the in-process repo server
+		// (repo#credential) rather than as legacy checklist rows; OfferedGitCredentials
+		// records the startup credential list for Settings -> GitHub tokens and
+		// per-client repo#credential validation.
+		Capabilities:          append(ui.OfferedCapabilities(), ui.APICapabilities()...),
+		OfferedGitCredentials: live.GitHubTokens(),
+		Consoles:              consoleSessions,
+		Secrets:               uiSecrets,
+		LocalScriptApprovals:  localScriptApprovals,
 		// The registry run() attaches capability servers into, for the
 		// status column of Settings' Capability servers pane.
 		CapabilityServers: capabilityServerStatuses(live),
@@ -227,7 +388,10 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		Stall: orchestrator.TaskStallNote,
 		// And the sub-case of that state, with its control
 		// (ui.Config.Reasons) -- joined here for the same reason.
-		Reasons: ReasonClassifier{PolicyFile: cfg.PolicyFile},
+		// With the deployment's own dispatch conditions, so a queued
+		// task says why nothing is dispatching rather than that it is
+		// ready (DispatchConditions).
+		Reasons: ReasonClassifier{PolicyFile: cfg.PolicyFile, DispatchBlocked: DispatchConditions.Why},
 		// The same action for the other kind of credential this
 		// deployment holds (ui.Config.AgentKeyChecks): the key each agent
 		// framework runs as, which the Agents tab can otherwise only
@@ -265,7 +429,8 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		// the template can know which that is. The reconcile loop is
 		// handed the identical function for the identical reason
 		// (orchestrator.Config.StateRepo above).
-		StateRepoRef: settingsRepo,
+		StateRepoRef:   settingsRepo,
+		ForbiddenRepos: forbidden,
 		// The three host-power actions, nil under Kubernetes: there is
 		// no machine here that is this deployment's to reboot or power
 		// off (the node runs other people's workloads), and restarting
@@ -298,7 +463,7 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		// show is a property of the shape it runs as, so logSources
 		// decides it rather than a literal here.
 		Logs:        LogSources(cfg),
-		LogRedactor: logRedactor(SecretsDir(cfg.DataDir)),
+		LogRedactor: logRedactor(SecretsDir(cfg.DataDir), uiSecrets),
 		// The deployment's external UI base, for the one absolute link
 		// grain writes (Grain-Task: in a changelist CL's description); unset
 		// leaves that line out rather than writing localhost.
@@ -312,7 +477,13 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		// able to override this deployment's framework both formats can
 		// be in this one directory at once -- so the reader wired here
 		// picks between them per file rather than per deployment.
-		LiveTranscripts: LiveTranscriptDir(transcriptDir),
+		LiveTranscripts: LiveTranscriptDirWithStore(transcriptDir, cfg.transcriptObjects),
+		ArchivedTranscripts: func() ui.ArchivedTranscript {
+			if cfg.transcriptObjects == nil {
+				return nil
+			}
+			return cfg.transcriptObjects
+		}(),
 		// orchestrator.ChecksUnavailable reads process-lifetime state
 		// RunCycle's own reconcile loop sets the first time GitHub 403s a
 		// check-runs read against this deployment's credential -- see its
@@ -416,6 +587,12 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		// reconcilerDown (daemon.go), the same way AutoMergeDegraded above
 		// mirrors orchestrator.ChecksUnavailable -- bwsalmon/agents#576.
 		ReconcilerDown: func() bool { return ReconcilerDown.Load() },
+		// And why, with the error and since when: the same fact as
+		// named conditions, for the health route, the config response
+		// and the pipeline feed.
+		DispatchConditions: DispatchConditions,
+		// And the store switched underneath it (storeswitch.go).
+		StoreSwitch: CurrentStoreSwitch,
 		// Restarting: this process has been told to stop, or the
 		// upgrader is running an upgrade that ends in a restart.
 		Restarting: daemonRestarting(cfg, upgrader),
@@ -428,10 +605,13 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		// unconditionally, since a wake written before that loop starts
 		// (this server is up first, deliberately) sits in the buffer and
 		// is read when it does.
-		Wake:                  wakeCycle,
-		TriggerIAPSync:        TriggerIAPSync,
-		SandboxBackends:       cfg.availableSandboxBackends(),
-		SandboxBackendOptions: cfg.sandboxBackendOptions(),
+		Wake:                     wakeCycle,
+		TriggerIAPSync:           TriggerIAPSync,
+		RegistryStatus:           registryStatus,
+		TriggerRegistryHeartbeat: triggerRegistryHeartbeat,
+		TriggerRegistrySync:      triggerRegistrySync,
+		SandboxBackends:          cfg.availableSandboxBackends(),
+		SandboxBackendOptions:    cfg.sandboxBackendOptions(),
 		// And whether a merged settings change reset something on this
 		// deployment that grain had nowhere to say out loud -- the same
 		// marker, for a fact that reaches nobody without one
@@ -598,6 +778,11 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		branchGate.local = lister
 	}
 	uiCfg.RepoBranches = branchGate
+	revGate := repoRevGate{remote: githubTokens}
+	if resolver, ok := stateRepo.(configRepoRevResolver); ok {
+		revGate.local = resolver
+	}
+	uiCfg.RepoRevs = revGate
 	// grain's own CI, behind the same kind of gate PullRequests above is
 	// behind and for the same reason: the engine belongs to runDaemon
 	// (it needs the git proxy every job clones through), and this server
@@ -623,12 +808,20 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		uiCfg.Upgrader = upgrader
 		uiCfg.LastRestart = lastRestart(store, upgrader, cfg.runHostUpgrade.adoption())
 	}
+	uiCfg.DisableSelfUpgrade = cfg.DisableSelfUpgrade
+	uiCfg.ManagementURL = strings.TrimSpace(cfg.ManagementURL)
 	// And one line in the journal saying which of the two pipelines this
 	// deployment's upgrades actually run, or that they are off. Here
 	// rather than inside newUpgrader, so that it is said where the
 	// upgrader is put to use rather than wherever it happens to be
 	// built.
 	switch {
+	case cfg.DisableSelfUpgrade:
+		if uiCfg.ManagementURL != "" {
+			log.Printf("grain daemon: in-VM self-upgrade is disabled (-disable-self-upgrade); upgrades are managed externally at %s", uiCfg.ManagementURL)
+		} else {
+			log.Print("grain daemon: in-VM self-upgrade is disabled (-disable-self-upgrade); upgrades are managed externally")
+		}
 	case cfg.UpgradeImage != "":
 		log.Print(upgradeImageNote(cfg))
 		if len(cfg.UpgradeVerifyCmd) == 0 {
@@ -641,6 +834,9 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		log.Print("grain daemon: upgrading from the UI is off -- neither -upgrade-image nor -upgrade-src-dir is set")
 	}
 
+	if ep := strings.TrimSpace(cfg.UiCloudIdentityEndpoint); ep != "" {
+		uiCfg.GroupChecker = ui.NewCloudIdentityGroupChecker(ui.WithCloudIdentityEndpoint(ep))
+	}
 	uiClient := ui.NewClient(uiCfg, store)
 	if err := uiClient.MigrateAllowedPrincipals(context.Background()); err != nil {
 		log.Printf("grain daemon: WARNING: migrating allowed principals: %v", err)
@@ -649,6 +845,14 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 	// client (sandbox_cli.go).
 	liveSandboxCLI.Store(uiClient)
 	srv := ui.NewServerWithClient(uiClient)
+	if cfg.RegistryConnect {
+		if reg := live.Registry(); reg != nil && !reg.HasTunnelConnector() {
+			reg.SetTunnelConnector(NewRegistryTunnelSupervisor(RegistryTunnelSupervisorOptions{
+				Handler:        srv.RegistryTunnelHandler(),
+				OnUnauthorized: reg.InvalidateOIDCCache,
+			}))
+		}
+	}
 	// A CI job's api token is answered by this same handler, in process,
 	// held to its route table (pkg/capability/ciapi).
 	CIAPI.SetUpstream(srv)
@@ -660,11 +864,29 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 	// (startGitProxy), which comes up after this server does.
 	srv.SetNamespace(liveNamespace.Load)
 
+	// Loopback listener for capability servers (host-script approve: true)
+	// to request, wait on, and expire per-call approvals under their minted
+	// task-scoped ghsa_ bearer tokens (localScriptCallbackServer).
+	callbackSrv, callbackLn, err := localScriptCallbackServer(srv)
+	if err != nil {
+		return nil, err
+	}
+	localScriptApprovalURL.Store("http://" + callbackLn.Addr().String())
+	go func() {
+		_ = callbackSrv.Serve(callbackLn)
+	}()
+
 	var httpSrv *http.Server
 	if cfg.UiAddr != "" {
-		ln, err := net.Listen("tcp", cfg.UiAddr)
-		if err != nil {
-			return nil, fmt.Errorf("listening on %s: %w", cfg.UiAddr, err)
+		ln := uiLn
+		uiLn = nil
+		if ln == nil {
+			ln, err = net.Listen("tcp", cfg.UiAddr)
+			if err != nil {
+				localScriptApprovalURL.Store("")
+				_ = callbackSrv.Close()
+				return nil, fmt.Errorf("listening on %s: %w", cfg.UiAddr, err)
+			}
 		}
 		url := "http://" + ln.Addr().String()
 		log.Printf("grain daemon: serving the UI/API on %s as %s", url, uiCfg.Actor.ID)
@@ -697,6 +919,8 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 
 	return func(ctx context.Context) error {
 		cancelDiscovery()
+		localScriptApprovalURL.Store("")
+		_ = callbackSrv.Shutdown(ctx)
 		if httpSrv != nil {
 			return httpSrv.Shutdown(ctx)
 		}
@@ -734,6 +958,27 @@ func lastRestart(store *model.Store, upgrader *upgrade.Upgrader,
 		}
 		return restartAdoption(orchestrator.UpgradeAdoption(ctx, store, adoption, status, time.Now().UTC()))
 	}
+}
+
+// localScriptCallbackAddr is where the local-script approval callback
+// listener binds: loopback only, on a port the kernel picks.
+const localScriptCallbackAddr = "127.0.0.1:0"
+
+// localScriptCallbackServer opens the second listener startUIServer runs:
+// a loopback one whose address is published as the approval-callback base
+// URL (localScriptApprovalURL) that localexec.HTTPApprover dials. It
+// serves the whole UI handler, so it is guarded the way the -ui-addr
+// listener is: HostGuard refuses a Host naming a domain this daemon does
+// not answer to with 421, which is what keeps a DNS-rebound page that
+// found the port by scanning from reaching it (grain#2380). HTTPApprover
+// sends the IP-literal Host of that URL, which HostGuard always allows.
+func localScriptCallbackServer(handler http.Handler) (*http.Server, net.Listener, error) {
+	ln, err := net.Listen("tcp", localScriptCallbackAddr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("listening for local-script approval callbacks: %w", err)
+	}
+	srv := &http.Server{Handler: ui.HostGuard(handler, localScriptCallbackAddr, nil), ReadHeaderTimeout: 30 * time.Second}
+	return srv, ln, nil
 }
 
 // restartAdoption is report in the shape the upgrade pane reads, or nil.

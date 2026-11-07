@@ -55,6 +55,8 @@ export default function EditTaskForm({
 }) {
   const [title, setTitle] = useState(t.title);
   const [description, setDescription] = useState(t.description || "");
+  const savedExternalRef = t.externalRef || "";
+  const [externalRef, setExternalRef] = useState(savedExternalRef);
   // The review attached to this task (grain/task-284). Editable here and
   // not only on the new-task form because this is where the decision
   // usually gets made: a task is filed, and somewhere between queued and
@@ -68,6 +70,8 @@ export default function EditTaskForm({
   );
   const savedReviewers = (t.reviewers || []).join(", ");
   const [reviewers, setReviewers] = useState(savedReviewers);
+  const savedOwner = t.owner || "";
+  const [owner, setOwner] = useState(savedOwner);
   const reviewFiled = Boolean(t.reviewTask);
   // Which model this task's next run is driven by (grain/task-110),
   // editable here for the reason the review above is: the decision is
@@ -135,8 +139,10 @@ export default function EditTaskForm({
   const isDirty = () => {
     if (title !== t.title) return true;
     if (description !== (t.description || "")) return true;
+    if (externalRef.trim() !== savedExternalRef) return true;
     if (reviewTemplateId !== (t.reviewTemplateId || "")) return true;
     if (reviewers !== savedReviewers) return true;
+    if (owner.trim() !== savedOwner) return true;
     if (nothingNeededAction !== savedNothingNeeded) return true;
     if (keepRunning !== savedKeepRunning) return true;
     if (String(priority).trim() !== String(savedPriority)) return true;
@@ -173,9 +179,15 @@ export default function EditTaskForm({
           body: JSON.stringify({
             title,
             description,
+            ...(externalRef.trim() !== savedExternalRef
+              ? { externalRef: externalRef.trim() }
+              : {}),
             reviewTemplateId,
             ...(reviewers !== savedReviewers
               ? { reviewers: parsedReviewers }
+              : {}),
+            ...(owner.trim() && owner.trim() !== savedOwner
+              ? { owner: owner.trim() }
               : {}),
             ...(nothingNeededAction !== savedNothingNeeded
               ? { nothingNeededAction }
@@ -218,6 +230,24 @@ export default function EditTaskForm({
         onChange={(e) => setDescription(e.target.value)}
         multiline
         minRows={5}
+        fullWidth
+        size="small"
+      />
+      <TextField
+        label="External ref"
+        placeholder="CA-204"
+        value={externalRef}
+        onChange={(e) => setExternalRef(e.target.value)}
+        helperText="work identifier from an external planning tool, inherited by spawned tasks"
+        fullWidth
+        size="small"
+      />
+      <TextField
+        label="Owner"
+        placeholder="alice@example.com"
+        value={owner}
+        onChange={(e) => setOwner(e.target.value)}
+        helperText="account responsible for this task (transfers are audited)"
         fullWidth
         size="small"
       />

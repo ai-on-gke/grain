@@ -49,6 +49,7 @@ func sessionStoresOffClaim(cfg Config, getenv func(string) string) []string {
 	}
 	var out []string
 	data := cfg.DataDir
+	hasObjectStore := cfg.ObjectStoreURI != "" || cfg.ObjectStore != nil
 	if dir := agentSessionsDir(data); dir == "" {
 		out = append(out, "agy's and codex's session stores: there is no -data-dir to keep them in, so every run gets a temporary home")
 	}
@@ -58,7 +59,7 @@ func sessionStoresOffClaim(cfg Config, getenv func(string) string) []string {
 			claudeDir = filepath.Join(home, ".claude")
 		}
 	}
-	if cfg.RunHost == nil && cfg.RunHostImage == "" && data != "" && !pathUnder(claudeDir, data) {
+	if !hasObjectStore && cfg.RunHost == nil && cfg.RunHostImage == "" && data != "" && !pathUnder(claudeDir, data) {
 		out = append(out, fmt.Sprintf("claude's session store %s is not under -data-dir %s: set HOME under it, as the shipped manifests do (HOME=/data/home)",
 			orUnset(claudeDir), data))
 	}

@@ -188,7 +188,7 @@ func TestConsoleSessionTaskCapabilityEditsSurviveDaemonRestart(t *testing.T) {
 			return g.Capability == capID
 		})
 	}
-	if !hasGrant(director.Grants, "self-debug") {
+	if !hasGrant(director.Grants, model.GrainSourceGrant) {
 		t.Fatalf("initial director grants = %+v, want self-debug", director.Grants)
 	}
 	if hasGrant(director.Grants, model.GrainHostExecGrant) {
@@ -220,7 +220,7 @@ func TestConsoleSessionTaskCapabilityEditsSurviveDaemonRestart(t *testing.T) {
 		}
 	}
 
-	postCapability(`{"id":"self-debug","attach":false}`)
+	postCapability(`{"id":"https://grain.dev/capabilities/grain#source={}","attach":false}`)
 	// Attached by its retired bare id, which is recorded as the
 	// grain#host-exec grant it became.
 	postCapability(`{"id":"self-repair","attach":true}`)
@@ -229,7 +229,7 @@ func TestConsoleSessionTaskCapabilityEditsSurviveDaemonRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hasGrant(edited.Grants, "self-debug") {
+	if hasGrant(edited.Grants, model.GrainSourceGrant) {
 		t.Fatalf("after detach, task grants = %+v, want self-debug absent", edited.Grants)
 	}
 	if !hasGrant(edited.Grants, model.GrainHostExecGrant) {
@@ -239,7 +239,7 @@ func TestConsoleSessionTaskCapabilityEditsSurviveDaemonRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if slices.Contains(sessions[0].Capabilities, "self-debug") || !slices.Contains(sessions[0].Capabilities, model.GrainHostExecGrant) {
+	if slices.Contains(sessions[0].Capabilities, model.GrainSourceGrant) || !slices.Contains(sessions[0].Capabilities, model.GrainHostExecGrant) {
 		t.Fatalf("before restart, ListConsoleSessions capabilities = %v, want self-debug absent and self-repair present", sessions[0].Capabilities)
 	}
 	cfg, err = store.GetConfig(ctx)
@@ -277,7 +277,7 @@ func TestConsoleSessionTaskCapabilityEditsSurviveDaemonRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hasGrant(restartedTask.Grants, "self-debug") {
+	if hasGrant(restartedTask.Grants, model.GrainSourceGrant) {
 		t.Errorf("after daemon restart, task grants = %+v, reverted removed default self-debug", restartedTask.Grants)
 	}
 	if !hasGrant(restartedTask.Grants, model.GrainHostExecGrant) {
@@ -292,7 +292,7 @@ func TestConsoleSessionTaskCapabilityEditsSurviveDaemonRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if slices.Contains(sessions[0].Capabilities, "self-debug") {
+	if slices.Contains(sessions[0].Capabilities, model.GrainSourceGrant) {
 		t.Errorf("after daemon restart, ListConsoleSessions capabilities = %v, reverted self-debug", sessions[0].Capabilities)
 	}
 	if !slices.Contains(sessions[0].Capabilities, model.GrainHostExecGrant) {
@@ -310,7 +310,7 @@ func TestConsoleSessionTaskCapabilityEditsSurviveDaemonRestart(t *testing.T) {
 	}
 
 	// Simulate a config edit made while the daemon is down (dropping
-	// bootstrap-playbooks from the declaration), then restart again.
+	// BootstrapPlaybooksGrant from the declaration), then restart again.
 	db.Close()
 	closed = true
 	store, db = openStoreInDir(t, dir)
@@ -318,7 +318,7 @@ func TestConsoleSessionTaskCapabilityEditsSurviveDaemonRestart(t *testing.T) {
 	settings(t, store, func(c *model.Config) {
 		defs := model.DefaultConsoleSessions()
 		defs[0].Capabilities = slices.DeleteFunc(defs[0].Capabilities, func(capID string) bool {
-			return capID == "bootstrap-playbooks"
+			return capID == model.BootstrapPlaybooksGrant
 		})
 		c.ConsoleSessions = defs
 	})
@@ -328,10 +328,10 @@ func TestConsoleSessionTaskCapabilityEditsSurviveDaemonRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hasGrant(afterConfigEdit.Grants, "bootstrap-playbooks") {
-		t.Errorf("after offline config removal, task grants = %+v, kept dropped bootstrap-playbooks", afterConfigEdit.Grants)
+	if hasGrant(afterConfigEdit.Grants, model.BootstrapPlaybooksGrant) {
+		t.Errorf("after offline config removal, task grants = %+v, kept dropped BootstrapPlaybooksGrant", afterConfigEdit.Grants)
 	}
-	if hasGrant(afterConfigEdit.Grants, "self-debug") {
+	if hasGrant(afterConfigEdit.Grants, model.GrainSourceGrant) {
 		t.Errorf("after offline config removal, task grants = %+v, reverted removed self-debug", afterConfigEdit.Grants)
 	}
 	if !hasGrant(afterConfigEdit.Grants, model.GrainHostExecGrant) {
@@ -352,7 +352,7 @@ func TestConsoleSessionTaskEditWithoutSnapshotHonoursDeclarationChanges(t *testi
 		cfg.ConsoleSessions = []model.ConsoleSession{{
 			ID:            model.DirectorSessionID,
 			Title:         "Director",
-			Capabilities:  []string{"self-debug", "self-repair"},
+			Capabilities:  []string{model.GrainSourceGrant, "self-repair"},
 			NetworkAccess: model.NetworkOpen,
 			KeepRunning:   true,
 		}}
@@ -362,7 +362,7 @@ func TestConsoleSessionTaskEditWithoutSnapshotHonoursDeclarationChanges(t *testi
 
 	// Clear the persisted snapshot and change the declaration as if the
 	// deployment upgraded and edited grain/config while down: self-repair is
-	// dropped, bootstrap-playbooks is added, and KeepRunning is turned off.
+	// dropped, BootstrapPlaybooksGrant is added, and KeepRunning is turned off.
 	if _, err := store.DB().ExecContext(ctx, "DELETE FROM `console_session_sync`"); err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +370,7 @@ func TestConsoleSessionTaskEditWithoutSnapshotHonoursDeclarationChanges(t *testi
 		cfg.ConsoleSessions = []model.ConsoleSession{{
 			ID:            model.DirectorSessionID,
 			Title:         "Director",
-			Capabilities:  []string{"self-debug", "bootstrap-playbooks"},
+			Capabilities:  []string{model.GrainSourceGrant, model.BootstrapPlaybooksGrant},
 			NetworkAccess: model.NetworkOpen,
 			KeepRunning:   false,
 		}}
@@ -385,7 +385,7 @@ func TestConsoleSessionTaskEditWithoutSnapshotHonoursDeclarationChanges(t *testi
 
 	// Operator detaches self-debug through the task capability API before the
 	// reconciler runs its first post-restart sync.
-	if err := client.SetCapability(ctx, director.ID, "self-debug", false); err != nil {
+	if err := client.SetCapability(ctx, director.ID, model.GrainSourceGrant, false); err != nil {
 		t.Fatalf("SetCapability detach self-debug: %v", err)
 	}
 
@@ -400,14 +400,14 @@ func TestConsoleSessionTaskEditWithoutSnapshotHonoursDeclarationChanges(t *testi
 			return g.Capability == capID
 		})
 	}
-	if hasGrant("self-debug") {
+	if hasGrant(model.GrainSourceGrant) {
 		t.Errorf("synced Grants = %+v, reverted operator-detached self-debug", synced.Grants)
 	}
 	if hasGrant("self-repair") || hasGrant(model.GrainHostExecGrant) {
 		t.Errorf("synced Grants = %+v, kept self-repair dropped from declaration while down", synced.Grants)
 	}
-	if !hasGrant("bootstrap-playbooks") {
-		t.Errorf("synced Grants = %+v, swallowed bootstrap-playbooks added to declaration while down", synced.Grants)
+	if !hasGrant(model.BootstrapPlaybooksGrant) {
+		t.Errorf("synced Grants = %+v, swallowed bootstrap-playbooks alias added to declaration while down", synced.Grants)
 	}
 	if synced.KeepRunning {
 		t.Errorf("synced KeepRunning = true, want false from declaration change while down")

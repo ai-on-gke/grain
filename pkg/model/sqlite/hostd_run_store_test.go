@@ -14,8 +14,7 @@
 
 package sqlite_test
 
-// Which hostd a task is pinned to (model.SetTaskHostd), which one each
-// run went to (model.TaskRunHostd), and the hostd a run's capability
+// Which hostd each run went to (model.TaskRunHostd), and the hostd a run's capability
 // audit records carry, against a real database.
 
 import (
@@ -24,35 +23,6 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/model"
 )
-
-func TestTaskHostdPinRoundTrips(t *testing.T) {
-	t.Parallel()
-	store, _, ctx := openStore(t)
-	if got, err := store.TaskHostd(ctx, "a1b2"); err != nil || got != "" {
-		t.Fatalf("TaskHostd before a pin = %q, %v; want the default", got, err)
-	}
-	if err := store.SetTaskHostd(ctx, "a1b2", " zone=b , gpu=a100 "); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := store.TaskHostd(ctx, "a1b2"); got != "gpu=a100,zone=b" {
-		t.Errorf("TaskHostd = %q, want the labels sorted", got)
-	}
-	if err := store.SetTaskHostd(ctx, "a1b2", "laptop"); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := store.TaskHostd(ctx, "a1b2"); got != "laptop" {
-		t.Errorf("TaskHostd = %q, want laptop", got)
-	}
-	if err := store.SetTaskHostd(ctx, "a1b2", "Not A Name"); err == nil {
-		t.Error("SetTaskHostd accepted a name that is not a hostd name")
-	}
-	if err := store.SetTaskHostd(ctx, "a1b2", ""); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := store.TaskHostd(ctx, "a1b2"); got != "" {
-		t.Errorf("TaskHostd after clearing = %q, want the default", got)
-	}
-}
 
 func TestTaskRunHostdAndCapabilityAuditRoundTrip(t *testing.T) {
 	t.Parallel()

@@ -106,7 +106,25 @@ func TestDefaultOnSeedsANewDeploymentConfig(t *testing.T) {
 	if cfg.TaskBranchTemplate != model.DefaultTaskBranchTemplate {
 		t.Errorf("NewDeploymentConfig() lost model.NewDeploymentConfig's own settings: %+v", cfg)
 	}
-	wantDirector := []string{"self-debug", model.GrainJournalGrant, "api:deployment:read", model.GrainHealthGrant, "bootstrap-playbooks", "zz-default-on"}
+	wantDirector := []string{
+		"api:self-debug",
+		model.GrainSourceGrant,
+		model.GrainJournalGrant,
+		"api:deployment:read",
+		model.GrainHealthGrant,
+		model.BootstrapPlaybooksGrant,
+		"api:task-admin",
+		"api:capabilities:read",
+		"api:capabilities:detach",
+		"api:settings:read",
+		"api:repos:read",
+		"api:releases:read",
+		"api:schedules:read",
+		"api:templates:read",
+		"api:suites:read",
+		"api:dispatch:read",
+		"zz-default-on",
+	}
 	if got := model.DefaultConsoleSessions()[0].Capabilities; !slices.Equal(got, wantDirector) {
 		t.Errorf("DefaultConsoleSessions()[0].Capabilities = %v, want %v", got, wantDirector)
 	}

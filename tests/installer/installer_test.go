@@ -468,7 +468,7 @@ func (d *deployment) teardown() {
 	sudo("systemctl", "reload", "systemd-logind.service")
 
 	for _, unit := range []string{
-		"grain-daemon.service",
+		"grain-daemon.service", "grain-postgres.service",
 		"grain-reboot.path", "grain-restart.path", "grain-shutdown.path",
 		"grain-reboot.service", "grain-restart.service", "grain-shutdown.service",
 		// Nothing installs these two any more (grain/task-193), but a
@@ -482,6 +482,8 @@ func (d *deployment) teardown() {
 	}
 	sudo("systemctl", "daemon-reload")
 	sudo("docker", "rm", "--force", "grain-daemon")
+	sudo("docker", "rm", "--force", "grain-postgres")
+	sudo("rm", "-f", "/etc/grain/postgres.env")
 	// Empty now, and setup.sh's own: `rmdir` rather than `rm -rf`, so a
 	// host that keeps something else under /etc/grain keeps it.
 	sudo("rmdir", "/etc/grain")
@@ -514,7 +516,7 @@ func (d *deployment) uninstall() []string {
 
 	var left []string
 	for _, unit := range []string{
-		"grain-daemon.service",
+		"grain-daemon.service", "grain-postgres.service",
 		"grain-reboot.path", "grain-restart.path", "grain-shutdown.path",
 		"grain-reboot.service", "grain-restart.service", "grain-shutdown.service",
 	} {
@@ -525,12 +527,14 @@ func (d *deployment) uninstall() []string {
 			left = append(left, unit+" still active")
 		}
 	}
-	if sudo("docker", "container", "inspect", "grain-daemon").exitCode == 0 {
-		left = append(left, "the grain-daemon container")
+	for _, container := range []string{"grain-daemon", "grain-postgres"} {
+		if sudo("docker", "container", "inspect", container).exitCode == 0 {
+			left = append(left, "the "+container+" container")
+		}
 	}
 	for _, path := range []string{
 		"/usr/local/bin/grain", "/usr/local/bin/granule", "/usr/local/lib/grain",
-		"/etc/grain/image.env", "/etc/grain/cli.env", "/etc/profile.d/grain.sh",
+		"/etc/grain/image.env", "/etc/grain/cli.env", "/etc/grain/postgres.env", "/etc/profile.d/grain.sh",
 		logindDropIn, d.data, d.sandbox,
 	} {
 		if sudoTest("-e", path) {
@@ -906,6 +910,53 @@ func TestTheDaemonServiceExistsAndIsRunning(t *testing.T) {
 	if state != "active" {
 		journal := sudo("journalctl", "-u", "grain-daemon.service", "-n", "50", "--no-pager").stdout
 		t.Fatalf("grain-daemon.service is %q:\n%s", state, journal)
+	}
+}
+
+// A fresh install keeps its store in PostgreSQL, on the local server
+// setup.sh provisions (its database block): running, reachable on the
+// loopback interface only, and what the daemon's unit is ordered after.
+func TestAFreshDeployKeepsItsStoreOnTheLocalPostgres(t *testing.T) {
+	requireInstaller(t)
+	d := deployed(t)
+
+	if state := strings.TrimSpace(sudo("systemctl", "is-active", "grain-postgres.service").stdout); state != "active" {
+		journal := sudo("journalctl", "-u", "grain-postgres.service", "-n", "50", "--no-pager").stdout
+		t.Fatalf("grain-postgres.service is %q:\n%s", state, journal)
+	}
+	unit := sudoRead("/etc/systemd/system/grain-daemon.service")
+	for _, want := range []string{"Requires=docker.service grain-postgres.service", "grain-postgres.service", "EnvironmentFile=/etc/grain/postgres.env"} {
+		if !strings.Contains(unit, want) {
+			t.Errorf("grain-daemon.service has no %q:\n%s", want, unit)
+		}
+	}
+	env := sudoRead("/etc/grain/postgres.env")
+	if !strings.Contains(env, "GRAIN_DB_DSN=postgres://grain:") || !strings.Contains(env, "@127.0.0.1:5432/grain") {
+		t.Errorf("/etc/grain/postgres.env does not name the local server:\n%s", strings.Split(env, ":")[0])
+	}
+	if strings.Contains(unit, strings.TrimSpace(sudoRead(filepath.Join(d.data, "secrets", "postgres-password")))) {
+		t.Errorf("grain-daemon.service carries the database password")
+	}
+	if mode := strings.TrimSpace(sudo("stat", "-c", "%a %U", "/etc/grain/postgres.env").stdout); mode != "600 root" {
+		t.Errorf("/etc/grain/postgres.env is %q, want \"600 root\"", mode)
+	}
+	listening := sudo("ss", "-ltnH", "sport = :5432").stdout
+	if !strings.Contains(listening, "127.0.0.1:5432") {
+		t.Errorf("nothing listens on 127.0.0.1:5432:\n%s", listening)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(listening), "\n") {
+		if line != "" && !strings.Contains(line, "127.0.0.1:5432") {
+			t.Errorf("PostgreSQL listens beyond the loopback interface: %s", line)
+		}
+	}
+	if got := sudoUID(t, filepath.Join(d.data, "postgres", "PG_VERSION")); got != sudoUID(t, d.data) {
+		t.Errorf("the cluster is owned by uid %d, not the deployment's account", got)
+	}
+	if r := sudo("docker", "exec", "grain-postgres", "psql", "-w", "-h", "127.0.0.1", "-U", "grain", "-d", "grain", "-c", "SELECT 1"); r.exitCode == 0 {
+		t.Errorf("grain-postgres accepted a loopback connection without a password:\n%s", r)
+	}
+	if r := sudo("docker", "exec", "grain-postgres", "psql", "-w", "-U", "grain", "-d", "grain", "-c", "SELECT 1"); r.exitCode == 0 {
+		t.Errorf("grain-postgres accepted a local-socket connection without a password:\n%s", r)
 	}
 }
 

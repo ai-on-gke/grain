@@ -174,8 +174,9 @@ itself, against `-target`ed subsets of this same module, with state kept
 on the VM's own data disk (`backend-local.hcl.example`) instead of GCS.
 
 That path is written up as a playbook an agent holding the
-`bootstrap-playbooks` grant can read and act on --
-`pkg/capability/bootstrap/playbooks/gcp-capabilities.md` -- rather than
+`https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}`
+grant can read and act on --
+`pkg/playbooks/gcp-capabilities.md` -- rather than
 repeated here; file an interactive task carrying that grant (plus
 `self-repair`, for the commands the playbook tells it to run) and ask it
 to bootstrap GCP capabilities, or read that file directly.
@@ -204,15 +205,15 @@ commit to grain (`Dockerfile`). Three variables decide which one:
 - **`grain_image`** is the repository, for a mirror or a private copy.
   A registry needing credentials takes `grain_image_pull_user` here and
   a `GRAIN_IMAGE_PULL_TOKEN` through `push-secrets.sh`;
-  `ghcr.io/bwsalmon/grain`'s own package is public and pulls
-  anonymously.
+  `docker.io/grainai`'s own repositories are public and pull
+  anonymously (subject to Docker Hub's anonymous rate limits).
 
 Two consequences worth knowing before a first deploy. A deploy no longer
 compiles anything on this host, so `grain_ref` pointing at a tag or a
 commit SHA -- fine for the checkout -- has no image published under that
 name, and needs `grain_image_tag` set alongside it. And the host now
 needs to reach the registry: an egress policy that allowed GitHub and a
-Debian mirror also needs `ghcr.io`.
+Debian mirror also needs Docker Hub (`registry-1.docker.io`, `auth.docker.io`, `production.cloudflare.docker.com`).
 
 For the container's own shape -- what it is given, what it deliberately
 is not, and the two systemd path units that let it reboot the host and
@@ -474,8 +475,18 @@ Grain pull requests. The repository has no external remote and the deploy
 does not accept a repository URL or branch for one.
 
 The data disk, mounted at `/var/lib/grain/data`, holds both this
-repository and the SQLite database. Preserve that disk during rebuilds,
-and back it up (a disk snapshot schedule is the simple way): back up
+repository and the task store. A new deployment's store is PostgreSQL:
+`setup.sh` provisions a local server on the instance, the same way as on
+any host. This module has no Cloud SQL instance for grain's own store, so
+that is the default ([docs/database.md](../../../docs/database.md)). The
+server's data is in `/var/lib/grain/data/postgres` on that disk, so it
+lives and dies with it. An instance deployed before this keeps its SQLite
+database. To use Cloud SQL instead, pass `GRAIN_DB_DSN`
+([docs/cloudsql-postgres.md](../../../docs/cloudsql-postgres.md)).
+Preserve the data disk during rebuilds, and back it up (a disk snapshot
+schedule is the simple way; for PostgreSQL, take the snapshot with
+`grain-daemon.service` and `grain-postgres.service` stopped, or use the
+`pg_dump` in docs/database.md): back up
 `/var/lib/grain/data`; never back up `/var/lib/grain/scratch`, which is
 the sandbox disk's run space and caches and is rebuilt by the next
 deploy. A future backup facility will back up both stores together;

@@ -48,11 +48,13 @@ type webhookCursorFile struct {
 // into orchestrator.GitHubEventSource, persisting the last acknowledged
 // sequence number across daemon restarts.
 type GitHubWebhookConsumer struct {
-	cursorPath string
-	client     *ghwebhook.Client
-	localStore *ghwebhook.Store
-	localAddr  string
-	webhookSec func() string
+	cursorPath  string
+	store       *model.Store
+	useDBCursor bool
+	client      *ghwebhook.Client
+	localStore  *ghwebhook.Store
+	localAddr   string
+	webhookSec  func() string
 
 	mu       sync.Mutex
 	ackedSeq uint64
@@ -60,9 +62,18 @@ type GitHubWebhookConsumer struct {
 	pending  []ghwebhook.Event
 }
 
-// NewGitHubWebhookConsumer constructs a GitHubWebhookConsumer from cfg and creds.
+// NewGitHubWebhookConsumer constructs a GitHubWebhookConsumer from cfg and creds
+// using file-backed cursor persistence.
 func NewGitHubWebhookConsumer(cfg Config, creds *gitproxy.CredentialSet) (*GitHubWebhookConsumer, error) {
-	return newGitHubWebhookConsumer(cfg, creds)
+	return newGitHubWebhookConsumer(context.Background(), cfg, creds, nil)
+}
+
+// NewGitHubWebhookConsumerWithStore constructs a GitHubWebhookConsumer that
+// persists its replay cursor in PostgreSQL when cfg.DbDriver == "postgres" and
+// store is non-nil (seeding once from github-webhook-cursor.json if no database
+// row exists yet), while keeping github-webhooks.jsonl on local scratch disk.
+func NewGitHubWebhookConsumerWithStore(ctx context.Context, cfg Config, creds *gitproxy.CredentialSet, store *model.Store) (*GitHubWebhookConsumer, error) {
+	return newGitHubWebhookConsumer(ctx, cfg, creds, store)
 }
 
 // ListenAddr returns the bound address when running an in-process listener.
@@ -75,7 +86,7 @@ func (c *GitHubWebhookConsumer) ListenAddr() string {
 	return c.localAddr
 }
 
-func newGitHubWebhookConsumer(cfg Config, creds *gitproxy.CredentialSet) (*GitHubWebhookConsumer, error) {
+func newGitHubWebhookConsumer(ctx context.Context, cfg Config, creds *gitproxy.CredentialSet, store *model.Store) (*GitHubWebhookConsumer, error) {
 	if cfg.GithubWebhookURL == "" && cfg.GithubWebhookAddr == "" {
 		return nil, nil
 	}
@@ -84,15 +95,42 @@ func newGitHubWebhookConsumer(cfg Config, creds *gitproxy.CredentialSet) (*GitHu
 	}
 
 	cursorPath := filepath.Join(cfg.DataDir, "github-webhook-cursor.json")
-	acked, err := loadWebhookCursor(cursorPath)
-	if err != nil {
-		return nil, fmt.Errorf("reading GitHub webhook cursor: %w", err)
+	useDBCursor := cfg.DbDriver == "postgres" && store != nil
+
+	var acked uint64
+	if useDBCursor {
+		cur, err := store.GetGitHubWebhookCursor(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("reading GitHub webhook cursor: %w", err)
+		}
+		if cur != nil {
+			acked = cur.LastAckedSeq
+		} else {
+			fileAcked, exists, err := loadWebhookCursorFile(cursorPath)
+			if err != nil {
+				return nil, fmt.Errorf("reading GitHub webhook cursor seed file: %w", err)
+			}
+			if exists {
+				if err := store.SetGitHubWebhookCursor(ctx, fileAcked, time.Now().UTC()); err != nil {
+					return nil, fmt.Errorf("seeding GitHub webhook cursor in database: %w", err)
+				}
+				acked = fileAcked
+			}
+		}
+	} else {
+		var err error
+		acked, err = loadWebhookCursor(cursorPath)
+		if err != nil {
+			return nil, fmt.Errorf("reading GitHub webhook cursor: %w", err)
+		}
 	}
 
 	c := &GitHubWebhookConsumer{
-		cursorPath: cursorPath,
-		ackedSeq:   acked,
-		maxSeen:    acked,
+		cursorPath:  cursorPath,
+		store:       store,
+		useDBCursor: useDBCursor,
+		ackedSeq:    acked,
+		maxSeen:     acked,
 	}
 
 	if cfg.GithubWebhookURL != "" {
@@ -112,6 +150,21 @@ func newGitHubWebhookConsumer(cfg Config, creds *gitproxy.CredentialSet) (*GitHu
 	st, err := ghwebhook.OpenStore(storePath)
 	if err != nil {
 		return nil, fmt.Errorf("opening local GitHub webhook store: %w", err)
+	}
+	// A cursor kept in PostgreSQL outlives github-webhooks.jsonl, which stays
+	// on this VM's scratch disk: a replacement VM opens an empty store whose
+	// sequence numbers start again at 1. A cursor ahead of everything the
+	// local store has ever numbered therefore belongs to a store that no
+	// longer exists, and honouring it would silently drop every new event
+	// until the fresh store's numbering caught up with it. Start this store
+	// from zero instead; the first Ack writes the new position back.
+	if useDBCursor {
+		if _, latest := st.After(c.ackedSeq, 1); latest < c.ackedSeq {
+			log.Printf("grain daemon: GitHub webhook cursor %d in the database is ahead of local store %s (latest %d), which was replaced; starting from its beginning",
+				c.ackedSeq, storePath, latest)
+			c.ackedSeq = 0
+			c.maxSeen = 0
+		}
 	}
 	envSecret := strings.TrimSpace(os.Getenv(githubWebhookSecretEnv))
 	c.localStore = st
@@ -161,15 +214,25 @@ func (c *GitHubWebhookConsumer) Pending() ([]ghwebhook.Event, error) {
 	return out, nil
 }
 
-// Ack records seq as processed and atomically updates the cursor file.
+// Ack records seq as processed and persists the cursor in PostgreSQL (when
+// running on Postgres) or atomically updates github-webhook-cursor.json.
 func (c *GitHubWebhookConsumer) Ack(seq uint64) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if seq <= c.ackedSeq {
 		return nil
 	}
-	if err := saveWebhookCursor(c.cursorPath, seq); err != nil {
-		return err
+	if c.useDBCursor {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := c.store.SetGitHubWebhookCursor(ctx, seq, time.Now().UTC())
+		cancel()
+		if err != nil {
+			return err
+		}
+	} else {
+		if err := saveWebhookCursor(c.cursorPath, seq); err != nil {
+			return err
+		}
 	}
 	c.ackedSeq = seq
 	idx := 0
@@ -311,18 +374,23 @@ func (c *GitHubWebhookConsumer) watchLocal(ctx context.Context, wake func(), inv
 }
 
 func loadWebhookCursor(path string) (uint64, error) {
+	seq, _, err := loadWebhookCursorFile(path)
+	return seq, err
+}
+
+func loadWebhookCursorFile(path string) (uint64, bool, error) {
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return 0, nil
+		return 0, false, nil
 	}
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	var cur webhookCursorFile
 	if err := json.Unmarshal(raw, &cur); err != nil {
-		return 0, err
+		return 0, false, err
 	}
-	return cur.LastAckedSeq, nil
+	return cur.LastAckedSeq, true, nil
 }
 
 func saveWebhookCursor(path string, seq uint64) error {

@@ -358,8 +358,8 @@ type Config struct {
 	// deployment, and what a task needs installed in it is not the same
 	// everywhere: one deployment's agents work on Rust, another's need a
 	// private CA. Such an image is built FROM one of grain's minimal base
-	// images (ghcr.io/bwsalmon/grain/guest-base for VM backends,
-	// ghcr.io/bwsalmon/grain/k8s-sandbox-base for pods and containers),
+	// images (docker.io/grainai/sandbox-base for VM backends,
+	// docker.io/grainai/sandbox-k8s-base for pods and containers),
 	// which carry only what grain itself needs inside a sandbox -- and
 	// that boundary is versioned (pkg/sandboximage.Contract), so a custom
 	// image needs rebuilding only when the contract it was built at falls
@@ -937,6 +937,18 @@ type Config struct {
 	// OwnerTrustPrincipal on behalf of the owner. Empty -- the default --
 	// leaves every such filing proposed. Stored as JSON in one column.
 	OwnerTrust []OwnerTrustRule
+	// AutoGrantContextReads lists committed-context repositories ("*" or
+	// owner/name) for which filing or updating a task with a repo-qualified
+	// context reference (`owner/name:path@rev`) automatically adds the
+	// required -read grant instead of refusing when -read was omitted. Empty
+	// -- the default -- requires an explicit -read grant for any non-target
+	// context repository. Stored as JSON in one column.
+	AutoGrantContextReads []string
+	// Registry configures self-registration and periodic heartbeating with a
+	// grain registry as a connected entry (design/design/registry.design.md).
+	// Empty -- the default -- disables registry connection. Stored as JSON in
+	// grain_config.registry; registration tokens live in pkg/secrets.
+	Registry RegistryConfig
 	// CLIRun is where each agent CLI runs, keyed by framework name
 	// (claude, codex, antigravity): on the host, in a per-run
 	// container of an image, or whichever of those the host allows
@@ -971,14 +983,16 @@ type Config struct {
 
 // Default Kubernetes sandbox configuration values.
 const (
-	DefaultK8sNamespace        = "grain"
-	DefaultK8sKubectl          = "kubectl"
-	DefaultK8sDeployment       = "grain"
-	DefaultK8sContainer        = "grain"
-	DefaultK8sWorkspace        = "/home/agent"
-	DefaultK8sGranuleWorkspace = "/home/debian"
-	DefaultK8sSandboxImage     = "ghcr.io/bwsalmon/grain/k8s-sandbox:latest"
-	DefaultSandboxImage        = "ghcr.io/bwsalmon/grain/guest:latest"
+	DefaultK8sNamespace          = "grain"
+	DefaultK8sKubectl            = "kubectl"
+	DefaultK8sDeployment         = "grain"
+	DefaultK8sContainer          = "grain"
+	DefaultK8sWorkspace          = "/home/agent"
+	DefaultK8sGranuleWorkspace   = "/home/debian"
+	DefaultK8sSandboxImage       = "docker.io/grainai/sandbox-k8s:latest"
+	DefaultSandboxImage          = "docker.io/grainai/sandbox:latest"
+	LegacyDefaultK8sSandboxImage = "ghcr.io/bwsalmon/grain/k8s-sandbox:latest"
+	LegacyDefaultSandboxImage    = "ghcr.io/bwsalmon/grain/guest:latest"
 
 	// The PriorityClasses deploy/kubernetes/ ships, highest first --
 	// k8s.PriorityClassInteractive and its siblings, restated here
@@ -1424,6 +1438,38 @@ type AgentBackend struct {
 	// that is legitimately slow is what the first is for.
 	ModelTurnTimeout string `json:"modelTurnTimeout,omitempty"`
 	ModelRetryCutoff string `json:"modelRetryCutoff,omitempty"`
+	// Hostd is the grain hostd this connection's agent CLI runs on: a
+	// registered hostd's name, or a label selector "k=v[,k=v]" any
+	// connected hostd carrying every label satisfies
+	// (ParseHostdSelector). Empty leaves it where the framework's run
+	// location says (container, or the deployment's default hostd). A
+	// pinned connection's runs start their CLI on that hostd, count
+	// against its capacity, and key a usage limit on an ambient
+	// credential to it; while it is not connected the connection is
+	// unavailable and its runs wait -- they move to HostdFallback, in
+	// order, only when that is set. It is the connection's placement, not
+	// a task's: no task, template or repository chooses a hostd.
+	Hostd string `json:"hostd,omitempty"`
+	// HostdFallback is the hostd selectors, in order, a run on this
+	// connection tries when Hostd is not connected. Empty by default:
+	// nothing falls back silently.
+	HostdFallback []string `json:"hostdFallback,omitempty"`
+}
+
+// HostdTargets is the connection's hostd selectors in the order a run
+// tries them: Hostd, then HostdFallback. nil for a connection with no
+// hostd placement.
+func (b AgentBackend) HostdTargets() []string {
+	if strings.TrimSpace(b.Hostd) == "" {
+		return nil
+	}
+	out := []string{strings.TrimSpace(b.Hostd)}
+	for _, f := range b.HostdFallback {
+		if f = strings.TrimSpace(f); f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // EffectiveConcurrency returns the maximum number of concurrent agent runs

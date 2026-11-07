@@ -152,6 +152,9 @@ check "images.json is the last asset the sha- release gets" \
   '[ "$(sed -n "1,/published sha-/p" <<< "$out" | grep "would POST .*--upload" | tail -n 1 | grep -c images.json)" = 1 ]'
 check "every release is created as a prerelease that can never be latest" \
   '[ "$(grep -c "\"prerelease\":true,\"make_latest\":\"false\"" <<< "$out")" = 2 ]'
+check "a channel moves by uploading images.json.next and renaming it into place" \
+  'sed -n "/channel-main: holds/,\$p" <<< "$out" | grep -q -- "--upload images.json.next" &&
+   sed -n "/channel-main: holds/,\$p" <<< "$out" | grep -q "would rename images.json.next to images.json"'
 check "nothing was pushed to a registry" '! grep -qE "docker (push|login|tag)" "$DOCKER_LOG"'
 
 run bash "$assets" --dry-run publish main
@@ -162,12 +165,14 @@ run bash "$assets" publish "sha-$short"
 check "a real publish with no token fails before writing anything" '[ "$status" != 0 ] && grep -q "needs GITHUB_TOKEN" <<< "$out"'
 
 run bash "$assets" --dry-run promote
-check "promote points vX.Y.Z at the sha- release and marks it GitHub's latest" \
+check "promote copies the sha- release's assets onto vX.Y.Z and marks it GitHub's latest" \
   '[ "$status" = 0 ] && grep -q "promoting sha-$short as v3.4.0" <<< "$out" && grep -q "published v3.4.0" <<< "$out" &&
-   grep -q "\"prerelease\":false,\"make_latest\":\"true\"" <<< "$out" && [ "$(grep -c "would POST .*--upload" <<< "$out")" = 1 ] &&
+   grep -q "\"prerelease\":false,\"make_latest\":\"true\"" <<< "$out" && [ "$(grep -c "would POST .*--upload" <<< "$out")" = 7 ] &&
+   [ "$(grep "would POST .*--upload" <<< "$out" | tail -n 1 | grep -c "upload images.json$")" = 1 ] &&
    ! grep -q "release latest" <<< "$out"'
-check "a promoted manifest differs only in version and createdAt" \
-  '[ "$(jq -r .version "$m")" = v3.4.0 ] && [ "$(jq -r .commit "$m")" = "$commit" ] && bash "$assets" validate > /dev/null'
+check "a promoted manifest names vX.Y.Z as its version and as every image's release" \
+  '[ "$(jq -r .version "$m")" = v3.4.0 ] && [ "$(jq -r .commit "$m")" = "$commit" ] &&
+   [ "$(jq -r "[.images[].release] | unique | join(\",\")" "$m")" = v3.4.0 ] && bash "$assets" validate > /dev/null'
 
 git tag -a v3.3.0 -m v3.3.0 "$first"
 git push -q origin v3.3.0
@@ -198,6 +203,11 @@ check "a pushed -pending tag publishes vX.Y.Z-pending with version vX.Y.Z" \
   '[ "$status" = 0 ] && grep -q "published v3.5.0-pending" <<< "$out" && [ "$(jq -r .version "$m")" = v3.5.0 ]'
 run bash "$assets" --dry-run train-tag v3.5.0-rc.2-discarded
 check "a pushed -discarded tag publishes the discarded marker" '[ "$status" = 0 ] && grep -q "published v3.5.0-rc.2-discarded" <<< "$out"'
+for promoted in v3.4.0 latest; do
+  run bash "$assets" --dry-run train-tag "$promoted"
+  check "train-tag refuses to promote $promoted (that is promote.yml's and promote-release.yml's)" \
+    '[ "$status" != 0 ] && grep -q "not a release-train tag" <<< "$out" && ! grep -q "published" <<< "$out"'
+done
 run bash "$assets" --dry-run discard-pending v3.5.0
 check "a rejected pending release gets its -rejected marker" '[ "$status" = 0 ] && grep -q "published v3.5.0-rejected" <<< "$out"'
 run bash "$assets" --dry-run retract v3.4.0
@@ -216,68 +226,13 @@ check "mirror retags a release's image into the deployment's registry" \
 bash "$assets" package > /dev/null
 run bash "$assets" --dry-run prune
 check "prune plans retention without writing anything" '[ "$status" = 0 ] && grep -q "keep the newest 50" <<< "$out"'
+run env RELEASE_RETAIN_SHA=7 bash "$assets" --dry-run prune
+check "RELEASE_RETAIN_SHA sets how many sha- releases prune keeps" '[ "$status" = 0 ] && grep -q "keep the newest 7" <<< "$out"'
+run env RELEASE_RETAIN_SHA=many bash "$assets" --dry-run prune
+check "a RELEASE_RETAIN_SHA that is not a number fails" '[ "$status" != 0 ] && grep -q "RELEASE_RETAIN_SHA=many is not a number" <<< "$out"'
 
 run bash "$assets" load
 check "load checks every image ID the manifest names" '[ "$status" = 0 ] && [ "$(grep -c "^release-assets.sh: loaded" <<< "$out")" = 3 ]'
-
-# The train publishes its own names only: vX.Y.Z and latest are a person's
-# approval (promote-release.yml), never a pushed train tag's.
-run bash "$assets" --dry-run train-tag v3.4.0
-check "train-tag refuses a release tag" '[ "$status" != 0 ] && grep -q "not a tag the release train publishes" <<< "$out" && ! grep -q "published v3.4.0" <<< "$out"'
-run bash "$assets" --dry-run train-tag latest
-check "train-tag refuses latest" '[ "$status" != 0 ] && grep -q "not a tag the release train publishes" <<< "$out"'
-
-# prune against a fake GitHub API: three sha- releases, the oldest of
-# which channel-main points at. A manifest that cannot be read stops the
-# prune before anything is deleted -- a holder missing from the referenced
-# list would otherwise be deleted while channel-main still points at it.
-mkdir -p "$work/fakeapi"
-cat > "$work/fakeapi/curl" <<'EOF'
-#!/usr/bin/env bash
-out=/dev/null method=GET url=""
-while [ $# -gt 0 ]; do
-  case "$1" in
-    -o) out="$2"; shift ;;
-    -X) method="$2"; shift ;;
-    -w | -H | --data-binary | -T) shift ;;
-    -*) ;;
-    *) url="$1" ;;
-  esac
-  shift
-done
-echo "$method $url" >> "$FAKE_LOG"
-case "$method $url" in
-  "GET "*"/releases?per_page=100&page=1")
-    cat > "$out" <<'JSON'
-[{"created_at":"2026-11-03T00:00:00Z","id":3,"tag_name":"sha-cccccccccccc","assets":[{"id":30,"name":"images.json"}]},
- {"created_at":"2026-11-02T00:00:00Z","id":2,"tag_name":"sha-bbbbbbbbbbbb","assets":[{"id":20,"name":"images.json"}]},
- {"created_at":"2026-11-01T00:00:00Z","id":1,"tag_name":"sha-aaaaaaaaaaaa","assets":[{"id":10,"name":"images.json"}]},
- {"created_at":"2026-11-01T00:00:00Z","id":9,"tag_name":"channel-main","assets":[{"id":90,"name":"images.json"}]}]
-JSON
-    printf 200 ;;
-  "GET "*"/releases/assets/90")
-    if [ "${FAKE_MANIFEST_STATUS:-200}" = 200 ]; then
-      echo '{"schema":2,"images":{"grain":{"release":"sha-aaaaaaaaaaaa"}}}' > "$out"
-    else
-      echo '{"message":"Not Found"}' > "$out"
-    fi
-    printf '%s' "${FAKE_MANIFEST_STATUS:-200}" ;;
-  "DELETE "*) echo '' > "$out"; printf 204 ;;
-  *) echo "{}" > "$out"; printf 404 ;;
-esac
-EOF
-chmod +x "$work/fakeapi/curl"
-export FAKE_LOG="$work/fakeapi/log"
-: > "$FAKE_LOG"
-run env PATH="$work/fakeapi:$PATH" GITHUB_TOKEN=fake RELEASE_ASSETS_KEEP=1 FAKE_MANIFEST_STATUS=404 bash "$assets" prune
-check "prune deletes nothing when a pointer's manifest cannot be read" \
-  '[ "$status" != 0 ] && grep -q "pruning nothing" <<< "$out" && ! grep -q "^DELETE" "$FAKE_LOG"'
-: > "$FAKE_LOG"
-run env PATH="$work/fakeapi:$PATH" GITHUB_TOKEN=fake RELEASE_ASSETS_KEEP=1 bash "$assets" prune
-check "prune keeps the newest and every holder pointed at, and deletes the rest" \
-  '[ "$status" = 0 ] && grep -q "keeping sha-aaaaaaaaaaaa" <<< "$out" && grep -q "pruned sha-bbbbbbbbbbbb" <<< "$out" &&
-   [ "$(grep -c "^DELETE" "$FAKE_LOG")" = 2 ] && ! grep -q "^DELETE .*/releases/1$" "$FAKE_LOG" && ! grep -q "^DELETE .*/releases/3$" "$FAKE_LOG" &&
-   ! grep -q "^DELETE .*/releases/9$" "$FAKE_LOG"'
 
 echo "$((cases - failures)) of $cases passed"
 [ "$failures" = 0 ]

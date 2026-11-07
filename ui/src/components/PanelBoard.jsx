@@ -23,6 +23,7 @@ import { STATE_LABELS } from "../state.js";
 import { attributesFor } from "../taskAttributes.js";
 import {
   NO_NARROWING,
+  admitsState,
   defaultFilters,
   describeUnknownConditions,
   narrowTasks,
@@ -53,8 +54,12 @@ import {
 } from "./ReorderPickup.jsx";
 import GanttChart from "./GanttChart.jsx";
 import Sparkline from "./Sparkline.jsx";
-import StateDot from "./StateDot.jsx";
-import { ListEmpty } from "./ListPrimitives.jsx";
+import StateDot, { isLiveRunning } from "./StateDot.jsx";
+import {
+  ListEmpty,
+  TasksLoadError,
+  tasksLoadFailed,
+} from "./ListPrimitives.jsx";
 import NarrowingBar from "./NarrowingBar.jsx";
 import { TaskRow } from "./TaskList.jsx";
 import { rowFields } from "./CustomFields.jsx";
@@ -235,12 +240,16 @@ const GANTT_PANEL_ROWS = 10;
 // draw the same shape of the same series.
 const METRICS_BUCKETS = 24;
 
+// PARTIAL_COUNT_TITLE is what a count marked "+" says when pointed at.
+const PARTIAL_COUNT_TITLE =
+  "Counts the closed tasks loaded so far; older closed tasks are not counted yet.";
+
 // ListPanel is the flat list, cut to the top few rows. The rows are the
 // list view's own (TaskRow), without the checkbox and the drag handle:
 // selecting and reordering are gestures the list view offers over the
 // same tasks, and a panel is a window onto them rather than a second
 // place to act on them.
-function ListPanel({ tasks, config, narrowing, onOpenTask }) {
+function ListPanel({ tasks, config, narrowing, onOpenTask, partial = false }) {
   if (tasks.length === 0) return <ListEmpty>Nothing here right now.</ListEmpty>;
   // A panel carries its own sort, saved with the panel rather than
   // picked in a toolbar, so a panel that says "the backlog by priority"
@@ -260,7 +269,8 @@ function ListPanel({ tasks, config, narrowing, onOpenTask }) {
           component="p"
           className="panel-list-more"
         >
-          Showing {shown.length} of {tasks.length}.
+          Showing {shown.length} of {tasks.length}
+          {partial ? "+" : ""}.
         </Typography>
       )}
       <ul className="task-list">
@@ -292,7 +302,7 @@ function ListPanel({ tasks, config, narrowing, onOpenTask }) {
 // Each count is a link into the list narrowed to that column's states,
 // on top of whatever the panel is already narrowed to: "eleven waiting"
 // is a number worth clicking, and what it opens should be those eleven.
-function StatesPanel({ tasks, narrowing, onOpen }) {
+function StatesPanel({ tasks, narrowing, onOpen, partial = false }) {
   const columns = useMemo(() => loadColumns() || defaultColumns(), []);
   const { cards, hidden } = groupIntoColumns(tasks, columns);
   return (
@@ -328,16 +338,34 @@ function StatesPanel({ tasks, narrowing, onOpen }) {
               onOpen({ view: "tasks", narrowing: asked });
             }}
           >
-            <span className="panel-state-count">{held.length}</span>
+            <span
+              className="panel-state-count"
+              title={
+                partial && c.states.includes("closed")
+                  ? PARTIAL_COUNT_TITLE
+                  : undefined
+              }
+            >
+              {held.length}
+              {partial && c.states.includes("closed") ? "+" : ""}
+            </span>
             <span className="panel-state-title">
               {/* The dot the rest of the UI draws for the first state
                   this column collects: a column is recognised by its
                   colour on the board, and a count that dropped it would
-                  be the same layout wearing a different face. */}
-              <StateDot
-                state={c.states[0]}
-                title={STATE_LABELS[c.states[0]] || c.states[0]}
-              />
+                  be the same layout wearing a different face. Hidden
+                  from assistive technology, though: the column's title
+                  beside it already says it in words, and the mark's own
+                  label read out as well made the Running count "2
+                  Running Running". */}
+              {isLiveRunning(c.states[0]) && (
+                <span className="panel-state-mark" aria-hidden="true">
+                  <StateDot
+                    state={c.states[0]}
+                    title={STATE_LABELS[c.states[0]] || c.states[0]}
+                  />
+                </span>
+              )}
               {c.title}
             </span>
           </a>
@@ -494,6 +522,10 @@ function Panel({
   over,
   picked,
   tasks,
+  tasksFailed = false,
+  tasksError = null,
+  onRetryTasks,
+  closedPartial = false,
   config,
   onOpenTask,
   onOpen,
@@ -501,6 +533,11 @@ function Panel({
   now,
 }) {
   const narrowing = panelNarrowing(panel, asked);
+  // Whether this panel's counts are a floor rather than a total: the
+  // closed tasks are paged in (closedTasks.js), and while some are not
+  // held yet a panel whose question lets closed work through counts
+  // only the ones that are -- so it says "200+" rather than "200".
+  const partial = closedPartial && admitsState(narrowing, config, "closed");
   // The tasks a panel is about: the same resolve/sort/match every task
   // view does, from the one place that does it (taskFilters.js's
   // narrowTasks). Worked out here even though only three of the four
@@ -527,33 +564,46 @@ function Panel({
   let drawn;
   switch (panel.kind) {
     case "gantt":
-      body = (
-        // The tasks the page holds rather than the ones narrowed above,
-        // even though the count beside the heading is the narrowed
-        // length: GanttChart narrows what it is given by the narrowing
-        // it is given, so handing it the answer as well would be the
-        // same filter run twice over 929 tasks -- and asked the same
-        // question of the same list, its own call lands on the answer
-        // this one just computed.
-        <GanttChart
-          tasks={tasks}
-          config={config}
-          narrowing={narrowing}
-          onOpenTask={onOpenTask}
-          now={now}
-          embedded
-          fixedView={ganttView}
-          maxRows={GANTT_PANEL_ROWS}
-        />
-      );
       drawn = ganttView.range;
-      count = narrowed.length;
+      if (tasksFailed) {
+        body = <TasksLoadError error={tasksError} onRetry={onRetryTasks} />;
+      } else {
+        body = (
+          // The tasks the page holds rather than the ones narrowed above,
+          // even though the count beside the heading is the narrowed
+          // length: GanttChart narrows what it is given by the narrowing
+          // it is given, so handing it the answer as well would be the
+          // same filter run twice over 929 tasks -- and asked the same
+          // question of the same list, its own call lands on the answer
+          // this one just computed.
+          <GanttChart
+            tasks={tasks}
+            config={config}
+            narrowing={narrowing}
+            onOpenTask={onOpenTask}
+            now={now}
+            embedded
+            fixedView={ganttView}
+            maxRows={GANTT_PANEL_ROWS}
+          />
+        );
+        count = narrowed.length;
+      }
       break;
     case "states":
-      body = (
-        <StatesPanel tasks={narrowed} narrowing={narrowing} onOpen={onOpen} />
-      );
-      count = narrowed.length;
+      if (tasksFailed) {
+        body = <TasksLoadError error={tasksError} onRetry={onRetryTasks} />;
+      } else {
+        body = (
+          <StatesPanel
+            tasks={narrowed}
+            narrowing={narrowing}
+            onOpen={onOpen}
+            partial={partial}
+          />
+        );
+        count = narrowed.length;
+      }
       break;
     case "metrics": {
       const scope = reportScope(narrowing, attributesFor(config));
@@ -562,15 +612,20 @@ function Panel({
       break;
     }
     default:
-      body = (
-        <ListPanel
-          tasks={narrowed}
-          config={config}
-          narrowing={narrowing}
-          onOpenTask={onOpenTask}
-        />
-      );
-      count = narrowed.length;
+      if (tasksFailed) {
+        body = <TasksLoadError error={tasksError} onRetry={onRetryTasks} />;
+      } else {
+        body = (
+          <ListPanel
+            tasks={narrowed}
+            config={config}
+            narrowing={narrowing}
+            onOpenTask={onOpenTask}
+            partial={partial}
+          />
+        );
+        count = narrowed.length;
+      }
   }
 
   // Only on a panel that is showing the reader's own narrowing and
@@ -619,7 +674,15 @@ function Panel({
             (ReorderPickup.jsx). */}
         {handle}
         <h3 className="panel-title">{panelTitle(panel)}</h3>
-        {count !== null && <span className="count">{count}</span>}
+        {count !== null && (
+          <span
+            className="count"
+            title={partial ? PARTIAL_COUNT_TITLE : undefined}
+          >
+            {count}
+            {partial ? "+" : ""}
+          </span>
+        )}
         {keepable && (
           <button
             type="button"
@@ -693,6 +756,12 @@ function Panel({
 export default function PanelBoard({
   board,
   tasks,
+  tasksLoaded = true,
+  tasksError = null,
+  onRetryTasks,
+  // closedPartial is useClosedTasks' partial: some closed tasks are not
+  // paged in yet, so a count over closed work is a floor.
+  closedPartial = false,
   config,
   narrowing = NO_NARROWING,
   // A dashboard rendered without one is a dashboard whose toolbar
@@ -712,6 +781,7 @@ export default function PanelBoard({
   now = Date.now(),
 }) {
   const panels = board.panels || [];
+  const tasksFailed = tasksLoadFailed(tasks, tasksLoaded, tasksError);
   // Worked out once for the whole grid rather than per panel: it is a
   // question about the dashboard ("has its reader narrowed it away from
   // what the board says?"), and every panel gets the same answer.
@@ -874,6 +944,10 @@ export default function PanelBoard({
                 over={dragKey !== null && overKey === panel.key}
                 picked={pickedKey === panel.key}
                 tasks={tasks}
+                tasksFailed={tasksFailed}
+                tasksError={tasksError}
+                onRetryTasks={onRetryTasks}
+                closedPartial={closedPartial}
                 config={config}
                 onOpenTask={onOpenTask}
                 onOpen={onOpen}

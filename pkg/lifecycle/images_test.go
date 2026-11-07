@@ -33,7 +33,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/granule/pkg/qcow2"
+	"github.com/gke-labs/granule/pkg/qcow2"
 )
 
 // Digests that are the right shape and belong to nothing.
@@ -155,7 +155,7 @@ func (f *fakeDocker) ran(name string) []string {
 }
 
 func images(f *fakeDocker) *DockerImages {
-	return &DockerImages{StockGuest: "ghcr.io/bwsalmon/grain-sandbox:v9", Runner: f.run}
+	return &DockerImages{StockGuest: "docker.io/grainai/sandbox:v9", Runner: f.run}
 }
 
 func TestResolveReadsTheDigestBehindTheReleaseTag(t *testing.T) {
@@ -247,7 +247,7 @@ func TestPrepareAssemblesTheContainerHalfWithTheRepositorysDisk(t *testing.T) {
 	if second, err := d.Prepare(context.Background(), "ghcr.io/acme/billing/lc", testDigest); err != nil || second != local {
 		t.Errorf("second Prepare: %q, %v", second, err)
 	}
-	other := &DockerImages{StockGuest: "ghcr.io/bwsalmon/grain-sandbox:v10", Runner: f.run}
+	other := &DockerImages{StockGuest: "docker.io/grainai/sandbox:v10", Runner: f.run}
 	moved, err := other.Prepare(context.Background(), "ghcr.io/acme/billing/lc", testDigest)
 	if err != nil {
 		t.Fatal(err)
@@ -348,7 +348,7 @@ func TestPrepareRemovesTheAssembledImagesItSupersedes(t *testing.T) {
 
 	// The upgrade: the same repository at the same digest, on this
 	// deployment's new container half.
-	upgraded := &DockerImages{StockGuest: "ghcr.io/bwsalmon/grain-sandbox:v10", Runner: f.run}
+	upgraded := &DockerImages{StockGuest: "docker.io/grainai/sandbox:v10", Runner: f.run}
 	local, err := upgraded.Prepare(context.Background(), billing, testDigest)
 	if err != nil {
 		t.Fatal(err)
@@ -381,7 +381,7 @@ func TestPrepareSurvivesAnImageDockerWillNotRemove(t *testing.T) {
 	f.failOn = "image rm"
 	var logged []string
 	upgraded := &DockerImages{
-		StockGuest: "ghcr.io/bwsalmon/grain-sandbox:v10", Runner: f.run,
+		StockGuest: "docker.io/grainai/sandbox:v10", Runner: f.run,
 		Log: func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) },
 	}
 	local, err := upgraded.Prepare(context.Background(), billing, testDigest)

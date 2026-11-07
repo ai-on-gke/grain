@@ -718,16 +718,51 @@ func TestBuildPromptDoesNotAskAStandingSessionToDependOnItself(t *testing.T) {
 		}
 	}
 
-	// An ordinary task still gets the whole of the advice: it is the one
-	// this was always right for.
-	ordinary := model.Task{ID: "t1", Title: "Do the thing", Body: "details"}
+	// A repo-targeted task still gets the whole of the advice: it has a
+	// change to land, so it is the one "once this task's own change has
+	// landed" is right for.
+	ordinary := model.Task{
+		ID: "t1", Title: "Do the thing", Body: "details",
+		Target: &model.RepoRef{Owner: "acme", Name: "widgets"},
+	}
 	prompt = orchestrator.BuildPrompt(ordinary, "", "", false,
 		orchestrator.DefaultMaxRunRuntime, orchestrator.History{}, nil)
 	if !strings.Contains(prompt, "task t1 itself, when") {
-		t.Errorf("prompt no longer tells an ordinary task it may depend on itself: %q", prompt)
+		t.Errorf("prompt no longer tells a repo-targeted task it may depend on itself: %q", prompt)
 	}
-	if strings.Contains(prompt, "Never name task") {
-		t.Errorf("prompt warns an ordinary task off a link it may perfectly well make: %q", prompt)
+	if strings.Contains(prompt, "Never name task") || strings.Contains(prompt, "Do not put task") {
+		t.Errorf("prompt warns a repo-targeted task off a link it may perfectly well make: %q", prompt)
+	}
+
+	// A task whose repository targets live in Writes (with Target == nil)
+	// also lands repository changes and may depend on itself.
+	withWrites := model.Task{
+		ID: "t2", Title: "Update config", Body: "details",
+		Writes: []model.WriteTarget{{Repo: model.RepoRef{Owner: "grain", Name: "config"}}},
+	}
+	prompt = orchestrator.BuildPrompt(withWrites, "", "", false,
+		orchestrator.DefaultMaxRunRuntime, orchestrator.History{}, nil)
+	if !strings.Contains(prompt, "task t2 itself, when") {
+		t.Errorf("prompt no longer tells a task with Writes it may depend on itself: %q", prompt)
+	}
+
+	// A repo-less report task (Target == nil && len(Writes) == 0) has no
+	// repository change to land and rests in awaiting_reply until a human
+	// closes the report, so it must not be told to put itself in depends_on.
+	repoless := model.Task{ID: "t3", Title: "Suggest what to tune", Body: "details"}
+	prompt = orchestrator.BuildPrompt(repoless, "", "", false,
+		orchestrator.DefaultMaxRunRuntime, orchestrator.History{}, nil)
+	if strings.Contains(prompt, "task t3 itself, when") {
+		t.Errorf("prompt asks a repo-less task to depend on itself: %q", prompt)
+	}
+	for _, want := range []string{
+		"an earlier proposal in this same run",
+		"another existing task whose change must land first",
+		"Do not put task t3 itself in depends_on",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt for repo-less task does not mention %q: %q", want, prompt)
+		}
 	}
 }
 
@@ -2076,6 +2111,122 @@ func TestRunDispatchCancelsLiveRunWhenTaskStopped(t *testing.T) {
 		}
 	case <-time.After(runWaitLimit):
 		t.Fatal("RunDispatch did not return after task was stopped")
+	}
+}
+
+func TestRunDispatchCancelsCloneInFlightWhenTaskStopped(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	dispatchTask(t, ctx, store, "t1")
+	d := dispatch.Dispatch{TaskID: "t1", RunID: "r1", Attempt: 1}
+	startRun(t, ctx, store, d, baseTime)
+	task, err := store.GetTask(ctx, "t1")
+	if err != nil || task == nil {
+		t.Fatalf("reading task: %v", err)
+	}
+
+	cloneStarted := make(chan struct{})
+	var cloneOnce sync.Once
+	tools := []mcp.Tool{{
+		Name: "run_command",
+		Handler: func(tctx context.Context, args map[string]any) mcp.Result {
+			cloneOnce.Do(func() { close(cloneStarted) })
+			<-tctx.Done()
+			return mcp.Result{Text: "exit=128\n" + tctx.Err().Error(), IsError: true}
+		},
+	}}
+
+	fw := agentFunc(func(runCtx context.Context, cfg agent.RunConfig) (*agent.Result, error) {
+		t.Error("framework.Run entered after turn was stopped during checkout")
+		return nil, runCtx.Err()
+	})
+
+	cancellers := orchestrator.NewTaskCancellers()
+	cfg := orchestrator.Config{
+		GitRemoteBase:  "http://127.0.0.1:9",
+		TaskCancellers: cancellers,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := orchestrator.RunDispatch(ctx, store, fw, cfg, *task, d, tools, t.TempDir(), "", nil, baseTime)
+		errCh <- err
+	}()
+
+	<-cloneStarted
+	if !cancellers.Cancel("t1", orchestrator.ErrTurnStopped) {
+		t.Fatal("cancellers.Cancel returned false while checkout was in flight")
+	}
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, orchestrator.ErrTurnStopped) {
+			t.Errorf("RunDispatch err = %v, want ErrTurnStopped", err)
+		}
+		runs, rerr := store.Runs(ctx, "t1")
+		if rerr != nil || len(runs) != 1 {
+			t.Fatalf("reading runs: %v, len = %d", rerr, len(runs))
+		}
+		if runs[0].Outcome != "cancelled" || runs[0].Detail != model.TurnStoppedDetail {
+			t.Errorf("run = (%q, %q), want (cancelled, %q)", runs[0].Outcome, runs[0].Detail, model.TurnStoppedDetail)
+		}
+	case <-time.After(runWaitLimit):
+		t.Fatal("RunDispatch did not abort checkout after task was stopped")
+	}
+}
+
+func TestRunDispatchRespectsOutOfProcessFinishRun(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	dispatchTask(t, ctx, store, "t1")
+	d := dispatch.Dispatch{TaskID: "t1", RunID: "r1", Attempt: 1}
+	startRun(t, ctx, store, d, baseTime)
+	task, err := store.GetTask(ctx, "t1")
+	if err != nil || task == nil {
+		t.Fatalf("reading task: %v", err)
+	}
+
+	started := make(chan struct{})
+	fw := agentFunc(func(runCtx context.Context, cfg agent.RunConfig) (*agent.Result, error) {
+		close(started)
+		<-runCtx.Done()
+		return nil, runCtx.Err()
+	})
+
+	cfg := orchestrator.Config{
+		CancelPollInterval: 10 * time.Millisecond,
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := orchestrator.RunDispatch(ctx, store, fw, cfg, *task, d, nil, t.TempDir(), "", nil, baseTime)
+		errCh <- err
+	}()
+
+	<-started
+	stopAt := baseTime.Add(5 * time.Second)
+	const customDetail = "cancelled by out-of-process ui"
+	if err := store.FinishRun(ctx, "r1", stopAt, "cancelled", customDetail); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("RunDispatch err = nil, want cancellation error")
+		}
+		runs, rerr := store.Runs(ctx, "t1")
+		if rerr != nil || len(runs) != 1 {
+			t.Fatalf("reading runs: %v, len = %d", rerr, len(runs))
+		}
+		if runs[0].Outcome != "cancelled" || runs[0].Detail != customDetail {
+			t.Errorf("run = (%q, %q), want out-of-process finish preserved as (cancelled, %q)",
+				runs[0].Outcome, runs[0].Detail, customDetail)
+		}
+		if runs[0].FinishedAt == nil || !runs[0].FinishedAt.Equal(stopAt) {
+			t.Errorf("FinishedAt = %v, want %v preserved", runs[0].FinishedAt, stopAt)
+		}
+	case <-time.After(runWaitLimit):
+		t.Fatal("RunDispatch did not notice out-of-process FinishRun")
 	}
 }
 

@@ -318,8 +318,10 @@ test.describe("Suite Management and Suite Execution Workflows", () => {
     await page.getByLabel("Name", { exact: true }).fill(suiteName);
 
     // 5. Select template
-    await page.getByLabel("Templates", { exact: true }).click();
-    await page.getByRole("option", { name: templateName }).click();
+    await chooseOption(
+      page.getByRole("combobox", { name: "Templates", exact: true }),
+      templateName,
+    );
     await page.keyboard.press("Escape");
 
     // 6. Submit Suite creation form

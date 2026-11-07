@@ -130,4 +130,40 @@ describe("PendingAccess", () => {
       "network › open",
     );
   });
+
+  it("shows an earlier partial grant with its declined items and server Principal ID", () => {
+    render(
+      <PendingAccess
+        t={{
+          id: "7",
+          pendingAccess: pending({
+            items: [
+              {
+                kind: "grant",
+                capability: "api:tasks:admin",
+                grant: "api:tasks:admin",
+                dangerous: true,
+              },
+            ],
+            earlier: [
+              {
+                granted: [
+                  { kind: "read", repo: "acme/docs" },
+                  { kind: "network", access: "open" },
+                ],
+                declined: [{ kind: "grant", capability: "api:tasks:admin" }],
+                at: "2026-11-04T21:00:00Z",
+                by: { Kind: "human", ID: "alice", Source: "access-code" },
+              },
+            ],
+          }),
+        }}
+        act={act}
+      />,
+    );
+    const alert = screen.getByTestId("access-earlier");
+    expect(alert).toHaveTextContent(
+      "Answered before by alice: 2 granted, 1 declined (api:tasks:admin).",
+    );
+  });
 });

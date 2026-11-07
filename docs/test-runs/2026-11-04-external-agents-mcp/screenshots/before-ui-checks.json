@@ -1,0 +1,134 @@
+[
+  {
+    "file": "before-tasks-3-1440-light.png",
+    "route": "/tasks/3",
+    "viewport": "1440x960",
+    "scheme": "light",
+    "horizontalOverflowPx": 0,
+    "filedByTestIdText": null,
+    "hasAliceOwner": true,
+    "hasBobOwner": false,
+    "hasFiledFrom": false
+  },
+  {
+    "file": "before-tasks-4-1440-light.png",
+    "route": "/tasks/4",
+    "viewport": "1440x960",
+    "scheme": "light",
+    "horizontalOverflowPx": 0,
+    "filedByTestIdText": null,
+    "hasAliceOwner": false,
+    "hasBobOwner": true,
+    "hasFiledFrom": false
+  },
+  {
+    "file": "before-settings-agents-1440-light.png",
+    "route": "/settings/agents",
+    "viewport": "1440x960",
+    "scheme": "light",
+    "horizontalOverflowPx": 0,
+    "filedByTestIdText": null,
+    "hasAliceOwner": false,
+    "hasBobOwner": false,
+    "hasFiledFrom": false
+  },
+  {
+    "file": "before-tasks-3-390-light.png",
+    "route": "/tasks/3",
+    "viewport": "390x900",
+    "scheme": "light",
+    "horizontalOverflowPx": 0,
+    "filedByTestIdText": null,
+    "hasAliceOwner": true,
+    "hasBobOwner": false,
+    "hasFiledFrom": false
+  },
+  {
+    "file": "before-tasks-4-390-light.png",
+    "route": "/tasks/4",
+    "viewport": "390x900",
+    "scheme": "light",
+    "horizontalOverflowPx": 0,
+    "filedByTestIdText": null,
+    "hasAliceOwner": false,
+    "hasBobOwner": true,
+    "hasFiledFrom": false
+  },
+  {
+    "file": "before-settings-agents-390-light.png",
+    "route": "/settings/agents",
+    "viewport": "390x900",
+    "scheme": "light",
+    "horizontalOverflowPx": 0,
+    "filedByTestIdText": null,
+    "hasAliceOwner": false,
+    "hasBobOwner": false,
+    "hasFiledFrom": false
+  },
+  {
+    "file": "before-tasks-3-1440-dark.png",
+    "route": "/tasks/3",
+    "viewport": "1440x960",
+    "scheme": "dark",
+    "horizontalOverflowPx": 0,
+    "filedByTestIdText": null,
+    "hasAliceOwner": true,
+    "hasBobOwner": false,
+    "hasFiledFrom": false
+  },
+  {
+    "file": "before-tasks-4-1440-dark.png",
+    "route": "/tasks/4",
+    "viewport": "1440x960",
+    "scheme": "dark",
+    "horizontalOverflowPx": 0,
+    "filedByTestIdText": null,
+    "hasAliceOwner": false,
+    "hasBobOwner": true,
+    "hasFiledFrom": false
+  },
+  {
+    "file": "before-settings-agents-1440-dark.png",
+    "route": "/settings/agents",
+    "viewport": "1440x960",
+    "scheme": "dark",
+    "horizontalOverflowPx": 0,
+    "filedByTestIdText": null,
+    "hasAliceOwner": false,
+    "hasBobOwner": false,
+    "hasFiledFrom": false
+  },
+  {
+    "file": "before-tasks-3-390-dark.png",
+    "route": "/tasks/3",
+    "viewport": "390x900",
+    "scheme": "dark",
+    "horizontalOverflowPx": 0,
+    "filedByTestIdText": null,
+    "hasAliceOwner": true,
+    "hasBobOwner": false,
+    "hasFiledFrom": false
+  },
+  {
+    "file": "before-tasks-4-390-dark.png",
+    "route": "/tasks/4",
+    "viewport": "390x900",
+    "scheme": "dark",
+    "horizontalOverflowPx": 0,
+    "filedByTestIdText": null,
+    "hasAliceOwner": false,
+    "hasBobOwner": true,
+    "hasFiledFrom": false
+  },
+  {
+    "file": "before-settings-agents-390-dark.png",
+    "route": "/settings/agents",
+    "viewport": "390x900",
+    "scheme": "dark",
+    "horizontalOverflowPx": 0,
+    "filedByTestIdText": null,
+    "hasAliceOwner": false,
+    "hasBobOwner": false,
+    "hasFiledFrom": false
+  }
+]

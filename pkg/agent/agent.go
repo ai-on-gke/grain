@@ -29,7 +29,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -200,13 +199,12 @@ type RunConfig struct {
 	// decide, never the agent's.
 	GitCredential string
 	// Grants names the capability grants this run's task holds whose
-	// whole effect is which tools the run gets --
-	// "self-debug" (pkg/capability/selfdebug), for reading grain's own
-	// source, and "bootstrap-playbooks" (pkg/capability/bootstrap), for
-	// reading the setup runbooks embedded in this binary. A Framework
-	// passes each one on as a "-grant <name>" argument of its forked
-	// "mcpserver" subprocess, which is where those tools are actually
-	// built (GrantArgs, and pkg/cli/mcpserver.go's flag of that name).
+	// whole effect is which tools the run gets -- such as
+	// grain#source (once self-debug), for reading grain's own source, or
+	// "grain#journal" (pkg/capability/grainlog). A Framework passes each
+	// one on as a "-grant <name>" argument of its forked "mcpserver"
+	// subprocess, which is where those tools are actually built
+	// (GrantArgs, and pkg/cli/mcpserver.go's flag of that name).
 	//
 	// They are names here, rather than the tools themselves in Tools,
 	// because Tools has no consumer left (see above): a Framework that
@@ -285,18 +283,7 @@ type RunConfig struct {
 	GrainSecretsDir string
 	// GrainStateDir is the controller's synchronized state checkout, passed only with deployment-health.
 	GrainStateDir string
-	// LocalScripts is the local-scripts declarations this run is served
-	// (pkg/capability/localscripts, docs/local-scripts.md), each one
-	// only after the daemon has checked the run's task holds its
-	// local-scripts:<name> capability. The forked mcpserver snapshots
-	// each and serves its scripts as local_<name> tools.
-	LocalScripts []LocalScripts
-	// LocalScriptsEnvFile is a 0600 file (localscripts.WriteCredentialsFile)
-	// of the secrets those declarations' scripts are delivered, named to
-	// the forked mcpserver as -local-scripts-env-file, never the values in
-	// argv, for SandboxEnvFile's reason. "" when they name none.
-	LocalScriptsEnvFile string
-	Tools               []mcp.Tool
+	Tools         []mcp.Tool
 	// MaxTurns caps the number of model-response/tool-call round trips
 	// before Run gives up and returns an error, guarding against a run
 	// that never stops asking for tools. Zero means the framework's own
@@ -674,7 +661,7 @@ func RunDeadlineArgs(ctx context.Context, cfg RunConfig) []string {
 // tools a name turns on is mcpserver's own business, and a grant added
 // later needs no new flag, no new field and no edit to this function.
 // The exceptions are the controller-side directories a tool needs:
-// self-debug's -grain-src-dir, grain-log's -grain-secrets-dir, and both
+// grain#source's -grain-src-dir (once self-debug's), grain-log's -grain-secrets-dir, and both
 // deployment-health's -grain-secrets-dir and -grain-state-dir. They are
 // written beside their grants, so a process's arguments say which grant a
 // directory belongs to, and omitted rather than passed empty when a
@@ -690,6 +677,7 @@ func RunDeadlineArgs(ctx context.Context, cfg RunConfig) []string {
 func GrantArgs(cfg RunConfig) []string {
 	var args []string
 	var grants []string
+	srcDirPassed := false
 	for _, grant := range cfg.Grants {
 		grants = append(grants, model.APIScopeSetGrantNames(grant)...)
 	}
@@ -698,8 +686,9 @@ func GrantArgs(cfg RunConfig) []string {
 			continue
 		}
 		args = append(args, "-grant", grant)
-		if grant == selfdebug.CapabilityName && cfg.GrainSourceDir != "" {
+		if model.IsGrainSourceGrant(grant) && cfg.GrainSourceDir != "" && !srcDirPassed {
 			args = append(args, "-grain-src-dir", cfg.GrainSourceDir)
+			srcDirPassed = true
 		}
 		if (model.IsGrainJournalGrant(grant) || model.IsGrainHealthGrant(grant)) && cfg.GrainSecretsDir != "" {
 			args = append(args, "-grain-secrets-dir", cfg.GrainSecretsDir)
@@ -707,18 +696,6 @@ func GrantArgs(cfg RunConfig) []string {
 		if model.IsGrainHealthGrant(grant) && cfg.GrainStateDir != "" {
 			args = append(args, "-grain-state-dir", cfg.GrainStateDir)
 		}
-	}
-	// Local scripts travel here too, rather than in a function of their
-	// own, so that every Framework that forks the mcpserver -- the custom
-	// backends' included -- passes them the moment it passes its grants.
-	for _, l := range cfg.LocalScripts {
-		if l.Name == "" || l.Path == "" {
-			continue
-		}
-		args = append(args, "-local-scripts", l.Name+"="+l.Path)
-	}
-	if len(cfg.LocalScripts) > 0 && cfg.LocalScriptsEnvFile != "" {
-		args = append(args, "-local-scripts-env-file", cfg.LocalScriptsEnvFile)
 	}
 	// And the tool budget, which is what a judgement task's grants mean
 	// for the process serving its tools, so it travels with them.
@@ -729,13 +706,6 @@ func GrantArgs(cfg RunConfig) []string {
 		}
 	}
 	return args
-}
-
-// LocalScripts is one local-scripts declaration a run is served: the
-// name its local-scripts:<name> capability grants, and its file on the
-// node host.
-type LocalScripts struct {
-	Name, Path string
 }
 
 // ProposeRepoArgs is the "-propose-repo <owner/name>" set a Framework

@@ -28,12 +28,21 @@ type ReasonClassifier struct {
 	// PolicyFile is the daemon's -policy file (Config.PolicyFile), which
 	// a task local policy holds is told to have edited; "" for none.
 	PolicyFile string
+	// DispatchBlocked is the condition holding this deployment's
+	// dispatch, in the daemon's words (dispatchcondition.Set.Why), or
+	// "" while it dispatches; nil is a deployment with nothing to ask
+	// -- `grain demo`'s UI, a test -- which never reports one.
+	DispatchBlocked func() string
 }
 
 // TaskReason is orchestrator.TaskReason.
 func (c ReasonClassifier) TaskReason(t model.Task, state model.State, obs *model.Observation,
-	openDeps []string, wait *model.GrantWait) ui.Reason {
-	return uiReason(orchestrator.TaskReason(t, state, obs, openDeps, wait, c.PolicyFile))
+	openDeps []string, wait *model.GrantWait, asked model.ReplyFacts) ui.Reason {
+	dispatchBlocked := ""
+	if c.DispatchBlocked != nil && state == model.StateQueued {
+		dispatchBlocked = c.DispatchBlocked()
+	}
+	return uiReason(orchestrator.TaskReason(t, state, obs, openDeps, wait, asked, c.PolicyFile, dispatchBlocked))
 }
 
 // MergeReason is orchestrator.MergeReason.

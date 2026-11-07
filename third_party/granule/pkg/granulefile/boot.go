@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bwsalmon/granule/pkg/dockercli"
-	"github.com/bwsalmon/granule/pkg/guestboot"
-	"github.com/bwsalmon/granule/pkg/guestbuild"
+	"github.com/gke-labs/granule/pkg/dockercli"
+	"github.com/gke-labs/granule/pkg/guestboot"
+	"github.com/gke-labs/granule/pkg/guestbuild"
 )
 
 // BootPhase is the part of a VM stage that only a booted guest can do

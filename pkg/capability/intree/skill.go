@@ -31,12 +31,20 @@ import (
 	"unicode/utf8"
 
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/playbooks"
 )
 
 // ConfigMapDir is the default directory on the sandbox VM where mint_config-map
 // places configured files and secrets when an entry omits an explicit path:
 // ConfigMapDir/<name>.
 const ConfigMapDir = "/home/debian/.config-map"
+
+// BootstrapMapName is the built-in config map served out of pkg/playbooks on
+// every config-map server (replacing the retired in-process bootstrap-playbooks
+// capability).
+const BootstrapMapName = "bootstrap"
+
+const bootstrapMapDescription = "Grain's own bootstrap playbooks: runbooks for walking whoever is in this chat through a setup flow (GCP service accounts, primary GitHub connection, test repos, Cloud SQL, host migration, or an off-cluster GKE sandbox cluster). Read a playbook in full before acting on any of it, and follow its guidance on what to ask the human for and what to run yourself (through run_host_command, which still needs a live approval for every command)."
 
 // SkillsDir is where mint_skill places each skill: SkillsDir/<skill>/.
 const SkillsDir = "/home/debian/.skills"
@@ -83,6 +91,7 @@ type configMapEntry struct {
 	name        string
 	description string
 	secret      bool
+	builtin     bool
 	dir         string
 	files       []configMapFile
 	bytes       int
@@ -305,6 +314,9 @@ func parseConfigMap(kind string, i int, item any, secretValues map[string]string
 			return nil, fmt.Errorf("%s %q: %q is not an accepted field (want name, description, dir, %s)", kind, name, f, keysField)
 		}
 	}
+	if name == BootstrapMapName {
+		return nil, fmt.Errorf("%s %q is reserved for grain's built-in bootstrap playbooks", kind, name)
+	}
 	if seenNames[name] {
 		return nil, fmt.Errorf("%s %q is configured twice", kind, name)
 	}
@@ -373,6 +385,42 @@ func parseConfigMap(kind string, i int, item any, secretValues map[string]string
 	return e, nil
 }
 
+func builtinBootstrapEntry() (*configMapEntry, error) {
+	dirEntries, err := fs.ReadDir(playbooks.FS, ".")
+	if err != nil {
+		return nil, fmt.Errorf("bootstrap playbooks: %w", err)
+	}
+	dir := path.Join(ConfigMapDir, BootstrapMapName)
+	e := &configMapEntry{
+		name:        BootstrapMapName,
+		description: bootstrapMapDescription,
+		builtin:     true,
+		dir:         dir,
+	}
+	var names []string
+	for _, de := range dirEntries {
+		if de.IsDir() || !strings.HasSuffix(de.Name(), ".md") {
+			continue
+		}
+		names = append(names, de.Name())
+	}
+	sort.Strings(names)
+	for _, fname := range names {
+		b, err := fs.ReadFile(playbooks.FS, fname)
+		if err != nil {
+			return nil, fmt.Errorf("bootstrap playbooks %s: %w", fname, err)
+		}
+		pl := protocol.Placement{
+			Path:    path.Join(dir, fname),
+			Mode:    "0644",
+			Content: string(b),
+		}
+		e.files = append(e.files, configMapFile{key: fname, placement: pl, bytes: len(b)})
+		e.bytes += len(b)
+	}
+	return e, nil
+}
+
 func parseConfigMapEntries(config map[string]any) ([]*configMapEntry, error) {
 	if len(config) == 0 {
 		return nil, nil
@@ -381,8 +429,15 @@ func parseConfigMapEntries(config map[string]any) ([]*configMapEntry, error) {
 	if err != nil {
 		return nil, err
 	}
+	bootstrap, err := builtinBootstrapEntry()
+	if err != nil {
+		return nil, err
+	}
 	seenNames := map[string]bool{}
 	seenPaths := map[string]string{}
+	for _, f := range bootstrap.files {
+		seenPaths[f.placement.Path] = SecretValueKey(bootstrap.name, f.key)
+	}
 	var entries []*configMapEntry
 	for _, list := range []struct{ field, kind string }{{"config_maps", "config-map"}, {"secrets", "secret"}} {
 		items, _ := config[list.field].([]any)
@@ -397,10 +452,75 @@ func parseConfigMapEntries(config map[string]any) ([]*configMapEntry, error) {
 	return entries, nil
 }
 
+// EmbeddedBootstrapPlacements returns every file the built-in bootstrap map
+// places -- under ConfigMapDir/bootstrap through config-map, and under
+// SkillsDir/bootstrap through the skill alias -- keyed by sandbox path, with
+// the exact content compiled into this binary. The orchestrator checks a
+// pass against it before writing a "bootstrap-only" grant's placements into
+// a sandbox that is a directory on grain's own host, so what lands there is
+// this binary's public markdown whatever server answered the mint.
+func EmbeddedBootstrapPlacements() (map[string]string, error) {
+	entry, err := builtinBootstrapEntry()
+	if err != nil {
+		return nil, err
+	}
+	skills, err := loadEmbeddedBootstrapSkill()
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, f := range entry.files {
+		out[f.placement.Path] = f.placement.Content
+	}
+	for _, sk := range skills {
+		for _, pl := range sk.files {
+			out[pl.Path] = pl.Content
+		}
+	}
+	return out, nil
+}
+
+func loadEmbeddedBootstrapSkill() (map[string]*skill, error) {
+	entry, err := builtinBootstrapEntry()
+	if err != nil {
+		return nil, err
+	}
+	sk := &skill{
+		name:        BootstrapMapName,
+		description: bootstrapMapDescription,
+	}
+	var listing strings.Builder
+	listing.WriteString("# Bootstrap playbooks\n\n")
+	listing.WriteString(bootstrapMapDescription + "\n\n")
+	for _, f := range entry.files {
+		pl := protocol.Placement{
+			Path:    path.Join(SkillsDir, BootstrapMapName, f.key),
+			Mode:    "0644",
+			Content: f.placement.Content,
+		}
+		sk.files = append(sk.files, pl)
+		sk.bytes += f.bytes
+		fmt.Fprintf(&listing, "- `%s`\n", f.key)
+	}
+	indexContent := listing.String()
+	sk.files = append([]protocol.Placement{{
+		Path:    path.Join(SkillsDir, BootstrapMapName, "SKILL.md"),
+		Mode:    "0644",
+		Content: indexContent,
+	}}, sk.files...)
+	sk.bytes += len(indexContent)
+	return map[string]*skill{BootstrapMapName: sk}, nil
+}
+
 // loadSkills reads every skill under dir, refusing anything mint_skill
 // could not place: a skill without SKILL.md, a file name outside
 // skillFile, a symlink, or more than a response may carry.
 func loadSkills(dir string) (map[string]*skill, error) {
+	if dir == BootstrapMapName {
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			return loadEmbeddedBootstrapSkill()
+		}
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -586,15 +706,16 @@ func newSkillMethod(skills map[string]*skill, now func() time.Time) (*protocol.M
 }
 
 func newConfigMapMethods(entries []*configMapEntry, dirSkills map[string]*skill, now func() time.Time) ([]*protocol.Method, error) {
-	if len(entries) == 0 && len(dirSkills) == 0 {
-		return nil, nil
+	bootstrap, err := builtinBootstrapEntry()
+	if err != nil {
+		return nil, err
 	}
 
 	var allEntries []*configMapEntry
 	byName := map[string]*configMapEntry{}
 	var cmEnum, secEnum, keyEnum []any
 
-	for _, e := range entries {
+	addEntry := func(e *configMapEntry) {
 		allEntries = append(allEntries, e)
 		byName[e.name] = e
 		if e.secret {
@@ -606,6 +727,10 @@ func newConfigMapMethods(entries []*configMapEntry, dirSkills map[string]*skill,
 			keyEnum = append(keyEnum, SecretValueKey(e.name, f.key))
 		}
 	}
+	for _, e := range entries {
+		addEntry(e)
+	}
+	addEntry(bootstrap)
 
 	var skillNames []string
 	for n := range dirSkills {
@@ -701,12 +826,23 @@ func newConfigMapMethods(entries []*configMapEntry, dirSkills map[string]*skill,
 					}
 				}
 			}
+			onlyKeys, subset := strs("keys")
 			if !explicit {
 				for _, e := range allEntries {
-					chosen[e.name] = true
+					if !e.builtin {
+						chosen[e.name] = true
+						continue
+					}
+					if subset {
+						for _, f := range e.files {
+							if onlyKeys[SecretValueKey(e.name, f.key)] {
+								chosen[e.name] = true
+								break
+							}
+						}
+					}
 				}
 			}
-			onlyKeys, subset := strs("keys")
 
 			resp := &protocol.MintResponse{Status: protocol.StatusOK}
 			var index strings.Builder
@@ -779,6 +915,22 @@ func ConfigMapConfigSchema() map[string]any {
 	return protocol.OperatorSchema(s)
 }
 
+// NewEmbeddedBootstrapServer builds an unconfigured, stateless config-map
+// server serving exclusively this binary's embedded bootstrap playbooks --
+// both as #config-map ("bootstrap") and as #skill ("bootstrap") -- without
+// reading the host filesystem.
+func NewEmbeddedBootstrapServer(now func() time.Time) (*Server, error) {
+	skills, err := loadEmbeddedBootstrapSkill()
+	if err != nil {
+		return nil, err
+	}
+	methods, err := newConfigMapMethods(nil, skills, now)
+	if err != nil {
+		return nil, err
+	}
+	return newServer("config-map", nil, methods...)
+}
+
 // NewConfigMap builds the configurable config-map server: method config-map,
 // stateless, placing configured files and secrets on the sandbox VM.
 func NewConfigMap(cfg ConfigMapConfig) (*Server, error) {
@@ -830,8 +982,8 @@ func NewSkill(cfg SkillConfig) (*Server, error) {
 func init() {
 	register(Builder{
 		Name:        "config-map",
-		Summary:     "configurable files and secrets placed in the sandbox (mint_config-map)",
-		NeedsConfig: true,
+		Summary:     "configurable files, secrets, and built-in bootstrap playbooks placed in the sandbox (mint_config-map)",
+		NeedsConfig: false,
 		Build: func(ctx context.Context, args []string, env Env, logger *log.Logger) (*Server, error) {
 			fs := newFlags("config-map", logOutput(logger))
 			dir := fs.String("dir", "", "optional directory holding one subdirectory per skill, each with a SKILL.md")

@@ -59,8 +59,8 @@ func TestTheRepositorysNightlyCIReviewScheduleFilesAReviewForARedNightlyOnMain(t
 	if got := strings.Join(trig.Branches, ","); got != "main" {
 		t.Errorf("branches = %s, want main", got)
 	}
-	if sched.TemplateID == nil || *sched.TemplateID != model.WorkflowReviewTemplateID("nightly") {
-		t.Errorf("template = %v, want %q", sched.TemplateID, model.WorkflowReviewTemplateID("nightly"))
+	if sched.TemplateID == nil || *sched.TemplateID != model.GitHubWorkflowReviewTemplateID("nightly") {
+		t.Errorf("template = %v, want %q", sched.TemplateID, model.GitHubWorkflowReviewTemplateID("nightly"))
 	}
 	if err := store.PutSchedule(ctx, sched); err != nil {
 		t.Fatalf("PutSchedule: %v", err)

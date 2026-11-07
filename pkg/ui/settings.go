@@ -651,6 +651,11 @@ type Settings struct {
 	// filings queue without a person's approval. Never nil coming out of
 	// here.
 	OwnerTrust []model.OwnerTrustRule `json:"ownerTrust"`
+	// AutoGrantContextReads is model.Config.AutoGrantContextReads: the
+	// committed-context repositories ("*" or owner/name) for which filing a
+	// task with `-design owner/name:path@rev` auto-grants -read access. Never
+	// nil coming out of here.
+	AutoGrantContextReads []string `json:"autoGrantContextReads"`
 	// TimeZone is model.Config.TimeZone: the IANA zone every timestamp the
 	// frontend prints is shown in. Never empty coming out of here -- an
 	// unset stored value reads back as model.DefaultTimeZone.
@@ -752,6 +757,12 @@ type Settings struct {
 	// settings are locked in the UI and REST API in favour of config
 	// repository pull requests. False by default.
 	SettingsLocked bool `json:"settingsLocked"`
+	// Registry holds the deployment's connected-entry grain registry
+	// settings (model.Config.Registry). RegistryTokenSet reports whether
+	// the registration credential secret ("registry-registration-token") is
+	// populated in pkg/secrets.
+	Registry         model.RegistryConfig `json:"registry"`
+	RegistryTokenSet bool                 `json:"registryTokenSet"`
 	// ConfigRepoOnly is GET /api/config's configRepoOnly for this row:
 	// whether the API refuses its non-bootstrap writes in favour of a
 	// config pull request. Unlike SettingsLocked it is false without a
@@ -1181,6 +1192,7 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		AutoUpgradeOn:                      cfg.AutoUpgradeMode(),
 		AutoUpgradeModes:                   model.AutoUpgradeModes(),
 		OwnerTrust:                         ownerTrustOrEmpty(cfg.OwnerTrust),
+		AutoGrantContextReads:              stringsOrEmpty(cfg.AutoGrantContextReads),
 		TimeZone:                           model.TimeZoneOrDefault(cfg.TimeZone),
 		AgentBackends:                      cfg.AgentBackends,
 		AgentCLIDefaults:                   c.Config.AgentCLIDefaults,
@@ -1194,6 +1206,8 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		RestartRequired:                    restartRequiredKeys(),
 		PendingRestart:                     c.pendingRestart(cfg, sandboxImgDefault, granuleImgDefault),
 		Unrunnable:                         unrunnable,
+		Registry:                           cfg.Registry,
+		RegistryTokenSet:                   c.registryTokenSet(),
 	}
 	c.resolveSandboxImageFields(ctx, cfg, sandboxImgDefault, granuleImgDefault).apply(&out)
 	out.K8sGranuleImageEffective = effectiveGranule
@@ -1460,10 +1474,13 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			AutoUpgradeOn:                      def.AutoUpgradeMode(),
 			AutoUpgradeModes:                   model.AutoUpgradeModes(),
 			OwnerTrust:                         ownerTrustOrEmpty(def.OwnerTrust),
+			AutoGrantContextReads:              stringsOrEmpty(def.AutoGrantContextReads),
 			TimeZone:                           model.TimeZoneOrDefault(def.TimeZone),
 			NetworkAccess:                      string(model.NormalizeNetworkAccess(def.NetworkAccess)),
 			NetworkAccesses:                    networkAccessNames(),
 			SettingsLocked:                     def.SettingsLocked,
+			Registry:                           def.Registry,
+			RegistryTokenSet:                   c.registryTokenSet(),
 			RestartRequired:                    restartRequiredKeys(),
 		}
 		c.resolveSandboxImageFields(ctx, def, sandboxImgDefault, granuleImgDefault).apply(&out)
@@ -1568,15 +1585,19 @@ type UpdateSettingsRequest struct {
 	AutoUpgradeOn *string `json:"autoUpgradeOn"`
 	// OwnerTrust replaces the owner-trust proposal policy
 	// (Settings.OwnerTrust); an empty list turns it off.
-	OwnerTrust          *[]model.OwnerTrustRule `json:"ownerTrust"`
-	AgentBackends       *[]model.AgentBackend   `json:"agentBackends"`
-	DefaultModel        *string                 `json:"defaultModel"`
-	PromptExtension     *string                 `json:"promptExtension"`
-	RepairTemplateID    *string                 `json:"repairTemplateID"`
-	TaskBranchTemplate  *string                 `json:"taskBranchTemplate"`
-	DeploymentID        *string                 `json:"deploymentId"`
-	DefaultCapabilities *[]string               `json:"defaultCapabilities"`
-	SettingsLocked      *bool                   `json:"settingsLocked"`
+	OwnerTrust *[]model.OwnerTrustRule `json:"ownerTrust"`
+	// AutoGrantContextReads replaces Settings.AutoGrantContextReads; an empty
+	// list turns auto-granting off.
+	AutoGrantContextReads *[]string             `json:"autoGrantContextReads"`
+	AgentBackends         *[]model.AgentBackend `json:"agentBackends"`
+	DefaultModel          *string               `json:"defaultModel"`
+	PromptExtension       *string               `json:"promptExtension"`
+	RepairTemplateID      *string               `json:"repairTemplateID"`
+	TaskBranchTemplate    *string               `json:"taskBranchTemplate"`
+	DeploymentID          *string               `json:"deploymentId"`
+	DefaultCapabilities   *[]string             `json:"defaultCapabilities"`
+	SettingsLocked        *bool                 `json:"settingsLocked"`
+	Registry              *model.RegistryConfig `json:"registry"`
 }
 
 func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
@@ -1587,8 +1608,9 @@ func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
 	}
 	*r = UpdateSettingsRequest(p)
 	var snake struct {
-		SettingsLocked      *bool     `json:"settings_locked"`
-		DefaultCapabilities *[]string `json:"default_capabilities"`
+		SettingsLocked        *bool     `json:"settings_locked"`
+		DefaultCapabilities   *[]string `json:"default_capabilities"`
+		AutoGrantContextReads *[]string `json:"auto_grant_context_reads"`
 	}
 	if err := json.Unmarshal(data, &snake); err == nil {
 		if r.SettingsLocked == nil && snake.SettingsLocked != nil {
@@ -1596,6 +1618,9 @@ func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
 		}
 		if r.DefaultCapabilities == nil && snake.DefaultCapabilities != nil {
 			r.DefaultCapabilities = snake.DefaultCapabilities
+		}
+		if r.AutoGrantContextReads == nil && snake.AutoGrantContextReads != nil {
+			r.AutoGrantContextReads = snake.AutoGrantContextReads
 		}
 	}
 	return nil
@@ -1611,6 +1636,9 @@ func (c *Client) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) 
 		if guard := c.checkGrainConfigWritable(ctx, current, nil); guard != nil {
 			return Settings{}, guard
 		}
+		return Settings{}, err
+	}
+	if err := c.checkRegistryAuthTargetWrite(ctx, current, cfg); err != nil {
 		return Settings{}, err
 	}
 	// A request changing only the Models and Sandboxes settings writes
@@ -1629,8 +1657,12 @@ func (c *Client) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) 
 		if changed := changedConfigFields(current, cfg); len(changed) > 0 {
 			log.Printf("grain ui: settings saved by %s: changed %s", writerName(ctx), strings.Join(changed, ", "))
 		}
+		if req.Registry != nil {
+			c.auditRegistryChanges(ctx, current, cfg)
+		}
 	}
 	c.triggerIAPSync()
+	c.triggerRegistrySync()
 	if req.AgentBackends != nil {
 		var before []model.AgentBackend
 		if current != nil {
@@ -2189,6 +2221,13 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	if req.SettingsLocked != nil {
 		cfg.SettingsLocked = *req.SettingsLocked
 	}
+	if req.Registry != nil {
+		normReg, err := model.NormalizeRegistryConfig(*req.Registry, c.Config.RegistryAllowInsecureHTTP)
+		if err != nil {
+			return model.Config{}, validationErrorf("%v", err)
+		}
+		cfg.Registry = normReg
+	}
 	if req.EnvironmentName != nil {
 		name := strings.TrimSpace(*req.EnvironmentName)
 		if utf8.RuneCountInString(name) > maxEnvironmentNameLen {
@@ -2294,6 +2333,13 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		}
 		cfg.OwnerTrust = rules
 	}
+	if req.AutoGrantContextReads != nil {
+		entries, err := model.NormalizeAutoGrantContextReads(*req.AutoGrantContextReads)
+		if err != nil {
+			return model.Config{}, validationErrorf("%v", err)
+		}
+		cfg.AutoGrantContextReads = entries
+	}
 	// A channel is a daily upgrade at some time; one saved without a
 	// time gets the default rather than a schedule that never fires.
 	if cfg.AutoUpgradeChannel != "" && strings.TrimSpace(cfg.AutoUpgradeTime) == "" {
@@ -2396,6 +2442,9 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 					return model.Config{}, validationErrorf("agentBackends[%d]: modelRetryCutoff (%s) is longer than modelTurnTimeout (%s); "+
 						"a turn agy is retrying should not be allowed longer than a slow one", i, retryCutoff, turnTimeout)
 				}
+			}
+			if err := c.normalizeConnectionHostd(ctx, cfg.AgentBackends, &backend); err != nil {
+				return model.Config{}, validationErrorf("agentBackends[%d]: %v", i, err)
 			}
 			seen[backend.ID] = true
 			(*req.AgentBackends)[i] = backend
@@ -2603,4 +2652,11 @@ func ownerTrustOrEmpty(rules []model.OwnerTrustRule) []model.OwnerTrustRule {
 		return []model.OwnerTrustRule{}
 	}
 	return rules
+}
+
+func stringsOrEmpty(items []string) []string {
+	if items == nil {
+		return []string{}
+	}
+	return items
 }

@@ -18,14 +18,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/apierror"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
+	"github.com/ai-on-gke/grain/pkg/version"
 )
 
 // errUpgradeUnavailable is what every upgrade handler reports when
@@ -37,6 +41,34 @@ import (
 // there is no upgrade resource here to act on.
 var errUpgradeUnavailable = errors.New(
 	"upgrading is not available: this deployment has neither -upgrade-image nor -upgrade-src-dir configured")
+
+// errSelfUpgradeDisabled is reported by every mutating or target-fetching
+// upgrade route when Config.DisableSelfUpgrade is true (-disable-self-upgrade).
+var errSelfUpgradeDisabled = apierror.Public(
+	"in-VM self-upgrade is disabled on this deployment (-disable-self-upgrade); upgrades are managed externally")
+
+func sanitizeManagementURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
+		return ""
+	}
+	return u.String()
+}
+
+func (s *Server) isSelfUpgradeDisabled() bool {
+	return s.tasks.Config.DisableSelfUpgrade
+}
+
+func (s *Server) upgradeUnavailableErr() error {
+	if s.isSelfUpgradeDisabled() {
+		return errSelfUpgradeDisabled
+	}
+	return errUpgradeUnavailable
+}
 
 // upgradeStatusResponse is both GET /api/upgrade's whole body and what
 // POST /api/upgrade returns once it has kicked an upgrade off. Enabled
@@ -67,11 +99,13 @@ type upgradeStatusResponse struct {
 	// request that names no branch goes to (grain/task-3689). Empty when
 	// the deployment cannot say -- one pinned to a sha- build, or the
 	// source pipeline.
-	Channel   string `json:"channel,omitempty"`
-	Branch    string `json:"branch"`
-	Phase     string `json:"phase"`
-	Detail    string `json:"detail"`
-	Unchanged bool   `json:"unchanged,omitempty"`
+	Channel      string `json:"channel,omitempty"`
+	Branch       string `json:"branch"`
+	Phase        string `json:"phase"`
+	Source       string `json:"source,omitempty"`
+	FallbackNote string `json:"fallbackNote,omitempty"`
+	Detail       string `json:"detail"`
+	Unchanged    bool   `json:"unchanged,omitempty"`
 	// Steps is the upgrade's own plan and how far through it is
 	// (pkg/upgrade's Status.Steps): what the pane draws its progress bar
 	// and its running commentary from, rather than saying nothing but
@@ -130,15 +164,21 @@ type upgradeStatusResponse struct {
 	// reference for the channel the deployment follows, and the
 	// repositories an operator may choose instead (startUpgradeRequest's
 	// Image). All empty on any other pipeline.
-	ImageRepo        string               `json:"imageRepo,omitempty"`
-	DefaultImageRepo string               `json:"defaultImageRepo,omitempty"`
-	DefaultImageRef  string               `json:"defaultImageRef,omitempty"`
-	ImageRepos       []string             `json:"imageRepos,omitempty"`
-	DiscardedRC      *upgrade.DiscardedRC `json:"discardedRc,omitempty"`
+	ImageRepo        string                      `json:"imageRepo,omitempty"`
+	DefaultImageRepo string                      `json:"defaultImageRepo,omitempty"`
+	DefaultImageRef  string                      `json:"defaultImageRef,omitempty"`
+	ImageRepos       []string                    `json:"imageRepos,omitempty"`
+	ImageSource      *upgradeImageSourceResponse `json:"imageSource,omitempty"`
+	DiscardedRC      *upgrade.DiscardedRC        `json:"discardedRc,omitempty"`
 	// RetractedRelease is set when the release this deployment runs has
 	// been retracted since it upgraded onto it: the pane tells the
 	// operator to move.
 	RetractedRelease *upgrade.RetractedRelease `json:"retractedRelease,omitempty"`
+	// SelfUpgradeDisabled is true when -disable-self-upgrade is set, so the
+	// UI hides in-VM self-upgrade actions in favour of external lifecycle
+	// management (optionally linking to ManagementURL).
+	SelfUpgradeDisabled bool   `json:"selfUpgradeDisabled,omitempty"`
+	ManagementURL       string `json:"managementUrl,omitempty"`
 }
 
 // upgradeScheduledResponse is the pending schedule and how close it is
@@ -179,7 +219,7 @@ type upgradeScheduledResponse struct {
 // source one answering with a commit and no ref.
 type upgradeRunningResponse struct {
 	// Image is the fully qualified reference the deployment's service
-	// runs -- "ghcr.io/bwsalmon/grain/grain:main". Image path only.
+	// runs -- "docker.io/grainai/grain:main". Image path only.
 	Image string `json:"image,omitempty"`
 	// Release, Commit, CommittedAt and Modified are the installed binary's build
 	// stamp on the source path, in the same shape and for the same
@@ -259,6 +299,8 @@ func upgradeStatusResponseFrom(up Upgrader, status upgrade.Status, inFlightRuns 
 		Channel:      channel,
 		Branch:       status.Branch,
 		Phase:        string(status.Phase),
+		Source:       status.Source,
+		FallbackNote: status.FallbackNote,
 		Detail:       status.Detail,
 		Unchanged:    status.Unchanged,
 		Steps:        steps,
@@ -274,6 +316,19 @@ func upgradeStatusResponseFrom(up Upgrader, status upgrade.Status, inFlightRuns 
 			resp.ImageRepos = target.Repositories
 			if channel != "" && target.Repository != "" {
 				resp.DefaultImageRef = target.Repository + ":" + upgrade.TagForBranch(channel)
+			}
+			if target.Source != "" {
+				resp.ImageSource = &upgradeImageSourceResponse{
+					Source:            string(target.Source),
+					SourceDefault:     target.SourceDefault,
+					Locked:            target.SourceLocked,
+					Fallback:          string(target.Fallback),
+					ReleaseRepository: target.ReleaseRepository,
+					ManifestAsset:     target.ManifestAsset,
+					ReleaseAsset:      target.ReleaseAsset,
+					ChecksumAsset:     target.ChecksumAsset,
+					ChecksumSuffix:    target.ChecksumSuffix,
+				}
 			}
 		}
 	}
@@ -461,12 +516,12 @@ func (s *Server) upgradeInterrupts(r *http.Request) []CLIUpgradeNote {
 	if s.tasks.Config.CLIRuns == nil {
 		return nil
 	}
-	settings, err := s.tasks.cliRunSettings(r.Context())
+	resolved, err := s.tasks.resolvedCLIRuns(r.Context())
 	if err != nil {
 		log.Printf("ui: reading which agent CLIs an upgrade interrupts: %v", err)
 		return nil
 	}
-	return cliUpgradeNotes(settings.Resolved)
+	return cliUpgradeNotes(resolved)
 }
 
 // cliUpgradeNotes is the CLIs in resolved (daemon.ResolveCLIRuns'
@@ -547,6 +602,29 @@ func (s *Server) scheduledUpgrade(r *http.Request) *upgradeScheduledResponse {
 // is running, how it upgrades and what its store is are a system
 // administrator's to read, as starting an upgrade is theirs to do.
 func (s *Server) handleGetUpgradeStatus(w http.ResponseWriter, r *http.Request) {
+	if s.isSelfUpgradeDisabled() {
+		var running *upgradeRunningResponse
+		if s.tasks.Config.Upgrader != nil {
+			if cur, err := s.tasks.Config.Upgrader.Running(); err == nil {
+				running = upgradeRunningResponseFrom(cur)
+			}
+		}
+		if running == nil {
+			info := version.Get()
+			if info.Unversioned {
+				info.Release = ""
+			}
+			running = upgradeRunningResponseFrom(upgrade.Running{Build: info})
+		}
+		writeJSON(w, http.StatusOK, upgradeStatusResponse{
+			Enabled:             false,
+			SelfUpgradeDisabled: true,
+			ManagementURL:       sanitizeManagementURL(s.tasks.Config.ManagementURL),
+			Running:             running,
+			Database:            s.databaseStatus(),
+		})
+		return
+	}
 	if s.tasks.Config.Upgrader == nil {
 		writeJSON(w, http.StatusOK, upgradeStatusResponse{
 			Enabled:  false,
@@ -581,8 +659,8 @@ type upgradeTargeter interface {
 // listing versions asks the image registry, and that status is polled
 // every few seconds while an upgrade runs.
 func (s *Server) handleGetUpgradeTargets(w http.ResponseWriter, r *http.Request) {
-	if s.tasks.Config.Upgrader == nil {
-		writeError(w, http.StatusNotFound, errUpgradeUnavailable)
+	if s.isSelfUpgradeDisabled() || s.tasks.Config.Upgrader == nil {
+		writeError(w, http.StatusNotFound, s.upgradeUnavailableErr())
 		return
 	}
 	targeter, ok := s.tasks.Config.Upgrader.(upgradeTargeter)
@@ -602,7 +680,7 @@ type startUpgradeRequest struct {
 	Branch string `json:"branch"`
 	// Image, when set, is the image to pull instead of the branch's tag
 	// in the configured repository: a repository the branch's tag is
-	// pulled from ("ghcr.io/bwsalmon/grain/grain"), or a full
+	// pulled from ("docker.io/grainai/grain"), or a full
 	// `repo:tag` or `repo@sha256:...` reference. It must be in a
 	// repository this deployment may upgrade onto
 	// (installtrack.ValidateTargetRepository); a tag in it names the
@@ -663,8 +741,8 @@ func deploymentChannel(up Upgrader) string {
 // applies it once nothing is running (orchestrator's
 // reconcileScheduledUpgrade). The same GET reports it either way.
 func (s *Server) handleStartUpgrade(w http.ResponseWriter, r *http.Request) {
-	if s.tasks.Config.Upgrader == nil {
-		writeError(w, http.StatusNotFound, errUpgradeUnavailable)
+	if s.isSelfUpgradeDisabled() || s.tasks.Config.Upgrader == nil {
+		writeError(w, http.StatusNotFound, s.upgradeUnavailableErr())
 		return
 	}
 	var req startUpgradeRequest
@@ -763,8 +841,8 @@ func (s *Server) scheduleUpgrade(r *http.Request, req startUpgradeRequest) error
 // wanted a deployment with no upgrade pending, and it has none. It says
 // which of the two happened.
 func (s *Server) handleCancelScheduledUpgrade(w http.ResponseWriter, r *http.Request) {
-	if s.tasks.Config.Upgrader == nil {
-		writeError(w, http.StatusNotFound, errUpgradeUnavailable)
+	if s.isSelfUpgradeDisabled() || s.tasks.Config.Upgrader == nil {
+		writeError(w, http.StatusNotFound, s.upgradeUnavailableErr())
 		return
 	}
 	cancelled, err := s.tasks.Store.ClearScheduledUpgrade(r.Context())
@@ -791,4 +869,89 @@ type cancelScheduledUpgradeResponse struct {
 	// Cancelled is whether this call is what called the upgrade off, as
 	// against finding none scheduled.
 	Cancelled bool `json:"cancelled"`
+}
+
+type upgradeImageSourceResponse struct {
+	Source            string `json:"source"`
+	SourceDefault     bool   `json:"sourceDefault"`
+	Locked            bool   `json:"locked"`
+	Fallback          string `json:"fallback,omitempty"`
+	ReleaseRepository string `json:"releaseRepository,omitempty"`
+	ManifestAsset     string `json:"manifestAsset,omitempty"`
+	ReleaseAsset      string `json:"releaseAsset,omitempty"`
+	ChecksumAsset     string `json:"checksumAsset,omitempty"`
+	ChecksumSuffix    string `json:"checksumSuffix,omitempty"`
+}
+
+type imageSourceUpdater interface {
+	SetImageSource(ov upgrade.ImageSourceOverride) error
+}
+
+type updateUpgradeSourceRequest struct {
+	Mode              string `json:"mode,omitempty"`
+	Fallback          string `json:"fallback,omitempty"`
+	FallbackExplicit  bool   `json:"fallbackExplicit,omitempty"`
+	ReleaseRepository string `json:"releaseRepository,omitempty"`
+	ReleaseAsset      string `json:"releaseAsset,omitempty"`
+	Checksum          string `json:"checksum,omitempty"`
+}
+
+func (s *Server) handleUpdateUpgradeSource(w http.ResponseWriter, r *http.Request) {
+	if s.isSelfUpgradeDisabled() || s.tasks.Config.Upgrader == nil {
+		writeError(w, http.StatusNotFound, s.upgradeUnavailableErr())
+		return
+	}
+	updater, ok := s.tasks.Config.Upgrader.(imageSourceUpdater)
+	if !ok {
+		writeError(w, http.StatusBadRequest, errors.New("this deployment's upgrader does not support configurable image sources"))
+		return
+	}
+	var req updateUpgradeSourceRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if err := updater.SetImageSource(upgrade.ImageSourceOverride{
+		Mode:              req.Mode,
+		Fallback:          req.Fallback,
+		FallbackExplicit:  req.FallbackExplicit,
+		ReleaseRepository: req.ReleaseRepository,
+		ReleaseAsset:      req.ReleaseAsset,
+		Checksum:          req.Checksum,
+	}); err != nil {
+		if errors.Is(err, upgrade.ErrImageSourceLocked) {
+			writeError(w, http.StatusConflict, err)
+			return
+		}
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	// The override lives in a file of the upgrader's, not the store, so
+	// no settings write records who made it: this row does (operator
+	// attribution spec §4.4).
+	s.tasks.auditUpgradeSource(r.Context(), req)
+	status, err := s.tasks.Config.Upgrader.Status()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	resp := s.upgradeStatusResponse(r, status)
+	resp.Database = s.databaseStatus()
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// auditUpgradeSource records a change to where image upgrades come from
+// in config_audit, with the person or agent who made it
+// (ui.RequestActor).
+func (c *Client) auditUpgradeSource(ctx context.Context, req updateUpgradeSourceRequest) {
+	if c == nil || c.Store == nil {
+		return
+	}
+	by := RequestActor(ctx)
+	summary := fmt.Sprintf("image source %q, fallback %q, release repository %q, asset %q, checksum %q",
+		req.Mode, req.Fallback, req.ReleaseRepository, req.ReleaseAsset, req.Checksum)
+	if _, err := c.Store.RecordConfigAudit(ctx, model.ConfigAuditEntry{
+		By: by.Actor, OnBehalfOf: by.OnBehalfOf, Surface: "upgrade:source", Summary: summary,
+	}); err != nil {
+		log.Printf("grain upgrade: recording the image source change in the config audit: %v", err)
+	}
 }

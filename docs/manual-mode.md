@@ -73,9 +73,11 @@ upgrade's hold.
 capability is an alias for the preset, and is recorded as
 `api:dispatch-control` wherever it is granted; schema migration 68
 rewrote the grants already stored. A run holding it reaches these
-routes as `{agent, <task id>}`: the `dispatch:write` ones as `api_*` MCP
-tools (`api_pause_pipeline`, `api_resume_pipeline`, `api_run_now`), which
-are model-only, and defer through `grain api` in its sandbox:
+routes as `{agent, <task id>}`: the `dispatch:write` ones through the
+`grain-controller` MCP server's `grain_invoke` (route tools
+`api_pause_pipeline`, `api_resume_pipeline`, `api_run_now`;
+[agent-api.md](agent-api.md)), which are model-only, and defer through
+`grain api` in its sandbox:
 
 - `POST /api/pipeline-pause` (`reason`): pause the whole deployment;
 - `DELETE /api/pipeline-pause`: lift the pause. An agent may lift only a
@@ -112,7 +114,7 @@ on every call, so taking it off the task stops the next call.
 
 ### The risk
 
-An agent holding `dispatch-control` decides what this deployment spends
+An agent holding `api:dispatch-control` decides what this deployment spends
 its runs on. It can hold the queue for as long as it likes and start
 whatever it chooses ahead of everybody else's work. Only grant it to
 a task or session you would trust with the pause button and Run now

@@ -60,6 +60,9 @@ const (
 	// serverEnvVar is pkg/cli's own: a CLI pointed at a daemon is not in
 	// sandbox mode, wherever it runs.
 	serverEnvVar = "GRAIN_SERVER"
+	// contextEnvVar is pkg/cli's too: a named context
+	// (design/spec/external-cli/external-cli.spec.md#XC-2) is a daemon.
+	contextEnvVar = "GRAIN_CONTEXT"
 )
 
 var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
@@ -129,7 +132,7 @@ func detectSandboxProxy(env sandboxEnv) (base, token string, ok bool) {
 	if v := strings.TrimSpace(env.Getenv(sandboxCLIEnv)); v == "0" || strings.EqualFold(v, "false") {
 		return "", "", false
 	}
-	if strings.TrimSpace(env.Getenv(serverEnvVar)) != "" {
+	if strings.TrimSpace(env.Getenv(serverEnvVar)) != "" || strings.TrimSpace(env.Getenv(contextEnvVar)) != "" {
 		// Somebody pointed this CLI at a daemon: that wins.
 		return "", "", false
 	}
@@ -185,6 +188,9 @@ var sandboxCommands = map[string][]string{
 	"issue": {"list", "read"},
 	"db":    {"query"},
 	"cap":   nil,
+	// grain screenshot runs locally, with node and Playwright: its flags
+	// are screenshot.mjs's own.
+	"screenshot": nil,
 }
 
 // sandboxCommandFlags are the flags each command reads; parseSandboxArgs
@@ -220,7 +226,7 @@ var sandboxCommandFlags = map[string][]string{
 	"task transcript":       {"attempt", "tail", "offset", "limit", "lines", "n"},
 	"task wait":             {"until", "timeout", "json", "park", "resume-at"},
 	"task message":          {"body", "file"},
-	"task propose":          {"title", "body", "file", "id", "repo", "branch", "no-repo", "depends-on", "capability", "fixes-base-branch", "no-port", "keep-running", "origin", "read", "custom-field", "not-before", "priority", "json", "supersedes", "auto-merge", "hold-for-approval"},
+	"task propose":          {"title", "body", "file", "id", "repo", "branch", "no-repo", "depends-on", "capability", "fixes-base-branch", "no-port", "keep-running", "origin", "read", "design", "custom-field", "not-before", "priority", "json", "supersedes", "auto-merge", "hold-for-approval"},
 	"api":                   {"scope", "json", "body", "file", "field", "reason"},
 	"memory list":           nil,
 	"memory read":           nil,
@@ -231,7 +237,7 @@ var sandboxCommandFlags = map[string][]string{
 	"quarantine":            {"reason", "ttl", "no-follow-up", "C"},
 	"metrics":               {"window", "since", "until", "repo", "author"},
 	"health":                nil,
-	"log":                   {"source", "since", "until", "priority", "min-priority", "contains", "max-lines", "lines", "n", "tail"},
+	"log":                   {"source", "unit", "since", "until", "priority", "min-priority", "contains", "max-lines", "lines", "n", "tail"},
 	"playbooks":             nil,
 	"issue list":            {"repo", "label", "limit"},
 	"issue read":            {"repo", "comments"},
@@ -281,7 +287,7 @@ func IsCommand(args []string) bool { return isSandboxCommand(args) }
 // maybeRunSandboxCLI runs args as a sandbox command when this process is in
 // a sandbox and args name one; handled is false otherwise.
 func maybeRunSandboxCLI(args []string, env sandboxEnv, stdout, stderr io.Writer) (code int, handled bool) {
-	if !isSandboxCommand(args) {
+	if !isSandboxCommand(args) || namesADaemon(args) {
 		return 0, false
 	}
 	base, token, ok := detectSandboxProxy(env)
@@ -314,7 +320,7 @@ func Unknown(args []string, stderr io.Writer) (code int, handled bool) {
 }
 
 func unknownCommand(args []string, env sandboxEnv, stderr io.Writer) (code int, handled bool) {
-	if len(args) > 0 && strings.HasPrefix(args[0], "-") {
+	if len(args) > 0 && strings.HasPrefix(args[0], "-") || namesADaemon(args) {
 		return 0, false
 	}
 	base, _, ok := detectSandboxProxy(env)
@@ -326,6 +332,27 @@ func unknownCommand(args []string, env sandboxEnv, stderr io.Writer) (code int, 
 	}
 	fmt.Fprintf(stderr, sandboxHelpText, redactProxy(base))
 	return 2, true
+}
+
+// namesADaemon reports whether args point this CLI at a daemon with
+// -server or -context (either spelling, anywhere before a bare "--"):
+// like $GRAIN_SERVER and $GRAIN_CONTEXT, that is pkg/cli's to answer, in
+// a sandbox or not (external-cli.spec.md#XC-3).
+func namesADaemon(args []string) bool {
+	for _, arg := range args {
+		if arg == "--" {
+			return false
+		}
+		name := strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-")
+		if name == arg {
+			continue
+		}
+		name, _, _ = strings.Cut(name, "=")
+		if name == "server" || name == "context" {
+			return true
+		}
+	}
+	return false
 }
 
 // redactProxy is base as help prints it: without the sandbox's token,
@@ -366,6 +393,9 @@ func (c *sandboxCLI) run(args []string) error {
 		// grain cap <server> <tool>'s flags are the tool's own, and its
 		// --help the tool's.
 		return c.capCommand(rest)
+	}
+	if cmd == "screenshot" {
+		return c.screenshotCommand(rest)
 	}
 	if subs := sandboxCommands[cmd]; subs != nil {
 		if len(rest) == 0 || isHelpFlag(rest[0]) {
@@ -768,11 +798,12 @@ func (c *sandboxCLI) ciRun(p sandboxArgs, run string) (repo, id string, err erro
 			return "", "", err
 		}
 	}
-	if repo = p.get("repo"); repo != "" {
-		return repo, run, nil
-	}
+	repo = p.get("repo")
 	var buf strings.Builder
 	if err := c.get("/cli/ci/run", url.Values{"id": {run}}, &buf); err != nil {
+		if repo != "" {
+			return repo, run, nil
+		}
 		if rc.Repo == "" {
 			return "", "", err
 		}
@@ -781,13 +812,26 @@ func (c *sandboxCLI) ciRun(p sandboxArgs, run string) (repo, id string, err erro
 		return rc.Repo, run, nil
 	}
 	var named struct {
+		ID   string `json:"id"`
 		Repo string `json:"repo"`
 	}
 	if err := json.Unmarshal([]byte(buf.String()), &named); err != nil || named.Repo == "" {
+		if repo != "" {
+			return repo, run, nil
+		}
 		if rc.Repo == "" {
 			return "", "", fmt.Errorf("finding the repository of CI run %s: %q", run, buf.String())
 		}
 		return rc.Repo, run, nil
+	}
+	if repo != "" && !strings.EqualFold(repo, named.Repo) {
+		// --repo names a different run with the same id.
+		return repo, run, nil
+	}
+	if strings.HasPrefix(named.ID, "gha:") {
+		// A bare GitHub Actions run id: its logs are read by the id
+		// the forge serves them under.
+		run = named.ID
 	}
 	return named.Repo, run, nil
 }
@@ -804,8 +848,16 @@ func (c *sandboxCLI) ciLog(p sandboxArgs) error {
 	}
 	uri += "/" + job
 	if strings.HasPrefix(run, "gha:") {
-		// A GitHub Actions job keeps one log, not one per step.
-		return c.read(uri+"/job.log", p, false)
+		// A GitHub Actions job keeps one log, job.log, which a step's
+		// <step>.log is a slice of.
+		step := p.get("step")
+		if step == "" {
+			return c.read(uri+"/job.log", p, false)
+		}
+		if !strings.HasSuffix(step, ".log") {
+			step += ".log"
+		}
+		return c.read(uri+"/"+step, p, false)
 	}
 	if n := p.get("attempt"); n != "" {
 		uri += "/attempts/" + n
@@ -982,7 +1034,7 @@ func flagName(name string) string {
 // instant it names, relative to now; one it cannot is sent as given, for
 // the tool to refuse in its own words.
 func grainLogQuery(p sandboxArgs, now time.Time) url.Values {
-	q := p.query("tail", "contains")
+	q := p.query("tail", "contains", "unit")
 	for _, name := range []string{"since", "until"} {
 		v := p.get(name)
 		if v == "" {

@@ -602,25 +602,21 @@ func TestCatalogueGCPKeyAccountOverrideAndUnnamedGrants(t *testing.T) {
 			}},
 		}},
 	}
-	// ValidateArgs populates permission_set="sandbox-agent" when a deprecated
-	// {"account":"prod"} grant omits permission_set; newGCPMethod.Mint overrides
-	// permission_set with account, so the catalogue must judge "prod".
-	if _, err := serverCat.ValidateGrants(model.GrantContext{
-		Kind:   "task",
-		Grants: []string{model.GCPKeyRef + `={"account":"prod","permission_set":"sandbox-agent","primary":true}`},
-	}); err == nil || !strings.Contains(err.Error(), `permission_set="prod"`) {
-		t.Fatalf("account=prod with default permission_set = %v, want allowed-values refusal on prod", err)
-	}
-	// Likewise for requires_person_when when account names "staging".
-	v, err := serverCat.ValidateGrants(model.GrantContext{
-		Kind:   "task",
-		Grants: []string{model.GCPKeyRef + `={"account":"staging","permission_set":"sandbox-agent","primary":true}`},
-	})
-	if err != nil || len(v.RequiresPerson) != 1 {
-		t.Fatalf("account=staging = (%+v, %v), want RequiresPerson", v, err)
+	// Removed account and activate arguments are refused outright with an error
+	// directing the caller to permission_set.
+	for _, removed := range []string{
+		model.GCPKeyRef + `={"account":"prod","permission_set":"sandbox-agent","primary":true}`,
+		model.GCPKeyRef + `={"account":"staging"}`,
+		model.GCPKeyRef + `={"account":"default"}`,
+		model.GCPKeyRef + `={"activate":true}`,
+		model.GCPKeyRef + `={"permission_set":"sandbox-agent","activate":false}`,
+	} {
+		if _, err := serverCat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{removed}}); err == nil || !strings.Contains(err.Error(), "permission_set") {
+			t.Fatalf("removed gcp#gcp-key arg %q = %v, want refusal naming permission_set", removed, err)
+		}
 	}
 	// An unnormalized unnamed grant cannot skip args.permission_set.allowed.
-	for _, unnamed := range []string{model.GCPKeyRef, model.GCPKeyRef + `={}`, model.GCPKeyRef + `={"account":"default"}`} {
+	for _, unnamed := range []string{model.GCPKeyRef, model.GCPKeyRef + `={}`} {
 		if _, err := serverCat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{unnamed}}); err == nil {
 			t.Errorf("unnamed %q admitted past args.permission_set.allowed", unnamed)
 		}

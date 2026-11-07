@@ -69,6 +69,7 @@ import {
   repoUrl,
   unionCapabilities,
 } from "../state.js";
+import { useRepoClosedCount, withClosedCount } from "../closedTasks.js";
 import AppIcon from "./AppIcon.jsx";
 import BranchField from "./BranchField.jsx";
 import ItemGlyph, { GlyphLabel } from "./ItemGlyph.jsx";
@@ -360,6 +361,9 @@ function RepoOverview({ upToDate, branches, gates, onShowTab }) {
 export default function RepoPage({
   repo,
   tasks,
+  // closedPartial is useClosedTasks' partial: some closed tasks are not
+  // paged in, so this repo's closed count is asked of the server.
+  closedPartial = false,
   config,
   baseBranchGates = [],
   // onOpenComparison opens one comparison of two of this repo's refs --
@@ -385,8 +389,30 @@ export default function RepoPage({
   repoTab = null,
   onShowTab,
   showError,
+  // dismissError takes the shell's error banner down if it still says the
+  // message given (App's dismissError), so a refusal can go the moment the
+  // save that answers it succeeds.
+  dismissError = () => {},
 }) {
   const root = repoApiRoot(repo);
+  // refuseSave and settleSave pair each box's refusal with its next good
+  // save. A refused value is put back or kept in the box, and the reason
+  // goes to the shell's banner, which stays up for five seconds whatever
+  // happens next -- so a workflow fixed and saved a second later still
+  // read, under the file that had just saved, as refused. Keyed by the
+  // box, so a save that succeeds takes down only its own refusal and never
+  // an unrelated one shown since.
+  const refusals = useRef(new Map());
+  const refuseSave = (key, err) => {
+    refusals.current.set(key, String(err?.message || err));
+    showError(err);
+  };
+  const settleSave = (key) => {
+    const message = refusals.current.get(key);
+    if (message === undefined) return;
+    refusals.current.delete(key);
+    dismissError(message);
+  };
   // gateCheck counts the saves here that can change whether this repo's
   // base branch is judged; the release pane re-reads its own copy of
   // the gate when it moves.
@@ -424,9 +450,6 @@ export default function RepoPage({
   const [caps, setCaps] = useState(null);
   const [capsSelection, setCapsSelection] = useState([]);
   const [ciCapsSelection, setCICapsSelection] = useState([]);
-  // hostdText is the default hostd box as typed (ui.RepoDefaults.
-  // DefaultHostd, read with caps above), saved on blur.
-  const [hostdText, setHostdText] = useState("");
   const [upstreamRepoText, setUpstreamRepoText] = useState("");
   // prompt/promptText are that same shape again, for this repo's own
   // prompt extension (grain/task-114): what GET /api/repos/{owner}/
@@ -550,14 +573,24 @@ export default function RepoPage({
   // open -- has no row, and gets an empty one rather than crashing the
   // page: its forms still work, since none of them needs the repo to be
   // known first.
-  const row = repoRows(config, tasks).find((r) => r.repo === repo) || {
-    repo,
-    total: 0,
-    counts: {},
-    blocked: 0,
-    configured: false,
-    defaults: false,
-  };
+  //
+  // The closed count is the server's while some closed tasks are not
+  // paged in (closedPartial): the pages held are the newest across every
+  // repo, and counting only those would present a floor as this repo's
+  // total. Until it answers the count says it is a floor ("12+").
+  const closedCount = useRepoClosedCount(repo, closedPartial);
+  const row = withClosedCount(
+    repoRows(config, tasks).find((r) => r.repo === repo) || {
+      repo,
+      total: 0,
+      counts: {},
+      blocked: 0,
+      configured: false,
+      defaults: false,
+    },
+    closedCount,
+  );
+  const countFloor = closedPartial && closedCount === null;
 
   const loadBranches = useCallback(async () => {
     try {
@@ -582,7 +615,6 @@ export default function RepoPage({
       setCaps(loaded);
       setCapsSelection(loaded.defaultCapabilities || []);
       setCICapsSelection(loaded.ciCapabilities || []);
-      setHostdText(loaded.defaultHostd || "");
       setUpstreamRepoText(loaded.upstreamRepo || "");
     } catch (err) {
       showError(err);
@@ -678,7 +710,6 @@ export default function RepoPage({
   // a blur that changed something from one that did not.
   const storedPromptText = prompt?.promptExtension || "";
   const storedSetupText = setup?.setupCommand || "";
-  const storedHostd = caps?.defaultHostd || "";
   const storedUpstreamRepo = caps?.upstreamRepo || "";
 
   // capsEffective is what a task filed against this repo would actually
@@ -825,6 +856,7 @@ export default function RepoPage({
         method: "POST",
         body: JSON.stringify({ name: branchName }),
       });
+      settleSave("branch");
       setBranchNote(
         added && added.alreadyRequested
           ? `${branchName} is already on this repo's list (${added.status}); nothing new was added.`
@@ -833,7 +865,7 @@ export default function RepoPage({
       form.reset();
       await loadBranches();
     } catch (err) {
-      showError(err);
+      refuseSave("branch", err);
     }
   };
 
@@ -852,11 +884,12 @@ export default function RepoPage({
         method: "PUT",
         body: JSON.stringify({ ciCapabilities: toSave }),
       });
+      settleSave("ciCapabilities");
       setCaps(updated);
       setCICapsSelection(updated.ciCapabilities || []);
       await onRefreshConfig();
     } catch (err) {
-      showError(err);
+      refuseSave("ciCapabilities", err);
     }
   };
 
@@ -870,31 +903,12 @@ export default function RepoPage({
         method: "PUT",
         body: JSON.stringify({ defaultCapabilities: toSave }),
       });
+      settleSave("capabilities");
       setCaps(updated);
       setCapsSelection(updated.defaultCapabilities || []);
       await onRefreshConfig();
     } catch (err) {
-      showError(err);
-    }
-  };
-
-  // saveDefaultHostd sets the hostd a task filed here starts pinned to
-  // when neither the filing nor its template names one
-  // (model.RepoConfig.DefaultHostd) through PUT .../settings, which leaves
-  // every field it is not sent alone. The server normalizes the selector
-  // and refuses one no hostd in the registry answers; a refused value is
-  // put back to the stored one rather than left looking saved.
-  const saveDefaultHostd = async (selector) => {
-    try {
-      const updated = await api(`${root}/settings`, {
-        method: "PUT",
-        body: JSON.stringify({ defaultHostd: selector }),
-      });
-      setCaps(updated);
-      setHostdText(updated.defaultHostd || "");
-    } catch (err) {
-      setHostdText(storedHostd);
-      showError(err);
+      refuseSave("capabilities", err);
     }
   };
 
@@ -904,12 +918,13 @@ export default function RepoPage({
         method: "PUT",
         body: JSON.stringify({ upstreamRepo: upstream }),
       });
+      settleSave("upstream");
       setCaps(updated);
       setUpstreamRepoText(updated.upstreamRepo || "");
       await onRefreshConfig();
     } catch (err) {
       setUpstreamRepoText(storedUpstreamRepo);
-      showError(err);
+      refuseSave("upstream", err);
     }
   };
 
@@ -933,11 +948,12 @@ export default function RepoPage({
         method: "PUT",
         body: JSON.stringify({ promptExtension: val }),
       });
+      settleSave("prompt");
       setPrompt(updated);
       setPromptText(updated.promptExtension || "");
       await onRefreshConfig();
     } catch (err) {
-      showError(err);
+      refuseSave("prompt", err);
     }
   };
 
@@ -955,11 +971,12 @@ export default function RepoPage({
         method: "PUT",
         body: JSON.stringify({ setupCommand: val }),
       });
+      settleSave("setup");
       setSetup(updated);
       setSetupText(updated.setupCommand || "");
       await onRefreshConfig();
     } catch (err) {
-      showError(err);
+      refuseSave("setup", err);
     }
   };
 
@@ -1030,10 +1047,11 @@ export default function RepoPage({
           body: JSON.stringify(fields),
         }),
       );
+      settleSave("issueImport");
       setImportDraft(null);
       await onRefreshConfig();
     } catch (err) {
-      showError(err);
+      refuseSave("issueImport", err);
     }
   };
 
@@ -1132,12 +1150,13 @@ export default function RepoPage({
         method: "PUT",
         body: JSON.stringify({ unfixableChecks: checks }),
       });
+      settleSave("unfixable");
       setUnfixable(updated);
       setUnfixableError("");
       await onRefreshConfig();
       return true;
     } catch (err) {
-      showError(err);
+      refuseSave("unfixable", err);
       return false;
     }
   };
@@ -1227,6 +1246,7 @@ export default function RepoPage({
         method: "PUT",
         body: JSON.stringify({ workflows: body }),
       });
+      settleSave("workflows");
       setWorkflows(updated);
       setWorkflowEdits((current) =>
         settleWorkflowEdits(current, sent, updated.workflows || []),
@@ -1234,7 +1254,7 @@ export default function RepoPage({
       await onRefreshConfig();
       return true;
     } catch (err) {
-      showError(err);
+      refuseSave("workflows", err);
       return false;
     }
   };
@@ -1412,7 +1432,7 @@ export default function RepoPage({
                 key={s}
                 size="small"
                 className={`badge badge-${s}`}
-                label={`${STATE_LABELS[s] || s} ${count}`}
+                label={`${STATE_LABELS[s] || s} ${count}${countFloor && s === "closed" ? "+" : ""}`}
               />
             ))}
             {row.blocked > 0 && (
@@ -1436,7 +1456,8 @@ export default function RepoPage({
               },
             })}
           >
-            {row.total} task{row.total === 1 ? "" : "s"} filed here
+            {row.total}
+            {countFloor ? "+" : ""} task{row.total === 1 ? "" : "s"} filed here
           </Link>
           <Box sx={{ flex: 1 }} />
           <Button
@@ -2346,66 +2367,6 @@ export default function RepoPage({
                     : capsEffective
                         .map((id) => capabilityName(config, id))
                         .join(", ")}
-                </Typography>
-              </Stack>
-            )}
-          </Box>
-
-          <Box data-testid="repo-default-hostd">
-            <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
-              Default hostd
-            </Typography>
-            {caps === null ? (
-              <Typography variant="body2" color="text.secondary">
-                Loading default hostd…
-              </Typography>
-            ) : (
-              <Stack spacing={1}>
-                <TextField
-                  id={`${refusalId}-hostd`}
-                  name="repoDefaultHostd"
-                  label={`Default hostd for ${repo}`}
-                  placeholder="gpu=yes"
-                  helperText="Where the host work of a task filed against this repo runs when neither the task nor its template names a hostd: a hostd's name, or label=value[,label=value]. Leave empty for the default hostd."
-                  value={hostdText}
-                  onChange={(e) => setHostdText(e.target.value)}
-                  onBlur={(e) => {
-                    const trimmed = e.target.value.trim();
-                    if (trimmed !== storedHostd) {
-                      saveDefaultHostd(trimmed);
-                    }
-                  }}
-                  autoComplete="off"
-                  inputProps={{
-                    ...identifierField,
-                    "data-testid": "repo-default-hostd-input",
-                    "aria-describedby": refusedBy(
-                      readOnly,
-                      `${refusalId}-hostd-helper-text`,
-                    ),
-                  }}
-                  fullWidth
-                  size="small"
-                  disabled={readOnly}
-                />
-                <Typography
-                  variant="body2"
-                  color="text.secondary"
-                  data-testid="repo-default-hostd-summary"
-                >
-                  A task filed against {repo} runs its host work on{" "}
-                  {storedHostd ? (
-                    <>
-                      hostd{" "}
-                      <code style={{ overflowWrap: "anywhere" }}>
-                        {storedHostd}
-                      </code>
-                      , unless it or its template names another
-                    </>
-                  ) : (
-                    "the default hostd, unless it or its template names one"
-                  )}
-                  .
                 </Typography>
               </Stack>
             )}

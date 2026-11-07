@@ -92,7 +92,7 @@ import (
 // build -- a `make build` on a laptop, a `docker build` with no build arg
 // -- falls back to. Naming the tag CI keeps pointed at main is a less
 // precise answer than that stamp and a far better one than nothing.
-const DefaultCheckImage = "ghcr.io/bwsalmon/grain/grain:latest"
+const DefaultCheckImage = "docker.io/grainai/grain:latest"
 
 // Formatted is what Format did, so its caller can print it: the files it
 // wrote, and the files it found already there and left alone.

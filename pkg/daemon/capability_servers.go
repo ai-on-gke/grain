@@ -56,21 +56,17 @@ const capabilityServerPrincipal = "capability-servers"
 //
 // A stdio server set to run: host is started through grain hostd where
 // that is this deployment's host executor (hostdClient non-nil,
-// Config.capabilityHostd), and refused anywhere else. A run routed to
-// another hostd has its run: host servers started there instead, through
-// the hostdCapabilityServers returned beside the registry, which
-// LiveConfig.Refresh keeps in step with it.
+// Config.capabilityHostd), and refused anywhere else. A run: hostd server
+// that names a hostd of its own (protocol.ServerConfig.Hostd) is started
+// on that hostd instead, through the hostdCapabilityServers returned
+// beside the registry, which LiveConfig.Refresh keeps in step with it.
 //
 // The first configuration is handed over from the stored row here; after
 // that LiveConfig.Refresh hands over each one it reads, so a merged
 // grain/config change or a Settings save reaches it on the next tick.
 // Each one is handed over with grain's in-tree servers registered in it
 // (registerBuiltinCapabilityServers), and the first is written back.
-//
-// gcpPool is the accounts the in-process gcp-key provider mints from
-// (gcpkey.PoolEmails of the deployment's gcp settings): Test on a gcp
-// server warns when one of its permission sets shares them.
-func startCapabilityServers(ctx context.Context, store *model.Store, secretStore *secrets.Store, dataDir string, hostdClient *hostd.Client, gcpPool []string) (*servers.Registry, *hostdCapabilityServers) {
+func startCapabilityServers(ctx context.Context, store *model.Store, secretStore *secrets.Store, dataDir string, hostdClient *hostd.Client) (*servers.Registry, *hostdCapabilityServers) {
 	var lookup func(name string) (string, bool)
 	if secretStore != nil {
 		auditCtx := secrets.WithPrincipal(context.Background(), capabilityServerPrincipal)
@@ -87,12 +83,6 @@ func startCapabilityServers(ctx context.Context, store *model.Store, secretStore
 		ConfigRoot: StateRepoDir(dataDir),
 		Hostd:      hostdClient,
 		Logf:       logf,
-		ProbeWarnings: func(_ string, cfg protocol.ServerConfig) []string {
-			if cfg.Builtin != "gcp" && intree.InTreeName(cfg) != "gcp" {
-				return nil
-			}
-			return intree.GCPOverlapWarnings(cfg, gcpPool)
-		},
 	}
 	if store != nil {
 		// A server that falls out of use says so where people look, not
@@ -136,20 +126,21 @@ func startCapabilityServers(ctx context.Context, store *model.Store, secretStore
 				configured = stored.MCPServers
 			}
 			configured = registerBuiltinCapabilityServers(ctx, store, dataDir, configured)
-			reg.Update(configured)
+			reg.Update(deploymentCapabilityServers(configured))
 			onHostd.update(configured)
 		}
 	}
 	go reg.Run(ctx, 0)
 	if store != nil {
+		combined := placedStatusRegistry{Registry: reg, placed: onHostd}
 		// Task workspaces any agent may create (RegisterWorkspaceJanitorTools)
 		// are deleted once their tasks have closed and the server's retention has passed.
-		go runWorkspaceJanitor(ctx, reg, storeClosedAt(store), workspaceJanitorInterval)
+		go runWorkspaceJanitor(ctx, combined, storeClosedAt(store), workspaceJanitorInterval)
 		// Non-PR change providers (pkg/change: workspace changelists) reach their
-		// capability server's daemon-only control tools through reg, and
+		// capability server's daemon-only control tools through combined, and
 		// a kind blocked on expired credentials is checked again every
 		// 5 minutes until it clears.
-		change.Bind(changeControl{reg: reg})
+		change.Bind(changeControl{reg: combined})
 		go change.Watch(ctx, store)
 		// Every live CL is handed to its provider's poller once a minute,
 		// for the task view's presubmit badge (changelists.md §3).
@@ -195,16 +186,14 @@ func externalConfigRepo(dataDir string) bool {
 	return err == nil && settings.Remote != ""
 }
 
-// gcpKeyPool returns nil now that the in-process gcp-key provider is retired
-// onto https://grain.dev/capabilities/gcp#gcp-key.
-func gcpKeyPool(_ Config) []string {
-	return nil
-}
-
 // capabilityServerStatuses is live's registry as the UI reads it: a nil
 // interface, not a typed nil, when there is none.
 func capabilityServerStatuses(live *LiveConfig) ui.CapabilityServerStatuses {
 	if reg := live.CapabilityServers(); reg != nil {
+		// With the rows of the servers placed on hostds of their own.
+		if live.hostdCapabilityServers != nil {
+			return placedStatusRegistry{Registry: reg, placed: live.hostdCapabilityServers}
+		}
 		return reg
 	}
 	return nil
@@ -245,7 +234,7 @@ func capabilityServerAlertsOnHostd(ctx context.Context, store *model.Store, host
 		if hostdName == "" {
 			return id
 		}
-		return id + " on grain hostd " + hostdName
+		return id + " on host " + hostdName
 	}
 	onDrop := func(st servers.Status) {
 		reason := st.Reason

@@ -57,13 +57,32 @@ func TestTheImageRunsTheCLIAndReportsASchemaVersion(t *testing.T) {
 // image that fails every run choosing another.
 func TestTheImageCarriesEveryBinaryTheDaemonShellsOutTo(t *testing.T) {
 	requireImage(t)
-	script := `for b in git bash granule kubectl docker claude agy codex journalctl top ssh curl initdb postgres pg_ctl psql; do ` +
+	script := `for b in git bash granule kubectl docker claude agy codex journalctl top ssh curl initdb postgres pg_ctl psql pg_dump pg_restore; do ` +
 		`command -v "$b" >/dev/null || { echo "MISSING $b"; exit 1; }; ` +
 		`done; echo all-present`
 
 	out := docker(t, "run", "--rm", "--entrypoint", "sh", image, "-c", script)
 	if !strings.Contains(out, "all-present") {
 		t.Fatalf("a binary the daemon shells out to is missing: %s", out)
+	}
+}
+
+// scripts/setup.sh provisions PostgreSQL 16 (`postgres:16-bookworm`) by
+// default, and `pg_dump` refuses to dump a server whose major version is
+// newer than its own. Keep the image's client at major >= 16 so `grain backup`
+// and scheduled daemon backups work on a default install.
+func TestTheImageCarriesAPostgresClientThatCanDumpTheDefaultServer(t *testing.T) {
+	requireImage(t)
+	out := strings.TrimSpace(docker(t, "run", "--rm", "--entrypoint", "pg_dump", image, "--version"))
+	// Example: "pg_dump (PostgreSQL) 16.15 (Debian 16.15-1.pgdg12+1)"
+	fields := strings.Fields(out)
+	if len(fields) < 3 {
+		t.Fatalf("unexpected pg_dump --version output: %q", out)
+	}
+	majorStr, _, _ := strings.Cut(fields[2], ".")
+	major, err := strconv.Atoi(majorStr)
+	if err != nil || major < 16 {
+		t.Fatalf("pg_dump major version in image = %q (from %q), want >= 16 to dump setup.sh's postgres:16-bookworm server", majorStr, out)
 	}
 }
 
@@ -129,7 +148,7 @@ func TestTheImageNamesTheSandboxContainerItExpects(t *testing.T) {
 	requireImage(t)
 	out := strings.TrimSpace(docker(t, "run", "--rm", image, "sandbox-image"))
 
-	if !strings.Contains(out, "/guest:") {
+	if !strings.Contains(out, "/sandbox:") {
 		t.Fatalf("sandbox-image printed %q", out)
 	}
 	// A bare `make image` leaves the source default (the tag CI keeps
@@ -203,7 +222,7 @@ func TestTheImagesReleaseLabelIsTheReleaseItReports(t *testing.T) {
 // the tree actually arrived, that it is grain's own and not some other
 // checkout, and that the three things deliberately left behind stayed
 // behind. .git is the one worth naming: it is 6MB of history no reader
-// wants (selfdebug is os.ReadFile and os.ReadDir), and a `cp -a` that
+// wants (grain#source is os.ReadFile and os.ReadDir), and a `cp -a` that
 // stopped excluding it would be invisible except in the image's size.
 func TestTheImageCarriesItsOwnSource(t *testing.T) {
 	requireImage(t)
@@ -213,7 +232,7 @@ func TestTheImageCarriesItsOwnSource(t *testing.T) {
 test -f ` + root + `/go.mod
 grep -q "^module github.com/ai-on-gke/grain$" ` + root + `/go.mod
 test -d ` + root + `/cmd/grain
-test -d ` + root + `/pkg/capability/selfdebug
+test -d ` + root + `/pkg/capability/grainserver
 for excluded in .git bin ui/node_modules; do
   if [ -e ` + root + `/$excluded ]; then echo "LEAKED $excluded"; exit 1; fi
 done
@@ -251,7 +270,7 @@ func TestAnUnprivilegedAccountCanReadTheImagesSource(t *testing.T) {
 	script := `set -e
 ls ` + root + ` >/dev/null
 ls ` + root + `/pkg >/dev/null
-cat ` + root + `/pkg/capability/selfdebug/selfdebug.go >/dev/null
+cat ` + root + `/pkg/capability/grainserver/grainserver.go >/dev/null
 cat ` + root + `/go.mod >/dev/null
 denied=$(find ` + root + ` \( \( -type d \( ! -readable -o ! -executable \) \) -o \( ! -type d ! -readable \) \) -print 2>/dev/null | head -20 || true)
 if [ -n "$denied" ]; then echo "DENIED:"; echo "$denied"; exit 1; fi

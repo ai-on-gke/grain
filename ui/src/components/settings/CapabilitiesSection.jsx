@@ -74,6 +74,19 @@ export default function CapabilitiesSection({
         readable as an alias for one release; update <code>.grain</code>{" "}
         declarations and external configs to <code>gcp#gemini-key</code>.
       </Alert>
+      <Alert
+        severity="info"
+        data-testid="bootstrap-playbooks-deprecation-notice"
+        sx={{ mb: 2, overflowWrap: "anywhere" }}
+      >
+        Deprecated: the in-process <code>bootstrap-playbooks</code> grant was
+        retired onto{" "}
+        <code>https://grain.dev/capabilities/config-map#config-map</code>{" "}
+        <code>{'{"config_maps":["bootstrap"]}'}</code>, which places the same
+        embedded runbooks in <code>/home/debian/.config-map/bootstrap</code>. It
+        remains readable as an alias for one release; update <code>.grain</code>{" "}
+        declarations and external configs to <code>config-map#config-map</code>.
+      </Alert>
       {/* The servers panel draws its own read-only form (readOnly), and
           keeps its list clickable so one server's page can still be
           opened; the card's disabled fieldset would stop that too. */}

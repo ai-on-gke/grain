@@ -25,6 +25,7 @@ package github
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -398,22 +399,94 @@ func (c *RESTClient) listActionsJobs(owner, repo string, runID int64, query stri
 
 // ActionsJobLog is GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs.
 //
-// GitHub answers it with a redirect to a short-lived blob URL on another
-// host. RealTransport's http.Client follows it, dropping the
-// Authorization header on the way as net/http does for a different host,
-// and so does a ForgeViaCommand host's tool (`<tool> api` follows
-// redirects itself; a redirect it did hand back would be re-sent through
-// the tool as a whole URL, CommandForgeTransport's rule for a URL outside
-// the API base). Either way what comes back here is the log.
+// GitHub -- github.com and an Enterprise Server alike -- answers it with
+// a redirect to a short-lived blob URL, usually on another host.
+// RealTransport's http.Client follows it, dropping the Authorization
+// header on the way as net/http does for a different host, and so does a
+// ForgeViaCommand host's tool (`<tool> api` follows redirects itself; a
+// redirect it did hand back would be re-sent through the tool as a whole
+// URL, CommandForgeTransport's rule for a URL outside the API base).
+// A transport that hands the redirect back instead (a Client whose
+// CheckRedirect stops it, a fake) has it followed here, once, without
+// the credential: the blob URL is signed and wants none.
 func (c *RESTClient) ActionsJobLog(owner, repo string, jobID int64) (string, error) {
 	resp, err := c.get(owner, repo, fmt.Sprintf("/repos/%s/%s/actions/jobs/%d/logs", owner, repo, jobID))
 	if err != nil {
-		return "", err
+		return "", redactURLError(err)
+	}
+	if loc := headerValue(resp.Headers, "Location"); resp.Status >= 300 && resp.Status < 400 && loc != "" {
+		blob, err := c.Transport.Request(http.MethodGet, loc, map[string]string{"User-Agent": "grain-automation"}, nil)
+		if err != nil {
+			return "", fmt.Errorf("following the job log's redirect to %s: %w", hostOf(loc), redactURLError(err))
+		}
+		// Named as the transport names a redirect it followed itself: the
+		// API request, then the blob host -- never the signed URL, whose
+		// query is the credential.
+		if resp.URL != "" {
+			blob.URL = resp.URL + " -> " + hostOf(loc)
+		} else {
+			blob.URL = "GET " + hostOf(loc)
+		}
+		resp = blob
 	}
 	if resp.Status != http.StatusOK {
 		return "", &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
 	}
+	if len(resp.Body) == 0 {
+		// A 200 with nothing in it is not a log, and saying only that it
+		// was empty leaves nobody able to tell which hop lost it: the
+		// forge, the blob store it redirected to, or the transport in
+		// between. So it is an error carrying the status, the hosts, and
+		// the headers that say who answered.
+		return "", fmt.Errorf("%w: %w", ErrEmptyJobLog,
+			&Error{Status: resp.Status, URL: resp.URL, Note: answeredBy(resp.Headers)})
+	}
 	return strings.ToValidUTF8(string(resp.Body), ""), nil
+}
+
+// ErrEmptyJobLog is ActionsJobLog's error for a job log answered 200 with
+// no body. It wraps an *Error naming the status, the host or hosts the
+// answer came from, and what the answer's headers say about who sent it.
+var ErrEmptyJobLog = errors.New("the forge answered the job log with no bytes at all")
+
+// answeredBy is what an answer's headers say about who sent it -- its
+// content type, server and any proxy it passed -- for an error about an
+// answer whose body says nothing ("content-type text/plain, server
+// blobstore"). Empty when the headers name none of them.
+func answeredBy(headers map[string]string) string {
+	var parts []string
+	for _, name := range []string{"Content-Type", "Server", "Via"} {
+		if v := strings.TrimSpace(headerValue(headers, name)); v != "" && !strings.ContainsAny(v, "\r\n") {
+			if len(v) > 80 {
+				v = v[:80]
+			}
+			parts = append(parts, strings.ToLower(name)+" "+v)
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// redactURLError cuts a *url.Error's URL down to its scheme and host. A
+// transport failure on the way to a job log -- net/http following the
+// forge's redirect, or this package following it itself -- names the
+// signed blob URL it was fetching, and that error reaches the agent
+// asking for the log.
+func redactURLError(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		ue.URL = hostOf(ue.URL)
+	}
+	return err
+}
+
+// hostOf is the scheme and host of a URL, leaving out a signed URL's
+// path and query.
+func hostOf(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "the URL it named"
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 // ListActionsArtifacts is GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts.

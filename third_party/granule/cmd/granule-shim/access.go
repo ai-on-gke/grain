@@ -13,10 +13,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bwsalmon/granule/pkg/config"
-	"github.com/bwsalmon/granule/pkg/guestexec"
-	"github.com/bwsalmon/granule/pkg/netshim"
-	"github.com/bwsalmon/granule/pkg/sandbox"
+	"github.com/gke-labs/granule/pkg/config"
+	"github.com/gke-labs/granule/pkg/guestexec"
+	"github.com/gke-labs/granule/pkg/netshim"
+	"github.com/gke-labs/granule/pkg/sandbox"
 )
 
 // The sandbox access API's configuration (docs/sandbox-access-api.md,

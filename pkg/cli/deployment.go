@@ -19,8 +19,16 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
 	"strings"
+	"time"
 
+	"github.com/pkg/browser"
+
+	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -129,6 +137,180 @@ func cmdGitConnections(ctx context.Context, c *ui.HTTPClient, out *printer, args
 		fmt.Printf("%s %s\n", host, conn.Credential)
 	}
 	return nil
+}
+
+const githubClientIDEnvVar = "GRAIN_GITHUB_CLIENT_ID"
+
+var (
+	gitLoginStdin       io.Reader = os.Stdin
+	gitLoginOpenBrowser           = browser.OpenURL
+	gitLoginHTTPClient  *http.Client
+	gitLoginGHToken     = defaultGitLoginGHToken
+)
+
+func defaultGitLoginGHToken(ctx context.Context, host string) (string, error) {
+	if strings.TrimSpace(host) == "" {
+		host = model.DefaultGitHost
+	}
+	cmd := exec.CommandContext(ctx, "gh", "auth", "token", "--hostname", host)
+	cmd.Env = append(os.Environ(), "GH_PROMPT_DISABLED=1")
+	out, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+			return "", fmt.Errorf("gh auth token --hostname %s: %s", host, strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		return "", fmt.Errorf("gh auth token --hostname %s: %w", host, err)
+	}
+	tok := strings.TrimSpace(string(out))
+	if tok == "" {
+		return "", fmt.Errorf("gh auth token --hostname %s returned an empty token", host)
+	}
+	return tok, nil
+}
+
+func defaultOAuthClientID() string {
+	if v := strings.TrimSpace(os.Getenv(githubClientIDEnvVar)); v != "" {
+		return v
+	}
+	return github.DefaultOAuthClientID
+}
+
+// cmdGitLogin captures a delegated GitHub HTTPS token (via browser OAuth
+// Device Flow, local `gh auth token`, or stdin) and registers it on the
+// deployment with SignAs enabled so new pull requests and comments are
+// signed with the user's name ("Signed by <Name> (via Grain)").
+func cmdGitLogin(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+	fs := flag.NewFlagSet("grain git-login", flag.ContinueOnError)
+	host := fs.String("host", model.DefaultGitHost, "git host to authenticate against")
+	baseURL := fs.String("base-url", "", "the host's scheme://host[:port], when that is not https on the default port")
+	proxy := fs.String("proxy", "", "the http(s)://host:port proxy the host is reached through, if any")
+	scope := fs.String("scope", "", "optional owner or owner/repo scope (empty sets the deployment-wide default on -host)")
+	author := fs.String("author", "", "explicit name to sign pull requests and comments with (defaults to your GitHub profile name or login)")
+	web := fs.Bool("web", false, "authenticate in a web browser using GitHub OAuth Device Flow")
+	fromGH := fs.Bool("from-gh", false, "delegate the token from this machine's `gh auth token` login")
+	withToken := fs.Bool("with-token", false, "read the HTTPS token from standard input")
+	clientID := fs.String("client-id", defaultOAuthClientID(), "GitHub OAuth Client ID for -web device flow ($"+githubClientIDEnvVar+")")
+	scopes := fs.String("scopes", strings.Join(github.DefaultOAuthScopes, ","), "comma-separated OAuth scopes requested by -web")
+	if _, err := parseArgs(fs, args); err != nil {
+		return err
+	}
+
+	modes := 0
+	if *web {
+		modes++
+	}
+	if *fromGH {
+		modes++
+	}
+	if *withToken {
+		modes++
+	}
+	if modes > 1 {
+		return errors.New("choose at most one of -web, -from-gh, or -with-token")
+	}
+
+	var (
+		token string
+		err   error
+	)
+	switch {
+	case *withToken:
+		raw, rerr := io.ReadAll(gitLoginStdin)
+		if rerr != nil {
+			return fmt.Errorf("reading token from stdin: %w", rerr)
+		}
+		token = strings.TrimSpace(string(raw))
+		if token == "" {
+			return errors.New("no token received on standard input")
+		}
+	case *fromGH:
+		token, err = gitLoginGHToken(ctx, *host)
+		if err != nil {
+			return err
+		}
+	case *web:
+		token, err = runGitLoginDeviceFlow(ctx, *host, *baseURL, *clientID, *scopes)
+		if err != nil {
+			return err
+		}
+	default:
+		// Auto mode: prefer an active local `gh` login when available,
+		// otherwise run the interactive browser OAuth Device Flow.
+		if ghTok, ghErr := gitLoginGHToken(ctx, *host); ghErr == nil && ghTok != "" {
+			token = ghTok
+		} else {
+			token, err = runGitLoginDeviceFlow(ctx, *host, *baseURL, *clientID, *scopes)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	updated, err := c.AddDeploymentGitConnection(ctx, ui.AddTeamGitConnectionRequest{
+		Type:    "pat",
+		Host:    *host,
+		Kind:    "github",
+		BaseURL: *baseURL,
+		Proxy:   *proxy,
+		Scope:   *scope,
+		Value:   token,
+		Author:  strings.TrimSpace(*author),
+		SignAs:  true,
+		Replace: true,
+	})
+	if err != nil {
+		return err
+	}
+	if out.json {
+		out.encode(updated)
+		return nil
+	}
+
+	resolvedAuthor := strings.TrimSpace(*author)
+	if resolvedAuthor == "" {
+		if conns, cerr := c.ListDeploymentGitConnections(ctx); cerr == nil {
+			for _, conn := range conns {
+				if model.SameGitHost(conn.Host, *host, model.DefaultGitHost) && strings.EqualFold(conn.Scope, strings.TrimSpace(*scope)) {
+					if conn.Status.Author != "" {
+						resolvedAuthor = conn.Status.Author
+						break
+					}
+					if conn.Status.CommitName != "" {
+						resolvedAuthor = conn.Status.CommitName
+						break
+					}
+				}
+			}
+		}
+	}
+	if resolvedAuthor != "" {
+		fmt.Printf("Authenticated to %s as %s: this deployment now clones, pushes, and signs new pull requests and comments as %q.\n",
+			*host, resolvedAuthor, github.PullRequestSignatureLine(resolvedAuthor))
+		return nil
+	}
+	fmt.Printf("Authenticated to %s: this deployment now clones, pushes, and calls GitHub with the delegated token.\n", *host)
+	return nil
+}
+
+func runGitLoginDeviceFlow(ctx context.Context, host, baseURL, clientID, rawScopes string) (string, error) {
+	var scopeList []string
+	for _, s := range strings.Split(rawScopes, ",") {
+		if trimmed := strings.TrimSpace(s); trimmed != "" {
+			scopeList = append(scopeList, trimmed)
+		}
+	}
+	webBase := github.DeviceWebBaseURL(host, baseURL)
+	dc, err := github.RequestDeviceCode(ctx, gitLoginHTTPClient, webBase, clientID, scopeList)
+	if err != nil {
+		return "", err
+	}
+	fmt.Fprintf(os.Stderr, "! First copy your one-time code: %s\n", dc.UserCode)
+	fmt.Fprintf(os.Stderr, "- Open %s in your browser to authorize Grain...\n", dc.VerificationURI)
+	if err := gitLoginOpenBrowser(dc.VerificationURI); err != nil {
+		fmt.Fprintf(os.Stderr, "  (Could not open browser automatically: %v)\n", err)
+	}
+	return github.PollDeviceToken(ctx, gitLoginHTTPClient, webBase, clientID, dc.DeviceCode, time.Duration(dc.Interval)*time.Second)
 }
 
 func cmdDefaultModel(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {

@@ -25,8 +25,7 @@
 #   -repo     the GitHub repository whose release assets carry the image
 #             (default ai-on-gke/grain; docs/release-assets.md)
 #   -image    pull the grain image from this registry repository instead
-#             of release assets -- ghcr.io/bwsalmon/grain/grain holds the
-#             releases published before release assets
+#             of release assets (CI publishes docker.io/grainai/grain)
 #   -key      with -image, the release's cosign public key: the image's
 #             signature must verify against it (docs/image-signing.md)
 #             before anything is installed
@@ -65,10 +64,6 @@ fi
 command -v docker >/dev/null || { echo "install-grain.sh: needs docker to load the release image" >&2; exit 1; }
 
 if [ -z "$image" ]; then
-  if ! [[ "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || [[ "$repo" == *..* ]]; then
-    echo "install-grain.sh: -repo must be OWNER/NAME, not '${repo}'" >&2
-    exit 2
-  fi
   [ -z "$key" ] || { echo "install-grain.sh: -key verifies a registry signature; release assets are checked by sha256 (use -image to verify a signed registry image)" >&2; exit 2; }
   command -v curl >/dev/null || { echo "install-grain.sh: needs curl to download release assets" >&2; exit 1; }
   command -v jq >/dev/null || { echo "install-grain.sh: needs jq to read the release's images.json" >&2; exit 1; }
@@ -76,7 +71,7 @@ if [ -z "$image" ]; then
   work="$(mktemp -d)"
   trap 'rm -rf "$work"' EXIT
   curl -fsSL -o "${work}/images.json" "${base}/images.json" ||
-    { echo "install-grain.sh: ${repo} release ${version} has no images.json; a release from before release assets needs -image ghcr.io/bwsalmon/grain/grain" >&2; exit 1; }
+    { echo "install-grain.sh: ${repo} release ${version} has no images.json; pull it from the registry with -image docker.io/grainai/grain" >&2; exit 1; }
   case "$(jq -r .schema "${work}/images.json")" in
     1 | 2) ;;
     *) echo "install-grain.sh: ${version}'s images.json is not schema 1 or 2" >&2; exit 1 ;;
@@ -86,18 +81,12 @@ if [ -z "$image" ]; then
   ref="$(jq -er .images.grain.ref "${work}/images.json")"
   id="$(jq -er .images.grain.imageId "${work}/images.json")"
   case "$asset" in */* | .* | "") echo "install-grain.sh: unsafe asset name '${asset}'" >&2; exit 1 ;; esac
-  [[ "$asset" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*\.tar\.gz$ ]] || { echo "install-grain.sh: unsafe asset name '${asset}'" >&2; exit 1; }
-  [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || { echo "install-grain.sh: ${version}'s images.json names no valid sha256 ('${sum}')" >&2; exit 1; }
-  [[ "$id" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "install-grain.sh: ${version}'s images.json names no valid imageId ('${id}')" >&2; exit 1; }
-  # A local <namespace>/<image>:<tag>: one with a registry host is never
-  # what release assets load, and docker would pull it.
-  if ! [[ "$ref" =~ ^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)+:[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]] ||
-    [[ "${ref%%/*}" == *[.:]* || "${ref%%/*}" == localhost ]]; then
-    echo "install-grain.sh: ${version}'s images.json names '${ref}', which is not a local image ref" >&2
-    exit 1
-  fi
   # Schema 2: the asset lives on the immutable release the image names.
   holder="$(jq -r --arg v "$version" '.images.grain.release // $v' "${work}/images.json")"
+  # The contract's own pattern, exactly, so a manifest cannot point the
+  # download outside ${repo} (sha-x/../../<owner>/<repo>/...).
+  [[ "$holder" =~ ^(sha-[0-9a-f]{12}|v[0-9]+\.[0-9]+\.[0-9]+)$ ]] || [ "$holder" = "$version" ] ||
+    { echo "install-grain.sh: ${version}'s images.json names '${holder}' as the release holding its grain image" >&2; exit 1; }
   [[ "$holder" =~ ^(sha-[0-9a-f]{12}|v[0-9]+\.[0-9]+\.[0-9]+)$ ]] || { echo "install-grain.sh: ${version} names '${holder}' as the release holding ${asset}" >&2; exit 1; }
   base="https://github.com/${repo}/releases/download/${holder}"
   curl -fsSL -o "${work}/${asset}" "${base}/${asset}"
@@ -111,6 +100,7 @@ if [ -z "$image" ]; then
   [ "$loaded" = "$id" ] || { echo "install-grain.sh: ${ref} is ${loaded} after loading, not ${id}" >&2; exit 1; }
   pinned="$ref"
   echo "image: ${ref} (${id}, ${asset} sha256 ${sum})"
+  echo "signature: NOT verified (release assets are checked against images.json's sha256, not signed; use -image and -key to verify a signed registry image)" >&2
 else
   docker pull -q "${image}:${version}" >/dev/null
   pinned="$(docker inspect --format '{{index .RepoDigests 0}}' "${image}:${version}")"

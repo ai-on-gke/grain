@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -120,8 +121,12 @@ func (p *printer) detail(d ui.TaskDetail) {
 			if tr.Reason != "" {
 				line += fmt.Sprintf(" (%s)", tr.Reason)
 			}
-			if tr.Detail != "" {
-				line += "; " + tr.Detail
+			detail := tr.Detail
+			if detail == "" && (tr.OldOwner != "" || tr.NewOwner != "") {
+				detail = fmt.Sprintf("%s -> %s", tr.OldOwner, tr.NewOwner)
+			}
+			if detail != "" {
+				line += "; " + detail
 			}
 			fmt.Println(line)
 		}
@@ -165,6 +170,14 @@ func attemptLine(a ui.Attempt) string {
 	case a.Model != "":
 		line += ", on " + a.Model
 	}
+	// The host its agent CLI ran on, by the name the run recorded --
+	// marked when that host has since been deleted from the registry.
+	if a.Hostd != nil && a.Hostd.Hostd != "" {
+		line += ", host " + a.Hostd.Hostd
+		if a.Hostd.Deleted {
+			line += " (deleted)"
+		}
+	}
 	return line
 }
 
@@ -183,13 +196,41 @@ func taskLine(t ui.Task) string {
 	if repo == "" {
 		repo = "-"
 	}
-	return fmt.Sprintf("%-6s %-*s %-24s %s", t.ID, stateColumn, t.State, repo, t.Title)
+	title := t.Title
+	if waiting := waitingOn(t); len(waiting) > 0 {
+		marker := fmt.Sprintf("(waits on %s)", strings.Join(waiting, ", "))
+		if title == "" {
+			title = marker
+		} else {
+			title += " " + marker
+		}
+	}
+	return fmt.Sprintf("%-6s %-*s %-24s %s", t.ID, stateColumn, t.State, repo, title)
+}
+
+func waitingOn(t ui.Task) []string {
+	if t.State != model.StateQueued {
+		return nil
+	}
+	if len(t.BlockedBy) > 0 {
+		return t.BlockedBy
+	}
+	var out []string
+	for _, dep := range t.DependsOn {
+		if st := t.DependsOnStates[dep]; st != "" && st != model.StateClosed {
+			out = append(out, dep)
+		}
+	}
+	return out
 }
 
 func taskBlock(t ui.Task) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s %s\n", t.ID, t.Title)
 	fmt.Fprintf(&b, "state:      %s\n", t.State)
+	if t.Owner != "" {
+		fmt.Fprintf(&b, "owner:      %s\n", t.Owner)
+	}
 	if t.Paused != nil {
 		paused := fmt.Sprintf("by %s at %s (was %s)", pausedBy(t.Paused), t.Paused.At.Format(time.RFC3339), t.Paused.FromState)
 		switch {
@@ -212,6 +253,24 @@ func taskBlock(t ui.Task) string {
 	if len(t.Reads) > 0 {
 		fmt.Fprintf(&b, "reads:      %s\n", strings.Join(t.Reads, ", "))
 	}
+	if len(t.Context) > 0 {
+		items := make([]string, 0, len(t.Context))
+		for _, c := range t.Context {
+			label := c.Path
+			if c.Placement == "read" && c.Repo != "" {
+				label = c.Repo + ":" + c.Path
+			}
+			if c.Rev != "" {
+				rev := c.Rev
+				if len(rev) > 12 {
+					rev = rev[:12]
+				}
+				label += "@" + rev
+			}
+			items = append(items, label)
+		}
+		fmt.Fprintf(&b, "context:    %s\n", strings.Join(items, ", "))
+	}
 	if len(t.Writes) > 0 {
 		// The branch beside each repo, since it is half of what the
 		// declaration says: a repo listed here with no branch shown would
@@ -233,6 +292,17 @@ func taskBlock(t ui.Task) string {
 	// readable only with -json.
 	if t.DeferredUntil != nil {
 		fmt.Fprintf(&b, "deferred until: %s\n", t.DeferredUntil.Format(time.RFC3339))
+	}
+	if len(t.DependsOn) > 0 {
+		deps := make([]string, len(t.DependsOn))
+		for i, dep := range t.DependsOn {
+			if st := t.DependsOnStates[dep]; st != "" {
+				deps[i] = fmt.Sprintf("%s (%s)", dep, st)
+			} else {
+				deps[i] = dep
+			}
+		}
+		fmt.Fprintf(&b, "depends on: %s\n", strings.Join(deps, ", "))
 	}
 	priority := t.Priority
 	if priority <= 0 {
@@ -271,6 +341,9 @@ func taskBlock(t ui.Task) string {
 	}
 	if t.Issue > 0 {
 		fmt.Fprintf(&b, "issue:      #%d\n", t.Issue)
+	}
+	if t.ExternalRef != "" {
+		fmt.Fprintf(&b, "external ref: %s\n", t.ExternalRef)
 	}
 	if t.PullRequest != "" {
 		fmt.Fprintf(&b, "pull request: %s\n", t.PullRequest)

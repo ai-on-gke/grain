@@ -1071,8 +1071,10 @@ func TestExternalAgentTokenOwnerAttributionOnJournalAuditAndTaskAuthor(t *testin
 	}
 
 	// A write to the task leaves an audit note naming the owner, and the
-	// journal line says the same.
-	if rec := fileAsExternal(t, srv, issued.Token, "/api/tasks/"+task.ID+"/comments", `{"body":"hello"}`, nil); rec.Code >= 300 {
+	// journal line says the same -- including on refused calls and with
+	// client=<filed_via> when X-Grain-Client is present.
+	if rec := fileAsExternal(t, srv, issued.Token, "/api/tasks/"+task.ID+"/comments", `{"body":"hello"}`,
+		map[string]string{"X-Grain-Client": "codex-cli/0.9.2 session=s9"}); rec.Code >= 300 {
 		t.Fatalf("commenting answered %d: %s", rec.Code, rec.Body)
 	}
 	comments, err := client.Store.Comments(ctx, task.ID)
@@ -1094,8 +1096,15 @@ func TestExternalAgentTokenOwnerAttributionOnJournalAuditAndTaskAuthor(t *testin
 	if !said {
 		t.Errorf("the agent's comment is not attributed on behalf of jane@example.com: %+v", comments)
 	}
-	if !strings.Contains(logBuf.String(), "{agent, external:jane-laptop on behalf of jane@example.com} POST /api/tasks") {
-		t.Errorf("journal does not name the owner:\n%s", logBuf.String())
+	journal := logBuf.String()
+	for _, want := range []string{
+		"refused {agent, external:jane-laptop on behalf of jane@example.com} POST /api/tasks",
+		"{agent, external:jane-laptop on behalf of jane@example.com} POST /api/tasks",
+		`client="codex-cli/0.9.2 session=s9"`,
+	} {
+		if !strings.Contains(journal, want) {
+			t.Errorf("journal missing %q:\n%s", want, journal)
+		}
 	}
 }
 
@@ -1370,7 +1379,6 @@ func TestExternalAgentEscalationRailsAndTokenRotationOwnerGuard(t *testing.T) {
 		{ID: "tpl-net-open", Name: "net-open", Title: "open net", Target: &widgets, NetworkAccess: model.NetworkOpen},
 		{ID: "tpl-durable", Name: "durable", Title: "durable", Target: &widgets, KeepRunning: true},
 		{ID: "tpl-prio", Name: "prio", Title: "high prio", Target: &widgets, Priority: &highPrio},
-		{ID: "tpl-hostd", Name: "hostd", Title: "pinned hostd", Target: &widgets, Hostd: "workstation-1"},
 		{ID: "tpl-interactive", Name: "interactive", Title: "interactive", Target: &widgets, Interactive: true},
 	} {
 		if err := client.Store.PutTemplate(ctx, tmpl); err != nil {
@@ -1398,8 +1406,8 @@ func TestExternalAgentEscalationRailsAndTokenRotationOwnerGuard(t *testing.T) {
 	}
 
 	// #XC-17 & parity rails: priority > 5, keepRunning, creator, interactive,
-	// fixesBaseBranch, hostd routing, targetless template without repo, and
-	// escalating templates are refused with 403.
+	// fixesBaseBranch, targetless template without repo, and escalating
+	// templates are refused with 403.
 	for _, tc := range []struct {
 		method, path, body string
 	}{
@@ -1410,17 +1418,29 @@ func TestExternalAgentEscalationRailsAndTokenRotationOwnerGuard(t *testing.T) {
 		{http.MethodPost, "/api/tasks", `{"title":"x","repo":"acme/widgets","interactive":true}`},
 		{http.MethodPost, "/api/tasks", `{"title":"x","repo":"acme/widgets","fixesBaseBranch":true}`},
 		{http.MethodPatch, "/api/tasks/200", `{"fixesBaseBranch":true}`},
-		{http.MethodPost, "/api/tasks", `{"title":"x","repo":"acme/widgets","hostd":"workstation-1"}`},
-		{http.MethodPut, "/api/tasks/200/hostd", `{"hostd":"workstation-1"}`},
 		{http.MethodPost, "/api/tasks", `{"title":"x","templateId":"tpl-targetless"}`},
 		{http.MethodPost, "/api/tasks", `{"title":"x","templateId":"tpl-net-open"}`},
 		{http.MethodPost, "/api/tasks", `{"title":"x","templateId":"tpl-durable"}`},
 		{http.MethodPost, "/api/tasks", `{"title":"x","templateId":"tpl-prio"}`},
-		{http.MethodPost, "/api/tasks", `{"title":"x","templateId":"tpl-hostd"}`},
 		{http.MethodPost, "/api/tasks", `{"title":"x","templateId":"tpl-interactive"}`},
 	} {
 		if code, resp := call(janeIssued.Token, tc.method, tc.path, tc.body); code != http.StatusForbidden {
 			t.Errorf("%s %s %s: status %d (%s), want 403", tc.method, tc.path, tc.body, code, resp)
+		}
+	}
+
+	// A task has no hostd at all (docs/host-placement.md): naming one is
+	// refused for everybody, an external agent included, never routed.
+	for _, tc := range []struct{ method, path, body string }{
+		{http.MethodPost, "/api/tasks", `{"title":"x","repo":"acme/widgets","hostd":"workstation-1"}`},
+		{http.MethodPut, "/api/tasks/200/hostd", `{"hostd":"workstation-1"}`},
+	} {
+		code, resp := call(janeIssued.Token, tc.method, tc.path, tc.body)
+		if code != http.StatusBadRequest && code != http.StatusForbidden {
+			t.Errorf("%s %s %s: status %d (%s), want it refused", tc.method, tc.path, tc.body, code, resp)
+		}
+		if code == http.StatusBadRequest && !strings.Contains(resp, "not the task") {
+			t.Errorf("%s %s: refused with %q, want it to say hostd is set on the connection or server", tc.method, tc.path, resp)
 		}
 	}
 

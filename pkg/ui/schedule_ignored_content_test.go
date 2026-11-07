@@ -38,7 +38,7 @@ func scheduleTemplate(t *testing.T, c *ui.Client, ctx context.Context) ui.Templa
 	tmpl, err := c.CreateTemplate(ctx, ui.CreateTemplateRequest{
 		Name: "Dependency bump", Title: "Bump dependencies", Description: "Bump every dependency.",
 		AutoMerge:    true,
-		Capabilities: []string{"read-issues"},
+		Capabilities: []string{"console"},
 		Reads:        []string{"acme/shared-lib"},
 		Writes:       []ui.WriteTarget{{Repo: "acme/widgets-state", Base: "deploy"}},
 	})
@@ -135,7 +135,7 @@ func TestCreateScheduleAllowsContentIdenticalToItsTemplate(t *testing.T) {
 	sched, err := c.CreateSchedule(ctx, ui.CreateScheduleRequest{
 		TemplateID: tmpl.ID, Repo: "acme/widgets", Recurrence: everyDay,
 		Title: "Bump dependencies", Description: "Bump every dependency.", AutoMerge: true,
-		Capabilities: []string{"read-issues"}, Reads: []string{"acme/shared-lib"},
+		Capabilities: []string{"console"}, Reads: []string{"acme/shared-lib"},
 		Writes: []ui.WriteTarget{{Repo: "acme/widgets-state", Base: "deploy"}},
 	})
 	if err != nil {

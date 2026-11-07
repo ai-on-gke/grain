@@ -37,6 +37,7 @@ describe("CapabilityAudit", () => {
           grant: "host-script#host-script",
           attemptId: "e1-12-2-0",
           at: "2026-10-23T18:00:00Z",
+          hostd: "h2",
           record: {
             time: "2026-10-23T18:00:00Z",
             attempt_id: "e1-12-2-0",
@@ -66,6 +67,7 @@ describe("CapabilityAudit", () => {
       await screen.findByText('["--dry-run","two words",""]'),
     ).toBeInTheDocument();
     expect(screen.getByText("deploy")).toBeInTheDocument();
+    expect(screen.getByText("host h2")).toBeInTheDocument();
     expect(screen.getByText("exit_code")).toBeInTheDocument();
     expect(screen.queryByText("attempt_id")).not.toBeInTheDocument();
     expect(screen.getByText(/left out 3 further/)).toBeInTheDocument();

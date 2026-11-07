@@ -48,8 +48,15 @@ const DirEnv = "GRAIN_HOST_SCRIPT_DIR"
 
 // ArgvType is the exec request's content type: one argument per line,
 // each hex-encoded, so any byte -- a newline, a quote -- is carried
-// without escaping and arrives exactly as it was given.
+// without escaping and arrives exactly as it was given. When standard
+// input is forwarded (--stdin), a "---" line ends the arguments and the
+// rest of the body is the raw stdin bytes.
 const ArgvType = "text/vnd.grain.argv-hex"
+
+// StdinSeparator is the line in an ArgvType request body that separates
+// hex-encoded argv lines from raw stdin bytes. Because '-' is not a hex
+// digit, no encoded argument line can equal it.
+const StdinSeparator = "---"
 
 // ExitProtocol is the status of a call grain could not make or answer:
 // no such grant, a refused token, an endpoint that is gone.
@@ -60,6 +67,7 @@ type Descriptor struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Usage       string `json:"usage,omitempty"`
+	Approve     bool   `json:"approve,omitempty"`
 	Port        int    `json:"port"`
 	AttemptID   string `json:"attempt_id"`
 	Token       string `json:"token"`
@@ -72,16 +80,21 @@ func (d Descriptor) URL() string {
 
 // Help is what `grain host-script <name> --grain-help` prints.
 func (d Descriptor) Help() string {
-	help := "Usage: grain host-script " + d.Name + " [arguments...]\n\n" + d.Description + "\n"
+	help := "Usage: grain host-script " + d.Name + " [arguments...]\n" +
+		"       grain host-script --stdin " + d.Name + " [arguments...]\n\n" + d.Description + "\n"
 	if d.Usage != "" {
 		help += "\n" + strings.TrimRight(d.Usage, "\n") + "\n"
 	}
-	return help + "\nRuns on grain's side, not in this sandbox; arguments are passed through exactly, without a shell, and are logged.\n"
+	help += "\nRuns on grain's side, not in this sandbox; arguments are passed through exactly, without a shell, and are logged. Pass --stdin before the script name to forward standard input.\n"
+	if d.Approve {
+		help += "Each call waits for a person's approval before it runs.\n"
+	}
+	return help
 }
 
 var scriptName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 
-const usage = `usage: grain host-script <name> [arguments...]
+const usage = `usage: grain host-script [--stdin] <name> [arguments...]
        grain host-script <name> --grain-help   print the script's description and usage
        grain host-script --help <name>         the same
        grain host-script --list                list the host scripts granted to this sandbox
@@ -94,11 +107,16 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	if dir == "" {
 		dir = Dir
 	}
-	return Run(dir, args, stdout, stderr)
+	return RunWithStdin(dir, args, os.Stdin, stdout, stderr)
 }
 
 // Run is Main reading descriptors from dir.
 func Run(dir string, args []string, stdout, stderr io.Writer) int {
+	return RunWithStdin(dir, args, os.Stdin, stdout, stderr)
+}
+
+// RunWithStdin is Run reading standard input from stdin when --stdin is given.
+func RunWithStdin(dir string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, usage)
 		return 2
@@ -118,6 +136,15 @@ func Run(dir string, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stdout, d.Help())
 		return 0
 	}
+	forwardStdin := false
+	if args[0] == "--stdin" || args[0] == "-stdin" {
+		forwardStdin = true
+		args = args[1:]
+		if len(args) == 0 {
+			fmt.Fprint(stderr, usage)
+			return 2
+		}
+	}
 	d, code := load(dir, args[0], stderr)
 	if d == nil {
 		return code
@@ -126,7 +153,15 @@ func Run(dir string, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stdout, d.Help())
 		return 0
 	}
-	return Call(*d, args[1:], stdout, stderr)
+	var callStdin io.Reader
+	if forwardStdin {
+		if stdin == nil {
+			callStdin = strings.NewReader("")
+		} else {
+			callStdin = stdin
+		}
+	}
+	return CallWithStdin(*d, args[1:], callStdin, stdout, stderr)
 }
 
 func load(dir, name string, stderr io.Writer) (*Descriptor, int) {
@@ -177,11 +212,21 @@ func list(dir string, stdout, stderr io.Writer) int {
 // frames to stdout and "e <bytes>" to stderr as they arrive, then the
 // status of "x <status>". A call with no exit frame is ExitProtocol.
 func Call(d Descriptor, argv []string, stdout, stderr io.Writer) int {
-	var body strings.Builder
+	return CallWithStdin(d, argv, nil, stdout, stderr)
+}
+
+// CallWithStdin is Call, also forwarding stdin when stdin is non-nil.
+func CallWithStdin(d Descriptor, argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	var head strings.Builder
 	for _, a := range argv {
-		body.WriteString(hex.EncodeToString([]byte(a)) + "\n")
+		head.WriteString(hex.EncodeToString([]byte(a)) + "\n")
 	}
-	req, err := http.NewRequest(http.MethodPost, d.URL(), strings.NewReader(body.String()))
+	var body io.Reader = strings.NewReader(head.String())
+	if stdin != nil {
+		head.WriteString(StdinSeparator + "\n")
+		body = io.MultiReader(strings.NewReader(head.String()), stdin)
+	}
+	req, err := http.NewRequest(http.MethodPost, d.URL(), body)
 	if err != nil {
 		fmt.Fprintf(stderr, "grain host-script: %s: %v\n", d.Name, err)
 		return ExitProtocol

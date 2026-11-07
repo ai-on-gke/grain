@@ -336,3 +336,42 @@ func TestListHostdsShowsTheSharedTokensHostd(t *testing.T) {
 		t.Errorf("with no shared token, GET /api/hostds = %s, want no shared row", rec.Body.String())
 	}
 }
+
+// GET /api/tasks/{id}/attempts/{number}/capability-audit carries each
+// record's hostd name when its capability server ran on a grain hostd,
+// so the UI and API audit match task_run_capability_audit.hostd.
+func TestAttemptCapabilityAuditIncludesHostd(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	task, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "host-script on h2", NoRepo: true, Approved: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	if err := client.Store.StartRun(ctx, model.Run{
+		ID: task.ID + "-1", TaskID: task.ID, Attempt: 1, StartedAt: now,
+	}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Store.AppendRunCapabilityAudit(ctx, task.ID+"-1", []model.CapabilityAuditRecord{
+		{Grant: "https://grain.dev/capabilities/host-script#host-script", AttemptID: "grain-" + task.ID + "-1-0", At: now, Hostd: "h2", Record: `{"script":"whoami","exit_code":0}`},
+		{Grant: "https://grain.dev/capabilities/config-map#config-map", AttemptID: "grain-" + task.ID + "-1-1", At: now, Record: `{"map":"env"}`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rec := do(t, srv, http.MethodGet, "/api/tasks/"+task.ID+"/attempts/1/capability-audit", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET capability-audit = %d %s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Records []ui.CapabilityAuditEntry `json:"records"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Records) != 2 || got.Records[0].Hostd != "h2" || got.Records[1].Hostd != "" {
+		t.Fatalf("capability-audit records = %+v, want [hostd=h2, hostd='']", got.Records)
+	}
+}

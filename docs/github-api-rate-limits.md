@@ -62,12 +62,13 @@ JSON that has not changed.
 
 Beside that, per live run (up to `max_workers`, six on this deployment):
 
-- for a task without the `grain-ci` capability, `wait_for_checks` reads
+- for a task without `https://grain.dev/capabilities/grain#ci` (formerly
+  `grain-ci`, retired in schema migration 96), `wait_for_checks` reads
   the branch head once and then the check runs
   every fifteen seconds until CI settles. grain's own CI takes about nine
   minutes, so that is roughly 36 requests a wait, and the tool's ceiling
   of an hour is 240.
-- for a task with `grain-ci`, `wait_for_checks` starts and polls Grain CI
+- for a task with `…/grain#ci`, `wait_for_checks` starts and polls Grain CI
   through the daemon and makes no GitHub Checks API requests.
 - a wait that ends red then reads the failing jobs' logs, up to five
   times over fifty seconds (`mcp.jobLogRetryDelays`), each attempt

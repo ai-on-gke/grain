@@ -1232,6 +1232,69 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     await expect(chip).not.toHaveClass(/MuiChip-colorWarning/);
   });
 
+  test("5d2. A board narrowed by a blocked or held value that does not exist says so on its chip", async ({
+    page,
+  }) => {
+    // docs/test-runs/2026-11-06-saved-boards-and-visualizations.md, bug
+    // 1: `blocked:any:true` drew "Blocked is any of Not blocked" -- the
+    // label of the value it is *not* -- over a Kanban board with no
+    // cards, and `humanReview:any:product_decision` (the category is
+    // product-decision) read like the real thing over an empty board.
+    const stamp = Date.now();
+    const board = await seedOne(page, "/api/boards", {
+      name: `WT Unknown Blocked ${stamp}`,
+      kind: "kanban",
+      query: "f=blocked:any:true",
+    });
+    seededBoards.push(board.id);
+
+    await page.goto(`/boards/${board.id}`);
+    const chip = page.locator(".narrowing-chips .MuiChip-root").first();
+    await expect(chip).toHaveText("Blocked is any of “true” (unknown)", {
+      ignoreCase: true,
+    });
+    await expect(chip).toHaveClass(/MuiChip-colorWarning/);
+    await expect(chip).toHaveAttribute(
+      "title",
+      /“true” is not a value Blocked has/,
+    );
+    await expect(page.locator(".board-card")).toHaveCount(0);
+
+    // The value the vocabulary has is known, labelled and matched: the
+    // demo's task 11 waits on task 8.
+    await page.goto(`/boards/${board.id}?f=blocked:any:yes`);
+    await expect(chip).toHaveText("Blocked is any of Blocked", {
+      ignoreCase: true,
+    });
+    await expect(chip).not.toHaveClass(/MuiChip-colorWarning/);
+    await expect(page.locator(".board-card").first()).toBeVisible();
+
+    await page.goto(`/boards/${board.id}?f=humanReview:any:product_decision`);
+    await expect(chip).toHaveText(
+      "Human review is any of “product_decision” (unknown)",
+      { ignoreCase: true },
+    );
+    await expect(chip).toHaveClass(/MuiChip-colorWarning/);
+
+    await page.goto(`/boards/${board.id}?f=origin:any:robot`);
+    await expect(chip).toHaveText("Origin is any of “robot” (unknown)", {
+      ignoreCase: true,
+    });
+    await expect(chip).toHaveClass(/MuiChip-colorWarning/);
+    await expect(page.locator(".board-card")).toHaveCount(0);
+
+    await page.goto(`/boards/${board.id}?f=origin:any:imported`);
+    await expect(chip).toHaveText("Origin is any of Imported issue", {
+      ignoreCase: true,
+    });
+    await expect(chip).not.toHaveClass(/MuiChip-colorWarning/);
+    await expect(
+      page.locator(".board-card", {
+        hasText: "[#42] Search results drop the last page",
+      }),
+    ).toBeVisible();
+  });
+
   test("4b. Back from a reloaded task returns to the board it was opened from", async ({
     page,
   }) => {
@@ -1433,6 +1496,23 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     const note = page.locator(".board-hidden-note");
     await expect(note).toContainText("Asked to submit");
     await expect(note).not.toContainText(/[(,] Asked[,)]|\(Asked[,)]/);
+
+    // 2026-11-06 walkthrough, bug 2: narrowed to the state no column
+    // collects, the board counted those tasks in the note and, under it,
+    // said none matched at all.
+    await page.goto(`/boards/${board.id}?f=state:any:awaiting_submit`);
+    await expect(note).toContainText(
+      /\d+ tasks? in no column \(Asked to submit\)/,
+    );
+    await expect(page.locator(".board-card")).toHaveCount(0);
+    await expect(
+      page.getByText("No tasks match this search and these filters."),
+    ).toHaveCount(0);
+    await expect(
+      page.getByText(
+        "None of the tasks this search and these filters match is in one of these columns.",
+      ),
+    ).toBeVisible();
   });
 
   test("8. Deletion safety and throwaway cleanup", async ({ page }) => {
@@ -1574,5 +1654,99 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     expect(layout.docScrollWidth).toBeLessThanOrEqual(layout.docClientWidth);
     expect(layout.titleWidth).toBeGreaterThanOrEqual(90);
     await page.unroute("**/api/tasks**");
+  });
+
+  test("5e. A list board ordered by state keeps both asked states together, ahead of failed", async ({
+    page,
+  }) => {
+    // 2026-11-04 walkthrough: sorting by state followed model.StateOf's
+    // precedence, which puts failed between the two asked states, so a
+    // failed task split the Asked group the sidebar and the Kanban board
+    // show as one. The demo seeds no failed task (failed is what a run
+    // ends in, and the demo runs none), so the task list here carries
+    // one more: a copy of an asked task, reported as failed. A copy
+    // rather than one of the demo's own tasks turned failed, since the
+    // specs before this one in the same worker move and close those.
+    const board = await seedOne(page, "/api/boards", {
+      name: `WT State Order ${Date.now()}`,
+      kind: "list",
+      query: "sort=state:asc&f=state:any:awaiting_reply|awaiting_submit|failed",
+    });
+    seededBoards.push(board.id);
+    await page.route(/\/api\/tasks(\?.*)?$/, async (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      const res = await route.fetch();
+      const body = await res.json();
+      const list = Array.isArray(body) ? body : body.tasks;
+      const asked = list.find((t) => t.state === "awaiting_submit");
+      if (asked)
+        list.push({
+          ...asked,
+          id: "99601",
+          title: "WT stub failed task",
+          state: "failed",
+        });
+      await route.fulfill({ response: res, json: body });
+    });
+    try {
+      await page.goto(`/boards/${board.id}`);
+      await expect(page.locator(".task-row .badge-failed")).toHaveCount(1);
+      const states = await page
+        .locator(".task-row")
+        .evaluateAll((rows) =>
+          rows.map(
+            (r) =>
+              (r
+                .querySelector(".badge")
+                ?.className.match(
+                  /badge-(awaiting_reply|awaiting_submit|failed)/,
+                ) || [])[1],
+          ),
+        );
+      const firstFailed = states.indexOf("failed");
+      expect(states.lastIndexOf("awaiting_reply")).toBeLessThan(firstFailed);
+      expect(states.lastIndexOf("awaiting_submit")).toBeLessThan(firstFailed);
+      expect(states.at(-1)).toBe("failed");
+    } finally {
+      await page.unroute(/\/api\/tasks(\?.*)?$/);
+    }
+  });
+
+  test("6e. A dashboard's running count is named once, not by its mark as well", async ({
+    page,
+  }) => {
+    // 2026-11-04 walkthrough: the grain mark the running tile draws was
+    // labelled "Running" beside the column's own title, so a screen
+    // reader heard "2 Running Running".
+    const board = await seedOne(page, "/api/boards", {
+      name: `WT Counts ${Date.now()}`,
+      kind: "panels",
+      query: "f=repo:any:acme/widgets",
+      panels: [{ kind: "states" }],
+    });
+    seededBoards.push(board.id);
+    await page.goto(`/boards/${board.id}`);
+    const running = page.locator("a.panel-state", { hasText: "Running" });
+    await expect(running.locator(".grain-mark-sheet, canvas")).toHaveCount(1);
+    await expect(running).toHaveAccessibleName(/^\d+ Running$/);
+    // The mark costs the tiles without one no extra gap: every count's
+    // words start the same distance from its tile's left edge.
+    const offsets = await page.locator("a.panel-state").evaluateAll((tiles) =>
+      tiles
+        .filter((a) => !a.querySelector(".panel-state-mark"))
+        .map((a) => {
+          const title = a.querySelector(".panel-state-title");
+          const words = [...title.childNodes].find(
+            (n) => n.nodeType === Node.TEXT_NODE && n.textContent.trim(),
+          );
+          const range = document.createRange();
+          range.selectNodeContents(words);
+          return Math.round(
+            range.getBoundingClientRect().left - a.getBoundingClientRect().left,
+          );
+        }),
+    );
+    expect(offsets.length).toBeGreaterThan(3);
+    expect(new Set(offsets).size).toBe(1);
   });
 });

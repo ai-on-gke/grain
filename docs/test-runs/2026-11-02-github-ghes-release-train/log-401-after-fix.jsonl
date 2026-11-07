@@ -1,0 +1,7 @@
+{"t": "05:20:22", "method": "GET", "path": "/api/v3/repos/acme/widgets/branches/feature", "status": 200}
+{"t": "05:20:22", "method": "GET", "path": "/api/v3/repos/acme/widgets/pulls?state=open&head=acme%3Afeature", "status": 200}
+{"t": "05:20:22", "method": "GET", "path": "/api/v3/repos/acme/widgets/pulls/7", "status": 200}
+{"t": "05:20:22", "method": "GET", "path": "/api/v3/repos/acme/widgets/pulls/7/comments?per_page=100", "status": 200}
+{"t": "05:20:22", "method": "POST", "path": "/api/graphql", "status": 401, "note": "forced 401"}
+{"t": "05:20:22", "method": "GET", "path": "/api/v3/repos/acme/widgets", "status": 200}
+{"t": "05:20:22", "method": "GET", "path": "/api/v3/repos/acme/widgets/commits/1111111111111111111111111111111111111111/check-runs?per_page=100", "status": 200}

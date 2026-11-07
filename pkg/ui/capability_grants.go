@@ -77,7 +77,7 @@ func (c *Client) ListCapabilityMethods(ctx context.Context) []CapabilityMethod {
 		}
 	}
 	configured, _ = intree.EnsureBuiltins(configured)
-	statuses := grainserver.Statuses()
+	statuses := c.inProcessStatuses()
 	if c.Config.CapabilityServers != nil {
 		for _, s := range c.Config.CapabilityServers.Statuses() {
 			if grainserver.IsInProcessID(s.ID) {
@@ -192,7 +192,7 @@ func (c *Client) CheckCapabilityGrants(ctx context.Context, grants []GrantReques
 		}
 		grantLookup := lookup
 		if grantLookup == nil && grainserver.IsInProcessGrant(s) {
-			grantLookup = grainserver.Lookup(nil)
+			grantLookup = grainserver.LookupWithRepoCredentials(nil, c.configuredGitCredentials())
 		}
 		if grantLookup != nil {
 			if _, err := grantLookup(protocolCapabilityID(s)); err != nil {
@@ -202,7 +202,7 @@ func (c *Client) CheckCapabilityGrants(ctx context.Context, grants []GrantReques
 			check.Unchecked = true
 		}
 		if check.Unchecked {
-			if err := model.CheckCapabilityGrantSyntax(s); err != nil {
+			if err := model.CheckCapabilityGrantArgsOffline(s); err != nil {
 				check.Error, check.Fields = err.Error(), grantFieldErrors(err)
 			} else {
 				check.Recorded = s
@@ -309,6 +309,9 @@ func (c *Client) SetCapabilityGrant(ctx context.Context, id string, req GrantReq
 		}
 		if !placed {
 			kept = append(kept, model.Grant{Capability: normalized, Via: model.GrantByLabel})
+		}
+		if _, _, err := model.GitCredentialOverride(kept); err != nil {
+			return validationErrorf("%w", err)
 		}
 		task.Grants = kept
 		return nil

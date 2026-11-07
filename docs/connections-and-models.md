@@ -424,6 +424,17 @@ Some limits:
   file applied from the state repository sets it with the authority of
   whoever may write that repository, and the save-time check doesn't run.
 
+## A connection's host
+
+A connection may name the host its agent CLI runs on
+(`hostd`, Settings -> Models -> **Run on host**): a host's name or a
+`label=value` selector, with an optional ordered `hostdFallback`. A run on
+it starts its CLI there, counts against that host's capacity, and keys a
+usage limit on an ambient credential to it. While the host is not
+connected the connection is unavailable and its runs wait; nothing falls
+back unless `hostdFallback` says where. No task, template or repository
+chooses a host. See [host-placement.md](host-placement.md).
+
 ## An Antigravity connection's model-turn deadline
 
 agy retries provider errors (429, 503, `RESOURCE_EXHAUSTED`) without saying so

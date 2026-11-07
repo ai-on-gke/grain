@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/k8s"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/registryauth"
@@ -143,7 +144,7 @@ func chooseSandboxImage(cfg Config) sandboxImageChoice {
 			log: fmt.Sprintf("grain daemon: sandbox image %s (named by -granule-create-arg, and the same one this build is stamped for)",
 				pinned),
 		}
-	case pinned != "" && imageRepository(pinned) == imageRepository(DefaultSandboxImage):
+	case pinned != "" && installtrack.ResolveLegacyRepository(imageRepository(pinned)) == installtrack.ResolveLegacyRepository(imageRepository(DefaultSandboxImage)):
 		return sandboxImageChoice{
 			image:  DefaultSandboxImage,
 			source: sandboxImageAdopted,
@@ -201,7 +202,7 @@ func withSandboxImageArg(args []string, image string) []string {
 }
 
 // imageRepository is an image reference without its tag or digest --
-// "ghcr.io/bwsalmon/grain/guest" for both of that repository's sha- tags.
+// "docker.io/grainai/sandbox" for both of that repository's sha- tags.
 // It is how chooseSandboxImage tells "another tag of the image this build
 // is stamped for" from "an image published somewhere else entirely".
 //
@@ -363,7 +364,7 @@ func uiSandboxImage(cfg Config) *ui.SandboxImage {
 		return &ui.SandboxImage{
 			Image:    firstNonEmpty(custom, stock),
 			Expected: DefaultK8sSandboxImage,
-			Pinned:   custom == "" && cfg.ContainerImage != "" && cfg.ContainerImage != DefaultK8sSandboxImage && cfg.ContainerImage != model.DefaultK8sSandboxImage,
+			Pinned:   custom == "" && cfg.ContainerImage != "" && cfg.ContainerImage != DefaultK8sSandboxImage && cfg.ContainerImage != model.DefaultK8sSandboxImage && cfg.ContainerImage != model.LegacyDefaultK8sSandboxImage,
 		}
 	default:
 		return nil
@@ -426,6 +427,9 @@ func stockSandboxImageFor(cfg Config) string {
 	case cfg.GranuleSandboxes:
 		return chooseSandboxImage(cfg).image
 	case cfg.ContainerSandboxes:
+		if cfg.ContainerImage == model.LegacyDefaultK8sSandboxImage {
+			return DefaultK8sSandboxImage
+		}
 		return firstNonEmpty(cfg.ContainerImage, DefaultK8sSandboxImage)
 	case cfg.K8sSandboxes:
 		return EffectiveK8sSandboxImage(cfg)
@@ -465,7 +469,7 @@ func customSandboxImageFor(cfg Config) string {
 			return ""
 		}
 	case cfg.ContainerSandboxes:
-		if cfg.ContainerImage != "" && cfg.ContainerImage != DefaultK8sSandboxImage && cfg.ContainerImage != model.DefaultK8sSandboxImage {
+		if cfg.ContainerImage != "" && cfg.ContainerImage != DefaultK8sSandboxImage && cfg.ContainerImage != model.DefaultK8sSandboxImage && cfg.ContainerImage != model.LegacyDefaultK8sSandboxImage {
 			return ""
 		}
 	case cfg.K8sSandboxes, cfg.K8sGranuleSandboxes:
@@ -680,6 +684,14 @@ func defaultMirrorSandboxImage(ctx context.Context, sourceRef, mirrorRepo, targe
 
 	// Ensure sourceRef is present locally before tagging.
 	if _, err := runSandboxMirrorDocker(ctx, nil, "image", "inspect", "--format", "{{.Id}}", sourceRef); err != nil {
+		// A release-asset ref (grain/guest:sha-...) is a local tag that
+		// `docker load` of the release's tarball leaves behind; pulling it
+		// would ask Docker Hub for a name nobody here controls.
+		if localOnlyImageRef(sourceRef) {
+			return "", fmt.Errorf("%s is not in the local image store and names no registry host, so it is a release-asset tag to load, not an image to pull "+
+				"(docker would fetch it from Docker Hub): load the release again (scripts/release-assets.sh fetch <release> DIR && scripts/release-assets.sh load DIR) "+
+				"or push it with scripts/release-assets.sh mirror <release> %s", sourceRef, mirrorRepo)
+		}
 		_ = sandboxMirrorLogin(ctx, sourceRef)
 		if _, pullErr := runSandboxMirrorDocker(ctx, nil, "pull", sourceRef); pullErr != nil {
 			return "", fmt.Errorf("docker pull %s: %w", sourceRef, pullErr)
@@ -815,4 +827,30 @@ func logCustomSandboxImage(ctx context.Context, cfg Config, image, stock string,
 	}
 	log.Printf("grain daemon: custom sandbox image %s (Settings -> Sandboxes) in place of %s: %s",
 		image, orUnknownImage(stock), check.Contract.Summary)
+}
+
+// localOnlyImageRef reports whether ref is the kind of name a release
+// asset's `docker load` leaves behind (images.json's "ref", such as
+// grain/k8s-sandbox:sha-0123456789ab): namespaced, but naming no registry
+// host. Docker and kubelet both read such a name as docker.io/<ref>, a
+// Docker Hub namespace nobody here controls, so it must never be pulled
+// or handed to a pod (docs/release-assets.md). An image meant to come from
+// Docker Hub is named with an explicit docker.io/ host; a bare official
+// image (ubuntu:24.04) has no namespace and is not one of these.
+func localOnlyImageRef(ref string) bool {
+	ref = strings.TrimSpace(ref)
+	return ref != "" && strings.Contains(ref, "/") && registryauth.HostOf(ref) == ""
+}
+
+// refuseLocalOnlyPodImage is the error a Kubernetes backend fails with
+// when the image its pods would be created from is a release-asset local
+// ref: a cluster cannot `docker load`, and kubelet would pull the name
+// from Docker Hub.
+func refuseLocalOnlyPodImage(image, flag string) error {
+	if !localOnlyImageRef(image) {
+		return nil
+	}
+	return fmt.Errorf("refusing to create Kubernetes sandbox pods from %s: it names no registry host, so it is the local tag a release asset loads, "+
+		"and kubelet would pull it from Docker Hub. Push the release into a registry the cluster pulls from "+
+		"(scripts/release-assets.sh mirror <release> <registry/prefix>, or -sandbox-image-mirror) and name the pushed image with %s", image, flag)
 }

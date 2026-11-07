@@ -278,7 +278,7 @@ test("run location offers host only where grain hostd is, and says why not", asy
   );
   await add.getByLabel("Run location").click();
   await expect(
-    page.getByRole("option", { name: /host \(through grain hostd\)/ }),
+    page.getByRole("option", { name: /host \(through the host agent\)/ }),
   ).toHaveAttribute("aria-disabled", "true");
 });
 
@@ -298,7 +298,14 @@ test("lists the built-in capability servers first, full width, badged and disabl
   // model-proxy is grain's own in-process server now, not a built-in
   // `grain capability` entry.
   await expect(list.locator('[data-builtin-row="model-proxy"]')).toHaveCount(0);
-  for (const name of ["config-map", "gchat", "gcp", "git", "host-script"]) {
+  for (const name of [
+    "config-map",
+    "figma",
+    "gchat",
+    "gcp",
+    "git",
+    "host-script",
+  ]) {
     const row = list.locator(`[data-builtin-row="${name}"]`);
     await expect(row).toHaveAttribute(
       "data-capability-server-row",
@@ -328,7 +335,7 @@ test("lists the built-in capability servers first, full width, badged and disabl
     await expect(
       card.getByRole("button", { name: "Edit connection" }),
     ).toBeVisible();
-    if (["config-map", "gchat", "gcp", "host-script"].includes(name)) {
+    if (["config-map", "figma", "gchat", "gcp", "host-script"].includes(name)) {
       await expect(
         card.getByRole("region", { name: "Server settings" }),
       ).toBeVisible();
@@ -400,7 +407,7 @@ test("configures the built-in config-map server with config maps and secret maps
     .click();
   const cmCard = page.locator('[data-builtin="config-map"]');
   await expect(cmCard.getByTestId("capability-server-state")).toHaveText(
-    "needs configuring",
+    "attached",
   );
   await cmCard.getByRole("button", { name: "Edit server settings" }).click();
   const cmForm = cmCard.getByTestId("capability-server-config");

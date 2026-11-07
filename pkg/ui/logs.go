@@ -24,6 +24,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/apierror"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/systemlog"
 )
 
 // LogSource is one named stream of recent log lines the UI's System
@@ -79,6 +80,54 @@ func (s *Server) handleListLogSources(w http.ResponseWriter, r *http.Request) {
 // logLinesResponse is GET /api/logs/{source}'s whole body.
 type logLinesResponse struct {
 	Lines []string `json:"lines"`
+	// Unit is the systemd unit these lines were read from, for a source
+	// that reads one (UnitLogSource): the daemon's own, or the one
+	// ?unit= named. Absent for a source that is not a journal.
+	Unit *LogUnit `json:"unit,omitempty"`
+	// Units is every unit ?unit= may name, the running one first --
+	// present only when there is more than one, which is the host
+	// carrying both grain's system unit and its user unit, where a
+	// reader has to be told which it got.
+	Units []LogUnit `json:"units,omitempty"`
+}
+
+// LogUnit is one systemd unit a journal source can read, as the route
+// names it.
+type LogUnit struct {
+	// Unit is the unit's name, and what ?unit= takes.
+	Unit string `json:"unit"`
+	// Scope is "system" or "user": which manager runs it.
+	Scope string `json:"scope"`
+	// Running is true for the unit this process runs under -- the one
+	// read when ?unit= says nothing.
+	Running bool `json:"running,omitempty"`
+}
+
+// UnitLogSource is a LogSource over a systemd unit's journal on a host
+// where another unit could have been meant (systemlog.DaemonJournal,
+// through DaemonJournal below): GET /api/logs/{source} says which unit
+// it read and takes ?unit= to pick another of Units. A LogSource that
+// is not one of these reads what it reads, and ?unit= on it is refused.
+type UnitLogSource interface {
+	LogSource
+	// Units is every unit this source may read, the running one first.
+	Units() []systemlog.Unit
+	// ForUnit is the source over one of Units, by name, or an error
+	// naming the units there are.
+	ForUnit(unit string) (LogSource, error)
+}
+
+// DaemonJournal is systemlog.DaemonJournal as a UnitLogSource: what a
+// host deployment wires as its "daemon" source.
+type DaemonJournal struct{ systemlog.DaemonJournal }
+
+// ForUnit implements UnitLogSource.
+func (d DaemonJournal) ForUnit(unit string) (LogSource, error) {
+	journal, err := d.Journal(unit)
+	if err != nil {
+		return nil, err
+	}
+	return journal, nil
 }
 
 func (s *Server) handleGetLogLines(w http.ResponseWriter, r *http.Request) {
@@ -99,6 +148,34 @@ func (s *Server) handleGetLogLines(w http.ResponseWriter, r *http.Request) {
 	}
 	if n > maxLogLines {
 		n = maxLogLines
+	}
+	var unit *LogUnit
+	var units []LogUnit
+	if selectable, ok := source.(UnitLogSource); ok {
+		all := selectable.Units()
+		chosen := all[0]
+		if want := r.URL.Query().Get("unit"); want != "" {
+			picked, err := selectable.ForUnit(want)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			source = picked
+			for _, u := range all {
+				if u.Name == want {
+					chosen = u
+				}
+			}
+		}
+		unit = &LogUnit{Unit: chosen.Name, Scope: chosen.Scope(), Running: chosen == all[0]}
+		if len(all) > 1 {
+			for _, u := range all {
+				units = append(units, LogUnit{Unit: u.Name, Scope: u.Scope(), Running: u == all[0]})
+			}
+		}
+	} else if r.URL.Query().Get("unit") != "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("log source %q is not a systemd journal: unit= does not apply to it", name))
+		return
 	}
 	lines, err := source.Tail(r.Context(), n)
 	if err != nil {
@@ -121,6 +198,5 @@ func (s *Server) handleGetLogLines(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	lines, _ = redactor.Redact(lines)
-	lines = redactDatabaseConfirmTokens(lines)
-	writeJSON(w, http.StatusOK, logLinesResponse{Lines: lines})
+	writeJSON(w, http.StatusOK, logLinesResponse{Lines: lines, Unit: unit, Units: units})
 }

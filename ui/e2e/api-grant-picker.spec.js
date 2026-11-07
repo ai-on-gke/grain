@@ -175,7 +175,10 @@ test("exercises Grain API picker across NewTaskOverlay, ConsoleSessionPage, Sche
   await page.goto("/");
   await page.getByRole("button", { name: "+ New task" }).click();
   const newTaskGroup = page.getByTestId("new-task-grants");
-  await expect(newTaskGroup).toContainText("None granted");
+  // The demo's deployment defaults are what self-debug became
+  // (api:self-debug and grain#source), pre-filled in the Grants section.
+  await expect(newTaskGroup).toContainText("api:self-debug");
+  await expect(newTaskGroup).toContainText("grain › source");
   await newTaskGroup.getByRole("button", { name: "Add grant…" }).click();
   const newTaskMenu = page.getByRole("menu", { name: "Grants to add" });
   await expect(newTaskMenu).toBeVisible();
@@ -226,7 +229,11 @@ test("exercises Grain API picker across NewTaskOverlay, ConsoleSessionPage, Sche
     name: "self-debug",
     exact: true,
   });
-  await sessionSelfDebug.click();
+  // The shipped Director already holds it (once self-debug); tick it only
+  // where a run of this file before has not left it held.
+  if ((await sessionSelfDebug.getAttribute("aria-checked")) !== "true") {
+    await sessionSelfDebug.click();
+  }
   await expect(sessionSelfDebug).toHaveAttribute("aria-checked", "true");
   await page.keyboard.press("Escape");
   await expect(

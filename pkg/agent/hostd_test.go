@@ -151,3 +151,21 @@ func TestHostdHostCancelEndsTheRun(t *testing.T) {
 		t.Errorf("Run = %v after %s, want a prompt failure", err, time.Since(start))
 	}
 }
+
+func TestHostdHostRemoveAllDoesNotWaitOnDisconnectedRemote(t *testing.T) {
+	remote := &hostd.Remote{}
+	h := HostdHost{
+		Remote: remote,
+		Client: hostd.Client{Dial: remote.Dialer("h1")},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	start := time.Now()
+	err := h.RemoveAll(ctx, "~/.grain/hostd-stage/sessions/antigravity/1/mcp_config.json")
+	if err == nil {
+		t.Fatal("RemoveAll on disconnected remote = nil, want ErrRemoteNotConnected")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("RemoveAll on disconnected remote took %s, want immediate return without Client.dial retry", elapsed)
+	}
+}

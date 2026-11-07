@@ -55,6 +55,30 @@ type MethodSpec struct {
 	Grace time.Duration
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+	// AcceptApproval advertises an optional "approval" callback object on
+	// mint_<Name>, which handleMint attaches to Mint's ctx
+	// (ApprovalCallbackFrom).
+	AcceptApproval bool
+}
+
+// ApprovalCallback is where a capability server reaches Grain's approval
+// queue on behalf of one minted attempt.
+type ApprovalCallback struct {
+	URL   string
+	Token string
+}
+
+type approvalCallbackKey struct{}
+
+// WithApprovalCallback carries cb to Server.Mint and MethodSpec.Mint.
+func WithApprovalCallback(ctx context.Context, cb ApprovalCallback) context.Context {
+	return context.WithValue(ctx, approvalCallbackKey{}, cb)
+}
+
+// ApprovalCallbackFrom returns the ApprovalCallback on ctx, if one was set.
+func ApprovalCallbackFrom(ctx context.Context) (ApprovalCallback, bool) {
+	cb, ok := ctx.Value(approvalCallbackKey{}).(ApprovalCallback)
+	return cb, ok && cb.URL != ""
 }
 
 type lease struct {
@@ -125,6 +149,22 @@ func (m *Method) tools() []servedTool {
 	if args == nil {
 		args = defaultArgsSchema
 	}
+	props := map[string]any{
+		"attempt_id": map[string]any{"type": "string", "pattern": attemptIDPattern.String()},
+		"deadline":   map[string]any{"type": "string", "format": "date-time"},
+		"args":       args,
+	}
+	if m.spec.AcceptApproval {
+		props["approval"] = map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"required":             []any{"url", "token"},
+			"properties": map[string]any{
+				"url":   map[string]any{"type": "string"},
+				"token": map[string]any{"type": "string"},
+			},
+		}
+	}
 	tools := []servedTool{{Tool: Tool{
 		Name:        mintPrefix + m.spec.Name,
 		Description: m.spec.Description,
@@ -132,11 +172,7 @@ func (m *Method) tools() []servedTool {
 			"type":                 "object",
 			"additionalProperties": false,
 			"required":             []any{"attempt_id", "deadline", "args"},
-			"properties": map[string]any{
-				"attempt_id": map[string]any{"type": "string", "pattern": attemptIDPattern.String()},
-				"deadline":   map[string]any{"type": "string", "format": "date-time"},
-				"args":       args,
-			},
+			"properties":           props,
 		},
 	}, handle: m.handleMint}}
 	if m.spec.Release != nil {
@@ -194,6 +230,18 @@ func (m *Method) handleMint(ctx context.Context, in map[string]any) ([]byte, err
 	args, err := ValidateArgs(m.spec.Args, rawArgs)
 	if err != nil {
 		return refused(err.Error())
+	}
+	if m.spec.AcceptApproval && in["approval"] != nil {
+		ap, ok := in["approval"].(map[string]any)
+		if !ok {
+			return refused("approval must be an object")
+		}
+		u, uOK := ap["url"].(string)
+		tok, tOK := ap["token"].(string)
+		if !uOK || !tOK || u == "" {
+			return refused("approval must carry non-empty url and string token")
+		}
+		ctx = WithApprovalCallback(ctx, ApprovalCallback{URL: u, Token: tok})
 	}
 
 	defer m.attemptLock(id)()
