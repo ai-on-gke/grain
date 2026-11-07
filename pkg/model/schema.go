@@ -567,17 +567,24 @@ import "strconv"
 // 118 rewrites stored `bootstrap-playbooks` grants across the grant tables,
 // deployment and repository default/CI capabilities, console sessions, and
 // capability_policy to `https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}`.
-const SchemaVersion = 118
+//
+// 119 adds `label` and `last_used_at` to `allowed_principal` for `delegate:`
+// entries (model.AllowedPrincipal.Label and LastUsedAt,
+// design/design/authentication.design.md §6).
+const SchemaVersion = 119
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
-// `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
-// through a verified identity (model.AllowedPrincipal).
+// `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
+// `delegate:<email>` entry admitted through a verified identity
+// (model.AllowedPrincipal).
 const allowedPrincipalTable = `CREATE TABLE IF NOT EXISTS ` + "`allowed_principal`" + ` (
-  ` + "`entry`" + `    TEXT     NOT NULL PRIMARY KEY,
-  ` + "`added_by`" + ` TEXT     NOT NULL DEFAULT '',
-  ` + "`added_at`" + ` DATETIME NOT NULL,
-  ` + "`reason`" + `   TEXT     NOT NULL DEFAULT '',
-  ` + "`role`" + `     TEXT     NOT NULL DEFAULT 'grain/operator'
+  ` + "`entry`" + `        TEXT     NOT NULL PRIMARY KEY,
+  ` + "`added_by`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`added_at`" + `     DATETIME NOT NULL,
+  ` + "`reason`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`role`" + `         TEXT     NOT NULL DEFAULT 'grain/operator',
+  ` + "`label`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`last_used_at`" + ` DATETIME NULL
 )`
 
 // allowedPrincipalMigrationTable records the one-time startup migration off

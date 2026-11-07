@@ -17,6 +17,8 @@ package main
 import (
 	"github.com/ai-on-gke/grain/pkg/registry"
 	_ "github.com/ai-on-gke/grain/pkg/registry/providers/gcp"
+	_ "github.com/ai-on-gke/grain/pkg/registry/providers/github"
+	_ "github.com/ai-on-gke/grain/pkg/registry/reconcile"
 )
 
 func main() {

@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/registry/store"
 	"github.com/ai-on-gke/grain/pkg/webauth"
 )
 
@@ -47,6 +48,7 @@ type InstanceSpec struct {
 	BootImage      string
 	StartupEnv     map[string]string
 	Labels         map[string]string
+	Generation     int64
 }
 
 // InstanceHandle describes the created or inspected VM instance.
@@ -59,16 +61,22 @@ type InstanceHandle struct {
 
 // InstanceStatus describes the live status of a hosted VM instance.
 type InstanceStatus struct {
+	InstanceID string
+	Name       string
+	Zone       string
 	State      string
 	InternalIP string
 	BackendURL string
+	Labels     map[string]string
 }
 
 // Compute provisions and manages hosted VM instances.
 type Compute interface {
 	CreateInstance(ctx context.Context, spec InstanceSpec) (*InstanceHandle, error)
+	StopInstance(ctx context.Context, zone, instanceID string) error
 	DeleteInstance(ctx context.Context, zone, instanceID string) error
 	GetInstanceStatus(ctx context.Context, zone, instanceID string) (*InstanceStatus, error)
+	ListInstances(ctx context.Context) ([]InstanceStatus, error)
 }
 
 // InstanceResourceSpec holds parameters for provisioning per-instance cloud resources.
@@ -77,13 +85,20 @@ type InstanceResourceSpec struct {
 	Name        string
 	OwnerEmail  string
 	SQLInstance string
+	ShipLogs    bool
+	AllowSSH    bool
 }
 
 // InstanceResourceBundle describes the provisioned per-instance identity, database, and secret scope.
 type InstanceResourceBundle struct {
 	ServiceAccountEmail string
+	SQLInstance         string
+	SQLConnectionName   string
+	SQLPrivateIP        string
 	DatabaseName        string
 	SecretPrefix        string
+	GCSBucket           string
+	GCSManagedFolder    string
 }
 
 // InstanceResources provisions per-instance IAM identities, databases, and secret prefixes.
@@ -92,6 +107,12 @@ type InstanceResources interface {
 	Teardown(ctx context.Context, spec InstanceResourceSpec, bundle InstanceResourceBundle, retainDB bool) error
 	GrantSSH(ctx context.Context, zone, instanceID, userEmail string) error
 	RevokeSSH(ctx context.Context, zone, instanceID, userEmail string) error
+}
+
+// SecretWriter is an optional interface implemented by InstanceResources providers
+// that can store per-instance secrets in Secret Manager under `<secret_prefix><entryName>-<suffix>`.
+type SecretWriter interface {
+	PutSecret(ctx context.Context, entryName, secretSuffix string, payload []byte) (string, error)
 }
 
 // ConfigRepoBundle describes a provisioned backing Git repository for an instance's state.
@@ -179,6 +200,40 @@ type DelegationPolicy interface {
 // ErrDelegationDenied is returned when an on-behalf-of request is refused by policy.
 var ErrDelegationDenied = errors.New("registry: on-behalf-of delegation denied by policy")
 
+// DelegationRefusedError wraps ErrDelegationDenied with a machine-readable
+// refusal reason (such as "app_not_registered", "app_disabled",
+// "person_not_admitted", "no_grant", "grant_expired", "entry_out_of_reach",
+// "read_only_grant", "not_delegable", or "delegation_disabled").
+type DelegationRefusedError struct {
+	Reason  string
+	Message string
+}
+
+func (e *DelegationRefusedError) Error() string {
+	if e == nil {
+		return ErrDelegationDenied.Error()
+	}
+	if e.Message != "" {
+		return fmt.Sprintf("%s: %s", ErrDelegationDenied.Error(), e.Message)
+	}
+	if e.Reason != "" {
+		return fmt.Sprintf("%s (%s)", ErrDelegationDenied.Error(), e.Reason)
+	}
+	return ErrDelegationDenied.Error()
+}
+
+func (e *DelegationRefusedError) Unwrap() error {
+	return ErrDelegationDenied
+}
+
+// DelegationRefusalReason returns the machine-readable reason code for HTTP 403 responses.
+func (e *DelegationRefusedError) DelegationRefusalReason() string {
+	if e == nil {
+		return ""
+	}
+	return e.Reason
+}
+
 // StaticDelegationPolicy implements the v1 static service-principal reader list
 // and a refuse-all AuthorizeOnBehalfOf stub.
 type StaticDelegationPolicy struct {
@@ -221,7 +276,269 @@ func (p *StaticDelegationPolicy) IsServicePrincipalReader(_ context.Context, ema
 
 // AuthorizeOnBehalfOf unconditionally denies all delegation requests in v1.
 func (p *StaticDelegationPolicy) AuthorizeOnBehalfOf(_ context.Context, servicePrincipal, targetUserEmail, targetEntryName string) (*DelegationActor, error) {
-	return nil, fmt.Errorf("%w: principal %q cannot act on behalf of %q for %q", ErrDelegationDenied, servicePrincipal, targetUserEmail, targetEntryName)
+	return nil, &DelegationRefusedError{
+		Reason:  "delegation_disabled",
+		Message: fmt.Sprintf("principal %q cannot act on behalf of %q for %q", servicePrincipal, targetUserEmail, targetEntryName),
+	}
+}
+
+// ConsentDelegationPolicy implements the "consent" DelegationPolicy backed by
+// registered delegating apps (`delegating_apps`) and per-person consent grants
+// (`delegation_grants`) in `*store.Store` (or in-memory registrations for unit tests).
+type ConsentDelegationPolicy struct {
+	static         *StaticDelegationPolicy
+	allowedDomains map[string]bool
+
+	mu     sync.RWMutex
+	st     *store.Store
+	nowFn  func() time.Time
+	apps   map[string]store.DelegatingAppRow
+	grants map[string]store.DelegationGrantRow
+}
+
+// NewConsentDelegationPolicy constructs a ConsentDelegationPolicy from AuthConfig
+// and an optional `*store.Store`.
+func NewConsentDelegationPolicy(cfg AuthConfig, st *store.Store) (*ConsentDelegationPolicy, error) {
+	staticPol, err := NewStaticDelegationPolicy(cfg.ServicePrincipals)
+	if err != nil {
+		return nil, err
+	}
+	domains := make(map[string]bool, len(cfg.AllowedDomains))
+	for _, d := range cfg.AllowedDomains {
+		d = strings.ToLower(strings.TrimSpace(d))
+		if d != "" {
+			domains[d] = true
+		}
+	}
+	return &ConsentDelegationPolicy{
+		static:         staticPol,
+		allowedDomains: domains,
+		st:             st,
+		nowFn:          time.Now,
+		apps:           make(map[string]store.DelegatingAppRow),
+		grants:         make(map[string]store.DelegationGrantRow),
+	}, nil
+}
+
+// SetStore attaches a backing `*store.Store` to p.
+func (p *ConsentDelegationPolicy) SetStore(st *store.Store) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.st = st
+	p.mu.Unlock()
+}
+
+// SetNow overrides the clock used for grant expiration checks.
+func (p *ConsentDelegationPolicy) SetNow(fn func() time.Time) {
+	if p == nil || fn == nil {
+		return
+	}
+	p.mu.Lock()
+	p.nowFn = fn
+	p.mu.Unlock()
+}
+
+// RegisterApp registers or updates an in-memory delegating app on p.
+func (p *ConsentDelegationPolicy) RegisterApp(app store.DelegatingAppRow) {
+	if p == nil {
+		return
+	}
+	app.Name = strings.ToLower(strings.TrimSpace(app.Name))
+	principal := strings.TrimSpace(app.Principal)
+	if strings.HasPrefix(strings.ToLower(principal), "serviceaccount:") {
+		principal = principal[len("serviceAccount:"):]
+	}
+	app.Principal = "serviceAccount:" + strings.ToLower(strings.TrimSpace(principal))
+	if app.MaxAccess == "" {
+		app.MaxAccess = "write"
+	}
+	p.mu.Lock()
+	p.apps[app.Name] = app
+	p.mu.Unlock()
+}
+
+// UpsertGrant registers or updates an in-memory consent grant on p.
+func (p *ConsentDelegationPolicy) UpsertGrant(grant store.DelegationGrantRow) {
+	if p == nil {
+		return
+	}
+	grant.App = strings.ToLower(strings.TrimSpace(grant.App))
+	grant.Person = strings.ToLower(strings.TrimSpace(grant.Person))
+	if grant.Access == "" {
+		grant.Access = "write"
+	}
+	p.mu.Lock()
+	p.grants[grant.App+"|"+grant.Person] = grant
+	p.mu.Unlock()
+}
+
+// IsServicePrincipalReader reports whether email is in `service_principals` or is
+// an enabled registered delegating app.
+func (p *ConsentDelegationPolicy) IsServicePrincipalReader(ctx context.Context, email string) (bool, error) {
+	if p == nil {
+		return false, nil
+	}
+	if ok, err := p.static.IsServicePrincipalReader(ctx, email); err != nil || ok {
+		return ok, err
+	}
+	app, err := p.lookupAppByPrincipal(ctx, email)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return app != nil && !app.Disabled(), nil
+}
+
+func (p *ConsentDelegationPolicy) lookupAppByPrincipal(ctx context.Context, principal string) (*store.DelegatingAppRow, error) {
+	norm := strings.TrimSpace(principal)
+	if strings.HasPrefix(strings.ToLower(norm), "serviceaccount:") {
+		norm = norm[len("serviceAccount:"):]
+	}
+	norm = "serviceAccount:" + strings.ToLower(strings.TrimSpace(norm))
+
+	p.mu.RLock()
+	st := p.st
+	for _, a := range p.apps {
+		if strings.EqualFold(a.Principal, norm) {
+			cp := a
+			p.mu.RUnlock()
+			return &cp, nil
+		}
+	}
+	p.mu.RUnlock()
+
+	if st != nil {
+		return st.GetDelegatingAppByPrincipal(ctx, principal)
+	}
+	return nil, store.ErrNotFound
+}
+
+func (p *ConsentDelegationPolicy) lookupGrant(ctx context.Context, appName, personEmail string) (*store.DelegationGrantRow, error) {
+	key := strings.ToLower(strings.TrimSpace(appName)) + "|" + strings.ToLower(strings.TrimSpace(personEmail))
+	p.mu.RLock()
+	st := p.st
+	if g, ok := p.grants[key]; ok && g.RevokedAt == nil {
+		cp := g
+		p.mu.RUnlock()
+		return &cp, nil
+	}
+	p.mu.RUnlock()
+
+	if st != nil {
+		return st.GetLiveDelegationGrant(ctx, appName, personEmail)
+	}
+	return nil, store.ErrNotFound
+}
+
+// AuthorizeOnBehalfOf verifies that servicePrincipal is an enabled delegating app,
+// targetUserEmail is an admitted human, and a live consent grant from targetUserEmail
+// to that app covers targetEntryName.
+func (p *ConsentDelegationPolicy) AuthorizeOnBehalfOf(ctx context.Context, servicePrincipal, targetUserEmail, targetEntryName string) (*DelegationActor, error) {
+	if p == nil {
+		return nil, &DelegationRefusedError{Reason: "delegation_disabled"}
+	}
+	spEmail := strings.TrimSpace(servicePrincipal)
+	if strings.HasPrefix(strings.ToLower(spEmail), "serviceaccount:") {
+		spEmail = spEmail[len("serviceAccount:"):]
+	}
+	spEmail = strings.ToLower(strings.TrimSpace(spEmail))
+	personEmail := strings.ToLower(strings.TrimSpace(targetUserEmail))
+	entryName := strings.ToLower(strings.TrimSpace(targetEntryName))
+
+	app, err := p.lookupAppByPrincipal(ctx, spEmail)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, &DelegationRefusedError{
+				Reason:  "app_not_registered",
+				Message: fmt.Sprintf("service principal %q is not a registered delegating app", spEmail),
+			}
+		}
+		return nil, err
+	}
+	if app.Disabled() {
+		return nil, &DelegationRefusedError{
+			Reason:  "app_disabled",
+			Message: fmt.Sprintf("delegating app %q is disabled", app.Name),
+		}
+	}
+
+	if personEmail == "" || !strings.Contains(personEmail, "@") || webauth.PrincipalKindForEmail(personEmail) != webauth.PrincipalHuman {
+		return nil, &DelegationRefusedError{
+			Reason:  "person_not_admitted",
+			Message: fmt.Sprintf("principal %q is not an admitted human user", personEmail),
+		}
+	}
+	if len(p.allowedDomains) > 0 {
+		at := strings.LastIndexByte(personEmail, '@')
+		domain := ""
+		if at > 0 && at < len(personEmail)-1 {
+			domain = strings.ToLower(personEmail[at+1:])
+		}
+		if !p.allowedDomains[domain] {
+			return nil, &DelegationRefusedError{
+				Reason:  "person_not_admitted",
+				Message: fmt.Sprintf("principal %q is not in an allowed domain", personEmail),
+			}
+		}
+	}
+	p.mu.RLock()
+	st := p.st
+	nowFn := p.nowFn
+	p.mu.RUnlock()
+	if st != nil {
+		if disabled, err := st.IsOwnerDisabled(ctx, personEmail); err == nil && disabled {
+			return nil, &DelegationRefusedError{
+				Reason:  "person_not_admitted",
+				Message: fmt.Sprintf("principal %q is disabled", personEmail),
+			}
+		}
+	}
+
+	grant, err := p.lookupGrant(ctx, app.Name, personEmail)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, &DelegationRefusedError{
+				Reason:  "no_grant",
+				Message: fmt.Sprintf("no active delegation grant from %q to %q", personEmail, app.Name),
+			}
+		}
+		return nil, err
+	}
+	now := time.Now().UTC()
+	if nowFn != nil {
+		now = nowFn().UTC()
+	}
+	if !grant.ExpiresAt.IsZero() && !now.Before(grant.ExpiresAt) {
+		return nil, &DelegationRefusedError{
+			Reason:  "grant_expired",
+			Message: fmt.Sprintf("delegation grant %q from %q to %q has expired", grant.ID, personEmail, app.Name),
+		}
+	}
+	if entryName != "" && !grant.CoversEntry(entryName) {
+		return nil, &DelegationRefusedError{
+			Reason:  "entry_out_of_reach",
+			Message: fmt.Sprintf("delegation grant %q does not cover entry %q", grant.ID, entryName),
+		}
+	}
+
+	access := strings.ToLower(strings.TrimSpace(grant.Access))
+	if access == "" {
+		access = "write"
+	}
+	if strings.EqualFold(app.MaxAccess, "read") {
+		access = "read"
+	}
+	return &DelegationActor{
+		Sub:    spEmail,
+		Kind:   "service",
+		App:    app.Name,
+		Grant:  grant.ID,
+		Access: access,
+	}, nil
 }
 
 // Signer signs short-lived ES256 registry assertions (`X-Grain-Registry-Assertion`)
@@ -430,6 +747,48 @@ func BuildSigner(ctx context.Context, cfg SigningConfig) (Signer, error) {
 	return fn(ctx, cfg)
 }
 
+func BuildCompute(ctx context.Context, cfg ComputeConfig) (Compute, error) {
+	provider := strings.TrimSpace(cfg.Provider)
+	if provider == "" {
+		provider = "gce"
+	}
+	regMu.RLock()
+	fn, ok := computeFactories[provider]
+	regMu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("registry: unknown compute.provider %q (registered: %s)", provider, strings.Join(RegisteredComputeProviders(), ", "))
+	}
+	return fn(ctx, cfg)
+}
+
+func BuildInstanceResources(ctx context.Context, cfg Config) (InstanceResources, error) {
+	provider := strings.TrimSpace(cfg.Compute.Provider)
+	if provider == "" {
+		provider = "gce"
+	}
+	regMu.RLock()
+	fn, ok := instanceResFactories[provider]
+	regMu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("registry: unknown instance resources provider %q (registered: %s)", provider, strings.Join(RegisteredInstanceResourcesProviders(), ", "))
+	}
+	return fn(ctx, cfg)
+}
+
+func BuildConfigRepos(ctx context.Context, cfg ConfigReposConfig) (ConfigRepos, error) {
+	provider := strings.TrimSpace(cfg.Provider)
+	if provider == "" {
+		provider = "none"
+	}
+	regMu.RLock()
+	fn, ok := configReposFactories[provider]
+	regMu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("registry: unknown config_repos.provider %q (registered: %s)", provider, strings.Join(RegisteredConfigReposProviders(), ", "))
+	}
+	return fn(ctx, cfg)
+}
+
 func RegisteredFrontIdentities() []string {
 	regMu.RLock()
 	defer regMu.RUnlock()
@@ -458,6 +817,24 @@ func RegisteredSignerProviders() []string {
 	regMu.RLock()
 	defer regMu.RUnlock()
 	return sortedKeys(signerFactories)
+}
+
+func RegisteredComputeProviders() []string {
+	regMu.RLock()
+	defer regMu.RUnlock()
+	return sortedKeys(computeFactories)
+}
+
+func RegisteredInstanceResourcesProviders() []string {
+	regMu.RLock()
+	defer regMu.RUnlock()
+	return sortedKeys(instanceResFactories)
+}
+
+func RegisteredConfigReposProviders() []string {
+	regMu.RLock()
+	defer regMu.RUnlock()
+	return sortedKeys(configReposFactories)
 }
 
 func sortedKeys[V any](m map[string]V) []string {
@@ -493,12 +870,20 @@ func (noopComputeProvider) CreateInstance(context.Context, InstanceSpec) (*Insta
 	return nil, errors.New("registry: compute provider is disabled (compute.provider = \"none\")")
 }
 
+func (noopComputeProvider) StopInstance(context.Context, string, string) error {
+	return errors.New("registry: compute provider is disabled (compute.provider = \"none\")")
+}
+
 func (noopComputeProvider) DeleteInstance(context.Context, string, string) error {
 	return errors.New("registry: compute provider is disabled (compute.provider = \"none\")")
 }
 
 func (noopComputeProvider) GetInstanceStatus(context.Context, string, string) (*InstanceStatus, error) {
 	return nil, errors.New("registry: compute provider is disabled (compute.provider = \"none\")")
+}
+
+func (noopComputeProvider) ListInstances(context.Context) ([]InstanceStatus, error) {
+	return nil, nil
 }
 
 type noopInstanceResources struct{}
@@ -552,6 +937,10 @@ func init() {
 
 	RegisterDelegationPolicy("static", func(_ context.Context, cfg AuthConfig) (DelegationPolicy, error) {
 		return NewStaticDelegationPolicy(cfg.ServicePrincipals)
+	})
+
+	RegisterDelegationPolicy("consent", func(_ context.Context, cfg AuthConfig) (DelegationPolicy, error) {
+		return NewConsentDelegationPolicy(cfg, nil)
 	})
 
 	RegisterComputeProvider("none", func(_ context.Context, _ ComputeConfig) (Compute, error) {

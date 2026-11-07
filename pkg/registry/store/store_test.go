@@ -610,4 +610,52 @@ func TestStep12RandomNameScopesCombinationSyncAndAsyncConflictsAndPromotion(t *t
 	if _, err := st.GetActiveTunnelSession(ctx, contender1.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected active tunnel session for revoked cred to be deleted immediately, got %v", err)
 	}
+
+	// 12. Delegating apps, consent grants, usage, and audit_log delegation fields.
+	app, err := st.CreateDelegatingApp(ctx, DelegatingAppRow{
+		Name:        "planning-app",
+		Principal:   "serviceAccount:planning-app@proj.iam.gserviceaccount.com",
+		DisplayName: "Planning App",
+		Owner:       "alice@example.com",
+		MaxAccess:   "write",
+		MaxGrantTTL: 30 * 24 * time.Hour,
+		CreatedBy:   "admin@example.com",
+	})
+	if err != nil {
+		t.Fatalf("CreateDelegatingApp: %v", err)
+	}
+	if app.Name != "planning-app" || app.Disabled() {
+		t.Fatalf("unexpected delegating app: %+v", app)
+	}
+	byPrincipal, err := st.GetDelegatingAppByPrincipal(ctx, "planning-app@proj.iam.gserviceaccount.com")
+	if err != nil || byPrincipal.Name != "planning-app" {
+		t.Fatalf("GetDelegatingAppByPrincipal: %v %+v", err, byPrincipal)
+	}
+	grant, err := st.UpsertDelegationGrant(ctx, "planning-app", "alice@example.com", []string{"*"}, "write", 24*time.Hour)
+	if err != nil {
+		t.Fatalf("UpsertDelegationGrant: %v", err)
+	}
+	if !strings.HasPrefix(grant.ID, "dlg_") || !grant.CoversEntry("any-entry") {
+		t.Fatalf("unexpected grant: %+v", grant)
+	}
+	// Replacing keeps the same grant ID.
+	grantReplaced, err := st.UpsertDelegationGrant(ctx, "planning-app", "alice@example.com", []string{"contender-one"}, "read", 24*time.Hour)
+	if err != nil {
+		t.Fatalf("UpsertDelegationGrant replace: %v", err)
+	}
+	if grantReplaced.ID != grant.ID || grantReplaced.Access != "read" || !grantReplaced.CoversEntry("contender-one") || grantReplaced.CoversEntry("other") {
+		t.Fatalf("unexpected replaced grant: %+v", grantReplaced)
+	}
+	if err := st.RecordDelegationUsage(ctx, grant.ID, "contender-one", true); err != nil {
+		t.Fatalf("RecordDelegationUsage: %v", err)
+	}
+	if err := st.RecordAuditWithDelegation(ctx, "alice@example.com", "planning-app@proj.iam.gserviceaccount.com", grant.ID, "delegated_write", contender1.ID, contender1.Name, map[string]any{"method": "POST"}); err != nil {
+		t.Fatalf("RecordAuditWithDelegation: %v", err)
+	}
+	if err := st.RevokeDelegationGrant(ctx, grant.ID, "alice@example.com"); err != nil {
+		t.Fatalf("RevokeDelegationGrant: %v", err)
+	}
+	if _, err := st.GetLiveDelegationGrant(ctx, "planning-app", "alice@example.com"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound after RevokeDelegationGrant, got %v", err)
+	}
 }

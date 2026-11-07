@@ -357,7 +357,7 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 					}
 				}
 				if openTask.NetworkAccess != "" || prev.NetworkAccess != openTask.NetworkAccess {
-					if !(s.NetworkAccess == model.NetworkNone && c.Config.SandboxShapeIgnored && openTask.NetworkAccess == model.NetworkOpen) {
+					if !(s.NetworkAccess == model.NetworkNone && !c.sandboxesIsolateNetwork() && openTask.NetworkAccess == model.NetworkOpen) {
 						networkAccess = string(openTask.NetworkAccess)
 					}
 				}
@@ -809,7 +809,7 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 				t.Grants = newGrants
 			}
 			if req.NetworkAccess != nil {
-				t.NetworkAccess = model.ConsoleSessionNetworkAccess(session, !c.Config.SandboxShapeIgnored)
+				t.NetworkAccess = model.ConsoleSessionNetworkAccess(session, c.sandboxesIsolateNetwork())
 			}
 			if req.TasksApproved != nil {
 				t.AutoApproveProposals = *req.TasksApproved
@@ -871,7 +871,7 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 				Capabilities:    session.Capabilities,
 				Reads:           session.Reads,
 				Writes:          session.Writes,
-				NetworkAccess:   model.ConsoleSessionNetworkAccess(session, !c.Config.SandboxShapeIgnored),
+				NetworkAccess:   model.ConsoleSessionNetworkAccess(session, c.sandboxesIsolateNetwork()),
 				Model:           strings.TrimSpace(session.Model),
 				Title:           model.ConsoleSessionTitle(session),
 				TasksApproved:   session.TasksApproved,
@@ -907,7 +907,7 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 				Capabilities:    prevCaps,
 				Reads:           prevReads,
 				Writes:          prevWrites,
-				NetworkAccess:   model.ConsoleSessionNetworkAccess(origSession, !c.Config.SandboxShapeIgnored),
+				NetworkAccess:   model.ConsoleSessionNetworkAccess(origSession, c.sandboxesIsolateNetwork()),
 				Model:           strings.TrimSpace(origSession.Model),
 				Title:           model.ConsoleSessionTitle(origSession),
 				TasksApproved:   origSession.TasksApproved,
@@ -971,7 +971,7 @@ func (c *Client) ensureConsoleSessionSnapshot(ctx context.Context, task model.Ta
 		Capabilities:    prevCaps,
 		Reads:           task.Reads,
 		Writes:          task.Writes,
-		NetworkAccess:   model.ConsoleSessionNetworkAccess(session, !c.Config.SandboxShapeIgnored),
+		NetworkAccess:   model.ConsoleSessionNetworkAccess(session, c.sandboxesIsolateNetwork()),
 		Model:           strings.TrimSpace(session.Model),
 		Title:           model.ConsoleSessionTitle(session),
 		TasksApproved:   session.TasksApproved,
@@ -979,6 +979,21 @@ func (c *Client) ensureConsoleSessionSnapshot(ctx context.Context, task model.Ta
 		GoogleChatSpace: session.GoogleChatSpace,
 		OfferedDefaults: consoleSessionHeldDefaults(task.Grants),
 	})
+}
+
+// sandboxesIsolateNetwork reports whether this deployment's sandbox backend can
+// honour model.NetworkNone, matching orchestrator.sandboxesIsolateNetwork.
+// ContainerSandboxes and plain K8sSandboxes apply a shape (SandboxShapeIgnored
+// is false) yet still cannot withhold a network, while DisabledSandboxes skips
+// shape (SandboxShapeIgnored is true) yet preserves configured NetworkNone
+// (IsolatesNetwork is true), so Config.Sandboxes (daemon.SandboxHealthAdapter)
+// is asked first when it answers; !SandboxShapeIgnored is the fallback for
+// callers and tests that configure no Sandboxes handle.
+func (c *Client) sandboxesIsolateNetwork() bool {
+	if iso, ok := c.Config.Sandboxes.(interface{ IsolatesNetwork() bool }); ok {
+		return iso.IsolatesNetwork()
+	}
+	return !c.Config.SandboxShapeIgnored
 }
 
 // consoleSessionHeldDefaults is the model.ConsoleSessionDefaultGrants a
@@ -1207,7 +1222,7 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 	}
 	taskID, err := model.FileConsoleSessionTask(ctx, c.Store, newSession, model.FileConsoleSessionOptions{
 		StateRepo:       c.stateRepoRef(),
-		NetworkIsolates: !c.Config.SandboxShapeIgnored,
+		NetworkIsolates: c.sandboxesIsolateNetwork(),
 		Now:             now,
 	})
 	if err != nil {
@@ -1344,7 +1359,7 @@ func (c *Client) RestartConsoleSession(ctx context.Context, id string, req Resta
 	}
 	if _, err := model.FileConsoleSessionTask(ctx, c.Store, session, model.FileConsoleSessionOptions{
 		StateRepo:            c.stateRepoRef(),
-		NetworkIsolates:      !c.Config.SandboxShapeIgnored,
+		NetworkIsolates:      c.sandboxesIsolateNetwork(),
 		PreviousTaskID:       previous,
 		CarryHandoverSummary: req.CarryHandover && previous != "",
 		Now:                  c.now(),
