@@ -80,6 +80,14 @@ func (g *DelegationGrantRow) CoversEntry(entryName string) bool {
 	return false
 }
 
+// NormalizeAppPrincipal returns the canonical `serviceAccount:<email>` form
+// `registry.delegating_apps.principal` is stored and matched in. A bare email
+// gains the `serviceAccount:` prefix (any case of it is accepted), and the
+// email is lower-cased; an empty input returns "".
+func NormalizeAppPrincipal(raw string) string {
+	return normalizeAppPrincipal(raw)
+}
+
 func normalizeAppPrincipal(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if strings.HasPrefix(strings.ToLower(raw), "serviceaccount:") {
@@ -136,6 +144,9 @@ INSERT INTO registry.delegating_apps (
 		maxAccess, ttlSec, app.RequireSubjectToken, string(redirectJSON),
 		strings.ToLower(strings.TrimSpace(app.CreatedBy)), now)
 	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "duplicate key") {
+			return nil, fmt.Errorf("%w: a delegating app named %q or with principal %q already exists", ErrConflict, name, principal)
+		}
 		return nil, err
 	}
 	_ = s.db.QueryRowContext(ctx, `SELECT pg_notify('registry_delegations', $1)`, "app:"+name).Scan()
@@ -346,6 +357,34 @@ FROM registry.delegation_grants
 WHERE app = $1 AND LOWER(person) = LOWER($2) AND revoked_at IS NULL`,
 		strings.ToLower(strings.TrimSpace(appName)), strings.ToLower(strings.TrimSpace(personEmail)))
 	return scanDelegationGrant(row)
+}
+
+// ListDelegationGrantsForPerson returns personEmail's delegation grants, newest
+// first. Revoked grants are included only when includeRevoked is set.
+func (s *Store) ListDelegationGrantsForPerson(ctx context.Context, personEmail string, includeRevoked bool) ([]DelegationGrantRow, error) {
+	q := `
+SELECT id, app, person, entries, access, created_at, updated_at, expires_at,
+       revoked_at, revoked_by, last_used_at
+FROM registry.delegation_grants
+WHERE LOWER(person) = LOWER($1)`
+	if !includeRevoked {
+		q += ` AND revoked_at IS NULL`
+	}
+	q += ` ORDER BY created_at DESC, id ASC`
+	rows, err := s.db.QueryContext(ctx, q, strings.ToLower(strings.TrimSpace(personEmail)))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DelegationGrantRow
+	for rows.Next() {
+		g, err := scanDelegationGrant(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *g)
+	}
+	return out, rows.Err()
 }
 
 // RevokeDelegationGrant marks a delegation grant revoked and emits `NOTIFY registry_delegations`.

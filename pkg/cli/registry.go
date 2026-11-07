@@ -71,6 +71,10 @@ const registryUsage = `usage: grain registry <subcommand> [args]
   transfer          [-registry-url <url>] -to <email> [-owner-group <group>]
                     [-clear-owner-group] <name>
   accept-transfer   [-registry-url <url>] <name>
+  delegating-apps   list | create -principal <sa-email> [flags] <name> | disable <name> | enable <name>
+                    (registry admins; see grain registry delegating-apps help)
+  grants            list [-include-revoked] | create -entry <name|*>... [-access <read|write>]
+                    [-ttl <duration>] <app> | revoke <grant-id|app>
 
 Self-registration, directory discovery, path routing, and control-plane management
 for a grain registry (Settings -> Registry; design/design/registry.design.md).`
@@ -213,6 +217,10 @@ func cmdRegistry(ctx context.Context, c *ui.HTTPClient, out *printer, args []str
 		return cmdRegistryTransfer(ctx, c, out, subArgs)
 	case "accept-transfer":
 		return cmdRegistryAcceptTransfer(ctx, c, out, subArgs)
+	case "delegating-apps":
+		return cmdRegistryDelegatingApps(ctx, c, out, subArgs)
+	case "grants":
+		return cmdRegistryGrants(ctx, c, out, subArgs)
 	default:
 		return fmt.Errorf("unknown registry subcommand %q\n%s", sub, registryUsage)
 	}
