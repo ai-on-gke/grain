@@ -47,6 +47,7 @@ type InstanceSpec struct {
 	BootImage      string
 	StartupEnv     map[string]string
 	Labels         map[string]string
+	Generation     int64
 }
 
 // InstanceHandle describes the created or inspected VM instance.
@@ -59,16 +60,22 @@ type InstanceHandle struct {
 
 // InstanceStatus describes the live status of a hosted VM instance.
 type InstanceStatus struct {
+	InstanceID string
+	Name       string
+	Zone       string
 	State      string
 	InternalIP string
 	BackendURL string
+	Labels     map[string]string
 }
 
 // Compute provisions and manages hosted VM instances.
 type Compute interface {
 	CreateInstance(ctx context.Context, spec InstanceSpec) (*InstanceHandle, error)
+	StopInstance(ctx context.Context, zone, instanceID string) error
 	DeleteInstance(ctx context.Context, zone, instanceID string) error
 	GetInstanceStatus(ctx context.Context, zone, instanceID string) (*InstanceStatus, error)
+	ListInstances(ctx context.Context) ([]InstanceStatus, error)
 }
 
 // InstanceResourceSpec holds parameters for provisioning per-instance cloud resources.
@@ -77,13 +84,20 @@ type InstanceResourceSpec struct {
 	Name        string
 	OwnerEmail  string
 	SQLInstance string
+	ShipLogs    bool
+	AllowSSH    bool
 }
 
 // InstanceResourceBundle describes the provisioned per-instance identity, database, and secret scope.
 type InstanceResourceBundle struct {
 	ServiceAccountEmail string
+	SQLInstance         string
+	SQLConnectionName   string
+	SQLPrivateIP        string
 	DatabaseName        string
 	SecretPrefix        string
+	GCSBucket           string
+	GCSManagedFolder    string
 }
 
 // InstanceResources provisions per-instance IAM identities, databases, and secret prefixes.
@@ -92,6 +106,12 @@ type InstanceResources interface {
 	Teardown(ctx context.Context, spec InstanceResourceSpec, bundle InstanceResourceBundle, retainDB bool) error
 	GrantSSH(ctx context.Context, zone, instanceID, userEmail string) error
 	RevokeSSH(ctx context.Context, zone, instanceID, userEmail string) error
+}
+
+// SecretWriter is an optional interface implemented by InstanceResources providers
+// that can store per-instance secrets in Secret Manager under `<secret_prefix><entryName>-<suffix>`.
+type SecretWriter interface {
+	PutSecret(ctx context.Context, entryName, secretSuffix string, payload []byte) (string, error)
 }
 
 // ConfigRepoBundle describes a provisioned backing Git repository for an instance's state.
@@ -430,6 +450,48 @@ func BuildSigner(ctx context.Context, cfg SigningConfig) (Signer, error) {
 	return fn(ctx, cfg)
 }
 
+func BuildCompute(ctx context.Context, cfg ComputeConfig) (Compute, error) {
+	provider := strings.TrimSpace(cfg.Provider)
+	if provider == "" {
+		provider = "gce"
+	}
+	regMu.RLock()
+	fn, ok := computeFactories[provider]
+	regMu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("registry: unknown compute.provider %q (registered: %s)", provider, strings.Join(RegisteredComputeProviders(), ", "))
+	}
+	return fn(ctx, cfg)
+}
+
+func BuildInstanceResources(ctx context.Context, cfg Config) (InstanceResources, error) {
+	provider := strings.TrimSpace(cfg.Compute.Provider)
+	if provider == "" {
+		provider = "gce"
+	}
+	regMu.RLock()
+	fn, ok := instanceResFactories[provider]
+	regMu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("registry: unknown instance resources provider %q (registered: %s)", provider, strings.Join(RegisteredInstanceResourcesProviders(), ", "))
+	}
+	return fn(ctx, cfg)
+}
+
+func BuildConfigRepos(ctx context.Context, cfg ConfigReposConfig) (ConfigRepos, error) {
+	provider := strings.TrimSpace(cfg.Provider)
+	if provider == "" {
+		provider = "none"
+	}
+	regMu.RLock()
+	fn, ok := configReposFactories[provider]
+	regMu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("registry: unknown config_repos.provider %q (registered: %s)", provider, strings.Join(RegisteredConfigReposProviders(), ", "))
+	}
+	return fn(ctx, cfg)
+}
+
 func RegisteredFrontIdentities() []string {
 	regMu.RLock()
 	defer regMu.RUnlock()
@@ -458,6 +520,24 @@ func RegisteredSignerProviders() []string {
 	regMu.RLock()
 	defer regMu.RUnlock()
 	return sortedKeys(signerFactories)
+}
+
+func RegisteredComputeProviders() []string {
+	regMu.RLock()
+	defer regMu.RUnlock()
+	return sortedKeys(computeFactories)
+}
+
+func RegisteredInstanceResourcesProviders() []string {
+	regMu.RLock()
+	defer regMu.RUnlock()
+	return sortedKeys(instanceResFactories)
+}
+
+func RegisteredConfigReposProviders() []string {
+	regMu.RLock()
+	defer regMu.RUnlock()
+	return sortedKeys(configReposFactories)
 }
 
 func sortedKeys[V any](m map[string]V) []string {
@@ -493,12 +573,20 @@ func (noopComputeProvider) CreateInstance(context.Context, InstanceSpec) (*Insta
 	return nil, errors.New("registry: compute provider is disabled (compute.provider = \"none\")")
 }
 
+func (noopComputeProvider) StopInstance(context.Context, string, string) error {
+	return errors.New("registry: compute provider is disabled (compute.provider = \"none\")")
+}
+
 func (noopComputeProvider) DeleteInstance(context.Context, string, string) error {
 	return errors.New("registry: compute provider is disabled (compute.provider = \"none\")")
 }
 
 func (noopComputeProvider) GetInstanceStatus(context.Context, string, string) (*InstanceStatus, error) {
 	return nil, errors.New("registry: compute provider is disabled (compute.provider = \"none\")")
+}
+
+func (noopComputeProvider) ListInstances(context.Context) ([]InstanceStatus, error) {
+	return nil, nil
 }
 
 type noopInstanceResources struct{}

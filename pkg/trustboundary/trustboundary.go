@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v18"
+const Version = "trust-boundary/v19"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -81,6 +81,12 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v19 adds the embedded bootstrap playbooks moved out of pkg/capability/
+// (pkg/playbooks/, task 3148) and the capability reference/policy,
+// catalogue and template-grant admission files
+// (pkg/model/capability_ref.go, pkg/model/capability_catalogue.go, and
+// pkg/model/template_grants.go) to capabilities-secrets (task 3388).
 //
 // v18 adds host enrollment codes, pending pairing-code handshakes and
 // deployment-owner request checks (pkg/model/host_enroll.go,
@@ -260,7 +266,7 @@ var Categories = []Category{
 	{
 		ID:          "capabilities-secrets",
 		Description: "capability grants, secret storage and the cloud identities credentials are minted from",
-		prefixes:    []string{"pkg/capability/", "pkg/secrets/", "pkg/secretsrepo/", "pkg/gcpsetup/", "pkg/redact/"},
+		prefixes:    []string{"pkg/capability/", "pkg/playbooks/", "pkg/secrets/", "pkg/secretsrepo/", "pkg/gcpsetup/", "pkg/redact/"},
 		files: []string{
 			// Running a command on grain's own host once a person approves.
 			"pkg/daemon/mcpserver_hostexec.go",
@@ -276,6 +282,13 @@ var Categories = []Category{
 			// Which CI events may be handed signing and publishing
 			// capabilities, read by all three of their enforcers.
 			"pkg/model/ci_grant_rule.go",
+			// Capability reference parsing and policy admission
+			// (CapabilityPolicy.Permits, UncoveredCapabilityRefs), catalogue
+			// grant validation (CapabilityCatalogue.ValidateGrants), and
+			// dangerous-grant and template escalation checks
+			// (IsDangerousGrant, TemplateWithinTask, ReviewGrants).
+			"pkg/model/capability_ref.go", "pkg/model/capability_catalogue.go",
+			"pkg/model/template_grants.go",
 		},
 	},
 	{

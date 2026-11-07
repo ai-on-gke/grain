@@ -332,4 +332,33 @@ describe("GanttChart", () => {
     expect(within(other).queryByText("Blocked")).toBeNull();
     expect(other.querySelector(".badge")).not.toHaveClass("badge-blocked");
   });
+
+  it("tells failed task reads from an empty timeline and keeps held bars across transient failures", async () => {
+    const onRetry = vi.fn();
+    const user = userEvent.setup();
+    renderChart({
+      tasks: [],
+      tasksLoaded: false,
+      tasksError: "synthetic tasks 500",
+      onRetry,
+    });
+    expect(screen.queryByText("No tasks yet.")).toBeNull();
+    expect(document.querySelector(".gantt-body")).toBeNull();
+    expect(document.querySelector(".content-header .count")).toBeNull();
+    expect(
+      screen.getByText("The tasks could not be loaded (synthetic tasks 500)."),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+
+    document.body.innerHTML = "";
+    renderChart({
+      tasks,
+      tasksLoaded: true,
+      tasksError: "synthetic tasks 500",
+    });
+    expect(screen.queryByText(/The tasks could not be loaded/)).toBeNull();
+    expect(screen.getByText("Fix the thing")).toBeInTheDocument();
+  });
 });

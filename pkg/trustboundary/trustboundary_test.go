@@ -249,6 +249,8 @@ var knownBoundaryFiles = []string{
 	"pkg/ui/local_script_approvals.go", "pkg/daemon/ui_server.go",
 	"pkg/model/repo_access.go", "pkg/daemon/ci.go", "pkg/daemon/ci_policy.go",
 	"pkg/daemon/ci_capability_pass.go", "pkg/daemon/capabilities.go",
+	"pkg/playbooks/", "pkg/model/capability_ref.go",
+	"pkg/model/capability_catalogue.go", "pkg/model/template_grants.go",
 }
 
 // Entries ending in "/" are directories: every .go file under them, as it
@@ -499,8 +501,8 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 // reach, the approval-callback tokens and the daemon's UI listeners. v16
 // classified none of them, so a change to any merged itself.
 func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v18" {
-		t.Errorf("Version = %q, want trust-boundary/v18", Version)
+	if Version != "trust-boundary/v19" {
+		t.Errorf("Version = %q, want trust-boundary/v19", Version)
 	}
 	for _, p := range []string{
 		"pkg/ui/access_roles.go",
@@ -540,6 +542,43 @@ func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
 			if Classify([]string{file}) == nil {
 				t.Errorf("%s is defined in %s, which Classify leaves unclassified", name, file)
 			}
+		}
+	}
+}
+
+// v19 (task 3388): the embedded bootstrap playbooks moved out of
+// pkg/capability/ in task 3148 (pkg/playbooks/) and the capability
+// reference/policy, catalogue and template-grant admission files in
+// pkg/model/ classify under capabilities-secrets.
+func TestPlaybooksAndCapabilityAdmissionFilesAreClassified(t *testing.T) {
+	if Version != "trust-boundary/v19" {
+		t.Errorf("Version = %q, want trust-boundary/v19", Version)
+	}
+	for _, p := range []string{
+		"pkg/playbooks/playbooks.go",
+		"pkg/playbooks/gcp-capabilities.md",
+		"pkg/playbooks/gke-sandbox-cluster.md",
+		"pkg/model/capability_ref.go",
+		"pkg/model/capability_catalogue.go",
+		"pkg/model/template_grants.go",
+	} {
+		if got := categoryIDs(Classify([]string{p})); !reflect.DeepEqual(got, []string{"capabilities-secrets"}) {
+			t.Errorf("Classify(%q) = %v, want [capabilities-secrets]", p, got)
+		}
+	}
+
+	defined := funcFiles(t, "pkg/model")
+	for _, name := range []string{
+		"Permits", "UncoveredCapabilityRefs", "ValidateGrants",
+		"IsDangerousGrant", "TemplateWithinTask", "ReviewTemplateWithinTask", "ReviewGrants",
+	} {
+		file, ok := defined[name]
+		if !ok {
+			t.Errorf("pkg/model: no func or method %s -- update this test to where it went", name)
+			continue
+		}
+		if got := categoryIDs(Classify([]string{file})); !reflect.DeepEqual(got, []string{"capabilities-secrets"}) {
+			t.Errorf("%s is defined in %s, Classify = %v, want [capabilities-secrets]", name, file, got)
 		}
 	}
 }
