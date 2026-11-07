@@ -21,6 +21,11 @@ import {
   removeOption,
 } from "./searchSelect.js";
 
+// -legacy-capability registers example-legacy, a made-up provider with
+// nothing to mint, so the Legacy capabilities pickers have a row: every
+// legacy provider core shipped has been retired onto a server method.
+test.use({ demoArgs: ["-legacy-capability"] });
+
 // Layout of SearchSelect's multiple mode (src/components/SearchSelect.jsx)
 // where it replaced a <Select multiple>: the Legacy capabilities pickers
 // on the new-task form and the task pane, and a suite's Templates. At
@@ -118,7 +123,7 @@ for (const [label, size] of [
       data: {
         title: `E2E multi select ${label} ${Date.now()}`,
         repo: "acme/widgets",
-        capabilities: ["github-sandbox"],
+        capabilities: ["example-legacy"],
       },
     });
     expect(created.ok()).toBeTruthy();
@@ -126,7 +131,7 @@ for (const [label, size] of [
     await page.goto(`/tasks/${task.id}`);
     const box = page.getByRole("combobox", { name: "Legacy capabilities" });
     await box.scrollIntoViewIfNeeded();
-    await expect.poll(() => chosenValues(box)).toEqual(["github-sandbox"]);
+    await expect.poll(() => chosenValues(box)).toEqual(["example-legacy"]);
     within(
       await chips(box).first().boundingBox(),
       await inputBase(box).boundingBox(),
@@ -161,9 +166,9 @@ for (const [label, size] of [
         r.url().endsWith(`/api/tasks/${task.id}/capabilities`) &&
         r.request().method() === "POST",
     );
-    await removeOption(box, "github-sandbox");
+    await removeOption(box, "example-legacy");
     expect(JSON.parse((await detached).request().postData())).toEqual({
-      id: "github-sandbox",
+      id: "example-legacy",
       attach: false,
     });
   });

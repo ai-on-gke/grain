@@ -2572,7 +2572,7 @@ func TestUIEditsWithStateRepoUnlockedPersistAcrossOrchestratorAndStateRepoCycles
 	client.Now = func() time.Time { return baseTime }
 
 	// Edit console_sessions, default_capabilities, repo_config, schedules, and templates via UI client while settings_locked is false (default).
-	capID := ui.OfferedCapabilities()[0].ID
+	capID := model.GitHubSandboxRepoGrant
 	if _, err := client.UpdateSettings(ctx, ui.UpdateSettingsRequest{
 		DefaultCapabilities: &[]string{capID},
 	}); err != nil {
