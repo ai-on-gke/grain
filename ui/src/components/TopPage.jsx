@@ -150,7 +150,14 @@ export default function TopPage({ showError }) {
               </PageHeaderPageActions>
             </Box>
           </PageHeaderActions>
-          <pre className="logs-view top-view">
+          {/* Focusable and named like LogsPage's pre so keyboard users can
+              scroll wide ps/top lines and long process tables. */}
+          <pre
+            className="logs-view top-view"
+            tabIndex={0}
+            role="region"
+            aria-label="Process snapshot"
+          >
             {data.lines && data.lines.length > 0
               ? data.lines.join("\n")
               : "(no output)"}
