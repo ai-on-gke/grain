@@ -567,7 +567,14 @@ import "strconv"
 // 118 rewrites stored `bootstrap-playbooks` grants across the grant tables,
 // deployment and repository default/CI capabilities, console sessions, and
 // capability_policy to `https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}`.
-const SchemaVersion = 118
+//
+// 119 adds `admission` to `task`, `template` and `schedule`
+// (model.Task.Admission, design/design/unified-grants.design.md §4.1) and
+// `default_admission` to `grain_config` and `repo_config`, moves every
+// stored `priority-dispatch` and `durable` grant into them -- the grant
+// tables, default capabilities and standing sessions -- and drops the
+// capability policy's entries for the two names.
+const SchemaVersion = 119
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
@@ -992,6 +999,7 @@ var Tables = []string{
   ` + "`proposer_task_id`" + `      TEXT     NOT NULL DEFAULT '',
   ` + "`proposer_run_id`" + `       TEXT     NOT NULL DEFAULT '',
   ` + "`external_ref`" + `          TEXT     NOT NULL DEFAULT '',
+  ` + "`admission`" + ` TEXT NOT NULL DEFAULT 'standard',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_external_ref`" + ` ON ` + "`task`" + ` (` + "`external_ref`" + `, ` + "`id`" + `)`,
@@ -1985,6 +1993,7 @@ var Tables = []string{
   ` + "`created_at`" + `            DATETIME NOT NULL,
   ` + "`every_n_minutes`" + `       INTEGER  NULL,
   ` + "`keep_running`" + `          INTEGER  NOT NULL DEFAULT 0,
+  ` + "`admission`" + ` TEXT NOT NULL DEFAULT 'standard',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2103,6 +2112,7 @@ var Tables = []string{
   ` + "`reviewers`" + `          TEXT NOT NULL DEFAULT '',
   ` + "`priority`" + `           INTEGER NOT NULL DEFAULT 0,
   ` + "`keep_running`" + `       INTEGER NOT NULL DEFAULT 0,
+  ` + "`admission`" + ` TEXT NOT NULL DEFAULT 'standard',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2589,6 +2599,7 @@ var Tables = []string{
   ` + "`owner_trust`" + `                  TEXT    NOT NULL DEFAULT '',
   ` + "`auto_grant_context_reads`" + `     TEXT    NOT NULL DEFAULT '',
   ` + "`registry`" + `                     TEXT    NOT NULL DEFAULT '',
+  ` + "`default_admission`" + ` TEXT NOT NULL DEFAULT 'standard',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -3342,6 +3353,7 @@ var Tables = []string{
   ` + "`issue_import_approved`" + `    INTEGER NOT NULL DEFAULT 0,
   ` + "`issue_import_interval_seconds`" + ` INTEGER NOT NULL DEFAULT 0,
   ` + "`upstream_repo`" + `            TEXT NOT NULL DEFAULT '',
+  ` + "`default_admission`" + ` TEXT NOT NULL DEFAULT 'standard',
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `)
 )`,
 

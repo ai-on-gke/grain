@@ -733,6 +733,12 @@ type Config struct {
 	// by a build default afterwards, so one an operator removed stays
 	// removed across restarts and upgrades.
 	DefaultCapabilities []string
+	// DefaultAdmission is the admission every task filed on this
+	// deployment starts at least at (Task.Admission,
+	// design/design/unified-grants.design.md §4.1), replacing naming
+	// priority-dispatch or durable in DefaultCapabilities. Standard, the
+	// default, raises nothing.
+	DefaultAdmission Admission
 	// PromptExtension is the standing instruction text every run
 	// dispatched on this deployment is given on top of the prompt grain
 	// builds for it (grain/task-114) -- prompt_extension.go's own doc

@@ -138,6 +138,10 @@ func (s *Store) SyncRepoDeclarations(ctx context.Context, repo RepoRef, commit s
 
 		for _, file := range declared.Templates {
 			t := file.Template
+			if rest, a, folded := FoldAdmissionGrants(t.Grants, t.Admission); folded {
+				t.Grants, t.Admission = rest, a
+				WarnAdmissionGrants("declared template", t.ID, a)
+			}
 			t.Grants = canonicalizeDeclaredGrants(t.Grants)
 			if existing, err := getTemplate(ctx, tx, t.ID); err != nil {
 				return err
@@ -174,6 +178,10 @@ func (s *Store) SyncRepoDeclarations(ctx context.Context, repo RepoRef, commit s
 		}
 		for _, file := range declared.Schedules {
 			sched := file.Schedule
+			if rest, a, folded := FoldAdmissionGrants(sched.Grants, sched.Admission); folded {
+				sched.Grants, sched.Admission = rest, a
+				WarnAdmissionGrants("declared schedule", sched.ID, a)
+			}
 			sched.Grants = canonicalizeDeclaredGrants(sched.Grants)
 			existing, err := getSchedule(ctx, tx, sched.ID)
 			if err != nil {

@@ -609,6 +609,10 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 	if err != nil {
 		return err
 	}
+	admissionEvent, err := guardAdmission(ctx, tx, &t)
+	if err != nil {
+		return err
+	}
 
 	explicitWorkOrigin := t.WorkOrigin
 	if t.WorkOrigin == "" {
@@ -662,8 +666,8 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
   `+"`target_owner`, `target_name`, `binding`, `base`, `folder`"+`,
   `+"`auto_merge`, `auto_approve_proposals`, `created_at`, `order_key`, `sandbox_cpus`, `sandbox_memory_mb`, `sandbox_disk_gb`, `interactive`, `agent_framework`, `agent_backend_id`, `agent_model`, `prompt_extension`, `review_template_id`, `network_access`, `nothing_needed_action`, `creator`, `time_zone`, `issue`, `no_port`, `agent_model_source`, `origin_ref`, `resume_on_deadline`, `change_target_kind`, `change_target_spec`, `reviewers`, `priority`, `keep_running`"+`,
   `+"`origin_actor_source`, `origin_behalf_source`, `approval_actor_source`, `approval_behalf_source`, `filed_via`"+`,
-  `+"`owner`, `proposer_actor_kind`, `proposer_actor_id`, `proposer_actor_source`, `proposer_behalf_kind`, `proposer_behalf_id`, `proposer_behalf_source`, `proposer_task_id`, `proposer_run_id`, `external_ref`"+`
-) VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?)`,
+  `+"`owner`, `proposer_actor_kind`, `proposer_actor_id`, `proposer_actor_source`, `proposer_behalf_kind`, `proposer_behalf_id`, `proposer_behalf_source`, `proposer_task_id`, `proposer_run_id`, `external_ref`, `admission`"+`
+) VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Branch, string(t.Intent), t.Title, t.Body,
 		string(oActor.Kind), oActor.ID, kindOf(oBehalf), idOf(oBehalf), string(t.Origin.Reason),
 		aActorKind, aActorID, aBehalfKind, aBehalfID, timeOf(t.ApprovedAt), timeOf(t.DeferredAt), timeOf(t.DeferredUntil),
@@ -673,7 +677,7 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 		t.AgentFramework, t.AgentBackendID, t.Model, t.PromptExtension, t.ReviewTemplateID, string(t.NetworkAccess), string(t.NothingNeededAction), t.Creator, t.TimeZone, t.Issue, t.NoPort, string(t.ModelSource), string(t.WorkOrigin), t.ResumeOnDeadline,
 		changeTargetKind(t.ChangeTarget), t.ChangeTarget.SpecString(), joinCSV(NormalizeReviewers(t.Reviewers)), priority, t.KeepRunning,
 		string(oActor.Source), sourceOf(oBehalf), aActorSource, aBehalfSource, t.FiledVia,
-		t.Owner, string(pActor.Kind), pActor.ID, string(pActor.Source), pbKind, pbID, pbSource, t.Proposer.TaskID, t.Proposer.RunID, t.ExternalRef,
+		t.Owner, string(pActor.Kind), pActor.ID, string(pActor.Source), pbKind, pbID, pbSource, t.Proposer.TaskID, t.Proposer.RunID, t.ExternalRef, t.Admission.String(),
 	); err != nil {
 		return fmt.Errorf("writing task %s: %w", t.ID, err)
 	}
@@ -685,6 +689,11 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 	if ownerEvent != nil {
 		if _, err := insertTaskEvent(ctx, tx, *ownerEvent); err != nil {
 			return fmt.Errorf("recording %s's owner change: %w", t.ID, err)
+		}
+	}
+	if admissionEvent != nil {
+		if _, err := insertTaskEvent(ctx, tx, *admissionEvent); err != nil {
+			return fmt.Errorf("recording %s's admission change: %w", t.ID, err)
 		}
 	}
 
@@ -1233,7 +1242,7 @@ const taskColumns = "`id`,`branch`,`intent`,`title`,`body`," +
 	"`auto_merge`,`auto_approve_proposals`,`created_at`,`order_key`,`sandbox_cpus`,`sandbox_memory_mb`,`sandbox_disk_gb`,`interactive`," +
 	"`agent_framework`,`agent_backend_id`,`agent_model`,`prompt_extension`,`review_template_id`,`network_access`,`nothing_needed_action`,`creator`,`time_zone`,`issue`,`no_port`,`agent_model_source`,`origin_ref`,`resume_on_deadline`,`change_target_kind`,`change_target_spec`,`reviewers`,`priority`,`keep_running`," +
 	"`origin_actor_source`,`origin_behalf_source`,`approval_actor_source`,`approval_behalf_source`,`filed_via`," +
-	"`owner`,`proposer_actor_kind`,`proposer_actor_id`,`proposer_actor_source`,`proposer_behalf_kind`,`proposer_behalf_id`,`proposer_behalf_source`,`proposer_task_id`,`proposer_run_id`,`external_ref`"
+	"`owner`,`proposer_actor_kind`,`proposer_actor_id`,`proposer_actor_source`,`proposer_behalf_kind`,`proposer_behalf_id`,`proposer_behalf_source`,`proposer_task_id`,`proposer_run_id`,`external_ref`,`admission`"
 
 // scanTask reads one task row. It takes the Scan method rather than a
 // *sql.Row or *sql.Rows so one function serves both the single-row and
@@ -1255,7 +1264,7 @@ func scanTask(scan func(...any) error) (Task, error) {
 		&t.AutoMerge, &t.AutoApproveProposals, &createdAt, &t.OrderKey, &t.SandboxCPUs, &t.SandboxMemoryMB, &t.SandboxDiskGB, &t.Interactive,
 		&t.AgentFramework, &t.AgentBackendID, &t.Model, &t.PromptExtension, &t.ReviewTemplateID, &networkAccess, &nothingNeeded, &t.Creator, &t.TimeZone, &t.Issue, &t.NoPort, &modelSource, &workOrigin, &t.ResumeOnDeadline, &ctKind, &ctSpec, &reviewers, &t.Priority, &t.KeepRunning,
 		&oaSource, &obSource, &aaSource, &abSource, &t.FiledVia,
-		&t.Owner, &paKind, &paID, &paSource, &pbKind, &pbID, &pbSource, &pTaskID, &pRunID, &t.ExternalRef); err != nil {
+		&t.Owner, &paKind, &paID, &paSource, &pbKind, &pbID, &pbSource, &pTaskID, &pRunID, &t.ExternalRef, &t.Admission); err != nil {
 		return Task{}, err
 	}
 	if paKind != "" || paID != "" || pTaskID != "" || pRunID != "" {
@@ -3859,7 +3868,7 @@ func (s *Store) RunNow(ctx context.Context) ([]RunNowRequest, error) {
 			"AND `r`.`id` IS NULL "+
 			"AND NOT EXISTS (SELECT 1 FROM `task_pause` AS `p` WHERE `p`.`task_id` = `o`.`task_id`) "+
 			"ORDER BY `o`.`run_now_at`, `o`.`task_id`",
-		append([]any{string(ReasonFix)}, priorityDispatchArgs()...),
+		[]any{string(ReasonFix)},
 		func(rows *sql.Rows) error {
 			var req RunNowRequest
 			if err := rows.Scan(&req.TaskID, &req.At, &req.Merger, &req.Priority); err != nil {
@@ -4031,7 +4040,7 @@ func (s *Store) ReadyPriorityDispatch(ctx context.Context) ([]string, error) {
 			"JOIN `task` AS `t` ON `t`.`id` = `r`.`task_id` "+
 			"WHERE "+priorityDispatchTaskSQL+" "+
 			"ORDER BY "+taskQueueOrderSQL,
-		priorityDispatchArgs(),
+		nil,
 		func(rows *sql.Rows) error {
 			var id string
 			if err := rows.Scan(&id); err != nil {
@@ -4669,8 +4678,7 @@ func liveRunCounts(ctx context.Context, q querier) (RunCounts, error) {
 	// A merger with priority dispatch is counted once, as priority:
 	// StartRun admitted it outside the counts, so it holds none of the
 	// merge queue's capacity either.
-	args := append([]any{string(ReasonFix)}, priorityDispatchArgs()...)
-	args = append(args, priorityDispatchArgs()...)
+	args := []any{string(ReasonFix)}
 	if err := q.QueryRowContext(ctx,
 		"SELECT COALESCE(SUM(CASE WHEN "+mergerTaskSQL+" AND NOT "+priorityDispatchTaskSQL+" THEN 1 ELSE 0 END), 0), "+
 			"COALESCE(SUM(CASE WHEN "+priorityDispatchTaskSQL+" THEN 1 ELSE 0 END), 0), COUNT(*) "+
@@ -5746,7 +5754,7 @@ const configColumns = "`poll_interval_ms`,`max_workers`,`max_mergers`,`max_merge
 	"`k8s_privileged`,`k8s_network_policy`,`k8s_deployment`,`k8s_container`," +
 	"`mcp_servers`,`capability_policy`,`cli_run`,`sandbox_overcommit`,`base_ci_red_streak`," +
 	"`k8s_priority_class_interactive`,`k8s_priority_class_agent`,`k8s_priority_class_ci`,`sandbox_disk_overcommit`," +
-	"`auto_upgrade_channel`,`auto_upgrade_time`,`judgement_model`,`external_agent_api`,`sandbox_image_mirror`,`session_sandbox_idle_ttl_ms`,`settings_locked`,`new_task_form`,`auto_upgrade_on`,`owner_trust`,`auto_grant_context_reads`,`registry`"
+	"`auto_upgrade_channel`,`auto_upgrade_time`,`judgement_model`,`external_agent_api`,`sandbox_image_mirror`,`session_sandbox_idle_ttl_ms`,`settings_locked`,`new_task_form`,`auto_upgrade_on`,`owner_trust`,`auto_grant_context_reads`,`registry`,`default_admission`"
 
 func scanConfig(scan func(...any) error) (Config, error) {
 	var c Config
@@ -5809,7 +5817,7 @@ func scanConfig(scan func(...any) error) (Config, error) {
 		&c.K8sPrivileged, &c.K8sNetworkPolicy, &c.K8sDeployment, &c.K8sContainer,
 		&mcpServers, &capabilityPolicy, &cliRun, &sandboxOvercommit, &c.BaseCIRedStreak,
 		&c.K8sPriorityClassInteractive, &c.K8sPriorityClassAgent, &c.K8sPriorityClassCI, &c.SandboxDiskOvercommit,
-		&c.AutoUpgradeChannel, &c.AutoUpgradeTime, &c.JudgementModel, &c.ExternalAgentAPI, &c.SandboxImageMirror, &sessionIdleTTLMS, &c.SettingsLocked, &newTaskForm, &c.AutoUpgradeOn, &ownerTrust, &autoGrantContextReads, &registry); err != nil {
+		&c.AutoUpgradeChannel, &c.AutoUpgradeTime, &c.JudgementModel, &c.ExternalAgentAPI, &c.SandboxImageMirror, &sessionIdleTTLMS, &c.SettingsLocked, &newTaskForm, &c.AutoUpgradeOn, &ownerTrust, &autoGrantContextReads, &registry, &c.DefaultAdmission); err != nil {
 		return Config{}, err
 	}
 	backends, err := DecodeAgentBackends(agentBackends)
@@ -5906,6 +5914,10 @@ func (s *Store) UpdateConfig(ctx context.Context, mutate func(*Config) error) er
 }
 
 func putConfigTx(ctx context.Context, tx *sql.Tx, c Config) error {
+	if rest, a, folded := FoldAdmissionNames(c.DefaultCapabilities, c.DefaultAdmission); folded {
+		c.DefaultCapabilities, c.DefaultAdmission = rest, a
+		WarnAdmissionGrants("config", "deployment", a)
+	}
 	agentBackends, err := EncodeAgentBackends(c.AgentBackends)
 	if err != nil {
 		return err
@@ -5947,7 +5959,7 @@ func putConfigTx(ctx context.Context, tx *sql.Tx, c Config) error {
 		return err
 	}
 	_, err = tx.ExecContext(ctx,
-		"REPLACE INTO `grain_config` (`id`, "+configColumns+") VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+		"REPLACE INTO `grain_config` (`id`, "+configColumns+") VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
 		c.PollInterval.Milliseconds(), c.MaxWorkers, c.MaxMergers, c.MaxMergesPerRepo, c.MergeBatchSize,
 		c.MergeGatherWindow.Milliseconds(), c.MaxCIJobs, c.MaxAgentTurns,
 		c.GitHubHost, c.GitHubInsecureHTTP, c.GCPProject, c.GCPServiceAccountEmail,
@@ -5983,7 +5995,7 @@ func putConfigTx(ctx context.Context, tx *sql.Tx, c Config) error {
 		strings.TrimSpace(c.K8sPriorityClassCI), c.SandboxDiskOvercommit,
 		strings.TrimSpace(c.AutoUpgradeChannel), strings.TrimSpace(c.AutoUpgradeTime),
 		strings.TrimSpace(c.JudgementModel), c.ExternalAgentAPI, strings.TrimSpace(c.SandboxImageMirror),
-		c.SessionSandboxIdleTTL.Milliseconds(), c.SettingsLocked, newTaskForm, strings.TrimSpace(c.AutoUpgradeOn), ownerTrust, autoGrantContextReads, registry)
+		c.SessionSandboxIdleTTL.Milliseconds(), c.SettingsLocked, newTaskForm, strings.TrimSpace(c.AutoUpgradeOn), ownerTrust, autoGrantContextReads, registry, c.DefaultAdmission.String())
 	return err
 }
 
@@ -6062,7 +6074,7 @@ func newScheduleID(ctx context.Context, tx *sql.Tx) (string, error) {
 
 const scheduleColumns = "`id`,`title`,`body`,`target_owner`,`target_name`,`base`," +
 	"`auto_merge`,`auto_approve_proposals`,`template_id`,`suite_id`,`recurrence_kind`,`every_n_hours`,`time_of_day_minutes`,`weekday`,`day_of_month`," +
-	"`overlap`,`network_access`,`nothing_needed_action`,`agent_model`,`enabled`,`next_run_at`,`last_run_at`,`created_at`,`time_zone`,`workflow_review`,`every_n_minutes`,`keep_running`"
+	"`overlap`,`network_access`,`nothing_needed_action`,`agent_model`,`enabled`,`next_run_at`,`last_run_at`,`created_at`,`time_zone`,`workflow_review`,`every_n_minutes`,`keep_running`,`admission`"
 
 func scanSchedule(scan func(...any) error) (Schedule, error) {
 	var t Schedule
@@ -6073,7 +6085,7 @@ func scanSchedule(scan func(...any) error) (Schedule, error) {
 	if err := scan(&t.ID, &t.Title, &t.Body, &t.Target.Owner, &t.Target.Name, &base,
 		&t.AutoMerge, &t.AutoApproveProposals, &templateID, &suiteID, &kind, &everyNHours, &timeOfDay, &weekday, &dayOfMonth,
 		&overlap, &networkAccess, &nothingNeeded, &t.Model, &t.Enabled, &t.NextRunAt, &lastRun, &t.CreatedAt, &timeZone,
-		&workflowReview, &everyNMinutes, &t.KeepRunning); err != nil {
+		&workflowReview, &everyNMinutes, &t.KeepRunning, &t.Admission); err != nil {
 		return Schedule{}, err
 	}
 	t.Target = RepoFromStored(t.Target.Owner, t.Target.Name)
@@ -6114,6 +6126,10 @@ func (s *Store) PutSchedule(ctx context.Context, t Schedule) error {
 }
 
 func putSchedule(ctx context.Context, tx *sql.Tx, t Schedule) error {
+	if rest, a, folded := FoldAdmissionGrants(t.Grants, t.Admission); folded {
+		t.Grants, t.Admission = rest, a
+		WarnAdmissionGrants("schedule", t.ID, a)
+	}
 	r := t.Recurrence
 	var everyNHours, everyNMinutes, timeOfDay, weekday, dayOfMonth any
 	switch r.Kind {
@@ -6143,12 +6159,12 @@ func putSchedule(ctx context.Context, tx *sql.Tx, t Schedule) error {
 	_, err := tx.ExecContext(ctx, `REPLACE INTO `+"`schedule`"+` (
   `+"`id`,`title`,`body`,`target_owner`,`target_name`,`base`,"+
 		"`auto_merge`,`auto_approve_proposals`,`template_id`,`suite_id`,`recurrence_kind`,`every_n_hours`,`time_of_day_minutes`,`weekday`,`day_of_month`,"+
-		"`overlap`,`network_access`,`nothing_needed_action`,`agent_model`,`enabled`,`next_run_at`,`last_run_at`,`created_at`,`time_zone`,`workflow_review`,`every_n_minutes`,`keep_running`"+`
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"`overlap`,`network_access`,`nothing_needed_action`,`agent_model`,`enabled`,`next_run_at`,`last_run_at`,`created_at`,`time_zone`,`workflow_review`,`every_n_minutes`,`keep_running`,`admission`"+`
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Title, t.Body, t.Target.StoredOwner(), t.Target.Name, nullable(t.Base),
 		t.AutoMerge, t.AutoApproveProposals, stringOf(t.TemplateID), stringOf(t.SuiteID), r.StoredKind(), everyNHours, timeOfDay, weekday, dayOfMonth,
 		string(overlap), string(t.NetworkAccess), string(t.NothingNeededAction), t.Model, t.Enabled, t.NextRunAt.UTC(), timeOf(t.LastRunAt), t.CreatedAt.UTC(), timeZone,
-		string(t.WorkflowReview), everyNMinutes, t.KeepRunning)
+		string(t.WorkflowReview), everyNMinutes, t.KeepRunning, t.Admission.String())
 	if err != nil {
 		return fmt.Errorf("writing schedule %s: %w", t.ID, err)
 	}
@@ -6758,7 +6774,7 @@ func newTemplateID(ctx context.Context, tx *sql.Tx) (string, error) {
 }
 
 const templateColumns = "`id`,`name`,`title`,`body`," +
-	"`target_owner`,`target_name`,`base`,`auto_merge`,`created_at`,`network_access`,`nothing_needed_action`,`agent_model`,`interactive`,`goal`,`change_target_kind`,`change_target_spec`,`reviewers`,`priority`,`keep_running`"
+	"`target_owner`,`target_name`,`base`,`auto_merge`,`created_at`,`network_access`,`nothing_needed_action`,`agent_model`,`interactive`,`goal`,`change_target_kind`,`change_target_spec`,`reviewers`,`priority`,`keep_running`,`admission`"
 
 func scanTemplate(scan func(...any) error) (Template, error) {
 	var t Template
@@ -6768,7 +6784,7 @@ func scanTemplate(scan func(...any) error) (Template, error) {
 	var priority int
 	if err := scan(&t.ID, &t.Name, &t.Title, &t.Body,
 		&target.Owner, &target.Name, &base, &t.AutoMerge, &t.CreatedAt, &networkAccess, &nothingNeeded, &t.Model, &t.Interactive,
-		&goal, &ctKind, &ctSpec, &reviewers, &priority, &t.KeepRunning); err != nil {
+		&goal, &ctKind, &ctSpec, &reviewers, &priority, &t.KeepRunning, &t.Admission); err != nil {
 		return Template{}, err
 	}
 	if priority != 0 {
@@ -6800,6 +6816,10 @@ func (s *Store) PutTemplate(ctx context.Context, t Template) error {
 }
 
 func putTemplate(ctx context.Context, tx *sql.Tx, t Template) error {
+	if rest, a, folded := FoldAdmissionGrants(t.Grants, t.Admission); folded {
+		t.Grants, t.Admission = rest, a
+		WarnAdmissionGrants("template", t.ID, a)
+	}
 	var targetOwner, targetName string
 	if t.Target != nil {
 		targetOwner, targetName = t.Target.StoredOwner(), t.Target.Name
@@ -6810,10 +6830,10 @@ func putTemplate(ctx context.Context, tx *sql.Tx, t Template) error {
 	}
 	_, err := tx.ExecContext(ctx, `REPLACE INTO `+"`template`"+` (
   `+templateColumns+`
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Name, t.Title, t.Body,
 		targetOwner, targetName, t.Base, t.AutoMerge, t.CreatedAt.UTC(), string(t.NetworkAccess), string(t.NothingNeededAction), t.Model, t.Interactive,
-		t.Goal.JSON(), changeTargetKind(t.ChangeTarget), t.ChangeTarget.SpecString(), joinCSV(NormalizeReviewers(t.Reviewers)), priority, t.KeepRunning)
+		t.Goal.JSON(), changeTargetKind(t.ChangeTarget), t.ChangeTarget.SpecString(), joinCSV(NormalizeReviewers(t.Reviewers)), priority, t.KeepRunning, t.Admission.String())
 	if err != nil {
 		return fmt.Errorf("writing template %s: %w", t.ID, err)
 	}

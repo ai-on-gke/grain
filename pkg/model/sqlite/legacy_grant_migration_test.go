@@ -339,8 +339,11 @@ func TestMigration86RewritesCorpResearchIdempotently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"priority-dispatch", corp, "read-issues"}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
+	if want := []string{corp, "read-issues"}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
 		t.Errorf("default capabilities = %v, want %v", gotCfg.DefaultCapabilities, want)
+	}
+	if gotCfg.DefaultAdmission != model.AdmissionBypass {
+		t.Errorf("default admission = %s, want bypass", gotCfg.DefaultAdmission)
 	}
 	if got, want := gotCfg.ConsoleSessions[0].Capabilities, []string{corp, "read-issues"}; !slices.Equal(got, want) {
 		t.Errorf("director capabilities = %v, want %v", got, want)

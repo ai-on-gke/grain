@@ -67,6 +67,9 @@ func TemplateWithinTask(acting Task, tmpl Template) error {
 			return fmt.Errorf("template %s grants read access to %s, which the agent's own task cannot read", tmpl.ID, r)
 		}
 	}
+	if tmpl.Admission > AdmissionStandard {
+		return fmt.Errorf("template %s sets admission: %s, which only a person may give", tmpl.ID, tmpl.Admission)
+	}
 	if len(tmpl.Reviewers) > 0 {
 		return fmt.Errorf("template %s sets reviewers, which only a person may set", tmpl.ID)
 	}

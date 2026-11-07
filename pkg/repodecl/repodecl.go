@@ -113,10 +113,13 @@ func Load(tree fs.FS, repo model.RepoRef) (model.RepoDeclarations, error) {
 	// discovered by a firing weeks later.
 	templates := map[string]bool{}
 	for _, file := range templateFiles {
-		tmpl, push, err := parseTemplate(file, repo)
+		tmpl, push, warn, err := parseTemplate(file, repo)
 		if err != nil {
 			errs = append(errs, err)
 			continue
+		}
+		if warn != "" {
+			declared.Warnings = append(declared.Warnings, warn)
 		}
 		templates[file.stem] = true
 		declared.Templates = append(declared.Templates, model.DeclaredTemplateFile{Path: file.path, Template: tmpl, Push: push})
@@ -135,10 +138,13 @@ func Load(tree fs.FS, repo model.RepoRef) (model.RepoDeclarations, error) {
 			errs = append(errs, fmt.Errorf("%s: %s already declares %q -- one file per declaration",
 				file.path, existingPath, model.DefaultReviewStem))
 		} else {
-			tmpl, push, err := parseTemplate(file, repo)
+			tmpl, push, warn, err := parseTemplate(file, repo)
 			if err != nil {
 				errs = append(errs, err)
 			} else {
+				if warn != "" {
+					declared.Warnings = append(declared.Warnings, warn)
+				}
 				templates[model.DefaultReviewStem] = true
 				declared.Templates = append(declared.Templates, model.DeclaredTemplateFile{Path: file.path, Template: tmpl, Push: push})
 			}
@@ -165,10 +171,13 @@ func Load(tree fs.FS, repo model.RepoRef) (model.RepoDeclarations, error) {
 	workflows, workflowErr := ci.LoadNativeDir(tree)
 
 	for _, file := range scheduleFiles {
-		sched, err := parseSchedule(file, repo, templates, suites, workflows, workflowErr == nil)
+		sched, warn, err := parseSchedule(file, repo, templates, suites, workflows, workflowErr == nil)
 		if err != nil {
 			errs = append(errs, err)
 			continue
+		}
+		if warn != "" {
+			declared.Warnings = append(declared.Warnings, warn)
 		}
 		declared.Schedules = append(declared.Schedules, model.DeclaredScheduleFile{Path: file.path, Schedule: sched})
 	}

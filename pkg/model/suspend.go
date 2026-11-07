@@ -40,7 +40,7 @@ func dispatchStandingOf(ctx context.Context, q querier, taskID string, runNow *t
 		"SELECT `t`.`order_key`, "+priorityDispatchTaskSQL+", "+directorTaskSQL+", "+
 			"EXISTS (SELECT 1 FROM `task_tag` AS `rt` WHERE `rt`.`task_id` = `t`.`id` AND `rt`.`tag` LIKE ?) "+
 			"FROM `task` AS `t` WHERE `t`.`id` = ?",
-		append(append(priorityDispatchArgs(), string(ReasonConsoleSession), ConsoleSessionTagPrefix+"%"),
+		append([]any{string(ReasonConsoleSession), ConsoleSessionTagPrefix + "%"},
 			baseRepairBranchTagPrefix+"%", taskID)...).
 		Scan(&st.OrderKey, &st.PriorityDispatch, &st.Session, &st.FixesBaseBranch)
 	if errors.Is(err, sql.ErrNoRows) {

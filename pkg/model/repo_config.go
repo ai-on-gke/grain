@@ -90,6 +90,10 @@ type RepoConfig struct {
 	// keeps it if the deployment-wide entry is later dropped. The union
 	// is what a task is filed with either way.
 	DefaultCapabilities []string
+	// DefaultAdmission is the admission every task filed against this
+	// repository starts at least at (Task.Admission); the higher of it
+	// and Config.DefaultAdmission applies.
+	DefaultAdmission Admission
 	// CICapabilities is the explicit capability set for this repo's CI jobs.
 	// It is independent of task defaults and is read when a CI run starts.
 	CICapabilities []string
@@ -888,7 +892,7 @@ func (c RepoConfig) Empty() bool {
 		c.RepairTemplateID == "" && len(c.PortBranches) == 0 && len(c.DeclaredPortBranches) == 0 &&
 		len(c.PortTypes) == 0 && len(c.DeclaredPortTypes) == 0 &&
 		c.GitCredential == "" && c.IssueImport.Empty() &&
-		c.UpstreamRepo == ""
+		c.UpstreamRepo == "" && c.DefaultAdmission == AdmissionStandard
 }
 
 // PullRequestRepo returns the repository where pull requests for a task

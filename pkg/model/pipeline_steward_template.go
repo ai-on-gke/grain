@@ -86,7 +86,7 @@ var PipelineStewardAPIPresets = []string{"task-admin", "dispatch-control", "ci-r
 //     and each notification it subscribes to (Store.wakeStandingTask,
 //     Store.WakeRestingTask) rather than one per firing. The handover it
 //     writes each wake is what it remembers, cursor included.
-//   - Durable (DurableCapability), with goal pipeline-healthy: on_met
+//   - Admission durable (AdmissionDurable), with goal pipeline-healthy: on_met
 //     rest, on_limit notify. A wake that ends rests the task on its goal
 //     rather than completing it; no deadline or wait cap ends a wake, and
 //     it is never held behind max_workers.
@@ -100,12 +100,12 @@ var PipelineStewardAPIPresets = []string{"task-admin", "dispatch-control", "ci-r
 //     task open to be woken again rather than closing it.
 //   - The grants: the presets above, what self-debug became
 //     (api:self-debug for the task readers and read_pipeline_changes, and
-//     grain#source), durable, and priority-dispatch
-//     (PriorityDispatchCapability), so that a congested pipeline -- the
-//     thing this job exists to unstick -- cannot starve it of a worker,
-//     park it behind a red branch's repair or hold it behind a pause it
-//     may itself have to lift. Those last two are grants only a person
-//     may otherwise give; grain gives them here by construction.
+//     grain#source). Its durable admission, which includes bypass, is so
+//     that a congested pipeline -- the thing this job exists to unstick --
+//     cannot starve it of a worker, park it behind a red branch's repair
+//     or hold it behind a pause it may itself have to lift. Only a person
+//     may otherwise raise admission above standard; grain sets it here by
+//     construction.
 //     query_merge_queue needs no grant; every run has it.
 func pipelineStewardTemplate(stateRepo RepoRef) *Template {
 	grants := make([]Grant, 0, len(PipelineStewardAPIPresets)+4)
@@ -117,10 +117,9 @@ func pipelineStewardTemplate(stateRepo RepoRef) *Template {
 	for _, g := range SelfDebugGrants() {
 		grants = append(grants, Grant{Capability: g, Via: GrantByGrain})
 	}
-	grants = append(grants, Grant{Capability: PriorityDispatchCapability, Via: GrantByGrain})
-	grants = append(grants, Grant{Capability: DurableCapability, Via: GrantByGrain})
 	t := &Template{
 		ID:                  PipelineStewardTemplateID,
+		Admission:           AdmissionDurable,
 		Name:                "Pipeline steward",
 		Title:               "Pipeline steward",
 		Body:                pipelineStewardBody(),
@@ -284,7 +283,7 @@ func writeRedRCSection(b *strings.Builder) {
 // UsesToolBudget reports whether t's runs are durable judgement wakes,
 // which run under the per-wake tool budget (design/design/durable-tasks.design.md#DT-13,
 // mcp's tool_budget.go): the pipeline steward's standing task, and any
-// task holding the durable grant.
+// task whose admission is durable.
 func UsesToolBudget(t Task) bool {
 	return IsPipelineStewardFiring(t) || t.IsDurable()
 }

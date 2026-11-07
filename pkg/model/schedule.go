@@ -153,6 +153,9 @@ type Schedule struct {
 	// the default, means close.
 	NothingNeededAction NothingNeededAction
 	KeepRunning         bool
+	// Admission is the admission every task this schedule files gets
+	// (Task.Admission).
+	Admission Admission
 
 	// Model is the model every task this schedule files asks for
 	// (Task.Model, docs/connections-and-models.md). Empty means this

@@ -253,6 +253,8 @@ type Composition struct {
 	// KeepRunning is whether the task immediately restarts when its run
 	// exits (Task.KeepRunning).
 	KeepRunning bool
+	// Admission is how the task's runs are let in (Task.Admission).
+	Admission Admission
 	// Priority is the resolved numeric priority for the task (DefaultTaskPriority = 5).
 	Priority int
 
@@ -306,6 +308,7 @@ func (c Composition) Task(id string, actor Principal, reason OriginReason, now t
 		TemplateID:           c.TemplateID,
 		Interactive:          c.Interactive,
 		KeepRunning:          c.KeepRunning,
+		Admission:            c.Admission,
 		CreatedAt:            &now,
 	}
 	if c.Model != "" {
@@ -425,6 +428,7 @@ func composeTemplate(tmpl Template, values map[string]string, target RepoRef, ba
 		Approved:             approved,
 		Interactive:          tmpl.Interactive,
 		KeepRunning:          tmpl.KeepRunning,
+		Admission:            tmpl.Admission,
 		Priority:             priority,
 		TemplateID:           tmpl.ID,
 		TemplateName:         tmpl.Name,
@@ -473,6 +477,9 @@ func ComposeScheduleTask(sched Schedule, tmpl *Template) Composition {
 		if sched.Model != "" {
 			comp.Model, comp.Sources.Model = sched.Model, LayerSchedule
 		}
+		if sched.Admission > comp.Admission {
+			comp.Admission = sched.Admission
+		}
 		// A template-backed schedule stores a copy of its template's
 		// grants (ui.scheduleContentFromTemplate), so only a capability
 		// the template does not already grant is the schedule's own to
@@ -520,6 +527,7 @@ func ComposeScheduleTask(sched Schedule, tmpl *Template) Composition {
 		AutoApproveProposals: sched.AutoApproveProposals,
 		Approved:             true,
 		KeepRunning:          sched.KeepRunning,
+		Admission:            sched.Admission,
 		Priority:             DefaultTaskPriority,
 		Sources: CompositionSources{
 			Title:                LayerSchedule,
