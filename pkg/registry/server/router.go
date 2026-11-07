@@ -848,9 +848,14 @@ func (rt *Router) ServeInstanceHost(w http.ResponseWriter, r *http.Request, name
 
 	// 11. Sign (or reuse cached 30s) ES256 X-Grain-Registry-Assertion (`aud = "https://<name>.<instance-domain>"`)
 	// and sanitize headers/cookies while preserving Host.
-	sub := strings.ToLower(strings.TrimSpace(effectiveCaller.Subject))
-	if sub == "" || actor != nil {
-		sub = strings.ToLower(strings.TrimSpace(effectiveCaller.Email))
+	// Use the canonical normalized email for both `sub` and `email` so
+	// downstream `webauth.IdentityFromRegistryClaims` accepts assertions when
+	// front-door IAP supplies a numeric Gaia ID (`accounts.google.com:<id>`) in
+	// `Caller.Subject`.
+	email := webauth.NormalizeIdentityEmail(effectiveCaller.Email)
+	sub := email
+	if sub == "" {
+		sub = webauth.NormalizeIdentityEmail(effectiveCaller.Subject)
 	}
 	kind := "human"
 	if effectiveCaller.Kind == webauth.PrincipalService {
@@ -859,7 +864,7 @@ func (rt *Router) ServeInstanceHost(w http.ResponseWriter, r *http.Request, name
 	assertionJWT, err := rt.signer.SignAssertion(r.Context(), AssertionClaims{
 		Audience: "https://" + entryHost,
 		Subject:  sub,
-		Email:    strings.ToLower(strings.TrimSpace(effectiveCaller.Email)),
+		Email:    email,
 		Kind:     kind,
 		Actor:    actor,
 	})
