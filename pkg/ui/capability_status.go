@@ -21,13 +21,11 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability"
 	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
 	consolecap "github.com/ai-on-gke/grain/pkg/capability/console"
-	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/imagesigning"
 	modelproxycap "github.com/ai-on-gke/grain/pkg/capability/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
-	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
 	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
 	// The release server's methods and the CI rules they declare
 	// (model.CIGrantRule), which the pickers' CI-only refusals read.
@@ -288,8 +286,6 @@ var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
 	"package-publish":           "Package publish",
 	"image-signing":             "Image signing",
 	"console":                   "Interactive console",
-	"priority-dispatch":         "Priority dispatch",
-	"durable":                   "Durable",
 	"read-issues":               "Read issues",
 	model.GitHubReadIssuesGrant: "Read issues",
 })
@@ -366,8 +362,6 @@ func capabilityProviderCatalog() []model.CapabilityProvider {
 		packagepublish.New(packagepublish.Config{}),
 		imagesigning.New(imagesigning.Config{}),
 		consolecap.New(),
-		prioritydispatch.New(),
-		durable.New(),
 	)
 	return providers
 }

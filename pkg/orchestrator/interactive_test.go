@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
-	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
@@ -234,7 +233,7 @@ func TestInteractiveMultiTurnConversationMixingChatAndPlainTextExits(t *testing.
 		Config: orchestrator.Config{
 			Now:          currentNow,
 			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities: orchestrator.SessionTestRegistry(durable.New()),
+			Capabilities: orchestrator.SessionTestRegistry(),
 			// SessionSandboxIdleTTL is left unset so run 1 reads the stored
 			// setting (30m above) and follows it live while it idles: the
 			// wait between Turn 1 and Turn 2 must not race a short timer
@@ -456,7 +455,7 @@ func TestInteractiveConcurrentCommentDuringProcessResultLeavesTaskQueued(t *test
 		})),
 		Config: orchestrator.Config{
 			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities: orchestrator.SessionTestRegistry(durable.New()),
+			Capabilities: orchestrator.SessionTestRegistry(),
 		},
 		MaxWorkers: 1,
 	}
@@ -506,7 +505,7 @@ func TestInteractiveFirstTurnWithNoCommentsDispatchesForAMessageItNeverSaw(t *te
 		})),
 		Config: orchestrator.Config{
 			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities: orchestrator.SessionTestRegistry(durable.New()),
+			Capabilities: orchestrator.SessionTestRegistry(),
 		},
 		MaxWorkers: 1,
 	}
@@ -593,7 +592,7 @@ func TestInteractiveFrameworkStickinessAndUsageLimitFallback(t *testing.T) {
 		},
 		Config: orchestrator.Config{
 			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities: orchestrator.SessionTestRegistry(durable.New()),
+			Capabilities: orchestrator.SessionTestRegistry(),
 		},
 		MaxWorkers: 1,
 	}
@@ -821,7 +820,7 @@ func TestInteractiveRunHostAdoptionMidChatWithRecreateSandboxAndSubsequentTurns(
 			SandboxRecreations:    recreations,
 			SessionSandboxIdleTTL: 30 * time.Minute,
 			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
+			Capabilities:          orchestrator.SessionTestRegistry(),
 		},
 	}
 	recordAdoptedSessionKeys(t, ctx, store, deps, director.ID, d.RunID)
@@ -933,7 +932,7 @@ func TestResumeAdoptedRunEnforcesWarmSandboxIsolationAndLedgerPark(t *testing.T)
 			Config: orchestrator.Config{
 				SessionSandboxIdleTTL: 30 * time.Minute,
 				StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-				Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
+				Capabilities:          orchestrator.SessionTestRegistry(),
 			},
 		}
 		info := runhost.Info{
@@ -1010,7 +1009,7 @@ func TestResumeAdoptedRunEnforcesWarmSandboxIsolationAndLedgerPark(t *testing.T)
 				SandboxRecreations:    recreations,
 				SessionSandboxIdleTTL: 30 * time.Minute,
 				StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-				Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
+				Capabilities:          orchestrator.SessionTestRegistry(),
 			},
 		}
 		info := runhost.Info{
@@ -1097,7 +1096,7 @@ func TestResumeAdoptedRunEnforcesWarmSandboxIsolationAndLedgerPark(t *testing.T)
 			Config: orchestrator.Config{
 				SessionSandboxIdleTTL: 30 * time.Minute,
 				StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-				Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
+				Capabilities:          orchestrator.SessionTestRegistry(),
 			},
 		}
 		info := runhost.Info{
@@ -1172,7 +1171,7 @@ func TestResumeAdoptedRunEnforcesWarmSandboxIsolationAndLedgerPark(t *testing.T)
 			Config: orchestrator.Config{
 				SessionSandboxIdleTTL: 30 * time.Minute,
 				StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-				Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
+				Capabilities:          orchestrator.SessionTestRegistry(),
 			},
 		}
 		info := runhost.Info{

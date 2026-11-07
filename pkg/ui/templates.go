@@ -17,6 +17,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"slices"
 	"strconv"
@@ -25,6 +26,14 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/model"
 )
+
+func extractLegacyAdmissionCaps(where string, caps []string) ([]string, model.Admission, bool) {
+	kept, adm, warnings := model.ExtractLegacyAdmissionStrings(caps)
+	for _, w := range warnings {
+		log.Printf("%s: %s", where, w)
+	}
+	return kept, adm, len(warnings) > 0
+}
 
 // templateNotFoundError marks a template ID with no template behind it --
 // scheduleNotFoundError's own reasoning, so the message a caller sees
@@ -104,6 +113,7 @@ type Template struct {
 	// switch existed keeps the revision it had.
 	Interactive  bool                        `json:"interactive,omitempty"`
 	KeepRunning  bool                        `json:"keepRunning,omitempty"`
+	Admission    string                      `json:"admission,omitempty"`
 	Reads        []string                    `json:"reads,omitempty"`
 	Writes       []WriteTarget               `json:"writes,omitempty"`
 	CustomFields map[string]CustomFieldValue `json:"customFields,omitempty"`
@@ -191,6 +201,7 @@ func templateFrom(t model.Template) Template {
 		AutoMerge:     t.AutoMerge,
 		Interactive:   t.Interactive,
 		KeepRunning:   t.KeepRunning,
+		Admission:     string(t.Admission),
 		NetworkAccess: string(t.NetworkAccess),
 		Model:         t.Model,
 		CustomFields:  customFieldValues(t.CustomFields),
@@ -336,9 +347,10 @@ type CreateTemplateRequest struct {
 	// (model.Template.Model), or "" to leave it to the team's default.
 	Model string `json:"model"`
 	// Interactive sets model.Template.Interactive.
-	Interactive      bool  `json:"interactive"`
-	KeepRunning      bool  `json:"keepRunning,omitempty"`
-	KeepRunningSnake *bool `json:"keep_running,omitempty"`
+	Interactive      bool   `json:"interactive"`
+	KeepRunning      bool   `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool  `json:"keep_running,omitempty"`
+	Admission        string `json:"admission,omitempty"`
 	// Hostd is read only to be refused (TaskHostdRefusal): a template's
 	// tasks have no hostd of their own.
 	Hostd        string                      `json:"hostd,omitempty"`
@@ -401,7 +413,15 @@ func (c *Client) CreateTemplate(ctx context.Context, req CreateTemplateRequest) 
 	if err := refuseTaskHostd("hostd", req.Hostd); err != nil {
 		return Template{}, err
 	}
-	grants, err := c.grantsFor(req.Capabilities, model.GrantByLabel)
+	admission, err := model.ParseOptionalAdmission(req.Admission)
+	if err != nil {
+		return Template{}, validationErrorf("%v", err)
+	}
+	capsWithoutLegacy, legacyAdm, hadLegacy := extractLegacyAdmissionCaps("template "+req.Name, req.Capabilities)
+	if hadLegacy {
+		admission = model.MaxAdmission(admission, legacyAdm)
+	}
+	grants, err := c.grantsFor(capsWithoutLegacy, model.GrantByLabel)
 	if err != nil {
 		return Template{}, err
 	}
@@ -455,6 +475,7 @@ func (c *Client) CreateTemplate(ctx context.Context, req CreateTemplateRequest) 
 		AutoMerge:     req.AutoMerge,
 		Interactive:   req.Interactive,
 		KeepRunning:   req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake),
+		Admission:     admission,
 		NetworkAccess: model.NetworkAccess(req.NetworkAccess),
 		Model:         chosenModel,
 		Reads:         reads,
@@ -572,6 +593,9 @@ func (c *Client) fromTemplate(ctx context.Context, req CreateTaskRequest) (Creat
 	}
 	if !req.KeepRunning && req.KeepRunningSnake == nil {
 		req.KeepRunning = comp.KeepRunning
+	}
+	if strings.TrimSpace(req.Admission) == "" && comp.Admission != "" {
+		req.Admission = string(comp.Admission)
 	}
 	if req.Priority == nil && comp.Priority != 0 {
 		p := comp.Priority
@@ -732,9 +756,10 @@ type UpdateTemplateRequest struct {
 	// clears it, so the template's tasks go back to the team's default.
 	Model *string `json:"model,omitempty"`
 	// Interactive edits CreateTemplateRequest.Interactive's own field.
-	Interactive      *bool `json:"interactive,omitempty"`
-	KeepRunning      *bool `json:"keepRunning,omitempty"`
-	KeepRunningSnake *bool `json:"keep_running,omitempty"`
+	Interactive      *bool   `json:"interactive,omitempty"`
+	KeepRunning      *bool   `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool   `json:"keep_running,omitempty"`
+	Admission        *string `json:"admission,omitempty"`
 	// Hostd is read only to be refused (TaskHostdRefusal).
 	Hostd        *string                      `json:"hostd,omitempty"`
 	Capabilities *[]string                    `json:"capabilities,omitempty"`
@@ -795,10 +820,22 @@ func (c *Client) UpdateTemplate(ctx context.Context, id string, req UpdateTempla
 			return Template{}, err
 		}
 	}
+	var chosenAdmission *model.Admission
+	if req.Admission != nil {
+		adm, err := model.ParseOptionalAdmission(*req.Admission)
+		if err != nil {
+			return Template{}, validationErrorf("%v", err)
+		}
+		chosenAdmission = &adm
+	}
 	var grants []model.Grant
+	var legacyAdmission model.Admission
+	var hadLegacyAdmission bool
 	if req.Capabilities != nil {
+		var capsWithoutLegacy []string
+		capsWithoutLegacy, legacyAdmission, hadLegacyAdmission = extractLegacyAdmissionCaps("template "+id, *req.Capabilities)
 		var err error
-		grants, err = c.grantsFor(*req.Capabilities, model.GrantByLabel)
+		grants, err = c.grantsFor(capsWithoutLegacy, model.GrantByLabel)
 		if err != nil {
 			return Template{}, err
 		}
@@ -933,6 +970,12 @@ func (c *Client) UpdateTemplate(ctx context.Context, id string, req UpdateTempla
 			t.KeepRunning = *req.KeepRunning
 		} else if req.KeepRunningSnake != nil {
 			t.KeepRunning = *req.KeepRunningSnake
+		}
+		if chosenAdmission != nil {
+			t.Admission = *chosenAdmission
+		}
+		if hadLegacyAdmission {
+			t.Admission = model.MaxAdmission(t.Admission, legacyAdmission)
 		}
 		if req.NetworkAccess != nil {
 			t.NetworkAccess = model.NetworkAccess(*req.NetworkAccess)
