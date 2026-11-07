@@ -410,7 +410,11 @@ func cmdRegistryRegister(ctx context.Context, c *ui.HTTPClient, out *printer, ar
 				fmt.Printf("registration token (shown once): %s\n", mintedToken)
 			}
 		}
-		printConnectedConfigSnippet(normCfg.URL, normCfg.Entry)
+		entryURL := ""
+		if remoteEntry != nil {
+			entryURL = remoteEntry.URL
+		}
+		printConnectedConfigSnippet(normCfg.URL, normCfg.Entry, entryURL, *tokenFile)
 		return nil
 	}
 

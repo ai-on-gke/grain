@@ -114,12 +114,37 @@ func TestRegistryTargetFlagsRejectInsecureURLBeforeOIDCMint(t *testing.T) {
 
 func TestPrintConnectedConfigSnippetQuotesShellMetacharacters(t *testing.T) {
 	out := captureStdout(t, func() {
-		printConnectedConfigSnippet("https://registry.example.com/$(id)", "bad;rm -rf /'x")
+		printConnectedConfigSnippet("https://registry.example.com/$(id)", "bad;rm -rf /'x", "", "")
 	})
 	if !strings.Contains(out, "'https://registry.example.com/$(id)'") {
 		t.Fatalf("snippet did not single-quote URL metacharacters: %s", out)
 	}
 	if !strings.Contains(out, `'bad;rm -rf /'\''x'`) {
 		t.Fatalf("snippet did not single-quote entry metacharacters: %s", out)
+	}
+}
+
+// TestPrintConnectedConfigSnippetCarriesVerifierFlags pins the 2026-11-07
+// walkthrough finding: the printed snippet omitted -ui-registry-issuer,
+// -ui-registry-audience and -ui-registry-keys-url (and the token file), so
+// pasting it failed with "-registry-connect requires -ui-registry-issuer,
+// -ui-registry-audience, and -ui-registry-keys-url".
+func TestPrintConnectedConfigSnippetCarriesVerifierFlags(t *testing.T) {
+	out := captureStdout(t, func() {
+		printConnectedConfigSnippet("https://registry.example.com/", "ws-1", "https://ws-1.grain-user.example", "/etc/grain/registry.token")
+	})
+	for _, want := range []string{
+		"-registry-url https://registry.example.com/",
+		"-registry-entry ws-1",
+		"-registry-token-file /etc/grain/registry.token",
+		"-registry-connect",
+		"-ui-require-verifier=registry",
+		"-ui-registry-issuer=grain-registry",
+		"-ui-registry-audience=https://ws-1.grain-user.example",
+		"-ui-registry-keys-url=https://registry.example.com/.well-known/jwks.json",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("snippet missing %q:\n%s", want, out)
+		}
 	}
 }
