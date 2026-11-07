@@ -3537,6 +3537,7 @@ func workflowFileMatches(runPath string, id int64, workflow string) bool {
 func pageRuns(reqPath string, qs url.Values, payload map[string]any, workflow string) (map[string]any, string) {
 	all, _ := payload["workflow_runs"].([]map[string]any)
 	branch := qs.Get("branch")
+	status := qs.Get("status")
 	var since time.Time
 	if c, ok := strings.CutPrefix(qs.Get("created"), ">="); ok {
 		since, _ = time.Parse(time.RFC3339, c)
@@ -3551,6 +3552,9 @@ func pageRuns(reqPath string, qs url.Values, payload map[string]any, workflow st
 			}
 		}
 		if branch != "" && r["head_branch"] != branch {
+			continue
+		}
+		if status != "" && r["status"] != status {
 			continue
 		}
 		if sha := qs.Get("head_sha"); sha != "" {
