@@ -1226,6 +1226,12 @@ type Config struct {
 	// (-ui-allowed-principals). When empty, defaults to $GRAIN_ALLOWED_PRINCIPALS,
 	// or the deployment owner (Actor) plus provisioned service accounts.
 	AllowedPrincipals []string
+	// DeploymentOwner is -deployment-owner ($GRAIN_DEPLOYMENT_OWNER): the
+	// human email address that owns this deployment for RBAC
+	// (IsDeploymentOwner, requireDeploymentOwner) and holds an immutable
+	// grain/operator floor on the access allowlist, regardless of the OS
+	// account the daemon runs as.
+	DeploymentOwner string
 	// ProvisionedServiceAccounts lists daemon-owned GCP service accounts grain
 	// itself provisions for this deployment (never gcp-key sandbox agent
 	// accounts), included in the default allowlist when AllowedPrincipals is unset.

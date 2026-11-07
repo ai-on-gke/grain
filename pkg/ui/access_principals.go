@@ -119,12 +119,12 @@ func (c *Client) MigrateAllowedPrincipals(ctx context.Context) error {
 	c.allowedPrincipalsMigrateMu.Lock()
 	defer c.allowedPrincipalsMigrateMu.Unlock()
 	if c.allowedPrincipalsMigrated {
-		return nil
+		return c.ensureDeploymentOwnerAllowedLocked(ctx)
 	}
 	raw, source := c.explicitAllowedPrincipalsRawWithSource()
 	if len(raw) == 0 {
 		c.allowedPrincipalsMigrated = true
-		return nil
+		return c.ensureDeploymentOwnerAllowedLocked(ctx)
 	}
 	pool := c.gcpKeyPoolSet(ctx)
 	var importable []string
@@ -152,7 +152,7 @@ func (c *Client) MigrateAllowedPrincipals(ctx context.Context) error {
 	c.allowedPrincipalsMigrated = true
 	if !didImport {
 		log.Printf("grain access: WARNING: %s is deprecated and ignored because the allowed users and groups list lives in the database (manage it in Settings -> Access or with 'grain access')", source)
-		return nil
+		return c.ensureDeploymentOwnerAllowedLocked(ctx)
 	}
 
 	names := make([]string, 0, len(imported))
@@ -182,6 +182,30 @@ func (c *Client) MigrateAllowedPrincipals(ctx context.Context) error {
 	}); auditErr != nil {
 		log.Printf("grain access: recording flag migration in config audit: %v", auditErr)
 	}
+	return c.ensureDeploymentOwnerAllowedLocked(ctx)
+}
+
+func (c *Client) ensureDeploymentOwnerAllowedLocked(ctx context.Context) error {
+	owner := c.explicitDeploymentOwnerEmail()
+	if owner == "" || c.Store == nil || c.deploymentOwnerSeeded == owner {
+		return nil
+	}
+	canonical := "user:" + owner
+	if existing, ok, err := c.allowedPrincipalNamed(ctx, canonical); err != nil {
+		return err
+	} else if ok {
+		if existing.Role != model.DefaultAccessRole {
+			if _, _, _, err := c.Store.SetAllowedPrincipalRole(ctx, canonical, model.DefaultAccessRole); err != nil {
+				return err
+			}
+		}
+		c.deploymentOwnerSeeded = owner
+		return nil
+	}
+	if _, _, err := c.Store.AddAllowedPrincipalWithRole(ctx, canonical, "deployment-owner", "-deployment-owner", model.DefaultAccessRole, c.now()); err != nil {
+		return err
+	}
+	c.deploymentOwnerSeeded = owner
 	return nil
 }
 
@@ -291,6 +315,9 @@ func (c *Client) AllowPrincipal(ctx context.Context, req AllowPrincipalRequest) 
 		if role == "" {
 			role = model.DefaultAccessRole
 		}
+		if owner := c.explicitDeploymentOwnerEmail(); owner != "" && canonical == "user:"+owner && role != model.DefaultAccessRole {
+			return AllowPrincipalResponse{}, validationErrorf("allowed principal %q is the deployment owner (-deployment-owner) and must keep role %s", canonical, model.DefaultAccessRole)
+		}
 		if prefix == "serviceAccount" && reason == "" {
 			return AllowPrincipalResponse{}, validationErrorf("allowed principal %q: give a reason to admit a service account (with role %s)", canonical, role)
 		}
@@ -331,6 +358,9 @@ func (c *Client) DenyPrincipal(ctx context.Context, rawEntry string) (DenyPrinci
 	if err != nil {
 		return DenyPrincipalResponse{}, validationErrorf("%v", err)
 	}
+	if owner := c.explicitDeploymentOwnerEmail(); owner != "" && canonical == "user:"+owner {
+		return DenyPrincipalResponse{}, validationErrorf("allowed principal %q is the deployment owner (-deployment-owner) and cannot be removed from the allowlist", canonical)
+	}
 	if existing, ok, err := c.allowedPrincipalNamed(ctx, canonical); err != nil {
 		return DenyPrincipalResponse{}, err
 	} else if ok {
@@ -370,6 +400,9 @@ func (c *Client) SetPrincipalRole(ctx context.Context, rawEntry string, req SetP
 	role := strings.TrimSpace(req.Role)
 	if role == "" {
 		return SetPrincipalRoleResponse{}, validationErrorf("allowed principal %q: name the role (a scope set) to give it", canonical)
+	}
+	if owner := c.explicitDeploymentOwnerEmail(); owner != "" && canonical == "user:"+owner && role != model.DefaultAccessRole {
+		return SetPrincipalRoleResponse{}, validationErrorf("allowed principal %q is the deployment owner (-deployment-owner) and must keep role %s", canonical, model.DefaultAccessRole)
 	}
 	reason := strings.TrimSpace(req.Reason)
 	if reason == "" {

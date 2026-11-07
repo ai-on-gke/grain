@@ -60,7 +60,7 @@ Any other command, including `mcpserver`, `capability` and the agent hooks, runs
 | Scheme | Holds | Needs |
 |---|---|---|
 | `ci://<owner>/<repo>/<run>/<job>/[attempts/<k>/]<step>.log`, `…/artifacts/<job>/<name>` | grain CI runs and GitHub Actions runs (`gha:` ids; one `job.log` per job) | `https://grain.dev/capabilities/grain#ci` (formerly `grain-ci`, retired in schema migration 96) for the task's own repo, `ci-read` for others |
-| `src://…` | the daemon's own source; `src://core/…` for core under a layered build; `src://playbooks/…` | `self-debug`, or `bootstrap-playbooks` for playbooks |
+| `src://…` | the daemon's own source; `src://core/…` for core under a layered build; `src://playbooks/…` | `…/grain#source` (formerly `self-debug`), or `…/config-map#config-map={"config_maps":["bootstrap"]}` (formerly `bootstrap-playbooks`, retired in schema migration 118) for playbooks |
 | `task://<id>/record.md`, `prompt.md`, `transcript.md`, `attempts/<n>/…` | task records | the run's own task, or `self-debug`/`tasks:read` for others |
 | `config://…` | the deployment's state repository (grain/config) | as the namespace grants |
 | `memory://<key>` | memory documents | `memory` |
@@ -696,7 +696,7 @@ Usage: `grain quarantine <package> <test-name> --reason <why> [--ttl 30d] [--no-
 - `grain metrics [<section>]` reads `deploy://metrics[/<section>]` with `window`, `since` and `until`. `--repo` and `--author` may be repeated. **Needs** `self-debug`.
 - `grain health` reads `deploy://health`. **Needs** `…/grain#health` (formerly `deployment-health`).
 - `grain log [<source> | --source s]` reads `deploy://grain.log[/<source>]`. `--since`/`--until` spans are resolved to RFC 3339 instants relative to now. `--priority`/`--min-priority` become `min_priority`, and `--max-lines`/`--lines`/`-n` become `max_lines`. A zero count is refused: `grain log: <flag> "0" is not a count of entries: it takes a positive integer`. **Needs** `…/grain#journal` (formerly `grain-log`).
-- `grain playbooks` prints one playbook name per line (`src://playbooks`, with `.md` dropped). `grain playbooks <name>` reads it. **Needs** `bootstrap-playbooks`.
+- `grain playbooks` prints one playbook name per line (`src://playbooks`, with `.md` dropped). `grain playbooks <name>` reads it. **Needs** `…/config-map#config-map={"config_maps":["bootstrap"]}` (formerly `bootstrap-playbooks`).
 
 <!-- BEGIN GENERATED FLAGS: grain metrics -->
 Usage: `grain metrics [<section>] [--window 7d | --since <date> [--until <date>]] [--repo owner/name]... [--author <a>]...`

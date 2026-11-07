@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -199,6 +200,67 @@ func (c *Client) requestPersonOrTrustedOperator(ctx context.Context) string {
 	return c.requestPersonOrOperator(ctx)
 }
 
+// DeploymentOwnerEnv is the environment variable fallback for -deployment-owner.
+const DeploymentOwnerEnv = "GRAIN_DEPLOYMENT_OWNER"
+
+// NormalizeDeploymentOwner validates and normalizes -deployment-owner
+// ($GRAIN_DEPLOYMENT_OWNER) to a lowercase human email address
+// ("alice@example.com"). An optional "user:" prefix is accepted and stripped;
+// empty input returns ("", nil).
+func NormalizeDeploymentOwner(raw string) (string, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", nil
+	}
+	if prefix, rest, ok := strings.Cut(s, ":"); ok {
+		if !strings.EqualFold(strings.TrimSpace(prefix), "user") {
+			return "", fmt.Errorf("invalid -deployment-owner %q: must be a user email address, not %s:", raw, strings.TrimSpace(prefix))
+		}
+		s = strings.TrimSpace(rest)
+	}
+	s = strings.ToLower(s)
+	local, domain, ok := strings.Cut(s, "@")
+	if !ok || local == "" || domain == "" || strings.ContainsAny(s, " \t\r\n,") || strings.Contains(domain, "@") || !strings.Contains(domain, ".") {
+		return "", fmt.Errorf("invalid -deployment-owner %q: must be an email address", raw)
+	}
+	if strings.HasSuffix(domain, ".gserviceaccount.com") {
+		return "", fmt.Errorf("invalid -deployment-owner %q: must be a human user email address, not a service account", raw)
+	}
+	return s, nil
+}
+
+// explicitDeploymentOwnerEmail returns the normalized -deployment-owner
+// ($GRAIN_DEPLOYMENT_OWNER) email when configured, or "" otherwise.
+func (c *Client) explicitDeploymentOwnerEmail() string {
+	if c == nil {
+		return ""
+	}
+	raw := strings.TrimSpace(c.Config.DeploymentOwner)
+	if raw == "" {
+		raw = strings.TrimSpace(os.Getenv(DeploymentOwnerEnv))
+	}
+	owner, err := NormalizeDeploymentOwner(raw)
+	if err != nil {
+		return ""
+	}
+	return owner
+}
+
+// deploymentOwnerEmail returns the explicit -deployment-owner email when set,
+// else the deployment's own actor's email when Config.Actor names an email
+// address.
+func (c *Client) deploymentOwnerEmail() string {
+	if owner := c.explicitDeploymentOwnerEmail(); owner != "" {
+		return owner
+	}
+	if c != nil {
+		if owner := c.operatorPerson(); strings.Contains(owner, "@") {
+			return strings.ToLower(owner)
+		}
+	}
+	return ""
+}
+
 // IsDeploymentOwner reports whether ctx acts as the deployment owner:
 //
 //   - Never an agent or service account.
@@ -207,8 +269,10 @@ func (c *Client) requestPersonOrTrustedOperator(ctx context.Context) string {
 //   - An un-named trusted caller (the deployment access code, loopback
 //     break-glass, or an in-process Client call) acts as the deployment owner.
 //   - A verified human holding full owner access (grain/operator, role.Full)
-//     is the deployment owner when Config.Actor names no email address (the
-//     default OS account), or when their verified email matches Config.Actor.
+//     is the deployment owner when neither -deployment-owner nor Config.Actor
+//     names an email address (the default OS account), or when their verified
+//     email matches -deployment-owner (or Config.Actor when -deployment-owner
+//     is unset).
 func (c *Client) IsDeploymentOwner(ctx context.Context) bool {
 	if c == nil {
 		return false
@@ -223,8 +287,7 @@ func (c *Client) IsDeploymentOwner(ctx context.Context) bool {
 	if p.Kind != model.PrincipalHuman {
 		return false
 	}
-	owner := c.operatorPerson()
-	if strings.Contains(owner, "@") {
+	if owner := c.deploymentOwnerEmail(); owner != "" {
 		return strings.EqualFold(strings.TrimSpace(p.ID), owner)
 	}
 	return true
@@ -234,7 +297,7 @@ func (c *Client) requireDeploymentOwner(ctx context.Context, action string) erro
 	if c.IsDeploymentOwner(ctx) {
 		return nil
 	}
-	if owner := c.operatorPerson(); strings.Contains(owner, "@") {
+	if owner := c.deploymentOwnerEmail(); owner != "" {
 		return &ForbiddenError{err: fmt.Errorf("only the deployment owner (%s) may %s", owner, action)}
 	}
 	return &ForbiddenError{err: fmt.Errorf("only the deployment owner may %s", action)}
