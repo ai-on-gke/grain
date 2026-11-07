@@ -70,6 +70,7 @@ const LABELS = {
   model: "Model",
   autoMerge: "Auto-merge",
   keepRunning: "Keep running",
+  admission: "Admission",
   approval: "Approval",
   priority: "Task priority",
 };

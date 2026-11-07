@@ -103,6 +103,22 @@ describe("TasksSection", () => {
     });
   });
 
+  it("saves Default admission", async () => {
+    const user = userEvent.setup();
+    const s = section({
+      defaultAdmission: "standard",
+      capabilities: [],
+    });
+    render(<TasksSection s={s} config={{}} />);
+    await user.click(
+      screen.getByRole("combobox", { name: "Default admission" }),
+    );
+    await user.click(screen.getByRole("option", { name: "Bypass queue" }));
+    expect(s.saveChoice).toHaveBeenCalledWith({
+      defaultAdmission: "bypass",
+    });
+  });
+
   it("lists the deployment's task fields and the tasks a field strands", async () => {
     const user = userEvent.setup();
     const onShow = vi.fn();

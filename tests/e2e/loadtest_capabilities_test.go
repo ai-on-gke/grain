@@ -56,7 +56,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability"
 	consolecap "github.com/ai-on-gke/grain/pkg/capability/console"
-	_ "github.com/ai-on-gke/grain/pkg/capability/grainserver"
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
 	"github.com/ai-on-gke/grain/pkg/model"

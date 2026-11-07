@@ -143,6 +143,45 @@ describe("App", () => {
     expect(JSON.parse(opts.body)).toMatchObject({ keepRunning: false });
   });
 
+  it("reads and saves a schedule's Admission", async () => {
+    const schedule = {
+      id: "sched-1",
+      title: "Nightly dependency bump",
+      description: "",
+      repo: "acme/widgets",
+      base: "",
+      autoMerge: false,
+      admission: "standard",
+      recurrence: { kind: "everyNHours", everyNHours: 24 },
+      enabled: true,
+      nextRunAt: "2026-08-29T00:00:00Z",
+    };
+    setupApi(initialTasks, [schedule]);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("Fix bug");
+
+    await user.click(screen.getByRole("button", { name: /^Processes/ }));
+    await user.click(await screen.findByText("Nightly dependency bump"));
+    const select = await screen.findByRole("combobox", { name: "Admission" });
+    await user.click(select);
+    await user.click(screen.getByRole("option", { name: "Bypass queue" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(
+        api.mock.calls.find(
+          ([path, opts]) =>
+            path === "/api/schedules/sched-1" && opts?.method === "PATCH",
+        ),
+      ).toBeTruthy(),
+    );
+    const [, opts] = api.mock.calls.find(
+      ([path, o]) => path === "/api/schedules/sched-1" && o?.method === "PATCH",
+    );
+    expect(JSON.parse(opts.body)).toMatchObject({ admission: "bypass" });
+  });
+
   it("previews a saved schedule with the model it asks for", async () => {
     // The draft endpoint has no saved row to fall back on, so the model
     // the save leaves out when unchanged has to be in the preview's body

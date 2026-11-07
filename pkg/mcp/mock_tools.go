@@ -886,11 +886,9 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 		Name: "propose_task",
 		Description: "Propose a follow-up or out-of-scope task for the queue. " + filing +
 			", linked to this task: queued when your task's permission covers it, or held " +
-			"unapproved for human review (pass hold_for_approval: true to hold regardless; " +
-			"keep_running or a priority above your task's always holds). " +
-			"Set depends_on for tasks it must wait on, repo if the work belongs in another " +
-			"repository, or supersedes to replace an undispatched task. Run 'grain help propose' " +
-			"for full reference.",
+			"for review (hold_for_approval: true holds regardless; keep_running, non-standard " +
+			"admission, or higher priority always holds). Set depends_on, repo, or supersedes " +
+			"as needed. Run 'grain help propose' for full reference.",
 		InputSchema: map[string]any{
 			"type":                 "object",
 			"additionalProperties": false,

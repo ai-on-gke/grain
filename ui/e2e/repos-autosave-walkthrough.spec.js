@@ -84,17 +84,25 @@ test.describe("Walkthrough: Auto-Saving Repo Pane & Sidebar Release Stamp (docs/
       });
       await expect(capsSelect).toBeVisible();
       await capsSelect.click();
-      // Select "Durable" from capabilities menu list. Not GCP key,
+      // Select "Interactive console" from capabilities menu list. Not GCP key,
       // Read issues, or Self debug: the demo makes those deployment defaults,
       // which every repo has on whatever it says, so choosing one here would
       // prove nothing saved.
-      const durableOption = page.getByRole("option", {
-        name: "Durable",
+      const consoleOption = page.getByRole("option", {
+        name: "Interactive console",
         exact: true,
       });
-      await expect(durableOption).toBeVisible();
-      await durableOption.click();
+      await expect(consoleOption).toBeVisible();
+      await consoleOption.click();
       await page.keyboard.press("Escape"); // Close select dropdown
+
+      // 2b. Modify Default Admission (select triggers onChange auto-save)
+      const admissionSelect = page.getByRole("combobox", {
+        name: "Default admission",
+      });
+      await expect(admissionSelect).toBeVisible();
+      await admissionSelect.click();
+      await page.getByRole("option", { name: "Durable", exact: true }).click();
 
       // 3. Modify Prompt Extension
       const promptInput = page.locator('textarea[name="repoPromptExtension"]');
@@ -149,7 +157,9 @@ test.describe("Walkthrough: Auto-Saving Repo Pane & Sidebar Release Stamp (docs/
         `/api/repos/${targetRepo}/capabilities`,
       );
       expect(capsRes.ok()).toBe(true);
-      expect((await capsRes.json()).defaultCapabilities).toContain("durable");
+      const capsJson = await capsRes.json();
+      expect(capsJson.defaultCapabilities).toContain("console");
+      expect(capsJson.defaultAdmission).toBe("durable");
     });
   });
 });

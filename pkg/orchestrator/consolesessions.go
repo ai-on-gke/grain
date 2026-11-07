@@ -831,6 +831,7 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 	}
 	if task.Title == title && task.Body == body && task.NetworkAccess == network &&
 		task.Model == chosenModel && task.KeepRunning == keepRunning &&
+		task.Admission == model.AdmissionDurable &&
 		slices.Equal(task.Grants, grants) &&
 		slices.Equal(taskReads, reads) &&
 		slices.Equal(taskWrites, writes) &&
@@ -862,6 +863,7 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 		t.Title = title
 		t.Body = body
 		t.Grants = grants
+		t.Admission = model.AdmissionDurable
 		t.NetworkAccess = network
 		t.KeepRunning = keepRunning
 		t.Reads = reads

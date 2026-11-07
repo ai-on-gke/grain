@@ -333,7 +333,7 @@ func TestCheckAccessRequestHonorsTemplateAndSessionCatalogueContext(t *testing.T
 						RequiresPerson: true,
 					},
 				},
-				"priority-dispatch": {
+				"console": {
 					Restrictions: &model.CapabilityRestrictions{
 						Kinds: model.Patterns{model.CatalogueKindSession},
 					},

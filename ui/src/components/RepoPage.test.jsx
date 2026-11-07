@@ -2956,5 +2956,48 @@ describe("RepoPage", () => {
       );
       expect(screen.getByTestId("repo-ci-grants")).toHaveTextContent("None");
     });
+
+    it("reads and auto-saves Default admission under Agents", async () => {
+      const user = userEvent.setup();
+      routeApi({
+        caps: {
+          ...noCaps,
+          defaultAdmission: "bypass",
+          deploymentDefaultAdmission: "standard",
+          effectiveDefaultAdmission: "bypass",
+        },
+      });
+      renderPage();
+      await openTab("Agents");
+
+      const section = await screen.findByTestId("repo-default-admission");
+      expect(section).toHaveTextContent(
+        "A task filed against acme/widgets starts at admission: Bypass queue",
+      );
+      answerOnce(
+        (path, opts) =>
+          !!opts && /\/settings$/.test(path) && opts.method === "PUT",
+        () =>
+          Promise.resolve({
+            ...noCaps,
+            defaultAdmission: "durable",
+            deploymentDefaultAdmission: "standard",
+            effectiveDefaultAdmission: "durable",
+          }),
+      );
+      await user.click(
+        within(section).getByRole("combobox", { name: "Default admission" }),
+      );
+      await user.click(screen.getByRole("option", { name: "Durable" }));
+      await waitFor(() =>
+        expect(api).toHaveBeenCalledWith("/api/repos/acme/widgets/settings", {
+          method: "PUT",
+          body: JSON.stringify({ defaultAdmission: "durable" }),
+        }),
+      );
+      expect(section).toHaveTextContent(
+        "A task filed against acme/widgets starts at admission: Durable",
+      );
+    });
   });
 });

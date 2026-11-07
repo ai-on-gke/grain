@@ -18,6 +18,7 @@ import {
   Button,
   Checkbox,
   FormControlLabel,
+  MenuItem,
   Stack,
   TextField,
 } from "@mui/material";
@@ -26,8 +27,10 @@ import { useTimeZone } from "../../TimeZoneContext.jsx";
 import { formatDateTime, zoneAbbreviation, zoneOffset } from "../../time.js";
 import { dayStart } from "../../taskFilters.js";
 import {
+  ADMISSION_OPTIONS,
   closablePullRequest,
   isTaskPaused,
+  normalizeAdmission,
   pausedDescription,
   taskPause,
 } from "../../state.js";
@@ -597,6 +600,33 @@ export default function Actions({ t, config, act, onOpenTask }) {
           sx={{ display: "flex", m: 0 }}
           slotProps={{ typography: { fontSize: "0.8rem" } }}
         />
+      )}
+      {t.state !== "closed" && (
+        <TextField
+          select
+          size="small"
+          name="admission"
+          label="Admission"
+          value={normalizeAdmission(t.admission)}
+          disabled={Boolean(t.consoleSession)}
+          onChange={(e) =>
+            act(
+              () =>
+                api(`/api/tasks/${t.id}`, {
+                  method: "PATCH",
+                  body: JSON.stringify({ admission: e.target.value }),
+                }),
+              t.id,
+            )
+          }
+          sx={{ mt: 0.5 }}
+        >
+          {ADMISSION_OPTIONS.map((o) => (
+            <MenuItem key={o.value} value={o.value} title={o.description}>
+              {o.label}
+            </MenuItem>
+          ))}
+        </TextField>
       )}
       {/* "This fixes a red <base>" (ui.UpdateTaskRequest.FixesBaseBranch,
           grain/task-3451): while a base branch is red, grain makes the

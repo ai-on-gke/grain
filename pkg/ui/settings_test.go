@@ -436,10 +436,10 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &deployment}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"priority-dispatch"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"console"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/gadgets", []string{"priority-dispatch", "read-issues"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/gadgets", []string{"console", "read-issues"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -459,12 +459,12 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 	if got := byID["read-issues"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets"}) {
 		t.Errorf("read-issues DefaultRepos = %v, want [acme/gadgets]", got)
 	}
-	if got := byID["priority-dispatch"]; got.Default {
-		t.Errorf("priority-dispatch Default = true, want false: no task outside those two repos is filed with it")
+	if got := byID["console"]; got.Default {
+		t.Errorf("console Default = true, want false: no task outside those two repos is filed with it")
 	}
 	// Sorted by repo, the order Store.ListRepoConfigs returns.
-	if got := byID["priority-dispatch"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets", "acme/widgets"}) {
-		t.Errorf("priority-dispatch DefaultRepos = %v, want [acme/gadgets acme/widgets]", got)
+	if got := byID["console"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets", "acme/widgets"}) {
+		t.Errorf("console DefaultRepos = %v, want [acme/gadgets acme/widgets]", got)
 	}
 	if got := byID["github-sandbox"].DefaultRepos; len(got) != 0 {
 		t.Errorf("github-sandbox DefaultRepos = %v, want none", got)

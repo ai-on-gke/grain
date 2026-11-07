@@ -3606,10 +3606,11 @@ func TestStartRunNeverRefusesAConsoleSessionAtFullCapacity(t *testing.T) {
 	session := task("sess1", true)
 	session.Origin.Reason = model.ReasonConsoleSession
 	session.Interactive = true
+	session.Admission = model.AdmissionDurable
 	session.Tags = []string{model.ConsoleSessionTag(model.DirectorSessionID)}
 	session.Grants = model.ConsoleSessionGrants(model.ConsoleSession{ID: model.DirectorSessionID})
 	steward := task("stew1", true)
-	steward.Grants = []model.Grant{{Capability: model.PriorityDispatchCapability, Via: model.GrantByLabel}}
+	steward.Admission = model.AdmissionBypass
 	for _, tk := range []model.Task{task("w0rk", true), task("w1rk", true), session, steward} {
 		if err := store.PutTask(ctx, tk); err != nil {
 			t.Fatal(err)

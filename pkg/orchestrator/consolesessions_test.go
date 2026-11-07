@@ -100,15 +100,18 @@ func TestTheDirectorIsFiledOnTheFirstCycleAndParkedOnItsOwnOpening(t *testing.T)
 	if director.NetworkAccess != model.NetworkOpen {
 		t.Errorf("NetworkAccess = %q, want open by default", director.NetworkAccess)
 	}
+	if director.Admission != model.AdmissionDurable {
+		t.Errorf("Admission = %q, want durable", director.Admission)
+	}
 	var grants []string
 	for _, g := range director.Grants {
 		grants = append(grants, g.Capability)
 	}
 	slices.Sort(grants)
-	wantGrants := []string{model.ConsoleSessionCIReadGrant, "api:deployment:read", "api:self-debug", model.BootstrapPlaybooksGrant, "durable", model.GrainHealthGrant, model.GrainJournalGrant, model.GrainSourceGrant}
+	wantGrants := []string{model.ConsoleSessionCIReadGrant, "api:deployment:read", "api:self-debug", model.BootstrapPlaybooksGrant, model.GrainHealthGrant, model.GrainJournalGrant, model.GrainSourceGrant}
 	slices.Sort(wantGrants)
 	if !slices.Equal(grants, wantGrants) {
-		t.Errorf("Grants = %v, want the shipped default set plus durable (%v)", grants, wantGrants)
+		t.Errorf("Grants = %v, want the shipped default set (%v)", grants, wantGrants)
 	}
 	goal, err := store.TaskGoal(ctx, director.ID)
 	if err != nil {
@@ -641,13 +644,16 @@ func TestChangingASessionsCapabilitiesReachesItsTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if updated.Admission != model.AdmissionDurable {
+		t.Errorf("Admission = %q, want durable", updated.Admission)
+	}
 	var grants []string
 	for _, g := range updated.Grants {
 		grants = append(grants, g.Capability)
 	}
 	slices.Sort(grants)
-	if !slices.Equal(grants, []string{model.ConsoleSessionCIReadGrant, "durable", model.GrainSourceGrant, "self-repair"}) {
-		t.Errorf("Grants = %v, want what the settings now say plus durable and the session defaults", grants)
+	if !slices.Equal(grants, []string{model.ConsoleSessionCIReadGrant, model.GrainSourceGrant, "self-repair"}) {
+		t.Errorf("Grants = %v, want what the settings now say plus the session defaults", grants)
 	}
 	if updated.NetworkAccess != model.NetworkOpen {
 		t.Errorf("NetworkAccess = %q, want the configured one", updated.NetworkAccess)
@@ -2222,7 +2228,10 @@ func TestActiveConsoleSessionOperatorEditsPreservedAcrossReconciles(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, wantCap := range append(caps, "priority-dispatch", model.DurableCapability) {
+	if updated.Admission != model.AdmissionDurable {
+		t.Errorf("active session task Admission = %q after reconcile, want durable", updated.Admission)
+	}
+	for _, wantCap := range caps {
 		if !slices.ContainsFunc(updated.Grants, func(g model.Grant) bool { return g.Capability == wantCap }) {
 			t.Errorf("active session task Grants = %v after reconcile, missing operator grant %q", updated.Grants, wantCap)
 		}

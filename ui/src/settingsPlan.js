@@ -112,6 +112,7 @@ const SETTING_LABELS = {
   k8sPrivileged: "Run Kubernetes sandbox containers privileged",
   k8sNetworkPolicy: "Cluster CNI enforces NetworkPolicy for network: none runs",
   defaultCapabilities: "Default capabilities",
+  defaultAdmission: "Default admission",
   // Keyed by the API's own name and labelled with the pane's own
   // wording, which for the first two is "Proxy cache" (grain/task-328):
   // the keys stay packageCache*, the words a reader sees do not.

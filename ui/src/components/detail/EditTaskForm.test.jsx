@@ -196,6 +196,29 @@ describe("DetailOverlay edit form", () => {
     expect(JSON.parse(api.mock.calls[0][1].body).keepRunning).toBe(true);
   });
 
+  it("updates admission from the edit form", async () => {
+    const act = vi.fn().mockResolvedValue(true);
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={baseTask}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    await user.click(screen.getByRole("combobox", { name: "Task admission" }));
+    await user.click(screen.getByRole("option", { name: "Bypass queue" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    act.mock.calls[0][0]();
+    expect(JSON.parse(api.mock.calls[0][1].body).admission).toBe("bypass");
+  });
+
   // grain/task-110: the same form moves a task that is already filed
   // onto one particular model -- the case this is for, since "this one
   // needs the expensive model" is usually learned after a run. The model

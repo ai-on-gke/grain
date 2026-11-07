@@ -24,12 +24,14 @@ import {
 import api from "../../api.js";
 import { taskPriority, wholeNumber } from "../../wholeNumber.js";
 import {
+  ADMISSION_OPTIONS,
   connectionLabel,
   connectionsServingModels,
   defaultModels,
   deploymentRow,
   modelOptions,
   connectionModels,
+  normalizeAdmission,
   teamDefaultLabel,
 } from "../../state.js";
 import ModelSelect from "../ModelSelect.jsx";
@@ -93,6 +95,8 @@ export default function EditTaskForm({
     useState(savedNothingNeeded);
   const savedKeepRunning = Boolean(t.keepRunning);
   const [keepRunning, setKeepRunning] = useState(savedKeepRunning);
+  const savedAdmission = normalizeAdmission(t.admission);
+  const [admission, setAdmission] = useState(savedAdmission);
   const savedPriority = t.priority ?? 5;
   const [priority, setPriority] = useState(String(savedPriority));
   // A whole number from 1 up, or empty for "leave it as it is". This
@@ -145,6 +149,7 @@ export default function EditTaskForm({
     if (owner.trim() !== savedOwner) return true;
     if (nothingNeededAction !== savedNothingNeeded) return true;
     if (keepRunning !== savedKeepRunning) return true;
+    if (admission !== savedAdmission) return true;
     if (String(priority).trim() !== String(savedPriority)) return true;
     if (model !== (t.model || "")) return true;
     if (agentBackendId !== (t.agentBackendId || "")) return true;
@@ -193,6 +198,7 @@ export default function EditTaskForm({
               ? { nothingNeededAction }
               : {}),
             ...(keepRunning !== savedKeepRunning ? { keepRunning } : {}),
+            ...(admission !== savedAdmission ? { admission } : {}),
             ...(!Number.isNaN(parsedPriority) &&
             parsedPriority !== savedPriority
               ? { priority: parsedPriority }
@@ -376,6 +382,23 @@ export default function EditTaskForm({
         sx={{ display: "flex", m: 0 }}
         slotProps={{ typography: { fontSize: "0.8rem" } }}
       />
+      <TextField
+        select
+        name="admission"
+        label="Task admission"
+        value={admission}
+        disabled={Boolean(t.consoleSession)}
+        onChange={(e) => setAdmission(e.target.value)}
+        helperText="how this task's runs are admitted to dispatch"
+        fullWidth
+        size="small"
+      >
+        {ADMISSION_OPTIONS.map((o) => (
+          <MenuItem key={o.value} value={o.value} title={o.description}>
+            {o.label}
+          </MenuItem>
+        ))}
+      </TextField>
       <TextField
         label="Task priority"
         type="number"

@@ -57,10 +57,12 @@ import LastWorkflowRun from "./LastWorkflowRun.jsx";
 import { useUnsavedEdits } from "../unsavedEdits.js";
 import { templateLabeler } from "../templateLabels.js";
 import {
+  ADMISSION_OPTIONS,
   configuredCapabilities,
   LEGACY_CAPABILITIES_HINT,
   NO_CAPABILITIES_HINT,
   defaultRepoChoice,
+  normalizeAdmission,
   targetableRepos,
 } from "../state.js";
 
@@ -420,6 +422,8 @@ function ScheduleOverlay({
   // so it is sent whether or not a template is attached -- and never for
   // a suite, which the API refuses.
   const [chosenModel, setChosenModel] = useState(schedule?.model || "");
+  const savedAdmission = normalizeAdmission(schedule?.admission);
+  const [admission, setAdmission] = useState(savedAdmission);
   const [fires, setFires] = useState(schedule?.suiteId ? "suite" : "task");
   const [suiteId, setSuiteId] = useState(schedule?.suiteId || "");
   const firesSuite = fires === "suite";
@@ -484,6 +488,9 @@ function ScheduleOverlay({
     if (!firesSuite && chosenModel !== (schedule?.model || "")) {
       req.model = chosenModel;
     }
+    if (!firesSuite && admission !== savedAdmission) {
+      req.admission = admission;
+    }
     if (!firesSuite && templateId === "") {
       req.title = title;
       req.description = description;
@@ -508,7 +515,7 @@ function ScheduleOverlay({
   const previewRequest = () =>
     firesSuite
       ? scheduleRequest()
-      : { ...scheduleRequest(), model: chosenModel };
+      : { ...scheduleRequest(), model: chosenModel, admission };
 
   // Whether leaving now would lose an edit: the form's own fields (the
   // cadence's number and time boxes are read off it, not state) plus
@@ -985,15 +992,38 @@ function ScheduleOverlay({
             </Box>
           )}
           {!firesSuite && (
-            <ModelPicker
-              config={config}
-              value={chosenModel}
-              onChange={setChosenModel}
-              emptyLabel={
-                templateId !== "" ? "The template's model" : undefined
-              }
-              helperText="the model every task this schedule files asks for"
-            />
+            <>
+              <ModelPicker
+                config={config}
+                value={chosenModel}
+                onChange={setChosenModel}
+                emptyLabel={
+                  templateId !== "" ? "The template's model" : undefined
+                }
+                helperText="the model every task this schedule files asks for"
+              />
+              <TextField
+                select
+                name="admission"
+                label="Admission"
+                value={admission}
+                onChange={(e) => setAdmission(e.target.value)}
+                helperText={
+                  templateId !== ""
+                    ? "how every task this schedule files is admitted (raises above the template's admission)"
+                    : "how every task this schedule files is admitted"
+                }
+                fullWidth
+                margin="normal"
+                size="small"
+              >
+                {ADMISSION_OPTIONS.map((o) => (
+                  <MenuItem key={o.value} value={o.value} title={o.description}>
+                    {o.label}
+                  </MenuItem>
+                ))}
+              </TextField>
+            </>
           )}
           {firesSuite ? (
             <Typography

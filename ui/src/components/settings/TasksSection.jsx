@@ -35,7 +35,12 @@ import { isCapabilityRef } from "../../capabilityArgs.js";
 import GrantsPicker from "../GrantsPicker.jsx";
 import ReadOnlyGrants from "../ReadOnlyGrants.jsx";
 import { localGrantHandlers } from "../capabilityMethods.js";
-import { LEGACY_CAPABILITIES_HINT, capabilityRows } from "../../state.js";
+import {
+  ADMISSION_OPTIONS,
+  LEGACY_CAPABILITIES_HINT,
+  capabilityRows,
+  normalizeAdmission,
+} from "../../state.js";
 import { legacyValues } from "../../taskAttributes.js";
 import SettingsCard from "./SettingsCard.jsx";
 
@@ -216,6 +221,35 @@ export default function TasksSection({
           }
           sx={{ display: "flex", mt: 1 }}
         />
+
+        <FormControl
+          fullWidth
+          margin="normal"
+          size="small"
+          data-setting-id="defaultAdmission"
+        >
+          <InputLabel id="settings-default-admission-label">
+            Default admission
+          </InputLabel>
+          <Select
+            labelId="settings-default-admission-label"
+            label="Default admission"
+            name="defaultAdmission"
+            value={normalizeAdmission(settings.defaultAdmission)}
+            onChange={(e) => saveChoice({ defaultAdmission: e.target.value })}
+          >
+            {ADMISSION_OPTIONS.map((o) => (
+              <MenuItem key={o.value} value={o.value} title={o.description}>
+                {o.label}
+              </MenuItem>
+            ))}
+          </Select>
+          <FormHelperText>
+            the admission every new task starts on, whichever repo it targets --
+            an individual repo can raise it on the repos page, and whoever files
+            a task can choose another level on the new-task form.
+          </FormHelperText>
+        </FormControl>
 
         <FormControl
           fullWidth

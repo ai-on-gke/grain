@@ -49,6 +49,7 @@ func TestConsoleSessionBypassesConnectionConcurrencyAndTakesNoSlot(t *testing.T)
 		Interactive: true,
 		Tags:        []string{model.ConsoleSessionTag(model.DirectorSessionID)},
 		Grants:      model.ConsoleSessionGrants(model.ConsoleSession{ID: model.DirectorSessionID}),
+		Admission:   model.AdmissionDurable,
 	}
 	if !sessionTask.IsConsoleSession() {
 		t.Fatalf("sessionTask.IsConsoleSession() = false, want true")

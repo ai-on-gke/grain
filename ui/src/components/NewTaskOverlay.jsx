@@ -45,12 +45,16 @@ import { PRIORITY_REFUSAL, taskPriority, wholeNumber } from "../wholeNumber.js";
 import { useHeldIds } from "../useHeldIds.js";
 import fileToAttachment from "../attachments.js";
 import {
+  ADMISSION_OPTIONS,
   branchesInUse,
   capabilityRows,
   capabilityUnavailableHint,
   LEGACY_CAPABILITIES_HINT,
   NO_CAPABILITIES_HINT,
+  defaultAdmissionFor,
   defaultCapabilitiesFor,
+  maxAdmission,
+  normalizeAdmission,
   connectionLabel,
   connectionsServingModels,
   defaultModels,
@@ -192,6 +196,10 @@ export default function NewTaskOverlay({
   // keep (2026-11-02 walkthrough: a template at 8 drew 5 and filed 8).
   const templatePriority = (id) =>
     String((templates || []).find((t) => t.id === id)?.priority || 5);
+  const templateAdmission = (id) =>
+    normalizeAdmission((templates || []).find((t) => t.id === id)?.admission);
+  const admissionDefaultFor = (r, tmplId) =>
+    maxAdmission(defaultAdmissionFor(config, r), templateAdmission(tmplId));
   // The picker is drawn where a template can matter to this form: it
   // was opened from one, or settings/new-task-form.yml gives some
   // template a layer of its own. Everywhere else it would be one more
@@ -638,6 +646,21 @@ export default function NewTaskOverlay({
     () => draft?.noPort ?? !!openingDefault("noPort"),
   );
   const [keepRunning, setKeepRunning] = useState(() => !!draft?.keepRunning);
+  const admissionEdited = useRef(Boolean(draft?.admissionEdited));
+  const [admission, setAdmission] = useState(() => {
+    if (
+      draft &&
+      draft.admission !== undefined &&
+      !(draftRepoYields && !draft.admissionEdited)
+    )
+      return normalizeAdmission(draft.admission);
+    return admissionDefaultFor(openingRepo, templateId);
+  });
+  useEffect(() => {
+    if (!admissionEdited.current) {
+      setAdmission(admissionDefaultFor(noRepo ? "" : repo, fromTemplate));
+    }
+  }, [fromTemplate, pickedTemplate?.admission]);
   // fixesBaseBranch is ui.CreateTaskRequest.FixesBaseBranch: this task
   // fixes its base branch while that branch is red, so grain never makes
   // it wait on the branch's own repair task (grain/task-3451).
@@ -741,6 +764,7 @@ export default function NewTaskOverlay({
     if (approved !== !!openingDefault("approved")) return true;
     if (noPort !== !!openingDefault("noPort")) return true;
     if (keepRunning) return true;
+    if (admissionEdited.current) return true;
     if (fixesBaseBranch !== !!openingDefault("fixesBaseBranch")) return true;
     if (newBranch !== !!openingDefault("newBranch")) return true;
     if (newBranchName.trim() !== "") return true;
@@ -804,6 +828,8 @@ export default function NewTaskOverlay({
         approved,
         noPort,
         keepRunning,
+        admission,
+        admissionEdited: admissionEdited.current,
         fixesBaseBranch,
         atFront,
         priority,
@@ -839,6 +865,7 @@ export default function NewTaskOverlay({
     approved,
     noPort,
     keepRunning,
+    admission,
     fixesBaseBranch,
     atFront,
     priority,
@@ -972,6 +999,8 @@ export default function NewTaskOverlay({
     setApproved(!!openingDefault("approved"));
     setNoPort(!!openingDefault("noPort"));
     setKeepRunning(false);
+    setAdmission(admissionDefaultFor(openingRepo, templateId));
+    admissionEdited.current = false;
     setFixesBaseBranch(!!openingDefault("fixesBaseBranch"));
     setAtFront(!!openingDefault("atFront"));
     setPriority(templatePriority(templateId));
@@ -1008,6 +1037,8 @@ export default function NewTaskOverlay({
     // leaving the previous repo's extra capabilities ticked would file
     // the task with capabilities this repo never asked for.
     if (!capabilitiesEdited.current) setCapabilities(capabilityDefaultsFor(r));
+    if (!admissionEdited.current)
+      setAdmission(admissionDefaultFor(r, fromTemplate));
     if (none || baseEdited.current) return;
     const hasHistory = (tasks || []).some(
       (t) => t.repo === r && suggestsBase(t),
@@ -1072,6 +1103,7 @@ export default function NewTaskOverlay({
       // (model.Task.NoPort).
       ...(noPort && !ct ? { noPort: true } : {}),
       ...(keepRunning ? { keepRunning: true } : {}),
+      ...(admissionEdited.current ? { admission } : {}),
       // Likewise only when ticked, and never for a task with no repo,
       // which has no base branch to fix.
       ...(fixesBaseBranch && !none ? { fixesBaseBranch: true } : {}),
@@ -1205,6 +1237,8 @@ export default function NewTaskOverlay({
       setApproved(!!openingDefault("approved"));
       setNoPort(!!openingDefault("noPort"));
       setKeepRunning(false);
+      setAdmission(admissionDefaultFor(openingRepo, templateId));
+      admissionEdited.current = false;
       setFixesBaseBranch(!!openingDefault("fixesBaseBranch"));
       setAtFront(!!openingDefault("atFront"));
       setPriority(templatePriority(templateId));
@@ -1647,6 +1681,28 @@ export default function NewTaskOverlay({
         sx={{ display: "flex" }}
       />
     </>
+  );
+  const admissionNode = (
+    <TextField
+      select
+      name="admission"
+      label="Admission"
+      value={admission}
+      onChange={(e) => {
+        admissionEdited.current = true;
+        setAdmission(e.target.value);
+      }}
+      helperText="how this task's runs are admitted to dispatch"
+      fullWidth
+      margin="normal"
+      size="small"
+    >
+      {ADMISSION_OPTIONS.map((o) => (
+        <MenuItem key={o.value} value={o.value} title={o.description}>
+          {o.label}
+        </MenuItem>
+      ))}
+    </TextField>
   );
   const grantsNode = (
     <>
@@ -2341,6 +2397,13 @@ export default function NewTaskOverlay({
       visibility: "shown",
       draws: true,
       node: keepRunningNode,
+    },
+    {
+      key: "admission",
+      order: 87,
+      visibility: "shown",
+      draws: true,
+      node: admissionNode,
     },
     {
       key: "priority",

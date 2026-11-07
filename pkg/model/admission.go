@@ -267,9 +267,6 @@ func ParseAdmissionChangeReason(reason string) (oldAdmission, newAdmission Admis
 // record when an existing task's admission changes (nil for none, and
 // for a new task, which carries what it was filed with).
 func guardAdmission(ctx context.Context, tx querier, t *Task) (*TaskEvent, error) {
-	if t.IsConsoleSession() {
-		t.Admission = AdmissionDurable
-	}
 	if rest, a, folded := FoldAdmissionGrants(t.Grants, t.Admission); folded {
 		t.Grants, t.Admission = rest, a
 		WarnAdmissionGrants("task", t.ID, a)
