@@ -593,7 +593,7 @@ addresses it with `nodad` so it doesn't wait.
   * Egress to another pod works over v6, which is kindnet's
     point-to-point routes with a link-local gateway.
 * **GKE.** A dual-stack cluster (`--stack-type=ipv4-ipv6` on a dual-stack
-  subnet) in `grain-sandbox-dev`, with the same checks as kind, plus
+  subnet) in `$GKE_PROJECT`, with the same checks as kind, plus
   Dataplane V2 (Cilium) routes. IPv6-only GKE only if the project and
   region offer it.
 

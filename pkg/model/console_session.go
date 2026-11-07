@@ -92,7 +92,9 @@ type ConsoleSession struct {
 	// NetworkAccess is the session's sandbox's reach, as a task-level
 	// override (Task.NetworkAccess): "" for this deployment's own
 	// default, NetworkNone for a session that may not reach the internet
-	// at all. The director ships NetworkOpen -- see DefaultConsoleSessions.
+	// at all. The director ships NetworkNone, which
+	// ConsoleSessionNetworkAccess resolves to NetworkOpen on a backend
+	// that cannot isolate -- see DefaultConsoleSessions.
 	NetworkAccess NetworkAccess
 	// TasksApproved is whether a task this session proposes is filed
 	// approved (queued, dispatchable by the next cycle) or proposed
@@ -299,7 +301,10 @@ func (t Task) IsConsoleSession() bool {
 // core registered as on by default for the build
 // (pkg/capability.Registration.DefaultOn, which calls
 // RegisterDefaultConsoleSessionCapability). DefaultConsoleSessions
-// grants them to the director alongside core's own four.
+// grants them to the director alongside core's own four. The value is
+// whether the capability needs egress from the sandbox itself
+// (RegisterDefaultConsoleSessionEgressCapability), which keeps the
+// shipped director's NetworkAccess open on that build.
 var (
 	registeredDefaultCapabilitiesMu sync.RWMutex
 	registeredDefaultCapabilities   = map[string]bool{}
@@ -310,15 +315,51 @@ var (
 // called. pkg/capability.RegisterProvider calls it for each Registration
 // with DefaultOn set, so a build that turns a capability on by default
 // for new tasks also turns it on by default for the director.
+//
+// id is taken to be served from grain's side of the sandbox boundary --
+// on the controller, the session host, or a port grain publishes to
+// sandboxes -- so it works under the director's shipped NetworkNone. A
+// capability that needs the sandbox to reach the internet itself
+// registers through RegisterDefaultConsoleSessionEgressCapability
+// instead.
 func RegisterDefaultConsoleSessionCapability(id string) (unregister func()) {
+	return registerDefaultConsoleSessionCapability(id, false)
+}
+
+// RegisterDefaultConsoleSessionEgressCapability is
+// RegisterDefaultConsoleSessionCapability for a capability that only
+// works when the sandbox it is materialized in can reach the internet
+// (pkg/capability.Registration.SandboxEgress). While one is registered,
+// DefaultConsoleSessions ships the director with NetworkOpen rather than
+// NetworkNone, so the build's own default capability is not granted to a
+// session that cannot use it (director-capabilities.spec.md §3.1.6).
+func RegisterDefaultConsoleSessionEgressCapability(id string) (unregister func()) {
+	return registerDefaultConsoleSessionCapability(id, true)
+}
+
+func registerDefaultConsoleSessionCapability(id string, egress bool) (unregister func()) {
 	registeredDefaultCapabilitiesMu.Lock()
 	defer registeredDefaultCapabilitiesMu.Unlock()
-	registeredDefaultCapabilities[id] = true
+	registeredDefaultCapabilities[id] = registeredDefaultCapabilities[id] || egress
 	return func() {
 		registeredDefaultCapabilitiesMu.Lock()
 		defer registeredDefaultCapabilitiesMu.Unlock()
 		delete(registeredDefaultCapabilities, id)
 	}
+}
+
+// defaultConsoleSessionCapabilitiesNeedEgress reports whether any
+// capability the build registered as on by default needs the sandbox to
+// reach the internet (RegisterDefaultConsoleSessionEgressCapability).
+func defaultConsoleSessionCapabilitiesNeedEgress() bool {
+	registeredDefaultCapabilitiesMu.RLock()
+	defer registeredDefaultCapabilitiesMu.RUnlock()
+	for _, egress := range registeredDefaultCapabilities {
+		if egress {
+			return true
+		}
+	}
+	return false
 }
 
 func defaultConsoleSessionCapabilities() []string {
@@ -372,10 +413,24 @@ func defaultConsoleSessionCapabilities() []string {
 // grain/config always waits for a person (ConfigRepoProposalHold),
 // whatever TasksApproved says (director-capabilities spec §3.1.3).
 //
-// NetworkOpen because the shipped host-directory sandbox cannot honour
-// NetworkNone: it runs on the host's own network stack, and correctly
-// refuses to pretend that network is absent. A deployment with an
-// isolating backend can close the director in the same pane the
+// NetworkNone (director-capabilities.spec.md §3.1.6): the director reads
+// untrusted text -- repository bodies, CI logs, transcripts -- and
+// everything it needs is reached through grain itself rather than the
+// internet. Its state-repository checkout (/home/debian/grain-state) and
+// every repository ReadsAll gives it clone through the git proxy; the
+// in-sandbox grain CLI talks to the same proxy (sandboxcli's
+// GRAIN_SANDBOX_PROXY); api_* tools and run-grant capabilities such as
+// corp#research run on grain's side, not in the sandbox; and the
+// isolating backends' NetworkNone firewall still admits the gateway's
+// sandbox service ports and the git proxy (granuleIsolationRuleset), so
+// egress would only be an exfiltration path. On a backend that cannot
+// isolate a sandbox's network -- the host-directory and container
+// backends -- ConsoleSessionNetworkAccess resolves this to NetworkOpen
+// when the session's task is filed and synced, so that the backend does
+// not refuse every exchange. A build that registers a default-on
+// capability needing egress from the sandbox itself
+// (RegisterDefaultConsoleSessionEgressCapability) ships NetworkOpen
+// instead. An operator can reopen the director in the same pane the
 // capabilities are in.
 func DefaultConsoleSessions() []ConsoleSession {
 	caps := []string{APIGrantPrefix + "self-debug", GrainSourceGrant, GrainJournalGrant, "api:deployment:read", GrainHealthGrant, BootstrapPlaybooksGrant}
@@ -384,6 +439,10 @@ func DefaultConsoleSessions() []ConsoleSession {
 			caps = append(caps, id)
 		}
 	}
+	network := NetworkNone
+	if defaultConsoleSessionCapabilitiesNeedEgress() {
+		network = NetworkOpen
+	}
 	return []ConsoleSession{{
 		ID:    DirectorSessionID,
 		Title: "Director",
@@ -391,7 +450,7 @@ func DefaultConsoleSessions() []ConsoleSession {
 		// Named as strings rather than through each capability package's
 		// own CapabilityName: those packages import this one.
 		Capabilities:  caps,
-		NetworkAccess: NetworkOpen,
+		NetworkAccess: network,
 		Writes:        []WriteTarget{{Repo: ConfigRepo()}},
 	}}
 }
@@ -941,6 +1000,52 @@ func ConsoleSessionNetworkAccess(session ConsoleSession, networkIsolates bool) N
 		return session.NetworkAccess
 	}
 	return NetworkOpen
+}
+
+// DirectorNetworkAccess is the network the shipped Director
+// (DefaultConsoleSessions) is filed with on a backend that does or does
+// not isolate a sandbox's network (ConsoleSessionNetworkAccess).
+func DirectorNetworkAccess(networkIsolates bool) NetworkAccess {
+	for _, s := range DefaultConsoleSessions() {
+		if s.ID == DirectorSessionID {
+			return ConsoleSessionNetworkAccess(s, networkIsolates)
+		}
+	}
+	return NetworkNone
+}
+
+// DirectorPolicyCapabilities is every capability the shipped Director is
+// granted (DefaultConsoleSessions, by way of ConsoleSessionGrants), as
+// local policy's capabilities.allow names it: a capability reference
+// carrying narrowing arguments keeps its canonical =<json> arguments so
+// a starter policy admits only that grant (for example the built-in
+// bootstrap config map, without opening operator config maps or
+// secrets), while one with empty arguments is named by its reference
+// alone. It is read from the running binary, so a capability a
+// linked-in package registers for the Director is among them.
+func DirectorPolicyCapabilities() []string {
+	var out []string
+	for _, s := range DefaultConsoleSessions() {
+		if s.ID != DirectorSessionID {
+			continue
+		}
+		for _, g := range ConsoleSessionGrants(s) {
+			c := g.Capability
+			if IsCapabilityRef(c) {
+				if spec, err := CapabilityGrantSpec(c); err == nil && len(spec.With) > 0 {
+					if enc, err := EncodeCapabilityGrant(spec); err == nil {
+						c = enc
+					}
+				} else {
+					c = CapabilityGrantRef(c)
+				}
+			}
+			if !slices.Contains(out, c) {
+				out = append(out, c)
+			}
+		}
+	}
+	return out
 }
 
 // ConsoleSessionConfigSnapshot records the static ConsoleSession config values

@@ -239,6 +239,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 			DefaultUnitsQuota: cfg.Quotas.DefaultInstanceUnits,
 			DefaultConnQuota:  cfg.Quotas.DefaultConnected,
 			ReservationPeriod: cfg.Quotas.ReservationPeriod,
+			DBRetentionPeriod: cfg.InstanceState.DBRetentionPeriod,
 		})
 		if err != nil {
 			return err
@@ -249,6 +250,9 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 			return err
 		}
 		isDisabled = st.IsOwnerDisabled
+		if sa, ok := delegation.(interface{ SetStore(*store.Store) }); ok {
+			sa.SetStore(st)
+		}
 	}
 
 	admitter, err := webauth.NewAdmitter(webauth.AdmissionConfig{

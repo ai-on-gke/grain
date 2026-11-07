@@ -73,6 +73,9 @@ var (
 
 	// ErrInvalidCredential is returned when a `grc_` token is unknown or revoked.
 	ErrInvalidCredential = errors.New("registry store: invalid or revoked entry credential")
+
+	// ErrSQLPoolExhausted is returned when all non-draining shared Cloud SQL instances have reached max_databases.
+	ErrSQLPoolExhausted = errors.New("registry store: all non-draining sql_instances have reached max_databases capacity")
 )
 
 // PrimaryScopeConflictError is returned when a synchronous scope mutation
@@ -106,6 +109,7 @@ type Thresholds struct {
 	DefaultUnitsQuota int
 	DefaultConnQuota  int
 	ReservationPeriod time.Duration
+	DBRetentionPeriod time.Duration
 }
 
 // DefaultThresholds returns the standard v1 registry thresholds.
@@ -117,6 +121,7 @@ func DefaultThresholds() Thresholds {
 		DefaultUnitsQuota: 2,
 		DefaultConnQuota:  20,
 		ReservationPeriod: 720 * time.Hour,
+		DBRetentionPeriod: 168 * time.Hour,
 	}
 }
 
@@ -267,6 +272,8 @@ type AuditEntry struct {
 	ID         int64          `json:"id"`
 	At         time.Time      `json:"at"`
 	ActorEmail string         `json:"actor_email"`
+	Via        string         `json:"via,omitempty"`
+	GrantID    string         `json:"grant_id,omitempty"`
 	Action     string         `json:"action"`
 	EntryID    string         `json:"entry_id,omitempty"`
 	EntryName  string         `json:"entry_name,omitempty"`
@@ -336,6 +343,9 @@ func New(ctx context.Context, db *sql.DB, thresholds Thresholds) (*Store, error)
 	}
 	if thresholds.ReservationPeriod <= 0 {
 		thresholds.ReservationPeriod = def.ReservationPeriod
+	}
+	if thresholds.DBRetentionPeriod <= 0 {
+		thresholds.DBRetentionPeriod = def.DBRetentionPeriod
 	}
 	if err := Migrate(ctx, db); err != nil {
 		return nil, err
@@ -431,6 +441,201 @@ ON CONFLICT (name) DO UPDATE SET
 		}
 	}
 	return nil
+}
+
+// GetShape looks up a shape row by name.
+func (s *Store) GetShape(ctx context.Context, name string) (*ShapeRow, error) {
+	name = strings.TrimSpace(name)
+	var r ShapeRow
+	err := s.db.QueryRowContext(ctx, `
+SELECT name, machine_type, boot_disk_gb, COALESCE(boot_disk_iops, 0), quota_units, description
+FROM registry.shapes
+WHERE name = $1`, name).Scan(&r.Name, &r.MachineType, &r.BootDiskGB, &r.BootDiskIOPS, &r.QuotaUnits, &r.Description)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+// GetSQLInstance looks up a shared Cloud SQL instance row by name.
+func (s *Store) GetSQLInstance(ctx context.Context, name string) (*SQLInstanceRow, error) {
+	name = strings.TrimSpace(name)
+	var r SQLInstanceRow
+	err := s.db.QueryRowContext(ctx, `
+SELECT name, connection_name, host(private_ip), max_databases, draining
+FROM registry.sql_instances
+WHERE name = $1`, name).Scan(&r.Name, &r.ConnectionName, &r.PrivateIP, &r.MaxDatabases, &r.Draining)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+// ListSQLInstances returns all configured Cloud SQL instances ordered by name.
+func (s *Store) ListSQLInstances(ctx context.Context) ([]SQLInstanceRow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT name, connection_name, host(private_ip), max_databases, draining
+FROM registry.sql_instances
+ORDER BY name ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SQLInstanceRow
+	for rows.Next() {
+		var r SQLInstanceRow
+		if err := rows.Scan(&r.Name, &r.ConnectionName, &r.PrivateIP, &r.MaxDatabases, &r.Draining); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// SetSQLInstanceDraining toggles the `draining` flag on a `registry.sql_instances` row.
+func (s *Store) SetSQLInstanceDraining(ctx context.Context, name string, draining bool) error {
+	res, err := s.db.ExecContext(ctx, `
+UPDATE registry.sql_instances
+SET draining = $1
+WHERE name = $2`, draining, strings.TrimSpace(name))
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DatabaseNameForEntry returns the canonical PostgreSQL database name for `entryName`
+// (`grain_<name with '-' replaced by '_'>`).
+func DatabaseNameForEntry(entryName string) string {
+	slug := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(entryName)), "-", "_")
+	return "grain_" + slug
+}
+
+// AllocateSQLInstance selects or preserves the shared Cloud SQL instance placement for `entryID`.
+// If the entry already has `sql_instance` assigned (e.g. during VM replacement or restore),
+// that assignment is preserved. Otherwise, the non-draining `sql_instances` row with the fewest
+// assigned non-purged databases below `max_databases` is selected and recorded on `registry.entries`.
+func (s *Store) AllocateSQLInstance(ctx context.Context, entryID, entryName string) (*SQLInstanceRow, string, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var existingInst, existingDB sql.NullString
+	if entryID != "" {
+		err = tx.QueryRowContext(ctx, `
+SELECT sql_instance, db_name
+FROM registry.entries
+WHERE id = $1
+FOR UPDATE`, entryID).Scan(&existingInst, &existingDB)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, "", ErrNotFound
+		}
+		if err != nil {
+			return nil, "", err
+		}
+	}
+
+	dbName := existingDB.String
+	if dbName == "" {
+		dbName = DatabaseNameForEntry(entryName)
+	}
+
+	if existingInst.Valid && strings.TrimSpace(existingInst.String) != "" {
+		var r SQLInstanceRow
+		err = tx.QueryRowContext(ctx, `
+SELECT name, connection_name, host(private_ip), max_databases, draining
+FROM registry.sql_instances
+WHERE name = $1`, existingInst.String).Scan(&r.Name, &r.ConnectionName, &r.PrivateIP, &r.MaxDatabases, &r.Draining)
+		if err != nil {
+			return nil, "", fmt.Errorf("lookup assigned sql_instance %q: %w", existingInst.String, err)
+		}
+		if existingDB.String == "" && entryID != "" {
+			if _, err := tx.ExecContext(ctx, `UPDATE registry.entries SET db_name = $1 WHERE id = $2`, dbName, entryID); err != nil {
+				return nil, "", err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, "", err
+		}
+		return &r, dbName, nil
+	}
+
+	// Lock non-draining sql_instances rows in deterministic order to serialize placement.
+	rows, err := tx.QueryContext(ctx, `
+SELECT name, connection_name, host(private_ip), max_databases, draining
+FROM registry.sql_instances
+WHERE draining = FALSE
+ORDER BY name ASC
+FOR UPDATE`)
+	if err != nil {
+		return nil, "", err
+	}
+	var candidates []SQLInstanceRow
+	for rows.Next() {
+		var r SQLInstanceRow
+		if err := rows.Scan(&r.Name, &r.ConnectionName, &r.PrivateIP, &r.MaxDatabases, &r.Draining); err != nil {
+			_ = rows.Close()
+			return nil, "", err
+		}
+		candidates = append(candidates, r)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, "", err
+	}
+	if len(candidates) == 0 {
+		return nil, "", ErrSQLPoolExhausted
+	}
+
+	var best *SQLInstanceRow
+	bestCount := -1
+	for i := range candidates {
+		c := &candidates[i]
+		var assigned int
+		err := tx.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM registry.entries e
+WHERE e.sql_instance = $1
+  AND e.db_name IS NOT NULL
+  AND e.db_name <> ''`, c.Name).Scan(&assigned)
+		if err != nil {
+			return nil, "", err
+		}
+		if assigned >= c.MaxDatabases {
+			continue
+		}
+		if best == nil || assigned < bestCount {
+			best = c
+			bestCount = assigned
+		}
+	}
+	if best == nil {
+		return nil, "", ErrSQLPoolExhausted
+	}
+
+	if entryID != "" {
+		if _, err := tx.ExecContext(ctx, `
+UPDATE registry.entries
+SET sql_instance = $1,
+    db_name      = $2
+WHERE id = $3`, best.Name, dbName, entryID); err != nil {
+			return nil, "", err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, "", err
+	}
+	return best, dbName, nil
 }
 
 // UpsertOwner ensures an owner record exists and updates `last_seen_at`.
@@ -1909,16 +2114,20 @@ func (s *Store) RestoreEntry(ctx context.Context, entryID string, expectedVersio
 	}
 
 	nextState := api.StateRunning
-	if cur.Kind == api.KindInstance && cur.BackendURL == "" {
+	if cur.Kind == api.KindInstance {
 		nextState = api.StateCreating
 	}
 
 	res, err := tx.ExecContext(ctx, `
 UPDATE registry.entries
 SET lifecycle_state = $1,
+    gce_instance_id = CASE WHEN kind = 'instance' THEN NULL ELSE gce_instance_id END,
+    internal_ip     = CASE WHEN kind = 'instance' THEN NULL ELSE internal_ip END,
+    backend_url     = CASE WHEN kind = 'instance' THEN NULL ELSE backend_url END,
     deleted_at      = NULL,
     reserved_until  = NULL,
     purge_after     = NULL,
+    db_purge_after  = NULL,
     status_reason   = '',
     version         = version + 1,
     updated_at      = $2
@@ -1967,7 +2176,14 @@ func (s *Store) SoftDeleteEntryWithOptions(ctx context.Context, entryID string, 
 	if deleteDisk {
 		dbPurgeAfter = now
 	} else {
-		dbPurgeAfter = purgeAfter
+		ret := s.thresholds.DBRetentionPeriod
+		if ret <= 0 {
+			ret = 168 * time.Hour
+		}
+		if s.thresholds.ReservationPeriod > 0 && ret > s.thresholds.ReservationPeriod {
+			ret = s.thresholds.ReservationPeriod
+		}
+		dbPurgeAfter = now.Add(ret)
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -3790,6 +4006,11 @@ WHERE registry.leases.holder_id = EXCLUDED.holder_id
 
 // RecordAudit writes an audit log row to `registry.audit_log`.
 func (s *Store) RecordAudit(ctx context.Context, actorEmail, action, entryID, entryName string, detail map[string]any) error {
+	return s.RecordAuditWithDelegation(ctx, actorEmail, "", "", action, entryID, entryName, detail)
+}
+
+// RecordAuditWithDelegation writes an audit log row with optional delegating app (`via`) and `grant_id`.
+func (s *Store) RecordAuditWithDelegation(ctx context.Context, actorEmail, via, grantID, action, entryID, entryName string, detail map[string]any) error {
 	if detail == nil {
 		detail = map[string]any{}
 	}
@@ -3802,9 +4023,9 @@ func (s *Store) RecordAudit(ctx context.Context, actorEmail, action, entryID, en
 		idParam = entryID
 	}
 	_, err = s.db.ExecContext(ctx, `
-INSERT INTO registry.audit_log (at, actor_email, action, entry_id, entry_name, detail)
-VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6::jsonb)`,
-		s.now(), actorEmail, action, idParam, entryName, string(detailJSON))
+INSERT INTO registry.audit_log (at, actor_email, via, grant_id, action, entry_id, entry_name, detail)
+VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), $8::jsonb)`,
+		s.now(), actorEmail, strings.TrimSpace(via), strings.TrimSpace(grantID), action, idParam, entryName, string(detailJSON))
 	return err
 }
 
@@ -3814,7 +4035,7 @@ func (s *Store) ListAuditLog(ctx context.Context, limit int) ([]AuditEntry, erro
 		limit = 100
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, at, actor_email, action, COALESCE(entry_id::text, ''), COALESCE(entry_name, ''), detail
+SELECT id, at, actor_email, COALESCE(via, ''), COALESCE(grant_id, ''), action, COALESCE(entry_id::text, ''), COALESCE(entry_name, ''), detail
 FROM registry.audit_log
 ORDER BY id DESC
 LIMIT $1`, limit)
@@ -3826,11 +4047,377 @@ LIMIT $1`, limit)
 	for rows.Next() {
 		var a AuditEntry
 		var detailBytes []byte
-		if err := rows.Scan(&a.ID, &a.At, &a.ActorEmail, &a.Action, &a.EntryID, &a.EntryName, &detailBytes); err != nil {
+		if err := rows.Scan(&a.ID, &a.At, &a.ActorEmail, &a.Via, &a.GrantID, &a.Action, &a.EntryID, &a.EntryName, &detailBytes); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(detailBytes, &a.Detail)
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// UpdateConfigRepo sets the provisioned Git `config_repo` URL on `entryID` under optimistic concurrency.
+func (s *Store) UpdateConfigRepo(ctx context.Context, entryID string, expectedVersion int64, configRepo string) (*EntryRow, error) {
+	now := s.now()
+	res, err := s.db.ExecContext(ctx, `
+UPDATE registry.entries
+SET config_repo = NULLIF($1, ''),
+    version     = version + 1,
+    updated_at  = $2
+WHERE id = $3 AND version = $4`,
+		strings.TrimSpace(configRepo), now, entryID, expectedVersion)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, fmt.Errorf("%w: entry %s version %d mismatch", ErrConflict, entryID, expectedVersion)
+	}
+	return s.GetEntryByID(ctx, entryID)
+}
+
+// UpdateReplaceStep updates `replace_step` and `status_reason` on an entry in `replacing` state under optimistic concurrency.
+func (s *Store) UpdateReplaceStep(ctx context.Context, entryID string, expectedVersion int64, step api.ReplaceStep, statusReason string) (*EntryRow, error) {
+	now := s.now()
+	res, err := s.db.ExecContext(ctx, `
+UPDATE registry.entries
+SET replace_step  = $1,
+    status_reason = $2,
+    version       = version + 1,
+    updated_at    = $3
+WHERE id = $4 AND version = $5 AND lifecycle_state = 'replacing' AND deleted_at IS NULL`,
+		string(step), statusReason, now, entryID, expectedVersion)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, fmt.Errorf("%w: entry %s version %d mismatch or not replacing", ErrConflict, entryID, expectedVersion)
+	}
+	out, err := s.GetEntryByID(ctx, entryID)
+	if err == nil && out != nil {
+		s.notify(ctx, "registry_entries", out.Name)
+	}
+	return out, err
+}
+
+// CompleteEntryReplace transitions an entry from `replacing` to `running`, clears `replace_step`,
+// `status_reason`, and `target_version`, and updates its VM placement under optimistic concurrency.
+func (s *Store) CompleteEntryReplace(ctx context.Context, entryID string, expectedVersion int64, gceInstanceID, internalIP, backendURL, grainVersion, grainCommit string) (*EntryRow, error) {
+	if backendURL != "" {
+		if err := validateBackendURL(backendURL); err != nil {
+			return nil, err
+		}
+	}
+	now := s.now()
+	res, err := s.db.ExecContext(ctx, `
+UPDATE registry.entries
+SET lifecycle_state   = 'running',
+    replace_step      = '',
+    status_reason     = '',
+    target_version    = '',
+    gce_instance_id   = COALESCE(NULLIF($1, ''), gce_instance_id),
+    internal_ip       = CASE WHEN $2 = '' THEN internal_ip ELSE $2::inet END,
+    backend_url       = COALESCE(NULLIF($3, ''), backend_url),
+    grain_version     = COALESCE(NULLIF($4, ''), grain_version),
+    grain_commit      = CASE WHEN $5 = '' THEN grain_commit ELSE $5 END,
+    last_heartbeat_at = $6,
+    version           = version + 1,
+    updated_at        = $6
+WHERE id = $7 AND version = $8 AND lifecycle_state = 'replacing' AND deleted_at IS NULL`,
+		gceInstanceID, internalIP, backendURL, grainVersion, grainCommit, now, entryID, expectedVersion)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, fmt.Errorf("%w: entry %s version %d mismatch or not replacing", ErrConflict, entryID, expectedVersion)
+	}
+	out, err := s.GetEntryByID(ctx, entryID)
+	if err == nil && out != nil {
+		s.notify(ctx, "registry_entries", out.Name)
+		if out.Listed {
+			s.notify(ctx, "registry_catalog", out.Name)
+		}
+	}
+	return out, err
+}
+
+// BeginDeleteEntry transitions an entry to `deleting` while recording `db_purge_after`
+// (`now` when `deleteDisk` is true, or `now + db_retention_period` otherwise).
+func (s *Store) BeginDeleteEntry(ctx context.Context, entryID string, expectedVersion int64, deleteDisk bool) (*EntryRow, error) {
+	now := s.now()
+	var dbPurgeAfter time.Time
+	if deleteDisk {
+		dbPurgeAfter = now
+	} else {
+		ret := s.thresholds.DBRetentionPeriod
+		if ret <= 0 {
+			ret = 168 * time.Hour
+		}
+		if s.thresholds.ReservationPeriod > 0 && ret > s.thresholds.ReservationPeriod {
+			ret = s.thresholds.ReservationPeriod
+		}
+		dbPurgeAfter = now.Add(ret)
+	}
+	res, err := s.db.ExecContext(ctx, `
+UPDATE registry.entries
+SET lifecycle_state = 'deleting',
+    replace_step    = '',
+    db_purge_after  = $1,
+    version         = version + 1,
+    updated_at      = $2
+WHERE id = $3 AND version = $4 AND deleted_at IS NULL`,
+		dbPurgeAfter, now, entryID, expectedVersion)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, fmt.Errorf("%w: entry %s version %d mismatch", ErrConflict, entryID, expectedVersion)
+	}
+	out, err := s.GetEntryByID(ctx, entryID)
+	if err == nil && out != nil {
+		s.notify(ctx, "registry_entries", out.Name)
+		if out.Listed {
+			s.notify(ctx, "registry_catalog", out.Name)
+		}
+	}
+	return out, err
+}
+
+// CompleteDeleteEntry finalizes deletion of an entry after its VM has been deleted and
+// its database/IAM resources have been fenced (or purged when `purgeResources` is true).
+func (s *Store) CompleteDeleteEntry(ctx context.Context, entryID string, expectedVersion int64, purgeResources bool) (*EntryRow, error) {
+	cur, err := s.GetEntryByID(ctx, entryID)
+	if err != nil {
+		return nil, err
+	}
+	now := s.now()
+	reservedUntil := now.Add(s.thresholds.ReservationPeriod)
+	if cur.ReservedUntil != nil && !cur.ReservedUntil.IsZero() {
+		reservedUntil = *cur.ReservedUntil
+	}
+	purgeAfter := reservedUntil
+	if cur.PurgeAfter != nil && !cur.PurgeAfter.IsZero() {
+		purgeAfter = *cur.PurgeAfter
+	}
+	ret := s.thresholds.DBRetentionPeriod
+	if ret <= 0 {
+		ret = 168 * time.Hour
+	}
+	if s.thresholds.ReservationPeriod > 0 && ret > s.thresholds.ReservationPeriod {
+		ret = s.thresholds.ReservationPeriod
+	}
+	dbPurgeAfter := now.Add(ret)
+	if cur.DBPurgeAfter != nil && !cur.DBPurgeAfter.IsZero() {
+		dbPurgeAfter = *cur.DBPurgeAfter
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	repos := collectPrimaryRepos(cur.Scopes)
+	for _, r := range repos {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "scope:"+r); err != nil {
+			return nil, err
+		}
+	}
+
+	res, err := tx.ExecContext(ctx, `
+UPDATE registry.entries
+SET lifecycle_state        = 'deleted',
+    replace_step           = '',
+    gce_instance_id        = NULL,
+    internal_ip            = NULL,
+    backend_url            = NULL,
+    service_account        = CASE WHEN $1 THEN NULL ELSE service_account END,
+    sql_instance           = CASE WHEN $1 THEN NULL ELSE sql_instance END,
+    db_name                = CASE WHEN $1 THEN NULL ELSE db_name END,
+    secret_prefix          = CASE WHEN $1 THEN NULL ELSE secret_prefix END,
+    config_repo            = CASE WHEN $1 THEN NULL ELSE config_repo END,
+    deleted_at             = COALESCE(deleted_at, $2),
+    reserved_until         = $3,
+    purge_after            = $4,
+    db_purge_after         = CASE WHEN $1 THEN NULL ELSE $5::timestamptz END,
+    last_disconnect_at     = COALESCE(last_disconnect_at, $2),
+    last_disconnect_reason = CASE WHEN last_disconnect_reason = '' THEN 'entry deleted' ELSE last_disconnect_reason END,
+    version                = version + 1,
+    updated_at             = $2
+WHERE id = $6 AND version = $7`,
+		purgeResources, now, reservedUntil, purgeAfter, dbPurgeAfter, entryID, expectedVersion)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, fmt.Errorf("%w: entry %s version %d mismatch", ErrConflict, entryID, expectedVersion)
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM registry.entry_scopes WHERE entry_id = $1`, entryID); err != nil {
+		return nil, err
+	}
+	if len(repos) > 0 {
+		if err := s.promoteContendersForReposTx(ctx, tx, repos, now); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE registry.entry_credentials SET revoked_at = $1 WHERE entry_id = $2 AND revoked_at IS NULL`, now, entryID); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM registry.tunnel_sessions WHERE entry_id = $1`, entryID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	out, err := s.GetEntryByID(ctx, entryID)
+	if err == nil && out != nil {
+		s.notify(ctx, "registry_entries", out.Name)
+		s.notify(ctx, "registry_tunnels", out.Name)
+		if cur.Listed {
+			s.notify(ctx, "registry_catalog", out.Name)
+		}
+	}
+	return out, err
+}
+
+// ListEntriesDueForPurge returns soft-deleted entries whose `db_purge_after` (or `purge_after`)
+// has passed and that still have retained cloud resources (`db_name`, `service_account`, `secret_prefix`, or `config_repo`).
+func (s *Store) ListEntriesDueForPurge(ctx context.Context) ([]*EntryRow, error) {
+	now := s.now()
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id
+FROM registry.entries
+WHERE lifecycle_state = 'deleted'
+  AND COALESCE(db_purge_after, purge_after) <= $1
+  AND (
+      (db_name IS NOT NULL AND db_name <> '') OR
+      (service_account IS NOT NULL AND service_account <> '') OR
+      (secret_prefix IS NOT NULL AND secret_prefix <> '') OR
+      (config_repo IS NOT NULL AND config_repo <> '')
+  )
+ORDER BY COALESCE(db_purge_after, purge_after) ASC`, now)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	out := make([]*EntryRow, 0, len(ids))
+	for _, id := range ids {
+		e, err := s.GetEntryByID(ctx, id)
+		if err == nil && e != nil {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+// MarkEntryResourcesPurged clears the retained cloud resource columns on a `deleted` entry
+// after its database, GSA, secrets, GCS folder, and config repo have been permanently deleted.
+func (s *Store) MarkEntryResourcesPurged(ctx context.Context, entryID string) error {
+	now := s.now()
+	_, err := s.db.ExecContext(ctx, `
+UPDATE registry.entries
+SET service_account = NULL,
+    sql_instance    = NULL,
+    db_name         = NULL,
+    db_purge_after  = NULL,
+    secret_prefix   = NULL,
+    config_repo     = NULL,
+    version         = version + 1,
+    updated_at      = $1
+WHERE id = $2 AND lifecycle_state = 'deleted'`, now, entryID)
+	return err
+}
+
+// PurgeExpiredTombstones permanently deletes `deleted` tombstone rows whose 30-day
+// reservation (`reserved_until` and `purge_after`) has expired and whose cloud resources
+// have already been purged.
+func (s *Store) PurgeExpiredTombstones(ctx context.Context) (int64, error) {
+	now := s.now()
+	res, err := s.db.ExecContext(ctx, `
+DELETE FROM registry.entries
+WHERE lifecycle_state = 'deleted'
+  AND deleted_at IS NOT NULL
+  AND COALESCE(reserved_until, purge_after) <= $1
+  AND COALESCE(purge_after, reserved_until) <= $1
+  AND (gce_instance_id IS NULL OR gce_instance_id = '')
+  AND (db_name IS NULL OR db_name = '')
+  AND (service_account IS NULL OR service_account = '')`, now)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// DeleteExpiredReplicas deletes rows in `registry.replicas` whose `heartbeat_at` is older
+// than `s.thresholds.ReplicaTTL`, cascading to `registry.tunnel_sessions` and emitting
+// `NOTIFY registry_tunnels` for any affected entries.
+func (s *Store) DeleteExpiredReplicas(ctx context.Context) ([]string, error) {
+	cutoff := s.now().Add(-s.thresholds.ReplicaTTL)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Collect affected entry names before cascading delete.
+	entryRows, err := tx.QueryContext(ctx, `
+SELECT DISTINCT e.name
+FROM registry.tunnel_sessions ts
+JOIN registry.replicas r ON r.replica_id = ts.replica_id
+JOIN registry.entries e ON e.id = ts.entry_id
+WHERE r.heartbeat_at <= $1`, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	var affectedEntries []string
+	for entryRows.Next() {
+		var name string
+		if err := entryRows.Scan(&name); err != nil {
+			_ = entryRows.Close()
+			return nil, err
+		}
+		affectedEntries = append(affectedEntries, name)
+	}
+	if err := entryRows.Close(); err != nil {
+		return nil, err
+	}
+
+	rows, err := tx.QueryContext(ctx, `
+DELETE FROM registry.replicas
+WHERE heartbeat_at <= $1
+RETURNING replica_id`, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	var deletedReplicas []string
+	for rows.Next() {
+		var repID string
+		if err := rows.Scan(&repID); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		deletedReplicas = append(deletedReplicas, repID)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	for _, name := range affectedEntries {
+		s.notify(ctx, "registry_tunnels", name)
+	}
+	return deletedReplicas, nil
 }

@@ -1014,4 +1014,76 @@ describe("PanelBoard", () => {
       expect(cost(6)).toBe(one);
     });
   });
+
+  describe("when tasks could not be loaded", () => {
+    const fourPanels = board([
+      { kind: "states", title: "States" },
+      { kind: "list", title: "Queue" },
+      { kind: "gantt", title: "Timeline" },
+      { kind: "metrics", title: "Throughput" },
+    ]);
+
+    it("tells failed task reads from an empty deployment, while leaving metrics up", async () => {
+      api.mockResolvedValue({
+        throughput: { tasksFiled: 7, tasksCompleted: 4, buckets: [] },
+      });
+      const onRetryTasks = vi.fn();
+      const user = userEvent.setup();
+      const { container } = draw({
+        board: fourPanels,
+        tasks: [],
+        tasksLoaded: false,
+        tasksError: "synthetic tasks 500",
+        onRetryTasks,
+      });
+
+      expect(screen.queryByText("Nothing here right now.")).toBeNull();
+      expect(screen.queryByText("No tasks yet.")).toBeNull();
+      expect(container.querySelectorAll(".panel-state")).toHaveLength(0);
+      expect(container.querySelectorAll(".panel-header .count")).toHaveLength(
+        0,
+      );
+      expect(
+        screen.getAllByText(
+          "The tasks could not be loaded (synthetic tasks 500).",
+        ),
+      ).toHaveLength(3);
+      expect(await screen.findByText("7")).toBeInTheDocument();
+
+      await user.click(screen.getAllByRole("button", { name: "Retry" })[0]);
+      expect(onRetryTasks).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows the load failure when a later fetch fails with no tasks held, and keeps held tasks when non-empty", () => {
+      const { rerender } = render(
+        <PanelBoard
+          board={board([{ kind: "list", title: "Queue" }])}
+          tasks={[]}
+          tasksLoaded={true}
+          tasksError="upstream 500"
+          config={config}
+          onOpenTask={() => {}}
+          now={NOW}
+        />,
+      );
+      expect(
+        screen.getByText("The tasks could not be loaded (upstream 500)."),
+      ).toBeInTheDocument();
+      expect(screen.queryByText("Nothing here right now.")).toBeNull();
+
+      rerender(
+        <PanelBoard
+          board={board([{ kind: "list", title: "Queue" }])}
+          tasks={tasks}
+          tasksLoaded={true}
+          tasksError="upstream 500"
+          config={config}
+          onOpenTask={() => {}}
+          now={NOW}
+        />,
+      );
+      expect(screen.queryByText(/The tasks could not be loaded/)).toBeNull();
+      expect(screen.getByText("Fix the flake")).toBeInTheDocument();
+    });
+  });
 });

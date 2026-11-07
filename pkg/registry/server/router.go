@@ -37,7 +37,23 @@ const (
 	// HeaderOnBehalfOf names the target human email when a delegating service
 	// principal acts on behalf of a signed-in user.
 	HeaderOnBehalfOf = "X-Grain-On-Behalf-Of"
+
+	// HeaderSubjectToken optionally carries the human user's ID token when an app
+	// requires proof of presence (`require_subject_token`).
+	HeaderSubjectToken = "X-Grain-Subject-Token"
 )
+
+func writeDelegationRefused(w http.ResponseWriter, reason, msg string) {
+	writeJSONStateResponse(w, http.StatusForbidden, struct {
+		Error  string `json:"error"`
+		Code   string `json:"code"`
+		Reason string `json:"reason,omitempty"`
+	}{
+		Error:  msg,
+		Code:   "delegation_refused",
+		Reason: reason,
+	})
+}
 
 // AssertionActor represents the RFC 8693 `act` claim in a delegated registry JWT.
 type AssertionActor struct {
@@ -389,6 +405,10 @@ func (rt *Router) WrapMainHandler(controlPlane http.Handler) http.Handler {
 		case HostRouteInvalidInstance, HostRouteUnknown:
 			WriteMissingEntryState(w, r, rt.opts.RegistryHost, match.EntryName, nil, false)
 		case HostRouteRegistry:
+			if strings.TrimSpace(r.Header.Get(HeaderOnBehalfOf)) != "" {
+				writeJSONError(w, http.StatusBadRequest, "delegation_not_supported", "X-Grain-On-Behalf-Of is only supported on entry hosts")
+				return
+			}
 			controlPlane.ServeHTTP(w, r)
 		}
 	})
@@ -424,6 +444,10 @@ func (rt *Router) PublicHandler(jwksHandler, healthzHandler http.HandlerFunc) ht
 		match := ClassifyHost(r.Host, rt.opts.RegistryHost, rt.opts.InstanceDomain)
 		if match.Kind != HostRouteRegistry {
 			writeJSONError(w, http.StatusNotFound, "not_found", "public endpoint only serves registry host")
+			return
+		}
+		if strings.TrimSpace(r.Header.Get(HeaderOnBehalfOf)) != "" {
+			writeJSONError(w, http.StatusBadRequest, "delegation_not_supported", "X-Grain-On-Behalf-Of is only supported on entry hosts")
 			return
 		}
 		p := r.URL.Path
@@ -647,18 +671,41 @@ func (rt *Router) ServeInstanceHost(w http.ResponseWriter, r *http.Request, name
 	var actor *AssertionActor
 	oboRaw := strings.TrimSpace(r.Header.Get(HeaderOnBehalfOf))
 	if oboRaw != "" {
+		if strings.TrimSpace(r.Header.Get("Cookie")) != "" ||
+			strings.TrimSpace(r.Header.Get("Origin")) != "" ||
+			strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")) != "" {
+			writeJSONError(w, http.StatusForbidden, "delegation_from_browser", "delegated requests must not carry browser headers (Cookie, Origin, Sec-Fetch-Site)")
+			return
+		}
 		if caller.Kind == webauth.PrincipalHuman {
-			writeJSONError(w, http.StatusBadRequest, "invalid_argument", "human callers must not set X-Grain-On-Behalf-Of")
+			writeJSONError(w, http.StatusBadRequest, "delegation_requires_service_caller", "human callers must not set X-Grain-On-Behalf-Of")
+			return
+		}
+		if IsUpgradeRequest(r) {
+			writeDelegationRefused(w, "not_delegable", "protocol upgrades cannot use on-behalf-of delegation")
 			return
 		}
 		oboEmail := strings.ToLower(oboRaw)
+		if webauth.PrincipalKindForEmail(oboEmail) != webauth.PrincipalHuman {
+			writeDelegationRefused(w, "person_not_admitted", "X-Grain-On-Behalf-Of must name a human principal")
+			return
+		}
 		if rt.delegation == nil {
-			writeJSONError(w, http.StatusForbidden, "delegation_refused", "on-behalf-of delegation is not permitted")
+			writeDelegationRefused(w, "delegation_disabled", "on-behalf-of delegation is not permitted")
 			return
 		}
 		act, delErr := rt.delegation.AuthorizeOnBehalfOf(r.Context(), caller.Email, oboEmail, name)
 		if delErr != nil {
-			writeJSONError(w, http.StatusForbidden, "delegation_refused", delErr.Error())
+			reason := "delegation_disabled"
+			var refErr interface{ DelegationRefusalReason() string }
+			if errors.As(delErr, &refErr) && refErr.DelegationRefusalReason() != "" {
+				reason = refErr.DelegationRefusalReason()
+			}
+			writeDelegationRefused(w, reason, delErr.Error())
+			return
+		}
+		if act != nil && strings.EqualFold(act.Access, "read") && r.Method != http.MethodGet && r.Method != http.MethodHead {
+			writeDelegationRefused(w, "read_only_grant", fmt.Sprintf("read-only delegation grant cannot perform %s", r.Method))
 			return
 		}
 		if disabled, err := rt.isOwnerDisabled(r.Context(), oboEmail); err == nil && disabled {
@@ -794,6 +841,19 @@ func (rt *Router) ServeInstanceHost(w http.ResponseWriter, r *http.Request, name
 	}
 
 	reqID := strings.TrimSpace(r.Header.Get("X-Request-Id"))
+	isWriteMethod := r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions
+	if actor != nil && rt.store != nil {
+		if actor.Grant != "" {
+			_ = rt.store.RecordDelegationUsage(r.Context(), actor.Grant, entry.Name, isWriteMethod)
+		}
+		if isWriteMethod {
+			_ = rt.store.RecordAuditWithDelegation(r.Context(), effectiveCaller.Email, actor.Sub, actor.Grant, "delegated_write", entry.ID, entry.Name, map[string]any{
+				"method": r.Method,
+				"path":   r.URL.Path,
+				"rid":    reqID,
+			})
+		}
+	}
 	SanitizeProxyRequest(r, entryHost, rt.opts.RegistryHost, rt.opts.IAPAudience, assertionJWT, reqID)
 
 	// 12. Dispatch per entry kind.

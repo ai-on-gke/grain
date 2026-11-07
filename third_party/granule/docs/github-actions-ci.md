@@ -82,7 +82,7 @@ own `GITHUB_TOKEN`.
 | :--- | :--- | :--- | :--- | :--- |
 | `GCP_WIF_PROVIDER` | Variable | For the GCP workflows | `gce-build.yml`, `storage-benchmark.yml`, `disk-direct-benchmark.yml`, `e2e-ipv6-gke.yml` | Full provider resource name: `projects/<number>/locations/global/workloadIdentityPools/<pool>/providers/<provider>`. |
 | `GCP_SA_EMAIL` | Variable | For the GCP workflows | same | The service account the provider impersonates. It replaces the `gcp#gcp-key` key file. |
-| `GCP_PROJECT_ID` | Variable | Recommended | same | The project the VMs and cluster are created in (`GCE_PROJECT` / `GKE_PROJECT`). Without it, `test/gce-build.sh` and `gce-bench.sh` use gcloud's configured project, and `e2e-ipv6-gke.yml` uses `grain-sandbox-dev`. |
+| `GCP_PROJECT_ID` | Variable | Recommended | same | The project the VMs and cluster are created in (`GCE_PROJECT` / `GKE_PROJECT`). Without it, `test/gce-build.sh`, `gce-bench.sh` and `test/e2e-ipv6.sh` use gcloud's configured project. |
 | `GHCR_TOKEN` | Secret | Optional | `release.yml` | A token with `write:packages`, used instead of `GITHUB_TOKEN` when the packages cannot grant this repository write access. |
 | `GHCR_USERNAME` | Variable | With `GHCR_TOKEN` | `release.yml` | The account `GHCR_TOKEN` belongs to. |
 | `ENABLE_GUEST_IMAGE_TESTS` | Variable | Once GHCR access is granted | `ci.yml` (`rootless-vm`, `sandbox-access-vm`) | `true` once `ghcr.io/gke-labs/granule/alpine` grants this repository read access. Until then both jobs are skipped with a notice. |

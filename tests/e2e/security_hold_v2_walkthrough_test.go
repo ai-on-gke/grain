@@ -136,9 +136,11 @@ func (w *holdWorld) clearedAtA(task model.Task) string {
 	// approval-callback tokens and the daemon's UI listeners to
 	// auth-routes, task 3168; v18 only adds host enrollment codes, the
 	// pairing-code join handshake and the request-actor check to
-	// auth-routes, task 3287).
-	if trustboundary.Version != "trust-boundary/v18" {
-		w.t.Fatalf("this walkthrough is about trust-boundary/v18, the build has %s", trustboundary.Version)
+	// auth-routes, task 3287; v19 only adds pkg/playbooks/ and the
+	// capability policy/catalogue/template-grant files to
+	// capabilities-secrets, task 3388).
+	if trustboundary.Version != "trust-boundary/v19" {
+		w.t.Fatalf("this walkthrough is about trust-boundary/v19, the build has %s", trustboundary.Version)
 	}
 	if w.merged(branch) {
 		w.t.Fatal("merged before the pull request read mergeable")

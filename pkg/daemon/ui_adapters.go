@@ -66,6 +66,20 @@ func (a SandboxHealthAdapter) SandboxCount() int {
 	return reporter.SandboxCount()
 }
 
+// IsolatesNetwork reports whether the underlying sandbox backend can withhold
+// the internet from a run (orchestrator.NetworkIsolator), matching
+// orchestrator.sandboxesIsolateNetwork: true when Inner is nil so a UI with no
+// backend to speak for keeps what was configured, and otherwise Inner's own
+// IsolatesNetwork answer (false on HostSandboxes, ContainerSandboxes, and
+// plain K8sSandboxes).
+func (a SandboxHealthAdapter) IsolatesNetwork() bool {
+	if a.Inner == nil {
+		return true
+	}
+	iso, ok := a.Inner.(orchestrator.NetworkIsolator)
+	return ok && iso.IsolatesNetwork()
+}
+
 func (a SandboxHealthAdapter) Health(ctx context.Context) []ui.SandboxSnapshot {
 	reporter, ok := a.Inner.(interface {
 		Health(context.Context) []orchestrator.SandboxHealth

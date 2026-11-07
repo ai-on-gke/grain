@@ -45,6 +45,9 @@ const (
 	DefaultInstanceQuotaUnits         = 2
 	DefaultConnectedQuota             = 20
 	DefaultGroupsCacheTTL             = 5 * time.Minute
+	DefaultComputeDrainTimeout        = 5 * time.Minute
+	DefaultComputeHealthTimeout       = 5 * time.Minute
+	DefaultComputeStatusPollInterval  = 15 * time.Second
 )
 
 var (
@@ -132,19 +135,23 @@ type DatabaseConfig struct {
 
 // ComputeConfig configures hosted VM provisioning.
 type ComputeConfig struct {
-	Provider      string            `yaml:"provider"`
-	Project       string            `yaml:"project"`
-	Region        string            `yaml:"region"`
-	Zones         []string          `yaml:"zones"`
-	Network       string            `yaml:"network"`
-	Subnetwork    string            `yaml:"subnetwork"`
-	BootImage     string            `yaml:"boot_image"`
-	VMPrefix      string            `yaml:"vm_prefix"`
-	SAPrefix      string            `yaml:"sa_prefix"`
-	SSHBreakGlass *bool             `yaml:"ssh_break_glass"`
-	Labels        map[string]string `yaml:"labels"`
-	DefaultShape  string            `yaml:"default_shape"`
-	Shapes        []Shape           `yaml:"shapes"`
+	Provider           string            `yaml:"provider"`
+	Project            string            `yaml:"project"`
+	Region             string            `yaml:"region"`
+	Zones              []string          `yaml:"zones"`
+	Network            string            `yaml:"network"`
+	Subnetwork         string            `yaml:"subnetwork"`
+	BootImage          string            `yaml:"boot_image"`
+	VMPrefix           string            `yaml:"vm_prefix"`
+	SAPrefix           string            `yaml:"sa_prefix"`
+	RegistryID         string            `yaml:"registry_id,omitempty"`
+	SSHBreakGlass      *bool             `yaml:"ssh_break_glass"`
+	Labels             map[string]string `yaml:"labels"`
+	DefaultShape       string            `yaml:"default_shape"`
+	Shapes             []Shape           `yaml:"shapes"`
+	DrainTimeout       time.Duration     `yaml:"drain_timeout,omitempty"`
+	HealthTimeout      time.Duration     `yaml:"health_timeout,omitempty"`
+	StatusPollInterval time.Duration     `yaml:"status_poll_interval,omitempty"`
 }
 
 // SQLInstanceConfig describes a shared Cloud SQL instance in the registry's pool.
@@ -157,12 +164,14 @@ type SQLInstanceConfig struct {
 
 // InstanceSQLConfig configures the pool of Cloud SQL instances for hosted VMs.
 type InstanceSQLConfig struct {
-	SQLInstances []SQLInstanceConfig `yaml:"sql_instances"`
+	SQLInstances     []SQLInstanceConfig `yaml:"sql_instances"`
+	AdminDSNTemplate string              `yaml:"admin_dsn_template,omitempty"`
 }
 
-// InstanceStateConfig configures retention for deleted instance databases.
+// InstanceStateConfig configures retention and GCS storage for hosted VMs.
 type InstanceStateConfig struct {
 	DBRetentionPeriod time.Duration `yaml:"db_retention_period"`
+	GCSBucket         string        `yaml:"gcs_bucket,omitempty"`
 }
 
 // SecretsConfig configures Secret Manager prefix isolation for hosted VMs.
@@ -178,11 +187,15 @@ type ObservabilityConfig struct {
 
 // ConfigReposConfig configures optional per-instance Git config repositories.
 type ConfigReposConfig struct {
-	Provider     string `yaml:"provider"`
-	GitHubOrg    string `yaml:"github_org"`
-	RepoPrefix   string `yaml:"repo_prefix"`
-	AppID        int64  `yaml:"app_id"`
-	Installation int64  `yaml:"installation_id"`
+	Provider       string `yaml:"provider"`
+	GitHubOrg      string `yaml:"github_org"`
+	RepoPrefix     string `yaml:"repo_prefix"`
+	AppID          int64  `yaml:"app_id"`
+	Installation   int64  `yaml:"installation_id"`
+	PrivateKeyFile string `yaml:"private_key_file,omitempty"`
+	PrivateKeyPEM  string `yaml:"private_key_pem,omitempty"`
+	KeySecret      string `yaml:"key_secret,omitempty"`
+	APIBaseURL     string `yaml:"api_base_url,omitempty"`
 }
 
 // QuotaOverride specifies custom quota limits for a specific user or group.
@@ -302,6 +315,15 @@ func (c *Config) ApplyDefaults() {
 		v := true
 		c.Compute.SSHBreakGlass = &v
 	}
+	if c.Compute.DrainTimeout == 0 {
+		c.Compute.DrainTimeout = DefaultComputeDrainTimeout
+	}
+	if c.Compute.HealthTimeout == 0 {
+		c.Compute.HealthTimeout = DefaultComputeHealthTimeout
+	}
+	if c.Compute.StatusPollInterval == 0 {
+		c.Compute.StatusPollInterval = DefaultComputeStatusPollInterval
+	}
 	if c.InstanceState.DBRetentionPeriod == 0 {
 		c.InstanceState.DBRetentionPeriod = DefaultDBRetentionPeriod
 	}
@@ -310,6 +332,9 @@ func (c *Config) ApplyDefaults() {
 	}
 	if strings.TrimSpace(c.ConfigRepos.Provider) == "" {
 		c.ConfigRepos.Provider = "none"
+	}
+	if strings.TrimSpace(c.ConfigRepos.RepoPrefix) == "" {
+		c.ConfigRepos.RepoPrefix = "grain-cfg-"
 	}
 	if c.Quotas.DefaultInstanceUnits == 0 {
 		c.Quotas.DefaultInstanceUnits = DefaultInstanceQuotaUnits
