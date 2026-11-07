@@ -157,7 +157,7 @@ capabilities:
     - "https://grain.dev/capabilities/grain#journal"
     - "api:deployment:read"
     - "https://grain.dev/capabilities/grain#health"
-    - "bootstrap-playbooks"
+    - 'https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}'
     - "api:ci-read"
 network: ["open"]
 allow_external_on_host_sandboxes: false
