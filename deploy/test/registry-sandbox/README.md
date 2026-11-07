@@ -86,8 +86,9 @@ sandbox project (`deploy/test/registry-sandbox/`).
 `up.sh` builds and pushes `Dockerfile.registry` to
 `us-docker.pkg.dev/<project>/grain/grain-registry:<tag>`, creates a GCS state
 bucket `gs://<project>-<prefix>-tfstate`, applies Terraform, reconciles the VM
-over IAP SSH, waits for `/healthz` + `/.well-known/jwks.json` + Google-managed
-TLS, and registers the `alice` connected entry.
+over IAP SSH, waits for the Load Balancer's `/healthz` health checks and
+Google-managed TLS, fetches `/.well-known/jwks.json` with TLS verified (never
+`curl -k`), and registers the `alice` connected entry.
 
 ### 2. Connect a `grain` daemon
 

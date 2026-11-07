@@ -515,11 +515,21 @@ else
   log "Note: iap.tunnelInstances.accessViaIAP not held by ${active_acct}; relying on GCE startup script reconciliation."
 fi
 
-log "Waiting for Global HTTPS Load Balancer (${lb_ip}) to serve ${jwks_url}..."
+# Readiness is read from the Load Balancer's own health checks (no TLS
+# involved), so this wait never needs to turn certificate verification off
+# while the Google-managed certificate is still provisioning.
+log "Waiting for Global HTTPS Load Balancer (${lb_ip}) health checks to report grain-registry HEALTHY..."
 lb_ready=0
 for attempt in $(seq 1 48); do
-  jwks_resp="$(curl -skf --max-time 10 --resolve "${registry_host}:443:${lb_ip}" "${jwks_url}" 2>/dev/null || true)"
-  if [[ -n "${jwks_resp}" ]] && [[ "$(jq -r '.keys | length' <<<"${jwks_resp}" 2>/dev/null || echo 0)" -ge 1 ]]; then
+  healthy=1
+  for bs in "${NAME_PREFIX}-iap-bs" "${NAME_PREFIX}-pub-bs"; do
+    bs_state="$(gcloud compute backend-services get-health "${bs}" --global --project="${PROJECT_ID}" --format=json 2>/dev/null |
+      jq -r '[.[]?.status.healthStatus[]?.healthState] | if length == 0 then "UNKNOWN" elif all(. == "HEALTHY") then "HEALTHY" else "UNHEALTHY" end' 2>/dev/null || echo UNKNOWN)"
+    if [[ "${bs_state}" != "HEALTHY" ]]; then
+      healthy=0
+    fi
+  done
+  if [[ "${healthy}" -eq 1 ]]; then
     lb_ready=1
     break
   fi
@@ -527,11 +537,12 @@ for attempt in $(seq 1 48); do
   sleep 10
 done
 if [[ "${lb_ready}" -ne 1 ]]; then
-  echo "up.sh: timed out waiting for HTTPS LB to serve /.well-known/jwks.json" >&2
+  echo "up.sh: timed out waiting for the HTTPS LB backends to report grain-registry HEALTHY" >&2
   gcloud compute instances get-serial-port-output "${vm_name}" --zone="${ZONE}" --project="${PROJECT_ID}" 2>/dev/null | tail -n 60 >&2 || true
   exit 1
 fi
 
+cert_status=""
 if [[ -n "${managed_cert_name}" && "${WAIT_CERT}" -eq 1 ]]; then
   log "Waiting up to ${CERT_TIMEOUT_SECS}s for Google-managed SSL certificate '${managed_cert_name}' to become ACTIVE..."
   deadline=$(( SECONDS + CERT_TIMEOUT_SECS ))
@@ -546,6 +557,46 @@ if [[ -n "${managed_cert_name}" && "${WAIT_CERT}" -eq 1 ]]; then
     log "  certificate status=${cert_status} (${domain_summary}); checking again in 15s..."
     sleep 15
   done
+fi
+
+# Fetch JWKS through the LB with TLS verified: the generated self-signed
+# certificate is trusted explicitly in self-signed mode, and the
+# Google-managed certificate through the system roots once it is ACTIVE.
+jwks_tls_flags=()
+check_jwks=1
+if [[ "${TLS_MODE}" == "self-signed" ]]; then
+  selfsigned_pem="$(terraform -chdir="${SCRIPT_DIR}" output -raw selfsigned_cert_pem)"
+  ca_bundle="${tmp_work_dir}/ca-bundle.pem"
+  : > "${ca_bundle}"
+  for cand in "${CURL_CA_BUNDLE:-}" "${SSL_CERT_FILE:-}" \
+    /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/cert.pem; do
+    if [[ -n "${cand}" && -r "${cand}" ]]; then
+      cat "${cand}" >> "${ca_bundle}"
+      printf '\n' >> "${ca_bundle}"
+    fi
+  done
+  printf '%s\n' "${selfsigned_pem}" >> "${ca_bundle}"
+  jwks_tls_flags+=(--cacert "${ca_bundle}")
+elif [[ "${cert_status}" != "ACTIVE" ]]; then
+  check_jwks=0
+  log "Note: Google-managed certificate is not ACTIVE yet; skipping the TLS-verified ${jwks_url} check (re-run verify.sh once it is)."
+fi
+if [[ "${check_jwks}" -eq 1 ]]; then
+  log "Checking ${jwks_url} through the LB with TLS verification..."
+  jwks_ok=0
+  for attempt in $(seq 1 30); do
+    jwks_resp="$(curl -sf --max-time 10 "${jwks_tls_flags[@]}" --resolve "${registry_host}:443:${lb_ip}" "${jwks_url}" 2>/dev/null || true)"
+    if [[ -n "${jwks_resp}" ]] && [[ "$(jq -r '.keys | length' <<<"${jwks_resp}" 2>/dev/null || echo 0)" -ge 1 ]]; then
+      jwks_ok=1
+      break
+    fi
+    log "  [attempt ${attempt}/30] LB certificate/route propagating; retrying in 10s..."
+    sleep 10
+  done
+  if [[ "${jwks_ok}" -ne 1 ]]; then
+    echo "up.sh: timed out waiting for HTTPS LB to serve ${jwks_url} with a verifiable certificate" >&2
+    exit 1
+  fi
 fi
 
 if [[ -n "${TOKEN_OUT_DIR}" ]]; then
