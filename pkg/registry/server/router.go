@@ -875,7 +875,7 @@ func (rt *Router) ServeInstanceHost(w http.ResponseWriter, r *http.Request, name
 	case api.KindInstance:
 		rt.routeInstanceEntry(w, r, entry, entryHost)
 	case api.KindConnected:
-		rt.routeConnectedEntry(w, r, entry, isManager, true)
+		rt.routeConnectedEntry(w, r, entry, isManager, time.Time{})
 	default:
 		writeJSONError(w, http.StatusNotImplemented, "unsupported_entry_kind", fmt.Sprintf("entry kind %q is not supported", entry.Kind))
 	}
@@ -896,7 +896,11 @@ func (rt *Router) routeInstanceEntry(w http.ResponseWriter, r *http.Request, ent
 	proxy.ServeHTTP(w, r)
 }
 
-func (rt *Router) routeConnectedEntry(w http.ResponseWriter, r *http.Request, entry *store.EntryRow, isManager bool, allowWait bool) {
+// routeConnectedEntry routes a request for a connected entry to the replica
+// holding its tunnel. graceDeadline is the end of the reconnect_grace this
+// request is already waiting out; the zero value means it has not started one,
+// and handleOfflineOrWait starts one if the tunnel disconnected recently.
+func (rt *Router) routeConnectedEntry(w http.ResponseWriter, r *http.Request, entry *store.EntryRow, isManager bool, graceDeadline time.Time) {
 	// 1. Check local active tunnel first (1 hop).
 	if local := rt.GetLocalTunnel(entry.Name); local != nil {
 		rt.serveLocalTunnel(w, r, entry, isManager, local)
@@ -912,7 +916,7 @@ func (rt *Router) routeConnectedEntry(w http.ResponseWriter, r *http.Request, en
 	}
 	if ok && tc.HasActiveSession(now, rt.opts.ReplicaTTL) {
 		if tc.ReplicaID != "" && tc.ReplicaID != rt.replicaID && tc.PeerAddr != "" {
-			rt.forwardToPeer(w, r, entry, isManager, tc.PeerAddr, allowWait)
+			rt.forwardToPeer(w, r, entry, isManager, tc.PeerAddr, graceDeadline)
 			return
 		}
 		if tc.ReplicaID == rt.replicaID {
@@ -922,7 +926,7 @@ func (rt *Router) routeConnectedEntry(w http.ResponseWriter, r *http.Request, en
 	}
 
 	// 3. Tunnel is offline; wait in reconnect_grace if recently disconnected, else render 503 offline page.
-	rt.handleOfflineOrWait(w, r, entry, isManager, allowWait)
+	rt.handleOfflineOrWait(w, r, entry, isManager, graceDeadline)
 }
 
 func (rt *Router) serveLocalTunnel(w http.ResponseWriter, r *http.Request, entry *store.EntryRow, isManager bool, local *ActiveTunnel) {
@@ -946,20 +950,38 @@ func (rt *Router) serveLocalTunnel(w http.ResponseWriter, r *http.Request, entry
 	proxy.ServeHTTP(w, r)
 }
 
-func (rt *Router) handleOfflineOrWait(w http.ResponseWriter, r *http.Request, entry *store.EntryRow, isManager bool, allowWait bool) {
+// handleOfflineOrWait holds a request for an offline connected entry until its
+// tunnel reconnects, or renders the 503 offline page.
+//
+// A request that finds the tunnel disconnected recently starts a
+// reconnect_grace window of ReconnectGrace; graceDeadline is non-zero when the
+// request is already inside one. Every wait the request takes shares that one
+// deadline. That matters because a wake is not proof of a reconnect: the tunnel
+// cache is refreshed from PostgreSQL by NOTIFY handlers and the poll, and a
+// refresh that read the session before its old replica released it re-marks
+// that dead session active and wakes the waiters. The woken request forwards to
+// the old replica, is told the tunnel is gone, and comes back here to wait out
+// what is left of the same grace for the real reconnect -- instead of answering
+// 503 inside the grace it was promised, or starting a fresh grace and holding
+// the request for longer than ReconnectGrace in all.
+func (rt *Router) handleOfflineOrWait(w http.ResponseWriter, r *http.Request, entry *store.EntryRow, isManager bool, graceDeadline time.Time) {
 	now := rt.now()
 	tc, _ := rt.tunnelCache.Get(entry.Name)
-	if allowWait && rt.opts.ReconnectGrace > 0 && tc.DisconnectedRecently(now, DefaultReconnectWindow) {
-		deadline := time.Now().Add(rt.opts.ReconnectGrace)
-		cur, ok, err := rt.tunnelCache.WaitForReconnect(r.Context(), entry.Name, rt.opts.ReconnectGrace)
-		if err == nil && ok && cur.ReplicaID == rt.replicaID {
-			ok = rt.waitForLocalTunnel(r.Context(), entry.Name, deadline)
+	if rt.opts.ReconnectGrace > 0 {
+		if graceDeadline.IsZero() && tc.DisconnectedRecently(now, DefaultReconnectWindow) {
+			graceDeadline = time.Now().Add(rt.opts.ReconnectGrace)
 		}
-		if err == nil && ok {
-			rt.routeConnectedEntry(w, r, entry, isManager, false)
-			return
+		if remaining := time.Until(graceDeadline); !graceDeadline.IsZero() && remaining > 0 {
+			cur, ok, err := rt.tunnelCache.WaitForReconnect(r.Context(), entry.Name, remaining)
+			if err == nil && ok && cur.ReplicaID == rt.replicaID {
+				ok = rt.waitForLocalTunnel(r.Context(), entry.Name, graceDeadline)
+			}
+			if err == nil && ok {
+				rt.routeConnectedEntry(w, r, entry, isManager, graceDeadline)
+				return
+			}
+			tc, _ = rt.tunnelCache.Get(entry.Name)
 		}
-		tc, _ = rt.tunnelCache.Get(entry.Name)
 	}
 	WriteOfflineConnectedState(w, r, rt.enrichOfflineEntry(r.Context(), entry), tc, rt.now(), isManager)
 }
