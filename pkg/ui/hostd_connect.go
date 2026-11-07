@@ -87,6 +87,9 @@ func (s *Server) hostdConnectIdentity(r *http.Request) (hostd.ConnectIdentity, i
 			}
 			return hostd.ConnectIdentity{}, http.StatusUnauthorized, fmt.Errorf("its identity did not verify: %v", cv.err)
 		}
+		if cv.id.Via != nil {
+			return hostd.ConnectIdentity{}, http.StatusForbidden, fmt.Errorf("a remote hostd cannot connect via a delegated identity (%s acting for %s): connect directly as the hostd's owner", cv.id.Via.Email, cv.id.Email)
+		}
 		if !s.isRegisteredHostdOwner(r.Context(), cv.id) {
 			if err := s.checkAllowedPrincipal(r.Context(), cv.id); err != nil {
 				return hostd.ConnectIdentity{}, http.StatusForbidden, err

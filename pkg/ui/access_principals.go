@@ -59,6 +59,7 @@ type AllowPrincipalRequest struct {
 	Entry  string `json:"entry"`
 	Reason string `json:"reason,omitempty"`
 	Role   string `json:"role,omitempty"`
+	Label  string `json:"label,omitempty"`
 }
 
 // SetPrincipalRoleRequest is PATCH /api/access/principals/{entry}: the role
@@ -131,7 +132,7 @@ func (c *Client) MigrateAllowedPrincipals(ctx context.Context) error {
 	for _, r := range raw {
 		for _, item := range SplitAllowedPrincipals(r) {
 			prefix, email, canonical, err := model.NormalizeAllowedPrincipalEntry(item)
-			if err == nil && prefix != "serviceAccount" {
+			if err == nil && prefix != "serviceAccount" && prefix != "delegate" {
 				if pool[email] {
 					dropped = append(dropped, item)
 					continue
@@ -259,12 +260,15 @@ func (c *Client) ListAllowedPrincipals(ctx context.Context) (AccessPrincipalsRes
 	}, nil
 }
 
-// AllowPrincipal adds a `user:<email>`, `group:<email>` or
-// `serviceAccount:<email>` entry to the database allowlist. A
-// serviceAccount: entry needs a reason, and an account whose key grain hands
-// to tasks (the gcp-key / gcp permission-set pools) is always refused.
-// Adding an existing entry is an idempotent no-op.
+// AllowPrincipal adds a `user:<email>`, `group:<email>`,
+// `serviceAccount:<email>` or `delegate:<email>` entry to the database
+// allowlist. A serviceAccount: or delegate: entry needs a reason, and an
+// account whose key grain hands to tasks (the gcp-key / gcp permission-set
+// pools) is always refused. Adding an existing entry is an idempotent no-op.
 func (c *Client) AllowPrincipal(ctx context.Context, req AllowPrincipalRequest) (AllowPrincipalResponse, error) {
+	if isDelegatedRequest(ctx) {
+		return AllowPrincipalResponse{}, forbiddenCodeErrorf("requires_person", "delegated requests may not change the allowed users, groups and delegating apps list")
+	}
 	if err := c.MigrateAllowedPrincipals(ctx); err != nil {
 		return AllowPrincipalResponse{}, err
 	}
@@ -272,22 +276,51 @@ func (c *Client) AllowPrincipal(ctx context.Context, req AllowPrincipalRequest) 
 	if err != nil {
 		return AllowPrincipalResponse{}, validationErrorf("%v", err)
 	}
-	if prefix != "group" && c.gcpKeyPoolSet(ctx)[email] {
-		return AllowPrincipalResponse{}, validationErrorf("allowed principal %q names a grain-managed service account whose key is handed to task sandboxes and cannot be admitted", canonical)
-	}
 	reason := strings.TrimSpace(req.Reason)
 	if reason == "" {
 		reason = actingReasonFromContext(ctx)
 	}
 	role := strings.TrimSpace(req.Role)
-	if role == "" {
-		role = model.DefaultAccessRole
-	}
-	if owner := c.explicitDeploymentOwnerEmail(); owner != "" && canonical == "user:"+owner && role != model.DefaultAccessRole {
-		return AllowPrincipalResponse{}, validationErrorf("allowed principal %q is the deployment owner (-deployment-owner) and must keep role %s", canonical, model.DefaultAccessRole)
-	}
-	if prefix == "serviceAccount" && reason == "" {
-		return AllowPrincipalResponse{}, validationErrorf("allowed principal %q: give a reason to admit a service account (with role %s)", canonical, role)
+	var label string
+	if prefix == "delegate" {
+		if p, ok := PrincipalFromContext(ctx); ok && p.Kind != model.PrincipalHuman {
+			return AllowPrincipalResponse{}, forbiddenCodeErrorf("requires_person", "%s may not add %s: only a person may add delegate: entries", p.ID, canonical)
+		}
+		label = strings.TrimSpace(req.Label)
+		if err := model.ValidateDelegateLabel(label); err != nil {
+			return AllowPrincipalResponse{}, validationErrorf("allowed principal %q: %v", canonical, err)
+		}
+		if c.gcpKeyPoolSet(ctx)[email] {
+			return AllowPrincipalResponse{}, unprocessableErrorf("allowed principal %q names a grain-managed service account whose key is handed to task sandboxes and cannot be admitted as a delegating app", canonical)
+		}
+		if role == "" {
+			role = model.DefaultDelegateAccessRole
+		}
+		if reason == "" {
+			return AllowPrincipalResponse{}, validationErrorf("allowed principal %q: give a reason to admit a delegating app (with role %s)", canonical, role)
+		}
+		if _, ok := model.APIScopeSetNamed(role); !ok {
+			return AllowPrincipalResponse{}, validationErrorf("role %q is no scope set in effect (Settings -> Scope sets, or a built-in such as %s or grain/viewer)", role, model.DefaultDelegateAccessRole)
+		}
+		if err := model.ValidateDelegateRole(role); err != nil {
+			return AllowPrincipalResponse{}, unprocessableErrorf("allowed principal %q: %v", canonical, err)
+		}
+	} else {
+		if strings.TrimSpace(req.Label) != "" {
+			return AllowPrincipalResponse{}, validationErrorf("allowed principal %q: label is only supported on delegate:<email> entries", canonical)
+		}
+		if prefix != "group" && c.gcpKeyPoolSet(ctx)[email] {
+			return AllowPrincipalResponse{}, validationErrorf("allowed principal %q names a grain-managed service account whose key is handed to task sandboxes and cannot be admitted", canonical)
+		}
+		if role == "" {
+			role = model.DefaultAccessRole
+		}
+		if owner := c.explicitDeploymentOwnerEmail(); owner != "" && canonical == "user:"+owner && role != model.DefaultAccessRole {
+			return AllowPrincipalResponse{}, validationErrorf("allowed principal %q is the deployment owner (-deployment-owner) and must keep role %s", canonical, model.DefaultAccessRole)
+		}
+		if prefix == "serviceAccount" && reason == "" {
+			return AllowPrincipalResponse{}, validationErrorf("allowed principal %q: give a reason to admit a service account (with role %s)", canonical, role)
+		}
 	}
 	if existing, ok, err := c.allowedPrincipalNamed(ctx, canonical); err != nil {
 		return AllowPrincipalResponse{}, err
@@ -299,7 +332,7 @@ func (c *Client) AllowPrincipal(ctx context.Context, req AllowPrincipalRequest) 
 	if err := checkAccessRoleAssignment(ctx, canonical, role, "", reason); err != nil {
 		return AllowPrincipalResponse{}, err
 	}
-	p, created, err := c.Store.AddAllowedPrincipalWithRole(ctx, canonical, writerName(ctx), reason, role, c.now())
+	p, created, err := c.Store.AddAllowedPrincipalWithOptions(ctx, canonical, writerName(ctx), reason, role, label, c.now())
 	if err != nil {
 		return AllowPrincipalResponse{}, err
 	}
@@ -315,6 +348,9 @@ func (c *Client) AllowPrincipal(ctx context.Context, req AllowPrincipalRequest) 
 
 // DenyPrincipal removes an entry from the database allowlist.
 func (c *Client) DenyPrincipal(ctx context.Context, rawEntry string) (DenyPrincipalResponse, error) {
+	if isDelegatedRequest(ctx) {
+		return DenyPrincipalResponse{}, forbiddenCodeErrorf("requires_person", "delegated requests may not change the allowed users, groups and delegating apps list")
+	}
 	if err := c.MigrateAllowedPrincipals(ctx); err != nil {
 		return DenyPrincipalResponse{}, err
 	}
@@ -351,10 +387,13 @@ func (c *Client) DenyPrincipal(ctx context.Context, rawEntry string) (DenyPrinci
 
 // SetPrincipalRole gives an entry already on the allowlist another role.
 func (c *Client) SetPrincipalRole(ctx context.Context, rawEntry string, req SetPrincipalRoleRequest) (SetPrincipalRoleResponse, error) {
+	if isDelegatedRequest(ctx) {
+		return SetPrincipalRoleResponse{}, forbiddenCodeErrorf("requires_person", "delegated requests may not change the allowed users, groups and delegating apps list")
+	}
 	if err := c.MigrateAllowedPrincipals(ctx); err != nil {
 		return SetPrincipalRoleResponse{}, err
 	}
-	_, _, canonical, err := model.NormalizeAllowedPrincipalEntry(rawEntry)
+	prefix, _, canonical, err := model.NormalizeAllowedPrincipalEntry(rawEntry)
 	if err != nil {
 		return SetPrincipalRoleResponse{}, validationErrorf("%v", err)
 	}
@@ -368,6 +407,17 @@ func (c *Client) SetPrincipalRole(ctx context.Context, rawEntry string, req SetP
 	reason := strings.TrimSpace(req.Reason)
 	if reason == "" {
 		reason = actingReasonFromContext(ctx)
+	}
+	if prefix == "delegate" {
+		if p, ok := PrincipalFromContext(ctx); ok && p.Kind != model.PrincipalHuman {
+			return SetPrincipalRoleResponse{}, forbiddenCodeErrorf("requires_person", "%s may not change %s: only a person may change delegate: entries", p.ID, canonical)
+		}
+		if _, ok := model.APIScopeSetNamed(role); !ok {
+			return SetPrincipalRoleResponse{}, validationErrorf("role %q is no scope set in effect (Settings -> Scope sets, or a built-in such as %s or grain/viewer)", role, model.DefaultDelegateAccessRole)
+		}
+		if err := model.ValidateDelegateRole(role); err != nil {
+			return SetPrincipalRoleResponse{}, unprocessableErrorf("allowed principal %q: %v", canonical, err)
+		}
 	}
 	existing, ok, err := c.allowedPrincipalNamed(ctx, canonical)
 	if err != nil {
@@ -417,8 +467,16 @@ func (c *Client) allowedPrincipalNamed(ctx context.Context, canonical string) (m
 // a role only an access-code admin assigns or one that denies scopes
 // (docs/design/access-rbac.md §3).
 func checkAccessEntryChange(ctx context.Context, entry, current string) error {
+	if isDelegatedRequest(ctx) {
+		return forbiddenCodeErrorf("requires_person", "delegated requests may not change the allowed users, groups and delegating apps list")
+	}
 	if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent {
 		return &ForbiddenError{err: fmt.Errorf("agent %s may not change who signs in to this deployment: only a person changes the allowed users and groups list", p.ID)}
+	}
+	if strings.HasPrefix(entry, "delegate:") {
+		if p, ok := PrincipalFromContext(ctx); ok && p.Kind != model.PrincipalHuman {
+			return forbiddenCodeErrorf("requires_person", "%s may not change %s: only a person may change delegate: entries", p.ID, entry)
+		}
 	}
 	caller := accessRoleFromContext(ctx)
 	if caller == nil || current == "" {

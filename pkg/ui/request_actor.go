@@ -80,6 +80,12 @@ func operatorActor(ctx context.Context) model.Principal {
 // design/spec/external-cli/external-cli.spec.md#XC-14), and nil
 // otherwise until spec §2.4 lands.
 func RequestActor(ctx context.Context) model.Attribution {
+	if del := delegatedIdentityFromContext(ctx); del != nil {
+		return model.Attribution{
+			Actor:      model.Principal{Kind: model.PrincipalService, ID: del.AppEmail, Source: model.SourceRegistry},
+			OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: del.PersonEmail, Source: model.SourceRegistry},
+		}
+	}
 	if p, ok := PrincipalFromContext(ctx); ok {
 		if p.Kind == model.PrincipalAgent && p.Source == model.SourceExternalToken {
 			if tok := externalTokenFromContext(ctx); tok != nil {

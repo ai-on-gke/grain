@@ -271,6 +271,12 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	if roleSlot.role != nil {
 		r = r.WithContext(withAccessRole(r.Context(), roleSlot.role))
 	}
+	if roleSlot.delegation != nil {
+		r = r.WithContext(withDelegatedIdentity(r.Context(), roleSlot.delegation))
+		log.Printf("grain ui: delegated request: %s %s actor=service:%s on_behalf_of=user:%s via=%s registry_rid=%q registry_jti=%q delegation_grant=%q",
+			r.Method, r.URL.Path, roleSlot.delegation.AppEmail, roleSlot.delegation.PersonEmail, roleSlot.delegation.ViaLabel,
+			roleSlot.delegation.RequestID, roleSlot.delegation.JTI, roleSlot.delegation.Grant)
+	}
 	if s.tasks != nil {
 		r = r.WithContext(s.tasks.withOperatorActor(r.Context()))
 	}
@@ -280,7 +286,19 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		p, method, ok := extractPrincipal(r)
 		if ok {
-			if !singleTenantOpenRoute(r) || s.allowedPrincipalErr(r.Context(), VerifiedIdentity{Email: p.ID, Kind: p.Kind}) == nil {
+			admitted := !singleTenantOpenRoute(r)
+			if !admitted {
+				if err := s.admitVerifiedPrincipal(r.Context(), cv.id); err == nil {
+					admitted = true
+					if roleSlot.role != nil {
+						r = r.WithContext(withAccessRole(r.Context(), roleSlot.role))
+					}
+					if roleSlot.delegation != nil {
+						r = r.WithContext(withDelegatedIdentity(r.Context(), roleSlot.delegation))
+					}
+				}
+			}
+			if admitted {
 				r = r.WithContext(withAuthMethod(WithPrincipal(r.Context(), p), method))
 			} else {
 				ok = false
