@@ -100,6 +100,7 @@ if [ -z "$image" ]; then
   [ "$loaded" = "$id" ] || { echo "install-grain.sh: ${ref} is ${loaded} after loading, not ${id}" >&2; exit 1; }
   pinned="$ref"
   echo "image: ${ref} (${id}, ${asset} sha256 ${sum})"
+  echo "signature: NOT verified (release assets are checked against images.json's sha256, not signed; use -image and -key to verify a signed registry image)" >&2
 else
   docker pull -q "${image}:${version}" >/dev/null
   pinned="$(docker inspect --format '{{index .RepoDigests 0}}' "${image}:${version}")"
