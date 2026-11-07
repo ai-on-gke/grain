@@ -20,9 +20,10 @@ package orchestrator
 // On a repository that releases from grain CI, the release train's own
 // run raises release.pending:vX.Y.Z through the CI API
 // (scripts/release-from-trunk.sh raise_pending). On one that releases
-// from GitHub Actions (ci_mode: github) the train runs on a hosted
-// runner, which cannot reach this deployment -- on 11-01/02 that is why
-// the Inbox never showed an Approve button. So the deployment looks,
+// from GitHub Actions (model.Store.ReleasesFromGitHubActions: ci_mode:
+// github, or no CI Mode set and no grain CI in effect) the train runs on a
+// hosted runner, which cannot reach this deployment -- on 11-01/02 that is
+// why the Inbox never showed an Approve button. So the deployment looks,
 // outbound: the vX.Y.Z-pending tag is the state, and this reconciler
 // reads the repository's tags and raises the notification for every
 // release staged and not yet promoted, with the -pending tag's message
@@ -41,6 +42,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -66,8 +68,68 @@ var releasePendingNotifier = model.PrincipalString(model.Principal{Kind: model.P
 var pendingTagPattern = regexp.MustCompile(`^(v[0-9]+\.[0-9]+\.[0-9]+)-pending$`)
 var releaseTagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 
-// releasePendingPolled is when each repository's tags were last read.
-var releasePendingPolled sync.Map // repo string -> time.Time
+// releasePendingPolled is when each repository's tags were last read,
+// keyed by store and repository so parallel tests do not share a clock.
+var releasePendingPolled sync.Map // releasePendingKey -> time.Time
+
+func releasePendingKey(store *model.Store, repo model.RepoRef) string {
+	return fmt.Sprintf("%p|%s", store, strings.ToLower(repo.String()))
+}
+
+type releasePendingCandidate struct {
+	repo model.RepoRef
+	cfg  *model.RepoConfig
+}
+
+// releasePendingCandidates lists every repository this deployment works
+// in that could release from GitHub Actions: each repo_config row, plus
+// each repository Config.TargetRepos names outright (not by pattern),
+// which has no row of its own when it keeps every default.
+func releasePendingCandidates(ctx context.Context, store *model.Store) ([]releasePendingCandidate, error) {
+	configs, err := store.ListRepoConfigs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("orchestrator: reading repo configs: %w", err)
+	}
+	targets, err := store.TargetRepos(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("orchestrator: reading target repos: %w", err)
+	}
+	var out []releasePendingCandidate
+	for i := range configs {
+		r := configs[i].Repo
+		if r.Owner == "" || r.Name == "" {
+			continue
+		}
+		out = append(out, releasePendingCandidate{repo: r, cfg: &configs[i]})
+	}
+	for _, entry := range targets {
+		entry = strings.TrimSpace(entry)
+		if entry == "" || strings.ContainsAny(entry, "*?[") {
+			continue
+		}
+		r, err := model.ParseRepo(entry)
+		if err != nil || r.Owner == "" || r.Name == "" {
+			continue
+		}
+		if slices.ContainsFunc(out, func(c releasePendingCandidate) bool { return c.repo.Same(r) }) {
+			continue
+		}
+		out = append(out, releasePendingCandidate{repo: r})
+	}
+	slices.SortFunc(out, func(a, b releasePendingCandidate) int {
+		return strings.Compare(a.repo.String(), b.repo.String())
+	})
+	return out, nil
+}
+
+func isGitOnlyRepo(client github.Client, repo model.RepoRef) bool {
+	if rc, ok := client.(*github.RESTClient); ok {
+		if src, ok := rc.Tokens.(github.GitOnlySource); ok {
+			return src.GitOnly(repo.StoredOwner(), repo.Name) != ""
+		}
+	}
+	return false
+}
 
 // reconcileReleasePending reads, at most every
 // releasePendingPollInterval, the tags of every repository this
@@ -82,28 +144,35 @@ func reconcileReleasePending(ctx context.Context, deps Deps, now time.Time) erro
 		return nil // a forge connection that cannot read tags raises nothing
 	}
 	files, _ := deps.Client.(github.FileReader)
-	configs, err := deps.Store.ListRepoConfigs(ctx)
+	candidates, err := releasePendingCandidates(ctx, deps.Store)
 	if err != nil {
-		return fmt.Errorf("orchestrator: reading repo configs: %w", err)
+		return err
 	}
 	var errs []error
-	for _, cfg := range configs {
-		if !model.RunsWorkItem(&cfg, model.ReleaseItem) {
+	for _, cand := range candidates {
+		if !model.RunsWorkItem(cand.cfg, model.ReleaseItem) {
 			continue
 		}
-		if allowed, err := repoAllowedForAnyTeam(ctx, deps.Store, cfg.Repo); err != nil || !allowed {
+		if allowed, err := repoAllowedForAnyTeam(ctx, deps.Store, cand.repo); err != nil || !allowed {
 			continue
 		}
-		eff, err := deps.Store.EffectiveRepoConfig(ctx, cfg.Repo)
-		if err != nil || eff.CIMode != model.CIModeGitHub {
+		if isGitOnlyRepo(deps.Client, cand.repo) {
 			continue
 		}
-		key := cfg.Repo.String()
+		actions, err := deps.Store.ReleasesFromGitHubActions(ctx, cand.repo)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("orchestrator: %w", err))
+			continue
+		}
+		if !actions {
+			continue
+		}
+		key := releasePendingKey(deps.Store, cand.repo)
 		if last, ok := releasePendingPolled.Load(key); ok && now.Sub(last.(time.Time)) < releasePendingPollInterval {
 			continue
 		}
 		releasePendingPolled.Store(key, now)
-		if err := watchPendingReleases(ctx, deps.Store, tags, files, cfg.Repo, now); err != nil {
+		if err := watchPendingReleases(ctx, deps.Store, tags, files, cand.repo, now); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -114,7 +183,7 @@ func reconcileReleasePending(ctx context.Context, deps Deps, now time.Time) erro
 // its tags as they stand now.
 func watchPendingReleases(ctx context.Context, store *model.Store, tags github.ReleaseTagReader,
 	files github.FileReader, repo model.RepoRef, now time.Time) error {
-	refs, err := tags.ListMatchingTags(repo.Owner, repo.Name, "v")
+	refs, err := tags.ListMatchingTags(repo.StoredOwner(), repo.Name, "v")
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading %s's release tags: %w", repo, github.Readable(err))
 	}
@@ -205,7 +274,7 @@ func pendingReleaseBody(tags github.ReleaseTagReader, files github.FileReader, r
 	fmt.Fprintf(&b, "%s is staged as %s-pending on %s and waits for a person: Approve tags %s, moves latest onto it "+
 		"and publishes its images (GitHub Actions promote-release.yml); Reject drops it.\n\n", version, version, repo, version)
 	if tag.ObjectType == "tag" {
-		if at, err := tags.GetAnnotatedTag(repo.Owner, repo.Name, tag.ObjectSHA); err == nil && at != nil {
+		if at, err := tags.GetAnnotatedTag(repo.StoredOwner(), repo.Name, tag.ObjectSHA); err == nil && at != nil {
 			if msg := strings.TrimSpace(at.Message); msg != "" {
 				b.WriteString(msg + "\n\n")
 			}
@@ -215,7 +284,7 @@ func pendingReleaseBody(tags github.ReleaseTagReader, files github.FileReader, r
 	var notes []byte
 	found := false
 	if files != nil {
-		notes, found, _ = files.ReadFile(repo.Owner, repo.Name, "main", notesPath)
+		notes, found, _ = files.ReadFile(repo.StoredOwner(), repo.Name, "main", notesPath)
 	}
 	if !found {
 		fmt.Fprintf(&b, "Release notes: %s has not merged yet; merge the release-notes task's pull request before approving.\n", notesPath)
