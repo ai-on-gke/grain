@@ -498,7 +498,7 @@ func run() error {
 	cancellers := orchestrator.NewTaskCancellers()
 	handler := ui.NewServer(ui.Config{
 		Actor:         model.Principal{Kind: model.PrincipalHuman, ID: "director-e2e-operator"},
-		DefaultTarget: &defaultRepo, Capabilities: ui.OfferedCapabilities(),
+		DefaultTarget: &defaultRepo, Capabilities: append(ui.OfferedCapabilities(), ui.APICapabilities()...),
 		Secrets: secretStore, StateRepoRef: func() model.RepoRef { return stateRepo },
 		Sandboxes: sandboxHealth{inner: sandboxes}, HostStats: hostPressure,
 		SandboxShapeIgnored: true,

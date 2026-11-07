@@ -109,6 +109,7 @@ var settingsAppliedLive = map[string]string{
 	"repairTemplateID":    "orchestrator resolves the repair template dynamically from the config row on each repair/triage filing",
 	"defaultCapabilities": "pkg/ui, which reads grain_config per request (CreateTask's own defaults)",
 	"defaultAdmission":    "pkg/ui, which reads grain_config per request (CreateTask's defaultTaskAdmission)",
+	"defaultHosting":      "pkg/ui, which reads grain_config per request (CreateTask's defaultTaskHosting)",
 	"newestFirst":         "pkg/ui, which reads grain_config per request",
 	"showClosedByDefault": "pkg/ui, which reads grain_config per request",
 	"approvedByDefault":   "pkg/ui, which reads grain_config per request",

@@ -1822,6 +1822,7 @@ type CreateTaskRequest struct {
 	KeepRunning      bool   `json:"keepRunning,omitempty"`
 	KeepRunningSnake *bool  `json:"keep_running,omitempty"`
 	Admission        string `json:"admission,omitempty"`
+	Hosting          string `json:"hosting,omitempty"`
 	// Goal declares the task's goal (model.TaskGoal,
 	// design/design/durable-tasks.design.md#DT-4) as it is filed; nil for none, or
 	// for the goal of the template it is filed from.
@@ -2276,6 +2277,30 @@ func (c *Client) defaultTaskAdmission(ctx context.Context, target *model.RepoRef
 	return model.NormalizeAdmission(adm), nil
 }
 
+func (c *Client) defaultTaskHosting(ctx context.Context, target *model.RepoRef) (model.Hosting, error) {
+	if c.Store == nil {
+		return model.HostingUnattended, nil
+	}
+	var h model.Hosting
+	cfg, err := c.Store.GetConfig(ctx)
+	if err != nil {
+		return "", err
+	}
+	if cfg != nil && cfg.DefaultHosting != "" {
+		h = cfg.DefaultHosting
+	}
+	if target != nil {
+		rc, err := c.Store.GetRepoConfig(ctx, *target)
+		if err != nil {
+			return "", err
+		}
+		if rc != nil {
+			h = model.MaxHosting(h, rc.DefaultHosting)
+		}
+	}
+	return model.NormalizeHosting(h), nil
+}
+
 // No GitHub issue is created, and none is needed: Store.NewTaskID
 // allocates identity, so a task exists the moment this returns. That is
 // the whole inversion in one method -- this used to open an issue and let
@@ -2636,11 +2661,18 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if err != nil {
 		return Task{}, validationErrorf("%v", err)
 	}
+	explicitHosting, err := model.ParseOptionalHosting(req.Hosting)
+	if err != nil {
+		return Task{}, validationErrorf("%v", err)
+	}
 	var legacyAdmission model.Admission
 	var hadLegacyAdmission bool
+	var legacyHosting model.Hosting
+	var hadLegacyHosting bool
 	if req.Capabilities != nil {
 		var capsWithoutLegacy []string
 		capsWithoutLegacy, legacyAdmission, hadLegacyAdmission = extractLegacyAdmissionCaps("task", *req.Capabilities)
+		capsWithoutLegacy, legacyHosting, hadLegacyHosting = extractLegacyHostingCaps("task", capsWithoutLegacy)
 		req.Capabilities = &capsWithoutLegacy
 	}
 	grants, droppedRefusals, err := c.creationGrants(ctx, req, target, teamID)
@@ -2659,6 +2691,17 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		}
 	}
 	taskAdmission = model.NormalizeAdmission(taskAdmission)
+	taskHosting := explicitHosting
+	if hadLegacyHosting {
+		taskHosting = model.MaxHosting(taskHosting, legacyHosting)
+	}
+	if taskHosting == "" {
+		taskHosting, err = c.defaultTaskHosting(ctx, target)
+		if err != nil {
+			return Task{}, err
+		}
+	}
+	taskHosting = model.NormalizeHosting(taskHosting)
 	// The template a person filed this from, which is how the task's runs
 	// find that template's declared push set (model.Task.TemplateID) and how
 	// the catalogue judges its template restrictions. An agent's proposal
@@ -3094,6 +3137,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		NothingNeededAction:  nothingNeeded,
 		KeepRunning:          keepRunning,
 		Admission:            taskAdmission,
+		Hosting:              taskHosting,
 		NoPort:               req.NoPort,
 		WorkOrigin:           explicitOrigin,
 		AgentFramework:       agentFramework,
@@ -4583,6 +4627,8 @@ type UpdateTaskRequest struct {
 	Capabilities *[]string `json:"capabilities,omitempty"`
 	// Admission sets model.Task.Admission ("standard", "bypass", or "durable").
 	Admission *string `json:"admission,omitempty"`
+	// Hosting sets model.Task.Hosting ("unattended" or "console").
+	Hosting *string `json:"hosting,omitempty"`
 	// PriorityDispatch is a deprecated one-release alias that maps true to
 	// bypass admission and false back to standard admission.
 	PriorityDispatch *bool `json:"priorityDispatch,omitempty"`
@@ -4798,7 +4844,7 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	// sent as agentBackendId as the model choice it was.
 	var editModel *string
 	var isConsoleSessionTask bool
-	if req.Model != nil || req.AgentBackendID != nil || req.Capabilities != nil || req.Admission != nil || req.PriorityDispatch != nil || req.KeepRunning != nil {
+	if req.Model != nil || req.AgentBackendID != nil || req.Capabilities != nil || req.Admission != nil || req.Hosting != nil || req.PriorityDispatch != nil || req.KeepRunning != nil {
 		if existing, err := c.Store.GetTask(ctx, id); err == nil && existing != nil {
 			isConsoleSessionTask = existing.IsConsoleSession()
 		}
@@ -4984,15 +5030,27 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		norm := model.NormalizeAdmission(adm)
 		chosenAdmission = &norm
 	}
+	var chosenHosting *model.Hosting
+	if req.Hosting != nil {
+		h, err := model.ParseOptionalHosting(*req.Hosting)
+		if err != nil {
+			return Task{}, validationErrorf("%v", err)
+		}
+		norm := model.NormalizeHosting(h)
+		chosenHosting = &norm
+	}
 	if req.PriorityDispatch != nil {
 		log.Printf("task %s: priorityDispatch is deprecated; set admission instead", id)
 	}
 	var normalizedCaps []string
 	var legacyAdmission model.Admission
 	var hadLegacyAdmission bool
+	var legacyHosting model.Hosting
+	var hadLegacyHosting bool
 	if req.Capabilities != nil {
 		var capsWithoutLegacy []string
 		capsWithoutLegacy, legacyAdmission, hadLegacyAdmission = extractLegacyAdmissionCaps("task "+id, *req.Capabilities)
+		capsWithoutLegacy, legacyHosting, hadLegacyHosting = extractLegacyHostingCaps("task "+id, capsWithoutLegacy)
 		seen := map[string]bool{}
 		normalizedCaps = make([]string, 0, len(capsWithoutLegacy))
 		for _, rawCap := range capsWithoutLegacy {
@@ -5305,6 +5363,12 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		}
 		if hadLegacyAdmission {
 			task.Admission = model.MaxAdmission(model.NormalizeAdmission(task.Admission), legacyAdmission)
+		}
+		if chosenHosting != nil {
+			task.Hosting = *chosenHosting
+		}
+		if hadLegacyHosting {
+			task.Hosting = model.MaxHosting(model.NormalizeHosting(task.Hosting), legacyHosting)
 		}
 		if req.PriorityDispatch != nil {
 			if *req.PriorityDispatch {
@@ -5634,6 +5698,7 @@ func (c *Client) mutate(ctx context.Context, id string, apply func(*model.Task) 
 	}
 	c.ensureConsoleSessionSnapshot(ctx, *task)
 	ctx = model.WithAdmissionChange(ctx, c.requestActor(ctx))
+	ctx = model.WithHostingChange(ctx, c.requestActor(ctx))
 	actor := c.requestActor(ctx).Actor
 	var released []model.HumanReviewReason
 	if err := c.Store.UpdateTask(ctx, id, func(t *model.Task) error {
@@ -5713,6 +5778,23 @@ func (c *Client) SetCapability(ctx context.Context, id, capabilityID string, att
 			}
 			if cur == aliasAdm {
 				task.Admission = model.AdmissionStandard
+			}
+			return nil
+		})
+	}
+	if aliasHosting, ok := model.LegacyHostingAlias(capabilityID); ok {
+		log.Printf("task %s: capability %q is deprecated; set hosting instead", id, capabilityID)
+		return c.mutate(ctx, id, func(task *model.Task) error {
+			task.Grants = slices.DeleteFunc(task.Grants, func(g model.Grant) bool {
+				return g.Capability == capabilityID
+			})
+			cur := model.NormalizeHosting(task.Hosting)
+			if attach {
+				task.Hosting = model.MaxHosting(cur, aliasHosting)
+				return nil
+			}
+			if cur == aliasHosting {
+				task.Hosting = model.HostingUnattended
 			}
 			return nil
 		})

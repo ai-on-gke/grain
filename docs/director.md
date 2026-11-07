@@ -213,8 +213,8 @@ now**, which stops the open run (the conversation stays) so the next
 message starts a fresh one with what was saved.
 
 **It is a chat, not a terminal.** grain has both: `pkg/console` runs an
-agent's own CLI on a pseudo-terminal for a task holding the `console`
-capability. A standing session is the other one — comments in, comments
+agent's own CLI on a pseudo-terminal for a task with `hosting: console`
+(formerly the `console` capability). A standing session is the other one — comments in, comments
 out, the same conversation grain already carries in both directions —
 because that is what survives a run ending, reads on a phone, and needs
 no session manager to still exist tomorrow. `TaskChat.jsx`'s own doc

@@ -1080,6 +1080,9 @@ func agentGrantRefusal(held []string, name string, normalize func(string) (strin
 	if name == "" {
 		return nil
 	}
+	if _, ok := model.LegacyHostingAlias(name); ok {
+		return nil
+	}
 	if expanded := model.CanonicalLegacyGrants(name); len(expanded) > 1 {
 		for _, part := range expanded {
 			if err := agentGrantRefusal(held, part, normalize); err != nil {
@@ -3285,6 +3288,7 @@ func editedPatchResponseKeys(body []byte) []string {
 	add(req.Priority != nil, "priority")
 	add(req.PriorityDispatch != nil, "priorityDispatch")
 	add(req.Admission != nil, "admission")
+	add(req.Hosting != nil, "hosting")
 	add(req.Issue != nil, "issue")
 	add(req.AutoMerge != nil, "autoMerge")
 	add(req.AutoApproveProposals != nil, "autoApproveProposals")

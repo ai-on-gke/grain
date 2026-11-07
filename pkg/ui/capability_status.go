@@ -20,7 +20,6 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability"
 	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
-	consolecap "github.com/ai-on-gke/grain/pkg/capability/console"
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/imagesigning"
@@ -285,7 +284,6 @@ var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
 	"registry-push":             "Registry push",
 	"package-publish":           "Package publish",
 	"image-signing":             "Image signing",
-	"console":                   "Interactive console",
 	"read-issues":               "Read issues",
 	model.GitHubReadIssuesGrant: "Read issues",
 })
@@ -361,7 +359,6 @@ func capabilityProviderCatalog() []model.CapabilityProvider {
 		registrypush.NewWithConfig(registrypush.Config{}),
 		packagepublish.New(packagepublish.Config{}),
 		imagesigning.New(imagesigning.Config{}),
-		consolecap.New(),
 	)
 	return providers
 }

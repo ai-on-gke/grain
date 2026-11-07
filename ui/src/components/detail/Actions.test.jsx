@@ -1361,6 +1361,35 @@ describe("DetailOverlay actions", () => {
     expect(select).toHaveAttribute("aria-disabled", "true");
   });
 
+  // The Hosting select replaced the console capability
+  // (unified-grants.design.md §4.1).
+  it("sets a task's hosting from the actions column", async () => {
+    const act = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={{ ...baseTask, hosting: "unattended" }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+        showError={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole("combobox", { name: /Hosting/ }));
+    await user.click(
+      screen.getByRole("option", { name: "Interactive console" }),
+    );
+
+    act.mock.calls[0][0]();
+    expect(api).toHaveBeenCalledWith("/api/tasks/12", {
+      method: "PATCH",
+      body: JSON.stringify({ hosting: "console" }),
+    });
+  });
+
   // Auto-merge is read after the run, not at checkout, so unlike the
   // repo and base above it is the one edit here that does count for the
   // run already in flight.

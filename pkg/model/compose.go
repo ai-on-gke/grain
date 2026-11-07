@@ -176,6 +176,13 @@ func admissionSourceOf(admission Admission, said CompositionLayer) CompositionLa
 	return said
 }
 
+func hostingSourceOf(hosting Hosting, said CompositionLayer) CompositionLayer {
+	if hosting == "" {
+		return LayerDeployment
+	}
+	return said
+}
+
 // CompositionSources is which layer decided each field of a Composition
 // -- one CompositionLayer per field of it, in the same order, so a
 // reader can put "from the suite" beside "auto-merge: on".
@@ -197,6 +204,7 @@ type CompositionSources struct {
 	Interactive          CompositionLayer
 	KeepRunning          CompositionLayer
 	Admission            CompositionLayer
+	Hosting              CompositionLayer
 }
 
 // Composition is one task a firing will file, resolved: every value it
@@ -264,6 +272,9 @@ type Composition struct {
 	// Admission is the resolved admission setting for the task (empty means
 	// neither template nor schedule set one, so Task defaults to standard).
 	Admission Admission
+	// Hosting is the resolved hosting setting for the task (empty means
+	// neither template nor schedule set one, so Task defaults to unattended).
+	Hosting Hosting
 	// Priority is the resolved numeric priority for the task (DefaultTaskPriority = 5).
 	Priority int
 
@@ -318,6 +329,7 @@ func (c Composition) Task(id string, actor Principal, reason OriginReason, now t
 		Interactive:          c.Interactive,
 		KeepRunning:          c.KeepRunning,
 		Admission:            NormalizeAdmission(c.Admission),
+		Hosting:              NormalizeHosting(c.Hosting),
 		CreatedAt:            &now,
 	}
 	if c.Model != "" {
@@ -438,6 +450,7 @@ func composeTemplate(tmpl Template, values map[string]string, target RepoRef, ba
 		Interactive:          tmpl.Interactive,
 		KeepRunning:          tmpl.KeepRunning,
 		Admission:            tmpl.Admission,
+		Hosting:              tmpl.Hosting,
 		Priority:             priority,
 		TemplateID:           tmpl.ID,
 		TemplateName:         tmpl.Name,
@@ -459,6 +472,7 @@ func composeTemplate(tmpl Template, values map[string]string, target RepoRef, ba
 			Interactive:          LayerTemplate,
 			KeepRunning:          LayerTemplate,
 			Admission:            admissionSourceOf(tmpl.Admission, LayerTemplate),
+			Hosting:              hostingSourceOf(tmpl.Hosting, LayerTemplate),
 		},
 	}
 }
@@ -494,6 +508,15 @@ func ComposeScheduleTask(sched Schedule, tmpl *Template) Composition {
 			} else if comp.Admission == "" {
 				comp.Admission = sched.Admission
 				comp.Sources.Admission = LayerSchedule
+			}
+		}
+		if sched.Hosting != "" {
+			if merged := MaxHosting(comp.Hosting, sched.Hosting); merged != comp.Hosting {
+				comp.Hosting = merged
+				comp.Sources.Hosting = LayerSchedule
+			} else if comp.Hosting == "" {
+				comp.Hosting = sched.Hosting
+				comp.Sources.Hosting = LayerSchedule
 			}
 		}
 		// A template-backed schedule stores a copy of its template's
@@ -544,6 +567,7 @@ func ComposeScheduleTask(sched Schedule, tmpl *Template) Composition {
 		Approved:             true,
 		KeepRunning:          sched.KeepRunning,
 		Admission:            sched.Admission,
+		Hosting:              sched.Hosting,
 		Priority:             DefaultTaskPriority,
 		Sources: CompositionSources{
 			Title:                LayerSchedule,
@@ -563,6 +587,7 @@ func ComposeScheduleTask(sched Schedule, tmpl *Template) Composition {
 			Interactive:          LayerSchedule,
 			KeepRunning:          LayerSchedule,
 			Admission:            admissionSourceOf(sched.Admission, LayerSchedule),
+			Hosting:              hostingSourceOf(sched.Hosting, LayerSchedule),
 		},
 	}
 }

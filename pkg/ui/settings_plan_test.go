@@ -243,6 +243,7 @@ func everySettingChanged() ui.UpdateSettingsRequest {
 		DeploymentID:                ptr("prod"),
 		DefaultCapabilities:         ptr([]string{ui.OfferedCapabilities()[0].ID}),
 		DefaultAdmission:            ptr("bypass"),
+		DefaultHosting:              ptr("console"),
 		SettingsLocked:              ptr(true),
 		Registry: &model.RegistryConfig{
 			URL:         "https://registry.example.com",
