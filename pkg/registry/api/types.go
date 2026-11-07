@@ -54,6 +54,8 @@ const (
 	StateCreating  EntryState = "creating"
 	StateRunning   EntryState = "running"
 	StateReplacing EntryState = "replacing"
+	StateStopping  EntryState = "stopping"
+	StateStopped   EntryState = "stopped"
 	StateDeleting  EntryState = "deleting"
 	StateDeleted   EntryState = "deleted"
 	StateFailed    EntryState = "failed"
@@ -62,7 +64,26 @@ const (
 // Valid reports whether s is a known EntryState.
 func (s EntryState) Valid() bool {
 	switch s {
-	case StateCreating, StateRunning, StateReplacing, StateDeleting, StateDeleted, StateFailed:
+	case StateCreating, StateRunning, StateReplacing, StateStopping, StateStopped, StateDeleting, StateDeleted, StateFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// AutoUpgradePolicy configures scheduled fleet upgrade behavior for a hosted instance.
+type AutoUpgradePolicy string
+
+const (
+	AutoUpgradeOff    AutoUpgradePolicy = "off"
+	AutoUpgradeNotify AutoUpgradePolicy = "notify"
+	AutoUpgradeMinor  AutoUpgradePolicy = "minor"
+)
+
+// Valid reports whether p is a recognized AutoUpgradePolicy.
+func (p AutoUpgradePolicy) Valid() bool {
+	switch p {
+	case AutoUpgradeOff, AutoUpgradeNotify, AutoUpgradeMinor:
 		return true
 	default:
 		return false
@@ -435,6 +456,9 @@ type Entry struct {
 	DataDiskGB          int              `json:"data_disk_gb,omitempty"`
 	AllowSSH            bool             `json:"allow_ssh"`
 	ShipLogs            bool             `json:"ship_logs"`
+	AutoUpgrade         string           `json:"auto_upgrade,omitempty"`
+	AutoWake            bool             `json:"auto_wake,omitempty"`
+	UpgradeAvailable    string           `json:"upgrade_available,omitempty"`
 	BackendURL          string           `json:"backend_url,omitempty"`
 	GrainVersion        string           `json:"grain_version,omitempty"`
 	GrainCommit         string           `json:"grain_commit,omitempty"`
@@ -457,6 +481,7 @@ type Entry struct {
 	Credentials         []CredentialMeta `json:"credentials,omitempty"`
 	CreatedAt           time.Time        `json:"created_at"`
 	UpdatedAt           time.Time        `json:"updated_at"`
+	StoppedAt           *time.Time       `json:"stopped_at,omitempty"`
 	DeletedAt           *time.Time       `json:"deleted_at,omitempty"`
 	ReservedUntil       *time.Time       `json:"reserved_until,omitempty"`
 	PurgeAfter          *time.Time       `json:"purge_after,omitempty"`
@@ -478,6 +503,8 @@ type CreateEntryRequest struct {
 	Zone               string       `json:"zone,omitempty"`
 	AllowSSH           *bool        `json:"allow_ssh,omitempty"`
 	ShipLogs           *bool        `json:"ship_logs,omitempty"`
+	AutoUpgrade        string       `json:"auto_upgrade,omitempty"`
+	AutoWake           *bool        `json:"auto_wake,omitempty"`
 	Scopes             []ScopeInput `json:"scopes,omitempty"`
 	CredentialLabel    string       `json:"credential_label,omitempty"`
 }
@@ -502,6 +529,8 @@ type UpdateEntryRequest struct {
 	Shape              *string   `json:"shape,omitempty"`
 	AllowSSH           *bool     `json:"allow_ssh,omitempty"`
 	ShipLogs           *bool     `json:"ship_logs,omitempty"`
+	AutoUpgrade        *string   `json:"auto_upgrade,omitempty"`
+	AutoWake           *bool     `json:"auto_wake,omitempty"`
 }
 
 // SetScopesRequest replaces an entry's declared scopes via PUT /api/entries/<name>/scopes.

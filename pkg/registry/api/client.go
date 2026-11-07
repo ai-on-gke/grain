@@ -576,6 +576,26 @@ func (c *Client) RestoreEntry(ctx context.Context, name string) (*Entry, error) 
 	return &out, nil
 }
 
+// StopEntry sends POST /api/entries/<name>/stop to halt a hosted instance while keeping externalized state.
+func (c *Client) StopEntry(ctx context.Context, name string) (*Entry, error) {
+	var out Entry
+	path := "/api/entries/" + url.PathEscape(name) + "/stop"
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, struct{}{}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// StartEntry sends POST /api/entries/<name>/start to wake a stopped hosted instance.
+func (c *Client) StartEntry(ctx context.Context, name string) (*Entry, error) {
+	var out Entry
+	path := "/api/entries/" + url.PathEscape(name) + "/start"
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, struct{}{}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // DeleteEntry sends DELETE /api/entries/<name>.
 func (c *Client) DeleteEntry(ctx context.Context, name string, req DeleteEntryRequest) error {
 	path := "/api/entries/" + url.PathEscape(name)

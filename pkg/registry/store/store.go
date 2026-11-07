@@ -214,6 +214,9 @@ type EntryRow struct {
 	SSHGrantedTo      string     `json:"ssh_granted_to,omitempty"`
 	AllowSSH          bool       `json:"allow_ssh"`
 	ShipLogs          bool       `json:"ship_logs"`
+	AutoUpgrade       string     `json:"auto_upgrade,omitempty"`
+	AutoWake          bool       `json:"auto_wake,omitempty"`
+	UpgradeAvailable  string     `json:"upgrade_available,omitempty"`
 
 	GrainVersion         string          `json:"grain_version,omitempty"`
 	GrainCommit          string          `json:"grain_commit,omitempty"`
@@ -235,6 +238,7 @@ type EntryRow struct {
 
 	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`
+	StoppedAt     *time.Time `json:"stopped_at,omitempty"`
 	DeletedAt     *time.Time `json:"deleted_at,omitempty"`
 	ReservedUntil *time.Time `json:"reserved_until,omitempty"`
 	PurgeAfter    *time.Time `json:"purge_after,omitempty"`
@@ -968,6 +972,8 @@ type CreateEntryInput struct {
 	Zone               string
 	AllowSSH           *bool
 	ShipLogs           *bool
+	AutoUpgrade        string
+	AutoWake           *bool
 	BackendURL         string
 	DeclaredScopes     []ScopeClaim
 }
@@ -1013,6 +1019,14 @@ func (s *Store) CreateEntry(ctx context.Context, in CreateEntryInput) (*EntryRow
 	shipLogs := false
 	if in.ShipLogs != nil {
 		shipLogs = *in.ShipLogs
+	}
+	autoUpgrade := strings.ToLower(strings.TrimSpace(in.AutoUpgrade))
+	if autoUpgrade != "" && !api.AutoUpgradePolicy(autoUpgrade).Valid() {
+		return nil, fmt.Errorf("invalid auto_upgrade policy %q (expected off, notify, or minor)", in.AutoUpgrade)
+	}
+	autoWake := true
+	if in.AutoWake != nil {
+		autoWake = *in.AutoWake
 	}
 	state := in.LifecycleState
 	if state == "" {
@@ -1103,19 +1117,19 @@ func (s *Store) CreateEntry(ctx context.Context, in CreateEntryInput) (*EntryRow
 INSERT INTO registry.entries (
     id, name, kind, owner_email, owner_group, listed, visibility, access_list,
     display_name, purpose, tags,
-    lifecycle_state, version, shape, zone, allow_ssh, ship_logs, backend_url,
+    lifecycle_state, version, shape, zone, allow_ssh, ship_logs, auto_upgrade, auto_wake, backend_url,
     connected_principal, host_kind,
     created_at, updated_at
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8::jsonb,
     $9, $10, $11::jsonb,
-    $12, 1, NULLIF($13, ''), NULLIF($14, ''), $15, $16, NULLIF($17, ''),
-    $18, $19,
-    $20, $20
+    $12, 1, NULLIF($13, ''), NULLIF($14, ''), $15, $16, $17, $18, NULLIF($19, ''),
+    $20, $21,
+    $22, $22
 )`,
 		id, name, string(in.Kind), ownerEmail, ownerGroup, listed, string(vis), string(accessJSON),
 		in.DisplayName, in.Purpose, string(tagsJSON),
-		string(state), in.Shape, in.Zone, allowSSH, shipLogs, in.BackendURL,
+		string(state), in.Shape, in.Zone, allowSSH, shipLogs, autoUpgrade, autoWake, in.BackendURL,
 		strings.TrimSpace(in.ConnectedPrincipal), hostKind, now)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "entries_active_name_idx") || strings.Contains(strings.ToLower(err.Error()), "duplicate key") {
@@ -1198,6 +1212,7 @@ func (s *Store) GetEntryByID(ctx context.Context, id string) (*EntryRow, error) 
 		secretPrefix, configRepo  sql.NullString
 		sshGrantedTo, grainVer    sql.NullString
 		dbPurge, sshExp, hbAt     sql.NullTime
+		stoppedAt                 sql.NullTime
 		delAt, reservedUntil      sql.NullTime
 		purgeAfter, discAt        sql.NullTime
 	)
@@ -1209,14 +1224,14 @@ SELECT
     e.shape, e.zone, e.gce_instance_id, host(e.internal_ip), e.backend_url,
     e.service_account, e.sql_instance, e.db_name, e.db_purge_after,
     e.secret_prefix, e.config_repo, e.ssh_grant_expires_at, e.ssh_granted_to,
-    e.allow_ssh, e.ship_logs,
+    e.allow_ssh, e.ship_logs, e.auto_upgrade, e.auto_wake, e.upgrade_available,
     e.grain_version, e.grain_commit, e.target_version, e.health_state, e.health_detail,
     e.active_tasks, e.awaiting_reply_tasks, e.pending_inbox, e.active_sessions,
     e.has_reported_scopes, e.last_heartbeat_at,
     e.session_epoch, e.connected_principal, e.host_kind,
     e.last_disconnect_at, e.last_disconnect_reason,
     COALESCE(o.disabled, FALSE),
-    e.created_at, e.updated_at, e.deleted_at, e.reserved_until, e.purge_after
+    e.created_at, e.updated_at, e.stopped_at, e.deleted_at, e.reserved_until, e.purge_after
 FROM registry.entries e
 LEFT JOIN registry.owners o ON o.email = e.owner_email
 WHERE e.id = $1`, id).Scan(
@@ -1226,14 +1241,14 @@ WHERE e.id = $1`, id).Scan(
 		&shape, &zone, &gceID, &internalIP, &backendURL,
 		&sa, &sqlInst, &dbName, &dbPurge,
 		&secretPrefix, &configRepo, &sshExp, &sshGrantedTo,
-		&row.AllowSSH, &row.ShipLogs,
+		&row.AllowSSH, &row.ShipLogs, &row.AutoUpgrade, &row.AutoWake, &row.UpgradeAvailable,
 		&grainVer, &row.GrainCommit, &row.TargetVersion, &healthStr, &row.HealthDetail,
 		&row.ActiveTasks, &row.AwaitingReplyTasks, &row.PendingInbox, &row.ActiveSessions,
 		&row.HasReportedScopes, &hbAt,
 		&row.SessionEpoch, &row.ConnectedPrincipal, &row.HostKind,
 		&discAt, &row.LastDisconnectReason,
 		&row.OwnerDisabled,
-		&row.CreatedAt, &row.UpdatedAt, &delAt, &reservedUntil, &purgeAfter,
+		&row.CreatedAt, &row.UpdatedAt, &stoppedAt, &delAt, &reservedUntil, &purgeAfter,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -1274,6 +1289,10 @@ WHERE e.id = $1`, id).Scan(
 	if discAt.Valid {
 		t := discAt.Time
 		row.LastDisconnectAt = &t
+	}
+	if stoppedAt.Valid {
+		t := stoppedAt.Time
+		row.StoppedAt = &t
 	}
 	if delAt.Valid {
 		t := delAt.Time
@@ -1468,6 +1487,7 @@ func (s *Store) TransitionEntryState(ctx context.Context, entryID string, expect
 UPDATE registry.entries
 SET lifecycle_state = $1,
     status_reason   = $2,
+    stopped_at      = CASE WHEN $1 = 'running' THEN NULL ELSE stopped_at END,
     version         = version + 1,
     updated_at      = $3
 WHERE id = $4 AND version = $5`,
@@ -1668,6 +1688,8 @@ type UpdateEntryCatalogInput struct {
 	Shape              *string
 	AllowSSH           *bool
 	ShipLogs           *bool
+	AutoUpgrade        *string
+	AutoWake           *bool
 }
 
 // UpdateEntryCatalog updates mutable catalog and VM configuration fields under optimistic concurrency.
@@ -1744,6 +1766,18 @@ func (s *Store) UpdateEntryCatalog(ctx context.Context, entryID string, expected
 	if in.ShipLogs != nil {
 		shipLogs = *in.ShipLogs
 	}
+	autoUpgrade := cur.AutoUpgrade
+	if in.AutoUpgrade != nil {
+		nextAU := strings.ToLower(strings.TrimSpace(*in.AutoUpgrade))
+		if nextAU != "" && !api.AutoUpgradePolicy(nextAU).Valid() {
+			return nil, fmt.Errorf("invalid auto_upgrade policy %q (expected off, notify, or minor)", *in.AutoUpgrade)
+		}
+		autoUpgrade = nextAU
+	}
+	autoWake := cur.AutoWake
+	if in.AutoWake != nil {
+		autoWake = *in.AutoWake
+	}
 
 	now := s.now()
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -1783,11 +1817,13 @@ SET display_name        = $1,
     shape               = NULLIF($8, ''),
     allow_ssh           = $9,
     ship_logs           = $10,
+    auto_upgrade        = $11,
+    auto_wake           = $12,
     version             = version + 1,
-    updated_at          = $11
-WHERE id = $12 AND version = $13 AND deleted_at IS NULL`,
+    updated_at          = $13
+WHERE id = $14 AND version = $15 AND deleted_at IS NULL`,
 		displayName, purpose, string(tagsJSON), hostKind, connPrincipal, ownerGroup,
-		listed, shape, allowSSH, shipLogs, now, entryID, expectedVersion)
+		listed, shape, allowSSH, shipLogs, autoUpgrade, autoWake, now, entryID, expectedVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -3795,6 +3831,9 @@ func (s *Store) ToAPIEntry(e *EntryRow, instanceDomain string) api.Entry {
 		Zone:                e.Zone,
 		AllowSSH:            e.AllowSSH,
 		ShipLogs:            e.ShipLogs,
+		AutoUpgrade:         e.AutoUpgrade,
+		AutoWake:            e.AutoWake,
+		UpgradeAvailable:    e.UpgradeAvailable,
 		BackendURL:          e.BackendURL,
 		GrainVersion:        e.GrainVersion,
 		GrainCommit:         e.GrainCommit,
@@ -3816,6 +3855,7 @@ func (s *Store) ToAPIEntry(e *EntryRow, instanceDomain string) api.Entry {
 		Credentials:         e.Credentials,
 		CreatedAt:           e.CreatedAt,
 		UpdatedAt:           e.UpdatedAt,
+		StoppedAt:           e.StoppedAt,
 		DeletedAt:           e.DeletedAt,
 		ReservedUntil:       e.ReservedUntil,
 		PurgeAfter:          e.PurgeAfter,
@@ -4119,6 +4159,8 @@ SET lifecycle_state   = 'running',
     replace_step      = '',
     status_reason     = '',
     target_version    = '',
+    upgrade_available = '',
+    stopped_at        = NULL,
     gce_instance_id   = COALESCE(NULLIF($1, ''), gce_instance_id),
     internal_ip       = CASE WHEN $2 = '' THEN internal_ip ELSE $2::inet END,
     backend_url       = COALESCE(NULLIF($3, ''), backend_url),
@@ -4425,4 +4467,186 @@ RETURNING replica_id`, cutoff)
 		s.notify(ctx, "registry_tunnels", name)
 	}
 	return deletedReplicas, nil
+}
+
+// BeginStopEntry transitions a hosted `instance` entry from `running` (or `failed`) to `stopping`
+// under optimistic concurrency so the reconciler can drain active tasks and remove the VM while
+// retaining externalized state (database, secrets, GCS folder, and config repo).
+func (s *Store) BeginStopEntry(ctx context.Context, entryID string, expectedVersion int64, statusReason string) (*EntryRow, error) {
+	now := s.now()
+	res, err := s.db.ExecContext(ctx, `
+UPDATE registry.entries
+SET lifecycle_state = 'stopping',
+    replace_step    = '',
+    status_reason   = $1,
+    version         = version + 1,
+    updated_at      = $2
+WHERE id = $3
+  AND version = $4
+  AND kind = 'instance'
+  AND lifecycle_state IN ('running', 'failed')
+  AND deleted_at IS NULL`,
+		statusReason, now, entryID, expectedVersion)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, fmt.Errorf("%w: entry %s version %d mismatch or cannot be stopped from current state", ErrConflict, entryID, expectedVersion)
+	}
+	out, err := s.GetEntryByID(ctx, entryID)
+	if err == nil && out != nil {
+		s.notify(ctx, "registry_entries", out.Name)
+		if out.Listed {
+			s.notify(ctx, "registry_catalog", out.Name)
+		}
+	}
+	return out, err
+}
+
+// CompleteStopEntry finalizes a `stopping` hosted `instance` into `stopped` after its VM
+// has been halted and deleted, clearing `gce_instance_id`, `internal_ip`, and `backend_url`
+// while preserving externalized state (`service_account`, `sql_instance`, `db_name`, `secret_prefix`, `config_repo`).
+func (s *Store) CompleteStopEntry(ctx context.Context, entryID string, expectedVersion int64) (*EntryRow, error) {
+	now := s.now()
+	res, err := s.db.ExecContext(ctx, `
+UPDATE registry.entries
+SET lifecycle_state      = 'stopped',
+    replace_step         = '',
+    status_reason        = '',
+    gce_instance_id      = NULL,
+    internal_ip          = NULL,
+    backend_url          = NULL,
+    active_tasks         = 0,
+    awaiting_reply_tasks = 0,
+    active_sessions      = 0,
+    stopped_at           = $1,
+    version              = version + 1,
+    updated_at           = $1
+WHERE id = $2
+  AND version = $3
+  AND lifecycle_state = 'stopping'
+  AND deleted_at IS NULL`,
+		now, entryID, expectedVersion)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, fmt.Errorf("%w: entry %s version %d mismatch or not stopping", ErrConflict, entryID, expectedVersion)
+	}
+	out, err := s.GetEntryByID(ctx, entryID)
+	if err == nil && out != nil {
+		s.notify(ctx, "registry_entries", out.Name)
+		if out.Listed {
+			s.notify(ctx, "registry_catalog", out.Name)
+		}
+	}
+	return out, err
+}
+
+// BeginStartEntry transitions a `stopped` (or `stopping`) hosted `instance` entry to `creating`
+// so the reconciler boots a fresh VM attached to the preserved externalized state.
+func (s *Store) BeginStartEntry(ctx context.Context, entryID string, expectedVersion int64, statusReason string) (*EntryRow, error) {
+	now := s.now()
+	res, err := s.db.ExecContext(ctx, `
+UPDATE registry.entries
+SET lifecycle_state = 'creating',
+    replace_step    = '',
+    status_reason   = $1,
+    gce_instance_id = NULL,
+    internal_ip     = NULL,
+    backend_url     = NULL,
+    stopped_at      = NULL,
+    version         = version + 1,
+    updated_at      = $2
+WHERE id = $3
+  AND version = $4
+  AND kind = 'instance'
+  AND lifecycle_state IN ('stopped', 'stopping')
+  AND deleted_at IS NULL`,
+		statusReason, now, entryID, expectedVersion)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, fmt.Errorf("%w: entry %s version %d mismatch or cannot be started from current state", ErrConflict, entryID, expectedVersion)
+	}
+	out, err := s.GetEntryByID(ctx, entryID)
+	if err == nil && out != nil {
+		s.notify(ctx, "registry_entries", out.Name)
+		if out.Listed {
+			s.notify(ctx, "registry_catalog", out.Name)
+		}
+	}
+	return out, err
+}
+
+// WakeStoppedEntry atomically transitions a `stopped` hosted `instance` entry with `auto_wake = TRUE`
+// to `creating` when an authorized user visits `<name>.<instance-domain>`. If another concurrent
+// visitor has already woken the entry, `woke` is false and the current entry is returned without error.
+func (s *Store) WakeStoppedEntry(ctx context.Context, entryID, callerEmail string) (row *EntryRow, woke bool, err error) {
+	now := s.now()
+	res, err := s.db.ExecContext(ctx, `
+UPDATE registry.entries
+SET lifecycle_state = 'creating',
+    replace_step    = '',
+    status_reason   = 'auto-waking on visit',
+    gce_instance_id = NULL,
+    internal_ip     = NULL,
+    backend_url     = NULL,
+    stopped_at      = NULL,
+    version         = version + 1,
+    updated_at      = $1
+WHERE id = $2
+  AND kind = 'instance'
+  AND lifecycle_state = 'stopped'
+  AND auto_wake = TRUE
+  AND deleted_at IS NULL`,
+		now, entryID)
+	if err != nil {
+		return nil, false, err
+	}
+	n, _ := res.RowsAffected()
+	out, err := s.GetEntryByID(ctx, entryID)
+	if err != nil {
+		return nil, false, err
+	}
+	if n > 0 {
+		actor := strings.ToLower(strings.TrimSpace(callerEmail))
+		if actor == "" {
+			actor = "system:auto-wake"
+		}
+		_ = s.RecordAudit(ctx, actor, "entry_auto_wake", out.ID, out.Name, map[string]any{
+			"caller": actor,
+		})
+		s.notify(ctx, "registry_entries", out.Name)
+		if out.Listed {
+			s.notify(ctx, "registry_catalog", out.Name)
+		}
+		return out, true, nil
+	}
+	return out, false, nil
+}
+
+// SetEntryUpgradeAvailable updates `upgrade_available` on an entry (used by `auto_upgrade: notify`
+// or cleared when the entry reaches the target version).
+func (s *Store) SetEntryUpgradeAvailable(ctx context.Context, entryID, upgradeAvailable string) (*EntryRow, error) {
+	now := s.now()
+	upgradeAvailable = strings.TrimSpace(upgradeAvailable)
+	res, err := s.db.ExecContext(ctx, `
+UPDATE registry.entries
+SET upgrade_available = $1,
+    updated_at        = $2
+WHERE id = $3
+  AND deleted_at IS NULL
+  AND upgrade_available <> $1`,
+		upgradeAvailable, now, entryID)
+	if err != nil {
+		return nil, err
+	}
+	n, _ := res.RowsAffected()
+	out, err := s.GetEntryByID(ctx, entryID)
+	if err == nil && out != nil && n > 0 {
+		s.notify(ctx, "registry_entries", out.Name)
+	}
+	return out, err
 }

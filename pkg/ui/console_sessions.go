@@ -66,6 +66,12 @@ type ConsoleSessionSetting struct {
 	// Capabilities are the capability ids this session's task is granted
 	// -- what the pane's own tick boxes read and write.
 	Capabilities []string `json:"capabilities"`
+	// MissingShippedDefaults lists the shipped Tier 1 capabilities
+	// (model.DefaultConsoleSessions) that a saved console_sessions row for
+	// this session lacks and that this deployment offers and permits on the
+	// session. Empty when console_sessions has never been saved or when all
+	// shipped defaults are already held.
+	MissingShippedDefaults []string `json:"missingShippedDefaults,omitempty"`
 	// NetworkAccess is "" for the deployment's own default, or one of
 	// model.NetworkAccesses().
 	NetworkAccess string `json:"networkAccess,omitempty"`
@@ -402,24 +408,74 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 		if team == "" {
 			team = model.DefaultTeamID
 		}
+		var missingShippedDefaults []string
+		if cfg.ConsoleSessions != nil {
+			missing, err := c.missingShippedSessionDefaults(ctx, s.ID, capabilities, openTask)
+			if err != nil {
+				return nil, err
+			}
+			missingShippedDefaults = missing
+		}
 		out = append(out, ConsoleSessionSetting{
-			ID:              s.ID,
-			Title:           title,
-			Team:            team,
-			TaskID:          taskID,
-			Capabilities:    capabilities,
-			NetworkAccess:   networkAccess,
-			TasksApproved:   tasksApproved,
-			KeepRunning:     keepRunning,
-			Reads:           reads,
-			ReadsAll:        s.ReadsAllRepos(),
-			AutoReads:       autoReads,
-			Writes:          writes,
-			GoogleChatSpace: googleChatSpace,
-			Model:           modelChoice,
-			Crowded:         crowded,
-			CrowdedNote:     note,
+			ID:                     s.ID,
+			Title:                  title,
+			Team:                   team,
+			TaskID:                 taskID,
+			Capabilities:           capabilities,
+			MissingShippedDefaults: missingShippedDefaults,
+			NetworkAccess:          networkAccess,
+			TasksApproved:          tasksApproved,
+			KeepRunning:            keepRunning,
+			Reads:                  reads,
+			ReadsAll:               s.ReadsAllRepos(),
+			AutoReads:              autoReads,
+			Writes:                 writes,
+			GoogleChatSpace:        googleChatSpace,
+			Model:                  modelChoice,
+			Crowded:                crowded,
+			CrowdedNote:            note,
 		})
+	}
+	return out, nil
+}
+
+// missingShippedSessionDefaults returns the shipped default capabilities
+// (model.DefaultConsoleSessions) missing from a saved console session's
+// held capabilities, filtered to grants this deployment actually offers
+// and permits on the session's task so "Adopt shipped defaults" never
+// proposes a grant UpdateConsoleSession would refuse.
+func (c *Client) missingShippedSessionDefaults(ctx context.Context, sessionID string, held []string, openTask *model.Task) ([]string, error) {
+	candidates := model.MissingShippedConsoleSessionCapabilities(sessionID, held)
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	var checkTask func(capID string) error
+	if openTask != nil {
+		policy, configured, err := c.capabilityPolicyFor(ctx)
+		if err != nil {
+			return nil, err
+		}
+		checkTask = func(capID string) error {
+			if model.IsCapabilityRef(capID) {
+				subject := model.CapabilitySubject{Repo: openTask.Target, Kind: model.CapabilityRunTask}
+				if err := policy.Permits(capID, subject, configured); err != nil {
+					return err
+				}
+			}
+			return c.catalogueEditRefusal(ctx, *openTask, capID)
+		}
+	}
+	var out []string
+	for _, capID := range candidates {
+		if _, ok := c.capabilityByID(capID); !ok {
+			continue
+		}
+		if checkTask != nil {
+			if err := checkTask(capID); err != nil {
+				continue
+			}
+		}
+		out = append(out, capID)
 	}
 	return out, nil
 }
@@ -805,7 +861,9 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 			if req.KeepRunning != nil || req.KeepRunningSnake != nil {
 				t.KeepRunning = session.KeepRunning
 			}
-			t.Body = model.DirectorSessionBody(stateRepo, session)
+			effective := session
+			effective.TasksApproved = model.ConsoleSessionQueuesProposals(sessions, *t)
+			t.Body = model.DirectorSessionBody(stateRepo, effective)
 			return nil
 		}); err != nil {
 			return nil, err
