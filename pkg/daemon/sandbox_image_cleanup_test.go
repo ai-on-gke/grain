@@ -43,9 +43,7 @@ if [ "$1 $2" = "image rm" ]; then
 fi
 exit 0
 `
-	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeExecutableStub(t, filepath.Join(dir, "docker"), script)
 	saved := sandboxMirrorDockerCmd
 	sandboxMirrorDockerCmd = []string{filepath.Join(dir, "docker")}
 	t.Cleanup(func() { sandboxMirrorDockerCmd = saved })
