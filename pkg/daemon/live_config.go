@@ -17,10 +17,12 @@ package daemon
 import (
 	"context"
 	"log"
+	"slices"
 	"strings"
 	"sync"
 
 	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
@@ -172,6 +174,12 @@ func NewLiveConfig(store *model.Store, sandboxes orchestrator.Sandboxes, cfg Con
 	var tokens []string
 	if github != nil {
 		tokens = github.ExtraNames()
+		if tokens == nil {
+			tokens = []string{}
+		}
+		grainserver.ConfigureRepoCredentials(func() []string {
+			return slices.Clone(tokens)
+		})
 	}
 	return &LiveConfig{
 		store: store, sandboxes: sandboxes,

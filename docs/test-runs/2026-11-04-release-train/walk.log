@@ -1,0 +1,680 @@
+<log> orchestrator: ai-on-gke/grain at c6004bc95553 declares 22 template(s), 3 suite(s), 13 schedule(s), 3 trigger(s)
+<log> orchestrator: ai-on-gke/grain at c6004bc95553: .grain/settings.yml changes 1 settings field(s) of this repository: prompt-extension: (blank) -> "## Commit Message Standards for Agents"... (1970 characters)
+[04:50:31] setup: githubsim ai-on-gke/grain at http://127.0.0.1:36135, bare ~/scratch/walk/origin.git, main c6004bc95553; tags latest v3.0.0 v3.0.1 v3.0.2 v3.1.0 v3.1.1
+[04:50:31] setup: declared suite repo:suite:ai-on-gke:grain:release-qualification, mode until_clean, max passes 1, items repo:template:ai-on-gke:grain:qualification-mergequeue, repo:template:ai-on-gke:grain:qualification-ci-diagnostics, repo:template:ai-on-gke:grain:qualification-base-triage, repo:template:ai-on-gke:grain:qualification-system-smoke
+
+=== 1. item 1: main is known-good; nightly.yml last ran on main's previous commit
+[04:50:31] seeded tests.yml and release.yml green on main@c6004bc95553, nightly.yml (schedule) on main@78285367a1d3
+
+=== 2. item 1: train tick 1 cuts v3.2.0-rc.1 (FORCE=true: the walk does not wait out RELEASE_MIN_INTERVAL_MINUTES)
+--- tick 1: FORCE=true release-from-trunk.sh  (exit 0)
+    | release-from-trunk: fetching origin's main, candidate and tags
+    | release-from-trunk: major 3 (floor minor 0); newest promoted release v3.1.1; next minor v3.2.0; notes from v3.1.1
+    | release-from-trunk: phase 1: nothing in qualification; the next rc must be after v3.1.1 (0e5f0baf3efd)
+    | release-from-trunk: phase 2: the newest release is off main's history; the next rc must be after where it left main (8a740f996c22)
+    | release-from-trunk: read 2 GitHub Actions runs of ai-on-gke/grain's tests release on main
+    |   Selecting the newest known-good commit on refs/remotes/origin/main after 8a740f996c22 (required: tests release).
+    |     c6004bc95553: tests.yml success release.yml success; known-good.
+    |   LKG c6004bc95553bd1e329f7fe62da0e18aeb711a48
+    | release-from-trunk: phase 2: the commits since v3.1.1 make a minor release: v3.2.0
+    | release-from-trunk: phase 2: cutting v3.2.0-rc.1 on c6004bc95553
+    | release-from-trunk: output rc_tag=v3.2.0-rc.1
+    | release-from-trunk: RELEASE_IMAGES=off: not running release-images.sh rc v3.2.0-rc.1
+    | release-from-trunk: phase 2: v3.2.0-rc.1 is cut and candidate is on it; nightly.yml qualifies it (Stage 1), then grain/release-qualification (Stage 2)
+    OK   rc_tag=v3.2.0-rc.1 cut (exit 0)
+[04:50:31] refs: candidate=c6004bc9 latest=e9d3db81 v3.2.0-rc.1=3d153247
+    OK   v3.2.0-rc.1 is on main's head c6004bc95553
+    tag v3.2.0-rc.1 (c6004bc95553):
+      > Release candidate v3.2.0-rc.1
+      > 
+      > Cut from main.
+
+=== 3. item 1/6: release-train-actions.sh on tick 1's outputs starts Stage 1 on the tag
+--- actions after tick 1:  release-train-actions.sh ~/scratch/walk/actions.in (exit 0)
+    | release-train-actions: v3.2.0-rc.1 was pushed with GITHUB_TOKEN, whose tag pushes start no workflow; dispatching nightly.yml on it
+[04:50:31] githubsim: workflow_dispatch nightly.yml ref=v3.2.0-rc.1 inputs=map[jobs:] -> queued run 20003
+    OK   one nightly.yml dispatch on v3.2.0-rc.1 with no inputs.jobs
+
+=== 4. item 1: Stage 2 waits while Stage 1 is queued
+[04:55:31] reconcile: SyncReleaseQualification ran
+    OK   no qualification task filed while nightly.yml is queued
+[04:55:31] check runs on c6004bc95553 (stage1-queued): 0
+
+=== 5. item 1: train tick 2 while Stage 1 runs
+--- tick 2:  release-from-trunk.sh  (exit 0)
+    | release-from-trunk: fetching origin's main, candidate and tags
+    | release-from-trunk: major 3 (floor minor 0); newest promoted release v3.1.1; next minor v3.2.0; notes from v3.1.1
+    | release-from-trunk: phase 1: v3.2.0-rc.1 (c6004bc95553) is in qualification; asking the qualification gate
+    |   Qualification of v3.2.0-rc.1 (c6004bc95553).
+    |   PENDING nightly: nightly.yml has not run on v3.2.0-rc.1 (c6004bc95553) yet
+    |   PENDING grain/release-qualification: waits for Stage 1 (nightly.yml) to pass
+    |   Qualification: PENDING v3.2.0-rc.1 (nightly).
+    | release-from-trunk: output qualification=pending
+    | release-from-trunk: output qualifying_rc=v3.2.0-rc.1
+    | release-from-trunk: phase 1: v3.2.0-rc.1's qualification is pending; one rc qualifies at a time, so nothing is cut
+    OK   nothing cut while v3.2.0-rc.1 qualifies (exit 0)
+
+=== 6. item 6: Stage 1 finishes with two first failures; the train asks for one retry of each
+[07:55:31] actions: nightly.yml run 20003 on v3.2.0-rc.1 (workflow_dispatch) concluded failure: jobs go-long,staterepo-soak,loadtest,scalability,merge-stress,long-term-test,long-sim,postgres-stress,tunnel-stress,ui-e2e-long,installer-variants,vulns,cmd-grain-stress,upgrade-test
+[07:55:31] reconcile: SyncReleaseQualification ran
+    OK   Stage 2 not started on a red Stage 1
+--- tick 3:  release-from-trunk.sh  (exit 0)
+    | release-from-trunk: fetching origin's main, candidate and tags
+    | release-from-trunk: major 3 (floor minor 0); newest promoted release v3.1.1; next minor v3.2.0; notes from v3.1.1
+    | release-from-trunk: phase 1: v3.2.0-rc.1 (c6004bc95553) is in qualification; asking the qualification gate
+    |   Qualification of v3.2.0-rc.1 (c6004bc95553).
+    |   PASS cmd-grain-stress: passed (success)
+    |   PASS go-long: passed (success)
+    |   PASS installer-variants: passed (success)
+    |   PENDING loadtest: failed for the first time (failure); it gets one retry on v3.2.0-rc.1
+    |   PASS long-sim: passed (success)
+    |   PASS long-term-test: passed (success)
+    |   PASS merge-stress: passed (success)
+    |   PASS postgres-stress: passed (success)
+    |   PASS scalability: passed (success)
+    |   PASS staterepo-soak: passed (success)
+    |   PENDING tunnel-stress: failed for the first time (failure); it gets one retry on v3.2.0-rc.1
+    |   PASS ui-e2e-long: passed (success)
+    |   PASS upgrade-test: passed (success)
+    |   PASS vulns: passed (success)
+    |   PENDING grain/release-qualification: waits for Stage 1 (nightly.yml) to pass
+    |   RERUN nightly loadtest flake
+    |   RERUN nightly tunnel-stress flake
+    |   Qualification: PENDING v3.2.0-rc.1 (loadtest tunnel-stress).
+    | release-from-trunk: output qualification=pending
+    | release-from-trunk: output qualifying_rc=v3.2.0-rc.1
+    | release-from-trunk: output qualification_rerun=nightly:loadtest:flake,nightly:tunnel-stress:flake
+    | release-from-trunk: phase 1: v3.2.0-rc.1's qualification is pending; to re-run: nightly:loadtest:flake,nightly:tunnel-stress:flake; one rc qualifies at a time, so nothing is cut
+[07:55:31] tick 3 outputs: qualification=pending qualifying_rc=v3.2.0-rc.1 qualification_rerun=nightly:loadtest:flake,nightly:tunnel-stress:flake
+--- actions after tick 3:  release-train-actions.sh ~/scratch/walk/actions.in (exit 0)
+    | release-train-actions: v3.2.0-rc.1: re-running loadtest,tunnel-stress (nightly:loadtest:flake,nightly:tunnel-stress:flake)
+[07:55:31] githubsim: workflow_dispatch nightly.yml ref=v3.2.0-rc.1 inputs=map[jobs:loadtest,tunnel-stress] -> queued run 20004
+    OK   one combined nightly.yml re-run dispatch with inputs.jobs=loadtest,tunnel-stress
+
+=== 7. item 6: a second wake while the re-run is queued dispatches nothing
+--- tick 4:  release-from-trunk.sh  (exit 0)
+    | release-from-trunk: fetching origin's main, candidate and tags
+    | release-from-trunk: major 3 (floor minor 0); newest promoted release v3.1.1; next minor v3.2.0; notes from v3.1.1
+    | release-from-trunk: phase 1: v3.2.0-rc.1 (c6004bc95553) is in qualification; asking the qualification gate
+    |   Qualification of v3.2.0-rc.1 (c6004bc95553).
+    |   PASS cmd-grain-stress: passed (success)
+    |   PASS go-long: passed (success)
+    |   PASS installer-variants: passed (success)
+    |   PENDING loadtest: failed for the first time (failure); it gets one retry on v3.2.0-rc.1
+    |   PASS long-sim: passed (success)
+    |   PASS long-term-test: passed (success)
+    |   PASS merge-stress: passed (success)
+    |   PASS postgres-stress: passed (success)
+    |   PASS scalability: passed (success)
+    |   PASS staterepo-soak: passed (success)
+    |   PENDING tunnel-stress: failed for the first time (failure); it gets one retry on v3.2.0-rc.1
+    |   PASS ui-e2e-long: passed (success)
+    |   PASS upgrade-test: passed (success)
+    |   PASS vulns: passed (success)
+    |   PENDING grain/release-qualification: waits for Stage 1 (nightly.yml) to pass
+    |   RERUN nightly loadtest flake
+    |   RERUN nightly tunnel-stress flake
+    |   Qualification: PENDING v3.2.0-rc.1 (loadtest tunnel-stress).
+    | release-from-trunk: output qualification=pending
+    | release-from-trunk: output qualifying_rc=v3.2.0-rc.1
+    | release-from-trunk: output qualification_rerun=nightly:loadtest:flake,nightly:tunnel-stress:flake
+    | release-from-trunk: phase 1: v3.2.0-rc.1's qualification is pending; to re-run: nightly:loadtest:flake,nightly:tunnel-stress:flake; one rc qualifies at a time, so nothing is cut
+--- actions after tick 4:  release-train-actions.sh ~/scratch/walk/actions.in (exit 0)
+    | release-train-actions: v3.2.0-rc.1: nightly.yml is still running on it (20004); re-running loadtest,tunnel-stress waits for it
+[07:55:31] githubsim: no workflow_dispatch
+    OK   no second dispatch while the re-run is open
+
+=== 8. item 1: the re-run passes; Stage 2 starts off it
+[08:25:31] actions: nightly.yml run 20004 on v3.2.0-rc.1 (workflow_dispatch) concluded success: jobs loadtest,tunnel-stress
+[08:26:31] reconcile: SyncReleaseQualification ran
+[08:26:31] qualification tasks for v3.2.0-rc.1:
+    qualification-base-triage    3 [queued] "Qualify v3.2.0-rc.1: base branch triage, team inheritance and repair unblocking" prio 8
+    qualification-ci-diagnostics 2 [queued] "Qualify v3.2.0-rc.1: quarantine and CI diagnostic tools" prio 8
+    qualification-mergequeue     1 [queued] "Qualify v3.2.0-rc.1: independent clean-and-green merging, gates and conflict clusters" prio 8
+    OK   three gate items filed (the final item waits for them): 3
+[08:26:31] check runs on c6004bc95553 (stage2-started): 1
+    #8001 grain/release-qualification  app=grain-walkthrough  status=in_progress conclusion=-        external_id=release-qualification:ai-on-gke/grain@v3.2.0-rc.1
+        title: Qualifying v3.2.0-rc.1
+        | Stage 1 (nightly) is green on c6004bc95553bd1e329f7fe62da0e18aeb711a48; Stage 2 started: repo:template:ai-on-gke:grain:qualification-mergequeue, repo:template:ai-on-gke:grain:qualification-ci-diagnostics, repo:template:ai-on-gke:grain:qualification-base-triage.
+
+=== 9. item 1: a same-named check run from another App does not qualify the rc
+--- tick 5 (foreign success check present): DRY_RUN=true release-from-trunk.sh  (exit 0)
+    | release-from-trunk: fetching origin's main, candidate and tags
+    | release-from-trunk: major 3 (floor minor 0); newest promoted release v3.1.1; next minor v3.2.0; notes from v3.1.1
+    | release-from-trunk: phase 1: v3.2.0-rc.1 (c6004bc95553) is in qualification; asking the qualification gate
+    |   Qualification of v3.2.0-rc.1 (c6004bc95553).
+    |   PASS cmd-grain-stress: passed (success)
+    |   PASS go-long: passed (success)
+    |   PASS installer-variants: passed (success)
+    |   PASS loadtest: passed on its one retry (failure,success): a flake
+    |   PASS long-sim: passed (success)
+    |   PASS long-term-test: passed (success)
+    |   PASS merge-stress: passed (success)
+    |   PASS postgres-stress: passed (success)
+    |   PASS scalability: passed (success)
+    |   PASS staterepo-soak: passed (success)
+    |   PASS tunnel-stress: passed on its one retry (failure,success): a flake
+    |   PASS ui-e2e-long: passed (success)
+    |   PASS upgrade-test: passed (success)
+    |   PASS vulns: passed (success)
+    |   IGNORED grain/release-qualification: 1 from github-actions, not grain-walkthrough; only grain's own app is trusted
+    |   PENDING grain/release-qualification: still running (pending)
+    |   Qualification: PENDING v3.2.0-rc.1 (grain/release-qualification).
+    | release-from-trunk: output qualification=pending
+    | release-from-trunk: output qualifying_rc=v3.2.0-rc.1
+    | release-from-trunk: phase 1: v3.2.0-rc.1's qualification is pending; one rc qualifies at a time, so nothing is cut
+    OK   no -pending and no release off github-actions' check run
+
+=== 10. item 1: the scripted agent passes every gate; grain files the final item; it passes
+[08:36:31] agent: 1 finished: Qualification-Verdict: PASS
+[08:46:31] agent: 2 finished: Qualification-Verdict: PASS
+[08:56:31] agent: 3 finished: Qualification-Verdict: PASS
+[08:57:31] reconcile: SyncReleaseQualification ran
+[08:57:31] qualification tasks for v3.2.0-rc.1:
+    qualification-base-triage    3 [awaiting_reply] "Qualify v3.2.0-rc.1: base branch triage, team inheritance and repair unblocking" prio 8
+    qualification-ci-diagnostics 2 [awaiting_reply] "Qualify v3.2.0-rc.1: quarantine and CI diagnostic tools" prio 8
+    qualification-mergequeue     1 [awaiting_reply] "Qualify v3.2.0-rc.1: independent clean-and-green merging, gates and conflict clusters" prio 8
+    qualification-system-smoke   4 [queued] "Qualify v3.2.0-rc.1: multi-team UI walkthroughs, state repository sync and deployment health" prio 8
+[08:57:31] check runs on c6004bc95553 (gates-passed): 2
+    #7001 grain/release-qualification  app=github-actions     status=completed   conclusion=success  external_id=
+    #8001 grain/release-qualification  app=grain-walkthrough  status=in_progress conclusion=-        external_id=release-qualification:ai-on-gke/grain@v3.2.0-rc.1
+        title: Qualifying v3.2.0-rc.1
+        | Stage 1 (nightly) is green on c6004bc95553bd1e329f7fe62da0e18aeb711a48; Stage 2 started: repo:template:ai-on-gke:grain:qualification-mergequeue, repo:template:ai-on-gke:grain:qualification-ci-diagnostics, repo:template:ai-on-gke:grain:qualification-base-triage.
+[09:17:31] agent: 4 finished: Qualification-Verdict: PASS
+[09:18:31] reconcile: SyncReleaseQualification ran
+[09:18:31] check runs on c6004bc95553 (qualified): 2
+    #7001 grain/release-qualification  app=github-actions     status=completed   conclusion=success  external_id=
+    #8001 grain/release-qualification  app=grain-walkthrough  status=completed   conclusion=success  external_id=release-qualification:ai-on-gke/grain@v3.2.0-rc.1
+        title: Release qualification of v3.2.0-rc.1: success
+        | repo:template:ai-on-gke:grain:qualification-mergequeue: pass (task 1, attempt 1)
+        | repo:template:ai-on-gke:grain:qualification-ci-diagnostics: pass (task 2, attempt 1)
+        | repo:template:ai-on-gke:grain:qualification-base-triage: pass (task 3, attempt 1)
+        | repo:template:ai-on-gke:grain:qualification-system-smoke: pass (task 4, attempt 1)
+    OK   grain/release-qualification completed success, posted as grain-walkthrough
+
+=== 11. item 1: the default train would release v3.2.0 itself (dry run)
+--- tick 6 dry run: DRY_RUN=true release-from-trunk.sh  (exit 0)
+    | release-from-trunk: fetching origin's main, candidate and tags
+    | release-from-trunk: major 3 (floor minor 0); newest promoted release v3.1.1; next minor v3.2.0; notes from v3.1.1
+    | release-from-trunk: phase 1: v3.2.0-rc.1 (c6004bc95553) is in qualification; asking the qualification gate
+    |   Qualification of v3.2.0-rc.1 (c6004bc95553).
+    |   PASS cmd-grain-stress: passed (success)
+    |   PASS go-long: passed (success)
+    |   PASS installer-variants: passed (success)
+    |   PASS loadtest: passed on its one retry (failure,success): a flake
+    |   PASS long-sim: passed (success)
+    |   PASS long-term-test: passed (success)
+    |   PASS merge-stress: passed (success)
+    |   PASS postgres-stress: passed (success)
+    |   PASS scalability: passed (success)
+    |   PASS staterepo-soak: passed (success)
+    |   PASS tunnel-stress: passed on its one retry (failure,success): a flake
+    |   PASS ui-e2e-long: passed (success)
+    |   PASS upgrade-test: passed (success)
+    |   PASS vulns: passed (success)
+    |   IGNORED grain/release-qualification: 1 from github-actions, not grain-walkthrough; only grain's own app is trusted
+    |   PASS grain/release-qualification: passed (success)
+    |   Qualification: PASS v3.2.0-rc.1.
+    |   v3.2.0: breaking changes since v3.1.1:
+    |   - refactor(models)!: remove the custom command connection type (#645)
+    |     - custom command connections (framework "custom") are
+    |   ~/work/scripts/release-notes.sh: refusing to promote v3.2.0: it carries breaking changes, and it is not a major release.
+    |     v3.1.1 is major 3, v3.2.0 is major 3, and scripts/release.conf at c6004bc95553bd1e329f7fe62da0e18aeb711a48 has RELEASE_MAJOR=3.
+    |     To release them, raise RELEASE_MAJOR in scripts/release.conf above 3 and cut again,
+    |     or have a person set RELEASE_ALLOW_BREAKING=v3.2.0 for this one promotion.
+    | release-from-trunk: phase 1: v3.2.0-rc.1 qualified, but the train does not release it itself: it carries breaking changes since v3.1.1 and is not the major release RELEASE_MAJOR asks for; staging v3.2.0-pending for a person to approve (v3.2.0 and latest are not touched)
+    | release-from-trunk: output promotion_blocked=it carries breaking changes since v3.1.1 and is not the major release RELEASE_MAJOR asks for
+    | release-from-trunk: [dry-run] would git push origin refs/tags/v3.2.0-pending
+    | release-from-trunk: output pending_version=v3.2.0
+    | release-from-trunk: RELEASE_IMAGES=off: not running release-images.sh pending v3.2.0
+    | release-from-trunk: RELEASE_NOTES_TASK=off: no release-notes task for v3.2.0 (notes from v3.1.1)
+    | release-from-trunk: RELEASE_NOTIFY=off: no notification that v3.2.0 is ready to promote
+    | release-from-trunk: read 2 GitHub Actions runs of ai-on-gke/grain's tests release on main
+    |   Selecting the newest known-good commit on refs/remotes/origin/main after c6004bc95553 (required: tests release).
+    |   LKG none
+    | release-from-trunk: phase 2: no new LKG commit on main since c6004bc95553; nothing to cut
+[09:18:31] tick 6 outputs: promotion_blocked=it carries breaking changes since v3.1.1 and is not the major release RELEASE_MAJOR asks for pending_version=v3.2.0
+
+=== 12. item 1: with RELEASE_AUTO_PROMOTE=false the train stages v3.2.0-pending
+--- tick 7: RELEASE_AUTO_PROMOTE=false release-from-trunk.sh  (exit 0)
+    | release-from-trunk: fetching origin's main, candidate and tags
+    | release-from-trunk: major 3 (floor minor 0); newest promoted release v3.1.1; next minor v3.2.0; notes from v3.1.1
+    | release-from-trunk: phase 1: v3.2.0-rc.1 (c6004bc95553) is in qualification; asking the qualification gate
+    |   Qualification of v3.2.0-rc.1 (c6004bc95553).
+    |   PASS cmd-grain-stress: passed (success)
+    |   PASS go-long: passed (success)
+    |   PASS installer-variants: passed (success)
+    |   PASS loadtest: passed on its one retry (failure,success): a flake
+    |   PASS long-sim: passed (success)
+    |   PASS long-term-test: passed (success)
+    |   PASS merge-stress: passed (success)
+    |   PASS postgres-stress: passed (success)
+    |   PASS scalability: passed (success)
+    |   PASS staterepo-soak: passed (success)
+    |   PASS tunnel-stress: passed on its one retry (failure,success): a flake
+    |   PASS ui-e2e-long: passed (success)
+    |   PASS upgrade-test: passed (success)
+    |   PASS vulns: passed (success)
+    |   IGNORED grain/release-qualification: 1 from github-actions, not grain-walkthrough; only grain's own app is trusted
+    |   PASS grain/release-qualification: passed (success)
+    |   Qualification: PASS v3.2.0-rc.1.
+    | release-from-trunk: phase 1: v3.2.0-rc.1 qualified, but the train does not release it itself: RELEASE_AUTO_PROMOTE is false; staging v3.2.0-pending for a person to approve (v3.2.0 and latest are not touched)
+    | release-from-trunk: output promotion_blocked=RELEASE_AUTO_PROMOTE is false
+    | release-from-trunk: output pending_version=v3.2.0
+    | release-from-trunk: RELEASE_IMAGES=off: not running release-images.sh pending v3.2.0
+    | release-from-trunk: RELEASE_NOTES_TASK=off: no release-notes task for v3.2.0 (notes from v3.1.1)
+    | release-from-trunk: RELEASE_NOTIFY=off: no notification that v3.2.0 is ready to promote
+    | release-from-trunk: read 2 GitHub Actions runs of ai-on-gke/grain's tests release on main
+    |   Selecting the newest known-good commit on refs/remotes/origin/main after c6004bc95553 (required: tests release).
+    |   LKG none
+    | release-from-trunk: phase 2: no new LKG commit on main since c6004bc95553; nothing to cut
+    OK   pending_version=v3.2.0 (exit 0)
+[09:18:31] refs: candidate=c6004bc9 latest=e9d3db81 v3.2.0-pending=294c2216 v3.2.0-rc.1=3d153247
+    tag v3.2.0-pending (c6004bc95553):
+      > Release v3.2.0 pending approval
+      > 
+      > From v3.2.0-rc.1, which passed Stage 1 (nightly.yml) and Stage 2 (grain/release-qualification).
+      > 
+      > A person approves it (grain release approve v3.2.0) or rejects it (grain release reject v3.2.0).
+      > 
+      > Qualification: PASS
+    OK   v3.2.0 not tagged and latest not moved (8a740f996c22, the remote's v3.1.0)
+
+=== 13. item 1: a person approves v3.2.0 (approve mode, outside the train's grant; v3.2.0 carries #645's breaking change)
+--- approve: RELEASE_PUSH_GRANT= GRAIN_CI_REQUESTED_BY_KIND=human GRAIN_CI_REQUESTED_BY=walkthrough@example.com RELEASE_ALLOW_BREAKING=v3.2.0 release-from-trunk.sh approve v3.2.0 (exit 0)
+    | release-from-trunk: fetching origin's main, candidate and tags
+    |   v3.2.0: breaking changes since v3.1.1:
+    |   - refactor(models)!: remove the custom command connection type (#645)
+    |     - custom command connections (framework "custom") are
+    |   v3.2.0: promoting with breaking changes: RELEASE_ALLOW_BREAKING=v3.2.0 overrides the gate
+    | release-from-trunk: approve: walkthrough@example.com approved v3.2.0 (v3.2.0-rc.1, c6004bc95553, qualified); promoting it to v3.2.0 and latest
+    | Updated tag 'latest' (was e9d3db81)
+    | release-from-trunk: output promoted_version=v3.2.0
+    | release-from-trunk: RELEASE_IMAGES=off: not running release-images.sh promote v3.2.0
+    | release-from-trunk: approve: v3.2.0 is released (after v3.1.1); v3.2.0-pending is gone
+    OK   v3.2.0 and latest on c6004bc95553
+[09:18:31] refs: candidate=c6004bc9 latest=0689f54d v3.2.0=ed328ec6 v3.2.0-rc.1=3d153247
+
+=== 14. item 2/3: a fix lands on main and is known-good; train cuts v3.3.0-rc.1
+--- tick 8: FORCE=true release-from-trunk.sh  (exit 0)
+    | release-from-trunk: fetching origin's main, candidate and tags
+    | release-from-trunk: major 3 (floor minor 0); newest promoted release v3.2.0; next minor v3.3.0; notes from v3.2.0
+    | release-from-trunk: phase 1: nothing in qualification; the next rc must be after v3.2.0 (c6004bc95553)
+    | release-from-trunk: read 4 GitHub Actions runs of ai-on-gke/grain's tests release on main
+    |   Selecting the newest known-good commit on refs/remotes/origin/main after c6004bc95553 (required: tests release).
+    |     55cf8c54caec: tests.yml success release.yml success; known-good.
+    |   LKG 55cf8c54caeca60a735d96d360c58c63c18be29a
+    | release-from-trunk: phase 2: the commits since v3.2.0 make a minor release: v3.3.0
+    | release-from-trunk: phase 2: cutting v3.3.0-rc.1 on 55cf8c54caec
+    | release-from-trunk: output rc_tag=v3.3.0-rc.1
+    | release-from-trunk: RELEASE_IMAGES=off: not running release-images.sh rc v3.3.0-rc.1
+    | release-from-trunk: phase 2: v3.3.0-rc.1 is cut and candidate is on it; nightly.yml qualifies it (Stage 1), then grain/release-qualification (Stage 2)
+    OK   v3.3.0-rc.1 cut on 55cf8c54caec (exit 0)
+[12:18:31] refs: candidate=55cf8c54 latest=0689f54d v3.2.0=ed328ec6 v3.2.0-rc.1=3d153247 v3.3.0-rc.1=2af6b31c
+--- actions after the cut of v3.3.0-rc.1:  release-train-actions.sh ~/scratch/walk/actions.in (exit 0)
+    | release-train-actions: v3.3.0-rc.1 was pushed with GITHUB_TOKEN, whose tag pushes start no workflow; dispatching nightly.yml on it
+[12:18:31] githubsim: workflow_dispatch nightly.yml ref=v3.3.0-rc.1 inputs=map[jobs:] -> queued run 20007
+[15:18:31] actions: nightly.yml run 20007 on v3.3.0-rc.1 (workflow_dispatch) concluded success: jobs go-long,staterepo-soak,loadtest,scalability,merge-stress,long-term-test,long-sim,postgres-stress,tunnel-stress,ui-e2e-long,installer-variants,vulns,cmd-grain-stress,upgrade-test
+[15:19:31] reconcile: SyncReleaseQualification ran
+[15:19:31] qualification tasks for v3.3.0-rc.1:
+    qualification-base-triage    7 [queued] "Qualify v3.3.0-rc.1: base branch triage, team inheritance and repair unblocking" prio 8
+    qualification-ci-diagnostics 6 [queued] "Qualify v3.3.0-rc.1: quarantine and CI diagnostic tools" prio 8
+    qualification-mergequeue     5 [queued] "Qualify v3.3.0-rc.1: independent clean-and-green merging, gates and conflict clusters" prio 8
+
+=== 15. item 2: first attempts on v3.3.0-rc.1: a pull request, a follow-up on main, an INFRA footer
+[15:24:31] agent: 5 pushed grain/5 and grain opened ai-on-gke/grain#9000
+[15:24:31] agent: 5 finished: Qualification-Verdict: PASS
+[15:29:31] agent: 6 proposed task 8 on main: "Fix a defect 6 found qualifying v3.3.0-rc.1"
+[15:29:31] agent: 6 finished: Qualification-Verdict: PASS
+[15:34:31] agent: 7 finished: Qualification-Verdict: INFRA
+[15:35:31] reconcile: SyncReleaseQualification ran
+[15:35:31] qualification tasks for v3.3.0-rc.1:
+    qualification-base-triage    7 [awaiting_reply] "Qualify v3.3.0-rc.1: base branch triage, team inheritance and repair unblocking" prio 8; 11 [queued] "Qualify v3.3.0-rc.1: base branch triage, team inheritance and repair unblocking" prio 8
+    qualification-ci-diagnostics 6 [awaiting_reply] "Qualify v3.3.0-rc.1: quarantine and CI diagnostic tools" prio 8; 10 [queued] "Qualify v3.3.0-rc.1: quarantine and CI diagnostic tools" prio 8
+    qualification-mergequeue     5 [awaiting_submit] "Qualify v3.3.0-rc.1: independent clean-and-green merging, gates and conflict clusters" prio 8; 9 [queued] "Qualify v3.3.0-rc.1: independent clean-and-green merging, gates and conflict clusters" prio 8
+    OK   qualification-mergequeue re-run once (2 attempts)
+    OK   qualification-ci-diagnostics re-run once (2 attempts)
+    OK   qualification-base-triage re-run once (2 attempts)
+    OK   the final item not started
+[15:35:31] notifications (after-rc1-attempt-1): 0
+
+=== 16. item 2: second attempts: the same pull request and follow-up again; the infra re-run passes
+[15:40:31] agent: 9 pushed grain/9 and grain opened ai-on-gke/grain#9001
+[15:40:31] agent: 9 finished: Qualification-Verdict: PASS
+[15:45:31] agent: 10 proposed task 12 on main: "Fix a defect 10 found qualifying v3.3.0-rc.1"
+[15:45:31] agent: 10 finished: Qualification-Verdict: PASS
+[15:50:31] agent: 11 finished: Qualification-Verdict: PASS
+[15:50:31] seeded nightly.yml run 20008 in progress on v3.3.0-rc.1 and run 20009 in progress on main, both at 55cf8c54caec
+
+=== 17. item 3: v3.3.0-rc.1 is confirmed red: grain/release-qualification fails and pipeline.rc-failed is raised
+<log> orchestrator: raised notification pipeline.rc-failed:v3.3.0-rc.1 (warning): Release candidate v3.3.0-rc.1 of ai-on-gke/grain failed qualification
+[15:51:31] reconcile: SyncReleaseQualification ran
+[15:51:31] check runs on 55cf8c54caec (rc1-red): 1
+    #8002 grain/release-qualification  app=grain-walkthrough  status=completed   conclusion=failure  external_id=release-qualification:ai-on-gke/grain@v3.3.0-rc.1
+        title: Release qualification of v3.3.0-rc.1: failure
+        | repo:template:ai-on-gke:grain:qualification-mergequeue: fail (task 9, attempt 2) -- task 9 opened a pull request
+        | repo:template:ai-on-gke:grain:qualification-ci-diagnostics: fail (task 10, attempt 2) -- task 10 proposed a follow-up task
+        | repo:template:ai-on-gke:grain:qualification-base-triage: pass (task 11, attempt 2)
+        | repo:template:ai-on-gke:grain:qualification-system-smoke: not started
+        | confirmed red after 1 retry: repo:template:ai-on-gke:grain:qualification-mergequeue, repo:template:ai-on-gke:grain:qualification-ci-diagnostics
+[15:51:31] notifications (rc1-red): 1
+    [open] pipeline.rc-failed:v3.3.0-rc.1 (warning, automation:release-qualification) Release candidate v3.3.0-rc.1 of ai-on-gke/grain failed qualification
+        | `v3.3.0-rc.1` (55cf8c54caec) of ai-on-gke/grain failed Stage 2 qualification (grain/release-qualification): attempt 1 of RELEASE_MAX_RC_ATTEMPTS (3).
+        | Commits to triage: `c6004bc95553bd1e329f7fe62da0e18aeb711a48..55cf8c54caeca60a735d96d360c58c63c18be29a` (everything since v3.2.0).
+        | Qualification:
+        | - repo:template:ai-on-gke:grain:qualification-mergequeue: fail (task 9, attempt 2) -- task 9 opened a pull request
+        | - repo:template:ai-on-gke:grain:qualification-ci-diagnostics: fail (task 10, attempt 2) -- task 10 proposed a follow-up task
+        | - repo:template:ai-on-gke:grain:qualification-base-triage: pass (task 11, attempt 2)
+        | - repo:template:ai-on-gke:grain:qualification-system-smoke: not started
+        | - confirmed red after 1 retry: repo:template:ai-on-gke:grain:qualification-mergequeue, repo:template:ai-on-gke:grain:qualification-ci-diagnostics
+        | The train tags v3.3.0-rc.1-discarded and cuts v3.3.0-rc.2 from the next known-good commit after it. Title each fix or revert that must land first `[rc-blocker v3.3.0-rc.1] ...`: while any such task is open, check run grain/rc-hold on 55cf8c54caec holds v3.3.0-rc.2.
+    OK   pipeline.rc-failed:v3.3.0-rc.1 names the range v3.2.0..55cf8c54caec
+
+=== 18. item 3: a fix lands on main, and the steward files [rc-blocker v3.3.0-rc.1]; grain holds the next rc
+[16:01:31] person: filed task 13 "[rc-blocker v3.3.0-rc.1] fix the merge queue"
+[16:02:31] reconcile: SyncReleaseQualification ran
+[16:02:31] check runs on 55cf8c54caec (rc1-held): 2
+    #8002 grain/release-qualification  app=grain-walkthrough  status=completed   conclusion=failure  external_id=release-qualification:ai-on-gke/grain@v3.3.0-rc.1
+        title: Release qualification of v3.3.0-rc.1: failure
+        | repo:template:ai-on-gke:grain:qualification-mergequeue: fail (task 9, attempt 2) -- task 9 opened a pull request
+        | repo:template:ai-on-gke:grain:qualification-ci-diagnostics: fail (task 10, attempt 2) -- task 10 proposed a follow-up task
+        | repo:template:ai-on-gke:grain:qualification-base-triage: pass (task 11, attempt 2)
+        | repo:template:ai-on-gke:grain:qualification-system-smoke: not started
+        | confirmed red after 1 retry: repo:template:ai-on-gke:grain:qualification-mergequeue, repo:template:ai-on-gke:grain:qualification-ci-diagnostics
+    #8003 grain/rc-hold                app=grain-walkthrough  status=in_progress conclusion=-        external_id=rc-hold:v3.3.0-rc.1
+        title: Holding v3.3.0-rc.2
+        | v3.3.0-rc.2 is held until these blockers of v3.3.0-rc.1 land: task 13.
+
+=== 19. item 3/6: the next train run drops v3.3.0-rc.1, emits rc_held and cuts nothing; actions cancel only the rc's run
+--- tick 9:  release-from-trunk.sh  (exit 0)
+    | release-from-trunk: fetching origin's main, candidate and tags
+    | release-from-trunk: major 3 (floor minor 0); newest promoted release v3.2.0; next minor v3.3.0; notes from v3.2.0
+    | release-from-trunk: phase 1: v3.3.0-rc.1 (55cf8c54caec) is in qualification; asking the qualification gate
+    |   Qualification of v3.3.0-rc.1 (55cf8c54caec).
+    |   PASS cmd-grain-stress: passed (success)
+    |   PASS go-long: passed (success)
+    |   PASS installer-variants: passed (success)
+    |   PASS loadtest: passed (success)
+    |   PASS long-sim: passed (success)
+    |   PASS long-term-test: passed (success)
+    |   PASS merge-stress: passed (success)
+    |   PASS postgres-stress: passed (success)
+    |   PASS scalability: passed (success)
+    |   PASS staterepo-soak: passed (success)
+    |   PASS tunnel-stress: passed (success)
+    |   PASS ui-e2e-long: passed (success)
+    |   PASS upgrade-test: passed (success)
+    |   PASS vulns: passed (success)
+    |   FAIL grain/release-qualification: failed (failure): grain concludes failure only once an item has failed its own retry, so it is confirmed red
+    |   Qualification: FAIL v3.3.0-rc.1 (grain/release-qualification).
+    | release-from-trunk: phase 1: v3.3.0-rc.1 failed qualification; dropping it
+    | release-from-trunk: RELEASE_IMAGES=off: not running release-images.sh discard-rc v3.3.0-rc.1
+    | release-from-trunk: output discarded_rc=v3.3.0-rc.1
+    | release-from-trunk: output qualification=fail
+    | release-from-trunk: phase 2: v3.3.0-rc.2 is held by grain/rc-hold on 55cf8c54caec: v3.3.0-rc.2 is held until these blockers of v3.3.0-rc.1 land: task 13.
+    | release-from-trunk: output rc_held=v3.3.0-rc.2
+    OK   discarded_rc=v3.3.0-rc.1 and rc_held, no rc_tag (exit 0)
+[16:02:31] refs: candidate=55cf8c54 latest=0689f54d v3.2.0=ed328ec6 v3.2.0-rc.1=3d153247 v3.3.0-rc.1=2af6b31c v3.3.0-rc.1-discarded=cdb2ad47
+--- actions after tick 9:  release-train-actions.sh ~/scratch/walk/actions.in (exit 0)
+    | release-train-actions: v3.3.0-rc.1 was dropped; cancelling its nightly.yml run 20008
+    OK   cancelled exactly run 20008 (the rc's), not 20009 (main's): [20008]
+--- tick 10 (still held):  release-from-trunk.sh  (exit 0)
+    | release-from-trunk: fetching origin's main, candidate and tags
+    | release-from-trunk: major 3 (floor minor 0); newest promoted release v3.2.0; next minor v3.3.0; notes from v3.2.0
+    | release-from-trunk: phase 1: v3.3.0-rc.1 (55cf8c54caec) was dropped; the next rc of v3.3.0 is rc.2
+    | release-from-trunk: phase 2: v3.3.0-rc.2 is held by grain/rc-hold on 55cf8c54caec: v3.3.0-rc.2 is held until these blockers of v3.3.0-rc.1 land: task 13.
+    | release-from-trunk: output rc_held=v3.3.0-rc.2
+    OK   still held, nothing cut
+
+=== 20. item 3: the blocker closes; grain completes the hold; the following run cuts v3.3.0-rc.2
+[16:12:31] task 13 closed (its fix landed)
+[16:12:31] reconcile: SyncReleaseQualification ran
+[16:12:31] check runs on 55cf8c54caec (rc1-hold-lifted): 2
+    #8002 grain/release-qualification  app=grain-walkthrough  status=completed   conclusion=failure  external_id=release-qualification:ai-on-gke/grain@v3.3.0-rc.1
+        title: Release qualification of v3.3.0-rc.1: failure
+        | repo:template:ai-on-gke:grain:qualification-mergequeue: fail (task 9, attempt 2) -- task 9 opened a pull request
+        | repo:template:ai-on-gke:grain:qualification-ci-diagnostics: fail (task 10, attempt 2) -- task 10 proposed a follow-up task
+        | repo:template:ai-on-gke:grain:qualification-base-triage: pass (task 11, attempt 2)
+        | repo:template:ai-on-gke:grain:qualification-system-smoke: not started
+        | confirmed red after 1 retry: repo:template:ai-on-gke:grain:qualification-mergequeue, repo:template:ai-on-gke:grain:qualification-ci-diagnostics
+    #8003 grain/rc-hold                app=grain-walkthrough  status=completed   conclusion=success  external_id=rc-hold:v3.3.0-rc.1
+        title: Blockers landed
+        | Every task titled [rc-blocker v3.3.0-rc.1] has landed; v3.3.0-rc.2 may be cut.
+--- tick 11:  release-from-trunk.sh  (exit 0)
+    | release-from-trunk: fetching origin's main, candidate and tags
+    | release-from-trunk: major 3 (floor minor 0); newest promoted release v3.2.0; next minor v3.3.0; notes from v3.2.0
+    | release-from-trunk: phase 1: v3.3.0-rc.1 (55cf8c54caec) was dropped; the next rc of v3.3.0 is rc.2
+    | release-from-trunk: read 6 GitHub Actions runs of ai-on-gke/grain's tests release on main
+    |   Selecting the newest known-good commit on refs/remotes/origin/main after 55cf8c54caec (required: tests release).
+    |     89a784148550: tests.yml success release.yml success; known-good.
+    |   LKG 89a784148550dd2bc636092945a278c0ac14bac3
+    | release-from-trunk: phase 2: cutting v3.3.0-rc.2 on 89a784148550
+    | release-from-trunk: output rc_tag=v3.3.0-rc.2
+    | release-from-trunk: RELEASE_IMAGES=off: not running release-images.sh rc v3.3.0-rc.2
+    | release-from-trunk: phase 2: v3.3.0-rc.2 is cut and candidate is on it; nightly.yml qualifies it (Stage 1), then grain/release-qualification (Stage 2)
+    OK   v3.3.0-rc.2 cut on 89a784148550 (exit 0)
+[16:12:31] refs: candidate=89a78414 latest=0689f54d v3.2.0=ed328ec6 v3.2.0-rc.1=3d153247 v3.3.0-rc.1=2af6b31c v3.3.0-rc.1-discarded=cdb2ad47 v3.3.0-rc.2=a43a18b1
+<log> orchestrator: cleared notification pipeline.rc-failed:v3.3.0-rc.1
+[16:13:31] reconcile: SyncReleaseQualification ran
+    OK   pipeline.rc-failed:v3.3.0-rc.1 cleared once v3.3.0-rc.2 is cut
+--- actions after the cut of v3.3.0-rc.2:  release-train-actions.sh ~/scratch/walk/actions.in (exit 0)
+    | release-train-actions: v3.3.0-rc.2 was pushed with GITHUB_TOKEN, whose tag pushes start no workflow; dispatching nightly.yml on it
+[16:13:31] githubsim: workflow_dispatch nightly.yml ref=v3.3.0-rc.2 inputs=map[jobs:] -> queued run 20012
+[19:13:31] actions: nightly.yml run 20012 on v3.3.0-rc.2 (workflow_dispatch) concluded success: jobs go-long,staterepo-soak,loadtest,scalability,merge-stress,long-term-test,long-sim,postgres-stress,tunnel-stress,ui-e2e-long,installer-variants,vulns,cmd-grain-stress,upgrade-test
+[19:14:31] reconcile: SyncReleaseQualification ran
+[19:14:31] qualification tasks for v3.3.0-rc.2:
+    qualification-base-triage    16 [queued] "Qualify v3.3.0-rc.2: base branch triage, team inheritance and repair unblocking" prio 8
+    qualification-ci-diagnostics 15 [queued] "Qualify v3.3.0-rc.2: quarantine and CI diagnostic tools" prio 8
+    qualification-mergequeue     14 [queued] "Qualify v3.3.0-rc.2: independent clean-and-green merging, gates and conflict clusters" prio 8
+
+=== 21. item 2/3: v3.3.0-rc.2: a footer naming another commit, and a leftover scratch branch, twice each
+[19:19:31] agent: 14 finished: Qualification-Verdict: PASS
+[19:24:31] agent: 15 left refs/heads/qualification/15 on the remote
+[19:24:31] agent: 15 finished: Qualification-Verdict: PASS
+[19:29:31] agent: 16 finished: Qualification-Verdict: PASS
+<log> orchestrator: raised notification pipeline.flake-budget:ai-on-gke/grain:repo:template:ai-on-gke:grain:qualification-mergequeue (warning): Release qualification item repo:template:ai-on-gke:grain:qualification-mergequeue of ai-on-gke/grain is flaking
+<log> orchestrator: raised notification pipeline.flake-budget:ai-on-gke/grain:repo:template:ai-on-gke:grain:qualification-ci-diagnostics (warning): Release qualification item repo:template:ai-on-gke:grain:qualification-ci-diagnostics of ai-on-gke/grain is flaking
+[19:30:31] reconcile: SyncReleaseQualification ran
+[19:30:31] qualification tasks for v3.3.0-rc.2:
+    qualification-base-triage    16 [awaiting_reply] "Qualify v3.3.0-rc.2: base branch triage, team inheritance and repair unblocking" prio 8
+    qualification-ci-diagnostics 15 [awaiting_reply] "Qualify v3.3.0-rc.2: quarantine and CI diagnostic tools" prio 8; 18 [queued] "Qualify v3.3.0-rc.2: quarantine and CI diagnostic tools" prio 8
+    qualification-mergequeue     14 [awaiting_reply] "Qualify v3.3.0-rc.2: independent clean-and-green merging, gates and conflict clusters" prio 8; 17 [queued] "Qualify v3.3.0-rc.2: independent clean-and-green merging, gates and conflict clusters" prio 8
+[19:35:31] agent: 17 finished: Qualification-Verdict: PASS
+[19:40:31] agent: 18 left refs/heads/qualification/18 on the remote
+[19:40:31] agent: 18 finished: Qualification-Verdict: PASS
+<log> orchestrator: raised notification pipeline.rc-failed:v3.3.0-rc.2 (warning): Release candidate v3.3.0-rc.2 of ai-on-gke/grain failed qualification
+[19:41:31] reconcile: SyncReleaseQualification ran
+[19:41:31] check runs on 89a784148550 (rc2-red): 1
+    #8004 grain/release-qualification  app=grain-walkthrough  status=completed   conclusion=failure  external_id=release-qualification:ai-on-gke/grain@v3.3.0-rc.2
+        title: Release qualification of v3.3.0-rc.2: failure
+        | repo:template:ai-on-gke:grain:qualification-mergequeue: fail (task 17, attempt 2) -- task 17 qualified commit c6004bc95553bd1e329f7fe62da0e18aeb711a48, not 89a784148550dd2bc636092945a278c0ac14bac3
+        | repo:template:ai-on-gke:grain:qualification-ci-diagnostics: fail (task 18, attempt 2) -- task 18 left refs/heads/qualification/18 behind
+        | repo:template:ai-on-gke:grain:qualification-base-triage: pass (task 16, attempt 1)
+        | repo:template:ai-on-gke:grain:qualification-system-smoke: not started
+        | confirmed red after 1 retry: repo:template:ai-on-gke:grain:qualification-mergequeue, repo:template:ai-on-gke:grain:qualification-ci-diagnostics
+    OK   pipeline.rc-failed:v3.3.0-rc.2 raised
+
+=== 22. item 3: no blocker; the train drops v3.3.0-rc.2 and converges on release/v3.3.0
+--- tick 12:  release-from-trunk.sh  (exit 0)
+    | release-from-trunk: fetching origin's main, candidate and tags
+    | release-from-trunk: major 3 (floor minor 0); newest promoted release v3.2.0; next minor v3.3.0; notes from v3.2.0
+    | release-from-trunk: phase 1: v3.3.0-rc.2 (89a784148550) is in qualification; asking the qualification gate
+    |   Qualification of v3.3.0-rc.2 (89a784148550).
+    |   PASS cmd-grain-stress: passed (success)
+    |   PASS go-long: passed (success)
+    |   PASS installer-variants: passed (success)
+    |   PASS loadtest: passed (success)
+    |   PASS long-sim: passed (success)
+    |   PASS long-term-test: passed (success)
+    |   PASS merge-stress: passed (success)
+    |   PASS postgres-stress: passed (success)
+    |   PASS scalability: passed (success)
+    |   PASS staterepo-soak: passed (success)
+    |   PASS tunnel-stress: passed (success)
+    |   PASS ui-e2e-long: passed (success)
+    |   PASS upgrade-test: passed (success)
+    |   PASS vulns: passed (success)
+    |   FAIL grain/release-qualification: failed (failure): grain concludes failure only once an item has failed its own retry, so it is confirmed red
+    |   Qualification: FAIL v3.3.0-rc.2 (grain/release-qualification).
+    | release-from-trunk: phase 1: v3.3.0-rc.2 failed qualification; dropping it
+    | release-from-trunk: RELEASE_IMAGES=off: not running release-images.sh discard-rc v3.3.0-rc.2
+    | release-from-trunk: output discarded_rc=v3.3.0-rc.2
+    | release-from-trunk: output qualification=fail
+    | release-from-trunk: phase 2: rc.2 of v3.3.0 failed too; making release/v3.3.0 from it (89a784148550): cherry-pick fix: commits onto it from main (Backported-from: <sha>), and rc.3 is cut from it once release.yml is green there
+    | release-from-trunk: output convergence_branch=release/v3.3.0
+[19:41:31] tick 12 outputs: discarded_rc=v3.3.0-rc.2 qualification=fail convergence_branch=release/v3.3.0
+[19:41:31] refs: candidate=89a78414 release/v3.3.0=89a78414 latest=0689f54d v3.2.0=ed328ec6 v3.2.0-rc.1=3d153247 v3.3.0-rc.1=2af6b31c v3.3.0-rc.1-discarded=cdb2ad47 v3.3.0-rc.2=a43a18b1 v3.3.0-rc.2-discarded=c1387ec4
+    OK   release/v3.3.0 made from v3.3.0-rc.2's commit 89a784148550
+--- tick 13:  release-from-trunk.sh  (exit 0)
+    | release-from-trunk: fetching origin's main, candidate and tags
+    | release-from-trunk: major 3 (floor minor 0); newest promoted release v3.2.0; next minor v3.3.0; notes from v3.2.0
+    | release-from-trunk: phase 1: v3.3.0-rc.2 (89a784148550) was dropped; the next rc of v3.3.0 is rc.3
+    | release-from-trunk: phase 2: rc.3 of v3.3.0 converges on release/v3.3.0 (89a784148550 and the fixes cherry-picked onto it)
+    | release-from-trunk: read 1 GitHub Actions runs of ai-on-gke/grain's release on release/v3.3.0
+    |   Selecting the newest known-good commit on refs/remotes/origin/release/v3.3.0 after 89a784148550 (required: release).
+    |     cb16d5051c65: release.yml success; known-good.
+    |   LKG cb16d5051c651a16fc03f83bc510c17d18bb9e10
+    | release-from-trunk: phase 2: cutting v3.3.0-rc.3 on cb16d5051c65
+    | release-from-trunk: output rc_tag=v3.3.0-rc.3
+    | release-from-trunk: RELEASE_IMAGES=off: not running release-images.sh rc v3.3.0-rc.3
+    | release-from-trunk: phase 2: v3.3.0-rc.3 is cut and candidate is on it; nightly.yml qualifies it (Stage 1), then grain/release-qualification (Stage 2)
+    OK   v3.3.0-rc.3 cut on release/v3.3.0 at cb16d5051c65 (exit 0)
+[20:01:31] refs: candidate=cb16d505 release/v3.3.0=cb16d505 latest=0689f54d v3.2.0=ed328ec6 v3.2.0-rc.1=3d153247 v3.3.0-rc.1=2af6b31c v3.3.0-rc.1-discarded=cdb2ad47 v3.3.0-rc.2=a43a18b1 v3.3.0-rc.2-discarded=c1387ec4 v3.3.0-rc.3=dfaa6fc8
+--- actions after the cut of v3.3.0-rc.3:  release-train-actions.sh ~/scratch/walk/actions.in (exit 0)
+    | release-train-actions: v3.3.0-rc.3 was pushed with GITHUB_TOKEN, whose tag pushes start no workflow; dispatching nightly.yml on it
+[20:01:31] githubsim: workflow_dispatch nightly.yml ref=v3.3.0-rc.3 inputs=map[jobs:] -> queued run 20015
+[23:01:31] actions: nightly.yml run 20015 on v3.3.0-rc.3 (workflow_dispatch) concluded success: jobs go-long,staterepo-soak,loadtest,scalability,merge-stress,long-term-test,long-sim,postgres-stress,tunnel-stress,ui-e2e-long,installer-variants,vulns,cmd-grain-stress,upgrade-test
+<log> orchestrator: cleared notification pipeline.rc-failed:v3.3.0-rc.2
+[23:02:31] reconcile: SyncReleaseQualification ran
+[23:02:31] qualification tasks for v3.3.0-rc.3:
+    qualification-base-triage    21 [queued] "Qualify v3.3.0-rc.3: base branch triage, team inheritance and repair unblocking" prio 8
+    qualification-ci-diagnostics 20 [queued] "Qualify v3.3.0-rc.3: quarantine and CI diagnostic tools" prio 8
+    qualification-mergequeue     19 [queued] "Qualify v3.3.0-rc.3: independent clean-and-green merging, gates and conflict clusters" prio 8
+
+=== 23. item 3: v3.3.0-rc.3 is red too: pipeline.release-escalated, and the train cuts no rc.4
+[23:07:31] agent: 19 finished: Qualification-Verdict: FAIL
+[23:12:31] agent: 20 finished: Qualification-Verdict: PASS
+[23:17:31] agent: 21 finished: Qualification-Verdict: PASS
+[23:18:31] reconcile: SyncReleaseQualification ran
+[23:23:31] agent: 22 finished: Qualification-Verdict: FAIL
+<log> orchestrator: raised notification pipeline.rc-failed:v3.3.0-rc.3 (warning): Release candidate v3.3.0-rc.3 of ai-on-gke/grain failed qualification
+<log> orchestrator: raised notification pipeline.release-escalated:v3.3.0 (critical): v3.3.0 of ai-on-gke/grain failed 3 release candidates; the train cuts no more of it
+[23:24:31] reconcile: SyncReleaseQualification ran
+[23:24:31] check runs on cb16d5051c65 (rc3-red): 1
+    #8005 grain/release-qualification  app=grain-walkthrough  status=completed   conclusion=failure  external_id=release-qualification:ai-on-gke/grain@v3.3.0-rc.3
+        title: Release qualification of v3.3.0-rc.3: failure
+        | repo:template:ai-on-gke:grain:qualification-mergequeue: fail (task 22, attempt 2) -- task 22 reported Qualification-Verdict: FAIL
+        | repo:template:ai-on-gke:grain:qualification-ci-diagnostics: pass (task 20, attempt 1)
+        | repo:template:ai-on-gke:grain:qualification-base-triage: pass (task 21, attempt 1)
+        | repo:template:ai-on-gke:grain:qualification-system-smoke: not started
+        | confirmed red after 1 retry: repo:template:ai-on-gke:grain:qualification-mergequeue
+[23:24:31] notifications (rc3-red): 6
+    [cleared] pipeline.rc-failed:v3.3.0-rc.1 (warning, automation:release-qualification) Release candidate v3.3.0-rc.1 of ai-on-gke/grain failed qualification
+        | `v3.3.0-rc.1` (55cf8c54caec) of ai-on-gke/grain failed Stage 2 qualification (grain/release-qualification): attempt 1 of RELEASE_MAX_RC_ATTEMPTS (3).
+        | Commits to triage: `c6004bc95553bd1e329f7fe62da0e18aeb711a48..55cf8c54caeca60a735d96d360c58c63c18be29a` (everything since v3.2.0).
+        | Qualification:
+        | - repo:template:ai-on-gke:grain:qualification-mergequeue: fail (task 9, attempt 2) -- task 9 opened a pull request
+        | - repo:template:ai-on-gke:grain:qualification-ci-diagnostics: fail (task 10, attempt 2) -- task 10 proposed a follow-up task
+        | - repo:template:ai-on-gke:grain:qualification-base-triage: pass (task 11, attempt 2)
+        | - repo:template:ai-on-gke:grain:qualification-system-smoke: not started
+        | - confirmed red after 1 retry: repo:template:ai-on-gke:grain:qualification-mergequeue, repo:template:ai-on-gke:grain:qualification-ci-diagnostics
+        | The train tags v3.3.0-rc.1-discarded and cuts v3.3.0-rc.2 from the next known-good commit after it. Title each fix or revert that must land first `[rc-blocker v3.3.0-rc.1] ...`: while any such task is open, check run grain/rc-hold on 55cf8c54caec holds v3.3.0-rc.2.
+    [open] pipeline.flake-budget:ai-on-gke/grain:repo:template:ai-on-gke:grain:qualification-mergequeue (warning, automation:release-qualification) Release qualification item repo:template:ai-on-gke:grain:qualification-mergequeue of ai-on-gke/grain is flaking
+        | repo:template:ai-on-gke:grain:qualification-mergequeue failed and was retried 2 times in the last 24h of release qualification, most recently on v3.3.0-rc.2 (task 14 qualified commit c6004bc95553bd1e329f7fe62da0e18aeb711a48, not 89a784148550dd2bc636092945a278c0ac14bac3). A flake retry is spent per candidate, so a flaky item makes red candidates out of healthy ones: de-flake it, or quarantine what it tests.
+    [open] pipeline.flake-budget:ai-on-gke/grain:repo:template:ai-on-gke:grain:qualification-ci-diagnostics (warning, automation:release-qualification) Release qualification item repo:template:ai-on-gke:grain:qualification-ci-diagnostics of ai-on-gke/grain is flaking
+        | repo:template:ai-on-gke:grain:qualification-ci-diagnostics failed and was retried 2 times in the last 24h of release qualification, most recently on v3.3.0-rc.2 (task 15 left refs/heads/qualification/15 behind). A flake retry is spent per candidate, so a flaky item makes red candidates out of healthy ones: de-flake it, or quarantine what it tests.
+    [cleared] pipeline.rc-failed:v3.3.0-rc.2 (warning, automation:release-qualification) Release candidate v3.3.0-rc.2 of ai-on-gke/grain failed qualification
+        | `v3.3.0-rc.2` (89a784148550) of ai-on-gke/grain failed Stage 2 qualification (grain/release-qualification): attempt 2 of RELEASE_MAX_RC_ATTEMPTS (3).
+        | Commits to triage: `c6004bc95553bd1e329f7fe62da0e18aeb711a48..89a784148550dd2bc636092945a278c0ac14bac3` (everything since v3.2.0).
+        | New since v3.3.0-rc.1: `55cf8c54caeca60a735d96d360c58c63c18be29a..89a784148550dd2bc636092945a278c0ac14bac3`.
+        | Qualification:
+        | - repo:template:ai-on-gke:grain:qualification-mergequeue: fail (task 17, attempt 2) -- task 17 qualified commit c6004bc95553bd1e329f7fe62da0e18aeb711a48, not 89a784148550dd2bc636092945a278c0ac14bac3
+        | - repo:template:ai-on-gke:grain:qualification-ci-diagnostics: fail (task 18, attempt 2) -- task 18 left refs/heads/qualification/18 behind
+        | - repo:template:ai-on-gke:grain:qualification-base-triage: pass (task 16, attempt 1)
+        | - repo:template:ai-on-gke:grain:qualification-system-smoke: not started
+        | - confirmed red after 1 retry: repo:template:ai-on-gke:grain:qualification-mergequeue, repo:template:ai-on-gke:grain:qualification-ci-diagnostics
+        | The train tags v3.3.0-rc.2-discarded and cuts v3.3.0-rc.3 from the next known-good commit after it. Title each fix or revert that must land first `[rc-blocker v3.3.0-rc.2] ...`: while any such task is open, check run grain/rc-hold on 89a784148550 holds v3.3.0-rc.3.
+    [open] pipeline.rc-failed:v3.3.0-rc.3 (warning, automation:release-qualification) Release candidate v3.3.0-rc.3 of ai-on-gke/grain failed qualification
+        | `v3.3.0-rc.3` (cb16d5051c65) of ai-on-gke/grain failed Stage 2 qualification (grain/release-qualification): attempt 3 of RELEASE_MAX_RC_ATTEMPTS (3).
+        | Commits to triage: `c6004bc95553bd1e329f7fe62da0e18aeb711a48..cb16d5051c651a16fc03f83bc510c17d18bb9e10` (everything since v3.2.0).
+        | New since v3.3.0-rc.2: `89a784148550dd2bc636092945a278c0ac14bac3..cb16d5051c651a16fc03f83bc510c17d18bb9e10`.
+        | Qualification:
+        | - repo:template:ai-on-gke:grain:qualification-mergequeue: fail (task 22, attempt 2) -- task 22 reported Qualification-Verdict: FAIL
+        | - repo:template:ai-on-gke:grain:qualification-ci-diagnostics: pass (task 20, attempt 1)
+        | - repo:template:ai-on-gke:grain:qualification-base-triage: pass (task 21, attempt 1)
+        | - repo:template:ai-on-gke:grain:qualification-system-smoke: not started
+        | - confirmed red after 1 retry: repo:template:ai-on-gke:grain:qualification-mergequeue
+        | This was the version's last attempt: pipeline.release-escalated:v3.3.0 is raised, and the train cuts no more of v3.3.0 until a person resets or advances it.
+    [open] pipeline.release-escalated:v3.3.0 (critical, automation:release-qualification) v3.3.0 of ai-on-gke/grain failed 3 release candidates; the train cuts no more of it
+        | v3.3.0 of ai-on-gke/grain has used RELEASE_MAX_RC_ATTEMPTS (3) release candidates, and v3.3.0-rc.3 failed qualification too. The train cuts no more of v3.3.0 until a person resets it (cuts another candidate of it by hand) or advances it to the next version.
+        | ### v3.3.0-rc.1
+        | `v3.3.0-rc.1` (55cf8c54caec) of ai-on-gke/grain failed Stage 2 qualification (grain/release-qualification): attempt 1 of RELEASE_MAX_RC_ATTEMPTS (3).
+        | Commits to triage: `c6004bc95553bd1e329f7fe62da0e18aeb711a48..55cf8c54caeca60a735d96d360c58c63c18be29a` (everything since v3.2.0).
+        | Qualification:
+        | - repo:template:ai-on-gke:grain:qualification-mergequeue: fail (task 9, attempt 2) -- task 9 opened a pull request
+        | - repo:template:ai-on-gke:grain:qualification-ci-diagnostics: fail (task 10, attempt 2) -- task 10 proposed a follow-up task
+        | - repo:template:ai-on-gke:grain:qualification-base-triage: pass (task 11, attempt 2)
+        | - repo:template:ai-on-gke:grain:qualification-system-smoke: not started
+        | - confirmed red after 1 retry: repo:template:ai-on-gke:grain:qualification-mergequeue, repo:template:ai-on-gke:grain:qualification-ci-diagnostics
+        | The train tags v3.3.0-rc.1-discarded and cuts v3.3.0-rc.2 from the next known-good commit after it. Title each fix or revert that must land first `[rc-blocker v3.3.0-rc.1] ...`: while any such task is open, check run grain/rc-hold on 55cf8c54caec holds v3.3.0-rc.2.
+        | ### v3.3.0-rc.2
+        | `v3.3.0-rc.2` (89a784148550) of ai-on-gke/grain failed Stage 2 qualification (grain/release-qualification): attempt 2 of RELEASE_MAX_RC_ATTEMPTS (3).
+        | Commits to triage: `c6004bc95553bd1e329f7fe62da0e18aeb711a48..89a784148550dd2bc636092945a278c0ac14bac3` (everything since v3.2.0).
+        | New since v3.3.0-rc.1: `55cf8c54caeca60a735d96d360c58c63c18be29a..89a784148550dd2bc636092945a278c0ac14bac3`.
+        | Qualification:
+        | - repo:template:ai-on-gke:grain:qualification-mergequeue: fail (task 17, attempt 2) -- task 17 qualified commit c6004bc95553bd1e329f7fe62da0e18aeb711a48, not 89a784148550dd2bc636092945a278c0ac14bac3
+        | - repo:template:ai-on-gke:grain:qualification-ci-diagnostics: fail (task 18, attempt 2) -- task 18 left refs/heads/qualification/18 behind
+        | - repo:template:ai-on-gke:grain:qualification-base-triage: pass (task 16, attempt 1)
+        | - repo:template:ai-on-gke:grain:qualification-system-smoke: not started
+        | - confirmed red after 1 retry: repo:template:ai-on-gke:grain:qualification-mergequeue, repo:template:ai-on-gke:grain:qualification-ci-diagnostics
+        | The train tags v3.3.0-rc.2-discarded and cuts v3.3.0-rc.3 from the next known-good commit after it. Title each fix or revert that must land first `[rc-blocker v3.3.0-rc.2] ...`: while any such task is open, check run grain/rc-hold on 89a784148550 holds v3.3.0-rc.3.
+        | ### v3.3.0-rc.3
+        | `v3.3.0-rc.3` (cb16d5051c65) of ai-on-gke/grain failed Stage 2 qualification (grain/release-qualification): attempt 3 of RELEASE_MAX_RC_ATTEMPTS (3).
+        | Commits to triage: `c6004bc95553bd1e329f7fe62da0e18aeb711a48..cb16d5051c651a16fc03f83bc510c17d18bb9e10` (everything since v3.2.0).
+        | New since v3.3.0-rc.2: `89a784148550dd2bc636092945a278c0ac14bac3..cb16d5051c651a16fc03f83bc510c17d18bb9e10`.
+        | Qualification:
+        | - repo:template:ai-on-gke:grain:qualification-mergequeue: fail (task 22, attempt 2) -- task 22 reported Qualification-Verdict: FAIL
+        | - repo:template:ai-on-gke:grain:qualification-ci-diagnostics: pass (task 20, attempt 1)
+        | - repo:template:ai-on-gke:grain:qualification-base-triage: pass (task 21, attempt 1)
+        | - repo:template:ai-on-gke:grain:qualification-system-smoke: not started
+        | - confirmed red after 1 retry: repo:template:ai-on-gke:grain:qualification-mergequeue
+        | This was the version's last attempt: pipeline.release-escalated:v3.3.0 is raised, and the train cuts no more of v3.3.0 until a person resets or advances it.
+    OK   pipeline.release-escalated:v3.3.0 raised
+--- tick 14:  release-from-trunk.sh  (exit 1)
+    | release-from-trunk: fetching origin's main, candidate and tags
+    | release-from-trunk: major 3 (floor minor 0); newest promoted release v3.2.0; next minor v3.3.0; notes from v3.2.0
+    | release-from-trunk: phase 1: v3.3.0-rc.3 (cb16d5051c65) is in qualification; asking the qualification gate
+    |   Qualification of v3.3.0-rc.3 (cb16d5051c65).
+    |   PASS cmd-grain-stress: passed (success)
+    |   PASS go-long: passed (success)
+    |   PASS installer-variants: passed (success)
+    |   PASS loadtest: passed (success)
+    |   PASS long-sim: passed (success)
+    |   PASS long-term-test: passed (success)
+    |   PASS merge-stress: passed (success)
+    |   PASS postgres-stress: passed (success)
+    |   PASS scalability: passed (success)
+    |   PASS staterepo-soak: passed (success)
+    |   PASS tunnel-stress: passed (success)
+    |   PASS ui-e2e-long: passed (success)
+    |   PASS upgrade-test: passed (success)
+    |   PASS vulns: passed (success)
+    |   FAIL grain/release-qualification: failed (failure): grain concludes failure only once an item has failed its own retry, so it is confirmed red
+    |   Qualification: FAIL v3.3.0-rc.3 (grain/release-qualification).
+    | release-from-trunk: phase 1: v3.3.0-rc.3 failed qualification; dropping it
+    | release-from-trunk: RELEASE_IMAGES=off: not running release-images.sh discard-rc v3.3.0-rc.3
+    | release-from-trunk: output discarded_rc=v3.3.0-rc.3
+    | release-from-trunk: output qualification=fail
+    | release-from-trunk: output escalated_version=v3.3.0
+    | release-from-trunk: v3.3.0 has had 3 release candidates dropped, RELEASE_MAX_RC_ATTEMPTS (3); the train cuts no more of it until a person resets or advances it
+[23:34:31] tick 14 outputs: discarded_rc=v3.3.0-rc.3 qualification=fail escalated_version=v3.3.0
+    OK   escalated_version=v3.3.0, exit 1, nothing cut
+[23:34:31] refs: candidate=cb16d505 release/v3.3.0=cb16d505 latest=0689f54d v3.2.0=ed328ec6 v3.2.0-rc.1=3d153247 v3.3.0-rc.1=2af6b31c v3.3.0-rc.1-discarded=cdb2ad47 v3.3.0-rc.2=a43a18b1 v3.3.0-rc.2-discarded=c1387ec4 v3.3.0-rc.3=dfaa6fc8 v3.3.0-rc.3-discarded=21340268
+--- actions after tick 14:  release-train-actions.sh ~/scratch/walk/actions.in (exit 0)
+    | release-train-actions: v3.3.0-rc.3 was dropped; no nightly.yml run is still running on it
+    | ::error::release-train: v3.3.0 has used RELEASE_MAX_RC_ATTEMPTS release candidates; the train cuts no more of it until a person resets or advances it (playbook section 5)
+[23:34:31] githubsim: no workflow_dispatch
+    OK   no v3.3.0-rc.4
+
+[23:34:31] the scratch clone's local git config (no identity may be written):
+    OK   no user.* key in the scratch clone's .git/config

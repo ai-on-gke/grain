@@ -297,3 +297,14 @@ sudo ./scripts/setup.sh --db-dsn "postgres://grain:secret@db.internal:5432/grain
 
 [cloudsql-postgres.md](cloudsql-postgres.md) covers Cloud SQL and the Cloud
 SQL Auth Proxy.
+
+## Migrating to GKE
+
+`scripts/migrate-local-to-gke.sh` refuses a host whose store is the local
+server. The controller in the cluster can't reach this host's 127.0.0.1,
+and the server's files aren't a consistent copy while it runs. First move
+the store to a server the cluster can reach, as described in
+[Moving a store](#moving-a-store). Then run the script again. The refusal
+prints the commands to run.
+[grain-init-platforms.md](grain-init-platforms.md#migrating-a-local-install-to-gke)
+covers the rest of the migration.
