@@ -2374,7 +2374,8 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 			backend.Team = strings.TrimSpace(backend.Team)
 			if backend.AuthMode != "" {
 				valid := backend.Framework == model.AgentFrameworkCodex &&
-					(backend.AuthMode == model.CodexAuthAPIKey || backend.AuthMode == model.CodexAuthSubscription)
+					(backend.AuthMode == model.CodexAuthAPIKey || backend.AuthMode == model.CodexAuthSubscription ||
+						backend.AuthMode == model.AntigravityAuthAmbient)
 				valid = valid || backend.Framework == model.AgentFrameworkAntigravity &&
 					(backend.AuthMode == model.CodexAuthAPIKey || backend.AuthMode == model.AntigravityAuthAmbient)
 				valid = valid || backend.Framework == model.AgentFrameworkClaude &&
@@ -2461,6 +2462,13 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 			if !ok || source.ID == backend.ID || source.Framework != backend.Framework || source.CredentialBackendID != "" {
 				return model.Config{}, validationErrorf("agentBackends[%d].credentialBackendId must name a directly authenticated backend of the same type", i)
 			}
+		}
+		// Ambient credentials are a CLI login on the connection's host,
+		// so they need one named (model.CheckAmbientPlacement); a
+		// connection stored that way before the rule is refused only once
+		// it changes.
+		if err := model.CheckAmbientPlacement(*req.AgentBackends, cfg.AgentBackends); err != nil {
+			return model.Config{}, validationErrorf("%v", err)
 		}
 		stored := cfg.AgentBackends
 		cfg.AgentBackends = append([]model.AgentBackend(nil), (*req.AgentBackends)...)

@@ -526,6 +526,11 @@ type Config struct {
 	// another machine dialing in to /api/hostd/connect (hostd.Remote,
 	// which checks the hostd token itself); nil refuses them.
 	HostdRemote http.Handler
+	// LocalHostdLogins, when set, is the agent CLI logins on the machine
+	// of the co-located grain hostd (model.LocalHostd), from its hello,
+	// and whether it said: what the host pickers show beside "local". A
+	// dialing-in hostd's come with its session (hostd.RemotePeer.Logins).
+	LocalHostdLogins func(ctx context.Context) ([]string, bool)
 	// Upgrader is set only when this deployment was told how it
 	// upgrades itself: which image to pull per branch
 	// (pkg/cli/daemon.go's -upgrade-image, the shape scripts/setup.sh

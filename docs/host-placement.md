@@ -81,6 +81,66 @@ server's capability audit records (`task_run_capability_audit.hostd`) says
 B. While a placed server's host is not connected, a grant of it cannot be
 minted and the task waits with `needs-hostd:<selector>`.
 
+## Credentials: stored or ambient
+
+Settings -> Models -> the connection -> **Credentials** says what a run on
+the connection authenticates with:
+
+- **Stored**: a key, token or `auth.json` grain holds for the connection
+  (an API key, a Claude Code OAuth token, a Vertex AI service account, a
+  ChatGPT subscription's uploaded `auth.json`), or reused from another
+  connection.
+- **Ambient**: the agent CLI's own login on the machine its CLI runs on
+  (`authMode: ambient`, for Antigravity, Claude and Codex alike). grain
+  stores no secret for it.
+
+Ambient is accepted only on a connection placed on a host (`hostd`), so
+which machine's login a run spends is always said
+(`model.CheckAmbientPlacement`). A save that makes a connection ambient
+with no host, or clears the host of an ambient one, is refused with
+"ambient credentials are the agent CLI's own login on the machine it runs
+on ...". A connection saved ambient and unplaced before the rule keeps
+running through the default host, untouched by unrelated saves, until it
+is changed; where there is only one host it is placed on it (below).
+
+A Codex *subscription* connection counts as stored here: grain holds its
+`auth.json`. (A run of one on a host with a `codex login` of its own still
+links that login, so a usage limit on it is keyed to the host the way an
+ambient one is.)
+
+## Which logins a host has
+
+A host reports the agent CLI logins on its machine, as the user it runs
+as, in its hello (`hostd.Hello.Logins`): `codex` for
+`$CODEX_HOME/auth.json` (else `~/.codex/auth.json`), `claude` for
+`$CLAUDE_CONFIG_DIR/.credentials.json` (else
+`~/.claude/.credentials.json`), and `antigravity` for
+`~/.gemini/oauth_creds.json` or agy's own `~/.gemini/antigravity-cli`. The
+daemon asks a dialing-in host once it connects, and the co-located one
+when the list is read; `GET /api/hostds` carries them as `logins` (with
+`loginsKnown`), and the **Run on host** picker shows them beside each host
+("logins: codex, claude", "no CLI logins", or nothing for a host that is
+offline or too old to say). A file being there says the CLI signed in on
+that machine, not that the login is still good.
+
+## Host work nothing places
+
+A `run: host` capability server with no `hostd`, and a connection with no
+`hostd` whose CLI runs on the host because Settings -> Models says
+**Host** or the daemon's `-<cli>-run` flag (`GRAIN_*_RUN=host`, or an
+edition's built-in default) does, go to the deployment's default host.
+When that is the only host there is -- exactly one unrevoked host in the
+registry (`local` counting only where a co-located grain hostd runs), and
+it is the default -- grain writes it down
+(`model.MigrateImplicitHostPlacement`): the server becomes `run: hostd`,
+`hostd: <host>`, and the connection gets `hostd: <host>`. It does this when
+the daemon starts and on every grain/config import (`pkg/staterepo`), so
+the next export carries the placement. With several hosts nothing is
+rewritten: which one was meant stays the default host's. A connection
+whose CLI runs in the daemon's container, or detached, is left where it
+is. A development daemon on the bare machine, whose host runs are its own
+children, has no host to write down and rewrites nothing.
+
 ## Enrolling and managing hosts
 
 Remote hosts join in **Settings → Hosts** (`/settings/hosts`, alias `/settings/hostds`) or through `grain host`:
