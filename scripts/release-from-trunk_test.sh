@@ -159,6 +159,7 @@ qualification() {
     flake) attempts=(failure) ;;
     infra) attempts=(cancelled) ;;
     fail) attempts=(failure failure) ;;
+    stage2-fail) attempts=(success) check=failure ;;
   esac
   t=$((now - 7200))
   ids=("${stage1_ids[@]}")
@@ -216,6 +217,7 @@ train() { # train [VAR=value...]: run the train in the clone
 remote_tag() { git -C "$work/remote.git" rev-parse -q --verify "refs/tags/$1^{commit}" 2>/dev/null || true; }
 remote_candidate() { git -C "$work/remote.git" rev-parse -q --verify refs/heads/candidate 2>/dev/null || true; }
 
+not() { ! "$@"; }
 expect() { # expect <case> <condition-description> <test-command...>
   local name="$1" what="$2"
   shift 2
@@ -273,6 +275,20 @@ expect "infra" "exits 0" eq "$status" 0
 expect "infra" "outputs infra" grep -qxF "qualification=infra" "$work/train.out"
 expect "infra" "asks for a re-run" grep -qxF "qualification_rerun=nightly:upgrade-test:infra" "$work/train.out"
 expect "infra" "drops nothing" eq "$(remote_tag v2.3.0-rc.1-discarded)" ""
+
+# --- grain's own grain/release-qualification failure: red at once ---
+# grain posts failure only after an item has failed its own retry, and
+# never re-runs a completed candidate, so the train drops the rc on it
+# rather than wait for a Stage 2 retry nobody makes
+# (docs/test-runs/2026-11-04-release-train.md, finding 1).
+qualification stage2-fail "$c3"
+: > "$work/train.out"
+train RELEASE_TRAIN_OUTPUT="$work/train.out" DRY_RUN=true
+expect "stage 2 red" "exits 0" eq "$status" 0
+expect "stage 2 red" "drops the rc" grep -qxF "discarded_rc=v2.3.0-rc.1" "$work/train.out"
+expect "stage 2 red" "outputs the verdict" grep -qxF "qualification=fail" "$work/train.out"
+expect "stage 2 red" "asks for no Stage 2 re-run" not grep -q "qualification_rerun=" "$work/train.out"
+expect "stage 2 red" "a dry run pushes no discard tag" eq "$(remote_tag v2.3.0-rc.1-discarded)" ""
 
 # --- confirmed red: dropped, rc.2 cut ---
 qualification fail "$c3"

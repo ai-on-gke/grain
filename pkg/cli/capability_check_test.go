@@ -122,14 +122,10 @@ func writeLadder(t *testing.T, files map[string]string) string {
 	return dataDir
 }
 
-// A named token's material is not in the secrets store at all -- it is
-// an operator's file under secrets/github -- so its provider is built
-// holding the credential ladder instead, and the resolver every other
-// capability is checked through goes unused. This is that wiring, and it
-// stays offline by using a credential the ladder serves as anonymous: an
-// empty token file, which the provider has an answer for before it ever
-// reaches GitHub.
-func TestCapabilityCheckReachesANamedGitHubTokensLadder(t *testing.T) {
+// github-credential:<name> was retired onto repo#credential (schema
+// migration 120), so daemon.CapabilityProviders no longer registers an
+// in-process provider per named token in secrets/github.
+func TestCapabilityCheckOfRetiredGitHubCredentialFindsNoProvider(t *testing.T) {
 	t.Parallel()
 	dataDir := writeLadder(t, map[string]string{"bot.token": "tok\n", "release-bot.token": "\n"})
 	ladder, err := daemon.GitHubCredentialLadder(dataDir)
@@ -142,15 +138,10 @@ func TestCapabilityCheckReachesANamedGitHubTokensLadder(t *testing.T) {
 	}
 	adapter := daemon.CapabilityCheckAdapter{Live: live, Creds: noCredentials{}}
 
-	result, err := adapter.CheckCapability(context.Background(), model.GitCredentialCapability("release-bot"))
-	if err == nil {
-		t.Fatal("expected a credential file with no token in it to be reported")
-	}
-	if !strings.Contains(err.Error(), "secrets/github/release-bot.token") {
-		t.Errorf("error %q does not name the file that resolves to nothing", err)
-	}
-	if len(result.Credentials) != 1 || result.Credentials[0] != "secrets/github/release-bot.token" {
-		t.Errorf("Credentials = %v, want the file named even on the failure path", result.Credentials)
+	for _, id := range []string{"github-credential:release-bot", model.GitCredentialCapability("release-bot")} {
+		if _, err := adapter.CheckCapability(context.Background(), id); err == nil || !strings.Contains(err.Error(), "registers no provider") {
+			t.Errorf("CheckCapability(%q) = %v, want no provider registered", id, err)
+		}
 	}
 }
 

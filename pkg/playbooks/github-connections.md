@@ -167,13 +167,15 @@ and needing no `credentials.json` entry at all. Settings -> GitHub ->
 Named tokens is the ordinary way to add one, and the whole flow: name,
 value, "Save token", restart.
 
-Each of those names becomes a capability of its own,
-`github-credential:<name>`, offered in the per-task capability picker and
-listed on Settings' Capabilities tab. A task holding one pushes and pulls
-through that token instead of the ladder above, for that task only; the
-token itself never enters the sandbox. Like the ladder, the names are
-read once at daemon startup, so a token added now needs a restart before
-it can be ticked on anything.
+Each of those names is enumerated as an argument on the in-process
+`https://grain.dev/capabilities/repo#credential` method
+(`{"credential":"<name>"}`; `github-credential:<name>` remains a
+one-release alias), offered in the per-task capability picker and listed on
+Settings' Capabilities tab under the `https://grain.dev/capabilities/repo`
+server. A task holding one pushes and pulls through that token instead of
+the ladder above, for that task only; the token itself never enters the
+sandbox. Like the ladder, the names are read once at daemon startup, so a
+token added now needs a restart before it can be picked on anything.
 
 Only offer this if the human asks for a second token or describes work
 one task needs wider (or narrower) access for. One default credential is

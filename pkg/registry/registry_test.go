@@ -1399,6 +1399,168 @@ func TestStep12CatalogCRUDGroupAuthHeartbeatsDirectoryAndRouteEndToEnd(t *testin
 	}
 }
 
+func TestStep17StopStartAutoUpgradeAndMaintenanceWindowEndToEnd(t *testing.T) {
+	// 1. Validate ComputeConfig auto_upgrade and maintenance_window parsing (same-day and overnight UTC windows).
+	if _, _, err := ParseMaintenanceWindow("02:00-06:00"); err != nil {
+		t.Fatalf("ParseMaintenanceWindow 02:00-06:00: %v", err)
+	}
+	if !InMaintenanceWindow("02:00-06:00", time.Date(2026, 11, 7, 3, 30, 0, 0, time.UTC)) {
+		t.Fatalf("expected 03:30 UTC inside 02:00-06:00")
+	}
+	if InMaintenanceWindow("02:00-06:00", time.Date(2026, 11, 7, 6, 0, 0, 0, time.UTC)) {
+		t.Fatalf("expected 06:00 UTC outside [02:00, 06:00)")
+	}
+
+	if _, _, err := ParseMaintenanceWindow("22:00-02:00"); err != nil {
+		t.Fatalf("ParseMaintenanceWindow 22:00-02:00: %v", err)
+	}
+	if !InMaintenanceWindow("22:00-02:00", time.Date(2026, 11, 7, 23, 15, 0, 0, time.UTC)) || !InMaintenanceWindow("22:00-02:00", time.Date(2026, 11, 8, 1, 45, 0, 0, time.UTC)) {
+		t.Fatalf("expected 23:15 and 01:45 UTC inside overnight window 22:00-02:00")
+	}
+	if InMaintenanceWindow("22:00-02:00", time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)) {
+		t.Fatalf("expected 12:00 UTC outside overnight window 22:00-02:00")
+	}
+
+	if _, _, err := ParseMaintenanceWindow("25:00-06:00"); err == nil {
+		t.Fatalf("expected invalid maintenance_window hour to fail")
+	}
+
+	badCfgYAML := strings.Replace(validTestYAML(), "default_shape: standard", "default_shape: standard\n  auto_upgrade: major", 1)
+	if _, err := ParseConfig([]byte(badCfgYAML)); err == nil {
+		t.Fatalf("expected invalid compute.auto_upgrade=major to fail validation")
+	}
+
+	// 2. End-to-end HTTP test for POST /api/entries/{name}/stop, POST /api/entries/{name}/start, and auto_upgrade/auto_wake fields.
+	pgURL := startEphemeralPostgresForRegistryTest(t)
+	ctx := context.Background()
+	st, err := store.Open(ctx, pgURL, store.DefaultThresholds())
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer st.Close()
+
+	if err := st.SeedShapes(ctx, []store.ShapeRow{
+		{Name: "small", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
+	}); err != nil {
+		t.Fatalf("SeedShapes: %v", err)
+	}
+
+	admitter, err := webauth.NewAdmitter(webauth.AdmissionConfig{
+		Verifier:       fakeFrontIdentity{},
+		AllowedDomains: []string{"example.com"},
+		Admins:         []string{"user:admin@example.com"},
+	})
+	if err != nil {
+		t.Fatalf("NewAdmitter: %v", err)
+	}
+	signer, err := NewEphemeralLocalSigner("step17-k1")
+	if err != nil {
+		t.Fatalf("NewEphemeralLocalSigner: %v", err)
+	}
+	cfg, err := ParseConfig([]byte(validTestYAML()))
+	if err != nil {
+		t.Fatalf("ParseConfig: %v", err)
+	}
+	srv, err := NewServer(ServerOptions{
+		Config:    *cfg,
+		Store:     st,
+		Admitter:  admitter,
+		Signer:    signer,
+		ReplicaID: "rep-step17",
+		PeerAddr:  "127.0.0.1:18082",
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	clientFor := func(email string) *api.Client {
+		c, err := api.NewClient(api.ClientConfig{
+			BaseURL:           ts.URL,
+			AllowInsecureHTTP: true,
+			ExtraHeaders:      http.Header{"X-Test-Email": []string{email}},
+		})
+		if err != nil {
+			t.Fatalf("NewClient(%s): %v", email, err)
+		}
+		return c
+	}
+
+	aliceCli := clientFor("alice@example.com")
+	bobCli := clientFor("bob@example.com")
+
+	autoWakeFalse := false
+	created, err := aliceCli.CreateEntry(ctx, api.CreateEntryRequest{
+		Name:        "alice-vm17",
+		Kind:        api.KindInstance,
+		Shape:       "small",
+		AutoUpgrade: string(api.AutoUpgradeMinor),
+		AutoWake:    &autoWakeFalse,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry alice-vm17: %v", err)
+	}
+	if created.Entry.AutoUpgrade != string(api.AutoUpgradeMinor) || created.Entry.AutoWake {
+		t.Fatalf("expected auto_upgrade=minor and auto_wake=false, got %+v", created.Entry)
+	}
+
+	// Update auto_wake=true and auto_upgrade=notify via PATCH /api/entries/alice-vm17.
+	autoWakeTrue := true
+	notifyPol := string(api.AutoUpgradeNotify)
+	updated, err := aliceCli.UpdateEntry(ctx, "alice-vm17", api.UpdateEntryRequest{
+		AutoUpgrade: &notifyPol,
+		AutoWake:    &autoWakeTrue,
+	})
+	if err != nil {
+		t.Fatalf("UpdateEntry alice-vm17: %v", err)
+	}
+	if updated.AutoUpgrade != string(api.AutoUpgradeNotify) || !updated.AutoWake {
+		t.Fatalf("expected auto_upgrade=notify and auto_wake=true after update, got %+v", updated)
+	}
+
+	// Transition alice-vm17 to running so it can be stopped.
+	row, err := st.GetEntryByName(ctx, "alice-vm17")
+	if err != nil {
+		t.Fatalf("GetEntryByName: %v", err)
+	}
+	if _, err := st.TransitionEntryState(ctx, row.ID, row.Version, api.StateRunning, ""); err != nil {
+		t.Fatalf("TransitionEntryState running: %v", err)
+	}
+
+	// Non-manager bob cannot stop alice-vm17 (403 Forbidden).
+	if _, err := bobCli.StopEntry(ctx, "alice-vm17"); !isAPIStatus(err, http.StatusForbidden) {
+		t.Fatalf("expected 403 Forbidden when bob stops alice-vm17, got %v", err)
+	}
+
+	// Owner alice stops alice-vm17 -> state transitions to stopping.
+	stoppingEntry, err := aliceCli.StopEntry(ctx, "alice-vm17")
+	if err != nil {
+		t.Fatalf("StopEntry: %v", err)
+	}
+	if stoppingEntry.State != api.StateStopping {
+		t.Fatalf("expected state=stopping after StopEntry, got %s", stoppingEntry.State)
+	}
+
+	// Complete stop in store (as reconciler does) -> state=stopped.
+	row, err = st.GetEntryByName(ctx, "alice-vm17")
+	if err != nil {
+		t.Fatalf("GetEntryByName: %v", err)
+	}
+	if _, err := st.CompleteStopEntry(ctx, row.ID, row.Version); err != nil {
+		t.Fatalf("CompleteStopEntry: %v", err)
+	}
+
+	// Owner alice starts alice-vm17 -> state transitions stopped -> creating.
+	startingEntry, err := aliceCli.StartEntry(ctx, "alice-vm17")
+	if err != nil {
+		t.Fatalf("StartEntry: %v", err)
+	}
+	if startingEntry.State != api.StateCreating {
+		t.Fatalf("expected state=creating after StartEntry, got %s", startingEntry.State)
+	}
+}
+
 func startEphemeralPostgresForRegistryTest(t *testing.T) string {
 	t.Helper()
 	if envURL := strings.TrimSpace(os.Getenv("GRAIN_TEST_POSTGRES_URL")); envURL != "" {

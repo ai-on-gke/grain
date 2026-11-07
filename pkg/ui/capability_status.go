@@ -479,10 +479,6 @@ func capabilityCheckable(name string) bool {
 // an operator's files, read at startup into Config.Capabilities, not a
 // property of this build.
 func (c *Client) checkable(id string) bool {
-	if _, ok := model.GitCredentialName(id); ok {
-		_, offered := c.capabilityByID(id)
-		return offered
-	}
 	return capabilityCheckable(id)
 }
 
@@ -753,54 +749,6 @@ func (c *Client) capabilityStatuses(cfg model.Config, repoConfigs []model.RepoCo
 			len(status.PendingConfig) == 0 &&
 			len(status.MissingSecrets) == 0
 		out = append(out, status)
-	}
-	return append(out, c.githubTokenStatuses(cfg, reposByCapability)...)
-}
-
-// githubTokenStatuses is one row per named GitHub token this deployment
-// offers as a capability of its own (grain/task-117) -- read off
-// c.Config.Capabilities rather than capabilityCatalog above, because
-// unlike every other row here these are not a property of this build at
-// all: they are whatever tokens an operator has placed under
-// secrets/github, which pkg/cli/daemon.go turned into picker rows and
-// providers at startup.
-//
-// Ready and Grantable are both true by construction, and that stays the
-// honest answer to what those two fields ask: a row exists here only
-// because a credential file of that name exists (gitproxy.CredentialSet.
-// ExtraNames), and it exists in the picker only because the same startup
-// pass put it there beside the matching provider. There is no
-// deployment setting and no secrets-store entry either could be waiting
-// on -- MissingConfig and MissingSecrets ask about the two gates a
-// GitHub token has neither of.
-//
-// What that answer never covered is the way these credentials actually
-// fail: a token revoked, expired or rotated at GitHub's end, or one
-// whose access to a repo was withdrawn, changes nothing about the file,
-// so this row went on saying **Ready** while every push through it was
-// refused (grain/task-189). Checkable is where that is answered now, and
-// deliberately not folded into Ready -- the same rule grain/task-172
-// landed on for every other standing credential: Ready means configured,
-// a check is a point-in-time answer somebody asked for, and a badge that
-// silently meant both would be a worse answer than two fields that each
-// mean one thing.
-func (c *Client) githubTokenStatuses(cfg model.Config, reposByCapability map[string][]string) []CapabilityStatus {
-	var out []CapabilityStatus
-	for _, capability := range c.Config.Capabilities {
-		name, ok := model.GitCredentialName(capability.ID)
-		if !ok {
-			continue
-		}
-		out = append(out, CapabilityStatus{
-			ID:           capability.ID,
-			Name:         GitHubTokenDisplayName(name),
-			Description:  capability.Description,
-			Ready:        true,
-			Grantable:    true,
-			Checkable:    c.Config.CapabilityChecks != nil && c.checkable(capability.ID),
-			Default:      slices.Contains(cfg.DefaultCapabilities, capability.ID),
-			DefaultRepos: reposByCapability[capability.ID],
-		})
 	}
 	return out
 }

@@ -21,7 +21,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -30,7 +29,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/ciapi"
 	consolecap "github.com/ai-on-gke/grain/pkg/capability/console"
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
-	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
@@ -66,19 +64,12 @@ func newCapabilityRegistryWithStore(_ *model.Store, providers ...model.Capabilit
 // its two secrets unresolvable, and Materialize fails closed the same
 // way any other missing secret does.
 //
-// githubTokens is this deployment's named GitHub tokens beyond its
-// default one (gitHubCredentialLadder below), one provider each, and
-// githubCredentials is where a check for one of those reads its material
-// -- the ladder itself, which is the only thing that knows both forms a
-// named credential comes in (githubtoken.Config.Credentials). It may be
-// nil: a dispatch through one of these providers resolves no credential
-// at all (they mint nothing and place nothing), so only the check misses
-// it, and it says so rather than failing the token.
-//
-// proxies is unused since the claude-, openai- and gemini-proxy
-// providers were retired onto the in-process model-proxy server
-// (modelProxyMethod); the parameter stays for the callers that pass it.
-func CapabilityProviders(cfg Config, store *model.Store, _ map[string]*modelproxy.Endpoint, githubTokens []string, githubCredentials githubCredentialLadder) []model.CapabilityProvider {
+// proxies and githubTokens are unused since the claude-, openai- and
+// gemini-proxy providers were retired onto the in-process model-proxy server
+// (modelProxyMethod) and github-credential:<name> was retired onto the
+// in-process repo server (grainserver.RepoCredentialRef, schema migration 120);
+// the parameters stay for the callers that pass them.
+func CapabilityProviders(cfg Config, _ *model.Store, _ map[string]*modelproxy.Endpoint, _ []string, githubCredentials githubCredentialLadder) []model.CapabilityProvider {
 	var providers []model.CapabilityProvider
 	// gemini-key is no longer a provider here: it was retired onto the
 	// gcp server's gemini-key (schema migration 103), which mints with
@@ -124,55 +115,10 @@ func CapabilityProviders(cfg Config, store *model.Store, _ map[string]*modelprox
 	// providers here: they were retired onto the in-process model-proxy
 	// server (modelProxyMethod below, schema migration 100), which mints
 	// the same token on the same endpoints with the run's connection.
-	// One per named GitHub token beyond this deployment's default one
-	// (grain/task-117). Registered last, and unconditionally on the names
-	// being there: a token is a capability because an operator's own file
-	// under secrets/github says so, not because anything in this build
-	// enumerates it -- so without these, granting one would be refused as
-	// a capability no provider is registered for (model.ResolveGrants),
-	// and the run would never dispatch.
-	providers = append(providers, githubtoken.Providers(githubTokens, githubtoken.Config{
-		Credentials: githubCredentials,
-		// What a check holds the token against beyond "is it alive":
-		// the repos this deployment's teams own, read per check rather
-		// than here, since teams change while the daemon runs and a
-		// registry is built once and kept. (Target repos moved from the
-		// deployment to its teams in a5c329900; this was
-		// cfg.targetRepos until then.)
-		Repos:        teamRepos(store),
-		Host:         cfg.GithubHost,
-		InsecureHTTP: cfg.GithubInsecureHTTP,
-	})...)
+	// github-credential:<name> is no longer a provider here either: it was
+	// retired onto the in-process repo server's repo#credential (schema
+	// migration 120).
 	return providers
-}
-
-// teamRepos is githubtoken.Config.Repos over store: the deployment's
-// TargetRepos (model.Config), without duplicates, read afresh on each
-// call. A nil store (a caller with no database behind it) owns no repos,
-// which leaves a check reporting liveness alone. Entries that do not
-// parse are left in for the check to skip, as it skips them anyway.
-func teamRepos(store *model.Store) func(context.Context) ([]string, error) {
-	return func(ctx context.Context) ([]string, error) {
-		if store == nil {
-			return nil, nil
-		}
-		targets, err := store.TargetRepos(ctx)
-		if err != nil {
-			return nil, err
-		}
-		var out []string
-		var seen []model.RepoRef
-		for _, entry := range targets {
-			if repo, err := model.ParseRepo(entry); err == nil {
-				if slices.ContainsFunc(seen, repo.Same) {
-					continue
-				}
-				seen = append(seen, repo)
-			}
-			out = append(out, entry)
-		}
-		return out, nil
-	}
 }
 
 // missingCapabilityProviderConfig is the deployment configuration that

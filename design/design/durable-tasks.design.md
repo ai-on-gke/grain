@@ -95,7 +95,7 @@ schedules, with repository and deployment defaults). It was first built
 as a capability grant, `durable`, beside task 834's `priority-dispatch`;
 [unified-grants.design.md §4.1](unified-grants.design.md#41-admission-and-hosting-are-task-settings-not-grants)
 replaced both with the ordered setting `admission: standard | bypass |
-durable`, schema migration 120 moved every stored grant into the column
+durable`, schema migration 121 moved every stored grant into the column
 (holding both means `durable`), and the bare names are accepted on input
 for one release with a deprecation warning.
 
@@ -885,7 +885,7 @@ findings are rows in the same table.
 | Change | Stage |
 |---|---|
 | `task_suspension` table; `task_run.suspend_kind`; `model.SuspensionKind`; `model.DispatchStanding` | DT-S1 |
-| `durable` grant (since migration 120, `admission: durable`); `Config.MaxDurableRuns`; `Config.DurableIdleTimeout` | DT-S2 |
+| `durable` grant (since migration 121, `admission: durable`); `Config.MaxDurableRuns`; `Config.DurableIdleTimeout` | DT-S2 |
 | Session store on persistent storage on Kubernetes | DT-S3 |
 | `task.resume_on_deadline`; `resume_later` tool; `model.ResumeOn` (the `task_suspension.resume_on` wait target) with `ci`, `message`; `POST /api/tasks/{id}/resume-later` | DT-S4 |
 | `task_goal` table; `Template.Goal`; `propose_task.goal` | DT-S5 |
