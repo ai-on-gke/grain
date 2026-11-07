@@ -684,6 +684,14 @@ func defaultMirrorSandboxImage(ctx context.Context, sourceRef, mirrorRepo, targe
 
 	// Ensure sourceRef is present locally before tagging.
 	if _, err := runSandboxMirrorDocker(ctx, nil, "image", "inspect", "--format", "{{.Id}}", sourceRef); err != nil {
+		// A release-asset ref (grain/guest:sha-...) is a local tag that
+		// `docker load` of the release's tarball leaves behind; pulling it
+		// would ask Docker Hub for a name nobody here controls.
+		if localOnlyImageRef(sourceRef) {
+			return "", fmt.Errorf("%s is not in the local image store and names no registry host, so it is a release-asset tag to load, not an image to pull "+
+				"(docker would fetch it from Docker Hub): load the release again (scripts/release-assets.sh fetch <release> DIR && scripts/release-assets.sh load DIR) "+
+				"or push it with scripts/release-assets.sh mirror <release> %s", sourceRef, mirrorRepo)
+		}
 		_ = sandboxMirrorLogin(ctx, sourceRef)
 		if _, pullErr := runSandboxMirrorDocker(ctx, nil, "pull", sourceRef); pullErr != nil {
 			return "", fmt.Errorf("docker pull %s: %w", sourceRef, pullErr)
@@ -819,4 +827,30 @@ func logCustomSandboxImage(ctx context.Context, cfg Config, image, stock string,
 	}
 	log.Printf("grain daemon: custom sandbox image %s (Settings -> Sandboxes) in place of %s: %s",
 		image, orUnknownImage(stock), check.Contract.Summary)
+}
+
+// localOnlyImageRef reports whether ref is the kind of name a release
+// asset's `docker load` leaves behind (images.json's "ref", such as
+// grain/k8s-sandbox:sha-0123456789ab): namespaced, but naming no registry
+// host. Docker and kubelet both read such a name as docker.io/<ref>, a
+// Docker Hub namespace nobody here controls, so it must never be pulled
+// or handed to a pod (docs/release-assets.md). An image meant to come from
+// Docker Hub is named with an explicit docker.io/ host; a bare official
+// image (ubuntu:24.04) has no namespace and is not one of these.
+func localOnlyImageRef(ref string) bool {
+	ref = strings.TrimSpace(ref)
+	return ref != "" && strings.Contains(ref, "/") && registryauth.HostOf(ref) == ""
+}
+
+// refuseLocalOnlyPodImage is the error a Kubernetes backend fails with
+// when the image its pods would be created from is a release-asset local
+// ref: a cluster cannot `docker load`, and kubelet would pull the name
+// from Docker Hub.
+func refuseLocalOnlyPodImage(image, flag string) error {
+	if !localOnlyImageRef(image) {
+		return nil
+	}
+	return fmt.Errorf("refusing to create Kubernetes sandbox pods from %s: it names no registry host, so it is the local tag a release asset loads, "+
+		"and kubelet would pull it from Docker Hub. Push the release into a registry the cluster pulls from "+
+		"(scripts/release-assets.sh mirror <release> <registry/prefix>, or -sandbox-image-mirror) and name the pushed image with %s", image, flag)
 }

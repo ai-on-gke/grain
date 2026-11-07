@@ -634,6 +634,9 @@ func Run(ctx context.Context, cfg Config) error {
 		k8sInstance := k8sInstanceLabel(ctx, store)
 		k8sKubeconfig := EffectiveK8sKubeconfig(cfg)
 		k8sImage := startImage
+		if err := refuseLocalOnlyPodImage(k8sImage, "-k8s-sandbox-image"); err != nil {
+			return err
+		}
 		k8sWorkspace := EffectiveK8sWorkspace(cfg)
 		cpuOvercommit, memOvercommit := cfg.overcommitRatios()
 		sandboxes = orchestrator.NewK8sSandboxes(orchestrator.K8sConfig{
@@ -672,6 +675,9 @@ func Run(ctx context.Context, cfg Config) error {
 		k8sInstance := k8sInstanceLabel(ctx, store)
 		k8sKubeconfig := EffectiveK8sKubeconfig(cfg)
 		k8sGranuleImage := startImage
+		if err := refuseLocalOnlyPodImage(k8sGranuleImage, "-k8s-granule-image"); err != nil {
+			return err
+		}
 		k8sWorkspace := EffectiveK8sWorkspace(cfg)
 		var forwardedPortsFunc func() []int
 		if EffectiveK8sGitProxyHost(cfg) == "127.0.0.1" {
