@@ -627,31 +627,33 @@ export default function Actions({ t, config, act, onOpenTask }) {
         </AccessGate>
       )}
       {t.state !== "closed" && (
-        <TextField
-          select
-          size="small"
-          name="admission"
-          label="Admission"
-          value={normalizeAdmission(t.admission)}
-          disabled={Boolean(t.consoleSession)}
-          onChange={(e) =>
-            act(
-              () =>
-                api(`/api/tasks/${t.id}`, {
-                  method: "PATCH",
-                  body: JSON.stringify({ admission: e.target.value }),
-                }),
-              t.id,
-            )
-          }
-          sx={{ mt: 0.5 }}
-        >
-          {ADMISSION_OPTIONS.map((o) => (
-            <MenuItem key={o.value} value={o.value} title={o.description}>
-              {o.label}
-            </MenuItem>
-          ))}
-        </TextField>
+        <AccessGate scope="tasks:write" repo={t.repo}>
+          <TextField
+            select
+            size="small"
+            name="admission"
+            label="Admission"
+            value={normalizeAdmission(t.admission)}
+            disabled={Boolean(t.consoleSession)}
+            onChange={(e) =>
+              act(
+                () =>
+                  api(`/api/tasks/${t.id}`, {
+                    method: "PATCH",
+                    body: JSON.stringify({ admission: e.target.value }),
+                  }),
+                t.id,
+              )
+            }
+            sx={{ mt: 0.5 }}
+          >
+            {ADMISSION_OPTIONS.map((o) => (
+              <MenuItem key={o.value} value={o.value} title={o.description}>
+                {o.label}
+              </MenuItem>
+            ))}
+          </TextField>
+        </AccessGate>
       )}
       {/* "This fixes a red <base>" (ui.UpdateTaskRequest.FixesBaseBranch,
           grain/task-3451): while a base branch is red, grain makes the
