@@ -62,6 +62,7 @@ func TestClassifyEveryCategoryTheIssueNames(t *testing.T) {
 		"Dockerfile.relay":                "sandbox-images",
 		"tools/build/dockerfile":          "sandbox-images",
 		"scripts/setup.sh":                "setup-scripts",
+		"scripts/install-grain.sh":        "setup-scripts",
 		"./pkg/gitproxy/../gitproxy/a.go": "credential-proxy",
 	}
 	for p, want := range cases {
@@ -472,6 +473,9 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 		".grain/workflows/release.yml", ".github/workflows/release.yml",
 		".grain/workflows/promote.yml", ".github/workflows/promote.yml",
 		".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",
+		// v21: the release-asset publisher and the workflow that runs it
+		// on the train's tag pushes.
+		"scripts/release-assets.sh", ".github/workflows/release-train-assets.yml",
 	}
 	for _, p := range reviewed {
 		got := Classify([]string{p})
@@ -503,8 +507,8 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 // reach, the approval-callback tokens and the daemon's UI listeners. v16
 // classified none of them, so a change to any merged itself.
 func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v20" {
-		t.Errorf("Version = %q, want trust-boundary/v20", Version)
+	if Version != "trust-boundary/v21" {
+		t.Errorf("Version = %q, want trust-boundary/v21", Version)
 	}
 	for _, p := range []string{
 		"pkg/ui/access_roles.go",
@@ -553,8 +557,8 @@ func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
 // reference/policy, catalogue and template-grant admission files in
 // pkg/model/ classify under capabilities-secrets.
 func TestPlaybooksAndCapabilityAdmissionFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v20" {
-		t.Errorf("Version = %q, want trust-boundary/v20", Version)
+	if Version != "trust-boundary/v21" {
+		t.Errorf("Version = %q, want trust-boundary/v21", Version)
 	}
 	for _, p := range []string{
 		"pkg/playbooks/playbooks.go",
@@ -589,8 +593,8 @@ func TestPlaybooksAndCapabilityAdmissionFilesAreClassified(t *testing.T) {
 // bearer token model and lifecycle handlers classify under auth-routes, while
 // the provenance-only X-Grain-Client / FiledVia helpers stay unclassified.
 func TestOwnerTrustAndExternalAgentTokenFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v20" {
-		t.Errorf("Version = %q, want trust-boundary/v20", Version)
+	if Version != "trust-boundary/v21" {
+		t.Errorf("Version = %q, want trust-boundary/v21", Version)
 	}
 	for _, p := range []string{
 		"pkg/model/owner_trust.go",

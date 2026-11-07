@@ -33,6 +33,36 @@ async function task(page, id) {
   return response.json();
 }
 
+// stopSettled waits out the whole of Stop, not only its first half. Stop
+// (ui.Client.Stop) posts its comment and parks the task before it cancels
+// the run, and the parked comment outranks a live run in model.StateOf --
+// so the task reads awaiting_reply with turnStopped the moment /stop
+// answers, while the cancelled run is still unwinding and its attempt is
+// not finished yet. Reading the attempt then (or pressing Retry, which the
+// page offers on the same two facts) raced the orchestrator recording
+// it: on a busy runner the attempt came back with no detail at all, and
+// rc.1's nightly failed this spec in all three of its shards.
+async function stopSettled(page, id) {
+  await expect
+    .poll(
+      async () => {
+        const t = await task(page, id);
+        const attempt = t.attempts?.[0];
+        return {
+          turnStopped: !!t.turnStopped,
+          finished: !!attempt?.finishedAt,
+          detail: attempt?.detail ?? "",
+        };
+      },
+      { timeout: 15_000 },
+    )
+    .toEqual({
+      turnStopped: true,
+      finished: true,
+      detail: "turn stopped by user",
+    });
+}
+
 for (const [name, viewport] of Object.entries(WIDTHS)) {
   test(`a stopped turn is resumed by Retry at once (${name})`, async ({
     page,
@@ -58,11 +88,7 @@ for (const [name, viewport] of Object.entries(WIDTHS)) {
       expect(
         (await page.request.post(`/api/tasks/${id}/stop`)).ok(),
       ).toBeTruthy();
-      await expect
-        .poll(async () => (await task(page, id)).turnStopped, {
-          timeout: 15_000,
-        })
-        .toBe(true);
+      await stopSettled(page, id);
       const stopped = await task(page, id);
       expect(stopped.state).toBe("awaiting_reply");
       expect(stopped.attempts[0].detail).toBe("turn stopped by user");
@@ -143,9 +169,7 @@ test("Retry dispatches at once while another task holds a worker slot", async ({
     expect(
       (await page.request.post(`/api/tasks/${id}/stop`)).ok(),
     ).toBeTruthy();
-    await expect
-      .poll(async () => (await task(page, id)).turnStopped, { timeout: 15_000 })
-      .toBe(true);
+    await stopSettled(page, id);
 
     await page.goto(`/tasks/${id}`);
     const retry = page.getByRole("button", { name: "Retry", exact: true });

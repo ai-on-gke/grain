@@ -66,8 +66,11 @@ var releasePendingNotifier = model.PrincipalString(model.Principal{Kind: model.P
 var pendingTagPattern = regexp.MustCompile(`^(v[0-9]+\.[0-9]+\.[0-9]+)-pending$`)
 var releaseTagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 
-// releasePendingPolled is when each repository's tags were last read.
-var releasePendingPolled sync.Map // repo string -> time.Time
+// releasePendingPolled is when each repository's tags were last read,
+// keyed by the store (model.Store.ID) and the repository, so that two
+// stores in one process -- tests running side by side, or one test's two
+// -count iterations -- never hold each other's poll back.
+var releasePendingPolled sync.Map // store id | repo string -> time.Time
 
 // reconcileReleasePending reads, at most every
 // releasePendingPollInterval, the tags of every repository this
@@ -98,7 +101,7 @@ func reconcileReleasePending(ctx context.Context, deps Deps, now time.Time) erro
 		if err != nil || eff.CIMode != model.CIModeGitHub {
 			continue
 		}
-		key := cfg.Repo.String()
+		key := fmt.Sprintf("%d|%s", deps.Store.ID(), cfg.Repo.String())
 		if last, ok := releasePendingPolled.Load(key); ok && now.Sub(last.(time.Time)) < releasePendingPollInterval {
 			continue
 		}
