@@ -1209,10 +1209,10 @@ func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
-	if call, ok := agentCallFromContext(r.Context()); ok && call.external != nil && len(call.external.Repos) > 0 {
+	if call, ok := agentCallFromContext(r.Context()); ok && !call.grants.Allows("templates:read", "") {
 		filtered := make([]Template, 0, len(list))
 		for _, t := range list {
-			if t.Repo != "" && !call.grants.Allows("templates:read", t.Repo) {
+			if !templateAllowedForGrants(t, call.grants) {
 				continue
 			}
 			filtered = append(filtered, t)
@@ -1220,6 +1220,26 @@ func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
 		list = filtered
 	}
 	writeJSON(w, http.StatusOK, list)
+}
+
+func templateAllowedForGrants(t Template, grants APIGrantSet) bool {
+	if t.Repo != "" && !grants.Allows("templates:read", t.Repo) {
+		return false
+	}
+	if t.DeclaredIn != nil && t.DeclaredIn.Repo != "" && !grants.Allows("templates:read", t.DeclaredIn.Repo) {
+		return false
+	}
+	for _, repo := range t.Reads {
+		if repo != "" && !grants.Allows("templates:read", repo) {
+			return false
+		}
+	}
+	for _, wt := range t.Writes {
+		if wt.Repo != "" && !grants.Allows("templates:read", wt.Repo) {
+			return false
+		}
+	}
+	return true
 }
 
 // handleTemplateComposition takes the repo, the branch and the values

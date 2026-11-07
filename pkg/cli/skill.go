@@ -21,6 +21,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -249,7 +250,7 @@ func cmdSkillInstall(ctx context.Context, c *ui.HTTPClient, out *printer, sel se
 		Targets          []skillTarget `json:"targets"`
 	}{
 		Context:          ctxKey,
-		Server:           c.BaseURL,
+		Server:           skill.ScrubServerURL(c.BaseURL),
 		Version:          ver,
 		DeploymentDigest: digest,
 		Targets:          targets,
@@ -276,6 +277,11 @@ func assertSkillContainsNoSecrets(ctx context.Context, rendered string, c *ui.HT
 	}
 	if strings.Contains(rendered, "Authorization: Bearer ") {
 		return fmt.Errorf("refusing to write SKILL.md: rendered content contained a bearer header")
+	}
+	if u, err := url.Parse(strings.TrimSpace(c.BaseURL)); err == nil && u.User != nil {
+		if pw, ok := u.User.Password(); ok && pw != "" && strings.Contains(rendered, pw) {
+			return fmt.Errorf("refusing to write SKILL.md: rendered content contained URL credentials")
+		}
 	}
 	for _, tok := range []string{
 		strings.TrimSpace(c.Token),
@@ -560,7 +566,7 @@ func cmdSkillStatus(ctx context.Context, c *ui.HTTPClient, out *printer, sel sel
 	curVer := skillVersionFunc()
 	report := skillStatusReport{
 		Context:          ctxKey,
-		Server:           c.BaseURL,
+		Server:           skill.ScrubServerURL(c.BaseURL),
 		CurrentVersion:   curVer,
 		DeploymentDigest: liveDigest,
 		Files:            []skillFileReport{},

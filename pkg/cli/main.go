@@ -668,7 +668,7 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 	case "skill":
 		return cmdSkill(ctx, c, out, sel, cmdArgs)
 	case "mcp":
-		return cmdMCP(ctx, c, sel, cmdArgs)
+		return cmdMCP(ctx, c, fs, sel, cmdArgs)
 	case "list":
 		return cmdList(ctx, c, out, cmdArgs)
 	case "get", "show":

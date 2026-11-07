@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -54,9 +55,24 @@ func ParseMetadata(content []byte) (EmbeddedMeta, bool) {
 	return meta, meta.Version != "" && meta.DeploymentSHA256 != ""
 }
 
-// WriteFileAtomically writes data to path (0644) via a sibling temp file.
+// WriteFileAtomically writes data to path via a sibling temp file, preserving
+// existing file permissions or defaulting to 0644 when creating a new file.
 func WriteFileAtomically(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	return WriteFileWithMode(path, data, 0o644)
+}
+
+// WriteFileWithMode writes data atomically to path, preserving the existing
+// file mode if path already exists and otherwise applying defaultPerm.
+func WriteFileWithMode(path string, data []byte, defaultPerm os.FileMode) error {
+	perm := defaultPerm
+	if info, err := os.Stat(path); err == nil {
+		perm = info.Mode().Perm()
+	}
+	dirPerm := os.FileMode(0o755)
+	if perm&0o077 == 0 {
+		dirPerm = 0o700
+	}
+	if err := os.MkdirAll(filepath.Dir(path), dirPerm); err != nil {
 		return fmt.Errorf("creating directory for %s: %w", path, err)
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".grain-skill-*")
@@ -70,7 +86,7 @@ func WriteFileAtomically(path string, data []byte) error {
 		cleanup()
 		return err
 	}
-	if err := tmp.Chmod(0o644); err != nil {
+	if err := tmp.Chmod(perm); err != nil {
 		_ = tmp.Close()
 		cleanup()
 		return err
@@ -84,6 +100,17 @@ func WriteFileAtomically(path string, data []byte) error {
 		return err
 	}
 	return nil
+}
+
+// ScrubServerURL strips any embedded userinfo credentials from rawURL.
+func ScrubServerURL(rawURL string) string {
+	trimmed := strings.TrimSpace(rawURL)
+	u, err := url.Parse(trimmed)
+	if err != nil || u.User == nil {
+		return strings.TrimRight(trimmed, "/")
+	}
+	u.User = nil
+	return strings.TrimRight(u.String(), "/")
 }
 
 // RegisterMCPServer registers `grain mcp [--context <ctx>]` in the target
@@ -121,12 +148,12 @@ func registerJSONMCP(configPath, grainBin string, args []string) error {
 	if err != nil {
 		return err
 	}
-	return WriteFileAtomically(configPath, append(encoded, '\n'))
+	return WriteFileWithMode(configPath, append(encoded, '\n'), 0o600)
 }
 
 var (
-	codexGrainTableHeader = regexp.MustCompile(`(?m)^\[mcp_servers\.(?:grain|"grain")\]\s*$`)
-	anyTOMLTableHeader    = regexp.MustCompile(`(?m)^\[[^\]]+\]\s*$`)
+	codexGrainTableHeader = regexp.MustCompile(`(?m)^\s*\[mcp_servers\.(?:grain|"grain")\]\s*(?:#.*)?$`)
+	anyTOMLTableHeader    = regexp.MustCompile(`(?m)^\s*\[\[?[^\]\r\n]+\]\]?\s*(?:#.*)?$`)
 )
 
 func registerCodexTOML(configPath, grainBin string, args []string) error {
@@ -171,7 +198,7 @@ func registerCodexTOML(configPath, grainBin string, args []string) error {
 			updated = trimmed + "\n\n" + stanza
 		}
 	}
-	return WriteFileAtomically(configPath, []byte(updated))
+	return WriteFileWithMode(configPath, []byte(updated), 0o600)
 }
 
 // FormatDeploymentSection renders the live deployment metadata section of
@@ -183,7 +210,7 @@ func FormatDeploymentSection(ctxLabel, baseURL string, who ui.AuthWhoamiResponse
 	var b strings.Builder
 	b.WriteString("## 5. Active Deployment Metadata\n\n")
 	fmt.Fprintf(&b, "- **Context:** `%s`\n", ctxLabel)
-	fmt.Fprintf(&b, "- **Server:** `%s`\n", strings.TrimRight(baseURL, "/"))
+	fmt.Fprintf(&b, "- **Server:** `%s`\n", ScrubServerURL(baseURL))
 	if cfg.EnvironmentName != "" {
 		fmt.Fprintf(&b, "- **Deployment name:** %s\n", cfg.EnvironmentName)
 	}

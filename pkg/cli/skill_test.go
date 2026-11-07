@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"io"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -489,5 +490,112 @@ func TestStaleSkillStderrNoticeNeverCorruptsJSONStdout(t *testing.T) {
 	wantNotice := "note: grain skill for context team is stale; run 'grain skill install'\n"
 	if stderr != wantNotice {
 		t.Errorf("digest-stale list --json stderr = %q, want %q", stderr, wantNotice)
+	}
+}
+
+func TestGrainSkillInstallPreservesMCPPermissionsTOMLTablesAndScrubsURLUserinfo(t *testing.T) {
+	homeDir, _, rawToken, _ := setupSkillTestEnv(t)
+
+	// 1. Existing 0600 Claude JSON and Codex TOML MCP configs must retain 0600,
+	// newly created MCP configs must default to 0600, and Codex TOML updates
+	// must preserve [[array_of_tables]] and commented table headers.
+	claudeMCP := filepath.Join(homeDir, ".claude.json")
+	if err := os.WriteFile(claudeMCP, []byte(`{"mcpServers":{"github":{"command":"gh-mcp","env":{"GH_TOKEN":"secret-123"}}}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	codexMCP := filepath.Join(homeDir, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(codexMCP), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	initialTOML := strings.Join([]string{
+		`[mcp_servers.grain]`,
+		`command = "old-grain"`,
+		`args = ["mcp"]`,
+		``,
+		`[[profiles]]`,
+		`name = "work"`,
+		``,
+		`[mcp_servers.other] # keep inline comment`,
+		`command = "other"`,
+		``,
+	}, "\n")
+	if err := os.WriteFile(codexMCP, []byte(initialTOML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, flags := range [][]string{
+		{"--claude", "--mcp"},
+		{"--codex", "--mcp"},
+		{"--gemini", "--mcp"},
+	} {
+		_ = captureStdout(t, func() {
+			if err := runCLI(append([]string{"skill", "install", "--json"}, flags...)); err != nil {
+				t.Fatalf("grain skill install %v: %v", flags, err)
+			}
+		})
+	}
+
+	geminiMCP := filepath.Join(homeDir, ".gemini", "settings.json")
+	for _, p := range []string{claudeMCP, codexMCP, geminiMCP} {
+		info, err := os.Stat(p)
+		if err != nil {
+			t.Fatalf("stat %s: %v", p, err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Errorf("%s mode = %04o, want 0600", p, got)
+		}
+	}
+
+	afterTOMLBytes, err := os.ReadFile(codexMCP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterTOML := string(afterTOMLBytes)
+	for _, want := range []string{
+		`command = "/usr/local/bin/grain"`,
+		`[[profiles]]`,
+		`name = "work"`,
+		`[mcp_servers.other] # keep inline comment`,
+	} {
+		if !strings.Contains(afterTOML, want) {
+			t.Errorf("updated Codex config.toml missing %q:\n%s", want, afterTOML)
+		}
+	}
+
+	// 2. Embedded URL userinfo credentials in -server must never be written to SKILL.md
+	// or echoed in --json output.
+	ctxs, err := loadContexts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(ctxs.Contexts["team"].Server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.User = url.UserPassword("deploy-bot", "url-embedded-secret-xyz")
+	customDir := filepath.Join(t.TempDir(), "url-scrub-skill")
+	jsonOut := captureStdout(t, func() {
+		if err := runCLI([]string{
+			"-server", u.String(),
+			"-token", rawToken,
+			"skill", "install", "--dir", customDir, "--json",
+		}); err != nil {
+			t.Fatalf("grain skill install with URL userinfo: %v", err)
+		}
+	})
+	skillRaw, err := os.ReadFile(filepath.Join(customDir, "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, surface := range []struct {
+		name string
+		text string
+	}{
+		{"install --json", jsonOut},
+		{"SKILL.md", string(skillRaw)},
+	} {
+		if strings.Contains(surface.text, "url-embedded-secret-xyz") || strings.Contains(surface.text, "deploy-bot") {
+			t.Errorf("%s leaked URL userinfo credentials:\n%s", surface.name, surface.text)
+		}
 	}
 }

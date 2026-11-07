@@ -46,7 +46,7 @@ var (
 	maxMCPWaitSlice     = 90 * time.Second
 )
 
-func cmdMCP(ctx context.Context, c *ui.HTTPClient, sel selectedContext, args []string) error {
+func cmdMCP(ctx context.Context, c *ui.HTTPClient, parentFS *flag.FlagSet, sel selectedContext, args []string) error {
 	fs := flag.NewFlagSet("grain mcp", flag.ContinueOnError)
 	ctxFlag := fs.String("context", sel.name, "the named context to use ($"+contextEnvVar+"; see `grain context list`)")
 	pos, err := parseArgs(fs, args)
@@ -57,16 +57,22 @@ func cmdMCP(ctx context.Context, c *ui.HTTPClient, sel selectedContext, args []s
 		return err
 	}
 	if name := strings.TrimSpace(*ctxFlag); name != "" && name != sel.name {
-		dummyFS := flag.NewFlagSet("grain", flag.ContinueOnError)
+		targetFS := parentFS
+		if targetFS == nil {
+			targetFS = flag.NewFlagSet("grain", flag.ContinueOnError)
+		}
 		server := c.BaseURL
-		nextSel, _, err := resolveTarget(dummyFS, &server, name)
+		nextSel, _, err := resolveTarget(targetFS, &server, name)
 		if err != nil {
 			return err
 		}
 		nextClient := ui.NewHTTPClient(server)
 		nextClient.HTTP = c.HTTP
 		nextClient.RetryPolicy = c.RetryPolicy
-		useContextCredential(nextClient, nextSel, "")
+		nextClient.Token = c.Token
+		nextClient.Audience = c.Audience
+		nextClient.User = c.User
+		useContextCredential(nextClient, nextSel, tokenSource(c.Token))
 		c = nextClient
 	}
 	return serveExternalMCP(ctx, c, os.Stdin, os.Stdout)

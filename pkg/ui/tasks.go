@@ -2328,7 +2328,87 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if authenticated || singleTenantTrusted(r) {
 		resp.InstallTrackSignals = det.Signals
 	}
+	if call, ok := agentCallFromContext(r.Context()); ok {
+		narrowConfigForAgentCall(&resp, call)
+	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func narrowConfigForAgentCall(resp *configResponse, call agentCall) {
+	if !call.grants.Has("settings:read") {
+		resp.Deployment = nil
+		resp.PromptExtension = ""
+	}
+	if call.grants.Allows("settings:read", "") || call.grants.Allows("deployment:read", "") {
+		return
+	}
+	repoAllowed := func(repo string) bool {
+		repo = strings.TrimSpace(repo)
+		return repo != "" && (call.grants.Allows("settings:read", repo) || call.grants.Allows("deployment:read", repo))
+	}
+	filterRepos := func(in []string) []string {
+		if len(in) == 0 {
+			return nil
+		}
+		var out []string
+		for _, r := range in {
+			if repoAllowed(r) {
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+	resp.TargetRepos = filterRepos(resp.TargetRepos)
+	if resp.DefaultTarget != "" && !repoAllowed(resp.DefaultTarget) {
+		resp.DefaultTarget = ""
+	}
+	if resp.ConfigRepo != "" && !repoAllowed(resp.ConfigRepo) {
+		resp.ConfigRepo = ""
+	}
+	if resp.ExternalConfigRepo != "" && !repoAllowed(resp.ExternalConfigRepo) {
+		resp.ExternalConfigRepo = ""
+		resp.ExternalConfigBranch = ""
+	}
+	resp.ReposWithWorkflows = filterRepos(resp.ReposWithWorkflows)
+	resp.ReposWithCICapabilities = filterRepos(resp.ReposWithCICapabilities)
+	resp.ReposWithPromptExtension = filterRepos(resp.ReposWithPromptExtension)
+	resp.ReposWithSetupCommand = filterRepos(resp.ReposWithSetupCommand)
+	resp.ReposWithReleaseSettings = filterRepos(resp.ReposWithReleaseSettings)
+	for repo := range resp.RepoDefaultAdmissions {
+		if !repoAllowed(repo) {
+			delete(resp.RepoDefaultAdmissions, repo)
+		}
+	}
+	if len(resp.RepoDefaultAdmissions) == 0 {
+		resp.RepoDefaultAdmissions = nil
+	}
+	for repo := range resp.RepoDefaultCapabilities {
+		if !repoAllowed(repo) {
+			delete(resp.RepoDefaultCapabilities, repo)
+		}
+	}
+	if len(resp.RepoDefaultCapabilities) == 0 {
+		resp.RepoDefaultCapabilities = nil
+	}
+	if resp.Deployment != nil {
+		resp.Deployment.TargetRepos = filterRepos(resp.Deployment.TargetRepos)
+		if resp.Deployment.ConfigRepo != "" && !repoAllowed(resp.Deployment.ConfigRepo) {
+			resp.Deployment.ConfigRepo = ""
+			resp.Deployment.ConfigCloneURL = ""
+			resp.Deployment.CloneCommand = ""
+		}
+		filterAssoc := func(in []TeamRepoAssociation) []TeamRepoAssociation {
+			var out []TeamRepoAssociation
+			for _, a := range in {
+				if repoAllowed(a.Repo) {
+					out = append(out, a)
+				}
+			}
+			return out
+		}
+		resp.Deployment.Repos = filterAssoc(resp.Deployment.Repos)
+		resp.Deployment.AssociatedRepos = filterAssoc(resp.Deployment.AssociatedRepos)
+	}
 }
 
 // handleListTasks answers the live task list -- every task not closed,
