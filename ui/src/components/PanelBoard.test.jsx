@@ -246,6 +246,39 @@ describe("PanelBoard", () => {
     expect(within(waiting).getByText("1")).toBeInTheDocument();
   });
 
+  // Closed work is paged in (closedTasks.js, grain task 3051): while some
+  // of it is not held, a count over a question that lets closed tasks
+  // through is a floor, and says so, rather than reading as the total.
+  it("marks a count over closed work as a floor while closed tasks are still paged in", () => {
+    localStorage.setItem(
+      BOARD_STORAGE_KEY,
+      JSON.stringify([
+        { id: "c1", title: "Working", states: ["running"] },
+        { id: "c3", title: "Done", states: ["closed"] },
+      ]),
+    );
+    const done = task({ id: 4, title: "Done already", state: "closed" });
+    draw({
+      board: board([
+        { kind: "states", title: "Everything" },
+        { kind: "list", title: "Open work", query: "f=state:none:closed" },
+      ]),
+      tasks: [...tasks, done],
+      closedPartial: true,
+    });
+    const doneCol = screen.getByText("Done").closest(".panel-state");
+    expect(within(doneCol).getByText("1+")).toBeInTheDocument();
+    const working = screen.getByText("Working").closest(".panel-state");
+    expect(within(working).getByText("2")).toBeInTheDocument();
+    const everything = screen.getByText("Everything").closest(".panel");
+    expect(everything.querySelector(".panel-header .count")).toHaveTextContent(
+      /^4\+$/,
+    );
+    // A panel whose own question sets closed work aside counts it all.
+    const open = screen.getByText("Open work").closest(".panel");
+    expect(open.querySelector(".panel-header .count")).toHaveTextContent(/^3$/);
+  });
+
   // 2026-11-04 boards walkthrough: the running column's grain mark is
   // labelled "Running" for its tooltip, and read out beside the
   // column's own title it named the count "2 Running Running".

@@ -504,7 +504,7 @@ var routeQueries = map[string]map[string]string{
 	},
 	"GET /api/capability-servers/gchat-usage": {"id": "The gchat capability server's capability_id."},
 	"GET /api/capability-methods":             {"kind": "The run kind the grants are for (task, process or ci): each method then carries policyRefusal, why the capability policy denies it that run.", "repo": "With kind, the repository (owner/name) the run is on."},
-	"GET /api/notifications":                  {"open": "1 for only notifications not yet cleared.", "after": "Only notifications after this id.", "family": "Only this family (the subject before its first ':')."},
+	"GET /api/notifications":                  {"open": "1 for only notifications not yet cleared.", "after": "Only notifications after this id.", "family": "Only this family (the subject before its first ':').", "fields": "list for each body cut to its first line, as the UI's lists draw it (a pending release's is kept whole)."},
 	"GET /api/memory/documents/{name}":        {"repo": "The repository (owner/name) whose document to read; the deployment's without one."},
 	"GET /api/release-notes/stats":            {"period": "The week whose figures to read; the week just ended without one."},
 	"POST /api/repos":                         {"team": "The team whose targets to add to; the default team without one."},
