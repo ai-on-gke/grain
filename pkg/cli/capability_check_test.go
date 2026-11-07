@@ -69,7 +69,7 @@ func TestCapabilityCheckOfRetiredGeminiKeyFindsNoProvider(t *testing.T) {
 }
 
 // github-sandbox was retired onto the in-process github server's
-// github#sandbox-repo (schema migration 121), so no deployment registers a
+// github#sandbox-repo (schema migration 122), so no deployment registers a
 // provider for the bare name any more.
 func TestCapabilityCheckOfRetiredGitHubSandboxFindsNoProvider(t *testing.T) {
 	t.Parallel()

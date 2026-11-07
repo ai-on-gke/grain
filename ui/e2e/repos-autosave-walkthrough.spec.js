@@ -84,8 +84,8 @@ test.describe("Walkthrough: Auto-Saving Repo Pane & Sidebar Release Stamp (docs/
       });
       await expect(capsSelect).toBeVisible();
       await capsSelect.click();
-      // Select "Durable" from capabilities menu list. Not GCP key,
-      // Read issues, or Self debug: the demo makes those deployment defaults,
+      // Select "Durable" from capabilities menu list. Not GCP key or
+      // Self debug: the demo makes those deployment defaults,
       // which every repo has on whatever it says, so choosing one here would
       // prove nothing saved.
       const durableOption = page.getByRole("option", {

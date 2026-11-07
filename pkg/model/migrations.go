@@ -853,6 +853,11 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     121,
+		Description: "rewrite stored read-issues grants, repo_config.ci_capabilities and capability_policy included, to https://grain.dev/capabilities/github#read-issues={} (the in-process capability is retired)",
+		Up:          migrateReadIssuesGrants,
+	},
+	{
+		Version:     122,
 		Description: "rewrite stored github-sandbox grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/github#sandbox-repo={} (the in-process github-sandbox is retired)",
 		Up:          migrateGitHubSandboxGrants,
 	},

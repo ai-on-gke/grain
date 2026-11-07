@@ -19,7 +19,13 @@ import {
   Button,
   CircularProgress,
   Divider,
+  FormControl,
+  FormControlLabel,
+  FormHelperText,
+  FormLabel,
   MenuItem,
+  Radio,
+  RadioGroup,
   Stack,
   TextField,
   Typography,
@@ -71,6 +77,28 @@ export function foldLegacyModel(backend) {
   const models = [model, ...(backend.models || []).filter((m) => m !== model)];
   return { ...rest, models };
 }
+
+// credentialsOf is a connection's credentials (model.AgentBackend.
+// Credentials): "ambient" for the agent CLI's own login on the host it
+// runs on (authMode "ambient", directly or through the connection it
+// reuses), "stored" for a key, token or auth.json grain holds, and ""
+// for a new connection that has chosen nothing yet.
+export function credentialsOf(backend, backends = []) {
+  const mode = backend.credentialBackendId
+    ? backends.find((b) => b.id === backend.credentialBackendId)?.authMode
+    : backend.authMode;
+  if (mode === "ambient") return "ambient";
+  if (!backend.credentialBackendId && !backend.authMode) return "";
+  return "stored";
+}
+
+// ambientLoginLabels name the login an ambient connection of each
+// framework spends.
+const ambientLoginLabels = {
+  antigravity: "Antigravity (agy)",
+  claude: "Claude Code",
+  codex: "Codex",
+};
 
 function authenticationValue(backend) {
   if (backend.credentialBackendId)
@@ -150,6 +178,36 @@ export default function ModelBackendPage({
       !candidate.credentialBackendId,
   );
   const authValue = authenticationValue(draft);
+  // The Credentials choice as the person last made it, until the
+  // connection says it: Ambient waits for a host to be picked, and Stored
+  // for a method.
+  const [credentialsChoice, setCredentialsChoice] = useState(null);
+  const credentials = credentialsChoice ?? credentialsOf(draft, backends);
+  const chooseCredentials = (value) => {
+    setCredentialsChoice(value);
+    if (value === "ambient" && latest.current.hostd) {
+      chooseAuthentication("ambient");
+    }
+  };
+  // placeAmbient is picking the host an ambient connection's login is on
+  // from the Credentials section: the placement and the credentials are
+  // saved together, since neither is accepted without the other.
+  const placeAmbient = async (values) => {
+    if (!values.hostd) {
+      change(values);
+      return;
+    }
+    const next = {
+      ...latest.current,
+      ...values,
+      credentialBackendId: undefined,
+      authMode: "ambient",
+    };
+    if (await saveDraft(next)) {
+      setCredentialsChoice(null);
+      setCatalogRevision((revision) => revision + 1);
+    }
+  };
   const typeDirty = persisted && draft.framework !== persisted.framework;
   const dirty =
     unfinished ||
@@ -246,7 +304,10 @@ export default function ModelBackendPage({
               ? value || undefined
               : undefined,
         };
-    if (await saveDraft(next)) setCatalogRevision((revision) => revision + 1);
+    if (await saveDraft(next)) {
+      setCredentialsChoice(null);
+      setCatalogRevision((revision) => revision + 1);
+    }
   };
 
   const credentialLabel =
@@ -402,80 +463,147 @@ export default function ModelBackendPage({
               </Alert>
             ) : (
               <Stack spacing={2}>
-                <ReadOnlyFieldset disabled={configReadOnly}>
-                  <SearchSelect
-                    label="Authentication method"
-                    shrinkLabel
-                    placeholder={
-                      requiresChoice
-                        ? "Choose an authentication method"
-                        : undefined
-                    }
-                    value={authValue}
-                    disabled={saving || configReadOnly}
-                    onChange={(next) => chooseAuthentication(next)}
-                    options={[
-                      ...(requiresChoice
-                        ? [
-                            {
-                              value: "",
-                              label: "Choose an authentication method",
-                              disabled: true,
-                            },
-                          ]
-                        : []),
-                      ...(draft.framework === "antigravity"
-                        ? [
-                            {
-                              value: "ambient",
-                              label: "Ambient Antigravity login",
-                            },
-                            { value: "api_key", label: "Gemini API key" },
-                          ]
-                        : []),
-                      ...(draft.framework === "codex"
-                        ? [
-                            { value: "api_key", label: "OpenAI API key" },
-                            {
-                              value: "subscription",
-                              label: "ChatGPT subscription (auth.json)",
-                            },
-                          ]
-                        : []),
-                      ...(draft.framework === "claude"
-                        ? [
-                            {
-                              value: "api_key",
-                              label: "Claude Code OAuth token",
-                            },
-                            {
-                              value: "vertex",
-                              label: "Google Cloud Vertex AI",
-                            },
-                          ]
-                        : []),
-                      // Named as the connection list names it, by id when it
-                      // has no name: every source shares this one's framework,
-                      // so modelBackendLabel's framework fallback gave several
-                      // nameless ones the same "Reuse authentication from
-                      // Claude" and no way to tell them apart.
-                      ...sources.map((source) => ({
-                        value: `reuse:${source.id}`,
-                        label: `Reuse authentication from ${source.name || source.id}`,
-                      })),
-                    ]}
-                  />
-                </ReadOnlyFieldset>
-                {!authenticationChosen && (
+                {requiresChoice && (
+                  <ReadOnlyFieldset disabled={configReadOnly}>
+                    <FormControl data-testid="connection-credentials">
+                      <FormLabel id="connection-credentials-label">
+                        Credentials
+                      </FormLabel>
+                      <RadioGroup
+                        row
+                        aria-labelledby="connection-credentials-label"
+                        value={credentials}
+                        onChange={(event) =>
+                          chooseCredentials(event.target.value)
+                        }
+                      >
+                        <FormControlLabel
+                          value="stored"
+                          disabled={saving || configReadOnly}
+                          control={<Radio />}
+                          label="Stored"
+                        />
+                        <FormControlLabel
+                          value="ambient"
+                          disabled={saving || configReadOnly}
+                          control={<Radio />}
+                          label="Ambient"
+                        />
+                      </RadioGroup>
+                      <FormHelperText>
+                        {credentials === "ambient"
+                          ? "The CLI's own login on the host this connection runs on. " +
+                            "Grain stores no secret for it, so it needs a host."
+                          : "A key, token or auth.json Grain holds for this connection."}
+                      </FormHelperText>
+                    </FormControl>
+                  </ReadOnlyFieldset>
+                )}
+                {credentials === "ambient" && requiresChoice && (
+                  <>
+                    {!draft.hostd || authValue !== "ambient" ? (
+                      <ReadOnlyFieldset disabled={configReadOnly}>
+                        <ConnectionHostdField
+                          backend={{ ...draft, authMode: "ambient" }}
+                          onChange={placeAmbient}
+                          noFallback
+                          disabled={saving || configReadOnly}
+                          emptyLabel="Choose the host whose login it spends"
+                          helperText={
+                            "Ambient credentials are the CLI's login on one host: " +
+                            "pick it, and the connection is saved running there."
+                          }
+                          testId="credentials-hostd"
+                        />
+                        {draft.hostd && authValue !== "ambient" && (
+                          <Button
+                            type="button"
+                            variant="contained"
+                            disabled={saving}
+                            onClick={() => chooseAuthentication("ambient")}
+                            sx={{ mt: 1 }}
+                          >
+                            Use the login on host {draft.hostd}
+                          </Button>
+                        )}
+                      </ReadOnlyFieldset>
+                    ) : (
+                      <Alert severity="info" data-testid="credentials-ambient">
+                        Grain will use the{" "}
+                        {ambientLoginLabels[draft.framework] || "CLI"} login on
+                        host {draft.hostd}. A stored key is ignored.
+                      </Alert>
+                    )}
+                  </>
+                )}
+                {credentials !== "ambient" && (
+                  <ReadOnlyFieldset disabled={configReadOnly}>
+                    <SearchSelect
+                      label="Authentication method"
+                      shrinkLabel
+                      placeholder={
+                        requiresChoice
+                          ? "Choose an authentication method"
+                          : undefined
+                      }
+                      value={authValue}
+                      disabled={saving || configReadOnly}
+                      onChange={(next) => chooseAuthentication(next)}
+                      options={[
+                        ...(requiresChoice
+                          ? [
+                              {
+                                value: "",
+                                label: "Choose an authentication method",
+                                disabled: true,
+                              },
+                            ]
+                          : []),
+                        ...(draft.framework === "antigravity"
+                          ? [{ value: "api_key", label: "Gemini API key" }]
+                          : []),
+                        ...(draft.framework === "codex"
+                          ? [
+                              { value: "api_key", label: "OpenAI API key" },
+                              {
+                                value: "subscription",
+                                label: "ChatGPT subscription (auth.json)",
+                              },
+                            ]
+                          : []),
+                        ...(draft.framework === "claude"
+                          ? [
+                              {
+                                value: "api_key",
+                                label: "Claude Code OAuth token",
+                              },
+                              {
+                                value: "vertex",
+                                label: "Google Cloud Vertex AI",
+                              },
+                            ]
+                          : []),
+                        // Named as the connection list names it, by id when it
+                        // has no name: every source shares this one's framework,
+                        // so modelBackendLabel's framework fallback gave several
+                        // nameless ones the same "Reuse authentication from
+                        // Claude" and no way to tell them apart.
+                        // An ambient source is a login on its own host, which
+                        // is nothing to reuse: Ambient above is that choice.
+                        ...sources
+                          .filter((source) => source.authMode !== "ambient")
+                          .map((source) => ({
+                            value: `reuse:${source.id}`,
+                            label: `Reuse authentication from ${source.name || source.id}`,
+                          })),
+                      ]}
+                    />
+                  </ReadOnlyFieldset>
+                )}
+                {!authenticationChosen && credentials !== "ambient" && (
                   <Alert severity="info">
                     Choose one authentication method. Only the selected method
                     will be used.
-                  </Alert>
-                )}
-                {authValue === "ambient" && (
-                  <Alert severity="info">
-                    Grain will use the Antigravity login already available to
-                    the daemon. A stored Gemini API key is ignored.
                   </Alert>
                 )}
                 {authValue === "vertex" && (
@@ -659,7 +787,16 @@ export default function ModelBackendPage({
                         helperText="Maximum number of concurrent agents on this connection (4 by default)"
                         fullWidth
                       />
-                      <ConnectionHostdField backend={draft} onChange={change} />
+                      <ConnectionHostdField
+                        backend={draft}
+                        onChange={change}
+                        {...(credentialsOf(draft, backends) === "ambient"
+                          ? {
+                              emptyLabel:
+                                "None (not allowed: its credentials are ambient)",
+                            }
+                          : {})}
+                      />
                       {cliBinary && (
                         <TextField
                           label="CLI path (optional)"

@@ -32,14 +32,13 @@ const (
 	PackagePublishRef         = ReleaseCapabilityServerID + "#package-publish"
 )
 
-// The in-process github server and its sandbox-repo method: the ephemeral
-// scratch repository the retired github-sandbox provider minted
-// (schema migration 121).
+// The in-process github server's (GitHubCapabilityServerID) sandbox-repo
+// method: the ephemeral scratch repository the retired github-sandbox
+// provider minted (schema migration 122).
 const (
-	GitHubCapabilityServerID = "https://grain.dev/capabilities/github"
-	GitHubSandboxRepoMethod  = "sandbox-repo"
-	GitHubSandboxRepoRef     = GitHubCapabilityServerID + "#" + GitHubSandboxRepoMethod
-	GitHubSandboxRepoGrant   = GitHubSandboxRepoRef + "={}"
+	GitHubSandboxRepoMethod = "sandbox-repo"
+	GitHubSandboxRepoRef    = GitHubCapabilityServerID + "#" + GitHubSandboxRepoMethod
+	GitHubSandboxRepoGrant  = GitHubSandboxRepoRef + "={}"
 )
 
 // CIGrantRule is when a CI job may be handed a capability reference, as

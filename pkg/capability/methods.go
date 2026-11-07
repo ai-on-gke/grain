@@ -42,7 +42,10 @@ type Method struct {
 	// on, such as https://grain.dev/capabilities/corp. Every method
 	// registered with one Server is served by the one in-process server.
 	// It may not be one of core's own (model.GrainCapabilityServerID,
-	// model.RepoCapabilityServerID).
+	// model.RepoCapabilityServerID). model.GitHubCapabilityServerID takes
+	// contributed methods (#sandbox-repo) beside core's own #read-issues,
+	// which grainserver serves together as the one in-process github
+	// server; a contributed method may not take core's method name.
 	Server string
 	// Spec is the method: its name, arguments and Mint, as
 	// protocol.NewMethod takes them.
@@ -105,6 +108,9 @@ var registeredMethods = map[string]Method{}
 func Register(m Method) (unregister func()) {
 	if m.Server == model.GrainCapabilityServerID || m.Server == model.RepoCapabilityServerID {
 		panic(fmt.Sprintf("capability: Register(%q): core's own in-process servers take no contributed methods", m.Ref()))
+	}
+	if m.Server == model.GitHubCapabilityServerID && m.Spec.Name == model.GitHubReadIssuesMethod {
+		panic(fmt.Sprintf("capability: Register(%q): core's own github server already answers #%s", m.Ref(), m.Spec.Name))
 	}
 	if _, err := protocol.ParseRef(m.Ref()); err != nil {
 		panic(fmt.Sprintf("capability: Register(%q): %v", m.Ref(), err))
@@ -218,22 +224,54 @@ func MethodServer(id string) (*protocol.Server, bool, error) {
 	return srv, true, nil
 }
 
+// ContributedMethods is the methods registered on id, as the
+// protocol.Methods that serve them, for a core server that answers
+// contributed methods beside its own (grainserver's github server, whose
+// #read-issues is core's). Like MethodServer's server, each is built once
+// for as long as what is registered on id stays the same, so every server
+// built around them shares one lease table per method: a release_ reaches
+// the lease its mint recorded however many times the core server is
+// rebuilt in between. It is nil when nothing is registered on id.
+func ContributedMethods(id string) ([]*protocol.Method, error) {
+	builtMu.Lock()
+	methods, gen := builtMethods[id], builtGen
+	builtMu.Unlock()
+	if methods != nil {
+		return methods, nil
+	}
+	methods, err := buildContributedMethods(id)
+	if err != nil || len(methods) == 0 {
+		return nil, err
+	}
+	builtMu.Lock()
+	defer builtMu.Unlock()
+	if cached := builtMethods[id]; cached != nil {
+		return cached, nil
+	}
+	if gen == builtGen {
+		builtMethods[id] = methods
+	}
+	return methods, nil
+}
+
 var (
-	builtMu  sync.Mutex
-	built    = map[string]*protocol.Server{}
-	builtGen int
+	builtMu      sync.Mutex
+	built        = map[string]*protocol.Server{}
+	builtMethods = map[string][]*protocol.Method{}
+	builtGen     int
 )
 
-// forgetMethodServer drops id's built server, for the next MethodServer
-// to build from what is registered then.
+// forgetMethodServer drops id's built server and methods, for the next
+// MethodServer or ContributedMethods to build from what is registered then.
 func forgetMethodServer(id string) {
 	builtMu.Lock()
 	defer builtMu.Unlock()
 	delete(built, id)
+	delete(builtMethods, id)
 	builtGen++
 }
 
-func buildMethodServer(id string) (*protocol.Server, bool, error) {
+func buildContributedMethods(id string) ([]*protocol.Method, error) {
 	var methods []*protocol.Method
 	for _, m := range Methods() {
 		if m.Server != id {
@@ -241,9 +279,17 @@ func buildMethodServer(id string) (*protocol.Server, bool, error) {
 		}
 		pm, err := protocol.NewMethod(m.Spec)
 		if err != nil {
-			return nil, true, fmt.Errorf("capability %s: building #%s: %w", id, m.Spec.Name, err)
+			return nil, fmt.Errorf("capability %s: building #%s: %w", id, m.Spec.Name, err)
 		}
 		methods = append(methods, pm)
+	}
+	return methods, nil
+}
+
+func buildMethodServer(id string) (*protocol.Server, bool, error) {
+	methods, err := ContributedMethods(id)
+	if err != nil {
+		return nil, true, err
 	}
 	if len(methods) == 0 {
 		return nil, false, nil

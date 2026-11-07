@@ -1676,7 +1676,7 @@ func (c *Client) ciCapabilityIDs() []string {
 	}
 	// A capability-server method declaring a CI grant rule with no
 	// provider left in the catalog (github#sandbox-repo, retired from
-	// github-sandbox by schema migration 121) is offered as its own grant:
+	// github-sandbox by schema migration 122) is offered as its own grant:
 	// the repository's list is what grants it to a CI job, so dropping it
 	// here would leave no picker that can.
 	seen := make(map[string]bool, len(ids))

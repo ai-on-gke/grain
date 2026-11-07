@@ -62,9 +62,6 @@ git clone -q "$url" "$dir" || fail "could not clone $url"
 cd "$dir" || fail "no $dir"
 git fetch -q --tags --force origin || fail "could not fetch origin's tags"
 
-"$grain" ci list --repo "$repo" --ref main --provider github-actions --format github --limit 500 > "$out/runs.json" ||
-  fail "grain ci list could not read main's GitHub Actions runs"
-
 # The rc the train will judge: the newest vX.Y.Z-rc.N with neither a
 # -discarded tag nor its vX.Y.Z (or vX.Y.Z-pending) beside it. If this
 # names a different rc from the train's own choice, the train reads no
@@ -79,8 +76,48 @@ while read -r t; do
   rc="$t"
 done < <(git tag -l 'v*-rc.*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$' | sort -V)
 
-# The newest dropped rc's commit, whose grain/rc-hold holds the next rc.
-dropped="$(git tag -l 'v*-rc.*-discarded' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+-discarded$' | sed 's/-discarded$//' | sort -V | tail -n 1)"
+# The newest dropped rc of an unreleased version, whose grain/rc-hold holds
+# the next rc when nothing is currently qualifying.
+dropped=""
+while read -r t; do
+  [ -n "$t" ] || continue
+  v="${t%-rc.*}"
+  git rev-parse -q --verify "refs/tags/$v" >/dev/null && continue
+  git rev-parse -q --verify "refs/tags/$v-pending" >/dev/null && continue
+  dropped="$t"
+done < <(git tag -l 'v*-rc.*-discarded' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+-discarded$' | sed 's/-discarded$//' | sort -V)
+
+# Stage 0 (candidate-gate.sh select-lkg) reads only the required workflows on
+# the active cut branch -- main, or release/vX.Y.Z once rc.2 has been dropped
+# and its convergence branch exists -- so query each required workflow directly
+# rather than letting unrelated workflows on main crowd them out of one page.
+cut_branch=main
+required="${CANDIDATE_GATE_REQUIRED-tests release}"
+if [ -z "$rc" ] && [ -n "$dropped" ] && [ "$(( ${dropped##*.} + 1 ))" -ge 3 ]; then
+  conv="release/${dropped%-rc.*}"
+  if git show-ref --verify --quiet "refs/remotes/origin/$conv"; then
+    cut_branch="$conv"
+    required="${RELEASE_BRANCH_REQUIRED-release}"
+  fi
+fi
+if [ -n "$required" ]; then
+  : > "$out/runs.jsonl"
+  for wf in $required; do
+    "$grain" ci list --repo "$repo" --ref "$cut_branch" --workflow "$wf.yml" --provider github-actions --format github --limit 500 > "$out/runs-$wf.json" ||
+      fail "grain ci list could not read $wf.yml's GitHub Actions runs on $cut_branch"
+    cat "$out/runs-$wf.json" >> "$out/runs.jsonl"
+    rm -f "$out/runs-$wf.json"
+  done
+  jq -s '{
+    total_count: (map(.total_count // (.workflow_runs | length)) | add // 0),
+    workflow_runs: (map(.workflow_runs // []) | add // []),
+    grain_note: ([.[].grain_note // empty | select(length > 0)] | join("; "))
+  } | if .grain_note == "" then del(.grain_note) else . end' "$out/runs.jsonl" > "$out/runs.json" ||
+    fail "could not combine $cut_branch's GitHub Actions runs"
+else
+  "$grain" ci list --repo "$repo" --ref "$cut_branch" --provider github-actions --format github --limit 500 > "$out/runs.json" ||
+    fail "grain ci list could not read $cut_branch's GitHub Actions runs"
+fi
 
 app=""
 env_args=()
@@ -94,13 +131,18 @@ if [ -n "$rc" ]; then
   app="$(jq -r '.grain_app // empty' "$out/qual-checks.json")"
   env_args+=(RELEASE_QUALIFICATION_RUNS_JSON="$out/qual-runs.json" RELEASE_QUALIFICATION_CHECKS_JSON="$out/qual-checks.json")
 fi
-if [ -n "$dropped" ]; then
-  dropped_sha="$(git rev-parse "$dropped^{commit}")"
-  "$grain" ci checks "$dropped_sha" --repo "$repo" --name grain/rc-hold --format github > "$out/hold-checks.json" ||
-    fail "grain ci checks could not read grain/rc-hold on $dropped"
+# If $rc fails qualification in Phase 1 of this same tick, Phase 2 checks
+# grain/rc-hold on $rc's commit rather than an earlier dropped rc's; when
+# nothing is currently qualifying, Phase 2 checks $dropped's commit.
+hold_rc="${rc:-$dropped}"
+if [ -n "$hold_rc" ]; then
+  hold_sha="$(git rev-parse "$hold_rc^{commit}")"
+  "$grain" ci checks "$hold_sha" --repo "$repo" --name grain/rc-hold --format github > "$out/hold-checks.json" ||
+    fail "grain ci checks could not read grain/rc-hold on $hold_rc"
   app="${app:-$(jq -r '.grain_app // empty' "$out/hold-checks.json")}"
   env_args+=(RELEASE_HOLD_CHECKS_JSON="$out/hold-checks.json")
 fi
+app="${app:-${RELEASE_QUALIFICATION_APP:-}}"
 for f in "$out"/*.json; do
   note="$(jq -r '.grain_note // empty' "$f" 2>/dev/null || true)"
   [ -z "$note" ] || say "grain_note in $(basename "$f"): $note"

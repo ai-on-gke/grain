@@ -1,0 +1,22 @@
+record under test (rollback v2.4.0):
+  grain-release-approval/v1
+  repo: acme/widgets
+  version: v2.4.0
+  decision: rollback
+  commit: 90526bbeb4ec6edb70d23810cd327ebf98a53d97
+  approver: debian
+  short_soak_ok: false
+  allow_breaking: false
+  rollback_to: v2.3.0
+  reason_sha256: 7ed88a3158fbf63362ad4333fc23dc3eeb9b5448b37cffb0b0c1503526e5ffff
+  issued: 1794027108
+  expires: 1794028008
+as dispatched                      exit 0: debian
+expired (NOW = expires)            exit 1: verify-release-approval: refused: the record expired at 1794028008 (now 1794028008): press Approve again
+expired (NOW = expires + 3600)     exit 1: verify-release-approval: refused: the record expired at 1794028008 (now 1794031608): press Approve again
+another commit (v2.4.0 moved)      exit 1: verify-release-approval: refused: the record's commit is "90526bbeb4ec6edb70d23810cd327ebf98a53d97", but this run is for "fb6d3fa44abd18414a5c0350afdfd00a74650c67"
+verified against another key       exit 1: verify-release-approval: refused: the approval record's signature does not verify against GRAIN_RELEASE_APPROVAL_KEY
+signed with another key            exit 1: verify-release-approval: refused: the approval record's signature does not verify against GRAIN_RELEASE_APPROVAL_KEY
+approver edited after signing      exit 1: verify-release-approval: refused: the approval record's signature does not verify against GRAIN_RELEASE_APPROVAL_KEY
+rollback: reason input changed     exit 1: verify-release-approval: refused: the record's reason_sha256 is "7ed88a3158fbf63362ad4333fc23dc3eeb9b5448b37cffb0b0c1503526e5ffff", but this run is for "183476ef46ecc8671685476a54b0162950150b242381b3e442bbd1d2302c30b3"
+rollback: rollback_to changed      exit 1: verify-release-approval: refused: the record's rollback_to is "v2.3.0", but this run is for "v2.2.0"

@@ -1,0 +1,18 @@
+record under test (approve v2.4.1):
+  grain-release-approval/v1
+  repo: acme/widgets
+  version: v2.4.1
+  decision: approve
+  commit: 90526bbeb4ec6edb70d23810cd327ebf98a53d97
+  approver: debian
+  short_soak_ok: false
+  allow_breaking: false
+  issued: 1794027752
+  expires: 1794028652
+as dispatched                      exit 0: debian
+expired (NOW = expires)            exit 1: verify-release-approval: refused: the record expired at 1794028652 (now 1794028652): press Approve again
+expired (NOW = expires + 3600)     exit 1: verify-release-approval: refused: the record expired at 1794028652 (now 1794032252): press Approve again
+another commit (v2.4.1-pending moved) exit 1: verify-release-approval: refused: the record's commit is "90526bbeb4ec6edb70d23810cd327ebf98a53d97", but this run is for "34e6012acda002bc3290a889622c1db5a5e17a76"
+verified against another key       exit 1: verify-release-approval: refused: the approval record's signature does not verify against GRAIN_RELEASE_APPROVAL_KEY
+signed with another key            exit 1: verify-release-approval: refused: the approval record's signature does not verify against GRAIN_RELEASE_APPROVAL_KEY
+approver edited after signing      exit 1: verify-release-approval: refused: the approval record's signature does not verify against GRAIN_RELEASE_APPROVAL_KEY
