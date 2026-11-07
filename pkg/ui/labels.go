@@ -1193,6 +1193,12 @@ type Config struct {
 	DBDSN string
 	// DataDir is the root data directory of the grain installation.
 	DataDir string
+	// ReleaseApprovalDir is where the release-approval signing key
+	// (pkg/releaseapproval.KeyFile) is kept, when it is not DataDir: the
+	// demo, which has no data directory, keeps one in its throwaway
+	// store's directory so an Inbox Approve over -github-sim can sign
+	// its record.
+	ReleaseApprovalDir string
 	// SourceDB is the raw *sql.DB backing this store, which a task's
 	// database access queries (task_db.go).
 	SourceDB *sql.DB

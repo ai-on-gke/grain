@@ -400,6 +400,48 @@ func (p demoPullRequests) BranchExists(owner, name, branch string) (bool, error)
 	return p.client.BranchExists(owner, name, branch)
 }
 
+// The release forge (ui.Client.releaseForge): the sim's -pending and
+// release tags, and the promote-release.yml dispatch an Inbox Approve or
+// a rollback sends, held to the one repo the sim stands for as
+// BranchExists is. Without these the demo had no forge a release could be
+// approved through (docs/test-runs/2026-11-04-release-approval.md, F2).
+var (
+	_ github.ReleaseTagReader   = demoPullRequests{}
+	_ github.WorkflowDispatcher = demoPullRequests{}
+)
+
+func (p demoPullRequests) releaseClient(owner, name string) (*github.RESTClient, error) {
+	rest, ok := p.client.(*github.RESTClient)
+	if !ok || !p.repo.Same(model.RepoRef{Owner: owner, Name: name}) {
+		return nil, fmt.Errorf("the simulated GitHub only has %s, not %s/%s", p.repo, owner, name)
+	}
+	return rest, nil
+}
+
+func (p demoPullRequests) ListMatchingTags(owner, name, prefix string) ([]github.TagRef, error) {
+	rest, err := p.releaseClient(owner, name)
+	if err != nil {
+		return nil, err
+	}
+	return rest.ListMatchingTags(owner, name, prefix)
+}
+
+func (p demoPullRequests) GetAnnotatedTag(owner, name, sha string) (*github.AnnotatedTag, error) {
+	rest, err := p.releaseClient(owner, name)
+	if err != nil {
+		return nil, err
+	}
+	return rest.GetAnnotatedTag(owner, name, sha)
+}
+
+func (p demoPullRequests) DispatchWorkflow(owner, name, workflow, ref string, inputs map[string]string) error {
+	rest, err := p.releaseClient(owner, name)
+	if err != nil {
+		return err
+	}
+	return rest.DispatchWorkflow(owner, name, workflow, ref, inputs)
+}
+
 // demoGitHubSimComparer is the daemon's GitHub comparison held to the
 // one repo the sim stands for. The sim panics on a request for any other
 // repo, and real GitHub would answer one this credential cannot see with

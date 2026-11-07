@@ -152,6 +152,12 @@ var (
 	gitOtherRefRe     = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/git/(refs/.+)$`)
 	gitMatchingRefsRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/git/matching-refs/(.*)$`)
 	gitTagObjectRe    = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/git/tags/([0-9a-f]+)$`)
+	// workflowDispatchesRe is POST .../actions/workflows/{workflow}/dispatches
+	// (github.RESTClient.DispatchWorkflow): a workflow_dispatch run, which
+	// the sim records in WorkflowDispatches rather than runs. A GET of the
+	// same path, which GitHub does not serve, lists them -- the sim's own
+	// way for a walkthrough to read back what grain dispatched.
+	workflowDispatchesRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/workflows/([^/]+)/dispatches$`)
 	// mergesRe: the branch-into-branch merge the merge queue makes to
 	// bring a stale head up to date with its base
 	// (github.RESTClient.MergeBranch, orchestrator.refreshStaleHead).
@@ -428,6 +434,10 @@ type Sim struct {
 	// WorkflowRuns is explicit workflow runs seeded for GET .../actions/runs
 	// and GET .../actions/runs/{id}/jobs.
 	WorkflowRuns []WorkflowRun
+	// WorkflowDispatches is every POST .../actions/workflows/{w}/dispatches
+	// the sim was sent, in order (promote-release.yml from an Inbox
+	// Approve or a rollback, pkg/ui/release_approval_github.go).
+	WorkflowDispatches []WorkflowDispatch
 	// RerunFailedJobs is every run id POST .../rerun-failed-jobs was
 	// asked about, in order. The sim starts no new attempt: a test that
 	// wants one moves the seeded run's RunAttempt and Jobs on itself.
@@ -1429,6 +1439,20 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 		return s.reachableRepos(p, qs, headers), nil
 	}
 	if method == "GET" {
+		if m := workflowDispatchesRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			workflow, err := url.PathUnescape(m[3])
+			if err != nil {
+				workflow = m[3]
+			}
+			out := make([]WorkflowDispatch, 0)
+			for _, d := range s.WorkflowDispatches {
+				if d.Workflow == workflow {
+					out = append(out, d)
+				}
+			}
+			return jsonResponse(200, out), nil
+		}
 		if m := pullReviewsRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
 			var reviews []map[string]any
@@ -1914,6 +1938,24 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 		return s.graphql(body)
 	}
 	if method == "POST" {
+		if m := workflowDispatchesRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			workflow, err := url.PathUnescape(m[3])
+			if err != nil {
+				workflow = m[3]
+			}
+			var payload struct {
+				Ref    string            `json:"ref"`
+				Inputs map[string]string `json:"inputs"`
+			}
+			if err := json.Unmarshal(body, &payload); err != nil || strings.TrimSpace(payload.Ref) == "" {
+				return jsonResponse(422, map[string]string{"message": "Invalid request: ref is required"}), nil
+			}
+			s.WorkflowDispatches = append(s.WorkflowDispatches, WorkflowDispatch{
+				Workflow: workflow, Ref: payload.Ref, Inputs: payload.Inputs,
+			})
+			return github.ApiResponse{Status: 204}, nil
+		}
 		if m := rerunFailedJobsRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
 			if s.RerunRefused != 0 {
@@ -3083,6 +3125,21 @@ func workflowRunsJSON(owner, repo string, runID int, jobs []WorkflowJob) map[str
 // otherwise the run its jobs imply. Run ids come from runIDFor, the same
 // as every other answer here, so the jobs endpoint can be asked about
 // anything named in this list.
+// WorkflowDispatch is one workflow_dispatch the sim was sent: the
+// workflow file (or id), the ref and the inputs, exactly as posted.
+type WorkflowDispatch struct {
+	Workflow string            `json:"workflow"`
+	Ref      string            `json:"ref"`
+	Inputs   map[string]string `json:"inputs,omitempty"`
+}
+
+// Dispatches is a copy of WorkflowDispatches, read under Sim's mutex.
+func (s *Sim) Dispatches() []WorkflowDispatch {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]WorkflowDispatch(nil), s.WorkflowDispatches...)
+}
+
 // AddWorkflowRun appends r to WorkflowRuns under Sim's mutex, filling in
 // the defaults repoRunsJSON serves (an unused run ID, status "completed",
 // conclusion from r.Jobs, attempt 1, HeadSHA from HeadBranch and HeadRepo
