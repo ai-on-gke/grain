@@ -392,6 +392,7 @@ playwright-browsers:
 
 test-e2e-suite:
 	cd ui && { [ -x node_modules/.bin/playwright ] || npm ci; } && npm run test:e2e $${PLAYWRIGHT_PROJECT:+-- --project="$$PLAYWRIGHT_PROJECT"}
+	cd ui-registry && { [ -x node_modules/.bin/playwright ] || npm ci; } && npm run test:e2e
 
 test-e2e: frontend playwright-browsers test-e2e-suite
 

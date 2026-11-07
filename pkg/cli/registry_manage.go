@@ -304,6 +304,7 @@ func cmdRegistryRotateCredential(ctx context.Context, c *ui.HTTPClient, out *pri
 		if err := writeTokenFile(*tokenFile, resp.RegistrationToken); err != nil {
 			return fmt.Errorf("writing -token-file: %w", err)
 		}
+		resp.RegistrationToken = ""
 	}
 	if out.json {
 		out.encode(resp)

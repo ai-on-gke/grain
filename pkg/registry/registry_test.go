@@ -1397,6 +1397,93 @@ func TestStep12CatalogCRUDGroupAuthHeartbeatsDirectoryAndRouteEndToEnd(t *testin
 	if err != nil || accepted.Owner != "bob@example.com" || accepted.OwnerGroup != "group:team-alpha@example.com" {
 		t.Fatalf("AcceptTransfer by bob failed: %+v (err=%v)", accepted, err)
 	}
+
+	// 10. Status & AdminSummary authorization, unlisted privacy, and replica TTL health.
+	listedFalse := false
+	secretConn, err := aliceCli.CreateEntry(ctx, api.CreateEntryRequest{
+		Name:   "alice-unlisted-secret",
+		Kind:   api.KindConnected,
+		Listed: &listedFalse,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry alice-unlisted-secret: %v", err)
+	}
+	secretRow, err := st.GetEntryByName(ctx, "alice-unlisted-secret")
+	if err != nil {
+		t.Fatalf("GetEntryByName alice-unlisted-secret: %v", err)
+	}
+	_, _ = st.RecordHeartbeat(ctx, secretRow.ID, api.HeartbeatRequest{
+		GrainVersion: "v9.9.9-unlisted-private",
+		HostKind:     api.HostKindWorkstation,
+		Health:       api.HealthOK,
+	})
+	_, _ = st.AcquireTunnelSessionWithCred(ctx, secretRow.ID, "rep-step12", "198.51.100.99:5000", secretConn.Credential.CredentialID)
+
+	// Register a second replica whose heartbeat is fresh now, then advance past ReplicaTTL for stale-replica check.
+	_ = st.UpsertReplica(ctx, "rep-stale", "10.0.0.99:8082")
+	now = now.Add(20 * time.Second)
+	_ = st.UpsertReplica(ctx, "rep-step12", "127.0.0.1:18082")
+
+	// Non-admin cannot call /api/admin/summary (403) and does NOT see unlisted versions, counts, tunnels, or peer_addr on /api/status.
+	if _, err := bobCli.AdminSummary(ctx); !isAPIStatus(err, http.StatusForbidden) {
+		t.Fatalf("expected 403 Forbidden for non-admin AdminSummary, got %v", err)
+	}
+	bobStatus, err := bobCli.Status(ctx)
+	if err != nil {
+		t.Fatalf("bob Status: %v", err)
+	}
+	if _, leaked := bobStatus.VersionCounts["v9.9.9-unlisted-private"]; leaked {
+		t.Fatalf("non-admin /api/status leaked unlisted entry version: %+v", bobStatus.VersionCounts)
+	}
+	for _, rep := range bobStatus.Replicas {
+		if rep.PeerAddr != "" {
+			t.Fatalf("non-admin /api/status leaked replica peer_addr: %+v", rep)
+		}
+		if rep.ReplicaID == "rep-stale" && rep.Healthy {
+			t.Fatalf("stale replica marked healthy in /api/status: %+v", rep)
+		}
+		if rep.ReplicaID == "rep-step12" && !rep.Healthy {
+			t.Fatalf("fresh replica marked unhealthy in /api/status: %+v", rep)
+		}
+	}
+
+	adminCli := clientFor("admin@example.com")
+	adminStatus, err := adminCli.Status(ctx)
+	if err != nil {
+		t.Fatalf("admin Status: %v", err)
+	}
+	if adminStatus.VersionCounts["v9.9.9-unlisted-private"] != 1 {
+		t.Fatalf("expected admin /api/status to include unlisted entry version, got %+v", adminStatus.VersionCounts)
+	}
+	if adminStatus.TotalEntries != bobStatus.TotalEntries+1 {
+		t.Fatalf("expected admin TotalEntries (%d) == non-admin TotalEntries (%d) + 1", adminStatus.TotalEntries, bobStatus.TotalEntries)
+	}
+	if adminStatus.ActiveTunnels != bobStatus.ActiveTunnels+1 {
+		t.Fatalf("expected admin ActiveTunnels (%d) == non-admin ActiveTunnels (%d) + 1", adminStatus.ActiveTunnels, bobStatus.ActiveTunnels)
+	}
+
+	adminSum, err := adminCli.AdminSummary(ctx)
+	if err != nil {
+		t.Fatalf("admin AdminSummary: %v", err)
+	}
+	for _, rep := range adminSum.Replicas {
+		if rep.ReplicaID == "rep-stale" && rep.Healthy {
+			t.Fatalf("stale replica marked healthy in /api/admin/summary: %+v", rep)
+		}
+		if rep.ReplicaID == "rep-step12" && !rep.Healthy {
+			t.Fatalf("fresh replica marked unhealthy in /api/admin/summary: %+v", rep)
+		}
+	}
+}
+
+func TestDemoRefusesNonLoopbackAddr(t *testing.T) {
+	for _, bad := range []string{"0.0.0.0:0", ":0", "10.0.0.5:8080", "example.com:8080"} {
+		var out, errBuf strings.Builder
+		err := Run(context.Background(), []string{"demo", "-addr", bad}, &out, &errBuf)
+		if err == nil || !strings.Contains(err.Error(), "loopback") {
+			t.Fatalf("Run(demo -addr %q) = %v, want loopback refusal", bad, err)
+		}
+	}
 }
 
 func startEphemeralPostgresForRegistryTest(t *testing.T) string {

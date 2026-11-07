@@ -59,10 +59,34 @@ function parseRouteFromPathname(pathname) {
   if (clean === "/admin") return { page: "admin", entryName: "" };
   if (clean === "/status") return { page: "status", entryName: "" };
   if (clean.startsWith("/entries/")) {
-    const name = decodeURIComponent(clean.slice("/entries/".length));
-    if (name) return { page: "detail", entryName: name };
+    try {
+      const name = decodeURIComponent(clean.slice("/entries/".length));
+      if (name) return { page: "detail", entryName: name };
+    } catch {
+      return { page: "my-entries", entryName: "" };
+    }
   }
   return { page: "my-entries", entryName: "" };
+}
+
+function safeHttpUrl(raw) {
+  if (!raw || typeof raw !== "string") return "";
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol === "https:" || parsed.protocol === "http:") {
+      return parsed.toString();
+    }
+  } catch {
+    return "";
+  }
+  return "";
+}
+
+function sanitizeSlug(raw, fallback) {
+  const cleaned = String(raw || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9.-]/g, "");
+  return cleaned || fallback;
 }
 
 function makeRandomEntryName() {
@@ -71,16 +95,25 @@ function makeRandomEntryName() {
 }
 
 function buildConnectedSnippet(registryHost, instanceDomain, entryName, token) {
-  const regOrigin = registryHost
+  const rawOrigin = registryHost
     ? registryHost.startsWith("http")
       ? registryHost
       : `https://${registryHost}`
     : typeof window !== "undefined"
       ? window.location.origin
       : "https://registry.grain.example.com";
-  const instDom = instanceDomain || "grain.example.com";
-  const name = entryName || "my-grain";
-  const tokLine = token ? `export GRAIN_REGISTRY_TOKEN="${token}"\n` : "";
+  const regOrigin = (
+    safeHttpUrl(rawOrigin) || "https://registry.grain.example.com"
+  ).replace(/\/+$/, "");
+  const instDom = sanitizeSlug(instanceDomain, "grain.example.com");
+  const name =
+    String(entryName || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, "") || "my-grain";
+  const safeToken = String(token || "").replace(/[^A-Za-z0-9_.-]/g, "");
+  const tokLine = safeToken
+    ? `export GRAIN_REGISTRY_TOKEN="${safeToken}"\n`
+    : "";
   const cli =
     `${tokLine}grain daemon \\\n` +
     `  -registry-url ${regOrigin} \\\n` +
@@ -306,12 +339,12 @@ function DirectoryView({ onNavigateEntry }) {
                   key: "open",
                   header: "Action",
                   render: (r) =>
-                    r.url ? (
+                    safeHttpUrl(r.url) ? (
                       <a
                         className="gs-btn gs-btn-sm gs-btn-primary"
-                        href={r.url}
+                        href={safeHttpUrl(r.url)}
                         target="_blank"
-                        rel="noreferrer"
+                        rel="noopener noreferrer"
                       >
                         Open grain
                       </a>
@@ -459,12 +492,12 @@ function DirectoryView({ onNavigateEntry }) {
               </div>
 
               <div className="reg-actions-row">
-                {entry.url ? (
+                {safeHttpUrl(entry.url) ? (
                   <a
                     className="gs-btn gs-btn-sm gs-btn-primary"
-                    href={entry.url}
+                    href={safeHttpUrl(entry.url)}
                     target="_blank"
-                    rel="noreferrer"
+                    rel="noopener noreferrer"
                   >
                     Open grain
                   </a>
@@ -749,12 +782,12 @@ function MyEntriesView({ me, onNavigateEntry, onNavigateNew, onRefreshMe }) {
               header: "Quick Actions",
               render: (e) => (
                 <div className="reg-actions-row">
-                  {e.url && e.state !== "deleted" ? (
+                  {safeHttpUrl(e.url) && e.state !== "deleted" ? (
                     <a
                       className="gs-btn gs-btn-sm gs-btn-primary"
-                      href={e.url}
+                      href={safeHttpUrl(e.url)}
                       target="_blank"
-                      rel="noreferrer"
+                      rel="noopener noreferrer"
                     >
                       Open
                     </a>
@@ -1583,12 +1616,12 @@ function EntryDetailView({
             <button type="button" className="gs-btn" onClick={onBack}>
               Back
             </button>
-            {entry.url && entry.state !== "deleted" ? (
+            {safeHttpUrl(entry.url) && entry.state !== "deleted" ? (
               <a
                 className="gs-btn gs-btn-primary"
-                href={entry.url}
+                href={safeHttpUrl(entry.url)}
                 target="_blank"
-                rel="noreferrer"
+                rel="noopener noreferrer"
               >
                 Open grain
               </a>
@@ -2830,17 +2863,19 @@ export default function App() {
               >
                 Status
               </button>
-              <button
-                type="button"
-                className={
-                  route.page === "admin"
-                    ? "reg-nav-link reg-nav-link-active"
-                    : "reg-nav-link"
-                }
-                onClick={() => navigate("/admin")}
-              >
-                Admin
-              </button>
+              {Boolean(me && (me.is_admin || me.is_registry_admin)) ? (
+                <button
+                  type="button"
+                  className={
+                    route.page === "admin"
+                      ? "reg-nav-link reg-nav-link-active"
+                      : "reg-nav-link"
+                  }
+                  onClick={() => navigate("/admin")}
+                >
+                  Admin
+                </button>
+              ) : null}
             </nav>
           </div>
 

@@ -178,7 +178,8 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json') }}
+            ui-registry/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-registry/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -198,7 +199,7 @@ jobs:
         run: make fmt
 
       - name: Fill the npm cache from the registry
-        run: ./scripts/warm-npm-cache.sh ui
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-registry
 
       - name: Build frontend
         run: make frontend
@@ -255,7 +256,8 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json') }}
+            ui-registry/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-registry/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -315,7 +317,7 @@ jobs:
           git config --global user.email "grain-ci@example.com"
 
       - name: Fill the npm cache from the registry
-        run: ./scripts/warm-npm-cache.sh ui
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-registry
 
       - name: Build frontend
         run: make frontend
@@ -871,12 +873,13 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json') }}
+            ui-registry/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-registry/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
       - name: Fill the npm cache from the registry
-        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-registry
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-registry && ./scripts/warm-npm-cache.sh ui-registry
 
       - name: Build frontend
         run: make frontend
@@ -940,7 +943,8 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json') }}
+            ui-registry/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-registry/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -960,7 +964,7 @@ jobs:
           sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
 
       - name: Fill the npm cache from the registry
-        run: ./scripts/warm-npm-cache.sh ui
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-registry
 
       - name: Build frontend
         run: make frontend
@@ -1116,7 +1120,8 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json') }}
+            ui-registry/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-registry/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -1126,7 +1131,7 @@ jobs:
           sudo git config --system user.email "grain-ci@example.com"
           git config --global user.name "grain-ci"
           git config --global user.email "grain-ci@example.com"
-          ./scripts/warm-npm-cache.sh ui
+          ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-registry
 
       - name: Configure authenticated Docker Hub pulls
         env:

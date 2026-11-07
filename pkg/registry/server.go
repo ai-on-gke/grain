@@ -509,50 +509,69 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.store != nil {
 		entries, err := s.store.ListEntries(r.Context())
-		if err == nil {
-			for _, e := range entries {
-				apiEntry := s.enrichAPIEntry(r.Context(), e, caller.IsAdmin)
-				resp.TotalEntries++
-				switch apiEntry.Status {
-				case api.StatusOnline:
-					resp.OnlineEntries++
-				case api.StatusDegraded:
-					resp.DegradedEntries++
-				default:
-					resp.OfflineEntries++
-				}
-				switch e.Kind {
-				case api.KindInstance:
-					resp.InstanceEntries++
-				case api.KindConnected:
-					resp.ConnectedCount++
-				}
-				ver := strings.TrimSpace(e.GrainVersion)
-				if ver == "" {
-					ver = "unreported"
-				}
-				resp.VersionCounts[ver]++
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		listedByName := make(map[string]bool, len(entries))
+		for _, e := range entries {
+			listedByName[e.Name] = e.Listed
+			if !caller.IsAdmin && !e.Listed {
+				continue
 			}
+			apiEntry := s.enrichAPIEntry(r.Context(), e, caller.IsAdmin)
+			resp.TotalEntries++
+			switch apiEntry.Status {
+			case api.StatusOnline:
+				resp.OnlineEntries++
+			case api.StatusDegraded:
+				resp.DegradedEntries++
+			default:
+				resp.OfflineEntries++
+			}
+			switch e.Kind {
+			case api.KindInstance:
+				resp.InstanceEntries++
+			case api.KindConnected:
+				resp.ConnectedCount++
+			}
+			ver := strings.TrimSpace(e.GrainVersion)
+			if ver == "" {
+				ver = "unreported"
+			}
+			resp.VersionCounts[ver]++
 		}
-		tunnels, _ := s.store.ListActiveTunnelSessions(r.Context())
-		tunnelsByReplica := make(map[string]int)
-		for _, ts := range tunnels {
-			tunnelsByReplica[ts.ReplicaID]++
-		}
-		resp.ActiveTunnels = len(tunnels)
 
-		replicas, _ := s.store.ListReplicas(r.Context())
 		replicaTTL := s.cfg.Tunnel.ReplicaTTL
 		if replicaTTL <= 0 {
 			replicaTTL = DefaultTunnelReplicaTTL
 		}
-		now := s.store.Thresholds()
-		_ = now
-		for _, rep := range replicas {
-			healthy := time.Since(rep.HeartbeatAt) <= replicaTTL*2
-			if rep.HeartbeatAt.After(time.Now().Add(-24 * time.Hour)) {
-				healthy = true
+		now := s.store.Now()
+
+		tunnels, err := s.store.ListActiveTunnelSessions(r.Context())
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		tunnelsByReplica := make(map[string]int)
+		for _, ts := range tunnels {
+			if now.Sub(ts.ReplicaLastSeen) > replicaTTL {
+				continue
 			}
+			if !caller.IsAdmin && !listedByName[ts.EntryName] {
+				continue
+			}
+			tunnelsByReplica[ts.ReplicaID]++
+			resp.ActiveTunnels++
+		}
+
+		replicas, err := s.store.ListReplicas(r.Context())
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		for _, rep := range replicas {
+			healthy := now.Sub(rep.HeartbeatAt) <= replicaTTL
 			peerAddr := rep.PeerAddr
 			if !caller.IsAdmin {
 				peerAddr = ""
@@ -566,18 +585,21 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 				ActiveTunnels: tunnelsByReplica[rep.ReplicaID],
 			})
 		}
-		if shapes, err := s.store.ListShapes(r.Context()); err == nil {
-			for _, sh := range shapes {
-				resp.Shapes = append(resp.Shapes, api.Shape{
-					Name:         sh.Name,
-					MachineType:  sh.MachineType,
-					BootDiskGB:   sh.BootDiskGB,
-					BootDiskIOPS: sh.BootDiskIOPS,
-					QuotaUnits:   sh.QuotaUnits,
-					Description:  sh.Description,
-					Default:      sh.Name == s.cfg.Compute.DefaultShape,
-				})
-			}
+		shapes, err := s.store.ListShapes(r.Context())
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		for _, sh := range shapes {
+			resp.Shapes = append(resp.Shapes, api.Shape{
+				Name:         sh.Name,
+				MachineType:  sh.MachineType,
+				BootDiskGB:   sh.BootDiskGB,
+				BootDiskIOPS: sh.BootDiskIOPS,
+				QuotaUnits:   sh.QuotaUnits,
+				Description:  sh.Description,
+				Default:      sh.Name == s.cfg.Compute.DefaultShape,
+			})
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -594,9 +616,22 @@ func (s *Server) handleGetAdminSummary(w http.ResponseWriter, r *http.Request) {
 		AuditLog:       []api.AuditLogEntry{},
 	}
 	if s.store != nil {
-		tunnels, _ := s.store.ListActiveTunnelSessions(r.Context())
+		replicaTTL := s.cfg.Tunnel.ReplicaTTL
+		if replicaTTL <= 0 {
+			replicaTTL = DefaultTunnelReplicaTTL
+		}
+		now := s.store.Now()
+
+		tunnels, err := s.store.ListActiveTunnelSessions(r.Context())
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
 		tunnelsByReplica := make(map[string]int)
 		for _, ts := range tunnels {
+			if now.Sub(ts.ReplicaLastSeen) > replicaTTL {
+				continue
+			}
 			tunnelsByReplica[ts.ReplicaID]++
 			out.TunnelSessions = append(out.TunnelSessions, api.TunnelSessionInfo{
 				EntryName:    ts.EntryName,
@@ -610,18 +645,26 @@ func (s *Server) handleGetAdminSummary(w http.ResponseWriter, r *http.Request) {
 				CredID:       ts.CredID,
 			})
 		}
-		replicas, _ := s.store.ListReplicas(r.Context())
+		replicas, err := s.store.ListReplicas(r.Context())
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
 		for _, rep := range replicas {
 			out.Replicas = append(out.Replicas, api.ReplicaStatus{
 				ReplicaID:     rep.ReplicaID,
 				PeerAddr:      rep.PeerAddr,
 				StartedAt:     rep.StartedAt,
 				HeartbeatAt:   rep.HeartbeatAt,
-				Healthy:       true,
+				Healthy:       now.Sub(rep.HeartbeatAt) <= replicaTTL,
 				ActiveTunnels: tunnelsByReplica[rep.ReplicaID],
 			})
 		}
-		audits, _ := s.store.ListAuditLog(r.Context(), 100)
+		audits, err := s.store.ListAuditLog(r.Context(), 100)
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
 		for _, a := range audits {
 			out.AuditLog = append(out.AuditLog, api.AuditLogEntry{
 				ID:         a.ID,

@@ -377,6 +377,11 @@ func (s *Store) SetNow(fn func() time.Time) {
 	}
 }
 
+// Now returns the current UTC time according to the store's clock.
+func (s *Store) Now() time.Time {
+	return s.now()
+}
+
 func (s *Store) now() time.Time {
 	if s != nil && s.nowFn != nil {
 		return s.nowFn().UTC()

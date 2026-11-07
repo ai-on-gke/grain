@@ -32,12 +32,27 @@ import (
 	"github.com/ai-on-gke/grain/pkg/registry/server"
 )
 
+func isDemoLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(addr))
+	if err != nil || host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 func runDemo(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("grain-registry demo", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	addr := fs.String("addr", "127.0.0.1:0", "listen address for demo server")
+	addr := fs.String("addr", "127.0.0.1:0", "loopback listen address for demo server")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if !isDemoLoopbackAddr(*addr) {
+		return fmt.Errorf("grain-registry demo serves unauthenticated fixture data and may only listen on loopback (got %q)", *addr)
 	}
 
 	ln, err := net.Listen("tcp", *addr)

@@ -81,6 +81,11 @@ func (tf registryTargetFlags) client(ctx context.Context, c *ui.HTTPClient) (*ap
 	if regURL == "" {
 		return nil, "", errors.New("-registry-url is required (or set $" + daemon.RegistryURLEnv + ")")
 	}
+	normURL, err := api.ValidateRegistryURL(regURL, false)
+	if err != nil {
+		return nil, "", err
+	}
+	regURL = normURL
 	if aud == "" {
 		aud = regURL
 	}

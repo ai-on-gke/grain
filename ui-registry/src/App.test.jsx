@@ -666,4 +666,50 @@ describe("Grain Registry UI", () => {
     expect(screen.getByText("*.grain.example.com")).toBeInTheDocument();
     expect(screen.getAllByText("v0.14.2").length).toBeGreaterThan(0);
   });
+
+  it("hides Admin nav for non-admin callers, blocks non-http entry URLs, and handles malformed routes", async () => {
+    globalThis.fetch = createFetchMock({
+      "GET /api/me": () =>
+        new Response(
+          JSON.stringify({
+            ...sampleMe,
+            is_admin: false,
+            is_registry_admin: false,
+          }),
+          { status: 200 },
+        ),
+      "GET /api/entries?mine=1&include_deleted=true": () =>
+        new Response(
+          JSON.stringify({
+            entries: [
+              {
+                ...sampleEntries[0],
+                url: "javascript:alert(1)",
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+    });
+
+    renderApp("/entries/%E0%A4%A");
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: "My Entries" }),
+      ).toBeInTheDocument();
+      expect(screen.getAllByText("alice@example.com").length).toBeGreaterThan(
+        0,
+      );
+      expect(
+        screen.getByText("Platform Core VM (platform-vm)"),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByRole("button", { name: "Admin" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "Open" }),
+    ).not.toBeInTheDocument();
+  });
 });
