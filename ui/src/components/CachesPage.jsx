@@ -300,7 +300,7 @@ export default function CachesPage({ showError, standalone = false }) {
                     <Button
                       size="small"
                       aria-label={`Flush the Actions cache of ${repoLabel(repo.repo)}`}
-                      disabled={flushingActions !== ""}
+                      disabled={flushingActions !== "" || !(repo.bytes || 0)}
                       onClick={() => flushActions(repo.repo)}
                     >
                       Flush
