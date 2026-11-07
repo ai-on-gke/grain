@@ -1273,6 +1273,51 @@ describe("DetailOverlay actions", () => {
     });
   });
 
+  // The Admission select replaced the priority-dispatch toggle
+  // (unified-grants.design.md §4.1).
+  it("sets a task's admission from the actions column", async () => {
+    const act = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={{ ...baseTask, admission: "standard" }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+        showError={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole("combobox", { name: /Admission/ }));
+    await user.click(screen.getByRole("option", { name: "Bypass queue" }));
+
+    act.mock.calls[0][0]();
+    expect(api).toHaveBeenCalledWith("/api/tasks/12", {
+      method: "PATCH",
+      body: JSON.stringify({ admission: "bypass" }),
+    });
+  });
+
+  it("keeps a console session's admission durable", () => {
+    render(
+      <DetailOverlay
+        task={{ ...baseTask, admission: "durable", consoleSession: "steward" }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+        showError={() => {}}
+      />,
+    );
+
+    const select = screen.getByRole("combobox", { name: /Admission/ });
+    expect(select).toHaveTextContent("Durable");
+    expect(select).toHaveAttribute("aria-disabled", "true");
+  });
+
   // Auto-merge is read after the run, not at checkout, so unlike the
   // repo and base above it is the one edit here that does count for the
   // run already in flight.
