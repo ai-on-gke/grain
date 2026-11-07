@@ -767,6 +767,17 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	if err := store.SetGitHubWebhookCursor(ctx, 4242, sub); err != nil {
 		t.Fatalf("recording GitHub webhook cursor: %v", err)
 	}
+	if err := store.PutReleaseApprovalDecision(ctx, model.ReleaseApprovalDecision{
+		Repo:      model.RepoRef{Owner: "owner", Name: "payments-api"},
+		Version:   "v2.6.0",
+		Commit:    "2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e",
+		Decision:  "approve",
+		Workflow:  "promote-release.yml",
+		DecidedBy: "alice@example.com",
+		DecidedAt: sub,
+	}); err != nil {
+		t.Fatalf("recording release approval decision: %v", err)
+	}
 	// The grain CI workflows this deployment declares for a repo it does
 	// not control (model.RepoWorkflow). Two of them, since the table's
 	// key is (repo, path) and a repository with one workflow would not

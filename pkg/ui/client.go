@@ -114,6 +114,10 @@ type Client struct {
 	ciDisk    ciDiskUsageCache
 	prFilesMu sync.Mutex
 	prFiles   *cifault.FileCache
+	// rollbackDispatches remembers recent promote-release.yml rollback
+	// dispatches on this client while their signed records are good, so a
+	// double click starts one rollback rather than two.
+	rollbackDispatches map[string]ReleaseDispatch
 }
 
 // NewClient builds a Client over a store.

@@ -3670,6 +3670,26 @@ var Tables = []string{
   PRIMARY KEY (` + "`period`" + `)
 )`,
 
+	// The promote-release.yml dispatch a person started for a pending GitHub
+	// Actions release (model.ReleaseApprovalDecision), keyed by
+	// (owner, name, version, commit) so the release-pending watcher does not
+	// re-raise release.pending for a commit already approved from the CLI or
+	// API, and DecideRelease refuses a second dispatch while the first is
+	// outstanding. Grain's own runtime record, like base_branch_release.
+	// Needs no SchemaVersion bump: Init's CREATE TABLE IF NOT EXISTS creates
+	// it on every database.
+	`CREATE TABLE IF NOT EXISTS ` + "`release_approval`" + ` (
+  ` + "`owner`" + `      TEXT     NOT NULL,
+  ` + "`name`" + `       TEXT     NOT NULL,
+  ` + "`version`" + `    TEXT     NOT NULL,
+  ` + "`commit`" + `     TEXT     NOT NULL,
+  ` + "`decision`" + `   TEXT     NOT NULL,
+  ` + "`workflow`" + `   TEXT     NOT NULL,
+  ` + "`decided_by`" + ` TEXT     NOT NULL,
+  ` + "`decided_at`" + ` DATETIME NOT NULL,
+  PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `, ` + "`version`" + `, ` + "`commit`" + `)
+)`,
+
 	// A repo's qualification setup -- bwsalmon/agents#518's two switches:
 	// require_approval gates every task a run instantiates behind a
 	// human's own bulk approval (Store.ApproveQualificationRun) rather
