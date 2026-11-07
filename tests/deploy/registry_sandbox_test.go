@@ -210,6 +210,21 @@ func TestRegistrySandboxScriptFlagValidation(t *testing.T) {
 			args:   []string{"--project"},
 		},
 		{
+			name:   "configure-oauth rejects malformed project",
+			script: "configure-oauth.sh",
+			args:   []string{"--project", "bad/project", "--client-id", "1234.apps.googleusercontent.com"},
+		},
+		{
+			name:   "configure-oauth rejects malformed prefix",
+			script: "configure-oauth.sh",
+			args:   []string{"--project", "my-sandbox", "--prefix", "BAD_PREFIX", "--client-id", "1234.apps.googleusercontent.com"},
+		},
+		{
+			name:   "configure-oauth rejects malformed client-id",
+			script: "configure-oauth.sh",
+			args:   []string{"--project", "my-sandbox", "--client-id", "bad-client-id"},
+		},
+		{
 			name:   "daemon-up rejects malformed project",
 			script: "daemon-up.sh",
 			args:   []string{"--project", "../bad", "--owner", "alice@example.com"},
@@ -375,5 +390,109 @@ exit 0
 				t.Fatalf("%s invoked terraform or mutated GCS despite cross-project state bucket", tc.script)
 			}
 		})
+	}
+}
+
+func TestConfigureOAuthFlagsFileSecretPassing(t *testing.T) {
+	sandboxDir := filepath.Join("..", "..", "deploy", "test", "registry-sandbox")
+	fakeBin := t.TempDir()
+	logFile := filepath.Join(fakeBin, "gcloud.log")
+
+	secretVal := "super-sensitive-oauth-secret-xyz123"
+	secretFile := filepath.Join(t.TempDir(), "client_secret.txt")
+	if err := os.WriteFile(secretFile, []byte(secretVal+"\n"), 0o600); err != nil {
+		t.Fatalf("writing secret file: %v", err)
+	}
+
+	writeFake := func(name, content string) {
+		p := filepath.Join(fakeBin, name)
+		if err := os.WriteFile(p, []byte(content), 0o755); err != nil {
+			t.Fatalf("writing fake %s: %v", name, err)
+		}
+	}
+
+	writeFake("gcloud", `#!/usr/bin/env bash
+set -euo pipefail
+
+for arg in "$@"; do
+  if [[ "$arg" == *"`+secretVal+`"* ]]; then
+    echo "ERROR: secret found in argv: $arg" >&2
+    exit 99
+  fi
+done
+
+case "$*" in
+  *"backend-services update"*)
+    flags_file=""
+    for arg in "$@"; do
+      case "$arg" in
+        --flags-file=*)
+          flags_file="${arg#--flags-file=}"
+          ;;
+      esac
+    done
+    if [[ -z "${flags_file}" ]]; then
+      echo "ERROR: missing --flags-file in update command" >&2
+      exit 98
+    fi
+    content="$(cat "${flags_file}")"
+    if [[ "${content}" != *"`+secretVal+`"* ]]; then
+      echo "ERROR: flags file missing secret" >&2
+      exit 97
+    fi
+    if [[ "${content}" != *"test-client.apps.googleusercontent.com"* ]]; then
+      echo "ERROR: flags file missing client id" >&2
+      exit 96
+    fi
+    echo "UPDATED" >> "`+logFile+`"
+    exit 0
+    ;;
+  *"backend-services describe"*"format=value"*)
+    echo "test-client.apps.googleusercontent.com"
+    exit 0
+    ;;
+  *"backend-services describe"*"format=json"*)
+    echo '{"iap":{"enabled":true,"oauth2ClientId":"test-client.apps.googleusercontent.com"}}'
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`)
+
+	env := append(os.Environ(), "PATH="+fakeBin+":"+os.Getenv("PATH"))
+
+	cmd := exec.Command("bash", filepath.Join(sandboxDir, "configure-oauth.sh"),
+		"--project", "my-sandbox",
+		"--client-id", "test-client.apps.googleusercontent.com",
+		"--client-secret-file", secretFile,
+	)
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("configure-oauth.sh failed: %v\n%s", err, out)
+	}
+
+	if !strings.Contains(string(out), "Done. IAP on grain-reg-iap-bs now uses OAuth client test-client.apps.googleusercontent.com") {
+		t.Fatalf("unexpected output: %s", out)
+	}
+
+	logged, err := os.ReadFile(logFile)
+	if err != nil || !strings.Contains(string(logged), "UPDATED") {
+		t.Fatalf("backend-services update was not called as expected, logged: %q (err: %v)", string(logged), err)
+	}
+
+	showCmd := exec.Command("bash", filepath.Join(sandboxDir, "configure-oauth.sh"),
+		"--project", "my-sandbox",
+		"--show",
+	)
+	showCmd.Env = env
+	showOut, err := showCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("configure-oauth.sh --show failed: %v\n%s", err, showOut)
+	}
+	if !strings.Contains(string(showOut), `"oauth2ClientId": "test-client.apps.googleusercontent.com"`) {
+		t.Fatalf("unexpected --show output: %s", showOut)
 	}
 }

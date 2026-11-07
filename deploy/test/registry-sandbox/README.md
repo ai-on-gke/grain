@@ -205,7 +205,83 @@ heartbeat status, version, queue counts), `/api/route`, and an end-to-end HTTP
 request routed over the outbound WebSocket mux tunnel to the connected daemon's
 `registry` identity verifier.
 
-### 4. Tear down cleanly (`down.sh`)
+### 4. Update the staging deployment for subsequent PRs
+
+When developing changes in subsequent PRs (such as updating `cmd/grain-registry`,
+`pkg/registry/...`, `ui-registry/`, or `pkg/daemon/...`), you can update the
+running staging deployment in-place without destroying and recreating the load
+balancer, IP address, TLS certificates, or database.
+
+#### Updating the Registry VM (`grain-reg-vm`):
+
+Run `up.sh` from your PR branch with `--no-wait-cert`:
+
+```bash
+./deploy/test/registry-sandbox/up.sh \
+  --project my-gcp-sandbox \
+  --admin alice@example.com \
+  --no-wait-cert
+```
+
+This performs an in-place update:
+1. Builds a fresh container image from `Dockerfile.registry` on the PR branch
+   (which automatically compiles the `ui-registry/` SPA via `npm run build` and
+   embeds the assets into `grain-registry`).
+2. Pushes the image tag `us-docker.pkg.dev/<project>/grain/grain-registry:sandbox-<git-sha>`
+   to Artifact Registry.
+3. Applies Terraform in-place to update the `registry_image` metadata attribute
+   on `grain-reg-vm`.
+4. Executes `/usr/local/sbin/grain-registry-reconcile` over IAP SSH on `grain-reg-vm`,
+   which pulls the new image and swaps the running container with zero downtime.
+5. Verifies that the load balancer health checks report healthy.
+
+> **Tip (Fast manual update without running Terraform):**
+> If Terraform definitions (`*.tf`) were not changed, you can build/push the
+> image and update instance metadata directly:
+> ```bash
+> # 1. Build and push image
+> TAG="sandbox-$(git rev-parse --short HEAD)"
+> docker build -f Dockerfile.registry -t "us-docker.pkg.dev/my-gcp-sandbox/grain/grain-registry:${TAG}" .
+> docker push "us-docker.pkg.dev/my-gcp-sandbox/grain/grain-registry:${TAG}"
+>
+> # 2. Update image in VM metadata
+> CURRENT_CFG="$(gcloud compute instances describe grain-reg-vm --project my-gcp-sandbox --zone us-central1-a --format='value(metadata.grain-registry-config)')"
+> NEW_CFG="$(echo "${CURRENT_CFG}" | jq -c --arg img "us-docker.pkg.dev/my-gcp-sandbox/grain/grain-registry:${TAG}" '.registry_image = $img')"
+> gcloud compute instances add-metadata grain-reg-vm --project my-gcp-sandbox --zone us-central1-a --metadata grain-registry-config="${NEW_CFG}"
+>
+> # 3. Trigger container restart on the VM
+> gcloud compute ssh grain-reg-vm --project my-gcp-sandbox --zone us-central1-a --tunnel-through-iap --command "sudo /usr/local/sbin/grain-registry-reconcile"
+> ```
+
+#### Updating the Test Daemon VM (`grain-reg-daemon-sandbox-daemon`):
+
+When testing daemon changes, tunnel client updates, or capability changes from a PR:
+
+```bash
+./deploy/test/registry-sandbox/daemon-up.sh \
+  --project my-gcp-sandbox \
+  --owner alice@example.com \
+  --entry sandbox-daemon
+```
+
+This rebuilds the lightweight `grain-daemon` test runtime image, pushes it to
+Artifact Registry, triggers a rolling update of the daemon container on the VM,
+re-registers the entry, and runs `verify.sh`.
+
+#### Verifying After an Update:
+
+Run `verify.sh`:
+
+```bash
+./deploy/test/registry-sandbox/verify.sh \
+  --project my-gcp-sandbox \
+  --entry sandbox-daemon
+```
+
+Then visit `https://<registry_host>` in your browser to sign in via Cloud IAP
+and interact with the updated Web UI and directory.
+
+### 5. Tear down cleanly (`down.sh`)
 
 ```bash
 ./deploy/test/registry-sandbox/down.sh \
