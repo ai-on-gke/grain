@@ -118,7 +118,7 @@ for (const [label, size] of [
       data: {
         title: `E2E multi select ${label} ${Date.now()}`,
         repo: "acme/widgets",
-        capabilities: ["read-issues"],
+        capabilities: ["console"],
       },
     });
     expect(created.ok()).toBeTruthy();
@@ -126,7 +126,7 @@ for (const [label, size] of [
     await page.goto(`/tasks/${task.id}`);
     const box = page.getByRole("combobox", { name: "Legacy capabilities" });
     await box.scrollIntoViewIfNeeded();
-    await expect.poll(() => chosenValues(box)).toEqual(["read-issues"]);
+    await expect.poll(() => chosenValues(box)).toEqual(["console"]);
     within(
       await chips(box).first().boundingBox(),
       await inputBase(box).boundingBox(),
@@ -161,9 +161,9 @@ for (const [label, size] of [
         r.url().endsWith(`/api/tasks/${task.id}/capabilities`) &&
         r.request().method() === "POST",
     );
-    await removeOption(box, "read-issues");
+    await removeOption(box, "console");
     expect(JSON.parse((await detached).request().postData())).toEqual({
-      id: "read-issues",
+      id: "console",
       attach: false,
     });
   });

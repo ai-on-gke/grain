@@ -566,3 +566,219 @@ func TestDaemonRegistryFlags(t *testing.T) {
 		t.Fatalf("checkConfig(-registry-connect with verifier flags) = %v, want nil", err)
 	}
 }
+
+func TestRegistryCLISubcommands(t *testing.T) {
+	ctx := context.Background()
+
+	var (
+		mu      sync.Mutex
+		entries = map[string]api.Entry{}
+	)
+	regSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/entries":
+			var list []api.Entry
+			for _, e := range entries {
+				list = append(list, e)
+			}
+			_ = json.NewEncoder(w).Encode(api.ListEntriesResponse{Entries: list})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/directory":
+			var dir []api.DirectoryEntry
+			for _, e := range entries {
+				if !e.Listed {
+					continue
+				}
+				dir = append(dir, api.DirectoryEntry{
+					Name:        e.Name,
+					URL:         "https://" + e.Name + ".grain.example.com",
+					Kind:        e.Kind,
+					Status:      e.Status,
+					HostKind:    e.HostKind,
+					DisplayName: e.DisplayName,
+					Owner:       e.Owner,
+				})
+			}
+			_ = json.NewEncoder(w).Encode(api.DirectoryResponse{Entries: dir})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/route":
+			repo := r.URL.Query().Get("repo")
+			path := r.URL.Query().Get("path")
+			cand := api.RouteCandidate{
+				Name:   "platform-vm",
+				URL:    "https://platform-vm.grain.example.com",
+				Kind:   api.KindInstance,
+				Status: api.StatusOnline,
+				Owner:  "alice@example.com",
+				MatchedScope: api.MatchedScope{
+					Repo:        repo,
+					PathPrefix:  path,
+					Role:        api.RolePrimary,
+					Source:      api.SourceDeclared,
+					Specificity: len(path),
+				},
+			}
+			_ = json.NewEncoder(w).Encode(api.RouteResponse{
+				Repo:       repo,
+				Path:       path,
+				Primary:    &cand,
+				Candidates: []api.RouteCandidate{cand},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/entries":
+			var req api.CreateEntryRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			listed := false
+			if req.Listed != nil {
+				listed = *req.Listed
+			}
+			e := api.Entry{
+				Name:        req.Name,
+				URL:         "https://" + req.Name + ".grain.example.com",
+				Kind:        req.Kind,
+				State:       api.StateCreating,
+				Status:      api.StatusOffline,
+				HostKind:    api.HostKindRegistryVM,
+				DisplayName: req.DisplayName,
+				Purpose:     req.Purpose,
+				Owner:       "alice@example.com",
+				OwnerGroup:  req.OwnerGroup,
+				Listed:      listed,
+				Shape:       req.Shape,
+				Tags:        req.Tags,
+			}
+			entries[req.Name] = e
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(api.CreateEntryResponse{Entry: e})
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/entries/"):
+			name := strings.TrimPrefix(r.URL.Path, "/api/entries/")
+			e, ok := entries[name]
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				_ = json.NewEncoder(w).Encode(map[string]any{"error": "not found"})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(e)
+		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/entries/"):
+			name := strings.TrimPrefix(r.URL.Path, "/api/entries/")
+			e := entries[name]
+			var req api.UpdateEntryRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if req.DisplayName != nil {
+				e.DisplayName = *req.DisplayName
+			}
+			if req.Listed != nil {
+				e.Listed = *req.Listed
+			}
+			entries[name] = e
+			_ = json.NewEncoder(w).Encode(e)
+		case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/scopes"):
+			name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/entries/"), "/scopes")
+			e := entries[name]
+			var req api.SetScopesRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			e.Scopes = nil
+			for _, sc := range req.Scopes {
+				e.Scopes = append(e.Scopes, api.Scope{
+					Repo:       sc.Repo,
+					PathPrefix: sc.PathPrefix,
+					Role:       sc.Role,
+					Source:     api.SourceDeclared,
+					Active:     true,
+				})
+			}
+			entries[name] = e
+			_ = json.NewEncoder(w).Encode(api.SetScopesResponse{Scopes: e.Scopes})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/credentials/rotate"):
+			_ = json.NewEncoder(w).Encode(api.RotateCredentialResponse{
+				RegistrationToken: "grc_rotated_subcmd_token",
+				Credential:        api.CredentialMeta{CredentialID: "cred-123"},
+			})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/upgrade"):
+			name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/entries/"), "/upgrade")
+			e := entries[name]
+			var req api.UpgradeEntryRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			e.TargetVersion = req.TargetVersion
+			entries[name] = e
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(e)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/replace"):
+			name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/entries/"), "/replace")
+			e := entries[name]
+			var req api.ReplaceEntryRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			e.Shape = req.Shape
+			e.State = api.StateReplacing
+			e.ReplaceStep = api.ReplaceStepDraining
+			entries[name] = e
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(e)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/transfer"):
+			name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/entries/"), "/transfer")
+			e := entries[name]
+			var req api.TransferRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			e.PendingOwner = req.To
+			entries[name] = e
+			_ = json.NewEncoder(w).Encode(e)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/transfer/accept"):
+			name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/entries/"), "/transfer/accept")
+			e := entries[name]
+			e.Owner = e.PendingOwner
+			e.PendingOwner = ""
+			entries[name] = e
+			_ = json.NewEncoder(w).Encode(e)
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/entries/"):
+			name := strings.TrimPrefix(r.URL.Path, "/api/entries/")
+			e := entries[name]
+			e.State = api.StateDeleted
+			entries[name] = e
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "deleted"})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/restore"):
+			name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/entries/"), "/restore")
+			e := entries[name]
+			e.State = api.StateRunning
+			entries[name] = e
+			_ = json.NewEncoder(w).Encode(e)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer regSrv.Close()
+
+	prevClient := registryHTTPClient
+	prevOIDC := registryOIDCToken
+	registryHTTPClient = regSrv.Client()
+	registryOIDCToken = func(ctx context.Context, registryURL, audience string) (string, error) {
+		return "oidc-test-token", nil
+	}
+	defer func() {
+		registryHTTPClient = prevClient
+		registryOIDCToken = prevOIDC
+	}()
+
+	out := &printer{json: true}
+	runSub := func(args ...string) {
+		t.Helper()
+		full := append([]string{args[0], "-registry-url", regSrv.URL}, args[1:]...)
+		if err := cmdRegistry(ctx, nil, out, full); err != nil {
+			t.Fatalf("cmdRegistry(%v) = %v", full, err)
+		}
+	}
+
+	runSub("create", "-shape", "medium", "-display-name", "Platform VM", "-listed", "-scope", "acme/platform:pkg/api:primary", "platform-vm")
+	runSub("list", "-all")
+	runSub("directory", "-q", "platform")
+	runSub("route", "-repo", "acme/platform", "-path", "pkg/api/types.go")
+	runSub("show", "platform-vm")
+	runSub("update", "-display-name", "Platform Core VM", "-listed", "platform-vm")
+	runSub("scopes", "-set", "acme/platform:pkg/registry:primary", "platform-vm")
+	runSub("scopes", "platform-vm")
+	runSub("rotate-credential", "-label", "ci-rotation", "-revoke-previous", "platform-vm")
+	runSub("upgrade", "-version", "v0.14.2", "platform-vm")
+	runSub("resize", "-shape", "large", "platform-vm")
+	runSub("transfer", "-to", "bob@example.com", "platform-vm")
+	runSub("accept-transfer", "platform-vm")
+	runSub("delete", "-confirm", "platform-vm", "platform-vm")
+	runSub("restore", "platform-vm")
+}

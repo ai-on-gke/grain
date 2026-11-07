@@ -446,7 +446,7 @@ func TestPersonOnlyOperationsRefuseDelegation(t *testing.T) {
 	}
 
 	// 3b. The same for admission above standard, which replaced the
-	// priority-dispatch and durable grants (schema migration 121): a task
+	// priority-dispatch and durable grants (schema migration 122): a task
 	// holding no person-only grant but admission bypass or durable is
 	// still a person's to approve directly.
 	for _, adm := range []model.Admission{model.AdmissionBypass, model.AdmissionDurable} {

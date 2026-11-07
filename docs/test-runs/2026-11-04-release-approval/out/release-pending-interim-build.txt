@@ -1,0 +1,5 @@
+release.pending:v2.6.0 acme/widgets 2026-11-07T05:10:52.65997907Z None None
+release.pending:v2.5.1 acme/widgets 2026-11-07T05:10:52.65997907Z None None
+release.pending:v2.5.0 acme/widgets 2026-11-07T05:00:50.659426571Z 2026-11-07T05:10:52.670169164Z automation:release-watch
+release.pending:v2.4.1 acme/widgets 2026-11-07T05:00:50.659426571Z 2026-11-07T05:02:32.910195205Z human:debian
+release.pending:v2.4.0 ai-on-gke/grain 2026-11-07T03:20:50.515670074Z None None

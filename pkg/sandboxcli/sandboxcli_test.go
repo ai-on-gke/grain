@@ -334,8 +334,8 @@ func TestSandboxCLIIssuesAndDBAgainstTheProxy(t *testing.T) {
 	if len(queries) != 1 || queries[0] != "SELECT id FROM task" {
 		t.Errorf("queries that reached the database = %q, want only the SELECT", queries)
 	}
-	if _, errOut, code := runAs("tok-bare", "issue", "list"); code != 1 || !strings.Contains(errOut, `"read-issues"`) {
-		t.Errorf("issue list without read-issues: %d %s", code, errOut)
+	if _, errOut, code := runAs("tok-bare", "issue", "list"); code != 1 || !strings.Contains(errOut, `"https://grain.dev/capabilities/github#read-issues"`) {
+		t.Errorf("issue list without github#read-issues: %d %s", code, errOut)
 	}
 }
 

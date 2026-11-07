@@ -355,12 +355,12 @@ func TestConsoleSessionCapabilitiesSayWhichOnesThisDeploymentCanHonour(t *testin
 		t.Error("github-sandbox says it is not ready without naming a single thing it needs")
 	}
 	// One that needs no configuration at all stays on offer.
-	debug, ok := byID["read-issues"]
+	debug, ok := byID["console"]
 	if !ok {
-		t.Fatalf("read-issues is missing from %v", resp.Capabilities)
+		t.Fatalf("console is missing from %v", resp.Capabilities)
 	}
 	if debug.Ready == nil || !*debug.Ready {
-		t.Errorf("read-issues ready = %v, want true: it needs nothing configured", debug.Ready)
+		t.Errorf("console ready = %v, want true: it needs nothing configured", debug.Ready)
 	}
 }
 
@@ -1151,7 +1151,7 @@ func TestActiveConsoleSessionEditableWhenStateRepoConfigured(t *testing.T) {
 		t.Fatalf("len(listed.Sessions) = %d, want 1", len(listed.Sessions))
 	}
 	dir := listed.Sessions[0]
-	for _, wantCap := range []string{"read-issues", "api:tasks:admin", "api:release-manager"} {
+	for _, wantCap := range []string{model.GitHubReadIssuesGrant, "api:tasks:admin", "api:release-manager"} {
 		if !slices.Contains(dir.Capabilities, wantCap) {
 			t.Errorf("GET /api/console-sessions Capabilities = %v, missing %q", dir.Capabilities, wantCap)
 		}
