@@ -161,6 +161,12 @@ func (c *Client) catalogueApprovalRefusal(ctx context.Context, task model.Task) 
 				personOnly = append(personOnly, g.Capability)
 			}
 		}
+		// Admission above standard replaced the person-only
+		// priority-dispatch and durable grants, so it asks for a
+		// person acting directly the way holding either did.
+		if adm := model.NormalizeAdmission(task.Admission); adm.AtLeast(model.AdmissionBypass) {
+			personOnly = append(personOnly, "admission "+string(adm))
+		}
 		if len(personOnly) > 0 {
 			return forbiddenCodeErrorf("requires_person", "task %s holds %s, which only a person acting directly may approve",
 				task.ID, strings.Join(personOnly, ", "))

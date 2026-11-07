@@ -856,6 +856,20 @@ var Migrations = []Migration{
 		Description: "rewrite stored read-issues grants, repo_config.ci_capabilities and capability_policy included, to https://grain.dev/capabilities/github#read-issues={} (the in-process capability is retired)",
 		Up:          migrateReadIssuesGrants,
 	},
+	{
+		Version:     122,
+		Description: "replace priority-dispatch and durable grants with the admission setting on tasks, templates, schedules and defaults",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `admission` TEXT NOT NULL DEFAULT 'standard'",
+			"ALTER TABLE `template` ADD COLUMN `admission` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `schedule` ADD COLUMN `admission` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `grain_config` ADD COLUMN `default_admission` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `repo_config` ADD COLUMN `default_admission` TEXT NOT NULL DEFAULT ''",
+		},
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			return MigrateAdmissionFromGrants(ctx, tx, false)
+		},
+	},
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as

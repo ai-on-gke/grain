@@ -284,6 +284,8 @@ type declaredTemplateView struct {
 	Interactive bool `json:"interactive,omitempty"`
 	// KeepRunning is the template's keep-running: restart on exit.
 	KeepRunning bool `json:"keepRunning,omitempty"`
+	// Admission is the template's admission: "standard", "bypass" or "durable".
+	Admission string `json:"admission,omitempty"`
 	// NothingNeeded is the template's nothing-needed: "" for close.
 	NothingNeeded string              `json:"nothingNeeded,omitempty"`
 	CustomFields  map[string][]string `json:"customFields,omitempty"`
@@ -318,6 +320,7 @@ type declaredScheduleView struct {
 	Base       string      `json:"base,omitempty"`
 	Overlap    string      `json:"overlap"`
 	Enabled    bool        `json:"enabled"`
+	Admission  string      `json:"admission,omitempty"`
 	NextFiring []time.Time `json:"nextFiring,omitempty"`
 }
 
@@ -360,6 +363,7 @@ func (v *declarationsView) fill(declared model.RepoDeclarations, now time.Time, 
 			Network:      string(t.Template.NetworkAccess),
 			Interactive:  t.Template.Interactive,
 			KeepRunning:  t.Template.KeepRunning,
+			Admission:    string(t.Template.Admission),
 			CustomFields: t.Template.CustomFields,
 			Push:         t.Push,
 
@@ -394,14 +398,15 @@ func (v *declarationsView) fill(declared model.RepoDeclarations, now time.Time, 
 			// two are the same for a `.grain/schedules` file, and for one
 			// translated out of a workflow cron the id is the one that
 			// says which schedule this is (`workflow.nightly`).
-			Stem:    declaredStem(s.Schedule.ID),
-			ID:      s.Schedule.ID,
-			Name:    s.Schedule.Title,
-			Fires:   declaredTrigger(stems, s.Schedule),
-			Cadence: declaredCadence(s.Schedule.Recurrence),
-			Base:    s.Schedule.Base,
-			Overlap: overlapWording(s.Schedule.Overlap),
-			Enabled: s.Schedule.Enabled,
+			Stem:      declaredStem(s.Schedule.ID),
+			ID:        s.Schedule.ID,
+			Name:      s.Schedule.Title,
+			Fires:     declaredTrigger(stems, s.Schedule),
+			Cadence:   declaredCadence(s.Schedule.Recurrence),
+			Base:      s.Schedule.Base,
+			Overlap:   overlapWording(s.Schedule.Overlap),
+			Enabled:   s.Schedule.Enabled,
+			Admission: string(s.Schedule.Admission),
 		}
 		at := now
 		schedLoc := s.Schedule.Location()
