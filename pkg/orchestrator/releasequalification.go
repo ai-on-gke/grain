@@ -54,19 +54,25 @@ package orchestrator
 //
 // # State
 //
-// There is no table of its own. Every attempt is a suite run tagged
-// model.ReleaseQualificationTag(repo, rc_tag), so the attempts of one
-// candidate are Store.SuiteRunsTagged's answer; and the verdict, once
-// reached, is the completed check run itself -- grain's own, posted by
-// the GitHub App its forge connection is (latestCheckRun) -- so a
-// candidate whose check run is completed is never looked at again: a candidate is
-// qualified again by cutting rc.(N+1), the ordinary path after a red one.
+// There is no table of its own. Every Stage 2 attempt is a set of suite
+// runs tagged model.QualificationAttemptTag(baseTag, attempt) (baseTag for
+// attempt 1, baseTag#2, #3, ... after an infrastructure stall), so the
+// item runs of that attempt are Store.SuiteRunsTagged's answer; and the
+// verdict, once reached, is the completed check run itself -- grain's own,
+// posted by the GitHub App its forge connection is (latestAttemptCheckRun).
+// A candidate whose newest check run concluded success or failure is final
+// and never looked at again (a red candidate is qualified again by cutting
+// rc.(N+1)). One that concluded neutral (stalled on infrastructure) waits
+// while pipeline.release-infra-stalled is open and unacknowledged, then
+// starts a fresh Stage 2 attempt and a new check run on the same commit
+// once a person acknowledges or clears the stall.
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -339,6 +345,56 @@ func latestCheckRun(runs []github.CheckRun, name, app, externalID string) *githu
 	return out
 }
 
+// parseQualificationAttempt parses extID as baseTag (attempt 1) or
+// baseTag#<n> (attempt n >= 2).
+func parseQualificationAttempt(extID, baseTag string) (int, bool) {
+	if extID == baseTag {
+		return 1, true
+	}
+	rest, ok := strings.CutPrefix(extID, baseTag+"#")
+	if !ok || rest == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(rest)
+	if err != nil || n < 2 || strconv.Itoa(n) != rest {
+		return 0, false
+	}
+	return n, true
+}
+
+// latestAttemptCheckRun is the highest Stage 2 attempt number app posted
+// as name for baseTag and the newest check run within that attempt (or 1,
+// nil when app has posted none yet).
+func latestAttemptCheckRun(runs []github.CheckRun, name, app, baseTag string) (int, *github.CheckRun) {
+	bestAttempt := 1
+	var out *github.CheckRun
+	for i := range runs {
+		r := &runs[i]
+		if r.Name != name || r.App != app {
+			continue
+		}
+		attempt, ok := parseQualificationAttempt(r.ExternalID, baseTag)
+		if !ok {
+			continue
+		}
+		if out == nil || attempt > bestAttempt || (attempt == bestAttempt && r.ID > out.ID) {
+			bestAttempt = attempt
+			out = r
+		}
+	}
+	return bestAttempt, out
+}
+
+// infraStallActive reports whether notifyKey's pipeline.release-infra-stalled
+// notification is still open and unacknowledged.
+func infraStallActive(ctx context.Context, store *model.Store, notifyKey string) (bool, error) {
+	open, err := store.OpenNotification(ctx, model.NotificationSubject(model.FamilyReleaseInfraStalled, notifyKey))
+	if err != nil {
+		return false, err
+	}
+	return open != nil && open.AckedAt == nil, nil
+}
+
 // stage1Green reports whether Stage 1 has succeeded on sha: the newest
 // run of its workflow (GitHub lists runs newest first), or the newest
 // status of its context.
@@ -457,11 +513,27 @@ func qualifyCandidate(ctx context.Context, store *model.Store, forge ReleaseQual
 	if err != nil {
 		return fmt.Errorf("reading checks on %s: %w", rcTag, err)
 	}
-	tag := model.QualificationTag(gate.stem, repo, cand.key)
-	check := latestCheckRun(checks, checkName, app, tag)
+	baseTag := model.QualificationTag(gate.stem, repo, cand.key)
+	attempt, check := latestAttemptCheckRun(checks, checkName, app, baseTag)
 	if check != nil && check.Status == "completed" {
-		return nil
+		if check.Conclusion == nil || *check.Conclusion != model.ConclusionNeutral {
+			return nil
+		}
+		nextTag := model.QualificationAttemptTag(baseTag, attempt+1)
+		nextRuns, err := store.SuiteRunsTagged(ctx, nextTag)
+		if err != nil {
+			return err
+		}
+		if len(nextRuns) == 0 {
+			stalled, err := infraStallActive(ctx, store, cand.notifyKey)
+			if err != nil || stalled {
+				return err
+			}
+		}
+		attempt++
+		check = nil
 	}
+	tag := model.QualificationAttemptTag(baseTag, attempt)
 
 	suite := gate.suite
 	items := make([]string, 0, len(suite.Items))
@@ -476,6 +548,10 @@ func qualifyCandidate(ctx context.Context, store *model.Store, forge ReleaseQual
 		check: checkName, release: cand.release, notifyKey: cand.notifyKey}
 	if check != nil {
 		q.checkID = check.ID
+	}
+	qualifyingTitle := fmt.Sprintf("Qualifying %s", rcTag)
+	if attempt > 1 {
+		qualifyingTitle = fmt.Sprintf("Qualifying %s (attempt %d)", rcTag, attempt)
 	}
 
 	if len(runs) == 0 {
@@ -493,9 +569,19 @@ func qualifyCandidate(ctx context.Context, store *model.Store, forge ReleaseQual
 		if err := q.start(ctx, gates); err != nil {
 			return err
 		}
-		return q.post("in_progress", "", fmt.Sprintf("Qualifying %s", rcTag),
-			fmt.Sprintf("Stage 1 (%s) is green on %s; Stage 2 started: %s.",
-				gate.cfg.Stage1Name(), sha, strings.Join(gates, ", ")))
+		if attempt > 1 {
+			if err := clearPipelineNotification(ctx, store,
+				model.NotificationSubject(model.FamilyReleaseInfraStalled, q.notifyKey), releaseQualificationNotifier); err != nil {
+				return err
+			}
+		}
+		started := fmt.Sprintf("Stage 1 (%s) is green on %s; Stage 2 started: %s.",
+			gate.cfg.Stage1Name(), sha, strings.Join(gates, ", "))
+		if attempt > 1 {
+			started = fmt.Sprintf("Stage 1 (%s) is green on %s; Stage 2 attempt %d started: %s.",
+				gate.cfg.Stage1Name(), sha, attempt, strings.Join(gates, ", "))
+		}
+		return q.post("in_progress", "", qualifyingTitle, started)
 	}
 
 	attempts, err := q.judge(ctx, runs)
@@ -505,8 +591,9 @@ func qualifyCandidate(ctx context.Context, store *model.Store, forge ReleaseQual
 	d := model.DecideReleaseQualification(items, attempts, model.DefaultQualificationPolicy)
 	summary := strings.Join(d.Lines, "\n")
 	// The notifications go up before the verdict is posted: a candidate
-	// with a completed check run is never looked at again, so a raise
-	// that failed after it would never be retried.
+	// with a completed check run is not looked at again (or, for neutral,
+	// waits on the open stall notification), so a raise that failed after
+	// it would never be retried.
 	switch d.Conclusion {
 	case model.ConclusionFailure:
 		if cand.rc != nil {
@@ -515,7 +602,7 @@ func qualifyCandidate(ctx context.Context, store *model.Store, forge ReleaseQual
 			}
 		}
 	case model.ConclusionNeutral:
-		if err := q.raiseInfraStalled(ctx, d.Lines[len(d.Lines)-1]); err != nil {
+		if err := q.raiseInfraStalled(ctx, d.Lines[len(d.Lines)-1], true); err != nil {
 			return err
 		}
 	case "":
@@ -547,7 +634,7 @@ func qualifyCandidate(ctx context.Context, store *model.Store, forge ReleaseQual
 		}
 	}
 	if q.checkID == 0 {
-		return q.post("in_progress", "", fmt.Sprintf("Qualifying %s", rcTag), summary)
+		return q.post("in_progress", "", qualifyingTitle, summary)
 	}
 	return nil
 }

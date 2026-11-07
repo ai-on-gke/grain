@@ -41,9 +41,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability"
-	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
-	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
@@ -193,17 +191,15 @@ func OfferedCapabilities() []Capability {
 		offered = append(offered, Capability{ID: r.ID, Name: r.Name, Description: r.Description})
 	}
 	offered = append(offered, []Capability{
-		{ID: prioritydispatch.CapabilityName, Name: "Priority dispatch",
-			Description: prioritydispatch.Description},
-		{ID: durable.CapabilityName, Name: "Durable",
-			Description: durable.Description},
-		// No bootstrap-playbooks row: it was retired onto the config-map
-		// server's config-map {"config_maps":["bootstrap"]} (schema migration
-		// 118), which is offered with the other capability-server methods.
+		// No priority-dispatch or durable rows: both were retired onto the
+		// task's admission setting (schema migration 122). No console row:
+		// it was retired onto the task's hosting setting (schema migration
+		// 123). No bootstrap-playbooks row: it was retired onto the
+		// config-map server's config-map {"config_maps":["bootstrap"]}
+		// (schema migration 118), which is offered with the other
+		// capability-server methods.
 		{ID: "github-sandbox", Name: "GitHub sandbox",
 			Description: "Create a private, single-use GitHub sandbox repo for this task to work in instead of /repo"},
-		{ID: "console", Name: "Interactive console",
-			Description: "Run this task's agent CLI on a terminal in the UI, and keep it running until somebody closes it -- everything else about the task is unchanged, including the pull request its branch becomes"},
 		// Not grain#ci: nobody attaches it by hand. A repository's CI
 		// Mode is the switch, and grain grants grain#ci to that
 		// repository's tasks itself (pkg/capability/grainci's package

@@ -669,7 +669,7 @@ export default function SettingsPage({
       case "repositories":
         body = (
           <RepositoriesSection
-            config={config}
+            {...common}
             tasks={tasks}
             onOpenRepo={onOpenRepo}
             onSection={go}

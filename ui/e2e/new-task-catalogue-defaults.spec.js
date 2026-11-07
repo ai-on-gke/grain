@@ -18,10 +18,10 @@ import { chips, chooseOption } from "./searchSelect.js";
 // A deployment default the capability catalogue restricts to one repo,
 // on a task filed with No repo (2026-10-29 test run, Bug 3). The demo
 // defaults api:self-debug, grain#source (once self-debug) and
-// github#read-issues; this test adds the legacy console capability to
-// those defaults. With console restricted to acme/widgets, the form used
+// github#read-issues; this test adds the legacy github-sandbox capability to
+// those defaults. With github-sandbox restricted to acme/widgets, the form used
 // to post all defaults and be refused with a 400 for a grant nobody had
-// picked. Now it marks console as refused
+// picked. Now it marks github-sandbox as refused
 // where it is ticked, says it is left off, and files the task with the
 // defaults the server keeps.
 
@@ -29,7 +29,9 @@ test.use({ demoArgs: ["-github-sim", "-fake-ci"] });
 
 const RESTRICTED = {
   catalogue: {
-    inProcess: { console: { restrictions: { repos: ["acme/widgets"] } } },
+    inProcess: {
+      "github-sandbox": { restrictions: { repos: ["acme/widgets"] } },
+    },
   },
 };
 
@@ -48,7 +50,7 @@ async function openStandalone(page, title) {
   const picker = page.getByRole("combobox", { name: "Legacy capabilities" });
   const note = page.getByTestId("new-task-catalogue-refused");
   await expect(note).toHaveText(
-    "settings/capabilities.yml refuses console on a task with no repo, so that default is left off this task.",
+    "settings/capabilities.yml refuses github-sandbox on a task with no repo, so that default is left off this task.",
   );
   return { picker, note };
 }
@@ -66,7 +68,9 @@ test("a No repo task leaves off a default the catalogue refuses there", async ({
     expect(
       (
         await request.put("/api/settings", {
-          data: { defaultCapabilities: [...defaultsBefore, "console"] },
+          data: {
+            defaultCapabilities: [...defaultsBefore, "github-sandbox"],
+          },
         })
       ).ok(),
     ).toBe(true);
@@ -82,7 +86,7 @@ test("a No repo task leaves off a default the catalogue refuses there", async ({
         `E2E catalogue default ${width} ${Date.now()}`,
       );
 
-      // Only gcp-key is marked, and it sits inside the picker; the note
+      // Only github-sandbox is marked, and it sits inside the picker; the note
       // sits inside the picker's own column, at either width.
       const refused = chips(picker).and(
         page.locator("[data-catalogue-refused]"),
@@ -107,7 +111,7 @@ test("a No repo task leaves off a default the catalogue refuses there", async ({
       // Its option carries the catalogue's reason, and stays enabled:
       // it is ticked, and its own row is how it would come off.
       await picker.click();
-      const option = page.getByRole("option", { name: /Interactive console/i });
+      const option = page.getByRole("option", { name: /GitHub sandbox/i });
       await expect(option).toContainText("repos: acme/widgets");
       await expect(option).not.toHaveAttribute("aria-disabled", "true");
       await page.keyboard.press("Escape");
@@ -138,7 +142,7 @@ test("a No repo task leaves off a default the catalogue refuses there", async ({
 
       if (width !== 1440) continue;
       // Filing leaves the untouched list to the server, which keeps the
-      // defaults it may and drops console, rather than refusing the task.
+      // defaults it may and drops github-sandbox, rather than refusing the task.
       const filing = page.waitForResponse(
         (r) =>
           r.url().endsWith("/api/tasks") && r.request().method() === "POST",
@@ -157,7 +161,7 @@ test("a No repo task leaves off a default the catalogue refuses there", async ({
           "https://grain.dev/capabilities/grain#source={}",
         ]),
       );
-      expect(detail.capabilities).not.toContain("console");
+      expect(detail.capabilities).not.toContain("github-sandbox");
     }
   } finally {
     await request.put("/api/capability-policy", {
@@ -177,29 +181,22 @@ test("an edited picker is asked to untick a refused grant", async ({
   request,
 }) => {
   const before = await (await request.get("/api/capability-policy")).json();
-  const defaultsBefore =
-    (await (await request.get("/api/settings")).json()).defaultCapabilities ||
-    [];
   try {
-    expect(
-      (
-        await request.put("/api/settings", {
-          data: { defaultCapabilities: [...defaultsBefore, "console"] },
-        })
-      ).ok(),
-    ).toBe(true);
     await request.put("/api/capability-policy", {
       data: { policy: RESTRICTED },
     });
     await page.setViewportSize({ width: 1440, height: 1000 });
-    const { picker, note } = await openStandalone(
-      page,
-      `E2E catalogue edited ${Date.now()}`,
-    );
-    await chooseOption(picker, "priority-dispatch");
+    await page.goto("/");
+    await page.getByRole("button", { name: /^\+? ?New task$/ }).click();
+    await expect(page.getByRole("heading", { name: "New task" })).toBeVisible();
+    await page.getByLabel("Title").fill(`E2E catalogue edited ${Date.now()}`);
+    const picker = page.getByRole("combobox", { name: "Legacy capabilities" });
+    await chooseOption(picker, "github-sandbox");
     await page.keyboard.press("Escape");
+    await chooseOption(page.getByLabel(/^Repos/), "none");
+    const note = page.getByTestId("new-task-catalogue-refused");
     await expect(note).toHaveText(
-      "settings/capabilities.yml refuses console on a task with no repo: untick it, or the task will not be filed.",
+      "settings/capabilities.yml refuses github-sandbox on a task with no repo: untick it, or the task will not be filed.",
     );
     await chooseOption(page.getByLabel(/^Repos/), "acme/widgets");
     await expect(note).toHaveCount(0);
@@ -210,9 +207,6 @@ test("an edited picker is asked to untick a refused grant", async ({
   } finally {
     await request.put("/api/capability-policy", {
       data: { policy: before.policy || {} },
-    });
-    await request.put("/api/settings", {
-      data: { defaultCapabilities: defaultsBefore },
     });
   }
 });

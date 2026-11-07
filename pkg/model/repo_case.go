@@ -316,7 +316,7 @@ var repoCaseTables = []repoCaseTable{
 		// repository are folded together, which is how clone_url,
 		// unfixable_checks and base_branch_ci_jobs came to be missing
 		// from it before grain/task-340 noticed.
-		values: []string{"default_capabilities", "prompt_extension", "setup_command", "ci_capabilities", "release_workflows_disabled", "release_secrets", "declarations", "require_branch_up_to_date", "ignore_github_ci", "watch_default_branch", "clone_url", "unfixable_checks", "base_branch_ci_jobs", "declared_prompt_extension", "declared_setup_command", "post_merge_dispatch_jobs", "work_ownership", "work_overrides", "ci_mode", "repair_template_id", "port_branches", "declared_port_branches", "port_types", "declared_port_types", "git_credential", "merge_on_green", "base_repair_bypasses_human_gates", "merge_recheck", "issue_import_enabled", "issue_import_repo", "issue_import_label", "issue_import_approved", "issue_import_interval_seconds", "upstream_repo"},
+		values: []string{"default_capabilities", "prompt_extension", "setup_command", "ci_capabilities", "release_workflows_disabled", "release_secrets", "declarations", "require_branch_up_to_date", "ignore_github_ci", "watch_default_branch", "clone_url", "unfixable_checks", "base_branch_ci_jobs", "declared_prompt_extension", "declared_setup_command", "post_merge_dispatch_jobs", "work_ownership", "work_overrides", "ci_mode", "repair_template_id", "port_branches", "declared_port_branches", "port_types", "declared_port_types", "git_credential", "merge_on_green", "base_repair_bypasses_human_gates", "merge_recheck", "issue_import_enabled", "issue_import_repo", "issue_import_label", "issue_import_approved", "issue_import_interval_seconds", "upstream_repo", "default_admission", "default_hosting"},
 		merge:  mergeRepoConfigRow,
 	},
 	// What grain CI last made of a branch things merge into
@@ -965,6 +965,16 @@ func mergeRepoConfigRow(canonical, divergent []string) ([]string, string) {
 		return nil, "both spellings set different upstream_repo"
 	}
 	out[33] = upstream
+	defaultAdm, ok := pickText(canonical[34], divergent[34])
+	if !ok {
+		return nil, "both spellings set different default_admission"
+	}
+	out[34] = defaultAdm
+	defaultHost, ok := pickText(canonical[35], divergent[35])
+	if !ok {
+		return nil, "both spellings set different default_hosting"
+	}
+	out[35] = defaultHost
 	return out, ""
 }
 

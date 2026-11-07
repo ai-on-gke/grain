@@ -128,15 +128,26 @@ export function useSettingsSection({ showError, dismissError, onSaved } = {}) {
         if (errorKey && sent && raw.startsWith(`${sent}:`)) {
           raw = `${errorKey}${raw.slice(sent.length)}`;
         }
-        const message = settingErrorMessage(raw);
+        // A write refused because the setting lives in a config
+        // repository (409 config_managed_externally) carries the file
+        // and the patch to commit there: showError opens the refusal
+        // dialog for the error itself, with its Create Config PR, where
+        // the bare message dumped that patch into a five-second toast.
+        // Sending it again is refused again, so it offers no Retry.
+        const refusal = err?.configRefusal;
+        const message = refusal
+          ? `${settingLabel(field)} is managed in the config repository ${refusal.repo || ""}`.trim()
+          : settingErrorMessage(raw);
         refused(field, message);
         setError({
           key: field,
           field: settingLabel(field),
           message,
-          retry: () => saveChoiceRef.current?.(payload, { errorKey }),
+          retry: refusal
+            ? undefined
+            : () => saveChoiceRef.current?.(payload, { errorKey }),
         });
-        showError?.(message);
+        showError?.(refusal ? err : message);
         return false;
       } finally {
         setInFlight((n) => n - 1);

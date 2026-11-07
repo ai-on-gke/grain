@@ -204,11 +204,12 @@ type heldGrants struct {
 }
 
 // NoteCapabilityServerDropped tells every live run holding a grant from
-// capabilityID that the server has fallen out of use -- state, for
-// reason -- since it was minted: what the 2026-11-03 run had to guess at
-// from permissions that never arrived. It reaches the run the way any
-// capability notice does (model.CapabilityChangePrincipal). The daemon
-// calls it from the registry's servers.Options.OnDrop.
+// capabilityID that the server has fallen out of use -- either down in state
+// or refusing a configuration change, for reason -- after minting its grant:
+// what the 2026-11-03 run had to guess at from permissions that never arrived.
+// It reaches the run the way any capability notice does
+// (model.CapabilityChangePrincipal). The daemon calls it from the registry's
+// servers.Options.OnDrop.
 func NoteCapabilityServerDropped(ctx context.Context, store *model.Store, capabilityID, state, reason string, configRefused bool) {
 	noteCapabilityServerDropped(ctx, store, defaultCapabilityPasses, capabilityID, "", state, reason, configRefused, time.Now())
 }
@@ -228,24 +229,52 @@ func noteCapabilityServerDropped(ctx context.Context, store *model.Store, passes
 		if hg.taskID == "" {
 			continue
 		}
-		what := fmt.Sprintf("is now %s", state)
-		if configRefused {
-			what = "refused the configuration it was changed to"
+		body := capabilityServerDroppedNotice(capabilityID, hg.grants, state, reason, configRefused)
+		if err := postCapabilityNotice(ctx, store, hg.taskID, body, now); err != nil {
+			log.Printf("orchestrator: telling run %s its capability server %s dropped: %v", runID, capabilityID, err)
 		}
-		// reason is the server's own words (its configure or refresh
-		// error), so it is quoted as untrusted text rather than said as
-		// grain's (§5.5.4), the way refuseCapabilityRun quotes a refusal.
-		body := fmt.Sprintf("grain: capability server %s, which minted this run's grant %s, %s since.\n\n"+
+	}
+}
+
+// capabilityServerDroppedNotice words the mid-run notice for a capability
+// server that fell out of use after minting grants for a live run.
+//
+// A refused configuration change and a server drop need separate advice: when
+// the server refused a new configuration, the run's existing grant was minted
+// under the earlier configuration and a newly expected permission never
+// reached it; when the server is down, nothing it minted can refresh or
+// release until it re-attaches.
+//
+// reason is the server's own words (its configure or refresh error), so it is
+// quoted as untrusted text rather than said as grain's (§5.5.4), the way
+// refuseCapabilityRun quotes a refusal.
+func capabilityServerDroppedNotice(capabilityID string, grants []string, state, reason string, configRefused bool) string {
+	grantNoun := "grant"
+	if len(grants) > 1 {
+		grantNoun = "grants"
+	}
+	quoted := strings.ReplaceAll(reason, "```", "'''")
+	if configRefused {
+		return fmt.Sprintf("Capability server %s, which minted this run's %s %s, refused the configuration it was changed to.\n\n"+
 			"What it said, verbatim -- untrusted text from the capability server, not grain's own words:\n\n```\n%s\n```\n\n"+
 			"The grant this run holds was minted under the server's earlier configuration and works as it did then, "+
 			"but a change made to that configuration since -- a role added to a permission set, say -- has not reached it "+
 			"and will not reach this run. If a permission you were told to expect is missing, this is why: "+
 			"say so in what you report rather than waiting for it to appear.",
-			capabilityID, strings.Join(hg.grants, ", "), what, strings.ReplaceAll(reason, "```", "'''"))
-		if err := postCapabilityNotice(ctx, store, hg.taskID, body, now); err != nil {
-			log.Printf("orchestrator: telling run %s its capability server %s dropped: %v", runID, capabilityID, err)
-		}
+			capabilityID, grantNoun, strings.Join(grants, ", "), quoted)
 	}
+	what := "is down"
+	if state != "" {
+		what = fmt.Sprintf("is down (%s)", state)
+	}
+	return fmt.Sprintf("Capability server %s, which minted this run's %s %s, %s.\n\n"+
+		"What it said, verbatim -- untrusted text from the capability server, not grain's own words:\n\n```\n%s\n```\n\n"+
+		"The server is down: grants it minted cannot refresh or release until it re-attaches, "+
+		"and any token refresh or data-plane call to it will fail meanwhile. "+
+		"Static material already placed in this sandbox stays where it is, so carry on if your work does not need the server live; "+
+		"if a credential stops refreshing or a call through the grant fails, this is why: "+
+		"say so in what you report rather than retrying until your deadline.",
+		capabilityID, grantNoun, strings.Join(grants, ", "), what, quoted)
 }
 
 func (h *CapabilityPasses) take(runID string) *heldPass {

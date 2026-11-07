@@ -86,19 +86,33 @@ func runDemo(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	}
 }
 
+type demoQuotaOverride struct {
+	MaxInstanceUnits int
+	MaxInstances     int
+	MaxConnected     int
+	Note             string
+	UpdatedBy        string
+	UpdatedAt        *time.Time
+}
+
 type demoState struct {
-	mu             sync.RWMutex
-	now            time.Time
-	callerEmail    string
-	instanceDomain string
-	registryHost   string
-	shapes         []api.Shape
-	entries        map[string]*api.Entry
-	order          []string
-	replicas       []api.ReplicaStatus
-	tunnels        []api.TunnelSessionInfo
-	auditLog       []api.AuditLogEntry
-	nextAuditID    int64
+	mu              sync.RWMutex
+	now             time.Time
+	callerEmail     string
+	instanceDomain  string
+	registryHost    string
+	shapes          []api.Shape
+	entries         map[string]*api.Entry
+	order           []string
+	replicas        []api.ReplicaStatus
+	tunnels         []api.TunnelSessionInfo
+	auditLog        []api.AuditLogEntry
+	nextAuditID     int64
+	ownerDisabled   map[string]bool
+	quotas          map[string]*demoQuotaOverride
+	sqlInstances    []api.SQLInstanceStatus
+	orphans         []api.OrphanVMInfo
+	reconcilerLease *api.LeaseStatus
 }
 
 func newDemoState() *demoState {
@@ -196,14 +210,17 @@ func newDemoState() *demoState {
 				ID:         104,
 				At:         now.Add(-12 * time.Minute),
 				ActorEmail: "bob@example.com",
+				Via:        "owner",
 				Action:     "entry_transfer_offer",
 				EntryName:  "ml-trainer-k8s",
-				Detail:     map[string]any{"to": "alice@example.com"},
+				Detail:     map[string]any{"to": "alice@example.com", "expires_at": now.Add(7*24*time.Hour - 12*time.Minute).Format(time.RFC3339)},
 			},
 			{
 				ID:         103,
 				At:         now.Add(-25 * time.Minute),
 				ActorEmail: "alice@example.com",
+				Via:        "owner_group",
+				GrantID:    "group:payments-eng@example.com",
 				Action:     "entry_replace",
 				EntryName:  "payments-staging",
 				Detail:     map[string]any{"shape": "large", "target_version": "v0.14.2"},
@@ -212,6 +229,7 @@ func newDemoState() *demoState {
 				ID:         102,
 				At:         now.Add(-2 * time.Hour),
 				ActorEmail: "alice@example.com",
+				Via:        "owner",
 				Action:     "credential_rotate",
 				EntryName:  "alice-workstation",
 				Detail:     map[string]any{"cred_id": "cred-alice-ws-01"},
@@ -220,12 +238,65 @@ func newDemoState() *demoState {
 				ID:         101,
 				At:         now.Add(-6 * time.Hour),
 				ActorEmail: "alice@example.com",
+				Via:        "admin_override",
 				Action:     "entry_scopes_update",
 				EntryName:  "alice-workstation",
 				Detail:     map[string]any{"repo": "acme/platform"},
 			},
 		},
-		nextAuditID: 105,
+		nextAuditID:   105,
+		ownerDisabled: map[string]bool{},
+		quotas: map[string]*demoQuotaOverride{
+			"alice@example.com": {
+				MaxInstanceUnits: 12,
+				MaxInstances:     6,
+				MaxConnected:     20,
+				Note:             "Platform team lead elevated quota",
+				UpdatedBy:        "admin@example.com",
+				UpdatedAt:        timePtr(now.Add(-7 * 24 * time.Hour)),
+			},
+		},
+		sqlInstances: []api.SQLInstanceStatus{
+			{
+				Name:              "grain-fleet-sql-01",
+				ConnectionName:    "acme-prod:us-central1:grain-fleet-sql-01",
+				PrivateIP:         "10.128.0.51",
+				MaxDatabases:      40,
+				UsedDatabases:     3,
+				ActiveDatabases:   2,
+				RetainedDatabases: 1,
+				Draining:          false,
+			},
+			{
+				Name:              "grain-fleet-sql-02",
+				ConnectionName:    "acme-prod:us-central1:grain-fleet-sql-02",
+				PrivateIP:         "10.128.0.52",
+				MaxDatabases:      40,
+				UsedDatabases:     0,
+				ActiveDatabases:   0,
+				RetainedDatabases: 0,
+				Draining:          false,
+			},
+		},
+		orphans: []api.OrphanVMInfo{
+			{
+				InstanceID: "grain-legacy-worker-09",
+				Zone:       "us-central1-a",
+				EntryName:  "legacy-worker-09",
+				State:      "RUNNING",
+				InternalIP: "10.128.15.99",
+				DetectedAt: now.Add(-45 * time.Minute),
+			},
+		},
+		reconcilerLease: &api.LeaseStatus{
+			LeaseName:  "reconciler",
+			HolderID:   "registry-us-central1-a-01",
+			ExpiresAt:  now.Add(27 * time.Second),
+			AcquiredAt: now.Add(-48 * time.Hour),
+			RenewedAt:  now.Add(-3 * time.Second),
+			Active:     true,
+			LagSeconds: 3,
+		},
 	}
 
 	seedEntries := []*api.Entry{
@@ -539,6 +610,7 @@ func newDemoState() *demoState {
 			Owner:               "bob@example.com",
 			OwnerGroup:          "group:ml-infra@example.com",
 			PendingOwner:        "alice@example.com",
+			TransferExpiresAt:   timePtr(now.Add(7*24*time.Hour - 12*time.Minute)),
 			ConnectedPrincipal:  "ml-trainer-sa@acme-prod.iam.gserviceaccount.com",
 			Listed:              true,
 			Tags:                []string{"ml", "kubernetes", "gpu"},
@@ -663,6 +735,7 @@ func newDemoState() *demoState {
 			DeletedAt:     timePtr(now.Add(-48 * time.Hour)),
 			ReservedUntil: timePtr(now.Add(28 * 24 * time.Hour)),
 			PurgeAfter:    timePtr(now.Add(28 * 24 * time.Hour)),
+			DBPurgeAfter:  timePtr(now.Add(5 * 24 * time.Hour)),
 			Generation:    2,
 		},
 	}
@@ -685,6 +758,18 @@ func (d *demoState) handler() http.Handler {
 	mux.HandleFunc("GET /api/shapes", d.handleShapes)
 	mux.HandleFunc("GET /api/status", d.handleStatus)
 	mux.HandleFunc("GET /api/admin/summary", d.handleAdminSummary)
+	mux.HandleFunc("POST /api/admin/owners/{email}", d.handleAdminSetOwnerDisabled)
+	mux.HandleFunc("PATCH /api/admin/owners/{email}", d.handleAdminSetOwnerDisabled)
+	mux.HandleFunc("PUT /api/admin/quotas/{email}", d.handleAdminSetQuota)
+	mux.HandleFunc("POST /api/admin/quotas/{email}", d.handleAdminSetQuota)
+	mux.HandleFunc("DELETE /api/admin/quotas/{email}", d.handleAdminResetQuota)
+	mux.HandleFunc("POST /api/admin/conflicts/resolve", d.handleAdminResolveConflict)
+	mux.HandleFunc("POST /api/admin/sql-instances/{name}", d.handleAdminSetSQLDraining)
+	mux.HandleFunc("PATCH /api/admin/sql-instances/{name}", d.handleAdminSetSQLDraining)
+	mux.HandleFunc("DELETE /api/admin/orphans/{zone}/{instance}", d.handleAdminDeleteOrphan)
+	mux.HandleFunc("DELETE /api/admin/tunnels/{name}", d.handleAdminDisconnectTunnel)
+	mux.HandleFunc("POST /api/admin/entries/{name}/purge", d.handleAdminPurgeEntry)
+	mux.HandleFunc("POST /api/admin/entries/{name}/transfer", d.handleAdminForceTransfer)
 	mux.HandleFunc("GET /api/directory", d.handleDirectory)
 	mux.HandleFunc("GET /api/route", d.handleRoute)
 	mux.HandleFunc("GET /api/entries/{name}/availability", d.handleAvailability)
@@ -801,13 +886,147 @@ func (d *demoState) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+func (d *demoState) buildOwnerSummariesLocked() []api.OwnerQuotaSummary {
+	ownerSet := map[string]bool{}
+	for _, name := range d.order {
+		e := d.entries[name]
+		if e.Owner != "" {
+			ownerSet[strings.ToLower(e.Owner)] = true
+		}
+	}
+	for email := range d.quotas {
+		ownerSet[strings.ToLower(email)] = true
+	}
+	for email := range d.ownerDisabled {
+		ownerSet[strings.ToLower(email)] = true
+	}
+	var emails []string
+	for email := range ownerSet {
+		emails = append(emails, email)
+	}
+	sort.Strings(emails)
+
+	shapeUnits := map[string]int{}
+	for _, sh := range d.shapes {
+		shapeUnits[sh.Name] = sh.QuotaUnits
+	}
+
+	var out []api.OwnerQuotaSummary
+	for _, email := range emails {
+		sum := api.OwnerQuotaSummary{
+			Email:            email,
+			Disabled:         d.ownerDisabled[email],
+			MaxInstanceUnits: 10,
+			MaxConnected:     20,
+		}
+		if q, ok := d.quotas[email]; ok && q != nil {
+			sum.HasOverride = true
+			if q.MaxInstanceUnits > 0 {
+				sum.MaxInstanceUnits = q.MaxInstanceUnits
+			}
+			if q.MaxConnected > 0 {
+				sum.MaxConnected = q.MaxConnected
+			}
+			sum.UpdatedBy = q.UpdatedBy
+			sum.UpdatedAt = q.UpdatedAt
+		}
+		for _, name := range d.order {
+			e := d.entries[name]
+			if !strings.EqualFold(e.Owner, email) {
+				continue
+			}
+			if e.DeletedAt != nil {
+				continue
+			}
+			if e.Kind == api.KindInstance {
+				u := shapeUnits[e.Shape]
+				if u <= 0 {
+					u = 1
+				}
+				sum.UsedInstanceUnits += u
+			} else if e.Kind == api.KindConnected {
+				sum.UsedConnected++
+			}
+		}
+		out = append(out, sum)
+	}
+	return out
+}
+
+func (d *demoState) buildScopeConflictsLocked() []api.AdminScopeConflict {
+	var conflicts []api.AdminScopeConflict
+	for _, name := range d.order {
+		e := d.entries[name]
+		if e.DeletedAt != nil {
+			continue
+		}
+		for _, sc := range e.Scopes {
+			if !sc.Active && sc.InactiveReason == api.InactivePrimaryConflict {
+				confEntry, _ := d.entries[sc.ConflictWith]
+				var confOwner, confGroup, confPrefix string
+				if confEntry != nil {
+					confOwner = confEntry.Owner
+					confGroup = confEntry.OwnerGroup
+					for _, csc := range confEntry.Scopes {
+						if strings.EqualFold(csc.Repo, sc.Repo) && csc.Active && csc.EffectiveRole == api.RolePrimary {
+							confPrefix = csc.PathPrefix
+							break
+						}
+					}
+				}
+				claimedAt := e.UpdatedAt
+				if sc.ClaimedAt != nil {
+					claimedAt = *sc.ClaimedAt
+				}
+				conflicts = append(conflicts, api.AdminScopeConflict{
+					EntryName:           e.Name,
+					Owner:               e.Owner,
+					OwnerGroup:          e.OwnerGroup,
+					Repo:                sc.Repo,
+					PathPrefix:          sc.PathPrefix,
+					Source:              string(sc.Source),
+					ClaimedAt:           claimedAt,
+					ConflictWith:        sc.ConflictWith,
+					IncumbentOwner:      confOwner,
+					IncumbentOwnerGroup: confGroup,
+					IncumbentPathPrefix: confPrefix,
+				})
+			}
+		}
+	}
+	return conflicts
+}
+
 func (d *demoState) handleAdminSummary(w http.ResponseWriter, r *http.Request) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
+
+	var deletedEntries []api.Entry
+	versionCounts := map[string]int{}
+	for _, name := range d.order {
+		e := d.entries[name]
+		if e.DeletedAt != nil {
+			deletedEntries = append(deletedEntries, *e)
+			continue
+		}
+		ver := e.GrainVersion
+		if ver == "" {
+			ver = "unreported"
+		}
+		versionCounts[ver]++
+	}
+
 	writeJSON(w, http.StatusOK, api.AdminSummaryResponse{
-		Replicas:       d.replicas,
-		TunnelSessions: d.tunnels,
-		AuditLog:       d.auditLog,
+		Replicas:        d.replicas,
+		TunnelSessions:  d.tunnels,
+		AuditLog:        d.auditLog,
+		Owners:          d.buildOwnerSummariesLocked(),
+		ScopeConflicts:  d.buildScopeConflictsLocked(),
+		SQLInstances:    d.sqlInstances,
+		Orphans:         d.orphans,
+		DeletedEntries:  deletedEntries,
+		VersionCounts:   versionCounts,
+		ReconcilerLease: d.reconcilerLease,
 	})
 }
 
@@ -1344,6 +1563,21 @@ func (d *demoState) handleReplaceEntry(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, *e)
 }
 
+func (d *demoState) appendAuditLocked(via, grantID, action, entryName string, detail map[string]any) {
+	ev := api.AuditLogEntry{
+		ID:         d.nextAuditID,
+		At:         d.now,
+		ActorEmail: d.callerEmail,
+		Via:        via,
+		GrantID:    grantID,
+		Action:     action,
+		EntryName:  entryName,
+		Detail:     detail,
+	}
+	d.nextAuditID++
+	d.auditLog = append([]api.AuditLogEntry{ev}, d.auditLog...)
+}
+
 func (d *demoState) handleRestoreEntry(w http.ResponseWriter, r *http.Request) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -1353,11 +1587,17 @@ func (d *demoState) handleRestoreEntry(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "not_found", fmt.Sprintf("entry %q not found", name))
 		return
 	}
+	if e.PurgedAt != nil {
+		writeJSONError(w, http.StatusConflict, "conflict", fmt.Sprintf("entry %q has been hard-purged and cannot be restored", name))
+		return
+	}
 	e.State = api.StateRunning
 	e.Status = api.StatusOnline
 	e.DeletedAt = nil
 	e.ReservedUntil = nil
 	e.PurgeAfter = nil
+	e.DBPurgeAfter = nil
+	d.appendAuditLocked("owner", "", "entry_restore", name, nil)
 	writeJSON(w, http.StatusOK, *e)
 }
 
@@ -1372,11 +1612,14 @@ func (d *demoState) handleDeleteEntry(w http.ResponseWriter, r *http.Request) {
 	}
 	t := d.now
 	resUntil := d.now.Add(30 * 24 * time.Hour)
+	dbPurge := d.now.Add(7 * 24 * time.Hour)
 	e.State = api.StateDeleted
 	e.Status = api.StatusOffline
 	e.DeletedAt = &t
 	e.ReservedUntil = &resUntil
 	e.PurgeAfter = &resUntil
+	e.DBPurgeAfter = &dbPurge
+	d.appendAuditLocked("owner", "", "entry_delete", name, nil)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "deleted", "name": name})
 }
 
@@ -1395,10 +1638,35 @@ func (d *demoState) handleOfferTransfer(w http.ResponseWriter, r *http.Request) 
 	if to == "" {
 		to = strings.TrimSpace(req.NewOwner)
 	}
+	if req.Cancel {
+		e.PendingOwner = ""
+		e.TransferExpiresAt = nil
+		d.appendAuditLocked("owner", "", "entry_transfer_cancel", name, nil)
+		writeJSON(w, http.StatusOK, *e)
+		return
+	}
+	if req.Force {
+		e.Owner = to
+		e.PendingOwner = ""
+		e.TransferExpiresAt = nil
+		if req.ClearOwnerGroup {
+			e.OwnerGroup = ""
+		} else if req.OwnerGroup != "" {
+			e.OwnerGroup = req.OwnerGroup
+		}
+		d.appendAuditLocked("admin_override", "", "entry_transfer", name, map[string]any{"to": to, "force": true})
+		writeJSON(w, http.StatusOK, *e)
+		return
+	}
+	exp := d.now.Add(7 * 24 * time.Hour)
 	e.PendingOwner = to
-	if req.OwnerGroup != "" {
+	e.TransferExpiresAt = &exp
+	if req.ClearOwnerGroup {
+		e.OwnerGroup = ""
+	} else if req.OwnerGroup != "" {
 		e.OwnerGroup = req.OwnerGroup
 	}
+	d.appendAuditLocked("owner", "", "entry_transfer_offer", name, map[string]any{"to": to, "expires_at": exp.Format(time.RFC3339)})
 	writeJSON(w, http.StatusOK, *e)
 }
 
@@ -1411,7 +1679,246 @@ func (d *demoState) handleAcceptTransfer(w http.ResponseWriter, r *http.Request)
 		writeJSONError(w, http.StatusNotFound, "not_found", fmt.Sprintf("entry %q not found", name))
 		return
 	}
+	prevOwner := e.Owner
 	e.Owner = d.callerEmail
 	e.PendingOwner = ""
+	e.TransferExpiresAt = nil
+	t := d.now
+	for i := range e.Credentials {
+		if e.Credentials[i].RevokedAt == nil {
+			e.Credentials[i].RevokedAt = &t
+		}
+	}
+	var keptTunnels []api.TunnelSessionInfo
+	for _, ts := range d.tunnels {
+		if !strings.EqualFold(ts.EntryName, name) {
+			keptTunnels = append(keptTunnels, ts)
+		}
+	}
+	d.tunnels = keptTunnels
+	if e.Kind == api.KindConnected {
+		f := false
+		e.TunnelConnected = &f
+		e.Status = api.StatusOffline
+	}
+	d.appendAuditLocked("owner", "", "entry_transfer_accept", name, map[string]any{"from": prevOwner, "to": d.callerEmail})
+	writeJSON(w, http.StatusOK, *e)
+}
+
+func (d *demoState) handleAdminSetOwnerDisabled(w http.ResponseWriter, r *http.Request) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	email := strings.ToLower(strings.TrimSpace(r.PathValue("email")))
+	var req api.SetOwnerDisabledRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	d.ownerDisabled[email] = req.Disabled
+	for _, e := range d.entries {
+		if strings.EqualFold(e.Owner, email) {
+			e.OwnerDisabled = req.Disabled
+			if req.Disabled && e.DeletedAt != nil {
+				t := d.now
+				e.ReservedUntil = &t
+			}
+		}
+	}
+	d.appendAuditLocked("admin_override", "", "owner_disabled_update", "", map[string]any{"owner_email": email, "disabled": req.Disabled})
+	for _, s := range d.buildOwnerSummariesLocked() {
+		if strings.EqualFold(s.Email, email) {
+			writeJSON(w, http.StatusOK, s)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, api.OwnerQuotaSummary{Email: email, Disabled: req.Disabled})
+}
+
+func (d *demoState) handleAdminSetQuota(w http.ResponseWriter, r *http.Request) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	email := strings.ToLower(strings.TrimSpace(r.PathValue("email")))
+	var req api.SetQuotaRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	t := d.now
+	d.quotas[email] = &demoQuotaOverride{
+		MaxInstanceUnits: req.MaxInstanceUnits,
+		MaxConnected:     req.MaxConnected,
+		UpdatedBy:        d.callerEmail,
+		UpdatedAt:        &t,
+	}
+	d.appendAuditLocked("admin_override", "", "quota_update", "", map[string]any{
+		"owner_email":        email,
+		"max_instance_units": req.MaxInstanceUnits,
+		"max_connected":      req.MaxConnected,
+	})
+	for _, s := range d.buildOwnerSummariesLocked() {
+		if strings.EqualFold(s.Email, email) {
+			writeJSON(w, http.StatusOK, s)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, api.OwnerQuotaSummary{Email: email})
+}
+
+func (d *demoState) handleAdminResetQuota(w http.ResponseWriter, r *http.Request) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	email := strings.ToLower(strings.TrimSpace(r.PathValue("email")))
+	delete(d.quotas, email)
+	d.appendAuditLocked("admin_override", "", "quota_reset", "", map[string]any{"owner_email": email})
+	for _, s := range d.buildOwnerSummariesLocked() {
+		if strings.EqualFold(s.Email, email) {
+			writeJSON(w, http.StatusOK, s)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, api.OwnerQuotaSummary{Email: email})
+}
+
+func (d *demoState) handleAdminResolveConflict(w http.ResponseWriter, r *http.Request) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var req api.ResolveConflictRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	e, ok := d.entries[strings.ToLower(strings.TrimSpace(req.EntryName))]
+	if !ok {
+		writeJSONError(w, http.StatusNotFound, "not_found", "entry not found")
+		return
+	}
+	action := strings.ToLower(strings.TrimSpace(req.Resolution))
+	if action == "" {
+		action = "demote"
+	}
+	var keptScopes []api.Scope
+	for _, sc := range e.Scopes {
+		if strings.EqualFold(sc.Repo, req.Repo) && sc.PathPrefix == req.PathPrefix {
+			if action == "remove" {
+				continue
+			}
+			sc.Role = api.RoleSecondary
+			sc.EffectiveRole = api.RoleSecondary
+			sc.Active = true
+			sc.InactiveReason = ""
+			sc.ConflictWith = ""
+		}
+		keptScopes = append(keptScopes, sc)
+	}
+	e.Scopes = keptScopes
+	e.ScopeConflicts = nil
+	d.appendAuditLocked("admin_override", "", "scope_conflict_resolve", e.Name, map[string]any{
+		"repo":        req.Repo,
+		"path_prefix": req.PathPrefix,
+		"resolution":  action,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "resolved", "resolution": action})
+}
+
+func (d *demoState) handleAdminSetSQLDraining(w http.ResponseWriter, r *http.Request) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	name := strings.TrimSpace(r.PathValue("name"))
+	var req api.SetSQLInstanceDrainingRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	for i := range d.sqlInstances {
+		if d.sqlInstances[i].Name == name {
+			d.sqlInstances[i].Draining = req.Draining
+			d.appendAuditLocked("admin_override", "", "sql_instance_draining", "", map[string]any{
+				"instance_name": name,
+				"draining":      req.Draining,
+			})
+			writeJSON(w, http.StatusOK, d.sqlInstances[i])
+			return
+		}
+	}
+	writeJSONError(w, http.StatusNotFound, "not_found", fmt.Sprintf("SQL instance %q not found", name))
+}
+
+func (d *demoState) handleAdminDeleteOrphan(w http.ResponseWriter, r *http.Request) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	zone := strings.TrimSpace(r.PathValue("zone"))
+	inst := strings.TrimSpace(r.PathValue("instance"))
+	var kept []api.OrphanVMInfo
+	for _, o := range d.orphans {
+		if o.Zone == zone && o.InstanceID == inst {
+			continue
+		}
+		kept = append(kept, o)
+	}
+	d.orphans = kept
+	d.appendAuditLocked("admin_override", "", "orphan_vm_delete", "", map[string]any{"zone": zone, "instance_id": inst})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "deleted", "zone": zone, "instance_id": inst})
+}
+
+func (d *demoState) handleAdminDisconnectTunnel(w http.ResponseWriter, r *http.Request) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	name := strings.ToLower(strings.TrimSpace(r.PathValue("name")))
+	var kept []api.TunnelSessionInfo
+	for _, ts := range d.tunnels {
+		if strings.EqualFold(ts.EntryName, name) {
+			continue
+		}
+		kept = append(kept, ts)
+	}
+	d.tunnels = kept
+	if e, ok := d.entries[name]; ok {
+		f := false
+		e.TunnelConnected = &f
+		e.Status = api.StatusOffline
+	}
+	d.appendAuditLocked("admin_override", "", "tunnel_disconnect", name, nil)
+	writeJSON(w, http.StatusOK, map[string]any{"status": "disconnected", "entry_name": name})
+}
+
+func (d *demoState) handleAdminPurgeEntry(w http.ResponseWriter, r *http.Request) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	name := strings.ToLower(strings.TrimSpace(r.PathValue("name")))
+	e, ok := d.entries[name]
+	if !ok {
+		writeJSONError(w, http.StatusNotFound, "not_found", fmt.Sprintf("entry %q not found", name))
+		return
+	}
+	var req api.HardPurgeRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	t := d.now
+	e.State = api.StateDeleted
+	e.Status = api.StatusOffline
+	if e.DeletedAt == nil {
+		e.DeletedAt = &t
+	}
+	e.PurgedAt = &t
+	e.DBPurgeAfter = &t
+	if req.ReleaseReservation {
+		e.ReservedUntil = &t
+	}
+	d.appendAuditLocked("admin_override", "", "entry_hard_purge", name, map[string]any{"release_reservation": req.ReleaseReservation})
+	writeJSON(w, http.StatusOK, *e)
+}
+
+func (d *demoState) handleAdminForceTransfer(w http.ResponseWriter, r *http.Request) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	name := strings.ToLower(strings.TrimSpace(r.PathValue("name")))
+	e, ok := d.entries[name]
+	if !ok {
+		writeJSONError(w, http.StatusNotFound, "not_found", fmt.Sprintf("entry %q not found", name))
+		return
+	}
+	var req api.TransferRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	to := strings.TrimSpace(req.To)
+	if to == "" {
+		to = strings.TrimSpace(req.NewOwner)
+	}
+	prev := e.Owner
+	e.Owner = to
+	e.PendingOwner = ""
+	e.TransferExpiresAt = nil
+	if req.ClearOwnerGroup {
+		e.OwnerGroup = ""
+	} else if req.OwnerGroup != "" {
+		e.OwnerGroup = req.OwnerGroup
+	}
+	d.appendAuditLocked("admin_override", "", "entry_transfer", name, map[string]any{"from": prev, "to": to, "force": true})
 	writeJSON(w, http.StatusOK, *e)
 }

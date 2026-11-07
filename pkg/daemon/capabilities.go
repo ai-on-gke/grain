@@ -27,13 +27,10 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
 	"github.com/ai-on-gke/grain/pkg/capability/ciapi"
-	consolecap "github.com/ai-on-gke/grain/pkg/capability/console"
-	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
-	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
 	"github.com/ai-on-gke/grain/pkg/capability/release"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
@@ -84,11 +81,8 @@ func CapabilityProviders(cfg Config, _ *model.Store, _ map[string]*modelproxy.En
 	// (schema migration 118), which places the same embedded playbooks.
 	// read-issues is no longer a provider here: it was retired onto the
 	// in-process github server's read-issues method (schema migration 121).
-	providers = append(providers,
-		consolecap.New(),
-		prioritydispatch.New(),
-		durable.New(),
-	)
+	// console is no longer a provider here: it was retired onto the task's
+	// hosting setting (schema migration 123).
 	// image-signing, registry-push and package-publish are no longer
 	// providers here: they were retired onto the in-process release
 	// server (pkg/capability/release, schema migration 101), whose

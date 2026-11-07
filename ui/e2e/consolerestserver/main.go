@@ -53,7 +53,6 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
-	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
@@ -625,7 +624,7 @@ func run() error {
 		TaskCanceller: taskCanceller{cancellers},
 		Wake:          wake,
 		Actor:         model.Principal{Kind: model.PrincipalHuman, ID: "console-rest-e2e-operator"},
-		DefaultTarget: &defaultRepo, Capabilities: ui.OfferedCapabilities(),
+		DefaultTarget: &defaultRepo, Capabilities: append(ui.OfferedCapabilities(), ui.APICapabilities()...),
 		// The run's access code (e2e/global-setup.js): every caller,
 		// loopback included, shows it, as on every grain daemon.
 		LocalAPIToken: os.Getenv("GRAIN_E2E_ACCESS_CODE"),
@@ -633,7 +632,7 @@ func run() error {
 	// api grants resolve as on every grain daemon
 	// (ui.AgentAPIDynamicProvider): every console session holds
 	// model.ConsoleSessionCIReadGrant by default.
-	registry := model.NewCapabilityRegistry(append(admincaps.Providers(), durable.New())...)
+	registry := model.NewCapabilityRegistry(admincaps.Providers()...)
 	registry.RegisterDynamic(ui.AgentAPIDynamicProvider)
 	deps := orchestrator.Deps{
 		Store:     store,

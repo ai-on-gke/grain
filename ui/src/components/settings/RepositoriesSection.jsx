@@ -30,6 +30,7 @@ import api from "../../api.js";
 import { buildPath } from "../../paths.js";
 import { repoApiRoot } from "../../repoApi.js";
 import { knownRepos } from "../../state.js";
+import { repoAdministered } from "../../taskWrites.js";
 import {
   CI_MODE_LABELS,
   confirmBaseRepairBypass,
@@ -57,6 +58,7 @@ export default function RepositoriesSection({
   tasks,
   onOpenRepo,
   onSection,
+  showError,
 }) {
   const repos = knownRepos(config, tasks);
   const [facts, setFacts] = useState({});
@@ -116,10 +118,20 @@ export default function RepositoriesSection({
         body: JSON.stringify({ baseRepairBypassesHumanGates: on }),
       });
       setFacts((all) => ({ ...all, [repo]: { ...all[repo], defaults } }));
-    } catch {
-      // Leave the previous state untouched if the write fails.
+    } catch (err) {
+      // The switch stays where it was, and the refusal is said rather
+      // than swallowed: a switch that silently springs back reads as a
+      // click that missed.
+      showError?.(err);
     }
   };
+
+  // The switch is one of repo's settings, so it is drawn disabled where
+  // the repository's own Merge queue tab draws it disabled (RepoPage's
+  // readOnly): for anyone but one of repo's admins, and for everybody
+  // when settings live in the config repo, both of which the API refuses.
+  const bypassReadOnly = (repo) =>
+    Boolean(config?.configRepoOnly) || !repoAdministered(config, repo);
 
   return (
     <SettingsCard title="Repositories" anchor="repositories">
@@ -204,7 +216,7 @@ export default function RepositoriesSection({
                       <Checkbox
                         size="small"
                         checked={checked}
-                        disabled={!defaults}
+                        disabled={!defaults || bypassReadOnly(repo)}
                         onChange={(e) =>
                           toggleBaseRepairBypass(repo, e.target.checked)
                         }

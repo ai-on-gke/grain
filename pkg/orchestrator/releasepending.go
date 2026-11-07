@@ -69,11 +69,13 @@ var pendingTagPattern = regexp.MustCompile(`^(v[0-9]+\.[0-9]+\.[0-9]+)-pending$`
 var releaseTagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 
 // releasePendingPolled is when each repository's tags were last read,
-// keyed by store and repository so parallel tests do not share a clock.
+// keyed by the store (model.Store.ID) and the repository, so that two
+// stores in one process -- tests running side by side, or one test's two
+// -count iterations -- never hold each other's poll back.
 var releasePendingPolled sync.Map // releasePendingKey -> time.Time
 
 func releasePendingKey(store *model.Store, repo model.RepoRef) string {
-	return fmt.Sprintf("%p|%s", store, strings.ToLower(repo.String()))
+	return fmt.Sprintf("%d|%s", store.ID(), strings.ToLower(repo.String()))
 }
 
 type releasePendingCandidate struct {

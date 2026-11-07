@@ -733,6 +733,14 @@ type Config struct {
 	// by a build default afterwards, so one an operator removed stays
 	// removed across restarts and upgrades.
 	DefaultCapabilities []string
+	// DefaultAdmission is the deployment-wide default admission setting
+	// seeded onto new ad-hoc tasks when neither the caller nor a template
+	// names one (empty or standard means standard).
+	DefaultAdmission Admission
+	// DefaultHosting is the deployment-wide default hosting setting seeded
+	// onto new ad-hoc tasks when neither the caller nor a template names one
+	// (empty or unattended means unattended).
+	DefaultHosting Hosting
 	// PromptExtension is the standing instruction text every run
 	// dispatched on this deployment is given on top of the prompt grain
 	// builds for it (grain/task-114) -- prompt_extension.go's own doc

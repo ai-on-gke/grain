@@ -36,6 +36,7 @@ import (
 
 type requestSourceContextKey struct{}
 type operatorActorContextKey struct{}
+type onBehalfOfContextKey struct{}
 
 // withRequestSource records how serveHTTP admitted a request that names
 // nobody: the access code, break-glass over loopback, or in-process.
@@ -51,6 +52,18 @@ func withOperatorActor(ctx context.Context, p model.Principal) context.Context {
 		return ctx
 	}
 	return context.WithValue(ctx, operatorActorContextKey{}, p)
+}
+
+// withOnBehalfOf records who the agent the gate admitted acts for (spec
+// §2.4). Only agentAPIGate calls it, with what agentOnBehalfOf read from
+// the store: nothing a caller sends -- a header, a body field -- ever
+// reaches it, so an agent cannot claim a person (§6.2). nil leaves ctx
+// as it was.
+func withOnBehalfOf(ctx context.Context, p *model.Principal) context.Context {
+	if p == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, onBehalfOfContextKey{}, *p)
 }
 
 // operatorActor is the deployment's own actor withOperatorActor recorded,
@@ -75,24 +88,38 @@ func operatorActor(ctx context.Context) model.Principal {
 //     admitted the request by (access-code, loopback), or in-process for
 //     a caller that never went through serveHTTP at all.
 //
-// OnBehalfOf is the owner of the external agent credential the request
-// presented (model.ExternalAgentToken.Owner,
-// design/spec/external-cli/external-cli.spec.md#XC-14), and nil
-// otherwise until spec §2.4 lands.
+// OnBehalfOf is the person an agent or delegated service principal acts
+// for: a delegated registry caller's person (AU-26), an external agent
+// credential's owner (model.ExternalAgentToken.Owner, #XC-14), or the
+// person the agent API gate derived from grain's own records
+// (withOnBehalfOf, spec §2.4), and nil for anybody else.
 func RequestActor(ctx context.Context) model.Attribution {
-	if del := delegatedIdentityFromContext(ctx); del != nil {
-		return model.Attribution{
-			Actor:      model.Principal{Kind: model.PrincipalService, ID: del.AppEmail, Source: model.SourceRegistry},
-			OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: del.PersonEmail, Source: model.SourceRegistry},
-		}
-	}
 	if p, ok := PrincipalFromContext(ctx); ok {
+		if del := delegatedIdentityFromContext(ctx); del != nil &&
+			p.Kind == model.PrincipalHuman && p.Source == model.SourceRegistry && strings.EqualFold(p.ID, del.PersonEmail) {
+			return model.Attribution{
+				Actor:      model.Principal{Kind: model.PrincipalService, ID: del.AppEmail, Source: model.SourceRegistry},
+				OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: del.PersonEmail, Source: model.SourceRegistry},
+			}
+		}
 		if p.Kind == model.PrincipalAgent && p.Source == model.SourceExternalToken {
 			if tok := externalTokenFromContext(ctx); tok != nil {
 				return model.Attribution{Actor: p, OnBehalfOf: tok.OwnerPrincipal()}
 			}
 		}
-		return model.Attribution{Actor: p}
+		who := model.Attribution{Actor: p}
+		if p.Kind == model.PrincipalAgent {
+			if b, ok := ctx.Value(onBehalfOfContextKey{}).(model.Principal); ok && b.Kind == model.PrincipalHuman && b.Verified() {
+				who.OnBehalfOf = &b
+			}
+		}
+		return who
+	}
+	if del := delegatedIdentityFromContext(ctx); del != nil {
+		return model.Attribution{
+			Actor:      model.Principal{Kind: model.PrincipalService, ID: del.AppEmail, Source: model.SourceRegistry},
+			OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: del.PersonEmail, Source: model.SourceRegistry},
+		}
 	}
 	op := operatorActor(ctx)
 	op.Source = model.SourceInProcess
