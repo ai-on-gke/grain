@@ -416,11 +416,18 @@ func (s *Server) effectiveAllowedPrincipals(ctx context.Context) ([]AllowedPrinc
 	if err != nil {
 		return nil, err
 	}
-	out := make([]AllowedPrincipalEntry, 0, len(rows)+2)
+	out := make([]AllowedPrincipalEntry, 0, len(rows)+3)
+	owner := s.tasks.explicitDeploymentOwnerEmail()
+	if owner != "" {
+		out = append(out, AllowedPrincipalEntry{Prefix: "user", Value: owner, Role: model.DefaultAccessRole})
+	}
 	pool := s.tasks.gcpKeyPoolSet(ctx)
 	for _, r := range rows {
 		prefix, val, _, nErr := model.NormalizeAllowedPrincipalEntry(r.Entry)
 		if nErr != nil || (prefix == "serviceAccount" && pool[val]) {
+			continue
+		}
+		if owner != "" && prefix == "user" && val == owner && (r.Role == "" || r.Role == model.DefaultAccessRole) {
 			continue
 		}
 		out = append(out, AllowedPrincipalEntry{Prefix: prefix, Value: val, Role: r.Role})

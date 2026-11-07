@@ -19,6 +19,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+)
+
+const (
+	// ModeMirror keeps grain/config controller-local while mirroring commits to
+	// and from Remote (for example over a per-instance deploy key).
+	ModeMirror = "mirror"
+	// ModeExternal uses Remote as a read-only external IaC source of truth.
+	ModeExternal = "external"
 )
 
 // Settings holds the host-side options for the controller-local config
@@ -31,10 +40,18 @@ type Settings struct {
 	Remote string `json:"remote,omitempty"`
 	// Branch is the branch state lives on; DefaultBranch when empty.
 	Branch string `json:"branch,omitempty"`
+	// Mode selects how Remote is used when non-empty: "mirror" keeps
+	// grain/config controller-local while pushing/pulling to Remote; empty or
+	// "external" uses Remote in read-only external IaC mode.
+	Mode string `json:"mode,omitempty"`
 	// TokenFile is an optional path to a file containing a personal access
 	// token for Remote. When empty, Grain uses the GitHub connection in its
 	// store (or GRAIN_STATE_REPO_TOKEN / GITHUB_TOKEN).
 	TokenFile string `json:"tokenFile,omitempty"`
+	// SSHKeyFile is an optional path to an SSH private key (such as a
+	// per-instance GitHub deploy key at /run/grain-secrets/config-repo-key)
+	// used for SSH operations against Remote.
+	SSHKeyFile string `json:"sshKeyFile,omitempty"`
 	// CheckImage is the container image agents use to validate proposed
 	// grain/config changes. Empty selects the current Grain build.
 	CheckImage string `json:"checkImage,omitempty"`
@@ -51,6 +68,18 @@ type Settings struct {
 	NoWorkflow            bool `json:"noWorkflow,omitempty"`
 	PostCheck             bool `json:"postCheck,omitempty"`
 	LocalOnlyAcknowledged bool `json:"localOnlyAcknowledged,omitempty"`
+}
+
+// IsMirror reports whether s configures a controller-local grain/config
+// repository that mirrors commits to Remote.
+func (s Settings) IsMirror() bool {
+	return strings.TrimSpace(s.Remote) != "" && strings.EqualFold(strings.TrimSpace(s.Mode), ModeMirror)
+}
+
+// IsExternal reports whether s configures read-only external IaC mode against
+// Remote.
+func (s Settings) IsExternal() bool {
+	return strings.TrimSpace(s.Remote) != "" && !s.IsMirror()
 }
 
 // SettingsFileName is what the file is called in the data directory.

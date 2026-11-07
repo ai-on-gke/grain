@@ -59,6 +59,7 @@ type Client struct {
 	localScriptsOnce           sync.Once
 	allowedPrincipalsMigrateMu sync.Mutex
 	allowedPrincipalsMigrated  bool
+	deploymentOwnerSeeded      string
 	// Now is the clock, injectable so tests get deterministic timestamps.
 	// nil means time.Now().UTC().
 	Now func() time.Time
