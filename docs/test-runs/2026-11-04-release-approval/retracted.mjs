@@ -25,7 +25,9 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { signIn } from "../../../ui/e2e/accesscode.js";
 
-const { chromium } = createRequire(path.join(process.cwd(), "package.json"))("@playwright/test");
+const { chromium } = createRequire(path.join(process.cwd(), "package.json"))(
+  "@playwright/test",
+);
 const [url, code, out] = process.argv.slice(2);
 const browser = await chromium.launch();
 const context = await browser.newContext({
@@ -43,17 +45,25 @@ const alert = page.getByRole("alert").filter({ hasText: "retracted" });
 await alert.waitFor();
 const report = { alert: (await alert.innerText()).replace(/\s+/g, " ").trim() };
 await page.screenshot({ path: path.join(out, "upgrade-retracted-alert.png") });
-const upgradeButton = page.getByTestId("upgrade-section").getByRole("button", { name: "Upgrade", exact: true });
+const upgradeButton = page
+  .getByTestId("upgrade-section")
+  .getByRole("button", { name: "Upgrade", exact: true });
 
 // 1. "Move back to latest": capture what Upgrade would start, start nothing.
 let captured = null;
 await page.route("**/api/upgrade", async (route) => {
   if (route.request().method() !== "POST") return route.continue();
   captured = route.request().postDataJSON();
-  await route.fulfill({ status: 409, contentType: "application/json", body: '{"error":"walkthrough: not downgrading"}' });
+  await route.fulfill({
+    status: 409,
+    contentType: "application/json",
+    body: '{"error":"walkthrough: not downgrading"}',
+  });
 });
 await alert.getByRole("button", { name: /^Move back to latest/ }).click();
-report.latestButton = await alert.getByRole("button", { name: /^Move back to latest/ }).innerText();
+report.latestButton = await alert
+  .getByRole("button", { name: /^Move back to latest/ })
+  .innerText();
 await upgradeButton.click();
 await page.waitForTimeout(1000);
 report.latestUpgradeRequest = captured;
@@ -64,12 +74,21 @@ const newer = alert.getByRole("button", { name: /^Upgrade to v/ });
 report.newerButton = await newer.innerText();
 await newer.click();
 const [resp] = await Promise.all([
-  page.waitForResponse((r) => r.url().endsWith("/api/upgrade") && r.request().method() === "POST"),
+  page.waitForResponse(
+    (r) => r.url().endsWith("/api/upgrade") && r.request().method() === "POST",
+  ),
   upgradeButton.click(),
 ]);
 report.newerUpgradeRequest = resp.request().postDataJSON();
-report.newerUpgradeResponse = { status: resp.status(), phase: (await resp.json()).phase, branch: (await resp.json()).branch };
+report.newerUpgradeResponse = {
+  status: resp.status(),
+  phase: (await resp.json()).phase,
+  branch: (await resp.json()).branch,
+};
 report.dialogs = dialogs;
-await fs.writeFile(path.join(out, "retracted.json"), JSON.stringify(report, null, 2) + "\n");
+await fs.writeFile(
+  path.join(out, "retracted.json"),
+  JSON.stringify(report, null, 2) + "\n",
+);
 console.log(JSON.stringify(report, null, 2));
 await browser.close();
