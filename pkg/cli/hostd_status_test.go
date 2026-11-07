@@ -49,8 +49,12 @@ func TestHostdStatusLineNamesWhatAnsweringHostdOffers(t *testing.T) {
 	socket := filepath.Join(dir, "hostd.sock")
 	ctx := context.Background()
 
-	// Nothing listening: an error, which -status exits 1 on.
-	if _, err := hostdStatusLine(ctx, hostd.Client{Socket: socket}); err == nil ||
+	// Nothing listening: an error, which -status exits 1 on. -status gives
+	// hostd 5s; a shorter deadline here says the same thing without
+	// sitting out the client's whole 30s wait for a restarting hostd.
+	down, cancelDown := context.WithTimeout(ctx, time.Second)
+	defer cancelDown()
+	if _, err := hostdStatusLine(down, hostd.Client{Socket: socket}); err == nil ||
 		!strings.Contains(err.Error(), "not reachable") {
 		t.Fatalf("no hostd: err = %v, want not reachable", err)
 	}
