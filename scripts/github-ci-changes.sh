@@ -131,13 +131,13 @@ is_ignored_by_go_program() {
 }
 
 # Mirrors *not-read-by-the-go-backend in .grain/workflows/tests.yml:
-#   *not-read-by-the-go-program + ui/**
+#   *not-read-by-the-go-program + ui/** + ui-registry/** + ui-shared/**
 is_ignored_by_go_backend() {
   local file="$1"
   if is_ignored_by_go_program "$file"; then
     return 0
   fi
-  if [[ "$file" == ui/* ]]; then
+  if [[ "$file" == ui/* || "$file" == ui-registry/* || "$file" == ui-shared/* ]]; then
     return 0
   fi
   return 1
@@ -166,7 +166,7 @@ classify_file() {
     granule=true
   fi
 
-  if [[ "$file" == ui/* || "$file" == "Makefile" || "$file" == "scripts/warm-npm-cache.sh" || "$file" == ".github/workflows/tests.yml" ]]; then
+  if [[ "$file" == ui/* || "$file" == ui-registry/* || "$file" == ui-shared/* || "$file" == "Makefile" || "$file" == "scripts/warm-npm-cache.sh" || "$file" == ".github/workflows/tests.yml" ]]; then
     frontend=true
   fi
 

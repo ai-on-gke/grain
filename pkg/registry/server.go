@@ -31,10 +31,11 @@ import (
 	"github.com/ai-on-gke/grain/pkg/registry/api"
 	"github.com/ai-on-gke/grain/pkg/registry/server"
 	"github.com/ai-on-gke/grain/pkg/registry/store"
+	"github.com/ai-on-gke/grain/pkg/version"
 	"github.com/ai-on-gke/grain/pkg/webauth"
 )
 
-const strictCSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+const strictCSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
 
 // ServerOptions configures a registry HTTP Server.
 type ServerOptions struct {
@@ -295,6 +296,8 @@ func (s *Server) Handler() http.Handler {
 	})
 
 	mux.Handle("GET /api/me", s.admitter.RequireHuman(http.HandlerFunc(s.handleGetMe)))
+	mux.Handle("GET /api/status", s.admitter.RequireHuman(http.HandlerFunc(s.handleGetStatus)))
+	mux.Handle("GET /api/admin/summary", s.admitter.RequireAdmin(http.HandlerFunc(s.handleGetAdminSummary)))
 	// Service principals read the catalog (/api/directory, /api/route) and
 	// nothing else; shapes and control-plane endpoints are for humans
 	// (registry.design.md, "Plain service calls").
@@ -441,6 +444,8 @@ func (s *Server) handleGetMe(w http.ResponseWriter, r *http.Request) {
 		"is_admin":          caller.IsAdmin,
 		"is_registry_admin": caller.IsAdmin,
 		"can_create":        caller.CanCreate,
+		"instance_domain":   s.cfg.InstanceDomain,
+		"registry_host":     s.cfg.Host,
 	}
 	if s.store != nil {
 		_, _ = s.store.UpsertOwner(r.Context(), caller.Email)
@@ -477,6 +482,204 @@ func (s *Server) handleGetShapes(w http.ResponseWriter, r *http.Request) {
 		"default_shape": s.cfg.Compute.DefaultShape,
 		"shapes":        s.cfg.Compute.Shapes,
 	})
+}
+
+func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
+	caller := webauth.AdmittedFromContext(r.Context())
+	if !s.checkCallerEnabled(w, r, caller) {
+		return
+	}
+	vInfo := version.Get()
+	release := vInfo.Release
+	if release == "" {
+		release = "dev"
+	}
+	resp := api.StatusResponse{
+		OK:             !s.IsDraining(),
+		Status:         "ok",
+		Host:           s.cfg.Host,
+		InstanceDomain: s.cfg.InstanceDomain,
+		Release:        release,
+		Revision:       vInfo.Revision,
+		DefaultShape:   s.cfg.Compute.DefaultShape,
+		Replicas:       []api.ReplicaStatus{},
+		VersionCounts:  map[string]int{},
+		Shapes:         []api.Shape{},
+	}
+	if s.IsDraining() {
+		resp.Status = "draining"
+	}
+	if s.store != nil {
+		entries, err := s.store.ListEntries(r.Context())
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		listedByName := make(map[string]bool, len(entries))
+		for _, e := range entries {
+			listedByName[e.Name] = e.Listed
+			if !caller.IsAdmin && !e.Listed {
+				continue
+			}
+			apiEntry := s.enrichAPIEntry(r.Context(), e, caller.IsAdmin)
+			resp.TotalEntries++
+			switch apiEntry.Status {
+			case api.StatusOnline:
+				resp.OnlineEntries++
+			case api.StatusDegraded:
+				resp.DegradedEntries++
+			default:
+				resp.OfflineEntries++
+			}
+			switch e.Kind {
+			case api.KindInstance:
+				resp.InstanceEntries++
+			case api.KindConnected:
+				resp.ConnectedCount++
+			}
+			ver := strings.TrimSpace(e.GrainVersion)
+			if ver == "" {
+				ver = "unreported"
+			}
+			resp.VersionCounts[ver]++
+		}
+
+		replicaTTL := s.cfg.Tunnel.ReplicaTTL
+		if replicaTTL <= 0 {
+			replicaTTL = DefaultTunnelReplicaTTL
+		}
+		now := s.store.Now()
+
+		tunnels, err := s.store.ListActiveTunnelSessions(r.Context())
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		tunnelsByReplica := make(map[string]int)
+		for _, ts := range tunnels {
+			if now.Sub(ts.ReplicaLastSeen) > replicaTTL {
+				continue
+			}
+			if !caller.IsAdmin && !listedByName[ts.EntryName] {
+				continue
+			}
+			tunnelsByReplica[ts.ReplicaID]++
+			resp.ActiveTunnels++
+		}
+
+		replicas, err := s.store.ListReplicas(r.Context())
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		for _, rep := range replicas {
+			healthy := now.Sub(rep.HeartbeatAt) <= replicaTTL
+			peerAddr := rep.PeerAddr
+			if !caller.IsAdmin {
+				peerAddr = ""
+			}
+			resp.Replicas = append(resp.Replicas, api.ReplicaStatus{
+				ReplicaID:     rep.ReplicaID,
+				PeerAddr:      peerAddr,
+				StartedAt:     rep.StartedAt,
+				HeartbeatAt:   rep.HeartbeatAt,
+				Healthy:       healthy,
+				ActiveTunnels: tunnelsByReplica[rep.ReplicaID],
+			})
+		}
+		shapes, err := s.store.ListShapes(r.Context())
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		for _, sh := range shapes {
+			resp.Shapes = append(resp.Shapes, api.Shape{
+				Name:         sh.Name,
+				MachineType:  sh.MachineType,
+				BootDiskGB:   sh.BootDiskGB,
+				BootDiskIOPS: sh.BootDiskIOPS,
+				QuotaUnits:   sh.QuotaUnits,
+				Description:  sh.Description,
+				Default:      sh.Name == s.cfg.Compute.DefaultShape,
+			})
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleGetAdminSummary(w http.ResponseWriter, r *http.Request) {
+	caller := webauth.AdmittedFromContext(r.Context())
+	if !s.checkCallerEnabled(w, r, caller) {
+		return
+	}
+	out := api.AdminSummaryResponse{
+		Replicas:       []api.ReplicaStatus{},
+		TunnelSessions: []api.TunnelSessionInfo{},
+		AuditLog:       []api.AuditLogEntry{},
+	}
+	if s.store != nil {
+		replicaTTL := s.cfg.Tunnel.ReplicaTTL
+		if replicaTTL <= 0 {
+			replicaTTL = DefaultTunnelReplicaTTL
+		}
+		now := s.store.Now()
+
+		tunnels, err := s.store.ListActiveTunnelSessions(r.Context())
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		tunnelsByReplica := make(map[string]int)
+		for _, ts := range tunnels {
+			if now.Sub(ts.ReplicaLastSeen) > replicaTTL {
+				continue
+			}
+			tunnelsByReplica[ts.ReplicaID]++
+			out.TunnelSessions = append(out.TunnelSessions, api.TunnelSessionInfo{
+				EntryName:    ts.EntryName,
+				ReplicaID:    ts.ReplicaID,
+				PeerAddr:     ts.PeerAddr,
+				SessionEpoch: ts.SessionEpoch,
+				RemoteAddr:   ts.RemoteAddr,
+				ConnectedAt:  ts.ConnectedAt,
+				LastSeenAt:   ts.LastSeenAt,
+				RTTMs:        ts.RTTMs,
+				CredID:       ts.CredID,
+			})
+		}
+		replicas, err := s.store.ListReplicas(r.Context())
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		for _, rep := range replicas {
+			out.Replicas = append(out.Replicas, api.ReplicaStatus{
+				ReplicaID:     rep.ReplicaID,
+				PeerAddr:      rep.PeerAddr,
+				StartedAt:     rep.StartedAt,
+				HeartbeatAt:   rep.HeartbeatAt,
+				Healthy:       now.Sub(rep.HeartbeatAt) <= replicaTTL,
+				ActiveTunnels: tunnelsByReplica[rep.ReplicaID],
+			})
+		}
+		audits, err := s.store.ListAuditLog(r.Context(), 100)
+		if err != nil {
+			writeInternalError(w, err)
+			return
+		}
+		for _, a := range audits {
+			out.AuditLog = append(out.AuditLog, api.AuditLogEntry{
+				ID:         a.ID,
+				At:         a.At,
+				ActorEmail: a.ActorEmail,
+				Action:     a.Action,
+				EntryID:    a.EntryID,
+				EntryName:  a.EntryName,
+				Detail:     a.Detail,
+			})
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleGetDirectory(w http.ResponseWriter, r *http.Request) {
@@ -602,6 +805,7 @@ func (s *Server) handleGetEntries(w http.ResponseWriter, r *http.Request) {
 	kindFilter := strings.ToLower(strings.TrimSpace(qv.Get("kind")))
 	statusFilter := strings.ToLower(strings.TrimSpace(qv.Get("status")))
 	includeDeleted := strings.EqualFold(qv.Get("include_deleted"), "true") || qv.Get("include_deleted") == "1"
+	mineOnly := strings.EqualFold(qv.Get("mine"), "true") || qv.Get("mine") == "1"
 	var listedFilter *bool
 	if rawListed := strings.TrimSpace(qv.Get("listed")); rawListed != "" {
 		b := strings.EqualFold(rawListed, "true") || rawListed == "1"
@@ -639,7 +843,7 @@ func (s *Server) handleGetEntries(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		if !caller.IsAdmin {
+		if !caller.IsAdmin || mineOnly {
 			isOwnerOrPending := strings.EqualFold(e.OwnerEmail, caller.Email) ||
 				(e.PendingOwner != "" && strings.EqualFold(e.PendingOwner, caller.Email))
 			if !isOwnerOrPending {
@@ -959,8 +1163,10 @@ func (s *Server) handleSetScopes(w http.ResponseWriter, r *http.Request) {
 		conflicts = []api.ScopeConflict{}
 	}
 	writeJSON(w, http.StatusOK, api.SetScopesResponse{
-		Scopes:    store.CombinedAPIScopes(updated.Scopes),
-		Conflicts: conflicts,
+		Scopes:         store.CombinedAPIScopes(updated.Scopes),
+		ReportedScopes: store.RawAPIScopes(updated.Scopes, api.SourceReported),
+		DeclaredScopes: store.RawAPIScopes(updated.Scopes, api.SourceDeclared),
+		Conflicts:      conflicts,
 	})
 }
 
