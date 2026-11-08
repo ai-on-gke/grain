@@ -287,13 +287,16 @@ var serverLogStamp = regexp.MustCompile(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(\.
 // capability server writes to its stderr, already scrubbed of its
 // secrets, logged as the server's.
 func capabilityServerStderr(id string) io.Writer {
-	return capabilityServerLog{id: id}
+	return capabilityServerLog{id: id, logf: log.Printf}
 }
 
-type capabilityServerLog struct{ id string }
+type capabilityServerLog struct {
+	id   string
+	logf func(format string, args ...any)
+}
 
 func (l capabilityServerLog) Write(p []byte) (int, error) {
 	line := serverLogStamp.ReplaceAllString(strings.TrimRight(string(p), "\r\n"), "")
-	log.Printf("grain daemon: capability server %s: %s", l.id, line)
+	l.logf("grain daemon: capability server %s: %s", l.id, line)
 	return len(p), nil
 }

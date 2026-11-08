@@ -15,8 +15,7 @@
 package daemon
 
 import (
-	"bytes"
-	"log"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -27,21 +26,18 @@ import (
 // the only record of each grant and token it mints, were discarded
 // (2026-11-08 gcp token-mode walk).
 func TestACapabilityServersStderrIsLoggedAsItsOwn(t *testing.T) {
-	var buf bytes.Buffer
-	prevOut, prevFlags := log.Writer(), log.Flags()
-	log.SetOutput(&buf)
-	log.SetFlags(0)
-	t.Cleanup(func() { log.SetOutput(prevOut); log.SetFlags(prevFlags) })
-
-	w := capabilityServerStderr("https://grain.dev/capabilities/gcp")
+	var lines []string
+	w := capabilityServerStderr("https://grain.dev/capabilities/gcp").(capabilityServerLog)
+	w.logf = func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)+"\n") }
 	w.Write([]byte("2026/11/08 02:18:16 gcp: audit: attempt grain-3-1-0: permission set ext-deploy: granted access tokens\n"))
 	w.Write([]byte("no stamp here\n"))
 	want := "grain daemon: capability server https://grain.dev/capabilities/gcp: gcp: audit: attempt grain-3-1-0: permission set ext-deploy: granted access tokens\n" +
 		"grain daemon: capability server https://grain.dev/capabilities/gcp: no stamp here\n"
-	if got := buf.String(); got != want {
+	got := strings.Join(lines, "")
+	if got != want {
 		t.Errorf("logged:\n%s\nwant:\n%s", got, want)
 	}
-	if strings.Contains(buf.String(), "2026/11/08") {
+	if strings.Contains(got, "2026/11/08") {
 		t.Error("the server's own timestamp was kept")
 	}
 }
