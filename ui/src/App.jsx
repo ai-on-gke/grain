@@ -1379,7 +1379,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // the task detail over whatever the reader was looking at -- a message
   // sent in a chat should leave them in the chat.
   const sessionAct = useCallback(
-    async (mutate) => {
+    async (mutate, taskId) => {
       sessionTaskSeq.current += 1;
       try {
         await mutate();
@@ -1388,7 +1388,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
         return false;
       }
       try {
-        await loadSessionTask();
+        await loadSessionTask(taskId || openSessionTaskIdRef.current);
         await refreshList();
       } catch (err) {
         showError(err);
@@ -2215,7 +2215,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // reported here and rethrown, so the page keeps the message in its
   // composer.
   const startStandingSession = useCallback(
-    async ({ title, message, attachments = [], model, pin = false }) => {
+    async (
+      { title, message, attachments = [], model, pin = false },
+      takeHandoff,
+    ) => {
       let res;
       try {
         res = await api("/api/console-sessions", {
@@ -2243,6 +2246,35 @@ function AppContent({ onReload = () => window.location.reload() }) {
         listed.filter((s) => !known.has(s.id)).at(-1)?.id ||
         listed.at(-1)?.id;
       if (created) {
+        const createdRow = listed.find((s) => s.id === created);
+        if (createdRow?.taskId) {
+          openSessionTaskIdRef.current = createdRow.taskId;
+          try {
+            const detail = await api(`/api/tasks/${createdRow.taskId}`);
+            if (detail) {
+              sessionTaskSeq.current += 1;
+              setSessionTask(detail);
+            }
+          } catch {
+            // Best-effort preload; the session pane's effect retries if needed.
+          }
+        }
+        const handoff = takeHandoff?.();
+        if (
+          handoff &&
+          (handoff.draft?.text ||
+            handoff.attachments?.length > 0 ||
+            handoff.queued?.length > 0)
+        ) {
+          setSessionPrompt({
+            sessionId: created,
+            text: handoff.draft?.text || "",
+            html: handoff.draft?.html ?? handoff.draft?.text ?? "",
+            attachments: handoff.attachments || [],
+            queued: handoff.queued || [],
+            consumeOnApply: true,
+          });
+        }
         if (pin) addPinnedItem({ kind: "session", id: created });
         openStandingSession(created);
       }
@@ -2432,6 +2464,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // exactly the half-fetched page this is about. The first failure is
   // worth one error banner; the rest of the shell renders on whatever
   // did land, as it did before.
+  const shellLoadedRef = useRef(false);
   useEffect(() => {
     (async () => {
       const results = await Promise.allSettled([
@@ -2452,6 +2485,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       } else {
         noteReached("shell");
       }
+      shellLoadedRef.current = true;
       setLoaded(true);
     })();
   }, [
@@ -2468,17 +2502,28 @@ function AppContent({ onReload = () => window.location.reload() }) {
     noteReached,
   ]);
 
-  // The suite runs, fetched on the way into the suites page rather than
-  // at mount with the five lists above: they are the one list nothing
-  // outside that page shows, so paying for them on every cold load of
-  // every other view would buy nothing. Until now they arrived on the
-  // first poll tick, which left the page's own runs list blank for a
-  // few seconds after every visit -- and left a link straight to one
-  // run's pane (/suites/runs/7) with nothing to open.
+  // The suite runs, fetched on the way into Processes rather than at mount
+  // with the lists above: nothing outside Processes shows them. When
+  // entering Processes from another view after the initial shell load,
+  // schedules, templates and suites are refreshed alongside suiteRuns and
+  // triggers as well -- switching view resets the background poll's timer,
+  // which otherwise left newly synced .grain/ declarations stale beside
+  // fresh triggers until the next poll tick.
   useEffect(() => {
     if (view !== "processes") return;
-    refreshSuiteRuns().catch(showError);
-  }, [view, refreshSuiteRuns, showError]);
+    const refreshes = [refreshSuiteRuns()];
+    if (shellLoadedRef.current) {
+      refreshes.push(refreshSchedules(), refreshTemplates(), refreshSuites());
+    }
+    Promise.all(refreshes).catch(showError);
+  }, [
+    view,
+    refreshSuiteRuns,
+    refreshSchedules,
+    refreshTemplates,
+    refreshSuites,
+    showError,
+  ]);
 
   // The triggers, read on the way into Processes from every repository
   // the loaded schedules, templates and suites were declared in. A

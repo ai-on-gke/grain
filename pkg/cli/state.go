@@ -72,10 +72,11 @@ Commands:
                             Upgrade button does, and rehearse that import first.
                             Prints "prepared FROM TO DIR", "current N" or "none".
                             Stop the daemon first; scripts/setup.sh runs it
-  check DIR                 load a state repository's files into a throwaway
+  check [-migrate] DIR      load a state repository's files into a throwaway
                             database and report what breaks. Needs no -data-dir
-                            and touches nothing; agents use it to validate a
-                            proposed grain/config change
+                            (when set, also checks deployment-specific git_ref
+                            watches) and touches nothing; agents use it to
+                            validate a proposed grain/config change
   key show                  print this installation's secrets public key
   key path                  print where the private key is read from
   key import [-key-file F]  install a secrets private key this operator holds,

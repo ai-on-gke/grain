@@ -233,4 +233,48 @@ test.describe("user and system settings walkthrough regressions", () => {
       await chooseOption(zone, "");
     }
   });
+
+  // Clicking Continue in Settings → Models → New connection unmounts the
+  // Continue button and drops document.activeElement to <body>, where MUI's
+  // Dialog did not hear Escape (docs/test-runs/2026-11-08-user-system-settings.md).
+  test("pressing Escape right after Continue on New connection closes and cleans up the draft", async ({
+    page,
+    request,
+  }) => {
+    const before = await (await request.get("/api/settings")).json();
+    const beforeIds = (before.agentBackends || []).map((b) => b.id);
+
+    const prompts = [];
+    page.on("dialog", (dialog) => {
+      prompts.push(dialog.message());
+      dialog.accept();
+    });
+
+    await page.goto("/settings/models");
+    await page.getByRole("button", { name: "New connection" }).click();
+    const overlay = page.getByRole("dialog", { name: "New connection" });
+    await expect(overlay).toBeVisible();
+
+    await overlay.getByLabel("Agent type").click();
+    await page.getByRole("option", { name: "Claude" }).click();
+    await overlay.getByRole("button", { name: "Continue" }).click();
+
+    const editedOverlay = page.getByRole("dialog", { name: "Claude" });
+    await expect(
+      editedOverlay.getByRole("heading", { name: "Authentication" }),
+    ).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await expect.poll(() => prompts.length).toBe(1);
+    expect(prompts[0]).toContain("Leave and discard");
+    expect(prompts[0]).not.toMatch(/^Remove the connection /);
+    await expect(editedOverlay).toHaveCount(0);
+
+    await expect
+      .poll(async () => {
+        const after = await (await request.get("/api/settings")).json();
+        return (after.agentBackends || []).map((b) => b.id);
+      })
+      .toEqual(beforeIds);
+  });
 });
