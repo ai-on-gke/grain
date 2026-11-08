@@ -285,7 +285,7 @@ RUN set -eu; \
 		arm64) sha="${KUBECTL_SHA256_ARM64}" ;; \
 		*) echo "no kubectl checksum pinned for $arch -- add one above" >&2; exit 1 ;; \
 	esac; \
-	curl -4 -fsSL --max-time 180 --retry 3 --retry-delay 2 --retry-all-errors \
+	curl -4 -fsSL --max-time 180 --retry 8 --retry-max-time 600 --retry-connrefused --retry-all-errors \
 		-o /out/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${arch}/kubectl"; \
 	echo "${sha}  /out/kubectl" | sha256sum -c -; \
 	chmod 0755 /out/kubectl
@@ -486,8 +486,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends libcap2-bin \
 # image build succeeding beside it), which is a flake rather than a
 # network that cannot reach it. --retry-all-errors because a reset
 # mid-handshake is not one of the transient failures --retry alone
-# covers. A network that genuinely cannot reach downloads.claude.ai still
-# fails, three attempts later, exactly as loudly.
+# covers; no --retry-delay because setting a fixed delay disables curl's
+# exponential backoff (1s..128s) and exhausts three retries in 6 seconds
+# during a multi-minute GitHub or CDN 504 brownout. A network that
+# genuinely cannot reach downloads.claude.ai still fails after backoff,
+# exactly as loudly.
 #
 # INSTALL_CLAUDE_CLI=0 opts out for a build on a network that cannot
 # reach downloads.claude.ai at all; the resulting image runs everything
@@ -512,7 +515,7 @@ RUN if [ "$INSTALL_CLAUDE_CLI" = "1" ]; then \
 			aarch64|arm64) platform=linux-arm64; sha256="$CLAUDE_CLI_SHA256_ARM64" ;; \
 			*) echo "unsupported architecture for the Claude CLI: $arch" >&2; exit 1 ;; \
 		esac; \
-		curl -4 -fsSL --max-time 300 --retry 3 --retry-delay 2 --retry-all-errors \
+		curl -4 -fsSL --max-time 300 --retry 8 --retry-max-time 600 --retry-connrefused --retry-all-errors \
 			"https://downloads.claude.ai/claude-code-releases/${CLAUDE_CLI_VERSION}/${platform}/claude" \
 			-o /tmp/claude; \
 		echo "$sha256  /tmp/claude" | sha256sum -c -; \
@@ -573,7 +576,7 @@ RUN if [ "$INSTALL_AGY_CLI" = "1" ]; then \
 			aarch64|arm64) platform=linux-arm; archive=cli_linux_arm64.tar.gz; sha256="$AGY_CLI_SHA256_ARM64" ;; \
 			*) echo "unsupported architecture for the Antigravity CLI: $arch" >&2; exit 1 ;; \
 		esac; \
-		curl -4 -fsSL --max-time 180 --retry 3 --retry-delay 2 --retry-all-errors \
+		curl -4 -fsSL --max-time 180 --retry 8 --retry-max-time 600 --retry-connrefused --retry-all-errors \
 			"https://storage.googleapis.com/antigravity-public/antigravity-cli/${AGY_CLI_VERSION}-${AGY_CLI_BUILD}/${platform}/${archive}" \
 			-o /tmp/agy.tar.gz; \
 		echo "$sha256  /tmp/agy.tar.gz" | sha256sum -c -; \
@@ -634,7 +637,7 @@ RUN if [ "$INSTALL_CODEX_CLI" = "1" ]; then \
 			aarch64|arm64) target=aarch64-unknown-linux-musl; sha256="$CODEX_CLI_SHA256_ARM64"; host_sha256="$CODEX_CODE_MODE_HOST_SHA256_ARM64" ;; \
 			*) echo "unsupported architecture for the codex CLI: $arch" >&2; exit 1 ;; \
 		esac; \
-		curl -4 -fsSL --max-time 180 --retry 3 --retry-delay 2 --retry-all-errors \
+		curl -4 -fsSL --max-time 180 --retry 8 --retry-max-time 600 --retry-connrefused --retry-all-errors \
 			"https://github.com/openai/codex/releases/download/${CODEX_CLI_VERSION}/codex-${target}.tar.gz" \
 			-o /tmp/codex.tar.gz; \
 		echo "$sha256  /tmp/codex.tar.gz" | sha256sum -c -; \
@@ -643,7 +646,7 @@ RUN if [ "$INSTALL_CODEX_CLI" = "1" ]; then \
 		codex="$(find /opt/codex -type f -name 'codex*' -perm -u+x | head -n1)"; \
 		test -n "$codex"; \
 		ln -sf "$codex" /usr/local/bin/codex; \
-		curl -4 -fsSL --max-time 180 --retry 3 --retry-delay 2 --retry-all-errors \
+		curl -4 -fsSL --max-time 180 --retry 8 --retry-max-time 600 --retry-connrefused --retry-all-errors \
 			"https://github.com/openai/codex/releases/download/${CODEX_CLI_VERSION}/codex-code-mode-host-${target}.tar.gz" \
 			-o /tmp/codex-code-mode-host.tar.gz; \
 		echo "$host_sha256  /tmp/codex-code-mode-host.tar.gz" | sha256sum -c -; \

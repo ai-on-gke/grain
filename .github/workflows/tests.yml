@@ -1006,14 +1006,21 @@ jobs:
 
       - name: Install shellcheck and actionlint
         run: |
+          set -euo pipefail
           # Pin ShellCheck to v0.9.0 (matching Debian Bookworm in Granulefile) so
           # newer ShellCheck releases on ubuntu-latest (0.11.0+) do not fail on
           # unmodified scripts.
-          curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.9.0/shellcheck-v0.9.0.linux.x86_64.tar.xz \
-            | sudo tar -xJ --strip-components=1 -C /usr/local/bin shellcheck-v0.9.0/shellcheck
+          curl -4 -fsSL --max-time 180 --retry 8 --retry-max-time 600 --retry-connrefused --retry-all-errors \
+            https://github.com/koalaman/shellcheck/releases/download/v0.9.0/shellcheck-v0.9.0.linux.x86_64.tar.xz \
+            -o /tmp/shellcheck.tar.xz
+          sudo tar -xJf /tmp/shellcheck.tar.xz --strip-components=1 -C /usr/local/bin shellcheck-v0.9.0/shellcheck
+          rm -f /tmp/shellcheck.tar.xz
           if ! command -v actionlint >/dev/null 2>&1; then
-            curl -fsSL https://github.com/rhysd/actionlint/releases/download/v1.7.4/actionlint_1.7.4_linux_amd64.tar.gz \
-              | sudo tar -xz -C /usr/local/bin actionlint
+            curl -4 -fsSL --max-time 180 --retry 8 --retry-max-time 600 --retry-connrefused --retry-all-errors \
+              https://github.com/rhysd/actionlint/releases/download/v1.7.4/actionlint_1.7.4_linux_amd64.tar.gz \
+              -o /tmp/actionlint.tar.gz
+            sudo tar -xzf /tmp/actionlint.tar.gz -C /usr/local/bin actionlint
+            rm -f /tmp/actionlint.tar.gz
           fi
           /usr/local/bin/shellcheck --version
           actionlint -version

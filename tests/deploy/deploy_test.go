@@ -3353,20 +3353,71 @@ func TestBothImagesPinTheSameAgentCLIs(t *testing.T) {
 		}
 	}
 
-	// Every download here forces IPv4 and retries, which is a property of
-	// the *line* and so is lost by anyone who rewrites one -- this test's
-	// own change nearly took it off two of them, resolving a conflict
-	// with the commit that had just added it. CI's build host has no
-	// IPv6 route, so an AAAA-first fetch spends a connect on an
-	// unreachable address; the Granulefile forces IPv4 for the same
-	// reason (TestTheGuestBuildRidesOutASlowArchive).
-	for _, line := range strings.Split(stripComments(sandbox), "\n") {
-		if !strings.Contains(line, "curl -") {
+	// Every download in both Dockerfiles forces IPv4 and retries with
+	// exponential backoff, which is a property of the *line* and so is lost
+	// by anyone who rewrites one -- this test's own change nearly took it
+	// off two of them, resolving a conflict with the commit that had just
+	// added it. CI's build host has no IPv6 route, so an AAAA-first fetch
+	// spends a connect on an unreachable address; the Granulefile forces
+	// IPv4 for the same reason (TestTheGuestBuildRidesOutASlowArchive).
+	// And none of them may pass --retry-delay: curl disables exponential
+	// backoff whenever a fixed delay is set, turning `--retry 3
+	// --retry-delay 2` into a 6s retry window that fails a whole release
+	// build on a multi-minute GitHub Releases 504 brownout.
+	for _, file := range []struct{ name, text string }{{"Dockerfile", daemon}, {"Dockerfile.k8s-sandbox", sandbox}} {
+		for _, line := range strings.Split(stripComments(file.text), "\n") {
+			if !strings.Contains(line, "curl -") {
+				continue
+			}
+			if !strings.Contains(line, "curl -4 ") || !strings.Contains(line, "--retry-all-errors") || !strings.Contains(line, "--retry-max-time") {
+				t.Errorf("%s runs a curl that does not force IPv4 and retry with --retry-max-time: %s", file.name, strings.TrimSpace(line))
+			}
+			if strings.Contains(line, "--retry-delay") {
+				t.Errorf("%s runs a curl with --retry-delay, which disables curl's exponential backoff: %s", file.name, strings.TrimSpace(line))
+			}
+		}
+	}
+}
+
+func TestGitHubWorkflowReleaseDownloadsBackOffExponentially(t *testing.T) {
+	for _, name := range []string{"release.yml", "promote.yml", "release-train.yml"} {
+		content := stripComments(read(t, ".github", "workflows", name))
+		for _, line := range strings.Split(content, "\n") {
+			if !strings.Contains(line, "sigstore/cosign/releases/download") && !strings.Contains(line, "curl ") {
+				continue
+			}
+			if !strings.Contains(line, "curl ") || strings.Contains(line, "curl -fsSIL") {
+				continue
+			}
+			if !strings.Contains(line, "curl -4 ") || !strings.Contains(line, "--retry-all-errors") || !strings.Contains(line, "--retry-max-time") {
+				t.Errorf(".github/workflows/%s runs a binary download curl without -4, --retry-max-time and --retry-all-errors: %s", name, strings.TrimSpace(line))
+			}
+			if strings.Contains(line, "--retry-delay") {
+				t.Errorf(".github/workflows/%s runs a curl with --retry-delay, disabling exponential backoff: %s", name, strings.TrimSpace(line))
+			}
+		}
+	}
+
+	testsWorkflow := stripComments(read(t, ".github", "workflows", "tests.yml"))
+	lintInstall := between(t, testsWorkflow, "- name: Install shellcheck and actionlint", "- name: Lint GitHub Actions workflows")
+	if strings.Contains(lintInstall, "| sudo tar") {
+		t.Error(".github/workflows/tests.yml pipes curl straight into sudo tar in Install shellcheck and actionlint; stage the archive to a file first so retries do not feed truncated bytes to tar")
+	}
+	var curls int
+	for _, line := range strings.Split(lintInstall, "\n") {
+		if !strings.Contains(line, "curl ") {
 			continue
 		}
-		if !strings.Contains(line, "curl -4 ") || !strings.Contains(line, "--retry-all-errors") {
-			t.Errorf("Dockerfile.k8s-sandbox runs a curl that does not force IPv4 and retry: %s", strings.TrimSpace(line))
+		curls++
+		if !strings.Contains(line, "curl -4 ") || !strings.Contains(line, "--retry-all-errors") || !strings.Contains(line, "--retry-max-time") {
+			t.Errorf(".github/workflows/tests.yml lint install runs curl without -4, --retry-max-time and --retry-all-errors: %s", strings.TrimSpace(line))
 		}
+		if strings.Contains(line, "--retry-delay") {
+			t.Errorf(".github/workflows/tests.yml lint install runs curl with --retry-delay, disabling exponential backoff: %s", strings.TrimSpace(line))
+		}
+	}
+	if curls != 2 {
+		t.Errorf("expected 2 curl downloads in Install shellcheck and actionlint, got %d", curls)
 	}
 }
 

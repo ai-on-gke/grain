@@ -212,7 +212,7 @@ RUN if [ "$INSTALL_CLAUDE_CLI" = "1" ]; then \
             aarch64|arm64) platform=linux-arm64; sha256="$CLAUDE_CLI_SHA256_ARM64" ;; \
             *) echo "unsupported architecture for the Claude CLI: $arch" >&2; exit 1 ;; \
         esac; \
-        curl -4 -fsSL --max-time 300 --retry 3 --retry-delay 2 --retry-all-errors "https://downloads.claude.ai/claude-code-releases/${CLAUDE_CLI_VERSION}/${platform}/claude" -o /tmp/claude; \
+        curl -4 -fsSL --max-time 300 --retry 8 --retry-max-time 600 --retry-connrefused --retry-all-errors "https://downloads.claude.ai/claude-code-releases/${CLAUDE_CLI_VERSION}/${platform}/claude" -o /tmp/claude; \
         echo "$sha256  /tmp/claude" | sha256sum -c -; chmod +x /tmp/claude; \
         HOME=/opt/claude /tmp/claude install "$CLAUDE_CLI_VERSION"; rm -f /tmp/claude; \
         echo "$sha256  /opt/claude/.local/share/claude/versions/$CLAUDE_CLI_VERSION" | sha256sum -c -; \
@@ -258,7 +258,7 @@ RUN if [ "$INSTALL_AGY_CLI" = "1" ]; then \
             aarch64|arm64) platform=linux-arm; archive=cli_linux_arm64.tar.gz; sha256="$AGY_CLI_SHA256_ARM64" ;; \
             *) echo "unsupported architecture for the Antigravity CLI: $arch" >&2; exit 1 ;; \
         esac; \
-        curl -4 -fsSL --max-time 180 --retry 3 --retry-delay 2 --retry-all-errors \
+        curl -4 -fsSL --max-time 180 --retry 8 --retry-max-time 600 --retry-connrefused --retry-all-errors \
             "https://storage.googleapis.com/antigravity-public/antigravity-cli/${AGY_CLI_VERSION}-${AGY_CLI_BUILD}/${platform}/${archive}" \
             -o /tmp/agy.tar.gz; \
         echo "$sha256  /tmp/agy.tar.gz" | sha256sum -c -; \
@@ -285,11 +285,11 @@ RUN if [ "$INSTALL_CODEX_CLI" = "1" ]; then \
             aarch64|arm64) target=aarch64-unknown-linux-musl; sha256="$CODEX_CLI_SHA256_ARM64"; host_sha256="$CODEX_CODE_MODE_HOST_SHA256_ARM64" ;; \
             *) echo "unsupported architecture for the codex CLI: $arch" >&2; exit 1 ;; \
         esac; \
-        curl -4 -fsSL --max-time 180 --retry 3 --retry-delay 2 --retry-all-errors "https://github.com/openai/codex/releases/download/${CODEX_CLI_VERSION}/codex-${target}.tar.gz" -o /tmp/codex.tar.gz; \
+        curl -4 -fsSL --max-time 180 --retry 8 --retry-max-time 600 --retry-connrefused --retry-all-errors "https://github.com/openai/codex/releases/download/${CODEX_CLI_VERSION}/codex-${target}.tar.gz" -o /tmp/codex.tar.gz; \
         echo "$sha256  /tmp/codex.tar.gz" | sha256sum -c -; \
         tar -xzf /tmp/codex.tar.gz -C /opt/codex; rm -f /tmp/codex.tar.gz; \
         codex="$(find /opt/codex -type f -name 'codex*' -perm -u+x | head -n1)"; test -n "$codex"; ln -sf "$codex" /usr/local/bin/codex; \
-        curl -4 -fsSL --max-time 180 --retry 3 --retry-delay 2 --retry-all-errors "https://github.com/openai/codex/releases/download/${CODEX_CLI_VERSION}/codex-code-mode-host-${target}.tar.gz" -o /tmp/codex-code-mode-host.tar.gz; \
+        curl -4 -fsSL --max-time 180 --retry 8 --retry-max-time 600 --retry-connrefused --retry-all-errors "https://github.com/openai/codex/releases/download/${CODEX_CLI_VERSION}/codex-code-mode-host-${target}.tar.gz" -o /tmp/codex-code-mode-host.tar.gz; \
         echo "$host_sha256  /tmp/codex-code-mode-host.tar.gz" | sha256sum -c -; \
         tar -xzf /tmp/codex-code-mode-host.tar.gz -C /opt/codex; rm -f /tmp/codex-code-mode-host.tar.gz; \
         code_mode_host="$(find /opt/codex -type f -name 'codex-code-mode-host*' -perm -u+x | head -n1)"; test -n "$code_mode_host"; \
