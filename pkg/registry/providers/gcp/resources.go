@@ -806,8 +806,23 @@ func (r *GCPInstanceResources) provisionPostgresACLs(ctx context.Context, sqlIns
 			return fmt.Errorf("gcp sql: creating role %s: %w", iamUser, err)
 		}
 	} else {
+		// A re-provision (a retried create, a replace) finds the role already
+		// there. The admin is normally not a superuser -- Cloud SQL never grants
+		// one -- and PostgreSQL refuses to let a non-superuser name SUPERUSER,
+		// BYPASSRLS or REPLICATION in ALTER ROLE at all, even to turn them off.
+		// So check those attributes instead of restating them: a role carrying
+		// any of them was not made by this provisioner and is left alone.
+		var rolSuper, rolBypassRLS, rolReplication bool
+		if err := adminDB.QueryRowContext(ctx,
+			`SELECT rolsuper, rolbypassrls, rolreplication FROM pg_roles WHERE rolname = $1`, iamUser,
+		).Scan(&rolSuper, &rolBypassRLS, &rolReplication); err != nil {
+			return fmt.Errorf("gcp sql: checking attributes of role %s: %w", iamUser, err)
+		}
+		if rolSuper || rolBypassRLS || rolReplication {
+			return fmt.Errorf("%w: existing role %s has SUPERUSER, BYPASSRLS or REPLICATION; refusing to reuse it", ErrOutOfScope, iamUser)
+		}
 		alterRoleSQL := fmt.Sprintf(
-			`ALTER ROLE %s WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS CONNECTION LIMIT %d%s`,
+			`ALTER ROLE %s WITH LOGIN NOCREATEDB NOCREATEROLE CONNECTION LIMIT %d%s`,
 			quotedRole, DefaultRoleConnectionLimit, pwClause)
 		if _, err := adminDB.ExecContext(ctx, alterRoleSQL); err != nil {
 			return fmt.Errorf("gcp sql: altering role %s: %w", iamUser, err)

@@ -87,6 +87,27 @@ func WithOperationPollInterval(d time.Duration) ComputeOption {
 	}
 }
 
+// WithServiceAccountPropagationRetry overrides how often, and how patiently,
+// CreateInstance retries an insert that GCE refuses because the instance's
+// service account is not visible to Compute Engine yet. The n-th retry waits
+// n*backoff. attempts <= 1 disables the retry.
+func WithServiceAccountPropagationRetry(attempts int, backoff time.Duration) ComputeOption {
+	return func(c *GCECompute) {
+		c.saRetryAttempts = attempts
+		if backoff > 0 {
+			c.saRetryBackoff = backoff
+		}
+	}
+}
+
+// Defaults for WithServiceAccountPropagationRetry: six inserts spread over
+// roughly 75s, which covers the IAM propagation delay observed between
+// creating a per-instance service account and GCE accepting it.
+const (
+	defaultSARetryAttempts = 6
+	defaultSARetryBackoff  = 5 * time.Second
+)
+
 // GCECompute implements `registry.Compute` against the Google Compute Engine v1 REST API,
 // enforcing project, zone, prefix (`vm_prefix`), and label (`grain-registry`, `grain-entry`,
 // `grain-generation`) scope checks on every operation.
@@ -105,6 +126,9 @@ type GCECompute struct {
 	baseURL       string
 	httpClient    *http.Client
 	pollInterval  time.Duration
+
+	saRetryAttempts int
+	saRetryBackoff  time.Duration
 }
 
 var gceMachineTypeRe = regexp.MustCompile(`^[a-z][a-z0-9]*-(standard|highmem|highcpu|megamem|ultramem|custom)-[0-9]+(-[a-z0-9]+)*$|^e2-(micro|small|medium)$`)
@@ -211,6 +235,9 @@ func NewGCECompute(ctx context.Context, cfg registry.ComputeConfig, opts ...Comp
 		labels:        labelsCopy,
 		baseURL:       defaultComputeBaseURL,
 		pollInterval:  50 * time.Millisecond,
+
+		saRetryAttempts: defaultSARetryAttempts,
+		saRetryBackoff:  defaultSARetryBackoff,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -575,7 +602,7 @@ func (c *GCECompute) CreateInstance(ctx context.Context, spec registry.InstanceS
 
 	insertURL := fmt.Sprintf("%s/projects/%s/zones/%s/instances",
 		c.baseURL, url.PathEscape(c.project), url.PathEscape(zone))
-	if err := c.doOperation(ctx, http.MethodPost, insertURL, insertReq); err != nil {
+	if err := c.insertInstance(ctx, insertURL, zone, vmName, insertReq); err != nil {
 		return nil, fmt.Errorf("gcp compute: inserting instance %s in %s: %w", vmName, zone, err)
 	}
 
@@ -821,6 +848,46 @@ func (c *GCECompute) getRawInstance(ctx context.Context, zone, instanceID string
 		return nil, false, fmt.Errorf("gcp compute: decoding instance %s: %w", instanceID, err)
 	}
 	return &inst, true, nil
+}
+
+// insertInstance posts the instance insert, retrying while GCE reports the
+// instance's service account as missing. The registry creates a fresh
+// per-instance service account immediately before the insert, and IAM can take
+// tens of seconds to make it visible to Compute Engine, so the first insert
+// commonly fails with EXTERNAL_RESOURCE_NOT_FOUND even though the account
+// exists. Any other error is returned at once.
+func (c *GCECompute) insertInstance(ctx context.Context, insertURL, zone, vmName string, insertReq gceInstance) error {
+	for attempt := 1; ; attempt++ {
+		err := c.doOperation(ctx, http.MethodPost, insertURL, insertReq)
+		if err == nil || !isServiceAccountNotFound(err) || attempt >= c.saRetryAttempts {
+			return err
+		}
+		// A refused insert creates nothing, but check before inserting again so a
+		// retry can never collide with an instance that did come up.
+		if _, found, getErr := c.getRawInstance(ctx, zone, vmName); getErr == nil && found {
+			return nil
+		}
+		timer := time.NewTimer(c.saRetryBackoff * time.Duration(attempt))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("%w (gave up waiting for the service account to propagate: %v)", err, ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+// isServiceAccountNotFound reports whether err is GCE refusing an instance
+// because the service account it should run as does not exist (yet).
+func isServiceAccountNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "serviceAccount") {
+		return false
+	}
+	return strings.Contains(msg, "EXTERNAL_RESOURCE_NOT_FOUND") || strings.Contains(msg, "was not found")
 }
 
 func (c *GCECompute) doOperation(ctx context.Context, method, reqURL string, payload any) error {

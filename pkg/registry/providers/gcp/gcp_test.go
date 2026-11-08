@@ -45,6 +45,11 @@ type fakeGCEState struct {
 	mu        sync.Mutex
 	instances map[string]map[string]any // key: project/zone/name
 	disks     map[string]map[string]any // key: project/zone/name
+
+	// saNotFoundInserts makes that many upcoming instance inserts fail the way
+	// GCE does while a just-created service account is still propagating.
+	saNotFoundInserts int
+	inserts           int
 }
 
 func newFakeGCEServer(t *testing.T) (*httptest.Server, *fakeGCEState) {
@@ -90,6 +95,18 @@ func newFakeGCEServer(t *testing.T) (*httptest.Server, *fakeGCEState) {
 					}
 					name, _ := body["name"].(string)
 					key := proj + "/" + zone + "/" + name
+					st.inserts++
+					if st.saNotFoundInserts > 0 {
+						st.saNotFoundInserts--
+						_ = json.NewEncoder(w).Encode(map[string]any{
+							"kind": "compute#operation", "name": "op-sa", "status": "DONE",
+							"error": map[string]any{"errors": []any{map[string]any{
+								"code":    "EXTERNAL_RESOURCE_NOT_FOUND",
+								"message": "The resource 'grain-sa-x@test-proj.iam.gserviceaccount.com' of type 'serviceAccount' was not found.",
+							}}},
+						})
+						return
+					}
 					if _, exists := st.instances[key]; exists {
 						w.WriteHeader(http.StatusConflict)
 						_ = json.NewEncoder(w).Encode(map[string]any{
