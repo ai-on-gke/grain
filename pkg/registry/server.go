@@ -1580,6 +1580,14 @@ func (s *Server) handleReplaceEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Shapes, boot disks and VM replacement only mean something for hosted
+	// instances: a connected entry's grain runs on its owner's machine, and
+	// putting it into "replacing" stops the registry routing to its tunnel.
+	if entry.Kind != api.KindInstance {
+		writeJSONError(w, http.StatusBadRequest, "invalid_entry_kind", "only kind=\"instance\" entries can be resized or replaced")
+		return
+	}
+
 	var req api.ReplaceEntryRequest
 	if r.Body != nil && r.Body != http.NoBody {
 		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req)
