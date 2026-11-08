@@ -305,6 +305,15 @@ describe("NewTaskOverlay", () => {
     await user.type(base, "a:b:c");
     expect(screen.getByText(/has more than one ':'/)).toBeInTheDocument();
     expect(base).toHaveAttribute("aria-invalid", "true");
+    // The server refuses a malformed label in these same words, so the
+    // form does not offer a submit that can only come back refused.
+    expect(screen.getByRole("button", { name: "Create task" })).toBeDisabled();
+    await user.clear(base);
+    await user.type(base, "alice:");
+    expect(
+      screen.getByText(/needs both an owner and a branch/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create task" })).toBeDisabled();
 
     await user.clear(base);
     await user.type(base, "andrzejfudro:chore/bump-agy-1.4.9");

@@ -189,8 +189,32 @@ func secretsList(store *secrets.Store, args []string) error {
 		fmt.Println("no secrets set")
 		return nil
 	}
+	// Keys the catalogue still lists but Secret Manager no longer holds
+	// (deleted out of band, or every version destroyed) are marked, since
+	// nothing else would tell an operator the two have drifted apart. A
+	// probe that cannot reach Secret Manager is a warning, not a reason
+	// to withhold the list itself.
+	gone := map[string]bool{}
+	missing, err := store.MissingUpstream(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "grain secrets: could not check the catalogue against Secret Manager: %v\n", err)
+	}
+	for _, m := range missing {
+		gone[m.SecretName+"/"+m.Key] = true
+	}
 	for _, s := range list {
-		fmt.Printf("%s: %s\n", s.Name, strings.Join(s.Keys, ", "))
+		keys := make([]string, len(s.Keys))
+		for i, k := range s.Keys {
+			keys[i] = k
+			if gone[s.Name+"/"+k] {
+				keys[i] = k + " (missing in Secret Manager)"
+			}
+		}
+		fmt.Printf("%s: %s\n", s.Name, strings.Join(keys, ", "))
+	}
+	if len(missing) > 0 {
+		fmt.Fprintf(os.Stderr, "grain secrets: %d catalogued key(s) are gone from Secret Manager and left out of redaction; "+
+			"run `grain secrets delete <secret> <key>` to drop each, or set it again\n", len(missing))
 	}
 	return nil
 }
