@@ -85,6 +85,13 @@ type Server struct {
 	RenewInterval  time.Duration
 	CurrentToken   func() string
 	OnTokenRenewed func(token string, expiresAt time.Time)
+	// RenewedAt is when the credential CurrentToken returns was issued --
+	// its token file's modification time -- so that a restarted host
+	// agent renews on its credential's schedule rather than RenewInterval
+	// after it started. Zero counts from the first connection. Either
+	// way the schedule outlives a reconnect: a host whose connection drops
+	// more often than RenewInterval still renews (renewDue).
+	RenewedAt time.Time
 	// StageRoot is where OpStage may write on this machine, for a run a
 	// daemon reaches over Remote: "~/.grain/hostd-stage" under hostd's
 	// home when empty (stageRoot). It should be a directory nothing else
@@ -107,6 +114,11 @@ type Server struct {
 
 	uid uint32
 	wg  sync.WaitGroup
+
+	// renewMu guards renewedAt: when this host's credential was last
+	// issued or renewed, across every connection this Server makes.
+	renewMu   sync.Mutex
+	renewedAt time.Time
 
 	mu    sync.Mutex
 	procs map[string]*proc

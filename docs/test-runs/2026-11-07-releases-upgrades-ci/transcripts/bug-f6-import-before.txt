@@ -1,0 +1,21 @@
+=== Bug F6 reproduction (build 5594dbbb, before the fix) ===
+# Live daemon on 127.0.0.1:4290, -data-dir /tmp/item4/data with secrets-repo.json
+# (acme/host-secrets) and targetRepos [acme/widgets]. POST /api/schedules refused
+# grain/config-alpha with 400, but an operator commit to the local grain/config
+# working tree (the path a merged grain/config pull request takes) was imported:
+
+$ git -C data/state-repo commit -qam 'operator: watch retired alias'   # sched-2: repo acme/widgets -> grain/config-alpha
+5b931f2 operator: watch retired alias
+$ sleep 25; curl -H "Authorization: Bearer $C" localhost:4290/api/schedules | jq '.[] | select(.id=="sched-2")'
+{"id":"sched-2","repo":"grain/config-alpha","suppressed":{"reason":"watchedRepoOffTarget","detail":"watches grain/config-alpha, which is not on this deployment's target repo list"}}
+
+daemon.log:
+2026/11/08 01:09:07 staterepo: wrote settings snapshot to /tmp/item4/data/settings-snapshots/20261108T010907Z-5b931f2c0160 before applying 5b931f2c0160956c09d47de7100e74511d86ee70
+2026/11/08 01:09:07 staterepo: the settings that just arrived did not match this database on 1 row ... settings/schedules.yml (id = 'sched-2'): recurrence_kind was 'git_ref:{"repo":"acme/widgets","ref":"refs/heads/main"}' and is now 'git_ref:{"repo":"grain/config-alpha","ref":"refs/heads/main"}'. ...
+
+# The enabled schedule now watches the retired alias REST refuses; its
+# suppression names only the target-repo list, not why the repo is forbidden.
+# Same for acme/host-secrets (the encrypted secrets backup repository):
+# pkg/staterepo TestAMergedSettingsChangeMayNotWatchAForbiddenRepository fails
+# on 5594dbbb with "Apply = <nil>, want ErrNotApplied naming \"encrypted secrets
+# backup repository\"".

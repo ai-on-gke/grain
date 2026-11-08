@@ -1096,3 +1096,88 @@ func TestStep16TwoStepTransfer7DayExpiryRestoreHardPurgeAndAdminRecovery(t *test
 		t.Fatalf("ListOwnerQuotaSummaries = (%+v, %v)", owners, err)
 	}
 }
+
+func TestCustomBootDiskGBAndResize(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	if err := st.SeedShapes(ctx, []ShapeRow{
+		{Name: "n2-standard-4", MachineType: "n2-standard-4", BootDiskGB: 100, QuotaUnits: 2},
+		{Name: "n2-standard-8", MachineType: "n2-standard-8", BootDiskGB: 200, QuotaUnits: 4},
+	}); err != nil {
+		t.Fatalf("SeedShapes: %v", err)
+	}
+	if err := st.SetQuota(ctx, "alice@example.com", 16, 10, "admin"); err != nil {
+		t.Fatalf("SetQuota: %v", err)
+	}
+
+	// Out-of-bounds disk sizes are rejected.
+	if _, err := st.CreateEntry(ctx, CreateEntryInput{
+		Name:       "bad-disk-vm",
+		Kind:       api.KindInstance,
+		OwnerEmail: "alice@example.com",
+		Shape:      "n2-standard-4",
+		BootDiskGB: 10,
+	}); err == nil {
+		t.Fatal("expected error for boot_disk_gb < 20")
+	}
+
+	// Default disk size falls back to shape's BootDiskGB in ToAPIEntry.
+	eDefault, err := st.CreateEntry(ctx, CreateEntryInput{
+		Name:       "default-disk-vm",
+		Kind:       api.KindInstance,
+		OwnerEmail: "alice@example.com",
+		Shape:      "n2-standard-4",
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry default-disk-vm: %v", err)
+	}
+	apiDefault := st.ToAPIEntry(eDefault, "grain.example.com")
+	if apiDefault.BootDiskGB != 100 || apiDefault.MachineType != "n2-standard-4" {
+		t.Fatalf("apiDefault = (disk=%d, mt=%q), want (100, n2-standard-4)", apiDefault.BootDiskGB, apiDefault.MachineType)
+	}
+
+	// Custom disk size overrides shape default and survives same-shape version upgrade,
+	// then resets to new shape's default when resizing shape without explicit disk override.
+	eCustom, err := st.CreateEntry(ctx, CreateEntryInput{
+		Name:       "custom-disk-vm",
+		Kind:       api.KindInstance,
+		OwnerEmail: "alice@example.com",
+		Shape:      "n2-standard-4",
+		BootDiskGB: 150,
+	})
+	if err != nil {
+		t.Fatalf("CreateEntry custom-disk-vm: %v", err)
+	}
+	if eCustom.BootDiskGB != 150 {
+		t.Fatalf("eCustom.BootDiskGB = %d, want 150", eCustom.BootDiskGB)
+	}
+	apiCustom := st.ToAPIEntry(eCustom, "grain.example.com")
+	if apiCustom.BootDiskGB != 150 {
+		t.Fatalf("apiCustom.BootDiskGB = %d, want 150", apiCustom.BootDiskGB)
+	}
+
+	eUpgraded, err := st.RequestEntryReplace(ctx, eCustom.ID, eCustom.Version, "n2-standard-4", "v1.3.0")
+	if err != nil {
+		t.Fatalf("RequestEntryReplace same shape: %v", err)
+	}
+	if eUpgraded.BootDiskGB != 150 {
+		t.Fatalf("expected custom BootDiskGB=150 preserved on same-shape upgrade, got %d", eUpgraded.BootDiskGB)
+	}
+
+	eResizedShape, err := st.RequestEntryReplaceWithDisk(ctx, eUpgraded.ID, eUpgraded.Version, "n2-standard-8", "", 0)
+	if err != nil {
+		t.Fatalf("RequestEntryReplaceWithDisk shape change: %v", err)
+	}
+	if got := st.ToAPIEntry(eResizedShape, "grain.example.com").BootDiskGB; got != 200 {
+		t.Fatalf("expected new shape default BootDiskGB=200 after shape change, got %d", got)
+	}
+
+	eResizedDisk, err := st.RequestEntryReplaceWithDisk(ctx, eResizedShape.ID, eResizedShape.Version, "n2-standard-8", "", 350)
+	if err != nil {
+		t.Fatalf("RequestEntryReplaceWithDisk custom disk: %v", err)
+	}
+	if eResizedDisk.BootDiskGB != 350 || st.ToAPIEntry(eResizedDisk, "grain.example.com").BootDiskGB != 350 {
+		t.Fatalf("expected custom BootDiskGB=350 after disk resize, got %d", eResizedDisk.BootDiskGB)
+	}
+}

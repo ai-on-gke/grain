@@ -597,6 +597,16 @@ func (p *printer) declarations(v declarationsView) {
 		if t.KeepRunning {
 			fmt.Printf("  keep-running: true\n")
 		}
+		// Admission and hosting are said whenever the file set them, and
+		// also when they came from a retired grant name (priority-dispatch,
+		// durable, console) folded into the setting: otherwise the only
+		// trace of what a run will be admitted as is a log line on stderr.
+		if t.Admission != "" {
+			fmt.Printf("  admission:  %s\n", t.Admission)
+		}
+		if t.Hosting != "" {
+			fmt.Printf("  hosting:    %s\n", t.Hosting)
+		}
 		if len(t.CustomFields) > 0 {
 			values := make([]string, 0, len(t.CustomFields))
 			for _, name := range daemon.SortedKeys(t.CustomFields) {
@@ -630,6 +640,12 @@ func (p *printer) declarations(v declarationsView) {
 		fmt.Printf("  cadence:    %s\n", s.Cadence)
 		fmt.Printf("  base:       %s\n", baseOrDefault(s.Base))
 		fmt.Printf("  overlap:    %s\n", s.Overlap)
+		if s.Admission != "" {
+			fmt.Printf("  admission:  %s\n", s.Admission)
+		}
+		if s.Hosting != "" {
+			fmt.Printf("  hosting:    %s\n", s.Hosting)
+		}
 		if !s.Enabled {
 			fmt.Printf("  enabled:    no -- declared, synced, and never comes due until the file says otherwise\n")
 		}

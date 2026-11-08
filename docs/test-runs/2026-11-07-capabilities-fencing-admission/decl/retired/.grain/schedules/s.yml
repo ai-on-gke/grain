@@ -1,0 +1,7 @@
+name: Retired schedule
+template: t
+daily:
+  at: "03:00"
+capabilities:
+  - durable
+  - read-issues

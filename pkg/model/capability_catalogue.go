@@ -511,6 +511,18 @@ func retiredInProcessNames(g string) []string {
 	for legacy, to := range allLegacyGrantReplacements() {
 		if to == grant {
 			out = append(out, legacy)
+			continue
+		}
+		// Methodless server shorthand (https://grain.dev/capabilities/github)
+		// may resolve to any method on that server, so it is bound by
+		// every retired name that became one of them (github-sandbox,
+		// read-issues): otherwise a catalogue disabling or restricting
+		// in_process.github-sandbox is bypassed by dropping the method.
+		if IsCapabilityRef(to) && IsCapabilityRef(grant) && !strings.Contains(CapabilityGrantRef(grant), "#") {
+			toServer, _, _ := strings.Cut(CapabilityGrantRef(to), "#")
+			if strings.EqualFold(toServer, CapabilityGrantRef(grant)) {
+				out = append(out, legacy)
+			}
 		}
 	}
 	for legacy, tos := range legacyGrantMultiReplacements {

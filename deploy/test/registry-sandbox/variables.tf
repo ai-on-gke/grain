@@ -34,6 +34,17 @@ variable "zone" {
   default     = "us-central1-a"
 }
 
+variable "compute_zones" {
+  description = "GCE zones within var.region eligible for hosted Grain VM placement (compute.zones)."
+  type        = list(string)
+  default     = ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
+
+  validation {
+    condition     = length(var.compute_zones) > 0 && alltrue([for z in var.compute_zones : can(regex("^[a-z][a-z0-9-]*[a-z0-9]$", trimspace(z)))])
+    error_message = "compute_zones must contain at least one valid GCE zone name."
+  }
+}
+
 variable "name_prefix" {
   description = "Short prefix for sandbox resources (3-12 lowercase alphanumeric/hyphen characters so sslip.io domains fit GCP's 63-char managed SSL certificate limit)."
   type        = string
@@ -142,6 +153,29 @@ variable "boot_disk_gb" {
   default     = 20
 }
 
+variable "sql_machine_type" {
+  description = "GCE machine type for the shared instance_sql PostgreSQL pool VM."
+  type        = string
+  default     = "e2-small"
+}
+
+variable "sql_boot_disk_gb" {
+  description = "Boot persistent disk size in GiB for the shared instance_sql PostgreSQL pool VM."
+  type        = number
+  default     = 50
+}
+
+variable "hosted_daemon_image" {
+  description = "Container image reference run by hosted GCE VMs (kind = instance) to serve grain daemon."
+  type        = string
+  default     = "docker.io/grainai/grain:main"
+
+  validation {
+    condition     = trimspace(var.hosted_daemon_image) != ""
+    error_message = "hosted_daemon_image must not be empty."
+  }
+}
+
 variable "create_vm_service_account" {
   description = "Create a dedicated least-privilege VM service account and bind project-level Artifact Registry/Logging roles (requires roles/resourcemanager.projectIamAdmin). Set false to run the VM as the default Compute Engine service account (<number>-compute@developer.gserviceaccount.com)."
   type        = bool
@@ -174,4 +208,38 @@ variable "existing_kms_key_id" {
     condition     = trimspace(var.existing_kms_key_id) == "" || can(regex("^projects/[a-z][a-z0-9.:-]*[a-z0-9]/locations/[a-z0-9-]+/keyRings/[A-Za-z0-9_-]+/cryptoKeys/[A-Za-z0-9_-]+$", trimspace(var.existing_kms_key_id)))
     error_message = "existing_kms_key_id must be empty or match projects/<id>/locations/<loc>/keyRings/<ring>/cryptoKeys/<key>."
   }
+}
+
+variable "hosted_project_id" {
+  description = "GCP project where hosted GCE VM instances (kind = instance, grain-vm-*) and their per-instance service accounts are created. Empty (default) means the registry project. A different project gets its own peered VPC (hosted.tf)."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = trimspace(var.hosted_project_id) == "" || can(regex("^[a-z][a-z0-9-]{4,28}[a-z0-9]$", trimspace(var.hosted_project_id)))
+    error_message = "hosted_project_id must be empty or a valid GCP project ID."
+  }
+}
+
+variable "hosted_credentials_file" {
+  description = "Optional service account key file used for resources in hosted_project_id when the default credentials cannot manage that project. Empty uses Application Default Credentials."
+  type        = string
+  default     = ""
+}
+
+variable "hosted_subnet_cidr" {
+  description = "Primary IPv4 range of the hosted VM subnet in hosted_project_id (cross-project mode only). Must not overlap the registry subnet (10.42.0.0/24) because the two VPCs are peered."
+  type        = string
+  default     = "10.43.0.0/24"
+
+  validation {
+    condition     = can(cidrhost(var.hosted_subnet_cidr, 0)) && var.hosted_subnet_cidr != "10.42.0.0/24"
+    error_message = "hosted_subnet_cidr must be a valid CIDR distinct from the registry subnet 10.42.0.0/24."
+  }
+}
+
+variable "manage_hosted_project_iam" {
+  description = "Bind roles/compute.instanceAdmin.v1, roles/iam.serviceAccountAdmin and roles/iam.serviceAccountUser in hosted_project_id to the registry VM service account (requires resourcemanager.projects.setIamPolicy there). Set false when an administrator grants them out of band (see README)."
+  type        = bool
+  default     = false
 }

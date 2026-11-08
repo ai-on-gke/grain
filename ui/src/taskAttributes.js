@@ -143,6 +143,14 @@ const ORIGIN_LABELS = {
   review: "Review",
 };
 
+// ADMISSION_LABELS names each admission value the way the task pane's
+// Admission select does (detail/Actions.jsx).
+const ADMISSION_LABELS = {
+  standard: "Standard",
+  bypass: "Bypass queue",
+  durable: "Durable",
+};
+
 // EXTERNAL_AGENT_PREFIX is model.ExternalAgentPrincipalPrefix: the
 // principal an external agent's credential acts as is
 // "external:<token name>".
@@ -442,6 +450,22 @@ export const ATTRIBUTES = [
     // nothing rather than reading as "Off" (labelOf's other branch).
     closed: true,
     labelOf: (v) => (v === "on" ? "On" : "Off"),
+  },
+  {
+    // How the task is admitted past the queue (model.Admission, the
+    // task pane's Admission select): ordinary queued work, past the
+    // worker limit, or that plus no wall-clock deadline. Every row of
+    // GET /api/tasks carries one; a row from a server older than the
+    // setting has none and is standard, which is what it was run as.
+    id: "admission",
+    label: "Admission",
+    type: TYPE_ENUM,
+    values: (t) => [t.admission || "standard"],
+    order: ["standard", "bypass", "durable"],
+    // Every value model.ValidAdmission accepts, so `admission:any:bogus`
+    // says it matches nothing rather than reading as a real admission.
+    closed: true,
+    labelOf: (v) => ADMISSION_LABELS[v] || v,
   },
   {
     // Held for a person's decision (humanReviewHold), by the categories

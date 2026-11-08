@@ -16,6 +16,7 @@ package ui_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"slices"
 	"strings"
@@ -374,5 +375,68 @@ func TestCapabilitiesDetachOverTheControllerMCPServer(t *testing.T) {
 	}
 	if got := taskGrantNames(t, client, "2"); slices.Contains(got, "self-debug") {
 		t.Errorf("task 2 grants after MCP detach = %v, want self-debug removed", got)
+	}
+}
+
+// grain_explore_scope labels the routes a credential reaches through
+// capabilities:detach with that scope, not with the dangerous
+// capabilities:admin they are registered under: the 2026-11-07 §4
+// walkthrough found a detach-only credential told it held
+// "capabilities:admin" (dangerous: true).
+func TestCapabilitiesDetachIsWhatGrainExploreScopeSays(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	enableExternalAgentAPI(t, client.Store)
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+		Name:   "detacher",
+		Scopes: []string{"capabilities:detach", "tasks:read"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	headers := map[string]string{"Authorization": "Bearer " + issued.Token}
+	for _, args := range []map[string]any{{}, {"scope": "capabilities"}} {
+		text, isErr := callControllerTool(t, srv, headers, ui.ToolGrainExploreScope, args)
+		if isErr {
+			t.Fatalf("grain_explore_scope(%v): %s", args, text)
+		}
+		// The overview's scope list, and each route's scope field; a
+		// route's own description may still say which scope it is
+		// registered under.
+		if strings.Contains(text, `"scope":"capabilities:admin"`) {
+			t.Errorf("grain_explore_scope(%v) lists capabilities:admin to a detach-only credential:\n%s", args, text)
+		}
+		if !strings.Contains(text, `"scope":"capabilities:detach"`) {
+			t.Errorf("grain_explore_scope(%v) does not name capabilities:detach:\n%s", args, text)
+		}
+	}
+	text, _ := callControllerTool(t, srv, headers, ui.ToolGrainExploreScope, map[string]any{})
+	var overview struct {
+		Groups []struct {
+			Group  string `json:"group"`
+			Scopes []struct {
+				Scope      string `json:"scope"`
+				Dangerous  bool   `json:"dangerous"`
+				RouteCount int    `json:"routeCount"`
+			} `json:"scopes"`
+		} `json:"groups"`
+	}
+	if err := json.Unmarshal([]byte(text), &overview); err != nil {
+		t.Fatalf("decoding the overview: %v\n%s", err, text)
+	}
+	found := false
+	for _, g := range overview.Groups {
+		for _, sc := range g.Scopes {
+			if sc.Scope == "capabilities:detach" {
+				found = true
+				if sc.Dangerous || sc.RouteCount != 3 {
+					t.Errorf("capabilities:detach overview = %+v, want 3 routes, not dangerous", sc)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Errorf("overview groups = %+v, want a capabilities:detach entry", overview.Groups)
 	}
 }
