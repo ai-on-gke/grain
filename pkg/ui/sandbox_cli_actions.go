@@ -43,9 +43,10 @@ type SandboxCLIActions struct {
 }
 
 var (
-	_ gitproxy.CLIActions            = SandboxCLIActions{}
-	_ gitproxy.CLITaskActions        = SandboxCLIActions{}
-	_ gitproxy.CLIGitHubCheckActions = SandboxCLIActions{}
+	_ gitproxy.CLIActions             = SandboxCLIActions{}
+	_ gitproxy.CLITaskActions         = SandboxCLIActions{}
+	_ gitproxy.CLIGitHubCheckActions  = SandboxCLIActions{}
+	_ gitproxy.CLIReviewThreadActions = SandboxCLIActions{}
 )
 
 // PullRequestReviewActions is what grain pr reply and grain pr resolve
@@ -170,6 +171,23 @@ func (a SandboxCLIActions) ResolveReviewThread(ctx context.Context, taskID, thre
 		return gitproxy.CLIActionResult{}, errNoReviewActions
 	}
 	text, refused, err := r.ResolveForTask(ctx, taskID, threadID, commentID)
+	return gitproxy.CLIActionResult{Text: text, Refused: refused}, err
+}
+
+// PullRequestThreadLister is an optional extension of
+// PullRequestReviewActions: the review threads on a task's own pull
+// request, for `grain pr threads`.
+type PullRequestThreadLister interface {
+	ThreadsForTask(ctx context.Context, taskID string, unresolvedOnly bool) (text string, refused bool, err error)
+}
+
+// ListReviewThreads is gitproxy.CLIReviewThreadActions.
+func (a SandboxCLIActions) ListReviewThreads(ctx context.Context, taskID string, unresolvedOnly bool) (gitproxy.CLIActionResult, error) {
+	l, ok := a.Client.Config.PullRequests.(PullRequestThreadLister)
+	if !ok || l == nil {
+		return gitproxy.CLIActionResult{}, errNoReviewActions
+	}
+	text, refused, err := l.ThreadsForTask(ctx, taskID, unresolvedOnly)
 	return gitproxy.CLIActionResult{Text: text, Refused: refused}, err
 }
 

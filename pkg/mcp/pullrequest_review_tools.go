@@ -430,3 +430,98 @@ func findReviewThread(threads []github.ReviewThread, threadID string, commentID 
 	}
 	return github.ReviewThread{}, false
 }
+
+// ReviewThreadsText lists the review conversations on the run's own open
+// pull request for `grain pr threads`: one entry per thread, giving its
+// GraphQL ID (what `grain pr resolve --thread-id` takes), the ID of the
+// comment that opened it, its author, path:line, whether it is resolved or
+// outdated, and the comment and every reply. unresolvedOnly leaves the
+// resolved ones out, which is the set a repository requiring conversation
+// resolution will not merge past -- outdated ones included.
+//
+// It is a read of the pull request the task already owns, so unlike
+// pull_request_status it needs no CI grant. The IsError result is a
+// sentence for the run, as every tool here answers.
+func ReviewThreadsText(client PullRequestReader, scope PullRequestScope, unresolvedOnly bool) Result {
+	if client == nil {
+		return Result{Text: noPullRequestCommenter, IsError: true}
+	}
+	client = readableErrors(client)
+	pr, refusal := ownOpenPullRequest(client, scope)
+	if refusal != nil {
+		return *refusal
+	}
+	prOwner, prRepo := scope.prOwner(), scope.prRepo()
+	comments, err := client.ListReviewComments(prOwner, prRepo, pr.Number)
+	if err != nil {
+		return Result{Text: fmt.Sprintf("reading the review comments on #%d: %v", pr.Number, err), IsError: true}
+	}
+	commenter := commenterOf(client)
+	if commenter == nil {
+		return Result{Text: fmt.Sprintf("Review threads on #%d cannot be read through this deployment's "+
+			"GitHub client.\n", pr.Number), IsError: true}
+	}
+	threads, err := commenter.ListReviewThreads(prOwner, prRepo, pr.Number)
+	if err != nil {
+		return Result{Text: fmt.Sprintf("reading the review threads on #%d: %v", pr.Number, err), IsError: true}
+	}
+	return Result{Text: renderReviewThreads(pr.Number, comments, threads, unresolvedOnly)}
+}
+
+// renderReviewThreads is ReviewThreadsText's layout, in the order GitHub
+// lists the threads.
+func renderReviewThreads(number int, comments []github.ReviewComment, threads []github.ReviewThread, unresolvedOnly bool) string {
+	byID := map[int]github.ReviewComment{}
+	for _, c := range comments {
+		byID[c.ID] = c
+	}
+	unresolved := 0
+	for _, th := range threads {
+		if !th.Resolved {
+			unresolved++
+		}
+	}
+	var b strings.Builder
+	if unresolvedOnly {
+		fmt.Fprintf(&b, "Unresolved review threads on #%d: %d of %d\n", number, unresolved, len(threads))
+	} else {
+		fmt.Fprintf(&b, "Review threads on #%d: %d, %d unresolved\n", number, len(threads), unresolved)
+	}
+	for _, th := range threads {
+		if unresolvedOnly && th.Resolved {
+			continue
+		}
+		var root github.ReviewComment
+		if len(th.CommentIDs) > 0 {
+			root = byID[th.CommentIDs[0]]
+			root.ID = th.CommentIDs[0]
+		}
+		path := root.Path
+		if path == "" {
+			path = th.Path
+		}
+		where := path
+		if root.Line != nil {
+			where = fmt.Sprintf("%s:%d", path, *root.Line)
+		}
+		state := "unresolved"
+		if th.Resolved {
+			state = "resolved"
+		}
+		if th.Outdated || root.Line == nil {
+			state += ", outdated"
+		}
+		fmt.Fprintf(&b, "\nthread %s (%s)\n  comment %d by @%s on %s\n", th.ID, state, root.ID, userOrUnknown(root.User), where)
+		writeIndented(&b, root.Body, "    ")
+		for _, id := range th.CommentIDs[min(1, len(th.CommentIDs)):] {
+			reply := byID[id]
+			fmt.Fprintf(&b, "  reply %d by @%s:\n", id, userOrUnknown(reply.User))
+			writeIndented(&b, reply.Body, "    ")
+		}
+	}
+	if unresolved > 0 {
+		b.WriteString("\nAnswer one with `grain pr reply <body> --comment-id <id>` and resolve it with " +
+			"`grain pr resolve --thread-id <id>` once it is dealt with.\n")
+	}
+	return b.String()
+}
