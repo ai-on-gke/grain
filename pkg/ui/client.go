@@ -5971,6 +5971,14 @@ func (c *Client) Approve(ctx context.Context, id string) error {
 	if err := c.catalogueApprovalRefusal(ctx, *task); err != nil {
 		return err
 	}
+	if by := c.requestActor(ctx).Actor; isExternalAgent(by) {
+		// The agent API gate asked this already (externalApprovalRail);
+		// asked again here so approve and run-now hold the same rail
+		// whichever route an external credential reaches them by.
+		if err := c.externalApprovalRefusal(ctx, by.ID, *task); err != nil {
+			return err
+		}
+	}
 	if err := c.Store.Approve(ctx, id, c.requestActor(ctx), c.now()); err != nil {
 		return err
 	}
@@ -7386,6 +7394,13 @@ func (c *Client) agentMayApprove(ctx context.Context, task model.Task) error {
 	if by.Kind != model.PrincipalAgent {
 		return nil
 	}
+	if isExternalAgent(by) {
+		// An external credential serves no task whose grants could bound
+		// the approval, so it is asked what POST /api/tasks/{id}/approve
+		// asks it: its own lineage and every person hold. The gate also
+		// asks it for tasks:admin (externalApprovalRail).
+		return c.externalApprovalRefusal(ctx, by.ID, task)
+	}
 	requester, err := c.Store.GetTask(ctx, by.ID)
 	if err != nil {
 		return err
@@ -7446,6 +7461,13 @@ func (c *Client) agentMayApprove(ctx context.Context, task model.Task) error {
 			"a person has to approve it before an agent may run it", task.ID, strings.Join(asked, ", "), by.ID)
 	}
 	return nil
+}
+
+// isExternalAgent says whether p is an external agent credential
+// ("external:<name>", model.SourceExternalToken) rather than a task's run.
+func isExternalAgent(p model.Principal) bool {
+	return p.Kind == model.PrincipalAgent &&
+		(p.Source == model.SourceExternalToken || strings.HasPrefix(strings.TrimSpace(p.ID), "external:"))
 }
 
 // agentEscalatedCapabilities is model.EscalatedCapabilities for an
