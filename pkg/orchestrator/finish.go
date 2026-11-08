@@ -2334,6 +2334,13 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// (AutoSubmits knows nothing of keep_running or priority).
 		heldByRun, _ := p["hold_for_approval"].(bool)
 		hold := heldByRun || needsPersonWhy != ""
+		if heldByRun {
+			// The run asked for a person whatever its permission covers
+			// (model.HoldRequestedTag), which the agent approval rail
+			// reads; HeldForApprovalTag below says only whether that
+			// request changed the outcome.
+			proposal.Tags = append(proposal.Tags, model.HoldRequestedTag)
+		}
 		// A fixture on this task's own qualification scratch branch is
 		// within a permission of its own (model.ScratchFixture): this
 		// task may push that branch itself, so the fixture is queued, and

@@ -1253,6 +1253,11 @@ func TestConsoleSessionsOnShapedUnisolatedBackendResolveNetworkNoneToOpen(t *tes
 	if len(listed) != 1 || listed[0].NetworkAccess != string(model.NetworkNone) {
 		t.Fatalf("ListConsoleSessions NetworkAccess = %q, want %q (not the fallback open)", listed[0].NetworkAccess, model.NetworkNone)
 	}
+	// ...and says what runs actually get, so the pane can warn rather than
+	// show "none" over a run that has egress (2026-11-07 §4 walkthrough).
+	if listed[0].EffectiveNetworkAccess != string(model.NetworkOpen) {
+		t.Errorf("ListConsoleSessions EffectiveNetworkAccess = %q, want %q", listed[0].EffectiveNetworkAccess, model.NetworkOpen)
+	}
 
 	none := string(model.NetworkNone)
 	if _, err := client.UpdateConsoleSession(ctx, model.DirectorSessionID, ui.UpdateConsoleSessionRequest{
@@ -1344,6 +1349,11 @@ func TestConsoleSessionsOnIsolatedUnshapedBackendKeepNetworkNone(t *testing.T) {
 	}
 	if updatedTask.NetworkAccess != model.NetworkNone {
 		t.Errorf("task NetworkAccess after UpdateConsoleSession(none) = %q, want %q (must not widen to open)", updatedTask.NetworkAccess, model.NetworkNone)
+	}
+	if listed, err := client.ListConsoleSessions(ctx); err != nil {
+		t.Fatal(err)
+	} else if listed[0].EffectiveNetworkAccess != "" {
+		t.Errorf("ListConsoleSessions EffectiveNetworkAccess = %q on an isolating backend, want \"\"", listed[0].EffectiveNetworkAccess)
 	}
 
 	restarted, err := client.RestartConsoleSession(ctx, model.DirectorSessionID, ui.RestartConsoleSessionRequest{})
