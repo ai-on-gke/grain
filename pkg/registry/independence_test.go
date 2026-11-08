@@ -135,11 +135,20 @@ type pkgImports struct {
 	imports    []string
 }
 
+// registryInternalsTestOnlyCallers are packages outside the registry that
+// may import its internals because they are not daemon or CLI code at all:
+// tests/security holds every server's trust boundaries as tests (its only
+// non-test file is doc.go), and the registry's consent surface is one of
+// them, so it stands up a real pkg/registry Server over pkg/registry/store.
+var registryInternalsTestOnlyCallers = map[string]bool{
+	"tests/security": true,
+}
+
 func checkNonRegistryPackagesOnlyImportAPI(pkgs []pkgImports) []string {
 	var violations []string
 	for _, p := range pkgs {
 		callerRel, ok := strings.CutPrefix(p.importPath, modulePrefix)
-		if !ok || isRegistryOwnedPackage(callerRel) {
+		if !ok || isRegistryOwnedPackage(callerRel) || registryInternalsTestOnlyCallers[callerRel] {
 			continue
 		}
 		for _, imp := range p.imports {
@@ -370,6 +379,21 @@ func TestBoundaryCheckersCatchViolations(t *testing.T) {
 			},
 		},
 		{
+			// tests/security exercises the registry's trust boundaries directly.
+			importPath: modulePrefix + "tests/security",
+			imports: []string{
+				modulePrefix + "pkg/registry",
+				modulePrefix + "pkg/registry/store",
+			},
+		},
+		{
+			// ...but no other tests/ package gets that exemption.
+			importPath: modulePrefix + "tests/e2e",
+			imports: []string{
+				modulePrefix + "pkg/registry/store",
+			},
+		},
+		{
 			// Internal registry package importing sibling registry packages is allowed here.
 			importPath: modulePrefix + "pkg/registry/server",
 			imports: []string{
@@ -384,6 +408,7 @@ func TestBoundaryCheckersCatchViolations(t *testing.T) {
 		"pkg/cli -> pkg/registry/providers/gcp",
 		"pkg/cli -> pkg/registry/store",
 		"pkg/daemon -> pkg/registry/server",
+		"tests/e2e -> pkg/registry/store",
 	}
 	if strings.Join(reverse, ",") != strings.Join(wantReverse, ",") {
 		t.Fatalf("reverse violations = %v, want %v", reverse, wantReverse)
