@@ -170,7 +170,9 @@ if [ -n "$hold_rc" ]; then
   app="${app:-$(jq -r '.grain_app // empty' "$out/hold-checks.json")}"
   env_args+=(RELEASE_HOLD_CHECKS_JSON="$out/hold-checks.json")
 fi
-app="${app:-${RELEASE_QUALIFICATION_APP:-}}"
+# A forge connection that is no GitHub App (a PAT) reports no grain_app:
+# with no app to trust, none is (Stage 1 alone qualifies; nothing holds).
+app="${app:-${RELEASE_QUALIFICATION_APP:-none}}"
 for f in "$out"/*.json; do
   note="$(jq -r '.grain_note // empty' "$f" 2>/dev/null || true)"
   [ -z "$note" ] || say "grain_note in $(basename "$f"): $note"

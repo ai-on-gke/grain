@@ -430,9 +430,24 @@ check "check-qualification: CHECK_QUALIFICATION_APP may name the app by id" 0 \
 CHECK_QUALIFICATION_APP=42 qualify "$green1" "$(checks_file q-c-numslug 42:success)"
 check "check-qualification: an app id is never matched against another app's slug" 2 \
   "IGNORED grain/release-qualification: 1 from 42, not 42" "Qualification: PENDING"
-CHECK_QUALIFICATION_APP='' qualify "$green1" "$(checks_file q-c-noapp success)"
-check "check-qualification: with no app configured no check run is trusted" 64 "CHECK_QUALIFICATION_APP is unset"
-lacks "check-qualification: an unconfigured gate never passes" "Qualification: PASS"
+# With no app trusted (none, empty or unset: a forge connection that is no
+# GitHub App posts no check run), Stage 2 is skipped and no check run --
+# grain's-looking, foreign or app-less -- is read: Stage 1 qualifies alone.
+CHECK_QUALIFICATION_APP=none qualify "$green1" "$(checks_file q-c-none failure actions:success noapp:success)"
+check "check-qualification: CHECK_QUALIFICATION_APP=none skips Stage 2" 0 \
+  "SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)" "Qualification: PASS $tag."
+lacks "check-qualification: CHECK_QUALIFICATION_APP=none judges no check run" "grain/release-qualification: failed"
+CHECK_QUALIFICATION_APP='' qualify "$green1"
+check "check-qualification: an empty CHECK_QUALIFICATION_APP is none, and needs no check run listing" 0 \
+  "SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none" "Qualification: PASS $tag."
+unset CHECK_QUALIFICATION_APP
+qualify "$green1" "$(checks_file q-c-unset failure)"
+export CHECK_QUALIFICATION_APP=grain-test
+check "check-qualification: an unset CHECK_QUALIFICATION_APP is none" 0 \
+  "SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none" "Qualification: PASS $tag."
+mapfile -t red < <(stage1_run success 100 1 "$recent" "state repository soak=failure")
+CHECK_QUALIFICATION_APP=none qualify "$(jobs_file q-none-red "${red[@]}" "$(gh_job "state repository soak" failure 101 1 $((recent + 600)))")"
+check "check-qualification: CHECK_QUALIFICATION_APP=none still needs Stage 1" 1 "Qualification: FAIL"
 
 RELEASE_NEVER_PROMOTE="v1.14.0 v3.1.0" qualify "$green1" "$(checks_file q-never success)"
 check "check-qualification: RELEASE_NEVER_PROMOTE fails an otherwise green RC" 1 "FAIL never: RELEASE_NEVER_PROMOTE (v1.14.0 v3.1.0) names v3.1.0"
