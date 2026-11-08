@@ -1,0 +1,31 @@
+{
+  "id": "https://grain.dev/capabilities/gcp",
+  "state": "attached",
+  "methods": [
+    "gcp-key"
+  ],
+  "permission_set": {
+    "default": "org-deploy",
+    "enum": [
+      "org-deploy"
+    ],
+    "title": "Permission set",
+    "type": "string",
+    "x-grain-person-granted": [
+      "org-deploy"
+    ]
+  },
+  "config": {
+    "permission_sets": [
+      {
+        "credential": "token",
+        "max_lease": "20m",
+        "name": "org-deploy",
+        "roles": [
+          "roles/run.admin"
+        ],
+        "service_account": "deployer@walk-proj.iam.gserviceaccount.com"
+      }
+    ]
+  }
+}
