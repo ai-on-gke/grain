@@ -141,9 +141,11 @@ func (w *holdWorld) clearedAtA(task model.Task) string {
 	// capabilities-secrets, task 3388; v20 only adds the external-agent
 	// owner-trust policy and the gma_ token model and handlers to
 	// auth-routes, task 3026; v21 only adds the release-asset publisher,
-	// its train workflow and install-grain.sh, task 2990).
-	if trustboundary.Version != "trust-boundary/v21" {
-		w.t.Fatalf("this walkthrough is about trust-boundary/v21, the build has %s", trustboundary.Version)
+	// its train workflow and install-grain.sh, task 2990; v22 only adds
+	// pkg/webauth/ to auth-routes and pkg/registry/ and cmd/grain-registry/
+	// to credential-proxy, task 3479).
+	if trustboundary.Version != "trust-boundary/v22" {
+		w.t.Fatalf("this walkthrough is about trust-boundary/v22, the build has %s", trustboundary.Version)
 	}
 	if w.merged(branch) {
 		w.t.Fatal("merged before the pull request read mergeable")

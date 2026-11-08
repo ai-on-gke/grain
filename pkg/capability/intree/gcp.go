@@ -496,10 +496,21 @@ func init() {
 			var accounts listFlag
 			fs.Var(&accounts, "account", "deprecated: an old fixed pool, [name=]email[*count] (repeatable)")
 			listen := fs.String("listen", "127.0.0.1:"+strconv.Itoa(DefaultGCPTokenPort), "the loopback address of the data-plane listener token-mode permission sets' grants fetch access tokens from")
+			fake := fs.String("fake-cloud", "", "test only: connect to an in-memory GCP (gcpfake) built from this JSON fixture instead of Google")
 			if err := fs.Parse(args); err != nil {
 				return nil, err
 			}
 			cfg := GCPConfig{Log: logger, Env: env, Listen: listenAddr(env, *listen)}
+			if *fake != "" {
+				cloud, now, err := loadGCPFake(*fake)
+				if err != nil {
+					return nil, err
+				}
+				cfg.Connector, cfg.Now = cloud, now
+				if logger != nil {
+					logger.Printf("gcp: -fake-cloud %s: every admin connects to an in-memory fake GCP; nothing reaches Google", *fake)
+				}
+			}
 			var legacy []gcpsets.LegacyAccount
 			for _, v := range accounts {
 				a, err := parseGCPAccount(v)

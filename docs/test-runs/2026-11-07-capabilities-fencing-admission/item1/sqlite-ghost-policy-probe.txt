@@ -1,0 +1,24 @@
+== acme/denied  https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}
+   400 the capability policy denies https://grain.dev/capabilities/config-map#config-map to this task on acme/denied (rule 1: deny https://grain.dev/capabilities/config-map#config-map)
+== acme/denied  https://grain.dev/capabilities/skill#config-map={"config_maps":["bootstrap"]}
+   400 the capability policy denies https://grain.dev/capabilities/config-map#config-map to this task on acme/denied (rule 1: deny https://grain.dev/capabilities/config-map#config-map)
+== acme/denied  https://grain.dev/capabilities/github#read-issues={}
+   400 capability https://grain.dev/capabilities/github#read-issues={} is disabled in settings/capabilities.yml (in_process.read-issues, the capability it replaced)
+== acme/denied  https://grain.dev/capabilities/repo#credential={"credential":"bot"}
+   400 the capability policy denies https://grain.dev/capabilities/repo#credential to this task on acme/denied (rule 3: deny https://grain.dev/capabilities/repo#credential)
+== acme/skill-denied  https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}
+   400 the capability policy denies https://grain.dev/capabilities/config-map#config-map to this task on acme/skill-denied (rule 5: deny https://grain.dev/capabilities/skill#config-map)
+== acme/skill-denied  https://grain.dev/capabilities/skill#config-map={"config_maps":["bootstrap"]}
+   400 the capability policy denies https://grain.dev/capabilities/config-map#config-map to this task on acme/skill-denied (rule 5: deny https://grain.dev/capabilities/skill#config-map)
+== acme/widgets  https://grain.dev/capabilities/github#read-issues={}
+   400 capability https://grain.dev/capabilities/github#read-issues={} is disabled in settings/capabilities.yml (in_process.read-issues, the capability it replaced)
+== acme/widgets  https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}
+   201 task 10 admission=durable caps=['https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}']
+== acme/widgets  https://grain.dev/capabilities/repo#credential={"credential":"bot"}
+   201 task 11 admission=durable caps=['https://grain.dev/capabilities/repo#credential={"credential":"bot"}']
+== acme/widgets  https://grain.dev/capabilities/grain#source={}
+   201 task 12 admission=durable caps=['https://grain.dev/capabilities/grain#source={}']
+== acme/widgets  read-issues
+   400 capability https://grain.dev/capabilities/github#read-issues={} is disabled in settings/capabilities.yml (in_process.read-issues, the capability it replaced)
+== acme/widgets  priority-dispatch
+   201 task 13 admission=bypass caps=[]

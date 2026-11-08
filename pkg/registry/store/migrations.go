@@ -321,6 +321,14 @@ ALTER TABLE registry.leases
     ADD COLUMN IF NOT EXISTS renewed_at  TIMESTAMPTZ NOT NULL DEFAULT now();
 `,
 	},
+	{
+		version: 7,
+		name:    "custom_boot_disk_gb",
+		upSQL: `
+ALTER TABLE registry.entries
+    ADD COLUMN IF NOT EXISTS boot_disk_gb INT;
+`,
+	},
 }
 
 // migrateLockKey is the pg_advisory_lock key every grain-registry replica takes

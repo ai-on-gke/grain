@@ -254,6 +254,7 @@ var knownBoundaryFiles = []string{
 	"pkg/model/capability_catalogue.go", "pkg/model/template_grants.go",
 	"pkg/model/owner_trust.go", "pkg/model/external_agent_token.go",
 	"pkg/ui/external_agents.go",
+	"pkg/webauth/", "pkg/registry/", "cmd/grain-registry/",
 }
 
 // Entries ending in "/" are directories: every .go file under them, as it
@@ -507,8 +508,8 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 // reach, the approval-callback tokens and the daemon's UI listeners. v16
 // classified none of them, so a change to any merged itself.
 func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v21" {
-		t.Errorf("Version = %q, want trust-boundary/v21", Version)
+	if Version != "trust-boundary/v22" {
+		t.Errorf("Version = %q, want trust-boundary/v22", Version)
 	}
 	for _, p := range []string{
 		"pkg/ui/access_roles.go",
@@ -557,8 +558,8 @@ func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
 // reference/policy, catalogue and template-grant admission files in
 // pkg/model/ classify under capabilities-secrets.
 func TestPlaybooksAndCapabilityAdmissionFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v21" {
-		t.Errorf("Version = %q, want trust-boundary/v21", Version)
+	if Version != "trust-boundary/v22" {
+		t.Errorf("Version = %q, want trust-boundary/v22", Version)
 	}
 	for _, p := range []string{
 		"pkg/playbooks/playbooks.go",
@@ -593,8 +594,8 @@ func TestPlaybooksAndCapabilityAdmissionFilesAreClassified(t *testing.T) {
 // bearer token model and lifecycle handlers classify under auth-routes, while
 // the provenance-only X-Grain-Client / FiledVia helpers stay unclassified.
 func TestOwnerTrustAndExternalAgentTokenFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v21" {
-		t.Errorf("Version = %q, want trust-boundary/v21", Version)
+	if Version != "trust-boundary/v22" {
+		t.Errorf("Version = %q, want trust-boundary/v22", Version)
 	}
 	for _, p := range []string{
 		"pkg/model/owner_trust.go",
@@ -643,5 +644,40 @@ func TestOwnerTrustAndExternalAgentTokenFilesAreClassified(t *testing.T) {
 				t.Errorf("%s is defined in %s, Classify = %v, want [auth-routes]", name, file, got)
 			}
 		}
+	}
+}
+
+// v22 (task 3479, found in the security review of task 3284): grain-registry's
+// front door. pkg/webauth/ verifies IAP and registry-assertion JWTs, admits
+// principals and checks proxy-auth CSRF (auth-routes); pkg/registry/ and
+// cmd/grain-registry/ decide visibility and delegation, sign assertions,
+// strip edge credentials before a tunnel and authenticate grc_ credentials
+// (credential-proxy). v21 classified none of them, so a change to any merged
+// itself.
+func TestRegistryFrontDoorIsClassified(t *testing.T) {
+	if Version != "trust-boundary/v22" {
+		t.Errorf("Version = %q, want trust-boundary/v22", Version)
+	}
+	for p, want := range map[string]string{
+		"pkg/webauth/iap.go":                "auth-routes",
+		"pkg/webauth/registry.go":           "auth-routes",
+		"pkg/webauth/admission.go":          "auth-routes",
+		"pkg/webauth/csrf.go":               "auth-routes",
+		"pkg/registry/signer.go":            "credential-proxy",
+		"pkg/registry/server/router.go":     "credential-proxy",
+		"pkg/registry/server/proxy.go":      "credential-proxy",
+		"pkg/registry/server/tunnel.go":     "credential-proxy",
+		"pkg/registry/store/store.go":       "credential-proxy",
+		"pkg/registry/providers/gcp/kms.go": "credential-proxy",
+		"cmd/grain-registry/main.go":        "credential-proxy",
+	} {
+		if got := categoryIDs(Classify([]string{p})); !reflect.DeepEqual(got, []string{want}) {
+			t.Errorf("Classify(%q) = %v, want [%s]", p, got, want)
+		}
+	}
+
+	// Control: the registry's React app is UI, not the front door.
+	if got := Classify([]string{"ui-registry/src/App.jsx"}); got != nil {
+		t.Errorf("Classify(ui-registry/src/App.jsx) = %v, want nothing", categoryIDs(got))
 	}
 }

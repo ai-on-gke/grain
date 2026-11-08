@@ -299,7 +299,7 @@ func readTokenFile(path string) (string, error) {
 // capabilities section.
 func defaultAllowlist(stage, server, agyPath string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# %s's allowlist: the agent CLIs the grain daemon at\n# %s may start on this machine, as you. hostd re-reads it on\n# every request. %s runs agent CLIs only: capabilities: stays empty.\n", Program, server, Program)
+	fmt.Fprintf(&b, "# %s's allowlist: the agent CLIs the grain daemon at\n# %s may start on this machine, as you. %s re-reads it on\n# every request. %s runs agent CLIs only: capabilities: stays empty.\n", Program, server, Program, Program)
 	b.WriteString("clis:\n")
 	fmt.Fprintf(&b, "  agy:\n    path: %s\n    paths_under: [%s]\n    cwd_under: [%s]\n", agyPath, stage, stage)
 	b.WriteString("    env: [HOME, AGY_CLI_DISABLE_AUTO_UPDATE, GEMINI_API_KEY, GOOGLE_API_KEY]\n")
@@ -367,7 +367,7 @@ func renderUnit(u unitConfig) (string, error) {
 func promptToken() (string, error) {
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
-		return "", fmt.Errorf("no terminal to ask for the hostd token on: set %s", TokenEnv)
+		return "", fmt.Errorf("no terminal to ask for the host token on: set %s", TokenEnv)
 	}
 	defer tty.Close()
 	fd := int(tty.Fd())
@@ -386,7 +386,7 @@ func promptToken() (string, error) {
 			}
 		}()
 	}
-	fmt.Fprint(tty, "Paste this hostd's token (Settings -> Hostds), then Enter: ")
+	fmt.Fprint(tty, "Paste this host's token (Settings -> Hosts), then Enter: ")
 	b, err := term.ReadPassword(fd)
 	fmt.Fprintln(tty)
 	if err != nil {

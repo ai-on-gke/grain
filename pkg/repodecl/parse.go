@@ -1024,10 +1024,15 @@ func parseRecurrence(f file, raw rawSchedule) (model.Recurrence, error) {
 			// grain/config is read off grain's own disk with no credential
 			// in front of it, and no repository's file may reach it
 			// (parseCapabilities): not even to learn where its refs are.
-			if watched, err := model.ParseRepo(cp.Repo); err == nil && model.IsConfigRepo(watched) {
-				return model.Recurrence{}, fmt.Errorf("%s: `git_ref` watches %s, which is grain's own "+
-					"configuration; no repository's file may reach it -- a schedule that watches it is "+
-					"declared in grain's own settings", f.path, watched)
+			if watched, err := model.ParseRepo(cp.Repo); err == nil {
+				if model.IsConfigRepo(watched) {
+					return model.Recurrence{}, fmt.Errorf("%s: `git_ref` watches %s, which is grain's own "+
+						"configuration; no repository's file may reach it -- a schedule that watches it is "+
+						"declared in grain's own settings", f.path, watched)
+				}
+				if model.IsRetiredConfigRepo(watched) {
+					return model.Recurrence{}, fmt.Errorf("%s: `git_ref` watches %s: %s", f.path, watched, model.RetiredConfigRepoReason(watched))
+				}
 			}
 			r = model.Recurrence{Kind: model.RecurrenceGitRef, GitRef: &cp, TimeZone: tz}
 		case gh != nil:

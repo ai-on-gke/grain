@@ -2503,11 +2503,16 @@ image_exists() {
 
 # Point $2 at whatever $1 is: one manifest copied registry-side by
 # imagetools where buildx is here, a pull, tag and push where it is not.
+# `--prefer-index=false` forces a byte-for-byte carbon copy of single-platform
+# manifests pushed by `docker push` rather than wrapping them in a newly
+# synthesized OCI image index (buildx's default `--prefer-index=true`), so the
+# retagged manifest keeps the exact source digest for `copy_by_digest`,
+# cosign signature verification, and `ghcr-prune` digest grouping.
 retag_image() {
   local attempt
   if docker buildx version >/dev/null 2>&1; then
     for attempt in 1 2 3; do
-      if registry_env docker buildx imagetools create --tag "$2" "$1"; then
+      if registry_env docker buildx imagetools create --tag "$2" "$1" --prefer-index=false; then
         return 0
       fi
       if [ "$attempt" -lt 3 ]; then

@@ -594,6 +594,10 @@ func (s *Server) authenticateExternalAgent(w http.ResponseWriter, r *http.Reques
 		writeTokenExpired(w, *tok.ExpiresAt)
 		return nil, nil, false
 	}
+	if status, err := s.externalTokenOwnerCap(r.Context(), tok); err != nil {
+		writeError(w, status, err)
+		return nil, nil, false
+	}
 	release, wait, err := s.externalLimiter.acquire(tok, now)
 	if err != nil {
 		w.Header().Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(wait.Seconds())))))

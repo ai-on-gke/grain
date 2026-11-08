@@ -65,6 +65,7 @@ import {
 } from "../state.js";
 import AccessGate from "./AccessGate.jsx";
 import AdmissionField from "./AdmissionField.jsx";
+import HostingField from "./HostingField.jsx";
 
 const WEEKDAYS = [
   "sunday",
@@ -415,6 +416,9 @@ function ScheduleOverlay({
   // previewed: a repository's declared schedule may raise its
   // template's (docs/declarations.md).
   const [admission, setAdmission] = useState(schedule?.admission || "standard");
+  // How every firing is hosted (model.Schedule.Hosting); "" on the wire
+  // is unattended. Editable and previewed as admission is.
+  const [hosting, setHosting] = useState(schedule?.hosting || "unattended");
   const [networkAccess, setNetworkAccess] = useState(
     schedule?.networkAccess || "",
   );
@@ -501,6 +505,9 @@ function ScheduleOverlay({
       if (admission !== (schedule?.admission || "standard")) {
         req.admission = admission;
       }
+      if (hosting !== (schedule?.hosting || "unattended")) {
+        req.hosting = hosting;
+      }
       req.networkAccess = networkAccess;
       req.nothingNeededAction = nothingNeededAction;
       req.reads = reads;
@@ -532,6 +539,12 @@ function ScheduleOverlay({
               ? admission
               : templateId === schedule?.templateId
                 ? schedule?.admission || ""
+                : "",
+          hosting:
+            templateId === ""
+              ? hosting
+              : templateId === schedule?.templateId
+                ? schedule?.hosting || ""
                 : "",
         };
 
@@ -1100,6 +1113,11 @@ function ScheduleOverlay({
               <AdmissionField
                 value={admission}
                 onChange={setAdmission}
+                noun="schedule"
+              />
+              <HostingField
+                value={hosting}
+                onChange={setHosting}
                 noun="schedule"
               />
               <TextField

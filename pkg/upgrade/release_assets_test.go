@@ -1971,3 +1971,45 @@ func TestPublishedReleasesSortsNewestFirstAndSkipsPointers(t *testing.T) {
 		t.Error("pickPublishedRelease(nil) found a release")
 	}
 }
+
+// A deployment told to load one named tarball (-upgrade-release-asset)
+// rather than an images.json manifest counts a release carrying that
+// tarball as published. It used to hold every release to images.json, so
+// such a deployment listed no versions at all and could not upgrade
+// (docs/test-runs/2026-11-07-releases-upgrades-ci.md, Bug F2).
+func TestSingleReleaseAssetCountsAsPublished(t *testing.T) {
+	forge := newFakeForgeServer(t, "team", "edition")
+	forge.releases["v3.2.0"] = &fakeReleaseSpec{
+		tag: "v3.2.0", targetCommitish: testCommit1, id: 10, createdAt: "2026-11-01T10:00:00Z",
+		assets: map[string][]byte{"grain-image.tar.gz": []byte("not really a tarball")},
+	}
+	tagUnpublished(forge, "v3.2.1", testCommit2, "2026-11-02T10:00:00Z", 11)
+	dir := t.TempDir()
+	u := newUpgrader(t, Config{
+		Image: &ImageConfig{
+			Repository: "edition-local/grain",
+			Source:     ImageSourceReleaseAssets,
+			RefFile:    filepath.Join(dir, "image.env"),
+			PullCmd:    []string{"false"},
+			ReleaseAssets: ReleaseAssetsConfig{
+				Repository:    "github.com/team/edition",
+				Asset:         "grain-image.tar.gz",
+				ClientForHost: forge.clientFunc("", "", ""),
+			},
+		},
+		StatusFile: filepath.Join(dir, "status.json"),
+	})
+	if !u.releaseAssetsOnly() {
+		t.Fatal("explicit release-assets with no fallback should load release assets only")
+	}
+	tags, err := u.listReleaseTags(context.Background())
+	if err != nil {
+		t.Fatalf("listReleaseTags: %v", err)
+	}
+	if !slices.Contains(tags, "v3.2.0") {
+		t.Errorf("release tags = %v, want v3.2.0 (it carries the configured grain-image.tar.gz)", tags)
+	}
+	if slices.Contains(tags, "v3.2.1") {
+		t.Errorf("release tags = %v, want v3.2.1 left out (tagged, not published)", tags)
+	}
+}

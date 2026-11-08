@@ -1,0 +1,30 @@
+## fresh store
+{"networkAccess":"none","effectiveNetworkAccess":null,"tasksApproved":true,"taskId":"1","tier1":["api:capabilities:detach","api:capabilities:read","api:ci-read","api:deployment:read","api:dispatch:read","api:releases:read","api:repos:read","api:schedules:read","api:self-debug","api:settings:read","api:suites:read","api:task-admin","api:templates:read"],"missingShippedDefaults":null}
+{"task1":{"networkAccess":"none","approved":true}}
+## upgraded store: a saved pre-#806/#817 row (no Tier 1 api grants, tasksApproved false, one custom extra)
+PUT 200
+{"tasksApproved":false,"held":8,"missingShippedDefaults":["api:task-admin","api:capabilities:read","api:capabilities:detach","api:settings:read","api:repos:read","api:releases:read","api:schedules:read","api:templates:read","api:suites:read","api:dispatch:read"]}
+## adopt over REST (what the pane's button sends: held + missing), racing 10 concurrent tasksApproved/title edits
+title-3 200
+title-8 200
+title-5 200
+title-1 200
+adopt 200
+title-2 200
+title-10 200
+title-4 200
+title-6 200
+title-9 200
+title-7 200
+{"tasksApproved":false,"held":18,"missingShippedDefaults":null,"customExtraKept":true}
+## the Director's task carries every session grant (no grant dropped by the sync)
+{
+  "sessionOnly": [],
+  "taskOnly": []
+}
+daemon log sync-race lines: 0
+## stale-tab adopt: tab A reads the row, tab B adds a grant, tab A clicks Adopt
+reset to the pre-#806 row: 200
+tab B adds api:tasks:read: 200
+tab A adopts from its stale read: 200
+{"tabBGrantKept":false,"missingShippedDefaults":null}

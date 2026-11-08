@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // --- fakes -----------------------------------------------------------
@@ -115,10 +116,14 @@ type fakeCredentials struct {
 	material map[string]string
 	err      error
 	resolved []string
+	// runs is the secret store audit's run (secrets.RunFromContext) on
+	// every Resolve, in order.
+	runs []string
 }
 
 func (c *fakeCredentials) Resolve(ctx context.Context, name string) (string, error) {
 	c.resolved = append(c.resolved, name)
+	c.runs = append(c.runs, secrets.RunFromContext(ctx))
 	if c.err != nil {
 		return "", c.err
 	}
