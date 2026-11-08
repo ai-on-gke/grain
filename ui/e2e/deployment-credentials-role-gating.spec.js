@@ -157,3 +157,38 @@ test("the old Integrations tab's addresses scroll to the Deployment credentials 
     }
   }
 });
+
+// Item 1 again: /settings/secrets scrolled Other secrets' heading flush
+// against the foot of the sticky header, where every SettingsCard anchor
+// keeps a 16px scroll margin.
+test("/settings/secrets leaves Other secrets clear of the header", async ({
+  page,
+}) => {
+  await page.goto("/settings/capabilities");
+  expect(await putSecret(page, "/api/secrets/cosign-key/key", "k")).toBe(200);
+  try {
+    for (const viewport of [
+      { width: 1440, height: 900 },
+      { width: 390, height: 844 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await page.goto("/settings/secrets");
+      await expect(page).toHaveURL(/\/settings\/capabilities#other-secrets$/);
+      const heading = page.locator("#other-secrets");
+      await expect(heading).toBeInViewport();
+      await page.waitForTimeout(300);
+      const gap = await page.evaluate(() => {
+        const header = document.querySelector("header");
+        const top = document
+          .querySelector("#other-secrets")
+          .getBoundingClientRect().top;
+        return top - (header ? header.getBoundingClientRect().bottom : 0);
+      });
+      expect(gap, `gap at ${viewport.width}px`).toBeGreaterThanOrEqual(8);
+    }
+  } finally {
+    await page.evaluate(() =>
+      fetch("/api/secrets/cosign-key", { method: "DELETE" }),
+    );
+  }
+});
