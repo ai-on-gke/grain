@@ -1,0 +1,28 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# grain-sbx:walk: the walk's sandbox image -- the sandbox contract (2),
+# user debian, and the sandbox's own grain (cmd/grain-sandbox) copied in as
+# ./grain. Dockerfile.k8s-sandbox's builder cannot fetch Go modules here.
+# The base is pinned to the digest Dockerfile.k8s-sandbox's BASE_IMAGE
+# uses, so a rebuild of this image pulls the same Debian it does rather
+# than whatever the floating tag points at that day.
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+RUN apt-get update && apt-get install -y --no-install-recommends bash ca-certificates curl findutils git tar python3-minimal procps \
+ && rm -rf /var/lib/apt/lists/* \
+ && install -d -m0755 /etc/grain && printf '2\n' > /etc/grain/sandbox-contract \
+ && useradd -m -u 1000 -s /bin/bash debian && ln -s /home/debian /home/agent
+COPY grain /usr/local/bin/grain
+USER debian
+WORKDIR /home/debian

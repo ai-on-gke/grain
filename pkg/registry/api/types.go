@@ -993,3 +993,85 @@ type AdminSummaryResponse struct {
 	ReconcilerLease *LeaseStatus         `json:"reconciler_lease,omitempty"`
 	AuditLog        []AuditLogEntry      `json:"audit_log"`
 }
+
+// DelegatingApp is a registered delegating app: a service account that may act
+// on behalf of the people who consent to it (`delegation_policy: consent`).
+// Served by GET/POST/PATCH /api/admin/delegating-apps.
+type DelegatingApp struct {
+	Name                string     `json:"name"`
+	Principal           string     `json:"principal"`
+	DisplayName         string     `json:"display_name"`
+	Description         string     `json:"description,omitempty"`
+	Homepage            string     `json:"homepage,omitempty"`
+	Owner               string     `json:"owner"`
+	OwnerGroup          string     `json:"owner_group,omitempty"`
+	MaxAccess           string     `json:"max_access"`
+	MaxGrantTTLSeconds  int64      `json:"max_grant_ttl_seconds"`
+	RequireSubjectToken bool       `json:"require_subject_token,omitempty"`
+	RedirectURIs        []string   `json:"redirect_uris,omitempty"`
+	CreatedBy           string     `json:"created_by"`
+	CreatedAt           time.Time  `json:"created_at"`
+	DisabledAt          *time.Time `json:"disabled_at,omitempty"`
+	DisabledBy          string     `json:"disabled_by,omitempty"`
+}
+
+// ListDelegatingAppsResponse is the body of GET /api/admin/delegating-apps.
+type ListDelegatingAppsResponse struct {
+	Apps []DelegatingApp `json:"apps"`
+}
+
+// CreateDelegatingAppRequest is the body of POST /api/admin/delegating-apps.
+// Principal may be a bare service-account email or `serviceAccount:<email>`;
+// the registry stores the `serviceAccount:` form. Owner defaults to the
+// calling admin, MaxAccess to "write", and MaxGrantTTLSeconds to 90 days.
+type CreateDelegatingAppRequest struct {
+	Name                string   `json:"name"`
+	Principal           string   `json:"principal"`
+	DisplayName         string   `json:"display_name,omitempty"`
+	Description         string   `json:"description,omitempty"`
+	Homepage            string   `json:"homepage,omitempty"`
+	Owner               string   `json:"owner,omitempty"`
+	OwnerGroup          string   `json:"owner_group,omitempty"`
+	MaxAccess           string   `json:"max_access,omitempty"`
+	MaxGrantTTLSeconds  int64    `json:"max_grant_ttl_seconds,omitempty"`
+	RequireSubjectToken bool     `json:"require_subject_token,omitempty"`
+	RedirectURIs        []string `json:"redirect_uris,omitempty"`
+}
+
+// SetDelegatingAppDisabledRequest is the body of PATCH /api/admin/delegating-apps/<name>.
+type SetDelegatingAppDisabledRequest struct {
+	Disabled bool `json:"disabled"`
+}
+
+// DelegationGrant is one person's consent for a delegating app to act on
+// their behalf against the named entries ("*" covers every entry the person
+// can reach). Served by GET/POST/DELETE /api/delegation-grants.
+type DelegationGrant struct {
+	ID         string     `json:"id"`
+	App        string     `json:"app"`
+	Person     string     `json:"person"`
+	Entries    []string   `json:"entries"`
+	Access     string     `json:"access"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+	ExpiresAt  time.Time  `json:"expires_at"`
+	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
+	RevokedBy  string     `json:"revoked_by,omitempty"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+}
+
+// ListDelegationGrantsResponse is the body of GET /api/delegation-grants.
+type ListDelegationGrantsResponse struct {
+	Grants []DelegationGrant `json:"grants"`
+}
+
+// CreateDelegationGrantRequest is the body of POST /api/delegation-grants.
+// The grant is always made by, and for, the signed-in person: Person may be
+// left empty, and a value naming anyone else is refused with 403.
+type CreateDelegationGrantRequest struct {
+	App        string   `json:"app"`
+	Entries    []string `json:"entries"`
+	Access     string   `json:"access,omitempty"`
+	TTLSeconds int64    `json:"ttl_seconds,omitempty"`
+	Person     string   `json:"person,omitempty"`
+}

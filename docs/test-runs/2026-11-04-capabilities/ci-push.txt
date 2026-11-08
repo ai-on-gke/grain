@@ -1,0 +1,9 @@
+run 37bd3058afd47fb3 push conclusion: success warning: None
+job publish success | error: None | warning: capability https://grain.dev/capabilities/release#package-publish={} is withheld on push runs (released only to release, workflow_dispatch, and grain's scheduled runs)
+  step echo "event: $GRAIN_CI_EVENT" success
+   | grain ci: capability https://grain.dev/capabilities/release#package-publish={} is withheld on push runs (released only to release, workflow_dispatch, and grain's scheduled runs)
+   | event: push
+   | ls: cannot access '/home/debian/.package-publish-*': No such file or directory
+   | ls: cannot access '/home/debian/.docker/config.json': No such file or directory
+   | ls: cannot access '/home/debian/.grain/bin/docker-credential-grain': No such file or directory
+   | 
