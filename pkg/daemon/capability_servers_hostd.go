@@ -459,6 +459,21 @@ func (h *hostdCapabilityServers) hostCapabilityEntries(ctx context.Context, sele
 	return entries, true, nil
 }
 
+// hostAgentsOnly reports whether the connected host selector names says,
+// in its hello, that it runs agent CLIs only (grain-agentd). A host that
+// cannot be reached, or one too old to say, is not.
+func (h *hostdCapabilityServers) hostAgentsOnly(ctx context.Context, selector string) bool {
+	if h == nil || h.live == nil {
+		return false
+	}
+	route, err := resolveHostdSelector(hostd.ForDisplay(ctx), h.live(), h.store, selector)
+	if err != nil {
+		return false
+	}
+	hello, err := route.Exec.hostdClient().Hello(hostd.ForDisplay(ctx))
+	return err == nil && hello.AgentsOnly
+}
+
 func (h *hostdCapabilityServers) rotateManaged(capabilityID string) ([]string, error) {
 	if h == nil || h.live == nil {
 		return h.base.RotateManaged(capabilityID)
@@ -520,6 +535,10 @@ func (r placedStatusRegistry) Probe(ctx context.Context, id string, cfg protocol
 
 func (r placedStatusRegistry) HostCapabilityEntriesFor(ctx context.Context, selector string) ([]string, bool, error) {
 	return r.placed.hostCapabilityEntries(ctx, selector)
+}
+
+func (r placedStatusRegistry) HostAgentsOnly(ctx context.Context, selector string) bool {
+	return r.placed.hostAgentsOnly(ctx, selector)
 }
 
 func (r placedStatusRegistry) RotateManaged(capabilityID string) ([]string, error) {
