@@ -86,6 +86,10 @@ resource "google_compute_instance" "registry" {
 
   metadata_startup_script = file("${path.module}/files/startup.sh")
 
+  lifecycle {
+    ignore_changes = [metadata_startup_script]
+  }
+
   depends_on = [
     google_compute_router_nat.this,
     google_compute_instance.instance_sql,

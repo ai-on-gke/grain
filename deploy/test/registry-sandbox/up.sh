@@ -689,7 +689,13 @@ if [[ "${has_iap_ssh}" -eq 1 ]]; then
       --zone="${ZONE}" \
       --tunnel-through-iap \
       --quiet \
-      --command="test -x /usr/local/sbin/grain-instance-sql-reconcile && sudo /usr/local/sbin/grain-instance-sql-reconcile" >/dev/null 2>&1; then
+      --command="test -x /usr/local/sbin/grain-instance-sql-reconcile" >/dev/null 2>&1; then
+      gcloud compute ssh "${sql_vm_name}" \
+        --project="${PROJECT_ID}" \
+        --zone="${ZONE}" \
+        --tunnel-through-iap \
+        --quiet \
+        --command="sudo bash -s" < "${SCRIPT_DIR}/files/sql-startup.sh" >/dev/null
       sql_reconciled=1
       break
     fi
@@ -709,7 +715,13 @@ if [[ "${has_iap_ssh}" -eq 1 ]]; then
       --zone="${ZONE}" \
       --tunnel-through-iap \
       --quiet \
-      --command="test -x /usr/local/sbin/grain-registry-reconcile && sudo /usr/local/sbin/grain-registry-reconcile" >/dev/null 2>&1; then
+      --command="test -x /usr/local/sbin/grain-registry-reconcile" >/dev/null 2>&1; then
+      gcloud compute ssh "${vm_name}" \
+        --project="${PROJECT_ID}" \
+        --zone="${ZONE}" \
+        --tunnel-through-iap \
+        --quiet \
+        --command="sudo bash -s" < "${SCRIPT_DIR}/files/startup.sh" >/dev/null
       reconciled=1
       break
     fi
