@@ -602,8 +602,6 @@ func runItem2(ctx context.Context) *checks { return item2(ctx) }
 func runItem3(ctx context.Context) *checks { return item3(ctx) }
 func runItem4(ctx context.Context) *checks { return item4(ctx) }
 
-
-
 // liveServer is a real ui.Server over a fresh SQLite store with the
 // operator's access code, for items 2-4.
 type liveServer struct {
