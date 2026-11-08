@@ -107,8 +107,8 @@ export default function HealthTab({
             </Button>
           }
         >
-          <UnbackedStateDot config={config} /> A merged change reset settings on
-          this deployment.
+          <UnbackedStateDot decorative sx={{ mr: 0.75 }} /> A merged change
+          reset settings on this deployment.
         </Alert>
       )}
       {pending.length > 0 && (

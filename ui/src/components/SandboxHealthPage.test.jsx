@@ -2746,3 +2746,91 @@ describe("StaleSandboxImageAlerts", () => {
     expect(screen.queryByTestId("stale-sandbox-image")).toBeNull();
   });
 });
+
+describe("deployment time zone formatting on SandboxHealthPage", () => {
+  afterEach(() => api.mockReset());
+
+  it("formats overcommit OOM, standing sandboxes, host credentials, and live row tooltips in the deployment time zone", async () => {
+    const oomAt = "2026-11-07T20:15:00Z";
+    const standingStarted = "2026-11-07T20:00:00Z";
+    const standingNext = "2026-11-08T21:30:00Z";
+    const credsSince = "2026-11-07T19:00:00Z";
+    const liveStarted = "2026-11-07T21:45:00Z";
+
+    api.mockResolvedValue({
+      enabled: true,
+      hostCredentials: {
+        detail: "host credentials expired: renew on build-1.example.test",
+        since: credsSince,
+        runs: 2,
+      },
+      budget: {
+        mode: "auto",
+        cpuOvercommit: 2.0,
+        memoryOvercommit: 1.2,
+        overcommit: {
+          mode: "auto",
+          cpuOvercommit: 2.0,
+          memoryOvercommit: 1.2,
+          oomKills: 1,
+          lastOomAt: oomAt,
+        },
+      },
+      standingSandboxes: [
+        {
+          name: "preview-worker",
+          sandbox: "s-preview",
+          image: "ghcr.io/acme/worker:latest",
+          state: "backoff",
+          failed: true,
+          failures: 2,
+          startedAt: standingStarted,
+          nextAttempt: standingNext,
+          restarts: 2,
+        },
+      ],
+      sandboxes: [
+        {
+          sandbox: "agent-run-7",
+          name: "agent-run-7",
+          kind: "agent",
+          backend: "docker",
+          status: "running",
+          startedAt: liveStarted,
+          cpus: 2,
+          memoryTotalMB: 4096,
+        },
+      ],
+    });
+
+    render(
+      <TimeZoneProvider zone="Asia/Tokyo">
+        <SandboxHealthPage showError={() => {}} />
+      </TimeZoneProvider>,
+    );
+
+    const oc = await screen.findByTestId("sandbox-overcommit-status");
+    expect(oc).toHaveTextContent(`last ${formatDateTime(oomAt, "Asia/Tokyo")}`);
+
+    const standing = screen.getByTestId("standing-sandboxes");
+    expect(standing).toHaveTextContent(
+      formatDateTime(standingStarted, "Asia/Tokyo"),
+    );
+    expect(screen.getByTestId("standing-next-attempt")).toHaveTextContent(
+      `next attempt ${formatDateTime(standingNext, "Asia/Tokyo")}`,
+    );
+
+    expect(screen.getByText(/host credentials expired/).textContent).toContain(
+      `since ${formatDateTime(credsSince, "Asia/Tokyo")}.`,
+    );
+
+    const liveRow = document.getElementById("live-sandbox-agent-run-7");
+    expect(liveRow).not.toBeNull();
+    const cellsWithTitle = [...liveRow.querySelectorAll("td[title]")].map(
+      (el) => el.getAttribute("title"),
+    );
+    expect(cellsWithTitle).toContain(
+      `Started ${formatDateTime(liveStarted, "Asia/Tokyo")}`,
+    );
+  });
+});
