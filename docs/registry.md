@@ -251,7 +251,7 @@ services:
 | State | Backing service | Per-instance isolation |
 | --- | --- | --- |
 | Tasks, runs, comments, attachments, CI verdicts, merge queue, settings and memory tables, webhook replay cursor | **Shared Cloud SQL for PostgreSQL pool** (`instance_sql.sql_instances`) | Dedicated database `grain_<name_with_underscores>` and IAM database role `gi-<slug>@<project>.iam` with `PUBLIC` access revoked and per-role connection limits |
-| Model keys, Git credentials, capability secrets, `request_secret` values, config-repo deploy key, break-glass `local-api-token` | **Google Cloud Secret Manager** (`secrets.secret_prefix`, default `grain-inst-`) | Secrets stored under `grain-inst-<name>-<item>`. The VM's service account holds conditional IAM prefix bindings (`resource.name.startsWith(".../secrets/grain-inst-<name>-")`) with `secrets.list` omitted so no VM can enumerate sibling secret names |
+| Model keys, Git credentials, capability secrets, `request_secret` values, config-repo deploy key, break-glass `local-api-token`, and the database password when `instance_sql.cloud_sql_admin: false` (`grain-inst-<name>-db-password`) | **Google Cloud Secret Manager** (`secrets.secret_prefix`, default `grain-inst-`) | Secrets stored under `grain-inst-<name>-<item>`. The VM's service account holds conditional IAM prefix bindings (`resource.name.startsWith(".../secrets/grain-inst-<name>-")`) with `secrets.list` omitted so no VM can enumerate sibling secret names |
 | Declarative `grain/config` repository (`settings/*.yml`, `tables/*.json`, `memory/**`, Git history and open config PRs) | **Per-instance configuration repository** (`config_repos.provider: github` or `none`) | Dedicated private repository (`<github_org>/<repo_prefix><name>`) accessed via a repository-scoped `ed25519` SSH deploy key stored in Secret Manager (`grain-inst-<name>-config-repo-key`) |
 | Agent transcripts, CI artifacts, archived durable session bundles | **Google Cloud Storage** (`instance_state.gcs_bucket`) | Object prefix `gs://<bucket>/instances/<name>/` isolated by GCS Managed Folder / prefix IAM bindings for `gi-<slug>@` |
 
@@ -1266,6 +1266,14 @@ compute:
 instance_sql:
   # Default true (Cloud SQL IAM database auth + Admin API); set false for
   # direct TCP over private_ip when Cloud SQL Admin API is unavailable.
+  # With false, each instance's role is a built-in password user: the
+  # registry generates a fresh password on every provision, stores it in
+  # Secret Manager as `<secret_prefix><name>-db-password` (never in the
+  # VM's `grain-config` metadata, which anyone with compute.instances.get
+  # can read), and the VM fetches it at boot with its own service account
+  # and connects with `sslmode=require`. When `compute.bind_project_iam` is
+  # false, the registry grants the VM's service account secretAccessor on
+  # that one secret.
   # cloud_sql_admin: true
   sql_instances:
     - name: grain-inst-sql-0

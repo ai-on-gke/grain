@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -1154,6 +1153,23 @@ func (r *Reconciler) provisionEntryResources(ctx context.Context, entry *store.E
 		}
 		bundle.SecretPrefix = secPref + entry.Name + "-"
 	}
+	if bundle.DatabasePassword != "" {
+		// A provider that handed back a raw password: store it in Secret
+		// Manager and drop it, so grain-config (GCE metadata, readable with
+		// compute.instances.get) only ever names the secret.
+		if bundle.DatabasePasswordSecret == "" {
+			sw, ok := r.resources.(registry.SecretWriter)
+			if !ok {
+				return nil, "", errors.New("instance resources returned a database password but cannot store secrets; refusing to put it in VM metadata")
+			}
+			name, err := sw.PutSecret(ctx, entry.Name, registry.DatabasePasswordSecretSuffix, []byte(bundle.DatabasePassword))
+			if err != nil {
+				return nil, "", fmt.Errorf("storing database password: %w", err)
+			}
+			bundle.DatabasePasswordSecret = name
+		}
+		bundle.DatabasePassword = ""
+	}
 
 	configRepoURL := entry.ConfigRepo
 	if r.configRepos != nil && r.cfg.ConfigRepos.Provider != "none" {
@@ -1267,8 +1283,13 @@ func InstanceGrainConfig(cfg registry.Config, entry *store.EntryRow, bundle *reg
 	if bundle.DatabaseUser != "" {
 		env["GRAIN_DB_USER"] = bundle.DatabaseUser
 	}
-	if bundle.DatabasePassword != "" {
-		env["GRAIN_DB_PASSWORD"] = bundle.DatabasePassword
+	// grain-config becomes GCE instance metadata, which anyone holding
+	// compute.instances.get on the project can read, so it never carries
+	// bundle.DatabasePassword. A built-in password user's password is named
+	// by its Secret Manager resource instead, and the VM fetches it with its
+	// own service account and builds a TLS (`sslmode=require`) DSN locally.
+	if bundle.DatabasePasswordSecret != "" {
+		env["GRAIN_DB_PASSWORD_SECRET"] = bundle.DatabasePasswordSecret
 	}
 
 	set := func(k, v string) {
@@ -1287,18 +1308,13 @@ func InstanceGrainConfig(cfg registry.Config, entry *store.EntryRow, bundle *reg
 	set("sql_instance", sqlConnectionName(cfg, bundle))
 	set("db_name", bundle.DatabaseName)
 	set("db_user", bundle.DatabaseUser)
-	if bundle.DatabasePassword != "" && bundle.DatabaseUser != "" && bundle.SQLPrivateIP != "" {
+	if bundle.DatabasePasswordSecret != "" {
 		// Built-in (password) users cannot go through cloud-sql-proxy's
-		// --auto-iam-authn socket, so connect over the private IP the way
-		// hosted-vm-startup.sh does.
-		dsn := url.URL{
-			Scheme:   "postgres",
-			User:     url.UserPassword(bundle.DatabaseUser, bundle.DatabasePassword),
-			Host:     bundle.SQLPrivateIP + ":5432",
-			Path:     "/" + bundle.DatabaseName,
-			RawQuery: "sslmode=disable",
-		}
-		set("db_dsn", dsn.String())
+		// --auto-iam-authn socket, so scripts/grain-instance-init.sh
+		// connects over the private IP with the password it reads from
+		// this secret.
+		set("db_password_secret", bundle.DatabasePasswordSecret)
+		set("sql_private_ip", bundle.SQLPrivateIP)
 	}
 	if prefix := strings.TrimSpace(bundle.SecretPrefix); prefix != "" {
 		project := strings.TrimSpace(cfg.Secrets.Project)
