@@ -615,7 +615,8 @@ func clearAccessCookie(w http.ResponseWriter, r *http.Request) {
 // The routes a single-tenant daemon serves to a caller without the code:
 // the login page's own, logging out, and a grain hostd dialing in
 // (hostdConnectRoute), which authenticates in its own protocol, with the
-// script that installs one (hostdInstallRoute).
+// script that installs one (hostdInstallRoute), and the script that
+// installs the grain CLI (cliInstallRoute).
 const (
 	accessCodePath       = "/api/auth/access-code"
 	accessCodeScriptPath = "/api/auth/access-code/login.js"
@@ -626,7 +627,7 @@ func singleTenantOpenRoute(r *http.Request) bool {
 	case accessCodePath, accessCodeScriptPath, "/api/auth/logout", "/api/auth/whoami":
 		return true
 	}
-	return hostdConnectRoute(r) || hostdInstallRoute(r) || hostdEnrollOpenRoute(r)
+	return hostdConnectRoute(r) || hostdInstallRoute(r) || hostdEnrollOpenRoute(r) || cliInstallRoute(r)
 }
 
 const errAccessCodeNeeded = "this daemon is single-tenant and every caller shows its access code: " +
