@@ -268,3 +268,13 @@ handler to finish, and asserts `serverMux.ActiveStreams() == 0` after every
 request. That checks what the test name says: RoundTrip's side closes its
 stream on `Body.Close()` and on error. It passes 500 times under `-race` and
 with the 50ms sleep. It fails if `streamClosingBody` stops closing the stream.
+
+CI's `ui e2e` then failed one test of 1051:
+`settings-config-modes-walkthrough.spec.js` ("a locked Deployment
+credentials card dims config fields…"). `main` added it in c7a3e032, after
+this branch was cut. It expected `/settings/credentials` to land on a bare
+`/settings/capabilities`. On this branch that address deliberately keeps
+`#credentials`, which is Bug 1's fix, so the test now expects
+`/settings/capabilities#credentials`. That spec, `settings-panel-walkthrough`,
+`deployment-credentials-links`, `deployment-operations-pending-restart-field`
+and `sessions-worktree-pinned-nav-walkthrough` (37 tests) pass locally.
