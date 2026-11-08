@@ -249,6 +249,37 @@ test("a viewer's refused task controls keep the pane's own spacing", async ({
   await expectGatesFilled(page, page.locator(".actions"));
 });
 
+// A refused control must sit where the allowed one does: SuiteOverlay's
+// "+ New template" kept its own margin inside a wrapper that carried it
+// too, and the wrapper's line box added more, so it and everything under
+// it sat lower for a viewer (docs/test-runs/2026-11-07-rbac-roles-ui.md
+// U3).
+test("a viewer's suite New template sits where the allowed one does", async ({
+  page,
+  request,
+}) => {
+  const res = await request.get("/api/suites");
+  const body = await res.json();
+  const suite = (Array.isArray(body) ? body : body.suites || [])[0];
+  expect(suite, "a demo suite").toBeTruthy();
+  const place = async () => {
+    await page.goto(`/processes/suites/${suite.id}`);
+    const button = page.getByRole("button", { name: "+ New template" });
+    await expect(button).toBeVisible();
+    const save = page.getByRole("button", { name: "Save", exact: true });
+    return [await button.boundingBox(), await save.boundingBox()];
+  };
+  const [allowed, allowedSave] = await place();
+  await asViewer(page);
+  const [refused, refusedSave] = await place();
+  await expect(
+    page.getByRole("button", { name: "+ New template" }),
+  ).toBeDisabled();
+  expect(Math.abs(refused.y - allowed.y)).toBeLessThan(1.5);
+  expect(Math.abs(refused.x - allowed.x)).toBeLessThan(1.5);
+  expect(Math.abs(refusedSave.y - allowedSave.y)).toBeLessThan(1.5);
+});
+
 // An access request's Grant and Deny are POST .../access-request/...,
 // which needs capabilities:admin; the task pane offered them to every
 // role (docs/test-runs/2026-11-07-rbac-roles-ui.md U4).
