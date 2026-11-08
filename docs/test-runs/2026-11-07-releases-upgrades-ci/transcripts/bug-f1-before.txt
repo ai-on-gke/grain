@@ -1,0 +1,67 @@
+=== GET /api/upgrade/targets (unpatched grain daemon with -github-host 127.0.0.1:4280 -github-insecure-http) ===
+{
+  "targets": [
+    {
+      "name": "latest",
+      "kind": "channel",
+      "allowed": true
+    },
+    {
+      "name": "candidate",
+      "kind": "channel",
+      "allowed": false
+    },
+    {
+      "name": "main",
+      "kind": "channel",
+      "allowed": true
+    }
+  ],
+  "allowedBranches": [
+    "latest",
+    "main",
+    "v[0-9]*.[0-9]*.[0-9]*"
+  ],
+  "versionsError": "Get \"https://127.0.0.1:4280/api/v3/repos/ai-on-gke/grain/releases?per_page=100&page=1\": http: server gave HTTP response to HTTPS client",
+  "default": "latest"
+}
+=== POST /api/upgrade {branch: v3.2.0} ===
+{
+  "enabled": true,
+  "mode": "image",
+  "running": {
+    "image": "docker.io/grainai/grain:v3.1.0"
+  },
+  "channel": "latest",
+  "branch": "v3.2.0",
+  "phase": "running",
+  "detail": "",
+  "startedAt": "2026-11-07T22:55:57.957869134Z",
+  "inFlightRuns": 0,
+  "imageRepo": "docker.io/grainai/grain",
+  "defaultImageRepo": "docker.io/grainai/grain",
+  "defaultImageRef": "docker.io/grainai/grain:latest",
+  "imageRepos": [
+    "ghcr.io/bwsalmon/grain/grain",
+    "ghcr.io/ai-on-gke/grain/grain",
+    "docker.io/grainai/grain"
+  ],
+  "imageSource": {
+    "source": "release-assets",
+    "sourceDefault": false,
+    "locked": true,
+    "releaseRepository": "127.0.0.1:4280/ai-on-gke/grain",
+    "manifestAsset": "images.json",
+    "checksumSuffix": ".sha256"
+  }
+}
+=== GET /api/upgrade status ===
+{
+  "running": {
+    "image": "docker.io/grainai/grain:v3.1.0"
+  },
+  "phase": "failed",
+  "lastAttempt": null
+}
+=== Forge log ===
+2026/11/07 22:55:41 releases_forge listening on http://127.0.0.1:4280 (mode=normal)

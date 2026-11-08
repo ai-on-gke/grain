@@ -38,6 +38,29 @@ resource "google_project_iam_member" "vm_log_writer" {
   member  = "serviceAccount:${google_service_account.vm[0].email}"
 }
 
+locals {
+  hosted_vm_registry_roles = toset([
+    "roles/compute.instanceAdmin.v1",
+    "roles/iam.serviceAccountAdmin",
+    "roles/iam.serviceAccountUser",
+    "roles/secretmanager.admin",
+    "roles/cloudsql.client",
+  ])
+}
+
+# Grant the registry service account permissions to manage hosted GCE VM
+# instances (`grain-vm-*`), per-instance service accounts (`grain-sa-*`),
+# per-instance secrets, and shared SQL database connections. When
+# `create_vm_service_account` is false (sandbox projects without
+# `resourcemanager.projects.setIamPolicy`), the VM runs under the Compute Engine
+# default service account which already holds `roles/editor` in the sandbox.
+resource "google_project_iam_member" "vm_hosted_provisioning" {
+  for_each = var.create_vm_service_account ? local.hosted_vm_registry_roles : toset([])
+  project  = var.project_id
+  role     = each.value
+  member   = "serviceAccount:${google_service_account.vm[0].email}"
+}
+
 resource "google_service_account" "verifier" {
   count        = var.create_verifier_sa && trimspace(var.verifier_service_account_email) == "" ? 1 : 0
   account_id   = "${var.name_prefix}-ver"

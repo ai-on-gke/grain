@@ -1,0 +1,10 @@
+      1 --- PASS: TestStopBeforeSetupStartsPreservesCancelledRowWithoutAcquiringSandbox (0.22s)
+      1 --- PASS: TestStopBeforeSetupStartsPreservesCancelledRowWithoutAcquiringSandbox (0.23s)
+      1 --- PASS: TestStopBeforeSetupStartsPreservesCancelledRowWithoutAcquiringSandbox (0.86s)
+      1 --- PASS: TestStopDuringCloneCancelsImmediatelyWithoutSetupFailedStrike (1.36s)
+      1 --- PASS: TestStopDuringCloneCancelsImmediatelyWithoutSetupFailedStrike (1.43s)
+      1 --- PASS: TestStopDuringCloneCancelsImmediatelyWithoutSetupFailedStrike (2.07s)
+      1 --- PASS: TestStopDuringSandboxSetupCancelsImmediatelyAndRetrySkipsBackoff (1.19s)
+      1 --- PASS: TestStopDuringSandboxSetupCancelsImmediatelyAndRetrySkipsBackoff (1.24s)
+      1 --- PASS: TestStopDuringSandboxSetupCancelsImmediatelyAndRetrySkipsBackoff (1.96s)
+      1 ok  	github.com/ai-on-gke/grain/pkg/orchestrator	6.847s

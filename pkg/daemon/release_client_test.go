@@ -90,3 +90,48 @@ func TestDaemonReleaseHostClientCredentialSelection(t *testing.T) {
 		t.Fatalf("unexpected MissingHint: %q", unconfClient.MissingHint)
 	}
 }
+
+// A deployment started with -github-host HOST -github-insecure-http reads
+// release assets from that host over plain HTTP; it used to build https://HOST/api/v3 and fail every listing with "server gave
+// HTTP response to HTTPS client"
+// (docs/test-runs/2026-11-07-releases-upgrades-ci.md, Bug F1).
+func TestDaemonReleaseHostClientHonoursInsecureGitHubHost(t *testing.T) {
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	store, closeStore := openTestStore(t, dataDir)
+	defer closeStore()
+	creds, err := GitHubCredentialLadder(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := daemonReleaseHostClient(Config{DataDir: dataDir, GithubHost: "127.0.0.1:4280", GithubInsecureHTTP: true}, store, creds)
+	hc, err := resolver(ctx, "127.0.0.1:4280", "ai-on-gke", "grain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hc.APIBase != "http://127.0.0.1:4280/api/v3" {
+		t.Errorf("APIBase = %q, want http://127.0.0.1:4280/api/v3", hc.APIBase)
+	}
+	// A release repository on github.com stays on github.com, over TLS:
+	// -github-host names where this deployment's own work lives, not where
+	// grain's releases are published.
+	for _, host := range []string{"", "github.com"} {
+		hc, err := resolver(ctx, host, "ai-on-gke", "grain")
+		if err != nil {
+			t.Fatalf("resolver(%q): %v", host, err)
+		}
+		if hc.APIBase != "https://api.github.com" {
+			t.Errorf("resolver(%q).APIBase = %q, want https://api.github.com", host, hc.APIBase)
+		}
+	}
+
+	// Without -github-insecure-http the same host is still read over TLS.
+	secure := daemonReleaseHostClient(Config{DataDir: dataDir, GithubHost: "127.0.0.1:4280"}, store, creds)
+	hc, err = secure(ctx, "127.0.0.1:4280", "ai-on-gke", "grain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(hc.APIBase, "https://127.0.0.1:4280") {
+		t.Errorf("secure APIBase = %q, want https://127.0.0.1:4280...", hc.APIBase)
+	}
+}

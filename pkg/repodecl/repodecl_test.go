@@ -847,6 +847,12 @@ trigger:
 	if msg := loadErr(t, files); !strings.Contains(msg, "grain's own configuration") {
 		t.Fatalf("watching grain/config: error = %q", msg)
 	}
+	// A retired per-team alias is refused too, as POST /api/schedules
+	// refuses it (docs/test-runs/2026-11-07-releases-upgrades-ci.md, Bug F5).
+	files[".grain/schedules/sync.yml"] = "template: sync\ntrigger:\n  git_ref:\n    repo: grain/config-alpha\n    ref: refs/heads/main\n"
+	if msg := loadErr(t, files); !strings.Contains(msg, "grain/config-alpha not found: only grain/config exists") {
+		t.Fatalf("watching retired grain/config-alpha: error = %q", msg)
+	}
 	files[".grain/schedules/sync.yml"] = "trigger:\n  git_ref:\n    repo: upstream/core\n    ref: refs/tags/latest\n"
 	if msg := loadErr(t, files); !strings.Contains(msg, "needs a `template:`") {
 		t.Fatalf("no template: error = %q", msg)
