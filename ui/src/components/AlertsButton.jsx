@@ -27,7 +27,7 @@ import {
 } from "@mui/material";
 import AppIcon from "./AppIcon.jsx";
 import { useTimeZone } from "../TimeZoneContext.jsx";
-import { formatTime } from "../time.js";
+import { formatMoment } from "../time.js";
 import {
   alertSentence,
   liftAgentPause,
@@ -385,8 +385,8 @@ function AlertRow({
   }
 
   const when = [
-    alert.since ? `Since ${formatTime(alert.since, zone)}` : null,
-    alert.until ? `Until ${formatTime(alert.until, zone)}` : null,
+    alert.since ? `Since ${formatMoment(alert.since, zone)}` : null,
+    alert.until ? `Until ${formatMoment(alert.until, zone)}` : null,
   ].filter(Boolean);
 
   return (

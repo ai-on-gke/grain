@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import api from "./api.js";
-import { formatDateTime, formatTime } from "./time.js";
+import { formatDateTime, formatMoment, formatTime } from "./time.js";
 import { hasGitCredential } from "./gitConnections.js";
 import { redBaseRepairSentence, waitingBaseRepair } from "./state.js";
 import { forceMergeOffered } from "./taskWrites.js";
@@ -238,7 +238,7 @@ export async function resumePipeline(pause) {
 // question an operator asks next, and the answer is not obvious: pausing
 // stops the queue being drained, it does not cancel work under way.
 export function pipelinePauseMessage(pause, zone = "") {
-  const since = pause?.since ? ` since ${formatTime(pause.since, zone)}` : "";
+  const since = pause?.since ? ` since ${formatMoment(pause.since, zone)}` : "";
   const reason = pause?.reason ? ` — ${pause.reason}` : "";
   const waiting = pause?.untilTask
     ? ` It lifts itself when task ${pause.untilTask} finishes.`
