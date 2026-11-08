@@ -681,3 +681,83 @@ for (const theme of ["light", "dark"]) {
     });
   });
 }
+
+test.describe("Deleted standing session removes its sidebar pin", () => {
+  test.afterEach(async ({ page }) => {
+    await page.evaluate(async () => {
+      localStorage.removeItem("grain.pinned");
+      await fetch("/api/console-sessions/pinned-ops-audit", {
+        method: "DELETE",
+      }).catch(() => {});
+    });
+  });
+
+  test("deleting a pinned standing session clears its pin from Customize sidebar and prevents same-slug resurrection", async ({
+    page,
+  }) => {
+    await page.setViewportSize(DESKTOP);
+    await page.goto("/session/new");
+
+    await page.getByLabel("Session name").fill("Pinned Ops Audit");
+    await page.getByLabel("Pin to sidebar").click();
+    await expect(page.getByLabel("Pin to sidebar")).toBeChecked();
+    await page.getByRole("button", { name: "Create session" }).click();
+
+    await expect(page).toHaveURL(/\/session\/pinned-ops-audit$/);
+    const pinnedButton = page
+      .locator("aside nav")
+      .first()
+      .getByRole("button", { name: "Pinned Ops Audit" });
+    await expect(pinnedButton).toBeVisible();
+    await expect(pinnedButton).toHaveAttribute("aria-current", "page");
+
+    page.once("dialog", (d) => d.accept());
+    await page.getByRole("button", { name: "Delete session" }).click();
+    await expect(page).not.toHaveURL(/\/session\/pinned-ops-audit$/);
+
+    const storedPins = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem("grain.pinned") || "[]"),
+    );
+    expect(
+      storedPins.filter(
+        (p) => p.kind === "session" && p.id === "pinned-ops-audit",
+      ),
+    ).toEqual([]);
+
+    await page
+      .locator("aside")
+      .getByRole("button", { name: "Customize sidebar" })
+      .click();
+    const dialog = page.getByRole("dialog");
+    await expect(
+      dialog.getByRole("heading", { name: "Customize sidebar" }),
+    ).toBeVisible();
+    await expect(dialog.getByText("pinned-ops-audit")).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+
+    // Creating a new session with the same title and Pin to sidebar unchecked
+    // reuses the slug on the server and must stay unpinned on desktop and phone.
+    await page.goto("/session/new");
+    await page.getByLabel("Session name").fill("Pinned Ops Audit");
+    await expect(page.getByLabel("Pin to sidebar")).not.toBeChecked();
+    await page.getByRole("button", { name: "Create session" }).click();
+
+    await expect(page).toHaveURL(/\/session\/pinned-ops-audit$/);
+    await expect(
+      page
+        .locator("aside nav")
+        .first()
+        .getByRole("button", { name: "Pinned Ops Audit" }),
+    ).toHaveCount(0);
+
+    await page.setViewportSize(PHONE);
+    await page.getByRole("button", { name: "Open navigation" }).click();
+    const drawer = page.getByRole("dialog", { name: "Navigation" });
+    await expect(drawer).toBeVisible();
+    await expect(
+      drawer.getByRole("button", { name: "Pinned Ops Audit" }),
+    ).toHaveCount(0);
+    await page.keyboard.press("Escape");
+  });
+});
