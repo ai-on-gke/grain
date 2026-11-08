@@ -96,6 +96,12 @@ type MergeRefusal struct {
 	// passing), so that a wait asks once every few minutes rather than
 	// once a cycle.
 	Polled time.Time
+	// SentBack is when the queue sent the task back to an agent to deal
+	// with the unresolved review conversations this refusal was for
+	// (orchestrator.sendBackForUnresolvedThreads), zero where it has not.
+	// One send-back per refusal run: a run that comes back with threads
+	// still open is handed to a person instead.
+	SentBack time.Time
 }
 
 // MaxBlindMergeRetries is how many times in a row the queue asks GitHub
@@ -232,6 +238,17 @@ func MarkMergeRefusalEscalated(ref Ref) {
 	defer refusedMerges.mu.Unlock()
 	if r, ok := refusedMerges.seen[ref.String()]; ok {
 		r.Escalated = true
+		refusedMerges.seen[ref.String()] = r
+	}
+}
+
+// MarkMergeRefusalSentBack notes that the task behind the refusal on record
+// for ref has been sent back to an agent at now (MergeRefusal.SentBack).
+func MarkMergeRefusalSentBack(ref Ref, now time.Time) {
+	refusedMerges.mu.Lock()
+	defer refusedMerges.mu.Unlock()
+	if r, ok := refusedMerges.seen[ref.String()]; ok {
+		r.SentBack = now
 		refusedMerges.seen[ref.String()] = r
 	}
 }
