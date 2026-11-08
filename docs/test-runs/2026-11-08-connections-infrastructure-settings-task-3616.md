@@ -243,3 +243,28 @@ The demo's own HTTP capability server (`https://capabilities.demo.grain.example/
   - `connection-credentials.spec.js`
   - `credential-reach-walkthrough.spec.js`
   - `git-connection-refusal-banner`, `git-connections-multihost-walkthrough`, `hostds-capacity-and-banner`, `hostds-delete`, `hostds-settings-layout`, `cli-run-locations-hostd`, `api-scope-set-edit`, `capability-policy-pickers`, `capability-info-popovers`, `capability-in-process-servers`, `host-script-settings`, `settings-config-modes-walkthrough` and `config-repo-only-settings`: 42 passed.
+
+## Merge-queue repair (2026-11-08, later the same day)
+
+Merging `main` into this branch conflicted in `ui/src/components/SettingsPage.jsx`.
+`main` (cd41dd73, task 3615) had also taught `go()` to take an anchor, but
+only scrolled to it; this branch passes it to `onSection` so the address
+carries it as its `#hash`. The resolution keeps both: `go(next, anchor)`
+asks before a dirty leave, hands the anchor to `onSection`, and also sets the
+scroll target. `SettingsPage.test.jsx` now expects CLI's Sign in link to call
+`onSection("agents", "external-agents")`. Vitest for `SettingsPage`,
+`GitSection`, `settingsSections` and `SecretsPanel`, and Playwright's
+`user-system-settings-walkthrough`, `deployment-credentials-links` and
+`sessions-worktree-pinned-nav-walkthrough` (23 tests), pass on the merge.
+
+CI's `go unit` then failed in `pkg/registry`, which nothing on this branch touches:
+`TestWSMuxSessionRoundTripClosesStreams` reported "RoundTrip 4 failed: tunnel
+mux: stream reset by peer". The cause is a race in the test. The peer handler
+closes its stream only after writing the response. So the requester can read
+that response and open the next stream before the peer frees a slot under its
+`MaxStreams: 2` cap, and the peer resets the new stream. A 50ms sleep before
+the handler's close reproduces it every time. The test now waits for each peer
+handler to finish, and asserts `serverMux.ActiveStreams() == 0` after every
+request. That checks what the test name says: RoundTrip's side closes its
+stream on `Body.Close()` and on error. It passes 500 times under `-race` and
+with the 50ms sleep. It fails if `streamClosingBody` stops closing the stream.
