@@ -141,7 +141,7 @@ DIGIT          = %x30-39 ; 0-9
 
 2.1.2. `<capability_id>` MUST be a valid `https://` URL with a non-empty host and at least one non-empty path segment, MUST NOT contain a query string, fragment, userinfo, or `.` / `..` segments, and MUST NOT end with `/`. Grain compares `capability_id`s byte-for-byte with no normalization: it is a lookup key into `mcpServers` (§3.1), not an address.
 
-2.1.3. `<method>` MUST match `^[a-z0-9][a-z0-9_-]{0,62}$`. Because tool names carry the verb prefixes `mint_` and `release_` (§4.1.2), every conforming `<method>` maps unambiguously to `mint_<method>` and `release_<method>` (a method named `github-release` maps to `mint_github-release` and `release_github-release`).
+2.1.3. `<method>` MUST match `^[a-z0-9][a-z0-9_:-]{0,62}$`. The `:` is there so grain's in-process agent API server can name each scope as itself (`https://grain.dev/capabilities/api#ci:write`); an external server SHOULD NOT use it, since some MCP clients refuse it in a tool name. Because tool names carry the verb prefixes `mint_` and `release_` (§4.1.2), every conforming `<method>` maps unambiguously to `mint_<method>` and `release_<method>` (a method named `github-release` maps to `mint_github-release` and `release_github-release`).
 
 2.1.4. **Single-Method Shorthand Resolution.** When `#<method>` is omitted:
 1. If the attached server advertises `mint_<method>` where `<method>` equals the final path segment of `<capability_id>` (`…/diagnostics` → `mint_diagnostics`), the reference resolves to `<capability_id>#<that-segment>`.
