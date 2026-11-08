@@ -2195,6 +2195,13 @@ type CreateTaskRequest struct {
 	// so team authorization boundary enforcement can distinguish declared grants
 	// from explicit user requests.
 	grantsFromTemplate []model.Grant
+
+	// readsFromTemplate and writesFromTemplate record that Reads or Writes came
+	// from an unbound template rather than being typed alongside Repo on this
+	// request, so CreateTask drops a redundant entry once DefaultTarget or
+	// forkPR.Base settles (model.ReadsBesides, model.WritesBesides).
+	readsFromTemplate  bool
+	writesFromTemplate bool
 }
 
 func proposalTags(key string, held, holdRequested bool) []string {
@@ -2706,14 +2713,19 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if err != nil {
 		return Task{}, err
 	}
+	if req.writesFromTemplate && target != nil {
+		writes = model.WritesBesides(writes, *target, req.Base)
+	}
 	if err := refuseTargetAmongWrites(writes, target, req.Base); err != nil {
 		return Task{}, err
 	}
 	// A proposal naming its own repo among its reads is an agent
 	// repeating what its run already has, not a choice between two
 	// meanings anybody needs to be asked about: it is dropped rather than
-	// failing the propose_task call over it (grain/task-1983).
-	if req.ProposedBy != "" {
+	// failing the propose_task call over it (grain/task-1983). The same
+	// holds for reads inherited from an unbound template whose target repo
+	// was chosen at filing time or resolved from DefaultTarget.
+	if req.ProposedBy != "" || req.readsFromTemplate {
 		reads = readsBesidesTarget(reads, target)
 	}
 	if err := refuseTargetAmongReads(reads, target); err != nil {

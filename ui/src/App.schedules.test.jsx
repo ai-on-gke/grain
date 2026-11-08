@@ -882,4 +882,64 @@ describe("App", () => {
       confirm.mockRestore();
     }
   });
+
+  it("refreshes schedules, templates and suites immediately when navigating into Processes", async () => {
+    setupApi(initialTasks, [], [], []);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("Fix bug");
+
+    // Simulate declarations synced on another view before entering Processes
+    // (before the 3-second background poll fires).
+    setupApi(
+      initialTasks,
+      [
+        {
+          id: "repo:schedule:acme:widgets:nightly",
+          title: "Declared nightly audit",
+          repo: "acme/widgets",
+          recurrence: { kind: "daily", timeOfDay: "02:00" },
+          enabled: true,
+          nextRunAt: "2026-08-29T02:00:00Z",
+          declaredIn: {
+            repo: "acme/widgets",
+            path: ".grain/schedules/nightly.yml",
+          },
+        },
+      ],
+      [
+        {
+          id: "repo:template:acme:widgets:audit",
+          name: "Declared audit template",
+          title: "Audit repo",
+          repo: "acme/widgets",
+          declaredIn: {
+            repo: "acme/widgets",
+            path: ".grain/templates/audit.yml",
+          },
+        },
+      ],
+      [
+        {
+          id: "repo:suite:acme:widgets:smoke",
+          name: "Declared smoke suite",
+          repo: "acme/widgets",
+          mode: "until_clean",
+          maxPasses: 2,
+          items: [{ templateId: "repo:template:acme:widgets:audit" }],
+          declaredIn: { repo: "acme/widgets", path: ".grain/suites/smoke.yml" },
+        },
+      ],
+    );
+
+    await user.click(screen.getByRole("button", { name: /^Processes/ }));
+
+    expect(
+      await screen.findByText("Declared nightly audit"),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByText("Declared audit template"),
+    ).toBeInTheDocument();
+    expect(await screen.findByText("Declared smoke suite")).toBeInTheDocument();
+  });
 });

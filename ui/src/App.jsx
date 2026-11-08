@@ -2432,6 +2432,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // exactly the half-fetched page this is about. The first failure is
   // worth one error banner; the rest of the shell renders on whatever
   // did land, as it did before.
+  const shellLoadedRef = useRef(false);
   useEffect(() => {
     (async () => {
       const results = await Promise.allSettled([
@@ -2452,6 +2453,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       } else {
         noteReached("shell");
       }
+      shellLoadedRef.current = true;
       setLoaded(true);
     })();
   }, [
@@ -2468,17 +2470,28 @@ function AppContent({ onReload = () => window.location.reload() }) {
     noteReached,
   ]);
 
-  // The suite runs, fetched on the way into the suites page rather than
-  // at mount with the five lists above: they are the one list nothing
-  // outside that page shows, so paying for them on every cold load of
-  // every other view would buy nothing. Until now they arrived on the
-  // first poll tick, which left the page's own runs list blank for a
-  // few seconds after every visit -- and left a link straight to one
-  // run's pane (/suites/runs/7) with nothing to open.
+  // The suite runs, fetched on the way into Processes rather than at mount
+  // with the lists above: nothing outside Processes shows them. When
+  // entering Processes from another view after the initial shell load,
+  // schedules, templates and suites are refreshed alongside suiteRuns and
+  // triggers as well -- switching view resets the background poll's timer,
+  // which otherwise left newly synced .grain/ declarations stale beside
+  // fresh triggers until the next poll tick.
   useEffect(() => {
     if (view !== "processes") return;
-    refreshSuiteRuns().catch(showError);
-  }, [view, refreshSuiteRuns, showError]);
+    const refreshes = [refreshSuiteRuns()];
+    if (shellLoadedRef.current) {
+      refreshes.push(refreshSchedules(), refreshTemplates(), refreshSuites());
+    }
+    Promise.all(refreshes).catch(showError);
+  }, [
+    view,
+    refreshSuiteRuns,
+    refreshSchedules,
+    refreshTemplates,
+    refreshSuites,
+    showError,
+  ]);
 
   // The triggers, read on the way into Processes from every repository
   // the loaded schedules, templates and suites were declared in. A
