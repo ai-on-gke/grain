@@ -338,8 +338,8 @@ var sandboxCommandHelp = map[string]string{
 		"  --lines N, -n N   the latest N entries, one a line (alias --max-lines; default 200, at most 1000)\n" +
 		"  --tail N          the last N BYTES of what that returns\n",
 	"playbooks":  "grain playbooks [<name>]\n\nList the bootstrap playbooks by name, one per line, or print one (src://playbooks; the name\nis taken with or without its .md). Needs https://grain.dev/capabilities/config-map#config-map={\"config_maps\":[\"bootstrap\"]}.\n",
-	"issue list": "grain issue list [--repo owner/name] [--label <l>] [--limit N]\n\nGitHub issues. Needs read-issues.\n",
-	"issue read": "grain issue read <number> [--repo owner/name] [--comments]\n\nOne GitHub issue. Needs read-issues.\n",
+	"issue list": "grain issue list [--repo owner/name] [--label <l>] [--limit N]\n\nGitHub issues. Needs https://grain.dev/capabilities/github#read-issues (formerly read-issues).\n",
+	"issue read": "grain issue read <number> [--repo owner/name] [--comments]\n\nOne GitHub issue. Needs https://grain.dev/capabilities/github#read-issues (formerly read-issues).\n",
 	"db query":   "grain db query <sql>\n\nA read-only SQL query on grain's database. Needs db-read.\n",
 	"ci":         "grain ci (list | show | checks | log | test-history | artifact | wait | run-job | retrigger) ...\n\nRun 'grain ci <command> --help' for each.\n",
 	"pr":         "grain pr (status | base-status | open | reply | resolve | threads | review-comment)\n",

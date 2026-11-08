@@ -59,6 +59,9 @@ type Server struct {
 	Logf func(format string, args ...any)
 	// Build is this hostd's version, for Hello.
 	Build string
+	// AgentsOnly says, in Hello, that this host agent runs agent CLIs
+	// only (grain-agentd).
+	AgentsOnly bool
 	// CurrentLink is the installer's current link hostd was started
 	// through (CurrentLinkFor), for Hello's Running and Current; "" for
 	// none.
@@ -592,6 +595,7 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 		h.Capacity, h.Labels = a.Capacity, a.Labels
 		describeCopies(ctx, &h, s.CurrentLink)
 		h.Logins = ambientLogins()
+		h.AgentsOnly = s.AgentsOnly
 		if sessionMux(ctx) != nil {
 			s.describeRemote(&h)
 		}
@@ -698,7 +702,7 @@ func (s *Server) env() []string {
 }
 
 func (s *Server) refuse(conn net.Conn, reason string) {
-	reason = strings.TrimPrefix(reason, "hostd refused: ")
+	reason = strings.TrimPrefix(reason, refusedPrefix)
 	s.logf("hostd: refused: %s", reason)
 	_ = writeJSON(conn, frameRefused, Refusal{Reason: reason})
 }

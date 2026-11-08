@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -1196,39 +1197,7 @@ func (r *Reconciler) createVMForEntry(ctx context.Context, entry *store.EntryRow
 		"grain-generation": genStr,
 	}
 
-	regURL := ""
-	jwksURL := ""
-	if r.cfg.Host != "" {
-		regURL = "https://" + r.cfg.Host
-		jwksURL = regURL + "/.well-known/jwks.json"
-	}
-	targetVer := strings.TrimSpace(entry.TargetVersion)
-	if targetVer == "" {
-		targetVer = strings.TrimSpace(entry.GrainVersion)
-	}
-	startupEnv := map[string]string{
-		"GRAIN_ENTRY_NAME":          entry.Name,
-		"GRAIN_REGISTRY_URL":        regURL,
-		"GRAIN_INSTANCE_DOMAIN":     r.cfg.InstanceDomain,
-		"GRAIN_JWKS_URL":            jwksURL,
-		"GRAIN_OWNER_EMAIL":         entry.OwnerEmail,
-		"GRAIN_OWNER_GROUP":         entry.OwnerGroup,
-		"GRAIN_SQL_INSTANCE":        bundle.SQLInstance,
-		"GRAIN_SQL_CONNECTION_NAME": bundle.SQLConnectionName,
-		"GRAIN_SQL_PRIVATE_IP":      bundle.SQLPrivateIP,
-		"GRAIN_DB_NAME":             bundle.DatabaseName,
-		"GRAIN_SECRET_PREFIX":       bundle.SecretPrefix,
-		"GRAIN_GCS_BUCKET":          bundle.GCSBucket,
-		"GRAIN_GCS_PREFIX":          bundle.GCSManagedFolder,
-		"GRAIN_CONFIG_REPO":         configRepoURL,
-		"GRAIN_VERSION":             targetVer,
-	}
-	if bundle.DatabaseUser != "" {
-		startupEnv["GRAIN_DB_USER"] = bundle.DatabaseUser
-	}
-	if bundle.DatabasePassword != "" {
-		startupEnv["GRAIN_DB_PASSWORD"] = bundle.DatabasePassword
-	}
+	startupEnv := InstanceGrainConfig(r.cfg, entry, bundle, configRepoURL)
 
 	diskGB := shape.BootDiskGB
 	if entry.BootDiskGB > 0 {
@@ -1248,6 +1217,128 @@ func (r *Reconciler) createVMForEntry(ctx context.Context, entry *store.EntryRow
 		Labels:         labels,
 		Generation:     entry.Version,
 	})
+}
+
+// InstanceGrainConfig builds the `grain-config` metadata a hosted VM boots
+// from. The snake_case keys are the ones scripts/grain-instance-init.sh reads
+// to write /etc/grain/daemon.env (deployment_owner, the project-qualified
+// sm_prefix, the registry verifier triple, object_store and so on); the
+// GRAIN_* keys are kept for startup scripts that still read them, such as
+// deploy/test/registry-sandbox/files/hosted-vm-startup.sh.
+func InstanceGrainConfig(cfg registry.Config, entry *store.EntryRow, bundle *registry.InstanceResourceBundle, configRepoURL string) map[string]string {
+	if bundle == nil {
+		bundle = &registry.InstanceResourceBundle{}
+	}
+	regURL := ""
+	jwksURL := ""
+	managementURL := ""
+	if cfg.Host != "" {
+		regURL = "https://" + cfg.Host
+		jwksURL = regURL + "/.well-known/jwks.json"
+		managementURL = regURL + "/entries/" + entry.Name
+	}
+	instanceDomain := strings.TrimPrefix(strings.TrimSpace(cfg.InstanceDomain), ".")
+	audience := ""
+	if instanceDomain != "" {
+		// The `aud` the registry's proxy signs for this entry (pkg/registry/server/router.go).
+		audience = "https://" + entry.Name + "." + instanceDomain
+	}
+	targetVer := strings.TrimSpace(entry.TargetVersion)
+	if targetVer == "" {
+		targetVer = strings.TrimSpace(entry.GrainVersion)
+	}
+	env := map[string]string{
+		"GRAIN_ENTRY_NAME":          entry.Name,
+		"GRAIN_REGISTRY_URL":        regURL,
+		"GRAIN_INSTANCE_DOMAIN":     cfg.InstanceDomain,
+		"GRAIN_JWKS_URL":            jwksURL,
+		"GRAIN_OWNER_EMAIL":         entry.OwnerEmail,
+		"GRAIN_OWNER_GROUP":         entry.OwnerGroup,
+		"GRAIN_SQL_INSTANCE":        bundle.SQLInstance,
+		"GRAIN_SQL_CONNECTION_NAME": bundle.SQLConnectionName,
+		"GRAIN_SQL_PRIVATE_IP":      bundle.SQLPrivateIP,
+		"GRAIN_DB_NAME":             bundle.DatabaseName,
+		"GRAIN_SECRET_PREFIX":       bundle.SecretPrefix,
+		"GRAIN_GCS_BUCKET":          bundle.GCSBucket,
+		"GRAIN_GCS_PREFIX":          bundle.GCSManagedFolder,
+		"GRAIN_CONFIG_REPO":         configRepoURL,
+		"GRAIN_VERSION":             targetVer,
+	}
+	if bundle.DatabaseUser != "" {
+		env["GRAIN_DB_USER"] = bundle.DatabaseUser
+	}
+	if bundle.DatabasePassword != "" {
+		env["GRAIN_DB_PASSWORD"] = bundle.DatabasePassword
+	}
+
+	set := func(k, v string) {
+		if v = strings.TrimSpace(v); v != "" {
+			env[k] = v
+		}
+	}
+	set("instance", entry.Name)
+	set("deployment_owner", entry.OwnerEmail)
+	set("owner_group", strings.TrimPrefix(strings.TrimSpace(entry.OwnerGroup), "group:"))
+	set("issuer", registry.RegistryAssertionIssuer)
+	set("instance_domain", instanceDomain)
+	set("audience", audience)
+	set("jwks_url", jwksURL)
+	set("management_url", managementURL)
+	set("sql_instance", sqlConnectionName(cfg, bundle))
+	set("db_name", bundle.DatabaseName)
+	set("db_user", bundle.DatabaseUser)
+	if bundle.DatabasePassword != "" && bundle.DatabaseUser != "" && bundle.SQLPrivateIP != "" {
+		// Built-in (password) users cannot go through cloud-sql-proxy's
+		// --auto-iam-authn socket, so connect over the private IP the way
+		// hosted-vm-startup.sh does.
+		dsn := url.URL{
+			Scheme:   "postgres",
+			User:     url.UserPassword(bundle.DatabaseUser, bundle.DatabasePassword),
+			Host:     bundle.SQLPrivateIP + ":5432",
+			Path:     "/" + bundle.DatabaseName,
+			RawQuery: "sslmode=disable",
+		}
+		set("db_dsn", dsn.String())
+	}
+	if prefix := strings.TrimSpace(bundle.SecretPrefix); prefix != "" {
+		project := strings.TrimSpace(cfg.Secrets.Project)
+		if project == "" {
+			project = strings.TrimSpace(cfg.Compute.Project)
+		}
+		if strings.HasPrefix(prefix, "projects/") {
+			set("sm_prefix", prefix)
+		} else if project != "" {
+			set("sm_prefix", "projects/"+project+"/secrets/"+prefix)
+		}
+	}
+	if bucket := strings.TrimSpace(bundle.GCSBucket); bucket != "" {
+		folder := strings.Trim(strings.TrimSpace(bundle.GCSManagedFolder), "/")
+		if folder == "" {
+			folder = "instances/" + entry.Name
+		}
+		set("object_store", "gs://"+bucket+"/"+folder+"/")
+	}
+	set("config_repo", configRepoURL)
+	return env
+}
+
+// sqlConnectionName is the `project:region:instance` name cloud-sql-proxy
+// needs, which the bundle carries as SQLConnectionName. A bare instance name
+// is qualified with the compute project and region when those are known.
+func sqlConnectionName(cfg registry.Config, bundle *registry.InstanceResourceBundle) string {
+	if c := strings.TrimSpace(bundle.SQLConnectionName); c != "" {
+		return c
+	}
+	inst := strings.TrimSpace(bundle.SQLInstance)
+	if inst == "" || strings.Contains(inst, ":") {
+		return inst
+	}
+	project := strings.TrimSpace(cfg.Compute.Project)
+	region := strings.TrimSpace(cfg.Compute.Region)
+	if project != "" && region != "" {
+		return project + ":" + region + ":" + inst
+	}
+	return inst
 }
 
 func (r *Reconciler) resolveShape(ctx context.Context, shapeName string) registry.Shape {

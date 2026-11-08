@@ -1,0 +1,116 @@
+{
+  "item": "item2-external-ref",
+  "results": [
+    {
+      "name": "2a child proposal (repo B) inherits PROJ-42 from root (repo A)",
+      "pass": true,
+      "detail": "map[1:PROJ-42 2:PROJ-42 900:PROJ-42 901:PROJ-42]"
+    },
+    {
+      "name": "2b superseding task inherits PROJ-42",
+      "pass": true,
+      "detail": "map[1:PROJ-42 2:PROJ-42 900:PROJ-42 901:PROJ-42]"
+    },
+    {
+      "name": "2c two-hop proposal inherits PROJ-42",
+      "pass": true,
+      "detail": "map[1:PROJ-42 2:PROJ-42 900:PROJ-42 901:PROJ-42]"
+    },
+    {
+      "name": "2d operator summary counts all 4 tasks",
+      "pass": true,
+      "detail": "HTTP 200 {\"externalRef\":\"PROJ-42\",\"total\":4,\"byState\":{\"proposed\":3,\"queued\":1},\"checks\":{\"passed\":0,\"total\":0},\"openQuestions\":[],\"pullRequests\":{\"opened\":0,\"merged\":0,\"open\":0},\"lastActivityAt\":\"2026-11-08T01:43:52.532547737Z\"}"
+    },
+    {
+      "name": "2e operator grain list -externalRef sees all 4",
+      "pass": true,
+      "detail": "HTTP 200 ids=[1 2 900 901]"
+    },
+    {
+      "name": "2f scoped summary counts only repo A's task",
+      "pass": true,
+      "detail": "HTTP 200 {\"externalRef\":\"PROJ-42\",\"total\":1,\"byState\":{\"queued\":1},\"checks\":{\"passed\":0,\"total\":0},\"openQuestions\":[],\"pullRequests\":{\"opened\":0,\"merged\":0,\"open\":0},\"lastActivityAt\":\"2026-11-08T01:43:52.521893719Z\"}"
+    },
+    {
+      "name": "2g scoped summary never names repo B",
+      "pass": true,
+      "detail": "{\"externalRef\":\"PROJ-42\",\"total\":1,\"byState\":{\"queued\":1},\"checks\":{\"passed\":0,\"total\":0},\"openQuestions\":[],\"pullRequests\":{\"opened\":0,\"merged\":0,\"open\":0},\"lastActivityAt\":\"2026-11-08T01:43:52.521893719Z\"}"
+    },
+    {
+      "name": "2h scoped list -externalRef sees only the root",
+      "pass": true,
+      "detail": "HTTP 200 ids=[1] body=[{\"id\":\"1\",\"title\":\"Root PROJ-42 work\",\"description\":\"root\",\"author\":\"operator@example.com\",\"authorKind\":\"human\",\"authorSource\":\"access-code\",\"authorLabel\":\"operator (access code)\",\"approvedBy\":\"operator@example.com\",\"approvedByKind\":\"human\",\"approvedBySource\":\"access-code\",\"approvedByLabel\":\"operator (access code)\",\"state\":\"queued\",\"repo\":\"acme/core\",\"branch\":\"grain/6673dff4/task-1-root-proj-42-work\",\"priority\":5,\"autoMerge\":false,\"autoApproveProposals\":false,\"interactive\":false,\"admission\":\"standard\",\"hosting\":\"unattended\",\"owner\":\"operator@example.com\",\"creator\":\"operator@example.com\",\"capa [clipped]"
+    },
+    {
+      "name": "2i scoped summary narrowed to repo B is refused or empty",
+      "pass": true,
+      "detail": "HTTP 403 {\"error\":\"external:core-reader holds tasks:read, but not on acme/billing\"}"
+    },
+    {
+      "name": "2j scoped token cannot read repo B's task",
+      "pass": true,
+      "detail": "HTTP 403 {\"error\":\"external:core-reader holds tasks:read, but not on acme/billing\"}"
+    },
+    {
+      "name": "2k scoped list narrowed to repo B is refused or empty",
+      "pass": true,
+      "detail": "HTTP 403 {\"error\":\"external:core-reader holds tasks:read, but not on acme/billing\"}"
+    },
+    {
+      "name": "2l scoped filer cannot inherit externalRef from an unreadable repo B task",
+      "pass": true,
+      "detail": "probe externalRef=\"\""
+    },
+    {
+      "name": "2m unknown ref answers an empty summary",
+      "pass": true,
+      "detail": "HTTP 200 {\"externalRef\":\"UNKNOWN-1\",\"total\":0,\"byState\":{},\"checks\":{\"passed\":0,\"total\":0},\"openQuestions\":[],\"pullRequests\":{\"opened\":0,\"merged\":0,\"open\":0}}"
+    }
+  ],
+  "data": {
+    "externalRefs": {
+      "1": "PROJ-42",
+      "2": "PROJ-42",
+      "900": "PROJ-42",
+      "901": "PROJ-42"
+    },
+    "operatorSummary": {
+      "byState": {
+        "proposed": 3,
+        "queued": 1
+      },
+      "checks": {
+        "passed": 0,
+        "total": 0
+      },
+      "externalRef": "PROJ-42",
+      "lastActivityAt": "2026-11-08T01:43:52.532547737Z",
+      "openQuestions": [],
+      "pullRequests": {
+        "merged": 0,
+        "open": 0,
+        "opened": 0
+      },
+      "total": 4
+    },
+    "scopedSummary": {
+      "byState": {
+        "queued": 1
+      },
+      "checks": {
+        "passed": 0,
+        "total": 0
+      },
+      "externalRef": "PROJ-42",
+      "lastActivityAt": "2026-11-08T01:43:52.521893719Z",
+      "openQuestions": [],
+      "pullRequests": {
+        "merged": 0,
+        "open": 0,
+        "opened": 0
+      },
+      "total": 1
+    },
+    "unknownRef": "{\"externalRef\":\"UNKNOWN-1\",\"total\":0,\"byState\":{},\"checks\":{\"passed\":0,\"total\":0},\"openQuestions\":[],\"pullRequests\":{\"opened\":0,\"merged\":0,\"open\":0}}"
+  }
+}
