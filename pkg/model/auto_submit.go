@@ -299,15 +299,38 @@ func EscalatedCapabilities(child, parent Task) []string {
 // it asked for capabilities its proposer does not hold
 // (EscalatedCapabilities), so that approving the work is visibly also
 // approving those grants rather than doing so silently. "" for none.
+//
+// A grant only a person may give (IsPersonOnlyGrant: a dangerous scope,
+// or a capability reference its server reserves to a person) is escalated
+// whether or not the proposer holds it, so it is not said to be one the
+// proposer lacks: a gcp permission set over an existing service account,
+// proposed by the task that holds it, is held for that reason alone.
 func CapabilityEscalationNote(proposer string, caps []string) string {
-	if len(caps) == 0 {
-		return ""
+	var lacked, personal []string
+	for _, c := range caps {
+		if IsPersonOnlyGrant(c) {
+			personal = append(personal, c)
+		} else {
+			lacked = append(lacked, c)
+		}
 	}
-	return fmt.Sprintf("\n\n---\n\ngrain: this proposal asked for %s, which task %s, "+
-		"which proposed it, does not hold itself. It was filed holding them, so it waits for "+
-		"a person rather than being queued automatically: approving it grants those "+
-		"capabilities as well as the work. Remove them from the task first if it should go "+
-		"ahead without them.", "`"+strings.Join(caps, "`, `")+"`", proposer)
+	var note string
+	if len(lacked) > 0 {
+		note += fmt.Sprintf("\n\n---\n\ngrain: this proposal asked for %s, which task %s, "+
+			"which proposed it, does not hold itself. It was filed holding them, so it waits for "+
+			"a person rather than being queued automatically: approving it grants those "+
+			"capabilities as well as the work. Remove them from the task first if it should go "+
+			"ahead without them.", "`"+strings.Join(lacked, "`, `")+"`", proposer)
+	}
+	if len(personal) > 0 {
+		note += fmt.Sprintf("\n\n---\n\ngrain: this proposal asked for %s, which only a person "+
+			"may grant: no task passes it on to work it proposes, task %s, which proposed it, "+
+			"included, whether or not it holds it itself. It was filed holding them, so it waits "+
+			"for a person rather than being queued automatically: approving it grants those "+
+			"capabilities as well as the work. Remove them from the task first if it should go "+
+			"ahead without them.", "`"+strings.Join(personal, "`, `")+"`", proposer)
+	}
+	return note
 }
 
 // SeededEscalations splits caps -- EscalatedCapabilities(child, ...) --

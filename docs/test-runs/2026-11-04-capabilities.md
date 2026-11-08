@@ -155,4 +155,4 @@ Re-attach: with the hold removed, the registry re-attached the server at 04:19:0
 
 - F2: validate the catalogue a save will export (policy plus repository and deployment defaults) on `PUT /api/capability-policy` and the repository capability writes, so the API cannot store a catalogue `grain state check` refuses.
 - F8: word the server-drop notice as grain's, not a person's, and give a drop advice that differs from a refused config.
-- Item 3 live: walk gcp token mode in a container on a daemon whose gcp server uses a `gcpfake` connector. Cover the exchange at the forwarded listener, refresh to the deadline, revoke at release, and `propose_task` with the person-granted set.
+- Item 3 live: walk gcp token mode in a container on a daemon whose gcp server uses a `gcpfake` connector. Cover the exchange at the forwarded listener, refresh to the deadline, revoke at release, and `propose_task` with the person-granted set. Walked in [2026-11-08-gcp-token-mode.md](2026-11-08-gcp-token-mode.md).
