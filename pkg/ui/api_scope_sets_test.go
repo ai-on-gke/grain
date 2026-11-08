@@ -148,7 +148,10 @@ func TestScopeSetUsageAndGrantsOutsideItsRepos(t *testing.T) {
 		}
 	}
 	slices.Sort(grants)
-	if want := []string{"api:walk-readers", "api:walk-readers@acme/widgets"}; !slices.Equal(grants, want) {
+	if want := []string{
+		model.APIRef("walk-readers"),
+		model.APIGrantString("walk-readers", "acme/widgets"),
+	}; !slices.Equal(grants, want) {
 		t.Errorf("walk-readers holders' grants = %v, want %v", grants, want)
 	}
 }

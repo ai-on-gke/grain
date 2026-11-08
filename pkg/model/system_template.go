@@ -310,8 +310,8 @@ func memoryAgentTemplate(stateRepo RepoRef) *Template {
 		Body:          memoryAgentBody(stateRepo),
 		NetworkAccess: NetworkOpen,
 		Grants: []Grant{
-			{Capability: "api:memory", Via: GrantByGrain},
-			{Capability: APIGrantPrefix + "self-debug", Via: GrantByGrain},
+			{Capability: APIRef("memory"), Via: GrantByGrain},
+			{Capability: APIRef("self-debug"), Via: GrantByGrain},
 			{Capability: GrainSourceGrant, Via: GrantByGrain},
 		},
 	}
@@ -539,8 +539,8 @@ func releaseNotesTemplate(stateRepo RepoRef) *Template {
 		Body:          releaseNotesBody(stateRepo),
 		NetworkAccess: NetworkOpen,
 		Grants: []Grant{
-			{Capability: "api:release-notes", Via: GrantByGrain},
-			{Capability: APIGrantPrefix + "self-debug", Via: GrantByGrain},
+			{Capability: APIRef("release-notes"), Via: GrantByGrain},
+			{Capability: APIRef("self-debug"), Via: GrantByGrain},
 			{Capability: GrainSourceGrant, Via: GrantByGrain},
 		},
 	}
@@ -804,7 +804,7 @@ func infraReviewTemplate(stateRepo RepoRef) *Template {
 			// pkg/capability/selfdebug and pkg/capability/grainci's own
 			// CapabilityName constants: those packages import this one,
 			// so this one cannot import them.
-			{Capability: APIGrantPrefix + "self-debug", Via: GrantByGrain},
+			{Capability: APIRef("self-debug"), Via: GrantByGrain},
 			{Capability: GrainSourceGrant, Via: GrantByGrain},
 			{Capability: GrainCIGrant, Via: GrantByGrain},
 		},

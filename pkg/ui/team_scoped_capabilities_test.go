@@ -59,7 +59,7 @@ func TestANonAdminTeamAdminGrantsTheTeamScopedCapabilities(t *testing.T) {
 		t.Fatalf("a payments admin granting self-debug: %v", err)
 	}
 	// The retired self-debug is filed as what it became.
-	if !slices.Contains(task.Capabilities, model.GrainSourceGrant) || !slices.Contains(task.Capabilities, "api:self-debug") {
+	if !slices.Contains(task.Capabilities, model.GrainSourceGrant) || !slices.Contains(task.Capabilities, model.APIRef("self-debug")) {
 		t.Fatalf("task capabilities = %v, want all team-scoped grants", task.Capabilities)
 	}
 	detail, err := c.GetTask(t.Context(), task.ID)

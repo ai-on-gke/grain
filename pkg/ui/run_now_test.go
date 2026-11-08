@@ -721,8 +721,8 @@ func TestRunNowByAnAgentDoesNotApproveADangerousAPIGrantItHolds(t *testing.T) {
 	}
 	err = c.RunNow(agentCtx, proposal.ID)
 	var forbidden *ui.ForbiddenError
-	if !errors.As(err, &forbidden) || !strings.Contains(err.Error(), "api:secrets:write") {
-		t.Fatalf("RunNow by an agent on a task asking for api:secrets:write: err = %v, want a refusal naming it", err)
+	if !errors.As(err, &forbidden) || !strings.Contains(err.Error(), model.APIRef("secrets:write")) {
+		t.Fatalf("RunNow by an agent on a task asking for %s: err = %v, want a refusal naming it", model.APIRef("secrets:write"), err)
 	}
 	if stored, err := store.GetTask(ctx, proposal.ID); err != nil || stored.Approval != nil {
 		t.Fatalf("approval = %+v, err = %v; want it left for a person", stored.Approval, err)

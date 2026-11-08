@@ -162,7 +162,7 @@ test("a No repo task leaves off a default the catalogue refuses there", async ({
       const detail = await (await request.get(`/api/tasks/${task.id}`)).json();
       expect(detail.capabilities).toEqual(
         expect.arrayContaining([
-          "api:self-debug",
+          "https://grain.dev/capabilities/api#self-debug",
           "https://grain.dev/capabilities/grain#source={}",
         ]),
       );

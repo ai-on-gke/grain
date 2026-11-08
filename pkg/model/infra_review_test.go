@@ -60,7 +60,7 @@ func TestTheInfraReviewCanSuggestAndCannotApply(t *testing.T) {
 	for _, g := range tmpl.Grants {
 		granted[g.Capability] = true
 	}
-	for _, want := range []string{"api:self-debug", model.GrainSourceGrant, model.GrainCIGrant} {
+	for _, want := range []string{model.APIRef("self-debug"), model.GrainSourceGrant, model.GrainCIGrant} {
 		if !granted[want] {
 			t.Errorf("the infrastructure review does not hold %q; its grants are %+v",
 				want, tmpl.Grants)
@@ -69,7 +69,7 @@ func TestTheInfraReviewCanSuggestAndCannotApply(t *testing.T) {
 	// Each of these would let the run act rather than recommend, and
 	// each for a different reason -- see infraReviewTemplate's own
 	// "deliberately not granted".
-	for _, forbidden := range []string{"self-repair", model.GrainHostExecGrant, "memory", "api:memory", "release-notes", "api:release-notes"} {
+	for _, forbidden := range []string{"self-repair", model.GrainHostExecGrant, "memory", "api:memory", model.APIRef("memory"), "release-notes", "api:release-notes", model.APIRef("release-notes")} {
 		if granted[forbidden] {
 			t.Errorf("the infrastructure review holds %q: a job that suggests parameter "+
 				"changes must not also be able to make one, or to file tonight's hypothesis "+

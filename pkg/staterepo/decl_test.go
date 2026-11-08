@@ -280,7 +280,7 @@ func TestAHandEditOfASettingsDocumentIsApplied(t *testing.T) {
 		t.Errorf("the title did not land: %q", tmpl.Title)
 	}
 	// self-debug lands as what it became (model.SelfDebugGrants).
-	if len(tmpl.Grants) != 3 || tmpl.Grants[0].Capability != "api:memory" || tmpl.Grants[1].Capability != "api:self-debug" ||
+	if len(tmpl.Grants) != 3 || tmpl.Grants[0].Capability != "api:memory" || tmpl.Grants[1].Capability != model.APIRef("self-debug") ||
 		tmpl.Grants[2].Capability != model.GrainSourceGrant {
 		t.Errorf("the grants did not land: %+v", tmpl.Grants)
 	}

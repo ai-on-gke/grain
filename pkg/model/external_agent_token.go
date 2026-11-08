@@ -265,7 +265,7 @@ func ResolveExternalAgentGrants(scopeSet string, scopes, repos []string) ([]stri
 	var dangerous bool
 	addTarget := func(target, explicitRepo string) error {
 		if explicitRepo != "" {
-			g := APIGrantPrefix + target + "@" + explicitRepo
+			g := APIGrantString(target, explicitRepo)
 			parsed, ok, err := ParseAPIGrant(g)
 			if !ok || err != nil {
 				return err
@@ -277,7 +277,7 @@ func ResolveExternalAgentGrants(scopeSet string, scopes, repos []string) ([]stri
 			return nil
 		}
 		if len(cleanRepos) == 0 {
-			g := APIGrantPrefix + target
+			g := APIRef(target)
 			parsed, ok, err := ParseAPIGrant(g)
 			if !ok || err != nil {
 				return err
@@ -289,7 +289,7 @@ func ResolveExternalAgentGrants(scopeSet string, scopes, repos []string) ([]stri
 			return nil
 		}
 		for _, repo := range cleanRepos {
-			g := APIGrantPrefix + target + "@" + repo
+			g := APIGrantString(target, repo)
 			parsed, ok, err := ParseAPIGrant(g)
 			if !ok || err != nil {
 				return err

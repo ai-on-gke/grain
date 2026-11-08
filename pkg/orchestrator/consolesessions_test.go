@@ -116,18 +116,18 @@ func TestTheDirectorIsFiledOnTheFirstCycleAndParkedOnItsOwnOpening(t *testing.T)
 	}
 	wantGrants := []string{
 		model.ConsoleSessionCIReadGrant,
-		"api:deployment:read",
-		"api:self-debug",
-		"api:task-admin",
-		"api:capabilities:read",
-		"api:capabilities:detach",
-		"api:settings:read",
-		"api:repos:read",
-		"api:releases:read",
-		"api:schedules:read",
-		"api:templates:read",
-		"api:suites:read",
-		"api:dispatch:read",
+		model.APIRef("deployment:read"),
+		model.APIRef("self-debug"),
+		model.APIRef("task-admin"),
+		model.APIRef("capabilities:read"),
+		model.APIRef("capabilities:detach"),
+		model.APIRef("settings:read"),
+		model.APIRef("repos:read"),
+		model.APIRef("releases:read"),
+		model.APIRef("schedules:read"),
+		model.APIRef("templates:read"),
+		model.APIRef("suites:read"),
+		model.APIRef("dispatch:read"),
 		model.BootstrapPlaybooksGrant,
 		model.GrainHealthGrant,
 		model.GrainJournalGrant,
@@ -2243,7 +2243,7 @@ func TestActiveConsoleSessionOperatorEditsPreservedAcrossReconciles(t *testing.T
 	// 1. Operator edits the active console session task via PATCH /api/tasks/{id}
 	// even though a state repo (grain/config) is configured.
 	hostScriptCap := `https://grain.dev/capabilities/host-script#host-script={"script":"cluster-autoscaler"}`
-	caps := []string{model.GrainSourceGrant, "api:tasks:admin", "api:release-manager", hostScriptCap}
+	caps := []string{model.GrainSourceGrant, model.APIRef("tasks:admin"), model.APIRef("release-manager"), hostScriptCap}
 	reads := []string{"acme/docs", "acme/widgets"}
 	writes := []ui.WriteTarget{{Repo: "acme/widgets", Base: "main"}}
 	chosenModel := "claude-opus-4"

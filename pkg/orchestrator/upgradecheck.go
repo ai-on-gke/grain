@@ -238,7 +238,7 @@ func fileUpgradeCheck(ctx context.Context, deps Deps, status upgrade.Status, tag
 		},
 		Binding: model.BindingDirective,
 		Grants: []model.Grant{
-			{Capability: model.APIGrantPrefix + "self-debug", Via: model.GrantByGrain},
+			{Capability: model.APIRef("self-debug"), Via: model.GrantByGrain},
 			{Capability: model.GrainSourceGrant, Via: model.GrantByGrain},
 			{Capability: model.GrainJournalGrant, Via: model.GrantByGrain},
 		},

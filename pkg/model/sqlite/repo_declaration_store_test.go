@@ -819,7 +819,7 @@ func TestSyncRepoDeclarationsCanonicalizesLegacyGrants(t *testing.T) {
 		tmplCaps = append(tmplCaps, g.Capability)
 	}
 	wantTmplCaps := []string{
-		"api:self-debug",
+		model.APIRef("self-debug"),
 		model.BootstrapPlaybooksGrant,
 		model.GrainSourceGrant,
 	}

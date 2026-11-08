@@ -120,7 +120,7 @@ func TestInProcessServerNormalizesAndMintsJournal(t *testing.T) {
 	if model.IsDangerousGrant(grainserver.SourceGrant) {
 		t.Fatalf("SourceGrant should not be dangerous: it is read-only, as self-debug was")
 	}
-	wantSelfDebug := []string{"api:self-debug", grainserver.SourceGrant}
+	wantSelfDebug := []string{model.APIRef("self-debug"), grainserver.SourceGrant}
 	if got := model.CanonicalLegacyGrants(grainserver.LegacySelfDebug); !slices.Equal(got, wantSelfDebug) {
 		t.Fatalf("CanonicalLegacyGrants(self-debug) = %v, want %v", got, wantSelfDebug)
 	}
@@ -414,6 +414,11 @@ func TestAPIServerListsEveryScopeAndPreset(t *testing.T) {
 	for _, p := range model.APIPresets() {
 		want = append(want, p.Name)
 	}
+	for _, set := range model.APIScopeSetsInEffect() {
+		if !slices.Contains(want, set.Name) {
+			want = append(want, set.Name)
+		}
+	}
 	for _, name := range want {
 		if !slices.Contains(st.Methods, name) {
 			t.Errorf("api server lists no #%s (methods %v)", name, st.Methods)
@@ -429,6 +434,11 @@ func TestAPIServerListsEveryScopeAndPreset(t *testing.T) {
 		t.Errorf("IsInProcessID(%s) = false", grainserver.APIID)
 	}
 
+	if err := model.InstallAPIScopeSets([]model.APIScopeSet{{Name: "ops/triage", Scopes: []string{"ci:read", "tasks:read"}}}); err != nil {
+		t.Fatalf("InstallAPIScopeSets: %v", err)
+	}
+	t.Cleanup(func() { _ = model.InstallAPIScopeSets(nil) })
+
 	lookup := grainserver.Lookup(nil)
 	for _, tc := range []struct {
 		spec protocol.GrantSpec
@@ -438,6 +448,8 @@ func TestAPIServerListsEveryScopeAndPreset(t *testing.T) {
 		{protocol.GrantSpec{Capability: model.APIRef("ci:write"), With: map[string]any{"repo": "acme/widgets"}},
 			model.APIRef("ci:write") + `={"repo":"acme/widgets"}`},
 		{protocol.GrantSpec{Capability: model.APIRef("task-admin")}, model.APIRef("task-admin") + "={}"},
+		{protocol.GrantSpec{Capability: model.APIRef("ops/triage"), With: map[string]any{"repo": "acme/widgets"}},
+			model.APIRef("ops/triage") + `={"repo":"acme/widgets"}`},
 	} {
 		grants, err := protocol.Normalize([]protocol.GrantSpec{tc.spec}, lookup)
 		if err != nil {

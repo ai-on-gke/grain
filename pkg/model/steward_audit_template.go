@@ -39,10 +39,10 @@ func stewardAuditTemplate(stateRepo RepoRef) *Template {
 		Model:         JudgementModelName,
 		NetworkAccess: NetworkOpen,
 		Grants: []Grant{
-			{Capability: APIGrantPrefix + "self-debug", Via: GrantByGrain},
+			{Capability: APIRef("self-debug"), Via: GrantByGrain},
 			{Capability: GrainSourceGrant, Via: GrantByGrain},
 			{Capability: GrainCIGrant, Via: GrantByGrain},
-			{Capability: APIGrantPrefix + "ci-read", Via: GrantByGrain},
+			{Capability: APIRef("ci-read"), Via: GrantByGrain},
 		},
 	}
 	if stateRepo.Owner != "" {

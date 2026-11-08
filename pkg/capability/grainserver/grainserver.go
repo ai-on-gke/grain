@@ -33,10 +33,10 @@
 //     an API request's grants: list is sorted back into them
 //     (model.SplitRequestGrants).
 //   - https://grain.dev/capabilities/api: grain's own agent API, one
-//     method per scope and preset of docs/agent-api.md, each with an
-//     optional {repo} (formerly api:<scope>[@owner/name], which is still
-//     what is stored, model.CanonicalGrant). Nothing is minted: the
-//     grant is served as the run's api_* tools.
+//     method per scope, preset and scope set of docs/agent-api.md, each
+//     with an optional {repo} (formerly api:<scope>[@owner/name],
+//     model.CanonicalGrant). Nothing is minted: the grant is served as
+//     the run's api_* tools.
 //   - https://grain.dev/capabilities/github: GitHub operations answered by
 //     grain itself: reading issues and comments with the run's team git
 //     credential (#read-issues, formerly read-issues), and provisioning a
@@ -186,8 +186,6 @@ var (
 
 	githubOnce    sync.Once
 	githubInst    *protocol.Server
-	apiOnce       sync.Once
-	apiInst       *protocol.Server
 	configMapOnce sync.Once
 	configMapInst *protocol.Server
 )
@@ -386,16 +384,22 @@ func apiArgs() map[string]any {
 }
 
 // buildAPIServer is the in-process https://grain.dev/capabilities/api
-// server: a method for every scope (model.APIScopes) and preset
-// (model.APIPresets) of docs/agent-api.md. A dangerous scope is said so
-// in its description; who may grant one is model.IsDangerousGrant's,
-// which reads the reference as the api:<scope> it stands for.
+// server: a method for every scope (model.APIScopes), preset
+// (model.APIPresets) and scope set (model.APIScopeSetsInEffect) of
+// docs/agent-api.md. A dangerous scope or person-only set is said so in
+// its description; who may grant one is model.IsDangerousGrant's, which
+// reads the reference through model.CanonicalGrant.
 func buildAPIServer() *protocol.Server {
 	mint := func(_ context.Context, _ string, _ time.Time, _ map[string]any) (*protocol.MintResponse, error) {
 		return &protocol.MintResponse{Status: protocol.StatusOK}, nil
 	}
 	var methods []*protocol.Method
+	added := map[string]bool{}
 	add := func(name, description string) {
+		if added[name] || !protocol.ValidMethod(name) {
+			return
+		}
+		added[name] = true
 		m, err := protocol.NewMethod(protocol.MethodSpec{
 			Name:        name,
 			Description: description,
@@ -424,6 +428,21 @@ func buildAPIServer() *protocol.Server {
 		}
 		add(p.Name, p.Description+". Preset of: "+strings.Join(scopes, ", ")+".")
 	}
+	for _, set := range model.APIScopeSetsInEffect() {
+		scopes := make([]string, len(set.Resolved))
+		for i, s := range set.Resolved {
+			scopes[i] = string(s)
+		}
+		desc := set.Description
+		if desc == "" {
+			desc = "API scope set"
+		}
+		desc += ". Scope set of: " + strings.Join(scopes, ", ") + "."
+		if set.Person {
+			desc += " (dangerous: only a person may grant it)"
+		}
+		add(set.Name, desc)
+	}
 	cs, err := protocol.NewCapabilityServer("api", methods...)
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: building api capability server: %v", err))
@@ -435,12 +454,11 @@ func buildAPIServer() *protocol.Server {
 	return srv
 }
 
-// APIServer returns the singleton in-process https://grain.dev/capabilities/api server.
+// APIServer returns the in-process https://grain.dev/capabilities/api
+// server reflecting the currently installed scope sets as well as core's
+// scopes and presets.
 func APIServer() *protocol.Server {
-	apiOnce.Do(func() {
-		apiInst = buildAPIServer()
-	})
-	return apiInst
+	return buildAPIServer()
 }
 
 // APIStatus is Status for the in-process api server.

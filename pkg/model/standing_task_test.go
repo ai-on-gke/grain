@@ -122,8 +122,8 @@ func TestAStandingScheduleWakesItsOneTaskRatherThanFilingAnother(t *testing.T) {
 		t.Errorf("admission after the wake = %q, want the template's durable admission restored", task.Admission)
 	}
 	for _, preset := range model.PipelineStewardAPIPresets {
-		if !slices.ContainsFunc(task.Grants, func(g model.Grant) bool { return g.Capability == model.APIGrantPrefix+preset }) {
-			t.Errorf("grants after the wake = %v, want the template's api:%s kept", task.Grants, preset)
+		if !slices.ContainsFunc(task.Grants, func(g model.Grant) bool { return g.Capability == model.APIRef(preset) }) {
+			t.Errorf("grants after the wake = %v, want the template's %s kept", task.Grants, model.APIRef(preset))
 		}
 	}
 	comments, err := store.Comments(ctx, id)

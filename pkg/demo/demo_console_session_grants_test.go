@@ -107,7 +107,7 @@ func TestDemoStandingSessionGrantsCanBeEdited(t *testing.T) {
 	if !slices.ContainsFunc(session.Capabilities, func(c string) bool { return strings.HasPrefix(c, configMap) }) {
 		t.Fatalf("session capabilities = %v, want a %s grant", session.Capabilities, configMap)
 	}
-	const removed = "api:capabilities:detach"
+	removed := model.APIRef("capabilities:detach")
 	if !slices.Contains(session.Capabilities, removed) {
 		t.Fatalf("session capabilities = %v, want %s", session.Capabilities, removed)
 	}

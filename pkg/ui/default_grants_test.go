@@ -47,7 +47,7 @@ func TestDeploymentDefaultCapabilitiesTakeMethodAndAPIGrants(t *testing.T) {
 		t.Fatalf("PUT /api/settings: %d %v", code, out)
 	}
 	got := stringsOf(out["defaultCapabilities"])
-	if !slices.Equal(got, []string{defaultGrantRecorded, "api:tasks:read"}) {
+	if !slices.Equal(got, []string{defaultGrantRecorded, model.APIRef("tasks:read")}) {
 		t.Fatalf("defaultCapabilities = %v", got)
 	}
 	if code := postJSON(t, ts, http.MethodPut, "/api/settings", map[string]any{
@@ -62,7 +62,7 @@ func TestDeploymentDefaultCapabilitiesTakeMethodAndAPIGrants(t *testing.T) {
 	if code := postJSON(t, ts, http.MethodGet, "/api/config", nil, &cfg); code != http.StatusOK {
 		t.Fatalf("GET /api/config: %d", code)
 	}
-	if got := stringsOf(cfg["defaultCapabilities"]); !slices.Equal(got, []string{defaultGrantRecorded, "api:tasks:read"}) {
+	if got := stringsOf(cfg["defaultCapabilities"]); !slices.Equal(got, []string{defaultGrantRecorded, model.APIRef("tasks:read")}) {
 		t.Fatalf("/api/config defaultCapabilities = %v", got)
 	}
 
@@ -71,7 +71,7 @@ func TestDeploymentDefaultCapabilitiesTakeMethodAndAPIGrants(t *testing.T) {
 	if code := postJSON(t, ts, http.MethodPost, "/api/tasks", map[string]any{"title": "seeded"}, &task); code != http.StatusOK && code != http.StatusCreated {
 		t.Fatalf("POST /api/tasks: %d %v", code, task)
 	}
-	if caps := stringsOf(task["capabilities"]); !slices.Contains(caps, defaultGrantRecorded) || !slices.Contains(caps, "api:tasks:read") {
+	if caps := stringsOf(task["capabilities"]); !slices.Contains(caps, defaultGrantRecorded) || !slices.Contains(caps, model.APIRef("tasks:read")) {
 		t.Fatalf("task capabilities = %v", caps)
 	}
 }
@@ -89,7 +89,7 @@ func TestRepoDefaultAndCICapabilitiesTakeMethodGrants(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("PUT capabilities: %d %v", code, out)
 	}
-	if got := stringsOf(out["defaultCapabilities"]); !slices.Equal(got, []string{defaultGrantRecorded, "api:tasks:read"}) {
+	if got := stringsOf(out["defaultCapabilities"]); !slices.Equal(got, []string{defaultGrantRecorded, model.APIRef("tasks:read")}) {
 		t.Fatalf("defaultCapabilities = %v", got)
 	}
 
@@ -104,7 +104,7 @@ func TestRepoDefaultAndCICapabilitiesTakeMethodGrants(t *testing.T) {
 		t.Fatalf("ciCapabilities = %v", got)
 	}
 	// The task defaults are left as they were.
-	if got := stringsOf(out["defaultCapabilities"]); !slices.Equal(got, []string{defaultGrantRecorded, "api:tasks:read"}) {
+	if got := stringsOf(out["defaultCapabilities"]); !slices.Equal(got, []string{defaultGrantRecorded, model.APIRef("tasks:read")}) {
 		t.Fatalf("defaultCapabilities after the CI write = %v", got)
 	}
 	for _, bad := range []string{defaultGrantInvalid, grantTestCap + "#key=not-json"} {
@@ -141,7 +141,8 @@ func TestConsoleSessionCapabilitiesTakeMethodGrants(t *testing.T) {
 			got = stringsOf(s["capabilities"])
 		}
 	}
-	if !slices.Equal(got, []string{"api:tasks:read", defaultGrantRecorded}) {
+	if !slices.Equal(got, []string{defaultGrantRecorded, model.APIRef("tasks:read")}) &&
+		!slices.Equal(got, []string{model.APIRef("tasks:read"), defaultGrantRecorded}) {
 		t.Fatalf("capabilities = %v", got)
 	}
 	if code := postJSON(t, ts, http.MethodPut, "/api/console-sessions/grants", map[string]any{

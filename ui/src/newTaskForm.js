@@ -184,15 +184,29 @@ export function formFieldsIn(resolved, visibility) {
   ).sort((a, b) => resolved.fields[a].order - resolved.fields[b].order);
 }
 
-// grantRefOf is what the picker's offered and hidden lists name a grant
-// by: an api grant without its @repo, and a capability server method by
-// its server as well as by itself.
+// grantNames is what the picker's offered, hidden and display lists may name
+// a grant by: either api:<what> or https://grain.dev/capabilities/api#<what>
+// for an agent API grant, without @repo or =<json> arguments, and a
+// capability server method by its server as well as by itself.
 function grantNames(id) {
   const g = String(id || "").trim();
-  const bare = g.split("@")[0];
-  const out = [g, bare];
+  const noArgs = g.split("=")[0];
+  const bare = noArgs.split("@")[0];
+  const out = [g];
+  if (!out.includes(bare)) out.push(bare);
+  if (bare.startsWith("api:")) {
+    const short = bare.slice("api:".length);
+    out.push(`https://grain.dev/capabilities/api#${short}`);
+    out.push("https://grain.dev/capabilities/api");
+  } else if (bare.startsWith("https://grain.dev/capabilities/api#")) {
+    const short = bare.slice("https://grain.dev/capabilities/api#".length);
+    out.push(`api:${short}`);
+  }
   const hash = bare.indexOf("#");
-  if (hash > 0) out.push(bare.slice(0, hash));
+  if (hash > 0) {
+    const server = bare.slice(0, hash);
+    if (!out.includes(server)) out.push(server);
+  }
   return out;
 }
 

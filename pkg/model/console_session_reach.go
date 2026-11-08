@@ -53,7 +53,7 @@ import (
 // repository's CI Mode -- whether grain runs its workflows and holds the
 // merge queue on them -- rather than a read, and which nobody may attach
 // by hand.
-const ConsoleSessionCIReadGrant = APIGrantPrefix + "ci-read"
+const ConsoleSessionCIReadGrant = APICapabilityServerID + "#ci-read"
 
 // consoleSessionDefaultGrants are the capabilities every session's task
 // is granted GrantByDefault unless the session declines them. Unlike the

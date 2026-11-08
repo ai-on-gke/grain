@@ -108,7 +108,7 @@ func TestDeploymentRepoConfigWritesRepoConfig(t *testing.T) {
 		t.Fatalf("GetRepoConfig = %+v, %v", saved, err)
 	}
 	if saved.SetupCommand != "npm run custom-setup" || saved.CIMode != model.CIModeGrain || saved.RepairTemplateID != "template-123" ||
-		!slices.Equal(saved.DefaultCapabilities, []string{model.GitHubSandboxRepoGrant, "api:tasks:read"}) {
+		!slices.Equal(saved.DefaultCapabilities, []string{model.GitHubSandboxRepoGrant, model.APIRef("tasks:read")}) {
 		t.Fatalf("repo_config after PUT = %+v", saved)
 	}
 

@@ -18,6 +18,8 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // TestCreateTaskRequestGrants is unified-grants §3's API half of slice 2:
@@ -36,7 +38,7 @@ func TestCreateTaskRequestGrants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if req.Capabilities == nil || !reflect.DeepEqual(*req.Capabilities, []string{"api:ci:write@acme/widgets", "api:task-admin", "self-debug"}) {
+	if req.Capabilities == nil || !reflect.DeepEqual(*req.Capabilities, []string{model.APIGrantString("ci:write", "acme/widgets"), model.APIRef("task-admin"), "self-debug"}) {
 		t.Errorf("Capabilities = %v", req.Capabilities)
 	}
 	if !reflect.DeepEqual(req.Reads, []string{"acme/docs"}) {
@@ -81,7 +83,7 @@ func TestUpdateTaskRequestGrants(t *testing.T) {
 	]}`), &req); err != nil {
 		t.Fatal(err)
 	}
-	if req.Capabilities == nil || !reflect.DeepEqual(*req.Capabilities, []string{"api:ci:read"}) {
+	if req.Capabilities == nil || !reflect.DeepEqual(*req.Capabilities, []string{model.APIRef("ci:read")}) {
 		t.Errorf("Capabilities = %v", req.Capabilities)
 	}
 	if req.Writes == nil || !reflect.DeepEqual(*req.Writes, []WriteTarget{{Repo: "acme/site"}}) {

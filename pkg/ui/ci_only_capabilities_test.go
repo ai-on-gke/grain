@@ -153,7 +153,7 @@ func refusesAsCIOnly(err error, id string) bool {
 		return false
 	}
 	text := err.Error()
-	return strings.Contains(text, id) &&
+	return (strings.Contains(text, id) || strings.Contains(text, model.CanonicalGrantKey(id))) &&
 		strings.Contains(text, "CI capability") &&
 		strings.Contains(text, "CI capabilities")
 }

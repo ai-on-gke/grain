@@ -100,14 +100,18 @@ func NewCapabilityRestarts() *CapabilityRestarts {
 // grant, which the agent-API gate reads per request, or an added `api:*`
 // grant reaches a model-only route on a run that started without
 // `grain-controller` attached.
+func isAPICapabilityGrant(c string) bool {
+	return strings.HasPrefix(c, model.APIGrantPrefix) || model.IsAPIGrantRef(c)
+}
+
 func capabilityNeedsSandbox(old, now []string) bool {
 	for _, c := range old {
-		if !slices.Contains(now, c) && !strings.HasPrefix(c, model.APIGrantPrefix) {
+		if !slices.Contains(now, c) && !isAPICapabilityGrant(c) {
 			return true
 		}
 	}
 	for _, c := range now {
-		if !slices.Contains(old, c) && !strings.HasPrefix(c, model.APIGrantPrefix) {
+		if !slices.Contains(old, c) && !isAPICapabilityGrant(c) {
 			return true
 		}
 	}
@@ -141,16 +145,16 @@ func controllerOnlyScopesAdded(old, now []string) []model.APIScope {
 	return added
 }
 
-// apiGrantsOf is the `api:*` grants among names, sorted.
+// apiGrantsOf is the `api:*` / `.../api#*` grants among names, sorted by canonical key.
 func apiGrantsOf(names []string) []string {
 	var out []string
 	for _, n := range names {
-		if strings.HasPrefix(n, model.APIGrantPrefix) {
-			out = append(out, n)
+		if isAPICapabilityGrant(n) {
+			out = append(out, model.CanonicalGrantKey(n))
 		}
 	}
 	sort.Strings(out)
-	return out
+	return slices.Compact(out)
 }
 
 // blockedInChat reports whether task's live run is waiting on a person:

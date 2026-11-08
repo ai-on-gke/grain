@@ -153,6 +153,15 @@ func (s *ProposalSeeding) admits(child Task, c string) (SeededDefault, bool) {
 // for a reference is its recorded form -- is one of defaults exactly,
 // with: arguments and all once both are in recorded form.
 func seededFrom(defaults []string, c string) bool {
+	if strings.HasPrefix(c, APIGrantPrefix) || IsAPIGrantRef(c) {
+		want := CanonicalGrantKey(c)
+		for _, d := range defaults {
+			if CanonicalGrantKey(strings.TrimSpace(d)) == want {
+				return true
+			}
+		}
+		return false
+	}
 	if IsCapabilityRef(c) {
 		want, ok := recordedCapabilityGrant(c)
 		if !ok {
@@ -175,8 +184,12 @@ func seededFrom(defaults []string, c string) bool {
 }
 
 // canonicalGrantString is s in recorded form when it is a capability
-// reference that parses, and s as written otherwise.
+// reference that parses (or CanonicalGrantKey for an api grant), and s as
+// written otherwise.
 func canonicalGrantString(s string) string {
+	if strings.HasPrefix(s, APIGrantPrefix) || IsAPIGrantRef(s) {
+		return CanonicalGrantKey(s)
+	}
 	if g, ok := recordedCapabilityGrant(s); ok {
 		return RecordedCapabilityGrant(g)
 	}

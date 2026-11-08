@@ -542,7 +542,11 @@ func (c *Client) capabilityLookup() protocol.Lookup {
 func (c *Client) normalizeCapabilityID(id string) (string, error) {
 	orig := strings.TrimSpace(id)
 	id = model.CanonicalLegacyGrant(id)
-	if !model.IsCapabilityRef(id) {
+	trimmed := strings.TrimSpace(id)
+	if !model.IsCapabilityRef(trimmed) &&
+		!strings.HasPrefix(trimmed, model.APIGrantPrefix) &&
+		!strings.HasPrefix(trimmed, model.RepoReadCapabilityPrefix) &&
+		!strings.HasPrefix(trimmed, model.RepoWriteCapabilityPrefix) {
 		return id, nil
 	}
 	lookup := c.capabilityLookup()
@@ -5943,9 +5947,18 @@ func (c *Client) SetCapability(ctx context.Context, id, capabilityID string, att
 	// attach two different capabilities without one losing: a retry runs
 	// again against the set the winner already wrote.
 	return c.mutate(ctx, id, func(task *model.Task) error {
+		matchesTarget := func(capID string) bool {
+			if slices.Contains(targetIDs, capID) {
+				return true
+			}
+			key := model.CanonicalGrantKey(capID)
+			return slices.ContainsFunc(targetIDs, func(tid string) bool {
+				return model.CanonicalGrantKey(tid) == key
+			})
+		}
 		kept := make([]model.Grant, 0, len(task.Grants)+len(targetIDs))
 		for _, g := range task.Grants {
-			if !slices.Contains(targetIDs, g.Capability) {
+			if !matchesTarget(g.Capability) {
 				kept = append(kept, g)
 			}
 		}
@@ -7615,20 +7628,27 @@ func isExternalAgent(p model.Principal) bool {
 func agentEscalatedCapabilities(task, requester model.Task) []string {
 	held := make(map[string]bool, len(requester.Grants))
 	for _, g := range requester.Grants {
-		held[g.Capability] = true
+		held[model.CanonicalGrantKey(g.Capability)] = true
 	}
 	var out []string
 	for _, g := range task.Grants {
-		if model.IsCapabilityRef(g.Capability) || g.Via == model.GrantByDefault ||
-			(held[g.Capability] && !model.IsPersonOnlyGrant(g.Capability)) {
+		isAPI := strings.HasPrefix(g.Capability, model.APIGrantPrefix) || model.IsAPIGrantRef(g.Capability)
+		if (!isAPI && model.IsCapabilityRef(g.Capability)) || g.Via == model.GrantByDefault {
 			continue
 		}
-		held[g.Capability] = true
+		key := model.CanonicalGrantKey(g.Capability)
+		if held[key] && !model.IsPersonOnlyGrant(g.Capability) {
+			continue
+		}
+		held[key] = true
 		out = append(out, g.Capability)
 	}
 	childRefs := make([]model.Grant, 0, len(task.Grants))
 	for _, g := range task.Grants {
 		if g.Via == model.GrantByDefault && model.IsGrainCIGrant(g.Capability) {
+			continue
+		}
+		if model.IsAPIGrantRef(g.Capability) {
 			continue
 		}
 		childRefs = append(childRefs, g)

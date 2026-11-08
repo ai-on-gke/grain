@@ -146,8 +146,8 @@ func TestTeamBroadcastIsTheTeamsBroadcastScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stored.Grants) != 1 || stored.Grants[0].Capability != "api:team-broadcast" {
-		t.Fatalf("grants = %+v, want team-broadcast recorded as api:team-broadcast", stored.Grants)
+	if len(stored.Grants) != 1 || stored.Grants[0].Capability != model.APIRef("team-broadcast") {
+		t.Fatalf("grants = %+v, want team-broadcast recorded as %s", stored.Grants, model.APIRef("team-broadcast"))
 	}
 	other, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "Bystander", Approved: true, NoRepo: true})
 	if err != nil {

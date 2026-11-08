@@ -565,8 +565,9 @@ trigger:
 	if grainci.Granted(reviewTask.Grants) || grainci.GrantedExplicitly(reviewTask.Grants) {
 		t.Fatalf("reviewTask holds grain-ci (%+v), which would change merge gating on an unset-CIMode repo", reviewTask.Grants)
 	}
-	if len(reviewTask.Grants) != 1 || reviewTask.Grants[0].Capability != "api:ci-read@acme/widgets" || reviewTask.Grants[0].Via != model.GrantByGrain {
-		t.Fatalf("reviewTask.Grants = %+v, want [{Capability:api:ci-read@acme/widgets Via:grain}]", reviewTask.Grants)
+	wantCIRead := model.APIGrantString("ci-read", "acme/widgets")
+	if len(reviewTask.Grants) != 1 || reviewTask.Grants[0].Capability != wantCIRead || reviewTask.Grants[0].Via != model.GrantByGrain {
+		t.Fatalf("reviewTask.Grants = %+v, want [{Capability:%s Via:grain}]", reviewTask.Grants, wantCIRead)
 	}
 	apiGrants := model.APIGrantsOf([]string{reviewTask.Grants[0].Capability})
 	if !apiGrants.Allows("ci:read", "acme/widgets") || apiGrants.Allows("ci:read", "acme/other") || apiGrants.Allows("ci:read", "") {

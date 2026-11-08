@@ -23,12 +23,47 @@
 // pickers keep them out of their own lists.
 
 export const API_GRANT_PREFIX = "api:";
+export const API_CAPABILITY_SERVER_ID = "https://grain.dev/capabilities/api";
+export const API_CAPABILITY_REF_PREFIX = `${API_CAPABILITY_SERVER_ID}#`;
 
-// isApiGrant reports whether id is an agent API grant name at all,
-// valid or not: a picker leaves every one of them to ApiGrantPicker,
-// which can also remove one that no longer parses.
+// API_ARGS_SCHEMA is the with: schema every method on
+// https://grain.dev/capabilities/api declares (grainserver.buildAPIServer):
+// one optional repo limit, so GrantsPicker can render the inline repo field
+// before /api/capability-methods finishes loading (or in offline unit tests).
+export const API_ARGS_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    repo: {
+      type: "string",
+      pattern: "^([A-Za-z0-9._-]+/)?[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$",
+      description:
+        "Limit the grant to this repository, owner/name; omit for every repository.",
+    },
+  },
+};
+
+// isApiGrant reports whether id is a legacy api:<what>[@repo] grant name,
+// valid or not: unmigrated rows in the store and GET /api/config's metadata
+// rows still carry this spelling.
 export function isApiGrant(id) {
   return typeof id === "string" && id.startsWith(API_GRANT_PREFIX);
+}
+
+// isApiCapabilityRef reports whether id is a canonical
+// https://grain.dev/capabilities/api#<what>[=<json>] grant string.
+export function isApiCapabilityRef(id) {
+  if (typeof id !== "string") return false;
+  const trimmed = id.trim();
+  const eq = trimmed.indexOf("=");
+  const ref = eq < 0 ? trimmed : trimmed.slice(0, eq);
+  return ref.startsWith(API_CAPABILITY_REF_PREFIX);
+}
+
+// apiRef is the canonical capability reference for shortName ("ci:write" ->
+// "https://grain.dev/capabilities/api#ci:write").
+export function apiRef(shortName) {
+  return `${API_CAPABILITY_REF_PREFIX}${shortName}`;
 }
 
 // withoutApiRows is a capability listing with the api rows taken out,
@@ -37,10 +72,26 @@ export function withoutApiRows(rows) {
   return (rows || []).filter((c) => !isApiGrant(c.id));
 }
 
-// splitApiGrant reads a grant name into the offered row it is spelled
-// from and the repository it is limited to ("" for every one):
-// "api:ci:write@acme/widgets" is ["api:ci:write", "acme/widgets"].
+// splitApiGrant reads either a canonical .../api#<what>[={"repo":"..."}]
+// grant or a legacy api:<what>[@repo] grant into the offered /api/config row
+// id ("api:<what>") and the repository it is limited to ("" for every one).
 export function splitApiGrant(id) {
+  if (isApiCapabilityRef(id)) {
+    const trimmed = id.trim();
+    const eq = trimmed.indexOf("=");
+    const ref = eq < 0 ? trimmed : trimmed.slice(0, eq);
+    const short = ref.slice(API_CAPABILITY_REF_PREFIX.length);
+    let repo = "";
+    if (eq >= 0) {
+      try {
+        const parsed = JSON.parse(trimmed.slice(eq + 1));
+        if (parsed && typeof parsed.repo === "string") repo = parsed.repo;
+      } catch {
+        // Malformed JSON keeps repo empty; checkGrants surfaces the error.
+      }
+    }
+    return [`${API_GRANT_PREFIX}${short}`, repo];
+  }
   const at = id.indexOf("@");
   return at < 0 ? [id, ""] : [id.slice(0, at), id.slice(at + 1)];
 }

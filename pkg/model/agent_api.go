@@ -441,7 +441,7 @@ func HasGrainSource(grants []string) bool {
 // REST half (every task's record, metrics, pipeline and deployment
 // status) and grain#source for grain's own source checkout.
 func SelfDebugGrants() []string {
-	return []string{APIGrantPrefix + "self-debug", GrainSourceGrant}
+	return []string{APIRef("self-debug"), GrainSourceGrant}
 }
 
 // IsGrainHealthGrant reports whether grant names grain#health (recorded or
@@ -752,16 +752,16 @@ func HasBootstrapPlaybooks(grants []string) bool {
 // name keeps granting what it did so a grant nothing rewrote -- a
 // repository's own .grain declaration, an older grain/config -- keeps working.
 var legacyGrantReplacements = map[string]string{
-	"team-broadcast":   APIGrantPrefix + "team-broadcast",
-	"dispatch-control": APIGrantPrefix + "dispatch-control",
-	"pipeline-control": APIGrantPrefix + "pipeline-control",
-	"memory":           APIGrantPrefix + "memory",
-	"release-notes":    APIGrantPrefix + "release-notes",
+	"team-broadcast":   APIRef("team-broadcast"),
+	"dispatch-control": APIRef("dispatch-control"),
+	"pipeline-control": APIRef("pipeline-control"),
+	"memory":           APIRef("memory"),
+	"release-notes":    APIRef("release-notes"),
 	"grain-log":        GrainJournalGrant,
 	"db-read":          GrainSQLReadGrant,
 	"db-write":         GrainSQLWriteGrant,
-	"self-upgrade":     APIGrantPrefix + "self-upgrade",
-	"test-quarantine":  APIGrantPrefix + "test-quarantine",
+	"self-upgrade":     APIRef("self-upgrade"),
+	"test-quarantine":  APIRef("test-quarantine"),
 	"self-repair":      GrainHostExecGrant,
 	"git-push-any-ref": GitPushAnyRefGrant,
 	"gcp-key":          GCPKeySandboxAgentGrant,
@@ -795,7 +795,7 @@ var legacyGrantReplacements = map[string]string{
 // multiple canonical grants (for example an api scope plus an in-process
 // grain server method).
 var legacyGrantMultiReplacements = map[string][]string{
-	"deployment-health": {APIGrantPrefix + "deployment:read", GrainHealthGrant},
+	"deployment-health": {APIRef("deployment:read"), GrainHealthGrant},
 	// Retired by schema migration 115: the REST half of self-debug is its
 	// api preset, the source checkout the grain server's #source method.
 	SelfDebugCapability: SelfDebugGrants(),
