@@ -161,5 +161,6 @@ copy "$SRC/sandbox-k8s@$k8s_digest" "$DST/k8s-sandbox" "${tags[@]}"
 copy "$SRC/grain@$daemon_digest" "$DST/grain" "${tags[@]}"
 
 say "record in docs/release-assets.md (\"Last GHCR publish\"):"
-printf '| %s | `%s` | %s | `%s` | `%s` | `%s` |\n' \
-  "$(date -u +%Y-%m-%d)" "$channel" "$(printf '`:%s` ' "${tags[@]}")" "${commit:0:12}" "$daemon_digest" "$sandbox_digest / $k8s_digest"
+bt='`'
+printf "| %s | $bt%s$bt | %s | $bt%s$bt | $bt%s$bt | $bt%s$bt |\n" \
+  "$(date -u +%Y-%m-%d)" "$channel" "$(printf "$bt:%s$bt " "${tags[@]}")" "${commit:0:12}" "$daemon_digest" "$sandbox_digest / $k8s_digest"
