@@ -235,7 +235,9 @@ row.
   writes them. There is nothing in `tables/template.json` to rename.
   `Store.resolveTemplate` asks this build first and the store second.
 - **The schedule that fires one is a row**, seeded idempotently under
-  that same well-known id by `orchestrator.reconcileSystemSchedules`, and
+  that same well-known id by `orchestrator.reconcileSystemSchedules` (waiting
+  one hour, `systemScheduleFirstFiringGrace`, before a freshly seeded row's
+  first firing so an operator can review repositories and settings first), and
   it is exported. It is protected on four sides: the id is the identity,
   so no rename of anything else moves it; the seeder re-writes the row if
   it is missing; the resync writes this build's template back over its

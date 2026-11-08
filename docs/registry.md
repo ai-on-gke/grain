@@ -223,10 +223,15 @@ grain registry create \
   naming friction and squatting on common words. You can also pass a
   custom DNS label (`[a-z][a-z0-9-]{1,30}[a-z0-9]`, no `--`, not in the
   reserved name list).
-- **Weighted shapes.** Each shape (`small`, `standard`, `large`, etc.)
-  specifies machine type, disk size, and an integer quota weight
-  (`quota_units`) charged against the owner's `max_instance_units`
-  (default `2`).
+- **Weighted shapes and custom boot disks.** Each shape (`small`,
+  `standard`, `large`, etc.) specifies machine type, default boot disk size,
+  and an integer quota weight (`quota_units`) charged against the owner's
+  `max_instance_units` (default `2`). Pass `-disk-gb <gb>` (`boot_disk_gb`,
+  `20`–`4000` GB) on `grain registry create` or `grain registry resize` to
+  override the shape's default boot disk size. GCE instances boot with nested
+  virtualization enabled (`enableNestedVirtualization: true`) for Firecracker
+  sandboxes, using `hyperdisk-balanced` and `GVNIC` on `c4-*` machine types
+  and `pd-ssd` on other families.
 - **Break-glass SSH and fleet logs.** OS Login break-glass SSH for the
   instance owner is enabled by default (`compute.ssh_break_glass: true`,
   or `-allow-ssh` on `grain registry create` / `update`; see
@@ -281,10 +286,10 @@ Hosted instances move through a narrow state machine:
   `grain_version`, `grain_commit`, `health_state`, `active_tasks`,
   `awaiting_reply_tasks`, `last_heartbeat_at`, and self-reported
   repository scopes.
-- **Upgrades, shape changes, and VM recovery (`replacing`).** Upgrading
+- **Upgrades, shape or disk changes, and VM recovery (`replacing`).** Upgrading
   to a new release (`grain registry upgrade [-version <vX.Y.Z>] <name>`
-  or `POST /api/entries/<name>/upgrade`), changing VM shape
-  (`grain registry resize -shape <shape> <name>`), or recovering a
+  or `POST /api/entries/<name>/upgrade`), changing VM shape or boot disk size
+  (`grain registry resize [-shape <shape>] [-disk-gb <gb>] [-version <vX.Y.Z>] <name>`), or recovering a
   broken VM (`POST /api/entries/<name>/replace`) all execute the same
   replacement sequence (`replace_step`):
   1. `draining`: replicas serve a `503` updating page (`Retry-After: 5`)
@@ -1105,14 +1110,14 @@ for machine-readable JSON output on every subcommand.
 | `grain registry route [flags] [<repo> [<path>]]` | Resolve ranked candidate grains for a repository and path via `GET /api/route` (`-repo`, `-path`, `-include-offline`) |
 | `grain registry list [flags]` | List entries owned by you or your `owner_group` (`-all` for admins; `-owner`, `-owner-group`, `-kind`, `-status`, `-listed`, `-conflict`, `-include-deleted`) |
 | `grain registry show <name>` | Show full entry details, tunnel connection state, version, `reported` and `declared` scopes, `scope_conflicts`, and credential metadata |
-| `grain registry create [flags] [<name>]` | Provision a hosted `instance` VM (`-name`, `-shape`, `-zone`, `-display-name`, `-purpose`, `-owner-group`, `-listed`, `-tags`, `-allow-ssh`, `-ship-logs`, `-scope`) |
+| `grain registry create [flags] [<name>]` | Provision a hosted `instance` VM (`-name`, `-shape`, `-disk-gb`, `-zone`, `-display-name`, `-purpose`, `-owner-group`, `-listed`, `-tags`, `-allow-ssh`, `-ship-logs`, `-scope`) |
 | `grain registry register [flags] [<entry>]` | Reserve or update a `connected` entry, configure the local daemon (unless `-standalone`), and optionally mint/rotate a `grc_…` token (`-mint-token`, `-rotate-token`, `-oidc`, `-token-file`) |
 | `grain registry unregister [flags] [<entry>]` | Unregister a `connected` entry from the registry (unless `-keep-remote`) and clear the local daemon's registry settings and stored token |
 | `grain registry update [flags] <name>` | Edit catalog metadata, `owner_group`, `listed`/`unlisted`, `tags`, `host_kind`, `connected_principal`, `shape`, `allow_ssh`, or `ship_logs` |
 | `grain registry scopes [-set <repo[:prefix[:role]]>]... [-clear] <name>` | View or replace `declared` repository scope overrides on `<name>` |
 | `grain registry rotate-credential [flags] <name>` | Mint a replacement `grc_…` token for a `connected` entry (`-overlap`, `-revoke-previous`, `-cred-id`, `-label`, `-token-file`) |
 | `grain registry upgrade [-version <vX.Y.Z>] <name>` | Replace a hosted `instance` VM onto the target (or current default) release image |
-| `grain registry resize -shape <shape> [-version <vX.Y.Z>] <name>` | Replace a hosted `instance` VM onto a new shape |
+| `grain registry resize [-shape <shape>] [-disk-gb <gb>] [-version <vX.Y.Z>] <name>` | Replace a hosted `instance` VM onto a new shape and/or boot disk size (`20`–`4000` GB) |
 | `grain registry delete [-confirm <name>\|-yes] [-delete-disk] <name>` | Delete an entry (fencing a hosted instance's database for the 7-day restore window unless `-delete-disk` is set, and holding the name for 30 days) |
 | `grain registry stop <name>` | Stop a hosted `instance`'s VM while keeping its state (`stopping` → `stopped`) |
 | `grain registry start <name>` | Start a stopped hosted `instance` again |
@@ -1230,6 +1235,10 @@ compute:
   network: projects/grain-instances-prod/global/networks/grain-instances
   subnetwork: projects/grain-instances-prod/regions/us-central1/subnetworks/instances
   boot_image: projects/grain-images/global/images/family/grain-release
+  # Optional GCE bootstrap script (mutually exclusive) and project-IAM toggle:
+  # startup_script_file: /etc/grain-registry/instance-startup.sh
+  # startup_script: "#!/bin/sh\n..."
+  # bind_project_iam: true
   vm_prefix: grain-
   sa_prefix: gi-
   ssh_break_glass: true
@@ -1255,6 +1264,9 @@ compute:
       description: "16 vCPU, 64 GB RAM"
 
 instance_sql:
+  # Default true (Cloud SQL IAM database auth + Admin API); set false for
+  # direct TCP over private_ip when Cloud SQL Admin API is unavailable.
+  # cloud_sql_admin: true
   sql_instances:
     - name: grain-inst-sql-0
       connection_name: grain-instances-prod:us-central1:grain-inst-sql-0
