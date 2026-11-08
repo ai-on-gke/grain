@@ -548,6 +548,12 @@ type Sim struct {
 	// comments must be resolved." while any review thread on the pull
 	// request is unresolved.
 	RequireConversationResolution bool
+	// ConversationRefusal, when non-empty, replaces the message the merge
+	// is refused with under RequireConversationResolution -- GitHub has
+	// worded it more than one way ("All comments must be resolved.", "A
+	// conversation must be resolved before this pull request can be
+	// merged.").
+	ConversationRefusal string
 	// RefuseLabels, when non-zero, is the status GitHub answers POST
 	// .../issues/N/labels with instead of applying them -- a 403 for a
 	// token without the permission, a 422 for a label the repository will
@@ -2574,8 +2580,11 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 							s.RequireApprovals)}), nil
 					}
 					if s.conversationResolutionRequired(s.PullRequests[i].Base) && s.hasUnresolvedReviewThreads(number) {
-						return jsonResponse(405, map[string]string{"message": "Repository rule violations found\n\n" +
-							"All comments must be resolved."}), nil
+						msg := "Repository rule violations found\n\nAll comments must be resolved."
+						if s.ConversationRefusal != "" {
+							msg = s.ConversationRefusal
+						}
+						return jsonResponse(405, map[string]string{"message": msg}), nil
 					}
 					// GitHub's own message: commit_title (its default
 					// when empty), a blank line, then commit_message.
