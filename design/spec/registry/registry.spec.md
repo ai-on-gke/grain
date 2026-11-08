@@ -308,13 +308,14 @@ Every normative requirement below is derived from the implementation on `main` a
    - `P` is an admitted human principal in `auth.allowed_domains` (`reason: "person_not_admitted"`);
    - a live, non-revoked, non-expired consent grant (`registry.delegation_grants`) exists for `(app, P)` covering `<entry>` (or `"*"`) (`reason: "no_grant"`, `"grant_expired"`, `"grant_revoked"`, or `"entry_out_of_reach"`).
 3. When authorized, the registry MUST mint `X-Grain-Registry-Assertion` with `sub = P`, `email = P`, `kind = "human"`, and top-level `act = {sub: <app_email>, kind: "service", app: <app_name>, grant: <grant_id>, access: <"read"|"write">}` (single level only; nested `act.act` is forbidden).
-4. Revoking a consent grant MUST immediately evict matching cached tokens via `CachingSigner.InvalidateGrant(grantID)`.
+4. Revoking or updating a consent grant MUST immediately evict matching cached tokens via `CachingSigner.InvalidateGrant(grantID)`, and disabling a delegating app MUST immediately evict matching cached tokens via `CachingSigner.InvalidateApp(appName)` — both on the serving replica and across peer replicas via PostgreSQL `LISTEN registry_delegations` (`grant:<id>` and `app:<name>`).
 5. Delegating apps MUST be managed only by registry admins, through `GET`/`POST /api/admin/delegating-apps` (list, create) and `PATCH /api/admin/delegating-apps/{name}` (`{"disabled": bool}`). Create MUST normalise `principal` through `store.NormalizeAppPrincipal` (a bare email gains `serviceAccount:`), MUST refuse a principal that is not a service account (`400`), and MUST answer a taken name or principal with `409`.
 6. Consent grants MUST be managed through `GET`/`POST /api/delegation-grants` and `DELETE /api/delegation-grants/{grant-id|app}`, which admit human callers only and act only for the signed-in person: a create whose `person` names anyone else MUST be refused with `403` (admins included), a list MUST return only the caller's grants, and a revoke of another person's grant MUST answer `404`, indistinguishable from a missing one. A grant MUST NOT exceed the app's `max_access` (`403 exceeds_max_access`) or `max_grant_ttl_seconds` (capped), and a disabled app MUST take no new grants (`403 app_disabled`).
 
 **Pinned by:**
 - `pkg/registry/registry_test.go`: `TestConsentDelegationPolicyAuthorizeOnBehalfOf`, `TestCachingSignerActClaimAndInvalidation`
 - `pkg/registry/delegation_admin_test.go`: `TestDelegatingAppAdminAPIAndPersonGrants`
+- `pkg/registry/e2e_test.go`: `TestMultiReplicaDelegationCacheEviction`
 - `pkg/registry/store/store_test.go`: `TestNormalizeAppPrincipal`
 - `tests/security/registry_delegation_test.go`: `TestRegistryConsentSurfaceRefusesOtherTenantsAndNonAdmins`, `TestRegistryDelegationGrantIsOnlyEverThePersonsOwn`
 - `pkg/ui/delegation_test.go`: `TestRegistryVerifierExposesPersonAndDelegatingApp`, `TestRegistryVerifierRefusesMalformedOrNestedAct`, `TestDelegatedRoleIsPersonIntersectDelegate`
@@ -506,12 +507,14 @@ Every normative requirement below is derived from the implementation on `main` a
    - **My Entries (`/`)**: personal quota cards, incoming pending transfer acceptance banner, entry table with status/tasks/conflict badges, and type-to-confirm soft-delete dialog;
    - **Directory (`/directory`)**: searchable organization catalog of listed entries and interactive longest-prefix route tester (`/api/route`);
    - **Create / Register (`/new`)**: live name availability checker, hosted VM shape selector, connected entry registration with copyable `-registry-connect` CLI snippet, and one-time `grc_…` token display;
+   - **Apps acting for you (`/grants`, alias `/apps`)**: personal consent grant manager listing active grants (`GET /api/delegation-grants`) with an `Include revoked grants` toggle (`?include_revoked=true`), a consent form (`POST /api/delegation-grants` with `app`, `entries`, `access`, `ttl_seconds`), and per-grant revocation (`DELETE /api/delegation-grants/<id>`);
    - **Entry Detail (`/entries/{name}`)**: runtime & tunnel liveness, 4-step VM replacement progress stepper, catalog & ownership editor, two-step transfer offer (with 7-day expiry display, optional `clear_owner_group`, cancel offer, and recipient accept button), reported vs declared scope editor with `409` conflict banner, `grc_…` credential rotation/revocation, VM resize/upgrade, and soft-delete/restore;
-   - **Admin (`/admin`, visible only when `me.is_registry_admin` is true)**: reconciler leader lease card, active outbound tunnels per replica with `Disconnect`, owners & quotas editor (`Save quota override`, `Reset quota`, `Disable/Enable owner`), active scope conflicts resolver (`Demote to secondary`, `Remove scope`), shared Cloud SQL pool (`Drain instance` / `Resume placement`), orphan GCE VMs (`Delete orphan VM`), all entries & retention recovery (`Restore`, `Hard purge`, `Force transfer`), and control-plane audit log showing `actor_email` and `via`/`grant_id`;
+   - **Admin (`/admin`, visible only when `me.is_registry_admin` is true)**: reconciler leader lease card, active outbound tunnels per replica with `Disconnect`, owners & quotas editor (`Save quota override`, `Reset quota`, `Disable/Enable owner`), active scope conflicts resolver (`Demote to secondary`, `Remove scope`), shared Cloud SQL pool (`Drain instance` / `Resume placement`), orphan GCE VMs (`Delete orphan VM`), all entries & retention recovery (`Restore`, `Hard purge`, `Force transfer`), delegating apps registry (`GET/POST /api/admin/delegating-apps` accepting a bare service-account email stored as `serviceAccount:<email>`, and `PATCH /api/admin/delegating-apps/<name>` to disable/enable), and control-plane audit log showing `actor_email` and `via`/`grant_id`;
    - **Status (`/status`)**: service health, active replica heartbeats, fleet version distribution, and VM shape catalog.
 
 **Pinned by:**
 - `pkg/registry/server/static_test.go`: `TestStaticHandlerServesSPAWithStrictCSP`
+- `pkg/registry/delegation_admin_test.go`: `TestDemoDelegatingAppsAndPersonGrants`
 - `ui-registry/src/App.test.jsx`:
   - `renders My entries view with quota summary, pending transfer banner, and delete confirmation modal`
   - `renders Directory view and evaluates interactive route tester`
@@ -521,6 +524,8 @@ Every normative requirement below is derived from the implementation on `main` a
   - `renders Admin and Status views with active outbound tunnels per replica and fleet summary`
   - `hides Admin nav for non-admin callers, blocks non-http entry URLs, and handles malformed routes`
   - `supports two-step ownership transfer offer with expiry and cancel in Entry detail view, and admin recovery actions in Admin view`
+  - `lists, creates with a bare service-account email, and disables/enables delegating apps on Admin screen`
+  - `lists, grants consent, toggles include_revoked, and revokes grants on Apps acting for you screen`
 
 ---
 
@@ -549,7 +554,7 @@ Every normative requirement below is derived from the implementation on `main` a
 | `REG-19` | Zero-SQL hot path via `CatalogCache` and PostgreSQL `LISTEN/NOTIFY` | Implemented | `TestStep12CatalogCRUDGroupAuthHeartbeatsDirectoryAndRouteEndToEnd` |
 | `REG-20` | ES256 `X-Grain-Registry-Assertion` signing, `30s` `CachingSigner`, and `/.well-known/jwks.json` | Implemented | `TestKMSSignerSignAssertionAndJWKS`, `TestCachingSignerActClaimAndInvalidation` |
 | `REG-21` | Downstream `registry` `IdentityVerifier` on `grain` daemons | Implemented | `TestRegistryVerifierAcceptsValidAssertionAndRefusesTampered` |
-| `REG-22` | RFC 8693 `act` delegated identity (`X-Grain-On-Behalf-Of`) and per-person consent grants | Implemented | `TestConsentDelegationPolicyAuthorizeOnBehalfOf`, `TestRegistryVerifierExposesPersonAndDelegatingApp`, `TestDelegatedRoleIsPersonIntersectDelegate`, `TestDelegatingAppAdminAPIAndPersonGrants`, `TestRegistryDelegationGrantIsOnlyEverThePersonsOwn` |
+| `REG-22` | RFC 8693 `act` delegated identity (`X-Grain-On-Behalf-Of`) and per-person consent grants | Implemented | `TestConsentDelegationPolicyAuthorizeOnBehalfOf`, `TestRegistryVerifierExposesPersonAndDelegatingApp`, `TestDelegatedRoleIsPersonIntersectDelegate`, `TestDelegatingAppAdminAPIAndPersonGrants`, `TestMultiReplicaDelegationCacheEviction`, `TestRegistryDelegationGrantIsOnlyEverThePersonsOwn` |
 | `REG-23` | Reverse proxy routing and inbound `X-Grain-*` / `X-Goog-IAP-*` header stripping | Implemented | `TestRouterReverseProxyAndHeaderSanitization` |
 | `REG-24` | Outbound WebSocket tunnel (`grain.tunnel.v1` mux) and credential revocation termination | Implemented | `TestSessionHTTPAndWebSocketMultiplexing`, `TestStep13TunnelMuxCrossReplicaForwardingAndReconnect` |
 | `REG-25` | Cross-replica peer forwarding on `:8082` with `X-Grain-Tunnel-Hop: 1` loop prevention | Implemented | `TestStep13TunnelMuxCrossReplicaForwardingAndReconnect` |

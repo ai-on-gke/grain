@@ -129,6 +129,18 @@ func (a signerAdapter) VerifyPeerToken(ctx context.Context, token string) (strin
 	return claims.Subject, nil
 }
 
+func (a signerAdapter) InvalidateGrant(grantID string) {
+	if inv, ok := a.signer.(interface{ InvalidateGrant(string) }); ok {
+		inv.InvalidateGrant(grantID)
+	}
+}
+
+func (a signerAdapter) InvalidateApp(appName string) {
+	if inv, ok := a.signer.(interface{ InvalidateApp(string) }); ok {
+		inv.InvalidateApp(appName)
+	}
+}
+
 type delegationAdapter struct {
 	policy DelegationPolicy
 }

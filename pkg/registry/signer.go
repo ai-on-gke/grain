@@ -550,6 +550,21 @@ func (c *CachingSigner) InvalidateGrant(grantID string) {
 	c.mu.Unlock()
 }
 
+// InvalidateApp removes all cached assertions issued for appName (`act.app`).
+func (c *CachingSigner) InvalidateApp(appName string) {
+	appName = strings.ToLower(strings.TrimSpace(appName))
+	if c == nil || appName == "" {
+		return
+	}
+	c.mu.Lock()
+	for k := range c.entries {
+		if k.hasActor && strings.EqualFold(k.actorApp, appName) {
+			delete(c.entries, k)
+		}
+	}
+	c.mu.Unlock()
+}
+
 // InvalidateActor removes all cached assertions issued for actorSub.
 func (c *CachingSigner) InvalidateActor(actorSub string) {
 	actorSub = strings.ToLower(strings.TrimSpace(actorSub))

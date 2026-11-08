@@ -1055,6 +1055,70 @@ func TestCachingSignerActClaimAndInvalidation(t *testing.T) {
 	if err != nil || delTok2Hit != delTok2 {
 		t.Fatalf("expected dlg_2 to remain cached after InvalidateGrant(dlg_1)")
 	}
+
+	// Cache a token for a second app ("triage-app"), then InvalidateApp("planning-app"):
+	// both planning-app grants (dlg_1 and dlg_2) are evicted while triage-app and plainTok remain cached.
+	otherAppClaims := RegistryClaims{
+		Audience: "https://alice-vm.instances.example.com",
+		Subject:  "alice@example.com",
+		Email:    "alice@example.com",
+		Kind:     "human",
+		Actor: &DelegationActor{
+			Sub:    "triage-app@proj.iam.gserviceaccount.com",
+			Kind:   "service",
+			App:    "triage-app",
+			Grant:  "dlg_3",
+			Access: "read",
+		},
+	}
+	otherAppTok, err := caching.SignAssertion(ctx, otherAppClaims)
+	if err != nil {
+		t.Fatalf("SignAssertion otherAppTok: %v", err)
+	}
+	caching.InvalidateApp("planning-app")
+	delTok1AfterApp, err := caching.SignAssertion(ctx, RegistryClaims{
+		Audience: "https://alice-vm.instances.example.com",
+		Subject:  "alice@example.com",
+		Email:    "alice@example.com",
+		Kind:     "human",
+		Actor: &DelegationActor{
+			Sub:    "planning-app@proj.iam.gserviceaccount.com",
+			Kind:   "service",
+			App:    "planning-app",
+			Grant:  "dlg_1",
+			Access: "write",
+		},
+	})
+	if err != nil || delTok1AfterApp == delTok1After {
+		t.Fatalf("expected fresh token for dlg_1 after InvalidateApp(planning-app)")
+	}
+	delTok2AfterApp, err := caching.SignAssertion(ctx, RegistryClaims{
+		Audience: "https://alice-vm.instances.example.com",
+		Subject:  "alice@example.com",
+		Email:    "alice@example.com",
+		Kind:     "human",
+		Actor: &DelegationActor{
+			Sub:    "planning-app@proj.iam.gserviceaccount.com",
+			Kind:   "service",
+			App:    "planning-app",
+			Grant:  "dlg_2",
+			Access: "read",
+		},
+	})
+	if err != nil || delTok2AfterApp == delTok2 {
+		t.Fatalf("expected fresh token for dlg_2 after InvalidateApp(planning-app)")
+	}
+	if otherHit, err := caching.SignAssertion(ctx, otherAppClaims); err != nil || otherHit != otherAppTok {
+		t.Fatalf("expected triage-app assertion to remain cached after InvalidateApp(planning-app)")
+	}
+	if plainHit, err := caching.SignAssertion(ctx, RegistryClaims{
+		Audience: "https://alice-vm.instances.example.com",
+		Subject:  "alice@example.com",
+		Email:    "alice@example.com",
+		Kind:     "human",
+	}); err != nil || plainHit != plainTok {
+		t.Fatalf("expected non-delegated assertion to remain cached after InvalidateApp(planning-app)")
+	}
 }
 
 func TestStep12CatalogCRUDGroupAuthHeartbeatsDirectoryAndRouteEndToEnd(t *testing.T) {

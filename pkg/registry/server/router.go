@@ -335,20 +335,43 @@ func (rt *Router) Close() {
 }
 
 // StartBackground launches the background goroutines for:
-//   - PostgreSQL `LISTEN registry_entries` and `LISTEN registry_tunnels`
+//   - PostgreSQL `LISTEN registry_entries`, `LISTEN registry_tunnels`, `LISTEN registry_catalog`, and `LISTEN registry_delegations`
 //   - 3s `tunnelCache` fallback poll + local tunnel reconciliation
 //   - `replica_heartbeat` (`replicas` table upsert)
 func (rt *Router) StartBackground(ctx context.Context) {
 	if rt.store == nil {
 		return
 	}
+	bgCtx, bgCancel := context.WithCancel(ctx)
+	go func() {
+		select {
+		case <-ctx.Done():
+			bgCancel()
+		case <-rt.stopCh:
+			bgCancel()
+		}
+	}()
+
 	_ = rt.store.UpsertReplica(ctx, rt.replicaID, rt.PeerAddr())
 	_ = rt.tunnelCache.PollAll(ctx)
 	_ = rt.catalogCache.Reload(ctx)
-	go rt.catalogCache.StartLoop(ctx)
+	go rt.catalogCache.StartLoop(bgCtx)
 
 	if strings.TrimSpace(rt.opts.DatabaseURL) != "" {
-		go ListenPostgresAllNotifications(ctx, rt.opts.DatabaseURL, rt.onEntryNotification, rt.onTunnelNotification, rt.onCatalogNotification)
+		firstAttemptDone := make(chan struct{})
+		var once sync.Once
+		markAttempt := func() { once.Do(func() { close(firstAttemptDone) }) }
+		go listenPostgresChannels(bgCtx, rt.opts.DatabaseURL, PostgresNotificationHandlers{
+			OnEntry:      rt.onEntryNotification,
+			OnTunnel:     rt.onTunnelNotification,
+			OnCatalog:    rt.onCatalogNotification,
+			OnDelegation: rt.onDelegationNotification,
+		}, markAttempt)
+		select {
+		case <-firstAttemptDone:
+		case <-bgCtx.Done():
+		case <-time.After(2 * time.Second):
+		}
 	}
 
 	go func() {
@@ -413,6 +436,31 @@ func (rt *Router) onCatalogNotification(_ string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = rt.catalogCache.Reload(ctx)
+}
+
+func (rt *Router) onDelegationNotification(payload string) {
+	payload = strings.TrimSpace(payload)
+	if payload == "" || rt.signer == nil {
+		return
+	}
+	kind, rest, ok := strings.Cut(payload, ":")
+	if !ok {
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "grant":
+		if id := strings.TrimSpace(rest); id != "" {
+			if inv, ok := rt.signer.(interface{ InvalidateGrant(string) }); ok {
+				inv.InvalidateGrant(id)
+			}
+		}
+	case "app":
+		if name := strings.ToLower(strings.TrimSpace(rest)); name != "" {
+			if inv, ok := rt.signer.(interface{ InvalidateApp(string) }); ok {
+				inv.InvalidateApp(name)
+			}
+		}
+	}
 }
 
 // WrapMainHandler wraps the control-plane handler on `:8080`, routing
