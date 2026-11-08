@@ -469,6 +469,46 @@ describe("ConsoleSessionPage", () => {
     expect(JSON.parse(options.body)).toEqual({ networkAccess: "open" });
   });
 
+  // On a backend that cannot withhold a network (-host-sandboxes) the
+  // session's task is filed with egress whatever the select says, and
+  // the API reports it as effectiveNetworkAccess
+  // (docs/test-runs/2026-11-07-director-agent-api.md, finding 1).
+  it("warns when the backend cannot withhold the session's network", async () => {
+    const props = {
+      task: task(),
+      capabilities,
+      networkAccessOptions: ["open", "none"],
+      act: vi.fn(),
+      onSaved: vi.fn(),
+      showError: vi.fn(),
+    };
+    const { rerender } = render(
+      <ConsoleSessionPage
+        {...props}
+        session={session({ networkAccess: "none" })}
+      />,
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /Director capabilities/ }),
+    );
+    expect(
+      screen.queryByTestId("session-network-not-isolated"),
+    ).not.toBeInTheDocument();
+
+    rerender(
+      <ConsoleSessionPage
+        {...props}
+        session={session({
+          networkAccess: "none",
+          effectiveNetworkAccess: "open",
+        })}
+      />,
+    );
+    expect(
+      screen.getByTestId("session-network-not-isolated"),
+    ).toHaveTextContent(/cannot withhold a run's network/);
+  });
+
   // Configured, but the cycle that files its task has not run yet: a
   // wait, said out loud, rather than an empty chat window that swallows
   // whatever is typed into it.

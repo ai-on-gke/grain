@@ -571,6 +571,22 @@ export default function ConsoleSessionPage({
             </option>
           ))}
         </TextField>
+        {session.effectiveNetworkAccess &&
+          session.effectiveNetworkAccess !==
+            (session.networkAccess || "open") && (
+            <Alert
+              severity="warning"
+              data-testid="session-network-not-isolated"
+              sx={{
+                mt: 1,
+                "& .MuiAlert-message": { overflowWrap: "anywhere" },
+              }}
+            >
+              This deployment&apos;s sandboxes cannot withhold a run&apos;s
+              network, so this session&apos;s runs are given egress (outbound
+              internet) whatever is chosen here.
+            </Alert>
+          )}
       </Box>
 
       {/* Which model the session's agent runs on (model.ConsoleSession.
