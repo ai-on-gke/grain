@@ -31,6 +31,8 @@ import {
 import api from "../../api.js";
 import CopyButton from "../CopyButton.jsx";
 import SettingsCard from "./SettingsCard.jsx";
+import { formatDateTime } from "../../time.js";
+import { useTimeZone } from "../../TimeZoneContext.jsx";
 
 // formatLabels is a host's labels as the label field takes them:
 // "k=v,k2=v2", sorted.
@@ -188,6 +190,7 @@ export function deletedLines(deleted) {
 // hosts"), pending join requests ("Pending"), the host registry
 // ("Hosts"), and legacy per-host token registration.
 export default function HostdsSection({ showError }) {
+  const zone = useTimeZone();
   const [hostds, setHostds] = useState(null);
   const [codes, setCodes] = useState([]);
   const [selectedCodeName, setSelectedCodeName] = useState("");
@@ -1087,11 +1090,7 @@ export default function HostdsSection({ showError }) {
                       <Box>{connectionText(h)}</Box>
                       {h.last_seen_at ? (
                         <Typography variant="caption" color="text.secondary">
-                          Last check-in{" "}
-                          {new Date(h.last_seen_at)
-                            .toISOString()
-                            .replace("T", " ")
-                            .slice(0, 16)}
+                          Last check-in {formatDateTime(h.last_seen_at, zone)}
                         </Typography>
                       ) : null}
                     </TableCell>

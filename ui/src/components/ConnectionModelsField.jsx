@@ -27,6 +27,8 @@ import { identifierField } from "../identifierField.js";
 import { searchFilter } from "../fuzzy.js";
 import { HighlightedText } from "./SearchSelect.jsx";
 import { DISCOVERING_FRAMEWORKS, NO_MODELS_LABEL } from "../state.js";
+import { formatDateTime } from "../time.js";
+import { useTimeZone } from "../TimeZoneContext.jsx";
 
 // ConnectionModelsField is what one connection says about models: what
 // its provider lists (read-only, with a refresh), and what it advertises,
@@ -299,10 +301,11 @@ export default function ConnectionModelsField({
 // StoredDiscovery says when grain last heard from the provider, and why
 // it could not since -- the list dispatch is using meanwhile.
 function StoredDiscovery({ discovered }) {
+  const zone = useTimeZone();
   if (!discovered) return null;
   const at =
     discovered.refreshedAt && !discovered.refreshedAt.startsWith("0001")
-      ? new Date(discovered.refreshedAt).toLocaleString()
+      ? formatDateTime(discovered.refreshedAt, zone)
       : "";
   return (
     <Stack spacing={0.25} sx={{ mt: 0.75 }}>
