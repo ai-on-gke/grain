@@ -709,6 +709,15 @@ func normalizeScopeOwnerRepoPattern(raw string) (string, error) {
 // MatchScopeOwnerRule returns the most-specific ScopeOwnerRule matching repo:
 // an exact `<owner>/<repo>` rule wins over `<prefix>/*` rules, and longer
 // `<prefix>/*` rules win over shorter ones.
+//
+// Repository identifiers are free-form, so the same repository can be claimed
+// as `acme/billing` or host-qualified as `github.com/acme/billing`, and
+// /api/route matches whichever form a caller queries. A rule written in the
+// bare `<owner>/...` form therefore also governs host-qualified claims of the
+// same path (`<host>/<owner>/...`, where the first segment contains a dot);
+// otherwise `acme/*` could be sidestepped by claiming `github.com/acme/billing`.
+// Rules naming the host-qualified form are consulted first, so an operator can
+// still give one host's copy of a repository its own principals.
 func MatchScopeOwnerRule(rules []ScopeOwnerRule, repo string) (*ScopeOwnerRule, bool) {
 	if len(rules) == 0 {
 		return nil, false
@@ -717,23 +726,34 @@ func MatchScopeOwnerRule(rules []ScopeOwnerRule, repo string) (*ScopeOwnerRule, 
 	if err != nil {
 		normRepo = strings.ToLower(strings.TrimSpace(repo))
 	}
-	var bestPrefix *ScopeOwnerRule
-	bestPrefixLen := -1
-	for i := range rules {
-		pat := rules[i].Repo
-		if pat == normRepo {
-			return &rules[i], true
+	forms := []string{normRepo}
+	if host, rest, ok := strings.Cut(normRepo, "/"); ok && strings.Contains(host, ".") && strings.Contains(rest, "/") {
+		forms = append(forms, rest)
+	}
+	for _, form := range forms {
+		for i := range rules {
+			if rules[i].Repo == form {
+				return &rules[i], true
+			}
 		}
-		if strings.HasSuffix(pat, "/*") {
+	}
+	for _, form := range forms {
+		var bestPrefix *ScopeOwnerRule
+		bestPrefixLen := -1
+		for i := range rules {
+			pat := rules[i].Repo
+			if !strings.HasSuffix(pat, "/*") {
+				continue
+			}
 			prefix := strings.TrimSuffix(pat, "/*")
-			if strings.HasPrefix(normRepo, prefix+"/") && len(prefix) > bestPrefixLen {
+			if strings.HasPrefix(form, prefix+"/") && len(prefix) > bestPrefixLen {
 				bestPrefix = &rules[i]
 				bestPrefixLen = len(prefix)
 			}
 		}
-	}
-	if bestPrefix != nil {
-		return bestPrefix, true
+		if bestPrefix != nil {
+			return bestPrefix, true
+		}
 	}
 	return nil, false
 }

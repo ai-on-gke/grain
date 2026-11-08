@@ -178,6 +178,29 @@ catalog:
 	if r, ok := MatchScopeOwnerRule(cfg.Catalog.ScopeOwners, "beta/app"); ok || r != nil {
 		t.Fatalf("MatchScopeOwnerRule(beta/app) = (%+v, %v), want unmatched", r, ok)
 	}
+	// Host-qualified claims of the same path are governed by the bare-form
+	// rules, so `alpha/*` cannot be sidestepped by claiming
+	// `github.com/alpha/app` (which /api/route matches as its own key).
+	if r, ok := MatchScopeOwnerRule(cfg.Catalog.ScopeOwners, "https://GitHub.com/Alpha/App.git"); !ok || r.Principals[0] != "group:alpha-eng@alpha.test" {
+		t.Fatalf("MatchScopeOwnerRule(github.com/alpha/app) = (%+v, %v), want group:alpha-eng@alpha.test", r, ok)
+	}
+	if r, ok := MatchScopeOwnerRule(cfg.Catalog.ScopeOwners, "github.com/alpha/special"); !ok || r.Principals[0] != "user:lead@alpha.test" {
+		t.Fatalf("MatchScopeOwnerRule(github.com/alpha/special) = (%+v, %v), want exact user:lead@alpha.test", r, ok)
+	}
+	if r, ok := MatchScopeOwnerRule(cfg.Catalog.ScopeOwners, "github.com/beta/app"); ok || r != nil {
+		t.Fatalf("MatchScopeOwnerRule(github.com/beta/app) = (%+v, %v), want unmatched", r, ok)
+	}
+	// A rule naming the host-qualified form takes precedence for that host.
+	hostRules := []ScopeOwnerRule{
+		{Repo: "alpha/*", Principals: []string{"group:alpha-eng@alpha.test"}},
+		{Repo: "git.example.com/alpha/*", Principals: []string{"user:mirror@alpha.test"}},
+	}
+	if r, ok := MatchScopeOwnerRule(hostRules, "git.example.com/alpha/app"); !ok || r.Principals[0] != "user:mirror@alpha.test" {
+		t.Fatalf("MatchScopeOwnerRule(git.example.com/alpha/app) = (%+v, %v), want user:mirror@alpha.test", r, ok)
+	}
+	if r, ok := MatchScopeOwnerRule(hostRules, "github.com/alpha/app"); !ok || r.Principals[0] != "group:alpha-eng@alpha.test" {
+		t.Fatalf("MatchScopeOwnerRule(github.com/alpha/app) with host rules = (%+v, %v), want group:alpha-eng@alpha.test", r, ok)
+	}
 
 	for _, badYAML := range []struct {
 		name  string
@@ -537,6 +560,18 @@ catalog:
 	})
 	if !isAPIStatus(err, http.StatusForbidden) || !strings.Contains(err.Error(), "not authorized to claim a primary scope") {
 		t.Fatalf("expected 403 scope_owner_forbidden on Bob CreateEntry(alpha/app primary), got %v", err)
+	}
+
+	// 1b. Spelling the same repository host-qualified does not sidestep the
+	// bare-form `alpha/*` rule.
+	_, err = bobCli.CreateEntry(ctx, api.CreateEntryRequest{
+		Name:   "bob-ws",
+		Kind:   api.KindConnected,
+		Listed: &listedFalse,
+		Scopes: []api.ScopeInput{{Repo: "https://github.com/alpha/app.git", PathPrefix: "", Role: api.RolePrimary}},
+	})
+	if !isAPIStatus(err, http.StatusForbidden) || !strings.Contains(err.Error(), "not authorized to claim a primary scope") {
+		t.Fatalf("expected 403 scope_owner_forbidden on Bob CreateEntry(github.com/alpha/app primary), got %v", err)
 	}
 
 	// 2. Bob CAN create bob-ws with a secondary scope on alpha/app and a primary scope

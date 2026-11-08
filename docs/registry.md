@@ -681,7 +681,12 @@ multi-team / multi-domain fleets via `catalog.scope_owners`:
    `user:<email>` and `group:<email>` principals. When multiple rules could
    match a repository, an **exact `<owner>/<repo>` rule overrides the
    longest matching `<prefix>/*` wildcard rule**; repositories matching no
-   rule remain self-service.
+   rule remain self-service. A rule written in the bare `<owner>/...` form
+   also governs host-qualified claims of the same path (`acme/*` covers
+   `github.com/acme/billing` as well as `acme/billing`), since scopes and
+   `/api/route` queries may spell a repository either way; a rule naming
+   the host-qualified form (`github.com/acme/*`) is consulted first for that
+   host.
    - An entry is authorized to hold a `primary` scope (`declared` or
      `reported`) on a restricted repository if and only if:
      1. `user:<entry.owner>` is listed in the matching rule's `principals`,
