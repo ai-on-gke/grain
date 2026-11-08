@@ -84,7 +84,7 @@ func reconcileGitRefSchedules(ctx context.Context, deps Deps, now time.Time) err
 		if !sched.Enabled || sched.Recurrence.Kind != model.RecurrenceGitRef || sched.Recurrence.GitRef == nil {
 			continue
 		}
-		pollKey := fmt.Sprintf("%p|%s", deps.Store, sched.ID)
+		pollKey := fmt.Sprintf("%d|%s", deps.Store.ID(), sched.ID)
 		if last, ok := gitRefPolled.Load(pollKey); ok && now.Sub(last.(time.Time)) < gitRefPollInterval {
 			continue
 		}

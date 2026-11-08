@@ -68,7 +68,7 @@ var (
 )
 
 func redRCKey(store *model.Store, parts ...string) string {
-	return fmt.Sprintf("%p|%s", store, strings.ToLower(strings.Join(parts, "|")))
+	return fmt.Sprintf("%d|%s", store.ID(), strings.ToLower(strings.Join(parts, "|")))
 }
 
 func tagCommits(tags []github.Tag) map[string]string {
