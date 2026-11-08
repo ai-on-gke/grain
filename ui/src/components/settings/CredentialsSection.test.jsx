@@ -113,4 +113,35 @@ describe("CredentialsSection GCP help", () => {
       ),
     ).toBeInTheDocument();
   });
+
+  it("wraps GitHub and GCP config fields in ReadOnlyFieldset when settings are locked while leaving secrets editable", async () => {
+    api.mockResolvedValue({ enabled: true, secrets: [] });
+
+    const { container } = render(
+      <CredentialsSection
+        s={makeSectionState({ configLocked: true })}
+        claimedSecrets={[]}
+      />,
+    );
+
+    const insecureCheckbox = container.querySelector(
+      'input[name="githubInsecureHttp"]',
+    );
+    expect(insecureCheckbox).toBeDisabled();
+    expect(insecureCheckbox.closest("[data-settings-readonly]")).not.toBeNull();
+    expect(
+      container
+        .querySelector('input[name="githubHost"]')
+        .closest("[data-settings-readonly]"),
+    ).not.toBeNull();
+
+    await waitFor(() =>
+      expect(container.querySelector("#other-secrets")).not.toBeNull(),
+    );
+    expect(
+      container
+        .querySelector("#other-secrets")
+        .closest("[data-settings-readonly]"),
+    ).toBeNull();
+  });
 });

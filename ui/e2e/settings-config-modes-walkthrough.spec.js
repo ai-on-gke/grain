@@ -212,3 +212,35 @@ test("a setting refused for the config repo opens the refusal dialog", async ({
   ).toHaveCount(0);
   await expect(box).toBeChecked({ checked: before });
 });
+
+// Legacy capabilities wrapped its GitHub and GCP config fields in a bare
+// <Box component="fieldset" disabled> instead of <ReadOnlyFieldset>, leaving
+// githubInsecureHttp without [data-settings-readonly] dimming when locked
+// (docs/test-runs/2026-11-08-user-system-settings.md).
+test("a locked Legacy capabilities card dims config fields via ReadOnlyFieldset while keeping secrets editable", async ({
+  page,
+}) => {
+  await page.setViewportSize(DESKTOP);
+  await withConfig(page, { configRepoOnly: true, settingsLocked: true });
+  await page.goto("/settings/credentials");
+
+  const section = page.getByTestId("settings-section");
+  const box = section.locator("input[name=githubInsecureHttp]");
+  await expect(box).toBeDisabled();
+  expect(
+    await box.evaluate((el) => Boolean(el.closest("[data-settings-readonly]"))),
+  ).toBe(true);
+  expect(
+    await box.evaluate(
+      (el) => getComputedStyle(el.closest(".MuiCheckbox-root")).opacity,
+    ),
+  ).toBe("0.5");
+
+  const otherSecrets = section.locator("#other-secrets");
+  await expect(otherSecrets).toBeVisible();
+  expect(
+    await otherSecrets.evaluate((el) =>
+      Boolean(el.closest("[data-settings-readonly]")),
+    ),
+  ).toBe(false);
+});

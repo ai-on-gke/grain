@@ -274,3 +274,157 @@ unstubbed against real `grain demo` and `grain daemon` instances.
 
 - `cd ui && npx vitest run`: **257 files passed, 4026 tests passed**.
 - `cd ui && npx playwright test e2e/user-system-settings-walkthrough.spec.js e2e/settings-config-modes-walkthrough.spec.js e2e/access-principals-settings.spec.js e2e/settings-models-walkthrough.spec.js e2e/settings-models-all-disabled.spec.js e2e/settings-agents-branch-template.spec.js e2e/memory.spec.js e2e/repo-setting-refusal-clears.spec.js --project=chromium`: **29 passed**.
+
+---
+
+## Second run: Task 3462 (`grain/098073e4/task-3462-walk-through-settings-its`)
+
+An independent browser walkthrough executed initially against `297401e2`
+(`main`, "Merge pull request #935", before Task 3358's PR #938 landed) and then
+rebased and re-verified on `1ab19467` (`main`, "Merge pull request #941").
+Because the two runs ran concurrently before PR #938 merged, this run
+independently reproduced Task 3358's `AccessSection` hardcoded-UTC `Added`
+timestamp and `RoleChip` `<div>`-in-`<p>` `validateDOMNesting` issues, and also
+uncovered and fixed two additional Settings UI bugs below.
+
+### Commit and environment
+
+- **Commits tested**: `297401e2` during initial walkthrough and screenshot
+  baseline; `1ab19467` after fast-forwarding onto `origin/main` with this
+  branch's fixes rebuilt into `pkg/ui/static`.
+- **Servers**:
+  - `grain demo -addr 127.0.0.1:0 -open=false -access-code-file <temp>` over a
+    throwaway embedded SQLite store.
+  - `grain daemon` (`startDaemon` with `directConfigWrites: false`,
+    `-max-mergers 1`) over a throwaway SQLite store, controller-local
+    `grain/config` Git repository, and a throwaway local bare Git repository
+    (`git init --bare`) for external config-repo mode.
+- **Browser & viewports**: Playwright (`@playwright/test` 1.62.1) driving real
+  Chromium (`/var/cache/playwright`) at desktop (`1280×860`, `1440×900`, and
+  `1280×560` for hash-anchor scroll checks), tablet (`800×1000`), and phone
+  (`390×844`) widths in light and dark themes, with browser time zones `UTC`
+  and `America/Los_Angeles`.
+- **Gemini API key**: `/home/debian/.gemini-api-key` was absent in this sandbox.
+
+### Stubs and intercepted routes (Task 3462)
+
+| Route / boundary | How it was intercepted | Why |
+|---|---|---|
+| `PUT /api/settings` (delay & 503) | Delayed one `PUT /api/settings` by 250 ms via `page.route`, and answered a single `PUT /api/settings` with HTTP `503` (`{"error":"simulated transient failure"}`) before letting `Retry` hit the real server. | Deterministic verification of `Saving…` → `All changes saved` and `Couldn't save <field>` + `Retry`. |
+| `GET /api/settings` (`pendingRestart` / `restartRequired`) | Folded `restartRequired: ["maxAgentTurns"]`, `pendingRestart: ["maxAgentTurns"]` into one `GET /api/settings` response on `grain demo`. | Exercised the `Restart needed` chip and its navigation to `/system/power` within `Agents`. |
+| `GET /api/config` & `/_gcp_iap/clear_login_cookie` | Folded `{ authenticated: true, authMethod: "iap", actor: "user:dana@example.com", iapLogoutURL: "/_gcp_iap/clear_login_cookie", access: { role: "grain/viewer", roles: ["grain/viewer"], full: false, scopes: [...] } }` into `GET /api/config` in an isolated context, and answered `/_gcp_iap/clear_login_cookie` with `200 Signed out of IAP`. | Verified signed-in identity email badge, `This browser` card, role-scoped read-only rendering, and IAP sign-out redirect without an external IAP proxy. |
+| `GET /api/settings` & `GET /api/config` (models & pauses) | Folded `discovered: { models: ["gemini-discovered-preview"] }` onto `gemini-pro`, tested `defaultModel: "vanished-model-99"`, folded `paused` (`canLift: true`) onto `gemini-pro` and `gemini-2.5-pro`, and recorded `DELETE /api/pause` calls. | Verified discovered-model propagation across pickers, unadvertised-model warnings, and `Resume` calls without an external provider API key. |
+| `GET /api/settings` (`taskFields`) | Folded `legacyTaskCount: 2` onto `priority` on `GET /api/settings`. | Verified the `"2 tasks still carry a value this field no longer offers"` link into `/?f=custom.priority%3Alegacy`. |
+| `GET /api/state-repo` (`resetNotices`) & `GET /api/config` (`stateRepoSyncFailure`) | Folded a synthetic `resetNotices` entry (`tables/grain_config.json`) onto `GET /api/state-repo` (letting `POST /api/state-repo/dismiss-reset` hit the real daemon), and folded `stateRepoSyncFailure` onto `GET /api/config` after testing a real unreachable bare path (`502`). | Immediate verification of reset dismissal, header `Alerts` popover, and `/inbox` `Config repo` navigation without waiting 5 minutes for `syncFailureGrace`. |
+| Local bare Git repository (`git init --bare`) | Seeded a throwaway local bare repository from `grain/config` and pointed `Config repo → External repository` at its path. | Exercised real Git fetch/validate/switch in `grain daemon` without external GitHub network access. |
+
+### Steps and outcomes summary (Task 3462)
+
+- **Layout, paths, viewports, and legacy redirects**: Opened Settings from
+  `top-bar-settings` on desktop and `phone-settings` on phone (`390×844`);
+  verified bare `/settings` opens `/settings/models` on desktop and the grouped
+  list (`Models & sandboxes`, `Secrets & access`, `This browser`, `Operations`,
+  `Managed in config repo`) on phone; verified `/settings/<section>` and
+  `/settings/tasks#task-fields` (`top ≈ 80 px` at `1280×560`) across reload and
+  Back/Forward; verified tablet (`800×1000`) `Section` select, phone
+  `All settings` back arrow, zero horizontal overflow across all 8 sections, and
+  all legacy redirects (`/admin`, `/admin/workflow`, `/admin/executors`,
+  `/system/executors`, `/settings/hosts` → `/settings/hostds`,
+  `/admin/upgrade`, `/system/upgrade`, `/memory`).
+- **Filter settings**: Verified `/` focuses the filter input (and is ignored
+  when typing in an input), label (`instruc`) and helper keyword (`overcommit`)
+  matches grouped by section, `Enter` scroll + focus + `.setting-highlight`,
+  `"No setting matches …"`, and `Escape` restoring section groups.
+- **Save and config-repo lock model**: Verified immediate save on
+  checkbox/select/radio, blur/`Enter` save on single-line text/number, explicit
+  `Save` / `Discard` on `Standing instructions` and `Memory`, `Saving…` →
+  `All changes saved`, `1m` → `1m0s` server normalization read-back, `-5`
+  client-side refusal by label with zero `PUT`s and banner dismissal on restore,
+  `503` `Couldn't save Max agent turns` + `Retry`, dirty dot + leave prompts,
+  `Restart needed` chip → `/system/power`, `General → Settings lock` across
+  `Managed in config repo` + `Engine` + `Caches` + `Legacy capabilities` (where
+  **Bug A** below was found), `"View in config repo → <path>"` links, live `409
+  config_managed_externally` → `Create Config PR` opening held task `#2` / PR
+  `#2` and clearing refusal status after a subsequent valid save, and external
+  config-repo switching (`external-config-repo-banner`, disabled `Settings lock`,
+  usable `Access`).
+- **Preferences, Access, General, Config repo, Models, Agents, Memory, Tasks**:
+  - `Preferences`: `Auto` / `Light` / `Dark` theme persistence, `America/Los_Angeles`
+    default vs `Asia/Tokyo` override across `/inbox`, `/tasks/<id>`, and
+    `/settings/access`, `Oldest first` / `Newest first` timeline order,
+    `Customize sidebar` pinning/reordering/unpinning (`Memory`, `Power`, board,
+    session) across reload, and zero server writes.
+  - `Access`: usable when locked or in external config-repo mode; access-code
+    and stubbed IAP (`dana@example.com`, `grain/viewer`) sessions, principal
+    validation + dangerous-role/service-account reason prompts, and `Log out`.
+  - `General`: `Deployment` (`environmentName`, `showClosedByDefault`),
+    `Settings lock` disabled without a config repo, `Updates` (`upgradeCheckMode`,
+    `upgradePausePipeline`, `autoUpgradeOn`, `Channel`, `Time of day` `04:30`),
+    and `About` matching the rail `build-stamp`.
+  - `Config repo`: internal `grain/config` sync status, `Export now`,
+    `Back up secrets here` / `Stop backing them up`, reset notice `Dismiss`,
+    Config Repo Browser (`/settings/config-repo/tables/grain_config.json`,
+    `/config?path=tables/grain_config.json` redirect, `README.md` Markdown
+    preview, missing-file inline error), and failing-sync `Alerts` + `/inbox`
+    `Config repo` link.
+  - `Models`: `Test Connection`, `Disable` / `Enable` + all-disabled warning,
+    `Edit` (`Stored` / `Ambient`), unfinished `New connection` draft cleanup on
+    leave without a `Remove` prompt (where **Bug B** below was found on
+    `Escape` after `Continue`), `Remove` confirmation + 0-connection empty state,
+    discovered models + reasoning effort + fallback models feeding pickers in
+    `+ New task`, `/session/new`, `New schedule`, and `New template`,
+    unadvertised-model warning, paused connection & model `Resume`, and
+    `Where each agent CLI runs`.
+  - `Agents`: `Max agent turns`, `Standing instructions`, `Task branches`
+    git-ref and uniqueness validation keeping the sample deployment ID visible,
+    and `Commit identity` link to `/settings/git`.
+  - `Memory`: deployment and `acme/widgets` notes + inline documents, dirty
+    guards on rail, `Back`, and `beforeunload`, reversible `Save` + reload
+    read-back, absent from rail unless pinned and absent from repo pages.
+  - `Tasks`: `Queue new tasks immediately`, `Auto-merge new tasks by default`,
+    `Default legacy capabilities`, `Default grants` (`api:task-admin`), backlog
+    & follow-up limits verified in `+ New task`, and `Task fields` legacy-value
+    link into `/?f=custom.priority%3Alegacy`.
+
+### Additional bugs found and fixed in Task 3462
+
+1. **`Settings → Legacy capabilities` wrapped locked config fields in a bare `<fieldset>` instead of `<ReadOnlyFieldset>`**
+   - **Deterministic reproduction**: Enable `General → Settings lock` (or
+     configure an external config repository) and open `/settings/credentials`.
+     `CredentialsSection` passes `allowInExternalMode` to `SettingsCard` (so
+     secret inputs remain writable) and wrapped its GitHub and GCP config fields
+     in `<Box component="fieldset" disabled>` rather than `<ReadOnlyFieldset>`,
+     leaving `input[name="githubInsecureHttp"]` without `[data-settings-readonly]`
+     dimming (`opacity: 1` instead of `0.5`) and without `ReadOnlyFieldset`'s
+     keyboard-inert select/chip protection.
+   - **Fix**: `ui/src/components/settings/CredentialsSection.jsx` now wraps its
+     GitHub and GCP config fields in
+     `<ReadOnlyFieldset disabled={Boolean(readOnly) || Boolean(s.configLocked)}>`
+     while keeping `SecretsPanel` outside it.
+   - **Regression coverage**: Unit test in
+     `ui/src/components/settings/CredentialsSection.test.jsx` and Playwright e2e
+     test in `ui/e2e/settings-config-modes-walkthrough.spec.js`.
+
+2. **Pressing `Escape` inside an `Overlay` (such as `Models → New connection` right after `Continue`) failed when an unmounted button dropped focus to `document.body`**
+   - **Deterministic reproduction**: Open `/settings/models` → `New connection`,
+     select `Claude`, and click `Continue`. `Continue` unmounts as the overlay
+     advances to `Authentication`, causing Chromium to drop
+     `document.activeElement` to `document.body`. Pressing `Escape` then did
+     nothing because MUI's `Dialog` attaches its `Escape` keydown handler to
+     `.MuiDialog-root` rather than `document`.
+   - **Fix**: `ui/src/components/Overlay.jsx` attaches a ref to `Dialog`'s paper
+     and listens for `Escape` on `document`, forwarding it to
+     `handleClose(event, "escapeKeyDown")` when the event target is outside this
+     `Overlay`'s `.MuiModal-root`, this `Overlay` is the topmost open
+     `.MuiModal-root`, and no `.MuiPopper-root` or `[data-open-popover]` is open.
+   - **Regression coverage**: Unit tests in `ui/src/components/Overlay.test.jsx`
+     and `ui/src/components/ModelBackendPage.test.jsx`, plus Playwright e2e test
+     in `ui/e2e/user-system-settings-walkthrough.spec.js`.
+
+### Verification runs (Task 3462 on `1ab19467`)
+
+- `cd ui && npm run format:check`: **clean**.
+- `cd ui && npm test`: **257 files passed, 4046+ tests passed**.
+- `cd ui && npx playwright test e2e/user-system-settings-walkthrough.spec.js e2e/settings-config-modes-walkthrough.spec.js e2e/access-principals-settings.spec.js e2e/settings-models-walkthrough.spec.js e2e/settings-panel-walkthrough.spec.js e2e/settings-agents-branch-template.spec.js e2e/settings-upgrade.spec.js`: **42 passed**.
+- `go test ./tests/hygiene/... ./pkg/ui/...`: **passed**.
+
