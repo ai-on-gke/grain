@@ -1,0 +1,1 @@
+{"acceptedAuth":["access-code","iap"],"externalAgentApi":false,"version":"v0.0.0-20261108032317-938b4c971a84","authenticated":true,"principal":"human:dana@example.com","actor":"service:console@my-proj.iam.gserviceaccount.com","onBehalfOf":"user:dana@example.com","via":"release-console"}

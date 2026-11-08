@@ -59,6 +59,8 @@ import CustomizeSidebarOverlay from "./CustomizeSidebarOverlay.jsx";
 import { NEW_SESSION_ID } from "./NewSessionPage.jsx";
 import AppIcon, { NavGlyph } from "./AppIcon.jsx";
 import GrainMark from "./GrainMark.jsx";
+import AccessGate from "./AccessGate.jsx";
+import { useAccess } from "../AccessContext.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
 import { tasksLoadFailed } from "./ListPrimitives.jsx";
 import UnbackedStateDot, { stateDot } from "./UnbackedStateDot.jsx";
@@ -779,6 +781,12 @@ export default function Sidebar({
       ? `Tasks could not be refreshed (${tasksError}); showing the last list read — click to retry`
       : undefined;
   const repoCount = repoRows(config, tasks).length;
+  // Filing a task needs tasks:write: a role without it sees New task
+  // disabled, with the reason, rather than a form whose Create ends in a
+  // 403 (docs/test-runs/2026-11-07-rbac-roles.md F7).
+  const { reason: accessReason } = useAccess(config);
+  const fileWhy = accessReason("tasks:write");
+  const canFile = !fileWhy;
   // time.Time's zero value is still a non-empty string on the wire, so
   // FinishedAt cannot distinguish a live run here. Conclusion is CI's
   // canonical completion signal: its zero value means the run is pending.
@@ -1031,19 +1039,25 @@ export default function Sidebar({
             className="header-split-button"
             sx={{ my: 0.2 }}
           >
-            <Button
-              aria-label="+ New task"
-              onClick={onOpenNewTask}
-              startIcon={<AppIcon name="add" size={16} />}
-              sx={{
-                flex: "1 1 auto",
-                minWidth: 0,
-                whiteSpace: "nowrap",
-                "& .MuiButton-startIcon": { mr: 0.5, ml: 0 },
-              }}
+            <AccessGate
+              scope="tasks:write"
+              config={config}
+              wrapperStyle={{ flex: "1 1 auto", minWidth: 0 }}
             >
-              New task
-            </Button>
+              <Button
+                aria-label="+ New task"
+                onClick={onOpenNewTask}
+                startIcon={<AppIcon name="add" size={16} />}
+                sx={{
+                  flex: "1 1 auto",
+                  minWidth: 0,
+                  whiteSpace: "nowrap",
+                  "& .MuiButton-startIcon": { mr: 0.5, ml: 0 },
+                }}
+              >
+                New task
+              </Button>
+            </AccessGate>
             <Button
               aria-label="Create options"
               aria-controls={createMenuOpen ? "create-options-menu" : undefined}
@@ -1079,6 +1093,8 @@ export default function Sidebar({
         }}
       >
         <MenuItem
+          disabled={!canFile}
+          title={canFile ? undefined : fileWhy}
           onClick={() => {
             setCreateMenuAnchor(null);
             onOpenNewTask?.();
