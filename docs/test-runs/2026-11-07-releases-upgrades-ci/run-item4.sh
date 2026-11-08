@@ -24,7 +24,7 @@
 #       Upgrade refuses moving a verifying deployment onto release assets,
 #       both rendered at 1440/390 (screens.cjs);
 #   4B  pkg/pkgcache /artifacts-uploads/ multi-chunk push and auth
-#       boundaries (#811; item4_pkgcache_probe.go).
+#       boundaries (#811; testdata/item4_pkgcache_probe.go).
 #
 # Needs: $GRAIN (a grain build of this checkout), prep-item1.sh's
 # /tmp/item1-build (for the Settings -> Upgrade daemon's release forge),
@@ -247,6 +247,6 @@ SCHED_URL="http://$A" SCHED_CODE="$CODE_a" SCHED_TITLE="Watch offlist/upstream" 
   node "$HERE/screens.cjs"
 
 echo "=== 4B pkg/pkgcache /artifacts-uploads/ multi-chunk push & auth boundaries (#811) ==="
-(cd "$REPO" && go run "$HERE/item4_pkgcache_probe.go")
+(cd "$REPO" && go run "$HERE/testdata/item4_pkgcache_probe.go")
 
 echo "ALL §9 ITEM 4 CHECKS PASSED"

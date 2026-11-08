@@ -30,7 +30,7 @@
 // proxied; a sandbox with no network (restricted client) cannot start or
 // continue an upload; and dot-dot traversal never reaches the upstream.
 //
-//	go run docs/test-runs/2026-11-07-releases-upgrades-ci/item4_pkgcache_probe.go
+//	go run docs/test-runs/2026-11-07-releases-upgrades-ci/testdata/item4_pkgcache_probe.go
 package main
 
 import (

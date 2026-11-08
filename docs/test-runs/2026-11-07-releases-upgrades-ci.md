@@ -84,7 +84,7 @@ Harness: [`run-item3.sh`](2026-11-07-releases-upgrades-ci/run-item3.sh), [`item3
 
 ## §9.4 Forbidden `git_ref` schedules & `pkgcache` `/artifacts-uploads/` — PASS (after F5, F6)
 
-Harness: [`run-item4.sh`](2026-11-07-releases-upgrades-ci/run-item4.sh), [`screens.cjs`](2026-11-07-releases-upgrades-ci/screens.cjs), [`item4_pkgcache_probe.go`](2026-11-07-releases-upgrades-ci/item4_pkgcache_probe.go). Transcript: [`item4-live.txt`](2026-11-07-releases-upgrades-ci/transcripts/item4-live.txt).
+Harness: [`run-item4.sh`](2026-11-07-releases-upgrades-ci/run-item4.sh), [`screens.cjs`](2026-11-07-releases-upgrades-ci/screens.cjs), [`item4_pkgcache_probe.go`](2026-11-07-releases-upgrades-ci/testdata/item4_pkgcache_probe.go). Transcript: [`item4-live.txt`](2026-11-07-releases-upgrades-ci/transcripts/item4-live.txt).
 
 - **4A.1 REST** (#744): the live daemon backs secrets up to `acme/host-secrets` and has `targetRepos [acme/widgets]`. `POST /api/schedules` returns 400 for `grain/config-alpha` (`not found: only grain/config exists`), for `acme/host-secrets` and `ACME/Host-Secrets` (forbidden set: encrypted secrets backup repo), and for `not a repo`. It returns 201 for `grain/config`, `acme/widgets` and `offlist/upstream`, and the last reports `suppressed: watchedRepoOffTarget`. `PATCH` onto `grain/config-beta` → 400.
 - **4A.2 grandfathered pause**: after the secrets remote is moved onto a schedule's watched repo and the daemon restarts, re-saving the watch returns 400, while `{"enabled": false, …}` returns 200 and pauses the schedule.
