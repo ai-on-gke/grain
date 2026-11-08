@@ -36,7 +36,7 @@ sequenceDiagram
     GCP-->>Orch: status: ok, ports: [4252], placements: [external_account JSON,<br/>.gcp-token/<attempt_id>/<set>.token, <set>-id-token, activate.sh]
 
     Orch->>Relay: Register authenticated forward (sandbox 127.0.0.1:4252 -> host 127.0.0.1:4252)
-    Orch->>Sbx: Write placements & run setup (gcloud auth login --cred-file=...)
+    Orch->>Sbx: Write placements & run setup (gcloud config set auth/credential_file_override ...)
 
     loop On first GCP call & automatic ADC refresh before expiry
         Sbx->>Relay: POST http://127.0.0.1:4252/runs/<attempt_id>/token<br/>(subject_token = <set>.token)
@@ -62,7 +62,7 @@ The end-to-end flow spans four stages:
 2. **Sandbox materialization and port relay:**
    - Grain registers port `4252` on its capability port relay (`pkg/capability/portforward`), placing a lightweight guest forwarder bound to `127.0.0.1:4252` inside the sandbox that tunnels over Grain's sandbox fabric using a per-forward upgrade token. Because the relay runs on the sandbox fabric alongside the git proxy, token exchange works even when the task runs with `network_access: "none"` (provided the task's workload itself only reaches allowed endpoints or uses tokens passed to a permitted service).
    - Grain atomically writes the `external_account` JSON configuration to `/home/debian/.gcp-service-account.json` (`0600`, or `/home/debian/.gcp-keys/<set>.json` when `primary: false`), the per-attempt secret to `/home/debian/.gcp-token/<attempt_id>/<set>.token` (`0600`), an OIDC ID-token helper script to `/home/debian/.gcp-token/<attempt_id>/<set>-id-token` (`0700`), and non-secret metadata to `/home/debian/.gcp-service-account.about` (`0644`).
-   - For a primary grant (`primary: true`), Grain runs `/home/debian/.gcp-token/<attempt_id>/activate.sh` (`0700`) before the agent starts, executing `gcloud auth login --cred-file=/home/debian/.gcp-service-account.json --quiet` and `gcloud config set project <project>`.
+   - For a primary grant (`primary: true`), Grain runs `/home/debian/.gcp-token/<attempt_id>/activate.sh` (`0700`) before the agent starts, executing `gcloud config set auth/credential_file_override /home/debian/.gcp-service-account.json --quiet` and `gcloud config set project <project> --quiet`. It does not use `gcloud auth login --cred-file`: login introspects the access token against `sts.googleapis.com/v1/introspect`, and STS answers `{"active": false}` for the iamcredentials-minted service-account token the token endpoint returns, so login exits 1. The script discards only stdout, so a failing command's stderr reaches the task's setup-failure comment.
 
 3. **Local RFC 8693 token exchange (`127.0.0.1:4252`):**
    - Standard Google Cloud SDKs (Go, Python, Node.js, Java, Rust), Terraform's `google` provider, and `gcloud` natively support `"type": "external_account"` credential files with `"credential_source": {"file": "..."}`.
