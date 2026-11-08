@@ -924,11 +924,12 @@ every turn; `/mcp` suits a client that wants each route as its own tool.
 
 ### Enabling the endpoint
 
-`POST /mcp` is **off by default**. Enable it in Settings
-(`PUT /api/settings` with `{"externalAgentApi": true}`, or the
-`external_agent_api` parameter in `grain_config`). When disabled, every
-external agent request is refused with `403 Forbidden` even if it
-presents a valid token.
+`POST /mcp` is **off by default**. Enable it under
+[Settings → Agents → External agents](/settings/agents#external-agents)
+(**Accept external agents**), via `PUT /api/settings` with
+`{"externalAgentApi": true}`, or via the `external_agent_api` parameter in
+`grain_config`. When disabled, every external agent request is refused with
+`403 Forbidden` even if it presents a valid token.
 
 ### Per-agent credentials
 
@@ -1048,8 +1049,11 @@ through `agentAPIGate`:
 
 ### Following work from a workstation
 
-The host `grain` CLI, signed in with `grain login`, is the external
-agent's own client ([external-cli.spec.md](../design/spec/external-cli/external-cli.spec.md),
+The host `grain` CLI — installed from [Settings → CLI](/settings/cli) via
+`curl -fsSL <origin>/cli/install.sh | sh` (`GET /cli/install.sh`, which
+verifies the release archive against `checksums.txt`) and signed in with
+`grain login` — is the external agent's own client
+([external-cli.spec.md](../design/spec/external-cli/external-cli.spec.md),
 `design/spec/cli/host.spec.md` CLI-65 and CLI-110 for every flag). Besides
 filing and reading tasks, it follows what an agent filed without polling
 task by task:

@@ -350,6 +350,44 @@ describe("panelUsesNarrowing", () => {
     }
     expect(panelUsesNarrowing({ kind: "metrics" }, NO_NARROWING)).toBe(false);
   });
+
+  // 2026-11-08 saved-boards walkthrough (task 3612): a dashboard scoped to
+  // acme/widgets and then searched offered "Keep" on its throughput panel,
+  // whose report had not changed at all -- the repo was the board's own.
+  // The comparison is against what the dashboard asks unnarrowed, and a
+  // panel's own range overrides any span the toolbar names.
+  it("is false when the report a throughput panel fetches is the one it fetches on the board's own question", () => {
+    const baseline = q("f=repo:any:acme/widgets");
+    const panel = { kind: "metrics", range: "7d" };
+    expect(
+      panelUsesNarrowing(panel, q("f=repo:any:acme/widgets&q=retry"), baseline),
+    ).toBe(false);
+    expect(
+      panelUsesNarrowing(
+        panel,
+        q("f=repo:any:acme/widgets&f=state:any:open"),
+        baseline,
+      ),
+    ).toBe(false);
+    expect(panelUsesNarrowing(panel, q("f=created:within:30"))).toBe(false);
+    expect(
+      panelUsesNarrowing(
+        panel,
+        q("f=repo:any:acme/widgets&f=author:any:ada"),
+        baseline,
+      ),
+    ).toBe(true);
+    expect(
+      panelUsesNarrowing(
+        panel,
+        q("f=repo:any:acme/widgets&f=created:after:2026-01-01"),
+        baseline,
+      ),
+    ).toBe(true);
+    expect(
+      panelUsesNarrowing(panel, q("f=repo:any:acme/gadgets"), baseline),
+    ).toBe(true);
+  });
 });
 
 describe("panelGanttView", () => {

@@ -22,7 +22,10 @@ import {
 } from "@mui/material";
 import { serverPath } from "../CapabilityServersPanel.jsx";
 import SecretsPanel from "../SecretsPanel.jsx";
-import SettingsCard, { settingHints } from "./SettingsCard.jsx";
+import SettingsCard, {
+  ReadOnlyFieldset,
+  settingHints,
+} from "./SettingsCard.jsx";
 import { identifierField } from "../../identifierField.js";
 import { ConfigManagedNotice } from "../ConfigRepoLink.jsx";
 
@@ -72,14 +75,12 @@ export default function CredentialsSection({ s, claimedSecrets }) {
           secrets grain stores.
         </Typography>
         <>
-          <Box
-            component="fieldset"
-            // Config-managed grain_config fields: refused by the API
-            // while settings are locked as well as in external mode
-            // (settings-mutability.spec.md D-2). The secrets below
-            // stay writable either way.
+          {/* Config-managed grain_config fields: refused by the API while
+              settings are locked as well as in external mode
+              (settings-mutability.spec.md D-2). The secrets below stay
+              writable either way. */}
+          <ReadOnlyFieldset
             disabled={Boolean(readOnly) || Boolean(s.configLocked)}
-            sx={{ border: 0, p: 0, m: 0, minInlineSize: 0 }}
           >
             {!readOnly && s.configLocked && (
               <ConfigManagedNotice
@@ -206,7 +207,7 @@ export default function CredentialsSection({ s, claimedSecrets }) {
               fullWidth
               margin="normal"
             />
-          </Box>
+          </ReadOnlyFieldset>
 
           <SecretsPanel
             claimed={claimedSecrets}
