@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -475,6 +476,48 @@ func (s *Server) admitVerifiedPrincipal(ctx context.Context, id VerifiedIdentity
 		slot.role = resolveAccessRoles(normalizeIdentityEmail(id.Email), roles)
 	}
 	return nil
+}
+
+// externalTokenOwnerCap refuses an external agent token wider than its
+// owner's current role, so a gma_ token issued while its owner held
+// grain/operator stops working when the owner is moved to a narrower role
+// (docs/test-runs/2026-11-07-rbac-roles.md F2). It returns the HTTP status
+// to refuse with, or nil. An owner the allowlist does not match is left as
+// before; a failed group lookup that could narrow the owner refuses.
+func (s *Server) externalTokenOwnerCap(ctx context.Context, tok *model.ExternalAgentToken) (int, error) {
+	owner := tok.OwnerPrincipal()
+	if owner == nil || owner.Kind != model.PrincipalHuman {
+		return 0, nil
+	}
+	email := normalizeIdentityEmail(owner.ID)
+	roles, err := s.allowedPrincipalRoles(ctx, VerifiedIdentity{Email: email, Sub: email, Kind: model.PrincipalHuman}, true)
+	if err != nil {
+		var groupErr *groupAllowlistRefusalError
+		if errors.As(err, &groupErr) {
+			// Groups hold email addresses: an owner that is not one --
+			// the deployment's local account, which a token issued
+			// without an owner acts for -- is in none of them, so a
+			// failed lookup cannot be hiding a role it holds.
+			if !strings.Contains(email, "@") {
+				return 0, nil
+			}
+			return http.StatusForbidden, fmt.Errorf("external agent token %s acts for %s, whose role cannot be checked: %s", tok.Name, email, groupErr.public)
+		}
+		return 0, nil
+	}
+	ownerAR := resolveAccessRoles(email, roles)
+	if ownerAR.Full {
+		return 0, nil
+	}
+	_, set, _, err := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos)
+	if err != nil {
+		return 0, nil
+	}
+	tokAR := &accessRole{Who: "external:" + tok.Name, set: set, deny: map[APIScope]bool{}}
+	if err := ownerAR.noWiderThan(tokAR); err != nil {
+		return http.StatusForbidden, fmt.Errorf("external agent token %s is wider than its owner's current role: %v; re-issue it within %s", tok.Name, err, strings.Join(ownerAR.Roles, ", "))
+	}
+	return 0, nil
 }
 
 // roleGate wraps one route: a verified session is answered only within

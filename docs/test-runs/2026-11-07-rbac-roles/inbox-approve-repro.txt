@@ -1,0 +1,10 @@
+# Build 840f8af (before F6/F7 fix), live daemon behind tests/iap/iapsim.go,
+# Chromium at 1440x900 signed in through /_iapsim/login, clicking the first
+# enabled "Approve" on /inbox:
+{"email":"vic@example.com","approveEnabled":true,"posts":["403 /api/tasks/2/approve"],"toast":["vic@example.com (role grain/viewer) holds no scope tasks:admin, which POST /api/tasks/{id}/approve needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)"],"proposedBefore":5,"proposedAfter":5}
+{"email":"dana@example.com","approveEnabled":true,"posts":["403 /api/tasks/2/approve"],"toast":["dana@example.com (role grain/contributor) holds no scope tasks:admin, which POST /api/tasks/{id}/approve needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)"],"proposedBefore":5,"proposedAfter":5}
+# After the fix the same button is disabled (Playwright: toBeDisabled) and its
+# wrapper's tooltip reads "Needs tasks:admin, which your role grain/viewer does
+# not grant."
+# after: {"email":"vic@example.com","approveEnabled":false,"posts":[],"toast":[],"proposedBefore":5,"proposedAfter":5}
+# after: {"email":"dana@example.com","approveEnabled":false,"posts":[],"toast":[],"proposedBefore":5,"proposedAfter":5}
