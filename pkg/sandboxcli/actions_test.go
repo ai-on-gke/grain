@@ -523,3 +523,46 @@ func TestQuarantineSaysWhenItsFollowUpWasNotFiled(t *testing.T) {
 		t.Errorf("quarantine.yml = %q, %v", raw, err)
 	}
 }
+
+// grain pr threads reads /cli/pr/threads -- a GET, with ?unresolved=1 for
+// --unresolved -- and prints what the proxy answers.
+func TestGrainPRThreadsListsTheReviewThreads(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Method+" "+r.URL.RequestURI())
+		mu.Unlock()
+		if r.URL.Path != "/cli/pr/threads" {
+			http.Error(w, "no such route", http.StatusNotFound)
+			return
+		}
+		_, _ = io.WriteString(w, "Unresolved review threads on #120: 1 of 5\n\nthread PullRequestReviewThread157399 (unresolved)\n"+
+			"  comment 234726 by @code-review[bot] on scripts/run.sh:9\n    This runs in a subshell.\n")
+	}))
+	defer srv.Close()
+
+	out, errOut, code := runActionCLI(t, srv, nil, "pr", "threads", "--unresolved")
+	if code != 0 || !strings.Contains(out, "thread PullRequestReviewThread157399 (unresolved)") ||
+		!strings.Contains(out, "comment 234726 by @code-review[bot] on scripts/run.sh:9") {
+		t.Fatalf("pr threads --unresolved: code=%d out=%q err=%q", code, out, errOut)
+	}
+	if _, errOut, code := runActionCLI(t, srv, nil, "pr", "threads"); code != 0 {
+		t.Fatalf("pr threads: code=%d err=%q", code, errOut)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"GET /cli/pr/threads?unresolved=1", "GET /cli/pr/threads"}
+	var got []string
+	for _, s := range seen {
+		if strings.Contains(s, "/cli/pr/threads") {
+			got = append(got, s)
+		}
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("requests = %q, want %q", got, want)
+	}
+	if out, _, code := runActionCLI(t, srv, nil, "pr", "threads", "--help"); code != 0 || !strings.Contains(out, "--unresolved") {
+		t.Errorf("pr threads --help: code=%d out=%q", code, out)
+	}
+}

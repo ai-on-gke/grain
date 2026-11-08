@@ -120,6 +120,7 @@ var toolActivityNotes = map[string]string{
 	"base_branch_status":            "checking CI on the base branch",
 	"reply_to_pull_request_comment": "answering a review comment on its pull request",
 	"resolve_review_thread":         "resolving a review thread on its pull request",
+	"list_review_threads":           "reading the review threads on its pull request",
 	"get_ci_log":                    "reading a CI log",
 	"get_ci_artifact":               "downloading a CI artifact",
 	"list_ci_runs":                  "looking through recent CI runs",
