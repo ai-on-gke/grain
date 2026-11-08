@@ -225,6 +225,11 @@ func (s *Server) handleAdminSetDelegatingAppDisabled(w http.ResponseWriter, r *h
 	action := "admin_delegating_app_enable"
 	if req.Disabled {
 		action = "admin_delegating_app_disable"
+		// Drop this replica's cached assertions minted for the disabled app now,
+		// rather than letting them live out the 30s cache.
+		if inv, ok := s.signer.(interface{ InvalidateApp(string) }); ok {
+			inv.InvalidateApp(name)
+		}
 	}
 	_ = s.store.RecordAudit(r.Context(), caller.Email, action, "", "", map[string]any{"app": name})
 	app, err := s.store.GetDelegatingApp(r.Context(), name)
@@ -340,6 +345,11 @@ func (s *Server) handleCreateDelegationGrant(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		s.writeStoreError(w, err)
 		return
+	}
+	// Upsert reuses the existing live grant ID when narrowing entries or access;
+	// evict any cached assertions minted under the previous scope on this replica.
+	if inv, ok := s.signer.(interface{ InvalidateGrant(string) }); ok {
+		inv.InvalidateGrant(grant.ID)
 	}
 	_ = s.store.RecordAudit(r.Context(), caller.Email, "delegation_grant_create", "", "", map[string]any{
 		"app":      grant.App,

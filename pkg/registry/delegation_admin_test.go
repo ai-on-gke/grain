@@ -283,7 +283,29 @@ func TestDelegatingAppAdminAPIAndPersonGrants(t *testing.T) {
 		t.Fatalf("alice's grant stopped working after refused revokes: %v", err)
 	}
 
-	// 6. Disabling the app stops it acting and stops new grants; enabling restores it.
+	// 6. Disabling the app stops it acting, stops new grants, and drops cached
+	// assertions for that app on the local replica; enabling restores it.
+	claims := RegistryClaims{
+		Audience: "https://alice-vm.instances.example.com",
+		Subject:  alice, Email: alice, Kind: "human",
+		Actor: &DelegationActor{Sub: planner, Kind: "service", App: "planner", Grant: grant.ID, Access: "read"},
+	}
+	otherAppClaims := RegistryClaims{
+		Audience: "https://alice-vm.instances.example.com",
+		Subject:  alice, Email: alice, Kind: "human",
+		Actor: &DelegationActor{Sub: "triage@proj.iam.gserviceaccount.com", Kind: "service", App: "triage", Grant: "dlg_other", Access: "read"},
+	}
+	preDisableTok, err := signer.SignAssertion(ctx, claims)
+	if err != nil {
+		t.Fatalf("SignAssertion before disable: %v", err)
+	}
+	otherAppTok, err := signer.SignAssertion(ctx, otherAppClaims)
+	if err != nil {
+		t.Fatalf("SignAssertion otherAppClaims: %v", err)
+	}
+	if again, _ := signer.SignAssertion(ctx, claims); again != preDisableTok {
+		t.Fatal("expected a cache hit before app disable")
+	}
 	if code, body := doDelegationJSON(t, h, http.MethodPatch, "/api/admin/delegating-apps/planner", alice, api.SetDelegatingAppDisabledRequest{Disabled: true}); code != http.StatusForbidden {
 		t.Fatalf("alice disabling app = %d %s, want 403", code, body)
 	}
@@ -297,6 +319,12 @@ func TestDelegatingAppAdminAPIAndPersonGrants(t *testing.T) {
 	if _, err := pol.AuthorizeOnBehalfOf(ctx, planner, alice, "alice-vm"); refusalReason(err) != "app_disabled" {
 		t.Fatalf("disabled app: err=%v, want app_disabled", err)
 	}
+	if afterDisable, _ := signer.SignAssertion(ctx, claims); afterDisable == preDisableTok {
+		t.Fatal("disabling the app left its cached assertion in place on the local replica")
+	}
+	if otherAfterDisable, _ := signer.SignAssertion(ctx, otherAppClaims); otherAfterDisable != otherAppTok {
+		t.Fatal("disabling planner evicted another app's cached assertion")
+	}
 	if code, body := doDelegationJSON(t, h, http.MethodPost, "/api/delegation-grants", bob,
 		api.CreateDelegationGrantRequest{App: "planner", Entries: []string{"*"}}); code != http.StatusForbidden {
 		t.Fatalf("grant to disabled app = %d %s, want 403", code, body)
@@ -307,11 +335,6 @@ func TestDelegatingAppAdminAPIAndPersonGrants(t *testing.T) {
 
 	// 7. Alice revokes her own grant by app name; it shows only with include_revoked,
 	// and this replica's cached assertions minted under it are dropped at once.
-	claims := RegistryClaims{
-		Audience: "https://alice-vm.instances.example.com",
-		Subject:  alice, Email: alice, Kind: "human",
-		Actor: &DelegationActor{Sub: planner, Kind: "service", App: "planner", Grant: grant.ID, Access: "read"},
-	}
 	cachedTok, err := signer.SignAssertion(ctx, claims)
 	if err != nil {
 		t.Fatalf("SignAssertion: %v", err)
