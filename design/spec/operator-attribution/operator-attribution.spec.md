@@ -194,7 +194,12 @@ exception is the in-process CLI (`grain create -author`, no
   This is what a run's writes are "for".
 - *External agent token.* The on-behalf-of is the verified human who
   minted the token, recorded on the token row when it is created
-  (`CreateExternalAgentToken`).
+  (`CreateExternalAgentToken`). A token minted under the access code (or
+  over loopback, or in-process) naming no owner has none: it never
+  defaults to the deployment's own actor (§6.3). An owner such an issuer
+  names explicitly (`external-cli.spec.md#XC-14`) is recorded with that
+  issuer's source (`owner_source`), so the on-behalf-of is not
+  `Verified()`.
 
 2.5. **No verifier configured.** With no IAP audience and no registered
 verifier, step 3 of §2.1 never fires. Every human write is
