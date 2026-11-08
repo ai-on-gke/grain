@@ -62,7 +62,7 @@ func TestCapabilityEscalationNoteNamesEachCapability(t *testing.T) {
 // existing service account, x-grain-person-granted in its server's
 // schema) is held for a person even when the proposer holds the very same
 // grant -- and the note says so, rather than that the proposer does not
-// hold it. Walked live in docs/test-runs/2026-11-08-gcp-token-mode.md,
+// hold it. Walked live in docs/test-runs/2026-11-08-gcp-token-mode-containers.md,
 // where the old note told the person deciding that task 9 "does not hold
 // itself" the set it was running with.
 func TestPersonGrantedEscalationIsNotSaidToBeUnheld(t *testing.T) {
@@ -94,7 +94,7 @@ func TestPersonGrantedEscalationIsNotSaidToBeUnheld(t *testing.T) {
 	}
 	note := model.ProposalEscalationNote("9", child, escalated)
 	personal := "this proposal asked for `" + held + "`, which only a person may grant"
-	if !strings.Contains(note, personal) || !strings.Contains(note, "whether or not it holds it itself") {
+	if !strings.Contains(note, personal) || !strings.Contains(note, "whether or not task 9, which proposed it, holds it") {
 		t.Errorf("note = %q, want the held person-granted set explained as a person's to grant", note)
 	}
 	if strings.Contains(note, held+"`, which task 9, which proposed it, does not hold itself") ||

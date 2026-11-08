@@ -1,0 +1,23 @@
+{
+  "default_identity": "walk-admin@walk-proj.iam.gserviceaccount.com",
+  "accounts": [
+    {
+      "project": "walk-proj",
+      "email": "deployer@walk-proj.iam.gserviceaccount.com",
+      "description": "made by hand, before grain"
+    },
+    {
+      "project": "walk-proj",
+      "email": "log-reader@walk-proj.iam.gserviceaccount.com",
+      "description": "made by hand, before grain"
+    }
+  ],
+  "bindings": [
+    {
+      "resource": "projects/walk-proj",
+      "role": "roles/run.admin",
+      "member": "serviceAccount:deployer@walk-proj.iam.gserviceaccount.com"
+    }
+  ],
+  "clock_file": "/home/debian/walk/gcp-clock"
+}

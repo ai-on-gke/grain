@@ -21,8 +21,8 @@
 # and no base branch (the parent whose proposals AutoSubmits judges).
 #
 # Built beforehand (from the checkout):
-#   go build -o ~/walk/bin/gcpwalk docs/test-runs/2026-11-08-gcp-token-mode/gcpwalk.go
-#   cp docs/test-runs/2026-11-08-gcp-token-mode/{fake-agy.sh,step-gcp-token.sh,exchange.sh,mcp-propose.py} ~/walk/
+#   go build -o ~/walk/bin/gcpwalk docs/test-runs/2026-11-08-gcp-token-mode-containers/gcpwalk.go
+#   cp docs/test-runs/2026-11-08-gcp-token-mode-containers/{fake-agy.sh,step-gcp-token.sh,exchange.sh,mcp-propose.py} ~/walk/
 #   (fake-agy.sh -> ~/walk/fake-agy, step-gcp-token.sh -> ~/walk/step.sh)
 # The daemon, with nftables installed so container sandboxes are fenced
 # (an unfenced container refuses every external grant):

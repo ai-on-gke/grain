@@ -1748,7 +1748,7 @@ func (c *Client) ciCapabilityIDs() []string {
 			// release server's) is offered as the grant it became,
 			// which is what its stored rows were rewritten to.
 			if _, ok := model.CIGrantRuleFor(spec.Name); ok {
-				ids = append(ids, model.CanonicalLegacyGrant(spec.Name))
+				ids = append(ids, model.CanonicalCIGrant(spec.Name))
 				continue
 			}
 			ids = append(ids, spec.Name)
@@ -1779,9 +1779,11 @@ func (c *Client) cleanRepoCICapabilities(ids []string) ([]string, error) {
 	for _, id := range ids {
 		canonicalID := id
 		if _, ok := model.CIGrantRuleFor(id); ok {
-			// The release server's methods, in either spelling: granted
-			// by this list, recorded as the method (schema 101).
-			canonicalID = model.CanonicalLegacyGrant(strings.TrimSpace(id))
+			// Methods declaring a CI grant rule (the release server's,
+			// schema 101, and github#sandbox-repo, 124) in any spelling --
+			// retired name, bare or case-varied reference: granted by this
+			// list, recorded as <ref>={}.
+			canonicalID = model.CanonicalCIGrant(id)
 		} else if target, ok := model.RepoReadTarget(id); ok {
 			canonicalID = model.RepoReadCapability(target)
 		} else if target, ok := model.RepoWriteTarget(id); ok {

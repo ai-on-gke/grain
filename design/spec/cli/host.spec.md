@@ -1284,6 +1284,7 @@ Self-registers a grain deployment in a grain registry (`design/design/registry.d
 - `register` creates or updates a `connected` entry on the registry (`POST /api/entries` or `PATCH /api/entries/{name}` / `POST /api/entries/{name}/credentials/rotate`), updates `Registry` in `POST /api/settings` (clearing any previous registry URL before swapping credentials when retargeting), stores any minted `grc_...` registration credential in the daemon's secret store under `registry-registration-token` (`PUT /api/secrets/registry-registration-token/value`), and runs an immediate heartbeat via `POST /api/registry/heartbeat`. `-standalone` registers on the registry without contacting a local daemon and prints the `-registry-connect` configuration snippet.
 - `unregister` deletes the entry on the registry (`DELETE /api/entries/{name}` unless `-keep-remote` is given), clears `Registry` in `POST /api/settings`, and deletes `registry-registration-token` from the daemon's secret store.
 - `update`, `scopes`, `rotate-credential`, `upgrade`, `resize`, `delete`, `restore`, `transfer`, and `accept-transfer` manage entry catalog fields, declared scopes, `grc_...` credentials, VM lifecycle replacements, soft-deletion/restoration, and two-step ownership transfers.
+- `stop` and `start` call `POST /api/entries/{name}/stop` and `POST /api/entries/{name}/start` on a hosted `instance` entry the caller manages: `stop` moves it to `stopping` → `stopped` (no VM, externalised state kept) and `start` boots it again (a visit to a stopped entry also wakes it). Both are human-only on the registry (a delegating app is refused), take the same target flags as `upgrade`, and print the entry's new lifecycle `state`; a `connected` entry is refused with `invalid_entry_kind`.
 
 **Scope:** `status` requires `api:read`; `register` and `unregister` require `admin` on the local daemon (unless `-standalone` is set); remote registry control-plane subcommands authenticate directly to `-registry-url` with OIDC or `-registry-token`.
 
@@ -1362,6 +1363,7 @@ _No flags._
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-allow-ssh` | bool | `true` |  | enable OS Login break-glass SSH access |
+| `-disk-gb` | int |  |  | boot disk size in GB (20..4000; defaults to shape default) |
 | `-display-name` | string |  |  | human-readable display name in the registry directory |
 | `-listed` | bool |  |  | include this entry in default registry directory listings |
 | `-name` | string |  |  | entry name (defaults to a random generated name when omitted) |
@@ -1479,6 +1481,7 @@ _No flags._
 <!-- BEGIN GENERATED FLAGS: grain registry resize -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
+| `-disk-gb` | int |  |  | boot disk size in GB (20..4000; defaults to shape default) |
 | `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
 | `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
 | `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
@@ -1502,6 +1505,26 @@ _No flags._
 #### `grain registry restore`
 
 <!-- BEGIN GENERATED FLAGS: grain registry restore -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+<!-- END GENERATED FLAGS -->
+
+#### `grain registry stop`
+
+<!-- BEGIN GENERATED FLAGS: grain registry stop -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+<!-- END GENERATED FLAGS -->
+
+#### `grain registry start`
+
+<!-- BEGIN GENERATED FLAGS: grain registry start -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
@@ -1620,7 +1643,7 @@ _No flags._
 | `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/registry_test.go`: `TestRegistryCLIRegisterStatusUnregister`, `TestRegistryCLISubcommands`, `TestDaemonRegistryFlags`; `pkg/cli/registry_delegation_test.go`: `TestRegistryCLIDelegatingAppsAndGrants`.
+**Pinned by:** `pkg/cli/registry_test.go`: `TestRegistryCLIRegisterStatusUnregister`, `TestRegistryCLISubcommands`, `TestRegistryCLIStopStart`, `TestDaemonRegistryFlags`; `pkg/cli/registry_delegation_test.go`: `TestRegistryCLIDelegatingAppsAndGrants`.
 
 ---
 
@@ -2558,3 +2581,4 @@ _No flags._
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/sandboximage_test.go`: `TestSandboxImageCommandPrintsDefaultAndBase`, `TestSandboxImageContractSubcommand`, `TestSandboxImageCheckSubcommand`.
+

@@ -1,0 +1,60 @@
+=== [2A] Legacy GHCR -> Docker Hub alias table, live daemon transition & Hub v2 prune ===
+PASS ResolveLegacyRepository(ghcr.io/bwsalmon/grain/grain) -> docker.io/grainai/grain
+PASS IsLegacyRepository(ghcr.io/bwsalmon/grain/grain) -> true
+PASS ResolveLegacyRepository(ghcr.io/ai-on-gke/grain/grain) -> docker.io/grainai/grain
+PASS IsLegacyRepository(ghcr.io/ai-on-gke/grain/grain) -> true
+PASS ResolveLegacyRepository(ghcr.io/bwsalmon/grain/guest) -> docker.io/grainai/sandbox
+PASS IsLegacyRepository(ghcr.io/bwsalmon/grain/guest) -> true
+PASS ResolveLegacyRepository(ghcr.io/bwsalmon/grain/granule-sandbox) -> docker.io/grainai/sandbox
+PASS IsLegacyRepository(ghcr.io/bwsalmon/grain/granule-sandbox) -> true
+PASS ResolveLegacyRepository(ghcr.io/ai-on-gke/grain/guest) -> docker.io/grainai/sandbox
+PASS IsLegacyRepository(ghcr.io/ai-on-gke/grain/guest) -> true
+PASS ResolveLegacyRepository(ghcr.io/bwsalmon/grain/guest-base) -> docker.io/grainai/sandbox-base
+PASS IsLegacyRepository(ghcr.io/bwsalmon/grain/guest-base) -> true
+PASS ResolveLegacyRepository(ghcr.io/bwsalmon/grain/k8s-sandbox) -> docker.io/grainai/sandbox-k8s
+PASS IsLegacyRepository(ghcr.io/bwsalmon/grain/k8s-sandbox) -> true
+PASS ResolveLegacyRepository(ghcr.io/ai-on-gke/grain/k8s-sandbox) -> docker.io/grainai/sandbox-k8s
+PASS IsLegacyRepository(ghcr.io/ai-on-gke/grain/k8s-sandbox) -> true
+PASS ResolveLegacyRepository(ghcr.io/bwsalmon/grain/k8s-sandbox-base) -> docker.io/grainai/sandbox-k8s-base
+PASS IsLegacyRepository(ghcr.io/bwsalmon/grain/k8s-sandbox-base) -> true
+PASS ResolveLegacyRepository(grainai/grain) -> docker.io/grainai/grain
+PASS IsLegacyRepository(grainai/grain) -> false
+PASS ResolveLegacyRepository(index.docker.io/grainai/registry) -> docker.io/grainai/registry
+PASS IsLegacyRepository(index.docker.io/grainai/registry) -> false
+PASS ResolveLegacyRepository(registry-1.docker.io/grainai/sandbox) -> docker.io/grainai/sandbox
+PASS IsLegacyRepository(registry-1.docker.io/grainai/sandbox) -> false
+PASS ResolveLegacyRepository(us-docker.pkg.dev/my-proj/containers/grain) -> us-docker.pkg.dev/my-proj/containers/grain
+PASS IsLegacyRepository(us-docker.pkg.dev/my-proj/containers/grain) -> false
+PASS ResolveLegacyRepository(127.0.0.1:4281/custom/grain) -> 127.0.0.1:4281/custom/grain
+PASS IsLegacyRepository(127.0.0.1:4281/custom/grain) -> false
+PASS ResolveLegacyRepository(ghcr.io/example-org/private-grain) -> ghcr.io/example-org/private-grain
+PASS IsLegacyRepository(ghcr.io/example-org/private-grain) -> false
+PASS ResolveLegacyImageRef(unpinned).ref -> docker.io/grainai/sandbox:v3.1.0
+PASS ResolveLegacyImageRef(unpinned).changed -> true
+PASS ResolveLegacyImageRef(digest-pinned).ref -> ghcr.io/bwsalmon/grain/guest:v3.1.0@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+PASS ResolveLegacyImageRef(digest-pinned).changed -> false
+PASS ResolveLegacyImageRef(custom-private).ref -> us-docker.pkg.dev/my-proj/containers/grain:latest
+PASS ResolveLegacyImageRef(custom-private).changed -> false
+PASS Upgrader(legacy ghcr).Running().Ref -> ghcr.io/ai-on-gke/grain/grain:latest
+PASS Upgrader(legacy ghcr).EffectiveRepository() -> docker.io/grainai/grain
+PASS Upgrader(custom private).Running().Ref -> us-docker.pkg.dev/my-proj/containers/grain:latest
+PASS Upgrader(custom private).EffectiveRepository() -> us-docker.pkg.dev/my-proj/containers/grain
+ALL ITEM 2 ALIAS & UPGRADE TRANSITION CHECKS PASSED
+PASS scripts/release-image-repos.sh canonical & legacy mapping checks
+PASS live grain daemon /api/upgrade transitions ghcr.io/ai-on-gke/grain/grain -> docker.io/grainai/grain
+PASS live grain daemon /api/upgrade preserves explicit custom registry us-docker.pkg.dev/my-proj/containers/grain
+ok  	github.com/ai-on-gke/grain/cmd/ghcr-prune	0.015s
+PASS cmd/ghcr-prune Docker Hub v2 API & package coverage
+=== [2B] Isolated DOCKER_CONFIG (#747) & Live OCI v2 Promotion of grain + grain-registry (#780) ===
+PASS #747: docker login to docker.io isolated in ephemeral DOCKER_CONFIG; $HOME/.docker/config.json untouched
+PASS #780 fail-closed: missing registry:sha-2b64460 rejected before moving any release tags
+PASS #780 + Bug F4: grain & registry rebuilt with RELEASE=v1.5.0, signed, and carbon-copied to :latest and :sha-2b64460
+=== [2C] Pre-Docker-Hub GHCR Promotion (#753) & Fail-Closed Digest/Signature Checks ===
+PASS #753 fail-closed (1/4): missing GHCR source rejected with pre-Docker-Hub diagnostic
+PASS #753 fail-closed (2/4): unsigned GHCR source rejected under REQUIRE_IMAGE_SIGNING=true
+PASS #753 fail-closed (3/4): unusable signing key rejected cleanly
+PASS #753 fail-closed (4/4): digest mismatch rejected and zero release tags moved
+PASS #753 happy path: all 5 signed pre-Docker-Hub GHCR images verified, carbon-copied by digest, and re-signed on target Hub without rebuilding stamped grain:v3.1.0
+=== [2D] Verify /home/debian/work git config hygiene ===
+PASS /home/debian/work/.git/config clean
+ALL §9 ITEM 2 CHECKS PASSED

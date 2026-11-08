@@ -319,12 +319,63 @@ func Covers(parent []Grant, child Grant) bool {
 	case GrantByAgent:
 		return true
 	}
+	child = withArgDefaults(child)
 	for _, p := range parent {
-		if p.Equal(child) {
+		if withArgDefaults(p).Equal(child) {
 			return true
 		}
 	}
 	return false
+}
+
+// argDefaults are, by canonical capability_id#method, the defaults of the
+// top-level arguments each method last advertised (NoteArgDefaults).
+var argDefaults sync.Map
+
+// NoteArgDefaults records, from each discovered method's argument schema,
+// the defaults of its top-level arguments, replacing what capabilityID
+// advertised before. Discovery calls it beside NotePersonGrantedArgs.
+func NoteArgDefaults(capabilityID string, methods map[string]*MethodInfo) {
+	for name, m := range methods {
+		key := capabilityID + "#" + name
+		defs := map[string]any{}
+		props, _ := m.ArgsSchema["properties"].(map[string]any)
+		for arg, raw := range props {
+			ps, _ := raw.(map[string]any)
+			if def, ok := ps["default"]; ok {
+				defs[arg] = def
+			}
+		}
+		if len(defs) == 0 {
+			argDefaults.Delete(key)
+			continue
+		}
+		argDefaults.Store(key, defs)
+	}
+}
+
+// withArgDefaults is g with every top-level argument it leaves out set to
+// its method's default, which is what the grant gets when it is minted:
+// so a grant string as an agent writes it, {"permission_set": "logs"},
+// is the grant recorded for its parent, {"permission_set": "logs",
+// "primary": true}, rather than an escalation (2026-11-08 gcp token-mode
+// walk). A method discovery has not seen is left as it is.
+func withArgDefaults(g Grant) Grant {
+	v, ok := argDefaults.Load(g.Ref.CapabilityID + "#" + g.Ref.Method)
+	if !ok {
+		return g
+	}
+	args := make(map[string]any, len(g.Args))
+	for k, a := range g.Args {
+		args[k] = a
+	}
+	for arg, def := range v.(map[string]any) {
+		if _, ok := args[arg]; !ok {
+			args[arg] = def
+		}
+	}
+	g.Args = args
+	return g
 }
 
 // Uncovered lists, in canonical-reference order, the child grants none of

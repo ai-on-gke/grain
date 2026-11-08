@@ -1,0 +1,16 @@
+=== 1. forge_download MCP confinement checks (553689d1) ===
+PASS (a) refused non-grain-release-asset-* filename
+2026/11/07 23:15:48 gitproxy: `forgecli api --method GET repos/acme/grain/releases/assets/42` stopped after 11ms: context canceled
+PASS (b) refused missing placeholder without creating file
+2026/11/07 23:15:48 gitproxy: `forgecli api --method GET repos/acme/grain/releases/assets/42` stopped after 11ms: context canceled
+PASS (c) refused symlink placeholder without touching target
+PASS (d) refused symlinked parent directory
+2026/11/07 23:15:48 gitproxy: `forgecli api --method GET repos/acme/grain/releases/assets/42` stopped after 11ms: context canceled
+PASS (e) refused non-empty placeholder
+2026/11/07 23:15:48 gitproxy: `forgecli api --method GET repos/acme/grain/releases/assets/42` stopped after 10ms: context canceled
+PASS (f) refused multi-hardlink placeholder
+2026/11/07 23:15:48 gitproxy: `forgecli api --method GET repos/acme/grain/releases/assets/42` finished in 10ms
+PASS (g) streamed 69 bytes into daemon placeholder (sha256=90adeb9cfdc94552e467966a8ec9b5d484385b50f86adb6ea21b3a05a6c3f6ea)
+=== 2. Dedicated edition release repo bare vX.Y.Z tags vs shared repo edition suffixes (#772) ===
+PASS dedicated edition repo accepts bare vX.Y.Z tags: [v3.2.0 v3.1.0]
+PASS shared repo keeps edition suffix filtering: [v2.9.0-google]

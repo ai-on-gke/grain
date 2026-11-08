@@ -280,6 +280,49 @@ describe("App", () => {
     expect(screen.queryByRole("combobox", { name: "Admission" })).toBeNull();
   });
 
+  // Hosting (model.Schedule.Hosting) sits beside admission, the setting
+  // that replaced the console capability.
+  it("reads and saves a raw schedule's hosting", async () => {
+    const schedule = {
+      id: "sched-1",
+      title: "Nightly dependency bump",
+      description: "",
+      repo: "acme/widgets",
+      base: "",
+      autoMerge: false,
+      recurrence: { kind: "everyNHours", everyNHours: 24 },
+      enabled: true,
+      nextRunAt: "2026-08-29T00:00:00Z",
+    };
+    setupApi(initialTasks, [schedule]);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("Fix bug");
+
+    await user.click(screen.getByRole("button", { name: /^Processes/ }));
+    await user.click(await screen.findByText("Nightly dependency bump"));
+    const select = await screen.findByRole("combobox", { name: "Hosting" });
+    expect(select).toHaveTextContent("Unattended");
+    await user.click(select);
+    await user.click(
+      await screen.findByRole("option", { name: "Interactive console" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(
+        api.mock.calls.find(
+          ([path, opts]) =>
+            path === "/api/schedules/sched-1" && opts?.method === "PATCH",
+        ),
+      ).toBeTruthy(),
+    );
+    const [, opts] = api.mock.calls.find(
+      ([path, o]) => path === "/api/schedules/sched-1" && o?.method === "PATCH",
+    );
+    expect(JSON.parse(opts.body)).toMatchObject({ hosting: "console" });
+  });
+
   it("switches a schedule to every N minutes", async () => {
     const schedule = {
       id: "sched-1",

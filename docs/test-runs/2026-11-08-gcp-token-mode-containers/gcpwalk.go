@@ -28,7 +28,7 @@
 // ahead, GET /now prints it. GET /lifetimes prints the lifetimes gcpfake's
 // generateAccessToken was asked for.
 //
-//	go run docs/test-runs/2026-11-08-gcp-token-mode/gcpwalk.go 127.0.0.1:4260 127.0.0.1:4252 127.0.0.1:4261 <64 hex>
+//	go run docs/test-runs/2026-11-08-gcp-token-mode-containers/gcpwalk.go 127.0.0.1:4260 127.0.0.1:4252 127.0.0.1:4261 <64 hex>
 package main
 
 import (

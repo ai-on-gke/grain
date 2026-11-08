@@ -675,7 +675,8 @@ Actions job's log when given a `gha:` run id. `grain ci wait` and
   - a task in its own proposal lineage: one it proposed or filed over the
     API, or one proposed by any task down that chain, however many hops;
   - a task held for a person: one filed with `hold_for_approval`
-    (`held-for-approval` tag), targeting or writing `grain/config`, or
+    (`hold-requested` tag, recorded whether or not its proposer's
+    permission would have queued it), targeting or writing `grain/config`, or
     targeting a change target that requires a person's approval; one
     carrying a repository-declared `push:` set or ungranted `autoMerge`;
     one holding a grant `settings/capabilities.yml` marks `requires_person`,

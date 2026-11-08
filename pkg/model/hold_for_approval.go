@@ -44,6 +44,25 @@ func HeldForApproval(t Task) bool {
 	return slices.Contains(t.Tags, HeldForApprovalTag)
 }
 
+// HoldRequestedTag marks a proposal whose propose_task call asked for
+// hold_for_approval, whether or not its proposer's permission would have
+// queued it. HeldForApprovalTag is deliberately narrower -- it says a
+// choice was made, so a proposal from a run whose permission covered
+// nothing does not carry it -- but the request is the proposer saying
+// "a person decides this", and that is what the agent approval rail
+// (ui.agentApprovalRail) has to honour: without this tag an agent holding
+// api:tasks:admin or dispatch:write could approve such a proposal for the
+// person it was left for (docs/test-runs/2026-11-07-director-agent-api.md,
+// finding 2). Per call and never inherited, like HeldForApprovalTag.
+const HoldRequestedTag = "hold-requested"
+
+// HoldRequested reports whether t's proposer asked for it to wait for a
+// person (propose_task's hold_for_approval): t carries HoldRequestedTag,
+// or HeldForApprovalTag from before HoldRequestedTag was recorded.
+func HoldRequested(t Task) bool {
+	return HeldForApproval(t) || slices.Contains(t.Tags, HoldRequestedTag)
+}
+
 // HeldForApprovalNote is the line appended to a held proposal's body, in
 // the voice of AutoSubmitLimitNote and for its reason: the person
 // approving it should know a decision was made, and by whom. "" for a
