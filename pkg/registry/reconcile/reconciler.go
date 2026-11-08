@@ -42,6 +42,21 @@ const (
 	DefaultOrphanSweepInterval = 5 * time.Minute
 )
 
+func init() {
+	registry.RegisterReconcilerFactory(func(opts registry.ReconcilerBuildOptions) (registry.BackgroundReconciler, error) {
+		return New(Options{
+			Config:      opts.Config,
+			Store:       opts.Store,
+			Compute:     opts.Compute,
+			Resources:   opts.Resources,
+			ConfigRepos: opts.ConfigRepos,
+			Signer:      opts.Signer,
+			HostCache:   opts.HostCache,
+			HolderID:    opts.HolderID,
+		})
+	})
+}
+
 // HostCacheUpdater is an optional callback notified when an entry's backend placement
 // or lifecycle state changes so the data-plane host cache stays immediately warm.
 type HostCacheUpdater interface {
@@ -1194,7 +1209,10 @@ func (r *Reconciler) createVMForEntry(ctx context.Context, entry *store.EntryRow
 	startupEnv := map[string]string{
 		"GRAIN_ENTRY_NAME":          entry.Name,
 		"GRAIN_REGISTRY_URL":        regURL,
+		"GRAIN_INSTANCE_DOMAIN":     r.cfg.InstanceDomain,
 		"GRAIN_JWKS_URL":            jwksURL,
+		"GRAIN_OWNER_EMAIL":         entry.OwnerEmail,
+		"GRAIN_OWNER_GROUP":         entry.OwnerGroup,
 		"GRAIN_SQL_INSTANCE":        bundle.SQLInstance,
 		"GRAIN_SQL_CONNECTION_NAME": bundle.SQLConnectionName,
 		"GRAIN_SQL_PRIVATE_IP":      bundle.SQLPrivateIP,
@@ -1205,12 +1223,25 @@ func (r *Reconciler) createVMForEntry(ctx context.Context, entry *store.EntryRow
 		"GRAIN_CONFIG_REPO":         configRepoURL,
 		"GRAIN_VERSION":             targetVer,
 	}
+	if bundle.DatabaseUser != "" {
+		startupEnv["GRAIN_DB_USER"] = bundle.DatabaseUser
+	}
+	if bundle.DatabasePassword != "" {
+		startupEnv["GRAIN_DB_PASSWORD"] = bundle.DatabasePassword
+	}
+
+	diskGB := shape.BootDiskGB
+	if entry.BootDiskGB > 0 {
+		diskGB = entry.BootDiskGB
+		shape.BootDiskGB = diskGB
+	}
 
 	return r.compute.CreateInstance(ctx, registry.InstanceSpec{
 		EntryID:        entry.ID,
 		Name:           entry.Name,
 		Zone:           zone,
 		Shape:          shape,
+		BootDiskGB:     diskGB,
 		ServiceAccount: bundle.ServiceAccountEmail,
 		BootImage:      r.cfg.Compute.BootImage,
 		StartupEnv:     startupEnv,
@@ -1224,12 +1255,20 @@ func (r *Reconciler) resolveShape(ctx context.Context, shapeName string) registr
 	if shapeName == "" {
 		shapeName = strings.TrimSpace(r.cfg.Compute.DefaultShape)
 	}
+	var cfgBootDiskType string
+	for _, s := range r.cfg.Compute.Shapes {
+		if s.Name == shapeName {
+			cfgBootDiskType = s.BootDiskType
+			break
+		}
+	}
 	if shapeName != "" && r.store != nil {
 		if row, err := r.store.GetShape(ctx, shapeName); err == nil && row != nil {
 			return registry.Shape{
 				Name:         row.Name,
 				MachineType:  row.MachineType,
 				BootDiskGB:   row.BootDiskGB,
+				BootDiskType: cfgBootDiskType,
 				BootDiskIOPS: row.BootDiskIOPS,
 				QuotaUnits:   row.QuotaUnits,
 				Description:  row.Description,

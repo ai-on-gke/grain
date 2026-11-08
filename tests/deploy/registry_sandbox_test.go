@@ -200,14 +200,69 @@ func TestRegistrySandboxScriptFlagValidation(t *testing.T) {
 			args:   []string{"--project", "my-sandbox", "--admin", "alice@example.com", "--image", "us-docker.pkg.dev/my-sandbox/grain/grain-registry:tag;id"},
 		},
 		{
+			name:   "up rejects shell-expanding hosted-daemon-image ref",
+			script: "up.sh",
+			args:   []string{"--project", "my-sandbox", "--admin", "alice@example.com", "--hosted-daemon-image", "docker.io/grainai/grain:main;id"},
+		},
+		{
 			name:   "up rejects missing option value",
 			script: "up.sh",
 			args:   []string{"--project"},
 		},
 		{
+			name:   "instance-ctl rejects missing action",
+			script: "instance-ctl.sh",
+			args:   []string{"--project", "my-sandbox", "--entry", "alice-vm"},
+		},
+		{
+			name:   "instance-ctl rejects malformed project",
+			script: "instance-ctl.sh",
+			args:   []string{"create", "--project", "../bad", "--entry", "alice-vm", "--owner", "alice@example.com"},
+		},
+		{
+			name:   "instance-ctl rejects malformed entry",
+			script: "instance-ctl.sh",
+			args:   []string{"create", "--project", "my-sandbox", "--entry", "../bad", "--owner", "alice@example.com"},
+		},
+		{
+			name:   "instance-ctl rejects shell-expanding owner",
+			script: "instance-ctl.sh",
+			args:   []string{"create", "--project", "my-sandbox", "--entry", "alice-vm", "--owner", "alice$(id)@example.com"},
+		},
+		{
+			name:   "instance-ctl rejects disk-gb below minimum",
+			script: "instance-ctl.sh",
+			args:   []string{"create", "--project", "my-sandbox", "--entry", "alice-vm", "--owner", "alice@example.com", "--disk-gb", "10"},
+		},
+		{
+			name:   "instance-ctl rejects disk-gb above maximum",
+			script: "instance-ctl.sh",
+			args:   []string{"create", "--project", "my-sandbox", "--entry", "alice-vm", "--owner", "alice@example.com", "--disk-gb", "5000"},
+		},
+		{
+			name:   "instance-ctl rejects missing option value",
+			script: "instance-ctl.sh",
+			args:   []string{"status", "--project"},
+		},
+		{
 			name:   "configure-oauth rejects missing option value",
 			script: "configure-oauth.sh",
 			args:   []string{"--project"},
+		},
+		{
+			name:   "configure-oauth rejects malformed project",
+			script: "configure-oauth.sh",
+			args:   []string{"--project", "bad/project", "--client-id", "1234.apps.googleusercontent.com"},
+		},
+		{
+			name:   "configure-oauth rejects malformed prefix",
+			script: "configure-oauth.sh",
+			args:   []string{"--project", "my-sandbox", "--prefix", "BAD_PREFIX", "--client-id", "1234.apps.googleusercontent.com"},
+		},
+		{
+			name:   "configure-oauth rejects malformed client-id",
+			script: "configure-oauth.sh",
+			args:   []string{"--project", "my-sandbox", "--client-id", "bad-client-id"},
 		},
 		{
 			name:   "daemon-up rejects malformed project",
@@ -375,5 +430,173 @@ exit 0
 				t.Fatalf("%s invoked terraform or mutated GCS despite cross-project state bucket", tc.script)
 			}
 		})
+	}
+}
+
+func TestConfigureOAuthFlagsFileSecretPassing(t *testing.T) {
+	sandboxDir := filepath.Join("..", "..", "deploy", "test", "registry-sandbox")
+	fakeBin := t.TempDir()
+	logFile := filepath.Join(fakeBin, "gcloud.log")
+
+	secretVal := "super-sensitive-oauth-secret-xyz123"
+	secretFile := filepath.Join(t.TempDir(), "client_secret.txt")
+	if err := os.WriteFile(secretFile, []byte(secretVal+"\n"), 0o600); err != nil {
+		t.Fatalf("writing secret file: %v", err)
+	}
+
+	writeFake := func(name, content string) {
+		p := filepath.Join(fakeBin, name)
+		if err := os.WriteFile(p, []byte(content), 0o755); err != nil {
+			t.Fatalf("writing fake %s: %v", name, err)
+		}
+	}
+
+	writeFake("gcloud", `#!/usr/bin/env bash
+set -euo pipefail
+
+for arg in "$@"; do
+  if [[ "$arg" == *"`+secretVal+`"* ]]; then
+    echo "ERROR: secret found in argv: $arg" >&2
+    exit 99
+  fi
+done
+
+case "$*" in
+  *"backend-services update"*)
+    flags_file=""
+    for arg in "$@"; do
+      case "$arg" in
+        --flags-file=*)
+          flags_file="${arg#--flags-file=}"
+          ;;
+      esac
+    done
+    if [[ -z "${flags_file}" ]]; then
+      echo "ERROR: missing --flags-file in update command" >&2
+      exit 98
+    fi
+    content="$(cat "${flags_file}")"
+    if [[ "${content}" != *"`+secretVal+`"* ]]; then
+      echo "ERROR: flags file missing secret" >&2
+      exit 97
+    fi
+    if [[ "${content}" != *"test-client.apps.googleusercontent.com"* ]]; then
+      echo "ERROR: flags file missing client id" >&2
+      exit 96
+    fi
+    echo "UPDATED" >> "`+logFile+`"
+    exit 0
+    ;;
+  *"backend-services describe"*"format=value"*)
+    echo "test-client.apps.googleusercontent.com"
+    exit 0
+    ;;
+  *"backend-services describe"*"format=json"*)
+    echo '{"iap":{"enabled":true,"oauth2ClientId":"test-client.apps.googleusercontent.com"}}'
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`)
+
+	env := append(os.Environ(), "PATH="+fakeBin+":"+os.Getenv("PATH"))
+
+	cmd := exec.Command("bash", filepath.Join(sandboxDir, "configure-oauth.sh"),
+		"--project", "my-sandbox",
+		"--client-id", "test-client.apps.googleusercontent.com",
+		"--client-secret-file", secretFile,
+	)
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("configure-oauth.sh failed: %v\n%s", err, out)
+	}
+
+	if !strings.Contains(string(out), "Done. IAP on grain-reg-iap-bs now uses OAuth client test-client.apps.googleusercontent.com") {
+		t.Fatalf("unexpected output: %s", out)
+	}
+
+	logged, err := os.ReadFile(logFile)
+	if err != nil || !strings.Contains(string(logged), "UPDATED") {
+		t.Fatalf("backend-services update was not called as expected, logged: %q (err: %v)", string(logged), err)
+	}
+
+	showCmd := exec.Command("bash", filepath.Join(sandboxDir, "configure-oauth.sh"),
+		"--project", "my-sandbox",
+		"--show",
+	)
+	showCmd.Env = env
+	showOut, err := showCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("configure-oauth.sh --show failed: %v\n%s", err, showOut)
+	}
+	if !strings.Contains(string(showOut), `"oauth2ClientId": "test-client.apps.googleusercontent.com"`) {
+		t.Fatalf("unexpected --show output: %s", showOut)
+	}
+}
+
+// TestRegistrySandboxHostedProjectWiring checks the cross-project hosted VM
+// mode: hosted VMs in a separate project get a peered VPC with CIDR-based
+// firewall rules, and the registry config points compute at that project while
+// keeping per-instance secrets in the registry project.
+func TestRegistrySandboxHostedProjectWiring(t *testing.T) {
+	sandboxDir := filepath.Join("..", "..", "deploy", "test", "registry-sandbox")
+	read := func(name string) string {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(sandboxDir, name))
+		if err != nil {
+			t.Fatalf("reading %s: %v", name, err)
+		}
+		return string(data)
+	}
+
+	hosted := read("hosted.tf")
+	for _, want := range []string{
+		`resource "google_compute_network_peering" "registry_to_hosted"`,
+		`resource "google_compute_network_peering" "hosted_to_registry"`,
+		`resource "google_compute_router_nat" "hosted"`,
+		`source_ranges = ["${google_compute_instance.registry.network_interface[0].network_ip}/32"]`,
+		`source_ranges = [google_compute_subnetwork.hosted[0].ip_cidr_range]`,
+		`"roles/compute.instanceAdmin.v1"`,
+		`"roles/iam.serviceAccountAdmin"`,
+		`"roles/iam.serviceAccountUser"`,
+	} {
+		if !strings.Contains(hosted, want) {
+			t.Errorf("hosted.tf missing %q", want)
+		}
+	}
+	if strings.Contains(hosted, "source_tags") {
+		t.Errorf("hosted.tf must not use source_tags: tags do not match across VPC peering")
+	}
+
+	instance := read("instance.tf")
+	for _, want := range []string{
+		"compute_project_id  = local.hosted_project_id",
+		"secrets_project_id  = trimspace(var.project_id)",
+		"network_name        = local.hosted_network_name",
+		"subnet_name         = local.hosted_subnet_name",
+	} {
+		if !strings.Contains(instance, want) {
+			t.Errorf("instance.tf registry_vm_config missing %q", want)
+		}
+	}
+
+	startup := read(filepath.Join("files", "startup.sh"))
+	for _, want := range []string{
+		"project: ${compute_project_id_json}",
+		"secrets:\n  project: ${secrets_project_id_json}",
+	} {
+		if !strings.Contains(startup, want) {
+			t.Errorf("files/startup.sh missing %q", want)
+		}
+	}
+
+	up := read("up.sh")
+	for _, want := range []string{"--hosted-project)", "--hosted-credentials)", "hosted_project_id: $hosted_project_id"} {
+		if !strings.Contains(up, want) {
+			t.Errorf("up.sh missing %q", want)
+		}
 	}
 }

@@ -229,6 +229,26 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		return err
 	}
 
+	var compute Compute
+	var resources InstanceResources
+	if strings.TrimSpace(cfg.Compute.Provider) != "none" {
+		compute, err = BuildCompute(ctx, cfg.Compute)
+		if err != nil {
+			return err
+		}
+		resources, err = BuildInstanceResources(ctx, cfg)
+		if err != nil {
+			return err
+		}
+	}
+	var configRepos ConfigRepos
+	if strings.TrimSpace(cfg.ConfigRepos.Provider) != "" && strings.TrimSpace(cfg.ConfigRepos.Provider) != "none" {
+		configRepos, err = BuildConfigRepos(ctx, cfg.ConfigRepos)
+		if err != nil {
+			return err
+		}
+	}
+
 	var st *store.Store
 	var isDisabled webauth.DisabledChecker
 	if strings.TrimSpace(cfg.Database.URL) != "" {
@@ -253,6 +273,9 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		if sa, ok := delegation.(interface{ SetStore(*store.Store) }); ok {
 			sa.SetStore(st)
 		}
+		if resStore, ok := resources.(interface{ SetStore(*store.Store) }); ok {
+			resStore.SetStore(st)
+		}
 	}
 
 	admitter, err := webauth.NewAdmitter(webauth.AdmissionConfig{
@@ -276,19 +299,46 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	}
 
 	srv, err := NewServer(ServerOptions{
-		Config:     cfg,
-		Store:      st,
-		Admitter:   admitter,
-		Groups:     groups,
-		Delegation: delegation,
-		Signer:     signer,
-		Transport:  transport,
-		Metrics:    NewMetrics(),
-		ReplicaID:  replicaID,
-		PeerAddr:   peerAddr,
+		Config:      cfg,
+		Store:       st,
+		Admitter:    admitter,
+		Groups:      groups,
+		Delegation:  delegation,
+		Signer:      signer,
+		Transport:   transport,
+		Compute:     compute,
+		Resources:   resources,
+		ConfigRepos: configRepos,
+		Metrics:     NewMetrics(),
+		ReplicaID:   replicaID,
+		PeerAddr:    peerAddr,
 	})
 	if err != nil {
 		return err
+	}
+
+	var rec BackgroundReconciler
+	if st != nil {
+		var hostCache ReconcilerHostCache
+		if srv.Router() != nil {
+			hostCache = srv.Router().HostCache()
+		}
+		rec, err = BuildReconciler(ReconcilerBuildOptions{
+			Config:      cfg,
+			Store:       st,
+			Compute:     compute,
+			Resources:   resources,
+			ConfigRepos: configRepos,
+			Signer:      signer,
+			HostCache:   hostCache,
+			HolderID:    replicaID,
+		})
+		if err != nil {
+			return err
+		}
+		if rec != nil {
+			srv.SetOrphanProvider(rec)
+		}
 	}
 
 	mainLn, err := net.Listen("tcp", cfg.Listen)
@@ -319,6 +369,9 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	}
 
 	srv.StartBackground(ctx)
+	if rec != nil {
+		rec.Start(ctx)
+	}
 
 	mainHTTPSrv := &http.Server{
 		Handler:           srv.Handler(),

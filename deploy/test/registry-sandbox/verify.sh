@@ -193,14 +193,24 @@ else
   fi
   terraform -chdir="${SCRIPT_DIR}" init -reconfigure -input=false \
     -backend-config="bucket=${STATE_BUCKET}" \
-    -backend-config="prefix=registry-sandbox/${NAME_PREFIX}" >/dev/null
+    -backend-config="prefix=registry-sandbox/${NAME_PREFIX}" >/dev/null 2>&1 || true
 fi
 
-registry_host="$(terraform -chdir="${SCRIPT_DIR}" output -raw registry_host)"
-instance_domain="$(terraform -chdir="${SCRIPT_DIR}" output -raw instance_domain)"
-lb_ip="$(terraform -chdir="${SCRIPT_DIR}" output -raw lb_ip)"
-verifier_sa="$(terraform -chdir="${SCRIPT_DIR}" output -raw verifier_service_account)"
-tls_mode="$(terraform -chdir="${SCRIPT_DIR}" output -raw tls_mode)"
+get_tf_output() {
+  local out_name="$1"
+  local val
+  val="$(terraform -chdir="${SCRIPT_DIR}" output -raw "${out_name}" 2>/dev/null || true)"
+  if [[ -z "${val}" && "${LOCAL_STATE}" -eq 0 ]]; then
+    val="$(gcloud storage cat "gs://${STATE_BUCKET}/registry-sandbox/${NAME_PREFIX}/default.tfstate" 2>/dev/null | jq -r ".outputs.${out_name}.value // empty" 2>/dev/null || true)"
+  fi
+  printf '%s' "${val}"
+}
+
+registry_host="$(get_tf_output registry_host)"
+instance_domain="$(get_tf_output instance_domain)"
+lb_ip="$(get_tf_output lb_ip)"
+verifier_sa="$(get_tf_output verifier_service_account)"
+tls_mode="$(get_tf_output tls_mode)"
 
 if ! [[ "${registry_host}" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]]; then
   echo "verify.sh: invalid registry_host '${registry_host}' in Terraform outputs" >&2
@@ -224,7 +234,7 @@ fi
 # its own: the self-signed wildcard certificate Terraform generated (public
 # `selfsigned_cert_pem` output) is trusted alongside the system roots instead.
 # `--insecure-tls` remains an explicit operator opt-in.
-selfsigned_pem="$(terraform -chdir="${SCRIPT_DIR}" output -raw selfsigned_cert_pem 2>/dev/null || true)"
+selfsigned_pem="$(get_tf_output selfsigned_cert_pem)"
 
 curl_tls_flags=()
 if [[ "${INSECURE_TLS}" -eq 1 ]]; then
@@ -317,27 +327,28 @@ if [[ -n "${ENTRY_NAME}" ]]; then
     exit 1
   fi
 else
-  mapfile -t targets < <(jq -r '.entries[] | select(.kind == "connected") | .name' <<<"${dir_json}")
+  mapfile -t targets < <(jq -r '.entries[] | select(.kind == "connected" or .kind == "instance") | .name' <<<"${dir_json}")
 fi
 
 if [[ "${#targets[@]}" -eq 0 ]]; then
-  echo "    NOTE: No connected entries registered yet."
+  echo "    NOTE: No entries registered yet."
   exit 0
 fi
 
 for name in "${targets[@]}"; do
   entry_obj="$(jq -c --arg n "${name}" '.entries[] | select(.name == $n)' <<<"${dir_json}")"
+  entry_kind="$(jq -r '.kind // "connected"' <<<"${entry_obj}")"
   status="$(jq -r '.status' <<<"${entry_obj}")"
   ver="$(jq -r '.grain_version // empty' <<<"${entry_obj}")"
   hb_age="$(jq -r '.heartbeat_age_seconds // "null"' <<<"${entry_obj}")"
   active_tasks="$(jq -r '.active_tasks' <<<"${entry_obj}")"
   awaiting_reply="$(jq -r '.awaiting_reply_tasks' <<<"${entry_obj}")"
   queue_depth="$(jq -r '.queue_depth' <<<"${entry_obj}")"
-  echo "    Entry '${name}': status=${status} version=${ver:-unknown} heartbeat_age_s=${hb_age} active_tasks=${active_tasks} awaiting_reply=${awaiting_reply} queue_depth=${queue_depth}"
+  echo "    Entry '${name}' (${entry_kind}): status=${status} version=${ver:-unknown} heartbeat_age_s=${hb_age} active_tasks=${active_tasks} awaiting_reply=${awaiting_reply} queue_depth=${queue_depth}"
 
   if [[ "${status}" != "online" ]]; then
     if [[ -z "${ENTRY_NAME}" && "${hb_age}" == "null" ]]; then
-      echo "    NOTE: Entry '${name}' is registered but awaiting its first daemon heartbeat; skipping route/tunnel check (pass --entry ${name} to require online)."
+      echo "    NOTE: Entry '${name}' (${entry_kind}) is not online yet; skipping route check (pass --entry ${name} to require online)."
       continue
     fi
     echo "verify.sh: expected entry '${name}' status=online, got '${status}'" >&2
@@ -358,7 +369,11 @@ for name in "${targets[@]}"; do
   jq . <<<"${route_json}"
 
   entry_host="${name}.${instance_domain}"
-  echo "==> [5/5] Routing HTTP request through https://${entry_host}/api/auth/whoami over outbound tunnel..."
+  transport_desc="outbound tunnel"
+  if [[ "${entry_kind}" == "instance" ]]; then
+    transport_desc="private VPC HTTP"
+  fi
+  echo "==> [5/5] Routing HTTP request through https://${entry_host}/api/auth/whoami over ${transport_desc}..."
   # When tls_mode=hybrid and <name> was not pre-listed in managed_entry_names,
   # *.instance_domain uses the self-signed wildcard fallback certificate, which
   # curl_tls_flags already trusts (pinned, not -k).
