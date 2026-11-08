@@ -32,14 +32,17 @@ import (
 // lifecycle_state "replacing", after which the registry answered every request
 // for it with the "currently replacing" state page instead of routing to its
 // live tunnel.
-func TestReplaceRefusesConnectedEntries(t *testing.T) {
+// newWalkthroughRegistry starts a PostgreSQL-backed registry Server and
+// returns a client factory acting as the given person.
+func newWalkthroughRegistry(t *testing.T) (context.Context, *store.Store, func(email string) *api.Client) {
+	t.Helper()
 	pgURL := startEphemeralPostgresForRegistryTest(t)
 	ctx := context.Background()
 	st, err := store.Open(ctx, pgURL, store.DefaultThresholds())
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
-	defer st.Close()
+	t.Cleanup(func() { _ = st.Close() })
 	if err := st.SeedShapes(ctx, []store.ShapeRow{
 		{Name: "small", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
 	}); err != nil {
@@ -66,15 +69,25 @@ func TestReplaceRefusesConnectedEntries(t *testing.T) {
 		t.Fatalf("NewServer: %v", err)
 	}
 	ts := httptest.NewServer(srv.Handler())
-	defer ts.Close()
-	cli, err := api.NewClient(api.ClientConfig{
-		BaseURL:           ts.URL,
-		AllowInsecureHTTP: true,
-		ExtraHeaders:      http.Header{"X-Test-Email": []string{"alice@example.com"}},
-	})
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
+	t.Cleanup(ts.Close)
+	clientFor := func(email string) *api.Client {
+		c, err := api.NewClient(api.ClientConfig{
+			BaseURL:           ts.URL,
+			AllowInsecureHTTP: true,
+			ExtraHeaders:      http.Header{"X-Test-Email": []string{email}},
+		})
+		if err != nil {
+			t.Fatalf("NewClient(%s): %v", email, err)
+		}
+		return c
 	}
+	return ctx, st, clientFor
+
+}
+
+func TestReplaceRefusesConnectedEntries(t *testing.T) {
+	ctx, st, clientFor := newWalkthroughRegistry(t)
+	cli := clientFor("alice@example.com")
 
 	if _, err := cli.CreateEntry(ctx, api.CreateEntryRequest{Name: "alice-laptop", Kind: api.KindConnected}); err != nil {
 		t.Fatalf("CreateEntry connected: %v", err)
@@ -105,5 +118,39 @@ func TestReplaceRefusesConnectedEntries(t *testing.T) {
 	}
 	if _, err := cli.ReplaceEntry(ctx, "alice-vm", api.ReplaceEntryRequest{BootDiskGB: 200}); err != nil {
 		t.Fatalf("ReplaceEntry on a hosted instance: %v", err)
+	}
+}
+
+// TestOthersDeletedEntryReadsAsNotFound is the regression for the second
+// 2026-11-08 walkthrough finding: after an admin purge released a deleted
+// entry's name reservation, GET /api/names reported the name available but
+// `grain registry register` by anybody else stopped at "caller does not have
+// permission to view this entry" (403 from GET /api/entries/{name} on the
+// tombstone), so the name could not be claimed through the CLI.
+func TestOthersDeletedEntryReadsAsNotFound(t *testing.T) {
+	ctx, _, clientFor := newWalkthroughRegistry(t)
+	alice, bob, admin := clientFor("alice@example.com"), clientFor("bob@example.com"), clientFor("admin@example.com")
+
+	if _, err := alice.CreateEntry(ctx, api.CreateEntryRequest{Name: "old-box", Kind: api.KindConnected}); err != nil {
+		t.Fatalf("CreateEntry: %v", err)
+	}
+	if err := alice.DeleteEntry(ctx, "old-box", api.DeleteEntryRequest{Confirm: "old-box", ConfirmName: "old-box"}); err != nil {
+		t.Fatalf("DeleteEntry: %v", err)
+	}
+	if _, err := bob.GetEntry(ctx, "old-box"); !api.IsNotFound(err) {
+		t.Fatalf("bob GET of alice's deleted entry = %v, want not found", err)
+	}
+	if _, err := alice.GetEntry(ctx, "old-box"); err != nil {
+		t.Fatalf("alice GET of her own deleted entry: %v (owners still see tombstones to restore them)", err)
+	}
+	if _, err := admin.PurgeEntry(ctx, "old-box", api.HardPurgeRequest{ReleaseReservation: true}); err != nil {
+		t.Fatalf("PurgeEntry: %v", err)
+	}
+	if _, err := bob.CreateEntry(ctx, api.CreateEntryRequest{Name: "old-box", Kind: api.KindConnected}); err != nil {
+		t.Fatalf("bob claiming the released name: %v", err)
+	}
+	got, err := bob.GetEntry(ctx, "old-box")
+	if err != nil || got.Owner != "bob@example.com" {
+		t.Fatalf("bob GET of his new old-box = %+v, %v", got, err)
 	}
 }

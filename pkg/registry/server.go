@@ -1200,7 +1200,17 @@ func (s *Server) handleGetEntry(w http.ResponseWriter, r *http.Request) {
 	isPendingOwner := entry.PendingOwner != "" && strings.EqualFold(entry.PendingOwner, caller.Email)
 
 	if !isManager && !isPendingOwner {
-		if !entry.Listed || entry.LifecycleState == api.StateDeleted || entry.DeletedAt != nil {
+		// Somebody else's deleted entry is gone as far as this caller is
+		// concerned: answer 404 rather than 403, so `grain registry register`
+		// goes on to claim a name whose reservation has lapsed or been
+		// released instead of stopping at "permission to view", and so the
+		// tombstone's existence is not disclosed (GET /api/names reports
+		// reservations).
+		if entry.LifecycleState == api.StateDeleted || entry.DeletedAt != nil {
+			writeJSONError(w, http.StatusNotFound, "not_found", fmt.Sprintf("entry %q not found", name))
+			return
+		}
+		if !entry.Listed {
 			writeJSONError(w, http.StatusForbidden, "forbidden", "caller does not have permission to view this entry")
 			return
 		}
