@@ -142,6 +142,10 @@ type Options struct {
 	// ExternalConfigBranch is its branch, "main" when empty.
 	ExternalConfigRepo   string
 	ExternalConfigBranch string
+	// ConfigChange is -config-change (demo_config_change.go): a real,
+	// throwaway grain/config and two tasks parked on proposal branches
+	// of it, so the config-change card's Approve & Apply and Reject work.
+	ConfigChange bool
 	// Qualification is -qualification (demo_qualification.go): a release
 	// candidate whose qualification run waits for approval.
 	Qualification bool
@@ -636,6 +640,13 @@ func Run(opts Options) error {
 		// 3613).
 		if ref, ok := newExternalConfigRepo(opts.ExternalConfigRepo, opts.ExternalConfigBranch).ref(); ok {
 			cfg.StateRepoRef = func() model.RepoRef { return ref }
+		}
+	}
+	if opts.ConfigChange {
+		// Past every seed too, so grain/config is exported from the
+		// demo's finished configuration.
+		if err := configureConfigChangeDemo(ctx, dir, db, store, &cfg); err != nil {
+			return fmt.Errorf("grain demo: -config-change: %v", err)
 		}
 	}
 	ghCalls.enableLive()
