@@ -109,6 +109,12 @@ func TestProcessResultHoldWithoutPermissionIsAnOrdinaryProposal(t *testing.T) {
 	if model.HeldForApproval(p) {
 		t.Error("tagged held, but nothing was held back")
 	}
+	// The request itself is still recorded, so the agent approval rail
+	// keeps another agent from approving it for the person it asked for
+	// (docs/test-runs/2026-11-07-director-agent-api.md, finding 2).
+	if !model.HoldRequested(p) {
+		t.Errorf("tags = %v, want %s recorded", p.Tags, model.HoldRequestedTag)
+	}
 }
 
 // keep_running and a priority above the proposer's wait for a person in

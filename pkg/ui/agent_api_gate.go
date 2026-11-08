@@ -897,7 +897,8 @@ func inGrainAgentTaskID(p model.Principal) string {
 // for (ui.CreateTask, orchestrator.relayProposedTasks, Client.agentMayApprove),
 // asked again of the task as it stands now:
 //
-//   - hold_for_approval (model.HeldForApprovalTag);
+//   - hold_for_approval (model.HoldRequested: HoldRequestedTag, or
+//     HeldForApprovalTag on a proposal filed before it was recorded);
 //   - targeting or writing this deployment's configuration repository
 //     (model.ConfigRepoProposalHold);
 //   - targeting a change target that requires a person's approval
@@ -917,7 +918,7 @@ func inGrainAgentTaskID(p model.Principal) string {
 //     (model.PersonOnlyProposalSettings).
 func (s *Server) proposalPersonHolds(ctx context.Context, task model.Task, proposer, acting *model.Task) ([]string, error) {
 	var holds []string
-	if model.HeldForApproval(task) {
+	if model.HoldRequested(task) {
 		holds = append(holds, "it was filed with hold_for_approval")
 	}
 	if why := model.ConfigRepoProposalHold(task); why != "" {
