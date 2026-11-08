@@ -563,6 +563,26 @@ describe("RepoPage", () => {
     await screen.findByLabelText("Default capabilities");
   });
 
+  // docs/test-runs/2026-11-07-repository-release-memory-ui.md,
+  // observation 2: a repo removed from the target list keeps its tasks,
+  // and its page counts them and says why the repo is not listed.
+  it("counts the tasks still targeting a repo no longer on the target list", async () => {
+    routeApi();
+    renderPage({
+      repo: "acme/gadgets",
+      tasks: [{ id: "9", repo: "acme/gadgets", state: "queued" }],
+      config: { targetRepos: ["acme/widgets"] },
+    });
+
+    expect(screen.getByText("Waiting 1")).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", {
+        name: "1 task still targets this repo, which is no longer on the target list",
+      }),
+    ).toHaveAttribute("href", "/?f=repo:any:acme/gadgets");
+    await screen.findByLabelText("Default capabilities");
+  });
+
   // grain/task-47: this page is what a Repos row opens, so it is headed
   // by the same ring that list and the nav entry above it carry
   // (ItemGlyph.jsx, docs/brand.md) -- beside the heading rather than

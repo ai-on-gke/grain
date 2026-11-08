@@ -757,3 +757,48 @@ func TestPersonGrantedArgDefaultIsReserved(t *testing.T) {
 		t.Error("a bare reference whose default is unreserved is person-granted")
 	}
 }
+
+// A grant that leaves an argument out gets its schema default when it is
+// minted, so it is covered by a parent's grant recorded with that default
+// filled in: an agent passing on the gcp set it holds, written as
+// {"permission_set": "logs"}, was held as an escalation of its own
+// {"permission_set": "logs", "primary": true} (2026-11-08 gcp token-mode
+// walk). A different value is still not covered, nor is a person-granted
+// one.
+func TestAnArgumentLeftOutIsCoveredAsItsDefault(t *testing.T) {
+	id := "https://example.test/capabilities/arg-default-test"
+	ref := Ref{CapabilityID: id, Method: "key"}
+	schema := func(withDefault bool) map[string]*MethodInfo {
+		primary := map[string]any{"type": "boolean"}
+		if withDefault {
+			primary["default"] = true
+		}
+		return map[string]*MethodInfo{"key": {ArgsSchema: map[string]any{"type": "object", "properties": map[string]any{
+			"set":     map[string]any{"type": "string", "enum": []any{"logs", "org"}, PersonGrantedArgKey: []any{"org"}},
+			"primary": primary,
+		}}}}
+	}
+	parent := []Grant{
+		{Ref: ref, Args: map[string]any{"set": "logs", "primary": true}},
+		{Ref: ref, Args: map[string]any{"set": "org", "primary": true}},
+	}
+	bare := Grant{Ref: ref, Args: map[string]any{"set": "logs"}}
+	if Covers(parent, bare) {
+		t.Fatal("covered before discovery noted any default; the test proves nothing")
+	}
+	NoteArgDefaults(id, schema(true))
+	NotePersonGrantedArgs(id, schema(true))
+	t.Cleanup(func() { NoteArgDefaults(id, schema(false)); NotePersonGrantedArgs(id, schema(false)) })
+	if !Covers(parent, bare) {
+		t.Error("a grant leaving primary out is not covered by the parent's grant with primary: true")
+	}
+	if Covers(parent, Grant{Ref: ref, Args: map[string]any{"set": "logs", "primary": false}}) {
+		t.Error("primary: false is covered by primary: true")
+	}
+	if Covers(parent, Grant{Ref: ref, Args: map[string]any{"set": "org"}}) {
+		t.Error("a person-granted set is covered")
+	}
+	if bare.Args["primary"] != nil {
+		t.Error("Covers changed the grant it was asked about")
+	}
+}

@@ -1,0 +1,24 @@
+[
+  {
+    "width": "desktop",
+    "networkSelect": "none",
+    "warningShown": true,
+    "warningText": "This deployment's sandboxes cannot withhold a run's network, so this session's runs are given egress (outbound internet) whatever is chosen here.",
+    "warningBelowSelect": true,
+    "warningInsideViewport": true,
+    "adoptBannerShown": false,
+    "horizontalOverflow": false,
+    "pageErrors": []
+  },
+  {
+    "width": "phone",
+    "networkSelect": "none",
+    "warningShown": true,
+    "warningText": "This deployment's sandboxes cannot withhold a run's network, so this session's runs are given egress (outbound internet) whatever is chosen here.",
+    "warningBelowSelect": true,
+    "warningInsideViewport": true,
+    "adoptBannerShown": false,
+    "horizontalOverflow": false,
+    "pageErrors": []
+  }
+]

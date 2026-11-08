@@ -68,6 +68,20 @@ export const SETTINGS_GROUPS = [
           "workstation",
         ],
       },
+      // Putting the grain CLI on a workstation (external-cli.spec.md
+      // #XC-32): commands to copy, nothing to save.
+      {
+        id: "cli",
+        label: "CLI",
+        keywords: [
+          "cli",
+          "command line",
+          "install",
+          "login",
+          "skill",
+          "terminal",
+        ],
+      },
       // Who changed what (operator-attribution spec §4.4): read-only
       // logs, nothing to save.
       {

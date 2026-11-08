@@ -194,6 +194,7 @@ func (s *Server) Refresh(ctx context.Context) error {
 	s.Methods, s.ConfigSchema, s.ControlTools = methods, schema, control
 	if s.ID != "" {
 		NotePersonGrantedArgs(s.ID, methods)
+		NoteArgDefaults(s.ID, methods)
 	}
 	return nil
 }

@@ -67,7 +67,21 @@ import (
 // with no API credential paired, a plain git host) or a lookup that
 // failed; the caller then falls back to grain's own default identity.
 func (c *CredentialSet) CredentialGitIdentity(name string) (CommitIdentity, error) {
-	return c.credentialGitIdentity(name, 0)
+	return c.credentialGitIdentity(name, 0, true)
+}
+
+// CredentialOwnerIdentity is who credential name belongs to, as its own
+// forge answers for it: the same lookup CredentialGitIdentity makes, but
+// without the host account's git config (HostGitIdentity) laid over the
+// answer. CredentialGitIdentity prefers the host's git config because a
+// commit is the host person's own work; a signature ("Signed by <Author>
+// (via Grain)") instead says whose credential acted, and that is the
+// token's owner even on a host whose own git user is somebody else
+// (design/design/git-login.design.md). For an ambient credential the
+// owner is the host's login as GitHub knows it (AmbientIdentityOf),
+// falling back to AmbientGitIdentity when that login cannot be read.
+func (c *CredentialSet) CredentialOwnerIdentity(name string) (CommitIdentity, error) {
+	return c.credentialGitIdentity(name, 0, false)
 }
 
 // AuthorOf returns the human author attribution name recorded for
@@ -90,14 +104,20 @@ func (c *CredentialSet) AuthorOf(name string) string {
 	return ""
 }
 
-// credentialGitIdentity is CredentialGitIdentity, following at most one
-// SSH key -> API credential pairing (depth guards a pairing that points
-// back at an SSH key, which APICredential already refuses).
-func (c *CredentialSet) credentialGitIdentity(name string, depth int) (CommitIdentity, error) {
+// credentialGitIdentity is CredentialGitIdentity (hostGit true) or
+// CredentialOwnerIdentity (hostGit false), following at most one SSH key
+// -> API credential pairing (depth guards a pairing that points back at
+// an SSH key, which APICredential already refuses).
+func (c *CredentialSet) credentialGitIdentity(name string, depth int, hostGit bool) (CommitIdentity, error) {
 	switch {
 	case name == "" || name == "anonymous":
 		return CommitIdentity{}, errors.New("an anonymous credential is nobody to commit as")
 	case c.IsAmbient(name):
+		if !hostGit {
+			if id, ok := c.ambientOwnerIdentity(name); ok {
+				return id, nil
+			}
+		}
 		return c.AmbientGitIdentity(name)
 	}
 	cred, ok := c.Get(name)
@@ -109,7 +129,7 @@ func (c *CredentialSet) credentialGitIdentity(name string, depth int) (CommitIde
 		if !paired || depth > 0 {
 			return CommitIdentity{}, fmt.Errorf("SSH key credential %q has no API credential paired with it to say who it is", name)
 		}
-		id, err := c.credentialGitIdentity(api.Name, depth+1)
+		id, err := c.credentialGitIdentity(api.Name, depth+1, hostGit)
 		id.SigningKey = ""
 		return id, err
 	}
@@ -123,7 +143,27 @@ func (c *CredentialSet) credentialGitIdentity(name string, depth int) (CommitIde
 	if cred.Token == nil || *cred.Token == "" {
 		return CommitIdentity{}, fmt.Errorf("credential %q has no token", name)
 	}
-	return c.tokenGitIdentity(name, h, *cred.Token)
+	return c.tokenGitIdentity(name, h, *cred.Token, hostGit)
+}
+
+// ambientOwnerIdentity is the ambient login behind credential name as
+// its forge knows it: its display name (or login) and its noreply
+// address. ok is false when the login cannot be read or names nobody.
+func (c *CredentialSet) ambientOwnerIdentity(name string) (CommitIdentity, bool) {
+	login, err := c.AmbientIdentityOf(name)
+	if err != nil {
+		return CommitIdentity{}, false
+	}
+	id := CommitIdentity{Name: oneLine(strings.TrimSpace(login.Name))}
+	if id.Name == "" {
+		id.Name = oneLine(strings.TrimSpace(login.Login))
+	}
+	if id.Name == "" {
+		return CommitIdentity{}, false
+	}
+	f, _ := c.AmbientOf(name)
+	id.Email = login.NoreplyEmail(f.Host)
+	return id, true
 }
 
 // credentialIdentityEntry is one CredentialGitIdentity answer, kept for
@@ -163,13 +203,21 @@ type githubUser struct {
 
 // tokenGitIdentity asks h's API who token is (GET /user) and builds the
 // commit identity from the answer, preferring the host account's own git
-// config (HostGitIdentity) where available, then the display name and email
-// from /user, and falling back to the login and its noreply address for
-// whichever half is still empty.
-func (c *CredentialSet) tokenGitIdentity(name string, h CredentialHost, token string) (CommitIdentity, error) {
+// config (HostGitIdentity) where available and hostGit is set, then the
+// display name and email from /user, and falling back to the login and
+// its noreply address for whichever half is still empty. The cache holds
+// /user's own answer, so an owner lookup (hostGit false) and a commit
+// lookup share one request per token.
+func (c *CredentialSet) tokenGitIdentity(name string, h CredentialHost, token string, hostGit bool) (CommitIdentity, error) {
 	key := h.Host + "\x00" + token
+	withHost := func(id CommitIdentity) CommitIdentity {
+		if !hostGit {
+			return id
+		}
+		return applyHostGitIdentity(id, c.HostGitIdentity())
+	}
 	if id, ok := c.cachedCredentialIdentity(name, key); ok {
-		return applyHostGitIdentity(id, c.HostGitIdentity()), nil
+		return withHost(id), nil
 	}
 	transport, err := c.appTransportFor(name)
 	if err != nil {
@@ -202,7 +250,7 @@ func (c *CredentialSet) tokenGitIdentity(name string, h CredentialHost, token st
 		id.Email = login.NoreplyEmail(h.Host)
 	}
 	c.cacheCredentialIdentity(name, key, id)
-	return applyHostGitIdentity(id, c.HostGitIdentity()), nil
+	return withHost(id), nil
 }
 
 func applyHostGitIdentity(id, host CommitIdentity) CommitIdentity {
@@ -369,19 +417,32 @@ type credentialIdentityFlight struct {
 // lookup goes on in the background, so that asking again later finds it
 // done (cached) or joins it.
 func (c *CredentialSet) CredentialGitIdentityWithin(name string, wait time.Duration) (id CommitIdentity, pending bool, err error) {
+	return c.identityWithin(name, wait, func() (CommitIdentity, error) { return c.CredentialGitIdentity(name) })
+}
+
+// CredentialOwnerIdentityWithin is CredentialOwnerIdentity bounded the
+// way CredentialGitIdentityWithin is, for a caller that answers a person
+// -- recording who a connection signs as when it is saved.
+func (c *CredentialSet) CredentialOwnerIdentityWithin(name string, wait time.Duration) (id CommitIdentity, pending bool, err error) {
+	return c.identityWithin("\x00owner\x00"+name, wait, func() (CommitIdentity, error) { return c.CredentialOwnerIdentity(name) })
+}
+
+// identityWithin runs lookup at most once at a time per key, waiting at
+// most wait for it (CredentialGitIdentityWithin).
+func (c *CredentialSet) identityWithin(key string, wait time.Duration, lookup func() (CommitIdentity, error)) (id CommitIdentity, pending bool, err error) {
 	c.mu.Lock()
-	fl, ok := c.credentialIdentityFlights[name]
+	fl, ok := c.credentialIdentityFlights[key]
 	if !ok {
 		if c.credentialIdentityFlights == nil {
 			c.credentialIdentityFlights = map[string]*credentialIdentityFlight{}
 		}
 		fl = &credentialIdentityFlight{done: make(chan struct{})}
-		c.credentialIdentityFlights[name] = fl
+		c.credentialIdentityFlights[key] = fl
 		go func() {
-			id, err := c.CredentialGitIdentity(name)
+			id, err := lookup()
 			c.mu.Lock()
-			if c.credentialIdentityFlights[name] == fl {
-				delete(c.credentialIdentityFlights, name)
+			if c.credentialIdentityFlights[key] == fl {
+				delete(c.credentialIdentityFlights, key)
 			}
 			fl.id, fl.err = id, err
 			c.mu.Unlock()
