@@ -1,0 +1,7 @@
+gcp#gcp-key migration: console_session retired-session: keeping grant "https://grain.dev/capabilities/gcp#gcp-key={\"account\":\"ghost-set\",\"activate\":false}" because permission set "ghost-set" is not configured on https://grain.dev/capabilities/gcp
+gcp#gcp-key migration: capability_policy.catalogue.defaults.ci: keeping grant "https://grain.dev/capabilities/gcp#gcp-key={\"account\":\"ghost-set\",\"activate\":false}" because permission set "ghost-set" is not configured on https://grain.dev/capabilities/gcp
+gcp#gcp-key migration: repo_config acme/widgets ci_capabilities: keeping grant "https://grain.dev/capabilities/gcp#gcp-key={\"account\":\"ghost-set\",\"activate\":false}" because permission set "ghost-set" is not configured on https://grain.dev/capabilities/gcp
+gcp#gcp-key migration: task 2: keeping grant "https://grain.dev/capabilities/gcp#gcp-key={\"account\":\"ghost-set\",\"activate\":false}" because permission set "ghost-set" is not configured on https://grain.dev/capabilities/gcp
+gcp#gcp-key migration: template template-1: keeping grant "https://grain.dev/capabilities/gcp#gcp-key={\"account\":\"ghost-set\",\"activate\":false}" because permission set "ghost-set" is not configured on https://grain.dev/capabilities/gcp
+gcp#gcp-key migration: schedule sched-1: keeping grant "https://grain.dev/capabilities/gcp#gcp-key={\"account\":\"ghost-set\",\"activate\":false}" because permission set "ghost-set" is not configured on https://grain.dev/capabilities/gcp
+grain: migrated the store in place from schema 108 to 125

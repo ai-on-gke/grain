@@ -283,19 +283,6 @@ func canonicalCommand(cmd string) string {
 	return cmd
 }
 
-// hostRegistryVerb reports whether word, after "grain host", names one of
-// the host registry's subcommands (cmdHostds) rather than starting the
-// host agent, whose arguments are all flags.
-func hostRegistryVerb(word string) bool {
-	switch word {
-	case "list", "ls", "register", "create", "install", "set-owner", "help",
-		"pending", "accept", "reject", "rekey", "codes", "invite", "rotate-code", "revoke-code",
-		"rename", "update", "revoke", "delete":
-		return true
-	}
-	return false
-}
-
 // runTaskCLI runs the task CLI and says how it ended (errors.go): the
 // exit code, and on stderr either a sentence or, under -json, the one
 // {"error": ...} object -- with whatever the flag package or a command

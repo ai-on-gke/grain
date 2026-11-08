@@ -487,6 +487,54 @@ func cmdRegistryRestore(ctx context.Context, c *ui.HTTPClient, out *printer, arg
 	return nil
 }
 
+// cmdRegistryStop implements `grain registry stop <name>`: it halts a hosted
+// instance's VM while the registry keeps its externalised state (database,
+// secrets, config repository), so the entry costs no VM compute until it is
+// started again or woken by a visit.
+func cmdRegistryStop(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+	return cmdRegistryPower(ctx, c, out, args, "stop")
+}
+
+// cmdRegistryStart implements `grain registry start <name>`: it boots a
+// stopped hosted instance back onto a VM with its prior state.
+func cmdRegistryStart(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+	return cmdRegistryPower(ctx, c, out, args, "start")
+}
+
+func cmdRegistryPower(ctx context.Context, c *ui.HTTPClient, out *printer, args []string, verb string) error {
+	fs := flag.NewFlagSet("grain registry "+verb, flag.ContinueOnError)
+	tf := bindRegistryTargetFlags(fs)
+
+	rest, err := parseArgs(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(rest) != 1 || strings.TrimSpace(rest[0]) == "" {
+		return fmt.Errorf("usage: grain registry %s <name>", verb)
+	}
+	name := strings.TrimSpace(rest[0])
+
+	regClient, _, err := tf.client(ctx, c)
+	if err != nil {
+		return err
+	}
+	var updated *api.Entry
+	if verb == "stop" {
+		updated, err = regClient.StopEntry(ctx, name)
+	} else {
+		updated, err = regClient.StartEntry(ctx, name)
+	}
+	if err != nil {
+		return err
+	}
+	if out.json {
+		out.encode(updated)
+		return nil
+	}
+	fmt.Printf("requested %s for %s (state=%s)\n", verb, updated.Name, updated.State)
+	return nil
+}
+
 func cmdRegistryTransfer(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain registry transfer", flag.ContinueOnError)
 	tf := bindRegistryTargetFlags(fs)

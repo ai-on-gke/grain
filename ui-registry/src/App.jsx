@@ -60,11 +60,74 @@ import {
   setOwnerDisabled,
   setQuota,
   setSQLInstanceDraining,
+  startEntry,
+  stopEntry,
   updateEntry,
   upgradeEntry,
 } from "./api.js";
 
 const REPLACE_STEPS = ["draining", "deleting_vm", "creating_vm", "probing"];
+
+// Hosted instances a manager can stop (POST /api/entries/{name}/stop) or
+// start again (POST /api/entries/{name}/start); these mirror the states the
+// registry's BeginStopEntry / BeginStartEntry accept.
+const STOPPABLE_STATES = new Set(["running", "failed"]);
+const STARTABLE_STATES = new Set(["stopped", "stopping"]);
+
+function canStopEntry(e) {
+  return Boolean(e) && e.kind === "instance" && STOPPABLE_STATES.has(e.state);
+}
+
+function canStartEntry(e) {
+  return Boolean(e) && e.kind === "instance" && STARTABLE_STATES.has(e.state);
+}
+
+// reachabilityStatus is what the Reachability pill shows: a deleted, stopped
+// or stopping entry says so rather than a bare "offline".
+function reachabilityStatus(e) {
+  if (
+    e.state === "deleted" ||
+    e.state === "stopped" ||
+    e.state === "stopping"
+  ) {
+    return e.state;
+  }
+  return e.status;
+}
+
+function LifecycleBadge({ entry }) {
+  let cls = "gs-badge";
+  if (entry.state === "stopped") cls = "gs-badge reg-badge-stopped";
+  else if (entry.state === "stopping") cls = "gs-badge gs-badge-warning";
+  else if (entry.state === "failed" || entry.state === "deleted") {
+    cls = "gs-badge gs-badge-danger";
+  }
+  return (
+    <span className={cls} data-testid={`lifecycle-badge-${entry.name}`}>
+      {entry.state}
+      {entry.replace_step ? ` (${entry.replace_step})` : ""}
+    </span>
+  );
+}
+
+function StopEntryDialog({ target, onCancel, onConfirm }) {
+  return (
+    <ConfirmDialog
+      open={Boolean(target)}
+      title={`Stop ${target?.name || ""}?`}
+      confirmLabel="Stop instance"
+      onCancel={onCancel}
+      onConfirm={onConfirm}
+    >
+      <p>
+        Stopping <strong>{target?.name}</strong> lets running tasks drain, then
+        shuts down and deletes its VM. Its database, secrets and config
+        repository are kept, so starting it again (or visiting its URL, when
+        auto-wake is on) boots a new VM with everything intact.
+      </p>
+    </ConfirmDialog>
+  );
+}
 
 function parseRouteFromPathname(pathname) {
   const clean = (pathname || "/").replace(/\/+$/, "") || "/";
@@ -593,6 +656,7 @@ function MyEntriesView({ me, onNavigateEntry, onNavigateNew, onRefreshMe }) {
   const [actionNotice, setActionNotice] = useState("");
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [stopTarget, setStopTarget] = useState(null);
 
   const loadEntries = useCallback(async () => {
     setLoading(true);
@@ -654,6 +718,31 @@ function MyEntriesView({ me, onNavigateEntry, onNavigateNew, onRefreshMe }) {
       if (onRefreshMe) onRefreshMe();
     } catch (err) {
       setError(err.message || "Failed to restore entry");
+    }
+  };
+
+  const handleConfirmStop = async () => {
+    if (!stopTarget) return;
+    const name = stopTarget.name;
+    setError("");
+    setStopTarget(null);
+    try {
+      await stopEntry(name);
+      setActionNotice(`Requested stop for ${name}.`);
+      await loadEntries();
+    } catch (err) {
+      setError(err.message || "Failed to stop instance");
+    }
+  };
+
+  const handleQuickStart = async (name) => {
+    setError("");
+    try {
+      await startEntry(name);
+      setActionNotice(`Requested start for ${name}.`);
+      await loadEntries();
+    } catch (err) {
+      setError(err.message || "Failed to start instance");
     }
   };
 
@@ -795,10 +884,7 @@ function MyEntriesView({ me, onNavigateEntry, onNavigateNew, onRefreshMe }) {
               render: (e) => (
                 <div className="reg-badge-row">
                   <HostKindBadge hostKind={e.host_kind} kind={e.kind} />
-                  <span className="gs-badge">
-                    {e.state}
-                    {e.replace_step ? ` (${e.replace_step})` : ""}
-                  </span>
+                  <LifecycleBadge entry={e} />
                 </div>
               ),
             },
@@ -808,7 +894,7 @@ function MyEntriesView({ me, onNavigateEntry, onNavigateNew, onRefreshMe }) {
               sortValue: (e) => e.status,
               render: (e) => (
                 <StatusPill
-                  status={e.state === "deleted" ? "deleted" : e.status}
+                  status={reachabilityStatus(e)}
                   ageSeconds={e.heartbeat_age_seconds}
                   detail={e.status_detail}
                 />
@@ -867,7 +953,9 @@ function MyEntriesView({ me, onNavigateEntry, onNavigateNew, onRefreshMe }) {
                   >
                     Manage
                   </button>
-                  {e.kind === "instance" && e.state !== "deleted" ? (
+                  {e.kind === "instance" &&
+                  e.state !== "deleted" &&
+                  !canStartEntry(e) ? (
                     <>
                       <button
                         type="button"
@@ -884,6 +972,26 @@ function MyEntriesView({ me, onNavigateEntry, onNavigateNew, onRefreshMe }) {
                         Resize
                       </button>
                     </>
+                  ) : null}
+                  {canStopEntry(e) ? (
+                    <button
+                      type="button"
+                      className="gs-btn gs-btn-sm"
+                      aria-label={`Stop ${e.name}`}
+                      onClick={() => setStopTarget(e)}
+                    >
+                      Stop
+                    </button>
+                  ) : null}
+                  {canStartEntry(e) ? (
+                    <button
+                      type="button"
+                      className="gs-btn gs-btn-sm gs-btn-primary"
+                      aria-label={`Start ${e.name}`}
+                      onClick={() => handleQuickStart(e.name)}
+                    >
+                      Start
+                    </button>
                   ) : null}
                   {e.state === "deleted" ? (
                     <button
@@ -911,6 +1019,12 @@ function MyEntriesView({ me, onNavigateEntry, onNavigateNew, onRefreshMe }) {
           ]}
         />
       )}
+
+      <StopEntryDialog
+        target={stopTarget}
+        onCancel={() => setStopTarget(null)}
+        onConfirm={handleConfirmStop}
+      />
 
       <ConfirmDialog
         open={Boolean(deleteTarget)}
@@ -1496,6 +1610,7 @@ function EntryDetailView({
   const [mintedToken, setMintedToken] = useState("");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [stopDialogOpen, setStopDialogOpen] = useState(false);
 
   const syncFromEntry = (data) => {
     setEntry(data);
@@ -1717,6 +1832,31 @@ function EntryDetailView({
     }
   };
 
+  const handleStopConfirm = async () => {
+    setError("");
+    setNotice("");
+    setStopDialogOpen(false);
+    try {
+      const updated = await stopEntry(entry.name);
+      syncFromEntry(updated);
+      setNotice(`Requested stop for ${updated.name}.`);
+    } catch (err) {
+      setError(err.message || "Failed to stop instance");
+    }
+  };
+
+  const handleStart = async () => {
+    setError("");
+    setNotice("");
+    try {
+      const updated = await startEntry(entry.name);
+      syncFromEntry(updated);
+      setNotice(`Requested start for ${updated.name}.`);
+    } catch (err) {
+      setError(err.message || "Failed to start instance");
+    }
+  };
+
   const handleRestore = async () => {
     setError("");
     setNotice("");
@@ -1784,6 +1924,24 @@ function EntryDetailView({
             <button type="button" className="gs-btn" onClick={onBack}>
               Back
             </button>
+            {canStopEntry(entry) ? (
+              <button
+                type="button"
+                className="gs-btn"
+                onClick={() => setStopDialogOpen(true)}
+              >
+                Stop instance
+              </button>
+            ) : null}
+            {canStartEntry(entry) ? (
+              <button
+                type="button"
+                className="gs-btn gs-btn-primary"
+                onClick={handleStart}
+              >
+                Start instance
+              </button>
+            ) : null}
             {safeHttpUrl(entry.url) && entry.state !== "deleted" ? (
               <a
                 className="gs-btn gs-btn-primary"
@@ -1860,6 +2018,28 @@ function EntryDetailView({
         </div>
       ) : null}
 
+      {entry.kind === "instance" &&
+      (entry.state === "stopped" || entry.state === "stopping") ? (
+        <div
+          className="reg-banner reg-banner-info"
+          data-testid="stopped-banner"
+        >
+          <div>
+            <strong>
+              {entry.state === "stopped"
+                ? "This instance is stopped."
+                : "This instance is stopping."}
+            </strong>{" "}
+            {entry.state === "stopped"
+              ? "No VM is running; its database, secrets and config repository are kept."
+              : "Running tasks are draining before its VM is shut down; its state is kept."}{" "}
+            {entry.auto_wake
+              ? "Start it here, or visit its URL to wake it."
+              : "Auto-wake is off, so start it here to bring it back."}
+          </div>
+        </div>
+      ) : null}
+
       {entry.pending_owner ? (
         <div
           className="reg-banner reg-banner-info"
@@ -1906,7 +2086,7 @@ function EntryDetailView({
             <div className="reg-kv-label">Reachability Status</div>
             <div className="reg-kv-val">
               <StatusPill
-                status={entry.state === "deleted" ? "deleted" : entry.status}
+                status={reachabilityStatus(entry)}
                 ageSeconds={entry.heartbeat_age_seconds}
               />
             </div>
@@ -1921,8 +2101,7 @@ function EntryDetailView({
           <div className="reg-kv-item">
             <div className="reg-kv-label">Lifecycle State</div>
             <div className="reg-kv-val">
-              {entry.state}
-              {entry.replace_step ? ` · ${entry.replace_step}` : ""}
+              <LifecycleBadge entry={entry} />
             </div>
           </div>
           {entry.kind === "connected" ? (
@@ -2534,6 +2713,12 @@ function EntryDetailView({
           )}
         </div>
       </section>
+
+      <StopEntryDialog
+        target={stopDialogOpen ? entry : null}
+        onCancel={() => setStopDialogOpen(false)}
+        onConfirm={handleStopConfirm}
+      />
 
       <ConfirmDialog
         open={deleteDialogOpen}
@@ -3322,7 +3507,7 @@ function AdminView({ onNavigateEntry }) {
               render: (e) => (
                 <div>
                   <StatusPill
-                    status={e.state === "deleted" ? "deleted" : e.status}
+                    status={reachabilityStatus(e)}
                     ageSeconds={e.heartbeat_age_seconds}
                   />
                   {e.purged_at ? (

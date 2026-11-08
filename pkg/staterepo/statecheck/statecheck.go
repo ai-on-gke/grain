@@ -36,6 +36,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/sandboximage"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
 // CustomFields is the one thing this command asks of a dump beyond
@@ -423,6 +424,38 @@ func looksLikeCredential(name string) bool {
 		}
 	}
 	return strings.HasSuffix(n, "_key") || strings.HasSuffix(n, "-key")
+}
+
+// GitRefSchedules fails the check when an enabled git_ref schedule in the
+// dump watches a forbidden repository: a retired per-team grain/config-<team>
+// alias, local grain/config when an external state repository is configured in
+// dataDir, or the encrypted secrets backup repository configured in dataDir.
+// Disabled (enabled: false) grandfathered schedules are permitted so an
+// existing schedule can be paused cleanly.
+func GitRefSchedules(ctx context.Context, db *sql.DB, dataDir string) error {
+	schedules, err := model.New(db).ListSchedules(ctx)
+	if err != nil {
+		return fmt.Errorf("reading the schedules this dump carries: %w", err)
+	}
+	var bad []string
+	for _, s := range schedules {
+		if !s.Enabled || s.Recurrence.Kind != model.RecurrenceGitRef || s.Recurrence.GitRef == nil {
+			continue
+		}
+		watched, err := model.ParseRepo(s.Recurrence.GitRef.Repo)
+		if err != nil {
+			bad = append(bad, fmt.Sprintf("schedule %s: invalid git_ref repo %q: %v", s.ID, s.Recurrence.GitRef.Repo, err))
+			continue
+		}
+		if why := staterepo.ForbiddenGitRefWatch(watched, dataDir); why != "" {
+			bad = append(bad, fmt.Sprintf("schedule %s: git_ref repo %s cannot be watched: %s", s.ID, watched, why))
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	return fmt.Errorf("settings/schedules.yml declares %d forbidden git_ref schedule(s):\n  %s",
+		len(bad), strings.Join(bad, "\n  "))
 }
 
 // ScratchStore is an empty SQLite database at this build's schema, in a

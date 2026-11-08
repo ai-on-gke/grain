@@ -75,6 +75,15 @@ type ConsoleSessionSetting struct {
 	// NetworkAccess is "" for the deployment's own default, or one of
 	// model.NetworkAccesses().
 	NetworkAccess string `json:"networkAccess,omitempty"`
+	// EffectiveNetworkAccess is the network this session's runs are
+	// actually given when that is not NetworkAccess: "open" when the
+	// session asks for "none" on a sandbox backend that cannot withhold a
+	// network (sandboxesIsolateNetwork false, e.g. -host-sandboxes), where
+	// orchestrator.reconcileConsoleSessions files the session's task with
+	// egress whatever is chosen. "" when the setting is what runs get, so
+	// the pane warns only when its select would otherwise say something
+	// untrue.
+	EffectiveNetworkAccess string `json:"effectiveNetworkAccess,omitempty"`
 	// TasksApproved is whether tasks this session proposes are filed
 	// approved rather than waiting for a person. False is the default --
 	// see model.ConsoleSession's own doc comment on why.
@@ -430,6 +439,10 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 			}
 			missingShippedDefaults = missing
 		}
+		var effectiveNetwork string
+		if model.NetworkAccess(networkAccess) == model.NetworkNone && !c.sandboxesIsolateNetwork() {
+			effectiveNetwork = string(model.NetworkOpen)
+		}
 		out = append(out, ConsoleSessionSetting{
 			ID:                     s.ID,
 			Title:                  title,
@@ -438,6 +451,7 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 			Capabilities:           capabilities,
 			MissingShippedDefaults: missingShippedDefaults,
 			NetworkAccess:          networkAccess,
+			EffectiveNetworkAccess: effectiveNetwork,
 			TasksApproved:          tasksApproved,
 			KeepRunning:            keepRunning,
 			Hosting:                hosting,
