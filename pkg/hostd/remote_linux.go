@@ -124,20 +124,43 @@ func (s *Server) renewLoop(ctx context.Context, m *mux.Mux) {
 	if every <= 0 {
 		every = DefaultRenewInterval
 	}
-	ticker := time.NewTicker(every)
-	defer ticker.Stop()
+	// The first renewal is due RenewInterval after the credential was last
+	// issued, not after this connection opened: a ticker started afresh on
+	// every connection never fires for a host that reconnects more often
+	// than RenewInterval (a daemon upgraded or restarted twice a day), and
+	// its 30-day credential would run out while it was connected.
+	wait := s.renewDue(every, time.Now())
 	for {
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
 		case <-m.Done():
+			timer.Stop()
 			return
-		case <-ticker.C:
-			if err := s.renewOnce(ctx, m); err != nil && ctx.Err() == nil {
-				s.logf("hostd: silent credential renewal deferred: %v", err)
-			}
+		case <-timer.C:
+		}
+		if err := s.renewOnce(ctx, m); err != nil && ctx.Err() == nil {
+			s.logf("hostd: silent credential renewal deferred: %v", err)
+		}
+		wait = every
+	}
+}
+
+// renewDue is how long from now until this host's credential is due a
+// silent renewal: every after it was last issued or renewed (RenewedAt,
+// else the first connection), or at once when that has already passed.
+func (s *Server) renewDue(every time.Duration, now time.Time) time.Duration {
+	s.renewMu.Lock()
+	defer s.renewMu.Unlock()
+	if s.renewedAt.IsZero() {
+		s.renewedAt = s.RenewedAt
+		if s.renewedAt.IsZero() || s.renewedAt.After(now) {
+			s.renewedAt = now
 		}
 	}
+	return max(s.renewedAt.Add(every).Sub(now), 0)
 }
 
 func (s *Server) renewOnce(ctx context.Context, m *mux.Mux) error {
@@ -170,6 +193,9 @@ func (s *Server) renewOnce(ctx context.Context, m *mux.Mux) error {
 		if err := json.Unmarshal(payload, &rep); err != nil || rep.Token == "" {
 			return fmt.Errorf("malformed renew reply")
 		}
+		s.renewMu.Lock()
+		s.renewedAt = time.Now()
+		s.renewMu.Unlock()
 		if s.OnTokenRenewed != nil {
 			s.OnTokenRenewed(rep.Token, rep.ExpiresAt)
 		}

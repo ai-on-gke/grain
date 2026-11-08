@@ -227,6 +227,7 @@ func hostdCmd(args []string) {
 		RenewName:       *name,
 		RenewKey:        privKey,
 		CurrentToken:    getToken,
+		RenewedAt:       hostd.TokenFileIssuedAt(*tokenFile),
 		OnTokenRenewed: func(next string, _ time.Time) {
 			tokMu.Lock()
 			curToken = next
