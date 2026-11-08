@@ -639,12 +639,14 @@ type SecretValue struct {
 // recording an AuditEntry on the configured AuditLogger.
 //
 // On the Secret Manager backend a catalogued key whose value is gone upstream
-// (ErrGoneUpstream) is skipped and logged, not returned as an error: one stale
-// catalogue entry would otherwise refuse every transcript upload, and its
-// database fallback, until someone noticed. Skipping it is still safe for
-// redaction, since a value that no longer exists cannot be handed to a run and
-// so cannot turn up in new output. Any other failure still fails the whole
-// call, closed.
+// (ErrGoneUpstream) is logged, not returned as an error: one stale catalogue
+// entry would otherwise refuse every transcript upload, and its database
+// fallback, until someone noticed. A value that no longer exists cannot be
+// handed to a new run, but one handed out before it went may still be in a
+// running sandbox's output, so the value this process last read for such a
+// key (while the read cache is on) is still returned; one it never read is
+// skipped. Any other failure, including a 404 that is not a Secret Manager
+// error, still fails the whole call, closed.
 func (s *Store) KnownValues(ctx context.Context) ([]SecretValue, error) {
 	if s.backend == BackendSecretManager {
 		if err := s.ready(); err != nil {

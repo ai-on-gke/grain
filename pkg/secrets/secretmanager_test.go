@@ -1032,9 +1032,68 @@ func TestAccessGoneUpstream(t *testing.T) {
 		{http.StatusForbidden, `{"error":{"code":403,"status":"PERMISSION_DENIED"}}`, false},
 		{http.StatusUnauthorized, `{"error":{"code":401}}`, false},
 		{http.StatusServiceUnavailable, `unavailable`, false},
+		// A 404 that is not a Secret Manager error -- a wrong endpoint, a
+		// proxy -- says nothing about the secret and must stay fatal, or it
+		// would drop every value from redaction at once.
+		{http.StatusNotFound, "404 page not found\n", false},
+		{http.StatusNotFound, `<html><body>Not Found</body></html>`, false},
+		{http.StatusNotFound, `{"error":{"code":403,"status":"PERMISSION_DENIED"}}`, false},
+		{http.StatusBadRequest, `FAILED_PRECONDITION: version is DESTROYED`, false},
 	} {
 		if got := accessGoneUpstream(tc.status, []byte(tc.body)); got != tc.want {
 			t.Errorf("accessGoneUpstream(%d, %s) = %v, want %v", tc.status, tc.body, got, tc.want)
 		}
+	}
+}
+
+// A value this process read before its key went from Secret Manager may still
+// be in a running sandbox's output, so it stays in KnownValues -- even past the
+// read cache's expiry -- while it no longer resolves, and until the key is
+// reconciled.
+func TestSecretManagerKnownValuesRetainsValueReadBeforeItWentUpstream(t *testing.T) {
+	ctx := context.Background()
+	writer, fake, cat := newTestSMStore(t)
+	if err := writer.Set("tok", "value", []byte("handed-out-secret")); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	reader := OpenSecretManager(SecretManagerConfig{
+		Prefix:     writer.sm.prefix,
+		Catalogue:  cat,
+		Endpoint:   writer.sm.endpoint,
+		HTTPClient: writer.sm.httpClient,
+		Token:      func(context.Context) (string, error) { return fake.token, nil },
+		Now:        func() time.Time { return now },
+	})
+	if _, err := reader.Resolve(ctx, "tok"); err != nil {
+		t.Fatalf("Resolve(tok): %v", err)
+	}
+
+	fake.mu.Lock()
+	for res := range fake.secrets {
+		delete(fake.secrets, res)
+	}
+	fake.mu.Unlock()
+	now = now.Add(2 * DefaultSecretManagerCacheTTL)
+
+	if _, err := reader.Resolve(ctx, "tok"); !errors.Is(err, ErrGoneUpstream) {
+		t.Fatalf("Resolve(tok) after deletion upstream = %v, want ErrGoneUpstream", err)
+	}
+	want := []SecretValue{{SecretName: "tok", Key: "value", Value: "handed-out-secret"}}
+	for i := 0; i < 2; i++ {
+		known, err := reader.KnownValues(ctx)
+		if err != nil {
+			t.Fatalf("KnownValues: %v", err)
+		}
+		if !reflect.DeepEqual(known, want) {
+			t.Fatalf("KnownValues #%d = %+v, want the value read before it went, %+v", i, known, want)
+		}
+	}
+
+	if err := reader.DeleteKey("tok", "value"); err != nil {
+		t.Fatal(err)
+	}
+	if known, err := reader.KnownValues(ctx); err != nil || len(known) != 0 {
+		t.Fatalf("KnownValues after reconciling = %+v, %v; want none", known, err)
 	}
 }
