@@ -51,6 +51,14 @@ describe("CapabilitiesSection deprecation notices", () => {
       "bootstrap-playbooks-deprecation-notice",
       ["bootstrap-playbooks", "config-map#config-map"],
     ],
+    [
+      "github-sandbox-deprecation-notice",
+      [
+        "github-sandbox",
+        "https://grain.dev/capabilities/github#sandbox-repo",
+        "github#sandbox-repo",
+      ],
+    ],
   ])("shows %s", (testId, texts) => {
     render(<CapabilitiesSection />);
     const notice = screen.getByTestId(testId);

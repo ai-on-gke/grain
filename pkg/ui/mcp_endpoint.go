@@ -265,10 +265,34 @@ func (a mcpCallerAccess) authorizedRoutes() []APIRoute {
 	out := make([]APIRoute, 0, len(all))
 	for _, rt := range all {
 		if a.allowsRoute(rt) {
-			out = append(out, rt)
+			out = append(out, a.reachedAs(rt))
 		}
 	}
 	return out
+}
+
+// reachedAs is rt labelled with the scope this caller actually reaches it
+// through. A route reached only through a narrower scope's carve-out --
+// capabilities:detach on the capabilities:admin routes
+// (capabilitiesDetachAllowsRoute), tasks:admin's priority patch
+// (tasksAdminAllowsTaskPatch) -- is listed under that scope, so
+// grain_explore_scope does not tell a credential holding only the
+// non-dangerous capabilities:detach that it holds the dangerous
+// capabilities:admin (docs/test-runs/2026-11-07-director-agent-api.md,
+// finding 3). Only the label changes: the gate still authorizes the call
+// against routeScopes and the carve-out's own body rules.
+func (a mcpCallerAccess) reachedAs(rt APIRoute) APIRoute {
+	if a.fullAccess || a.grantSet.Has(rt.Scope) ||
+		(a.role != nil && a.role.Full && a.externalToken == nil && a.actingTaskID == "") {
+		return rt
+	}
+	switch {
+	case capabilitiesDetachAllowsRoute(a.grantSet, rt.Pattern):
+		rt.Scope = "capabilities:detach"
+	case tasksAdminAllowsTaskPatch(a.grantSet, rt.Pattern):
+		rt.Scope = "tasks:admin"
+	}
+	return rt
 }
 
 func scopeDomainGroup(scope APIScope) string {

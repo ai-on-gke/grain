@@ -651,7 +651,11 @@ func LookupWithRepoCredentials(fallback protocol.Lookup, repoCredentials []strin
 			}
 			return buildRepoServer(), nil
 		case GitHubID:
-			return buildGitHubServer(), nil
+			// The one server, not one built afresh: #sandbox-repo's leases
+			// are its protocol.Method's own, so a release_ answered by a
+			// server built for the release would know of no lease and never
+			// delete the repository (capability.MethodServer's doc comment).
+			return GitHubServer(), nil
 		}
 		if srv, ok, err := capability.MethodServer(capabilityID); ok {
 			return srv, err

@@ -27,7 +27,9 @@ function answer(routes) {
     const search = url.searchParams.get("search") || "";
     const cursor = url.searchParams.get("cursor") || "";
     const repo = url.searchParams.get("repo") || "";
-    const key = `${repo ? `repo=${repo}` : ""}${search ? `search=${search}` : ""}${cursor ? `@${cursor}` : ""}`;
+    const owner = url.searchParams.get("owner") || "";
+    const extRef = url.searchParams.get("externalRef") || "";
+    const key = `${repo ? `repo=${repo}` : ""}${search ? `search=${search}` : ""}${owner ? `owner=${owner}` : ""}${extRef ? `externalRef=${extRef}` : ""}${cursor ? `@${cursor}` : ""}`;
     if (!(key in routes)) throw new Error(`unexpected ${path}`);
     return routes[key];
   });
@@ -170,6 +172,118 @@ describe("useClosedTasks", () => {
     );
     await act(async () => release());
     expect(hook.result.current.closed.map((t) => t.id)).toEqual(["8"]);
+  });
+
+  it("asks the server for a pinned owner or external reference, not every page", async () => {
+    // 2026-11-07 walkthrough, F6: `externalRef:any:CA-9012` over closed
+    // work was answered only on the pages held, so the pager read every
+    // closed page until the one task turned up.
+    answer({
+      "": {
+        tasks: [closed("50", "2026-11-05T00:00:00Z")],
+        nextCursor: "c1",
+        total: 3000,
+        merged: 0,
+        sessions: 0,
+      },
+      "externalRef=CA-9012": {
+        tasks: [
+          closed("12", "2026-01-02T00:00:00Z", { externalRef: "CA-9012" }),
+        ],
+        nextCursor: "",
+        total: 1,
+        merged: 0,
+        sessions: 0,
+      },
+      "owner=deep@example.com": {
+        tasks: [
+          closed("12", "2026-01-02T00:00:00Z", { owner: "deep@example.com" }),
+        ],
+        nextCursor: "o1",
+        total: 2,
+        merged: 0,
+        sessions: 0,
+      },
+      "owner=deep@example.com@o1": {
+        tasks: [
+          closed("7", "2026-01-01T00:00:00Z", { owner: "deep@example.com" }),
+        ],
+        nextCursor: "",
+        total: 2,
+        merged: 0,
+        sessions: 0,
+      },
+      "search=quillowner=deep@example.com": {
+        tasks: [
+          closed("12", "2026-01-02T00:00:00Z", { owner: "deep@example.com" }),
+        ],
+        nextCursor: "",
+        total: 1,
+        merged: 0,
+        sessions: 0,
+      },
+    });
+    const hook = renderHook(
+      ({ q, filters }) => useClosedTasks(true, q, filters),
+      { initialProps: { q: "", filters: undefined } },
+    );
+    await waitFor(() => expect(hook.result.current.closed).toHaveLength(1));
+    expect(hook.result.current.searching).toBe(false);
+
+    hook.rerender({ q: "", filters: { owner: "", externalRef: "CA-9012" } });
+    // The pager pages the server's answer from the first render on, so
+    // the short list's end coming into view reads nothing else.
+    expect(hook.result.current.searching).toBe(true);
+    expect(hook.result.current.hasMore).toBe(false);
+    await waitFor(() =>
+      expect(hook.result.current.closed.map((t) => t.id)).toEqual(["50", "12"]),
+    );
+    // Drawn as found, unmarked: the views match the reference themselves.
+    const hit = hook.result.current.closed.find((t) => t.id === "12");
+    expect(hit.searchHit).toBeUndefined();
+    expect(hook.result.current.hasMore).toBe(false);
+    await act(() => hook.result.current.loadMore());
+    expect(
+      api.mock.calls
+        .filter(([p]) => !p.includes("externalRef="))
+        .map(([p]) => p),
+    ).toEqual(["/api/tasks?state=closed&limit=200&cursor="]);
+
+    // An owner pages its own answer, not the newest-closed list.
+    hook.rerender({
+      q: "",
+      filters: { owner: "deep@example.com", externalRef: "" },
+    });
+    await waitFor(() =>
+      expect(hook.result.current.closed.map((t) => t.id)).toEqual(["50", "12"]),
+    );
+    expect(hook.result.current.hasMore).toBe(true);
+    await act(() => hook.result.current.loadMore());
+    expect(hook.result.current.closed.map((t) => t.id)).toEqual([
+      "50",
+      "12",
+      "7",
+    ]);
+    expect(hook.result.current.hasMore).toBe(false);
+
+    // With the box set too, both go in one request.
+    hook.rerender({
+      q: "quill",
+      filters: { owner: "deep@example.com", externalRef: "" },
+    });
+    await waitFor(() =>
+      expect(hook.result.current.closed.map((t) => t.id)).toEqual(["50", "12"]),
+    );
+    expect(
+      hook.result.current.closed.find((t) => t.id === "12").searchHit,
+    ).toBe("quill");
+
+    // Dropped, the hits go and the pager is the newest-closed list's again.
+    hook.rerender({ q: "", filters: { owner: "", externalRef: "" } });
+    expect(hook.result.current.searching).toBe(false);
+    expect(hook.result.current.closed.map((t) => t.id)).toEqual(["50"]);
+    expect(hook.result.current.hasMore).toBe(true);
+    expect(api.mock.calls.some(([p]) => p.includes("cursor=c1"))).toBe(false);
   });
 });
 

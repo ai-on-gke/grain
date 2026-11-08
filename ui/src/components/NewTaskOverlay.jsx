@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import AccessGate from "./AccessGate.jsx";
 import { isApiGrant, withoutApiRows } from "../apiGrants.js";
 import GrantsPicker from "./GrantsPicker.jsx";
 import GrantChip from "./GrantChip.jsx";
@@ -2385,21 +2386,27 @@ export default function NewTaskOverlay({
           ) : (
             <span />
           )}
-          <Button
-            type="submit"
-            variant="contained"
-            onClick={markSubmitAttempt}
-            disabled={
-              submitting ||
-              priorityInvalid ||
-              forkHeadInvalid ||
-              (!title.trim() && !pickedTemplate) ||
-              (!noRepo && !repo.trim() && !pickedTemplate?.repo) ||
-              (!noRepo && newBranch && !newBranchName.trim())
-            }
+          <AccessGate
+            scope="tasks:write"
+            repo={noRepo ? undefined : repo.trim() || undefined}
+            config={config}
           >
-            Create task
-          </Button>
+            <Button
+              type="submit"
+              variant="contained"
+              onClick={markSubmitAttempt}
+              disabled={
+                submitting ||
+                priorityInvalid ||
+                forkHeadInvalid ||
+                (!title.trim() && !pickedTemplate) ||
+                (!noRepo && !repo.trim() && !pickedTemplate?.repo) ||
+                (!noRepo && newBranch && !newBranchName.trim())
+              }
+            >
+              Create task
+            </Button>
+          </AccessGate>
         </Stack>
       }
     >

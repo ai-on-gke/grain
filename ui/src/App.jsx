@@ -39,6 +39,7 @@ import { keepIfSame, UNCHANGED } from "./poll.js";
 import {
   NO_NARROWING,
   admitsState,
+  closedServerFilters,
   defaultFilters,
   defaultNarrowing,
   defaultSortFor,
@@ -377,7 +378,16 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // show closed work, "" otherwise: what useClosedTasks asks the server
   // to search closed tasks for (set below, once the narrowing is known).
   const [closedSearch, setClosedSearch] = useState("");
-  const closedTasks = useClosedTasks(tasksListed, closedSearch);
+  // closedPinned is the owner and external reference the narrowing pins
+  // (taskFilters.js's closedServerFilters), under the same conditions:
+  // the server answers those over closed work too.
+  const [closedPinnedOwner, setClosedPinnedOwner] = useState("");
+  const [closedPinnedRef, setClosedPinnedRef] = useState("");
+  const closedFilters = useMemo(
+    () => ({ owner: closedPinnedOwner, externalRef: closedPinnedRef }),
+    [closedPinnedOwner, closedPinnedRef],
+  );
+  const closedTasks = useClosedTasks(tasksListed, closedSearch, closedFilters);
   const tasks = useMemo(
     () => mergeTaskLists(liveTasks, closedTasks.closed),
     [liveTasks, closedTasks.closed],
@@ -525,10 +535,15 @@ function AppContent({ onReload = () => window.location.reload() }) {
     () => admitsState(narrowing, config, "closed"),
     [narrowing, config],
   );
-  const closedSearchWanted =
-    closedInView && stateFilterAdmitsClosed(stateFilter)
-      ? (narrowing.search || "").trim()
-      : "";
+  const closedAsked = closedInView && stateFilterAdmitsClosed(stateFilter);
+  const closedSearchWanted = closedAsked ? (narrowing.search || "").trim() : "";
+  const closedPinnedWanted = useMemo(
+    () =>
+      closedAsked
+        ? closedServerFilters(narrowing, config)
+        : { owner: "", externalRef: "" },
+    [closedAsked, narrowing, config],
+  );
   // A layout effect, not a passive one: the render that narrows the list
   // to the box's new text must not commit to the screen with the pager
   // still in its old mode. While it lagged, the end of the now-short list
@@ -536,9 +551,19 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // list (or of the previous search) on the first keystroke of every
   // search (2026-11-07 walkthrough); this one re-renders before paint,
   // so the observer is gone before it can fire.
+  // The owner and external reference go over the same way, for the same
+  // reason: a condition that narrows the list to a task deep in closed
+  // work must have the pager asking the server for it before the short
+  // list's end can come into view (2026-11-07 walkthrough, F6).
   useLayoutEffect(() => {
     setClosedSearch(closedSearchWanted);
-  }, [closedSearchWanted]);
+    setClosedPinnedOwner(closedPinnedWanted.owner);
+    setClosedPinnedRef(closedPinnedWanted.externalRef);
+  }, [
+    closedSearchWanted,
+    closedPinnedWanted.owner,
+    closedPinnedWanted.externalRef,
+  ]);
   // closedFloor is whether closed tasks a view could show are still to
   // be read -- a next page of the newest-closed list, or of the server's
   // search while the box is set -- so a count over that view is a floor.
@@ -3729,6 +3754,14 @@ function AppContent({ onReload = () => window.location.reload() }) {
                     alerts={alertsButton}
                     onOpenSettings={() => openSettings("")}
                     settingsOpen={view === "settings"}
+                    tasksStale={
+                      tasksListed &&
+                      tasksError &&
+                      !tasksLoadFailed(tasks, tasksListed, tasksError)
+                        ? String(tasksError)
+                        : null
+                    }
+                    onRetryTasks={retryTasks}
                   >
                     {sidebar}
                   </PhoneNav>

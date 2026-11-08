@@ -8,7 +8,7 @@
 
 ## What a capability is
 
-A **capability** is something a task, standing session, process or CI job is given for the length of one attempt: a GCP key, a checkout of another repository, a model-proxy token, an extra MCP toolset, a host script it may call, grain's own API under a scope. It is granted as a **reference**, `<capability_id>#<method>`, with a `with:` object validated against the method's schema (spec §2). `capability_id` is an `https://` URL used only as a name; grain never fetches it. Everything grain itself provides lives under `https://grain.dev/capabilities/`.
+A **capability** is something a task, standing session, process or CI job is given for the length of one attempt: a GCP credential (short-lived impersonated access tokens or a per-attempt service-account key; [`gcp-access.design.md`](gcp-access.design.md)), a checkout of another repository, a model-proxy token, an extra MCP toolset, a host script it may call, grain's own API under a scope. It is granted as a **reference**, `<capability_id>#<method>`, with a `with:` object validated against the method's schema (spec §2). `capability_id` is an `https://` URL used only as a name; grain never fetches it. Everything grain itself provides lives under `https://grain.dev/capabilities/`.
 
 **Trust model** (spec §1.3). The operator trusts each capability server with the credentials bound to it, and the server is fully trusted inside every sandbox it serves: its files, setup commands, prompt text and tools act with the run's authority. The sandbox is trusted by neither. It cannot reach a server's control plane (stdio pipe or `serverUrl`), only grain's per-attempt proxies. `with:` arguments are untrusted input, because they come from repositories, templates and agents. Grain refuses grants from external servers on a sandbox backend that cannot keep the control plane out of reach (the unisolated `host` backend, an unfenced `container` backend: `mintCapabilityPass` in `pkg/orchestrator/capability_pass.go`).
 
@@ -79,6 +79,7 @@ Until each one is converted, the UI shows it under **Legacy capabilities**.
 ## Where the detail is
 
 - Protocol, grant syntax, configuration, minting, materialization: [`capabilities.spec.md`](../spec/capabilities/capabilities.spec.md).
+- Keyless GCP capability access (`credential: token` vs. `credential: key`): [`gcp-access.design.md`](gcp-access.design.md) and [`docs/gcp-key-permission-sets.md`](../../docs/gcp-key-permission-sets.md).
 - Writing a server, built-ins, granting from the UI: [`docs/capabilities.md`](../../docs/capabilities.md).
 - The Settings pages: [`docs/capability-servers-ui.md`](../../docs/capability-servers-ui.md).
 - CI: [`docs/ci-capabilities.md`](../../docs/ci-capabilities.md).
