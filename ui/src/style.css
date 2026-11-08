@@ -5303,3 +5303,9 @@ a.committed-context-sha:hover {
   font-size: 0.71rem;
   color: var(--accent);
 }
+
+/* AccessGate's wrapper around a refused control: the control fills it,
+   as it fills the slot it would have taken ungated (AccessGate.jsx). */
+.access-gate > * {
+  flex-grow: 1;
+}
