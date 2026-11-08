@@ -112,6 +112,19 @@ export default function CapabilitiesSection({
         remains readable as an alias for one release; update <code>.grain</code>{" "}
         declarations and external configs to <code>config-map#config-map</code>.
       </Alert>
+      <Alert
+        severity="info"
+        data-testid="github-sandbox-deprecation-notice"
+        sx={{ mb: 2, overflowWrap: "anywhere" }}
+      >
+        Deprecated: the in-process <code>github-sandbox</code> grant was retired
+        onto <code>https://grain.dev/capabilities/github#sandbox-repo</code>,
+        which mints ephemeral repositories with the same{" "}
+        <code>github-app/app-id</code> and <code>github-app/private-key</code>{" "}
+        secrets. It remains readable as an alias for one release; update{" "}
+        <code>.grain</code> declarations, repository CI capabilities and
+        external configs to <code>github#sandbox-repo</code>.
+      </Alert>
       {/* The servers panel draws its own read-only form (readOnly), and
           keeps its list clickable so one server's page can still be
           opened; the card's disabled fieldset would stop that too. */}
