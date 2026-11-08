@@ -38,6 +38,7 @@ func cmdRegistryCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args
 	tf := bindRegistryTargetFlags(fs)
 	nameFlag := fs.String("name", "", "entry name (defaults to a random generated name when omitted)")
 	shape := fs.String("shape", "", "VM shape name (defaults to registry default shape)")
+	diskGB := fs.Int("disk-gb", 0, "boot disk size in GB (20..4000; defaults to shape default)")
 	zone := fs.String("zone", "", "optional GCE zone override")
 	displayName := fs.String("display-name", "", "human-readable display name in the registry directory")
 	purpose := fs.String("purpose", "", "short description of this hosted grain's purpose")
@@ -74,6 +75,12 @@ func cmdRegistryCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args
 		return err
 	}
 
+	if *diskGB != 0 {
+		if err := api.ValidateBootDiskGB(*diskGB); err != nil {
+			return err
+		}
+	}
+
 	regClient, _, err := tf.client(ctx, c)
 	if err != nil {
 		return err
@@ -87,6 +94,7 @@ func cmdRegistryCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args
 		Listed:      listed,
 		Tags:        parseCommaTags(*tags),
 		Shape:       strings.TrimSpace(*shape),
+		BootDiskGB:  *diskGB,
 		Zone:        strings.TrimSpace(*zone),
 		Scopes:      scopes,
 	}
@@ -360,6 +368,7 @@ func cmdRegistryResize(ctx context.Context, c *ui.HTTPClient, out *printer, args
 	fs := flag.NewFlagSet("grain registry resize", flag.ContinueOnError)
 	tf := bindRegistryTargetFlags(fs)
 	shapeFlag := fs.String("shape", "", "target VM shape name")
+	diskGB := fs.Int("disk-gb", 0, "boot disk size in GB (20..4000; defaults to shape default)")
 	ver := fs.String("version", "", "optional target grain version to apply during replacement")
 
 	rest, err := parseArgs(fs, args)
@@ -367,15 +376,20 @@ func cmdRegistryResize(ctx context.Context, c *ui.HTTPClient, out *printer, args
 		return err
 	}
 	if len(rest) < 1 || len(rest) > 2 {
-		return errors.New("usage: grain registry resize -shape <shape> [-version <vX.Y.Z>] <name>")
+		return errors.New("usage: grain registry resize [-shape <shape>] [-disk-gb <gb>] [-version <vX.Y.Z>] <name>")
 	}
 	name := strings.TrimSpace(rest[0])
 	shape := strings.TrimSpace(*shapeFlag)
 	if len(rest) == 2 && shape == "" {
 		shape = strings.TrimSpace(rest[1])
 	}
-	if shape == "" {
-		return errors.New("resize requires -shape <shape>")
+	if *diskGB != 0 {
+		if err := api.ValidateBootDiskGB(*diskGB); err != nil {
+			return err
+		}
+	}
+	if shape == "" && *diskGB == 0 {
+		return errors.New("resize requires -shape <shape> or -disk-gb <gb>")
 	}
 
 	regClient, _, err := tf.client(ctx, c)
@@ -384,6 +398,7 @@ func cmdRegistryResize(ctx context.Context, c *ui.HTTPClient, out *printer, args
 	}
 	updated, err := regClient.ReplaceEntry(ctx, name, api.ReplaceEntryRequest{
 		Shape:         shape,
+		BootDiskGB:    *diskGB,
 		TargetVersion: strings.TrimSpace(*ver),
 	})
 	if err != nil {

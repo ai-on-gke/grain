@@ -19,6 +19,8 @@ locals {
     "compute.googleapis.com",
     "iam.googleapis.com",
     "iap.googleapis.com",
+    "secretmanager.googleapis.com",
+    "sqladmin.googleapis.com",
   ])
 }
 
@@ -80,7 +82,7 @@ resource "google_compute_firewall" "lb_to_registry" {
 
 # Allow Cloud IAP TCP forwarding (`gcloud compute ssh --tunnel-through-iap`)
 # to SSH only (`enable-oslogin = "TRUE"`) for administrative operations
-# (`register-entry.sh`, `up.sh` reconciliation, and diagnostics).
+# (`register-entry.sh`, `up.sh` reconciliation, break-glass hosted VM checks, and diagnostics).
 resource "google_compute_firewall" "iap_to_registry" {
   name    = "${var.name_prefix}-allow-iap-tcp"
   network = google_compute_network.this.name
@@ -91,5 +93,36 @@ resource "google_compute_firewall" "iap_to_registry" {
   }
 
   source_ranges = ["35.235.240.0/20"]
-  target_tags   = ["${var.name_prefix}-vm"]
+  target_tags   = ["${var.name_prefix}-vm", "${var.name_prefix}-sql", "grain-instance"]
+}
+
+# Allow the grain-registry VM to probe and proxy HTTP (:8080) traffic to hosted
+# Grain GCE VM instances (`grain-vm-*`, tagged `grain-instance`) over the VPC.
+resource "google_compute_firewall" "registry_to_hosted_vms" {
+  name    = "${var.name_prefix}-allow-reg-to-vms"
+  network = google_compute_network.this.name
+
+  allow {
+    protocol = "tcp"
+    ports    = ["8080"]
+  }
+
+  source_tags = ["${var.name_prefix}-vm"]
+  target_tags = ["grain-instance"]
+}
+
+# Allow the grain-registry VM (per-instance role/DB provisioning) and hosted
+# Grain GCE VM instances (`grain-instance`) to reach the shared PostgreSQL pool
+# on TCP:5432.
+resource "google_compute_firewall" "to_instance_sql" {
+  name    = "${var.name_prefix}-allow-to-sql"
+  network = google_compute_network.this.name
+
+  allow {
+    protocol = "tcp"
+    ports    = ["5432"]
+  }
+
+  source_tags = ["${var.name_prefix}-vm", "grain-instance"]
+  target_tags = ["${var.name_prefix}-sql"]
 }

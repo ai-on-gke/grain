@@ -492,6 +492,24 @@ type Entry struct {
 	Generation          int              `json:"generation,omitempty"`
 }
 
+const (
+	// MinBootDiskGB is the minimum custom boot disk size in GB for a hosted VM.
+	MinBootDiskGB = 20
+	// MaxBootDiskGB is the maximum custom boot disk size in GB for a hosted VM.
+	MaxBootDiskGB = 4000
+)
+
+// ValidateBootDiskGB validates an optional boot disk size override (0 means use the shape default).
+func ValidateBootDiskGB(gb int) error {
+	if gb == 0 {
+		return nil
+	}
+	if gb < MinBootDiskGB || gb > MaxBootDiskGB {
+		return fmt.Errorf("boot_disk_gb must be between %d and %d GB (got %d)", MinBootDiskGB, MaxBootDiskGB, gb)
+	}
+	return nil
+}
+
 // CreateEntryRequest is the request body for POST /api/entries.
 type CreateEntryRequest struct {
 	Name               string       `json:"name"`
@@ -504,6 +522,7 @@ type CreateEntryRequest struct {
 	Listed             *bool        `json:"listed,omitempty"`
 	Tags               []string     `json:"tags,omitempty"`
 	Shape              string       `json:"shape,omitempty"`
+	BootDiskGB         int          `json:"boot_disk_gb,omitempty"`
 	Zone               string       `json:"zone,omitempty"`
 	AllowSSH           *bool        `json:"allow_ssh,omitempty"`
 	ShipLogs           *bool        `json:"ship_logs,omitempty"`
@@ -641,6 +660,7 @@ type UpgradeEntryRequest struct {
 // ReplaceEntryRequest triggers a shape or image replacement on a hosted instance entry.
 type ReplaceEntryRequest struct {
 	Shape         string `json:"shape,omitempty"`
+	BootDiskGB    int    `json:"boot_disk_gb,omitempty"`
 	TargetVersion string `json:"target_version,omitempty"`
 }
 
