@@ -1504,10 +1504,12 @@ func grantAlreadyStored(existing []string, name string, normalize func(string) (
 		return true
 	}
 	// A retired name is held by a row storing what it became (the
-	// release server's methods, schema migration 101), and the reverse.
+	// release server's methods, schema migration 101, and
+	// github#sandbox-repo, 124), and the reverse; so is a bare or
+	// case-varied spelling of the <ref>={} a row records.
 	if _, ok := model.CIGrantRuleFor(name); ok {
-		canonical := model.CanonicalLegacyGrant(name)
-		return slices.ContainsFunc(existing, func(e string) bool { return model.CanonicalLegacyGrant(e) == canonical })
+		canonical := model.CanonicalCIGrant(name)
+		return slices.ContainsFunc(existing, func(e string) bool { return model.CanonicalCIGrant(e) == canonical })
 	}
 	if model.IsCapabilityRef(name) && normalize != nil {
 		if recorded, err := normalize(name); err == nil && slices.Contains(existing, recorded) {
