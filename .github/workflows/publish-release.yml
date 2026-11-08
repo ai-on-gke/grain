@@ -278,8 +278,13 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write
+    # One group per release, shared by promote.yml, publish-release.yml and
+    # release-train-assets.yml (concurrency groups span a repository's
+    # workflows): cli-publish replaces archives left without checksums.txt,
+    # so two runs uploading to the same release at once could leave one
+    # run's archive beside the other's checksums.txt.
     concurrency:
-      group: ${{ github.workflow }}-cli-${{ github.ref_name }}
+      group: grain-cli-assets-${{ github.ref_name }}
       cancel-in-progress: false
     steps:
       - name: Checkout

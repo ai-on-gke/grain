@@ -334,6 +334,21 @@ func TestPublishReleaseVerifiesBeforeItPublishes(t *testing.T) {
 	contains(t, publishCLI, "needs: [publish, cli]")
 	contains(t, publishCLI, "if: needs.publish.outputs.train == 'true'")
 	contains(t, publishCLI, "release-assets.sh cli-publish")
+	// The step loop above reads the publish job alone, so hold every other
+	// job to the same rule: besides publish and cli (which can write
+	// nothing), a job runs only once publish has verified the tag as the
+	// train's.
+	jobs := text[strings.Index(text, "\njobs:\n"):]
+	for _, key := range workflowJobKey.FindAllString(jobs, -1) {
+		job := strings.TrimSuffix(strings.TrimSpace(key), ":")
+		if job == "publish" || job == "cli" {
+			continue
+		}
+		body := namedJob(t, text, job)
+		if !strings.Contains(body, "needs.publish.outputs.train == 'true'") {
+			t.Errorf("publish-release.yml job %q runs for a tag verify did not pass as the train's", job)
+		}
+	}
 }
 
 // Every vX.Y.Z and vX.Y.Z-rc.N release carries the grain CLI that GET
@@ -364,6 +379,11 @@ func TestEveryPublishedReleaseGetsItsGrainCLI(t *testing.T) {
 			if !strings.Contains(publish, want) {
 				t.Errorf("%s: the cli-assets job does not say %q", file, want)
 			}
+		}
+		// One concurrency group per release across the three workflows, so
+		// no two runs upload the same release's CLI at once.
+		if !strings.Contains(publish, "group: grain-cli-assets-${{ ") {
+			t.Errorf("%s: the cli-assets job does not queue in the shared grain-cli-assets-<release> group", file)
 		}
 		if strings.Contains(publish, "build-cli.sh") || strings.Contains(publish, "setup-go") {
 			t.Errorf("%s: the cli-assets job, which holds contents: write, builds something", file)
