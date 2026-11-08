@@ -280,7 +280,13 @@ export function settingsAliasAnchor(raw) {
 // alias in /settings/<alias>, unless a #hash already names a target.
 export function settingsAliasAnchorAt(pathname, hash) {
   if (hash && hash !== "#") return "";
-  const m = /^\/settings\/([^/]+)\/?$/.exec(String(pathname || ""));
+  const path = String(pathname || "");
+  // The old Integrations tab (/admin/integrations, /system/integrations)
+  // held the GitHub host and secrets before Legacy capabilities did, so
+  // it lands on the same card (2026-11-08 deployment credentials card
+  // walkthrough).
+  if (/^\/(admin|system)\/integrations\/?$/i.test(path)) return "credentials";
+  const m = /^\/settings\/([^/]+)\/?$/.exec(path);
   return m ? settingsAliasAnchor(decodeURIComponent(m[1])) : "";
 }
 

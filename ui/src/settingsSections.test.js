@@ -52,4 +52,23 @@ describe("settingsAliasAnchor", () => {
     expect(settingsAliasAnchorAt("/settings/credentials/x", "")).toBe("");
     expect(settingsAliasAnchorAt("/repos/credentials", "")).toBe("");
   });
+
+  // 2026-11-08 deployment credentials card walkthrough: /admin/integrations
+  // and /system/integrations -- the tab the GitHub host and secrets lived
+  // on before Legacy capabilities -- redirected to the top of
+  // Capabilities, 5,800px above the card, while /settings/credentials
+  // scrolled to it.
+  it("scrolls the old Integrations tab's addresses to the card too", () => {
+    expect(settingsAliasAnchorAt("/admin/integrations", "")).toBe(
+      "credentials",
+    );
+    expect(settingsAliasAnchorAt("/system/Integrations/", "")).toBe(
+      "credentials",
+    );
+    expect(settingsAliasAnchorAt("/admin/integrations", "#githubHost")).toBe(
+      "",
+    );
+    expect(settingsAliasAnchorAt("/admin/general", "")).toBe("");
+    expect(settingsAliasAnchorAt("/system/health", "")).toBe("");
+  });
 });
