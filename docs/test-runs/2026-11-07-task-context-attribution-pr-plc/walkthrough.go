@@ -602,10 +602,7 @@ func runItem2(ctx context.Context) *checks { return item2(ctx) }
 func runItem3(ctx context.Context) *checks { return item3(ctx) }
 func runItem4(ctx context.Context) *checks { return item4(ctx) }
 
-var _ = daemon.PullRequestOpener{}
-var _ github.Client
 
-func item4(ctx context.Context) *checks { return newChecks("item4") }
 
 // liveServer is a real ui.Server over a fresh SQLite store with the
 // operator's access code, for items 2-4.
@@ -618,7 +615,7 @@ type liveServer struct {
 	tmp    string
 }
 
-func newLiveServer(ctx context.Context, name string, mutate func(*ui.Config)) *liveServer {
+func newLiveServer(ctx context.Context, name string, mutate func(*ui.Config, *model.Store)) *liveServer {
 	tmp, _ := os.MkdirTemp("", "walk-"+name+"-*")
 	store, db := openStore(ctx, filepath.Join(tmp, "data"))
 	cfg := ui.Config{
@@ -627,7 +624,7 @@ func newLiveServer(ctx context.Context, name string, mutate func(*ui.Config)) *l
 		LocalAPIToken: operatorToken,
 	}
 	if mutate != nil {
-		mutate(&cfg)
+		mutate(&cfg, store)
 	}
 	client := ui.NewClient(cfg, store)
 	srv := httptest.NewServer(ui.NewServerWithClient(client))
@@ -920,5 +917,230 @@ func item3(ctx context.Context) *checks {
 	// Bob can't be set by an agent; Alice (token, not an agent) can hand it back.
 	code, body = alice.do("PATCH", "/api/tasks/"+aT.ID, map[string]any{"owner": "alice@example.com"})
 	c.Data["aliceTakesBack"] = fmt.Sprintf("HTTP %d %s", code, clip(body))
+	return c
+}
+
+// ---------------------------------------------------------------------------
+// Item 4: PR adoption (review-only vs finish) + request_human_review
+
+func pushBranch(bare, branch string, files map[string]string, msg string) string {
+	tmp, _ := os.MkdirTemp("", "walk-push-*")
+	defer os.RemoveAll(tmp)
+	work := filepath.Join(tmp, "w")
+	gitCmd(tmp, "clone", "-q", "-b", "main", bare, work)
+	gitCmd(work, "checkout", "-q", "-b", branch)
+	writeFiles(work, files)
+	gitCmd(work, "add", ".")
+	gitCmd(work, "commit", "-q", "-m", msg)
+	gitCmd(work, "push", "-q", "-f", "origin", branch)
+	return gitCmd(work, "rev-parse", "HEAD")
+}
+
+func markMergeable(sim *githubsim.Sim) {
+	t := true
+	for i := range sim.PullRequests {
+		if sim.PullRequests[i].State == "open" {
+			sim.PullRequests[i].Mergeable = &t
+		}
+	}
+}
+
+func item4(ctx context.Context) *checks {
+	c := newChecks("item4-pr-adoption-human-review")
+	gitRoot, _ := os.MkdirTemp("", "walk-item4-git-*")
+	defer os.RemoveAll(gitRoot)
+	bare, _, mainSHA := initBare(gitRoot, "acme", "widgets", map[string]string{"README.md": "widgets\n"})
+	sim := githubsim.New("acme", "widgets", bare, "main")
+	ghClient := github.NewClient(sim, nil)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+
+	// External contributor PR #41.
+	contribSHA := pushBranch(bare, "contrib/faster-parser", map[string]string{"parser.go": "package widgets\n"}, "faster parser")
+	yes := true
+	sim.PullRequests = append(sim.PullRequests, githubsim.PullRequest{
+		Number: 41, Title: "Faster parser", Body: "Speeds up parsing.", Head: "contrib/faster-parser", Base: "main",
+		HTMLURL: "https://github.com/acme/widgets/pull/41", State: "open", Mergeable: &yes, CreatedAt: time.Now().UTC(),
+	})
+	success := "success"
+	sim.CheckRuns[contribSHA] = []github.CheckRun{{ID: 1, Name: "Tests", Status: "completed", Conclusion: &success}}
+
+	l := newLiveServer(ctx, "item4", func(cfg *ui.Config, store *model.Store) {
+		cfg.PullRequests = &daemon.PullRequestOpener{Store: store, Client: ghClient}
+	})
+	defer l.Close()
+	_ = l.store.PutRepoConfig(ctx, model.RepoConfig{Repo: repo})
+	deps := orchestrator.Deps{Store: l.store, Client: ghClient}
+	now := time.Now().UTC()
+
+	// 4a. grain pr review (review-only filing) through the real CLI.
+	out, err := grainCLI(l.srv.URL, operatorToken, "pr", "review", "acme/widgets#41")
+	c.Data["cliPrReview"] = out
+	c.check("4a grain pr review files a review of the external PR", err == nil, "err=%v out=%s", err, clip([]byte(out)))
+	out, err = grainCLI(l.srv.URL, operatorToken, "pr", "adopt", "acme/widgets#41")
+	c.Data["cliPrAdoptReviewOnly"] = out
+	c.check("4b grain pr adopt (default review-only) files a shepherd", err == nil && strings.Contains(strings.ToLower(out), "review-only"),
+		"err=%v out=%s", err, clip([]byte(out)))
+	for i := 0; i < 3; i++ {
+		markMergeable(sim)
+		_ = orchestrator.RunCycle(ctx, deps, now.Add(time.Duration(i)*time.Minute))
+	}
+	headAfter := gitCmd(bare, "rev-parse", "refs/heads/contrib/faster-parser")
+	mainAfter := gitCmd(bare, "rev-parse", "refs/heads/main")
+	pr := sim.PullRequests[0]
+	c.check("4c review-only: no pushes to the PR branch, no merge, main untouched",
+		headAfter == contribSHA && mainAfter == mainSHA && !pr.Merged && pr.State == "open",
+		"head=%s (was %s) main=%s (was %s) merged=%v state=%s", headAfter[:12], contribSHA[:12], mainAfter[:12], mainSHA[:12], pr.Merged, pr.State)
+	out, err = grainCLI(l.srv.URL, operatorToken, "pr", "status", "acme/widgets#41")
+	c.Data["cliPrStatus"] = out
+	c.check("4d grain pr status reports the shepherd and review-only mode",
+		err == nil && strings.Contains(strings.ToLower(out), "review-only"), "err=%v out=%s", err, clip([]byte(out)))
+
+	// 4e. Upgrade gate: a tasks:write token (no tasks:admin) cannot upgrade an approved shepherd.
+	writer := l.token(c, "widgets-writer", "dana@example.com", []string{"tasks:read", "tasks:write", "repos:read", "merge:write"}, []string{"acme/widgets"})
+	code, body := writer.do("POST", "/api/pull-requests/adopt", map[string]any{"pr": "acme/widgets#41", "mode": "finish"})
+	c.Data["writerUpgrade"] = fmt.Sprintf("HTTP %d %s", code, clip(body))
+	c.check("4e upgrade to finish refused for a tasks:write token", code == 403, "HTTP %d %s", code, clip(body))
+	out, err = grainCLI(l.srv.URL, operatorToken, "pr", "adopt", "-mode", "finish", "acme/widgets#41")
+	if err != nil && strings.Contains(out, "flag provided but not defined") {
+		out, err = grainCLI(l.srv.URL, operatorToken, "pr", "adopt", "--mode=finish", "acme/widgets#41")
+	}
+	c.Data["cliPrAdoptFinish"] = out
+	c.check("4f operator upgrades review-only -> finish with grain pr adopt", err == nil && strings.Contains(strings.ToLower(out), "finish"),
+		"err=%v out=%s", err, clip([]byte(out)))
+
+	// 4g. request_human_review on an auto_merge: true task: a real run
+	// pushes through the scoped proxy and grain opens its PR; CI is still
+	// running when the review asks for a person, then turns green.
+	// Part one is done: close the adoption's tasks so only #500 dispatches.
+	if all, err := l.store.ListTasks(ctx); err == nil {
+		for _, t := range all {
+			_ = l.client.Close(ctx, t.ID, ui.CloseOptions{})
+		}
+	}
+	gs := startGit(ctx, l.tmp, l.store, []string{"acme/widgets"})
+	defer gs.Close()
+	_ = os.MkdirAll(filepath.Join(gs.root, "acme"), 0o755)
+	gitCmd(gitRoot, "clone", "-q", "--bare", bare, filepath.Join(gs.root, "acme", "widgets.git"))
+	bare = filepath.Join(gs.root, "acme", "widgets.git")
+	gitCmd(bare, "config", "http.receivepack", "true")
+	sim.BareRepo = bare
+	heldUI := l.create(c, l.api, "held task", map[string]any{
+		"title": "feat: add widget cache", "description": "cache", "repo": "acme/widgets", "autoMerge": true, "approved": true,
+	})
+	held := taskByID(ctx, l.store, heldUI.ID)
+	if held.Approval == nil {
+		_ = l.client.Approve(ctx, held.ID)
+	}
+	var sha string
+	sandboxRoot := filepath.Join(l.tmp, "sandboxes")
+	_ = os.MkdirAll(sandboxRoot, 0o755)
+	runDeps := orchestrator.Deps{
+		Store: l.store, Client: ghClient, Sandboxes: orchestrator.NewHostSandboxes(sandboxRoot),
+		Framework: orchestrator.StaticFramework(fnProvider(func(ctx context.Context, rc agent.RunConfig) (*agent.Result, error) {
+			work := filepath.Join(rc.SandboxRoot, "work")
+			_ = os.WriteFile(filepath.Join(work, "cache.go"), []byte("package widgets\n"), 0o644)
+			gitCmd(work, "add", "cache.go")
+			gitCmd(work, "commit", "-q", "-m", "feat: add widget cache\n\nAdds the cache.")
+			cmd := exec.Command("git", "push", "-q", "origin", "HEAD:refs/heads/"+rc.Branch)
+			cmd.Dir = work
+			cmd.Env = append(gitEnv(), "HOME="+rc.SandboxRoot)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				return nil, fmt.Errorf("push: %v %s", err, out)
+			}
+			sha = gitCmd(work, "rev-parse", "HEAD")
+			sim.CheckRuns[sha] = []github.CheckRun{{ID: 2, Name: "Tests", Status: "in_progress"}}
+			return &agent.Result{FinalText: "done", ToolCalls: []agent.ToolCall{
+				{Name: "comment_on_issue", Arguments: map[string]any{"comment": "Added the cache."}, Text: "ok"}}}, nil
+		})),
+		Config:           orchestrator.Config{GitRemoteBase: gs.proxy.URL},
+		MintSandboxToken: gs.tokens.EnsureToken,
+		MaxWorkers:       1,
+	}
+	deps = runDeps
+	for i := 0; i < 3; i++ {
+		markMergeable(sim)
+		_ = orchestrator.RunCycle(ctx, deps, now.Add(time.Duration(5+i)*time.Minute))
+	}
+	pr500 := model.TaskPullRequest(taskByID(ctx, l.store, held.ID))
+	if pr500 == nil {
+		runs, _ := l.store.Runs(ctx, held.ID)
+		c.check("4g run opens #500's PR", false, "no PR; links=%v runs=%+v", taskByID(ctx, l.store, held.ID).Links, runs)
+		return c
+	}
+	st := struct{ PullRequest struct{ Number int } }{}
+	st.PullRequest.Number = pr500.Number
+	c.Data["heldTaskLinksBeforeHold"] = fmt.Sprint(taskByID(ctx, l.store, held.ID).Links)
+	prNum := st.PullRequest.Number
+	review := model.Task{ID: "9501", Intent: model.IntentReview, Title: "Security review of #" + held.ID, Target: &repo, CreatedAt: &now,
+		Origin: model.Origin{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}}, Reason: model.ReasonReview},
+		Links:  []model.Link{{Kind: model.LinkProposedBy, Target: held.ID}}}
+	if err := l.store.PutTask(ctx, review); err != nil {
+		panic(err)
+	}
+	code, body = l.api.do("POST", "/api/tasks/"+review.ID+"/human-review", map[string]any{
+		"category": "security", "reason": "Adds an unauthenticated cache endpoint", "details": "Needs a person to confirm the exposure is intended.",
+	})
+	c.check("4g review run's request_human_review raises a hold on #500", code == 200, "HTTP %d %s", code, clip(body))
+	// The review run then finishes, so nothing but the hold stands between #500 and its merge.
+	if err := l.client.Close(ctx, review.ID, ui.CloseOptions{}); err != nil {
+		c.check("4g' review run finishes", false, "%v", err)
+	}
+	for i := 0; i < 3; i++ {
+		markMergeable(sim)
+		_ = orchestrator.RunCycle(ctx, deps, now.Add(time.Duration(10+i)*time.Minute))
+	}
+	var prState githubsim.PullRequest
+	for _, p := range sim.PullRequests {
+		if p.Number == prNum {
+			prState = p
+		}
+	}
+	sim.CheckRuns[sha] = []github.CheckRun{{ID: 2, Name: "Tests", Status: "completed", Conclusion: &success}}
+	for i := 0; i < 3; i++ {
+		markMergeable(sim)
+		_ = orchestrator.RunCycle(ctx, deps, now.Add(time.Duration(13+i)*time.Minute))
+	}
+	for _, p := range sim.PullRequests {
+		if p.Number == prNum {
+			prState = p
+		}
+	}
+	c.check("4h green checks + auto_merge still held for a person", !prState.Merged && prState.State == "open",
+		"PR #%d merged=%v state=%s", prNum, prState.Merged, prState.State)
+	code, body = l.api.do("GET", "/api/tasks/"+held.ID, nil)
+	var detail map[string]any
+	_ = json.Unmarshal(body, &detail)
+	hj, _ := json.Marshal(detail["humanReviewHold"])
+	c.Data["heldTaskState"] = detail["state"]
+	c.Data["humanReviewHold"] = detail["humanReviewHold"]
+	c.check("4i Task detail payload carries humanReviewHold with the category and reason",
+		strings.Contains(string(hj), "security") && strings.Contains(string(hj), "unauthenticated cache"), "state=%v hold=%s", detail["state"], hj)
+	_, body = l.api.do("GET", "/api/tasks", nil)
+	c.check("4j task list payload carries the hold (humanReview filter / list badge)",
+		strings.Contains(string(body), `"humanReviewHold"`), "list mentions humanReviewHold=%v", strings.Contains(string(body), `"humanReviewHold"`))
+	out, _ = grainCLI(l.srv.URL, operatorToken, "show", held.ID)
+	c.Data["cliShowHeld"] = out
+	c.check("4k grain show names the hold", strings.Contains(strings.ToLower(out), "human review") || strings.Contains(strings.ToLower(out), "held"),
+		"out=%s", clip([]byte(out)))
+	_, body = l.api.do("GET", "/api/inbox", nil)
+	inboxHeld := strings.Contains(string(body), `"kind":"merge-held","task":"`+held.ID+`"`)
+	c.Data["inbox"] = json.RawMessage(body)
+	c.check("4l Inbox lists the held task for a person", inboxHeld, "inbox=%s", clip(body))
+
+	// 4m. An agent token may not release it; a person can.
+	code, body = writer.do("POST", "/api/tasks/"+held.ID+"/human-review/release", nil)
+	c.check("4m external agent token cannot release the hold", code == 403, "HTTP %d %s", code, clip(body))
+	code, body = l.api.do("POST", "/api/tasks/"+held.ID+"/human-review/release", nil)
+	c.check("4n operator releases the hold", code == 200, "HTTP %d %s", code, clip(body))
+	for i := 0; i < 3; i++ {
+		markMergeable(sim)
+		_ = orchestrator.RunCycle(ctx, deps, now.Add(time.Duration(20+i)*time.Minute))
+	}
+	for _, p := range sim.PullRequests {
+		if p.Number == prNum {
+			prState = p
+		}
+	}
+	c.check("4o released hold lets auto-merge land", prState.Merged, "PR #%d merged=%v state=%s", prNum, prState.Merged, prState.State)
 	return c
 }
