@@ -5190,6 +5190,9 @@ func recordRunEnd(ctx, finishCtx context.Context, store *model.Store, cfg Config
 			log.Printf("orchestrator: run %s: flushing transcript to object store: %v", runID, sinkErr)
 		}
 		savedToObjectStore = saved
+		if !saved && narrative != "" {
+			transcript = fallbackNarrative(cfg.TranscriptSink, runID, transcript)
+		}
 	}
 	if finishErr == nil && transcript != "" && !savedToObjectStore {
 		// A separate write, after FinishRun's own -- see
@@ -5377,4 +5380,23 @@ func dispatchChangeTargetRefusal(task model.Task) error {
 			task.ID, task.ChangeTarget.Kind, model.CapabilityGrantRef(checked.Grants[len(checked.Grants)-1].Capability))
 	}
 	return nil
+}
+
+// fallbackNarrative is the narrative a run keeps in model.Store when its
+// TranscriptSink did not store it: redacted by the sink's own redaction
+// when it has one (NarrativeRedactor), and nothing at all when that
+// redaction fails, rather than a copy redacted less than the one the
+// object store would have held (the 2026-11-07 walkthrough found a
+// deployment secret in task_run.transcript after an upload failed).
+func fallbackNarrative(sink TranscriptSink, runID, transcript string) string {
+	nr, ok := sink.(NarrativeRedactor)
+	if !ok || transcript == "" {
+		return transcript
+	}
+	redacted, err := nr.RedactNarrative(transcript)
+	if err != nil {
+		log.Printf("orchestrator: run %s: not keeping the transcript the object store could not take: redacting it: %v", runID, err)
+		return ""
+	}
+	return redacted
 }

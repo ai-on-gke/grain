@@ -35,6 +35,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent/codex"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/objectstore"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/redact"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -504,6 +505,20 @@ func (t *TranscriptObjectStore) FlushRunEnd(ctx context.Context, runID, rawPath,
 		}
 	}
 	return savedNarrative, errors.Join(errs...)
+}
+
+var _ orchestrator.NarrativeRedactor = (*TranscriptObjectStore)(nil)
+
+// RedactNarrative implements orchestrator.NarrativeRedactor: the
+// redaction FlushRunEnd applies to a narrative before uploading it, for
+// the copy the orchestrator keeps in the database when the upload fails.
+func (t *TranscriptObjectStore) RedactNarrative(narrative string) (string, error) {
+	r, err := t.resolveRedactor()
+	if err != nil {
+		return "", err
+	}
+	redacted, _ := r.Text(narrative)
+	return redacted, nil
 }
 
 // RestoreRaw implements orchestrator.TranscriptSink.

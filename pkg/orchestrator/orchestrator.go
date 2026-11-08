@@ -1138,6 +1138,17 @@ type TranscriptSink interface {
 	RestoreRaw(ctx context.Context, runID, destPath string) error
 }
 
+// NarrativeRedactor is what a TranscriptSink that redacts more than the
+// run's own sandbox environment implements (pkg/daemon's
+// TranscriptObjectStore redacts every value in the deployment's secret
+// store before uploading). When FlushRunEnd could not store the
+// narrative, the copy kept in model.Store instead goes through the same
+// redaction, so a bucket outage never leaves a less-redacted transcript
+// behind than a healthy bucket would have.
+type NarrativeRedactor interface {
+	RedactNarrative(narrative string) (string, error)
+}
+
 // HostSandboxes hands out one directory per run, on the host this process
 // itself runs on. A directory is created by Acquire and removed by
 // Release, so nothing of one task's run survives into the next.

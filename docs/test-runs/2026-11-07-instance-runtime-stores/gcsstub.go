@@ -17,7 +17,9 @@
 // gcsstub is a tiny GCS JSON API stand-in for the 2026-11-07 §2
 // walkthrough: objects.insert (multipart, media and resumable uploads),
 // objects.get (metadata and alt=media), objects.list and objects.delete.
-// Every stored object is mirrored byte-for-byte under -dir/<bucket>/<name>
+// GET /_reset?bucket=B empties a bucket and GET /_fail?name=S makes
+// every upload whose object name contains S fail with a 503 (empty S
+// stops). Every stored object is mirrored byte-for-byte under -dir/<bucket>/<name>
 // so a walkthrough can grep exactly what crossed the wire, and every
 // request is logged to stdout.
 //
@@ -231,6 +233,14 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		default:
 			http.Error(w, "unsupported", 405)
 		}
+	case path == "/_reset":
+		mu.Lock()
+		delete(objects, q.Get("bucket"))
+		if dir != "" && q.Get("bucket") != "" {
+			_ = os.RemoveAll(filepath.Join(dir, filepath.Base(q.Get("bucket"))))
+		}
+		mu.Unlock()
+		fmt.Fprintf(w, "bucket %q emptied\n", q.Get("bucket"))
 	case path == "/_fail":
 		mu.Lock()
 		failPut = q.Get("name")
