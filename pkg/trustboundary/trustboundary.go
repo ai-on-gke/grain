@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v23"
+const Version = "trust-boundary/v24"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -81,6 +81,13 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v24 adds scripts/build-cli.sh to release-machinery (task 3597, filed by
+// task 3580): promote.yml, publish-release.yml and release-train-assets.yml
+// build the grain-<os>-<arch>.tar.gz archives and checksums.txt with it in a
+// contents: read job and publish them as assets on every vX.Y.Z and
+// vX.Y.Z-rc.N release, where GET /cli/install.sh installs them on
+// workstations.
 //
 // v23 adds what the 2026-11-08 security review of main (task 3329,
 // finding 1) found #885's v22 left out (auth-routes): the human-review
@@ -439,9 +446,10 @@ var Categories = []Category{
 			// and cancelling a dropped rc's runs.
 			"scripts/release-train-actions.sh", ".github/workflows/rc-qualification.yml",
 			// Release assets (docs/release-assets.md): the publisher every
-			// assets job runs with contents: write, and the workflow that
-			// runs it on the release train's tag pushes.
-			"scripts/release-assets.sh", ".github/workflows/release-train-assets.yml",
+			// assets job runs with contents: write, the CLI archive builder
+			// whose output it publishes on every release, and the workflow
+			// that runs them on the release train's tag pushes.
+			"scripts/release-assets.sh", "scripts/build-cli.sh", ".github/workflows/release-train-assets.yml",
 			".grain/workflows/release.yml", ".github/workflows/release.yml",
 			".grain/workflows/promote.yml", ".github/workflows/promote.yml",
 			".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",
