@@ -628,7 +628,7 @@ export default function SettingsPage({
         );
         break;
       case "hostds":
-        body = <HostdsSection {...common} />;
+        body = <HostdsSection {...common} dismissError={dismissError} />;
         break;
       case "audit":
         body = <AuditSection />;
