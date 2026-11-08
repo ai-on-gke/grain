@@ -238,10 +238,16 @@ Every normative requirement below is derived from the implementation on `main` a
 4. Across all non-deleted **listed** (`listed = true`) entries, at most one entry MAY hold an active `effective_role = 'primary'` scope on overlapping prefixes of the same repository `R`:
    - On synchronous control-plane writes (`POST /api/entries` with `listed = true`, `PATCH /api/entries/{name}` setting `listed = true`, or `PUT /api/entries/{name}/scopes` on a listed entry), an overlapping primary claim against an incumbent listed entry MUST be rejected with HTTP `409 Conflict` (`code: "primary_scope_conflict"`) and a structured `ScopeConflict` payload naming the incumbent entry, prefix, and owner.
    - On asynchronous `POST /api/entries/{name}/heartbeat`, a newly reported primary scope that overlaps an incumbent listed primary scope MUST NOT fail the heartbeat; instead, the contender's reported scope MUST be stored with `active = false`, `inactive_reason = 'primary_conflict'`, and `conflict_with = <incumbent>`, surfacing an active conflict banner in the UI and in `GET /api/admin/summary`.
+5. When `catalog.scope_owners` configures ownership rules (`repo: <owner>/<name>` or `<prefix>/*`, where an exact repository rule overrides the longest matching `<prefix>/*` rule, rules naming a host-qualified repository (`<host>/<owner>/...`) are consulted before bare `<owner>/...` rules, and a bare rule also governs host-qualified claims of the same path; repositories matching no rule remain self-service), an entry MAY hold a `primary` scope on a restricted repository if and only if `user:<entry.owner>`, `entry.owner_group`, or a `GroupResolver`-verified group of `entry.owner` appears in the rule's `principals`:
+   - Unauthorized synchronous `primary` writes and transfers (`POST /api/entries`, `PUT /api/entries/{name}/scopes`, `PATCH /api/entries/{name}`, `POST /api/entries/{name}/transfer`, `POST /api/entries/{name}/transfer/accept`) MUST fail closed with `403 Forbidden` (`code: "scope_owner_forbidden"`), or `503 Service Unavailable` (`Retry-After: 5`) if `GroupResolver` fails during evaluation.
+   - Asynchronous heartbeats (`PUT /api/entries/{name}/heartbeat`) and admin force-transfers (`POST /api/admin/entries/{name}/force-transfer`) MUST NOT fail liveness on an unauthorized `primary` scope; instead, unauthorized `primary` claims MUST be demoted to `role = 'secondary'`.
+   - Primary claims stored before a rule applied (the policy newly configured or tightened) MUST NOT be grandfathered: on startup the registry re-evaluates every entry's `primary` scopes and demotes those the policy does not authorize to `role = 'secondary'`. A `GroupResolver` error during this sweep leaves the claim unchanged rather than demoting it.
 
 **Pinned by:**
 - `pkg/registry/store/store_test.go`: `TestCredentialsScopesHeartbeatsAndRouteResolution`, `TestStep16TwoStepTransfer7DayExpiryRestoreHardPurgeAndAdminRecovery`
 - `pkg/registry/registry_test.go`: `TestStep12CatalogCRUDGroupAuthHeartbeatsDirectoryAndRouteEndToEnd`, `TestStep16TwoStepTransferRestoreHardPurgeAndAdminRecoveryEndToEnd`
+- `pkg/registry/scope_owners_and_shapes_test.go`: `TestParseConfigScopeOwnersValidationAndMatching`, `TestDefaultScopeClaimsWalkthroughAndSecondaryRoute`, `TestCatalogScopeOwnersEnforcesPrimaryClaimsAndDemotesHeartbeats`
+- `pkg/registry/scope_owners_sweep_test.go`: `TestScopeOwnersStartupSweepDemotesPrePolicyPrimaries`
 
 ---
 
@@ -256,10 +262,12 @@ Every normative requirement below is derived from the implementation on `main` a
    2. **Effective role** (`primary` ahead of `secondary`);
    3. **Live reachability status** (`online` ahead of `degraded` ahead of `offline`), EXCEPT that an `offline` `primary` at equal or higher specificity MUST remain ranked ahead of an `online` `secondary` when `include_offline` is `true` (the default) so callers see that the designated primary owner is offline; when `include_offline=false` is passed, offline entries (including offline primaries) MUST be excluded;
    4. **Tie-breakers**: earlier `claimed_at`, then lexicographical `entry.name`.
+4. `RouteResponse.Primary` MUST be populated if and only if the top-ranked candidate's `matched_scope.role == "primary"`; when only `secondary` entries match `(repo, path)`, `Primary` MUST remain `nil` while matching `secondary` entries are returned in `Candidates`.
 
 **Pinned by:**
 - `pkg/registry/store/store_test.go`: `TestCredentialsScopesHeartbeatsAndRouteResolution`
 - `pkg/registry/registry_test.go`: `TestStep12CatalogCRUDGroupAuthHeartbeatsDirectoryAndRouteEndToEnd`
+- `pkg/registry/scope_owners_and_shapes_test.go`: `TestDefaultScopeClaimsWalkthroughAndSecondaryRoute`, `TestCatalogScopeOwnersEnforcesPrimaryClaimsAndDemotesHeartbeats`
 
 ### 7.2 Zero-SQL hot path (`CatalogCache` + PostgreSQL `LISTEN/NOTIFY`) {#REG-19}
 
