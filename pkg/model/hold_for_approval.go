@@ -102,10 +102,25 @@ func AutoApprovalRefusal(child, parent Task, sessionQueues bool, seeding *Propos
 	}
 	if escalated, _ := ProposalEscalations(child, parent, sessionQueues, seeding); len(escalated) > 0 {
 		asked, seeded := SeededEscalations(child, escalated)
+		// A grant only a person may give is escalated whether or not
+		// parent holds it (CapabilityEscalationNote), so it is not said
+		// to be one parent lacks.
+		var lacked, personal []string
+		for _, c := range asked {
+			if IsPersonOnlyGrant(c) {
+				personal = append(personal, c)
+			} else {
+				lacked = append(lacked, c)
+			}
+		}
 		var why []string
-		if len(asked) > 0 {
+		if len(lacked) > 0 {
 			why = append(why, fmt.Sprintf("it asks for %s, which your task does not hold",
-				"`"+strings.Join(asked, "`, `")+"`"))
+				"`"+strings.Join(lacked, "`, `")+"`"))
+		}
+		if len(personal) > 0 {
+			why = append(why, fmt.Sprintf("it asks for %s, which only a person may grant, "+
+				"whether or not your task holds it", "`"+strings.Join(personal, "`, `")+"`"))
 		}
 		if len(seeded) > 0 {
 			why = append(why, fmt.Sprintf("it is seeded with this deployment's default capability %s, "+

@@ -65,6 +65,22 @@ async function barBoxes(page) {
   };
 }
 
+// The placement checks measure the bar without an environment chip, which
+// takes up to 96 px of the wordmark's room. This worker's demo server is
+// shared with the files run before this one (e2e/fixtures.js), and
+// several of them save an environment name, so the name is cleared here
+// and put back afterwards rather than assumed empty.
+let environmentName = "";
+test.beforeEach(async ({ page }) => {
+  environmentName =
+    (await (await page.request.get("/api/settings")).json()).environmentName ??
+    "";
+  await page.request.put("/api/settings", { data: { environmentName: "" } });
+});
+test.afterEach(async ({ page }) => {
+  await page.request.put("/api/settings", { data: { environmentName } });
+});
+
 for (const colorScheme of ["light", "dark"]) {
   test(`a phone's top bar says the task list is stale while /api/tasks fails (390px, ${colorScheme})`, async ({
     page,
@@ -115,7 +131,12 @@ for (const colorScheme of ["light", "dark"]) {
         );
       }
       // The wordmark keeps its room: the row takes none from the bar.
-      expect(after.wordmark.width).toBeGreaterThan(30);
+      // Its room is what the bar's other items leave it, so it is
+      // compared with the bar before the outage rather than with a
+      // fixed width: an environment name an earlier spec left on the
+      // worker's shared demo server puts a chip of up to 96 px beside it.
+      expect(after.wordmark).toEqual(before.wordmark);
+      expect(after.wordmark.width).toBeGreaterThan(0);
       const main = await page.locator("main").first().boundingBox();
       expect(main.y).toBeGreaterThanOrEqual(box.y + box.height - 0.5);
       // One line, nothing cut off at this width.
