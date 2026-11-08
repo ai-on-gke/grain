@@ -1,0 +1,174 @@
+# schema
+93
+# task_grant
+2 | claude-proxy | label
+2 | gcp-key | label
+2 | gcp-key:deploy | label
+2 | gemini-key | label
+2 | gemini-proxy | label
+2 | grain-ci | default
+2 | image-signing | label
+2 | openai-proxy | label
+2 | package-publish | label
+2 | registry-push | label
+3 | claude-proxy | grain
+3 | durable | grain
+3 | gcp-key | grain
+3 | gcp-key:deploy | grain
+3 | gemini-key | grain
+3 | gemini-proxy | grain
+3 | openai-proxy | grain
+# template_grant
+template-1 | claude-proxy | label
+template-1 | gcp-key | label
+template-1 | gcp-key:deploy | label
+template-1 | gemini-key | label
+template-1 | gemini-proxy | label
+template-1 | grain-ci | label
+template-1 | image-signing | label
+template-1 | openai-proxy | label
+template-1 | package-publish | label
+template-1 | registry-push | label
+# schedule_grant
+sched-1 | claude-proxy | label
+sched-1 | gcp-key | label
+sched-1 | gcp-key:deploy | label
+sched-1 | gemini-key | label
+sched-1 | gemini-proxy | label
+sched-1 | grain-ci | label
+sched-1 | image-signing | label
+sched-1 | openai-proxy | label
+sched-1 | package-publish | label
+sched-1 | registry-push | label
+# grain_config.default_capabilities
+gcp-key
+openai-proxy
+# repo_config
+acme/widgets | default | gcp-key:deploy
+acme/widgets | default | claude-proxy
+acme/widgets | default | gemini-key
+acme/widgets | ci | gcp-key
+acme/widgets | ci | claude-proxy
+acme/widgets | ci | image-signing
+acme/widgets | ci | registry-push
+acme/widgets | ci | package-publish
+acme/widgets | ci | gemini-key
+# console_sessions (id: capabilities)
+retired-session: ['claude-proxy', 'gcp-key', 'gcp-key:deploy', 'gemini-key', 'gemini-proxy', 'grain-ci', 'image-signing', 'openai-proxy']
+# capability_policy
+{
+ "catalogue": {
+  "apiScopes": {},
+  "defaults": {
+   "ci": [
+    "image-signing",
+    "package-publish",
+    "gcp-key:deploy",
+    "grain-ci"
+   ],
+   "repos": {
+    "acme/widgets": {
+     "ci": [
+      "registry-push",
+      "openai-proxy"
+     ],
+     "task": [
+      "gcp-key:deploy",
+      "gemini-proxy"
+     ]
+    }
+   },
+   "task": [
+    "gcp-key",
+    "claude-proxy",
+    "gemini-key"
+   ]
+  },
+  "inProcess": {
+   "claude-proxy": {
+    "enabled": true
+   },
+   "gcp-key": {
+    "enabled": true
+   },
+   "gemini-key": {
+    "enabled": true
+   },
+   "grain-ci": {
+    "enabled": true
+   },
+   "image-signing": {
+    "enabled": false
+   }
+  }
+ }
+}
+# mcp_servers
+{
+ "https://grain.dev/capabilities/config-map": {
+  "args": [
+   "capability",
+   "config-map"
+  ],
+  "builtin": "config-map",
+  "command": "grain"
+ },
+ "https://grain.dev/capabilities/gchat": {
+  "args": [
+   "capability",
+   "gchat",
+   "-listen",
+   "127.0.0.1:4251"
+  ],
+  "builtin": "gchat",
+  "command": "grain"
+ },
+ "https://grain.dev/capabilities/gcp": {
+  "args": [
+   "capability",
+   "gcp"
+  ],
+  "builtin": "gcp",
+  "command": "grain"
+ },
+ "https://grain.dev/capabilities/git": {
+  "args": [
+   "capability",
+   "git"
+  ],
+  "builtin": "git",
+  "command": "grain"
+ },
+ "https://grain.dev/capabilities/host-script": {
+  "args": [
+   "capability",
+   "host-script"
+  ],
+  "builtin": "host-script",
+  "command": "grain"
+ },
+ "https://grain.dev/capabilities/model-proxy": {
+  "args": [
+   "capability",
+   "model-proxy"
+  ],
+  "builtin": "model-proxy",
+  "command": "grain"
+ }
+}
+# agent_backends
+[
+ {
+  "framework": "claude",
+  "id": "stub",
+  "name": "Stub"
+ },
+ {
+  "command": "/usr/local/bin/my-agent --prompt-file {prompt}",
+  "framework": "custom",
+  "id": "my-custom",
+  "name": "My custom agent"
+ }
+]
+# gcp_key
+deploy | walk-deploy | deployer@walk-deploy.iam.gserviceaccount.com | 1 | gcp-key-minter-deploy | 7200
