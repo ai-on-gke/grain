@@ -1,203 +1,170 @@
 # Task intake, Inbox and lifecycle UI walkthrough — 2026-11-08
 
-- **Date:** 2026-11-08, 03:30–04:15 UTC
-- **Task:** grain/098073e4/task-3158 (attempt 2), base `main`
+- **Date:** 2026-11-08, 04:17–05:00 UTC
+- **Task:** task 3354, branch `grain/098073e4/task-3354-walk-through-task-intake-inbox`, base `main`
 - **Commit tested:** `d7dde0c2` (`main` at the start of the run, "Merge pull
-  request #877"), which is the build the rail's version link names
-  (`v0.0.0-20261108030308-d7dde0c23839`). The two fixes below were checked
-  against a rebuild of this branch on a second server.
+  request #877"). The binary reports `v0.0.0-20261108030308-d7dde0c23839`.
 - **Environment:**
-  - Debian sandbox, `linux/amd64`; Go from `/usr/local/bin/go`, Node.js
-    `v20.19.0`
+  - Debian sandbox, `linux/amd64`; Go 1.26.10, Node.js `v20.19.0`
   - Playwright from `ui/package-lock.json`, headless Chromium
-    (`PLAYWRIGHT_BROWSERS_PATH=/var/cache/playwright`), timezone UTC, 1400×900
-    unless a step says 390×844
-  - `cd ui && npm ci && npm run build`, then `go build ./cmd/grain`, so the
-    embedded `pkg/ui/static` was current.
-  - `:8420` (base build): `grain demo -addr 127.0.0.1:8420 -open=false
--github-sim -fake-ci -scheduled-workflows -merge-rules -merge-queue-states
+    (`PLAYWRIGHT_BROWSERS_PATH=/var/cache/playwright`), timezone UTC,
+    1400×900
+  - Frontend built with `cd ui && npm ci && npm run build`, then
+    `go build -o /var/tmp/grain ./cmd/grain`, so the embedded
+    `pkg/ui/static` was current
+  - Server: `grain demo -addr 127.0.0.1:8420 -open=false -github-sim
+-fake-ci -scheduled-workflows -merge-rules -merge-queue-states
 -secrets-store -stalled-tasks -sensitive-hold -review-questions
--notifications -fork-pull-request -access-code-file <file>`, with
-    `TMPDIR=/var/tmp/walk`, so the store was a throwaway embedded SQLite file.
-  - `:8421` (this branch's build): `grain demo -github-sim -fork-pull-request`
-    over its own throwaway store, for the fixes only.
-  - There was no `/home/debian/.gemini-api-key`, so no model was called and
-    `LOOK=1` could not describe screenshots. `sqlite3` was installed with apt
-    for stub 1.
-- **How it was driven:** throwaway Playwright scripts (not committed). They sign
-  in with `POST /api/auth/access-code`, then act only through visible controls.
-  Every page logged `pageerror`, console errors and warnings, responses of 400
-  or more (with their bodies), failed requests, every dialog (its text and
-  whether it was accepted or dismissed), and every non-GET `/api/` request with
-  its body. The REST API was used only to read back what a gesture had
-  persisted, except where a stub below says otherwise.
+-notifications -fork-pull-request -human-review -base-branch-ci
+-access-code-file <file>` with `TMPDIR=/var/tmp/walk`, so the store
+    was a throwaway embedded SQLite file
+  - There was no `/home/debian/.gemini-api-key`, so no model was called.
+    `sqlite3` was installed with apt for stub 1.
+- **How it was driven:** throwaway Playwright scripts (not committed). Each
+  one signs in through the "Access code" page and then acts only through
+  visible controls. Every page logged `pageerror`, console errors and
+  warnings, `/api/` responses of 400 or more (with their bodies), failed
+  requests, every dialog (its text and whether it was accepted), and every
+  non-GET `/api/` request with its body. The REST API was used only to read
+  back what a gesture had persisted, and for the setup stubs listed below.
 
 ## Stubs
 
-The server, store, built frontend, browser and gestures were real throughout.
-Each stub stands in for something that only an agent run, a reconciler or an
-external system writes:
+The server, store, built frontend, browser and gestures were real
+throughout. Each stub stands in for something that only an agent run, a
+reconciler, a config repository or setup would write:
 
-1. **Host-script approvals** (a run's runhost): sqlite `task_grant`
-   `('2', 'https://grain.dev/capabilities/grain#host-script={"scripts":["deploy.sh"]}', 'operator')`,
-   then three `POST /api/tasks/2/local-script-approvals` (`walk-1`, `walk-2`,
-   and `walk-3` with `stdin_bytes: 42`, a two-line `stdin_preview` and
-   `stdin_sha256: abc123`).
-2. **Template priority:** `PATCH /api/templates/template-2 {"priority":8}`
-   (setup only).
+1. **Host-script approvals** (normally posted by a run's runhost): sqlite
+   `task_grant ('2','local-scripts:deploy-tools','operator')`, then two
+   `POST /api/tasks/2/local-script-approvals` (`walk-1`, `walk-2`) with
+   the access code as a bearer token. Each carried a 42-byte stdin preview
+   and sha256 `abc123`. The endpoint refuses a signed-in person, so a
+   browser cannot make the request itself.
+2. **Template priority** (setup): `PATCH /api/templates/template-2
+{"priority":8}`.
 3. **Config-repo sync failure** (`grain demo` has no state repository):
-   `page.route` added `stateRepoSyncFailure` to the real `GET /api/config`.
-4. **`settings/new-task-form.yml`** (no config repository): `page.route` added
-   `newTaskForm: {default: {fields: {customFields: {visibility: hidden}}}}`
-   to `GET /api/config`.
-5. **Inbox empty and error states:** `page.route` emptied `GET /api/tasks`,
-   `/api/notifications` and `/api/local-script-approvals`, then in a second
-   pass answered `GET /api/tasks` with a 500 on a cold load.
-6. **A close and reopen with a long reason** (what an agent or the CLI sends;
-   the page's Close sends none): `POST /api/tasks/32/close {"reason":…}` and
-   `POST …/32/reopen {"reason":…}`, with a 400-character reason ending in an
-   unbroken 115-character token.
+   `page.route` added `stateRepoSyncFailure {since, error:"push rejected:
+non-fast-forward", repo:"acme/grain-config"}` to the real `GET
+/api/config`.
+4. **`settings/new-task-form.yml`** (no config repository):
+   `page.route` added `newTaskForm: {default: {fields: {customFields:
+{visibility: hidden}}}}` to `GET /api/config`.
+5. **Inbox empty and error states:** `page.route` emptied the arrays in
+   `GET /api/tasks`, `/api/notifications` and
+   `/api/local-script-approvals`. A second pass answered `GET /api/tasks`
+   with a 500.
 
 ## Steps and outcomes
 
 ### Inbox
 
-| #   | Step                                                          | Outcome                                                                                                                                                                                                                                                                                                         | Verdict |
-| --- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| 1   | Rail's Inbox from `/`, then `/inbox` directly                 | Both open `/inbox`. Rail `Inbox 23`: Notifications 3 (collapsed, count shown), Asked: reply 2, Review needs your decision 1, Asked: submit for merge 9, Unblock a merge 1, Approve on GitHub 1, Look at a stuck task 4, Approve a proposal 2. These sum to 23.                                                  | PASS    |
-| 2   | Notifications by keyboard                                     | Starts `aria-expanded=false`. Enter → true, Space → false, Enter → true. It lists the flaky-e2e notice, the v2.4.0 promotion (Approve / Reject / Acknowledge / Investigate) and the stalled-merge notice.                                                                                                       | PASS    |
-| 3   | Collapse Approve a proposal by click; reload                  | After the reload Notifications is still expanded and Approve a proposal still collapsed.                                                                                                                                                                                                                        | PASS    |
-| 4   | Stuck group sub-cases                                         | #5 (`syncEntry`, merge queue) offers Open task only; #21 (`reconcileDispatch`) offers Run now; #22 (`ProcessResult`) offers Cancel; #23 (`reconcileWake`) offers Undefer. Each note names the part of grain that should have moved the task on.                                                                 | PASS    |
-| 5   | Run now #21; Cancel #22 dismissed, then accepted; Undefer #23 | Run now → #21 leaves the group (4→3), `queued`. Cancel asks "Cancel 22? The run in flight is stopped and the task is closed; it can be reopened later."; dismissing sends nothing (#22 still `running`); accepting sends `…/22/close` and #22 is `closed`. `…/23/undefer` → #23 `queued`. The rail falls 22→20. | PASS    |
-| 6   | Retry merge on #25 (Unblock a merge)                          | `POST …/25/retry-merge`; the group is gone.                                                                                                                                                                                                                                                                     | PASS    |
-| 7   | Approve proposal #1                                           | `…/1/approve`; #1 `queued`. #12 still shows `imported` and `unapproved` with Approve / Defer / Decline.                                                                                                                                                                                                         | PASS    |
-| 8   | Parked question #4: Reply, Send                               | Reply opens an inline box; Send posts `…/4/comments {"body":"Only unblock the merge queue."}`; #4 `queued`; Asked: reply 2→1.                                                                                                                                                                                   | PASS    |
-| 9   | Review decision #28: Ship as is                               | Offers Reply and Ship as is; Ship as is sends `…/28/submit`; #28 `completed` (merge queue); the group is gone.                                                                                                                                                                                                  | PASS    |
-| 10  | CL rows in Asked: submit for merge                            | Submit is inline only on submittable rows: #15 (CL), and PRs #6, #24, #26. #14, #16, #17, #18 and #19 carry their "Not submittable yet: …" reason and no Submit. Submit on #15 sends `…/15/submit`; #15 closes as merged (rail Merged 1, `/?state=merged` lists it). The rail reads 15.                         | PASS    |
-| 11  | Local scripts (stub 1)                                        | The "Local scripts waiting for approval 3" group appears and the rail goes 15→18. Each row says `deploy.sh "--env" "staging-1"`; walk-3 adds "(and 42 bytes on stdin)", "On stdin: 42 bytes, sha256 abc123" and the preview.                                                                                    | PASS    |
-| 12  | Deny a call on task #2's page; reload                         | `…/lsa-1/answer {"approve":false}`; after the reload the timeline has "Denied local script call walk-1 (deploy-tools)"; the Inbox group reads 2.                                                                                                                                                                | PASS    |
-| 13  | Config-repo sync failure (stub 3)                             | A "Settings are not being exported 1" group explains the backup gap. The rail's 17 equals the groups (3+2+1+7+1+1+1 = 16) plus the failure.                                                                                                                                                                     | PASS    |
-| 14  | Empty and error states (stub 5)                               | Empty: "Nothing is waiting on you. Every task is either running, waiting or done." 500: "The task list could not be read, so this page cannot show what is waiting on you yet. It tries again on its own."                                                                                                      | PASS    |
+| #   | Step                                                          | Outcome                                                                                                                                                                                                                                                                                                                                                                                       | Verdict |
+| --- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| 1   | Rail's Inbox from `/`, then `/inbox` directly                 | Both land on `/inbox`. The rail read `Inbox 25` ("21 tasks waiting on you, 4 notifications"), and `27` once stub 1's two waiting host-script calls were added. Groups: Notifications 4, Local scripts waiting for approval 2, Asked: reply 2, Review needs your decision 1, Asked: submit for merge 10, Unblock a merge 1, Approve on GitHub 1, Look at a stuck task 4, Approve a proposal 2. | PASS    |
+| 2   | Notifications by keyboard                                     | Starts `aria-expanded=false` with its count 4 still shown. Enter → true, Space → false, Enter → true.                                                                                                                                                                                                                                                                                         | PASS    |
+| 3   | Collapse Approve a proposal by click, then reload             | After the reload Notifications stays expanded and Approve a proposal stays collapsed. Enter on its header opens it again.                                                                                                                                                                                                                                                                     | PASS    |
+| 4   | Local scripts: Approve walk-1, Deny walk-2                    | Each row names task 2 and shows `deploy.sh "--env" "staging-N" (and 42 bytes on stdin)`, "On stdin: 42 bytes, sha256 abc123" and the preview. Approve sends `…/lsa-1/answer {"approve":true}` and the group goes 2 → 1. Deny sends `{"approve":false}` and the group disappears. The rail goes 27 → 26 → 25 (the second change shows on the next poll).                                       | PASS    |
+| 5   | Stuck group sub-cases                                         | #5 (`syncEntry`, on the merge queue) offers only Open task. #21 (`reconcileDispatch`) offers Run now, #22 (`ProcessResult`, live run) offers Cancel, and #23 (`reconcileWake`) offers Undefer. Each row explains why it counts as stuck.                                                                                                                                                      | PASS    |
+| 6   | Run now #21; Cancel #22 dismissed, then accepted; Undefer #23 | Run now: `…/21/run-now`, the group goes 4 → 3, #21 is `queued`. Cancel asks "Cancel 22? The run in flight is stopped and the task is closed; it can be reopened later." Dismissing sends nothing (#22 stays `running`). Accepting sends `…/22/close`, #22 is `closed`, the group goes → 2. Undefer: `…/23/undefer`, #23 is `queued`, the group goes → 1.                                      | PASS    |
+| 7   | Retry merge on #25 (Unblock a merge)                          | `POST …/25/retry-merge`; the group disappears.                                                                                                                                                                                                                                                                                                                                                | PASS    |
+| 8   | Approve proposal #1                                           | `…/1/approve`; #1 is `queued`; Approve a proposal goes 2 → 1. #12 is still listed with its `imported` chip and Approve / Defer / Decline.                                                                                                                                                                                                                                                     | PASS    |
+| 9   | Parked question #4: Show question, Reply                      | Show question expands the full question and its context. Reply → Send posts `…/4/comments {"body":…}`; #4 goes `awaiting_reply` → `queued` and Asked: reply goes 2 → 1.                                                                                                                                                                                                                       | PASS    |
+| 10  | Review decision #28: Ship as is                               | `POST …/28/submit`; #28 is `completed` (merge queue); the Review needs your decision group disappears.                                                                                                                                                                                                                                                                                        | PASS    |
+| 11  | Submit offered only when submittable                          | In Asked: submit for merge, Submit appears on #6, #15, #24, #26 and #30. CL tasks #14, #16, #17, #18 and #19, which are not submittable, have no Submit; each row instead says why it cannot be submitted yet (for example "review is not approved (changes requested); required presubmit has not passed on snapshot 3 (failed)").                                                           | PASS    |
+| 12  | CL actions (Mail, Publish replies, Sync)                      | These are on the task page, not the Inbox row (see O1). #14: Mail disabled, Publish replies (2), Submit disabled, Sync. #17: Mail enabled. Pressing it sends `…/17/change-mail {}` and the review becomes `in_review`, "already mailed". #19: Sync sends `…/19/change-sync`; Submit stays disabled for "required presubmit has not passed on snapshot 3 (not run)".                           | PASS    |
+| 13  | Config-repo sync failure (stub 3)                             | Rail 18 → 19. A "Settings are not being exported 1" group appears with "Settings have not been exported to acme/grain-config since 11/8/2026, 3:00:00 AM: push rejected: non-fast-forward".                                                                                                                                                                                                   | PASS    |
+| 14  | Empty state, then load error (stub 5)                         | Empty: "Nothing is waiting on you. Every task is either running, waiting or done." and the rail shows no Inbox count. Error: "The task list could not be read, so this page cannot show what is waiting on you yet. It tries again on its own." Notifications stay listed.                                                                                                                    | PASS    |
 
-### New task
+### Intake
 
-| #   | Step                                                 | Outcome                                                                                                                                                                                                                                                                                                                                                                                                         | Verdict                      |
-| --- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
-| 15  | `+ New task`, every field (filed #30)                | Focus lands on Title. Set: title, description, `notes.txt` attachment, repo acme/widgets, base `release/1.0`, reviewer `alice`, Task priority 3, auto-merge unticked, Advanced → vCPUs 2 and Network access "none". The model picker offers only "Deployment default (gemini-2.5-pro)", `gemini-2.5-pro` and `gemini-2.5-flash` (the demo's one connection). #30 read back with every value and its attachment. | PASS                         |
-| 16  | Task priority `0`, `-2`, `2.5`                       | Each: "a whole number, 1 or more; default 5, higher numbers run first", `aria-invalid=true`, Create task disabled.                                                                                                                                                                                                                                                                                              | PASS                         |
-| 17  | Proposed path (#31)                                  | Queue immediately unticked → #31 `proposed`.                                                                                                                                                                                                                                                                                                                                                                    | PASS                         |
-| 18  | Fork head with Create a new branch unticked          | `alice:feature-x` → "GitHub fork head: branch feature-x on alice's fork. grain files this task against the open pull request on acme/widgets it heads." `alice:` and `:x` → "needs both an owner and a branch"; `a:b:c` → "has more than one ':'". **Create task stayed enabled for the malformed labels, and pressing it returned the same words as a 400 (bug 1, fixed).**                                    | FAIL on base, PASS after fix |
-| 19  | Cancel                                               | Escape closes the form and keeps the draft; reopening restores it; Discard draft empties it; nothing filed.                                                                                                                                                                                                                                                                                                     | PASS                         |
-| 20  | No repo (#32)                                        | Repos → "No repo (standalone task -- nothing to check out)" files `noRepo:true`, `queued`.                                                                                                                                                                                                                                                                                                                      | PASS                         |
-| 21  | Rail's create menu                                   | "Create options" lists New task, New session, New board; New task opens the form on `/new`.                                                                                                                                                                                                                                                                                                                     | PASS                         |
-| 22  | Template priority (stub 2), from the template's page | "New task from this template" opens `/new` with the picker: No template / security-audit / release-qualification (not the field-carrying GKE template). security-audit → 8, release-qualification → 5, back → 8; edited to 4, switching keeps 4. #33 filed at priority 4 against the template's `main`.                                                                                                         | PASS                         |
-| 23  | Template with input fields                           | Its Use… on Processes → Templates opens "File a task from a template" with its inputs, not the New task form.                                                                                                                                                                                                                                                                                                   | PASS                         |
-| 24  | `/new?field.priority=high&field.area=backend&…`      | Notice: "This link asked for values this form has left out: “nosuch” is not a field on this deployment; Estimate (days): “x” is not one of its values."; Priority and Area prefilled. With stub 4: "Priority: “high” is in a field this form hides; Area: “backend” is in a field this form hides."                                                                                                             | PASS                         |
+| #   | Step                                                               | Outcome                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Verdict |
+| --- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| 15  | Rail's create menu                                                 | "Create options" lists New task, New session and New board. New task opens the form on `/new`, with focus in Title.                                                                                                                                                                                                                                                                                                                                                          | PASS    |
+| 16  | Queued path, every field (#32)                                     | Filled title, two-paragraph description, an attachment, repo acme/widgets (options: —, acme/widgets, No repo, Other…), base `release/1.0`, reviewers `alice, bob`, Area backend, auto-merge unticked, priority 7. Read back as `queued` with `base release/1.0`, `priority 7`, `reviewers [alice,bob]`, `autoMerge false`, `customFields {area:backend, priority:medium}`, `attachments [attach.txt]` and the repo's default grants.                                         | PASS    |
+| 17  | Task priority validation                                           | `0`, `-2` and `1.5` are each refused with "a whole number, 1 or more; default 5, higher numbers run first", and Create task is disabled. `7` is accepted.                                                                                                                                                                                                                                                                                                                    | PASS    |
+| 18  | Model picker                                                       | Offers "Deployment default (gemini-2.5-pro)", gemini-2.5-pro and gemini-2.5-flash, which are the models the demo's enabled connections advertise. Escape closes the list and leaves the form open.                                                                                                                                                                                                                                                                           | PASS    |
+| 19  | Refused field inside Advanced options; proposed no-repo path (#33) | With vCPUs `-1` set and Advanced options collapsed again, Create task opens Advanced (`aria-expanded` false → true) and focuses `sandboxCpus`; nothing is filed. With vCPUs 2, Repos "No repo" and Queue immediately unticked, the task is filed as `noRepo:true, sandboxCpus:2` and `proposed`.                                                                                                                                                                             | PASS    |
+| 20  | Template's Use…                                                    | On Processes, Use… opens "File a task from a template" both for the field-carrying GKE template and for security-audit. The latter shows "Files against acme/widgets @ main -- this template is bound to it."                                                                                                                                                                                                                                                                | PASS    |
+| 21  | Template picker priority (stub 2, #34)                             | From security-audit's page, "New task from this template" opens the form at priority 8. The picker lists No template, security-audit and release-qualification. Switching to release-qualification gives 5, and back gives 8. After editing it to 4, switching templates keeps 4. Helper text: "always files against acme/widgets on main, whatever Repos and Base branch say". #34 is filed at priority 4 on `main`, even though the box held the remembered `release/1.0`. | PASS    |
+| 22  | `/new?field.…` links                                               | Notice: "This link asked for values this form has left out: “nosuch” is not a field on this deployment; Estimate (days): “x” is not one of its values." With stub 4: "Priority: “high” is in a field this form hides; Area: “backend” is in a field this form hides."                                                                                                                                                                                                        | PASS    |
+| 23  | Fork head, Create a new branch unticked (#35)                      | `alice:feature-x` → "GitHub fork head: branch feature-x on alice's fork. grain files this task against the open pull request on acme/widgets it heads." `alice:` and `:x` → "needs both an owner and a branch". `a:b:c` → "has more than one ':'". Submitting `a:b:c` is refused with a 400 in the same words, and the form stays open with the message. `contrib:fix/readme-typo` files #35.                                                                                | PASS    |
+| 24  | Grants (#36)                                                       | Add grant… opens the "Grants to add" menu: Grain API presets, scopes grouped by area, then Capability server methods with their verdicts ("needs arguments", "ci only: not a grant for agent tasks…"). Ticking `ci-read` sends a grant check, Escape closes only the menu, and #36 is filed with `api:ci-read` beside the repo's defaults.                                                                                                                                   | PASS    |
 
 ### Tasks list
 
-| #   | Step                          | Outcome                                                                                                                                                                                                                                                                                                                | Verdict |
-| --- | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| 25  | Every rail state view         | Tasks, Proposed, Waiting, Running, Asked, Merging (`?state=completed`), Deferred, Closed, Merged (`?state=merged&sort=merged:desc`, #15) and Blocked (#11) each list exactly the tasks in that state.                                                                                                                  | PASS    |
-| 26  | Search, reload, Back/Forward  | "retry budget" → `?q=retry+budget…`, rows 14,16–19; survives reload; Back returns to the Merging view and Forward to the search.                                                                                                                                                                                       | PASS    |
-| 27  | Filters → Add filter → Origin | Offers Filed by hand / Proposed by an agent / Imported issue. Imported issue → `&f=origin:any:imported`, row #12 only, "filters (2)", survives reload; Clear drops it back to the default view.                                                                                                                        | PASS    |
-| 28  | Row chips                     | Blocked shows its own "blocked on task" oval; merge-queue rows read "on merge queue"; non-default priority shows its badge; the live-run chip's title gives "Driven by ProcessResult · Waiting on the run in flight · "Cancel" ends this wait"; #12's `imported` chip is "imported from GitHub issue acme/widgets#42". | PASS    |
+| #   | Step                            | Outcome                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Verdict |
+| --- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
+| 25  | Every rail view                 | Proposed 2, Waiting 13, Running 2, Asked 11, Merging 4, Deferred 1, Closed 2 and Blocked 1 each open their `?state=` view with as many rows as their count. Tasks 35 opens the default narrowing (`f=state:none:deferred\|closed`) with 32 rows; the count includes the 3 deferred and closed tasks, as it is meant to.                                                                                                                                      | PASS    |
+| 26  | Row chips                       | #11 shows the state oval "Blocked on: #8 (running)" and a `blocked on task` chip. #5, #20, #25 and #28 read "Merging". #32 has `P7` and #34 `P4` ("Task priority N (default 5; higher numbers run first)"). Live #3 and #8 carry `live run`, whose hover reads "running/live_run · Driven by ProcessResult · Waiting on the run in flight". #12 carries `imported` ("imported from GitHub issue acme/widgets#42") with the "Imported" oval and `unapproved`. | PASS    |
+| 27  | Search                          | "retry" gives 7 rows and `?q=retry`; "12" finds #12 by id.                                                                                                                                                                                                                                                                                                                                                                                                   | PASS    |
+| 28  | Origin filter, reload           | Origin values: Filed by hand, Proposed by an agent, Imported issue, Review. Imported issue → `&f=origin:any:imported`, showing only #12, and the filter survives a reload.                                                                                                                                                                                                                                                                                   | PASS    |
+| 29  | Sort, compound narrowing, Clear | Sort by… → created gives `?state=queued&sort=created:desc` (36, 35, 34, 32, …), and the order survives a reload. `?state=asked&q=retry` gives 6 rows; Clear returns `?state=asked&f=none` with 11.                                                                                                                                                                                                                                                           | PASS    |
+| 30  | Back / Forward                  | `/` → `?state=queued&f=none`. Back returns to `/` (32 rows) and Forward to the Waiting view (13 rows).                                                                                                                                                                                                                                                                                                                                                       | PASS    |
 
 ### Task detail
 
-| #   | Step                                     | Outcome                                                                                                                                                                                                                                                                                                                              | Verdict                      |
-| --- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------- |
-| 29  | Edit #30                                 | Task priority 0 disables Save with the shared wording; title, description, reviewers `alice, bob` and priority 7 save in one `PATCH`, read back, and appear in the timeline as an edit.                                                                                                                                              | PASS                         |
-| 30  | Auto-merge and base on the pane          | Auto-merge toggles with `PATCH {"autoMerge":…}` each way. Base `release/2.0` is refused: "does not exist on acme/widgets: push it first, or have the task depend on the one that creates it".                                                                                                                                        | PASS                         |
-| 31  | Defer without and with a date; Undefer   | `…/defer {"deferredUntil":""}` → `deferred`, page offers Undefer; Undefer → `queued` with auto-merge kept; Until 2026-12-01 → `deferredUntil: 2026-12-01T00:00:00Z`.                                                                                                                                                                 | PASS                         |
-| 32  | Pause / Resume on a queued task          | `…/pause` keeps the state `queued` with `paused.fromState=queued`; the page offers Resume; Resume clears it and keeps auto-merge.                                                                                                                                                                                                    | PASS                         |
-| 33  | Close / Reopen; timeline at 390 px       | Close and Reopen land; the timeline says "Closed · by operator (access code)" and "Reopened · by operator (access code)". With stub 6 at 390×844, `scrollWidth` stays 390 and no reason element runs past the viewport.                                                                                                              | PASS                         |
-| 34  | Add and remove a dependency (#33 on #32) | "Add a dependency…" with `32` + Enter → `…/depends-on {"id":"32","attach":true}`; the chip reads "#32 Walk: no repo" with the hover "32 Walk: no repo — Waiting (blocking this task)"; rail Blocked 1→2, Blocked view 11,33. Delete on the focused chip detaches it; Blocked back to 1.                                              | PASS                         |
-| 35  | CL actions                               | #14 Submit disabled with "Not submittable yet: review is not approved (changes requested); …"; Publish replies (2) sent `…/change-publish` and is gone after reload; Mail is disabled once mailed. #17 Mail → `…/change-mail`, "Mailed cl/612400103…", "already mailed". #19 Sync → `…/change-sync`, "Synced cl/612400105".          | PASS                         |
-| 36  | Force merge on #24 (waiting on CI)       | A prompt asks "Force this merge? … Say why. It is required". Dismissing sends nothing; an empty reason is refused by the server ("forcing a merge needs a reason…"); with a reason it sends `…/force-merge {"reason":…}`, and the page explains it lands on the next merge-queue cycle.                                              | PASS                         |
-| 37  | Pause now / Resume on running #3         | **Pause now sent `…/pause {"immediate":true}` at once, with no confirmation, although its own tooltip says whatever the run has not pushed is lost (bug 2, fixed).** After the fix it asks first; dismissing sends nothing. Paused, the task keeps `running` with the note "Paused by operator … (was Running)"; Resume restores it. | FAIL on base, PASS after fix |
+| #   | Step                                  | Outcome                                                                                                                                                                                                                                                                                                                                                                                                          | Verdict |
+| --- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| 31  | Edit #32                              | Priority `0` disables Save with the shared wording. Title, reviewers `carol`, priority 9 and base `main` are saved with two `PATCH` calls, and all of them persist. `autoMerge` stays `false`.                                                                                                                                                                                                                   | PASS    |
+| 32  | Defer, Undefer, dated Defer           | Defer `{"deferredUntil":""}` → `deferred`; Undefer → `queued`. Until `2030-12-31` → "Picks itself back up on 12/31/2030, 12:00:00 AM, onto the queue.", and it is still there after a reload; Undefer → `queued`.                                                                                                                                                                                                | PASS    |
+| 33  | Close, Reopen #32                     | `…/close {"close_pull_request":false}` → `closed`, and the timeline shows "Closed · by operator (access code)". `…/reopen` → `queued`. After the defers, edits, close and reopen, `autoMerge` is still `false` and priority 9.                                                                                                                                                                                   | PASS    |
+| 34  | Dependency #34 → #33, then removed    | The picker ("Add a dependency…") sends `depends-on {"id":"33","attach":true}`. The chip reads "33 walk b: proposed no repo (open)", and its hover "33 Walk B: proposed no repo — Proposed (blocking this task)". #34 becomes `queued/blocked_on_task`, joins the Blocked view (11, 34), and the rail's Blocked goes 1 → 2. Removing the chip sends `attach:false`; #34 is unblocked and the rail goes back to 1. | PASS    |
+| 35  | Pause / Resume: queued #2, running #8 | #2 Pause → `…/pause`; #8 Pause now → `{"immediate":true}`. Resume appears without a reload, and each task keeps its state (`queued`, `running`) and its list position (2 → 2, 8 → 8). Resume → `…/resume`.                                                                                                                                                                                                       | PASS    |
+| 36  | Force merge #5 (stuck waiting on CI)  | It prompts "Force this merge? … Say why. It is required…". Dismissing sends nothing. With a reason it sends `…/5/force-merge {"reason":…}`, and the page shows "Asked grain to force the merge of acme/widgets#101 at fedcba987654, overriding the merge queue's own decision." without a reload. No seeded task offers Re-run CI or Retry merge on its page (Retry merge was covered from the Inbox, step 7).   | PASS    |
 
-### Selection bar and manual mode
+### Selection, bulk edit, manual mode
 
-| #   | Step                                               | Outcome                                                                                                                                                                                                                           | Verdict |
-| --- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| 38  | Waiting view, tick #30, #32, #33; Close dismissed  | "Close 3 task(s)?"; dismissing sends nothing and keeps the selection.                                                                                                                                                             | PASS    |
-| 39  | Bulk edit… → Cancel; Task priority `-1`, then `9`  | Mixed fields say "(mixed across the selection)". Cancel sends nothing and keeps the selection. `-1` disables Apply. `9` sends three `PATCH {"priority":9}` and nothing else; base and auto-merge unchanged; the selection clears. | PASS    |
-| 40  | Defer, Undefer, Attach/Detach, Close, Reopen       | One call per ticked task each; states land (`deferred`/`queued`/`closed`/`queued`). Attach and Detach of "API preset: task-admin" add and then remove `api:task-admin` on both tasks.                                             | PASS    |
-| 41  | Approve #31, Submit #6 from the bar                | #31 `queued`; #6 `completed` (merge queue).                                                                                                                                                                                       | PASS    |
-| 42  | System → Pipeline → Pause pipeline                 | Confirms "Pause the pipeline? …", `POST /api/pipeline-pause`. Every queued row is marked "waits for Run now" except #11 (blocked) and #21 (already started by Run now in step 5).                                                 | PASS    |
-| 43  | Select #30, #32 → Run selected now; reload; Resume | `…/run-now` each; their markers are gone and stay gone after the reload. Resume pipeline confirms and sends `DELETE /api/pipeline-pause`.                                                                                         | PASS    |
+| #   | Step                                               | Outcome                                                                                                                                                                                                                                                                                                    | Verdict |
+| --- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| 37  | Waiting view, tick #34, #35, #36                   | The bar shows "3 selected" with Approve, Run selected now, Submit, Retry merge, Defer, Undefer, Close, Reopen, Bulk edit…, the capability picker, Attach, Detach and Clear selection. Close asks "Close 3 task(s)?"; dismissing sends nothing and keeps the selection.                                     | PASS    |
+| 38  | Bulk edit… → Cancel; then Task priority -1, 6      | The dialog lists the fields with "task priority (mixed across the selection)". Cancel sends nothing and keeps the selection. Once Task priority is ticked, `-1` disables Apply. `6` sends three `PATCH {"priority":6}` calls and nothing else: base and auto-merge are unchanged and the selection clears. | PASS    |
+| 39  | Defer and Undefer from the bar                     | One call per ticked task each time; the tasks go `deferred` and then, from the Deferred view, back to `queued`.                                                                                                                                                                                            | PASS    |
+| 40  | System → Pipeline → Pause pipeline                 | Confirm "Pause the pipeline? Grain will stop starting new agent and CI runs…" → `POST /api/pipeline-pause`. Every queued row carries "waits for Run now" except #11 (blocked) and #21 (already started in step 6).                                                                                         | PASS    |
+| 41  | Select #34, #35 → Run selected now; reload; Resume | `…/run-now` for each. After a reload their markers are gone and the rest remain. Resume pipeline asks first and sends `DELETE /api/pipeline-pause`.                                                                                                                                                        | PASS    |
 
 ### Console and network
 
-No uncaught page errors. The only 4xx/5xx responses and console errors were the
-deliberate ones: the refused base (step 30), the malformed fork label on base
-(step 18) and the empty Force merge reason (step 36), plus the stubbed 500 in
-step 14. The only failed requests (79) were `GET /api/tasks` and
-`/api/tasks/<id>` polls aborted by `page.goto`, `page.reload` or the browser
-closing (the UI aborts none itself).
+There were no uncaught page errors. The only console errors and 4xx/5xx
+responses were expected ones:
+
+- the 401 on the sign-in page, before the access code is entered;
+- the stubbed 500 in step 14;
+- the server refusing the malformed fork head in step 23.
+
+No requests failed apart from polls cut off by navigation. The demo
+server's log had no panics or errors.
 
 ## Bugs
 
-### 1 — Create task stayed enabled for a malformed fork head label (fixed)
-
-**Repro (base `d7dde0c2`):** `/new`, Title "x", Repos acme/widgets, leave
-Create a new branch unticked, Base branch `a:b:c` (or `alice:`). The box says
-`"a:b:c" has more than one ':': a fork head is <owner>:<branch>` and is marked
-invalid, but Create task stays enabled; pressing it sends `POST /api/tasks`
-and the server answers 400 with the same words. Noted as O4 on 11-04.
-
-**Fix:** `NewTaskOverlay.jsx` disables Create task while Base branch parses as
-a malformed fork head (`parseForkHead(base).error`, where BranchField takes
-labels), just as it does for an invalid Task priority. On `:8421`: `a:b:c` and
-`alice:` disable it, `alice:feature-x` and `release/1.0` leave it enabled.
-Covered in `NewTaskOverlay.repos.test.jsx` ("accepts a GitHub fork head label
-as the base branch").
-
-### 2 — Pause now stopped a running task with no confirmation (fixed)
-
-**Repro (base `d7dde0c2`):** open a running task (#3 in the demo) and press
-Pause now. `POST /api/tasks/3/pause {"immediate":true}` is sent at once. The
-button's own tooltip says "Whatever the run has not pushed is lost", and Cancel
-on the same page asks first.
-
-**Fix:** `detail/Actions.jsx` asks "Pause 3 now? Its run is stopped at once,
-without the grace period to push its work and write its handover; whatever it
-has not pushed is lost. Resume picks the task back up where it was left." and
-pauses only once confirmed. On `:8421` dismissing sent nothing and accepting
-paused the task. Covered in `detail/Actions.test.jsx` ("asks before Pause now
-stops a running task, and pauses only once confirmed").
-
-`npx vitest run` over the two changed test files and `NewTaskOverlay.test.jsx` passed (96 tests), and so did
-`npx playwright test` over `external-pr-chip*.spec.js`, `task-pause.spec.js`,
-`new-task-form-config.spec.js` and `new-task-number-boxes.spec.js` (18
-tests). Screenshots of `/new` and `/tasks/8` at desktop and phone width, light
-and dark, were taken before (`:8420`) and after (`:8421`) with
-`ui/e2e/screenshot.mjs --url`. Without a Gemini key they could not be
-described, so the guarded form was measured instead at 1440 and 390 px, light
-and dark. There was no horizontal overflow, Create task sat inside the
-viewport with MUI's standard disabled colours, and the Base branch helper
-stayed within its field.
+None found in this run.
 
 ## Observations
 
-- **O1:** with no repo picked, Create task is disabled with nothing on the form
-  saying why (Repos carries no required mark). Title does carry one.
-- **O2:** the New task form offers no Admission or Hosting choice. A task's
-  page and the template and schedule editors do.
-- **O3:** the Inbox's local-script rows name the task and the command but not
-  the call id (`walk-1`); the task page's timeline does.
-- **O4:** the dependency picker's results are a `MenuList` under a plain text
-  box (no `role=combobox`/`aria-expanded`). Keyboard use works (type, arrows,
-  Enter), but a screen reader hears no popup.
-- **O5:** the rail's entries are `role=button` divs, not links, so they cannot
-  be opened in a new tab.
-- **O6:** the selection bar's capability picker offers presets marked
-  "(dangerous)" (deployment-ops, self-upgrade, tasks:admin, merge:force) and
-  attaches them without a confirmation. Only the non-dangerous task-admin was
-  attached here.
-- Not exercised for want of a seed, as on 11-04: stop and Retry on an
-  interactive turn, the capability-policy toast for dropped default grants, a
-  capability that is not ready, cross-team approvals, an inline config-repo
-  change card, an attempt's capability audit, a pending-secret box, a
-  suspended session and the Internal PR link.
+- **O1:** Mail, Publish replies and Sync are drawn on the task page
+  (`detail/Actions.jsx`: `ReviewActions`, `ClSubmitActions`), not on Inbox
+  rows. Inbox rows offer only Submit, and only when the change is
+  submittable. Otherwise the row says why it is not. They were exercised
+  on the task page instead (step 12).
+- **O2:** Use… on a field-less template (security-audit) also opens "File
+  a task from a template", not the New task form. The template picker with
+  its priority is reached through the template page's "New task from this
+  template" (step 21).
+- **O3:** On a queued or proposed task with no pull request, Close on the
+  task page closes at once with no confirmation (step 33). The batch bar's
+  Close and the Inbox's Cancel of a running task do ask first. A closed
+  task can be reopened, so this was not treated as a defect.
+- **O4:** `bad owner:x` has no `<owner>:<branch>` label shape, so the form
+  shows no fork-head explanation and treats it as a plain branch. The client
+  (`forkHead.js`) and server (`model.ParseForkHead`) agree on this.
+- **Not exercised this run:** the goal card and `on_limit`, the work tree,
+  the merge policy lines, a pending-secret box, a suspended session, the
+  host-script approval card on the task page, the chat pane's Pause/Stop/Retry,
+  long close reasons at 390 px, and the held-for-approval chip. The time
+  went to the intake, Inbox and batch paths. The 2026-11-04 walkthrough
+  covered all of these over the same seeds and stubs; this run did not
+  re-check them.
+- **Not reachable in the demo:** the capability-policy toast for dropped
+  default grants, a ticked capability that is not ready, cross-team
+  approvals and their withdraw control, an inline config-repo change card,
+  an attempt's capability audit, and the Internal PR link. No seed carries
+  any of these.
