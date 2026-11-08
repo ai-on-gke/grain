@@ -111,6 +111,15 @@ const (
 // specific which should have been there.
 var ErrNoSecret = errors.New("secrets: no secret")
 
+// ErrGoneUpstream reports that a key the Secret Manager backend's
+// catalogue still lists has no readable value in Secret Manager: the secret
+// was deleted out of band (HTTP 404), or every version of it was destroyed or
+// disabled. It is deliberately not ErrNoSecret -- the catalogue says the key
+// should be there, and an operator has to reconcile the two with
+// `grain secrets delete` (or set the key again) -- and KnownValues skips such
+// entries rather than failing redaction as a whole (see MissingUpstream).
+var ErrGoneUpstream = errors.New("secrets: catalogued key is gone from Secret Manager")
+
 type taskContextKey struct{}
 type runContextKey struct{}
 type principalContextKey struct{}
@@ -628,6 +637,14 @@ type SecretValue struct {
 
 // KnownValues reads every stored secret key and value for redaction, without
 // recording an AuditEntry on the configured AuditLogger.
+//
+// On the Secret Manager backend a catalogued key whose value is gone upstream
+// (ErrGoneUpstream) is skipped and logged, not returned as an error: one stale
+// catalogue entry would otherwise refuse every transcript upload, and its
+// database fallback, until someone noticed. Skipping it is still safe for
+// redaction, since a value that no longer exists cannot be handed to a run and
+// so cannot turn up in new output. Any other failure still fails the whole
+// call, closed.
 func (s *Store) KnownValues(ctx context.Context) ([]SecretValue, error) {
 	if s.backend == BackendSecretManager {
 		if err := s.ready(); err != nil {
@@ -661,6 +678,27 @@ func (s *Store) KnownValues(ctx context.Context) ([]SecretValue, error) {
 		}
 	}
 	return out, nil
+}
+
+// SecretKeyRef names one key of one secret.
+type SecretKeyRef struct {
+	SecretName string `json:"secret"`
+	Key        string `json:"key"`
+}
+
+// MissingUpstream reports the catalogued keys whose values are gone from
+// Secret Manager (ErrGoneUpstream), probing each one there rather than
+// trusting the read cache. Values read along the way are discarded and no
+// AuditEntry is recorded. The file backend has no upstream to drift from and
+// always reports none.
+func (s *Store) MissingUpstream(ctx context.Context) ([]SecretKeyRef, error) {
+	if err := s.ready(); err != nil {
+		return nil, err
+	}
+	if s.backend != BackendSecretManager {
+		return nil, nil
+	}
+	return s.sm.missingUpstream(ctx)
 }
 
 // SecretInfo names one secret and the keys it currently holds.
