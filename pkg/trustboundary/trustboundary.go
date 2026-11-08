@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v21"
+const Version = "trust-boundary/v22"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -81,6 +81,17 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v22 adds grain-registry's front door (task 3479, found in the security
+// review of task 3284): pkg/webauth/, which verifies Cloud IAP JWTs and
+// X-Grain-Registry-Assertion ES256 JWTs, admits domains, groups and
+// service principals, and runs the proxy-auth Fetch-Metadata/Origin CSRF
+// checks (auth-routes); and pkg/registry/ with cmd/grain-registry/, which
+// verify front-door IAP assertions, decide entry visibility and
+// X-Grain-On-Behalf-Of delegation, sign X-Grain-Registry-Assertion JWTs,
+// strip edge credentials and IAP cookies before forwarding over tunnels,
+// and authenticate grc_ entry credentials (credential-proxy, beside the
+// rendezvous relay, the other remote-access edge).
 //
 // v21 adds what release assets brought onto the boundary (task 2990,
 // reviewed by task 3039): scripts/release-assets.sh, which publishes,
@@ -222,7 +233,7 @@ var Categories = []Category{
 	{
 		ID:          "auth-routes",
 		Description: "authentication, principals, request guards and the UI/API route table",
-		prefixes:    []string{"pkg/access/", "pkg/iapreconciler/", "pkg/policy/", "pkg/jwks/"},
+		prefixes:    []string{"pkg/access/", "pkg/iapreconciler/", "pkg/policy/", "pkg/jwks/", "pkg/webauth/"},
 		files: []string{
 			"pkg/ui/server.go", "pkg/ui/principal.go", "pkg/ui/request_actor.go", "pkg/ui/access.go",
 			"pkg/ui/accesscode.go", "pkg/ui/single_tenant.go",
@@ -330,6 +341,10 @@ var Categories = []Category{
 		prefixes: []string{
 			"pkg/gitproxy/", "pkg/modelproxy/", "pkg/pkgcache/", "pkg/relay/", "pkg/tunnel/",
 			"cmd/grain-relay/", "cmd/grain-connect/",
+			// grain-registry: the IAP front door, entry visibility and
+			// on-behalf-of delegation, the assertion signer, the edge
+			// credential stripping before a tunnel, and grc_ credentials.
+			"pkg/registry/", "cmd/grain-registry/",
 		},
 	},
 	{
