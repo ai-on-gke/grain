@@ -50,10 +50,18 @@ import (
 //   - not part of a draft review grain posted itself for a review task's
 //     findings (model.LinkDraftReview) -- those are the review-questions
 //     hold's to put to the owner (reviewquestions.go), not a run's to fix;
-//   - not resolved and not outdated, when the thread view (GitHub's
-//     GraphQL API) can be read. A credential or host without it falls back
-//     to counting every unrecorded thread, which errs towards one run too
-//     many rather than a reviewer nobody answers.
+//   - not resolved, when the thread view (GitHub's GraphQL API) can be
+//     read. An outdated thread counts: GitHub's "conversations must be
+//     resolved" rule counts it too, and one a bot left on a commit the
+//     branch has since moved past (REST reports its line as null) used to
+//     be recorded and dropped here, leaving the merge refused over a thread
+//     the task was never told about (task 3016's comment 234726). A
+//     credential or host without the thread view falls back to counting
+//     every unrecorded thread, which errs towards one run too many rather
+//     than a reviewer nobody answers.
+//
+// The run's note lists the new threads and, beneath them, every older one
+// still unresolved: a merge waits on all of them, not on the newest batch.
 //
 // Which tasks: one whose run is over and whose change is waiting to land
 // (completed and on the merge queue, or awaiting Submit) -- never a
@@ -168,27 +176,32 @@ func sendRunForReviewThreads(ctx context.Context, store *model.Store, client git
 		return nil
 	}
 
-	// Threads already resolved or outdated are recorded with the rest, so
-	// they cost a thread read once rather than every cycle, but send no run.
-	open := fresh
+	// Threads already resolved are recorded with the rest, so they cost a
+	// thread read once rather than every cycle, but send no run.
+	threadOf := map[int]github.ReviewThread{}
+	threadsRead := false
 	if lister, ok := client.(reviewThreadLister); ok {
 		threads, err := lister.ListReviewThreads(ref.Repo.Owner, ref.Repo.Name, ref.Number)
 		if err != nil {
 			log.Printf("orchestrator: reading review threads on %s (%v); counting every new one as open", ref, err)
 		} else {
-			closed := map[int]bool{}
+			threadsRead = true
 			for _, th := range threads {
-				if (th.Resolved || th.Outdated) && len(th.CommentIDs) > 0 {
-					closed[th.CommentIDs[0]] = true
-				}
-			}
-			open = nil
-			for _, c := range fresh {
-				if !closed[c.ID] {
-					open = append(open, c)
+				if len(th.CommentIDs) > 0 {
+					threadOf[th.CommentIDs[0]] = th
 				}
 			}
 		}
+	}
+	var open []relayThread
+	freshIDs := map[int]bool{}
+	for _, c := range fresh {
+		freshIDs[c.ID] = true
+		th, known := threadOf[c.ID]
+		if known && th.Resolved {
+			continue
+		}
+		open = append(open, relayThread{Comment: c, ThreadID: th.ID, Outdated: th.Outdated})
 	}
 
 	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
@@ -203,6 +216,24 @@ func sendRunForReviewThreads(ctx context.Context, store *model.Store, client git
 		return nil
 	}
 
+	// Everything else still open on the pull request, recorded on an
+	// earlier pass: the run is told about those too, since the merge
+	// waits on every unresolved thread and not only on the newest.
+	var still []relayThread
+	if threadsRead {
+		for _, c := range comments {
+			if c.InReplyTo != 0 || freshIDs[c.ID] || relayed[c.ID] || !seen[strconv.Itoa(c.ID)] {
+				continue
+			}
+			if c.ReviewID != 0 && drafts[strconv.Itoa(c.ReviewID)] {
+				continue
+			}
+			if th, known := threadOf[c.ID]; known && !th.Resolved {
+				still = append(still, relayThread{Comment: c, ThreadID: th.ID, Outdated: th.Outdated})
+			}
+		}
+	}
+
 	if err := store.ObserveField(ctx, task.ID, now, func(o *model.Observation) {
 		o.CompletedAt = nil
 		o.RetryRequestedAt = &now
@@ -210,27 +241,118 @@ func sendRunForReviewThreads(ctx context.Context, store *model.Store, client git
 		return fmt.Errorf("orchestrator: queueing %s for its review threads: %w", task.ID, err)
 	}
 	log.Printf("orchestrator: %d new review thread(s) on %s; sending %s another run", len(open), ref, task.ID)
-	return reviewComment(ctx, store, task.ID, reviewThreadsNote(ref, open), now)
+	return reviewComment(ctx, store, task.ID, reviewThreadsNote(ref, open, still), now)
 }
 
-// reviewThreadsNote is what the run sent for new threads reads first.
-func reviewThreadsNote(ref model.PullRequestRef, threads []github.ReviewComment) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s opened on %s, so this task is back in the queue to deal with %s:\n\n",
-		countOf(len(threads), "new review thread"), ref, pronounFor(len(threads)))
-	for _, c := range threads {
+// relayThread is one review conversation as a run is told about it: the
+// comment that opened it and, where the thread view could be read, the
+// thread's GraphQL ID (what `grain pr resolve --thread-id` takes) and
+// whether GitHub calls it outdated.
+type relayThread struct {
+	Comment  github.ReviewComment
+	ThreadID string
+	Outdated bool
+}
+
+// writeRelayThreads lists threads one bullet each: thread ID, first
+// comment ID, author, path:line and the comment's body.
+func writeRelayThreads(b *strings.Builder, threads []relayThread) {
+	for _, th := range threads {
+		c := th.Comment
 		where := c.Path
 		if c.Line != nil {
 			where = fmt.Sprintf("%s:%d", c.Path, *c.Line)
 		}
+		if th.Outdated || c.Line == nil {
+			where += " (outdated)"
+		}
+		thread := ""
+		if th.ThreadID != "" {
+			thread = fmt.Sprintf("thread `%s`, ", th.ThreadID)
+		}
 		body := strings.ReplaceAll(strings.TrimSpace(c.Body), "\n", "\n  ")
-		fmt.Fprintf(&b, "- comment %d by %s on `%s` -- %s\n", c.ID, c.User, where, body)
+		fmt.Fprintf(b, "- %scomment %d by %s on `%s` -- %s\n", thread, c.ID, userOrUnknownAuthor(c.User), where, body)
 	}
-	b.WriteString("\nFor each one: fix it -- commit and push to this task's branch -- or, where it is " +
-		"wrong or out of scope, answer it with the reason (reply_to_pull_request_comment with its " +
-		"comment_id). Then mark it resolved (resolve_review_thread). pull_request_status lists the " +
-		"threads with their IDs. Leave nothing you could have fixed as a reply.")
+}
+
+// listUnresolvedThreads is every unresolved review conversation on ref,
+// outdated or not, each joined to the comment that opened it -- the set a
+// repository requiring conversation resolution will not merge past. ok is
+// false where the thread view, or the comments that say which review each
+// thread belongs to, could not be read.
+func listUnresolvedThreads(client github.Client, ref model.PullRequestRef) ([]relayThread, bool) {
+	if client == nil || ref.Number <= 0 {
+		return nil, false
+	}
+	lister, ok := client.(reviewThreadLister)
+	if !ok {
+		return nil, false
+	}
+	threads, err := lister.ListReviewThreads(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	if err != nil {
+		log.Printf("orchestrator: reading review threads on %s: %v", ref, err)
+		return nil, false
+	}
+	comments, err := client.ListReviewComments(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	if err != nil {
+		// Without the comments there is no ReviewID to tell grain's own
+		// draft-review threads (the owner's questions, which no agent run
+		// is to resolve) from anybody else's, and no body to relay: the
+		// thread view is as good as unread.
+		log.Printf("orchestrator: reading review comments on %s: %v", ref, err)
+		return nil, false
+	}
+	byID := map[int]github.ReviewComment{}
+	for _, c := range comments {
+		byID[c.ID] = c
+	}
+	var out []relayThread
+	for _, th := range threads {
+		if th.Resolved {
+			continue
+		}
+		var root github.ReviewComment
+		if len(th.CommentIDs) > 0 {
+			root = byID[th.CommentIDs[0]]
+			root.ID = th.CommentIDs[0]
+		}
+		if root.Path == "" {
+			root.Path = th.Path
+		}
+		out = append(out, relayThread{Comment: root, ThreadID: th.ID, Outdated: th.Outdated})
+	}
+	return out, true
+}
+
+// reviewThreadsNote is what the run sent for new threads reads first:
+// the new threads, then every older one still unresolved.
+func reviewThreadsNote(ref model.PullRequestRef, threads, still []relayThread) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s opened on %s, so this task is back in the queue to deal with %s:\n\n",
+		countOf(len(threads), "new review thread"), ref, pronounFor(len(threads)))
+	writeRelayThreads(&b, threads)
+	if len(still) > 0 {
+		fmt.Fprintf(&b, "\n%s from before %s still unresolved, and the merge waits on %s too:\n\n",
+			countOf(len(still), "review thread"), isAre(len(still)), pronounFor(len(still)))
+		writeRelayThreads(&b, still)
+	}
+	b.WriteString(reviewThreadsHowTo)
 	return b.String()
+}
+
+// reviewThreadsHowTo is the instruction every list of review threads sent
+// to a run ends with.
+const reviewThreadsHowTo = "\nFor each one: fix it -- commit and push to this task's branch -- or, where it is " +
+	"wrong or out of scope, answer it with the reason (`grain pr reply <body> --comment-id <id>`, or " +
+	"reply_to_pull_request_comment with its comment_id). Then mark it resolved (`grain pr resolve " +
+	"--thread-id <id>`, or resolve_review_thread). `grain pr threads --unresolved` lists what is " +
+	"still open with its IDs. Leave nothing you could have fixed as a reply."
+
+func isAre(n int) string {
+	if n == 1 {
+		return "is"
+	}
+	return "are"
 }
 
 func pronounFor(n int) string {
