@@ -74,7 +74,7 @@ Before capability servers, grain had a registry of in-process providers, each gr
 
 - the CI alias `release-gate-read` (retiring with `…/api` references in unified-grants slices 2–4), which mints no credential of its own (it hands a CI job the daemon's own release-gate callback).
 
-Until each one is converted, the UI shows it under **Legacy capabilities**.
+The seam an edition used to contribute a bare provider (`capability.RegisterProvider`) is removed, and so is the Settings → **Legacy capabilities** tab that listed them (task 2876): its GitHub host, GCP settings and secrets are the **Deployment credentials** card on Settings → Capabilities. The bare names stay readable as aliases for one release; every migration that rewrites them stays, so an old database or config-repo export still upgrades.
 
 ## Where the detail is
 
