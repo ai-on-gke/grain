@@ -846,7 +846,7 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 		task.Admission == model.AdmissionDurable &&
 		model.NormalizeHosting(task.Hosting) == hosting &&
 		task.Model == chosenModel && task.KeepRunning == keepRunning &&
-		slices.Equal(task.Grants, grants) &&
+		slices.EqualFunc(task.Grants, grants, model.Grant.Equal) &&
 		slices.Equal(taskReads, reads) &&
 		slices.Equal(taskWrites, writes) &&
 		slices.Equal(taskLinks, links) {

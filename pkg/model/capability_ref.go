@@ -220,6 +220,10 @@ func NormalizeCapabilityNames(names []string, lookup protocol.Lookup) ([]string,
 	out := make([]string, 0, len(names))
 	seen := map[string]bool{}
 	for _, name := range names {
+		name, err := storedAPIGrant(name)
+		if err != nil {
+			return nil, err
+		}
 		if IsCapabilityRef(name) {
 			recorded, err := normalizeCapabilityRef(name, lookup)
 			if err != nil {
@@ -237,6 +241,19 @@ func NormalizeCapabilityNames(names []string, lookup protocol.Lookup) ([]string,
 		return nil, err
 	}
 	return out, nil
+}
+
+// storedAPIGrant is s with an api reference rewritten to the
+// api:<what>[@repo] slice 2 stores (StoredGrantSpelling), refused when it
+// names nothing of docs/agent-api.md; every other string unchanged.
+func storedAPIGrant(s string) (string, error) {
+	if _, isAPI := apiMethodOf(CapabilityGrantRef(s)); !isAPI {
+		return s, nil
+	}
+	if _, _, err := ParseAPIGrant(s); err != nil {
+		return "", err
+	}
+	return StoredGrantSpelling(s), nil
 }
 
 func normalizeCapabilityRef(s string, lookup protocol.Lookup) (string, error) {
@@ -270,6 +287,14 @@ func NormalizeCapabilityGrants(grants []Grant, lookup protocol.Lookup) ([]Grant,
 	out := make([]Grant, 0, len(grants))
 	seen := map[string]bool{}
 	for _, g := range grants {
+		if g.With != nil {
+			g.Capability, g.With = g.Key(), nil
+		}
+		stored, err := storedAPIGrant(g.Capability)
+		if err != nil {
+			return nil, err
+		}
+		g.Capability = stored
 		if IsCapabilityRef(g.Capability) {
 			recorded, err := normalizeCapabilityRef(g.Capability, lookup)
 			if err != nil {
@@ -300,6 +325,11 @@ func CapabilityGrants(grants []Grant, lookup protocol.Lookup) ([]protocol.Grant,
 	var specs []protocol.GrantSpec
 	for _, g := range grants {
 		if !IsCapabilityRef(g.Capability) {
+			continue
+		}
+		// An api reference mints nothing: it is api:<scope>, served as
+		// the run's api_* tools (ResolveGrants reads it as that).
+		if _, isAPI := apiMethodOf(CapabilityGrantRef(g.Capability)); isAPI {
 			continue
 		}
 		spec, err := CapabilityGrantSpec(g.Capability)
@@ -608,6 +638,13 @@ func (p CapabilityPolicy) Permits(g string, s CapabilitySubject, servers ...map[
 	// that reference: the rule is the whole of when it may be held.
 	if _, ok := CIGrantRuleFor(g); ok {
 		g = CanonicalLegacyGrant(g)
+	}
+	// api:<scope>[@repo], repo-read:<repo> and repo-write:<repo> are
+	// judged as the reference they stand for (CanonicalGrant,
+	// design/design/unified-grants.design.md §2), so a rule naming
+	// https://grain.dev/capabilities/api#merge:force matches either spelling.
+	if !IsCapabilityRef(g) {
+		g = CanonicalGrantKey(g)
 	}
 	if !IsCapabilityRef(g) {
 		return nil

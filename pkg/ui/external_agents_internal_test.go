@@ -95,3 +95,59 @@ func TestExternalAgentTokenReachesNoInternalRoute(t *testing.T) {
 		t.Fatal("routeScopes names no internal route to check")
 	}
 }
+
+// externalAgentTokenOwner records an owner with the source of whoever set
+// it: a verified minter's, the access code's (or loopback's, or the
+// in-process CLI's) when only an unverified issuer named it, and the
+// minting credential's own when an external agent passes its owner on.
+func TestExternalAgentTokenOwnerSources(t *testing.T) {
+	c := &Client{Config: Config{Actor: DefaultActor("operator@example.com")}}
+	ctx := context.Background()
+	accessCode := withRequestSource(ctx, model.SourceAccessCode)
+	loopback := withRequestSource(ctx, model.SourceLoopback)
+	alice := WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com", Source: model.SourceIAP})
+	unverifiedHuman := WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "mallory@example.com"})
+	agentOf := func(tok model.ExternalAgentToken) context.Context {
+		return withExternalToken(WithPrincipal(ctx, model.Principal{Kind: model.PrincipalAgent, ID: tok.PrincipalID(), Source: model.SourceExternalToken}), &tok)
+	}
+	for _, tc := range []struct {
+		name      string
+		ctx       context.Context
+		req       CreateExternalAgentTokenRequest
+		owner     string
+		src       model.AuthSource
+		forbidden bool
+	}{
+		{"verified minter owns it", alice, CreateExternalAgentTokenRequest{}, "alice@example.com", model.SourceIAP, false},
+		{"verified minter names bob", alice, CreateExternalAgentTokenRequest{Owner: "bob@example.com"}, "bob@example.com", model.SourceIAP, false},
+		{"verified self-service", alice, CreateExternalAgentTokenRequest{SelfService: true}, "alice@example.com", model.SourceIAP, false},
+		{"access code names nobody", accessCode, CreateExternalAgentTokenRequest{}, "", "", false},
+		{"access code names bob", accessCode, CreateExternalAgentTokenRequest{Owner: "bob@example.com"}, "bob@example.com", model.SourceAccessCode, false},
+		{"access code self-service", accessCode, CreateExternalAgentTokenRequest{SelfService: true}, "", "", false},
+		{"access code self-service naming bob", accessCode, CreateExternalAgentTokenRequest{SelfService: true, Owner: "bob@example.com"}, "", "", true},
+		{"loopback names nobody", loopback, CreateExternalAgentTokenRequest{}, "", "", false},
+		{"loopback names bob", loopback, CreateExternalAgentTokenRequest{Owner: "bob@example.com"}, "bob@example.com", model.SourceLoopback, false},
+		{"in-process names nobody", ctx, CreateExternalAgentTokenRequest{}, "", "", false},
+		{"in-process names bob", ctx, CreateExternalAgentTokenRequest{Owner: "bob@example.com"}, "bob@example.com", model.SourceInProcess, false},
+		{"a principal nobody verified is no owner", unverifiedHuman, CreateExternalAgentTokenRequest{}, "", "", false},
+		{"agent passes on a verified owner", agentOf(model.ExternalAgentToken{Name: "a", Owner: "alice@example.com", OwnerSource: model.SourceIAP}),
+			CreateExternalAgentTokenRequest{}, "alice@example.com", model.SourceIAP, false},
+		{"agent passes on an access-code owner", agentOf(model.ExternalAgentToken{Name: "b", Owner: "bob@example.com", OwnerSource: model.SourceAccessCode}),
+			CreateExternalAgentTokenRequest{}, "bob@example.com", model.SourceAccessCode, false},
+		{"agent passes on an old row's owner", agentOf(model.ExternalAgentToken{Name: "c", Owner: "carol@example.com"}),
+			CreateExternalAgentTokenRequest{}, "carol@example.com", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			owner, src, err := c.externalAgentTokenOwner(tc.ctx, tc.req)
+			if tc.forbidden {
+				if err == nil {
+					t.Fatalf("= %q, %q; want refused", owner, src)
+				}
+				return
+			}
+			if err != nil || owner != tc.owner || src != tc.src {
+				t.Fatalf("= %q, %q, %v; want %q, %q", owner, src, err, tc.owner, tc.src)
+			}
+		})
+	}
+}
