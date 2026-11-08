@@ -66,6 +66,7 @@ var cliRouteTools = map[string]string{
 	"pr/open":           "open_pull_request",
 	"pr/reply":          "reply_to_pull_request_comment",
 	"pr/resolve":        "resolve_review_thread",
+	"pr/threads":        "list_review_threads",
 	"pr/review-comment": "add_review_comment",
 	"revert-info":       "revert_task",
 	"status":            "update_status",
