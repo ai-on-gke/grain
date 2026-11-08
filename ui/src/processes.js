@@ -154,7 +154,11 @@ export function buildProcessRows({
       nextRunAt: evLabel ? null : s.nextRunAt || null,
       nextLabel: evLabel,
       enabled: !!s.enabled,
-      system: !!s.system,
+      // A repository-declared workflow schedule fires a
+      // system:workflow-review:* template, so ui.Schedule.System is true,
+      // but it is the repository's schedule rather than one of grain's
+      // standing jobs, and cannot be paused from here (task 3614).
+      system: !!s.system && !isWorkflowSchedule(s) && !s.declaredIn,
       declaredIn: s.declaredIn || null,
       item: s,
     });

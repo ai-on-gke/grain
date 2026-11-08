@@ -359,7 +359,7 @@ function SuiteOverlay({
           direction="row"
           justifyContent={isNew ? "flex-end" : "space-between"}
           alignItems="center"
-          sx={{ mt: 2 }}
+          sx={{ mt: 2, flexWrap: "wrap", gap: 1 }}
         >
           {/* Delete and Save are suites:write, as the list's own Run and
               New are (ProcessesList.jsx) -- missed here when the rest of
@@ -372,7 +372,7 @@ function SuiteOverlay({
               </Button>
             </AccessGate>
           )}
-          <Stack direction="row" spacing={1}>
+          <Stack direction="row" spacing={1} sx={{ ml: "auto" }}>
             <Button onClick={onClose}>{declaredIn ? "Close" : "Cancel"}</Button>
             <AccessGate scope="suites:write">
               <Button type="submit" variant="contained" disabled={!!declaredIn}>
@@ -397,7 +397,13 @@ function SuiteOverlay({
         path="/api/suites/composition"
         body={suiteRequest()}
         heading="What each pass files"
-        note={isNew ? "as filled in above" : "as edited above, not as saved"}
+        note={
+          isNew
+            ? "as filled in above"
+            : declaredIn
+              ? `declared in ${declaredIn.path}`
+              : "as edited above, not as saved"
+        }
       />
       {showNewTemplate && (
         <TemplateOverlay

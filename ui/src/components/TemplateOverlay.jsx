@@ -568,7 +568,7 @@ function TemplateOverlay({
           direction="row"
           justifyContent={isNew ? "flex-end" : "space-between"}
           alignItems="center"
-          sx={{ mt: 2 }}
+          sx={{ mt: 2, flexWrap: "wrap", gap: 1 }}
         >
           {!isNew && (
             <AccessGate scope="templates:write" repo={repo}>
@@ -577,10 +577,18 @@ function TemplateOverlay({
               </Button>
             </AccessGate>
           )}
-          <Stack direction="row" spacing={1}>
+          <Stack
+            direction="row"
+            spacing={1}
+            alignItems="center"
+            sx={{ ml: "auto", flexWrap: "wrap", rowGap: 1 }}
+          >
             {!isNew && onNewTask && (
               <AccessGate scope="tasks:write" repo={repo}>
-                <Button onClick={() => onNewTask(template)}>
+                <Button
+                  onClick={() => onNewTask(template)}
+                  sx={{ whiteSpace: "nowrap" }}
+                >
                   New task from this template
                 </Button>
               </AccessGate>
