@@ -14,6 +14,8 @@
 
 import { test, expect } from "./fixtures.js";
 
+test.use({ demoArgs: ["-secrets-store"] });
+
 test("Deployment credentials GCP help wraps cleanly and links to the gcp server and Other secrets", async ({
   page,
 }) => {
@@ -73,4 +75,101 @@ test("Deployment credentials GCP help wraps cleanly and links to the gcp server 
   await expect(
     page.getByRole("heading", { name: "gcp server", level: 4 }),
   ).toBeVisible();
+});
+
+test("Other secrets keeps retired capability secrets visible and aligned on desktop and phone", async ({
+  page,
+}) => {
+  await page.goto("/settings/capabilities");
+  try {
+    for (const [path, value] of [
+      ["/api/secrets/github-app/app-id", "12345"],
+      ["/api/secrets/github-app/private-key", "pem-data"],
+      ["/api/secrets/registry-push/value", "reg-token"],
+    ]) {
+      const res = await page.evaluate(
+        async ([p, v]) => {
+          const r = await fetch(p, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ value: v }),
+          });
+          return r.status;
+        },
+        [path, value],
+      );
+      expect(res).toBe(200);
+    }
+
+    for (const viewport of [
+      { width: 1440, height: 900 },
+      { width: 390, height: 844 },
+    ]) {
+      for (const theme of ["light", "dark"]) {
+        await page.setViewportSize(viewport);
+        await page.evaluate((t) => {
+          localStorage.setItem("grain-theme", t);
+        }, theme);
+        await page.reload();
+        await page.goto("/settings/capabilities#other-secrets");
+
+        const card = page.locator("#other-secrets");
+        await card.scrollIntoViewIfNeeded();
+        await expect(card).toBeVisible();
+
+        for (const secretName of ["github-app", "registry-push"]) {
+          const row = card.locator(".secret-row").filter({
+            has: page.locator(".secret-name", { hasText: secretName }),
+          });
+          await expect(row).toBeVisible();
+          await expect(
+            row.getByRole("button", { name: "Delete secret" }),
+          ).toBeVisible();
+        }
+
+        await expect(
+          card.getByRole("link", { name: "Capability servers" }),
+        ).toHaveAttribute("href", "/settings/capabilities#capability-servers");
+
+        const geometry = await page.evaluate(() => {
+          const other = document.querySelector("#other-secrets");
+          const otherRect = other.getBoundingClientRect();
+          const rows = Array.from(other.querySelectorAll(".secret-row")).map(
+            (r) => {
+              const rect = r.getBoundingClientRect();
+              const btn = r.querySelector("button")?.getBoundingClientRect();
+              return {
+                leftOffset: rect.left - otherRect.left,
+                rightExceedsCard: rect.right - otherRect.right,
+                btnRightExceedsRow: btn ? btn.right - rect.right : 0,
+                height: rect.height,
+              };
+            },
+          );
+          return {
+            docOverflow:
+              document.documentElement.scrollWidth -
+              document.documentElement.clientWidth,
+            cardOverflow: other.scrollWidth - other.clientWidth,
+            rows,
+          };
+        });
+
+        expect(geometry.docOverflow).toBeLessThanOrEqual(0);
+        expect(geometry.cardOverflow).toBeLessThanOrEqual(1);
+        expect(geometry.rows.length).toBeGreaterThanOrEqual(2);
+        for (const row of geometry.rows) {
+          expect(row.leftOffset).toBeGreaterThanOrEqual(-1);
+          expect(row.rightExceedsCard).toBeLessThanOrEqual(1);
+          expect(row.btnRightExceedsRow).toBeLessThanOrEqual(1);
+          expect(row.height).toBeGreaterThan(24);
+        }
+      }
+    }
+  } finally {
+    await page.evaluate(async () => {
+      await fetch("/api/secrets/github-app", { method: "DELETE" });
+      await fetch("/api/secrets/registry-push", { method: "DELETE" });
+    });
+  }
 });

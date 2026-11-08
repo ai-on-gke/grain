@@ -692,13 +692,14 @@ export default function SettingsPage({
             s={s}
             item={item}
             onItem={onItem}
+            // Only secrets a live control elsewhere in Settings owns:
+            // CapabilitiesPanel is retired, so secrets reported on
+            // settings.capabilities (github-app, registry-push, cosign-*)
+            // have no per-capability field and stay visible in SecretsPanel.
             claimedSecrets={[
               "registry-registration-token",
               ...(settings?.agentBackends || []).map(
                 (backend) => `agent-backend-${backend.id}`,
-              ),
-              ...(settings?.capabilities || []).flatMap((c) =>
-                (c.secrets || []).map((sec) => sec.secret),
               ),
             ]}
           />

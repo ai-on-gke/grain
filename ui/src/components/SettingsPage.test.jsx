@@ -697,6 +697,80 @@ describe("SettingsPage", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("keeps secrets from retired legacy capability statuses visible under Other secrets", async () => {
+    api.mockImplementation((path, init) => {
+      if (path === "/api/settings" && !init?.method) {
+        return Promise.resolve({
+          ...settings,
+          agentBackends: [{ id: "gemini-1", framework: "gemini" }],
+          capabilities: [
+            {
+              id: "github-sandbox",
+              secrets: [
+                {
+                  name: "github-app/app-id",
+                  secret: "github-app",
+                  key: "app-id",
+                  set: true,
+                },
+                {
+                  name: "github-app/private-key",
+                  secret: "github-app",
+                  key: "private-key",
+                  set: true,
+                },
+              ],
+            },
+            {
+              id: "registry-push",
+              secrets: [
+                {
+                  name: "registry-push",
+                  secret: "registry-push",
+                  key: "value",
+                  set: true,
+                },
+              ],
+            },
+          ],
+        });
+      }
+      if (path === "/api/secrets" && !init?.method) {
+        return Promise.resolve({
+          enabled: true,
+          secrets: [
+            { name: "github-app", keys: ["app-id", "private-key"] },
+            { name: "registry-push", keys: ["value"] },
+            { name: "registry-registration-token", keys: ["value"] },
+            { name: "agent-backend-gemini-1", keys: ["value"] },
+          ],
+        });
+      }
+      return Promise.resolve({});
+    });
+    render(
+      <PreferencesProvider>
+        <SettingsPage
+          config={{}}
+          section="capabilities"
+          onSection={vi.fn()}
+          showError={vi.fn()}
+        />
+      </PreferencesProvider>,
+    );
+    const card = await screen.findByTestId("deployment-credentials");
+    expect(await within(card).findByText("github-app")).toBeInTheDocument();
+    expect(within(card).getByText("app-id")).toBeInTheDocument();
+    expect(within(card).getByText("private-key")).toBeInTheDocument();
+    expect(within(card).getByText("registry-push")).toBeInTheDocument();
+    expect(
+      within(card).queryByText("registry-registration-token"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(card).queryByText("agent-backend-gemini-1"),
+    ).not.toBeInTheDocument();
+  });
+
   it("marks an edited Memory note dirty in the header and nav, asks before switching sections, and clears the dot after confirming", async () => {
     const user = userEvent.setup();
     api.mockImplementation((path) => {
