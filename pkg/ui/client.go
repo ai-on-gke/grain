@@ -68,6 +68,11 @@ type Client struct {
 	// repository gets today.
 	Lifecycles       Lifecycles
 	githubBranchesMu sync.Mutex
+	// consoleSessionEditMu keeps UpdateConsoleSession to one edit at a
+	// time, so an edit resolved against what a session holds now
+	// (adoptShippedDefaults, expectCapabilities) is written before any
+	// other edit of a session can land between that read and its write.
+	consoleSessionEditMu sync.Mutex
 	// modelDiscoveryMu keeps AdvertiseDiscoveredModels to one pass at a
 	// time, so a save's kick and the periodic pass never both write.
 	modelDiscoveryMu sync.Mutex
