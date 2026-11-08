@@ -76,6 +76,31 @@ export default function CapabilitiesSection({
       </Alert>
       <Alert
         severity="info"
+        data-testid="release-deprecation-notice"
+        sx={{ mb: 2, overflowWrap: "anywhere" }}
+      >
+        Deprecated: the in-process <code>image-signing</code>,{" "}
+        <code>registry-push</code> and <code>package-publish</code> grants were
+        retired onto the in-process{" "}
+        <code>https://grain.dev/capabilities/release</code> server&apos;s
+        methods of the same names, which place the same files on the same CI
+        events. They remain readable as aliases for one release; update{" "}
+        <code>.grain</code> declarations, repository CI capabilities and
+        external configs to <code>release#&lt;method&gt;</code>.
+      </Alert>
+      <Alert
+        severity="info"
+        data-testid="grain-ci-deprecation-notice"
+        sx={{ mb: 2, overflowWrap: "anywhere" }}
+      >
+        Deprecated: the in-process <code>grain-ci</code> grant was retired onto{" "}
+        <code>https://grain.dev/capabilities/grain#ci</code>, which a
+        repository&apos;s CI Mode still grants. It remains readable as an alias
+        for one release; update <code>.grain</code> declarations and external
+        configs to <code>grain#ci</code>.
+      </Alert>
+      <Alert
+        severity="info"
         data-testid="bootstrap-playbooks-deprecation-notice"
         sx={{ mb: 2, overflowWrap: "anywhere" }}
       >

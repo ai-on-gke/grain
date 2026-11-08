@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
 	"github.com/ai-on-gke/grain/pkg/capability/portforward"
@@ -281,10 +282,26 @@ func (g *CiGrantReservations) mintCIPass(ctx context.Context, req ci.SandboxRequ
 	if g.Servers != nil {
 		servers = g.Servers()
 	}
-	if servers == nil {
-		return nil, time.Time{}, &protocol.RefusedError{Reason: "this deployment attaches no capability servers, so it cannot grant a capability reference"}
+	// In-process servers -- core's own and every server a build
+	// contributes methods to through capability.Register, the release
+	// server's image-signing, registry-push and package-publish among
+	// them -- are not in the attached registry, which tracks mcp_servers
+	// only. grainserver.Lookup serves them first and falls back to the
+	// registry for the rest, as the agent task's half does
+	// (orchestrator.mintCapabilityPass); without it every in-process
+	// reference a job held was refused as "not configured in mcpServers"
+	// (docs/test-runs/2026-11-04-capabilities.md, F4).
+	var base protocol.Lookup
+	if servers != nil {
+		base = servers.Lookup
+	} else {
+		for _, ref := range refs {
+			if !grainserver.IsInProcessGrant(ref.Capability) {
+				return nil, time.Time{}, &protocol.RefusedError{Reason: "this deployment attaches no capability servers, so it cannot grant a capability reference"}
+			}
+		}
 	}
-	lookup := servers.Lookup
+	lookup := grainserver.Lookup(base)
 	grants, err := model.CapabilityGrants(refs, lookup)
 	if err != nil {
 		return nil, time.Time{}, &protocol.TransientError{Grant: "capabilities", Err: err}

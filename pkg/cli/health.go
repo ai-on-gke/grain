@@ -68,6 +68,21 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 	if h.Daemon != nil && h.Daemon.StoreSwitch != nil {
 		fmt.Printf("ALERT (since %s): %s\n\n", h.Daemon.StoreSwitch.Since.UTC().Format("2006-01-02 15:04:05Z"), h.Daemon.StoreSwitch.Message)
 	}
+	// Capability servers out of use: what the capability.server-down
+	// alert names (#647). The response has carried them since, but this
+	// printer never did, so `grain health` said "no counters" with a
+	// server down (docs/test-runs/2026-11-04-capabilities.md, F7).
+	if len(h.CapabilityServers) > 0 {
+		fmt.Println("FAILING: capability servers out of use -- no grant is minted from one until it attaches again:")
+		for _, s := range h.CapabilityServers {
+			state := string(s.State)
+			if s.ConfigRefused {
+				state = "refused its saved config"
+			}
+			fmt.Printf("  %s (%s): %s\n", s.ID, state, s.Reason)
+		}
+		fmt.Println()
+	}
 	hasRegistryIssue := h.Registry != nil && (h.Registry.LastError != "" || len(h.Registry.ScopeConflicts) > 0)
 	if hasRegistryIssue {
 		fmt.Printf("registry (%s @ %s): %s\n", h.Registry.Entry, h.Registry.URL, h.Registry.State)
@@ -94,7 +109,7 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 		}
 	}
 	if len(h.Counters) == 0 {
-		if !hasRegistryIssue {
+		if !hasRegistryIssue && len(h.CapabilityServers) == 0 {
 			fmt.Println("no counters: nothing on this daemon registers any")
 		}
 		return

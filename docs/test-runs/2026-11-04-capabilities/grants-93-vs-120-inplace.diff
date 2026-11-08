@@ -1,0 +1,221 @@
+2c2
+< 93
+---
+> 120
+4,14c4,14
+< 2 | claude-proxy | label
+< 2 | gcp-key | label
+< 2 | gcp-key:deploy | label
+< 2 | gemini-key | label
+< 2 | gemini-proxy | label
+< 2 | grain-ci | default
+< 2 | image-signing | label
+< 2 | openai-proxy | label
+< 2 | package-publish | label
+< 2 | registry-push | label
+< 3 | claude-proxy | grain
+---
+> 2 | https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"deploy","primary":true} | label
+> 2 | https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent","primary":true} | label
+> 2 | https://grain.dev/capabilities/gcp#gemini-key={} | label
+> 2 | https://grain.dev/capabilities/grain#ci={} | default
+> 2 | https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"claude"} | label
+> 2 | https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"gemini"} | label
+> 2 | https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"openai"} | label
+> 2 | https://grain.dev/capabilities/release#image-signing={} | label
+> 2 | https://grain.dev/capabilities/release#package-publish={} | label
+> 2 | https://grain.dev/capabilities/release#registry-push={} | label
+> 3 | api:ci-read | default
+16,20c16,23
+< 3 | gcp-key | grain
+< 3 | gcp-key:deploy | grain
+< 3 | gemini-key | grain
+< 3 | gemini-proxy | grain
+< 3 | openai-proxy | grain
+---
+> 3 | https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"deploy","primary":true} | grain
+> 3 | https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent","primary":true} | grain
+> 3 | https://grain.dev/capabilities/gcp#gemini-key={} | grain
+> 3 | https://grain.dev/capabilities/grain#ci={} | grain
+> 3 | https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"claude"} | grain
+> 3 | https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"gemini"} | grain
+> 3 | https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"openai"} | grain
+> 3 | https://grain.dev/capabilities/release#image-signing={} | grain
+22,31c25,34
+< template-1 | claude-proxy | label
+< template-1 | gcp-key | label
+< template-1 | gcp-key:deploy | label
+< template-1 | gemini-key | label
+< template-1 | gemini-proxy | label
+< template-1 | grain-ci | label
+< template-1 | image-signing | label
+< template-1 | openai-proxy | label
+< template-1 | package-publish | label
+< template-1 | registry-push | label
+---
+> template-1 | https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"deploy","primary":true} | label
+> template-1 | https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent","primary":true} | label
+> template-1 | https://grain.dev/capabilities/gcp#gemini-key={} | label
+> template-1 | https://grain.dev/capabilities/grain#ci={} | label
+> template-1 | https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"claude"} | label
+> template-1 | https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"gemini"} | label
+> template-1 | https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"openai"} | label
+> template-1 | https://grain.dev/capabilities/release#image-signing={} | label
+> template-1 | https://grain.dev/capabilities/release#package-publish={} | label
+> template-1 | https://grain.dev/capabilities/release#registry-push={} | label
+33,42c36,45
+< sched-1 | claude-proxy | label
+< sched-1 | gcp-key | label
+< sched-1 | gcp-key:deploy | label
+< sched-1 | gemini-key | label
+< sched-1 | gemini-proxy | label
+< sched-1 | grain-ci | label
+< sched-1 | image-signing | label
+< sched-1 | openai-proxy | label
+< sched-1 | package-publish | label
+< sched-1 | registry-push | label
+---
+> sched-1 | https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"deploy","primary":true} | label
+> sched-1 | https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent","primary":true} | label
+> sched-1 | https://grain.dev/capabilities/gcp#gemini-key={} | label
+> sched-1 | https://grain.dev/capabilities/grain#ci={} | label
+> sched-1 | https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"claude"} | label
+> sched-1 | https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"gemini"} | label
+> sched-1 | https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"openai"} | label
+> sched-1 | https://grain.dev/capabilities/release#image-signing={} | label
+> sched-1 | https://grain.dev/capabilities/release#package-publish={} | label
+> sched-1 | https://grain.dev/capabilities/release#registry-push={} | label
+44,45c47,48
+< gcp-key
+< openai-proxy
+---
+> https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent","primary":true}
+> https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"openai"}
+47,55c50,58
+< acme/widgets | default | gcp-key:deploy
+< acme/widgets | default | claude-proxy
+< acme/widgets | default | gemini-key
+< acme/widgets | ci | gcp-key
+< acme/widgets | ci | claude-proxy
+< acme/widgets | ci | image-signing
+< acme/widgets | ci | registry-push
+< acme/widgets | ci | package-publish
+< acme/widgets | ci | gemini-key
+---
+> acme/widgets | default | https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"deploy","primary":true}
+> acme/widgets | default | https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"claude"}
+> acme/widgets | default | https://grain.dev/capabilities/gcp#gemini-key={}
+> acme/widgets | ci | https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent","primary":true}
+> acme/widgets | ci | https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"claude"}
+> acme/widgets | ci | https://grain.dev/capabilities/release#image-signing={}
+> acme/widgets | ci | https://grain.dev/capabilities/release#registry-push={}
+> acme/widgets | ci | https://grain.dev/capabilities/release#package-publish={}
+> acme/widgets | ci | https://grain.dev/capabilities/gcp#gemini-key={}
+57c60
+< retired-session: ['claude-proxy', 'gcp-key', 'gcp-key:deploy', 'gemini-key', 'gemini-proxy', 'grain-ci', 'image-signing', 'openai-proxy']
+---
+> retired-session: ['https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"deploy","primary":true}', 'https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent","primary":true}', 'https://grain.dev/capabilities/gcp#gemini-key={}', 'https://grain.dev/capabilities/grain#ci={}', 'https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"claude"}', 'https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"gemini"}', 'https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"openai"}', 'https://grain.dev/capabilities/release#image-signing={}']
+64,67c67,70
+<     "image-signing",
+<     "package-publish",
+<     "gcp-key:deploy",
+<     "grain-ci"
+---
+>     "https://grain.dev/capabilities/release#image-signing={}",
+>     "https://grain.dev/capabilities/release#package-publish={}",
+>     "https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"deploy\",\"primary\":true}",
+>     "https://grain.dev/capabilities/grain#ci={}"
+72,73c75,76
+<       "registry-push",
+<       "openai-proxy"
+---
+>       "https://grain.dev/capabilities/release#registry-push={}",
+>       "https://grain.dev/capabilities/model-proxy#model-proxy={\"vendor\":\"openai\"}"
+76,77c79,80
+<       "gcp-key:deploy",
+<       "gemini-proxy"
+---
+>       "https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"deploy\",\"primary\":true}",
+>       "https://grain.dev/capabilities/model-proxy#model-proxy={\"vendor\":\"gemini\"}"
+82,84c85,87
+<     "gcp-key",
+<     "claude-proxy",
+<     "gemini-key"
+---
+>     "https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"sandbox-agent\",\"primary\":true}",
+>     "https://grain.dev/capabilities/model-proxy#model-proxy={\"vendor\":\"claude\"}",
+>     "https://grain.dev/capabilities/gcp#gemini-key={}"
+115a119,128
+>  "https://grain.dev/capabilities/figma": {
+>   "args": [
+>    "capability",
+>    "figma",
+>    "-listen",
+>    "127.0.0.1:4253"
+>   ],
+>   "builtin": "figma",
+>   "command": "grain"
+>  },
+132c145,192
+<   "command": "grain"
+---
+>   "command": "grain",
+>   "config": {
+>    "admins": [
+>     {
+>      "credential_env": "GRAIN_GCP_MINTER_MINTER",
+>      "credential_source": "configured",
+>      "name": "minter"
+>     },
+>     {
+>      "credential_env": "GRAIN_GCP_MINTER_MINTER_DEPLOY",
+>      "credential_source": "configured",
+>      "name": "minter-deploy"
+>     }
+>    ],
+>    "gemini_key": {
+>     "admin": "minter",
+>     "project": "walk-proj"
+>    },
+>    "permission_sets": [
+>     {
+>      "accounts": [
+>       "grain-sa-0@walk-proj.iam.gserviceaccount.com",
+>       "grain-sa-1@walk-proj.iam.gserviceaccount.com"
+>      ],
+>      "admin": "minter",
+>      "adopt_legacy": true,
+>      "max_lease": "24h0m0s",
+>      "name": "sandbox-agent",
+>      "project": "walk-proj"
+>     },
+>     {
+>      "accounts": [
+>       "deployer@walk-deploy.iam.gserviceaccount.com"
+>      ],
+>      "admin": "minter-deploy",
+>      "adopt_legacy": true,
+>      "key_path": "/home/debian/.gcp-service-account-deploy.json",
+>      "max_lease": "2h0m0s",
+>      "name": "deploy",
+>      "project": "walk-deploy"
+>     }
+>    ]
+>   },
+>   "env": {
+>    "GRAIN_GCP_MINTER_MINTER": "$secret:gcp-key-minter",
+>    "GRAIN_GCP_MINTER_MINTER_DEPLOY": "$secret:gcp-key-minter-deploy"
+>   },
+>   "notice": "In-process gcp-key was migrated to gcp#gcp-key permission sets. Bare gcp-key and gcp-key:<name> remain accepted as aliases for one release; update .grain declarations and external configs to https://grain.dev/capabilities/gcp#gcp-key. In-process gemini-key was migrated to gcp#gemini-key, minting with the gcp-key-minter secret. Bare gemini-key remains accepted as an alias for one release; update .grain declarations and external configs to https://grain.dev/capabilities/gcp#gemini-key."
+149,156d208
+<  },
+<  "https://grain.dev/capabilities/model-proxy": {
+<   "args": [
+<    "capability",
+<    "model-proxy"
+<   ],
+<   "builtin": "model-proxy",
+<   "command": "grain"
+167a220,221
+>   "disabled": true,
+>   "disabledReason": "custom command connections were removed in v3.2.0; replace it with an Antigravity, Claude or Codex connection",

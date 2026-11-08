@@ -132,7 +132,7 @@ func Method(endpoints map[string]*modelproxy.Endpoint) capability.Method {
 				}
 				resp := &protocol.MintResponse{Status: protocol.StatusOK, PromptSection: prompt}
 				for _, pl := range mat.Placements {
-					resp.Placements = append(resp.Placements, protocol.Placement{Path: pl.Path, Mode: "0" + pl.EffectiveMode(), Content: pl.Content})
+					resp.Placements = append(resp.Placements, protocol.Placement{Path: pl.Path, Mode: pl.ProtocolMode(), Content: pl.Content})
 				}
 				mu.Lock()
 				leases[attemptID] = held{vendor: name, lease: *mat.Lease, resp: resp}
