@@ -744,4 +744,45 @@ describe("GitConnections git connections and input operations", () => {
     ).toHaveTextContent("remove it or edit its scope first");
     confirm.mockRestore();
   });
+  // The banner a refused save raised (showError) comes down once the next
+  // save succeeds, rather than staying up over the row just added.
+  it("dismisses the banner its refusal raised once a save succeeds", async () => {
+    const user = userEvent.setup();
+    const showError = vi.fn();
+    const dismissError = vi.fn();
+    let posts = 0;
+    api.mockImplementation((url, opts) => {
+      if (url.includes("/git-connections") && opts?.method === "POST") {
+        posts += 1;
+        return posts === 1
+          ? Promise.reject(new Error("the token is empty"))
+          : Promise.resolve({ ok: true });
+      }
+      if (url.includes("/git-connections") && !opts) return Promise.resolve([]);
+      return Promise.resolve({});
+    });
+    render(
+      <GitConnections
+        deployment={deployment}
+        onDeploymentChanged={vi.fn()}
+        showError={showError}
+        dismissError={dismissError}
+      />,
+    );
+    await user.click(await screen.findByTestId("add-connection-button"));
+    await user.type(screen.getByLabelText("Token (PAT)"), "throwaway");
+    const save = screen.getByRole("button", { name: "Save connection" });
+    await user.click(save);
+    expect(
+      await screen.findByTestId("git-connections-error"),
+    ).toHaveTextContent("the token is empty");
+    expect(showError).toHaveBeenCalledTimes(1);
+    expect(dismissError).not.toHaveBeenCalled();
+
+    await user.click(save);
+    await waitFor(() =>
+      expect(dismissError).toHaveBeenCalledWith("the token is empty"),
+    );
+    expect(screen.queryByTestId("git-connections-error")).toBeNull();
+  });
 });

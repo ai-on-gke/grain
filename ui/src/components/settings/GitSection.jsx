@@ -32,7 +32,12 @@ import SettingsCard, { SettingsReadOnlyContext } from "./SettingsCard.jsx";
 // list is drawn read-only; a connection's token or key is secret
 // material, still written only through the secret store (Settings →
 // Legacy capabilities, /api/secrets), never into grain/config.
-export default function GitSection({ onSaved, showError, onSection }) {
+export default function GitSection({
+  onSaved,
+  showError,
+  dismissError,
+  onSection,
+}) {
   const readOnly = useContext(SettingsReadOnlyContext);
   const { deployment, error, reloadDeployment } = useDeployment({
     onSaved,
@@ -52,6 +57,7 @@ export default function GitSection({ onSaved, showError, onSection }) {
           deploymentGitEmail={DEFAULT_GIT_IDENTITY_EMAIL}
           canManageTokens={!readOnly}
           showError={showError}
+          dismissError={dismissError}
           onDeploymentChanged={async () => {
             await reloadDeployment();
             await onSaved?.();
