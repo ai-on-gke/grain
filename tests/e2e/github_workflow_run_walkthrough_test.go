@@ -300,12 +300,12 @@ trigger:
 		if g.Capability == "grain-ci" {
 			t.Fatalf("review task holds grain-ci in a ci_mode github repo: %+v", review.Grants)
 		}
-		if g.Capability == "api:ci-read@acme/widgets" && g.Via == model.GrantByGrain {
+		if g.Capability == model.APIGrantString("ci-read", "acme/widgets") && g.Via == model.GrantByGrain {
 			hasCIRead = true
 		}
 	}
 	if !hasCIRead {
-		t.Fatalf("review task grants = %+v, want api:ci-read@acme/widgets (GrantByGrain)", review.Grants)
+		t.Fatalf("review task grants = %+v, want %s (GrantByGrain)", review.Grants, model.APIGrantString("ci-read", "acme/widgets"))
 	}
 	// 4. With its composed grant, the review task reads the GitHub run's
 	// log from its sandbox: the synthesized ci.Run behind `grain ci log 1201`.
