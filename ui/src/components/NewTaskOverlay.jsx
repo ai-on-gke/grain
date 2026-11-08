@@ -82,6 +82,7 @@ import NoGitConnectionNotice from "./NoGitConnectionNotice.jsx";
 import SearchSelect from "./SearchSelect.jsx";
 import SidePanel from "./SidePanel.jsx";
 import TaskPicker from "./TaskPicker.jsx";
+import { parseForkHead } from "../forkHead.js";
 import { clearTaskDraft, loadTaskDraft, saveTaskDraft } from "../taskDraft.js";
 import { templateLabeler } from "../templateLabels.js";
 import {
@@ -671,6 +672,12 @@ export default function NewTaskOverlay({
   // the browser's own min/step message or to the server's JSON decoder.
   const priorityInvalid =
     String(priority).trim() !== "" && Number.isNaN(taskPriority(priority));
+  // A Base branch typed as a fork head label but malformed: BranchField
+  // already says what is wrong with it, in the server's own words, and
+  // the server refuses it, so Create task waits for it to be fixed
+  // rather than offering a submit that can only come back refused.
+  const forkHeadInvalid =
+    !changeTarget && (noRepo || !newBranch) && !!parseForkHead(base)?.error;
   // customFields is this deployment's own fields (grain/task-53), held
   // as state rather than read off the form at submit for the reason
   // capabilities above is: an enum is a <Select> and a boolean a
@@ -2385,6 +2392,7 @@ export default function NewTaskOverlay({
             disabled={
               submitting ||
               priorityInvalid ||
+              forkHeadInvalid ||
               (!title.trim() && !pickedTemplate) ||
               (!noRepo && !repo.trim() && !pickedTemplate?.repo) ||
               (!noRepo && newBranch && !newBranchName.trim())
