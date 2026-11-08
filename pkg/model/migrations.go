@@ -894,6 +894,12 @@ var Migrations = []Migration{
 		Description: "rewrite grain-ci in the capability policy's rules and catalogue defaults to https://grain.dev/capabilities/grain#ci={} (migration 96 rewrote every other stored grain-ci grant)",
 		Up:          migrateGrainCIPolicy,
 	},
+	{
+		Version: 126,
+		Description: "rewrite the gcp#gcp-key grants migration 109 kept as written (an \"account\" naming an unconfigured permission set) " +
+			"to permission_set, so the state repository a store exports loads again",
+		Up: MigrateGCPKeyGrantArgs,
+	},
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as

@@ -600,7 +600,11 @@ import "strconv"
 // CI and per-repository defaults -- to
 // `https://grain.dev/capabilities/grain#ci={}`, which migration 96 did
 // everywhere else a grant is stored (grain_ci_policy_migration.go).
-const SchemaVersion = 125
+// 126 changes no table: it runs migration 109's gcp#gcp-key rewrite again,
+// which now rewrites an `account` naming an unconfigured permission set to
+// `permission_set` (with a note) where 109 once kept it as written, a grant
+// every state-repository check refused (gcp_key_args_migration.go).
+const SchemaVersion = 126
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
