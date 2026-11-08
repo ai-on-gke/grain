@@ -286,6 +286,8 @@ func (c *CapabilityCatalogue) Refusals(gc GrantContext) []GrantRefusal {
 // judge is one grant: whether a person must approve it, or why it is
 // refused.
 func (c *CapabilityCatalogue) judge(g string, gc GrantContext) (bool, error) {
+	// An api reference is judged as the api:<scope> it stands for.
+	g = StoredGrantSpelling(g)
 	switch {
 	case IsCapabilityRef(g):
 		return c.judgeRef(g, gc)

@@ -320,8 +320,13 @@ never changes the code.
 
 Behind IAP, the browser signs in through IAP's Google sign-in, and
 grain shows no code page to a caller whose assertion verifies. With
-`-ui-require-iap` there is no code page at all. The rest of this
-section is how the code works where it is accepted.
+`-ui-require-iap` there is no code page at all. A browser whose request
+carries a verified assertion that posts the code anyway gets a `403`
+saying that its IAP sign-in, not the code, decides its role, and no
+cookie. The code is not checked, so the refusal does not say whether it
+was right. To use the code, run it over loopback ([Break-glass over
+loopback](#break-glass-over-loopback)). The rest of this section is how
+the code works where it is accepted.
 
 A request to a single-tenant daemon that carries no valid code gets a
 minimal **Enter access code** page (`401`) and never the app. An API
