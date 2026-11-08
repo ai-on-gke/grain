@@ -1772,6 +1772,46 @@ export function repoRows(config, tasks) {
   return [...byRepo.values()].sort((a, b) => a.repo.localeCompare(b.repo));
 }
 
+// repoPageRow is the row a repo's own page reads its counts from: its
+// repoRows row where it has one, and otherwise a row counting the tasks
+// that target it anyway. The second case is a repo that has fallen off
+// a restricted deployment's targetRepos with work still filed against
+// it -- repoRows rightly leaves it off the Repos list (a task never
+// raises a row of its own there), but someone who comes back to the
+// repo's page by URL or from one of those tasks is asking about the
+// repo itself, and reading "0 tasks filed here" over live queued work
+// hid it from them. `offList` marks that case so the page can say why
+// the repo is not on the list while its tasks are.
+//
+// A repo nothing here knows about at all -- a hand-typed URL -- gets
+// the same empty row it always did, so the page's forms still work.
+export function repoPageRow(config, tasks, repo) {
+  const key = repoKey(repo);
+  const listed = repoRows(config, tasks).find((r) => repoKey(r.repo) === key);
+  if (listed) return listed;
+  const row = {
+    repo,
+    total: 0,
+    counts: {},
+    blocked: 0,
+    configured: false,
+    defaults: false,
+    // Only a restricted deployment can leave a repo with tasks off the
+    // list; an unrestricted one raises a row for every task's repo.
+    offList: (config?.targetRepos || []).length > 0,
+  };
+  for (const t of tasks || []) {
+    if (repoKey(t.repo) !== key || !t.repo) continue;
+    // Left out for the reason repoRows leaves it out: the task list the
+    // count links to hides a session's task.
+    if (t.consoleSession || t.interactive) continue;
+    row.total += 1;
+    row.counts[t.state] = (row.counts[t.state] || 0) + 1;
+    if (t.blocked) row.blocked += 1;
+  }
+  return row;
+}
+
 // repoActivity is one repoRows row read as a single status, for the dot
 // the repos list draws ahead of a repo's name (grain/task-327) -- the
 // same "what is going on here, at a glance" a task row's own state badge
