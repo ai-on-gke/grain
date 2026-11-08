@@ -360,7 +360,7 @@ test.describe("Deployment Settings and Operations Walkthrough", () => {
     // name and key once set, never by value, and deleting it takes it off
     // the list again.
     await page.goto("/admin");
-    await page.getByTestId("settings-nav-credentials").click();
+    await page.getByTestId("settings-nav-capabilities").click();
     await page.getByLabel("Secret", { exact: true }).fill("ops-walkthrough");
     await page.getByLabel("Key", { exact: true }).fill("token");
     await page
