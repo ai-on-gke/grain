@@ -1,0 +1,12 @@
+### wait T1 (access)
+$ timeout 60 /home/debian/bin/grain wait 2 -until awaiting-reply
+    2	queued
+      question: T1 reads acme/other. **This run asked for more access:** - read acme/other Grant or deny it in the card on this task. Granting applies the chosen items to th...
+    -> exit=0
+### show T1 (access)
+### show T1 (access)
+$ sh -c /home/debian/bin/grain show 2 | head -12
+    2 T1 external loop
+    state:      awaiting_reply
+    reason:     awaiting_reply/access_request [Grant]
+    owner:      console-rest-e2e-operator

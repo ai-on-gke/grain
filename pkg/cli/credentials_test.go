@@ -126,6 +126,41 @@ func exitOf(err error) int {
 	return code
 }
 
+// TestCredentialStoreKeepsNoStaleSecret: a context that first fell back
+// to the 0600 file (no keyring, or a locked one) and later signs in again
+// with the keyring reachable keeps no copy of the old secret on disk, and
+// a keyring-held secret is never forgotten from a session that cannot
+// reach the keyring -- that would leave it there with nothing naming it
+// (docs/test-runs/2026-11-07-cli-contexts-gitlogin-liveness.md, F1/F2).
+func TestCredentialStoreKeepsNoStaleSecret(t *testing.T) {
+	dir := useConfigHome(t)
+	path := filepath.Join(dir, "credentials", "team")
+
+	if loc, err := (credentialStore{}).store("team", "old-secret"); err != nil || loc != "file:team" {
+		t.Fatalf("headless store = %q, %v", loc, err)
+	}
+	kr := &fakeKeyring{secrets: map[string]string{}}
+	withKeyring := credentialStore{keyring: kr}
+	loc, err := withKeyring.store("team", "new-secret")
+	if err != nil || loc != "keyring:grain/team" {
+		t.Fatalf("keyring store = %q, %v", loc, err)
+	}
+	if raw, err := os.ReadFile(path); !os.IsNotExist(err) {
+		t.Errorf("the keyring took the secret but %s still holds %q (%v)", path, raw, err)
+	}
+
+	err = (credentialStore{}).delete("team", loc)
+	if exitOf(err) != exitAuth || !strings.Contains(err.Error(), "secret-tool clear service grain account team") {
+		t.Fatalf("delete from a session with no keyring = %v; want exit 3 naming how to clear it", err)
+	}
+	if kr.secrets["team"] != "new-secret" {
+		t.Fatalf("keyring lost the secret: %v", kr.secrets)
+	}
+	if err := withKeyring.delete("team", loc); err != nil || len(kr.secrets) != 0 {
+		t.Fatalf("delete with the keyring = %v, keyring %v", err, kr.secrets)
+	}
+}
+
 // TestMacKeychainSetKeepsTheSecretOffTheCommandLine: security(1) is
 // given the secret on stdin, never in its argv, where ps shows it to
 // every account on the machine.

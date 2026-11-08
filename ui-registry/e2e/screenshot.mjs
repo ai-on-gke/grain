@@ -34,7 +34,7 @@ const VIEWPORTS = {
 const THEMES = ["light", "dark"];
 const THEME_KEY = "grain.themeMode";
 const DEFAULT_PAGES =
-  "/,/directory,/new,/entries/alice-workstation,/admin,/status";
+  "/,/directory,/new,/grants,/entries/alice-workstation,/admin,/admin#delegating-apps,/status";
 
 function parseArgs(argv) {
   const opts = {
@@ -199,6 +199,16 @@ async function main() {
               .waitForLoadState("networkidle", { timeout: 10_000 })
               .catch(() => {});
             await tab.evaluate(() => document.fonts.ready);
+            const hashIdx = page.indexOf("#");
+            if (hashIdx >= 0) {
+              const anchorId = page.slice(hashIdx + 1);
+              if (anchorId) {
+                await tab.evaluate((id) => {
+                  const el = document.getElementById(id);
+                  if (el) el.scrollIntoView({ block: "start" });
+                }, anchorId);
+              }
+            }
             await tab.waitForTimeout(300);
             const file = path.join(
               opts.out,
