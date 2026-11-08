@@ -387,7 +387,18 @@ func cmdRegistryRegister(ctx context.Context, c *ui.HTTPClient, out *printer, ar
 		retargeting := (existingCfg.URL != "" && existingCfg.URL != normCfg.URL) ||
 			(existingCfg.Entry != "" && !strings.EqualFold(existingCfg.Entry, normCfg.Entry))
 		hasStoredEntryCfg := !*standalone && existingCfg.Entry != "" && !retargeting
-		remoteEntry, mintedToken, err = upsertConnectedEntry(ctx, regClient, normCfg, effectiveHostKind, strings.TrimSpace(*connectedPrincipal), explicitScopes, passed, hasStoredEntryCfg, wantMint, *rotateToken || *mintToken || *standalone || !daemonHasSecret || retargeting)
+		remoteEntry, mintedToken, err = upsertConnectedEntry(
+			ctx,
+			regClient,
+			normCfg,
+			effectiveHostKind,
+			strings.TrimSpace(*connectedPrincipal),
+			explicitScopes,
+			passed,
+			hasStoredEntryCfg,
+			wantMint,
+			*rotateToken || *mintToken || *standalone || !daemonHasSecret || retargeting,
+		)
 		if err != nil {
 			return err
 		}
@@ -483,9 +494,6 @@ func inheritExistingEntryConfig(cfg *model.RegistryConfig, remote *api.Entry, pa
 	if !passed["owner-group"] && cfg.OwnerGroup == "" {
 		cfg.OwnerGroup = remote.OwnerGroup
 	}
-	if !passed["host-kind"] && cfg.HostKind == "" && remote.HostKind != "" {
-		cfg.HostKind = remote.HostKind
-	}
 	if !passed["tags"] && len(cfg.Tags) == 0 && len(remote.Tags) > 0 {
 		cfg.Tags = slices.Clone(remote.Tags)
 	}
@@ -503,7 +511,7 @@ func upsertConnectedEntry(
 	wantToken bool,
 	needFreshToken bool,
 ) (*api.Entry, string, error) {
-	existing, err := client.GetEntry(ctx, cfg.Entry)
+	existingEntry, err := client.GetEntry(ctx, cfg.Entry)
 	if err != nil && !api.IsNotFound(err) {
 		return nil, "", err
 	}
@@ -538,31 +546,31 @@ func upsertConnectedEntry(
 
 	var updReq api.UpdateEntryRequest
 	needUpdate := false
-	if syncAllCfg || passed["display-name"] {
+	if passed["display-name"] || (syncAllCfg && cfg.DisplayName != "") {
 		disp := cfg.DisplayName
 		updReq.DisplayName = &disp
 		needUpdate = true
 	}
-	if syncAllCfg || passed["purpose"] {
+	if passed["purpose"] || (syncAllCfg && cfg.Purpose != "") {
 		purp := cfg.Purpose
 		updReq.Purpose = &purp
 		needUpdate = true
 	}
-	if syncAllCfg || passed["host-kind"] {
-		hk := hostKind
+	if passed["host-kind"] || (syncAllCfg && cfg.HostKind != "") {
+		hk := cfg.HostKind
 		updReq.HostKind = &hk
 		needUpdate = true
 	}
-	if syncAllCfg || passed["owner-group"] {
+	if passed["owner-group"] || (syncAllCfg && cfg.OwnerGroup != "") {
 		group := cfg.OwnerGroup
 		updReq.OwnerGroup = &group
 		needUpdate = true
 	}
-	if syncAllCfg || passed["listed"] {
+	if passed["listed"] || syncAllCfg {
 		updReq.Listed = &listed
 		needUpdate = true
 	}
-	if syncAllCfg || passed["tags"] {
+	if passed["tags"] || (syncAllCfg && len(cfg.Tags) > 0) {
 		tags := slices.Clone(cfg.Tags)
 		if tags == nil {
 			tags = []string{}
@@ -570,12 +578,12 @@ func upsertConnectedEntry(
 		updReq.Tags = &tags
 		needUpdate = true
 	}
-	if connectedPrincipal != "" {
+	if passed["connected-principal"] || connectedPrincipal != "" {
 		cp := connectedPrincipal
 		updReq.ConnectedPrincipal = &cp
 		needUpdate = true
 	}
-	updated := existing
+	updated := existingEntry
 	if needUpdate {
 		var updErr error
 		updated, updErr = client.UpdateEntry(ctx, cfg.Entry, updReq)
@@ -588,7 +596,7 @@ func upsertConnectedEntry(
 		if scErr != nil {
 			return nil, "", scErr
 		}
-		if scResp != nil {
+		if scResp != nil && updated != nil {
 			updated.Scopes = scResp.Scopes
 		}
 	}

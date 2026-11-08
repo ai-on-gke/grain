@@ -1302,3 +1302,87 @@ func TestRegistryTunnelSupervisorConnectServeAndGracefulRotation(t *testing.T) {
 	cancel()
 	<-supDone
 }
+
+func TestRegistryManagerPreservesRemoteMetadataAndHostKindWhenUnsetLocally(t *testing.T) {
+	t.Parallel()
+	fake, srv := newFakeRegistryServer(t)
+	fake.mu.Lock()
+	fake.entries["conn-alice"] = api.CreateEntryRequest{
+		Name:        "conn-alice",
+		Kind:        api.KindConnected,
+		HostKind:    api.HostKindOther,
+		DisplayName: "Alice",
+		Purpose:     "API",
+	}
+	fake.mu.Unlock()
+
+	dataDir := t.TempDir()
+	store, db, err := OpenStore("sqlite", "", dataDir)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	// OIDC mode with unset DisplayName, Purpose, and HostKind while LiveConfig
+	// infers HostKindWorkstation: neither PATCH nor Heartbeat may overwrite
+	// existing remote metadata or CLI-declared HostKind.
+	cfg := model.DefaultConfig()
+	cfg.Registry = model.RegistryConfig{
+		URL:      srv.URL,
+		Entry:    "conn-alice",
+		AuthMode: model.RegistryAuthOIDC,
+	}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatalf("PutConfig: %v", err)
+	}
+
+	mgr := NewRegistryManager(RegistryManagerOptions{
+		Store:      store,
+		HTTPClient: srv.Client(),
+		LiveConfig: func() Config { return Config{HostSandboxes: true} },
+		OIDCTokenSource: func(_ context.Context, _ string) (string, time.Time, error) {
+			return "oidc-jwt", time.Now().Add(10 * time.Minute), nil
+		},
+		JitterFraction: -1,
+	})
+
+	if _, err := mgr.TriggerHeartbeat(ctx); err != nil {
+		t.Fatalf("TriggerHeartbeat: %v", err)
+	}
+
+	fake.mu.Lock()
+	updates := append([]api.UpdateEntryRequest(nil), fake.updates...)
+	hbs := append([]api.HeartbeatRequest(nil), fake.heartbeats...)
+	fake.mu.Unlock()
+
+	if len(updates) != 1 {
+		t.Fatalf("expected 1 initial OIDC PATCH, got %d", len(updates))
+	}
+	if updates[0].DisplayName != nil || updates[0].Purpose != nil || updates[0].HostKind != nil || updates[0].Listed != nil {
+		t.Fatalf("OIDC PATCH with unset local metadata would overwrite remote values: %+v", updates[0])
+	}
+	if len(hbs) != 1 || hbs[0].HostKind != "" {
+		t.Fatalf("heartbeat sent HostKind=%q when local config left host_kind unset, want empty", hbs[0].HostKind)
+	}
+
+	// Explicitly configuring HostKind on the daemon sends it on both PATCH and Heartbeat.
+	cfg.Registry.HostKind = api.HostKindKubernetes
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatalf("PutConfig explicit host_kind: %v", err)
+	}
+	if _, err := mgr.TriggerHeartbeat(ctx); err != nil {
+		t.Fatalf("TriggerHeartbeat with explicit host_kind: %v", err)
+	}
+
+	fake.mu.Lock()
+	lastUpd := fake.updates[len(fake.updates)-1]
+	lastHB := fake.heartbeats[len(fake.heartbeats)-1]
+	fake.mu.Unlock()
+	if lastUpd.HostKind == nil || *lastUpd.HostKind != api.HostKindKubernetes {
+		t.Fatalf("expected explicit HostKind=kubernetes in PATCH, got %+v", lastUpd.HostKind)
+	}
+	if lastHB.HostKind != api.HostKindKubernetes {
+		t.Fatalf("expected explicit HostKind=kubernetes in Heartbeat, got %q", lastHB.HostKind)
+	}
+}

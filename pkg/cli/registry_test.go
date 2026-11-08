@@ -782,3 +782,251 @@ func TestRegistryCLISubcommands(t *testing.T) {
 	runSub("delete", "-confirm", "platform-vm", "platform-vm")
 	runSub("restore", "platform-vm")
 }
+
+func TestRegistryRegisterPreservesStandaloneMetadataAndCLIHostKind(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+
+	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(tmp, "data")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := model.New(db)
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	secStore := secrets.Open(secrets.Config{
+		File:    filepath.Join(tmp, "secrets.age"),
+		KeyFile: filepath.Join(tmp, "secrets.key"),
+	})
+
+	var (
+		mu           sync.Mutex
+		entries      = map[string]api.Entry{}
+		activeTokens = map[string]string{}
+		lastHB       api.HeartbeatRequest
+	)
+	regSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/entries/"):
+			name := strings.TrimPrefix(r.URL.Path, "/api/entries/")
+			e, ok := entries[name]
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				_ = json.NewEncoder(w).Encode(map[string]any{"error": "not found"})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(e)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/entries":
+			var req api.CreateEntryRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			listed := false
+			if req.Listed != nil {
+				listed = *req.Listed
+			}
+			e := api.Entry{
+				Name:        req.Name,
+				Kind:        req.Kind,
+				HostKind:    req.HostKind,
+				DisplayName: req.DisplayName,
+				Purpose:     req.Purpose,
+				OwnerGroup:  req.OwnerGroup,
+				Listed:      listed,
+				Tags:        req.Tags,
+				Status:      api.StatusOffline,
+			}
+			entries[req.Name] = e
+			tok := "grc_standalone_tok"
+			activeTokens[req.Name] = tok
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(api.CreateEntryResponse{Entry: e, RegistrationToken: tok})
+		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/entries/"):
+			name := strings.TrimPrefix(r.URL.Path, "/api/entries/")
+			e := entries[name]
+			var req api.UpdateEntryRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if req.DisplayName != nil {
+				e.DisplayName = *req.DisplayName
+			}
+			if req.Purpose != nil {
+				e.Purpose = *req.Purpose
+			}
+			if req.HostKind != nil {
+				e.HostKind = *req.HostKind
+			}
+			if req.OwnerGroup != nil {
+				e.OwnerGroup = *req.OwnerGroup
+			}
+			if req.Listed != nil {
+				e.Listed = *req.Listed
+			}
+			if req.Tags != nil {
+				e.Tags = *req.Tags
+			}
+			entries[name] = e
+			_ = json.NewEncoder(w).Encode(e)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/credentials/rotate"):
+			name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/entries/"), "/credentials/rotate")
+			tok := "grc_daemon_tok"
+			activeTokens[name] = tok
+			_ = json.NewEncoder(w).Encode(api.RotateCredentialResponse{RegistrationToken: tok})
+		case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/heartbeat"):
+			name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/entries/"), "/heartbeat")
+			if auth != activeTokens[name] {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			var hb api.HeartbeatRequest
+			_ = json.NewDecoder(r.Body).Decode(&hb)
+			lastHB = hb
+			e := entries[name]
+			if hb.HostKind != "" {
+				e.HostKind = hb.HostKind
+			}
+			e.Status = api.StatusOnline
+			entries[name] = e
+			_ = json.NewEncoder(w).Encode(api.HeartbeatResponse{Status: api.StatusOnline, NextIntervalSeconds: 60})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer regSrv.Close()
+
+	prevHTTP := registryHTTPClient
+	prevOIDC := registryOIDCToken
+	registryHTTPClient = regSrv.Client()
+	registryOIDCToken = func(_ context.Context, _, _ string) (string, error) {
+		return "oidc-creator-jwt", nil
+	}
+	defer func() {
+		registryHTTPClient = prevHTTP
+		registryOIDCToken = prevOIDC
+	}()
+
+	mgr := daemon.NewRegistryManager(daemon.RegistryManagerOptions{
+		Store:   store,
+		Secrets: secStore,
+		LiveConfig: func() daemon.Config {
+			mc, _ := store.GetConfig(ctx)
+			if mc == nil {
+				return daemon.Config{HostSandboxes: true}
+			}
+			return daemon.Config{HostSandboxes: true, Registry: mc.Registry}
+		},
+		Health:         func() (api.HealthState, string) { return api.HealthOK, "" },
+		Version:        func() version.Info { return version.Info{Release: "v1.5.0", Revision: "def5678"} },
+		HTTPClient:     regSrv.Client(),
+		BaseInterval:   time.Hour,
+		JitterFraction: -1,
+	})
+	uiCfg := withAccessCode(ui.Config{
+		Actor:                    ui.DefaultActor("operator"),
+		Capabilities:             ui.OfferedCapabilities(),
+		Secrets:                  secStore,
+		RegistryStatus:           mgr.Snapshot,
+		TriggerRegistryHeartbeat: mgr.TriggerHeartbeat,
+		TriggerRegistrySync:      mgr.Trigger,
+	})
+	daemonSrv := httptest.NewServer(ui.NewServer(uiCfg, store))
+	defer daemonSrv.Close()
+
+	c := accessCodeClient(daemonSrv.URL)
+	if _, err := c.UpdateSettings(ctx, *settingsRequest("30s", 2, "github.example")); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Pre-create the entry via `-standalone` with display_name, purpose,
+	// host_kind=kubernetes, listed=false, and tags.
+	tokFile := filepath.Join(tmp, "conn-alice.token")
+	_ = captureStdout(t, func() {
+		err := cmdRegistry(ctx, nil, &printer{}, []string{
+			"register",
+			"-standalone",
+			"-registry-url", regSrv.URL,
+			"-display-name", "Alice",
+			"-purpose", "API",
+			"-host-kind", "kubernetes",
+			"-listed=false",
+			"-tags", "backend,api",
+			"-token-file", tokFile,
+			"conn-alice",
+		})
+		if err != nil {
+			t.Fatalf("standalone register: %v", err)
+		}
+	})
+
+	// 2. Register against the local daemon (which infers host_kind=workstation)
+	// WITHOUT -display-name / -purpose / -host-kind / -listed / -tags.
+	// Neither the PATCH nor the immediate heartbeat may overwrite the remote
+	// entry's metadata or CLI-declared host_kind.
+	_ = captureStdout(t, func() {
+		err := cmdRegistry(ctx, c, &printer{}, []string{
+			"register",
+			"-registry-url", regSrv.URL,
+			"conn-alice",
+		})
+		if err != nil {
+			t.Fatalf("daemon register: %v", err)
+		}
+	})
+
+	mu.Lock()
+	gotEntry := entries["conn-alice"]
+	gotHB := lastHB
+	mu.Unlock()
+	if gotEntry.DisplayName != "Alice" || gotEntry.Purpose != "API" {
+		t.Fatalf("remote entry metadata cleared on daemon register: %+v, want DisplayName=Alice Purpose=API", gotEntry)
+	}
+	if gotEntry.HostKind != api.HostKindKubernetes {
+		t.Fatalf("remote entry host_kind = %q, want kubernetes (not daemon's inferred workstation)", gotEntry.HostKind)
+	}
+	if gotHB.HostKind != "" {
+		t.Fatalf("heartbeat sent HostKind=%q when local config left host_kind unset, want empty", gotHB.HostKind)
+	}
+	if gotEntry.Listed {
+		t.Fatalf("remote entry Listed = true, want preserved false")
+	}
+	if len(gotEntry.Tags) != 2 || gotEntry.Tags[0] != "backend" || gotEntry.Tags[1] != "api" {
+		t.Fatalf("remote entry Tags = %v, want [backend api]", gotEntry.Tags)
+	}
+
+	mc, err := store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mc.Registry.DisplayName != "Alice" || mc.Registry.Purpose != "API" || mc.Registry.Listed {
+		t.Fatalf("daemon stored RegistryConfig did not adopt remote metadata: %+v", mc.Registry)
+	}
+
+	// 3. Explicit CLI flags still override (including clearing with -display-name "").
+	_ = captureStdout(t, func() {
+		err := cmdRegistry(ctx, c, &printer{}, []string{
+			"register",
+			"-registry-url", regSrv.URL,
+			"-display-name", "",
+			"-purpose", "Updated API",
+			"-host-kind", "other",
+			"-listed",
+			"conn-alice",
+		})
+		if err != nil {
+			t.Fatalf("daemon register with explicit overrides: %v", err)
+		}
+	})
+
+	mu.Lock()
+	gotUpdated := entries["conn-alice"]
+	gotUpdatedHB := lastHB
+	mu.Unlock()
+	if gotUpdated.DisplayName != "" || gotUpdated.Purpose != "Updated API" || !gotUpdated.Listed {
+		t.Fatalf("explicit overrides not applied: %+v", gotUpdated)
+	}
+	if gotUpdated.HostKind != api.HostKindOther || gotUpdatedHB.HostKind != api.HostKindOther {
+		t.Fatalf("explicit -host-kind override not applied: entry=%q hb=%q, want other", gotUpdated.HostKind, gotUpdatedHB.HostKind)
+	}
+}

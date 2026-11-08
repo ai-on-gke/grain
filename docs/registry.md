@@ -426,6 +426,25 @@ registration, run `grain registry unregister [<entry>]` (pass
 `-keep-remote` to clear the local daemon's settings without deleting the
 registry entry).
 
+**Metadata and `host_kind` precedence.** When `grain registry register`
+connects a local daemon to an existing entry (for example, one reserved
+earlier with `-standalone`), catalog fields follow a strict precedence
+order:
+
+1. **Explicit CLI flags** passed on that `grain registry register` or
+   `grain registry update` invocation (`-display-name`, `-purpose`,
+   `-host-kind`, `-owner-group`, `-listed`, `-tags`, `-scope`).
+2. **Explicitly configured local daemon `Registry` settings** already set
+   for the same `(registry_url, entry)`.
+3. **Existing remote registry entry values** (`GET /api/entries/<name>`),
+   which are preserved and adopted into the local daemon's settings
+   whenever the corresponding CLI flags are omitted.
+4. **Daemon runtime host inference** (`workstation`, `kubernetes`, or
+   `other`), used only as a fallback when creating a brand-new entry with
+   no explicit `-host-kind`. Periodic heartbeats and OIDC metadata syncs
+   send `host_kind` only when explicitly configured on the daemon, so a
+   CLI-declared `-host-kind` is never overwritten by background heartbeats.
+
 ### Outbound tunnel (`-registry-connect`)
 
 To route `https://<name>.<instance-domain>/` to a `connected` grain,
@@ -691,6 +710,75 @@ Overlap is enforced in two ways:
    unlists, or drops that primary scope, the registry automatically
    promotes the earliest non-overlapping contender.
 
+### Who may claim a `primary` scope (`catalog.scope_owners`)
+
+Overlap detection prevents two listed entries from claiming overlapping
+`primary` prefixes, and unlisted entries (`listed = false`) never appear in
+`/api/directory` or `/api/route` (if an unlisted entry stages a whole-repo
+`primary` scope while another listed entry already holds a subdirectory on
+that repository, flipping the unlisted entry to `listed = true` fails with
+`409 Conflict`). However, overlap detection alone does not decide *which*
+admitted users or teams are allowed to claim an unclaimed repository or a
+disjoint `primary` prefix (for example claiming `acme/app` or
+`acme/app:services/web` while another team's entry holds
+`acme/app:services/api`, which would otherwise route paths outside
+`services/api` to the second entry).
+
+`grain-registry` supports both single-team self-service fleets and
+multi-team / multi-domain fleets via `catalog.scope_owners`:
+
+1. **Default self-service mode (`catalog.scope_owners` omitted).** In a
+   single-team or single-organization registry where every admitted user in
+   `auth.allowed_domains` is trusted to register team grains without manual
+   approval, any entry manager can claim non-overlapping `primary` scopes
+   (first-registered wins across listed entries, with admin override via
+   `POST /api/admin/conflicts/resolve`). This preserves zero-ceremony
+   self-registration from `RepoConfig` heartbeats without requiring GitHub
+   admin tokens on the registry.
+2. **Per-repository / per-organization ownership verification
+   (`catalog.scope_owners`).** Multi-team or multi-domain registries can
+   bind repository patterns (`<owner>/<repo>` or `<prefix>/*`) to allowed
+   `user:<email>` and `group:<email>` principals. When multiple rules could
+   match a repository, an **exact `<owner>/<repo>` rule overrides the
+   longest matching `<prefix>/*` wildcard rule**; repositories matching no
+   rule remain self-service. A rule written in the bare `<owner>/...` form
+   also governs host-qualified claims of the same path (`acme/*` covers
+   `github.com/acme/billing` as well as `acme/billing`), since scopes and
+   `/api/route` queries may spell a repository either way; a rule naming
+   the host-qualified form (`github.com/acme/*`) is consulted first for that
+   host.
+   - An entry is authorized to hold a `primary` scope (`declared` or
+     `reported`) on a restricted repository if and only if:
+     1. `user:<entry.owner>` is listed in the matching rule's `principals`,
+     2. `entry.owner_group` is non-empty and listed in `principals`, or
+     3. `entry.owner` is a verified member of a `group:<email>` listed in
+        `principals` via `GroupResolver`.
+   - **Synchronous API writes and transfers fail closed:** unauthorized
+     `primary` claims on `POST /api/entries`,
+     `PUT /api/entries/<name>/scopes`, `PATCH /api/entries/<name>` (when
+     changing `owner_group` or setting `listed = true`),
+     `POST /api/entries/<name>/transfer`, and
+     `POST /api/entries/<name>/transfer/accept` are rejected with
+     `403 Forbidden` (`code: "scope_owner_forbidden"`). If `GroupResolver`
+     is temporarily unavailable while checking a `group:` rule, synchronous
+     writes fail closed with `503 Service Unavailable` (`Retry-After: 5`).
+     `secondary` scopes remain allowed for any admitted entry manager.
+   - **Heartbeats and admin force-transfers demote rather than fail:**
+     asynchronous `PUT /api/entries/<name>/heartbeat` reports never fail
+     liveness on an unauthorized `primary` scope (`200 OK`); instead,
+     unauthorized reported `primary` claims are stored as `secondary`
+     (`role = "secondary"`). Likewise, an admin force-transfer
+     (`POST /api/admin/entries/<name>/force-transfer`) to a recipient
+     outside a repo's `scope_owners` demotes affected declared `primary`
+     scopes on that entry to `secondary`.
+   - **Existing claims are re-checked at startup:** primaries stored before
+     a rule applied (the policy newly added, or a rule tightened) are not
+     grandfathered. Each registry replica re-evaluates every entry's
+     `primary` scopes when it starts and demotes the unauthorized ones to
+     `secondary` (audited as `entry_scope_owner_demote`). A `GroupResolver`
+     error during that sweep leaves the claim as it is rather than demoting
+     it on a transient outage.
+
 ---
 
 ## 5. Accountable Ownership, `owner_group`, Quotas, and Transfers
@@ -862,17 +950,44 @@ How `/api/route` matches and ranks candidates:
       (`len(path_prefix) DESC`, where whole-repo `""` has length `0`).
    3. **Liveness and load tie-breaker:** `online` > `degraded` >
       `offline`, then lowest `active_tasks`, then `name ASC`.
-3. **Offline primaries stay visible in rank 1.** Because active `primary`
-   prefixes across listed entries are mutually disjoint, at most one
-   `primary` entry matches any `(repo, path_prefix)` specificity level.
-   If that primary grain is currently `offline` or `degraded` (for
-   example, a VM mid-upgrade or a disconnected workstation), it remains
-   in rank 1 with `status: "offline"` / `"degraded"` and its
-   `heartbeat_age_seconds`, `owner`, `owner_group`, and `url` ahead of
-   any `online` `secondary` candidates. A caller can therefore tell the
-   user *"primary grain `autoscaler` (`owner: alice@example.com`) is
-   offline; wait or route to secondary `core-fallback` (`online`)"*
-   rather than silently dispatching standing work to the wrong grain.
+3. **Offline primaries stay visible in rank 1, and `primary` is strictly
+   role-gated.** Because active `primary` prefixes across listed entries
+   are mutually disjoint, at most one `primary` entry matches any
+   `(repo, path_prefix)` specificity level. If that primary grain is
+   currently `offline` or `degraded` (for example, a VM mid-upgrade or a
+   disconnected workstation), it remains in rank 1 with
+   `status: "offline"` / `"degraded"` and its `heartbeat_age_seconds`,
+   `owner`, `owner_group`, and `url` ahead of any `online` `secondary`
+   candidates. A caller can therefore tell the user *"primary grain
+   `autoscaler` (`owner: alice@example.com`) is offline; wait or route to
+   secondary `core-fallback` (`online`)"* rather than silently dispatching
+   standing work to the wrong grain. The top-level `primary` field in
+   `RouteResponse` is populated **only** when a `role: "primary"` candidate
+   matches; when only `secondary` entries match `(repo, path)`, `primary`
+   is `null` (omitted) and those entries appear only in `candidates`.
+
+#### Route consumer authorization
+
+`GET /api/route` is a **catalog discovery endpoint, not an authorization
+grant**. Route consumers MUST pair `/api/route` with caller/target
+authorization appropriate to how they dispatch work:
+
+- **Interactive users and delegated apps (`X-Grain-On-Behalf-Of`):** the
+  registry refuses to mint a delegated `act` assertion unless the signed-in
+  person holds an active consent grant (`delegation_grants.entries`)
+  covering the specific target entry (`403 no_grant`), and the target grain
+  independently enforces its own `allowed_principal` and `delegate:` rules.
+  An untrusted listed entry therefore cannot silently receive a person's
+  delegated credentials.
+- **Automated non-delegated service principals (`serviceAccount:…`):**
+  planners, webhook routers, or bots that dispatch work directly as a
+  service principal or external agent token without per-entry human consent
+  MUST NOT blindly send sensitive repository work or secrets to an
+  arbitrary route result unless **either** (a) the registry enforces
+  `catalog.scope_owners` for those repositories, **or** (b) the caller
+  checks `matched_scope.role == "primary"` and verifies the candidate's
+  `owner` / `owner_group` against its own trusted allowlist before
+  dispatching.
 
 Example CLI and HTTP usage:
 
@@ -1068,6 +1183,16 @@ catalog:
   degraded_after: 45s
   offline_after: 90s
   cache_ttl: 3s
+  # Optional: restrict which owners / owner_groups may hold primary scopes on specific repos or orgs.
+  # Exact <owner>/<repo> rules override the longest matching <prefix>/* wildcard rule.
+  # scope_owners:
+  #   - repo: acme/*
+  #     principals:
+  #       - group:acme-eng@example.com
+  #   - repo: acme/billing
+  #     principals:
+  #       - group:billing-owners@example.com
+  #       - user:alice@example.com
 
 tunnel:
   transport: ws-mux
