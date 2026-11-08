@@ -213,34 +213,51 @@ test("a setting refused for the config repo opens the refusal dialog", async ({
   await expect(box).toBeChecked({ checked: before });
 });
 
-// Legacy capabilities wrapped its GitHub and GCP config fields in a bare
+// Deployment credentials (Settings → Capabilities, formerly Legacy
+// capabilities) wrapped its GitHub and GCP config fields in a bare
 // <Box component="fieldset" disabled> instead of <ReadOnlyFieldset>, leaving
 // githubInsecureHttp without [data-settings-readonly] dimming when locked
 // (docs/test-runs/2026-11-08-user-system-settings.md).
-test("a locked Legacy capabilities card dims config fields via ReadOnlyFieldset while keeping secrets editable", async ({
+test("a locked Deployment credentials card dims config fields via ReadOnlyFieldset while keeping secrets editable", async ({
   page,
 }) => {
-  await page.setViewportSize(DESKTOP);
   await withConfig(page, { configRepoOnly: true, settingsLocked: true });
-  await page.goto("/settings/credentials");
+  for (const viewport of [DESKTOP, PHONE]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/settings/credentials");
+    await expect(page).toHaveURL(/\/settings\/capabilities$/);
 
-  const section = page.getByTestId("settings-section");
-  const box = section.locator("input[name=githubInsecureHttp]");
-  await expect(box).toBeDisabled();
-  expect(
-    await box.evaluate((el) => Boolean(el.closest("[data-settings-readonly]"))),
-  ).toBe(true);
-  expect(
-    await box.evaluate(
-      (el) => getComputedStyle(el.closest(".MuiCheckbox-root")).opacity,
-    ),
-  ).toBe("0.5");
+    const card = page.getByTestId("deployment-credentials");
+    const box = card.locator("input[name=githubInsecureHttp]");
+    await expect(box).toBeDisabled();
+    expect(
+      await box.evaluate((el) =>
+        Boolean(el.closest("[data-settings-readonly]")),
+      ),
+    ).toBe(true);
+    expect(
+      await box.evaluate(
+        (el) => getComputedStyle(el.closest(".MuiCheckbox-root")).opacity,
+      ),
+    ).toBe("0.5");
 
-  const otherSecrets = section.locator("#other-secrets");
-  await expect(otherSecrets).toBeVisible();
-  expect(
-    await otherSecrets.evaluate((el) =>
-      Boolean(el.closest("[data-settings-readonly]")),
-    ),
-  ).toBe(false);
+    const otherSecrets = card.locator("#other-secrets");
+    await expect(otherSecrets).toBeVisible();
+    expect(
+      await otherSecrets.evaluate((el) =>
+        Boolean(el.closest("[data-settings-readonly]")),
+      ),
+    ).toBe(false);
+
+    const cardRect = await card.boundingBox();
+    expect(cardRect.x).toBeGreaterThanOrEqual(0);
+    expect(cardRect.x + cardRect.width).toBeLessThanOrEqual(viewport.width);
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth -
+          document.documentElement.clientWidth,
+      ),
+    ).toBe(0);
+  }
 });

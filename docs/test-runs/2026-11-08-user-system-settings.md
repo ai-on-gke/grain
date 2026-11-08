@@ -388,12 +388,14 @@ uncovered and fixed two additional Settings UI bugs below.
 
 ### Additional bugs found and fixed in Task 3462
 
-1. **`Settings → Legacy capabilities` wrapped locked config fields in a bare `<fieldset>` instead of `<ReadOnlyFieldset>`**
+1. **`CredentialsSection` (`Deployment credentials` on `Settings → Capabilities`, formerly `Settings → Legacy capabilities`) wrapped locked config fields in a bare `<fieldset>` instead of `<ReadOnlyFieldset>`**
    - **Deterministic reproduction**: Enable `General → Settings lock` (or
-     configure an external config repository) and open `/settings/credentials`.
-     `CredentialsSection` passes `allowInExternalMode` to `SettingsCard` (so
-     secret inputs remain writable) and wrapped its GitHub and GCP config fields
-     in `<Box component="fieldset" disabled>` rather than `<ReadOnlyFieldset>`,
+     configure an external config repository) and open `/settings/credentials`
+     (which following PR #929 `21d92af1` lands on the `Deployment credentials`
+     card of `/settings/capabilities`). `CredentialsSection` passes
+     `allowInExternalMode` to `SettingsCard` (so secret inputs remain writable)
+     and wrapped its GitHub and GCP config fields in
+     `<Box component="fieldset" disabled>` rather than `<ReadOnlyFieldset>`,
      leaving `input[name="githubInsecureHttp"]` without `[data-settings-readonly]`
      dimming (`opacity: 1` instead of `0.5`) and without `ReadOnlyFieldset`'s
      keyboard-inert select/chip protection.
@@ -421,10 +423,10 @@ uncovered and fixed two additional Settings UI bugs below.
      and `ui/src/components/ModelBackendPage.test.jsx`, plus Playwright e2e test
      in `ui/e2e/user-system-settings-walkthrough.spec.js`.
 
-### Verification runs (Task 3462 on `1ab19467`)
+### Verification runs (Task 3462 on `1ab19467` and merged `beefc4da`)
 
-- `cd ui && npm run format:check`: **clean**.
-- `cd ui && npm test`: **257 files passed, 4046+ tests passed**.
-- `cd ui && npx playwright test e2e/user-system-settings-walkthrough.spec.js e2e/settings-config-modes-walkthrough.spec.js e2e/access-principals-settings.spec.js e2e/settings-models-walkthrough.spec.js e2e/settings-panel-walkthrough.spec.js e2e/settings-agents-branch-template.spec.js e2e/settings-upgrade.spec.js`: **42 passed**.
-- `go test ./tests/hygiene/... ./pkg/ui/...`: **passed**.
+- `make frontend && make fmt-frontend`: **clean**.
+- `cd ui && npm test -- --maxWorkers=4` & `cd ui-registry && npm test -- --maxWorkers=4`: **passed**.
+- Playwright Chromium e2e across `user-system-settings-walkthrough`, `settings-config-modes-walkthrough`, `deployment-credentials-gcp-help`, `capability-server-settings`, `config-repo-iac-modes`, `settings-models-walkthrough`, `settings-panel-walkthrough`, `access-principals-settings`, `hostds-capacity-and-banner`, `task_intake_inbox_lifecycle_walkthrough`, `multi-search-select-layout`, `deployment-operations-pending-restart-field`, `deployment-settings-and-operations-inputs-walkthrough`, `sessions-worktree-pinned-nav-walkthrough`, `config-repo-only-settings`, `config-refusal-pull-request`, and `ui-registry`: **94 passed**.
+- `go build ./... && go vet ./... && go test ./tests/hygiene/... ./pkg/ui/... ./cmd/grain/...`: **passed**.
 

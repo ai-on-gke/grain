@@ -171,13 +171,13 @@ describe("SystemPage", () => {
     });
     expect(githubPendingLink).toHaveAttribute(
       "href",
-      "/settings/credentials#githubHost",
+      "/settings/capabilities#githubHost",
     );
     await user.click(pollPendingLink);
     expect(onOpenSettings).toHaveBeenCalledWith("engine", "pollInterval");
     onOpenSettings.mockClear();
     await user.click(githubPendingLink);
-    expect(onOpenSettings).toHaveBeenCalledWith("credentials", "githubHost");
+    expect(onOpenSettings).toHaveBeenCalledWith("capabilities", "githubHost");
     await user.click(within(pendingRow).getByRole("button", { name: "Power" }));
     expect(onTab).toHaveBeenCalledWith("power");
 

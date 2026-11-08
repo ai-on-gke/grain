@@ -54,7 +54,6 @@ package e2e
 import (
 	"testing"
 
-	"github.com/ai-on-gke/grain/pkg/capability"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -81,9 +80,6 @@ func loadHarnessRegistry(extra ...model.CapabilityProvider) *model.CapabilityReg
 	providers := append([]model.CapabilityProvider{}, extra...)
 	providers = append(providers,
 		registrypush.New())
-	for _, r := range capability.Registered() {
-		providers = append(providers, r.New())
-	}
 	reg := model.NewCapabilityRegistry(providers...)
 	reg.RegisterDynamic(ui.AgentAPIDynamicProvider)
 	return reg

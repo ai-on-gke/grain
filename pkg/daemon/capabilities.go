@@ -25,7 +25,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
 	"github.com/ai-on-gke/grain/pkg/capability/ciapi"
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
@@ -71,7 +70,6 @@ func CapabilityProviders(cfg Config, _ *model.Store, _ map[string]*modelproxy.En
 	githubsandbox.Configure(githubsandbox.Config{
 		Host: cfg.GithubHost, InsecureHTTP: cfg.GithubInsecureHTTP,
 	})
-	providers = append(providers, admincaps.Providers()...)
 	// bootstrap-playbooks is no longer a provider here: it was retired onto
 	// the config-map server's config-map {"config_maps":["bootstrap"]}
 	// (schema migration 118), which places the same embedded playbooks.

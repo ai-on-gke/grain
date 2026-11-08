@@ -45,11 +45,6 @@ export const SETTINGS_GROUPS = [
     id: "secrets",
     label: "Secrets & access",
     sections: [
-      {
-        id: "credentials",
-        label: "Legacy capabilities",
-        keywords: ["credentials", "secrets", "legacy capabilities"],
-      },
       { id: "access", label: "Access" },
       // The host registry (pkg/model/hostd.go): invited, paired, rotated
       // and revoked here, never declared in the config repo.
@@ -219,7 +214,7 @@ const OLD_SETTINGS_TABS = {
   // Executors were retired with remote executors; the grain hostds that
   // replaced them are registered under Hostds.
   executors: "hostds",
-  integrations: "credentials",
+  integrations: "capabilities",
   state: "config-repo",
   // Upgrade was a System tab (/system/upgrade) until it moved into
   // Settings; old links and bookmarks land on the section.
@@ -238,9 +233,9 @@ const OLD_SYSTEM_TABS = [
 
 // SETTINGS_SECTION_ALIASES are /settings/<section> paths that name a
 // pane by what it holds rather than by its section: the capability
-// servers card is on Capabilities, and the legacy capabilities' secrets
-// are on Legacy capabilities (whose id stays credentials), under
-// Secrets & access.
+// servers card is on Capabilities, and so are the GitHub host, GCP
+// settings and secrets that were Settings → Legacy capabilities (section
+// id credentials) before that tab was retired: its old links land there.
 const SETTINGS_SECTION_ALIASES = {
   "capability-servers": "capabilities",
   // Settings -> Executors was retired with remote executors; the grain
@@ -249,8 +244,9 @@ const SETTINGS_SECTION_ALIASES = {
   executors: "hostds",
   hosts: "hostds",
   host: "hostds",
-  "legacy-capabilities": "credentials",
-  secrets: "credentials",
+  credentials: "capabilities",
+  "legacy-capabilities": "capabilities",
+  secrets: "capabilities",
 };
 
 // settingsSectionFor is the section a /settings/<section> path names,

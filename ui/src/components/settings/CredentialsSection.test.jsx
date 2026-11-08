@@ -65,9 +65,7 @@ describe("CredentialsSection GCP help", () => {
     const gcpServerHref =
       "/settings/capabilities/https%3A%2F%2Fgrain.dev%2Fcapabilities%2Fgcp";
 
-    const deploymentWide = screen.getByTestId(
-      "legacy-capabilities-deployment-wide",
-    );
+    const deploymentWide = screen.getByTestId("deployment-credentials");
     expect(deploymentWide).not.toHaveTextContent(
       /GCP key capability's page, in the list above/i,
     );

@@ -212,27 +212,24 @@ Settings → Tasks, and each repository's) that grant one of its methods
 detaches the server; once removed, those grants are refused at admission
 until they are changed or the server is added back under the same ID.
 
-## Legacy capabilities
+## Deployment credentials (formerly Legacy capabilities)
 
-**Settings → Legacy capabilities** is a different thing: the capabilities built
-into grain itself before capability servers, each granted by a bare name such
-as `github-sandbox` or `read-issues` and handed over by grain directly rather than by a
-server ([ci-capabilities.md](ci-capabilities.md)). Every one that minted a
-credential has been retired onto a server method (`gcp-key` onto
-`…/gcp#gcp-key`, the model proxies onto `…/model-proxy`, `grain-log` onto
-`…/grain#journal`, `self-debug` onto the `api:self-debug` preset plus
-`…/grain#source`, `read-issues` onto `…/github#read-issues`, `github-sandbox`
-onto `…/github#sandbox-repo`, and so on), and its bare name is kept as a
-one-release alias. What is left is listed in
-[unified-grants.design.md §4](../design/design/unified-grants.design.md#4-retiring-the-in-process-capabilities). That tab lists them one
-full-width row each, with **Ready** or **Not ready** and chips such as **CI
-only** and **Default**, each explaining itself as a tooltip. A row opens the
-capability's page: what it is short of, its own credentials, and **Test
-credential** where it holds a standing one. Under the list, **Deployment-wide
-settings** holds the GitHub host and the GCP project and service accounts that
-several of them read, and the secrets no capability claims. Which capabilities
-every new task starts with is chosen in **Settings → Tasks**, under **Default
-capabilities**.
+**Settings → Legacy capabilities** listed the capabilities built into grain
+itself before capability servers, each granted by a bare name such as
+`github-sandbox` or `read-issues` and handed over by grain directly rather than
+by a server. Every one has been retired onto a server method, an api preset or
+a task setting (`gcp-key` onto `…/gcp#gcp-key`, the model proxies onto
+`…/model-proxy`, `grain-log` onto `…/grain#journal`, `self-debug` onto the
+`api:self-debug` preset plus `…/grain#source`, `read-issues` onto
+`…/github#read-issues`, `github-sandbox` onto `…/github#sandbox-repo`, and so
+on -- [unified-grants.design.md §4](../design/design/unified-grants.design.md#4-retiring-the-in-process-capabilities)),
+its bare name kept as a one-release alias, and the tab went with them. What
+was still useful on it is the **Deployment credentials** card at the foot of
+this page: the GitHub host, the GCP project and service accounts migrated
+`gcp-key` and `gemini-key` pools were seeded from, and every stored secret,
+with the ones a capability server uses listed with that server. The tab's old
+address, `/settings/credentials`, opens it. Which capabilities every new task
+starts with is chosen in **Settings → Tasks**, under **Default capabilities**.
 
 ## The API behind these pages
 
