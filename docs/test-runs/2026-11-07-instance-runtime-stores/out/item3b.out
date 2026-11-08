@@ -1,0 +1,21 @@
+NOTICE:  database "walk_i3b" does not exist, skipping
+
+== 3b-1. startup validation
+-ui-require-verifier bogus               -> ui-require-verifier="bogus" names no active IdentityVerifier: configure that verifier first, or drop -ui-require-verifier to keep accepting the access code over the network
+-ui-require-verifier registry            -> ui-require-verifier="registry" names no active IdentityVerifier: set -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url first, or drop -ui-require-verifier to keep accepting the acc
+-ui-require-iap -ui-require-verifier reg -> ui-require-iap and -ui-require-verifier="registry": -ui-require-iap is an alias for -ui-require-verifier=iap
+-ui-require-verifier iap                 -> ui-require-verifier=iap needs an IAP audience: set -ui-iap-audience (or $GRAIN_IAP_AUDIENCE) to the IAP backend's /projects/NUMBER/global/backendServices/ID, or drop -ui-require-verifier to keep accep
+
+== 3b-2. -ui-require-verifier=registry with the registry verifier configured
+loopback bearer, no forwarding headers: 200
+same bearer with X-Forwarded-For (a proxied network caller): 401
+grain_access cookie with X-Forwarded-For: 401
+"Enter access code" page served to a network caller: 0
+{"accessCodeAccepted":true,"authenticated":false,"requireVerifier":"registry"}
+grain access-code (stdout is the code, the note goes to stderr):
+  stdout: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  stderr: grain access-code: the server requires registry (-ui-require-verifier=registry): this code is not accepted over the network, only from the daemon's own host over loopback; sign in through registry instead
+
+== 3b-3. a server answering with a hostile verifier label
+  stderr: grain access-code: the server requires verified sign-in (-ui-require-verifier): this code is not accepted over the network, only from the daemon's own host over loopback
+  escape bytes on stderr: 0
