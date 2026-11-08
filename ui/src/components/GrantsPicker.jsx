@@ -174,11 +174,21 @@ export default function GrantsPicker({
   helpText = "",
 }) {
   const all = grants || [];
-  const apiHeld = useMemo(() => all.filter(isApiGrant), [all]);
+  // Canonical https://grain.dev/capabilities/api#<scope> grants are
+  // capability server methods like any other, edited with their {repo}
+  // argument among the method sections; only legacy api:<scope>[@repo]
+  // strings from unmigrated rows stay in the api group.
+  const apiHeld = useMemo(
+    () => all.filter((id) => isApiGrant(id) && !isApiCapabilityRef(id)),
+    [all],
+  );
   const refs = useMemo(() => all.filter(isCapabilityRef), [all]);
   const offered = config?.capabilities || [];
   const { presets, areas } = groupApiRows(offered);
-  const apiRowOf = (id) => offered.find((c) => c.id === splitApiGrant(id)[0]);
+  const apiRowOf = (id) => {
+    const [target] = splitApiGrant(id);
+    return offered.find((c) => splitApiGrant(c.id)[0] === target);
+  };
 
   const [methods, setMethods] = useState(null);
   const [loadError, setLoadError] = useState("");
@@ -503,20 +513,28 @@ export default function GrantsPicker({
     };
   };
 
+  // methodOf is ref's method as GET /api/capability-methods lists it. An
+  // api scope always takes its optional {repo} argument
+  // (grainserver.buildAPIServer), so its section keeps the inline repo
+  // field before that listing loads -- and if a listing leaves the
+  // schema out -- rather than switching shape under someone's click.
   const methodOf = (ref) => {
-    if (byRef[ref]) return byRef[ref];
+    const listed = byRef[ref];
     if (isApiCapabilityRef(ref)) {
+      if (listed && hasArguments(listed.args)) return listed;
       const row = apiRowOf(ref);
       return {
         ref,
         capability: API_CAPABILITY_SERVER_ID,
-        method: apiShortName(ref),
-        description: row ? row.summary || row.description || "" : "",
+        method: listed?.method || apiShortName(ref),
+        description:
+          listed?.description ||
+          (row ? row.summary || row.description || "" : ""),
         args: API_ARGS_SCHEMA,
         requiresArgs: false,
       };
     }
-    return null;
+    return listed || null;
   };
 
   // methodState is what is wrong with a held method grant, if anything.
@@ -912,9 +930,10 @@ export default function GrantsPicker({
   };
 
   const anyApi = presets.length > 0 || areas.length > 0;
-  const anyMethods = (methods || []).length > 0;
+  const anyMethods = (methods || []).some((m) => !isApiGrant(m.ref));
   const held = apiHeld.length + refs.length + drafts.length;
-  if (!anyApi && !anyMethods && held === 0 && !loadError && count === 0)
+  const stillLoading = count > 0 && methods === null;
+  if (!anyApi && !anyMethods && held === 0 && !loadError && !stillLoading)
     return null;
 
   const regionId = `${idPrefix}-grants`;

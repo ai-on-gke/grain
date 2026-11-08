@@ -592,6 +592,45 @@ describe("UpgradePanel", () => {
     expect(screen.queryByText(/Now running/)).not.toBeInTheDocument();
   });
 
+  // 2026-11-08 deployment-operations walkthrough (task 3617): `grain demo
+  // -upgrade-image` -- an image-mode upgrader whose ref file cannot be
+  // read -- left Settings → Upgrade with no version anywhere on it, while
+  // the externally managed pane beside it already fell back to the build
+  // GET /api/config's `version` names.
+  it("falls back to the build this UI was served by when the daemon names nothing running", async () => {
+    api.mockResolvedValue({ enabled: true, mode: "image", phase: "" });
+    render(
+      <UpgradePanel
+        showError={() => {}}
+        version={{ release: "v3.2.0-dev", commit: "46d27f7eb7630000" }}
+      />,
+    );
+
+    expect(await screen.findByText(/Now running/)).toHaveTextContent(
+      "Now running 46d27f7",
+    );
+    expect(screen.getByTitle("46d27f7eb7630000")).toBeInTheDocument();
+  });
+
+  it("prefers what the daemon says is running over the build", async () => {
+    api.mockResolvedValue({
+      enabled: true,
+      mode: "image",
+      phase: "",
+      running: { image: "docker.io/grainai/grain:main" },
+    });
+    render(
+      <UpgradePanel
+        showError={() => {}}
+        version={{ release: "v3.2.0-dev", commit: "46d27f7eb7630000" }}
+      />,
+    );
+
+    expect(await screen.findByText(/Now running/)).toHaveTextContent(
+      "Now running docker.io/grainai/grain:main",
+    );
+  });
+
   it("submits the entered branch and shows the resulting status", async () => {
     api
       .mockResolvedValueOnce({ enabled: true, phase: "", branch: "" })

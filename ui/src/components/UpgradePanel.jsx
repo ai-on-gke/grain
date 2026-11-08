@@ -1480,7 +1480,13 @@ export default function UpgradePanel({
             upgrade failing, lifts it &mdash; since a run started now would only
             be discarded by the restart this ends in.
           </Typography>
-          <RunningNow running={status.running} />
+          {/* The same fallback the externally managed branch above
+              draws: a daemon that cannot read its image ref file (or an
+              older one that sends no `running`) still runs the build
+              GET /api/config's `version` names, and the pane said nothing at all
+              about where the deployment already was (2026-11-08
+              deployment-operations walkthrough, task 3617). */}
+          <RunningNow running={fallbackRunning} />
           <DiscardedRCAlert
             discardedRc={status.discardedRc || targetsData?.discardedRc}
             disabled={running}

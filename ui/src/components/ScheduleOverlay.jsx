@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { isApiGrant, withoutApiRows } from "../apiGrants.js";
+import { isApiGrant, isLegacyApiGrant, withoutApiRows } from "../apiGrants.js";
 import GrantsPicker from "./GrantsPicker.jsx";
 import { localGrantHandlers } from "./capabilityMethods.js";
 import { isCapabilityRef } from "../capabilityArgs.js";
@@ -349,7 +349,7 @@ function ScheduleOverlay({
   const capabilityIds = capabilities.filter(
     (id) => !isCapabilityRef(id) && !isApiGrant(id),
   );
-  const apiIds = capabilities.filter(isApiGrant);
+  const apiIds = capabilities.filter(isLegacyApiGrant);
   const capabilityRefs = capabilities.filter(isCapabilityRef);
   const heldCapabilityIds = useHeldIds(capabilityIds);
   const capabilityOptions = withoutApiRows(

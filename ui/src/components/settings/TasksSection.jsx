@@ -30,12 +30,20 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import { isApiGrant, withoutApiRows } from "../../apiGrants.js";
+import {
+  isApiGrant,
+  isLegacyApiGrant,
+  withoutApiRows,
+} from "../../apiGrants.js";
 import { isCapabilityRef } from "../../capabilityArgs.js";
 import GrantsPicker from "../GrantsPicker.jsx";
 import ReadOnlyGrants from "../ReadOnlyGrants.jsx";
 import { localGrantHandlers } from "../capabilityMethods.js";
-import { LEGACY_CAPABILITIES_HINT, capabilityRows } from "../../state.js";
+import {
+  LEGACY_CAPABILITIES_HINT,
+  NO_CAPABILITIES_HINT,
+  capabilityRows,
+} from "../../state.js";
 import { legacyValues } from "../../taskAttributes.js";
 import SettingsCard from "./SettingsCard.jsx";
 
@@ -151,7 +159,7 @@ export default function TasksSection({
   const legacyDefaults = defaultCapabilities.filter(
     (id) => !isCapabilityRef(id) && !isApiGrant(id),
   );
-  const apiDefaults = defaultCapabilities.filter(isApiGrant);
+  const apiDefaults = defaultCapabilities.filter(isLegacyApiGrant);
   const refDefaults = defaultCapabilities.filter(isCapabilityRef);
   const capabilityChoices = withoutApiRows(
     capabilityRows(
@@ -253,10 +261,7 @@ export default function TasksSection({
             )}
           >
             {capabilityChoices.length === 0 && (
-              <MenuItem disabled>
-                None configured &mdash; the rows under Settings → Legacy
-                capabilities are where a capability is set up
-              </MenuItem>
+              <MenuItem disabled>{NO_CAPABILITIES_HINT}</MenuItem>
             )}
             {capabilityChoices.map((c) => (
               <MenuItem key={c.id} value={c.id} title={c.description}>

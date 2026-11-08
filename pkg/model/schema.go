@@ -609,7 +609,12 @@ import "strconv"
 // which now rewrites an `account` naming an unconfigured permission set to
 // `permission_set` (with a note) where 109 once kept it as written, a grant
 // every state-repository check refused (gcp_key_args_migration.go).
-const SchemaVersion = 127
+// 128 changes no table: it drops default, template and schedule grants that
+// the deployment's capability catalogue disables (with a note on affected
+// templates and schedules), so a store saved before API policy writes checked
+// defaults exports a state repository that passes grain state check
+// (catalogue_disabled_migration.go).
+const SchemaVersion = 128
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or

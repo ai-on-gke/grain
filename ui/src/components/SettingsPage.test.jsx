@@ -393,6 +393,79 @@ describe("SettingsPage", () => {
     expect(onSection).toHaveBeenCalledWith("preferences");
   });
 
+  it("keeps the tablet Section picker on the current section when a dirty leave is cancelled", async () => {
+    window.matchMedia = (query) => ({
+      matches: query !== PHONE_QUERY && query.includes("899"),
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    try {
+      const user = userEvent.setup();
+      const { onSection } = setup({ section: "agents" });
+      const promptBox = await screen.findByLabelText(
+        "Standing instructions for every run",
+      );
+      await user.type(promptBox, " stay here");
+
+      const picker = screen.getByRole("combobox", { name: "Section" });
+      expect(picker).toHaveValue("Agents");
+      await chooseOption(user, picker, "general");
+      expect(confirmSpy).toHaveBeenCalled();
+      expect(onSection).not.toHaveBeenCalled();
+      expect(picker).toHaveValue("Agents");
+    } finally {
+      confirmSpy.mockRestore();
+    }
+  });
+
+  // Agents' Commit identity and CLI's Sign in pointers were bare hrefs:
+  // they reloaded the app and skipped the dirty-card prompt.
+  it("opens Git from Agents and Agents from CLI in place, asking first when dirty", async () => {
+    const confirmSpy = vi
+      .spyOn(window, "confirm")
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+    try {
+      const user = userEvent.setup();
+      const { onSection, rerender } = setup({ section: "agents" });
+      const promptBox = await screen.findByLabelText(
+        "Standing instructions for every run",
+      );
+      await user.type(promptBox, " dirty edit");
+
+      const gitLink = screen.getByRole("link", { name: /Settings → Git/ });
+      await user.click(gitLink);
+      expect(confirmSpy).toHaveBeenCalledTimes(1);
+      expect(onSection).not.toHaveBeenCalled();
+
+      await user.click(gitLink);
+      expect(confirmSpy).toHaveBeenCalledTimes(2);
+      expect(onSection).toHaveBeenCalledWith("git");
+
+      onSection.mockClear();
+      rerender(
+        <PreferencesProvider>
+          <SettingsPage
+            config={{}}
+            section="cli"
+            onSection={onSection}
+            showError={vi.fn()}
+          />
+        </PreferencesProvider>,
+      );
+      await user.click(
+        await screen.findByTestId("cli-external-agent-api-link"),
+      );
+      expect(onSection).toHaveBeenCalledWith("agents", "external-agents");
+    } finally {
+      confirmSpy.mockRestore();
+    }
+  });
+
   it("edits max worker agents (10 by default) in the Engine section", async () => {
     const user = userEvent.setup();
     setup({ section: "engine" });

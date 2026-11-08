@@ -51,7 +51,7 @@ export function taskBranchSuggestion(settings) {
 
 // AgentsSection is Settings → Agents (design/design/settings-panel.design.md
 // §3.2). `s` is the page's useSettingsSection().
-export default function AgentsSection({ s }) {
+export default function AgentsSection({ s, onSection }) {
   const { settings, saveChoice, onTextBlur, onIntBlur, onEnterKey } = s;
   return (
     <>
@@ -184,8 +184,25 @@ export default function AgentsSection({ s }) {
         >
           Agents commit as the account the git credential they push with acts as
           -- a token&apos;s owner, a GitHub App&apos;s bot account -- which{" "}
-          <Link href="/settings/git">Settings &rarr; Git</Link> shows. A
-          credential that names nobody commits as grain&apos;s own,{" "}
+          <Link
+            href="/settings/git"
+            onClick={(evt) => {
+              if (
+                !onSection ||
+                evt.button !== 0 ||
+                evt.metaKey ||
+                evt.ctrlKey ||
+                evt.shiftKey ||
+                evt.altKey
+              )
+                return;
+              evt.preventDefault();
+              onSection("git");
+            }}
+          >
+            Settings &rarr; Git
+          </Link>{" "}
+          shows. A credential that names nobody commits as grain&apos;s own,{" "}
           {DEFAULT_GIT_IDENTITY_NAME} &lt;
           {DEFAULT_GIT_IDENTITY_EMAIL}&gt;.
         </Typography>

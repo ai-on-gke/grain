@@ -907,6 +907,12 @@ var Migrations = []Migration{
 			"to permission_set, so the state repository a store exports loads again",
 		Up: MigrateGCPKeyGrantArgs,
 	},
+	{
+		Version: 128,
+		Description: "drop default, template and schedule grants that the deployment's capability catalogue disables, " +
+			"noting affected templates and schedules so the state repository a store exports loads again",
+		Up: MigrateCatalogueDisabledGrants,
+	},
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as

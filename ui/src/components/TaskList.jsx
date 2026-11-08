@@ -845,6 +845,22 @@ export function TaskRow({
             label="imported"
           />
         )}
+        {/* The pull request this task is about but did not open: a
+            fork's, adopted when the task was filed against its head
+            label (ui.Task.ExternalPullRequests). Outlined, as on the
+            task page's header, and not a link here: the row is the link
+            to the task, and the task page links the pull request. */}
+        {(t.externalPullRequests || []).map((ref) => (
+          <Chip
+            key={`external-pr-${ref}`}
+            size="small"
+            variant="outlined"
+            className="chip-external-pr"
+            data-testid="task-external-pr-chip"
+            title={`about pull request ${ref}, opened from a fork rather than by this task`}
+            label={ref}
+          />
+        ))}
         {t.stacked && !nested && (
           <Chip size="small" className="chip-stacked" {...stackedChip(t)} />
         )}

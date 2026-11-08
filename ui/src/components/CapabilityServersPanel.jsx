@@ -1212,6 +1212,7 @@ export default function CapabilityServersPanel({
   readOnly,
   selected: selectedProp,
   onSelect,
+  onChanged,
 }) {
   const [servers, setServers] = useState(null);
   // The open server, by capability_id, or "" for the list. Held by the
@@ -1321,6 +1322,10 @@ export default function CapabilityServersPanel({
       invalidateCapabilityMethods();
       setServers(Array.isArray(data) ? data : []);
       refreshUsage();
+      // A server's own secrets are made, renamed and deleted with it:
+      // whatever lists them (Deployment credentials' Other secrets) reads
+      // them again rather than go on naming a server that is gone.
+      onChanged?.();
       return true;
     } catch (err) {
       showError(err);
@@ -1849,6 +1854,7 @@ export default function CapabilityServersPanel({
                 onSaved={(data) => {
                   setServers(Array.isArray(data) ? data : []);
                   setConfiguring(null);
+                  onChanged?.();
                 }}
               />
             )}

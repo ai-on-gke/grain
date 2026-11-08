@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { isApiGrant, withoutApiRows } from "../apiGrants.js";
+import { isApiGrant, isLegacyApiGrant, withoutApiRows } from "../apiGrants.js";
 import GrantsPicker from "./GrantsPicker.jsx";
 import { localGrantHandlers } from "./capabilityMethods.js";
 import { isCapabilityRef } from "../capabilityArgs.js";
@@ -524,7 +524,10 @@ export default function ConsoleSessionPage({
           grants={session.capabilities || []}
           onApiChange={(next) =>
             saveCapabilities(
-              replacing((session.capabilities || []).filter(isApiGrant), next),
+              replacing(
+                (session.capabilities || []).filter(isLegacyApiGrant),
+                next,
+              ),
               "api",
             )
           }

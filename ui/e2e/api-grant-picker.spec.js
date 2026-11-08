@@ -105,9 +105,12 @@ test("lists the API presets before every scope, with what each preset grants", a
     menu.locator('[data-api-grant="api:tasks:read"] .api-dangerous'),
   ).toHaveCount(0);
 
-  // The search narrows every kind at once.
+  // The search narrows every kind at once, and GET /api/capability-methods'
+  // https://grain.dev/capabilities/api#* entries are owned by the Grain API
+  // groups rather than duplicated under Capability server methods.
   await page.getByLabel("Search grants").fill("merge:force");
   await expect(menu.locator(".api-grant-row")).toHaveCount(1);
+  await expect(menu.locator(".method-grant-row")).toHaveCount(0);
   await page.keyboard.press("Escape");
 
   // The legacy Capabilities list no longer carries them.

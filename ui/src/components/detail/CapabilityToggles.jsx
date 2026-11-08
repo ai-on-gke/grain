@@ -16,7 +16,11 @@ import { useState } from "react";
 import { Alert, Box, Button, FormControl, FormHelperText } from "@mui/material";
 import api from "../../api.js";
 import { isCapabilityRef } from "../../capabilityArgs.js";
-import { isApiGrant, withoutApiRows } from "../../apiGrants.js";
+import {
+  isApiGrant,
+  isLegacyApiGrant,
+  withoutApiRows,
+} from "../../apiGrants.js";
 import GrantsPicker from "../GrantsPicker.jsx";
 import SearchSelect from "../SearchSelect.jsx";
 import {
@@ -33,7 +37,7 @@ export default function CapabilityToggles({ t, config, act }) {
   // grants (apiGrants.js) are GrantsPicker's below, one chip list; the
   // checklist is the legacy in-process ids.
   const selected = held.filter((id) => !isCapabilityRef(id) && !isApiGrant(id));
-  const apiSelected = held.filter(isApiGrant);
+  const apiSelected = held.filter(isLegacyApiGrant);
   const [capabilitiesChanged, setCapabilitiesChanged] = useState(false);
   const [restarting, setRestarting] = useState(false);
   // A task can hold a grant the picker no longer offers -- a capability
