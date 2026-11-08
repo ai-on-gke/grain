@@ -288,6 +288,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		StateDir:        *stateDir,
 		Build:           version.Get().Release,
 		Remote:          dial,
+		AgentsOnly:      true,
 		RenewName:       *name,
 		RenewKey:        privKey,
 		CurrentToken:    getToken,

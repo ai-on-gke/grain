@@ -208,6 +208,24 @@ func TestRunRefusesAndLogsWhatTheAllowlistDoesNotAccept(t *testing.T) {
 	}
 }
 
+// A refusal reaches a task's failure line as the client's error text: it
+// names the host agent, not hostd, and says so once.
+func TestARefusalReadsAsTheHostAgentRefused(t *testing.T) {
+	ts := startServer(t, "", nil)
+	_, err := ts.client.Run(context.Background(), Request{Kind: KindCLI, Name: "sh", Env: []string{"MCP_TOOL_TIMEOUT=1"}}, nil, nil, nil)
+	var r *RefusedError
+	if !errors.As(err, &r) {
+		t.Fatalf("err = %v, want a refusal", err)
+	}
+	msg := err.Error()
+	if !strings.HasPrefix(msg, "the host agent refused: ") || strings.Count(msg, "refused:") != 1 || strings.Contains(msg, "hostd") {
+		t.Errorf("refusal reads %q, want one \"the host agent refused: \" and no hostd", msg)
+	}
+	if !strings.Contains(msg, "MCP_TOOL_TIMEOUT") || strings.HasPrefix(r.Reason, "the host agent") {
+		t.Errorf("refusal = %q, reason %q; want the reason once, naming the variable", msg, r.Reason)
+	}
+}
+
 func TestOffersListsTheAllowlist(t *testing.T) {
 	ts := startServer(t, "capabilities:\n  cap:\n    command: /bin/true\n", nil)
 	offers, err := ts.client.Offers(context.Background())
