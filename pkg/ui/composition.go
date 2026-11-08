@@ -320,6 +320,15 @@ func (c *Client) DraftScheduleComposition(ctx context.Context, req CreateSchedul
 			return Composition{}, validationErrorf("%v", err)
 		}
 		sched.Admission = model.MaxAdmission(sched.Admission, adm)
+		// Hosting the same way: `hosting: console` beside `template:`
+		// raises the template's, and the preview left it out altogether
+		// while the stored schedule's composition and its firings said
+		// "console, from the schedule" (2026-11-08 walkthrough).
+		hosting, err := model.ParseOptionalHosting(req.Hosting)
+		if err != nil {
+			return Composition{}, validationErrorf("%v", err)
+		}
+		sched.Hosting = model.MaxHosting(sched.Hosting, hosting)
 	}
 	return c.compositionOfSchedule(ctx, sched, "this schedule")
 }
