@@ -1,0 +1,99 @@
+== store a secret whose value the bind error will quote
+    set bind-host/value
+== hold the git proxy's port and start the daemon
+    journal: 2026/11/07 22:42:23 grain daemon: dispatch blocked [git-proxy]: starting git proxy: listen tcp [redacted: secret bind-host/value]: bind: address already in use -- no task is dispatched until this clears
+== unauthenticated: nothing of the condition may show
+    ok    GET /api/auth/config (no credential): {"error":"this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's \"Enter access code\" page, or send it as a bearer to
+    ok    GET /api/auth/whoami (no credential): {"acceptedAuth":["access-code"],"externalAgentApi":false,"version":"v0.0.0-20261107215434-f55b8c73acb8+dirty","authenticated":false}
+    ok    GET /api/config (no credential): {"error":"this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's \"Enter access code\" page, or send it as a bearer to
+    ok    GET /api/sandboxes (no credential): {"error":"this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's \"Enter access code\" page, or send it as a bearer to
+    ok    GET /api/health (no credential): {"error":"this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's \"Enter access code\" page, or send it as a bearer to
+== authenticated surfaces
+### grain health
+$ authed health
+    FAILING: dispatch is blocked -- no task is dispatched until this clears:
+      [git-proxy] starting git proxy: listen tcp [redacted: secret bind-host/value]: bind: address already in use (for 0s, since 2026-11-07T22:42:23Z)
+        remedy: free the port the git proxy binds (or move the block with -sandbox-port-base) and restart the daemon
+    
+    no counters: nothing on this daemon registers any
+    -> exit=0
+### GET /api/sandboxes .dispatchBlocked
+$ sh -c curl -s -H 'Authorization: Bearer DAEMON-CODE-1111-2222-3333' http://127.0.0.1:4293/api/sandboxes | jq -c .dispatchBlocked
+    [{"name":"git-proxy","error":"starting git proxy: listen tcp [redacted: secret bind-host/value]: bind: address already in use","since":"2026-11-07T22:42:23.438671909Z","remedy":"free the port the git proxy binds (or move the block with -sandbox-port-base) and restart the daemon","held":"1s","check":"dispatch blocked -- git proxy: starting git proxy: listen tcp [redacted: secret bind-host/value]: bind: address already in use"}]
+    -> exit=0
+### GET /api/config .dispatchBlocked
+$ sh -c curl -s -H 'Authorization: Bearer DAEMON-CODE-1111-2222-3333' http://127.0.0.1:4293/api/config | jq -c '{reconcilerDown,dispatchBlocked}'
+    {"reconcilerDown":true,"dispatchBlocked":[{"name":"git-proxy","error":"starting git proxy: listen tcp [redacted: secret bind-host/value]: bind: address already in use","since":"2026-11-07T22:42:23.438671909Z","remedy":"free the port the git proxy binds (or move the block with -sandbox-port-base) and restart the daemon","held":"1s","check":"dispatch blocked -- git proxy: starting git proxy: listen tcp [redacted: secret bind-host/value]: bind: address already in use"}]}
+    -> exit=0
+### file a task
+$ authed -json create -repo acme/widgets -title queued behind a dead git proxy -body x -approve
+    {
+      "id": "4",
+      "title": "queued behind a dead git proxy",
+      "description": "x",
+      "author": "debian",
+      "authorKind": "human",
+      "authorSource": "access-code",
+      "authorLabel": "operator (access code)",
+      "approvedBy": "debian",
+      "approvedByKind": "human",
+      "approvedBySource": "access-code",
+      "approvedByLabel": "operator (access code)",
+      "state": "queued",
+      "repo": "acme/widgets",
+      "branch": "grain/7ab5ee87/task-4-queued-behind-a-dead-git-proxy",
+      "priority": 5,
+      "autoMerge": false,
+      "autoApproveProposals": false,
+      "interactive": false,
+      "admission": "standard",
+      "hosting": "unattended",
+      "owner": "debian",
+      "creator": "debian",
+      "capabilities": [],
+      "createdAt": "2026-11-07T22:42:24.163631733Z",
+      "approved": true,
+      "blocked": false,
+      "reason": {
+        "reason": "queued/dispatch_blocked",
+        "class": "awaiting an external answer",
+        "resource": "dispatch blocked -- git proxy: starting git proxy: listen tcp [redacted: secret bind-host/value]: bind: address already in use"
+      }
+    }
+    -> exit=0
+### grain show <queued>
+$ sh -c env GRAIN_TOKEN=DAEMON-CODE-1111-2222-3333 /home/debian/bin/grain --server http://127.0.0.1:4293 show 4 | head -8
+    4 queued behind a dead git proxy
+    state:      queued
+    reason:     queued/dispatch_blocked (dispatch blocked -- git proxy: starting git proxy: listen tcp [redacted: secret bind-host/value]: bind: address already in use)
+    owner:      debian
+    repo:       acme/widgets
+    priority:   5
+    auto-merge: false
+    
+    -> exit=0
+### grain show -json <queued> .reason
+$ sh -c env GRAIN_TOKEN=DAEMON-CODE-1111-2222-3333 /home/debian/bin/grain --server http://127.0.0.1:4293 -json show 4 | jq -c .reason
+    {"reason":"queued/dispatch_blocked","class":"awaiting an external answer","resource":"dispatch blocked -- git proxy: starting git proxy: listen tcp [redacted: secret bind-host/value]: bind: address already in use"}
+    -> exit=0
+### grain list (queued row)
+$ sh -c env GRAIN_TOKEN=DAEMON-CODE-1111-2222-3333 /home/debian/bin/grain --server http://127.0.0.1:4293 list | grep -E '^4 '
+    4      queued          acme/widgets             queued behind a dead git proxy
+    -> exit=0
+### MCP read_grain_task over grain mcp (stdio; the plan names it grain_get_task, which this build does not register)
+    {"reason":"queued/dispatch_blocked","class":"awaiting an external answer","resource":"dispatch blocked -- git proxy: starting git proxy: listen tcp [redacted: secret bind-host/value]: bind: address already in use"}
+== the secret value never appears on an authenticated surface either
+    ok    /api/sandboxes: no 127.0.0.1:24576
+    ok    /api/config: no 127.0.0.1:24576
+    ok    /api/tasks/4: no 127.0.0.1:24576
+    ok    /api/health: no 127.0.0.1:24576
+    ok    grain health: no 127.0.0.1:24576
+== recovery: free the port, restart, condition gone
+### GET /api/sandboxes .dispatchBlocked after restart
+$ sh -c curl -s -H 'Authorization: Bearer DAEMON-CODE-1111-2222-3333' http://127.0.0.1:4293/api/sandboxes | jq -c .dispatchBlocked
+    null
+    -> exit=0
+### grain show -json <task> .reason after restart
+$ sh -c env GRAIN_TOKEN=DAEMON-CODE-1111-2222-3333 /home/debian/bin/grain --server http://127.0.0.1:4293 -json show 4 | jq -c '{state,reason}'
+    {"state":"queued","reason":{"reason":"queued/ready","class":"driven","resource":"a worker slot (max_workers) and a sandbox","driver":"reconcileDispatch","control":"Run now"}}
+    -> exit=0
