@@ -673,7 +673,7 @@ Boards
 Sessions
   (sessions)
 Processes        17
-CI
+CI                          ← hidden until Customize shows it
 Repos             6
 ──────────
 operator@example.com  ⎋      ← user tile, Log out (§4.3)
@@ -697,12 +697,20 @@ v1.14.0 · 3f2a1c9            ← build stamp, as today
   Boards, Sessions, Processes, CI, Repos and Staging
   (`sidebarSections.js`) can be hidden in this browser, kept as an array
   of ids in `localStorage["grain.sidebar.hidden"]`; nothing stored means
-  everything shows, and an id the build does not know is ignored, so a
-  section added later is never hidden by an old list. A hidden section
+  the default, `DEFAULT_HIDDEN_SECTIONS` (CI alone hidden), while a stored
+  `[]` shows everything, and an id the build does not know is ignored, so
+  a section added later is never hidden by an old list. A hidden section
   loses its row and its rail count, folded or not, but its route still
   opens by URL and a pin of it still shows under Pinned. The Customize
   control itself stays when Pinned is hidden, so the panel can always be
-  put back; Reset to default there shows everything again.
+  put back; Reset to default there goes back to the default, hiding CI
+  again.
+
+**Decision:** CI is hidden from the sidebar by default. *Recommended:
+yes.* This records what PR #726 shipped. `/ci` still opens by URL and
+from a repo's CI tab, and Customize puts the entry back for a browser
+that wants it. Browsers that never customised their sidebar lose the
+entry on upgrade.
 
 ### 4.3 What the footer holds instead
 
@@ -1388,3 +1396,5 @@ answer.
 23. Several users' pins in one browser are merged: **yes** (§6.3).
 24. Stages run (a) → (b) → (c) in sequence: **yes** (§7).
 25. Stage (a) waits for #4880 and #4862–#4864: **yes** (§7).
+26. CI is hidden from the sidebar by default, and Reset to default hides
+    it again: **yes** (§4.2).
