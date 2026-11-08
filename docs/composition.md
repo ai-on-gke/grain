@@ -94,6 +94,15 @@ surprised people:
   team's default model answers it at dispatch, and the preview says
   *team* (`model.modelSourceOf`). A suite-run schedule cannot choose one.
 
+- **Composed `Reads` and `Writes` drop the task's own target repository.**
+  Reusable templates and schedules can list cross-repository `reads` or
+  `writes` without knowing which repository a firing will target; once
+  placement settles (`Template.Target`, the schedule/suite/filing `repo`,
+  or `DefaultTarget` when filing from an unbound template via `POST /api/tasks`),
+  entries matching that target are stripped automatically
+  (`model.ReadsBesides`, `model.WritesBesides`) rather than duplicated in
+  previews or refused at task creation.
+
 Network access was itself an exception here until grain/task-427:
 `Schedule` had no field for it, so an inline schedule's firings could
 only ever take the deployment's default, and a recurring job that had no
