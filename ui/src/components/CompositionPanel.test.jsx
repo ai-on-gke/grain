@@ -139,6 +139,28 @@ describe("CompositionPanel", () => {
     expect(screen.queryByText("bypass")).not.toBeInTheDocument();
   });
 
+  // So does hosting, the way HostingField words it (2026-11-08
+  // walkthrough: a declared schedule's `hosting: console`).
+  it("names the hosting row and its value in words", async () => {
+    api.mockResolvedValue({
+      kind: "task",
+      tasks: [
+        {
+          templateId: "template-1",
+          templateName: "Pair",
+          title: "Pair",
+          fields: [field("hosting", "schedule", ["console"])],
+        },
+      ],
+    });
+    render(<CompositionPanel path="/api/schedules/sched-1/composition" />);
+
+    expect(await screen.findByText("Hosting")).toBeInTheDocument();
+    expect(screen.queryByText("hosting")).not.toBeInTheDocument();
+    expect(screen.getByText("interactive console")).toBeInTheDocument();
+    expect(screen.getByText("from the schedule")).toBeInTheDocument();
+  });
+
   it("pairs each capability group with its own source when values come from multiple layers", async () => {
     api.mockResolvedValue({
       kind: "task",

@@ -360,6 +360,40 @@ func TestDraftScheduleCompositionKeepsAScheduleAdmissionOverItsTemplates(t *test
 	}
 }
 
+// The same for hosting: a declared schedule's `hosting: console` beside
+// `template:` is what its firings file, so the pane's preview of it --
+// which composes through the draft -- has to say so too, rather than
+// leaving the row out (2026-11-08 walkthrough).
+func TestDraftScheduleCompositionKeepsAScheduleHostingOverItsTemplates(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+	tmpl := templateForComposition(t, c, ctx, ui.CreateTemplateRequest{
+		Name: "Pair", Title: "Pair on the flaky test",
+	})
+	req := ui.CreateScheduleRequest{TemplateID: tmpl.ID, Repo: "acme/widgets"}
+	got, err := c.DraftScheduleComposition(ctx, req)
+	if err != nil {
+		t.Fatalf("composing a draft: %v", err)
+	}
+	for _, f := range got.Tasks[0].Fields {
+		if f.Name == "hosting" {
+			t.Fatalf("an unattended draft has a hosting row %+v, want none", f)
+		}
+	}
+
+	req.Hosting = "console"
+	got, err = c.DraftScheduleComposition(ctx, req)
+	if err != nil {
+		t.Fatalf("composing a draft with its own hosting: %v", err)
+	}
+	wantField(t, got.Tasks[0], "hosting", "schedule", "console")
+
+	req.Hosting = "somewhere"
+	if _, err := c.DraftScheduleComposition(ctx, req); err == nil {
+		t.Error("composing a draft with an unknown hosting succeeded, want it refused")
+	}
+}
+
 // A draft that names a template resolves it out of the store on every
 // call, exactly as a firing does -- so a preview shows today's template
 // and not a copy taken when the form was opened.

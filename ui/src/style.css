@@ -3117,6 +3117,18 @@ html[data-phone="true"] .gantt-body {
 .suite-run-row .template-name {
   min-width: var(--list-title-min);
 }
+/* ...and the chip strip a floor of one whole chip. It shrinks in
+   proportion with the name and the hints beside it, and once it was
+   narrower than its first chip there was no second line to drop that
+   chip onto, so it was cut inside its own pill instead: 23px of
+   "succeeded" at 620px and 10px of "failed" on a phone, where the
+   status is what the row is read for (2026-11-08 walkthrough). The
+   strip's min-content is its widest chip still laid out -- ChipStrip
+   takes the wrapped ones out -- so the status always reads whole and
+   only the chips after it give way. e2e/narrow.spec.js measures it. */
+.suite-run-row .chips {
+  min-width: min-content;
+}
 /* ...which leaves this hint the one .template-title in the tree that
    keeps a flex item's own default (grain/task-431). Everywhere else the
    title floors at 9rem and grows into what is left, and both halves of
