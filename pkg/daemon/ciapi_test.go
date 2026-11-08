@@ -58,7 +58,13 @@ func ciAPIRegistry(gate *ciapi.Endpoint) *model.CapabilityRegistry {
 // can ask for: a pull request's, an ordinary push's, or an agent's
 // withheld workflow_dispatch/release run gets no token.
 func TestAPIGrantsAreGrantedToTrustedSchedulesAndReleasesOnly(t *testing.T) {
-	for _, id := range []string{model.ReleaseGateReadCapability, "api:release-gate-read", "api:ci:read"} {
+	for _, id := range []string{
+		model.ReleaseGateReadCapability,
+		"api:release-gate-read",
+		"api:ci:read",
+		model.APIRef(model.ReleaseGateReadCapability),
+		model.APIRef("ci:read"),
+	} {
 		t.Run(id, func(t *testing.T) { testTrustedOnly(t, id) })
 	}
 }
@@ -91,7 +97,7 @@ func testTrustedOnly(t *testing.T, id string) {
 		}
 		var granted bool
 		for _, r := range resolved {
-			if r.Grant.Capability == id && !r.Resolution.Refused {
+			if r.Grant.Capability == model.StoredGrantSpelling(id) && !r.Resolution.Refused {
 				granted = true
 			}
 		}
@@ -125,7 +131,7 @@ func testTrustedOnly(t *testing.T, id string) {
 		t.Fatal(err)
 	}
 	for _, r := range resolved {
-		if r.Grant.Capability == id && !r.Resolution.Refused {
+		if r.Grant.Capability == model.StoredGrantSpelling(id) && !r.Resolution.Refused {
 			t.Errorf("another repository's trusted schedule was not refused: %+v", resolved)
 		}
 	}
@@ -209,16 +215,27 @@ func TestADangerousAPIScopeIsRefusedInCI(t *testing.T) {
 	gate := ciapi.NewEndpoint()
 	gate.SetURL("http://192.0.2.1:9000")
 	reg := ciAPIRegistry(gate)
-	for _, id := range []string{"api:settings:write", "api:task-admin", "api:secrets:read", "api:deployment:restart"} {
+	for _, id := range []string{
+		"api:settings:write", "api:task-admin", "api:secrets:read", "api:deployment:restart",
+		model.APIRef("settings:write"), model.APIRef("task-admin"), model.APIRef("secrets:read"), model.APIRef("deployment:restart"),
+		model.APIRef("ci:read") + `={"bogus":1}`,
+	} {
 		cc, resolved, err := ResolveCICapabilities(context.Background(), reg, nil, model.GrainSourceRepo(), "ci-job",
 			ci.EventRelease, false, []string{id})
 		if err != nil {
 			t.Fatalf("%s: %v", id, err)
 		}
+		found := false
 		for _, r := range resolved {
-			if r.Grant.Capability == id && !r.Resolution.Refused {
-				t.Errorf("%s was granted to a release job", id)
+			if r.Grant.Capability == model.StoredGrantSpelling(id) {
+				found = true
+				if !r.Resolution.Refused {
+					t.Errorf("%s was granted to a release job", id)
+				}
 			}
+		}
+		if !found {
+			t.Errorf("%s was silently skipped instead of resolved as refused", id)
 		}
 		if _, err := model.MaterializeGrants(context.Background(), reg, cc, resolved); err != nil {
 			t.Fatal(err)
@@ -404,5 +421,30 @@ func TestACIJobsCapabilityContextCarriesItsDeadline(t *testing.T) {
 	}
 	if !cc.Deadline.IsZero() {
 		t.Errorf("Deadline = %v for a job with no deadline, want none", cc.Deadline)
+	}
+}
+
+func TestCheckCIJobRepoAccessPolicyEnforcesPolicyOnCIAPIGrants(t *testing.T) {
+	pol := model.CapabilityPolicy{
+		Rules: []model.CapabilityPolicyRule{
+			{Capability: model.APIRef("ci:read"), Deny: true},
+			{Capability: model.APIRef(model.ReleaseGateReadCapability), Deny: true},
+		},
+	}
+	for _, capID := range []string{"api:ci:read", model.APIRef("ci:read"), model.ReleaseGateReadCapability} {
+		if err := CheckCIJobRepoAccessPolicy(pol, nil, ci.SandboxRequest{
+			Repo: "ai-on-gke/grain", Event: ci.EventRelease, Capabilities: []string{capID},
+		}); err == nil {
+			t.Errorf("release job with %q admitted despite CapabilityPolicy deny rule", capID)
+		}
+		// On pull_request, ciapi is withheld by its event gate and must not fail PR runs.
+		if err := CheckCIJobRepoAccessPolicy(pol, nil, ci.SandboxRequest{
+			Repo: "ai-on-gke/grain", Event: ci.EventPullRequest, Untrusted: true, Capabilities: []string{capID},
+		}); err != nil {
+			t.Errorf("pull_request job with withheld %q failed policy check: %v", capID, err)
+		}
+	}
+	if refs := ciCapabilityRefs([]string{model.APIRef("ci:read")}, ci.EventRelease, false, false); len(refs) != 0 {
+		t.Errorf("ciCapabilityRefs included ciapi ref %+v in protocol pass grants", refs)
 	}
 }

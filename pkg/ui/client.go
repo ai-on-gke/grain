@@ -621,9 +621,14 @@ func (c *Client) capabilityByID(id string) (Capability, bool) {
 	if grainci.IsGrant(id) {
 		return Capability{}, false
 	}
-	// An api reference is the api:<scope> it stands for (model.CanonicalGrant).
+	// An api reference is the api:<scope> it stands for (model.CanonicalGrant);
+	// one that cannot rewrite (methodless https://grain.dev/capabilities/api,
+	// unknown args, invalid repo) is not a valid grant.
 	if stored := model.StoredGrantSpelling(id); stored != id {
 		return c.capabilityByID(stored)
+	}
+	if model.IsAPIGrantRef(id) || model.CapabilityGrantRef(id) == model.APICapabilityServerID {
+		return Capability{}, false
 	}
 	if model.IsCapabilityRef(id) {
 		if model.CheckCapabilityGrantSyntax(id) != nil {

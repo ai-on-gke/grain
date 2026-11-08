@@ -108,16 +108,25 @@ func CheckCIJobCatalogue(cat *model.CapabilityCatalogue, req ci.SandboxRequest) 
 
 // CheckCIJobRepoAccessPolicy judges a CI job's repository access grants
 // (repo#read, repo#write {repo}, and their bare repo-read:/repo-write:
-// spellings) against the deployment's CapabilityPolicy. Non-repo capability
-// references are judged in mintCIPass, which skips repository access because
-// it mints no pass.
+// spellings) and agent API grants (api:<scope>, https://grain.dev/capabilities/api#<scope>,
+// release-gate-read, on runs whose event admits ciapi) against the deployment's
+// CapabilityPolicy. Other capability references are judged in mintCIPass, which
+// skips repository access and ciapi because neither mints a protocol pass.
 func CheckCIJobRepoAccessPolicy(capPolicy model.CapabilityPolicy, servers map[string]protocol.ServerConfig, req ci.SandboxRequest) error {
+	admitsCIAPI := !req.WithholdEventGated &&
+		(req.Event == ci.EventRelease || req.Event == ci.EventManual || (req.Event == ci.EventSchedule && req.TrustedSchedule))
 	var canonical []string
 	for _, id := range req.Capabilities {
 		if target, ok := model.RepoReadTarget(id); ok {
 			canonical = append(canonical, model.RepoReadGrant(target))
 		} else if target, ok := model.RepoWriteTarget(id); ok {
 			canonical = append(canonical, model.RepoWriteGrant(target))
+		} else if admitsCIAPI {
+			if id == model.ReleaseGateReadCapability {
+				canonical = append(canonical, model.APIRef(model.ReleaseGateReadCapability))
+			} else if _, ok, _ := model.ParseAPIGrant(id); ok || model.CapabilityGrantRef(id) == model.APICapabilityServerID {
+				canonical = append(canonical, model.CanonicalGrantKey(id))
+			}
 		}
 	}
 	if len(canonical) == 0 {

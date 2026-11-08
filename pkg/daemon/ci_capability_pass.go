@@ -118,7 +118,8 @@ func ciCapabilityRefs(ids []string, event ci.Event, trustedSchedule, withholdEve
 		if rule, ok := model.CIGrantRuleFor(c); ok && ((rule.IsEventGated() && withholdEventGated) || !rule.Admits(string(event), trustedSchedule)) {
 			continue
 		}
-		if model.IsCapabilityRef(c) && !model.IsGrainCIGrant(c) && !model.IsRepoAccessGrant(c) {
+		isAPIRef := model.IsAPIGrantRef(c) || model.CapabilityGrantRef(c) == model.APICapabilityServerID
+		if model.IsCapabilityRef(c) && !isAPIRef && !model.IsGrainCIGrant(c) && !model.IsRepoAccessGrant(c) {
 			out = append(out, model.Grant{Capability: c, Via: model.GrantByDefault})
 		}
 	}

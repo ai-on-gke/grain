@@ -646,8 +646,10 @@ func ResolveGrants(ctx context.Context, reg *CapabilityRegistry, cc CapabilityCo
 			continue
 		}
 		// A capability reference is a capability server's to mint, at
-		// admission (protocol.MintPass), not an in-process provider's.
-		if IsCapabilityRef(g.Capability) {
+		// admission (protocol.MintPass), not an in-process provider's --
+		// except a malformed .../api reference StoredGrantSpelling could
+		// not rewrite, which stays for dynamic API providers to refuse.
+		if IsCapabilityRef(g.Capability) && !IsAPIGrantRef(g.Capability) && CapabilityGrantRef(g.Capability) != APICapabilityServerID {
 			continue
 		}
 		granted[g.Capability] = g

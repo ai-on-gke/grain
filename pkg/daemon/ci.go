@@ -1169,7 +1169,8 @@ func ciWithheldCapabilityNotes(reg *model.CapabilityRegistry, event ci.Event, tr
 			}
 			continue
 		}
-		if reg == nil || model.IsCapabilityRef(id) {
+		isAPIRef := model.IsAPIGrantRef(id) || model.CapabilityGrantRef(id) == model.APICapabilityServerID
+		if reg == nil || (model.IsCapabilityRef(id) && !isAPIRef) {
 			continue
 		}
 		provider, ok := reg.LookupFor(id, true)
@@ -1396,11 +1397,12 @@ func ResolveCICapabilities(ctx context.Context, reg *model.CapabilityRegistry, c
 		// (CiGrantReservations.Acquire). grain#ci, in either spelling,
 		// is added below whatever the list says; repository access, in
 		// either spelling, is widened on the proxy by grantRepoAccess.
-		if grainci.IsGrant(id) || model.IsCapabilityRef(id) || model.IsRepoAccessGrant(id) {
+		isAPIRef := model.IsAPIGrantRef(id) || model.CapabilityGrantRef(id) == model.APICapabilityServerID
+		if grainci.IsGrant(id) || (model.IsCapabilityRef(id) && !isAPIRef) || model.IsRepoAccessGrant(id) {
 			continue
 		}
 		provider, ok := reg.LookupFor(id, true)
-		if !ok && model.IsCapabilityRef(model.CanonicalLegacyGrant(id)) {
+		if !ok && !isAPIRef && model.IsCapabilityRef(model.CanonicalLegacyGrant(id)) {
 			continue
 		}
 		if !ok {

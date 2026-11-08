@@ -287,13 +287,14 @@ func capabilityMatch(pattern, capability string) bool {
 }
 
 // matchesCapability reports whether any of patterns matches capability.
-// Repository access is matched in both its spellings
-// (model.RepoAccessSpellings): a policy written for repo-write:acme/* must
-// keep denying the repo#write {"repo":"acme/x"} migration 88 rewrote it
-// to, and one naming the repo#write method must deny a repository's own
-// .grain/workflows repo-write: that nothing rewrites.
+// Repository access and agent API grants are matched in both their
+// spellings (model.RepoAccessSpellings, model.APIGrantSpellings): a
+// policy file on this machine is not rewritten when store rows or writers
+// move to canonical https://grain.dev/capabilities/{repo,api}#...
+// references, nor are unmigrated rows or .grain/ declarations when a
+// policy names the canonical reference.
 func matchesCapability(patterns []string, capability string) bool {
-	for _, spelling := range model.RepoAccessSpellings(capability) {
+	for _, spelling := range grantSpellings(capability) {
 		for _, pattern := range patterns {
 			if capabilityMatch(pattern, spelling) {
 				return true
@@ -301,6 +302,16 @@ func matchesCapability(patterns []string, capability string) bool {
 		}
 	}
 	return false
+}
+
+func grantSpellings(capability string) []string {
+	out := model.RepoAccessSpellings(capability)
+	for _, s := range model.APIGrantSpellings(capability) {
+		if !slices.Contains(out, s) {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // splitRepoPattern splits a repos entry into its host ("" for the
@@ -539,6 +550,11 @@ func retiredAs(name string) (string, bool) {
 func capabilityRefAliasVariants(capability string) []string {
 	c := lowerCapabilityRefPrefix(capability)
 	if !model.IsCapabilityRef(c) {
+		for _, s := range model.APIGrantSpellings(capability) {
+			if model.IsCapabilityRef(s) {
+				return []string{capability, lowerCapabilityRefPrefix(s)}
+			}
+		}
 		return []string{capability}
 	}
 	ref, with, hasWith := strings.Cut(c, "=")
@@ -751,10 +767,13 @@ func allowsCapability(patterns []string, capability string) bool {
 			}
 		}
 		// A name retired into several grants (self-debug became
-		// api:self-debug and grain#source; deployment-health
-		// api:deployment:read and grain#health) admits each of them.
+		// api#self-debug and grain#source; deployment-health
+		// api#deployment:read and grain#health) admits each of them,
+		// in either the canonical .../api# or legacy api: spelling.
 		if tos := model.CanonicalLegacyGrants(strings.ToLower(strings.TrimSpace(pattern))); len(tos) > 1 &&
-			slices.ContainsFunc(tos, func(to string) bool { return strings.EqualFold(to, want) }) {
+			slices.ContainsFunc(tos, func(to string) bool {
+				return strings.EqualFold(to, want) || strings.EqualFold(model.CanonicalGrantKey(to), model.CanonicalGrantKey(capability))
+			}) {
 			return true
 		}
 	}

@@ -3036,3 +3036,85 @@ func TestShippedDirectorTasksApprovedStickyOverridesAcrossReconciles(t *testing.
 		}
 	})
 }
+
+// Upgrading from pre-slice-3 api:<what> session snapshots and DeclinedDefaults
+// to canonical https://grain.dev/capabilities/api#<what> defaults must not
+// re-attach capabilities an operator previously removed or declined, nor
+// duplicate grants already held in legacy spelling.
+func TestUpgradingSessionSnapshotAcrossAPISpellingsDoesNotRegrantRemovedCapabilities(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	runSessions(t, store, baseTime)
+	director := sessionTasks(t, store)[0]
+
+	// Simulate pre-slice-3 state: task holds only legacy "api:capabilities:detach"
+	// (operator removed "api:task-admin" and "api:ci-read"), while the stored
+	// console_session_sync snapshot still lists legacy "api:..." strings.
+	if err := store.UpdateTask(ctx, director.ID, func(tk *model.Task) error {
+		tk.Grants = []model.Grant{{Capability: "api:capabilities:detach", Via: model.GrantByGrain}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	legacyCaps := make([]string, 0, len(model.DefaultConsoleSessions()[0].Capabilities))
+	for _, c := range model.DefaultConsoleSessions()[0].Capabilities {
+		legacyCaps = append(legacyCaps, model.StoredGrantSpelling(c))
+	}
+	if err := model.RecordSyncedConsoleSession(ctx, store, director.ID, model.ConsoleSessionConfigSnapshot{
+		Title:           director.Title,
+		NetworkAccess:   director.NetworkAccess,
+		TasksApproved:   true,
+		KeepRunning:     true,
+		Capabilities:    legacyCaps,
+		OfferedDefaults: []string{"api:ci-read"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	runSessions(t, store, baseTime.Add(time.Minute))
+	after, err := store.GetTask(ctx, director.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range after.Grants {
+		key := model.CanonicalGrantKey(g.Capability)
+		if key == model.APIRef("task-admin") || key == model.ConsoleSessionCIReadGrant {
+			t.Errorf("upgrade sync re-attached operator-removed capability %q (all grants: %+v)", g.Capability, after.Grants)
+		}
+	}
+	detachCount := 0
+	for _, g := range after.Grants {
+		if model.CanonicalGrantKey(g.Capability) == model.APIRef("capabilities:detach") {
+			detachCount++
+		}
+	}
+	if detachCount != 1 {
+		t.Errorf("capabilities:detach count = %d in %+v, want 1", detachCount, after.Grants)
+	}
+
+	// Also verify legacy DeclinedDefaults: ["api:ci-read"] keeps ci-read off a newly filed session.
+	settings(t, store, func(cfg *model.Config) {
+		cfg.ConsoleSessions = append(model.DefaultConsoleSessions(), model.ConsoleSession{
+			ID:               "ops",
+			Title:            "Ops",
+			Capabilities:     []string{},
+			DeclinedDefaults: []string{"api:ci-read"},
+		})
+	})
+	runSessions(t, store, baseTime.Add(2*time.Minute))
+	var opsTask *model.Task
+	for _, st := range sessionTasks(t, store) {
+		if st.Title == "Ops" {
+			stCopy := st
+			opsTask = &stCopy
+		}
+	}
+	if opsTask == nil {
+		t.Fatal("ops session task was not created")
+	}
+	for _, g := range opsTask.Grants {
+		if model.CanonicalGrantKey(g.Capability) == model.ConsoleSessionCIReadGrant {
+			t.Errorf("ops session with DeclinedDefaults:[\"api:ci-read\"] received %q", g.Capability)
+		}
+	}
+}

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -224,6 +225,39 @@ func StoredGrantSpelling(s string) string {
 		return legacy
 	}
 	return s
+}
+
+// APIGrantSpellings is every spelling of capability's agent API grant --
+// the canonical https://grain.dev/capabilities/api#<what>[={"repo":...}]
+// reference and the legacy api:<what>[@<repo>] form -- with capability
+// itself first, so a rule written in either matches a grant held in the
+// other. Just capability for anything else.
+func APIGrantSpellings(capability string) []string {
+	out := []string{capability}
+	add := func(s string) {
+		if s != "" && !slices.Contains(out, s) {
+			out = append(out, s)
+		}
+	}
+	trimmed := strings.TrimSpace(capability)
+	probe := trimmed
+	if len(trimmed) > len(APIGrantPrefix) && strings.EqualFold(trimmed[:len(APIGrantPrefix)], APIGrantPrefix) {
+		probe = APIGrantPrefix + trimmed[len(APIGrantPrefix):]
+	} else if ref, with, hasWith := strings.Cut(trimmed, "="); strings.EqualFold(CapabilityGrantRef(ref), APICapabilityServerID) ||
+		(len(ref) > len(APICapabilityServerID)+1 && strings.EqualFold(ref[:len(APICapabilityServerID)+1], APICapabilityServerID+"#")) {
+		probe = APICapabilityServerID + ref[len(APICapabilityServerID):]
+		if hasWith {
+			probe += "=" + with
+		}
+	}
+	g := CanonicalGrant(probe)
+	if _, isAPI := apiMethodOf(g.Capability); isAPI {
+		add(g.Key())
+		if legacy, ok := LegacyGrantString(g); ok {
+			add(legacy)
+		}
+	}
+	return out
 }
 
 // storedGrantSpellings is grants with each Capability in its stored

@@ -288,6 +288,9 @@ func predicates(child, parent Task) string {
 	fmt.Fprintf(&b, "ungrantedWrites=%v ", UngrantedWrites(child, parent))
 	fmt.Fprintf(&b, "ungrantedReads=%v ", UngrantedReads(child, parent))
 	fmt.Fprintf(&b, "sameBranch=%v ", SameBranch(child, parent))
+	tmplErr := TemplateWithinTask(parent, Template{ID: "tmpl", Grants: child.Grants, Reads: child.Reads, Writes: child.Writes})
+	kept, dropped := ReviewGrants(child.Grants, parent)
+	fmt.Fprintf(&b, "tmplWithin=%v reviewKept=%d reviewDropped=%d ", tmplErr == nil, len(kept), len(dropped))
 	for _, g := range child.Grants {
 		fmt.Fprintf(&b, "[dangerous=%v personOnly=%v api=%v",
 			IsDangerousGrant(g.Capability), IsPersonOnlyGrant(g.Capability), IsDangerousAPIGrant(g.Capability))

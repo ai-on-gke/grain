@@ -189,6 +189,14 @@ func CheckCapabilityGrantArgsOffline(s string) error {
 	if _, err := protocol.ParseRef(spec.Capability); err != nil {
 		return err
 	}
+	if spec.Capability == APICapabilityServerID {
+		return fmt.Errorf("capability reference %q must name a #<scope> method", spec.Capability)
+	}
+	if IsAPIGrantRef(spec.Capability) {
+		if _, ok := LegacyGrantString(CanonicalGrant(s)); !ok {
+			return fmt.Errorf("capability grant %q: with may carry only a valid \"repo\" (owner/name)", s)
+		}
+	}
 	if err := CheckGCPKeyGrantArgs(spec, ""); err != nil {
 		return err
 	}
