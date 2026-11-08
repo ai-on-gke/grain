@@ -329,6 +329,62 @@ const sampleAdminSummary = {
 };
 
 function createFetchMock(overrides = {}) {
+  const appsState = [
+    {
+      name: "planner",
+      principal: "serviceAccount:planner@acme-prod.iam.gserviceaccount.com",
+      display_name: "Task Planner",
+      description: "Files and dispatches tasks across your sandboxes.",
+      homepage: "https://planner.example.com",
+      owner: "alice@example.com",
+      owner_group: "group:platform-eng@example.com",
+      max_access: "write",
+      max_grant_ttl_seconds: 7776000,
+      require_subject_token: false,
+      created_by: "alice@example.com",
+      created_at: "2026-10-25T12:00:00Z",
+    },
+    {
+      name: "legacy-chat",
+      principal: "serviceAccount:legacy-chat@acme-prod.iam.gserviceaccount.com",
+      display_name: "Legacy Chat Bridge",
+      owner: "bob@example.com",
+      max_access: "write",
+      max_grant_ttl_seconds: 2592000,
+      require_subject_token: false,
+      created_by: "bob@example.com",
+      created_at: "2026-10-10T12:00:00Z",
+      disabled_at: "2026-11-05T12:00:00Z",
+      disabled_by: "alice@example.com",
+    },
+  ];
+
+  const grantsState = [
+    {
+      id: "dlg_a1b2c3d4e5f60001",
+      app: "planner",
+      person: "alice@example.com",
+      entries: ["platform-vm", "alice-workstation"],
+      access: "write",
+      created_at: "2026-11-01T12:00:00Z",
+      updated_at: "2026-11-01T12:00:00Z",
+      expires_at: "2027-01-30T12:00:00Z",
+      last_used_at: "2026-11-06T23:25:00Z",
+    },
+    {
+      id: "dlg_a1b2c3d4e5f60000",
+      app: "legacy-chat",
+      person: "alice@example.com",
+      entries: ["alice-workstation"],
+      access: "read",
+      created_at: "2026-10-15T12:00:00Z",
+      updated_at: "2026-11-05T12:00:00Z",
+      expires_at: "2026-11-14T12:00:00Z",
+      revoked_at: "2026-11-05T12:00:00Z",
+      revoked_by: "alice@example.com",
+    },
+  ];
+
   return vi.fn(async (input, init = {}) => {
     const url = typeof input === "string" ? input : input.url;
     const method = (init.method || "GET").toUpperCase();
@@ -348,6 +404,106 @@ function createFetchMock(overrides = {}) {
     }
     if (url === "/api/admin/summary") {
       return new Response(JSON.stringify(sampleAdminSummary), { status: 200 });
+    }
+    if (url === "/api/admin/delegating-apps" && method === "GET") {
+      return new Response(JSON.stringify({ apps: appsState }), { status: 200 });
+    }
+    if (url === "/api/admin/delegating-apps" && method === "POST") {
+      const body = JSON.parse(init.body || "{}");
+      const rawPrincipal = String(body.principal || "").trim();
+      const principal = rawPrincipal.startsWith("serviceAccount:")
+        ? `serviceAccount:${rawPrincipal.slice("serviceAccount:".length).toLowerCase()}`
+        : `serviceAccount:${rawPrincipal.toLowerCase()}`;
+      const created = {
+        name: body.name,
+        principal,
+        display_name: body.display_name || body.name,
+        description: body.description || "",
+        homepage: body.homepage || "",
+        owner: body.owner || sampleMe.email,
+        owner_group: body.owner_group || "",
+        max_access: body.max_access || "write",
+        max_grant_ttl_seconds: body.max_grant_ttl_seconds || 7776000,
+        require_subject_token: Boolean(body.require_subject_token),
+        created_by: sampleMe.email,
+        created_at: "2026-11-08T00:00:00Z",
+      };
+      appsState.push(created);
+      return new Response(JSON.stringify(created), { status: 201 });
+    }
+    if (url.startsWith("/api/admin/delegating-apps/") && method === "PATCH") {
+      const name = decodeURIComponent(
+        url.slice("/api/admin/delegating-apps/".length),
+      );
+      const body = JSON.parse(init.body || "{}");
+      const found = appsState.find((a) => a.name === name);
+      if (!found) {
+        return new Response(JSON.stringify({ error: "not found" }), {
+          status: 404,
+        });
+      }
+      if (body.disabled) {
+        found.disabled_at = "2026-11-08T00:01:00Z";
+        found.disabled_by = sampleMe.email;
+      } else {
+        delete found.disabled_at;
+        delete found.disabled_by;
+      }
+      return new Response(JSON.stringify(found), { status: 200 });
+    }
+    if (
+      (url === "/api/delegation-grants" ||
+        url.startsWith("/api/delegation-grants?")) &&
+      method === "GET"
+    ) {
+      const u = new URL(url, "http://localhost");
+      const includeRevoked = u.searchParams.get("include_revoked") === "true";
+      const filtered = includeRevoked
+        ? grantsState
+        : grantsState.filter((g) => !g.revoked_at);
+      return new Response(JSON.stringify({ grants: filtered }), {
+        status: 200,
+      });
+    }
+    if (url === "/api/delegation-grants" && method === "POST") {
+      const body = JSON.parse(init.body || "{}");
+      const existing = grantsState.find(
+        (g) => g.app === body.app && !g.revoked_at,
+      );
+      if (existing) {
+        existing.entries = body.entries;
+        existing.access = body.access || "write";
+        existing.updated_at = "2026-11-08T00:02:00Z";
+        return new Response(JSON.stringify(existing), { status: 200 });
+      }
+      const created = {
+        id: "dlg_newgrant0000001",
+        app: body.app,
+        person: sampleMe.email,
+        entries: body.entries,
+        access: body.access || "read",
+        created_at: "2026-11-08T00:02:00Z",
+        updated_at: "2026-11-08T00:02:00Z",
+        expires_at: "2026-12-08T00:02:00Z",
+      };
+      grantsState.unshift(created);
+      return new Response(JSON.stringify(created), { status: 200 });
+    }
+    if (url.startsWith("/api/delegation-grants/") && method === "DELETE") {
+      const ref = decodeURIComponent(
+        url.slice("/api/delegation-grants/".length),
+      );
+      const found = grantsState.find(
+        (g) => !g.revoked_at && (g.id === ref || g.app === ref),
+      );
+      if (!found) {
+        return new Response(JSON.stringify({ error: "not found" }), {
+          status: 404,
+        });
+      }
+      found.revoked_at = "2026-11-08T00:03:00Z";
+      found.revoked_by = sampleMe.email;
+      return new Response(null, { status: 204 });
     }
     if (url === "/api/directory" || url.startsWith("/api/directory?")) {
       return new Response(JSON.stringify({ entries: sampleEntries }), {
@@ -903,6 +1059,179 @@ describe("Grain Registry UI", () => {
         screen.getByText(/Deleted orphan VM grain-legacy-worker-09/i),
       ).toBeInTheDocument();
     });
+  });
+
+  it("lists, creates with a bare service-account email, and disables/enables delegating apps on Admin screen", async () => {
+    const fetchMock = createFetchMock();
+    globalThis.fetch = fetchMock;
+    renderApp("/admin");
+
+    const section = await screen.findByTestId("admin-delegating-apps-section");
+    expect(section).toHaveTextContent("planner");
+    expect(section).toHaveTextContent(
+      "serviceAccount:planner@acme-prod.iam.gserviceaccount.com",
+    );
+    expect(section).toHaveTextContent("legacy-chat");
+
+    // Register a new delegating app with a bare service-account email
+    fireEvent.change(within(section).getByLabelText("App name"), {
+      target: { value: "release-bot" },
+    });
+    fireEvent.change(within(section).getByLabelText("Service account email"), {
+      target: { value: "release-bot@acme-prod.iam.gserviceaccount.com" },
+    });
+    fireEvent.change(within(section).getByLabelText("Display name"), {
+      target: { value: "Release Bot" },
+    });
+    fireEvent.change(within(section).getByLabelText("Max access ceiling"), {
+      target: { value: "read" },
+    });
+    fireEvent.change(within(section).getByLabelText("Max grant TTL (days)"), {
+      target: { value: "14" },
+    });
+    fireEvent.click(
+      within(section).getByRole("button", {
+        name: "Register delegating app",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /Registered delegating app release-bot \(serviceAccount:release-bot@acme-prod\.iam\.gserviceaccount\.com\)/i,
+        ),
+      ).toBeInTheDocument();
+    });
+    expect(section).toHaveTextContent(
+      "serviceAccount:release-bot@acme-prod.iam.gserviceaccount.com",
+    );
+
+    // Verify POST payload passed bare email and computed ttl seconds
+    const postCall = fetchMock.mock.calls.find(
+      ([u, init]) =>
+        u === "/api/admin/delegating-apps" &&
+        (init?.method || "GET").toUpperCase() === "POST",
+    );
+    expect(postCall).toBeTruthy();
+    expect(JSON.parse(postCall[1].body)).toMatchObject({
+      name: "release-bot",
+      principal: "release-bot@acme-prod.iam.gserviceaccount.com",
+      display_name: "Release Bot",
+      max_access: "read",
+      max_grant_ttl_seconds: 14 * 86400,
+    });
+
+    // Enable disabled legacy-chat app via PATCH /api/admin/delegating-apps/legacy-chat
+    fireEvent.click(within(section).getByRole("button", { name: "Enable" }));
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Enabled delegating app legacy-chat/i),
+      ).toBeInTheDocument();
+    });
+    const patchCall = fetchMock.mock.calls.find(
+      ([u, init]) =>
+        u === "/api/admin/delegating-apps/legacy-chat" &&
+        (init?.method || "GET").toUpperCase() === "PATCH",
+    );
+    expect(patchCall).toBeTruthy();
+    expect(JSON.parse(patchCall[1].body)).toEqual({ disabled: false });
+  });
+
+  it("lists, grants consent, toggles include_revoked, and revokes grants on Apps acting for you screen", async () => {
+    const fetchMock = createFetchMock();
+    globalThis.fetch = fetchMock;
+    renderApp("/");
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Apps acting for you" }),
+      ).toBeInTheDocument();
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Apps acting for you" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: "Apps acting for you" }),
+      ).toBeInTheDocument();
+    });
+
+    const grantsSection = screen.getByTestId("person-grants-section");
+    expect(grantsSection).toHaveTextContent("planner");
+    expect(grantsSection).toHaveTextContent("dlg_a1b2c3d4e5f60001");
+    expect(grantsSection).not.toHaveTextContent("legacy-chat");
+
+    // Toggle include_revoked -> GET /api/delegation-grants?include_revoked=true
+    fireEvent.click(
+      within(grantsSection).getByLabelText("Include revoked grants"),
+    );
+    await waitFor(() => {
+      expect(grantsSection).toHaveTextContent("legacy-chat");
+      expect(grantsSection).toHaveTextContent("dlg_a1b2c3d4e5f60000");
+    });
+
+    // Grant consent via POST /api/delegation-grants
+    const consentCard = screen.getByTestId("grant-consent-card");
+    fireEvent.change(
+      within(consentCard).getByLabelText("Delegating app name"),
+      {
+        target: { value: "triage-bot" },
+      },
+    );
+    fireEvent.change(within(consentCard).getByLabelText("Entries"), {
+      target: { value: "platform-vm, alice-workstation" },
+    });
+    fireEvent.change(within(consentCard).getByLabelText("Access level"), {
+      target: { value: "read" },
+    });
+    fireEvent.change(within(consentCard).getByLabelText("Grant TTL value"), {
+      target: { value: "7" },
+    });
+    fireEvent.change(within(consentCard).getByLabelText("Grant TTL unit"), {
+      target: { value: "days" },
+    });
+    fireEvent.click(
+      within(consentCard).getByRole("button", { name: "Grant consent" }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Granted read consent to triage-bot/i),
+      ).toBeInTheDocument();
+    });
+    expect(grantsSection).toHaveTextContent("triage-bot");
+
+    const postGrantCall = fetchMock.mock.calls.find(
+      ([u, init]) =>
+        u === "/api/delegation-grants" &&
+        (init?.method || "GET").toUpperCase() === "POST",
+    );
+    expect(postGrantCall).toBeTruthy();
+    expect(JSON.parse(postGrantCall[1].body)).toEqual({
+      app: "triage-bot",
+      entries: ["platform-vm", "alice-workstation"],
+      access: "read",
+      ttl_seconds: 7 * 86400,
+    });
+
+    // Revoke active grant by ID -> DELETE /api/delegation-grants/<id>
+    const revokeButtons = within(grantsSection).getAllByRole("button", {
+      name: "Revoke",
+    });
+    fireEvent.click(revokeButtons[0]);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Revoked consent grant dlg_newgrant0000001/i),
+      ).toBeInTheDocument();
+    });
+    const deleteCall = fetchMock.mock.calls.find(
+      ([u, init]) =>
+        u === "/api/delegation-grants/dlg_newgrant0000001" &&
+        (init?.method || "GET").toUpperCase() === "DELETE",
+    );
+    expect(deleteCall).toBeTruthy();
   });
 
   it("supports configurable boot disk size on Hosted VM create and resize", async () => {

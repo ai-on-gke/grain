@@ -109,12 +109,26 @@ type SigningConfig struct {
 	JWTTTL     time.Duration `yaml:"jwt_ttl"`
 }
 
-// CatalogConfig configures entry heartbeat and status thresholds.
+// ScopeOwnerRule restricts which entry owners or co-owning groups may hold an
+// active primary scope on a repository (`<owner>/<repo>`) or org/host prefix
+// (`<prefix>/*`, such as `alpha/*` or `github.com/alpha/*`).
+//
+// When `catalog.scope_owners` is empty or no rule matches a repository, any
+// admitted entry manager may claim non-overlapping primary scopes on that
+// repository (first-registered wins across listed entries).
+type ScopeOwnerRule struct {
+	Repo       string   `yaml:"repo"`
+	Principals []string `yaml:"principals"`
+}
+
+// CatalogConfig configures entry heartbeat, status thresholds, and optional
+// primary-scope repository ownership rules.
 type CatalogConfig struct {
-	HeartbeatInterval time.Duration `yaml:"heartbeat_interval"`
-	DegradedAfter     time.Duration `yaml:"degraded_after"`
-	OfflineAfter      time.Duration `yaml:"offline_after"`
-	CacheTTL          time.Duration `yaml:"cache_ttl"`
+	HeartbeatInterval time.Duration    `yaml:"heartbeat_interval"`
+	DegradedAfter     time.Duration    `yaml:"degraded_after"`
+	OfflineAfter      time.Duration    `yaml:"offline_after"`
+	CacheTTL          time.Duration    `yaml:"cache_ttl"`
+	ScopeOwners       []ScopeOwnerRule `yaml:"scope_owners,omitempty"`
 }
 
 // TunnelConfig configures the outbound `grain connect` tunnel listener and replica routing.
@@ -476,6 +490,26 @@ func (c *Config) ValidateWithResolver(resolver any) error {
 	if c.Catalog.CacheTTL < 0 {
 		return errors.New("config: catalog.cache_ttl must not be negative")
 	}
+	seenScopeOwnerRepos := make(map[string]bool, len(c.Catalog.ScopeOwners))
+	for i, rule := range c.Catalog.ScopeOwners {
+		pattern, err := normalizeScopeOwnerRepoPattern(rule.Repo)
+		if err != nil {
+			return fmt.Errorf("config: catalog.scope_owners[%d].repo: %w", i, err)
+		}
+		if seenScopeOwnerRepos[pattern] {
+			return fmt.Errorf("config: duplicate catalog.scope_owners repo pattern %q", pattern)
+		}
+		seenScopeOwnerRepos[pattern] = true
+		if len(rule.Principals) == 0 {
+			return fmt.Errorf("config: catalog.scope_owners[%d].principals (%s) must be non-empty", i, pattern)
+		}
+		normPrincipals, err := normalizeUserOrGroupList(resolver, fmt.Sprintf("catalog.scope_owners[%d].principals", i), rule.Principals)
+		if err != nil {
+			return err
+		}
+		c.Catalog.ScopeOwners[i].Repo = pattern
+		c.Catalog.ScopeOwners[i].Principals = normPrincipals
+	}
 
 	// Tunnel validation
 	if c.Tunnel.ReplicaHeartbeat <= 0 {
@@ -659,6 +693,81 @@ func isValidEmail(email string) bool {
 	}
 	domain := email[at+1:]
 	return !strings.Contains(domain, "@") && strings.Contains(domain, ".")
+}
+
+func normalizeScopeOwnerRepoPattern(raw string) (string, error) {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	if s == "" {
+		return "", errors.New("repo pattern is required")
+	}
+	if strings.HasSuffix(s, "/*") {
+		prefix := strings.TrimSuffix(s, "/*")
+		if prefix == "" || strings.ContainsAny(prefix, " \t\r\n*?#\\") {
+			return "", fmt.Errorf("invalid repo wildcard pattern %q (expected <owner>/* or <host>/<owner>/*)", raw)
+		}
+		for _, seg := range strings.Split(prefix, "/") {
+			if seg == "" || seg == "." || seg == ".." {
+				return "", fmt.Errorf("invalid repo wildcard pattern %q: invalid segment %q", raw, seg)
+			}
+		}
+		return prefix + "/*", nil
+	}
+	if strings.Contains(s, "*") {
+		return "", fmt.Errorf("invalid repo pattern %q (wildcards are only supported as trailing \"/*\")", raw)
+	}
+	return api.NormalizeRepo(s)
+}
+
+// MatchScopeOwnerRule returns the most-specific ScopeOwnerRule matching repo:
+// an exact `<owner>/<repo>` rule wins over `<prefix>/*` rules, and longer
+// `<prefix>/*` rules win over shorter ones.
+//
+// Repository identifiers are free-form, so the same repository can be claimed
+// as `acme/billing` or host-qualified as `github.com/acme/billing`, and
+// /api/route matches whichever form a caller queries. A rule written in the
+// bare `<owner>/...` form therefore also governs host-qualified claims of the
+// same path (`<host>/<owner>/...`, where the first segment contains a dot);
+// otherwise `acme/*` could be sidestepped by claiming `github.com/acme/billing`.
+// Rules naming the host-qualified form are consulted first, so an operator can
+// still give one host's copy of a repository its own principals.
+func MatchScopeOwnerRule(rules []ScopeOwnerRule, repo string) (*ScopeOwnerRule, bool) {
+	if len(rules) == 0 {
+		return nil, false
+	}
+	normRepo, err := api.NormalizeRepo(repo)
+	if err != nil {
+		normRepo = strings.ToLower(strings.TrimSpace(repo))
+	}
+	forms := []string{normRepo}
+	if host, rest, ok := strings.Cut(normRepo, "/"); ok && strings.Contains(host, ".") && strings.Contains(rest, "/") {
+		forms = append(forms, rest)
+	}
+	for _, form := range forms {
+		for i := range rules {
+			if rules[i].Repo == form {
+				return &rules[i], true
+			}
+		}
+	}
+	for _, form := range forms {
+		var bestPrefix *ScopeOwnerRule
+		bestPrefixLen := -1
+		for i := range rules {
+			pat := rules[i].Repo
+			if !strings.HasSuffix(pat, "/*") {
+				continue
+			}
+			prefix := strings.TrimSuffix(pat, "/*")
+			if strings.HasPrefix(form, prefix+"/") && len(prefix) > bestPrefixLen {
+				bestPrefix = &rules[i]
+				bestPrefixLen = len(prefix)
+			}
+		}
+		if bestPrefix != nil {
+			return bestPrefix, true
+		}
+	}
+	return nil, false
 }
 
 // ParseMaintenanceWindow parses a UTC maintenance window in "HH:MM-HH:MM" format

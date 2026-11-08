@@ -221,8 +221,11 @@ func TestAFailedLookupOfAGroupWhoseRoleDeniesRefuses(t *testing.T) {
 	// A group whose role denies is not: leaving its veto out would give
 	// dee the secrets:read it withholds, so dee is refused instead.
 	h.allow(t, "group:contractors@example.com", "contractors")
-	if code, body := h.call("dee@example.com", http.MethodGet, "/api/deployment/secret-audit", ""); code != http.StatusForbidden || !strings.Contains(body, "contractors@example.com") {
-		t.Fatalf("GET secret-audit with a denying group's lookup failing: %d %s, want 403 naming the group", code, body)
+	if code, body := h.call("dee@example.com", http.MethodGet, "/api/deployment/secret-audit", ""); code != http.StatusForbidden ||
+		!strings.Contains(body, "contractors@example.com") ||
+		!strings.Contains(body, "group membership lookup unavailable") ||
+		strings.Contains(body, "cloud identity unavailable") {
+		t.Fatalf("GET secret-audit with a denying group's lookup failing: %d %s, want generic 403 naming the group without underlying error", code, body)
 	}
 }
 
