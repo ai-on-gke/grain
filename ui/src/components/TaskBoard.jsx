@@ -60,6 +60,7 @@ import {
   MoveSlot,
   MovingBar,
   gapsOf,
+  taskSlotName,
   usePickup,
 } from "./ReorderPickup.jsx";
 import BoardColumnsOverlay from "./BoardColumnsOverlay.jsx";
@@ -455,7 +456,7 @@ export default function TaskBoard({
                           gapBefore.has(t.id) &&
                           gaps.has(gapBefore.get(t.id)) && (
                             <MoveSlot
-                              label={`Move here, above ${t.title}, in ${c.title}`}
+                              label={`Move here, above ${taskSlotName(t)}, in ${c.title}`}
                               onMove={() => {
                                 moveTo(lifted, kept, gapBefore.get(t.id));
                                 cancelPickup();

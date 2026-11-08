@@ -44,6 +44,8 @@ import {
 import { identifierField } from "../identifierField.js";
 import { searchFilter } from "../fuzzy.js";
 import { fetchUpgradeTargets } from "../upgradeTargets.js";
+import { formatDateTime } from "../time.js";
+import { useTimeZone } from "../TimeZoneContext.jsx";
 import { HighlightedText } from "./SearchSelect.jsx";
 
 // STATUS_POLL_MS is how often this panel re-fetches /api/upgrade while
@@ -380,6 +382,7 @@ function sessionLabel(session) {
 // Absent when the daemon sent none: nothing ran across the restart, or
 // the daemon is too old to say.
 function LastRestart({ report }) {
+  const zone = useTimeZone();
   if (!report) return null;
   const adopted = report.adopted || [];
   const lost = report.lost || [];
@@ -394,7 +397,7 @@ function LastRestart({ report }) {
       className="upgrade-last-restart"
     >
       <strong>Last restart</strong>
-      {report.at ? ` (${new Date(report.at).toLocaleString()})` : ""}:{" "}
+      {report.at ? ` (${formatDateTime(report.at, zone)})` : ""}:{" "}
       <span className="upgrade-last-restart-summary">
         {adopted.length} adopted, {lost.length} lost
         {lost.length > 0 && ` (${byFramework(report.lostByFramework)})`}

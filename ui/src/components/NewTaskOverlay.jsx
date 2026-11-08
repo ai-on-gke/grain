@@ -156,10 +156,24 @@ export default function NewTaskOverlay({
   const openingRepo = defaultRepo || (formNoRepo ? "" : formRepoDefault) || "";
   const openingDefault = (id) => openingForm.fields[id].default;
   // formEdited is every field somebody has changed in this form -- or
-  // that a restored draft holds -- which a change of repo or template
-  // leaves alone when it re-applies the configured defaults (below), the
-  // way baseEdited and capabilitiesEdited do for their own fields.
-  const formEdited = useRef(new Set(draft ? Object.keys(draft) : []));
+  // had changed when its draft was saved -- which a change of repo or
+  // template leaves alone when it re-applies the configured defaults
+  // (below), the way baseEdited and capabilitiesEdited do for their own
+  // fields. A draft records that set as `edited`, because it saves every
+  // field, typed or not: seeding from all its keys marked an untouched
+  // Task priority edited, so a title left in the form made "New task
+  // from this template" keep the 5 the draft held and file it over the
+  // template's own priority (2026-11-08 intake walkthrough). A draft
+  // saved before `edited` was recorded falls back to all its keys.
+  const formEdited = useRef(
+    new Set(
+      draft
+        ? Array.isArray(draft.edited)
+          ? draft.edited
+          : Object.keys(draft)
+        : [],
+    ),
+  );
   const edit = (id, set) => (value) => {
     formEdited.current.add(id);
     set(value);
@@ -818,6 +832,7 @@ export default function NewTaskOverlay({
         atFront,
         priority,
         customFields,
+        edited: [...formEdited.current],
       });
     } else {
       clearTaskDraft();

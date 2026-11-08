@@ -24,6 +24,7 @@ import HostdsSection, {
   parseLabels,
 } from "./HostdsSection.jsx";
 import api from "../../api.js";
+import { TimeZoneProvider } from "../../TimeZoneContext.jsx";
 
 vi.mock("../../api.js", () => ({ default: vi.fn() }));
 
@@ -53,6 +54,23 @@ describe("HostdsSection", () => {
     const local = screen.getByTestId("hostd-row-local");
     expect(within(local).queryByText("Rotate")).toBeNull();
     expect(within(local).queryByText("Revoke")).toBeNull();
+  });
+
+  // "Last check-in" printed an unlabelled UTC slice whatever time zone
+  // this browser chose (2026-11-08 settings walkthrough).
+  it("prints a host's last check-in in this browser's chosen time zone", async () => {
+    const seen = "2026-11-03T05:00:00Z";
+    api.mockResolvedValueOnce([LOCAL, { ...WS, last_seen_at: seen }]);
+    render(
+      <TimeZoneProvider zone="Asia/Tokyo">
+        <HostdsSection showError={vi.fn()} />
+      </TimeZoneProvider>,
+    );
+    const row = await screen.findByTestId("hostd-row-ws-1");
+    const inTokyo = new Date(seen).toLocaleString(undefined, {
+      timeZone: "Asia/Tokyo",
+    });
+    expect(row).toHaveTextContent(`Last check-in ${inTokyo}`);
   });
 
   it("shows who a hostd connected as, and a remote hostd with no owner", async () => {
