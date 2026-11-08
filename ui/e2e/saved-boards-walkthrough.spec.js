@@ -1515,6 +1515,50 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     ).toBeVisible();
   });
 
+  // A failed /api/boards read as an empty store once the five-second
+  // banner had gone: "No boards yet." and a New board button, on the
+  // index and on a board's own address. It says the load failed, keeps
+  // the board's URL, and Retry brings the board back.
+  test("1b. A boards load that fails says so, and Retry opens the board the URL names", async ({
+    page,
+  }) => {
+    const path = await boardPath(page, "Tree");
+    let failing = true;
+    await page.route("**/api/boards", async (route) => {
+      if (failing && route.request().method() === "GET") {
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "synthetic boards 500" }),
+        });
+        return;
+      }
+      await route.continue();
+    });
+    try {
+      await page.goto(path);
+      const failed = page.locator(".tasks-load-error");
+      await expect(failed).toContainText(
+        "The boards could not be loaded (synthetic boards 500).",
+      );
+      await expect(page.getByText("No boards yet.")).toHaveCount(0);
+      // Still there after the banner's five seconds.
+      await page.waitForTimeout(5500);
+      await expect(failed).toBeVisible();
+      expect(new URL(page.url()).pathname).toBe(path);
+
+      failing = false;
+      await failed.getByRole("button", { name: "Retry" }).click();
+      await expect(failed).toHaveCount(0);
+      await expect(
+        page.getByRole("heading", { name: "Tree", exact: true }),
+      ).toBeVisible();
+      expect(new URL(page.url()).pathname).toBe(path);
+    } finally {
+      await page.unroute("**/api/boards");
+    }
+  });
+
   test("8. Deletion safety and throwaway cleanup", async ({ page }) => {
     // Verify that the UI does NOT render arbitrary board deletion buttons,
     // adhering to the state repository configuration architecture.
