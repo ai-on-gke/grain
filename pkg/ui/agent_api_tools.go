@@ -583,6 +583,11 @@ var routeFieldDocs = map[string]map[string]string{
 		"scope":      "What to check access to: an owner/name repository, an owner (its target repositories on this host), or empty for every target repository on the host.",
 		"source":     "For an ambient login, which tool is asked for the token: \"gh\", \"git\" or \"auto\".",
 	},
+	"PUT /api/console-sessions/{id}": {
+		"capabilities":         "The session's whole capability list, replacing what it holds. Send expectCapabilities with it, or a change somebody else made since you read the session is undone.",
+		"expectCapabilities":   "The capabilities list you read the session holding (GET /api/console-sessions) and computed capabilities from. If the session no longer holds exactly that set, the call is refused with 409 code \"stale\" and changes nothing; read it again and redo the change.",
+		"adoptShippedDefaults": "true adds the shipped defaults the session lacks (missingShippedDefaults) to what it holds now, keeping everything else. Send it instead of capabilities, never with it.",
+	},
 }
 
 // repoSettingsFieldRoutes names the per-field repository configuration

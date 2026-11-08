@@ -17,6 +17,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -196,6 +197,24 @@ type UpdateConsoleSessionRequest struct {
 	// setting rather than a task edit -- the next cycle resolves the
 	// session's reads from it -- so it needs writable settings.
 	ReadsAll *bool `json:"readsAll"`
+	// AdoptShippedDefaults adds the shipped Tier 1 grants the session
+	// lacks (ConsoleSessionSetting.MissingShippedDefaults) to what it
+	// holds when the request is served, keeping everything else it
+	// holds. It is the pane's Adopt shipped defaults button, and it is
+	// resolved here rather than by the caller because a caller's copy
+	// of the held set may be stale: a tab that read the session before
+	// another tab granted it something, then sent held plus missing, put
+	// back the old set and lost that grant (2026-11-07 director agent
+	// API walkthrough, finding 4). Exclusive with Capabilities.
+	AdoptShippedDefaults bool `json:"adoptShippedDefaults,omitempty"`
+	// ExpectCapabilities is the held set (ConsoleSessionSetting.
+	// Capabilities) the caller computed Capabilities from. Given, the
+	// edit is refused with a 409 coded "stale" (staleEditError),
+	// changing nothing, when the session no longer holds exactly that
+	// set -- somebody else changed its grants after the caller read
+	// them -- so a whole-list save cannot silently undo their change.
+	// Order does not matter. Only valid alongside Capabilities.
+	ExpectCapabilities *[]string `json:"expectCapabilities,omitempty"`
 
 	// renameByAgent marks a Title written by the session's own agent
 	// (RenameConsoleSessionOfTask) rather than by a person: it is
@@ -562,7 +581,88 @@ func (c *Client) consoleSessionCrowding(ctx context.Context, taskID string) (boo
 // new capabilities onto it on the next cycle
 // (orchestrator.syncConsoleSessionTask), which is the same one-writer
 // discipline every other setting follows.
+//
+// Edits are served one at a time (consoleSessionEditMu), and an edit
+// that names what it was computed from -- adoptShippedDefaults, or
+// capabilities with expectCapabilities -- is resolved against the
+// session as it is listed now (resolveConsoleSessionCapabilityEdit),
+// inside that one-at-a-time section, so no other edit can land between
+// that read and this write.
 func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req UpdateConsoleSessionRequest) ([]ConsoleSessionSetting, error) {
+	c.consoleSessionEditMu.Lock()
+	defer c.consoleSessionEditMu.Unlock()
+	if req.AdoptShippedDefaults || req.ExpectCapabilities != nil {
+		resolved, err := c.resolveConsoleSessionCapabilityEdit(ctx, id, req)
+		if err != nil {
+			return nil, err
+		}
+		req = resolved
+	}
+	return c.updateConsoleSession(ctx, id, req)
+}
+
+// resolveConsoleSessionCapabilityEdit turns an edit that depends on what
+// the session holds into a plain Capabilities edit, reading what it
+// holds the way GET /api/console-sessions lists it -- which is what the
+// pane read, and what MissingShippedDefaults is measured against.
+//
+// adoptShippedDefaults becomes held plus the missing shipped defaults;
+// expectCapabilities is checked against held and refused, as a
+// staleEditError, when the two differ as sets. With nothing missing,
+// adopting is left a no-op rather than a save of held, which would also
+// decline any session default held does not list.
+func (c *Client) resolveConsoleSessionCapabilityEdit(ctx context.Context, id string, req UpdateConsoleSessionRequest) (UpdateConsoleSessionRequest, error) {
+	if req.AdoptShippedDefaults && req.Capabilities != nil {
+		return req, validationErrorf("adoptShippedDefaults and capabilities are exclusive: adopting adds the missing shipped defaults to what the session holds now, so send one or the other")
+	}
+	if req.ExpectCapabilities != nil && req.Capabilities == nil {
+		return req, validationErrorf("expectCapabilities is the held set capabilities was computed from, so it needs capabilities alongside it")
+	}
+	listed, err := c.ListConsoleSessions(ctx)
+	if err != nil {
+		return req, err
+	}
+	i := slices.IndexFunc(listed, func(s ConsoleSessionSetting) bool { return s.ID == id })
+	if i < 0 {
+		// updateConsoleSession says why: not configured, or settings
+		// read-only.
+		return req, nil
+	}
+	current := listed[i]
+	if req.ExpectCapabilities != nil && !sameCapabilitySet(*req.ExpectCapabilities, current.Capabilities) {
+		return req, &staleEditError{Kind: "console session", ID: id}
+	}
+	if req.AdoptShippedDefaults {
+		req.AdoptShippedDefaults = false
+		if len(current.MissingShippedDefaults) > 0 {
+			next := slices.Clone(current.Capabilities)
+			for _, capID := range current.MissingShippedDefaults {
+				if !slices.Contains(next, capID) {
+					next = append(next, capID)
+				}
+			}
+			req.Capabilities = &next
+		}
+	}
+	return req, nil
+}
+
+// sameCapabilitySet reports whether a and b name the same capabilities,
+// in any order and ignoring repeats and surrounding space.
+func sameCapabilitySet(a, b []string) bool {
+	set := func(ids []string) map[string]bool {
+		out := make(map[string]bool, len(ids))
+		for _, id := range ids {
+			if id = strings.TrimSpace(id); id != "" {
+				out[id] = true
+			}
+		}
+		return out
+	}
+	return maps.Equal(set(a), set(b))
+}
+
+func (c *Client) updateConsoleSession(ctx context.Context, id string, req UpdateConsoleSessionRequest) ([]ConsoleSessionSetting, error) {
 	cfg, err := c.consoleSessionConfig(ctx)
 	if err != nil {
 		return nil, err
