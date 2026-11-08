@@ -763,6 +763,7 @@ func TestEventsAuthorizationFilteringAcrossPrincipalsAndRoles(t *testing.T) {
 
 	// Issue a multi-repo external-agent token covering acme/widgets + acme/gadgets,
 	// and a token without tasks:read.
+	h.allow(t, "user:operator@example.com", "grain/operator") // behind IAP a token works only while its owner is listed
 	multiRepoTok := issueFSToken(t, h.client, "plc-bridge", []string{"tasks:read"}, "acme/widgets", "acme/gadgets")
 	ciOnlyTok := issueFSToken(t, h.client, "ci-watcher", []string{"ci:read"}, "acme/widgets")
 

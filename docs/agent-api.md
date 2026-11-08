@@ -953,6 +953,14 @@ Each external agent is issued its own scoped bearer token (`gma_<hex>`):
   (`"selfService": true`, what `grain login --issue-token` mints) belongs
   to its verified caller only (to nobody under the access code), and an
   agent issuing one can pass on only the owner it acts for itself.
+  A credential never does more than its owner's current role allows: it
+  is refused once the owner is moved to a narrower role. While IAP, the
+  registry or another identity verifier is configured, it is also
+  refused once its owner is on no entry of the allowed users and groups
+  list, because they were removed (`grain access deny`) or never added.
+  With no verifier the list admits nobody, so it does not limit a
+  credential there. A credential issued without an owner acts for the
+  deployment's local account and is never refused for being unlisted.
   `grain/external-dev` (the default for a workstation agent) and
   `grain/external-read` (a read-only observer) are the built-in scope
   sets for these credentials; neither holds a dangerous scope.

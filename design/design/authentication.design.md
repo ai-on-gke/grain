@@ -108,6 +108,7 @@ group:grain-admins@example.com
 
 - **Verified identity wins by default (`AccessCodeWins() == false`, including IAP).** When a request carries both an IAP assertion and a bearer access code or `grain_access` cookie, the assertion governs: the caller must pass `checkAllowedPrincipal` and `checkVerifiedIdentityCSRF`, and acts as their named email rather than anonymous `operator`.
 - **Access code wins for always-attached wrapper proxies (`AccessCodeWins() == true`).** A wrapper distribution whose corporate proxy attaches a signed identity header to every proxied request may return `AccessCodeWins() == true`. When such a request also carries a valid access code (or a valid `gma_…` token), `singleTenantGate` and `accessCodeAccepted` honour that credential—even under `-ui-require-verifier` / `-ui-require-iap`—so an operator can still break glass through the corporate proxy when the allowlist or group directory is broken. A present header that fails cryptographic verification still returns `401` with no fallback.
+- **Signing in by code behind a winning verifier is refused, not ignored.** Under `AccessCodeWins() == false`, `POST /api/auth/access-code` with a verified assertion answers `403`, saying that the verified identity's role applies. It sets no `grain_access` cookie, which that browser's proxied requests would never use. The code is not compared, so the refusal reveals nothing about it.
 
 ### CSRF protection (`pkg/ui/csrf.go`)
 
