@@ -37,7 +37,7 @@ func TestReleaseTrainShellSuites(t *testing.T) {
 			t.Skipf("%s not on PATH: %v", tool, err)
 		}
 	}
-	for _, suite := range []string{"candidate-gate_test.sh", "release-from-trunk_test.sh", "release-patch_test.sh", "release-notes_test.sh", "release-train-actions_test.sh", "release-train-task_test.sh", "release-assets_test.sh"} {
+	for _, suite := range []string{"candidate-gate_test.sh", "release-from-trunk_test.sh", "release-patch_test.sh", "release-notes_test.sh", "release-train-actions_test.sh", "release-train-task_test.sh", "release-assets_test.sh", "ghcr-bridge_test.sh"} {
 		t.Run(suite, func(t *testing.T) {
 			cmd := exec.Command("bash", filepath.Join(repoRoot(t), "scripts", suite))
 			out, err := cmd.CombinedOutput()
