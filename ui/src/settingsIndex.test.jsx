@@ -23,7 +23,6 @@ import CISection from "./components/settings/CISection.jsx";
 import SandboxesSection from "./components/settings/SandboxesSection.jsx";
 import CachesSection from "./components/settings/CachesSection.jsx";
 import CapabilitiesSection from "./components/settings/CapabilitiesSection.jsx";
-import CredentialsSection from "./components/settings/CredentialsSection.jsx";
 import ModelsSection from "./components/settings/ModelsSection.jsx";
 import TasksSection from "./components/settings/TasksSection.jsx";
 import GitSection from "./components/settings/GitSection.jsx";
@@ -73,8 +72,7 @@ const SECTIONS = {
   ci: <CISection s={s} />,
   sandboxes: <SandboxesSection s={s} />,
   caches: <CachesSection s={s} />,
-  capabilities: <CapabilitiesSection showError={vi.fn()} />,
-  credentials: <CredentialsSection s={s} claimedSecrets={[]} />,
+  capabilities: <CapabilitiesSection s={s} claimedSecrets={[]} />,
   models: <ModelsSection config={{}} showError={vi.fn()} />,
   tasks: <TasksSection s={s} config={{}} />,
   git: <GitSection showError={vi.fn()} />,

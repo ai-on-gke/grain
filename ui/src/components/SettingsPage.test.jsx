@@ -77,10 +77,12 @@ describe("SettingsPage", () => {
     expect(labels).toEqual(
       SETTINGS_GROUPS.flatMap((g) => g.sections.map((s) => s.label)),
     );
+    // No Legacy capabilities: that tab was retired, its Deployment
+    // credentials card moved onto Capabilities.
+    expect(labels).not.toContain("Legacy capabilities");
     expect(labels).toEqual([
       "Models",
       "Sandboxes",
-      "Legacy capabilities",
       "Access",
       "Hosts",
       "CLI",
@@ -630,7 +632,7 @@ describe("SettingsPage", () => {
       <PreferencesProvider>
         <SettingsPage
           config={{}}
-          section="credentials"
+          section="capabilities"
           onSection={vi.fn()}
           onSaved={onSaved}
           showError={vi.fn()}
@@ -678,7 +680,7 @@ describe("SettingsPage", () => {
       <PreferencesProvider>
         <SettingsPage
           config={{}}
-          section="credentials"
+          section="capabilities"
           onSection={vi.fn()}
           showError={vi.fn()}
         />
@@ -1081,8 +1083,8 @@ describe("SettingsPage", () => {
       expect(screen.getByLabelText("Sandbox vCPUs")).toBeEnabled();
     });
 
-    it("locks Legacy capabilities' GitHub host and GCP project", async () => {
-      setupLocked("credentials");
+    it("locks Deployment credentials' GitHub host and GCP project", async () => {
+      setupLocked("capabilities");
       expect(await screen.findByLabelText("GitHub host")).toBeDisabled();
       expect(screen.getByLabelText(/GCP project/)).toBeDisabled();
     });
