@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v24"
+const Version = "trust-boundary/v25"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -81,6 +81,17 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v25 adds what the security review of task 3597 (task 3624) found beside
+// scripts/build-cli.sh: the workstation CLI installer (pkg/ui/cli_install.sh,
+// served unauthenticated at GET /cli/install.sh to be piped into sh, and
+// pkg/ui/cli_install.go, whose cliInstallRoute exempts it from the
+// single-tenant access code) to setup-scripts, beside its hostd
+// counterpart; and the helpers the release builds and workflows run or
+// source (scripts/buildvcs.sh, scripts/configure-dockerhub-auth.sh, which
+// promote.yml and publish-release.yml run with DOCKER_PAT, and
+// scripts/release-image-repos.sh, which names the published image
+// repositories) to release-machinery.
 //
 // v24 adds scripts/build-cli.sh to release-machinery (task 3597, filed by
 // task 3580): promote.yml, publish-release.yml and release-train-assets.yml
@@ -442,6 +453,11 @@ var Categories = []Category{
 			// version every published image is tagged with, and the host
 			// setup the publishing job sources.
 			"scripts/patch-tag-guard.sh", "scripts/build-version.sh", "scripts/grain-ci-host.sh",
+			// The VCS-stamp flag every release binary and image is built
+			// with, the Docker Hub login the publishing jobs run with
+			// DOCKER_PAT, and the registry and repository names every
+			// image is published under.
+			"scripts/buildvcs.sh", "scripts/configure-dockerhub-auth.sh", "scripts/release-image-repos.sh",
 			// The rc's Actions housekeeping: re-running qualification jobs
 			// and cancelling a dropped rc's runs.
 			"scripts/release-train-actions.sh", ".github/workflows/rc-qualification.yml",
@@ -524,6 +540,10 @@ var Categories = []Category{
 			// Served unauthenticated and run as root on every hostd machine,
 			// and the route that renders it and decides who sees what.
 			"pkg/ui/hostd_install.sh", "pkg/ui/hostd_install.go",
+			// Served unauthenticated and piped into sh on operator and
+			// developer workstations, and the route that renders it and
+			// exempts it from the single-tenant access code.
+			"pkg/ui/cli_install.sh", "pkg/ui/cli_install.go",
 		},
 	},
 }
