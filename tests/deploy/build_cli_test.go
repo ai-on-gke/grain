@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -46,8 +47,10 @@ func TestBuildCLIScriptProducesBinariesAndTarballs(t *testing.T) {
 	outDir := t.TempDir()
 	scriptPath := filepath.Join(repoRoot(t), "scripts", "build-cli.sh")
 
+	const release = "v0.0.0-build-cli-test"
 	cmd := exec.Command("bash", scriptPath, outDir)
 	cmd.Dir = repoRoot(t)
+	cmd.Env = append(os.Environ(), "RELEASE="+release)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("build-cli.sh failed: %v\n%s", err, string(out))
@@ -69,6 +72,24 @@ func TestBuildCLIScriptProducesBinariesAndTarballs(t *testing.T) {
 		p := filepath.Join(outDir, file)
 		if info, err := os.Stat(p); err != nil || info.Size() == 0 {
 			t.Errorf("expected non-empty file %s, stat err: %v", file, err)
+		}
+	}
+
+	// What a release publishes: the four archives and a checksums.txt
+	// naming exactly them, as release-assets.sh cli-publish checks.
+	validate := exec.Command("bash", filepath.Join(repoRoot(t), "scripts", "release-assets.sh"), "cli-validate", outDir)
+	if out, err := validate.CombinedOutput(); err != nil {
+		t.Errorf("release-assets.sh cli-validate refuses what build-cli.sh wrote: %v\n%s", err, out)
+	}
+
+	// Every binary carries RELEASE, as the daemon of the same release does.
+	for _, bin := range []string{"grain-linux-amd64", "grain-darwin-arm64"} {
+		out, err := exec.Command("go", "version", "-m", filepath.Join(outDir, bin)).CombinedOutput()
+		if err != nil {
+			t.Fatalf("go version -m %s: %v\n%s", bin, err, out)
+		}
+		if want := "pkg/version.Release=" + release; !strings.Contains(string(out), want) {
+			t.Errorf("%s is not stamped with %s:\n%s", bin, want, out)
 		}
 	}
 }

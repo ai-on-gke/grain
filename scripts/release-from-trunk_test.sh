@@ -79,6 +79,8 @@ fi
 # RELEASE_AUTO_PROMOTE=false keeps for every release; the ones after it
 # turn it on, as scripts/release.conf has it.
 auto_promote=false
+# More lines for setup's release.conf (such as RELEASE_QUALIFICATION_APP=none).
+conf_extra=""
 
 # setup <never-promote> [<subject>...]: a fresh remote whose main is
 # c0..c4 (or c0 and a commit per subject given), v2.1.0 promoted (and
@@ -93,6 +95,7 @@ setup() {
     cd "$work/seed"
     mkdir scripts
     printf 'RELEASE_MAJOR=2\nRELEASE_FLOOR_MINOR=3\nRELEASE_NEVER_PROMOTE="%s"\nRELEASE_AUTO_PROMOTE=%s\n' "$1" "$auto_promote" > scripts/release.conf
+    [ -z "$conf_extra" ] || printf '%s\n' "$conf_extra" >> scripts/release.conf
     git add scripts/release.conf
     git commit -q -m c0
     GIT_COMMITTER_DATE="@$((now - 48 * 3600)) +0000" git tag -a v2.1.0 -m "Release v2.1.0"
@@ -215,12 +218,17 @@ rc_hold() {
   esac
 }
 
-train() { # train [VAR=value...]: run the train in the clone
+train() { # train [--no-app] [VAR=value...]: run the train in the clone; --no-app leaves RELEASE_QUALIFICATION_APP unset
+  local app=(RELEASE_QUALIFICATION_APP=grain-test)
   status=0
-  out="$(cd "$work/clone" && env RELEASE_RUNS_JSON="$work/runs.json" \
+  if [ "${1:-}" = --no-app ]; then
+    app=()
+    shift
+  fi
+  out="$(cd "$work/clone" && env -u RELEASE_QUALIFICATION_APP RELEASE_RUNS_JSON="$work/runs.json" \
     RELEASE_QUALIFICATION_RUNS_JSON="$work/qual-runs.json" RELEASE_QUALIFICATION_CHECKS_JSON="$work/qual-checks.json" \
     RELEASE_HOLD_CHECKS_JSON="$work/hold-checks.json" \
-    RELEASE_IMAGES="$work/images.sh" RELEASE_NOTES_TASK=off RELEASE_NOW="$now" RELEASE_QUALIFICATION_APP=grain-test \
+    RELEASE_IMAGES="$work/images.sh" RELEASE_NOTES_TASK=off RELEASE_NOW="$now" ${app[@]+"${app[@]}"} \
     "$@" bash "$train" 2>&1)" || status=$?
 }
 
@@ -567,9 +575,9 @@ expect "rc-hold, no token" "exits 0" eq "$status" 0
 expect "rc-hold, no token" "says it has no grain/rc-hold to read" has "no GitHub token, so no grain/rc-hold check run to read on ${c2:0:12}"
 expect "rc-hold, no token" "cuts rc.2" eq "$(remote_tag v2.3.0-rc.2)" "$c3"
 
-# Hardening: RELEASE_QUALIFICATION_APP unset refuses rather than trust a foreign
-# completion, numeric app id matches, whitespace-only summary still holds, and a
-# malformed check-run response fails closed.
+# Hardening: RELEASE_QUALIFICATION_APP unset (or empty) refuses rather than
+# trust a foreign completion, numeric app id matches, whitespace-only summary
+# still holds, and a malformed check-run response fails closed.
 setup ""
 tag_remote v2.3.0-rc.1 "$c2" 3
 tag_remote v2.3.0-rc.1-discarded "$c2" 2
@@ -579,12 +587,19 @@ jq -cn --arg sha "$c2" --arg t1 "$(iso $((now - 300)))" --arg t2 "$(iso $((now -
     {id:1,name:"grain/rc-hold",head_sha:$sha,status:"in_progress",started_at:$t1,output:{title:"Holding v2.3.0-rc.2",summary:"waiting on task 101"},app:{id:42,slug:"grain-test"}},
     {id:2,name:"grain/rc-hold",head_sha:$sha,status:"completed",conclusion:"success",started_at:$t2,output:{title:"Done",summary:"forged"},app:{id:15368,slug:"github-actions"}}
   ]}' > "$work/hold-checks.json"
-: > "$work/images.log"
-train RELEASE_QUALIFICATION_APP=
-expect "rc-hold, no app configured" "exits 1" eq "$status" 1
-expect "rc-hold, no app configured" "says why" has "RELEASE_QUALIFICATION_APP is unset, so no grain/rc-hold check run can be trusted"
-expect "rc-hold, no app configured" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
-expect "rc-hold, no app configured" "publishes nothing" images_were ""
+for app_setting in "" unset; do
+  : > "$work/images.log"
+  if [ "$app_setting" = unset ]; then
+    train --no-app
+  else
+    train RELEASE_QUALIFICATION_APP=
+  fi
+  expect "rc-hold, no app configured ($app_setting)" "exits 1" eq "$status" 1
+  expect "rc-hold, no app configured ($app_setting)" "says why" has "RELEASE_QUALIFICATION_APP is unset, so no grain/rc-hold check run can be trusted"
+  expect "rc-hold, no app configured ($app_setting)" "is never none by default" not has "RELEASE_QUALIFICATION_APP=none"
+  expect "rc-hold, no app configured ($app_setting)" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
+  expect "rc-hold, no app configured ($app_setting)" "publishes nothing" images_were ""
+done
 
 jq -cn --arg sha "$c2" --arg t "$(iso $((now - 300)))" \
   '{check_runs:[{id:1,name:"grain/rc-hold",head_sha:$sha,status:"in_progress",started_at:$t,output:{title:"Holding v2.3.0-rc.2",summary:"  \n\t  "},app:{id:42,slug:"grain-test"}}]}' \
@@ -601,6 +616,35 @@ echo '{"message":"bad gateway"}' > "$work/hold-checks.json"
 train
 expect "rc-hold, malformed json" "exits 1" eq "$status" 1
 expect "rc-hold, malformed json" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
+
+# RELEASE_QUALIFICATION_APP=none, set explicitly in the environment or in
+# release.conf (a forge connection that is no GitHub App, so posts no check
+# run): no grain/rc-hold check run is trusted, so none -- not even one that
+# looks like grain's -- holds rc.2.
+for app_setting in none conf-none; do
+  conf_extra=""
+  [ "$app_setting" != conf-none ] || conf_extra="RELEASE_QUALIFICATION_APP=none"
+  setup ""
+  conf_extra=""
+  tag_remote v2.3.0-rc.1 "$c2" 3
+  tag_remote v2.3.0-rc.1-discarded "$c2" 2
+  runs "$c2" "$c3"
+  jq -cn --arg sha "$c2" --arg t "$(iso $((now - 300)))" \
+    '{check_runs:[{id:1,name:"grain/rc-hold",head_sha:$sha,status:"in_progress",started_at:$t,output:{title:"Holding v2.3.0-rc.2",summary:"waiting on task 101"},app:{id:42,slug:"grain-test"}}]}' \
+    > "$work/hold-checks.json"
+  : > "$work/images.log"
+  : > "$work/train.out"
+  if [ "$app_setting" = conf-none ]; then
+    train --no-app RELEASE_TRAIN_OUTPUT="$work/train.out"
+  else
+    train RELEASE_QUALIFICATION_APP="$app_setting" RELEASE_TRAIN_OUTPUT="$work/train.out"
+  fi
+  expect "rc-hold, app $app_setting" "exits 0" eq "$status" 0
+  expect "rc-hold, app $app_setting" "says no hold is trusted" has "RELEASE_QUALIFICATION_APP=none, so no grain/rc-hold check run on ${c2:0:12} is trusted"
+  expect "rc-hold, app $app_setting" "cuts rc.2" eq "$(remote_tag v2.3.0-rc.2)" "$c3"
+  expect "rc-hold, app $app_setting" "publishes rc.2" images_were "rc v2.3.0-rc.2"
+  expect "rc-hold, app $app_setting" "emits no rc_held" no_line '^rc_held=' "$work/train.out"
+done
 
 # --- a same-named check run from another app qualifies nothing ---
 setup ""
@@ -619,7 +663,15 @@ qualification pass "$c2"
 train RELEASE_QUALIFICATION_APP=
 expect "no app configured" "exits 1" eq "$status" 1
 expect "no app configured" "says why" has "CHECK_QUALIFICATION_APP is unset"
+expect "no app configured" "never skips Stage 2" not has "SKIPPED grain/release-qualification"
 expect "no app configured" "stages no release" eq "$(remote_tag v2.3.0-pending)" ""
+# With RELEASE_QUALIFICATION_APP=none, set explicitly, Stage 2 is skipped: the
+# same foreign check run is not even read, and Stage 1 alone qualifies the rc.
+train RELEASE_QUALIFICATION_APP=none
+expect "app none" "exits 0" eq "$status" 0
+expect "app none" "skips Stage 2" has "SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)"
+expect "app none" "reads no check run" not has "IGNORED grain/release-qualification"
+expect "app none" "qualifies the rc on Stage 1" has "Qualification: PASS v2.3.0-rc.1"
 
 # --- a hand-cut rc.1 of the next version still waits out the interval ---
 setup ""
@@ -1216,6 +1268,17 @@ qualification fail "$c2"
 verify v2.3.0
 expect "verify, no longer qualified" "exits 1" eq "$status" 1
 expect "verify, no longer qualified" "says so" has "does not pass qualification now"
+# With RELEASE_QUALIFICATION_APP=none, verify reads no check run: Stage 1
+# alone qualifies. Empty, it trusts no check run and publishes nothing.
+qualification stage2-fail "$c2"
+verify v2.3.0
+expect "verify, Stage 2 red" "exits 1" eq "$status" 1
+verify v2.3.0 RELEASE_QUALIFICATION_APP=none
+expect "verify, app none" "exits 0" eq "$status" 0
+expect "verify, app none" "skips Stage 2" has "SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none"
+verify v2.3.0 RELEASE_QUALIFICATION_APP=
+expect "verify, app empty" "exits 1" eq "$status" 1
+expect "verify, app empty" "is not published" has "does not pass qualification now"
 qualification pass "$c2"
 (
   cd "$work/seed"

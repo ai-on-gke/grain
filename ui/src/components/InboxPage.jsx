@@ -51,7 +51,7 @@ import {
   decideRelease,
   pendingReleaseOf,
 } from "../notifications.js";
-import { formatTime } from "../time.js";
+import { formatMoment } from "../time.js";
 import { useTimeZone } from "../TimeZoneContext.jsx";
 import { ListEmpty, ListHeader } from "./ListPrimitives.jsx";
 import Markdown from "./Markdown.jsx";
@@ -856,7 +856,7 @@ function NotificationsGroup({
             <p className="inbox-note">
               {notificationSentence(n)}{" "}
               <span className="inbox-note-meta">
-                {n.subject} · since {formatTime(n.raisedAt, zone)}
+                {n.subject} · since {formatMoment(n.raisedAt, zone)}
                 {n.ackedAt ? " · acknowledged" : ""}
               </span>
             </p>

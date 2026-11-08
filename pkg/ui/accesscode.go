@@ -646,6 +646,15 @@ func errVerifierRequired(verifier string) string {
 		"so sign in through %s; the code still works from the daemon's own host over loopback", verifier, verifier, verifier)
 }
 
+// errAccessCodeBehindVerifier is POST /api/auth/access-code's refusal
+// for a caller a verifier has already identified, whose verifier does not
+// declare AccessCodePrecedence: the identity's role applies, not the code's.
+func errAccessCodeBehindVerifier(cv callerVerification) string {
+	return fmt.Sprintf("you are signed in as %s through %s, and that sign-in decides your role here (Settings -> Access): "+
+		"the access code does not change it, so it was not used. Ask an operator for a wider role, "+
+		"or use the code from the daemon's own host over loopback", cv.id.Email, cv.method)
+}
+
 const errAccessCodeLimited = "too many wrong access codes: wait a minute and try again"
 
 // singleTenantGate is a single-tenant daemon's access gate, ahead of
@@ -805,6 +814,16 @@ func (s *Server) handleAccessCodeLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeAccessCodePage(w, status, msg, r.PostForm.Get(accessReturnField))
+	}
+	if cv := cachedOrVerifyCaller(r); cv.present && cv.err == nil && !cv.accessCodeWins {
+		// The verified identity, not the code, decides every request this
+		// browser sends through the proxy (singleTenantGate), so a cookie
+		// set here would be accepted and then never used
+		// (docs/test-runs/2026-11-07-rbac-roles.md F1). Say so instead.
+		// The code is not looked at, so this tells nobody whether it was
+		// right.
+		fail(http.StatusForbidden, errAccessCodeBehindVerifier(cv))
+		return
 	}
 	source := accessSource(r)
 	if !accessLimitExempt(r) && s.access.sourceLimited(source, time.Now()) {

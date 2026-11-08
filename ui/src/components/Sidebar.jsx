@@ -303,8 +303,8 @@ function FooterItem({ kind, label, active, onClick, children }) {
   );
 }
 
-// SignedInRow is the phone's stand-in for the header rail's email badge
-// (PageHeader.jsx's GlobalButtons): who the deployment's identity
+// SignedInRow is the phone's form of the desktop footer's user tile and
+// Log out button (settings-panel design §4.3): who the deployment's identity
 // verifier says this browser is, as a row that opens Settings -> Access,
 // and Log out under it rather than behind a menu -- the drawer is
 // already the menu. Log out sits below the address, not beside it: in

@@ -1,4 +1,9 @@
-# Saved boards and task visualizations walkthrough — 2026-11-08
+# Saved boards and task visualizations walkthrough — 2026-11-08 (task 3355)
+
+A second walkthrough of the same commit ran alongside this one and
+landed as `2026-11-08-saved-boards-and-visualizations.md`; it fixed a
+failed boards load reading as "No boards yet" and the index's pointer at
+a New board button. This run found and fixed a different bug.
 
 ## Commit and environment
 
