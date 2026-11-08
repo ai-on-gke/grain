@@ -329,6 +329,26 @@ func (c *Client) DraftScheduleComposition(ctx context.Context, req CreateSchedul
 			return Composition{}, validationErrorf("%v", err)
 		}
 		sched.Hosting = model.MaxHosting(sched.Hosting, hosting)
+		// Capabilities the same way: a repository's declared schedule can
+		// declare `capabilities:` alongside `template:` (docs/declarations.md),
+		// and model.ComposeScheduleTask files them beside the template's
+		// own, as the stored schedule's composition says -- the preview
+		// dropped them (2026-11-08 walkthrough, task 3614).
+		if len(req.Capabilities) > 0 {
+			caps, legacyAdm, hadLegacy := extractLegacyAdmissionCaps("schedule", req.Capabilities)
+			if hadLegacy {
+				sched.Admission = model.MaxAdmission(sched.Admission, legacyAdm)
+			}
+			caps, legacyHosting, hadLegacyHosting := extractLegacyHostingCaps("schedule", caps)
+			if hadLegacyHosting {
+				sched.Hosting = model.MaxHosting(sched.Hosting, legacyHosting)
+			}
+			extra, err := c.grantsFor(caps, model.GrantByLabel)
+			if err != nil {
+				return Composition{}, err
+			}
+			sched.Grants = append(append([]model.Grant(nil), sched.Grants...), extra...)
+		}
 	}
 	return c.compositionOfSchedule(ctx, sched, "this schedule")
 }

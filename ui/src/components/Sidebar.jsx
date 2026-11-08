@@ -1117,7 +1117,12 @@ export default function Sidebar({
           <ListItemText>New session</ListItemText>
         </MenuItem>
         {onNewBoard && (
+          // Filing a board is filing a task (boards.js), so a role that
+          // cannot file one is refused here exactly as on "New task"
+          // above -- not offered a form whose submit it cannot press.
           <MenuItem
+            disabled={!canFile}
+            title={canFile ? undefined : fileWhy}
             onClick={() => {
               setCreateMenuAnchor(null);
               onNewBoard();

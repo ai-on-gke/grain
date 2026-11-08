@@ -226,10 +226,15 @@ on -- [unified-grants.design.md §4](../design/design/unified-grants.design.md#4
 its bare name kept as a one-release alias, and the tab went with them. What
 was still useful on it is the **Deployment credentials** card at the foot of
 this page: the GitHub host, the GCP project and service accounts migrated
-`gcp-key` and `gemini-key` pools were seeded from, and every stored secret,
-with the ones a capability server uses listed with that server. The tab's old
-address, `/settings/credentials`, opens it. Which capabilities every new task
-starts with is chosen in **Settings → Tasks**, under **Default capabilities**.
+`gcp-key` and `gemini-key` pools were seeded from, and every stored secret —
+with the ones a capability server uses listed with that server and any remaining
+secrets (including stored `github-app`, `registry-push`, `cosign-key` and
+`cosign-password` secrets from retired in-process capabilities) kept visible and
+deletable under **Other secrets**. The tab's old addresses
+(`/settings/credentials`, `/settings/legacy-capabilities`, `/settings/secrets`,
+`/admin/integrations`) resolve to Settings → Capabilities. Which capabilities
+every new task starts with is chosen in **Settings → Tasks**, under **Default
+capabilities**.
 
 ## The API behind these pages
 
