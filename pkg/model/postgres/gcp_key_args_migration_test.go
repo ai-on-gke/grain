@@ -112,10 +112,10 @@ func TestMigration109PostgresRewritesAndNotesMissingSets(t *testing.T) {
 	}
 }
 
-// Migration 126 rewrites, on PostgreSQL too, the grants migration 109 kept
+// Migration 127 rewrites, on PostgreSQL too, the grants migration 109 kept
 // as written because their "account" named an unconfigured permission set
 // (docs/test-runs/2026-11-07-capabilities-fencing-admission.md, F1).
-func TestMigration126PostgresRewritesGCPKeyGrantsMigration109Kept(t *testing.T) {
+func TestMigration127PostgresRewritesGCPKeyGrantsMigration109Kept(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 
@@ -157,9 +157,9 @@ func TestMigration126PostgresRewritesGCPKeyGrantsMigration109Kept(t *testing.T) 
 		}
 	}
 
-	rewindSchemaTo(t, ctx, db, 125)
+	rewindSchemaTo(t, ctx, db, 126)
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating a version-125 store: %v", err)
+		t.Fatalf("migrating a version-126 store: %v", err)
 	}
 
 	if got := grantRows(t, ctx, db, "task_grant", "task_id")["t-kept"]; !slices.Equal(got, []string{want}) {

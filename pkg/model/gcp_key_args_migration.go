@@ -380,7 +380,7 @@ func RewriteGCPKeyCatalogue(cat *CapabilityCatalogue, configuredSets []string, g
 // (default_capabilities, console_sessions, capability_policy) and
 // persistent_sandbox. Grants whose "account" names an unconfigured permission
 // set are rewritten to that set all the same, logged, and noted on their
-// task, template or schedule. Migration 126 runs it again, for stores that
+// task, template or schedule. Migration 127 runs it again, for stores that
 // ran 109 when it still kept those grants as written.
 func MigrateGCPKeyGrantArgs(ctx context.Context, tx *sql.Tx) error {
 	type cfgRow struct {

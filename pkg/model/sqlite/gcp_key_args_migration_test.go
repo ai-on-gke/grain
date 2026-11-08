@@ -362,7 +362,7 @@ func TestMigration109RewritesAndNotesMissingPermissionSets(t *testing.T) {
 		}
 	}
 
-	// Re-running migration 109 (and 126) is idempotent: notes are not duplicated.
+	// Re-running migration 109 (and 127) is idempotent: notes are not duplicated.
 	tplBodyBefore := tpl.Body
 	schedBodyBefore := sched.Body
 	migrateFrom108(t, ctx, db)
@@ -383,8 +383,8 @@ func TestMigration109RewritesAndNotesMissingPermissionSets(t *testing.T) {
 // unconfigured set as written exported a state repository that neither
 // `grain state check` nor `grain state prepare-upgrade` would load
 // (docs/test-runs/2026-11-07-capabilities-fencing-admission.md, F1).
-// Migration 126 rewrites those grants on every surface 109 covers.
-func TestMigration126RewritesGCPKeyGrantsMigration109Kept(t *testing.T) {
+// Migration 127 rewrites those grants on every surface 109 covers.
+func TestMigration127RewritesGCPKeyGrantsMigration109Kept(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 
@@ -430,11 +430,11 @@ func TestMigration126RewritesGCPKeyGrantsMigration109Kept(t *testing.T) {
 		}
 	}
 
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 125 WHERE `id` = 1"); err != nil {
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 126 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating a version-125 store: %v", err)
+		t.Fatalf("migrating a version-126 store: %v", err)
 	}
 
 	for _, g := range []struct{ table, col, id string }{

@@ -600,11 +600,16 @@ import "strconv"
 // CI and per-repository defaults -- to
 // `https://grain.dev/capabilities/grain#ci={}`, which migration 96 did
 // everywhere else a grant is stored (grain_ci_policy_migration.go).
-// 126 changes no table: it runs migration 109's gcp#gcp-key rewrite again,
+// 126 adds `external_agent_token`.`owner_source`
+// (model.ExternalAgentToken.OwnerSource): how the issuer who set a
+// credential's owner was established, so an owner named under the shared
+// access code is not reported as a verified on-behalf-of
+// (operator-attribution spec §6.3, external-cli spec #XC-14).
+// 127 changes no table: it runs migration 109's gcp#gcp-key rewrite again,
 // which now rewrites an `account` naming an unconfigured permission set to
 // `permission_set` (with a note) where 109 once kept it as written, a grant
 // every state-repository check refused (gcp_key_args_migration.go).
-const SchemaVersion = 126
+const SchemaVersion = 127
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -864,6 +869,7 @@ const externalAgentTokenTable = `CREATE TABLE IF NOT EXISTS ` + "`external_agent
   ` + "`last_used_at`" + `   DATETIME NULL,
   ` + "`created_by`" + `     TEXT     NOT NULL DEFAULT '',
   ` + "`owner`" + `          TEXT     NOT NULL DEFAULT '',
+  ` + "`owner_source`" + `   TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `),
   UNIQUE (` + "`token_hash`" + `)
 )`

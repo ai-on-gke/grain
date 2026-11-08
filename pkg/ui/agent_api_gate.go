@@ -800,7 +800,7 @@ func (s *Server) agentApprovalRail(ctx context.Context, acting *model.Task, targ
 		return nil
 	}
 	me := model.NormalizeTaskID(acting.ID)
-	proposer, chain, err := s.proposalLineage(ctx, *task, me)
+	proposer, chain, err := s.tasks.proposalLineage(ctx, *task, me)
 	if err != nil {
 		return err
 	}
@@ -813,7 +813,7 @@ func (s *Server) agentApprovalRail(ctx context.Context, acting *model.Task, targ
 			"directly or through the tasks they filed, even under api:tasks:admin or dispatch:write -- a person approves them "+
 			"(docs/agent-api.md)", me, task.ID, how)
 	}
-	if holds, err := s.proposalPersonHolds(ctx, *task, proposer, acting); err != nil {
+	if holds, err := s.tasks.proposalPersonHolds(ctx, *task, proposer, acting); err != nil {
 		return err
 	} else if len(holds) > 0 {
 		return fmt.Errorf("task %s cannot approve task %s: it is held for a person (%s), and an agent never "+
@@ -823,12 +823,131 @@ func (s *Server) agentApprovalRail(ctx context.Context, acting *model.Task, targ
 	return nil
 }
 
+// externalApprovalRail is agentApprovalRail for an external agent
+// credential (principal "external:<name>"): the same G8 rail, asked of a
+// caller that has no task of its own. An owned credential is its owner's
+// delegate, not its owner, so it never stands in for the person a hold
+// is waiting for (docs/agent-api.md, "Routes without calling-task
+// context"). It refuses approving target -- over POST
+// /api/tasks/{id}/approve, or POST /api/tasks/{id}/run-now on an
+// unapproved task -- when:
+//
+//   - target is in the credential's own lineage: the credential filed it,
+//     or filed a task whose LinkProposedBy chain proposed it
+//     (Client.externalApprovalRefusal);
+//   - target is held for a person (proposalPersonHolds, with no acting
+//     task): hold_for_approval, grain/config, a person-held change
+//     target, a declared push set, auto-merge, a requires_person or
+//     person-only grant, keep_running or admission above standard, or an
+//     escalation past its in-grain proposer;
+//   - on run-now, the credential holds dispatch:write but not tasks:admin
+//     on the task's repository: run-now's implicit approval is an
+//     approval, so it asks for the scope the approve route does, and the
+//     two routes agree on every unapproved task.
+//
+// An already-approved target passes run-now straight through, as it does
+// for a task's run, so dispatch:write still jumps queued work ahead.
+func (s *Server) externalApprovalRail(ctx context.Context, principal string, set APIGrantSet, repo, target string, onlyIfUnapproved bool) error {
+	id := model.NormalizeTaskID(target)
+	task, err := s.tasks.Store.GetTask(ctx, id)
+	if err != nil {
+		return fmt.Errorf("reading task %s: %w", id, err)
+	}
+	if task == nil || (onlyIfUnapproved && task.Approval != nil) {
+		return nil
+	}
+	if onlyIfUnapproved && !set.Allows("tasks:admin", repo) && !(repo == "" && set.Has("tasks:admin")) {
+		return fmt.Errorf("%s cannot run task %s now: it is not approved, and run-now would approve it first, which "+
+			"an external agent credential may only do under tasks:admin -- approve it under tasks:admin, or a person "+
+			"approves it (docs/agent-api.md)", principal, task.ID)
+	}
+	return s.tasks.externalApprovalRefusal(ctx, principal, *task)
+}
+
+// externalApprovalRefusal is the half of externalApprovalRail that reads
+// only the task: its lineage and its person holds. Client.Approve and
+// Client.RunNow ask it again of an external caller, so the rail holds
+// whichever route reaches them (REST, POST /mcp, POST /api/mcp's
+// grain_invoke), and the two routes give the same answer.
+func (c *Client) externalApprovalRefusal(ctx context.Context, principal string, task model.Task) error {
+	filed, chain, proposer, err := c.externalProposalLineage(ctx, task, principal)
+	if err != nil {
+		return err
+	}
+	if filed {
+		how := "it filed it"
+		if len(chain) > 0 {
+			how = "it filed task " + chain[0] + ", which is in the chain that proposed it (" + strings.Join(chain, " → ") + ")"
+		}
+		return forbiddenErrorf("%s cannot approve task %s: %s, and an external agent credential never approves its own "+
+			"filings, directly or through the tasks they proposed, even under api:tasks:admin or dispatch:write -- a "+
+			"person approves them (docs/agent-api.md)", principal, task.ID, how)
+	}
+	holds, err := c.proposalPersonHolds(ctx, task, proposer, nil)
+	if err != nil {
+		return err
+	}
+	if len(holds) > 0 {
+		return forbiddenErrorf("%s cannot approve task %s: it is held for a person (%s), and an external agent "+
+			"credential, even one a person owns, never approves a task held for a person, even under api:tasks:admin "+
+			"or dispatch:write (docs/agent-api.md)", principal, task.ID, strings.Join(holds, "; "))
+	}
+	return nil
+}
+
+// externalProposalLineage walks task's proposal chain upwards, as
+// proposalLineage does, looking for a task the external credential
+// principal filed. filed is true when principal filed task itself or any
+// task up its chain; chain is then the in-grain chain from principal's
+// filing down to task's proposer, nearest last (empty when principal
+// filed task itself). proposer is task's own in-grain proposer, nil when
+// it has none.
+func (c *Client) externalProposalLineage(ctx context.Context, task model.Task, principal string) (bool, []string, *model.Task, error) {
+	var proposer *model.Task
+	var chain []string
+	seen := map[string]bool{task.ID: true}
+	cur := task
+	for range maxProposalLineageDepth + 1 {
+		if filedByExternal(cur, principal) {
+			slices.Reverse(chain)
+			return true, chain, proposer, nil
+		}
+		up := proposedByOf(cur)
+		if up == "" || seen[up] {
+			return false, nil, proposer, nil
+		}
+		seen[up] = true
+		next, err := c.Store.GetTask(ctx, up)
+		if err != nil {
+			return false, nil, nil, fmt.Errorf("reading task %s, which proposed %s: %w", up, cur.ID, err)
+		}
+		if next == nil {
+			return false, nil, proposer, nil
+		}
+		if proposer == nil {
+			proposer = next
+		}
+		chain = append(chain, up)
+		cur = *next
+	}
+	return false, nil, nil, fmt.Errorf("task %s's LinkProposedBy chain exceeds %d hops, so its proposal lineage cannot be verified",
+		task.ID, maxProposalLineageDepth)
+}
+
+// filedByExternal says whether the external agent credential principal
+// ("external:<name>") filed t: t's origin names it as the actor, whoever
+// it acted on behalf of.
+func filedByExternal(t model.Task, principal string) bool {
+	a := t.Origin.Attribution.Actor
+	return principal != "" && a.Kind == model.PrincipalAgent && strings.TrimSpace(a.ID) == principal
+}
+
 // proposalLineage walks task's LinkProposedBy chain upwards. It returns
 // task's own proposer (nil when it has none, or it is no longer stored)
 // and, when actor is somewhere on that chain, the chain from actor down
 // to task's proposer, nearest last -- empty when actor proposed none of
 // it.
-func (s *Server) proposalLineage(ctx context.Context, task model.Task, actor string) (*model.Task, []string, error) {
+func (c *Client) proposalLineage(ctx context.Context, task model.Task, actor string) (*model.Task, []string, error) {
 	var proposer *model.Task
 	var chain []string
 	seen := map[string]bool{task.ID: true}
@@ -844,7 +963,7 @@ func (s *Server) proposalLineage(ctx context.Context, task model.Task, actor str
 			slices.Reverse(chain)
 			return proposer, chain, nil
 		}
-		next, err := s.tasks.Store.GetTask(ctx, up)
+		next, err := c.Store.GetTask(ctx, up)
 		if err != nil {
 			return nil, nil, fmt.Errorf("reading task %s, which proposed %s: %w", up, cur.ID, err)
 		}
@@ -916,7 +1035,7 @@ func inGrainAgentTaskID(p model.Principal) string {
 //     (model.EscalatedCapabilities, UngrantedWrites, UngrantedReads), and
 //     keep_running or a priority above its own
 //     (model.PersonOnlyProposalSettings).
-func (s *Server) proposalPersonHolds(ctx context.Context, task model.Task, proposer, acting *model.Task) ([]string, error) {
+func (c *Client) proposalPersonHolds(ctx context.Context, task model.Task, proposer, acting *model.Task) ([]string, error) {
 	var holds []string
 	if model.HoldRequested(task) {
 		holds = append(holds, "it was filed with hold_for_approval")
@@ -927,7 +1046,7 @@ func (s *Server) proposalPersonHolds(ctx context.Context, task model.Task, propo
 	if needs, why := model.ChangeTargetNeedsPersonApproval(task.ChangeTarget); needs {
 		holds = append(holds, why)
 	}
-	needsPerson, err := s.tasks.catalogueRequiresPerson(ctx, task)
+	needsPerson, err := c.catalogueRequiresPerson(ctx, task)
 	if err != nil {
 		return nil, fmt.Errorf("reading the capability catalogue: %w", err)
 	}
@@ -945,7 +1064,7 @@ func (s *Server) proposalPersonHolds(ctx context.Context, task model.Task, propo
 		holds = append(holds, fmt.Sprintf("it holds %s, which only a person may grant", strings.Join(personOnly, ", ")))
 	}
 	if task.TemplateID != "" {
-		decl, err := s.tasks.Store.GetRepoDeclaration(ctx, task.TemplateID)
+		decl, err := c.Store.GetRepoDeclaration(ctx, task.TemplateID)
 		if err != nil {
 			return nil, fmt.Errorf("reading declaration %s: %w", task.TemplateID, err)
 		}
@@ -2683,7 +2802,7 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	if (IsDangerousAPIScope(scope) || method == http.MethodDelete) && call.reason == "" {
 		return call, fmt.Errorf("%s is destructive (scope %s): give a reason", pattern, scope)
 	}
-	if err := s.externalAgentRails(ctx, tok, pattern, method, scope, call.targetTask, body); err != nil {
+	if err := s.externalAgentRails(ctx, tok, set, call.repo, pattern, method, scope, call.targetTask, body); err != nil {
 		return call, err
 	}
 	if err := agentGrantEscalationFrom(held, pattern, body, s.storedFieldGrants(ctx, pattern, call.repo), s.tasks.normalizeCapabilityID); err != nil {
@@ -2844,7 +2963,7 @@ func (s *Server) externalAgentCallRepo(ctx context.Context, r *http.Request, pat
 	return "", nil, nil
 }
 
-func (s *Server) externalAgentRails(ctx context.Context, tok *model.ExternalAgentToken, pattern, method string, scope APIScope, target string, body []byte) error {
+func (s *Server) externalAgentRails(ctx context.Context, tok *model.ExternalAgentToken, set APIGrantSet, repo, pattern, method string, scope APIScope, target string, body []byte) error {
 	if method == http.MethodGet {
 		return nil
 	}
@@ -2861,6 +2980,11 @@ func (s *Server) externalAgentRails(ctx context.Context, tok *model.ExternalAgen
 				return fmt.Errorf("task %s is paused by %s %s; only they may lift or override that pause",
 					target, p.PausedBy.Kind, principalName(p.PausedBy))
 			}
+		}
+	}
+	if (pattern == approveTaskRoute || pattern == runNowTaskRoute) && target != "" {
+		if err := s.externalApprovalRail(ctx, principal, set, repo, target, pattern == runNowTaskRoute); err != nil {
+			return err
 		}
 	}
 	// External agents have no calling task from which to inherit a repository,

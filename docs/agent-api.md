@@ -71,6 +71,16 @@ A grant is one capability name per scope or preset:
 | `api:ci:write@bwsalmon/grain` | a scope or preset on one repository only |
 | `api:ops/triage` | a [scope set](#scope-sets)'s resolved scopes |
 
+Each scope and preset is also a method of grain's in-process capability
+server `https://grain.dev/capabilities/api`
+([unified-grants.design.md](../design/design/unified-grants.design.md) §1):
+`https://grain.dev/capabilities/api#ci:write` with `{repo: bwsalmon/grain}`
+is the same grant as `api:ci:write@bwsalmon/grain`, and every check that
+reads grants (admission, the proposal and approval rules, the capability
+policy) reads the two as one. `GET /api/capability-methods` lists the
+server. For now grain still records the `api:` spelling, so a reference
+sent in is stored as the `api:` name it stands for.
+
 A template, schedule or task can also write the grant as the `api`
 capability with arguments, which is the same thing spelled for a
 declaration:
@@ -694,6 +704,9 @@ Actions job's log when given a `gha:` run id. `grain ci wait` and
   and started by `run-now` under `dispatch:write` when within the caller's
   grants). A person approves either kind as before
   (design/spec/director/director-capabilities.spec.md §3.3 item 3, G8).
+  An external agent credential is held to the same rail, with its own
+  filings as its lineage (see
+  [Routes without calling-task context](#routes-without-calling-task-context)).
 - **Upgrade holds.** A run honours them. It can't lift a dispatch pause
   someone else took. It can't upgrade, restart or reboot while an upgrade
   check holds dispatch for another task.
@@ -940,10 +953,24 @@ Each external agent is issued its own scoped bearer token (`gma_<hex>`):
   request rate limit (`rateLimit`, requests per minute, default `60`), and
   an in-flight concurrency cap (`maxConcurrent`, default `8`).
 - **Owner**: the person the credential acts on behalf of (`owner`). It
-  defaults to the person issuing it; an operator may name somebody else.
-  A self-service credential (`"selfService": true`, what
-  `grain login --issue-token` mints) belongs to its caller only, and an
+  defaults to the verified person issuing it (signed in through IAP or a
+  registered verifier); an operator may name somebody else. The shared
+  access code, break-glass loopback and the in-process CLI are nobody in
+  particular, so a credential they issue without naming an owner acts on
+  behalf of nobody -- never the deployment's own actor -- and an owner
+  they do name is recorded as named by them (`ownerSource`), so its calls
+  show that owner as unverified. A self-service credential
+  (`"selfService": true`, what `grain login --issue-token` mints) belongs
+  to its verified caller only (to nobody under the access code), and an
   agent issuing one can pass on only the owner it acts for itself.
+  A credential never does more than its owner's current role allows: it
+  is refused once the owner is moved to a narrower role. While IAP, the
+  registry or another identity verifier is configured, it is also
+  refused once its owner is on no entry of the allowed users and groups
+  list, because they were removed (`grain access deny`) or never added.
+  With no verifier the list admits nobody, so it does not limit a
+  credential there. A credential issued without an owner acts for the
+  deployment's local account and is never refused for being unlisted.
   `grain/external-dev` (the default for a workstation agent) and
   `grain/external-read` (a read-only observer) are the built-in scope
   sets for these credentials; neither holds a dangerous scope.
@@ -1085,7 +1112,8 @@ task" behave as follows:
 | `PUT /api/tasks/{id}/session-title` (`api_set_task_session_title`) | Excluded from `tools/list` and refused by `agentAPIGate` (renames the calling run's own standing chat session). |
 | `/api/console/*` and `/api/console-sessions*` | Excluded from `tools/list` and refused by `agentAPIGate` (bound to in-grain sandbox consoles and session tasks). |
 | `POST /api/tasks` (`api_create_task`) | Requires an explicit target in the request body (`repo`, a `templateId` with a target, or `noRepo: true`) because there is no calling task from which to inherit a default repository. |
-| Self-protection on `/api/tasks/{id}/*` | No task ID matches `external:<name>`, so an external agent with the required scope and repository grant can stop, close, retry, pause, or reorder any task in its allowed repositories while still honouring standing-session ownership, pause ownership, and upgrade holds. |
+| Self-protection on `/api/tasks/{id}/*` | No task ID matches `external:<name>`, so an external agent with the required scope and repository grant can stop, close, retry, pause, or reorder any task in its allowed repositories while still honouring standing-session ownership, pause ownership, and upgrade holds. Approval is the exception: see the next row. |
+| Approving: `POST /api/tasks/{id}/approve` (`api_approve`) and `POST /api/tasks/{id}/run-now` (`api_run_now`) on an unapproved task | The G8 approval rail ([Self-protection rails](#self-protection-rails)) applies to external credentials too, owned or not. An owned credential is its owner's delegate, not its owner, so it never stands in for the person a hold waits for. It is refused (403) a task in its own lineage: one the credential filed (the task's origin names `external:<name>`), or one proposed down the chain of a task it filed. It is also refused a task held for a person: `hold_for_approval`, targeting or writing `grain/config` or a person-held change target, a declared `push:` set, `autoMerge`, a `requires_person` or person-only grant, `keep_running`, an `admission` above `standard`, or a capability, write, read or priority its in-grain proposer doesn't hold. This applies whoever filed the task, a person included. `run-now`'s implicit approval is an approval, so on an unapproved task it needs `tasks:admin` as well as `dispatch:write` and asks the same questions. Approve and `run-now` therefore give the same answer for any unapproved task, over REST, `POST /mcp` and `POST /api/mcp`'s `grain_invoke`. Any other unapproved task is approved under `tasks:admin`, and an approved task is still jumped ahead by `run-now` under `dispatch:write` alone. Owner-trust approval at filing is unchanged. A person approves the rest. |
 | Single-repo collection reads (`GET /api/tasks`, `GET /api/ci/runs`, `GET /api/ci/workflows`, `GET /api/merge-batches`, `GET /api/pipeline/changes`, `GET /api/memory/documents/{name}`) | When a credential is restricted to a single repository and omits `?repo=`, the query filter defaults automatically to that repository, and the answer holds nothing outside it. A credential restricted to several repositories names one in `?repo=` on each read. |
 | External configuration repository (`409 config_managed_externally`) | Works unchanged: when the deployment's configuration lives in an external git repository, configuration-writing tools return `409 Conflict` (`code: "config_managed_externally"`) with the rehearsed git patch to commit. |
 

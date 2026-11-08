@@ -65,9 +65,12 @@ scripts/install-grain.sh -version v1.9.0 -image docker.io/grainai/grain -key cos
 ```
 
 If `~/.local/bin` is not on your `PATH`, add it. Without docker, copy the
-binary off any machine that has it. To build from source instead (macOS
-included), use `make dist-cli`. It writes `bin/dist/grain-<os>-<arch>.tar.gz`
-and a `checksums.txt` to check them against.
+binary off any machine that has it. Every `vX.Y.Z` release also carries
+`grain-<os>-<arch>.tar.gz` archives for Linux and macOS and a
+`checksums.txt` (docs/release-assets.md, "The grain CLI"), which a running
+daemon's `curl -fsSL <origin>/cli/install.sh | sh` installs. To build from
+source instead, use `make dist-cli`. It writes the same
+`bin/dist/grain-<os>-<arch>.tar.gz` and `checksums.txt`.
 
 ## 2. Get a sandbox and a model CLI ready
 

@@ -482,8 +482,18 @@ func (s *Server) admitVerifiedPrincipal(ctx context.Context, id VerifiedIdentity
 // owner's current role, so a gma_ token issued while its owner held
 // grain/operator stops working when the owner is moved to a narrower role
 // (docs/test-runs/2026-11-07-rbac-roles.md F2). It returns the HTTP status
-// to refuse with, or nil. An owner the allowlist does not match is left as
-// before; a failed group lookup that could narrow the owner refuses.
+// to refuse with, or nil. A failed group lookup that could narrow the owner
+// refuses.
+//
+// An owner the allowlist does not match is refused while an identity
+// verifier (IAP, the registry, or a wrapper's) is active: that list is then
+// what admits people, so an owner removed from it (`grain access deny`), or
+// never on it, has no role for the token to act within
+// (docs/test-runs/2026-11-07-rbac-roles.md O4). With no verifier the list
+// admits nobody -- single-user and access-code deployments, whose token
+// owners were never on it -- and such a token is left as before. The
+// deployment's local account, which a token issued without an owner acts
+// for, is no email address and is never refused for not being listed.
 func (s *Server) externalTokenOwnerCap(ctx context.Context, tok *model.ExternalAgentToken) (int, error) {
 	owner := tok.OwnerPrincipal()
 	if owner == nil || owner.Kind != model.PrincipalHuman {
@@ -502,6 +512,9 @@ func (s *Server) externalTokenOwnerCap(ctx context.Context, tok *model.ExternalA
 				return 0, nil
 			}
 			return http.StatusForbidden, fmt.Errorf("external agent token %s acts for %s, whose role cannot be checked: %s", tok.Name, email, groupErr.public)
+		}
+		if strings.Contains(email, "@") && len(activeVerifiers(ctx)) > 0 {
+			return http.StatusForbidden, fmt.Errorf("external agent token %s acts for %s, who holds no role on this deployment: %v; add them back in Settings -> Access, or revoke the token", tok.Name, email, err)
 		}
 		return 0, nil
 	}
