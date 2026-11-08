@@ -66,6 +66,7 @@ import {
   MoveSlot,
   MovingBar,
   gapsOf,
+  taskSlotName,
   usePickup,
 } from "./ReorderPickup.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
@@ -463,7 +464,7 @@ export default function TaskList({
                   gaps.has(gapBefore.get(t.id)) && (
                     <MoveSlot
                       className="reorder-slot-gutter"
-                      label={`Move here, above ${t.title}`}
+                      label={`Move here, above ${taskSlotName(t)}`}
                       onMove={() => {
                         moveTo(pickedIds, kept, gapBefore.get(t.id));
                         cancelPickup();
