@@ -472,3 +472,44 @@ test("keeps a task's title in a narrow window", async ({ page }) => {
   ).toBeGreaterThanOrEqual(Math.floor(await titleFloor(page)));
   expect((await chipFit(row)).sliced).toEqual([]);
 });
+
+// A suite run's row in the Processes page's Suite runs list (2026-11-08
+// walkthrough). Its chips -- status, repo, branch -- shrank in
+// proportion with the name and the hints beside them, so once the
+// strip was narrower than its first chip there was no second line for
+// that chip to be dropped onto and it was cut inside its own pill: 23px
+// of "succeeded" at 620px, 10px of "failed" on a phone. The status is
+// what the row is read for, so the strip never goes narrower than one
+// whole chip.
+for (const viewport of [NARROW, { width: 390, height: 844 }]) {
+  test(`keeps a suite run's status whole at ${viewport.width}px`, async ({
+    page,
+  }) => {
+    const template = await seedOne(page, "/api/templates", CROWDED);
+    const suite = await seedSuiteAndRun(page, SHORT_SUITE, template.id);
+    try {
+      await page.setViewportSize(viewport);
+      await page.goto("/processes?kind=suite");
+      const row = page
+        .locator(".suite-run-row", { hasText: SHORT_SUITE })
+        .first();
+      await expect(row).toBeVisible();
+      const status = row.locator(".chips .MuiChip-root").first();
+      await expect(status).toHaveText(/^active$/i);
+      expect(
+        await truncated(status.locator(".MuiChip-label")),
+        "the run's status chip was cut inside its own pill",
+      ).toBe(false);
+      const fit = await chipFit(row);
+      expect(fit.shown[0]).toMatch(/^active$/i);
+      expect(fit.sliced).toEqual([]);
+      const right = await row.evaluate(
+        (el) => el.getBoundingClientRect().right,
+      );
+      expect(right).toBeLessThanOrEqual(viewport.width + 0.5);
+    } finally {
+      await page.request.delete(`/api/suites/${suite.id}`);
+      await page.request.delete(`/api/templates/${template.id}`);
+    }
+  });
+}

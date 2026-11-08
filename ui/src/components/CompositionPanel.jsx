@@ -71,6 +71,7 @@ const LABELS = {
   autoMerge: "Auto-merge",
   keepRunning: "Keep running",
   admission: "Admission",
+  hosting: "Hosting",
   approval: "Approval",
   priority: "Task priority",
 };
@@ -120,6 +121,8 @@ const VALUES = {
   // The task pane's own Admission select words it "Bypass queue"
   // (detail/Actions.jsx); "durable" reads the same either way.
   admission: { bypass: "bypass queue" },
+  // ...and its Hosting select (HostingField) "Interactive console".
+  hosting: { console: "interactive console" },
 };
 
 // passes says how many times the tasks below are filed. A suite run
