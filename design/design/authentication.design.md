@@ -73,7 +73,7 @@ func RegisterIdentityVerifier(v IdentityVerifier) (unregister func())
 In the UI:
 
 - `GET /api/config` (`pkg/ui/server.go`) and `GET /api/auth/user` (`pkg/ui/auth.go`, `AuthUserResponse`) return `authMethod` (`"iap"` or verifier name) and `user`/`actor` (`user:<email>` for humans, `service:<email>` for service accounts).
-- At desktop widths, `PageHeader.jsx` (`ui/src/components/PageHeader.jsx`) shows the signed-in email badge (`top-bar-user`) with a menu linking to `Settings → Access` (`ui/src/components/settings/AccessSection.jsx`) and `Log out`. At phone widths (`390 px`), `Sidebar.jsx` (`ui/src/components/Sidebar.jsx`) renders `"Signed in as <email>"` and `Log out` in the pinned drawer footer.
+- At desktop widths, the foot of `Sidebar.jsx` (`ui/src/components/Sidebar.jsx`) shows the user tile (`user-tile`, the verified email, opening `Settings → Access` in `ui/src/components/settings/AccessSection.jsx`) with a compact `Log out` button (`sidebar-logout`) beside it; the page header rail has no signed-in badge (settings-panel design §4.3). At phone widths (`390 px`), `Sidebar.jsx` (`ui/src/components/Sidebar.jsx`) renders `"Signed in as <email>"` and `Log out` in the pinned drawer footer.
 - `POST /api/auth/logout` (`pkg/ui/accesscode.go`) clears any `grain_access` cookie and, when `identifyCaller` reports `AuthMethodIAP`, returns `{"loggedOut": true, "redirect": "/_gcp_iap/clear_login_cookie"}` so the browser clears IAP's login cookie.
 
 ## 3. Admission: the database allowlist, groups, and roles
