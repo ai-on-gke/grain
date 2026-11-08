@@ -44,7 +44,9 @@ const { chromium } = createRequire(path.join(uiDir, "package.json"))(
 
 const [base, out, ...people] = process.argv.slice(2);
 if (!base || !out || people.length === 0) {
-  console.error("usage: browser-walkthrough.mjs <base> <out> <email=label> ...");
+  console.error(
+    "usage: browser-walkthrough.mjs <base> <out> <email=label> ...",
+  );
   process.exit(2);
 }
 const IDLE_MS = Number(process.env.IDLE_MS || 4000);
@@ -53,12 +55,15 @@ const VIEWPORTS = [
   { name: "390", width: 390, height: 844 },
 ];
 const SCHEMES = ["light", "dark"];
-const PAGES = (process.env.PAGES || "/,/boards,/boards/@first,/tasks/@first,/@bulk,/new,/inbox,/repos,/processes,/settings,/settings/access,/system")
+const PAGES = (
+  process.env.PAGES ||
+  "/,/boards,/boards/@first,/tasks/@first,/@bulk,/new,/inbox,/repos,/processes,/settings,/settings/access,/system"
+)
   .split(",")
   .filter(Boolean);
 // Buttons whose name says they write. A viewer must see none enabled.
 const WRITE_NAMES =
-  /^(New task|New board|Edit|Approve|Approve and dispatch|Merge|Force merge|Save|Add|Allow|Rotate|Delete|Cancel task|Retry|Dispatch|Bulk edit|Apply)$/i;
+  /^(\+ New task|New task|New board|Edit|Approve|Approve all.*|Defer|Decline|Reply|Acknowledge|Investigate|Run now|Merge|Force merge|Save|Add|Allow|Rotate|Delete|Cancel task|Retry|Dispatch|Bulk edit|Apply)$/i;
 
 await fs.mkdir(out, { recursive: true });
 const browser = await chromium.launch();
@@ -86,7 +91,13 @@ async function measure(page) {
       els.forEach((el, i) => {
         const b = el.getBoundingClientRect();
         if (b.width === 0 && b.height === 0) return;
-        boxes.push({ key: `${s}#${i}`, x: b.x, y: b.y, w: b.width, h: b.height });
+        boxes.push({
+          key: `${s}#${i}`,
+          x: b.x,
+          y: b.y,
+          w: b.width,
+          h: b.height,
+        });
       });
     }
     return boxes;
@@ -157,18 +168,20 @@ for (const person of people) {
         `${base}/_iapsim/login?email=${encodeURIComponent(email)}&next=/api/auth/whoami`,
       );
       const page = await ctx.newPage();
-      await page.goto(`${base}/_iapsim/login?email=${encodeURIComponent(email)}&next=/api/auth/whoami`);
+      await page.goto(
+        `${base}/_iapsim/login?email=${encodeURIComponent(email)}&next=/api/auth/whoami`,
+      );
       const whoami = JSON.parse(await page.locator("body").innerText());
       const cfg = await (await ctx.request.get(`${base}/api/config`)).json();
       whoami.roles = cfg.access?.full ? ["(full)"] : cfg.access?.roles;
-      const boardId = await firstId(ctx, "/api/boards", (j) =>
-        {
-          const all = Array.isArray(j) ? j : j.boards || [];
-          return (all.find((b) => b.kind === "kanban") || all[0])?.id;
-        },
-      );
-      const taskId = await firstId(ctx, "/api/tasks?limit=5", (j) =>
-        (Array.isArray(j) ? j : j.tasks || [])[0]?.id,
+      const boardId = await firstId(ctx, "/api/boards", (j) => {
+        const all = Array.isArray(j) ? j : j.boards || [];
+        return (all.find((b) => b.kind === "kanban") || all[0])?.id;
+      });
+      const taskId = await firstId(
+        ctx,
+        "/api/tasks?limit=5",
+        (j) => (Array.isArray(j) ? j : j.tasks || [])[0]?.id,
       );
       let bad = [];
       const consoleErrors = [];
@@ -211,7 +224,10 @@ for (const person of people) {
           );
           const n = await boxes.count();
           for (let i = 0; i < Math.min(2, n); i++) {
-            await boxes.nth(i).click({ trial: false }).catch(() => {});
+            await boxes
+              .nth(i)
+              .click({ trial: false })
+              .catch(() => {});
           }
           bulkNote = `${n} selectable rows offered`;
         }
@@ -225,19 +241,29 @@ for (const person of people) {
         const overflow = await page.evaluate(
           () => document.documentElement.scrollWidth - window.innerWidth,
         );
-        const writes = await page.evaluate((re) => {
-          const rx = new RegExp(re.source, re.flags);
-          const out = { enabled: [], disabled: [] };
-          for (const b of document.querySelectorAll("button, [role=button]")) {
-            const name = (b.getAttribute("aria-label") || b.textContent || "").trim();
-            if (!rx.test(name)) continue;
-            const r = b.getBoundingClientRect();
-            if (r.width === 0 || r.height === 0) continue;
-            const off = b.disabled || b.getAttribute("aria-disabled") === "true";
-            (off ? out.disabled : out.enabled).push(name);
-          }
-          return out;
-        }, { source: WRITE_NAMES.source, flags: WRITE_NAMES.flags });
+        const writes = await page.evaluate(
+          (re) => {
+            const rx = new RegExp(re.source, re.flags);
+            const out = { enabled: [], disabled: [] };
+            for (const b of document.querySelectorAll(
+              "button, [role=button]",
+            )) {
+              const name = (
+                b.getAttribute("aria-label") ||
+                b.textContent ||
+                ""
+              ).trim();
+              if (!rx.test(name)) continue;
+              const r = b.getBoundingClientRect();
+              if (r.width === 0 || r.height === 0) continue;
+              const off =
+                b.disabled || b.getAttribute("aria-disabled") === "true";
+              (off ? out.disabled : out.enabled).push(name);
+            }
+            return out;
+          },
+          { source: WRITE_NAMES.source, flags: WRITE_NAMES.flags },
+        );
         const slug = `${label}-${vp.name}-${scheme}-${(p.replace(/[^a-z0-9]+/gi, "_") || "root").replace(/^_|_$/g, "") || "root"}`;
         const file = path.join(out, `${slug}.png`);
         await page.screenshot({ path: file });
@@ -275,14 +301,20 @@ for (const person of people) {
 // One contact sheet per person and width keeps each image readable.
 const sheet = path.join(out, "contact-sheet.png");
 {
-  const pick = shots.filter((s) => /-(light|dark)-(root|boards|tasks_first|new|settings_access|system)$/.test(s.name));
+  const pick = shots.filter((s) =>
+    /-(light|dark)-(root|boards|tasks_first|new|settings_access|system)$/.test(
+      s.name,
+    ),
+  );
   const cells = await Promise.all(
     pick.map(async (shot) => {
       const data = (await fs.readFile(shot.file)).toString("base64");
       return `<figure><img src="data:image/png;base64,${data}"><figcaption>${shot.name}</figcaption></figure>`;
     }),
   );
-  const page = await browser.newPage({ viewport: { width: 2000, height: 800 } });
+  const page = await browser.newPage({
+    viewport: { width: 2000, height: 800 },
+  });
   await page.setContent(`<!doctype html><style>
     body { margin: 0; padding: 12px; background: #888; font: 13px sans-serif;
       display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
