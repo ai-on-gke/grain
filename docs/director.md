@@ -102,7 +102,14 @@ given.
 
 A wrapper distribution can register further capabilities as on by default
 for the director (`pkg/capability.Registration.DefaultOn`); each shows in
-the director's pane like any other, and can be unticked there.
+the director's pane like any other, and can be unticked there. A deployment
+that already saved its `director` row before newer shipped default
+capabilities existed keeps its saved list rather than having new grants
+added silently; the director's pane offers **Adopt shipped defaults**
+(`adoptShippedDefaults: true` on `PUT /api/console-sessions/director`),
+which adds missing shipped defaults while keeping custom grants
+(`expectCapabilities` guards capability saves against concurrent edits with
+`409` `code: "stale"`).
 
 ## What every session reads by default
 

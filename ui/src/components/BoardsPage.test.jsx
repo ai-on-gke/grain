@@ -417,5 +417,63 @@ describe("BoardsPage", () => {
         screen.queryByRole("button", { name: /^Move / }),
       ).not.toBeInTheDocument();
     });
+
+    // 2026-11-08 saved-boards walkthrough (task 3612): two folders each
+    // holding a "Triage" gave two handles named "Move Triage" and two
+    // slots named "Move here, above Triage" leading into different
+    // folders.
+    it("names same-named boards in different folders apart on handles and slots", async () => {
+      const user = userEvent.setup();
+      const dupes = [
+        {
+          id: "board-10",
+          name: "Triage",
+          folder: "Ops",
+          kind: "list",
+          description: "",
+          query: "",
+        },
+        {
+          id: "board-11",
+          name: "Triage",
+          folder: "Zeta",
+          kind: "list",
+          description: "",
+          query: "",
+        },
+        {
+          id: "board-12",
+          name: "Overview",
+          folder: "",
+          kind: "panels",
+          description: "",
+          query: "",
+        },
+      ];
+      render(
+        <BoardsPage
+          boards={dupes}
+          onOpenBoard={() => {}}
+          onNewBoard={() => {}}
+          onMoveBoard={vi.fn()}
+        />,
+      );
+      expect(
+        screen.getByRole("button", { name: "Move Triage, in Ops" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Move Triage, in Zeta" }),
+      ).toBeInTheDocument();
+      // A unique name stays exactly as it was.
+      await user.click(screen.getByRole("button", { name: "Move Overview" }));
+      expect(
+        screen.getByRole("button", { name: "Move here, above Triage, in Ops" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", {
+          name: "Move here, above Triage, in Zeta",
+        }),
+      ).toBeInTheDocument();
+    });
   });
 });
