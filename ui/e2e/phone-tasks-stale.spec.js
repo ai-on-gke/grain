@@ -65,6 +65,22 @@ async function barBoxes(page) {
   };
 }
 
+// The placement checks measure the bar without an environment chip, which
+// takes up to 96 px of the wordmark's room. This worker's demo server is
+// shared with the files run before this one (e2e/fixtures.js), and
+// several of them save an environment name, so the name is cleared here
+// and put back afterwards rather than assumed empty.
+let environmentName = "";
+test.beforeEach(async ({ page }) => {
+  environmentName =
+    (await (await page.request.get("/api/settings")).json()).environmentName ??
+    "";
+  await page.request.put("/api/settings", { data: { environmentName: "" } });
+});
+test.afterEach(async ({ page }) => {
+  await page.request.put("/api/settings", { data: { environmentName } });
+});
+
 for (const colorScheme of ["light", "dark"]) {
   test(`a phone's top bar says the task list is stale while /api/tasks fails (390px, ${colorScheme})`, async ({
     page,
