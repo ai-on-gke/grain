@@ -493,6 +493,13 @@ func (s *Server) externalTokenOwnerCap(ctx context.Context, tok *model.ExternalA
 	if err != nil {
 		var groupErr *groupAllowlistRefusalError
 		if errors.As(err, &groupErr) {
+			// Groups hold email addresses: an owner that is not one --
+			// the deployment's local account, which a token issued
+			// without an owner acts for -- is in none of them, so a
+			// failed lookup cannot be hiding a role it holds.
+			if !strings.Contains(email, "@") {
+				return 0, nil
+			}
 			return http.StatusForbidden, fmt.Errorf("external agent token %s acts for %s, whose role cannot be checked: %s", tok.Name, email, groupErr.public)
 		}
 		return 0, nil

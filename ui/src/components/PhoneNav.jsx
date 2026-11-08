@@ -25,6 +25,7 @@ import {
 } from "@mui/material";
 import AppIcon from "./AppIcon.jsx";
 import GrainMark from "./GrainMark.jsx";
+import AccessGate from "./AccessGate.jsx";
 import { stateDot } from "./UnbackedStateDot.jsx";
 
 // PhoneNav is what the sidebar becomes on a phone (phone.js): the rail
@@ -180,20 +181,26 @@ export default function PhoneNav({
             </IconButton>
           )}
           {onOpenNewTask && (
-            <IconButton
-              size="small"
-              className="header-control-icon"
-              aria-label="New task"
-              onClick={onOpenNewTask}
-              sx={{
-                bgcolor: "primary.main",
-                color: "primary.contrastText",
-                borderRadius: 1.5,
-                "&:hover": { bgcolor: "primary.dark" },
-              }}
-            >
-              <AppIcon name="add" size={20} />
-            </IconButton>
+            <AccessGate scope="tasks:write" config={config}>
+              <IconButton
+                size="small"
+                className="header-control-icon"
+                aria-label="New task"
+                onClick={onOpenNewTask}
+                sx={{
+                  bgcolor: "primary.main",
+                  color: "primary.contrastText",
+                  borderRadius: 1.5,
+                  "&:hover": { bgcolor: "primary.dark" },
+                  "&.Mui-disabled": {
+                    bgcolor: "action.disabledBackground",
+                    color: "action.disabled",
+                  },
+                }}
+              >
+                <AppIcon name="add" size={20} />
+              </IconButton>
+            </AccessGate>
           )}
         </Toolbar>
       </AppBar>

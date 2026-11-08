@@ -15,7 +15,8 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import InboxPage from "./InboxPage.jsx";
+import InboxPage, { inboxActionScope } from "./InboxPage.jsx";
+import { viewerConfig } from "../accessTestConfigs.js";
 import { inboxTasks } from "../state.js";
 import api from "../api.js";
 
@@ -1637,5 +1638,81 @@ describe("InboxPage", () => {
         screen.queryByText("Add a dark mode toggle"),
       ).not.toBeInTheDocument();
     });
+  });
+});
+
+// A role without the scope a row's answer needs is shown that answer
+// disabled, with the reason, instead of a button whose click ends in a 403
+// toast (docs/test-runs/2026-11-07-rbac-roles.md F6).
+describe("InboxPage for a limited role", () => {
+  const contributorConfig = {
+    access: {
+      role: "grain/contributor",
+      roles: ["grain/contributor"],
+      full: false,
+      scopes: ["tasks:read", "tasks:write", "ci:read", "ci:write"],
+    },
+  };
+  const proposals = [
+    task({ id: "1", title: "Add a dark mode toggle", state: "proposed" }),
+    task({ id: "2", title: "Fix flaky retry test", state: "proposed" }),
+    task({ id: "4", title: "Investigate the stall", state: "awaiting_reply" }),
+  ];
+
+  afterEach(() => vi.clearAllMocks());
+
+  it("names the scope every answer's request needs", () => {
+    expect(inboxActionScope({ post: "/approve" })).toBe("tasks:admin");
+    expect(inboxActionScope({ post: "/defer" })).toBe("tasks:write");
+    expect(inboxActionScope({ post: "/run-now" })).toBe("dispatch:write");
+    expect(inboxActionScope({ post: "/retry-merge" })).toBe("merge:write");
+    expect(inboxActionScope({ forceMerge: true })).toBe("merge:force");
+    expect(inboxActionScope({ open: true })).toBeNull();
+    expect(inboxActionScope({ href: () => "x" })).toBeNull();
+  });
+
+  it("disables every write for a viewer and sends nothing", async () => {
+    const onAct = vi.fn();
+    render(
+      <InboxPage
+        {...baseProps}
+        config={viewerConfig}
+        onAct={onAct}
+        tasks={proposals}
+      />,
+    );
+    for (const name of ["Approve", "Defer", "Decline", "Reply"]) {
+      for (const b of screen.getAllByRole("button", { name, exact: true })) {
+        expect(b).toBeDisabled();
+      }
+    }
+    expect(screen.getByRole("button", { name: /^Approve all/ })).toBeDisabled();
+    expect(onAct).not.toHaveBeenCalled();
+  });
+
+  it("leaves a contributor Defer and Reply but not Approve", async () => {
+    render(
+      <InboxPage {...baseProps} config={contributorConfig} tasks={proposals} />,
+    );
+    for (const b of screen.getAllByRole("button", {
+      name: "Approve",
+      exact: true,
+    })) {
+      expect(b).toBeDisabled();
+    }
+    for (const b of screen.getAllByRole("button", {
+      name: "Defer",
+      exact: true,
+    })) {
+      expect(b).toBeEnabled();
+    }
+    expect(screen.getByRole("button", { name: "Reply" })).toBeEnabled();
+  });
+
+  it("changes nothing for an unlimited caller", () => {
+    renderInbox();
+    expect(
+      screen.getByRole("button", { name: "Approve", exact: true }),
+    ).toBeEnabled();
   });
 });

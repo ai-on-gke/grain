@@ -4,13 +4,13 @@
 | 1.2 | grain access allow group:devs as grain/contributor | `allowed group:devs@example.com` | `allowed group:devs@example.com as grain/contributor` | PASS |
 | 1.3 | grain access allow user:vic (viewer only, no group) | `allowed user:vic@example.com` | `allowed user:vic@example.com as grain/viewer` | PASS |
 | 1.4 | unknown role grain/developer is refused by the CLI (plan names a role grain does not ship) | `^[^0].*|.*(unknown|no scope set|not a).*` | `2 grain: role "grain/developer" is no scope set in effect (Settings -> Scope sets, or a built-in such as grain/operator or grain/viewer)` | PASS |
-| 1.5 | grain access list shows both alice and devs rows with roles | `user:alice@example.com.*grain/viewer` | `user:alice@example.com	grain/viewer	added by the access code	2026-11-08T02:26:44Z	alice reads group:devs@example.com	grain/contributor	added by the access code	` | PASS |
+| 1.5 | grain access list shows both alice and devs rows with roles | `user:alice@example.com.*grain/viewer` | `user:alice@example.com	grain/viewer	added by the access code	2026-11-08T03:11:13Z	alice reads group:devs@example.com	grain/contributor	added by the access code	` | PASS |
 | 1.6 | alice whoami readable (200) | `^200$` | `200` | PASS |
 | 1.7 | alice's /api/auth/user access lists both matched roles | `grain/contributor.*grain/viewer|grain/viewer.*grain/contributor` | `{"authenticated":true,"user":"alice@example.com","tenancy":"single","authMethod":"iap","access":{"role":"grain/contributor, grain/viewer","roles":["grain/contri` | PASS |
 | 1.8 | alice (user viewer + group contributor) can file tasks: roles union | `^201$` | `201` | PASS |
 | 1.9 | vic (viewer only) refused tasks:write | `^403$` | `403` | PASS |
 | 1.10 | vic (viewer) can still read whoami | `^200$` | `200` | PASS |
-| 1.11 | unlisted nobody@ can read whoami, which reports authenticated:false | `^200 .*"authenticated":false` | `200 {"acceptedAuth":["access-code","iap"],"externalAgentApi":false,"version":"v0.0.0-20261108014945-46ab9012bbc0+dirty","authenticated":false}` | PASS |
+| 1.11 | unlisted nobody@ can read whoami, which reports authenticated:false | `^200 .*"authenticated":false` | `200 {"acceptedAuth":["access-code","iap"],"externalAgentApi":false,"version":"v0.0.0-20261108022838-840f8af660a5+dirty","authenticated":false}` | PASS |
 | 1.11b | unlisted nobody@ refused every scoped route, naming Settings -> Access | `^403 .*Settings -(>|\\u003e) Access` | `403 {"error":"principal \"nobody@example.com\" is not on the allowed users and groups list (Settings -\u003e Access)"}` | PASS |
 | 1.12 | serviceAccount: without --reason refused | `^[1-9].*reason` | `2 grain: allowed principal "serviceAccount:ci-bot@my-proj.iam.gserviceaccount.com": give a reason to admit a service account (with role grain/viewer)` | PASS |
 | 1.13 | serviceAccount: with --reason admitted | `allowed serviceAccount:ci-bot` | `allowed serviceAccount:ci-bot@my-proj.iam.gserviceaccount.com as grain/viewer` | PASS |
@@ -21,8 +21,8 @@
 | 1.18 | delegate: with --label and --reason admitted | `allowed delegate:console` | `allowed delegate:console@my-proj.iam.gserviceaccount.com as grain/delegated` | PASS |
 | 1.19 | delegate row defaults to grain/delegated, keeps label, never used | `^grain/delegated release-console null$` | `grain/delegated release-console null` | PASS |
 | 1.20 | dana via delegate:console admitted | `^200$` | `200` | PASS |
-| 1.21 | delegated whoami attributes the person via the delegate label | `dana@example.com.*release-console|release-console.*dana@example.com` | `{"acceptedAuth":["access-code","iap"],"externalAgentApi":false,"version":"v0.0.0-20261108014945-46ab9012bbc0+dirty","authenticated":true,"principal":"human:dana` | PASS |
-| 1.22 | delegate last_used_at stamped after use | `^[0-9]{4}-` | `2026-11-08T02:26:45.604614666Z` | PASS |
+| 1.21 | delegated whoami attributes the person via the delegate label | `dana@example.com.*release-console|release-console.*dana@example.com` | `{"acceptedAuth":["access-code","iap"],"externalAgentApi":false,"version":"v0.0.0-20261108022838-840f8af660a5+dirty","authenticated":true,"principal":"human:dana` | PASS |
+| 1.22 | delegate last_used_at stamped after use | `^[0-9]{4}-` | `2026-11-08T03:11:14.441268889Z` | PASS |
 | 1.23 | dana (contributor) via delegate (delegated) can file a task | `^201$` | `201` | PASS |
 | 1.24 | delegated task attributed to dana (via release-console) | `dana@example.com` | `{"id":"3","title":"delegated filing","description":"dana via console","author":"console@my-proj.iam.gserviceaccount.com","authorKind":"service","authorSource":"` | PASS |
 | 1.25 | viewer vic via a write delegate still refused: intersection, not union | `^403$` | `403` | PASS |
@@ -79,7 +79,7 @@
 | 3.6 | viewer grain_submit_task refused | `HTTP 403|holds no|grain/viewer` | `{"jsonrpc":"2.0","id":1,"result":{"content":[{"text":"grain_submit_task failed: HTTP 403: vic@example.com (role grain/viewer) holds no scope tasks:write, which ` | PASS |
 | 3.7 | no task or state created by refused MCP calls | `^5$` | `5` | PASS |
 | 3.7b | target task title untouched by MCP calls | `^operator target$` | `operator target` | PASS |
-| 3.8 | operator-scoped gma_ token issued for olivia | `^gma_` | `gma_87f4dabb16ff1d525fb0f70b8771c4ce` | PASS |
+| 3.8 | operator-scoped gma_ token issued for olivia | `^gma_` | `gma_ac8ccdba2d07e9a4b33c1c7b5c96396e` | PASS |
 | 3.9 | gma_ token can file while its owner is operator | `"id"|[Tt]ask` | `{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"unknown tool grain_submit_task"}}` | PASS |
 | 3.10 | grain access role downgrades olivia to grain/viewer | `olivia@example.com` | `user:olivia@example.com: role grain/operator -> grain/viewer` | PASS |
 | 3.11 | downgraded owner's operator gma_ refused on /mcp tools/list (fix F2; was 314 tools) | `wider than its owner's current role` | `{"error":"external agent token olivia-laptop is wider than its owner's current role: it grants tasks:write, which olivia@example.com (role grain/viewer) does no` | PASS |

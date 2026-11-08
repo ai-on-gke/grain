@@ -911,7 +911,8 @@ func TestExternalTokenCannotExceedItsOwnersCurrentRole(t *testing.T) {
 		t.Fatalf("viewer token filing = %d, want 403", code)
 	}
 
-	// A group lookup that fails when the group could narrow the owner refuses.
+	// A group lookup that fails cannot narrow an owner whose own user:
+	// entry's role has no deny: contributor's token still files.
 	h.allow(t, "user:gus@example.com", "grain/contributor")
 	h.allow(t, "group:readers@example.com", "grain/viewer")
 	h.client.Config.GroupChecker = groupCheckerFunc(func(context.Context, string, string) (bool, error) {
@@ -926,5 +927,33 @@ func TestExternalTokenCannotExceedItsOwnersCurrentRole(t *testing.T) {
 	bearer["Authorization"] = "Bearer " + gus.Token
 	if code := file("/api/tasks"); code != http.StatusCreated {
 		t.Fatalf("contributor token of a contributor owner, group lookup down = %d, want 201 (no deny to miss)", code)
+	}
+
+	// A token issued without an owner acts for the deployment's local
+	// account, which is no email address and so in no group: a group
+	// lookup that fails leaves it working (ui/e2e/external-agent-filer.spec.js).
+	unowned, err := h.client.CreateExternalAgentToken(ctx, ui.CreateExternalAgentTokenRequest{
+		Name: "widgets-writer", Scopes: []string{"tasks:write"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bearer["Authorization"] = "Bearer " + unowned.Token
+	if code := file("/api/tasks"); code != http.StatusCreated {
+		t.Fatalf("unowned token, group lookup down = %d, want 201", code)
+	}
+
+	// An owner with an email address and no entry of their own, whose only
+	// possible match is the group that cannot be looked up, is refused.
+	ghost, err := h.client.CreateExternalAgentToken(ctx, ui.CreateExternalAgentTokenRequest{
+		Name: "hal-laptop", Scopes: []string{"tasks:write"}, Owner: "hal@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bearer["Authorization"] = "Bearer " + ghost.Token
+	rec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, "/api/tasks", `{"title":"x","description":"x","noRepo":true}`, bearer)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "cannot be checked") {
+		t.Fatalf("token of an owner only a failed group lookup could match = %d %s, want 403", rec.Code, rec.Body.String())
 	}
 }
