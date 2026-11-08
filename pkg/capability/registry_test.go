@@ -37,7 +37,7 @@ func TestDefaultOnSeedsANewDeploymentConfig(t *testing.T) {
 	}
 	unregister := capability.Register(capability.Method{
 		Server:    capabilitytest.MethodServer,
-		Spec:      capabilitytest.MethodSpec(zzDefaultOn),
+		Spec:      capabilitytest.MethodSpec("zz-default-on"),
 		DefaultOn: true,
 	})
 	t.Cleanup(unregister)
