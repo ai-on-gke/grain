@@ -548,9 +548,14 @@ outright.
 their older spellings `repo-read:<owner>/<repo>` and
 `repo-write:<owner>/<repo>`, are not granted from this list. Both spellings
 are accepted in a job's `capabilities:` and will stay accepted, since those
-files live in other people's repositories. No provider stands behind either
-one: the grant carries its own rules (`model.IsRepoAccessGrant`). It is
-CI-only, so a task that holds it is refused. Write access has the event gate
+files live in other people's repositories. Grain's in-process
+`https://grain.dev/capabilities/repo` server stands behind `#read`, `#write`,
+`#credential`, and `#target` (`GET /api/capability-methods` lists them), and
+the repository-access grant carries its own rules (`model.IsRepoAccessGrant`).
+Held in a task's `capabilities:` list, `#read` and `#write` remain CI-only and
+are refused (whereas in a task create or edit request's unified `grants:` list,
+`model.SplitRequestGrants` maps `repo#target`, `repo#read`, and `repo#write` to
+the task's `repo`/`base`, `reads`, and `writes`). Write access has the event gate
 described below (`model.RepoAccessAdmitsCIEvent`). **The declaration in the repository is the
 allowance; the team's GitHub credential is the authority.** A job gets
 read or write access to a repository only when both of these hold:
