@@ -278,7 +278,8 @@ func writeRelayThreads(b *strings.Builder, threads []relayThread) {
 // listUnresolvedThreads is every unresolved review conversation on ref,
 // outdated or not, each joined to the comment that opened it -- the set a
 // repository requiring conversation resolution will not merge past. ok is
-// false where the thread view could not be read at all.
+// false where the thread view, or the comments that say which review each
+// thread belongs to, could not be read.
 func listUnresolvedThreads(client github.Client, ref model.PullRequestRef) ([]relayThread, bool) {
 	if client == nil || ref.Number <= 0 {
 		return nil, false
@@ -294,7 +295,12 @@ func listUnresolvedThreads(client github.Client, ref model.PullRequestRef) ([]re
 	}
 	comments, err := client.ListReviewComments(ref.Repo.Owner, ref.Repo.Name, ref.Number)
 	if err != nil {
+		// Without the comments there is no ReviewID to tell grain's own
+		// draft-review threads (the owner's questions, which no agent run
+		// is to resolve) from anybody else's, and no body to relay: the
+		// thread view is as good as unread.
 		log.Printf("orchestrator: reading review comments on %s: %v", ref, err)
+		return nil, false
 	}
 	byID := map[int]github.ReviewComment{}
 	for _, c := range comments {

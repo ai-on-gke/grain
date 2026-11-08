@@ -15,6 +15,7 @@
 package orchestrator_test
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -441,5 +442,77 @@ func TestAnUnresolvedConversationTheRunLeftOpenIsHandedToAPerson(t *testing.T) {
 	}
 	if !strings.Contains(obs.MergeQueueNote, "1 unresolved review conversations by code-review[bot]") {
 		t.Errorf("note = %q, want the open thread counted", obs.MergeQueueNote)
+	}
+}
+
+// withDraftFinding adds a thread from grain's own draft review (a review
+// task's question for the owner) to the pull request unresolvedConversationQueue
+// built, and links that review to the task.
+func withDraftFinding(t *testing.T, sim *githubsim.Sim, store *model.Store, task model.Task, branch string) {
+	t.Helper()
+	line := 20
+	number := prNumber(t, sim, branch)
+	sim.ReviewComments[number] = append(sim.ReviewComments[number],
+		github.ReviewComment{ID: 234728, User: "grain", Body: "owner question: keep this?", Path: "scripts/run.sh", Line: &line, ReviewID: 77})
+	if err := store.UpdateTask(t.Context(), task.ID, func(tk *model.Task) error {
+		tk.Links = append(tk.Links, model.Link{Kind: model.LinkDraftReview, Target: "77"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A thread from grain's own draft review is the owner's question, not
+// something the sent-back run is told to fix and resolve.
+func TestAnUnresolvedConversationSendBackLeavesOutGrainsDraftReview(t *testing.T) {
+	sim, _, store, task, branch, sync := unresolvedConversationQueue(t, "convo-draft")
+	withDraftFinding(t, sim, store, task, branch)
+	ctx := t.Context()
+
+	if err := sync(baseTime); err == nil {
+		t.Fatal("expected the refused merge to be reported")
+	}
+	if s := stateOf(t, ctx, store, task.ID); s != model.StateQueued {
+		t.Fatalf("state = %q, want %q", s, model.StateQueued)
+	}
+	for _, body := range commentBodies(t, ctx, store, task.ID) {
+		if strings.Contains(body, "owner question") || strings.Contains(body, "thread-234728") {
+			t.Errorf("grain's own draft review was sent to the run to resolve:\n%s", body)
+		}
+		if strings.Contains(body, "2 threads are still open") {
+			return
+		}
+	}
+	t.Error("the send-back comment did not list the two other threads")
+}
+
+// failingReviewComments is a client whose REST review-comment read fails
+// while its thread view still answers.
+type failingReviewComments struct{ *github.RESTClient }
+
+func (failingReviewComments) ListReviewComments(string, string, int) ([]github.ReviewComment, error) {
+	return nil, errors.New("github: 502 bad gateway")
+}
+
+// Where the review comments cannot be read, nothing tells grain's own
+// draft-review threads from anybody else's: the queue sends nothing back
+// and hands the refusal to a person, rather than telling a run to resolve
+// threads that may be the owner's questions.
+func TestAnUnresolvedConversationIsNotSentBackBlindWhenCommentsCannotBeRead(t *testing.T) {
+	sim, client, store, task, branch, _ := unresolvedConversationQueue(t, "convo-blind")
+	withDraftFinding(t, sim, store, task, branch)
+	ctx := t.Context()
+
+	if err := orchestrator.SyncPullRequests(ctx, store, failingReviewComments{client}, baseTime); err == nil {
+		t.Fatal("expected the refused merge to be reported")
+	}
+	if s := stateOf(t, ctx, store, task.ID); s == model.StateQueued {
+		t.Fatalf("the task was sent back with threads it could not tell apart: %q", commentBodies(t, ctx, store, task.ID))
+	}
+	if obs := mergeQueueStatus(t, ctx, store, task.ID); obs.MergeQueueBlockedAt == nil {
+		t.Fatalf("the refusal was not handed to a person: %q", obs.MergeQueueNote)
+	}
+	if mergedHead(sim, branch) {
+		t.Fatal("merged with threads unresolved")
 	}
 }
