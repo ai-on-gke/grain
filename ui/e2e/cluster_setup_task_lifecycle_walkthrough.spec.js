@@ -40,66 +40,78 @@ test.describe("Grain Cluster Setup, Task Submission, and Lifecycle Completion Wa
   test("1. Cluster Initialization & Admin Deployment Configuration", async ({
     page,
   }) => {
-    await page.goto("/");
-    await expect(page).toHaveTitle(/grain/i);
-    await expect(page.locator(".task-row").first()).toBeVisible();
+    // The demo server is the worker's (fixtures.js): an environment name
+    // left behind puts a chip on every later page's bar.
+    const initial = await (await page.request.get("/api/settings")).json();
+    try {
+      await page.goto("/");
+      await expect(page).toHaveTitle(/grain/i);
+      await expect(page.locator(".task-row").first()).toBeVisible();
 
-    await expect(page.getByRole("button", { name: /^Tasks/ })).toBeVisible();
-    await expect(page.getByRole("button", { name: /^Inbox/ })).toBeVisible();
+      await expect(page.getByRole("button", { name: /^Tasks/ })).toBeVisible();
+      await expect(page.getByRole("button", { name: /^Inbox/ })).toBeVisible();
 
-    // Navigate to Settings (the old /admin lands on General)
-    await page.goto("/admin");
-    await expect(
-      page.getByRole("heading", { name: "Settings", exact: true }),
-    ).toBeVisible();
+      // Navigate to Settings (the old /admin lands on General)
+      await page.goto("/admin");
+      await expect(
+        page.getByRole("heading", { name: "Settings", exact: true }),
+      ).toBeVisible();
 
-    // Ensure baseline settings are initialized
-    const checkRes = await page.request.get("/api/settings");
-    const checkJson = await checkRes.json();
-    if (!checkJson.configured) {
-      const initRes = await page.request.put("/api/settings", {
-        data: BASELINE_SETTINGS,
-      });
-      expect(initRes.ok()).toBe(true);
+      // Ensure baseline settings are initialized
+      const checkRes = await page.request.get("/api/settings");
+      const checkJson = await checkRes.json();
+      if (!checkJson.configured) {
+        const initRes = await page.request.put("/api/settings", {
+          data: BASELINE_SETTINGS,
+        });
+        expect(initRes.ok()).toBe(true);
+        await page.reload();
+      }
+
+      // Configure General Deployment Settings
+      const envInput = page.getByLabel("Environment name");
+      await expect(envInput).toBeVisible();
+      await envInput.fill("prod-grain-cluster-alpha");
+      await envInput.blur();
+
+      // Configure Engine & Concurrency. There is no deployment-wide worker
+      // or CI job count here any more (grain/task-28): the counts belong to
+      // the teams, and what bounds this host is the sandbox budget.
+      await page.getByTestId("settings-nav-engine").click();
+      const pollInput = page.getByLabel("Poll interval");
+      await expect(pollInput).toBeVisible();
+      await pollInput.fill("45s");
+      await pollInput.blur();
+
+      // Configure Sandboxes & MicroVM Infrastructure: the default sandbox
+      // shape lives on Settings → Sandboxes (System → Sandboxes is the
+      // pool's health page).
+      await page.getByTestId("settings-nav-sandboxes").click();
+      const cpusInput = page.getByLabel("Sandbox vCPUs");
+      await expect(cpusInput).toBeVisible();
+      await cpusInput.fill("4");
+      await cpusInput.blur();
+
+      // Verify persistence across reload. The reload stays on the section
+      // it was taken on, so General is reached from the section nav.
       await page.reload();
+      await expect(
+        page.getByRole("heading", { name: "Settings", exact: true }),
+      ).toBeVisible();
+      await expect(page).toHaveURL(/\/settings\/sandboxes$/);
+      await expect(page.getByLabel("Sandbox vCPUs")).toHaveValue("4");
+      await page.getByTestId("settings-nav-general").click();
+      await expect(page.getByLabel("Environment name")).toHaveValue(
+        "prod-grain-cluster-alpha",
+      );
+    } finally {
+      await page.request.put("/api/settings", {
+        data: {
+          environmentName: initial.environmentName ?? "",
+          pollInterval: initial.pollInterval || "30s",
+        },
+      });
     }
-
-    // Configure General Deployment Settings
-    const envInput = page.getByLabel("Environment name");
-    await expect(envInput).toBeVisible();
-    await envInput.fill("prod-grain-cluster-alpha");
-    await envInput.blur();
-
-    // Configure Engine & Concurrency. There is no deployment-wide worker
-    // or CI job count here any more (grain/task-28): the counts belong to
-    // the teams, and what bounds this host is the sandbox budget.
-    await page.getByTestId("settings-nav-engine").click();
-    const pollInput = page.getByLabel("Poll interval");
-    await expect(pollInput).toBeVisible();
-    await pollInput.fill("45s");
-    await pollInput.blur();
-
-    // Configure Sandboxes & MicroVM Infrastructure: the default sandbox
-    // shape lives on Settings → Sandboxes (System → Sandboxes is the
-    // pool's health page).
-    await page.getByTestId("settings-nav-sandboxes").click();
-    const cpusInput = page.getByLabel("Sandbox vCPUs");
-    await expect(cpusInput).toBeVisible();
-    await cpusInput.fill("4");
-    await cpusInput.blur();
-
-    // Verify persistence across reload. The reload stays on the section
-    // it was taken on, so General is reached from the section nav.
-    await page.reload();
-    await expect(
-      page.getByRole("heading", { name: "Settings", exact: true }),
-    ).toBeVisible();
-    await expect(page).toHaveURL(/\/settings\/sandboxes$/);
-    await expect(page.getByLabel("Sandbox vCPUs")).toHaveValue("4");
-    await page.getByTestId("settings-nav-general").click();
-    await expect(page.getByLabel("Environment name")).toHaveValue(
-      "prod-grain-cluster-alpha",
-    );
   });
 
   test("2. Repository Onboarding, Workflows, and Team Management", async ({
