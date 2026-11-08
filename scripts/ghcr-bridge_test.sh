@@ -22,6 +22,7 @@ script="$here/ghcr-bridge.sh"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 fails=0
+passes=0
 
 expect() { # expect <name> <want-status> <want-output-substring> -- <args...>
   local name="$1" want="$2" sub="$3" got out
@@ -31,11 +32,12 @@ expect() { # expect <name> <want-status> <want-output-substring> -- <args...>
   got=$?
   set -e
   if [ "$got" != "$want" ] || [[ "$out" != *"$sub"* ]]; then
-    echo "FAIL: $name: exit $got (want $want), output:"
+    echo "FAIL $name: exit $got (want $want), output:"
     printf '%s\n' "$out" | sed 's/^/  /'
     fails=$((fails + 1))
   else
     echo "ok: $name"
+    passes=$((passes + 1))
   fi
 }
 
@@ -146,4 +148,4 @@ expect "a daemon stamped with another guest is refused" 1 "is stamped with sandb
 [ ! -s "$work/log" ] || { echo "FAIL: a refused main copied:"; cat "$work/log"; fails=$((fails + 1)); }
 
 [ "$fails" -eq 0 ] || { echo "$fails failure(s)"; exit 1; }
-echo PASS
+echo "$passes passed"
