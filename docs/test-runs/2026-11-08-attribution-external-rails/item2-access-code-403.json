@@ -1,0 +1,1 @@
+{"error":"you are signed in as alice@example.com through iap, and that sign-in decides your role here (Settings -\u003e Access): the access code does not change it, so it was not used. Ask an operator for a wider role, or use the code from the daemon's own host over loopback"}
