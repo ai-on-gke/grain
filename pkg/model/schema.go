@@ -609,7 +609,11 @@ import "strconv"
 // which now rewrites an `account` naming an unconfigured permission set to
 // `permission_set` (with a note) where 109 once kept it as written, a grant
 // every state-repository check refused (gcp_key_args_migration.go).
-const SchemaVersion = 127
+// 128 adds token accounting (tokenusage.go): `task_run_usage`, one row per
+// run that reported its provider usage; `usage_capacity`, the usage a
+// (connection, model) window had consumed when its provider refused it;
+// and `usage_setting`, the operator's budgets and concurrency mode.
+const SchemaVersion = 128
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -4286,6 +4290,13 @@ var Tables = []string{
 	hostdTokenTable,
 	hostEnrollmentCodeTable,
 	hostJoinRequestTable,
+
+	// Token accounting (tokenusage.go, schema 128).
+	taskRunUsageTable,
+	taskRunUsageFinishedIndex,
+	taskRunUsageTaskIndex,
+	usageCapacityTable,
+	usageSettingTable,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`secret_resolution_audit`" + ` (
   ` + "`id`" + `          INTEGER PRIMARY KEY AUTOINCREMENT,
