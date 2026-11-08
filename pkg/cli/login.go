@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/cli/skill"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -327,7 +328,9 @@ func cmdLogin(ctx context.Context, base *ui.HTTPClient, out *printer, sel select
 		}{*name, *entry})
 		return nil
 	}
-	fmt.Printf("signed in to %s as context %s (%s)\n", server, *name, entry.Auth)
+	// Never echo a password typed into the URL (http://user:pass@host)
+	// back to a terminal or a log, as `grain skill install` never writes it.
+	fmt.Printf("signed in to %s as context %s (%s)\n", skill.ScrubServerURL(server), *name, entry.Auth)
 	return nil
 }
 

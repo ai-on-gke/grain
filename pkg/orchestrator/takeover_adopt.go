@@ -117,6 +117,17 @@ func invalidf(format string, a ...any) error {
 	return fmt.Errorf("%w: %s", model.ErrPullRequestInvalid, fmt.Sprintf(format, a...))
 }
 
+// readPullRequestErr says why reading ref from GitHub failed. A 404 is
+// the caller naming a pull request that does not exist (or that this
+// deployment's credential cannot see) -- model.ErrPullRequestNotFound,
+// which the routes answer 404 -- not grain failing with a 500.
+func readPullRequestErr(ref model.PullRequestRef, err error) error {
+	if github.IsNotFound(err) {
+		return fmt.Errorf("%w: GitHub has no %s that this deployment's credential can see: %w", model.ErrPullRequestNotFound, ref, err)
+	}
+	return fmt.Errorf("reading %s: %w", ref, err)
+}
+
 // openPullRequestDetail reads ref, refusing one that is no longer open.
 func openPullRequestDetail(deps Deps, ref model.PullRequestRef) (github.PullRequestDetail, error) {
 	if deps.Client == nil {
@@ -124,7 +135,7 @@ func openPullRequestDetail(deps Deps, ref model.PullRequestRef) (github.PullRequ
 	}
 	detail, err := deps.Client.GetPullRequest(ref.Repo.Owner, ref.Repo.Name, ref.Number)
 	if err != nil {
-		return github.PullRequestDetail{}, fmt.Errorf("reading %s: %w", ref, err)
+		return github.PullRequestDetail{}, readPullRequestErr(ref, err)
 	}
 	if detail.Merged || !strings.EqualFold(detail.State, "open") {
 		return detail, conflictf("%s is no longer open", ref)
@@ -577,7 +588,7 @@ func PullRequestStatusOf(ctx context.Context, deps Deps, ref model.PullRequestRe
 	if deps.Client != nil {
 		d, err := deps.Client.GetPullRequest(ref.Repo.Owner, ref.Repo.Name, ref.Number)
 		if err != nil {
-			return out, fmt.Errorf("reading %s: %w", ref, err)
+			return out, readPullRequestErr(ref, err)
 		}
 		detail = d
 		out.Head, out.State = d.HeadSHA, strings.ToLower(d.State)
