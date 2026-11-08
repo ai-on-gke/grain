@@ -278,7 +278,7 @@ func TestMigration109RewritesGCPKeyAccountAndActivateEverywhere(t *testing.T) {
 	}
 }
 
-func TestMigration109KeepsAndNotesMissingPermissionSets(t *testing.T) {
+func TestMigration109RewritesAndNotesMissingPermissionSets(t *testing.T) {
 	// Not parallel: captures package-global log output.
 	store, db, ctx := openStore(t)
 
@@ -324,29 +324,36 @@ func TestMigration109KeepsAndNotesMissingPermissionSets(t *testing.T) {
 
 	migrateFrom108(t, ctx, db)
 
-	// Missing permission set keeps the grant intact everywhere.
-	if got := grantRows(t, ctx, db, "task_grant", "task_id")["t-missing"]; !slices.Equal(got, []string{missingGrant}) {
-		t.Errorf("task_grant = %v, want [%s] kept", got, missingGrant)
+	// A missing permission set is still named as permission_set, so the
+	// grant is one the state repository loads (CheckGCPKeyGrantArgs refuses
+	// "account" everywhere it validates).
+	wantGhost := `https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"ghost-set","primary":true}`
+	if got := grantRows(t, ctx, db, "task_grant", "task_id")["t-missing"]; !slices.Equal(got, []string{wantGhost}) {
+		t.Errorf("task_grant = %v, want [%s]", got, wantGhost)
 	}
-	if got := grantRows(t, ctx, db, "template_grant", "template_id")["tpl-missing"]; !slices.Equal(got, []string{missingGrant}) {
-		t.Errorf("template_grant = %v, want [%s] kept", got, missingGrant)
+	if got := grantRows(t, ctx, db, "template_grant", "template_id")["tpl-missing"]; !slices.Equal(got, []string{wantGhost}) {
+		t.Errorf("template_grant = %v, want [%s]", got, wantGhost)
 	}
-	if got := grantRows(t, ctx, db, "schedule_grant", "schedule_id")["sched-missing"]; !slices.Equal(got, []string{missingGrant}) {
-		t.Errorf("schedule_grant = %v, want [%s] kept", got, missingGrant)
+	if got := grantRows(t, ctx, db, "schedule_grant", "schedule_id")["sched-missing"]; !slices.Equal(got, []string{wantGhost}) {
+		t.Errorf("schedule_grant = %v, want [%s]", got, wantGhost)
 	}
+	wantNote := model.GCPKeyMissingSetMigrationNote(missingGrant, wantGhost, "ghost-set")
 
 	// Notes are left on the task, template, schedule, and migration log.
 	comments := taskCommentBodies(t, ctx, db, "t-missing")
-	if len(comments) != 1 || !strings.Contains(comments[0], "ghost-set") || !strings.Contains(comments[0], "permission_set") {
-		t.Errorf("task comments = %v, want 1 migration note naming ghost-set and permission_set", comments)
+	if len(comments) != 1 || !strings.HasSuffix(comments[0], ": "+wantNote) {
+		t.Errorf("task comments = %v, want 1 migration note %q", comments, wantNote)
+	}
+	if !strings.Contains(wantNote, `permission set "ghost-set" is not configured`) || !strings.Contains(wantNote, wantGhost) {
+		t.Errorf("note = %q, want it to name the rewritten grant and the missing set", wantNote)
 	}
 	tpl, err := store.GetTemplate(ctx, "tpl-missing")
-	if err != nil || tpl == nil || !strings.Contains(tpl.Body, "ghost-set") {
-		t.Errorf("template body = %+v (err=%v), want migration note naming ghost-set", tpl, err)
+	if err != nil || tpl == nil || !strings.HasSuffix(tpl.Body, "\n\n---\n\n"+wantNote) {
+		t.Errorf("template body = %+v (err=%v), want migration note %q", tpl, err, wantNote)
 	}
 	sched, err := store.GetSchedule(ctx, "sched-missing")
-	if err != nil || sched == nil || !strings.Contains(sched.Body, "ghost-set") {
-		t.Errorf("schedule body = %+v (err=%v), want migration note naming ghost-set", sched, err)
+	if err != nil || sched == nil || !strings.HasSuffix(sched.Body, "\n\n---\n\n"+wantNote) {
+		t.Errorf("schedule body = %+v (err=%v), want migration note %q", sched, err, wantNote)
 	}
 	logged := logBuf.String()
 	for _, wantSub := range []string{"task t-missing", "template tpl-missing", "schedule sched-missing", "ghost-set"} {
@@ -355,7 +362,7 @@ func TestMigration109KeepsAndNotesMissingPermissionSets(t *testing.T) {
 		}
 	}
 
-	// Re-running migration 109 is idempotent: notes are not duplicated.
+	// Re-running migration 109 (and 127) is idempotent: notes are not duplicated.
 	tplBodyBefore := tpl.Body
 	schedBodyBefore := sched.Body
 	migrateFrom108(t, ctx, db)
@@ -369,5 +376,109 @@ func TestMigration109KeepsAndNotesMissingPermissionSets(t *testing.T) {
 	schedAfter, _ := store.GetSchedule(ctx, "sched-missing")
 	if schedAfter.Body != schedBodyBefore {
 		t.Errorf("second migration duplicated schedule note: %q", schedAfter.Body)
+	}
+}
+
+// A store that ran migration 109 while it still kept an "account" naming an
+// unconfigured set as written exported a state repository that neither
+// `grain state check` nor `grain state prepare-upgrade` would load
+// (docs/test-runs/2026-11-07-capabilities-fencing-admission.md, F1).
+// Migration 127 rewrites those grants on every surface 109 covers.
+func TestMigration127RewritesGCPKeyGrantsMigration109Kept(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+
+	kept := `https://grain.dev/capabilities/gcp#gcp-key={"account":"ghost-set","activate":false}`
+	want := `https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"ghost-set","primary":true}`
+
+	cfg := testConfig()
+	cfg.MCPServers = gcpServerWithSets("sandbox-agent")
+	cfg.DefaultCapabilities = []string{kept}
+	cfg.CapabilityPolicy = model.CapabilityPolicy{
+		Catalogue: &model.CapabilityCatalogue{
+			Defaults: model.CatalogueDefaults{
+				Task: []string{kept},
+				Repos: map[string]model.CatalogueRepoDefaults{
+					"acme/widgets": {CI: []string{kept}},
+				},
+			},
+		},
+	}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: widgets, CICapabilities: []string{kept}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutTask(ctx, model.Task{ID: "t-kept", Title: "Kept"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutTemplate(ctx, model.Template{ID: "tpl-kept", Name: "Kept tpl", Title: "Kept", Body: "Template body."}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutSchedule(ctx, model.Schedule{ID: "sched-kept", Target: widgets, Title: "Kept sched", Body: "Schedule body."}); err != nil {
+		t.Fatal(err)
+	}
+	for _, ins := range []struct{ table, col, id string }{
+		{"task_grant", "task_id", "t-kept"},
+		{"template_grant", "template_id", "tpl-kept"},
+		{"schedule_grant", "schedule_id", "sched-kept"},
+	} {
+		if _, err := db.ExecContext(ctx, "INSERT INTO `"+ins.table+"` (`"+ins.col+"`, `capability`, `via`) VALUES (?, ?, 'label')", ins.id, kept); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 126 WHERE `id` = 1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.New(db).Init(ctx); err != nil {
+		t.Fatalf("migrating a version-126 store: %v", err)
+	}
+
+	for _, g := range []struct{ table, col, id string }{
+		{"task_grant", "task_id", "t-kept"},
+		{"template_grant", "template_id", "tpl-kept"},
+		{"schedule_grant", "schedule_id", "sched-kept"},
+	} {
+		if got := grantRows(t, ctx, db, g.table, g.col)[g.id]; !slices.Equal(got, []string{want}) {
+			t.Errorf("%s %s = %v, want [%s]", g.table, g.id, got, want)
+		}
+	}
+	gotCfg, err := store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(gotCfg.DefaultCapabilities, []string{want}) {
+		t.Errorf("default_capabilities = %v, want [%s]", gotCfg.DefaultCapabilities, want)
+	}
+	if cat := gotCfg.CapabilityPolicy.Catalogue; cat == nil ||
+		!slices.Equal(cat.Defaults.Task, []string{want}) ||
+		!slices.Equal(cat.Defaults.Repos["acme/widgets"].CI, []string{want}) {
+		t.Errorf("catalogue defaults = %+v, want task and acme/widgets CI [%s]", cat, want)
+	}
+	gotRepo, err := store.GetRepoConfig(ctx, widgets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(gotRepo.CICapabilities, []string{want}) {
+		t.Errorf("repo ci_capabilities = %v, want [%s]", gotRepo.CICapabilities, want)
+	}
+
+	wantNote := model.GCPKeyMissingSetMigrationNote(kept, want, "ghost-set")
+	if got := taskCommentBodies(t, ctx, db, "t-kept"); len(got) != 1 || !strings.HasSuffix(got[0], ": "+wantNote) {
+		t.Errorf("task comments = %v, want 1 migration note %q", got, wantNote)
+	}
+	if tpl, err := store.GetTemplate(ctx, "tpl-kept"); err != nil || tpl == nil || !strings.HasSuffix(tpl.Body, wantNote) {
+		t.Errorf("template body = %+v (err=%v), want migration note %q", tpl, err, wantNote)
+	}
+	if sched, err := store.GetSchedule(ctx, "sched-kept"); err != nil || sched == nil || !strings.HasSuffix(sched.Body, wantNote) {
+		t.Errorf("schedule body = %+v (err=%v), want migration note %q", sched, err, wantNote)
+	}
+
+	// Every rewritten grant is one the state repository's checks accept.
+	if err := model.CheckCapabilityGrantArgsOffline(want); err != nil {
+		t.Errorf("CheckCapabilityGrantArgsOffline(%s) = %v", want, err)
 	}
 }

@@ -623,6 +623,9 @@ func ResolveGrants(ctx context.Context, reg *CapabilityRegistry, cc CapabilityCo
 	granted := make(map[string]Grant, len(cc.Task.Grants))
 	var out []GrantResolution
 	for _, g := range cc.Task.Grants {
+		// An api reference resolves as the api:<scope> it stands for
+		// (CanonicalGrant, design/design/unified-grants.design.md §3).
+		g.Capability = StoredGrantSpelling(g.Capability)
 		// Repository access has no provider: the reference carries
 		// what one decided (IsRepoAccessGrant). It is CI-only, and a CI
 		// job's is honoured by the scope it widens rather than here.

@@ -186,6 +186,46 @@ describe("BoardsPage", () => {
     expect(onNewBoard).toHaveBeenCalled();
   });
 
+  // A failed /api/boards is not an empty store: "No boards yet." and its
+  // New board button sent the reader off to request a board that
+  // already existed, once the five-second banner had gone.
+  it("says the boards could not be loaded rather than that there are none", async () => {
+    const onRetry = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <BoardsPage
+        boards={[]}
+        onOpenBoard={() => {}}
+        onNewBoard={() => {}}
+        loadError="synthetic boards 500"
+        onRetry={onRetry}
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "The boards could not be loaded (synthetic boards 500).",
+    );
+    expect(screen.queryByText("No boards yet.")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalled();
+  });
+
+  // A poll that fails while the boards are already here leaves them up:
+  // the banner says what went wrong, and the list is still true.
+  it("keeps the boards it has when a later load fails", () => {
+    render(
+      <BoardsPage
+        boards={boards}
+        onOpenBoard={() => {}}
+        onNewBoard={() => {}}
+        loadError="synthetic boards 500"
+      />,
+    );
+
+    expect(screen.getByText("Waiting on me")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   // ...and says, in as many words, that a board is made by asking an
   // agent for one -- which is the part nobody would guess.
   it("says how a board gets made", () => {

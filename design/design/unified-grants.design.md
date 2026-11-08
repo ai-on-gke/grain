@@ -1,8 +1,11 @@
 # Unified grants: one grant model, one Grants picker
 
-Status: design, with slice 1 (UI only) landed alongside it (task 1060).
-As of 2026-11-07 slices 2–5 have not started (`model.Grant` is still
-`{Capability, Via, Folder}` and there is no `model.CanonicalGrant`), and
+Status: design, with slice 1 (UI only) landed alongside it (task 1060)
+and slice 2 (read both) landed from task 3304: `model.Grant` is
+`{Capability, With, Via, Folder}`, `model.CanonicalGrant` reads every
+spelling, `…/api` and the task-level `…/repo#target`/`#read`/`#write`
+are in-process servers, and the fidelity fixture is
+`pkg/model/canonical_grant_test.go`. Slices 3–5 have not started, and
 slice 6, the per-capability conversions of §4, is mostly done; §4's
 table says which, and the remaining slices and conversions are filed from
 [Task #3274](/tasks/3274). The overview of capabilities as a whole is
@@ -139,6 +142,14 @@ once with a fidelity test.**
   accepts `grants: [{capability, with}]` beside `capabilities`, `reads`
   and `writes`. A request that sends both for one kind is refused rather
   than merged.
+  *As built (task 3304):* readers compare in the spelling slice 2
+  stores (`model.StoredGrantSpelling`, CanonicalGrant then back), so a
+  legacy-only store gives byte-for-byte today's answers. `grants:` is
+  accepted on task create and edit (`CreateTaskRequest`,
+  `UpdateTaskRequest`); a list naming only repository access leaves
+  capabilities alone. §2.1.3's method grammar gained `:` for `…/api`.
+  The React grant helpers (`ui/src/apiGrants.js`) still read only the
+  `api:` spelling, which is all this slice ever writes.
 - **Slice 3 (write one).** Writers switch to references. This is the
   first change an older binary cannot read, so it lands in the release
   after slice 2 ships.

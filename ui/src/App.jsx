@@ -449,6 +449,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // changed them -- but they show *tasks*, so an open one is a task view
   // with the shared narrowing over it rather than a pane of its own.
   const [boards, setBoards] = useState([]);
+  // Why /api/boards last failed, null once it answers: the Boards page
+  // says so in place of "No boards yet." (BoardsPage.jsx).
+  const [boardsError, setBoardsError] = useState(null);
 
   const [openBoardId, setOpenBoardId] = useState(
     () => parsePath(window.location.pathname).boardId || null,
@@ -1225,7 +1228,19 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // handed a kind it has never heard of or a row that is not a board at
   // all, and none of that is worth a blank screen (boards.js).
   const refreshBoards = useCallback(async () => {
-    const next = normalizeBoards(await api("/api/boards"));
+    let raw;
+    try {
+      raw = await api("/api/boards");
+    } catch (err) {
+      setBoardsError(
+        isUnreachable(err) && !err?.explained
+          ? unreachableReason(err)
+          : String(err?.message || err),
+      );
+      throw err;
+    }
+    setBoardsError(null);
+    const next = normalizeBoards(raw);
     // Kept when unchanged: a dashboard is polled on every tick while it
     // is the view (the poll effect below), and a board arriving as a new
     // object every three seconds would re-render every panel on it
@@ -2362,6 +2377,11 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // TaskList's own way of saying "no bound on this side" (dropped at the
   // very head or the very tail of the list), which the API expects as an
   // absent field rather than a literal null.
+  // Reordering is POST /api/tasks/reorder (tasks:write): a role without
+  // it is not offered the list's or a kanban column's drag handles, as
+  // canMoveBoards withholds the boards' (docs/test-runs/
+  // 2026-11-07-rbac-roles-ui.md U1).
+  const canReorderTasks = canAccess(config, "tasks:write");
   const reorderTasks = useCallback(
     async (ids, afterId, beforeId) => {
       try {
@@ -3181,7 +3201,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
         selected={selected}
         onToggleSelect={toggleSelect}
         onSelectAll={setSelection}
-        onReorder={reorderTasks}
+        onReorder={canReorderTasks ? reorderTasks : undefined}
         onShownChange={setShownIds}
         onRefresh={refreshList}
         showError={showError}
@@ -3235,7 +3255,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
         selected={selected}
         onToggleSelect={toggleSelect}
         onSelectAll={setSelection}
-        onReorder={reorderTasks}
+        onReorder={canReorderTasks ? reorderTasks : undefined}
         onShownChange={setShownIds}
         countFloor={closedInView && closedFloor}
         footer={<ClosedTasksMore closed={closedTasks} active={closedInView} />}
@@ -4122,6 +4142,8 @@ function AppContent({ onReload = () => window.location.reload() }) {
                             }}
                             onNewBoard={openNewBoardTask}
                             onMoveBoard={canMoveBoards ? moveBoard : undefined}
+                            loadError={boardsError}
+                            onRetry={() => refreshBoards().catch(showError)}
                           />
                         ) : (
                           <div className="main-column">

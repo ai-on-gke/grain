@@ -651,7 +651,12 @@ export default function SettingsPage({
         break;
       case "git":
         body = (
-          <GitSection showError={showError} onSaved={onSaved} onSection={go} />
+          <GitSection
+            showError={showError}
+            dismissError={dismissError}
+            onSaved={onSaved}
+            onSection={go}
+          />
         );
         break;
       case "tasks":

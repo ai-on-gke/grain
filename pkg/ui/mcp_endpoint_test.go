@@ -370,7 +370,7 @@ func TestControllerMCPExternalTokenIgnoresActingTaskHeader(t *testing.T) {
 	enableExternalAgentAPI(t, client.Store)
 	seedAPITask(t, client, "30", "acme/widgets", "api:settings:read", "api:tasks:read")
 
-	humanCtx := ui.WithPrincipal(context.Background(), model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	humanCtx := ui.WithPrincipal(context.Background(), model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com", Source: model.SourceIAP})
 	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
 		Name:     "byo-harness",
 		ScopeSet: "grain/ci-read",
@@ -768,7 +768,7 @@ func TestControllerMCPGetTaskPreservesOwnerAttributionAndFiledVia(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	humanCtx := ui.WithPrincipal(context.Background(), model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	humanCtx := ui.WithPrincipal(context.Background(), model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com", Source: model.SourceIAP})
 	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
 		Name:     "alice-mcp",
 		ScopeSet: "grain/external-dev",

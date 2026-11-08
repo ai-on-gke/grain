@@ -68,6 +68,11 @@ type Client struct {
 	// repository gets today.
 	Lifecycles       Lifecycles
 	githubBranchesMu sync.Mutex
+	// consoleSessionEditMu keeps UpdateConsoleSession to one edit at a
+	// time, so an edit resolved against what a session holds now
+	// (adoptShippedDefaults, expectCapabilities) is written before any
+	// other edit of a session can land between that read and its write.
+	consoleSessionEditMu sync.Mutex
 	// modelDiscoveryMu keeps AdvertiseDiscoveredModels to one pass at a
 	// time, so a save's kick and the periodic pass never both write.
 	modelDiscoveryMu sync.Mutex
@@ -328,16 +333,39 @@ func decodeTaskPriority(raw json.RawMessage) (int, error) {
 
 // UnmarshalJSON reads Priority with decodeTaskPriority; every other field
 // decodes as it would without it.
+//
+// A grants: list ([{capability, with}], design/design/unified-grants.design.md
+// §3) is sorted into Capabilities, Reads, Writes and Repo/Base, the
+// fields that store each kind (decodeRequestGrants); a request that also
+// names one of those kinds the old way is refused.
 func (r *CreateTaskRequest) UnmarshalJSON(data []byte) error {
 	type Alias CreateTaskRequest
 	var aux struct {
 		Alias
 		RawPriority json.RawMessage `json:"priority,omitempty"`
+		RawGrants   json.RawMessage `json:"grants,omitempty"`
 	}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
 	*r = CreateTaskRequest(aux.Alias)
+	if present(aux.RawGrants) {
+		got, err := decodeRequestGrants(aux.RawGrants, model.GrantSpelling{
+			Capabilities: r.Capabilities != nil, Reads: len(r.Reads) > 0,
+			Writes: len(r.Writes) > 0, Target: strings.TrimSpace(r.Repo) != "",
+		})
+		if err != nil {
+			return err
+		}
+		if got.Capabilities != nil {
+			r.Capabilities = &got.Capabilities
+		}
+		r.Reads = append(r.Reads, repoStrings(got.Reads)...)
+		r.Writes = append(r.Writes, uiWriteTargets(got.Writes)...)
+		if got.Target != nil {
+			r.Repo, r.Base = got.Target.Repo.String(), got.Target.Base
+		}
+	}
 	if trimmed := strings.TrimSpace(string(aux.RawPriority)); trimmed != "" && trimmed != "null" {
 		n, err := decodeTaskPriority(aux.RawPriority)
 		if err != nil {
@@ -346,6 +374,81 @@ func (r *CreateTaskRequest) UnmarshalJSON(data []byte) error {
 		r.Priority = &n
 	}
 	return nil
+}
+
+// present reports whether a raw JSON field was sent with a value.
+func present(raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	return trimmed != "" && trimmed != "null"
+}
+
+// decodeRequestGrants reads a request's grants: list -- each entry a
+// grant string or a {capability, with} object -- into the fields slice 2
+// stores them in (model.SplitRequestGrants): repository access into
+// reads, writes and the task's repo, everything else into capabilities in
+// today's spelling. A plain string that is not a capability reference
+// (a bare in-process name, api:<scope>) is a capability as written.
+// Capabilities is non-nil when the list names any capability, or names
+// nothing at all -- an empty grants: list is exactly no capabilities, as
+// capabilities: [] is -- and nil when it names only repository access,
+// which leaves capabilities to whatever they would have been.
+func decodeRequestGrants(raw json.RawMessage, legacy model.GrantSpelling) (model.RequestGrants, error) {
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return model.RequestGrants{}, validationErrorf("grants must be a list")
+	}
+	grants := make([]model.Grant, 0, len(items))
+	for _, item := range items {
+		// Read exactly as a capabilities: entry is (model.CapabilityEntryNames):
+		// a string, or {capability, with} and nothing else.
+		names, err := model.CapabilityEntryNames(item)
+		if err != nil {
+			return model.RequestGrants{}, validationErrorf("grants: %v", err)
+		}
+		for _, s := range names {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			if !model.IsCapabilityRef(s) {
+				grants = append(grants, model.Grant{Capability: s})
+				continue
+			}
+			spec, err := model.CapabilityGrantSpec(s)
+			if err != nil {
+				return model.RequestGrants{}, validationErrorf("grants: %v", err)
+			}
+			g := model.Grant{Capability: spec.Capability}
+			if spec.With != nil {
+				g.With, _ = json.Marshal(spec.With)
+			}
+			grants = append(grants, g)
+		}
+	}
+	out, err := model.SplitRequestGrants(grants, legacy)
+	if err != nil {
+		return model.RequestGrants{}, validationErrorf("%v", err)
+	}
+	if len(items) == 0 {
+		out.Capabilities = []string{}
+	}
+	return out, nil
+}
+
+func repoStrings(repos []model.RepoRef) []string {
+	out := make([]string, len(repos))
+	for i, r := range repos {
+		out[i] = r.String()
+	}
+	return out
+}
+
+func uiWriteTargets(writes []model.WriteTarget) []WriteTarget {
+	out := make([]WriteTarget, len(writes))
+	for i, w := range writes {
+		out[i] = WriteTarget{Repo: w.Repo.String(), Base: w.Base}
+	}
+	return out
 }
 
 // decodeAttachments validates and base64-decodes uploads into the
@@ -514,6 +617,10 @@ func (c *Client) capabilityByID(id string) (Capability, bool) {
 	if grainci.IsGrant(id) {
 		return Capability{}, false
 	}
+	// An api reference is the api:<scope> it stands for (model.CanonicalGrant).
+	if stored := model.StoredGrantSpelling(id); stored != id {
+		return c.capabilityByID(stored)
+	}
 	if model.IsCapabilityRef(id) {
 		if model.CheckCapabilityGrantSyntax(id) != nil {
 			return Capability{}, false
@@ -526,7 +633,7 @@ func (c *Client) capabilityByID(id string) (Capability, bool) {
 		// repo#read and repo#write {repo} are CI-only repository access
 		// grants; only repo#write {refs, force} (git-push-any-ref) is a
 		// task/template grant.
-		if ref == model.RepoReadRef || model.IsRepoAccessGrant(id) ||
+		if ref == model.RepoReadRef || ref == model.RepoTargetRef || model.IsRepoAccessGrant(id) ||
 			(ref == model.RepoWriteRef && !model.IsGitPushAnyRefGrant(id)) {
 			return Capability{}, false
 		}
@@ -2943,6 +3050,11 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	var escalated []string
 	if proposedBy != nil {
 		child := model.Task{Target: target, Base: req.Base, Grants: grants, Writes: writes, Admission: askedAdmission, TemplateID: filedFrom}
+		// Judged with its bases spelled as the proposer's own write
+		// targets spell them wherever the two name the same default
+		// branch (model.AlignDefaultBases); the task is filed with the
+		// base the request gave it.
+		child = model.AlignDefaultBases(child, *proposedBy, c.proposalDefaultBranches())
 		autoMerge = autoMerge && proposedBy.AutoMerge && model.AutoSubmits(child, *proposedBy)
 		child.Reads = reads
 		// Read before the proposal's escalations are measured: a
@@ -4689,12 +4801,27 @@ func (r *UpdateTaskRequest) UnmarshalJSON(data []byte) error {
 		}
 		r.Capabilities = caps
 	}
-	if r.Capabilities == nil && len(aux.RawGrants) > 0 {
-		caps, err := parseCapRaw(aux.RawGrants)
+	if present(aux.RawGrants) {
+		got, err := decodeRequestGrants(aux.RawGrants, model.GrantSpelling{
+			Capabilities: r.Capabilities != nil, Reads: r.Reads != nil, Writes: r.Writes != nil,
+		})
 		if err != nil {
 			return err
 		}
-		r.Capabilities = caps
+		if got.Target != nil {
+			return validationErrorf("grants: %s: a task's repository is not edited", model.RepoTargetRef)
+		}
+		if got.Capabilities != nil {
+			r.Capabilities = &got.Capabilities
+		}
+		if got.Reads != nil {
+			reads := repoStrings(got.Reads)
+			r.Reads = &reads
+		}
+		if got.Writes != nil {
+			writes := uiWriteTargets(got.Writes)
+			r.Writes = &writes
+		}
 	}
 	if r.NetworkAccess == nil && aux.NetworkAccessSnake != nil {
 		r.NetworkAccess = aux.NetworkAccessSnake
@@ -5970,6 +6097,14 @@ func (c *Client) Approve(ctx context.Context, id string) error {
 	}
 	if err := c.catalogueApprovalRefusal(ctx, *task); err != nil {
 		return err
+	}
+	if by := c.requestActor(ctx).Actor; isExternalAgent(by) {
+		// The agent API gate asked this already (externalApprovalRail);
+		// asked again here so approve and run-now hold the same rail
+		// whichever route an external credential reaches them by.
+		if err := c.externalApprovalRefusal(ctx, by.ID, *task); err != nil {
+			return err
+		}
 	}
 	if err := c.Store.Approve(ctx, id, c.requestActor(ctx), c.now()); err != nil {
 		return err
@@ -7386,6 +7521,13 @@ func (c *Client) agentMayApprove(ctx context.Context, task model.Task) error {
 	if by.Kind != model.PrincipalAgent {
 		return nil
 	}
+	if isExternalAgent(by) {
+		// An external credential serves no task whose grants could bound
+		// the approval, so it is asked what POST /api/tasks/{id}/approve
+		// asks it: its own lineage and every person hold. The gate also
+		// asks it for tasks:admin (externalApprovalRail).
+		return c.externalApprovalRefusal(ctx, by.ID, task)
+	}
 	requester, err := c.Store.GetTask(ctx, by.ID)
 	if err != nil {
 		return err
@@ -7446,6 +7588,13 @@ func (c *Client) agentMayApprove(ctx context.Context, task model.Task) error {
 			"a person has to approve it before an agent may run it", task.ID, strings.Join(asked, ", "), by.ID)
 	}
 	return nil
+}
+
+// isExternalAgent says whether p is an external agent credential
+// ("external:<name>", model.SourceExternalToken) rather than a task's run.
+func isExternalAgent(p model.Principal) bool {
+	return p.Kind == model.PrincipalAgent &&
+		(p.Source == model.SourceExternalToken || strings.HasPrefix(strings.TrimSpace(p.ID), "external:"))
 }
 
 // agentEscalatedCapabilities is model.EscalatedCapabilities for an

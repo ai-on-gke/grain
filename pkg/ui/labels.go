@@ -298,6 +298,13 @@ type Config struct {
 	// filed with one as its branch is resolved to that pull request
 	// (forkhead.go). nil refuses such a task with a message saying so.
 	GitHubForkPullRequests ForkPullRequests
+	// GitHubDefaultBranches is that client asked which branch a
+	// repository's default is, so a proposal filed live with no base and
+	// a proposer filed with an explicit `base: main` read as landing on
+	// the one branch they do (model.AlignDefaultBases). nil, or a
+	// repository it cannot answer for, compares bases as written -- the
+	// proposal is filed for a person rather than queued.
+	GitHubDefaultBranches DefaultBranchReader
 	// GitHubCredentialAvailable answers through that client's own token source,
 	// including a deployment-wide posting credential when one is configured.
 	GitHubCredentialAvailable func(owner, repo string) bool

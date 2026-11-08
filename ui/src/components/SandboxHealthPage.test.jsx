@@ -18,6 +18,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import SandboxHealthPage, {
   CI_SANDBOXES_STORAGE_KEY,
   SandboxClusterFree,
+  SandboxOvercommitStatus,
   appendHistory,
   ciSandboxesSummary,
   runningFor,
@@ -31,6 +32,8 @@ import SandboxHealthPage, {
   StaleSandboxImageAlerts,
 } from "./SandboxHealthPage.jsx";
 import api from "../api.js";
+import { formatDateTime } from "../time.js";
+import { TimeZoneProvider } from "../TimeZoneContext.jsx";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
 
@@ -2091,6 +2094,41 @@ describe("SandboxHealthPage", () => {
     );
     expect(adjustments).toHaveTextContent(
       /memory 2\.00× → 1\.40× — kernel OOM kill seen on host/,
+    );
+  });
+});
+
+describe("SandboxOvercommitStatus", () => {
+  // An adjustment is history, often weeks old: the controller can hold a
+  // factor for as long as the host stays calm. It used to be printed as
+  // the browser's clock time alone ("9:20:00 AM"), which on another day
+  // read as earlier today, and in a zone other than the deployment's.
+  it("dates each adjustment, in the deployment's zone", () => {
+    render(
+      <TimeZoneProvider zone="Asia/Tokyo">
+        <SandboxOvercommitStatus
+          overcommit={{
+            mode: "auto",
+            cpuOvercommit: 2.75,
+            adjustments: [
+              {
+                at: "2026-10-24T09:20:00Z",
+                dimension: "cpu",
+                from: 2.5,
+                to: 2.75,
+                reason: "calm",
+              },
+            ],
+          }}
+        />
+      </TimeZoneProvider>,
+    );
+    const adjustments = screen.getByTestId("overcommit-adjustments");
+    const when = formatDateTime("2026-10-24T09:20:00Z", "Asia/Tokyo");
+    expect(when).toMatch(/2026/);
+    expect(adjustments).toHaveTextContent(`(${when})`);
+    expect(adjustments).not.toHaveTextContent(
+      `(${new Date("2026-10-24T09:20:00Z").toLocaleTimeString()})`,
     );
   });
 });

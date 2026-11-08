@@ -108,7 +108,7 @@ func ReviewTemplateRefusedNote(proposer, asked, fallback string, why error) stri
 // dangerous capability (db-write, self-repair), or a capability-server reference whose
 // method or arguments require a person (protocol.GrantByPerson).
 func IsDangerousGrant(name string) bool {
-	s := strings.TrimSpace(name)
+	s := strings.TrimSpace(StoredGrantSpelling(name))
 	if s == "db-write" || s == "self-repair" {
 		return true
 	}

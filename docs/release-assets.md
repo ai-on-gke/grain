@@ -25,8 +25,8 @@ release that holds its asset.
 | --- | --- | --- | --- |
 | `sha-<12 hex>` | the tarballs, their `.sha256` sidecars and `images.json` | never: assets are only ever added, never replaced | `release.yml`, every build of a release branch |
 | `channel-<branch>` (`/` as `-`: `channel-main`, `channel-candidate`, `channel-release-v3.1.1`) | `images.json` | forward only: onto a commit its current one is an ancestor of; `channel-candidate` follows the newest rc | `release.yml` on a branch push; the release train for `channel-candidate` |
-| `vX.Y.Z` | copies of its commit's `sha-<short>` tarballs and sidecars, and `images.json` naming itself | never: assets are only ever added | `promote.yml`, `promote-release.yml`, `publish-release.yml` (`release-assets.sh promote`) |
-| `vX.Y.Z-rc.N`, `vX.Y.Z-pending`, `vX.Y.Z-rc.N-discarded`, `-rejected`, `-retracted` | `images.json` | never | `release-train-assets.yml` on the train's tag pushes, and `promote-release.yml` |
+| `vX.Y.Z` | copies of its commit's `sha-<short>` tarballs and sidecars, `images.json` naming itself, and [the grain CLI](#the-grain-cli) | never: assets are only ever added | `promote.yml`, `promote-release.yml`, `publish-release.yml` (`release-assets.sh promote`) |
+| `vX.Y.Z-rc.N`, `vX.Y.Z-pending`, `vX.Y.Z-rc.N-discarded`, `-rejected`, `-retracted` | `images.json` (and on `vX.Y.Z-rc.N`, [the grain CLI](#the-grain-cli)) | never | `release-train-assets.yml` on the train's tag pushes, and `promote-release.yml` |
 
 - **There is no release named `latest`.** The latest channel is GitHub's own
   latest-release marker: promote creates or updates `vX.Y.Z` with
@@ -50,6 +50,27 @@ release that holds its asset.
 
 GitHub refuses an asset of 2 GiB or more; `release-assets.sh package`
 fails, naming the image, before anything is uploaded.
+
+### The grain CLI
+
+`vX.Y.Z` and `vX.Y.Z-rc.N` releases — the versions a daemon reports —
+also carry the `grain` CLI that the daemon's `GET /cli/install.sh`
+(`pkg/ui/cli_install.sh`) downloads:
+
+- `grain-linux-amd64.tar.gz`, `grain-linux-arm64.tar.gz`,
+  `grain-darwin-amd64.tar.gz`, `grain-darwin-arm64.tar.gz`, each holding one
+  file, `grain`, built by `scripts/build-cli.sh` from the release's tag and
+  stamped with the release (`pkg/version.Release`), as its daemon is;
+- `checksums.txt`, one `sha256sum` line (`<64 hex>  <archive>`) per archive,
+  naming exactly those four. The install script checks the archive it
+  downloads against it before extracting.
+
+`images.json` does not name them. `release-assets.sh cli-validate DIR`
+checks a directory holds exactly these; `release-assets.sh cli-publish
+<release> DIR` uploads the archives and then `checksums.txt` to a release
+that already exists. A release carrying `checksums.txt` is never written
+again; archives a failed run left without one are replaced; and a release
+missing any of the five afterwards fails the run.
 
 ### `images.json`, schema 2
 
@@ -147,6 +168,20 @@ commit the git tag `latest` names, with copies of that commit's
 `sha-<short>` assets and marked GitHub's latest release. A release promoted before release assets
 existed has no `sha-<short>` release; the automatic run warns and skips
 it, and asking for it by name fails.
+
+`promote.yml` and `publish-release.yml`, and `release-train-assets.yml`
+for an rc tag, also build the release's grain CLI in a `cli` job holding
+only `contents: read` (`scripts/build-cli.sh`, `RELEASE=<release>`) and
+hand it to a `cli-assets` job that runs `scripts/release-assets.sh
+cli-publish` once the release itself is published. `promote-release.yml`
+builds none: a release it approves gets its CLI from `promote.yml`'s next
+run, which publishes it for the release the git tag `latest` names. Both
+jobs are skipped once the release carries its `checksums.txt`;
+`promote.yml`'s automatic run skips a release that does not exist
+(`RELEASE_CLI_SKIP_UNRELEASED=true`), as `promote` does. Every
+`cli-assets` job queues in one concurrency group per release
+(`grain-cli-assets-<release>`), so no two runs upload the same release's
+CLI at once.
 
 The release train publishes with `scripts/release-assets.sh retag
 sha-<short> <version> <release>...` (an rc as `vX.Y.0-rc.N` and

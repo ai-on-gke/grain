@@ -173,7 +173,7 @@ These apply to the `kubernetes` and `kubernetes-granule` backends. Every field e
 
 ### 3.3 Models & sandboxes → Executors (removed)
 
-Removed with remote executors: `grain hostd` is grain's only host agent, and a remote one dials in with the daemon's `-hostd-token-file` token (a startup flag, §10), set up under Models → *Where each agent CLI runs*. `/settings/executors` and its old `/admin` and `/system` links open Models. Schema 87 dropped `executor_token`.
+Removed with remote executors: `grain host` is grain's only host agent, and a remote one dials in with the daemon's `-hostd-token-file` token (a startup flag, §10), set up under Models → *Where each agent CLI runs*. `/settings/executors` and its old `/admin` and `/system` links open Models. Schema 87 dropped `executor_token`.
 
 ### 3.4 Capabilities → Deployment credentials (`/settings/capabilities#credentials`)
 
@@ -496,7 +496,7 @@ This file is re-read per request and never exported (`pkg/staterepo/settings.go`
 - Caches: `-package-cache-dir` and its upstream mirror flags, `-actions-cache-dir`
 - Upgrade and power: §3.6
 - Backups: `-backup-interval`, `-backup-gcs-bucket`, `-backup-google-drive-folder`, `-backup-google-credentials-file`
-- Policy: `-policy` (`grain_policy.yml`; see [`docs/local-policy.md`](../../../docs/local-policy.md)), `-local-scripts`, `-local-scripts-env-file`
+- Policy: `-policy` (`grain_policy.yml`; see [`docs/local-policy.md`](../../../docs/local-policy.md)), `-local-scripts`
 - Deprecated or removed: `-max-mergers` and `-max-ci-jobs` are ignored. `-cli-image`, `-cli-image-file` and `-cli-container-engine` are ignored. `-tunnel-*` and `-relay-*` refuse to start.
 
 `-flag-names` and each flag's help text are the authoritative flag reference.

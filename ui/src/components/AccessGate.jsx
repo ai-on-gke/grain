@@ -27,6 +27,17 @@ import { useAccess } from "../AccessContext.jsx";
 // `config` overrides the AccessConfigProvider's, for a component already
 // handed one. `wrapperStyle` styles the wrapper a refused control is
 // drawn in -- a margin the button itself carried to place it in a row.
+// The wrapper then carries that margin instead of the button: a refused
+// button keeps none of its own, or it would count twice (SuiteOverlay's
+// "+ New template" sat 6px low and pushed the footer down 14px).
+//
+// The wrapper is the Stack's child now, not the control: a Stack zeroes
+// its own children's margins, so an `sx` margin on the control that did
+// nothing ungated suddenly applies inside the wrapper and pushes every
+// sibling below it down. Give a gated control no margin of its own. The
+// wrapper's child grows to fill it (style.css's .access-gate), so a row
+// that stretches its items -- a footer whose neighbour wrapped onto two
+// lines -- stretches a refused button as it would an allowed one.
 export default function AccessGate({
   scope,
   repo,
@@ -57,7 +68,11 @@ export default function AccessGate({
           ...wrapperStyle,
         }}
       >
-        {cloneElement(child, { disabled: true, title: undefined })}
+        {cloneElement(child, {
+          disabled: true,
+          title: undefined,
+          ...(wrapperStyle && { style: { ...child.props.style, margin: 0 } }),
+        })}
       </span>
     </Tooltip>
   );
