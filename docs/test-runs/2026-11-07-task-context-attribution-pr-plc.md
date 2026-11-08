@@ -165,3 +165,11 @@ Before the fixes **nothing worked** (F2–F5 below). After them:
 
 - `go test ./tests/hygiene/... ./pkg/ports/... ./pkg/cli/...` passes.
 - `cd grain-plc && go test -race ./...` passes. This PR touches `grain-plc/`, so `.github/workflows/plc-tests.yml` runs too.
+
+## CI repair (attempt 2)
+
+After the first push, this PR's `ui e2e` check was red. Three more failures showed up while fixing it:
+
+- **`ui e2e`, `console-resting-notes-walkthrough.spec.js:92`, `count: 3` instead of `2`.** This was a real orchestrator race, not a flake in the spec. The console-session reconciler only consulted `LiveRuns` to decide whether a session was mid-exchange. A run's row is finished before `ProcessResult` posts its answer (the window `InFlight.Busy` covers), so a cycle landing in that window parked the session with `_Waiting for you._` *above* the answer. The next park then could not reuse it. Repro: `npx playwright test e2e/console-resting-notes-walkthrough.spec.js --repeat-each=15 --workers=4` failed 3 of 39 runs. The logged comments showed the resting note written before `Scripted answer 1.`, with the same timestamp. **Fixed** in `pkg/orchestrator/consolesessions.go`, which now also checks `deps.Runs.Busy`. `TestConsoleSessionIsNotParkedWhileItsResultIsStillBeingProcessed` fails without the fix. The spec then passed 60/60.
+- **`installer`, `TestTheCLIWrapperTalksToTheDeploymentItInstalled`.** The job ran across 03:00 UTC, when the memory agent's system schedule fires (`systemScheduleTimeOfDay`), so the fresh deployment's task list held a scheduled task. **Fixed**: the check now lets tasks the deployment's own schedules filed through.
+- **`run host`, `TestDaemonRestartKeepsAWarmSessionSandboxOnlyUnderItsRecordedKeys`.** Same minute: a system-scheduled task took the test daemon's only worker slot (`MaxWorkers: 1`), and `warm-session` was never dispatched. This is a time-of-day flake. A rerun away from 03:00 passes. Hardening it is a follow-up.
