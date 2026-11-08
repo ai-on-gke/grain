@@ -35,6 +35,8 @@ test("saves a typed setting when the rail leaves Settings", async ({
   page,
 }) => {
   const name = `escape-${Date.now()}`;
+  // The demo server is the worker's (fixtures.js): an environment name
+  // left behind puts a chip on every later page's bar.
   const initial = await (await page.request.get("/api/settings")).json();
   try {
     await page.goto("/settings/general");
@@ -50,10 +52,6 @@ test("saves a typed setting when the rail leaves Settings", async ({
     await page.goto("/settings/general");
     await expect(page.getByLabel("Environment name")).toHaveValue(name);
   } finally {
-    // The demo server is the worker's (fixtures.js), so the name saved
-    // here would otherwise stay on every later page it serves: on a
-    // phone its chip takes 104px of the top bar from the wordmark
-    // (phone-tasks-stale.spec.js failed on it in the full suite).
     await page.request.put("/api/settings", {
       data: { environmentName: initial.environmentName ?? "" },
     });
