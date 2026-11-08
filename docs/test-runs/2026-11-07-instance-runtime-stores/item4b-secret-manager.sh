@@ -52,8 +52,8 @@ printf '%s' "$SECRET" | "$GRAIN" secrets -data-dir "$D" "${SMF[@]}" set deploy t
 SMF+=(-db-driver postgres -db-dsn "$URL")
 echo "with -db-driver postgres -db-dsn:"
 printf '%s' "$SECRET" | "$GRAIN" secrets -data-dir "$D" "${SMF[@]}" set deploy token; echo "set exit=$?"
-printf 'v1' | "$GRAIN" secrets -data-dir "$D" "${SMF[@]}" set multi a; printf 'v2' | "$GRAIN" secrets -data-dir "$D" "${SMF[@]}" set multi b
-printf 'v1-rotated' | "$GRAIN" secrets -data-dir "$D" "${SMF[@]}" set multi a
+printf 'one' | "$GRAIN" secrets -data-dir "$D" "${SMF[@]}" set multi a; printf 'two' | "$GRAIN" secrets -data-dir "$D" "${SMF[@]}" set multi b
+printf 'one-rotated' | "$GRAIN" secrets -data-dir "$D" "${SMF[@]}" set multi a
 "$GRAIN" secrets -data-dir "$D" "${SMF[@]}" list
 echo "secret_entries:"; psql_g $DB -c "SELECT secret_name||'/'||key||' -> '||sm_secret||' v'||coalesce(nullif(version,''),'1') FROM secret_entries ORDER BY 1" | sed 's/^/  /'
 echo "Secret Manager (values base64):"; smdump | sed 's/^/  /'
