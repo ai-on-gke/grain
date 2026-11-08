@@ -80,7 +80,6 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	mergeRules := fs.Bool("merge-rules", false, "seed acme/widgets' merge rules (the docs/declarations.md example) and two deploy/** changes the merge queue classified under them")
 	mechanicalPort := fs.Bool("mechanical-port", false, "seed a change merged onto main and the port grain cherry-picked to candidate itself, with no agent run")
 	qualification := fs.Bool("qualification", false, "seed a release candidate of -default-target-repo whose qualification run is waiting for approval")
-	legacyCapability := fs.Bool("legacy-capability", false, "register a made-up legacy capability with nothing to mint, as an edition would, so the Legacy capabilities pickers have a row (every legacy provider core shipped is retired)")
 	secretsStore := fs.Bool("secrets-store", false, "wire a real secrets store in the demo's throwaway directory, so secrets and release secrets can be set and removed")
 	humanReview := fs.Bool("human-review", false, "seed a change a review held for a person's decision (request_human_review), waiting for Submit or Release hold")
 	reviewQuestions := fs.Bool("review-questions", false, "seed a change whose review left questions for its owner, held on their decision, and send it back to the queue once they reply, as a daemon would")
@@ -218,7 +217,6 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 		MechanicalPort:         *mechanicalPort,
 		Qualification:          *qualification,
 		SecretsStore:           *secretsStore,
-		LegacyCapability:       *legacyCapability,
 		GitHubAPI:              *githubAPI,
 		UpgradeImage:           *upgradeImage,
 		UpgradeAllowedBranches: daemon.SplitBranchPatterns(*upgradeAllowedBranches),

@@ -37,7 +37,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/daemon"
@@ -146,13 +145,6 @@ type Options struct {
 	// Qualification is -qualification (demo_qualification.go): a release
 	// candidate whose qualification run waits for approval.
 	Qualification bool
-	// LegacyCapability is -legacy-capability: register LegacyCapabilityID,
-	// a made-up provider with nothing to mint, the way an edition
-	// contributes one (capability.RegisterProvider). Every legacy provider
-	// core shipped has been retired onto a capability server method, so
-	// without it the Legacy capabilities pickers -- still how an edition's
-	// providers are granted -- have no row to show or exercise.
-	LegacyCapability bool
 	// SecretsStore is -secrets-store (demo_qualification.go): a real
 	// secrets store in the demo's throwaway directory.
 	SecretsStore bool
@@ -275,14 +267,6 @@ const demoGitHubToken = "ghp_demo_secret_token_acme_widgets"
 // "grain demo: ...", ready for the command to print as it is.
 func Run(opts Options) error {
 	repo := opts.Repo
-	if opts.LegacyCapability {
-		defer capability.RegisterProvider(capability.Registration{
-			ID:          LegacyCapabilityID,
-			Name:        LegacyCapabilityName,
-			Description: "A made-up legacy capability this demo registers, as an edition would, with nothing to mint",
-			New:         func() model.CapabilityProvider { return &legacyCapability{} },
-		})()
-	}
 	cfg := ui.Config{
 		Actor:         ui.DefaultActor(daemon.ActorID(opts.Actor)),
 		DefaultTarget: &repo,
@@ -2950,27 +2934,4 @@ func processDemoGitHubWebhooks(ctx context.Context, store *model.Store, events o
 		GitHubEvents: events,
 	}
 	return runDemoReconcilers(ctx, deps, now, "github-events", "takeovers")
-}
-
-// LegacyCapabilityID and LegacyCapabilityName are -legacy-capability's
-// made-up provider (Options.LegacyCapability).
-const (
-	LegacyCapabilityID   = "example-legacy"
-	LegacyCapabilityName = "Example legacy capability"
-)
-
-// legacyCapability is -legacy-capability's provider: a grant with nothing
-// to mint or place.
-type legacyCapability struct {
-	model.BaseCapability
-}
-
-func (*legacyCapability) Spec() model.CapabilitySpec {
-	return model.CapabilitySpec{
-		Name:        LegacyCapabilityID,
-		Label:       LegacyCapabilityName,
-		Description: "A made-up legacy capability this demo registers, as an edition would, with nothing to mint",
-		Source:      model.GrantByLabel,
-		Provision:   model.ProvisionGrant,
-	}
 }
