@@ -233,6 +233,21 @@ if [[ "${KEEP_IMAGES}" -eq 1 ]]; then
 fi
 "${SCRIPT_DIR}/daemon-down.sh" "${daemon_down_args[@]}"
 
+# Delete any hosted GCE VM instances (`grain-vm-*`, labeled `grain-managed=true`)
+# attached to `<prefix>-subnet` so `terraform destroy` can release the VPC cleanly.
+mapfile -t hosted_vms < <(gcloud compute instances list \
+  --project="${PROJECT_ID}" \
+  --filter="name~'^grain-vm-' AND labels.grain-managed=true" \
+  --format="csv[no-heading](name,zone)" 2>/dev/null || true)
+for row in "${hosted_vms[@]}"; do
+  [[ -z "${row}" ]] && continue
+  hname="${row%%,*}"
+  hzone="${row##*,}"
+  hzone="${hzone##*/}"
+  log "Deleting hosted GCE VM ${hname} (${hzone})..."
+  gcloud compute instances delete "${hname}" --project="${PROJECT_ID}" --zone="${hzone}" --quiet || true
+done
+
 if [[ "${have_state}" -eq 1 ]]; then
   jq -n \
     --arg project_id "${PROJECT_ID}" \

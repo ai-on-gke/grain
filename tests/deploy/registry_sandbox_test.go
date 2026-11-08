@@ -200,9 +200,49 @@ func TestRegistrySandboxScriptFlagValidation(t *testing.T) {
 			args:   []string{"--project", "my-sandbox", "--admin", "alice@example.com", "--image", "us-docker.pkg.dev/my-sandbox/grain/grain-registry:tag;id"},
 		},
 		{
+			name:   "up rejects shell-expanding hosted-daemon-image ref",
+			script: "up.sh",
+			args:   []string{"--project", "my-sandbox", "--admin", "alice@example.com", "--hosted-daemon-image", "docker.io/grainai/grain:main;id"},
+		},
+		{
 			name:   "up rejects missing option value",
 			script: "up.sh",
 			args:   []string{"--project"},
+		},
+		{
+			name:   "instance-ctl rejects missing action",
+			script: "instance-ctl.sh",
+			args:   []string{"--project", "my-sandbox", "--entry", "alice-vm"},
+		},
+		{
+			name:   "instance-ctl rejects malformed project",
+			script: "instance-ctl.sh",
+			args:   []string{"create", "--project", "../bad", "--entry", "alice-vm", "--owner", "alice@example.com"},
+		},
+		{
+			name:   "instance-ctl rejects malformed entry",
+			script: "instance-ctl.sh",
+			args:   []string{"create", "--project", "my-sandbox", "--entry", "../bad", "--owner", "alice@example.com"},
+		},
+		{
+			name:   "instance-ctl rejects shell-expanding owner",
+			script: "instance-ctl.sh",
+			args:   []string{"create", "--project", "my-sandbox", "--entry", "alice-vm", "--owner", "alice$(id)@example.com"},
+		},
+		{
+			name:   "instance-ctl rejects disk-gb below minimum",
+			script: "instance-ctl.sh",
+			args:   []string{"create", "--project", "my-sandbox", "--entry", "alice-vm", "--owner", "alice@example.com", "--disk-gb", "10"},
+		},
+		{
+			name:   "instance-ctl rejects disk-gb above maximum",
+			script: "instance-ctl.sh",
+			args:   []string{"create", "--project", "my-sandbox", "--entry", "alice-vm", "--owner", "alice@example.com", "--disk-gb", "5000"},
+		},
+		{
+			name:   "instance-ctl rejects missing option value",
+			script: "instance-ctl.sh",
+			args:   []string{"status", "--project"},
 		},
 		{
 			name:   "configure-oauth rejects missing option value",

@@ -76,3 +76,13 @@ output "selfsigned_cert_pem" {
   description = "PEM of the self-signed wildcard certificate on the HTTPS Load Balancer (public certificate only; empty when tls_mode is managed). verify.sh trusts it instead of disabling TLS verification."
   value       = local.use_selfsigned_cert ? tls_self_signed_cert.wildcard[0].cert_pem : ""
 }
+
+output "sql_vm_name" {
+  description = "Name of the GCE VM running the shared PostgreSQL pool for hosted Grain instances."
+  value       = google_compute_instance.instance_sql.name
+}
+
+output "sql_private_ip" {
+  description = "Reserved private VPC IPv4 address of the shared PostgreSQL pool for hosted Grain instances."
+  value       = google_compute_address.instance_sql.address
+}

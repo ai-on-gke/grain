@@ -4,23 +4,41 @@ Disposable, reproducible test/demo environment for `grain-registry` in a GCP
 sandbox project (`deploy/test/registry-sandbox/`).
 
 > **Scope note:** This directory provisions a lightweight single-project
-> test/demo deployment for connecting external `grain` daemons (`connected`
-> entries over `-registry-connect` outbound WebSocket mux tunnels) and testing
-> catalog discovery + subdomain routing. It intentionally keeps all resources
-> minimal and self-contained so it does not pre-empt the production
-> multi-replica deployment layout.
+> test/demo deployment for both **hosted GCE VM instances (`kind = instance`)**
+> with nested virtualization (`/dev/kvm`) and **connected external `grain`
+> daemons (`kind = connected`)** over `-registry-connect` outbound WebSocket mux
+> tunnels, testing catalog discovery + subdomain routing. It intentionally keeps
+> all resources minimal and self-contained so it does not pre-empt the
+> production multi-replica deployment layout.
 
 ## Architecture
 
-- **Compute & Database (`instance.tf`, `files/startup.sh`)**: One private-IP
-  `e2-small` Debian 12 GCE VM (no external IP, outbound egress via Cloud NAT to
-  satisfy `constraints/compute.vmExternalIpAccess`) running:
+- **Registry Control Plane & Database (`instance.tf`, `files/startup.sh`)**: One
+  private-IP `e2-small` Debian 12 GCE VM (no external IP, outbound egress via
+  Cloud NAT to satisfy `constraints/compute.vmExternalIpAccess`) running:
   - `postgres:16-alpine` (pinned by digest) bound strictly to `127.0.0.1:5432` with persistent data
     on the VM boot disk (`/var/lib/grain-registry/pgdata`);
   - `grain-registry` built from `Dockerfile.registry` (`make image-registry`),
-    configured with `compute.provider: "none"` and `config_repos.provider: "none"`,
+    configured with `compute.provider: "gce"` (N2 and C4 shapes across
+    `us-central1-{a,b,c,f}`, nested virtualization enabled, user-configurable
+    boot disk sizing `20–4000` GiB) and `config_repos.provider: "none"`,
     listening on `:8080` (IAP-protected control plane + `<entry>.<instance_domain>`
-    tunnel router) and `:8081` (locked-down `PublicHandler`).
+    router) and `:8081` (locked-down `PublicHandler`).
+- **Shared Hosted-Instance PostgreSQL Pool (`sql.tf`, `files/sql-startup.sh`)**:
+  One private-IP `e2-small` Debian 12 GCE VM (`<prefix>-sql`) running
+  `postgres:16-alpine` on `5432/tcp` (firewall-restricted strictly to
+  `<prefix>-vm` and `grain-instance`-tagged VMs on `<prefix>-net`), serving as
+  `instance_sql.sql_instances` for per-instance database and credential
+  provisioning (`grain_<entry>`).
+- **Hosted GCE VM Instances (`files/hosted-vm-startup.sh`, `pkg/registry/providers/gcp`)**:
+  Disposable `grain-vm-<entry>` VMs provisioned on demand from the registry UI
+  or `grain registry create` with `enableNestedVirtualization: true` (`/dev/kvm`
+  exposed to `grain-daemon` for Granule microVM sandboxes):
+  - `n2-standard-2` / `c4-standard-2` (2 vCPUs, default 50 GiB `pd-balanced` / `hyperdisk-balanced`)
+  - `n2-standard-4` (default) / `c4-standard-4` (4 vCPUs, default 100 GiB)
+  - `n2-standard-8` / `c4-standard-8` (8 vCPUs, default 200 GiB)
+  - `n2-standard-16` / `c4-standard-16` (16 vCPUs, default 400 GiB)
+  - `n2-standard-64` (64 vCPUs, default 1,000 GiB `pd-balanced`)
 - **Signing Key (`kms.tf`)**: One Cloud KMS asymmetric signing key
   (`EC_SIGN_P256_SHA256`, `ASYMMETRIC_SIGN`) consumed by
   `pkg/registry/providers/gcp` to sign `X-Grain-Registry-Assertion` JWTs
@@ -130,9 +148,44 @@ keep the custom client. `down.sh` deletes the backend service; the OAuth
 client itself stays in the project until you delete it in the Console.
 `configure-oauth.sh --project <id> --show` prints which client is active.
 
-### 2. Connect a `grain` daemon
+### 2. Provision a hosted GCE VM (`kind = instance`) or connect a `grain` daemon
 
-**Option A — Provision a disposable test `grain daemon` VM inside the sandbox (`daemon-up.sh`):**
+**Hosted GCE VM (`kind = instance`, N2 / C4 with `/dev/kvm` nested virtualization):**
+
+From the browser UI (`https://<registry_host>/new?kind=instance`), pick an N2 or
+C4 shape (and optional custom boot disk size in GiB) and click **Create**, or
+use the CLI:
+
+```bash
+grain registry create my-dev-vm \
+  --registry-url "https://<registry_host>" \
+  --shape n2-standard-4 \
+  --disk-gb 150
+```
+
+When testing from a non-interactive service account (without a browser OAuth
+session), use `instance-ctl.sh` over IAP SSH:
+
+```bash
+./deploy/test/registry-sandbox/instance-ctl.sh create \
+  --project my-gcp-sandbox \
+  --entry my-dev-vm \
+  --owner alice@example.com \
+  --shape n2-standard-4 \
+  --disk-gb 150 \
+  --allow-verifier-sa
+
+./deploy/test/registry-sandbox/verify.sh \
+  --project my-gcp-sandbox \
+  --entry my-dev-vm
+
+./deploy/test/registry-sandbox/instance-ctl.sh delete \
+  --project my-gcp-sandbox \
+  --entry my-dev-vm \
+  --purge
+```
+
+**Connected external daemon (`kind = connected`) — Option A (`daemon-up.sh`):**
 
 ```bash
 ./deploy/test/registry-sandbox/daemon-up.sh \

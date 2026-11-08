@@ -330,6 +330,7 @@ type gceNetworkInterface struct {
 	Network       string            `json:"network,omitempty"`
 	Subnetwork    string            `json:"subnetwork,omitempty"`
 	NetworkIP     string            `json:"networkIP,omitempty"`
+	NicType       string            `json:"nicType,omitempty"`
 	AccessConfigs []gceAccessConfig `json:"accessConfigs,omitempty"`
 }
 
@@ -521,6 +522,9 @@ func (c *GCECompute) CreateInstance(ctx context.Context, spec registry.InstanceS
 		Network:       netName,
 		Subnetwork:    subnetName,
 		AccessConfigs: nil, // Hosted VMs never have external IPs.
+	}
+	if strings.HasPrefix(baseMT, "c4-") || strings.HasPrefix(baseMT, "c3-") {
+		netIface.NicType = "GVNIC"
 	}
 
 	var saList []gceServiceAccount

@@ -33,6 +33,7 @@ AR_LOCATION="${AR_LOCATION:-us}"
 AR_REPO="${AR_REPO:-grain}"
 IMAGE_TAG="${IMAGE_TAG:-}"
 REGISTRY_IMAGE="${REGISTRY_IMAGE:-}"
+HOSTED_DAEMON_IMAGE="${HOSTED_DAEMON_IMAGE:-docker.io/grainai/grain:main}"
 SKIP_IMAGE_BUILD=0
 TLS_MODE="${TLS_MODE:-hybrid}"
 WAIT_CERT=1
@@ -67,6 +68,7 @@ Options:
   --ar-repo <name>           Artifact Registry Docker repository name (default: grain)
   --image-tag <tag>          Image tag when building Dockerfile.registry (default: sandbox-<git-sha>)
   --image <ref>              Full pre-built image reference (skips image build unless omitted)
+  --hosted-daemon-image <ref> Container image run inside hosted GCE VMs (default: docker.io/grainai/grain:main)
   --skip-image-build         Skip building/pushing Dockerfile.registry (requires --image)
   --tls-mode <mode>          hybrid (default), managed, or self-signed
   --no-wait-cert             Do not wait for Google-managed SSL certificate ACTIVE status
@@ -146,6 +148,11 @@ while [[ $# -gt 0 ]]; do
     --image)
       require_arg "$#" "$1"
       REGISTRY_IMAGE="$2"
+      shift 2
+      ;;
+    --hosted-daemon-image)
+      require_arg "$#" "$1"
+      HOSTED_DAEMON_IMAGE="$2"
       shift 2
       ;;
     --skip-image-build)
@@ -287,6 +294,11 @@ if [[ -n "${REGISTRY_IMAGE}" ]] && ! [[ "${REGISTRY_IMAGE}" =~ ^[A-Za-z0-9][A-Za
   exit 2
 fi
 
+if [[ -z "${HOSTED_DAEMON_IMAGE}" ]] || ! [[ "${HOSTED_DAEMON_IMAGE}" =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ ]]; then
+  echo "up.sh: invalid --hosted-daemon-image '${HOSTED_DAEMON_IMAGE}'" >&2
+  exit 2
+fi
+
 if [[ -z "${STATE_BUCKET}" ]]; then
   STATE_BUCKET="${PROJECT_ID}-${NAME_PREFIX}-tfstate"
 fi
@@ -342,6 +354,8 @@ gcloud services enable \
   iam.googleapis.com \
   iamcredentials.googleapis.com \
   iap.googleapis.com \
+  secretmanager.googleapis.com \
+  sqladmin.googleapis.com \
   storage.googleapis.com \
   --project="${PROJECT_ID}" \
   --quiet
@@ -501,6 +515,13 @@ if [[ "${#ENTRIES[@]}" -gt 0 ]]; then
     entry_names+=("${ename}")
   done
   entries_json="$(printf '%s\n' "${entry_names[@]}" | jq -R . | jq -s 'unique')"
+else
+  existing_mcert_json="$(gcloud compute ssl-certificates describe "${NAME_PREFIX}-mcert" --global --project="${PROJECT_ID}" --format=json 2>/dev/null || true)"
+  if [[ -n "${existing_mcert_json}" ]]; then
+    entries_json="$(jq -c '
+      [(.managed.domains // [])[] | capture("^(?<name>[a-z][a-z0-9-]{1,30}[a-z0-9])\\.i-") | .name] | unique
+    ' <<<"${existing_mcert_json}" 2>/dev/null || echo '[]')"
+  fi
 fi
 
 log "Checking IAM permissions for ${active_acct} in ${PROJECT_ID}..."
@@ -563,6 +584,7 @@ jq -n \
   --arg zone "${ZONE}" \
   --arg name_prefix "${NAME_PREFIX}" \
   --arg registry_image "${REGISTRY_IMAGE}" \
+  --arg hosted_daemon_image "${HOSTED_DAEMON_IMAGE}" \
   --arg admin_email "${ADMIN_EMAIL}" \
   --arg tls_mode "${TLS_MODE}" \
   --arg verifier_sa_email "${verifier_sa_email}" \
@@ -576,6 +598,7 @@ jq -n \
     zone: $zone,
     name_prefix: $name_prefix,
     registry_image: $registry_image,
+    hosted_daemon_image: $hosted_daemon_image,
     admin_email: $admin_email,
     tls_mode: $tls_mode,
     create_vm_service_account: $create_vm_sa,
@@ -624,8 +647,29 @@ if gcloud kms keys describe "${key_name}" --keyring="${kr_name}" --location="${R
   fi
 fi
 
+prior_proxy_certs="$(gcloud compute target-https-proxies describe "${NAME_PREFIX}-https-proxy" --global --project="${PROJECT_ID}" --format='value(sslCertificates)' 2>/dev/null || true)"
+
 log "Applying Terraform configuration..."
 terraform -chdir="${SCRIPT_DIR}" apply -auto-approve -input=false -var-file="${tmp_tfvars}"
+
+if [[ -n "${prior_proxy_certs}" ]]; then
+  current_proxy_certs="$(gcloud compute target-https-proxies describe "${NAME_PREFIX}-https-proxy" --global --project="${PROJECT_ID}" --format=json 2>/dev/null || true)"
+  merged_cert_names="$(jq -r --arg prior "${prior_proxy_certs}" '
+    ((.sslCertificates // []) + ($prior | split(";") | map(select(length > 0))))
+    | map(split("/") | last)
+    | unique
+    | join(",")
+  ' <<<"${current_proxy_certs}" 2>/dev/null || true)"
+  current_cert_names="$(jq -r '(.sslCertificates // []) | map(split("/") | last) | unique | join(",")' <<<"${current_proxy_certs}" 2>/dev/null || true)"
+  if [[ -n "${merged_cert_names}" && "${merged_cert_names}" != "${current_cert_names}" ]]; then
+    log "Re-attaching out-of-band SSL certificates on ${NAME_PREFIX}-https-proxy (${merged_cert_names})..."
+    gcloud compute target-https-proxies update "${NAME_PREFIX}-https-proxy" \
+      --global \
+      --project="${PROJECT_ID}" \
+      --ssl-certificates="${merged_cert_names}" \
+      --quiet >/dev/null || true
+  fi
+fi
 
 registry_url="$(terraform -chdir="${SCRIPT_DIR}" output -raw registry_url)"
 registry_host="$(terraform -chdir="${SCRIPT_DIR}" output -raw registry_host)"
@@ -633,9 +677,30 @@ instance_domain="$(terraform -chdir="${SCRIPT_DIR}" output -raw instance_domain)
 jwks_url="$(terraform -chdir="${SCRIPT_DIR}" output -raw jwks_url)"
 lb_ip="$(terraform -chdir="${SCRIPT_DIR}" output -raw lb_ip)"
 vm_name="$(terraform -chdir="${SCRIPT_DIR}" output -raw vm_name)"
+sql_vm_name="$(terraform -chdir="${SCRIPT_DIR}" output -raw sql_vm_name)"
 managed_cert_name="$(terraform -chdir="${SCRIPT_DIR}" output -raw managed_cert_name)"
 
 if [[ "${has_iap_ssh}" -eq 1 ]]; then
+  log "Waiting for SQL pool VM ${sql_vm_name} startup & reconciling PostgreSQL over IAP SSH..."
+  sql_reconciled=0
+  for attempt in $(seq 1 36); do
+    if gcloud compute ssh "${sql_vm_name}" \
+      --project="${PROJECT_ID}" \
+      --zone="${ZONE}" \
+      --tunnel-through-iap \
+      --quiet \
+      --command="test -x /usr/local/sbin/grain-instance-sql-reconcile && sudo /usr/local/sbin/grain-instance-sql-reconcile" >/dev/null 2>&1; then
+      sql_reconciled=1
+      break
+    fi
+    log "  [attempt ${attempt}/36] SQL VM startup still in progress; retrying in 10s..."
+    sleep 10
+  done
+  if [[ "${sql_reconciled}" -ne 1 ]]; then
+    echo "up.sh: timed out waiting for ${sql_vm_name} to reconcile over IAP SSH" >&2
+    exit 1
+  fi
+
   log "Waiting for VM ${vm_name} startup & reconciling grain-registry over IAP SSH..."
   reconciled=0
   for attempt in $(seq 1 36); do

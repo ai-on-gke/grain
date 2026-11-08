@@ -327,27 +327,28 @@ if [[ -n "${ENTRY_NAME}" ]]; then
     exit 1
   fi
 else
-  mapfile -t targets < <(jq -r '.entries[] | select(.kind == "connected") | .name' <<<"${dir_json}")
+  mapfile -t targets < <(jq -r '.entries[] | select(.kind == "connected" or .kind == "instance") | .name' <<<"${dir_json}")
 fi
 
 if [[ "${#targets[@]}" -eq 0 ]]; then
-  echo "    NOTE: No connected entries registered yet."
+  echo "    NOTE: No entries registered yet."
   exit 0
 fi
 
 for name in "${targets[@]}"; do
   entry_obj="$(jq -c --arg n "${name}" '.entries[] | select(.name == $n)' <<<"${dir_json}")"
+  entry_kind="$(jq -r '.kind // "connected"' <<<"${entry_obj}")"
   status="$(jq -r '.status' <<<"${entry_obj}")"
   ver="$(jq -r '.grain_version // empty' <<<"${entry_obj}")"
   hb_age="$(jq -r '.heartbeat_age_seconds // "null"' <<<"${entry_obj}")"
   active_tasks="$(jq -r '.active_tasks' <<<"${entry_obj}")"
   awaiting_reply="$(jq -r '.awaiting_reply_tasks' <<<"${entry_obj}")"
   queue_depth="$(jq -r '.queue_depth' <<<"${entry_obj}")"
-  echo "    Entry '${name}': status=${status} version=${ver:-unknown} heartbeat_age_s=${hb_age} active_tasks=${active_tasks} awaiting_reply=${awaiting_reply} queue_depth=${queue_depth}"
+  echo "    Entry '${name}' (${entry_kind}): status=${status} version=${ver:-unknown} heartbeat_age_s=${hb_age} active_tasks=${active_tasks} awaiting_reply=${awaiting_reply} queue_depth=${queue_depth}"
 
   if [[ "${status}" != "online" ]]; then
     if [[ -z "${ENTRY_NAME}" && "${hb_age}" == "null" ]]; then
-      echo "    NOTE: Entry '${name}' is registered but awaiting its first daemon heartbeat; skipping route/tunnel check (pass --entry ${name} to require online)."
+      echo "    NOTE: Entry '${name}' (${entry_kind}) is not online yet; skipping route check (pass --entry ${name} to require online)."
       continue
     fi
     echo "verify.sh: expected entry '${name}' status=online, got '${status}'" >&2
@@ -368,7 +369,11 @@ for name in "${targets[@]}"; do
   jq . <<<"${route_json}"
 
   entry_host="${name}.${instance_domain}"
-  echo "==> [5/5] Routing HTTP request through https://${entry_host}/api/auth/whoami over outbound tunnel..."
+  transport_desc="outbound tunnel"
+  if [[ "${entry_kind}" == "instance" ]]; then
+    transport_desc="private VPC HTTP"
+  fi
+  echo "==> [5/5] Routing HTTP request through https://${entry_host}/api/auth/whoami over ${transport_desc}..."
   # When tls_mode=hybrid and <name> was not pre-listed in managed_entry_names,
   # *.instance_domain uses the self-signed wildcard fallback certificate, which
   # curl_tls_flags already trusts (pinned, not -k).

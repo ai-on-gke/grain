@@ -164,6 +164,9 @@ func TestGCEComputeNestedVirtualizationN2C4AndCustomDisk(t *testing.T) {
 			if nic0["subnetwork"] != "projects/test-proj/regions/us-central1/subnetworks/grain-reg-subnet" {
 				t.Fatalf("subnetwork = %v, want expanded subnetwork URL", nic0["subnetwork"])
 			}
+			if tc.shape.MachineType == "c4-standard-8" && nic0["nicType"] != "GVNIC" {
+				t.Fatalf("nicType = %v, want GVNIC for c4 machine family", nic0["nicType"])
+			}
 
 			meta, _ := raw["metadata"].(map[string]any)
 			items, _ := meta["items"].([]any)

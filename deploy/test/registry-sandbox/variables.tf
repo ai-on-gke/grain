@@ -34,6 +34,17 @@ variable "zone" {
   default     = "us-central1-a"
 }
 
+variable "compute_zones" {
+  description = "GCE zones within var.region eligible for hosted Grain VM placement (compute.zones)."
+  type        = list(string)
+  default     = ["us-central1-a", "us-central1-b", "us-central1-c", "us-central1-f"]
+
+  validation {
+    condition     = length(var.compute_zones) > 0 && alltrue([for z in var.compute_zones : can(regex("^[a-z][a-z0-9-]*[a-z0-9]$", trimspace(z)))])
+    error_message = "compute_zones must contain at least one valid GCE zone name."
+  }
+}
+
 variable "name_prefix" {
   description = "Short prefix for sandbox resources (3-12 lowercase alphanumeric/hyphen characters so sslip.io domains fit GCP's 63-char managed SSL certificate limit)."
   type        = string
@@ -140,6 +151,29 @@ variable "boot_disk_gb" {
   description = "Boot persistent disk size in GiB for the test registry VM."
   type        = number
   default     = 20
+}
+
+variable "sql_machine_type" {
+  description = "GCE machine type for the shared instance_sql PostgreSQL pool VM."
+  type        = string
+  default     = "e2-small"
+}
+
+variable "sql_boot_disk_gb" {
+  description = "Boot persistent disk size in GiB for the shared instance_sql PostgreSQL pool VM."
+  type        = number
+  default     = 50
+}
+
+variable "hosted_daemon_image" {
+  description = "Container image reference run by hosted GCE VMs (kind = instance) to serve grain daemon."
+  type        = string
+  default     = "docker.io/grainai/grain:main"
+
+  validation {
+    condition     = trimspace(var.hosted_daemon_image) != ""
+    error_message = "hosted_daemon_image must not be empty."
+  }
 }
 
 variable "create_vm_service_account" {
