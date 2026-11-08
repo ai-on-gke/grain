@@ -127,6 +127,28 @@ describe("processes", () => {
     );
   });
 
+  it("marks only grain's own standing schedules as system, not a workflow schedule's system template", () => {
+    const [wf, sys, declared] = buildProcessRows({
+      schedules: [
+        { ...schedules[3], system: true },
+        { id: "system:upgrade-check", title: "Upgrade check", system: true },
+        {
+          id: "repo:schedule:acme:widgets:odd",
+          title: "Declared odd",
+          system: true,
+          declaredIn: { repo: "acme/widgets", path: ".grain/schedules/o.yml" },
+        },
+      ],
+      templates: [],
+      suites: [],
+      suiteRuns: [],
+      triggers: [],
+    });
+    expect(wf).toMatchObject({ kind: "workflow", system: false });
+    expect(sys).toMatchObject({ kind: "schedule", system: true });
+    expect(declared).toMatchObject({ kind: "schedule", system: false });
+  });
+
   it("derives a template's last and next runs from the schedules that fire it", () => {
     const t = row("template:template-1");
     // The newest last run of the three, and the soonest next run of
