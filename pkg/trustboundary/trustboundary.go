@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v24"
+const Version = "trust-boundary/v25"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -81,6 +81,18 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v25 adds what the 2026-11-08 second security review of main (task 3584,
+// finding 1) found unclassified (capabilities-secrets):
+// pkg/model/canonical_grant.go, new in #927 (unified grants slice 2), which
+// maps …/api#<scope> references to and from api:<scope>[@repo] for
+// ParseAPIGrant (so APIGrantsOf and every agent-API authorization),
+// IsDangerousGrant, GrantsSubsetOf, EscalatedCapabilities,
+// CapabilityPolicy.Permits and the catalogue, and whose SplitRequestGrants
+// turns a request's grants: list into a task's Repo/Base, Reads and Writes
+// -- a one-line change there could make a dangerous scope read as safe to
+// all of them at once; and pkg/model/auto_submit.go (SelfApproved,
+// EscalatedCapabilities), the same shape and unclassified since before.
 //
 // v24 adds scripts/build-cli.sh to release-machinery (task 3597, filed by
 // task 3580): promote.yml, publish-release.yml and release-train-assets.yml
@@ -350,6 +362,19 @@ var Categories = []Category{
 			// (IsDangerousGrant, TemplateWithinTask, ReviewGrants).
 			"pkg/model/capability_ref.go", "pkg/model/capability_catalogue.go",
 			"pkg/model/template_grants.go",
+			// The …/api#<scope> reference <-> api:<scope>[@repo] mapping
+			// every grant comparison reads through (CanonicalGrant,
+			// LegacyGrantString, StoredGrantSpelling, CanonicalGrantKey)
+			// -- ParseAPIGrant, IsDangerousGrant, GrantsSubsetOf,
+			// CapabilityPolicy.Permits and the catalogue all ask it first
+			// -- and SplitRequestGrants, which turns a request's grants:
+			// list into a task's Repo/Base, Reads and Writes.
+			"pkg/model/canonical_grant.go",
+			// Which capabilities a proposal asked for beyond its
+			// proposer's (EscalatedCapabilities), the check that holds it
+			// for a person, and the self-approval bounds (SelfApproved,
+			// AutoSubmitLimit) on how far a proposal tree auto-submits.
+			"pkg/model/auto_submit.go",
 		},
 	},
 	{
