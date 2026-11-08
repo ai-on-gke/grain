@@ -348,9 +348,10 @@ test("switches between internal grain/config and external read-only IaC config r
         }),
       ).toBeEnabled();
 
-      // Mutable exception 3: /settings/credentials (CredentialsSection) keeps
+      // Mutable exception 3: /settings/capabilities' Deployment credentials
+      // card (CredentialsSection) keeps
       // repo-managed host/GCP inputs disabled while SecretsPanel remains interactive.
-      await page.goto(`${daemon.url}/settings/credentials`);
+      await page.goto(`${daemon.url}/settings/capabilities`);
       await expect(
         page.getByRole("textbox", { name: "GitHub host" }),
       ).toBeDisabled();
@@ -361,7 +362,7 @@ test("switches between internal grain/config and external read-only IaC config r
 
     // Verify storing an encrypted secret in CredentialsSection works while in External mode.
     await page.setViewportSize({ width: 1280, height: 800 });
-    await page.goto(`${daemon.url}/settings/credentials`);
+    await page.goto(`${daemon.url}/settings/capabilities`);
     await page
       .getByRole("textbox", { name: "Secret", exact: true })
       .fill("iac-mode-secret");

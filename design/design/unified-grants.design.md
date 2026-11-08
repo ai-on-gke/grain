@@ -212,6 +212,14 @@ This is the per-capability list, with what each one becomes. The
 providers still registered on `main` (`daemon.CapabilityProviders`) are
 the rows not marked **done**:
 
+**Status (task 2876):** every row that minted a credential is done. The
+`capability.RegisterProvider` seam and the Settings → Legacy capabilities
+tab are removed; the tab's GitHub host, GCP settings and secrets are the
+Deployment credentials card on Settings → Capabilities. The bare names
+remain one-release aliases (no promoted release contains every
+conversion yet), and the task forms' empty Legacy capabilities checklist
+is still to be removed.
+
 | In-process id | Becomes (proposed) | Kind of change |
 |---|---|---|
 | `gcp-key` | `https://grain.dev/capabilities/gcp#gcp-key` `{permission_set}` | **done** (task 2430): in-process `gcp-key` and `gcp-key:<name>` providers removed; schema migration 97 seeds `sandbox-agent` and `<name>` permission sets on `https://grain.dev/capabilities/gcp` from `grain_config` and `gcp_key` rows (keeping `/home/debian/.gcp-service-account-<name>.json` key placement) and rewrites stored grants across tasks, templates, schedules, default/CI capabilities, console sessions, catalogue, and policy (`gcp-key` and `gcp-key:<name>` remain one-release aliases; [gcp-key-permission-sets.md](../../docs/gcp-key-permission-sets.md)) |

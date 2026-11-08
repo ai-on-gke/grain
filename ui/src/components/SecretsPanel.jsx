@@ -36,19 +36,17 @@ import { serverPath } from "./CapabilityServersPanel.jsx";
 // that could only ever 404.
 //
 // grain/task-110: this was the whole Secrets tab, a flat list of every
-// secret in the store with a three-box form under it. Everything grain
-// itself resolves now sits with whatever uses it instead -- each backend's
-// credential on the Models & connections tab and each capability's own beside it on the
-// Capabilities tab (SecretField) -- because a name and a key with nothing
-// saying what wants them is not something an operator can act on.
+// secret in the store with a three-box form under it. Credentials with a
+// dedicated field sit with whatever uses them -- each backend's credential
+// under Settings -> Models and the registry token under Settings -> Registry.
 //
-// What is left is this: the remainder, on the foot of the Capabilities
-// tab. `claimed` names the secrets a control elsewhere on the pane
-// already owns, and they are filtered out here rather than shown twice.
-// The free-form form stays, so a credential this build has no field for
-// -- a minter renamed through gcpkey.Config.MinterCredential, anything a
-// future capability reads -- is still settable from the UI rather than
-// only from `grain secrets set` on the host.
+// What is left is this: the remainder, on the Deployment credentials card at
+// the foot of Settings -> Capabilities. `claimed` names the secrets a control
+// elsewhere in Settings already owns, and they are filtered out here rather
+// than shown twice. The free-form form stays, so credentials with no dedicated
+// field -- github-app, gcp-key-minter, release signing/push credentials, or
+// anything a custom capability reads -- remain visible, settable and deletable
+// from the UI rather than only from `grain secrets` on the host.
 //
 // grain/task-2263: GET /api/secrets says which capability servers use
 // each secret (capabilityServers) -- their $secret: references, and the
@@ -157,13 +155,15 @@ export default function SecretsPanel({ showError, claimed, onSecretsChanged }) {
     <Box id="other-secrets" sx={{ mt: 3 }}>
       <Typography variant="subtitle2">Other secrets</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-        Everything in this deployment&apos;s secrets store that nothing above
+        Everything in this deployment&apos;s secrets store that nothing else
         claims -- backend credentials are set on each connection under Settings
-        &rarr; Models, each capability&apos;s own beside it here, and each
-        capability server&apos;s own on its page under{" "}
-        <Link href="/settings/capabilities">Settings &rarr; Capabilities</Link>.
-        Names and keys only, never values: a secret can be set, replaced and
-        deleted from here, and never read back.
+        &rarr; Models, the registry token under Settings &rarr; Registry, and
+        each capability server&apos;s own on its page under{" "}
+        <Link href="/settings/capabilities#capability-servers">
+          Capability servers
+        </Link>{" "}
+        above. Names and keys only, never values: a secret can be set, replaced
+        and deleted from here, and never read back.
       </Typography>
       {!resp.enabled && (
         <Alert severity="info" sx={{ mb: 2 }}>

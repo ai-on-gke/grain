@@ -136,13 +136,16 @@ describe("SecretsPanel", () => {
     );
   });
 
-  it("says capability servers' own secrets live on Settings → Capabilities", async () => {
+  it("says capability servers' own secrets live under Capability servers above", async () => {
     api.mockResolvedValueOnce({ enabled: true, secrets: [] });
     render(<SecretsPanel showError={() => {}} />);
 
     expect(
-      await screen.findByRole("link", { name: "Settings → Capabilities" }),
-    ).toHaveAttribute("href", "/settings/capabilities");
+      await screen.findByRole("link", { name: "Capability servers" }),
+    ).toHaveAttribute("href", "/settings/capabilities#capability-servers");
+    expect(
+      screen.queryByText(/each capability's own beside it here/i),
+    ).not.toBeInTheDocument();
   });
 
   it("leaves repository release secrets on their repository page", async () => {

@@ -1997,10 +1997,14 @@ export default function CapabilityServersPanel({
           </Link>
         </Typography>
         <Alert severity="info" data-testid="capability-servers-vs-legacy">
-          This is grain&apos;s current capability system. The older capabilities
-          built into grain itself, granted by a bare name such as{" "}
-          <code>gcp-key</code>, and their credentials are on{" "}
-          <Link href="/settings/credentials">Legacy capabilities</Link>.
+          This is grain&apos;s capability system. The older capabilities built
+          into grain itself, granted by a bare name such as <code>gcp-key</code>
+          , have all been retired onto these servers&apos; methods; the GitHub
+          host, GCP settings and secrets they used are under{" "}
+          <Link href="/settings/capabilities#credentials">
+            Deployment credentials
+          </Link>
+          .
         </Alert>
       </Box>
       <Glossary />
