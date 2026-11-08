@@ -1844,4 +1844,88 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
       }
     }
   });
+
+  // 2026-11-08 walkthrough (task 3612): folders exist so two areas can
+  // each keep a board of one name, and the handles and slots for them
+  // carried one accessible name between them.
+  test("1c. Same-named boards in two folders get distinct Move handles and slots", async ({
+    page,
+  }) => {
+    const stamp = Date.now();
+    const shared = `WT Triage ${stamp}`;
+    for (const folder of [`Ops ${stamp}`, `Zeta ${stamp}`]) {
+      await seedOne(page, "/api/boards", {
+        name: shared,
+        folder,
+        kind: "list",
+        description: "",
+        query: "",
+      });
+    }
+    const mover = await seedOne(page, "/api/boards", {
+      name: `WT Mover ${stamp}`,
+      folder: "",
+      kind: "list",
+      description: "",
+      query: "",
+    });
+
+    await page.goto("/boards");
+    await expect(
+      page.getByRole("button", { name: `Move ${shared}, in Ops ${stamp}` }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: `Move ${shared}, in Zeta ${stamp}` }),
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: `Move ${mover.name}` }).click();
+    const slotLabels = await page
+      .getByRole("button", { name: /^Move here/ })
+      .evaluateAll((els) => els.map((e) => e.getAttribute("aria-label")));
+    expect(slotLabels).toContain(`Move here, above ${shared}, in Ops ${stamp}`);
+    expect(slotLabels).toContain(
+      `Move here, above ${shared}, in Zeta ${stamp}`,
+    );
+    expect(new Set(slotLabels).size).toBe(slotLabels.length);
+    await page.keyboard.press("Escape");
+  });
+
+  // 2026-11-08 walkthrough (task 3612): a dashboard scoped to a repo and
+  // then searched offered "Keep" on a throughput panel whose report the
+  // search does not change.
+  test("6f. A scoped dashboard offers Keep on its throughput panel only when the report would change", async ({
+    page,
+  }) => {
+    const dash = await seedOne(page, "/api/boards", {
+      name: `WT Scoped Dash ${Date.now()}`,
+      folder: "",
+      kind: "panels",
+      description: "",
+      query: "f=repo:any:acme/widgets",
+      panels: [
+        { kind: "list", title: "Queue", width: "half", orderKey: 1000 },
+        {
+          kind: "metrics",
+          title: "Throughput 7d",
+          range: "7d",
+          width: "half",
+          orderKey: 2000,
+        },
+      ],
+    });
+    const metricsKeep = page.getByRole("button", {
+      name: "Keep this narrowing on “Throughput 7d”",
+    });
+
+    await page.goto(`/boards/${dash.id}?f=repo:any:acme/widgets&q=retry`);
+    await expect(
+      page.getByRole("button", { name: "Keep this narrowing on “Queue”" }),
+    ).toBeVisible();
+    await expect(metricsKeep).toHaveCount(0);
+
+    await page.goto(
+      `/boards/${dash.id}?f=repo:any:acme/widgets&f=author:any:ada`,
+    );
+    await expect(metricsKeep).toBeVisible();
+  });
 });

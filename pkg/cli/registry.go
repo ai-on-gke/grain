@@ -45,7 +45,7 @@ const registryUsage = `usage: grain registry <subcommand> [args]
   route             [-registry-url <url>] [-repo <owner/name>] [-path <subpath>]
                     [-include-offline] [<repo> [<path>]]
   show              [-registry-url <url>] <name>
-  create            [-registry-url <url>] [-name <name>] [-shape <shape>] [-zone <zone>]
+  create            [-registry-url <url>] [-name <name>] [-shape <shape>] [-disk-gb <gb>] [-zone <zone>]
                     [-display-name <text>] [-purpose <text>] [-owner-group <group>]
                     [-listed] [-tags <t1,t2>] [-allow-ssh] [-ship-logs]
                     [-scope <repo[:prefix[:role]]>]... [<name>]
@@ -65,7 +65,7 @@ const registryUsage = `usage: grain registry <subcommand> [args]
   rotate-credential [-registry-url <url>] [-label <label>] [-cred-id <uuid>]
                     [-revoke-previous] [-overlap <duration>] [-token-file <path>] <name>
   upgrade           [-registry-url <url>] [-version <vX.Y.Z>] <name>
-  resize            [-registry-url <url>] -shape <shape> [-version <vX.Y.Z>] <name>
+  resize            [-registry-url <url>] [-shape <shape>] [-disk-gb <gb>] [-version <vX.Y.Z>] <name>
   delete            [-registry-url <url>] [-confirm <name>] [-yes] [-delete-disk] <name>
   restore           [-registry-url <url>] <name>
   stop              [-registry-url <url>] <name>

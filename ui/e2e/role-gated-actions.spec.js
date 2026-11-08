@@ -325,6 +325,76 @@ test("a viewer's access request Grant and Deny are disabled, and say why", async
   );
 });
 
+// 2026-11-08 saved-boards walkthrough (task 3612): BoardPage refused a
+// viewer "Edit board" and "New board", while the dashboard under it still
+// offered "Add panel" and "Keep", and the rail's Create options menu
+// offered "New board" -- each opening a form the viewer could not submit.
+test("a viewer's Create options New board and dashboard Add panel / Keep are refused in place", async ({
+  page,
+}) => {
+  const created = await page.request.post("/api/boards", {
+    data: {
+      name: `Viewer dash ${Date.now()}`,
+      folder: "",
+      kind: "panels",
+      description: "",
+      query: "f=repo:any:acme/widgets",
+      panels: [
+        { kind: "list", title: "Queue", width: "half", orderKey: 1000 },
+        { kind: "states", title: "States", width: "half", orderKey: 2000 },
+      ],
+    },
+  });
+  expect(created.ok()).toBe(true);
+  const dash = await created.json();
+  try {
+    const dashUrl = `/boards/${dash.id}?f=repo:any:acme/widgets&q=retry`;
+    const open = () =>
+      page.locator(".panel-header").first().getByRole("link", { name: "Open" });
+    const keepName = "Keep this narrowing on “Queue”";
+    await page.goto(dashUrl);
+    const allowedAdd = await page
+      .getByRole("button", { name: "Add panel" })
+      .boundingBox();
+    const allowedKeep = await page
+      .getByRole("button", { name: keepName })
+      .boundingBox();
+    const allowedOpen = await open().boundingBox();
+
+    await asViewer(page);
+    await page.goto(dashUrl);
+
+    await page.getByRole("button", { name: "Create options" }).click();
+    await expect(
+      page.getByRole("menuitem", { name: "New task" }),
+    ).toHaveAttribute("aria-disabled", "true");
+    await expect(
+      page.getByRole("menuitem", { name: "New board" }),
+    ).toHaveAttribute("aria-disabled", "true");
+    await page.keyboard.press("Escape");
+
+    const addBtn = page.getByRole("button", { name: "Add panel" });
+    const keepBtn = page.getByRole("button", { name: keepName });
+    await expect(addBtn).toBeDisabled();
+    await expect(keepBtn).toBeDisabled();
+    await expectGatesFilled(page, page.locator(".panel-board"));
+
+    const refusedAdd = await addBtn.boundingBox();
+    const refusedKeep = await keepBtn.boundingBox();
+    const refusedOpen = await open().boundingBox();
+    for (const [a, b] of [
+      [allowedAdd, refusedAdd],
+      [allowedKeep, refusedKeep],
+      [allowedOpen, refusedOpen],
+    ]) {
+      expect(Math.abs(a.x - b.x)).toBeLessThan(1.5);
+      expect(Math.abs(a.y - b.y)).toBeLessThan(1.5);
+    }
+  } finally {
+    await page.request.delete(`/api/boards/${dash.id}`).catch(() => {});
+  }
+});
+
 test.describe("on a phone", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
