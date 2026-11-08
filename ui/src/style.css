@@ -2391,7 +2391,23 @@ html[data-phone="true"] .gantt-body {
 .panel-keep:hover {
   text-decoration: underline;
 }
-.panel-keep + .panel-open {
+/* Refused for a role without tasks:write (AccessGate): the same word,
+   muted, in the same place -- the gate's wrapper takes the auto margin
+   over so neither it nor "Open" beside it moves. */
+.panel-keep:disabled {
+  color: var(--text-muted);
+  opacity: 0.55;
+  cursor: default;
+  text-decoration: none;
+}
+.panel-header > .access-gate {
+  margin-left: auto;
+}
+.panel-header > .access-gate > .panel-keep {
+  margin-left: 0;
+}
+.panel-keep + .panel-open,
+.panel-header > .access-gate + .panel-open {
   margin-left: 0;
 }
 /* ...and on a finger, the same link with a target under it. "Open" set
@@ -2431,6 +2447,14 @@ html[data-phone="true"] .gantt-body {
     padding: 0 0.9rem;
     margin-top: -0.6rem;
     margin-bottom: -0.6rem;
+  }
+  .panel-header > .access-gate {
+    margin-top: -0.6rem;
+    margin-bottom: -0.6rem;
+  }
+  .panel-header > .access-gate > .panel-keep {
+    margin-top: 0;
+    margin-bottom: 0;
   }
   .panel-open {
     margin-right: -0.9rem;
