@@ -222,6 +222,22 @@ test("a viewer is offered no reorder handles on the task list", async ({
   );
 });
 
+test("a viewer is offered no drag on a kanban board's cards", async ({
+  page,
+}) => {
+  const res = await page.request.get("/api/boards");
+  const board = (await res.json()).find((b) => b.name === "Board");
+  expect(board, "the demo's kanban board").toBeTruthy();
+  await page.goto(`/boards/${board.id}`);
+  await expect(
+    page.locator(".board-column [draggable=true]").first(),
+  ).toBeVisible();
+  await asViewer(page);
+  await page.reload();
+  await expect(page.locator(".board-card").first()).toBeVisible();
+  await expect(page.locator(".board-column [draggable=true]")).toHaveCount(0);
+});
+
 test("a viewer's refused task controls keep the pane's own spacing", async ({
   page,
 }) => {

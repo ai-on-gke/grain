@@ -128,8 +128,20 @@ async function bulkSelect(page) {
       .check({ timeout: 3000 })
       .catch(() => {});
   }
-  const bar = page.locator("[aria-label*='selected' i], .batch-actions").first();
-  return `checkboxes=${n} bar=${(await bar.count()) > 0}`;
+  // BatchActionsBar: the fixed Paper that says "N selected".
+  const bar = page.locator(".MuiPaper-root", { hasText: /^\d+ selected/ }).last();
+  if (!(await bar.count())) return `checkboxes=${n} no bar`;
+  const info = await bar.evaluate((el) => {
+    const out = { enabled: [], refused: [], overflow: el.scrollWidth - el.clientWidth };
+    for (const b of el.querySelectorAll("button")) {
+      const r = b.getBoundingClientRect();
+      if (r.width === 0) continue;
+      const name = (b.getAttribute("aria-label") || b.textContent).trim();
+      (b.disabled ? out.refused : out.enabled).push(name);
+    }
+    return out;
+  });
+  return `checkboxes=${n} bar: enabled [${info.enabled.join(", ")}] refused [${info.refused.join(", ")}] overflow ${info.overflow}px`;
 }
 
 function group(page, title) {
