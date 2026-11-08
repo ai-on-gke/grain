@@ -661,6 +661,7 @@ func TestCatalogueGCPKeyAccountOverrideAndUnnamedGrants(t *testing.T) {
 		t.Fatal("GCPKeySandboxAgentGrant bypassed disabled in_process.gcp-key:sandbox-agent")
 	}
 }
+
 // TestCatalogueRetiredGitHubSandboxBindsSandboxRepo: a catalogue saved
 // before github-sandbox was retired onto github#sandbox-repo (schema
 // migration 124) keeps its in_process.github-sandbox entry, which the
