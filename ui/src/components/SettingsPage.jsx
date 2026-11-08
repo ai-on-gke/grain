@@ -296,14 +296,18 @@ export default function SettingsPage({
     return () => observer.disconnect();
   }, [focusTarget, current, settings]);
 
-  const go = (next) => {
-    if (next === current) return true;
-    if (
-      (s.dirtyCards.length > 0 || leavingLosesEdits()) &&
-      !window.confirm(DISCARD_PROMPT)
-    )
-      return false;
-    onSection(next);
+  // go opens section next, asking first when an edit would be lost; a
+  // nextAnchor (a card or field id) is scrolled to once it is drawn.
+  const go = (next, nextAnchor = "") => {
+    if (next !== current) {
+      if (
+        (s.dirtyCards.length > 0 || leavingLosesEdits()) &&
+        !window.confirm(DISCARD_PROMPT)
+      )
+        return false;
+      onSection(next);
+    }
+    if (nextAnchor) setFocusTarget(nextAnchor);
     return true;
   };
 
@@ -631,7 +635,7 @@ export default function SettingsPage({
         body = <AuditSection />;
         break;
       case "cli":
-        body = <CLISection s={s} config={config} />;
+        body = <CLISection s={s} config={config} onSection={go} />;
         break;
       case "config-repo":
         body = (
@@ -670,7 +674,7 @@ export default function SettingsPage({
         );
         break;
       case "agents":
-        body = <AgentsSection s={s} />;
+        body = <AgentsSection s={s} onSection={go} />;
         break;
       case "memory":
         body = <MemorySection {...common} s={s} tasks={tasks} />;

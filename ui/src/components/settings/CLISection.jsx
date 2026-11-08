@@ -102,7 +102,7 @@ function Command({ text, testId, label }) {
 // the grain CLI on a workstation, sign it in to this deployment and hand
 // it to a coding agent. It saves nothing; the one setting it depends on,
 // externalAgentApi, is Settings → Agents'.
-export default function CLISection({ s, config }) {
+export default function CLISection({ s, config, onSection }) {
   const origin = window.location.origin;
   const cmds = cliCommands(origin);
   const release = config?.version?.unversioned
@@ -139,6 +139,19 @@ export default function CLISection({ s, config }) {
             <Link
               href="/settings/agents#external-agents"
               data-testid="cli-external-agent-api-link"
+              onClick={(evt) => {
+                if (
+                  !onSection ||
+                  evt.button !== 0 ||
+                  evt.metaKey ||
+                  evt.ctrlKey ||
+                  evt.shiftKey ||
+                  evt.altKey
+                )
+                  return;
+                evt.preventDefault();
+                onSection("agents", "external-agents");
+              }}
             >
               Settings &rarr; Agents
             </Link>{" "}
