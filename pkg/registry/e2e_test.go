@@ -2870,3 +2870,451 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 		}
 	})
 }
+
+// TestMultiReplicaDelegationCacheEviction verifies that revoking a consent grant or
+// disabling a delegating app on Replica A propagates over PostgreSQL
+// `LISTEN registry_delegations` (`pg_notify`) so Replica B immediately evicts its
+// cached `X-Grain-Registry-Assertion` tokens rather than serving them for up to 30s.
+func TestMultiReplicaDelegationCacheEviction(t *testing.T) {
+	pg := startE2EPostgresCluster(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	st, err := store.Open(ctx, pg.RegistryDSN, store.DefaultThresholds())
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	if err := st.SeedShapes(ctx, []store.ShapeRow{
+		{Name: "standard", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
+	}); err != nil {
+		t.Fatalf("SeedShapes: %v", err)
+	}
+
+	var lastAssertionMu sync.Mutex
+	var lastAssertion string
+	backendSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastAssertionMu.Lock()
+		lastAssertion = r.Header.Get(api.HeaderRegistryAssertion)
+		lastAssertionMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	t.Cleanup(backendSrv.Close)
+
+	popAssertion := func() string {
+		lastAssertionMu.Lock()
+		defer lastAssertionMu.Unlock()
+		got := lastAssertion
+		lastAssertion = ""
+		return got
+	}
+
+	const (
+		registryHost   = "registry.example.com"
+		instanceDomain = "instances.example.com"
+		iapAudience    = "/projects/123/global/backendServices/e2e-delegation"
+		adminEmail     = "admin@example.com"
+		aliceEmail     = "alice@example.com"
+		plannerSA      = "planner@test-proj.iam.gserviceaccount.com"
+		triageSA       = "triage@test-proj.iam.gserviceaccount.com"
+	)
+
+	if _, err := st.CreateEntry(ctx, store.CreateEntryInput{
+		Name:           "alice-vm",
+		Kind:           api.KindInstance,
+		OwnerEmail:     aliceEmail,
+		Shape:          "standard",
+		Zone:           "us-central1-a",
+		LifecycleState: api.StateRunning,
+		BackendURL:     backendSrv.URL,
+	}); err != nil {
+		t.Fatalf("CreateEntry alice-vm: %v", err)
+	}
+
+	groups := newE2EGroupResolver(nil)
+	localSigner, err := registry.NewLocalSigner(registry.SigningConfig{
+		Provider: "local",
+		KeyID:    "e2e-delegation-key-1",
+		JWTTTL:   60 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewLocalSigner: %v", err)
+	}
+	jwksDoc, err := localSigner.JWKS(ctx)
+	if err != nil {
+		t.Fatalf("localSigner.JWKS: %v", err)
+	}
+
+	authCfg := registry.AuthConfig{
+		Provider:          "iap",
+		IAPAudience:       iapAudience,
+		AllowedDomains:    []string{"example.com"},
+		Admins:            []string{"user:" + adminEmail},
+		ServicePrincipals: []string{"serviceAccount:ci-bot@test-proj.iam.gserviceaccount.com"},
+		DelegationPolicy:  "consent",
+	}
+	regCfg := registry.Config{
+		Host:           registryHost,
+		InstanceDomain: instanceDomain,
+		Listen:         "127.0.0.1:8080",
+		JWKSListen:     "127.0.0.1:8081",
+		Database:       registry.DatabaseConfig{URL: pg.RegistryDSN},
+		Auth:           authCfg,
+		Signing: registry.SigningConfig{
+			Provider: "local",
+			KeyID:    "e2e-delegation-key-1",
+			JWTTTL:   60 * time.Second,
+		},
+		Compute: registry.ComputeConfig{
+			Provider:     "gce",
+			Project:      "test-proj",
+			Region:       "us-central1",
+			Zones:        []string{"us-central1-a"},
+			DefaultShape: "standard",
+			Shapes: []registry.Shape{
+				{Name: "standard", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
+			},
+		},
+		Quotas: registry.QuotasConfig{
+			DefaultInstanceUnits: 2,
+			DefaultConnected:     3,
+		},
+		Tunnel: registry.TunnelConfig{
+			PeerListen:           "127.0.0.1:8082",
+			MaxConcurrentStreams: 256,
+			MaxBufferedBytes:     16 << 20,
+			ReconnectGrace:       2 * time.Second,
+			DrainTimeout:         500 * time.Millisecond,
+			ReplicaHeartbeat:     2 * time.Second,
+			ReplicaTTL:           10 * time.Second,
+		},
+		Catalog: registry.CatalogConfig{
+			CacheTTL: 50 * time.Millisecond,
+		},
+	}
+
+	type delegationReplica struct {
+		id      string
+		srv     *registry.Server
+		signer  *registry.CachingSigner
+		mainSrv *httptest.Server
+	}
+
+	// Each replica has its own ConsentDelegationPolicy and its own 30s CachingSigner
+	// wrapping the shared key, sharing state only through PostgreSQL.
+	startReplica := func(id string) *delegationReplica {
+		pol, err := registry.NewConsentDelegationPolicy(authCfg, st)
+		if err != nil {
+			t.Fatalf("NewConsentDelegationPolicy(%s): %v", id, err)
+		}
+		admitter, err := webauth.NewAdmitter(webauth.AdmissionConfig{
+			Verifier:                e2eIdentityVerifier{},
+			Groups:                  groups,
+			AllowedDomains:          authCfg.AllowedDomains,
+			Admins:                  authCfg.Admins,
+			ServicePrincipals:       authCfg.ServicePrincipals,
+			ServicePrincipalChecker: pol.IsServicePrincipalReader,
+		})
+		if err != nil {
+			t.Fatalf("NewAdmitter(%s): %v", id, err)
+		}
+		repSigner := registry.NewCachingSigner(localSigner, 30*time.Second)
+		srv, err := registry.NewServer(registry.ServerOptions{
+			Config:     regCfg,
+			Store:      st,
+			Admitter:   admitter,
+			Groups:     groups,
+			Delegation: pol,
+			Signer:     repSigner,
+			ReplicaID:  id,
+		})
+		if err != nil {
+			t.Fatalf("NewServer(%s): %v", id, err)
+		}
+		mainSrv := httptest.NewServer(srv.Handler())
+		srv.StartBackground(ctx)
+		t.Cleanup(func() {
+			srv.Router().Close()
+			mainSrv.CloseClientConnections()
+			mainSrv.Close()
+		})
+		return &delegationReplica{
+			id:      id,
+			srv:     srv,
+			signer:  repSigner,
+			mainSrv: mainSrv,
+		}
+	}
+
+	repA := startReplica("deleg-rep-a")
+	repB := startReplica("deleg-rep-b")
+
+	doJSON := func(rep *delegationReplica, method, host, path, callerEmail string, body any, extraHdr map[string]string) (int, []byte) {
+		t.Helper()
+		var bodyReader io.Reader
+		if body != nil {
+			b, err := json.Marshal(body)
+			if err != nil {
+				t.Fatalf("json.Marshal: %v", err)
+			}
+			bodyReader = bytes.NewReader(b)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, rep.mainSrv.URL+path, bodyReader)
+		if err != nil {
+			t.Fatalf("http.NewRequest: %v", err)
+		}
+		req.Host = host
+		if callerEmail != "" {
+			req.Header.Set("X-Test-Email", callerEmail)
+		}
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		req.Header.Set("Accept", "application/json")
+		for k, v := range extraHdr {
+			req.Header.Set(k, v)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s%s on %s: %v", method, host, path, rep.id, err)
+		}
+		defer resp.Body.Close()
+		respBytes, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, respBytes
+	}
+
+	entryHost := "alice-vm." + instanceDomain
+	entryAud := "https://" + entryHost
+	oboHdr := map[string]string{regserver.HeaderOnBehalfOf: aliceEmail}
+
+	// 1. Admin registers two delegating apps ("planner" and "triage") on Replica A,
+	// and Alice consents to both on Replica A.
+	for _, appSpec := range []api.CreateDelegatingAppRequest{
+		{Name: "planner", Principal: plannerSA, MaxAccess: "write"},
+		{Name: "triage", Principal: triageSA, MaxAccess: "read"},
+	} {
+		if code, body := doJSON(repA, http.MethodPost, registryHost, "/api/admin/delegating-apps", adminEmail, appSpec, nil); code != http.StatusCreated {
+			t.Fatalf("POST delegating-apps %s = %d %s", appSpec.Name, code, body)
+		}
+	}
+
+	code, body := doJSON(repA, http.MethodPost, registryHost, "/api/delegation-grants", aliceEmail,
+		api.CreateDelegationGrantRequest{App: "planner", Entries: []string{"alice-vm"}, Access: "read"}, nil)
+	if code != http.StatusOK {
+		t.Fatalf("POST grant planner = %d %s", code, body)
+	}
+	var plannerGrant1 api.DelegationGrant
+	if err := json.Unmarshal(body, &plannerGrant1); err != nil {
+		t.Fatalf("unmarshal plannerGrant1: %v", err)
+	}
+
+	code, body = doJSON(repA, http.MethodPost, registryHost, "/api/delegation-grants", aliceEmail,
+		api.CreateDelegationGrantRequest{App: "triage", Entries: []string{"alice-vm"}, Access: "read"}, nil)
+	if code != http.StatusOK {
+		t.Fatalf("POST grant triage = %d %s", code, body)
+	}
+	var triageGrant api.DelegationGrant
+	if err := json.Unmarshal(body, &triageGrant); err != nil {
+		t.Fatalf("unmarshal triageGrant: %v", err)
+	}
+
+	// 2. Warm Replica B's assertion cache via real delegated HTTP requests for both apps.
+	_ = popAssertion()
+	if code, body := doJSON(repB, http.MethodGet, entryHost, "/api/tasks", plannerSA, nil, oboHdr); code != http.StatusOK {
+		t.Fatalf("delegated GET via repB (planner #1) = %d %s", code, body)
+	}
+	plannerTokB1 := popAssertion()
+	if plannerTokB1 == "" {
+		t.Fatal("backend did not receive X-Grain-Registry-Assertion from repB")
+	}
+	claims1, err := registry.VerifyRegistryAssertion(plannerTokB1, jwksDoc, entryAud, time.Now().UTC())
+	if err != nil || claims1.Actor == nil || claims1.Actor.Grant != plannerGrant1.ID || claims1.Actor.App != "planner" {
+		t.Fatalf("unexpected delegated assertion claims: %+v (err=%v)", claims1, err)
+	}
+
+	// Repeat on Replica B -> must serve the cached assertion within the 30s window.
+	if code, body := doJSON(repB, http.MethodGet, entryHost, "/api/tasks", plannerSA, nil, oboHdr); code != http.StatusOK {
+		t.Fatalf("delegated GET via repB (planner #2) = %d %s", code, body)
+	}
+	if got := popAssertion(); got != plannerTokB1 {
+		t.Fatal("expected Replica B to serve its cached X-Grain-Registry-Assertion before revoke")
+	}
+
+	// Also warm triage on Replica B so we can verify selective eviction.
+	if code, body := doJSON(repB, http.MethodGet, entryHost, "/api/tasks", triageSA, nil, oboHdr); code != http.StatusOK {
+		t.Fatalf("delegated GET via repB (triage #1) = %d %s", code, body)
+	}
+	triageTokB1 := popAssertion()
+	if code, body := doJSON(repB, http.MethodGet, entryHost, "/api/tasks", triageSA, nil, oboHdr); code != http.StatusOK {
+		t.Fatalf("delegated GET via repB (triage #2) = %d %s", code, body)
+	}
+	if got := popAssertion(); got != triageTokB1 {
+		t.Fatal("expected Replica B to cache triage's assertion")
+	}
+
+	// 3. Revoke Alice's planner grant on Replica A (`DELETE /api/delegation-grants/<id>`).
+	// Replica B must refuse subsequent delegated requests AND evict plannerTokB1 from its
+	// CachingSigner via `LISTEN registry_delegations` (`grant:<id>`), while keeping triage cached.
+	if code, body := doJSON(repA, http.MethodDelete, registryHost, "/api/delegation-grants/"+plannerGrant1.ID, aliceEmail, nil, nil); code != http.StatusOK {
+		t.Fatalf("DELETE grant on repA = %d %s", code, body)
+	}
+
+	plannerClaims1 := registry.RegistryClaims{
+		Audience: entryAud,
+		Subject:  aliceEmail,
+		Email:    aliceEmail,
+		Kind:     "human",
+		Actor: &registry.DelegationActor{
+			Sub:    plannerSA,
+			Kind:   "service",
+			App:    "planner",
+			Grant:  plannerGrant1.ID,
+			Access: "read",
+		},
+	}
+	evictDeadline := time.Now().Add(3 * time.Second)
+	evictedOnRepB := false
+	for time.Now().Before(evictDeadline) {
+		tok, err := repB.signer.SignAssertion(ctx, plannerClaims1)
+		if err != nil {
+			t.Fatalf("repB.signer.SignAssertion: %v", err)
+		}
+		if tok != plannerTokB1 {
+			evictedOnRepB = true
+			break
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	if !evictedOnRepB {
+		t.Fatal("revoking grant on Replica A did not evict the cached assertion on Replica B via LISTEN registry_delegations")
+	}
+
+	_ = popAssertion()
+	code, body = doJSON(repB, http.MethodGet, entryHost, "/api/tasks", plannerSA, nil, oboHdr)
+	if code != http.StatusForbidden || !bytes.Contains(body, []byte(`"no_grant"`)) {
+		t.Fatalf("delegated GET via repB after revoke on repA = %d %s, want 403 no_grant", code, body)
+	}
+	if leaked := popAssertion(); leaked != "" {
+		t.Fatalf("revoked grant still forwarded assertion %q to backend", leaked)
+	}
+
+	// Triage's cached assertion on Replica B must remain untouched.
+	if code, body := doJSON(repB, http.MethodGet, entryHost, "/api/tasks", triageSA, nil, oboHdr); code != http.StatusOK {
+		t.Fatalf("delegated GET via repB (triage after planner revoke) = %d %s", code, body)
+	}
+	if got := popAssertion(); got != triageTokB1 {
+		t.Fatal("revoking planner grant unexpectedly evicted triage's cached assertion on Replica B")
+	}
+
+	// 4. Re-grant planner, warm BOTH Replica A and Replica B, then disable "planner" on Replica A.
+	// Both Replica A (locally in handleAdminSetDelegatingAppDisabled) and Replica B (via
+	// `LISTEN registry_delegations` `app:planner`) must evict their cached assertions, so
+	// re-enabling "planner" within the 30s window mints fresh assertions on both replicas.
+	code, body = doJSON(repA, http.MethodPost, registryHost, "/api/delegation-grants", aliceEmail,
+		api.CreateDelegationGrantRequest{App: "planner", Entries: []string{"alice-vm"}, Access: "read"}, nil)
+	if code != http.StatusOK {
+		t.Fatalf("POST re-grant planner = %d %s", code, body)
+	}
+	var plannerGrant2 api.DelegationGrant
+	if err := json.Unmarshal(body, &plannerGrant2); err != nil {
+		t.Fatalf("unmarshal plannerGrant2: %v", err)
+	}
+
+	if code, body := doJSON(repA, http.MethodGet, entryHost, "/api/tasks", plannerSA, nil, oboHdr); code != http.StatusOK {
+		t.Fatalf("delegated GET via repA (planner warm #1) = %d %s", code, body)
+	}
+	plannerTokA2 := popAssertion()
+	if code, body := doJSON(repA, http.MethodGet, entryHost, "/api/tasks", plannerSA, nil, oboHdr); code != http.StatusOK {
+		t.Fatalf("delegated GET via repA (planner warm #2) = %d %s", code, body)
+	}
+	if got := popAssertion(); got != plannerTokA2 {
+		t.Fatal("expected Replica A to cache planner's assertion before disable")
+	}
+
+	if code, body := doJSON(repB, http.MethodGet, entryHost, "/api/tasks", plannerSA, nil, oboHdr); code != http.StatusOK {
+		t.Fatalf("delegated GET via repB (planner warm #1) = %d %s", code, body)
+	}
+	plannerTokB2 := popAssertion()
+	if code, body := doJSON(repB, http.MethodGet, entryHost, "/api/tasks", plannerSA, nil, oboHdr); code != http.StatusOK {
+		t.Fatalf("delegated GET via repB (planner warm #2) = %d %s", code, body)
+	}
+	if got := popAssertion(); got != plannerTokB2 {
+		t.Fatal("expected Replica B to cache planner's assertion before disable")
+	}
+
+	// Admin disables "planner" on Replica A.
+	if code, body := doJSON(repA, http.MethodPatch, registryHost, "/api/admin/delegating-apps/planner", adminEmail,
+		api.SetDelegatingAppDisabledRequest{Disabled: true}, nil); code != http.StatusOK {
+		t.Fatalf("PATCH disable planner on repA = %d %s", code, body)
+	}
+
+	plannerClaims2 := registry.RegistryClaims{
+		Audience: entryAud,
+		Subject:  aliceEmail,
+		Email:    aliceEmail,
+		Kind:     "human",
+		Actor: &registry.DelegationActor{
+			Sub:    plannerSA,
+			Kind:   "service",
+			App:    "planner",
+			Grant:  plannerGrant2.ID,
+			Access: "read",
+		},
+	}
+
+	// Replica B refuses delegated requests while disabled and evicts plannerTokB2 via LISTEN.
+	code, body = doJSON(repB, http.MethodGet, entryHost, "/api/tasks", plannerSA, nil, oboHdr)
+	if code != http.StatusForbidden || !bytes.Contains(body, []byte(`"app_disabled"`)) {
+		t.Fatalf("delegated GET via repB while app disabled = %d %s, want 403 app_disabled", code, body)
+	}
+
+	appEvictDeadline := time.Now().Add(3 * time.Second)
+	appEvictedOnRepB := false
+	for time.Now().Before(appEvictDeadline) {
+		tok, err := repB.signer.SignAssertion(ctx, plannerClaims2)
+		if err != nil {
+			t.Fatalf("repB.signer.SignAssertion: %v", err)
+		}
+		if tok != plannerTokB2 {
+			// Clear the probe token so the HTTP re-enable check below exercises a clean cache.
+			repB.signer.InvalidateApp("planner")
+			appEvictedOnRepB = true
+			break
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	if !appEvictedOnRepB {
+		t.Fatal("disabling app on Replica A did not evict cached assertions on Replica B via LISTEN registry_delegations")
+	}
+
+	// Triage's cached assertion on Replica B is still intact after disabling planner.
+	if code, body := doJSON(repB, http.MethodGet, entryHost, "/api/tasks", triageSA, nil, oboHdr); code != http.StatusOK {
+		t.Fatalf("delegated GET via repB (triage after planner disable) = %d %s", code, body)
+	}
+	if got := popAssertion(); got != triageTokB1 {
+		t.Fatal("disabling planner unexpectedly evicted triage's cached assertion on Replica B")
+	}
+
+	// Re-enable "planner" on Replica A within the 30s cache window: Replica A (untouched by
+	// SignAssertion probes above) and Replica B must both mint fresh assertions rather than
+	// serving pre-disable cached tokens.
+	if code, body := doJSON(repA, http.MethodPatch, registryHost, "/api/admin/delegating-apps/planner", adminEmail,
+		api.SetDelegatingAppDisabledRequest{Disabled: false}, nil); code != http.StatusOK {
+		t.Fatalf("PATCH enable planner on repA = %d %s", code, body)
+	}
+	if code, body := doJSON(repA, http.MethodGet, entryHost, "/api/tasks", plannerSA, nil, oboHdr); code != http.StatusOK {
+		t.Fatalf("delegated GET via repA after re-enable = %d %s", code, body)
+	}
+	if got := popAssertion(); got == "" || got == plannerTokA2 {
+		t.Fatal("Replica A served pre-disable cached assertion after app disable + re-enable")
+	}
+	if code, body := doJSON(repB, http.MethodGet, entryHost, "/api/tasks", plannerSA, nil, oboHdr); code != http.StatusOK {
+		t.Fatalf("delegated GET via repB after re-enable = %d %s", code, body)
+	}
+	if got := popAssertion(); got == "" || got == plannerTokB2 {
+		t.Fatal("Replica B served pre-disable cached assertion after app disable + re-enable")
+	}
+}

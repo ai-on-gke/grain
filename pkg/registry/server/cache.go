@@ -612,6 +612,14 @@ func (c *TunnelCache) ActiveWaiters(name string) int {
 	return len(c.waiters[name])
 }
 
+// PostgresNotificationHandlers holds callbacks for PostgreSQL LISTEN/NOTIFY channels.
+type PostgresNotificationHandlers struct {
+	OnEntry      func(name string)
+	OnTunnel     func(name string)
+	OnCatalog    func(name string)
+	OnDelegation func(payload string)
+}
+
 // ListenPostgresNotifications connects to `dsn` and listens on `registry_entries` and
 // `registry_tunnels`, invoking `onEntry(payload)` and `onTunnel(payload)` when notifications arrive.
 // It automatically reconnects with backoff until `ctx` is canceled.
@@ -628,14 +636,43 @@ func ListenPostgresAllNotifications(
 	onTunnel func(name string),
 	onCatalog func(name string),
 ) {
+	ListenPostgresChannels(ctx, dsn, PostgresNotificationHandlers{
+		OnEntry:   onEntry,
+		OnTunnel:  onTunnel,
+		OnCatalog: onCatalog,
+	})
+}
+
+// ListenPostgresChannels connects to `dsn` and listens on `registry_entries`,
+// `registry_tunnels`, `registry_catalog`, and `registry_delegations`.
+// It automatically reconnects with backoff until `ctx` is canceled.
+func ListenPostgresChannels(ctx context.Context, dsn string, h PostgresNotificationHandlers) {
+	listenPostgresChannels(ctx, dsn, h, nil)
+}
+
+func listenPostgresChannels(
+	ctx context.Context,
+	dsn string,
+	h PostgresNotificationHandlers,
+	onFirstAttempt func(),
+) {
 	if strings.TrimSpace(dsn) == "" {
+		if onFirstAttempt != nil {
+			onFirstAttempt()
+		}
 		return
 	}
 	for {
 		if ctx.Err() != nil {
+			if onFirstAttempt != nil {
+				onFirstAttempt()
+			}
 			return
 		}
-		_ = runPostgresListenSession(ctx, dsn, onEntry, onTunnel, onCatalog)
+		_ = runPostgresListenSession(ctx, dsn, h, onFirstAttempt)
+		if onFirstAttempt != nil {
+			onFirstAttempt()
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -647,9 +684,8 @@ func ListenPostgresAllNotifications(
 func runPostgresListenSession(
 	ctx context.Context,
 	dsn string,
-	onEntry func(name string),
-	onTunnel func(name string),
-	onCatalog func(name string),
+	h PostgresNotificationHandlers,
+	onReady func(),
 ) error {
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -666,25 +702,36 @@ func runPostgresListenSession(
 	if _, err := conn.Exec(ctx, `LISTEN registry_catalog`); err != nil {
 		return err
 	}
+	if _, err := conn.Exec(ctx, `LISTEN registry_delegations`); err != nil {
+		return err
+	}
+	if onReady != nil {
+		onReady()
+	}
 
 	for {
 		notification, err := conn.WaitForNotification(ctx)
 		if err != nil {
 			return err
 		}
-		payload := strings.ToLower(strings.TrimSpace(notification.Payload))
+		rawPayload := strings.TrimSpace(notification.Payload)
+		payload := strings.ToLower(rawPayload)
 		switch notification.Channel {
 		case "registry_entries":
-			if onEntry != nil {
-				onEntry(payload)
+			if h.OnEntry != nil {
+				h.OnEntry(payload)
 			}
 		case "registry_tunnels":
-			if onTunnel != nil {
-				onTunnel(payload)
+			if h.OnTunnel != nil {
+				h.OnTunnel(payload)
 			}
 		case "registry_catalog":
-			if onCatalog != nil {
-				onCatalog(payload)
+			if h.OnCatalog != nil {
+				h.OnCatalog(payload)
+			}
+		case "registry_delegations":
+			if h.OnDelegation != nil {
+				h.OnDelegation(rawPayload)
 			}
 		}
 	}

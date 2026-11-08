@@ -308,13 +308,14 @@ Every normative requirement below is derived from the implementation on `main` a
    - `P` is an admitted human principal in `auth.allowed_domains` (`reason: "person_not_admitted"`);
    - a live, non-revoked, non-expired consent grant (`registry.delegation_grants`) exists for `(app, P)` covering `<entry>` (or `"*"`) (`reason: "no_grant"`, `"grant_expired"`, `"grant_revoked"`, or `"entry_out_of_reach"`).
 3. When authorized, the registry MUST mint `X-Grain-Registry-Assertion` with `sub = P`, `email = P`, `kind = "human"`, and top-level `act = {sub: <app_email>, kind: "service", app: <app_name>, grant: <grant_id>, access: <"read"|"write">}` (single level only; nested `act.act` is forbidden).
-4. Revoking a consent grant MUST immediately evict matching cached tokens via `CachingSigner.InvalidateGrant(grantID)`.
+4. Revoking or updating a consent grant MUST immediately evict matching cached tokens via `CachingSigner.InvalidateGrant(grantID)`, and disabling a delegating app MUST immediately evict matching cached tokens via `CachingSigner.InvalidateApp(appName)` — both on the serving replica and across peer replicas via PostgreSQL `LISTEN registry_delegations` (`grant:<id>` and `app:<name>`).
 5. Delegating apps MUST be managed only by registry admins, through `GET`/`POST /api/admin/delegating-apps` (list, create) and `PATCH /api/admin/delegating-apps/{name}` (`{"disabled": bool}`). Create MUST normalise `principal` through `store.NormalizeAppPrincipal` (a bare email gains `serviceAccount:`), MUST refuse a principal that is not a service account (`400`), and MUST answer a taken name or principal with `409`.
 6. Consent grants MUST be managed through `GET`/`POST /api/delegation-grants` and `DELETE /api/delegation-grants/{grant-id|app}`, which admit human callers only and act only for the signed-in person: a create whose `person` names anyone else MUST be refused with `403` (admins included), a list MUST return only the caller's grants, and a revoke of another person's grant MUST answer `404`, indistinguishable from a missing one. A grant MUST NOT exceed the app's `max_access` (`403 exceeds_max_access`) or `max_grant_ttl_seconds` (capped), and a disabled app MUST take no new grants (`403 app_disabled`).
 
 **Pinned by:**
 - `pkg/registry/registry_test.go`: `TestConsentDelegationPolicyAuthorizeOnBehalfOf`, `TestCachingSignerActClaimAndInvalidation`
 - `pkg/registry/delegation_admin_test.go`: `TestDelegatingAppAdminAPIAndPersonGrants`
+- `pkg/registry/e2e_test.go`: `TestMultiReplicaDelegationCacheEviction`
 - `pkg/registry/store/store_test.go`: `TestNormalizeAppPrincipal`
 - `tests/security/registry_delegation_test.go`: `TestRegistryConsentSurfaceRefusesOtherTenantsAndNonAdmins`, `TestRegistryDelegationGrantIsOnlyEverThePersonsOwn`
 - `pkg/ui/delegation_test.go`: `TestRegistryVerifierExposesPersonAndDelegatingApp`, `TestRegistryVerifierRefusesMalformedOrNestedAct`, `TestDelegatedRoleIsPersonIntersectDelegate`
@@ -549,7 +550,7 @@ Every normative requirement below is derived from the implementation on `main` a
 | `REG-19` | Zero-SQL hot path via `CatalogCache` and PostgreSQL `LISTEN/NOTIFY` | Implemented | `TestStep12CatalogCRUDGroupAuthHeartbeatsDirectoryAndRouteEndToEnd` |
 | `REG-20` | ES256 `X-Grain-Registry-Assertion` signing, `30s` `CachingSigner`, and `/.well-known/jwks.json` | Implemented | `TestKMSSignerSignAssertionAndJWKS`, `TestCachingSignerActClaimAndInvalidation` |
 | `REG-21` | Downstream `registry` `IdentityVerifier` on `grain` daemons | Implemented | `TestRegistryVerifierAcceptsValidAssertionAndRefusesTampered` |
-| `REG-22` | RFC 8693 `act` delegated identity (`X-Grain-On-Behalf-Of`) and per-person consent grants | Implemented | `TestConsentDelegationPolicyAuthorizeOnBehalfOf`, `TestRegistryVerifierExposesPersonAndDelegatingApp`, `TestDelegatedRoleIsPersonIntersectDelegate`, `TestDelegatingAppAdminAPIAndPersonGrants`, `TestRegistryDelegationGrantIsOnlyEverThePersonsOwn` |
+| `REG-22` | RFC 8693 `act` delegated identity (`X-Grain-On-Behalf-Of`) and per-person consent grants | Implemented | `TestConsentDelegationPolicyAuthorizeOnBehalfOf`, `TestRegistryVerifierExposesPersonAndDelegatingApp`, `TestDelegatedRoleIsPersonIntersectDelegate`, `TestDelegatingAppAdminAPIAndPersonGrants`, `TestMultiReplicaDelegationCacheEviction`, `TestRegistryDelegationGrantIsOnlyEverThePersonsOwn` |
 | `REG-23` | Reverse proxy routing and inbound `X-Grain-*` / `X-Goog-IAP-*` header stripping | Implemented | `TestRouterReverseProxyAndHeaderSanitization` |
 | `REG-24` | Outbound WebSocket tunnel (`grain.tunnel.v1` mux) and credential revocation termination | Implemented | `TestSessionHTTPAndWebSocketMultiplexing`, `TestStep13TunnelMuxCrossReplicaForwardingAndReconnect` |
 | `REG-25` | Cross-replica peer forwarding on `:8082` with `X-Grain-Tunnel-Hop: 1` loop prevention | Implemented | `TestStep13TunnelMuxCrossReplicaForwardingAndReconnect` |
