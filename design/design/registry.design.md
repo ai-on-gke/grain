@@ -252,7 +252,7 @@ Before the registry service skeleton lands, those self-contained HTTP authentica
 
 ### Extension points for wrapper distributions
 
-`pkg/registry` exposes `registry.Main()` plus package-level `Register*` hooks, following grain's `cli.Main()` (`cmd/grain/main.go`) and `Register*` pattern (`ui.RegisterIdentityVerifier`, `change.Register`, `capability.RegisterProvider`). A downstream wrapper distribution builds its own `cmd/grain-registry/main.go` that blank-imports its internal registrations and calls `registry.Main()`:
+`pkg/registry` exposes `registry.Main()` plus package-level `Register*` hooks, following grain's `cli.Main()` (`cmd/grain/main.go`) and `Register*` pattern (`ui.RegisterIdentityVerifier`, `change.Register`, `capability.Register`). A downstream wrapper distribution builds its own `cmd/grain-registry/main.go` that blank-imports its internal registrations and calls `registry.Main()`:
 
 - **`RegisterFrontIdentity(name, factory)`:** edge identity verification (`"iap"` built in; downstream proxies registered by name and selected via `identity.front`).
 - **`RegisterGroupResolver(name, factory)`:** resolves `group:<email>` membership for `owner_group`, `admins`, and `creators` (`"cloud-identity"` and `"static"` built in; corporate directory resolvers registered by wrapper editions).
