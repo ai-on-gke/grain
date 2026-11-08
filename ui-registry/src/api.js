@@ -278,3 +278,43 @@ export function disconnectTunnel(name) {
     method: "DELETE",
   });
 }
+
+export function fetchDelegatingApps() {
+  return requestJSON("/api/admin/delegating-apps");
+}
+
+export function createDelegatingApp(payload) {
+  return requestJSON("/api/admin/delegating-apps", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function setDelegatingAppDisabled(name, disabled) {
+  return requestJSON(`/api/admin/delegating-apps/${encodeURIComponent(name)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ disabled: Boolean(disabled) }),
+  });
+}
+
+export function fetchDelegationGrants(params = {}) {
+  const qs = new URLSearchParams();
+  if (params.includeRevoked) {
+    qs.set("include_revoked", "true");
+  }
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return requestJSON(`/api/delegation-grants${suffix}`);
+}
+
+export function createDelegationGrant(payload) {
+  return requestJSON("/api/delegation-grants", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function revokeDelegationGrant(ref) {
+  return requestJSON(`/api/delegation-grants/${encodeURIComponent(ref)}`, {
+    method: "DELETE",
+  });
+}

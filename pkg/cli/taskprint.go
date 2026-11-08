@@ -228,6 +228,21 @@ func taskBlock(t ui.Task) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s %s\n", t.ID, t.Title)
 	fmt.Fprintf(&b, "state:      %s\n", t.State)
+	// The sub-case the state is held in (Task.Reason): which ask an
+	// awaiting_reply task is parked on (#782), or the dispatch-down
+	// condition a queued one waits behind (#712). -json and the UI's
+	// chip already carried it; without this line the text reader saw a
+	// bare state and none of what it waits on.
+	if r := t.Reason; r != nil && r.Reason != "" {
+		line := r.Reason
+		if r.Resource != "" {
+			line += " (" + r.Resource + ")"
+		}
+		if r.Control != "" {
+			line += " [" + r.Control + "]"
+		}
+		fmt.Fprintf(&b, "reason:     %s\n", line)
+	}
 	if t.Owner != "" {
 		fmt.Fprintf(&b, "owner:      %s\n", t.Owner)
 	}

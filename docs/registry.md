@@ -146,7 +146,9 @@ anything but `GET`/`HEAD`. (The default `static` policy refuses every
 on-behalf-of request.)
 
 **Registering an app (registry admins).** Only callers in `auth.admins`
-can create, list, disable, or enable apps:
+can create, list, disable, or enable apps (from the Registry UI's
+**Admin → Delegating Apps** section at `/admin#delegating-apps`, the API,
+or the CLI):
 
 | Route | CLI | Effect |
 | --- | --- | --- |
@@ -171,7 +173,8 @@ grain registry delegating-apps create -principal planner@my-proj.iam.gserviceacc
 ```
 
 **Granting consent (any person).** These routes act only for the signed-in
-person; service accounts are refused.
+person (from the Registry UI's **Apps acting for you** screen at `/grants`,
+the API, or the CLI); service accounts are refused.
 
 | Route | CLI | Effect |
 | --- | --- | --- |
