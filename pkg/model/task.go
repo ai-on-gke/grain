@@ -37,6 +37,7 @@
 package model
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -594,8 +595,16 @@ type CredentialRef struct{ Name string }
 // Grant records how this task came by a capability, which a capability's
 // own definition cannot say: the same capability can be label-requested
 // on one task and folder-inherited on another.
+//
+// Capability is the grant string as stored. With is a unified grant's
+// normalized with: arguments (design/design/unified-grants.design.md §1),
+// set by CanonicalGrant and by requests that send grants:
+// [{capability, with}]; nil on every grant read from the store, where
+// arguments are still folded into Capability (slice 2 writes today's
+// spelling, CanonicalGrant reads either).
 type Grant struct {
 	Capability string
+	With       json.RawMessage
 	Via        GrantSource
 	Folder     *FolderRef
 }
@@ -613,7 +622,12 @@ type Grant struct {
 // A capability reference is covered only by a reference with the same
 // canonical capability and deep-equal normalized args
 // (UncoveredCapabilityRefs, design/spec/capabilities/capabilities.spec.md §2.3.4).
+//
+// Both sides are read through CanonicalGrant into the spelling slice 2
+// stores (StoredGrantSpelling), so an api reference and the api:<scope>
+// it stands for compare equal.
 func GrantsSubsetOf(grants, allowed []Grant) bool {
+	grants, allowed = storedGrantSpellings(grants), storedGrantSpellings(allowed)
 	have := make(map[string]bool, len(allowed))
 	for _, g := range allowed {
 		have[g.Capability] = true
@@ -690,7 +704,9 @@ func SameBranch(a, b Task) bool {
 // default is, so a child that names a branch explicitly where the
 // declaration left it empty reads as a different branch and inherits
 // nothing. That errs toward withholding, which is the direction a trust
-// gate should fail in.
+// gate should fail in. A caller that can resolve the default branch
+// passes the child through AlignDefaultBases first, so "" and an explicit
+// default-branch name read as the one branch they are.
 //
 // Where the child lands is only half of it. A child carries extra write
 // targets of its own (Task.Writes), and those are permission it hands
@@ -717,7 +733,7 @@ func LandsWhereGranted(child, parent Task) bool {
 	if child.Target == nil || IsConfigRepo(*child.Target) {
 		return false
 	}
-	for _, w := range WriteTargets(parent) {
+	for _, w := range WriteTargetsOfGrants(TaskRepoGrants(parent)) {
 		if w.Repo.Same(*child.Target) && w.Base == child.Base {
 			return true
 		}
@@ -729,10 +745,14 @@ func LandsWhereGranted(child, parent Task) bool {
 // already among parent's WriteTargets, repo and branch alike -- the
 // write targets a proposal asked for that the task proposing it was
 // never given. Empty when there are none.
+//
+// Both sides are read as unified grants (TaskRepoGrants,
+// design/design/unified-grants.design.md §2): parent's #target and
+// #write grants against child's own #write grants.
 func UngrantedWrites(child, parent Task) []WriteTarget {
-	granted := WriteTargets(parent)
+	granted := WriteTargetsOfGrants(TaskRepoGrants(parent))
 	var out []WriteTarget
-	for _, w := range child.Writes {
+	for _, w := range childWriteGrants(child) {
 		found := false
 		for _, g := range granted {
 			if g.Repo.Same(w.Repo) && g.Base == w.Base {
@@ -745,6 +765,97 @@ func UngrantedWrites(child, parent Task) []WriteTarget {
 		}
 	}
 	return out
+}
+
+// AlignDefaultBases is child with every base it names -- its own Base and
+// each of its Writes entries' -- respelled the way parent's WriteTargets
+// entry for the same repository spells it, wherever the two differ only
+// in that one of them is "" and the other names that repository's
+// default branch. Every other base is left exactly as written.
+//
+// LandsWhereGranted, UngrantedWrites and SameBranch compare bases as
+// written, with "" left unresolved, because nothing in this package can
+// ask a remote which branch its default is. That errs toward withholding,
+// and it withheld the commonest proposal there is: a run whose task was
+// filed with an explicit `base: main` calls propose_task without naming a
+// base, which files the proposal with Base "" -- the default branch,
+// which is `main` -- and `"main" == ""` is false, so the proposal was
+// never auto-approved however its parent was configured (found by task
+// 3411's live walk). defaultBranch is the caller's answer to the question
+// this package cannot ask: the repository's default branch, or "" when it
+// cannot say, in which case the base is left as written and the gate
+// still withholds. A nil defaultBranch changes nothing.
+//
+// It never changes where child lands: a respelled base names the branch
+// the original did. Callers hand the result to the permission checks and
+// file the child as written, so a proposal that named no base keeps
+// meaning "the repository's default branch, whatever that is when it
+// runs" -- proposedTarget's reason for never copying a parent's own Base
+// onto the proposals it makes, since that base may be a branch that is
+// gone by the time anybody approves them.
+func AlignDefaultBases(child, parent Task, defaultBranch func(RepoRef) string) Task {
+	if defaultBranch == nil {
+		return child
+	}
+	granted := WriteTargets(parent)
+	if len(granted) == 0 {
+		return child
+	}
+	align := func(repo RepoRef, base string) string {
+		var other []string
+		for _, g := range granted {
+			if !g.Repo.Same(repo) {
+				continue
+			}
+			if g.Base == base {
+				return base
+			}
+			if (g.Base == "") != (base == "") {
+				other = append(other, g.Base)
+			}
+		}
+		if len(other) == 0 {
+			return base
+		}
+		def := strings.TrimSpace(defaultBranch(repo))
+		if def == "" {
+			return base
+		}
+		for _, g := range other {
+			// Exactly one of g and base is "", so whichever is not has
+			// to be the default branch for the two to be one branch.
+			if g == def || base == def {
+				return g
+			}
+		}
+		return base
+	}
+	if child.Target != nil {
+		child.Base = align(*child.Target, child.Base)
+	}
+	if len(child.Writes) > 0 {
+		writes := make([]WriteTarget, len(child.Writes))
+		for i, w := range child.Writes {
+			writes[i] = WriteTarget{Repo: w.Repo, Base: align(w.Repo, w.Base)}
+		}
+		child.Writes = writes
+	}
+	return child
+}
+
+// AutoSubmitRefusedOnLanding reports whether AutoSubmits refuses child on
+// LandsWhereGranted and on nothing else: parent holds the permission to
+// queue its proposals, child asks for nothing that permission does not
+// cover, and the one thing wrong with it is the branch it lands on. That
+// is the refusal nothing else on the proposal explains -- escalated
+// capabilities, ungranted writes and reads each leave a note of their
+// own -- so a caller filing it for a person says why with this.
+func AutoSubmitRefusedOnLanding(child, parent Task) bool {
+	return (parent.AutoMerge || parent.AutoApproveProposals) &&
+		!NormalizeAdmission(child.Admission).AtLeast(AdmissionBypass) &&
+		GrantsSubsetOf(child.Grants, parent.Grants) &&
+		len(UngrantedReads(child, parent)) == 0 &&
+		!LandsWhereGranted(child, parent)
 }
 
 // UngrantedReads is the entries of child's own Reads the task proposing

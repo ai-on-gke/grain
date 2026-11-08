@@ -32,6 +32,8 @@ import {
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import api from "../api.js";
 import { buildPath } from "../paths.js";
+import { formatDateTime } from "../time.js";
+import { useTimeZone } from "../TimeZoneContext.jsx";
 import CIArtifactsPanel from "./CIArtifactsPanel.jsx";
 import CIHistoryPanel from "./CIHistoryPanel.jsx";
 import CIJobCachePanel from "./CIJobCachePanel.jsx";
@@ -786,6 +788,7 @@ export function runningFor(startedAt, now = Date.now()) {
 }
 
 export function SandboxOvercommitStatus({ budget, overcommit, sx }) {
+  const zone = useTimeZone();
   const oc = overcommit || budget?.overcommit || null;
   const hasFactors =
     oc?.cpuOvercommit != null ||
@@ -886,7 +889,10 @@ export function SandboxOvercommitStatus({ budget, overcommit, sx }) {
               {Number(adj.from ?? 0).toFixed(2)}× &rarr;{" "}
               {Number(adj.to ?? 0).toFixed(2)}×
               {adj.reason ? ` — ${adj.reason}` : ""}
-              {adj.at ? ` (${new Date(adj.at).toLocaleTimeString()})` : ""}
+              {/* With its date and in the deployment's zone: the
+                  controller can sit at a factor for weeks, and a bare
+                  clock time reads as "earlier today" whenever it was. */}
+              {adj.at ? ` (${formatDateTime(adj.at, zone)})` : ""}
             </Typography>
           ))}
         </Box>

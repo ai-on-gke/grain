@@ -246,13 +246,28 @@ expect_eq "same-tick drop + hold: holds rc.2" "$(remote_tag v2.2.0-rc.2)" ""
 expect_has "same-tick drop + hold: reports hold" "$out" "v2.2.0-rc.2 is held by grain/rc-hold"
 expect_has "same-tick drop + hold: acted on discard" "$out" "RELEASE_TRAIN_RESULT=acted"
 
-# 3. With unreleased dropped rc and empty grain_app (non-App credential), fails closed.
-jq -cn --arg sha "$c1" '{total_count:0, check_runs:[], grain_app:""}' > "$work/fixtures/checks-$c1-grain_rc-hold.json"
-run_tick FAKE_APP_JSON='""'
+# 3. An empty grain_app (a forge connection that is no GitHub App, such as a
+#    PAT, or one grain cannot tell) with no RELEASE_QUALIFICATION_APP set
+#    anywhere fails closed: it is never "none" by default.
+jq -cn --arg sha "$c1" --arg t "$(iso $((now - 600)))" \
+  '{total_count:1, check_runs:[{id:11, name:"grain/rc-hold", head_sha:$sha, status:"in_progress", conclusion:null, started_at:$t, output:{summary:"1 open rc-blocker"}, app:{slug:"grain-forge"}}], grain_app:""}' \
+  > "$work/fixtures/checks-$c1-grain_rc-hold.json"
+run_tick FAKE_APP_JSON='""' RELEASE_QUALIFICATION_APP=
 expect_eq "missing grain_app: exit 1" "$status" 1
 expect_has "missing grain_app: result failed" "$out" "RELEASE_TRAIN_RESULT=failed"
 expect_has "missing grain_app: explains RELEASE_QUALIFICATION_APP" "$out" "RELEASE_QUALIFICATION_APP is unset"
+expect_not_has "missing grain_app: is never none by default" "$out" "RELEASE_QUALIFICATION_APP=none"
 expect_eq "missing grain_app: still holds rc.2" "$(remote_tag v2.2.0-rc.2)" ""
+
+#    With RELEASE_QUALIFICATION_APP=none set explicitly (as scripts/release.conf
+#    may), no app is trusted, so no grain/rc-hold holds rc.2 (dry run, so the
+#    next case still sees the hold).
+run_tick FAKE_APP_JSON='""' RELEASE_QUALIFICATION_APP=none DRY_RUN=true
+expect_eq "empty grain_app: exit 0" "$status" 0
+expect_not_has "empty grain_app: does not fail" "$out" "RELEASE_TRAIN_RESULT=failed"
+expect_has "empty grain_app: trusts no rc-hold" "$out" "RELEASE_QUALIFICATION_APP=none, so no grain/rc-hold check run"
+expect_not_has "empty grain_app: is not held" "$out" "is held by grain/rc-hold"
+expect_eq "empty grain_app: dry run pushes no rc.2" "$(remote_tag v2.2.0-rc.2)" ""
 
 # 4. Once grain/rc-hold completes on $c1, the next tick cuts v2.2.0-rc.2 on $c2.
 jq -cn --arg sha "$c1" --arg t "$(iso $((now - 300)))" \

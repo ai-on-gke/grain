@@ -24,6 +24,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/capability/servers"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -213,7 +214,7 @@ func TestRepoServerNormalizesGitPushAnyRef(t *testing.T) {
 	pass.Release(context.Background())
 
 	st := grainserver.RepoStatus()
-	if want := []string{grainserver.RepoCredentialMethod, grainserver.RepoReadMethod, grainserver.RepoWriteMethod}; st.ID != grainserver.RepoID || !slices.Equal(st.Methods, want) {
+	if want := []string{grainserver.RepoCredentialMethod, grainserver.RepoReadMethod, grainserver.RepoTargetMethod, grainserver.RepoWriteMethod}; st.ID != grainserver.RepoID || !slices.Equal(st.Methods, want) {
 		t.Fatalf("RepoStatus() = %+v, want %s with %v", st, grainserver.RepoID, want)
 	}
 }
@@ -394,5 +395,81 @@ func TestRepoServerCredentialValidatesConfiguredNamesAndConflicts(t *testing.T) 
 	prompts := pass.PromptSections([]string{want})
 	if !strings.Contains(prompts, `"release-bot"`) {
 		t.Errorf("PromptSections = %q, want prompt naming release-bot", prompts)
+	}
+}
+
+// TestAPIServerListsEveryScopeAndPreset is unified-grants §1's in-process
+// https://grain.dev/capabilities/api: one method per scope and preset of
+// docs/agent-api.md, each taking an optional {repo}, normalizing like any
+// server's.
+func TestAPIServerListsEveryScopeAndPreset(t *testing.T) {
+	st := grainserver.APIStatus()
+	if st.ID != grainserver.APIID || st.Transport != "in-process" {
+		t.Fatalf("APIStatus() = %+v", st)
+	}
+	var want []string
+	for _, s := range model.APIScopes() {
+		want = append(want, string(s.Scope))
+	}
+	for _, p := range model.APIPresets() {
+		want = append(want, p.Name)
+	}
+	for _, name := range want {
+		if !slices.Contains(st.Methods, name) {
+			t.Errorf("api server lists no #%s (methods %v)", name, st.Methods)
+		}
+	}
+	if len(st.Methods) != len(want) {
+		t.Errorf("api server lists %d methods, want %d", len(st.Methods), len(want))
+	}
+	if !slices.ContainsFunc(grainserver.Statuses(), func(s servers.Status) bool { return s.ID == grainserver.APIID }) {
+		t.Errorf("Statuses() leaves out %s", grainserver.APIID)
+	}
+	if !grainserver.IsInProcessID(grainserver.APIID) {
+		t.Errorf("IsInProcessID(%s) = false", grainserver.APIID)
+	}
+
+	lookup := grainserver.Lookup(nil)
+	for _, tc := range []struct {
+		spec protocol.GrantSpec
+		want string
+	}{
+		{protocol.GrantSpec{Capability: model.APIRef("ci:write")}, model.APIRef("ci:write") + "={}"},
+		{protocol.GrantSpec{Capability: model.APIRef("ci:write"), With: map[string]any{"repo": "acme/widgets"}},
+			model.APIRef("ci:write") + `={"repo":"acme/widgets"}`},
+		{protocol.GrantSpec{Capability: model.APIRef("task-admin")}, model.APIRef("task-admin") + "={}"},
+	} {
+		grants, err := protocol.Normalize([]protocol.GrantSpec{tc.spec}, lookup)
+		if err != nil {
+			t.Fatalf("Normalize(%+v): %v", tc.spec, err)
+		}
+		if got := model.RecordedCapabilityGrant(grants[0]); got != tc.want {
+			t.Errorf("Normalize(%+v) = %s, want %s", tc.spec, got, tc.want)
+		}
+	}
+	if _, err := protocol.Normalize([]protocol.GrantSpec{{Capability: model.APIRef("ci:write"),
+		With: map[string]any{"bogus": true}}}, lookup); err == nil {
+		t.Errorf("Normalize accepted an api grant with an argument other than repo")
+	}
+}
+
+// TestRepoServerListsTaskRepoAccess is the repo server's task-level
+// methods: #target {repo, base}, and #write's {repo, base} write target
+// beside a CI job's {repo}.
+func TestRepoServerListsTaskRepoAccess(t *testing.T) {
+	lookup := grainserver.Lookup(nil)
+	for _, spec := range []protocol.GrantSpec{
+		{Capability: model.RepoTargetRef, With: map[string]any{"repo": "acme/widgets", "base": ""}},
+		{Capability: model.RepoWriteRef, With: map[string]any{"repo": "acme/widgets", "base": "release/v1"}},
+		{Capability: model.RepoWriteRef, With: map[string]any{"repo": "acme/widgets"}},
+		{Capability: model.RepoReadRef, With: map[string]any{"repo": "acme/widgets"}},
+	} {
+		if _, err := protocol.Normalize([]protocol.GrantSpec{spec}, lookup); err != nil {
+			t.Errorf("Normalize(%+v): %v", spec, err)
+		}
+	}
+	if _, err := protocol.Normalize([]protocol.GrantSpec{{Capability: model.RepoTargetRef,
+		With: map[string]any{"repo": "acme/widgets"}}}, lookup); err == nil {
+		t.Errorf("Normalize accepted a #target without a base")
 	}
 }
