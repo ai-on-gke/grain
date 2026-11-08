@@ -296,21 +296,22 @@ export default function SettingsPage({
     return () => observer.disconnect();
   }, [focusTarget, current, settings]);
 
-  // go opens another section, and with nextAnchor a card or field on it
+  // go opens section next, asking first when an edit would be lost. A
+  // nextAnchor (a card or field id) rides along as the address's #hash
   // (GitSection's note opens Capabilities at its Deployment credentials
-  // card): the address carries it as its #hash, and it is scrolled to.
+  // card; CLI's Sign in opens Agents at External agents) and is scrolled
+  // to once it is drawn.
   const go = (next, nextAnchor = "") => {
-    if (next === current) {
-      if (nextAnchor) setFocusTarget(nextAnchor);
-      return true;
+    if (next !== current) {
+      if (
+        (s.dirtyCards.length > 0 || leavingLosesEdits()) &&
+        !window.confirm(DISCARD_PROMPT)
+      )
+        return false;
+      if (nextAnchor) onSection(next, nextAnchor);
+      else onSection(next);
     }
-    if (
-      (s.dirtyCards.length > 0 || leavingLosesEdits()) &&
-      !window.confirm(DISCARD_PROMPT)
-    )
-      return false;
-    if (nextAnchor) onSection(next, nextAnchor);
-    else onSection(next);
+    if (nextAnchor) setFocusTarget(nextAnchor);
     return true;
   };
 
@@ -638,7 +639,7 @@ export default function SettingsPage({
         body = <AuditSection />;
         break;
       case "cli":
-        body = <CLISection s={s} config={config} />;
+        body = <CLISection s={s} config={config} onSection={go} />;
         break;
       case "config-repo":
         body = (
@@ -677,7 +678,7 @@ export default function SettingsPage({
         );
         break;
       case "agents":
-        body = <AgentsSection s={s} />;
+        body = <AgentsSection s={s} onSection={go} />;
         break;
       case "memory":
         body = <MemorySection {...common} s={s} tasks={tasks} />;

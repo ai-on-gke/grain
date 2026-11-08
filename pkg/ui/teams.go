@@ -179,7 +179,12 @@ func (c *Client) populateTeamReposFrom(ctx context.Context, src *teamRepoSources
 			team.ConfigRepo = c.Config.StateRepoRef().String()
 		}
 		if team.ConfigRepo == "" {
-			team.ConfigRepo = remote
+			// owner/name, the form every other ConfigRepo is in and the
+			// one the repos pane compares repository names against -- not
+			// the remote URL, which matched no repository and let the
+			// config repo's own page offer Remove (2026-11-08
+			// walkthrough, task 3613).
+			team.ConfigRepo = repoSlugFromRemote(remote)
 		}
 		team.ConfigCloneURL = remote
 		team.CloneCommand = "git clone " + remote

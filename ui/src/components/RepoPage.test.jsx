@@ -2919,6 +2919,45 @@ describe("RepoPage", () => {
     await waitFor(() => expect(releaseReads()).toBeGreaterThan(before));
   });
 
+  // docs/test-runs/2026-11-08-repository-release-memory-ui.md (task
+  // 3613), bug 1: switching "Standing work on this deployment" off stops
+  // the server judging this repo's base branch, so GET
+  // /api/base-branch-gates drops its unjudged warning at once -- but the
+  // page never asked the shell to re-read it, and the red alert, the CI
+  // tab's dot and the overview's CI gate stayed until a reload (and did
+  // not come back when it was switched on again).
+  it("re-reads the base-branch gates when standing work is switched off and on", async () => {
+    const user = userEvent.setup();
+    routeApi();
+    let defaultRuns = true;
+    const otherwise = api.getMockImplementation();
+    api.mockImplementation((path, opts) => {
+      if (/\/work-ownership$/.test(path)) {
+        if (opts) defaultRuns = JSON.parse(opts.body).default !== "off";
+        return Promise.resolve({
+          ...ownsItsWork,
+          default: defaultRuns ? "" : "off",
+          defaultRuns,
+        });
+      }
+      return otherwise(path, opts);
+    });
+    const onRefreshGates = vi.fn(async () => {});
+    renderPage({ onRefreshGates });
+    await openTab("Releases");
+
+    const standing = await screen.findByRole("switch", {
+      name: "Standing work on this deployment",
+    });
+    expect(onRefreshGates).not.toHaveBeenCalled();
+    await user.click(standing);
+    await waitFor(() => expect(onRefreshGates).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(standing).not.toBeChecked());
+    await user.click(standing);
+    await waitFor(() => expect(onRefreshGates).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(standing).toBeChecked());
+  });
+
   // The release's work-ownership override and the "Automatic releases"
   // switch are one setting drawn twice (model.RunsWorkItem). Saving either
   // left the other saying what was true before until a reload: "release:

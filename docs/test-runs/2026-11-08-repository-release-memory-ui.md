@@ -167,3 +167,298 @@ Grain's own API and React UI were never mocked or replaced. Only the following n
   - **Reproduction**: Start `grain demo -github-sim -external-config-repo=https://github.com/grain/config.git`, sign in, and inspect `GET /api/config` (or open `/repos/grain/config/settings/advanced`).
   - **Observed**: In `pkg/daemon/ui_server.go` + `pkg/daemon/statemanager.go`, a real `grain daemon` sets `StateRepoRef: settingsRepo`, which parses the external config remote into `owner/name` so `GET /api/config` populates `configRepo` (`"grain/config"`). In `pkg/demo/demo.go`, `-external-config-repo` wires `cfg.StateRepo = newExternalConfigRepo(...)` without setting `cfg.StateRepoRef`. Consequently, `GET /api/config` omits `configRepo` in demo mode, so `row.configRepo` is `false` on `/repos/grain/config/settings/advanced` (showing `grain/config is not one of this deployment's target repos.` instead of `This is the deployment's own configuration repository and cannot be removed here.`).
   - **Disposition**: Real daemon deployments already wire `StateRepoRef` properly; filed a focused follow-up task on `main` to wire `cfg.StateRepoRef` in `pkg/demo/demo.go` using shared remote-slug parsing and add a `pkg/demo` test.
+
+---
+
+# Second pass: task 3613
+
+A second walk of the same area, by task 3613, against later code. It covers
+the same brief and adds two bugs that the first pass missed or left for a
+follow-up. Both are fixed on this branch.
+
+## Environment
+
+- **Commits tested**: the walk started on `8ee9b97e`. The run was suspended
+  and resumed in a fresh sandbox, and the second half and every fix
+  verification ran on `33a44581` (origin/main at 2026-11-08 12:44 UTC).
+  The fixes are on top of that commit.
+- **Sandbox**: Debian, Go and Node 20.19 from the image, Playwright
+  Chromium headless shell 1234 (`PLAYWRIGHT_BROWSERS_PATH=/var/cache/playwright`).
+  Desktop runs used 1280×900. Phone runs used 390×844, including
+  `hasTouch` for tap reordering. Light and dark were both checked.
+- **No Gemini key**: `/home/debian/.gemini-api-key` is absent, so
+  `LOOK=1` was not available. Layout was checked with DOM bounding boxes
+  and `scrollWidth` assertions instead of by looking at the images.
+- **Servers**: each one was a real `grain demo` built from the checkout
+  (`make frontend` then `go build ./cmd/grain`). Each ran on a throwaway
+  embedded SQLite store under its own `TMPDIR`, on `-addr=127.0.0.1:0`,
+  with a generated `-access-code-file`. The browser signed in through
+  `POST /api/auth/access-code` and got the real session cookie.
+  - **A (full)**: `-github-sim -reconcile=500ms -fake-ci -scheduled-workflows -base-branch-ci -secrets-store -merge-rules -merge-queue-states -qualification -legacy-capability`
+  - **B (gate)**: `-github-sim`. This is the one server where a GitHub CI
+    Mode with a watched default branch gives an unjudged gate. Server A's
+    `-base-branch-ci` judges the branch, so no gate appears there.
+  - **C (external config)**: `-github-sim -qualification -external-config-repo=https://github.com/grain/config.git`
+  - **D (unconfigured)**: `-unconfigured`
+- **Stubs**: the demo already simulates GitHub (branches, compare, issues,
+  repository contents) through `-github-sim`, so only two things were
+  intercepted, both with Playwright `page.route`:
+  1. `GET /api/repos/acme/widgets/releases` returned one `503`
+     (`simulated release store outage 3613`), to check the error state
+     and that a reload recovers. Every later call reached the real server.
+  2. `POST …/import-issues` was held for 600 ms before reaching the real
+     server, so the `Importing…` loading state could be seen.
+  Declarations, branches and release state were real. They were written
+  by `git push` into the simulated repository at
+  `<demo dir>/githubsim/acme/widgets.git`.
+
+## Steps and outcomes
+
+All interaction went through visible controls in a real Chromium page.
+The only exceptions are setup PUTs that write what the page's own switches
+write, and they are marked as such below.
+
+### Repos list (server A, then D)
+- Server D: `/repos` shows the no-git-connection notice, which links to
+  `/settings/git`.
+- `/repos` opened from the rail and by direct URL with a reload. The busy
+  row `acme/widgets` reads `blocked 1 proposed 3 waiting 2 running 2 asked 4
+  merging 3 deferred 1 · 16 tasks`.
+- `Clone URL` appears only for a repository on another host
+  (`git.example.test/team/custom`) and goes away when the field is cleared.
+- Added `acme/gadgets`, `acme/zebra` and an 86-character repository name.
+  All three survived a reload.
+- At 390 px, in light and in dark: `scrollWidth` is 390. `Add repo` sits at
+  x=303–374 px. The `Blocked 1` chip is the first chip on the busy row and
+  is fully visible (x=241–312 px). The long name is cut with an ellipsis
+  at 144 px.
+- Search (`GADGETS` gives 1 row, a nonsense term gives 0, and the clear
+  button gives all 4 back). All four sorts were checked: `Name (A–Z)`,
+  `Active first`, `Most tasks`, `Custom order`.
+- Reordering by keyboard (`Enter`, `Escape` to cancel, `Enter`, then
+  `Move here`), by pointer drag, which held after a reload, and by touch
+  tap at 390×844. The custom order is kept in the browser
+  (`localStorage`), so no request is made.
+
+### Repo page, task count and filing (server A)
+- Opened a row, came back with `← Repos`, then followed `16 tasks filed
+  here` to the task list filtered to that repo (16 rows). Browser Back
+  returned to the repo.
+- `New task` from `/repos/acme/gadgets` had `acme/gadgets` preselected.
+  Filing it created #24, and after a reload the page read `1 task filed
+  here`.
+- Remove on `acme/zebra`: dismissing the confirm kept the repo, and
+  accepting removed it. `/repos/ACME/zebra` at 390 px then reads `2 tasks
+  still target this repo, which is no longer on the target list`. A
+  console session on the repo is not counted, and the page does not
+  overflow.
+
+### Tabs, URLs and Settings → Repositories
+- All seven tabs follow `/repos/acme/widgets/settings/<tab>` and survive a
+  reload. The old `#agents` hash is upgraded to the path form. At 390 px
+  the selected tab scrolls fully into view for all seven tabs (checked
+  after MUI's 300 ms scroll animation).
+- With focus on the CI tab, `ArrowRight` moves focus to `Merge queue`, and
+  `Enter` opens `/repos/acme/widgets/settings/merge-queue`.
+- The `acme/widgets` row on Settings → Repositories reads `main | Read |
+  Grain CI | Not listed`. Its `main` link opens `settings/releases` and
+  Back/Forward works. The declarations link opens `settings/advanced` and
+  the CI mode link opens `settings/ci`.
+
+### Overview, CI, Merge queue (server A, gate on B)
+- Overview summary: `CI gate Grain CI · Up to date before merge Not
+  required · Merge when green Off · Issue import Off · Base repair bypass
+  Off · Branches 0`. After issue import was set up it read `On, approved`.
+- `Merge re-checks` panel: the standing chip reads `Testing` and the clock
+  reads `5m of 90m`. `Show the run` opens run #101. The task link goes to
+  `/tasks/5`, which shows the same re-check, and Back returns.
+- CI tab:
+  - `Watch default branch` survives a reload.
+  - A new workflow with invalid YAML is refused with a 400 when the field
+    loses focus, and the leave guard then asks (`You have unsaved changes
+    here. Leave and discard them?`).
+  - A valid workflow saves as `.grain/workflows/lint-3613.yml`, survives a
+    reload, and is gone after Remove and a reload.
+  - CI capability policy verdicts, judged per repo: a policy rule denying
+    `https://capabilities.demo.grain.example/cloud#cloud-key` to CI runs
+    on `acme/gadgets` was set with `PUT /api/capability-policy`. In the
+    CI grants `Add grant…` list, that method is disabled with the
+    policy's reason on `acme/gadgets` and enabled on `acme/widgets`. The
+    policy was restored afterwards.
+- CI Mode and base-gate warnings (server B, all through the radios):
+  - With `Use GitHub CI` and the default branch watched, the header shows
+    `Nothing is testing acme/widgets's default branch, and the merge queue
+    is merging onto it anyway. grain CI is not enabled for this
+    repository…`.
+  - With `Use No CI`, the Overview reads `No CI — base branch not judged`.
+  - On the Releases page, `Go to CI Mode` opens `settings/ci` with the
+    radio in view.
+  - Choosing grain CI clears the warning within seconds, with no reload.
+- Merge queue tab:
+  - `Require branches up to date` and `Merge when green and clean` both
+    survive a reload.
+  - `Base-branch repair PRs may merge without a human`: turning it on asks
+    for confirmation, both on the Merge queue tab and on Settings →
+    Repositories. Dismissing leaves it off and accepting turns it on.
+    Turning it off asks nothing, in both places.
+  - Unfixable checks: `Add` is disabled while the box is empty. `grain CI`
+    is refused inline (`…judges one exact commit on the branch…`) without
+    a write. An added check survives a reload, and the same name in
+    different case is refused as `already declares`.
+
+### Agents (server A)
+- The deployment layer (`Deployment prompt layer: include regression
+  tests.`, set through `PUT /api/settings`) and the `.grain/settings.yml`
+  layers (`Declared prompt layer…`, `echo declared-setup-3613`) are shown
+  read-only beside the editable boxes.
+- Default capabilities: ticking `Example legacy capability` saved it, and
+  the `A task filed against acme/widgets starts with: …` line named it
+  before and after a reload.
+- The prompt extension and setup command save when the field loses focus,
+  and both survive a reload. Leaving by clicking also takes focus off the
+  field, which saves it first, so no prompt appears. That is intended.
+- GitHub issue import:
+  - `Import issues now` is disabled while import is off.
+  - The queue-at-once switch shows its trust warning (`Turn it on only if
+    you trust everybody who can open an issue…`).
+  - Typing in source, label and interval and then leaving makes the guard
+    ask.
+  - While the import is in flight the button reads `Importing…`.
+  - Outcomes:
+    - Empty label: `Read 0 open issues on acme/widgets: imported 0, 0
+      already imported.`
+    - Label `grain-agent`: `Read 1 open issue on acme/widgets: imported 1,
+      0 already imported.`
+    - Same import again: `…imported 0, 1 already imported.`
+    - Missing source repo: `Read 0 open issues on
+      acme/missing-upstream-3613: … GitHub answered 404: Not Found`.
+  - Label and interval both survive a reload.
+
+### Branches and Compare (server A)
+- `Add branch` refuses `bad..ref.lock`. It adds `feature/managed-3613`,
+  which survives a reload. Adding it again reads `feature/managed-3613 is
+  already on this repo's list (pending); nothing new was added.`
+- Picking `feature/compare-3613` from the Head branch menu, which lists
+  the repository's own branches, opens
+  `/repos/acme/widgets/compare/main...feature/compare-3613`. Both pushed
+  files are in the diff, and it survives a reload.
+- The direct link with a slashed base, `release/1.0...main`, works.
+- An unknown head ref reports that GitHub has nothing to compare.
+- The diff page fits 390 px.
+
+### Advanced (server A)
+- The push was valid: a template with `push:` refs, a gated path trigger
+  with `template:`, a daily schedule, and `.grain/settings.yml` with
+  `port-branches` and `port-types`. After it:
+  - The status reads `Read at b73b589242ca: 1 template(s), 0 suite(s), 1
+    schedule(s), 1 trigger(s)`.
+  - The trigger file is listed, and the extra push refs
+    `refs/heads/docs-sync/*` and `refs/tags/docs-*` (force) are shown.
+  - The read-only `Port directions` table is drawn, with the warning
+    `port-types in .grain/settings.yml: main->unpaired-branch names
+    unpaired-branch, which is not a paired branch…`.
+- A broken template was then pushed. The status reads `Last read failed:
+  … field not_a_real_field not found…`, and the last good trigger stays
+  listed.
+- The demo polls a repository every 2 minutes
+  (`declarationPollInterval`), so a push shows up on the next poll.
+- Remove on `acme/widgets`: the confirm says `Remove acme/widgets from
+  target repos? … Tasks already filed there are not affected.`
+  Dismissing keeps the page.
+- On server C, `/repos/grain/config/settings/advanced` shows no Remove
+  and says `This is the deployment's own configuration repository and
+  cannot be removed here.` (fix 2 below).
+
+### Releases (server A)
+- Work ownership:
+  - The `Nightly widget audit` schedule, read from the declarations, can
+    be set to `off`. It then shows `Off, set here`, and that survives a
+    reload. `say nothing` clears it.
+  - `Turn off automatic releases` presses the release item's own row, and
+    turning them back on releases it.
+  - An unsaved `postMergeDispatchJobs` edit makes the leave guard ask.
+- `/repos/acme/widgets/releases/1.0`:
+  - The 503 stub shows `Could not load …: simulated release store outage
+    3613`, and a reload recovers.
+  - The candidate is `1.0.rc.1`. `Cut new RC` is disabled with the reason
+    `Cut new RC: 1.0.rc.1 is active: a new RC is cut once it is promoted.`
+  - `Promote current RC` was enabled in this run, after qualification had
+    started. In the first pass it was disabled with its reason while
+    qualification was still pending approval.
+  - The qualification task link goes to `/tasks/23`, and Back returns.
+    `Approve all` moves qualification to running.
+  - Editing the qualification plan makes the leave guard ask. Saving
+    persists, checked by a reload.
+- Creating releases:
+  - `bad space` is refused with the full release-name rule.
+  - `1.0` is refused with `this repo already has an unmerged release with
+    this name`.
+  - `2.0` is created, and its direct URL survives a reload.
+- `Delete release`: dismissing its confirm keeps the release, and
+  accepting removes it.
+- `/releases/nonexistent-3613` says `acme/widgets has no release named
+  “nonexistent-3613” -- showing 1.0 instead…`.
+- 390 px fits in light and in dark.
+- The full RC cut → promote → second RC cycle was walked in the first
+  pass above. It was not repeated here.
+
+## Console and network audit (second pass)
+- Uncaught page errors: **0**.
+- Console `Failed to load resource` entries: every one matches a
+  deliberate negative case. The 400s are the invalid branch name and the
+  invalid workflow YAML. The 404s are the unknown compare ref and the
+  missing issue source. The 503 is the stub.
+- One more: on server C, `GET /api/state-repo/files` answers 500. The
+  demo's external config stub has no working tree
+  (`errDemoConfigRepo`), and the page continues normally. This was noted
+  and not changed, because it only affects the demo stub.
+- Network failures other than aborted navigations: **0**.
+
+## Bugs found and fixed
+
+### 1. Standing work changes left the base-gate warning stale (`ui/src/components/RepoPage.jsx`)
+- **Repro**: on `grain demo -github-sim`, run
+  `PUT /api/repos/acme/widgets/ci-mode {"ciMode":"github"}` and
+  `PUT …/watch-default-branch {"watchDefaultBranch":true}`. Open
+  `/repos/acme/widgets/settings/releases` and switch off **Standing work
+  on this deployment**.
+- **Observed**: `GET /api/base-branch-gates` drops the gate straight away,
+  because `baseCheckSwitchedOff` in `pkg/ui/basebranchgate.go` no longer
+  judges the repo. The page never asked the shell to read the gates
+  again, so the red header warning, the CI tab's dot and the Overview's
+  `base branch not judged` all stayed until a reload or the shell's
+  one-minute poll. Switching standing work back on did not bring the
+  warning back either.
+- **Fix**: `RepoWorkOwnership`'s `onSaved` now also calls
+  `onRefreshGates()`, which is what the CI Mode and Watch default branch
+  saves already did.
+- **Coverage**:
+  - Vitest: `re-reads the base-branch gates when standing work is
+    switched off and on`. It fails on the base commit.
+  - Playwright: `ui/e2e/repo-work-ownership-gate-refresh.spec.js`, on
+    desktop and phone. The warning has to leave within 10 s with no
+    reload and come back when standing work is switched on again. The
+    spec also checks the page does not overflow and has no page errors.
+    It fails on the base commit.
+
+### 2. The demo with an external config repo did not identify its config repo (`pkg/demo`, `pkg/ui/teams.go`)
+- **Repro**: run `grain demo -github-sim -external-config-repo=https://github.com/grain/config.git`
+  and request `GET /api/config`.
+- **Observed**: `configRepo` is missing, and `GET /api/deployment` gives
+  `configRepo` as the remote URL. `/repos/grain/config/settings/advanced`
+  reads `grain/config is not one of this deployment's target repos.`
+  instead of refusing to remove the config repo. The first pass filed this
+  as a follow-up; it was small and safe enough to fix here.
+- **Fix**:
+  - The demo now sets `ui.Config.StateRepoRef` from the remote, in
+    owner/name form, the way the daemon wires `settingsRepo`.
+  - `populateTeamReposFrom` now falls back to `repoSlugFromRemote(remote)`
+    instead of the raw URL.
+- **Coverage**:
+  - Go: `TestExternalConfigRepoRef` in `pkg/demo`, and
+    `TestExternalConfigRepoDeploymentNamesItsConfigRepoAsOwnerName` in
+    `pkg/ui`. The second fails on the base commit.
+  - Playwright: `repo-release-plan-config-repo.spec.js` now asserts
+    `configRepo === "grain/config"` on both endpoints, plus the refusal
+    copy with no Remove button, on desktop and phone. It fails on the
+    base commit.
