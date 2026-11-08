@@ -940,9 +940,15 @@ Each external agent is issued its own scoped bearer token (`gma_<hex>`):
   request rate limit (`rateLimit`, requests per minute, default `60`), and
   an in-flight concurrency cap (`maxConcurrent`, default `8`).
 - **Owner**: the person the credential acts on behalf of (`owner`). It
-  defaults to the person issuing it; an operator may name somebody else.
-  A self-service credential (`"selfService": true`, what
-  `grain login --issue-token` mints) belongs to its caller only, and an
+  defaults to the verified person issuing it (signed in through IAP or a
+  registered verifier); an operator may name somebody else. The shared
+  access code, break-glass loopback and the in-process CLI are nobody in
+  particular, so a credential they issue without naming an owner acts on
+  behalf of nobody -- never the deployment's own actor -- and an owner
+  they do name is recorded as named by them (`ownerSource`), so its calls
+  show that owner as unverified. A self-service credential
+  (`"selfService": true`, what `grain login --issue-token` mints) belongs
+  to its verified caller only (to nobody under the access code), and an
   agent issuing one can pass on only the owner it acts for itself.
   `grain/external-dev` (the default for a workstation agent) and
   `grain/external-read` (a read-only observer) are the built-in scope
