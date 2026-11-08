@@ -1060,6 +1060,170 @@ describe("Grain Registry UI", () => {
       ).toBeInTheDocument();
     });
   });
+  describe("stop and start of hosted instances", () => {
+    const stoppedVm = {
+      ...sampleEntries[0],
+      name: "docs-preview",
+      url: "https://docs-preview.grain.example.com",
+      display_name: "Docs Preview VM",
+      state: "stopped",
+      status: "offline",
+      auto_wake: true,
+    };
+
+    // powerFetch serves a mutable entry list and records stop/start posts,
+    // falling back to the shared fixture mock for everything else.
+    function powerFetch(entries) {
+      const calls = [];
+      const base = createFetchMock();
+      const fetchMock = vi.fn(async (input, init = {}) => {
+        const url = typeof input === "string" ? input : input.url;
+        const method = (init.method || "GET").toUpperCase();
+        if (method === "GET" && url.startsWith("/api/entries?")) {
+          return new Response(JSON.stringify({ entries }), { status: 200 });
+        }
+        const m = url.match(/^\/api\/entries\/([^/?]+)(?:\/(stop|start))?$/);
+        if (m) {
+          const idx = entries.findIndex(
+            (e) => e.name === decodeURIComponent(m[1]),
+          );
+          if (idx >= 0 && method === "GET" && !m[2]) {
+            return new Response(JSON.stringify(entries[idx]), { status: 200 });
+          }
+          if (idx >= 0 && method === "POST" && m[2]) {
+            calls.push(`${m[2]} ${entries[idx].name}`);
+            entries[idx] = {
+              ...entries[idx],
+              state: m[2] === "stop" ? "stopping" : "creating",
+            };
+            return new Response(JSON.stringify(entries[idx]), { status: 202 });
+          }
+        }
+        return base(input, init);
+      });
+      return { fetchMock, calls };
+    }
+
+    it("offers Stop on running instances and Start on stopped ones in My entries, with a stopped badge", async () => {
+      const entries = [
+        { ...sampleEntries[0] },
+        { ...stoppedVm },
+        { ...sampleEntries[1] },
+      ];
+      const { fetchMock, calls } = powerFetch(entries);
+      globalThis.fetch = fetchMock;
+      renderApp("/");
+
+      await screen.findByRole("button", { name: "Stop platform-vm" });
+      expect(
+        screen.getByRole("button", { name: "Start docs-preview" }),
+      ).toBeInTheDocument();
+      // Connected entries and stopped instances get no Stop; running ones no Start.
+      expect(
+        screen.queryByRole("button", { name: "Stop alice-workstation" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Start alice-workstation" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Stop docs-preview" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Start platform-vm" }),
+      ).toBeNull();
+
+      const badge = screen.getByTestId("lifecycle-badge-docs-preview");
+      expect(badge).toHaveTextContent("stopped");
+      expect(badge).toHaveClass("reg-badge-stopped");
+      expect(screen.getByTestId("lifecycle-badge-platform-vm")).not.toHaveClass(
+        "reg-badge-stopped",
+      );
+
+      // Stop asks first, and cancelling sends nothing.
+      fireEvent.click(screen.getByRole("button", { name: "Stop platform-vm" }));
+      let dialog = await screen.findByRole("dialog");
+      expect(dialog).toHaveTextContent("Stop platform-vm?");
+      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      expect(calls).toEqual([]);
+
+      fireEvent.click(screen.getByRole("button", { name: "Stop platform-vm" }));
+      dialog = await screen.findByRole("dialog");
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Stop instance" }),
+      );
+      await screen.findByText("Requested stop for platform-vm.");
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("lifecycle-badge-platform-vm"),
+        ).toHaveTextContent("stopping");
+      });
+      // A stopping instance can be started again straight away.
+      expect(
+        screen.getByRole("button", { name: "Start platform-vm" }),
+      ).toBeInTheDocument();
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Start docs-preview" }),
+      );
+      await screen.findByText("Requested start for docs-preview.");
+      expect(calls).toEqual(["stop platform-vm", "start docs-preview"]);
+    });
+
+    it("renders a stopped instance's detail page with a stopped banner and Start, then Stop once it runs", async () => {
+      const entries = [{ ...stoppedVm }];
+      const { fetchMock, calls } = powerFetch(entries);
+      globalThis.fetch = fetchMock;
+      renderApp("/entries/docs-preview");
+
+      const banner = await screen.findByTestId("stopped-banner");
+      expect(banner).toHaveTextContent("This instance is stopped.");
+      expect(banner).toHaveTextContent("visit its URL to wake it");
+      expect(screen.getByTestId("lifecycle-badge-docs-preview")).toHaveClass(
+        "reg-badge-stopped",
+      );
+      expect(
+        screen.queryByRole("button", { name: "Stop instance" }),
+      ).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Start instance" }));
+      await screen.findByText("Requested start for docs-preview.");
+      expect(calls).toEqual(["start docs-preview"]);
+      expect(screen.queryByTestId("stopped-banner")).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Start instance" }),
+      ).toBeNull();
+    });
+
+    it("offers Stop instance on a running instance's detail page but not on a connected entry", async () => {
+      const entries = [{ ...sampleEntries[0] }, { ...sampleEntries[1] }];
+      const { fetchMock, calls } = powerFetch(entries);
+      globalThis.fetch = fetchMock;
+      const { unmount } = renderApp("/entries/platform-vm");
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Stop instance" }),
+      );
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Stop instance" }),
+      );
+      await screen.findByText("Requested stop for platform-vm.");
+      expect(calls).toEqual(["stop platform-vm"]);
+      expect(await screen.findByTestId("stopped-banner")).toHaveTextContent(
+        "This instance is stopping.",
+      );
+      unmount();
+
+      renderApp("/entries/alice-workstation");
+      await screen.findByTestId("tunnel-status-badge");
+      expect(
+        screen.queryByRole("button", { name: "Stop instance" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Start instance" }),
+      ).toBeNull();
+    });
+  });
 
   it("lists, creates with a bare service-account email, and disables/enables delegating apps on Admin screen", async () => {
     const fetchMock = createFetchMock();
@@ -1232,5 +1396,81 @@ describe("Grain Registry UI", () => {
         (init?.method || "GET").toUpperCase() === "DELETE",
     );
     expect(deleteCall).toBeTruthy();
+  });
+
+  it("supports configurable boot disk size on Hosted VM create and resize", async () => {
+    let capturedCreateBody = null;
+    let capturedReplaceBody = null;
+
+    global.fetch = createFetchMock({
+      "POST /api/entries": async (_url, init) => {
+        capturedCreateBody = JSON.parse(init.body);
+        return new Response(
+          JSON.stringify({
+            entry: {
+              name: capturedCreateBody.name,
+              url: `https://${capturedCreateBody.name}.grain.example.com`,
+              kind: "instance",
+              state: "creating",
+              status: "offline",
+              owner: sampleMe.email,
+              shape: capturedCreateBody.shape,
+              boot_disk_gb: capturedCreateBody.boot_disk_gb,
+            },
+          }),
+          { status: 202 },
+        );
+      },
+      "POST /api/entries/platform-vm/replace": async (_url, init) => {
+        capturedReplaceBody = JSON.parse(init.body);
+        return new Response(
+          JSON.stringify({
+            ...sampleEntries[0],
+            state: "replacing",
+            replace_step: "draining",
+            shape: capturedReplaceBody.shape,
+            boot_disk_gb: capturedReplaceBody.boot_disk_gb,
+          }),
+          { status: 202 },
+        );
+      },
+    });
+
+    renderApp("/create");
+    await waitFor(() => {
+      expect(screen.getByText(/Hosted VM \(instance\)/i)).toBeInTheDocument();
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: /Hosted VM \(instance\)/i }),
+    );
+
+    const diskInput = await screen.findByLabelText("Boot disk size (GB)");
+    expect(diskInput).toHaveValue(100);
+
+    fireEvent.change(screen.getByLabelText("VM Shape"), {
+      target: { value: "small" },
+    });
+    expect(diskInput).toHaveValue(50);
+
+    fireEvent.change(diskInput, { target: { value: "150" } });
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Create hosted VM$/i }),
+    );
+    await waitFor(() => {
+      expect(capturedCreateBody).not.toBeNull();
+    });
+    expect(capturedCreateBody.shape).toBe("small");
+    expect(capturedCreateBody.boot_disk_gb).toBe(150);
+
+    renderApp("/entries/platform-vm");
+    const resizeDiskInput = await screen.findByLabelText("Boot Disk Size (GB)");
+    fireEvent.change(resizeDiskInput, { target: { value: "250" } });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Resize / Replace VM" }),
+    );
+    await waitFor(() => {
+      expect(capturedReplaceBody).not.toBeNull();
+    });
+    expect(capturedReplaceBody.boot_disk_gb).toBe(250);
   });
 });

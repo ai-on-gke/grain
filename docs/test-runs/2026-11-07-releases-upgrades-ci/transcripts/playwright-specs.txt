@@ -1,0 +1,12 @@
+
+Running 8 tests using 3 workers
+
+[1/8] [chromium] › e2e/upgrade-image-chooser.spec.js:33:5 › the upgrade image chooser › lines up under the branch field at desktop width
+[2/8] [chromium] › e2e/settings-upgrade.spec.js:24:3 › Settings → Upgrade › the old /system/upgrade link, anchor and all, lands on it
+[3/8] [chromium] › e2e/processes-git-ref-suppression.spec.js:17:1 › off-target git_ref schedule shows Suppressed badge, warning, and non-overlapping row layout on /processes
+[4/8] [chromium] › e2e/settings-upgrade.spec.js:41:3 › Settings → Upgrade › sits in the Deployment group, beside the section nav, and not in System
+[5/8] [chromium] › e2e/upgrade-image-chooser.spec.js:33:5 › the upgrade image chooser › lines up under the branch field at phone width
+[6/8] [chromium] › e2e/settings-upgrade.spec.js:58:3 › Settings → Upgrade › the settings filter finds it for 'upgrade'
+[7/8] [chromium] › e2e/settings-upgrade.spec.js:75:3 › Settings → Upgrade › the build stamp opens it
+[8/8] [chromium] › e2e/settings-upgrade.spec.js:86:5 › Settings → Upgrade › on a phone › the section list reaches it, and back returns to the list
+  8 passed (34.1s)

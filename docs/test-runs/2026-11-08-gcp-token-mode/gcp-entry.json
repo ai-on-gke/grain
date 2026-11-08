@@ -1,0 +1,29 @@
+{
+ "id": "https://grain.dev/capabilities/gcp",
+ "config": {
+  "command": "grain",
+  "args": [
+   "capability",
+   "gcp",
+   "-fake-cloud",
+   "/home/debian/walk/gcpfake.json"
+  ],
+  "builtin": "gcp",
+  "config": {
+   "permission_sets": [
+    {
+     "name": "ext-deploy",
+     "service_account": "deployer@walk-proj.iam.gserviceaccount.com",
+     "roles": [
+      "roles/run.admin"
+     ]
+    },
+    {
+     "name": "ext-logs",
+     "service_account": "log-reader@walk-proj.iam.gserviceaccount.com",
+     "person_granted": false
+    }
+   ]
+  }
+ }
+}

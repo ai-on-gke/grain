@@ -4,23 +4,74 @@ Disposable, reproducible test/demo environment for `grain-registry` in a GCP
 sandbox project (`deploy/test/registry-sandbox/`).
 
 > **Scope note:** This directory provisions a lightweight single-project
-> test/demo deployment for connecting external `grain` daemons (`connected`
-> entries over `-registry-connect` outbound WebSocket mux tunnels) and testing
-> catalog discovery + subdomain routing. It intentionally keeps all resources
-> minimal and self-contained so it does not pre-empt the production
-> multi-replica deployment layout.
+> test/demo deployment for both **hosted GCE VM instances (`kind = instance`)**
+> with nested virtualization (`/dev/kvm`) and **connected external `grain`
+> daemons (`kind = connected`)** over `-registry-connect` outbound WebSocket mux
+> tunnels, testing catalog discovery + subdomain routing. It intentionally keeps
+> all resources minimal and self-contained so it does not pre-empt the
+> production multi-replica deployment layout.
 
 ## Architecture
 
-- **Compute & Database (`instance.tf`, `files/startup.sh`)**: One private-IP
-  `e2-small` Debian 12 GCE VM (no external IP, outbound egress via Cloud NAT to
-  satisfy `constraints/compute.vmExternalIpAccess`) running:
+- **Registry Control Plane & Database (`instance.tf`, `files/startup.sh`)**: One
+  private-IP `e2-small` Debian 12 GCE VM (no external IP, outbound egress via
+  Cloud NAT to satisfy `constraints/compute.vmExternalIpAccess`) running:
   - `postgres:16-alpine` (pinned by digest) bound strictly to `127.0.0.1:5432` with persistent data
     on the VM boot disk (`/var/lib/grain-registry/pgdata`);
   - `grain-registry` built from `Dockerfile.registry` (`make image-registry`),
-    configured with `compute.provider: "none"` and `config_repos.provider: "none"`,
+    configured with `compute.provider: "gce"` (N2 and C4 shapes across
+    `us-central1-{a,b,c,f}`, nested virtualization enabled, user-configurable
+    boot disk sizing `20–4000` GiB) and `config_repos.provider: "none"`,
     listening on `:8080` (IAP-protected control plane + `<entry>.<instance_domain>`
-    tunnel router) and `:8081` (locked-down `PublicHandler`).
+    router) and `:8081` (locked-down `PublicHandler`).
+- **Shared Hosted-Instance PostgreSQL Pool (`sql.tf`, `files/sql-startup.sh`)**:
+  One private-IP `e2-small` Debian 12 GCE VM (`<prefix>-sql`) running
+  `postgres:16-alpine` on `5432/tcp` (firewall-restricted strictly to
+  `<prefix>-vm` and `grain-instance`-tagged VMs on `<prefix>-net`), serving as
+  `instance_sql.sql_instances` for per-instance database and credential
+  provisioning (`grain_<entry>`).
+- **Hosted GCE VM Instances (`files/hosted-vm-startup.sh`, `pkg/registry/providers/gcp`)**:
+  Disposable `grain-vm-<entry>` VMs provisioned on demand from the registry UI
+  or `grain registry create` with `enableNestedVirtualization: true` (`/dev/kvm`
+  exposed to `grain-daemon` for Granule microVM sandboxes):
+  - `n2-standard-2` / `c4-standard-2` (2 vCPUs, default 50 GiB `pd-balanced` / `hyperdisk-balanced`)
+  - `n2-standard-4` (default) / `c4-standard-4` (4 vCPUs, default 100 GiB)
+  - `n2-standard-8` / `c4-standard-8` (8 vCPUs, default 200 GiB)
+  - `n2-standard-16` / `c4-standard-16` (16 vCPUs, default 400 GiB)
+  - `n2-standard-64` (64 vCPUs, default 1,000 GiB `pd-balanced`)
+- **Separate Hosted-VM Project (`hosted.tf`, `up.sh --hosted-project`)**:
+  Hosted VMs (and their per-instance service accounts) can run in a project
+  other than the registry's. `hosted.tf` then creates `<prefix>-hosted-net` /
+  `<prefix>-hosted-subnet` (default `10.43.0.0/24`, Private Google Access,
+  Cloud NAT) in that project, peers it bidirectionally with `<prefix>-net`, and
+  adds CIDR-based firewall rules (peering cannot match source tags): registry VM
+  IP -> `grain-instance` on `8080/tcp`, IAP -> `grain-instance` on `22/tcp`, and
+  the hosted subnet -> `<prefix>-sql` on `5432/tcp`. Per-instance secrets stay in
+  the registry project (`secrets.project`). The registry VM's service account
+  needs `roles/compute.instanceAdmin.v1`, `roles/iam.serviceAccountAdmin` and
+  `roles/iam.serviceAccountUser` in the hosted project: pass
+  `--manage-hosted-iam` when the deploying identity can set that project's IAM
+  policy, otherwise have a project owner run:
+
+  ```bash
+  VM_SA="$(gcloud compute instances describe <prefix>-vm --zone us-central1-a \
+    --project <registry-project> --format='value(serviceAccounts[0].email)')"
+  for role in roles/compute.instanceAdmin.v1 roles/iam.serviceAccountAdmin roles/iam.serviceAccountUser; do
+    gcloud projects add-iam-policy-binding <hosted-project> \
+      --member="serviceAccount:${VM_SA}" --role="${role}" --condition=None
+  done
+  ```
+
+  For example, to run the registry in `example-hub-project` and hosted VMs in
+  `example-hosted-project`:
+
+  ```bash
+  ./deploy/test/registry-sandbox/up.sh \
+    --project example-hub-project --admin owner@example.com \
+    --hosted-project example-hosted-project \
+    --hosted-credentials /path/to/example-hosted-project-key.json \
+    --no-wait-cert
+  ```
 - **Signing Key (`kms.tf`)**: One Cloud KMS asymmetric signing key
   (`EC_SIGN_P256_SHA256`, `ASYMMETRIC_SIGN`) consumed by
   `pkg/registry/providers/gcp` to sign `X-Grain-Registry-Assertion` JWTs
@@ -130,9 +181,44 @@ keep the custom client. `down.sh` deletes the backend service; the OAuth
 client itself stays in the project until you delete it in the Console.
 `configure-oauth.sh --project <id> --show` prints which client is active.
 
-### 2. Connect a `grain` daemon
+### 2. Provision a hosted GCE VM (`kind = instance`) or connect a `grain` daemon
 
-**Option A — Provision a disposable test `grain daemon` VM inside the sandbox (`daemon-up.sh`):**
+**Hosted GCE VM (`kind = instance`, N2 / C4 with `/dev/kvm` nested virtualization):**
+
+From the browser UI (`https://<registry_host>/new?kind=instance`), pick an N2 or
+C4 shape (and optional custom boot disk size in GiB) and click **Create**, or
+use the CLI:
+
+```bash
+grain registry create my-dev-vm \
+  --registry-url "https://<registry_host>" \
+  --shape n2-standard-4 \
+  --disk-gb 150
+```
+
+When testing from a non-interactive service account (without a browser OAuth
+session), use `instance-ctl.sh` over IAP SSH:
+
+```bash
+./deploy/test/registry-sandbox/instance-ctl.sh create \
+  --project my-gcp-sandbox \
+  --entry my-dev-vm \
+  --owner alice@example.com \
+  --shape n2-standard-4 \
+  --disk-gb 150 \
+  --allow-verifier-sa
+
+./deploy/test/registry-sandbox/verify.sh \
+  --project my-gcp-sandbox \
+  --entry my-dev-vm
+
+./deploy/test/registry-sandbox/instance-ctl.sh delete \
+  --project my-gcp-sandbox \
+  --entry my-dev-vm \
+  --purge
+```
+
+**Connected external daemon (`kind = connected`) — Option A (`daemon-up.sh`):**
 
 ```bash
 ./deploy/test/registry-sandbox/daemon-up.sh \
@@ -205,7 +291,83 @@ heartbeat status, version, queue counts), `/api/route`, and an end-to-end HTTP
 request routed over the outbound WebSocket mux tunnel to the connected daemon's
 `registry` identity verifier.
 
-### 4. Tear down cleanly (`down.sh`)
+### 4. Update the staging deployment for subsequent PRs
+
+When developing changes in subsequent PRs (such as updating `cmd/grain-registry`,
+`pkg/registry/...`, `ui-registry/`, or `pkg/daemon/...`), you can update the
+running staging deployment in-place without destroying and recreating the load
+balancer, IP address, TLS certificates, or database.
+
+#### Updating the Registry VM (`grain-reg-vm`):
+
+Run `up.sh` from your PR branch with `--no-wait-cert`:
+
+```bash
+./deploy/test/registry-sandbox/up.sh \
+  --project my-gcp-sandbox \
+  --admin alice@example.com \
+  --no-wait-cert
+```
+
+This performs an in-place update:
+1. Builds a fresh container image from `Dockerfile.registry` on the PR branch
+   (which automatically compiles the `ui-registry/` SPA via `npm run build` and
+   embeds the assets into `grain-registry`).
+2. Pushes the image tag `us-docker.pkg.dev/<project>/grain/grain-registry:sandbox-<git-sha>`
+   to Artifact Registry.
+3. Applies Terraform in-place to update the `registry_image` metadata attribute
+   on `grain-reg-vm`.
+4. Executes `/usr/local/sbin/grain-registry-reconcile` over IAP SSH on `grain-reg-vm`,
+   which pulls the new image and swaps the running container with zero downtime.
+5. Verifies that the load balancer health checks report healthy.
+
+> **Tip (Fast manual update without running Terraform):**
+> If Terraform definitions (`*.tf`) were not changed, you can build/push the
+> image and update instance metadata directly:
+> ```bash
+> # 1. Build and push image
+> TAG="sandbox-$(git rev-parse --short HEAD)"
+> docker build -f Dockerfile.registry -t "us-docker.pkg.dev/my-gcp-sandbox/grain/grain-registry:${TAG}" .
+> docker push "us-docker.pkg.dev/my-gcp-sandbox/grain/grain-registry:${TAG}"
+>
+> # 2. Update image in VM metadata
+> CURRENT_CFG="$(gcloud compute instances describe grain-reg-vm --project my-gcp-sandbox --zone us-central1-a --format='value(metadata.grain-registry-config)')"
+> NEW_CFG="$(echo "${CURRENT_CFG}" | jq -c --arg img "us-docker.pkg.dev/my-gcp-sandbox/grain/grain-registry:${TAG}" '.registry_image = $img')"
+> gcloud compute instances add-metadata grain-reg-vm --project my-gcp-sandbox --zone us-central1-a --metadata grain-registry-config="${NEW_CFG}"
+>
+> # 3. Trigger container restart on the VM
+> gcloud compute ssh grain-reg-vm --project my-gcp-sandbox --zone us-central1-a --tunnel-through-iap --command "sudo /usr/local/sbin/grain-registry-reconcile"
+> ```
+
+#### Updating the Test Daemon VM (`grain-reg-daemon-sandbox-daemon`):
+
+When testing daemon changes, tunnel client updates, or capability changes from a PR:
+
+```bash
+./deploy/test/registry-sandbox/daemon-up.sh \
+  --project my-gcp-sandbox \
+  --owner alice@example.com \
+  --entry sandbox-daemon
+```
+
+This rebuilds the lightweight `grain-daemon` test runtime image, pushes it to
+Artifact Registry, triggers a rolling update of the daemon container on the VM,
+re-registers the entry, and runs `verify.sh`.
+
+#### Verifying After an Update:
+
+Run `verify.sh`:
+
+```bash
+./deploy/test/registry-sandbox/verify.sh \
+  --project my-gcp-sandbox \
+  --entry sandbox-daemon
+```
+
+Then visit `https://<registry_host>` in your browser to sign in via Cloud IAP
+and interact with the updated Web UI and directory.
+
+### 5. Tear down cleanly (`down.sh`)
 
 ```bash
 ./deploy/test/registry-sandbox/down.sh \

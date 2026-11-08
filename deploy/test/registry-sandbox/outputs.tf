@@ -76,3 +76,23 @@ output "selfsigned_cert_pem" {
   description = "PEM of the self-signed wildcard certificate on the HTTPS Load Balancer (public certificate only; empty when tls_mode is managed). verify.sh trusts it instead of disabling TLS verification."
   value       = local.use_selfsigned_cert ? tls_self_signed_cert.wildcard[0].cert_pem : ""
 }
+
+output "sql_vm_name" {
+  description = "Name of the GCE VM running the shared PostgreSQL pool for hosted Grain instances."
+  value       = google_compute_instance.instance_sql.name
+}
+
+output "sql_private_ip" {
+  description = "Reserved private VPC IPv4 address of the shared PostgreSQL pool for hosted Grain instances."
+  value       = google_compute_address.instance_sql.address
+}
+
+output "hosted_project_id" {
+  description = "Project where hosted GCE VM instances (kind = instance) are created."
+  value       = local.hosted_project_id
+}
+
+output "hosted_network" {
+  description = "VPC network and subnetwork used by hosted GCE VM instances."
+  value       = "${local.hosted_network_name}/${local.hosted_subnet_name} (${local.hosted_subnet_cidr})"
+}

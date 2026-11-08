@@ -1,0 +1,60 @@
+== sandbox container: grain-sandbox-21-1 (grain-sbx:walk)
+-- ls -l the grant's files
+-rw-r--r-- 1 debian debian 390 Nov  8 02:34 .gcp-service-account.about
+-rw------- 1 debian debian 371 Nov  8 02:34 .gcp-service-account.json
+total 12
+-rwx------ 1 debian debian 211 Nov  8 02:34 activate.sh
+-rwx------ 1 debian debian 349 Nov  8 02:34 ext-deploy-id-token
+-rw------- 1 debian debian  64 Nov  8 02:34 ext-deploy.token
+-- ~/.gcp-service-account.json
+{
+  "audience": "//grain.dev/capabilities/gcp/permission-sets/ext-deploy",
+  "credential_source": {
+    "file": "/home/debian/.gcp-token/grain-21-1-0/ext-deploy.token"
+  },
+  "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+  "token_url": "http://127.0.0.1:4252/runs/grain-21-1-0/token",
+  "type": "external_account",
+  "universe_domain": "googleapis.com"
+}
+-- ~/.gcp-service-account.about
+permission_set: ext-deploy
+service_account: deployer@walk-proj.iam.gserviceaccount.com
+project: walk-proj
+roles: roles/run.admin
+key: /home/debian/.gcp-service-account.json
+credential: short-lived access tokens by impersonation (no key exists); /home/debian/.gcp-service-account.json is an external_account config
+id_token: /home/debian/.gcp-token/grain-21-1-0/ext-deploy-id-token AUDIENCE
+-- any private_key anywhere under ~: 0 file(s)
+token_url: http://127.0.0.1:4252/runs/grain-21-1-0/token
+subject token file: /home/debian/.gcp-token/grain-21-1-0/ext-deploy.token
+== 02:34:09 exchange 1 (curl, inside the container)
+{"access_token":"tok-7-deployer@<cut>","expires_in":3599,"issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer"}
+ HTTP 200
+== 02:34:09 exchange 2
+{"access_token":"tok-8-deployer@<cut>","expires_in":3599,"issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer"}
+ HTTP 200
+== 02:34:09 adc-probe (golang.org/x/oauth2/google, inside the container)
+adc-probe: /home/debian/.gcp-service-account.json gave a Bearer token tok-9-deployer@<cut>, expiring in 59m59s
+== 02:34:09 ID token (the placed id-token helper)
+id-https://walk.example/aud-deployer@<cut>
+== 02:34:10 a wrong subject token
+{"error":"invalid_grant","error_description":"this grant's token is unknown or released"}
+ HTTP 401
+saved the per-attempt token (3fd143<cut>) for after release
+== the grant's deadline (gcp server audit): 2026-11-08T06:19:04Z
+== 02:34:10 server clock moved to 06:18:34 (deadline - 30s)
+{"access_token":"tok-10-deployer@<cut>","expires_in":30,"issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer"}
+ HTTP 200
+adc-probe: /home/debian/.gcp-service-account.json gave a Bearer token tok-11-deployer@<cut>, expiring in 30s
+== 02:34:10 server clock moved to 06:19:09 (deadline + 5s)
+{"error":"invalid_grant","error_description":"permission set ext-deploy: the grant's deadline 2026-11-08T06:19:04Z has passed"}
+ HTTP 401
+adc-probe: token: oauth2/google: status code 401: {"error":"invalid_grant","error_description":"permission set ext-deploy: the grant's deadline 2026-11-08T06:19:04Z has passed"}
+
+curl: (22) The requested URL returned error: 401
+
+== 02:34:10 server clock back to now
+{"access_token":"tok-12-deployer@<cut>","expires_in":3599,"issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer"}
+ HTTP 200
+== 2026-11-08T02:34:10Z done

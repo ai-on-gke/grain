@@ -65,7 +65,7 @@ import {
   capabilityName,
   capabilityRows,
   capabilityUnavailableHint,
-  repoRows,
+  repoPageRow,
   repoUrl,
   unionCapabilities,
 } from "../state.js";
@@ -616,18 +616,13 @@ export default function RepoPage({
   // repo, and counting only those would present a floor as this repo's
   // total. Until it answers the count says it is a floor ("12+").
   const closedCount = useRepoClosedCount(repo, closedPartial);
-  const row = withClosedCount(
-    repoRows(config, tasks).find((r) => r.repo === repo) || {
-      repo,
-      total: 0,
-      counts: {},
-      blocked: 0,
-      configured: false,
-      defaults: false,
-    },
-    closedCount,
-  );
+  const row = withClosedCount(repoPageRow(config, tasks, repo), closedCount);
   const countFloor = closedPartial && closedCount === null;
+  // Tasks still filed against a repo a restricted deployment no longer
+  // lists (repoPageRow's offList). The count says so rather than reading
+  // as though this were any listed repo's work, since the repo is not on
+  // the Repos list these tasks would otherwise be found from.
+  const offList = row.offList && row.total > 0;
 
   const loadBranches = useCallback(async () => {
     try {
@@ -1515,7 +1510,9 @@ export default function RepoPage({
           <Link
             variant="caption"
             color="text.secondary"
-            whiteSpace="nowrap"
+            // The off-list sentence is too long to hold on one line of a
+            // phone; the plain count is short enough to keep whole.
+            whiteSpace={offList ? "normal" : "nowrap"}
             href={buildPath({
               view: "tasks",
               narrowing: {
@@ -1526,7 +1523,10 @@ export default function RepoPage({
             })}
           >
             {row.total}
-            {countFloor ? "+" : ""} task{row.total === 1 ? "" : "s"} filed here
+            {countFloor ? "+" : ""} task{row.total === 1 ? "" : "s"}{" "}
+            {offList
+              ? `still target${row.total === 1 ? "s" : ""} this repo, which is no longer on the target list`
+              : "filed here"}
           </Link>
           <Box sx={{ flex: 1 }} />
           <Button

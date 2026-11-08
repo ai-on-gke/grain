@@ -2076,13 +2076,16 @@ type CreateTaskRequest struct {
 	grantsFromTemplate []model.Grant
 }
 
-func proposalTags(key string, held bool) []string {
+func proposalTags(key string, held, holdRequested bool) []string {
 	var tags []string
 	if key != "" {
 		tags = append(tags, key)
 	}
 	if held {
 		tags = append(tags, model.HeldForApprovalTag)
+	}
+	if holdRequested {
+		tags = append(tags, model.HoldRequestedTag)
 	}
 	return tags
 }
@@ -3145,7 +3148,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		Reads:                reads,
 		Writes:               writes,
 		CustomFields:         customFields,
-		Tags:                 proposalTags(req.ProposalKey, heldNote != ""),
+		Tags:                 proposalTags(req.ProposalKey, heldNote != "", req.HoldForApproval && proposedBy != nil),
 		CreatedAt:            &now,
 		OrderKey:             orderKey,
 		FiledVia:             filedViaFromContext(ctx),

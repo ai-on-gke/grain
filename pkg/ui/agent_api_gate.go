@@ -897,7 +897,8 @@ func inGrainAgentTaskID(p model.Principal) string {
 // for (ui.CreateTask, orchestrator.relayProposedTasks, Client.agentMayApprove),
 // asked again of the task as it stands now:
 //
-//   - hold_for_approval (model.HeldForApprovalTag);
+//   - hold_for_approval (model.HoldRequested: HoldRequestedTag, or
+//     HeldForApprovalTag on a proposal filed before it was recorded);
 //   - targeting or writing this deployment's configuration repository
 //     (model.ConfigRepoProposalHold);
 //   - targeting a change target that requires a person's approval
@@ -917,7 +918,7 @@ func inGrainAgentTaskID(p model.Principal) string {
 //     (model.PersonOnlyProposalSettings).
 func (s *Server) proposalPersonHolds(ctx context.Context, task model.Task, proposer, acting *model.Task) ([]string, error) {
 	var holds []string
-	if model.HeldForApproval(task) {
+	if model.HoldRequested(task) {
 		holds = append(holds, "it was filed with hold_for_approval")
 	}
 	if why := model.ConfigRepoProposalHold(task); why != "" {
@@ -1504,10 +1505,12 @@ func grantAlreadyStored(existing []string, name string, normalize func(string) (
 		return true
 	}
 	// A retired name is held by a row storing what it became (the
-	// release server's methods, schema migration 101), and the reverse.
+	// release server's methods, schema migration 101, and
+	// github#sandbox-repo, 124), and the reverse; so is a bare or
+	// case-varied spelling of the <ref>={} a row records.
 	if _, ok := model.CIGrantRuleFor(name); ok {
-		canonical := model.CanonicalLegacyGrant(name)
-		return slices.ContainsFunc(existing, func(e string) bool { return model.CanonicalLegacyGrant(e) == canonical })
+		canonical := model.CanonicalCIGrant(name)
+		return slices.ContainsFunc(existing, func(e string) bool { return model.CanonicalCIGrant(e) == canonical })
 	}
 	if model.IsCapabilityRef(name) && normalize != nil {
 		if recorded, err := normalize(name); err == nil && slices.Contains(existing, recorded) {

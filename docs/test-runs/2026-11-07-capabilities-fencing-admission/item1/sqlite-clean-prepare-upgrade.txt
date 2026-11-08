@@ -1,0 +1,3 @@
+warning: tables/repo_config.json row 0 has a column "default_hostd" that repo_config does not; it would be ignored
+rehearsed: 101 rows across 22 tables migrate from schema 108 into 125
+prepared 108 125 /home/debian/walk1/sqlite-clean/prepared/schema-upgrade

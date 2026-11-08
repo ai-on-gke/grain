@@ -57,6 +57,7 @@ import {
 } from "../state.js";
 import AccessGate from "./AccessGate.jsx";
 import AdmissionField from "./AdmissionField.jsx";
+import HostingField from "./HostingField.jsx";
 
 // TemplateOverlay is a template's own sub page (bwsalmon/agents#545):
 // "+ New" on the Processes page (ProcessesList) opens this blank, and clicking
@@ -163,6 +164,9 @@ function TemplateOverlay({
   // The admission every task this template files starts at
   // (model.Template.Admission); "" on the wire is standard.
   const [admission, setAdmission] = useState(template?.admission || "standard");
+  // How every task this template files is hosted (model.Template.Hosting);
+  // "" on the wire is unattended.
+  const [hosting, setHosting] = useState(template?.hosting || "unattended");
 
   // Whether leaving now would lose an edit: the text boxes are read off
   // the form, and the pickers above keep their answers in state.
@@ -174,6 +178,7 @@ function TemplateOverlay({
     fields,
     chosenModel,
     admission,
+    hosting,
   });
   const [stale, setStale] = useState(null);
   // Held from when the pane opened, ScheduleOverlay's openedRevision.
@@ -221,6 +226,9 @@ function TemplateOverlay({
       ...(admission !== (template?.admission || "standard")
         ? { admission }
         : {}),
+      // Only when it changed, as admission: absent leaves the saved
+      // hosting alone (ui.UpdateTemplateRequest.Hosting).
+      ...(hosting !== (template?.hosting || "unattended") ? { hosting } : {}),
       reads,
       writes,
       reviewers: (data.get("reviewers") || "")
@@ -473,6 +481,7 @@ function TemplateOverlay({
             onChange={setAdmission}
             noun="template"
           />
+          <HostingField value={hosting} onChange={setHosting} noun="template" />
           <TextField
             select
             name="networkAccess"

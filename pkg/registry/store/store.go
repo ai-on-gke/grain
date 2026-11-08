@@ -220,6 +220,7 @@ type EntryRow struct {
 	Version           int64          `json:"version"`
 
 	Shape             string     `json:"shape,omitempty"`
+	BootDiskGB        int        `json:"boot_disk_gb,omitempty"`
 	Zone              string     `json:"zone,omitempty"`
 	GCEInstanceID     string     `json:"gce_instance_id,omitempty"`
 	InternalIP        string     `json:"internal_ip,omitempty"`
@@ -1175,6 +1176,7 @@ type CreateEntryInput struct {
 	Tags               []string
 	LifecycleState     api.EntryState
 	Shape              string
+	BootDiskGB         int
 	Zone               string
 	AllowSSH           *bool
 	ShipLogs           *bool
@@ -1189,6 +1191,14 @@ type CreateEntryInput struct {
 func (s *Store) CreateEntry(ctx context.Context, in CreateEntryInput) (*EntryRow, error) {
 	if !in.Kind.Valid() {
 		return nil, fmt.Errorf("unsupported entry kind %q (only \"instance\" and \"connected\" are supported in v1)", in.Kind)
+	}
+	if in.BootDiskGB != 0 {
+		if in.Kind != api.KindInstance {
+			return nil, fmt.Errorf("boot_disk_gb is only valid for kind=%q", api.KindInstance)
+		}
+		if err := api.ValidateBootDiskGB(in.BootDiskGB); err != nil {
+			return nil, err
+		}
 	}
 	ownerEmail := strings.ToLower(strings.TrimSpace(in.OwnerEmail))
 	if ownerEmail == "" {
@@ -1324,19 +1334,19 @@ func (s *Store) CreateEntry(ctx context.Context, in CreateEntryInput) (*EntryRow
 INSERT INTO registry.entries (
     id, name, kind, owner_email, owner_group, listed, visibility, access_list,
     display_name, purpose, tags,
-    lifecycle_state, version, shape, zone, allow_ssh, ship_logs, auto_upgrade, auto_wake, backend_url,
+    lifecycle_state, version, shape, boot_disk_gb, zone, allow_ssh, ship_logs, auto_upgrade, auto_wake, backend_url,
     connected_principal, host_kind,
     created_at, updated_at
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8::jsonb,
     $9, $10, $11::jsonb,
-    $12, 1, NULLIF($13, ''), NULLIF($14, ''), $15, $16, $17, $18, NULLIF($19, ''),
-    $20, $21,
-    $22, $22
+    $12, 1, NULLIF($13, ''), NULLIF($14, 0), NULLIF($15, ''), $16, $17, $18, $19, NULLIF($20, ''),
+    $21, $22,
+    $23, $23
 )`,
 		id, name, string(in.Kind), ownerEmail, ownerGroup, listed, string(vis), string(accessJSON),
 		in.DisplayName, in.Purpose, string(tagsJSON),
-		string(state), in.Shape, in.Zone, allowSSH, shipLogs, autoUpgrade, autoWake, in.BackendURL,
+		string(state), in.Shape, in.BootDiskGB, in.Zone, allowSSH, shipLogs, autoUpgrade, autoWake, in.BackendURL,
 		strings.TrimSpace(in.ConnectedPrincipal), hostKind, now)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "entries_active_name_idx") || strings.Contains(strings.ToLower(err.Error()), "duplicate key") {
@@ -1432,7 +1442,7 @@ SELECT
     e.id, e.name, e.kind, e.owner_email, e.owner_group, e.pending_owner, e.transfer_expires_at, e.listed, e.visibility, e.access_list,
     e.display_name, e.purpose, e.tags,
     e.lifecycle_state, e.status_reason, e.replace_step, e.version,
-    e.shape, e.zone, e.gce_instance_id, host(e.internal_ip), e.backend_url,
+    e.shape, COALESCE(e.boot_disk_gb, 0), e.zone, e.gce_instance_id, host(e.internal_ip), e.backend_url,
     e.service_account, e.sql_instance, e.db_name, e.db_purge_after,
     e.secret_prefix, e.config_repo, e.ssh_grant_expires_at, e.ssh_granted_to,
     e.allow_ssh, e.ship_logs, e.auto_upgrade, e.auto_wake, e.upgrade_available,
@@ -1449,7 +1459,7 @@ WHERE e.id = $1`, id).Scan(
 		&row.ID, &row.Name, &kindStr, &row.OwnerEmail, &row.OwnerGroup, &row.PendingOwner, &transferExp, &row.Listed, &visStr, &accessJSON,
 		&row.DisplayName, &row.Purpose, &tagsJSON,
 		&stateStr, &row.StatusReason, &row.ReplaceStep, &row.Version,
-		&shape, &zone, &gceID, &internalIP, &backendURL,
+		&shape, &row.BootDiskGB, &zone, &gceID, &internalIP, &backendURL,
 		&sa, &sqlInst, &dbName, &dbPurge,
 		&secretPrefix, &configRepo, &sshExp, &sshGrantedTo,
 		&row.AllowSSH, &row.ShipLogs, &row.AutoUpgrade, &row.AutoWake, &row.UpgradeAvailable,
@@ -2134,6 +2144,16 @@ WHERE id = $3 AND version = $4 AND deleted_at IS NULL`,
 // RequestEntryReplace transitions a hosted instance entry into `replacing` (draining step)
 // while validating any shape change against the owner's instance unit quota.
 func (s *Store) RequestEntryReplace(ctx context.Context, entryID string, expectedVersion int64, shape, targetVersion string) (*EntryRow, error) {
+	return s.RequestEntryReplaceWithDisk(ctx, entryID, expectedVersion, shape, targetVersion, 0)
+}
+
+// RequestEntryReplaceWithDisk transitions a hosted instance entry into `replacing` (draining step)
+// with an optional custom boot disk size override (`bootDiskGB == 0` uses the new shape's default
+// when changing shapes or preserves the current disk size when keeping the same shape).
+func (s *Store) RequestEntryReplaceWithDisk(ctx context.Context, entryID string, expectedVersion int64, shape, targetVersion string, bootDiskGB int) (*EntryRow, error) {
+	if err := api.ValidateBootDiskGB(bootDiskGB); err != nil {
+		return nil, err
+	}
 	cur, err := s.GetEntryByID(ctx, entryID)
 	if err != nil {
 		return nil, err
@@ -2148,6 +2168,12 @@ func (s *Store) RequestEntryReplace(ctx context.Context, entryID string, expecte
 	nextTarget := cur.TargetVersion
 	if strings.TrimSpace(targetVersion) != "" {
 		nextTarget = strings.TrimSpace(targetVersion)
+	}
+	nextBootDiskGB := cur.BootDiskGB
+	if bootDiskGB > 0 {
+		nextBootDiskGB = bootDiskGB
+	} else if nextShape != cur.Shape {
+		nextBootDiskGB = 0
 	}
 
 	now := s.now()
@@ -2181,11 +2207,12 @@ UPDATE registry.entries
 SET lifecycle_state = $1,
     replace_step    = $2,
     shape           = NULLIF($3, ''),
-    target_version  = $4,
+    boot_disk_gb    = NULLIF($4, 0),
+    target_version  = $5,
     version         = version + 1,
-    updated_at      = $5
-WHERE id = $6 AND version = $7 AND deleted_at IS NULL`,
-		string(api.StateReplacing), string(api.ReplaceStepDraining), nextShape, nextTarget, now, entryID, expectedVersion)
+    updated_at      = $6
+WHERE id = $7 AND version = $8 AND deleted_at IS NULL`,
+		string(api.StateReplacing), string(api.ReplaceStepDraining), nextShape, nextBootDiskGB, nextTarget, now, entryID, expectedVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -4066,8 +4093,18 @@ func (s *Store) ToAPIEntry(e *EntryRow, instanceDomain string) api.Entry {
 		lastSeenAt = e.LastHeartbeatAt
 	}
 	var conflicts []api.ScopeConflict
+	var machineType string
+	bootDiskGB := e.BootDiskGB
 	if s != nil {
 		conflicts = s.EntryScopeConflicts(context.Background(), e)
+		if e.Kind == api.KindInstance && e.Shape != "" {
+			if sh, err := s.GetShape(context.Background(), e.Shape); err == nil && sh != nil {
+				machineType = sh.MachineType
+				if bootDiskGB <= 0 {
+					bootDiskGB = sh.BootDiskGB
+				}
+			}
+		}
 	}
 	return api.Entry{
 		Name:                e.Name,
@@ -4091,6 +4128,8 @@ func (s *Store) ToAPIEntry(e *EntryRow, instanceDomain string) api.Entry {
 		Tags:                e.Tags,
 		Shape:               e.Shape,
 		Zone:                e.Zone,
+		MachineType:         machineType,
+		BootDiskGB:          bootDiskGB,
 		AllowSSH:            e.AllowSSH,
 		ShipLogs:            e.ShipLogs,
 		AutoUpgrade:         e.AutoUpgrade,

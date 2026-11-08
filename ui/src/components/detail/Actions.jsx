@@ -38,6 +38,7 @@ import TaskLink from "./TaskLink.jsx";
 import AccessGate from "../AccessGate.jsx";
 import { ReviewActions } from "../ClReview.jsx";
 import ClSubmitActions from "../ClSubmit.jsx";
+import { HOSTING_HELP } from "../HostingField.jsx";
 
 // ADMISSION_HELP explains each admission value under the task pane's
 // Admission select (design/design/unified-grants.design.md §4.1).
@@ -47,15 +48,6 @@ const ADMISSION_HELP = {
     "Admitted past the worker and merger limits and a pipeline pause; still charged to the sandbox budget.",
   durable:
     "Bypass queue, plus no wall-clock deadline: suspended when idle and counted under the durable limit.",
-};
-
-// HOSTING_HELP explains each hosting value under the task pane's
-// Hosting select (design/design/unified-grants.design.md §4.1).
-const HOSTING_HELP = {
-  unattended:
-    "Hands the agent its prompt and runs the turn to completion on its own.",
-  console:
-    "Runs the agent CLI on an interactive terminal in the UI until somebody closes it.",
 };
 
 // closePullRequest is deliberately local state that dies with the

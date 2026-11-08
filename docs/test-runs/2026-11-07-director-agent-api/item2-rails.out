@@ -1,0 +1,153 @@
+
+## setup: a person's message on the Director starts a fresh turn; acme/other seeds a default grant
+HTTP 200 {"id":"1","state":"queued","admission":"durable"}
+HTTP 200 {}
+
+## A. unchanged seeded repo default (acme/other's read-issues, which the Director does not hold) -> queued
+HTTP 201 {"id":"2","state":"queued","admission":"standard"}
+
+## B. smuggled Tier 3 api scope (api:settings:write) -> held or refused
+HTTP 201 {"id":"3","state":"proposed","admission":"standard"}
+
+## C. smuggled person-only capability (grain#host-exec) -> held
+HTTP 201 {"id":"4","state":"proposed","admission":"standard"}
+
+## D. admission durable -> held
+HTTP 201 {"id":"5","state":"proposed","admission":"durable"}
+
+## E. admission bypass -> held
+HTTP 201 {"id":"6","state":"proposed","admission":"bypass"}
+
+## F. targets grain/config -> held
+HTTP 201 {"id":"7","state":"proposed","admission":"standard"}
+
+## G. writes grain/config -> held
+HTTP 201 {"id":"8","state":"proposed","admission":"standard"}
+
+## H. seeded template carrying host-exec (system:gke-sandbox-cluster) -> held
+HTTP 201 {"id":"9","state":"proposed","admission":"standard"}
+
+## I. holdForApproval -> held
+HTTP 201 {"id":"10","state":"proposed","admission":"standard"}
+task 2: seeded default -> queued caps=1 admission=standard
+  note:  
+
+task 3: tier3 api -> proposed caps=1 admission=standard
+  note:  
+
+task 4: host-exec -> proposed caps=1 admission=standard
+  note:  
+
+task 5: durable -> proposed caps=0 admission=durable
+  note:  
+
+task 6: bypass -> proposed caps=0 admission=bypass
+  note:  
+
+task 7: config target -> proposed caps=1 admission=standard
+  note:  
+
+task 8: config write -> proposed caps=0 admission=standard
+  note:  
+
+task 9: template host-exec -> proposed caps=2 admission=standard
+  note:  
+
+task 10: hold -> proposed caps=0 admission=standard
+  note:  
+
+
+## per-turn cap: 11 more proposals in the same turn (TurnFanOut 10; A above already counts)
+HTTP 201 {"id":"11","state":"queued","admission":"standard"}
+HTTP 201 {"id":"12","state":"queued","admission":"standard"}
+HTTP 201 {"id":"13","state":"queued","admission":"standard"}
+HTTP 201 {"id":"14","state":"queued","admission":"standard"}
+HTTP 201 {"id":"15","state":"queued","admission":"standard"}
+HTTP 201 {"id":"16","state":"queued","admission":"standard"}
+HTTP 201 {"id":"17","state":"queued","admission":"standard"}
+HTTP 201 {"id":"18","state":"queued","admission":"standard"}
+HTTP 201 {"id":"19","state":"queued","admission":"standard"}
+HTTP 201 {"id":"20","state":"proposed","admission":"standard"}
+HTTP 201 {"id":"21","state":"proposed","admission":"standard"}
+
+## Director self-approval of its own held proposal (the last fan-out)
+own held proposal: task 21 (proposed)
+- POST /api/tasks/21/approve:
+HTTP 403 {"error":"task 1 holds no api grant for scope tasks:admin, which POST /api/tasks/{id}/approve needs: ask a person to grant api:tasks:admin or a preset that includes it (docs/agent-api.md)"}
+- POST /api/tasks/21/run-now:
+HTTP 403 {"error":"task 1 holds no api grant for scope dispatch:write, which POST /api/tasks/{id}/run-now needs: ask a person to grant api:dispatch:write or a preset that includes it (docs/agent-api.md)"}
+- PATCH /api/tasks/21 {approved:true}:
+HTTP 403 {"error":"an agent files work unapproved and never approves its own proposals, even under api:tasks:admin (docs/agent-api.md)"}
+- POST /api/tasks {approved:true} as the Director:
+HTTP 403 {"error":"an agent files work unapproved and never approves its own proposals, even under api:tasks:admin (docs/agent-api.md)"}
+
+## Person-filed tasks the Director tries to approve at its shipped posture (api:task-admin, no tasks:admin/dispatch:write)
+parent=22 hold=23 tier3=24 durable=25 config=26 plain=27
+- approve 23:
+HTTP 403 {"error":"task 1 holds no api grant for scope tasks:admin, which POST /api/tasks/{id}/approve needs: ask a person to grant api:tasks:admin or a preset that includes it (docs/agent-api.md)"}
+- run-now 23:
+HTTP 403 {"error":"task 1 holds no api grant for scope dispatch:write, which POST /api/tasks/{id}/run-now needs: ask a person to grant api:dispatch:write or a preset that includes it (docs/agent-api.md)"}
+- approve 24:
+HTTP 403 {"error":"task 1 holds no api grant for scope tasks:admin, which POST /api/tasks/{id}/approve needs: ask a person to grant api:tasks:admin or a preset that includes it (docs/agent-api.md)"}
+- run-now 24:
+HTTP 403 {"error":"task 1 holds no api grant for scope dispatch:write, which POST /api/tasks/{id}/run-now needs: ask a person to grant api:dispatch:write or a preset that includes it (docs/agent-api.md)"}
+- approve 25:
+HTTP 403 {"error":"task 1 holds no api grant for scope tasks:admin, which POST /api/tasks/{id}/approve needs: ask a person to grant api:tasks:admin or a preset that includes it (docs/agent-api.md)"}
+- run-now 25:
+HTTP 403 {"error":"task 1 holds no api grant for scope dispatch:write, which POST /api/tasks/{id}/run-now needs: ask a person to grant api:dispatch:write or a preset that includes it (docs/agent-api.md)"}
+- approve 26:
+HTTP 403 {"error":"task 1 holds no api grant for scope tasks:admin, which POST /api/tasks/{id}/approve needs: ask a person to grant api:tasks:admin or a preset that includes it (docs/agent-api.md)"}
+- run-now 26:
+HTTP 403 {"error":"task 1 holds no api grant for scope dispatch:write, which POST /api/tasks/{id}/run-now needs: ask a person to grant api:dispatch:write or a preset that includes it (docs/agent-api.md)"}
+- approve plain 27 (held for nobody, outside the lineage):
+HTTP 403 {"error":"task 1 holds no api grant for scope tasks:admin, which POST /api/tasks/{id}/approve needs: ask a person to grant api:tasks:admin or a preset that includes it (docs/agent-api.md)"}
+
+## A person grants the Director api:tasks:admin + api:dispatch:write; the G8 rail must still hold
+HTTP 200 {}
+{"task1caps":["api:dispatch:write","api:tasks:admin"]}
+- own held proposal 21 again: approve / run-now
+HTTP 403 {"error":"task 1 cannot approve task 21: it proposed it, and an agent never approves its own proposals, directly or through the tasks they filed, even under api:tasks:admin or dispatch:write -- a person approves them (docs/agent-api.md)"}
+HTTP 403 {"error":"task 1 cannot approve task 21: it proposed it, and an agent never approves its own proposals, directly or through the tasks they filed, even under api:tasks:admin or dispatch:write -- a person approves them (docs/agent-api.md)"}
+parent=28 hold=29 tier3=30 durable=31 config=32 plain=33
+- approve 29:
+HTTP 403 {"error":"task 1 cannot approve task 29: it is held for a person (it was filed with hold_for_approval), and an agent never approves a task held for a person, even under api:tasks:admin or dispatch:write (docs/agent-api.md)"}
+- run-now 29:
+HTTP 403 {"error":"task 1 cannot approve task 29: it is held for a person (it was filed with hold_for_approval), and an agent never approves a task held for a person, even under api:tasks:admin or dispatch:write (docs/agent-api.md)"}
+- approve 30:
+HTTP 403 {"error":"task 1 cannot approve task 30: it is held for a person (it holds api:settings:write, which only a person may grant; it asks for api:settings:write, which task 28 that proposed it does not hold), and an agent never approves a task held for a person, even under api:tasks:admin or dispatch:write (docs/agent-api.md)"}
+- run-now 30:
+HTTP 403 {"error":"task 1 cannot approve task 30: it is held for a person (it holds api:settings:write, which only a person may grant; it asks for api:settings:write, which task 28 that proposed it does not hold), and an agent never approves a task held for a person, even under api:tasks:admin or dispatch:write (docs/agent-api.md)"}
+- approve 31:
+HTTP 403 {"error":"task 1 cannot approve task 31: it is held for a person (it sets admission to `durable`, which only a person may give a task), and an agent never approves a task held for a person, even under api:tasks:admin or dispatch:write (docs/agent-api.md)"}
+- run-now 31:
+HTTP 403 {"error":"task 1 cannot approve task 31: it is held for a person (it sets admission to `durable`, which only a person may give a task), and an agent never approves a task held for a person, even under api:tasks:admin or dispatch:write (docs/agent-api.md)"}
+- approve 32:
+HTTP 403 {"error":"task 1 cannot approve task 32: it is held for a person (it targets grain/config, this deployment's configuration repository, and a proposed task that may land work there always waits for a person (propose a configuration change with propose_config_change instead)), and an agent never approves a task held for a person, even under api:tasks:admin or dispatch:write (docs/agent-api.md)"}
+- run-now 32:
+HTTP 403 {"error":"task 1 cannot approve task 32: it is held for a person (it targets grain/config, this deployment's configuration repository, and a proposed task that may land work there always waits for a person (propose a configuration change with propose_config_change instead)), and an agent never approves a task held for a person, even under api:tasks:admin or dispatch:write (docs/agent-api.md)"}
+- approve plain 33 (held for nobody, outside the lineage):
+HTTP 200 {"id":"33","state":"queued","admission":"standard"}
+task 29 now: third-party hold -> proposed
+task 30 now: third-party tier3 -> proposed
+task 31 now: person durable -> proposed
+task 32 now: person config -> proposed
+task 33 now: person plain -> queued
+task 21 now: fan-out 11 -> proposed
+
+## External agent credential (tasks:read/write/admin + dispatch:write on acme/app)
+minted: {"id":"1","owner":"alice@example.com","resolvedScopes":["dispatch:write@acme/app","tasks:admin@acme/app","tasks:read@acme/app","tasks:write@acme/app"],"error":null}
+- external files a task with approved:true:
+HTTP 201 {"id":"36","state":"queued"}
+- external filed task 37 (proposed); approve it:
+HTTP 200 {"id":"37","state":"queued"}
+- approve person hold 34:
+HTTP 200 {"id":"34","state":"queued"}
+- run-now person durable 35:
+HTTP 403 {"error":"35 is not approved, and agent \"external:rails-ext\" serves no task whose grants could cover approving it"}
+- same over POST /api/mcp (grain_invoke api_approve on 35):
+false
+"{\"id\":\"35\",\"title\":\"person durable 2\",\"author\":\"operator@example.com\",\"authorKind\":\"human\",\"authorSource\":\"access-code\",\"authorLabel\":\"operator (access code)\",\"approvedBy\":\"external:rails-ext\",\"approvedByKind\":\"agent\",\"approvedBySource\":\"ex"
+null
+task 34 now: person hold 2 -> queued
+task 35 now: person durable 2 -> queued
+task 37 now: ext filed -> queued
