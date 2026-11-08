@@ -56,6 +56,9 @@ type fakeProber struct {
 	// placedEntries, when non-nil, simulates CapabilityServerPlacedProber:
 	// nil slice for a key means registered-but-disconnected.
 	placedEntries map[string][]string
+	// agentsOnly names the placed hosts whose hello says they run agent
+	// CLIs only (CapabilityServerAgentsOnlyProber).
+	agentsOnly map[string]bool
 	// refuse makes the server's configure refuse every config with it;
 	// unreachable makes the probe fail before configure is reached.
 	refuse, unreachable string
@@ -111,6 +114,10 @@ func (f *fakeProber) HostCapabilityEntriesFor(_ context.Context, selector string
 		return nil, false, fmt.Errorf("hostd %s is not connected", selector)
 	}
 	return entries, true, nil
+}
+
+func (f *fakeProber) HostAgentsOnly(_ context.Context, selector string) bool {
+	return f.agentsOnly[selector]
 }
 
 func configTestServer(t *testing.T, p *fakeProber) (*httptest.Server, *ui.HTTPClient, *ui.Client, *secrets.Store) {
@@ -262,6 +269,53 @@ func TestRunHostIsCheckedAgainstTheHostdAllowlist(t *testing.T) {
 	// Back to the container is always allowed.
 	if _, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: configCap, Config: protocol.ServerConfig{Command: "grain"}}); err != nil {
 		t.Errorf("run in the container: %v", err)
+	}
+}
+
+// A server placed on an agents-only host (grain-agentd) is refused with
+// advice that can work there: that host runs agent CLIs only, so the
+// server needs a `grain host`, not an entry in /etc/grain/hostd.yaml.
+func TestPlacedCapabilityServerOnAnAgentsOnlyHostSaysItNeedsAGrainHost(t *testing.T) {
+	ctx := context.Background()
+	_, hc, client, _ := configTestServer(t, &fakeProber{
+		noHostd: true,
+		placedEntries: map[string][]string{
+			"host-d":   {},
+			"host-old": {},
+			"host-e":   {"other-cap"},
+		},
+		agentsOnly: map[string]bool{"host-d": true},
+	})
+	registerHostds(t, client.Store, model.Hostd{Name: "host-d"}, model.Hostd{Name: "host-old"}, model.Hostd{Name: "host-e"})
+
+	cfg := protocol.ServerConfig{Command: "walk-echo", Run: protocol.RunHostd, Hostd: "host-d"}
+	_, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: configCap, Config: cfg})
+	if err == nil {
+		t.Fatal("placing a run: host server on an agents-only host succeeded")
+	}
+	for _, want := range []string{"host-d runs agent CLIs only", "grain host", `"walk-echo"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal %q does not say %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "under capabilities: in") {
+		t.Errorf("refusal %q tells the operator to add an allowlist entry an agents-only host refuses", err)
+	}
+
+	// A host that offers no capabilities entries and does not say it is
+	// agents-only (an older grain-agentd) gets both pieces of advice.
+	cfg.Hostd = "host-old"
+	_, err = hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: configCap, Config: cfg})
+	if err == nil || !strings.Contains(err.Error(), "it offers no capabilities entries") ||
+		!strings.Contains(err.Error(), "if this host runs grain-agentd, it runs agent CLIs only") {
+		t.Errorf("refusal on a host offering nothing = %v", err)
+	}
+
+	// A full host offering other entries is told to add one, as before.
+	cfg.Hostd = "host-e"
+	_, err = hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: configCap, Config: cfg})
+	if err == nil || !strings.Contains(err.Error(), `add an entry "walk-echo" under capabilities:`) || strings.Contains(err.Error(), "grain-agentd") {
+		t.Errorf("refusal on a full host = %v", err)
 	}
 }
 
