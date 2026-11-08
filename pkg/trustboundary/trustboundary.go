@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v22"
+const Version = "trust-boundary/v23"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -81,6 +81,18 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v23 adds what the 2026-11-08 security review of main (task 3329,
+// finding 1) found #885's v22 left out (auth-routes): the human-review
+// hold (pkg/model/human_review_hold.go, pkg/ui/human_review.go), whose
+// ReleaseHumanReviewHold refuses agent and automation principals -- the
+// rule that an agent may raise a human-review hold but never release it,
+// which the security hold's raiseHumanOnlyReview and raiseFindingsReview
+// rely on; the director's Tier 3 floor (pkg/model/director_floor.go,
+// WithinDirectorFloor and DirectorFloorRefusal), which the gate, the MCP
+// endpoint and staterepo/validate_pr.go apply; and pkg/ui/on_behalf_of.go
+// (agentOnBehalfOf), attribution only today, classified so a change that
+// makes it authorize is reviewed.
 //
 // v22 adds grain-registry's front door (task 3479, found in the security
 // review of task 3284): pkg/webauth/, which verifies Cloud IAP JWTs and
@@ -293,6 +305,16 @@ var Categories = []Category{
 			// -ui-addr one and the loopback approval-callback one -- and
 			// the HostGuard in front of each.
 			"pkg/daemon/ui_server.go",
+			// The human-review hold: an agent or automation principal may
+			// raise one but never release it (ReleaseHumanReviewHold,
+			// RequestHumanReview), which the security hold relies on.
+			"pkg/model/human_review_hold.go", "pkg/ui/human_review.go",
+			// The director's Tier 3 floor (WithinDirectorFloor,
+			// DirectorFloorRefusal) the gate, /api/mcp and validate_pr apply.
+			"pkg/model/director_floor.go",
+			// Which person an agent's call is attributed to
+			// (agentOnBehalfOf): attribution only, kept that way by review.
+			"pkg/ui/on_behalf_of.go",
 		},
 	},
 	{
