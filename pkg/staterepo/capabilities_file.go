@@ -906,7 +906,7 @@ func checkCapabilities(dir string) error {
 			id := fmt.Sprint(g[kind.parent])
 			owner := byID[id]
 			capability, _ := textOf(g["capability"])
-			if rewritten, changed, missing := model.RewriteGCPKeyGrant(capability, configuredSets, serverIDs); changed && missing == "" {
+			if rewritten, changed, _ := model.RewriteGCPKeyGrant(capability, configuredSets, serverIDs); changed {
 				capability = rewritten
 			}
 			gc := model.GrantContext{Kind: model.CatalogueKindTask, Grants: []string{capability}}

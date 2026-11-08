@@ -901,6 +901,12 @@ var Migrations = []Migration{
 			"ALTER TABLE `external_agent_token` ADD COLUMN `owner_source` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version: 127,
+		Description: "rewrite the gcp#gcp-key grants migration 109 kept as written (an \"account\" naming an unconfigured permission set) " +
+			"to permission_set, so the state repository a store exports loads again",
+		Up: MigrateGCPKeyGrantArgs,
+	},
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as

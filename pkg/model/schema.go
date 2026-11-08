@@ -605,7 +605,11 @@ import "strconv"
 // credential's owner was established, so an owner named under the shared
 // access code is not reported as a verified on-behalf-of
 // (operator-attribution spec §6.3, external-cli spec #XC-14).
-const SchemaVersion = 126
+// 127 changes no table: it runs migration 109's gcp#gcp-key rewrite again,
+// which now rewrites an `account` naming an unconfigured permission set to
+// `permission_set` (with a note) where 109 once kept it as written, a grant
+// every state-repository check refused (gcp_key_args_migration.go).
+const SchemaVersion = 127
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
