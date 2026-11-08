@@ -358,9 +358,12 @@ func handler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	addr := flag.String("addr", "127.0.0.1:4380", "listen address")
+	addr := flag.String("addr", "", "listen address (required; the run scripts pass one)")
 	flag.StringVar(&repo, "repo", "ai-on-gke/grain", "owner/name")
 	flag.Parse()
+	if *addr == "" {
+		log.Fatal("-addr is required")
+	}
 	base = "http://" + *addr
 	log.Printf("releases_fake on %s for %s", base, repo)
 	log.Fatal(http.ListenAndServe(*addr, http.HandlerFunc(handler)))

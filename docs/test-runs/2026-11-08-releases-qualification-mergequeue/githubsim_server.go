@@ -52,9 +52,12 @@ func git(dir string, args ...string) {
 }
 
 func main() {
-	addr := flag.String("addr", "127.0.0.1:4390", "listen address")
+	addr := flag.String("addr", "", "listen address (required; the run scripts pass one)")
 	dir := flag.String("dir", "/tmp/s5-item3/sim", "where the bare repo lives")
 	flag.Parse()
+	if *addr == "" {
+		log.Fatal("-addr is required")
+	}
 	bare := filepath.Join(*dir, "acme", "widgets.git")
 	seed := filepath.Join(*dir, "seed")
 	if _, err := os.Stat(bare); err != nil {
