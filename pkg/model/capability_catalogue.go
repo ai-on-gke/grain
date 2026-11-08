@@ -283,6 +283,120 @@ func (c *CapabilityCatalogue) Refusals(gc GrantContext) []GrantRefusal {
 	return out
 }
 
+// DisabledReason reports whether the catalogue disables grant outright -- an
+// entry with enabled: false on its server, in_process entry, retired in_process
+// predecessor, or api_scopes preset -- returning the refusal reason judge
+// produces. Restrictions such as repos, kinds, templates, ci_only or unlisted
+// server methods are not disabled entries and return ("", false).
+func (c *CapabilityCatalogue) DisabledReason(grant string) (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	g := StoredGrantSpelling(strings.TrimSpace(grant))
+	if g == "" {
+		return "", false
+	}
+	switch {
+	case IsCapabilityRef(g):
+		if reason, ok := c.retiredInProcessDisabled(g); ok {
+			return reason, true
+		}
+		return c.serverRefDisabled(g)
+	case strings.HasPrefix(g, APIGrantPrefix):
+		if reason, ok := c.retiredInProcessDisabled(g); ok {
+			return reason, true
+		}
+		return c.apiScopesDisabled(g)
+	}
+	return c.inProcessDisabled(g)
+}
+
+func (c *CapabilityCatalogue) retiredInProcessDisabled(g string) (string, bool) {
+	names := retiredInProcessNames(g)
+	if GCPKeySetUnnamed(g) {
+		var extra []string
+		for k := range c.InProcess {
+			if strings.HasPrefix(k, "gcp-key:") && !slices.Contains(names, k) {
+				extra = append(extra, k)
+			}
+		}
+		sort.Strings(extra)
+		names = append(names, extra...)
+	}
+	if BootstrapSkillSetUnnamed(g) && !slices.Contains(names, "bootstrap-playbooks") {
+		names = append(names, "bootstrap-playbooks")
+		sort.Strings(names)
+	}
+	for _, legacy := range names {
+		entry, key, ok := c.inProcessEntry(legacy)
+		if !ok {
+			continue
+		}
+		if entry.Enabled != nil && !*entry.Enabled {
+			return fmt.Sprintf("capability %s is disabled in settings/capabilities.yml (in_process.%s, the capability it replaced)", g, key), true
+		}
+	}
+	return "", false
+}
+
+func (c *CapabilityCatalogue) serverRefDisabled(g string) (string, bool) {
+	ref := CapabilityGrantRef(g)
+	if parsed, err := CapabilityGrantSpec(g); err == nil {
+		ref = parsed.Capability
+	}
+	id, _, _ := strings.Cut(ref, "#")
+	srv, ok := c.server(id)
+	if !ok {
+		return "", false
+	}
+	if srv.Enabled != nil && !*srv.Enabled {
+		return fmt.Sprintf("capability %s: server %s is disabled in settings/capabilities.yml", ref, srv.ID), true
+	}
+	return "", false
+}
+
+func (c *CapabilityCatalogue) apiScopesDisabled(g string) (string, bool) {
+	rest := strings.TrimPrefix(g, APIGrantPrefix)
+	what, _, _ := strings.Cut(rest, "@")
+	for _, key := range presetLookupKeys(what) {
+		p, ok := c.APIScopes.Presets[key]
+		if !ok {
+			continue
+		}
+		if p.Enabled != nil && !*p.Enabled {
+			return fmt.Sprintf("capability %s is disabled in settings/capabilities.yml", g), true
+		}
+	}
+	return "", false
+}
+
+func (c *CapabilityCatalogue) inProcessDisabled(g string) (string, bool) {
+	if entry, _, ok := c.inProcessEntry(g); ok {
+		if entry.Enabled != nil && !*entry.Enabled {
+			return fmt.Sprintf("capability %s is disabled in settings/capabilities.yml", g), true
+		}
+	}
+	if repo, ok := RepoReadTarget(g); ok {
+		return c.serverRefDisabled(RepoReadGrant(repo))
+	}
+	if repo, ok := RepoWriteTarget(g); ok {
+		return c.serverRefDisabled(RepoWriteGrant(repo))
+	}
+	trimmed := strings.TrimSpace(g)
+	if repl := CanonicalLegacyGrants(trimmed); !(len(repl) == 1 && repl[0] == trimmed) {
+		for _, rg := range repl {
+			if reason, ok := c.DisabledReason(rg); ok {
+				return reason, true
+			}
+		}
+	} else if preset := APIAliasPreset(trimmed); preset != "" {
+		return c.apiScopesDisabled(APIGrantPrefix + preset)
+	} else if trimmed == ReleaseGateReadCapability {
+		return c.apiScopesDisabled(APIGrantPrefix + ReleaseGateReadCapability)
+	}
+	return "", false
+}
+
 // judge is one grant: whether a person must approve it, or why it is
 // refused.
 func (c *CapabilityCatalogue) judge(g string, gc GrantContext) (bool, error) {

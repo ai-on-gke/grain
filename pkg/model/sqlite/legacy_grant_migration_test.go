@@ -579,7 +579,9 @@ func TestMigrationFoldsRetiredCatalogueInProcess(t *testing.T) {
 	if want := []string{"api:pipeline-control", "release-gate-read"}; !slices.Equal(cat.Defaults.Task, want) {
 		t.Errorf("catalogue.defaults.task = %v, want %v", cat.Defaults.Task, want)
 	}
-	if want := []string{"api:release-notes", "api:memory"}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].Task, want) {
+	// Migration 90 rewrites release-notes and memory to api:release-notes and
+	// api:memory; migration 128 then drops disabled api:memory from defaults.
+	if want := []string{"api:release-notes"}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].Task, want) {
 		t.Errorf("catalogue.defaults.repos[acme/widgets].task = %v, want %v", cat.Defaults.Repos["acme/widgets"].Task, want)
 	}
 	if _, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{"api:memory"}}); err == nil {
