@@ -860,3 +860,71 @@ func TestMCPPerToolRoleChecks(t *testing.T) {
 		t.Fatalf("viewer POST /mcp api_add_comment: %d %s, want tool error naming tasks:write and role grain/viewer", writeRec.Code, writeRec.Body.String())
 	}
 }
+
+// TestExternalTokenCannotExceedItsOwnersCurrentRole: a gma_ token issued
+// while its owner held grain/operator is refused once the owner is moved to
+// grain/viewer, on REST and both MCP endpoints, and works again within the
+// owner's role (docs/test-runs/2026-11-07-rbac-roles.md F2).
+func TestExternalTokenCannotExceedItsOwnersCurrentRole(t *testing.T) {
+	ctx := context.Background()
+	h := newRoleHarness(t)
+	enableExternalAgentAPI(t, h.client.Store)
+	h.allow(t, "user:olivia@example.com", model.DefaultAccessRole)
+	issued, err := h.client.CreateExternalAgentToken(ctx, ui.CreateExternalAgentTokenRequest{
+		Name: "olivia-laptop", ScopeSet: model.DefaultAccessRole, Owner: "olivia@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bearer := map[string]string{"Authorization": "Bearer " + issued.Token, "Content-Type": "application/json"}
+	file := func(path string) int {
+		body := `{"title":"gma filing","description":"x","noRepo":true}`
+		if path != "/api/tasks" {
+			body = `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`
+		}
+		return serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, path, body, bearer).Code
+	}
+	if code := file("/api/tasks"); code != http.StatusCreated {
+		t.Fatalf("token of an operator owner filing = %d, want 201", code)
+	}
+	if _, _, _, err := h.client.Store.SetAllowedPrincipalRole(ctx, "user:olivia@example.com", "grain/viewer"); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/api/tasks", "/mcp", "/api/mcp"} {
+		rec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, path, `{"title":"x","description":"x","noRepo":true}`, bearer)
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "wider than its owner's current role") {
+			t.Fatalf("POST %s with a downgraded owner's operator token = %d %s, want 403 naming the owner's role", path, rec.Code, rec.Body.String())
+		}
+	}
+
+	narrow, err := h.client.CreateExternalAgentToken(ctx, ui.CreateExternalAgentTokenRequest{
+		Name: "olivia-reader", ScopeSet: "grain/viewer", Owner: "olivia@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bearer["Authorization"] = "Bearer " + narrow.Token
+	if code := file("/mcp"); code != http.StatusOK {
+		t.Fatalf("viewer token of a viewer owner on /mcp = %d, want 200", code)
+	}
+	if code := file("/api/tasks"); code != http.StatusForbidden {
+		t.Fatalf("viewer token filing = %d, want 403", code)
+	}
+
+	// A group lookup that fails when the group could narrow the owner refuses.
+	h.allow(t, "user:gus@example.com", "grain/contributor")
+	h.allow(t, "group:readers@example.com", "grain/viewer")
+	h.client.Config.GroupChecker = groupCheckerFunc(func(context.Context, string, string) (bool, error) {
+		return false, errors.New("cloud identity unreachable")
+	})
+	gus, err := h.client.CreateExternalAgentToken(ctx, ui.CreateExternalAgentTokenRequest{
+		Name: "gus-laptop", ScopeSet: "grain/contributor", Owner: "gus@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bearer["Authorization"] = "Bearer " + gus.Token
+	if code := file("/api/tasks"); code != http.StatusCreated {
+		t.Fatalf("contributor token of a contributor owner, group lookup down = %d, want 201 (no deny to miss)", code)
+	}
+}
