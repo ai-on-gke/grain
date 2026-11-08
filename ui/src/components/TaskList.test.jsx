@@ -977,7 +977,7 @@ describe("TaskList", () => {
         // it is already in gets no slot, because tapping it would
         // promise a move and make none.
         expect(slots().map((b) => b.getAttribute("aria-label"))).toEqual([
-          "Move here, above First",
+          "Move here, above task 1, “First”",
           "Move here, to the end of the list",
         ]);
       });
@@ -989,7 +989,9 @@ describe("TaskList", () => {
 
         await user.click(screen.getByRole("button", { name: "Move task 3" }));
         await user.click(
-          screen.getByRole("button", { name: "Move here, above Second" }),
+          screen.getByRole("button", {
+            name: "Move here, above task 2, “Second”",
+          }),
         );
 
         expect(onReorder).toHaveBeenCalledWith([3], 1, 2);
@@ -1025,7 +1027,9 @@ describe("TaskList", () => {
         expect(screen.getByText(/Moving 2 tasks/)).toBeInTheDocument();
 
         await user.click(
-          screen.getByRole("button", { name: "Move here, above Second" }),
+          screen.getByRole("button", {
+            name: "Move here, above task 2, “Second”",
+          }),
         );
         expect(onReorder).toHaveBeenCalledWith([1, 3], null, 2);
       });

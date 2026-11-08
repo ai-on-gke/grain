@@ -189,4 +189,48 @@ test.describe("user and system settings walkthrough regressions", () => {
       section.getByRole("button", { name: "Remove" }).first(),
     ).toBeVisible();
   });
+
+  // Settings → Access formatted PrincipalTable's Added column in UTC
+  // regardless of Settings → Preferences' time zone (2026-11-08 settings
+  // walkthrough).
+  test("Settings → Access prints principal Added times in this browser's chosen time zone", async ({
+    page,
+  }) => {
+    const res = await page.request.get("/api/access/principals");
+    expect(res.ok()).toBeTruthy();
+    const { entries } = await res.json();
+    const first = entries.find((e) => e.addedAt);
+    expect(first).toBeTruthy();
+
+    const inTokyo = await page.evaluate(
+      (iso) =>
+        new Date(iso).toLocaleString(undefined, { timeZone: "Asia/Tokyo" }),
+      first.addedAt,
+    );
+    const inLA = await page.evaluate(
+      (iso) =>
+        new Date(iso).toLocaleString(undefined, {
+          timeZone: "America/Los_Angeles",
+        }),
+      first.addedAt,
+    );
+    expect(inTokyo).not.toBe(inLA);
+
+    await page.goto("/settings/preferences");
+    const zone = page.getByRole("combobox", { name: "Time zone" });
+    try {
+      await chooseOption(zone, "Asia/Tokyo");
+      await page.goto("/settings/access");
+      const row = page.getByTestId(`principal-row-${first.entry}`);
+      await expect(row).toContainText(inTokyo);
+
+      await page.goto("/settings/preferences");
+      await chooseOption(zone, "America/Los_Angeles");
+      await page.goto("/settings/access");
+      await expect(row).toContainText(inLA);
+    } finally {
+      await page.goto("/settings/preferences");
+      await chooseOption(zone, "");
+    }
+  });
 });

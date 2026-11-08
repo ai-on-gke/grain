@@ -32,6 +32,8 @@ import SecretField from "../SecretField.jsx";
 import { ConfigManagedNotice } from "../ConfigRepoLink.jsx";
 import { identifierField } from "../../identifierField.js";
 import SettingsCard, { ReadOnlyFieldset } from "./SettingsCard.jsx";
+import { formatDateTime } from "../../time.js";
+import { useTimeZone } from "../../TimeZoneContext.jsx";
 
 function connectionBadge(state, enabled) {
   if (!enabled || state === "disabled") {
@@ -66,6 +68,7 @@ function originLabel(origin) {
 // "Connected entries"): live connection and heartbeat state, advertised scopes,
 // registration credential secret, and owner-managed catalog metadata.
 export default function RegistrySection({ s }) {
+  const zone = useTimeZone();
   const {
     settings,
     saveChoice,
@@ -223,7 +226,7 @@ export default function RegistrySection({ s }) {
           {!enabled
             ? "Configure a registry URL and entry name below (or run 'grain registry register') so this daemon self-registers as a connected entry and heartbeats its version, health, task counts, and repository scopes."
             : snapshot?.lastHeartbeatAt
-              ? `Last heartbeat ${new Date(snapshot.lastHeartbeatAt).toISOString()}${snapshot.heartbeatIntervalSeconds ? ` (every ${snapshot.heartbeatIntervalSeconds}s)` : ""} · health ${snapshot.health || "ok"} · ${snapshot.activeTasks ?? 0} active, ${snapshot.awaitingReplyTasks ?? 0} awaiting reply`
+              ? `Last heartbeat ${formatDateTime(snapshot.lastHeartbeatAt, zone)}${snapshot.heartbeatIntervalSeconds ? ` (every ${snapshot.heartbeatIntervalSeconds}s)` : ""} · health ${snapshot.health || "ok"} · ${snapshot.activeTasks ?? 0} active, ${snapshot.awaitingReplyTasks ?? 0} awaiting reply`
               : "Waiting for first heartbeat…"}
         </Typography>
 

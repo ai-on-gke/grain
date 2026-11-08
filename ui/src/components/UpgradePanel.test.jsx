@@ -24,6 +24,7 @@ import UpgradePanel, {
 import api from "../api.js";
 import { optionValues } from "../searchSelectTesting.js";
 import { fetchUpgradeTargets } from "../upgradeTargets.js";
+import { TimeZoneProvider } from "../TimeZoneContext.jsx";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
 // The branch field's drop-down (grain/task-1914), answered apart from
@@ -826,6 +827,30 @@ describe("UpgradePanel", () => {
     );
     expect(screen.getByText(/1120-1/).closest("li")).toHaveTextContent(
       /lost: run 1120-1 \(the Director session\) on claude/,
+    );
+  });
+
+  // LastRestart printed report.at in the browser's own zone even when
+  // Settings → Preferences chose another (2026-11-08 settings walkthrough).
+  it("prints the last restart time in this browser's chosen time zone", async () => {
+    const at = "2026-11-08T02:30:00Z";
+    api.mockResolvedValue({
+      enabled: true,
+      mode: "image",
+      phase: "",
+      lastRestart: { at, adopted: [], lost: [] },
+    });
+    const { container } = render(
+      <TimeZoneProvider zone="Asia/Tokyo">
+        <UpgradePanel showError={() => {}} />
+      </TimeZoneProvider>,
+    );
+    await screen.findByText(/Last restart/);
+    const inTokyo = new Date(at).toLocaleString(undefined, {
+      timeZone: "Asia/Tokyo",
+    });
+    expect(container.querySelector(".upgrade-last-restart")).toHaveTextContent(
+      `Last restart (${inTokyo}):`,
     );
   });
 
