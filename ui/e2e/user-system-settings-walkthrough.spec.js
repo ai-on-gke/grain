@@ -233,4 +233,93 @@ test.describe("user and system settings walkthrough regressions", () => {
       await chooseOption(zone, "");
     }
   });
+
+  // At a tablet width the nav is the Section select; cancelling "Discard
+  // unsaved changes?" kept the page on Agents but left "General" in the
+  // box (2026-11-08 settings walkthrough, task 3615).
+  test("the tablet Section select keeps the current section when a dirty leave is cancelled", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 800, height: 1000 });
+    await page.goto("/settings/agents");
+    const promptBox = page.getByLabel("Standing instructions for every run");
+    await expect(promptBox).toBeVisible();
+    await promptBox.fill("unsaved walkthrough edit");
+    await expect(page.getByTestId("settings-status")).toContainText(
+      "Unsaved changes in Standing instructions",
+    );
+
+    page.once("dialog", (dialog) => dialog.dismiss());
+    const picker = page.getByRole("combobox", { name: "Section" });
+    await expect(picker).toHaveValue("Agents");
+    await chooseOption(picker, "General");
+
+    await expect(page).toHaveURL(/\/settings\/agents$/);
+    await expect(
+      page.getByRole("heading", { name: "Agents", exact: true }),
+    ).toBeVisible();
+    await expect(picker).toHaveValue("Agents");
+    await page.getByTestId("promptExtension-discard").click();
+  });
+
+  // The retired Settings → Legacy capabilities tab was still what Tasks'
+  // empty Default legacy capabilities menu pointed at.
+  test("Tasks' empty Default legacy capabilities menu points at Grants", async ({
+    page,
+  }) => {
+    await page.goto("/settings/tasks");
+    await page
+      .locator('[data-setting-id="defaultCapabilities"] [role="combobox"]')
+      .click();
+    const empty = page.getByRole("option", {
+      name: "None offered -- grant access under Grants",
+    });
+    await expect(empty).toBeVisible();
+    await expect(empty).toHaveAttribute("aria-disabled", "true");
+    await expect(page.getByText(/Settings → Legacy capabilities/i)).toHaveCount(
+      0,
+    );
+    await page.keyboard.press("Escape");
+  });
+
+  // Agents → Commit identity and CLI → Sign in reloaded the whole app and
+  // skipped the unsaved-changes prompt.
+  test("Agents' Git link and CLI's Agents link open in place and guard unsaved edits", async ({
+    page,
+  }) => {
+    await page.goto("/settings/agents");
+    await page.evaluate(() => {
+      window.__settingsSpaAlive = true;
+    });
+    const promptBox = page.getByLabel("Standing instructions for every run");
+    await promptBox.fill("unsaved standing instruction");
+    await expect(page.getByTestId("settings-status")).toContainText(
+      "Unsaved changes in Standing instructions",
+    );
+    const gitLink = page
+      .getByTestId("commit-identity-pointer")
+      .getByRole("link", { name: /Settings → Git/ });
+
+    page.once("dialog", (dialog) => dialog.dismiss());
+    await gitLink.click();
+    await expect(page).toHaveURL(/\/settings\/agents$/);
+    await expect(promptBox).toHaveValue("unsaved standing instruction");
+
+    page.once("dialog", (dialog) => dialog.accept());
+    await gitLink.click();
+    await expect(page).toHaveURL(/\/settings\/git$/);
+    await expect(
+      page.getByRole("heading", { name: "Git", exact: true }),
+    ).toBeVisible();
+    expect(await page.evaluate(() => window.__settingsSpaAlive)).toBe(true);
+
+    await page.getByTestId("settings-nav-cli").click();
+    await expect(page).toHaveURL(/\/settings\/cli$/);
+    await page.getByTestId("cli-external-agent-api-link").click();
+    await expect(page).toHaveURL(/\/settings\/agents/);
+    await expect(
+      page.getByRole("heading", { name: "Agents", exact: true }),
+    ).toBeVisible();
+    expect(await page.evaluate(() => window.__settingsSpaAlive)).toBe(true);
+  });
 });

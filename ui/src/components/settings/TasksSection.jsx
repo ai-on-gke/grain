@@ -35,7 +35,11 @@ import { isCapabilityRef } from "../../capabilityArgs.js";
 import GrantsPicker from "../GrantsPicker.jsx";
 import ReadOnlyGrants from "../ReadOnlyGrants.jsx";
 import { localGrantHandlers } from "../capabilityMethods.js";
-import { LEGACY_CAPABILITIES_HINT, capabilityRows } from "../../state.js";
+import {
+  LEGACY_CAPABILITIES_HINT,
+  NO_CAPABILITIES_HINT,
+  capabilityRows,
+} from "../../state.js";
 import { legacyValues } from "../../taskAttributes.js";
 import SettingsCard from "./SettingsCard.jsx";
 
@@ -253,10 +257,7 @@ export default function TasksSection({
             )}
           >
             {capabilityChoices.length === 0 && (
-              <MenuItem disabled>
-                None configured &mdash; the rows under Settings → Legacy
-                capabilities are where a capability is set up
-              </MenuItem>
+              <MenuItem disabled>{NO_CAPABILITIES_HINT}</MenuItem>
             )}
             {capabilityChoices.map((c) => (
               <MenuItem key={c.id} value={c.id} title={c.description}>
