@@ -12,7 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Alert, Button, Link, TextField, Typography } from "@mui/material";
+import {
+  Alert,
+  Button,
+  Checkbox,
+  FormControlLabel,
+  Link,
+  TextField,
+  Typography,
+} from "@mui/material";
 import SettingsCard, { MultilineSetting } from "./SettingsCard.jsx";
 import {
   DEFAULT_GIT_IDENTITY_EMAIL,
@@ -140,6 +148,33 @@ export default function AgentsSection({ s }) {
             tab, and a team that names none commits as grain's own.
             Boxes here saved into a field PUT /api/settings ignores,
             so they answered 200 and came back empty on a reload. */}
+      </SettingsCard>
+      <SettingsCard title="External agents" anchor="external-agents">
+        <FormControlLabel
+          control={
+            <Checkbox
+              name="externalAgentApi"
+              data-setting-id="externalAgentApi"
+              checked={!!settings.externalAgentApi}
+              onChange={(evt) =>
+                saveChoice({ externalAgentApi: evt.target.checked })
+              }
+            />
+          }
+          label={
+            <>
+              Accept external agents
+              <span className="hint">
+                off (default): only people signed in to this deployment and its
+                own runs reach its API. On: a coding agent or the grain CLI on a
+                workstation can sign in with a scoped gma_ token (
+                <code>grain login --issue-token</code>, Settings &rarr; CLI) and
+                use the /mcp endpoint, within the scope set its token was minted
+                for.
+              </span>
+            </>
+          }
+        />
       </SettingsCard>
       <SettingsCard title="Commit identity" anchor="commit-identity">
         <Typography

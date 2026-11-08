@@ -132,6 +132,12 @@ type Hello struct {
 	// hostd alone, local or remote; an older hostd says nothing, which
 	// is "not known", not "none".
 	Logins []string `json:"logins,omitempty"`
+	// AgentsOnly is set by a host agent that runs agent CLIs and nothing
+	// else (grain-agentd, Server.AgentsOnly): its allowlist has no
+	// capabilities: and may not have any, so a run: host capability
+	// server placed on it needs a `grain host` instead. An older build
+	// says nothing, which is "not known".
+	AgentsOnly bool `json:"agents_only,omitempty"`
 }
 
 // ThisHello is this build's Hello; build is its version string.

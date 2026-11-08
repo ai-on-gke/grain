@@ -35,10 +35,8 @@ test("saves a typed setting when the rail leaves Settings", async ({
   page,
 }) => {
   const name = `escape-${Date.now()}`;
-  // The name is saved on this worker's demo server, which the files run
-  // after this one share (e2e/fixtures.js), so it is put back: left set,
-  // it put an environment chip in every later phone bar and squeezed
-  // phone-tasks-stale.spec.js's wordmark to 22 px.
+  // The demo server is the worker's (fixtures.js): an environment name
+  // left behind puts a chip on every later page's bar.
   const initial = await (await page.request.get("/api/settings")).json();
   try {
     await page.goto("/settings/general");
