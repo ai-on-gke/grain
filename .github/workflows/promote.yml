@@ -17,7 +17,9 @@
 # Keeps the `:latest` and `:vX.Y.Z` image tags on `docker.io/grainai/*`
 # aligned with the git `latest` tag by running `scripts/release-images.sh promote`,
 # and the `vX.Y.Z` GitHub release's assets (and GitHub's latest-release
-# marker) with it by running `scripts/release-assets.sh promote`.
+# marker) with it by running `scripts/release-assets.sh promote`, and puts
+# the release's grain CLI archives on it (`scripts/build-cli.sh`, then
+# `scripts/release-assets.sh cli-publish`).
 
 name: promote
 
@@ -318,3 +320,132 @@ jobs:
             args+=("${PROMOTE_VERSION}")
           fi
           bash ./scripts/release-assets.sh "${args[@]}"
+
+  # The grain CLI GET /cli/install.sh fetches off the promoted release
+  # (pkg/ui/cli_install.sh): scripts/build-cli.sh's four
+  # grain-<os>-<arch>.tar.gz archives and their checksums.txt, built from
+  # the release's tag and stamped with its version as the daemon is. Built
+  # in a job holding nothing but `contents: read`, and skipped once the
+  # release carries its checksums.txt -- which is every push to main or
+  # candidate after the first.
+  cli:
+    name: build the release's grain CLI
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      build: ${{ steps.release.outputs.build }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Refuse a patch tag that did not come from its release branch
+        env:
+          PROMOTE_VERSION: ${{ inputs.version }}
+        run: bash ./scripts/patch-tag-guard.sh --latest "${GITHUB_REF:-}" "${PROMOTE_VERSION:-}"
+
+      - name: Resolve the release and whether it still needs its CLI
+        id: release
+        env:
+          PROMOTE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # promote-version prints nothing but a vX.Y.Z.
+          version="$(bash ./scripts/release-assets.sh promote-version "${PROMOTE_VERSION:-}")"
+          build=true
+          if curl -fsSIL -o /dev/null "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${version}/checksums.txt"; then
+            echo "promote: ${version} already carries the grain CLI"
+            build=false
+          fi
+          {
+            echo "version=${version}"
+            echo "build=${build}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Setup Go
+        if: steps.release.outputs.build == 'true'
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build the grain CLI
+        if: steps.release.outputs.build == 'true'
+        env:
+          RELEASE: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          bash ./scripts/build-cli.sh --ref "refs/tags/${RELEASE}" "${RUNNER_TEMP}/release-cli"
+          bash ./scripts/release-assets.sh cli-validate "${RUNNER_TEMP}/release-cli"
+
+      - name: Hand the archives to cli-assets
+        if: steps.release.outputs.build == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: grain-cli
+          path: |
+            ${{ runner.temp }}/release-cli/*.tar.gz
+            ${{ runner.temp }}/release-cli/checksums.txt
+          if-no-files-found: error
+          retention-days: 1
+
+  # Uploads what cli built to the vX.Y.Z release the assets job promoted
+  # (scripts/release-assets.sh cli-publish): the archives, then
+  # checksums.txt, never replacing a release that carries one. On a push,
+  # a release that predates release assets -- which promote skips -- is
+  # skipped here too (RELEASE_CLI_SKIP_UNRELEASED); asked for by name, it
+  # fails.
+  cli-assets:
+    name: publish the release's grain CLI
+    needs: [cli, assets]
+    if: ${{ !cancelled() && needs.cli.result == 'success' && needs.assets.result == 'success' && needs.cli.outputs.build == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    concurrency:
+      group: ${{ github.workflow }}-cli-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch the archives cli built
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: grain-cli
+          path: ${{ runner.temp }}/release-cli
+
+      - name: Publish the grain CLI
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          PROMOTE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ needs.cli.outputs.version }}
+        run: |
+          set -euo pipefail
+          # The same dry-run rule as the assets job.
+          case "${GITHUB_REF:-}" in
+            refs/heads/main|refs/heads/candidate|refs/tags/v*) is_release_ref=true ;;
+            *) is_release_ref=false ;;
+          esac
+          dry_run="${INPUT_DRY_RUN:-}"
+          if [ "$is_release_ref" != "true" ] && [ "${GITHUB_EVENT_NAME:-}" != "release" ]; then
+            dry_run="true"
+          fi
+          args=()
+          if [ "${dry_run}" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          if [ -z "${PROMOTE_VERSION:-}" ]; then
+            export RELEASE_CLI_SKIP_UNRELEASED=true
+          fi
+          bash ./scripts/release-assets.sh "${args[@]}" cli-publish "${RELEASE_VERSION}" "${RUNNER_TEMP}/release-cli"
