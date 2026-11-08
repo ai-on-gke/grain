@@ -202,3 +202,62 @@ func TestExternalAgentApprovalRailHoldsInTheClient(t *testing.T) {
 		t.Errorf("Client.RunNow(942) as external:rails-ext: %v, want it approved and run", err)
 	}
 }
+
+// run-now's implicit approval asks for exactly the tasks:admin the
+// approve route's own scope check does. For a task with no repository
+// that is tasks:admin on every repository: a credential holding
+// dispatch:write everywhere but tasks:admin only for acme/widgets is
+// refused both routes, over REST and over POST /api/mcp's grain_invoke,
+// and the task stays proposed (2026-11-08 second review, finding 3). A
+// credential holding both scopes everywhere is granted both.
+func TestExternalAgentRunNowOnANoRepoTaskNeedsUnlimitedTasksAdmin(t *testing.T) {
+	srv, client := testServer(t)
+	enableExternalAgentAPI(t, client.Store)
+	mint := func(name string, scopes ...string) string {
+		t.Helper()
+		issued, err := client.CreateExternalAgentToken(context.Background(), ui.CreateExternalAgentTokenRequest{
+			Name: name, Scopes: scopes, Owner: "alice@example.com",
+		})
+		if err != nil {
+			t.Fatalf("minting credential %s: %v", name, err)
+		}
+		return issued.Token
+	}
+	noRepo := func(task *model.Task) { task.Target = nil }
+
+	mixed := mint("mixed", "tasks:read", "dispatch:write", "tasks:admin@acme/widgets")
+	railTask(t, client, "950", "", noRepo)
+	if code, body := externalTaskAction(t, srv, mixed, "950", "approve"); code != http.StatusForbidden || !strings.Contains(body, "tasks:admin") {
+		t.Errorf("approve on a no-repository task under tasks:admin@acme/widgets: %d %s, want 403 naming tasks:admin", code, body)
+	}
+	if code, body := externalTaskAction(t, srv, mixed, "950", "run-now"); code != http.StatusForbidden || !strings.Contains(body, "tasks:admin") {
+		t.Errorf("run-now on an unapproved no-repository task under tasks:admin@acme/widgets: %d %s, want 403 naming tasks:admin", code, body)
+	}
+	if out, isErr := externalMCPTaskAction(t, srv, mixed, "api_approve", "950"); !isErr || !strings.Contains(out, "tasks:admin") {
+		t.Errorf("POST /api/mcp grain_invoke api_approve on a no-repository task under tasks:admin@acme/widgets: isErr=%v %s, want refusal naming tasks:admin", isErr, out)
+	}
+	if out, isErr := externalMCPTaskAction(t, srv, mixed, "api_run_now", "950"); !isErr || !strings.Contains(out, "tasks:admin") {
+		t.Errorf("POST /api/mcp grain_invoke api_run_now on an unapproved no-repository task under tasks:admin@acme/widgets: isErr=%v %s, want refusal naming tasks:admin", isErr, out)
+	}
+	wantProposed(t, client, "950")
+
+	admin := mint("admin", "tasks:read", "dispatch:write", "tasks:admin")
+	railTask(t, client, "951", "", noRepo)
+	railTask(t, client, "952", "", noRepo)
+	railTask(t, client, "953", "", noRepo)
+	railTask(t, client, "954", "", noRepo)
+	if code, body := externalTaskAction(t, srv, admin, "951", "approve"); code != http.StatusOK {
+		t.Errorf("approve on a no-repository task under unlimited tasks:admin: %d %s, want 200", code, body)
+	}
+	if code, body := externalTaskAction(t, srv, admin, "952", "run-now"); code != http.StatusOK {
+		t.Errorf("run-now on an unapproved no-repository task under unlimited tasks:admin: %d %s, want 200", code, body)
+	}
+	wantQueued(t, client, "952")
+	if out, isErr := externalMCPTaskAction(t, srv, admin, "api_approve", "953"); isErr {
+		t.Errorf("POST /api/mcp grain_invoke api_approve on a no-repository task under unlimited tasks:admin: %s, want it approved", out)
+	}
+	if out, isErr := externalMCPTaskAction(t, srv, admin, "api_run_now", "954"); isErr {
+		t.Errorf("POST /api/mcp grain_invoke api_run_now on an unapproved no-repository task under unlimited tasks:admin: %s, want it approved and run", out)
+	}
+	wantQueued(t, client, "954")
+}
