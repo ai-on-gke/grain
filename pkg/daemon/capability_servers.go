@@ -18,7 +18,10 @@ import (
 	"context"
 	"fmt"
 	"github.com/ai-on-gke/grain/pkg/change"
+	"io"
 	"log"
+	"regexp"
+	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
@@ -83,6 +86,10 @@ func startCapabilityServers(ctx context.Context, store *model.Store, secretStore
 		ConfigRoot: StateRepoDir(dataDir),
 		Hostd:      hostdClient,
 		Logf:       logf,
+		// A stdio server's own log is this one's: the gcp server's
+		// "gcp: audit: ..." lines, the only record of each grant and token
+		// it mints, were discarded here (2026-11-08 gcp token-mode walk).
+		Stderr: capabilityServerStderr,
 	}
 	if store != nil {
 		// A server that falls out of use says so where people look, not
@@ -270,4 +277,23 @@ func capabilityServerAlertsOnHostd(ctx context.Context, store *model.Store, host
 		}
 	}
 	return onDrop, onAttach
+}
+
+// serverLogStamp is the date and time a server's own log.Logger puts
+// before each line, which this log already puts before it.
+var serverLogStamp = regexp.MustCompile(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(\.\d+)? `)
+
+// capabilityServerStderr is servers.Options.Stderr: each line a stdio
+// capability server writes to its stderr, already scrubbed of its
+// secrets, logged as the server's.
+func capabilityServerStderr(id string) io.Writer {
+	return capabilityServerLog{id: id}
+}
+
+type capabilityServerLog struct{ id string }
+
+func (l capabilityServerLog) Write(p []byte) (int, error) {
+	line := serverLogStamp.ReplaceAllString(strings.TrimRight(string(p), "\r\n"), "")
+	log.Printf("grain daemon: capability server %s: %s", l.id, line)
+	return len(p), nil
 }
