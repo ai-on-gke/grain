@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -264,6 +265,60 @@ func (s *Server) StartBackground(ctx context.Context) {
 	if s.router != nil {
 		s.router.StartBackground(ctx)
 	}
+	if s.store != nil && len(s.cfg.Catalog.ScopeOwners) > 0 {
+		go func() {
+			if n, err := s.ReconcilePrimaryScopeOwners(ctx); err != nil {
+				log.Printf("registry: catalog.scope_owners startup sweep: %v (demoted %d entries)", err, n)
+			} else if n > 0 {
+				log.Printf("registry: catalog.scope_owners startup sweep demoted unauthorized primary scopes on %d entries", n)
+			}
+		}()
+	}
+}
+
+// ReconcilePrimaryScopeOwners re-evaluates every stored entry's primary
+// scopes against catalog.scope_owners and demotes those the policy does not
+// authorize. Write-time checks alone leave primaries claimed before the
+// policy was configured (or before a rule was tightened) in place, and
+// /api/route would keep returning them as primary; this sweep, run once at
+// startup, closes that gap. It returns how many entries were changed.
+func (s *Server) ReconcilePrimaryScopeOwners(ctx context.Context) (int, error) {
+	if s.store == nil || len(s.cfg.Catalog.ScopeOwners) == 0 {
+		return 0, nil
+	}
+	entries, err := s.store.ListEntries(ctx)
+	if err != nil {
+		return 0, err
+	}
+	changed := 0
+	var firstErr error
+	for _, e := range entries {
+		hasPrimary := false
+		for _, sc := range e.Scopes {
+			if sc.PrimaryClaim {
+				hasPrimary = true
+				break
+			}
+		}
+		if !hasPrimary {
+			continue
+		}
+		updated, dErr := s.demoteUnauthorizedPrimaryScopesWithPolicy(ctx, e, true, false)
+		if dErr != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("entry %q: %w", e.Name, dErr)
+			}
+			continue
+		}
+		if updated != e {
+			changed++
+			_ = s.store.RecordAudit(ctx, "system:scope-owners", "entry_scope_owner_demote", updated.ID, updated.Name, nil)
+			if s.router != nil {
+				s.router.HostCache().Put(updated)
+			}
+		}
+	}
+	return changed, firstErr
 }
 
 // BeginDrain marks `/healthz` not-ready (`503`) and drains active tunnels on SIGTERM.
@@ -2563,6 +2618,16 @@ func (s *Server) checkPrimaryScopeClaims(w http.ResponseWriter, r *http.Request,
 }
 
 func (s *Server) demoteUnauthorizedPrimaryScopes(ctx context.Context, entry *store.EntryRow, demoteDeclared bool) (*store.EntryRow, error) {
+	return s.demoteUnauthorizedPrimaryScopesWithPolicy(ctx, entry, demoteDeclared, true)
+}
+
+// demoteUnauthorizedPrimaryScopesWithPolicy demotes entry's primary scopes
+// that catalog.scope_owners does not authorize. demoteOnLookupError decides
+// what a GroupResolver error does: true demotes (fail closed, used right
+// after an ownership change), false leaves the claim as it is (used by the
+// startup sweep, so a transient resolver outage at boot cannot permanently
+// rewrite a legitimately-held declared primary scope).
+func (s *Server) demoteUnauthorizedPrimaryScopesWithPolicy(ctx context.Context, entry *store.EntryRow, demoteDeclared, demoteOnLookupError bool) (*store.EntryRow, error) {
 	if s.store == nil || entry == nil || len(s.cfg.Catalog.ScopeOwners) == 0 || len(entry.Scopes) == 0 {
 		return entry, nil
 	}
@@ -2574,7 +2639,7 @@ func (s *Server) demoteUnauthorizedPrimaryScopes(ctx context.Context, entry *sto
 				continue
 			}
 			allowed, err := s.authorizePrimaryScopeOwner(ctx, declared[i].Repo, entry.OwnerEmail, entry.OwnerGroup)
-			if err != nil || !allowed {
+			if (err != nil && demoteOnLookupError) || (err == nil && !allowed) {
 				declared[i].Primary = false
 				changedDeclared = true
 			}
@@ -2587,7 +2652,7 @@ func (s *Server) demoteUnauthorizedPrimaryScopes(ctx context.Context, entry *sto
 			continue
 		}
 		allowed, err := s.authorizePrimaryScopeOwner(ctx, reported[i].Repo, entry.OwnerEmail, entry.OwnerGroup)
-		if err != nil || !allowed {
+		if (err != nil && demoteOnLookupError) || (err == nil && !allowed) {
 			reported[i].Primary = false
 			changedReported = true
 		}

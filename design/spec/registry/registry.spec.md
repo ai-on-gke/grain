@@ -241,11 +241,13 @@ Every normative requirement below is derived from the implementation on `main` a
 5. When `catalog.scope_owners` configures ownership rules (`repo: <owner>/<name>` or `<prefix>/*`, where an exact repository rule overrides the longest matching `<prefix>/*` rule; repositories matching no rule remain self-service), an entry MAY hold a `primary` scope on a restricted repository if and only if `user:<entry.owner>`, `entry.owner_group`, or a `GroupResolver`-verified group of `entry.owner` appears in the rule's `principals`:
    - Unauthorized synchronous `primary` writes and transfers (`POST /api/entries`, `PUT /api/entries/{name}/scopes`, `PATCH /api/entries/{name}`, `POST /api/entries/{name}/transfer`, `POST /api/entries/{name}/transfer/accept`) MUST fail closed with `403 Forbidden` (`code: "scope_owner_forbidden"`), or `503 Service Unavailable` (`Retry-After: 5`) if `GroupResolver` fails during evaluation.
    - Asynchronous heartbeats (`PUT /api/entries/{name}/heartbeat`) and admin force-transfers (`POST /api/admin/entries/{name}/force-transfer`) MUST NOT fail liveness on an unauthorized `primary` scope; instead, unauthorized `primary` claims MUST be demoted to `role = 'secondary'`.
+   - Primary claims stored before a rule applied (the policy newly configured or tightened) MUST NOT be grandfathered: on startup the registry re-evaluates every entry's `primary` scopes and demotes those the policy does not authorize to `role = 'secondary'`. A `GroupResolver` error during this sweep leaves the claim unchanged rather than demoting it.
 
 **Pinned by:**
 - `pkg/registry/store/store_test.go`: `TestCredentialsScopesHeartbeatsAndRouteResolution`, `TestStep16TwoStepTransfer7DayExpiryRestoreHardPurgeAndAdminRecovery`
 - `pkg/registry/registry_test.go`: `TestStep12CatalogCRUDGroupAuthHeartbeatsDirectoryAndRouteEndToEnd`, `TestStep16TwoStepTransferRestoreHardPurgeAndAdminRecoveryEndToEnd`
 - `pkg/registry/scope_owners_and_shapes_test.go`: `TestParseConfigScopeOwnersValidationAndMatching`, `TestDefaultScopeClaimsWalkthroughAndSecondaryRoute`, `TestCatalogScopeOwnersEnforcesPrimaryClaimsAndDemotesHeartbeats`
+- `pkg/registry/scope_owners_sweep_test.go`: `TestScopeOwnersStartupSweepDemotesPrePolicyPrimaries`
 
 ---
 

@@ -706,6 +706,13 @@ multi-team / multi-domain fleets via `catalog.scope_owners`:
      (`POST /api/admin/entries/<name>/force-transfer`) to a recipient
      outside a repo's `scope_owners` demotes affected declared `primary`
      scopes on that entry to `secondary`.
+   - **Existing claims are re-checked at startup:** primaries stored before
+     a rule applied (the policy newly added, or a rule tightened) are not
+     grandfathered. Each registry replica re-evaluates every entry's
+     `primary` scopes when it starts and demotes the unauthorized ones to
+     `secondary` (audited as `entry_scope_owner_demote`). A `GroupResolver`
+     error during that sweep leaves the claim as it is rather than demoting
+     it on a transient outage.
 
 ---
 
