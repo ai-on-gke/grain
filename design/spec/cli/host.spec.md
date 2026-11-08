@@ -1537,6 +1537,7 @@ _No flags._
 <!-- BEGIN GENERATED FLAGS: grain registry transfer -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
+| `-cancel` | bool |  |  | withdraw the entry's pending transfer offer instead of making one |
 | `-clear-owner-group` | bool |  |  | clear the entry's co-owning group |
 | `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
 | `-owner-group` | string |  |  | optional co-owning group to set alongside transfer |

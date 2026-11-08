@@ -1123,6 +1123,7 @@ for machine-readable JSON output on every subcommand.
 | `grain registry start <name>` | Start a stopped hosted `instance` again |
 | `grain registry restore <name>` | Restore a soft-deleted hosted `instance` whose retention window (`purge_after`) has not expired |
 | `grain registry transfer -to <email> [-owner-group <group>] [-clear-owner-group] <name>` | Offer a two-step accountable `owner` transfer to `<email>` |
+| `grain registry transfer -cancel <name>` | Withdraw the entry's pending transfer offer (before it is accepted or expires) |
 | `grain registry accept-transfer <name>` | Accept a pending ownership transfer offered to you |
 | `grain registry delegating-apps list\|create\|disable\|enable` | Registry admins: manage the service accounts allowed to act on people's behalf ([Delegated access](#delegated-access-delegating-apps-and-consent-grants)) |
 | `grain registry grants list\|create\|revoke` | Grant, list, or revoke your own consent for a delegating app to act for you |
