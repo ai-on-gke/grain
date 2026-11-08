@@ -2377,6 +2377,11 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // TaskList's own way of saying "no bound on this side" (dropped at the
   // very head or the very tail of the list), which the API expects as an
   // absent field rather than a literal null.
+  // Reordering is POST /api/tasks/reorder (tasks:write): a role without
+  // it is not offered the list's or a kanban column's drag handles, as
+  // canMoveBoards withholds the boards' (docs/test-runs/
+  // 2026-11-07-rbac-roles-ui.md U1).
+  const canReorderTasks = canAccess(config, "tasks:write");
   const reorderTasks = useCallback(
     async (ids, afterId, beforeId) => {
       try {
@@ -3196,7 +3201,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
         selected={selected}
         onToggleSelect={toggleSelect}
         onSelectAll={setSelection}
-        onReorder={reorderTasks}
+        onReorder={canReorderTasks ? reorderTasks : undefined}
         onShownChange={setShownIds}
         onRefresh={refreshList}
         showError={showError}
@@ -3250,7 +3255,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
         selected={selected}
         onToggleSelect={toggleSelect}
         onSelectAll={setSelection}
-        onReorder={reorderTasks}
+        onReorder={canReorderTasks ? reorderTasks : undefined}
         onShownChange={setShownIds}
         countFloor={closedInView && closedFloor}
         footer={<ClosedTasksMore closed={closedTasks} active={closedInView} />}

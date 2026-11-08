@@ -75,6 +75,24 @@ async function withProposal(page) {
   );
 }
 
+// expectGatesFilled checks every refused control on the page fills the
+// wrapper AccessGate draws it in. A wrapper taller than its control is a
+// sibling pushed down (the task pane's Admission and Hosting kept margins
+// a Stack had zeroed) or a button left at the top of a row that stretched
+// its neighbours (docs/test-runs/2026-11-07-rbac-roles-ui.md U2, U3).
+async function expectGatesFilled(page, within = page.locator("body")) {
+  const gates = await within.locator(".access-gate:visible").all();
+  expect(gates.length).toBeGreaterThan(0);
+  for (const gate of gates) {
+    const g = await gate.boundingBox();
+    const c = await gate.locator("> *").first().boundingBox();
+    const name = (await gate.innerText()).trim().slice(0, 40);
+    expect(Math.abs(g.height - c.height), `${name} height`).toBeLessThan(1.5);
+    expect(Math.abs(g.width - c.width), `${name} width`).toBeLessThan(1.5);
+    expect(Math.abs(g.y - c.y), `${name} top`).toBeLessThan(1.5);
+  }
+}
+
 const proposalRow = (page) =>
   page
     .locator(".inbox-group", { has: page.getByText("Approve a proposal") })
@@ -186,6 +204,127 @@ test("a viewer's New task is disabled in the rail and on the form, and says why"
   ).toBeDisabled();
 });
 
+// Dragging a row reorders the queue (POST /api/tasks/reorder, tasks:write).
+// A viewer was offered the handles and the drag, and the drop ended in a
+// 403 toast (docs/test-runs/2026-11-07-rbac-roles-ui.md U1).
+test("a viewer is offered no reorder handles on the task list", async ({
+  page,
+}) => {
+  await page.goto("/");
+  // The access code is unlimited: the demo's list offers the handles.
+  await expect(page.locator("main [draggable=true]").first()).toBeVisible();
+  await asViewer(page);
+  await page.reload();
+  await expect(page.locator("main .task-row").first()).toBeVisible();
+  await expect(page.locator("main [draggable=true]")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Move task / })).toHaveCount(
+    0,
+  );
+});
+
+test("a viewer is offered no drag on a kanban board's cards", async ({
+  page,
+}) => {
+  const res = await page.request.get("/api/boards");
+  const board = (await res.json()).find((b) => b.name === "Board");
+  expect(board, "the demo's kanban board").toBeTruthy();
+  await page.goto(`/boards/${board.id}`);
+  await expect(
+    page.locator(".board-column [draggable=true]").first(),
+  ).toBeVisible();
+  await asViewer(page);
+  await page.reload();
+  await expect(page.locator(".board-card").first()).toBeVisible();
+  await expect(page.locator(".board-column [draggable=true]")).toHaveCount(0);
+});
+
+test("a viewer's refused task controls keep the pane's own spacing", async ({
+  page,
+}) => {
+  await asViewer(page);
+  await page.goto("/tasks/1");
+  await expect(
+    page.getByRole("button", { name: "Edit", exact: true }),
+  ).toBeDisabled();
+  await expectGatesFilled(page, page.locator(".actions"));
+});
+
+// A refused control must sit where the allowed one does: SuiteOverlay's
+// "+ New template" kept its own margin inside a wrapper that carried it
+// too, and the wrapper's line box added more, so it and everything under
+// it sat lower for a viewer (docs/test-runs/2026-11-07-rbac-roles-ui.md
+// U3).
+test("a viewer's suite New template sits where the allowed one does", async ({
+  page,
+  request,
+}) => {
+  const res = await request.get("/api/suites");
+  const body = await res.json();
+  const suite = (Array.isArray(body) ? body : body.suites || [])[0];
+  expect(suite, "a demo suite").toBeTruthy();
+  const place = async () => {
+    await page.goto(`/processes/suites/${suite.id}`);
+    const button = page.getByRole("button", { name: "+ New template" });
+    await expect(button).toBeVisible();
+    const save = page.getByRole("button", { name: "Save", exact: true });
+    return [await button.boundingBox(), await save.boundingBox()];
+  };
+  const [allowed, allowedSave] = await place();
+  await asViewer(page);
+  const [refused, refusedSave] = await place();
+  await expect(
+    page.getByRole("button", { name: "+ New template" }),
+  ).toBeDisabled();
+  expect(Math.abs(refused.y - allowed.y)).toBeLessThan(1.5);
+  expect(Math.abs(refused.x - allowed.x)).toBeLessThan(1.5);
+  expect(Math.abs(refusedSave.y - allowedSave.y)).toBeLessThan(1.5);
+});
+
+// An access request's Grant and Deny are POST .../access-request/...,
+// which needs capabilities:admin; the task pane offered them to every
+// role (docs/test-runs/2026-11-07-rbac-roles-ui.md U4).
+test("a viewer's access request Grant and Deny are disabled, and say why", async ({
+  page,
+}) => {
+  await asViewer(page);
+  await page.route(/\/api\/tasks\/1$/, async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const headers = { ...route.request().headers() };
+    delete headers["if-none-match"];
+    const response = await route.fetch({ headers });
+    const json = {
+      ...(await response.json()),
+      awaitingAccess: true,
+      pendingAccess: {
+        summary: "Grant read on acme/docs",
+        reason: "Role-gated fixture.",
+        items: [{ kind: "read", repo: "acme/docs" }],
+        holds: {},
+        earlier: [],
+      },
+    };
+    await route.fulfill({ response, json });
+  });
+  await page.goto("/tasks/1");
+  const card = page.getByRole("region", {
+    name: "Access request waiting for your decision",
+  });
+  await expect(card).toBeVisible();
+  const grant = card.getByRole("button", { name: "Grant all" });
+  const deny = card.getByRole("button", { name: "Deny" });
+  await expect(grant).toBeDisabled();
+  await expect(deny).toBeDisabled();
+  // Still one row, Grant first.
+  const g = await grant.boundingBox();
+  const d = await deny.boundingBox();
+  expect(Math.abs(g.y - d.y)).toBeLessThan(2);
+  expect(g.x + g.width).toBeLessThanOrEqual(d.x);
+  await grant.locator("xpath=..").hover();
+  await expect(page.getByRole("tooltip")).toHaveText(
+    "Needs capabilities:admin, which your role grain/viewer does not grant.",
+  );
+});
+
 test.describe("on a phone", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
@@ -229,5 +368,21 @@ test.describe("on a phone", () => {
     const box = await plus.boundingBox();
     expect(box.x).toBeGreaterThanOrEqual(0);
     expect(box.x + box.width).toBeLessThanOrEqual(390);
+  });
+
+  test("a viewer's refused template buttons fill their footer row", async ({
+    page,
+    request,
+  }) => {
+    const res = await request.get("/api/templates");
+    const body = await res.json();
+    const list = Array.isArray(body) ? body : body.templates || [];
+    const tmpl = list.find((t) => !t.builtIn) || list[0];
+    expect(tmpl, "a demo template").toBeTruthy();
+    await asViewer(page);
+    await page.goto(`/processes/templates/${tmpl.id}`);
+    const save = page.getByRole("button", { name: "Save", exact: true });
+    await expect(save).toBeDisabled();
+    await expectGatesFilled(page, save.locator("xpath=../.."));
   });
 });
