@@ -158,8 +158,10 @@ qualification, or that a person rejects, is dropped and a later run cuts
   (`success`), when the triage window elapses with no blocker (`neutral`), or if
   superseded (`neutral`). Before cutting `rc.(N+1)` (`next_n > 1`), Phase 2 reads
   `commits/<floor>/check-runs?check_name=grain%2Frc-hold&filter=all` (or
-  `RELEASE_HOLD_CHECKS_JSON` in tests): if `RELEASE_QUALIFICATION_APP` is unset
-  it refuses rather than trust another app's check run, and if the newest check
+  `RELEASE_HOLD_CHECKS_JSON` in tests): if `RELEASE_QUALIFICATION_APP` (the
+  environment, else `scripts/release.conf`) is unset it refuses rather than
+  trust another app's check run; if it is explicitly `none` no check run is
+  trusted, so nothing holds; and if the newest check
   run from `RELEASE_QUALIFICATION_APP` is not `completed`, Phase 2 cuts nothing, logs
   `phase 2: vX.Y.0-rc.(N+1) is held by grain/rc-hold on <floor>: <summary>`,
   emits `rc_held=vX.Y.0-rc.(N+1)` and exits 0. No check run from
@@ -202,7 +204,13 @@ which case it is dropped without qualifying):
    `.grain/suites/release-qualification.yml` against the rc and posts check
    run `grain/release-qualification` on its commit. Only a check run created
    by `RELEASE_QUALIFICATION_APP` (grain's own GitHub App) counts; same-named
-   check runs from any other app are ignored.
+   check runs from any other app are ignored, and with no
+   `RELEASE_QUALIFICATION_APP` configured none is trusted and the rc never
+   passes. With `RELEASE_QUALIFICATION_APP` set explicitly to `none` (in the
+   environment or `scripts/release.conf`), as for a forge connection that is a
+   personal access token rather than a GitHub App (which cannot post check
+   runs), Stage 2 is skipped (`SKIPPED grain/release-qualification`) and Stage
+   1 alone qualifies the rc. It is never `none` by default.
 
 A first product failure of any Stage 1 job or Stage 2 item gets one retry on
 the same rc (`flake`); cancelled, timed-out or capacity-starved runs are
