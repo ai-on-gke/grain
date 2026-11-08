@@ -25,10 +25,11 @@
 # the Cloud Console (the IAP OAuth Admin API that could create one was shut
 # down in March 2026), lifts that restriction.
 #
-# The client secret is read from a file or from a hidden prompt and sent to
-# the Compute API on stdin, so it never appears in argv, shell history, the
-# repository, or Terraform state. Terraform (lb.tf) ignores the OAuth client
-# fields on the backend service, so re-running up.sh keeps this setting.
+# The client secret is read from a file or from a hidden prompt and passed to
+# gcloud via --flags-file using a process-substituted descriptor, so it never
+# appears in argv, shell history, the repository, or Terraform state. Terraform
+# (lb.tf) ignores the OAuth client fields on the backend service, so re-running
+# up.sh keeps this setting.
 
 set -euo pipefail
 
@@ -131,7 +132,7 @@ if ! [[ "${NAME_PREFIX}" =~ ^[a-z][a-z0-9-]{1,10}[a-z0-9]$ ]]; then
   exit 2
 fi
 
-for tool in gcloud curl jq; do
+for tool in gcloud jq; do
   if ! command -v "${tool}" >/dev/null 2>&1; then
     echo "configure-oauth.sh: required tool not found: ${tool}" >&2
     exit 1
@@ -139,7 +140,6 @@ for tool in gcloud curl jq; do
 done
 
 BACKEND="${NAME_PREFIX}-iap-bs"
-BS_URL="https://compute.googleapis.com/compute/v1/projects/${PROJECT_ID}/global/backendServices/${BACKEND}"
 
 if [[ "${SHOW_ONLY}" -eq 1 ]]; then
   gcloud compute backend-services describe "${BACKEND}" --global \
@@ -180,31 +180,24 @@ if [[ -z "${client_secret}" ]]; then
   exit 2
 fi
 
-access_tok="$(gcloud auth print-access-token)"
-
 echo "Updating IAP on backend service ${BACKEND} in ${PROJECT_ID} to OAuth client ${CLIENT_ID}..." >&2
-# Body (with the secret) goes on stdin via bash's builtin printf -> jq -Rs
-# (never --arg secret, which would put the secret in jq's argv) and the bearer
-# token goes through a header file descriptor, so neither appears in ps/argv.
-op_json="$(
-  printf '%s' "${client_secret}" |
-    jq -Rs --arg id "${CLIENT_ID}" \
-      '{iap: {enabled: true, oauth2ClientId: $id, oauth2ClientSecret: .}}' |
-    curl -sS --fail-with-body -X PATCH \
-      -H @<(printf 'Authorization: Bearer %s\nContent-Type: application/json\n' "${access_tok}") \
-      --data-binary @- \
-      "${BS_URL}"
-)" || {
-  echo "configure-oauth.sh: PATCH ${BACKEND} failed:" >&2
-  echo "${op_json:-}" | jq -r '.error.message // .' >&2 2>/dev/null || true
+# The OAuth client secret is piped via bash's builtin printf -> jq -Rs
+# into a JSON flags file read through a process-substituted file descriptor
+# (--flags-file=<( ... )), so the secret never appears in argv, shell history,
+# or process listings. Using gcloud directly avoids corp mTLS auth failures
+# (ACCESS_TOKEN_TYPE_UNSUPPORTED) that occur with raw curl calls.
+if ! gcloud compute backend-services update "${BACKEND}" --global \
+  --project "${PROJECT_ID}" \
+  --flags-file=<(
+    printf '%s' "${client_secret}" |
+      jq -Rs --arg id "${CLIENT_ID}" \
+        '{"--iap": ("enabled,oauth2-client-id=" + $id + ",oauth2-client-secret=" + (rtrimstr("\n")))}'
+  ) >/dev/null; then
+  unset client_secret
+  echo "configure-oauth.sh: updating backend service ${BACKEND} failed" >&2
   exit 1
-}
-unset client_secret
-
-op_name="$(echo "${op_json}" | jq -r '.name // empty')"
-if [[ -n "${op_name}" ]]; then
-  gcloud compute operations wait "${op_name}" --global --project "${PROJECT_ID}" >/dev/null
 fi
+unset client_secret
 
 now_id="$(gcloud compute backend-services describe "${BACKEND}" --global \
   --project "${PROJECT_ID}" --format='value(iap.oauth2ClientId)')"

@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -129,6 +130,10 @@ func (f *fakeCLIActions) ReplyToPullRequestComment(_ context.Context, taskID str
 
 func (f *fakeCLIActions) ResolveReviewThread(context.Context, string, string, int) (gitproxy.CLIActionResult, error) {
 	return gitproxy.CLIActionResult{Text: "Resolved."}, nil
+}
+
+func (f *fakeCLIActions) ListReviewThreads(_ context.Context, taskID string, unresolvedOnly bool) (gitproxy.CLIActionResult, error) {
+	return gitproxy.CLIActionResult{Text: fmt.Sprintf("threads of task %s, unresolved only: %v\nthread T1 (unresolved)", taskID, unresolvedOnly)}, nil
 }
 
 func (f *fakeCLIActions) RevertInfo(_ context.Context, taskID, target string, anyTask bool) (gitproxy.RevertInfo, error) {
@@ -396,6 +401,19 @@ func TestCLIActionsRefuseAndRoute(t *testing.T) {
 	}
 	if rec := send(h, http.MethodPost, "tok-ci", "/cli/pr/resolve", `{}`); rec.Code != http.StatusBadRequest {
 		t.Errorf("resolve naming nothing: %d", rec.Code)
+	}
+	// Listing the threads is a read of the run's own pull request: a run
+	// without the CI grant (tok-plain) may make it, and gets its own task's.
+	if rec := send(h, http.MethodGet, "tok-plain", "/cli/pr/threads?unresolved=1", ""); rec.Code != http.StatusOK ||
+		!strings.Contains(rec.Body.String(), "threads of task 8, unresolved only: true") {
+		t.Errorf("pr threads --unresolved: %d %s", rec.Code, rec.Body)
+	}
+	if rec := send(h, http.MethodGet, "tok-ci", "/cli/pr/threads", ""); rec.Code != http.StatusOK ||
+		!strings.Contains(rec.Body.String(), "threads of task 7, unresolved only: false") {
+		t.Errorf("pr threads: %d %s", rec.Code, rec.Body)
+	}
+	if rec := send(h, http.MethodPost, "tok-ci", "/cli/pr/threads", `{}`); rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("pr threads by POST: %d", rec.Code)
 	}
 
 	if rec := send(h, http.MethodPost, "tok-ci", "/cli/pr/review-comment", `{"body":"x","path":"a.go"}`); rec.Code != http.StatusBadRequest {

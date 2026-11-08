@@ -1362,6 +1362,7 @@ _No flags._
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-allow-ssh` | bool | `true` |  | enable OS Login break-glass SSH access |
+| `-disk-gb` | int |  |  | boot disk size in GB (20..4000; defaults to shape default) |
 | `-display-name` | string |  |  | human-readable display name in the registry directory |
 | `-listed` | bool |  |  | include this entry in default registry directory listings |
 | `-name` | string |  |  | entry name (defaults to a random generated name when omitted) |
@@ -1479,6 +1480,7 @@ _No flags._
 <!-- BEGIN GENERATED FLAGS: grain registry resize -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
+| `-disk-gb` | int |  |  | boot disk size in GB (20..4000; defaults to shape default) |
 | `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
 | `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
 | `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
