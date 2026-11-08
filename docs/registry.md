@@ -1273,7 +1273,12 @@ instance_sql:
   # can read), and the VM fetches it at boot with its own service account
   # and connects with `sslmode=require`. When `compute.bind_project_iam` is
   # false, the registry grants the VM's service account secretAccessor on
-  # that one secret.
+  # that one secret. grain-config is only written when a VM is created, so
+  # a hosted instance provisioned by an older registry still carries its
+  # password (and an `sslmode=disable` DSN) in metadata until it is
+  # replaced: `grain registry upgrade <name>` (or
+  # `POST /api/entries/<name>/replace`) re-provisions it, which rotates the
+  # password and moves it into Secret Manager.
   # cloud_sql_admin: true
   sql_instances:
     - name: grain-inst-sql-0
