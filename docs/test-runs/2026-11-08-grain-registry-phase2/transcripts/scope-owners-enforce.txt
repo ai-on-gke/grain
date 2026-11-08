@@ -1,0 +1,89 @@
+=== startup sweep (both replicas restarted with catalog.scope_owners)
+    2026/11/08 23:12:41 registry: catalog.scope_owners startup sweep demoted unauthorized primary scopes on 1 entries
+=== (b) pre-existing unauthorized primaries on directory and route
+$ [bob@example.com @ 4261] grain registry show bob-ws
+    Name:        bob-ws
+    URL:         https://bob-ws.grain-user.test
+    Kind:        connected (host_kind=workstation)
+    State:       running (status=offline, listed=true)
+    Owner:       bob@example.com
+    Tunnel:      connected=false
+    Scopes:
+      acme/billing               /                role=secondary source=declared active=true
+      github.com/acme/payments   /                role=secondary source=declared active=true
+    (exit 0)
+$ [alice@example.com @ 4261] grain registry route acme/billing
+    no matching grain entries for acme/billing 
+    (exit 0)
+$ [alice@example.com @ 4261] grain registry route github.com/acme/billing
+    no matching grain entries for github.com/acme/billing 
+    (exit 0)
+$ [alice@example.com @ 4261] grain registry route acme/payments
+    no matching grain entries for acme/payments 
+    (exit 0)
+$ [alice@example.com @ 4261] grain registry route github.com/acme/payments
+    no matching grain entries for github.com/acme/payments 
+    (exit 0)
+$ [alice@example.com @ 4261] GET /api/directory?repo=acme/billing 
+    HTTP 200
+    {"entries":[{"name":"bob-ws","url":"https://bob-ws.grain-user.test","kind":"connected","state":"running","status":"offline","owner":"bob@example.com","host_kind":"workstation","scopes":[{"repo":"acme/billing","path_prefix":"","role":"secondary","effective_role":"secondary","source":"declared","active":true,"claimed_at":"2026-11-08T23:12:28.640512Z","updated_at":"2026-11-08T23:12:41.519393Z"},{"repo":"github.com/acme/payments","path_prefix":"","role":"secondary","effective_role":"secondary","source":"declared","active":true,"claimed_at":"2026-11-08T23:12:28.640512Z","updated_at":"2026-11-08T23:12:41.519393Z"}],"active_tasks":0,"awaiting_reply_tasks":0,"queue_depth":0,"updated_at":"2026-11-08T23:12:41.519393Z"}]}
+
+=== (b) connected-entry heartbeat re-declaring the primaries
+$ PUT :4253/api/entries/bob-ws/heartbeat scopes=[acme/billing:primary github.com/acme/payments:primary]
+    {"status":"offline","active_scopes":[{"repo":"acme/billing","path_prefix":"","role":"secondary","effective_role":"secondary","source":"reported","active":true,"claimed_at":"2026-11-08T23:12:28.640512Z","updated_at":"2026-11-08T23:12:41.519393Z"},{"repo":"github.com/acme/payments","path_prefix":"","role":"secondary","effective_role":"secondary","source":"reported","active":true,"claimed_at":"2026-11-08T23:12:28.640512Z","updated_at":"2026-11-08T23:12:41.519393Z"}],"next_interval_seconds":2,"next_heartbeat_seconds":2}
+    
+        HTTP 200
+$ [alice@example.com @ 4261] grain registry route acme/billing
+    no matching grain entries for acme/billing 
+    (exit 0)
+$ [alice@example.com @ 4261] grain registry route github.com/acme/payments
+    no matching grain entries for github.com/acme/payments 
+    (exit 0)
+=== (a) new primary claims by non-owners
+$ [bob@example.com @ 4251] grain registry scopes -set acme/repo:primary bob-ws
+    grain: registry API 403 (scope_owner_forbidden): entry owner "bob@example.com" is not authorized to claim a primary scope on "acme/repo"
+    (exit 1)
+$ [bob@example.com @ 4251] grain registry scopes -set github.com/acme/repo:primary bob-ws
+    grain: registry API 403 (scope_owner_forbidden): entry owner "bob@example.com" is not authorized to claim a primary scope on "github.com/acme/repo"
+    (exit 1)
+$ [bob@example.com @ 4251] grain registry scopes -set GitHub.com/ACME/repo:primary bob-ws
+    grain: registry API 403 (scope_owner_forbidden): entry owner "bob@example.com" is not authorized to claim a primary scope on "github.com/acme/repo"
+    (exit 1)
+$ [bob@example.com @ 4251] grain registry scopes -set acme/repo:secondary bob-ws
+    updated declared scopes on bob-ws (3 effective scopes)
+    (exit 0)
+$ [bob@example.com @ 4251] grain registry create -name bob-vm -shape standard -scope acme/repo:primary
+    grain: registry API 403 (scope_owner_forbidden): entry owner "bob@example.com" is not authorized to claim a primary scope on "acme/repo"
+    (exit 1)
+$ [bob@example.com @ 4251] grain registry create -name bob-vm -shape standard -scope github.com/acme/repo:primary
+    grain: registry API 403 (scope_owner_forbidden): entry owner "bob@example.com" is not authorized to claim a primary scope on "github.com/acme/repo"
+    (exit 1)
+$ [bob@example.com @ 4251] grain registry register -standalone -mint-token -listed -scope github.com/acme/repo:primary bob-ws2
+    grain: registry API 403 (scope_owner_forbidden): entry owner "bob@example.com" is not authorized to claim a primary scope on "github.com/acme/repo"
+    (exit 1)
+=== owners may claim
+$ [carol@example.com @ 4251] grain registry register -standalone -mint-token -listed -scope acme/repo:primary carol-ws
+    registered connected entry carol-ws on http://127.0.0.1:4251
+    registration token written to /tmp/gr2/carol-ws.token
+    (exit 0)
+$ [carol@example.com @ 4251] grain registry scopes -set acme/repo:primary -set github.com/acme/other:primary carol-ws
+    updated declared scopes on carol-ws (2 effective scopes)
+    (exit 0)
+$ [alice@example.com @ 4261] grain registry route github.com/acme/repo
+    no matching grain entries for github.com/acme/repo 
+    (exit 0)
+=== (c) gitlab.example.com/acme/* host override
+$ [alt@example.com @ 4251] grain registry register -standalone -mint-token -listed -scope gitlab.example.com/acme/repo:primary alt-ws
+    registered connected entry alt-ws on http://127.0.0.1:4251
+    registration token written to /tmp/gr2/alt-ws.token
+    (exit 0)
+$ [carol@example.com @ 4251] grain registry scopes -set gitlab.example.com/acme/repo2:primary carol-ws
+    grain: registry API 403 (scope_owner_forbidden): entry owner "carol@example.com" is not authorized to claim a primary scope on "gitlab.example.com/acme/repo2"
+    (exit 1)
+$ [alt@example.com @ 4251] grain registry scopes -set acme/repo3:primary alt-ws
+    grain: registry API 403 (scope_owner_forbidden): entry owner "alt@example.com" is not authorized to claim a primary scope on "acme/repo3"
+    (exit 1)
+$ [alice@example.com @ 4261] grain registry route gitlab.example.com/acme/repo
+    Primary: alt-ws (offline, https://alt-ws.grain-user.test, prefix="")
+      alt-ws                   role=primary   status=offline  prefix=/                  source=declared https://alt-ws.grain-user.test
+    (exit 0)
