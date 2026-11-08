@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"google.golang.org/api/option"
@@ -31,6 +32,13 @@ type GoogleCloudStorage struct {
 	bucket  string
 }
 
+// GCSEndpointEnv points `grain backup -gcs-bucket` (and scheduled GCS
+// backups) at another GCS JSON API endpoint, with authentication disabled
+// and -google-credentials-file ignored: a local emulator or stub in a
+// walkthrough or end-to-end test, the way GRAIN_OBJECT_STORE_GCS_ENDPOINT
+// does for -object-store. Never set it on a real deployment.
+const GCSEndpointEnv = "GRAIN_BACKUP_GCS_ENDPOINT"
+
 // NewGoogleCloudStorage uses Application Default Credentials unless
 // credentialsFile names a service-account or OAuth credential JSON file. The
 // credential is consumed by the Google client and is never passed to the
@@ -41,7 +49,9 @@ func NewGoogleCloudStorage(ctx context.Context, bucket, credentialsFile string, 
 		return nil, fmt.Errorf("backup: GCS bucket is required")
 	}
 	opts = append(opts, option.WithScopes(storage.DevstorageReadWriteScope))
-	if credentialsFile != "" {
+	if ep := strings.TrimSpace(os.Getenv(GCSEndpointEnv)); ep != "" {
+		opts = append(opts, option.WithEndpoint(ep), option.WithoutAuthentication())
+	} else if credentialsFile != "" {
 		opts = append(opts, option.WithCredentialsFile(credentialsFile))
 	}
 	service, err := storage.NewService(ctx, opts...)
