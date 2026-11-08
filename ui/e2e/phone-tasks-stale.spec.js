@@ -131,7 +131,12 @@ for (const colorScheme of ["light", "dark"]) {
         );
       }
       // The wordmark keeps its room: the row takes none from the bar.
-      expect(after.wordmark.width).toBeGreaterThan(30);
+      // Its room is what the bar's other items leave it, so it is
+      // compared with the bar before the outage rather than with a
+      // fixed width: an environment name an earlier spec left on the
+      // worker's shared demo server puts a chip of up to 96 px beside it.
+      expect(after.wordmark).toEqual(before.wordmark);
+      expect(after.wordmark.width).toBeGreaterThan(0);
       const main = await page.locator("main").first().boundingBox();
       expect(main.y).toBeGreaterThanOrEqual(box.y + box.height - 0.5);
       // One line, nothing cut off at this width.
