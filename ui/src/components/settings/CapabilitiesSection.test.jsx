@@ -16,7 +16,10 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import CapabilitiesSection from "./CapabilitiesSection.jsx";
 
-vi.mock("../CapabilityServersPanel.jsx", () => ({ default: () => null }));
+vi.mock("../CapabilityServersPanel.jsx", () => ({
+  default: () => null,
+  serverPath: (id) => `/settings/capabilities/${encodeURIComponent(id)}`,
+}));
 vi.mock("../CapabilityPolicyEditor.jsx", () => ({ default: () => null }));
 vi.mock("../ApiScopeSetsPanel.jsx", () => ({ default: () => null }));
 

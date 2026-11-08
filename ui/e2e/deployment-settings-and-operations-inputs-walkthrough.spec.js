@@ -159,8 +159,9 @@ test.describe("Deployment Settings, System Operations, and Console Sessions Inpu
   test("2. SecretField and GitHub integration inputs: masking, setting, and clear confirmation", async ({
     page,
   }) => {
-    // Navigate to Integrations & Auth in Admin settings
-    await page.goto("/settings/credentials");
+    // Settings → Capabilities' Deployment credentials card (the retired
+    // Legacy capabilities tab).
+    await page.goto("/settings/capabilities");
     await expect(
       page.getByRole("heading", { name: "Settings", exact: true }),
     ).toBeVisible();
