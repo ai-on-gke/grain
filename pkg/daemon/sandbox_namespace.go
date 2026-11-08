@@ -403,12 +403,40 @@ func (d sandboxDeploy) withCredentials(ctx context.Context, listing string) stri
 	if err := json.Unmarshal([]byte(listing), &m); err != nil {
 		return listing
 	}
-	m["credentials"] = health.Credentials
+	m["credentials"] = redactCredentialsHealth(*health.Credentials, redact)
 	b, err := json.Marshal(m)
 	if err != nil {
 		return listing
 	}
 	return redact(string(b)) + "\n"
+}
+
+func redactCredentialsHealth(c ui.CredentialsHealth, redact func(string) string) *ui.CredentialsHealth {
+	out := ui.CredentialsHealth{
+		ChangeProviders: slices.Clone(c.ChangeProviders),
+		Failures:        slices.Clone(c.Failures),
+	}
+	for i := range out.ChangeProviders {
+		if out.ChangeProviders[i].Detail != "" {
+			out.ChangeProviders[i].Detail = redact(out.ChangeProviders[i].Detail)
+		}
+	}
+	if c.Host != nil {
+		h := *c.Host
+		if h.Detail != "" {
+			h.Detail = redact(h.Detail)
+		}
+		out.Host = &h
+	}
+	for i := range out.Failures {
+		if out.Failures[i].Title != "" {
+			out.Failures[i].Title = redact(out.Failures[i].Title)
+		}
+		if out.Failures[i].Detail != "" {
+			out.Failures[i].Detail = redact(out.Failures[i].Detail)
+		}
+	}
+	return &out
 }
 
 func (d sandboxDeploy) ListStateTables(ctx context.Context) ([]string, error) {

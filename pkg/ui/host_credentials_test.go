@@ -114,16 +114,27 @@ func TestSandboxHealthReportsBlockedChangeProvidersAndHostToolFailures(t *testin
 }
 
 // GET /api/sandboxes is reachable directly under deployment:read (without
-// deploymenthealth.Tools), so its credentials section redacts known secrets
-// via Config.LogRedactor and withholds details if the redactor cannot load.
+// deploymenthealth.Tools), so hostCredentials and credentials redact known
+// secrets via Config.LogRedactor and withhold text if the redactor cannot load.
 func TestSandboxHealthRedactsCredentialsAndWithholdsWhenRedactorFails(t *testing.T) {
 	srv, client := testServer(t)
+	ctx := context.Background()
+	task := create(t, client, ctx)
 	t.Cleanup(credhealth.Reset)
 	t.Cleanup(func() { change.ClearBlocked("fakeredactcl") })
 
 	since := time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC)
+	if err := client.Store.StartRun(ctx, model.Run{
+		ID: "r-redact", TaskID: task.ID, Sandbox: "s1", Attempt: 1, StartedAt: since,
+	}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Store.FinishRun(ctx, "r-redact", since.Add(time.Second), model.EnvironmentOutcome,
+		"host credentials expired: plain-shapeless-secret rejected"); err != nil {
+		t.Fatal(err)
+	}
 	change.MarkBlocked("fakeredactcl", change.BlockedCredentials, "auth failed with plain-shapeless-secret", since)
-	credhealth.Fail(context.Background(), "check:probe", "Probe failing", "token plain-shapeless-secret rejected", since)
+	credhealth.Fail(ctx, "check:probe", "Probe plain-shapeless-secret failing", "token plain-shapeless-secret rejected", since)
 
 	client.Config.LogRedactor = func() (*grainlog.Redactor, error) {
 		return grainlog.NewRedactor([]grainlog.KnownValue{{Label: "secret probe-token", Value: "plain-shapeless-secret"}}), nil

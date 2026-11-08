@@ -65,11 +65,17 @@ type Failure struct {
 func Subject(source string) string { return "credentials-expired." + source }
 
 var (
-	mu       sync.Mutex
-	failures = map[string]Failure{}
-	notifier Notifier
-	checks   = map[string]Check{}
+	mu            sync.Mutex
+	failures      = map[string]Failure{}
+	notified      = map[string]bool{}
+	verifiedClean = map[string]bool{}
+	notifier      Notifier
+	checks        = map[string]Check{}
 )
+
+type openNotificationReader interface {
+	OpenNotification(ctx context.Context, subject string) (*model.Notification, error)
+}
 
 // Bind makes n the notifier failures are raised on, until the returned
 // func is called. Before Bind, failures are recorded but raise nothing.
@@ -77,10 +83,12 @@ func Bind(n Notifier) (unbind func()) {
 	mu.Lock()
 	prev := notifier
 	notifier = n
+	verifiedClean = map[string]bool{}
 	mu.Unlock()
 	return func() {
 		mu.Lock()
 		notifier = prev
+		verifiedClean = map[string]bool{}
 		mu.Unlock()
 	}
 }
@@ -94,16 +102,20 @@ func Fail(ctx context.Context, source, title, detail string, now time.Time) bool
 	title, _ = (*redact.Redactor)(nil).Text(title)
 	detail, _ = (*redact.Redactor)(nil).Text(detail)
 	mu.Lock()
+	delete(verifiedClean, source)
 	f, ok := failures[source]
+	newSpell := !ok
 	if ok {
 		f.Title, f.Detail, f.Last = title, detail, now
 		f.Count++
 		failures[source] = f
-		mu.Unlock()
-		return false
+	} else {
+		failures[source] = Failure{Source: source, Title: title, Detail: detail, Since: now, Last: now, Count: 1}
 	}
-	failures[source] = Failure{Source: source, Title: title, Detail: detail, Since: now, Last: now, Count: 1}
-	n := notifier
+	var n Notifier
+	if !notified[source] {
+		n = notifier
+	}
 	mu.Unlock()
 	if n != nil {
 		if _, err := n.RaiseNotification(ctx, model.Notification{
@@ -111,22 +123,64 @@ func Fail(ctx context.Context, source, title, detail string, now time.Time) bool
 			RaisedBy: raisedBy, RaisedAt: now,
 		}); err != nil {
 			log.Printf("credhealth: raising %s: %v", Subject(source), err)
+		} else {
+			mu.Lock()
+			if _, still := failures[source]; still {
+				notified[source] = true
+			}
+			mu.Unlock()
 		}
 	}
-	return true
+	return newSpell
 }
 
 // Clear records source as healthy again and clears its notification,
-// reporting whether it had been failing.
+// reporting whether it had been failing (or had an open notification
+// left from an earlier daemon run).
 func Clear(ctx context.Context, source string) bool {
 	mu.Lock()
 	_, was := failures[source]
 	delete(failures, source)
+	delete(notified, source)
+	checkPersisted := !was && !verifiedClean[source]
+	verifiedClean[source] = true
 	n := notifier
 	mu.Unlock()
 	if was && n != nil {
 		if _, err := n.ClearNotification(ctx, Subject(source), raisedBy); err != nil {
 			log.Printf("credhealth: clearing %s: %v", Subject(source), err)
+			mu.Lock()
+			if _, failing := failures[source]; !failing {
+				delete(verifiedClean, source)
+			}
+			mu.Unlock()
+		}
+		return true
+	}
+	if checkPersisted && n != nil {
+		if opener, ok := n.(openNotificationReader); ok {
+			open, err := opener.OpenNotification(ctx, Subject(source))
+			if err != nil {
+				mu.Lock()
+				if _, failing := failures[source]; !failing {
+					delete(verifiedClean, source)
+				}
+				mu.Unlock()
+				return false
+			}
+			if open != nil {
+				cleared, err := n.ClearNotification(ctx, Subject(source), raisedBy)
+				if err != nil {
+					log.Printf("credhealth: clearing %s: %v", Subject(source), err)
+					mu.Lock()
+					if _, failing := failures[source]; !failing {
+						delete(verifiedClean, source)
+					}
+					mu.Unlock()
+					return false
+				}
+				return cleared
+			}
 		}
 	}
 	return was
@@ -220,6 +274,8 @@ func Reset() {
 	mu.Lock()
 	defer mu.Unlock()
 	failures = map[string]Failure{}
+	notified = map[string]bool{}
+	verifiedClean = map[string]bool{}
 	checks = map[string]Check{}
 	notifier = nil
 }
