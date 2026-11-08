@@ -1643,6 +1643,11 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 	if err != nil {
 		return err
 	}
+	// Which branch each repository's default is, asked of the forge at
+	// most once per repository for the batch, so a proposal that named no
+	// base and a parent filed with `base: main` read as the one branch
+	// they are (model.AlignDefaultBases).
+	defaultBranch := proposalDefaultBranches(client)
 
 	// Local `id` of a propose_task call -> the task id it was filed
 	// under, filled in as each proposal lands so only earlier calls are
@@ -2174,6 +2179,12 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		if !model.NormalizeAdmission(askedAdmission).AtLeast(model.AdmissionBypass) {
 			permissionProposal.Admission = model.AdmissionStandard
 		}
+		// Where the proposal lands, spelled as this task's own write
+		// targets spell it wherever the two name the same default branch
+		// -- for the permission checks below only; the proposal is filed
+		// with the base the call gave it.
+		aligned := model.AlignDefaultBases(proposal, task, defaultBranch)
+		permissionProposal.Base, permissionProposal.Writes = aligned.Base, aligned.Writes
 		// admission above standard, keep_running, or a priority above this
 		// task's own: settings only a person may give a task
 		// (model.PersonOnlyProposalSettings), so filed as asked, for a
@@ -2310,7 +2321,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// the person deciding is told which ones they are. That holds
 		// for a session's approval as much as for AutoSubmits, for the
 		// reason escalated capabilities do.
-		ungranted := model.UngrantedWrites(proposal, task)
+		ungranted := model.UngrantedWrites(aligned, task)
 		if len(ungranted) > 0 {
 			proposal.Body += model.UngrantedWritesNote(task.ID, ungranted)
 		}
@@ -2384,10 +2395,17 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 				// it can be told they are now the bound.
 				proposal.Body += model.AutoSubmitLimitNote(task.ID, limit, limits)
 			}
+		case proposal.ChangeTarget == nil && model.AutoSubmitRefusedOnLanding(permissionProposal, task):
+			// This task may queue its proposals, and this one asks for
+			// nothing that permission does not cover -- it only lands on
+			// a branch the permission does not reach. Nothing above says
+			// so, and a proposal left unapproved with no word on why
+			// reads as grain having forgotten it (task 3411's live walk).
+			proposal.Body += otherBranchQueueNote(task, proposal)
 		}
 		asked := proposedAutoMerge(p, task) &&
 			model.GrantsSubsetOf(proposal.Grants, task.Grants)
-		proposal.AutoMerge = asked && model.LandsWhereGranted(proposal, task)
+		proposal.AutoMerge = asked && model.LandsWhereGranted(aligned, task)
 		if scratch {
 			// Merging into the scratch branch is what the fixture is for,
 			// whatever this task's own auto-merge says about its default
@@ -3106,6 +3124,51 @@ func otherBranchAutoMergeNote(task, proposal model.Task) string {
 		"permission for one branch, not for the run holding it. Turn it on when you approve "+
 		"this if it belongs here too.",
 		task.ID, landingBranch(task), landingBranch(proposal))
+}
+
+// otherBranchQueueNote is what a human approving the proposal reads when
+// the task that proposed it may queue its proposals unreviewed
+// (AutoMerge or AutoApproveProposals) and this one was filed for them
+// anyway, for the one reason no other note covers: it lands on a branch
+// that permission does not reach (model.AutoSubmitRefusedOnLanding).
+// Attributed to grain, like otherBranchAutoMergeNote, and naming both
+// branches for the same reason it does.
+func otherBranchQueueNote(task, proposal model.Task) string {
+	granted := landingBranch(task)
+	if len(task.Writes) > 0 {
+		granted += " (or one of the write targets it declares)"
+	}
+	return fmt.Sprintf("\n\n---\n\ngrain: task %s, which proposed this, may queue the work it splits "+
+		"out without review, but only work landing on %s. This task lands on %s instead, so "+
+		"it was filed for a person to approve. Approve it if it belongs there.",
+		task.ID, granted, landingBranch(proposal))
+}
+
+// proposalDefaultBranches is relayProposedTasks' answer to which branch a
+// repository's default is (model.AlignDefaultBases), asked of client at
+// most once per repository and remembered for the batch. "" -- for a
+// repository the forge cannot answer for, or with no client at all --
+// leaves a base as written, so the permission checks still withhold.
+func proposalDefaultBranches(client github.Client) func(model.RepoRef) string {
+	if client == nil {
+		return nil
+	}
+	known := map[string]string{}
+	return func(repo model.RepoRef) string {
+		key := strings.ToLower(repo.String())
+		if def, ok := known[key]; ok {
+			return def
+		}
+		def, err := client.DefaultBranch(repo.Owner, repo.Name)
+		if err != nil {
+			log.Printf("orchestrator: reading %s's default branch to judge a proposal's base: %v "+
+				"-- comparing bases as written", repo, err)
+			def = ""
+		}
+		def = strings.TrimSpace(def)
+		known[key] = def
+		return def
+	}
 }
 
 // changeTargetAutoMergeNote is otherBranchAutoMergeNote for a proposal
