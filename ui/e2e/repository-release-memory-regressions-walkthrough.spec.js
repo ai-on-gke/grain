@@ -93,7 +93,9 @@ test("a removed repo's page still counts the tasks that target it", async ({
   page,
   request,
 }) => {
-  const repo = "acme/gadgets";
+  // A repo no other spec touches: specs share a worker's demo store, and
+  // acme/gadgets picks up tasks of its own from them.
+  const repo = "acme/removed-with-work";
   let taskID = "";
   try {
     expect((await request.post("/api/repos", { data: { repo } })).ok()).toBe(
@@ -124,7 +126,7 @@ test("a removed repo's page still counts the tasks that target it", async ({
     });
     await expect(link).toBeVisible();
     await link.click();
-    await expect(page).toHaveURL(/f=repo:any:acme\/gadgets/);
+    await expect(page).toHaveURL(/f=repo:any:acme\/removed-with-work/);
     await expect(
       page.locator(".task-list .task-row", {
         hasText: "Left behind on a removed repo",
