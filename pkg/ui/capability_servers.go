@@ -197,6 +197,15 @@ type CapabilityServerPlacedProber interface {
 	HostCapabilityEntriesFor(ctx context.Context, selector string) (entries []string, connected bool, err error)
 }
 
+// CapabilityServerAgentsOnlyProber is implemented by a
+// CapabilityServerPlacedProber that can say whether a placed host's hello
+// says it runs agent CLIs only (hostd.Hello.AgentsOnly, grain-agentd): no
+// capabilities entry can be added there, so a refusal says to use a
+// `grain host` instead.
+type CapabilityServerAgentsOnlyProber interface {
+	HostAgentsOnly(ctx context.Context, selector string) bool
+}
+
 // CapabilityServerToolCaller is the part of the daemon's registry
 // Settings' per-script Test button uses (servers.Registry.CallTool).
 type CapabilityServerToolCaller interface {
@@ -954,6 +963,15 @@ func (c *Client) checkRunLocation(ctx context.Context, cfg protocol.ServerConfig
 			}
 			return validationErrorf("run: host on host %s: %s", cfg.Hostd, err)
 		}
+		// An agents-only host never gains an entry, grain's own included:
+		// the advice is another kind of host, not an allowlist edit.
+		if !slices.Contains(entries, cfg.Command) {
+			if ap, ok := pp.(CapabilityServerAgentsOnlyProber); ok && ap.HostAgentsOnly(ctx, string(cfg.Hostd)) {
+				return validationErrorf("run: host on host %s: %s runs agent CLIs only (grain-agentd), and its allowlist "+
+					"may not name capabilities, so it cannot run capability server %q; place the server on a host "+
+					"enrolled with `grain host`, or run it in the container", cfg.Hostd, cfg.Hostd, cfg.Command)
+			}
+		}
 		return checkHostdOffersEntry(entries, cfg, "on host "+string(cfg.Hostd))
 	}
 	hosts := c.HostCapabilityEntries(ctx)
@@ -983,8 +1001,14 @@ func checkHostdOffersEntry(entries []string, cfg protocol.ServerConfig, where st
 	if where != "" {
 		prefix += " " + where
 	}
+	help := hostd.MissingEntryHelp(cfg.Command)
+	if len(entries) == 0 && where != "" {
+		// A placed host offering nothing may be one that never can: a
+		// grain-agentd too old to say so in its hello.
+		help += "; if this host runs grain-agentd, it runs agent CLIs only and the server needs a host enrolled with `grain host`"
+	}
 	return validationErrorf("%s: the host agent's allowlist has no capabilities entry %q (it offers %s); %s",
-		prefix, cfg.Command, offered, hostd.MissingEntryHelp(cfg.Command))
+		prefix, cfg.Command, offered, help)
 }
 
 // HostCapabilityEntries says whether run: host is possible here and what
