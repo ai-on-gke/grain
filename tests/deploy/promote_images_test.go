@@ -343,10 +343,14 @@ func TestPromoteRebuildsTheGrainImageWithTheReleaseStamped(t *testing.T) {
 		// The release's own Dockerfile, given the ARG it predates.
 		"ARG RELEASE=\n" + oldMakeBuild + " RELEASE=${RELEASE}\n",
 		"push docker.io/grainai/grain:v1.5.0",
-		"buildx imagetools create --tag docker.io/grainai/grain:latest docker.io/grainai/grain:v1.5.0",
+		// The stamped release is a single-platform manifest `docker push`
+		// wrote, so the retags carbon-copy it (--prefer-index=false) rather
+		// than wrapping it in a new index under another digest
+		// (docs/test-runs/2026-11-07-releases-upgrades-ci.md, Bug F4).
+		"buildx imagetools create --tag docker.io/grainai/grain:latest docker.io/grainai/grain:v1.5.0 --prefer-index=false",
 		// The candidate's build is replaced under its sha- tag by the
 		// stamped release, so cmd/ghcr-prune keeps that tag with vX.Y.Z.
-		"buildx imagetools create --tag docker.io/grainai/grain:sha-" + short + " docker.io/grainai/grain:v1.5.0",
+		"buildx imagetools create --tag docker.io/grainai/grain:sha-" + short + " docker.io/grainai/grain:v1.5.0 --prefer-index=false",
 	} {
 		containsRun(t, docker, want)
 	}

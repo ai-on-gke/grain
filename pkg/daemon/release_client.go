@@ -21,21 +21,23 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
-func releaseHostAPIBase(credHost gitproxy.CredentialHost, rawHost, defHost string, insecureHTTP bool) (string, error) {
+// releaseHostAPIBase is the REST API root release assets are read from on
+// credHost: its own API host and path prefix (api.github.com, or
+// HOST/api/v3 on an enterprise host), over plain HTTP when the deployment
+// was started with -github-insecure-http and credHost is its -github-host,
+// or when the connection itself is recorded without TLS. Before this the
+// upgrade client always built https://HOST/api/v3, so a -github-insecure-http
+// forge answered every listing with "server gave HTTP response to HTTPS
+// client" (docs/test-runs/2026-11-07-releases-upgrades-ci.md, Bug F1).
+func releaseHostAPIBase(credHost gitproxy.CredentialHost, defHost string, insecureHTTP bool) (string, error) {
 	apiHost, prefix, ok := credHost.APIBase()
 	if !ok {
 		return "", fmt.Errorf("is on %s, a plain git host with no forge API", credHost.Host)
-	}
-	if (rawHost == "" || model.SameGitHost(rawHost, model.DefaultGitHost, model.DefaultGitHost)) &&
-		defHost != "" && !credHost.Recorded {
-		apiHost = github.APIHost(defHost)
-		prefix = ""
 	}
 	scheme := "https"
 	if (insecureHTTP && model.SameGitHost(credHost.Host, defHost, model.DefaultGitHost)) || !credHost.UseTLS() {
@@ -52,8 +54,7 @@ func releaseHostAPIBase(credHost gitproxy.CredentialHost, rawHost, defHost strin
 // enterprise hosts use their configured token, App, or ambient CLI connection.
 func daemonReleaseHostClient(cfg Config, store *model.Store, credentials *gitproxy.CredentialSet) func(ctx context.Context, host, owner, repo string) (*upgrade.ReleaseHostClient, error) {
 	return func(ctx context.Context, host, owner, repo string) (*upgrade.ReleaseHostClient, error) {
-		rawHost := strings.ToLower(strings.TrimSpace(host))
-		host = rawHost
+		host = strings.ToLower(strings.TrimSpace(host))
 		if host == "" {
 			host = model.DefaultGitHost
 		}
@@ -89,14 +90,10 @@ func daemonReleaseHostClient(cfg Config, store *model.Store, credentials *gitpro
 			}
 		}
 		if cfg.GithubInsecureHTTP && credHost.BaseURL == "" && model.SameGitHost(host, defHost, model.DefaultGitHost) {
-			targetHost := host
-			if model.SameGitHost(host, model.DefaultGitHost, model.DefaultGitHost) && defHost != "" {
-				targetHost = defHost
-			}
-			credHost.BaseURL = "http://" + targetHost
+			credHost.BaseURL = "http://" + host
 		}
 
-		apiBase, err := releaseHostAPIBase(credHost, rawHost, defHost, cfg.GithubInsecureHTTP)
+		apiBase, err := releaseHostAPIBase(credHost, defHost, cfg.GithubInsecureHTTP)
 		if err != nil {
 			return nil, fmt.Errorf("repository %s/%s %w", owner, repo, err)
 		}

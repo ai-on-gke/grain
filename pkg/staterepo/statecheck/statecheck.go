@@ -36,7 +36,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/sandboximage"
-	"github.com/ai-on-gke/grain/pkg/secretsrepo"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
@@ -438,15 +437,6 @@ func GitRefSchedules(ctx context.Context, db *sql.DB, dataDir string) error {
 	if err != nil {
 		return fmt.Errorf("reading the schedules this dump carries: %w", err)
 	}
-	var externalStateRemote, secretsRemote string
-	if dataDir != "" {
-		if st, err := staterepo.LoadSettings(dataDir); err == nil {
-			externalStateRemote = strings.TrimSpace(st.Remote)
-		}
-		if sec, err := secretsrepo.LoadSettings(dataDir); err == nil {
-			secretsRemote = strings.TrimSpace(sec.Remote)
-		}
-	}
 	var bad []string
 	for _, s := range schedules {
 		if !s.Enabled || s.Recurrence.Kind != model.RecurrenceGitRef || s.Recurrence.GitRef == nil {
@@ -457,17 +447,8 @@ func GitRefSchedules(ctx context.Context, db *sql.DB, dataDir string) error {
 			bad = append(bad, fmt.Sprintf("schedule %s: invalid git_ref repo %q: %v", s.ID, s.Recurrence.GitRef.Repo, err))
 			continue
 		}
-		if model.IsRetiredConfigRepo(watched) {
-			bad = append(bad, fmt.Sprintf("schedule %s: git_ref repo %s: %s", s.ID, watched, model.RetiredConfigRepoReason(watched)))
-			continue
-		}
-		if model.IsConfigRepo(watched) && externalStateRemote != "" {
-			bad = append(bad, fmt.Sprintf("schedule %s: git_ref repo %s cannot be watched because local %s is disabled when configuration is managed in external repository %s",
-				s.ID, watched, model.ConfigRepo(), externalStateRemote))
-			continue
-		}
-		if secretsRemote != "" && remoteMatchesRepo(secretsRemote, watched) {
-			bad = append(bad, fmt.Sprintf("schedule %s: git_ref repo %s cannot be watched: it is this deployment's encrypted secrets backup repository", s.ID, watched))
+		if why := staterepo.ForbiddenGitRefWatch(watched, dataDir); why != "" {
+			bad = append(bad, fmt.Sprintf("schedule %s: git_ref repo %s cannot be watched: %s", s.ID, watched, why))
 		}
 	}
 	if len(bad) == 0 {
@@ -475,33 +456,6 @@ func GitRefSchedules(ctx context.Context, db *sql.DB, dataDir string) error {
 	}
 	return fmt.Errorf("settings/schedules.yml declares %d forbidden git_ref schedule(s):\n  %s",
 		len(bad), strings.Join(bad, "\n  "))
-}
-
-func remoteMatchesRepo(remote string, repo model.RepoRef) bool {
-	r := strings.TrimSpace(strings.TrimSuffix(remote, ".git"))
-	for _, pfx := range []string{"https://", "http://", "ssh://git@", "ssh://"} {
-		r = strings.TrimPrefix(r, pfx)
-	}
-	if strings.HasPrefix(r, "git@") {
-		r = strings.Replace(strings.TrimPrefix(r, "git@"), ":", "/", 1)
-	}
-	parsed, err := model.ParseRepo(r)
-	if err != nil {
-		// Strip default github.com host if present.
-		if after, ok := strings.CutPrefix(strings.ToLower(r), "github.com/"); ok {
-			parsed, err = model.ParseRepo(after)
-		}
-	}
-	if err != nil {
-		return false
-	}
-	if parsed.Same(repo) {
-		return true
-	}
-	if strings.EqualFold(parsed.Host, "github.com") && repo.Host == "" {
-		return strings.EqualFold(parsed.Owner, repo.Owner) && strings.EqualFold(parsed.Name, repo.Name)
-	}
-	return false
 }
 
 // ScratchStore is an empty SQLite database at this build's schema, in a
