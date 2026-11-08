@@ -38,6 +38,7 @@ import GeneralSection from "./settings/GeneralSection.jsx";
 import AccessSection from "./settings/AccessSection.jsx";
 import HostdsSection from "./settings/HostdsSection.jsx";
 import AuditSection from "./settings/AuditSection.jsx";
+import CLISection from "./settings/CLISection.jsx";
 import ConfigRepoSection from "./settings/ConfigRepoSection.jsx";
 import ModelsSection from "./settings/ModelsSection.jsx";
 import AgentsSection from "./settings/AgentsSection.jsx";
@@ -85,9 +86,10 @@ export { SETTINGS_SECTIONS, SETTINGS_GROUPS };
 // preferences, Access's sign-in (design/design/config-repo-settings.design.md
 // §1 invariant 7: it stays outside the config repo so a bad config PR can
 // never lock the operator out), Upgrade, which is an action, and Audit,
-// which only reads logs -- so they are never read-only under an external
-// config repo. Upgrade and Audit have no save state either, so their
-// headers leave the "All changes saved" line off.
+// which only reads logs, and CLI, which only shows commands -- so they are
+// never read-only under an external config repo. Upgrade, Audit and CLI
+// have no save state either, so their headers leave the "All changes
+// saved" line off.
 const NOT_CONFIG = new Set([
   "config-repo",
   "preferences",
@@ -95,8 +97,9 @@ const NOT_CONFIG = new Set([
   "access",
   "hostds",
   "audit",
+  "cli",
 ]);
-const NO_SAVE_STATE = new Set(["upgrade", "audit"]);
+const NO_SAVE_STATE = new Set(["upgrade", "audit", "cli"]);
 
 // SECTION_WRITE_SCOPE is the scope a section's saves need
 // (pkg/ui/route_scopes.go): PUT /api/settings for the settings rows,
@@ -128,6 +131,7 @@ const SECTION_WRITE_SCOPE = {
 const READS_SETTINGS = new Set([
   "general",
   "access",
+  "cli",
   "agents",
   "tasks",
   "capabilities",
@@ -628,6 +632,9 @@ export default function SettingsPage({
         break;
       case "audit":
         body = <AuditSection />;
+        break;
+      case "cli":
+        body = <CLISection s={s} config={config} />;
         break;
       case "config-repo":
         body = (

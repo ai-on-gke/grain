@@ -83,6 +83,7 @@ describe("SettingsPage", () => {
       "Legacy capabilities",
       "Access",
       "Hosts",
+      "CLI",
       "Audit",
       "Preferences",
       "Upgrade",
