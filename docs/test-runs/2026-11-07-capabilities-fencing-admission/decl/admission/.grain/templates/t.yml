@@ -1,0 +1,8 @@
+name: Admission template
+title: "admission walk"
+body: |
+  Walk §6 item 1.
+admission: durable
+capabilities:
+  - https://grain.dev/capabilities/github#read-issues={}
+  - https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}
