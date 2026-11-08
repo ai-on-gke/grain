@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -319,6 +320,17 @@ type smBackend struct {
 	tokMu      sync.Mutex
 	tokCached  string
 	tokExpires time.Time
+
+	// goneMu guards gone: the catalogued keys knownValues last found
+	// missing upstream, keyed by catalogueMapKey, so each is logged once when it
+	// goes missing (and once when it comes back) rather than on every
+	// redactor build. retained holds, for those keys, the value last read
+	// before they went (taken from the read cache, so only while caching is
+	// on): a run handed it earlier may still print it, so knownValues keeps
+	// redacting it rather than dropping it the moment Secret Manager does.
+	goneMu   sync.Mutex
+	gone     map[string]bool
+	retained map[string]string
 }
 
 // OpenSecretManager opens a Store backed by Google Cloud Secret Manager and a
@@ -425,7 +437,8 @@ func (b *smBackend) getCached(secret, key string) (string, bool) {
 		return "", false
 	}
 	if !b.now().Before(entry.expiresAt) {
-		delete(b.cache, k)
+		// Left in place, not deleted: readEntry overwrites it, and if the
+		// key turns out gone upstream it is the value redaction retains.
 		return "", false
 	}
 	return entry.value, true
@@ -444,9 +457,40 @@ func (b *smBackend) putCached(secret, key, value string) {
 }
 
 func (b *smBackend) deleteCached(secret, key string) {
+	k := catalogueMapKey(secret, key)
 	b.cacheMu.Lock()
-	delete(b.cache, catalogueMapKey(secret, key))
+	delete(b.cache, k)
 	b.cacheMu.Unlock()
+	b.goneMu.Lock()
+	delete(b.retained, k)
+	b.goneMu.Unlock()
+}
+
+// retainGone moves the last value cached for a key just found gone upstream,
+// expired or not, out of the read cache and into retained, so it stops
+// resolving but is still redacted.
+func (b *smBackend) retainGone(secret, key string) {
+	k := catalogueMapKey(secret, key)
+	b.cacheMu.Lock()
+	entry, ok := b.cache[k]
+	delete(b.cache, k)
+	b.cacheMu.Unlock()
+	if !ok {
+		return
+	}
+	b.goneMu.Lock()
+	if b.retained == nil {
+		b.retained = make(map[string]string)
+	}
+	b.retained[k] = entry.value
+	b.goneMu.Unlock()
+}
+
+func (b *smBackend) retainedValue(secret, key string) (string, bool) {
+	b.goneMu.Lock()
+	defer b.goneMu.Unlock()
+	v, ok := b.retained[catalogueMapKey(secret, key)]
+	return v, ok
 }
 
 func (b *smBackend) token(ctx context.Context) (string, error) {
@@ -635,6 +679,9 @@ func (b *smBackend) accessLatest(ctx context.Context, resource string) ([]byte, 
 		return nil, err
 	}
 	if status != http.StatusOK {
+		if accessGoneUpstream(status, body) {
+			return nil, fmt.Errorf("%w: reading %s: HTTP %d: %s", ErrGoneUpstream, resource, status, strings.TrimSpace(string(body)))
+		}
 		return nil, fmt.Errorf("secrets: reading %s: HTTP %d: %s", resource, status, strings.TrimSpace(string(body)))
 	}
 	var resp smAccessResponse
@@ -649,6 +696,37 @@ func (b *smBackend) accessLatest(ctx context.Context, resource string) ([]byte, 
 		return nil, fmt.Errorf("secrets: decoding base64 payload of %s: %w", resource, err)
 	}
 	return data, nil
+}
+
+// accessGoneUpstream reports whether a failed versions/latest:access means the
+// value is gone rather than unreachable: the secret itself is deleted (404
+// NOT_FOUND, which is also what Secret Manager answers when no version is
+// left enabled), or the latest version is destroyed or disabled (400
+// FAILED_PRECONDITION naming the state). Anything else -- 401, 403, 5xx -- is
+// a failure to read, not evidence of absence, and stays fatal. Only a Google
+// API error body counts: a bare 404 from a misconfigured endpoint or a proxy
+// in front of it says nothing about the secret, and treating it as gone would
+// silently drop every value from redaction.
+func accessGoneUpstream(status int, body []byte) bool {
+	var apiErr struct {
+		Error struct {
+			Code    int    `json:"code"`
+			Status  string `json:"status"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &apiErr); err != nil || apiErr.Error.Code != status {
+		return false
+	}
+	switch status {
+	case http.StatusNotFound:
+		return true
+	case http.StatusBadRequest:
+		msg := strings.ToUpper(apiErr.Error.Message)
+		return strings.EqualFold(apiErr.Error.Status, "FAILED_PRECONDITION") &&
+			(strings.Contains(msg, "DESTROYED") || strings.Contains(msg, "DISABLED"))
+	}
+	return false
 }
 
 func (b *smBackend) deleteSecretResource(ctx context.Context, resource string) error {
@@ -790,6 +868,15 @@ func (b *smBackend) resolveEntry(ctx context.Context, entry CatalogueEntry) (str
 	if cached, ok := b.getCached(entry.SecretName, entry.Key); ok {
 		return cached, nil
 	}
+	return b.readEntry(ctx, entry)
+}
+
+// readEntry reads entry's latest value from Secret Manager, bypassing the
+// cache, and caches what it reads. A value found gone upstream is dropped
+// from the cache, so a deleted secret stops resolving as soon as anything
+// notices rather than when its cache entry would have expired; it is
+// retained for redaction only (see retainGone).
+func (b *smBackend) readEntry(ctx context.Context, entry CatalogueEntry) (string, error) {
 	secretID, err := b.secretIDForEntry(entry)
 	if err != nil {
 		return "", err
@@ -800,10 +887,18 @@ func (b *smBackend) resolveEntry(ctx context.Context, entry CatalogueEntry) (str
 	}
 	data, err := b.accessLatest(ctx, resource)
 	if err != nil {
+		if errors.Is(err, ErrGoneUpstream) {
+			b.retainGone(entry.SecretName, entry.Key)
+			return "", fmt.Errorf("%w (run `grain secrets delete %s %s` to drop it from the catalogue, or set it again)",
+				err, entry.SecretName, entry.Key)
+		}
 		return "", err
 	}
 	val := string(data)
 	b.putCached(entry.SecretName, entry.Key, val)
+	b.goneMu.Lock()
+	delete(b.retained, catalogueMapKey(entry.SecretName, entry.Key))
+	b.goneMu.Unlock()
 	return val, nil
 }
 
@@ -869,15 +964,76 @@ func (b *smBackend) knownValues(ctx context.Context) ([]SecretValue, error) {
 	out := make([]SecretValue, 0, len(entries))
 	for _, entry := range entries {
 		val, err := b.resolveEntry(ctx, entry)
+		if errors.Is(err, ErrGoneUpstream) {
+			// Not fatal: see Store.KnownValues. A value this process read
+			// before it went is still redacted.
+			b.noteGone(entry, err)
+			if last, ok := b.retainedValue(entry.SecretName, entry.Key); ok {
+				out = append(out, SecretValue{SecretName: entry.SecretName, Key: entry.Key, Value: last})
+			}
+			continue
+		}
 		if err != nil {
 			return nil, fmt.Errorf("reading %s/%s: %w", entry.SecretName, entry.Key, err)
 		}
+		b.noteGone(entry, nil)
 		out = append(out, SecretValue{
 			SecretName: entry.SecretName,
 			Key:        entry.Key,
 			Value:      val,
 		})
 	}
+	return out, nil
+}
+
+// noteGone records whether entry was just found gone upstream (err non-nil)
+// or readable (err nil), logging each change of state once.
+func (b *smBackend) noteGone(entry CatalogueEntry, err error) {
+	k := catalogueMapKey(entry.SecretName, entry.Key)
+	b.goneMu.Lock()
+	was := b.gone[k]
+	if err != nil {
+		if b.gone == nil {
+			b.gone = make(map[string]bool)
+		}
+		b.gone[k] = true
+	} else {
+		delete(b.gone, k)
+	}
+	b.goneMu.Unlock()
+	switch {
+	case err != nil && !was:
+		log.Printf("grain secrets: %s/%s is in the catalogue but %v; leaving it out of redaction until it is reconciled",
+			entry.SecretName, entry.Key, err)
+	case err == nil && was:
+		log.Printf("grain secrets: %s/%s is readable in Secret Manager again", entry.SecretName, entry.Key)
+	}
+}
+
+// missingUpstream probes every catalogued entry in Secret Manager, bypassing
+// the cache, and reports those that are gone upstream.
+func (b *smBackend) missingUpstream(ctx context.Context) ([]SecretKeyRef, error) {
+	entries, err := b.cat.ListSecretEntries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []SecretKeyRef
+	for _, entry := range entries {
+		_, err := b.readEntry(ctx, entry)
+		if errors.Is(err, ErrGoneUpstream) {
+			out = append(out, SecretKeyRef{SecretName: entry.SecretName, Key: entry.Key})
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("reading %s/%s: %w", entry.SecretName, entry.Key, err)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].SecretName != out[j].SecretName {
+			return out[i].SecretName < out[j].SecretName
+		}
+		return out[i].Key < out[j].Key
+	})
 	return out, nil
 }
 
