@@ -92,6 +92,19 @@ function safeHttpUrl(raw) {
   return "";
 }
 
+function safeHttpOrigin(raw) {
+  if (!raw || typeof raw !== "string") return "";
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol === "https:" || parsed.protocol === "http:") {
+      return parsed.origin;
+    }
+  } catch {
+    return "";
+  }
+  return "";
+}
+
 function sanitizeSlug(raw, fallback) {
   const cleaned = String(raw || "")
     .toLowerCase()
@@ -112,9 +125,8 @@ function buildConnectedSnippet(registryHost, instanceDomain, entryName, token) {
     : typeof window !== "undefined"
       ? window.location.origin
       : "https://registry.grain.example.com";
-  const regOrigin = (
-    safeHttpUrl(rawOrigin) || "https://registry.grain.example.com"
-  ).replace(/\/+$/, "");
+  const regOrigin =
+    safeHttpOrigin(rawOrigin) || "https://registry.grain.example.com";
   const instDom = sanitizeSlug(instanceDomain, "grain.example.com");
   const name =
     String(entryName || "")
@@ -130,7 +142,7 @@ function buildConnectedSnippet(registryHost, instanceDomain, entryName, token) {
     `  -registry-entry ${name} \\\n` +
     `  -registry-connect \\\n` +
     `  -ui-require-verifier=registry \\\n` +
-    `  -ui-registry-issuer ${regOrigin} \\\n` +
+    `  -ui-registry-issuer grain-registry \\\n` +
     `  -ui-registry-audience https://${name}.${instDom} \\\n` +
     `  -ui-registry-keys-url ${regOrigin}/.well-known/jwks.json`;
   const yaml =
@@ -141,7 +153,7 @@ function buildConnectedSnippet(registryHost, instanceDomain, entryName, token) {
     `  auth_mode: token\n` +
     `auth:\n` +
     `  require_verifier: registry\n` +
-    `  registry_issuer: ${regOrigin}\n` +
+    `  registry_issuer: grain-registry\n` +
     `  registry_audience: https://${name}.${instDom}\n` +
     `  registry_keys_url: ${regOrigin}/.well-known/jwks.json`;
   return { cli, yaml };

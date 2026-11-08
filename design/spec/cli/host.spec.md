@@ -1534,7 +1534,95 @@ _No flags._
 | `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/registry_test.go`: `TestRegistryCLIRegisterStatusUnregister`, `TestRegistryCLISubcommands`, `TestDaemonRegistryFlags`.
+#### Delegating apps and consent grants
+
+`grain registry delegating-apps list|create|disable|enable` is the registry-admin surface for `registry.delegating_apps` (`GET`/`POST /api/admin/delegating-apps`, `PATCH /api/admin/delegating-apps/<name>`): `create` takes the app's short name and `-principal`, a service-account email with or without the `serviceAccount:` prefix (the registry stores the prefixed form, so a bare email can no longer register an app that reads as `app_not_registered`). `grain registry grants list|create|revoke` is the person-facing surface for `registry.delegation_grants` (`GET`/`POST /api/delegation-grants`, `DELETE /api/delegation-grants/<grant-id|app>`): every grant is the signed-in person's own, and `revoke` takes a `dlg_…` ID or the app's name. Both verbs take the same `-registry-url` / `-registry-token` / `-oidc-audience` target flags as the rest of `grain registry`; `help` (or no verb) prints each group's usage.
+
+#### `grain registry delegating-apps create`
+
+<!-- BEGIN GENERATED FLAGS: grain registry delegating-apps create -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-description` | string |  |  | what the app does with the access it is granted |
+| `-display-name` | string |  |  | name people see when granting consent (defaults to the app name) |
+| `-homepage` | string |  |  | URL describing the app |
+| `-max-access` | string | `"write"` |  | most access a grant to this app may carry: read or write |
+| `-max-grant-ttl` | duration |  |  | longest a grant to this app may last before it has to be renewed; 0 means 90 days |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-owner` | string |  |  | person accountable for the app (defaults to you) |
+| `-owner-group` | string |  |  | optional group co-owning the app |
+| `-principal` | string |  |  | service account the app calls as: an email, or serviceAccount:<email> |
+| `-redirect-uri` | value |  |  | consent redirect URI the app may use (repeatable) |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+| `-require-subject-token` | bool |  |  | require a subject token alongside on-behalf-of requests |
+<!-- END GENERATED FLAGS -->
+
+#### `grain registry delegating-apps disable`
+
+<!-- BEGIN GENERATED FLAGS: grain registry delegating-apps disable -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+<!-- END GENERATED FLAGS -->
+
+#### `grain registry delegating-apps enable`
+
+<!-- BEGIN GENERATED FLAGS: grain registry delegating-apps enable -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+<!-- END GENERATED FLAGS -->
+
+#### `grain registry delegating-apps list`
+
+<!-- BEGIN GENERATED FLAGS: grain registry delegating-apps list -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+<!-- END GENERATED FLAGS -->
+
+#### `grain registry grants create`
+
+<!-- BEGIN GENERATED FLAGS: grain registry grants create -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-access` | string |  |  | read or write (defaults to the app's max access) |
+| `-entry` | value |  |  | entry the app may reach on your behalf, or "*" for every entry you can reach (repeatable) |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+| `-ttl` | duration |  |  | how long the grant lasts, capped at the app's max grant TTL; 0 means 30 days |
+<!-- END GENERATED FLAGS -->
+
+#### `grain registry grants list`
+
+<!-- BEGIN GENERATED FLAGS: grain registry grants list -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-include-revoked` | bool |  |  | also list grants you have revoked |
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+<!-- END GENERATED FLAGS -->
+
+#### `grain registry grants revoke`
+
+<!-- BEGIN GENERATED FLAGS: grain registry grants revoke -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
+| `-registry-token` | string |  | $GRAIN_REGISTRY_TOKEN | bearer token for authenticating to the registry ($GRAIN_REGISTRY_TOKEN) |
+| `-registry-url` | string |  | $GRAIN_REGISTRY_URL | base URL of the grain registry ($GRAIN_REGISTRY_URL) |
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/registry_test.go`: `TestRegistryCLIRegisterStatusUnregister`, `TestRegistryCLISubcommands`, `TestDaemonRegistryFlags`; `pkg/cli/registry_delegation_test.go`: `TestRegistryCLIDelegatingAppsAndGrants`.
 
 ---
 

@@ -1424,6 +1424,11 @@ func TestStep12CatalogCRUDGroupAuthHeartbeatsDirectoryAndRouteEndToEnd(t *testin
 	_ = st.UpsertReplica(ctx, "rep-stale", "10.0.0.99:8082")
 	now = now.Add(20 * time.Second)
 	_ = st.UpsertReplica(ctx, "rep-step12", "127.0.0.1:18082")
+	_, _ = srv.Router().TunnelCache().RefreshEntry(ctx, "alice-unlisted-secret")
+	secretDetail, err := aliceCli.GetEntry(ctx, "alice-unlisted-secret")
+	if err != nil || secretDetail.TunnelConnected == nil || !*secretDetail.TunnelConnected {
+		t.Fatalf("expected enrichAPIEntry TunnelConnected=true under store clock, got %+v (err=%v)", secretDetail, err)
+	}
 
 	// Non-admin cannot call /api/admin/summary (403) and does NOT see unlisted versions, counts, tunnels, or peer_addr on /api/status.
 	if _, err := bobCli.AdminSummary(ctx); !isAPIStatus(err, http.StatusForbidden) {
@@ -2065,6 +2070,10 @@ func TestStep18DocsRegistryAndAccessCode(t *testing.T) {
 		"grain registry register",
 		"grain registry scopes",
 		"primary_conflict",
+		"/api/admin/delegating-apps",
+		"/api/delegation-grants",
+		"grain registry delegating-apps",
+		"grain registry grants",
 	} {
 		if !strings.Contains(regDoc, want) {
 			t.Errorf("docs/registry.md missing %q", want)

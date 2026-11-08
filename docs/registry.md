@@ -133,6 +133,63 @@ exact same reverse-proxy authentication pipeline:
    (`allowed_principal`) and RBAC roles decide whether that caller is
    admitted to the grain and what they may do there.
 
+### Delegated access: delegating apps and consent grants
+
+With `auth.delegation_policy: consent`, a registered **delegating app** — a
+service account such as a planning board or an issue triager — may call
+`https://<name>.<instance-domain>/…` on behalf of a person by sending
+`X-Grain-On-Behalf-Of: user:<email>`, but only while that person holds a
+live **consent grant** to the app covering `<name>` (or `"*"`). The
+registry still checks the person's own access to the entry, so a grant
+never reaches further than the person could; a `read` grant also refuses
+anything but `GET`/`HEAD`. (The default `static` policy refuses every
+on-behalf-of request.)
+
+**Registering an app (registry admins).** Only callers in `auth.admins`
+can create, list, disable, or enable apps:
+
+| Route | CLI | Effect |
+| --- | --- | --- |
+| `GET /api/admin/delegating-apps` | `grain registry delegating-apps list` | List every app, enabled or not |
+| `POST /api/admin/delegating-apps` | `grain registry delegating-apps create -principal <sa-email> [flags] <name>` | Register an app (`201`; `409` if the name or principal is taken) |
+| `PATCH /api/admin/delegating-apps/<name>` `{"disabled": true\|false}` | `grain registry delegating-apps disable\|enable <name>` | Stop (or resume) the app acting for anyone; its grants are kept |
+
+`principal` is the service account the app calls as. Give the bare email
+or `serviceAccount:<email>`: the registry stores and matches the
+`serviceAccount:` form either way, and refuses anything that is not a
+`*.gserviceaccount.com` account (a person's email could never present as
+a machine caller, so such an app would only ever read as
+`app_not_registered`). Other fields: `display_name` (defaults to the
+name), `description`, `homepage`, `owner` (a person; defaults to the
+calling admin), `owner_group`, `max_access` (`read` or `write`, default
+`write`), `max_grant_ttl_seconds` (default 90 days; `-max-grant-ttl` takes
+a Go duration), `require_subject_token`, and `redirect_uris`.
+
+```text
+grain registry delegating-apps create -principal planner@my-proj.iam.gserviceaccount.com \
+    -display-name "Planning board" -max-access read -max-grant-ttl 720h planner
+```
+
+**Granting consent (any person).** These routes act only for the signed-in
+person; service accounts are refused.
+
+| Route | CLI | Effect |
+| --- | --- | --- |
+| `GET /api/delegation-grants[?include_revoked=true]` | `grain registry grants list [-include-revoked]` | Your own grants, newest first |
+| `POST /api/delegation-grants` | `grain registry grants create -entry <name\|*>... [-access read\|write] [-ttl <dur>] <app>` | Grant (or replace your live grant to) `<app>` |
+| `DELETE /api/delegation-grants/<grant-id\|app>` | `grain registry grants revoke <grant-id\|app>` | Revoke one of your grants by its `dlg_…` ID or by app name |
+
+A grant body is `{"app", "entries", "access", "ttl_seconds"}`. `entries`
+is required: entry names, or `"*"` for every entry you can reach.
+`access` defaults to the app's `max_access` and may not exceed it (`403
+exceeds_max_access`); `ttl_seconds` defaults to 30 days and is capped at
+the app's `max_grant_ttl_seconds`. A disabled app takes no new grants
+(`403 app_disabled`). Grants are only ever your own: a body whose
+`person` names anyone else is refused with `403` — registry admins
+included — and somebody else's grant ID answers `404`, exactly like one
+that does not exist. Every create, disable, enable, grant, and revoke is
+recorded in `registry.audit_log`.
+
 ---
 
 ## 2. Hosted Instances (`kind = instance`)
@@ -932,6 +989,8 @@ for machine-readable JSON output on every subcommand.
 | `grain registry restore <name>` | Restore a soft-deleted hosted `instance` whose retention window (`purge_after`) has not expired |
 | `grain registry transfer -to <email> [-owner-group <group>] [-clear-owner-group] <name>` | Offer a two-step accountable `owner` transfer to `<email>` |
 | `grain registry accept-transfer <name>` | Accept a pending ownership transfer offered to you |
+| `grain registry delegating-apps list\|create\|disable\|enable` | Registry admins: manage the service accounts allowed to act on people's behalf ([Delegated access](#delegated-access-delegating-apps-and-consent-grants)) |
+| `grain registry grants list\|create\|revoke` | Grant, list, or revoke your own consent for a delegating app to act for you |
 
 ---
 

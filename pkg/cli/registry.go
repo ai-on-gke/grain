@@ -71,6 +71,10 @@ const registryUsage = `usage: grain registry <subcommand> [args]
   transfer          [-registry-url <url>] -to <email> [-owner-group <group>]
                     [-clear-owner-group] <name>
   accept-transfer   [-registry-url <url>] <name>
+  delegating-apps   list | create -principal <sa-email> [flags] <name> | disable <name> | enable <name>
+                    (registry admins; see grain registry delegating-apps help)
+  grants            list [-include-revoked] | create -entry <name|*>... [-access <read|write>]
+                    [-ttl <duration>] <app> | revoke <grant-id|app>
 
 Self-registration, directory discovery, path routing, and control-plane management
 for a grain registry (Settings -> Registry; design/design/registry.design.md).`
@@ -213,6 +217,10 @@ func cmdRegistry(ctx context.Context, c *ui.HTTPClient, out *printer, args []str
 		return cmdRegistryTransfer(ctx, c, out, subArgs)
 	case "accept-transfer":
 		return cmdRegistryAcceptTransfer(ctx, c, out, subArgs)
+	case "delegating-apps":
+		return cmdRegistryDelegatingApps(ctx, c, out, subArgs)
+	case "grants":
+		return cmdRegistryGrants(ctx, c, out, subArgs)
 	default:
 		return fmt.Errorf("unknown registry subcommand %q\n%s", sub, registryUsage)
 	}
@@ -375,16 +383,16 @@ func cmdRegistryRegister(ctx context.Context, c *ui.HTTPClient, out *printer, ar
 		if clientErr != nil {
 			return clientErr
 		}
-		scopes := model.ToScopeInputs(existingSnap.AdvertisedScopes)
-		if len(explicitScopes) > 0 {
-			scopes = explicitScopes
-		}
 		wantMint := normCfg.EffectiveAuthMode() == model.RegistryAuthToken || *mintToken
 		retargeting := (existingCfg.URL != "" && existingCfg.URL != normCfg.URL) ||
 			(existingCfg.Entry != "" && !strings.EqualFold(existingCfg.Entry, normCfg.Entry))
-		remoteEntry, mintedToken, err = upsertConnectedEntry(ctx, regClient, normCfg, effectiveHostKind, strings.TrimSpace(*connectedPrincipal), scopes, wantMint, *rotateToken || *mintToken || *standalone || !daemonHasSecret || retargeting)
+		hasStoredEntryCfg := !*standalone && existingCfg.Entry != "" && !retargeting
+		remoteEntry, mintedToken, err = upsertConnectedEntry(ctx, regClient, normCfg, effectiveHostKind, strings.TrimSpace(*connectedPrincipal), explicitScopes, passed, hasStoredEntryCfg, wantMint, *rotateToken || *mintToken || *standalone || !daemonHasSecret || retargeting)
 		if err != nil {
 			return err
+		}
+		if !*standalone && !hasStoredEntryCfg && remoteEntry != nil {
+			inheritExistingEntryConfig(&normCfg, remoteEntry, passed)
 		}
 	}
 
@@ -462,6 +470,27 @@ func cmdRegistryRegister(ctx context.Context, c *ui.HTTPClient, out *printer, ar
 	return nil
 }
 
+func inheritExistingEntryConfig(cfg *model.RegistryConfig, remote *api.Entry, passed map[string]bool) {
+	if !passed["listed"] {
+		cfg.Listed = remote.Listed
+	}
+	if !passed["display-name"] && cfg.DisplayName == "" {
+		cfg.DisplayName = remote.DisplayName
+	}
+	if !passed["purpose"] && cfg.Purpose == "" {
+		cfg.Purpose = remote.Purpose
+	}
+	if !passed["owner-group"] && cfg.OwnerGroup == "" {
+		cfg.OwnerGroup = remote.OwnerGroup
+	}
+	if !passed["host-kind"] && cfg.HostKind == "" && remote.HostKind != "" {
+		cfg.HostKind = remote.HostKind
+	}
+	if !passed["tags"] && len(cfg.Tags) == 0 && len(remote.Tags) > 0 {
+		cfg.Tags = slices.Clone(remote.Tags)
+	}
+}
+
 func upsertConnectedEntry(
 	ctx context.Context,
 	client *api.Client,
@@ -469,10 +498,12 @@ func upsertConnectedEntry(
 	hostKind api.HostKind,
 	connectedPrincipal string,
 	scopes []api.ScopeInput,
+	passed map[string]bool,
+	syncAllCfg bool,
 	wantToken bool,
 	needFreshToken bool,
 ) (*api.Entry, string, error) {
-	_, err := client.GetEntry(ctx, cfg.Entry)
+	existing, err := client.GetEntry(ctx, cfg.Entry)
 	if err != nil && !api.IsNotFound(err) {
 		return nil, "", err
 	}
@@ -505,28 +536,59 @@ func upsertConnectedEntry(
 		return &created.Entry, tok, nil
 	}
 
-	disp := cfg.DisplayName
-	purp := cfg.Purpose
-	group := cfg.OwnerGroup
-	hk := hostKind
-	updReq := api.UpdateEntryRequest{
-		DisplayName: &disp,
-		Purpose:     &purp,
-		HostKind:    &hk,
-		OwnerGroup:  &group,
-		Listed:      &listed,
-		Tags:        &cfg.Tags,
+	var updReq api.UpdateEntryRequest
+	needUpdate := false
+	if syncAllCfg || passed["display-name"] {
+		disp := cfg.DisplayName
+		updReq.DisplayName = &disp
+		needUpdate = true
+	}
+	if syncAllCfg || passed["purpose"] {
+		purp := cfg.Purpose
+		updReq.Purpose = &purp
+		needUpdate = true
+	}
+	if syncAllCfg || passed["host-kind"] {
+		hk := hostKind
+		updReq.HostKind = &hk
+		needUpdate = true
+	}
+	if syncAllCfg || passed["owner-group"] {
+		group := cfg.OwnerGroup
+		updReq.OwnerGroup = &group
+		needUpdate = true
+	}
+	if syncAllCfg || passed["listed"] {
+		updReq.Listed = &listed
+		needUpdate = true
+	}
+	if syncAllCfg || passed["tags"] {
+		tags := slices.Clone(cfg.Tags)
+		if tags == nil {
+			tags = []string{}
+		}
+		updReq.Tags = &tags
+		needUpdate = true
 	}
 	if connectedPrincipal != "" {
 		cp := connectedPrincipal
 		updReq.ConnectedPrincipal = &cp
+		needUpdate = true
 	}
-	updated, updErr := client.UpdateEntry(ctx, cfg.Entry, updReq)
-	if updErr != nil {
-		return nil, "", updErr
+	updated := existing
+	if needUpdate {
+		var updErr error
+		updated, updErr = client.UpdateEntry(ctx, cfg.Entry, updReq)
+		if updErr != nil {
+			return nil, "", updErr
+		}
 	}
 	if len(scopes) > 0 {
-		if scResp, scErr := client.SetScopes(ctx, cfg.Entry, scopes); scErr == nil && scResp != nil {
+		scResp, scErr := client.SetScopes(ctx, cfg.Entry, scopes)
+		if scErr != nil {
+			return nil, "", scErr
+		}
+		if scResp != nil {
 			updated.Scopes = scResp.Scopes
 		}
 	}

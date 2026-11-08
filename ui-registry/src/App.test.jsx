@@ -643,9 +643,12 @@ describe("Grain Registry UI", () => {
       );
     });
 
-    // Verify -registry-connect snippet updates with entry name
+    // Verify -registry-connect snippet updates with entry name and fixed grain-registry issuer
     expect(
       screen.getByText(/-registry-entry my-workstation/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/-ui-registry-issuer grain-registry/i),
     ).toBeInTheDocument();
 
     fireEvent.click(
@@ -657,6 +660,9 @@ describe("Grain Registry UI", () => {
         "grc_test_secret_token_12345",
       );
     });
+    expect(
+      screen.getByText(/registry_issuer: grain-registry/i),
+    ).toBeInTheDocument();
   });
 
   it("renders Entry detail view with tunnel status, last_seen_at, scopes, conflict banner, and credential rotation", async () => {
@@ -796,6 +802,27 @@ describe("Grain Registry UI", () => {
     expect(
       screen.queryByRole("link", { name: "Open" }),
     ).not.toBeInTheDocument();
+
+    // Verify /new snippet strips URL paths, queries, and shell metacharacters from registry_host.
+    globalThis.fetch = createFetchMock({
+      "GET /api/me": () =>
+        new Response(
+          JSON.stringify({
+            ...sampleMe,
+            registry_host: "https://registry.grain.example.com/evil/$(id)?x=1",
+          }),
+          { status: 200 },
+        ),
+    });
+    renderApp("/new");
+    await waitFor(() => {
+      expect(
+        screen.getAllByText(
+          /-registry-url https:\/\/registry\.grain\.example\.com \\/,
+        ).length,
+      ).toBeGreaterThan(0);
+    });
+    expect(screen.queryByText(/\$\(id\)/)).not.toBeInTheDocument();
   });
 
   it("supports two-step ownership transfer offer with expiry and cancel in Entry detail view, and admin recovery actions in Admin view", async () => {

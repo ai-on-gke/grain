@@ -534,7 +534,12 @@ test("Console session lifecycle controls, backing-task redirects, and session Wo
   await expect.poll(async () => sessionTaskID(page, "triage")).toBeTruthy();
   const triageTaskId = await sessionTaskID(page, "triage");
   expect(triageTaskId).not.toBe(directorTaskId);
-  await expect(page.getByText("waiting for your reply")).toBeVisible();
+  // The new session's task has to be dispatched and park before the page
+  // can say it is waiting; under the full suite's load that outlasts the
+  // default 5s (as in console-resting-notes-walkthrough.spec.js).
+  await expect(page.getByText("waiting for your reply")).toBeVisible({
+    timeout: 15_000,
+  });
 
   // Navigate directly to /tasks/<directorTaskId> and /tasks/<triageTaskId>
   // at both desktop (1280x800) and phone (390x844) viewports.

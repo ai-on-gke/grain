@@ -351,11 +351,7 @@ func (p *ConsentDelegationPolicy) RegisterApp(app store.DelegatingAppRow) {
 		return
 	}
 	app.Name = strings.ToLower(strings.TrimSpace(app.Name))
-	principal := strings.TrimSpace(app.Principal)
-	if strings.HasPrefix(strings.ToLower(principal), "serviceaccount:") {
-		principal = principal[len("serviceAccount:"):]
-	}
-	app.Principal = "serviceAccount:" + strings.ToLower(strings.TrimSpace(principal))
+	app.Principal = store.NormalizeAppPrincipal(app.Principal)
 	if app.MaxAccess == "" {
 		app.MaxAccess = "write"
 	}
@@ -399,11 +395,7 @@ func (p *ConsentDelegationPolicy) IsServicePrincipalReader(ctx context.Context, 
 }
 
 func (p *ConsentDelegationPolicy) lookupAppByPrincipal(ctx context.Context, principal string) (*store.DelegatingAppRow, error) {
-	norm := strings.TrimSpace(principal)
-	if strings.HasPrefix(strings.ToLower(norm), "serviceaccount:") {
-		norm = norm[len("serviceAccount:"):]
-	}
-	norm = "serviceAccount:" + strings.ToLower(strings.TrimSpace(norm))
+	norm := store.NormalizeAppPrincipal(principal)
 
 	p.mu.RLock()
 	st := p.st

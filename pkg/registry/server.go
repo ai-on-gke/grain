@@ -335,6 +335,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /api/admin/tunnels/{name}", s.admitter.RequireAdmin(http.HandlerFunc(s.handleAdminDisconnectTunnel)))
 	mux.Handle("POST /api/admin/entries/{name}/purge", s.admitter.RequireAdmin(http.HandlerFunc(s.handleAdminPurgeEntry)))
 	mux.Handle("POST /api/admin/entries/{name}/transfer", s.admitter.RequireAdmin(http.HandlerFunc(s.handleAdminForceTransfer)))
+	mux.Handle("GET /api/admin/delegating-apps", s.admitter.RequireAdmin(http.HandlerFunc(s.handleAdminListDelegatingApps)))
+	mux.Handle("POST /api/admin/delegating-apps", s.admitter.RequireAdmin(http.HandlerFunc(s.handleAdminCreateDelegatingApp)))
+	mux.Handle("PATCH /api/admin/delegating-apps/{name}", s.admitter.RequireAdmin(http.HandlerFunc(s.handleAdminSetDelegatingAppDisabled)))
+	mux.Handle("GET /api/delegation-grants", s.admitter.RequireHuman(http.HandlerFunc(s.handleListDelegationGrants)))
+	mux.Handle("POST /api/delegation-grants", s.admitter.RequireHuman(http.HandlerFunc(s.handleCreateDelegationGrant)))
+	mux.Handle("DELETE /api/delegation-grants/{ref}", s.admitter.RequireHuman(http.HandlerFunc(s.handleRevokeDelegationGrant)))
 	// Service principals read the catalog (/api/directory, /api/route) and
 	// nothing else; shapes and control-plane endpoints are for humans
 	// (registry.design.md, "Plain service calls").
@@ -2194,6 +2200,9 @@ func (s *Server) enrichAPIEntry(ctx context.Context, e *store.EntryRow, isAdmin 
 	}
 	if s.router != nil && s.router.TunnelCache() != nil {
 		now := time.Now().UTC()
+		if s.store != nil {
+			now = s.store.Now()
+		}
 		replicaTTL := s.cfg.Tunnel.ReplicaTTL
 		if replicaTTL <= 0 {
 			replicaTTL = DefaultTunnelReplicaTTL

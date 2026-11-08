@@ -658,6 +658,63 @@ func TestStep12RandomNameScopesCombinationSyncAndAsyncConflictsAndPromotion(t *t
 	if _, err := st.GetLiveDelegationGrant(ctx, "planning-app", "alice@example.com"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound after RevokeDelegationGrant, got %v", err)
 	}
+
+	// A bare-email principal is stored in serviceAccount: form, and a second
+	// app with the same principal (in either form) or name is ErrConflict.
+	bare, err := st.CreateDelegatingApp(ctx, DelegatingAppRow{
+		Name: "triage-app", Principal: " Triage-App@proj.iam.gserviceaccount.com ",
+		DisplayName: "Triage", Owner: "alice@example.com", CreatedBy: "admin@example.com",
+	})
+	if err != nil || bare.Principal != "serviceAccount:triage-app@proj.iam.gserviceaccount.com" {
+		t.Fatalf("CreateDelegatingApp bare principal: %+v (err=%v)", bare, err)
+	}
+	for _, dup := range []DelegatingAppRow{
+		{Name: "triage-two", Principal: "serviceAccount:triage-app@proj.iam.gserviceaccount.com"},
+		{Name: "triage-app", Principal: "other@proj.iam.gserviceaccount.com"},
+	} {
+		dup.Owner, dup.DisplayName, dup.CreatedBy = "alice@example.com", "dup", "admin@example.com"
+		if _, err := st.CreateDelegatingApp(ctx, dup); !errors.Is(err, ErrConflict) {
+			t.Fatalf("CreateDelegatingApp duplicate %+v: err=%v, want ErrConflict", dup, err)
+		}
+	}
+
+	// ListDelegationGrantsForPerson returns only that person's grants, and
+	// revoked ones only when asked.
+	if _, err := st.UpsertDelegationGrant(ctx, "triage-app", "Alice@Example.com", []string{"*"}, "read", time.Hour); err != nil {
+		t.Fatalf("UpsertDelegationGrant triage-app: %v", err)
+	}
+	if _, err := st.UpsertDelegationGrant(ctx, "triage-app", "bob@example.com", []string{"*"}, "read", time.Hour); err != nil {
+		t.Fatalf("UpsertDelegationGrant bob: %v", err)
+	}
+	liveGrants, err := st.ListDelegationGrantsForPerson(ctx, "alice@example.com", false)
+	if err != nil || len(liveGrants) != 1 || liveGrants[0].App != "triage-app" || liveGrants[0].Person != "alice@example.com" {
+		t.Fatalf("ListDelegationGrantsForPerson live: %+v (err=%v)", liveGrants, err)
+	}
+	allGrants, err := st.ListDelegationGrantsForPerson(ctx, "ALICE@example.com", true)
+	if err != nil || len(allGrants) != 2 {
+		t.Fatalf("ListDelegationGrantsForPerson include revoked: %+v (err=%v)", allGrants, err)
+	}
+	for _, g := range allGrants {
+		if g.Person != "alice@example.com" {
+			t.Fatalf("alice's grant list includes %s's grant %+v", g.Person, g)
+		}
+	}
+}
+
+func TestNormalizeAppPrincipal(t *testing.T) {
+	for in, want := range map[string]string{
+		"":                                       "",
+		"   ":                                    "",
+		"serviceAccount:":                        "",
+		"planner@proj.iam.gserviceaccount.com":   "serviceAccount:planner@proj.iam.gserviceaccount.com",
+		" Planner@Proj.iam.gserviceaccount.com ": "serviceAccount:planner@proj.iam.gserviceaccount.com",
+		"serviceAccount:planner@proj.iam.gserviceaccount.com": "serviceAccount:planner@proj.iam.gserviceaccount.com",
+		"SERVICEACCOUNT:Planner@proj.iam.gserviceaccount.com": "serviceAccount:planner@proj.iam.gserviceaccount.com",
+	} {
+		if got := NormalizeAppPrincipal(in); got != want {
+			t.Errorf("NormalizeAppPrincipal(%q) = %q, want %q", in, got, want)
+		}
+	}
 }
 
 func TestStep17StopStartAutoWakeAndUpgradeAvailable(t *testing.T) {

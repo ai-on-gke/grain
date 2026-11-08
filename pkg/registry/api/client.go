@@ -717,3 +717,67 @@ func (c *Client) ForceTransfer(ctx context.Context, name string, req TransferReq
 	}
 	return &out, nil
 }
+
+// ListDelegatingApps sends GET /api/admin/delegating-apps (admin only).
+func (c *Client) ListDelegatingApps(ctx context.Context) ([]DelegatingApp, error) {
+	var out ListDelegatingAppsResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/api/admin/delegating-apps", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Apps, nil
+}
+
+// CreateDelegatingApp sends POST /api/admin/delegating-apps (admin only).
+func (c *Client) CreateDelegatingApp(ctx context.Context, req CreateDelegatingAppRequest) (*DelegatingApp, error) {
+	var out DelegatingApp
+	if err := c.doJSON(ctx, http.MethodPost, "/api/admin/delegating-apps", nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SetDelegatingAppDisabled sends PATCH /api/admin/delegating-apps/<name> (admin only).
+func (c *Client) SetDelegatingAppDisabled(ctx context.Context, name string, disabled bool) (*DelegatingApp, error) {
+	var out DelegatingApp
+	path := "/api/admin/delegating-apps/" + url.PathEscape(name)
+	if err := c.doJSON(ctx, http.MethodPatch, path, nil, SetDelegatingAppDisabledRequest{Disabled: disabled}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ListDelegationGrants sends GET /api/delegation-grants: the signed-in
+// person's own grants, including revoked ones when includeRevoked is set.
+func (c *Client) ListDelegationGrants(ctx context.Context, includeRevoked bool) ([]DelegationGrant, error) {
+	var q url.Values
+	if includeRevoked {
+		q = url.Values{"include_revoked": {"true"}}
+	}
+	var out ListDelegationGrantsResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/api/delegation-grants", q, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Grants, nil
+}
+
+// CreateDelegationGrant sends POST /api/delegation-grants, granting (or
+// updating the signed-in person's live grant to) a delegating app.
+func (c *Client) CreateDelegationGrant(ctx context.Context, req CreateDelegationGrantRequest) (*DelegationGrant, error) {
+	var out DelegationGrant
+	if err := c.doJSON(ctx, http.MethodPost, "/api/delegation-grants", nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// RevokeDelegationGrant sends DELETE /api/delegation-grants/<ref>, where ref is
+// a grant ID (`dlg_...`) or the name of an app the signed-in person has a
+// live grant to.
+func (c *Client) RevokeDelegationGrant(ctx context.Context, ref string) (*DelegationGrant, error) {
+	var out DelegationGrant
+	path := "/api/delegation-grants/" + url.PathEscape(ref)
+	if err := c.doJSON(ctx, http.MethodDelete, path, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}

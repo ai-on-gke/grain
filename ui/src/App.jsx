@@ -12,7 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { kindNarrowing } from "./processFilters.js";
 import api, {
   isUnreachable,
@@ -522,7 +529,14 @@ function AppContent({ onReload = () => window.location.reload() }) {
     closedInView && stateFilterAdmitsClosed(stateFilter)
       ? (narrowing.search || "").trim()
       : "";
-  useEffect(() => {
+  // A layout effect, not a passive one: the render that narrows the list
+  // to the box's new text must not commit to the screen with the pager
+  // still in its old mode. While it lagged, the end of the now-short list
+  // came into view and ClosedTasksMore read a page of the newest-closed
+  // list (or of the previous search) on the first keystroke of every
+  // search (2026-11-07 walkthrough); this one re-renders before paint,
+  // so the observer is gone before it can fire.
+  useLayoutEffect(() => {
     setClosedSearch(closedSearchWanted);
   }, [closedSearchWanted]);
   // closedFloor is whether closed tasks a view could show are still to

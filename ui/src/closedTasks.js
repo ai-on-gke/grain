@@ -40,7 +40,7 @@ export const SEARCH_DEBOUNCE_MS = 300;
 
 // closedPagePath is the request for the page after cursor ("" for the
 // newest). search narrows it to the closed tasks whose title,
-// description or id holds that text (pkg/ui's taskListQuery), repo to
+// description, external reference or id holds that text (pkg/ui's taskListQuery), repo to
 // one repository's, and limit sets the page's size -- a caller that
 // wants only the totals asks for a page of one.
 export function closedPagePath(
@@ -209,8 +209,8 @@ export function closedPartial({ answered, totals, held, nextCursor }) {
 // held would miss every task closed before them, so the server is asked
 // instead (GET /api/tasks?state=closed&search=, which also matches
 // descriptions), SEARCH_DEBOUNCE_MS after the box goes quiet, and what
-// it finds is merged in beside the rest, marked with the text that
-// found it (markSearchHits).
+// it finds is drawn beside the rest while the box still holds that text,
+// marked with the text that found it (markSearchHits).
 export function useClosedTasks(enabled = true, search = "") {
   const [closed, setClosed] = useState([]);
   const [nextCursor, setNextCursor] = useState("");
@@ -224,6 +224,14 @@ export function useClosedTasks(enabled = true, search = "") {
   // asked for, nextCursor its next page, loading while a page of it is
   // on its way.
   const [searched, setSearched] = useState(NO_SEARCH);
+  // found is what the server's search has answered for searched.q, held
+  // apart from the newest-closed pages in `closed`: a hit can be any
+  // number of pages deeper than the oldest page read, and merged into
+  // those pages it stayed drawn below them -- out of place, after a gap
+  // of every task closed in between -- once the box was emptied
+  // (2026-11-07 walkthrough). The views see it only while that search is
+  // the box's.
+  const [found, setFound] = useState(NO_TASKS);
   // deep is whether a page past the first has been read, whose cursor a
   // refresh of the first must not overwrite.
   const deep = useRef(false);
@@ -265,9 +273,8 @@ export function useClosedTasks(enabled = true, search = "") {
       if (gen !== searchGen.current) return;
       // Not the page's totals: they count the search's matches, and the
       // rail's counts are of every closed task.
-      setClosed((prev) =>
-        mergeClosedPage(prev, markSearchHits(page.tasks, key)),
-      );
+      const hits = markSearchHits(page.tasks, key);
+      setFound((prev) => (cursor ? mergeClosedPage(prev, hits) : hits));
       setSearched({ q: key, nextCursor: page.nextCursor, loading: false });
     } catch (err) {
       console.warn("grain: searching closed tasks failed", err);
@@ -282,6 +289,7 @@ export function useClosedTasks(enabled = true, search = "") {
       searchGen.current += 1;
       searchInFlight.current = false;
       setSearched(NO_SEARCH);
+      setFound(NO_TASKS);
       return undefined;
     }
     const timer = setTimeout(() => searchPage(q, ""), SEARCH_DEBOUNCE_MS);
@@ -334,10 +342,19 @@ export function useClosedTasks(enabled = true, search = "") {
     };
   }, [enabled, refresh]);
 
-  const unseen = useMemo(() => unseenClosed(totals, closed), [totals, closed]);
-  const partial = closedPartial({ answered, totals, held: closed, nextCursor });
+  // shown is what the views draw: the newest-closed pages, and while the
+  // box is set, what the server's search for it found.
+  const shown = useMemo(
+    () =>
+      searching && searched.q === q && found.length > 0
+        ? mergeClosedPage(closed, found)
+        : closed,
+    [searching, searched.q, q, found, closed],
+  );
+  const unseen = useMemo(() => unseenClosed(totals, shown), [totals, shown]);
+  const partial = closedPartial({ answered, totals, held: shown, nextCursor });
   return {
-    closed,
+    closed: shown,
     hasMore: searching
       ? searched.q === q && searched.nextCursor !== ""
       : nextCursor !== "",
@@ -403,3 +420,4 @@ export function useRepoClosedCount(repo, enabled) {
 
 // NO_SEARCH is useClosedTasks' search state with nothing searched.
 const NO_SEARCH = Object.freeze({ q: "", nextCursor: "", loading: false });
+const NO_TASKS = Object.freeze([]);

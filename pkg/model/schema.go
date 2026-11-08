@@ -595,7 +595,12 @@ import "strconv"
 // `default_capabilities`, `ci_capabilities`, `console_sessions` and
 // `capability_policy` become
 // `https://grain.dev/capabilities/github#sandbox-repo={}`.
-const SchemaVersion = 124
+// 125 changes no table: it rewrites `grain-ci` in
+// `grain_config`.`capability_policy` -- its rules and its catalogue's task,
+// CI and per-repository defaults -- to
+// `https://grain.dev/capabilities/grain#ci={}`, which migration 96 did
+// everywhere else a grant is stored (grain_ci_policy_migration.go).
+const SchemaVersion = 125
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or

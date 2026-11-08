@@ -101,6 +101,44 @@ describe("useClosedTasks", () => {
     expect(hook.result.current.hasMore).toBe(true);
   });
 
+  it("draws a search's deep hits only while the box holds that search", async () => {
+    // 2026-11-07 walkthrough: merged into the newest-closed pages, a hit
+    // from far below them stayed drawn after them -- out of place, after
+    // a gap -- once the box was emptied.
+    answer({
+      "": {
+        tasks: [closed("50", "2026-11-05T00:00:00Z")],
+        nextCursor: "c1",
+        total: 300,
+        merged: 0,
+        sessions: 0,
+      },
+      "search=needle": {
+        tasks: [closed("3", "2026-01-02T00:00:00Z")],
+        nextCursor: "",
+        total: 1,
+        merged: 0,
+        sessions: 0,
+      },
+    });
+    const hook = renderHook(({ q }) => useClosedTasks(true, q), {
+      initialProps: { q: "" },
+    });
+    await waitFor(() => expect(hook.result.current.closed).toHaveLength(1));
+    hook.rerender({ q: "needle" });
+    await waitFor(() =>
+      expect(hook.result.current.closed.map((t) => t.id)).toEqual(["50", "3"]),
+    );
+    hook.rerender({ q: "" });
+    expect(hook.result.current.closed.map((t) => t.id)).toEqual(["50"]);
+    expect(hook.result.current.hasMore).toBe(true);
+    // Typed again, the hit is asked for again rather than remembered.
+    hook.rerender({ q: "needle" });
+    await waitFor(() =>
+      expect(hook.result.current.closed.map((t) => t.id)).toEqual(["50", "3"]),
+    );
+  });
+
   it("asks nothing of the server for a search until enabled", async () => {
     answer({});
     renderHook(() => useClosedTasks(false, "deadlock"));

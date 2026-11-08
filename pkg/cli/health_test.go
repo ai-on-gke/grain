@@ -126,3 +126,28 @@ func TestGrainHealthSurfacesRegistryFailuresAndScopeConflicts(t *testing.T) {
 		}
 	}
 }
+
+// A capability server out of use is what `grain health` leads with: the
+// health response has listed them since #647, but the printer never did,
+// so a deployment with a server down was told "no counters"
+// (docs/test-runs/2026-11-04-capabilities.md, F7).
+func TestGrainHealthListsCapabilityServersOutOfUse(t *testing.T) {
+	out := captureStdout(t, func() {
+		(&printer{}).health(ui.SandboxHealthResponse{CapabilityServers: []ui.CapabilityServerDown{
+			{ID: "https://walk.example/caps/cm", State: "failed", Reason: "initialize: mcp: capability server closed its output: EOF"},
+			{ID: "https://grain.dev/capabilities/gcp", State: "needs-config", ConfigRefused: true, Reason: "gcp: permission set org: roles/owner is not grantable"},
+		}})
+	})
+	for _, want := range []string{
+		"FAILING: capability servers out of use",
+		"https://walk.example/caps/cm (failed): initialize: mcp: capability server closed its output: EOF",
+		"https://grain.dev/capabilities/gcp (refused its saved config): gcp: permission set org: roles/owner is not grantable",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("grain health output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "no counters") {
+		t.Errorf("grain health says there is nothing to report with a server down:\n%s", out)
+	}
+}
