@@ -296,14 +296,21 @@ export default function SettingsPage({
     return () => observer.disconnect();
   }, [focusTarget, current, settings]);
 
-  const go = (next) => {
-    if (next === current) return true;
+  // go opens another section, and with nextAnchor a card or field on it
+  // (GitSection's note opens Capabilities at its Deployment credentials
+  // card): the address carries it as its #hash, and it is scrolled to.
+  const go = (next, nextAnchor = "") => {
+    if (next === current) {
+      if (nextAnchor) setFocusTarget(nextAnchor);
+      return true;
+    }
     if (
       (s.dirtyCards.length > 0 || leavingLosesEdits()) &&
       !window.confirm(DISCARD_PROMPT)
     )
       return false;
-    onSection(next);
+    if (nextAnchor) onSection(next, nextAnchor);
+    else onSection(next);
     return true;
   };
 

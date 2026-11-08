@@ -141,8 +141,12 @@ test.describe("Pinned System and Settings sub-targets", () => {
       ["/settings/general", "/settings/general", ["General"]],
       ["/settings/capabilities", "/settings/capabilities", ["Capabilities"]],
       // The retired Legacy capabilities tab's address lands on, and
-      // lights, Capabilities.
-      ["/settings/credentials", "/settings/capabilities", ["Capabilities"]],
+      // lights, Capabilities, at the Deployment credentials card it was.
+      [
+        "/settings/credentials",
+        "/settings/capabilities#credentials",
+        ["Capabilities"],
+      ],
     ];
     for (const reload of [false, true]) {
       for (const [path, canonical, lit] of want) {
