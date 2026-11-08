@@ -1,0 +1,198 @@
+=== 1A. Schema v2 channel pointer + tagged-not-published v3.2.1 (#749) + signature binding ===
+{
+  "targets": [
+    {
+      "name": "latest",
+      "kind": "channel",
+      "allowed": true
+    },
+    {
+      "name": "candidate",
+      "kind": "channel",
+      "allowed": false
+    },
+    {
+      "name": "main",
+      "kind": "channel",
+      "allowed": true
+    },
+    {
+      "name": "v3.2.0",
+      "kind": "version",
+      "allowed": true
+    }
+  ],
+  "versionsError": null
+}
+--- Requesting unpublished v3.2.1 (must fail closed naming v3.2.0) ---
+{
+  "phase": "failed",
+  "detail": "release-assets: release v3.2.1 on 127.0.0.1:4280/ai-on-gke/grain is not published; the newest published release is v3.2.0"
+}
+--- Requesting latest (v2 channel pointer channel-latest -> v3.2.0) ---
+{
+  "phase": "ok",
+  "source": "release-assets",
+  "detail": "loaded docker.io/grainai/grain:latest (sha256:a5539187853ca539b1223e6addb0acd6b912c6b390ad4a409b54ea11c016a6af) from 127.0.0.1:4280/ai-on-gke/grain release v3.2.0; restarting",
+  "steps": [
+    {
+      "name": "pull image",
+      "status": null,
+      "detail": "loaded grain-image.tar.gz (sha256:a5539187853ca539b1223e6addb0acd6b912c6b390ad4a409b54ea11c016a6af) from 127.0.0.1:4280/ai-on-gke/grain release v3.2.0"
+    },
+    {
+      "name": "signature",
+      "status": null,
+      "detail": "docker.io/grainai/grain:v3.2.0 is verified"
+    },
+    {
+      "name": "health check",
+      "status": null,
+      "detail": "the loaded image runs"
+    },
+    {
+      "name": "unit flags",
+      "status": null,
+      "detail": "docker.io/grainai/grain:v3.2.0 accepts all 15 flags this deployment was started with"
+    },
+    {
+      "name": "sandbox image",
+      "status": null,
+      "detail": "this deployment runs no sandbox containers"
+    },
+    {
+      "name": "schema",
+      "status": null,
+      "detail": "unchanged: both builds are at schema 125"
+    },
+    {
+      "name": "record image",
+      "status": null,
+      "detail": "/tmp/item1-live/case-1a/image.env now names docker.io/grainai/grain:latest (sha256:a5539187853ca539b1223e6addb0acd6b912c6b390ad4a409b54ea11c016a6af)"
+    },
+    {
+      "name": "restart",
+      "status": null,
+      "detail": null
+    }
+  ]
+}
+GRAIN_IMAGE=docker.io/grainai/grain:latest
+2026-11-08T01:20:21Z GRAIN_IMAGE=docker.io/grainai/grain:latest
+=== 1B. Slash-branch tag mapping release/v3.2.0 -> channel-release-v3.2.0 (#799) ===
+{
+  "phase": "running",
+  "branch": "release/v3.2.0",
+  "detail": "",
+  "error": null
+}
+{
+  "phase": "ok",
+  "branch": "release/v3.2.0",
+  "source": "release-assets",
+  "detail": "loaded docker.io/grainai/grain:release..v3.2.0 (sha256:a5539187853ca539b1223e6addb0acd6b912c6b390ad4a409b54ea11c016a6af) from 127.0.0.1:4280/ai-on-gke/grain release channel-release-v3.2.0; restarting"
+}
+{
+  "requests": [
+    "GET /api/v3/repos/ai-on-gke/grain/releases/tags/channel-release-v3.2.0 (Accept=application/vnd.github+json)",
+    "GET /api/v3/repos/ai-on-gke/grain/releases/assets/106 (Accept=application/octet-stream)",
+    "GET /api/v3/repos/ai-on-gke/grain/releases/tags/v3.2.0 (Accept=application/vnd.github+json)",
+    "GET /api/v3/repos/ai-on-gke/grain/releases/assets/102 (Accept=application/octet-stream)",
+    "GET /api/v3/repos/ai-on-gke/grain/releases/assets/101 (Accept=application/octet-stream)"
+  ]
+}
+=== 1C. Mid-update images.json.next-only defers without falling back to registry (#661) ===
+{
+  "phase": "failed",
+  "source": "release-assets",
+  "detail": "release-assets: moving release is mid-update: release channel-main on 127.0.0.1:4280/ai-on-gke/grain has no images.json yet (its publisher uploads it last); try again later"
+}
+=== 1D. Swapped tarball rejected by images.json imageId check AND by verifyLoaded signature binding (#661 a2681b21) ===
+--- 1D.i: swapped-id (tarball #2 vs images.json imageId #1) ---
+{
+  "phase": "failed",
+  "detail": "release-assets: release asset integrity check failed: loaded daemon image grain-image.tar.gz has ID sha256:9517122e5656ff721e55b4bf0fa05e8f6611efcca053960c813f3314bae7e15b, but images.json expects sha256:a5539187853ca539b1223e6addb0acd6b912c6b390ad4a409b54ea11c016a6af"
+}
+--- 1D.ii: swapped-sig (both tarball #2 and images.json imageId #2 swapped; VerifyCmd trusts only #1) ---
+{
+  "phase": "failed",
+  "detail": "verifying the signature on loaded image docker.io/grainai/grain:v3.2.0: the verifier reported signatures for sha256:a5539187853ca539b1223e6addb0acd6b912c6b390ad4a409b54ea11c016a6af and not for sha256:9517122e5656ff721e55b4bf0fa05e8f6611efcca053960c813f3314bae7e15b, the image loaded from the release; leaving this deployment on the image it already runs",
+  "steps": [
+    {
+      "name": "pull image",
+      "status": null,
+      "detail": "loaded grain-image.tar.gz (sha256:9517122e5656ff721e55b4bf0fa05e8f6611efcca053960c813f3314bae7e15b) from 127.0.0.1:4280/ai-on-gke/grain release v3.2.0"
+    },
+    {
+      "name": "signature",
+      "status": null,
+      "detail": "verifying the signature on loaded image docker.io/grainai/grain:v3.2.0: the verifier reported signatures for sha256:a5539187853ca539b1223e6addb0acd6b912c6b390ad4a409b54ea11c016a6af and not for sha256:9517122e5656ff721e55b4bf0fa05e8f6611efcca053960c813f3314bae7e15b, the image loaded from the release;…"
+    },
+    {
+      "name": "health check",
+      "status": null,
+      "detail": null
+    },
+    {
+      "name": "unit flags",
+      "status": null,
+      "detail": null
+    },
+    {
+      "name": "sandbox image",
+      "status": null,
+      "detail": null
+    },
+    {
+      "name": "schema",
+      "status": null,
+      "detail": null
+    },
+    {
+      "name": "record image",
+      "status": null,
+      "detail": null
+    },
+    {
+      "name": "restart",
+      "status": null,
+      "detail": null
+    }
+  ]
+}
+=== 1E. Single-asset -upgrade-release-asset without images.json (Bug F2 after-fix) ===
+{
+  "targets": [
+    {
+      "name": "latest",
+      "kind": "channel",
+      "allowed": true
+    },
+    {
+      "name": "candidate",
+      "kind": "channel",
+      "allowed": false
+    },
+    {
+      "name": "main",
+      "kind": "channel",
+      "allowed": true
+    },
+    {
+      "name": "v3.2.0",
+      "kind": "version",
+      "allowed": true
+    }
+  ],
+  "versionsError": null
+}
+{
+  "phase": "ok",
+  "source": "release-assets",
+  "detail": "loaded docker.io/grainai/grain:v3.2.0 (sha256:a5539187853ca539b1223e6addb0acd6b912c6b390ad4a409b54ea11c016a6af) from 127.0.0.1:4280/ai-on-gke/grain release v3.2.0; restarting"
+}
+=== 1F. Settings -> Upgrade PUT /api/upgrade/source refusals on verifying deployment & disallowed repo (#661) ===
+PUT mode=release-assets with -upgrade-verify-cmd -> HTTP 400: {"error":"this deployment verifies image signatures (-upgrade-verify-cmd), so loading release-asset tarballs takes the daemon's -upgrade-image-source=release-assets or -upgrade-image-fallback=release-assets flag rather than the upgrade pane"}
+PUT fallback=release-assets with -upgrade-verify-cmd -> HTTP 400: {"error":"this deployment verifies image signatures (-upgrade-verify-cmd), so loading release-asset tarballs takes the daemon's -upgrade-image-source=release-assets or -upgrade-image-fallback=release-assets flag rather than the upgrade pane"}
+PUT disallowed releaseRepository -> HTTP 400: {"error":"release repository \"github.com/attacker/evil\" is not one this deployment may upgrade from; allowed are github.com/ai-on-gke/grain (set another with the daemon's -upgrade-release-repo flag)"}
+ALL ITEM 1 LIVE DAEMON CHECKS PASSED

@@ -58,13 +58,13 @@ type appTokens struct {
 	slug  string
 }
 
-func (a appTokens) TokenFor(_, _ string) *string          { return &a.token }
+func (a appTokens) TokenFor(_, _ string) *string           { return &a.token }
 func (a appTokens) AppSlugFor(_, _ string) (string, error) { return a.slug, nil }
 
 // multiRepoTransport routes GitHub API requests to per-owner/repo githubsim
 // instances so downstream `synced-release` gates can read upstream tags too.
 type multiRepoTransport struct {
-	sims    map[string]*githubsim.Sim
+	sims       map[string]*githubsim.Sim
 	defaultSim *githubsim.Sim
 }
 
