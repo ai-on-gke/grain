@@ -1,0 +1,153 @@
+{
+  "label": "base",
+  "steps": [
+    {
+      "name": "target list set",
+      "status": 200
+    },
+    {
+      "name": "filed task 1",
+      "status": 201,
+      "id": "2",
+      "repo": "acme/legacy-service",
+      "state": "proposed"
+    },
+    {
+      "name": "filed task 2",
+      "status": 201,
+      "id": "3",
+      "repo": "acme/legacy-service",
+      "state": "proposed"
+    },
+    {
+      "name": "filed task 3",
+      "status": 201,
+      "id": "4",
+      "repo": "acme/legacy-service",
+      "state": "proposed"
+    },
+    {
+      "name": "standing session",
+      "status": 201,
+      "body": "{\"sessions\":[{\"id\":\"director\",\"title\":\"Director\",\"team\":\"default\",\"taskId\":\"1\",\"capabilities\":[\"api:ci-read\"],\"missingShippedDefaults\":[\"api:self-debug\",\"https://grain.dev/capabilities/grain#source={}"
+    },
+    {
+      "name": "acme/legacy-service removed from the target list",
+      "ok": true,
+      "status": 200
+    },
+    {
+      "name": "targetRepos now",
+      "targetRepos": [
+        "acme/widgets"
+      ]
+    },
+    {
+      "name": "/repos omits the removed repo 1440-light",
+      "ok": true,
+      "listed": 0
+    },
+    {
+      "name": "/repos/ACME/legacy-service says 3 tasks 1440-light",
+      "ok": true,
+      "text": "3 tasks still target this repo, which is no longer on the target list"
+    },
+    {
+      "name": "note wraps without overflow 1440-light",
+      "ok": true,
+      "right": 922.109375,
+      "vw": 1440,
+      "docOverflow": 0,
+      "worstAncestor": 0,
+      "lines": 1
+    },
+    {
+      "name": "axe removed-repo page 1440-light",
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "note links to the 3 filtered tasks 1440-light",
+      "ok": false,
+      "url": "/?f=repo:any:ACME/legacy-service",
+      "rows": 0,
+      "sessionRow": false
+    },
+    {
+      "name": "/repos omits the removed repo 1440-dark",
+      "ok": true,
+      "listed": 0
+    },
+    {
+      "name": "/repos/ACME/legacy-service says 3 tasks 1440-dark",
+      "ok": true,
+      "text": "3 tasks still target this repo, which is no longer on the target list"
+    },
+    {
+      "name": "note wraps without overflow 1440-dark",
+      "ok": true,
+      "right": 922.109375,
+      "vw": 1440,
+      "docOverflow": 0,
+      "worstAncestor": 0,
+      "lines": 1
+    },
+    {
+      "name": "note links to the 3 filtered tasks 1440-dark",
+      "ok": false,
+      "url": "/?f=repo:any:ACME/legacy-service",
+      "rows": 0,
+      "sessionRow": false
+    },
+    {
+      "name": "/repos omits the removed repo 390-light",
+      "ok": true,
+      "listed": 0
+    },
+    {
+      "name": "/repos/ACME/legacy-service says 3 tasks 390-light",
+      "ok": true,
+      "text": "3 tasks still target this repo, which is no longer on the target list"
+    },
+    {
+      "name": "note wraps without overflow 390-light",
+      "ok": true,
+      "right": 349.53125,
+      "vw": 390,
+      "docOverflow": 0,
+      "worstAncestor": 0,
+      "lines": 1
+    },
+    {
+      "name": "note links to the 3 filtered tasks 390-light",
+      "ok": false,
+      "url": "/?f=repo:any:ACME/legacy-service",
+      "rows": 0,
+      "sessionRow": false
+    },
+    {
+      "name": "/repos omits the removed repo 390-dark",
+      "ok": true,
+      "listed": 0
+    },
+    {
+      "name": "/repos/ACME/legacy-service says 3 tasks 390-dark",
+      "ok": true,
+      "text": "3 tasks still target this repo, which is no longer on the target list"
+    },
+    {
+      "name": "note wraps without overflow 390-dark",
+      "ok": true,
+      "right": 349.53125,
+      "vw": 390,
+      "docOverflow": 0,
+      "worstAncestor": 0,
+      "lines": 1
+    }
+  ],
+  "failures": [
+    "note links to the 3 filtered tasks 1440-light",
+    "note links to the 3 filtered tasks 1440-dark",
+    "note links to the 3 filtered tasks 390-light"
+  ]
+}

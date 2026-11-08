@@ -1,0 +1,1256 @@
+{
+  "label": "after",
+  "steps": [
+    {
+      "name": "owner-me 1440-light: one targeted closed request first",
+      "ok": true,
+      "targeted": 5,
+      "firstTargeted": {
+        "at": 1794176215769,
+        "cursor": "",
+        "search": "",
+        "owner": "console-rest-e2e-operator",
+        "externalRef": ""
+      },
+      "firstPaint": 2767
+    },
+    {
+      "name": "owner-me 1440-light: never pages the plain closed list",
+      "ok": true,
+      "plainDeep": 0,
+      "total": 6
+    },
+    {
+      "name": "owner-me 1440-light: rows match, no duplicates, in place",
+      "ok": true,
+      "shown": 875,
+      "expected": 875,
+      "dupes": 0,
+      "strays": [],
+      "order": true
+    },
+    {
+      "name": "owner-me 1440-light: no horizontal overflow",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "owner-me 1440-light: chips cleared back to the plain list",
+      "ok": true,
+      "rows": 200,
+      "outOfPlace": [],
+      "newTargeted": 0
+    },
+    {
+      "name": "owner-other 1440-light: one targeted closed request first",
+      "ok": true,
+      "targeted": 5,
+      "firstTargeted": {
+        "at": 1794176224897,
+        "cursor": "",
+        "search": "",
+        "owner": "other@example.com",
+        "externalRef": ""
+      },
+      "firstPaint": 2824
+    },
+    {
+      "name": "owner-other 1440-light: never pages the plain closed list",
+      "ok": true,
+      "plainDeep": 0,
+      "total": 6
+    },
+    {
+      "name": "owner-other 1440-light: rows match, no duplicates, in place",
+      "ok": true,
+      "shown": 875,
+      "expected": 875,
+      "dupes": 0,
+      "strays": [],
+      "order": true
+    },
+    {
+      "name": "owner-other 1440-light: no horizontal overflow",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "owner-other 1440-light: chips cleared back to the plain list",
+      "ok": true,
+      "rows": 200,
+      "outOfPlace": [],
+      "newTargeted": 0
+    },
+    {
+      "name": "extref-inc99 1440-light: one targeted closed request first",
+      "ok": true,
+      "targeted": 1,
+      "firstTargeted": {
+        "at": 1794176234379,
+        "cursor": "",
+        "search": "",
+        "owner": "",
+        "externalRef": "INC-99"
+      },
+      "firstPaint": 2565
+    },
+    {
+      "name": "extref-inc99 1440-light: never pages the plain closed list",
+      "ok": true,
+      "plainDeep": 0,
+      "total": 2
+    },
+    {
+      "name": "extref-inc99 1440-light: rows match, no duplicates, in place",
+      "ok": true,
+      "shown": 3,
+      "expected": 3,
+      "dupes": 0,
+      "strays": [],
+      "order": true
+    },
+    {
+      "name": "extref-inc99 1440-light: every match drawn",
+      "ok": true,
+      "shown": [
+        11,
+        9,
+        7
+      ],
+      "expect": [
+        11,
+        9,
+        7
+      ]
+    },
+    {
+      "name": "extref-inc99 1440-light: no horizontal overflow",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "extref-inc99 1440-light: chips cleared back to the plain list",
+      "ok": true,
+      "rows": 200,
+      "outOfPlace": [],
+      "newTargeted": 0
+    },
+    {
+      "name": "owner-me-search 1440-light: one targeted closed request first",
+      "ok": true,
+      "targeted": 1,
+      "firstTargeted": {
+        "at": 1794176243504,
+        "cursor": "",
+        "search": "kestrelmint",
+        "owner": "console-rest-e2e-operator",
+        "externalRef": ""
+      },
+      "firstPaint": 2855
+    },
+    {
+      "name": "owner-me-search 1440-light: never pages the plain closed list",
+      "ok": true,
+      "plainDeep": 0,
+      "total": 2
+    },
+    {
+      "name": "owner-me-search 1440-light: rows match, no duplicates, in place",
+      "ok": true,
+      "shown": 10,
+      "expected": 10,
+      "dupes": 0,
+      "strays": [],
+      "order": true
+    },
+    {
+      "name": "owner-me-search 1440-light: every match drawn",
+      "ok": true,
+      "shown": [
+        3492,
+        3104,
+        2716,
+        2328,
+        1940,
+        1552,
+        1164,
+        776,
+        388,
+        0
+      ],
+      "expect": [
+        3492,
+        3104,
+        2716,
+        2328,
+        1940,
+        1552,
+        1164,
+        776,
+        388,
+        0
+      ]
+    },
+    {
+      "name": "owner-me-search 1440-light: no horizontal overflow",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "owner-me-search 1440-light: chips cleared back to the plain list",
+      "ok": true,
+      "rows": 200,
+      "outOfPlace": [],
+      "newTargeted": 0
+    },
+    {
+      "name": "owner-me-durable 1440-light: one targeted closed request first",
+      "ok": true,
+      "targeted": 5,
+      "firstTargeted": {
+        "at": 1794176252070,
+        "cursor": "",
+        "search": "",
+        "owner": "console-rest-e2e-operator",
+        "externalRef": ""
+      },
+      "firstPaint": 2681
+    },
+    {
+      "name": "owner-me-durable 1440-light: never pages the plain closed list",
+      "ok": true,
+      "plainDeep": 0,
+      "total": 6
+    },
+    {
+      "name": "owner-me-durable 1440-light: rows match, no duplicates, in place",
+      "ok": true,
+      "shown": 219,
+      "expected": 219,
+      "dupes": 0,
+      "strays": [],
+      "order": true
+    },
+    {
+      "name": "owner-me-durable 1440-light: no horizontal overflow",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "owner-me-durable 1440-light: chips cleared back to the plain list",
+      "ok": true,
+      "rows": 200,
+      "outOfPlace": [],
+      "newTargeted": 0
+    },
+    {
+      "name": "race 1440-light: stale owner:any:alice answer never drawn",
+      "ok": true,
+      "alice": 0,
+      "bob": 200,
+      "reqs": [
+        "alice@example.com",
+        "bob@example.com"
+      ],
+      "url": "http://127.0.0.1:34821/?f=state:any:closed&f=owner:any:bob%40example.com"
+    },
+    {
+      "name": "admission sort asc 1440-light: standard+\"\" < bypass < durable",
+      "ok": true,
+      "rows": 200,
+      "legacy": 48,
+      "firstRanks": [
+        0,
+        0,
+        0
+      ],
+      "lastRanks": [
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "name": "admission sort desc 1440-light: standard+\"\" < bypass < durable",
+      "ok": true,
+      "rows": 200,
+      "legacy": 48,
+      "firstRanks": [
+        2,
+        2,
+        2
+      ],
+      "lastRanks": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "admission:any:standard 1440-light: keeps legacy \"\" rows",
+      "ok": true,
+      "rows": 96,
+      "legacy": 48
+    },
+    {
+      "name": "admission:any:bogus 1440-light: warning chip",
+      "ok": true,
+      "text": "admission is any of “bogus” (unknown)"
+    },
+    {
+      "name": "admission:any:bogus 1440-light: no overflow",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "axe narrowing 1440-light",
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "saved kanban admission:any:durable 1440-light",
+      "ok": true,
+      "status": 201,
+      "cards": 0,
+      "chips": [
+        "admission is any of durable"
+      ]
+    },
+    {
+      "name": "owner-me 1440-dark: one targeted closed request first",
+      "ok": true,
+      "targeted": 5,
+      "firstTargeted": {
+        "at": 1794176281516,
+        "cursor": "",
+        "search": "",
+        "owner": "console-rest-e2e-operator",
+        "externalRef": ""
+      },
+      "firstPaint": 3486
+    },
+    {
+      "name": "owner-me 1440-dark: never pages the plain closed list",
+      "ok": true,
+      "plainDeep": 0,
+      "total": 6
+    },
+    {
+      "name": "owner-me 1440-dark: rows match, no duplicates, in place",
+      "ok": true,
+      "shown": 875,
+      "expected": 875,
+      "dupes": 0,
+      "strays": [],
+      "order": true
+    },
+    {
+      "name": "owner-me 1440-dark: no horizontal overflow",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "owner-me 1440-dark: chips cleared back to the plain list",
+      "ok": true,
+      "rows": 200,
+      "outOfPlace": [],
+      "newTargeted": 0
+    },
+    {
+      "name": "owner-other 1440-dark: one targeted closed request first",
+      "ok": true,
+      "targeted": 5,
+      "firstTargeted": {
+        "at": 1794176290220,
+        "cursor": "",
+        "search": "",
+        "owner": "other@example.com",
+        "externalRef": ""
+      },
+      "firstPaint": 2529
+    },
+    {
+      "name": "owner-other 1440-dark: never pages the plain closed list",
+      "ok": true,
+      "plainDeep": 0,
+      "total": 6
+    },
+    {
+      "name": "owner-other 1440-dark: rows match, no duplicates, in place",
+      "ok": true,
+      "shown": 875,
+      "expected": 875,
+      "dupes": 0,
+      "strays": [],
+      "order": true
+    },
+    {
+      "name": "owner-other 1440-dark: no horizontal overflow",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "owner-other 1440-dark: chips cleared back to the plain list",
+      "ok": true,
+      "rows": 200,
+      "outOfPlace": [],
+      "newTargeted": 0
+    },
+    {
+      "name": "extref-inc99 1440-dark: one targeted closed request first",
+      "ok": true,
+      "targeted": 1,
+      "firstTargeted": {
+        "at": 1794176299158,
+        "cursor": "",
+        "search": "",
+        "owner": "",
+        "externalRef": "INC-99"
+      },
+      "firstPaint": 2627
+    },
+    {
+      "name": "extref-inc99 1440-dark: never pages the plain closed list",
+      "ok": true,
+      "plainDeep": 0,
+      "total": 2
+    },
+    {
+      "name": "extref-inc99 1440-dark: rows match, no duplicates, in place",
+      "ok": true,
+      "shown": 3,
+      "expected": 3,
+      "dupes": 0,
+      "strays": [],
+      "order": true
+    },
+    {
+      "name": "extref-inc99 1440-dark: every match drawn",
+      "ok": true,
+      "shown": [
+        11,
+        9,
+        7
+      ],
+      "expect": [
+        11,
+        9,
+        7
+      ]
+    },
+    {
+      "name": "extref-inc99 1440-dark: no horizontal overflow",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "extref-inc99 1440-dark: chips cleared back to the plain list",
+      "ok": true,
+      "rows": 200,
+      "outOfPlace": [],
+      "newTargeted": 0
+    },
+    {
+      "name": "owner-me-search 1440-dark: one targeted closed request first",
+      "ok": true,
+      "targeted": 1,
+      "firstTargeted": {
+        "at": 1794176308119,
+        "cursor": "",
+        "search": "kestrelmint",
+        "owner": "console-rest-e2e-operator",
+        "externalRef": ""
+      },
+      "firstPaint": 2904
+    },
+    {
+      "name": "owner-me-search 1440-dark: never pages the plain closed list",
+      "ok": true,
+      "plainDeep": 0,
+      "total": 2
+    },
+    {
+      "name": "owner-me-search 1440-dark: rows match, no duplicates, in place",
+      "ok": true,
+      "shown": 10,
+      "expected": 10,
+      "dupes": 0,
+      "strays": [],
+      "order": true
+    },
+    {
+      "name": "owner-me-search 1440-dark: every match drawn",
+      "ok": true,
+      "shown": [
+        3492,
+        3104,
+        2716,
+        2328,
+        1940,
+        1552,
+        1164,
+        776,
+        388,
+        0
+      ],
+      "expect": [
+        3492,
+        3104,
+        2716,
+        2328,
+        1940,
+        1552,
+        1164,
+        776,
+        388,
+        0
+      ]
+    },
+    {
+      "name": "owner-me-search 1440-dark: no horizontal overflow",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "owner-me-search 1440-dark: chips cleared back to the plain list",
+      "ok": true,
+      "rows": 200,
+      "outOfPlace": [],
+      "newTargeted": 0
+    },
+    {
+      "name": "owner-me-durable 1440-dark: one targeted closed request first",
+      "ok": true,
+      "targeted": 5,
+      "firstTargeted": {
+        "at": 1794176316866,
+        "cursor": "",
+        "search": "",
+        "owner": "console-rest-e2e-operator",
+        "externalRef": ""
+      },
+      "firstPaint": 2723
+    },
+    {
+      "name": "owner-me-durable 1440-dark: never pages the plain closed list",
+      "ok": true,
+      "plainDeep": 0,
+      "total": 6
+    },
+    {
+      "name": "owner-me-durable 1440-dark: rows match, no duplicates, in place",
+      "ok": true,
+      "shown": 219,
+      "expected": 219,
+      "dupes": 0,
+      "strays": [],
+      "order": true
+    },
+    {
+      "name": "owner-me-durable 1440-dark: no horizontal overflow",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "owner-me-durable 1440-dark: chips cleared back to the plain list",
+      "ok": true,
+      "rows": 200,
+      "outOfPlace": [],
+      "newTargeted": 0
+    },
+    {
+      "name": "race 1440-dark: stale owner:any:alice answer never drawn",
+      "ok": true,
+      "alice": 0,
+      "bob": 200,
+      "reqs": [
+        "alice@example.com",
+        "bob@example.com"
+      ],
+      "url": "http://127.0.0.1:34821/?f=state:any:closed&f=owner:any:bob%40example.com"
+    },
+    {
+      "name": "admission sort asc 1440-dark: standard+\"\" < bypass < durable",
+      "ok": true,
+      "rows": 200,
+      "legacy": 48,
+      "firstRanks": [
+        0,
+        0,
+        0
+      ],
+      "lastRanks": [
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "name": "admission sort desc 1440-dark: standard+\"\" < bypass < durable",
+      "ok": true,
+      "rows": 200,
+      "legacy": 48,
+      "firstRanks": [
+        2,
+        2,
+        2
+      ],
+      "lastRanks": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "admission:any:standard 1440-dark: keeps legacy \"\" rows",
+      "ok": true,
+      "rows": 96,
+      "legacy": 48
+    },
+    {
+      "name": "admission:any:bogus 1440-dark: warning chip",
+      "ok": true,
+      "text": "admission is any of “bogus” (unknown)"
+    },
+    {
+      "name": "admission:any:bogus 1440-dark: no overflow",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "saved kanban admission:any:durable 1440-dark",
+      "ok": true,
+      "status": 201,
+      "cards": 0,
+      "chips": [
+        "admission is any of durable"
+      ]
+    },
+    {
+      "name": "owner-me 390-light: one targeted closed request first",
+      "ok": true,
+      "targeted": 5,
+      "firstTargeted": {
+        "at": 1794176344746,
+        "cursor": "",
+        "search": "",
+        "owner": "console-rest-e2e-operator",
+        "externalRef": ""
+      },
+      "firstPaint": 3529
+    },
+    {
+      "name": "owner-me 390-light: never pages the plain closed list",
+      "ok": true,
+      "plainDeep": 0,
+      "total": 6
+    },
+    {
+      "name": "owner-me 390-light: rows match, no duplicates, in place",
+      "ok": true,
+      "shown": 875,
+      "expected": 875,
+      "dupes": 0,
+      "strays": [],
+      "order": true
+    },
+    {
+      "name": "owner-me 390-light: no horizontal overflow",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "owner-me 390-light: chips cleared back to the plain list",
+      "ok": true,
+      "rows": 200,
+      "outOfPlace": [],
+      "newTargeted": 0
+    },
+    {
+      "name": "owner-other 390-light: one targeted closed request first",
+      "ok": true,
+      "targeted": 5,
+      "firstTargeted": {
+        "at": 1794176353366,
+        "cursor": "",
+        "search": "",
+        "owner": "other@example.com",
+        "externalRef": ""
+      },
+      "firstPaint": 2591
+    },
+    {
+      "name": "owner-other 390-light: never pages the plain closed list",
+      "ok": true,
+      "plainDeep": 0,
+      "total": 6
+    },
+    {
+      "name": "owner-other 390-light: rows match, no duplicates, in place",
+      "ok": true,
+      "shown": 875,
+      "expected": 875,
+      "dupes": 0,
+      "strays": [],
+      "order": true
+    },
+    {
+      "name": "owner-other 390-light: no horizontal overflow",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "owner-other 390-light: chips cleared back to the plain list",
+      "ok": true,
+      "rows": 200,
+      "outOfPlace": [],
+      "newTargeted": 0
+    },
+    {
+      "name": "extref-inc99 390-light: one targeted closed request first",
+      "ok": true,
+      "targeted": 1,
+      "firstTargeted": {
+        "at": 1794176362433,
+        "cursor": "",
+        "search": "",
+        "owner": "",
+        "externalRef": "INC-99"
+      },
+      "firstPaint": 2519
+    },
+    {
+      "name": "extref-inc99 390-light: never pages the plain closed list",
+      "ok": true,
+      "plainDeep": 0,
+      "total": 2
+    },
+    {
+      "name": "extref-inc99 390-light: rows match, no duplicates, in place",
+      "ok": true,
+      "shown": 3,
+      "expected": 3,
+      "dupes": 0,
+      "strays": [],
+      "order": true
+    },
+    {
+      "name": "extref-inc99 390-light: every match drawn",
+      "ok": true,
+      "shown": [
+        11,
+        9,
+        7
+      ],
+      "expect": [
+        11,
+        9,
+        7
+      ]
+    },
+    {
+      "name": "extref-inc99 390-light: no horizontal overflow",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "extref-inc99 390-light: chips cleared back to the plain list",
+      "ok": true,
+      "rows": 200,
+      "outOfPlace": [],
+      "newTargeted": 0
+    },
+    {
+      "name": "owner-me-search 390-light: one targeted closed request first",
+      "ok": true,
+      "targeted": 1,
+      "firstTargeted": {
+        "at": 1794176371260,
+        "cursor": "",
+        "search": "kestrelmint",
+        "owner": "console-rest-e2e-operator",
+        "externalRef": ""
+      },
+      "firstPaint": 2826
+    },
+    {
+      "name": "owner-me-search 390-light: never pages the plain closed list",
+      "ok": true,
+      "plainDeep": 0,
+      "total": 2
+    },
+    {
+      "name": "owner-me-search 390-light: rows match, no duplicates, in place",
+      "ok": true,
+      "shown": 10,
+      "expected": 10,
+      "dupes": 0,
+      "strays": [],
+      "order": true
+    },
+    {
+      "name": "owner-me-search 390-light: every match drawn",
+      "ok": true,
+      "shown": [
+        3492,
+        3104,
+        2716,
+        2328,
+        1940,
+        1552,
+        1164,
+        776,
+        388,
+        0
+      ],
+      "expect": [
+        3492,
+        3104,
+        2716,
+        2328,
+        1940,
+        1552,
+        1164,
+        776,
+        388,
+        0
+      ]
+    },
+    {
+      "name": "owner-me-search 390-light: no horizontal overflow",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "owner-me-search 390-light: chips cleared back to the plain list",
+      "ok": true,
+      "rows": 200,
+      "outOfPlace": [],
+      "newTargeted": 0
+    },
+    {
+      "name": "owner-me-durable 390-light: one targeted closed request first",
+      "ok": true,
+      "targeted": 5,
+      "firstTargeted": {
+        "at": 1794176379720,
+        "cursor": "",
+        "search": "",
+        "owner": "console-rest-e2e-operator",
+        "externalRef": ""
+      },
+      "firstPaint": 2614
+    },
+    {
+      "name": "owner-me-durable 390-light: never pages the plain closed list",
+      "ok": true,
+      "plainDeep": 0,
+      "total": 6
+    },
+    {
+      "name": "owner-me-durable 390-light: rows match, no duplicates, in place",
+      "ok": true,
+      "shown": 219,
+      "expected": 219,
+      "dupes": 0,
+      "strays": [],
+      "order": true
+    },
+    {
+      "name": "owner-me-durable 390-light: no horizontal overflow",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "owner-me-durable 390-light: chips cleared back to the plain list",
+      "ok": true,
+      "rows": 200,
+      "outOfPlace": [],
+      "newTargeted": 0
+    },
+    {
+      "name": "race 390-light: stale owner:any:alice answer never drawn",
+      "ok": true,
+      "alice": 0,
+      "bob": 200,
+      "reqs": [
+        "alice@example.com",
+        "bob@example.com"
+      ],
+      "url": "http://127.0.0.1:34821/?f=state:any:closed&f=owner:any:bob%40example.com"
+    },
+    {
+      "name": "admission sort asc 390-light: standard+\"\" < bypass < durable",
+      "ok": true,
+      "rows": 200,
+      "legacy": 48,
+      "firstRanks": [
+        0,
+        0,
+        0
+      ],
+      "lastRanks": [
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "name": "admission sort desc 390-light: standard+\"\" < bypass < durable",
+      "ok": true,
+      "rows": 200,
+      "legacy": 48,
+      "firstRanks": [
+        2,
+        2,
+        2
+      ],
+      "lastRanks": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "admission:any:standard 390-light: keeps legacy \"\" rows",
+      "ok": true,
+      "rows": 96,
+      "legacy": 48
+    },
+    {
+      "name": "admission:any:bogus 390-light: warning chip",
+      "ok": true,
+      "text": "admission is any of “bogus” (unknown)"
+    },
+    {
+      "name": "admission:any:bogus 390-light: no overflow",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "axe narrowing 390-light",
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "saved kanban admission:any:durable 390-light",
+      "ok": true,
+      "status": 201,
+      "cards": 0,
+      "chips": [
+        "admission is any of durable"
+      ]
+    },
+    {
+      "name": "owner-me 390-dark: one targeted closed request first",
+      "ok": true,
+      "targeted": 5,
+      "firstTargeted": {
+        "at": 1794176408323,
+        "cursor": "",
+        "search": "",
+        "owner": "console-rest-e2e-operator",
+        "externalRef": ""
+      },
+      "firstPaint": 3389
+    },
+    {
+      "name": "owner-me 390-dark: never pages the plain closed list",
+      "ok": true,
+      "plainDeep": 0,
+      "total": 6
+    },
+    {
+      "name": "owner-me 390-dark: rows match, no duplicates, in place",
+      "ok": true,
+      "shown": 875,
+      "expected": 875,
+      "dupes": 0,
+      "strays": [],
+      "order": true
+    },
+    {
+      "name": "owner-me 390-dark: no horizontal overflow",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "owner-me 390-dark: chips cleared back to the plain list",
+      "ok": true,
+      "rows": 200,
+      "outOfPlace": [],
+      "newTargeted": 0
+    },
+    {
+      "name": "owner-other 390-dark: one targeted closed request first",
+      "ok": true,
+      "targeted": 5,
+      "firstTargeted": {
+        "at": 1794176417153,
+        "cursor": "",
+        "search": "",
+        "owner": "other@example.com",
+        "externalRef": ""
+      },
+      "firstPaint": 2746
+    },
+    {
+      "name": "owner-other 390-dark: never pages the plain closed list",
+      "ok": true,
+      "plainDeep": 0,
+      "total": 6
+    },
+    {
+      "name": "owner-other 390-dark: rows match, no duplicates, in place",
+      "ok": true,
+      "shown": 875,
+      "expected": 875,
+      "dupes": 0,
+      "strays": [],
+      "order": true
+    },
+    {
+      "name": "owner-other 390-dark: no horizontal overflow",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "owner-other 390-dark: chips cleared back to the plain list",
+      "ok": true,
+      "rows": 200,
+      "outOfPlace": [],
+      "newTargeted": 0
+    },
+    {
+      "name": "extref-inc99 390-dark: one targeted closed request first",
+      "ok": true,
+      "targeted": 1,
+      "firstTargeted": {
+        "at": 1794176427135,
+        "cursor": "",
+        "search": "",
+        "owner": "",
+        "externalRef": "INC-99"
+      },
+      "firstPaint": 2793
+    },
+    {
+      "name": "extref-inc99 390-dark: never pages the plain closed list",
+      "ok": true,
+      "plainDeep": 0,
+      "total": 2
+    },
+    {
+      "name": "extref-inc99 390-dark: rows match, no duplicates, in place",
+      "ok": true,
+      "shown": 3,
+      "expected": 3,
+      "dupes": 0,
+      "strays": [],
+      "order": true
+    },
+    {
+      "name": "extref-inc99 390-dark: every match drawn",
+      "ok": true,
+      "shown": [
+        11,
+        9,
+        7
+      ],
+      "expect": [
+        11,
+        9,
+        7
+      ]
+    },
+    {
+      "name": "extref-inc99 390-dark: no horizontal overflow",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "extref-inc99 390-dark: chips cleared back to the plain list",
+      "ok": true,
+      "rows": 200,
+      "outOfPlace": [],
+      "newTargeted": 0
+    },
+    {
+      "name": "owner-me-search 390-dark: one targeted closed request first",
+      "ok": true,
+      "targeted": 1,
+      "firstTargeted": {
+        "at": 1794176436284,
+        "cursor": "",
+        "search": "kestrelmint",
+        "owner": "console-rest-e2e-operator",
+        "externalRef": ""
+      },
+      "firstPaint": 2844
+    },
+    {
+      "name": "owner-me-search 390-dark: never pages the plain closed list",
+      "ok": true,
+      "plainDeep": 0,
+      "total": 2
+    },
+    {
+      "name": "owner-me-search 390-dark: rows match, no duplicates, in place",
+      "ok": true,
+      "shown": 10,
+      "expected": 10,
+      "dupes": 0,
+      "strays": [],
+      "order": true
+    },
+    {
+      "name": "owner-me-search 390-dark: every match drawn",
+      "ok": true,
+      "shown": [
+        3492,
+        3104,
+        2716,
+        2328,
+        1940,
+        1552,
+        1164,
+        776,
+        388,
+        0
+      ],
+      "expect": [
+        3492,
+        3104,
+        2716,
+        2328,
+        1940,
+        1552,
+        1164,
+        776,
+        388,
+        0
+      ]
+    },
+    {
+      "name": "owner-me-search 390-dark: no horizontal overflow",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "owner-me-search 390-dark: chips cleared back to the plain list",
+      "ok": true,
+      "rows": 200,
+      "outOfPlace": [],
+      "newTargeted": 0
+    },
+    {
+      "name": "owner-me-durable 390-dark: one targeted closed request first",
+      "ok": true,
+      "targeted": 5,
+      "firstTargeted": {
+        "at": 1794176444746,
+        "cursor": "",
+        "search": "",
+        "owner": "console-rest-e2e-operator",
+        "externalRef": ""
+      },
+      "firstPaint": 2631
+    },
+    {
+      "name": "owner-me-durable 390-dark: never pages the plain closed list",
+      "ok": true,
+      "plainDeep": 0,
+      "total": 6
+    },
+    {
+      "name": "owner-me-durable 390-dark: rows match, no duplicates, in place",
+      "ok": true,
+      "shown": 219,
+      "expected": 219,
+      "dupes": 0,
+      "strays": [],
+      "order": true
+    },
+    {
+      "name": "owner-me-durable 390-dark: no horizontal overflow",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "owner-me-durable 390-dark: chips cleared back to the plain list",
+      "ok": true,
+      "rows": 200,
+      "outOfPlace": [],
+      "newTargeted": 0
+    },
+    {
+      "name": "race 390-dark: stale owner:any:alice answer never drawn",
+      "ok": true,
+      "alice": 0,
+      "bob": 200,
+      "reqs": [
+        "alice@example.com",
+        "bob@example.com"
+      ],
+      "url": "http://127.0.0.1:34821/?f=state:any:closed&f=owner:any:bob%40example.com"
+    },
+    {
+      "name": "admission sort asc 390-dark: standard+\"\" < bypass < durable",
+      "ok": true,
+      "rows": 200,
+      "legacy": 48,
+      "firstRanks": [
+        0,
+        0,
+        0
+      ],
+      "lastRanks": [
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "name": "admission sort desc 390-dark: standard+\"\" < bypass < durable",
+      "ok": true,
+      "rows": 200,
+      "legacy": 48,
+      "firstRanks": [
+        2,
+        2,
+        2
+      ],
+      "lastRanks": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "admission:any:standard 390-dark: keeps legacy \"\" rows",
+      "ok": true,
+      "rows": 96,
+      "legacy": 48
+    },
+    {
+      "name": "admission:any:bogus 390-dark: warning chip",
+      "ok": true,
+      "text": "admission is any of “bogus” (unknown)"
+    },
+    {
+      "name": "admission:any:bogus 390-dark: no overflow",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "saved kanban admission:any:durable 390-dark",
+      "ok": true,
+      "status": 201,
+      "cards": 0,
+      "chips": [
+        "admission is any of durable"
+      ]
+    }
+  ],
+  "failures": []
+}
