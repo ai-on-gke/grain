@@ -85,6 +85,7 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	humanReview := fs.Bool("human-review", false, "seed a change a review held for a person's decision (request_human_review), waiting for Submit or Release hold")
 	reviewQuestions := fs.Bool("review-questions", false, "seed a change whose review left questions for its owner, held on their decision, and send it back to the queue once they reply, as a daemon would")
 	externalConfigRepo := fs.String("external-config-repo", "", "serve a deployment whose configuration is managed in this external config repository (a remote URL): every configuration write is refused with 409 and the exact edit to commit there instead (docs/external-config-repo.md)")
+	configChange := fs.Bool("config-change", false, "serve a real, throwaway grain/config exported from the demo's store, and seed two tasks parked on proposal branches of it (propose_config_change), so the config-change card's Approve & Apply merges into its main and Reject deletes the branch")
 	externalConfigBranch := fs.String("external-config-branch", "main", "with -external-config-repo, the branch of that repository configuration is read from")
 	sensitiveHold := fs.Bool("sensitive-hold", false, "seed a change held by a sensitive path trigger, and a failed trigger declaration read")
 	githubAPI := fs.String("github-api", "", "host:port of a GitHub API stub on loopback, spoken to over plain HTTP: the Settings → Git Test buttons, the New task pickers and filing's reach refusal all ask it what the deployment's credential can reach")
@@ -146,6 +147,9 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 		if set {
 			return demo.Options{}, errors.New("-external-config-branch only means something with -external-config-repo")
 		}
+	}
+	if *configChange && *externalConfigRepo != "" {
+		return demo.Options{}, errors.New("-config-change and -external-config-repo are mutually exclusive: an external config repository takes no proposals here")
 	}
 	if *githubAPI != "" && !demo.IsLoopbackHostPort(*githubAPI) {
 		return demo.Options{}, errors.New("-github-api must be a loopback host:port (it is spoken to over plain HTTP)")
@@ -214,6 +218,7 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 		ReviewQuestions:        *reviewQuestions,
 		HumanReview:            *humanReview,
 		ExternalConfigRepo:     *externalConfigRepo,
+		ConfigChange:           *configChange,
 		ExternalConfigBranch:   *externalConfigBranch,
 		MechanicalPort:         *mechanicalPort,
 		Qualification:          *qualification,
