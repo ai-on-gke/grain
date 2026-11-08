@@ -2008,6 +2008,30 @@ describe("closed work the server searched", () => {
         viewerOwner: "user:Alice@example.com",
       }),
     ).toEqual({ owner: "alice@example.com", externalRef: "" });
+    // ...and is nobody until GET /api/config has said who that is: the
+    // list must not ask for owner=operator (expand's fallback) first.
+    expect(
+      closedServerFilters(
+        with_({ attr: "owner", op: "any", values: ["me"] }),
+        null,
+      ),
+    ).toEqual(none);
+    expect(
+      closedServerFilters(
+        with_(
+          { attr: "owner", op: "any", values: ["Me"] },
+          { attr: "externalRef", op: "any", values: ["INC-99"] },
+        ),
+        null,
+      ),
+    ).toEqual({ owner: "", externalRef: "INC-99" });
+    // A loaded config with no viewer still reads "me" as "operator".
+    expect(
+      closedServerFilters(
+        with_({ attr: "owner", op: "any", values: ["me"] }),
+        {},
+      ),
+    ).toEqual({ owner: "operator", externalRef: "" });
     // Anything the server's one exact value cannot answer stays the
     // client's: several values, another comparison, "Not set", or a
     // second condition on the same attribute.
@@ -2036,6 +2060,45 @@ describe("closed work the server searched", () => {
 // Admission (model.Admission) as a narrowing attribute: every row of
 // GET /api/tasks carries one, and a link naming it was read as an
 // unknown condition and not applied (2026-11-07 walkthrough, F5).
+// A repo is named without case (GitHub's, and state.js's repoKey): the
+// count link /repos/ACME/legacy-service draws is `repo:any:ACME/
+// legacy-service`, and it matched none of the tasks the page had just
+// counted (2026-11-08 walkthrough, F2).
+describe("the repo attribute", () => {
+  const legacy = task({ id: "7", repo: "acme/legacy-service" });
+  const widgets = task({ id: "8", repo: "acme/widgets" });
+  const none = task({ id: "9", repo: "" });
+  it("matches a repo whatever case the condition or the task spells it in", () => {
+    for (const v of [
+      "ACME/legacy-service",
+      "Acme/Legacy-Service",
+      "acme/legacy-service",
+    ]) {
+      const cond = { attr: "repo", op: "any", values: [v] };
+      expect(matches(legacy, cond)).toBe(true);
+      expect(matches(widgets, cond)).toBe(false);
+      expect(matches(none, cond)).toBe(false);
+    }
+    expect(
+      matches(task({ repo: "Acme/Widgets" }), {
+        attr: "repo",
+        op: "any",
+        values: ["acme/widgets"],
+      }),
+    ).toBe(true);
+    expect(
+      matches(widgets, { attr: "repo", op: "none", values: ["ACME/Widgets"] }),
+    ).toBe(false);
+    // "No repo" still means no repo.
+    expect(matches(none, { attr: "repo", op: "any", values: [NONE] })).toBe(
+      true,
+    );
+    expect(matches(legacy, { attr: "repo", op: "any", values: [NONE] })).toBe(
+      false,
+    );
+  });
+});
+
 describe("the admission attribute", () => {
   const durable = task({ id: "1", admission: "durable" });
   const bypass = task({ id: "2", admission: "bypass" });
