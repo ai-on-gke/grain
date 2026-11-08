@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useContext } from "react";
+import { useCallback, useContext, useState } from "react";
 import { Alert } from "@mui/material";
 import CapabilityServersPanel from "../CapabilityServersPanel.jsx";
 import CapabilityPolicyEditor from "../CapabilityPolicyEditor.jsx";
@@ -38,6 +38,13 @@ export default function CapabilitiesSection({
   const effectiveReadOnly = Boolean(
     readOnlyProp ?? s?.readOnly ?? contextReadOnly,
   );
+  // Bumped whenever a capability server is added, configured, renamed or
+  // removed, so the Deployment credentials card's secrets list -- which
+  // lists each server's own secrets apart -- reads the store again
+  // (2026-11-08 connections walkthrough: a removed server's secret stayed
+  // listed, linking to the gone server, until a reload).
+  const [secretsSeq, setSecretsSeq] = useState(0);
+  const serversChanged = useCallback(() => setSecretsSeq((n) => n + 1), []);
   return (
     <>
       <Alert
@@ -142,6 +149,7 @@ export default function CapabilitiesSection({
           readOnly={effectiveReadOnly}
           selected={item}
           onSelect={onItem}
+          onChanged={serversChanged}
         />
       </SettingsCard>
       <SettingsCard title="Capability policy" anchor="capability-policy">
@@ -157,7 +165,11 @@ export default function CapabilitiesSection({
         />
       </SettingsCard>
       {s?.settings && (
-        <CredentialsSection s={s} claimedSecrets={claimedSecrets} />
+        <CredentialsSection
+          s={s}
+          claimedSecrets={claimedSecrets}
+          secretsSeq={secretsSeq}
+        />
       )}
     </>
   );

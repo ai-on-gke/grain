@@ -460,7 +460,7 @@ describe("SettingsPage", () => {
       await user.click(
         await screen.findByTestId("cli-external-agent-api-link"),
       );
-      expect(onSection).toHaveBeenCalledWith("agents");
+      expect(onSection).toHaveBeenCalledWith("agents", "external-agents");
     } finally {
       confirmSpy.mockRestore();
     }

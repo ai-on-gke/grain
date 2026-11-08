@@ -225,7 +225,8 @@ test("a locked Deployment credentials card dims config fields via ReadOnlyFields
   for (const viewport of [DESKTOP, PHONE]) {
     await page.setViewportSize(viewport);
     await page.goto("/settings/credentials");
-    await expect(page).toHaveURL(/\/settings\/capabilities$/);
+    // The retired address opens Capabilities at the card it stands for.
+    await expect(page).toHaveURL(/\/settings\/capabilities#credentials$/);
 
     const card = page.getByTestId("deployment-credentials");
     const box = card.locator("input[name=githubInsecureHttp]");

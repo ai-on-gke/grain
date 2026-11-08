@@ -106,6 +106,8 @@ import SystemPage from "./components/SystemPage.jsx";
 import {
   DEFAULT_SETTINGS_SECTION,
   oldAdminDestination,
+  settingsAliasAnchor,
+  settingsAliasAnchorAt,
   settingsSectionFor,
   systemDestination,
   settingsSectionLabel,
@@ -868,7 +870,11 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const [settingsSection, setSettingsSection] = useState(
     () => parsePath(window.location.pathname).settingsSection || "",
   );
-  const [settingsAnchor, setSettingsAnchor] = useState("");
+  // A retired alias with no #hash of its own (/settings/credentials) names
+  // a card on its section, which it scrolls to rather than to the top.
+  const [settingsAnchor, setSettingsAnchor] = useState(() =>
+    settingsAliasAnchorAt(window.location.pathname, window.location.hash),
+  );
   // settingsItem is one item of the open section, in the path after it:
   // the capability server /settings/capabilities/<id> opens.
   const [settingsItem, setSettingsItem] = useState(
@@ -3082,7 +3088,13 @@ function AppContent({ onReload = () => window.location.reload() }) {
         const keptHash =
           view === "repos" && openRepo && isRepoTab(hash.replace(/^#/, ""))
             ? ""
-            : hash;
+            : hash ||
+              // The first write on an alias that named a card
+              // (/settings/credentials) says which, so the corrected
+              // address still opens that card when reloaded or shared.
+              (!mountedRef.current && view === "settings" && settingsAnchor
+                ? `#${settingsAnchor}`
+                : "");
         window.history.replaceState(entry, "", path + keptHash);
       }
     }
@@ -3552,7 +3564,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       if (leavingLosesEdits() && !window.confirm(DISCARD_PROMPT)) return;
       setSettingsSection(dest.settingsSection);
       setSettingsItem("");
-      setSettingsAnchor(anchor);
+      setSettingsAnchor(anchor || settingsAliasAnchor(asked));
       setViewAndCloseOpen("settings");
     },
     [setViewAndCloseOpen, openSystem],
@@ -4134,9 +4146,14 @@ function AppContent({ onReload = () => window.location.reload() }) {
                               section={settingsSection}
                               anchor={settingsAnchor}
                               item={settingsItem}
-                              onItem={setSettingsItem}
-                              onSection={(next) => {
+                              onItem={(next) => {
+                                // A card the section was opened at is
+                                // not one of its items' pages.
                                 setSettingsAnchor("");
+                                setSettingsItem(next);
+                              }}
+                              onSection={(next, nextAnchor = "") => {
+                                setSettingsAnchor(nextAnchor);
                                 setSettingsItem("");
                                 setSettingsSection(next);
                               }}

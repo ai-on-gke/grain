@@ -38,7 +38,7 @@ const GCP_SERVER_PATH = serverPath("https://grain.dev/capabilities/gcp");
 // §3.2) until the last in-process capability was retired onto a
 // capability server method and the tab's capability list had nothing left
 // to show. `s` is the page's useSettingsSection().
-export default function CredentialsSection({ s, claimedSecrets }) {
+export default function CredentialsSection({ s, claimedSecrets, secretsSeq }) {
   const {
     settings,
     saveChoice,
@@ -211,6 +211,7 @@ export default function CredentialsSection({ s, claimedSecrets }) {
 
           <SecretsPanel
             claimed={claimedSecrets}
+            refreshKey={secretsSeq}
             showError={showError}
             onSecretsChanged={handleSecretsChanged}
           />

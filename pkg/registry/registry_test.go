@@ -606,6 +606,13 @@ func TestWSMuxSessionRoundTripClosesStreams(t *testing.T) {
 	})
 	defer clientMux.Close()
 
+	// handled hears from each peer handler once it has closed its end. The
+	// peer closes only after writing its response, so a requester that has
+	// already read that response can open the next stream before the peer
+	// frees a slot under its MaxStreams cap, and the peer resets it (CI saw
+	// "RoundTrip 4 failed: tunnel mux: stream reset by peer"). Waiting here
+	// keeps the peer's cap out of what this test measures.
+	handled := make(chan struct{}, 8)
 	go func() {
 		for {
 			st, err := clientMux.AcceptStream()
@@ -613,6 +620,7 @@ func TestWSMuxSessionRoundTripClosesStreams(t *testing.T) {
 				return
 			}
 			go func(s *mux.Stream) {
+				defer func() { handled <- struct{}{} }()
 				defer s.Close()
 				req, err := http.ReadRequest(bufio.NewReader(s))
 				if err != nil {
@@ -628,8 +636,18 @@ func TestWSMuxSessionRoundTripClosesStreams(t *testing.T) {
 		}
 	}()
 
+	waitHandled := func(i int) {
+		t.Helper()
+		select {
+		case <-handled:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("request %d: peer handler never finished", i)
+		}
+	}
+
 	sess := &wsMuxSession{m: serverMux}
-	// Run 6 sequential requests over a MaxStreams=2 mux to prove streams are closed on Body.Close() and error.
+	// Run 6 sequential requests, one of them failing, and check after each
+	// that RoundTrip's side closed its stream on Body.Close() or on the error.
 	for i := 0; i < 6; i++ {
 		path := "/ping"
 		if i == 2 {
@@ -645,6 +663,10 @@ func TestWSMuxSessionRoundTripClosesStreams(t *testing.T) {
 				_ = resp.Body.Close()
 				t.Fatalf("expected error on /drop")
 			}
+			waitHandled(i)
+			if n := serverMux.ActiveStreams(); n != 0 {
+				t.Fatalf("after failed RoundTrip %d: %d streams still open", i, n)
+			}
 			continue
 		}
 		if err != nil {
@@ -656,6 +678,10 @@ func TestWSMuxSessionRoundTripClosesStreams(t *testing.T) {
 		}
 		if string(body) != "ok" {
 			t.Fatalf("unexpected body %q", string(body))
+		}
+		waitHandled(i)
+		if n := serverMux.ActiveStreams(); n != 0 {
+			t.Fatalf("after RoundTrip %d: %d streams still open", i, n)
 		}
 	}
 }

@@ -296,8 +296,11 @@ export default function SettingsPage({
     return () => observer.disconnect();
   }, [focusTarget, current, settings]);
 
-  // go opens section next, asking first when an edit would be lost; a
-  // nextAnchor (a card or field id) is scrolled to once it is drawn.
+  // go opens section next, asking first when an edit would be lost. A
+  // nextAnchor (a card or field id) rides along as the address's #hash
+  // (GitSection's note opens Capabilities at its Deployment credentials
+  // card; CLI's Sign in opens Agents at External agents) and is scrolled
+  // to once it is drawn.
   const go = (next, nextAnchor = "") => {
     if (next !== current) {
       if (
@@ -305,7 +308,8 @@ export default function SettingsPage({
         !window.confirm(DISCARD_PROMPT)
       )
         return false;
-      onSection(next);
+      if (nextAnchor) onSection(next, nextAnchor);
+      else onSection(next);
     }
     if (nextAnchor) setFocusTarget(nextAnchor);
     return true;
