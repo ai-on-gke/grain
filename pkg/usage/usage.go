@@ -448,11 +448,15 @@ func computeScope(in Input, k scopeKey, budgets map[scopeKey]model.TokenBudget, 
 	return s
 }
 
-func (s Scope) label() string {
-	name := s.ConnectionName
-	if name == "" {
-		name = s.Connection
+func (s Scope) connectionLabel() string {
+	if s.ConnectionName != "" {
+		return s.ConnectionName
 	}
+	return s.Connection
+}
+
+func (s Scope) label() string {
+	name := s.connectionLabel()
 	if s.Model == "" {
 		return name
 	}
@@ -502,10 +506,10 @@ func messages(in Input, rep Report) (advisories, warnings []string) {
 			switch {
 			case s.PausedUntil != nil:
 				warnings = append(warnings, fmt.Sprintf("default model %s on %s is paused until %s; work falls back to %s",
-					s.Model, s.label(), s.PausedUntil.UTC().Format("15:04 MST"), next))
+					s.Model, s.connectionLabel(), s.PausedUntil.UTC().Format("15:04 MST"), next))
 			case s.RunsOutAt != nil && (s.ResetAt == nil || s.RunsOutAt.Before(*s.ResetAt)):
 				warnings = append(warnings, fmt.Sprintf("default model %s on %s runs out in %s, before its reset; next on the default list: %s",
-					s.Model, s.label(), roughly(s.RunsOutAt.Sub(now)), next))
+					s.Model, s.connectionLabel(), roughly(s.RunsOutAt.Sub(now)), next))
 			}
 		}
 	}

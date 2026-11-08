@@ -221,6 +221,13 @@ type Deps struct {
 	MaxWorkers int
 	MaxMergers int
 	MaxCIJobs  int
+	// UsageCap, when set, is the automatic worker cap token accounting
+	// computes from the remaining provider budget (usage.Cap.Workers):
+	// handed MaxWorkers, it returns the cap to dispatch under, which a
+	// cycle clamps to MaxWorkers again so it can never be exceeded. It
+	// returns MaxWorkers unchanged unless the operator opted in (usage
+	// mode "auto"). nil dispatches under MaxWorkers.
+	UsageCap func(ctx context.Context, now time.Time, maxWorkers int) int
 	// Budget is how much of the machine every live sandbox on this host
 	// may commit between them (model.Budget, grain/task-173): the host's
 	// own cores and memory, less what is reserved for the host itself,
@@ -1265,7 +1272,7 @@ func reconcileDispatch(ctx context.Context, deps Deps, now time.Time) error {
 			return ""
 		})))
 	limits := model.Limits{
-		Workers: deps.MaxWorkers, Mergers: deps.MaxMergers, CIJobs: deps.MaxCIJobs,
+		Workers: usageCappedWorkers(ctx, deps, now), Mergers: deps.MaxMergers, CIJobs: deps.MaxCIJobs,
 		Durable: deps.Config.maxDurableRuns(),
 		Budget:  deps.Budget, AgentShape: deps.AgentShape, Ledger: deps.Ledger,
 	}
@@ -3221,4 +3228,22 @@ func setupFailedEnding(err error) (outcome, detail string) {
 			"; the task is not counted as failed, and waits in the queue for it to reconnect"
 	}
 	return "setup-failed", "this run's sandbox could not be prepared: " + err.Error()
+}
+
+// usageCappedWorkers is the worker limit a cycle dispatches under:
+// deps.MaxWorkers, lowered by deps.UsageCap where the operator opted into
+// the automatic cap, and never above deps.MaxWorkers (or below one) --
+// an estimate shapes dispatch, it does not stop it.
+func usageCappedWorkers(ctx context.Context, deps Deps, now time.Time) int {
+	if deps.UsageCap == nil || deps.MaxWorkers <= 0 {
+		return deps.MaxWorkers
+	}
+	n := deps.UsageCap(ctx, now, deps.MaxWorkers)
+	if n > deps.MaxWorkers {
+		n = deps.MaxWorkers
+	}
+	if n < 1 {
+		n = 1
+	}
+	return n
 }
