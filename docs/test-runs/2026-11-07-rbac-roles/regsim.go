@@ -38,10 +38,13 @@ import (
 )
 
 func main() {
-	addr := flag.String("addr", "127.0.0.1:18380", "listener (JWKS and signer)")
+	addr := flag.String("addr", "", "listener (JWKS and signer), host:port; required")
 	iss := flag.String("iss", "https://registry.test.local", "issuer the assertions carry")
 	aud := flag.String("aud", "https://grain.test.local", "audience the assertions carry")
 	flag.Parse()
+	if *addr == "" {
+		log.Fatal("regsim: -addr host:port is required (walkthrough.sh passes it)")
+	}
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
