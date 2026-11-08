@@ -34,9 +34,10 @@ import (
 func linkEdition(t *testing.T, edition string) {
 	t.Helper()
 	savedGet := version.Get
+	base := savedGet()
 	version.RegisterEdition(edition)
 	version.Get = func() version.Info {
-		info := savedGet()
+		info := base
 		info.Release, info.Edition = "", edition
 		return info
 	}

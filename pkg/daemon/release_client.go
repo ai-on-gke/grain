@@ -21,10 +21,28 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
+
+func releaseHostAPIBase(credHost gitproxy.CredentialHost, rawHost, defHost string, insecureHTTP bool) (string, error) {
+	apiHost, prefix, ok := credHost.APIBase()
+	if !ok {
+		return "", fmt.Errorf("is on %s, a plain git host with no forge API", credHost.Host)
+	}
+	if (rawHost == "" || model.SameGitHost(rawHost, model.DefaultGitHost, model.DefaultGitHost)) &&
+		defHost != "" && !credHost.Recorded {
+		apiHost = github.APIHost(defHost)
+		prefix = ""
+	}
+	scheme := "https"
+	if (insecureHTTP && model.SameGitHost(credHost.Host, defHost, model.DefaultGitHost)) || !credHost.UseTLS() {
+		scheme = "http"
+	}
+	return scheme + "://" + apiHost + prefix, nil
+}
 
 // daemonReleaseHostClient returns upgrade.ReleaseAssetsConfig.ClientForHost
 // backed by this deployment's configured git connections and credential set.
@@ -34,7 +52,8 @@ import (
 // enterprise hosts use their configured token, App, or ambient CLI connection.
 func daemonReleaseHostClient(cfg Config, store *model.Store, credentials *gitproxy.CredentialSet) func(ctx context.Context, host, owner, repo string) (*upgrade.ReleaseHostClient, error) {
 	return func(ctx context.Context, host, owner, repo string) (*upgrade.ReleaseHostClient, error) {
-		host = strings.ToLower(strings.TrimSpace(host))
+		rawHost := strings.ToLower(strings.TrimSpace(host))
+		host = rawHost
 		if host == "" {
 			host = model.DefaultGitHost
 		}
@@ -42,9 +61,6 @@ func daemonReleaseHostClient(cfg Config, store *model.Store, credentials *gitpro
 		credHost := gitproxy.CredentialHost{
 			Host: host,
 			Kind: model.GitHostGitHub,
-		}
-		if cfg.GithubInsecureHTTP && model.SameGitHost(host, defHost, model.DefaultGitHost) {
-			credHost.BaseURL = "http://" + host
 		}
 		if model.SameGitHost(host, model.DefaultGitHost, model.DefaultGitHost) {
 			credHost.Host = model.DefaultGitHost
@@ -66,20 +82,36 @@ func daemonReleaseHostClient(cfg Config, store *model.Store, credentials *gitpro
 			connName = strings.TrimSpace(name)
 		}
 
+		if credentials != nil && connName != "" {
+			h := credentials.HostOf(connName)
+			if h.Host != "" && model.SameGitHost(h.Host, credHost.Host, defHost) {
+				credHost = h
+			}
+		}
+		if cfg.GithubInsecureHTTP && credHost.BaseURL == "" && model.SameGitHost(host, defHost, model.DefaultGitHost) {
+			targetHost := host
+			if model.SameGitHost(host, model.DefaultGitHost, model.DefaultGitHost) && defHost != "" {
+				targetHost = defHost
+			}
+			credHost.BaseURL = "http://" + targetHost
+		}
+
+		apiBase, err := releaseHostAPIBase(credHost, rawHost, defHost, cfg.GithubInsecureHTTP)
+		if err != nil {
+			return nil, fmt.Errorf("repository %s/%s %w", owner, repo, err)
+		}
+
 		missingConnHint := fmt.Sprintf("configure a git connection covering %s/%s/%s in Settings -> Connections", credHost.Host, owner, repo)
 		if connName != "" {
 			missingConnHint = fmt.Sprintf("check git connection %q for %s in Settings -> Connections", connName, credHost.Host)
 		}
 
 		if credentials != nil && connName != "" {
-			h := credentials.HostOf(connName)
-			if h.Host != "" && model.SameGitHost(h.Host, credHost.Host, defHost) {
-				credHost = h
-			}
 			if credentials.ForgeViaCommand(connName) {
 				if cliClient := credentials.ForgeHTTPClient(connName, 0); cliClient != nil {
 					return &upgrade.ReleaseHostClient{
 						Client:      cliClient,
+						APIBase:     apiBase,
 						Connection:  connName,
 						MissingHint: missingConnHint,
 					}, nil
@@ -93,6 +125,7 @@ func daemonReleaseHostClient(cfg Config, store *model.Store, credentials *gitpro
 				} else {
 					return &upgrade.ReleaseHostClient{
 						Client:     credHost.HTTPClient(0),
+						APIBase:    apiBase,
 						Connection: connName,
 						MissingHint: fmt.Sprintf(
 							"git connection %q on %s is SSH-only and cannot read release assets via the REST API; pair it with a token or App in Settings -> Connections",
@@ -104,6 +137,7 @@ func daemonReleaseHostClient(cfg Config, store *model.Store, credentials *gitpro
 				if cred.Token != nil && *cred.Token != "" {
 					return &upgrade.ReleaseHostClient{
 						Client:      credHost.HTTPClient(0),
+						APIBase:     apiBase,
 						Token:       *cred.Token,
 						Connection:  connName,
 						MissingHint: missingConnHint,
@@ -127,6 +161,7 @@ func daemonReleaseHostClient(cfg Config, store *model.Store, credentials *gitpro
 			if cliClient, ok := gitproxy.AmbientHostHTTPClient(credHost, "", 0); ok {
 				return &upgrade.ReleaseHostClient{
 					Client:      cliClient,
+					APIBase:     apiBase,
 					Connection:  connName,
 					MissingHint: missingConnHint,
 				}, nil
@@ -135,6 +170,7 @@ func daemonReleaseHostClient(cfg Config, store *model.Store, credentials *gitpro
 
 		return &upgrade.ReleaseHostClient{
 			Client:      credHost.HTTPClient(0),
+			APIBase:     apiBase,
 			Connection:  connName,
 			MissingHint: missingConnHint,
 		}, nil

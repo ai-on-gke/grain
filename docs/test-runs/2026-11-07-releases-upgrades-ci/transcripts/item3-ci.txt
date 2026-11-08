@@ -1,0 +1,37 @@
+=== Step 1: Run item3_ci_probe.go (3A..3D) ===
+=== 3A: Suite qualification: stanza (#831), release declarations (#825/#680) & scratch-branch push grants (#621) ===
+PASS 3A.1: ai-on-gke/grain declarations verified (4 qualification items with scratch push + ci:read, 20m release-train)
+PASS 3A.2: invalid qualification: stanzas refused cleanly by repodecl.Load
+PASS 3A.3: RC-tags release-qualification gated on Stage 1, held smoke item last, and posted grain/release-qualification=success
+PASS 3A.4: custom qualification: (synced-release + stage1.workflow=ci.yml) selected go.mod release pin and posted grain/edition-qualification=success
+PASS 3A.5: scratch-branch child proposals (#621) queue+auto-merge on qualification/<parent-id> and hold on main / foreign branches
+=== 3B & 3C: Superseded release.yml (#775), review prompt (#699), slow branch polling (#819) & triage ancestry (#745) ===
+2026/11/08 00:16:27 orchestrator: GitHub release run 1003 on acme/widgets is an on-demand build of one commit, not a release of main: not recording it
+2026/11/08 00:16:27 orchestrator: GitHub release run 1001 of acme/widgets main at ab959bd552e6 was cancelled, superseded by 7c8f08454498 (run 1002): a newer merge's release replaced this one before it could run, so this commit publishes nothing of its own and nothing failed -- if it is ever tagged or promoted, its images are built on demand
+PASS 3B.1: cancelled release.yml at ab959bd superseded by 7c8f084 (Detail="superseded by 7c8f08454498 (run 1002): a newer merge's release replaced this one before it could run, so this commit publishes nothing of its own and nothing failed -- if it is ever tagged or promoted, its images are built on demand", Failures=0, BaseBranchCI unbroken, on-demand run ignored)
+PASS 3B.2: github_workflow_run review schedule (#699) filed task with .github/workflows prompt + run/job/log details
+2026/11/08 00:16:27 orchestrator: filed 2 to triage failed release on acme/widgets main at 7c8f08454498 (failure)
+2026/11/08 00:16:27 orchestrator: appended comment to active release triage task 2 for failed release on acme/widgets main at 611ab6973042 (failure)
+2026/11/08 00:16:27 orchestrator: appended comment to active release triage task 2 for failed release on acme/widgets main at 611ab6973042 (failure)
+PASS 3C.1: older ancestor commit finishing green late keeps newer C1 triage task open and preserves failure streak (#745)
+2026/11/08 00:16:27 orchestrator: keeping release triage task triage-non-ancestor open: release run 5001 at 2a3aa1713fcb does not supersede failing commit 385a4feba06e on acme/widgets main (status="diverged", err=<nil>)
+2026/11/08 00:16:27 orchestrator: closing 2: Closed as superseded: GitHub Actions release workflow `release` published `main` on acme/widgets at 2a3aa1713fcb (run `5001`), so its releases are working again and there is nothing left for this task to triage.
+PASS 3C.2: branch-scoped completed-run poll (#819) found run 5001 behind 70 PR runs, reset Failures=3->0, superseded C1 triage 2, and kept non-ancestor/other-repo triage tasks open (#745)
+=== 3D: Empty GitHub Actions job log host diagnostic & non-caching (#828) ===
+PASS 3D.1: RESTClient.ActionsJobLog empty-body error names both hosts + headers with zero SAS leakage: the forge answered the job log with no bytes at all: GitHub API error 200 from GET http://127.0.0.1:4284/repos/acme/widgets/actions/jobs/701/logs -> http://localhost:4285: "" (content-type text/plain, server Windows-Azure-Blob/1.0, via 1.1 edge.proxy)
+PASS 3D.2: ui.Server /api/ci/runs/{id}/log exposed 502 host diagnostic without caching empty response, then served & cached populated log
+ALL ITEM 3 GO PROBES PASSED
+=== Step 2: Exercise candidate-gate.sh check-qualification CHECK_QUALIFICATION_APP numeric vs slug (#642) ===
+PASS 3E.1: unset CHECK_QUALIFICATION_APP refused with exit 64
+PASS 3E.2: numeric CHECK_QUALIFICATION_APP=42 ignored spoofed app{id:999, slug:'42'} -> PENDING (exit 2)
+PASS 3E.3: numeric CHECK_QUALIFICATION_APP=42 trusted app{id:42, slug:'grain-bot'} and ignored evil-bot -> PASS
+PASS 3E.4: slug CHECK_QUALIFICATION_APP=grain-bot trusted app{slug:'grain-bot'} and ignored evil-bot -> PASS
+=== Step 3: Exercise release-images.sh on-demand (#775) in /tmp scratch clone against live OCI registry ===
+Updated tag 'latest' (was e9d3db81)
+release-images.sh: using Docker's existing credentials for 127.0.0.1:4286
+release-images.sh: v3.2.0 (2a2392cb07753ad3595b1efd9a9adfa7356d4863) has no 127.0.0.1:4286/grainai/sandbox:sha-2a2392c 127.0.0.1:4286/grainai/sandbox-k8s:sha-2a2392c 127.0.0.1:4286/grainai/grain:sha-2a2392c 127.0.0.1:4286/grainai/registry:sha-2a2392c
+release-images.sh: 2a2392cb07753ad3595b1efd9a9adfa7356d4863 (on main) has no published sha-2a2392c images -- its release run was superseded by a newer merge, or never ran -- so dispatching release.yml to build, test and publish it (commit=2a2392cb07753ad3595b1efd9a9adfa7356d4863)
+release-images.sh: 127.0.0.1:4286/grainai/{sandbox,sandbox-k8s,grain,registry}:sha-2a2392c are published; promoting them
+PASS 3F.1: release-images.sh on-demand v3.2.0 dispatched release.yml for superseded commit 2a2392c and populated sha- images without moving release tags
+PASS 3F.2: /home/debian/work/.git/config hygiene preserved
+ALL ITEM 3 CHECKS PASSED
