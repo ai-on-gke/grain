@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -122,9 +123,18 @@ func TestGCPTokenModeGrantPlacesAnExternalAccountAndNoKey(t *testing.T) {
 	if about := placement(t, resp, gcpAboutPath(GCPKeyPath)).Content; !strings.Contains(about, "service_account: "+testOrgSA) || !strings.Contains(about, "no key exists") {
 		t.Errorf("about = %s", about)
 	}
-	if !strings.Contains(placement(t, resp, resp.Setup).Content, "gcloud auth login --cred-file=") {
-		t.Errorf("setup does not sign gcloud in with the config")
+	// gcloud is pointed at the config, not signed in with it: `gcloud auth
+	// login --cred-file` introspects the impersonated token against STS,
+	// which answers {"active": false} for a token it did not issue.
+	setup := placement(t, resp, resp.Setup).Content
+	if !strings.Contains(setup, "gcloud config set auth/credential_file_override '"+GCPKeyPath+"' --quiet") ||
+		!strings.Contains(setup, "gcloud config set project ") {
+		t.Errorf("setup does not point gcloud at the config:\n%s", setup)
 	}
+	if strings.Contains(setup, "auth login") {
+		t.Errorf("setup still runs gcloud auth login, which fails STS introspection:\n%s", setup)
+	}
+	assertSetupKeepsStderr(t, setup)
 
 	// A client library reading the placed config, as ADC would, gets the
 	// impersonated account's token from the forwarded listener.
@@ -237,5 +247,88 @@ func TestGCPExistingAccountSetsArePersonGranted(t *testing.T) {
 	org2 := protocol.Grant{Ref: protocol.Ref{CapabilityID: ps2.ID, Method: "gcp-key"}, Args: validated(t, ps2, "gcp-key", map[string]any{"permission_set": "org"})}
 	if protocol.GrantKindOf(org2) != protocol.GrantCovered {
 		t.Error("person_granted: false still reserves the set")
+	}
+}
+
+// assertSetupKeepsStderr fails if any gcloud command in an activate.sh
+// discards its stderr: that is the only account of why setup failed that
+// the task's conversation gets (CapabilitySetupError's output tail).
+func assertSetupKeepsStderr(t *testing.T, script string) {
+	t.Helper()
+	for _, line := range strings.Split(script, "\n") {
+		if !strings.HasPrefix(line, "gcloud ") {
+			continue
+		}
+		if strings.Contains(line, "2>") || strings.Contains(line, "&>") {
+			t.Errorf("setup line discards stderr: %q", line)
+		}
+		if !strings.Contains(line, "--quiet") {
+			t.Errorf("setup line is not --quiet: %q", line)
+		}
+	}
+}
+
+// runActivate runs an activate.sh under sh with a stand-in gcloud first on
+// PATH that logs its arguments and, when failArg names one of them, fails
+// the way gcloud does: a message on stderr and status 1.
+func runActivate(t *testing.T, script, failArg string) (log, output string, err error) {
+	t.Helper()
+	if _, lookErr := exec.LookPath("sh"); lookErr != nil {
+		t.Skip("no sh")
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "gcloud.log")
+	fake := "#!/bin/sh\n" +
+		"echo \"$*\" >> " + shellQuote(logPath) + "\n" +
+		"echo 'Updated property.'\n" +
+		"case \"$*\" in *" + failArg + "*) echo 'ERROR: (gcloud) fake failure for " + failArg + "' >&2; exit 1;; esac\n"
+	if err := os.WriteFile(filepath.Join(dir, "gcloud"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	scriptPath := filepath.Join(dir, "activate.sh")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", scriptPath)
+	cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	logged, _ := os.ReadFile(logPath)
+	return string(logged), string(out), err
+}
+
+func TestGCPActivateScriptsRunAndReportFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name, script, want string
+	}{
+		{"token", gcpTokenActivateScript(GCPKeyPath, "grain-test-proj"),
+			"config set auth/credential_file_override " + GCPKeyPath + " --quiet\nconfig set project grain-test-proj --quiet\n"},
+		{"key", gcpKeyActivateScript(GCPKeyPath, "grain-test-proj"),
+			"auth activate-service-account --key-file=" + GCPKeyPath + " --quiet\nconfig set project grain-test-proj --quiet\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assertSetupKeepsStderr(t, tc.script)
+			log, out, err := runActivate(t, tc.script, "no-such-arg")
+			if err != nil {
+				t.Fatalf("activate.sh failed: %v\n%s", err, out)
+			}
+			if log != tc.want {
+				t.Errorf("gcloud ran\n%s\nwant\n%s", log, tc.want)
+			}
+			if strings.Contains(out, "Updated property") {
+				t.Errorf("stdout was not discarded: %q", out)
+			}
+			// A failing gcloud stops the script, and what it said on stderr
+			// is what setup's output carries.
+			log, out, err = runActivate(t, tc.script, "project")
+			if err == nil {
+				t.Fatalf("activate.sh succeeded although gcloud config set project failed")
+			}
+			if !strings.Contains(out, "fake failure for project") {
+				t.Errorf("gcloud's stderr was not kept: output = %q", out)
+			}
+			if strings.Count(log, "\n") != 2 {
+				t.Errorf("gcloud ran\n%s", log)
+			}
+		})
 	}
 }
