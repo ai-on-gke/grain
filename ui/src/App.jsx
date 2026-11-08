@@ -312,7 +312,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // this line differs between the two -- the phone layout is the same
   // views in a shell that fits, not a second UI.
   const isPhone = useIsPhone();
-  const { addPinnedItem } = usePinnedNav();
+  const { addPinnedItem, removePinnedItem } = usePinnedNav();
   // ...and the same answer, published on <html> for the stylesheet, the
   // way AppThemeProvider publishes the resolved light/dark mode. The
   // rules a phone needs are mostly plain CSS -- padding, wrapping, how
@@ -2293,6 +2293,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
 
   const deleteStandingSession = useCallback(
     async (deletedId) => {
+      removePinnedItem({ kind: "session", id: deletedId });
       await Promise.all([refreshSessions(), refreshList()]);
       if (openSessionId === deletedId) {
         // null rather than "director": the first session this deployment
@@ -2307,7 +2308,14 @@ function AppContent({ onReload = () => window.location.reload() }) {
         if (view === "session") setViewAndCloseOpen("session");
       }
     },
-    [refreshSessions, refreshList, openSessionId, view, setViewAndCloseOpen],
+    [
+      removePinnedItem,
+      refreshSessions,
+      refreshList,
+      openSessionId,
+      view,
+      setViewAndCloseOpen,
+    ],
   );
 
   const consumeSessionPrompt = useCallback((request) => {

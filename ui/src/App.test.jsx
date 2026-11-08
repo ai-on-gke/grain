@@ -1498,6 +1498,97 @@ describe("App", () => {
   );
 
   it(
+    "removes a deleted standing session's sidebar pin so Customize sidebar and later sessions with the same slug do not inherit it",
+    { timeout: 60000 },
+    async () => {
+      localStorage.setItem(
+        "grain.pinned",
+        JSON.stringify([
+          { kind: "view", id: "inbox" },
+          { kind: "session", id: "release-planning" },
+          { kind: "session", id: "ops-triage" },
+        ]),
+      );
+      window.history.pushState({}, "", "/session/release-planning");
+      setupApi();
+      vi.stubGlobal(
+        "confirm",
+        vi.fn(() => true),
+      );
+      const rest = api.getMockImplementation();
+      let sessionsState = [
+        { id: "director", title: "Director", taskId: "session-1" },
+        {
+          id: "release-planning",
+          title: "Release planning",
+          taskId: "session-2",
+        },
+        {
+          id: "ops-triage",
+          title: "Ops triage",
+          taskId: "session-3",
+        },
+      ];
+      api.mockImplementation((path, opts) => {
+        const method = opts?.method || "GET";
+        if (path === "/api/console-sessions" && method === "GET") {
+          return Promise.resolve({ sessions: sessionsState });
+        }
+        const delMatch = path.match(/^\/api\/console-sessions\/([\w-]+)$/);
+        if (delMatch && method === "DELETE") {
+          sessionsState = sessionsState.filter((s) => s.id !== delMatch[1]);
+          return Promise.resolve({ ok: true });
+        }
+        if (path === "/api/tasks/session-2" && method === "GET") {
+          return Promise.resolve({
+            id: "session-2",
+            title: "Release planning",
+            state: "awaiting_reply",
+            interactive: true,
+            consoleSession: "release-planning",
+            comments: [],
+          });
+        }
+        if (path === "/api/tasks/session-1" && method === "GET") {
+          return Promise.resolve({
+            id: "session-1",
+            title: "Director",
+            state: "awaiting_reply",
+            interactive: true,
+            consoleSession: "director",
+            comments: [],
+          });
+        }
+        return rest(path, opts);
+      });
+
+      render(<App />);
+      await screen.findByLabelText("Message");
+      fireEvent.click(screen.getByText("Delete session"));
+
+      await waitFor(() =>
+        expect(window.location.pathname).not.toBe("/session/release-planning"),
+      );
+      expect(JSON.parse(localStorage.getItem("grain.pinned"))).toEqual([
+        { kind: "view", id: "inbox" },
+        { kind: "session", id: "ops-triage" },
+      ]);
+
+      // Deleting from /sessions cleans up that session's pin too.
+      fireEvent.click(screen.getByText("Sessions"));
+      const listDeleteBtn = await screen.findByLabelText(
+        "Delete session Ops triage",
+      );
+      fireEvent.click(listDeleteBtn);
+      await waitFor(() =>
+        expect(JSON.parse(localStorage.getItem("grain.pinned"))).toEqual([
+          { kind: "view", id: "inbox" },
+        ]),
+      );
+    },
+  );
+
+  it(
     "does not show the previous standing session's conversation while the newly opened session's task is still loading",
     { timeout: 60000 },
     async () => {
