@@ -28,11 +28,15 @@ import {
 import {
   acceptTransfer,
   cancelTransfer,
+  createDelegatingApp,
+  createDelegationGrant,
   createEntry,
   deleteEntry,
   deleteOrphanVM,
   disconnectTunnel,
   fetchAdminSummary,
+  fetchDelegatingApps,
+  fetchDelegationGrants,
   fetchDirectory,
   fetchEntries,
   fetchEntry,
@@ -49,7 +53,9 @@ import {
   resolveScopeConflict,
   restoreEntry,
   revokeCredential,
+  revokeDelegationGrant,
   rotateCredential,
+  setDelegatingAppDisabled,
   setEntryScopes,
   setOwnerDisabled,
   setQuota,
@@ -66,6 +72,9 @@ function parseRouteFromPathname(pathname) {
   if (clean === "/new" || clean === "/create" || clean === "/register") {
     return { page: "new", entryName: "" };
   }
+  if (clean === "/grants" || clean === "/apps") {
+    return { page: "grants", entryName: "" };
+  }
   if (clean === "/admin") return { page: "admin", entryName: "" };
   if (clean === "/status") return { page: "status", entryName: "" };
   if (clean.startsWith("/entries/")) {
@@ -77,6 +86,43 @@ function parseRouteFromPathname(pathname) {
     }
   }
   return { page: "my-entries", entryName: "" };
+}
+
+function formatTTLSeconds(sec) {
+  const n = Number(sec) || 0;
+  if (n <= 0) return "90d";
+  if (n % 86400 === 0) return `${n / 86400}d`;
+  if (n % 3600 === 0) return `${n / 3600}h`;
+  if (n % 60 === 0) return `${n / 60}m`;
+  return `${n}s`;
+}
+
+function formatShortTimestamp(iso) {
+  if (!iso || typeof iso !== "string") return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return iso
+    .replace(/\.\d+Z$/, "Z")
+    .replace("T", " ")
+    .replace(/:\d{2}Z$/, " UTC");
+}
+
+function DelegationStatePill({ state }) {
+  const norm = String(state || "").toLowerCase();
+  let cls = "gs-pill gs-pill-offline";
+  if (norm === "enabled" || norm === "active") {
+    cls = "gs-pill gs-pill-online";
+  } else if (norm === "expired") {
+    cls = "gs-pill gs-pill-degraded";
+  } else if (norm === "disabled" || norm === "revoked") {
+    cls = "gs-pill gs-pill-danger";
+  }
+  return (
+    <span className={cls}>
+      <span className="gs-pill-dot" aria-hidden="true" />
+      <span>{norm}</span>
+    </span>
+  );
 }
 
 function safeHttpUrl(raw) {
@@ -2423,17 +2469,36 @@ function AdminView({ onNavigateEntry }) {
   const [forceTransferTo, setForceTransferTo] = useState("");
   const [forceClearGroup, setForceClearGroup] = useState(false);
 
+  // Delegating apps state
+  const [delegatingApps, setDelegatingApps] = useState([]);
+  const [newAppName, setNewAppName] = useState("");
+  const [newAppPrincipal, setNewAppPrincipal] = useState("");
+  const [newAppDisplayName, setNewAppDisplayName] = useState("");
+  const [newAppDescription, setNewAppDescription] = useState("");
+  const [newAppHomepage, setNewAppHomepage] = useState("");
+  const [newAppOwner, setNewAppOwner] = useState("");
+  const [newAppOwnerGroup, setNewAppOwnerGroup] = useState("");
+  const [newAppMaxAccess, setNewAppMaxAccess] = useState("write");
+  const [newAppMaxTTLDays, setNewAppMaxTTLDays] = useState("90");
+  const [newAppRequireSubjectToken, setNewAppRequireSubjectToken] =
+    useState(false);
+  const [creatingApp, setCreatingApp] = useState(false);
+
   const loadAdmin = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const [sumData, entData] = await Promise.all([
+      const [sumData, entData, appsData] = await Promise.all([
         fetchAdminSummary(),
         fetchEntries({ all: "1", include_deleted: "true" }),
+        fetchDelegatingApps(),
       ]);
       setSummary(sumData);
       setAllEntries(
         Array.isArray(entData && entData.entries) ? entData.entries : [],
+      );
+      setDelegatingApps(
+        Array.isArray(appsData && appsData.apps) ? appsData.apps : [],
       );
     } catch (err) {
       setError(err.message || "Failed to load admin summary");
@@ -2596,7 +2661,79 @@ function AdminView({ onNavigateEntry }) {
     }
   };
 
-  if (loading) {
+  const handleCreateDelegatingApp = async (e) => {
+    e.preventDefault();
+    const trimmedName = newAppName.trim().toLowerCase();
+    const trimmedPrincipal = newAppPrincipal.trim();
+    if (!trimmedName || !trimmedPrincipal) return;
+    setError("");
+    setNotice("");
+    setCreatingApp(true);
+    try {
+      const ttlDaysNum = Number(newAppMaxTTLDays);
+      const ttlSec =
+        Number.isFinite(ttlDaysNum) && ttlDaysNum > 0
+          ? Math.round(ttlDaysNum * 86400)
+          : 0;
+      const body = {
+        name: trimmedName,
+        principal: trimmedPrincipal,
+        max_access: newAppMaxAccess,
+        max_grant_ttl_seconds: ttlSec,
+        require_subject_token: newAppRequireSubjectToken,
+      };
+      if (newAppDisplayName.trim()) {
+        body.display_name = newAppDisplayName.trim();
+      }
+      if (newAppDescription.trim()) {
+        body.description = newAppDescription.trim();
+      }
+      if (newAppHomepage.trim()) {
+        body.homepage = newAppHomepage.trim();
+      }
+      if (newAppOwner.trim()) {
+        body.owner = newAppOwner.trim();
+      }
+      if (newAppOwnerGroup.trim()) {
+        body.owner_group = newAppOwnerGroup.trim();
+      }
+      const created = await createDelegatingApp(body);
+      await loadAdmin();
+      setNotice(
+        `Registered delegating app ${created?.name || trimmedName} (${created?.principal || trimmedPrincipal}).`,
+      );
+      setNewAppName("");
+      setNewAppPrincipal("");
+      setNewAppDisplayName("");
+      setNewAppDescription("");
+      setNewAppHomepage("");
+      setNewAppOwner("");
+      setNewAppOwnerGroup("");
+      setNewAppMaxAccess("write");
+      setNewAppMaxTTLDays("90");
+      setNewAppRequireSubjectToken(false);
+    } catch (err) {
+      setError(err.message || "Failed to register delegating app");
+    } finally {
+      setCreatingApp(false);
+    }
+  };
+
+  const handleToggleDelegatingApp = async (name, nextDisabled) => {
+    setError("");
+    setNotice("");
+    try {
+      await setDelegatingAppDisabled(name, nextDisabled);
+      await loadAdmin();
+      setNotice(
+        `${nextDisabled ? "Disabled" : "Enabled"} delegating app ${name}.`,
+      );
+    } catch (err) {
+      setError(err.message || "Failed to update delegating app state");
+    }
+  };
+
+  if (loading && !summary) {
     return (
       <div className="reg-card">
         Loading registry administration overview...
@@ -2610,7 +2747,7 @@ function AdminView({ onNavigateEntry }) {
     <div>
       <PageHeader
         title="Registry Administration"
-        subtitle="Inspect active outbound tunnels per replica, organization-wide entries, owners & quotas, scope conflicts, shared Cloud SQL pool, orphan VMs, retention recovery, and control-plane audit logs."
+        subtitle="Inspect active outbound tunnels per replica, organization-wide entries, owners & quotas, scope conflicts, shared Cloud SQL pool, orphan VMs, retention recovery, delegating apps, and control-plane audit logs."
       />
 
       {notice ? (
@@ -3168,6 +3305,297 @@ function AdminView({ onNavigateEntry }) {
         </form>
       </section>
 
+      <section
+        id="delegating-apps"
+        className="reg-section reg-card reg-stack"
+        data-testid="admin-delegating-apps-section"
+      >
+        <div className="reg-section-head">
+          <h2 className="reg-section-title">Delegating Apps</h2>
+          <span className="gs-badge">delegation_policy: consent</span>
+        </div>
+        <p className="reg-section-desc">
+          Register and govern machine service accounts permitted to act on
+          behalf of consenting users via <code>X-Grain-Act-As</code>. Enter a
+          bare service-account email; the registry normalizes and stores{" "}
+          <code>serviceAccount:&lt;email&gt;</code>.
+        </p>
+
+        <SortableTable
+          emptyMessage="No delegating apps registered."
+          rowKey={(app) => app.name}
+          rows={delegatingApps}
+          columns={[
+            {
+              key: "name",
+              header: "App",
+              sortValue: (app) => app.name,
+              render: (app) => {
+                const safeHome = safeHttpUrl(app.homepage);
+                return (
+                  <div>
+                    <div className="reg-badge-row">
+                      <strong className="reg-mono">{app.name}</strong>
+                      {app.display_name && app.display_name !== app.name ? (
+                        <span>· {app.display_name}</span>
+                      ) : null}
+                      {app.require_subject_token ? (
+                        <span className="gs-badge gs-badge-warning">
+                          subject token
+                        </span>
+                      ) : null}
+                    </div>
+                    {app.description ? (
+                      <div className="reg-hint">{app.description}</div>
+                    ) : null}
+                    {safeHome ? (
+                      <div className="reg-hint">
+                        <a
+                          href={safeHome}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="reg-inline-link"
+                        >
+                          {safeHome}
+                        </a>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              },
+            },
+            {
+              key: "principal",
+              header: "Service Account Principal",
+              sortValue: (app) => app.principal,
+              render: (app) => (
+                <span className="reg-mono">{app.principal}</span>
+              ),
+            },
+            {
+              key: "ceiling",
+              header: "Owner & Ceiling",
+              render: (app) => (
+                <div>
+                  <div>
+                    {app.owner || "—"}
+                    {app.owner_group ? ` (${app.owner_group})` : ""}
+                  </div>
+                  <div className="reg-badge-row reg-meta-badges">
+                    <span
+                      className={
+                        app.max_access === "write"
+                          ? "gs-badge gs-badge-vm"
+                          : "gs-badge gs-badge-workstation"
+                      }
+                    >
+                      max {app.max_access}
+                    </span>
+                    <span className="gs-badge">
+                      TTL ≤ {formatTTLSeconds(app.max_grant_ttl_seconds)}
+                    </span>
+                  </div>
+                </div>
+              ),
+            },
+            {
+              key: "status",
+              header: "Status",
+              render: (app) => (
+                <div>
+                  <DelegationStatePill
+                    state={app.disabled_at ? "disabled" : "enabled"}
+                  />
+                  {app.disabled_at ? (
+                    <div className="reg-hint">
+                      {app.disabled_by ? `by ${app.disabled_by}` : "disabled"}
+                    </div>
+                  ) : null}
+                </div>
+              ),
+            },
+            {
+              key: "action",
+              header: "Action",
+              render: (app) => {
+                const isDisabled = Boolean(app.disabled_at);
+                return (
+                  <button
+                    type="button"
+                    className={
+                      isDisabled
+                        ? "gs-btn gs-btn-sm gs-btn-primary"
+                        : "gs-btn gs-btn-sm gs-btn-danger"
+                    }
+                    onClick={() =>
+                      handleToggleDelegatingApp(app.name, !isDisabled)
+                    }
+                  >
+                    {isDisabled ? "Enable" : "Disable"}
+                  </button>
+                );
+              },
+            },
+          ]}
+        />
+
+        <form
+          className="reg-subcard reg-stack"
+          onSubmit={handleCreateDelegatingApp}
+        >
+          <h3 className="reg-subcard-title">Register a Delegating App</h3>
+          <div className="reg-form-grid">
+            <div className="reg-field">
+              <label className="reg-label" htmlFor="admin-app-name">
+                App name
+              </label>
+              <input
+                id="admin-app-name"
+                className="gs-input reg-mono"
+                placeholder="planner"
+                value={newAppName}
+                onChange={(e) => setNewAppName(e.target.value)}
+                required
+              />
+              <span className="reg-hint">
+                3–63 lowercase letters, digits, or hyphens (starts with a
+                letter).
+              </span>
+            </div>
+
+            <div className="reg-field">
+              <label className="reg-label" htmlFor="admin-app-principal">
+                Service account email
+              </label>
+              <input
+                id="admin-app-principal"
+                className="gs-input reg-mono"
+                placeholder="planner@acme-prod.iam.gserviceaccount.com"
+                value={newAppPrincipal}
+                onChange={(e) => setNewAppPrincipal(e.target.value)}
+                required
+              />
+              <span className="reg-hint">
+                Bare service-account email; stored as{" "}
+                <code>serviceAccount:&lt;email&gt;</code>.
+              </span>
+            </div>
+
+            <div className="reg-field">
+              <label className="reg-label" htmlFor="admin-app-display-name">
+                Display name
+              </label>
+              <input
+                id="admin-app-display-name"
+                className="gs-input"
+                placeholder="Task Planner"
+                value={newAppDisplayName}
+                onChange={(e) => setNewAppDisplayName(e.target.value)}
+              />
+            </div>
+
+            <div className="reg-field">
+              <label className="reg-label" htmlFor="admin-app-owner">
+                Accountable owner email
+              </label>
+              <input
+                id="admin-app-owner"
+                className="gs-input"
+                placeholder="Defaults to signed-in admin"
+                value={newAppOwner}
+                onChange={(e) => setNewAppOwner(e.target.value)}
+              />
+            </div>
+
+            <div className="reg-field">
+              <label className="reg-label" htmlFor="admin-app-owner-group">
+                Owner group (optional)
+              </label>
+              <input
+                id="admin-app-owner-group"
+                className="gs-input"
+                placeholder="platform-team@example.com"
+                value={newAppOwnerGroup}
+                onChange={(e) => setNewAppOwnerGroup(e.target.value)}
+              />
+            </div>
+
+            <div className="reg-field">
+              <label className="reg-label" htmlFor="admin-app-homepage">
+                Homepage URL (optional)
+              </label>
+              <input
+                id="admin-app-homepage"
+                className="gs-input"
+                placeholder="https://planner.example.com"
+                value={newAppHomepage}
+                onChange={(e) => setNewAppHomepage(e.target.value)}
+              />
+            </div>
+
+            <div className="reg-field">
+              <label className="reg-label" htmlFor="admin-app-max-access">
+                Max access ceiling
+              </label>
+              <select
+                id="admin-app-max-access"
+                className="gs-select"
+                value={newAppMaxAccess}
+                onChange={(e) => setNewAppMaxAccess(e.target.value)}
+              >
+                <option value="write">write</option>
+                <option value="read">read</option>
+              </select>
+            </div>
+
+            <div className="reg-field">
+              <label className="reg-label" htmlFor="admin-app-max-ttl-days">
+                Max grant TTL (days)
+              </label>
+              <input
+                id="admin-app-max-ttl-days"
+                type="number"
+                min="1"
+                className="gs-input"
+                value={newAppMaxTTLDays}
+                onChange={(e) => setNewAppMaxTTLDays(e.target.value)}
+              />
+            </div>
+
+            <div className="reg-field">
+              <label className="reg-label" htmlFor="admin-app-description">
+                Description (optional)
+              </label>
+              <input
+                id="admin-app-description"
+                className="gs-input"
+                placeholder="Files and dispatches tasks across your sandboxes."
+                value={newAppDescription}
+                onChange={(e) => setNewAppDescription(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="reg-actions-row">
+            <label className="reg-checkbox-row">
+              <input
+                type="checkbox"
+                checked={newAppRequireSubjectToken}
+                onChange={(e) => setNewAppRequireSubjectToken(e.target.checked)}
+              />
+              <span>Require user subject token alongside delegation grant</span>
+            </label>
+            <button
+              type="submit"
+              className="gs-btn gs-btn-primary"
+              disabled={creatingApp}
+            >
+              {creatingApp ? "Registering..." : "Register delegating app"}
+            </button>
+          </div>
+        </form>
+      </section>
+
       <section className="reg-section">
         <h2 className="reg-section-title">Control-Plane Audit Log</h2>
         <SortableTable
@@ -3219,6 +3647,445 @@ function AdminView({ onNavigateEntry }) {
             },
           ]}
         />
+      </section>
+    </div>
+  );
+}
+
+function AppsActingForYouView({ onNavigateEntry }) {
+  const [grants, setGrants] = useState([]);
+  const [includeRevoked, setIncludeRevoked] = useState(false);
+  const [myEntries, setMyEntries] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  // Grant consent form state
+  const [appInput, setAppInput] = useState("");
+  const [entriesInput, setEntriesInput] = useState("");
+  const [accessInput, setAccessInput] = useState("");
+  const [ttlValue, setTtlValue] = useState("30");
+  const [ttlUnit, setTtlUnit] = useState("days");
+  const [submittingGrant, setSubmittingGrant] = useState(false);
+  const [revokingId, setRevokingId] = useState("");
+
+  const loadGrants = useCallback(async (withRevoked) => {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetchDelegationGrants({ includeRevoked: withRevoked });
+      setGrants(Array.isArray(res && res.grants) ? res.grants : []);
+    } catch (err) {
+      setError(err.message || "Failed to load consent grants");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadGrants(includeRevoked);
+  }, [includeRevoked, loadGrants]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchEntries()
+      .then((res) => {
+        if (cancelled) return;
+        const rows = Array.isArray(res && res.entries) ? res.entries : [];
+        setMyEntries(rows.filter((e) => e && e.state !== "deleted" && e.name));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleAddEntryToken = (token) => {
+    if (token === "*") {
+      setEntriesInput("*");
+      return;
+    }
+    const existing = entriesInput
+      .split(/[\s,]+/)
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => s && s !== "*");
+    if (!existing.includes(token)) {
+      existing.push(token);
+    }
+    setEntriesInput(existing.join(", "));
+  };
+
+  const handlePrefillFromGrant = (grant) => {
+    setAppInput(grant.app || "");
+    setEntriesInput(
+      Array.isArray(grant.entries) ? grant.entries.join(", ") : "",
+    );
+    setAccessInput(grant.access || "");
+    setError("");
+    setNotice(
+      `Loaded ${grant.app} into the consent form above — adjust scope or TTL and click Grant consent.`,
+    );
+  };
+
+  const handleGrantConsent = async (e) => {
+    e.preventDefault();
+    const app = appInput.trim().toLowerCase();
+    const entries = Array.from(
+      new Set(
+        entriesInput
+          .split(/[\s,]+/)
+          .map((s) => s.trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    );
+    if (!app || entries.length === 0) {
+      setError(
+        "Enter both a delegating app name and at least one entry (or *).",
+      );
+      return;
+    }
+    const rawNum = Number(ttlValue);
+    const mult = ttlUnit === "days" ? 86400 : ttlUnit === "hours" ? 3600 : 1;
+    const ttlSeconds =
+      Number.isFinite(rawNum) && rawNum > 0 ? Math.round(rawNum * mult) : 0;
+
+    setError("");
+    setNotice("");
+    setSubmittingGrant(true);
+    try {
+      const created = await createDelegationGrant({
+        app,
+        entries,
+        access: accessInput,
+        ttl_seconds: ttlSeconds,
+      });
+      await loadGrants(includeRevoked);
+      setNotice(
+        `Granted ${created?.access || accessInput || "app-ceiling"} consent to ${created?.app || app} (${created?.id || "saved"}).`,
+      );
+      setAppInput("");
+      setEntriesInput("");
+      setAccessInput("");
+      setTtlValue("30");
+      setTtlUnit("days");
+    } catch (err) {
+      setError(err.message || "Failed to grant consent");
+    } finally {
+      setSubmittingGrant(false);
+    }
+  };
+
+  const handleRevokeGrant = async (grant) => {
+    setError("");
+    setNotice("");
+    setRevokingId(grant.id);
+    try {
+      await revokeDelegationGrant(grant.id);
+      await loadGrants(includeRevoked);
+      setNotice(`Revoked consent grant ${grant.id} for ${grant.app}.`);
+    } catch (err) {
+      setError(err.message || "Failed to revoke consent grant");
+    } finally {
+      setRevokingId("");
+    }
+  };
+
+  return (
+    <div>
+      <PageHeader
+        title="Apps acting for you"
+        subtitle="Inspect, grant, and revoke personal consent allowing registered delegating apps to reach entries with delegation_policy: consent on your behalf."
+      />
+
+      {notice ? (
+        <div className="reg-banner reg-banner-success" role="status">
+          <span>{notice}</span>
+        </div>
+      ) : null}
+
+      {error ? (
+        <div className="reg-banner reg-banner-danger" role="alert">
+          <span>{error}</span>
+        </div>
+      ) : null}
+
+      <section
+        className="reg-section reg-card reg-stack"
+        data-testid="grant-consent-card"
+      >
+        <div>
+          <h2 className="reg-section-title">Grant Consent to an App</h2>
+          <p className="reg-section-desc">
+            Authorizes a registered delegating app to forward requests as your
+            identity to the entries you select. Re-submitting for the same app
+            replaces your active grant in place.
+          </p>
+        </div>
+
+        <form className="reg-stack" onSubmit={handleGrantConsent}>
+          <div className="reg-form-grid">
+            <div className="reg-field">
+              <label className="reg-label" htmlFor="grant-app-input">
+                Delegating app name
+              </label>
+              <input
+                id="grant-app-input"
+                className="gs-input reg-mono"
+                placeholder="planner"
+                value={appInput}
+                onChange={(e) => setAppInput(e.target.value)}
+                required
+              />
+              <span className="reg-hint">
+                Short app name registered by a registry administrator.
+              </span>
+            </div>
+
+            <div className="reg-field">
+              <label className="reg-label" htmlFor="grant-entries-input">
+                Entries
+              </label>
+              <input
+                id="grant-entries-input"
+                className="gs-input reg-mono"
+                placeholder="platform-vm, alice-workstation or *"
+                value={entriesInput}
+                onChange={(e) => setEntriesInput(e.target.value)}
+                required
+              />
+              <span className="reg-hint">
+                Comma-separated entry names, or <code>*</code> for every entry
+                you can reach.
+              </span>
+              <div className="reg-chip-row">
+                <button
+                  type="button"
+                  className="gs-btn gs-btn-sm"
+                  onClick={() => handleAddEntryToken("*")}
+                >
+                  All reachable (*)
+                </button>
+                {myEntries.slice(0, 6).map((ent) => (
+                  <button
+                    key={ent.name}
+                    type="button"
+                    className="gs-btn gs-btn-sm"
+                    onClick={() => handleAddEntryToken(ent.name)}
+                  >
+                    + {ent.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="reg-field">
+              <label className="reg-label" htmlFor="grant-access-select">
+                Access level
+              </label>
+              <select
+                id="grant-access-select"
+                className="gs-select"
+                value={accessInput}
+                onChange={(e) => setAccessInput(e.target.value)}
+              >
+                <option value="">App ceiling (default)</option>
+                <option value="read">read</option>
+                <option value="write">write</option>
+              </select>
+              <span className="reg-hint">
+                Bounded by the app&apos;s registered max_access ceiling.
+              </span>
+            </div>
+
+            <div className="reg-field">
+              <label className="reg-label" htmlFor="grant-ttl-value">
+                Grant TTL
+              </label>
+              <div className="reg-ttl-row">
+                <input
+                  id="grant-ttl-value"
+                  type="number"
+                  min="0"
+                  className="gs-input"
+                  aria-label="Grant TTL value"
+                  value={ttlValue}
+                  onChange={(e) => setTtlValue(e.target.value)}
+                />
+                <select
+                  id="grant-ttl-unit"
+                  className="gs-select"
+                  aria-label="Grant TTL unit"
+                  value={ttlUnit}
+                  onChange={(e) => setTtlUnit(e.target.value)}
+                >
+                  <option value="days">days</option>
+                  <option value="hours">hours</option>
+                  <option value="seconds">seconds</option>
+                </select>
+              </div>
+              <span className="reg-hint">
+                Set 0 to inherit the app&apos;s maximum grant TTL.
+              </span>
+            </div>
+          </div>
+
+          <div className="reg-actions-row">
+            <button
+              type="submit"
+              className="gs-btn gs-btn-primary"
+              disabled={submittingGrant}
+            >
+              {submittingGrant ? "Granting..." : "Grant consent"}
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section
+        className="reg-section reg-card reg-stack"
+        data-testid="person-grants-section"
+      >
+        <div className="reg-section-head">
+          <h2 className="reg-section-title">Your Consent Grants</h2>
+          <label className="reg-checkbox-row">
+            <input
+              type="checkbox"
+              checked={includeRevoked}
+              onChange={(e) => setIncludeRevoked(e.target.checked)}
+            />
+            <span>Include revoked grants</span>
+          </label>
+        </div>
+
+        {loading && grants.length === 0 ? (
+          <div className="reg-hint">Loading your consent grants...</div>
+        ) : (
+          <SortableTable
+            emptyMessage="No active consent grants. Apps cannot act as you on consent-gated entries until you grant consent above."
+            rowKey={(g) => g.id}
+            rows={grants}
+            columns={[
+              {
+                key: "app",
+                header: "App & Grant ID",
+                sortValue: (g) => g.app,
+                render: (g) => (
+                  <div>
+                    <strong className="reg-mono">{g.app}</strong>
+                    <div className="reg-hint reg-mono">{g.id}</div>
+                  </div>
+                ),
+              },
+              {
+                key: "entries",
+                header: "Entries",
+                render: (g) => {
+                  const list = Array.isArray(g.entries) ? g.entries : [];
+                  if (list.includes("*")) {
+                    return (
+                      <span className="gs-badge gs-badge-vm">
+                        * (all reachable entries)
+                      </span>
+                    );
+                  }
+                  return (
+                    <div className="reg-badge-row">
+                      {list.map((name) => (
+                        <button
+                          key={name}
+                          type="button"
+                          className="reg-inline-link reg-mono"
+                          onClick={() => onNavigateEntry(name)}
+                        >
+                          {name}
+                        </button>
+                      ))}
+                    </div>
+                  );
+                },
+              },
+              {
+                key: "access",
+                header: "Access",
+                sortValue: (g) => g.access,
+                render: (g) => (
+                  <span
+                    className={
+                      g.access === "write"
+                        ? "gs-badge gs-badge-vm"
+                        : "gs-badge gs-badge-workstation"
+                    }
+                  >
+                    {g.access}
+                  </span>
+                ),
+              },
+              {
+                key: "status",
+                header: "Status & Expiry",
+                render: (g) => {
+                  const isRevoked = Boolean(g.revoked_at);
+                  const isExpired =
+                    !isRevoked &&
+                    Boolean(g.expires_at) &&
+                    Date.parse(g.expires_at) <= Date.now();
+                  const state = isRevoked
+                    ? "revoked"
+                    : isExpired
+                      ? "expired"
+                      : "active";
+                  return (
+                    <div>
+                      <DelegationStatePill state={state} />
+                      {isRevoked ? (
+                        <div className="reg-hint">
+                          Revoked {formatShortTimestamp(g.revoked_at)}
+                        </div>
+                      ) : g.expires_at ? (
+                        <div className="reg-hint">
+                          Expires {formatShortTimestamp(g.expires_at)}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                },
+              },
+              {
+                key: "last_used",
+                header: "Last Used",
+                render: (g) => <span>{formatRelativeAge(g.last_used_at)}</span>,
+              },
+              {
+                key: "actions",
+                header: "Actions",
+                render: (g) => {
+                  const isRevoked = Boolean(g.revoked_at);
+                  return (
+                    <div className="reg-actions-row">
+                      <button
+                        type="button"
+                        className="gs-btn gs-btn-sm"
+                        onClick={() => handlePrefillFromGrant(g)}
+                      >
+                        {isRevoked ? "Re-grant" : "Update"}
+                      </button>
+                      {!isRevoked ? (
+                        <button
+                          type="button"
+                          className="gs-btn gs-btn-sm gs-btn-danger"
+                          disabled={revokingId === g.id}
+                          onClick={() => handleRevokeGrant(g)}
+                        >
+                          {revokingId === g.id ? "Revoking..." : "Revoke"}
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                },
+              },
+            ]}
+          />
+        )}
       </section>
     </div>
   );
@@ -3508,6 +4375,17 @@ export default function App() {
               <button
                 type="button"
                 className={
+                  route.page === "grants"
+                    ? "reg-nav-link reg-nav-link-active"
+                    : "reg-nav-link"
+                }
+                onClick={() => navigate("/grants")}
+              >
+                Apps acting for you
+              </button>
+              <button
+                type="button"
+                className={
                   route.page === "status"
                     ? "reg-nav-link reg-nav-link-active"
                     : "reg-nav-link"
@@ -3559,6 +4437,8 @@ export default function App() {
             onBack={() => navigate("/")}
             onRefreshMe={loadMeAndShapes}
           />
+        ) : route.page === "grants" ? (
+          <AppsActingForYouView onNavigateEntry={onNavigateEntry} />
         ) : route.page === "admin" ? (
           <AdminView onNavigateEntry={onNavigateEntry} />
         ) : route.page === "status" ? (

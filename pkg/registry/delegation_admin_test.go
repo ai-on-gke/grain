@@ -283,7 +283,29 @@ func TestDelegatingAppAdminAPIAndPersonGrants(t *testing.T) {
 		t.Fatalf("alice's grant stopped working after refused revokes: %v", err)
 	}
 
-	// 6. Disabling the app stops it acting and stops new grants; enabling restores it.
+	// 6. Disabling the app stops it acting, stops new grants, and drops cached
+	// assertions for that app on the local replica; enabling restores it.
+	claims := RegistryClaims{
+		Audience: "https://alice-vm.instances.example.com",
+		Subject:  alice, Email: alice, Kind: "human",
+		Actor: &DelegationActor{Sub: planner, Kind: "service", App: "planner", Grant: grant.ID, Access: "read"},
+	}
+	otherAppClaims := RegistryClaims{
+		Audience: "https://alice-vm.instances.example.com",
+		Subject:  alice, Email: alice, Kind: "human",
+		Actor: &DelegationActor{Sub: "triage@proj.iam.gserviceaccount.com", Kind: "service", App: "triage", Grant: "dlg_other", Access: "read"},
+	}
+	preDisableTok, err := signer.SignAssertion(ctx, claims)
+	if err != nil {
+		t.Fatalf("SignAssertion before disable: %v", err)
+	}
+	otherAppTok, err := signer.SignAssertion(ctx, otherAppClaims)
+	if err != nil {
+		t.Fatalf("SignAssertion otherAppClaims: %v", err)
+	}
+	if again, _ := signer.SignAssertion(ctx, claims); again != preDisableTok {
+		t.Fatal("expected a cache hit before app disable")
+	}
 	if code, body := doDelegationJSON(t, h, http.MethodPatch, "/api/admin/delegating-apps/planner", alice, api.SetDelegatingAppDisabledRequest{Disabled: true}); code != http.StatusForbidden {
 		t.Fatalf("alice disabling app = %d %s, want 403", code, body)
 	}
@@ -297,6 +319,12 @@ func TestDelegatingAppAdminAPIAndPersonGrants(t *testing.T) {
 	if _, err := pol.AuthorizeOnBehalfOf(ctx, planner, alice, "alice-vm"); refusalReason(err) != "app_disabled" {
 		t.Fatalf("disabled app: err=%v, want app_disabled", err)
 	}
+	if afterDisable, _ := signer.SignAssertion(ctx, claims); afterDisable == preDisableTok {
+		t.Fatal("disabling the app left its cached assertion in place on the local replica")
+	}
+	if otherAfterDisable, _ := signer.SignAssertion(ctx, otherAppClaims); otherAfterDisable != otherAppTok {
+		t.Fatal("disabling planner evicted another app's cached assertion")
+	}
 	if code, body := doDelegationJSON(t, h, http.MethodPost, "/api/delegation-grants", bob,
 		api.CreateDelegationGrantRequest{App: "planner", Entries: []string{"*"}}); code != http.StatusForbidden {
 		t.Fatalf("grant to disabled app = %d %s, want 403", code, body)
@@ -307,11 +335,6 @@ func TestDelegatingAppAdminAPIAndPersonGrants(t *testing.T) {
 
 	// 7. Alice revokes her own grant by app name; it shows only with include_revoked,
 	// and this replica's cached assertions minted under it are dropped at once.
-	claims := RegistryClaims{
-		Audience: "https://alice-vm.instances.example.com",
-		Subject:  alice, Email: alice, Kind: "human",
-		Actor: &DelegationActor{Sub: planner, Kind: "service", App: "planner", Grant: grant.ID, Access: "read"},
-	}
 	cachedTok, err := signer.SignAssertion(ctx, claims)
 	if err != nil {
 		t.Fatalf("SignAssertion: %v", err)
@@ -337,5 +360,95 @@ func TestDelegatingAppAdminAPIAndPersonGrants(t *testing.T) {
 	_, body = doDelegationJSON(t, h, http.MethodGet, "/api/delegation-grants?include_revoked=true", alice, nil)
 	if json.Unmarshal(body, &mine) != nil || len(mine.Grants) != 1 || mine.Grants[0].ID != grant.ID || mine.Grants[0].RevokedAt == nil {
 		t.Fatalf("include_revoked grants = %s", body)
+	}
+}
+
+func TestDemoDelegatingAppsAndPersonGrants(t *testing.T) {
+	h := newDemoState().handler()
+
+	// 1. Seeded delegating apps are returned sorted, including enabled and disabled fixtures.
+	code, body := doDelegationJSON(t, h, http.MethodGet, "/api/admin/delegating-apps", "", nil)
+	var appsResp api.ListDelegatingAppsResponse
+	if code != http.StatusOK || json.Unmarshal(body, &appsResp) != nil || len(appsResp.Apps) != 3 {
+		t.Fatalf("GET demo /api/admin/delegating-apps = %d %s", code, body)
+	}
+
+	// 2. Registering with a bare service-account email stores the serviceAccount: form;
+	// human principals and duplicate names/principals are rejected.
+	if code, body := doDelegationJSON(t, h, http.MethodPost, "/api/admin/delegating-apps", "", api.CreateDelegatingAppRequest{
+		Name:      "bad-human",
+		Principal: "alice@example.com",
+	}); code != http.StatusBadRequest {
+		t.Fatalf("POST human principal = %d %s, want 400", code, body)
+	}
+	code, body = doDelegationJSON(t, h, http.MethodPost, "/api/admin/delegating-apps", "", api.CreateDelegatingAppRequest{
+		Name:               "release-bot",
+		Principal:          "release-bot@acme-prod.iam.gserviceaccount.com",
+		DisplayName:        "Release Bot",
+		MaxAccess:          "read",
+		MaxGrantTTLSeconds: 86400,
+	})
+	var createdApp api.DelegatingApp
+	if code != http.StatusCreated || json.Unmarshal(body, &createdApp) != nil {
+		t.Fatalf("POST demo /api/admin/delegating-apps = %d %s", code, body)
+	}
+	if createdApp.Principal != "serviceAccount:release-bot@acme-prod.iam.gserviceaccount.com" {
+		t.Fatalf("stored principal = %q, want serviceAccount: prefix", createdApp.Principal)
+	}
+	if code, body := doDelegationJSON(t, h, http.MethodPost, "/api/admin/delegating-apps", "", api.CreateDelegatingAppRequest{
+		Name:      "release-bot",
+		Principal: "other-bot@acme-prod.iam.gserviceaccount.com",
+	}); code != http.StatusConflict {
+		t.Fatalf("duplicate app name = %d %s, want 409", code, body)
+	}
+
+	// 3. Disable and re-enable the app; while disabled, granting consent returns 403 app_disabled.
+	code, body = doDelegationJSON(t, h, http.MethodPatch, "/api/admin/delegating-apps/release-bot", "", api.SetDelegatingAppDisabledRequest{Disabled: true})
+	if code != http.StatusOK || !bytes.Contains(body, []byte(`"disabled_at"`)) {
+		t.Fatalf("PATCH disable = %d %s", code, body)
+	}
+	if code, body := doDelegationJSON(t, h, http.MethodPost, "/api/delegation-grants", "", api.CreateDelegationGrantRequest{
+		App: "release-bot", Entries: []string{"platform-vm"},
+	}); code != http.StatusForbidden {
+		t.Fatalf("grant to disabled app = %d %s, want 403", code, body)
+	}
+	code, body = doDelegationJSON(t, h, http.MethodPatch, "/api/admin/delegating-apps/release-bot", "", api.SetDelegatingAppDisabledRequest{Disabled: false})
+	if code != http.StatusOK || bytes.Contains(body, []byte(`"disabled_at"`)) {
+		t.Fatalf("PATCH enable = %d %s", code, body)
+	}
+
+	// 4. Grant consent, verify max_access ceiling, list with/without include_revoked, and revoke by ID.
+	if code, body := doDelegationJSON(t, h, http.MethodPost, "/api/delegation-grants", "", api.CreateDelegationGrantRequest{
+		App: "release-bot", Entries: []string{"platform-vm"}, Access: "write",
+	}); code != http.StatusForbidden {
+		t.Fatalf("write grant on read-only app = %d %s, want 403", code, body)
+	}
+	code, body = doDelegationJSON(t, h, http.MethodPost, "/api/delegation-grants", "", api.CreateDelegationGrantRequest{
+		App: "release-bot", Entries: []string{"platform-vm"}, Access: "read", TTLSeconds: 3600,
+	})
+	var grant api.DelegationGrant
+	if code != http.StatusOK || json.Unmarshal(body, &grant) != nil || grant.ID == "" {
+		t.Fatalf("POST demo /api/delegation-grants = %d %s", code, body)
+	}
+
+	code, body = doDelegationJSON(t, h, http.MethodGet, "/api/delegation-grants", "", nil)
+	var liveResp api.ListDelegationGrantsResponse
+	if code != http.StatusOK || json.Unmarshal(body, &liveResp) != nil || len(liveResp.Grants) != 3 {
+		t.Fatalf("GET live demo grants = %d %s", code, body)
+	}
+
+	code, body = doDelegationJSON(t, h, http.MethodDelete, "/api/delegation-grants/"+grant.ID, "", nil)
+	if code != http.StatusOK || !bytes.Contains(body, []byte(`"revoked_at"`)) {
+		t.Fatalf("DELETE demo grant = %d %s", code, body)
+	}
+
+	code, body = doDelegationJSON(t, h, http.MethodGet, "/api/delegation-grants", "", nil)
+	if json.Unmarshal(body, &liveResp) != nil || len(liveResp.Grants) != 2 {
+		t.Fatalf("GET live demo grants after revoke = %d %s", code, body)
+	}
+	code, body = doDelegationJSON(t, h, http.MethodGet, "/api/delegation-grants?include_revoked=true", "", nil)
+	var allResp api.ListDelegationGrantsResponse
+	if code != http.StatusOK || json.Unmarshal(body, &allResp) != nil || len(allResp.Grants) != 4 {
+		t.Fatalf("GET all demo grants = %d %s", code, body)
 	}
 }
