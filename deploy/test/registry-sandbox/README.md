@@ -39,6 +39,39 @@ sandbox project (`deploy/test/registry-sandbox/`).
   - `n2-standard-8` / `c4-standard-8` (8 vCPUs, default 200 GiB)
   - `n2-standard-16` / `c4-standard-16` (16 vCPUs, default 400 GiB)
   - `n2-standard-64` (64 vCPUs, default 1,000 GiB `pd-balanced`)
+- **Separate Hosted-VM Project (`hosted.tf`, `up.sh --hosted-project`)**:
+  Hosted VMs (and their per-instance service accounts) can run in a project
+  other than the registry's. `hosted.tf` then creates `<prefix>-hosted-net` /
+  `<prefix>-hosted-subnet` (default `10.43.0.0/24`, Private Google Access,
+  Cloud NAT) in that project, peers it bidirectionally with `<prefix>-net`, and
+  adds CIDR-based firewall rules (peering cannot match source tags): registry VM
+  IP -> `grain-instance` on `8080/tcp`, IAP -> `grain-instance` on `22/tcp`, and
+  the hosted subnet -> `<prefix>-sql` on `5432/tcp`. Per-instance secrets stay in
+  the registry project (`secrets.project`). The registry VM's service account
+  needs `roles/compute.instanceAdmin.v1`, `roles/iam.serviceAccountAdmin` and
+  `roles/iam.serviceAccountUser` in the hosted project: pass
+  `--manage-hosted-iam` when the deploying identity can set that project's IAM
+  policy, otherwise have a project owner run:
+
+  ```bash
+  VM_SA="$(gcloud compute instances describe <prefix>-vm --zone us-central1-a \
+    --project <registry-project> --format='value(serviceAccounts[0].email)')"
+  for role in roles/compute.instanceAdmin.v1 roles/iam.serviceAccountAdmin roles/iam.serviceAccountUser; do
+    gcloud projects add-iam-policy-binding <hosted-project> \
+      --member="serviceAccount:${VM_SA}" --role="${role}" --condition=None
+  done
+  ```
+
+  The staging deployment runs the registry in `bsalmon-sandbox` and hosted VMs
+  in `bsalmon-fun-sandbox`:
+
+  ```bash
+  ./deploy/test/registry-sandbox/up.sh \
+    --project bsalmon-sandbox --admin bsalmon@google.com \
+    --hosted-project bsalmon-fun-sandbox \
+    --hosted-credentials /path/to/bsalmon-fun-sandbox-key.json \
+    --no-wait-cert
+  ```
 - **Signing Key (`kms.tf`)**: One Cloud KMS asymmetric signing key
   (`EC_SIGN_P256_SHA256`, `ASYMMETRIC_SIGN`) consumed by
   `pkg/registry/providers/gcp` to sign `X-Grain-Registry-Assertion` JWTs

@@ -30,6 +30,8 @@ STATE_BUCKET="${STATE_BUCKET:-}"
 LOCAL_STATE=0
 KEEP_IMAGES=0
 KEEP_STATE_BUCKET=0
+HOSTED_PROJECT_ID="${HOSTED_PROJECT_ID:-}"
+HOSTED_CREDENTIALS="${HOSTED_CREDENTIALS:-}"
 
 usage() {
   cat <<'EOF'
@@ -45,6 +47,8 @@ Options:
   --local-state            Destroy using local Terraform state instead of GCS
   --keep-images            Do not delete grain-registry image tags pushed by up.sh
   --keep-state-bucket      Do not delete the GCS Terraform state bucket after destroy
+  --hosted-project <id>    Hosted GCE VM project passed to up.sh --hosted-project (default: --project)
+  --hosted-credentials <f> Service account key file for --hosted-project (default: ADC)
   -h, --help               Show this help text
 EOF
 }
@@ -62,6 +66,16 @@ while [[ $# -gt 0 ]]; do
     --project)
       require_arg "$#" "$1"
       PROJECT_ID="$2"
+      shift 2
+      ;;
+    --hosted-project)
+      require_arg "$#" "$1"
+      HOSTED_PROJECT_ID="$2"
+      shift 2
+      ;;
+    --hosted-credentials)
+      require_arg "$#" "$1"
+      HOSTED_CREDENTIALS="$2"
       shift 2
       ;;
     --prefix)
@@ -234,9 +248,24 @@ fi
 "${SCRIPT_DIR}/daemon-down.sh" "${daemon_down_args[@]}"
 
 # Delete any hosted GCE VM instances (`grain-vm-*`, labeled `grain-managed=true`)
-# attached to `<prefix>-subnet` so `terraform destroy` can release the VPC cleanly.
+# attached to `<prefix>-subnet` (or `<prefix>-hosted-subnet` in --hosted-project)
+# so `terraform destroy` can release the VPC cleanly.
+HOSTED_VM_PROJECT="${HOSTED_PROJECT_ID:-${PROJECT_ID}}"
+hosted_gcloud_args=()
+if [[ -n "${HOSTED_CREDENTIALS}" ]]; then
+  HOSTED_CREDENTIALS="$(cd "$(dirname "${HOSTED_CREDENTIALS}")" && pwd)/$(basename "${HOSTED_CREDENTIALS}")"
+  hosted_acct="$(jq -r '.client_email // empty' "${HOSTED_CREDENTIALS}")"
+  prev_acct="$(gcloud config get-value account 2>/dev/null || true)"
+  gcloud auth activate-service-account --key-file="${HOSTED_CREDENTIALS}" >/dev/null 2>&1 || true
+  if [[ -n "${prev_acct}" ]]; then
+    gcloud config set account "${prev_acct}" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${hosted_acct}" ]]; then
+    hosted_gcloud_args+=(--account="${hosted_acct}")
+  fi
+fi
 mapfile -t hosted_vms < <(gcloud compute instances list \
-  --project="${PROJECT_ID}" \
+  --project="${HOSTED_VM_PROJECT}" "${hosted_gcloud_args[@]}" \
   --filter="name~'^grain-vm-' AND labels.grain-managed=true" \
   --format="csv[no-heading](name,zone)" 2>/dev/null || true)
 for row in "${hosted_vms[@]}"; do
@@ -245,7 +274,7 @@ for row in "${hosted_vms[@]}"; do
   hzone="${row##*,}"
   hzone="${hzone##*/}"
   log "Deleting hosted GCE VM ${hname} (${hzone})..."
-  gcloud compute instances delete "${hname}" --project="${PROJECT_ID}" --zone="${hzone}" --quiet || true
+  gcloud compute instances delete "${hname}" --project="${HOSTED_VM_PROJECT}" "${hosted_gcloud_args[@]}" --zone="${hzone}" --quiet || true
 done
 
 if [[ "${have_state}" -eq 1 ]]; then
@@ -254,11 +283,15 @@ if [[ "${have_state}" -eq 1 ]]; then
     --arg region "${REGION}" \
     --arg zone "${ZONE}" \
     --arg name_prefix "${NAME_PREFIX}" \
+    --arg hosted_project_id "${HOSTED_PROJECT_ID}" \
+    --arg hosted_credentials_file "${HOSTED_CREDENTIALS}" \
     '{
       project_id: $project_id,
       region: $region,
       zone: $zone,
       name_prefix: $name_prefix,
+      hosted_project_id: $hosted_project_id,
+      hosted_credentials_file: $hosted_credentials_file,
       registry_image: "unused-during-destroy",
       admin_email: "destroy@example.com"
     }' > "${tmp_tfvars}"

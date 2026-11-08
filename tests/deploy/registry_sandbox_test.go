@@ -536,3 +536,67 @@ esac
 		t.Fatalf("unexpected --show output: %s", showOut)
 	}
 }
+
+// TestRegistrySandboxHostedProjectWiring checks the cross-project hosted VM
+// mode: hosted VMs in a separate project get a peered VPC with CIDR-based
+// firewall rules, and the registry config points compute at that project while
+// keeping per-instance secrets in the registry project.
+func TestRegistrySandboxHostedProjectWiring(t *testing.T) {
+	sandboxDir := filepath.Join("..", "..", "deploy", "test", "registry-sandbox")
+	read := func(name string) string {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(sandboxDir, name))
+		if err != nil {
+			t.Fatalf("reading %s: %v", name, err)
+		}
+		return string(data)
+	}
+
+	hosted := read("hosted.tf")
+	for _, want := range []string{
+		`resource "google_compute_network_peering" "registry_to_hosted"`,
+		`resource "google_compute_network_peering" "hosted_to_registry"`,
+		`resource "google_compute_router_nat" "hosted"`,
+		`source_ranges = ["${google_compute_instance.registry.network_interface[0].network_ip}/32"]`,
+		`source_ranges = [google_compute_subnetwork.hosted[0].ip_cidr_range]`,
+		`"roles/compute.instanceAdmin.v1"`,
+		`"roles/iam.serviceAccountAdmin"`,
+		`"roles/iam.serviceAccountUser"`,
+	} {
+		if !strings.Contains(hosted, want) {
+			t.Errorf("hosted.tf missing %q", want)
+		}
+	}
+	if strings.Contains(hosted, "source_tags") {
+		t.Errorf("hosted.tf must not use source_tags: tags do not match across VPC peering")
+	}
+
+	instance := read("instance.tf")
+	for _, want := range []string{
+		"compute_project_id  = local.hosted_project_id",
+		"secrets_project_id  = trimspace(var.project_id)",
+		"network_name        = local.hosted_network_name",
+		"subnet_name         = local.hosted_subnet_name",
+	} {
+		if !strings.Contains(instance, want) {
+			t.Errorf("instance.tf registry_vm_config missing %q", want)
+		}
+	}
+
+	startup := read(filepath.Join("files", "startup.sh"))
+	for _, want := range []string{
+		"project: ${compute_project_id_json}",
+		"secrets:\n  project: ${secrets_project_id_json}",
+	} {
+		if !strings.Contains(startup, want) {
+			t.Errorf("files/startup.sh missing %q", want)
+		}
+	}
+
+	up := read("up.sh")
+	for _, want := range []string{"--hosted-project)", "--hosted-credentials)", "hosted_project_id: $hosted_project_id"} {
+		if !strings.Contains(up, want) {
+			t.Errorf("up.sh missing %q", want)
+		}
+	}
+}

@@ -209,3 +209,37 @@ variable "existing_kms_key_id" {
     error_message = "existing_kms_key_id must be empty or match projects/<id>/locations/<loc>/keyRings/<ring>/cryptoKeys/<key>."
   }
 }
+
+variable "hosted_project_id" {
+  description = "GCP project where hosted GCE VM instances (kind = instance, grain-vm-*) and their per-instance service accounts are created. Empty (default) means the registry project. A different project gets its own peered VPC (hosted.tf)."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = trimspace(var.hosted_project_id) == "" || can(regex("^[a-z][a-z0-9-]{4,28}[a-z0-9]$", trimspace(var.hosted_project_id)))
+    error_message = "hosted_project_id must be empty or a valid GCP project ID."
+  }
+}
+
+variable "hosted_credentials_file" {
+  description = "Optional service account key file used for resources in hosted_project_id when the default credentials cannot manage that project. Empty uses Application Default Credentials."
+  type        = string
+  default     = ""
+}
+
+variable "hosted_subnet_cidr" {
+  description = "Primary IPv4 range of the hosted VM subnet in hosted_project_id (cross-project mode only). Must not overlap the registry subnet (10.42.0.0/24) because the two VPCs are peered."
+  type        = string
+  default     = "10.43.0.0/24"
+
+  validation {
+    condition     = can(cidrhost(var.hosted_subnet_cidr, 0)) && var.hosted_subnet_cidr != "10.42.0.0/24"
+    error_message = "hosted_subnet_cidr must be a valid CIDR distinct from the registry subnet 10.42.0.0/24."
+  }
+}
+
+variable "manage_hosted_project_iam" {
+  description = "Bind roles/compute.instanceAdmin.v1, roles/iam.serviceAccountAdmin and roles/iam.serviceAccountUser in hosted_project_id to the registry VM service account (requires resourcemanager.projects.setIamPolicy there). Set false when an administrator grants them out of band (see README)."
+  type        = bool
+  default     = false
+}

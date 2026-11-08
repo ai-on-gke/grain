@@ -139,7 +139,10 @@ host_json="$(jq -r '.registry_host | @json' <<<"${cfg_json}")"
 instance_domain_json="$(jq -r '.instance_domain | @json' <<<"${cfg_json}")"
 iap_audience_json="$(jq -r '.iap_audience | @json' <<<"${cfg_json}")"
 kms_key_name_json="$(jq -r '.kms_key_name | @json' <<<"${cfg_json}")"
-project_id_json="$(jq -r '.project_id | @json' <<<"${cfg_json}")"
+# Hosted GCE VMs (and their per-instance service accounts) may live in a
+# separate project (hosted.tf); per-instance secrets stay in the registry project.
+compute_project_id_json="$(jq -r '(.compute_project_id // .project_id) | @json' <<<"${cfg_json}")"
+secrets_project_id_json="$(jq -r '(.secrets_project_id // .project_id) | @json' <<<"${cfg_json}")"
 region_json="$(jq -r '(.region // "us-central1") | @json' <<<"${cfg_json}")"
 network_name_json="$(jq -r '.network_name | @json' <<<"${cfg_json}")"
 subnet_name_json="$(jq -r '.subnet_name | @json' <<<"${cfg_json}")"
@@ -189,7 +192,7 @@ database:
   url: "postgres://grain:${pgpass}@127.0.0.1:5432/grain_registry?sslmode=disable"
 compute:
   provider: "gce"
-  project: ${project_id_json}
+  project: ${compute_project_id_json}
   region: ${region_json}
   zones:
 ${zones_yaml}
@@ -262,6 +265,8 @@ instance_sql:
       connection_name: ${sql_connection_name_json}
       private_ip: ${sql_private_ip_json}
       max_databases: 100
+secrets:
+  project: ${secrets_project_id_json}
 quotas:
   default_instance_units: 64
 config_repos:

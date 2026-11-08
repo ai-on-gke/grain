@@ -26,15 +26,17 @@ locals {
     registry_image      = trimspace(var.registry_image)
     hosted_daemon_image = trimspace(var.hosted_daemon_image)
     project_id          = trimspace(var.project_id)
+    compute_project_id  = local.hosted_project_id
+    secrets_project_id  = trimspace(var.project_id)
     region              = trimspace(var.region)
     compute_zones       = [for z in var.compute_zones : trimspace(z)]
-    network_name        = google_compute_network.this.name
-    subnet_name         = google_compute_subnetwork.this.name
+    network_name        = local.hosted_network_name
+    subnet_name         = local.hosted_subnet_name
     sql_instance_name   = "${var.name_prefix}-sql"
     sql_connection_name = "${var.project_id}:${var.region}:${var.name_prefix}-sql"
     sql_private_ip      = google_compute_address.instance_sql.address
     sql_admin_password  = local.sql_admin_password
-    bind_project_iam    = var.create_vm_service_account
+    bind_project_iam    = var.create_vm_service_account && !local.hosted_cross
     registry_host       = local.registry_host
     instance_domain     = local.instance_domain
     iap_audience        = local.iap_audience
@@ -97,6 +99,10 @@ resource "google_compute_instance" "registry" {
     google_project_iam_member.vm_hosted_provisioning,
     google_kms_crypto_key_iam_member.vm_signer,
     google_kms_crypto_key_iam_member.vm_viewer,
+    google_compute_router_nat.hosted,
+    google_compute_network_peering.hosted_to_registry,
+    google_compute_firewall.sql_from_hosted,
+    google_project_iam_member.hosted_registry,
   ]
 }
 

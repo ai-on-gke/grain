@@ -86,3 +86,13 @@ output "sql_private_ip" {
   description = "Reserved private VPC IPv4 address of the shared PostgreSQL pool for hosted Grain instances."
   value       = google_compute_address.instance_sql.address
 }
+
+output "hosted_project_id" {
+  description = "Project where hosted GCE VM instances (kind = instance) are created."
+  value       = local.hosted_project_id
+}
+
+output "hosted_network" {
+  description = "VPC network and subnetwork used by hosted GCE VM instances."
+  value       = "${local.hosted_network_name}/${local.hosted_subnet_name} (${local.hosted_subnet_cidr})"
+}

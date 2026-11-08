@@ -34,6 +34,10 @@ AR_REPO="${AR_REPO:-grain}"
 IMAGE_TAG="${IMAGE_TAG:-}"
 REGISTRY_IMAGE="${REGISTRY_IMAGE:-}"
 HOSTED_DAEMON_IMAGE="${HOSTED_DAEMON_IMAGE:-docker.io/grainai/grain:main}"
+HOSTED_PROJECT_ID="${HOSTED_PROJECT_ID:-}"
+HOSTED_CREDENTIALS="${HOSTED_CREDENTIALS:-}"
+HOSTED_SUBNET_CIDR="${HOSTED_SUBNET_CIDR:-10.43.0.0/24}"
+MANAGE_HOSTED_IAM=0
 SKIP_IMAGE_BUILD=0
 TLS_MODE="${TLS_MODE:-hybrid}"
 WAIT_CERT=1
@@ -69,6 +73,12 @@ Options:
   --image-tag <tag>          Image tag when building Dockerfile.registry (default: sandbox-<git-sha>)
   --image <ref>              Full pre-built image reference (skips image build unless omitted)
   --hosted-daemon-image <ref> Container image run inside hosted GCE VMs (default: docker.io/grainai/grain:main)
+  --hosted-project <id>      Project for hosted GCE VMs (kind = instance); default: --project.
+                             A different project gets a peered VPC (hosted.tf)
+  --hosted-credentials <f>   Service account key file for --hosted-project (default: ADC)
+  --hosted-subnet-cidr <c>   Hosted VM subnet range in --hosted-project (default: 10.43.0.0/24)
+  --manage-hosted-iam        Bind the registry VM SA's roles in --hosted-project via Terraform
+                             (needs resourcemanager.projects.setIamPolicy there)
   --skip-image-build         Skip building/pushing Dockerfile.registry (requires --image)
   --tls-mode <mode>          hybrid (default), managed, or self-signed
   --no-wait-cert             Do not wait for Google-managed SSL certificate ACTIVE status
@@ -113,6 +123,25 @@ while [[ $# -gt 0 ]]; do
       ;;
     --share-entries)
       SHARE_ENTRIES=1
+      shift
+      ;;
+    --hosted-project)
+      require_arg "$#" "$1"
+      HOSTED_PROJECT_ID="$2"
+      shift 2
+      ;;
+    --hosted-credentials)
+      require_arg "$#" "$1"
+      HOSTED_CREDENTIALS="$2"
+      shift 2
+      ;;
+    --hosted-subnet-cidr)
+      require_arg "$#" "$1"
+      HOSTED_SUBNET_CIDR="$2"
+      shift 2
+      ;;
+    --manage-hosted-iam)
+      MANAGE_HOSTED_IAM=1
       shift
       ;;
     --prefix)
@@ -212,6 +241,19 @@ fi
 if ! [[ "${PROJECT_ID}" =~ ^[a-z][a-z0-9.:-]*[a-z0-9]$ ]]; then
   echo "up.sh: invalid --project '${PROJECT_ID}'" >&2
   exit 2
+fi
+
+if [[ -n "${HOSTED_PROJECT_ID}" ]] && ! [[ "${HOSTED_PROJECT_ID}" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]]; then
+  echo "up.sh: invalid --hosted-project '${HOSTED_PROJECT_ID}'" >&2
+  exit 2
+fi
+
+if [[ -n "${HOSTED_CREDENTIALS}" ]]; then
+  if [[ ! -r "${HOSTED_CREDENTIALS}" ]]; then
+    echo "up.sh: --hosted-credentials '${HOSTED_CREDENTIALS}' is not readable" >&2
+    exit 2
+  fi
+  HOSTED_CREDENTIALS="$(cd "$(dirname "${HOSTED_CREDENTIALS}")" && pwd)/$(basename "${HOSTED_CREDENTIALS}")"
 fi
 
 if ! [[ "${NAME_PREFIX}" =~ ^[a-z][a-z0-9-]{1,10}[a-z0-9]$ ]]; then
@@ -585,6 +627,10 @@ jq -n \
   --arg name_prefix "${NAME_PREFIX}" \
   --arg registry_image "${REGISTRY_IMAGE}" \
   --arg hosted_daemon_image "${HOSTED_DAEMON_IMAGE}" \
+  --arg hosted_project_id "${HOSTED_PROJECT_ID}" \
+  --arg hosted_credentials_file "${HOSTED_CREDENTIALS}" \
+  --arg hosted_subnet_cidr "${HOSTED_SUBNET_CIDR}" \
+  --argjson manage_hosted_project_iam "$([[ "${MANAGE_HOSTED_IAM}" -eq 1 ]] && echo true || echo false)" \
   --arg admin_email "${ADMIN_EMAIL}" \
   --arg tls_mode "${TLS_MODE}" \
   --arg verifier_sa_email "${verifier_sa_email}" \
@@ -599,6 +645,10 @@ jq -n \
     name_prefix: $name_prefix,
     registry_image: $registry_image,
     hosted_daemon_image: $hosted_daemon_image,
+    hosted_project_id: $hosted_project_id,
+    hosted_credentials_file: $hosted_credentials_file,
+    hosted_subnet_cidr: $hosted_subnet_cidr,
+    manage_hosted_project_iam: $manage_hosted_project_iam,
     admin_email: $admin_email,
     tls_mode: $tls_mode,
     create_vm_service_account: $create_vm_sa,
