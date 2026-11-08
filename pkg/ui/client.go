@@ -2948,6 +2948,11 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	var escalated []string
 	if proposedBy != nil {
 		child := model.Task{Target: target, Base: req.Base, Grants: grants, Writes: writes, Admission: askedAdmission, TemplateID: filedFrom}
+		// Judged with its bases spelled as the proposer's own write
+		// targets spell them wherever the two name the same default
+		// branch (model.AlignDefaultBases); the task is filed with the
+		// base the request gave it.
+		child = model.AlignDefaultBases(child, *proposedBy, c.proposalDefaultBranches())
 		autoMerge = autoMerge && proposedBy.AutoMerge && model.AutoSubmits(child, *proposedBy)
 		child.Reads = reads
 		// Read before the proposal's escalations are measured: a
