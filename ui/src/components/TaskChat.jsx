@@ -432,7 +432,11 @@ export default function TaskChat({
       0,
     );
     const optimisticKey = `optimistic-${++pendingSeq.current}`;
-    if (!onSend && body.trim()) {
+    // onSend's message gets the same "Sending…" bubble: on a session
+    // not yet started (NewSessionPage.jsx) it is the first message,
+    // which would otherwise vanish from the box for as long as starting
+    // the session takes, with nothing in the transcript to say it went.
+    if (body.trim()) {
       setPendingComments((cur) => [
         ...cur,
         {
@@ -516,12 +520,7 @@ export default function TaskChat({
         // act() reports a failure and swallows it, so whether the message
         // landed is only known from here.
         if (!posted) {
-          if (onSend) {
-            setDraft((cur) => (cur.text.trim() ? cur : sent));
-            setAttachments((cur) => (cur.length ? cur : files));
-          } else {
-            unsent();
-          }
+          unsent();
         } else {
           setPendingComments((cur) =>
             cur.map((p) =>
@@ -531,12 +530,7 @@ export default function TaskChat({
         }
         onDraftConsumed?.(draftRequest);
       } catch (err) {
-        if (onSend) {
-          setDraft((cur) => (cur.text.trim() ? cur : sent));
-          setAttachments((cur) => (cur.length ? cur : files));
-        } else {
-          unsent();
-        }
+        unsent();
         throw err;
       }
     });
