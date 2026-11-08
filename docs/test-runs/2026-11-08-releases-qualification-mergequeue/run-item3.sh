@@ -38,7 +38,7 @@ start() {
   GRAIN_TOKEN="$(cat "$ROOT/code")"
   export GRAIN_SERVER GRAIN_TOKEN
 }
-polls() { curl -fsS "$SIM/_calls" | jq '[.[] | select(.Path | test("matching-refs/tags"))] | length'; }
+polls() { curl -fsS "$SIM/_calls" | jq '[(. // [])[] | select(.Path | test("matching-refs/tags"))] | length'; }
 wait_poll() { # wait_poll N: until the watcher has polled the tags N times in all
   for _ in $(seq 1 120); do [ "$(polls)" -ge "$1" ] && return 0; sleep 0.5; done
   return 1
@@ -52,9 +52,9 @@ rm -rf "$ROOT"
 mkdir -p "$ROOT"
 echo "=== boot ($driver) ==="
 start
+n0="$(polls)"
 "$G" repo add acme/widgets >/dev/null
 "$G" repo list
-n0="$(polls)"
 wait_poll $((n0 + 1)) && ok "watcher polled acme/widgets (ci_mode unset, no .grain/workflows) once repo was added" || bad "no poll"
 "$G" repo work-ownership acme/widgets | head -1
 
@@ -72,7 +72,10 @@ r2=$?
 echo "approve #1 rc=$r1: $(head -c 300 "$ROOT/approve-1.txt")"
 echo "approve #2 rc=$r2: $(head -c 300 "$ROOT/approve-2.txt")"
 [ $((r1 == 0 ? 1 : 0)) -ne $((r2 == 0 ? 1 : 0)) ] && ok "exactly one of two concurrent approves succeeded" || bad "concurrent approves: rc $r1 / $r2"
-[ "$(polls)" = "$n1" ] && ok "the watcher had not polled since the tag appeared (approve came first)" || echo "note: watcher polled in between"
+# The approve reads the -pending tag through the same matching-refs endpoint
+# the watcher polls, so the count moves by the approve's own read; the
+# watcher's own next poll is releasePendingPollInterval (10m) after boot.
+echo "note: $(($(polls) - n1)) matching-refs read(s) since the tag appeared (the approve's own tag reads; the watcher next polls 10m after boot)"
 sleep 1
 [ "$(dispatches v1.4.0)" = 1 ] && ok "promote-release.yml dispatched once for v1.4.0" || bad "dispatches for v1.4.0: $(dispatches v1.4.0)"
 "$G" release approve -repo acme/widgets v1.4.0 >"$ROOT/approve-3.txt" 2>&1 && bad "a later approve succeeded: $(cat "$ROOT/approve-3.txt")" || ok "a third approve is refused: $(head -c 200 "$ROOT/approve-3.txt")"

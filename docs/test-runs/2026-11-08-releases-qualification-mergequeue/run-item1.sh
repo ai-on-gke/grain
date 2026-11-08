@@ -209,7 +209,8 @@ grep -c 'sha256\|tar.gz\|images.json' "$ROOT/log-daemon-upgrade.txt" || true
 cat "$ROOT/daemon/image.env"
 id2="$(jq -r .images.grain.imageId "$ROOT/assets-${c2:0:12}/images.json")"
 jq -e '.phase == "ok"' "$ROOT/upgrade-status.json" >/dev/null && ok "upgrade to main: every step done (pull, health check, unit flags, schema, record, restart)" || bad "upgrade phase: $(jq -r .phase "$ROOT/upgrade-status.json")"
-grep -q "$id2" "$ROOT/daemon/image.env" && ok "image.env now pins c2's grain image $id2 ($(cat "$ROOT/daemon/image.env"))" || bad "image.env: $(cat "$ROOT/daemon/image.env"), want $id2"
+loaded="$(docker image inspect --format '{{.Id}}' "$(sed -n 's/^GRAIN_IMAGE=//p' "$ROOT/daemon/image.env")")"
+[ "$loaded" = "$id2" ] && ok "image.env ($(cat "$ROOT/daemon/image.env")) now names c2's grain image $id2" || bad "image.env names $loaded, want $id2"
 grep -q 'release channel-main' "$ROOT/upgrade-status.json" && ok "the image was loaded from release channel-main's images.json + sha- holder" || bad "source"
 
 after_cfg="$(sha256sum "$checkout/.git/config" | cut -d' ' -f1)"
