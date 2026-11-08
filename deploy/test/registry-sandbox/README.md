@@ -62,14 +62,14 @@ sandbox project (`deploy/test/registry-sandbox/`).
   done
   ```
 
-  The staging deployment runs the registry in `bsalmon-sandbox` and hosted VMs
-  in `bsalmon-fun-sandbox`:
+  For example, to run the registry in `example-hub-project` and hosted VMs in
+  `example-hosted-project`:
 
   ```bash
   ./deploy/test/registry-sandbox/up.sh \
-    --project bsalmon-sandbox --admin bsalmon@google.com \
-    --hosted-project bsalmon-fun-sandbox \
-    --hosted-credentials /path/to/bsalmon-fun-sandbox-key.json \
+    --project example-hub-project --admin owner@example.com \
+    --hosted-project example-hosted-project \
+    --hosted-credentials /path/to/example-hosted-project-key.json \
     --no-wait-cert
   ```
 - **Signing Key (`kms.tf`)**: One Cloud KMS asymmetric signing key
