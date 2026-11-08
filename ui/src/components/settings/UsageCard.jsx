@@ -29,7 +29,7 @@ import {
 } from "@mui/material";
 import { useCallback, useContext, useEffect, useState } from "react";
 import api from "../../api.js";
-import { formatDateTime } from "../../time.js";
+import { formatMoment } from "../../time.js";
 import { useTimeZone } from "../../TimeZoneContext.jsx";
 import { SettingsReadOnlyContext } from "./SettingsCard.jsx";
 
@@ -133,7 +133,8 @@ export default function UsageCard({ showError }) {
       </Typography>
       <Box data-testid="usage-rollup">
         <Typography variant="body2">
-          <strong>{rollup.runs || 0}</strong> runs recorded,{" "}
+          <strong>{rollup.runs || 0}</strong>{" "}
+          {rollup.runs === 1 ? "run" : "runs"} recorded,{" "}
           <strong>{formatTokens(rollup.billable)}</strong> billable tokens (
           {formatTokens(rollup.inputTokens)} in,{" "}
           {formatTokens(rollup.outputTokens)} out,{" "}
@@ -147,13 +148,17 @@ export default function UsageCard({ showError }) {
           {report.maxWorkers}
           {report.sustainableWorkers != null
             ? `; the remaining budget sustains ≈ ${report.sustainableWorkers}`
-            : "; nothing bounds the estimate (a connection in use has no known budget)"}
+            : "; nothing bounds the estimate (a connection in use has no known budget, or no runs to estimate from)"}
           .
         </Typography>
       </Box>
       {scopes.length > 0 ? (
         <TableContainer sx={{ overflowX: "auto" }}>
-          <Table size="small" data-testid="usage-table">
+          <Table
+            size="small"
+            data-testid="usage-table"
+            sx={{ "& th, & td": { whiteSpace: "nowrap" } }}
+          >
             <TableHead>
               <TableRow>
                 <TableCell>Connection</TableCell>
@@ -195,7 +200,7 @@ export default function UsageCard({ showError }) {
                         : "—"}
                   </TableCell>
                   <TableCell>
-                    {s.resetAt ? formatDateTime(s.resetAt, zone) : "—"}
+                    {s.resetAt ? formatMoment(s.resetAt, zone) : "—"}
                   </TableCell>
                   <TableCell align="right">
                     {formatTokens(s.burnPerHour)}

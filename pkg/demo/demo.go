@@ -1666,6 +1666,9 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	if err := seedDemoAudit(ctx, store, ago); err != nil {
 		return err
 	}
+	if err := seedDemoTokenUsage(ctx, store, now); err != nil {
+		return err
+	}
 	if err := seedDemoMemory(ctx, store, cfg, ago); err != nil {
 		return err
 	}
