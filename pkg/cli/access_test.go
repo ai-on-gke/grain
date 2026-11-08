@@ -167,3 +167,30 @@ func TestAccessAllowDelegateCLI(t *testing.T) {
 		t.Fatalf("expected 1 delegate entry at grain/delegated with label slack-bot, got %+v", parsed.Entries)
 	}
 }
+
+func TestAccessAllowHelpDocumentsLabelRule(t *testing.T) {
+	helpOut, err := runAccessCLI(t, "http://127.0.0.1:1", "", "access", "--help")
+	if err != nil {
+		t.Fatalf("grain access --help: %v", err)
+	}
+	if !strings.Contains(helpOut, "[a-z][a-z0-9-]{0,31}") {
+		t.Errorf("grain access --help missing label format rule:\n%s", helpOut)
+	}
+
+	origStderr := os.Stderr
+	r, w, pipeErr := os.Pipe()
+	if pipeErr != nil {
+		t.Fatal(pipeErr)
+	}
+	os.Stderr = w
+	defer func() { os.Stderr = origStderr }()
+
+	_, _ = runAccessCLI(t, "http://127.0.0.1:1", "", "access", "allow", "--help")
+	_ = w.Close()
+	var errBuf bytes.Buffer
+	_, _ = io.Copy(&errBuf, r)
+	_ = r.Close()
+	if !strings.Contains(errBuf.String(), "[a-z][a-z0-9-]{0,31}") {
+		t.Errorf("grain access allow --help missing label format rule:\n%s", errBuf.String())
+	}
+}
