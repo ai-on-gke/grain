@@ -233,6 +233,9 @@ type Composition struct {
 	// default branch.
 	Base string
 
+	// Reads is the read-only repos, already minus any naming this task's own
+	// target -- ReadsBesides, applied here for the same reason WritesBesides
+	// is applied to Writes.
 	Reads []RepoRef
 	// Writes is the extra write targets, already minus any naming this
 	// task's own target -- WritesBesides, applied here so that what a
@@ -436,7 +439,7 @@ func composeTemplate(tmpl Template, values map[string]string, target RepoRef, ba
 		ChangeTarget:         changeTarget,
 		Reviewers:            slices.Clone(tmpl.Reviewers),
 		Base:                 branch,
-		Reads:                tmpl.Reads,
+		Reads:                ReadsBesides(tmpl.Reads, repo),
 		Writes:               WritesBesides(tmpl.Writes, repo, branch),
 		Grants:               grants,
 		GrantSources:         repeatLayer(LayerTemplate, len(grants)),
@@ -554,7 +557,7 @@ func ComposeScheduleTask(sched Schedule, tmpl *Template) Composition {
 		Body:                 sched.Body,
 		Target:               targetPointer(sched.Target),
 		Base:                 sched.Base,
-		Reads:                sched.Reads,
+		Reads:                ReadsBesides(sched.Reads, sched.Target),
 		Writes:               WritesBesides(sched.Writes, sched.Target, sched.Base),
 		Grants:               sched.Grants,
 		GrantSources:         repeatLayer(LayerSchedule, len(sched.Grants)),
