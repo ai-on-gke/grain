@@ -298,6 +298,18 @@ func (a apiClient) do(method, path string, body any) (int, []byte) {
 	return resp.StatusCode, data
 }
 
+// grainCLI runs the freshly built grain binary against a live server.
+func grainCLI(server, token string, args ...string) (string, error) {
+	bin := os.Getenv("GRAIN_BIN")
+	if bin == "" {
+		bin = "/home/debian/bin/grain"
+	}
+	cmd := exec.Command(bin, args...)
+	cmd.Env = append(os.Environ(), "GRAIN_SERVER="+server, "GRAIN_TOKEN="+token, "NO_COLOR=1")
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
 func clip(b []byte) string {
 	s := strings.TrimSpace(string(b))
 	if len(s) > 600 {
@@ -546,6 +558,12 @@ func runItem1(ctx context.Context) *checks {
 		code == 200 && strings.Contains(string(cj), sha1) && strings.Contains(string(cj), "PLC-042 billing spec"),
 		"HTTP %d context=%s", code, clip(cj))
 
+	showOut, showErr := grainCLI(srv.URL, operatorToken, "show", task.ID)
+	c.Data["grainShow"] = showOut
+	c.check("1p' grain show renders the pinned context refs and manifest",
+		showErr == nil && strings.Contains(showOut, "acme/specs:plc/042@"+sha1) && strings.Contains(showOut, "PLC-042 billing spec"),
+		"err=%v out=%s", showErr, clip([]byte(showOut)))
+
 	// 1q. A pin whose commit vanished upstream (history rewritten) must refuse.
 	vanished := strings.Repeat("ab", 20)
 	code, body = api.do("POST", "/api/tasks", map[string]any{
@@ -587,6 +605,320 @@ func runItem4(ctx context.Context) *checks { return item4(ctx) }
 var _ = daemon.PullRequestOpener{}
 var _ github.Client
 
-func item2(ctx context.Context) *checks { return newChecks("item2") }
-func item3(ctx context.Context) *checks { return newChecks("item3") }
 func item4(ctx context.Context) *checks { return newChecks("item4") }
+
+// liveServer is a real ui.Server over a fresh SQLite store with the
+// operator's access code, for items 2-4.
+type liveServer struct {
+	store  *model.Store
+	db     *sql.DB
+	client *ui.Client
+	srv    *httptest.Server
+	api    apiClient
+	tmp    string
+}
+
+func newLiveServer(ctx context.Context, name string, mutate func(*ui.Config)) *liveServer {
+	tmp, _ := os.MkdirTemp("", "walk-"+name+"-*")
+	store, db := openStore(ctx, filepath.Join(tmp, "data"))
+	cfg := ui.Config{
+		Actor:         model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"},
+		Capabilities:  ui.OfferedCapabilities(),
+		LocalAPIToken: operatorToken,
+	}
+	if mutate != nil {
+		mutate(&cfg)
+	}
+	client := ui.NewClient(cfg, store)
+	srv := httptest.NewServer(ui.NewServerWithClient(client))
+	l := &liveServer{store: store, db: db, client: client, srv: srv, api: apiClient{base: srv.URL, token: operatorToken}, tmp: tmp}
+	if code, body := l.api.do("PUT", "/api/settings", map[string]any{"githubHost": "github.com", "externalAgentApi": true}); code != 200 {
+		panic(fmt.Sprintf("enabling external agent API: HTTP %d %s", code, body))
+	}
+	return l
+}
+
+func (l *liveServer) Close() { l.srv.Close(); l.db.Close(); os.RemoveAll(l.tmp) }
+
+func (l *liveServer) token(c *checks, name, owner string, scopes, repos []string) apiClient {
+	code, body := l.api.do("POST", "/api/external-agents/tokens", map[string]any{
+		"name": name, "scopes": scopes, "repos": repos, "owner": owner,
+	})
+	var issued struct {
+		Token string `json:"token"`
+	}
+	_ = json.Unmarshal(body, &issued)
+	if issued.Token == "" {
+		c.check("mint token "+name, false, "HTTP %d %s", code, clip(body))
+	}
+	return apiClient{base: l.srv.URL, token: issued.Token}
+}
+
+func (l *liveServer) create(c *checks, as apiClient, label string, req map[string]any) ui.Task {
+	code, body := as.do("POST", "/api/tasks", req)
+	var t ui.Task
+	_ = json.Unmarshal(body, &t)
+	if t.ID == "" {
+		c.check("file "+label, false, "HTTP %d %s", code, clip(body))
+	}
+	return t
+}
+
+func listIDs(body []byte) []string {
+	var tasks []map[string]any
+	if json.Unmarshal(body, &tasks) != nil {
+		var wrapped struct {
+			Tasks []map[string]any `json:"tasks"`
+		}
+		_ = json.Unmarshal(body, &wrapped)
+		tasks = wrapped.Tasks
+	}
+	var ids []string
+	for _, t := range tasks {
+		if id, ok := t["id"].(string); ok {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	return ids
+}
+
+// ---------------------------------------------------------------------------
+// Item 2: externalRef transitive inheritance & cross-repo isolation
+
+func item2(ctx context.Context) *checks {
+	c := newChecks("item2-external-ref")
+	l := newLiveServer(ctx, "item2", nil)
+	defer l.Close()
+	core := model.RepoRef{Owner: "acme", Name: "core"}
+	billing := model.RepoRef{Owner: "acme", Name: "billing"}
+	for _, r := range []model.RepoRef{core, billing} {
+		_ = l.store.PutRepoConfig(ctx, model.RepoConfig{Repo: r})
+	}
+	root := l.create(c, l.api, "root", map[string]any{
+		"title": "Root PROJ-42 work", "description": "root", "repo": "acme/core", "externalRef": "PROJ-42", "approved": true,
+	})
+	// Child proposal in repo B filed from the root (origin task:<root>).
+	child := l.create(c, l.api, "child", map[string]any{
+		"title": "Billing follow-up", "description": "child", "repo": "acme/billing", "origin": "task:" + root.ID,
+	})
+	// Superseding task in repo B and a second-hop proposal off it: the
+	// shapes orchestrator files (LinkSupersedes / LinkProposedBy).
+	now := time.Now().UTC()
+	super := model.Task{ID: "900", Intent: model.IntentImplement, Title: "Billing follow-up v2", Target: &billing,
+		Links: []model.Link{{Kind: model.LinkSupersedes, Target: child.ID}}, CreatedAt: &now}
+	hop := model.Task{ID: "901", Intent: model.IntentImplement, Title: "Billing two-hop proposal", Target: &billing,
+		Links: []model.Link{{Kind: model.LinkProposedBy, Target: "900"}}, CreatedAt: &now}
+	for _, t := range []model.Task{super, hop} {
+		if err := l.store.PutTask(ctx, t); err != nil {
+			panic(err)
+		}
+	}
+	got := map[string]string{}
+	for _, id := range []string{root.ID, child.ID, "900", "901"} {
+		got[id] = taskByID(ctx, l.store, id).ExternalRef
+	}
+	c.Data["externalRefs"] = got
+	c.check("2a child proposal (repo B) inherits PROJ-42 from root (repo A)", got[child.ID] == "PROJ-42", "%v", got)
+	c.check("2b superseding task inherits PROJ-42", got["900"] == "PROJ-42", "%v", got)
+	c.check("2c two-hop proposal inherits PROJ-42", got["901"] == "PROJ-42", "%v", got)
+
+	// Operator view.
+	code, body := l.api.do("GET", "/api/refs/PROJ-42/summary", nil)
+	var opSum map[string]any
+	_ = json.Unmarshal(body, &opSum)
+	c.Data["operatorSummary"] = opSum
+	c.check("2d operator summary counts all 4 tasks", code == 200 && fmt.Sprint(opSum["total"]) == "4",
+		"HTTP %d %s", code, clip(body))
+	code, body = l.api.do("GET", "/api/tasks?externalRef=PROJ-42", nil)
+	opIDs := listIDs(body)
+	c.check("2e operator grain list -externalRef sees all 4", code == 200 && len(opIDs) == 4, "HTTP %d ids=%v", code, opIDs)
+
+	// Token scoped to repo A only.
+	scoped := l.token(c, "core-reader", "", []string{"tasks:read", "tasks:write"}, []string{"acme/core"})
+	code, body = scoped.do("GET", "/api/refs/PROJ-42/summary", nil)
+	var scSum map[string]any
+	_ = json.Unmarshal(body, &scSum)
+	c.Data["scopedSummary"] = scSum
+	c.check("2f scoped summary counts only repo A's task", code == 200 && fmt.Sprint(scSum["total"]) == "1",
+		"HTTP %d %s", code, clip(body))
+	c.check("2g scoped summary never names repo B", !strings.Contains(strings.ToLower(string(body)), "billing"),
+		"%s", clip(body))
+	code, body = scoped.do("GET", "/api/tasks?externalRef=PROJ-42", nil)
+	scIDs := listIDs(body)
+	c.check("2h scoped list -externalRef sees only the root", code == 200 && slices.Equal(scIDs, []string{root.ID}),
+		"HTTP %d ids=%v body=%s", code, scIDs, clip(body))
+	code, body = scoped.do("GET", "/api/refs/PROJ-42/summary?repo=acme/billing", nil)
+	c.check("2i scoped summary narrowed to repo B is refused or empty",
+		code == 403 || (code == 200 && !strings.Contains(string(body), `"total":1`) && strings.Contains(string(body), `"total":0`)),
+		"HTTP %d %s", code, clip(body))
+	code, body = scoped.do("GET", "/api/tasks/"+child.ID, nil)
+	c.check("2j scoped token cannot read repo B's task", code == 403 || code == 404, "HTTP %d %s", code, clip(body))
+	code, body = scoped.do("GET", "/api/tasks?externalRef=PROJ-42&repo=acme/billing", nil)
+	c.check("2k scoped list narrowed to repo B is refused or empty", code == 403 || len(listIDs(body)) == 0,
+		"HTTP %d %s", code, clip(body))
+
+	// Inheritance guard: the scoped token files in repo A with origin=task:<repo B task>.
+	probe := l.create(c, scoped, "probe", map[string]any{
+		"title": "Probe", "description": "probe", "repo": "acme/core", "origin": "task:900",
+	})
+	if probe.ID != "" {
+		ref := taskByID(ctx, l.store, probe.ID).ExternalRef
+		c.check("2l scoped filer cannot inherit externalRef from an unreadable repo B task", ref == "",
+			"probe externalRef=%q", ref)
+	}
+	// A different ref nobody can see: zero, not 404 (no existence oracle).
+	code, body = scoped.do("GET", "/api/refs/UNKNOWN-1/summary", nil)
+	c.Data["unknownRef"] = clip(body)
+	c.check("2m unknown ref answers an empty summary", code == 200 && strings.Contains(string(body), `"total":0`),
+		"HTTP %d %s", code, clip(body))
+	return c
+}
+
+// ---------------------------------------------------------------------------
+// Item 3: task owner & proposer
+
+func item3(ctx context.Context) *checks {
+	c := newChecks("item3-owner-proposer")
+	l := newLiveServer(ctx, "item3", nil)
+	defer l.Close()
+	core := model.RepoRef{Owner: "acme", Name: "core"}
+	_ = l.store.PutRepoConfig(ctx, model.RepoConfig{Repo: core})
+	alice := l.token(c, "alice-cli", "alice@example.com", []string{"tasks:read", "tasks:write"}, []string{"acme/core"})
+	bob := l.token(c, "bob-cli", "bob@example.com", []string{"tasks:read", "tasks:write"}, []string{"acme/core"})
+
+	// Operator default owner.
+	op := l.create(c, l.api, "operator task", map[string]any{"title": "Operator task", "description": "x", "repo": "acme/core"})
+	opT := taskByID(ctx, l.store, op.ID)
+	c.check("3a operator-filed task owner defaults to the operator", opT.Owner == "operator@example.com", "owner=%q", opT.Owner)
+
+	// Alice files with her token.
+	at := l.create(c, alice, "alice task", map[string]any{"title": "Alice task", "description": "x", "repo": "acme/core"})
+	aT := taskByID(ctx, l.store, at.ID)
+	c.Data["aliceTask"] = map[string]any{"id": aT.ID, "owner": aT.Owner, "creator": aT.Creator}
+	c.check("3b token-filed task owner defaults to the token owner (Alice)", aT.Owner == "alice@example.com",
+		"owner=%q creator=%q", aT.Owner, aT.Creator)
+
+	// Alice's agent proposes a follow-up: a real dispatch through the scoped
+	// proxy whose run calls propose_task.
+	gs := startGit(ctx, l.tmp, l.store, []string{"acme/core"})
+	defer gs.Close()
+	initBare(gs.root, "acme", "core", map[string]string{"README.md": "core\n"})
+	_ = l.client.Approve(ctx, aT.ID)
+	sandboxRoot := filepath.Join(l.tmp, "sandboxes")
+	_ = os.MkdirAll(sandboxRoot, 0o755)
+	deps := orchestrator.Deps{
+		Store: l.store, Sandboxes: orchestrator.NewHostSandboxes(sandboxRoot),
+		Framework: orchestrator.StaticFramework(fnProvider(func(ctx context.Context, rc agent.RunConfig) (*agent.Result, error) {
+			return &agent.Result{FinalText: "done", ToolCalls: []agent.ToolCall{
+				{Name: "propose_task", Arguments: map[string]any{"title": "Alice agent follow-up", "body": "follow-up"}, Text: "ok"},
+				{Name: "comment_on_issue", Arguments: map[string]any{"comment": "Done."}, Text: "ok"},
+			}}, nil
+		})),
+		Config:           orchestrator.Config{GitRemoteBase: gs.proxy.URL},
+		MintSandboxToken: gs.tokens.EnsureToken,
+		MaxWorkers:       1,
+	}
+	_ = orchestrator.RunCycle(ctx, deps, time.Now().UTC())
+	propID := ""
+	all, _ := l.store.ListTasks(ctx)
+	for _, t := range all {
+		if t.Title == "Alice agent follow-up" {
+			propID = t.ID
+		}
+	}
+	if propID == "" {
+		c.check("3c dispatch files Alice's agent proposal", false, "no proposal")
+		return c
+	}
+	pT := taskByID(ctx, l.store, propID)
+	code, body := alice.do("GET", "/api/tasks/"+propID, nil)
+	var propView map[string]any
+	_ = json.Unmarshal(body, &propView)
+	proposedLabel := ""
+	if trs, ok := propView["transitions"].([]any); ok {
+		for _, tr := range trs {
+			m, _ := tr.(map[string]any)
+			if m["state"] == "proposed" {
+				proposedLabel = fmt.Sprint(m["actorLabel"])
+			}
+		}
+	}
+	c.Data["proposal"] = map[string]any{"id": propID, "owner": pT.Owner, "proposer": pT.Proposer, "timelineProposedBy": proposedLabel}
+	c.check("3c agent proposal inherits owner=Alice", pT.Owner == "alice@example.com", "owner=%q", pT.Owner)
+	c.check("3c' proposer attribution names the proposing task", pT.Proposer.TaskID == aT.ID && pT.Proposer.RunID != "",
+		"proposer=%+v", pT.Proposer)
+	c.check("3c'' timeline 'Proposed by' names task #"+aT.ID+" on behalf of Alice",
+		code == 200 && strings.Contains(proposedLabel, "task #"+aT.ID) && strings.Contains(proposedLabel, "alice@example.com"),
+		"HTTP %d label=%q", code, proposedLabel)
+	prop := pT
+
+	// owner:me as Alice and Bob before the transfer.
+	_, body = alice.do("GET", "/api/tasks?owner=me", nil)
+	aliceMine := listIDs(body)
+	_, body = bob.do("GET", "/api/tasks?owner=me", nil)
+	bobMine := listIDs(body)
+	c.check("3d owner:me as Alice lists Alice's tasks", slices.Contains(aliceMine, aT.ID) && slices.Contains(aliceMine, prop.ID) && !slices.Contains(aliceMine, op.ID),
+		"alice=%v", aliceMine)
+	c.check("3e owner:me as Bob lists nothing yet", len(bobMine) == 0, "bob=%v", bobMine)
+
+	// Transfer via the UI's PATCH (the Task detail owner editor).
+	code, body = l.api.do("PATCH", "/api/tasks/"+aT.ID, map[string]any{"owner": "bob@example.com"})
+	c.check("3f UI owner transfer Alice -> Bob", code == 200 && taskByID(ctx, l.store, aT.ID).Owner == "bob@example.com",
+		"HTTP %d %s", code, clip(body))
+	_, body = alice.do("GET", "/api/tasks?owner=me", nil)
+	aliceMine = listIDs(body)
+	_, body = bob.do("GET", "/api/tasks?owner=me", nil)
+	bobMine = listIDs(body)
+	c.check("3g owner:me follows the transfer", slices.Contains(bobMine, aT.ID) && !slices.Contains(aliceMine, aT.ID),
+		"alice=%v bob=%v", aliceMine, bobMine)
+	_, body = l.api.do("GET", "/api/tasks?owner=bob@example.com", nil)
+	c.check("3h owner:<email> filter", slices.Equal(listIDs(body), []string{aT.ID}), "ids=%v", listIDs(body))
+
+	// Audit / timeline entry.
+	code, body = l.api.do("GET", "/api/tasks/"+aT.ID+"/timeline", nil)
+	if code == 404 {
+		code, body = l.api.do("GET", "/api/tasks/"+aT.ID, nil)
+	}
+	c.Data["timelineSnippet"] = clip(body)
+	c.check("3i ownership transfer recorded on the task's history",
+		strings.Contains(string(body), "bob@example.com") && strings.Contains(strings.ToLower(string(body)), "owner"),
+		"HTTP %d", code)
+
+	// grain update -owner and grain list -owner me through the real CLI.
+	out, err := grainCLI(l.srv.URL, operatorToken, "update", aT.ID, "-owner", "carol@example.com")
+	c.check("3j grain update -owner transfers Bob -> Carol", err == nil && taskByID(ctx, l.store, aT.ID).Owner == "carol@example.com",
+		"err=%v out=%s", err, clip([]byte(out)))
+	out, err = grainCLI(l.srv.URL, alice.token, "list", "-owner", "me")
+	c.Data["cliAliceOwnerMe"] = out
+	c.check("3k grain list -owner me as Alice lists her proposal only",
+		err == nil && strings.Contains(out, "Alice agent follow-up") && !strings.Contains(out, "Alice task"),
+		"err=%v out=%s", err, clip([]byte(out)))
+	out, err = grainCLI(l.srv.URL, bob.token, "list", "-owner", "me")
+	c.Data["cliBobOwnerMe"] = out
+	c.check("3l grain list -owner me as Bob is empty after the second transfer",
+		err == nil && !strings.Contains(out, "Alice task") && !strings.Contains(out, "Alice agent follow-up"),
+		"err=%v out=%s", err, clip([]byte(out)))
+	out, err = grainCLI(l.srv.URL, operatorToken, "show", aT.ID)
+	c.Data["cliShowOwner"] = out
+	c.check("3m grain show names the owner", err == nil && strings.Contains(out, "carol@example.com"), "err=%v out=%s", err, clip([]byte(out)))
+	var transfers []string
+	_, body = l.api.do("GET", "/api/tasks/"+aT.ID, nil)
+	var detail map[string]any
+	_ = json.Unmarshal(body, &detail)
+	if trs, ok := detail["transitions"].([]any); ok {
+		for _, tr := range trs {
+			m, _ := tr.(map[string]any)
+			if strings.Contains(strings.ToLower(fmt.Sprint(m["state"])), "owner") {
+				transfers = append(transfers, fmt.Sprintf("%v by %v: %v", m["state"], m["actorLabel"], m["reason"]))
+			}
+		}
+	}
+	c.Data["ownerTransitions"] = transfers
+	c.check("3n both transfers audited as owner transitions", len(transfers) >= 2, "%v", transfers)
+
+	// Bob can't be set by an agent; Alice (token, not an agent) can hand it back.
+	code, body = alice.do("PATCH", "/api/tasks/"+aT.ID, map[string]any{"owner": "alice@example.com"})
+	c.Data["aliceTakesBack"] = fmt.Sprintf("HTTP %d %s", code, clip(body))
+	return c
+}

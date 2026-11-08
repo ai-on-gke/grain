@@ -24,12 +24,12 @@
     {
       "name": "1e @main pinned to immutable SHA at filing",
       "pass": true,
-      "detail": "designs=[acme/specs:architecture.md@977a76ed2c82f3e43c3ccd3e94cfbe03866c508a acme/specs:plc/042@977a76ed2c82f3e43c3ccd3e94cfbe03866c508a] want [acme/specs:architecture.md@977a76ed2c82f3e43c3ccd3e94cfbe03866c508a acme/specs:plc/042@977a76ed2c82f3e43c3ccd3e94cfbe03866c508a]"
+      "detail": "designs=[acme/specs:architecture.md@42f7865ad1c561440b0effc5ed13eb703cee0901 acme/specs:plc/042@42f7865ad1c561440b0effc5ed13eb703cee0901] want [acme/specs:architecture.md@42f7865ad1c561440b0effc5ed13eb703cee0901 acme/specs:plc/042@42f7865ad1c561440b0effc5ed13eb703cee0901]"
     },
     {
       "name": "1f sandbox clone detached at pinned SHA1 though main moved to SHA2",
       "pass": true,
-      "detail": "HEAD=977a76ed2c82f3e43c3ccd3e94cfbe03866c508a sha1=977a76ed2c82f3e43c3ccd3e94cfbe03866c508a sha2=91457d4f137f56aa96e2e86c00c13305cbf4b493"
+      "detail": "HEAD=42f7865ad1c561440b0effc5ed13eb703cee0901 sha1=42f7865ad1c561440b0effc5ed13eb703cee0901 sha2=9a961ee224394d07207ffb1376e0a0ed62a90890"
     },
     {
       "name": "1g sandbox sees approved v1 content",
@@ -49,12 +49,12 @@
     {
       "name": "1j tamper: push straight to proxy URL refused by scoped proxy",
       "pass": true,
-      "detail": "out=remote: acme/specs is read-only for this sandbox: it may fetch it but not push to it\nfatal: unable to access 'http://127.0.0.1:33697/acme/specs.git/': The requested URL returned error: 403"
+      "detail": "out=remote: acme/specs is read-only for this sandbox: it may fetch it but not push to it\nfatal: unable to access 'http://127.0.0.1:43365/acme/specs.git/': The requested URL returned error: 403"
     },
     {
       "name": "1k acme/specs main untouched by sandbox",
       "pass": true,
-      "detail": "main=91457d4f137f56aa96e2e86c00c13305cbf4b493"
+      "detail": "main=9a961ee224394d07207ffb1376e0a0ed62a90890"
     },
     {
       "name": "1l manifest persisted on task after checkout",
@@ -64,7 +64,7 @@
     {
       "name": "1m propose_task child inherits pinned manifest refs",
       "pass": true,
-      "detail": "child designs=[acme/specs:architecture.md@977a76ed2c82f3e43c3ccd3e94cfbe03866c508a acme/specs:plc/042@977a76ed2c82f3e43c3ccd3e94cfbe03866c508a]"
+      "detail": "child designs=[acme/specs:architecture.md@42f7865ad1c561440b0effc5ed13eb703cee0901 acme/specs:plc/042@42f7865ad1c561440b0effc5ed13eb703cee0901]"
     },
     {
       "name": "1n propose_task child inherits -read acme/specs",
@@ -79,7 +79,12 @@
     {
       "name": "1p GET /api/tasks/{id} renders context refs with manifest",
       "pass": true,
-      "detail": "HTTP 200 context=[{\"path\":\"architecture.md\",\"placement\":\"read\",\"repo\":\"acme/specs\",\"rev\":\"977a76ed2c82f3e43c3ccd3e94cfbe03866c508a\"},{\"manifest\":{\"description\":\"Approved by design review\",\"files\":[{\"kind\":\"design\",\"path\":\"spec.md\",\"source_url\":\"https://planner.example.com/PLC-042\",\"title\":\"Billing spec\"}],\"title\":\"PLC-042 billing spec\"},\"path\":\"plc/042\",\"placement\":\"read\",\"repo\":\"acme/specs\",\"rev\":\"977a76ed2c82f3e43c3ccd3e94cfbe03866c508a\"}]"
+      "detail": "HTTP 200 context=[{\"path\":\"architecture.md\",\"placement\":\"read\",\"repo\":\"acme/specs\",\"rev\":\"42f7865ad1c561440b0effc5ed13eb703cee0901\"},{\"manifest\":{\"description\":\"Approved by design review\",\"files\":[{\"kind\":\"design\",\"path\":\"spec.md\",\"source_url\":\"https://planner.example.com/PLC-042\",\"title\":\"Billing spec\"}],\"title\":\"PLC-042 billing spec\"},\"path\":\"plc/042\",\"placement\":\"read\",\"repo\":\"acme/specs\",\"rev\":\"42f7865ad1c561440b0effc5ed13eb703cee0901\"}]"
+    },
+    {
+      "name": "1p' grain show renders the pinned context refs and manifest",
+      "pass": false,
+      "detail": "err=\u003cnil\u003e out=2 Implement architecture\nstate:      awaiting_reply\nowner:      operator@example.com\nrepo:       acme/app\nreads:      acme/specs\ncontext:    acme/specs:architecture.md@42f7865ad1c5, acme/specs:plc/042@42f7865ad1c5\npriority:   5\nauto-merge: false\n\nFollow the pinned spec.\nfiled by:        operator (access code)\n\nhistory:\n  -\u003e proposed        2026-11-08T01:31:41Z by operator (access code)\n  -\u003e queued          2026-11-08T01:31:41Z\n  -\u003e running         2026-11-08T01:31:41Z\n  -\u003e awaiting_reply  2026-11-08T01:31:41Z\n\nattempts:\n  #1 started 2026-11-08T01:31:41Z, finished 2026-11-08T01:31:41Z, succeede [clipped]"
     },
     {
       "name": "1q pin to a commit missing upstream fails setup instead of using another revision",
@@ -89,11 +94,11 @@
   ],
   "data": {
     "1a_refusal": "{\"error\":\"committed context \\\"acme/specs:architecture.md@main\\\" is in acme/specs (task target: acme/app): grant read access with -read acme/specs, or add acme/specs to autoGrantContextReads\"}",
-    "appSeedSHA": "c228e6ddc12978478f1b8c9930fa58692260983d",
+    "appSeedSHA": "81956a87c64550b910ab35dcca6e6dd73a0da42a",
     "child": {
       "designs": [
-        "acme/specs:architecture.md@977a76ed2c82f3e43c3ccd3e94cfbe03866c508a",
-        "acme/specs:plc/042@977a76ed2c82f3e43c3ccd3e94cfbe03866c508a"
+        "acme/specs:architecture.md@42f7865ad1c561440b0effc5ed13eb703cee0901",
+        "acme/specs:plc/042@42f7865ad1c561440b0effc5ed13eb703cee0901"
       ],
       "id": "4",
       "reads": [
@@ -102,14 +107,15 @@
     },
     "filedTask": {
       "designs": [
-        "acme/specs:architecture.md@977a76ed2c82f3e43c3ccd3e94cfbe03866c508a",
-        "acme/specs:plc/042@977a76ed2c82f3e43c3ccd3e94cfbe03866c508a"
+        "acme/specs:architecture.md@42f7865ad1c561440b0effc5ed13eb703cee0901",
+        "acme/specs:plc/042@42f7865ad1c561440b0effc5ed13eb703cee0901"
       ],
       "id": "2",
       "reads": [
         "acme/specs"
       ]
     },
+    "grainShow": "2 Implement architecture\nstate:      awaiting_reply\nowner:      operator@example.com\nrepo:       acme/app\nreads:      acme/specs\ncontext:    acme/specs:architecture.md@42f7865ad1c5, acme/specs:plc/042@42f7865ad1c5\npriority:   5\nauto-merge: false\n\nFollow the pinned spec.\nfiled by:        operator (access code)\n\nhistory:\n  -\u003e proposed        2026-11-08T01:31:41Z by operator (access code)\n  -\u003e queued          2026-11-08T01:31:41Z\n  -\u003e running         2026-11-08T01:31:41Z\n  -\u003e awaiting_reply  2026-11-08T01:31:41Z\n\nattempts:\n  #1 started 2026-11-08T01:31:41Z, finished 2026-11-08T01:31:41Z, succeeded\n\n--- comment #2 by grain on behalf of 2 ---\nDone against the pinned spec.",
     "run": {
       "detail": "the run made 2 tool call(s) [comment_on_issue x1, propose_task x1]",
       "outcome": "succeeded"
@@ -120,20 +126,20 @@
       "promptMentionsSHA2": false,
       "promptPinned": true,
       "pushURL": "grain-read-only",
-      "sandboxHead": "977a76ed2c82f3e43c3ccd3e94cfbe03866c508a",
-      "tamperProxyPushOutput": "remote: acme/specs is read-only for this sandbox: it may fetch it but not push to it\nfatal: unable to access 'http://127.0.0.1:33697/acme/specs.git/': The requested URL returned error: 403",
+      "sandboxHead": "42f7865ad1c561440b0effc5ed13eb703cee0901",
+      "tamperProxyPushOutput": "remote: acme/specs is read-only for this sandbox: it may fetch it but not push to it\nfatal: unable to access 'http://127.0.0.1:43365/acme/specs.git/': The requested URL returned error: 403",
       "tamperProxyPushRefused": true,
       "tamperPushOutput": "fatal: 'grain-read-only' does not appear to be a git repository\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.",
       "tamperPushRefused": true
     },
-    "specsSHA1": "977a76ed2c82f3e43c3ccd3e94cfbe03866c508a",
-    "specsSHA2": "91457d4f137f56aa96e2e86c00c13305cbf4b493",
+    "specsSHA1": "42f7865ad1c561440b0effc5ed13eb703cee0901",
+    "specsSHA2": "9a961ee224394d07207ffb1376e0a0ed62a90890",
     "taskDetailContext": [
       {
         "path": "architecture.md",
         "placement": "read",
         "repo": "acme/specs",
-        "rev": "977a76ed2c82f3e43c3ccd3e94cfbe03866c508a"
+        "rev": "42f7865ad1c561440b0effc5ed13eb703cee0901"
       },
       {
         "manifest": {
@@ -151,7 +157,7 @@
         "path": "plc/042",
         "placement": "read",
         "repo": "acme/specs",
-        "rev": "977a76ed2c82f3e43c3ccd3e94cfbe03866c508a"
+        "rev": "42f7865ad1c561440b0effc5ed13eb703cee0901"
       }
     ],
     "vanishedFiling": "HTTP 201 id=5"
