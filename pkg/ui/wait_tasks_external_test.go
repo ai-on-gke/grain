@@ -27,7 +27,8 @@ import (
 )
 
 // #XC-22: GET /api/tasks/wait answers an already-met condition at once,
-// wakes on the commit that meets one, answers a closed-unmerged task
+// wakes on the commit that meets one (and, for awaiting-reply, not
+// before the run asking has finished), answers a closed-unmerged task
 // under until=merged as a failure, times out after its timeout, checks
 // every task it names against the caller's grants, and credits no wait.
 // (The CLI half, grain wait's exit 5, is pkg/cli's test of this name.)
@@ -75,18 +76,38 @@ func TestTasksWaitEndpointWakesOnConditionsEarnsNoWaitCreditAndExits5OnTimeout(t
 		t.Errorf("an open task with timeout=1: %d %+v after %s, want a timed-out answer after about 1s", code, resp, took)
 	}
 
-	// Woken by the commit that parks the task on a question, not by a timer.
+	// A run is live on 500, and posts its question before it has
+	// finished (orchestrator.relayParkingCalls writes the comment and
+	// PendingQuestionCommentID as the run is tearing down). That is not
+	// parked yet: a wait until awaiting-reply must not wake on it.
+	if err := client.Store.StartRun(ctx, model.Run{ID: "run-500", TaskID: "500", Attempt: 1, StartedAt: baseTime}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	qid, err := client.Store.AddComment(ctx, model.Comment{TaskID: "500", Body: "which branch?",
+		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: "run"}}, CreatedAt: baseTime})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Store.Observe(ctx, model.Observation{TaskID: "500", PendingQuestionCommentID: &qid}); err != nil {
+		t.Fatal(err)
+	}
+	code, resp, took = wait("", "ids=500,501&until=awaiting-reply&timeout=1")
+	if code != http.StatusOK || resp.Met || !resp.TimedOut || took < time.Second {
+		t.Fatalf("awaiting-reply with a question pending while its run is still live: %d %+v after %s, want no wake until the timeout", code, resp, took)
+	}
+
+	// Woken by the commit that finishes the run and leaves the task
+	// parked, not by a timer.
 	go func() {
 		time.Sleep(200 * time.Millisecond)
-		qid, err := client.Store.AddComment(ctx, model.Comment{TaskID: "500", Body: "which branch?",
-			Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: "run"}}, CreatedAt: baseTime})
-		if err == nil {
-			_ = client.Store.Observe(ctx, model.Observation{TaskID: "500", PendingQuestionCommentID: &qid})
-		}
+		_ = client.Store.FinishRun(ctx, "run-500", baseTime.Add(time.Minute), "succeeded", "")
 	}()
 	code, resp, took = wait("", "ids=500,501&until=awaiting-reply&timeout=30")
 	if code != http.StatusOK || !resp.Met || resp.Condition != "awaiting-reply" || took > 10*time.Second {
 		t.Fatalf("awaiting-reply: %d %+v after %s, want woken by the park", code, resp, took)
+	}
+	if resp.Tasks[0].State != model.StateAwaitingReply {
+		t.Errorf("woke with task 500 in state %q, want %q", resp.Tasks[0].State, model.StateAwaitingReply)
 	}
 	if resp.Tasks[0].Question != "which branch?" {
 		t.Errorf("the parked question = %q", resp.Tasks[0].Question)

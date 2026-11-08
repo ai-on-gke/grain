@@ -256,7 +256,7 @@ Alongside its baseline task-creation flags (`-repo`/`-no-repo`, `-base`, `-title
    - Evaluates `until` conditions immediately on entry (so already-satisfied conditions return immediately without race) and on every relevant state/CI transition:
      - `closed`: satisfied when **all** `ids` are in a closed terminal state;
      - `merged`: satisfied when **all** `ids` closed merged, **or** wakes early with failure if any task in `ids` closes unmerged/failed/cancelled so the caller never hangs waiting for an impossible merge;
-     - `awaiting-reply`: wakes as soon as **any** task in `ids` is parked on a question or secret request;
+     - `awaiting-reply`: wakes as soon as **any** task in `ids` is parked on a question or secret request -- its derived state is `awaiting_reply` **and** it has no attempt still live. A question comment the run posted while it is still finishing (`PendingQuestionCommentID` set mid-run) **MUST NOT** wake the wait on its own, so a caller that replies straight after waking is never refused as "not parked";
      - `ci-done`: wakes as soon as **any** task in `ids` has a concluded latest CI run;
      - `any`: wakes on the first state or run change on **any** task in `ids` (compared against optional `since=<revision|timestamp>`).
    - External callers **MUST NOT** accrue `RunWaitCredits` (`pkg/orchestrator/waitcredit.go` applies exclusively to in-grain task runs).
