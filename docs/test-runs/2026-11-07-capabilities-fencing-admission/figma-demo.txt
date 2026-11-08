@@ -1,0 +1,10 @@
+== PUT /api/capability-servers
+[{"id":"https://grain.dev/capabilities/config-map","config":{"command":"grain","args":["capability","config-map"],"builtin":"config-map"},"secrets":[],"status":{"id":"https://grain.dev/capabilities/config-map","state":"pending","transport":"stdio","builtin":"config-map","configSchema":{"additionalProperties":false,"properties":{"config_maps":{"description":"Config maps: each one name holding several files, all placed on the sandbox VM by one grant. Stored in grain_config.","items":{"properties":{"data":{"additionalProperties":{"additionalProperties":false,"properties":{"content":{"description":"File content.","format":"code","type":"string"},"executable":{"description":"Use 0755 permissions when mode is omitted.","type":"boolean"},"mode":{"description":"Octal file permissions (defaults to 0644, or 0755 when executable is true).","type":"string"},"path":{"description":"Optional clean abso
+== POST /api/capability-servers/figma-test
+{"account":"design","auth_mode":"pat","user_id":"demo-user","handle":"Demo Designer","email":"designer@demo.grain.example"}
+
+== POST /api/capability-servers/figma-test
+{"account":"nobody","auth_mode":"","error":"Figma account \"nobody\" is not configured"}
+
+== POST /api/capability-servers/test
+{"id":"https://grain.dev/capabilities/figma","ok":true,"methods":[{"name":"mcp","description":"Equip the run with an attempt-scoped Figma MCP toolset (parse_figma_url, get_file, get_design_context, export_images, get_styles_and_variables, get_comments) without exposing Figma credentials to the sandbox.\n\naccount design (pat): connected as Demo Designer \u003cdesigner@demo.grain.example\u003e","args":{"additionalProperties":false,"properties":{"account":{"description":"Configured Figma account to authenticate as (optional when only one account is configured).","enum":["design"],"title":"Figma account","type":"string"},"file_keys":{"description":"Optional list of Figma file keys this grant may read (narrows any account-level allowlist).","items":{"pattern":"^[A-Za-z0-9_-]{1,128}$","type":"string"},"title":"Restrict to Figma file keys","type":"array"}},"type":"object"},"releasable":true,"d
