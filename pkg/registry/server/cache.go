@@ -1284,10 +1284,6 @@ func (c *CatalogCache) Route(ctx context.Context, repo, filePath, rawIncludeOffl
 			break
 		}
 	}
-	if res.Primary == nil && len(matches) == 1 {
-		m := matches[0]
-		res.Primary = &m
-	}
 	return res, nil
 }
 
