@@ -1982,3 +1982,86 @@ describe("closed work the server searched", () => {
     expect(admitsState(closedOnly, null, "queued")).toBe(false);
   });
 });
+
+// Admission (model.Admission) as a narrowing attribute: every row of
+// GET /api/tasks carries one, and a link naming it was read as an
+// unknown condition and not applied (2026-11-07 walkthrough, F5).
+describe("the admission attribute", () => {
+  const durable = task({ id: "1", admission: "durable" });
+  const bypass = task({ id: "2", admission: "bypass" });
+  const standard = task({ id: "3", admission: "standard" });
+  // A row from a server older than the setting, run as standard work.
+  const older = task({ id: "4" });
+
+  it("is a known, closed enum over the three admissions", () => {
+    const a = attr("admission");
+    expect(a).toBeDefined();
+    expect(a.type).toBe("enum");
+    expect(a.closed).toBe(true);
+    expect(a.order).toEqual(["standard", "bypass", "durable"]);
+    expect(ATTRIBUTES.map((x) => x.id)).toContain("admission");
+    const read = (query) => parsePath("/", `?${query}`).narrowing.filters;
+    expect(unknownConditions(read("f=admission:any:durable"), attrs)).toEqual(
+      [],
+    );
+  });
+
+  it("matches the tasks admitted that way, reading none as standard", () => {
+    const any = (...values) => ({ attr: "admission", op: "any", values });
+    expect(matches(durable, any("durable"))).toBe(true);
+    expect(matches(bypass, any("durable"))).toBe(false);
+    expect(matches(standard, any("standard"))).toBe(true);
+    expect(matches(older, any("standard"))).toBe(true);
+    expect(matches(older, any("bypass", "durable"))).toBe(false);
+    const none = { attr: "admission", op: "none", values: ["standard"] };
+    expect(matches(bypass, none)).toBe(true);
+    expect(matches(older, none)).toBe(false);
+  });
+
+  it("does not offer 'is empty', since every task has one", () => {
+    expect(operatorsFor(attr("admission"))).not.toContain("empty");
+  });
+
+  it("offers its values in rank order, named as the task pane names them", () => {
+    expect(
+      optionsFor(attr("admission"), [durable, standard, bypass], config).map(
+        (o) => [o.value, o.label],
+      ),
+    ).toEqual([
+      ["standard", "Standard"],
+      ["bypass", "Bypass queue"],
+      ["durable", "Durable"],
+    ]);
+  });
+
+  it("sorts by rank rather than by spelling", () => {
+    const ids = (dir) =>
+      sortTasks(
+        [standard, durable, bypass],
+        [{ attr: "admission", dir }],
+        attrs,
+        config,
+      ).map((t) => t.id);
+    expect(ids("asc")).toEqual(["3", "2", "1"]);
+    expect(ids("desc")).toEqual(["1", "2", "3"]);
+  });
+
+  it("marks a value it does not have, the way origin:any:robot is", () => {
+    const cond = {
+      attr: "admission",
+      op: "any",
+      values: ["durable", "bogus"],
+    };
+    expect(unknownValues(attr("admission"), cond)).toEqual(["bogus"]);
+    expect(describeCondition(attr("admission"), cond, config)).toBe(
+      "Admission is any of Durable, “bogus” (unknown)",
+    );
+    expect(
+      unknownValues(attr("admission"), {
+        attr: "admission",
+        op: "any",
+        values: ["standard", "bypass", "durable"],
+      }),
+    ).toEqual([]);
+  });
+});
