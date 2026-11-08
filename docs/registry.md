@@ -259,10 +259,9 @@ registry pod, zero registry credentials stored on the VM) while allowing
 per-instance TLS (`https://…`) to be enabled later without changing the
 data model or authentication contract.
 
-### Instance lifecycle, upgrades, resize, and restore
+### Instance lifecycle, upgrades, resize, stop/start, and restore
 
-Hosted instances move through a narrow state machine (there is no
-`stop`/`start` state in the first version):
+Hosted instances move through a narrow state machine:
 
 - **`creating` → `running` (or `failed`).** `POST /api/entries` records
   the entry in `creating` and returns `202 Accepted`. The leader
@@ -297,6 +296,17 @@ Hosted instances move through a narrow state machine (there is no
      repo.
   4. `probing` → `running`: once `/healthz` and `/api/registry/status`
      respond on the new `backend_url`, the entry returns to `running`.
+- **Stop and start (`stopping` → `stopped`).** An entry manager can
+  park an idle instance with `grain registry stop <name>` (or
+  `POST /api/entries/<name>/stop`, or **Stop** on the entry's page and
+  in **My entries**). The reconciler waits up to `compute.drain_timeout`
+  for active tasks to finish, then halts and deletes the VM while keeping
+  the database, secrets, GCS prefix, and config repo, and the entry
+  shows as `stopped` (status `offline`). `grain registry start <name>`
+  (`POST /api/entries/<name>/start`, or **Start**) boots a replacement
+  VM onto the same state; with `auto_wake` on (the default), a visit to
+  `https://<name>.<instance-domain>/` wakes it too. Both are human-only
+  and refused for `connected` entries.
 - **Deletion, 7-day fenced database retention, and 30-day name hold.**
   `grain registry delete -confirm <name> <name>` (or
   `DELETE /api/entries/<name>`) transitions the instance through
@@ -986,6 +996,8 @@ for machine-readable JSON output on every subcommand.
 | `grain registry upgrade [-version <vX.Y.Z>] <name>` | Replace a hosted `instance` VM onto the target (or current default) release image |
 | `grain registry resize -shape <shape> [-version <vX.Y.Z>] <name>` | Replace a hosted `instance` VM onto a new shape |
 | `grain registry delete [-confirm <name>\|-yes] [-delete-disk] <name>` | Delete an entry (fencing a hosted instance's database for the 7-day restore window unless `-delete-disk` is set, and holding the name for 30 days) |
+| `grain registry stop <name>` | Stop a hosted `instance`'s VM while keeping its state (`stopping` → `stopped`) |
+| `grain registry start <name>` | Start a stopped hosted `instance` again |
 | `grain registry restore <name>` | Restore a soft-deleted hosted `instance` whose retention window (`purge_after`) has not expired |
 | `grain registry transfer -to <email> [-owner-group <group>] [-clear-owner-group] <name>` | Offer a two-step accountable `owner` transfer to `<email>` |
 | `grain registry accept-transfer <name>` | Accept a pending ownership transfer offered to you |

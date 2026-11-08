@@ -22,6 +22,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -781,4 +782,104 @@ func TestRegistryCLISubcommands(t *testing.T) {
 	runSub("accept-transfer", "platform-vm")
 	runSub("delete", "-confirm", "platform-vm", "platform-vm")
 	runSub("restore", "platform-vm")
+}
+
+// TestRegistryCLIStopStart drives `grain registry stop` / `start` against a
+// fake registry: each posts to its own endpoint, prints the new lifecycle
+// state, and refuses a missing or extra entry name before any request.
+func TestRegistryCLIStopStart(t *testing.T) {
+	ctx := context.Background()
+
+	var (
+		mu    sync.Mutex
+		calls []string
+		entry = api.Entry{Name: "idle-vm", Kind: api.KindInstance, State: api.StateRunning}
+	)
+	regSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/entries/idle-vm/stop":
+			entry.State = api.StateStopping
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(entry)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/entries/idle-vm/start":
+			entry.State = api.StateCreating
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(entry)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/entries/edge-box/stop":
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"code":  "invalid_entry_kind",
+				"error": `only kind="instance" entries can be stopped`,
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer regSrv.Close()
+
+	prevClient := registryHTTPClient
+	prevOIDC := registryOIDCToken
+	registryHTTPClient = regSrv.Client()
+	registryOIDCToken = func(ctx context.Context, registryURL, audience string) (string, error) {
+		return "oidc-test-token", nil
+	}
+	t.Cleanup(func() {
+		registryHTTPClient = prevClient
+		registryOIDCToken = prevOIDC
+	})
+
+	run := func(args ...string) (string, error) {
+		t.Helper()
+		full := append([]string{args[0], "-registry-url", regSrv.URL}, args[1:]...)
+		var err error
+		stdout := captureStdout(t, func() {
+			err = cmdRegistry(ctx, nil, &printer{}, full)
+		})
+		return stdout, err
+	}
+
+	got, err := run("stop", "idle-vm")
+	if err != nil {
+		t.Fatalf("registry stop: %v", err)
+	}
+	if want := "requested stop for idle-vm (state=stopping)"; !strings.Contains(got, want) {
+		t.Fatalf("registry stop printed %q, want %q", got, want)
+	}
+
+	got, err = run("start", "idle-vm")
+	if err != nil {
+		t.Fatalf("registry start: %v", err)
+	}
+	if want := "requested start for idle-vm (state=creating)"; !strings.Contains(got, want) {
+		t.Fatalf("registry start printed %q, want %q", got, want)
+	}
+
+	if _, err := run("stop", "edge-box"); err == nil || !strings.Contains(err.Error(), "can be stopped") {
+		t.Fatalf("registry stop on a connected entry = %v, want the registry's refusal", err)
+	}
+
+	mu.Lock()
+	before := len(calls)
+	mu.Unlock()
+	for _, args := range [][]string{{"stop"}, {"start"}, {"stop", "a", "b"}} {
+		if _, err := run(args...); err == nil || !strings.Contains(err.Error(), "usage: grain registry "+args[0]) {
+			t.Fatalf("registry %v = %v, want a usage error", args, err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) != before {
+		t.Fatalf("usage errors reached the registry: %v", calls[before:])
+	}
+	want := []string{
+		"POST /api/entries/idle-vm/stop",
+		"POST /api/entries/idle-vm/start",
+		"POST /api/entries/edge-box/stop",
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("registry calls = %v, want %v", calls, want)
+	}
 }

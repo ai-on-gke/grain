@@ -68,6 +68,8 @@ const registryUsage = `usage: grain registry <subcommand> [args]
   resize            [-registry-url <url>] -shape <shape> [-version <vX.Y.Z>] <name>
   delete            [-registry-url <url>] [-confirm <name>] [-yes] [-delete-disk] <name>
   restore           [-registry-url <url>] <name>
+  stop              [-registry-url <url>] <name>
+  start             [-registry-url <url>] <name>
   transfer          [-registry-url <url>] -to <email> [-owner-group <group>]
                     [-clear-owner-group] <name>
   accept-transfer   [-registry-url <url>] <name>
@@ -213,6 +215,10 @@ func cmdRegistry(ctx context.Context, c *ui.HTTPClient, out *printer, args []str
 		return cmdRegistryDelete(ctx, c, out, subArgs)
 	case "restore":
 		return cmdRegistryRestore(ctx, c, out, subArgs)
+	case "stop":
+		return cmdRegistryStop(ctx, c, out, subArgs)
+	case "start":
+		return cmdRegistryStart(ctx, c, out, subArgs)
 	case "transfer":
 		return cmdRegistryTransfer(ctx, c, out, subArgs)
 	case "accept-transfer":
