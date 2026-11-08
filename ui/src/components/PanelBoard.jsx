@@ -25,6 +25,7 @@ import {
   NO_NARROWING,
   admitsState,
   defaultFilters,
+  defaultNarrowing,
   describeUnknownConditions,
   narrowTasks,
   unknownConditions,
@@ -43,9 +44,10 @@ import {
 } from "../panels.js";
 import { childRenderKeys } from "../childOrder.js";
 import { panelPlaces } from "../panelOrder.js";
-import { keptQuery } from "../boards.js";
+import { boardNarrowing, keptQuery } from "../boards.js";
 import { reportPath, reportScope, scopeSummary } from "../report.js";
 import { loadView } from "../gantt.js";
+import AccessGate from "./AccessGate.jsx";
 import {
   MoveHandle,
   MoveSlot,
@@ -511,6 +513,10 @@ function scopeNote(scope) {
 function Panel({
   panel,
   asked,
+  // What the dashboard asks before anybody narrows it (keptQuery's own
+  // comparison point), so a throughput panel offers "Keep" only when the
+  // reader's narrowing changes the report it fetches.
+  baseline,
   kept,
   handle,
   // The drag, in two halves: `grip` is what makes the header a drag
@@ -637,7 +643,7 @@ function Panel({
     Boolean(onKeep) &&
     kept &&
     !panel.query &&
-    panelUsesNarrowing(panel, narrowing);
+    panelUsesNarrowing(panel, narrowing, baseline);
 
   // What the row asked for and did not get. "" on every panel whose
   // range was understood, and on every panel that named none, so this
@@ -684,21 +690,25 @@ function Panel({
           </span>
         )}
         {keepable && (
-          <button
-            type="button"
-            className="panel-keep"
-            // Named for the reader who cannot see which panel this
-            // button sits in: a dashboard can have several of them at
-            // once, and "Keep" on its own would be several buttons with
-            // one name. The title says what will happen, since the
-            // gesture writes nothing itself -- it opens the task that
-            // does.
-            aria-label={`Keep this narrowing on “${panelTitle(panel)}”`}
-            title={`File the task that makes \`${kept}\` this panel's own question`}
-            onClick={() => onKeep(panel)}
-          >
-            Keep
-          </button>
+          // Keep files a task, so a role without tasks:write is refused
+          // it the way BoardPage's own "Edit board" is.
+          <AccessGate scope="tasks:write" config={config}>
+            <button
+              type="button"
+              className="panel-keep"
+              // Named for the reader who cannot see which panel this
+              // button sits in: a dashboard can have several of them at
+              // once, and "Keep" on its own would be several buttons with
+              // one name. The title says what will happen, since the
+              // gesture writes nothing itself -- it opens the task that
+              // does.
+              aria-label={`Keep this narrowing on “${panelTitle(panel)}”`}
+              title={`File the task that makes \`${kept}\` this panel's own question`}
+              onClick={() => onKeep(panel)}
+            >
+              Keep
+            </button>
+          </AccessGate>
         )}
         <a
           className="panel-open"
@@ -786,6 +796,7 @@ export default function PanelBoard({
   // question about the dashboard ("has its reader narrowed it away from
   // what the board says?"), and every panel gets the same answer.
   const kept = keptQuery(board, narrowing, config);
+  const baseline = boardNarrowing(board) || defaultNarrowing(config);
 
   // The two halves of the gesture, held exactly as BoardList holds them.
   // dragKey is the panel a mouse is dragging; overKey is only the
@@ -877,9 +888,11 @@ export default function PanelBoard({
         defaults={defaultFilters(config)}
         searchPlaceholder="Search this dashboard…"
       >
-        <Button size="small" onClick={() => onAddPanel?.(board)}>
-          Add panel
-        </Button>
+        <AccessGate scope="tasks:write" config={config}>
+          <Button size="small" onClick={() => onAddPanel?.(board)}>
+            Add panel
+          </Button>
+        </AccessGate>
       </NarrowingBar>
       {pickedKey !== null && (
         <MovingBar
@@ -908,6 +921,7 @@ export default function PanelBoard({
               <Panel
                 panel={panel}
                 asked={narrowing}
+                baseline={baseline}
                 kept={kept}
                 handle={
                   enabled ? (
