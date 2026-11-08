@@ -684,3 +684,105 @@ func TestRepoAccessGrantCarriesItsEventGate(t *testing.T) {
 		t.Error("a capability that is not repository access was admitted")
 	}
 }
+
+// AlignDefaultBases respells a base only where it and the parent's write
+// target for the same repository name one branch -- one of them "" and
+// the other that repository's default -- so a parent filed with an
+// explicit `base: main` reaches a proposal that named no base, and
+// nothing else changes (task 3411's live walk).
+func TestAlignDefaultBasesReadsEmptyAndTheDefaultBranchAsOne(t *testing.T) {
+	widgets := &RepoRef{Owner: "acme", Name: "widgets"}
+	docs := &RepoRef{Owner: "acme", Name: "docs"}
+	state := &RepoRef{Owner: "acme", Name: "widgets-state"}
+	defaults := map[string]string{"acme/widgets": "main", "acme/docs": "trunk", "acme/widgets-state": "main"}
+	asked := map[string]int{}
+	defaultBranch := func(r RepoRef) string {
+		asked[r.String()]++
+		return defaults[r.String()]
+	}
+	parent := Task{
+		Target: widgets, Base: "main", AutoApproveProposals: true,
+		Writes: []WriteTarget{{Repo: *docs}, {Repo: *state, Base: "deploy"}},
+	}
+
+	for _, tc := range []struct {
+		name     string
+		child    Task
+		wantBase string
+		want     bool
+	}{
+		{"no base on the parent's repo, whose default is the parent's base",
+			Task{Target: widgets}, "main", true},
+		{"the parent's base named explicitly", Task{Target: widgets, Base: "main"}, "main", true},
+		{"another branch of the parent's repo", Task{Target: widgets, Base: "dev"}, "dev", false},
+		{"the default branch named explicitly where the write target left it empty",
+			Task{Target: docs, Base: "trunk"}, "", true},
+		{"a branch that is not the default where the write target left it empty",
+			Task{Target: docs, Base: "main"}, "main", false},
+		{"no base where the write target named a branch that is not the default",
+			Task{Target: state}, "", false},
+	} {
+		got := AlignDefaultBases(tc.child, parent, defaultBranch)
+		if got.Base != tc.wantBase {
+			t.Errorf("%s: Base = %q, want %q", tc.name, got.Base, tc.wantBase)
+		}
+		if lands := LandsWhereGranted(got, parent); lands != tc.want {
+			t.Errorf("%s: LandsWhereGranted after aligning = %v, want %v", tc.name, lands, tc.want)
+		}
+		if submits := AutoSubmits(got, parent); submits != tc.want {
+			t.Errorf("%s: AutoSubmits after aligning = %v, want %v", tc.name, submits, tc.want)
+		}
+	}
+
+	// The child's own Writes are aligned the same way, so a proposal
+	// handing on the parent's default-branch write target is not read as
+	// minting a new one -- and the slice it came with is left alone.
+	writes := []WriteTarget{{Repo: *widgets}}
+	child := Task{Target: widgets, Writes: writes}
+	got := AlignDefaultBases(child, parent, defaultBranch)
+	if len(UngrantedWrites(got, parent)) != 0 || !AutoSubmits(got, parent) {
+		t.Errorf("aligned writes = %+v, ungranted %+v", got.Writes, UngrantedWrites(got, parent))
+	}
+	if writes[0].Base != "" {
+		t.Errorf("AlignDefaultBases rewrote the caller's Writes slice: %+v", writes)
+	}
+
+	// Unresolvable -- no resolver, or a repository it cannot answer
+	// for -- compares as written and withholds, as before.
+	if got := AlignDefaultBases(Task{Target: widgets}, parent, nil); got.Base != "" || AutoSubmits(got, parent) {
+		t.Errorf("with no resolver: Base %q, AutoSubmits %v", got.Base, AutoSubmits(got, parent))
+	}
+	unknown := func(RepoRef) string { return "" }
+	if got := AlignDefaultBases(Task{Target: widgets}, parent, unknown); got.Base != "" {
+		t.Errorf("with an unresolvable default: Base %q, want \"\"", got.Base)
+	}
+
+	// Nothing to resolve asks nothing: a base already matching, or a
+	// repository the parent was never given.
+	asked = map[string]int{}
+	AlignDefaultBases(Task{Target: widgets, Base: "main"}, parent, defaultBranch)
+	AlignDefaultBases(Task{Target: &RepoRef{Owner: "acme", Name: "elsewhere"}}, parent, defaultBranch)
+	if len(asked) != 0 {
+		t.Errorf("asked for default branches it did not need: %v", asked)
+	}
+}
+
+// AutoSubmitRefusedOnLanding is the one refusal no other note explains:
+// the parent may queue its proposals, the child asks for nothing more,
+// and only the branch it lands on is wrong.
+func TestAutoSubmitRefusedOnLanding(t *testing.T) {
+	widgets := &RepoRef{Owner: "acme", Name: "widgets"}
+	parent := Task{Target: widgets, Base: "release/1.0", AutoApproveProposals: true}
+	if !AutoSubmitRefusedOnLanding(Task{Target: widgets}, parent) {
+		t.Error("a proposal on another branch was not reported as refused on landing")
+	}
+	if AutoSubmitRefusedOnLanding(Task{Target: widgets, Base: "release/1.0"}, parent) {
+		t.Error("a proposal on the parent's own branch was reported as refused")
+	}
+	if AutoSubmitRefusedOnLanding(Task{Target: widgets}, Task{Target: widgets, Base: "release/1.0"}) {
+		t.Error("a parent with no permission to queue proposals was reported as refusing on landing")
+	}
+	if AutoSubmitRefusedOnLanding(Task{Target: widgets, Grants: []Grant{{Capability: "x"}}}, parent) {
+		t.Error("a proposal escalating a capability was reported as refused on landing alone")
+	}
+}

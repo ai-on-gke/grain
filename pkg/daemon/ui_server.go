@@ -453,6 +453,7 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		GitHubPullRequestFiles: githubClient,
 		GitHubPullRequests:     githubClient,
 		GitHubForkPullRequests: githubClient,
+		GitHubDefaultBranches:  githubClient,
 		// The manual "Import issues now" (POST .../import-issues): the
 		// orchestrator's own pass, read through the UI's GitHub client.
 		IssueImporter: func(ctx context.Context, repo model.RepoRef) (model.IssueImportResult, error) {

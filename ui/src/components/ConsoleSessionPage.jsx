@@ -16,6 +16,7 @@ import { isApiGrant, withoutApiRows } from "../apiGrants.js";
 import GrantsPicker from "./GrantsPicker.jsx";
 import { localGrantHandlers } from "./capabilityMethods.js";
 import { isCapabilityRef } from "../capabilityArgs.js";
+import { isStaleEdit } from "./StaleEdit.jsx";
 import { useEffect, useState } from "react";
 import { PageHeaderActions, useInPageHeader } from "./PageHeader.jsx";
 import {
@@ -121,7 +122,29 @@ export function liveRunKey(task) {
 // RUN_FIXED is every session field a run takes on when it starts and
 // keeps for its whole life; the rest of the pane (the Google Chat space,
 // whether its tasks are filed approved) is read as it is needed.
-const RUN_FIXED = ["capabilities", "reads", "writes", "networkAccess", "model"];
+const RUN_FIXED = [
+  "capabilities",
+  "adoptShippedDefaults",
+  "reads",
+  "writes",
+  "networkAccess",
+  "model",
+];
+
+// replacing is the edit a picker that hands back a whole slice of the
+// held list makes -- GrantsPicker's api:* grants, or its capability
+// server methods: what it took out of the slice it was shown, and what
+// it put in. Applied as that difference rather than as the slice, so an
+// entry somebody else added to the same slice since the pane read it is
+// kept when the save is retried on what the session holds now.
+function replacing(shown, next) {
+  const removed = shown.filter((c) => !next.includes(c));
+  const added = next.filter((c) => !shown.includes(c));
+  return (current) => [
+    ...current.filter((c) => !removed.includes(c) && !added.includes(c)),
+    ...added,
+  ];
+}
 
 export default function ConsoleSessionPage({
   session,
@@ -195,36 +218,78 @@ export default function ConsoleSessionPage({
     }
   };
 
+  // saveCapabilities saves a change to what the session holds, which the
+  // PUT takes as the whole list. edit turns a held list into the list to
+  // save, and the list it was given goes along as expectCapabilities:
+  // the server refuses the save as stale (409 "stale") if the session no
+  // longer holds exactly that -- another tab, or the agent API, changed
+  // its grants after this pane read them -- rather than letting this
+  // pane's old copy put the old set back over theirs (2026-11-07
+  // director agent API walkthrough, finding 4). On that refusal the pane
+  // reads the session again and makes the same edit to what it holds
+  // now, once; a second refusal is shown.
+  const saveCapabilities = async (edit, key) => {
+    setSaving(key);
+    const keyAtSave = runKey;
+    const put = (current) =>
+      api(`/api/console-sessions/${session.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          capabilities: edit(current),
+          expectCapabilities: current,
+        }),
+      });
+    try {
+      try {
+        await put(session.capabilities || []);
+      } catch (err) {
+        if (!isStaleEdit(err)) throw err;
+        const fresh = await api("/api/console-sessions");
+        const row = (fresh?.sessions || []).find((s) => s.id === session.id);
+        if (!row) throw err;
+        await put(row.capabilities || []);
+      }
+      if (keyAtSave) {
+        setStaleRuns((prev) => ({ ...prev, [session.id]: keyAtSave }));
+      }
+      await onSaved();
+    } catch (err) {
+      showError(err);
+      if (isStaleEdit(err)) await onSaved();
+    } finally {
+      setSaving(null);
+    }
+  };
+
   // methodGrants saves the session's capability server grants as
   // GrantsPicker changes them, keeping everything else it holds.
   const methodGrants = localGrantHandlers(
     (session?.capabilities || []).filter(isCapabilityRef),
     (refs) =>
-      save(
-        {
-          capabilities: [
-            ...(session.capabilities || []).filter((c) => !isCapabilityRef(c)),
-            ...refs,
-          ],
-        },
+      saveCapabilities(
+        replacing((session.capabilities || []).filter(isCapabilityRef), refs),
         "methods",
       ),
   );
 
+  // toggle is a tick box: what the click means -- on, or off -- is
+  // decided by the box as it was drawn, and applied to whatever the
+  // session holds when the save lands.
   const toggle = async (id) => {
-    const next = held.has(id)
-      ? (session.capabilities || []).filter((c) => c !== id)
-      : [...(session.capabilities || []), id];
-    await save({ capabilities: next }, id);
+    const on = !held.has(id);
+    await saveCapabilities((current) => {
+      const rest = current.filter((c) => c !== id);
+      return on ? [...rest, id] : rest;
+    }, id);
   };
 
+  // Adopt shipped defaults names no list at all: the server adds the
+  // missing shipped defaults to what the session holds when the request
+  // is served (UpdateConsoleSessionRequest.AdoptShippedDefaults), so a
+  // grant made in another tab since this one read the session stays.
   const missingShipped = session?.missingShippedDefaults || [];
   const adoptShippedDefaults = async () => {
-    const next = [...(session.capabilities || [])];
-    for (const id of missingShipped) {
-      if (!next.includes(id)) next.push(id);
-    }
-    await save({ capabilities: next }, "adoptShippedDefaults");
+    await save({ adoptShippedDefaults: true }, "adoptShippedDefaults");
   };
 
   const restart = async (carryHandover = false) => {
@@ -458,13 +523,8 @@ export default function ConsoleSessionPage({
           config={{ ...config, capabilities }}
           grants={session.capabilities || []}
           onApiChange={(next) =>
-            save(
-              {
-                capabilities: [
-                  ...(session.capabilities || []).filter((c) => !isApiGrant(c)),
-                  ...next,
-                ],
-              },
+            saveCapabilities(
+              replacing((session.capabilities || []).filter(isApiGrant), next),
               "api",
             )
           }

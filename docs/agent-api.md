@@ -71,6 +71,16 @@ A grant is one capability name per scope or preset:
 | `api:ci:write@bwsalmon/grain` | a scope or preset on one repository only |
 | `api:ops/triage` | a [scope set](#scope-sets)'s resolved scopes |
 
+Each scope and preset is also a method of grain's in-process capability
+server `https://grain.dev/capabilities/api`
+([unified-grants.design.md](../design/design/unified-grants.design.md) §1):
+`https://grain.dev/capabilities/api#ci:write` with `{repo: bwsalmon/grain}`
+is the same grant as `api:ci:write@bwsalmon/grain`, and every check that
+reads grants (admission, the proposal and approval rules, the capability
+policy) reads the two as one. `GET /api/capability-methods` lists the
+server. For now grain still records the `api:` spelling, so a reference
+sent in is stored as the `api:` name it stands for.
+
 A template, schedule or task can also write the grant as the `api`
 capability with arguments, which is the same thing spelled for a
 declaration:
@@ -943,10 +953,24 @@ Each external agent is issued its own scoped bearer token (`gma_<hex>`):
   request rate limit (`rateLimit`, requests per minute, default `60`), and
   an in-flight concurrency cap (`maxConcurrent`, default `8`).
 - **Owner**: the person the credential acts on behalf of (`owner`). It
-  defaults to the person issuing it; an operator may name somebody else.
-  A self-service credential (`"selfService": true`, what
-  `grain login --issue-token` mints) belongs to its caller only, and an
+  defaults to the verified person issuing it (signed in through IAP or a
+  registered verifier); an operator may name somebody else. The shared
+  access code, break-glass loopback and the in-process CLI are nobody in
+  particular, so a credential they issue without naming an owner acts on
+  behalf of nobody -- never the deployment's own actor -- and an owner
+  they do name is recorded as named by them (`ownerSource`), so its calls
+  show that owner as unverified. A self-service credential
+  (`"selfService": true`, what `grain login --issue-token` mints) belongs
+  to its verified caller only (to nobody under the access code), and an
   agent issuing one can pass on only the owner it acts for itself.
+  A credential never does more than its owner's current role allows: it
+  is refused once the owner is moved to a narrower role. While IAP, the
+  registry or another identity verifier is configured, it is also
+  refused once its owner is on no entry of the allowed users and groups
+  list, because they were removed (`grain access deny`) or never added.
+  With no verifier the list admits nobody, so it does not limit a
+  credential there. A credential issued without an owner acts for the
+  deployment's local account and is never refused for being unlisted.
   `grain/external-dev` (the default for a workstation agent) and
   `grain/external-read` (a read-only observer) are the built-in scope
   sets for these credentials; neither holds a dangerous scope.

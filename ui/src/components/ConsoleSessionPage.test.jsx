@@ -1041,17 +1041,14 @@ describe("ConsoleSessionPage", () => {
     await userEvent.click(
       within(banner).getByRole("button", { name: "Adopt shipped defaults" }),
     );
+    // The pane names no list: the server adds what is missing to what
+    // the session holds when the request lands, so a grant another tab
+    // made since this one read the session is not put back
+    // (2026-11-07 director agent API walkthrough, finding 4).
     await waitFor(() =>
       expect(api).toHaveBeenCalledWith("/api/console-sessions/director", {
         method: "PUT",
-        body: JSON.stringify({
-          capabilities: [
-            "self-debug",
-            "api:tasks:admin",
-            "api:task-admin",
-            "api:settings:read",
-          ],
-        }),
+        body: JSON.stringify({ adoptShippedDefaults: true }),
       }),
     );
     expect(onSaved).toHaveBeenCalled();
@@ -1077,5 +1074,114 @@ describe("ConsoleSessionPage", () => {
     expect(
       screen.queryByTestId("adopt-shipped-defaults-banner"),
     ).not.toBeInTheDocument();
+  });
+
+  // A tick box saves the whole list, so it says which list it was
+  // computed from; when the server refuses that as stale (another tab
+  // changed the grants since), the pane reads the session again and
+  // makes the same change to what it holds now instead of putting its
+  // old copy back.
+  it("sends what it read with a tick and retries a stale save on a fresh read", async () => {
+    api.mockReset();
+    const stale = Object.assign(new Error("changed by somebody else"), {
+      status: 409,
+      code: "stale",
+    });
+    let puts = 0;
+    api.mockImplementation(async (path, opts) => {
+      if (path === "/api/console-sessions/director" && opts?.method === "PUT") {
+        puts += 1;
+        if (puts === 1) throw stale;
+        return {};
+      }
+      if (path === "/api/console-sessions") {
+        return {
+          sessions: [
+            { id: "director", capabilities: ["self-debug", "api:tasks:read"] },
+          ],
+        };
+      }
+      return {};
+    });
+    const onSaved = vi.fn();
+    const showError = vi.fn();
+    render(
+      <ConsoleSessionPage
+        session={session()}
+        task={task()}
+        capabilities={capabilities}
+        act={vi.fn()}
+        onSaved={onSaved}
+        showError={showError}
+      />,
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /Director capabilities/ }),
+    );
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: /Self repair/ }),
+    );
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+
+    const bodies = api.mock.calls
+      .filter(
+        ([p, o]) =>
+          p === "/api/console-sessions/director" && o?.method === "PUT",
+      )
+      .map(([, o]) => JSON.parse(o.body));
+    expect(bodies).toEqual([
+      {
+        capabilities: ["self-debug", "self-repair"],
+        expectCapabilities: ["self-debug"],
+      },
+      {
+        capabilities: ["self-debug", "api:tasks:read", "self-repair"],
+        expectCapabilities: ["self-debug", "api:tasks:read"],
+      },
+    ]);
+    expect(showError).not.toHaveBeenCalled();
+    api.mockReset();
+    api.mockImplementation(async () => ({}));
+  });
+
+  it("shows a second stale refusal and re-reads rather than overwriting", async () => {
+    api.mockReset();
+    const stale = Object.assign(new Error("changed by somebody else"), {
+      status: 409,
+      code: "stale",
+    });
+    api.mockImplementation(async (path, opts) => {
+      if (opts?.method === "PUT") throw stale;
+      if (path === "/api/console-sessions") {
+        return { sessions: [{ id: "director", capabilities: [] }] };
+      }
+      return {};
+    });
+    const onSaved = vi.fn();
+    const showError = vi.fn();
+    render(
+      <ConsoleSessionPage
+        session={session()}
+        task={task()}
+        capabilities={capabilities}
+        act={vi.fn()}
+        onSaved={onSaved}
+        showError={showError}
+      />,
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /Director capabilities/ }),
+    );
+    await userEvent.click(screen.getByRole("checkbox", { name: /Self debug/ }));
+    await waitFor(() => expect(showError).toHaveBeenCalledWith(stale));
+    expect(onSaved).toHaveBeenCalled();
+    const puts = api.mock.calls.filter(([, o]) => o?.method === "PUT");
+    expect(puts).toHaveLength(2);
+    expect(JSON.parse(puts[1][1].body)).toEqual({
+      capabilities: [],
+      expectCapabilities: [],
+    });
+    api.mockReset();
+    api.mockImplementation(async () => ({}));
   });
 });

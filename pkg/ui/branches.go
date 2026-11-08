@@ -42,6 +42,44 @@ type RepoBranchSource interface {
 	RepoBranches(ctx context.Context, repo model.RepoRef) (names []string, ok bool, err error)
 }
 
+// DefaultBranchReader answers which branch a repository's default is
+// (Config.GitHubDefaultBranches). Narrow for the same reason
+// GitHubBranchLister is.
+type DefaultBranchReader interface {
+	DefaultBranch(owner, repo string) (string, error)
+}
+
+// proposalDefaultBranches is CreateTask's answer to which branch a
+// repository's default is when it judges a proposal against its
+// proposer's permission (model.AlignDefaultBases): asked of
+// Config.GitHubDefaultBranches at most once per repository per call, and
+// "" -- bases compared as written -- for the controller-local
+// configuration repository, for a repository the forge cannot answer
+// for, and with no reader at all.
+func (c *Client) proposalDefaultBranches() func(model.RepoRef) string {
+	reader := c.Config.GitHubDefaultBranches
+	if reader == nil {
+		return nil
+	}
+	known := map[string]string{}
+	return func(repo model.RepoRef) string {
+		if model.IsConfigRepo(repo) {
+			return ""
+		}
+		key := strings.ToLower(repo.String())
+		if def, ok := known[key]; ok {
+			return def
+		}
+		def, err := reader.DefaultBranch(repo.Owner, repo.Name)
+		if err != nil {
+			def = ""
+		}
+		def = strings.TrimSpace(def)
+		known[key] = def
+		return def
+	}
+}
+
 // PullRequestReader is the one read of a pull request this UI makes for
 // itself: its current head, for Client.ForceMerge. Narrow for the same
 // reason GitHubBranchLister is.
