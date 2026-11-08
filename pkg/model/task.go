@@ -37,6 +37,7 @@
 package model
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -594,8 +595,16 @@ type CredentialRef struct{ Name string }
 // Grant records how this task came by a capability, which a capability's
 // own definition cannot say: the same capability can be label-requested
 // on one task and folder-inherited on another.
+//
+// Capability is the grant string as stored. With is a unified grant's
+// normalized with: arguments (design/design/unified-grants.design.md §1),
+// set by CanonicalGrant and by requests that send grants:
+// [{capability, with}]; nil on every grant read from the store, where
+// arguments are still folded into Capability (slice 2 writes today's
+// spelling, CanonicalGrant reads either).
 type Grant struct {
 	Capability string
+	With       json.RawMessage
 	Via        GrantSource
 	Folder     *FolderRef
 }
@@ -613,7 +622,12 @@ type Grant struct {
 // A capability reference is covered only by a reference with the same
 // canonical capability and deep-equal normalized args
 // (UncoveredCapabilityRefs, design/spec/capabilities/capabilities.spec.md §2.3.4).
+//
+// Both sides are read through CanonicalGrant into the spelling slice 2
+// stores (StoredGrantSpelling), so an api reference and the api:<scope>
+// it stands for compare equal.
 func GrantsSubsetOf(grants, allowed []Grant) bool {
+	grants, allowed = storedGrantSpellings(grants), storedGrantSpellings(allowed)
 	have := make(map[string]bool, len(allowed))
 	for _, g := range allowed {
 		have[g.Capability] = true
@@ -717,7 +731,7 @@ func LandsWhereGranted(child, parent Task) bool {
 	if child.Target == nil || IsConfigRepo(*child.Target) {
 		return false
 	}
-	for _, w := range WriteTargets(parent) {
+	for _, w := range WriteTargetsOfGrants(TaskRepoGrants(parent)) {
 		if w.Repo.Same(*child.Target) && w.Base == child.Base {
 			return true
 		}
@@ -729,10 +743,14 @@ func LandsWhereGranted(child, parent Task) bool {
 // already among parent's WriteTargets, repo and branch alike -- the
 // write targets a proposal asked for that the task proposing it was
 // never given. Empty when there are none.
+//
+// Both sides are read as unified grants (TaskRepoGrants,
+// design/design/unified-grants.design.md §2): parent's #target and
+// #write grants against child's own #write grants.
 func UngrantedWrites(child, parent Task) []WriteTarget {
-	granted := WriteTargets(parent)
+	granted := WriteTargetsOfGrants(TaskRepoGrants(parent))
 	var out []WriteTarget
-	for _, w := range child.Writes {
+	for _, w := range childWriteGrants(child) {
 		found := false
 		for _, g := range granted {
 			if g.Repo.Same(w.Repo) && g.Base == w.Base {

@@ -71,6 +71,16 @@ A grant is one capability name per scope or preset:
 | `api:ci:write@bwsalmon/grain` | a scope or preset on one repository only |
 | `api:ops/triage` | a [scope set](#scope-sets)'s resolved scopes |
 
+Each scope and preset is also a method of grain's in-process capability
+server `https://grain.dev/capabilities/api`
+([unified-grants.design.md](../design/design/unified-grants.design.md) §1):
+`https://grain.dev/capabilities/api#ci:write` with `{repo: bwsalmon/grain}`
+is the same grant as `api:ci:write@bwsalmon/grain`, and every check that
+reads grants (admission, the proposal and approval rules, the capability
+policy) reads the two as one. `GET /api/capability-methods` lists the
+server. For now grain still records the `api:` spelling, so a reference
+sent in is stored as the `api:` name it stands for.
+
 A template, schedule or task can also write the grant as the `api`
 capability with arguments, which is the same thing spelled for a
 declaration:

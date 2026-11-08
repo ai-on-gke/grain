@@ -1061,8 +1061,20 @@ func (g APIGrant) OutsideRepoLimit() error {
 // not an api grant at all; err is set for one that is, but names no
 // scope or preset of the vocabulary, or a repository that does not
 // parse.
+//
+// An api reference (https://grain.dev/capabilities/api#<what>, with an
+// optional {repo}) reads as the api:<what>[@repo] it stands for
+// (CanonicalGrant); g.Name is name as given.
 func ParseAPIGrant(name string) (g APIGrant, ok bool, err error) {
-	rest, isAPI := strings.CutPrefix(strings.TrimSpace(name), APIGrantPrefix)
+	spelled := strings.TrimSpace(name)
+	if _, isRef := apiMethodOf(CapabilityGrantRef(spelled)); isRef {
+		legacy, legal := LegacyGrantString(CanonicalGrant(spelled))
+		if !legal {
+			return APIGrant{}, true, fmt.Errorf("api grant %q: takes no argument but repo", name)
+		}
+		spelled = legacy
+	}
+	rest, isAPI := strings.CutPrefix(spelled, APIGrantPrefix)
 	if !isAPI {
 		return APIGrant{}, false, nil
 	}
