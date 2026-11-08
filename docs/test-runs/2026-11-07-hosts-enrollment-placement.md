@@ -99,6 +99,17 @@ servers, which no longer exist.
 
 - `go unit` had failed on `tests/hygiene` `TestLicenseHeaders` (the four helper scripts that attempt 1 committed). The cause was this branch's own change, not the base; fix 3 above.
 - I ran `go unit`'s full package list locally with `-race`. The only other failure was `pkg/daemon` `TestAdoptedCISandboxFetchesAfterCARotationAcrossRestart` (`step runner a1-s0 missing in sandbox`). It failed while a UI build and a Go build were loading the VM at the same time, and passed 3 of 3 runs in isolation (`-race -count=3`). The branch does not touch it. This run had no access to GitHub CI history (`grain ci` is not granted), so whether it also flakes on `main` is unconfirmed.
+- Merge-queue repair run (2026-11-08, ~03:00 UTC). At `55c6c34c`, `go unit` passed. Three other jobs failed:
+  - `run host`: `TestDaemonRestartKeepsAWarmSessionSandboxOnlyUnderItsRecordedKeys` failed, and the log tail did not include an assertion.
+  - `go e2e`: a test in `./tests/e2e/...`. The tail grain served did not name it.
+  - `installer`: a subtest of `TestGoogleTrackRunsAgyThroughHostdAndMigratesFromHostMode`.
+
+  None of these tests runs the code this branch changes. Before the commit that changed it, nothing in `tests/` referred to `RenewInterval`, `RenewedAt`, `hostRegistryVerb` or `delete-revoked`. Locally:
+  - The three `run host` restart acceptance tests pass with `GRAIN_RUNHOST_DOCKER=1` (222 s).
+  - `go test -race ./tests/e2e/... ./tests/deploy/...` passes (628 s and 368 s).
+  - `go test -race` passes on `./pkg/agentd/... ./pkg/hostd/... ./pkg/cli/... ./tests/hygiene/... ./cmd/grain-agentd/...`.
+
+  A clean local run of the installer suite was not possible. That suite installs into the VM it runs on, under `/etc/grain` and systemd. The first local attempt ran under `sudo` without `/usr/sbin` on `PATH`, so it could not find `runuser`, and the timeout cut it off before it could clean up. The second attempt then started from the leftover `/etc/grain/hostd.yaml` (`mapping key "fakecap" already defined`). `origin/main` was merged in (`d7dde0c2`, PR #877) and CI ran again.
 
 ## Follow-ups
 
