@@ -338,7 +338,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	listenAddr := fs.String("listen", envOrDefault("PLC_CHAT_GATEWAY_LISTEN", ":4286"), "HTTP listen address")
 	registryURL := fs.String("registry-url", os.Getenv("GRAIN_REGISTRY_URL"), "Grain Registry base URL")
 	grainURL := fs.String("grain-url", os.Getenv("GRAIN_URL"), "Default Grain daemon base URL")
-	grainToken := fs.String("grain-token", os.Getenv("GRAIN_TOKEN"), "Bearer token sent to Grain daemons (an access code or an external-agent token; $GRAIN_TOKEN)")
+	grainToken := fs.String("grain-token", os.Getenv("GRAIN_TOKEN"), "Bearer token sent to the -grain-url daemon only (an access code or an external-agent token; $GRAIN_TOKEN)")
 	webhookSecret := fs.String("webhook-secret", os.Getenv("PLC_CHAT_WEBHOOK_SECRET"), "Shared secret for HMAC chat webhook verification")
 	defaultSpace := fs.String("default-space", os.Getenv("PLC_CHAT_DEFAULT_SPACE"), "Default chat space ID for outbound events")
 	watchSSE := fs.Bool("watch-sse", false, "Subscribe to GET /api/events SSE on startup")
@@ -355,7 +355,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	client := grainclient.New(grainclient.Config{
 		RegistryURL: *registryURL,
 		GrainURL:    *grainURL,
-		BearerToken: *grainToken,
+		GrainToken:  *grainToken,
 		ClientName:  grainclient.ClientPLCChatGateway,
 		Perf:        recorder,
 	})
