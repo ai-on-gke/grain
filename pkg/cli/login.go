@@ -354,6 +354,9 @@ func cmdLogout(ctx context.Context, base *ui.HTTPClient, out *printer, sel selec
 		return unknownContext(name, "")
 	}
 	store := newCredentialStore()
+	if err := store.keyringReachable(name, entry.Credential); err != nil {
+		return err
+	}
 	revoked := false
 	if entry.TokenID != "" && !*local {
 		rc := ui.NewHTTPClient(entry.Server)
