@@ -1,0 +1,24 @@
+{"item":4,"label":"legacy@1440","where":"Settings → Tasks","picker":"settings-default-capabilities-label","hint":true,"exampleLegacy":false,"withinViewport":true,"grants":1,"menu":"none offered -- grant access under grants"}
+{"item":4,"label":"legacy@1440","where":"Repository page","pickers":0,"grants":2}
+{"item":4,"label":"legacy@1440","where":"New task (/new)","picker":null,"hint":false,"exampleLegacy":true,"withinViewport":null,"grants":1,"menu":"Example legacy capability"}
+{"item":4,"label":"legacy@1440","where":"Template (/templates/new)","pickers":0,"grants":0}
+{"item":4,"label":"legacy@1440","where":"Schedule (/schedules/new)","pickers":0,"grants":0}
+{"item":4,"label":"legacy@1440","where":"Task pane (/tasks/1)","picker":"Legacy capabilities","hint":false,"exampleLegacy":true,"withinViewport":null,"grants":1,"menu":"Example legacy capability"}
+{"item":4,"label":"legacy@390","where":"Settings → Tasks","picker":"settings-default-capabilities-label","hint":true,"exampleLegacy":false,"withinViewport":true,"grants":1,"menu":"none offered -- grant access under grants"}
+{"item":4,"label":"legacy@390","where":"Repository page","pickers":0,"grants":2}
+{"item":4,"label":"legacy@390","where":"New task (/new)","picker":null,"hint":false,"exampleLegacy":true,"withinViewport":null,"grants":1,"menu":"Example legacy capability"}
+{"item":4,"label":"legacy@390","where":"Template (/templates/new)","pickers":0,"grants":0}
+{"item":4,"label":"legacy@390","where":"Schedule (/schedules/new)","pickers":0,"grants":0}
+{"item":4,"label":"legacy@390","where":"Task pane (/tasks/1)","picker":"Legacy capabilities","hint":false,"exampleLegacy":true,"withinViewport":null,"grants":1,"menu":"Example legacy capability"}
+{"item":4,"label":"no-legacy@1440","where":"Settings → Tasks","picker":"settings-default-capabilities-label","disabled":true}
+{"item":4,"label":"no-legacy@1440","where":"Repository page","pickers":0,"grants":0}
+{"item":4,"label":"no-legacy@1440","where":"New task (/new)","picker":null,"hint":true,"exampleLegacy":false,"withinViewport":true,"grants":1,"menu":"None offered -- grant access under Grants"}
+{"item":4,"label":"no-legacy@1440","where":"Template (/templates/new)","pickers":0,"grants":0}
+{"item":4,"label":"no-legacy@1440","where":"Schedule (/schedules/new)","pickers":0,"grants":0}
+{"item":4,"label":"no-legacy@1440","where":"Task pane (/tasks/1)","picker":"Legacy capabilities","hint":true,"exampleLegacy":false,"withinViewport":true,"grants":1,"menu":"None offered -- grant access under Grants"}
+{"item":4,"label":"no-legacy@390","where":"Settings → Tasks","picker":"settings-default-capabilities-label","disabled":true}
+{"item":4,"label":"no-legacy@390","where":"Repository page","pickers":0,"grants":0}
+{"item":4,"label":"no-legacy@390","where":"New task (/new)","picker":null,"hint":true,"exampleLegacy":false,"withinViewport":true,"grants":1,"menu":"None offered -- grant access under Grants"}
+{"item":4,"label":"no-legacy@390","where":"Template (/templates/new)","pickers":0,"grants":0}
+{"item":4,"label":"no-legacy@390","where":"Schedule (/schedules/new)","pickers":0,"grants":0}
+{"item":4,"label":"no-legacy@390","where":"Task pane (/tasks/1)","picker":"Legacy capabilities","hint":true,"exampleLegacy":false,"withinViewport":true,"grants":1,"menu":"None offered -- grant access under Grants"}
