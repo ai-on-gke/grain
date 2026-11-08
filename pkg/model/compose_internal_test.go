@@ -29,7 +29,7 @@ func TestAdjustGrainCIGrantDoesNotWriteIntoTheDeclaration(t *testing.T) {
 	if len(got) != 2 || got[1].Capability != GrainCIGrant {
 		t.Fatalf("adjustGrainCIGrant(..., true) = %+v, want self-debug then grain#ci", got)
 	}
-	if spare := backing[:2][1]; spare != (Grant{}) {
+	if spare := backing[:2][1]; !spare.Equal(Grant{}) {
 		t.Fatalf("adjustGrainCIGrant wrote %+v into the declaration's spare capacity", spare)
 	}
 
@@ -175,7 +175,7 @@ func TestApplyGrainCIGrantKeepsCIReadForARequestedGrainCI(t *testing.T) {
 	applyGrainCIGrant(&comp, false)
 
 	want := []Grant{{Capability: "self-debug", Via: GrantByLabel}, {Capability: "api:ci-read@acme/widgets", Via: GrantByGrain}}
-	if len(comp.Grants) != len(want) || comp.Grants[0] != want[0] || comp.Grants[1] != want[1] {
+	if len(comp.Grants) != len(want) || !comp.Grants[0].Equal(want[0]) || !comp.Grants[1].Equal(want[1]) {
 		t.Fatalf("Grants = %+v, want %+v", comp.Grants, want)
 	}
 	if len(comp.GrantSources) != 2 || comp.GrantSources[1] != comp.GrantSources[0] || comp.GrantSources[1] == "" {

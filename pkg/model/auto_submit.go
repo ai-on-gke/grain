@@ -258,6 +258,9 @@ func AutoSubmitLimitNote(proposer string, limit AutoSubmitLimit, limits AutoSubm
 // director-capabilities.spec.md §4.2), which the filing paths ask for
 // with the seeding source this function does not know.
 func EscalatedCapabilities(child, parent Task) []string {
+	// Read through CanonicalGrant into the stored spelling, so an api
+	// reference and today's api:<scope> are one grant here.
+	child.Grants, parent.Grants = storedGrantSpellings(child.Grants), storedGrantSpellings(parent.Grants)
 	held := make(map[string]bool, len(parent.Grants))
 	for _, g := range parent.Grants {
 		held[g.Capability] = true

@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"slices"
 	"strings"
@@ -825,6 +826,7 @@ func TestMCPPerToolRoleChecks(t *testing.T) {
 	// tools/list filters out write tools, read calls succeed, write calls fail
 	// naming the missing scope and role.
 	enableExternalAgentAPI(t, h.client.Store)
+	h.allow(t, "user:operator@example.com", "grain/operator") // behind IAP a token works only while its owner is listed
 	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
 	issued, err := h.client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
 		Name:     "contrib-bot",
@@ -955,5 +957,96 @@ func TestExternalTokenCannotExceedItsOwnersCurrentRole(t *testing.T) {
 	rec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, "/api/tasks", `{"title":"x","description":"x","noRepo":true}`, bearer)
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "cannot be checked") {
 		t.Fatalf("token of an owner only a failed group lookup could match = %d %s, want 403", rec.Code, rec.Body.String())
+	}
+}
+
+// A gma_ token stops working once its owner is removed from the allowlist,
+// and never works for an owner the list does not match, while a verifier
+// admits people by that list; with no verifier the list admits nobody and
+// such a token works as before (docs/test-runs/2026-11-07-rbac-roles.md O4).
+func TestExternalTokenOfAnUnlistedOwnerIsRefusedBehindAVerifier(t *testing.T) {
+	ctx := context.Background()
+	h := newRoleHarness(t)
+	enableExternalAgentAPI(t, h.client.Store)
+	h.allow(t, "user:olivia@example.com", "grain/contributor")
+	issue := func(name, owner string) map[string]string {
+		t.Helper()
+		issued, err := h.client.CreateExternalAgentToken(ctx, ui.CreateExternalAgentTokenRequest{
+			Name: name, ScopeSet: "grain/contributor", Owner: owner,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return map[string]string{"Authorization": "Bearer " + issued.Token, "Content-Type": "application/json"}
+	}
+	file := func(bearer map[string]string) *httptest.ResponseRecorder {
+		return serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, "/api/tasks", `{"title":"gma filing","description":"x","noRepo":true}`, bearer)
+	}
+	olivia := issue("olivia-laptop", "olivia@example.com")
+	stranger := issue("sam-laptop", "sam@example.com")
+	unowned, err := h.client.CreateExternalAgentToken(ctx, ui.CreateExternalAgentTokenRequest{
+		Name: "widgets-writer", Scopes: []string{"tasks:write"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := map[string]string{"Authorization": "Bearer " + unowned.Token, "Content-Type": "application/json"}
+
+	if rec := file(olivia); rec.Code != http.StatusCreated {
+		t.Fatalf("token of a listed owner = %d %s, want 201", rec.Code, rec.Body)
+	}
+	if _, _, err := h.client.Store.RemoveAllowedPrincipal(ctx, "user:olivia@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	for name, bearer := range map[string]map[string]string{"removed owner": olivia, "never-listed owner": stranger} {
+		for _, path := range []string{"/api/tasks", "/mcp", "/api/mcp"} {
+			rec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, path, `{"title":"x","description":"x","noRepo":true}`, bearer)
+			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "holds no role on this deployment") {
+				t.Fatalf("POST %s with a %s's token behind IAP = %d %s, want 403 naming the missing role", path, name, rec.Code, rec.Body)
+			}
+		}
+	}
+	if rec := file(local); rec.Code != http.StatusCreated {
+		t.Fatalf("unowned token (the local account) behind IAP = %d %s, want 201", rec.Code, rec.Body)
+	}
+
+	// No verifier: a single-user or access-code deployment, whose token
+	// owners were never on the list.
+	ui.ResetIAPConfig()
+	for name, bearer := range map[string]map[string]string{"removed owner": olivia, "never-listed owner": stranger, "local account": local} {
+		if rec := file(bearer); rec.Code != http.StatusCreated {
+			t.Fatalf("%s's token with no verifier = %d %s, want 201", name, rec.Code, rec.Body)
+		}
+	}
+}
+
+// Behind a verifier whose assertion beats the access code, signing in by
+// code is refused with the reason rather than answered 200 with a cookie
+// that is then never used (docs/test-runs/2026-11-07-rbac-roles.md F1).
+func TestAccessCodeSignInBehindIAPSaysTheVerifiedRoleApplies(t *testing.T) {
+	h := newRoleHarness(t)
+	h.allow(t, "user:vic@example.com", "grain/viewer")
+	for _, c := range []struct{ name, contentType, body string }{
+		{"json", "application/json", `{"code":"` + testAccessCode + `"}`},
+		{"form", "application/x-www-form-urlencoded", url.Values{"code": {testAccessCode}}.Encode()},
+	} {
+		hdrs := h.as("vic@example.com")
+		hdrs["Content-Type"] = c.contentType
+		rec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, "/api/auth/access-code", c.body, hdrs)
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "vic@example.com") ||
+			!strings.Contains(rec.Body.String(), "the access code does not change it") {
+			t.Fatalf("%s sign-in by code behind IAP = %d %s, want 403 saying the IAP role applies", c.name, rec.Code, rec.Body)
+		}
+		for _, ck := range rec.Result().Cookies() {
+			if ck.Name == ui.AccessCookieName && ck.Value != "" {
+				t.Fatalf("%s sign-in by code behind IAP set %s", c.name, ui.AccessCookieName)
+			}
+		}
+	}
+	// Without an assertion the code still signs in.
+	rec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, "/api/auth/access-code", `{"code":"`+testAccessCode+`"}`,
+		map[string]string{"Content-Type": "application/json"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("sign-in by code without an assertion = %d %s, want 200", rec.Code, rec.Body)
 	}
 }

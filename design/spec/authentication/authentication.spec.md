@@ -17,7 +17,7 @@ Every normative requirement below is derived from the implementation on `main` a
 - [5. `-ui-require-verifier` (`-ui-require-iap`) and Loopback Break-Glass](#5--ui-require-verifier--ui-require-iap-and-loopback-break-glass)
 - [6. Cross-Origin and CSRF Protection](#6-cross-origin-and-csrf-protection)
 - [7. Refusal Responses and Browser Pages](#7-refusal-responses-and-browser-pages)
-- [8. `grain hostd` Connection Identity and Owner Matching](#8-grain-hostd-connection-identity-and-owner-matching)
+- [8. `grain host` Connection Identity and Owner Matching](#8-grain-host-connection-identity-and-owner-matching)
 - [9. Diagnostic Logging of Refused Assertions and Principals](#9-diagnostic-logging-of-refused-assertions-and-principals)
 - [10. Plaintext Identity Headers and Sandbox Isolation](#10-plaintext-identity-headers-and-sandbox-isolation)
 - [11. Delegated (On-Behalf-Of) Identity via the Registry](#11-delegated-on-behalf-of-identity-via-the-registry)
@@ -241,7 +241,7 @@ Every normative requirement below is derived from the implementation on `main` a
 2. On API requests (`/api/` or `/api/*`) and non-`GET`/`HEAD` methods, the response body MUST be JSON naming the verified email and how to admit it (`Settings → Access` or `grain access allow`), plus any underlying lookup error.
 3. On browser navigations (`GET` or `HEAD` outside `/api/`), `writePrincipalRefusedPage` MUST return `text/html; charset=utf-8` titled `"Not allowed on this grain"` containing:
    - the HTML-escaped verified email and verifier name (and any underlying lookup error);
-   - remediation prose from the callback registered via `RegisterPrincipalAdvice`, or by default `Settings → Access` and `grain access allow 'user:<email>'` for human callers (or `grain hostds register --owner '<email>'` for service accounts);
+   - remediation prose from the callback registered via `RegisterPrincipalAdvice`, or by default `Settings → Access` and `grain access allow 'user:<email>'` for human callers (or `grain host register --owner '<email>'` for service accounts);
    - an `"Owner: sign in with the access code"` section that renders `<form method="post" action="/api/auth/access-code">` if and only if the deciding verifier has `AccessCodeWins() == true`, and otherwise explains that the verifier's identity takes precedence over the access code.
 
 **Pinned by:**
@@ -261,7 +261,7 @@ Every normative requirement below is derived from the implementation on `main` a
 
 ---
 
-## 8. `grain hostd` Connection Identity and Owner Matching
+## 8. `grain host` Connection Identity and Owner Matching
 
 ### 8.1 Local vs remote `hostd` classification and allowlist gate {#AU-17}
 
@@ -277,7 +277,7 @@ Every normative requirement below is derived from the implementation on `main` a
 
 ### 8.2 Hostd token authentication and remote owner matching {#AU-18}
 
-1. `grain hostd` dialling `GET /api/hostd/connect` MUST present its hostd credential (`ghd_…` registry token from `/api/hostds` or the deprecated shared `-hostd-token-file` secret) in `X-Grain-Hostd-Token` (falling back to `Authorization: Bearer` on the server only when `X-Grain-Hostd-Token` is empty), leaving `Authorization: Bearer <id-token>` available for OIDC ID tokens minted by `hostd.IAPTokenProvider` when `-iap-audience` / `$GRAIN_IAP_AUDIENCE` is set (`pkg/hostd/dialout.go`, `pkg/hostd/remote.go`, `pkg/hostd/iap_auth.go`).
+1. `grain host` dialling `GET /api/hostd/connect` MUST present its hostd credential (`ghd_…` registry token from `/api/hostds` or the deprecated shared `-hostd-token-file` secret) in `X-Grain-Hostd-Token` (falling back to `Authorization: Bearer` on the server only when `X-Grain-Hostd-Token` is empty), leaving `Authorization: Bearer <id-token>` available for OIDC ID tokens minted by `hostd.IAPTokenProvider` when `-iap-audience` / `$GRAIN_IAP_AUDIENCE` is set (`pkg/hostd/dialout.go`, `pkg/hostd/remote.go`, `pkg/hostd/iap_auth.go`).
 2. `hostd.Remote.ServeHTTP` MUST validate the hostd token first (`401` on missing/unknown token, `403` if `X-Grain-Hostd-Name` disagrees with the token's registered name).
 3. Whenever `ConnectIdentity.Remote` is `true`, `ownerRefusal` (`pkg/hostd/connect_identity.go`, `pkg/hostd/remote.go`) MUST:
    - refuse with `401 Unauthorized` when `ConnectIdentity.Principal` is empty;

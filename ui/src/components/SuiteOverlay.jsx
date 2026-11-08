@@ -251,10 +251,17 @@ function SuiteOverlay({
           </FormControl>
           {/* Gated like every other write on the Processes page
               (AccessGate.jsx): a role without templates:write is not
-              offered a template it could not save. */}
+              offered a template it could not save. The wrapper is
+              block-level: an inline one sits in a line box, whose strut
+              put the refused button 6px below the allowed one. */}
           <AccessGate
             scope="templates:write"
-            wrapperStyle={{ marginTop: -8, marginBottom: 8 }}
+            wrapperStyle={{
+              display: "flex",
+              width: "fit-content",
+              marginTop: -8,
+              marginBottom: 8,
+            }}
           >
             <Button
               size="small"

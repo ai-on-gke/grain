@@ -91,6 +91,58 @@ func TestProposalFromAutoApproveProposalsTaskIsQueuedWithoutAutoMerge(t *testing
 	}
 }
 
+// fakeDefaultBranches answers ui.Config.GitHubDefaultBranches from a map.
+type fakeDefaultBranches map[string]string
+
+func (f fakeDefaultBranches) DefaultBranch(owner, repo string) (string, error) {
+	return f[owner+"/"+repo], nil
+}
+
+// A parent filed with an explicit `base: main` and a live proposal that
+// names no base land on the one branch when main is the repository's
+// default, so the proposal is queued on the parent's permission -- and
+// still filed with no base of its own. Unresolved, the two compare as
+// written and the proposal waits for a person, as before (task 3411's
+// live walk).
+func TestLiveProposalWithNoBaseFromAParentFiledOnTheDefaultBranchIsQueued(t *testing.T) {
+	client, _, ctx := testClient(t)
+	parent, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "audit runner", Approved: true, Repo: "acme/widgets", Base: "main", AutoApproveProposals: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unresolved, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "before", ProposedBy: parent.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unresolved.State != model.StateProposed {
+		t.Errorf("with no default-branch reader: state = %s, want proposed", unresolved.State)
+	}
+
+	client.Config.GitHubDefaultBranches = fakeDefaultBranches{"acme/widgets": "main"}
+	piece, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "a piece of it", ProposedBy: parent.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if piece.State != model.StateQueued {
+		t.Errorf("state = %s, want queued -- \"\" is main, the branch its parent was filed on", piece.State)
+	}
+	if piece.Base != "" {
+		t.Errorf("base = %q, want \"\" -- filed with the base the request gave it", piece.Base)
+	}
+
+	client.Config.GitHubDefaultBranches = fakeDefaultBranches{"acme/widgets": "trunk"}
+	elsewhere, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "on trunk", ProposedBy: parent.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elsewhere.State != model.StateProposed {
+		t.Errorf("state = %s, want proposed -- the default branch is trunk, not its parent's main", elsewhere.State)
+	}
+}
+
 // And a task nobody trusted with an unreviewed merge passes on neither
 // half of it, which is the ordinary case and the one that keeps
 // propose_task's contract intact for every deployment that never turns

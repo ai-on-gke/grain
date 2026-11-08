@@ -279,6 +279,7 @@ func configureGitHubSimDemoWith(dir string, cfg ui.Config, repo model.RepoRef, s
 	})
 	cfg.GitHubBranches = client
 	cfg.GitHubForkPullRequests = client
+	cfg.GitHubDefaultBranches = client
 	prReader := demoPullRequests{repo: repo, client: client}
 	if prev, ok := cfg.GitHubPullRequests.(demoPullRequests); ok {
 		prReader.store = prev.store

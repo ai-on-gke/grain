@@ -672,7 +672,6 @@ export default function Actions({ t, config, act, onOpenTask }) {
               htmlInput: { "aria-label": "Admission" },
               formHelperText: { sx: { fontSize: "0.7rem" } },
             }}
-            sx={{ mt: 1, mb: 0.5 }}
           >
             <MenuItem value="standard">Standard</MenuItem>
             <MenuItem value="bypass">Bypass queue</MenuItem>
@@ -710,7 +709,6 @@ export default function Actions({ t, config, act, onOpenTask }) {
               htmlInput: { "aria-label": "Hosting" },
               formHelperText: { sx: { fontSize: "0.7rem" } },
             }}
-            sx={{ mt: 1, mb: 0.5 }}
           >
             <MenuItem value="unattended">Unattended</MenuItem>
             <MenuItem value="console">Interactive console</MenuItem>

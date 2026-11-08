@@ -31,12 +31,15 @@ import (
 
 // GCPKeyMissingSetMigrationNote formats the note recorded on a task, template
 // or schedule when a gcp#gcp-key grant carried an "account" value that matches
-// no configured permission set on https://grain.dev/capabilities/gcp.
-func GCPKeyMissingSetMigrationNote(grant, missingSet string) string {
+// no configured permission set on https://grain.dev/capabilities/gcp. The
+// grant is still rewritten (to rewritten, naming that set as its
+// permission_set) so the state repository can load it; the note says the set
+// it names has to be configured before the grant can mint anything.
+func GCPKeyMissingSetMigrationNote(grant, rewritten, missingSet string) string {
 	return fmt.Sprintf(
-		"grain: gcp#gcp-key migration kept grant %s because permission set %q is not configured on %s; "+
-			"configure that permission set or replace the grant's removed \"account\" argument with \"permission_set\".",
-		grant, missingSet, GCPCapabilityServerID,
+		"grain: gcp#gcp-key migration rewrote grant %s to %s, but permission set %q is not configured on %s; "+
+			"configure that permission set or change the grant's \"permission_set\".",
+		grant, rewritten, missingSet, GCPCapabilityServerID,
 	)
 }
 
@@ -169,9 +172,10 @@ func legacyGCPAccountSetName(spec string) string {
 //     unless a set literally named "default" is configured);
 //   - activate is dropped;
 //   - if X (or "default" when configuredSets is empty) matches no configured
-//     permission set, missingSet is returned non-empty and rewritten equals
-//     grant (changed == false) so the caller keeps the grant and records a
-//     migration note.
+//     permission set, the grant is still rewritten to permission_set: X and
+//     missingSet is returned non-empty, so the caller records a migration
+//     note. Keeping "account" would leave a grant that nothing loads: every
+//     validation of the state repository refuses it (CheckGCPKeyGrantArgs).
 func RewriteGCPKeyGrant(grant string, configuredSets []string, gcpServerIDs map[string]bool) (rewritten string, changed bool, missingSet string) {
 	s := strings.TrimSpace(grant)
 	if !IsCapabilityRef(s) {
@@ -206,25 +210,16 @@ func RewriteGCPKeyGrant(grant string, configuredSets []string, gcpServerIDs map[
 	if hasAcct && rawAcct != nil {
 		acctStr, ok := rawAcct.(string)
 		if !ok {
-			return grant, false, fmt.Sprint(rawAcct)
+			acctStr = fmt.Sprint(rawAcct)
 		}
 		acct := strings.TrimSpace(acctStr)
 		if acct != "" {
-			var target string
-			if acct == "default" {
-				switch {
-				case slices.Contains(configuredSets, "default"):
-					target = "default"
-				case len(configuredSets) > 0:
-					target = configuredSets[0]
-				default:
-					return grant, false, "default"
-				}
-			} else {
-				if !slices.Contains(configuredSets, acct) {
-					return grant, false, acct
-				}
-				target = acct
+			target := acct
+			if acct == "default" && !slices.Contains(configuredSets, "default") && len(configuredSets) > 0 {
+				target = configuredSets[0]
+			}
+			if !slices.Contains(configuredSets, target) {
+				missingSet = target
 			}
 			newWith["permission_set"] = target
 		}
@@ -245,12 +240,12 @@ func RewriteGCPKeyGrant(grant string, configuredSets []string, gcpServerIDs map[
 		return grant, false, ""
 	}
 	out := outRef.String() + "=" + string(data)
-	return out, out != grant, ""
+	return out, out != grant, missingSet
 }
 
 // RewriteGCPKeyGrantSlice rewrites a slice of capability grant strings in
-// order, deduplicating equal grants while preserving unrewritable grants
-// (whose missing permission set is reported via onMissing).
+// order, deduplicating equal grants and reporting each grant rewritten to a
+// permission set that is not configured via onMissing.
 func RewriteGCPKeyGrantSlice(items []string, configuredSets []string, gcpServerIDs map[string]bool, onMissing func(grant, missingSet string)) ([]string, bool) {
 	if len(items) == 0 {
 		return items, false
@@ -384,7 +379,9 @@ func RewriteGCPKeyCatalogue(cat *CapabilityCatalogue, configuredSets []string, g
 // task_grant_wait, template_grant, schedule_grant, repo_config, grain_config
 // (default_capabilities, console_sessions, capability_policy) and
 // persistent_sandbox. Grants whose "account" names an unconfigured permission
-// set are kept in place, logged, and noted on their task, template or schedule.
+// set are rewritten to that set all the same, logged, and noted on their
+// task, template or schedule. Migration 127 runs it again, for stores that
+// ran 109 when it still kept those grants as written.
 func MigrateGCPKeyGrantArgs(ctx context.Context, tx *sql.Tx) error {
 	type cfgRow struct {
 		id               int64
@@ -428,7 +425,7 @@ func MigrateGCPKeyGrantArgs(ctx context.Context, tx *sql.Tx) error {
 	}
 
 	logMissing := func(where, grant, missing string) {
-		log.Printf("gcp#gcp-key migration: %s: keeping grant %q because permission set %q is not configured on %s",
+		log.Printf("gcp#gcp-key migration: %s: rewrote grant %q to permission_set %q, which is not configured on %s",
 			where, grant, missing, GCPCapabilityServerID)
 	}
 
@@ -588,7 +585,7 @@ func MigrateGCPKeyGrantArgs(ctx context.Context, tx *sql.Tx) error {
 	}
 	wRows.Close()
 	for _, w := range waits {
-		if next, c, missing := RewriteGCPKeyGrant(w.cap, configuredSets, gcpServerIDs); c && missing == "" {
+		if next, c, _ := RewriteGCPKeyGrant(w.cap, configuredSets, gcpServerIDs); c {
 			if _, err := tx.ExecContext(ctx,
 				"UPDATE `task_grant_wait` SET `capability` = ? WHERE `task_id` = ?",
 				next, w.taskID); err != nil {
@@ -598,7 +595,7 @@ func MigrateGCPKeyGrantArgs(ctx context.Context, tx *sql.Tx) error {
 	}
 
 	// Rewrite task_grant, template_grant and schedule_grant, leaving notes on
-	// owners whose grants name an unconfigured permission set.
+	// owners whose grants now name an unconfigured permission set.
 	for _, tbl := range []struct {
 		grantTable string
 		ownerCol   string
@@ -676,11 +673,10 @@ func migrateOwnerGrantTableGCPKeyArgs(
 		next, changed, missing := RewriteGCPKeyGrant(r.capability, configuredSets, gcpServerIDs)
 		if missing != "" {
 			logMissing(ownerKind+" "+r.ownerID, r.capability, missing)
-			note := GCPKeyMissingSetMigrationNote(r.capability, missing)
+			note := GCPKeyMissingSetMigrationNote(r.capability, next, missing)
 			if err := recordOwnerMigrationNote(ctx, tx, ownerKind, r.ownerID, note, now); err != nil {
 				return fmt.Errorf("%s %s: recording migration note: %w", ownerKind, r.ownerID, err)
 			}
-			continue
 		}
 		if !changed {
 			continue

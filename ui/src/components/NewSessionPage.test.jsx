@@ -106,6 +106,33 @@ describe("NewSessionPage", () => {
     });
   });
 
+  it("shows the first message as sending while the session starts", async () => {
+    let finish;
+    const onStart = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const user = userEvent.setup();
+    render(<NewSessionPage onStart={onStart} />);
+
+    const box = screen.getByRole("textbox", { name: "Message" });
+    await user.click(box);
+    await user.paste("plan the docs refresh");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(onStart).toHaveBeenCalledTimes(1));
+    // The box is cleared, but the message is not gone: it is in the
+    // transcript, marked sending, for as long as starting it takes.
+    expect(box.textContent).toBe("");
+    expect(screen.getByText("plan the docs refresh")).toBeInTheDocument();
+    expect(screen.getByText("Sending…")).toBeInTheDocument();
+    expect(screen.queryByText("No messages yet")).toBeNull();
+    finish();
+    await waitFor(() => expect(screen.queryByText("Sending…")).toBeNull());
+  });
+
   it("keeps the message in the box when starting the session fails", async () => {
     const onStart = vi.fn().mockRejectedValue(new Error("503"));
     const user = userEvent.setup();
@@ -118,5 +145,9 @@ describe("NewSessionPage", () => {
 
     await waitFor(() => expect(onStart).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(box).toHaveTextContent("lost otherwise"));
+    // Back in the box only: no sending or failed bubble is left behind.
+    expect(screen.queryByText("Sending…")).toBeNull();
+    expect(screen.queryByText("Not sent")).toBeNull();
+    expect(screen.getByText("No messages yet")).toBeInTheDocument();
   });
 });
