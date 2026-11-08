@@ -119,3 +119,76 @@ func TestRunChecks(t *testing.T) {
 		t.Errorf("raised after cancelled check = %q, want no new raise", n.raised)
 	}
 }
+
+type persistentNotifier struct {
+	notifier
+	open    map[string]*model.Notification
+	openOps int
+	failErr error
+}
+
+func (p *persistentNotifier) RaiseNotification(ctx context.Context, no model.Notification) (model.NotificationRaise, error) {
+	if p.failErr != nil {
+		return model.NotificationRaise{}, p.failErr
+	}
+	if p.open == nil {
+		p.open = map[string]*model.Notification{}
+	}
+	cp := no
+	p.open[no.Subject] = &cp
+	return p.notifier.RaiseNotification(ctx, no)
+}
+
+func (p *persistentNotifier) ClearNotification(ctx context.Context, subject, by string) (bool, error) {
+	_, had := p.open[subject]
+	delete(p.open, subject)
+	_, _ = p.notifier.ClearNotification(ctx, subject, by)
+	return had, nil
+}
+
+func (p *persistentNotifier) OpenNotification(_ context.Context, subject string) (*model.Notification, error) {
+	p.openOps++
+	return p.open[subject], nil
+}
+
+// Clear clears an open notification persisted before a daemon restart once,
+// without re-querying the store on every subsequent healthy pass, and Fail
+// retries raising a notification when an earlier attempt failed or preceded Bind.
+func TestPersistedNotificationClearsAfterRestartAndUnnotifiedSpellRetries(t *testing.T) {
+	credhealth.Reset()
+	t.Cleanup(credhealth.Reset)
+	ctx, now := context.Background(), time.Now()
+
+	store := &persistentNotifier{
+		open: map[string]*model.Notification{
+			credhealth.Subject("check:cert"): {Subject: credhealth.Subject("check:cert")},
+		},
+	}
+	credhealth.Bind(store)
+
+	if !credhealth.Clear(ctx, "check:cert") {
+		t.Error("first Clear after restart did not clear the persisted notification")
+	}
+	if credhealth.Clear(ctx, "check:cert") {
+		t.Error("second Clear reported clearing again")
+	}
+	if store.openOps != 1 || len(store.cleared) != 1 {
+		t.Errorf("openOps=%d cleared=%q, want 1 open check and 1 clear", store.openOps, store.cleared)
+	}
+
+	// Transient RaiseNotification error is retried on the next Fail in the spell.
+	store.failErr = errors.New("db busy")
+	if !credhealth.Fail(ctx, "host-tool:x", "t", "d1", now) {
+		t.Error("first Fail is not new")
+	}
+	if len(store.raised) != 0 {
+		t.Fatalf("raised = %q while store errored", store.raised)
+	}
+	store.failErr = nil
+	if credhealth.Fail(ctx, "host-tool:x", "t", "d2", now.Add(time.Minute)) {
+		t.Error("second Fail in same spell reported new")
+	}
+	if want := []string{credhealth.Subject("host-tool:x")}; !slices.Equal(store.raised, want) {
+		t.Errorf("raised after retry = %q, want %q", store.raised, want)
+	}
+}

@@ -350,12 +350,17 @@ func TestDeployStateRedactsCredentialsSection(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(state, "tables", "task.json"), []byte(`[]`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := secrets.Open(SecretsConfig(dataDir)).Set("corp-auth", "token", []byte("s3cret-cred-token")); err != nil {
+	secStore := secrets.Open(SecretsConfig(dataDir))
+	if err := secStore.Set("corp-auth", "token", []byte("s3cret-cred-token")); err != nil {
+		t.Fatal(err)
+	}
+	if err := secStore.Set("corp-auth", "quoted", []byte(`s3cret-"quoted"-token`)); err != nil {
 		t.Fatal(err)
 	}
 
 	since := time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC)
-	change.MarkBlocked("fakestatecl", change.BlockedCredentials, "expired using s3cret-cred-token", since)
+	change.MarkBlocked("fakestatecl", change.BlockedCredentials,
+		"expired using s3cret-cred-token and s3cret-\"quoted\"-token\n-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEAsecretkeyline\n-----END RSA PRIVATE KEY-----", since)
 	credhealth.Fail(context.Background(), "host-tool:made-up", "Host tools failing", "renew https://user:pass@corp.example/auth", since)
 
 	// Direct DeployProvider.ReadState call must already be redacted,
@@ -373,8 +378,14 @@ func TestDeployStateRedactsCredentialsSection(t *testing.T) {
 	if !strings.Contains(direct, `"credentials"`) || !strings.Contains(direct, `"fakestatecl"`) {
 		t.Errorf("ReadState missing credentials section:\n%s", direct)
 	}
-	if strings.Contains(direct, "s3cret-cred-token") || strings.Contains(direct, "user:pass") {
-		t.Errorf("ReadState leaked unredacted secret or userinfo:\n%s", direct)
+	for _, leak := range []string{"s3cret-cred-token", "quoted\"-token", "MIIEpAIBAAKCAQEAsecretkeyline", "user:pass"} {
+		if strings.Contains(direct, leak) {
+			t.Errorf("ReadState leaked %q:\n%s", leak, direct)
+		}
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(direct), &parsed); err != nil {
+		t.Errorf("ReadState did not produce valid JSON after PEM redaction: %v\n%s", err, direct)
 	}
 	if !strings.HasSuffix(direct, "\n") {
 		t.Errorf("ReadState missing trailing newline: %q", direct)

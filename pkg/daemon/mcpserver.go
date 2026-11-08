@@ -1487,7 +1487,7 @@ func GrantedDaemonTools(grants GrantNames, srcDir, secretsDir, stateDir, taskID 
 		redactor := grainLogRedactor(secretsDir)
 		var redact func(string) string
 		if redactor != nil {
-			redact = func(s string) string { lines, _ := redactor.Redact([]string{s}); return lines[0] }
+			redact = func(s string) string { text, _ := redactor.Text(s); return text }
 		}
 		var reader deploymenthealth.Reader
 		if client != nil {

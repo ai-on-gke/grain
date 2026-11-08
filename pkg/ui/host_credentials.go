@@ -42,9 +42,35 @@ type HostCredentialsWarning struct {
 	TaskID string    `json:"taskId,omitempty"`
 }
 
+const withheldCredentialDetail = "(withheld: the redaction list could not be read)"
+
+func (c *Client) credentialRedactor() (redactor *grainlog.Redactor, withhold bool) {
+	if c.Config.LogRedactor == nil {
+		return nil, false
+	}
+	r, err := c.Config.LogRedactor()
+	if err != nil || r == nil {
+		return nil, true
+	}
+	return r, false
+}
+
+func redactCredentialText(s string, redactor *grainlog.Redactor, withhold bool) string {
+	if s == "" {
+		return ""
+	}
+	if withhold {
+		return withheldCredentialDetail
+	}
+	out, _ := redactor.Text(s)
+	return out
+}
+
 // hostCredentialsWarning is the current spell of expired-credential runs,
 // or nil. A failed read is logged and reads as nil: the pane carries
-// everything else it has rather than going down with it.
+// everything else it has rather than going down with it. Detail is passed
+// through Config.LogRedactor (or shape-redacted when unconfigured) and
+// withheld when a configured redactor cannot be built.
 func (c *Client) hostCredentialsWarning(ctx context.Context) *HostCredentialsWarning {
 	if c.Store == nil {
 		return nil
@@ -57,7 +83,14 @@ func (c *Client) hostCredentialsWarning(ctx context.Context) *HostCredentialsWar
 	if f == nil {
 		return nil
 	}
-	return &HostCredentialsWarning{Detail: f.Detail, Since: f.Since, Last: f.Last, Runs: f.Runs, TaskID: f.TaskID}
+	redactor, withhold := c.credentialRedactor()
+	return &HostCredentialsWarning{
+		Detail: redactCredentialText(f.Detail, redactor, withhold),
+		Since:  f.Since,
+		Last:   f.Last,
+		Runs:   f.Runs,
+		TaskID: f.TaskID,
+	}
 }
 
 // CredentialsHealth is the deployment-health pane's credentials section:
@@ -80,10 +113,10 @@ type CredentialsHealth struct {
 }
 
 // credentialsHealth gathers CredentialsHealth, with host the warning
-// already read for the same response. Change-provider and credhealth
-// details are passed through Config.LogRedactor (or shape-redacted when
-// none is configured); if a configured redactor cannot be built, details
-// are withheld rather than served unredacted.
+// already read (and redacted) for the same response. Change-provider and
+// credhealth strings are passed through Config.LogRedactor (or
+// shape-redacted when none is configured); if a configured redactor cannot
+// be built, they are withheld rather than served unredacted.
 func (c *Client) credentialsHealth(host *HostCredentialsWarning) *CredentialsHealth {
 	providers := change.Blocked()
 	failures := credhealth.Failures()
@@ -91,32 +124,13 @@ func (c *Client) credentialsHealth(host *HostCredentialsWarning) *CredentialsHea
 		return nil
 	}
 	if len(providers) > 0 || len(failures) > 0 {
-		var redactor *grainlog.Redactor
-		var redactErr error
-		if c.Config.LogRedactor != nil {
-			redactor, redactErr = c.Config.LogRedactor()
-		}
-		withhold := c.Config.LogRedactor != nil && (redactErr != nil || redactor == nil)
+		redactor, withhold := c.credentialRedactor()
 		for i := range providers {
-			if providers[i].Detail == "" {
-				continue
-			}
-			if withhold {
-				providers[i].Detail = "(withheld: the redaction list could not be read)"
-				continue
-			}
-			providers[i].Detail, _ = redactor.Text(providers[i].Detail)
+			providers[i].Detail = redactCredentialText(providers[i].Detail, redactor, withhold)
 		}
 		for i := range failures {
-			if withhold {
-				failures[i].Title, _ = (*grainlog.Redactor)(nil).Text(failures[i].Title)
-				if failures[i].Detail != "" {
-					failures[i].Detail = "(withheld: the redaction list could not be read)"
-				}
-				continue
-			}
-			failures[i].Title, _ = redactor.Text(failures[i].Title)
-			failures[i].Detail, _ = redactor.Text(failures[i].Detail)
+			failures[i].Title = redactCredentialText(failures[i].Title, redactor, withhold)
+			failures[i].Detail = redactCredentialText(failures[i].Detail, redactor, withhold)
 		}
 	}
 	return &CredentialsHealth{ChangeProviders: providers, Host: host, Failures: failures}
