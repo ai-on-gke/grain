@@ -194,6 +194,7 @@ body {
 
 .reg-section {
   margin-bottom: 24px;
+  scroll-margin-top: 84px;
 }
 
 .reg-section-title {
@@ -489,17 +490,69 @@ body {
   min-width: 150px;
 }
 
+.reg-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.reg-section-head .reg-section-title {
+  margin: 0;
+}
+
+.reg-subcard {
+  padding: 14px;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.reg-subcard-title {
+  margin: 0 0 10px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.reg-ttl-row {
+  display: grid;
+  grid-template-columns: 1fr 120px;
+  gap: 8px;
+}
+
+.reg-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.reg-meta-badges {
+  margin-top: 4px;
+}
+
 @media (max-width: 720px) {
   .reg-topbar {
+    position: static;
     padding: 10px 12px;
   }
   .reg-main {
     padding: 16px 12px 36px;
   }
+  .reg-section {
+    scroll-margin-top: 16px;
+  }
   .reg-route-form {
     grid-template-columns: 1fr;
   }
   .reg-grid-cards {
+    grid-template-columns: 1fr;
+  }
+  .reg-form-grid {
     grid-template-columns: 1fr;
   }
 }

@@ -30,6 +30,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/registry/api"
 	"github.com/ai-on-gke/grain/pkg/registry/server"
+	"github.com/ai-on-gke/grain/pkg/webauth"
 )
 
 func isDemoLoopbackAddr(addr string) bool {
@@ -96,23 +97,26 @@ type demoQuotaOverride struct {
 }
 
 type demoState struct {
-	mu              sync.RWMutex
-	now             time.Time
-	callerEmail     string
-	instanceDomain  string
-	registryHost    string
-	shapes          []api.Shape
-	entries         map[string]*api.Entry
-	order           []string
-	replicas        []api.ReplicaStatus
-	tunnels         []api.TunnelSessionInfo
-	auditLog        []api.AuditLogEntry
-	nextAuditID     int64
-	ownerDisabled   map[string]bool
-	quotas          map[string]*demoQuotaOverride
-	sqlInstances    []api.SQLInstanceStatus
-	orphans         []api.OrphanVMInfo
-	reconcilerLease *api.LeaseStatus
+	mu               sync.RWMutex
+	now              time.Time
+	callerEmail      string
+	instanceDomain   string
+	registryHost     string
+	shapes           []api.Shape
+	entries          map[string]*api.Entry
+	order            []string
+	replicas         []api.ReplicaStatus
+	tunnels          []api.TunnelSessionInfo
+	auditLog         []api.AuditLogEntry
+	nextAuditID      int64
+	ownerDisabled    map[string]bool
+	quotas           map[string]*demoQuotaOverride
+	sqlInstances     []api.SQLInstanceStatus
+	orphans          []api.OrphanVMInfo
+	reconcilerLease  *api.LeaseStatus
+	delegatingApps   map[string]*api.DelegatingApp
+	delegationGrants []*api.DelegationGrant
+	nextGrantSeq     int
 }
 
 func newDemoState() *demoState {
@@ -297,6 +301,83 @@ func newDemoState() *demoState {
 			Active:     true,
 			LagSeconds: 3,
 		},
+		delegatingApps: map[string]*api.DelegatingApp{
+			"planner": {
+				Name:               "planner",
+				Principal:          "serviceAccount:planner@acme-prod.iam.gserviceaccount.com",
+				DisplayName:        "Planning Board",
+				Description:        "Files tasks and reads status on grains matching a repository route.",
+				Homepage:           "https://planner.example.com",
+				Owner:              "alice@example.com",
+				OwnerGroup:         "group:platform-eng@example.com",
+				MaxAccess:          "write",
+				MaxGrantTTLSeconds: int64(90 * 24 * time.Hour / time.Second),
+				CreatedBy:          "alice@example.com",
+				CreatedAt:          now.Add(-14 * 24 * time.Hour),
+			},
+			"triage-bot": {
+				Name:               "triage-bot",
+				Principal:          "serviceAccount:triage-bot@acme-prod.iam.gserviceaccount.com",
+				DisplayName:        "Issue Triager",
+				Description:        "Inspects active queues and CI health across your entries (read-only).",
+				Owner:              "bob@example.com",
+				OwnerGroup:         "group:platform-eng@example.com",
+				MaxAccess:          "read",
+				MaxGrantTTLSeconds: int64(30 * 24 * time.Hour / time.Second),
+				CreatedBy:          "alice@example.com",
+				CreatedAt:          now.Add(-10 * 24 * time.Hour),
+			},
+			"legacy-chat": {
+				Name:               "legacy-chat",
+				Principal:          "serviceAccount:legacy-chat@acme-prod.iam.gserviceaccount.com",
+				DisplayName:        "Legacy Chat Slash Commands",
+				Description:        "Retired chat integration; disabled pending decommissioning.",
+				Owner:              "carol@example.com",
+				MaxAccess:          "write",
+				MaxGrantTTLSeconds: int64(30 * 24 * time.Hour / time.Second),
+				CreatedBy:          "alice@example.com",
+				CreatedAt:          now.Add(-30 * 24 * time.Hour),
+				DisabledAt:         timePtr(now.Add(-2 * 24 * time.Hour)),
+				DisabledBy:         "alice@example.com",
+			},
+		},
+		delegationGrants: []*api.DelegationGrant{
+			{
+				ID:         "dlg_a1b2c3d4e5f60001",
+				App:        "planner",
+				Person:     "alice@example.com",
+				Entries:    []string{"platform-vm", "alice-workstation"},
+				Access:     "write",
+				CreatedAt:  now.Add(-5 * 24 * time.Hour),
+				UpdatedAt:  now.Add(-5 * 24 * time.Hour),
+				ExpiresAt:  now.Add(25 * 24 * time.Hour),
+				LastUsedAt: timePtr(now.Add(-18 * time.Minute)),
+			},
+			{
+				ID:         "dlg_a1b2c3d4e5f60002",
+				App:        "triage-bot",
+				Person:     "alice@example.com",
+				Entries:    []string{"*"},
+				Access:     "read",
+				CreatedAt:  now.Add(-9 * 24 * time.Hour),
+				UpdatedAt:  now.Add(-9 * 24 * time.Hour),
+				ExpiresAt:  now.Add(21 * 24 * time.Hour),
+				LastUsedAt: timePtr(now.Add(-2 * time.Hour)),
+			},
+			{
+				ID:        "dlg_a1b2c3d4e5f60000",
+				App:       "legacy-chat",
+				Person:    "alice@example.com",
+				Entries:   []string{"alice-workstation"},
+				Access:    "write",
+				CreatedAt: now.Add(-20 * 24 * time.Hour),
+				UpdatedAt: now.Add(-3 * 24 * time.Hour),
+				ExpiresAt: now.Add(10 * 24 * time.Hour),
+				RevokedAt: timePtr(now.Add(-3 * 24 * time.Hour)),
+				RevokedBy: "alice@example.com",
+			},
+		},
+		nextGrantSeq: 3,
 	}
 
 	seedEntries := []*api.Entry{
@@ -770,6 +851,12 @@ func (d *demoState) handler() http.Handler {
 	mux.HandleFunc("DELETE /api/admin/tunnels/{name}", d.handleAdminDisconnectTunnel)
 	mux.HandleFunc("POST /api/admin/entries/{name}/purge", d.handleAdminPurgeEntry)
 	mux.HandleFunc("POST /api/admin/entries/{name}/transfer", d.handleAdminForceTransfer)
+	mux.HandleFunc("GET /api/admin/delegating-apps", d.handleAdminListDelegatingApps)
+	mux.HandleFunc("POST /api/admin/delegating-apps", d.handleAdminCreateDelegatingApp)
+	mux.HandleFunc("PATCH /api/admin/delegating-apps/{name}", d.handleAdminSetDelegatingAppDisabled)
+	mux.HandleFunc("GET /api/delegation-grants", d.handleListDelegationGrants)
+	mux.HandleFunc("POST /api/delegation-grants", d.handleCreateDelegationGrant)
+	mux.HandleFunc("DELETE /api/delegation-grants/{ref}", d.handleRevokeDelegationGrant)
 	mux.HandleFunc("GET /api/directory", d.handleDirectory)
 	mux.HandleFunc("GET /api/route", d.handleRoute)
 	mux.HandleFunc("GET /api/entries/{name}/availability", d.handleAvailability)
@@ -1921,4 +2008,304 @@ func (d *demoState) handleAdminForceTransfer(w http.ResponseWriter, r *http.Requ
 	}
 	d.appendAuditLocked("admin_override", "", "entry_transfer", name, map[string]any{"from": prev, "to": to, "force": true})
 	writeJSON(w, http.StatusOK, *e)
+}
+
+func (d *demoState) handleAdminListDelegatingApps(w http.ResponseWriter, r *http.Request) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	names := make([]string, 0, len(d.delegatingApps))
+	for name := range d.delegatingApps {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	apps := make([]api.DelegatingApp, 0, len(names))
+	for _, name := range names {
+		apps = append(apps, *d.delegatingApps[name])
+	}
+	writeJSON(w, http.StatusOK, api.ListDelegatingAppsResponse{Apps: apps})
+}
+
+func (d *demoState) handleAdminCreateDelegatingApp(w http.ResponseWriter, r *http.Request) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var req api.CreateDelegatingAppRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", "invalid JSON body")
+		return
+	}
+	name := strings.ToLower(strings.TrimSpace(req.Name))
+	if !delegatingAppNameRe.MatchString(name) {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument",
+			fmt.Sprintf("invalid app name %q: must be 3..63 lowercase ASCII letters, digits, or hyphens, starting with a letter and ending with a letter or digit", req.Name))
+		return
+	}
+	principal, err := validateAppPrincipal(req.Principal)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", err.Error())
+		return
+	}
+	owner := strings.ToLower(strings.TrimSpace(req.Owner))
+	if owner == "" {
+		owner = strings.ToLower(d.callerEmail)
+	}
+	if !strings.Contains(owner, "@") || webauth.PrincipalKindForEmail(owner) != webauth.PrincipalHuman {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", fmt.Sprintf("owner %q must be a person's email", req.Owner))
+		return
+	}
+	maxAccess := strings.ToLower(strings.TrimSpace(req.MaxAccess))
+	if maxAccess == "" {
+		maxAccess = "write"
+	}
+	if maxAccess != "read" && maxAccess != "write" {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", fmt.Sprintf("invalid max_access %q: must be \"read\" or \"write\"", req.MaxAccess))
+		return
+	}
+	if req.MaxGrantTTLSeconds < 0 {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", "max_grant_ttl_seconds must not be negative")
+		return
+	}
+	ttlSec := req.MaxGrantTTLSeconds
+	if ttlSec == 0 {
+		ttlSec = int64(90 * 24 * time.Hour / time.Second)
+	}
+	if _, exists := d.delegatingApps[name]; exists {
+		writeJSONError(w, http.StatusConflict, "conflict", fmt.Sprintf("a delegating app named %q already exists", name))
+		return
+	}
+	for _, existing := range d.delegatingApps {
+		if strings.EqualFold(existing.Principal, principal) {
+			writeJSONError(w, http.StatusConflict, "conflict", fmt.Sprintf("a delegating app with principal %q already exists", principal))
+			return
+		}
+	}
+	displayName := strings.TrimSpace(req.DisplayName)
+	if displayName == "" {
+		displayName = name
+	}
+	created := &api.DelegatingApp{
+		Name:                name,
+		Principal:           principal,
+		DisplayName:         displayName,
+		Description:         strings.TrimSpace(req.Description),
+		Homepage:            strings.TrimSpace(req.Homepage),
+		Owner:               owner,
+		OwnerGroup:          strings.TrimSpace(req.OwnerGroup),
+		MaxAccess:           maxAccess,
+		MaxGrantTTLSeconds:  ttlSec,
+		RequireSubjectToken: req.RequireSubjectToken,
+		RedirectURIs:        req.RedirectURIs,
+		CreatedBy:           strings.ToLower(d.callerEmail),
+		CreatedAt:           d.now,
+	}
+	d.delegatingApps[name] = created
+	d.appendAuditLocked("admin_override", "", "admin_delegating_app_create", "", map[string]any{
+		"app":        created.Name,
+		"principal":  created.Principal,
+		"max_access": created.MaxAccess,
+	})
+	writeJSON(w, http.StatusCreated, *created)
+}
+
+func (d *demoState) handleAdminSetDelegatingAppDisabled(w http.ResponseWriter, r *http.Request) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	name := strings.ToLower(strings.TrimSpace(r.PathValue("name")))
+	var req api.SetDelegatingAppDisabledRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", "invalid JSON body")
+		return
+	}
+	app, ok := d.delegatingApps[name]
+	if !ok {
+		writeJSONError(w, http.StatusNotFound, "not_found", fmt.Sprintf("no delegating app named %q", name))
+		return
+	}
+	action := "admin_delegating_app_enable"
+	if req.Disabled {
+		t := d.now
+		app.DisabledAt = &t
+		app.DisabledBy = strings.ToLower(d.callerEmail)
+		action = "admin_delegating_app_disable"
+	} else {
+		app.DisabledAt = nil
+		app.DisabledBy = ""
+	}
+	d.appendAuditLocked("admin_override", "", action, "", map[string]any{"app": name})
+	writeJSON(w, http.StatusOK, *app)
+}
+
+func (d *demoState) handleListDelegationGrants(w http.ResponseWriter, r *http.Request) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	includeRevoked := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("include_revoked")), "true")
+	var out []api.DelegationGrant
+	for _, g := range d.delegationGrants {
+		if !strings.EqualFold(g.Person, d.callerEmail) {
+			continue
+		}
+		if !includeRevoked && g.RevokedAt != nil {
+			continue
+		}
+		cp := *g
+		cp.Entries = append([]string{}, g.Entries...)
+		out = append(out, cp)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.After(out[j].CreatedAt)
+		}
+		return out[i].ID < out[j].ID
+	})
+	if out == nil {
+		out = []api.DelegationGrant{}
+	}
+	writeJSON(w, http.StatusOK, api.ListDelegationGrantsResponse{Grants: out})
+}
+
+func (d *demoState) handleCreateDelegationGrant(w http.ResponseWriter, r *http.Request) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var req api.CreateDelegationGrantRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", "invalid JSON body")
+		return
+	}
+	person := strings.ToLower(strings.TrimSpace(d.callerEmail))
+	if p := strings.ToLower(strings.TrimSpace(req.Person)); p != "" && p != person {
+		writeJSONError(w, http.StatusForbidden, "forbidden", "a delegation grant can only be made by the person it is for")
+		return
+	}
+	appName := strings.ToLower(strings.TrimSpace(req.App))
+	if appName == "" {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", "app is required")
+		return
+	}
+	var entries []string
+	seen := map[string]bool{}
+	for _, raw := range req.Entries {
+		e := strings.ToLower(strings.TrimSpace(raw))
+		if e == "" || seen[e] {
+			continue
+		}
+		if e != "*" {
+			if err := api.ValidateEntryName(e); err != nil {
+				writeJSONError(w, http.StatusBadRequest, "invalid_argument", err.Error())
+				return
+			}
+		}
+		seen[e] = true
+		entries = append(entries, e)
+	}
+	if len(entries) == 0 {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", `entries is required: name the entries the app may reach for you, or "*" for every entry you can reach`)
+		return
+	}
+	if req.TTLSeconds < 0 {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", "ttl_seconds must not be negative")
+		return
+	}
+	app, ok := d.delegatingApps[appName]
+	if !ok {
+		writeJSONError(w, http.StatusNotFound, "not_found", fmt.Sprintf("no delegating app named %q", appName))
+		return
+	}
+	if app.DisabledAt != nil {
+		writeJSONError(w, http.StatusForbidden, "app_disabled", fmt.Sprintf("delegating app %q is disabled", appName))
+		return
+	}
+	access := strings.ToLower(strings.TrimSpace(req.Access))
+	if access == "" {
+		access = app.MaxAccess
+	}
+	if access != "read" && access != "write" {
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", fmt.Sprintf("invalid access %q: must be \"read\" or \"write\"", req.Access))
+		return
+	}
+	if app.MaxAccess == "read" && access == "write" {
+		writeJSONError(w, http.StatusForbidden, "exceeds_max_access", fmt.Sprintf("delegating app %q accepts read-only grants", appName))
+		return
+	}
+	ttlSec := req.TTLSeconds
+	if ttlSec <= 0 {
+		ttlSec = int64(30 * 24 * time.Hour / time.Second)
+	}
+	if app.MaxGrantTTLSeconds > 0 && ttlSec > app.MaxGrantTTLSeconds {
+		ttlSec = app.MaxGrantTTLSeconds
+	}
+	expiresAt := d.now.Add(time.Duration(ttlSec) * time.Second)
+	var grant *api.DelegationGrant
+	for _, g := range d.delegationGrants {
+		if g.App == appName && strings.EqualFold(g.Person, person) && g.RevokedAt == nil {
+			g.Entries = entries
+			g.Access = access
+			g.UpdatedAt = d.now
+			g.ExpiresAt = expiresAt
+			grant = g
+			break
+		}
+	}
+	if grant == nil {
+		id := fmt.Sprintf("dlg_a1b2c3d4e5f6%04x", d.nextGrantSeq)
+		d.nextGrantSeq++
+		grant = &api.DelegationGrant{
+			ID:        id,
+			App:       appName,
+			Person:    person,
+			Entries:   entries,
+			Access:    access,
+			CreatedAt: d.now,
+			UpdatedAt: d.now,
+			ExpiresAt: expiresAt,
+		}
+		d.delegationGrants = append(d.delegationGrants, grant)
+	}
+	d.appendAuditLocked("owner", grant.ID, "delegation_grant_create", "", map[string]any{
+		"app":      grant.App,
+		"grant_id": grant.ID,
+		"entries":  grant.Entries,
+		"access":   grant.Access,
+	})
+	cp := *grant
+	cp.Entries = append([]string{}, grant.Entries...)
+	writeJSON(w, http.StatusOK, cp)
+}
+
+func (d *demoState) handleRevokeDelegationGrant(w http.ResponseWriter, r *http.Request) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	ref := strings.TrimSpace(r.PathValue("ref"))
+	person := strings.ToLower(strings.TrimSpace(d.callerEmail))
+	var grant *api.DelegationGrant
+	if strings.HasPrefix(ref, grantIDPrefix) {
+		for _, g := range d.delegationGrants {
+			if g.ID == ref {
+				grant = g
+				break
+			}
+		}
+	} else {
+		appName := strings.ToLower(ref)
+		for _, g := range d.delegationGrants {
+			if g.App == appName && strings.EqualFold(g.Person, person) && g.RevokedAt == nil {
+				grant = g
+				break
+			}
+		}
+	}
+	if grant == nil || !strings.EqualFold(grant.Person, person) {
+		writeJSONError(w, http.StatusNotFound, "not_found", fmt.Sprintf("you have no live delegation grant %q", ref))
+		return
+	}
+	if grant.RevokedAt == nil {
+		t := d.now
+		grant.RevokedAt = &t
+		grant.RevokedBy = person
+		d.appendAuditLocked("owner", grant.ID, "delegation_grant_revoke", "", map[string]any{
+			"app":      grant.App,
+			"grant_id": grant.ID,
+		})
+	}
+	cp := *grant
+	cp.Entries = append([]string{}, grant.Entries...)
+	writeJSON(w, http.StatusOK, cp)
 }
