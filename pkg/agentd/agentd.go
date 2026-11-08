@@ -145,10 +145,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	joinCode := fs.String("join", "", "enroll this host using an enrollment code from Settings -> Hosts -> Invite hosts ($"+JoinCodeEnv+")")
 	rekeyHost := fs.String("rekey", "", "migrate an existing per-host token for the named host to a key-bound credential, accepted by the deployment owner")
 	joinOnly := fs.Bool("join-only", false, "with -join or -rekey: exit 0 once accepted and the credential is saved, without starting the server")
-	name := fs.String("name", "", "the registry name this hostd expects to be; optional, the daemon names it from its token")
-	allowlist := fs.String("allowlist", p.Allowlist, "the agent CLIs this hostd may run (clis: only); owned by you or root, and not group- or world-writable")
-	socket := fs.String("socket", defaultSocket(), "the local unix socket hostd also listens on (mode 0600)")
-	stateDir := fs.String("state-dir", p.StateDir, "where hostd records the process groups it started")
+	name := fs.String("name", "", "the registry name this host expects to be (Settings -> Hosts); optional, the daemon names it from its token")
+	allowlist := fs.String("allowlist", p.Allowlist, "the agent CLIs this host agent may run (clis: only); owned by you or root, and not group- or world-writable")
+	socket := fs.String("socket", defaultSocket(), "the local unix socket the host agent also listens on (mode 0600)")
+	stateDir := fs.String("state-dir", p.StateDir, "where the host agent records the process groups it started")
 	iapAudience := fs.String("iap-audience", "", "the OAuth client ID of the IAP in front of the daemon, for an IAP URL")
 	build := fs.Bool("build", false, "print this binary's build and exit")
 	check := fs.Bool("check", false, "check the allowlist, print the agent CLIs it offers, and exit")
@@ -291,6 +291,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		RenewName:       *name,
 		RenewKey:        privKey,
 		CurrentToken:    getToken,
+		RenewedAt:       hostd.TokenFileIssuedAt(*tokenFile),
 		OnTokenRenewed: func(next string, _ time.Time) {
 			tokMu.Lock()
 			curToken = next
@@ -333,7 +334,7 @@ func checkAgentsOnly(path string, owners []uint32) error {
 	}
 	if len(a.Capabilities) > 0 {
 		names := slices.Sorted(maps.Keys(a.Capabilities))
-		return fmt.Errorf("%s names capabilities (%s): %s runs agent CLIs only; remove them, or use `grain hostd`", path, strings.Join(names, ", "), Program)
+		return fmt.Errorf("%s names capabilities (%s): %s runs agent CLIs only; remove them, or run `grain host`, which serves capabilities too", path, strings.Join(names, ", "), Program)
 	}
 	if len(a.CLIs) == 0 {
 		return fmt.Errorf("%s offers no agent CLIs: add a clis: entry (agy, claude or codex)", path)
