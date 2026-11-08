@@ -1,0 +1,122 @@
+{
+  "item": "item3-owner-proposer",
+  "results": [
+    {
+      "name": "3a operator-filed task owner defaults to the operator",
+      "pass": true,
+      "detail": "owner=\"operator@example.com\""
+    },
+    {
+      "name": "3b token-filed task owner defaults to the token owner (Alice)",
+      "pass": true,
+      "detail": "owner=\"alice@example.com\" creator=\"alice@example.com\""
+    },
+    {
+      "name": "3c agent proposal inherits owner=Alice",
+      "pass": true,
+      "detail": "owner=\"alice@example.com\""
+    },
+    {
+      "name": "3c' proposer attribution names the proposing task",
+      "pass": true,
+      "detail": "proposer={Attribution:{Actor:{Kind:agent ID:2 Source:sandbox} OnBehalfOf:0x289c75c58720} TaskID:2 RunID:2-1}"
+    },
+    {
+      "name": "3c'' timeline 'Proposed by' names task #2 on behalf of Alice",
+      "pass": true,
+      "detail": "HTTP 200 label=\"task #2 (run #1) on behalf of alice@example.com\""
+    },
+    {
+      "name": "3d owner:me as Alice lists Alice's tasks",
+      "pass": true,
+      "detail": "alice=[2 4]"
+    },
+    {
+      "name": "3e owner:me as Bob lists nothing yet",
+      "pass": true,
+      "detail": "bob=[]"
+    },
+    {
+      "name": "3f UI owner transfer Alice -\u003e Bob",
+      "pass": true,
+      "detail": "HTTP 200 {\"id\":\"2\",\"title\":\"Alice task\",\"description\":\"x\",\"author\":\"external:alice-cli\",\"authorKind\":\"agent\",\"authorSource\":\"external-token\",\"authorLabel\":\"external agent alice-cli for alice@example.com\",\"approvedBy\":\"operator@example.com\",\"approvedByKind\":\"human\",\"approvedBySource\":\"in-process\",\"approvedByLabel\":\"operator (local)\",\"state\":\"awaiting_reply\",\"repo\":\"acme/core\",\"branch\":\"grain/fd44d1bc/task-2-alice-task\",\"priority\":5,\"autoMerge\":false,\"autoApproveProposals\":false,\"interactive\":false,\"admission\":\"standard\",\"hosting\":\"unattended\",\"owner\":\"bob@example.com\",\"creator\":\"alice@example.com\",\"capa [clipped]"
+    },
+    {
+      "name": "3g owner:me follows the transfer",
+      "pass": true,
+      "detail": "alice=[4] bob=[2]"
+    },
+    {
+      "name": "3h owner:\u003cemail\u003e filter",
+      "pass": true,
+      "detail": "ids=[2]"
+    },
+    {
+      "name": "3i ownership transfer recorded on the task's history",
+      "pass": true,
+      "detail": "HTTP 200"
+    },
+    {
+      "name": "3j grain update -owner transfers Bob -\u003e Carol",
+      "pass": true,
+      "detail": "err=\u003cnil\u003e out=2 Alice task\nstate:      awaiting_reply\nowner:      carol@example.com\nrepo:       acme/core\npriority:   5\nauto-merge: false\n\nx"
+    },
+    {
+      "name": "3k grain list -owner me as Alice lists her proposal only",
+      "pass": true,
+      "detail": "err=\u003cnil\u003e out=4      proposed        acme/core                Alice agent follow-up"
+    },
+    {
+      "name": "3l grain list -owner me as Bob is empty after the second transfer",
+      "pass": true,
+      "detail": "err=\u003cnil\u003e out="
+    },
+    {
+      "name": "3m grain show names the owner",
+      "pass": true,
+      "detail": "err=\u003cnil\u003e out=2 Alice task\nstate:      awaiting_reply\nowner:      carol@example.com\nrepo:       acme/core\npriority:   5\nauto-merge: false\n\nx\nfiled by:        external agent alice-cli for alice@example.com\n\nhistory:\n  -\u003e proposed        2026-11-08T01:43:52Z by external agent alice-cli for alice@example.com\n  -\u003e queued          2026-11-08T01:43:52Z\n  -\u003e running         2026-11-08T01:43:52Z\n  -\u003e awaiting_reply  2026-11-08T01:43:52Z\n  -\u003e owner_changed   2026-11-08T01:43:52Z by operator (access code) (alice@example.com -\u003e bob@example.com); owner changed from alice@example.com to bob@example.com\n  -\u003e owner_change [clipped]"
+    },
+    {
+      "name": "3n both transfers audited as owner transitions",
+      "pass": true,
+      "detail": "[owner_changed by operator (access code): alice@example.com -\u003e bob@example.com owner_changed by operator (access code): bob@example.com -\u003e carol@example.com]"
+    }
+  ],
+  "data": {
+    "aliceTakesBack": "HTTP 403 {\"error\":\"an agent cannot set or transfer task ownership\"}",
+    "aliceTask": {
+      "creator": "alice@example.com",
+      "id": "2",
+      "owner": "alice@example.com"
+    },
+    "cliAliceOwnerMe": "4      proposed        acme/core                Alice agent follow-up",
+    "cliBobOwnerMe": "",
+    "cliShowOwner": "2 Alice task\nstate:      awaiting_reply\nowner:      carol@example.com\nrepo:       acme/core\npriority:   5\nauto-merge: false\n\nx\nfiled by:        external agent alice-cli for alice@example.com\n\nhistory:\n  -\u003e proposed        2026-11-08T01:43:52Z by external agent alice-cli for alice@example.com\n  -\u003e queued          2026-11-08T01:43:52Z\n  -\u003e running         2026-11-08T01:43:52Z\n  -\u003e awaiting_reply  2026-11-08T01:43:52Z\n  -\u003e owner_changed   2026-11-08T01:43:52Z by operator (access code) (alice@example.com -\u003e bob@example.com); owner changed from alice@example.com to bob@example.com\n  -\u003e owner_changed   2026-11-08T01:43:52Z by operator (access code) (bob@example.com -\u003e carol@example.com); owner changed from bob@example.com to carol@example.com\n\nattempts:\n  #1 started 2026-11-08T01:43:52Z, finished 2026-11-08T01:43:52Z, succeeded\n\n--- comment #2 by grain on behalf of 2 ---\nDone.",
+    "ownerTransitions": [
+      "owner_changed by operator (access code): alice@example.com -\u003e bob@example.com",
+      "owner_changed by operator (access code): bob@example.com -\u003e carol@example.com"
+    ],
+    "proposal": {
+      "id": "4",
+      "owner": "alice@example.com",
+      "proposer": {
+        "Attribution": {
+          "Actor": {
+            "Kind": "agent",
+            "ID": "2",
+            "Source": "sandbox"
+          },
+          "OnBehalfOf": {
+            "Kind": "human",
+            "ID": "alice@example.com",
+            "Source": ""
+          }
+        },
+        "TaskID": "2",
+        "RunID": "2-1"
+      },
+      "timelineProposedBy": "task #2 (run #1) on behalf of alice@example.com"
+    },
+    "timelineSnippet": "{\"id\":\"2\",\"title\":\"Alice task\",\"description\":\"x\",\"author\":\"external:alice-cli\",\"authorKind\":\"agent\",\"authorSource\":\"external-token\",\"authorLabel\":\"external agent alice-cli for alice@example.com\",\"approvedBy\":\"operator@example.com\",\"approvedByKind\":\"human\",\"approvedBySource\":\"in-process\",\"approvedByLabel\":\"operator (local)\",\"state\":\"awaiting_reply\",\"repo\":\"acme/core\",\"branch\":\"grain/fd44d1bc/task-2-alice-task\",\"priority\":5,\"autoMerge\":false,\"autoApproveProposals\":false,\"interactive\":false,\"admission\":\"standard\",\"hosting\":\"unattended\",\"owner\":\"bob@example.com\",\"creator\":\"alice@example.com\",\"capa [clipped]"
+  }
+}

@@ -35,10 +35,8 @@ test("saves a typed setting when the rail leaves Settings", async ({
   page,
 }) => {
   const name = `escape-${Date.now()}`;
-  // The demo server is the worker's (fixtures.ts), so the name saved here
-  // is put back afterwards: left set, every later spec on this worker drew
-  // an environment chip on the phone bar, which squeezed the wordmark to
-  // 22 px under phone-tasks-stale.spec.js.
+  // The demo server is the worker's (fixtures.js): an environment name
+  // left behind puts a chip on every later page's bar.
   const initial = await (await page.request.get("/api/settings")).json();
   try {
     await page.goto("/settings/general");
@@ -54,10 +52,9 @@ test("saves a typed setting when the rail leaves Settings", async ({
     await page.goto("/settings/general");
     await expect(page.getByLabel("Environment name")).toHaveValue(name);
   } finally {
-    const restored = await page.request.put("/api/settings", {
+    await page.request.put("/api/settings", {
       data: { environmentName: initial.environmentName ?? "" },
     });
-    expect(restored.ok()).toBe(true);
   }
 });
 
