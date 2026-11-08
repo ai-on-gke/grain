@@ -76,47 +76,6 @@ test("returns to Metrics on Back from the oldest queued task", async ({
   ).toBeVisible();
 });
 
-test("drops a credential verdict when the re-check gets no answer", async ({
-  page,
-}) => {
-  // GET /api/settings is the real answer: the demo wires a capability
-  // checker (demoCapabilityChecks in pkg/demo/demo_scenarios.go), so
-  // github-sandbox is checkable. The check itself is intercepted. Its
-  // verdict is the answer from GitHub, which issued the App's key, and the
-  // demo has no key to send. That external boundary is the one thing stubbed here:
-  // ok first, then a 502.
-  let checks = 0;
-  await page.route("**/api/capabilities/github-sandbox/check", (route) => {
-    checks += 1;
-    return checks === 1
-      ? route.fulfill({
-          json: {
-            id: "github-sandbox",
-            ok: true,
-            detail: "The key was accepted (intercepted).",
-            checkedAt: new Date().toISOString(),
-          },
-        })
-      : route.fulfill({
-          status: 502,
-          json: { error: "the issuing service did not answer (intercepted)" },
-        });
-  });
-
-  await page.goto("/admin/integrations");
-  await page.getByRole("button", { name: /^GitHub sandbox, / }).click();
-  const testButton = page.getByRole("button", { name: "Test credential" });
-
-  await testButton.click();
-  await expect(page.getByText("Credential works")).toBeVisible();
-
-  await testButton.click();
-  await expect(
-    page.getByText("the issuing service did not answer (intercepted)"),
-  ).toBeVisible();
-  await expect(page.getByText("Credential works")).toHaveCount(0);
-});
-
 // Regressions found by the 2026-10-04 walkthrough
 // (docs/test-runs/2026-10-04-deployment-operations.md).
 
@@ -222,36 +181,6 @@ test("keeps the keyboard-focused System tab in view on a narrow screen", async (
 
 // 2026-10-07 standing-work walkthrough
 // (docs/test-runs/2026-10-07-standing-work-settings-forms.md).
-
-// The Integrations capability sub-tabs were a scrolling strip, walked
-// here with the keyboard. They are a list of full-width rows now: at
-// 700 px and at a phone's 375 px every row fits inside the viewport, and
-// a row reached with Tab opens its capability's page on Enter.
-for (const width of [700, 375]) {
-  test(`fits the legacy capability list and opens a row from the keyboard at ${width} px`, async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width, height: 800 });
-    await page.goto("/admin/integrations");
-    const rows = page
-      .getByRole("list", { name: "Legacy capabilities" })
-      .locator("[data-legacy-capability-row]");
-    await expect(rows.first()).toBeVisible();
-    for (const row of await rows.all()) {
-      const box = await row.boundingBox();
-      expect(box.x).toBeGreaterThanOrEqual(0);
-      expect(box.x + box.width).toBeLessThanOrEqual(width + 1);
-    }
-    const id = await rows.first().getAttribute("data-legacy-capability-row");
-    await rows.first().focus();
-    await page.keyboard.press("Enter");
-    await expect(
-      page.locator(`[data-legacy-capability="${id}"]`),
-    ).toBeVisible();
-    await page.getByTestId("legacy-capabilities-back").click();
-    await expect(rows.first()).toBeVisible();
-  });
-}
 
 // Board → Columns closed on Escape and on Back and dropped the edit.
 test("asks before leaving an edited board layout", async ({ page }) => {

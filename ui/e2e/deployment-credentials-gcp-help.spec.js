@@ -14,7 +14,7 @@
 
 import { test, expect } from "./fixtures.js";
 
-test("Legacy capabilities GCP help wraps cleanly and links to the gcp server and Other secrets", async ({
+test("Deployment credentials GCP help wraps cleanly and links to the gcp server and Other secrets", async ({
   page,
 }) => {
   for (const viewport of [
@@ -22,15 +22,15 @@ test("Legacy capabilities GCP help wraps cleanly and links to the gcp server and
     { width: 390, height: 844 },
   ]) {
     await page.setViewportSize(viewport);
-    await page.goto("/settings/credentials");
+    await page.goto("/settings/capabilities");
 
-    const section = page.getByTestId("legacy-capabilities-deployment-wide");
+    const section = page.getByTestId("deployment-credentials");
     await section.scrollIntoViewIfNeeded();
     await expect(section).toBeVisible();
 
     const overflow = await page.evaluate(() => {
       const sec = document.querySelector(
-        '[data-testid="legacy-capabilities-deployment-wide"]',
+        '[data-testid="deployment-credentials"]',
       );
       const projHelp = document.querySelector(
         '[data-setting-id="gcpProject"] .MuiFormHelperText-root',
@@ -58,7 +58,7 @@ test("Legacy capabilities GCP help wraps cleanly and links to the gcp server and
   }
 
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto("/settings/credentials");
+  await page.goto("/settings/capabilities");
 
   const emailField = page.locator('[data-setting-id="gcpServiceAccountEmail"]');
   await emailField.scrollIntoViewIfNeeded();
