@@ -1379,7 +1379,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // the task detail over whatever the reader was looking at -- a message
   // sent in a chat should leave them in the chat.
   const sessionAct = useCallback(
-    async (mutate) => {
+    async (mutate, taskId) => {
       sessionTaskSeq.current += 1;
       try {
         await mutate();
@@ -1388,7 +1388,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
         return false;
       }
       try {
-        await loadSessionTask();
+        await loadSessionTask(taskId || openSessionTaskIdRef.current);
         await refreshList();
       } catch (err) {
         showError(err);
@@ -2215,7 +2215,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // reported here and rethrown, so the page keeps the message in its
   // composer.
   const startStandingSession = useCallback(
-    async ({ title, message, attachments = [], model, pin = false }) => {
+    async (
+      { title, message, attachments = [], model, pin = false },
+      takeHandoff,
+    ) => {
       let res;
       try {
         res = await api("/api/console-sessions", {
@@ -2243,6 +2246,35 @@ function AppContent({ onReload = () => window.location.reload() }) {
         listed.filter((s) => !known.has(s.id)).at(-1)?.id ||
         listed.at(-1)?.id;
       if (created) {
+        const createdRow = listed.find((s) => s.id === created);
+        if (createdRow?.taskId) {
+          openSessionTaskIdRef.current = createdRow.taskId;
+          try {
+            const detail = await api(`/api/tasks/${createdRow.taskId}`);
+            if (detail) {
+              sessionTaskSeq.current += 1;
+              setSessionTask(detail);
+            }
+          } catch {
+            // Best-effort preload; the session pane's effect retries if needed.
+          }
+        }
+        const handoff = takeHandoff?.();
+        if (
+          handoff &&
+          (handoff.draft?.text ||
+            handoff.attachments?.length > 0 ||
+            handoff.queued?.length > 0)
+        ) {
+          setSessionPrompt({
+            sessionId: created,
+            text: handoff.draft?.text || "",
+            html: handoff.draft?.html ?? handoff.draft?.text ?? "",
+            attachments: handoff.attachments || [],
+            queued: handoff.queued || [],
+            consumeOnApply: true,
+          });
+        }
         if (pin) addPinnedItem({ kind: "session", id: created });
         openStandingSession(created);
       }
