@@ -119,7 +119,9 @@ function TemplateOverlay({
     (id) => !isCapabilityRef(id) && !isApiGrant(id),
   );
   const apiIds = capabilities.filter(isApiGrant);
-  const capabilityRefs = capabilities.filter(isCapabilityRef);
+  const capabilityRefs = capabilities.filter(
+    (id) => isCapabilityRef(id) && !isApiGrant(id),
+  );
   const heldCapabilityIds = useHeldIds(capabilityIds);
   const capabilityOptions = withoutApiRows(
     configuredCapabilities(config?.capabilities, heldCapabilityIds),

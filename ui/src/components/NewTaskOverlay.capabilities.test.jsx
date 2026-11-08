@@ -618,4 +618,59 @@ describe("NewTaskOverlay", () => {
       ).not.toBeInTheDocument(),
     );
   });
+
+  it("keeps https://grain.dev/capabilities/api# defaults in GrantsPicker and out of Legacy capabilities", async () => {
+    api.mockImplementation(async (path) => {
+      if (path.split("?")[0] === "/api/capability-methods") {
+        return [
+          {
+            ref: "https://grain.dev/capabilities/api#ci:read",
+            capability: "https://grain.dev/capabilities/api",
+            method: "ci:read",
+          },
+        ];
+      }
+      return [];
+    });
+    const user = userEvent.setup();
+    render(
+      <NewTaskOverlay
+        config={{
+          capabilityMethods: 1,
+          capabilities: [
+            { id: "self-debug", name: "Self debug" },
+            { id: "api:ci:read", summary: "Read CI", description: "Read CI" },
+          ],
+          targetRepos: ["acme/widgets"],
+          defaultTarget: "acme/widgets",
+          defaultCapabilities: [
+            "self-debug",
+            'https://grain.dev/capabilities/api#ci:read={"repo":"acme/widgets"}',
+          ],
+        }}
+        onClose={() => {}}
+        onCreated={() => Promise.resolve()}
+        showError={() => {}}
+      />,
+    );
+
+    expect(
+      chips(screen.getByLabelText("Legacy capabilities")).map(
+        (c) => c.textContent,
+      ),
+    ).toEqual(["Self debug"]);
+    const grants = screen.getByTestId("new-task-grants");
+    const apiGrant = within(grants).getByLabelText(
+      "api:ci:read on acme/widgets",
+    );
+    await user.click(within(apiGrant).getByRole("button", { name: /remove/i }));
+    expect(
+      within(grants).queryByLabelText("api:ci:read on acme/widgets"),
+    ).toBeNull();
+
+    await user.type(screen.getByLabelText(/Title/), "Remove api ref default");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
+    await user.click(screen.getByRole("button", { name: "Create task" }));
+    expect(filed().capabilities).toEqual(["self-debug"]);
+  });
 });

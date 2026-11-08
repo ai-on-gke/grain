@@ -263,11 +263,12 @@ export default function ConsoleSessionPage({
 
   // methodGrants saves the session's capability server grants as
   // GrantsPicker changes them, keeping everything else it holds.
+  const isMethodRef = (id) => isCapabilityRef(id) && !isApiGrant(id);
   const methodGrants = localGrantHandlers(
-    (session?.capabilities || []).filter(isCapabilityRef),
+    (session?.capabilities || []).filter(isMethodRef),
     (refs) =>
       saveCapabilities(
-        replacing((session.capabilities || []).filter(isCapabilityRef), refs),
+        replacing((session.capabilities || []).filter(isMethodRef), refs),
         "methods",
       ),
   );

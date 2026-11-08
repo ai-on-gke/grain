@@ -778,7 +778,9 @@ export default function RepoPage({
     (id) => !isCapabilityRef(id) && !isApiGrant(id),
   );
   const capsApi = capsSelection.filter(isApiGrant);
-  const capsRefs = capsSelection.filter(isCapabilityRef);
+  const capsRefs = capsSelection.filter(
+    (id) => isCapabilityRef(id) && !isApiGrant(id),
+  );
   const capsMethods = localGrantHandlers(capsRefs, (refs) => {
     const next = [...capsLegacy, ...capsApi, ...refs];
     setCapsSelection(next);

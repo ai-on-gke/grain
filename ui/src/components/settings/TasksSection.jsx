@@ -152,7 +152,9 @@ export default function TasksSection({
     (id) => !isCapabilityRef(id) && !isApiGrant(id),
   );
   const apiDefaults = defaultCapabilities.filter(isApiGrant);
-  const refDefaults = defaultCapabilities.filter(isCapabilityRef);
+  const refDefaults = defaultCapabilities.filter(
+    (id) => isCapabilityRef(id) && !isApiGrant(id),
+  );
   const capabilityChoices = withoutApiRows(
     capabilityRows(
       (settings.capabilities || []).filter((c) => c.grantable !== false),

@@ -17,7 +17,14 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ApiGrantPicker from "./ApiGrantPicker.jsx";
 import { optionValues } from "../searchSelectTesting.js";
-import { groupApiRows, withoutApiRows } from "../apiGrants.js";
+import {
+  apiShortName,
+  groupApiRows,
+  isApiGrant,
+  splitApiGrant,
+  storedApiGrant,
+  withoutApiRows,
+} from "../apiGrants.js";
 
 const config = {
   targetRepos: ["acme/widgets"],
@@ -68,6 +75,75 @@ describe("apiGrants", () => {
     expect(withoutApiRows(config.capabilities).map((r) => r.id)).toEqual([
       "gcp-key",
     ]);
+  });
+
+  it("reads https://grain.dev/capabilities/api#<scope> references alongside api:<scope>", () => {
+    expect(isApiGrant("api:ci:write")).toBe(true);
+    expect(isApiGrant("api:ci:write@acme/widgets")).toBe(true);
+    expect(isApiGrant("https://grain.dev/capabilities/api#ci:write")).toBe(
+      true,
+    );
+    expect(
+      isApiGrant(
+        'https://grain.dev/capabilities/api#ci:write={"repo":"acme/widgets"}',
+      ),
+    ).toBe(true);
+    expect(isApiGrant("https://grain.dev/capabilities/api")).toBe(false);
+    expect(isApiGrant("https://grain.dev/capabilities/gcp#gcp-key")).toBe(
+      false,
+    );
+    expect(isApiGrant("gcp-key")).toBe(false);
+
+    expect(
+      splitApiGrant("https://grain.dev/capabilities/api#ci:write"),
+    ).toEqual(["api:ci:write", ""]);
+    expect(
+      splitApiGrant("https://grain.dev/capabilities/api#ci:write={}"),
+    ).toEqual(["api:ci:write", ""]);
+    expect(
+      splitApiGrant(
+        'https://grain.dev/capabilities/api#ci:write={"repo":"acme/widgets"}',
+      ),
+    ).toEqual(["api:ci:write", "acme/widgets"]);
+    expect(
+      splitApiGrant(
+        'https://grain.dev/capabilities/api#ci:write={"repo":"a/b","extra":1}',
+      ),
+    ).toEqual([
+      'https://grain.dev/capabilities/api#ci:write={"repo":"a/b","extra":1}',
+      "",
+    ]);
+    expect(
+      splitApiGrant("https://grain.dev/capabilities/api#ci:write=not-json"),
+    ).toEqual(["https://grain.dev/capabilities/api#ci:write=not-json", ""]);
+
+    expect(apiShortName("https://grain.dev/capabilities/api#ci:write")).toBe(
+      "ci:write",
+    );
+    expect(
+      apiShortName(
+        'https://grain.dev/capabilities/api#ci:write={"repo":"acme/widgets"}',
+      ),
+    ).toBe("ci:write");
+    expect(apiShortName("https://grain.dev/capabilities/api#task-admin")).toBe(
+      "task-admin",
+    );
+    expect(
+      apiShortName('https://grain.dev/capabilities/api#ci:write={"bogus":1}'),
+    ).toBe('ci:write={"bogus":1}');
+
+    expect(
+      storedApiGrant(
+        'https://grain.dev/capabilities/api#ci:write={"repo":"acme/widgets"}',
+      ),
+    ).toBe("api:ci:write@acme/widgets");
+    expect(
+      withoutApiRows([
+        { id: "gcp-key" },
+        { id: "https://grain.dev/capabilities/api#ci:read" },
+        { id: "api:tasks:read" },
+      ]).map((r) => r.id),
+    ).toEqual(["gcp-key"]);
   });
 });
 
@@ -149,5 +225,41 @@ describe("ApiGrantPicker", () => {
     const chip = screen.getByText("tasks:fly").closest(".MuiChip-root");
     fireEvent.click(chip.querySelector(".MuiChip-deleteIcon"));
     expect(onChange).toHaveBeenLastCalledWith(["api:ci:read"]);
+  });
+
+  it("displays and unticks held https://grain.dev/capabilities/api# grants", () => {
+    const onChange = vi.fn();
+    render(
+      <ApiGrantPicker
+        config={config}
+        selected={[
+          "https://grain.dev/capabilities/api#tasks:admin",
+          'https://grain.dev/capabilities/api#ci:read={"repo":"acme/widgets"}',
+          'https://grain.dev/capabilities/api#ci:read={"bogus":true}',
+        ]}
+        onChange={onChange}
+        idPrefix="t"
+      />,
+    );
+    expect(screen.getByText("3 granted")).toBeTruthy();
+    open();
+    expect(screen.getByText("ci:read on acme/widgets")).toBeTruthy();
+    expect(screen.getByRole("checkbox", { name: "tasks:admin" }).checked).toBe(
+      true,
+    );
+    fireEvent.click(screen.getByRole("checkbox", { name: "tasks:admin" }));
+    expect(onChange).toHaveBeenLastCalledWith([
+      'https://grain.dev/capabilities/api#ci:read={"repo":"acme/widgets"}',
+      'https://grain.dev/capabilities/api#ci:read={"bogus":true}',
+    ]);
+
+    const invalidChip = screen
+      .getByText('ci:read={"bogus":true}')
+      .closest(".MuiChip-root");
+    fireEvent.click(invalidChip.querySelector(".MuiChip-deleteIcon"));
+    expect(onChange).toHaveBeenLastCalledWith([
+      "https://grain.dev/capabilities/api#tasks:admin",
+      'https://grain.dev/capabilities/api#ci:read={"repo":"acme/widgets"}',
+    ]);
   });
 });
