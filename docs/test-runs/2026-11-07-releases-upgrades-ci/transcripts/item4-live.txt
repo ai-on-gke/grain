@@ -1,0 +1,83 @@
+=== 4A.1 REST: POST/PATCH /api/schedules refuse forbidden git_ref repos (#744) ===
+PASS POST watching grain/config-alpha -> 400 recurrence.gitRef.repo: grain/config-alpha not found: only grain/config exists
+PASS POST watching acme/host-secrets -> 400 recurrence.gitRef.repo: acme/host-secrets cannot be watched: it is in this deployment's forbidden repository set (encrypted secrets backup r
+PASS POST watching ACME/Host-Secrets -> 400 recurrence.gitRef.repo: ACME/Host-Secrets cannot be watched: it is in this deployment's forbidden repository set (encrypted secrets backup r
+PASS POST watching not a repo -> 400 recurrence: git_ref trigger needs `repo: owner/name`, got "not a repo"
+PASS POST watching grain/config -> 201 sched-1
+PASS POST watching acme/widgets -> 201 sched-2
+PASS POST watching offlist/upstream -> 201 sched-3
+PASS PATCH sched-2 onto grain/config-beta -> 400
+PASS sched-3 watching offlist/upstream reports suppressed={"reason":"watchedRepoOffTarget","detail":"watches offlist/upstream, which is not on this deployment's target repo list"}
+=== 4A.2 A grandfathered schedule whose watched repo became forbidden can be paused ===
+PASS PATCH sched-4 keeping its now-forbidden watch -> 400
+PASS PATCH sched-4 enabled:false -> 200 (paused)
+=== 4A.3 CLI: grain declarations check on .grain/schedules (#744, Bug F5) ===
+PASS grain declarations check watching upstream/core -> rc=0 Well-formed. Grain reads these once an operator turns declarations on for acme/widgets (`grain repo`, or the repository's own settings page)
+PASS grain declarations check watching grain/config-alpha -> rc=1 grain: 1 problem with this repository's declarations -- see above
+PASS grain declarations check watching grain/config -> rc=1 grain: 1 problem with this repository's declarations -- see above
+=== 4A.4 CLI: grain state check on a copy of the live state repo (#744, Bug F5) ===
+PASS grain state check …/state-check/ok -> rc=0 ok: grain can load this
+PASS grain state check …/state-check/malformed -> rc=1 grain state: staterepo: settings/schedules.yml, sched-3: git_ref trigger needs `repo: owner/name`, got "not a repo"
+PASS grain state check …/state-check/retired -> rc=1 grain state: settings/schedules.yml declares 1 forbidden git_ref schedule(s):
+PASS grain state check …/state-check/secrets -> rc=0 ok: grain can load this
+PASS grain state -data-dir …/state-check check …/state-check/secrets -> rc=1 grain state: settings/schedules.yml declares 1 forbidden git_ref schedule(s):
+=== 4A.5 A merged grain/config change on the running daemon (Bug F6) ===
+PASS daemon refused f0bd8b8:
+    2026/11/08 01:29:32 staterepo: refusing to apply the settings that just arrived, keeping this deployment's database as it is: settings/schedules.yml declares 1 forbidden git_ref schedule(s):
+  schedule sched-2: git_ref repo grain/config-alpha cannot be watched: grain/config-alpha not found: only grain/config exists
+2026/11/08 01:29:32 grain: state sync failed: state repository holds changes grain could not apply (unapplied commits 4e2b505d..f0bd8b84: f0bd8b8 ("operator: watch the retired alias")): staterepo: refusing to apply: settings/schedules.yml declares 1 forbidden git_ref schedule(s):
+PASS sched-2 still watches acme/widgets in the database
+PASS after reverting f0bd8b8, a follow-up rename applied (title="Watch acme/widgets (renamed)"); the grandfathered sched-4 row did not wedge the import
+=== 4A.6 UI at 1440/390: Processes -> Schedules suppression (#744) & Settings -> Upgrade refusal (#661) ===
+PASS desktop: Suppressed chip visible on "Watch offlist/upstream"
+PASS desktop: row hint "suppressed: watches offlist/upstream, which is not on this deployment's target repo list"
+PASS processes-schedules-desktop (no horizontal overflow)
+PASS desktop: schedule overlay explains the suppression
+PASS schedule-overlay-desktop (no horizontal overflow)
+PASS settings-upgrade-desktop (no horizontal overflow)
+PASS desktop: choosing "Release assets only" -> PUT /api/upgrade/source 400 {"error":"this deployment verifies image signatures (-upgrade-verify-cmd), so loading release-asset tarballs takes the d
+PASS desktop: refusal shown and image source still registry
+PASS settings-upgrade-refused-desktop (no horizontal overflow)
+PASS phone: Suppressed chip visible on "Watch offlist/upstream"
+PASS phone: row hint "suppressed: watches offlist/upstream, which is not on this deployment's target repo list"
+PASS processes-schedules-phone (no horizontal overflow)
+PASS phone: schedule overlay explains the suppression
+PASS schedule-overlay-phone (no horizontal overflow)
+PASS settings-upgrade-phone (no horizontal overflow)
+PASS phone: choosing "Release assets only" -> PUT /api/upgrade/source 400 {"error":"this deployment verifies image signatures (-upgrade-verify-cmd), so loading release-asset tarballs takes the d
+PASS phone: refusal shown and image source still registry
+PASS settings-upgrade-refused-phone (no horizontal overflow)
+ALL UI CHECKS PASSED
+=== 4B pkg/pkgcache /artifacts-uploads/ multi-chunk push & auth boundaries (#811) ===
+=== 4B.1 multi-chunk Artifact Registry push through pkgcache (#811) ===
+PASS POST blobs/uploads/ -> 202 Location https://us-central1-docker.pkg.dev/artifacts-uploads/namespaces/acme-proj/repositories/containers/uploads/sess-811
+PASS PATCH chunk 1/4 (262144 bytes) -> 202 Range 0-262143
+PASS PATCH chunk 2/4 (262144 bytes) -> 202 Range 0-524287
+PASS PATCH chunk 3/4 (262144 bytes) -> 202 Range 0-786431
+PASS PATCH chunk 4/4 (262144 bytes) -> 202 Range 0-1048575
+PASS PUT final chunk ?digest -> 201 sha256:cc00c20c9ee6e594803af26c7f34b0d88d55ae519cd1e127e785a7298c6b09e2
+PASS upstream reassembled 1048699/1048699 bytes with digest sha256:cc00c20c9ee6e594803af26c7f34b0d88d55ae519cd1e127e785a7298c6b09e2
+=== 4B.2 auth boundary: what reached the *.pkg.dev upstream ===
+PASS no internal header, daemon GitHub credential, or traversal reached upstream (leaks=[])
+PASS every upstream request was for us-central1-docker.pkg.dev (hosts=map[us-central1-docker.pkg.dev:6])
+=== 4B.3 upload session Locations on other hosts are refused, not proxied ===
+PASS PATCH https://ghcr.io/artifacts-uploads/namespaces/acme-proj/repositories/containers/uploads/sess-811 -> 404 (refused)
+PASS PATCH https://registry-1.docker.io/artifacts-uploads/namespaces/acme-proj/repositories/containers/uploads/sess-811 -> 404 (refused)
+PASS PATCH https://pkg.dev/artifacts-uploads/namespaces/acme-proj/repositories/containers/uploads/sess-811 -> 404 (refused)
+PASS PATCH https://evilpkg.dev/artifacts-uploads/namespaces/acme-proj/repositories/containers/uploads/sess-811 -> 405 (refused)
+PASS PATCH https://us-central1-docker.pkg.dev.evil.example/artifacts-uploads/namespaces/acme-proj/repositories/containers/uploads/sess-811 -> 405 (refused)
+PASS PATCH https://attacker.example/artifacts-uploads/namespaces/acme-proj/repositories/containers/uploads/sess-811 -> 405 (refused)
+PASS no refused session request reached any upstream (0 new)
+=== 4B.4 dot-dot traversal out of /artifacts-uploads/ ===
+PASS PUT /artifacts-uploads/../v1/secret -> 400
+PASS PUT /artifacts-uploads/%2e%2e/v1/secret -> 400
+PASS PUT /artifacts-uploads/%252e%252e/v1/secret -> 404
+PASS traversal never reached the upstream (leaks=[])
+=== 4B.5 a sandbox with no network (restricted client) cannot push ===
+PASS restricted POST /v2/acme-proj/containers/widgets/blobs/uploads/ -> 403
+PASS restricted PATCH /artifacts-uploads/namespaces/acme-proj/repositories/containers/uploads/sess-811 -> 403
+PASS restricted PUT /artifacts-uploads/namespaces/acme-proj/repositories/containers/uploads/sess-811?digest=sha256%3Acc00c20c9ee6e594803af26c7f34b0d88d55ae519cd1e127e785a7298c6b09e2 -> 403
+PASS restricted GET /artifacts-uploads/namespaces/acme-proj/repositories/containers/uploads/sess-811 -> 404
+PASS no restricted request reached the upstream (0 new)
+ALL ITEM 4B PKGCACHE CHECKS PASSED
+ALL §9 ITEM 4 CHECKS PASSED
