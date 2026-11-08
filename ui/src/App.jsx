@@ -3754,6 +3754,14 @@ function AppContent({ onReload = () => window.location.reload() }) {
                     alerts={alertsButton}
                     onOpenSettings={() => openSettings("")}
                     settingsOpen={view === "settings"}
+                    tasksStale={
+                      tasksListed &&
+                      tasksError &&
+                      !tasksLoadFailed(tasks, tasksListed, tasksError)
+                        ? String(tasksError)
+                        : null
+                    }
+                    onRetryTasks={retryTasks}
                   >
                     {sidebar}
                   </PhoneNav>
