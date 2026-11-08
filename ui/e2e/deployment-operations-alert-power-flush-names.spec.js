@@ -140,7 +140,7 @@ test("pending-restart and not-runnable settings on System → Health link to the
   );
   await expect(githubPending).toHaveAttribute(
     "href",
-    "/settings/credentials#githubHost",
+    "/settings/capabilities#githubHost",
   );
 
   // Power stays in the right-hand action slot of the pending-restart alert.
@@ -222,6 +222,6 @@ test("pending-restart and not-runnable settings on System → Health link to the
   );
 
   await phonePending.getByRole("link", { name: "GitHub host" }).click();
-  await expect(page).toHaveURL(/\/settings\/credentials#githubHost$/);
+  await expect(page).toHaveURL(/\/settings\/capabilities#githubHost$/);
   await expect(page.locator('[data-setting-id="githubHost"]')).toBeInViewport();
 });

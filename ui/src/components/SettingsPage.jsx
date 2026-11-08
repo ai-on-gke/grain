@@ -47,7 +47,6 @@ import TasksSection from "./settings/TasksSection.jsx";
 import RepositoriesSection from "./settings/RepositoriesSection.jsx";
 import GitSection from "./settings/GitSection.jsx";
 import CapabilitiesSection from "./settings/CapabilitiesSection.jsx";
-import CredentialsSection from "./settings/CredentialsSection.jsx";
 import EngineSection from "./settings/EngineSection.jsx";
 import CISection from "./settings/CISection.jsx";
 import SandboxesSection from "./settings/SandboxesSection.jsx";
@@ -117,7 +116,6 @@ const SECTION_WRITE_SCOPE = {
   registry: "settings:write",
   sandboxes: "settings:write",
   caches: "settings:write",
-  credentials: "settings:write",
   "config-repo": "settings:write",
   models: "connections:write",
   git: "connections:write",
@@ -135,7 +133,6 @@ const READS_SETTINGS = new Set([
   "agents",
   "tasks",
   "capabilities",
-  "credentials",
   "engine",
   "registry",
   "ci",
@@ -226,7 +223,7 @@ export default function SettingsPage({
   const readOnly = external || configManaged || Boolean(roleRefusal);
   s.readOnly = readOnly;
   // configLocked is for the sections that mix bootstrap settings with
-  // config-managed ones (Engine, Sandboxes, Legacy capabilities): the
+  // config-managed ones (Engine, Sandboxes, Capabilities' Deployment credentials): the
   // API refuses a change to the config-managed fields while this is on
   // (settings-mutability.spec.md D-1, D-2), so those fields are drawn
   // read-only one by one and the bootstrap ones beside them stay
@@ -689,19 +686,20 @@ export default function SettingsPage({
         );
         break;
       case "capabilities":
-        body = <CapabilitiesSection {...common} item={item} onItem={onItem} />;
-        break;
-      case "credentials":
         body = (
-          <CredentialsSection
+          <CapabilitiesSection
+            {...common}
             s={s}
+            item={item}
+            onItem={onItem}
+            // Only secrets a live control elsewhere in Settings owns:
+            // CapabilitiesPanel is retired, so secrets reported on
+            // settings.capabilities (github-app, registry-push, cosign-*)
+            // have no per-capability field and stay visible in SecretsPanel.
             claimedSecrets={[
               "registry-registration-token",
               ...(settings?.agentBackends || []).map(
                 (backend) => `agent-backend-${backend.id}`,
-              ),
-              ...(settings?.capabilities || []).flatMap((c) =>
-                (c.secrets || []).map((sec) => sec.secret),
               ),
             ]}
           />

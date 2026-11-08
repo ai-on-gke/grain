@@ -534,35 +534,35 @@ export const SETTINGS_INDEX = [
   },
   {
     id: "githubHost",
-    section: "credentials",
+    section: "capabilities",
     anchor: "credentials",
     label: "GitHub host",
     keywords: [],
   },
   {
     id: "githubInsecureHttp",
-    section: "credentials",
+    section: "capabilities",
     anchor: "credentials",
     label: "Speak plain HTTP to GitHub host",
     keywords: [],
   },
   {
     id: "gcpProject",
-    section: "credentials",
+    section: "capabilities",
     anchor: "credentials",
     label: "GCP project",
     keywords: ["gcp", "gemini"],
   },
   {
     id: "gcpServiceAccountEmail",
-    section: "credentials",
+    section: "capabilities",
     anchor: "credentials",
     label: "GCP service account email",
     keywords: [],
   },
   {
     id: "gcpServiceAccountCount",
-    section: "credentials",
+    section: "capabilities",
     anchor: "credentials",
     label: "GCP service account count",
     keywords: [],
@@ -897,10 +897,10 @@ export const SETTINGS_INDEX = [
     card: true,
   },
   {
-    id: "card:credentials:credentials",
-    section: "credentials",
+    id: "card:capabilities:credentials",
+    section: "capabilities",
     anchor: "credentials",
-    label: "Legacy capabilities",
+    label: "Deployment credentials",
     keywords: [
       "credentials",
       "legacy capabilities",
@@ -978,7 +978,7 @@ const SETTING_BY_ID = new Map(
 // unrunnable), or null for a key no section draws. target is what a link
 // to the setting scrolls to: the field itself (its data-setting-id), as
 // the filter's own pick does, since a card's top can be a screen or more
-// above a field near its foot (Legacy capabilities' GitHub host).
+// above a field near its foot (Deployment credentials' GitHub host).
 export function settingLocation(id) {
   const entry = SETTING_BY_ID.get(id);
   if (!entry) return null;

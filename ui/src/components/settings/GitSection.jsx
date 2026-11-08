@@ -31,7 +31,7 @@ import SettingsCard, { SettingsReadOnlyContext } from "./SettingsCard.jsx";
 // config-repo only (design/design/config-repo-settings.design.md §2.1), so the
 // list is drawn read-only; a connection's token or key is secret
 // material, still written only through the secret store (Settings →
-// Legacy capabilities, /api/secrets), never into grain/config.
+// Capabilities, /api/secrets), never into grain/config.
 export default function GitSection({
   onSaved,
   showError,
@@ -74,15 +74,15 @@ export default function GitSection({
           A connection&apos;s token or key is never part of the config repo: it
           is set write-only under{" "}
           <Link
-            href="/settings/credentials"
+            href="/settings/capabilities#credentials"
             onClick={(evt) => {
               if (!onSection || evt.button !== 0 || evt.metaKey || evt.ctrlKey)
                 return;
               evt.preventDefault();
-              onSection("credentials");
+              onSection("capabilities");
             }}
           >
-            Settings → Legacy capabilities
+            Settings → Capabilities
           </Link>
           , or when a task asks for it.
         </Typography>
