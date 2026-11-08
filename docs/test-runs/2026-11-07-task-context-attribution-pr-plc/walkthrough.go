@@ -561,7 +561,7 @@ func runItem1(ctx context.Context) *checks {
 	showOut, showErr := grainCLI(srv.URL, operatorToken, "show", task.ID)
 	c.Data["grainShow"] = showOut
 	c.check("1p' grain show renders the pinned context refs and manifest",
-		showErr == nil && strings.Contains(showOut, "acme/specs:plc/042@"+sha1) && strings.Contains(showOut, "PLC-042 billing spec"),
+		showErr == nil && strings.Contains(showOut, "acme/specs:plc/042@"+sha1[:12]) && strings.Contains(showOut, "PLC-042 billing spec") && strings.Contains(showOut, "[design] spec.md -- Billing spec <https://planner.example.com/PLC-042>"),
 		"err=%v out=%s", showErr, clip([]byte(showOut)))
 
 	// 1q. A pin whose commit vanished upstream (history rewritten) must refuse.

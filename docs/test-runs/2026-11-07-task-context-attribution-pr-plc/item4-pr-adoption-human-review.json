@@ -14,12 +14,12 @@
     {
       "name": "4c review-only: no pushes to the PR branch, no merge, main untouched",
       "pass": true,
-      "detail": "head=be6040a03b63 (was be6040a03b63) main=a9fd246ce0d2 (was a9fd246ce0d2) merged=false state=open"
+      "detail": "head=72458d331540 (was 72458d331540) main=8e9b5cf180a2 (was 8e9b5cf180a2) merged=false state=open"
     },
     {
       "name": "4d grain pr status reports the shepherd and review-only mode",
       "pass": true,
-      "detail": "err=\u003cnil\u003e out=acme/widgets#41 (open)\nhead:        be6040a03b63618cbeb87fbe66b280f2d9dcf475\nshepherd:    task 2, review-only, queued\nci:          no grain CI run\nmerge queue: held: review\nreviews:\n  task 3  code      pending   0 findings, 0 unresolved threads\n  task 4  security  pending   0 findings, 0 unresolved threads\n  task 1  code      pending   0 findings, 0 unresolved threads"
+      "detail": "err=\u003cnil\u003e out=acme/widgets#41 (open)\nhead:        72458d331540ecf61d59af3045e3f4a2d30e4493\nshepherd:    task 2, review-only, queued\nci:          no grain CI run\nmerge queue: held: review\nreviews:\n  task 3  code      pending   0 findings, 0 unresolved threads\n  task 4  security  pending   0 findings, 0 unresolved threads\n  task 1  code      pending   0 findings, 0 unresolved threads"
     },
     {
       "name": "4e upgrade to finish refused for a tasks:write token",
@@ -34,7 +34,7 @@
     {
       "name": "4g review run's request_human_review raises a hold on #500",
       "pass": true,
-      "detail": "HTTP 200 {\"task\":\"6\",\"added\":true,\"reasons\":[{\"source\":\"requested\",\"category\":\"security\",\"reason\":\"Adds an unauthenticated cache endpoint\",\"reviewTask\":\"9501\",\"at\":\"2026-11-08T01:36:24Z\"}]}"
+      "detail": "HTTP 200 {\"task\":\"6\",\"added\":true,\"reasons\":[{\"source\":\"requested\",\"category\":\"security\",\"reason\":\"Adds an unauthenticated cache endpoint\",\"reviewTask\":\"9501\",\"at\":\"2026-11-08T01:43:53Z\"}]}"
     },
     {
       "name": "4h green checks + auto_merge still held for a person",
@@ -44,7 +44,7 @@
     {
       "name": "4i Task detail payload carries humanReviewHold with the category and reason",
       "pass": true,
-      "detail": "state=awaiting_submit hold=[{\"at\":\"2026-11-08T01:36:24Z\",\"category\":\"security\",\"reason\":\"Adds an unauthenticated cache endpoint\",\"reviewTask\":\"9501\",\"source\":\"requested\"}]"
+      "detail": "state=awaiting_submit hold=[{\"at\":\"2026-11-08T01:43:53Z\",\"category\":\"security\",\"reason\":\"Adds an unauthenticated cache endpoint\",\"reviewTask\":\"9501\",\"source\":\"requested\"}]"
     },
     {
       "name": "4j task list payload carries the hold (humanReview filter / list badge)",
@@ -54,7 +54,7 @@
     {
       "name": "4k grain show names the hold",
       "pass": true,
-      "detail": "out=6 feat: add widget cache\nstate:      awaiting_submit\nowner:      operator@example.com\nrepo:       acme/widgets\npriority:   5\nauto-merge: false\npull request: acme/widgets#9001\n\ncache\nfiled by:        operator (access code)\n\nhistory:\n  -\u003e human_review_requested 2026-11-08T01:36:24Z by task 9501 (Adds an unauthenticated cache endpoint); category security; review task 9501\n  -\u003e proposed        2026-11-08T01:36:24Z by operator (access code)\n  -\u003e queued          2026-11-08T01:36:24Z\n  -\u003e auto_merge_off  2026-11-08T01:36:24Z by task 9501 (held for a person's review); ui.(*Client).RequestHumanReview ( [clipped]"
+      "detail": "out=6 feat: add widget cache\nstate:      awaiting_submit\nowner:      operator@example.com\nrepo:       acme/widgets\npriority:   5\nauto-merge: false\npull request: acme/widgets#9001\n\ncache\nfiled by:        operator (access code)\n\nhistory:\n  -\u003e human_review_requested 2026-11-08T01:43:53Z by task 9501 (Adds an unauthenticated cache endpoint); category security; review task 9501\n  -\u003e proposed        2026-11-08T01:43:53Z by operator (access code)\n  -\u003e queued          2026-11-08T01:43:53Z\n  -\u003e auto_merge_off  2026-11-08T01:43:53Z by task 9501 (held for a person's review); ui.(*Client).RequestHumanReview ( [clipped]"
     },
     {
       "name": "4l Inbox lists the held task for a person",
@@ -81,13 +81,13 @@
     "cliPrAdoptFinish": "task 2 upgraded acme/widgets#41\nstate: queued\nmode:  finish",
     "cliPrAdoptReviewOnly": "task 2 adopted acme/widgets#41\nstate: queued\nmode:  review-only",
     "cliPrReview": "task 1: review of acme/widgets#41 (queued)",
-    "cliPrStatus": "acme/widgets#41 (open)\nhead:        be6040a03b63618cbeb87fbe66b280f2d9dcf475\nshepherd:    task 2, review-only, queued\nci:          no grain CI run\nmerge queue: held: review\nreviews:\n  task 3  code      pending   0 findings, 0 unresolved threads\n  task 4  security  pending   0 findings, 0 unresolved threads\n  task 1  code      pending   0 findings, 0 unresolved threads",
-    "cliShowHeld": "6 feat: add widget cache\nstate:      awaiting_submit\nowner:      operator@example.com\nrepo:       acme/widgets\npriority:   5\nauto-merge: false\npull request: acme/widgets#9001\n\ncache\nfiled by:        operator (access code)\n\nhistory:\n  -\u003e human_review_requested 2026-11-08T01:36:24Z by task 9501 (Adds an unauthenticated cache endpoint); category security; review task 9501\n  -\u003e proposed        2026-11-08T01:36:24Z by operator (access code)\n  -\u003e queued          2026-11-08T01:36:24Z\n  -\u003e auto_merge_off  2026-11-08T01:36:24Z by task 9501 (held for a person's review); ui.(*Client).RequestHumanReview (human_review.go:127)\n  -\u003e running         2026-11-08T01:41:23Z\n  -\u003e awaiting_submit 2026-11-08T01:41:23Z\n\nattempts:\n  #1 started 2026-11-08T01:41:23Z, finished 2026-11-08T01:36:24Z, succeeded\n\n--- comment #4 by grain on behalf of 6 ---\nAdded the cache.\n\n--- comment #5 by human-review ---\n**Held for a person's review** (security): Adds an unauthenticated cache endpoint\n\nRaised by review [task 9501](/tasks/9501).\n\nNeeds a person to confirm the exposure is intended.\n\nThis change will not merge itself while the hold stands: a clean CI run, a later clean review or a new push do not release it. Press Submit to merge it, or Release hold once you have decided.",
-    "heldTaskLinksBeforeHold": "[{fixes acme/widgets#9001} {trust-boundary-cleared trust-boundary/v21@6c182d51de2bbe552a3a56a6178cb3a5c3e76e42}]",
+    "cliPrStatus": "acme/widgets#41 (open)\nhead:        72458d331540ecf61d59af3045e3f4a2d30e4493\nshepherd:    task 2, review-only, queued\nci:          no grain CI run\nmerge queue: held: review\nreviews:\n  task 3  code      pending   0 findings, 0 unresolved threads\n  task 4  security  pending   0 findings, 0 unresolved threads\n  task 1  code      pending   0 findings, 0 unresolved threads",
+    "cliShowHeld": "6 feat: add widget cache\nstate:      awaiting_submit\nowner:      operator@example.com\nrepo:       acme/widgets\npriority:   5\nauto-merge: false\npull request: acme/widgets#9001\n\ncache\nfiled by:        operator (access code)\n\nhistory:\n  -\u003e human_review_requested 2026-11-08T01:43:53Z by task 9501 (Adds an unauthenticated cache endpoint); category security; review task 9501\n  -\u003e proposed        2026-11-08T01:43:53Z by operator (access code)\n  -\u003e queued          2026-11-08T01:43:53Z\n  -\u003e auto_merge_off  2026-11-08T01:43:53Z by task 9501 (held for a person's review); ui.(*Client).RequestHumanReview (human_review.go:127)\n  -\u003e running         2026-11-08T01:48:53Z\n  -\u003e awaiting_submit 2026-11-08T01:48:53Z\n\nattempts:\n  #1 started 2026-11-08T01:48:53Z, finished 2026-11-08T01:43:53Z, succeeded\n\n--- comment #4 by grain on behalf of 6 ---\nAdded the cache.\n\n--- comment #5 by human-review ---\n**Held for a person's review** (security): Adds an unauthenticated cache endpoint\n\nRaised by review [task 9501](/tasks/9501).\n\nNeeds a person to confirm the exposure is intended.\n\nThis change will not merge itself while the hold stands: a clean CI run, a later clean review or a new push do not release it. Press Submit to merge it, or Release hold once you have decided.",
+    "heldTaskLinksBeforeHold": "[{fixes acme/widgets#9001} {trust-boundary-cleared trust-boundary/v21@c8e101575a8c65ce2b4f9a5ec57ae5fd12849284}]",
     "heldTaskState": "awaiting_submit",
     "humanReviewHold": [
       {
-        "at": "2026-11-08T01:36:24Z",
+        "at": "2026-11-08T01:43:53Z",
         "category": "security",
         "reason": "Adds an unauthenticated cache endpoint",
         "reviewTask": "9501",
