@@ -1888,6 +1888,7 @@ Serves the task UI on localhost over a throwaway store of fake tasks. Every call
 | `-agent-paused` | bool |  |  | serve a deployment whose agent dispatch is paused on a provider's usage limit |
 | `-as` | string |  |  | principal to attribute the fake tasks to (defaults to the OS user) |
 | `-base-branch-ci` | bool |  |  | with -github-sim and -fake-ci, let POST /api/e2e/base-branch/{red,green} {"branch": ...} (loopback only) turn a branch red or green on a -fake-ci verdict, through grain's own base-branch reconciler and dispatch's linking step, dispatching nothing |
+| `-config-change` | bool |  |  | serve a real, throwaway grain/config exported from the demo's store, and seed two tasks parked on proposal branches of it (propose_config_change), so the config-change card's Approve & Apply merges into its main and Reject deletes the branch |
 | `-default-target-repo` | string | `"acme/widgets"` |  | owner/name the fake tasks target |
 | `-disable-self-upgrade` | bool |  |  | as on grain daemon: disable in-VM self-upgrade actions and hide in-VM upgrade controls in the UI |
 | `-external-config-branch` | string | `"main"` |  | with -external-config-repo, the branch of that repository configuration is read from |

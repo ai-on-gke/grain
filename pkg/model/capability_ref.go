@@ -457,6 +457,11 @@ func capabilityEntry(raw json.RawMessage) (string, error) {
 		return "", err
 	}
 	if !IsCapabilityRef(spec.Capability) {
+		if len(spec.With) == 0 {
+			// {capability: <name>} with no with: at all: the refusal
+			// below would blame arguments the entry never sent.
+			return "", fmt.Errorf("capability grant %q: a name that is not a capability reference (https://...) is written as a plain string, %q, not as a {capability, with} object", spec.Capability, spec.Capability)
+		}
 		return "", fmt.Errorf("capability grant %q: only a capability reference (https://...) takes with: arguments", spec.Capability)
 	}
 	return EncodeCapabilityGrant(spec)
