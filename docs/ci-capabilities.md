@@ -141,9 +141,10 @@ jobs:
 The arguments, the environment each built-in reads its credential from, and
 what each mint places are in
 [docs/capabilities.md](capabilities.md#in-tree-capability-servers-grain-capability-name).
-The few providers still in `pkg/capability/` (`github-sandbox`, the
-`release-gate-read` alias) are granted the older way, from this repository's
-list or by declaring the alias.
+The one provider core still registers in-process, the `release-gate-read`
+alias, is granted the older way, from this repository's list or by declaring
+the alias. (`github-sandbox` was the other until schema migration 124 made it
+`https://grain.dev/capabilities/github#sandbox-repo`.)
 A job naming a reference has it minted before its sandbox is
 built, through the server attached for it in `mcpServers`: the reference
 need not be in the repository's CI capabilities, the deployment's
@@ -639,8 +640,9 @@ Both are gone:
 - A job that relied on such an entry without declaring it must now
   declare it in its workflow file. Its team must also have a credential
   that can reach the repository.
-- Everything else in this list, such as `github-sandbox`,
-  `package-publish`, `registry-push` and release secrets, is a
+- Everything else in this list, such as `…/github#sandbox-repo`
+  (formerly `github-sandbox`), the release server's `package-publish` and
+  `registry-push`, and release secrets, is a
   deployment-owned credential that belongs to no team. Those are still
   the operator's to grant here. (`gcp-key` and `gemini-key` were here too,
   until they became `…/gcp` references that a job declares.)

@@ -214,7 +214,13 @@ func reconcileConsoleSession(ctx context.Context, deps Deps, session model.Conso
 		// task with a fresh conversation, and the closed one keeps its
 		// record.
 		if task != nil && (obs == nil || obs.ClosedAt == nil) {
-			return updateConsoleSession(ctx, deps, session, *task, obs, running[task.ID], now)
+			// A run's row is finished before its result has been turned
+			// into what it implies (InFlight.Busy): its answer is not on
+			// the task yet, and parking in that window posts the resting
+			// line above the answer, so the next park cannot reuse it and
+			// posts a second one.
+			live := running[task.ID] || (deps.Runs != nil && deps.Runs.Busy(task.ID))
+			return updateConsoleSession(ctx, deps, session, *task, obs, live, now)
 		}
 		// The conversation that ended. The replacement is told where it
 		// came from and is handed that thread's standing summary --

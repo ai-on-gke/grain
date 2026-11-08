@@ -217,11 +217,13 @@ until they are changed or the server is added back under the same ID.
 **Settings → Legacy capabilities** is a different thing: the capabilities built
 into grain itself before capability servers, each granted by a bare name such
 as `github-sandbox` or `read-issues` and handed over by grain directly rather than by a
-server ([ci-capabilities.md](ci-capabilities.md)). Most have been retired onto
-server methods (`gcp-key` onto `…/gcp#gcp-key`, the model proxies onto
-`…/model-proxy`, `grain-log` onto `…/grain#journal`, `self-debug` onto the
-`api:self-debug` preset plus `…/grain#source`, and so on). What is
-left is listed in
+server ([ci-capabilities.md](ci-capabilities.md)). Every one that minted a
+credential has been retired onto a server method (`gcp-key` onto
+`…/gcp#gcp-key`, the model proxies onto `…/model-proxy`, `grain-log` onto
+`…/grain#journal`, `self-debug` onto the `api:self-debug` preset plus
+`…/grain#source`, `read-issues` onto `…/github#read-issues`, `github-sandbox`
+onto `…/github#sandbox-repo`, and so on), and its bare name is kept as a
+one-release alias. What is left is listed in
 [unified-grants.design.md §4](../design/design/unified-grants.design.md#4-retiring-the-in-process-capabilities). That tab lists them one
 full-width row each, with **Ready** or **Not ready** and chips such as **CI
 only** and **Default**, each explaining itself as a tooltip. A row opens the

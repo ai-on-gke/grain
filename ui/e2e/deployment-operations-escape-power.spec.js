@@ -35,18 +35,27 @@ test("saves a typed setting when the rail leaves Settings", async ({
   page,
 }) => {
   const name = `escape-${Date.now()}`;
-  await page.goto("/settings/general");
-  const field = page.getByLabel("Environment name");
-  await field.fill(name);
-  await page.getByRole("button", { name: /^Tasks \d+/ }).click();
+  // The demo server is the worker's (fixtures.js): an environment name
+  // left behind puts a chip on every later page's bar.
+  const initial = await (await page.request.get("/api/settings")).json();
+  try {
+    await page.goto("/settings/general");
+    const field = page.getByLabel("Environment name");
+    await field.fill(name);
+    await page.getByRole("button", { name: /^Tasks \d+/ }).click();
 
-  await expect(page).not.toHaveURL(/\/settings/);
-  await expect(page).toHaveTitle(new RegExp(`^${name} `));
-  const stored = await (await page.request.get("/api/settings")).json();
-  expect(stored.environmentName).toBe(name);
+    await expect(page).not.toHaveURL(/\/settings/);
+    await expect(page).toHaveTitle(new RegExp(`^${name} `));
+    const stored = await (await page.request.get("/api/settings")).json();
+    expect(stored.environmentName).toBe(name);
 
-  await page.goto("/settings/general");
-  await expect(page.getByLabel("Environment name")).toHaveValue(name);
+    await page.goto("/settings/general");
+    await expect(page.getByLabel("Environment name")).toHaveValue(name);
+  } finally {
+    await page.request.put("/api/settings", {
+      data: { environmentName: initial.environmentName ?? "" },
+    });
+  }
 });
 
 test("acknowledges an accepted power action and reports a refused one", async ({

@@ -1018,6 +1018,64 @@ through `agentAPIGate`:
   `keepRunning`, or a priority above the default still waits for a
   person.
 
+### Following work from a workstation
+
+The host `grain` CLI, signed in with `grain login`, is the external
+agent's own client ([external-cli.spec.md](../design/spec/external-cli/external-cli.spec.md),
+`design/spec/cli/host.spec.md` CLI-65 and CLI-110 for every flag). Besides
+filing and reading tasks, it follows what an agent filed without polling
+task by task:
+
+- `grain inbox [-repo R] [-kind question|secret|notification|merge-held|proposal]`
+  (`GET /api/inbox`, `tasks:read`) lists what the UI Inbox would show on the
+  repositories the credential reads: parked questions and secret requests,
+  warning and critical notifications, merge-held pull requests and
+  unapproved proposals, each with its root-relative UI path.
+- `grain wait <id...> [-until closed|merged|awaiting-reply|ci-done|any[,...]]`
+  re-issues `GET /api/tasks/wait` (`tasks:read`), which holds one call for
+  at most 60 seconds. It exits `0` when a condition is met, `1` when
+  `-until merged` meets a task that closed unmerged (or `-until closed` a
+  failed one), and `5` when `-timeout` (default `30m`) runs out, printing
+  the `grain wait` line that carries on. An external caller earns no wait
+  credit.
+- `grain reply <id> [<body...> | -body-file F]` (`POST /api/tasks/{id}/reply`,
+  `tasks:write`) answers the question a run parked on. It is refused with
+  exit `2`, posting nothing, when no `ask_question` is parked, and when the
+  task waits on a `request_secret`, whose value only the encrypted input on
+  `/tasks/<id>` takes. `grain comment` posts a general note either way.
+- `grain logs <id> [-attempt N] [-tail N] [-follow]` prints an attempt's
+  activity and transcript, and with `-follow` streams it until the attempt
+  ends.
+- `GET /api/refs/{ref}/summary` rolls up every readable task carrying one
+  external work reference (`externalRef`, set with `grain create
+  -external-ref CA-204` and inherited by the tasks it spawns): counts by
+  state, CI checks passed, open questions and pull requests.
+  `grain list -external-ref CA-204` lists the tasks themselves.
+- `GET /api/events` (`tasks:read`) is an ordered, cursor-resumable feed of
+  `task.state`, `task.question`, `task.comment` and `task.ci` events
+  ([integration-events.design.md](../design/design/integration-events.design.md)).
+  It answers a JSON page (`?since=<event id>`, `limit` 1 to 500, default
+  100; `since=now` starts at the head), long-polls with `&wait=<seconds>`
+  (at most 25), or streams Server-Sent Events (`Accept: text/event-stream`
+  or `?stream=1`, resuming from `Last-Event-ID`). `?repo=` and
+  `?types=` narrow it; without `?repo=` it answers only the repositories
+  the caller reads. Events carry ids, one-line summaries, external
+  references and attribution, never comment bodies, prompts, transcripts
+  or CI logs, and the store keeps the latest 10,000.
+
+`grain skill install [-jetski|-claude|-codex|-gemini|-dir D] [-project]`
+writes a `SKILL.md` for the active context into the coding agent's skill
+directory: the CLI guide built into the binary, plus the deployment's
+repositories, templates and the caller's scopes, and never a token or
+secret. `grain skill status` says whether it is `installed`, `stale` or
+`missing`, and other commands print a one-line note on stderr when it is
+stale. `grain mcp` is an optional local stdio MCP server for agents that
+prefer tools to a shell: thirteen tools (`propose_task`,
+`list_grain_tasks`, `wait_for_task`, `reply_to_task`, `grain_inbox`, ...)
+that run the same client code as the CLI verbs, with `wait_for_task`
+answering at least every 90 seconds so an MCP client never times out.
+`grain skill install -mcp` registers it in the agent's MCP configuration.
+
 ### Routes without calling-task context
 
 Because an external agent is not a running grain task and has no sandbox
