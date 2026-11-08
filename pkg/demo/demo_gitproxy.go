@@ -183,11 +183,16 @@ func configureGitProxyDemo(dir string, store *model.Store, repo model.RepoRef, b
 func newDemoNamespace(dir string, store *model.Store) (*namespace.Server, *daemon.SandboxCLIBackend, *daemon.InProcessAPI) {
 	// Ensure state-repo/settings/settings.yaml and secrets/secrets.key exist so
 	// config://, deploy://health, and deploy://grain.log reads work in demo.
-	settingsDir := filepath.Join(daemon.StateRepoDir(dir), "settings")
-	_ = os.MkdirAll(settingsDir, 0o755)
-	settingsPath := filepath.Join(settingsDir, "settings.yaml")
-	if _, err := os.Stat(settingsPath); os.IsNotExist(err) {
-		_ = os.WriteFile(settingsPath, []byte("default_model: gemini-2.5-pro\n"), 0o644)
+	// Not over -config-change's real grain/config, though: an untracked
+	// file in that checkout is uncommitted work its approvals refuse to
+	// merge over ("config checkout has uncommitted changes").
+	if !demoStateRepoIsReal(dir) {
+		settingsDir := filepath.Join(daemon.StateRepoDir(dir), "settings")
+		_ = os.MkdirAll(settingsDir, 0o755)
+		settingsPath := filepath.Join(settingsDir, "settings.yaml")
+		if _, err := os.Stat(settingsPath); os.IsNotExist(err) {
+			_ = os.WriteFile(settingsPath, []byte("default_model: gemini-2.5-pro\n"), 0o644)
+		}
 	}
 	_ = secrets.New(daemon.SecretsDir(dir))
 
