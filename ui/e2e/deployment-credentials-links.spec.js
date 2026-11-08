@@ -14,6 +14,10 @@
 
 import { expect, test } from "./fixtures.js";
 
+// -secrets-store, so a capability server's typed secret really reaches
+// the store and is listed on the Deployment credentials card.
+test.use({ demoArgs: ["-secrets-store"] });
+
 // The retired Settings → Legacy capabilities tab is the Deployment
 // credentials card at the foot of Settings → Capabilities (task 2876), and
 // the links that named it still have to reach it. In the 2026-11-08
@@ -102,4 +106,59 @@ test("Settings → Git's read-only note opens the Deployment credentials card", 
   await page.goBack();
   await expect(page).toHaveURL("/settings/git");
   await expect(page.getByTestId("git-secret-note")).toBeVisible();
+});
+
+// A capability server's own secrets are listed apart on the Deployment
+// credentials card, below the servers on the same page. Adding,
+// configuring and removing a server there used to leave that list as it
+// was drawn: a removed server's secret stayed listed, linking to the gone
+// server, until a reload (2026-11-08 connections walkthrough).
+test("the Deployment credentials card follows a capability server's own secret without a reload", async ({
+  page,
+  request,
+}) => {
+  const DEMO = "https://capabilities.demo.grain.example/cloud";
+  const ID = "https://capabilities.demo.grain.example/cloud-secrets-e2e";
+  const demo = (
+    await (await request.get("/api/capability-servers")).json()
+  ).find((s) => s.id === DEMO);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/settings/capabilities#capability-servers");
+  await page.getByTestId("capability-server-add-button").click();
+  const add = page.getByTestId("capability-server-add");
+  await add.getByLabel(/Capability ID/).fill(ID);
+  await add.getByLabel("Transport").click();
+  await page.getByRole("option", { name: /HTTP/ }).click();
+  await add.getByLabel(/Server URL/).fill(demo.config.serverUrl);
+  await add
+    .getByLabel(/Headers/)
+    .fill(`Authorization=${demo.config.headers.Authorization}`);
+  await add.getByRole("button", { name: "Add server" }).click();
+  const card = page.locator(`[data-capability-server="${ID}"]`);
+  await card.getByRole("button", { name: "Edit server settings" }).click();
+  const config = card.getByTestId("capability-server-config");
+  await config.getByLabel(/^project/).fill("acme-e2e");
+  await config.locator('input[id$="-apiToken"]').fill("e2e-token-never-shown");
+  await config.getByRole("button", { name: "Save server settings" }).click();
+  await expect(config).toHaveCount(0);
+
+  // Configured: its secret is listed under the server, without a reload.
+  const used = page.getByRole("list", {
+    name: "Secrets used by capability servers",
+  });
+  await expect(used).toContainText(ID);
+  await expect(page.locator("#other-secrets")).not.toContainText(
+    "e2e-token-never-shown",
+  );
+
+  // Removed: the secret goes with it, and so does the listing.
+  await card.getByRole("button", { name: "Remove" }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Remove" })
+    .click();
+  await expect(card).toHaveCount(0);
+  await expect(page.locator("#other-secrets")).not.toContainText(ID);
+  await page.reload();
+  await expect(page.locator("#other-secrets")).not.toContainText(ID);
 });

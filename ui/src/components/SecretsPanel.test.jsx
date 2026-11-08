@@ -296,4 +296,41 @@ describe("SecretsPanel", () => {
     );
     expect(api).toHaveBeenCalledTimes(1);
   });
+
+  // 2026-11-08 connections walkthrough: removing a capability server on
+  // Settings → Capabilities left its secret listed under "Used by
+  // capability servers", linking to the gone server, until a reload.
+  it("reads the store again when refreshKey changes", async () => {
+    const id = "https://walk.example/caps/cloud";
+    api
+      .mockResolvedValueOnce({
+        enabled: true,
+        secrets: [
+          {
+            name: "capability-server-1234",
+            keys: ["apiToken"],
+            capabilityServers: [id],
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ enabled: true, secrets: [] });
+    const { rerender } = render(
+      <SecretsPanel showError={() => {}} refreshKey={0} />,
+    );
+    expect(
+      await screen.findByRole("list", {
+        name: "Secrets used by capability servers",
+      }),
+    ).toHaveTextContent(id);
+    rerender(<SecretsPanel showError={() => {}} refreshKey={1} />);
+    expect(
+      await screen.findByText("No other secrets set."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("list", {
+        name: "Secrets used by capability servers",
+      }),
+    ).toBeNull();
+    expect(api).toHaveBeenCalledTimes(2);
+  });
 });
