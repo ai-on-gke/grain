@@ -1,0 +1,12 @@
+name: Retired template
+title: "retired walk"
+body: |
+  Walk §6 item 1 with retired names.
+capabilities:
+  - priority-dispatch
+  - durable
+  - self-debug
+  - bootstrap-playbooks
+  - read-issues
+  - github-credential:bot
+  - https://grain.dev/capabilities/gcp#gcp-key={"account":"default","activate":true}
