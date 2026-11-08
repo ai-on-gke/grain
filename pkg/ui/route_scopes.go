@@ -379,6 +379,7 @@ var routeScopes = map[string]APIScope{
 	"POST /api/hostd/renew":                                                "internal",
 	"GET /api/hostd/install.sh":                                            "internal",
 	"GET /hostd/install":                                                   "internal",
+	"GET /cli/install.sh":                                                  "internal",
 	"GET /api/hostds":                                                      "capabilities:read",
 	"POST /api/hostds":                                                     "capabilities:admin",
 	"GET /api/hostds/enrollment-codes":                                     "internal",

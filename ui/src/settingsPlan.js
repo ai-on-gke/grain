@@ -70,6 +70,7 @@ const SETTING_LABELS = {
   promptExtension: "Standing instructions for every run",
   taskBranchTemplate: "Branch name template",
   deploymentId: "Deployment ID",
+  externalAgentApi: "Accept external agents",
   githubHost: "GitHub host",
   githubInsecureHttp: "Speak plain HTTP to GitHub host",
   gcpProject: "GCP project",

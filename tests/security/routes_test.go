@@ -494,6 +494,7 @@ var routeAuthorization = map[string]authLevel{
 	// (TestHostdInstallScriptIsPublicAndHoldsNoSecret).
 	"GET /api/hostd/install.sh": public,
 	"GET /hostd/install":        public,
+	"GET /cli/install.sh":       public,
 }
 
 // The people the fixtures name. On the single-tenant daemon
