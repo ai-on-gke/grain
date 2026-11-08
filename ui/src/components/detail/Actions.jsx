@@ -343,6 +343,12 @@ export default function Actions({ t, config, act, onOpenTask }) {
                 color="warning"
                 title="Pause this task and stop its run at once, without the grace period. Whatever the run has not pushed is lost."
                 onClick={() =>
+                  // Asked first, as Cancel is: unlike Pause, this one
+                  // throws away whatever the run has not pushed, and
+                  // Resume cannot bring that back.
+                  confirm(
+                    `Pause ${t.id} now? Its run is stopped at once, without the grace period to push its work and write its handover; whatever it has not pushed is lost. Resume picks the task back up where it was left.`,
+                  ) &&
                   act(
                     () =>
                       api(`/api/tasks/${t.id}/pause`, {
