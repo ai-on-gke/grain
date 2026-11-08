@@ -384,15 +384,19 @@ describe("ProcessesList", () => {
     expect(onRefreshRuns).toHaveBeenCalledTimes(1);
     expect(onRefreshTasks).toHaveBeenCalledTimes(1);
 
-    // 2. Saving a template refreshes both templates and schedules.
+    // 2. Saving a template refreshes templates, schedules, and suites
+    // (whose items carry resolved templateName used by the toolbar filter).
     onRefreshSchedules.mockClear();
+    onRefreshSuites.mockClear();
     await user.click(screen.getByRole("link", { name: "Bump" }));
     await user.click(await screen.findByRole("button", { name: "Save" }));
     expect(onRefreshTemplates).toHaveBeenCalledTimes(1);
     expect(onRefreshSchedules).toHaveBeenCalledTimes(1);
+    expect(onRefreshSuites).toHaveBeenCalledTimes(1);
 
     // 3. Saving a suite refreshes both suites and schedules.
     onRefreshSchedules.mockClear();
+    onRefreshSuites.mockClear();
     await user.click(screen.getByRole("link", { name: "Qualify" }));
     await user.click(await screen.findByRole("button", { name: "Save" }));
     expect(onRefreshSuites).toHaveBeenCalledTimes(1);

@@ -480,6 +480,29 @@ func WritesBesides(writes []WriteTarget, target RepoRef, base string) []WriteTar
 	return out
 }
 
+// ReadsBesides is reads with any entry naming target dropped -- WritesBesides'
+// read-only counterpart, for reusable content (a Template's Reads, a
+// Schedule's) whose target repository is decided at firing time rather than
+// when the content was saved. When target is the zero RepoRef (an unbound
+// preview before any repo is picked, or a repoless firing), reads is returned
+// unchanged.
+func ReadsBesides(reads []RepoRef, target RepoRef) []RepoRef {
+	if target == (RepoRef{}) {
+		return reads
+	}
+	out := make([]RepoRef, 0, len(reads))
+	for _, r := range reads {
+		if r.Same(target) {
+			continue
+		}
+		out = append(out, r)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // WriteTargets is every repository a task may have work landed in, with
 // the base branch for each: Target/Base first, when it has one, then
 // Writes in whatever order they are in (the store hands them back sorted

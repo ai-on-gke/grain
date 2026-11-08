@@ -557,7 +557,11 @@ export default function ProcessesList({
           config={config}
           onClose={() => onOpenTemplate(null)}
           onSaved={() =>
-            Promise.all([onRefreshTemplates?.(), onRefreshSchedules?.()])
+            Promise.all([
+              onRefreshTemplates?.(),
+              onRefreshSchedules?.(),
+              onRefreshSuites?.(),
+            ])
           }
           // New Task has nowhere to fill a template's input fields, so
           // one that declares them was opened on a form whose filing
