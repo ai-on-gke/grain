@@ -12,12 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import DetailOverlay from "../DetailOverlay.jsx";
 import api from "../../api.js";
-import { chooseOption, removeOption } from "../../searchSelectTesting.js";
+import {
+  chips,
+  chooseOption,
+  removeOption,
+} from "../../searchSelectTesting.js";
 import { resetDetailMocks, baseTask, config } from "./testFixtures.js";
 
 vi.mock("../../api.js", () => ({ default: vi.fn().mockResolvedValue(null) }));
@@ -114,6 +118,48 @@ describe("DetailOverlay capabilities", () => {
     expect(api).toHaveBeenCalledWith("/api/tasks/12/capabilities", {
       method: "POST",
       body: JSON.stringify({ id: "scratch-repo", attach: false }),
+    });
+  });
+
+  it("keeps https://grain.dev/capabilities/api# grants in GrantsPicker and out of Legacy capabilities", async () => {
+    const act = vi.fn((mutate) => mutate());
+    const user = userEvent.setup();
+    const refGrant =
+      'https://grain.dev/capabilities/api#ci:read={"repo":"acme/widgets"}';
+    const task = {
+      ...baseTask,
+      capabilities: ["web-search", refGrant],
+    };
+    render(
+      <DetailOverlay
+        task={task}
+        tasks={[]}
+        config={{
+          ...config,
+          capabilities: [
+            ...(config.capabilities || []),
+            { id: "api:ci:read", summary: "Read CI", description: "Read CI" },
+          ],
+        }}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+      />,
+    );
+
+    expect(
+      chips(screen.getByLabelText("Legacy capabilities")).map(
+        (c) => c.textContent,
+      ),
+    ).toEqual(["Web search"]);
+    const grants = screen.getByTestId("task-12-grants");
+    const apiLine = within(grants).getByLabelText(
+      "api:ci:read on acme/widgets",
+    );
+    await user.click(within(apiLine).getByRole("button", { name: /remove/i }));
+    expect(api).toHaveBeenCalledWith("/api/tasks/12/capabilities", {
+      method: "POST",
+      body: JSON.stringify({ id: refGrant, attach: false }),
     });
   });
 });

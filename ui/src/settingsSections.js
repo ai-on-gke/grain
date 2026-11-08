@@ -259,6 +259,31 @@ export function settingsSectionFor(raw) {
   return SETTINGS_SECTION_ALIASES[id] || "";
 }
 
+// SETTINGS_ALIAS_ANCHORS are the cards an alias names within its
+// section: the retired Legacy capabilities tab is the Deployment
+// credentials card at the foot of Capabilities, and its secrets the
+// Other secrets list in it. Landing at the top of Capabilities left that
+// card some six screens below the fold (2026-11-08 connections walkthrough).
+const SETTINGS_ALIAS_ANCHORS = {
+  credentials: "credentials",
+  "legacy-capabilities": "credentials",
+  secrets: "other-secrets",
+};
+
+// settingsAliasAnchor is the card a /settings/<alias> path should scroll
+// to when it carries no #hash of its own, or "" for none.
+export function settingsAliasAnchor(raw) {
+  return SETTINGS_ALIAS_ANCHORS[String(raw || "").toLowerCase()] || "";
+}
+
+// settingsAliasAnchorAt is settingsAliasAnchor for a whole address: the
+// alias in /settings/<alias>, unless a #hash already names a target.
+export function settingsAliasAnchorAt(pathname, hash) {
+  if (hash && hash !== "#") return "";
+  const m = /^\/settings\/([^/]+)\/?$/.exec(String(pathname || ""));
+  return m ? settingsAliasAnchor(decodeURIComponent(m[1])) : "";
+}
+
 // systemTabFor is the tab a /system/<tab> path names, or "" for none.
 // An explicit /system/health stays "health" rather than folding into the
 // bare /system: on a phone the bare path is the list of tabs, not Health,

@@ -35,6 +35,7 @@ import {
   apiShortName,
   groupApiRows,
   splitApiGrant,
+  storedApiGrant,
 } from "../apiGrants.js";
 
 // ApiGrantPicker is the "Grain API" group of a capability picker: the
@@ -63,20 +64,21 @@ export default function ApiGrantPicker({
   if (presets.length === 0 && areas.length === 0 && selected.length === 0) {
     return null;
   }
-  const rowOf = (id) => offered.find((c) => c.id === splitApiGrant(id)[0]);
+  const rowOf = (id) => {
+    const [target] = splitApiGrant(id);
+    return offered.find((c) => splitApiGrant(c.id)[0] === target);
+  };
   const toggle = (rowId, on) => {
     const id = apiGrantId(rowId, repo);
-    onChange(
-      on
-        ? [...selected.filter((s) => s !== id), id]
-        : selected.filter((s) => s !== id),
-    );
+    const rest = selected.filter((s) => storedApiGrant(s) !== id);
+    onChange(on ? [...rest, id] : rest);
   };
   const regionId = `${idPrefix}-api-grants`;
 
   const line = (row) => {
     const id = apiGrantId(row.id, repo);
     const name = apiShortName(row.id);
+    const isSelected = selected.some((s) => storedApiGrant(s) === id);
     return (
       <Box
         key={row.id}
@@ -91,7 +93,7 @@ export default function ApiGrantPicker({
             <Checkbox
               size="small"
               sx={{ pt: 0.25 }}
-              checked={selected.includes(id)}
+              checked={isSelected}
               disabled={disabled}
               onChange={(e) => toggle(row.id, e.target.checked)}
               inputProps={{ "aria-label": name }}

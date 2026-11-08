@@ -778,7 +778,9 @@ export default function RepoPage({
     (id) => !isCapabilityRef(id) && !isApiGrant(id),
   );
   const capsApi = capsSelection.filter(isApiGrant);
-  const capsRefs = capsSelection.filter(isCapabilityRef);
+  const capsRefs = capsSelection.filter(
+    (id) => isCapabilityRef(id) && !isApiGrant(id),
+  );
   const capsMethods = localGrantHandlers(capsRefs, (refs) => {
     const next = [...capsLegacy, ...capsApi, ...refs];
     setCapsSelection(next);
@@ -2965,7 +2967,21 @@ export default function RepoPage({
             readOnly={readOnly}
             describedBy={refusedBy(readOnly)}
             refreshKey={releaseToggles}
-            onSaved={() => setOwnershipSaves((n) => n + 1)}
+            onSaved={() => {
+              setOwnershipSaves((n) => n + 1);
+              // Who runs this repository's standing work decides whether
+              // its base branch is judged here at all: switching it (or
+              // the Base-branch check item) off is the server's word that
+              // the unjudged-gate warning no longer applies
+              // (pkg/ui/basebranchgate.go, baseCheckSwitchedOff), and on
+              // again that it does. Re-read the shell's gates now, as the
+              // CI Mode and Watch default branch saves do, rather than
+              // leaving the warning, the CI tab's dot and the overview's
+              // CI gate stale until a reload (2026-11-08 walkthrough,
+              // task 3613). ownershipSaves above already re-reads the
+              // release pane, so this skips gateCheck.
+              Promise.resolve(onRefreshGates()).catch(() => {});
+            }}
             showError={showError}
           />
 

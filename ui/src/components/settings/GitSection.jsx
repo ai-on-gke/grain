@@ -79,7 +79,7 @@ export default function GitSection({
               if (!onSection || evt.button !== 0 || evt.metaKey || evt.ctrlKey)
                 return;
               evt.preventDefault();
-              onSection("capabilities");
+              onSection("capabilities", "credentials");
             }}
           >
             Settings → Capabilities

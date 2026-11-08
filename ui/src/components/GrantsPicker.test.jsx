@@ -909,4 +909,66 @@ describe("GrantsPicker", () => {
 
     confirm.mockRestore();
   });
+
+  it("leaves https://grain.dev/capabilities/api methods out of the method group and owns held api references", async () => {
+    const apiMethod = {
+      ref: "https://grain.dev/capabilities/api#ci:read",
+      capability: "https://grain.dev/capabilities/api",
+      method: "ci:read",
+      description: "Read CI",
+      args: {
+        type: "object",
+        properties: { repo: { type: "string" } },
+      },
+    };
+    serve({ current: [apiMethod, hostScript] });
+    const onApiChange = vi.fn();
+    const onSubmit = vi.fn();
+    const onRemove = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <GrantsPicker
+        grants={[
+          "https://grain.dev/capabilities/api#tasks:admin",
+          'https://grain.dev/capabilities/api#ci:read={"repo":"acme/widgets"}',
+        ]}
+        config={config}
+        onApiChange={onApiChange}
+        onSubmit={onSubmit}
+        onRemove={onRemove}
+      />,
+    );
+
+    expect(
+      screen.getByLabelText("api:tasks:admin (dangerous)"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("api:ci:read on acme/widgets"),
+    ).toBeInTheDocument();
+    // Held api references must not be rendered a second time as method grants
+    // or sent to POST /api/capability-grants/check.
+    expect(screen.queryByLabelText(/grain\.dev ›/)).toBeNull();
+    expect(
+      api.mock.calls.filter(([p]) => p === "/api/capability-grants/check"),
+    ).toHaveLength(0);
+
+    await user.click(screen.getByRole("button", { name: "Add grant…" }));
+    const menu = await screen.findByRole("menu", { name: "Grants to add" });
+    await within(menu).findByText("host-script");
+    expect(
+      menu.querySelector(
+        '[data-method="https://grain.dev/capabilities/api#ci:read"]',
+      ),
+    ).toBeNull();
+
+    const adminItem = within(menu).getByRole("menuitemcheckbox", {
+      name: "tasks:admin",
+    });
+    expect(adminItem).toHaveAttribute("aria-checked", "true");
+    await user.click(adminItem);
+    expect(onApiChange).toHaveBeenLastCalledWith([
+      'https://grain.dev/capabilities/api#ci:read={"repo":"acme/widgets"}',
+    ]);
+    expect(onRemove).not.toHaveBeenCalled();
+  });
 });

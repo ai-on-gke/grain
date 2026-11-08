@@ -350,7 +350,9 @@ function ScheduleOverlay({
     (id) => !isCapabilityRef(id) && !isApiGrant(id),
   );
   const apiIds = capabilities.filter(isApiGrant);
-  const capabilityRefs = capabilities.filter(isCapabilityRef);
+  const capabilityRefs = capabilities.filter(
+    (id) => isCapabilityRef(id) && !isApiGrant(id),
+  );
   const heldCapabilityIds = useHeldIds(capabilityIds);
   const capabilityOptions = withoutApiRows(
     configuredCapabilities(config?.capabilities, heldCapabilityIds),
@@ -546,6 +548,15 @@ function ScheduleOverlay({
               : templateId === schedule?.templateId
                 ? schedule?.hosting || ""
                 : "",
+          // And the schedule's own capabilities, which a repository's
+          // declared schedule can carry beside `template:` and its firings
+          // grant beside the template's (docs/declarations.md); the
+          // preview dropped them (2026-11-08 walkthrough, task 3614).
+          ...(templateId !== "" &&
+          templateId === schedule?.templateId &&
+          capabilities.length > 0
+            ? { capabilities }
+            : {}),
         };
 
   // Whether leaving now would lose an edit: the form's own fields (the
@@ -1268,14 +1279,24 @@ function ScheduleOverlay({
         <CompositionPanel
           path={`/api/schedules/${schedule.id}/composition`}
           heading="What this schedule files"
-          note="grain's own job -- its content comes from this build"
+          note={
+            declaredIn
+              ? `declared in ${declaredIn.path}`
+              : "grain's own job -- its content comes from this build"
+          }
         />
       ) : (
         <CompositionPanel
           path="/api/schedules/composition"
           body={previewRequest()}
           heading="What this schedule files"
-          note={isNew ? "as filled in above" : "as edited above, not as saved"}
+          note={
+            isNew
+              ? "as filled in above"
+              : declaredIn
+                ? `declared in ${declaredIn.path}`
+                : "as edited above, not as saved"
+          }
         />
       )}
     </Overlay>

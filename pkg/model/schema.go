@@ -609,11 +609,16 @@ import "strconv"
 // which now rewrites an `account` naming an unconfigured permission set to
 // `permission_set` (with a note) where 109 once kept it as written, a grant
 // every state-repository check refused (gcp_key_args_migration.go).
-// 128 adds token accounting (tokenusage.go): `task_run_usage`, one row per
+// 128 changes no table: it drops default, template and schedule grants that
+// the deployment's capability catalogue disables (with a note on affected
+// templates and schedules), so a store saved before API policy writes checked
+// defaults exports a state repository that passes grain state check
+// (catalogue_disabled_migration.go).
+// 129 adds token accounting (tokenusage.go): `task_run_usage`, one row per
 // run that reported its provider usage; `usage_capacity`, the usage a
 // (connection, model) window had consumed when its provider refused it;
 // and `usage_setting`, the operator's budgets and concurrency mode.
-const SchemaVersion = 128
+const SchemaVersion = 129
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -4291,7 +4296,7 @@ var Tables = []string{
 	hostEnrollmentCodeTable,
 	hostJoinRequestTable,
 
-	// Token accounting (tokenusage.go, schema 128).
+	// Token accounting (tokenusage.go, schema 129).
 	taskRunUsageTable,
 	taskRunUsageFinishedIndex,
 	taskRunUsageTaskIndex,

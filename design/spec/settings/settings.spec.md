@@ -177,7 +177,7 @@ Removed with remote executors: `grain host` is grain's only host agent, and a re
 
 ### 3.4 Capabilities → Deployment credentials (`/settings/capabilities#credentials`)
 
-Component: `CredentialsSection.jsx`, a card drawn at the foot of Settings → Capabilities. It was the Secrets & access → Legacy capabilities tab (section id `credentials`) until that tab was retired with the last in-process capability (task 2876); `/settings/credentials`, `/settings/secrets` and `/settings/legacy-capabilities` resolve to Capabilities, keeping any `#hash`. Surface: **config-managed** (the secret values themselves are never in the config repo).
+Component: `CredentialsSection.jsx`, a card drawn at the foot of Settings → Capabilities. It was the Secrets & access → Legacy capabilities tab (section id `credentials`) until that tab was retired with the last in-process capability (task 2876); `/settings/credentials`, `/settings/secrets` and `/settings/legacy-capabilities` resolve to Capabilities, keeping any `#hash`; with none, they open this card (`#credentials`, and `#other-secrets` for `/settings/secrets`) and the corrected address carries that anchor. Settings → Git's read-only note links to `/settings/capabilities#credentials` the same way. Surface: **config-managed** (the secret values themselves are never in the config repo).
 
 | UI label | API key | Column | Type, default, validation | Applies |
 | --- | --- | --- | --- | --- |

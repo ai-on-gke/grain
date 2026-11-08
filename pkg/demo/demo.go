@@ -628,6 +628,15 @@ func Run(opts Options) error {
 		// Only now, past every seed above: the seeds write configuration
 		// through the same client guard this turns into a refusal.
 		cfg.StateRepo = newExternalConfigRepo(opts.ExternalConfigRepo, opts.ExternalConfigBranch)
+		// And which repository that is, in owner/name form, the way a
+		// daemon wires both from one state manager (daemon's
+		// ui_server.go, StateRepoRef: settingsRepo). Without it
+		// /api/config named no configRepo and the config repository's
+		// own page offered to remove it (2026-11-08 walkthrough, task
+		// 3613).
+		if ref, ok := newExternalConfigRepo(opts.ExternalConfigRepo, opts.ExternalConfigBranch).ref(); ok {
+			cfg.StateRepoRef = func() model.RepoRef { return ref }
+		}
 	}
 	ghCalls.enableLive()
 	var simClient github.Client

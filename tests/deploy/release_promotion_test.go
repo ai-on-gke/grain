@@ -173,7 +173,7 @@ func TestReleaseMachineryClearsOnSecurityReview(t *testing.T) {
 		".grain/workflows/release.yml", ".github/workflows/release.yml",
 		".grain/workflows/promote.yml", ".github/workflows/promote.yml",
 		".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",
-		"scripts/release-assets.sh", ".github/workflows/release-train-assets.yml",
+		"scripts/release-assets.sh", "scripts/build-cli.sh", ".github/workflows/release-train-assets.yml",
 	} {
 		if !containsString(trigger.Paths, p) {
 			t.Errorf("the release-machinery trigger does not hold %s (paths %v)", p, trigger.Paths)

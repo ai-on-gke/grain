@@ -908,7 +908,13 @@ var Migrations = []Migration{
 		Up: MigrateGCPKeyGrantArgs,
 	},
 	{
-		Version:     128,
+		Version: 128,
+		Description: "drop default, template and schedule grants that the deployment's capability catalogue disables, " +
+			"noting affected templates and schedules so the state repository a store exports loads again",
+		Up: MigrateCatalogueDisabledGrants,
+	},
+	{
+		Version:     129,
 		Description: "add task_run_usage, usage_capacity and usage_setting for per-run token accounting and connection budgets (tokenusage.go)",
 		Statements: []string{
 			taskRunUsageTable,

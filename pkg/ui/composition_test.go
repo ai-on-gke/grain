@@ -724,3 +724,36 @@ func TestCompositionShowsKeepRunningWhereItIsOn(t *testing.T) {
 		}
 	}
 }
+
+// A schedule naming a template can carry capabilities of its own beside
+// it -- a repository's declared schedule does, with `capabilities:` next
+// to `template:` (docs/declarations.md) -- and its firings are granted
+// both. The draft preview, which is what the schedule pane draws, used to
+// drop the schedule's own and show the template's alone, while the stored
+// schedule's composition showed both (2026-11-08 walkthrough, task 3614).
+// CreateSchedule refuses the pair from a form, so this is the declared
+// schedule's case, which ScheduleOverlay previews with its own fields.
+func TestDraftScheduleCompositionKeepsAScheduleCapabilitiesBesideItsTemplates(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+	tmpl := templateForComposition(t, c, ctx, ui.CreateTemplateRequest{
+		Name: "Audit", Title: "Audit", Capabilities: []string{"gcp-key"},
+	})
+	req := ui.CreateScheduleRequest{
+		TemplateID: tmpl.ID, Repo: "acme/widgets", Base: "main",
+		Capabilities: []string{"read-issues"},
+	}
+	draft, err := c.DraftScheduleComposition(ctx, req)
+	if err != nil {
+		t.Fatalf("composing a draft: %v", err)
+	}
+	caps := field(t, draft.Tasks[0], "capabilities")
+	want := []string{model.GCPKeySandboxAgentGrant, model.GitHubReadIssuesGrant}
+	if !slices.Equal(caps.Values, want) {
+		t.Errorf("draft values = %v, want %v", caps.Values, want)
+	}
+	if !slices.Equal(caps.Sources, []string{"template", "schedule"}) {
+		t.Errorf("draft sources = %v, want [template schedule]", caps.Sources)
+	}
+
+}

@@ -449,7 +449,9 @@ export default function NewTaskOverlay({
     (id) => !isCapabilityRef(id) && !isApiGrant(id),
   );
   const apiIds = capabilities.filter(isApiGrant);
-  const capabilityRefs = capabilities.filter(isCapabilityRef);
+  const capabilityRefs = capabilities.filter(
+    (id) => isCapabilityRef(id) && !isApiGrant(id),
+  );
   const heldCapabilityIds = useHeldIds(capabilityIds);
   // settings/new-task-form.yml's capabilities.offered and .hidden narrow
   // what is offered (one already ticked is kept, to be unticked), and

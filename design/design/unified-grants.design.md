@@ -148,8 +148,9 @@ once with a fidelity test.**
   accepted on task create and edit (`CreateTaskRequest`,
   `UpdateTaskRequest`); a list naming only repository access leaves
   capabilities alone. §2.1.3's method grammar gained `:` for `…/api`.
-  The React grant helpers (`ui/src/apiGrants.js`) still read only the
-  `api:` spelling, which is all this slice ever writes.
+  The React grant helpers (`ui/src/apiGrants.js`) read both spellings as
+  of task 3607 while still writing the `api:` spelling that this slice
+  stores.
 - **Slice 3 (write one).** Writers switch to references. This is the
   first change an older binary cannot read, so it lands in the release
   after slice 2 ships.

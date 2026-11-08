@@ -55,7 +55,14 @@ import { serverPath } from "./CapabilityServersPanel.jsx";
 // there and no Delete, which would break the server. One grain made for
 // a server that no configured server uses any more (orphaned: left by a
 // rename) stays in Other secrets, labelled, so it can still be deleted.
-export default function SecretsPanel({ showError, claimed, onSecretsChanged }) {
+// refreshKey reads the store again whenever it changes: the capability
+// servers card above bumps it when a server's own secrets may have changed.
+export default function SecretsPanel({
+  showError,
+  claimed,
+  onSecretsChanged,
+  refreshKey,
+}) {
   const [resp, setResp] = useState(null);
 
   const refresh = useCallback(async () => {
@@ -69,7 +76,7 @@ export default function SecretsPanel({ showError, claimed, onSecretsChanged }) {
 
   useEffect(() => {
     refresh();
-  }, [refresh]);
+  }, [refresh, refreshKey]);
 
   // Both deletes are confirmed first: nothing here can read a value
   // back, so a stray press -- or Backspace on a focused key chip, which
