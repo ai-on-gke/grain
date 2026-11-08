@@ -78,12 +78,14 @@
 #                 counts; one of the same name from any other app -- an
 #                 Actions workflow with checks: write, another installed
 #                 app -- is reported as IGNORED and never judged. With
-#                 CHECK_QUALIFICATION_APP "none" (or empty or unset: a
+#                 CHECK_QUALIFICATION_APP "none", set explicitly (a
 #                 deployment whose forge connection is no GitHub App, and
 #                 so posts no check run) Stage 2 is SKIPPED and no check
 #                 run is read at all: Stage 1 alone qualifies the RC.
-#                 Otherwise only judged once Stage 1 passes; without
-#                 --checks-json it is PENDING;
+#                 With CHECK_QUALIFICATION_APP empty or unset no check run
+#                 is trusted at all (exit 64): an unconfigured gate never
+#                 passes. Otherwise only judged once Stage 1 passes;
+#                 without --checks-json it is PENDING;
 #       never     TAG, and the release it would become, are not in
 #                 RELEASE_NEVER_PROMOTE (scripts/release.conf).
 #     Every job (and the check run) is judged on its attempts in order:
@@ -143,9 +145,10 @@ CHECK_QUALIFICATION_CHECK="${CHECK_QUALIFICATION_CHECK-grain/release-qualificati
 # The GitHub App (slug or numeric id) whose CHECK_QUALIFICATION_CHECK is
 # trusted: grain's own forge connection, which posts it. Anything else
 # that can write check runs on the repository can post one by that name.
-# "none" (the default, as is empty) skips Stage 2: no check run is
-# trusted, so none is read, and Stage 1 alone qualifies the RC.
-CHECK_QUALIFICATION_APP="${CHECK_QUALIFICATION_APP:-none}"
+# "none" -- only ever as an explicit setting, never a default -- skips
+# Stage 2: no check run is trusted, so none is read, and Stage 1 alone
+# qualifies the RC. Empty or unset trusts nothing and fails closed.
+CHECK_QUALIFICATION_APP="${CHECK_QUALIFICATION_APP-}"
 CHECK_QUALIFICATION_MAX_FLAKES="${CHECK_QUALIFICATION_MAX_FLAKES:-2}"
 CHECK_QUALIFICATION_INFRA_STALL="${CHECK_QUALIFICATION_INFRA_STALL:-3}"
 
@@ -499,6 +502,8 @@ check_qualification() {
     echo "PENDING $CHECK_QUALIFICATION_CHECK: waits for Stage 1 (nightly.yml) to pass"
   elif [ -z "$checks" ]; then
     wait_for "$CHECK_QUALIFICATION_CHECK" "no check run listing was given"
+  elif [ -z "$CHECK_QUALIFICATION_APP" ]; then
+    die "CHECK_QUALIFICATION_APP is unset, so no $CHECK_QUALIFICATION_CHECK check run can be trusted: set it to the slug or id of the GitHub App grain posts it as, or to none to qualify on Stage 1 alone"
   else
     local foreign
     foreign="$(jq -r --arg rc "$rc" --arg check "$CHECK_QUALIFICATION_CHECK" --arg app "$CHECK_QUALIFICATION_APP" "$JQ_CHECK_RUN"'

@@ -170,9 +170,11 @@ if [ -n "$hold_rc" ]; then
   app="${app:-$(jq -r '.grain_app // empty' "$out/hold-checks.json")}"
   env_args+=(RELEASE_HOLD_CHECKS_JSON="$out/hold-checks.json")
 fi
-# A forge connection that is no GitHub App (a PAT) reports no grain_app:
-# with no app to trust, none is (Stage 1 alone qualifies; nothing holds).
-app="${app:-${RELEASE_QUALIFICATION_APP:-none}}"
+# A forge connection that is no GitHub App (a PAT) reports no grain_app
+# (as does one grain cannot tell). Then the environment, or else
+# scripts/release.conf's RELEASE_QUALIFICATION_APP, decides: "none" there
+# qualifies on Stage 1 alone with nothing holding, and unset fails closed.
+app="${app:-${RELEASE_QUALIFICATION_APP:-}}"
 for f in "$out"/*.json; do
   note="$(jq -r '.grain_note // empty' "$f" 2>/dev/null || true)"
   [ -z "$note" ] || say "grain_note in $(basename "$f"): $note"

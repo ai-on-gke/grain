@@ -182,11 +182,14 @@
 #                            grain/release-qualification and grain/rc-hold as:
 #                            only its check runs qualify an rc or lift a hold,
 #                            never same-named ones from an Actions workflow or
-#                            another app. "none" (the default, as is empty:
-#                            a forge connection that is no GitHub App posts
-#                            no check run) trusts neither: Stage 1 alone
-#                            qualifies an rc and no grain/rc-hold holds the
-#                            next (candidate-gate.sh's CHECK_QUALIFICATION_APP)
+#                            another app. "none", set explicitly here or in
+#                            scripts/release.conf (a forge connection that
+#                            is no GitHub App posts no check run), trusts
+#                            neither: Stage 1 alone qualifies an rc and no
+#                            grain/rc-hold holds the next. Empty here falls
+#                            back to scripts/release.conf; unset in both, no
+#                            check run is trusted and the train fails closed
+#                            (candidate-gate.sh's CHECK_QUALIFICATION_APP)
 #   RELEASE_IMAGES           the image publisher (bash scripts/release-images.sh);
 #                            "off" publishes nothing
 #   RELEASE_NOTES_TASK       "off" files no release-notes task
@@ -215,7 +218,8 @@
 #                            GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL are
 #                            unset; never written to the checkout's config
 #   RELEASE_MAJOR, RELEASE_FLOOR_MINOR, RELEASE_NEVER_PROMOTE,
-#   RELEASE_MIN_INTERVAL_MINUTES, RELEASE_MAX_RC_ATTEMPTS, RELEASE_AUTO_PROMOTE
+#   RELEASE_MIN_INTERVAL_MINUTES, RELEASE_MAX_RC_ATTEMPTS, RELEASE_AUTO_PROMOTE,
+#   RELEASE_QUALIFICATION_APP
 #                            override scripts/release.conf as main has it
 set -euo pipefail
 
@@ -603,9 +607,12 @@ esac
 github_token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 github_api="${RELEASE_GITHUB_API_URL:-${GITHUB_API_URL:-https://api.github.com}}"
 github_repo="${RELEASE_GITHUB_REPO:-${GITHUB_REPOSITORY:-${GRAIN_CI_REPO:-ai-on-gke/grain}}}"
-# The App trusted for grain/release-qualification and grain/rc-hold, or
-# none (also when unset): Stage 1 alone qualifies, and nothing holds.
-qualification_app="${RELEASE_QUALIFICATION_APP:-none}"
+# The App trusted for grain/release-qualification and grain/rc-hold, from
+# the environment or else scripts/release.conf as main has it. "none" --
+# only ever an explicit setting, never a default -- trusts no check run:
+# Stage 1 alone qualifies, and nothing holds. Empty in both trusts nothing
+# and fails closed, so an unconfigured deployment never promotes on Stage 1.
+qualification_app="${RELEASE_QUALIFICATION_APP:-$(conf_value RELEASE_QUALIFICATION_APP)}"
 github_get() { # github_get <path> <out>
   curl -fsS --max-time 60 -H "Authorization: Bearer $github_token" -H "Accept: application/vnd.github+json" \
     "${github_api%/}/repos/$github_repo/$1" -o "$2"
@@ -680,8 +687,8 @@ qualification_json() {
 # rc_hold_summary <floor_sha>: if the newest grain/rc-hold check run on
 # floor_sha from RELEASE_QUALIFICATION_APP is not completed, prints its
 # summary; otherwise prints nothing. No check at all means no hold, and so
-# does RELEASE_QUALIFICATION_APP=none (or unset): no app is trusted to post
-# one, and another app's check run never holds or lifts a hold.
+# does an explicit RELEASE_QUALIFICATION_APP=none: no app is trusted to post
+# one. An empty one refuses rather than trust another app's check run.
 rc_hold_summary() {
   local app_id="" hold_checks="" pages page n flooded=false
   if [ "$qualification_app" = none ]; then
@@ -690,9 +697,13 @@ rc_hold_summary() {
   fi
   [[ ! "$qualification_app" =~ ^[0-9]+$ ]] || app_id="&app_id=$qualification_app"
   if [ -n "${RELEASE_HOLD_CHECKS_JSON:-}" ]; then
+    [ -n "$qualification_app" ] ||
+      die "RELEASE_QUALIFICATION_APP is unset, so no grain/rc-hold check run can be trusted: set it to the slug or id of the GitHub App grain posts it as, or to none in scripts/release.conf"
     gate_json RELEASE_HOLD_CHECKS_JSON "" "$work/hold-checks.json"
     hold_checks="$work/hold-checks.json"
   elif [ -n "$github_token" ]; then
+    [ -n "$qualification_app" ] ||
+      die "RELEASE_QUALIFICATION_APP is unset, so no grain/rc-hold check run can be trusted: set it to the slug or id of the GitHub App grain posts it as, or to none in scripts/release.conf"
     pages="${RELEASE_GITHUB_PAGES:-3}"
     : > "$work/hold-checks.jsonl"
     flooded=true
