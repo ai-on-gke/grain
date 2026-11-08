@@ -255,6 +255,10 @@ var knownBoundaryFiles = []string{
 	"pkg/model/owner_trust.go", "pkg/model/external_agent_token.go",
 	"pkg/ui/external_agents.go",
 	"pkg/webauth/", "pkg/registry/", "cmd/grain-registry/",
+	"pkg/registry/signer.go", "pkg/registry/server/router.go", "pkg/registry/server/proxy.go",
+	"pkg/registry/store/delegation.go", "pkg/registry/delegation_admin.go", "pkg/registry/server.go",
+	"pkg/model/human_review_hold.go", "pkg/ui/human_review.go",
+	"pkg/model/director_floor.go", "pkg/ui/on_behalf_of.go",
 }
 
 // Entries ending in "/" are directories: every .go file under them, as it
@@ -508,8 +512,8 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 // reach, the approval-callback tokens and the daemon's UI listeners. v16
 // classified none of them, so a change to any merged itself.
 func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v22" {
-		t.Errorf("Version = %q, want trust-boundary/v22", Version)
+	if Version != "trust-boundary/v23" {
+		t.Errorf("Version = %q, want trust-boundary/v23", Version)
 	}
 	for _, p := range []string{
 		"pkg/ui/access_roles.go",
@@ -558,8 +562,8 @@ func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
 // reference/policy, catalogue and template-grant admission files in
 // pkg/model/ classify under capabilities-secrets.
 func TestPlaybooksAndCapabilityAdmissionFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v22" {
-		t.Errorf("Version = %q, want trust-boundary/v22", Version)
+	if Version != "trust-boundary/v23" {
+		t.Errorf("Version = %q, want trust-boundary/v23", Version)
 	}
 	for _, p := range []string{
 		"pkg/playbooks/playbooks.go",
@@ -594,8 +598,8 @@ func TestPlaybooksAndCapabilityAdmissionFilesAreClassified(t *testing.T) {
 // bearer token model and lifecycle handlers classify under auth-routes, while
 // the provenance-only X-Grain-Client / FiledVia helpers stay unclassified.
 func TestOwnerTrustAndExternalAgentTokenFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v22" {
-		t.Errorf("Version = %q, want trust-boundary/v22", Version)
+	if Version != "trust-boundary/v23" {
+		t.Errorf("Version = %q, want trust-boundary/v23", Version)
 	}
 	for _, p := range []string{
 		"pkg/model/owner_trust.go",
@@ -655,8 +659,8 @@ func TestOwnerTrustAndExternalAgentTokenFilesAreClassified(t *testing.T) {
 // (credential-proxy). v21 classified none of them, so a change to any merged
 // itself.
 func TestRegistryFrontDoorIsClassified(t *testing.T) {
-	if Version != "trust-boundary/v22" {
-		t.Errorf("Version = %q, want trust-boundary/v22", Version)
+	if Version != "trust-boundary/v23" {
+		t.Errorf("Version = %q, want trust-boundary/v23", Version)
 	}
 	for p, want := range map[string]string{
 		"pkg/webauth/iap.go":                "auth-routes",
@@ -679,5 +683,61 @@ func TestRegistryFrontDoorIsClassified(t *testing.T) {
 	// Control: the registry's React app is UI, not the front door.
 	if got := Classify([]string{"ui-registry/src/App.jsx"}); got != nil {
 		t.Errorf("Classify(ui-registry/src/App.jsx) = %v, want nothing", categoryIDs(got))
+	}
+}
+
+// v23 (task 3329, finding 1 of the 2026-11-08 security review of main):
+// the web-auth and registry identity-asserting paths the review found
+// unclassified at d7dde0c2 (classified since by v22), and what v22 still
+// left out -- the human-review hold an agent may raise but never release,
+// the director's Tier 3 floor, and agent on-behalf-of attribution.
+func TestWebauthAndRegistryIdentityFilesAreClassified(t *testing.T) {
+	if Version != "trust-boundary/v23" {
+		t.Errorf("Version = %q, want trust-boundary/v23", Version)
+	}
+	for p, want := range map[string]string{
+		"pkg/webauth/iap.go":               "auth-routes",
+		"pkg/webauth/registry.go":          "auth-routes",
+		"pkg/webauth/csrf.go":              "auth-routes",
+		"pkg/webauth/admission.go":         "auth-routes",
+		"pkg/webauth/groups.go":            "auth-routes",
+		"pkg/registry/server/router.go":    "credential-proxy",
+		"pkg/registry/server/proxy.go":     "credential-proxy",
+		"pkg/registry/signer.go":           "credential-proxy",
+		"pkg/registry/store/delegation.go": "credential-proxy",
+		"pkg/registry/delegation_admin.go": "credential-proxy",
+		"pkg/registry/server.go":           "credential-proxy",
+		"pkg/model/human_review_hold.go":   "auth-routes",
+		"pkg/ui/human_review.go":           "auth-routes",
+		"pkg/model/director_floor.go":      "auth-routes",
+		"pkg/ui/on_behalf_of.go":           "auth-routes",
+		// Contrast: the pkg/ui files the web-auth code moved out of.
+		"pkg/ui/csrf.go":      "auth-routes",
+		"pkg/ui/verifier.go":  "auth-routes",
+		"pkg/ui/allowlist.go": "auth-routes",
+	} {
+		if got := categoryIDs(Classify([]string{p})); !reflect.DeepEqual(got, []string{want}) {
+			t.Errorf("Classify(%q) = %v, want [%s]", p, got, want)
+		}
+	}
+
+	// The gates by name, as in TestNewAuthorizationFilesAreClassified, so
+	// a move out of these files fails here rather than at the next audit.
+	gates := map[string][]string{
+		"pkg/model": {"ReleaseHumanReviewHold", "WithinDirectorFloor", "DirectorFloorRefusal"},
+		"pkg/ui":    {"agentOnBehalfOf"},
+	}
+	for dir, names := range gates {
+		defined := funcFiles(t, dir)
+		for _, name := range names {
+			file, ok := defined[name]
+			if !ok {
+				t.Errorf("%s: no func or method %s -- update this test to where it went", dir, name)
+				continue
+			}
+			if got := categoryIDs(Classify([]string{file})); !reflect.DeepEqual(got, []string{"auth-routes"}) {
+				t.Errorf("%s is defined in %s, Classify = %v, want [auth-routes]", name, file, got)
+			}
+		}
 	}
 }

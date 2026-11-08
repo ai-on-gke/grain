@@ -532,7 +532,7 @@ func TestARunHostBuiltinThatNeverStartedIsRetried(t *testing.T) {
 	attach := func(ctx context.Context, id string, cfg protocol.ServerConfig, _ protocol.SecretLookup, _ protocol.DialOptions) (*protocol.Server, error) {
 		calls++
 		if !entryThere {
-			return nil, errors.New(`hostd refused: no capabilities entry "grain-gcp"`)
+			return nil, errors.New(`the host agent refused: no capabilities entry "grain-gcp"`)
 		}
 		return protocol.NewServer(ctx, id, &fakeCaller{methods: []string{"gcp-key"}})
 	}

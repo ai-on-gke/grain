@@ -691,8 +691,8 @@ func TestUnreachableHostdIsDialedAtMostOncePerInterval(t *testing.T) {
 		clockMu.Unlock()
 	}
 	t.Cleanup(func() {
-		hostdOffersNow = prevNow
 		resetHostdUnreachableCache()
+		hostdOffersNow = prevNow
 	})
 
 	dir, err := os.MkdirTemp("", "hostd-dead")
@@ -745,9 +745,11 @@ func TestUnreachableHostdIsDialedAtMostOncePerInterval(t *testing.T) {
 		t.Fatalf("resolutions within hostdUnreachableTTL dialed hostd %d times, want still 1", got)
 	}
 
-	// Once the interval elapses, the next resolution dials again.
+	// Once the interval elapses, the next resolution dials again -- in
+	// the background, answering with the expired failure meanwhile.
 	advance(hostdUnreachableTTL)
 	_ = cfg.ResolveCLIRuns(ctx)
+	sharedHostdUnreachableCache.refreshing.Wait()
 	if got := dials.Load(); got != 2 {
 		t.Fatalf("resolution after hostdUnreachableTTL dialed hostd %d times, want 2", got)
 	}
@@ -808,5 +810,123 @@ func TestUnreachableHostdIsDialedAtMostOncePerInterval(t *testing.T) {
 
 	if r := absentCfg.ResolveCLIRun(ctx, model.AgentFrameworkAntigravity); r.Err != "" || r.Via != ViaHostd {
 		t.Fatalf("after hostd started on %s, agy resolved %+v, want reachable host via hostd", absentSock, r)
+	}
+}
+
+// Past hostdUnreachableTTL, a poll behind a hung grain hostd (its socket
+// still there, nothing answering: the SIGSTOP shape) is answered at once
+// with the failure already known while one background probe refreshes it,
+// rather than waiting out hostdOffersTimeout behind that probe.
+func TestExpiredUnreachableHostdIsServedStaleWhileAProbeHangs(t *testing.T) {
+	resetHostdUnreachableCache()
+	var clockMu sync.Mutex
+	now := time.Date(2026, 11, 8, 4, 0, 0, 0, time.UTC)
+	prevNow := hostdOffersNow
+	hostdOffersNow = func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return now
+	}
+	advance := func(d time.Duration) {
+		clockMu.Lock()
+		now = now.Add(d)
+		clockMu.Unlock()
+	}
+	t.Cleanup(func() {
+		resetHostdUnreachableCache()
+		hostdOffersNow = prevNow
+	})
+
+	dir, err := os.MkdirTemp("", "hostd-hung")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "hung.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Until hang is set the peer hangs up at once, so the first failure is
+	// learned quickly; after it, connections are held open unanswered.
+	var hang atomic.Bool
+	var dials atomic.Int32
+	held := make(chan net.Conn, 4)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			dials.Add(1)
+			if hang.Load() {
+				held <- conn
+				continue
+			}
+			_ = conn.Close()
+		}
+	}()
+	var heldConns []net.Conn
+	t.Cleanup(func() {
+		ln.Close()
+		for _, c := range heldConns {
+			c.Close()
+		}
+	})
+
+	ctx := context.Background()
+	cfg := withExecutor(Config{HostdSocket: sock, AgyRun: model.CLIRunHost}, inContainer, nil)
+	first := cfg.ResolveCLIRun(ctx, model.AgentFrameworkAntigravity)
+	if first.Err == "" || dials.Load() != 1 {
+		t.Fatalf("first resolution = %+v after %d dials, want an error after 1", first, dials.Load())
+	}
+
+	hang.Store(true)
+	advance(hostdUnreachableTTL + time.Second)
+
+	// The first poll past the TTL starts the refresh and does not wait on it.
+	start := time.Now()
+	r := cfg.ResolveCLIRun(ctx, model.AgentFrameworkAntigravity)
+	if took := time.Since(start); took > 200*time.Millisecond {
+		t.Fatalf("poll past hostdUnreachableTTL took %s behind a hung hostd, want the known failure at once", took)
+	}
+	if r.Err != first.Err {
+		t.Fatalf("poll past hostdUnreachableTTL = %q, want the known failure %q", r.Err, first.Err)
+	}
+	select {
+	case c := <-held:
+		heldConns = append(heldConns, c)
+	case <-time.After(5 * time.Second):
+		t.Fatal("no background probe dialed hostd after the TTL expired")
+	}
+
+	// While that probe is still hung, further polls and status reads are
+	// answered at once too, and start no second probe.
+	start = time.Now()
+	if r := cfg.ResolveCLIRun(ctx, model.AgentFrameworkAntigravity); r.Err != first.Err {
+		t.Fatalf("poll during the refresh = %q, want the known failure %q", r.Err, first.Err)
+	}
+	if st := cfg.HostExecutorStatus(ctx); st.Hostd == nil || st.Hostd.Reachable {
+		t.Fatalf("HostExecutorStatus during the refresh = %+v, want unreachable", st.Hostd)
+	}
+	if took := time.Since(start); took > 200*time.Millisecond {
+		t.Fatalf("polls during the refresh took %s, want the known failure at once", took)
+	}
+	if got := dials.Load(); got != 2 {
+		t.Fatalf("polls during the refresh dialed hostd %d times, want 2 (one refresh)", got)
+	}
+
+	// Once the hung probe fails (here its peer finally hangs up), its
+	// failure is the fresh one: polls within the next TTL dial nothing.
+	for _, c := range heldConns {
+		c.Close()
+	}
+	sharedHostdUnreachableCache.refreshing.Wait()
+	advance(hostdUnreachableTTL / 2)
+	if r := cfg.ResolveCLIRun(ctx, model.AgentFrameworkAntigravity); r.Err == "" {
+		t.Fatalf("poll after the refresh failed = %+v, want unreachable", r)
+	}
+	if got := dials.Load(); got != 2 {
+		t.Fatalf("poll within the refreshed TTL dialed hostd %d times, want still 2", got)
 	}
 }
