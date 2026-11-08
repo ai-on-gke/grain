@@ -41,8 +41,10 @@ Adding an existing entry is a no-op; 'role' changes an entry's role.
 
 A role holding a dangerous scope -- grain/operator among them -- is
 assigned only with the access code, and needs --reason. A serviceAccount:
-or delegate: entry always needs --reason; accounts whose keys grain hands
-to tasks (the gcp-key pools) are always refused, whatever their role.`
+or delegate: entry always needs --reason; for delegate:, --label sets an
+optional short identifier matching [a-z][a-z0-9-]{0,31}. Accounts whose keys
+grain hands to tasks (the gcp-key pools) are always refused, whatever their
+role.`
 
 // cmdAccess is `grain access`: manage the verified-identity allowlist
 // through /api/access/principals.
@@ -95,7 +97,7 @@ func cmdAccess(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 		fs := flag.NewFlagSet("grain access allow", flag.ContinueOnError)
 		reason := fs.String("reason", "", "why the entry is added (required for serviceAccount:, delegate:, and for a role with a dangerous scope)")
 		role := fs.String("role", "", "the scope set the entry's sessions are held to (default grain/operator, or grain/delegated for delegate:)")
-		label := fs.String("label", "", "optional short label for a delegate: entry (such as planning-app)")
+		label := fs.String("label", "", "optional short label ([a-z][a-z0-9-]{0,31}) for a delegate: entry (such as planning-app)")
 		rest, err := parseArgs(fs, subArgs)
 		if err != nil {
 			return err

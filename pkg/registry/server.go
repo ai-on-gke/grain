@@ -220,7 +220,7 @@ func NewServer(opts ServerOptions) (*Server, error) {
 		return nil, err
 	}
 
-	return &Server{
+	srv := &Server{
 		cfg:         opts.Config,
 		store:       opts.Store,
 		admitter:    opts.Admitter,
@@ -235,7 +235,11 @@ func NewServer(opts ServerOptions) (*Server, error) {
 		metrics:     metrics,
 		static:      server.NewStaticHandler(),
 		router:      rt,
-	}, nil
+	}
+	if srv.store != nil && len(srv.cfg.Catalog.ScopeOwners) > 0 {
+		srv.store.SetPrimaryScopeAuthorizer(srv.authorizePrimaryScopeOwner)
+	}
+	return srv, nil
 }
 
 // SetOrphanProvider attaches an OrphanProvider (such as a Reconciler) to the Server.
@@ -1018,6 +1022,11 @@ func (s *Server) handleCreateEntry(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	declaredClaims := scopeInputsToClaims(req.Scopes)
+	if !s.checkPrimaryScopeClaims(w, r, declaredClaims, caller.Email, req.OwnerGroup) {
+		return
+	}
+
 	created, err := s.store.CreateEntry(r.Context(), store.CreateEntryInput{
 		Name:               req.Name,
 		Kind:               req.Kind,
@@ -1035,7 +1044,7 @@ func (s *Server) handleCreateEntry(w http.ResponseWriter, r *http.Request) {
 		ShipLogs:           req.ShipLogs,
 		AutoUpgrade:        req.AutoUpgrade,
 		AutoWake:           req.AutoWake,
-		DeclaredScopes:     scopeInputsToClaims(req.Scopes),
+		DeclaredScopes:     declaredClaims,
 	})
 	if err != nil {
 		s.writeStoreError(w, err)
@@ -1165,6 +1174,16 @@ func (s *Server) handleUpdateEntry(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if req.OwnerGroup != nil || (req.Listed != nil && *req.Listed && !entry.Listed) {
+		nextGroup := entry.OwnerGroup
+		if req.OwnerGroup != nil {
+			nextGroup = *req.OwnerGroup
+		}
+		if !s.checkPrimaryScopeClaims(w, r, scopeRowsToClaims(entry.Scopes, "declared"), entry.OwnerEmail, nextGroup) {
+			return
+		}
+	}
+
 	prevState := entry.LifecycleState
 	updated, err := s.store.UpdateEntryCatalog(r.Context(), entry.ID, entry.Version, store.UpdateEntryCatalogInput{
 		DisplayName:        req.DisplayName,
@@ -1183,6 +1202,11 @@ func (s *Server) handleUpdateEntry(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.writeStoreError(w, err)
 		return
+	}
+	if req.OwnerGroup != nil || (req.Listed != nil && *req.Listed && !entry.Listed) {
+		if demoted, dErr := s.demoteUnauthorizedPrimaryScopes(r.Context(), updated, false); dErr == nil && demoted != nil {
+			updated = demoted
+		}
 	}
 	_ = s.store.RecordAudit(r.Context(), caller.Email, "entry_update", updated.ID, updated.Name, nil)
 
@@ -1225,7 +1249,12 @@ func (s *Server) handleSetScopes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, err := s.store.SetDeclaredScopes(r.Context(), entry.ID, scopeInputsToClaims(req.Scopes))
+	claims := scopeInputsToClaims(req.Scopes)
+	if !s.checkPrimaryScopeClaims(w, r, claims, entry.OwnerEmail, entry.OwnerGroup) {
+		return
+	}
+
+	updated, err := s.store.SetDeclaredScopes(r.Context(), entry.ID, claims)
 	if err != nil {
 		s.writeStoreError(w, err)
 		return
@@ -1675,11 +1704,33 @@ func (s *Server) handleOfferTransfer(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "invalid_argument", "transfer requires 'to' email (or 'cancel: true' to cancel a pending offer)")
 		return
 	}
+	if !req.Cancel {
+		nextGroup := entry.OwnerGroup
+		if ownerGroupPtr != nil {
+			nextGroup = *ownerGroupPtr
+		}
+		declared := scopeRowsToClaims(entry.Scopes, "declared")
+		if ownerGroupPtr != nil {
+			if !s.checkPrimaryScopeClaims(w, r, declared, entry.OwnerEmail, nextGroup) {
+				return
+			}
+		}
+		if targetOwner != "" {
+			if !s.checkPrimaryScopeClaims(w, r, declared, targetOwner, nextGroup) {
+				return
+			}
+		}
+	}
 
 	updated, err := s.store.OfferEntryTransfer(r.Context(), entry.ID, entry.Version, targetOwner, ownerGroupPtr)
 	if err != nil {
 		s.writeStoreError(w, err)
 		return
+	}
+	if ownerGroupPtr != nil {
+		if demoted, dErr := s.demoteUnauthorizedPrimaryScopes(r.Context(), updated, false); dErr == nil && demoted != nil {
+			updated = demoted
+		}
 	}
 	auditAction := "entry_transfer_offer"
 	if targetOwner == "" {
@@ -1709,6 +1760,9 @@ func (s *Server) performAdminForceTransfer(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		s.writeStoreError(w, err)
 		return
+	}
+	if demoted, dErr := s.demoteUnauthorizedPrimaryScopes(r.Context(), updated, true); dErr == nil && demoted != nil {
+		updated = demoted
 	}
 	_ = s.store.RecordAudit(r.Context(), caller.Email, "admin_entry_force_transfer", updated.ID, updated.Name, map[string]any{
 		"from":        entry.OwnerEmail,
@@ -1751,6 +1805,9 @@ func (s *Server) handleAcceptTransfer(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusForbidden, "forbidden", "only the named pending transfer recipient may accept this transfer")
 		return
 	}
+	if !s.checkPrimaryScopeClaims(w, r, scopeRowsToClaims(entry.Scopes, "declared"), caller.Email, entry.OwnerGroup) {
+		return
+	}
 	if entry.Kind == api.KindInstance && entry.SSHGrantedTo != "" && s.resources != nil {
 		_ = s.resources.RevokeSSH(r.Context(), entry.Zone, entry.GCEInstanceID, entry.SSHGrantedTo)
 	}
@@ -1759,6 +1816,9 @@ func (s *Server) handleAcceptTransfer(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.writeStoreError(w, err)
 		return
+	}
+	if demoted, dErr := s.demoteUnauthorizedPrimaryScopes(r.Context(), updated, false); dErr == nil && demoted != nil {
+		updated = demoted
 	}
 	_ = s.store.RecordAudit(r.Context(), caller.Email, "entry_transfer_accept", updated.ID, updated.Name, map[string]any{
 		"from":        entry.OwnerEmail,
@@ -2242,6 +2302,8 @@ func (s *Server) writeStoreError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusConflict, "primary_scope_conflict", err.Error())
 	case errors.Is(err, store.ErrConflict):
 		writeJSONError(w, http.StatusConflict, "conflict", err.Error())
+	case errors.Is(err, store.ErrUnknownShape):
+		writeJSONError(w, http.StatusBadRequest, "invalid_argument", err.Error())
 	default:
 		writeJSONError(w, http.StatusBadRequest, "invalid_argument", err.Error())
 	}
@@ -2409,6 +2471,151 @@ func (s *Server) matchesAccessList(ctx context.Context, email string, accessList
 		}
 	}
 	return false, nil
+}
+
+func scopeRowsToClaims(rows []store.ScopeRow, source string) []store.ScopeClaim {
+	var out []store.ScopeClaim
+	for _, r := range rows {
+		if r.Source != source {
+			continue
+		}
+		out = append(out, store.ScopeClaim{
+			Repo:       r.Repo,
+			PathPrefix: r.PathPrefix,
+			Primary:    r.PrimaryClaim,
+			Branch:     r.Branch,
+		})
+	}
+	return out
+}
+
+// authorizePrimaryScopeOwner evaluates catalog.scope_owners for (repo, ownerEmail, ownerGroup).
+// When no rule matches repo, primary claims remain open to any admitted entry manager.
+func (s *Server) authorizePrimaryScopeOwner(ctx context.Context, repo, ownerEmail, ownerGroup string) (bool, error) {
+	rule, restricted := MatchScopeOwnerRule(s.cfg.Catalog.ScopeOwners, repo)
+	if !restricted {
+		return true, nil
+	}
+	normOwner := strings.ToLower(strings.TrimSpace(ownerEmail))
+	normGroup := normalizeGroupSpec(ownerGroup)
+	var groupSpecs []string
+	for _, p := range rule.Principals {
+		p = strings.TrimSpace(p)
+		switch {
+		case strings.HasPrefix(p, "user:"):
+			if normOwner != "" && strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(p, "user:")), normOwner) {
+				return true, nil
+			}
+		case strings.HasPrefix(p, "group:"):
+			if normGroup != "" && strings.EqualFold(p, normGroup) {
+				return true, nil
+			}
+			groupSpecs = append(groupSpecs, p)
+		}
+	}
+	if len(groupSpecs) == 0 || normOwner == "" {
+		return false, nil
+	}
+	var firstErr error
+	for _, spec := range groupSpecs {
+		ok, err := s.matchesAccessList(ctx, normOwner, []string{spec})
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if ok {
+			return true, nil
+		}
+	}
+	if firstErr != nil {
+		return false, firstErr
+	}
+	return false, nil
+}
+
+func (s *Server) checkPrimaryScopeClaims(w http.ResponseWriter, r *http.Request, claims []store.ScopeClaim, ownerEmail, ownerGroup string) bool {
+	if len(s.cfg.Catalog.ScopeOwners) == 0 || len(claims) == 0 {
+		return true
+	}
+	for _, sc := range claims {
+		if !sc.Primary {
+			continue
+		}
+		allowed, err := s.authorizePrimaryScopeOwner(r.Context(), sc.Repo, ownerEmail, ownerGroup)
+		if err != nil {
+			w.Header().Set("Retry-After", "5")
+			writeJSONError(w, http.StatusServiceUnavailable, "unavailable", "authorization lookup temporarily unavailable")
+			return false
+		}
+		if !allowed {
+			normRepo, rErr := api.NormalizeRepo(sc.Repo)
+			if rErr != nil {
+				normRepo = strings.ToLower(strings.TrimSpace(sc.Repo))
+			}
+			writeJSONError(w, http.StatusForbidden, "scope_owner_forbidden",
+				fmt.Sprintf("entry owner %q is not authorized to claim a primary scope on %q", strings.ToLower(strings.TrimSpace(ownerEmail)), normRepo))
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Server) demoteUnauthorizedPrimaryScopes(ctx context.Context, entry *store.EntryRow, demoteDeclared bool) (*store.EntryRow, error) {
+	if s.store == nil || entry == nil || len(s.cfg.Catalog.ScopeOwners) == 0 || len(entry.Scopes) == 0 {
+		return entry, nil
+	}
+	changedDeclared := false
+	declared := scopeRowsToClaims(entry.Scopes, "declared")
+	if demoteDeclared {
+		for i := range declared {
+			if !declared[i].Primary {
+				continue
+			}
+			allowed, err := s.authorizePrimaryScopeOwner(ctx, declared[i].Repo, entry.OwnerEmail, entry.OwnerGroup)
+			if err != nil || !allowed {
+				declared[i].Primary = false
+				changedDeclared = true
+			}
+		}
+	}
+	changedReported := false
+	reported := scopeRowsToClaims(entry.Scopes, "reported")
+	for i := range reported {
+		if !reported[i].Primary {
+			continue
+		}
+		allowed, err := s.authorizePrimaryScopeOwner(ctx, reported[i].Repo, entry.OwnerEmail, entry.OwnerGroup)
+		if err != nil || !allowed {
+			reported[i].Primary = false
+			changedReported = true
+		}
+	}
+	if changedReported {
+		if err := s.store.ReplaceEntryScopes(ctx, entry.ID, "reported", reported); err != nil {
+			return entry, err
+		}
+	}
+	if changedDeclared {
+		updated, err := s.store.SetDeclaredScopes(ctx, entry.ID, declared)
+		if err != nil {
+			return entry, err
+		}
+		if s.router != nil && updated.Listed {
+			_ = s.router.CatalogCache().Reload(ctx)
+		}
+		return updated, nil
+	}
+	if changedReported {
+		if s.router != nil && entry.Listed {
+			_ = s.router.CatalogCache().Reload(ctx)
+		}
+		if fresh, err := s.store.GetEntryByID(ctx, entry.ID); err == nil {
+			return fresh, nil
+		}
+	}
+	return entry, nil
 }
 
 type statusCapturingWriter struct {

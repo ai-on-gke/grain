@@ -2382,7 +2382,7 @@ Reconciles a live deployment's settings (`GET /api/settings`, then `PUT /api/set
 | Subcommand | Request |
 |---|---|
 | `list` (the default; also `ls`) | `GET /api/access/principals`. Prints each entry with its role, who added it and when, or `No allowed users or groups.`, and warns about `-ui-allowed-principals` entries that were dropped on import |
-| `allow [--role <set>] [--reason <why>] <user:<email>\|group:<email>\|serviceAccount:<email>>` (also `add`) | `POST /api/access/principals {"entry","role","reason"}`. `--role` defaults to `grain/operator`, whose dangerous scopes need the access code and a `--reason`. Adding an existing entry is a no-op that keeps its role |
+| `allow [--role <set>] [--reason <why>] [--label <name>] <user:<email>\|group:<email>\|serviceAccount:<email>\|delegate:<email>>` (also `add`) | `POST /api/access/principals {"entry","role","reason","label"}`. `--role` defaults to `grain/operator` (or `grain/delegated` for `delegate:`), whose dangerous scopes need the access code and a `--reason`. `--label` sets an optional short identifier (`[a-z][a-z0-9-]{0,31}`) on `delegate:` entries. Adding an existing entry is a no-op that keeps its role |
 | `role [--reason <why>] <entry> <set>` | `PATCH /api/access/principals/{entry} {"role","reason"}`. Prints `<entry>: role <old> -> <new>` |
 | `deny <user:<email>\|group:<email>>` (also `remove`, `rm`) | `DELETE /api/access/principals/{entry}` |
 
