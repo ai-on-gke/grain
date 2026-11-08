@@ -160,6 +160,20 @@ export function restoreEntry(name) {
   });
 }
 
+export function stopEntry(name) {
+  return requestJSON(`/api/entries/${encodeURIComponent(name)}/stop`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function startEntry(name) {
+  return requestJSON(`/api/entries/${encodeURIComponent(name)}/start`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
 export function deleteEntry(name, confirmName, deleteDisk = false) {
   const qs = new URLSearchParams({ confirm: confirmName });
   return requestJSON(

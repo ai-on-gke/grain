@@ -713,6 +713,35 @@ func newDemoState() *demoState {
 			Generation: 2,
 		},
 		{
+			// A hosted instance its owner stopped: no VM, state kept, and a
+			// visit (or Start) wakes it. Seeded so the SPA's stopped state
+			// can be reviewed and screenshotted.
+			Name:         "docs-preview",
+			URL:          "https://docs-preview.grain.example.com",
+			Kind:         api.KindInstance,
+			State:        api.StateStopped,
+			Status:       api.StatusOffline,
+			StatusDetail: "Stopped by owner; VM deleted, state kept",
+			HostKind:     api.HostKindRegistryVM,
+			DisplayName:  "Docs Preview VM",
+			Purpose:      "Occasional hosted grain for acme/docs preview builds, stopped between uses.",
+			Owner:        "alice@example.com",
+			Listed:       true,
+			Tags:         []string{"docs", "preview"},
+			Shape:        "small",
+			Zone:         "us-central1-a",
+			MachineType:  "e2-standard-2",
+			BootDiskGB:   50,
+			AllowSSH:     true,
+			AutoWake:     true,
+			GrainVersion: "v0.14.1",
+			GrainCommit:  "7b2d4a910c3e",
+			LastSeenAt:   timePtr(now.Add(-6 * time.Hour)),
+			CreatedAt:    now.Add(-15 * 24 * time.Hour),
+			UpdatedAt:    now.Add(-6 * time.Hour),
+			Generation:   4,
+		},
+		{
 			Name:          "alice-sandbox-old",
 			URL:           "https://alice-sandbox-old.grain.example.com",
 			Kind:          api.KindInstance,
@@ -783,6 +812,8 @@ func (d *demoState) handler() http.Handler {
 	mux.HandleFunc("DELETE /api/entries/{name}/credentials/{id}", d.handleRevokeCredential)
 	mux.HandleFunc("POST /api/entries/{name}/upgrade", d.handleUpgradeEntry)
 	mux.HandleFunc("POST /api/entries/{name}/replace", d.handleReplaceEntry)
+	mux.HandleFunc("POST /api/entries/{name}/stop", d.handleStopEntry)
+	mux.HandleFunc("POST /api/entries/{name}/start", d.handleStartEntry)
 	mux.HandleFunc("POST /api/entries/{name}/restore", d.handleRestoreEntry)
 	mux.HandleFunc("DELETE /api/entries/{name}", d.handleDeleteEntry)
 	mux.HandleFunc("POST /api/entries/{name}/transfer", d.handleOfferTransfer)
@@ -1576,6 +1607,39 @@ func (d *demoState) appendAuditLocked(via, grantID, action, entryName string, de
 	}
 	d.nextAuditID++
 	d.auditLog = append([]api.AuditLogEntry{ev}, d.auditLog...)
+}
+
+// handleStopEntry and handleStartEntry stand in for the registry's
+// stop/start endpoints. The demo has no reconciler, so a stop lands straight
+// in "stopped" and a start straight back in "running".
+func (d *demoState) handleStopEntry(w http.ResponseWriter, r *http.Request) {
+	d.setPowerState(w, r, "stopped", api.StateStopped, api.StatusOffline, "Stopped by owner; VM deleted, state kept", "entry_stop")
+}
+
+func (d *demoState) handleStartEntry(w http.ResponseWriter, r *http.Request) {
+	d.setPowerState(w, r, "started", api.StateRunning, api.StatusOnline, "", "entry_start")
+}
+
+func (d *demoState) setPowerState(w http.ResponseWriter, r *http.Request, verb string, state api.EntryState, status api.EntryStatus, detail, action string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	name := strings.ToLower(strings.TrimSpace(r.PathValue("name")))
+	e, ok := d.entries[name]
+	if !ok || e.State == api.StateDeleted {
+		writeJSONError(w, http.StatusNotFound, "not_found", fmt.Sprintf("entry %q not found", name))
+		return
+	}
+	if e.Kind != api.KindInstance {
+		writeJSONError(w, http.StatusBadRequest, "invalid_entry_kind", fmt.Sprintf("only kind=\"instance\" entries can be %s", verb))
+		return
+	}
+	e.State = state
+	e.Status = status
+	e.StatusDetail = detail
+	e.ReplaceStep = ""
+	e.UpdatedAt = d.now
+	d.appendAuditLocked("owner", "", action, name, nil)
+	writeJSON(w, http.StatusAccepted, *e)
 }
 
 func (d *demoState) handleRestoreEntry(w http.ResponseWriter, r *http.Request) {

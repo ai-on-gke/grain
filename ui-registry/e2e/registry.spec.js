@@ -116,3 +116,62 @@ test("serves embedded ui-registry under strict CSP and walks through all views w
   expect(pageErrors).toEqual([]);
   expect(cspErrors).toEqual([]);
 });
+
+test("stops and starts a hosted instance from My entries and its detail page", async ({
+  page,
+}) => {
+  const pageErrors = [];
+  page.on("pageerror", (err) => pageErrors.push(err.message));
+
+  // The demo seeds docs-preview as a stopped instance.
+  await page.goto(demo.url);
+  const badge = page.getByTestId("lifecycle-badge-docs-preview");
+  await expect(badge).toHaveText("stopped");
+  await expect(badge).toHaveClass(/reg-badge-stopped/);
+  await expect(
+    page.getByRole("button", { name: "Start docs-preview" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Stop platform-vm" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Stop alice-workstation" }),
+  ).toHaveCount(0);
+
+  // The stopped badge sits on the same line as the host-kind badge beside it.
+  const row = badge.locator("xpath=..");
+  const hostBadge = row.locator(".gs-badge").first();
+  const [b, h] = [await badge.boundingBox(), await hostBadge.boundingBox()];
+  expect(Math.abs(b.y + b.height / 2 - (h.y + h.height / 2))).toBeLessThan(2);
+
+  // Detail page: banner, Start, then Stop (with confirmation) back to stopped.
+  await page.goto(`${demo.url}/entries/docs-preview`);
+  await expect(page.getByTestId("stopped-banner")).toContainText(
+    "This instance is stopped.",
+  );
+  await expect(page.getByRole("button", { name: "Stop instance" })).toHaveCount(
+    0,
+  );
+  await page.getByRole("button", { name: "Start instance" }).click();
+  await expect(
+    page.getByText("Requested start for docs-preview."),
+  ).toBeVisible();
+  await expect(page.getByTestId("stopped-banner")).toHaveCount(0);
+  await expect(page.getByTestId("lifecycle-badge-docs-preview")).toHaveText(
+    "running",
+  );
+
+  await page.getByRole("button", { name: "Stop instance" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("Stop docs-preview?");
+  await dialog.getByRole("button", { name: "Stop instance" }).click();
+  await expect(
+    page.getByText("Requested stop for docs-preview."),
+  ).toBeVisible();
+  await expect(page.getByTestId("lifecycle-badge-docs-preview")).toHaveText(
+    "stopped",
+  );
+  await expect(page.getByTestId("stopped-banner")).toBeVisible();
+
+  expect(pageErrors).toEqual([]);
+});
