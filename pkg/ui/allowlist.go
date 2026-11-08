@@ -533,8 +533,11 @@ func (s *Server) allowedPrincipalRoles(ctx context.Context, id VerifiedIdentity,
 					// The group's role may veto scopes another entry
 					// grants (access-rbac.md §2): leaving it out would
 					// widen the caller, so refuse rather than guess.
-					return nil, fmt.Errorf("principal %q could not be checked against group %s, whose role %s denies scopes: %w",
-						id.Email, grp.Value, role, err)
+					return nil, &groupAllowlistRefusalError{
+						public: fmt.Sprintf("principal %q could not be checked against group %s, whose role %s denies scopes: group membership lookup unavailable",
+							id.Email, grp.Value, role),
+						cause: err,
+					}
 				}
 				if firstErr == nil {
 					firstErr = err
@@ -549,7 +552,10 @@ func (s *Server) allowedPrincipalRoles(ctx context.Context, id VerifiedIdentity,
 			}
 		}
 		if len(roles) == 0 && firstErr != nil {
-			return nil, fmt.Errorf("principal %q could not be authorized against group allowlist: %w", id.Email, firstErr)
+			return nil, &groupAllowlistRefusalError{
+				public: fmt.Sprintf("principal %q could not be authorized against group allowlist: group membership lookup unavailable", id.Email),
+				cause:  firstErr,
+			}
 		}
 	}
 	if len(roles) > 0 {
@@ -566,11 +572,25 @@ var (
 	refusedPrincipalsLogged = map[string]bool{}
 )
 
+// groupAllowlistRefusalError separates the generic message returned to remote
+// HTTP/UI callers from the underlying Cloud Identity / ADC credential error
+// recorded in the daemon log.
+type groupAllowlistRefusalError struct {
+	public string
+	cause  error
+}
+
+func (e *groupAllowlistRefusalError) Error() string {
+	return e.public
+}
+
 // logRefusedPrincipal logs, once per principal and kind of refusal, a
 // verified identity checkAllowedPrincipal turned away.
 func logRefusedPrincipal(id VerifiedIdentity, err error) {
 	pool := errors.Is(err, errGCPKeyPoolPrincipal)
-	key := normalizeIdentityEmail(id.Email) + "\x00" + fmt.Sprint(pool)
+	var groupErr *groupAllowlistRefusalError
+	hasGroupErr := errors.As(err, &groupErr)
+	key := normalizeIdentityEmail(id.Email) + "\x00" + fmt.Sprint(pool) + "\x00" + fmt.Sprint(hasGroupErr)
 	refusedPrincipalsMu.Lock()
 	seen := refusedPrincipalsLogged[key]
 	if !seen && len(refusedPrincipalsLogged) < 64 {
@@ -583,6 +603,10 @@ func logRefusedPrincipal(id VerifiedIdentity, err error) {
 	if pool {
 		log.Printf("ui: refused verified principal %q: it is a gcp-key agent service account, whose key is handed to task sandboxes -- "+
 			"a sandbox's key was presented through the identity proxy; take it off the proxy's access list (iap_members) and rotate the pool's keys", id.Email)
+		return
+	}
+	if hasGroupErr && groupErr.cause != nil {
+		log.Printf("ui: refused verified principal %q (%s): %s: %v", id.Email, id.Kind, groupErr.public, groupErr.cause)
 		return
 	}
 	log.Printf("ui: refused verified principal %q (%s): %v", id.Email, id.Kind, err)

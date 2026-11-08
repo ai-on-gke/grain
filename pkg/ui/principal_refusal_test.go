@@ -113,6 +113,7 @@ func TestRefusedPrincipalGetsAPageNamingThemWithTheAccessCodeForm(t *testing.T) 
 func TestRefusedPrincipalPageSaysTheAssertionTakesPrecedence(t *testing.T) {
 	ui.ResetIAPConfig()
 	t.Cleanup(ui.ResetIAPConfig)
+	logs := ui.LogBufferForTest(t)
 	t.Setenv("GRAIN_ALLOWED_PRINCIPALS", "")
 	unreg := ui.RegisterIdentityVerifier(&fakeHeaderVerifier{
 		name:     "strict-proxy",
@@ -123,8 +124,9 @@ func TestRefusedPrincipalPageSaysTheAssertionTakesPrecedence(t *testing.T) {
 
 	srv, client := testServer(t)
 	client.Config.AllowedPrincipals = []string{"user:alice@example.com", "group:ops@example.com"}
+	adcErr := "cloud identity credentials: google: could not find default credentials. See https://cloud.google.com/docs/authentication/external/set-up-adc for more information"
 	client.Config.GroupChecker = groupCheckerFunc(func(ctx context.Context, group, member string) (bool, error) {
-		return false, errors.New("cloud identity outage")
+		return false, errors.New(adcErr)
 	})
 	ui.SetAccessCodeForTest(srv, testAccessCode)
 
@@ -133,13 +135,31 @@ func TestRefusedPrincipalPageSaysTheAssertionTakesPrecedence(t *testing.T) {
 	if rec.Code != http.StatusForbidden || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/html") {
 		t.Fatalf("browser GET: got %d %q, want a 403 HTML page: %s", rec.Code, rec.Header().Get("Content-Type"), body)
 	}
-	for _, want := range []string{"oncall@example.com", "verified by strict-proxy", "takes precedence", "grain access-code", "cloud identity outage"} {
+	for _, want := range []string{"oncall@example.com", "verified by strict-proxy", "takes precedence", "grain access-code", "group membership lookup unavailable"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("refusal page lacks %q:\n%s", want, body)
 		}
 	}
+	for _, leak := range []string{"could not find default credentials", "set-up-adc", "cloud identity credentials"} {
+		if strings.Contains(body, leak) {
+			t.Errorf("refusal page leaked internal group-checker error %q:\n%s", leak, body)
+		}
+	}
 	if strings.Contains(body, "<form") {
 		t.Errorf("refusal page offers a form the assertion would override:\n%s", body)
+	}
+
+	// API callers likewise receive only the generic refusal text while the daemon
+	// log records the underlying ADC credential error for the operator.
+	apiRec := serveFrom(srv, "198.51.100.8:1234", http.MethodGet, "/api/tasks", "", map[string]string{"X-Strict-Assertion": "ok:oncall@example.com"})
+	if apiRec.Code != http.StatusForbidden || !strings.Contains(apiRec.Body.String(), "group membership lookup unavailable") {
+		t.Fatalf("API GET /api/tasks: got %d %s, want generic 403 group lookup refusal", apiRec.Code, apiRec.Body.String())
+	}
+	if strings.Contains(apiRec.Body.String(), "could not find default credentials") {
+		t.Errorf("API 403 JSON leaked ADC error details: %s", apiRec.Body.String())
+	}
+	if !strings.Contains(logs.String(), adcErr) {
+		t.Errorf("expected daemon log to record full ADC error %q, got:\n%s", adcErr, logs.String())
 	}
 }
 

@@ -27,6 +27,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -79,7 +80,22 @@ var (
 
 	// ErrSQLPoolExhausted is returned when all non-draining shared Cloud SQL instances have reached max_databases.
 	ErrSQLPoolExhausted = errors.New("registry store: all non-draining sql_instances have reached max_databases capacity")
+
+	// ErrUnknownShape is returned when a requested instance VM shape is not configured in registry.shapes.
+	ErrUnknownShape = errors.New("unknown shape")
 )
+
+func lookupShapeUnitsTx(ctx context.Context, tx *sql.Tx, shape string) (int, error) {
+	var units int
+	err := tx.QueryRowContext(ctx, `SELECT quota_units FROM registry.shapes WHERE name = $1`, shape).Scan(&units)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, fmt.Errorf("%w %q", ErrUnknownShape, shape)
+		}
+		return 0, fmt.Errorf("lookup shape %q: %w", shape, err)
+	}
+	return units, nil
+}
 
 // PrimaryScopeConflictError is returned when a synchronous scope mutation
 // conflicts with an existing active primary scope claim on a listed entry.
@@ -290,11 +306,38 @@ type AuditEntry struct {
 }
 
 // Store manages the `registry` PostgreSQL schema.
+// PrimaryScopeAuthorizer reports whether an entry owned by (ownerEmail, ownerGroup)
+// is permitted to hold a primary scope on repo under the registry's scope_owners policy.
+type PrimaryScopeAuthorizer func(ctx context.Context, repo, ownerEmail, ownerGroup string) (bool, error)
+
 type Store struct {
-	db         *sql.DB
-	thresholds Thresholds
-	nowFn      func() time.Time
-	catalogGen atomic.Uint64
+	db               *sql.DB
+	thresholds       Thresholds
+	nowFn            func() time.Time
+	catalogGen       atomic.Uint64
+	scopeAuthMu      sync.RWMutex
+	primaryScopeAuth PrimaryScopeAuthorizer
+}
+
+// SetPrimaryScopeAuthorizer configures an optional repository primary-scope
+// ownership policy enforced on asynchronous heartbeats (`RecordHeartbeat`).
+func (s *Store) SetPrimaryScopeAuthorizer(fn PrimaryScopeAuthorizer) {
+	if s == nil {
+		return
+	}
+	s.scopeAuthMu.Lock()
+	s.primaryScopeAuth = fn
+	s.scopeAuthMu.Unlock()
+}
+
+func (s *Store) primaryScopeAuthorizer() PrimaryScopeAuthorizer {
+	if s == nil {
+		return nil
+	}
+	s.scopeAuthMu.RLock()
+	fn := s.primaryScopeAuth
+	s.scopeAuthMu.RUnlock()
+	return fn
 }
 
 // Thresholds returns the store's configured runtime thresholds.
@@ -1262,9 +1305,10 @@ func (s *Store) CreateEntry(ctx context.Context, in CreateEntryInput) (*EntryRow
 	case api.KindInstance:
 		units := 1
 		if in.Shape != "" {
-			err := tx.QueryRowContext(ctx, `SELECT quota_units FROM registry.shapes WHERE name = $1`, in.Shape).Scan(&units)
+			var err error
+			units, err = lookupShapeUnitsTx(ctx, tx, in.Shape)
 			if err != nil {
-				return nil, fmt.Errorf("lookup shape %q: %w", in.Shape, err)
+				return nil, err
 			}
 		}
 		if quota.UsedInstanceUnits+units > quota.MaxInstanceUnits {
@@ -1978,9 +2022,9 @@ func (s *Store) UpdateEntryCatalog(ctx context.Context, entryID string, expected
 		if err != nil {
 			return nil, err
 		}
-		newUnits := 1
-		if err := tx.QueryRowContext(ctx, `SELECT quota_units FROM registry.shapes WHERE name = $1`, shape).Scan(&newUnits); err != nil {
-			return nil, fmt.Errorf("lookup shape %q: %w", shape, err)
+		newUnits, err := lookupShapeUnitsTx(ctx, tx, shape)
+		if err != nil {
+			return nil, err
 		}
 		oldUnits := 1
 		if cur.Shape != "" {
@@ -2118,9 +2162,9 @@ func (s *Store) RequestEntryReplace(ctx context.Context, entryID string, expecte
 		if err != nil {
 			return nil, err
 		}
-		newUnits := 1
-		if err := tx.QueryRowContext(ctx, `SELECT quota_units FROM registry.shapes WHERE name = $1`, nextShape).Scan(&newUnits); err != nil {
-			return nil, fmt.Errorf("lookup shape %q: %w", nextShape, err)
+		newUnits, err := lookupShapeUnitsTx(ctx, tx, nextShape)
+		if err != nil {
+			return nil, err
 		}
 		oldUnits := 1
 		if cur.Shape != "" {
@@ -2613,8 +2657,9 @@ func (s *Store) ReplaceEntryScopes(ctx context.Context, entryID, source string, 
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	var name string
 	var listed, hasReported bool
-	if err := tx.QueryRowContext(ctx, `SELECT listed, has_reported_scopes FROM registry.entries WHERE id = $1`, entryID).Scan(&listed, &hasReported); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT name, listed, has_reported_scopes FROM registry.entries WHERE id = $1`, entryID).Scan(&name, &listed, &hasReported); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -2623,7 +2668,14 @@ func (s *Store) ReplaceEntryScopes(ctx context.Context, entryID, source string, 
 	if err := s.replaceEntryScopesWithPolicyTx(ctx, tx, entryID, source, claims, listed, hasReported, true, now); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.notify(ctx, "registry_entries", name)
+	if listed {
+		s.notify(ctx, "registry_catalog", name)
+	}
+	return nil
 }
 
 type normScopeClaim struct {
@@ -3578,8 +3630,15 @@ func (s *Store) RecordHeartbeat(ctx context.Context, entryID string, hb api.Hear
 	var claims []ScopeClaim
 	if hb.Scopes != nil {
 		claims = make([]ScopeClaim, 0, len(hb.Scopes))
+		scopeAuth := s.primaryScopeAuthorizer()
 		for _, sc := range hb.Scopes {
 			primary := sc.Role == "" || sc.Role == api.RolePrimary
+			if primary && scopeAuth != nil {
+				allowed, authErr := scopeAuth(ctx, sc.Repo, prev.OwnerEmail, prev.OwnerGroup)
+				if authErr != nil || !allowed {
+					primary = false
+				}
+			}
 			claims = append(claims, ScopeClaim{
 				Repo:       sc.Repo,
 				PathPrefix: sc.PathPrefix,
@@ -4214,10 +4273,6 @@ func (s *Store) RouteRepoPath(ctx context.Context, repo, filePath, instanceDomai
 			res.Primary = &m
 			break
 		}
-	}
-	if res.Primary == nil && len(matches) == 1 {
-		m := matches[0]
-		res.Primary = &m
 	}
 	return res, nil
 }
