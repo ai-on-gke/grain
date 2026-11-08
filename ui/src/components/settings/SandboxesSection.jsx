@@ -580,9 +580,12 @@ export default function SandboxesSection({ s }) {
               ? String(settings.sandboxDiskFloorMinMbDefault)
               : undefined
           }
+          // Blank is the default its placeholder shows, as on every
+          // other box here, not 0: 0 is a value of its own, "no
+          // minimum", and blanking the box used to save it.
           onBlur={onIntBlur("sandboxDiskFloorMinMb", {
             defaultVal: undefined,
-            emptyVal: 0,
+            emptyVal: settings.sandboxDiskFloorMinMbDefault || 5120,
           })}
           onKeyDown={onEnterKey}
           fullWidth
