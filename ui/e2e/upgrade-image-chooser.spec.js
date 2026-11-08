@@ -67,4 +67,27 @@ test.describe("the upgrade image chooser", () => {
       expect(overflow).toBeLessThanOrEqual(0);
     });
   }
+
+  // 2026-11-08 deployment-operations walkthrough (task 3617): the demo's
+  // image upgrader has no ref file to read, so GET /api/upgrade names
+  // nothing running -- and the pane said nothing about where this
+  // deployment already was, though the build it runs is GET
+  // /api/config's `version` (and the rail's build stamp says so).
+  test("names the build it runs when the upgrader cannot say", async ({
+    page,
+  }) => {
+    const { version = {} } = await (
+      await page.request.get("/api/config")
+    ).json();
+    test.skip(!version.commit, "this binary was built without a commit");
+    const status = await (await page.request.get("/api/upgrade")).json();
+    expect(status.running).toBeFalsy();
+    await page.goto("/settings/upgrade");
+    await expect(page.getByLabel("Branch")).toBeVisible();
+    const running = page.locator("p.upgrade-running");
+    await expect(running).toHaveText(
+      `Now running ${version.commit.slice(0, 7)}${version.modified ? "-dirty" : ""}.`,
+    );
+    await expect(running.getByTitle(version.commit)).toBeVisible();
+  });
 });
