@@ -28,6 +28,7 @@ import {
   NO_NARROWING,
   NONE,
   admitsState,
+  closedServerFilters,
   defaultFilters,
   defaultNarrowing,
   defaultSortFor,
@@ -1980,5 +1981,54 @@ describe("closed work the server searched", () => {
     };
     expect(admitsState(closedOnly, null, "closed")).toBe(true);
     expect(admitsState(closedOnly, null, "queued")).toBe(false);
+  });
+
+  it("picks out the owner and external reference the server can answer over closed work", () => {
+    const with_ = (...filters) => ({ ...NO_NARROWING, filters });
+    const none = { owner: "", externalRef: "" };
+    expect(closedServerFilters(NO_NARROWING, null)).toEqual(none);
+    expect(
+      closedServerFilters(
+        with_(
+          { attr: "state", op: "any", values: ["closed"] },
+          { attr: "owner", op: "any", values: ["Someone@Example.com"] },
+        ),
+        null,
+      ),
+    ).toEqual({ owner: "someone@example.com", externalRef: "" });
+    expect(
+      closedServerFilters(
+        with_({ attr: "externalRef", op: "any", values: ["CA-9012"] }),
+        null,
+      ),
+    ).toEqual({ owner: "", externalRef: "CA-9012" });
+    // "me" is the viewer, as the list reads it.
+    expect(
+      closedServerFilters(with_({ attr: "owner", op: "any", values: ["me"] }), {
+        viewerOwner: "user:Alice@example.com",
+      }),
+    ).toEqual({ owner: "alice@example.com", externalRef: "" });
+    // Anything the server's one exact value cannot answer stays the
+    // client's: several values, another comparison, "Not set", or a
+    // second condition on the same attribute.
+    for (const filters of [
+      [
+        {
+          attr: "owner",
+          op: "any",
+          values: ["a@example.com", "b@example.com"],
+        },
+      ],
+      [{ attr: "owner", op: "none", values: ["a@example.com"] }],
+      [{ attr: "owner", op: "has", values: ["alice"] }],
+      [{ attr: "externalRef", op: "any", values: [NONE] }],
+      [{ attr: "externalRef", op: "filled", values: [] }],
+      [
+        { attr: "externalRef", op: "any", values: ["CA-1"] },
+        { attr: "externalRef", op: "none", values: ["CA-2"] },
+      ],
+    ]) {
+      expect(closedServerFilters(with_(...filters), null)).toEqual(none);
+    }
   });
 });
