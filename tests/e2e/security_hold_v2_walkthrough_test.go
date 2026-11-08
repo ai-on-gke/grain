@@ -145,9 +145,10 @@ func (w *holdWorld) clearedAtA(task model.Task) string {
 	// pkg/webauth/ to auth-routes and pkg/registry/ and cmd/grain-registry/
 	// to credential-proxy, task 3479; v23 only adds the human-review
 	// hold, the director floor and on_behalf_of.go to auth-routes,
-	// task 3329).
-	if trustboundary.Version != "trust-boundary/v23" {
-		w.t.Fatalf("this walkthrough is about trust-boundary/v23, the build has %s", trustboundary.Version)
+	// task 3329; v24 only adds scripts/build-cli.sh to
+	// release-machinery, task 3597).
+	if trustboundary.Version != "trust-boundary/v24" {
+		w.t.Fatalf("this walkthrough is about trust-boundary/v24, the build has %s", trustboundary.Version)
 	}
 	if w.merged(branch) {
 		w.t.Fatal("merged before the pull request read mergeable")
