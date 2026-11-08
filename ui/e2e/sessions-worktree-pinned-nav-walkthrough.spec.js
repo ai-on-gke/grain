@@ -36,7 +36,7 @@ const PINS = [
   "System → Sandboxes",
   "Settings",
   "Settings → General",
-  "Settings → Legacy capabilities",
+  "Settings → Capabilities",
 ];
 
 async function openPinnedOverlay(page) {
@@ -126,7 +126,7 @@ test.describe("Pinned System and Settings sub-targets", () => {
         "system/sandboxes",
         "settings",
         "settings/general",
-        "settings/credentials",
+        "settings/capabilities",
       ]),
     );
 
@@ -139,11 +139,10 @@ test.describe("Pinned System and Settings sub-targets", () => {
       ["/system/logs", "/system/logs", ["System"]],
       ["/settings", "/settings/models", ["Settings"]],
       ["/settings/general", "/settings/general", ["General"]],
-      [
-        "/settings/credentials",
-        "/settings/credentials",
-        ["Legacy capabilities"],
-      ],
+      ["/settings/capabilities", "/settings/capabilities", ["Capabilities"]],
+      // The retired Legacy capabilities tab's address lands on, and
+      // lights, Capabilities.
+      ["/settings/credentials", "/settings/capabilities", ["Capabilities"]],
     ];
     for (const reload of [false, true]) {
       for (const [path, canonical, lit] of want) {
@@ -163,8 +162,8 @@ test.describe("Pinned System and Settings sub-targets", () => {
     await expect(page).toHaveURL(/\/system$/);
     await aside.getByRole("button", { name: /^Sandboxes/ }).click();
     await expect(page).toHaveURL(/\/system\/sandboxes$/);
-    await aside.getByRole("button", { name: /^Legacy capabilities/ }).click();
-    await expect(page).toHaveURL(/\/settings\/credentials$/);
+    await aside.getByRole("button", { name: /^Capabilities/ }).click();
+    await expect(page).toHaveURL(/\/settings\/capabilities$/);
     await aside.getByRole("button", { name: /^General/ }).click();
     await expect(page).toHaveURL(/\/settings\/general$/);
   });
@@ -183,7 +182,7 @@ test.describe("Pinned System and Settings sub-targets", () => {
           { kind: "view", id: "system" },
           { kind: "view", id: "system", tab: "sandboxes" },
           { kind: "view", id: "system", tab: "sandboxes" },
-          { kind: "view", id: "settings", section: "credentials" },
+          { kind: "view", id: "settings", section: "capabilities" },
           { kind: "view", id: "settings", section: 7 },
           { kind: "view", id: "system", tab: "" },
           { kind: "nonsense", id: "system" },
@@ -208,12 +207,12 @@ test.describe("Pinned System and Settings sub-targets", () => {
       await expect
         .poll(() => selected(page))
         .toEqual(["Sandboxes", "Sandboxes"]);
-      await page.goto("/settings/credentials");
-      await expect(page).toHaveURL(/\/settings\/credentials$/);
+      await page.goto("/settings/capabilities");
+      await expect(page).toHaveURL(/\/settings\/capabilities$/);
       if (viewport === PHONE) {
         await page.getByRole("button", { name: "Open navigation" }).click();
       }
-      await expect.poll(() => selected(page)).toEqual(["Legacy capabilities"]);
+      await expect.poll(() => selected(page)).toEqual(["Capabilities"]);
     }
     expect(errors).toEqual([]);
   });

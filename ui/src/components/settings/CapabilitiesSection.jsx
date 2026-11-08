@@ -18,12 +18,16 @@ import CapabilityServersPanel from "../CapabilityServersPanel.jsx";
 import CapabilityPolicyEditor from "../CapabilityPolicyEditor.jsx";
 import ApiScopeSetsPanel from "../ApiScopeSetsPanel.jsx";
 import SettingsCard, { SettingsReadOnlyContext } from "./SettingsCard.jsx";
+import CredentialsSection from "./CredentialsSection.jsx";
 
 // CapabilitiesSection is Settings → Capabilities: the capability-server
 // entries (mcpServers), the capability policy and the agent API's scope
-// sets.
+// sets, and the Deployment credentials card (CredentialsSection) that was
+// Settings → Legacy capabilities: the GitHub host, the GCP settings and
+// the stored secrets, claimedSecrets naming the ones grain itself reads.
 export default function CapabilitiesSection({
   s,
+  claimedSecrets,
   showError,
   readOnly: readOnlyProp,
   item,
@@ -152,6 +156,9 @@ export default function CapabilitiesSection({
           readOnly={effectiveReadOnly}
         />
       </SettingsCard>
+      {s?.settings && (
+        <CredentialsSection s={s} claimedSecrets={claimedSecrets} />
+      )}
     </>
   );
 }

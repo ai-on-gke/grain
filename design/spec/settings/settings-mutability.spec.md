@@ -90,7 +90,7 @@ Every other `grain_config` field is non-bootstrap. Notably **not** bootstrap: `s
 2.6.1. **Settings page** (`SettingsPage.jsx`):
 - `external = externalConfigRepo != "" && section ∉ NOT_CONFIG` where `NOT_CONFIG = {config-repo, preferences, upgrade}`. In external mode every other section renders read-only (a disabled fieldset through `SettingsReadOnlyContext`) under the "Configuration is read-only and managed in …" banner.
 - `lockedInUI` is `settings.settingsLocked` once `GET /api/settings` has loaded, otherwise `config.configRepoOnly || config.settingsLocked`; `configManaged = (lockedInUI || external) && isConfigRepoSection(section)`. Only the sections in `CONFIG_REPO_SECTION_PATHS` — **General, Git, Repositories, Tasks, Agents, Capabilities, CI, Memory** — render read-only when locked, with a `ConfigManagedNotice` linking `/config?path=…` for each path.
-- A `SettingsCard` with `allowInExternalMode` escapes the read-only context: *Legacy capabilities* (its deployment-wide fieldset still honours `readOnly`), *Capability servers* (the panel draws its own read-only form from `readOnly`), *Task fields* (display-only), and *Settings lock* (only while `!external`, so the lock can be turned off from a locked General section; disabled when `GET /api/config` reports neither `configRepo` nor `externalConfigRepo`).
+- A `SettingsCard` with `allowInExternalMode` escapes the read-only context: *Deployment credentials* on Capabilities (its deployment-wide fieldset still honours `readOnly`), *Capability servers* (the panel draws its own read-only form from `readOnly`), *Task fields* (display-only), and *Settings lock* (only while `!external`, so the lock can be turned off from a locked General section; disabled when `GET /api/config` reports neither `configRepo` nor `externalConfigRepo`).
 - The settings search marks a hit "Read-only: in the config repo" when its section is a config-repo section and `configRepoOnly`.
 
 2.6.2. **Repo page** (`RepoPage.jsx`): `configRepoOnly = config.configRepoOnly || config.settingsLocked`; every configuration control is disabled with the config-repo notice as its `aria-describedby`. Operational actions (add a branch, import issues, manual release, base-branch run) are gated only by repo-admin rights (`adminReadOnly`).
@@ -196,7 +196,7 @@ Settings → Executors and its executor tokens were removed with remote executor
 | External agent tokens | Write-only — `POST /api/external-agents/tokens`, `…/{id}/rotate`, `…/{id}/revoke`, `…/revoke-all`, `DELETE …/{id}` | No — runtime credential | Unlocked (Secret; —) | No | `capabilities:admin`. |
 | External agent API on/off `externalAgentApi` | No — API only (`PUT /api/settings`) | Yes — `tables/grain_config.json` | Locked (G) / — | Yes | |
 
-### 3.4 Legacy capabilities / secrets (`/settings/credentials`)
+### 3.4 Deployment credentials / secrets (`/settings/capabilities#credentials`, formerly the Legacy capabilities tab)
 
 | Setting / entity | UI (unlocked) | Config repo | Locked: server / UI | External | Notes |
 | --- | --- | --- | --- | --- | --- |

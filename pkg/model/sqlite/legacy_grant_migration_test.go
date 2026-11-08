@@ -1293,3 +1293,95 @@ func TestMigration124RewritesGitHubSandboxPolicy(t *testing.T) {
 	}
 	assertPolicy(t, importedStore)
 }
+
+// A store from before the first conversion (schema 66), holding every
+// retired grant form at once -- in tasks, templates, schedules, the
+// deployment's default capabilities and standing sessions, and a
+// repository's default and CI capabilities -- upgrades to the current
+// schema in one pass with every one of them in its new form, meaning
+// what it meant, and nothing retired left over. Task 2876 removed the
+// in-process provider machinery those names were served by; the
+// migrations that rewrite them are what keeps such a store upgradeable.
+func TestAPreConversionStoreUpgradesEveryRetiredGrantAtOnce(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+	first := retiredGrants[0].version
+	var legacy, replacements []string
+	for _, r := range retiredGrants {
+		first = min(first, r.version)
+		legacy = append(legacy, r.legacy)
+		for _, to := range r.to {
+			if !slices.Contains(replacements, to) {
+				replacements = append(replacements, to)
+			}
+		}
+	}
+	sortedReplacements := slices.Clone(replacements)
+	sort.Strings(sortedReplacements)
+
+	cfg := testConfig()
+	cfg.DefaultCapabilities = slices.Clone(legacy)
+	cfg.ConsoleSessions = []model.ConsoleSession{{ID: "director", Title: "Director", Capabilities: slices.Clone(legacy)}}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: widgets, DefaultCapabilities: slices.Clone(legacy),
+		CICapabilities: slices.Clone(legacy)}); err != nil {
+		t.Fatal(err)
+	}
+	owners := map[string]string{"task_grant": "task_id", "template_grant": "template_id", "schedule_grant": "schedule_id"}
+	for table, owner := range owners {
+		for _, name := range legacy {
+			if _, err := db.ExecContext(ctx, "INSERT INTO `"+table+"` (`"+owner+"`, `capability`, `via`) VALUES ('old', ?, 'label')", name); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = ? WHERE `id` = 1", first-1); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.New(db).Init(ctx); err != nil {
+		t.Fatalf("migrating a version-%d store: %v", first-1, err)
+	}
+
+	noneRetired := func(what string, got []string) {
+		t.Helper()
+		for _, name := range legacy {
+			if slices.Contains(got, name) {
+				t.Errorf("%s still holds retired %q after the upgrade: %v", what, name, got)
+			}
+		}
+	}
+	for table, owner := range owners {
+		got := grantRows(t, ctx, db, table, owner)["old"]
+		sameGrantMeaning(t, table, legacy, got)
+		noneRetired(table, got)
+		if !slices.Equal(got, sortedReplacements) {
+			t.Errorf("%s holds %v after the upgrade, want every new form once: %v", table, got, sortedReplacements)
+		}
+	}
+	after, err := store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for what, got := range map[string][]string{
+		"default capabilities": after.DefaultCapabilities,
+		"director session":     after.ConsoleSessions[0].Capabilities,
+	} {
+		sameGrantMeaning(t, what, legacy, got)
+		noneRetired(what, got)
+	}
+	repo, err := store.GetRepoConfig(ctx, widgets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for what, got := range map[string][]string{
+		"repo default capabilities": repo.DefaultCapabilities,
+		"repo CI capabilities":      repo.CICapabilities,
+	} {
+		sameGrantMeaning(t, what, legacy, got)
+		noneRetired(what, got)
+	}
+}

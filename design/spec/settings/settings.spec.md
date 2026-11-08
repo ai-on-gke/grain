@@ -16,7 +16,7 @@ This document lists every setting a Grain deployment has. That covers the deploy
    - 3.1 Models & sandboxes → Models
    - 3.2 Models & sandboxes → Sandboxes
    - 3.3 Models & sandboxes → Executors (removed)
-   - 3.4 Secrets & access → Legacy capabilities
+   - 3.4 Capabilities → Deployment credentials (was Secrets & access → Legacy capabilities)
    - 3.5 Secrets & access → Access
    - 3.6 System / Operations → Upgrade
    - 3.7 System / Operations → Caches
@@ -175,9 +175,9 @@ These apply to the `kubernetes` and `kubernetes-granule` backends. Every field e
 
 Removed with remote executors: `grain host` is grain's only host agent, and a remote one dials in with the daemon's `-hostd-token-file` token (a startup flag, §10), set up under Models → *Where each agent CLI runs*. `/settings/executors` and its old `/admin` and `/system` links open Models. Schema 87 dropped `executor_token`.
 
-### 3.4 Secrets & access → Legacy capabilities (`/settings/credentials#credentials`)
+### 3.4 Capabilities → Deployment credentials (`/settings/capabilities#credentials`)
 
-Component: `CredentialsSection.jsx`. The aliases `/settings/secrets` and `/settings/legacy-capabilities` resolve here. Surface: **config-managed** (the secret values themselves are never in the config repo).
+Component: `CredentialsSection.jsx`, a card drawn at the foot of Settings → Capabilities. It was the Secrets & access → Legacy capabilities tab (section id `credentials`) until that tab was retired with the last in-process capability (task 2876); `/settings/credentials`, `/settings/secrets` and `/settings/legacy-capabilities` resolve to Capabilities, keeping any `#hash`. Surface: **config-managed** (the secret values themselves are never in the config repo).
 
 | UI label | API key | Column | Type, default, validation | Applies |
 | --- | --- | --- | --- | --- |

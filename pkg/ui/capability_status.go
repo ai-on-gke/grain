@@ -19,7 +19,6 @@ import (
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/capability"
-	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/imagesigning"
@@ -330,15 +329,11 @@ func capabilityCatalog() []model.CapabilitySpec {
 // same way the rest of the catalog is.
 //
 // capabilityDisplayName is capabilityDisplayNames[id], or for a
-// capability contributed from outside core the Name it was registered
-// with (capability.RegisterProvider, or capability.Register for a
-// contributed method's reference or grant).
+// contributed method's reference or grant the Name it was registered
+// with (capability.Register).
 func capabilityDisplayName(id string) string {
 	if name, ok := capabilityDisplayNames[id]; ok {
 		return name
-	}
-	if r, ok := capability.Lookup(id); ok {
-		return r.Name
 	}
 	for _, m := range capability.Methods() {
 		if id == m.Ref() || id == m.Grant() {
@@ -355,7 +350,6 @@ func capabilityProviderCatalog() []model.CapabilityProvider {
 	providers := []model.CapabilityProvider{
 		githubsandbox.NewProvider(githubsandbox.Config{}),
 	}
-	providers = append(providers, admincaps.Providers()...)
 	providers = append(providers,
 		registrypush.NewWithConfig(registrypush.Config{}),
 		packagepublish.New(packagepublish.Config{}),
