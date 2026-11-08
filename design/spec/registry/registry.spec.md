@@ -506,12 +506,14 @@ Every normative requirement below is derived from the implementation on `main` a
    - **My Entries (`/`)**: personal quota cards, incoming pending transfer acceptance banner, entry table with status/tasks/conflict badges, and type-to-confirm soft-delete dialog;
    - **Directory (`/directory`)**: searchable organization catalog of listed entries and interactive longest-prefix route tester (`/api/route`);
    - **Create / Register (`/new`)**: live name availability checker, hosted VM shape selector, connected entry registration with copyable `-registry-connect` CLI snippet, and one-time `grc_…` token display;
+   - **Apps acting for you (`/grants`, alias `/apps`)**: personal consent grant manager listing active grants (`GET /api/delegation-grants`) with an `Include revoked grants` toggle (`?include_revoked=true`), a consent form (`POST /api/delegation-grants` with `app`, `entries`, `access`, `ttl_seconds`), and per-grant revocation (`DELETE /api/delegation-grants/<id>`);
    - **Entry Detail (`/entries/{name}`)**: runtime & tunnel liveness, 4-step VM replacement progress stepper, catalog & ownership editor, two-step transfer offer (with 7-day expiry display, optional `clear_owner_group`, cancel offer, and recipient accept button), reported vs declared scope editor with `409` conflict banner, `grc_…` credential rotation/revocation, VM resize/upgrade, and soft-delete/restore;
-   - **Admin (`/admin`, visible only when `me.is_registry_admin` is true)**: reconciler leader lease card, active outbound tunnels per replica with `Disconnect`, owners & quotas editor (`Save quota override`, `Reset quota`, `Disable/Enable owner`), active scope conflicts resolver (`Demote to secondary`, `Remove scope`), shared Cloud SQL pool (`Drain instance` / `Resume placement`), orphan GCE VMs (`Delete orphan VM`), all entries & retention recovery (`Restore`, `Hard purge`, `Force transfer`), and control-plane audit log showing `actor_email` and `via`/`grant_id`;
+   - **Admin (`/admin`, visible only when `me.is_registry_admin` is true)**: reconciler leader lease card, active outbound tunnels per replica with `Disconnect`, owners & quotas editor (`Save quota override`, `Reset quota`, `Disable/Enable owner`), active scope conflicts resolver (`Demote to secondary`, `Remove scope`), shared Cloud SQL pool (`Drain instance` / `Resume placement`), orphan GCE VMs (`Delete orphan VM`), all entries & retention recovery (`Restore`, `Hard purge`, `Force transfer`), delegating apps registry (`GET/POST /api/admin/delegating-apps` accepting a bare service-account email stored as `serviceAccount:<email>`, and `PATCH /api/admin/delegating-apps/<name>` to disable/enable), and control-plane audit log showing `actor_email` and `via`/`grant_id`;
    - **Status (`/status`)**: service health, active replica heartbeats, fleet version distribution, and VM shape catalog.
 
 **Pinned by:**
 - `pkg/registry/server/static_test.go`: `TestStaticHandlerServesSPAWithStrictCSP`
+- `pkg/registry/delegation_admin_test.go`: `TestDemoDelegatingAppsAndPersonGrants`
 - `ui-registry/src/App.test.jsx`:
   - `renders My entries view with quota summary, pending transfer banner, and delete confirmation modal`
   - `renders Directory view and evaluates interactive route tester`
@@ -521,6 +523,8 @@ Every normative requirement below is derived from the implementation on `main` a
   - `renders Admin and Status views with active outbound tunnels per replica and fleet summary`
   - `hides Admin nav for non-admin callers, blocks non-http entry URLs, and handles malformed routes`
   - `supports two-step ownership transfer offer with expiry and cancel in Entry detail view, and admin recovery actions in Admin view`
+  - `lists, creates with a bare service-account email, and disables/enables delegating apps on Admin screen`
+  - `lists, grants consent, toggles include_revoked, and revokes grants on Apps acting for you screen`
 
 ---
 
