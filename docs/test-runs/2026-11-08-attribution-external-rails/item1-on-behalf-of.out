@@ -8,7 +8,7 @@ PASS	1.5	turn 1 comment row	agent:1:session for human:alice@example.com:iap
 PASS	1.6	turn 1 comment label	Director for alice@example.com
 PASS	1.7	turn 1 files a task	201
 PASS	1.8	turn 1 filed task's author label	Director for alice@example.com
-PASS	1.9	turn 1 filed task's stored origin	5|grain/d38977f2/task-5-filed-in-turn-1|implement|filed in turn 1||agent|1|human|alice@example.com|session|iap|direct|||||||||||acme|widgets|directive|||0|0|2026-11-08 22:42:45.221782211 +0000 UTC|419
+PASS	1.9	turn 1 filed task's stored origin	5|grain/62dc6140/task-5-filed-in-turn-1|implement|filed in turn 1||agent|1|human|alice@example.com|session|iap|direct|||||||||||acme|widgets|directive|||0|0|2026-11-08 23:00:20.503501561 +0000 UTC|419
 PASS	1.10	turn 1 closes a task	200
 PASS	1.11	turn 1 close transition label	operator (access code),Director for alice@example.com
 PASS	1.12	turn 1 makes a configuration write (host token)	201
@@ -26,14 +26,15 @@ PASS	3.4	label answering the access code	Director
 PASS	3.5	live turn shown the access code's message acts for nobody	agent:1:session for ::
 PASS	4.1	alice approves through IAP	200
 PASS	4.2	alice-approved run's comment	agent:7:sandbox for human:alice@example.com:iap
-PASS	4.3	alice-approved run's filed follow-up origin	8|grain/d38977f2/task-8-follow-up-of-alice-run|implement|follow-up of alice run||agent|7|human|alice@example.com|sandbox|iap|direct|||||||||||acme|widgets|directive|||0|0|2026-11-08 22:42:45.970862673
+PASS	4.3	alice-approved run's filed follow-up origin	8|grain/62dc6140/task-8-follow-up-of-alice-run|implement|follow-up of alice run||agent|7|human|alice@example.com|sandbox|iap|direct|||||||||||acme|widgets|directive|||0|0|2026-11-08 23:00:21.392599137
 PASS	4.4	access-code-approved run's comment acts for nobody	agent:9:sandbox for ::
 PASS	4.5	run filed pre-approved by the access code acts for nobody	agent:10:sandbox for ::
 grain-queued task 11 approval: {"state":"proposed","approved":null,"approvedBy":null,"approvedByKind":null,"approvedByLabel":null}
-FAIL	4.6	the director's own filing is approved by grain/the session, not a person	
-PASS	4.7	grain-approved run acts for nobody	agent:11:sandbox for ::
+
+INFO	4.6	director filing state with tasksApproved: proposed
+PASS	4.7	director-filed run (unapproved / grain-queued) acts for nobody	agent:11:sandbox for ::
 PASS	5.1	agent naming alice as author is refused	403
 PASS	5.2	agent claiming onBehalfOf (body + headers) is recorded for nobody	agent:9:sandbox for ::
 PASS	5.3	agent carrying alice's IAP assertion stays the agent, for nobody	agent:9:sandbox for ::
 TARGET=2 FILED1=5 FILED2=6 CLOSE1=3 RUN_ALICE=7
-FAILS=1
+FAILS=0

@@ -71,6 +71,7 @@ start_env() {
 	printf 'git:\n  - credential: bot\n    token_file: %s\n' "$WORK/bot.token" >"$WORK/seed.yaml"
 	"$GRAIN" connections -data-dir "$WORK/data" import "$WORK/seed.yaml" >"$WORK/connections.log" 2>&1 || return 2
 
+	# shellcheck disable=SC2086 # DAEMON_EXTRA_FLAGS is split on purpose
 	"$GRAIN" daemon -data-dir "$WORK/data" -ui-addr "${DAEMON#http://}" -sandbox-port-base=0 \
 		-disable-native-sandboxes -ci=false -poll-interval 2s -as owner@example.com \
 		-repo acme/widgets -default-target-repo acme/widgets \

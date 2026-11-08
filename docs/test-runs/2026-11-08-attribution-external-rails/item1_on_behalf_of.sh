@@ -37,7 +37,7 @@ if [[ ${REUSE:-} == 1 ]]; then
 	CODE=$(tr -d '[:space:]' <"$WORK/data/local-api-token")
 	DB="$WORK/data/store/grain.db" BODY="$WORK/body.json"
 else
-	start_env || exit 2
+	start_env "${ATTR_WORK:-}" || exit 2
 	trap stop_env EXIT
 fi
 : >"$OUT"
