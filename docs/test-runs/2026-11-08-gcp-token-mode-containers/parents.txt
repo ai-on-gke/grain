@@ -1,0 +1,4 @@
+{"id":"5","base":"main","autoApproveProposals":false,"capabilities":["https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"org-deploy\",\"primary\":true}"],"state":"awaiting_reply"}
+{"id":"7","base":"main","autoApproveProposals":true,"capabilities":["https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"org-deploy\",\"primary\":true}"],"state":"awaiting_reply"}
+{"id":"11","base":null,"autoApproveProposals":true,"capabilities":["https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"org-deploy\",\"primary\":true}"],"state":"awaiting_reply"}
+{"id":"18","base":null,"autoApproveProposals":true,"capabilities":["https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"org-deploy\",\"primary\":true}"],"state":"awaiting_reply"}
