@@ -61,5 +61,12 @@ describe("DetailOverlay capabilities", () => {
       method: "POST",
       body: JSON.stringify({ id: refGrant, attach: false }),
     });
+
+    const bareLine = within(grants).getByLabelText("web-search");
+    await user.click(within(bareLine).getByRole("button", { name: /remove/i }));
+    expect(api).toHaveBeenCalledWith("/api/tasks/12/capabilities", {
+      method: "POST",
+      body: JSON.stringify({ grant: "web-search", attach: false }),
+    });
   });
 });

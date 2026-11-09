@@ -164,6 +164,10 @@ type GrantCheck struct {
 	// filing a task holding it would be refused, or the grant dropped
 	// when it is only a default. Empty when no subject was named.
 	CatalogueRefusal string `json:"catalogueRefusal,omitempty"`
+	// AliasOf is the canonical grant(s) a retired bare capability name
+	// became (model.CanonicalLegacyGrants), normalized as a task records
+	// them. Empty when Grant is not a retired alias.
+	AliasOf []string `json:"aliasOf,omitempty"`
 }
 
 // CheckCapabilityGrants normalizes each grant against its server, the
@@ -177,57 +181,91 @@ func (c *Client) CheckCapabilityGrants(ctx context.Context, grants []GrantReques
 		if err != nil {
 			return nil, err
 		}
-		check := GrantCheck{Grant: s}
-		if c := model.CanonicalLegacyGrant(s); c != s {
-			s = c
+		repl := model.CanonicalLegacyGrants(s)
+		if len(repl) > 1 {
+			check := GrantCheck{Grant: s, AliasOf: make([]string, 0, len(repl))}
+			for _, r := range repl {
+				rc := c.checkSingleCapabilityGrant(r, "", lookup)
+				if rc.Recorded != "" {
+					check.AliasOf = append(check.AliasOf, rc.Recorded)
+				} else {
+					check.AliasOf = append(check.AliasOf, r)
+				}
+				if rc.Error != "" && check.Error == "" {
+					check.Error, check.Fields = rc.Error, rc.Fields
+				}
+				if rc.Unchecked {
+					check.Unchecked = true
+				}
+			}
+			out = append(out, check)
+			continue
 		}
-		if !model.IsCapabilityRef(s) {
-			if _, ok := c.capabilityByID(s); !ok {
-				check.Error = capabilityRefusal(s)
+		isAlias := len(repl) == 1 && repl[0] != s
+		target := s
+		reqGrant := req.Grant
+		if isAlias {
+			target = repl[0]
+			reqGrant = ""
+		}
+		check := c.checkSingleCapabilityGrant(target, reqGrant, lookup)
+		check.Grant = s
+		if isAlias {
+			if check.Recorded != "" {
+				check.AliasOf = []string{check.Recorded}
 			} else {
-				check.Recorded = s
+				check.AliasOf = []string{target}
 			}
-			out = append(out, check)
-			continue
-		}
-		grantLookup := lookup
-		if grantLookup == nil && grainserver.IsInProcessGrant(s) {
-			grantLookup = grainserver.LookupWithRepoCredentials(nil, c.configuredGitCredentials())
-		}
-		if grantLookup != nil {
-			if _, err := grantLookup(protocolCapabilityID(s)); err != nil {
-				check.Unchecked = true
-			}
-		} else {
-			check.Unchecked = true
-		}
-		if check.Unchecked {
-			if err := model.CheckCapabilityGrantArgsOffline(s); err != nil {
-				check.Error, check.Fields = err.Error(), grantFieldErrors(err)
-			} else {
-				check.Recorded = s
-			}
-			out = append(out, check)
-			continue
-		}
-		names, err := model.NormalizeCapabilityNames([]string{s}, grantLookup)
-		if err != nil {
-			check.Error, check.Fields = err.Error(), grantFieldErrors(err)
-			out = append(out, check)
-			continue
-		}
-		check.Recorded = names[0]
-		if spec, err := model.CapabilityGrantSpec(check.Recorded); err == nil {
-			check.Args = spec.With
-		}
-		// Only a grant handed back as a task recorded it can have changed;
-		// {capability, with} is a new grant being written.
-		if ref, err := protocol.ParseRef(model.CapabilityGrantRef(s)); err == nil && req.Grant != "" && ref.Method != "" && strings.Contains(s, "=") {
-			check.Changed = check.Recorded != s
 		}
 		out = append(out, check)
 	}
 	return out, nil
+}
+
+func (c *Client) checkSingleCapabilityGrant(s, reqGrant string, lookup protocol.Lookup) GrantCheck {
+	check := GrantCheck{Grant: s}
+	if !model.IsCapabilityRef(s) {
+		if _, ok := c.capabilityByID(s); !ok {
+			check.Error = capabilityRefusal(s)
+		} else {
+			check.Recorded = s
+		}
+		return check
+	}
+	grantLookup := lookup
+	if grantLookup == nil && grainserver.IsInProcessGrant(s) {
+		grantLookup = grainserver.LookupWithRepoCredentials(nil, c.configuredGitCredentials())
+	}
+	if grantLookup != nil {
+		if _, err := grantLookup(protocolCapabilityID(s)); err != nil {
+			check.Unchecked = true
+		}
+	} else {
+		check.Unchecked = true
+	}
+	if check.Unchecked {
+		if err := model.CheckCapabilityGrantArgsOffline(s); err != nil {
+			check.Error, check.Fields = err.Error(), grantFieldErrors(err)
+		} else {
+			check.Recorded = s
+		}
+		return check
+	}
+	names, err := model.NormalizeCapabilityNames([]string{s}, grantLookup)
+	if err != nil {
+		check.Error, check.Fields = err.Error(), grantFieldErrors(err)
+		return check
+	}
+	check.Recorded = names[0]
+	if spec, err := model.CapabilityGrantSpec(check.Recorded); err == nil {
+		check.Args = spec.With
+	}
+	// Only a grant handed back as a task recorded it can have changed;
+	// {capability, with} is a new grant being written.
+	if ref, err := protocol.ParseRef(model.CapabilityGrantRef(s)); err == nil && reqGrant != "" && ref.Method != "" && strings.Contains(s, "=") {
+		check.Changed = check.Recorded != s
+	}
+	return check
 }
 
 // protocolCapabilityID is the capability_id a grant string names, without
