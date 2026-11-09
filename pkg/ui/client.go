@@ -3137,7 +3137,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		}
 		sessionQueued = sessionQueues
 		if len(escalated) > 0 || len(ungrantedWrites) > 0 || len(ungrantedReads) > 0 {
-			sessionQueued = false
+			autoSubmit, sessionQueued = false, false
 		}
 		if !autoSubmit {
 			refusal = model.AutoApprovalRefusal(child, *proposedBy, sessionQueues, seeding)
@@ -7646,27 +7646,7 @@ func isExternalAgent(p model.Principal) bool {
 // pipeline steward, durable and holding run_task_now, could propose a task
 // asking for it and then approve that task itself.
 func agentEscalatedCapabilities(task, requester model.Task) []string {
-	held := make(map[string]bool, len(requester.Grants))
-	for _, g := range requester.Grants {
-		held[g.Capability] = true
-	}
-	var out []string
-	for _, g := range task.Grants {
-		if model.IsCapabilityRef(g.Capability) || g.Via == model.GrantByDefault ||
-			(held[g.Capability] && !model.IsPersonOnlyGrant(g.Capability)) {
-			continue
-		}
-		held[g.Capability] = true
-		out = append(out, g.Capability)
-	}
-	childRefs := make([]model.Grant, 0, len(task.Grants))
-	for _, g := range task.Grants {
-		if g.Via == model.GrantByDefault && model.IsGrainCIGrant(g.Capability) {
-			continue
-		}
-		childRefs = append(childRefs, g)
-	}
-	return append(out, model.UncoveredCapabilityRefs(childRefs, requester.Grants)...)
+	return model.AgentEscalatedCapabilities(task, requester)
 }
 
 // runNowComment is what a run-now leaves on the task's own thread. It

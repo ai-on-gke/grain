@@ -98,10 +98,10 @@ func TestRelayProposedTasksUnifiedGrantsEquivalenceAndNormalization(t *testing.T
 			Arguments: map[string]any{
 				"id":           "bare-legacy-cap",
 				"title":        "Bare legacy capability name",
-				"body":         "Must keep bare capability label intact rather than expanding retired aliases",
+				"body":         "Expands one-release retired aliases like ui.Client.CreateTask",
 				"repo":         "acme/app",
 				"branch":       "main",
-				"capabilities": []any{"self-repair"},
+				"capabilities": []any{"self-repair", "self-debug"},
 			},
 		},
 	}}
@@ -153,8 +153,18 @@ func TestRelayProposedTasksUnifiedGrantsEquivalenceAndNormalization(t *testing.T
 	if bareLegacy.Approval != nil {
 		t.Errorf("bare-legacy-cap proposal approved unexpectedly: %+v", bareLegacy.Approval)
 	}
-	if len(bareLegacy.Grants) != 1 || bareLegacy.Grants[0].Capability != "self-repair" || bareLegacy.Grants[0].Via != model.GrantByLabel {
-		t.Errorf("bare-legacy-cap Grants = %+v, want [{Capability:self-repair Via:label}]", bareLegacy.Grants)
+	wantExpanded := []model.Grant{
+		{Capability: "api:self-debug", Via: model.GrantByLabel},
+		{Capability: model.GrainHostExecGrant, Via: model.GrantByLabel},
+		{Capability: model.GrainSourceGrant, Via: model.GrantByLabel},
+	}
+	if len(bareLegacy.Grants) != len(wantExpanded) {
+		t.Fatalf("bare-legacy-cap Grants = %+v, want %+v", bareLegacy.Grants, wantExpanded)
+	}
+	for i, want := range wantExpanded {
+		if !bareLegacy.Grants[i].Equal(want) {
+			t.Errorf("bare-legacy-cap Grants[%d] = %+v, want %+v", i, bareLegacy.Grants[i], want)
+		}
 	}
 }
 

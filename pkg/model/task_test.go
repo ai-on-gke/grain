@@ -312,7 +312,7 @@ func TestLandsWhereGrantedReadsTheDeclaredWriteTargets(t *testing.T) {
 func TestLandsWhereGrantedRefusesWritesTheParentNeverHeld(t *testing.T) {
 	widgets := &RepoRef{Owner: "acme", Name: "widgets"}
 	state := RepoRef{Owner: "acme", Name: "widgets-state"}
-	grants := []Grant{{Capability: "self-repair", Via: GrantByLabel}}
+	grants := []Grant{{Capability: "self-debug", Via: GrantByLabel}}
 	parent := Task{
 		Target: widgets, Base: "main", AutoMerge: true, Grants: grants,
 		Writes: []WriteTarget{{Repo: state, Base: "deploy"}},
@@ -400,7 +400,7 @@ func TestAutoSubmitsRefusesReadsTheParentNeverHeld(t *testing.T) {
 func TestLandsWhereGrantedNeverWidensIntoAConfigRepo(t *testing.T) {
 	widgets := &RepoRef{Owner: "acme", Name: "widgets"}
 	config := ConfigRepo()
-	grants := []Grant{{Capability: "self-repair", Via: GrantByLabel}}
+	grants := []Grant{{Capability: "self-debug", Via: GrantByLabel}}
 	hop1 := Task{
 		Target: widgets, Base: "main", AutoMerge: true, Grants: grants,
 		Writes: []WriteTarget{{Repo: config, Base: "main"}},
@@ -428,9 +428,9 @@ func TestLandsWhereGrantedNeverWidensIntoAConfigRepo(t *testing.T) {
 func TestAutoSubmitsNeedsThePermissionAndBothItsLimits(t *testing.T) {
 	widgets := &RepoRef{Owner: "acme", Name: "widgets"}
 	docs := &RepoRef{Owner: "acme", Name: "docs"}
-	repair := []Grant{{Capability: "self-repair", Via: GrantByLabel}}
+	debug := []Grant{{Capability: "self-debug", Via: GrantByLabel}}
 	parent := Task{
-		Target: widgets, AutoMerge: true, Grants: repair,
+		Target: widgets, AutoMerge: true, Grants: debug,
 		Writes: []WriteTarget{{Repo: *docs, Base: "deploy"}},
 	}
 	for _, tc := range []struct {
@@ -441,7 +441,7 @@ func TestAutoSubmitsNeedsThePermissionAndBothItsLimits(t *testing.T) {
 	}{
 		{"the parent's own branch", Task{Target: widgets}, parent, true},
 		{"a subset of the parent's capabilities",
-			Task{Target: widgets, Grants: repair}, parent, true},
+			Task{Target: widgets, Grants: debug}, parent, true},
 		{"a declared write target on its declared branch",
 			Task{Target: docs, Base: "deploy"}, parent, true},
 		{"a branch nobody granted", Task{Target: widgets, Base: "release/2.0"}, parent, false},
@@ -449,16 +449,24 @@ func TestAutoSubmitsNeedsThePermissionAndBothItsLimits(t *testing.T) {
 		{"a capability the parent never held",
 			Task{Target: widgets, Grants: []Grant{{Capability: "gemini-key", Via: GrantByDefault}}},
 			parent, false},
+		{"a person-only capability the parent holds (bare alias)",
+			Task{Target: widgets, Grants: []Grant{{Capability: "self-repair", Via: GrantByLabel}}},
+			Task{Target: widgets, AutoMerge: true, Grants: []Grant{{Capability: "self-repair", Via: GrantByLabel}}},
+			false},
+		{"a person-only api capability the parent holds",
+			Task{Target: widgets, Grants: []Grant{{Capability: "self-upgrade", Via: GrantByLabel}}},
+			Task{Target: widgets, AutoMerge: true, Grants: []Grant{{Capability: "api:self-upgrade", Via: GrantByLabel}}},
+			false},
 		{"a parent that does not auto-merge", Task{Target: widgets},
-			Task{Target: widgets, Grants: repair}, false},
+			Task{Target: widgets, Grants: debug}, false},
 		{"a parent with auto-approve-proposals", Task{Target: widgets},
-			Task{Target: widgets, AutoApproveProposals: true, Grants: repair}, true},
+			Task{Target: widgets, AutoApproveProposals: true, Grants: debug}, true},
 		{"a parent with auto-approve-proposals proposing ungranted capability",
 			Task{Target: widgets, Grants: []Grant{{Capability: "gemini-key", Via: GrantByDefault}}},
-			Task{Target: widgets, AutoApproveProposals: true, Grants: repair}, false},
+			Task{Target: widgets, AutoApproveProposals: true, Grants: debug}, false},
 		{"a parent with auto-approve-proposals proposing ungranted branch",
 			Task{Target: widgets, Base: "release/2.0"},
-			Task{Target: widgets, AutoApproveProposals: true, Grants: repair}, false},
+			Task{Target: widgets, AutoApproveProposals: true, Grants: debug}, false},
 	} {
 		if got := AutoSubmits(tc.child, tc.parent); got != tc.want {
 			t.Errorf("%s: AutoSubmits = %v, want %v", tc.name, got, tc.want)
