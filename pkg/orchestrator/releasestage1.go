@@ -442,7 +442,9 @@ func stage1Failed(forge ReleaseQualificationForge, repo model.RepoRef, sha strin
 // raised nothing for yet -- one the train judged before grain did, or on a
 // forge connection whose jobs grain cannot read -- while it is still the
 // version's newest candidate: the hold it posts is what keeps the train
-// from cutting rc.(N+1) before the steward has triaged it.
+// from cutting rc.(N+1) before the steward has triaged it. A candidate
+// the daily cap dropped (droppedUnreleased) is not red, whatever its Stage
+// 1 run concluded, and raises nothing.
 func syncDiscardedStage1(ctx context.Context, store *model.Store, forge ReleaseQualificationForge, gate qualificationGate,
 	commits map[string]string, now time.Time) error {
 
@@ -466,6 +468,12 @@ func syncDiscardedStage1(ctx context.Context, store *model.Store, forge ReleaseQ
 			continue
 		}
 		if !red {
+			continue
+		}
+		if unjudged, err := droppedUnreleased(forge, gate.repo, name); err != nil || unjudged {
+			if err != nil {
+				errs = append(errs, fmt.Errorf("reading %s-discarded: %w", name, err))
+			}
 			continue
 		}
 		v, err := readStage1(forge, gate.repo, sha, gate.cfg)
