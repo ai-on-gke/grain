@@ -57,8 +57,9 @@ const (
 var releaseNotesFiler = model.Principal{Kind: model.PrincipalAutomation, ID: "release-notes"}
 
 var (
-	releaseNotesPolled sync.Map // store id | repo string -> time.Time
-	releaseNotesMerged sync.Map // store id | repo string | branch | version -> bool
+	releaseNotesPolled        sync.Map // store id | repo string -> time.Time
+	releaseNotesMerged        sync.Map // store id | repo string | branch | version -> bool
+	releaseNotesSeriesSettled sync.Map // store id | repo string | branch | M.m | highest -> bool (documented)
 )
 
 // ReleaseNotesVersionTag keys open release-notes tasks by repository and
@@ -81,6 +82,10 @@ func releaseNotesPollKey(store *model.Store, repo model.RepoRef) string {
 
 func releaseNotesMergedKey(store *model.Store, repo model.RepoRef, branch, version string) string {
 	return fmt.Sprintf("%d|%s|%s|%s", store.ID(), strings.ToLower(repo.String()), branch, version)
+}
+
+func releaseNotesSeriesKey(store *model.Store, repo model.RepoRef, branch string, major, minor int, highest string) string {
+	return fmt.Sprintf("%d|%s|%s|%d.%d|%s", store.ID(), strings.ToLower(repo.String()), branch, major, minor, highest)
 }
 
 func reconcileReleaseNotes(ctx context.Context, deps Deps, now time.Time) error {
@@ -115,6 +120,14 @@ func reconcileReleaseNotes(ctx context.Context, deps Deps, now time.Time) error 
 		return nil
 	}
 
+	globalCfg, err := deps.Store.GetConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("orchestrator: reading config for release notes: %w", err)
+	}
+	var catalogue *model.CapabilityCatalogue
+	if globalCfg != nil {
+		catalogue = globalCfg.CapabilityPolicy.Catalogue
+	}
 	configs, err := deps.Store.ListRepoConfigs(ctx)
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading repo configs for release notes: %w", err)
@@ -150,7 +163,7 @@ func reconcileReleaseNotes(ctx context.Context, deps Deps, now time.Time) error 
 			continue
 		}
 		releaseNotesPolled.Store(key, now)
-		if err := syncRepoReleaseNotes(ctx, deps, tags, files, targets, repo, d.tmpl, now); err != nil {
+		if err := syncRepoReleaseNotes(ctx, deps, tags, files, catalogue, targets, repo, d.tmpl, now); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -178,7 +191,7 @@ func repoDeclaredReleaseNotesTemplate(tmpl model.Template) (model.RepoRef, bool)
 }
 
 func syncRepoReleaseNotes(ctx context.Context, deps Deps, tags github.ReleaseTagReader, files github.FileReader,
-	targets []string, repo model.RepoRef, tmpl model.Template, now time.Time) error {
+	catalogue *model.CapabilityCatalogue, targets []string, repo model.RepoRef, tmpl model.Template, now time.Time) error {
 
 	baseBranch := strings.TrimSpace(tmpl.Base)
 	if baseBranch == "" {
@@ -245,24 +258,16 @@ func syncRepoReleaseNotes(ctx context.Context, deps Deps, tags github.ReleaseTag
 		}
 	})
 
+	missing, errs := missingReleaseNotesVersions(ctx, deps.Store, files, repo, baseBranch, versions)
+	if len(missing) == 0 {
+		return errors.Join(errs...)
+	}
+
 	var (
 		confLoaded    bool
 		neverPromotes map[string]bool
-		errs          []error
 	)
-	for _, version := range versions {
-		mergedKey := releaseNotesMergedKey(deps.Store, repo, baseBranch, version)
-		if _, ok := releaseNotesMerged.Load(mergedKey); ok {
-			continue
-		}
-		if !confLoaded {
-			neverPromotes = readReleaseNotesNeverPromote(files, repo, baseBranch)
-			confLoaded = true
-		}
-		if neverPromotes[version] {
-			continue
-		}
-
+	for _, version := range missing {
 		open, err := hasOpenReleaseNotesTask(ctx, deps.Store, repo, tmpl.ID, version)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("orchestrator: checking open release-notes tasks for %s %s: %w", repo, version, err))
@@ -272,17 +277,15 @@ func syncRepoReleaseNotes(ctx context.Context, deps Deps, tags github.ReleaseTag
 			continue
 		}
 
-		notesPath := "docs/releases/" + version + ".md"
-		_, found, err := files.ReadFile(repo.StoredOwner(), repo.Name, baseBranch, notesPath)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("orchestrator: checking %s on %s %s: %w", notesPath, repo, baseBranch, github.Readable(err)))
-			continue
+		if !confLoaded {
+			neverPromotes = readReleaseNotesNeverPromote(files, repo, baseBranch)
+			confLoaded = true
 		}
-		if found {
-			releaseNotesMerged.Store(mergedKey, true)
+		if neverPromotes[version] {
 			continue
 		}
 
+		notesPath := "docs/releases/" + version + ".md"
 		tag := candidates[version]
 		commit, _, err := peelPendingTag(tags, repo, tag)
 		if err != nil {
@@ -315,7 +318,8 @@ func syncRepoReleaseNotes(ctx context.Context, deps Deps, tags github.ReleaseTag
 		if comp.Target == nil || !comp.Target.Same(repo) {
 			continue
 		}
-		if !releaseNotesCompositionMayAutoApprove(comp, repo, targets) {
+		holdReasons := applyReleaseNotesCatalogue(catalogue, repo, tmpl, &comp)
+		if len(holdReasons) > 0 || !releaseNotesCompositionMayAutoApprove(comp, repo, targets) {
 			comp.Approved = false
 		}
 
@@ -331,6 +335,9 @@ func syncRepoReleaseNotes(ctx context.Context, deps Deps, tags github.ReleaseTag
 		}
 
 		task := comp.Task(id, releaseNotesFiler, model.ReasonSchedule, now)
+		if len(holdReasons) > 0 {
+			task.Body += fmt.Sprintf("\n\n_Filed for a person to approve: %s._", strings.Join(holdReasons, "; "))
+		}
 		task.Body += fmt.Sprintf("\n\n---\n\ngrain: filed automatically from `.grain/templates/release-notes.yml` because `%s` (`%s`) on `%s` has no `%s` on `%s`.",
 			tag.Name, shortCommit(commit), repo, notesPath, baseBranch)
 		task.OrderKey = orderKey
@@ -353,20 +360,204 @@ func syncRepoReleaseNotes(ctx context.Context, deps Deps, tags github.ReleaseTag
 	return errors.Join(errs...)
 }
 
+type releaseMinorSeries struct {
+	major, minor int
+	versions     []string // descending patch order (newest first)
+}
+
+// missingReleaseNotesVersions inspects versions (sorted ascending) by
+// (major, minor) series from newest to oldest, returning the versions in
+// ascending order that still need docs/releases/<version>.md on baseBranch.
+//
+// Once a patch in a (major, minor) series has docs/releases/<version>.md on
+// baseBranch, older patches in that same series are superseded and skipped,
+// while newer patches in that series (such as a hotfix vX.Y.Z cut on top of a
+// documented vX.Y.(Z-1)) are still filed. An older (major, minor) series that
+// sits below a newer documented series and has neither any docs/releases/ file
+// nor any previously filed release-notes task (for example, pre-train v3.0.*
+// tags rolled into v3.1.0.md) is treated as historical pre-notes history and
+// not backfilled.
+func missingReleaseNotesVersions(ctx context.Context, store *model.Store, files github.FileReader,
+	repo model.RepoRef, baseBranch string, versions []string) ([]string, []error) {
+
+	var series []releaseMinorSeries
+	for i := len(versions) - 1; i >= 0; i-- {
+		v := versions[i]
+		parts, ok := parseSemverParts(v)
+		if !ok {
+			continue
+		}
+		if len(series) == 0 || series[len(series)-1].major != parts[0] || series[len(series)-1].minor != parts[1] {
+			series = append(series, releaseMinorSeries{
+				major:    parts[0],
+				minor:    parts[1],
+				versions: []string{v},
+			})
+			continue
+		}
+		series[len(series)-1].versions = append(series[len(series)-1].versions, v)
+	}
+
+	var (
+		hasNewerDocumentedSeries bool
+		missing                  []string
+		errs                     []error
+	)
+	for _, s := range series {
+		highest := s.versions[0]
+		sKey := releaseNotesSeriesKey(store, repo, baseBranch, s.major, s.minor, highest)
+		if cachedDoc, ok := releaseNotesSeriesSettled.Load(sKey); ok {
+			if cachedDoc.(bool) {
+				hasNewerDocumentedSeries = true
+				continue
+			}
+			if hasNewerDocumentedSeries {
+				continue
+			}
+		}
+
+		var (
+			seriesDocumented bool
+			seriesErr        bool
+			seriesMissing    []string
+		)
+		for idx, v := range s.versions {
+			found, err := hasReleaseNotesOnBranch(store, files, repo, baseBranch, v)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("orchestrator: checking docs/releases/%s.md on %s %s: %w",
+					v, repo, baseBranch, github.Readable(err)))
+				seriesErr = true
+				break
+			}
+			if found {
+				seriesDocumented = true
+				if idx == 0 {
+					releaseNotesSeriesSettled.Store(sKey, true)
+				}
+				break
+			}
+			seriesMissing = append(seriesMissing, v)
+		}
+		if seriesErr {
+			continue
+		}
+		if seriesDocumented {
+			missing = append(missing, seriesMissing...)
+			hasNewerDocumentedSeries = true
+			continue
+		}
+		if !hasNewerDocumentedSeries {
+			missing = append(missing, seriesMissing...)
+			continue
+		}
+
+		tracked := false
+		for _, v := range s.versions {
+			filed, err := store.HasTaskWithTag(ctx, ReleaseNotesVersionTag(repo, v))
+			if err != nil {
+				errs = append(errs, fmt.Errorf("orchestrator: checking release-notes history for %s %s: %w", repo, v, err))
+				seriesErr = true
+				break
+			}
+			if filed {
+				tracked = true
+				break
+			}
+		}
+		if seriesErr {
+			continue
+		}
+		if tracked {
+			missing = append(missing, seriesMissing...)
+			continue
+		}
+		releaseNotesSeriesSettled.Store(sKey, false)
+	}
+
+	slices.Reverse(missing)
+	return missing, errs
+}
+
+func hasReleaseNotesOnBranch(store *model.Store, files github.FileReader, repo model.RepoRef, baseBranch, version string) (bool, error) {
+	mergedKey := releaseNotesMergedKey(store, repo, baseBranch, version)
+	if _, ok := releaseNotesMerged.Load(mergedKey); ok {
+		return true, nil
+	}
+	notesPath := "docs/releases/" + version + ".md"
+	_, found, err := files.ReadFile(repo.StoredOwner(), repo.Name, baseBranch, notesPath)
+	if err != nil {
+		return false, err
+	}
+	if found {
+		releaseNotesMerged.Store(mergedKey, true)
+	}
+	return found, nil
+}
+
 func readReleaseNotesNeverPromote(files github.FileReader, repo model.RepoRef, baseBranch string) map[string]bool {
 	_, _, never := readReleaseConf(files, repo, baseBranch)
 	return never
+}
+
+// applyReleaseNotesCatalogue enforces settings/capabilities.yml at filing time
+// the same way ui.Client.CreateTask and relayProposedTasks do: a refused
+// default grant is dropped, and any grant the catalogue marks requires_person
+// (which catalogueHold does not re-check at dispatch) or refuses outright
+// returns a hold reason so the task lands unapproved for a person.
+func applyReleaseNotesCatalogue(catalogue *model.CapabilityCatalogue, repo model.RepoRef, tmpl model.Template, comp *model.Composition) []string {
+	if catalogue == nil || len(comp.Grants) == 0 {
+		return nil
+	}
+	kept := make([]model.Grant, 0, len(comp.Grants))
+	var needsPerson, refused []string
+	for _, g := range comp.Grants {
+		gc := model.GrantContext{
+			Repo:         &repo,
+			TemplateID:   tmpl.ID,
+			TemplateName: tmpl.Name,
+			Kind:         model.CatalogueKindTask,
+			Grants:       []string{g.Capability},
+		}
+		verdict, err := catalogue.ValidateGrants(gc)
+		if err != nil {
+			if g.Via == model.GrantByDefault {
+				continue
+			}
+			refused = append(refused, err.Error())
+		}
+		kept = append(kept, g)
+		for _, req := range verdict.RequiresPerson {
+			if !slices.Contains(needsPerson, req) {
+				needsPerson = append(needsPerson, req)
+			}
+		}
+	}
+	comp.Grants = kept
+	var whys []string
+	if len(needsPerson) > 0 {
+		whys = append(whys, model.CatalogueRequiresPersonNote(needsPerson))
+	}
+	if len(refused) > 0 {
+		whys = append(whys, "settings/capabilities.yml refuses what it asked for ("+strings.Join(refused, "; ")+")")
+	}
+	return whys
 }
 
 func releaseNotesCompositionMayAutoApprove(comp model.Composition, repo model.RepoRef, targets []string) bool {
 	if model.NormalizeAdmission(comp.Admission).AtLeast(model.AdmissionBypass) {
 		return false
 	}
-	if len(comp.Reviewers) > 0 {
+	if comp.KeepRunning || comp.Interactive || model.NormalizeHosting(comp.Hosting) == model.HostingConsole {
+		return false
+	}
+	if comp.Priority > model.DefaultTaskPriority {
+		return false
+	}
+	if comp.ChangeTarget != nil || len(comp.Reviewers) > 0 {
 		return false
 	}
 	for _, g := range comp.Grants {
-		if model.IsPersonOnlyGrant(g.Capability) {
+		if model.IsPersonOnlyGrant(g.Capability) || model.IsAdminOnlyGrant(g.Capability) {
 			return false
 		}
 	}
@@ -376,7 +567,7 @@ func releaseNotesCompositionMayAutoApprove(comp model.Composition, repo model.Re
 		}
 	}
 	for _, r := range comp.Reads {
-		if !model.RepoAllowed(targets, r) {
+		if model.IsConfigRepo(r) || gitproxy.RetiredConfigRepo(r.Host, r.Owner, r.Name) || !model.RepoAllowed(targets, r) {
 			return false
 		}
 	}
@@ -404,7 +595,7 @@ func hasOpenReleaseNotesTask(ctx context.Context, store *model.Store, repo model
 		if t == nil || t.Target == nil || !t.Target.Same(repo) {
 			continue
 		}
-		if !mentionsReleaseNotesVersion(t.Title, version) && !strings.Contains(t.Body, notesPath) {
+		if !mentionsReleaseNotesVersion(t.Title, version) {
 			continue
 		}
 		lowerTitle := strings.ToLower(strings.TrimSpace(t.Title))

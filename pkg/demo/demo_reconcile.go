@@ -63,7 +63,7 @@ func runDemoReconcile(ctx context.Context, store *model.Store, releases github.C
 
 // demoReconcileCycle is one cycle of runDemoReconcile: "declarations",
 // "github-events", "github-ci-tails", "releases", "issue-imports",
-// "release-pending", then
+// "release-pending", "release-notes", then
 // "suites", in the order orchestrator.Reconcilers runs them, each error
 // named after its reconciler as orchestrator.RunCycle names it.
 func demoReconcileCycle(ctx context.Context, store *model.Store, releases github.Client, now time.Time) error {
