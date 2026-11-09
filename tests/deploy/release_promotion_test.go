@@ -428,3 +428,54 @@ func TestReleaseAndQualificationTemplatesHoldScopedCIRead(t *testing.T) {
 		}
 	}
 }
+
+// Regression for task 3788: release-process-review and release-watchdog
+// inspect watchdog/steward/rc-blocker/flake-budget tasks, notifications,
+// metrics, release-qualification suite runs, and release/candidate status, so
+// both must hold read-only task, deployment, suite, and release scopes (and
+// no dangerous scopes or retired bare `self-debug` prose).
+func TestReleaseReviewAndWatchdogHoldReadOnlyTaskAndSuiteScopes(t *testing.T) {
+	decl := declarations(t)
+	repo := model.GrainSourceRepo().String()
+	wantGrants := []string{
+		model.APIGrantPrefix + "ci-read@" + repo,
+		model.APIGrantPrefix + "self-debug",
+		model.APIGrantPrefix + "suites:read@" + repo,
+		model.APIGrantPrefix + "releases:read@" + repo,
+	}
+	targets := map[string]bool{
+		".grain/templates/release-process-review.yml": false,
+		".grain/templates/release-watchdog.yml":       false,
+	}
+	for _, tmpl := range decl.Templates {
+		if _, ok := targets[tmpl.Path]; !ok {
+			continue
+		}
+		targets[tmpl.Path] = true
+		var caps []string
+		for _, g := range tmpl.Template.Grants {
+			caps = append(caps, g.Capability)
+			parsed, ok, err := model.ParseAPIGrant(g.Capability)
+			if !ok || err != nil {
+				t.Errorf("%s carries non-API or invalid grant %q (ok=%v, err=%v)", tmpl.Path, g.Capability, ok, err)
+				continue
+			}
+			if parsed.Dangerous() {
+				t.Errorf("%s carries dangerous API grant %q", tmpl.Path, g.Capability)
+			}
+		}
+		for _, want := range wantGrants {
+			if !containsString(caps, want) {
+				t.Errorf("%s grants = %v, missing %q", tmpl.Path, caps, want)
+			}
+		}
+		if strings.Contains(tmpl.Template.Body, "`self-debug`") {
+			t.Errorf("%s body still names retired bare `self-debug`; use `api:self-debug`", tmpl.Path)
+		}
+	}
+	for path, seen := range targets {
+		if !seen {
+			t.Errorf("%s is not declared", path)
+		}
+	}
+}
