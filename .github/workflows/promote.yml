@@ -370,11 +370,35 @@ jobs:
           if curl -fsSIL -o /dev/null "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${version}/checksums.txt"; then
             echo "promote: ${version} already carries the grain CLI"
             build=false
+          elif [ -z "${PROMOTE_VERSION:-}" ]; then
+            commit="$(git rev-parse "refs/tags/${version}^{commit}")"
+            sha_release="sha-${commit:0:12}"
+            status="$(curl -fsSIL -o /dev/null -w '%{http_code}' \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases/tags/${version}" 2>/dev/null || true)"
+            if [ "$status" = "404" ] &&
+               ! curl -fsSIL -o /dev/null "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${sha_release}/images.json"; then
+              echo "promote: GitHub Release ${version} does not exist and ${sha_release} has no release assets to create it; skipping grain CLI build"
+              build=false
+            fi
           fi
           {
             echo "version=${version}"
             echo "build=${build}"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Cache Go modules and build cache
+        if: steps.release.outputs.build == 'true'
+        # zizmor: ignore[cache-poisoning]
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
 
       - name: Setup Go
         if: steps.release.outputs.build == 'true'
@@ -417,11 +441,11 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write
-    # One group per release, shared by promote.yml, publish-release.yml and
-    # release-train-assets.yml (concurrency groups span a repository's
-    # workflows): cli-publish replaces archives left without checksums.txt,
-    # so two runs uploading to the same release at once could leave one
-    # run's archive beside the other's checksums.txt.
+    # One group per release, shared by promote.yml, promote-release.yml,
+    # publish-release.yml and release-train-assets.yml (concurrency groups
+    # span a repository's workflows): cli-publish replaces archives left
+    # without checksums.txt, so two runs uploading to the same release at
+    # once could leave one run's archive beside the other's checksums.txt.
     concurrency:
       group: grain-cli-assets-${{ needs.cli.outputs.version }}
       cancel-in-progress: false

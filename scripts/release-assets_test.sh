@@ -410,6 +410,9 @@ check "cli-publish fails on a release that does not exist rather than creating i
 fake RELEASE_CLI_SKIP_UNRELEASED=true bash "$assets" cli-publish v3.9.9 "$cli"
 check "RELEASE_CLI_SKIP_UNRELEASED warns of a missing release and skips it" \
   '[ "$status" = 0 ] && grep -q "::warning::.*no release v3.9.9" <<< "$out" && ! grep -qE "^(POST|PATCH|DELETE) " "$FAKE_LOG"'
+fake DRY_RUN=true bash "$assets" cli-publish v3.9.9 "$cli"
+check "a dry run with GITHUB_TOKEN plans the CLI upload when promote --dry-run left no release yet" \
+  '[ "$status" = 0 ] && [ "$(grep -c "would POST .*--upload" <<< "$out")" = 5 ] && ! grep -qE "^(POST|PATCH|DELETE) " "$FAKE_LOG"'
 
 echo "$((cases - failures)) of $cases passed"
 [ "$failures" = 0 ]
