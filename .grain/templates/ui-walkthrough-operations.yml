@@ -18,32 +18,37 @@ body: |
     Traverse every tab (Health, Logs, Sandboxes, Caches, Top, Pipeline,
     Metrics, Power), its scrolling on a narrow window and the
     phone's section list, and confirm each rides in the URL
-    (`/system/<tab>`) through reload and Back/Forward, and that the old
-    `/admin/logs`, `/sandboxes`, `/caches` and `/metrics?<query>` links
-    land on the matching tab with their query kept.
+    (`/system/<tab>`, with tabs tied to their tabpanel) through reload
+    and Back/Forward, and that the old `/admin/logs`, `/sandboxes`,
+    `/caches` and `/metrics?<query>` links land on the matching tab with
+    their query kept.
   - Health (System's default tab): the alerts the bell lists, each with
     its link; the config-repo backing state; the settings saved but not
     applied until a restart and the ones stored but not runnable, each
-    linking to and focusing its specific `#<field-id>` in Settings; the
-    GitHub API budget and idle-poll backoff panel; the `grain hostd`
-    readiness note when host CLI entries are unreachable or missing; and
-    the host-mode install notice when the install still needs migrating.
+    linking to and focusing its specific `#<field-id>` in Settings; live
+    sandbox overcommit status; the GitHub API budget and idle-poll
+    backoff panel; registered daemon health counters when present; the
+    `grain hostd` readiness note when host CLI entries are unreachable or
+    missing; and the host-mode install notice when the install still
+    needs migrating.
   - Sandboxes: host commitment and pressure, the sandbox budget and the
-    auto overcommit controller's live status, pool status, sandbox
-    lifetime and storage, agent and standing sandboxes listed above CI
-    sandboxes folded behind their `"CI sandboxes (N)"` summary row in the
-    live table (persisting its open/closed state across reloads),
-    persistent sandboxes (their running commit and last refresh, and the
-    empty state), health/error/empty states, resource trends, and
-    long-table scrolling.
+    auto overcommit controller's live status (with dated adjustment
+    timestamps in the deployment's time zone), pool status, sandbox
+    lifetime and storage (formatted in the deployment's time zone), agent
+    and standing sandboxes listed above CI sandboxes folded behind their
+    `"CI sandboxes (N)"` summary row in the live table (persisting its
+    open/closed state across reloads), persistent sandboxes (their
+    running commit and last refresh, and the empty state),
+    health/error/empty states, resource trends, and long-table scrolling.
   - Caches: the proxy and Actions caches, their entry and byte usage
     against ceiling, per-repository Actions rows, Refresh, and each named
     Flush control (against throwaway entries only), with its
     confirmation.
   - CI (`/ci`, from the rail): the active-sandboxes table collapsed to a
     summary and expanded, run filtering; open runs/jobs/steps/log output
-    from rows and from task links; exercise direct-link and reload,
-    including a run id the daemon no longer remembers; inspect
+    from rows (confirming each row's open control is named after its own
+    run) and from task links; exercise direct-link and reload, including
+    a run id the daemon no longer remembers; inspect
     cache/pending/running/success/failure/errored/skipped states, a
     shared CI fault and the task it is assigned to, Retry on a concluded
     run (every job, and failed jobs only, following to the run it
@@ -58,23 +63,36 @@ body: |
     inspect every section, the time windows and trends, the release
     notes panel, narrowing carried in the URL, the empty/loading/failure
     states, long values, and navigation into the underlying tasks.
-  - Settings → Upgrade (it left System for Settings; still check it
-    here, from the build stamp and the old `/system/upgrade` link): the
-    version display, the image the upgrade would pull and
-    choosing another, the upgrade check mode shown read-only with its
-    link to Settings → General, and the database panel. Never actually
-    upgrade; intercept only that boundary.
+  - Settings → Upgrade (from the build stamp and the old
+    `/system/upgrade` link): the loading spinner while status is read,
+    the `Now running` version display (falling back to `/api/config`'s
+    `version` when the upgrader has no ref file), externally managed mode
+    when `-disable-self-upgrade` is set (with optional management URL
+    link), searchable target picker and release notes (breaking-change
+    warnings included), discarded-RC and retracted-release warning
+    banners and target actions, the `Image source` card on image-mode
+    deployments (release-assets with registry fallback, release-assets
+    only with release repository and checksum summary, registry only, and
+    read-only badge when locked by flag/env), the image the upgrade would
+    pull and choosing another, the upgrade check mode shown read-only
+    with its link to Settings → General, and the read-only `Database
+    Backend` panel (`PostgreSQL` or `SQLite`, with offline-only migration
+    instructions and commands). Never actually upgrade; intercept only
+    that boundary.
   - Alerts bell (in the page header rail, and on a phone's bar): drive
     (or, where only a live boundary can cause them, intercept) the
     reconciler-down, failing config-repo sync, agent/connection pause
-    with its resume time, pipeline pause and manual mode, setup
-    (no git connection, no model connection, no repository), host
-    sandboxes and red-base-branch repair alerts. Verify their wording and
-    links, that "see all" opens System → Health, and that each clears
-    when its cause does. The only standing banners left are the
-    disconnected banner and the host-mode install notice: raise each,
-    confirm it sits above the rail and the page without covering them,
-    and that it clears.
+    with its resume time (including the date when not today), pipeline
+    pause and manual mode, setup (no git connection, no model connection,
+    no repository), host sandboxes and red-base-branch repair alerts
+    (confirming the repair alert opens the repair task). Verify their
+    wording and links, that "see all" opens System → Health, and that
+    each clears when its cause does. The only standing banners left are
+    the disconnected banner (raised both on failed polls and when the
+    daemon accepts or holds connections without answering, and clearing
+    without a reload once it answers again) and the host-mode
+    install notice: raise each, confirm it sits above the rail and the
+    page without covering them, and that it clears.
   - Stub the host, CI-execution, cache, upgrade and live-connection
     boundaries only where the demo lacks them, retaining the real Grain
     server and browser UI, and document each intercepted route.

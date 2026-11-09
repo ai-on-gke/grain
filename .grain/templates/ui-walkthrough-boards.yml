@@ -10,37 +10,50 @@ body: |
   ## Coverage
 
   - Open the Boards index (`/boards`) and the seeded boards
-    from the rail and from direct URLs; verify folders, ordering
-    (including dragging a board in a section below the first), counts,
-    narrowing, search and sort where offered, and Back/Forward/reload
-    behaviour.
+    from the rail and from direct URLs; verify folders (confirming
+    same-named boards in different folders carry distinct accessible
+    names), ordering (including dragging a board in a section below the
+    first), counts, narrowing, search and sort where offered,
+    Back/Forward/reload behaviour, and that a failed `/api/boards` fetch
+    explains why the boards could not be loaded rather than saying "No
+    boards yet".
   - Request a new board from the rail's create menu (New board) and from
-    the Boards index header, then inspect the resulting task or proposal, so the product's
-    asynchronous creation contract is verified rather than bypassed.
+    the Boards index header, then inspect the resulting task or proposal,
+    so the product's asynchronous creation contract is verified rather
+    than bypassed; confirm a viewer role lacking `tasks:write` is not
+    offered New board, Edit board, kanban/list drag reorder, or dashboard
+    Add panel / Keep.
   - List and kanban: open task detail from rows and cards, edit column
     definitions, move cards and columns through mouse and keyboard/tap
-    affordances, and verify that state and order persist. Confirm the
+    affordances (confirming move slots identify tasks by id rather than
+    title alone), and verify that state and order persist. Confirm the
     merge-queue column reads "Merging", blocked cards show the blocked
-    state oval, a held proposal's card carries its "held for approval"
-    chip, an imported issue's card carries its `imported` chip, and a
-    board with custom columns distinguishes "Asked to submit" from
-    "Asked for a reply" in its "in no column" summary when a column
-    collects only one of the two.
-  - Timeline and gantt: change range and lanes, inspect
-    bars/dependencies/today marker, open a task from a bar, and verify
-    that settings and URL survive a reload.
+    state oval, `keep_running` tasks carry their marker, a held proposal's
+    card carries its "held for approval" chip, an imported issue's card
+    carries its `imported` chip, and a board with custom columns
+    distinguishes "Asked to submit" from "Asked for a reply" in its "in
+    no column" summary when a column collects only one of the two.
+  - Timeline and gantt: change range and lanes (confirming the Asked lane
+    is ordered after Running), inspect bars/dependencies/today marker,
+    open a task from a bar, and verify that settings and URL survive a
+    reload.
   - Tree: open a `tree` board and verify tasks nest under the task that
     filed them, that the board's narrowing applies and survives a
     reload, and that a row opens task detail.
-  - Dashboard: exercise whole-board narrowing; configure, add/request,
-    reorder and open panels; verify panel-specific query scoping, links
-    to the underlying task lists, and loading/empty/error rendering.
+  - Dashboard: exercise whole-board narrowing (confirming Keep is not
+    offered on a throughput panel whose report the typed narrowing would
+    not change); configure, add/request, reorder and open panels; verify
+    panel-specific query scoping, links to the underlying task lists (and
+    that browser Back from a panel's Open or state count restores focus
+    to that link), and loading/empty/error rendering.
   - Report: change the time window (`?window=` in the URL) and press
     Refresh, inspect and reorder the report's measurement sections
     (throughput, latency, backlog, merges, prompts, tools, agents,
     sandboxes and checks, confirming silent sections are omitted),
     verify repo and query scoping, and follow task references and
-    backlog counts as real links into the underlying task lists.
+    backlog counts as real links into the underlying task lists
+    (confirming backlog chip counts match those lists and browser Back
+    restores focus to the originating link).
   - Exercise delete and confirmation only where the UI actually exposes
     it, and only against throwaway objects created in this run.
 
