@@ -1,0 +1,24 @@
+[
+  {
+    "id": "slow8000",
+    "desc": "every /api/ answer delayed 8000 ms: banner never rises over 120 s",
+    "ok": true,
+    "got": {
+      "flips": [],
+      "maxConfig": 1,
+      "configSent": 12,
+      "maxApi": 9
+    }
+  },
+  {
+    "id": "slow9500",
+    "desc": "every /api/ answer delayed 9500 ms: banner never rises over 120 s",
+    "ok": true,
+    "got": {
+      "flips": [],
+      "maxConfig": 1,
+      "configSent": 10,
+      "maxApi": 9
+    }
+  }
+]

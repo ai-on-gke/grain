@@ -167,6 +167,81 @@ describe("App resilience", () => {
     expect(screen.queryByText(/cannot be reached/i)).toBeNull();
   });
 
+  // docs/test-runs/2026-11-09-shell-liveness.md, finding 1: only the
+  // tick's config read had a timeout, so the tick's other reads stayed
+  // open on a silent daemon, a new set every tick. Over HTTP/1.1 a
+  // browser holds six connections to a host, and once those reads held
+  // them all the config read queued behind them, so a proxy answering
+  // new requests again never took the banner down. A failed tick now
+  // gives up on its own reads, and the background polls' are bounded.
+  it("gives up on the rest of a tick's reads when grain stops answering", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { default: realApi } = await vi.importActual("./api.js");
+    setupApi(initialTasks);
+    const base = api.getMockImplementation();
+    let hung = false;
+    const silent = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (path, init) =>
+          new Promise((_resolve, reject) => {
+            silent.push({ path, init });
+            init.signal?.addEventListener("abort", () =>
+              reject(new DOMException("aborted", "AbortError")),
+            );
+          }),
+      ),
+    );
+    const held = [
+      "/api/tasks",
+      "/api/config",
+      "/api/ci/runs",
+      "/api/console-sessions",
+      "/api/persistent-sandboxes",
+      "/api/base-branch-gates",
+      "/api/notifications",
+    ];
+    // The poll's own list read, not closedTasks.js's one-off closed-task
+    // query on the same path.
+    const isHeld = (path, h) =>
+      h === "/api/tasks" ? path === h : path.startsWith(h);
+    api.mockImplementation((p, opts) =>
+      hung && held.some((h) => isHeld(p, h)) ? realApi(p, opts) : base(p, opts),
+    );
+    render(<App />);
+    await runTimers();
+    expect(screen.getByText("Fix bug")).toBeInTheDocument();
+
+    hung = true;
+    // Long enough for the banner, the backoff, and the slower polls'
+    // (staging every 15 s, notifications every 30 s, gates every 60 s)
+    // own reads to have been asked more than once.
+    await runTimers(90_000);
+    expect(
+      screen.getByText(/accepted the connection but sent no answer/i),
+    ).toBeInTheDocument();
+    const open = (prefix) =>
+      silent.filter(
+        ({ path, init }) => isHeld(path, prefix) && !init.signal?.aborted,
+      );
+    for (const prefix of held) {
+      expect(
+        silent.filter(({ path }) => isHeld(path, prefix)).length,
+      ).toBeGreaterThan(0);
+      // Every one asked was either given up on or is the one in flight.
+      expect(open(prefix).length, prefix).toBeLessThanOrEqual(1);
+    }
+    // Given up on is not an error of its own: the tasks pane says what
+    // the banner says, not "aborted".
+    expect(screen.queryByText(/aborted/i)).toBeNull();
+
+    hung = false;
+    await runTimers(POLL_INTERVAL_MS * 12);
+    expect(screen.queryByText(/cannot be reached/i)).toBeNull();
+  });
+
   // grain/task-2258: the backoff spaces out the main poll through an
   // outage, but it must not keep the banner up once grain answers
   // again. The restart watch keeps asking every POLL_INTERVAL_MS, and

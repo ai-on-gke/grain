@@ -1,0 +1,21 @@
+PASS 2.1-route-post
+PASS 2.2-route-get
+PASS 2.3-settings-flag-exit
+PASS 2.4-settings-flag-msg
+PASS 2.5-demo-flag-exit
+PASS 2.6-demo-flag-msg
+PASS 3.1-post-grants
+PASS 3.2-post-capabilities
+PASS 3.3-post-capability-objects
+PASS 3.4-cli-create
+PASS 3.5-propose-grants
+PASS 3.6-propose-capabilities
+PASS 3.7-template
+PASS 3.8-schedule
+PASS 3.9-methods-list-api-refs-to-ui
+PASS 4.1-live-bare-label
+PASS 5.1-post-grants-object
+PASS 5.2-post-capabilities-object
+PASS 5.3-propose-grants-object
+PASS 5.4-propose-capabilities-object
+fails=0

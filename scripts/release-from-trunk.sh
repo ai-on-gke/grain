@@ -1315,4 +1315,8 @@ push "refs/tags/$new_rc" || die "could not push $new_rc; candidate was not moved
 push --force "$lkg:refs/heads/candidate" || die "pushed $new_rc, but could not move candidate onto it"
 emit rc_tag "$new_rc"
 images rc "$new_rc" || die "cut $new_rc and moved candidate, but could not publish its images: run \`release-images.sh rc $new_rc\`"
-say "phase 2: $new_rc is cut and candidate is on it; nightly.yml qualifies it (Stage 1), then grain/release-qualification (Stage 2)"
+if [ "$qualification_app" = none ]; then
+  say "phase 2: $new_rc is cut and candidate is on it; nightly.yml qualifies it (Stage 1) alone: RELEASE_QUALIFICATION_APP=none skips grain/release-qualification (Stage 2)"
+else
+  say "phase 2: $new_rc is cut and candidate is on it; nightly.yml qualifies it (Stage 1), then grain/release-qualification (Stage 2)"
+fi

@@ -1,0 +1,19 @@
+exclusive: exit 2: grain demo: -config-change and -external-config-repo are mutually exclusive: an external config repository takes no proposals here
+PASS exclusive flags exit 2
+PASS exclusive flags say why
+PASS INT: started with every flag
+PASS INT: throwaway dir exists while serving (/tmp/grain-demo-2528796131)
+[1]+  Interrupt               "$GRAIN" demo -config-change -github-sim -fake-ci -git-proxy -secrets-store -reconcile 2s -addr 127.0.0.1:$PORT > "$log" 2>&1 < /dev/null
+INT: exit status 130
+PASS INT: process gone
+PASS INT: throwaway dir removed
+PASS INT: UI port closed
+PASS INT: git proxy port 34917 closed
+PASS TERM: started with every flag
+PASS TERM: throwaway dir exists while serving (/tmp/grain-demo-305813230)
+[1]+  Terminated              "$GRAIN" demo -config-change -github-sim -fake-ci -git-proxy -secrets-store -reconcile 2s -addr 127.0.0.1:$PORT > "$log" 2>&1 < /dev/null
+TERM: exit status 143
+PASS TERM: process gone
+PASS TERM: throwaway dir removed
+PASS TERM: UI port closed
+PASS TERM: git proxy port 40953 closed

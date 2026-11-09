@@ -835,6 +835,10 @@ type Result struct {
 	// Transcript as well, and a count in the run's tool census under
 	// StopCensusTool. Empty is every run that ended where it meant to.
 	StopBlocks []StopBlock
+	// Usage is what the run spent at its provider, as its CLI reported
+	// it (TokenUsage), summed over every exec of the CLI the run made.
+	// Zero for a CLI that reports nothing; set on a partial Result too.
+	Usage TokenUsage
 }
 
 // Framework drives one agent run to completion, using only the tools its

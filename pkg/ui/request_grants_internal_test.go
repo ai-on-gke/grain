@@ -16,6 +16,7 @@ package ui
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -106,5 +107,54 @@ func TestUpdateTaskRequestGrants(t *testing.T) {
 		if err := json.Unmarshal([]byte(body), &req); err == nil {
 			t.Errorf("UpdateTaskRequest accepted %s", body)
 		}
+	}
+}
+
+// TestCreateTaskRequestCapabilitiesReadAsProposeTaskReadsThem is
+// docs/test-runs/2026-11-09-access-forms-api-grants.md F1:
+// capabilities: [{capability: read-issues}] on POST /api/tasks was
+// refused with Go's own "json: cannot unmarshal object into Go struct
+// field .Alias.capabilities of type string", where the identical
+// propose_task call says a bare name is written as a plain string. Both
+// now read the list with model.CapabilityEntries.
+func TestCreateTaskRequestCapabilitiesReadAsProposeTaskReadsThem(t *testing.T) {
+	var req CreateTaskRequest
+	err := json.Unmarshal([]byte(`{"title":"x","capabilities":[{"capability":"read-issues"}]}`), &req)
+	if err == nil {
+		t.Fatalf("a bare name in a {capability} object was accepted: %v", req.Capabilities)
+	}
+	var validation *ValidationError
+	if !errors.As(err, &validation) {
+		t.Errorf("err = %v (%T), want a validation error", err, err)
+	}
+	want := `capabilities: capability grant "read-issues": a name that is not a capability reference (https://...) is written as a plain string, "read-issues", not as a {capability, with} object`
+	if err.Error() != want {
+		t.Errorf("err = %q\nwant %q", err, want)
+	}
+
+	req = CreateTaskRequest{}
+	if err := json.Unmarshal([]byte(`{"capabilities":[
+		"self-debug",
+		{"capability":"https://grain.dev/capabilities/api#ci-read","with":{"repo":"acme/widgets"}}
+	]}`), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Capabilities == nil || !reflect.DeepEqual(*req.Capabilities, []string{"self-debug", `https://grain.dev/capabilities/api#ci-read={"repo":"acme/widgets"}`}) {
+		t.Errorf("Capabilities = %v", req.Capabilities)
+	}
+
+	// An empty list is still an opinion (no capabilities), and an absent
+	// or null one still none (the deployment's defaults).
+	for body, wantNil := range map[string]bool{`{"capabilities":[]}`: false, `{"capabilities":null}`: true, `{}`: true} {
+		req = CreateTaskRequest{}
+		if err := json.Unmarshal([]byte(body), &req); err != nil {
+			t.Fatalf("%s: %v", body, err)
+		}
+		if (req.Capabilities == nil) != wantNil || (!wantNil && len(*req.Capabilities) != 0) {
+			t.Errorf("%s: Capabilities = %v, want nil=%v and empty", body, req.Capabilities, wantNil)
+		}
+	}
+	if err := json.Unmarshal([]byte(`{"capabilities":"self-debug"}`), &req); err == nil || !errors.As(err, &validation) {
+		t.Errorf("a capabilities string: err = %v, want a validation error", err)
 	}
 }

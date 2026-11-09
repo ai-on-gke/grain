@@ -1,0 +1,9 @@
+PUT /api/github-tokens/default -> 200 {"enabled":true,"dir":"/home/debian/walk2/v310-postgres/seed/secrets/github","tokens":[{"name":"default","app":false,"default":true,"connections":[""],"capabili
+POST /api/repos -> 200 {"configured":true,"pollInterval":"10s","pollIntervalDefault":"10s","maxWorkers":10,"maxMergesPerRepo":1,"maxAutoSubmitDepth":2,"maxAutoSubmitFanOut":5,"geminiE
+POST /api/tasks -> 201 {"id":"2","title":"disabled grant","description":"store-upgrade seed","author":"debian","authorKind":"human","state":"proposed","repo":"acme/widgets","branch":"
+POST /api/tasks -> 201 {"id":"3","title":"parked on github-sandbox","description":"store-upgrade seed","author":"debian","authorKind":"human","state":"proposed","repo":"acme/widgets",
+POST /api/tasks/3/approve -> 200 {"id":"3","title":"parked on github-sandbox","description":"store-upgrade seed","author":"debian","authorKind":"human","state":"queued","repo":"acme/widgets","b
+POST /api/templates -> 201 {"id":"template-1","name":"disabled-template","title":"disabled template","description":"seed","repo":"acme/widgets","autoMerge":false,"capabilities":[],"create
+POST /api/schedules -> 201 {"id":"sched-1","title":"nightly","description":"seed","repo":"acme/widgets","autoMerge":false,"autoApproveProposals":false,"capabilities":[],"recurrence":{"kin
+task=2,3 template=template-1 schedule=sched-1
+seeded: 12 statements

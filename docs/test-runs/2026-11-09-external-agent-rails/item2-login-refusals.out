@@ -1,0 +1,74 @@
+PASS	2.0	seed context minted with the documented form	0
+## 2.1: grain login http://127.0.0.1:4291 --auth access-code --issue-token --token-stdin --name c1 (stdin: piped)
+{"error":{"code":"token_stdin_issue_token","message":"--token-stdin and --issue-token do not combine: --token-stdin stores the secret it reads; to mint a gma_ token with an access code, pass the code with -token: grain -token CODE login http://127.0.0.1:4291 --issue-token","fix":"grain -token CODE login http://127.0.0.1:4291 --issue-token"}}
+
+PASS	2.1.exit	--issue-token --token-stdin (code piped): exit	2
+PASS	2.1.code	--issue-token --token-stdin (code piped): code	{"error":{"code":"token_stdin_issue_token","message":"--token-stdin and --issue-token do not combine: --token-stdin stores the secret it reads; to mint a gma_ token with an access code, pass the code with -token: grain -token CODE login http://127.0.0.1:4291 --issue-token","fix":"grain -token CODE l
+PASS	2.1.cfg	--issue-token --token-stdin (code piped): config untouched	850ef88b4b3ff794
+## 2.2: grain login http://127.0.0.1:4291 --issue-token --token-stdin --name c2 (stdin: piped)
+{"error":{"code":"token_stdin_issue_token","message":"--token-stdin and --issue-token do not combine: --token-stdin stores the secret it reads; to mint a gma_ token with an access code, pass the code with -token: grain -token CODE login http://127.0.0.1:4291 --issue-token","fix":"grain -token CODE login http://127.0.0.1:4291 --issue-token"}}
+
+PASS	2.2.exit	--issue-token --token-stdin (gma_ piped): exit	2
+PASS	2.2.code	--issue-token --token-stdin (gma_ piped): code	{"error":{"code":"token_stdin_issue_token","message":"--token-stdin and --issue-token do not combine: --token-stdin stores the secret it reads; to mint a gma_ token with an access code, pass the code with -token: grain -token CODE login http://127.0.0.1:4291 --issue-token","fix":"grain -token CODE l
+PASS	2.2.cfg	--issue-token --token-stdin (gma_ piped): config untouched	850ef88b4b3ff794
+## 2.3: grain login http://127.0.0.1:4291 --token-stdin --name c3 (stdin: tty)
+{"error":{"code":"usage","message":"--token-stdin read nothing from stdin"}}
+
+PASS	2.3.exit	--token-stdin with a TTY stdin: exit	2
+PASS	2.3.code	--token-stdin with a TTY stdin: code	{"error":{"code":"usage","message":"--token-stdin read nothing from stdin"}} 
+PASS	2.3.cfg	--token-stdin with a TTY stdin: config untouched	850ef88b4b3ff794
+## 2.4: grain login http://127.0.0.1:4291 --issue-token --auth iap --name c4 (stdin: empty)
+{"error":{"code":"usage","message":"--auth \"iap\": this grain build has no such credential source"}}
+
+PASS	2.4.exit	--issue-token --auth iap: exit	2
+PASS	2.4.code	--issue-token --auth iap: code	{"error":{"code":"usage","message":"--auth \"iap\": this grain build has no such credential source"}} 
+PASS	2.4.cfg	--issue-token --auth iap: config untouched	850ef88b4b3ff794
+## 2.5: grain login http://127.0.0.1:4291 --token-stdin --name c5 (stdin: piped)
+{"error":{"code":"usage","message":"stdin did not hold a gma_ token; pass --auth access-code to store an access code"}}
+
+PASS	2.5.exit	--token-stdin with a non-gma_ secret and no --auth access-code: exit	2
+PASS	2.5.code	--token-stdin with a non-gma_ secret and no --auth access-code: code	{"error":{"code":"usage","message":"stdin did not hold a gma_ token; pass --auth access-code to store an access code"}} 
+PASS	2.5.cfg	--token-stdin with a non-gma_ secret and no --auth access-code: config untouched	850ef88b4b3ff794
+## 2.6: grain login http://127.0.0.1:4291 --token-stdin --name c6 (stdin: empty)
+{"error":{"code":"usage","message":"--token-stdin read nothing from stdin"}}
+
+PASS	2.6.exit	--token-stdin with an empty stdin: exit	2
+PASS	2.6.code	--token-stdin with an empty stdin: code	{"error":{"code":"usage","message":"--token-stdin read nothing from stdin"}} 
+PASS	2.6.cfg	--token-stdin with an empty stdin: config untouched	850ef88b4b3ff794
+## 2.7: grain login --refresh --token-stdin --name seeded (stdin: piped)
+{"error":{"code":"token_stdin_refresh","message":"--token-stdin and --refresh do not combine: --refresh re-mints the context's own token, --token-stdin stores the one stdin holds; pass one of them","fix":"grain login --refresh"}}
+
+PASS	2.7.exit	--refresh --token-stdin: exit	2
+PASS	2.7.code	--refresh --token-stdin: code	{"error":{"code":"token_stdin_refresh","message":"--token-stdin and --refresh do not combine: --refresh re-mints the context's own token, --token-stdin stores the one stdin holds; pass one of them","fix":"grain login --refresh"}} 
+PASS	2.7.cfg	--refresh --token-stdin: config untouched	850ef88b4b3ff794
+## 2.8: grain login http://127.0.0.1:4291 --scope-set grain/viewer --name c8 (stdin: empty)
+{"error":{"code":"needs_issue_token","message":"--scope-set only shape the token --issue-token mints; add --issue-token","fix":"grain login http://127.0.0.1:4291 --issue-token --scope-set ..."}}
+
+PASS	2.8.exit	--scope-set without --issue-token: exit	2
+PASS	2.8.code	--scope-set without --issue-token: code	{"error":{"code":"needs_issue_token","message":"--scope-set only shape the token --issue-token mints; add --issue-token","fix":"grain login http://127.0.0.1:4291 --issue-token --scope-set ..."}} 
+PASS	2.8.cfg	--scope-set without --issue-token: config untouched	850ef88b4b3ff794
+## 2.9: grain login http://127.0.0.1:4291 --issue-token --expires soon --name c9 (stdin: empty)
+{"error":{"code":"usage","message":"--expires \"soon\": give a duration such as 30d or 12h"}}
+
+PASS	2.9.exit	--expires garbage: exit	2
+PASS	2.9.code	--expires garbage: code	{"error":{"code":"usage","message":"--expires \"soon\": give a duration such as 30d or 12h"}} 
+PASS	2.9.cfg	--expires garbage: config untouched	850ef88b4b3ff794
+## 2.10: grain login 127.0.0.1:4291 --name c10 (stdin: empty)
+{"error":{"code":"usage","message":"grain login needs the deployment's URL (https://grain.example.com), not \"127.0.0.1:4291\""}}
+
+PASS	2.10.exit	a URL with no scheme: exit	2
+PASS	2.10.code	a URL with no scheme: code	{"error":{"code":"usage","message":"grain login needs the deployment's URL (https://grain.example.com), not \"127.0.0.1:4291\""}} 
+PASS	2.10.cfg	a URL with no scheme: config untouched	850ef88b4b3ff794
+## 2.8b: grain -token CODE_REDACTED login http://127.0.0.1:4291 --repos acme/widgets --expires 7d --name c8b (stdin: empty)
+{"error":{"code":"needs_issue_token","message":"--expires, --repos only shape the token --issue-token mints; add --issue-token","fix":"grain login http://127.0.0.1:4291 --issue-token --expires --repos ..."}}
+
+PASS	2.8b.exit	--repos and --expires without --issue-token: exit	2
+PASS	2.8b.code	--repos and --expires without --issue-token: code	{"error":{"code":"needs_issue_token","message":"--expires, --repos only shape the token --issue-token mints; add --issue-token","fix":"grain login http://127.0.0.1:4291 --issue-token --expires --repos ..."}} 
+PASS	2.8b.cfg	--repos and --expires without --issue-token: config untouched	850ef88b4b3ff794
+PASS	2.11	config still the seeded one after all refusals	850ef88b4b3ff794
+PASS	2.12	login --help: --token-stdin says not with --issue-token	Usage of login:   -auth string     	how to sign in: access-code, or a credential source this build registers   -expires string     	how long --issue-token's token lasts (30d, 12h, ...) (default "30d")   -issue-token     	mint a scoped gma_ token for this workstation and keep it   -name string     	t
+PASS	2.13	grain -token CODE login <url> --issue-token: exit 0	0 signed in to http://127.0.0.1:4291 as context doc (external-token) 
+PASS	2.14	the stored credential is a gma_ token	gma_REDACTED
+PASS	2.15	grain --context doc list with the minted token: exit 0	0
+PASS	2.16	the daemon saw the gma_ credential	external:
+FAILS=0

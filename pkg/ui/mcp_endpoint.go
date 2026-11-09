@@ -1293,6 +1293,10 @@ func (s *Server) submitTaskTool() mcp.Tool {
 					"items":       map[string]any{"type": "string"},
 					"description": "Explicit capability IDs for the task (omit to use deployment defaults).",
 				},
+				"grants": map[string]any{
+					"type":        "array",
+					"description": "Unified grants, each a grant string or a {capability, with} object, as POST /api/tasks takes them (repo#target, repo#read and repo#write included). A request that also names the same kind the old way -- capabilities, reads, writes, or repo/base/no_repo beside repo#target -- is refused.",
+				},
 				"depends_on": map[string]any{
 					"type":        "array",
 					"items":       map[string]any{"type": "string"},
@@ -1385,6 +1389,12 @@ func (s *Server) submitTaskTool() mcp.Tool {
 				if caps, ok := stringSliceArg(rawCaps); ok {
 					body["capabilities"] = caps
 				}
+			}
+			// grants is forwarded as sent, so POST /api/tasks decodes it --
+			// and refuses a mixed request -- exactly as it would from REST
+			// or grain_invoke, rather than the task being filed without it.
+			if rawGrants, exists := args["grants"]; exists && rawGrants != nil {
+				body["grants"] = rawGrants
 			}
 			if rawDeps, exists := args["depends_on"]; exists && rawDeps != nil {
 				if deps, ok := stringSliceArg(rawDeps); ok {
