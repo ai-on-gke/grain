@@ -292,4 +292,30 @@ func TestEscalatedCapabilitiesTreatsBareAliasesAndCanonicalGrantsConsistently(t 
 			}
 		}
 	}
+
+	// 5. Person-only non-reference grants escalate regardless of Via (including
+	// GrantByDefault and GrantByDirective), matching UncoveredCapabilityRefs on
+	// person-only reference grants.
+	for _, cap := range []string{"self-upgrade", "api:self-upgrade", "https://grain.dev/capabilities/api#self-upgrade"} {
+		want := model.StoredGrantSpelling(cap)
+		p := model.Task{ID: "parent", Target: &repo, AutoMerge: true, Grants: label("api:self-upgrade")}
+		for _, via := range []model.GrantSource{model.GrantByDefault, model.GrantByDirective} {
+			c := model.Task{ID: "child", Target: &repo, Grants: []model.Grant{{Capability: cap, Via: via}}}
+			if got := model.EscalatedCapabilities(c, p); !slices.Equal(got, []string{want}) {
+				t.Errorf("person-only %s (%s) EscalatedCapabilities = %v, want [%s]", cap, via, got, want)
+			}
+			if got := model.AgentEscalatedCapabilities(c, p); !slices.Equal(got, []string{want}) {
+				t.Errorf("person-only %s (%s) AgentEscalatedCapabilities = %v, want [%s]", cap, via, got, want)
+			}
+			asked, seeded := model.SeededEscalations(c, []string{want})
+			if via == model.GrantByDefault && (!slices.Equal(seeded, []string{want}) || len(asked) != 0) {
+				t.Errorf("SeededEscalations(%s, default) = asked %v, seeded %v; want seeded [%s]", cap, asked, seeded, want)
+			}
+		}
+	}
+	for _, padded := range []string{" priority-dispatch ", " durable "} {
+		if !model.IsPersonOnlyGrant(padded) {
+			t.Errorf("IsPersonOnlyGrant(%q) = false, want true", padded)
+		}
+	}
 }

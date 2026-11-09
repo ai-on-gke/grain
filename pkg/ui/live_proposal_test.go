@@ -440,6 +440,31 @@ func TestSessionProposalAskingForACapabilityItsSessionLacksWaitsForAPerson(t *te
 	if !strings.Contains(filed.Description, "`"+model.GrainHostExecGrant+"`") {
 		t.Errorf("body = %q, want a note naming self-repair", filed.Description)
 	}
+
+	// Even when a repository's default_capabilities seeds a non-reference
+	// person-only grant (self-upgrade -> api:self-upgrade), a queueing
+	// director session must not auto-queue the proposal.
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:                repo,
+		DefaultCapabilities: []string{"self-upgrade"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seededPersonOnly, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "targets repo with person-only default", Description: "d",
+		Repo: repo.String(), ProposedBy: session.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seededPersonOnly.State != model.StateProposed || seededPersonOnly.AutoMerge {
+		t.Errorf("session proposal with person-only default: state=%s autoMerge=%v, want proposed and autoMerge=false",
+			seededPersonOnly.State, seededPersonOnly.AutoMerge)
+	}
+	if !strings.Contains(seededPersonOnly.Description, "`api:self-upgrade`") {
+		t.Errorf("body = %q, want escalation note naming api:self-upgrade", seededPersonOnly.Description)
+	}
 }
 
 func TestSessionProposalIsQueuedWhenTheDeploymentSaysThatSessionMay(t *testing.T) {

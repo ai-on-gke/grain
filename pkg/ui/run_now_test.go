@@ -727,6 +727,30 @@ func TestRunNowByAnAgentDoesNotApproveADangerousAPIGrantItHolds(t *testing.T) {
 	if stored, err := store.GetTask(ctx, proposal.ID); err != nil || stored.Approval != nil {
 		t.Fatalf("approval = %+v, err = %v; want it left for a person", stored.Approval, err)
 	}
+
+	// The same refusal applies when the dangerous api grant arrived via
+	// DefaultCapabilities (GrantByDefault) rather than explicit capabilities.
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:                repo,
+		DefaultCapabilities: []string{"self-upgrade"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seededProposal, err := c.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "carries a dangerous default scope", Description: "waits for a person",
+		Repo: repo.String(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.RunNow(agentCtx, seededProposal.ID)
+	if !errors.As(err, &forbidden) || !strings.Contains(err.Error(), "api:self-upgrade") {
+		t.Fatalf("RunNow by an agent on a task with default api:self-upgrade: err = %v, want a refusal naming it", err)
+	}
+	if stored, err := store.GetTask(ctx, seededProposal.ID); err != nil || stored.Approval != nil {
+		t.Fatalf("approval = %+v, err = %v; want it left for a person", stored.Approval, err)
+	}
 }
 
 // Over the agent API (X-Grain-Acting-Task), the acting task is already

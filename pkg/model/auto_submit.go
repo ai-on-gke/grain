@@ -281,19 +281,23 @@ func escalatedCapabilities(child, parent Task, labelOnly bool) []string {
 		if IsCapabilityRef(g.Capability) || listed[g.Capability] {
 			continue
 		}
-		if labelOnly {
-			if g.Via != GrantByLabel {
-				continue
-			}
-		} else if g.Via == GrantByDefault {
-			continue
-		}
 		// A dangerous api scope, or priority-dispatch, is a person's to
 		// grant, never an agent's (IsPersonOnlyGrant, docs/agent-api.md):
-		// a proposal asking for one is an escalation even when its
-		// proposer holds it.
-		if nonRefGrantCovered(g.Capability, held, parent.Grants) && !IsPersonOnlyGrant(g.Capability) {
-			continue
+		// a child carrying one -- even seeded as a default -- is an
+		// escalation whether or not its proposer holds it, matching
+		// UncoveredCapabilityRefs on person-only reference grants and
+		// ProposalEscalations (director-capabilities.spec.md §4.2).
+		if !IsPersonOnlyGrant(g.Capability) {
+			if labelOnly {
+				if g.Via != GrantByLabel {
+					continue
+				}
+			} else if g.Via == GrantByDefault {
+				continue
+			}
+			if nonRefGrantCovered(g.Capability, held, parent.Grants) {
+				continue
+			}
 		}
 		listed[g.Capability] = true
 		out = append(out, g.Capability)
@@ -355,7 +359,8 @@ func CapabilityEscalationNote(proposer string, caps []string) string {
 // into those child's proposer named in its own call (asked) and those
 // child carries only because this deployment or its repo seeds every new
 // task with them (seeded, GrantByDefault). Only a capability reference
-// can be in seeded: a named default is never an escalation at all.
+// or a person-only grant can be in seeded: any other named default is
+// never an escalation at all.
 //
 // The two are told apart because they are different things to approve.
 // "This proposal asked for X" is false of a seeded default, and the
@@ -379,7 +384,7 @@ func isSeededGrant(grants []Grant, capability string) bool {
 	want, wantRef := recordedCapabilityGrant(capability)
 	found := false
 	for _, g := range grants {
-		match := g.Capability == capability
+		match := StoredGrantSpelling(g.Capability) == capability
 		if !match && wantRef {
 			if got, ok := recordedCapabilityGrant(g.Capability); ok {
 				match = RecordedCapabilityGrant(got) == RecordedCapabilityGrant(want)
