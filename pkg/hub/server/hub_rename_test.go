@@ -40,12 +40,12 @@ func TestSanitizeProxyRequestSendsTheAssertionUnderBothNames(t *testing.T) {
 }
 
 // A connecting daemon's credential is read under either name.
-func TestExtractRegistryTokenReadsBothHeaderNames(t *testing.T) {
+func TestExtractHubTokenReadsBothHeaderNames(t *testing.T) {
 	for _, h := range []string{"X-Grain-Hub-Token", "X-Grain-Registry-Token"} {
 		r := httptest.NewRequest("GET", "/api/entries/a/connect", nil)
 		r.Header.Set(h, "grc_abc")
-		if got := ExtractRegistryToken(r); got != "grc_abc" {
-			t.Errorf("ExtractRegistryToken(%s) = %q", h, got)
+		if got := ExtractHubToken(r); got != "grc_abc" {
+			t.Errorf("ExtractHubToken(%s) = %q", h, got)
 		}
 	}
 }

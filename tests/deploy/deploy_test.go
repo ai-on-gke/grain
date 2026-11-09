@@ -3551,7 +3551,7 @@ func TestEveryBaseImageIsPinnedByDigest(t *testing.T) {
 	}
 }
 
-func TestRegistryDockerfileStampsVersionAndExcludesBuildCA(t *testing.T) {
+func TestHubDockerfileStampsVersionAndExcludesBuildCA(t *testing.T) {
 	df := read(t, "Dockerfile.hub")
 	contains(t, df, "github.com/ai-on-gke/grain/pkg/version.Release=${RELEASE}")
 	contains(t, df, "github.com/ai-on-gke/grain/pkg/version.Edition=${EDITION}")

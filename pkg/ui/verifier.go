@@ -152,8 +152,8 @@ func HasActiveVerifier(ctx context.Context, name string) bool {
 	return false
 }
 
-func registryVerifierEnabled(ctx context.Context) bool {
-	return webauth.EffectiveRegistryConfig(ctx).Enabled()
+func hubVerifierEnabled(ctx context.Context) bool {
+	return webauth.EffectiveHubConfig(ctx).Enabled()
 }
 
 // activeVerifiers returns the verifiers active for ctx in evaluation order.
@@ -165,26 +165,26 @@ func registryVerifierEnabled(ctx context.Context) bool {
 // RegisterIdentityVerifier.
 func activeVerifiers(ctx context.Context) []IdentityVerifier {
 	explicit := registeredVerifiersSnapshot()
-	var hasExplicitIAP, hasExplicitRegistry bool
+	var hasExplicitIAP, hasExplicitHub bool
 	for _, v := range explicit {
 		switch v.Name() {
 		case string(AuthMethodIAP):
 			hasExplicitIAP = true
-		case string(AuthMethodRegistry):
-			hasExplicitRegistry = true
+		case string(AuthMethodHub):
+			hasExplicitHub = true
 		}
 	}
 	includeIAP := !hasExplicitIAP && iapAudienceFor(ctx) != ""
-	includeRegistry := !hasExplicitRegistry && registryVerifierEnabled(ctx)
-	if !includeIAP && !includeRegistry {
+	includeHub := !hasExplicitHub && hubVerifierEnabled(ctx)
+	if !includeIAP && !includeHub {
 		return explicit
 	}
 	out := make([]IdentityVerifier, 0, 2+len(explicit))
 	if includeIAP {
 		out = append(out, defaultIAPVerifier)
 	}
-	if includeRegistry {
-		out = append(out, defaultRegistryVerifier)
+	if includeHub {
+		out = append(out, defaultHubVerifier)
 	}
 	out = append(out, explicit...)
 	return out
@@ -258,61 +258,61 @@ func (v *iapVerifier) Verify(r *http.Request) (VerifiedIdentity, bool, error) {
 	}, true, nil
 }
 
-// RegistryVerifierOption configures a registry IdentityVerifier created by NewRegistryVerifier.
-type RegistryVerifierOption = webauth.RegistryVerifierOption
+// HubVerifierOption configures a registry IdentityVerifier created by NewHubVerifier.
+type HubVerifierOption = webauth.HubVerifierOption
 
-// WithRegistryValidator overrides JWT validation on a registry IdentityVerifier.
-func WithRegistryValidator(v RegistryValidator) RegistryVerifierOption {
-	return webauth.WithRegistryValidator(v)
+// WithHubValidator overrides JWT validation on a registry IdentityVerifier.
+func WithHubValidator(v HubValidator) HubVerifierOption {
+	return webauth.WithHubValidator(v)
 }
 
-// WithRegistryAudience pins an expected single-URL audience on a registry
+// WithHubAudience pins an expected single-URL audience on a registry
 // IdentityVerifier, taking precedence over request/package defaults.
-func WithRegistryAudience(audience string) RegistryVerifierOption {
-	return webauth.WithRegistryAudience(audience)
+func WithHubAudience(audience string) HubVerifierOption {
+	return webauth.WithHubAudience(audience)
 }
 
-// WithRegistryIssuer pins the expected JWT issuer on a registry IdentityVerifier.
-func WithRegistryIssuer(issuer string) RegistryVerifierOption {
-	return webauth.WithRegistryIssuer(issuer)
+// WithHubIssuer pins the expected JWT issuer on a registry IdentityVerifier.
+func WithHubIssuer(issuer string) HubVerifierOption {
+	return webauth.WithHubIssuer(issuer)
 }
 
-// WithRegistryKeysURL pins the JWKS endpoint URL on a registry IdentityVerifier.
-func WithRegistryKeysURL(keysURL string) RegistryVerifierOption {
-	return webauth.WithRegistryKeysURL(keysURL)
+// WithHubKeysURL pins the JWKS endpoint URL on a registry IdentityVerifier.
+func WithHubKeysURL(keysURL string) HubVerifierOption {
+	return webauth.WithHubKeysURL(keysURL)
 }
 
-// WithRegistryVerifierHTTPClient pins an HTTP client for fetching JWKS keys on
+// WithHubVerifierHTTPClient pins an HTTP client for fetching JWKS keys on
 // a registry IdentityVerifier.
-func WithRegistryVerifierHTTPClient(client *http.Client) RegistryVerifierOption {
-	return webauth.WithRegistryVerifierHTTPClient(client)
+func WithHubVerifierHTTPClient(client *http.Client) HubVerifierOption {
+	return webauth.WithHubVerifierHTTPClient(client)
 }
 
-type registryVerifier struct {
-	inner *webauth.RegistryVerifier
+type hubVerifier struct {
+	inner *webauth.HubVerifier
 }
 
-var defaultRegistryVerifier IdentityVerifier = &registryVerifier{inner: webauth.NewRegistryVerifier()}
+var defaultHubVerifier IdentityVerifier = &hubVerifier{inner: webauth.NewHubVerifier()}
 
-// NewRegistryVerifier constructs an IdentityVerifier for grain-registry
+// NewHubVerifier constructs an IdentityVerifier for grain-registry
 // (X-Grain-Registry-Assertion).
-func NewRegistryVerifier(opts ...RegistryVerifierOption) IdentityVerifier {
-	return &registryVerifier{inner: webauth.NewRegistryVerifier(opts...)}
+func NewHubVerifier(opts ...HubVerifierOption) IdentityVerifier {
+	return &hubVerifier{inner: webauth.NewHubVerifier(opts...)}
 }
 
-func (v *registryVerifier) Name() string {
-	return string(AuthMethodRegistry)
+func (v *hubVerifier) Name() string {
+	return string(AuthMethodHub)
 }
 
-func (v *registryVerifier) Headers() []string {
+func (v *hubVerifier) Headers() []string {
 	return webauth.HubAssertionHeaders
 }
 
-func (v *registryVerifier) AccessCodeWins() bool {
+func (v *hubVerifier) AccessCodeWins() bool {
 	return false
 }
 
-func (v *registryVerifier) Verify(r *http.Request) (VerifiedIdentity, bool, error) {
+func (v *hubVerifier) Verify(r *http.Request) (VerifiedIdentity, bool, error) {
 	if r == nil {
 		return VerifiedIdentity{}, false, nil
 	}
@@ -396,8 +396,8 @@ func verifyCallerNow(r *http.Request) callerVerification {
 	if r == nil {
 		return callerVerification{}
 	}
-	if isRegistryTunnelRequest(r) {
-		return verifyRegistryTunnelCaller(r)
+	if isHubTunnelRequest(r) {
+		return verifyHubTunnelCaller(r)
 	}
 	for _, v := range activeVerifiers(r.Context()) {
 		headers := v.Headers()
@@ -419,7 +419,7 @@ func verifyCallerNow(r *http.Request) callerVerification {
 	if raw := strings.TrimSpace(r.Header.Get(IAPAssertionHeader)); raw != "" {
 		logRefusedAssertion(raw, "", errors.New("no IAP audience is configured (GRAIN_IAP_AUDIENCE / -ui-iap-audience), so no assertion can be verified"))
 	} else if raw := webauth.HubAssertion(r.Header); raw != "" {
-		logRefusedVerifierHeader(string(AuthMethodRegistry), HubAssertionHeader, errors.New("no registry verifier is configured (-ui-hub-issuer, -ui-hub-audience, -ui-hub-keys-url), so no assertion can be verified"))
+		logRefusedVerifierHeader(string(AuthMethodHub), HubAssertionHeader, errors.New("no registry verifier is configured (-ui-hub-issuer, -ui-hub-audience, -ui-hub-keys-url), so no assertion can be verified"))
 	} else {
 		logIgnoredIdentityHeader(r)
 	}
@@ -493,44 +493,44 @@ func verifyWithVerifier(r *http.Request, v IdentityVerifier, header string) (cal
 	}, true
 }
 
-type registryTunnelContextKey struct{}
+type hubTunnelContextKey struct{}
 
-func withRegistryTunnelRequest(ctx context.Context) context.Context {
-	return context.WithValue(ctx, registryTunnelContextKey{}, true)
+func withHubTunnelRequest(ctx context.Context) context.Context {
+	return context.WithValue(ctx, hubTunnelContextKey{}, true)
 }
 
-func isRegistryTunnelRequest(r *http.Request) bool {
+func isHubTunnelRequest(r *http.Request) bool {
 	if r == nil {
 		return false
 	}
-	ok, _ := r.Context().Value(registryTunnelContextKey{}).(bool)
+	ok, _ := r.Context().Value(hubTunnelContextKey{}).(bool)
 	return ok
 }
 
-// verifyRegistryTunnelCaller verifies r strictly through the active "registry"
+// verifyHubTunnelCaller verifies r strictly through the active "registry"
 // IdentityVerifier (X-Grain-Registry-Assertion). Missing assertions or
 // unconfigured verifiers fail closed.
-func verifyRegistryTunnelCaller(r *http.Request) callerVerification {
+func verifyHubTunnelCaller(r *http.Request) callerVerification {
 	if r == nil {
 		return callerVerification{
 			present: true,
-			method:  AuthMethodRegistry,
-			err:     errors.New(errVerifierRequired(string(AuthMethodRegistry))),
+			method:  AuthMethodHub,
+			err:     errors.New(errVerifierRequired(string(AuthMethodHub))),
 		}
 	}
 	var regVerifier IdentityVerifier
 	for _, v := range activeVerifiers(r.Context()) {
-		if v.Name() == string(AuthMethodRegistry) {
+		if v.Name() == string(AuthMethodHub) {
 			regVerifier = v
 			break
 		}
 	}
 	if regVerifier == nil {
 		err := errors.New("no registry IdentityVerifier is configured (-ui-hub-issuer, -ui-hub-audience, -ui-hub-keys-url)")
-		logRefusedVerifierHeader(string(AuthMethodRegistry), RegistryAssertionHeader, err)
+		logRefusedVerifierHeader(string(AuthMethodHub), RegistryAssertionHeader, err)
 		return callerVerification{
 			present: true,
-			method:  AuthMethodRegistry,
+			method:  AuthMethodHub,
 			err:     err,
 		}
 	}
@@ -539,8 +539,8 @@ func verifyRegistryTunnelCaller(r *http.Request) callerVerification {
 		return callerVerification{
 			present:  true,
 			verifier: regVerifier,
-			method:   AuthMethodRegistry,
-			err:      errors.New(errVerifierRequired(string(AuthMethodRegistry))),
+			method:   AuthMethodHub,
+			err:      errors.New(errVerifierRequired(string(AuthMethodHub))),
 		}
 	}
 	cv, matched := verifyWithVerifier(r, regVerifier, header)
@@ -548,8 +548,8 @@ func verifyRegistryTunnelCaller(r *http.Request) callerVerification {
 		return callerVerification{
 			present:  true,
 			verifier: regVerifier,
-			method:   AuthMethodRegistry,
-			err:      errors.New(errVerifierRequired(string(AuthMethodRegistry))),
+			method:   AuthMethodHub,
+			err:      errors.New(errVerifierRequired(string(AuthMethodHub))),
 		}
 	}
 	cv.accessCodeWins = false

@@ -568,7 +568,7 @@ func (p *ConsentDelegationPolicy) AuthorizeOnBehalfOf(ctx context.Context, servi
 // Signer signs short-lived ES256 registry assertions (`X-Grain-Registry-Assertion`)
 // and exposes the public verification keys as a RFC 7517 JWKS document.
 type Signer interface {
-	SignAssertion(ctx context.Context, claims RegistryClaims) (string, error)
+	SignAssertion(ctx context.Context, claims HubClaims) (string, error)
 	JWKS(ctx context.Context) (*JSONWebKeySet, error)
 }
 

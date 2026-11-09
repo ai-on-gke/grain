@@ -31,7 +31,7 @@ import (
 // `delegation_policy: consent` reads: the service accounts registered to act
 // on people's behalf, and each person's consent to one of them.
 
-const registryDelegatingAppsUsage = `usage: grain hub delegating-apps <subcommand> [args]   (hub admins only)
+const hubDelegatingAppsUsage = `usage: grain hub delegating-apps <subcommand> [args]   (hub admins only)
 
   list     [-hub-url <url>]
   create   [-hub-url <url>] -principal <service-account-email> [-display-name <text>]
@@ -46,7 +46,7 @@ people who grant it consent (auth.delegation_policy: consent). -principal takes
 the bare service-account email or serviceAccount:<email>; the hub stores
 the serviceAccount: form either way.`
 
-const registryGrantsUsage = `usage: grain hub grants <subcommand> [args]
+const hubGrantsUsage = `usage: grain hub grants <subcommand> [args]
 
   list     [-hub-url <url>] [-include-revoked]
   create   [-hub-url <url>] -entry <name|*>... [-access <read|write>] [-ttl <duration>] <app>
@@ -64,41 +64,41 @@ func isHelpWord(s string) bool {
 	return false
 }
 
-func cmdRegistryDelegatingApps(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+func cmdHubDelegatingApps(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	if len(args) == 0 || isHelpWord(args[0]) {
-		fmt.Println(registryDelegatingAppsUsage)
+		fmt.Println(hubDelegatingAppsUsage)
 		return nil
 	}
 	sub, subArgs := args[0], args[1:]
 	switch sub {
 	case "list", "ls":
-		return cmdRegistryDelegatingAppsList(ctx, c, out, subArgs)
+		return cmdHubDelegatingAppsList(ctx, c, out, subArgs)
 	case "create":
-		return cmdRegistryDelegatingAppsCreate(ctx, c, out, subArgs)
+		return cmdHubDelegatingAppsCreate(ctx, c, out, subArgs)
 	case "disable":
-		return cmdRegistryDelegatingAppsSetDisabled(ctx, c, out, subArgs, true)
+		return cmdHubDelegatingAppsSetDisabled(ctx, c, out, subArgs, true)
 	case "enable":
-		return cmdRegistryDelegatingAppsSetDisabled(ctx, c, out, subArgs, false)
+		return cmdHubDelegatingAppsSetDisabled(ctx, c, out, subArgs, false)
 	default:
-		return fmt.Errorf("unknown registry delegating-apps subcommand %q\n%s", sub, registryDelegatingAppsUsage)
+		return fmt.Errorf("unknown registry delegating-apps subcommand %q\n%s", sub, hubDelegatingAppsUsage)
 	}
 }
 
-func cmdRegistryGrants(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+func cmdHubGrants(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	if len(args) == 0 || isHelpWord(args[0]) {
-		fmt.Println(registryGrantsUsage)
+		fmt.Println(hubGrantsUsage)
 		return nil
 	}
 	sub, subArgs := args[0], args[1:]
 	switch sub {
 	case "list", "ls":
-		return cmdRegistryGrantsList(ctx, c, out, subArgs)
+		return cmdHubGrantsList(ctx, c, out, subArgs)
 	case "create":
-		return cmdRegistryGrantsCreate(ctx, c, out, subArgs)
+		return cmdHubGrantsCreate(ctx, c, out, subArgs)
 	case "revoke":
-		return cmdRegistryGrantsRevoke(ctx, c, out, subArgs)
+		return cmdHubGrantsRevoke(ctx, c, out, subArgs)
 	default:
-		return fmt.Errorf("unknown registry grants subcommand %q\n%s", sub, registryGrantsUsage)
+		return fmt.Errorf("unknown registry grants subcommand %q\n%s", sub, hubGrantsUsage)
 	}
 }
 
@@ -122,9 +122,9 @@ func formatTTLSeconds(sec int64) string {
 	return d.String()
 }
 
-func cmdRegistryDelegatingAppsList(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+func cmdHubDelegatingAppsList(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain hub delegating-apps list", flag.ContinueOnError)
-	tf := bindRegistryTargetFlags(fs)
+	tf := bindHubTargetFlags(fs)
 	rest, err := parseArgs(fs, args)
 	if err != nil {
 		return err
@@ -157,9 +157,9 @@ func cmdRegistryDelegatingAppsList(ctx context.Context, c *ui.HTTPClient, out *p
 	return nil
 }
 
-func cmdRegistryDelegatingAppsCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+func cmdHubDelegatingAppsCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain hub delegating-apps create", flag.ContinueOnError)
-	tf := bindRegistryTargetFlags(fs)
+	tf := bindHubTargetFlags(fs)
 	principal := fs.String("principal", "", "service account the app calls as: an email, or serviceAccount:<email>")
 	displayName := fs.String("display-name", "", "name people see when granting consent (defaults to the app name)")
 	description := fs.String("description", "", "what the app does with the access it is granted")
@@ -211,13 +211,13 @@ func cmdRegistryDelegatingAppsCreate(ctx context.Context, c *ui.HTTPClient, out 
 	return nil
 }
 
-func cmdRegistryDelegatingAppsSetDisabled(ctx context.Context, c *ui.HTTPClient, out *printer, args []string, disabled bool) error {
+func cmdHubDelegatingAppsSetDisabled(ctx context.Context, c *ui.HTTPClient, out *printer, args []string, disabled bool) error {
 	verb := "enable"
 	if disabled {
 		verb = "disable"
 	}
 	fs := flag.NewFlagSet("grain hub delegating-apps "+verb, flag.ContinueOnError)
-	tf := bindRegistryTargetFlags(fs)
+	tf := bindHubTargetFlags(fs)
 	rest, err := parseArgs(fs, args)
 	if err != nil {
 		return err
@@ -250,9 +250,9 @@ func printDelegationGrant(g api.DelegationGrant) {
 		g.ID, g.App, g.Access, strings.Join(g.Entries, ","), state)
 }
 
-func cmdRegistryGrantsList(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+func cmdHubGrantsList(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain hub grants list", flag.ContinueOnError)
-	tf := bindRegistryTargetFlags(fs)
+	tf := bindHubTargetFlags(fs)
 	includeRevoked := fs.Bool("include-revoked", false, "also list grants you have revoked")
 	rest, err := parseArgs(fs, args)
 	if err != nil {
@@ -286,9 +286,9 @@ func cmdRegistryGrantsList(ctx context.Context, c *ui.HTTPClient, out *printer, 
 	return nil
 }
 
-func cmdRegistryGrantsCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+func cmdHubGrantsCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain hub grants create", flag.ContinueOnError)
-	tf := bindRegistryTargetFlags(fs)
+	tf := bindHubTargetFlags(fs)
 	var entries multiStringFlag
 	fs.Var(&entries, "entry", `entry the app may reach on your behalf, or "*" for every entry you can reach (repeatable)`)
 	access := fs.String("access", "", "read or write (defaults to the app's max access)")
@@ -333,9 +333,9 @@ func cmdRegistryGrantsCreate(ctx context.Context, c *ui.HTTPClient, out *printer
 	return nil
 }
 
-func cmdRegistryGrantsRevoke(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+func cmdHubGrantsRevoke(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain hub grants revoke", flag.ContinueOnError)
-	tf := bindRegistryTargetFlags(fs)
+	tf := bindHubTargetFlags(fs)
 	rest, err := parseArgs(fs, args)
 	if err != nil {
 		return err

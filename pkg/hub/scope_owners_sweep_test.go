@@ -30,7 +30,7 @@ import (
 // authorize, so /api/route stops returning them as primary, while it keeps
 // authorized ones and does not demote anything on a GroupResolver outage.
 func TestScopeOwnersStartupSweepDemotesPrePolicyPrimaries(t *testing.T) {
-	dsn := startEphemeralPostgresForRegistryTest(t)
+	dsn := startEphemeralPostgresForHubTest(t)
 	ctx := context.Background()
 
 	st, err := store.Open(ctx, dsn, store.DefaultThresholds())

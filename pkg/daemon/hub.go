@@ -53,19 +53,19 @@ const (
 	HubTokenEnv   = "GRAIN_HUB_TOKEN"
 	HubConnectEnv = "GRAIN_HUB_CONNECT"
 
-	defaultRegistryRequestTimeout = 10 * time.Second
-	defaultRegistryMinInterval    = 2 * time.Second
-	defaultRegistryMaxInterval    = 5 * time.Minute
-	defaultRegistryBaseBackoff    = 1 * time.Second
-	defaultRegistryMaxBackoff     = 60 * time.Second
-	defaultRegistryJitterFraction = 0.15
+	defaultHubRequestTimeout = 10 * time.Second
+	defaultHubMinInterval    = 2 * time.Second
+	defaultHubMaxInterval    = 5 * time.Minute
+	defaultHubBaseBackoff    = 1 * time.Second
+	defaultHubMaxBackoff     = 60 * time.Second
+	defaultHubJitterFraction = 0.15
 )
 
-// InferRegistryHostKind returns the configured connected host_kind when set,
+// InferHubHostKind returns the configured connected host_kind when set,
 // or derives one from the daemon's sandbox backend / runtime environment.
-func (c Config) InferRegistryHostKind() api.HostKind {
-	if c.Registry.HostKind != "" {
-		return c.Registry.HostKind
+func (c Config) InferHubHostKind() api.HostKind {
+	if c.Hub.HostKind != "" {
+		return c.Hub.HostKind
 	}
 	if c.K8sSandboxes || c.K8sGranuleSandboxes || InKubernetesPod() {
 		return api.HostKindKubernetes
@@ -80,14 +80,14 @@ func (c Config) InferRegistryHostKind() api.HostKind {
 // its expiration time (or zero time if the JWT's own exp claim should be read).
 type OIDCTokenFunc func(ctx context.Context, audience string) (string, time.Time, error)
 
-// RegistryTunnelConnector is the seam for the outbound multiplexed proxy tunnel
+// HubTunnelConnector is the seam for the outbound multiplexed proxy tunnel
 // (`/api/entries/<name>/connect` via api.ConnectMux).
-type RegistryTunnelConnector interface {
+type HubTunnelConnector interface {
 	RunTunnel(ctx context.Context, cfg api.ConnectConfig) error
 }
 
-// RegistryManagerOptions configures a RegistryManager.
-type RegistryManagerOptions struct {
+// HubManagerOptions configures a HubManager.
+type HubManagerOptions struct {
 	Store             *model.Store
 	Secrets           *secrets.Store
 	LiveConfig        func() Config
@@ -98,7 +98,7 @@ type RegistryManagerOptions struct {
 	HTTPClient        *http.Client
 	AllowInsecureHTTP bool
 	OIDCTokenSource   OIDCTokenFunc
-	TunnelConnector   RegistryTunnelConnector
+	TunnelConnector   HubTunnelConnector
 
 	BaseInterval   time.Duration
 	MinInterval    time.Duration
@@ -113,13 +113,13 @@ type RegistryManagerOptions struct {
 	Logf           func(string, ...any)
 }
 
-// RegistryManager self-registers a grain daemon as a connected entry in a
+// HubManager self-registers a grain daemon as a connected entry in a
 // grain hub and keeps its entry fresh via a background heartbeat loop
 // (design/design/hub.design.md, "Connected entries").
 //
 // It runs in its own goroutine and never blocks or slows the reconcile loop.
-type RegistryManager struct {
-	opts RegistryManagerOptions
+type HubManager struct {
+	opts HubManagerOptions
 
 	wakeCh chan struct{}
 	stepMu sync.Mutex
@@ -127,8 +127,8 @@ type RegistryManager struct {
 	mu                       sync.Mutex
 	registered               bool
 	syncedMetaKey            string
-	syncedCfg                model.RegistryConfig
-	registryStatus           api.EntryStatus
+	syncedCfg                model.HubConfig
+	hubStatus                api.EntryStatus
 	lastHeartbeatAt          *time.Time
 	lastAttemptAt            *time.Time
 	nextHeartbeatAt          *time.Time
@@ -136,7 +136,7 @@ type RegistryManager struct {
 	consecutiveFailures      int
 	lastError                string
 	scopeConflicts           []api.ScopeConflict
-	lastObservedCfg          model.RegistryConfig
+	lastObservedCfg          model.HubConfig
 	lastObservedRepos        []string
 
 	credMu                 sync.Mutex
@@ -150,47 +150,47 @@ type RegistryManager struct {
 
 	tunnelMu        sync.Mutex
 	tunnelRunCtx    context.Context
-	tunnelConnector RegistryTunnelConnector
+	tunnelConnector HubTunnelConnector
 	tunnelKey       string
 	tunnelCancel    context.CancelFunc
 	tunnelDone      chan struct{}
 }
 
-// NewRegistryManager builds a RegistryManager from opts.
-func NewRegistryManager(opts RegistryManagerOptions) *RegistryManager {
+// NewHubManager builds a HubManager from opts.
+func NewHubManager(opts HubManagerOptions) *HubManager {
 	if opts.BaseInterval <= 0 {
 		opts.BaseInterval = api.DefaultHeartbeatInterval
 	}
 	if opts.MinInterval <= 0 {
-		if opts.BaseInterval < defaultRegistryMinInterval {
+		if opts.BaseInterval < defaultHubMinInterval {
 			opts.MinInterval = opts.BaseInterval / 2
 			if opts.MinInterval <= 0 {
 				opts.MinInterval = time.Millisecond
 			}
 		} else {
-			opts.MinInterval = defaultRegistryMinInterval
+			opts.MinInterval = defaultHubMinInterval
 		}
 	}
 	if opts.MaxInterval <= 0 {
-		opts.MaxInterval = defaultRegistryMaxInterval
+		opts.MaxInterval = defaultHubMaxInterval
 	}
 	if opts.BaseBackoff <= 0 {
-		opts.BaseBackoff = defaultRegistryBaseBackoff
+		opts.BaseBackoff = defaultHubBaseBackoff
 	}
 	if opts.MaxBackoff <= 0 {
-		opts.MaxBackoff = defaultRegistryMaxBackoff
+		opts.MaxBackoff = defaultHubMaxBackoff
 	}
 	if opts.RequestTimeout <= 0 {
-		opts.RequestTimeout = defaultRegistryRequestTimeout
+		opts.RequestTimeout = defaultHubRequestTimeout
 	}
 	if opts.JitterFraction == 0 {
-		opts.JitterFraction = defaultRegistryJitterFraction
+		opts.JitterFraction = defaultHubJitterFraction
 	}
 	if opts.Version == nil {
 		opts.Version = version.Get
 	}
 	if opts.Health == nil {
-		opts.Health = defaultRegistryHealth
+		opts.Health = defaultHubHealth
 	}
 	if opts.OIDCTokenSource == nil {
 		opts.OIDCTokenSource = defaultOIDCTokenSource
@@ -201,14 +201,14 @@ func NewRegistryManager(opts RegistryManagerOptions) *RegistryManager {
 	if opts.Logf == nil {
 		opts.Logf = log.Printf
 	}
-	return &RegistryManager{
+	return &HubManager{
 		opts:            opts,
 		wakeCh:          make(chan struct{}, 1),
 		tunnelConnector: opts.TunnelConnector,
 	}
 }
 
-func defaultRegistryHealth() (api.HealthState, string) {
+func defaultHubHealth() (api.HealthState, string) {
 	if ReconcilerDown.Load() {
 		return api.HealthDegraded, "reconcile loop is down"
 	}
@@ -217,7 +217,7 @@ func defaultRegistryHealth() (api.HealthState, string) {
 
 // SetTunnelConnector attaches or replaces the outbound proxy tunnel connector
 // seam reserved for `/api/entries/<name>/connect` (design/design/hub.design.md).
-func (m *RegistryManager) SetTunnelConnector(tc RegistryTunnelConnector) {
+func (m *HubManager) SetTunnelConnector(tc HubTunnelConnector) {
 	if m == nil {
 		return
 	}
@@ -230,8 +230,8 @@ func (m *RegistryManager) SetTunnelConnector(tc RegistryTunnelConnector) {
 	}
 }
 
-// HasTunnelConnector reports whether a RegistryTunnelConnector is attached.
-func (m *RegistryManager) HasTunnelConnector() bool {
+// HasTunnelConnector reports whether a HubTunnelConnector is attached.
+func (m *HubManager) HasTunnelConnector() bool {
 	if m == nil {
 		return false
 	}
@@ -242,7 +242,7 @@ func (m *RegistryManager) HasTunnelConnector() bool {
 
 // InvalidateOIDCCache clears any cached OIDC ID token so the next heartbeat or
 // tunnel dial mints a fresh token.
-func (m *RegistryManager) InvalidateOIDCCache() {
+func (m *HubManager) InvalidateOIDCCache() {
 	if m == nil {
 		return
 	}
@@ -251,7 +251,7 @@ func (m *RegistryManager) InvalidateOIDCCache() {
 
 // Trigger wakes the background heartbeat loop asynchronously. Safe to call from
 // any goroutine, HTTP handler, or reconcile tick.
-func (m *RegistryManager) Trigger() {
+func (m *HubManager) Trigger() {
 	if m == nil {
 		return
 	}
@@ -263,7 +263,7 @@ func (m *RegistryManager) Trigger() {
 
 // NotifyStoreConfig triggers an immediate sync when grain_config's registry
 // settings or target repository list changed on a reconcile tick.
-func (m *RegistryManager) NotifyStoreConfig(reg model.RegistryConfig, targetRepos []string) {
+func (m *HubManager) NotifyStoreConfig(reg model.HubConfig, targetRepos []string) {
 	if m == nil {
 		return
 	}
@@ -281,19 +281,19 @@ func (m *RegistryManager) NotifyStoreConfig(reg model.RegistryConfig, targetRepo
 
 // TriggerHeartbeat runs one registration/heartbeat step synchronously and
 // returns the resulting snapshot (used by POST /api/registry/heartbeat and CLI).
-func (m *RegistryManager) TriggerHeartbeat(ctx context.Context) (model.RegistrySnapshot, error) {
+func (m *HubManager) TriggerHeartbeat(ctx context.Context) (model.HubSnapshot, error) {
 	if m == nil {
-		return model.RegistrySnapshot{State: model.RegistryStateDisabled}, nil
+		return model.HubSnapshot{State: model.HubStateDisabled}, nil
 	}
 	_, stepErr := m.step(ctx)
 	snap, snapErr := m.Snapshot(ctx)
 	if stepErr != nil {
-		return snap, redactRegistryError(stepErr)
+		return snap, redactHubError(stepErr)
 	}
-	return snap, redactRegistryError(snapErr)
+	return snap, redactHubError(snapErr)
 }
 
-func redactRegistryError(err error) error {
+func redactHubError(err error) error {
 	if err == nil {
 		return nil
 	}
@@ -307,7 +307,7 @@ func redactRegistryError(err error) error {
 
 // Run executes the background self-registration and heartbeat loop until ctx is
 // cancelled.
-func (m *RegistryManager) Run(ctx context.Context) {
+func (m *HubManager) Run(ctx context.Context) {
 	if m == nil {
 		return
 	}
@@ -347,20 +347,20 @@ func (m *RegistryManager) Run(ctx context.Context) {
 	}
 }
 
-// Snapshot builds a point-in-time RegistrySnapshot combining the latest
+// Snapshot builds a point-in-time HubSnapshot combining the latest
 // heartbeat state with current store-derived scopes and task counts.
-func (m *RegistryManager) Snapshot(ctx context.Context) (model.RegistrySnapshot, error) {
+func (m *HubManager) Snapshot(ctx context.Context) (model.HubSnapshot, error) {
 	if m == nil {
-		return model.RegistrySnapshot{State: model.RegistryStateDisabled}, nil
+		return model.HubSnapshot{State: model.HubStateDisabled}, nil
 	}
 	inputs, err := m.loadInputs(ctx)
 	if err != nil {
-		return model.RegistrySnapshot{}, err
+		return model.HubSnapshot{}, err
 	}
 
 	m.mu.Lock()
 	registered := m.registered
-	regStatus := m.registryStatus
+	regStatus := m.hubStatus
 	lastHB := cloneTimePtr(m.lastHeartbeatAt)
 	lastAttempt := cloneTimePtr(m.lastAttemptAt)
 	nextHB := cloneTimePtr(m.nextHeartbeatAt)
@@ -371,28 +371,28 @@ func (m *RegistryManager) Snapshot(ctx context.Context) (model.RegistrySnapshot,
 	m.mu.Unlock()
 
 	enabled := inputs.regCfg.Enabled()
-	state := model.RegistryStateDisabled
+	state := model.HubStateDisabled
 	if enabled {
 		switch {
 		case lastErr != "" || failures > 0:
-			state = model.RegistryStateError
+			state = model.HubStateError
 		case lastHB == nil:
-			state = model.RegistryStateConnecting
+			state = model.HubStateConnecting
 		case len(conflicts) > 0 || regStatus == api.StatusDegraded || inputs.health != api.HealthOK:
-			state = model.RegistryStateDegraded
+			state = model.HubStateDegraded
 		default:
-			state = model.RegistryStateConnected
+			state = model.HubStateConnected
 		}
 	}
 
-	return model.RegistrySnapshot{
+	return model.HubSnapshot{
 		Enabled:                  enabled,
 		State:                    state,
 		Config:                   inputs.regCfg,
 		EffectiveHostKind:        inputs.hostKind,
 		TokenConfigured:          inputs.tokenConfigured,
 		CredentialSource:         inputs.credentialSource,
-		RegistryStatus:           regStatus,
+		HubStatus:                regStatus,
 		Registered:               registered,
 		LastHeartbeatAt:          lastHB,
 		LastAttemptAt:            lastAttempt,
@@ -411,9 +411,9 @@ func (m *RegistryManager) Snapshot(ctx context.Context) (model.RegistrySnapshot,
 	}, nil
 }
 
-type registryStepInputs struct {
+type hubStepInputs struct {
 	daemonCfg          Config
-	regCfg             model.RegistryConfig
+	regCfg             model.HubConfig
 	hostKind           api.HostKind
 	tokenConfigured    bool
 	credentialSource   string
@@ -423,10 +423,10 @@ type registryStepInputs struct {
 	healthDetail       string
 	activeTasks        int
 	awaitingReplyTasks int
-	scopes             []model.RegistryAdvertisedScope
+	scopes             []model.HubAdvertisedScope
 }
 
-func (m *RegistryManager) loadInputs(ctx context.Context) (registryStepInputs, error) {
+func (m *HubManager) loadInputs(ctx context.Context) (hubStepInputs, error) {
 	var dcfg Config
 	if m.opts.LiveConfig != nil {
 		dcfg = m.opts.LiveConfig()
@@ -439,25 +439,25 @@ func (m *RegistryManager) loadInputs(ctx context.Context) (registryStepInputs, e
 		var err error
 		stored, err = m.opts.Store.GetConfig(ctx)
 		if err != nil {
-			return registryStepInputs{}, fmt.Errorf("reading registry configuration: %w", err)
+			return hubStepInputs{}, fmt.Errorf("reading registry configuration: %w", err)
 		}
 		repoConfigs, err = m.opts.Store.ListRepoConfigs(ctx)
 		if err != nil {
-			return registryStepInputs{}, fmt.Errorf("listing repository configs: %w", err)
+			return hubStepInputs{}, fmt.Errorf("listing repository configs: %w", err)
 		}
-		active, awaiting, err = m.opts.Store.RegistryTaskCounts(ctx)
+		active, awaiting, err = m.opts.Store.HubTaskCounts(ctx)
 		if err != nil {
-			return registryStepInputs{}, fmt.Errorf("counting registry tasks: %w", err)
+			return hubStepInputs{}, fmt.Errorf("counting registry tasks: %w", err)
 		}
 	}
 
-	regCfg := dcfg.Registry
+	regCfg := dcfg.Hub
 	var targetRepos []string
 	if stored != nil {
-		regCfg = stored.Registry
+		regCfg = stored.Hub
 		targetRepos = stored.TargetRepos
 	}
-	dcfg.Registry = regCfg
+	dcfg.Hub = regCfg
 	m.mu.Lock()
 	m.lastObservedCfg = regCfg
 	m.lastObservedRepos = slices.Clone(targetRepos)
@@ -475,7 +475,7 @@ func (m *RegistryManager) loadInputs(ctx context.Context) (registryStepInputs, e
 		localRepoStrings = append(localRepoStrings, r.String())
 	}
 
-	scopes := model.DeriveRegistryScopes(targetRepos, localRepoStrings, stateRepo, repoConfigs, regCfg.Scopes)
+	scopes := model.DeriveHubScopes(targetRepos, localRepoStrings, stateRepo, repoConfigs, regCfg.Scopes)
 	vInfo := m.opts.Version()
 	health, healthDetail := m.opts.Health()
 	if health == "" {
@@ -484,10 +484,10 @@ func (m *RegistryManager) loadInputs(ctx context.Context) (registryStepInputs, e
 
 	tokConfigured, credSource := m.inspectCredential(dcfg, regCfg)
 
-	return registryStepInputs{
+	return hubStepInputs{
 		daemonCfg:          dcfg,
 		regCfg:             regCfg,
-		hostKind:           dcfg.InferRegistryHostKind(),
+		hostKind:           dcfg.InferHubHostKind(),
 		tokenConfigured:    tokConfigured,
 		credentialSource:   credSource,
 		grainVersion:       vInfo.Release,
@@ -500,7 +500,7 @@ func (m *RegistryManager) loadInputs(ctx context.Context) (registryStepInputs, e
 	}, nil
 }
 
-func (m *RegistryManager) step(parentCtx context.Context) (time.Duration, error) {
+func (m *HubManager) step(parentCtx context.Context) (time.Duration, error) {
 	m.stepMu.Lock()
 	defer m.stepMu.Unlock()
 
@@ -517,8 +517,8 @@ func (m *RegistryManager) step(parentCtx context.Context) (time.Duration, error)
 		m.mu.Lock()
 		m.registered = false
 		m.syncedMetaKey = ""
-		m.syncedCfg = model.RegistryConfig{}
-		m.registryStatus = ""
+		m.syncedCfg = model.HubConfig{}
+		m.hubStatus = ""
 		m.nextHeartbeatAt = nil
 		m.heartbeatIntervalSeconds = 0
 		m.consecutiveFailures = 0
@@ -534,13 +534,13 @@ func (m *RegistryManager) step(parentCtx context.Context) (time.Duration, error)
 	m.lastAttemptAt = &attemptAt
 	m.mu.Unlock()
 
-	normCfg, err := model.NormalizeRegistryConfig(inputs.regCfg, m.opts.AllowInsecureHTTP)
+	normCfg, err := model.NormalizeHubConfig(inputs.regCfg, m.opts.AllowInsecureHTTP)
 	if err != nil {
 		return m.recordFailure(err), err
 	}
 	inputs.regCfg = normCfg
-	inputs.daemonCfg.Registry = normCfg
-	inputs.hostKind = inputs.daemonCfg.InferRegistryHostKind()
+	inputs.daemonCfg.Hub = normCfg
+	inputs.hostKind = inputs.daemonCfg.InferHubHostKind()
 
 	tokenSource := func(callCtx context.Context) (string, error) {
 		tok, _, resolveErr := m.resolveCredential(callCtx, inputs.daemonCfg, inputs.regCfg)
@@ -558,7 +558,7 @@ func (m *RegistryManager) step(parentCtx context.Context) (time.Duration, error)
 		BaseURL:           inputs.regCfg.URL,
 		HTTPClient:        m.opts.HTTPClient,
 		AllowInsecureHTTP: m.opts.AllowInsecureHTTP,
-		UserAgent:         registryUserAgent(inputs.grainVersion),
+		UserAgent:         hubUserAgent(inputs.grainVersion),
 	}
 	if strings.HasPrefix(initialTok, api.RegistrationTokenPrefix) {
 		clientCfg.RegistrationToken = initialTok
@@ -577,7 +577,7 @@ func (m *RegistryManager) step(parentCtx context.Context) (time.Duration, error)
 	// In OIDC mode, ensure the connected entry exists and keep owner-managed
 	// catalog metadata (display_name, purpose, host_kind, listed, owner_group,
 	// tags) in sync via PATCH / POST /api/entries.
-	if inputs.regCfg.EffectiveAuthMode() == model.RegistryAuthOIDC {
+	if inputs.regCfg.EffectiveAuthMode() == model.HubAuthOIDC {
 		m.mu.Lock()
 		alreadySynced := m.syncedMetaKey == metaKey
 		prevCfg := m.syncedCfg
@@ -645,9 +645,9 @@ func (m *RegistryManager) step(parentCtx context.Context) (time.Duration, error)
 	wasFailing := m.consecutiveFailures > 0
 	m.registered = true
 	if resp.Status != "" {
-		m.registryStatus = resp.Status
+		m.hubStatus = resp.Status
 	} else {
-		m.registryStatus = api.StatusOnline
+		m.hubStatus = api.StatusOnline
 	}
 	m.lastHeartbeatAt = &now
 	m.nextHeartbeatAt = &next
@@ -665,7 +665,7 @@ func (m *RegistryManager) step(parentCtx context.Context) (time.Duration, error)
 	return delay, nil
 }
 
-func (m *RegistryManager) syncConnectedEntryMetadata(ctx context.Context, client *api.Client, cfg, prevCfg model.RegistryConfig, inferredHostKind api.HostKind, scopes []api.ScopeInput) error {
+func (m *HubManager) syncConnectedEntryMetadata(ctx context.Context, client *api.Client, cfg, prevCfg model.HubConfig, inferredHostKind api.HostKind, scopes []api.ScopeInput) error {
 	sameTarget := prevCfg.URL == cfg.URL && strings.EqualFold(prevCfg.Entry, cfg.Entry)
 	var upd api.UpdateEntryRequest
 	if cfg.DisplayName != "" || (sameTarget && prevCfg.DisplayName != "") {
@@ -705,7 +705,7 @@ func (m *RegistryManager) syncConnectedEntryMetadata(ctx context.Context, client
 	return err
 }
 
-func (m *RegistryManager) createConnectedEntry(ctx context.Context, client *api.Client, cfg model.RegistryConfig, hostKind api.HostKind, scopes []api.ScopeInput) error {
+func (m *HubManager) createConnectedEntry(ctx context.Context, client *api.Client, cfg model.HubConfig, hostKind api.HostKind, scopes []api.ScopeInput) error {
 	listed := cfg.Listed
 	_, err := client.CreateEntry(ctx, api.CreateEntryRequest{
 		Name:        cfg.Entry,
@@ -726,7 +726,7 @@ func (m *RegistryManager) createConnectedEntry(ctx context.Context, client *api.
 	return err
 }
 
-func (m *RegistryManager) recordFailure(err error) time.Duration {
+func (m *HubManager) recordFailure(err error) time.Duration {
 	now := m.opts.Now().UTC()
 	redactedErr, _ := (*redact.Redactor)(nil).Text(err.Error())
 
@@ -750,7 +750,7 @@ func (m *RegistryManager) recordFailure(err error) time.Duration {
 	return backoff
 }
 
-func (m *RegistryManager) computeBackoff(failures int, apiErr *api.APIError) time.Duration {
+func (m *HubManager) computeBackoff(failures int, apiErr *api.APIError) time.Duration {
 	delay := m.opts.BaseBackoff
 	for i := 1; i < failures && delay < m.opts.MaxBackoff; i++ {
 		delay *= 2
@@ -769,7 +769,7 @@ func (m *RegistryManager) computeBackoff(failures int, apiErr *api.APIError) tim
 	return delay
 }
 
-func (m *RegistryManager) clampInterval(serverInterval time.Duration) time.Duration {
+func (m *HubManager) clampInterval(serverInterval time.Duration) time.Duration {
 	d := serverInterval
 	if d <= 0 {
 		d = m.opts.BaseInterval
@@ -783,7 +783,7 @@ func (m *RegistryManager) clampInterval(serverInterval time.Duration) time.Durat
 	return d
 }
 
-func (m *RegistryManager) jitter(d time.Duration) time.Duration {
+func (m *HubManager) jitter(d time.Duration) time.Duration {
 	if d <= 0 || m.opts.JitterFraction < 0 {
 		return d
 	}
@@ -796,16 +796,16 @@ func (m *RegistryManager) jitter(d time.Duration) time.Duration {
 	return out
 }
 
-func (m *RegistryManager) inspectCredential(dcfg Config, regCfg model.RegistryConfig) (bool, string) {
-	if regCfg.EffectiveAuthMode() == model.RegistryAuthOIDC {
+func (m *HubManager) inspectCredential(dcfg Config, regCfg model.HubConfig) (bool, string) {
+	if regCfg.EffectiveAuthMode() == model.HubAuthOIDC {
 		return true, "oidc"
 	}
 	if m.opts.Secrets != nil {
-		if ok, err := m.opts.Secrets.Has(secrets.RegistryRegistrationTokenSecret, secrets.AgentCredentialKey); err == nil && ok {
+		if ok, err := m.opts.Secrets.Has(secrets.HubRegistrationTokenSecret, secrets.AgentCredentialKey); err == nil && ok {
 			return true, "secret"
 		}
 	}
-	if path := strings.TrimSpace(dcfg.RegistryTokenFile); path != "" {
+	if path := strings.TrimSpace(dcfg.HubTokenFile); path != "" {
 		if data, err := os.ReadFile(path); err == nil && strings.TrimSpace(string(data)) != "" {
 			return true, "file"
 		}
@@ -816,8 +816,8 @@ func (m *RegistryManager) inspectCredential(dcfg Config, regCfg model.RegistryCo
 	return false, ""
 }
 
-func (m *RegistryManager) resolveCredential(ctx context.Context, dcfg Config, regCfg model.RegistryConfig) (string, string, error) {
-	if regCfg.EffectiveAuthMode() == model.RegistryAuthOIDC {
+func (m *HubManager) resolveCredential(ctx context.Context, dcfg Config, regCfg model.HubConfig) (string, string, error) {
+	if regCfg.EffectiveAuthMode() == model.HubAuthOIDC {
 		aud := regCfg.EffectiveAudience()
 		tok, err := m.resolveOIDCToken(ctx, aud)
 		if err != nil {
@@ -836,7 +836,7 @@ func (m *RegistryManager) resolveCredential(ctx context.Context, dcfg Config, re
 		}
 	}
 
-	if path := strings.TrimSpace(dcfg.RegistryTokenFile); path != "" {
+	if path := strings.TrimSpace(dcfg.HubTokenFile); path != "" {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return "", "file", fmt.Errorf("reading registry token file %s: %w", path, err)
@@ -851,14 +851,14 @@ func (m *RegistryManager) resolveCredential(ctx context.Context, dcfg Config, re
 	}
 
 	return "", "", fmt.Errorf("no hub registration credential configured: run 'grain hub register %s' or set secret %s in Settings",
-		regCfg.Entry, secrets.RegistryRegistrationTokenSecret)
+		regCfg.Entry, secrets.HubRegistrationTokenSecret)
 }
 
-// resolveRegistrationSecret reads secrets.RegistryRegistrationTokenSecret from
+// resolveRegistrationSecret reads secrets.HubRegistrationTokenSecret from
 // m.opts.Secrets, caching the decrypted value against the raw ciphertext bytes
 // on disk so rotating or setting the secret in Settings takes effect on the
 // very next heartbeat without writing a secret_audit database row every 15s.
-func (m *RegistryManager) resolveRegistrationSecret(ctx context.Context) (string, error) {
+func (m *HubManager) resolveRegistrationSecret(ctx context.Context) (string, error) {
 	m.credMu.Lock()
 	defer m.credMu.Unlock()
 
@@ -878,13 +878,13 @@ func (m *RegistryManager) resolveRegistrationSecret(ctx context.Context) (string
 			}
 			val, resolveErr := m.opts.Secrets.Resolve(
 				secrets.WithPrincipal(ctx, "daemon/registry"),
-				secrets.RegistryRegistrationTokenSecret+"/"+secrets.AgentCredentialKey,
+				secrets.HubRegistrationTokenSecret+"/"+secrets.AgentCredentialKey,
 			)
 			if resolveErr != nil {
 				// Also support single-key resolution if stored under another key name.
 				if altVal, altErr := m.opts.Secrets.Resolve(
 					secrets.WithPrincipal(ctx, "daemon/registry"),
-					secrets.RegistryRegistrationTokenSecret,
+					secrets.HubRegistrationTokenSecret,
 				); altErr == nil {
 					val, resolveErr = altVal, nil
 				}
@@ -899,12 +899,12 @@ func (m *RegistryManager) resolveRegistrationSecret(ctx context.Context) (string
 
 	val, err := m.opts.Secrets.Resolve(
 		secrets.WithPrincipal(ctx, "daemon/registry"),
-		secrets.RegistryRegistrationTokenSecret+"/"+secrets.AgentCredentialKey,
+		secrets.HubRegistrationTokenSecret+"/"+secrets.AgentCredentialKey,
 	)
 	if err != nil {
 		if altVal, altErr := m.opts.Secrets.Resolve(
 			secrets.WithPrincipal(ctx, "daemon/registry"),
-			secrets.RegistryRegistrationTokenSecret,
+			secrets.HubRegistrationTokenSecret,
 		); altErr == nil {
 			val, err = altVal, nil
 		}
@@ -912,7 +912,7 @@ func (m *RegistryManager) resolveRegistrationSecret(ctx context.Context) (string
 	return strings.TrimSpace(val), err
 }
 
-func (m *RegistryManager) resolveOIDCToken(ctx context.Context, audience string) (string, error) {
+func (m *HubManager) resolveOIDCToken(ctx context.Context, audience string) (string, error) {
 	m.credMu.Lock()
 	defer m.credMu.Unlock()
 
@@ -944,7 +944,7 @@ func (m *RegistryManager) resolveOIDCToken(ctx context.Context, audience string)
 	return tok, nil
 }
 
-func (m *RegistryManager) invalidateOIDCCache() {
+func (m *HubManager) invalidateOIDCCache() {
 	m.credMu.Lock()
 	m.cachedOIDCAudience = ""
 	m.cachedOIDCToken = ""
@@ -1004,7 +1004,7 @@ func parseJWTExpiry(token string) time.Time {
 	return time.Unix(claims.Exp, 0)
 }
 
-func (m *RegistryManager) ensureTunnel(parentCtx context.Context, inputs registryStepInputs, initialTok string, tokenSource func(context.Context) (string, error)) {
+func (m *HubManager) ensureTunnel(parentCtx context.Context, inputs hubStepInputs, initialTok string, tokenSource func(context.Context) (string, error)) {
 	m.tunnelMu.Lock()
 	tc := m.tunnelConnector
 	if tc == nil {
@@ -1069,7 +1069,7 @@ func (m *RegistryManager) ensureTunnel(parentCtx context.Context, inputs registr
 	}(connCfg)
 }
 
-func (m *RegistryManager) stopTunnel() {
+func (m *HubManager) stopTunnel() {
 	m.tunnelMu.Lock()
 	cancel := m.tunnelCancel
 	done := m.tunnelDone
@@ -1084,7 +1084,7 @@ func (m *RegistryManager) stopTunnel() {
 	}
 }
 
-func metadataFingerprint(cfg model.RegistryConfig, hostKind api.HostKind) string {
+func metadataFingerprint(cfg model.HubConfig, hostKind api.HostKind) string {
 	b, _ := json.Marshal(struct {
 		URL         string       `json:"u"`
 		Entry       string       `json:"e"`
@@ -1107,7 +1107,7 @@ func metadataFingerprint(cfg model.RegistryConfig, hostKind api.HostKind) string
 	return string(b)
 }
 
-func registryUserAgent(rel string) string {
+func hubUserAgent(rel string) string {
 	if s := strings.TrimSpace(rel); s != "" {
 		return "grain-daemon/" + s
 	}

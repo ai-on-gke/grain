@@ -956,7 +956,7 @@ type Config struct {
 	// grain hub as a connected entry (design/design/hub.design.md).
 	// Empty -- the default -- disables registry connection. Stored as JSON in
 	// grain_config.registry; registration tokens live in pkg/secrets.
-	Registry RegistryConfig
+	Hub HubConfig
 	// CLIRun is where each agent CLI runs, keyed by framework name
 	// (claude, codex, antigravity): on the host, in a per-run
 	// container of an image, or whichever of those the host allows

@@ -1966,29 +1966,29 @@ func (c *HTTPClient) MergeBatches(ctx context.Context, repo string) (MergeBatche
 	return resp, nil
 }
 
-// GetRegistry fetches the deployment's current connected-entry registry
+// GetHub fetches the deployment's current connected-entry registry
 // status, heartbeat timings, and advertised scopes -- GET /api/registry.
-func (c *HTTPClient) GetRegistry(ctx context.Context) (model.RegistrySnapshot, error) {
-	var snap model.RegistrySnapshot
+func (c *HTTPClient) GetHub(ctx context.Context) (model.HubSnapshot, error) {
+	var snap model.HubSnapshot
 	if err := c.do(ctx, http.MethodGet, "/api/registry", nil, &snap); err != nil {
-		return model.RegistrySnapshot{}, err
+		return model.HubSnapshot{}, err
 	}
 	return snap, nil
 }
 
-// TriggerRegistryHeartbeat triggers an immediate registration/heartbeat step
+// TriggerHubHeartbeat triggers an immediate registration/heartbeat step
 // against the configured grain hub -- POST /api/registry/heartbeat.
-func (c *HTTPClient) TriggerRegistryHeartbeat(ctx context.Context) (model.RegistrySnapshot, error) {
-	var snap model.RegistrySnapshot
+func (c *HTTPClient) TriggerHubHeartbeat(ctx context.Context) (model.HubSnapshot, error) {
+	var snap model.HubSnapshot
 	if err := c.do(ctx, http.MethodPost, "/api/registry/heartbeat", nil, &snap); err != nil {
-		return model.RegistrySnapshot{}, err
+		return model.HubSnapshot{}, err
 	}
 	return snap, nil
 }
 
-// GetRegistryInstanceStatus fetches the wire api.InstanceStatusResponse from
+// GetHubInstanceStatus fetches the wire api.InstanceStatusResponse from
 // GET /api/registry/status.
-func (c *HTTPClient) GetRegistryInstanceStatus(ctx context.Context) (api.InstanceStatusResponse, error) {
+func (c *HTTPClient) GetHubInstanceStatus(ctx context.Context) (api.InstanceStatusResponse, error) {
 	var status api.InstanceStatusResponse
 	if err := c.do(ctx, http.MethodGet, "/api/registry/status", nil, &status); err != nil {
 		return api.InstanceStatusResponse{}, err

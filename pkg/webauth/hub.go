@@ -99,17 +99,17 @@ func singleAssertionValue(h http.Header, name string) (string, error) {
 }
 
 const (
-	registryKeysTTL          = time.Hour
-	registryKeysRefetchFloor = time.Minute
-	registryClockSkew        = 30 * time.Second
-	registryMaxLifetime      = 5 * time.Minute
+	hubKeysTTL          = time.Hour
+	hubKeysRefetchFloor = time.Minute
+	hubClockSkew        = 30 * time.Second
+	hubMaxLifetime      = 5 * time.Minute
 )
 
-type registryConfigContextKey struct{}
+type hubConfigContextKey struct{}
 
-// RegistryConfig holds request-level or server-level registry JWT verification
+// HubConfig holds request-level or server-level registry JWT verification
 // configuration (-ui-hub-issuer, -ui-hub-audience, -ui-hub-keys-url).
-type RegistryConfig struct {
+type HubConfig struct {
 	// Issuer is the exact iss claim a registry assertion must carry
 	// (e.g. "https://grain.example.com").
 	Issuer string
@@ -122,36 +122,36 @@ type RegistryConfig struct {
 }
 
 // Enabled reports whether all three registry verification settings are non-empty.
-func (c RegistryConfig) Enabled() bool {
+func (c HubConfig) Enabled() bool {
 	return strings.TrimSpace(c.Issuer) != "" &&
 		strings.TrimSpace(c.Audience) != "" &&
 		strings.TrimSpace(c.KeysURL) != ""
 }
 
 // AnySet reports whether any of the three registry verification settings is non-empty.
-func (c RegistryConfig) AnySet() bool {
+func (c HubConfig) AnySet() bool {
 	return strings.TrimSpace(c.Issuer) != "" ||
 		strings.TrimSpace(c.Audience) != "" ||
 		strings.TrimSpace(c.KeysURL) != ""
 }
 
-// WithRegistryConfig attaches a RegistryConfig to ctx.
-func WithRegistryConfig(ctx context.Context, cfg RegistryConfig) context.Context {
-	return context.WithValue(ctx, registryConfigContextKey{}, cfg)
+// WithHubConfig attaches a HubConfig to ctx.
+func WithHubConfig(ctx context.Context, cfg HubConfig) context.Context {
+	return context.WithValue(ctx, hubConfigContextKey{}, cfg)
 }
 
-// RegistryConfigFromContext extracts RegistryConfig from ctx if present.
-func RegistryConfigFromContext(ctx context.Context) (RegistryConfig, bool) {
+// HubConfigFromContext extracts HubConfig from ctx if present.
+func HubConfigFromContext(ctx context.Context) (HubConfig, bool) {
 	if ctx == nil {
-		return RegistryConfig{}, false
+		return HubConfig{}, false
 	}
-	cfg, ok := ctx.Value(registryConfigContextKey{}).(RegistryConfig)
+	cfg, ok := ctx.Value(hubConfigContextKey{}).(HubConfig)
 	return cfg, ok
 }
 
-// RegistryClaims represents the JWT claims contained in an
+// HubClaims represents the JWT claims contained in an
 // X-Grain-Registry-Assertion JWT minted by grain-registry.
-type RegistryClaims struct {
+type HubClaims struct {
 	jwt.RegisteredClaims
 	Email         string          `json:"email,omitempty"`
 	EmailVerified *bool           `json:"email_verified,omitempty"`
@@ -160,187 +160,187 @@ type RegistryClaims struct {
 	RequestID     string          `json:"rid,omitempty"`
 }
 
-// RegistryValidator validates a registry JWT assertion token string for a
+// HubValidator validates a registry JWT assertion token string for a
 // target audience.
-type RegistryValidator func(ctx context.Context, tokenStr string, audience string) (*RegistryClaims, error)
+type HubValidator func(ctx context.Context, tokenStr string, audience string) (*HubClaims, error)
 
-type registryKeySet struct {
+type hubKeySet struct {
 	keys    map[string]crypto.PublicKey
 	fetched time.Time
 }
 
-type registryUnavailableError struct {
+type hubUnavailableError struct {
 	err error
 }
 
-func (e registryUnavailableError) Error() string {
+func (e hubUnavailableError) Error() string {
 	return e.err.Error()
 }
 
-func (e registryUnavailableError) Unwrap() error {
+func (e hubUnavailableError) Unwrap() error {
 	return e.err
 }
 
 // Unavailable implements ui.VerifierUnavailableError so an initial JWKS fetch
 // failure before any keys are cached returns 503 Service Unavailable with
 // Retry-After: 5 rather than 401 Unauthorized.
-func (e registryUnavailableError) Unavailable() bool {
+func (e hubUnavailableError) Unavailable() bool {
 	return true
 }
 
 var (
-	registryMu           sync.RWMutex
-	registryIssuer       string
-	registryAudience     string
-	registryKeysURL      string
-	registryKeySets      map[string]*registryKeySet
-	registryHTTPClient   = &http.Client{Timeout: 5 * time.Second}
-	registryRefetchFloor = registryKeysRefetchFloor
+	hubMu           sync.RWMutex
+	hubIssuer       string
+	hubAudience     string
+	hubKeysURL      string
+	hubKeySets      map[string]*hubKeySet
+	hubHTTPClient   = &http.Client{Timeout: 5 * time.Second}
+	hubRefetchFloor = hubKeysRefetchFloor
 )
 
-// SetRegistryIssuer sets the expected issuer for registry JWT verification.
-func SetRegistryIssuer(issuer string) {
-	registryMu.Lock()
-	defer registryMu.Unlock()
-	registryIssuer = strings.TrimSpace(issuer)
+// SetHubIssuer sets the expected issuer for registry JWT verification.
+func SetHubIssuer(issuer string) {
+	hubMu.Lock()
+	defer hubMu.Unlock()
+	hubIssuer = strings.TrimSpace(issuer)
 }
 
-// GetRegistryIssuer returns the configured issuer for registry JWT verification.
-func GetRegistryIssuer() string {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-	if registryIssuer != "" {
-		return registryIssuer
+// GetHubIssuer returns the configured issuer for registry JWT verification.
+func GetHubIssuer() string {
+	hubMu.RLock()
+	defer hubMu.RUnlock()
+	if hubIssuer != "" {
+		return hubIssuer
 	}
 	return strings.TrimSpace(hubenv.Get("GRAIN_HUB_ISSUER"))
 }
 
-// SetRegistryAudience sets the expected audience for registry JWT verification.
-func SetRegistryAudience(aud string) {
-	registryMu.Lock()
-	defer registryMu.Unlock()
-	registryAudience = strings.TrimSpace(aud)
+// SetHubAudience sets the expected audience for registry JWT verification.
+func SetHubAudience(aud string) {
+	hubMu.Lock()
+	defer hubMu.Unlock()
+	hubAudience = strings.TrimSpace(aud)
 }
 
-// GetRegistryAudience returns the configured audience for registry JWT verification.
-func GetRegistryAudience() string {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-	if registryAudience != "" {
-		return registryAudience
+// GetHubAudience returns the configured audience for registry JWT verification.
+func GetHubAudience() string {
+	hubMu.RLock()
+	defer hubMu.RUnlock()
+	if hubAudience != "" {
+		return hubAudience
 	}
 	return strings.TrimSpace(hubenv.Get("GRAIN_HUB_AUDIENCE"))
 }
 
-// SetRegistryKeysURL sets the JWKS endpoint URL for registry JWT verification.
-func SetRegistryKeysURL(u string) {
-	registryMu.Lock()
-	defer registryMu.Unlock()
-	registryKeysURL = strings.TrimSpace(u)
+// SetHubKeysURL sets the JWKS endpoint URL for registry JWT verification.
+func SetHubKeysURL(u string) {
+	hubMu.Lock()
+	defer hubMu.Unlock()
+	hubKeysURL = strings.TrimSpace(u)
 }
 
-// GetRegistryKeysURL returns the configured JWKS endpoint URL for registry JWT verification.
-func GetRegistryKeysURL() string {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-	if registryKeysURL != "" {
-		return registryKeysURL
+// GetHubKeysURL returns the configured JWKS endpoint URL for registry JWT verification.
+func GetHubKeysURL() string {
+	hubMu.RLock()
+	defer hubMu.RUnlock()
+	if hubKeysURL != "" {
+		return hubKeysURL
 	}
 	return strings.TrimSpace(hubenv.Get("GRAIN_HUB_KEYS_URL"))
 }
 
-// SetRegistryHTTPClient sets a custom http.Client for fetching registry JWKS keys.
-func SetRegistryHTTPClient(client *http.Client) {
-	registryMu.Lock()
-	defer registryMu.Unlock()
+// SetHubHTTPClient sets a custom http.Client for fetching registry JWKS keys.
+func SetHubHTTPClient(client *http.Client) {
+	hubMu.Lock()
+	defer hubMu.Unlock()
 	if client != nil {
-		registryHTTPClient = client
+		hubHTTPClient = client
 	} else {
-		registryHTTPClient = &http.Client{Timeout: 5 * time.Second}
+		hubHTTPClient = &http.Client{Timeout: 5 * time.Second}
 	}
 }
 
-// SetRegistryRefetchFloor overrides the minimum interval between JWKS refetches
+// SetHubRefetchFloor overrides the minimum interval between JWKS refetches
 // triggered by an unknown key ID. A non-positive duration restores the 1-minute default.
-func SetRegistryRefetchFloor(d time.Duration) {
-	registryMu.Lock()
-	defer registryMu.Unlock()
+func SetHubRefetchFloor(d time.Duration) {
+	hubMu.Lock()
+	defer hubMu.Unlock()
 	if d > 0 {
-		registryRefetchFloor = d
+		hubRefetchFloor = d
 	} else {
-		registryRefetchFloor = registryKeysRefetchFloor
+		hubRefetchFloor = hubKeysRefetchFloor
 	}
 }
 
-// ResetRegistryConfig resets all registry package-level configurations and key caches to defaults.
-func ResetRegistryConfig() {
-	registryMu.Lock()
-	defer registryMu.Unlock()
-	registryIssuer = ""
-	registryAudience = ""
-	registryKeysURL = ""
-	registryKeySets = nil
-	registryHTTPClient = &http.Client{Timeout: 5 * time.Second}
-	registryRefetchFloor = registryKeysRefetchFloor
+// ResetHubConfig resets all registry package-level configurations and key caches to defaults.
+func ResetHubConfig() {
+	hubMu.Lock()
+	defer hubMu.Unlock()
+	hubIssuer = ""
+	hubAudience = ""
+	hubKeysURL = ""
+	hubKeySets = nil
+	hubHTTPClient = &http.Client{Timeout: 5 * time.Second}
+	hubRefetchFloor = hubKeysRefetchFloor
 }
 
-// RegistryIssuerFor returns the expected registry JWT issuer active for ctx.
-func RegistryIssuerFor(ctx context.Context) string {
-	if cfg, ok := RegistryConfigFromContext(ctx); ok && strings.TrimSpace(cfg.Issuer) != "" {
+// HubIssuerFor returns the expected registry JWT issuer active for ctx.
+func HubIssuerFor(ctx context.Context) string {
+	if cfg, ok := HubConfigFromContext(ctx); ok && strings.TrimSpace(cfg.Issuer) != "" {
 		return strings.TrimSpace(cfg.Issuer)
 	}
-	return GetRegistryIssuer()
+	return GetHubIssuer()
 }
 
-// RegistryAudienceFor returns the expected registry JWT audience active for ctx.
-func RegistryAudienceFor(ctx context.Context) string {
-	if cfg, ok := RegistryConfigFromContext(ctx); ok && strings.TrimSpace(cfg.Audience) != "" {
+// HubAudienceFor returns the expected registry JWT audience active for ctx.
+func HubAudienceFor(ctx context.Context) string {
+	if cfg, ok := HubConfigFromContext(ctx); ok && strings.TrimSpace(cfg.Audience) != "" {
 		return strings.TrimSpace(cfg.Audience)
 	}
-	return GetRegistryAudience()
+	return GetHubAudience()
 }
 
-// RegistryKeysURLFor returns the registry JWKS URL active for ctx.
-func RegistryKeysURLFor(ctx context.Context) string {
-	if cfg, ok := RegistryConfigFromContext(ctx); ok && strings.TrimSpace(cfg.KeysURL) != "" {
+// HubKeysURLFor returns the registry JWKS URL active for ctx.
+func HubKeysURLFor(ctx context.Context) string {
+	if cfg, ok := HubConfigFromContext(ctx); ok && strings.TrimSpace(cfg.KeysURL) != "" {
 		return strings.TrimSpace(cfg.KeysURL)
 	}
-	return GetRegistryKeysURL()
+	return GetHubKeysURL()
 }
 
-// EffectiveRegistryConfig returns the resolved RegistryConfig for ctx.
-func EffectiveRegistryConfig(ctx context.Context) RegistryConfig {
-	return RegistryConfig{
-		Issuer:   RegistryIssuerFor(ctx),
-		Audience: RegistryAudienceFor(ctx),
-		KeysURL:  RegistryKeysURLFor(ctx),
+// EffectiveHubConfig returns the resolved HubConfig for ctx.
+func EffectiveHubConfig(ctx context.Context) HubConfig {
+	return HubConfig{
+		Issuer:   HubIssuerFor(ctx),
+		Audience: HubAudienceFor(ctx),
+		KeysURL:  HubKeysURLFor(ctx),
 	}
 }
 
-func getRegistryPublicKey(ctx context.Context, client *http.Client, keysURL, kid string) (crypto.PublicKey, error) {
+func getHubPublicKey(ctx context.Context, client *http.Client, keysURL, kid string) (crypto.PublicKey, error) {
 	keysURL = strings.TrimSpace(keysURL)
 	if keysURL == "" {
 		return nil, errors.New("no registry keys URL is configured (GRAIN_REGISTRY_KEYS_URL / -ui-hub-keys-url), so no assertion can be verified")
 	}
-	registryMu.RLock()
-	set := registryKeySets[keysURL]
-	defaultClient := registryHTTPClient
-	refetchFloor := registryRefetchFloor
-	registryMu.RUnlock()
+	hubMu.RLock()
+	set := hubKeySets[keysURL]
+	defaultClient := hubHTTPClient
+	refetchFloor := hubRefetchFloor
+	hubMu.RUnlock()
 	if set != nil {
-		if key, ok := set.keys[kid]; ok && time.Since(set.fetched) < registryKeysTTL {
+		if key, ok := set.keys[kid]; ok && time.Since(set.fetched) < hubKeysTTL {
 			return key, nil
 		}
 	}
 
-	registryMu.Lock()
-	defer registryMu.Unlock()
+	hubMu.Lock()
+	defer hubMu.Unlock()
 
-	set = registryKeySets[keysURL]
-	refetchFloor = registryRefetchFloor
+	set = hubKeySets[keysURL]
+	refetchFloor = hubRefetchFloor
 	if set != nil {
 		key, ok := set.keys[kid]
-		if ok && time.Since(set.fetched) < registryKeysTTL {
+		if ok && time.Since(set.fetched) < hubKeysTTL {
 			return key, nil
 		}
 		if time.Since(set.fetched) < refetchFloor {
@@ -353,7 +353,7 @@ func getRegistryPublicKey(ctx context.Context, client *http.Client, keysURL, kid
 
 	hc := client
 	if hc == nil {
-		hc = registryHTTPClient
+		hc = hubHTTPClient
 		if hc == nil {
 			hc = defaultClient
 		}
@@ -366,12 +366,12 @@ func getRegistryPublicKey(ctx context.Context, client *http.Client, keysURL, kid
 			}
 			return nil, err
 		}
-		return nil, registryUnavailableError{err: err}
+		return nil, hubUnavailableError{err: err}
 	}
-	if registryKeySets == nil {
-		registryKeySets = map[string]*registryKeySet{}
+	if hubKeySets == nil {
+		hubKeySets = map[string]*hubKeySet{}
 	}
-	registryKeySets[keysURL] = &registryKeySet{keys: newKeys, fetched: time.Now()}
+	hubKeySets[keysURL] = &hubKeySet{keys: newKeys, fetched: time.Now()}
 
 	k, exists := newKeys[kid]
 	if !exists {
@@ -380,7 +380,7 @@ func getRegistryPublicKey(ctx context.Context, client *http.Client, keysURL, kid
 	return k, nil
 }
 
-// ValidateRegistryToken verifies a registry JWT assertion string against
+// ValidateHubToken verifies a registry JWT assertion string against
 // expectedAudience (a single URL, https://<name>.<instance-domain>) and returns
 // its verified claims.
 //
@@ -389,11 +389,11 @@ func getRegistryPublicKey(ctx context.Context, client *http.Client, keysURL, kid
 // leeway on exp/nbf/iat, enforces 0 < exp - iat <= 5m, checks exact iss and
 // single-audience equality, and rejects any token carrying the reserved act
 // claim until delegated-identity support is enabled.
-func ValidateRegistryToken(ctx context.Context, tokenStr string, expectedAudience string) (*RegistryClaims, error) {
-	return validateRegistryTokenWithClient(ctx, nil, tokenStr, expectedAudience)
+func ValidateHubToken(ctx context.Context, tokenStr string, expectedAudience string) (*HubClaims, error) {
+	return validateHubTokenWithClient(ctx, nil, tokenStr, expectedAudience)
 }
 
-func validateRegistryTokenWithClient(ctx context.Context, client *http.Client, tokenStr string, expectedAudience string) (*RegistryClaims, error) {
+func validateHubTokenWithClient(ctx context.Context, client *http.Client, tokenStr string, expectedAudience string) (*HubClaims, error) {
 	tokenStr = strings.TrimSpace(tokenStr)
 	if tokenStr == "" {
 		return nil, errors.New("empty registry assertion token")
@@ -405,19 +405,19 @@ func validateRegistryTokenWithClient(ctx context.Context, client *http.Client, t
 	if strings.Contains(expectedAudience, ",") {
 		return nil, errors.New("registry audience must be a single URL, not a comma-separated list")
 	}
-	issuer := RegistryIssuerFor(ctx)
+	issuer := HubIssuerFor(ctx)
 	if issuer == "" {
 		return nil, errors.New("no registry issuer is configured (GRAIN_REGISTRY_ISSUER / -ui-hub-issuer), so no assertion can be verified")
 	}
 	if strings.Contains(issuer, ",") {
 		return nil, errors.New("registry issuer must be a single issuer, not a comma-separated list")
 	}
-	keysURL := RegistryKeysURLFor(ctx)
+	keysURL := HubKeysURLFor(ctx)
 	if keysURL == "" {
 		return nil, errors.New("no registry keys URL is configured (GRAIN_REGISTRY_KEYS_URL / -ui-hub-keys-url), so no assertion can be verified")
 	}
 
-	claims := &RegistryClaims{}
+	claims := &HubClaims{}
 	token, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (any, error) {
 		if t.Method == nil || t.Method.Alg() != jwt.SigningMethodES256.Alg() {
 			return nil, fmt.Errorf("unexpected registry signing algorithm %v (want ES256)", t.Header["alg"])
@@ -426,7 +426,7 @@ func validateRegistryTokenWithClient(ctx context.Context, client *http.Client, t
 		if !ok || strings.TrimSpace(kid) == "" {
 			return nil, errors.New("missing kid in registry JWT header")
 		}
-		key, err := getRegistryPublicKey(ctx, client, keysURL, kid)
+		key, err := getHubPublicKey(ctx, client, keysURL, kid)
 		if err != nil {
 			return nil, err
 		}
@@ -439,7 +439,7 @@ func validateRegistryTokenWithClient(ctx context.Context, client *http.Client, t
 		jwt.WithValidMethods([]string{jwt.SigningMethodES256.Alg()}),
 		jwt.WithExpirationRequired(),
 		jwt.WithIssuedAt(),
-		jwt.WithLeeway(registryClockSkew),
+		jwt.WithLeeway(hubClockSkew),
 		jwt.WithIssuer(issuer),
 	)
 	if err != nil || !token.Valid {
@@ -458,21 +458,21 @@ func validateRegistryTokenWithClient(ctx context.Context, client *http.Client, t
 	if claims.IssuedAt == nil {
 		return nil, errors.New("missing iat in registry JWT claims")
 	}
-	if claims.IssuedAt.Time.After(time.Now().Add(registryClockSkew)) {
+	if claims.IssuedAt.Time.After(time.Now().Add(hubClockSkew)) {
 		return nil, errors.New("registry JWT iat is in the future")
 	}
 	lifetime := claims.ExpiresAt.Time.Sub(claims.IssuedAt.Time)
-	if lifetime <= 0 || lifetime > registryMaxLifetime {
-		return nil, fmt.Errorf("invalid registry JWT lifetime %s (must be in (0, %s])", lifetime, registryMaxLifetime)
+	if lifetime <= 0 || lifetime > hubMaxLifetime {
+		return nil, fmt.Errorf("invalid registry JWT lifetime %s (must be in (0, %s])", lifetime, hubMaxLifetime)
 	}
-	if _, err := IdentityFromRegistryClaims(claims); err != nil {
+	if _, err := IdentityFromHubClaims(claims); err != nil {
 		return nil, err
 	}
 
 	return claims, nil
 }
 
-type registryActClaim struct {
+type hubActClaim struct {
 	Sub    string `json:"sub"`
 	Kind   string `json:"kind"`
 	App    string `json:"app,omitempty"`
@@ -480,7 +480,7 @@ type registryActClaim struct {
 	Access string `json:"access"`
 }
 
-func parseRegistryActClaim(raw json.RawMessage, rawTopKind PrincipalKind, topEmail, topSub, jti string) (*DelegatingApp, error) {
+func parseHubActClaim(raw json.RawMessage, rawTopKind PrincipalKind, topEmail, topSub, jti string) (*DelegatingApp, error) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
 		return nil, nil
@@ -492,7 +492,7 @@ func parseRegistryActClaim(raw json.RawMessage, rawTopKind PrincipalKind, topEma
 	if _, hasNested := obj["act"]; hasNested {
 		return nil, errors.New("registry JWT carries nested act.act claim: chained delegation is not supported")
 	}
-	var act registryActClaim
+	var act hubActClaim
 	if err := json.Unmarshal(trimmed, &act); err != nil {
 		return nil, fmt.Errorf("malformed registry JWT act claim: %w", err)
 	}
@@ -522,9 +522,9 @@ func parseRegistryActClaim(raw json.RawMessage, rawTopKind PrincipalKind, topEma
 	}, nil
 }
 
-// IdentityFromRegistryClaims extracts and normalizes the VerifiedIdentity from
-// verified RegistryClaims.
-func IdentityFromRegistryClaims(claims *RegistryClaims) (VerifiedIdentity, error) {
+// IdentityFromHubClaims extracts and normalizes the VerifiedIdentity from
+// verified HubClaims.
+func IdentityFromHubClaims(claims *HubClaims) (VerifiedIdentity, error) {
 	if claims == nil {
 		return VerifiedIdentity{}, errors.New("nil registry claims")
 	}
@@ -561,7 +561,7 @@ func IdentityFromRegistryClaims(claims *RegistryClaims) (VerifiedIdentity, error
 	default:
 		return VerifiedIdentity{}, fmt.Errorf("unsupported registry principal kind %q", claims.Kind)
 	}
-	via, err := parseRegistryActClaim(claims.Act, rawKind, email, sub, claims.ID)
+	via, err := parseHubActClaim(claims.Act, rawKind, email, sub, claims.ID)
 	if err != nil {
 		return VerifiedIdentity{}, err
 	}
@@ -576,76 +576,76 @@ func IdentityFromRegistryClaims(claims *RegistryClaims) (VerifiedIdentity, error
 	}, nil
 }
 
-// VerifyRegistryToken validates a registry JWT assertion against the audience
+// VerifyHubToken validates a registry JWT assertion against the audience
 // active on ctx and returns the normalized authenticated email.
-func VerifyRegistryToken(ctx context.Context, tokenStr string) (string, error) {
+func VerifyHubToken(ctx context.Context, tokenStr string) (string, error) {
 	tokenStr = strings.TrimSpace(tokenStr)
 	if tokenStr == "" {
 		return "", errors.New("empty registry assertion token")
 	}
-	claims, err := ValidateRegistryToken(ctx, tokenStr, RegistryAudienceFor(ctx))
+	claims, err := ValidateHubToken(ctx, tokenStr, HubAudienceFor(ctx))
 	if err != nil {
 		return "", err
 	}
-	id, err := IdentityFromRegistryClaims(claims)
+	id, err := IdentityFromHubClaims(claims)
 	if err != nil {
 		return "", err
 	}
 	return id.Email, nil
 }
 
-// RegistryVerifierOption configures a RegistryVerifier created by NewRegistryVerifier.
-type RegistryVerifierOption func(*RegistryVerifier)
+// HubVerifierOption configures a HubVerifier created by NewHubVerifier.
+type HubVerifierOption func(*HubVerifier)
 
-// WithRegistryValidator overrides JWT validation on a RegistryVerifier.
-func WithRegistryValidator(v RegistryValidator) RegistryVerifierOption {
-	return func(rv *RegistryVerifier) {
+// WithHubValidator overrides JWT validation on a HubVerifier.
+func WithHubValidator(v HubValidator) HubVerifierOption {
+	return func(rv *HubVerifier) {
 		rv.validator = v
 	}
 }
 
-// WithRegistryAudience pins an expected single-URL audience on a
-// RegistryVerifier, taking precedence over request/package defaults.
-func WithRegistryAudience(audience string) RegistryVerifierOption {
-	return func(rv *RegistryVerifier) {
+// WithHubAudience pins an expected single-URL audience on a
+// HubVerifier, taking precedence over request/package defaults.
+func WithHubAudience(audience string) HubVerifierOption {
+	return func(rv *HubVerifier) {
 		rv.audience = strings.TrimSpace(audience)
 	}
 }
 
-// WithRegistryIssuer pins the expected JWT issuer on a RegistryVerifier.
-func WithRegistryIssuer(issuer string) RegistryVerifierOption {
-	return func(rv *RegistryVerifier) {
+// WithHubIssuer pins the expected JWT issuer on a HubVerifier.
+func WithHubIssuer(issuer string) HubVerifierOption {
+	return func(rv *HubVerifier) {
 		rv.issuer = strings.TrimSpace(issuer)
 	}
 }
 
-// WithRegistryKeysURL pins the JWKS endpoint URL on a RegistryVerifier.
-func WithRegistryKeysURL(keysURL string) RegistryVerifierOption {
-	return func(rv *RegistryVerifier) {
+// WithHubKeysURL pins the JWKS endpoint URL on a HubVerifier.
+func WithHubKeysURL(keysURL string) HubVerifierOption {
+	return func(rv *HubVerifier) {
 		rv.keysURL = strings.TrimSpace(keysURL)
 	}
 }
 
-// WithRegistryVerifierHTTPClient pins an HTTP client for fetching JWKS keys on
-// a RegistryVerifier.
-func WithRegistryVerifierHTTPClient(client *http.Client) RegistryVerifierOption {
-	return func(rv *RegistryVerifier) {
+// WithHubVerifierHTTPClient pins an HTTP client for fetching JWKS keys on
+// a HubVerifier.
+func WithHubVerifierHTTPClient(client *http.Client) HubVerifierOption {
+	return func(rv *HubVerifier) {
 		rv.httpClient = client
 	}
 }
 
-// RegistryVerifier verifies X-Grain-Registry-Assertion headers on incoming HTTP requests.
-type RegistryVerifier struct {
-	validator  RegistryValidator
+// HubVerifier verifies X-Grain-Registry-Assertion headers on incoming HTTP requests.
+type HubVerifier struct {
+	validator  HubValidator
 	audience   string
 	issuer     string
 	keysURL    string
 	httpClient *http.Client
 }
 
-// NewRegistryVerifier constructs a RegistryVerifier with the supplied options.
-func NewRegistryVerifier(opts ...RegistryVerifierOption) *RegistryVerifier {
-	rv := &RegistryVerifier{}
+// NewHubVerifier constructs a HubVerifier with the supplied options.
+func NewHubVerifier(opts ...HubVerifierOption) *HubVerifier {
+	rv := &HubVerifier{}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(rv)
@@ -655,45 +655,45 @@ func NewRegistryVerifier(opts ...RegistryVerifierOption) *RegistryVerifier {
 }
 
 // Name returns the canonical verifier name ("registry").
-func (v *RegistryVerifier) Name() string { return "registry" }
+func (v *HubVerifier) Name() string { return "registry" }
 
-// Headers returns the HTTP header names inspected by RegistryVerifier.
-func (v *RegistryVerifier) Headers() []string { return HubAssertionHeaders }
+// Headers returns the HTTP header names inspected by HubVerifier.
+func (v *HubVerifier) Headers() []string { return HubAssertionHeaders }
 
 // AccessCodeWins returns false: a valid registry assertion takes precedence
 // over an access code on the same request.
-func (v *RegistryVerifier) AccessCodeWins() bool { return false }
+func (v *HubVerifier) AccessCodeWins() bool { return false }
 
-// Validator returns the custom RegistryValidator configured on v, if any.
-func (v *RegistryVerifier) Validator() RegistryValidator { return v.validator }
+// Validator returns the custom HubValidator configured on v, if any.
+func (v *HubVerifier) Validator() HubValidator { return v.validator }
 
 // Audience returns the expected audience for ctx, preferring v's pinned audience.
-func (v *RegistryVerifier) Audience(ctx context.Context) string {
+func (v *HubVerifier) Audience(ctx context.Context) string {
 	if v != nil && v.audience != "" {
 		return v.audience
 	}
-	return RegistryAudienceFor(ctx)
+	return HubAudienceFor(ctx)
 }
 
 // Issuer returns the expected issuer for ctx, preferring v's pinned issuer.
-func (v *RegistryVerifier) Issuer(ctx context.Context) string {
+func (v *HubVerifier) Issuer(ctx context.Context) string {
 	if v != nil && v.issuer != "" {
 		return v.issuer
 	}
-	return RegistryIssuerFor(ctx)
+	return HubIssuerFor(ctx)
 }
 
 // KeysURL returns the JWKS URL for ctx, preferring v's pinned keysURL.
-func (v *RegistryVerifier) KeysURL(ctx context.Context) string {
+func (v *HubVerifier) KeysURL(ctx context.Context) string {
 	if v != nil && v.keysURL != "" {
 		return v.keysURL
 	}
-	return RegistryKeysURLFor(ctx)
+	return HubKeysURLFor(ctx)
 }
 
 // Enabled reports whether v is configured to verify requests in ctx (either via
 // a custom validator or with non-empty issuer, audience, and keys URL).
-func (v *RegistryVerifier) Enabled(ctx context.Context) bool {
+func (v *HubVerifier) Enabled(ctx context.Context) bool {
 	if v != nil && v.validator != nil {
 		return true
 	}
@@ -703,11 +703,11 @@ func (v *RegistryVerifier) Enabled(ctx context.Context) bool {
 }
 
 // ContextWithOverrides applies v's pinned Issuer, Audience, and KeysURL overrides onto ctx.
-func (v *RegistryVerifier) ContextWithOverrides(ctx context.Context) context.Context {
+func (v *HubVerifier) ContextWithOverrides(ctx context.Context) context.Context {
 	if v == nil || (v.issuer == "" && v.audience == "" && v.keysURL == "") {
 		return ctx
 	}
-	cfg, _ := RegistryConfigFromContext(ctx)
+	cfg, _ := HubConfigFromContext(ctx)
 	if v.issuer != "" {
 		cfg.Issuer = v.issuer
 	}
@@ -717,12 +717,12 @@ func (v *RegistryVerifier) ContextWithOverrides(ctx context.Context) context.Con
 	if v.keysURL != "" {
 		cfg.KeysURL = v.keysURL
 	}
-	return WithRegistryConfig(ctx, cfg)
+	return WithHubConfig(ctx, cfg)
 }
 
 // VerifyToken validates tokenStr using v's configuration and ctx, returning the
 // verified claims and the effective expected audience string.
-func (v *RegistryVerifier) VerifyToken(ctx context.Context, tokenStr string) (*RegistryClaims, string, error) {
+func (v *HubVerifier) VerifyToken(ctx context.Context, tokenStr string) (*HubClaims, string, error) {
 	ctx = v.ContextWithOverrides(ctx)
 	aud := v.Audience(ctx)
 	if v != nil && v.validator != nil {
@@ -733,14 +733,14 @@ func (v *RegistryVerifier) VerifyToken(ctx context.Context, tokenStr string) (*R
 	if v != nil {
 		hc = v.httpClient
 	}
-	claims, err := validateRegistryTokenWithClient(ctx, hc, tokenStr, aud)
+	claims, err := validateHubTokenWithClient(ctx, hc, tokenStr, aud)
 	return claims, aud, err
 }
 
 // VerifyRequest checks r's X-Grain-Registry-Assertion header. It returns
 // ok=false with a nil error when the header is absent, and an error when the
 // header is present but fails verification.
-func (v *RegistryVerifier) VerifyRequest(r *http.Request) (VerifiedIdentity, bool, error) {
+func (v *HubVerifier) VerifyRequest(r *http.Request) (VerifiedIdentity, bool, error) {
 	if r == nil {
 		return VerifiedIdentity{}, false, nil
 	}
@@ -755,7 +755,7 @@ func (v *RegistryVerifier) VerifyRequest(r *http.Request) (VerifiedIdentity, boo
 	if err != nil {
 		return VerifiedIdentity{}, false, err
 	}
-	id, err := IdentityFromRegistryClaims(claims)
+	id, err := IdentityFromHubClaims(claims)
 	if err != nil {
 		return VerifiedIdentity{}, false, err
 	}
@@ -769,7 +769,7 @@ func (v *RegistryVerifier) VerifyRequest(r *http.Request) (VerifiedIdentity, boo
 
 // Verify authenticates r via X-Grain-Registry-Assertion, returning an error if
 // the header is missing or invalid.
-func (v *RegistryVerifier) Verify(r *http.Request) (VerifiedIdentity, error) {
+func (v *HubVerifier) Verify(r *http.Request) (VerifiedIdentity, error) {
 	id, ok, err := v.VerifyRequest(r)
 	if err != nil {
 		return VerifiedIdentity{}, err

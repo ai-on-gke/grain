@@ -245,7 +245,7 @@ func everySettingChanged() ui.UpdateSettingsRequest {
 		DefaultAdmission:            ptr("bypass"),
 		DefaultHosting:              ptr("console"),
 		SettingsLocked:              ptr(true),
-		Registry: &model.RegistryConfig{
+		Hub: &model.HubConfig{
 			URL:         "https://registry.example.com",
 			Entry:       "grain-dev",
 			DisplayName: "Dev Grain",

@@ -137,9 +137,9 @@ func NewKMSSigner(ctx context.Context, opts KMSSignerOptions) (*KMSSigner, error
 	return s, nil
 }
 
-// SignAssertion signs RegistryClaims using Cloud KMS asymmetricSign (EC_SIGN_P256_SHA256)
+// SignAssertion signs HubClaims using Cloud KMS asymmetricSign (EC_SIGN_P256_SHA256)
 // and converts the returned ASN.1 DER signature into 64-byte JWS ES256 format (`R || S`).
-func (s *KMSSigner) SignAssertion(ctx context.Context, claims hub.RegistryClaims) (string, error) {
+func (s *KMSSigner) SignAssertion(ctx context.Context, claims hub.HubClaims) (string, error) {
 	verName, kid, err := s.ensureActiveVersion(ctx)
 	if err != nil {
 		return "", err

@@ -24,7 +24,7 @@ import (
 	"testing"
 )
 
-func TestRegistrySandboxScriptsAndTerraform(t *testing.T) {
+func TestHubSandboxScriptsAndTerraform(t *testing.T) {
 	sandboxDir := filepath.Join("..", "..", "deploy", "test", "hub-sandbox")
 
 	var scripts []string
@@ -106,7 +106,7 @@ func TestRegistrySandboxScriptsAndTerraform(t *testing.T) {
 	}
 }
 
-func TestRegistrySandboxScriptFlagValidation(t *testing.T) {
+func TestHubSandboxScriptFlagValidation(t *testing.T) {
 	sandboxDir := filepath.Join("..", "..", "deploy", "test", "hub-sandbox")
 
 	cases := []struct {
@@ -341,7 +341,7 @@ func TestRegistrySandboxScriptFlagValidation(t *testing.T) {
 	}
 }
 
-func TestRegistrySandboxCrossProjectStateBucketRejected(t *testing.T) {
+func TestHubSandboxCrossProjectStateBucketRejected(t *testing.T) {
 	sandboxDir := filepath.Join("..", "..", "deploy", "test", "hub-sandbox")
 	fakeBin := t.TempDir()
 	marker := filepath.Join(fakeBin, "touched")
@@ -537,11 +537,11 @@ esac
 	}
 }
 
-// TestRegistrySandboxHostedProjectWiring checks the cross-project hosted VM
+// TestHubSandboxHostedProjectWiring checks the cross-project hosted VM
 // mode: hosted VMs in a separate project get a peered VPC with CIDR-based
 // firewall rules, and the registry config points compute at that project while
 // keeping per-instance secrets in the registry project.
-func TestRegistrySandboxHostedProjectWiring(t *testing.T) {
+func TestHubSandboxHostedProjectWiring(t *testing.T) {
 	sandboxDir := filepath.Join("..", "..", "deploy", "test", "hub-sandbox")
 	read := func(name string) string {
 		t.Helper()
@@ -608,13 +608,13 @@ func TestRegistrySandboxHostedProjectWiring(t *testing.T) {
 	}
 }
 
-// TestRegistrySandboxInstancePoolConnectionsRequireTLS guards the shared
+// TestHubSandboxInstancePoolConnectionsRequireTLS guards the shared
 // hosted-instance PostgreSQL pool against cleartext connections: the
 // registry's admin connection carries the pool superuser password and every
 // generated role password (ALTER ROLE ... PASSWORD), and hosted VMs send
 // their own password and every query, so none of them may cross the VPC
 // with sslmode=disable, and the pool must serve TLS for them to connect.
-func TestRegistrySandboxInstancePoolConnectionsRequireTLS(t *testing.T) {
+func TestHubSandboxInstancePoolConnectionsRequireTLS(t *testing.T) {
 	filesDir := filepath.Join("..", "..", "deploy", "test", "hub-sandbox", "files")
 	read := func(name string) string {
 		t.Helper()
