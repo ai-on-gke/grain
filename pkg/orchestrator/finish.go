@@ -1674,7 +1674,51 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		catalogue = catalogueCfg.CapabilityPolicy.Catalogue
 		autoGrantContextReads = catalogueCfg.AutoGrantContextReads
 	}
-	for _, p := range proposals {
+	for _, rawP := range proposals {
+		p := rawP
+		if rawP["grants"] != nil {
+			pRepo, _ := rawP["repo"].(string)
+			pBranch, _ := rawP["branch"].(string)
+			pNoRepo, _ := rawP["no_repo"].(bool)
+			ct, ctErr := mcp.ProposedChangeTarget(rawP)
+			decoded, hasGrants, gErr := model.DecodeRawRequestGrants(rawP["grants"], model.GrantSpelling{
+				Capabilities: rawP["capabilities"] != nil,
+				Reads:        rawP["reads"] != nil,
+				Writes:       rawP["writes"] != nil,
+				Target:       strings.TrimSpace(pRepo) != "" || strings.TrimSpace(pBranch) != "" || pNoRepo || ctErr != nil || ct != nil,
+			})
+			if gErr != nil {
+				log.Printf("orchestrator: skipping proposed task with invalid grants: %v", gErr)
+				continue
+			}
+			if hasGrants {
+				p = make(map[string]any, len(rawP)+4)
+				for k, v := range rawP {
+					p[k] = v
+				}
+				if decoded.Capabilities != nil {
+					p["capabilities"] = decoded.Capabilities
+				}
+				if len(decoded.Reads) > 0 {
+					readStrs := make([]string, len(decoded.Reads))
+					for i, r := range decoded.Reads {
+						readStrs[i] = r.String()
+					}
+					p["reads"] = readStrs
+				}
+				if len(decoded.Writes) > 0 {
+					writeMaps := make([]any, len(decoded.Writes))
+					for i, w := range decoded.Writes {
+						writeMaps[i] = map[string]any{"repo": w.Repo.String(), "base": w.Base}
+					}
+					p["writes"] = writeMaps
+				}
+				if decoded.Target != nil {
+					p["repo"] = decoded.Target.Repo.String()
+					p["branch"] = decoded.Target.Base
+				}
+			}
+		}
 		title, _ := p["title"].(string)
 		body, _ := p["body"].(string)
 		var tmplID string
@@ -1846,11 +1890,11 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		if title == "" || body == "" {
 			continue
 		}
-		key := mcp.ProposalKeyArgs(task.ID, p)
+		key := mcp.ProposalKeyArgs(task.ID, rawP)
 		if existing, err := store.TaskWithTag(ctx, key); err != nil {
 			return fmt.Errorf("orchestrator: finding already-filed proposed task %q: %w", title, err)
 		} else if existing != nil {
-			if local, _ := p["id"].(string); local != "" {
+			if local, _ := rawP["id"].(string); local != "" {
 				if _, taken := filed[local]; !taken {
 					filed[local] = existing.ID
 				}
@@ -1923,18 +1967,24 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			if cap == "" || grainci.IsGrant(cap) {
 				continue
 			}
-			found := false
-			for _, g := range grants {
-				if g.Capability == cap {
-					found = true
-					break
+			for _, expanded := range model.CanonicalLegacyGrants(cap) {
+				expanded = model.StoredGrantSpelling(expanded)
+				if expanded == "" || grainci.IsGrant(expanded) {
+					continue
 				}
-			}
-			if !found {
-				grants = append(grants, model.Grant{
-					Capability: cap,
-					Via:        model.GrantByLabel,
-				})
+				found := false
+				for _, g := range grants {
+					if g.Capability == expanded {
+						found = true
+						break
+					}
+				}
+				if !found {
+					grants = append(grants, model.Grant{
+						Capability: expanded,
+						Via:        model.GrantByLabel,
+					})
+				}
 			}
 		}
 		customFields, droppedFields, err := proposedCustomFields(ctx, store, p)

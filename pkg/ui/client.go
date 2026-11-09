@@ -351,8 +351,10 @@ func (r *CreateTaskRequest) UnmarshalJSON(data []byte) error {
 	*r = CreateTaskRequest(aux.Alias)
 	if present(aux.RawGrants) {
 		got, err := decodeRequestGrants(aux.RawGrants, model.GrantSpelling{
-			Capabilities: r.Capabilities != nil, Reads: len(r.Reads) > 0,
-			Writes: len(r.Writes) > 0, Target: strings.TrimSpace(r.Repo) != "",
+			Capabilities: r.Capabilities != nil,
+			Reads:        r.Reads != nil,
+			Writes:       r.Writes != nil,
+			Target:       strings.TrimSpace(r.Repo) != "" || strings.TrimSpace(r.Base) != "" || r.NoRepo || r.ChangeTarget != nil,
 		})
 		if err != nil {
 			return err
@@ -393,44 +395,9 @@ func present(raw json.RawMessage) bool {
 // capabilities: [] is -- and nil when it names only repository access,
 // which leaves capabilities to whatever they would have been.
 func decodeRequestGrants(raw json.RawMessage, legacy model.GrantSpelling) (model.RequestGrants, error) {
-	var items []json.RawMessage
-	if err := json.Unmarshal(raw, &items); err != nil {
-		return model.RequestGrants{}, validationErrorf("grants must be a list")
-	}
-	grants := make([]model.Grant, 0, len(items))
-	for _, item := range items {
-		// Read exactly as a capabilities: entry is (model.CapabilityEntryNames):
-		// a string, or {capability, with} and nothing else.
-		names, err := model.CapabilityEntryNames(item)
-		if err != nil {
-			return model.RequestGrants{}, validationErrorf("grants: %v", err)
-		}
-		for _, s := range names {
-			s = strings.TrimSpace(s)
-			if s == "" {
-				continue
-			}
-			if !model.IsCapabilityRef(s) {
-				grants = append(grants, model.Grant{Capability: s})
-				continue
-			}
-			spec, err := model.CapabilityGrantSpec(s)
-			if err != nil {
-				return model.RequestGrants{}, validationErrorf("grants: %v", err)
-			}
-			g := model.Grant{Capability: spec.Capability}
-			if spec.With != nil {
-				g.With, _ = json.Marshal(spec.With)
-			}
-			grants = append(grants, g)
-		}
-	}
-	out, err := model.SplitRequestGrants(grants, legacy)
+	out, err := model.DecodeRequestGrantsJSON(raw, legacy)
 	if err != nil {
 		return model.RequestGrants{}, validationErrorf("%v", err)
-	}
-	if len(items) == 0 {
-		out.Capabilities = []string{}
 	}
 	return out, nil
 }
@@ -4103,20 +4070,15 @@ func (c *Client) creationGrants(ctx context.Context, req CreateTaskRequest, targ
 					if _, ok := c.capabilityByID(nid); !ok {
 						return nil, nil, validationErrorf("%s", capabilityRefusal(nid))
 					}
-					found := false
-					for _, g := range grants {
-						if g.Capability == nid {
-							found = true
-							break
-						}
-					}
-					if !found {
-						grants = append(grants, model.Grant{
-							Capability: nid,
-							Via:        model.GrantByLabel,
-						})
-					}
+					grants = append(grants, model.Grant{
+						Capability: nid,
+						Via:        model.GrantByLabel,
+					})
 				}
+			}
+			grants, err = model.NormalizeCapabilityGrants(grants, nil)
+			if err != nil {
+				return nil, nil, validationErrorf("%v", err)
 			}
 		}
 	} else if req.Capabilities != nil {

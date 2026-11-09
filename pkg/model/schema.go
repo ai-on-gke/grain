@@ -614,7 +614,11 @@ import "strconv"
 // templates and schedules), so a store saved before API policy writes checked
 // defaults exports a state repository that passes grain state check
 // (catalogue_disabled_migration.go).
-const SchemaVersion = 128
+// 129 changes no table: it rewrites retired capability names in
+// `task_grant_wait` (including `github-sandbox`) that earlier
+// rewriteLegacyGrantsMulti migrations left under their retired names
+// (legacy_grant_migration.go).
+const SchemaVersion = 129
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
