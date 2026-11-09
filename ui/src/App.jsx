@@ -323,7 +323,12 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // attribute also reaches what a media query would reach anyway but a
   // class on the shell below would not: the overlay panes, which MUI
   // renders into a portal outside this tree.
-  useEffect(() => {
+  //
+  // useLayoutEffect rather than useEffect so the attribute lands in the
+  // same commit as PhoneNav/Sidebar, before the browser paints or any
+  // post-commit measurement reads it: a passive effect left a frame with
+  // PhoneNav inside a row-oriented .app-body and desktop gutters.
+  useLayoutEffect(() => {
     document.documentElement.dataset.phone = isPhone ? "true" : "false";
   }, [isPhone]);
   // The desktop rail folded down to its icons, remembered per browser
@@ -334,7 +339,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const sidebarCollapsed = !isPhone && sidebarCollapsedChoice;
   // The pane anything you open fills starts where the rail ends
   // (Overlay.jsx), so it reads the rail's width off the same variable.
-  useEffect(() => {
+  useLayoutEffect(() => {
     document.documentElement.style.setProperty(
       "--sidebar-width",
       `${sidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_WIDTH}px`,

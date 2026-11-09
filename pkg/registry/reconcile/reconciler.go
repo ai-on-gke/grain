@@ -40,6 +40,15 @@ const (
 	DefaultStatusPollInterval  = 15 * time.Second
 	DefaultVMCheckInterval     = 60 * time.Second
 	DefaultOrphanSweepInterval = 5 * time.Minute
+
+	// DefaultServiceAccountPropagationTimeout bounds how long a `creating` entry keeps
+	// retrying a VM creation the compute provider refused because the instance's
+	// just-created service account was not visible to it yet (registry.ErrServiceAccountNotReady).
+	// GCP documents up to about 60s for a new account to propagate.
+	DefaultServiceAccountPropagationTimeout = 2 * time.Minute
+
+	serviceAccountRetryBaseDelay = 5 * time.Second
+	serviceAccountRetryMaxDelay  = 30 * time.Second
 )
 
 func init() {
@@ -93,6 +102,8 @@ type Options struct {
 	HealthTimeout      time.Duration
 	StepByStepReplace  bool
 	Now                func() time.Time
+	// ServiceAccountPropagationTimeout overrides DefaultServiceAccountPropagationTimeout.
+	ServiceAccountPropagationTimeout time.Duration
 }
 
 // Reconciler drives hosted VM lifecycle transitions (`creating`, `replacing`, `deleting`),
@@ -117,8 +128,15 @@ type Reconciler struct {
 	healthTimeout      time.Duration
 	stepByStepReplace  bool
 	nowFn              func() time.Time
+	saPropagation      time.Duration
 
 	isLeader atomic.Bool
+
+	// createRetryMu guards createRetries: per-entry backoff state for VM creations retried
+	// while the instance's service account propagates. It lives in memory only, so a new
+	// leader starts a fresh window; the window is short and bounded either way.
+	createRetryMu sync.Mutex
+	createRetries map[string]*createRetry
 
 	orphanMu        sync.RWMutex
 	orphans         []OrphanInstance
@@ -175,6 +193,10 @@ func New(opts Options) (*Reconciler, error) {
 	if nowFn == nil {
 		nowFn = time.Now
 	}
+	saPropagation := opts.ServiceAccountPropagationTimeout
+	if saPropagation <= 0 {
+		saPropagation = DefaultServiceAccountPropagationTimeout
+	}
 
 	return &Reconciler{
 		cfg:                opts.Config,
@@ -194,7 +216,9 @@ func New(opts Options) (*Reconciler, error) {
 		healthTimeout:      healthTimeout,
 		stepByStepReplace:  opts.StepByStepReplace,
 		nowFn:              nowFn,
+		saPropagation:      saPropagation,
 		reportedOrphans:    make(map[string]bool),
+		createRetries:      make(map[string]*createRetry),
 	}, nil
 }
 
@@ -351,6 +375,7 @@ func (r *Reconciler) reconcileEntries(ctx context.Context) error {
 		return err
 	}
 	var firstErr error
+	creating := make(map[string]bool)
 	for _, entry := range entries {
 		if entry.Kind != api.KindInstance {
 			continue
@@ -359,6 +384,7 @@ func (r *Reconciler) reconcileEntries(ctx context.Context) error {
 		switch entry.LifecycleState {
 		case api.StateCreating, "PROVISIONING":
 			if entry.DeletedAt == nil {
+				creating[entry.ID] = true
 				stepErr = r.reconcileCreatingEntry(ctx, entry)
 			}
 		case api.StateRunning, "ACTIVE":
@@ -392,15 +418,29 @@ func (r *Reconciler) reconcileEntries(ctx context.Context) error {
 			firstErr = stepErr
 		}
 	}
+	r.pruneCreateRetries(creating)
 	return firstErr
 }
 
 func (r *Reconciler) reconcileCreatingEntry(ctx context.Context, entry *store.EntryRow) error {
+	needsVM := entry.GCEInstanceID == "" || entry.BackendURL == ""
 	if r.compute == nil {
+		if needsVM {
+			// Without a compute provider nothing will ever create this VM; say so instead of
+			// leaving the entry in `creating` with an empty status_reason forever.
+			provider := strings.TrimSpace(r.cfg.Compute.Provider)
+			if provider == "" {
+				provider = "none"
+			}
+			r.failEntry(ctx, entry, fmt.Sprintf("no compute provider is configured (compute.provider is %q), so this registry cannot create hosted instances; configure compute.provider (for example \"gce\") and recreate the entry", provider))
+		}
 		return nil
 	}
 	// Phase 1: Provision GSA, Cloud SQL DB/role, GCS Managed Folder, Secret Manager IAM, Config Repo, and GCE VM.
-	if entry.GCEInstanceID == "" || entry.BackendURL == "" {
+	if needsVM {
+		if r.createRetryPending(entry.ID) {
+			return nil
+		}
 		bundle, configRepoURL, err := r.provisionEntryResources(ctx, entry)
 		if err != nil {
 			r.failEntry(ctx, entry, fmt.Sprintf("provisioning instance resources failed: %v", err))
@@ -420,9 +460,24 @@ func (r *Reconciler) reconcileCreatingEntry(ctx context.Context, entry *store.En
 
 		handle, err := r.createVMForEntry(ctx, entry, bundle, configRepoURL)
 		if err != nil {
+			if errors.Is(err, registry.ErrServiceAccountNotReady) {
+				if wait, attempt, ok := r.scheduleCreateRetry(entry.ID); ok {
+					r.noteCreatingReason(ctx, entry, fmt.Sprintf(
+						"waiting for service account %s to propagate before creating the GCE instance (attempt %d failed, retrying in %s): %v",
+						bundle.ServiceAccountEmail, attempt, wait, err))
+					return nil
+				}
+				r.clearCreateRetry(entry.ID)
+				r.failEntry(ctx, entry, fmt.Sprintf(
+					"creating GCE instance failed: service account %s was still not visible to the compute provider after retrying for %s: %v",
+					bundle.ServiceAccountEmail, r.saPropagation, err))
+				return err
+			}
+			r.clearCreateRetry(entry.ID)
 			r.failEntry(ctx, entry, fmt.Sprintf("creating GCE instance failed: %v", err))
 			return err
 		}
+		r.clearCreateRetry(entry.ID)
 
 		backendURL := strings.TrimSpace(handle.BackendURL)
 		if backendURL == "" && handle.InternalIP != "" {
@@ -1535,6 +1590,87 @@ func (r *Reconciler) recordStatusHeartbeat(ctx context.Context, entryID string, 
 		ActiveSessions:     st.ActiveSessions,
 		Scopes:             scopes,
 	})
+}
+
+// createRetry is the backoff state of a `creating` entry whose VM creation is being retried
+// while its service account propagates.
+type createRetry struct {
+	first    time.Time
+	attempts int
+	next     time.Time
+}
+
+// createRetryPending reports whether entryID is backing off and its next attempt is not due yet.
+func (r *Reconciler) createRetryPending(entryID string) bool {
+	r.createRetryMu.Lock()
+	defer r.createRetryMu.Unlock()
+	cr := r.createRetries[entryID]
+	return cr != nil && r.now().Before(cr.next)
+}
+
+// scheduleCreateRetry records a failed attempt for entryID and schedules the next one with
+// exponential backoff (5s, 10s, 20s, then every 30s). It returns ok=false once the
+// propagation window has elapsed since the first failure; the last attempt is scheduled at
+// the end of the window so the full window is used.
+func (r *Reconciler) scheduleCreateRetry(entryID string) (wait time.Duration, attempt int, ok bool) {
+	r.createRetryMu.Lock()
+	defer r.createRetryMu.Unlock()
+	now := r.now()
+	cr := r.createRetries[entryID]
+	if cr == nil {
+		cr = &createRetry{first: now}
+		r.createRetries[entryID] = cr
+	}
+	cr.attempts++
+	deadline := cr.first.Add(r.saPropagation)
+	if !now.Before(deadline) {
+		return 0, cr.attempts, false
+	}
+	wait = serviceAccountRetryBaseDelay
+	for i := 1; i < cr.attempts && wait < serviceAccountRetryMaxDelay; i++ {
+		wait *= 2
+	}
+	if wait > serviceAccountRetryMaxDelay {
+		wait = serviceAccountRetryMaxDelay
+	}
+	if now.Add(wait).After(deadline) {
+		wait = deadline.Sub(now)
+	}
+	cr.next = now.Add(wait)
+	return wait, cr.attempts, true
+}
+
+func (r *Reconciler) clearCreateRetry(entryID string) {
+	r.createRetryMu.Lock()
+	defer r.createRetryMu.Unlock()
+	delete(r.createRetries, entryID)
+}
+
+// pruneCreateRetries drops backoff state for entries that are no longer `creating`
+// (deleted, failed by someone else, or created by another leader).
+func (r *Reconciler) pruneCreateRetries(creating map[string]bool) {
+	r.createRetryMu.Lock()
+	defer r.createRetryMu.Unlock()
+	for id := range r.createRetries {
+		if !creating[id] {
+			delete(r.createRetries, id)
+		}
+	}
+}
+
+// noteCreatingReason records why a `creating` entry has not progressed yet without changing its state.
+func (r *Reconciler) noteCreatingReason(ctx context.Context, entry *store.EntryRow, reason string) {
+	fresh, err := r.store.GetEntryByID(ctx, entry.ID)
+	if err != nil || fresh == nil {
+		return
+	}
+	if fresh.LifecycleState != api.StateCreating && fresh.LifecycleState != "PROVISIONING" {
+		return
+	}
+	updated, err := r.store.TransitionEntryState(ctx, fresh.ID, fresh.Version, fresh.LifecycleState, reason)
+	if err == nil && updated != nil && r.hostCache != nil {
+		r.hostCache.Put(updated)
+	}
 }
 
 func (r *Reconciler) failEntry(ctx context.Context, entry *store.EntryRow, reason string) {

@@ -45,6 +45,16 @@ type fakeGCEState struct {
 	mu        sync.Mutex
 	instances map[string]map[string]any // key: project/zone/name
 	disks     map[string]map[string]any // key: project/zone/name
+	// insertOpErrors queues failed-operation responses for instances.insert: each POST pops
+	// the first one and answers with a DONE operation carrying that error instead of creating
+	// the instance.
+	insertOpErrors []fakeGCEOpError
+	insertAttempts int
+}
+
+type fakeGCEOpError struct {
+	Code    string
+	Message string
 }
 
 func newFakeGCEServer(t *testing.T) (*httptest.Server, *fakeGCEState) {
@@ -90,6 +100,20 @@ func newFakeGCEServer(t *testing.T) (*httptest.Server, *fakeGCEState) {
 					}
 					name, _ := body["name"].(string)
 					key := proj + "/" + zone + "/" + name
+					st.insertAttempts++
+					if len(st.insertOpErrors) > 0 {
+						opErr := st.insertOpErrors[0]
+						st.insertOpErrors = st.insertOpErrors[1:]
+						_ = json.NewEncoder(w).Encode(map[string]any{
+							"kind":   "compute#operation",
+							"name":   "op-failed-insert",
+							"status": "DONE",
+							"error": map[string]any{
+								"errors": []any{map[string]any{"code": opErr.Code, "message": opErr.Message}},
+							},
+						})
+						return
+					}
 					if _, exists := st.instances[key]; exists {
 						w.WriteHeader(http.StatusConflict)
 						_ = json.NewEncoder(w).Encode(map[string]any{
