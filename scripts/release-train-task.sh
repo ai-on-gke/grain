@@ -116,18 +116,11 @@ while read -r t; do
 done < <(git tag -l 'v*-rc.*-discarded' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+-discarded$' | sed 's/-discarded$//' | sort -V)
 
 # Stage 0 (candidate-gate.sh select-lkg) reads only the required workflows on
-# the active cut branch -- main, or release/vX.Y.Z once rc.2 has been dropped
-# and its convergence branch exists -- so query each required workflow directly
-# rather than letting unrelated workflows on main crowd them out of one page.
+# main, where every rc is cut (playbook section 5; there is no convergence
+# branch since 2026-11-09), so query each required workflow directly rather
+# than letting unrelated workflows on main crowd them out of one page.
 cut_branch=main
 required="${CANDIDATE_GATE_REQUIRED-tests release}"
-if [ -z "$rc" ] && [ -n "$dropped" ] && [ "$(( ${dropped##*.} + 1 ))" -ge 3 ]; then
-  conv="release/${dropped%-rc.*}"
-  if git show-ref --verify --quiet "refs/remotes/origin/$conv"; then
-    cut_branch="$conv"
-    required="${RELEASE_BRANCH_REQUIRED-release}"
-  fi
-fi
 if [ -n "$required" ]; then
   : > "$out/runs.jsonl"
   for wf in $required; do
