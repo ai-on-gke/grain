@@ -55,7 +55,10 @@ first.
 - The lists cover first-parent history between the two releases.
 - If a file for the release is already on `main`, both the reconciler and the
   task leave it as it is. Notes written or edited by hand are never
-  overwritten.
+  overwritten. Historical releases older than the newest `docs/releases/vX.Y.Z.md`
+  already on `main` (such as `v3.0.0`–`v3.0.2`, folded into `v3.1.0.md`) are
+  left alone too, while a new hotfix patch on an already-documented minor line
+  still gets its own task.
 - If a pending release is rejected before the task runs, the task writes
   nothing. Notes for a rejected release that already merged stay until a
   later rc of the same version is promoted, and that release leaves them as
