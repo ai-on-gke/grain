@@ -1154,6 +1154,7 @@ function ScheduleOverlay({
               <GrantsPicker
                 config={config}
                 grants={capabilities}
+                disabled={!!declaredIn}
                 onApiChange={(next) =>
                   setCapabilities([
                     ...capabilityIds,

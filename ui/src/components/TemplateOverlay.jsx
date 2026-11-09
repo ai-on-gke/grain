@@ -510,6 +510,7 @@ function TemplateOverlay({
           <GrantsPicker
             config={config}
             grants={capabilities}
+            disabled={locked}
             onApiChange={(next) =>
               setCapabilities([...capabilityIds, ...next, ...capabilityRefs])
             }
