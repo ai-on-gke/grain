@@ -439,6 +439,8 @@ Commands:
   failures [-window 7d] [-suspect]     what runs said when they failed for a reason grain could not
                                        name -- the instrument over its own provider-refusal markers
                                        (see failures.go)
+  usage [-mode auto] [-budget c/m=n/5h] token usage, budget, reset and burn rate per connection and model,
+                                       and the workers the remaining budget sustains (see usage_cmd.go)
   health                               the counters a layer built on grain keeps in the daemon, by
                                        section, since it started (-json: all of GET /api/sandboxes;
                                        see health.go)
@@ -697,6 +699,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdMetrics(ctx, c, out, cmdArgs)
 	case "failures":
 		return cmdFailures(ctx, c, out, cmdArgs)
+	case "usage":
+		return cmdUsage(ctx, c, out, cmdArgs)
 	case "health":
 		return cmdHealth(ctx, c, out, cmdArgs)
 	case "pause":

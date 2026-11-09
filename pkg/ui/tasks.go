@@ -763,6 +763,9 @@ type TaskDetail struct {
 	// agents#445: "show attempts and their status, in order, in the task
 	// view").
 	Attempts []Attempt `json:"attempts,omitempty"`
+	// Usage is every attempt's Usage summed: what the task has spent at
+	// its providers so far. Nil when no attempt reported any.
+	Usage *TaskUsage `json:"usage,omitempty"`
 	// Transitions is model.Transitions' own projection: every point the
 	// record lets this task's state be pinned to a time, oldest first
 	// (bwsalmon/agents#452 -- "show the state transitions for the task").
@@ -1090,6 +1093,10 @@ type Attempt struct {
 	AgentStartedAt    *time.Time      `json:"agentStartedAt,omitempty"`
 	FirstTurnAt       *time.Time      `json:"firstTurnAt,omitempty"`
 	Startup           *AttemptStartup `json:"startup,omitempty"`
+	// Usage is what this attempt spent at its model provider, as its
+	// CLI reported it (model.RunUsage); nil for an attempt whose CLI
+	// reported none, or one recorded before grain kept them.
+	Usage *model.RunUsage `json:"usage,omitempty"`
 }
 
 // AttemptStartup is the per-phase startup breakdown of one attempt

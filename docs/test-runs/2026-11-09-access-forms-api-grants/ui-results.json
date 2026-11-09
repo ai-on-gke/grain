@@ -1,0 +1,498 @@
+[
+  {
+    "form": "task-pane",
+    "step": "loaded",
+    "held": [
+      {
+        "grant": "api:ci-read@acme/widgets",
+        "text": "api:ci-read on acme/widgetsRead grain CI runs, logs and artifacts"
+      },
+      {
+        "grant": "api:tasks:read",
+        "text": "api:tasks:readRead tasks, their conversations, transcripts and trees"
+      }
+    ]
+  },
+  {
+    "form": "task-pane",
+    "step": "after-add-reload",
+    "held": [
+      {
+        "grant": "api:ci-read@acme/widgets",
+        "text": "api:ci-read on acme/widgetsRead grain CI runs, logs and artifacts"
+      },
+      {
+        "grant": "api:tasks:read",
+        "text": "api:tasks:readRead tasks, their conversations, transcripts and trees"
+      },
+      {
+        "grant": "api:tasks:write",
+        "text": "api:tasks:writeFile, edit, comment on, reorder, defer, retry, stop, close and reopen tasks"
+      }
+    ]
+  },
+  {
+    "form": "task-pane",
+    "step": "after-remove-reload",
+    "held": [
+      {
+        "grant": "api:ci-read@acme/widgets",
+        "text": "api:ci-read on acme/widgetsRead grain CI runs, logs and artifacts"
+      },
+      {
+        "grant": "api:tasks:read",
+        "text": "api:tasks:readRead tasks, their conversations, transcripts and trees"
+      }
+    ]
+  },
+  {
+    "form": "task-pane",
+    "step": "legacy-heading",
+    "count": 0
+  },
+  {
+    "form": "template",
+    "step": "loaded",
+    "held": [
+      {
+        "grant": "api:ci-read@acme/widgets",
+        "text": "api:ci-read on acme/widgetsRead grain CI runs, logs and artifacts"
+      },
+      {
+        "grant": "api:tasks:read",
+        "text": "api:tasks:readRead tasks, their conversations, transcripts and trees"
+      }
+    ]
+  },
+  {
+    "form": "template",
+    "step": "after-add-reload",
+    "held": [
+      {
+        "grant": "api:ci-read@acme/widgets",
+        "text": "api:ci-read on acme/widgetsRead grain CI runs, logs and artifacts"
+      },
+      {
+        "grant": "api:self-debug",
+        "text": "api:self-debugWhat the self-debug capability granted over the REST API: read tasks, runs, metrics and deployment status (grain's source checkout is grain#source)"
+      },
+      {
+        "grant": "api:tasks:read",
+        "text": "api:tasks:readRead tasks, their conversations, transcripts and trees"
+      },
+      {
+        "grant": "api:tasks:write",
+        "text": "api:tasks:writeFile, edit, comment on, reorder, defer, retry, stop, close and reopen tasks"
+      },
+      {
+        "grant": "https://grain.dev/capabilities/grain#source={}",
+        "text": "grain › source"
+      }
+    ]
+  },
+  {
+    "form": "template",
+    "step": "after-remove-reload",
+    "held": [
+      {
+        "grant": "api:ci-read@acme/widgets",
+        "text": "api:ci-read on acme/widgetsRead grain CI runs, logs and artifacts"
+      },
+      {
+        "grant": "api:self-debug",
+        "text": "api:self-debugWhat the self-debug capability granted over the REST API: read tasks, runs, metrics and deployment status (grain's source checkout is grain#source)"
+      },
+      {
+        "grant": "api:tasks:read",
+        "text": "api:tasks:readRead tasks, their conversations, transcripts and trees"
+      },
+      {
+        "grant": "https://grain.dev/capabilities/grain#source={}",
+        "text": "grain › source"
+      }
+    ]
+  },
+  {
+    "form": "template",
+    "step": "legacy-heading",
+    "count": 0
+  },
+  {
+    "form": "schedule",
+    "step": "loaded",
+    "held": [
+      {
+        "grant": "api:ci-read@acme/widgets",
+        "text": "api:ci-read on acme/widgetsRead grain CI runs, logs and artifacts"
+      },
+      {
+        "grant": "api:tasks:read",
+        "text": "api:tasks:readRead tasks, their conversations, transcripts and trees"
+      }
+    ]
+  },
+  {
+    "form": "schedule",
+    "step": "after-add-reload",
+    "held": [
+      {
+        "grant": "api:ci-read@acme/widgets",
+        "text": "api:ci-read on acme/widgetsRead grain CI runs, logs and artifacts"
+      },
+      {
+        "grant": "api:self-debug",
+        "text": "api:self-debugWhat the self-debug capability granted over the REST API: read tasks, runs, metrics and deployment status (grain's source checkout is grain#source)"
+      },
+      {
+        "grant": "api:tasks:read",
+        "text": "api:tasks:readRead tasks, their conversations, transcripts and trees"
+      },
+      {
+        "grant": "api:tasks:write",
+        "text": "api:tasks:writeFile, edit, comment on, reorder, defer, retry, stop, close and reopen tasks"
+      },
+      {
+        "grant": "https://grain.dev/capabilities/grain#source={}",
+        "text": "grain › source"
+      }
+    ]
+  },
+  {
+    "form": "schedule",
+    "step": "after-remove-reload",
+    "held": [
+      {
+        "grant": "api:ci-read@acme/widgets",
+        "text": "api:ci-read on acme/widgetsRead grain CI runs, logs and artifacts"
+      },
+      {
+        "grant": "api:self-debug",
+        "text": "api:self-debugWhat the self-debug capability granted over the REST API: read tasks, runs, metrics and deployment status (grain's source checkout is grain#source)"
+      },
+      {
+        "grant": "api:tasks:read",
+        "text": "api:tasks:readRead tasks, their conversations, transcripts and trees"
+      },
+      {
+        "grant": "https://grain.dev/capabilities/grain#source={}",
+        "text": "grain › source"
+      }
+    ]
+  },
+  {
+    "form": "schedule",
+    "step": "legacy-heading",
+    "count": 0
+  },
+  {
+    "form": "settings-tasks",
+    "step": "loaded",
+    "held": [
+      {
+        "grant": "api:tasks:read",
+        "text": "api:tasks:readRead tasks, their conversations, transcripts and trees"
+      }
+    ]
+  },
+  {
+    "form": "settings-tasks",
+    "step": "after-add-reload",
+    "held": [
+      {
+        "grant": "api:self-debug",
+        "text": "api:self-debugWhat the self-debug capability granted over the REST API: read tasks, runs, metrics and deployment status (grain's source checkout is grain#source)"
+      },
+      {
+        "grant": "api:tasks:read",
+        "text": "api:tasks:readRead tasks, their conversations, transcripts and trees"
+      },
+      {
+        "grant": "api:tasks:write",
+        "text": "api:tasks:writeFile, edit, comment on, reorder, defer, retry, stop, close and reopen tasks"
+      },
+      {
+        "grant": "https://grain.dev/capabilities/grain#source={}",
+        "text": "grain › source"
+      }
+    ]
+  },
+  {
+    "form": "settings-tasks",
+    "step": "after-remove-reload",
+    "held": [
+      {
+        "grant": "api:self-debug",
+        "text": "api:self-debugWhat the self-debug capability granted over the REST API: read tasks, runs, metrics and deployment status (grain's source checkout is grain#source)"
+      },
+      {
+        "grant": "api:tasks:read",
+        "text": "api:tasks:readRead tasks, their conversations, transcripts and trees"
+      },
+      {
+        "grant": "https://grain.dev/capabilities/grain#source={}",
+        "text": "grain › source"
+      }
+    ]
+  },
+  {
+    "form": "settings-tasks",
+    "step": "legacy-heading",
+    "count": 0
+  },
+  {
+    "form": "repo-defaults",
+    "step": "loaded",
+    "held": [
+      {
+        "grant": "api:ci-read@acme/widgets",
+        "text": "api:ci-read on acme/widgetsRead grain CI runs, logs and artifacts"
+      }
+    ]
+  },
+  {
+    "form": "repo-defaults",
+    "step": "after-add-reload",
+    "held": [
+      {
+        "grant": "api:self-debug",
+        "text": "api:self-debugWhat the self-debug capability granted over the REST API: read tasks, runs, metrics and deployment status (grain's source checkout is grain#source)"
+      },
+      {
+        "grant": "api:ci-read@acme/widgets",
+        "text": "api:ci-read on acme/widgetsRead grain CI runs, logs and artifacts"
+      },
+      {
+        "grant": "api:tasks:write",
+        "text": "api:tasks:writeFile, edit, comment on, reorder, defer, retry, stop, close and reopen tasks"
+      },
+      {
+        "grant": "https://grain.dev/capabilities/grain#source={}",
+        "text": "grain › source"
+      }
+    ]
+  },
+  {
+    "form": "repo-defaults",
+    "step": "after-remove-reload",
+    "held": [
+      {
+        "grant": "api:self-debug",
+        "text": "api:self-debugWhat the self-debug capability granted over the REST API: read tasks, runs, metrics and deployment status (grain's source checkout is grain#source)"
+      },
+      {
+        "grant": "api:ci-read@acme/widgets",
+        "text": "api:ci-read on acme/widgetsRead grain CI runs, logs and artifacts"
+      },
+      {
+        "grant": "https://grain.dev/capabilities/grain#source={}",
+        "text": "grain › source"
+      }
+    ]
+  },
+  {
+    "form": "repo-defaults",
+    "step": "legacy-heading",
+    "count": 0
+  },
+  {
+    "form": "new-task",
+    "step": "loaded",
+    "held": [
+      {
+        "grant": "api:self-debug",
+        "text": "api:self-debugWhat the self-debug capability granted over the REST API: read tasks, runs, metrics and deployment status (grain's source checkout is grain#source)"
+      },
+      {
+        "grant": "api:tasks:read",
+        "text": "api:tasks:readRead tasks, their conversations, transcripts and trees"
+      },
+      {
+        "grant": "https://grain.dev/capabilities/grain#source={}",
+        "text": "grain › source"
+      }
+    ]
+  },
+  {
+    "form": "console-session",
+    "step": "loaded",
+    "held": [
+      {
+        "grant": "api:capabilities:detach",
+        "text": "api:capabilities:detachRemove grants from a task (never a standing session's) and narrow a repository's default or CI capabilities, with a reason"
+      },
+      {
+        "grant": "api:capabilities:read",
+        "text": "api:capabilities:readRead capability servers and policy, and check grants"
+      },
+      {
+        "grant": "api:ci-read",
+        "text": "api:ci-readRead grain CI runs, logs and artifacts"
+      },
+      {
+        "grant": "api:ci-read@acme/widgets",
+        "text": "api:ci-read on acme/widgetsRead grain CI runs, logs and artifacts"
+      },
+      {
+        "grant": "api:deployment:read",
+        "text": "api:deployment:readRead host, sandbox, log, metric and upgrade status"
+      },
+      {
+        "grant": "api:dispatch:read",
+        "text": "api:dispatch:readRead whether dispatch is paused"
+      },
+      {
+        "grant": "api:releases:read",
+        "text": "api:releases:readRead releases, candidates and qualification"
+      },
+      {
+        "grant": "api:repos:read",
+        "text": "api:repos:readRead repository settings, branches and declarations"
+      },
+      {
+        "grant": "api:schedules:read",
+        "text": "api:schedules:readRead schedules and what they compose"
+      },
+      {
+        "grant": "api:self-debug",
+        "text": "api:self-debugWhat the self-debug capability granted over the REST API: read tasks, runs, metrics and deployment status (grain's source checkout is grain#source)"
+      },
+      {
+        "grant": "api:settings:read",
+        "text": "api:settings:readRead deployment settings and configuration"
+      },
+      {
+        "grant": "api:suites:read",
+        "text": "api:suites:readRead suites and suite runs"
+      },
+      {
+        "grant": "api:task-admin",
+        "text": "api:task-adminEdit, reorder, retry and close tasks, open and retry their merges, and re-run CI"
+      },
+      {
+        "grant": "api:tasks:read",
+        "text": "api:tasks:readRead tasks, their conversations, transcripts and trees"
+      },
+      {
+        "grant": "api:templates:read",
+        "text": "api:templates:readRead task templates"
+      },
+      {
+        "grant": "https://grain.dev/capabilities/config-map#config-map={\"config_maps\":[\"bootstrap\"]}",
+        "text": "config-map server › config-maphttps://grain.dev/capabilities/config-map#config-mapAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.config_mapsconfig_maps 1 *bootstrapconfig_maps 1 *Add config_mapskeysAdd keys"
+      },
+      {
+        "grant": "https://grain.dev/capabilities/grain#health={}",
+        "text": "grain › health"
+      },
+      {
+        "grant": "https://grain.dev/capabilities/grain#journal={}",
+        "text": "grain › journal"
+      },
+      {
+        "grant": "https://grain.dev/capabilities/grain#source={}",
+        "text": "grain › source"
+      }
+    ]
+  },
+  {
+    "form": "task-pane",
+    "step": "after-chip-remove-reload",
+    "held": [
+      {
+        "grant": "api:ci-read@acme/widgets",
+        "text": "api:ci-read on acme/widgetsRead grain CI runs, logs and artifacts"
+      }
+    ]
+  },
+  {
+    "form": "network",
+    "step": "capability-check-calls",
+    "calls": []
+  },
+  {
+    "form": "network",
+    "step": "grant-writes",
+    "writes": [
+      {
+        "method": "POST",
+        "url": "/api/tasks/2/capabilities",
+        "body": "{\"id\":\"api:tasks:write\",\"attach\":true}"
+      },
+      {
+        "method": "POST",
+        "url": "/api/tasks/2/capabilities",
+        "body": "{\"id\":\"api:tasks:write\",\"attach\":false}"
+      },
+      {
+        "method": "PATCH",
+        "url": "/api/templates/template-1",
+        "body": "{\"name\":\"held-bare\",\"title\":\"Held bare id template\",\"description\":\"\",\"repo\":\"\",\"base\":\"\",\"autoMerge\":false,\"interactive\":false,\"keepRunning\":false,\"networkAccess\":\"\",\"nothingNeededAction\":\"close\",\"reads\":[],\"writes\":[],\"reviewers\":[],\"capabilities\":[\"self-debug\",\"api:ci-read@acme/widgets\",\"api:tasks:read\",\"api:tasks:write\"],\"customFields\":{},\"fields\":[],\"priority\":0,\"revision\":\"57273f3640e19bcd\"}"
+      },
+      {
+        "method": "PATCH",
+        "url": "/api/templates/template-1",
+        "body": "{\"name\":\"held-bare\",\"title\":\"Held bare id template\",\"description\":\"\",\"repo\":\"\",\"base\":\"\",\"autoMerge\":false,\"interactive\":false,\"keepRunning\":false,\"networkAccess\":\"\",\"nothingNeededAction\":\"close\",\"reads\":[],\"writes\":[],\"reviewers\":[],\"capabilities\":[\"api:ci-read@acme/widgets\",\"api:self-debug\",\"api:tasks:read\",\"https://grain.dev/capabilities/grain#source={}\"],\"customFields\":{},\"fields\":[],\"priority\":0,\"revision\":\"8aebfe183fc7af45\"}"
+      },
+      {
+        "method": "POST",
+        "url": "/api/schedules/composition",
+        "body": "{\"templateId\":\"\",\"repo\":\"acme/widgets\",\"base\":\"\",\"title\":\"Held bare id schedule\",\"description\":\"\",\"autoMerge\":false,\"keepRunning\":false,\"networkAccess\":\"\",\"nothingNeededAction\":\"close\",\"reads\":[],\"writes\":[],\"capabilities\":[\"api:ci-read@acme/widgets\",\"api:tasks:read\",\"self-debug\"],\"customFields\":{},\"model\":\"\",\"admission\":\"standard\",\"hosting\":\"unattended\"}"
+      },
+      {
+        "method": "POST",
+        "url": "/api/schedules/composition",
+        "body": "{\"templateId\":\"\",\"repo\":\"acme/widgets\",\"base\":\"\",\"title\":\"Held bare id schedule\",\"description\":\"\",\"autoMerge\":false,\"keepRunning\":false,\"networkAccess\":\"\",\"nothingNeededAction\":\"close\",\"reads\":[],\"writes\":[],\"capabilities\":[\"self-debug\",\"api:ci-read@acme/widgets\",\"api:tasks:read\",\"api:tasks:write\"],\"customFields\":{},\"model\":\"\",\"admission\":\"standard\",\"hosting\":\"unattended\"}"
+      },
+      {
+        "method": "PATCH",
+        "url": "/api/schedules/sched-1",
+        "body": "{\"templateId\":\"\",\"repo\":\"acme/widgets\",\"base\":\"\",\"title\":\"Held bare id schedule\",\"description\":\"\",\"autoMerge\":false,\"keepRunning\":false,\"networkAccess\":\"\",\"nothingNeededAction\":\"close\",\"reads\":[],\"writes\":[],\"capabilities\":[\"self-debug\",\"api:ci-read@acme/widgets\",\"api:tasks:read\",\"api:tasks:write\"],\"customFields\":{},\"recurrence\":{\"kind\":\"everyNHours\",\"everyNHours\":24},\"overlap\":\"skip\",\"revision\":\"b1ebf9439ac7bb9a\"}"
+      },
+      {
+        "method": "POST",
+        "url": "/api/schedules/composition",
+        "body": "{\"templateId\":\"\",\"repo\":\"acme/widgets\",\"base\":\"\",\"title\":\"Held bare id schedule\",\"description\":\"\",\"autoMerge\":false,\"keepRunning\":false,\"networkAccess\":\"\",\"nothingNeededAction\":\"close\",\"reads\":[],\"writes\":[],\"capabilities\":[\"api:ci-read@acme/widgets\",\"api:self-debug\",\"api:tasks:read\",\"api:tasks:write\",\"https://grain.dev/capabilities/grain#source={}\"],\"customFields\":{},\"model\":\"\",\"admission\":\"standard\",\"hosting\":\"unattended\"}"
+      },
+      {
+        "method": "POST",
+        "url": "/api/schedules/composition",
+        "body": "{\"templateId\":\"\",\"repo\":\"acme/widgets\",\"base\":\"\",\"title\":\"Held bare id schedule\",\"description\":\"\",\"autoMerge\":false,\"keepRunning\":false,\"networkAccess\":\"\",\"nothingNeededAction\":\"close\",\"reads\":[],\"writes\":[],\"capabilities\":[\"api:ci-read@acme/widgets\",\"api:self-debug\",\"api:tasks:read\",\"https://grain.dev/capabilities/grain#source={}\"],\"customFields\":{},\"model\":\"\",\"admission\":\"standard\",\"hosting\":\"unattended\"}"
+      },
+      {
+        "method": "PATCH",
+        "url": "/api/schedules/sched-1",
+        "body": "{\"templateId\":\"\",\"repo\":\"acme/widgets\",\"base\":\"\",\"title\":\"Held bare id schedule\",\"description\":\"\",\"autoMerge\":false,\"keepRunning\":false,\"networkAccess\":\"\",\"nothingNeededAction\":\"close\",\"reads\":[],\"writes\":[],\"capabilities\":[\"api:ci-read@acme/widgets\",\"api:self-debug\",\"api:tasks:read\",\"https://grain.dev/capabilities/grain#source={}\"],\"customFields\":{},\"recurrence\":{\"kind\":\"everyNHours\",\"everyNHours\":24},\"overlap\":\"skip\",\"revision\":\"0b6008cde4d3e817\"}"
+      },
+      {
+        "method": "PUT",
+        "url": "/api/settings",
+        "body": "{\"defaultCapabilities\":[\"self-debug\",\"api:tasks:read\",\"api:tasks:write\"]}"
+      },
+      {
+        "method": "PUT",
+        "url": "/api/settings",
+        "body": "{\"defaultCapabilities\":[\"api:self-debug\",\"api:tasks:read\",\"https://grain.dev/capabilities/grain#source={}\"]}"
+      },
+      {
+        "method": "PUT",
+        "url": "/api/repos/acme/widgets/capabilities",
+        "body": "{\"defaultCapabilities\":[\"self-debug\",\"api:ci-read@acme/widgets\",\"api:tasks:write\"]}"
+      },
+      {
+        "method": "PUT",
+        "url": "/api/repos/acme/widgets/capabilities",
+        "body": "{\"defaultCapabilities\":[\"api:self-debug\",\"api:ci-read@acme/widgets\",\"https://grain.dev/capabilities/grain#source={}\"]}"
+      },
+      {
+        "method": "POST",
+        "url": "/api/tasks/2/capabilities",
+        "body": "{\"id\":\"api:tasks:read\",\"attach\":false}"
+      }
+    ]
+  },
+  {
+    "form": "errors",
+    "step": "page-errors",
+    "errors": []
+  }
+]

@@ -888,10 +888,11 @@ With no arguments it prints the usage and returns `flag: help requested`. **Scop
 
 **Pinned by:** `TestGrainReleaseRollbackCLI` in `pkg/cli/release_test.go`.
 
-### 4.11 `grain metrics`, `grain failures` and `grain health` {#CLI-40}
+### 4.11 `grain metrics`, `grain failures`, `grain usage` and `grain health` {#CLI-40}
 
 - `metrics [-window 7d | -since t -until t] [-repo R]… [-author A]…` calls `GET /api/metrics`. It prints throughput, latency, prompt sizes and sandbox cost, and says what it was scoped to. An impossible span is refused before the daemon is asked.
 - `failures [-window 7d] [-suspect]` calls `GET /api/unmatched-failures` and prints what runs said when they failed for a reason grain could not name.
+- `usage` calls `GET /api/usage` and prints token usage per connection and model: used in the window, the limit (configured, or learned from a provider's refusal and marked `~`), what is left, the next reset, the burn rate and the workers the remainder sustains, then the deployment rollup, the advisory estimate and warnings for default-list models about to run out. `-mode`, `-min-workers`, `-retention-days`, `-budget` (repeatable, replacing every budget) and `-clear-budgets` change the settings with `PUT /api/usage/settings` first. `-json` prints the whole response.
 - `health` calls `GET /api/sandboxes` and prints its `counters`: each section a layer built on grain registered with `ui.RegisterHealthCounters`, sorted by key. They are in-process counts since the daemon started. `-json` prints the whole response.
 
 <!-- BEGIN GENERATED FLAGS: grain metrics -->
@@ -912,11 +913,21 @@ With no arguments it prints the usage and returns `flag: help requested`. **Scop
 | `-window` | string |  |  | how far back to read: a duration like 36h, or a count of days or weeks like 7d (default 7d) |
 <!-- END GENERATED FLAGS -->
 
+<!-- BEGIN GENERATED FLAGS: grain usage -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-budget` | value |  |  | set a budget, connection[/model]=tokens/window (e.g. claude-1/opus=2000000/5h); repeatable, replaces every budget |
+| `-clear-budgets` | bool |  |  | remove every configured budget |
+| `-min-workers` | int | `-1` |  | set the floor the automatic cap never goes below; unset reads as 1 |
+| `-mode` | string |  |  | set the concurrency mode: advisory (estimate only, the default), auto (also cap workers at the estimate) or off |
+| `-retention-days` | int | `-1` |  | set how many days per-run usage is kept; unset reads as 30 |
+<!-- END GENERATED FLAGS -->
+
 <!-- BEGIN GENERATED FLAGS: grain health -->
 _No flags._
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/metrics_test.go`: `TestPrintMetricsSaysWhatItWasScopedTo`, `TestRunCLIMetricsScopesTheReport`, `TestRunCLIMetricsTakesAnAbsoluteSpan`, `TestCmdMetricsRejectsAnImpossibleSpanBeforeAsking`; `pkg/cli/failures_test.go`: `TestPrintFailures`, `TestPrintFailuresJSON`; `pkg/cli/health_test.go`: `TestGrainHealthShowsRegisteredCountersUntilUnregistered`.
+**Pinned by:** `pkg/cli/metrics_test.go`: `TestPrintMetricsSaysWhatItWasScopedTo`, `TestRunCLIMetricsScopesTheReport`, `TestRunCLIMetricsTakesAnAbsoluteSpan`, `TestCmdMetricsRejectsAnImpossibleSpanBeforeAsking`; `pkg/cli/failures_test.go`: `TestPrintFailures`, `TestPrintFailuresJSON`; `pkg/cli/health_test.go`: `TestGrainHealthShowsRegisteredCountersUntilUnregistered`; `pkg/cli/usage_cmd_test.go`: `TestParseBudget`, `TestGrainUsageShowsAndSets`.
 
 ### 4.12 `grain ci …` {#CLI-62}
 

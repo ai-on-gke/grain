@@ -18,6 +18,7 @@ import api from "../../api.js";
 import { useTimeZone } from "../../TimeZoneContext.jsx";
 import { useTimelineOrder } from "../../TimelineOrderContext.jsx";
 import { formatDateTime } from "../../time.js";
+import { formatTokens } from "../settings/UsageCard.jsx";
 import fileToAttachment from "../../attachments.js";
 import {
   STATE_LABELS,
@@ -95,6 +96,31 @@ const PR_EVENT_LABELS = {
 // The verb follows the outcome: a run somebody cancelled, one grain
 // paused for want of agent budget, or one the provider had no capacity
 // for, did not give up on anything.
+// usageLine is a run's or a task's token usage in one line: billable
+// tokens (input, output and cache writes), then the breakdown.
+function usageLine(u) {
+  const billable =
+    u.billable ??
+    (u.inputTokens || 0) + (u.outputTokens || 0) + (u.cacheWriteTokens || 0);
+  let line = `${formatTokens(billable)} tokens (${formatTokens(u.inputTokens)} in, ${formatTokens(u.outputTokens)} out`;
+  if (u.cacheReadTokens) line += `, ${formatTokens(u.cacheReadTokens)} cached`;
+  line += ")";
+  if (u.costUsd) line += ` · $${u.costUsd.toFixed(2)}`;
+  return line;
+}
+
+function usageTitle(u) {
+  return [
+    `${u.inputTokens || 0} input tokens`,
+    `${u.outputTokens || 0} output tokens`,
+    `${u.cacheReadTokens || 0} read from cache`,
+    `${u.cacheWriteTokens || 0} written to cache`,
+    u.costUsd ? `$${u.costUsd} reported by the provider` : "",
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+
 function setupBreadcrumb(a) {
   if (!a.setupNote || !a.finishedAt) return null;
   const stopped =
@@ -548,6 +574,17 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
               {a.capabilityAuditCount === 1 ? "" : "s"}
             </div>
           )}
+          {/* What it spent at its provider, as its CLI reported it
+              (ui.Attempt.Usage, docs/connections-and-models.md). */}
+          {a.usage && (
+            <div
+              className="timeline-meta timeline-attempt-usage"
+              data-testid="attempt-usage"
+              title={usageTitle(a.usage)}
+            >
+              {usageLine(a.usage)}
+            </div>
+          )}
           {/* Marked as grain's own words, the same way the live phrase
               is on the task row (TaskList.jsx): every other sentence
               shown about an attempt is the agent's, and "gave up while"
@@ -885,6 +922,16 @@ export default function Timeline({ t, act, showError, onOpenTask }) {
           history behind it, so the heading says what the feed is again
           -- for every task alike. */}
       <h3>Timeline</h3>
+      {t.usage && (
+        <div
+          className="timeline-meta timeline-task-usage"
+          data-testid="task-usage"
+          title={usageTitle(t.usage)}
+        >
+          {usageLine(t.usage)} across {t.usage.runs} run
+          {t.usage.runs === 1 ? "" : "s"}
+        </div>
+      )}
       {newestFirst && composer}
       {ordered.length > 0 && (
         <ul className="timeline-list">
