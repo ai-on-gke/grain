@@ -209,8 +209,11 @@ func holdRefusedMerge(client github.Client, e queueEntry, detail github.PullRequ
 		}
 		// The run sent back for these threads has finished and left some
 		// open: ask once more, so the refusal it earns is handed to a
-		// person (refusedMerge) rather than waited on in silence.
-		if !r.SentBack.IsZero() && e.obs != nil && e.obs.CompletedAt != nil && e.obs.CompletedAt.After(r.SentBack) {
+		// person (refusedMerge) rather than waited on in silence. Once,
+		// though: after that refusal is handed to a person (Escalated),
+		// the threads still being open is waited on like any other
+		// unresolved conversation, not asked about again on every poll.
+		if !r.SentBack.IsZero() && !r.Escalated && e.obs != nil && e.obs.CompletedAt != nil && e.obs.CompletedAt.After(r.SentBack) {
 			return false
 		}
 		return true

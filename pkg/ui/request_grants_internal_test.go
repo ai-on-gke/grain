@@ -61,9 +61,14 @@ func TestCreateTaskRequestGrants(t *testing.T) {
 	for _, body := range []string{
 		`{"capabilities":["self-debug"],"grants":["api:ci:read"]}`,
 		`{"capabilities":[],"grants":[{"capability":"https://grain.dev/capabilities/api#ci:read"}]}`,
+		`{"capabilities":["api:ci:read"],"grants":[]}`,
 		`{"reads":["acme/docs"],"grants":[{"capability":"https://grain.dev/capabilities/repo#read","with":{"repo":"acme/x"}}]}`,
+		`{"reads":[],"grants":[{"capability":"https://grain.dev/capabilities/repo#read","with":{"repo":"acme/x"}}]}`,
 		`{"writes":[{"repo":"acme/site"}],"grants":[{"capability":"https://grain.dev/capabilities/repo#write","with":{"repo":"acme/x","base":""}}]}`,
+		`{"writes":[],"grants":[{"capability":"https://grain.dev/capabilities/repo#write","with":{"repo":"acme/x","base":""}}]}`,
 		`{"repo":"acme/widgets","grants":[{"capability":"https://grain.dev/capabilities/repo#target","with":{"repo":"acme/x","base":""}}]}`,
+		`{"base":"develop","grants":[{"capability":"https://grain.dev/capabilities/repo#target","with":{"repo":"acme/x","base":"main"}}]}`,
+		`{"noRepo":true,"grants":[{"capability":"https://grain.dev/capabilities/repo#target","with":{"repo":"acme/x","base":"main"}}]}`,
 		`{"grants":[{"capability":"https://grain.dev/capabilities/api#ci:read","with":{"repo":"acme/x","extra":1}}]}`,
 	} {
 		var req CreateTaskRequest
@@ -92,6 +97,9 @@ func TestUpdateTaskRequestGrants(t *testing.T) {
 	}
 	for _, body := range []string{
 		`{"capabilities":["self-debug"],"grants":["api:ci:read"]}`,
+		`{"capabilities":["api:ci:read"],"grants":[]}`,
+		`{"reads":[],"grants":[{"capability":"https://grain.dev/capabilities/repo#read","with":{"repo":"acme/x"}}]}`,
+		`{"writes":[],"grants":[{"capability":"https://grain.dev/capabilities/repo#write","with":{"repo":"acme/x","base":""}}]}`,
 		`{"grants":[{"capability":"https://grain.dev/capabilities/repo#target","with":{"repo":"acme/x","base":""}}]}`,
 	} {
 		var req UpdateTaskRequest

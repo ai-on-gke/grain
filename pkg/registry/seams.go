@@ -73,6 +73,13 @@ type InstanceStatus struct {
 	Labels     map[string]string
 }
 
+// ErrServiceAccountNotReady is wrapped by a Compute provider's CreateInstance error when the
+// instance's own service account is not yet visible to the compute service (for example GCE's
+// EXTERNAL_RESOURCE_NOT_FOUND on a just-created account). Newly created service accounts are
+// eventually consistent -- GCP documents up to about 60s before other services can use them --
+// so the reconciler retries the creation with backoff instead of failing the entry outright.
+var ErrServiceAccountNotReady = errors.New("instance service account is not yet visible to the compute provider")
+
 // Compute provisions and manages hosted VM instances.
 type Compute interface {
 	CreateInstance(ctx context.Context, spec InstanceSpec) (*InstanceHandle, error)

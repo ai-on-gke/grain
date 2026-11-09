@@ -82,6 +82,7 @@ func TestJSONErrorsWriteStructuredStderrAndLeaveStdoutEmpty(t *testing.T) {
 		{"unauthenticated", []string{"-server", statusServer(t, http.StatusUnauthorized), "list", "--json"}, exitAuth, "unauthenticated"},
 		{"server error", []string{"-server", statusServer(t, http.StatusInternalServerError), "list", "--json"}, exitFailed, "server_error"},
 		{"conflict", []string{"-server", statusServer(t, http.StatusConflict), "list", "--json"}, exitUsage, "conflict"},
+		{"rate limited", []string{"-server", statusServer(t, http.StatusTooManyRequests), "list", "--json"}, exitFailed, "rate_limited"},
 		{"unreachable", []string{"-server", closedServer(t), "--connect-timeout", "200ms", "list", "--json"}, exitUnreachable, "daemon_unreachable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
