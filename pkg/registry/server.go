@@ -1053,7 +1053,7 @@ func (s *Server) handleCreateEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !caller.CanCreate && !caller.IsAdmin {
-		writeJSONError(w, http.StatusForbidden, "forbidden", "caller is not permitted to create registry entries")
+		writeJSONError(w, http.StatusForbidden, "forbidden", "caller is not permitted to create hub entries")
 		return
 	}
 	if s.store == nil {
@@ -1789,7 +1789,7 @@ func (s *Server) handleOfferTransfer(w http.ResponseWriter, r *http.Request) {
 
 	if req.Force {
 		if !caller.IsAdmin {
-			writeJSONError(w, http.StatusForbidden, "forbidden", "only registry admins may force-transfer entry ownership")
+			writeJSONError(w, http.StatusForbidden, "forbidden", "only hub admins may force-transfer entry ownership")
 			return
 		}
 		if targetOwner == "" {

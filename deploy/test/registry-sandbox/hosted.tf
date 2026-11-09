@@ -38,10 +38,14 @@ locals {
   # Manager secrets stay in the registry project and the instance SQL pool is
   # password-authenticated, so no secretmanager/cloudsql roles are required in
   # the hosted project.
+  # No roles/iam.serviceAccountUser: the registry grants itself that role on
+  # each per-instance service account it creates (compute.grant_self_act_as,
+  # default true) through roles/iam.serviceAccountAdmin's
+  # iam.serviceAccounts.setIamPolicy, so it never needs actAs project-wide.
+  # See docs/registry.md, "IAM the registry needs".
   hosted_project_registry_roles = toset([
     "roles/compute.instanceAdmin.v1",
     "roles/iam.serviceAccountAdmin",
-    "roles/iam.serviceAccountUser",
   ])
 
   hosted_network_name = local.hosted_cross ? google_compute_network.hosted[0].name : google_compute_network.this.name

@@ -561,10 +561,17 @@ func TestRegistrySandboxHostedProjectWiring(t *testing.T) {
 		`source_ranges = [google_compute_subnetwork.hosted[0].ip_cidr_range]`,
 		`"roles/compute.instanceAdmin.v1"`,
 		`"roles/iam.serviceAccountAdmin"`,
-		`"roles/iam.serviceAccountUser"`,
 	} {
 		if !strings.Contains(hosted, want) {
 			t.Errorf("hosted.tf missing %q", want)
+		}
+	}
+	// The registry grants itself actAs on each instance account it creates
+	// (compute.grant_self_act_as); a project-wide serviceAccountUser would let
+	// it act as any account in the hosted project.
+	for name, body := range map[string]string{"hosted.tf": hosted, "kms.tf": read("kms.tf")} {
+		if strings.Contains(body, `"roles/iam.serviceAccountUser"`) {
+			t.Errorf("%s must not grant the registry roles/iam.serviceAccountUser project-wide", name)
 		}
 	}
 	if strings.Contains(hosted, "source_tags") {
