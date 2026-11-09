@@ -498,14 +498,14 @@ if [[ "${SKIP_IMAGE_BUILD}" -eq 0 ]]; then
     ensure_gcs_bucket "${STATE_BUCKET}"
     cb_dir="$(mktemp -d)"
     cid="$(docker create "${REGISTRY_IMAGE}")"
-    docker cp "${cid}:/usr/local/bin/grain-registry" "${cb_dir}/grain-registry"
+    docker cp "${cid}:/usr/local/bin/grain-hub" "${cb_dir}/grain-hub"
     docker rm -f "${cid}" >/dev/null
-    chmod 0755 "${cb_dir}/grain-registry"
+    chmod 0755 "${cb_dir}/grain-hub"
     awk '
       /^ARG RUNTIME_IMAGE=/ { print; next }
       /^FROM \$\{RUNTIME_IMAGE\}/ { in_runtime=1 }
       in_runtime {
-        sub(/^COPY --from=build \/out\/grain-registry /, "COPY grain-registry ")
+        sub(/^COPY --from=build \/out\/grain-hub /, "COPY grain-hub ")
         print
       }
     ' "${REPO_ROOT}/Dockerfile.hub" > "${cb_dir}/Dockerfile"

@@ -122,6 +122,10 @@ if ! docker inspect grain-daemon >/dev/null 2>&1 || [[ "${desired_spec}" != "${c
     -e GRAIN_HUB_ISSUER=grain-registry \
     -e GRAIN_HUB_AUDIENCE="${entry_url}" \
     -e GRAIN_HUB_KEYS_URL="${jwks_url}" \
+    -e GRAIN_REGISTRY_CONNECT=true \
+    -e GRAIN_REGISTRY_ISSUER=grain-registry \
+    -e GRAIN_REGISTRY_AUDIENCE="${entry_url}" \
+    -e GRAIN_REGISTRY_KEYS_URL="${jwks_url}" \
     -e GRAIN_ALLOWED_PRINCIPALS="${allowed_principals_csv}" \
     "${daemon_image}" \
     "${daemon_args[@]}"
@@ -140,6 +144,9 @@ set -euo pipefail
 docker_env=(-e GRAIN_DATA_DIR=/var/lib/grain-daemon/data -e GRAIN_SERVER=http://127.0.0.1:8080)
 if [[ -n "${GRAIN_HUB_TOKEN+x}" ]]; then
   docker_env+=(-e GRAIN_HUB_TOKEN)
+fi
+if [[ -n "${GRAIN_REGISTRY_TOKEN+x}" ]]; then
+  docker_env+=(-e GRAIN_REGISTRY_TOKEN)
 fi
 exec docker exec -u grain "${docker_env[@]}" grain-daemon /usr/local/bin/grain "$@"
 WRAPPER_EOF

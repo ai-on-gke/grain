@@ -1631,10 +1631,11 @@ func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
 	var renamed struct {
 		Hub *model.RegistryConfig `json:"hub"`
 	}
-	if err := json.Unmarshal(data, &renamed); err == nil {
-		if renamed.Hub != nil {
-			r.Registry = renamed.Hub
-		}
+	if err := json.Unmarshal(data, &renamed); err != nil {
+		return err
+	}
+	if renamed.Hub != nil {
+		r.Registry = renamed.Hub
 	}
 	var snake struct {
 		SettingsLocked        *bool     `json:"settings_locked"`

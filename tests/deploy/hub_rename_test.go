@@ -107,3 +107,15 @@ func TestMakefileKeepsTheRegistryNamesAsAliases(t *testing.T) {
 	contains(t, mk, "MAIN_grain-hub ?= $(or $(MAIN_grain-registry),./cmd/grain-hub)")
 	contains(t, mk, "-t $(IMAGE_HUB) -f Dockerfile.hub .")
 }
+
+// deploy/test/hub-sandbox/up.sh's Cloud Build fallback extracts the
+// compiled binary (not the grain-registry symlink) and rewrites
+// Dockerfile.hub's runtime COPY --from=build /out/grain-hub line.
+func TestHubSandboxCloudBuildFallbackMatchesDockerfileHub(t *testing.T) {
+	up := read(t, "deploy", "test", "hub-sandbox", "up.sh")
+	contains(t, up, `docker cp "${cid}:/usr/local/bin/grain-hub" "${cb_dir}/grain-hub"`)
+	contains(t, up, `sub(/^COPY --from=build \/out\/grain-hub /, "COPY grain-hub ")`)
+	if strings.Contains(up, "/out/grain-registry") {
+		t.Fatalf("up.sh still looks for /out/grain-registry in Dockerfile.hub")
+	}
+}

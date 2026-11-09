@@ -60,7 +60,7 @@ META_HDR="Metadata-Flavor: Google"
 cfg_json="$(curl -fsSL -H "${META_HDR}" "${META_URL}/instance/attributes/grain-config")"
 
 entry_name="$(jq -r '.GRAIN_ENTRY_NAME // empty' <<<"${cfg_json}")"
-registry_url="$(jq -r '.GRAIN_HUB_URL // empty' <<<"${cfg_json}")"
+registry_url="$(jq -r '.GRAIN_HUB_URL // .GRAIN_REGISTRY_URL // empty' <<<"${cfg_json}")"
 jwks_url="$(jq -r '.GRAIN_JWKS_URL // empty' <<<"${cfg_json}")"
 instance_domain="$(jq -r '.GRAIN_INSTANCE_DOMAIN // empty' <<<"${cfg_json}")"
 owner_email="$(jq -r '.GRAIN_OWNER_EMAIL // empty' <<<"${cfg_json}")"
@@ -201,6 +201,12 @@ if ! docker inspect grain-daemon >/dev/null 2>&1 || [[ "${desired_spec}" != "${c
     --env-file /etc/grain-daemon/daemon.env \
     -e HOME=/var/lib/grain/home \
     -e GRAIN_DATA_DIR=/var/lib/grain/data \
+    -e GRAIN_HUB_ISSUER=grain-registry \
+    -e GRAIN_HUB_AUDIENCE="${entry_url}" \
+    -e GRAIN_HUB_KEYS_URL="${jwks_url}" \
+    -e GRAIN_REGISTRY_ISSUER=grain-registry \
+    -e GRAIN_REGISTRY_AUDIENCE="${entry_url}" \
+    -e GRAIN_REGISTRY_KEYS_URL="${jwks_url}" \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v /var/lib/grain:/var/lib/grain \
     -v /var/lib/granule:/var/lib/granule \

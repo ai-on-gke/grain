@@ -269,12 +269,19 @@ func TestRegistryTargetRequiresSecretsWriteRole(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	body := `{"registry":{"url":"https://registry.example.com","entry":"grain-dev"}}`
-	if code, resp := h.call("sam@example.com", http.MethodPut, "/api/settings", body); code != http.StatusForbidden {
-		t.Errorf("settings-only role PUT /api/settings(registry.url): %d %s, want 403", code, resp)
+	for _, body := range []string{
+		`{"registry":{"url":"https://registry.example.com","entry":"grain-dev"}}`,
+		`{"hub":{"url":"https://hub.example.com","entry":"grain-dev"}}`,
+	} {
+		if code, resp := h.call("sam@example.com", http.MethodPut, "/api/settings", body); code != http.StatusForbidden {
+			t.Errorf("settings-only role PUT /api/settings(%s): %d %s, want 403", body, code, resp)
+		}
+		if code, resp := h.call("ops@example.com", http.MethodPut, "/api/settings", body); code != http.StatusOK {
+			t.Fatalf("settings+secrets role PUT /api/settings(%s): %d %s, want 200", body, code, resp)
+		}
 	}
-	if code, resp := h.call("ops@example.com", http.MethodPut, "/api/settings", body); code != http.StatusOK {
-		t.Fatalf("settings+secrets role PUT /api/settings(registry.url): %d %s, want 200", code, resp)
+	if code, resp := h.call("ops@example.com", http.MethodPut, "/api/settings", `{"hub":"not-an-object"}`); code != http.StatusBadRequest {
+		t.Errorf("malformed hub payload PUT /api/settings: %d %s, want 400", code, resp)
 	}
 }
 
