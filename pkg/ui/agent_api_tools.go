@@ -339,6 +339,7 @@ var routeDocs = map[string]string{
 	"POST /api/access/principals":                                          "Add a user:<email> or group:<email> entry to the allowed users and groups list (idempotent when already present).",
 	"PATCH /api/access/principals/{entry}":                                 "Give an entry on the allowed users and groups list another role (a scope set).",
 	"DELETE /api/access/principals/{entry}":                                "Remove a user:<email> or group:<email> entry from the allowed users and groups list.",
+	"GET /api/access/history":                                              "List recent changes to the allowed users and groups list, newest first: who made each, when, the old and new role and the reason.",
 }
 
 // routeBodies is the request type a route reads its body into, which
@@ -602,6 +603,7 @@ var routeQueries = map[string]map[string]string{
 		"repo": "Only this repository's (owner/name) faults.",
 	}),
 	"GET /api/deployment/config-audit": listQueryDocs("actor, surface or summary", listPageLarge, nil),
+	"GET /api/access/history":          listQueryDocs("actor or summary", listPageLarge, nil),
 	"GET /api/external-agents/tokens":  listQueryDocs("id, name, owner or scope set", listPageMedium, nil),
 	"GET /api/access/principals":       listObjectQueryDocs("principal entry, role, reason or addedBy", listPageMedium, nil),
 	"DELETE /api/access/principals/{entry}": {

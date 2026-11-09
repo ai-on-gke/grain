@@ -48,7 +48,10 @@ type AccessRoleChoice struct {
 	Builtin     bool   `json:"builtin"`
 	// Person is true for a role holding a dangerous scope: assigning it
 	// needs a reason, and a person whose own role holds all of it.
-	Person   bool       `json:"person"`
+	Person bool `json:"person"`
+	// Denies is true for a role that denies scopes: in a role a deny is a
+	// veto, so changing an entry that has it needs a reason too.
+	Denies   bool       `json:"denies,omitempty"`
 	Resolved []APIScope `json:"resolved"`
 }
 
@@ -285,7 +288,7 @@ func (c *Client) ListAllowedPrincipals(ctx context.Context) (AccessPrincipalsRes
 			continue
 		}
 		roles = append(roles, AccessRoleChoice{Name: set.Name, Description: set.Description,
-			Builtin: set.Builtin, Person: set.Person, Resolved: set.Resolved})
+			Builtin: set.Builtin, Person: set.Person, Denies: len(roleDenies(set.Name)) > 0, Resolved: set.Resolved})
 	}
 	return AccessPrincipalsResponse{
 		Entries:            entries,
@@ -709,6 +712,54 @@ func (s *Server) handleListAccessPrincipals(w http.ResponseWriter, r *http.Reque
 		out.NextCursor = page.NextCursor
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// accessHistoryLimit is how many access changes an unpaged GET
+// /api/access/history (the Access page's own read) returns, newest first.
+const accessHistoryLimit = 100
+
+// handleAccessHistory is GET /api/access/history: the config_audit rows of
+// surface "access", so Settings -> Access shows who changed which role,
+// when and why to a caller holding access:read without settings:read.
+func (s *Server) handleAccessHistory(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageLarge)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	if !isAgentListCaller(r) && !r.URL.Query().Has("cursor") && !r.URL.Query().Has("q") {
+		list.Paged = false
+	}
+	entries, err := s.tasks.Store.ConfigAudit(r.Context(), maxConfigAudit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	title := s.tasks.sessionTitles(r.Context())
+	out := []ConfigAuditView{}
+	for _, e := range entries {
+		if e.Surface != "access" {
+			continue
+		}
+		view := ConfigAuditView{
+			ID:          e.ID,
+			At:          e.At,
+			Actor:       e.By.ID,
+			ActorKind:   string(e.By.Kind),
+			ActorSource: string(e.By.Source),
+			ActorLabel:  sessionLabel(e.By, e.OnBehalfOf, title),
+			Surface:     e.Surface,
+			Summary:     e.Summary,
+		}
+		if !list.matches(view.Actor, view.ActorLabel, view.Summary) {
+			continue
+		}
+		out = append(out, view)
+		if !list.Paged && len(out) == accessHistoryLimit {
+			break
+		}
+	}
+	writeList(w, out, list)
 }
 
 func (s *Server) handleAllowPrincipal(w http.ResponseWriter, r *http.Request) {

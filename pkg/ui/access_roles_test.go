@@ -391,6 +391,10 @@ func TestAVerifiedAdminChangesAnotherAdmin(t *testing.T) {
 	if !sawDown || !sawUp {
 		t.Fatalf("config_audit = %+v, want both changes by ops with old and new role and reason", audits)
 	}
+	// Settings -> Access reads the same trail, at access:read.
+	if code, body := h.call("lead@example.com", http.MethodGet, "/api/access/history", ""); code != http.StatusOK || !strings.Contains(body, `grain/operator -\u003e grain/viewer (left the on-call rota)`) || !strings.Contains(body, `"actor":"ops@example.com"`) {
+		t.Fatalf("GET /api/access/history: %d %s, want the change by ops", code, body)
+	}
 
 	// A narrower caller neither changes an admin nor gives the role.
 	if code, body := h.call("lead@example.com", http.MethodPatch, path("user:other@example.com"), `{"role":"grain/viewer","reason":"x"}`); code != http.StatusForbidden || !strings.Contains(body, "wider than") {
