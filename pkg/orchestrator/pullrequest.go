@@ -135,6 +135,7 @@ func resolveUpstreamRepo(ctx context.Context, store *model.Store, task model.Tas
 func OpenPullRequestForTask(ctx context.Context, store *model.Store, client github.Client,
 	task model.Task) (PullRequestStatus, error) {
 
+	client = github.ForTask(client, task.ID)
 	if task.Target == nil {
 		return PullRequestStatus{}, fmt.Errorf(
 			"orchestrator: task %s has no repo attached, so there is no branch to open a pull request for", task.ID)

@@ -17,6 +17,7 @@ package ui_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"strings"
@@ -373,12 +374,11 @@ func TestAddTeamGitConnectionPerUserPATAndReplaceScoping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	credCharlie, err := store.TaskGitCredentialOn(ctx, "t-charlie", "git.example.test", "acme", "widgets")
-	if err != nil {
-		t.Fatal(err)
+	if credAlice == credBob {
+		t.Fatalf("expected distinct credentials for alice (%q) and bob (%q)", credAlice, credBob)
 	}
-	if credAlice == credBob || credAlice == credCharlie || credBob == credCharlie {
-		t.Fatalf("expected distinct credentials for alice (%q), bob (%q), and charlie/default (%q)", credAlice, credBob, credCharlie)
+	if _, err := store.TaskGitCredentialOn(ctx, "t-charlie", "git.example.test", "acme", "widgets"); !errors.Is(err, model.ErrNoTeamGitCredential) {
+		t.Fatalf("TaskGitCredentialOn(t-charlie) err = %v, want ErrNoTeamGitCredential (charlie has no assigned token)", err)
 	}
 	if got, ok := credentials.GetForRepoOn(credAlice, "git.example.test", "acme", "widgets"); !ok || got.Token == nil || *got.Token != "tok-alice-2" {
 		t.Errorf("Alice token = %+v, want tok-alice-2", got)
@@ -386,8 +386,31 @@ func TestAddTeamGitConnectionPerUserPATAndReplaceScoping(t *testing.T) {
 	if got, ok := credentials.GetForRepoOn(credBob, "git.example.test", "acme", "widgets"); !ok || got.Token == nil || *got.Token != "tok-bob" {
 		t.Errorf("Bob token = %+v, want tok-bob", got)
 	}
-	if got, ok := credentials.GetForRepoOn(credCharlie, "git.example.test", "acme", "widgets"); !ok || got.Token == nil || *got.Token != "tok-default" {
-		t.Errorf("Charlie (default) token = %+v, want tok-default", got)
+
+	// 5. Picking a user-bound connection as a shared repository connection is refused with 400.
+	rec = doWithHeaders(t, srv, http.MethodPut, "/api/deployment/repos/acme/widgets/git-connection",
+		`{"credential": "`+credAlice+`", "host": "git.example.test"}`, alice)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("SetTeamRepoGitConnection with user-bound credential: got %d %s, want 400", rec.Code, rec.Body)
+	}
+
+	// 6. Reusing another user's credential name when adding a connection is refused with 400.
+	rec = doWithHeaders(t, srv, http.MethodPost, "/api/deployment/git-connections",
+		`{"host": "git.example.test", "kind": "git", "scope": "acme", "credential": "`+credAlice+`", "taskUser": "bob@example.com"}`, bob)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("AddTeamGitConnection reusing another user's credential: got %d %s, want 400", rec.Code, rec.Body)
+	}
+
+	// 7. Enabling requireUserGitCredential via PUT /api/deployment refuses connections without a taskUser.
+	rec = doWithHeaders(t, srv, http.MethodPut, "/api/deployment",
+		`{"requireUserGitCredential": true}`, alice)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT /api/deployment requireUserGitCredential: got %d %s, want 200", rec.Code, rec.Body)
+	}
+	rec = doWithHeaders(t, srv, http.MethodPost, "/api/deployment/git-connections",
+		`{"host": "other.example.test", "kind": "git", "type": "pat", "value": "tok-unassigned"}`, alice)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("AddTeamGitConnection without taskUser when requireUserGitCredential=true: got %d %s, want 400", rec.Code, rec.Body)
 	}
 }
 

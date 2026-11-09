@@ -96,7 +96,12 @@ export function resolveRepoConnection(connections, repo) {
   const rank = { default: 1, owner: 2, repo: 3 };
   let best = null;
   for (const conn of connections || []) {
-    if (!(conn?.credential || "").trim() || connHost(conn) !== host) continue;
+    if (
+      !(conn?.credential || "").trim() ||
+      (conn?.user || "").trim() ||
+      connHost(conn) !== host
+    )
+      continue;
     const scope = connScope(conn);
     let match = null;
     if (scope === "") match = "default";
@@ -115,7 +120,10 @@ export function repoPinnedConnection(connections, repo) {
   const { host, owner, name } = splitRepo(repo);
   return (
     (connections || []).find(
-      (c) => connHost(c) === host && connScope(c) === `${owner}/${name}`,
+      (c) =>
+        !(c?.user || "").trim() &&
+        connHost(c) === host &&
+        connScope(c) === `${owner}/${name}`,
     ) || null
   );
 }
@@ -133,8 +141,9 @@ export function distinctConnections(connections) {
   };
   const byCred = new Map();
   for (const conn of connections || []) {
-    const have = byCred.get(conn.credential);
-    if (!have || order(conn) < order(have)) byCred.set(conn.credential, conn);
+    const key = `${conn.credential}\x00${(conn.user || "").trim().toLowerCase()}`;
+    const have = byCred.get(key);
+    if (!have || order(conn) < order(have)) byCred.set(key, conn);
   }
   return [...byCred.values()];
 }

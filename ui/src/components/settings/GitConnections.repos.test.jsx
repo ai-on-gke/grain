@@ -208,4 +208,20 @@ describe("GitConnections repositories", () => {
     await user.type(picker, "corp pat");
     expect(optionValues(picker)).toEqual(["corp-bot"]);
   });
+
+  it("excludes user-bound connections from shared repository pickers and explains per-user resolution", async () => {
+    const user = userEvent.setup();
+    fakeServer([
+      { ...view("alice-pat"), user: "alice@example.com" },
+      view("corp-bot", "acme"),
+    ]);
+    renderPanel();
+    expect(
+      await screen.findByTestId("repo-connection-resolved-acme/widgets"),
+    ).toHaveTextContent("Uses each task author's assigned connection");
+
+    const picker = within(row("acme/widgets")).getByRole("combobox");
+    await user.click(picker);
+    expect(optionValues(picker)).toEqual(["", "corp-bot"]);
+  });
 });

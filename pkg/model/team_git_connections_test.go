@@ -80,5 +80,21 @@ func TestMatchUserGitConnectionAndDefaultPrecedence(t *testing.T) {
 	if _, ok := MatchUserGitConnection(conns, "charlie", "github.com", "github.com", "acme", "widgets"); ok {
 		t.Fatalf("MatchUserGitConnection(charlie) matched unexpectedly")
 	}
+
+	// MatchTeamGitConnection never returns a user-bound connection even when no default connection exists.
+	userOnly := []TeamGitConnection{
+		{Credential: "alice-host", Host: "github.com", User: "alice@example.com"},
+		{Credential: "bob-host", Host: "github.com", User: "bob@example.com"},
+	}
+	if got, ok := MatchTeamGitConnection(userOnly, "github.com", "github.com", "acme", "widgets"); ok {
+		t.Fatalf("MatchTeamGitConnection(userOnly) = %+v, true; want no match so a user's token is never used as a shared default", got)
+	}
+
+	// EncodeTeamGitConnectionsWithOptions / DecodeTeamGitConnectionsWithOptions preserves RequireUserGitCredential.
+	raw := EncodeTeamGitConnectionsWithOptions(userOnly, true)
+	decoded, reqUser := DecodeTeamGitConnectionsWithOptions(raw)
+	if !reqUser || len(decoded) != 2 {
+		t.Fatalf("DecodeTeamGitConnectionsWithOptions = (%+v, %v); want 2 connections and reqUser=true", decoded, reqUser)
+	}
 }
 
