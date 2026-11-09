@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import {
   Button,
   FormControl,
@@ -261,22 +261,49 @@ function returnFocusKey(href) {
   return typeof href === "string" ? href.split("/")[1] || "" : "";
 }
 
-function rememberReturnFocus(href) {
+// A remembered link is its href plus a tag, "" for a row's own name. The
+// tag tells apart links on one page that lead to the same place -- two
+// dashboard panels following the dashboard's own question both have an
+// "Open" to the same list -- so Back lands on the one that was followed
+// rather than on whichever of them mounted first.
+function returnFocusEntry(href, tag) {
+  return `${href}\u0000${tag}`;
+}
+
+function rememberReturnFocus(href, tag = "") {
   if (typeof href === "string" && href) {
-    returnFocusTo.set(returnFocusKey(href), href);
+    returnFocusTo.set(returnFocusKey(href), returnFocusEntry(href, tag));
   }
 }
 
-export function RowLink({ href, onOpen, className, children, ...rest }) {
+// useReturnFocus is RowLink's memory for a link that is not a row's name
+// but leaves the page all the same: a dashboard panel's "Open" and its
+// state counts, a report's backlog counts and task references. Coming
+// Back remounts the board -- a report fetches itself again, so its links
+// do not even exist until that lands -- and focus was left on <body>
+// (2026-11-09 boards walkthrough), where RowLink's rows already had it
+// back. It returns the ref to put on the link and the callback to call
+// when the link is followed in-app. A null tag turns it off, for a link
+// that should never take focus on mounting.
+export function useReturnFocus(href, tag = "") {
   const ref = useRef(null);
   useEffect(() => {
+    if (tag === null) return;
     const key = returnFocusKey(href);
-    if (returnFocusTo.get(key) !== href) return;
+    if (returnFocusTo.get(key) !== returnFocusEntry(href, tag)) return;
     returnFocusTo.delete(key);
     const active = document.activeElement;
     if (active && active !== document.body) return;
     ref.current?.focus();
-  }, [href]);
+  }, [href, tag]);
+  const remember = useCallback(() => {
+    if (tag !== null) rememberReturnFocus(href, tag);
+  }, [href, tag]);
+  return [ref, remember];
+}
+
+export function RowLink({ href, onOpen, className, children, ...rest }) {
+  const [ref, remember] = useReturnFocus(href);
   return (
     <a
       ref={ref}
@@ -288,8 +315,39 @@ export function RowLink({ href, onOpen, className, children, ...rest }) {
         if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)
           return;
         e.preventDefault();
-        rememberReturnFocus(href);
+        remember();
         onOpen();
+      }}
+      {...rest}
+    >
+      {children}
+    </a>
+  );
+}
+
+// FollowLink is a plain anchor that leaves the page with useReturnFocus's
+// memory: a real href, so it can be copied or opened in a new tab, and
+// followed in-app (onFollow) on a plain left click. Without onFollow the
+// browser follows the href itself.
+export function FollowLink({ href, tag = "", onFollow, children, ...rest }) {
+  const [ref, remember] = useReturnFocus(href, tag);
+  return (
+    <a
+      ref={ref}
+      href={href}
+      onClick={(e) => {
+        if (
+          !onFollow ||
+          e.button !== 0 ||
+          e.metaKey ||
+          e.ctrlKey ||
+          e.shiftKey ||
+          e.altKey
+        )
+          return;
+        e.preventDefault();
+        remember();
+        onFollow();
       }}
       {...rest}
     >
