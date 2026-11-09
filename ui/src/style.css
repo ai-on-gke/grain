@@ -2666,8 +2666,8 @@ html[data-phone="true"] .gantt-body {
   flex: none;
   padding-right: 1.75rem;
 }
-/* A pending release's soak beside its Approve (InboxPage's ReleaseSoak),
-   with the SHORT SOAK warning when it was under the minimum. */
+/* A pending release's soak or breaking-change warning beside its Approve
+   (InboxPage's ReleaseSoak), with SHORT SOAK and BREAKING chips. */
 .inbox-release-soak {
   display: inline-flex;
   align-items: center;

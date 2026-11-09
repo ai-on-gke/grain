@@ -450,9 +450,9 @@ const (
 	// DefaultClaudeCLIVersion and the two digests below pin the same
 	// release the deployment Dockerfile does -- kept in step with it by
 	// TestClaudeCLIDefaultsMatchDockerfile in this package.
-	DefaultClaudeCLIVersion     = "2.1.316"
-	DefaultClaudeCLISHA256Amd64 = "fd13c70000fec3f2116dfbcbb6121210b4a29328bf0e46210a59dd594a67d824"
-	DefaultClaudeCLISHA256Arm64 = "55cdb8e162d190432696ea54010e0fca2e18d06fa7a7127fd563b9ffd4f22624"
+	DefaultClaudeCLIVersion     = "2.1.319"
+	DefaultClaudeCLISHA256Amd64 = "dabafec82ca1319fa43d8be36a10fc61b1d11821cb98ad5df04ad95e199b8eed"
+	DefaultClaudeCLISHA256Arm64 = "a7e687fd1cb054d651c7588223de3786c99d4c682365e3c3ae1e59ce7f3a591f"
 
 	// DefaultUIAddr matches the daemon's own -ui-addr default
 	// (pkg/cli/daemon.go): every interface, on the port the grain CLI

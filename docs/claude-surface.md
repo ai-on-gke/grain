@@ -34,20 +34,20 @@ until the surface is regenerated and reviewed.
 
 ``````console
 $ claude --version
-2.1.316 (Claude Code)
+2.1.319 (Claude Code)
 ``````
 
 ``````console
-path   /opt/claude/.local/share/claude/versions/2.1.316
-size   328262000 bytes
-sha256 fd13c70000fec3f2116dfbcbb6121210b4a29328bf0e46210a59dd594a67d824
+path   /opt/claude/.local/share/claude/versions/2.1.319
+size   340226576 bytes
+sha256 dabafec82ca1319fa43d8be36a10fc61b1d11821cb98ad5df04ad95e199b8eed
 ``````
 
 How the image gets its claude, against the claude that answered here:
 
 ``````console
-installed by the Dockerfile   pinned: ARG CLAUDE_CLI_VERSION=2.1.316
-captured here                 2.1.316 (Claude Code)
+installed by the Dockerfile   pinned: ARG CLAUDE_CLI_VERSION=2.1.319
+captured here                 2.1.319 (Claude Code)
 ``````
 
 ## Commands and flags

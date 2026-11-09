@@ -1675,20 +1675,19 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		autoGrantContextReads = catalogueCfg.AutoGrantContextReads
 	}
 	for _, rawP := range proposals {
+		if err := mcp.ValidateProposeTaskArgs(rawP); err != nil {
+			log.Printf("orchestrator: skipping proposed task with invalid arguments: %v", err)
+			continue
+		}
 		p := rawP
 		if rawP["grants"] != nil {
-			pRepo, _ := rawP["repo"].(string)
-			pBranch, _ := rawP["branch"].(string)
-			pNoRepo, _ := rawP["no_repo"].(bool)
-			ct, ctErr := mcp.ProposedChangeTarget(rawP)
-			decoded, hasGrants, gErr := model.DecodeRawRequestGrants(rawP["grants"], model.GrantSpelling{
-				Capabilities: rawP["capabilities"] != nil,
-				Reads:        rawP["reads"] != nil,
-				Writes:       rawP["writes"] != nil,
-				Target:       strings.TrimSpace(pRepo) != "" || strings.TrimSpace(pBranch) != "" || pNoRepo || ctErr != nil || ct != nil,
-			})
+			decoded, hasGrants, gErr := model.DecodeRawRequestGrants(rawP["grants"], mcp.ProposeTaskGrantSpelling(rawP))
 			if gErr != nil {
 				log.Printf("orchestrator: skipping proposed task with invalid grants: %v", gErr)
+				continue
+			}
+			if ct, _ := mcp.ProposedChangeTarget(rawP); ct != nil && len(decoded.Writes) > 0 {
+				log.Printf("orchestrator: skipping proposed task with invalid grants: %s cannot be combined with writes", ct.Kind)
 				continue
 			}
 			if hasGrants {
