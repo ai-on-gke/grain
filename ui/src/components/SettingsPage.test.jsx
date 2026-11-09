@@ -91,7 +91,7 @@ describe("SettingsPage", () => {
       "Upgrade",
       "Caches",
       "Engine",
-      "Registry",
+      "Hub",
       "Config repo",
       "General",
       "Git",

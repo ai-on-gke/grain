@@ -60,15 +60,18 @@ sandbox project (`deploy/test/registry-sandbox/`).
   IP -> `grain-instance` on `8080/tcp`, IAP -> `grain-instance` on `22/tcp`, and
   the hosted subnet -> `<prefix>-sql` on `5432/tcp`. Per-instance secrets stay in
   the registry project (`secrets.project`). The registry VM's service account
-  needs `roles/compute.instanceAdmin.v1`, `roles/iam.serviceAccountAdmin` and
-  `roles/iam.serviceAccountUser` in the hosted project: pass
+  needs `roles/compute.instanceAdmin.v1` and `roles/iam.serviceAccountAdmin`
+  in the hosted project. It does not need project-wide
+  `roles/iam.serviceAccountUser`: it grants itself that role on each
+  per-instance account it creates (`compute.grant_self_act_as`, see
+  `docs/registry.md`, "IAM the registry needs"). Pass
   `--manage-hosted-iam` when the deploying identity can set that project's IAM
   policy, otherwise have a project owner run:
 
   ```bash
   VM_SA="$(gcloud compute instances describe <prefix>-vm --zone us-central1-a \
     --project <registry-project> --format='value(serviceAccounts[0].email)')"
-  for role in roles/compute.instanceAdmin.v1 roles/iam.serviceAccountAdmin roles/iam.serviceAccountUser; do
+  for role in roles/compute.instanceAdmin.v1 roles/iam.serviceAccountAdmin; do
     gcloud projects add-iam-policy-binding <hosted-project> \
       --member="serviceAccount:${VM_SA}" --role="${role}" --condition=None
   done

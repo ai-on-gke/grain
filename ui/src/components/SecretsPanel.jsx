@@ -39,7 +39,7 @@ import { ReadOnlyFieldset } from "./settings/SettingsCard.jsx";
 // grain/task-110: this was the whole Secrets tab, a flat list of every
 // secret in the store with a three-box form under it. Credentials with a
 // dedicated field sit with whatever uses them -- each backend's credential
-// under Settings -> Models and the registry token under Settings -> Registry.
+// under Settings -> Models and the hub token under Settings -> Hub.
 //
 // What is left is this: the remainder, on the Deployment credentials card at
 // the foot of Settings -> Capabilities. `claimed` names the secrets a control
@@ -174,8 +174,8 @@ export default function SecretsPanel({
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
         Everything in this deployment&apos;s secrets store that nothing else
         claims -- backend credentials are set on each connection under Settings
-        &rarr; Models, the registry token under Settings &rarr; Registry, and
-        each capability server&apos;s own on its page under{" "}
+        &rarr; Models, the hub token under Settings &rarr; Hub, and each
+        capability server&apos;s own on its page under{" "}
         <Link href="/settings/capabilities#capability-servers">
           Capability servers
         </Link>{" "}

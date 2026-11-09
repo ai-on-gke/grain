@@ -177,7 +177,7 @@ func TestTaskReasonOfIsTotal(t *testing.T) {
 		for _, task := range tasks {
 			for _, obs := range observations {
 				for _, deps := range [][]string{nil, {"2"}} {
-					for _, hold := range []queuedHold{holdNone, holdUsagePaused, holdLocalPolicy, holdDispatchBlocked} {
+					for _, hold := range []queuedHold{holdNone, holdUsagePaused, holdLocalPolicy, holdSuspension, holdDispatchBlocked} {
 						for _, asked := range askedFacts {
 							reason := taskReasonOf(task, model.State(state), obs, deps, hold, asked)
 							if _, ok := taskReasons[reason]; !ok || reasonState(reason) != state {
@@ -207,6 +207,8 @@ func TestTaskReasonOfIsTotal(t *testing.T) {
 		{model.StateQueued, model.Task{}, nil, nil, holdNone, taskReasonReady},
 		{model.StateQueued, model.Task{}, nil, nil, holdUsagePaused, taskReasonUsagePaused},
 		{model.StateQueued, model.Task{}, nil, nil, holdLocalPolicy, taskReasonLocalPolicy},
+		{model.StateQueued, model.Task{}, nil, nil, holdSuspension, taskReasonHeldBySuspension},
+		{model.StateQueued, model.Task{}, nil, []string{"2"}, holdSuspension, taskReasonBlocked},
 		{model.StateQueued, model.Task{}, nil, []string{"2"}, holdUsagePaused, taskReasonBlocked},
 		{model.StateQueued, model.Task{}, nil, []string{"2"}, holdLocalPolicy, taskReasonBlocked},
 		{model.StateQueued, model.Task{}, nil, nil, holdDispatchBlocked, taskReasonDispatchBlocked},

@@ -205,6 +205,40 @@ describe("CredentialsSection role gating", () => {
     expect(container.querySelector("input[name=githubHost]")).toBeEnabled();
   });
 
+  // F5 of the same walkthrough: the page's s.readOnly folds in
+  // Capabilities' capabilities:admin, which this card does not follow. A
+  // role holding settings:write and secrets:write without it (secretsonly)
+  // had the whole card read-only though every write returned 200.
+  it("stays editable for a role refused only capabilities:admin", async () => {
+    api.mockResolvedValue(secrets);
+    const { container } = render(
+      <CredentialsSection
+        s={makeSectionState({ readOnly: true, readOnlyForAnyRole: false })}
+        claimedSecrets={[]}
+      />,
+    );
+    await screen.findByText("github-app");
+    for (const name of ["githubHost", "gcpProject", "gcpServiceAccountEmail"]) {
+      expect(container.querySelector(`input[name=${name}]`)).toBeEnabled();
+    }
+    expect(screen.queryByTestId("credentials-read-only")).toBeNull();
+    expect(screen.getByRole("button", { name: "Set secret" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Delete secret" })).toBeEnabled();
+  });
+
+  it("still holds the fields read-only where every role is refused them", async () => {
+    api.mockResolvedValue(secrets);
+    const { container } = render(
+      <CredentialsSection
+        s={makeSectionState({ readOnly: true, readOnlyForAnyRole: true })}
+        claimedSecrets={[]}
+      />,
+    );
+    await screen.findByText("github-app");
+    expect(container.querySelector("input[name=githubHost]")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Set secret" })).toBeEnabled();
+  });
+
   it("says nothing extra when the role holds both write scopes", async () => {
     api.mockResolvedValue(secrets);
     render(<CredentialsSection s={makeSectionState()} claimedSecrets={[]} />);
