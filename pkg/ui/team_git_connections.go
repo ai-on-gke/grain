@@ -265,6 +265,9 @@ func (c *Client) AddTeamGitConnection(ctx context.Context, id string, req AddTea
 	if err != nil {
 		return Team{}, validationErrorf("invalid connection: %w", err)
 	}
+	if settings.RequireUserGitCredential && candidate.User == "" && strings.ToLower(strings.TrimSpace(req.Type)) != "none" && strings.TrimSpace(req.Credential) != "anonymous" {
+		return Team{}, validationErrorf("this deployment requires every git connection to be assigned to a task author user")
+	}
 	if !req.Replace {
 		for _, raw := range settings.EffectiveGitConnections() {
 			existing, err := model.NormalizeTeamGitConnection(raw)
@@ -326,6 +329,17 @@ func (c *Client) AddTeamGitConnection(ctx context.Context, id string, req AddTea
 		}
 		credName = savedName
 	} else {
+		for _, raw := range settings.EffectiveGitConnections() {
+			existing, err := model.NormalizeTeamGitConnection(raw)
+			if err != nil || existing.Credential != credName {
+				continue
+			}
+			if existing.User != "" && !model.SameGitConnectionUser(existing.User, candidate.User) {
+				return Team{}, validationErrorf(
+					"credential %q belongs to user %q and cannot be reassigned to another user or used as a default connection",
+					credName, existing.User)
+			}
+		}
 		// An ambient credential under the team's own name is still the
 		// host's login, which a system admin handed the team for one
 		// host: re-adding it rewrites its host record below -- where the
@@ -544,6 +558,11 @@ func (c *Client) SetTeamRepoGitConnection(ctx context.Context, id, owner, repo s
 			if err != nil || conn.Credential != credName || !model.SameGitHost(conn.Host, host, model.DefaultGitHost) {
 				continue
 			}
+			if conn.User != "" {
+				return Team{}, validationErrorf(
+					"credential %q belongs to user %q and cannot be set as the shared repository connection for %s/%s",
+					credName, conn.User, owner, repo)
+			}
 			if !held {
 				// Spelled as the connection it copies spells its host.
 				held, host = true, raw.Host
@@ -586,7 +605,7 @@ func (c *Client) SetTeamRepoGitConnection(ctx context.Context, id, owner, repo s
 	}
 	for _, conn := range settings.GitConnections {
 		norm, err := model.NormalizeTeamGitConnection(conn)
-		if err == nil && norm.Scope == scoped.Scope && model.SameGitHost(norm.Host, host, model.DefaultGitHost) {
+		if err == nil && norm.User == "" && norm.Scope == scoped.Scope && model.SameGitHost(norm.Host, host, model.DefaultGitHost) {
 			dropped = append(dropped, norm)
 			continue
 		}

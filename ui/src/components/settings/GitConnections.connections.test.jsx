@@ -811,4 +811,62 @@ describe("GitConnections git connections and input operations", () => {
       );
     });
   });
+
+  it("toggles requireUserGitCredential and requires a user when enabled", async () => {
+    const user = userEvent.setup();
+    const onDeploymentChanged = vi.fn();
+    api.mockImplementation((url, opts) => {
+      if (url.includes("/git-connections") && !opts) {
+        return Promise.resolve([]);
+      }
+      if (url === "/api/deployment" && opts?.method === "PUT") {
+        return Promise.resolve({ id: "default", requireUserGitCredential: true });
+      }
+      return Promise.resolve({});
+    });
+
+    const { rerender } = render(
+      <GitConnections
+        deployment={deployment}
+        onSave={vi.fn()}
+        onDeploymentChanged={onDeploymentChanged}
+        showError={vi.fn()}
+      />,
+    );
+
+    const switchInput = await screen.findByTestId(
+      "require-user-git-credential-switch",
+    );
+    await user.click(switchInput);
+
+    await waitFor(() => {
+      expect(api).toHaveBeenCalledWith(
+        "/api/deployment",
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({ requireUserGitCredential: true }),
+        }),
+      );
+    });
+
+    rerender(
+      <GitConnections
+        deployment={{ ...deployment, requireUserGitCredential: true }}
+        onSave={vi.fn()}
+        onDeploymentChanged={onDeploymentChanged}
+        showError={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByTestId("add-connection-button"));
+    await user.type(screen.getByLabelText("Token (PAT)"), "ghp_user_only");
+    const saveBtn = screen.getByRole("button", { name: "Save connection" });
+    expect(saveBtn).toBeDisabled();
+
+    await user.type(
+      screen.getByLabelText("User (task author, required)"),
+      "alice@example.com",
+    );
+    expect(saveBtn).toBeEnabled();
+  });
 });

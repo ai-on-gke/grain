@@ -17,9 +17,11 @@ import {
   Box,
   Button,
   Chip,
+  FormControlLabel,
   MenuItem,
   Paper,
   Stack,
+  Switch,
   Table,
   TableBody,
   TableCell,
@@ -542,6 +544,24 @@ function GitConnectionsList({
     }
   };
 
+  const toggleRequireUserGitCredential = async (evt) => {
+    const next = evt.target.checked;
+    setBusy(true);
+    setActionError(null);
+    try {
+      await api("/api/deployment", {
+        method: "PUT",
+        body: JSON.stringify({ requireUserGitCredential: next }),
+      });
+      await onChanged?.();
+    } catch (err) {
+      setActionError(err?.message || String(err));
+      showError?.(err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <Box sx={{ mb: 3 }} data-testid="git-connections-list">
       <Stack
@@ -568,6 +588,30 @@ function GitConnectionsList({
           </Button>
         )}
       </Stack>
+
+      <Box sx={{ mb: 1.5 }}>
+        <FormControlLabel
+          control={
+            <Switch
+              size="small"
+              checked={Boolean(deployment.requireUserGitCredential)}
+              disabled={readOnly || busy}
+              onChange={toggleRequireUserGitCredential}
+              inputProps={{
+                "data-testid": "require-user-git-credential-switch",
+              }}
+            />
+          }
+          label={
+            <Typography variant="body2">
+              Require per-user GitHub token (tasks only use the token assigned
+              to the task author; tasks from users without an assigned token are
+              blocked)
+            </Typography>
+          }
+          data-testid="require-user-git-credential-toggle"
+        />
+      </Box>
 
       {actionError && (
         <Alert
@@ -827,12 +871,20 @@ function GitConnectionsList({
 
             <TextField
               name="new-connection-user"
-              label="User (task author, optional)"
+              label={
+                deployment.requireUserGitCredential
+                  ? "User (task author, required)"
+                  : "User (task author, optional)"
+              }
               size="small"
               value={user}
               onChange={(evt) => setUser(evt.target.value)}
               placeholder="alice@example.com or alice"
-              helperText="Bind this credential to tasks raised by a specific user. Leave empty for a deployment-wide default connection."
+              helperText={
+                deployment.requireUserGitCredential
+                  ? "Required when per-user GitHub token enforcement is enabled: bind this credential to a specific task author."
+                  : "Bind this credential to tasks raised by a specific user. Leave empty for a deployment-wide default connection."
+              }
               fullWidth
             />
 
@@ -972,6 +1024,8 @@ function GitConnectionsList({
                 variant="contained"
                 disabled={
                   busy ||
+                  (Boolean(deployment.requireUserGitCredential) &&
+                    !user.trim()) ||
                   (authType === "pat" && !tokenValue.trim()) ||
                   (authType === "ssh" && !sshKey.trim()) ||
                   (authType === "app" &&
@@ -1073,13 +1127,22 @@ function RepoConnections({
         <Stack spacing={1}>
           {repos.map((repo) => {
             const { host } = splitRepo(repo);
-            const resolved = loading
-              ? null
-              : resolveRepoConnection(connections, repo);
+            const perUserOnly =
+              Boolean(deployment.requireUserGitCredential) ||
+              connections.some(
+                (c) =>
+                  Boolean(c.user) &&
+                  (c.host || "github.com").toLowerCase() === host,
+              );
+            const resolved =
+              loading || perUserOnly
+                ? null
+                : resolveRepoConnection(connections, repo);
             const pinned = repoPinnedConnection(connections, repo);
             const options = distinctConnections(
               connections.filter(
-                (c) => (c.host || "github.com").toLowerCase() === host,
+                (c) =>
+                  !c.user && (c.host || "github.com").toLowerCase() === host,
               ),
             );
             return (
@@ -1094,7 +1157,16 @@ function RepoConnections({
                   <Typography variant="body2">
                     <code>{repo}</code>
                   </Typography>
-                  {loading ? null : resolved ? (
+                  {loading ? null : perUserOnly ? (
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      data-testid={`repo-connection-resolved-${repo}`}
+                    >
+                      Uses each task author&apos;s assigned connection (tasks
+                      from users without one are held)
+                    </Typography>
+                  ) : resolved ? (
                     <Typography
                       variant="caption"
                       color="text.secondary"

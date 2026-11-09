@@ -1201,6 +1201,9 @@ func reconcileDispatch(ctx context.Context, deps Deps, now time.Time) error {
 	if !deps.SingleTenant && (deps.RequireTeamGitCredential || deps.TeamHasAgentBackend != nil) {
 		holds = append(holds, teamSetupHold(ctx, deps))
 	}
+	if held := userGitCredentialHold(ctx, deps); held != nil {
+		holds = append(holds, held)
+	}
 	if held := pendingBranchHold(ctx, deps); held != nil {
 		holds = append(holds, held)
 	}
@@ -1803,6 +1806,43 @@ func teamSetupHold(ctx context.Context, deps Deps) func(string) string {
 		// admitter replaces or clears the wait when it reaches the task,
 		// but a cycle out of capacity never does, and the sentence would
 		// go on naming a setting the team admin has already made.
+		clearTeamSetupWait(ctx, deps.Store, task.ID)
+		return ""
+	}
+}
+
+// userGitCredentialHold holds tasks whose target repository is on a git host
+// where per-user GitHub credentials are enforced (Config.EnforcesUserGitCredentialOn)
+// and whose task author has no git connection configured on that host.
+func userGitCredentialHold(ctx context.Context, deps Deps) func(string) string {
+	if deps.Store == nil {
+		return nil
+	}
+	cfg, err := deps.Store.GetConfig(ctx)
+	if err != nil || cfg == nil || (!cfg.RequireUserGitCredential && !cfg.HasAnyUserGitConnection()) {
+		return nil
+	}
+	return func(taskID string) string {
+		task, err := deps.Store.GetTask(ctx, taskID)
+		if err != nil || task == nil {
+			if err != nil {
+				log.Printf("orchestrator: reading %s to check its task author's git credential: %v", taskID, err)
+			}
+			return "held for setup: the task could not be read to check its GitHub credential"
+		}
+		if task.Target == nil || task.Target.Owner == "" || model.IsConfigRepo(*task.Target) {
+			clearTeamSetupWait(ctx, deps.Store, task.ID)
+			return ""
+		}
+		if !cfg.EnforcesUserGitCredentialOn(task.Target.Host, deps.Store.GitDefaultHost) {
+			clearTeamSetupWait(ctx, deps.Store, task.ID)
+			return ""
+		}
+		if _, err := deps.Store.TaskGitCredentialOn(ctx, taskID, task.Target.Host, task.Target.Owner, task.Target.Name); err != nil {
+			why := err.Error()
+			setTeamSetupWait(ctx, deps, task.ID, why)
+			return "held for setup: " + why
+		}
 		clearTeamSetupWait(ctx, deps.Store, task.ID)
 		return ""
 	}

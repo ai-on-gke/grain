@@ -115,3 +115,83 @@ func TestSingleTenantDispatchesATaskWhoseTeamIsNotSetUp(t *testing.T) {
 		})
 	}
 }
+
+func TestSingleTenantHoldsTaskWhenTaskAuthorHasNoAssignedGitCredential(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	_, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+
+	// Configure a user-bound connection for alice@example.com on github.com.
+	if err := store.UpdateConfig(ctx, func(c *model.Config) error {
+		c.GitConnections = []model.TeamGitConnection{
+			{Credential: "alice-pat", Host: "github.com", User: "alice@example.com"},
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Charlie files a task, but Charlie has no assigned GitHub token.
+	task := filedTask(t, ctx, store, "t-charlie", repo)
+	task.Owner = "charlie@example.com"
+	task.Creator = "charlie@example.com"
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+
+	var asked []orchestrator.AgentChoice
+	deps := orchestrator.Deps{
+		Store:        store,
+		Client:       client,
+		Sandboxes:    orchestrator.NewHostSandboxes(t.TempDir()),
+		SingleTenant: true,
+		MaxWorkers:   1,
+		Framework: func(_ context.Context, choice orchestrator.AgentChoice) (agent.Framework, error) {
+			asked = append(asked, choice)
+			return stubFramework{result: toolResult(agent.ToolCall{
+				Name:      "comment_on_issue",
+				Arguments: map[string]any{"comment": "done"},
+			})}, nil
+		},
+	}
+
+	// 1. RunCycle must hold Charlie's task in StateQueued rather than dispatching with Alice's token.
+	if err := orchestrator.RunCycle(ctx, deps, baseTime); err != nil {
+		t.Fatalf("RunCycle (blocked): %v", err)
+	}
+	if len(asked) != 0 {
+		t.Fatalf("Charlie's task was dispatched (%+v) despite having no assigned token", asked)
+	}
+	if state, err := store.State(ctx, "t-charlie"); err != nil || state != model.StateQueued {
+		t.Fatalf("state = %q, %v; want StateQueued", state, err)
+	}
+	w, err := store.GrantWaitOf(ctx, "t-charlie")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w == nil || w.Capability != model.TeamSetupWaitCapability || !strings.Contains(w.Resource, "charlie@example.com") {
+		t.Fatalf("wait = %+v; want team-setup wait naming charlie@example.com", w)
+	}
+
+	// 2. Once Charlie's GitHub token is added, RunCycle clears the wait and dispatches Charlie's task.
+	if err := store.UpdateConfig(ctx, func(c *model.Config) error {
+		c.GitConnections = append(c.GitConnections, model.TeamGitConnection{
+			Credential: "charlie-pat",
+			Host:       "github.com",
+			User:       "charlie@example.com",
+		})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := orchestrator.RunCycle(ctx, deps, baseTime); err != nil {
+		t.Fatalf("RunCycle (unblocked): %v", err)
+	}
+	if len(asked) != 1 {
+		t.Fatalf("Deps.Framework asked for %+v; want 1 dispatch after Charlie's token was added", asked)
+	}
+	if w, err := store.GrantWaitOf(ctx, "t-charlie"); err != nil || w != nil {
+		t.Fatalf("wait after dispatch = %+v, %v; want nil", w, err)
+	}
+}

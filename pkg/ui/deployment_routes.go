@@ -213,8 +213,9 @@ type UpdateDeploymentRequest struct {
 	AgentGitEmail *string               `json:"agentGitEmail,omitempty"`
 	// TargetRepos replaces the repositories the deployment dispatches
 	// work into when present (grain init's -github-repo).
-	TargetRepos *[]string `json:"targetRepos,omitempty"`
-	User        string    `json:"user,omitempty"`
+	TargetRepos              *[]string `json:"targetRepos,omitempty"`
+	RequireUserGitCredential *bool     `json:"requireUserGitCredential,omitempty"`
+	User                     string    `json:"user,omitempty"`
 }
 
 func (s *Server) handleUpdateDeployment(w http.ResponseWriter, r *http.Request) {
@@ -223,13 +224,14 @@ func (s *Server) handleUpdateDeployment(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	team, err := s.tasks.UpdateTeam(r.Context(), model.DefaultTeamID, UpdateTeamRequest{
-		DefaultModel:  req.DefaultModel,
-		DefaultModels: req.DefaultModels,
-		ModelSettings: req.ModelSettings,
-		AgentGitName:  req.AgentGitName,
-		AgentGitEmail: req.AgentGitEmail,
-		TargetRepos:   req.TargetRepos,
-		User:          requestPerson(r.Context()),
+		DefaultModel:             req.DefaultModel,
+		DefaultModels:            req.DefaultModels,
+		ModelSettings:            req.ModelSettings,
+		AgentGitName:             req.AgentGitName,
+		AgentGitEmail:            req.AgentGitEmail,
+		TargetRepos:              req.TargetRepos,
+		RequireUserGitCredential: req.RequireUserGitCredential,
+		User:                     requestPerson(r.Context()),
 	})
 	writeDeploymentResult(w, team, err)
 }

@@ -186,8 +186,24 @@ func TestTaskGitCredentialOnSelectsTaskUserPATAndFallsBackToDefault(t *testing.T
 	if got, err := store.TaskGitCredentialOn(ctx, "t-bob", "github.com", "acme", "widgets"); err != nil || got != "bob-pat" {
 		t.Errorf("TaskGitCredentialOn(bob) = %q, %v; want bob-pat", got, err)
 	}
-	if got, err := store.TaskGitCredentialOn(ctx, "t-charlie", "github.com", "acme", "widgets"); err != nil || got != "default-pat" {
-		t.Errorf("TaskGitCredentialOn(charlie) = %q, %v; want default-pat", got, err)
+	// Charlie has no assigned GitHub token: when per-user credentials are configured on the host,
+	// Charlie's task must be blocked rather than falling back to default-pat or another user's token.
+	if got, err := store.TaskGitCredentialOn(ctx, "t-charlie", "github.com", "acme", "widgets"); !errors.Is(err, model.ErrNoTeamGitCredential) || !strings.Contains(err.Error(), "charlie@example.com") || !strings.Contains(err.Error(), "has no GitHub credential") {
+		t.Errorf("TaskGitCredentialOn(charlie) = %q, %v; want ErrNoTeamGitCredential naming charlie@example.com", got, err)
+	}
+
+	// Even if Charlie's task is granted github-credential:default-pat or github-credential:alice-pat,
+	// TaskGitCredentialOn refuses to use another user's or the default token.
+	for _, forbiddenGrant := range []string{"github-credential:default-pat", "github-credential:alice-pat"} {
+		if err := store.UpdateTask(ctx, "t-charlie", func(tk *model.Task) error {
+			tk.Grants = []model.Grant{{Capability: forbiddenGrant}}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := store.TaskGitCredentialOn(ctx, "t-charlie", "github.com", "acme", "widgets"); !errors.Is(err, model.ErrNoTeamGitCredential) {
+			t.Errorf("TaskGitCredentialOn(charlie with %s) = %q, %v; want ErrNoTeamGitCredential", forbiddenGrant, got, err)
+		}
 	}
 
 	// Follow-up task on the same PR (#42 opened by t-bob) should use t-bob's PAT ("bob-pat"),

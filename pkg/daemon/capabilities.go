@@ -442,11 +442,11 @@ func (c credentialTokenSource) selectGitCredential(owner, repo string) (gitproxy
 		return gitproxy.Credential{}, false
 	}
 	if c.taskID != "" && c.taskCredential != nil {
-		if name, ok := c.taskCredential(c.taskID, host, ref.Owner, ref.Name); ok {
-			if cred, found := c.credentials.GetForRepoOn(name, host, ref.Owner, ref.Name); found {
-				return cred, true
-			}
+		name, ok := c.taskCredential(c.taskID, host, ref.Owner, ref.Name)
+		if !ok {
+			return gitproxy.Credential{}, false
 		}
+		return c.credentials.GetForRepoOn(name, host, ref.Owner, ref.Name)
 	}
 	if c.teamCredential == nil {
 		return gitproxy.Credential{}, false

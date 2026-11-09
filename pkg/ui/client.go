@@ -2465,13 +2465,17 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		links = inherited.Links
 		reads = readsBesidesTarget(inherited.Reads, target)
 	}
+	resolvedOwner, sessionBehalf, err := c.resolveNewTaskOwner(ctx, req, proposedBy)
+	if err != nil {
+		return Task{}, err
+	}
 	// A repository the team's GitHub credential cannot reach is turned
 	// away here, where whoever is filing can still do something about it,
 	// rather than failing the task's first clone (grain/task-1850). Work
 	// filed by automation -- an agent's proposal, a caller acting as
 	// grain -- has nobody at the form to tell, and refusing it would lose
 	// what it describes, so it is filed and parked on the same sentence.
-	reachRefused, err := c.reachRefusal(ctx, teamID, target, reads, writes)
+	reachRefused, err := c.reachRefusal(ctx, resolvedOwner, teamID, target, reads, writes)
 	if err != nil {
 		return Task{}, err
 	}
@@ -2819,10 +2823,6 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	var filedFrom string
 	if proposedBy == nil && c.requestActor(ctx).Actor.Kind != model.PrincipalAgent {
 		filedFrom = strings.TrimSpace(req.TemplateID)
-	}
-	resolvedOwner, sessionBehalf, err := c.resolveNewTaskOwner(ctx, req, proposedBy)
-	if err != nil {
-		return Task{}, err
 	}
 	task := model.Task{
 		ID:                   id,

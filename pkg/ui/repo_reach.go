@@ -35,13 +35,13 @@ import (
 
 // reachRefusal is the sentence a task is refused (or parked) with when
 // its team's credential cannot reach one of the repositories it names,
-// and "" when it can or when nothing can say -- gitproxy.Reach.Refusal,
+// and "" when it can or when nothing can say -- gitproxy.Reach.UserRefusal,
 // which the orchestrator's own filing paths (end-of-run proposals,
 // schedules, suite passes) ask too.
-func (c *Client) reachRefusal(ctx context.Context, team string, target *model.RepoRef, reads []model.RepoRef,
+func (c *Client) reachRefusal(ctx context.Context, user, team string, target *model.RepoRef, reads []model.RepoRef,
 	writes []model.WriteTarget) (string, error) {
 
-	return c.Config.GitReach.Refusal(ctx, c.Store, team, target, reads, writes)
+	return c.Config.GitReach.UserRefusal(ctx, c.Store, user, team, target, reads, writes)
 }
 
 // reachParkComment is gitproxy.ReachParkComment, the wording every

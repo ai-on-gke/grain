@@ -80,6 +80,12 @@ type Config struct {
 	// deployment's default host (EffectiveGitConnections). It was the
 	// default team's git_credential until schema 22.
 	GitCredential string
+	// RequireUserGitCredential requires every task to resolve a git
+	// connection explicitly bound to the task's author (TeamGitConnection.User).
+	// When enabled (or when user-bound connections are configured on the
+	// target host), tasks never fall back to a default or another user's
+	// token and are blocked until a token is assigned to the task author.
+	RequireUserGitCredential bool
 	// PollInterval is how often pkg/orchestrator's RunCycle runs. Read
 	// back out of this row once per tick, so changing it retimes the
 	// loop that is already running rather than the next one
@@ -1696,6 +1702,7 @@ func (c Config) WithConnectionsOf(imported Config) Config {
 	c.AgentBackends = imported.AgentBackends
 	c.GitConnections = imported.GitConnections
 	c.GitCredential = imported.GitCredential
+	c.RequireUserGitCredential = imported.RequireUserGitCredential
 	c.AgentBackendID = imported.AgentBackendID
 	c.ModelSettings = imported.ModelSettings
 	if imported.DefaultModel != "" {
