@@ -50,10 +50,10 @@ test("a default method grant is an editable section on a new task", async ({
       .toEqual([
         `${KEY}={"account":"staging","project":"acme-staging","read_only":true,"scopes":["cloud-platform"],"ttl_minutes":60}`,
       ]);
-    // The legacy picker beside it does not list the grant.
+    // There is no legacy checklist beside it any more.
     await expect(
-      page.locator('[data-setting-id="defaultCapabilities"]'),
-    ).not.toContainText("cloud-key");
+      page.getByRole("combobox", { name: "Default legacy capabilities" }),
+    ).toHaveCount(0);
 
     await page.goto("/");
     await page.getByRole("button", { name: "+ New task" }).click();

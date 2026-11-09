@@ -19,7 +19,7 @@ import { chooseOption } from "./searchSelect.js";
 // design/design/unified-grants.design.md) on the task pane, at desktop and phone
 // widths: the held grants are one stack of sections inside it -- a grant
 // with nothing to set on a single line -- "Add grant…" sits under it,
-// the legacy checklist above it, and the menu stays on screen.
+// with no legacy checklist beside it, and the menu stays on screen.
 
 const KEY = "https://grain.dev/capabilities/cloud-key#cloud-key";
 // grain demo's own capability server's method with arguments.
@@ -29,7 +29,7 @@ for (const [label, size] of [
   ["desktop", { width: 1440, height: 900 }],
   ["phone", { width: 390, height: 844 }],
 ]) {
-  test(`grants are one stack of sections under the legacy checklist (${label})`, async ({
+  test(`grants are one stack of sections (${label})`, async ({
     page,
     request,
   }) => {
@@ -99,11 +99,10 @@ for (const [label, size] of [
     const addBox = await add.boundingBox();
     expect(addBox.y).toBeGreaterThanOrEqual(held.y + held.height - 0.5);
 
-    // The legacy checklist is a separate control above the section.
-    const legacy = await page
-      .getByRole("combobox", { name: "Legacy capabilities" })
-      .boundingBox();
-    expect(legacy.y + legacy.height).toBeLessThanOrEqual(box.y);
+    // There is no legacy checklist beside it any more.
+    await expect(
+      page.getByRole("combobox", { name: "Legacy capabilities" }),
+    ).toHaveCount(0);
 
     // The menu opens on screen.
     await add.click();

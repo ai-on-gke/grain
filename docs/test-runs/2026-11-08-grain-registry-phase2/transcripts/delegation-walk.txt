@@ -1,0 +1,146 @@
+=== delegating apps (registry admins only)
+$ [root@example.com @ 4251] grain registry delegating-apps list
+    no delegating apps registered
+    (exit 0)
+$ [alice@example.com @ 4251] grain registry delegating-apps create -principal ci-bot@walk-proj.iam.gserviceaccount.com ci-bot
+    grain: registry API 403 (forbidden): admin privileges required
+    (exit 1)
+$ [root@example.com @ 4251] grain registry delegating-apps create -principal alice@example.com human-app
+    grain: registry API 400 (invalid_argument): principal "alice@example.com" is a person, not a service account: a delegating app acts as its own service account
+    (exit 1)
+$ [root@example.com @ 4251] grain registry delegating-apps create -principal ci-bot@walk-proj.iam.gserviceaccount.com -display-name CI bot -max-access write -max-grant-ttl 48h ci-bot
+    registered delegating app ci-bot as serviceAccount:ci-bot@walk-proj.iam.gserviceaccount.com
+    ci-bot                   serviceAccount:ci-bot@walk-proj.iam.gserviceaccount.com  max_access=write max_ttl=2d       owner=root@example.com enabled
+    (exit 0)
+$ [root@example.com @ 4251] grain registry delegating-apps create -principal serviceAccount:other-bot@walk-proj.iam.gserviceaccount.com -max-access read -max-grant-ttl 1h reader-app
+    registered delegating app reader-app as serviceAccount:other-bot@walk-proj.iam.gserviceaccount.com
+    reader-app               serviceAccount:other-bot@walk-proj.iam.gserviceaccount.com max_access=read  max_ttl=1h0m0s   owner=root@example.com enabled
+    (exit 0)
+$ [root@example.com @ 4261] grain registry delegating-apps list
+    ci-bot                   serviceAccount:ci-bot@walk-proj.iam.gserviceaccount.com  max_access=write max_ttl=2d       owner=root@example.com enabled
+    reader-app               serviceAccount:other-bot@walk-proj.iam.gserviceaccount.com max_access=read  max_ttl=1h0m0s   owner=root@example.com enabled
+    (exit 0)
+  stored principals: ci-bot=serviceAccount:ci-bot@walk-proj.iam.gserviceaccount.com max_access=write ttl=172800, reader-app=serviceAccount:other-bot@walk-proj.iam.gserviceaccount.com max_access=read ttl=3600
+=== consent grants
+$ [alice@example.com @ 4261] grain registry grants create -entry conn-alice -access write reader-app
+    grain: registry API 403 (exceeds_max_access): delegating app "reader-app" accepts read-only grants
+    (exit 1)
+$ [alice@example.com @ 4261] grain registry grants create -entry conn-alice -ttl 10h reader-app
+    granted reader-app read access to conn-alice until 2026-11-09T00:11:23Z (dlg_f42fe647974e96b3)
+    (exit 0)
+$ [alice@example.com @ 4261] grain registry grants create -entry conn-alice -access read ci-bot
+    granted ci-bot read access to conn-alice until 2026-11-10T23:11:23Z (dlg_df2c5d42fe898cae)
+    (exit 0)
+$ [alice@example.com @ 4261] grain registry grants list
+    dlg_df2c5d42fe898cae  app=ci-bot                   access=read  entries=conn-alice               expires 2026-11-10T23:11:23Z
+    dlg_f42fe647974e96b3  app=reader-app               access=read  entries=conn-alice               expires 2026-11-09T00:11:23Z
+    (exit 0)
+$ [bob@example.com @ 4261] grain registry grants list
+    no delegation grants
+    (exit 0)
+=== delegated traffic through both replicas (read grant)
+  A GET  whoami: 200 0.008648s {"actor":{"kind":"service","id":"ci-bot@walk-proj.iam.gserviceaccount.com","source":"registry","label":"alice@example.com (via ci-bot)"},"onBehalfOf":{"kind":"human","id":"alice@example.com","source":
+  B GET  whoami: 200 0.010191s {"actor":{"kind":"service","id":"ci-bot@walk-proj.iam.gserviceaccount.com","source":"registry","label":"alice@example.com (via ci-bot)"},"onBehalfOf":{"kind":"human","id":"alice@example.com","source":
+  B POST tasks:  403 0.002063s {"error":"read-only delegation grant cannot perform POST","code":"delegation_refused","reason":"read_only_grant"} 
+  B GET  for bob (no grant): 403 0.001740s {"error":"registry: on-behalf-of delegation denied by policy: no active delegation grant from \"bob@example.com\" to \"ci-bot\"","code":"delegation_refused","reason":"no_grant"} 
+  reader-app (granted, but not on the daemon's delegate: list): 403 0.007705s {"code":"delegate_not_allowed","delegatingApp":"other-bot@walk-proj.iam.gserviceaccount.com","error":"delegating app \"other-bot@walk-proj.iam.gserviceaccount.com\" is not allowed to act for people on
+=== (a) upsert to write, warm, then narrow back to read on A; B must refuse writes
+$ [alice@example.com @ 4261] grain registry grants create -entry conn-alice -access write ci-bot
+    granted ci-bot write access to conn-alice until 2026-11-10T23:11:23Z (dlg_df2c5d42fe898cae)
+    (exit 0)
+  B POST (write grant): 404 0.008085s {"error":"no such API endpoint: POST /api/tasks/does-not-exist/cancel"} 
+  warm A: 200 0.006365s {"actor":{"kind":"service","id":"ci-bot@walk-proj.iam.gserviceaccount.com","source":"registry","label":"alice@example.com (via ci-bot)"},"onBehalfOf":{"kind":"human","id":"alice@example.com","source":
+  warm B: 200 0.008671s {"actor":{"kind":"service","id":"ci-bot@walk-proj.iam.gserviceaccount.com","source":"registry","label":"alice@example.com (via ci-bot)"},"onBehalfOf":{"kind":"human","id":"alice@example.com","source":
+  warm B: 200 0.008287s {"actor":{"kind":"service","id":"ci-bot@walk-proj.iam.gserviceaccount.com","source":"registry","label":"alice@example.com (via ci-bot)"},"onBehalfOf":{"kind":"human","id":"alice@example.com","source":
+$ [alice@example.com @ 4251] grain registry grants create -entry conn-alice -access read ci-bot
+    granted ci-bot read access to conn-alice until 2026-11-10T23:11:23Z (dlg_df2c5d42fe898cae)
+    (exit 0)
+    replica 4261 refused after 14ms: 403 {"error":"read-only delegation grant cannot perform POST","code":"delegation_refused","reason":"read_only_grant"}
+=== (a') narrow entries away from conn-alice on A; B must refuse reads
+  warm A: 200 0.008691s {"actor":{"kind":"service","id":"ci-bot@walk-proj.iam.gserviceaccount.com","source":"registry","label":"alice@example.com (via ci-bot)"},"onBehalfOf":{"kind":"human","id":"alice@example.com","source":
+  warm B: 200 0.009459s {"actor":{"kind":"service","id":"ci-bot@walk-proj.iam.gserviceaccount.com","source":"registry","label":"alice@example.com (via ci-bot)"},"onBehalfOf":{"kind":"human","id":"alice@example.com","source":
+  warm B: 200 0.007577s {"actor":{"kind":"service","id":"ci-bot@walk-proj.iam.gserviceaccount.com","source":"registry","label":"alice@example.com (via ci-bot)"},"onBehalfOf":{"kind":"human","id":"alice@example.com","source":
+$ [alice@example.com @ 4251] grain registry grants create -entry some-other-entry -access read ci-bot
+    granted ci-bot read access to some-other-entry until 2026-11-10T23:11:23Z (dlg_df2c5d42fe898cae)
+    (exit 0)
+    replica 4261 refused after 13ms: 403 {"error":"registry: on-behalf-of delegation denied by policy: delegation grant \"dlg_df2c5d42fe898cae\" does not cover entry \"conn-alice\"","code":"delegation_
+=== (b) revoke on A by dlg_ ID; B must refuse
+$ [alice@example.com @ 4261] grain registry grants create -entry conn-alice -access write ci-bot
+    granted ci-bot write access to conn-alice until 2026-11-10T23:11:23Z (dlg_df2c5d42fe898cae)
+    (exit 0)
+  live grant: dlg_df2c5d42fe898cae
+  warm A: 200 0.007477s {"actor":{"kind":"service","id":"ci-bot@walk-proj.iam.gserviceaccount.com","source":"registry","label":"alice@example.com (via ci-bot)"},"onBehalfOf":{"kind":"human","id":"alice@example.com","source":
+  warm B: 200 0.009106s {"actor":{"kind":"service","id":"ci-bot@walk-proj.iam.gserviceaccount.com","source":"registry","label":"alice@example.com (via ci-bot)"},"onBehalfOf":{"kind":"human","id":"alice@example.com","source":
+  warm B: 200 0.010420s {"actor":{"kind":"service","id":"ci-bot@walk-proj.iam.gserviceaccount.com","source":"registry","label":"alice@example.com (via ci-bot)"},"onBehalfOf":{"kind":"human","id":"alice@example.com","source":
+$ [bob@example.com @ 4251] grain registry grants revoke dlg_df2c5d42fe898cae
+    grain: registry API 404 (not_found): you have no live delegation grant "dlg_df2c5d42fe898cae"
+    (exit 1)
+$ [bob@example.com @ 4251] grain registry grants revoke ci-bot
+    grain: registry API 404 (not_found): you have no live delegation grant "ci-bot"
+    (exit 1)
+  B still serves alice after bob's refused revokes: 200 0.007454s {"actor":{"kind":"service","id":"ci-bot@walk-proj.iam.gserviceaccount.com","source":"registry","label":"alice@example.com (via ci-bot)"},"onBehalfOf":{"kind":"human","id":"alice@example.com","source":
+$ [alice@example.com @ 4251] grain registry grants revoke dlg_df2c5d42fe898cae
+    revoked grant dlg_df2c5d42fe898cae to ci-bot
+    (exit 0)
+    replica 4261 refused after 12ms: 403 {"error":"registry: on-behalf-of delegation denied by policy: no active delegation grant from \"alice@example.com\" to \"ci-bot\"","code":"delegation_refused","
+=== (b') re-grant, warm, revoke by app name on A
+$ [alice@example.com @ 4261] grain registry grants create -entry * -access write ci-bot
+    granted ci-bot write access to * until 2026-11-10T23:11:23Z (dlg_02753f98a128af4c)
+    (exit 0)
+  warm A: 200 0.009232s {"actor":{"kind":"service","id":"ci-bot@walk-proj.iam.gserviceaccount.com","source":"registry","label":"alice@example.com (via ci-bot)"},"onBehalfOf":{"kind":"human","id":"alice@example.com","source":
+  warm B: 200 0.007499s {"actor":{"kind":"service","id":"ci-bot@walk-proj.iam.gserviceaccount.com","source":"registry","label":"alice@example.com (via ci-bot)"},"onBehalfOf":{"kind":"human","id":"alice@example.com","source":
+  warm B: 200 0.007731s {"actor":{"kind":"service","id":"ci-bot@walk-proj.iam.gserviceaccount.com","source":"registry","label":"alice@example.com (via ci-bot)"},"onBehalfOf":{"kind":"human","id":"alice@example.com","source":
+$ [alice@example.com @ 4251] grain registry grants revoke ci-bot
+    revoked grant dlg_02753f98a128af4c to ci-bot
+    (exit 0)
+    replica 4261 refused after 12ms: 403 {"error":"registry: on-behalf-of delegation denied by policy: no active delegation grant from \"alice@example.com\" to \"ci-bot\"","code":"delegation_refused","
+$ [alice@example.com @ 4251] grain registry grants list -include-revoked
+    dlg_02753f98a128af4c  app=ci-bot                   access=write entries=*                        revoked 2026-11-08T23:11:23Z
+    dlg_df2c5d42fe898cae  app=ci-bot                   access=write entries=conn-alice               revoked 2026-11-08T23:11:23Z
+    dlg_f42fe647974e96b3  app=reader-app               access=read  entries=conn-alice               expires 2026-11-09T00:11:23Z
+    (exit 0)
+=== (c) re-grant, warm, disable app on A; B must refuse; enable restores
+$ [alice@example.com @ 4261] grain registry grants create -entry conn-alice -access write ci-bot
+    granted ci-bot write access to conn-alice until 2026-11-10T23:11:24Z (dlg_ff5e96720910fc3a)
+    (exit 0)
+  warm A: 200 0.007630s {"actor":{"kind":"service","id":"ci-bot@walk-proj.iam.gserviceaccount.com","source":"registry","label":"alice@example.com (via ci-bot)"},"onBehalfOf":{"kind":"human","id":"alice@example.com","source":
+  warm B: 200 0.008675s {"actor":{"kind":"service","id":"ci-bot@walk-proj.iam.gserviceaccount.com","source":"registry","label":"alice@example.com (via ci-bot)"},"onBehalfOf":{"kind":"human","id":"alice@example.com","source":
+  warm B: 200 0.009125s {"actor":{"kind":"service","id":"ci-bot@walk-proj.iam.gserviceaccount.com","source":"registry","label":"alice@example.com (via ci-bot)"},"onBehalfOf":{"kind":"human","id":"alice@example.com","source":
+$ [root@example.com @ 4251] grain registry delegating-apps disable ci-bot
+    delegating app ci-bot disabled
+    (exit 0)
+    replica 4261 refused after 12ms: 403 {"error":"registry: on-behalf-of delegation denied by policy: delegating app \"ci-bot\" is disabled","code":"delegation_refused","reason":"app_disabled"}
+$ [alice@example.com @ 4261] grain registry grants create -entry conn-alice ci-bot
+    grain: registry API 403 (app_disabled): delegating app "ci-bot" is disabled
+    (exit 1)
+$ [root@example.com @ 4251] grain registry delegating-apps enable ci-bot
+    delegating app ci-bot enabled
+    (exit 0)
+  B after enable (grant was revoked by nothing, app re-enabled): 200 0.008916s {"actor":{"kind":"service","id":"ci-bot@walk-proj.iam.gserviceaccount.com","source":"registry","label":"alice@example.com (via ci-bot)"},"onBehalfOf":{"kind":"human","id":"alice@example.com","source":
+=== delegating app vs human-only stop/start and grant APIs
+$ [ci-bot@walk-proj.iam.gserviceaccount.com @ 4251] POST /api/entries/conn-alice/stop 
+    HTTP 403
+    {"error":"service principals may only call read-only catalog endpoints","code":"forbidden"}
+
+$ [ci-bot@walk-proj.iam.gserviceaccount.com @ 4251] POST /api/entries/conn-alice/start 
+    HTTP 403
+    {"error":"service principals may only call read-only catalog endpoints","code":"forbidden"}
+
+$ [ci-bot@walk-proj.iam.gserviceaccount.com @ 4251] GET /api/delegation-grants 
+    HTTP 403
+    {"error":"service principals may only call read-only catalog endpoints","code":"forbidden"}
+
+  SA stop with on-behalf-of on registry host:
+    {"error":"X-Grain-On-Behalf-Of is only supported on entry hosts","code":"delegation_not_supported"}
+        HTTP 400
+=== downstream delegate: allowlist on the connected daemon
+    user:alice@example.com	grain/operator	added by -ui-allowed-principals	2026-11-08T23:09:05Z
+    delegate:ci-bot@walk-proj.iam.gserviceaccount.com	grain/delegated	added by the access code	2026-11-08T23:10:36Z	walk delegated ci-bot
+  allowed: 200 0.007871s {"actor":{"kind":"service","id":"ci-bot@walk-proj.iam.gserviceaccount.com","source":"registry","label":"alice@example.com (via ci-bot)"},"onBehalfOf":{"kind":"human","id":"alice@example.com","source":
+    removed delegate:ci-bot@walk-proj.iam.gserviceaccount.com
+  after deny: 403 0.009593s {"code":"delegate_not_allowed","delegatingApp":"ci-bot@walk-proj.iam.gserviceaccount.com","error":"delegating app \"ci-bot@walk-proj.iam.gserviceaccount.com\" is not allowed to act for people on this 
+    allowed delegate:ci-bot@walk-proj.iam.gserviceaccount.com as grain/delegated
+  re-allowed: 200 0.008936s {"actor":{"kind":"service","id":"ci-bot@walk-proj.iam.gserviceaccount.com","source":"registry","label":"alice@example.com (via ci-bot)"},"onBehalfOf":{"kind":"human","id":"alice@example.com","source":
+=== LISTEN registry_delegations sessions (one per replica)
+    44868|idle|LISTEN registry_delegations
+    44884|idle|LISTEN registry_delegations

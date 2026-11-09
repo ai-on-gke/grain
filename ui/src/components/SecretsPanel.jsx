@@ -27,6 +27,7 @@ import api from "../api.js";
 import AppIcon from "./AppIcon.jsx";
 import { identifierField } from "../identifierField.js";
 import { serverPath } from "./CapabilityServersPanel.jsx";
+import { ReadOnlyFieldset } from "./settings/SettingsCard.jsx";
 
 // bwsalmon/agents#357: this pane can set and delete secrets on a server
 // this UI shares a host with, and report which ones exist, but it never
@@ -57,11 +58,20 @@ import { serverPath } from "./CapabilityServersPanel.jsx";
 // rename) stays in Other secrets, labelled, so it can still be deleted.
 // refreshKey reads the store again whenever it changes: the capability
 // servers card above bumps it when a server's own secrets may have changed.
+// readOnly draws the list's deletes and the set form disabled, with
+// readOnlyReason as their tooltip: for a role without secrets:write,
+// which every PUT and DELETE below needs (pkg/ui/route_scopes.go). The
+// Deployment credentials card follows Capabilities' capabilities:admin,
+// so that alone did not stop a role holding it without secrets:write
+// from being offered buttons the server refused with 403 (2026-11-08
+// deployment credentials walkthrough).
 export default function SecretsPanel({
   showError,
   claimed,
   onSecretsChanged,
   refreshKey,
+  readOnly = false,
+  readOnlyReason,
 }) {
   const [resp, setResp] = useState(null);
 
@@ -159,7 +169,7 @@ export default function SecretsPanel({
   const others = listed.filter((s) => !s.capabilityServers?.length);
 
   return (
-    <Box id="other-secrets" sx={{ mt: 3 }}>
+    <Box id="other-secrets" sx={{ mt: 3, scrollMarginTop: 16 }}>
       <Typography variant="subtitle2">Other secrets</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
         Everything in this deployment&apos;s secrets store that nothing else
@@ -181,7 +191,10 @@ export default function SecretsPanel({
         </Alert>
       )}
       {resp.enabled && (
-        <>
+        <ReadOnlyFieldset
+          disabled={Boolean(readOnly)}
+          title={readOnlyReason || undefined}
+        >
           {serverSecrets.length > 0 && (
             <>
               <Typography variant="body2" sx={{ fontWeight: 500 }}>
@@ -245,7 +258,9 @@ export default function SecretsPanel({
                       key={key}
                       size="small"
                       label={key}
-                      onDelete={() => deleteKey(s.name, key)}
+                      onDelete={
+                        readOnly ? undefined : () => deleteKey(s.name, key)
+                      }
                       deleteIcon={
                         <span
                           title={`delete ${s.name}/${key}`}
@@ -314,7 +329,7 @@ export default function SecretsPanel({
               </Button>
             </Stack>
           </form>
-        </>
+        </ReadOnlyFieldset>
       )}
     </Box>
   );

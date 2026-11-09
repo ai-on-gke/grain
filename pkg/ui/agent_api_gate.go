@@ -841,9 +841,12 @@ func (s *Server) agentApprovalRail(ctx context.Context, acting *model.Task, targ
 //     person-only grant, keep_running or admission above standard, or an
 //     escalation past its in-grain proposer;
 //   - on run-now, the credential holds dispatch:write but not tasks:admin
-//     on the task's repository: run-now's implicit approval is an
-//     approval, so it asks for the scope the approve route does, and the
-//     two routes agree on every unapproved task.
+//     on the task's repository -- or, for a task with no repository, not
+//     tasks:admin on every repository: run-now's implicit approval is an
+//     approval, so it asks for exactly the scope the approve route's own
+//     scope check does (set.Allows("tasks:admin", repo)), and the two
+//     routes agree on every unapproved task. tasks:admin held only for
+//     some repositories never approves a task that names none.
 //
 // An already-approved target passes run-now straight through, as it does
 // for a task's run, so dispatch:write still jumps queued work ahead.
@@ -856,7 +859,7 @@ func (s *Server) externalApprovalRail(ctx context.Context, principal string, set
 	if task == nil || (onlyIfUnapproved && task.Approval != nil) {
 		return nil
 	}
-	if onlyIfUnapproved && !set.Allows("tasks:admin", repo) && !(repo == "" && set.Has("tasks:admin")) {
+	if onlyIfUnapproved && !set.Allows("tasks:admin", repo) {
 		return fmt.Errorf("%s cannot run task %s now: it is not approved, and run-now would approve it first, which "+
 			"an external agent credential may only do under tasks:admin -- approve it under tasks:admin, or a person "+
 			"approves it (docs/agent-api.md)", principal, task.ID)

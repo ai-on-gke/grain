@@ -374,40 +374,6 @@ func (l *LiveConfig) modelListingConfig(ctx context.Context) Config {
 	return DispatchConfig(ctx, l.store, l.Current())
 }
 
-// storedConfig is grain_config as it stands right now, resolved into the
-// same shape current() answers in -- what this process *would* be
-// running with if it applied the row this instant, as against what it
-// has actually applied.
-//
-// The one caller is a credential check that found no provider
-// registered and has to say why (capabilityCheckAdapter.unregistered):
-// everything else in a running daemon reads current(), which is the
-// honest answer to what this deployment is doing, and reading the store
-// per request is not something this type invites. false means there was
-// nothing to compare against -- no store wired up (the tests below), a
-// database that would not answer, or a deployment with no configuration
-// row yet -- and leaves the caller with only what it already knew.
-//
-// Built on the same withLiveModelConfig refresh applies, so the two
-// cannot disagree about which fields a running process adopts: whatever
-// the next tick would put into applied is what this returns now.
-func (l *LiveConfig) storedConfig(ctx context.Context) (Config, bool) {
-	if l.store == nil {
-		return Config{}, false
-	}
-	stored, err := l.store.GetConfig(ctx)
-	if err != nil {
-		log.Printf("grain daemon: re-reading stored configuration: %v", err)
-		return Config{}, false
-	}
-	if stored == nil {
-		return Config{}, false
-	}
-	l.Mu.Lock()
-	defer l.Mu.Unlock()
-	return l.Applied.withLiveModelConfig(*stored), true
-}
-
 // modelConfig is current() in the shape pkg/ui compares the stored row
 // against (ui.Config.RunningConfig).
 func (l *LiveConfig) ModelConfig() model.Config { return l.Current().ToModelConfig() }

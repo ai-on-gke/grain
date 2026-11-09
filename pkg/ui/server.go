@@ -386,7 +386,6 @@ func (s *Server) routes() {
 	s.route("GET /api/registry", s.handleGetRegistry)
 	s.route("POST /api/registry/heartbeat", s.handleTriggerRegistryHeartbeat)
 	s.route("GET /api/registry/status", s.handleGetRegistryInstanceStatus)
-	s.route("POST /api/capabilities/{id}/check", s.handleCheckCapability)
 	s.route("GET /api/tasks", s.handleListTasks)
 	s.route("GET /api/tasks/states", s.handleTaskStates)
 	s.route("GET /api/tasks/wait", s.handleTasksWait)

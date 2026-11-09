@@ -263,23 +263,17 @@ test.describe("user and system settings walkthrough regressions", () => {
   });
 
   // The retired Settings → Legacy capabilities tab was still what Tasks'
-  // empty Default legacy capabilities menu pointed at.
-  test("Tasks' empty Default legacy capabilities menu points at Grants", async ({
-    page,
-  }) => {
+  // empty Default legacy capabilities menu pointed at; that always-empty
+  // menu is gone, and default grants are GrantsPicker's alone.
+  test("Tasks draws no Default legacy capabilities menu", async ({ page }) => {
     await page.goto("/settings/tasks");
-    await page
-      .locator('[data-setting-id="defaultCapabilities"] [role="combobox"]')
-      .click();
-    const empty = page.getByRole("option", {
-      name: "None offered -- grant access under Grants",
-    });
-    await expect(empty).toBeVisible();
-    await expect(empty).toHaveAttribute("aria-disabled", "true");
+    await expect(page.getByTestId("default-grants")).toBeVisible();
+    await expect(
+      page.getByRole("combobox", { name: "Default legacy capabilities" }),
+    ).toHaveCount(0);
     await expect(page.getByText(/Settings → Legacy capabilities/i)).toHaveCount(
       0,
     );
-    await page.keyboard.press("Escape");
   });
 
   // Agents → Commit identity and CLI → Sign in reloaded the whole app and

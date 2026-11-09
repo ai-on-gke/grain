@@ -881,6 +881,42 @@ func AutoSubmitRefusedOnLanding(child, parent Task) bool {
 		!LandsWhereGranted(child, parent)
 }
 
+// OtherBranchQueueNote is what a human approving a proposal reads when
+// the task that proposed it may queue its proposals unreviewed
+// (AutoMerge or AutoApproveProposals) and this one was filed for them
+// anyway, for the one reason no other note covers: it lands on a branch
+// that permission does not reach (AutoSubmitRefusedOnLanding). Attributed
+// to grain and naming both branches. It is appended to the proposal's
+// body wherever the proposal is filed: by orchestrator.relayProposedTasks
+// at the end of a run, and by ui.Client.CreateTask for a propose_task call
+// filed live -- which the end-of-run relay then skips as already filed.
+func OtherBranchQueueNote(parent, proposal Task) string {
+	granted := LandingBranch(parent)
+	if len(parent.Writes) > 0 {
+		granted += " (or one of the write targets it declares)"
+	}
+	return fmt.Sprintf("\n\n---\n\ngrain: task %s, which proposed this, may queue the work it splits "+
+		"out without review, but only work landing on %s. This task lands on %s instead, so "+
+		"it was filed for a person to approve. Approve it if it belongs there.",
+		parent.ID, granted, LandingBranch(proposal))
+}
+
+// LandingBranch names the branch task's change lands on, for a note a
+// person reads: its Base where it names one, else its repository's
+// default branch.
+func LandingBranch(task Task) string {
+	if task.Target == nil {
+		if task.Base != "" {
+			return "`" + task.Base + "`"
+		}
+		return "its repository's default branch"
+	}
+	if task.Base != "" {
+		return fmt.Sprintf("`%s` in `%s`", task.Base, task.Target)
+	}
+	return fmt.Sprintf("the default branch of `%s`", task.Target)
+}
+
 // UngrantedReads is the entries of child's own Reads the task proposing
 // it could not already read -- not parent's target, not one of its
 // Reads, not one of its WriteTargets. Empty when there are none.

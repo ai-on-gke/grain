@@ -229,6 +229,12 @@ export default function SettingsPage({
   // read-only one by one and the bootstrap ones beside them stay
   // editable.
   s.configLocked = configRepoOnly;
+  // Capabilities' Deployment credentials card writes through routes of
+  // their own beside the section's capabilities:admin -- PUT
+  // /api/settings and /api/secrets (pkg/ui/route_scopes.go) -- so it is
+  // told what the role refuses there too (CredentialsSection).
+  s.settingsWriteRefusal = accessDeniedReason(config, "settings:write");
+  s.secretsWriteRefusal = accessDeniedReason(config, "secrets:write");
 
   useEffect(() => {
     if (READS_SETTINGS.has(current) && !settings) reloadSettings();

@@ -366,7 +366,7 @@ _No flags._
 
 ### 4.2 `grain settings [flags]` {#CLI-31}
 
-With no setting flags it prints the stored configuration (`GET /api/settings`). With any flag it sends `PUT /api/settings` with only the given fields and prints the result. Capability and agent-key checks go through `POST /api/capabilities/{id}/check` and `POST /api/agent-keys/{framework}/check`. **Scope:** admin.
+With no setting flags it prints the stored configuration (`GET /api/settings`). With any flag it sends `PUT /api/settings` with only the given fields and prints the result. Agent-key checks go through `POST /api/agent-keys/{framework}/check`. **Scope:** admin.
 
 <!-- BEGIN GENERATED FLAGS: grain settings -->
 | Flag | Type | Default | Env | Description |
@@ -376,7 +376,6 @@ With no setting flags it prints the stored configuration (`GET /api/settings`). 
 | `-add-admin` | string |  |  | removed and ignored: whoever holds the access code is the deployment's owner |
 | `-agent-framework` | string |  |  | removed and ignored: models are chosen through model connections (Settings -> Models) |
 | `-check-agent-key` | string |  |  | test one agent framework's credential (antigravity, claude, codex) against the vendor that issued it, and print what came back -- changes nothing |
-| `-check-capability` | string |  |  | test one capability's standing credential against the service that issued it, and print what came back -- changes nothing |
 | `-ci-age-boost` | string |  |  | how long a queueing grain CI job waits to gain one step of rank, as a Go duration -- the floor that stops lower-ranked work starving (empty uses grain's default) |
 | `-ci-artifact-days` | int |  |  | how many days a grain CI run's artifacts are kept before the sweep drops them (0 uses grain's default) |
 | `-ci-artifact-file-mb` | int |  |  | largest single grain CI artifact kept, in MiB -- one past it is refused inside the job's own sandbox, so it is never copied out (0 uses grain's default) |
@@ -1548,6 +1547,7 @@ _No flags._
 <!-- BEGIN GENERATED FLAGS: grain registry transfer -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
+| `-cancel` | bool |  |  | withdraw the entry's pending transfer offer instead of making one |
 | `-clear-owner-group` | bool |  |  | clear the entry's co-owning group |
 | `-oidc-audience` | string |  |  | OIDC ID token audience for the registry (defaults to -registry-url) |
 | `-owner-group` | string |  |  | optional co-owning group to set alongside transfer |
@@ -1899,6 +1899,7 @@ Serves the task UI on localhost over a throwaway store of fake tasks. Every call
 | `-agent-paused` | bool |  |  | serve a deployment whose agent dispatch is paused on a provider's usage limit |
 | `-as` | string |  |  | principal to attribute the fake tasks to (defaults to the OS user) |
 | `-base-branch-ci` | bool |  |  | with -github-sim and -fake-ci, let POST /api/e2e/base-branch/{red,green} {"branch": ...} (loopback only) turn a branch red or green on a -fake-ci verdict, through grain's own base-branch reconciler and dispatch's linking step, dispatching nothing |
+| `-config-change` | bool |  |  | serve a real, throwaway grain/config exported from the demo's store, and seed two tasks parked on proposal branches of it (propose_config_change), so the config-change card's Approve & Apply merges into its main and Reject deletes the branch |
 | `-default-target-repo` | string | `"acme/widgets"` |  | owner/name the fake tasks target |
 | `-disable-self-upgrade` | bool |  |  | as on grain daemon: disable in-VM self-upgrade actions and hide in-VM upgrade controls in the UI |
 | `-external-config-branch` | string | `"main"` |  | with -external-config-repo, the branch of that repository configuration is read from |
@@ -1914,7 +1915,6 @@ Serves the task UI on localhost over a throwaway store of fake tasks. Every call
 | `-host-executor` | string |  |  | resolve Settings' run locations (Models and Capability servers) as this deployment would: empty for a development daemon on the bare machine, "kubernetes" (no host executor), "none" (a container with no host agent), "hostd-down" (a container whose host agent is configured but not answering), "hostd" (a container with a real host agent on a throwaway allowlist offering agy and corp-search), "hostd-remote" (a Kubernetes daemon with a real host agent dialed in) or "hostd-remote-down" (none dialed in) |
 | `-host-mode-install` | bool |  |  | show the notice an unmigrated host-mode install shows (banner, System -> Health, Upgrade), with the CLIs the default bare-machine run locations leave nowhere to run |
 | `-human-review` | bool |  |  | seed a change a review held for a person's decision (request_human_review), waiting for Submit or Release hold |
-| `-legacy-capability` | bool |  |  | offer a made-up legacy capability row with nothing behind it, so the Legacy capabilities pickers, which core no longer fills, have a row to exercise |
 | `-management-url` | string |  |  | as on grain daemon: optional external http:// or https:// URL shown where upgrades are managed externally |
 | `-mechanical-port` | bool |  |  | seed a change merged onto main and the port grain cherry-picked to candidate itself, with no agent run |
 | `-merge-queue-states` | bool |  |  | also seed two pull requests the merge queue is waiting on: one for its base branch to go green, one for an approval GitHub requires |

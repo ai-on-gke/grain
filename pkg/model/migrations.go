@@ -914,7 +914,13 @@ var Migrations = []Migration{
 		Up: MigrateCatalogueDisabledGrants,
 	},
 	{
-		Version:     129,
+		Version: 129,
+		Description: "rewrite retired capability names in task_grant_wait (such as github-sandbox) " +
+			"that earlier rewriteLegacyGrantsMulti migrations left under their retired names",
+		Up: migrateRetiredGrantWaits,
+	},
+	{
+		Version:     130,
 		Description: "add task_run_usage, usage_capacity and usage_setting for per-run token accounting and connection budgets (tokenusage.go)",
 		Statements: []string{
 			taskRunUsageTable,

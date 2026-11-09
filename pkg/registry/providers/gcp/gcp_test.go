@@ -45,6 +45,16 @@ type fakeGCEState struct {
 	mu        sync.Mutex
 	instances map[string]map[string]any // key: project/zone/name
 	disks     map[string]map[string]any // key: project/zone/name
+	// insertOpErrors queues failed-operation responses for instances.insert: each POST pops
+	// the first one and answers with a DONE operation carrying that error instead of creating
+	// the instance.
+	insertOpErrors []fakeGCEOpError
+	insertAttempts int
+}
+
+type fakeGCEOpError struct {
+	Code    string
+	Message string
 }
 
 func newFakeGCEServer(t *testing.T) (*httptest.Server, *fakeGCEState) {
@@ -90,6 +100,20 @@ func newFakeGCEServer(t *testing.T) (*httptest.Server, *fakeGCEState) {
 					}
 					name, _ := body["name"].(string)
 					key := proj + "/" + zone + "/" + name
+					st.insertAttempts++
+					if len(st.insertOpErrors) > 0 {
+						opErr := st.insertOpErrors[0]
+						st.insertOpErrors = st.insertOpErrors[1:]
+						_ = json.NewEncoder(w).Encode(map[string]any{
+							"kind":   "compute#operation",
+							"name":   "op-failed-insert",
+							"status": "DONE",
+							"error": map[string]any{
+								"errors": []any{map[string]any{"code": opErr.Code, "message": opErr.Message}},
+							},
+						})
+						return
+					}
 					if _, exists := st.instances[key]; exists {
 						w.WriteHeader(http.StatusConflict)
 						_ = json.NewEncoder(w).Encode(map[string]any{
@@ -399,6 +423,7 @@ type fakeGCPControlPlane struct {
 	sqlUsers        map[string]map[string]bool // sqlInstance -> userName -> exists
 	secrets         map[string][][]byte        // secretID -> versions
 	secretLabels    map[string]map[string]string
+	secretPolicies  map[string]iamPolicy // secretID -> secret-level IAM policy
 	managedFolders  map[string]iamPolicy
 	objects         map[string][]byte
 }
@@ -411,6 +436,7 @@ func newFakeGCPControlPlaneServer(t *testing.T) (*httptest.Server, *fakeGCPContr
 		sqlUsers:        make(map[string]map[string]bool),
 		secrets:         make(map[string][][]byte),
 		secretLabels:    make(map[string]map[string]string),
+		secretPolicies:  make(map[string]iamPolicy),
 		managedFolders:  make(map[string]iamPolicy),
 		objects:         make(map[string][]byte),
 	}
@@ -448,6 +474,23 @@ func newFakeGCPControlPlaneServer(t *testing.T) (*httptest.Server, *fakeGCPContr
 				_ = json.NewEncoder(w).Encode(map[string]any{})
 				return
 			}
+		}
+
+		// 1b. Secret Manager secret-level IAM policy: /v1/projects/{p}/secrets/{s}:setIamPolicy
+		if strings.HasPrefix(path, "/v1/projects/") && strings.Contains(path, "/secrets/") && strings.HasSuffix(path, ":setIamPolicy") {
+			trimmed := strings.TrimSuffix(path, ":setIamPolicy")
+			secretID := trimmed[strings.LastIndex(trimmed, "/")+1:]
+			if _, ok := cp.secrets[secretID]; !ok {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			var req struct {
+				Policy iamPolicy `json:"policy"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			cp.secretPolicies[secretID] = req.Policy
+			_ = json.NewEncoder(w).Encode(req.Policy)
+			return
 		}
 
 		// 2. Cloud Resource Manager project IAM policy: /v1/projects/{p}:getIamPolicy | :setIamPolicy

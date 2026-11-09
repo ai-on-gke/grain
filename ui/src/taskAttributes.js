@@ -308,7 +308,14 @@ export const ATTRIBUTES = [
     // the other repos its work may land in are attributes of their own,
     // below ("reads" and "writes"); a task that only reads a repo is not
     // one of that repo's tasks under any of them.
-    values: one((t) => t.repo),
+    //
+    // Compared without case, as GitHub names a repo and as a repo's own
+    // page finds its tasks (state.js's repoKey): /repos/ACME/legacy-service
+    // linked to `repo:any:ACME/legacy-service`, which matched none of the
+    // tasks it had just counted, filed as acme/legacy-service (2026-11-08
+    // walkthrough, F2).
+    values: one((t) => (t.repo ? String(t.repo).toLowerCase() : t.repo)),
+    expand: (v) => [v === NONE ? NONE : String(v).toLowerCase()],
     noneLabel: "No repo",
     glyphOf: (v) => (v === NONE ? null : "repos"),
   },

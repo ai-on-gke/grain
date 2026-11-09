@@ -45,7 +45,7 @@ import (
 )
 
 // taskRunUsageTable, usageCapacityTable and usageSettingTable are named
-// once for Tables and for migration 129, which adds them.
+// once for Tables and for migration 130, which adds them.
 const taskRunUsageTable = `CREATE TABLE IF NOT EXISTS ` + "`task_run_usage`" + ` (
   ` + "`run_id`" + `             TEXT     NOT NULL,
   ` + "`task_id`" + `            TEXT     NOT NULL DEFAULT '',

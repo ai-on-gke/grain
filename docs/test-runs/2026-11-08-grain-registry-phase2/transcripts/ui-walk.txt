@@ -1,0 +1,55 @@
+PASS phone: Stop opens a confirmation naming the entry
+PASS phone: Stop dialog fits the viewport (358px)
+PASS phone: Escape closes the Stop confirmation
+PASS phone: focus returns to the Stop button after Escape (got "Stop platform-vm")
+PASS phone: stopped entry detail shows the auto-wake banner ("ept. Start it here, or visit its URL to wake it.")
+PASS phone: stopped entry detail offers Start
+PASS phone: /grants shows "Apps acting for you"
+PASS phone: /admin#delegating-apps renders the delegating apps panel
+PASS phone: /admin shows the quotas recovery panel
+PASS phone: /admin shows the scope conflicts recovery panel
+PASS phone: /admin shows the SQL pool drain recovery panel
+PASS phone: /admin shows the orphan VMs recovery panel
+PASS phone: /admin shows the tunnel disconnect recovery panel
+PASS phone: /admin shows the reconciler lease recovery panel
+PASS desktop: Stop opens a confirmation naming the entry
+PASS desktop: Stop dialog fits the viewport (480px)
+PASS desktop: Escape closes the Stop confirmation
+PASS desktop: focus returns to the Stop button after Escape (got "Stop platform-vm")
+PASS desktop: confirmed Stop shows a stopping/stopped badge (stoppedstopped)
+PASS desktop: stopped entry detail shows the auto-wake banner ("ept. Start it here, or visit its URL to wake it.")
+PASS desktop: stopped entry detail offers Start
+PASS desktop: Start moves docs-preview out of stopped
+PASS desktop: /grants shows "Apps acting for you"
+PASS desktop: /admin#delegating-apps renders the delegating apps panel
+PASS desktop: /admin shows the quotas recovery panel
+PASS desktop: /admin shows the scope conflicts recovery panel
+PASS desktop: /admin shows the SQL pool drain recovery panel
+PASS desktop: /admin shows the orphan VMs recovery panel
+PASS desktop: /admin shows the tunnel disconnect recovery panel
+PASS desktop: /admin shows the reconciler lease recovery panel
+PASS overflow / desktop/light
+PASS overflow / desktop/dark
+PASS overflow / phone/light
+PASS overflow / phone/dark
+PASS overflow /grants desktop/light
+PASS overflow /grants desktop/dark
+PASS overflow /grants phone/light
+PASS overflow /grants phone/dark
+PASS overflow /admin desktop/light
+PASS overflow /admin desktop/dark
+PASS overflow /admin phone/light
+PASS overflow /admin phone/dark
+PASS overflow /admin#delegating-apps desktop/light
+PASS overflow /admin#delegating-apps desktop/dark
+PASS overflow /admin#delegating-apps phone/light
+PASS overflow /admin#delegating-apps phone/dark
+PASS overflow /entries/docs-preview desktop/light
+PASS overflow /entries/docs-preview desktop/dark
+PASS overflow /entries/docs-preview phone/light
+PASS overflow /entries/docs-preview phone/dark
+PASS overflow /entries/platform-vm desktop/light
+PASS overflow /entries/platform-vm desktop/dark
+PASS overflow /entries/platform-vm phone/light
+PASS overflow /entries/platform-vm phone/dark
+0 problem(s)

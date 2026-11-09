@@ -420,7 +420,6 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 | `POST /api/external-agents/tokens/{id}/revoke` | `capabilities:admin` | `writer` | `writer` MAY revoke only own token; `admin` may revoke any (`RB-14`). |
 | `DELETE /api/external-agents/tokens/{id}` | `capabilities:admin` | `writer` | `writer` MAY delete only own token; `admin` may delete any (`RB-14`). |
 | `POST /api/external-agents/tokens/revoke-all` | `capabilities:admin` | `admin` | Emergency deployment-wide kill switch (`admin` only). |
-| `POST /api/capabilities/{id}/check` | `capabilities:read` | `admin` | Actively probes upstream capability server/credential. |
 | `GET /api/capability-servers/gchat-usage` | `capabilities:read` | `admin` | Admin capability-server usage inspection. |
 | `GET /api/capability-servers/host-entries` | `capabilities:read` | `admin` | Lists host-script entries on host. |
 | `GET /api/capability-servers/usage` | `capabilities:read` | `admin` | Lists cross-deployment capability server usage. |

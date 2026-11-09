@@ -32,8 +32,10 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/agent/codex"
+	"github.com/ai-on-gke/grain/pkg/capability/servers"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/ui"
 	"github.com/ai-on-gke/grain/pkg/whererun"
 )
 
@@ -928,5 +930,132 @@ func TestExpiredUnreachableHostdIsServedStaleWhileAProbeHangs(t *testing.T) {
 	}
 	if got := dials.Load(); got != 2 {
 		t.Fatalf("poll within the refreshed TTL dialed hostd %d times, want still 2", got)
+	}
+}
+
+// HostCapabilityEntries (used by GET /api/capability-servers/host-entries)
+// shares queryHostdOffers' stale-while-revalidate cache so polling behind a
+// hung host agent returns in <200ms with one background probe, and replacing
+// the socket inode invalidates the cache immediately even if mtime matches.
+func TestHostCapabilityEntriesUsesStaleWhileRevalidateAndDetectsSameMtimeInodeReplacement(t *testing.T) {
+	resetHostdUnreachableCache()
+	var clockMu sync.Mutex
+	now := time.Date(2026, 11, 8, 5, 0, 0, 0, time.UTC)
+	prevNow := hostdOffersNow
+	hostdOffersNow = func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return now
+	}
+	advance := func(d time.Duration) {
+		clockMu.Lock()
+		now = now.Add(d)
+		clockMu.Unlock()
+	}
+	t.Cleanup(func() {
+		resetHostdUnreachableCache()
+		hostdOffersNow = prevNow
+	})
+
+	dir, err := os.MkdirTemp("", "hostd-cap-entries")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "host.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origInfo, err := os.Stat(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var hang atomic.Bool
+	var dials atomic.Int32
+	held := make(chan net.Conn, 4)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			dials.Add(1)
+			if hang.Load() {
+				held <- conn
+				continue
+			}
+			_ = conn.Close()
+		}
+	}()
+	var heldConns []net.Conn
+	t.Cleanup(func() {
+		ln.Close()
+		for _, c := range heldConns {
+			c.Close()
+		}
+	})
+
+	ctx := context.Background()
+	cfg := withExecutor(Config{HostdSocket: sock}, inContainer, nil)
+	base := servers.New(servers.Options{Hostd: cfg.capabilityHostd()})
+	h := newHostdCapabilityServers(ctx, base, servers.Options{Hostd: cfg.capabilityHostd()}, nil)
+	live := NewLiveConfig(nil, nil, cfg, nil).WithCapabilityServers(base).withHostdCapabilityServers(h)
+	prober, ok := capabilityServerStatuses(live).(ui.CapabilityServerProber)
+	if !ok {
+		t.Fatal("capabilityServerStatuses does not implement CapabilityServerProber")
+	}
+
+	if _, err := prober.HostCapabilityEntries(ctx); err == nil || dials.Load() != 1 {
+		t.Fatalf("first HostCapabilityEntries err = %v after %d dials, want error after 1", err, dials.Load())
+	}
+
+	hang.Store(true)
+	advance(hostdUnreachableTTL + time.Second)
+
+	start := time.Now()
+	if _, err := prober.HostCapabilityEntries(ctx); err == nil {
+		t.Fatal("HostCapabilityEntries past TTL = nil error, want cached failure")
+	}
+	if took := time.Since(start); took > 200*time.Millisecond {
+		t.Fatalf("HostCapabilityEntries past TTL took %s behind hung socket, want <200ms", took)
+	}
+	select {
+	case c := <-held:
+		heldConns = append(heldConns, c)
+	case <-time.After(5 * time.Second):
+		t.Fatal("no background probe dialed hostd after TTL expiry")
+	}
+	start = time.Now()
+	if _, err := prober.HostCapabilityEntries(ctx); err == nil {
+		t.Fatal("HostCapabilityEntries during refresh = nil error")
+	}
+	if took := time.Since(start); took > 200*time.Millisecond || dials.Load() != 2 {
+		t.Fatalf("during refresh took=%s dials=%d, want <200ms and 2 dials", took, dials.Load())
+	}
+	for _, c := range heldConns {
+		c.Close()
+	}
+	heldConns = nil
+	sharedHostdUnreachableCache.refreshing.Wait()
+
+	// Replace the socket with a live hostd at the exact same path AND reset
+	// its mtime to origInfo.ModTime(): inode comparison (os.SameFile) must
+	// invalidate the unreachable entry immediately within the TTL.
+	_ = ln.Close()
+	_ = os.Remove(sock)
+	liveSock := startTestHostd(t, "capabilities:\n  walk-cap:\n    command: %[1]s\n")
+	if err := os.Symlink(liveSock, sock); err != nil {
+		// Wait: os.Stat follows symlinks, so a symlink to liveSock has liveSock's
+		// own inode and we can set liveSock's mtime to origInfo.ModTime()!
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(liveSock, origInfo.ModTime(), origInfo.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := prober.HostCapabilityEntries(ctx)
+	if err != nil || !slices.Equal(entries, []string{"walk-cap"}) {
+		t.Fatalf("HostCapabilityEntries after same-mtime inode swap = (%v, %v), want ([walk-cap], nil)", entries, err)
 	}
 }

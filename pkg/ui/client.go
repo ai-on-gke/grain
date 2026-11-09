@@ -351,8 +351,10 @@ func (r *CreateTaskRequest) UnmarshalJSON(data []byte) error {
 	*r = CreateTaskRequest(aux.Alias)
 	if present(aux.RawGrants) {
 		got, err := decodeRequestGrants(aux.RawGrants, model.GrantSpelling{
-			Capabilities: r.Capabilities != nil, Reads: len(r.Reads) > 0,
-			Writes: len(r.Writes) > 0, Target: strings.TrimSpace(r.Repo) != "",
+			Capabilities: r.Capabilities != nil,
+			Reads:        r.Reads != nil,
+			Writes:       r.Writes != nil,
+			Target:       strings.TrimSpace(r.Repo) != "" || strings.TrimSpace(r.Base) != "" || r.NoRepo || r.ChangeTarget != nil,
 		})
 		if err != nil {
 			return err
@@ -393,44 +395,9 @@ func present(raw json.RawMessage) bool {
 // capabilities: [] is -- and nil when it names only repository access,
 // which leaves capabilities to whatever they would have been.
 func decodeRequestGrants(raw json.RawMessage, legacy model.GrantSpelling) (model.RequestGrants, error) {
-	var items []json.RawMessage
-	if err := json.Unmarshal(raw, &items); err != nil {
-		return model.RequestGrants{}, validationErrorf("grants must be a list")
-	}
-	grants := make([]model.Grant, 0, len(items))
-	for _, item := range items {
-		// Read exactly as a capabilities: entry is (model.CapabilityEntryNames):
-		// a string, or {capability, with} and nothing else.
-		names, err := model.CapabilityEntryNames(item)
-		if err != nil {
-			return model.RequestGrants{}, validationErrorf("grants: %v", err)
-		}
-		for _, s := range names {
-			s = strings.TrimSpace(s)
-			if s == "" {
-				continue
-			}
-			if !model.IsCapabilityRef(s) {
-				grants = append(grants, model.Grant{Capability: s})
-				continue
-			}
-			spec, err := model.CapabilityGrantSpec(s)
-			if err != nil {
-				return model.RequestGrants{}, validationErrorf("grants: %v", err)
-			}
-			g := model.Grant{Capability: spec.Capability}
-			if spec.With != nil {
-				g.With, _ = json.Marshal(spec.With)
-			}
-			grants = append(grants, g)
-		}
-	}
-	out, err := model.SplitRequestGrants(grants, legacy)
+	out, err := model.DecodeRequestGrantsJSON(raw, legacy)
 	if err != nil {
 		return model.RequestGrants{}, validationErrorf("%v", err)
-	}
-	if len(items) == 0 {
-		out.Capabilities = []string{}
 	}
 	return out, nil
 }
@@ -3072,7 +3039,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	keepRunning := req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake)
 	autoMerge, autoSubmit, sessionQueued := req.AutoMerge, false, false
-	var limitNote, ungrantedNote, heldNote, needsPersonNote, personOnlyNote, seededNote, refusal string
+	var limitNote, ungrantedNote, heldNote, needsPersonNote, personOnlyNote, seededNote, landingNote, refusal string
 	var escalated []string
 	if proposedBy != nil {
 		child := model.Task{Target: target, Base: req.Base, Grants: grants, Writes: writes, Admission: askedAdmission, TemplateID: filedFrom}
@@ -3114,6 +3081,18 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		if changeTarget == nil && model.ScratchFixture(child, *proposedBy, pushesScratch) {
 			autoSubmit = true
 			autoMerge = !req.DeclineAutoMerge
+		}
+		// The proposer may queue its proposals and this one asks for
+		// nothing that permission does not cover: it only lands on a
+		// branch the permission does not reach. Said on the proposal, as
+		// orchestrator.relayProposedTasks says it on the identical call
+		// replayed at the end of a run -- which skips this one as already
+		// filed, so without it a live proposal held for its branch alone
+		// reads as grain having forgotten it (2026-11-08 attribution and
+		// external rails walkthrough, F2).
+		if !autoSubmit && !sessionQueues && changeTarget == nil && !req.HoldForApproval &&
+			model.AutoSubmitRefusedOnLanding(child, *proposedBy) {
+			landingNote = model.OtherBranchQueueNote(*proposedBy, model.Task{Target: target, Base: req.Base})
 		}
 		ungrantedWrites := model.UngrantedWrites(child, *proposedBy)
 		ungrantedReads := model.UngrantedReads(child, *proposedBy)
@@ -3248,7 +3227,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		ID:                   id,
 		Intent:               model.IntentImplement,
 		Title:                req.Title,
-		Body:                 req.Description + forkNote + ungrantedNote + seededNote + reviewTemplateNote + limitNote + needsPersonNote + heldNote + personOnlyNote + neverEndingNote + supersedeRefusal + model.OriginKeptNote(req.Origin, target, proposedBy),
+		Body:                 req.Description + forkNote + ungrantedNote + seededNote + reviewTemplateNote + limitNote + needsPersonNote + heldNote + personOnlyNote + landingNote + neverEndingNote + supersedeRefusal + model.OriginKeptNote(req.Origin, target, proposedBy),
 		Origin:               origin,
 		Target:               target,
 		ChangeTarget:         changeTarget,
@@ -4117,20 +4096,15 @@ func (c *Client) creationGrants(ctx context.Context, req CreateTaskRequest, targ
 					if _, ok := c.capabilityByID(nid); !ok {
 						return nil, nil, validationErrorf("%s", capabilityRefusal(nid))
 					}
-					found := false
-					for _, g := range grants {
-						if g.Capability == nid {
-							found = true
-							break
-						}
-					}
-					if !found {
-						grants = append(grants, model.Grant{
-							Capability: nid,
-							Via:        model.GrantByLabel,
-						})
-					}
+					grants = append(grants, model.Grant{
+						Capability: nid,
+						Via:        model.GrantByLabel,
+					})
 				}
+			}
+			grants, err = model.NormalizeCapabilityGrants(grants, nil)
+			if err != nil {
+				return nil, nil, validationErrorf("%v", err)
 			}
 		}
 	} else if req.Capabilities != nil {

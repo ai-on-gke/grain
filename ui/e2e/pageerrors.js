@@ -56,8 +56,34 @@ const WEBKIT_ABANDONED_FETCH =
 //
 // Spread into `base.extend()` (fixtures.js, director-fixtures.js) or into
 // `test.extend()` for a spec that drives Playwright's own `test` directly.
+// Repeated from src/phone.js because this file runs in plain Node outside
+// the Vite bundle.
+const PHONE_QUERY =
+  "(max-width: 599.95px), (max-height: 480px) and (orientation: landscape)";
+
 export const pageErrors = {
   page: async ({ page }, use, testInfo) => {
+    // In Chromium, page.setViewportSize resolves as soon as CDP's
+    // Emulation.setDeviceMetricsOverride returns, before Blink runs a
+    // BeginMainFrame to fire MediaQueryList "change" events. A spec that
+    // measures bounding boxes immediately after crossing the phone
+    // breakpoint otherwise reads a 390px viewport still holding the 232px
+    // desktop rail. Once App has mounted (data-phone is set) and the tab
+    // is visible, wait for that frame so the shell matches the viewport.
+    const rawSetViewportSize = page.setViewportSize.bind(page);
+    page.setViewportSize = async (viewportSize) => {
+      await rawSetViewportSize(viewportSize);
+      await page
+        .waitForFunction((query) => {
+          const phone = document.documentElement?.dataset?.phone;
+          if (phone !== "true" && phone !== "false") return true;
+          if (document.visibilityState === "hidden") return true;
+          const matches = window.matchMedia(query).matches;
+          return phone === (matches ? "true" : "false");
+        }, PHONE_QUERY)
+        .catch(() => {});
+    };
+
     const thrown = [];
     page.on("pageerror", (err) => {
       // Matched on the first line of the message or of the stack: the

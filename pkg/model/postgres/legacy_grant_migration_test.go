@@ -883,3 +883,144 @@ func TestMigration124RewritesGitHubSandboxPolicy(t *testing.T) {
 	}
 	assertPolicy(t, importedStore)
 }
+
+// A store from before the first conversion (schema 66), holding every
+// retired grant form at once -- in tasks, templates, schedules, the
+// deployment's default capabilities and standing session, and a
+// repository's default and CI capabilities -- upgrades to the current
+// schema in one pass on PostgreSQL too, with every one of them in its new
+// form, meaning what it meant, and nothing retired left over. The SQLite
+// twin is pkg/model/sqlite's test of the same name; this one runs every
+// migration from 67 on inside PostgreSQL's single migration transaction,
+// where one statement that SQLite tolerates but PostgreSQL rejects aborts
+// the whole upgrade.
+func TestAPreConversionStoreUpgradesEveryRetiredGrantAtOnce(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+	first := retiredGrants[0].version
+	var legacy, replacements []string
+	for _, r := range retiredGrants {
+		first = min(first, r.version)
+		legacy = append(legacy, r.legacy)
+		for _, to := range r.to {
+			if !slices.Contains(replacements, to) {
+				replacements = append(replacements, to)
+			}
+		}
+	}
+	sortedReplacements := slices.Clone(replacements)
+	sort.Strings(sortedReplacements)
+
+	cfg := model.DefaultConfig()
+	cfg.DefaultCapabilities = slices.Clone(legacy)
+	cfg.ConsoleSessions = []model.ConsoleSession{{ID: "director", Title: "Director", Capabilities: slices.Clone(legacy)}}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: widgets, DefaultCapabilities: slices.Clone(legacy),
+		CICapabilities: slices.Clone(legacy)}); err != nil {
+		t.Fatal(err)
+	}
+	owners := map[string]string{"task_grant": "task_id", "template_grant": "template_id", "schedule_grant": "schedule_id"}
+	for table, owner := range owners {
+		for _, name := range legacy {
+			if _, err := db.ExecContext(ctx, "INSERT INTO `"+table+"` (`"+owner+"`, `capability`, `via`) VALUES ('old', ?, 'label')", name); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	rewindSchemaTo(t, ctx, db, first-1)
+	if err := model.New(db).Init(ctx); err != nil {
+		t.Fatalf("migrating a version-%d store: %v", first-1, err)
+	}
+	var version int
+	if err := db.QueryRowContext(ctx, "SELECT `version` FROM `grain_schema` WHERE `id` = 1").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != model.SchemaVersion {
+		t.Errorf("schema version after the upgrade = %d, want %d", version, model.SchemaVersion)
+	}
+
+	noneRetired := func(what string, got []string) {
+		t.Helper()
+		for _, name := range legacy {
+			if slices.Contains(got, name) {
+				t.Errorf("%s still holds retired %q after the upgrade: %v", what, name, got)
+			}
+		}
+	}
+	for table, owner := range owners {
+		got := grantRows(t, ctx, db, table, owner)["old"]
+		sameGrantMeaning(t, table, legacy, got)
+		noneRetired(table, got)
+		if !slices.Equal(got, sortedReplacements) {
+			t.Errorf("%s holds %v after the upgrade, want every new form once: %v", table, got, sortedReplacements)
+		}
+	}
+	after, err := store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.ConsoleSessions) != 1 {
+		t.Fatalf("console sessions after the upgrade = %+v, want the director alone", after.ConsoleSessions)
+	}
+	for what, got := range map[string][]string{
+		"default capabilities": after.DefaultCapabilities,
+		"director session":     after.ConsoleSessions[0].Capabilities,
+	} {
+		sameGrantMeaning(t, what, legacy, got)
+		noneRetired(what, got)
+	}
+	repo, err := store.GetRepoConfig(ctx, widgets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for what, got := range map[string][]string{
+		"repo default capabilities": repo.DefaultCapabilities,
+		"repo CI capabilities":      repo.CICapabilities,
+	} {
+		sameGrantMeaning(t, what, legacy, got)
+		noneRetired(what, got)
+	}
+}
+
+func TestMigrationRewritesRetiredGrantWaits(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		from int
+	}{
+		{"from_123_rewriteLegacyGrantsMulti", 123},
+		{"from_128_migrateRetiredGrantWaits", 128},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, db, ctx := openStore(t)
+			if _, err := db.ExecContext(ctx,
+				"INSERT INTO `task_grant_wait` (`task_id`, `capability`, `resource`, `waiting_at`) VALUES ('w1', 'github-sandbox', 'GitHub App rate limit', ?), ('w2', 'console', 'slot', ?)",
+				time.Now().UTC(), time.Now().UTC()); err != nil {
+				t.Fatal(err)
+			}
+			rewindSchemaTo(t, ctx, db, tc.from)
+			if err := model.New(db).Init(ctx); err != nil {
+				t.Fatalf("Init from %d: %v", tc.from, err)
+			}
+			var gotCap string
+			if err := db.QueryRowContext(ctx, "SELECT `capability` FROM `task_grant_wait` WHERE `task_id` = 'w1'").Scan(&gotCap); err != nil {
+				t.Fatalf("reading w1 grant wait: %v", err)
+			}
+			if gotCap != model.GitHubSandboxRepoGrant {
+				t.Errorf("w1 capability = %q, want %q", gotCap, model.GitHubSandboxRepoGrant)
+			}
+			var count int
+			if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM `task_grant_wait` WHERE `task_id` = 'w2'").Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			if tc.from == 128 && count != 0 {
+				t.Errorf("w2 console wait survived migration 129: count = %d", count)
+			}
+		})
+	}
+}

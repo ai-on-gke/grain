@@ -576,6 +576,12 @@ func (c *GCECompute) CreateInstance(ctx context.Context, spec registry.InstanceS
 	insertURL := fmt.Sprintf("%s/projects/%s/zones/%s/instances",
 		c.baseURL, url.PathEscape(c.project), url.PathEscape(zone))
 	if err := c.doOperation(ctx, http.MethodPost, insertURL, insertReq); err != nil {
+		if isServiceAccountNotFound(err, spec.ServiceAccount) {
+			// The account was most likely created moments ago and has not propagated to
+			// Compute yet. Mark the error so the reconciler retries with backoff rather than
+			// failing the entry; the insert operation failed, so no VM was left behind.
+			return nil, &serviceAccountNotReadyError{err: fmt.Errorf("gcp compute: inserting instance %s in %s: %w", vmName, zone, err)}
+		}
 		return nil, fmt.Errorf("gcp compute: inserting instance %s in %s: %w", vmName, zone, err)
 	}
 
@@ -918,6 +924,39 @@ func checkOpError(op *gceOperation) error {
 	}
 	e := op.Error.Errors[0]
 	return fmt.Errorf("GCE operation %s failed (%s): %s", op.Name, e.Code, e.Message)
+}
+
+// serviceAccountNotReadyError keeps GCE's own message while also matching
+// registry.ErrServiceAccountNotReady under errors.Is.
+type serviceAccountNotReadyError struct{ err error }
+
+func (e *serviceAccountNotReadyError) Error() string { return e.err.Error() }
+
+func (e *serviceAccountNotReadyError) Unwrap() []error {
+	return []error{e.err, registry.ErrServiceAccountNotReady}
+}
+
+// isServiceAccountNotFound reports whether an instances.insert failure says the instance's
+// service account does not exist (yet). GCE reports this either as a failed operation with
+// code EXTERNAL_RESOURCE_NOT_FOUND ("The resource '<sa>' of type 'serviceAccount' was not
+// found.") or as a synchronous 4xx naming the account; both are what an eventually
+// consistent, just-created account looks like from Compute's side.
+func isServiceAccountNotFound(err error, saEmail string) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	sa := strings.ToLower(strings.TrimSpace(saEmail))
+	mentionsSA := strings.Contains(msg, "serviceaccount") ||
+		strings.Contains(msg, "service account") ||
+		(sa != "" && strings.Contains(msg, sa))
+	if !mentionsSA {
+		return false
+	}
+	return strings.Contains(msg, "external_resource_not_found") ||
+		strings.Contains(msg, "was not found") ||
+		strings.Contains(msg, "notfound") ||
+		strings.Contains(msg, "does not exist")
 }
 
 func extractZoneFromURL(rawURL string) string {

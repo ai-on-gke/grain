@@ -1,0 +1,1027 @@
+{
+  "label": "after",
+  "steps": [
+    {
+      "name": "new-task 1440-light: nested repo SearchSelect opens",
+      "ok": true
+    },
+    {
+      "name": "new-task 1440-light: Escape #1 closes only the SearchSelect",
+      "ok": true,
+      "listbox": 0,
+      "menu": true,
+      "dialogs": []
+    },
+    {
+      "name": "new-task 1440-light: Escape #2 closes only GrantsPicker, focus on Add grant…",
+      "ok": true,
+      "menu": 0,
+      "focused": "<button class=\"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-ou",
+      "dialogs": [],
+      "url": "http://127.0.0.1:4393/new"
+    },
+    {
+      "name": "new-task 1440-light: Escape on a disabled row's link closes only GrantsPicker",
+      "ok": true,
+      "hasLink": true,
+      "dialogs": []
+    },
+    {
+      "name": "new-task 1440-light: Escape in the next task after opening closes only GrantsPicker",
+      "ok": true,
+      "gapMs": 46.9,
+      "framesBefore": 0,
+      "menu": 0,
+      "focusedAdd": true,
+      "dialogs": []
+    },
+    {
+      "name": "new-task 1440-light: immediate real Escape closes only GrantsPicker",
+      "ok": true,
+      "dialogs": []
+    },
+    {
+      "name": "new-task 1440-light: axe Add grant… menu",
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "new-task 1440-light: Escape #3 closes New Task and keeps the draft",
+      "ok": true,
+      "before": {
+        "url": "/new",
+        "dialogs": 2
+      },
+      "after": {
+        "url": "/",
+        "dialogs": 0
+      },
+      "kept": " (walk edit)",
+      "dialogs": []
+    },
+    {
+      "name": "template 1440-light: nested repo SearchSelect opens",
+      "ok": true
+    },
+    {
+      "name": "template 1440-light: Escape #1 closes only the SearchSelect",
+      "ok": true,
+      "listbox": 0,
+      "menu": true,
+      "dialogs": []
+    },
+    {
+      "name": "template 1440-light: Escape #2 closes only GrantsPicker, focus on Add grant…",
+      "ok": true,
+      "menu": 0,
+      "focused": "<button class=\"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-ou",
+      "dialogs": [],
+      "url": "http://127.0.0.1:4393/processes/templates/template-2"
+    },
+    {
+      "name": "template 1440-light: Escape on a disabled row's link closes only GrantsPicker",
+      "ok": true,
+      "hasLink": true,
+      "dialogs": []
+    },
+    {
+      "name": "template 1440-light: Escape in the next task after opening closes only GrantsPicker",
+      "ok": true,
+      "gapMs": 41.1,
+      "framesBefore": 0,
+      "menu": 0,
+      "focusedAdd": true,
+      "dialogs": []
+    },
+    {
+      "name": "template 1440-light: immediate real Escape closes only GrantsPicker",
+      "ok": true,
+      "dialogs": []
+    },
+    {
+      "name": "template 1440-light: axe Add grant… menu",
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "template 1440-light: Escape #3 asks DISCARD_PROMPT",
+      "ok": true,
+      "dialogs": [
+        "You have unsaved changes here. Leave and discard them?"
+      ]
+    },
+    {
+      "name": "schedule 1440-light: nested repo SearchSelect opens",
+      "ok": true
+    },
+    {
+      "name": "schedule 1440-light: Escape #1 closes only the SearchSelect",
+      "ok": true,
+      "listbox": 0,
+      "menu": true,
+      "dialogs": []
+    },
+    {
+      "name": "schedule 1440-light: Escape #2 closes only GrantsPicker, focus on Add grant…",
+      "ok": true,
+      "menu": 0,
+      "focused": "<button class=\"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-ou",
+      "dialogs": [],
+      "url": "http://127.0.0.1:4393/processes/schedules/sched-2"
+    },
+    {
+      "name": "schedule 1440-light: Escape on a disabled row's link closes only GrantsPicker",
+      "ok": true,
+      "hasLink": true,
+      "dialogs": []
+    },
+    {
+      "name": "schedule 1440-light: Escape in the next task after opening closes only GrantsPicker",
+      "ok": true,
+      "gapMs": 56.6,
+      "framesBefore": 0,
+      "menu": 0,
+      "focusedAdd": true,
+      "dialogs": []
+    },
+    {
+      "name": "schedule 1440-light: immediate real Escape closes only GrantsPicker",
+      "ok": true,
+      "dialogs": []
+    },
+    {
+      "name": "schedule 1440-light: axe Add grant… menu",
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "schedule 1440-light: Escape #3 asks DISCARD_PROMPT",
+      "ok": true,
+      "dialogs": [
+        "You have unsaved changes here. Leave and discard them?"
+      ]
+    },
+    {
+      "name": "task-panel 1440-light: nested repo SearchSelect opens",
+      "ok": true
+    },
+    {
+      "name": "task-panel 1440-light: Escape #1 closes only the SearchSelect",
+      "ok": true,
+      "listbox": 0,
+      "menu": true,
+      "dialogs": []
+    },
+    {
+      "name": "task-panel 1440-light: Escape #2 closes only GrantsPicker, focus on Add grant…",
+      "ok": true,
+      "menu": 0,
+      "focused": "<button class=\"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-ou",
+      "dialogs": [],
+      "url": "http://127.0.0.1:4393/tasks/2"
+    },
+    {
+      "name": "task-panel 1440-light: Escape on a disabled row's link closes only GrantsPicker",
+      "ok": true,
+      "hasLink": true,
+      "dialogs": []
+    },
+    {
+      "name": "task-panel 1440-light: Escape in the next task after opening closes only GrantsPicker",
+      "ok": true,
+      "gapMs": 51.5,
+      "framesBefore": 1,
+      "menu": 0,
+      "focusedAdd": true,
+      "dialogs": []
+    },
+    {
+      "name": "task-panel 1440-light: immediate real Escape closes only GrantsPicker",
+      "ok": true,
+      "dialogs": []
+    },
+    {
+      "name": "task-panel 1440-light: axe Add grant… menu",
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "task-panel 1440-light: Escape #3 closes the clean panel",
+      "ok": true,
+      "before": {
+        "url": "/tasks/2",
+        "dialogs": 3
+      },
+      "after": {
+        "url": "/",
+        "dialogs": 0
+      },
+      "dialogs": []
+    },
+    {
+      "name": "session-panel 1440-light: nested repo SearchSelect opens",
+      "ok": true
+    },
+    {
+      "name": "session-panel 1440-light: Escape #1 closes only the SearchSelect",
+      "ok": true,
+      "listbox": 0,
+      "menu": true,
+      "dialogs": []
+    },
+    {
+      "name": "session-panel 1440-light: Escape #2 closes only GrantsPicker, focus on Add grant…",
+      "ok": true,
+      "menu": 0,
+      "focused": "<button class=\"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-ou",
+      "dialogs": [],
+      "url": "http://127.0.0.1:4393/session/director"
+    },
+    {
+      "name": "session-panel 1440-light: Escape on a disabled row's link closes only GrantsPicker",
+      "ok": true,
+      "hasLink": true,
+      "dialogs": []
+    },
+    {
+      "name": "session-panel 1440-light: Escape in the next task after opening closes only GrantsPicker",
+      "ok": true,
+      "gapMs": 38.4,
+      "framesBefore": 0,
+      "menu": 0,
+      "focusedAdd": true,
+      "dialogs": []
+    },
+    {
+      "name": "session-panel 1440-light: immediate real Escape closes only GrantsPicker",
+      "ok": true,
+      "dialogs": []
+    },
+    {
+      "name": "session-panel 1440-light: axe Add grant… menu",
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "session-panel 1440-light: Escape #3 closes the clean panel",
+      "ok": true,
+      "before": {
+        "url": "/session/director",
+        "dialogs": 1
+      },
+      "after": {
+        "url": "/session/director",
+        "dialogs": 0
+      },
+      "dialogs": []
+    },
+    {
+      "name": "new-task 1440-dark: nested repo SearchSelect opens",
+      "ok": true
+    },
+    {
+      "name": "new-task 1440-dark: Escape #1 closes only the SearchSelect",
+      "ok": true,
+      "listbox": 0,
+      "menu": true,
+      "dialogs": []
+    },
+    {
+      "name": "new-task 1440-dark: Escape #2 closes only GrantsPicker, focus on Add grant…",
+      "ok": true,
+      "menu": 0,
+      "focused": "<button class=\"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-ou",
+      "dialogs": [],
+      "url": "http://127.0.0.1:4393/new"
+    },
+    {
+      "name": "new-task 1440-dark: Escape on a disabled row's link closes only GrantsPicker",
+      "ok": true,
+      "hasLink": true,
+      "dialogs": []
+    },
+    {
+      "name": "new-task 1440-dark: Escape in the next task after opening closes only GrantsPicker",
+      "ok": true,
+      "gapMs": 55,
+      "framesBefore": 1,
+      "menu": 0,
+      "focusedAdd": true,
+      "dialogs": []
+    },
+    {
+      "name": "new-task 1440-dark: immediate real Escape closes only GrantsPicker",
+      "ok": true,
+      "dialogs": []
+    },
+    {
+      "name": "new-task 1440-dark: Escape #3 closes New Task and keeps the draft",
+      "ok": true,
+      "before": {
+        "url": "/new",
+        "dialogs": 2
+      },
+      "after": {
+        "url": "/",
+        "dialogs": 0
+      },
+      "kept": " (walk edit)",
+      "dialogs": []
+    },
+    {
+      "name": "template 1440-dark: nested repo SearchSelect opens",
+      "ok": true
+    },
+    {
+      "name": "template 1440-dark: Escape #1 closes only the SearchSelect",
+      "ok": true,
+      "listbox": 0,
+      "menu": true,
+      "dialogs": []
+    },
+    {
+      "name": "template 1440-dark: Escape #2 closes only GrantsPicker, focus on Add grant…",
+      "ok": true,
+      "menu": 0,
+      "focused": "<button class=\"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-ou",
+      "dialogs": [],
+      "url": "http://127.0.0.1:4393/processes/templates/template-2"
+    },
+    {
+      "name": "template 1440-dark: Escape on a disabled row's link closes only GrantsPicker",
+      "ok": true,
+      "hasLink": true,
+      "dialogs": []
+    },
+    {
+      "name": "template 1440-dark: Escape in the next task after opening closes only GrantsPicker",
+      "ok": true,
+      "gapMs": 46.3,
+      "framesBefore": 0,
+      "menu": 0,
+      "focusedAdd": true,
+      "dialogs": []
+    },
+    {
+      "name": "template 1440-dark: immediate real Escape closes only GrantsPicker",
+      "ok": true,
+      "dialogs": []
+    },
+    {
+      "name": "template 1440-dark: Escape #3 asks DISCARD_PROMPT",
+      "ok": true,
+      "dialogs": [
+        "You have unsaved changes here. Leave and discard them?"
+      ]
+    },
+    {
+      "name": "schedule 1440-dark: nested repo SearchSelect opens",
+      "ok": true
+    },
+    {
+      "name": "schedule 1440-dark: Escape #1 closes only the SearchSelect",
+      "ok": true,
+      "listbox": 0,
+      "menu": true,
+      "dialogs": []
+    },
+    {
+      "name": "schedule 1440-dark: Escape #2 closes only GrantsPicker, focus on Add grant…",
+      "ok": true,
+      "menu": 0,
+      "focused": "<button class=\"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-ou",
+      "dialogs": [],
+      "url": "http://127.0.0.1:4393/processes/schedules/sched-2"
+    },
+    {
+      "name": "schedule 1440-dark: Escape on a disabled row's link closes only GrantsPicker",
+      "ok": true,
+      "hasLink": true,
+      "dialogs": []
+    },
+    {
+      "name": "schedule 1440-dark: Escape in the next task after opening closes only GrantsPicker",
+      "ok": true,
+      "gapMs": 44.7,
+      "framesBefore": 0,
+      "menu": 0,
+      "focusedAdd": true,
+      "dialogs": []
+    },
+    {
+      "name": "schedule 1440-dark: immediate real Escape closes only GrantsPicker",
+      "ok": true,
+      "dialogs": []
+    },
+    {
+      "name": "schedule 1440-dark: Escape #3 asks DISCARD_PROMPT",
+      "ok": true,
+      "dialogs": [
+        "You have unsaved changes here. Leave and discard them?"
+      ]
+    },
+    {
+      "name": "task-panel 1440-dark: nested repo SearchSelect opens",
+      "ok": true
+    },
+    {
+      "name": "task-panel 1440-dark: Escape #1 closes only the SearchSelect",
+      "ok": true,
+      "listbox": 0,
+      "menu": true,
+      "dialogs": []
+    },
+    {
+      "name": "task-panel 1440-dark: Escape #2 closes only GrantsPicker, focus on Add grant…",
+      "ok": true,
+      "menu": 0,
+      "focused": "<button class=\"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-ou",
+      "dialogs": [],
+      "url": "http://127.0.0.1:4393/tasks/2"
+    },
+    {
+      "name": "task-panel 1440-dark: Escape on a disabled row's link closes only GrantsPicker",
+      "ok": true,
+      "hasLink": true,
+      "dialogs": []
+    },
+    {
+      "name": "task-panel 1440-dark: Escape in the next task after opening closes only GrantsPicker",
+      "ok": true,
+      "gapMs": 38.5,
+      "framesBefore": 0,
+      "menu": 0,
+      "focusedAdd": true,
+      "dialogs": []
+    },
+    {
+      "name": "task-panel 1440-dark: immediate real Escape closes only GrantsPicker",
+      "ok": true,
+      "dialogs": []
+    },
+    {
+      "name": "task-panel 1440-dark: Escape #3 closes the clean panel",
+      "ok": true,
+      "before": {
+        "url": "/tasks/2",
+        "dialogs": 3
+      },
+      "after": {
+        "url": "/",
+        "dialogs": 0
+      },
+      "dialogs": []
+    },
+    {
+      "name": "session-panel 1440-dark: nested repo SearchSelect opens",
+      "ok": true
+    },
+    {
+      "name": "session-panel 1440-dark: Escape #1 closes only the SearchSelect",
+      "ok": true,
+      "listbox": 0,
+      "menu": true,
+      "dialogs": []
+    },
+    {
+      "name": "session-panel 1440-dark: Escape #2 closes only GrantsPicker, focus on Add grant…",
+      "ok": true,
+      "menu": 0,
+      "focused": "<button class=\"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-ou",
+      "dialogs": [],
+      "url": "http://127.0.0.1:4393/session/director"
+    },
+    {
+      "name": "session-panel 1440-dark: Escape on a disabled row's link closes only GrantsPicker",
+      "ok": true,
+      "hasLink": true,
+      "dialogs": []
+    },
+    {
+      "name": "session-panel 1440-dark: Escape in the next task after opening closes only GrantsPicker",
+      "ok": true,
+      "gapMs": 38.5,
+      "framesBefore": 0,
+      "menu": 0,
+      "focusedAdd": true,
+      "dialogs": []
+    },
+    {
+      "name": "session-panel 1440-dark: immediate real Escape closes only GrantsPicker",
+      "ok": true,
+      "dialogs": []
+    },
+    {
+      "name": "session-panel 1440-dark: Escape #3 closes the clean panel",
+      "ok": true,
+      "before": {
+        "url": "/session/director",
+        "dialogs": 1
+      },
+      "after": {
+        "url": "/session/director",
+        "dialogs": 0
+      },
+      "dialogs": []
+    },
+    {
+      "name": "new-task 390-light: nested repo SearchSelect opens",
+      "ok": true
+    },
+    {
+      "name": "new-task 390-light: Escape #1 closes only the SearchSelect",
+      "ok": true,
+      "listbox": 0,
+      "menu": true,
+      "dialogs": []
+    },
+    {
+      "name": "new-task 390-light: Escape #2 closes only GrantsPicker, focus on Add grant…",
+      "ok": true,
+      "menu": 0,
+      "focused": "<button class=\"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-ou",
+      "dialogs": [],
+      "url": "http://127.0.0.1:4393/new"
+    },
+    {
+      "name": "new-task 390-light: Escape on a disabled row's link closes only GrantsPicker",
+      "ok": true,
+      "hasLink": true,
+      "dialogs": []
+    },
+    {
+      "name": "new-task 390-light: Escape in the next task after opening closes only GrantsPicker",
+      "ok": true,
+      "gapMs": 37.1,
+      "framesBefore": 0,
+      "menu": 0,
+      "focusedAdd": true,
+      "dialogs": []
+    },
+    {
+      "name": "new-task 390-light: immediate real Escape closes only GrantsPicker",
+      "ok": true,
+      "dialogs": []
+    },
+    {
+      "name": "new-task 390-light: Escape #3 closes New Task and keeps the draft",
+      "ok": true,
+      "before": {
+        "url": "/new",
+        "dialogs": 2
+      },
+      "after": {
+        "url": "/",
+        "dialogs": 0
+      },
+      "kept": " (walk edit)",
+      "dialogs": []
+    },
+    {
+      "name": "template 390-light: nested repo SearchSelect opens",
+      "ok": true
+    },
+    {
+      "name": "template 390-light: Escape #1 closes only the SearchSelect",
+      "ok": true,
+      "listbox": 0,
+      "menu": true,
+      "dialogs": []
+    },
+    {
+      "name": "template 390-light: Escape #2 closes only GrantsPicker, focus on Add grant…",
+      "ok": true,
+      "menu": 0,
+      "focused": "<button class=\"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-ou",
+      "dialogs": [],
+      "url": "http://127.0.0.1:4393/processes/templates/template-2"
+    },
+    {
+      "name": "template 390-light: Escape on a disabled row's link closes only GrantsPicker",
+      "ok": true,
+      "hasLink": true,
+      "dialogs": []
+    },
+    {
+      "name": "template 390-light: Escape in the next task after opening closes only GrantsPicker",
+      "ok": true,
+      "gapMs": 49.6,
+      "framesBefore": 1,
+      "menu": 0,
+      "focusedAdd": true,
+      "dialogs": []
+    },
+    {
+      "name": "template 390-light: immediate real Escape closes only GrantsPicker",
+      "ok": true,
+      "dialogs": []
+    },
+    {
+      "name": "template 390-light: Escape #3 asks DISCARD_PROMPT",
+      "ok": true,
+      "dialogs": [
+        "You have unsaved changes here. Leave and discard them?"
+      ]
+    },
+    {
+      "name": "schedule 390-light: nested repo SearchSelect opens",
+      "ok": true
+    },
+    {
+      "name": "schedule 390-light: Escape #1 closes only the SearchSelect",
+      "ok": true,
+      "listbox": 0,
+      "menu": true,
+      "dialogs": []
+    },
+    {
+      "name": "schedule 390-light: Escape #2 closes only GrantsPicker, focus on Add grant…",
+      "ok": true,
+      "menu": 0,
+      "focused": "<button class=\"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-ou",
+      "dialogs": [],
+      "url": "http://127.0.0.1:4393/processes/schedules/sched-2"
+    },
+    {
+      "name": "schedule 390-light: Escape on a disabled row's link closes only GrantsPicker",
+      "ok": true,
+      "hasLink": true,
+      "dialogs": []
+    },
+    {
+      "name": "schedule 390-light: Escape in the next task after opening closes only GrantsPicker",
+      "ok": true,
+      "gapMs": 45.9,
+      "framesBefore": 0,
+      "menu": 0,
+      "focusedAdd": true,
+      "dialogs": []
+    },
+    {
+      "name": "schedule 390-light: immediate real Escape closes only GrantsPicker",
+      "ok": true,
+      "dialogs": []
+    },
+    {
+      "name": "schedule 390-light: Escape #3 asks DISCARD_PROMPT",
+      "ok": true,
+      "dialogs": [
+        "You have unsaved changes here. Leave and discard them?"
+      ]
+    },
+    {
+      "name": "task-panel 390-light: nested repo SearchSelect opens",
+      "ok": true
+    },
+    {
+      "name": "task-panel 390-light: Escape #1 closes only the SearchSelect",
+      "ok": true,
+      "listbox": 0,
+      "menu": true,
+      "dialogs": []
+    },
+    {
+      "name": "task-panel 390-light: Escape #2 closes only GrantsPicker, focus on Add grant…",
+      "ok": true,
+      "menu": 0,
+      "focused": "<button class=\"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-ou",
+      "dialogs": [],
+      "url": "http://127.0.0.1:4393/tasks/2"
+    },
+    {
+      "name": "task-panel 390-light: Escape on a disabled row's link closes only GrantsPicker",
+      "ok": true,
+      "hasLink": true,
+      "dialogs": []
+    },
+    {
+      "name": "task-panel 390-light: Escape in the next task after opening closes only GrantsPicker",
+      "ok": true,
+      "gapMs": 47.2,
+      "framesBefore": 0,
+      "menu": 0,
+      "focusedAdd": true,
+      "dialogs": []
+    },
+    {
+      "name": "task-panel 390-light: immediate real Escape closes only GrantsPicker",
+      "ok": true,
+      "dialogs": []
+    },
+    {
+      "name": "task-panel 390-light: Escape #3 closes the clean panel",
+      "ok": true,
+      "before": {
+        "url": "/tasks/2",
+        "dialogs": 3
+      },
+      "after": {
+        "url": "/",
+        "dialogs": 0
+      },
+      "dialogs": []
+    },
+    {
+      "name": "session-panel 390-light: nested repo SearchSelect opens",
+      "ok": true
+    },
+    {
+      "name": "session-panel 390-light: Escape #1 closes only the SearchSelect",
+      "ok": true,
+      "listbox": 0,
+      "menu": true,
+      "dialogs": []
+    },
+    {
+      "name": "session-panel 390-light: Escape #2 closes only GrantsPicker, focus on Add grant…",
+      "ok": true,
+      "menu": 0,
+      "focused": "<button class=\"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-ou",
+      "dialogs": [],
+      "url": "http://127.0.0.1:4393/session/director"
+    },
+    {
+      "name": "session-panel 390-light: Escape on a disabled row's link closes only GrantsPicker",
+      "ok": true,
+      "hasLink": true,
+      "dialogs": []
+    },
+    {
+      "name": "session-panel 390-light: Escape in the next task after opening closes only GrantsPicker",
+      "ok": true,
+      "gapMs": 50.1,
+      "framesBefore": 1,
+      "menu": 0,
+      "focusedAdd": true,
+      "dialogs": []
+    },
+    {
+      "name": "session-panel 390-light: immediate real Escape closes only GrantsPicker",
+      "ok": true,
+      "dialogs": []
+    },
+    {
+      "name": "session-panel 390-light: Escape #3 closes the clean panel",
+      "ok": true,
+      "before": {
+        "url": "/session/director",
+        "dialogs": 1
+      },
+      "after": {
+        "url": "/session/director",
+        "dialogs": 0
+      },
+      "dialogs": []
+    },
+    {
+      "name": "new-task 390-dark: nested repo SearchSelect opens",
+      "ok": true
+    },
+    {
+      "name": "new-task 390-dark: Escape #1 closes only the SearchSelect",
+      "ok": true,
+      "listbox": 0,
+      "menu": true,
+      "dialogs": []
+    },
+    {
+      "name": "new-task 390-dark: Escape #2 closes only GrantsPicker, focus on Add grant…",
+      "ok": true,
+      "menu": 0,
+      "focused": "<button class=\"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-ou",
+      "dialogs": [],
+      "url": "http://127.0.0.1:4393/new"
+    },
+    {
+      "name": "new-task 390-dark: Escape on a disabled row's link closes only GrantsPicker",
+      "ok": true,
+      "hasLink": true,
+      "dialogs": []
+    },
+    {
+      "name": "new-task 390-dark: Escape in the next task after opening closes only GrantsPicker",
+      "ok": true,
+      "gapMs": 41.4,
+      "framesBefore": 0,
+      "menu": 0,
+      "focusedAdd": true,
+      "dialogs": []
+    },
+    {
+      "name": "new-task 390-dark: immediate real Escape closes only GrantsPicker",
+      "ok": true,
+      "dialogs": []
+    },
+    {
+      "name": "new-task 390-dark: Escape #3 closes New Task and keeps the draft",
+      "ok": true,
+      "before": {
+        "url": "/new",
+        "dialogs": 2
+      },
+      "after": {
+        "url": "/",
+        "dialogs": 0
+      },
+      "kept": " (walk edit)",
+      "dialogs": []
+    },
+    {
+      "name": "template 390-dark: nested repo SearchSelect opens",
+      "ok": true
+    },
+    {
+      "name": "template 390-dark: Escape #1 closes only the SearchSelect",
+      "ok": true,
+      "listbox": 0,
+      "menu": true,
+      "dialogs": []
+    },
+    {
+      "name": "template 390-dark: Escape #2 closes only GrantsPicker, focus on Add grant…",
+      "ok": true,
+      "menu": 0,
+      "focused": "<button class=\"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-ou",
+      "dialogs": [],
+      "url": "http://127.0.0.1:4393/processes/templates/template-2"
+    },
+    {
+      "name": "template 390-dark: Escape on a disabled row's link closes only GrantsPicker",
+      "ok": true,
+      "hasLink": true,
+      "dialogs": []
+    },
+    {
+      "name": "template 390-dark: Escape in the next task after opening closes only GrantsPicker",
+      "ok": true,
+      "gapMs": 43.1,
+      "framesBefore": 0,
+      "menu": 0,
+      "focusedAdd": true,
+      "dialogs": []
+    },
+    {
+      "name": "template 390-dark: immediate real Escape closes only GrantsPicker",
+      "ok": true,
+      "dialogs": []
+    },
+    {
+      "name": "template 390-dark: Escape #3 asks DISCARD_PROMPT",
+      "ok": true,
+      "dialogs": [
+        "You have unsaved changes here. Leave and discard them?"
+      ]
+    },
+    {
+      "name": "schedule 390-dark: nested repo SearchSelect opens",
+      "ok": true
+    },
+    {
+      "name": "schedule 390-dark: Escape #1 closes only the SearchSelect",
+      "ok": true,
+      "listbox": 0,
+      "menu": true,
+      "dialogs": []
+    },
+    {
+      "name": "schedule 390-dark: Escape #2 closes only GrantsPicker, focus on Add grant…",
+      "ok": true,
+      "menu": 0,
+      "focused": "<button class=\"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-ou",
+      "dialogs": [],
+      "url": "http://127.0.0.1:4393/processes/schedules/sched-2"
+    },
+    {
+      "name": "schedule 390-dark: Escape on a disabled row's link closes only GrantsPicker",
+      "ok": true,
+      "hasLink": true,
+      "dialogs": []
+    },
+    {
+      "name": "schedule 390-dark: Escape in the next task after opening closes only GrantsPicker",
+      "ok": true,
+      "gapMs": 46.4,
+      "framesBefore": 0,
+      "menu": 0,
+      "focusedAdd": true,
+      "dialogs": []
+    },
+    {
+      "name": "schedule 390-dark: immediate real Escape closes only GrantsPicker",
+      "ok": true,
+      "dialogs": []
+    },
+    {
+      "name": "schedule 390-dark: Escape #3 asks DISCARD_PROMPT",
+      "ok": true,
+      "dialogs": [
+        "You have unsaved changes here. Leave and discard them?"
+      ]
+    },
+    {
+      "name": "task-panel 390-dark: nested repo SearchSelect opens",
+      "ok": true
+    },
+    {
+      "name": "task-panel 390-dark: Escape #1 closes only the SearchSelect",
+      "ok": true,
+      "listbox": 0,
+      "menu": true,
+      "dialogs": []
+    },
+    {
+      "name": "task-panel 390-dark: Escape #2 closes only GrantsPicker, focus on Add grant…",
+      "ok": true,
+      "menu": 0,
+      "focused": "<button class=\"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-ou",
+      "dialogs": [],
+      "url": "http://127.0.0.1:4393/tasks/2"
+    },
+    {
+      "name": "task-panel 390-dark: Escape on a disabled row's link closes only GrantsPicker",
+      "ok": true,
+      "hasLink": true,
+      "dialogs": []
+    },
+    {
+      "name": "task-panel 390-dark: Escape in the next task after opening closes only GrantsPicker",
+      "ok": true,
+      "gapMs": 49,
+      "framesBefore": 0,
+      "menu": 0,
+      "focusedAdd": true,
+      "dialogs": []
+    },
+    {
+      "name": "task-panel 390-dark: immediate real Escape closes only GrantsPicker",
+      "ok": true,
+      "dialogs": []
+    },
+    {
+      "name": "task-panel 390-dark: Escape #3 closes the clean panel",
+      "ok": true,
+      "before": {
+        "url": "/tasks/2",
+        "dialogs": 3
+      },
+      "after": {
+        "url": "/",
+        "dialogs": 0
+      },
+      "dialogs": []
+    },
+    {
+      "name": "session-panel 390-dark: nested repo SearchSelect opens",
+      "ok": true
+    },
+    {
+      "name": "session-panel 390-dark: Escape #1 closes only the SearchSelect",
+      "ok": true,
+      "listbox": 0,
+      "menu": true,
+      "dialogs": []
+    },
+    {
+      "name": "session-panel 390-dark: Escape #2 closes only GrantsPicker, focus on Add grant…",
+      "ok": true,
+      "menu": 0,
+      "focused": "<button class=\"MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-ou",
+      "dialogs": [],
+      "url": "http://127.0.0.1:4393/session/director"
+    },
+    {
+      "name": "session-panel 390-dark: Escape on a disabled row's link closes only GrantsPicker",
+      "ok": true,
+      "hasLink": true,
+      "dialogs": []
+    },
+    {
+      "name": "session-panel 390-dark: Escape in the next task after opening closes only GrantsPicker",
+      "ok": true,
+      "gapMs": 44.5,
+      "framesBefore": 0,
+      "menu": 0,
+      "focusedAdd": true,
+      "dialogs": []
+    },
+    {
+      "name": "session-panel 390-dark: immediate real Escape closes only GrantsPicker",
+      "ok": true,
+      "dialogs": []
+    },
+    {
+      "name": "session-panel 390-dark: Escape #3 closes the clean panel",
+      "ok": true,
+      "before": {
+        "url": "/session/director",
+        "dialogs": 1
+      },
+      "after": {
+        "url": "/session/director",
+        "dialogs": 0
+      },
+      "dialogs": []
+    }
+  ],
+  "failures": []
+}
