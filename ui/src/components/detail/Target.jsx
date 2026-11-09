@@ -31,10 +31,10 @@ import RepoField from "../RepoField.jsx";
 // and all) and a plain box for the branch, each PATCHing
 // /api/tasks/{id} as it is settled.
 //
-// It is the whole "Repos" section of the pane now (grain/task-202): the
-// other repos this task may change are handed in as children and render
-// under this one, so the panel says what it has to say about repos in
-// one place, the way the forms that file a task do.
+// It is the "Repos" section of the pane (grain/task-202). The other
+// repos this task reads and writes were handed in as children once; they
+// are grants now, in the Access section's Grants list (unified-grants
+// slice 5), and children is left for a caller with something to add.
 //
 // Unlike the read-only repos below, an edit here reaches nothing that is
 // already running. The checkout is made once, from the repo and base as

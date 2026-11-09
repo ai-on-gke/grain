@@ -25,7 +25,6 @@ import {
   Box,
   Button,
   Chip,
-  IconButton,
   Link,
   ListItemIcon,
   ListItemText,
@@ -34,13 +33,17 @@ import {
   MenuList,
   Popover,
   TextField,
-  Tooltip,
   Typography,
 } from "@mui/material";
 import CheckIcon from "@mui/icons-material/Check";
-import CloseIcon from "@mui/icons-material/Close";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import CapabilityArgsForm from "./CapabilityArgsForm.jsx";
+import GrantLine, { RemoveButton, sectionSx } from "./GrantLine.jsx";
+import RepoGrants, {
+  REPO_READ_REF,
+  RepoGrantMenuItems,
+  repoGrantMenuRows,
+} from "./RepoGrants.jsx";
 import InfoPopover from "./InfoPopover.jsx";
 import { capabilityMethods, checkGrants } from "./capabilityMethods.js";
 import {
@@ -175,6 +178,11 @@ export default function GrantsPicker({
   formCapabilities = null,
   label = "Grants",
   helpText = "",
+  // repos is the task's repository access, drawn as grants among the
+  // rest (RepoGrants.jsx, unified-grants slice 5): its target, the repos
+  // it reads and writes, and declared push: refs. null where the form
+  // has no repository access to edit (Settings' default lists, CI).
+  repos = null,
 }) {
   const all = grants || [];
   const bareHeld = useMemo(
@@ -208,6 +216,9 @@ export default function GrantsPicker({
   // drafts are argument sections not granted yet: {id, method, value,
   // server: {fields, message}}, each shown after its method's grants.
   const [drafts, setDrafts] = useState([]);
+  // repoDrafts is the repository grants picked from "Add grant…" and not
+  // given a repo yet: "read" or "write", each a repo picker in the list.
+  const [repoDrafts, setRepoDrafts] = useState([]);
   const [error, setError] = useState("");
   const listRef = useRef(null);
   const addButtonRef = useRef(null);
@@ -261,8 +272,10 @@ export default function GrantsPicker({
           if (!live.current) return null;
           loaded.current = true;
           setLoadError("");
-          setMethods(asList(m));
-          return asList(m);
+          // Only methods: a row without a ref is nothing to grant.
+          const listed = asList(m).filter((x) => typeof x?.ref === "string");
+          setMethods(listed);
+          return listed;
         })
         .catch((err) => {
           if (live.current) setLoadError(err.message);
@@ -810,11 +823,22 @@ export default function GrantsPicker({
         rows: shown,
       });
   }
+  const repoRows = repoGrantMenuRows(repos, matches);
+  if (repoRows.length > 0)
+    menuGroups.unshift({
+      key: "repos",
+      kind: "repo",
+      title: "Repository access",
+      rows: repoRows,
+    });
   const shownMethods = sortByDisplay(
     formCapabilities,
     (methods || []).filter(
       (m) =>
         !isApiCapabilityRef(m.ref) &&
+        // A task's read access is its reads list, offered above as
+        // "Read a repository"; the listed method is a CI job's.
+        !(repos && m.ref === REPO_READ_REF) &&
         formOffers(m.ref) &&
         matches(m.ref, m.method, m.description),
     ),
@@ -1006,9 +1030,28 @@ export default function GrantsPicker({
 
   const anyApi = presets.length > 0 || areas.length > 0;
   const anyMethods = (methods || []).some((m) => !isApiGrant(m.ref));
-  const held = bareHeld.length + apiHeld.length + refs.length + drafts.length;
+  const reposHeld = repos
+    ? (repos.target ? 1 : 0) +
+      (repos.reads || []).length +
+      (repos.writes || []).length +
+      (repos.push || []).length
+    : 0;
+  const held =
+    bareHeld.length +
+    apiHeld.length +
+    refs.length +
+    drafts.length +
+    reposHeld +
+    repoDrafts.length;
   const stillLoading = count > 0 && methods === null;
-  if (!anyApi && !anyMethods && held === 0 && !loadError && !stillLoading)
+  if (
+    !repos &&
+    !anyApi &&
+    !anyMethods &&
+    held === 0 &&
+    !loadError &&
+    !stillLoading
+  )
     return null;
 
   const regionId = `${idPrefix}-grants`;
@@ -1030,8 +1073,10 @@ export default function GrantsPicker({
       >
         {helpText || (
           <>
-            What the agent may use: grain&apos;s own API (docs/agent-api.md) and
-            capability server methods (docs/capabilities.md).
+            What the agent may use:{" "}
+            {repos ? "the repositories it may read and write, " : ""}
+            grain&apos;s own API (docs/agent-api.md) and capability server
+            methods (docs/capabilities.md).
           </>
         )}
       </Typography>
@@ -1052,6 +1097,16 @@ export default function GrantsPicker({
           <Typography variant="body2" color="text.secondary">
             None granted
           </Typography>
+        )}
+        {repos && (
+          <RepoGrants
+            repos={repos}
+            drafts={repoDrafts}
+            disabled={disabled}
+            onDropDraft={(i) =>
+              setRepoDrafts((ds) => ds.filter((_, j) => j !== i))
+            }
+          />
         )}
         {bareHeld.map(bareLine)}
         {apiHeld.map(apiLine)}
@@ -1157,7 +1212,15 @@ export default function GrantsPicker({
             >
               {g.title}
             </ListSubheader>,
-            ...g.rows.map(g.kind === "api" ? apiItem : methodItem),
+            ...(g.kind === "repo"
+              ? RepoGrantMenuItems({
+                  rows: g.rows,
+                  onPick: (kind) => {
+                    setAnchor(null);
+                    setRepoDrafts((ds) => [...ds, kind]);
+                  },
+                })
+              : g.rows.map(g.kind === "api" ? apiItem : methodItem)),
           ])}
           {menuGroups.length === 0 && (
             <MenuItem disabled>
@@ -1180,115 +1243,6 @@ export default function GrantsPicker({
         </Alert>
       )}
     </Box>
-  );
-}
-
-const sectionSx = {
-  border: 1,
-  borderColor: "divider",
-  borderRadius: 1,
-  minWidth: 0,
-};
-
-// GrantLine is a grant with nothing to set, on one line: its label (the
-// whole grant in its tooltip), a caption, a warning badge, and remove.
-function GrantLine({
-  grant,
-  kind,
-  label,
-  ariaLabel,
-  tip,
-  caption,
-  info,
-  badge,
-  onRemove,
-}) {
-  return (
-    <Box
-      role="group"
-      data-grant={grant}
-      data-grant-kind={kind}
-      aria-label={ariaLabel}
-      className="grant-line"
-      sx={{
-        ...sectionSx,
-        display: "flex",
-        alignItems: "center",
-        gap: 1,
-        pl: 1,
-        pr: onRemove ? 0.25 : 1,
-        py: 0.25,
-        minHeight: 32,
-      }}
-    >
-      <Tooltip
-        title={
-          <Box
-            component="span"
-            sx={{
-              display: "block",
-              whiteSpace: "pre-line",
-              wordBreak: "break-word",
-            }}
-            data-grant-tooltip
-          >
-            {tip}
-          </Box>
-        }
-        describeChild
-      >
-        <Typography
-          variant="body2"
-          component="span"
-          tabIndex={0}
-          className="grant-label"
-          noWrap
-          sx={{ flexShrink: 1, minWidth: 0, fontWeight: 500 }}
-        >
-          {label}
-        </Typography>
-      </Tooltip>
-      <InfoPopover title={info} label={label} />
-      {caption && (
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          noWrap
-          sx={{ flex: "1 1 0", minWidth: 0 }}
-        >
-          {caption}
-        </Typography>
-      )}
-      {!caption && <Box sx={{ flex: "1 1 0" }} />}
-      {badge && (
-        <Chip
-          size="small"
-          variant="outlined"
-          color={badge.color}
-          icon={<WarningAmberIcon />}
-          label={badge.label}
-          className="grant-badge"
-          sx={{ height: 20, fontSize: "0.7rem", flexShrink: 0 }}
-        />
-      )}
-      {onRemove && <RemoveButton label={ariaLabel} onClick={onRemove} />}
-    </Box>
-  );
-}
-
-function RemoveButton({ label, onClick }) {
-  return (
-    <Tooltip title="Remove">
-      <IconButton
-        size="small"
-        aria-label={`Remove ${label}`}
-        className="grant-remove"
-        onClick={onClick}
-        sx={{ flexShrink: 0 }}
-      >
-        <CloseIcon fontSize="small" />
-      </IconButton>
-    </Tooltip>
   );
 }
 
