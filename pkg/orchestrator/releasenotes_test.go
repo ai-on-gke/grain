@@ -411,3 +411,178 @@ func TestReleaseNotesRespectsRepoEligibilityAndPersonOnlyGrantGuard(t *testing.T
 		t.Errorf("task with person-only grant landed approved (%+v), want unapproved", tasks[0].Approval)
 	}
 }
+
+func TestReleaseNotesSkipsSupersededHistoricalTagsWhileFilingHotfixPatches(t *testing.T) {
+	resetReleaseNotesWatch(t)
+	ctx := context.Background()
+	store := openTestStoreForOrchestrator(t)
+	repo := model.RepoRef{Owner: "example", Name: "widgets"}
+
+	cfg := model.DefaultConfig()
+	cfg.TargetRepos = []string{repo.String()}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutTemplate(ctx, loadRepoReleaseNotesTemplate(t, repo)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Mirrors ai-on-gke/grain's history: v3.0.0, v3.0.1 and v3.0.2 were folded
+	// into v3.1.0.md and have no docs/releases/v3.0.*.md on main, while v3.1.0,
+	// v3.1.1 and v3.2.0 are documented on main.
+	forge := &fixtureForge{
+		repo: repo.String(),
+		tags: map[string]fixtureTag{
+			"v3.0.0": {commit: strings.Repeat("1", 40), message: "Initial v3.0.0"},
+			"v3.0.1": {commit: strings.Repeat("2", 40), message: "Patch v3.0.1"},
+			"v3.0.2": {commit: strings.Repeat("3", 40), message: "Patch v3.0.2"},
+			"v3.1.0": {commit: strings.Repeat("4", 40), message: "Release v3.1.0"},
+			"v3.1.1": {commit: strings.Repeat("5", 40), message: "Release v3.1.1"},
+			"v3.2.0": {commit: strings.Repeat("6", 40), message: "Release v3.2.0"},
+		},
+		files: map[string]string{
+			"docs/releases/v3.1.0.md": "# v3.1.0\n",
+			"docs/releases/v3.1.1.md": "# v3.1.1\n",
+			"docs/releases/v3.2.0.md": "# v3.2.0\n",
+		},
+	}
+	now := time.Date(2026, 11, 9, 19, 0, 0, 0, time.UTC)
+	deps := Deps{Store: store, Client: github.NewClient(forge, nil)}
+	if err := reconcileReleaseNotes(ctx, deps, now); err != nil {
+		t.Fatalf("reconcileReleaseNotes: %v", err)
+	}
+	if tasks, err := store.ListTasks(ctx); err != nil || len(tasks) != 0 {
+		t.Fatalf("filed %d tasks (%+v, err=%v), want 0 for historical v3.0.0..v3.0.2 tags", len(tasks), tasks, err)
+	}
+
+	// A hotfix patch v3.1.2 cut on the already-documented v3.1.* minor line
+	// still gets its release-notes task, measured from v3.1.1.
+	forge.setTag("v3.1.2", strings.Repeat("7", 40), "Hotfix v3.1.2")
+	now = now.Add(releaseNotesPollInterval)
+	if err := reconcileReleaseNotes(ctx, deps, now); err != nil {
+		t.Fatalf("reconcileReleaseNotes (+10m, hotfix v3.1.2): %v", err)
+	}
+	tasks, err := store.ListTasks(ctx)
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("ListTasks after hotfix v3.1.2 = %d (%v), want 1", len(tasks), err)
+	}
+	if tasks[0].Title != "docs(releases): write the release notes for v3.1.2" {
+		t.Errorf("Title = %q, want v3.1.2 release-notes title", tasks[0].Title)
+	}
+	if !strings.Contains(tasks[0].Body, "v3.1.1") {
+		t.Errorf("Body for v3.1.2 missing previous_version v3.1.1:\n%s", tasks[0].Body)
+	}
+}
+
+func TestReleaseNotesHoldsCatalogueRequiresPersonDeclaredPushAndKeepRunningForHuman(t *testing.T) {
+	resetReleaseNotesWatch(t)
+	ctx := context.Background()
+	store := openTestStoreForOrchestrator(t)
+
+	catPersonRepo := model.RepoRef{Owner: "example", Name: "catperson"}
+	catRefusedRepo := model.RepoRef{Owner: "example", Name: "catrefused"}
+	pushRepo := model.RepoRef{Owner: "example", Name: "declpush"}
+	anyRefRepo := model.RepoRef{Owner: "example", Name: "anyref"}
+	keepRunRepo := model.RepoRef{Owner: "example", Name: "keeprun"}
+	grainCIRepo := model.RepoRef{Owner: "example", Name: "grainci"}
+
+	allRepos := []model.RepoRef{catPersonRepo, catRefusedRepo, pushRepo, anyRefRepo, keepRunRepo, grainCIRepo}
+	cfg := model.DefaultConfig()
+	for _, r := range allRepos {
+		cfg.TargetRepos = append(cfg.TargetRepos, r.String())
+	}
+	cfg.CapabilityPolicy.Catalogue = &model.CapabilityCatalogue{
+		InProcess: map[string]model.CatalogueInProcess{
+			"self-debug": {Restrictions: &model.CapabilityRestrictions{RequiresPerson: true}},
+			"blocked-ip": {Restrictions: &model.CapabilityRestrictions{Repos: model.Patterns{"nobody/ever"}}},
+		},
+		Servers: []model.CatalogueServer{{
+			ID:      "https://grain.dev/capabilities/grain",
+			Methods: []model.CatalogueMethod{{Name: "source"}}, // omits grain#ci
+		}},
+	}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: grainCIRepo, CIMode: model.CIModeGrain}); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 11, 9, 20, 0, 0, 0, time.UTC)
+
+	catPersonTmpl := loadRepoReleaseNotesTemplate(t, catPersonRepo)
+	catPersonTmpl.Grants = []model.Grant{{Capability: "self-debug", Via: ".grain/templates/release-notes.yml"}}
+	if err := store.PutTemplate(ctx, catPersonTmpl); err != nil {
+		t.Fatal(err)
+	}
+
+	catRefusedTmpl := loadRepoReleaseNotesTemplate(t, catRefusedRepo)
+	catRefusedTmpl.Grants = []model.Grant{{Capability: "blocked-ip", Via: ".grain/templates/release-notes.yml"}}
+	if err := store.PutTemplate(ctx, catRefusedTmpl); err != nil {
+		t.Fatal(err)
+	}
+
+	pushTmpl := loadRepoReleaseNotesTemplate(t, pushRepo)
+	if _, err := store.SyncRepoDeclarations(ctx, pushRepo, "abc1234", model.RepoDeclarations{
+		Templates: []model.DeclaredTemplateFile{{
+			Path:     ".grain/templates/release-notes.yml",
+			Template: pushTmpl,
+			Push:     model.RefPushSet{{Pattern: "refs/tags/v*"}},
+		}},
+	}, now, time.UTC); err != nil {
+		t.Fatalf("SyncRepoDeclarations(pushRepo): %v", err)
+	}
+
+	anyRefTmpl := loadRepoReleaseNotesTemplate(t, anyRefRepo)
+	anyRefTmpl.Grants = []model.Grant{{Capability: model.GitPushAnyRefGrant, Via: ".grain/templates/release-notes.yml"}}
+	if err := store.PutTemplate(ctx, anyRefTmpl); err != nil {
+		t.Fatal(err)
+	}
+
+	keepRunTmpl := loadRepoReleaseNotesTemplate(t, keepRunRepo)
+	keepRunTmpl.KeepRunning = true
+	if err := store.PutTemplate(ctx, keepRunTmpl); err != nil {
+		t.Fatal(err)
+	}
+
+	grainCITmpl := loadRepoReleaseNotesTemplate(t, grainCIRepo)
+	if err := store.PutTemplate(ctx, grainCITmpl); err != nil {
+		t.Fatal(err)
+	}
+
+	forges := multiFixtureForge{}
+	for _, r := range allRepos {
+		forges[r.String()] = &fixtureForge{
+			repo:  r.String(),
+			tags:  map[string]fixtureTag{"v1.0.0": {commit: strings.Repeat("a", 40)}},
+			files: map[string]string{},
+		}
+	}
+	if err := reconcileReleaseNotes(ctx, Deps{Store: store, Client: github.NewClient(forges, nil)}, now); err != nil {
+		t.Fatalf("reconcileReleaseNotes: %v", err)
+	}
+
+	tasks, err := store.ListTasks(ctx)
+	if err != nil || len(tasks) != len(allRepos) {
+		t.Fatalf("ListTasks = %d (%v), want %d", len(tasks), err, len(allRepos))
+	}
+	byRepo := map[string]model.Task{}
+	for _, tk := range tasks {
+		if tk.Target != nil {
+			byRepo[tk.Target.String()] = tk
+		}
+	}
+	for _, held := range []model.RepoRef{catPersonRepo, catRefusedRepo, pushRepo, anyRefRepo, keepRunRepo} {
+		tk := byRepo[held.String()]
+		if tk.Approval != nil {
+			t.Errorf("%s task landed approved (%+v), want unapproved for human review", held, tk.Approval)
+		}
+	}
+	grainTask := byRepo[grainCIRepo.String()]
+	if grainTask.Approval == nil {
+		t.Errorf("%s clean template landed unapproved after stripping default grain#ci grant", grainCIRepo)
+	}
+	if len(grainTask.Grants) != 0 {
+		t.Errorf("%s grants = %+v, want catalogue-refused default grain#ci stripped", grainCIRepo, grainTask.Grants)
+	}
+}

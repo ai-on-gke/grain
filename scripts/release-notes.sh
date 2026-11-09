@@ -131,6 +131,12 @@ breaking_subject() {
   [[ "$1" =~ ^[A-Za-z]+(\([^\)]*\))?!: ]]
 }
 
+# has_breaking_trailer <message>: whether a commit message carries a
+# BREAKING CHANGE (or BREAKING-CHANGE) trailer line, even when empty.
+has_breaking_trailer() {
+  grep -qE '^BREAKING[ -]CHANGE:' <<<"$1"
+}
+
 # breaking_trailers <message>: the text of each BREAKING CHANGE trailer in
 # a commit message, one per line (joining wrapped continuation lines up to
 # the next blank line or trailer).
@@ -206,12 +212,14 @@ collect() {
     # pull request, every commit it brings.
     is_breaking=""
     breaking_subject "$title" && is_breaking=1
+    if has_breaking_trailer "$body"; then is_breaking=1; fi
     notes="$(breaking_trailers "$body")"
     if [ "${#p[@]}" -gt 1 ]; then
       local s m
       while IFS=$'\x1f' read -r -d $'\x1e' s m; do
         s="${s#$'\n'}"
         breaking_subject "$s" && is_breaking=1
+        if has_breaking_trailer "$m"; then is_breaking=1; fi
         m="$(breaking_trailers "$m")"
         [ -z "$m" ] || notes="${notes:+${notes}$'\n'}${m}"
       done < <(git log --format='%s%x1f%b%x1e' "${p[1]}" "^${p[0]}" "^${from_ref}")
