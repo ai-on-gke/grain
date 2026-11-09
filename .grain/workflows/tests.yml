@@ -662,7 +662,7 @@ jobs:
             ./pkg/releaseapproval/... ./pkg/releasenotes/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
             ./pkg/sandboxaccess/... ./pkg/sandboxaddr/... ./pkg/sandboxcli/... ./pkg/sandboximage/... ./pkg/schedulefilter/... ./pkg/secrets/... \
             ./pkg/secretsrepo/... ./pkg/statemachine/... ./pkg/sysstat/... \
-            ./pkg/systemlog/... ./pkg/treeid/... ./pkg/trustboundary/... ./pkg/tunnel/... ./pkg/upgrade/... \
+            ./pkg/systemlog/... ./pkg/treeid/... ./pkg/trustboundary/... ./pkg/tunnel/... ./pkg/upgrade/... ./pkg/usage/... \
             ./pkg/version/... ./pkg/webauth/... ./tests/bench/...
 
   # The vendored granule tree's own tests. third_party/granule is a module

@@ -444,6 +444,8 @@ var routeAuthorization = map[string]authLevel{
 	"/staging/{name}/{path...}":                      trusted,
 	"GET /api/metrics":                               trusted,
 	"GET /api/unmatched-failures":                    trusted,
+	"GET /api/usage":                                 trusted,
+	"PUT /api/usage/settings":                        trusted,
 	"GET /api/pause":                                 trusted,
 	"DELETE /api/pause":                              trusted,
 

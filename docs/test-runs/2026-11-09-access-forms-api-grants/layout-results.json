@@ -1,0 +1,458 @@
+[
+  {
+    "form": "task-pane",
+    "width": 1440,
+    "theme": "light",
+    "box": {
+      "x": 1152,
+      "y": 545.71875,
+      "w": 260,
+      "h": 204.4375
+    },
+    "gapToNext": 18,
+    "nextText": "Depends onNo dependencies.​",
+    "fieldsetLegend": "Access",
+    "fieldsetExtraHeight": 37,
+    "overflowX": 0,
+    "legacyText": false,
+    "orphanHeadings": [],
+    "bad": []
+  },
+  {
+    "form": "template",
+    "width": 1440,
+    "theme": "light",
+    "box": {
+      "x": 261,
+      "y": 658.71875,
+      "w": 704,
+      "h": 164.625
+    },
+    "gapToNext": 16,
+    "nextText": "DeleteNew task from this templateCancelSave",
+    "fieldsetLegend": "Name *",
+    "fieldsetExtraHeight": 1495,
+    "overflowX": 0,
+    "legacyText": false,
+    "orphanHeadings": [],
+    "bad": []
+  },
+  {
+    "form": "schedule",
+    "width": 1440,
+    "theme": "light",
+    "box": {
+      "x": 261,
+      "y": 406.25,
+      "w": 704,
+      "h": 164.625
+    },
+    "gapToNext": 8,
+    "nextText": "RepeatEvery N hoursRepeatEvery N hours *Every N hours *Time ",
+    "fieldsetLegend": "Template",
+    "fieldsetExtraHeight": 1443,
+    "overflowX": 0,
+    "legacyText": false,
+    "orphanHeadings": [],
+    "bad": []
+  },
+  {
+    "form": "settings-tasks",
+    "width": 1440,
+    "theme": "light",
+    "box": {
+      "x": 505,
+      "y": 399.515625,
+      "w": 726,
+      "h": 120.625
+    },
+    "gapToNext": 3,
+    "nextText": "Agent API grants and capability server methods, with their a",
+    "fieldsetLegend": null,
+    "fieldsetExtraHeight": null,
+    "overflowX": 0,
+    "legacyText": false,
+    "orphanHeadings": [],
+    "bad": []
+  },
+  {
+    "form": "repo-defaults",
+    "width": 1440,
+    "theme": "light",
+    "box": {
+      "x": 260,
+      "y": 353.015625,
+      "w": 648,
+      "h": 120.625
+    },
+    "gapToNext": 3,
+    "nextText": "Added to this deployment's own defaults, never subtracted fr",
+    "fieldsetLegend": null,
+    "fieldsetExtraHeight": null,
+    "overflowX": 0,
+    "legacyText": false,
+    "orphanHeadings": [],
+    "bad": []
+  },
+  {
+    "form": "new-task",
+    "width": 1440,
+    "theme": "light",
+    "box": {
+      "x": 904,
+      "y": 372.9375,
+      "w": 512,
+      "h": 140.53125
+    },
+    "gapToNext": 3,
+    "nextText": "Grants already listed are the defaults for this repo -- this",
+    "fieldsetLegend": null,
+    "fieldsetExtraHeight": null,
+    "overflowX": 0,
+    "legacyText": false,
+    "orphanHeadings": [],
+    "bad": []
+  },
+  {
+    "form": "task-pane",
+    "width": 1440,
+    "theme": "dark",
+    "box": {
+      "x": 1152,
+      "y": 545.71875,
+      "w": 260,
+      "h": 204.4375
+    },
+    "gapToNext": 18,
+    "nextText": "Depends onNo dependencies.​",
+    "fieldsetLegend": "Access",
+    "fieldsetExtraHeight": 37,
+    "overflowX": 0,
+    "legacyText": false,
+    "orphanHeadings": [],
+    "bad": []
+  },
+  {
+    "form": "template",
+    "width": 1440,
+    "theme": "dark",
+    "box": {
+      "x": 261,
+      "y": 658.71875,
+      "w": 704,
+      "h": 164.625
+    },
+    "gapToNext": 16,
+    "nextText": "DeleteNew task from this templateCancelSave",
+    "fieldsetLegend": "Name *",
+    "fieldsetExtraHeight": 1495,
+    "overflowX": 0,
+    "legacyText": false,
+    "orphanHeadings": [],
+    "bad": []
+  },
+  {
+    "form": "schedule",
+    "width": 1440,
+    "theme": "dark",
+    "box": {
+      "x": 261,
+      "y": 406.25,
+      "w": 704,
+      "h": 164.625
+    },
+    "gapToNext": 8,
+    "nextText": "RepeatEvery N hoursRepeatEvery N hours *Every N hours *Time ",
+    "fieldsetLegend": "Template",
+    "fieldsetExtraHeight": 1443,
+    "overflowX": 0,
+    "legacyText": false,
+    "orphanHeadings": [],
+    "bad": []
+  },
+  {
+    "form": "settings-tasks",
+    "width": 1440,
+    "theme": "dark",
+    "box": {
+      "x": 505,
+      "y": 399.515625,
+      "w": 726,
+      "h": 120.625
+    },
+    "gapToNext": 3,
+    "nextText": "Agent API grants and capability server methods, with their a",
+    "fieldsetLegend": null,
+    "fieldsetExtraHeight": null,
+    "overflowX": 0,
+    "legacyText": false,
+    "orphanHeadings": [],
+    "bad": []
+  },
+  {
+    "form": "repo-defaults",
+    "width": 1440,
+    "theme": "dark",
+    "box": {
+      "x": 260,
+      "y": 353.015625,
+      "w": 648,
+      "h": 120.625
+    },
+    "gapToNext": 3,
+    "nextText": "Added to this deployment's own defaults, never subtracted fr",
+    "fieldsetLegend": null,
+    "fieldsetExtraHeight": null,
+    "overflowX": 0,
+    "legacyText": false,
+    "orphanHeadings": [],
+    "bad": []
+  },
+  {
+    "form": "new-task",
+    "width": 1440,
+    "theme": "dark",
+    "box": {
+      "x": 904,
+      "y": 372.9375,
+      "w": 512,
+      "h": 140.53125
+    },
+    "gapToNext": 3,
+    "nextText": "Grants already listed are the defaults for this repo -- this",
+    "fieldsetLegend": null,
+    "fieldsetExtraHeight": null,
+    "overflowX": 0,
+    "legacyText": false,
+    "orphanHeadings": [],
+    "bad": []
+  },
+  {
+    "form": "task-pane",
+    "width": 390,
+    "theme": "light",
+    "box": {
+      "x": 17,
+      "y": 513.296875,
+      "w": 357,
+      "h": 184.53125
+    },
+    "gapToNext": 18,
+    "nextText": "Depends onNo dependencies.​",
+    "fieldsetLegend": "Access",
+    "fieldsetExtraHeight": 37,
+    "overflowX": 0,
+    "legacyText": false,
+    "orphanHeadings": [],
+    "bad": []
+  },
+  {
+    "form": "template",
+    "width": 390,
+    "theme": "light",
+    "box": {
+      "x": 17,
+      "y": 542.0625,
+      "w": 357,
+      "h": 184.53125
+    },
+    "gapToNext": 16,
+    "nextText": "DeleteNew task from this templateCancelSave",
+    "fieldsetLegend": "Name *",
+    "fieldsetExtraHeight": 1660,
+    "overflowX": 0,
+    "legacyText": false,
+    "orphanHeadings": [],
+    "bad": []
+  },
+  {
+    "form": "schedule",
+    "width": 390,
+    "theme": "light",
+    "box": {
+      "x": 17,
+      "y": 367.96875,
+      "w": 357,
+      "h": 184.53125
+    },
+    "gapToNext": 8,
+    "nextText": "RepeatEvery N hoursRepeatEvery N hours *Every N hours *Time ",
+    "fieldsetLegend": "Template",
+    "fieldsetExtraHeight": 1543,
+    "overflowX": 0,
+    "legacyText": false,
+    "orphanHeadings": [],
+    "bad": []
+  },
+  {
+    "form": "settings-tasks",
+    "width": 390,
+    "theme": "light",
+    "box": {
+      "x": 25,
+      "y": 423.0625,
+      "w": 340,
+      "h": 140.53125
+    },
+    "gapToNext": 3,
+    "nextText": "Agent API grants and capability server methods, with their a",
+    "fieldsetLegend": null,
+    "fieldsetExtraHeight": null,
+    "overflowX": 0,
+    "legacyText": false,
+    "orphanHeadings": [],
+    "bad": []
+  },
+  {
+    "form": "repo-defaults",
+    "width": 390,
+    "theme": "light",
+    "box": {
+      "x": 28,
+      "y": 402.453125,
+      "w": 334,
+      "h": 140.53125
+    },
+    "gapToNext": 3,
+    "nextText": "Added to this deployment's own defaults, never subtracted fr",
+    "fieldsetLegend": null,
+    "fieldsetExtraHeight": null,
+    "overflowX": 0,
+    "legacyText": false,
+    "orphanHeadings": [],
+    "bad": []
+  },
+  {
+    "form": "new-task",
+    "width": 390,
+    "theme": "light",
+    "box": {
+      "x": 24,
+      "y": 333.75,
+      "w": 342,
+      "h": 153.78125
+    },
+    "gapToNext": 3,
+    "nextText": "Grants already listed are the defaults for this repo -- this",
+    "fieldsetLegend": null,
+    "fieldsetExtraHeight": null,
+    "overflowX": 0,
+    "legacyText": false,
+    "orphanHeadings": [],
+    "bad": []
+  },
+  {
+    "form": "task-pane",
+    "width": 390,
+    "theme": "dark",
+    "box": {
+      "x": 17,
+      "y": 513.296875,
+      "w": 357,
+      "h": 184.53125
+    },
+    "gapToNext": 18,
+    "nextText": "Depends onNo dependencies.​",
+    "fieldsetLegend": "Access",
+    "fieldsetExtraHeight": 37,
+    "overflowX": 0,
+    "legacyText": false,
+    "orphanHeadings": [],
+    "bad": []
+  },
+  {
+    "form": "template",
+    "width": 390,
+    "theme": "dark",
+    "box": {
+      "x": 17,
+      "y": 542.0625,
+      "w": 357,
+      "h": 184.53125
+    },
+    "gapToNext": 16,
+    "nextText": "DeleteNew task from this templateCancelSave",
+    "fieldsetLegend": "Name *",
+    "fieldsetExtraHeight": 1660,
+    "overflowX": 0,
+    "legacyText": false,
+    "orphanHeadings": [],
+    "bad": []
+  },
+  {
+    "form": "schedule",
+    "width": 390,
+    "theme": "dark",
+    "box": {
+      "x": 17,
+      "y": 367.96875,
+      "w": 357,
+      "h": 184.53125
+    },
+    "gapToNext": 8,
+    "nextText": "RepeatEvery N hoursRepeatEvery N hours *Every N hours *Time ",
+    "fieldsetLegend": "Template",
+    "fieldsetExtraHeight": 1543,
+    "overflowX": 0,
+    "legacyText": false,
+    "orphanHeadings": [],
+    "bad": []
+  },
+  {
+    "form": "settings-tasks",
+    "width": 390,
+    "theme": "dark",
+    "box": {
+      "x": 25,
+      "y": 423.0625,
+      "w": 340,
+      "h": 140.53125
+    },
+    "gapToNext": 3,
+    "nextText": "Agent API grants and capability server methods, with their a",
+    "fieldsetLegend": null,
+    "fieldsetExtraHeight": null,
+    "overflowX": 0,
+    "legacyText": false,
+    "orphanHeadings": [],
+    "bad": []
+  },
+  {
+    "form": "repo-defaults",
+    "width": 390,
+    "theme": "dark",
+    "box": {
+      "x": 28,
+      "y": 402.453125,
+      "w": 334,
+      "h": 140.53125
+    },
+    "gapToNext": 3,
+    "nextText": "Added to this deployment's own defaults, never subtracted fr",
+    "fieldsetLegend": null,
+    "fieldsetExtraHeight": null,
+    "overflowX": 0,
+    "legacyText": false,
+    "orphanHeadings": [],
+    "bad": []
+  },
+  {
+    "form": "new-task",
+    "width": 390,
+    "theme": "dark",
+    "box": {
+      "x": 24,
+      "y": 333.75,
+      "w": 342,
+      "h": 153.78125
+    },
+    "gapToNext": 3,
+    "nextText": "Grants already listed are the defaults for this repo -- this",
+    "fieldsetLegend": null,
+    "fieldsetExtraHeight": null,
+    "overflowX": 0,
+    "legacyText": false,
+    "orphanHeadings": [],
+    "bad": []
+  }
+]

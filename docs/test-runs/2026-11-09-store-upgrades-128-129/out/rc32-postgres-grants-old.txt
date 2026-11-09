@@ -1,0 +1,114 @@
+# schema
+119
+# task_grant
+2 | api:test-quarantine | label
+2 | https://grain.dev/capabilities/github#read-issues={} | label
+3 | https://grain.dev/capabilities/github#sandbox-repo={} | label
+# template_grant
+template-1 | api:test-quarantine | label
+template-1 | https://grain.dev/capabilities/github#read-issues={} | label
+# schedule_grant
+sched-1 | api:test-quarantine | label
+sched-1 | https://grain.dev/capabilities/github#read-issues={} | label
+# grain_config.default_capabilities
+https://grain.dev/capabilities/github#read-issues={}
+api:test-quarantine
+# repo_config
+acme/widgets | default | https://grain.dev/capabilities/github#read-issues={}
+acme/widgets | default | api:test-quarantine
+acme/widgets | ci | api:test-quarantine
+acme/widgets | ci | https://grain.dev/capabilities/github#read-issues={}
+# console_sessions (id: capabilities)
+# capability_policy
+{
+ "catalogue": {
+  "defaults": {
+   "ci": [
+    "https://grain.dev/capabilities/github#read-issues={}"
+   ],
+   "repos": {
+    "acme/widgets": {
+     "ci": [
+      "https://grain.dev/capabilities/github#read-issues={}",
+      "api:test-quarantine"
+     ],
+     "task": [
+      "https://grain.dev/capabilities/github#read-issues={}"
+     ]
+    }
+   },
+   "task": [
+    "https://grain.dev/capabilities/github#read-issues={}",
+    "api:test-quarantine"
+   ]
+  },
+  "inProcess": {
+   "read-issues": {
+    "enabled": false
+   }
+  }
+ }
+}
+# mcp_servers
+{
+ "https://grain.dev/capabilities/config-map": {
+  "args": [
+   "capability",
+   "config-map"
+  ],
+  "builtin": "config-map",
+  "command": "grain"
+ },
+ "https://grain.dev/capabilities/figma": {
+  "args": [
+   "capability",
+   "figma",
+   "-listen",
+   "127.0.0.1:4253"
+  ],
+  "builtin": "figma",
+  "command": "grain"
+ },
+ "https://grain.dev/capabilities/gchat": {
+  "args": [
+   "capability",
+   "gchat",
+   "-listen",
+   "127.0.0.1:4251"
+  ],
+  "builtin": "gchat",
+  "command": "grain"
+ },
+ "https://grain.dev/capabilities/gcp": {
+  "args": [
+   "capability",
+   "gcp"
+  ],
+  "builtin": "gcp",
+  "command": "grain"
+ },
+ "https://grain.dev/capabilities/git": {
+  "args": [
+   "capability",
+   "git"
+  ],
+  "builtin": "git",
+  "command": "grain"
+ },
+ "https://grain.dev/capabilities/host-script": {
+  "args": [
+   "capability",
+   "host-script"
+  ],
+  "builtin": "host-script",
+  "command": "grain"
+ }
+}
+# agent_backends
+[]
+# admission (absent before schema 122)
+# task notes (task_comment by grain)
+# template/schedule notes (bodies mentioning grain:)
+# task_grant_wait (task, capability, resource)
+2 | github-sandbox | github-app
+3 | github-sandbox | github-app

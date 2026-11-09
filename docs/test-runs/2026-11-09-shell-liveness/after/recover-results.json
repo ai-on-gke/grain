@@ -1,0 +1,39 @@
+[
+  {
+    "id": "recover.banner",
+    "desc": "banner up after the stall",
+    "note": true,
+    "got": {
+      "ms": 24457
+    }
+  },
+  {
+    "id": "recover.held",
+    "desc": "requests the proxy is still holding when new ones start being answered",
+    "note": true,
+    "got": {
+      "held": 5,
+      "browserInFlight": 5,
+      "sent": {
+        "GET /api/tasks": 6,
+        "GET /api/config": 5,
+        "GET /api/ci/runs": 5,
+        "GET /api/console-sessions": 5,
+        "GET /api/restart-watch": 1,
+        "GET /api/persistent-sandboxes": 5,
+        "GET /api/notifications": 2,
+        "GET /api/base-branch-gates": 1
+      }
+    }
+  },
+  {
+    "id": "recover.clear",
+    "desc": "banner clears once the proxy answers new requests, with its old ones still held",
+    "ok": true,
+    "got": {
+      "ms": 29050,
+      "browserInFlight": 1,
+      "configInFlight": 0
+    }
+  }
+]

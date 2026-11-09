@@ -54,6 +54,26 @@ type rawEvent struct {
 	Error   *rawError `json:"error"`
 	Message string    `json:"message"`
 	Msg     *rawMsg   `json:"msg"`
+	// Usage is "turn.completed"'s account of what the turn spent
+	// (agent.TokenUsage). input_tokens includes cached_input_tokens.
+	Usage *rawUsage `json:"usage"`
+}
+
+type rawUsage struct {
+	InputTokens       int64 `json:"input_tokens"`
+	CachedInputTokens int64 `json:"cached_input_tokens"`
+	OutputTokens      int64 `json:"output_tokens"`
+	ReasoningTokens   int64 `json:"reasoning_output_tokens"`
+}
+
+// tokenUsage is u as agent.TokenUsage: one turn, with the cached part of
+// the input moved out of InputTokens so Billable does not count it.
+func (u rawUsage) tokenUsage() agent.TokenUsage {
+	input := u.InputTokens - u.CachedInputTokens
+	if input < 0 {
+		input = 0
+	}
+	return agent.TokenUsage{InputTokens: input, CacheReadTokens: u.CachedInputTokens, OutputTokens: u.OutputTokens + u.ReasoningTokens, Turns: 1}
 }
 
 // rawItem is one thread item -- a unit of what the agent did, reported
@@ -296,6 +316,9 @@ func parseEvents(stdout string) *parsedEvents {
 			}
 		case "turn.completed":
 			p.sawResult = true
+			if ev.Usage != nil {
+				p.result.Usage = p.result.Usage.Add(ev.Usage.tokenUsage())
+			}
 			p.result.FinalText = p.lastAgentMessage
 			// Last terminal event wins, for the reason above: a run that
 			// was refused and then finished must not be handed back to
