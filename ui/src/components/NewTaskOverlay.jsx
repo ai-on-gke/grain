@@ -426,23 +426,28 @@ export default function NewTaskOverlay({
       return draft.capabilities;
     return capabilityDefaultsFor(openingRepo);
   });
-  // Capability server grants (with their with: arguments) and the agent
-  // API's grants (apiGrants.js) are kept in the same list and edited by
-  // GrantsPicker below. Core offers no bare in-process capability any
-  // more, so there is no checklist for those: one a draft or a default
-  // already holds is kept as it is, untouched by GrantsPicker's edits.
-  const capabilityIds = capabilities.filter(
-    (id) => !isCapabilityRef(id) && !isApiGrant(id),
-  );
+  // Capability server grants (with their with: arguments), the agent API's
+  // grants (apiGrants.js), and any held bare capability id are kept in the
+  // same list and shown by GrantsPicker below, where a bare id can be
+  // removed or left as it is.
+  const isBareGrant = (id) => !isCapabilityRef(id) && !isApiGrant(id);
+  const capabilityIds = capabilities.filter(isBareGrant);
   const apiIds = capabilities.filter(isApiGrant);
   const capabilityRefs = capabilities.filter(
     (id) => isCapabilityRef(id) && !isApiGrant(id),
   );
   const formCapabilities = taskForm.capabilities;
-  const methodGrants = localGrantHandlers(capabilityRefs, (refs) => {
-    capabilitiesEdited.current = true;
-    setCapabilities([...capabilityIds, ...apiIds, ...refs]);
-  });
+  const methodGrants = localGrantHandlers(
+    [...capabilityIds, ...capabilityRefs],
+    (rest) => {
+      capabilitiesEdited.current = true;
+      setCapabilities([
+        ...rest.filter(isBareGrant),
+        ...apiIds,
+        ...rest.filter(isCapabilityRef),
+      ]);
+    },
+  );
   // capabilitiesEdited is Base branch's baseEdited above, for the same
   // reason: picking a different repo re-seeds this picker from that
   // repo's own defaults, and must not do so over a choice somebody has

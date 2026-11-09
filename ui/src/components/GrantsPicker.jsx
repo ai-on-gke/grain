@@ -54,6 +54,7 @@ import {
   storedApiGrant,
 } from "../apiGrants.js";
 import {
+  builtinServerName,
   describeGrant,
   hasArguments,
   initialValue,
@@ -84,16 +85,18 @@ import { pickerAllows, pickerDisplay, sortByDisplay } from "../newTaskForm.js";
 // at once; one with a required argument still to fill in is a draft
 // section here until it passes, and is granted then.
 //
-// It is a UI over the storage each kind has today, not a new model: both
-// kinds live in the task's capabilities list, an api grant as its name and
-// a method grant as its reference string. `grants` is that list (anything
-// else in it -- the legacy in-process ids -- is ignored here, and is the
-// checklist's beside it). Where a change lands is the caller's:
+// It is a UI over the storage each kind has today, not a new model: all
+// grants live in the task's capabilities list -- an api grant as its name,
+// a method grant as its reference string, and any bare capability id an
+// older store or declaration still holds as a read-only line that names
+// what retired alias it became and lets the person remove it. Where a
+// change lands is the caller's:
 // onApiChange(next) with the whole new list of api grants,
 // onSubmit(spec, replacing) with spec {capability, with} and replacing the
-// method grant being edited (or null), and onRemove(grant) for a method
-// grant. onSubmit and onRemove may reject; an error carrying `fields` (the
-// server's field errors) is shown against the arguments it names.
+// method grant being edited (or null), and onRemove(grant) for a method or
+// held bare capability grant. onSubmit and onRemove may reject; an error
+// carrying `fields` (the server's field errors) is shown against the
+// arguments it names.
 //
 // A method grant carries the warning states it always has: a method no
 // attached server offers any more, arguments the server's current schema
@@ -173,6 +176,13 @@ export default function GrantsPicker({
   helpText = "",
 }) {
   const all = grants || [];
+  const bareHeld = useMemo(
+    () =>
+      all.filter(
+        (id) => Boolean(id) && !isCapabilityRef(id) && !isApiGrant(id),
+      ),
+    [all],
+  );
   const apiHeld = useMemo(() => all.filter(isApiGrant), [all]);
   const refs = useMemo(
     () => all.filter((id) => isCapabilityRef(id) && !isApiGrant(id)),
@@ -276,11 +286,12 @@ export default function GrantsPicker({
     });
   }, [absentKey, load]);
 
-  const refsKey = refs.join("\n");
+  const toCheck = useMemo(() => [...bareHeld, ...refs], [bareHeld, refs]);
+  const toCheckKey = toCheck.join("\n");
   useEffect(() => {
-    if (refs.length === 0) return undefined;
+    if (toCheck.length === 0) return undefined;
     let current = true;
-    checkGrants(refs.map((grant) => ({ grant })))
+    checkGrants(toCheck.map((grant) => ({ grant })))
       .then((res) => {
         if (!current || !Array.isArray(res)) return;
         const out = {};
@@ -292,7 +303,7 @@ export default function GrantsPicker({
       current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refsKey]);
+  }, [toCheckKey]);
 
   const byRef = useMemo(() => {
     const m = {};
@@ -391,6 +402,62 @@ export default function GrantsPicker({
     setQuery("");
     setAnchor(evt.currentTarget);
     load(true);
+  };
+
+  const shortAlias = (g) => {
+    if (isApiGrant(g)) {
+      const [, limit] = splitApiGrant(g);
+      return `api:${apiShortName(g)}${limit ? ` on ${limit}` : ""}`;
+    }
+    if (isCapabilityRef(g)) {
+      const { ref, with: w, raw } = parseGrant(g);
+      if (raw === undefined) {
+        const { capability, method } = splitRef(ref);
+        const builtin = builtinServerName(capability);
+        if (builtin && method) {
+          const hasArgs = w && Object.keys(w).length > 0;
+          return hasArgs
+            ? `${builtin}#${method}=${JSON.stringify(w)}`
+            : `${builtin}#${method}`;
+        }
+      }
+    }
+    return g;
+  };
+
+  const bareLine = (id) => {
+    const check = checks[id];
+    const aliasOf = Array.isArray(check?.aliasOf) ? check.aliasOf : [];
+    const row = offered.find((c) => c.id === id);
+    let ariaLabel = id;
+    let caption = row?.summary || row?.description || "";
+    let tip = row?.description ? `${id}\n${row.description}` : id;
+    let badge = null;
+    if (aliasOf.length > 0) {
+      const short = aliasOf.map(shortAlias).join(" + ");
+      ariaLabel = `${id} (retired alias)`;
+      caption = `Retired alias of ${short}`;
+      tip = `Retired alias of ${aliasOf.join(" and ")}. Remove it, or replace it with ${aliasOf.length > 1 ? "those grants" : "that grant"}.\n\n${id}`;
+      badge = { label: "retired alias", color: "info" };
+    } else if (check?.error) {
+      ariaLabel = `${id} (no longer offered)`;
+      caption = "No longer offered";
+      tip = `${check.error}. Remove this grant.\n\n${id}`;
+      badge = { label: "no longer offered", color: "warning" };
+    }
+    return (
+      <GrantLine
+        key={id}
+        grant={id}
+        kind="capability"
+        label={id}
+        ariaLabel={ariaLabel}
+        tip={tip}
+        caption={caption}
+        badge={badge}
+        onRemove={disabled ? undefined : () => removeMethod(id)}
+      />
+    );
   };
 
   const apiLine = (id) => {
@@ -828,7 +895,7 @@ export default function GrantsPicker({
 
   const anyApi = presets.length > 0 || areas.length > 0;
   const anyMethods = (methods || []).some((m) => !isApiGrant(m.ref));
-  const held = apiHeld.length + refs.length + drafts.length;
+  const held = bareHeld.length + apiHeld.length + refs.length + drafts.length;
   const stillLoading = count > 0 && methods === null;
   if (!anyApi && !anyMethods && held === 0 && !loadError && !stillLoading)
     return null;
@@ -875,6 +942,7 @@ export default function GrantsPicker({
             None granted
           </Typography>
         )}
+        {bareHeld.map(bareLine)}
         {apiHeld.map(apiLine)}
         {groups.map((group) => (
           <Box

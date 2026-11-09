@@ -333,19 +333,23 @@ function ScheduleOverlay({
   const [capabilities, setCapabilities] = useState(
     schedule?.capabilities || [],
   );
-  // Capability server grants, with their with: arguments, and the agent
-  // API's grants (apiGrants.js) share the list and are edited together
-  // by GrantsPicker. Core offers no bare in-process capability any more,
-  // so one this schedule already names is kept as it is.
-  const capabilityIds = capabilities.filter(
-    (id) => !isCapabilityRef(id) && !isApiGrant(id),
-  );
+  // Capability server grants, with their with: arguments, the agent API's
+  // grants (apiGrants.js), and any held bare capability id share the list
+  // and are shown together by GrantsPicker.
+  const isBareGrant = (id) => !isCapabilityRef(id) && !isApiGrant(id);
+  const capabilityIds = capabilities.filter(isBareGrant);
   const apiIds = capabilities.filter(isApiGrant);
   const capabilityRefs = capabilities.filter(
     (id) => isCapabilityRef(id) && !isApiGrant(id),
   );
-  const methodGrants = localGrantHandlers(capabilityRefs, (refs) =>
-    setCapabilities([...capabilityIds, ...apiIds, ...refs]),
+  const methodGrants = localGrantHandlers(
+    [...capabilityIds, ...capabilityRefs],
+    (rest) =>
+      setCapabilities([
+        ...rest.filter(isBareGrant),
+        ...apiIds,
+        ...rest.filter(isCapabilityRef),
+      ]),
   );
   // reads is state for the reason capabilities is: its picker
   // (ReadOnlyReposField) is a search box, not a form field submit could

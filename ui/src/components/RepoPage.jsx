@@ -769,22 +769,27 @@ export default function RepoPage({
   });
 
   // The repo's own defaults hold all three kinds a task's capabilities
-  // do: legacy in-process ids, and the agent API's grants and capability
-  // server methods (with their with: arguments), which GrantsPicker
-  // edits. Core offers no bare in-process capability any more, so a
-  // stored legacy id has no picker of its own and is saved back as it is.
-  const capsLegacy = capsSelection.filter(
-    (id) => !isCapabilityRef(id) && !isApiGrant(id),
-  );
+  // do: held bare capability ids, and the agent API's grants and capability
+  // server methods (with their with: arguments), which GrantsPicker shows
+  // and edits.
+  const isBareGrant = (id) => !isCapabilityRef(id) && !isApiGrant(id);
+  const capsLegacy = capsSelection.filter(isBareGrant);
   const capsApi = capsSelection.filter(isApiGrant);
   const capsRefs = capsSelection.filter(
     (id) => isCapabilityRef(id) && !isApiGrant(id),
   );
-  const capsMethods = localGrantHandlers(capsRefs, (refs) => {
-    const next = [...capsLegacy, ...capsApi, ...refs];
-    setCapsSelection(next);
-    return saveCapabilities(next);
-  });
+  const capsMethods = localGrantHandlers(
+    [...capsLegacy, ...capsRefs],
+    (rest) => {
+      const next = [
+        ...rest.filter(isBareGrant),
+        ...capsApi,
+        ...rest.filter(isCapabilityRef),
+      ];
+      setCapsSelection(next);
+      return saveCapabilities(next);
+    },
+  );
   // A CI job holds no agent API grant -- there is no agent in it -- so
   // CI's own GrantsPicker is offered capability server methods alone.
   // A reference the CI picker itself offers (the release server's
@@ -2066,7 +2071,7 @@ export default function RepoPage({
                   ) : (
                     <GrantsPicker
                       config={{ ...config, capabilities: [] }}
-                      grants={ciCapsSelection}
+                      grants={ciCapsRefs}
                       onApiChange={() => {}}
                       onSubmit={ciCapsMethods.onSubmit}
                       onRemove={ciCapsMethods.onRemove}

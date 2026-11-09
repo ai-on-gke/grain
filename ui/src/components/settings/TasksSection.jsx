@@ -135,22 +135,25 @@ export default function TasksSection({
   const readOnly = Boolean(s.readOnly);
   const defaultCapabilities = settings.defaultCapabilities || [];
   // The defaults are one list holding all three kinds a task's own
-  // capabilities do: the legacy in-process ids, and the agent API's
-  // grants and capability server methods (with their with: arguments),
-  // edited with GrantsPicker. Core offers no bare in-process capability
-  // any more, so there is nothing to tick one from: a stored legacy id is
-  // kept as it is when GrantsPicker saves.
-  const legacyDefaults = defaultCapabilities.filter(
-    (id) => !isCapabilityRef(id) && !isApiGrant(id),
-  );
+  // capabilities do: held bare capability ids, and the agent API's grants
+  // and capability server methods (with their with: arguments), shown and
+  // edited with GrantsPicker.
+  const isBareGrant = (id) => !isCapabilityRef(id) && !isApiGrant(id);
+  const legacyDefaults = defaultCapabilities.filter(isBareGrant);
   const apiDefaults = defaultCapabilities.filter(isApiGrant);
   const refDefaults = defaultCapabilities.filter(
     (id) => isCapabilityRef(id) && !isApiGrant(id),
   );
-  const methodDefaults = localGrantHandlers(refDefaults, (refs) =>
-    saveChoice({
-      defaultCapabilities: [...legacyDefaults, ...apiDefaults, ...refs],
-    }),
+  const methodDefaults = localGrantHandlers(
+    [...legacyDefaults, ...refDefaults],
+    (rest) =>
+      saveChoice({
+        defaultCapabilities: [
+          ...rest.filter(isBareGrant),
+          ...apiDefaults,
+          ...rest.filter(isCapabilityRef),
+        ],
+      }),
   );
 
   return (
