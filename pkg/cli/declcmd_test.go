@@ -380,3 +380,47 @@ func TestDeclarationsCheckDefaultsToTheWorkingDirectory(t *testing.T) {
 		}
 	}
 }
+
+// A template or schedule naming repo#target under capabilities: is refused by
+// `grain declarations check` with the declaration-level reason and the
+// sync-keep-last-good notice, rather than passing lint and failing every
+// filing (docs/test-runs/2026-11-09-store-upgrades-128-129.md, O3).
+func TestDeclarationsCheckRefusesRepoTargetUnderCapabilities(t *testing.T) {
+	dir := t.TempDir()
+	tmplPath := filepath.Join(dir, ".grain", "templates", "t.yml")
+	if err := os.MkdirAll(filepath.Dir(tmplPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "name: Mixed template\ntitle: base + repo#target\nbody: shape\nbase: main\ncapabilities:\n" +
+		"  - 'https://grain.dev/capabilities/repo#target={\"repo\":\"acme/widgets\",\"base\":\"main\"}'\n"
+	if err := os.WriteFile(tmplPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := checkDeclarations(t, &printer{}, "-repo", "acme/widgets", dir)
+	if err == nil {
+		t.Fatalf("check accepted repo#target under capabilities:\n%s", out)
+	}
+	for _, want := range []string{
+		".grain/templates/t.yml",
+		model.RepoTargetRef,
+		"always target the declaring repository (acme/widgets), and its base is `base:`",
+		"repo_declaration_sync.last_error",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("text output missing %q:\n%s", want, out)
+		}
+	}
+
+	jsonOut, err := checkDeclarations(t, &printer{json: true}, "-repo", "acme/widgets", dir)
+	if err == nil {
+		t.Fatalf("json check accepted repo#target under capabilities:\n%s", jsonOut)
+	}
+	var view declarationsView
+	if err := json.Unmarshal([]byte(jsonOut), &view); err != nil {
+		t.Fatalf("unmarshal %q: %v", jsonOut, err)
+	}
+	if view.OK || len(view.Errors) != 1 || !strings.Contains(view.Errors[0], "base is `base:`") {
+		t.Errorf("view = %+v, want ok=false and repo#target refusal", view)
+	}
+}

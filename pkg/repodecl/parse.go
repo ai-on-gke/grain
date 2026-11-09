@@ -405,6 +405,17 @@ func parsePush(f file, raw []rawPush) (model.RefPushSet, error) {
 // (gitproxy.LocalRepository) and so has no team token in front of it to say no.
 // Naming the declaring repository itself in repo-read/repo-write is allowed
 // and adds nothing -- a task may already read and push its own target.
+//
+// Task-target projections (repo#target, and repo#read / repo#write carrying a
+// `base`) exist only to spell a task request's repo, base, reads and writes
+// fields in an API `grants:` list (model.SplitRequestGrants); CreateTask
+// refuses them as capability grants. They are refused here too: a declaration's
+// tasks always target the declaring repository (with `base:` naming its branch),
+// and extra repository writes always land on that repository's default branch.
+// A repository whose default branch already declares one fails Load on its next
+// sync, keeping its previously synced declarations live and recording the
+// refusal in `repo_declaration_sync.last_error` rather than leaving an
+// un-filable template in the store.
 func parseCapabilities(f file, repo model.RepoRef, caps []string) ([]model.RepoRef, []model.WriteTarget, []model.Grant, model.Admission, model.Hosting, error) {
 	var reads []model.RepoRef
 	var writes []model.WriteTarget
@@ -490,7 +501,23 @@ func parseCapabilities(f file, repo model.RepoRef, caps []string) ([]model.RepoR
 				continue
 			}
 			ref := model.CapabilityGrantRef(c)
+			if ref == model.RepoTargetRef {
+				errs = append(errs, fmt.Errorf("%s: capabilities: %q: a declaration's tasks always target "+
+					"the declaring repository (%s), and its base is `base:`", f.path, c, repo))
+				continue
+			}
 			if ref == model.RepoReadRef || (ref == model.RepoWriteRef && !model.IsGitPushAnyRefGrant(c)) {
+				if _, _, hasBase, err := model.RepoGrantArgs(model.CanonicalGrant(c)); err == nil && hasBase {
+					if ref == model.RepoReadRef {
+						errs = append(errs, fmt.Errorf("%s: capabilities: %q: %s takes only `repo: <owner>/<repo>`, not `base`",
+							f.path, c, model.RepoReadRef))
+					} else {
+						errs = append(errs, fmt.Errorf("%s: capabilities: %q: a declared write to another repository "+
+							"always lands on its default branch -- pass only `repo: <owner>/<repo>`, and set this "+
+							"repository's own branch with `base:`", f.path, c))
+					}
+					continue
+				}
 				errs = append(errs, fmt.Errorf("%s: capabilities: %q does not name a repository -- "+
 					"pass repo: <owner>/<repo> (or refs/force for branch push)", f.path, c))
 				continue
