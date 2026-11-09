@@ -111,7 +111,7 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	uiIAPKeysURL := fs.String("ui-iap-keys-url", "", "as on grain daemon: where the assertions' signing keys are published (default "+ui.GoogleIAPCertURL+")")
 	uiRegistryIssuer := fs.String("ui-registry-issuer", "", "as on grain daemon: the exact issuer URL a signed X-Grain-Registry-Assertion must carry")
 	uiRegistryAudience := fs.String("ui-registry-audience", "", "as on grain daemon: the single audience URL a signed X-Grain-Registry-Assertion must carry")
-	uiRegistryKeysURL := fs.String("ui-registry-keys-url", "", "as on grain daemon: where the registry's ES256 signing keys are published as a JWK set")
+	uiRegistryKeysURL := fs.String("ui-registry-keys-url", "", "as on grain daemon: where the hub's ES256 signing keys are published as a JWK set")
 	uiRequireIAP := fs.Bool("ui-require-iap", false, "as on grain daemon: accept the access code only from loopback with no forwarding headers; needs -ui-iap-audience")
 	uiRequireVerifier := fs.String("ui-require-verifier", "", "as on grain daemon: require network callers to sign in through the named IdentityVerifier (-ui-require-iap is an alias for -ui-require-verifier=iap)")
 	uiAllowedPrincipals := fs.String("ui-allowed-principals", "", ui.AllowedPrincipalsUsage)

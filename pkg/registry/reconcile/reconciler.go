@@ -43,7 +43,8 @@ const (
 
 	// DefaultServiceAccountPropagationTimeout bounds how long a `creating` entry keeps
 	// retrying a VM creation the compute provider refused because the instance's
-	// just-created service account was not visible to it yet (registry.ErrServiceAccountNotReady).
+	// just-created service account, or the registry's actAs grant on it, was not visible to it
+	// yet (registry.ErrServiceAccountNotReady).
 	// GCP documents up to about 60s for a new account to propagate.
 	DefaultServiceAccountPropagationTimeout = 2 * time.Minute
 
@@ -463,13 +464,13 @@ func (r *Reconciler) reconcileCreatingEntry(ctx context.Context, entry *store.En
 			if errors.Is(err, registry.ErrServiceAccountNotReady) {
 				if wait, attempt, ok := r.scheduleCreateRetry(entry.ID); ok {
 					r.noteCreatingReason(ctx, entry, fmt.Sprintf(
-						"waiting for service account %s to propagate before creating the GCE instance (attempt %d failed, retrying in %s): %v",
+						"waiting for service account %s, and the registry's permission to attach it, to propagate before creating the GCE instance (attempt %d failed, retrying in %s): %v",
 						bundle.ServiceAccountEmail, attempt, wait, err))
 					return nil
 				}
 				r.clearCreateRetry(entry.ID)
 				r.failEntry(ctx, entry, fmt.Sprintf(
-					"creating GCE instance failed: service account %s was still not visible to the compute provider after retrying for %s: %v",
+					"creating GCE instance failed: service account %s was still not visible to, or not attachable by, the compute provider after retrying for %s: %v",
 					bundle.ServiceAccountEmail, r.saPropagation, err))
 				return err
 			}

@@ -47,6 +47,7 @@ func TestProvisionStoresGeneratedDatabasePasswordInSecretManager(t *testing.T) {
 					Region:         "us-central1",
 					Zones:          []string{"us-central1-a"},
 					BindProjectIAM: &bind,
+					SelfPrincipal:  testSelfPrincipal,
 				},
 				Secrets: registry.SecretsConfig{Project: "test-proj", SecretPrefix: "grain-inst-"},
 				InstanceSQL: registry.InstanceSQLConfig{

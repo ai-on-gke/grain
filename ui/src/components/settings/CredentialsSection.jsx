@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useContext } from "react";
 import {
   Box,
   Checkbox,
@@ -25,7 +24,6 @@ import { serverPath } from "../CapabilityServersPanel.jsx";
 import SecretsPanel from "../SecretsPanel.jsx";
 import SettingsCard, {
   ReadOnlyFieldset,
-  SettingsRoleRefusalContext,
   settingHints,
 } from "./SettingsCard.jsx";
 import { identifierField } from "../../identifierField.js";
@@ -50,22 +48,23 @@ export default function CredentialsSection({ s, claimedSecrets, secretsSeq }) {
     reloadSettings,
     showError,
     onSaved,
-    readOnly,
   } = s;
+  // What is read-only whatever the role (external mode, a config-managed
+  // section); the page's s.readOnly also folds in Capabilities' own
+  // capabilities:admin, which this card does not follow.
+  const readOnly = s.readOnlyForAnyRole ?? s.readOnly;
   const { restartRequired, restartHint, restartChip } = settingHints(settings);
-  // The card follows Capabilities' capabilities:admin (SettingsPage's
-  // SECTION_WRITE_SCOPE), but its fields save through PUT /api/settings
-  // (settings:write) and its secrets through /api/secrets (secrets:write):
-  // a role holding the first without the others is held to those as well
-  // rather than offered controls the server refuses with 403 (2026-11-08
-  // deployment credentials walkthrough). Where the section itself is
-  // refused, the page already says why and the whole card is read-only.
-  const sectionRefusal = useContext(SettingsRoleRefusalContext);
+  // The card sits on Capabilities, but its fields save through PUT
+  // /api/settings (settings:write) and its secrets through /api/secrets
+  // (secrets:write), so each part follows its own scope rather than
+  // Capabilities' capabilities:admin (CapabilitiesSection clears the
+  // section's refusal for it): a role holding capabilities:admin alone is
+  // not offered controls the server refuses with 403, and one holding
+  // settings:write and secrets:write without it is not refused controls
+  // the server allows (2026-11-08 deployment credentials walkthrough).
   const settingsRefusal = s.settingsWriteRefusal || "";
   const secretsRefusal = s.secretsWriteRefusal || "";
-  const cardRefusals = sectionRefusal
-    ? []
-    : [settingsRefusal, secretsRefusal].filter(Boolean);
+  const cardRefusals = [settingsRefusal, secretsRefusal].filter(Boolean);
   const handleSecretsChanged = async () => {
     await reloadSettings();
     await onSaved?.();

@@ -17,6 +17,7 @@ package demo
 import (
 	"context"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -99,6 +100,18 @@ func TestConfigChangeDemoApprovesAndRejectsAgainstARealConfigRepo(t *testing.T) 
 	}
 	if !strings.Contains(poll.Diff, `+    "poll_interval_ms": 30000`) {
 		t.Errorf("poll interval diff = %q", poll.Diff)
+	}
+
+	// The base branch picker on these tasks lists grain/config's own
+	// branches, as the daemon's does, rather than answering 404.
+	branches, err := client.ListGitHubBranches(ctx, model.ConfigRepo())
+	if err != nil {
+		t.Fatalf("listing grain/config's branches: %v", err)
+	}
+	for _, want := range []string{"main", poll.Branch, prompt.Branch} {
+		if !slices.Contains(branches, want) {
+			t.Errorf("grain/config branches = %v, want %s among them", branches, want)
+		}
 	}
 
 	repoDir := daemon.StateRepoDir(dir)
