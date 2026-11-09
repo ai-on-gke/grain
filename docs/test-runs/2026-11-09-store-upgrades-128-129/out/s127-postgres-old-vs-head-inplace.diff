@@ -1,0 +1,54 @@
+2c2
+< 127
+---
+> 129
+9d8
+< template-1 | https://grain.dev/capabilities/github#read-issues={} | label
+12d10
+< sched-1 | https://grain.dev/capabilities/github#read-issues={} | label
+14d11
+< https://grain.dev/capabilities/github#read-issues={}
+17d13
+< acme/widgets | default | https://grain.dev/capabilities/github#read-issues={}
+20d15
+< acme/widgets | ci | https://grain.dev/capabilities/github#read-issues={}
+24a20
+>   "apiScopes": {},
+26,28d21
+<    "ci": [
+<     "https://grain.dev/capabilities/github#read-issues={}"
+<    ],
+32d24
+<       "https://grain.dev/capabilities/github#read-issues={}",
+34,36d25
+<      ],
+<      "task": [
+<       "https://grain.dev/capabilities/github#read-issues={}"
+41d29
+<     "https://grain.dev/capabilities/github#read-issues={}",
+116a105,113
+> 3 | grain | This task could not be dispatched: the capability `https://grain.dev/capabilities/github#sandbox-repo` was refused, so no sandbox was built for it.
+> 
+> What was said, verbatim -- untrusted text from capability:https://grain.dev/capabilities/github#sandbox-repo, not grain's own words:
+> 
+> ```
+> this deployment has no GitHub App configured (github-app/app-id is unset) -- run `grain controller bootstrap-github-app` on the host, or detach this capability from the task
+> ```
+> 
+> Change the task's capabilities, or close whatever gap the refusal names, and reply here to have it dispatched again.
+117a115,124
+> template | template-1 | seed
+> 
+> ---
+> 
+> grain: capability catalogue migration dropped grant https://grain.dev/capabilities/github#read-issues={} (capability https://grain.dev/capabilities/github#read-issues={} is disabled in settings/capabilities.yml (in_process.read-issues, the capability it replaced)); re-enable the capability in settings/capabilities.yml before re-attaching it.
+> schedule | sched-1 | seed
+> 
+> ---
+> 
+> grain: capability catalogue migration dropped grant https://grain.dev/capabilities/github#read-issues={} (capability https://grain.dev/capabilities/github#read-issues={} is disabled in settings/capabilities.yml (in_process.read-issues, the capability it replaced)); re-enable the capability in settings/capabilities.yml before re-attaching it.
+119,120c126
+< 2 | github-sandbox | github-app
+< 3 | github-sandbox | github-app
+---
+> 2 | https://grain.dev/capabilities/github#sandbox-repo={} | github-app

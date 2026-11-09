@@ -1,0 +1,7 @@
+name: Mixed template
+title: "reads: [] + grants"
+body: §2 item 3 shape.
+reads: []
+grants:
+  - capability: https://grain.dev/capabilities/repo#read
+    with: {repo: acme/widgets}
