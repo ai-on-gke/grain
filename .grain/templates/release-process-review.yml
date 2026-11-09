@@ -1,7 +1,11 @@
 name: Release process review
 title: Weekly review of releases and release pipeline improvements
 base: main
-capabilities: ["api:ci-read@ai-on-gke/grain"]
+capabilities:
+  - "api:ci-read@ai-on-gke/grain"
+  - "api:self-debug"
+  - "api:suites:read@ai-on-gke/grain"
+  - "api:releases:read@ai-on-gke/grain"
 body: |
   Review the past week of release pipeline execution on `main` and suggest
   concrete improvements to the release process. Releases go out
@@ -35,9 +39,11 @@ body: |
   - Tasks: inspect recent `release-watchdog` tasks, the pipeline steward's
     `pipeline.rc-failed` triage and `[rc-blocker <rc tag>]` tasks, and
     the `release-qualification` suite runs (`grain task list` / `grain task
-    read`, when `self-debug` is granted) to see where a person had to act,
-    which rcs were discarded or stalled, and why. If you cannot read tasks,
-    say so in the closing note.
+    read`, `grain api GET /api/suite-runs` and `grain api GET
+    /api/notifications`, when `api:self-debug` and
+    `api:suites:read@ai-on-gke/grain` are granted) to see where a person had
+    to act, which rcs were discarded or stalled, and why. If you cannot read
+    tasks, say so in the closing note.
 
   ## 2. Measure the pipeline
 

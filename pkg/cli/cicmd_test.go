@@ -1276,6 +1276,8 @@ func TestExternalCITestHistoryFormattingAndJSON(t *testing.T) {
 			json.NewEncoder(w).Encode(pass)
 		case "/api/ci/runs/9f2c1a":
 			json.NewEncoder(w).Encode(fail)
+		case "/api/repos/acme/widgets/capabilities":
+			json.NewEncoder(w).Encode(ui.RepoDefaults{Repo: "acme/widgets", CIMode: "grain"})
 		default:
 			t.Errorf("unexpected %s %s", r.Method, r.URL)
 			http.NotFound(w, r)
@@ -1320,6 +1322,75 @@ func TestExternalCITestHistoryFormattingAndJSON(t *testing.T) {
 	}
 	if _, err := ciCLI(t, handler, "test-history", "TestThing", "-limit", "0"); err == nil {
 		t.Error("-limit 0 should be refused")
+	}
+}
+
+// On a repository whose CI is GitHub Actions, `grain ci test-history
+// -repo` reads its Actions runs -- the failures grain recorded of them --
+// rather than grain CI's runs of a retired mode, and says what it read
+// and what it left out.
+func TestCITestHistoryReadsGitHubActionsOnAnActionsRepo(t *testing.T) {
+	at := time.Date(2026, 11, 8, 6, 0, 0, 0, time.UTC)
+	gha := ci.Run{ID: "gha:acme:widgets:42", Provider: ci.ProviderGitHubActions, Repo: "acme/widgets", Ref: "main",
+		Commit: "abcdefabcdef", Conclusion: ci.ConclusionFailure, StartedAt: &at,
+		Actions: &ci.ActionsRun{RunID: 42, Workflow: ".github/workflows/nightly.yml"},
+		Jobs: []ci.JobRun{{Name: "go-long", Conclusion: ci.ConclusionFailure, StartedAt: &at,
+			Steps: []ci.StepRun{{Name: "test", Output: "--- FAIL: TestThing (0.10s)\n"}}}}}
+	var providers []string
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/repos/acme/widgets/capabilities":
+			json.NewEncoder(w).Encode(ui.RepoDefaults{Repo: "acme/widgets", CIMode: "github"})
+		case "/api/ci/runs":
+			provider := r.URL.Query().Get("provider")
+			providers = append(providers, provider)
+			switch provider {
+			case ci.ProviderGitHubActions:
+				listed := gha
+				listed.Jobs = []ci.JobRun{{Name: "go-long", Conclusion: ci.ConclusionFailure, StartedAt: &at}}
+				json.NewEncoder(w).Encode(ui.CIRunsResponse{Enabled: true, Runs: []ci.Run{listed}, Matched: 1})
+			case ci.ProviderGrain:
+				json.NewEncoder(w).Encode(ui.CIRunsResponse{Enabled: true, Runs: []ci.Run{{ID: "run-1"}}, Matched: 53})
+			default:
+				t.Errorf("the listing asked for provider %q", provider)
+			}
+		case "/api/ci/runs/gha:acme:widgets:42":
+			json.NewEncoder(w).Encode(gha)
+		case "/api/ci/runs/run-1":
+			json.NewEncoder(w).Encode(ci.Run{ID: "run-1", Repo: "acme/widgets"})
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL)
+			http.NotFound(w, r)
+		}
+	}
+	out, err := ciCLI(t, handler, "test-history", "TestThing", "-repo", "acme/widgets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(providers, []string{ci.ProviderGitHubActions, ci.ProviderGrain}) {
+		t.Errorf("listings asked for providers %q", providers)
+	}
+	for _, want := range []string{
+		"Runs examined: 1 | Executions found: 1",
+		"GitHub Actions: 1 run(s) (2026-11-08 06:00 UTC)",
+		"its 53 Grain CI run(s), from before, are left out (-provider grain reads them)",
+		`run gha:acme:widgets:42 (nightly.yml, main @ abcdefa) | job "go-long": FAIL`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the report does not say %q:\n%s", want, out)
+		}
+	}
+
+	providers = nil
+	if _, err := ciCLI(t, handler, "test-history", "TestThing", "-repo", "acme/widgets", "-provider", "grain"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(providers, []string{ci.ProviderGrain}) {
+		t.Errorf("-provider grain listed providers %q", providers)
+	}
+	if _, err := ciCLI(t, handler, "test-history", "TestThing", "-provider", "jenkins"); err == nil {
+		t.Error("an unknown -provider should be refused")
 	}
 }
 

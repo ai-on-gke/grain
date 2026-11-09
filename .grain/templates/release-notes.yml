@@ -2,48 +2,59 @@ name: Release notes
 title: "docs(releases): write the release notes for {{version}}"
 base: main
 auto-merge: true
-# Filed by scripts/release-from-trunk.sh (.grain/workflows/release-train.yml)
-# through POST /api/tasks/from-template when a release candidate passes its
-# staging soak and is staged as vX.Y.0-pending -- before a person approves it,
-# so the notes are on main by the time anybody decides
-# (design/design/release-from-trunk.design.md, RFT-6 and RFT-8).
+# Filed outbound by grain's release-notes reconciler (pkg/orchestrator/releasenotes.go)
+# whenever a promoted vX.Y.Z tag (or a staged vX.Y.Z-pending tag waiting for a
+# person's approval) has no docs/releases/vX.Y.Z.md on main, and also by
+# scripts/release-from-trunk.sh through POST /api/tasks/from-template when a
+# release gate is wired (design/playbook/releases.playbook.md, section 8).
 fields:
   - name: version
-    label: Release (vX.Y.0)
+    label: Release (vX.Y.Z)
     required: true
   - name: previous_version
-    label: Previous release the notes start from (empty for the start of history)
+    label: Previous release the notes start from (empty for the start of history or auto-discover)
 body: |
-  `{{version}}` has passed its staging soak and is staged for a person's
-  approval as the git tag `{{version}}-pending`. Write its release notes,
-  `docs/releases/{{version}}.md`, and get them merged into `main` before
-  anybody approves it (`docs/releases/README.md`,
-  `docs/release-candidate-management.md`).
+  `{{version}}` has been promoted as the git tag `{{version}}` by the
+  continuous release train or an operator promotion (or is staged for a
+  person's approval as `{{version}}-pending`). Write its release notes,
+  `docs/releases/{{version}}.md`, and get them merged into `main` so builds
+  from `main` embed them (`pkg/releasenotes`, `docs/releases/README.md`,
+  `design/playbook/releases.playbook.md` §8).
 
   Do not tag, push or move any release tag, `latest` or `candidate`, and do
   not run `scripts/release-from-trunk.sh` or `scripts/release-images.sh`:
-  the release is a person's to approve, and this task only writes a file.
+  this task only writes `docs/releases/{{version}}.md`.
 
   ## 1. Find the release
 
   - `git fetch origin --tags`.
-  - The release's commit is what `{{version}}-pending` names
-    (`git rev-parse '{{version}}-pending^{commit}'`), or `{{version}}` if a
-    person has already approved it.
-  - If neither tag exists, the pending release was rejected: finish with
-    `nothing_needed`, saying so. Write nothing.
-  - If `docs/releases/{{version}}.md` is already on `origin/main`, leave it
-    as it is -- somebody wrote or edited it by hand -- and finish with
-    `nothing_needed`.
+  - Resolve `to_ref`: prefer the promoted tag `{{version}}`
+    (`git rev-parse '{{version}}^{commit}'`) when `refs/tags/{{version}}`
+    exists, or fall back to `{{version}}-pending`
+    (`git rev-parse '{{version}}-pending^{commit}'`) when the release is
+    staged for a person's approval and not yet promoted.
+  - If `refs/tags/{{version}}-retracted` exists, or if neither `{{version}}`
+    nor `{{version}}-pending` exists (for instance, a pending release was
+    rejected), finish with `nothing_needed`, saying so. Write nothing.
+  - If `docs/releases/{{version}}.md` is already on `origin/main`
+    (`git show origin/main:docs/releases/{{version}}.md >/dev/null 2>&1`),
+    leave it as it is -- somebody wrote or merged it already -- and finish
+    with `nothing_needed`.
 
   ## 2. Draft the highlights
 
-  Read what landed between `{{previous_version}}` and the release
-  (`git log --first-parent --oneline {{previous_version}}..'{{version}}-pending^{commit}'`,
-  and the pull requests behind the merges worth a closer look). If
-  `{{previous_version}}` is empty, the range is everything up to the release.
-  The previous release is never a placeholder tag such as `v2.5.0`: the train
-  skips anything `RELEASE_NEVER_PROMOTE` in `scripts/release.conf` names.
+  Determine `from_ref`: use `{{previous_version}}` when non-empty; otherwise
+  pick the newest earlier `vX.Y.Z` tag not named by `RELEASE_NEVER_PROMOTE` in
+  `scripts/release.conf` and not marked `-retracted` (or, for the first
+  release in history, the root commit
+  `$(git rev-list --max-parents=0 "${to_ref}^{commit}" | tail -1)`).
+
+  Read what landed between `${from_ref}` and `${to_ref}`
+  (`git log --first-parent --oneline "${from_ref}..${to_ref}^{commit}"`,
+  and the pull requests behind the merges worth a closer look).
+  The previous release is never a placeholder tag such as `v2.5.0` or a
+  retracted tag: skip anything `RELEASE_NEVER_PROMOTE` in
+  `scripts/release.conf` names.
 
   Write `## Highlights` prose into a scratch file outside the checkout
   (`/tmp/highlights.md`): a few short paragraphs or bullets on the features
@@ -55,20 +66,20 @@ body: |
 
   ## 3. Generate the notes
 
-  ```
-  bash scripts/release-notes.sh {{version}} {{previous_version}} '{{version}}-pending^{commit}' /tmp/highlights.md \
+  ```bash
+  to_ref="{{version}}"
+  git rev-parse -q --verify "refs/tags/${to_ref}^{commit}" >/dev/null || to_ref="{{version}}-pending"
+  bash scripts/release-notes.sh {{version}} "${from_ref}" "${to_ref}^{commit}" /tmp/highlights.md \
     > docs/releases/{{version}}.md
   ```
 
-  (With an empty previous release, pass the root commit,
-  `$(git rev-list --max-parents=0 HEAD | tail -1)`, as the from-ref.) Read
-  the result: the highlights first, then Features, Fixes and Other changes.
-  Fix any highlight that does not match the lists.
+  Read the result: the highlights first, then Breaking changes (if any),
+  Features, Fixes and Other changes. Fix any highlight that does not match the
+  lists.
 
   ## 4. Open the pull request
 
   Commit only `docs/releases/{{version}}.md`, as
   `docs(releases): add the release notes for {{version}}`, push your branch
-  and wait for CI to pass. The pull request merges on its own; the
-  operator notification for `{{version}}` links to this task, so the person
-  approving the release reads these notes first.
+  and wait for CI to pass. The pull request has `auto-merge: true` and merges
+  on its own once CI is green.

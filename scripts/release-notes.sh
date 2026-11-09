@@ -132,9 +132,40 @@ breaking_subject() {
 }
 
 # breaking_trailers <message>: the text of each BREAKING CHANGE trailer in
-# a commit message, one per line.
+# a commit message, one per line (joining wrapped continuation lines up to
+# the next blank line or trailer).
 breaking_trailers() {
-  sed -nE 's/^BREAKING[ -]CHANGE:[[:space:]]*(.*[^[:space:]])?[[:space:]]*$/\1/p' <<<"$1"
+  awk '
+    function flush() {
+      if (active) {
+        sub(/^[[:space:]]+/, "", cur)
+        sub(/[[:space:]]+$/, "", cur)
+        if (cur != "") print cur
+        active = 0
+        cur = ""
+      }
+    }
+    /^BREAKING[ -]CHANGE:[[:space:]]*/ {
+      flush()
+      line = $0
+      sub(/^BREAKING[ -]CHANGE:[[:space:]]*/, "", line)
+      sub(/[[:space:]]+$/, "", line)
+      cur = line
+      active = 1
+      next
+    }
+    active {
+      if ($0 ~ /^[[:space:]]*$/ || $0 ~ /^[A-Za-z][A-Za-z0-9-]*:[[:space:]]/) {
+        flush()
+        next
+      }
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      sub(/[[:space:]]+$/, "", line)
+      cur = (cur == "" ? line : cur " " line)
+    }
+    END { flush() }
+  ' <<<"$1"
 }
 
 # collect <rev-list args>: one record per first-parent commit in the range

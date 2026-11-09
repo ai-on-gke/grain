@@ -112,7 +112,7 @@ func demoReconcileCycle(ctx context.Context, store *model.Store, releases github
 		// does (orchestrator.reconcileReleasePending, at most every 10
 		// minutes per repository), so a walkthrough can seed one in the
 		// sim and Approve it from the Inbox.
-		if err := runDemoReconcilers(ctx, orchestrator.Deps{Store: store, Client: releases}, now, "release-pending"); err != nil {
+		if err := runDemoReconcilers(ctx, orchestrator.Deps{Store: store, Client: releases}, now, "release-pending", "release-notes"); err != nil {
 			errs = append(errs, err)
 		}
 	}

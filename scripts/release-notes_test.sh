@@ -115,7 +115,10 @@ g tag v3.1.0
 pr 2 "refactor: shuffle the config loader" "refactor: shuffle the config loader" \
   "Loads it lazily.
 
-BREAKING CHANGE: GRAIN_CONFIG is read once, at start"
+BREAKING CHANGE: GRAIN_CONFIG is read once,
+at start, and kept until exit.
+
+Origin: task 1"
 commit "feat(api)!: drop the v1 endpoints"
 commit "docs: say so"
 g tag v3.2.0
@@ -133,7 +136,7 @@ run v3.2.0 v3.1.0 v3.2.0
 check "breaking changes listed first" 0 "## Breaking changes
 
 - refactor: shuffle the config loader (#2)
-  - GRAIN_CONFIG is read once, at start
+  - GRAIN_CONFIG is read once, at start, and kept until exit.
 - feat(api)!: drop the v1 endpoints (" "## Features
 
 - feat(api)!: drop the v1 endpoints (" "## Other changes

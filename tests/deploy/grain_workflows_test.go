@@ -2138,10 +2138,14 @@ func TestTheReleaseNotesTemplateIsWhatTheTrainFiles(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"scripts/release-notes.sh", "Highlights", "docs/releases/{{version}}.md", "{{version}}-pending", "nothing_needed",
+		"scripts/release-notes.sh", "Highlights", "docs/releases/{{version}}.md",
+		"refs/tags/{{version}}", "{{version}}-pending", "nothing_needed",
 	} {
 		if !strings.Contains(tmpl.Body, want) {
 			t.Errorf("release-notes template body does not mention %q", want)
 		}
+	}
+	if strings.Contains(strings.ToLower(tmpl.Body), "staging soak") {
+		t.Error("release-notes template body still mentions the retired staging soak")
 	}
 }

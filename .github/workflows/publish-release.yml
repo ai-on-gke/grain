@@ -239,6 +239,17 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Cache Go modules and build cache
+        # zizmor: ignore[cache-poisoning]
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
@@ -278,11 +289,11 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write
-    # One group per release, shared by promote.yml, publish-release.yml and
-    # release-train-assets.yml (concurrency groups span a repository's
-    # workflows): cli-publish replaces archives left without checksums.txt,
-    # so two runs uploading to the same release at once could leave one
-    # run's archive beside the other's checksums.txt.
+    # One group per release, shared by promote.yml, promote-release.yml,
+    # publish-release.yml and release-train-assets.yml (concurrency groups
+    # span a repository's workflows): cli-publish replaces archives left
+    # without checksums.txt, so two runs uploading to the same release at
+    # once could leave one run's archive beside the other's checksums.txt.
     concurrency:
       group: grain-cli-assets-${{ github.ref_name }}
       cancel-in-progress: false
