@@ -137,6 +137,22 @@ func TestViewerRoleReadsButIsRefusedWrites(t *testing.T) {
 	}
 }
 
+// A config change is decided under settings:write, as any other change to
+// this deployment's settings is: a viewer is refused both decisions before
+// the task is even read, whatever commit they name
+// (docs/test-runs/2026-11-09-demo-config-change.md, finding 2).
+func TestViewerRoleIsRefusedConfigChangeDecisions(t *testing.T) {
+	h := newRoleHarness(t)
+	h.allow(t, "user:viv@example.com", "grain/viewer")
+	seedAPITask(t, h.client, "1", "acme/widgets")
+	for _, verb := range []string{"approve", "reject"} {
+		code, body := h.call("viv@example.com", http.MethodPost, "/api/tasks/1/config-change/"+verb, `{"headSha":"abc"}`)
+		if code != http.StatusForbidden || !strings.Contains(body, "settings:write") || !strings.Contains(body, "role grain/viewer") {
+			t.Errorf("viewer POST config-change/%s: %d %s, want 403 naming settings:write and the role", verb, code, body)
+		}
+	}
+}
+
 func TestRepoLimitedRoleIsRefusedOtherRepositories(t *testing.T) {
 	installScopeSets(t, model.APIScopeSet{Name: "acme/widgets-ci", Scopes: []string{"ci:read", "tasks:read"},
 		Repos: []string{"acme/widgets"}, Version: 1})

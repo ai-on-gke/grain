@@ -50,6 +50,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
+	"github.com/ai-on-gke/grain/pkg/usage"
 )
 
 // LocalAuditPath is where a deployment keeps its local audit log of
@@ -1315,6 +1316,15 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			log.Printf("grain daemon: restored %d usage-limit pause(s) from before this restart", n)
 		}
 		cancelRestore()
+		// Token accounting learns a window's capacity from the usage it
+		// had consumed when its provider refused it (usage.LearnFromPause).
+		agentPause.SetOnOpen(func(p model.UsageLimitPause, at time.Time) {
+			learnCtx, cancelLearn := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancelLearn()
+			if err := usage.LearnFromPause(learnCtx, store, p, at); err != nil {
+				log.Printf("grain daemon: learning %s/%s's budget from its usage-limit pause: %v", p.Connection, p.Model, err)
+			}
+		})
 	}
 	buildFramework := pool.Build
 	// Bounded rather than given ctx itself: this probe exists to log a
@@ -1849,9 +1859,13 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		TeamHasAgentBackend: teamHasAgentBackend(cfg, store),
 		MaxWorkers:          cfg.MaxWorkers,
 		MaxMergers:          cfg.MaxMergers,
-		Budget:              cfg.Budget(),
-		AgentShape:          cfg.AgentShape(),
-		Ledger:              cfg.Ledger,
+		// The automatic worker cap from the remaining provider budget,
+		// which only lowers MaxWorkers when the operator opted in
+		// (usage mode "auto", docs/connections-and-models.md).
+		UsageCap:   usageCapFor(store),
+		Budget:     cfg.Budget(),
+		AgentShape: cfg.AgentShape(),
+		Ledger:     cfg.Ledger,
 		// And the one part of that budget a startup reading cannot give:
 		// what the volume has left right now. Called once a cycle, so a
 		// dispatch onto a filling disk is deferred on the tick the disk
@@ -2083,4 +2097,12 @@ func sandboxGrainBinary() string {
 		exe = resolved
 	}
 	return orchestrator.SandboxGrainBinaryBeside(exe)
+}
+
+// usageCapFor is orchestrator.Deps.UsageCap for store: nil without one.
+func usageCapFor(store *model.Store) func(context.Context, time.Time, int) int {
+	if store == nil {
+		return nil
+	}
+	return (&usage.Cap{Store: store}).Workers
 }

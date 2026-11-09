@@ -344,11 +344,30 @@ func (r *CreateTaskRequest) UnmarshalJSON(data []byte) error {
 		Alias
 		RawPriority json.RawMessage `json:"priority,omitempty"`
 		RawGrants   json.RawMessage `json:"grants,omitempty"`
+		// capabilities: is read as propose_task reads it
+		// (model.CapabilityEntries): strings and {capability, with}
+		// objects alike, so an object a bare name was wrapped in is
+		// refused saying how to write it, not with a Go decoding error.
+		RawCapabilities json.RawMessage `json:"capabilities,omitempty"`
 	}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
 	*r = CreateTaskRequest(aux.Alias)
+	if present(aux.RawCapabilities) {
+		var entries any
+		if err := json.Unmarshal(aux.RawCapabilities, &entries); err != nil {
+			return validationErrorf("capabilities: %v", err)
+		}
+		caps, err := model.CapabilityEntries(entries)
+		if err != nil {
+			return validationErrorf("%v", err)
+		}
+		if caps == nil {
+			caps = []string{}
+		}
+		r.Capabilities = &caps
+	}
 	if present(aux.RawGrants) {
 		got, err := decodeRequestGrants(aux.RawGrants, model.GrantSpelling{
 			Capabilities: r.Capabilities != nil,
@@ -1410,11 +1429,25 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 		runHostds = nil
 	}
 	c.markDeletedRunHostds(ctx, runHostds)
+	// What each attempt spent at its provider (model.RunUsage), read
+	// once for the task; a failure leaves every attempt unmeasured.
+	runUsage := map[string]model.RunUsage{}
+	if usages, err := c.Store.TaskRunUsages(ctx, id); err != nil {
+		log.Printf("ui: task %s: reading its attempts' token usage: %v", id, err)
+	} else {
+		for _, u := range usages {
+			runUsage[u.RunID] = u
+		}
+		detail.Usage = taskUsageOf(usages)
+	}
 	detail.Attempts = make([]Attempt, 0, len(runs))
 	for _, r := range runs {
 		a := attemptFrom(r, promptBytes, auditCounts)
 		if h, ok := runHostds[r.ID]; ok {
 			a.Hostd = &h
+		}
+		if u, ok := runUsage[r.ID]; ok {
+			a.Usage = &u
 		}
 		detail.Attempts = append(detail.Attempts, a)
 	}

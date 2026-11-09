@@ -737,6 +737,8 @@ func (s *Server) routes() {
 	// What failed runs said when grain could not name why -- the
 	// instrument over its own refusal markers (pkg/ui/unmatched.go).
 	s.route("GET /api/unmatched-failures", s.handleListUnmatchedFailures)
+	s.route("GET /api/usage", s.handleGetUsage)
+	s.route("PUT /api/usage/settings", s.handlePutUsageSettings)
 
 	s.route("GET /api/pause", s.handleGetAgentPause)
 	s.route("DELETE /api/pause", s.handleLiftAgentPause)

@@ -16,6 +16,8 @@ package cli
 
 import (
 	"flag"
+	"fmt"
+	"os"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/hubenv"
@@ -134,4 +136,16 @@ func defineHubSubcommandRenames(fs *flag.FlagSet) *renamedFlags {
 		return nil
 	}
 	return defineRenamedFlags(fs, names...)
+}
+
+// deprecatedCommandAliases are the hiddenCommandAliases that say so on
+// stderr when used.
+var deprecatedCommandAliases = map[string]bool{"registry": true}
+
+// warnDeprecatedCommand says on stderr that the command word typed, raw,
+// is a deprecated spelling of cmd.
+func warnDeprecatedCommand(raw, cmd string) {
+	if deprecatedCommandAliases[raw] {
+		fmt.Fprintf(os.Stderr, "warning: 'grain %s' is deprecated and will be removed in a future release; use 'grain %s' (the Grain Registry is now the Grain Hub)\n", raw, cmd)
+	}
 }

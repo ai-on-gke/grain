@@ -272,17 +272,12 @@ func Main() {
 // or the CLI spec; both keep working for scripts and installed units.
 //
 // "registry" is "hub" now that the Grain Registry is the Grain Hub; it
-// warns that it is deprecated (deprecatedCommandAliases) and goes after a
-// release.
+// warns (warnDeprecatedCommand) and goes after a release.
 var hiddenCommandAliases = map[string]string{
 	"hostd":    "host",
 	"hostds":   "host",
 	"registry": "hub",
 }
-
-// deprecatedCommandAliases are the hiddenCommandAliases that say so on
-// stderr when used.
-var deprecatedCommandAliases = map[string]bool{"registry": true}
 
 // canonicalCommand is the command word cmd is spelled as now.
 func canonicalCommand(cmd string) string {
@@ -405,7 +400,8 @@ Commands:
                                        -field name=value sets one of the fields this deployment
                                        declares, repeatably -- "grain create -h" lists them)
   update <id> [flags]                  edit a task's title or fields, -field name=value included
-  approve <id>                         accept a proposed task (proposed -> queued)
+  approve [-reason r] <id>             accept a proposed task (proposed -> queued); an external agent
+                                       credential (gma_) must give -reason
   withdraw <id>                        withdraw a queued task's approval (queued -> proposed)
   defer [-until <date>] <id>           put a task aside without closing it (proposed/queued -> deferred);
                                        deferred tasks are hidden from task lists until asked for, and
@@ -428,7 +424,7 @@ Commands:
                                        withdrawn if anything else is pushed before the merge
   pr adopt|review|status <pr>          adopt (-mode review-only|finish), review (-design) or report on
                                        (-threads) a pull request grain did not open (see prcmd.go)
-  run-now <id>                         start a run of this task next, ahead of the queue and whatever
+  run-now [-reason r] <id>             start a run of this task next, ahead of the queue and whatever
                                        its state says -- including sending a finished or merging task
                                        back to an agent for more work on its own branch
   config                               show the capabilities this deployment offers
@@ -447,6 +443,8 @@ Commands:
   failures [-window 7d] [-suspect]     what runs said when they failed for a reason grain could not
                                        name -- the instrument over its own provider-refusal markers
                                        (see failures.go)
+  usage [-mode auto] [-budget c/m=n/5h] token usage, budget, reset and burn rate per connection and model,
+                                       and the workers the remaining budget sustains (see usage_cmd.go)
   health                               the counters a layer built on grain keeps in the daemon, by
                                        section, since it started (-json: all of GET /api/sandboxes;
                                        see health.go)
@@ -658,9 +656,7 @@ func runCLI(args []string) error {
 // dispatchCLI runs one task-CLI command against c.
 func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.FlagSet, sel selectedContext, rest []string) error {
 	cmd, cmdArgs := canonicalCommand(rest[0]), rest[1:]
-	if deprecatedCommandAliases[rest[0]] {
-		fmt.Fprintf(os.Stderr, "warning: 'grain %s' is deprecated and will be removed in a future release; use 'grain %s' (the Grain Registry is now the Grain Hub)\n", rest[0], cmd)
-	}
+	warnDeprecatedCommand(rest[0], cmd)
 	switch cmd {
 	case "context", "whoami", "login", "logout":
 		return dispatchSignIn(ctx, c, out, sel, cmd, cmdArgs)
@@ -708,6 +704,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdMetrics(ctx, c, out, cmdArgs)
 	case "failures":
 		return cmdFailures(ctx, c, out, cmdArgs)
+	case "usage":
+		return cmdUsage(ctx, c, out, cmdArgs)
 	case "health":
 		return cmdHealth(ctx, c, out, cmdArgs)
 	case "pause":

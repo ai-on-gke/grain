@@ -1,0 +1,6 @@
+name: Mixed template
+title: "capabilities + grants: []"
+body: §2 item 3 shape.
+capabilities:
+  - api:ci-read
+grants: []

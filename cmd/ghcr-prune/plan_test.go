@@ -486,3 +486,44 @@ func TestABasePackageKeepsTheNamesEveryOtherPackageKeeps(t *testing.T) {
 		})
 	}
 }
+
+// A staged release (vX.Y.Z-pending) waits for a person, and a person may
+// take longer than the window: v3.2.0-pending was staged at 03:13 UTC on
+// 2026-11-09 and, read as a branch tag, would have been deletable from
+// 2026-11-11 03:13 whether or not anybody had looked at it, leaving
+// `promote v3.2.0` to rebuild what it was meant only to retag. It is kept
+// until it is rejected (discard-pending's vX.Y.Z-rejected on the same
+// version); approval retags the same version vX.Y.Z, which keeps it anyway.
+func TestAStagedReleaseOutlivesTheWindowUntilItIsRejected(t *testing.T) {
+	p := policy()
+	p.KeepFor = 48 * time.Hour
+	p.KeepCommits = 1
+	versions := []Version{
+		{Package: "grain", ID: 1, Digest: "sha256:p1", Tags: []string{"v3.2.0-pending"}, Created: hoursAgo(96)},
+		{Package: "grain", ID: 2, Digest: "sha256:p2", Tags: []string{"v3.1.2-pending", "v3.1.2-rejected"}, Created: hoursAgo(96)},
+		{Package: "grain", ID: 3, Digest: "sha256:p3", Tags: []string{"v3.1.3-rejected"}, Created: hoursAgo(96)},
+		{Package: "sandbox", ID: 4, Digest: "sha256:p4", Tags: []string{"sha-cba7d44", "v3.2.0-pending"}, Created: hoursAgo(96)},
+		{Package: "grain", ID: 5, Digest: "sha256:p5", Tags: []string{"sha-ffe6755", "main"}, Created: hoursAgo(1)},
+	}
+	branches := map[string]bool{"main": true}
+	for _, id := range []int64{1, 4} {
+		if d := decide(t, versions, branches, p, id); !d.Keep || !strings.Contains(d.Reason, "staged release") {
+			t.Errorf("version %d is a staged release nobody has decided on and must be kept: keep=%v %s", id, d.Keep, d.Reason)
+		}
+	}
+	for _, id := range []int64{2, 3} {
+		if d := decide(t, versions, branches, p, id); d.Keep {
+			t.Errorf("version %d is a rejected staged release past the window and should go: %s", id, d.Reason)
+		}
+	}
+	for tag, want := range map[string]TagKind{
+		"v3.2.0-pending":      KindPending,
+		"v3.2.0-rejected":     KindBranch,
+		"v3.2.0-rc.1-pending": KindBranch,
+		"3.2.0-pending":       KindBranch,
+	} {
+		if got := classify("grain", tag); got != want {
+			t.Errorf("classify(grain, %q) = %v, want %v", tag, got, want)
+		}
+	}
+}

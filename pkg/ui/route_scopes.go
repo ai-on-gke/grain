@@ -331,6 +331,8 @@ var routeScopes = map[string]APIScope{
 	"/staging/{name}/{path...}":                                            "internal",
 	"GET /api/metrics":                                                     "deployment:read",
 	"GET /api/unmatched-failures":                                          "deployment:read",
+	"GET /api/usage":                                                       "deployment:read",
+	"PUT /api/usage/settings":                                              "settings:write",
 	"GET /api/pause":                                                       "dispatch:read",
 	"DELETE /api/pause":                                                    "dispatch:write",
 	"GET /api/console":                                                     "sessions:read",

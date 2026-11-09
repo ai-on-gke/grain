@@ -1,0 +1,5 @@
+mode=html200-api GET github.com/openai/codex/releases/download/rust-v0.166.0/codex-x86_64-unknown-linux-musl.tar.gz accept="*/*" auth=false -> 504
+mode=html200-api GET github.com/openai/codex/releases/download/rust-v0.166.0/codex-x86_64-unknown-linux-musl.tar.gz accept="*/*" auth=false -> 504
+mode=html200-api GET github.com/openai/codex/releases/download/rust-v0.166.0/codex-x86_64-unknown-linux-musl.tar.gz accept="*/*" auth=false -> 504
+mode=html200-api GET api.github.com/repos/openai/codex/releases/tags/rust-v0.166.0 accept="application/vnd.github+json" auth=false -> 200
+mode=html200-api GET registry.npmjs.org/@openai/codex/-/codex-0.166.0-linux-x64.tgz accept="*/*" auth=false -> 200

@@ -1,0 +1,5 @@
+name: Control template
+title: "control"
+body: §2 item 3 control.
+capabilities:
+  - api:ci-read
