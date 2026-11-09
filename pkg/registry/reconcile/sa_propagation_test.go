@@ -268,3 +268,52 @@ func TestReconcilerFailsCreatingEntryWithoutComputeProvider(t *testing.T) {
 		t.Fatalf("status_reason = %q, want it to name the missing compute provider", got.StatusReason)
 	}
 }
+
+// countingResources counts Provision calls, each of which (on the GCP provider) generates a
+// new database password, writes a new Secret Manager version and rotates the role.
+type countingResources struct {
+	registry.InstanceResources
+	mu         sync.Mutex
+	provisions int
+}
+
+func (c *countingResources) Provision(ctx context.Context, spec registry.InstanceResourceSpec) (*registry.InstanceResourceBundle, error) {
+	c.mu.Lock()
+	c.provisions++
+	c.mu.Unlock()
+	return c.InstanceResources.Provision(ctx, spec)
+}
+
+func (c *countingResources) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.provisions
+}
+
+// Retrying the VM insert while the service account propagates must not provision the
+// instance's resources again: the 2026-11-09 walkthrough (task 3731) saw one new
+// db-password Secret Manager version, and one password rotation, per attempt.
+func TestReconcilerProvisionsResourcesOnceAcrossServiceAccountRetries(t *testing.T) {
+	compute := &saNotReadyCompute{fakeCompute: newFakeCompute(""), failures: 3}
+	f := newSAPropagationFixture(t, compute, "gce")
+	res := &countingResources{InstanceResources: f.rec.resources}
+	f.rec.resources = res
+
+	var got *store.EntryRow
+	for i := 0; i < 120; i++ {
+		got = f.runOnce(t)
+		if got.LifecycleState != api.StateCreating {
+			break
+		}
+		*f.now = f.now.Add(time.Second)
+	}
+	if got.LifecycleState != api.StateRunning {
+		t.Fatalf("state = %q (reason %q), want running once the account propagated", got.LifecycleState, got.StatusReason)
+	}
+	if n := compute.createCalls(); n != 4 {
+		t.Fatalf("CreateInstance calls = %d, want 4 (three refused, one created)", n)
+	}
+	if n := res.count(); n != 1 {
+		t.Fatalf("Provision calls across %d VM creation attempts = %d, want 1", compute.createCalls(), n)
+	}
+}
