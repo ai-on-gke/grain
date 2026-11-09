@@ -151,10 +151,12 @@ test("an Actions repo's pending patch release is approved from the Inbox through
     decision: "reject",
   });
 
-  // Stage v3.2.0-pending with breaking changes and a failed promote-release.yml
-  // dispatch: the Inbox shows the failed run, GRAIN_RELEASE_APPROVAL_KEY +
-  // GET /api/release-approval-key, lets the operator inspect the key, and
-  // approves with allow_breaking=true.
+  // A pending release staged because it carries breaking changes outside
+  // RELEASE_MAJOR, whose earlier promote-release.yml dispatch failed, is
+  // listed under "Asked: approve a release" with the failed run and what to
+  // set (GRAIN_RELEASE_APPROVAL_KEY from GET /api/release-approval-key),
+  // shows BREAKING beside Approve breaking, asks a confirm naming the
+  // breaking changes, and dispatches allow_breaking=true signed.
   await ok(
     await page.request.post(`${SIM}/git/refs`, {
       data: { ref: "refs/tags/v3.2.0-pending", sha: commit },
@@ -170,20 +172,24 @@ test("an Actions repo's pending patch release is approved from the Inbox through
         body:
           "DISPATCH FAILED (gha:acme:widgets:42577215514): verify-release-approval: refused: the repository variable GRAIN_RELEASE_APPROVAL_KEY is not set\n" +
           "Remedy: set the repository variable GRAIN_RELEASE_APPROVAL_KEY on acme/widgets to the publicKey from GET /api/release-approval-key (or `grain release approval-key`), then approve or reject again.\n\n" +
-          "v3.2.0 is staged as v3.2.0-pending on acme/widgets.\n\n" +
-          "Release notes (docs/releases/v3.2.0.md):\n\n# v3.2.0\n\n## Breaking changes\n\n- feat!: drop v1 protocol",
+          "v3.2.0 is staged as v3.2.0-pending on acme/widgets and waits for a person.\n\n" +
+          "BREAKING CHANGES: v3.2.0 carries breaking changes since v3.1.1 and is not the major release RELEASE_MAJOR asks for; approving it needs allow_breaking: true.",
         repo: "acme/widgets",
         actions: ["approve-release", "reject-release"],
       },
     }),
     "raise v3.2.0 failed dispatch",
   );
+
   await page.reload();
-  const v320Row = section
+  await expect(section).toBeVisible();
+  const breakingRow = section
     .getByTestId("inbox-pending-release")
     .filter({ hasText: "v3.2.0 is ready to promote" });
-  await expect(v320Row).toBeVisible();
-  const failureBanner = v320Row.getByTestId("inbox-release-dispatch-failure");
+  await expect(breakingRow).toBeVisible();
+  const failureBanner = breakingRow.getByTestId(
+    "inbox-release-dispatch-failure",
+  );
   await expect(failureBanner).toContainText("gha:acme:widgets:42577215514");
   await expect(failureBanner).toContainText(
     "verify-release-approval: refused: the repository variable GRAIN_RELEASE_APPROVAL_KEY is not set",
@@ -196,27 +202,80 @@ test("an Actions repo's pending patch release is approved from the Inbox through
     "BEGIN PUBLIC KEY",
   );
   await expect(
-    v320Row.getByRole("checkbox", { name: /Allow breaking changes/i }),
+    breakingRow.getByRole("checkbox", { name: /Allow breaking changes/i }),
   ).toBeChecked();
+  const badge = breakingRow.getByTestId("inbox-release-soak");
+  await expect(badge).toHaveText("BREAKING");
+  const approveBreakingBtn = breakingRow.getByRole("button", {
+    name: "Approve breaking",
+  });
+  await expect(approveBreakingBtn).toBeVisible();
 
-  // Verify the expanded key and failure banner fit inside a 390px phone viewport without horizontal scroll.
+  // Badge sits left of Approve breaking inside .inbox-actions and vertically centred.
+  const actionsBox = await breakingRow.locator(".inbox-actions").boundingBox();
+  const badgeBox = await badge.boundingBox();
+  const btnBox = await approveBreakingBtn.boundingBox();
+  expect(badgeBox.x).toBeGreaterThanOrEqual(actionsBox.x - 1);
+  expect(badgeBox.x + badgeBox.width).toBeLessThanOrEqual(btnBox.x + 1);
+  expect(
+    Math.abs(badgeBox.y + badgeBox.height / 2 - (btnBox.y + btnBox.height / 2)),
+  ).toBeLessThan(4);
+
+  // On phone width, BREAKING takes its own right-aligned line above the
+  // action buttons and the page does not overflow horizontally.
   await page.setViewportSize({ width: 390, height: 844 });
-  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth,
-  }));
-  expect(scrollWidth).toBeLessThanOrEqual(clientWidth + 1);
+  await expect(badge).toBeVisible();
+  const phoneBadge = await badge.boundingBox();
+  const phoneBtn = await approveBreakingBtn.boundingBox();
+  expect(phoneBadge.y + phoneBadge.height).toBeLessThanOrEqual(phoneBtn.y + 2);
+  expect(phoneBtn.x + phoneBtn.width).toBeLessThanOrEqual(390 + 1);
+  const overflow = await page.evaluate(
+    () =>
+      document.documentElement.scrollWidth -
+      document.documentElement.clientWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(1);
   await page.setViewportSize({ width: 1440, height: 900 });
 
-  page.once("dialog", (dialog) => dialog.accept());
-  await v320Row.getByRole("button", { name: "Approve" }).click();
-  await expect(v320Row).toHaveCount(0);
+  let breakingDialog = "";
+  page.once("dialog", (dialog) => {
+    breakingDialog = dialog.message();
+    dialog.accept();
+  });
+  await approveBreakingBtn.click();
+  await expect(breakingRow).toHaveCount(0);
+  expect(breakingDialog).toContain(
+    "Approve v3.2.0 with BREAKING changes outside a major release?",
+  );
+  expect(breakingDialog).toContain(
+    "v3.2.0 carries breaking changes since v3.1.1 and is not the major release RELEASE_MAJOR asks for",
+  );
+
   sent = await dispatches();
   expect(sent).toHaveLength(before + 3);
-  expect(sent[sent.length - 1].inputs).toMatchObject({
-    version: "v3.2.0",
-    decision: "approve",
-    allow_breaking: "true",
-    short_soak_ok: "false",
+  const breakingApprove = sent[sent.length - 1];
+  expect(breakingApprove).toMatchObject({
+    workflow: "promote-release.yml",
+    ref: "main",
+    inputs: {
+      version: "v3.2.0",
+      decision: "approve",
+      short_soak_ok: "false",
+      allow_breaking: "true",
+    },
   });
+  const breakingRecord = Buffer.from(breakingApprove.inputs.approval, "base64");
+  expect(breakingRecord.toString()).toContain(
+    `repo: acme/widgets\nversion: v3.2.0\ndecision: approve\ncommit: ${commit}\n`,
+  );
+  expect(breakingRecord.toString()).toContain("allow_breaking: true\n");
+  expect(
+    crypto.verify(
+      "sha256",
+      breakingRecord,
+      publicKey,
+      Buffer.from(breakingApprove.inputs.approval_signature, "base64"),
+    ),
+    "the allow_breaking record verifies against the deployment's key",
+  ).toBe(true);
 });

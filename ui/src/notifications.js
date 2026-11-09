@@ -98,7 +98,7 @@ export function notificationAlerts(notifications) {
             ? [
                 {
                   kind: "approve-release",
-                  label: release.shortSoak ? "Approve short soak" : "Approve",
+                  label: approveReleaseLabel(release),
                   notification: n,
                   release,
                 },
@@ -127,6 +127,17 @@ export function notificationAlerts(notifications) {
 // design/design/release-from-trunk.design.md §4).
 const PENDING_RELEASE_FAMILY = "release.pending";
 
+// approveReleaseLabel names the Approve action for a pending release,
+// warning when approving overrides the short-soak or breaking-change gate.
+export function approveReleaseLabel(release) {
+  if (release?.shortSoak && release?.breaking) {
+    return "Approve short soak & breaking";
+  }
+  if (release?.breaking) return "Approve breaking";
+  if (release?.shortSoak) return "Approve short soak";
+  return "Approve";
+}
+
 // pendingReleaseOf is the release a notification asks a person to
 // approve, { repo, version, soak, shortSoak, breaking, dispatchFailure },
 // or null when it asks nothing of the kind: a minor release (vX.Y.0) or a
@@ -136,12 +147,15 @@ const PENDING_RELEASE_FAMILY = "release.pending";
 // SOAK warning) are read off the body only for soak-era -pending tags
 // whose Soak-Seconds and Soak-Forced trailers wrote them there; the
 // qualification-driven train writes "Qualification: PASS" instead, so
-// both are null on new notifications.
+// both are null on new notifications. breaking is read off the BREAKING
+// CHANGES warning, the train's staged notice / promotion_blocked= output,
+// or a structured breaking field when the release carries breaking changes
+// outside the major release RELEASE_MAJOR asks for.
 //
-// breaking is set when the release notes or body report breaking changes
-// outside a major bump (so approving needs allow_breaking).
 // dispatchFailure is set when a previous promote-release.yml dispatch
-// failed (orchestrator's checkPromoteReleaseFailure).
+// failed (orchestrator's checkPromoteReleaseFailure): the run, its
+// refusal and, for a missing or wrong GRAIN_RELEASE_APPROVAL_KEY, what to
+// set it to.
 export function pendingReleaseOf(n) {
   const family = n?.family || (n?.subject || "").split(":")[0];
   if (family !== PENDING_RELEASE_FAMILY) return null;
@@ -155,19 +169,17 @@ export function pendingReleaseOf(n) {
       .find((l) => l.startsWith("Soak: "))
       ?.match(/soaked \d+h\d{2}m of \d+h(?: \(FORCE=true\))?/)?.[0] || null;
   const shortSoak = lines.find((l) => l.startsWith("SHORT SOAK:")) || null;
-  const breakingLine =
+  const breaking =
     lines.find(
       (l) =>
-        /^#{1,3}\s+Breaking changes\b/i.test(l) ||
-        l.startsWith("BREAKING:") ||
-        l.startsWith("BREAKING CHANGE:") ||
-        /carries breaking changes|RELEASE_ALLOW_BREAKING/i.test(l),
-    ) || null;
-  const breaking = breakingLine
-    ? /^#{1,3}\s+Breaking changes\b/i.test(breakingLine)
+        l.startsWith("BREAKING CHANGES:") ||
+        (/carries breaking changes\b/.test(l) &&
+          /is not the major release RELEASE_MAJOR asks for/.test(l)),
+    ) ||
+    (n.breaking ? String(n.breaking) : null) ||
+    (lines.some((l) => /^#{1,3}\s+Breaking changes\b/i.test(l))
       ? "Release notes list breaking changes; approving needs allow_breaking."
-      : breakingLine
-    : null;
+      : null);
   const dispatchMatch = lines
     .find((l) => l.startsWith("DISPATCH FAILED ("))
     ?.match(/^DISPATCH FAILED \(([^)]+)\):\s*(.+)$/);
@@ -199,54 +211,61 @@ export function pendingReleaseOf(n) {
   };
 }
 
+function breakingDetail(release) {
+  const raw = String(release.breaking || "")
+    .replace(
+      /^(?:BREAKING CHANGES:\s*|promotion_blocked=\s*|Promotion-Blocked:\s*)/i,
+      "",
+    )
+    .replace(/;\s*approving it needs allow_breaking:\s*true\.?$/i, "")
+    .replace(/;\s*staging\s+v\d+\.\d+\.\d+-pending.*$/i, "")
+    .replace(/^.*?\bthe train does not release it itself:\s*/i, "")
+    .replace(/\.$/, "")
+    .trim();
+  if (!raw || raw === "true") {
+    return "It carries breaking changes and is not the major release RELEASE_MAJOR asks for";
+  }
+  return raw.startsWith("it ") ? `It ${raw.slice(3)}` : raw;
+}
+
 // decideRelease approves (or rejects) a pending release, after asking:
 // approving makes it official -- vX.Y.Z tagged, `latest` moved -- and
 // rejecting drops its release candidate. The daemon refuses anybody but
-// a person. short_soak_ok accepts a soak under the minimum and
-// allow_breaking accepts breaking changes outside a RELEASE_MAJOR bump.
-// Resolves to false when the person thought better of it.
+// a person. A soak-era release whose soak was short is approved with
+// short_soak_ok, and a release carrying breaking changes outside a
+// RELEASE_MAJOR major bump is approved with allow_breaking, each only
+// after a question that says so: without them the approve job refuses the
+// release. Resolves to false when the person thought better of it.
+//
+// options.shortSoakOk and options.allowBreaking, when given, override
+// what the notification implies: the Inbox's own checkboxes.
 export async function decideRelease(release, approve, options = {}) {
   const shortSoakOk =
-    approve &&
-    Boolean(
-      options.shortSoakOk !== undefined
-        ? options.shortSoakOk
-        : release.shortSoak,
-    );
+    approve && Boolean(options.shortSoakOk ?? release.shortSoak);
   const allowBreaking =
-    approve &&
-    Boolean(
-      options.allowBreaking !== undefined
-        ? options.allowBreaking
-        : release.breaking,
-    );
-  let question;
-  if (!approve) {
-    question = `Reject ${release.version}? Its release candidate is dropped, and the next release train run cuts the next one.`;
-  } else if (shortSoakOk && allowBreaking) {
-    question =
-      `Approve ${release.version} on a SHORT SOAK with BREAKING CHANGES? ` +
-      `It ${release.soak || "has no recorded soak"}, under the minimum, and carries breaking changes. ` +
-      `This sends short_soak_ok and allow_breaking, tags ${release.version}, moves latest onto it and publishes its images.`;
-  } else if (shortSoakOk) {
-    question =
-      `Approve ${release.version} on a SHORT SOAK? It ${release.soak || "has no recorded soak"}, under the minimum. ` +
-      `This accepts the short soak (short_soak_ok), tags ${release.version}, moves latest onto it and publishes its images.`;
-  } else if (allowBreaking) {
-    question =
-      `Approve ${release.version} with BREAKING CHANGES (allow_breaking)? ` +
-      `This overrides the breaking-change gate, tags ${release.version}, moves latest onto it and publishes its images.`;
-  } else {
-    question = `Approve ${release.version}? This tags ${release.version}, moves latest onto it and publishes its images.`;
-  }
+    approve && Boolean(options.allowBreaking ?? release.breaking);
+  const question = !approve
+    ? `Reject ${release.version}? Its release candidate is dropped, and the next release train run cuts the next one.`
+    : shortSoakOk && allowBreaking
+      ? `Approve ${release.version} on a SHORT SOAK and with BREAKING changes outside a major release? ` +
+        `It ${release.soak || "has no recorded soak"}, under the minimum. ${breakingDetail(release)}. ` +
+        `This accepts both (short_soak_ok, allow_breaking), tags ${release.version}, moves latest onto it and publishes its images.`
+      : allowBreaking
+        ? `Approve ${release.version} with BREAKING changes outside a major release? ${breakingDetail(release)}. ` +
+          `This accepts the breaking changes (allow_breaking), tags ${release.version}, moves latest onto it and publishes its images.`
+        : shortSoakOk
+          ? `Approve ${release.version} on a SHORT SOAK? It ${release.soak || "has no recorded soak"}, under the minimum. ` +
+            `This accepts the short soak (short_soak_ok), tags ${release.version}, moves latest onto it and publishes its images.`
+          : `Approve ${release.version}? This tags ${release.version}, moves latest onto it and publishes its images.`;
   if (!window.confirm(question)) return false;
-  const payload = {};
-  if (shortSoakOk) payload.short_soak_ok = true;
-  if (allowBreaking) payload.allow_breaking = true;
+  const answers = {
+    ...(shortSoakOk ? { short_soak_ok: true } : {}),
+    ...(allowBreaking ? { allow_breaking: true } : {}),
+  };
   await api(
     `${repoApiRoot(release.repo)}/pending-releases/${encodeURIComponent(release.version)}/${approve ? "approve" : "reject"}`,
-    Object.keys(payload).length > 0
-      ? { method: "POST", body: JSON.stringify(payload) }
+    Object.keys(answers).length > 0
+      ? { method: "POST", body: JSON.stringify(answers) }
       : { method: "POST" },
   );
   return true;

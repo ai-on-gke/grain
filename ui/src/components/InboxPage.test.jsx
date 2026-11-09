@@ -1809,7 +1809,9 @@ describe("InboxPage pending releases under Asked", () => {
     expect(allowBreaking).toBeChecked();
 
     vi.spyOn(window, "confirm").mockReturnValueOnce(true);
-    await user.click(within(item).getByRole("button", { name: "Approve" }));
+    await user.click(
+      within(item).getByRole("button", { name: "Approve breaking" }),
+    );
 
     await waitFor(() => {
       expect(api).toHaveBeenCalledWith(

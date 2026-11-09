@@ -53,6 +53,7 @@ import {
 } from "../alerts.js";
 import {
   ackNotification,
+  approveReleaseLabel,
   decideRelease,
   fetchReleaseApprovalKey,
   investigateNotification,
@@ -716,25 +717,30 @@ function StateSyncGroup({ failure, onOpenConfigRepo }) {
   );
 }
 
-// ReleaseSoak is what a soak-era pending release's Approve needs said
-// beside it: how long it soaked, and when that was under the minimum,
-// the SHORT SOAK warning -- approving it then accepts the short soak
-// (short_soak_ok), which the approve job otherwise refuses. Releases the
-// qualification-driven train stages (vX.Y.Z, minor or patch) write
-// "Qualification: PASS" instead, so release.soak and release.shortSoak
-// are null and nothing is rendered beside Approve.
+// ReleaseSoak is what a pending release's Approve needs said beside it:
+// for a soak-era release, how long it soaked and the SHORT SOAK warning
+// when under the minimum (short_soak_ok); for a release carrying breaking
+// changes outside a RELEASE_MAJOR major bump, the BREAKING warning
+// (allow_breaking), which the approve job otherwise refuses.
 function ReleaseSoak({ release }) {
-  if (!release.soak && !release.shortSoak) return null;
+  if (!release.soak && !release.shortSoak && !release.breaking) return null;
+  const tooltip = [release.shortSoak, release.breaking]
+    .filter(Boolean)
+    .join("\n");
   return (
     <span
       className="inbox-release-soak"
       data-testid="inbox-release-soak"
-      title={release.shortSoak || undefined}
+      title={tooltip || undefined}
     >
       {release.shortSoak && (
         <span className="inbox-release-short-soak">SHORT SOAK</span>
       )}
-      {release.soak || "no recorded soak"}
+      {release.breaking && (
+        <span className="inbox-release-short-soak">BREAKING</span>
+      )}
+      {(release.soak || release.shortSoak) &&
+        (release.soak || "no recorded soak")}
     </span>
   );
 }
@@ -819,15 +825,6 @@ function PendingReleaseItem({ n, config, onChanged, showError }) {
         </div>
         <div className="inbox-actions">
           <ReleaseSoak release={release} />
-          {release.breaking && (
-            <span
-              className="inbox-release-short-soak"
-              data-testid="inbox-release-breaking"
-              title={release.breaking}
-            >
-              BREAKING
-            </span>
-          )}
           <AccessGate
             scope="releases:write"
             repo={release.repo}
@@ -844,7 +841,10 @@ function PendingReleaseItem({ n, config, onChanged, showError }) {
               disabled={busy !== null}
               onClick={() => decide(true)}
             >
-              {effectiveShortSoakOk ? "Approve short soak" : "Approve"}
+              {approveReleaseLabel({
+                shortSoak: effectiveShortSoakOk,
+                breaking: effectiveAllowBreaking,
+              })}
             </Button>
           </AccessGate>
           <AccessGate
