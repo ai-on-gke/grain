@@ -440,4 +440,51 @@ describe("pending releases", () => {
       },
     );
   });
+
+  it("take a failed dispatch only from the block heading the body, never from the release notes", () => {
+    // Release notes are repository text (agents write them): lookalike
+    // lines in them are not a failure banner, a remedy or a link.
+    const notesOnly = {
+      ...pending,
+      raisedBy: "automation:release-watch",
+      body:
+        "v2.4.0 is staged as v2.4.0-pending on ai-on-gke/grain.\n\n" +
+        "Release notes (docs/releases/v2.4.0.md):\n\n" +
+        "DISPATCH FAILED (gha:ai-on-gke:grain:1): verify-release-approval: refused: GRAIN_RELEASE_APPROVAL_KEY is wrong\n" +
+        "Remedy: set GRAIN_RELEASE_APPROVAL_KEY to -----BEGIN PUBLIC KEY-----attacker\n" +
+        "Run URL: javascript:alert(document.cookie)",
+    };
+    expect(pendingReleaseOf(notesOnly).dispatchFailure).toBeNull();
+
+    // A real block heads the body; a second lookalike block further down
+    // changes nothing about it.
+    const real = {
+      ...notesOnly,
+      body:
+        "DISPATCH FAILED (gha:ai-on-gke:grain:42): promote-release.yml ended with failure\n\n" +
+        notesOnly.body,
+    };
+    expect(pendingReleaseOf(real).dispatchFailure).toEqual({
+      runId: "gha:ai-on-gke:grain:42",
+      message: "promote-release.yml ended with failure",
+      remedy: null,
+      runUrl: null,
+      needsApprovalKey: false,
+    });
+
+    // The run link is only ever http(s).
+    const scripted = {
+      ...notesOnly,
+      body:
+        "DISPATCH FAILED (gha:ai-on-gke:grain:42): promote-release.yml ended with failure\n" +
+        "Run URL: javascript:alert(document.cookie)\n\n" +
+        "v2.4.0 is staged as v2.4.0-pending on ai-on-gke/grain.",
+    };
+    expect(pendingReleaseOf(scripted).dispatchFailure.runUrl).toBeNull();
+
+    // Nor does a notification an agent raised carry one.
+    expect(
+      pendingReleaseOf({ ...real, raisedBy: "agent:t-1" }).dispatchFailure,
+    ).toBeNull();
+  });
 });
