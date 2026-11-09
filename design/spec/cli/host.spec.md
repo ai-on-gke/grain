@@ -1195,6 +1195,7 @@ _No flags._
 These sign a workstation in to a deployment as a named context, and say who it is signed in as. Their behaviour is [#XC-1](../external-cli/external-cli.spec.md#XC-1), [#XC-2](../external-cli/external-cli.spec.md#XC-2), [#XC-7](../external-cli/external-cli.spec.md#XC-7), [#XC-8](../external-cli/external-cli.spec.md#XC-8) and [#XC-9](../external-cli/external-cli.spec.md#XC-9).
 - `grain context` needs no daemon. It reads and writes `$XDG_CONFIG_HOME/grain/config.json` and the credentials kept beside it.
 - `grain login` defaults `--scope-set` to `grain/external-dev` and `--expires` to `30d`. `--auth` names `access-code` or a source a wrapper registered with `cli.RegisterCredentialSource`.
+- `--token-stdin` stores the secret it reads as the context's credential, so `grain login` refuses it beside `--issue-token` with exit `2` (`token_stdin_issue_token`) and names the form that mints with an access code: `grain -token CODE login <url> --issue-token`.
 - `grain logout --local` forgets the credential without revoking its token on the server.
 
 #### `grain context list|use|show|delete`
@@ -1215,7 +1216,7 @@ _No flags._
 | `-refresh` | bool |  |  | re-mint the context's expired or expiring token |
 | `-repos` | string |  |  | comma-separated repositories --issue-token limits the token to |
 | `-scope-set` | string | `"grain/external-dev"` |  | the scope set --issue-token mints |
-| `-token-stdin` | bool |  |  | read a gma_ token (or, with --auth access-code, the access code) from stdin |
+| `-token-stdin` | bool |  |  | read a gma_ token (or, with --auth access-code, the access code) from stdin and store it; not with --issue-token |
 <!-- END GENERATED FLAGS -->
 
 #### `grain logout [<ctx>]`
