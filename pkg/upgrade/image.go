@@ -46,8 +46,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/registryauth"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
+	"github.com/ai-on-gke/grain/pkg/registryauth"
 )
 
 // ImageConfig, set on Config.Image, makes an Upgrader upgrade a

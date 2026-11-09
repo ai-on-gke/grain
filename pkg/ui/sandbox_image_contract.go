@@ -25,8 +25,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/registryauth"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/registryauth"
 	"github.com/ai-on-gke/grain/pkg/sandboximage"
 )
 
