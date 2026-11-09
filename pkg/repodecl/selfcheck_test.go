@@ -34,7 +34,9 @@ package repodecl_test
 // because the branch is chosen when the suite is run.
 
 import (
+	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -247,5 +249,239 @@ func TestTheMainUISmokeSuiteRunsCoreWalkthroughTemplates(t *testing.T) {
 	}
 	if suite.RequireApproval || !suite.AutoMerge {
 		t.Errorf("%s: require-approval %v, auto-merge %v", stem, suite.RequireApproval, suite.AutoMerge)
+	}
+}
+
+// A schedule with `overlap: skip` (the default) holds every future firing
+// while its previous task remains open (`model.SuppressedByOpenTask`, with no
+// expiry). On a task that pushes no branch, finishing with `comment_on_issue`
+// (or a prose "closing note") sets CompletedAt without ClosedAt, which
+// `model.AwaitsAck` derives as `awaiting_reply` -- stalling the schedule until
+// a person notices and closes the task (tasks 3711, 3812, 3814).
+func TestOverlapSkipScheduleTemplatesDoNotEndInAwaitingReply(t *testing.T) {
+	declared := loadRepo(t)
+	checked, problems := lintOverlapSkipScheduleTemplates(declared)
+	if checked == 0 {
+		t.Fatal("checked 0 overlap: skip template schedules; expected at least release-train and release-watchdog")
+	}
+	for _, p := range problems {
+		t.Error(p)
+	}
+}
+
+func TestOverlapSkipScheduleTemplateLintCatchesAwaitingReplyPaths(t *testing.T) {
+	tmplID := model.RepoDeclaredID(model.DeclaredTemplate, repo, "tick")
+	makeDecl := func(overlap model.OverlapPolicy, tmpl model.Template) model.RepoDeclarations {
+		tmpl.ID = tmplID
+		return model.RepoDeclarations{
+			Templates: []model.DeclaredTemplateFile{
+				{Path: ".grain/templates/tick.yml", Template: tmpl},
+			},
+			Schedules: []model.DeclaredScheduleFile{
+				{
+					Path: ".grain/schedules/tick.yml",
+					Schedule: model.Schedule{
+						Overlap:    overlap,
+						TemplateID: &tmplID,
+					},
+				},
+			},
+		}
+	}
+
+	clean := model.Template{
+		NothingNeededAction: model.NothingNeededClose,
+		Body: "Run the check.\n" +
+			"- `TICK_RESULT=noop`: call `nothing_needed` with the reason (never `comment_on_issue`).\n" +
+			"- `TICK_RESULT=acted`: call `nothing_needed` with what changed.\n",
+	}
+	if _, problems := lintOverlapSkipScheduleTemplates(makeDecl(model.OverlapSkip, clean)); len(problems) != 0 {
+		t.Fatalf("clean template reported problems: %v", problems)
+	}
+
+	cases := []struct {
+		name string
+		decl model.RepoDeclarations
+		want string
+	}{
+		{
+			name: "nothing-needed ack",
+			decl: makeDecl(model.OverlapSkip, model.Template{
+				NothingNeededAction: model.NothingNeededAck,
+				Body:                "If clean, call `nothing_needed`.",
+			}),
+			want: "nothing-needed",
+		},
+		{
+			name: "interactive template",
+			decl: makeDecl(model.OverlapSkip, model.Template{
+				Interactive: true,
+				Body:        "If clean, call `nothing_needed`.",
+			}),
+			want: "interactive",
+		},
+		{
+			name: "missing nothing_needed",
+			decl: makeDecl(model.OverlapSkip, model.Template{
+				Body: "Inspect main and push any fixes.",
+			}),
+			want: "nothing_needed",
+		},
+		{
+			name: "acted calls comment_on_issue",
+			decl: makeDecl(model.OverlapSkip, model.Template{
+				Body: "- `RELEASE_TRAIN_RESULT=noop`: call `nothing_needed`.\n" +
+					"- `RELEASE_TRAIN_RESULT=acted`: call `comment_on_issue` with what it did.\n",
+			}),
+			want: "comment_on_issue",
+		},
+		{
+			name: "healthy leaves closing note",
+			decl: makeDecl(model.OverlapSkip, model.Template{
+				Body: "If fixes apply, push a PR; if healthy, leave a closing note confirming health or call `nothing_needed`.",
+			}),
+			want: "closing note",
+		},
+		{
+			name: "negation in previous sentence does not excuse comment_on_issue",
+			decl: makeDecl(model.OverlapSkip, model.Template{
+				Body: "Do not investigate further. Call `comment_on_issue` with the summary, or `nothing_needed`.",
+			}),
+			want: "comment_on_issue",
+		},
+		{
+			name: "result bullet omits nothing_needed",
+			decl: makeDecl(model.OverlapSkip, model.Template{
+				Body: "- `TICK_RESULT=noop`: call `nothing_needed`.\n" +
+					"- `TICK_RESULT=acted`: summarize the output.\n",
+			}),
+			want: "TICK_RESULT=acted",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, problems := lintOverlapSkipScheduleTemplates(tc.decl)
+			if len(problems) == 0 {
+				t.Fatalf("expected lint problem containing %q, got none", tc.want)
+			}
+			joined := strings.Join(problems, "\n")
+			if !strings.Contains(joined, tc.want) {
+				t.Errorf("problems = %q, want substring %q", joined, tc.want)
+			}
+		})
+	}
+
+	// An `overlap: allow` schedule never holds on an open task, so a
+	// report-only `comment_on_issue` template is allowed there.
+	allow := makeDecl(model.OverlapAllow, model.Template{
+		Body: "Post the report with `comment_on_issue`.",
+	})
+	if _, problems := lintOverlapSkipScheduleTemplates(allow); len(problems) != 0 {
+		t.Errorf("overlap: allow schedule reported problems: %v", problems)
+	}
+}
+
+var resultBulletRe = regexp.MustCompile("(?m)^[ \t]*-[ \t]+`([A-Z0-9_]+=[a-z0-9_-]+)`:(.*)$")
+
+func lintOverlapSkipScheduleTemplates(declared model.RepoDeclarations) (int, []string) {
+	byID := make(map[string]model.DeclaredTemplateFile, len(declared.Templates))
+	for _, f := range declared.Templates {
+		byID[f.Template.ID] = f
+	}
+
+	var checked int
+	var problems []string
+	for _, sf := range declared.Schedules {
+		if sf.Schedule.Overlap.Allows() || sf.Schedule.TemplateID == nil {
+			continue
+		}
+		tf, ok := byID[*sf.Schedule.TemplateID]
+		if !ok {
+			continue
+		}
+		checked++
+		tmpl := tf.Template
+		prefix := fmt.Sprintf("%s -> %s", sf.Path, tf.Path)
+
+		if tmpl.NothingNeededAction.Resolved() != model.NothingNeededClose {
+			problems = append(problems, fmt.Sprintf(
+				"%s: nothing-needed resolves to %q, want %q so a branchless finish closes the task and frees the overlap: skip schedule",
+				prefix, tmpl.NothingNeededAction.Resolved(), model.NothingNeededClose))
+		}
+		if tmpl.Interactive {
+			problems = append(problems, fmt.Sprintf(
+				"%s: interactive: true parks in awaiting_reply and holds the overlap: skip schedule", prefix))
+		}
+		if !strings.Contains(tmpl.Body, "nothing_needed") {
+			problems = append(problems, fmt.Sprintf(
+				"%s: body never names `nothing_needed`; an overlap: skip template must close branchless/no-op runs with `nothing_needed` rather than leaving them in awaiting_reply",
+				prefix))
+		}
+		for _, phrase := range []string{"comment_on_issue", "closing note"} {
+			if snippet, bad := findUnnegatedPhrase(tmpl.Body, phrase); bad {
+				problems = append(problems, fmt.Sprintf(
+					"%s: body instructs %q (%q), which leaves a branchless task in awaiting_reply and stalls the overlap: skip schedule; use `nothing_needed` (and `grain notify` when a person must see it)",
+					prefix, phrase, snippet))
+			}
+		}
+		// When a template dispatches on explicit `- \`VAR=outcome\`:` bullets
+		// (such as RELEASE_TRAIN_RESULT=noop|acted|failed), every outcome
+		// bullet must itself finish with `nothing_needed`.
+		bullets := resultBulletRe.FindAllStringSubmatchIndex(tmpl.Body, -1)
+		for i, loc := range bullets {
+			end := len(tmpl.Body)
+			if i+1 < len(bullets) {
+				end = bullets[i+1][0]
+			} else if para := strings.Index(tmpl.Body[loc[1]:], "\n\n"); para >= 0 {
+				end = loc[1] + para
+			}
+			label := tmpl.Body[loc[2]:loc[3]]
+			section := tmpl.Body[loc[0]:end]
+			if !strings.Contains(section, "nothing_needed") {
+				problems = append(problems, fmt.Sprintf(
+					"%s: outcome bullet %q does not finish with `nothing_needed`", prefix, label))
+			}
+		}
+	}
+	return checked, problems
+}
+
+// findUnnegatedPhrase reports the first occurrence of phrase (case-insensitive)
+// in body that is not immediately preceded in the same clause by a negation
+// ("never", "not", "don't").
+func findUnnegatedPhrase(body, phrase string) (string, bool) {
+	norm := strings.Join(strings.Fields(body), " ")
+	lower := strings.ToLower(norm)
+	target := strings.ToLower(phrase)
+
+	offset := 0
+	for {
+		idx := strings.Index(lower[offset:], target)
+		if idx < 0 {
+			return "", false
+		}
+		pos := offset + idx
+		windowStart := pos - 48
+		if windowStart < 0 {
+			windowStart = 0
+		}
+		before := lower[windowStart:pos]
+		// Stop at sentence or clause boundaries so a negation in an earlier
+		// sentence ("Do not investigate further. Call comment_on_issue...")
+		// never excuses a positive instruction in the next one.
+		if cut := strings.LastIndexAny(before, ".;:!?"); cut >= 0 {
+			before = before[cut+1:]
+		}
+		negated := strings.Contains(before, "never ") ||
+			strings.Contains(before, "not ") ||
+			strings.Contains(before, "don't ")
+		if !negated {
+			snipEnd := pos + len(target) + 32
+			if snipEnd > len(norm) {
+				snipEnd = len(norm)
+			}
+			return strings.TrimSpace(norm[windowStart:snipEnd]), true
+		}
+		offset = pos + len(target)
 	}
 }

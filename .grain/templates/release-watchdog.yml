@@ -2,6 +2,7 @@ name: Release watchdog
 title: Verify latest base branch release status and health
 base: main
 auto-merge: true
+nothing-needed: close
 capabilities:
   - "api:ci-read@ai-on-gke/grain"
   - "api:self-debug"
@@ -132,6 +133,16 @@ body: |
 
   ## 4. Verify and report
 
-  - If everything is healthy and releases are up-to-date, leave a closing note confirming the pipeline health:
-    the newest release and rc, the rc's stage and age, and the flake retries and retractions you counted.
-  - If fixes were applied, commit with descriptive messages, push the branch, and wait for CI checks to pass.
+  - If fixes were applied on this task's branch, commit with descriptive
+    messages, push the branch, and wait for CI checks to pass (`grain pr open`
+    and `grain ci wait`).
+  - Otherwise (no branch pushed on this task -- whether everything is healthy
+    or faults were handled via `grain notify` and `propose_task`), close with
+    `nothing_needed` (never `comment_on_issue`, which parks a branchless task
+    in `awaiting_reply` and holds the 6-hour `overlap: skip` schedule) passing
+    the full pipeline health and triage summary as its `reason`: the newest
+    release and rc, the rc's stage and age, the flake retries and retractions
+    you counted, and any notifications raised or follow-up tasks proposed. If
+    a fault needs a person's direct action and no `pipeline.*` notification
+    already covers it, raise `grain notify --severity warning` before calling
+    `nothing_needed`.
