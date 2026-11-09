@@ -359,7 +359,10 @@ func (r *GCPInstanceResources) SecretPrefixForEntry(entryName string) (string, e
 // Provision idempotently creates and configures:
 //  1. Per-instance GCP Service Account (`<sa_prefix><slug>@<project>.iam.gserviceaccount.com`)
 //  2. Shared Cloud SQL placement, database (`grain_<slug>`), and `CLOUD_IAM_SERVICE_ACCOUNT` role
-//     with `NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS CONNECTION LIMIT 20` and `REVOKE ALL ON DATABASE ... FROM PUBLIC`
+//     with `NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS CONNECTION LIMIT 20` and `REVOKE ALL ON DATABASE ... FROM PUBLIC`.
+//     With `instance_sql.cloud_sql_admin: false` the role is a built-in password user instead: a fresh random
+//     password is written to Secret Manager as `<secret_prefix><name>-db-password` (returned as
+//     DatabasePasswordSecret) and never placed in the returned bundle, so it cannot reach GCE metadata.
 //  3. GCS Managed Folder `instances/<name>/` with `roles/storage.objectUser`
 //  4. Conditional project IAM bindings for Cloud SQL, Secret Manager (`<secret_prefix><name>-*`), and optional fleet logs.
 func (r *GCPInstanceResources) Provision(ctx context.Context, spec registry.InstanceResourceSpec) (*registry.InstanceResourceBundle, error) {
@@ -391,7 +394,7 @@ func (r *GCPInstanceResources) Provision(ctx context.Context, spec registry.Inst
 
 	// 2. Provision shared SQL user + database + PostgreSQL ACLs (`REVOKE ... FROM PUBLIC`, `CONNECTION LIMIT 20`).
 	iamUser := IAMUserForServiceAccount(saEmail)
-	var dbUser, dbPassword string
+	var dbUser, dbPassword, dbPasswordSecret string
 	if r.cloudSQLAdmin {
 		if err := r.ensureCloudSQLUserAndDB(ctx, sqlInstName, dbName, iamUser); err != nil {
 			return nil, err
@@ -403,6 +406,22 @@ func (r *GCPInstanceResources) Provision(ctx context.Context, spec registry.Inst
 		}
 		dbUser = iamUser
 		dbPassword = hex.EncodeToString(pwBytes[:])
+		// The password goes to Secret Manager under the instance's prefix,
+		// never into the bundle the VM's grain-config metadata is built
+		// from: instance metadata is readable by anyone holding
+		// compute.instances.get. Store it before the role's password is
+		// changed so a failed write leaves the running role untouched.
+		dbPasswordSecret, err = r.PutSecret(ctx, spec.Name, registry.DatabasePasswordSecretSuffix, []byte(dbPassword))
+		if err != nil {
+			return nil, fmt.Errorf("gcp resources: storing database password: %w", err)
+		}
+		if !r.bindProjectIAM {
+			// Without the project-level prefix bindings the VM's service
+			// account could not read the secret; grant it on the secret.
+			if err := r.grantSecretAccessor(ctx, dbPasswordSecret, saEmail); err != nil {
+				return nil, err
+			}
+		}
 	}
 	if err := r.provisionPostgresACLs(ctx, sqlInstName, dbName, iamUser, dbPassword); err != nil {
 		return nil, err
@@ -426,16 +445,16 @@ func (r *GCPInstanceResources) Provision(ctx context.Context, spec registry.Inst
 	}
 
 	return &registry.InstanceResourceBundle{
-		ServiceAccountEmail: saEmail,
-		SQLInstance:         sqlInstName,
-		SQLConnectionName:   sqlConnName,
-		SQLPrivateIP:        sqlPrivateIP,
-		DatabaseName:        dbName,
-		DatabaseUser:        dbUser,
-		DatabasePassword:    dbPassword,
-		SecretPrefix:        secPrefix,
-		GCSBucket:           r.gcsBucket,
-		GCSManagedFolder:    managedFolder,
+		ServiceAccountEmail:    saEmail,
+		SQLInstance:            sqlInstName,
+		SQLConnectionName:      sqlConnName,
+		SQLPrivateIP:           sqlPrivateIP,
+		DatabaseName:           dbName,
+		DatabaseUser:           dbUser,
+		DatabasePasswordSecret: dbPasswordSecret,
+		SecretPrefix:           secPrefix,
+		GCSBucket:              r.gcsBucket,
+		GCSManagedFolder:       managedFolder,
 	}, nil
 }
 
@@ -582,6 +601,33 @@ func (r *GCPInstanceResources) PutSecret(ctx context.Context, entryName, secretS
 		return "", fmt.Errorf("gcp secretmanager: adding version to %s: %w", secretID, err)
 	}
 	return fullSecretName, nil
+}
+
+// grantSecretAccessor sets `secretName`'s own IAM policy so `saEmail` holds
+// roles/secretmanager.secretAccessor on it. It is used when
+// `compute.bind_project_iam: false` leaves the instance's service account
+// without the project-level Secret Manager prefix bindings. The secret is
+// registry-owned and per-instance, so its policy names only that account.
+func (r *GCPInstanceResources) grantSecretAccessor(ctx context.Context, secretName, saEmail string) error {
+	wantPrefix := fmt.Sprintf("projects/%s/secrets/%s", r.secretsProject, r.secretPrefix)
+	if !strings.HasPrefix(secretName, wantPrefix) {
+		return fmt.Errorf("%w: secret %q is outside %q", ErrOutOfScope, secretName, wantPrefix)
+	}
+	secretID := strings.TrimPrefix(secretName, fmt.Sprintf("projects/%s/secrets/", r.secretsProject))
+	setURL := fmt.Sprintf("%s/v1/projects/%s/secrets/%s:setIamPolicy",
+		r.secretBaseURL, url.PathEscape(r.secretsProject), url.PathEscape(secretID))
+	body := map[string]any{
+		"policy": map[string]any{
+			"bindings": []map[string]any{{
+				"role":    "roles/secretmanager.secretAccessor",
+				"members": []string{"serviceAccount:" + saEmail},
+			}},
+		},
+	}
+	if err := r.doJSONRequest(ctx, http.MethodPost, setURL, body, nil); err != nil {
+		return fmt.Errorf("gcp secretmanager: granting %s access to %s: %w", saEmail, secretID, err)
+	}
+	return nil
 }
 
 // GrantSSH grants time-bounded break-glass OS Login and IAP tunnel access (`roles/compute.osAdminLogin`,
