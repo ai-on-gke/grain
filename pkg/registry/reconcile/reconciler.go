@@ -442,10 +442,17 @@ func (r *Reconciler) reconcileCreatingEntry(ctx context.Context, entry *store.En
 		if r.createRetryPending(entry.ID) {
 			return nil
 		}
-		bundle, configRepoURL, err := r.provisionEntryResources(ctx, entry)
-		if err != nil {
-			r.failEntry(ctx, entry, fmt.Sprintf("provisioning instance resources failed: %v", err))
-			return err
+		// A retry while the service account propagates reuses what the first attempt
+		// provisioned: provisioning again would generate a new database password, add
+		// another Secret Manager version and rotate the role for every attempt.
+		bundle, configRepoURL, provisioned := r.createRetryResources(entry.ID)
+		if !provisioned {
+			var err error
+			bundle, configRepoURL, err = r.provisionEntryResources(ctx, entry)
+			if err != nil {
+				r.failEntry(ctx, entry, fmt.Sprintf("provisioning instance resources failed: %v", err))
+				return err
+			}
 		}
 
 		if configRepoURL != "" && configRepoURL != entry.ConfigRepo {
@@ -462,7 +469,7 @@ func (r *Reconciler) reconcileCreatingEntry(ctx context.Context, entry *store.En
 		handle, err := r.createVMForEntry(ctx, entry, bundle, configRepoURL)
 		if err != nil {
 			if errors.Is(err, registry.ErrServiceAccountNotReady) {
-				if wait, attempt, ok := r.scheduleCreateRetry(entry.ID); ok {
+				if wait, attempt, ok := r.scheduleCreateRetry(entry.ID, bundle, configRepoURL); ok {
 					r.noteCreatingReason(ctx, entry, fmt.Sprintf(
 						"waiting for service account %s, and the registry's permission to attach it, to propagate before creating the GCE instance (attempt %d failed, retrying in %s): %v",
 						bundle.ServiceAccountEmail, attempt, wait, err))
@@ -1599,6 +1606,23 @@ type createRetry struct {
 	first    time.Time
 	attempts int
 	next     time.Time
+
+	// bundle and configRepoURL are what the first attempt provisioned; later attempts
+	// only retry the VM creation.
+	bundle        *registry.InstanceResourceBundle
+	configRepoURL string
+}
+
+// createRetryResources returns the resources provisioned by the first attempt of a VM
+// creation that is being retried, if any.
+func (r *Reconciler) createRetryResources(entryID string) (*registry.InstanceResourceBundle, string, bool) {
+	r.createRetryMu.Lock()
+	defer r.createRetryMu.Unlock()
+	cr := r.createRetries[entryID]
+	if cr == nil || cr.bundle == nil {
+		return nil, "", false
+	}
+	return cr.bundle, cr.configRepoURL, true
 }
 
 // createRetryPending reports whether entryID is backing off and its next attempt is not due yet.
@@ -1613,13 +1637,13 @@ func (r *Reconciler) createRetryPending(entryID string) bool {
 // exponential backoff (5s, 10s, 20s, then every 30s). It returns ok=false once the
 // propagation window has elapsed since the first failure; the last attempt is scheduled at
 // the end of the window so the full window is used.
-func (r *Reconciler) scheduleCreateRetry(entryID string) (wait time.Duration, attempt int, ok bool) {
+func (r *Reconciler) scheduleCreateRetry(entryID string, bundle *registry.InstanceResourceBundle, configRepoURL string) (wait time.Duration, attempt int, ok bool) {
 	r.createRetryMu.Lock()
 	defer r.createRetryMu.Unlock()
 	now := r.now()
 	cr := r.createRetries[entryID]
 	if cr == nil {
-		cr = &createRetry{first: now}
+		cr = &createRetry{first: now, bundle: bundle, configRepoURL: configRepoURL}
 		r.createRetries[entryID] = cr
 	}
 	cr.attempts++
