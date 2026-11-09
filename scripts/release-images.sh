@@ -1580,7 +1580,16 @@ rc_images() {
 # The registry digest $1 names, asked of the registry: an index's digest
 # for a multi-platform image, the manifest's for a single one.
 registry_digest() {
-  registry_env docker buildx imagetools inspect "$1" --format '{{.Manifest.Digest}}' 2>/dev/null
+  if docker buildx version >/dev/null 2>&1; then
+    registry_env docker buildx imagetools inspect "$1" --format '{{.Manifest.Digest}}' 2>/dev/null
+    return
+  fi
+  local repo short_repo
+  repo="$(repository_of "$1")"
+  short_repo="${repo#docker.io/}"
+  registry_env docker pull -q "$1" >/dev/null 2>&1 || true
+  docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$1" 2>/dev/null \
+    | awk -v repo="$repo" -v short="$short_repo" 'index($0, repo "@sha256:") == 1 || index($0, short "@sha256:") == 1 {sub(/^.*@/, ""); print; exit}'
 }
 
 # Derive the public half of $signing_key once so signed_with_our_key can
@@ -2090,7 +2099,17 @@ publish_release() {
     if [[ " ${stamped[*]} " == *" $image "* ]]; then
       echo "release-images.sh: $root/$image:$promote_tag already reports $stamp; nothing to rebuild"
     elif [ "$image" = registry ] && [ "$promote_takes_hub" = true ]; then
-      retag_image "$root/hub:$promote_tag" "$root/$image:$promote_tag"
+      # Cosign signatures live per OCI repository, so a bare cross-repo
+      # retag from grainai/hub to grainai/registry leaves registry:$promote_tag
+      # (and the moving and sha- tags pointed at it below) unsigned. Copy by
+      # verified digest and sign in grainai/registry too when a signing key is
+      # configured; without one, retag and emit sign_image's standard warning.
+      if [ -r "$signing_key" ]; then
+        copy_by_digest "$root/hub:$promote_tag" "$root/$image:$promote_tag" || return 1
+      else
+        retag_image "$root/hub:$promote_tag" "$root/$image:$promote_tag" || return 1
+        sign_image "$root/$image:$promote_tag" || return 1
+      fi
     elif [ "$image" = hub ] || [ "$image" = registry ]; then
       rebuild_release_hub "$root/$image:sha-$promoted_short" "$root/$image:$promote_tag" "$main"
     else

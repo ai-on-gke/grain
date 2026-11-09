@@ -58,6 +58,46 @@ func HubAssertion(h http.Header) string {
 	return strings.TrimSpace(h.Get(RegistryAssertionHeader))
 }
 
+// hubAssertionToken extracts the single unambiguous assertion JWT from h.
+// During a rolling upgrade a pre-rename grain-registry strips only
+// X-Grain-Registry-Assertion and sets only X-Grain-Registry-Assertion, while a
+// post-rename grain-hub strips both and sets both headers to the identical JWT.
+// If both headers are non-empty with different values (or either carries
+// multiple distinct values), a caller smuggled X-Grain-Hub-Assertion past an
+// un-upgraded proxy; fail closed rather than trusting the smuggled header.
+func hubAssertionToken(h http.Header) (string, error) {
+	hubVal, err := singleAssertionValue(h, HubAssertionHeader)
+	if err != nil {
+		return "", err
+	}
+	regVal, err := singleAssertionValue(h, RegistryAssertionHeader)
+	if err != nil {
+		return "", err
+	}
+	if hubVal != "" && regVal != "" && hubVal != regVal {
+		return "", fmt.Errorf("conflicting %s and %s headers", HubAssertionHeader, RegistryAssertionHeader)
+	}
+	if hubVal != "" {
+		return hubVal, nil
+	}
+	return regVal, nil
+}
+
+func singleAssertionValue(h http.Header, name string) (string, error) {
+	var found string
+	for _, raw := range h.Values(name) {
+		v := strings.TrimSpace(raw)
+		if v == "" {
+			continue
+		}
+		if found != "" && found != v {
+			return "", fmt.Errorf("multiple %s headers with differing values", name)
+		}
+		found = v
+	}
+	return found, nil
+}
+
 const (
 	registryKeysTTL          = time.Hour
 	registryKeysRefetchFloor = time.Minute
@@ -704,7 +744,10 @@ func (v *RegistryVerifier) VerifyRequest(r *http.Request) (VerifiedIdentity, boo
 	if r == nil {
 		return VerifiedIdentity{}, false, nil
 	}
-	tokenStr := HubAssertion(r.Header)
+	tokenStr, err := hubAssertionToken(r.Header)
+	if err != nil {
+		return VerifiedIdentity{}, false, err
+	}
 	if tokenStr == "" {
 		return VerifiedIdentity{}, false, nil
 	}

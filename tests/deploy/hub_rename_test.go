@@ -15,6 +15,7 @@
 package deploy
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -34,8 +35,8 @@ var hubReleaseFiles = map[string]string{
 }
 
 // A promotion of a release cut since the rename rebuilds hub from its own
-// Dockerfile.hub and ./cmd/grain-hub, and publishes the same image under
-// registry too.
+// Dockerfile.hub and ./cmd/grain-hub, publishes and signs that same image
+// under registry too, and only then moves latest and sha- tags onto both.
 func TestPromoteOfAReleaseSinceTheHubRenamePublishesHubAndRegistry(t *testing.T) {
 	remote, commits := releaseRepoWithFiles(t, postSplitDockerfile, true, hubReleaseFiles)
 	short := commits["released"][:7]
@@ -50,6 +51,51 @@ func TestPromoteOfAReleaseSinceTheHubRenamePublishesHubAndRegistry(t *testing.T)
 	if docker != "" {
 		t.Errorf("a dry run asked docker for something:\n%s", docker)
 	}
+
+	// Unsigned promote (no signing key): rebuilds hub:v1.5.0 from Dockerfile.hub,
+	// retags registry:v1.5.0 from hub:v1.5.0, warns both are unsigned, and moves
+	// latest and sha-<short> for both.
+	out, docker, err = promoteRun(t, remote, []string{"promote"}, publishEnv(stubAnswers(t, short, "", "v1.5.0")))
+	if err != nil {
+		t.Fatalf("promote failed: %v\n%s\ndocker was asked:\n%s", err, out, docker)
+	}
+	containsRun(t, docker, "--build-arg MAIN_GRAIN_HUB=./cmd/grain-hub ")
+	containsRun(t, docker, "--build-arg RELEASE=v1.5.0 --label org.opencontainers.image.version=v1.5.0 -t docker.io/grainai/hub:v1.5.0 -f Dockerfile.hub .")
+	containsRun(t, docker, "push docker.io/grainai/hub:v1.5.0")
+	containsRun(t, docker, "buildx imagetools create --tag docker.io/grainai/registry:v1.5.0 docker.io/grainai/hub:v1.5.0")
+	containsRun(t, out, "docker.io/grainai/hub:v1.5.0 is published unsigned")
+	containsRun(t, out, "docker.io/grainai/registry:v1.5.0 is published unsigned")
+	for _, moving := range []string{
+		"buildx imagetools create --tag docker.io/grainai/hub:latest docker.io/grainai/hub:v1.5.0",
+		"buildx imagetools create --tag docker.io/grainai/hub:sha-" + short + " docker.io/grainai/hub:v1.5.0",
+		"buildx imagetools create --tag docker.io/grainai/registry:latest docker.io/grainai/registry:v1.5.0",
+		"buildx imagetools create --tag docker.io/grainai/registry:sha-" + short + " docker.io/grainai/registry:v1.5.0",
+	} {
+		containsRun(t, docker, moving)
+	}
+
+	// Signed promote (signing key present): cosign signatures live per OCI
+	// repository, so grainai/registry:v1.5.0 must be copied by verified digest
+	// and signed in grainai/registry as well as grainai/hub before moving tags.
+	answers := stubAnswers(t, short, "", "v1.5.0")
+	prependAnswer(t, answers,
+		`"buildx imagetools inspect docker.io/grainai/"*" --format {{.Manifest.Digest}}") echo sha256:cafe ;;`+"\n"+
+			`  "image inspect --format "*" docker.io/grainai/grain:v1.5.0") echo "docker.io/grainai/grain@sha256:aaaa" ;;`+"\n"+
+			`  "image inspect --format "*" docker.io/grainai/hub:v1.5.0") echo "docker.io/grainai/hub@sha256:cafe" ;;`)
+	signEnv, cosignLog := legacySigningEnv(t, answers, false)
+	out, docker, err = promoteRun(t, remote, []string{"promote"}, signEnv)
+	if err != nil {
+		t.Fatalf("signed promote failed: %v\n%s\ndocker was asked:\n%s", err, out, docker)
+	}
+	cosignAsked, _ := os.ReadFile(cosignLog)
+	for _, want := range []string{
+		"sign --yes --key " + signEnv["IMAGE_SIGNING_KEY"] + " --tlog-upload=false docker.io/grainai/grain@sha256:aaaa",
+		"sign --yes --key " + signEnv["IMAGE_SIGNING_KEY"] + " --tlog-upload=false docker.io/grainai/hub@sha256:cafe",
+		"sign --yes --key " + signEnv["IMAGE_SIGNING_KEY"] + " --tlog-upload=false docker.io/grainai/registry@sha256:cafe",
+	} {
+		containsRun(t, string(cosignAsked), want)
+	}
+	containsRun(t, docker, "buildx imagetools create --tag docker.io/grainai/registry:v1.5.0 docker.io/grainai/hub@sha256:cafe --prefer-index=false")
 }
 
 // Every merge's build tags the hub image under both names, and the push
