@@ -2114,13 +2114,23 @@ func TestTheReleaseNotesTemplateIsWhatTheTrainFiles(t *testing.T) {
 		t.Fatal("scripts/release-from-trunk.sh no longer files the release-notes template with version and previous_version; update this test with it")
 	}
 	var tmpl *model.Template
+	var tmplPush model.RefPushSet
 	for i, f := range decl.Templates {
 		if f.Path == ".grain/templates/release-notes.yml" {
 			tmpl = &decl.Templates[i].Template
+			tmplPush = f.Push
 		}
 	}
 	if tmpl == nil {
 		t.Fatal(".grain/templates/release-notes.yml is not among the declared templates")
+	}
+	if len(tmplPush) != 0 || len(tmpl.Grants) != 0 || len(tmpl.Reads) != 0 || len(tmpl.Writes) != 0 {
+		t.Errorf("release-notes template widens scope (push=%v, grants=%v, reads=%v, writes=%v); want none",
+			tmplPush, tmpl.Grants, tmpl.Reads, tmpl.Writes)
+	}
+	if tmpl.KeepRunning || tmpl.Interactive || model.NormalizeAdmission(tmpl.Admission) != model.AdmissionStandard {
+		t.Errorf("release-notes template sets elevated execution flags (keepRunning=%v, interactive=%v, admission=%q)",
+			tmpl.KeepRunning, tmpl.Interactive, tmpl.Admission)
 	}
 	if tmpl.ID != model.RepoDeclaredID(model.DeclaredTemplate, model.GrainSourceRepo(), "release-notes") {
 		t.Errorf("release-notes template id = %q; the train files it by the stem release-notes", tmpl.ID)

@@ -34,6 +34,7 @@ func resetReleaseNotesWatch(t *testing.T) {
 	clear := func() {
 		releaseNotesPolled.Range(func(k, _ any) bool { releaseNotesPolled.Delete(k); return true })
 		releaseNotesMerged.Range(func(k, _ any) bool { releaseNotesMerged.Delete(k); return true })
+		releaseNotesSeriesSettled.Range(func(k, _ any) bool { releaseNotesSeriesSettled.Delete(k); return true })
 	}
 	clear()
 	t.Cleanup(clear)
@@ -316,7 +317,7 @@ func TestManualOpenReleaseNotesTaskSuppressesDuplicateWhileRCTaskDoesNot(t *test
 			ID:        "rc-blocker-120",
 			Intent:    model.IntentImplement,
 			Title:     "[rc-blocker v1.2.0-rc.1] fix release notes test flake",
-			Body:      "Fix flaky test on v1.2.0-rc.1.",
+			Body:      "Fix flaky test on v1.2.0-rc.1 referencing docs/releases/v1.2.0.md.",
 			Target:    &target,
 			Base:      "main",
 			CreatedAt: &now,
@@ -409,5 +410,165 @@ func TestReleaseNotesRespectsRepoEligibilityAndPersonOnlyGrantGuard(t *testing.T
 	}
 	if tasks[0].Approval != nil {
 		t.Errorf("task with person-only grant landed approved (%+v), want unapproved", tasks[0].Approval)
+	}
+}
+
+func TestHistoricalPreNotesMinorSeriesIsNotBackfilledWhileHotfixPatchIsFiled(t *testing.T) {
+	resetReleaseNotesWatch(t)
+	ctx := context.Background()
+	store := openTestStoreForOrchestrator(t)
+	repo := model.RepoRef{Owner: "example", Name: "widgets"}
+
+	cfg := model.DefaultConfig()
+	cfg.TargetRepos = []string{repo.String()}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutTemplate(ctx, loadRepoReleaseNotesTemplate(t, repo)); err != nil {
+		t.Fatal(err)
+	}
+
+	forge := &fixtureForge{
+		repo: repo.String(),
+		tags: map[string]fixtureTag{
+			"v3.0.0": {commit: strings.Repeat("1", 40), message: "v3.0.0"},
+			"v3.0.1": {commit: strings.Repeat("2", 40), message: "v3.0.1"},
+			"v3.0.2": {commit: strings.Repeat("3", 40), message: "v3.0.2"},
+			"v3.1.0": {commit: strings.Repeat("4", 40), message: "Release v3.1.0"},
+			"v3.1.1": {commit: strings.Repeat("5", 40), message: "Release v3.1.1"},
+			"v3.2.0": {commit: strings.Repeat("6", 40), message: "Release v3.2.0"},
+		},
+		files: map[string]string{
+			"docs/releases/v3.1.0.md": "# v3.1.0\n",
+			"docs/releases/v3.1.1.md": "# v3.1.1\n",
+			"docs/releases/v3.2.0.md": "# v3.2.0\n",
+		},
+	}
+	deps := Deps{Store: store, Client: github.NewClient(forge, nil)}
+	now := time.Date(2026, 11, 9, 19, 0, 0, 0, time.UTC)
+
+	if err := reconcileReleaseNotes(ctx, deps, now); err != nil {
+		t.Fatalf("reconcileReleaseNotes: %v", err)
+	}
+	if tasks, err := store.ListTasks(ctx); err != nil || len(tasks) != 0 {
+		t.Fatalf("ListTasks = %d (%v), want 0 (pre-train v3.0.* tags must not backfill once v3.1/v3.2 are documented)", len(tasks), err)
+	}
+
+	// Steady-state poll with no new tags performs only the single ListMatchingTags read.
+	readsBefore := forge.reads
+	now = now.Add(releaseNotesPollInterval)
+	if err := reconcileReleaseNotes(ctx, deps, now); err != nil {
+		t.Fatalf("reconcileReleaseNotes (+10m steady): %v", err)
+	}
+	if got := forge.reads - readsBefore; got != 1 {
+		t.Errorf("steady-state forge reads = %d, want 1 (ListMatchingTags only)", got)
+	}
+
+	// A hotfix patch v3.1.2 on the already-documented 3.1 minor series still files a task from v3.1.1.
+	forge.setTag("v3.1.2", strings.Repeat("7", 40), "Release v3.1.2")
+	now = now.Add(releaseNotesPollInterval)
+	if err := reconcileReleaseNotes(ctx, deps, now); err != nil {
+		t.Fatalf("reconcileReleaseNotes (hotfix v3.1.2): %v", err)
+	}
+	tasks, err := store.ListTasks(ctx)
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("ListTasks after v3.1.2 hotfix = %d (%v), want 1", len(tasks), err)
+	}
+	if tasks[0].Title != "docs(releases): write the release notes for v3.1.2" {
+		t.Errorf("Title = %q, want v3.1.2 release-notes title", tasks[0].Title)
+	}
+	if !strings.Contains(tasks[0].Body, "v3.1.1") {
+		t.Errorf("hotfix Body missing previous_version v3.1.1:\n%s", tasks[0].Body)
+	}
+}
+
+func TestReleaseNotesHoldsCatalogueRequiresPersonAndEscalatedTemplateSettings(t *testing.T) {
+	resetReleaseNotesWatch(t)
+	ctx := context.Background()
+	store := openTestStoreForOrchestrator(t)
+
+	catPersonRepo := model.RepoRef{Owner: "example", Name: "catperson"}
+	catRefusedRepo := model.RepoRef{Owner: "example", Name: "catrefused"}
+	keepRunRepo := model.RepoRef{Owner: "example", Name: "keeprun"}
+	configReadRepo := model.RepoRef{Owner: "example", Name: "configread"}
+	highPrioRepo := model.RepoRef{Owner: "example", Name: "highprio"}
+
+	disabled := false
+	cfg := model.DefaultConfig()
+	cfg.TargetRepos = []string{
+		catPersonRepo.String(), catRefusedRepo.String(),
+		keepRunRepo.String(), configReadRepo.String(), highPrioRepo.String(),
+	}
+	cfg.CapabilityPolicy.Catalogue = &model.CapabilityCatalogue{
+		InProcess: map[string]model.CatalogueInProcess{
+			"github-sandbox": {Restrictions: &model.CapabilityRestrictions{RequiresPerson: true}},
+			"disabled-cap":   {Enabled: &disabled},
+			"default-off":    {Enabled: &disabled},
+		},
+	}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	tCatPerson := loadRepoReleaseNotesTemplate(t, catPersonRepo)
+	tCatPerson.Grants = []model.Grant{
+		{Capability: "github-sandbox", Via: "test"},
+		{Capability: "default-off", Via: model.GrantByDefault},
+	}
+
+	tCatRefused := loadRepoReleaseNotesTemplate(t, catRefusedRepo)
+	tCatRefused.Grants = []model.Grant{{Capability: "disabled-cap", Via: "test"}}
+
+	tKeepRun := loadRepoReleaseNotesTemplate(t, keepRunRepo)
+	tKeepRun.KeepRunning = true
+
+	tConfigRead := loadRepoReleaseNotesTemplate(t, configReadRepo)
+	tConfigRead.Reads = []model.RepoRef{model.ConfigRepo()}
+
+	highPrio := model.DefaultTaskPriority + 1
+	tHighPrio := loadRepoReleaseNotesTemplate(t, highPrioRepo)
+	tHighPrio.Priority = &highPrio
+
+	for _, tmpl := range []model.Template{tCatPerson, tCatRefused, tKeepRun, tConfigRead, tHighPrio} {
+		if err := store.PutTemplate(ctx, tmpl); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	forges := multiFixtureForge{}
+	for _, r := range []model.RepoRef{catPersonRepo, catRefusedRepo, keepRunRepo, configReadRepo, highPrioRepo} {
+		forges[r.String()] = &fixtureForge{
+			repo:  r.String(),
+			tags:  map[string]fixtureTag{"v1.0.0": {commit: strings.Repeat("9", 40)}},
+			files: map[string]string{},
+		}
+	}
+
+	now := time.Date(2026, 11, 9, 20, 0, 0, 0, time.UTC)
+	if err := reconcileReleaseNotes(ctx, Deps{Store: store, Client: github.NewClient(forges, nil)}, now); err != nil {
+		t.Fatalf("reconcileReleaseNotes: %v", err)
+	}
+
+	tasks, err := store.ListTasks(ctx)
+	if err != nil || len(tasks) != 5 {
+		t.Fatalf("ListTasks = %d (%v), want 5", len(tasks), err)
+	}
+	for _, tk := range tasks {
+		if tk.Approval != nil {
+			t.Errorf("task for %v landed approved (%+v), want unapproved for human review", tk.Target, tk.Approval)
+		}
+		if tk.Target != nil && tk.Target.Same(catPersonRepo) {
+			if !strings.Contains(tk.Body, "Filed for a person to approve") {
+				t.Errorf("catalogue requires_person task missing approval note:\n%s", tk.Body)
+			}
+			for _, g := range tk.Grants {
+				if g.Capability == "default-off" {
+					t.Errorf("refused GrantByDefault capability default-off was kept on task grants: %+v", tk.Grants)
+				}
+			}
+		}
+		if tk.Target != nil && tk.Target.Same(catRefusedRepo) && !strings.Contains(tk.Body, "settings/capabilities.yml refuses") {
+			t.Errorf("catalogue-refused task missing refusal note:\n%s", tk.Body)
+		}
 	}
 }
