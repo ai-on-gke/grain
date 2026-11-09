@@ -607,6 +607,9 @@ func (c *Config) ValidateWithResolver(resolver any) error {
 			if strings.TrimSpace(s.MachineType) == "" {
 				return fmt.Errorf("config: compute.shapes[%d] (%s) machine_type is required", i, s.Name)
 			}
+			if c.Compute.Provider == "gce" && isE2MachineType(s.MachineType) {
+				return fmt.Errorf("config: compute.shapes[%d] (%s) machine_type %q does not support nested virtualization, which hosted VMs need; use an N2 or C4 machine type (for example n2-standard-4 or c4-standard-4)", i, s.Name, s.MachineType)
+			}
 			if s.BootDiskGB <= 0 {
 				return fmt.Errorf("config: compute.shapes[%d] (%s) boot_disk_gb must be > 0", i, s.Name)
 			}
@@ -659,6 +662,17 @@ func (c *Config) ValidateWithResolver(resolver any) error {
 	}
 
 	return nil
+}
+
+// isE2MachineType reports whether a GCE machine type (bare, or a
+// "zones/<z>/machineTypes/<type>" path) is in the E2 series, which cannot run
+// nested virtualization.
+func isE2MachineType(machineType string) bool {
+	mt := strings.TrimSpace(machineType)
+	if idx := strings.LastIndex(mt, "/"); idx >= 0 {
+		mt = mt[idx+1:]
+	}
+	return strings.HasPrefix(mt, "e2-")
 }
 
 func normalizeUserOrGroupList(resolver any, field string, items []string) ([]string, error) {

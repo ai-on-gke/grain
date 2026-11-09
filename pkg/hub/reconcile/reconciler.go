@@ -1455,7 +1455,7 @@ func (r *Reconciler) resolveShape(ctx context.Context, shapeName string) hub.Sha
 	}
 	return hub.Shape{
 		Name:        "default",
-		MachineType: "e2-standard-4",
+		MachineType: "n2-standard-4",
 		BootDiskGB:  50,
 		QuotaUnits:  1,
 	}

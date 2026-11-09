@@ -46,14 +46,14 @@ const sampleShapes = {
     {
       name: "small",
       display_name: "Small (2 vCPU, 8 GB)",
-      machine_type: "e2-standard-2",
+      machine_type: "n2-standard-2",
       boot_disk_gb: 50,
       quota_units: 1,
     },
     {
       name: "medium",
       display_name: "Medium (4 vCPU, 16 GB)",
-      machine_type: "e2-standard-4",
+      machine_type: "n2-standard-4",
       boot_disk_gb: 100,
       quota_units: 2,
       default: true,

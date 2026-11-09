@@ -298,7 +298,7 @@ CREATE TABLE owners (
 -- VM shapes users may pick. Seeded from configuration on start (config wins).
 CREATE TABLE shapes (
   id              TEXT PRIMARY KEY,         -- "small", "standard", "large"
-  machine_type    TEXT NOT NULL,            -- "e2-standard-4"
+  machine_type    TEXT NOT NULL,            -- "n2-standard-4" (must support nested virtualization; never e2-*)
   boot_disk_gb    INT  NOT NULL,
   scratch_disk_gb INT  NOT NULL,            -- ephemeral local disk for sandboxes and caches
   disk_type       TEXT NOT NULL,            -- "pd-balanced"
@@ -1623,7 +1623,7 @@ config_repo:
   github_app_key_secret: projects/grain-registry/secrets/config-org-app-key/versions/latest
 
 shapes:
-  - {id: small,    machine_type: e2-standard-4,  boot_disk_gb: 30, scratch_disk_gb: 100, disk_type: pd-balanced, weight: 1, description: "4 vCPU, 16 GB"}
+  - {id: small,    machine_type: n2-standard-4,  boot_disk_gb: 30, scratch_disk_gb: 100, disk_type: pd-balanced, weight: 1, description: "4 vCPU, 16 GB"}
   - {id: standard, machine_type: n2-standard-8,  boot_disk_gb: 30, scratch_disk_gb: 200, disk_type: pd-balanced, weight: 2, description: "8 vCPU, 32 GB"}
   - {id: large,    machine_type: n2-standard-16, boot_disk_gb: 30, scratch_disk_gb: 500, disk_type: pd-ssd,      weight: 4, description: "16 vCPU, 64 GB"}
 

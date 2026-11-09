@@ -128,7 +128,7 @@ func newPasswordTestReconciler(t *testing.T, res hub.InstanceResources) (*Reconc
 	t.Helper()
 	st := newTestStore(t)
 	ctx := context.Background()
-	if err := st.SeedShapes(ctx, []store.ShapeRow{{Name: "medium", MachineType: "e2-standard-8", BootDiskGB: 100, QuotaUnits: 1}}); err != nil {
+	if err := st.SeedShapes(ctx, []store.ShapeRow{{Name: "medium", MachineType: "n2-standard-8", BootDiskGB: 100, QuotaUnits: 1}}); err != nil {
 		t.Fatalf("SeedShapes: %v", err)
 	}
 	if err := st.SeedSQLInstances(ctx, []store.SQLInstanceRow{

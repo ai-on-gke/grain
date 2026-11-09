@@ -1652,7 +1652,7 @@ func TestStopStartStatePagesAndAutoWakeOnVisit(t *testing.T) {
 	defer st.Close()
 
 	if err := st.SeedShapes(ctx, []store.ShapeRow{
-		{Name: "small", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
+		{Name: "small", MachineType: "n2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
 	}); err != nil {
 		t.Fatalf("SeedShapes: %v", err)
 	}

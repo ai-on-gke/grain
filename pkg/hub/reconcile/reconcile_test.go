@@ -420,7 +420,7 @@ func TestReconcilerCreatingReplacingDeletingPurgeAndPolling(t *testing.T) {
 	st.SetNow(func() time.Time { return now })
 
 	if err := st.SeedShapes(ctx, []store.ShapeRow{
-		{Name: "medium", MachineType: "e2-standard-8", BootDiskGB: 100, QuotaUnits: 1},
+		{Name: "medium", MachineType: "n2-standard-8", BootDiskGB: 100, QuotaUnits: 1},
 		{Name: "large", MachineType: "n2-standard-16", BootDiskGB: 200, QuotaUnits: 2},
 	}); err != nil {
 		t.Fatalf("SeedShapes: %v", err)
@@ -725,7 +725,7 @@ func TestReconcilerHealthTimeoutOrphansAndExpiredReplicas(t *testing.T) {
 	st.SetNow(func() time.Time { return now })
 
 	if err := st.SeedShapes(ctx, []store.ShapeRow{
-		{Name: "medium", MachineType: "e2-standard-8", BootDiskGB: 100, QuotaUnits: 1},
+		{Name: "medium", MachineType: "n2-standard-8", BootDiskGB: 100, QuotaUnits: 1},
 	}); err != nil {
 		t.Fatalf("SeedShapes: %v", err)
 	}
@@ -875,7 +875,7 @@ func TestReconcilerStopStartAutoWakeAndScheduledFleetUpgrades(t *testing.T) {
 	st.SetNow(func() time.Time { return now })
 
 	if err := st.SeedShapes(ctx, []store.ShapeRow{
-		{Name: "standard", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
+		{Name: "standard", MachineType: "n2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
 	}); err != nil {
 		t.Fatalf("SeedShapes: %v", err)
 	}

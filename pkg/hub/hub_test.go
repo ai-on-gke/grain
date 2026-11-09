@@ -96,7 +96,7 @@ compute:
   default_shape: standard
   shapes:
     - name: standard
-      machine_type: e2-standard-4
+      machine_type: n2-standard-4
       boot_disk_gb: 50
       quota_units: 1
 instance_sql:
@@ -160,6 +160,15 @@ func TestConfigValidationInvariants(t *testing.T) {
 		c.Tunnel.ReplicaTTL = 10 * time.Second
 		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "tunnel.replica_ttl") {
 			t.Fatalf("expected tunnel.replica_ttl error, got %v", err)
+		}
+	})
+
+	t.Run("e2 machine type rejected for gce", func(t *testing.T) {
+		c := *cfg
+		c.Compute.Shapes = []Shape{{Name: "standard", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1}}
+		err := c.Validate()
+		if err == nil || !strings.Contains(err.Error(), "nested virtualization") || !strings.Contains(err.Error(), "N2 or C4") {
+			t.Fatalf("expected e2 nested-virtualization error, got %v", err)
 		}
 	})
 
@@ -1159,7 +1168,7 @@ func TestStep12CatalogCRUDGroupAuthHeartbeatsDirectoryAndRouteEndToEnd(t *testin
 	st.SetNow(func() time.Time { return now })
 
 	if err := st.SeedShapes(ctx, []store.ShapeRow{
-		{Name: "small", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
+		{Name: "small", MachineType: "n2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
 		{Name: "large", MachineType: "n2-standard-8", BootDiskGB: 100, QuotaUnits: 2},
 	}); err != nil {
 		t.Fatalf("SeedShapes: %v", err)
@@ -1623,7 +1632,7 @@ func TestStep17StopStartAutoUpgradeAndMaintenanceWindowEndToEnd(t *testing.T) {
 	defer st.Close()
 
 	if err := st.SeedShapes(ctx, []store.ShapeRow{
-		{Name: "small", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
+		{Name: "small", MachineType: "n2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
 	}); err != nil {
 		t.Fatalf("SeedShapes: %v", err)
 	}
@@ -1781,7 +1790,7 @@ func TestStep16TwoStepTransferRestoreHardPurgeAndAdminRecoveryEndToEnd(t *testin
 	st.SetNow(func() time.Time { return now })
 
 	if err := st.SeedShapes(ctx, []store.ShapeRow{
-		{Name: "small", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
+		{Name: "small", MachineType: "n2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
 		{Name: "large", MachineType: "n2-standard-8", BootDiskGB: 100, QuotaUnits: 2},
 	}); err != nil {
 		t.Fatalf("SeedShapes: %v", err)

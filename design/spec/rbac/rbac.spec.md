@@ -1,8 +1,21 @@
 # Basic RBAC Specification
 
-**Status:** draft for review. Normative.
+**Status:** Superseded by [`docs/design/access-rbac.md`](../../../docs/design/access-rbac.md) (task 2969). Not normative; kept as the record of the proposal. See the note below.
 
-**Specifies:** [`rbac.design.md`](../../design/rbac.design.md)
+**Specifies:** [`rbac.design.md`](../../design/rbac.design.md) (also superseded)
+
+> **Superseded.** This draft was never implemented as written. Grain implemented roles as API scope sets instead (task 2969, [`docs/design/access-rbac.md`](../../../docs/design/access-rbac.md)), not as a fixed `admin > writer > reader` enum. An allowlist entry's `role` names a scope set: the built-ins `grain/viewer`, `grain/contributor` and `grain/operator`, or a set the deployment declares, with optional repository limits. A person who matches several entries holds the union of their sets' scopes, minus anything one of those sets denies. Each route is checked against its scope in `pkg/ui/route_scopes.go` by the same table that checks agents. There is no `model.Role`, `RoleWriter`, `IsAdminOnlyGrant` or `ui.RequirePermission`. Where this document and `access-rbac.md` or the code disagree, `access-rbac.md` and the code are right, and the nightly docs review should not report differences against this file.
+>
+> | Section here | Disposition | Replaced by |
+> | --- | --- | --- |
+> | §1.1 `RB-1` (three ordered roles, no custom roles) | **Superseded** | Roles are scope sets, built-in or declared, and custom roles are the point (`access-rbac.md` §1, §10) |
+> | §1.2–§1.4 `RB-2`–`RB-4` (storage, entry syntax, highest role wins) | **Superseded** | `allowed_principal.role` holds a scope set name, defaulting to `grain/operator`, and stays out of the grain/config export. Several matching entries are a union of grants with deny-overrides (`access-rbac.md` §1, §2, §9) |
+> | §1.5–§1.6 `RB-5`–`RB-6` (owner floor, break-glass) | **Superseded** | Access-code, loopback and in-process callers are unlimited admins, and only an unlimited admin may assign a role a person must grant (`access-rbac.md` §3, §4) |
+> | §2 `RB-7`–`RB-8` (admin-only grants, writer filing and approval) | **Superseded** | Filing, editing and approval by a limited role are held to that role's own scopes and repositories (`filingEscalation`, `roleGrantEscalation`, `roleApprovalWithin`). Approving a stored task, or Run now on a task with no approval yet, needs `tasks:admin` on its repository. A task with `autoMerge`, `keepRunning`, a grain/config or person-approved change target, or `networkAccess` wider than the default needs `grain/operator` (`access-rbac.md` §5) |
+> | §3 `RB-9`–`RB-12` (permission matrix) | **Superseded** | Every route's scope in `pkg/ui/route_scopes.go` and `humanRouteScopes`, held total by `TestRoleGateCoversEveryRoute` (`access-rbac.md` §5) |
+> | §4 `RB-13`–`RB-15` (agents and delegation) | **Superseded** | A person sending `X-Grain-Acting-Task` is held to both their role and the task's grants, and a `gma_` token inside a verified session is intersected with that session's role. Agents may not change the allowlist (`access-rbac.md` §3, §5) |
+> | §5–§6 `RB-16`–`RB-20` (enforcement, audit, migration, UI) | **Superseded** | The role gate in `Server.route`, refusals that name the role, `config_audit` surface `access`, existing rows migrating to `grain/operator`, and `access` on `GET /api/auth/user` and `GET /api/config` (`access-rbac.md` §1, §5, §6, §8) |
+> | §7 `RB-21`–`RB-22` (tests) | **Superseded** | The tests named in `access-rbac.md` and `pkg/ui/access_roles_test.go` |
 
 This specification defines role-based access control (`admin`, `writer`, `reader`) for Grain: role storage and resolution on allowlisted principals, the exhaustive permission matrix across HTTP routes, streaming/WebSocket endpoints, UI views, and CLI subcommands, agent delegation and `OnBehalfOf` intersection, single-point enforcement, audit, migration, and required automated tests. Where [`rbac.design.md`](../../design/rbac.design.md) and this specification disagree, this specification wins.
 
@@ -773,28 +786,28 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 
 | ID | Requirement | Status | Planned verification |
 |---|---|---|---|
-| `RB-1` | `model.Role` (`admin > writer > reader`) and `Covers` ordering | Proposed | `pkg/model/rbac_test.go` |
-| `RB-2` | `allowed_principal` SQL table; excluded from `SettingsTables`, in `BackupOnlyTables` | Proposed | `pkg/model/sqlite`, `pkg/model/postgres`, `pkg/staterepo` tests |
-| `RB-3` | Entry syntax (`=<role>`), `reader` default on new entries, `gcp-key` exclusion | Proposed | `pkg/ui/allowlist_test.go`, `pkg/daemon` startup tests |
-| `RB-4` | Highest-role-wins resolution & selective `GroupMemberChecker` short-circuit | Proposed | `TestRBACRoleResolutionAndLockout` |
-| `RB-5` | Immutable `-deployment-owner` floor & 3 lockout-prevention invariants (`422`) | Proposed | `TestRBACRoleResolutionAndLockout` |
-| `RB-6` | Break-glass `access-code`, `loopback`, and `in-process` resolve to `admin` (`operator`) | Proposed | `TestRBACRoleResolutionAndLockout`, `TestRBACRouteMatrix` |
-| `RB-7` | `model.IsAdminOnlyGrant` classification | Proposed | `pkg/model/rbac_test.go` |
-| `RB-8` | Writer task filing/approval hold-for-approval & `grain/config` `Submit` guard | Proposed | `TestRBACRouteMatrix`, `pkg/ui/rbac_tasks_test.go` |
-| `RB-9` | Normative resolution of the 11 hard-case boundaries | Proposed | `TestRBACRouteMatrix` |
-| `RB-10` | Exhaustive 332-route HTTP permission matrix | Proposed | `TestEveryRouteHasDeclaredPermission`, `TestRBACRouteMatrix` |
-| `RB-11` | Pre-upgrade enforcement on WebSocket, SSE, streaming, long-poll, and `/mcp` | Proposed | `TestRBACRouteMatrix`, `pkg/ui/persistent_sandboxes_test.go` |
-| `RB-12` | Browser UI route gating (`/settings/preferences` open) & CLI verb mapping | Proposed | Vitest, Playwright, `pkg/cli` tests |
-| `RB-13` | Server-side `OnBehalfOf` role intersection with immediate demotion effect | Proposed | `TestRBACAgentDelegationIntersection` |
-| `RB-14` | Director turn scoping, `writer` self-service `gma_` tokens, `admin`-only `hostds` | Proposed | `TestRBACAgentDelegationIntersection`, `pkg/ui/external_agents_test.go` |
-| `RB-15` | Autonomous schedule/trigger owner & `oncall` role rules | Proposed | `pkg/orchestrator/schedule_rbac_test.go` |
-| `RB-16` | `ui.RequirePermission` single check point & structured `403` JSON payload | Proposed | `TestEveryRouteHasDeclaredPermission`, `TestRBACRouteMatrix` |
-| `RB-17` | Deployment-wide read scoping for `reader` & universal non-readability of secret values | Proposed | `TestRBACRouteMatrix`, `tests/security/secret_audit_and_scoping_test.go` |
-| `RB-18` | `config_audit` recording on role changes & bounded deduplicated denial logs | Proposed | `TestRBACLegacyAllowlistMigrationAndAudit` |
-| `RB-19` | Existing-deployment `admin` migration & `seedOnly` database authority | Proposed | `TestRBACLegacyAllowlistMigrationAndAudit` |
-| `RB-20` | `GET /api/whoami`, `/api/access/principals`, role badge, and `/settings/users` UI | Proposed | `pkg/ui/whoami_test.go`, Vitest, Playwright |
-| `RB-21` | `TestEveryRouteHasDeclaredPermission` & `role × route` matrix test | Proposed | `pkg/ui/rbac_routes_test.go` |
-| `RB-22` | End-to-end delegation, lockout, break-glass, migration, and UI tests | Proposed | `pkg/ui`, `tests/security`, `ui/e2e` |
+| `RB-1` | `model.Role` (`admin > writer > reader`) and `Covers` ordering | Superseded | `pkg/model/rbac_test.go` |
+| `RB-2` | `allowed_principal` SQL table; excluded from `SettingsTables`, in `BackupOnlyTables` | Superseded | `pkg/model/sqlite`, `pkg/model/postgres`, `pkg/staterepo` tests |
+| `RB-3` | Entry syntax (`=<role>`), `reader` default on new entries, `gcp-key` exclusion | Superseded | `pkg/ui/allowlist_test.go`, `pkg/daemon` startup tests |
+| `RB-4` | Highest-role-wins resolution & selective `GroupMemberChecker` short-circuit | Superseded | `TestRBACRoleResolutionAndLockout` |
+| `RB-5` | Immutable `-deployment-owner` floor & 3 lockout-prevention invariants (`422`) | Superseded | `TestRBACRoleResolutionAndLockout` |
+| `RB-6` | Break-glass `access-code`, `loopback`, and `in-process` resolve to `admin` (`operator`) | Superseded | `TestRBACRoleResolutionAndLockout`, `TestRBACRouteMatrix` |
+| `RB-7` | `model.IsAdminOnlyGrant` classification | Superseded | `pkg/model/rbac_test.go` |
+| `RB-8` | Writer task filing/approval hold-for-approval & `grain/config` `Submit` guard | Superseded | `TestRBACRouteMatrix`, `pkg/ui/rbac_tasks_test.go` |
+| `RB-9` | Normative resolution of the 11 hard-case boundaries | Superseded | `TestRBACRouteMatrix` |
+| `RB-10` | Exhaustive 332-route HTTP permission matrix | Superseded | `TestEveryRouteHasDeclaredPermission`, `TestRBACRouteMatrix` |
+| `RB-11` | Pre-upgrade enforcement on WebSocket, SSE, streaming, long-poll, and `/mcp` | Superseded | `TestRBACRouteMatrix`, `pkg/ui/persistent_sandboxes_test.go` |
+| `RB-12` | Browser UI route gating (`/settings/preferences` open) & CLI verb mapping | Superseded | Vitest, Playwright, `pkg/cli` tests |
+| `RB-13` | Server-side `OnBehalfOf` role intersection with immediate demotion effect | Superseded | `TestRBACAgentDelegationIntersection` |
+| `RB-14` | Director turn scoping, `writer` self-service `gma_` tokens, `admin`-only `hostds` | Superseded | `TestRBACAgentDelegationIntersection`, `pkg/ui/external_agents_test.go` |
+| `RB-15` | Autonomous schedule/trigger owner & `oncall` role rules | Superseded | `pkg/orchestrator/schedule_rbac_test.go` |
+| `RB-16` | `ui.RequirePermission` single check point & structured `403` JSON payload | Superseded | `TestEveryRouteHasDeclaredPermission`, `TestRBACRouteMatrix` |
+| `RB-17` | Deployment-wide read scoping for `reader` & universal non-readability of secret values | Superseded | `TestRBACRouteMatrix`, `tests/security/secret_audit_and_scoping_test.go` |
+| `RB-18` | `config_audit` recording on role changes & bounded deduplicated denial logs | Superseded | `TestRBACLegacyAllowlistMigrationAndAudit` |
+| `RB-19` | Existing-deployment `admin` migration & `seedOnly` database authority | Superseded | `TestRBACLegacyAllowlistMigrationAndAudit` |
+| `RB-20` | `GET /api/whoami`, `/api/access/principals`, role badge, and `/settings/users` UI | Superseded | `pkg/ui/whoami_test.go`, Vitest, Playwright |
+| `RB-21` | `TestEveryRouteHasDeclaredPermission` & `role × route` matrix test | Superseded | `pkg/ui/rbac_routes_test.go` |
+| `RB-22` | End-to-end delegation, lockout, break-glass, migration, and UI tests | Superseded | `pkg/ui`, `tests/security`, `ui/e2e` |
 
 ---
 

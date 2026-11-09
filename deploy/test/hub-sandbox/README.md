@@ -244,7 +244,8 @@ session), use `instance-ctl.sh` over IAP SSH:
 ```
 
 `daemon-up.sh` builds a lightweight `grain-daemon` runtime image, creates a
-private-IP `e2-small` GCE VM on the sandbox subnet running `grain daemon` in
+private-IP `n2-standard-2` GCE VM (`--machine-type`; E2 types are refused
+because they cannot run nested virtualization) on the sandbox subnet running `grain daemon` in
 control-plane test mode (`-disable-native-sandboxes`) with
 `GRAIN_HUB_CONNECT=true`, `GRAIN_HUB_ISSUER=grain-registry`,
 `GRAIN_HUB_AUDIENCE=https://<entry>.<instance_domain>`,
