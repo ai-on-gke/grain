@@ -412,5 +412,22 @@ func TestAddTeamGitConnectionPerUserPATAndReplaceScoping(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("AddTeamGitConnection without taskUser when requireUserGitCredential=true: got %d %s, want 400", rec.Code, rec.Body)
 	}
+
+	// 8. When only user-bound connections exist (remove the default connection), UserGitCredentialOn
+	// still resolves a credential for pre-filing Reach checks while TaskGitCredentialOn blocks unassigned users.
+	defaultCred := team.GitConnections[0].Credential
+	rec = doWithHeaders(t, srv, http.MethodDelete, "/api/deployment/git-connections/"+defaultCred, "", alice)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE default git-connection: got %d %s, want 200", rec.Code, rec.Body)
+	}
+	if got, err := store.UserGitCredentialOn(ctx, "alice@example.com", "git.example.test", "acme", "widgets"); err != nil || got != credAlice {
+		t.Fatalf("UserGitCredentialOn(alice) = %q, %v; want %q", got, err, credAlice)
+	}
+	if got, err := store.UserGitCredentialOn(ctx, "charlie@example.com", "git.example.test", "acme", "widgets"); err != nil || got == "" {
+		t.Fatalf("UserGitCredentialOn(charlie, pre-filing reach check) = %q, %v; want deployment connection so filing succeeds before queue hold", got, err)
+	}
+	if _, err := store.TaskGitCredentialOn(ctx, "t-charlie", "git.example.test", "acme", "widgets"); !errors.Is(err, model.ErrNoTeamGitCredential) {
+		t.Fatalf("TaskGitCredentialOn(t-charlie) without default connection = %v; want ErrNoTeamGitCredential", err)
+	}
 }
 

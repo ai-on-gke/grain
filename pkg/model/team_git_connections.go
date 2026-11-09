@@ -267,11 +267,13 @@ func (c Config) EnforcesUserGitCredentialOn(host, defaultHost string) bool {
 	return c.RequireUserGitCredential || c.HasUserGitConnectionOn(host, defaultHost)
 }
 
-// MatchTeamGitConnection is the most specific default (User == "") connection
-// in conns for owner/repo on host -- one scoped to that repository, then to its
+// MatchTeamGitConnection is the most specific connection in conns for
+// owner/repo on host -- one scoped to that repository, then to its
 // owner, then the host's default -- with the earlier entry winning a tie.
-// Connections bound to a specific user (User != "") belong exclusively to that
-// user and never match here.
+// Connections with User == "" (deployment-wide defaults) are preferred;
+// when only user-bound connections exist on host, the most specific one is
+// returned for deployment-level read checks (while task execution goes through
+// TaskGitCredentialOn and strictly enforces task-author ownership).
 // host and every connection's own Host resolve an empty value to
 // defaultHost (ResolveGitHost). A connection on another host never
 // matches, however broad: there is no fallback across hosts.
@@ -279,17 +281,25 @@ func MatchTeamGitConnection(conns []TeamGitConnection, host, defaultHost, owner,
 	owner, repo = strings.ToLower(owner), strings.TrimSuffix(strings.ToLower(repo), ".git")
 	var bestDefault TeamGitConnection
 	bestDefaultRank := scopeNoMatch
+	var bestAny TeamGitConnection
+	bestAnyRank := scopeNoMatch
 	for _, raw := range conns {
 		c, err := NormalizeTeamGitConnection(raw)
-		if err != nil || c.User != "" || !SameGitHost(c.Host, host, defaultHost) {
+		if err != nil || !SameGitHost(c.Host, host, defaultHost) {
 			continue
 		}
 		rank := scopeRankFor(c.Scope, owner, repo)
-		if rank > bestDefaultRank {
+		if c.User == "" && rank > bestDefaultRank {
 			bestDefault, bestDefaultRank = c, rank
 		}
+		if rank > bestAnyRank {
+			bestAny, bestAnyRank = c, rank
+		}
 	}
-	return bestDefault, bestDefaultRank != scopeNoMatch
+	if bestDefaultRank != scopeNoMatch {
+		return bestDefault, true
+	}
+	return bestAny, bestAnyRank != scopeNoMatch
 }
 
 // MatchUserGitConnection is the most specific connection in conns bound

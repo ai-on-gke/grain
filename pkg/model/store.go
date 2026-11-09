@@ -5622,6 +5622,21 @@ func (s *Store) GitConnectionOn(ctx context.Context, host, owner, repo string) (
 	return "", missing
 }
 
+// UserGitCredentialOn returns user's own git connection on host for owner/repo
+// when one is configured (MatchUserGitConnection), falling back to
+// GitConnectionOn for pre-filing repository reachability checks when user has
+// no dedicated connection yet.
+func (s *Store) UserGitCredentialOn(ctx context.Context, user, host, owner, repo string) (string, error) {
+	if norm, err := NormalizeTaskOwner(user); err == nil && norm != "" && !strings.EqualFold(norm, DefaultTaskOwner) {
+		if settings, cerr := s.GetConfig(ctx); cerr == nil && settings != nil {
+			if conn, ok := MatchUserGitConnection(settings.EffectiveGitConnections(), norm, host, s.GitDefaultHost, owner, repo); ok && conn.Credential != "anonymous" {
+				return conn.Credential, nil
+			}
+		}
+	}
+	return s.GitConnectionOn(ctx, host, owner, repo)
+}
+
 // pinnedTarget is what a run's own target columns say
 // (task_run.target_owner/target_name): Valid false for a run with
 // nothing pinned onto it, which is every run recorded before those
