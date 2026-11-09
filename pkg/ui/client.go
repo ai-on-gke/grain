@@ -1429,11 +1429,25 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 		runHostds = nil
 	}
 	c.markDeletedRunHostds(ctx, runHostds)
+	// What each attempt spent at its provider (model.RunUsage), read
+	// once for the task; a failure leaves every attempt unmeasured.
+	runUsage := map[string]model.RunUsage{}
+	if usages, err := c.Store.TaskRunUsages(ctx, id); err != nil {
+		log.Printf("ui: task %s: reading its attempts' token usage: %v", id, err)
+	} else {
+		for _, u := range usages {
+			runUsage[u.RunID] = u
+		}
+		detail.Usage = taskUsageOf(usages)
+	}
 	detail.Attempts = make([]Attempt, 0, len(runs))
 	for _, r := range runs {
 		a := attemptFrom(r, promptBytes, auditCounts)
 		if h, ok := runHostds[r.ID]; ok {
 			a.Hostd = &h
+		}
+		if u, ok := runUsage[r.ID]; ok {
+			a.Usage = &u
 		}
 		detail.Attempts = append(detail.Attempts, a)
 	}
