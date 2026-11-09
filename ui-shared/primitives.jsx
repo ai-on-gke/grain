@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import { useThemeMode } from "./ThemeModeContext.jsx";
 
 export function formatRelativeAge(secondsOrIso) {
@@ -233,6 +233,7 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
 }) {
+  const titleId = useId();
   const dialogRef = useRef(null);
   const cancelRef = useRef(null);
   const onCancelRef = useRef(onCancel);
@@ -285,10 +286,10 @@ export function ConfirmDialog({
         className="gs-dialog"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="gs-dialog-title"
+        aria-labelledby={titleId}
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 id="gs-dialog-title" className="gs-dialog-title">
+        <h2 id={titleId} className="gs-dialog-title">
           {title}
         </h2>
         <div className="gs-dialog-body">{children}</div>

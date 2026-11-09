@@ -1668,6 +1668,10 @@ func (d *demoState) handleUpgradeEntry(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "not_found", fmt.Sprintf("entry %q not found", name))
 		return
 	}
+	if e.Kind != api.KindInstance {
+		writeJSONError(w, http.StatusBadRequest, "invalid_entry_kind", "only kind=\"instance\" entries can be upgraded")
+		return
+	}
 	var req api.UpgradeEntryRequest
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	if req.TargetVersion != "" {
@@ -1685,6 +1689,10 @@ func (d *demoState) handleReplaceEntry(w http.ResponseWriter, r *http.Request) {
 	e, ok := d.entries[name]
 	if !ok {
 		writeJSONError(w, http.StatusNotFound, "not_found", fmt.Sprintf("entry %q not found", name))
+		return
+	}
+	if e.Kind != api.KindInstance {
+		writeJSONError(w, http.StatusBadRequest, "invalid_entry_kind", "only kind=\"instance\" entries can be resized or replaced")
 		return
 	}
 	var req api.ReplaceEntryRequest

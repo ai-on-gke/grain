@@ -1,0 +1,36 @@
+config /tmp/hic-3745/registry.yaml is valid
+=== Creating walk-creating with SA_DELAY=60s ===
+  created hosted instance entry walk-creating (state=creating, shape=n2-standard-2, url=https://walk-creating.grain-user.test)
+
+=== API GET /api/entries/walk-creating (while creating) ===
+  {
+    "name": "walk-creating",
+    "kind": "instance",
+    "state": "creating",
+    "status": "offline",
+    "status_detail": "waiting for service account gi-walk-creating@made-up-proj.iam.gserviceaccount.com, and the registry's permission to attach it, to propagate before creating the GCE instance (attempt 1 failed, retrying in 5s): gcp compute: inserting instance grain-vm-walk-creating in us-central1-a: GCE operation op-1 failed (EXTERNAL_RESOURCE_NOT_FOUND): The resource 'gi-walk-creating@made-up-proj.iam.gserviceaccount.com' of type 'serviceAccount' was not found.",
+    "shape": "n2-standard-2",
+    "boot_disk_gb": 50
+  }
+
+=== grain registry list (while creating) ===
+  walk-creating            instance   creating   offline   listed=true  owner=alice@example.com        https://walk-creating.grain-user.test
+
+=== grain registry show walk-creating (while creating) ===
+  Name:        walk-creating
+  URL:         https://walk-creating.grain-user.test
+  Kind:        instance (host_kind=registry-vm)
+  State:       creating (status=offline, listed=true)
+  Owner:       alice@example.com
+  Shape:       n2-standard-2
+
+=== Capturing Playwright screenshots of / and /entries/walk-creating -> /tmp/gr-shots/creating-before ===
+  /tmp/gr-shots/creating-before/my_entries-desktop-light.png
+  /tmp/gr-shots/creating-before/my_entries-desktop-dark.png
+  /tmp/gr-shots/creating-before/my_entries-phone-light.png
+  /tmp/gr-shots/creating-before/my_entries-phone-dark.png
+  /tmp/gr-shots/creating-before/entries_walk_creating-desktop-light.png
+  /tmp/gr-shots/creating-before/entries_walk_creating-desktop-dark.png
+  /tmp/gr-shots/creating-before/entries_walk_creating-phone-light.png
+  /tmp/gr-shots/creating-before/entries_walk_creating-phone-dark.png
+  /tmp/gr-shots/creating-before/contact-sheet.png
