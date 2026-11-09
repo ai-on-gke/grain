@@ -4135,28 +4135,20 @@ func TestABranchTagAndItsCommitTagAreOneManifest(t *testing.T) {
 	contains(t, script, `push_image "$target"`)
 }
 
-// The job that can delete images is a job no branch push can reach, it
-// deletes only when it is told to, and it is not part of anything a host
-// runs.
-//
-// It holds package-publish, which is the capability that deletes a
-// package version -- strictly worse in the wrong hands than the one
-// build-artifacts.yml holds to publish, and the same argument that file
-// makes about push-vs-pull_request applies with more force. What keeps
-// it out of reach is the trigger: workflow_dispatch needs write access
-// to the repository. This job declares no cron, so the trusted schedules
-// package-publish answers do not reach it either; automated pruning runs
-// on release in release.yml instead.
-//
-// The dry-run default is the other half. Deleting a package version
-// cannot be undone, so the command deletes only when passed -apply, and
-// a human dispatching this to see what it would do must not have to
-// remember that.
+// Deleting images is CI's job alone: the release workflow's prune step
+// holds DOCKER_PAT, and package-publish is a CI-only capability that is
+// never placed in a task sandbox. The weekly prune-packages template is
+// therefore an audit -- a dry run of the plan against the live registry
+// and a read of the release prune step's logs -- and declares the
+// CI-read scope that reading those logs needs rather than a credential
+// it would never be given.
 func TestThePruneJobIsDeliberateAndOutOfBranchReach(t *testing.T) {
 	prune := stripComments(pruneTemplate(t))
 
 	contains(t, prune, "name: Prune GHCR packages")
 	contains(t, prune, "cmd/ghcr-prune")
+	contains(t, prune, `capabilities: ["api:ci-read@ai-on-gke/grain"]`)
+	contains(t, prune, "Prune old package versions")
 
 	// And it is a maintenance tool, not the deployment's: nothing on a host runs
 	// it, so it stays out of the binaries `make build` produces and out
