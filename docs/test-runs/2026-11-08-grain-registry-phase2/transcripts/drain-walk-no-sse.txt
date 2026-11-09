@@ -1,0 +1,23 @@
+daemon tunnel dials (front LB): 138 to A, 285 to B; latest: 2026/11/08 23:18:18 frontlb: 127.0.0.1:47134 -> 127.0.0.1:4251
+tunnel sessions before: 
+23:18:25.628 SIGTERM replica A (pid 18219)
+replica A exited after 58ms
+tunnel sessions after: 
+via-b status codes:     189 200 
+via-lb status codes:     189 200 
+SSE through A: 200 0.009066s 3646B received; err: 
+slow HTTP through A: 200 2309289B 2.402517s err: 
+daemon log during drain:
+    2026/11/08 23:16:41 grain daemon: registry tunnel (conn-alice) connected (session=6)
+    2026/11/08 23:16:53 grain daemon: registry tunnel (conn-alice) connected (session=7)
+    2026/11/08 23:17:13 grain daemon: registry tunnel (conn-alice) connected (session=8)
+    2026/11/08 23:17:26 grain daemon: registry tunnel (conn-alice) connected (session=9)
+    2026/11/08 23:18:18 grain daemon: registry tunnel (conn-alice) connected (session=10)
+    2026/11/08 23:18:26 grain daemon: registry tunnel (conn-alice) connected (session=11)
+replica A log tail:
+    2026/11/08 23:12:41 registry: catalog.scope_owners startup sweep demoted unauthorized primary scopes on 1 entries
+    grain-registry listening on 127.0.0.1:4252 (jwks: 127.0.0.1:4253, peer: 127.0.0.1:4254)
+    2026/11/08 23:16:53 httputil: ReverseProxy read error during body copy: tunnel mux: session closed
+    grain-registry listening on 127.0.0.1:4252 (jwks: 127.0.0.1:4253, peer: 127.0.0.1:4254)
+    2026/11/08 23:17:24 httputil: ReverseProxy read error during body copy: tunnel mux: session closed
+    grain-registry listening on 127.0.0.1:4252 (jwks: 127.0.0.1:4253, peer: 127.0.0.1:4254)

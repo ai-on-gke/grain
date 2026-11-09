@@ -1,0 +1,25 @@
+daemon tunnel dials (front LB): 93 to A, 236 to B; latest: 2026/11/08 23:17:13 frontlb: 127.0.0.1:52618 -> 127.0.0.1:4251
+tunnel sessions before: 
+23:17:19.685 SIGTERM replica A (pid 17087)
+replica A exited after 5068ms
+tunnel sessions after: 
+via-b status codes:      91 200       1 503 
+    23:17:24.753 503 {"code":"entry_offline","disconnect_reason":"graceful shutdown","display_name":"","entry":"conn-alice","error":"entry_offline","host_kind":"workstation","last_seen_at":"2026-11-08T23:17:24Z","last_seen_seconds_ago":0,"message":"connected entry \"conn-alice\" is offline","offline_seconds":0,"owner":"
+via-lb status codes:      91 200       1 503 
+    23:17:24.753 503 {"code":"entry_offline","disconnect_reason":"graceful shutdown","display_name":"","entry":"conn-alice","error":"entry_offline","host_kind":"workstation","last_seen_at":"2026-11-08T23:17:24Z","last_seen_seconds_ago":0,"message":"connected entry \"conn-alice\" is offline","offline_seconds":0,"owner":"
+SSE through A: 200 8.014248s 18B received; err: curl: (18) transfer closed with outstanding read data remaining
+slow HTTP through A: 200 2309289B 1.601543s err: 
+daemon log during drain:
+    2026/11/08 23:16:01 grain daemon: registry heartbeat failed (attempt 1, retrying in 1.01s): registry API 502: Bad Gateway
+    2026/11/08 23:16:01 grain daemon: registry tunnel (conn-alice) connected (session=5)
+    2026/11/08 23:16:41 grain daemon: registry tunnel (conn-alice) connected (session=6)
+    2026/11/08 23:16:53 grain daemon: registry tunnel (conn-alice) connected (session=7)
+    2026/11/08 23:17:13 grain daemon: registry tunnel (conn-alice) connected (session=8)
+    2026/11/08 23:17:26 grain daemon: registry tunnel (conn-alice) connected (session=9)
+replica A log tail:
+    grain-registry listening on 127.0.0.1:4252 (jwks: 127.0.0.1:4253, peer: 127.0.0.1:4254)
+    2026/11/08 23:12:41 registry: catalog.scope_owners startup sweep demoted unauthorized primary scopes on 1 entries
+    grain-registry listening on 127.0.0.1:4252 (jwks: 127.0.0.1:4253, peer: 127.0.0.1:4254)
+    2026/11/08 23:16:53 httputil: ReverseProxy read error during body copy: tunnel mux: session closed
+    grain-registry listening on 127.0.0.1:4252 (jwks: 127.0.0.1:4253, peer: 127.0.0.1:4254)
+    2026/11/08 23:17:24 httputil: ReverseProxy read error during body copy: tunnel mux: session closed

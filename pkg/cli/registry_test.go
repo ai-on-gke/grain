@@ -1129,3 +1129,68 @@ func TestRegistryRegisterPreservesStandaloneMetadataAndCLIHostKind(t *testing.T)
 		t.Fatalf("explicit -host-kind override not applied: entry=%q hb=%q, want other", gotUpdated.HostKind, gotUpdatedHB.HostKind)
 	}
 }
+
+// TestRegistryCLITransferCancel covers `grain registry transfer -cancel`: it
+// posts {"cancel": true} with no target, and refuses to be combined with -to.
+func TestRegistryCLITransferCancel(t *testing.T) {
+	ctx := context.Background()
+	var (
+		mu     sync.Mutex
+		bodies []api.TransferRequest
+	)
+	regSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/entries/team-vm/transfer" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		var req api.TransferRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		mu.Lock()
+		bodies = append(bodies, req)
+		mu.Unlock()
+		entry := api.Entry{Name: "team-vm", Kind: api.KindInstance, State: api.StateRunning}
+		if !req.Cancel {
+			entry.PendingOwner = req.To
+		}
+		_ = json.NewEncoder(w).Encode(entry)
+	}))
+	defer regSrv.Close()
+	prevClient := registryHTTPClient
+	prevOIDC := registryOIDCToken
+	registryHTTPClient = regSrv.Client()
+	registryOIDCToken = func(ctx context.Context, registryURL, audience string) (string, error) {
+		return "oidc-test-token", nil
+	}
+	t.Cleanup(func() {
+		registryHTTPClient = prevClient
+		registryOIDCToken = prevOIDC
+	})
+	run := func(args ...string) (string, error) {
+		t.Helper()
+		full := append([]string{"transfer", "-registry-url", regSrv.URL}, args...)
+		var err error
+		stdout := captureStdout(t, func() {
+			err = cmdRegistry(ctx, nil, &printer{}, full)
+		})
+		return stdout, err
+	}
+
+	got, err := run("-cancel", "team-vm")
+	if err != nil {
+		t.Fatalf("registry transfer -cancel: %v", err)
+	}
+	if want := "cancelled the pending ownership transfer of team-vm"; !strings.Contains(got, want) {
+		t.Fatalf("registry transfer -cancel printed %q, want %q", got, want)
+	}
+	if _, err := run("-cancel", "-to", "bob@example.com", "team-vm"); err == nil || !strings.Contains(err.Error(), "takes no -to") {
+		t.Fatalf("registry transfer -cancel -to = %v, want a usage refusal", err)
+	}
+	if _, err := run("team-vm"); err == nil || !strings.Contains(err.Error(), "-cancel") {
+		t.Fatalf("registry transfer without -to = %v, want an error naming -cancel", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 1 || !bodies[0].Cancel || bodies[0].To != "" || bodies[0].NewOwner != "" {
+		t.Fatalf("transfer requests = %+v, want exactly one {cancel: true} with no target", bodies)
+	}
+}
