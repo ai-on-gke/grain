@@ -52,7 +52,9 @@ func TestGrainInstanceInitBootsFromReconcilerMetadata(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		bundle registry.InstanceResourceBundle
-		want   []string
+		// secrets seeds the fake Secret Manager, by resource name.
+		secrets map[string]string
+		want    []string
 	}{
 		{
 			name: "cloud sql iam auth",
@@ -73,17 +75,22 @@ func TestGrainInstanceInitBootsFromReconcilerMetadata(t *testing.T) {
 		{
 			name: "built-in password user",
 			bundle: registry.InstanceResourceBundle{
-				SQLInstance:      "grain-shared-pg",
-				SQLPrivateIP:     "10.0.0.5",
-				DatabaseName:     "grain_alpha",
-				DatabaseUser:     "grain-sa-alpha@test-proj.iam",
-				DatabasePassword: "p@ss/word",
-				SecretPrefix:     "grain-inst-alpha-",
-				GCSBucket:        "grain-state",
-				GCSManagedFolder: "instances/alpha/",
+				SQLInstance:            "grain-shared-pg",
+				SQLPrivateIP:           "10.0.0.5",
+				DatabaseName:           "grain_alpha",
+				DatabaseUser:           "grain-sa-alpha@test-proj.iam",
+				DatabasePasswordSecret: "projects/test-proj/secrets/grain-inst-alpha-db-password",
+				SecretPrefix:           "grain-inst-alpha-",
+				GCSBucket:              "grain-state",
+				GCSManagedFolder:       "instances/alpha/",
+			},
+			// The password is served only by Secret Manager under the
+			// instance's prefix; grain-config never carries it.
+			secrets: map[string]string{
+				"projects/test-proj/secrets/grain-inst-alpha-db-password": "p@ss/word\n",
 			},
 			want: []string{
-				"GRAIN_DB_DSN=postgres://grain-sa-alpha%40test-proj.iam:p%40ss%2Fword@10.0.0.5:5432/grain_alpha?sslmode=disable",
+				"GRAIN_DB_DSN=postgres://grain-sa-alpha%40test-proj.iam:p%40ss%2Fword@10.0.0.5:5432/grain_alpha?sslmode=require",
 			},
 		},
 	} {
@@ -93,8 +100,20 @@ func TestGrainInstanceInitBootsFromReconcilerMetadata(t *testing.T) {
 				t.Fatal(err)
 			}
 
+			for _, pw := range []string{"p@ss/word", "p%40ss%2Fword"} {
+				if strings.Contains(string(grainConfig), pw) {
+					t.Fatalf("grain-config metadata carries the database password %q:\n%s", pw, grainConfig)
+				}
+			}
+			if strings.Contains(string(grainConfig), "sslmode=disable") {
+				t.Fatalf("grain-config metadata carries a cleartext DSN:\n%s", grainConfig)
+			}
+
 			var mu sync.Mutex
 			secrets := map[string]string{}
+			for k, v := range tc.secrets {
+				secrets[k] = v
+			}
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
 				case r.URL.Path == "/computeMetadata/v1/instance/attributes/grain-config":

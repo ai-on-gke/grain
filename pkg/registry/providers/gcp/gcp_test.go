@@ -399,6 +399,7 @@ type fakeGCPControlPlane struct {
 	sqlUsers        map[string]map[string]bool // sqlInstance -> userName -> exists
 	secrets         map[string][][]byte        // secretID -> versions
 	secretLabels    map[string]map[string]string
+	secretPolicies  map[string]iamPolicy // secretID -> secret-level IAM policy
 	managedFolders  map[string]iamPolicy
 	objects         map[string][]byte
 }
@@ -411,6 +412,7 @@ func newFakeGCPControlPlaneServer(t *testing.T) (*httptest.Server, *fakeGCPContr
 		sqlUsers:        make(map[string]map[string]bool),
 		secrets:         make(map[string][][]byte),
 		secretLabels:    make(map[string]map[string]string),
+		secretPolicies:  make(map[string]iamPolicy),
 		managedFolders:  make(map[string]iamPolicy),
 		objects:         make(map[string][]byte),
 	}
@@ -448,6 +450,23 @@ func newFakeGCPControlPlaneServer(t *testing.T) (*httptest.Server, *fakeGCPContr
 				_ = json.NewEncoder(w).Encode(map[string]any{})
 				return
 			}
+		}
+
+		// 1b. Secret Manager secret-level IAM policy: /v1/projects/{p}/secrets/{s}:setIamPolicy
+		if strings.HasPrefix(path, "/v1/projects/") && strings.Contains(path, "/secrets/") && strings.HasSuffix(path, ":setIamPolicy") {
+			trimmed := strings.TrimSuffix(path, ":setIamPolicy")
+			secretID := trimmed[strings.LastIndex(trimmed, "/")+1:]
+			if _, ok := cp.secrets[secretID]; !ok {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			var req struct {
+				Policy iamPolicy `json:"policy"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			cp.secretPolicies[secretID] = req.Policy
+			_ = json.NewEncoder(w).Encode(req.Policy)
+			return
 		}
 
 		// 2. Cloud Resource Manager project IAM policy: /v1/projects/{p}:getIamPolicy | :setIamPolicy
