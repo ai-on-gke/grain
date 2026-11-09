@@ -49,6 +49,8 @@ export const PHONE_QUERY =
 // the browser cannot be asked -- so every existing test, and any server
 // render, gets the desktop shell rather than throwing. A test that wants
 // the phone shell stubs window.matchMedia (see PhoneNav.test.jsx).
+// `noSsr` gives a real browser its answer on the first render rather than
+// drawing the desktop rail once and swapping it out in an effect.
 export function useIsPhone() {
-  return useMediaQuery(PHONE_QUERY);
+  return useMediaQuery(PHONE_QUERY, { noSsr: true });
 }
