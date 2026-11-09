@@ -36,9 +36,10 @@ func pipelineStewardBody(t *testing.T) string {
 
 // The steward is told its half of a red release candidate
 // (design/playbook/releases.playbook.md §5 and §12): triage, blockers
-// titled so they hold the next candidate, rc.3's convergence branch and
-// the escalation after the last attempt -- and that the reconciler's half
-// is not its to do.
+// titled so they hold the next candidate, fixes on main only (there is no
+// convergence branch), daily-cap drops that are not red, and the escalation
+// that does not stop the train -- and that the reconciler's half is not its
+// to do.
 func TestPipelineStewardIsToldHowToTriageARedReleaseCandidate(t *testing.T) {
 	t.Parallel()
 	body := pipelineStewardBody(t)
@@ -51,11 +52,13 @@ func TestPipelineStewardIsToldHowToTriageARedReleaseCandidate(t *testing.T) {
 		"while triage is pending",
 		"name `<rc_tag>` in your closing report",
 		"`rc.(N+1)` is not cut",
-		"`release/vX.Y.Z`",
-		"`branch: release/vX.Y.Z`",
-		"`Backported-from: <main_sha>`",
+		"fixes land on `main` only",
+		"`Discard-Reason: daily-cap`",
+		"`Discard-Reason: held-over`",
 		"**Escalate after 3 red candidates.**",
 		"`pipeline.release-escalated:vX.Y.Z`",
+		"The train does not stop",
+		"`rc.4`, `rc.5`",
 		"`agent.<your task id>:release-escalated:vX.Y.Z`",
 		"`pipeline.flake-budget:<repo>:<item>`",
 		"`pipeline.release-infra-stalled:<rc_tag>`",
@@ -66,10 +69,15 @@ func TestPipelineStewardIsToldHowToTriageARedReleaseCandidate(t *testing.T) {
 			t.Errorf("the steward's prompt does not say %q", want)
 		}
 	}
+	for _, retired := range []string{"`branch: release/vX.Y.Z`", "Backported-from", "cuts no more"} {
+		if strings.Contains(body, retired) {
+			t.Errorf("the steward's prompt still says %q, which the daily train retired", retired)
+		}
+	}
 }
 
 // ReleaseMaxRCAttempts is the train's own cap, so the escalation the
-// reconciler raises is the one the train stops at.
+// reconciler raises is at the threshold the train escalates at.
 func TestReleaseMaxRCAttemptsIsTheTrainsOwn(t *testing.T) {
 	t.Parallel()
 	conf, err := os.ReadFile("../../scripts/release.conf")
