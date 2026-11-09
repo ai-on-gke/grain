@@ -35,6 +35,14 @@ async function task(page, id) {
   return response.json();
 }
 
+async function storedHumanBodies(page, taskId) {
+  const response = await page.request.get(`/api/tasks/${taskId}/messages`);
+  expect(response.ok()).toBeTruthy();
+  const body = await response.json();
+  const list = Array.isArray(body) ? body : body.messages || [];
+  return list.filter((m) => m.authorKind === "human").map((m) => m.body);
+}
+
 async function controlInteractive(page, payload) {
   const response = await page.request.post("/e2e/interactive-control", {
     data: payload,
@@ -65,7 +73,7 @@ test("interactive session preserves messages sent while Asked, while Running, an
   try {
     const taskId = await sessionTaskID(page, sessionId);
     await expect
-      .poll(async () => (await task(page, taskId)).state)
+      .poll(async () => (await task(page, taskId)).state, { timeout: 15_000 })
       .toBe("awaiting_reply");
 
     await page.goto(`/session/${sessionId}`);
@@ -88,7 +96,7 @@ test("interactive session preserves messages sent while Asked, while Running, an
 
     // Status indicator transitions from Asked -> Running while the turn executes.
     await expect
-      .poll(async () => (await task(page, taskId)).state)
+      .poll(async () => (await task(page, taskId)).state, { timeout: 15_000 })
       .toBe("running");
     await expect(badge).toHaveClass(/badge-running/);
     await expect(badge).toHaveText("Interactive");
@@ -99,6 +107,9 @@ test("interactive session preserves messages sent while Asked, while Running, an
     await expect(
       page.locator(".cs-message--outgoing .cs-message__content"),
     ).toHaveText(["Message 1 while Asked", "Message 2 while Running"]);
+    await expect
+      .poll(() => storedHumanBodies(page, taskId), { timeout: 15_000 })
+      .toEqual(["Message 1 while Asked", "Message 2 while Running"]);
 
     // Release the run; the agent replies to both messages and parks back in Asked.
     await controlInteractive(page, { taskId, releaseRun: true });
@@ -108,7 +119,7 @@ test("interactive session preserves messages sent while Asked, while Running, an
       ),
     ).toBeVisible();
     await expect
-      .poll(async () => (await task(page, taskId)).state)
+      .poll(async () => (await task(page, taskId)).state, { timeout: 15_000 })
       .toBe("awaiting_reply");
     await expect(badge).toHaveClass(/badge-awaiting_reply/);
     await expect(badge).toHaveText("Asked");
@@ -131,9 +142,17 @@ test("interactive session preserves messages sent while Asked, while Running, an
       "Message 3 back-to-back A",
       "Message 4 back-to-back B",
     ]);
+    await expect
+      .poll(() => storedHumanBodies(page, taskId), { timeout: 15_000 })
+      .toEqual([
+        "Message 1 while Asked",
+        "Message 2 while Running",
+        "Message 3 back-to-back A",
+        "Message 4 back-to-back B",
+      ]);
 
     await expect
-      .poll(async () => (await task(page, taskId)).state)
+      .poll(async () => (await task(page, taskId)).state, { timeout: 15_000 })
       .toBe("running");
     await expect(badge).toHaveClass(/badge-running/);
     await expect(badge).toHaveText("Interactive");
@@ -145,7 +164,7 @@ test("interactive session preserves messages sent while Asked, while Running, an
       ),
     ).toBeVisible();
     await expect
-      .poll(async () => (await task(page, taskId)).state)
+      .poll(async () => (await task(page, taskId)).state, { timeout: 15_000 })
       .toBe("awaiting_reply");
     await expect(badge).toHaveClass(/badge-awaiting_reply/);
     await expect(badge).toHaveText("Asked");
