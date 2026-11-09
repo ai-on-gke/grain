@@ -156,7 +156,8 @@ func TestHostCapabilityServerIsRefusedUnlessHostdOffersIt(t *testing.T) {
 
 	cfg := ServerConfig{Command: "othercap", Run: RunHost}
 	if _, err := Attach(ctx, id, cfg, none, DialOptions{Hostd: &client}); err == nil ||
-		!strings.Contains(err.Error(), `offers no capability entry "othercap"`) {
+		!strings.Contains(err.Error(), `offers no capability entry "othercap"`) ||
+		strings.Contains(err.Error(), "grain hostd") {
 		t.Errorf("an entry hostd does not offer: err = %v", err)
 	}
 	gone := hostd.Client{Socket: filepath.Join(t.TempDir(), "gone.sock")}
@@ -168,6 +169,65 @@ func TestHostCapabilityServerIsRefusedUnlessHostdOffersIt(t *testing.T) {
 	if _, err := Attach(ctx, id, cfg, none, DialOptions{}); err == nil ||
 		!strings.Contains(err.Error(), "no hostd") {
 		t.Errorf("a daemon with no hostd at all: err = %v", err)
+	}
+}
+
+func TestAgentsOnlyHostRefusesPreplacedCapabilityServerWithoutHostdLeak(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("hostd refuses to run as root")
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	exe, _ = filepath.EvalSymlinks(exe)
+	dir, err := os.MkdirTemp("", "agentd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	allow := filepath.Join(dir, "allowlist.yaml")
+	if err := os.WriteFile(allow, []byte(fmt.Sprintf("clis:\n  claude:\n    path: %s\n", exe)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := &hostd.Server{
+		Socket:          filepath.Join(dir, "agentd.sock"),
+		Allowlist:       allow,
+		AllowlistOwners: []uint32{uint32(os.Getuid())},
+		StateDir:        filepath.Join(dir, "state"),
+		AgentsOnly:      true,
+		Logf:            func(string, ...any) {},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	for i := 0; ; i++ {
+		if _, err := os.Stat(srv.Socket); err == nil {
+			break
+		}
+		if i > 500 {
+			t.Fatal("agentd test server never listened")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	client := hostd.Client{Socket: srv.Socket}
+	cfg := ServerConfig{Command: "walk-echo", Run: RunHostd, Hostd: "agentd-1"}
+	_, err = Attach(ctx, "https://github.com/bwsalmon/grain/capabilities/test", cfg, func(string) (string, bool) { return "", false }, DialOptions{Hostd: &client})
+	if err == nil {
+		t.Fatal("Attach succeeded against an agents-only host")
+	}
+	msg := err.Error()
+	for _, want := range []string{"runs agent CLIs only (grain-agentd)", "grain host", "walk-echo"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error %q missing %q", msg, want)
+		}
+	}
+	if strings.Contains(msg, "hostd") {
+		t.Errorf("error %q leaked internal hostd wording", msg)
 	}
 }
 
