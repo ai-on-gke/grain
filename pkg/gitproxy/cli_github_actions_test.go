@@ -228,3 +228,91 @@ func TestCLISaysWhyAnActionsRunOffTheDefaultHostIsNotFound(t *testing.T) {
 		}
 	}
 }
+
+// actionsCIRepo is fakeExternalCI for a repository whose CI is GitHub
+// Actions (ci.ExternalRunsRepos).
+type actionsCIRepo struct{ fakeExternalCI }
+
+func (a actionsCIRepo) ServesRepo(_ context.Context, repo string) bool {
+	return strings.EqualFold(repo, a.run.Repo)
+}
+
+// TestCLITestHistoryReadsGitHubActionsOnAnActionsRepo: on a repository
+// whose CI is GitHub Actions, `grain ci test-history` counts the test's
+// failures out of the Actions runs grain recorded the failed jobs' logs
+// of, rather than reporting grain CI's month-old passes of a retired
+// mode as its history -- and says which runs it read, and which it left
+// out.
+func TestCLITestHistoryReadsGitHubActionsOnAnActionsRepo(t *testing.T) {
+	store := ci.NewRunStore(10)
+	old := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
+	for _, id := range []string{"run-1", "run-2"} {
+		store.Put(ci.Run{ID: id, Repo: "acme/widgets", Ref: "main", Conclusion: ci.ConclusionSuccess, StartedAt: &old,
+			Jobs: []ci.JobRun{{Name: "go test", Conclusion: ci.ConclusionSuccess}}})
+	}
+	at := time.Date(2026, 11, 8, 6, 0, 0, 0, time.UTC)
+	gha := ci.Run{ID: "gha:acme:widgets:42", Provider: ci.ProviderGitHubActions, Repo: "acme/widgets", Ref: "main",
+		Commit: "abcdefabcdefabcdef", Conclusion: ci.ConclusionFailure, StartedAt: &at,
+		Actions: &ci.ActionsRun{RunID: 42, Workflow: ".github/workflows/nightly.yml", FailedJobs: []string{"go-long"}},
+		Jobs: []ci.JobRun{
+			{Name: "go-long", Conclusion: ci.ConclusionFailure, StartedAt: &at, Steps: []ci.StepRun{{Name: "test",
+				Conclusion: ci.ConclusionFailure, Output: "--- FAIL: TestThing (0.20s)\nFAIL\n"}}},
+			{Name: "go unit", Conclusion: ci.ConclusionSuccess, StartedAt: &at},
+		}}
+	tokenFile := filepath.Join(t.TempDir(), "sandbox-tokens.json")
+	raw, _ := json.Marshal(map[string]string{"sb-ci": "tok-ci"})
+	if err := os.WriteFile(tokenFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := gitproxy.LoadSandboxTokens(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := &gitproxy.GitProxy{
+		Tokens:    tokens,
+		Namespace: &namespace.Server{CIStore: store, ExternalCI: actionsCIRepo{fakeExternalCI{run: gha}}, Redactor: redact.New(nil)},
+		NamespaceScopes: fakeNamespaceScopes{scopes: map[string]model.NamespaceScope{
+			"sb-ci": {TaskID: "7", RunID: "run-a", TaskRepo: "acme/widgets", TaskBranch: "grain/task-7", TaskBase: "main",
+				MayReadCI: true, AllowedRepos: map[string]bool{"acme/widgets": true}},
+		}},
+		Activity: &fakeActivity{},
+	}
+	h := gitproxy.NewHandler(proxy)
+	get := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", basicAuthHeader("tok-ci"))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := get("/cli/ci/test-history?test=TestThing")
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("test-history = %d %s", rec.Code, body)
+	}
+	for _, want := range []string{
+		"Runs examined: 1 | Executions found: 1",
+		"GitHub Actions: 1 run(s) (2026-11-08 06:00 UTC)",
+		"GitHub Actions runs count only this test's failures",
+		"its 2 Grain CI run(s), from before, are left out (--provider grain reads them)",
+		"Failed:  1",
+		`run gha:acme:widgets:42 (nightly.yml, main @ abcdefa) | job "go-long": FAIL`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("test-history does not say %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "Passed:  1") || strings.Contains(body, "Grain CI: ") {
+		t.Errorf("an Actions repository's history counted a pass or grain CI's runs:\n%s", body)
+	}
+
+	rec = get("/cli/ci/test-history?test=TestThing&provider=grain")
+	if body := rec.Body.String(); rec.Code != http.StatusOK || !strings.Contains(body, "Grain CI: 2 run(s) (2026-10-31 09:00 UTC)") ||
+		!strings.Contains(body, "Passed:  2") {
+		t.Errorf("--provider grain = %d\n%s", rec.Code, body)
+	}
+	if rec := get("/cli/ci/test-history?test=TestThing&provider=jenkins"); rec.Code != http.StatusBadRequest {
+		t.Errorf("an unknown provider answered %d %s", rec.Code, rec.Body)
+	}
+}
