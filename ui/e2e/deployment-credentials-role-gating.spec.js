@@ -39,6 +39,28 @@ const CAPADMIN = {
   ],
 };
 
+// F5 of the same walkthrough: the other way round. The card's writes
+// do not go through capabilities:admin at all, and against a live daemon
+// this role's PUT /api/settings and PUT/DELETE /api/secrets each returned
+// 200 (docs/test-runs/2026-11-08-deployment-credentials-card/routes.md),
+// yet the whole card was drawn read-only, saying it needed
+// capabilities:admin.
+const SECRETSONLY = {
+  role: "secretsonly",
+  roles: ["secretsonly"],
+  full: false,
+  scopes: [
+    "capabilities:read",
+    "repos:read",
+    "secrets:read",
+    "secrets:write",
+    "settings:read",
+    "settings:write",
+    "tasks:read",
+    "templates:read",
+  ],
+};
+
 async function asRole(page, access) {
   await page.route(
     (u) => u.pathname === "/api/config",
@@ -103,6 +125,59 @@ test("a role with capabilities:admin but not settings:write or secrets:write see
       const n = await note.boundingBox();
       const c = await card.boundingBox();
       expect(n.x + n.width).toBeLessThanOrEqual(c.x + c.width + 1);
+    }
+  } finally {
+    await page.unroute((u) => u.pathname === "/api/config");
+    await page.evaluate(() =>
+      fetch("/api/secrets/cosign-key", { method: "DELETE" }),
+    );
+  }
+});
+
+test("a role with settings:write and secrets:write but not capabilities:admin can use the card, and only the rest of Capabilities is read-only", async ({
+  page,
+}) => {
+  await page.goto("/settings/capabilities");
+  expect(await putSecret(page, "/api/secrets/cosign-key/key", "k")).toBe(200);
+  try {
+    await asRole(page, SECRETSONLY);
+    for (const viewport of [
+      { width: 1440, height: 900 },
+      { width: 390, height: 844 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await page.goto("/settings/capabilities#credentials");
+      const card = page.locator("#credentials");
+      await expect(card.getByText("cosign-key")).toBeVisible();
+      // The page's note names what capabilities:admin holds back, which
+      // is not this card.
+      const pageNote = page.getByTestId("settings-role-read-only");
+      await expect(pageNote).toContainText(
+        "Capability servers, the capability policy and API scope sets are read-only for you.",
+      );
+      await expect(pageNote).toContainText("Needs capabilities:admin");
+      await expect(
+        page.locator("#capability-policy [data-settings-readonly]").first(),
+      ).toBeVisible();
+      await expect(card.getByTestId("credentials-read-only")).toHaveCount(0);
+      await expect(card.locator("[data-settings-readonly]")).toHaveCount(0);
+      await expect(card.locator("input[name=githubHost]")).toBeEnabled();
+      await expect(card.locator("input[name=gcpProject]")).toBeEnabled();
+      await expect(
+        card.getByRole("button", { name: "Delete secret" }),
+      ).toBeEnabled();
+      await expect(
+        card.getByRole("button", { name: "Set secret" }),
+      ).toBeEnabled();
+      const overflow = await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth -
+          document.documentElement.clientWidth,
+      );
+      expect(overflow).toBeLessThanOrEqual(0);
+      const n = await pageNote.boundingBox();
+      const main = await page.getByRole("main").boundingBox();
+      expect(n.x + n.width).toBeLessThanOrEqual(main.x + main.width + 1);
     }
   } finally {
     await page.unroute((u) => u.pathname === "/api/config");
