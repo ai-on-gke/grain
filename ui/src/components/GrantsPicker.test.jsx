@@ -247,9 +247,12 @@ describe("GrantsPicker", () => {
         onRemove={vi.fn()}
       />,
     );
-    // Held grants are one list of sections; the legacy id is not among them.
+    // Held grants are one list of sections, bare capability ids included.
     const held = screen.getByTestId("grant-grants");
-    expect(within(held).queryByText(/gcp-key/)).toBeNull();
+    expect(within(held).getByLabelText("gcp-key")).toHaveAttribute(
+      "data-grant-kind",
+      "capability",
+    );
     expect(
       within(held).getByLabelText("api:tasks:admin (dangerous)"),
     ).toBeTruthy();
@@ -1016,5 +1019,89 @@ describe("GrantsPicker", () => {
     await waitFor(() =>
       expect(container.querySelector('[role="group"]')).toBeNull(),
     );
+  });
+
+  it("renders a held bare capability id as a read-only GrantLine naming its retired alias and removes it", async () => {
+    api.mockImplementation(async (path, opts) => {
+      if (path.split("?")[0] === "/api/capability-methods") return [];
+      if (path === "/api/capability-grants/check") {
+        return JSON.parse(opts.body).grants.map(({ grant }) => {
+          if (grant === "self-debug") {
+            return {
+              grant,
+              aliasOf: [
+                "api:self-debug",
+                "https://grain.dev/capabilities/grain#source={}",
+              ],
+            };
+          }
+          if (grant === "read-issues") {
+            return {
+              grant,
+              recorded: "https://grain.dev/capabilities/github#read-issues={}",
+              aliasOf: ["https://grain.dev/capabilities/github#read-issues={}"],
+            };
+          }
+          return { grant, error: `capability "${grant}" is not offered` };
+        });
+      }
+      throw new Error(`unexpected ${path}`);
+    });
+    const onRemove = vi.fn().mockResolvedValue();
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <GrantsPicker
+        grants={["self-debug", "read-issues", "gone-bare"]}
+        config={{}}
+        onApiChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onRemove={onRemove}
+      />,
+    );
+
+    const selfDebug = await screen.findByLabelText(
+      "self-debug (retired alias)",
+    );
+    expect(selfDebug).toHaveAttribute("data-grant", "self-debug");
+    expect(selfDebug).toHaveAttribute("data-grant-kind", "capability");
+    expect(selfDebug.querySelector("input")).toBeNull();
+    expect(
+      within(selfDebug).getByText(
+        "Retired alias of api:self-debug + grain#source",
+      ),
+    ).toBeInTheDocument();
+    expect(within(selfDebug).getByText("retired alias")).toBeInTheDocument();
+
+    const readIssues = screen.getByLabelText("read-issues (retired alias)");
+    expect(
+      within(readIssues).getByText("Retired alias of github#read-issues"),
+    ).toBeInTheDocument();
+
+    const gone = screen.getByLabelText("gone-bare (no longer offered)");
+    expect(within(gone).getByText("No longer offered")).toBeInTheDocument();
+
+    await user.click(
+      within(selfDebug).getByRole("button", {
+        name: "Remove self-debug (retired alias)",
+      }),
+    );
+    expect(onRemove).toHaveBeenCalledWith("self-debug");
+
+    rerender(
+      <GrantsPicker
+        grants={["self-debug"]}
+        config={{}}
+        disabled
+        onApiChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onRemove={onRemove}
+      />,
+    );
+    const readOnlyLine = await screen.findByLabelText(
+      "self-debug (retired alias)",
+    );
+    expect(
+      within(readOnlyLine).queryByRole("button", { name: /remove/i }),
+    ).toBeNull();
   });
 });

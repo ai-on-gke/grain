@@ -1,0 +1,170 @@
+PASS desktop/light my-entries-stop: opens "Stop platform-vm?"
+PASS desktop/light my-entries-stop: initial focus on Cancel (got "Cancel")
+PASS desktop/light my-entries-stop: dialog fits viewport (480px <= 1440px)
+PASS desktop/light my-entries-stop: zero horizontal overflow (1440/1440)
+PASS desktop/light my-entries-stop: Tab/Shift+Tab stays inside dialog (BUTTON:Stop instance -> BUTTON:Cancel -> BUTTON:Stop instance -> BUTTON:Cancel -> BUTTON:Stop instance)
+PASS desktop/light my-entries-stop: Escape closes and restores focus to opener
+PASS desktop/light my-entries-delete: opens "Delete platform-vm?"
+PASS desktop/light my-entries-delete: initial focus on Cancel (got "Cancel")
+PASS desktop/light my-entries-delete: dialog fits viewport (480px <= 1440px)
+PASS desktop/light my-entries-delete: zero horizontal overflow (1440/1440)
+PASS desktop/light my-entries-delete: Tab/Shift+Tab stays inside dialog (INPUT:confirm-delete-input -> BUTTON:Cancel -> INPUT:confirm-delete-input -> BUTTON:Cancel -> INPUT:confirm-delete-input)
+PASS desktop/light my-entries-delete: Escape closes and restores focus to opener
+PASS desktop/light detail-stop: opens "Stop platform-vm?"
+PASS desktop/light detail-stop: initial focus on Cancel (got "Cancel")
+PASS desktop/light detail-stop: dialog fits viewport (480px <= 1440px)
+PASS desktop/light detail-stop: zero horizontal overflow (1440/1440)
+PASS desktop/light detail-stop: Tab/Shift+Tab stays inside dialog (BUTTON:Stop instance -> BUTTON:Cancel -> BUTTON:Stop instance -> BUTTON:Cancel -> BUTTON:Stop instance)
+PASS desktop/light detail-stop: Escape closes and restores focus to opener
+PASS desktop/light detail-delete: opens "Delete platform-vm?"
+PASS desktop/light detail-delete: initial focus on Cancel (got "Cancel")
+PASS desktop/light detail-delete: dialog fits viewport (480px <= 1440px)
+PASS desktop/light detail-delete: zero horizontal overflow (1440/1440)
+PASS desktop/light detail-delete: Tab/Shift+Tab stays inside dialog (INPUT:detail-confirm-delete-input -> BUTTON:Cancel -> INPUT:detail-confirm-delete-input -> BUTTON:Cancel -> INPUT:detail-confirm-delete-input)
+PASS desktop/light detail-delete: Escape closes and restores focus to opener
+PASS desktop/light detail-revoke-cred: opens "Revoke registration credential?"
+PASS desktop/light detail-revoke-cred: initial focus on Cancel (got "Cancel")
+PASS desktop/light detail-revoke-cred: dialog fits viewport (480px <= 1440px)
+PASS desktop/light detail-revoke-cred: zero horizontal overflow (1440/1440)
+PASS desktop/light detail-revoke-cred: Tab/Shift+Tab stays inside dialog (BUTTON:Revoke credential -> BUTTON:Cancel -> BUTTON:Revoke credential -> BUTTON:Cancel -> BUTTON:Revoke credential)
+PASS desktop/light detail-revoke-cred: Escape closes and restores focus to opener
+PASS desktop/light grants-revoke: opens "Revoke consent for"
+PASS desktop/light grants-revoke: initial focus on Cancel (got "Cancel")
+PASS desktop/light grants-revoke: dialog fits viewport (480px <= 1440px)
+PASS desktop/light grants-revoke: zero horizontal overflow (1440/1440)
+PASS desktop/light grants-revoke: Tab/Shift+Tab stays inside dialog (BUTTON:Revoke grant -> BUTTON:Cancel -> BUTTON:Revoke grant -> BUTTON:Cancel -> BUTTON:Revoke grant)
+PASS desktop/light grants-revoke: Escape closes and restores focus to opener
+PASS desktop/light admin-purge: opens "Hard purge alice-sandbox-old?"
+PASS desktop/light admin-purge: initial focus on Cancel (got "Cancel")
+PASS desktop/light admin-purge: dialog fits viewport (480px <= 1440px)
+PASS desktop/light admin-purge: zero horizontal overflow (1440/1440)
+PASS desktop/light admin-purge: Tab/Shift+Tab stays inside dialog (BUTTON:Hard purge -> INPUT: -> BUTTON:Cancel -> INPUT: -> BUTTON:Hard purge)
+PASS desktop/light admin-purge: Escape closes and restores focus to opener
+PASS desktop/dark my-entries-stop: opens "Stop platform-vm?"
+PASS desktop/dark my-entries-stop: initial focus on Cancel (got "Cancel")
+PASS desktop/dark my-entries-stop: dialog fits viewport (480px <= 1440px)
+PASS desktop/dark my-entries-stop: zero horizontal overflow (1440/1440)
+PASS desktop/dark my-entries-stop: Tab/Shift+Tab stays inside dialog (BUTTON:Stop instance -> BUTTON:Cancel -> BUTTON:Stop instance -> BUTTON:Cancel -> BUTTON:Stop instance)
+PASS desktop/dark my-entries-stop: Escape closes and restores focus to opener
+PASS desktop/dark my-entries-delete: opens "Delete platform-vm?"
+PASS desktop/dark my-entries-delete: initial focus on Cancel (got "Cancel")
+PASS desktop/dark my-entries-delete: dialog fits viewport (480px <= 1440px)
+PASS desktop/dark my-entries-delete: zero horizontal overflow (1440/1440)
+PASS desktop/dark my-entries-delete: Tab/Shift+Tab stays inside dialog (INPUT:confirm-delete-input -> BUTTON:Cancel -> INPUT:confirm-delete-input -> BUTTON:Cancel -> INPUT:confirm-delete-input)
+PASS desktop/dark my-entries-delete: Escape closes and restores focus to opener
+PASS desktop/dark detail-stop: opens "Stop platform-vm?"
+PASS desktop/dark detail-stop: initial focus on Cancel (got "Cancel")
+PASS desktop/dark detail-stop: dialog fits viewport (480px <= 1440px)
+PASS desktop/dark detail-stop: zero horizontal overflow (1440/1440)
+PASS desktop/dark detail-stop: Tab/Shift+Tab stays inside dialog (BUTTON:Stop instance -> BUTTON:Cancel -> BUTTON:Stop instance -> BUTTON:Cancel -> BUTTON:Stop instance)
+PASS desktop/dark detail-stop: Escape closes and restores focus to opener
+PASS desktop/dark detail-delete: opens "Delete platform-vm?"
+PASS desktop/dark detail-delete: initial focus on Cancel (got "Cancel")
+PASS desktop/dark detail-delete: dialog fits viewport (480px <= 1440px)
+PASS desktop/dark detail-delete: zero horizontal overflow (1440/1440)
+PASS desktop/dark detail-delete: Tab/Shift+Tab stays inside dialog (INPUT:detail-confirm-delete-input -> BUTTON:Cancel -> INPUT:detail-confirm-delete-input -> BUTTON:Cancel -> INPUT:detail-confirm-delete-input)
+PASS desktop/dark detail-delete: Escape closes and restores focus to opener
+PASS desktop/dark detail-revoke-cred: opens "Revoke registration credential?"
+PASS desktop/dark detail-revoke-cred: initial focus on Cancel (got "Cancel")
+PASS desktop/dark detail-revoke-cred: dialog fits viewport (480px <= 1440px)
+PASS desktop/dark detail-revoke-cred: zero horizontal overflow (1440/1440)
+PASS desktop/dark detail-revoke-cred: Tab/Shift+Tab stays inside dialog (BUTTON:Revoke credential -> BUTTON:Cancel -> BUTTON:Revoke credential -> BUTTON:Cancel -> BUTTON:Revoke credential)
+PASS desktop/dark detail-revoke-cred: Escape closes and restores focus to opener
+PASS desktop/dark grants-revoke: opens "Revoke consent for"
+PASS desktop/dark grants-revoke: initial focus on Cancel (got "Cancel")
+PASS desktop/dark grants-revoke: dialog fits viewport (480px <= 1440px)
+PASS desktop/dark grants-revoke: zero horizontal overflow (1440/1440)
+PASS desktop/dark grants-revoke: Tab/Shift+Tab stays inside dialog (BUTTON:Revoke grant -> BUTTON:Cancel -> BUTTON:Revoke grant -> BUTTON:Cancel -> BUTTON:Revoke grant)
+PASS desktop/dark grants-revoke: Escape closes and restores focus to opener
+PASS desktop/dark admin-purge: opens "Hard purge alice-sandbox-old?"
+PASS desktop/dark admin-purge: initial focus on Cancel (got "Cancel")
+PASS desktop/dark admin-purge: dialog fits viewport (480px <= 1440px)
+PASS desktop/dark admin-purge: zero horizontal overflow (1440/1440)
+PASS desktop/dark admin-purge: Tab/Shift+Tab stays inside dialog (BUTTON:Hard purge -> INPUT: -> BUTTON:Cancel -> INPUT: -> BUTTON:Hard purge)
+PASS desktop/dark admin-purge: Escape closes and restores focus to opener
+PASS phone/light my-entries-stop: opens "Stop platform-vm?"
+PASS phone/light my-entries-stop: initial focus on Cancel (got "Cancel")
+PASS phone/light my-entries-stop: dialog fits viewport (358px <= 390px)
+PASS phone/light my-entries-stop: zero horizontal overflow (390/390)
+PASS phone/light my-entries-stop: Tab/Shift+Tab stays inside dialog (BUTTON:Stop instance -> BUTTON:Cancel -> BUTTON:Stop instance -> BUTTON:Cancel -> BUTTON:Stop instance)
+PASS phone/light my-entries-stop: Escape closes and restores focus to opener
+PASS phone/light my-entries-delete: opens "Delete platform-vm?"
+PASS phone/light my-entries-delete: initial focus on Cancel (got "Cancel")
+PASS phone/light my-entries-delete: dialog fits viewport (358px <= 390px)
+PASS phone/light my-entries-delete: zero horizontal overflow (390/390)
+PASS phone/light my-entries-delete: Tab/Shift+Tab stays inside dialog (INPUT:confirm-delete-input -> BUTTON:Cancel -> INPUT:confirm-delete-input -> BUTTON:Cancel -> INPUT:confirm-delete-input)
+PASS phone/light my-entries-delete: Escape closes and restores focus to opener
+PASS phone/light detail-stop: opens "Stop platform-vm?"
+PASS phone/light detail-stop: initial focus on Cancel (got "Cancel")
+PASS phone/light detail-stop: dialog fits viewport (358px <= 390px)
+PASS phone/light detail-stop: zero horizontal overflow (390/390)
+PASS phone/light detail-stop: Tab/Shift+Tab stays inside dialog (BUTTON:Stop instance -> BUTTON:Cancel -> BUTTON:Stop instance -> BUTTON:Cancel -> BUTTON:Stop instance)
+PASS phone/light detail-stop: Escape closes and restores focus to opener
+PASS phone/light detail-delete: opens "Delete platform-vm?"
+PASS phone/light detail-delete: initial focus on Cancel (got "Cancel")
+PASS phone/light detail-delete: dialog fits viewport (358px <= 390px)
+PASS phone/light detail-delete: zero horizontal overflow (390/390)
+PASS phone/light detail-delete: Tab/Shift+Tab stays inside dialog (INPUT:detail-confirm-delete-input -> BUTTON:Cancel -> INPUT:detail-confirm-delete-input -> BUTTON:Cancel -> INPUT:detail-confirm-delete-input)
+PASS phone/light detail-delete: Escape closes and restores focus to opener
+PASS phone/light detail-revoke-cred: opens "Revoke registration credential?"
+PASS phone/light detail-revoke-cred: initial focus on Cancel (got "Cancel")
+PASS phone/light detail-revoke-cred: dialog fits viewport (358px <= 390px)
+PASS phone/light detail-revoke-cred: zero horizontal overflow (390/390)
+PASS phone/light detail-revoke-cred: Tab/Shift+Tab stays inside dialog (BUTTON:Revoke credential -> BUTTON:Cancel -> BUTTON:Revoke credential -> BUTTON:Cancel -> BUTTON:Revoke credential)
+PASS phone/light detail-revoke-cred: Escape closes and restores focus to opener
+PASS phone/light grants-revoke: opens "Revoke consent for"
+PASS phone/light grants-revoke: initial focus on Cancel (got "Cancel")
+PASS phone/light grants-revoke: dialog fits viewport (358px <= 390px)
+PASS phone/light grants-revoke: zero horizontal overflow (390/390)
+PASS phone/light grants-revoke: Tab/Shift+Tab stays inside dialog (BUTTON:Revoke grant -> BUTTON:Cancel -> BUTTON:Revoke grant -> BUTTON:Cancel -> BUTTON:Revoke grant)
+PASS phone/light grants-revoke: Escape closes and restores focus to opener
+PASS phone/light admin-purge: opens "Hard purge alice-sandbox-old?"
+PASS phone/light admin-purge: initial focus on Cancel (got "Cancel")
+PASS phone/light admin-purge: dialog fits viewport (358px <= 390px)
+PASS phone/light admin-purge: zero horizontal overflow (390/390)
+PASS phone/light admin-purge: Tab/Shift+Tab stays inside dialog (BUTTON:Hard purge -> INPUT: -> BUTTON:Cancel -> INPUT: -> BUTTON:Hard purge)
+PASS phone/light admin-purge: Escape closes and restores focus to opener
+PASS phone/dark my-entries-stop: opens "Stop platform-vm?"
+PASS phone/dark my-entries-stop: initial focus on Cancel (got "Cancel")
+PASS phone/dark my-entries-stop: dialog fits viewport (358px <= 390px)
+PASS phone/dark my-entries-stop: zero horizontal overflow (390/390)
+PASS phone/dark my-entries-stop: Tab/Shift+Tab stays inside dialog (BUTTON:Stop instance -> BUTTON:Cancel -> BUTTON:Stop instance -> BUTTON:Cancel -> BUTTON:Stop instance)
+PASS phone/dark my-entries-stop: Escape closes and restores focus to opener
+PASS phone/dark my-entries-delete: opens "Delete platform-vm?"
+PASS phone/dark my-entries-delete: initial focus on Cancel (got "Cancel")
+PASS phone/dark my-entries-delete: dialog fits viewport (358px <= 390px)
+PASS phone/dark my-entries-delete: zero horizontal overflow (390/390)
+PASS phone/dark my-entries-delete: Tab/Shift+Tab stays inside dialog (INPUT:confirm-delete-input -> BUTTON:Cancel -> INPUT:confirm-delete-input -> BUTTON:Cancel -> INPUT:confirm-delete-input)
+PASS phone/dark my-entries-delete: Escape closes and restores focus to opener
+PASS phone/dark detail-stop: opens "Stop platform-vm?"
+PASS phone/dark detail-stop: initial focus on Cancel (got "Cancel")
+PASS phone/dark detail-stop: dialog fits viewport (358px <= 390px)
+PASS phone/dark detail-stop: zero horizontal overflow (390/390)
+PASS phone/dark detail-stop: Tab/Shift+Tab stays inside dialog (BUTTON:Stop instance -> BUTTON:Cancel -> BUTTON:Stop instance -> BUTTON:Cancel -> BUTTON:Stop instance)
+PASS phone/dark detail-stop: Escape closes and restores focus to opener
+PASS phone/dark detail-delete: opens "Delete platform-vm?"
+PASS phone/dark detail-delete: initial focus on Cancel (got "Cancel")
+PASS phone/dark detail-delete: dialog fits viewport (358px <= 390px)
+PASS phone/dark detail-delete: zero horizontal overflow (390/390)
+PASS phone/dark detail-delete: Tab/Shift+Tab stays inside dialog (INPUT:detail-confirm-delete-input -> BUTTON:Cancel -> INPUT:detail-confirm-delete-input -> BUTTON:Cancel -> INPUT:detail-confirm-delete-input)
+PASS phone/dark detail-delete: Escape closes and restores focus to opener
+PASS phone/dark detail-revoke-cred: opens "Revoke registration credential?"
+PASS phone/dark detail-revoke-cred: initial focus on Cancel (got "Cancel")
+PASS phone/dark detail-revoke-cred: dialog fits viewport (358px <= 390px)
+PASS phone/dark detail-revoke-cred: zero horizontal overflow (390/390)
+PASS phone/dark detail-revoke-cred: Tab/Shift+Tab stays inside dialog (BUTTON:Revoke credential -> BUTTON:Cancel -> BUTTON:Revoke credential -> BUTTON:Cancel -> BUTTON:Revoke credential)
+PASS phone/dark detail-revoke-cred: Escape closes and restores focus to opener
+PASS phone/dark grants-revoke: opens "Revoke consent for"
+PASS phone/dark grants-revoke: initial focus on Cancel (got "Cancel")
+PASS phone/dark grants-revoke: dialog fits viewport (358px <= 390px)
+PASS phone/dark grants-revoke: zero horizontal overflow (390/390)
+PASS phone/dark grants-revoke: Tab/Shift+Tab stays inside dialog (BUTTON:Revoke grant -> BUTTON:Cancel -> BUTTON:Revoke grant -> BUTTON:Cancel -> BUTTON:Revoke grant)
+PASS phone/dark grants-revoke: Escape closes and restores focus to opener
+PASS phone/dark admin-purge: opens "Hard purge alice-sandbox-old?"
+PASS phone/dark admin-purge: initial focus on Cancel (got "Cancel")
+PASS phone/dark admin-purge: dialog fits viewport (358px <= 390px)
+PASS phone/dark admin-purge: zero horizontal overflow (390/390)
+PASS phone/dark admin-purge: Tab/Shift+Tab stays inside dialog (BUTTON:Hard purge -> INPUT: -> BUTTON:Cancel -> INPUT: -> BUTTON:Hard purge)
+PASS phone/dark admin-purge: Escape closes and restores focus to opener
+PASS Start instance starts directly without confirmation modal (#878)
+Completed 169 checks with 0 failure(s).
