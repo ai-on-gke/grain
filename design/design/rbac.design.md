@@ -4,6 +4,10 @@
 
 **Specified by:** [`rbac.spec.md`](../spec/rbac/rbac.spec.md)
 
+**Status:** Superseded by [`docs/design/access-rbac.md`](../../docs/design/access-rbac.md) (task 2969). Not implemented as written.
+
+> **Superseded.** Grain implemented roles as API scope sets (`grain/viewer`, `grain/contributor`, `grain/operator`, or sets a deployment declares), checked by the same route scope table that checks agents. It did not implement the fixed `admin`/`writer`/`reader` roles proposed here. [`docs/design/access-rbac.md`](../../docs/design/access-rbac.md) describes what is built, and [`rbac.spec.md`](../spec/rbac/rbac.spec.md) maps each part of this proposal to what replaced it. This document is kept as the record of the proposal.
+
 **The core rule:** Every admitted human or service principal resolves to one of three ordered roles (`admin > writer > reader`) from database-backed allowlist entries and an immutable deployment-owner floor, enforced at a single server-side check point (`ui.RequirePermission`) across HTTP, WebSocket/SSE, MCP, and CLI calls; agents acting on a person's behalf intersect their own `api:*` scopes with that person's current role and can never exceed it.
 
 ## Context
