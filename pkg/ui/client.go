@@ -369,11 +369,25 @@ func (r *CreateTaskRequest) UnmarshalJSON(data []byte) error {
 		r.Capabilities = &caps
 	}
 	if present(aux.RawGrants) {
+		var targetFields []string
+		if strings.TrimSpace(r.Repo) != "" {
+			targetFields = append(targetFields, "repo")
+		}
+		if strings.TrimSpace(r.Base) != "" {
+			targetFields = append(targetFields, "base")
+		}
+		if r.NoRepo {
+			targetFields = append(targetFields, "noRepo")
+		}
+		if r.ChangeTarget != nil {
+			targetFields = append(targetFields, "changeTarget")
+		}
 		got, err := decodeRequestGrants(aux.RawGrants, model.GrantSpelling{
 			Capabilities: r.Capabilities != nil,
 			Reads:        r.Reads != nil,
 			Writes:       r.Writes != nil,
-			Target:       strings.TrimSpace(r.Repo) != "" || strings.TrimSpace(r.Base) != "" || r.NoRepo || r.ChangeTarget != nil,
+			Target:       len(targetFields) > 0,
+			TargetFields: targetFields,
 		})
 		if err != nil {
 			return err

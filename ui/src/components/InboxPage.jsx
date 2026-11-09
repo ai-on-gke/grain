@@ -46,6 +46,7 @@ import {
 } from "../alerts.js";
 import {
   ackNotification,
+  approveReleaseLabel,
   investigateNotification,
   notificationSentence,
   decideRelease,
@@ -707,25 +708,30 @@ function StateSyncGroup({ failure, onOpenConfigRepo }) {
   );
 }
 
-// ReleaseSoak is what a soak-era pending release's Approve needs said
-// beside it: how long it soaked, and when that was under the minimum,
-// the SHORT SOAK warning -- approving it then accepts the short soak
-// (short_soak_ok), which the approve job otherwise refuses. Releases the
-// qualification-driven train stages (vX.Y.Z, minor or patch) write
-// "Qualification: PASS" instead, so release.soak and release.shortSoak
-// are null and nothing is rendered beside Approve.
+// ReleaseSoak is what a pending release's Approve needs said beside it:
+// for a soak-era release, how long it soaked and the SHORT SOAK warning
+// when under the minimum (short_soak_ok); for a release carrying breaking
+// changes outside a RELEASE_MAJOR major bump, the BREAKING warning
+// (allow_breaking), which the approve job otherwise refuses.
 function ReleaseSoak({ release }) {
-  if (!release.soak && !release.shortSoak) return null;
+  if (!release.soak && !release.shortSoak && !release.breaking) return null;
+  const tooltip = [release.shortSoak, release.breaking]
+    .filter(Boolean)
+    .join("\n");
   return (
     <span
       className="inbox-release-soak"
       data-testid="inbox-release-soak"
-      title={release.shortSoak || undefined}
+      title={tooltip || undefined}
     >
       {release.shortSoak && (
         <span className="inbox-release-short-soak">SHORT SOAK</span>
       )}
-      {release.soak || "no recorded soak"}
+      {release.breaking && (
+        <span className="inbox-release-short-soak">BREAKING</span>
+      )}
+      {(release.soak || release.shortSoak) &&
+        (release.soak || "no recorded soak")}
     </span>
   );
 }
@@ -791,33 +797,37 @@ function NotificationsGroup({
                 </Alert>
               </div>
               <div className="inbox-actions">
-                {pendingReleaseOf(n) && (
-                  <>
-                    <ReleaseSoak release={pendingReleaseOf(n)} />
-                    <Button
-                      size="small"
-                      variant="contained"
-                      color={
-                        pendingReleaseOf(n).shortSoak ? "warning" : "primary"
-                      }
-                      disabled={busy !== null}
-                      onClick={() => act(n, "approve")}
-                    >
-                      {pendingReleaseOf(n).shortSoak
-                        ? "Approve short soak"
-                        : "Approve"}
-                    </Button>
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      color="error"
-                      disabled={busy !== null}
-                      onClick={() => act(n, "reject")}
-                    >
-                      Reject
-                    </Button>
-                  </>
-                )}
+                {(() => {
+                  const release = pendingReleaseOf(n);
+                  if (!release) return null;
+                  return (
+                    <>
+                      <ReleaseSoak release={release} />
+                      <Button
+                        size="small"
+                        variant="contained"
+                        color={
+                          release.shortSoak || release.breaking
+                            ? "warning"
+                            : "primary"
+                        }
+                        disabled={busy !== null}
+                        onClick={() => act(n, "approve")}
+                      >
+                        {approveReleaseLabel(release)}
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        color="error"
+                        disabled={busy !== null}
+                        onClick={() => act(n, "reject")}
+                      >
+                        Reject
+                      </Button>
+                    </>
+                  );
+                })()}
                 {!n.ackedAt && (
                   <AccessGate scope="notifications:write">
                     <Button
