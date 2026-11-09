@@ -645,6 +645,9 @@ type Grant struct {
 // A capability reference is covered only by a reference with the same
 // canonical capability and deep-equal normalized args
 // (UncoveredCapabilityRefs, design/spec/capabilities/capabilities.spec.md §2.3.4).
+// A grant only a person may give (IsPersonOnlyGrant) is never covered,
+// matching protocol.Covers on reference grants and EscalatedCapabilities
+// on named grants.
 //
 // Both sides are read through CanonicalGrant into the spelling slice 2
 // stores (StoredGrantSpelling), so an api reference and the api:<scope>
@@ -655,6 +658,9 @@ func GrantsSubsetOf(grants, allowed []Grant) bool {
 	grants, allowed = storedGrantSpellings(grants), storedGrantSpellings(allowed)
 	have := heldNonRefGrants(allowed)
 	for _, g := range grants {
+		if IsPersonOnlyGrant(g.Capability) {
+			return false
+		}
 		if IsCapabilityRef(g.Capability) {
 			continue
 		}

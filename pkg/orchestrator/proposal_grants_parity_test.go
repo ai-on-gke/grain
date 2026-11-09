@@ -125,6 +125,25 @@ func TestLiveAndRelayedProposalsStoreIdenticalGrants(t *testing.T) {
 			wantAutoMerge: false,
 		},
 		{
+			name: "self-upgrade non-ref person-only alias expands and holds for person",
+			parentGrants: []model.Grant{
+				{Capability: "api:self-upgrade", Via: model.GrantByLabel},
+			},
+			proposalPayload: map[string]any{
+				"title":        "Upgrade follow-up",
+				"body":         "Schedule daemon upgrade",
+				"repo":         "acme/widgets",
+				"branch":       "main",
+				"auto_merge":   true,
+				"capabilities": []any{"self-upgrade"},
+			},
+			wantGrants: []model.Grant{
+				{Capability: "api:self-upgrade", Via: model.GrantByLabel},
+			},
+			wantState:     model.StateProposed,
+			wantAutoMerge: false,
+		},
+		{
 			name: "defaults and unified grants with api# reference and bare alias",
 			defaultCaps: []string{
 				"self-debug",

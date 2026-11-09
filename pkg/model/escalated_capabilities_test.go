@@ -246,7 +246,9 @@ func TestEscalatedCapabilitiesTreatsBareAliasesAndCanonicalGrantsConsistently(t 
 	}
 
 	// 4. 1-to-1 non-dangerous aliases (gcp-key, memory) match in both directions,
-	// while person-only self-repair / grain#host-exec={} always escalates in both directions.
+	// while person-only grants (both reference-backed self-repair / grain#host-exec={}
+	// and non-reference self-upgrade / api:self-upgrade / api:secrets:write) always
+	// escalate and are never covered by GrantsSubsetOf or AutoSubmits in any direction.
 	for _, pair := range []struct {
 		bare, canonical string
 	}{
@@ -265,12 +267,29 @@ func TestEscalatedCapabilitiesTreatsBareAliasesAndCanonicalGrantsConsistently(t 
 		}
 	}
 
-	pHostExec := model.Task{Grants: label(model.GrainHostExecGrant)}
-	cSelfRepair := model.Task{Grants: label("self-repair")}
-	if got := model.EscalatedCapabilities(cSelfRepair, pHostExec); !slices.Equal(got, []string{"self-repair"}) {
-		t.Errorf("person-only bare self-repair must escalate even when parent holds grain#host-exec: got %v", got)
-	}
-	if got := model.EscalatedCapabilities(pHostExec, cSelfRepair); !slices.Equal(got, []string{model.GrainHostExecGrant}) {
-		t.Errorf("person-only grain#host-exec must escalate even when parent holds bare self-repair: got %v", got)
+	for _, pair := range []struct {
+		bare, canonical string
+	}{
+		{"self-repair", model.GrainHostExecGrant},
+		{"self-upgrade", "api:self-upgrade"},
+	} {
+		for _, parentCap := range []string{pair.bare, pair.canonical} {
+			for _, childCap := range []string{pair.bare, pair.canonical} {
+				p := model.Task{ID: "parent", Target: &repo, AutoMerge: true, Grants: label(parentCap)}
+				c := model.Task{ID: "child", Target: &repo, Grants: label(childCap)}
+				if got := model.EscalatedCapabilities(c, p); !slices.Equal(got, []string{childCap}) {
+					t.Errorf("person-only %s child vs %s parent: EscalatedCapabilities = %v, want [%s]", childCap, parentCap, got, childCap)
+				}
+				if got := model.AgentEscalatedCapabilities(c, p); !slices.Equal(got, []string{childCap}) {
+					t.Errorf("person-only %s child vs %s parent: AgentEscalatedCapabilities = %v, want [%s]", childCap, parentCap, got, childCap)
+				}
+				if model.GrantsSubsetOf(c.Grants, p.Grants) {
+					t.Errorf("person-only %s child vs %s parent: GrantsSubsetOf = true, want false", childCap, parentCap)
+				}
+				if model.AutoSubmits(c, p) {
+					t.Errorf("person-only %s child vs %s parent: AutoSubmits = true, want false", childCap, parentCap)
+				}
+			}
+		}
 	}
 }

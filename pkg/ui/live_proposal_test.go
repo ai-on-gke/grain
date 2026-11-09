@@ -358,6 +358,31 @@ func TestAutoSubmittedProposalInheritanceAndCapabilities(t *testing.T) {
 	if strings.Contains(piece.Description, "grain: this proposal asked for") {
 		t.Errorf("body = %q: a proposal asking for nothing new carries an escalation note", piece.Description)
 	}
+
+	// Even when the parent itself holds a non-reference person-only grant
+	// (self-upgrade -> api:self-upgrade), a proposal asking for it must wait for
+	// a person and must not inherit auto-merge.
+	upgradeParent, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "upgrade parent", Approved: true, AutoMerge: true,
+		Capabilities: &[]string{"self-upgrade"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	heldPersonOnly, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "upgrade child", ProposedBy: upgradeParent.ID, AutoMerge: true,
+		Capabilities: &[]string{"self-upgrade"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if heldPersonOnly.State != model.StateProposed || heldPersonOnly.AutoMerge {
+		t.Errorf("person-only proposal from holder: state=%s autoMerge=%v, want proposed and autoMerge=false",
+			heldPersonOnly.State, heldPersonOnly.AutoMerge)
+	}
+	if !strings.Contains(heldPersonOnly.Description, "only a person may grant") {
+		t.Errorf("body = %q, want person-only escalation note", heldPersonOnly.Description)
+	}
 }
 
 // grain#2409: a standing session trusted to queue its own work is not

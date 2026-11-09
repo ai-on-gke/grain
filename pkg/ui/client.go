@@ -3123,7 +3123,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		}
 		sessionQueued = sessionQueues
 		if len(escalated) > 0 || len(ungrantedWrites) > 0 || len(ungrantedReads) > 0 {
-			sessionQueued = false
+			autoSubmit, sessionQueued = false, false
 		}
 		if !autoSubmit {
 			refusal = model.AutoApprovalRefusal(child, *proposedBy, sessionQueues, seeding)
