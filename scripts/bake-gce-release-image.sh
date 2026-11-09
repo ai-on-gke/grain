@@ -14,7 +14,7 @@
 # limitations under the License.
 
 # Bake a per-release Compute Engine VM image into family `grain-release`
-# (design/design/registry.design.md, Step 8).
+# (design/design/hub.design.md, Step 8).
 #
 # What is baked into every `grain-release` image:
 #   - Docker Engine, the `grain` system account, and pre-pulled release

@@ -430,8 +430,8 @@ func TestRegistryVerifier(t *testing.T) {
 	if verifier.Name() != "registry" {
 		t.Fatalf("Name() = %q, want registry", verifier.Name())
 	}
-	if headers := verifier.Headers(); len(headers) != 1 || headers[0] != webauth.RegistryAssertionHeader {
-		t.Fatalf("Headers() = %v, want [%s]", headers, webauth.RegistryAssertionHeader)
+	if headers := verifier.Headers(); len(headers) != 2 || headers[0] != webauth.HubAssertionHeader || headers[1] != webauth.RegistryAssertionHeader {
+		t.Fatalf("Headers() = %v, want [%s %s]", headers, webauth.HubAssertionHeader, webauth.RegistryAssertionHeader)
 	}
 	if verifier.AccessCodeWins() {
 		t.Fatal("AccessCodeWins() = true, want false")

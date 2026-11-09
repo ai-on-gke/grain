@@ -128,7 +128,7 @@ type Category struct {
 // review of task 3284): pkg/webauth/, which verifies Cloud IAP JWTs and
 // X-Grain-Registry-Assertion ES256 JWTs, admits domains, groups and
 // service principals, and runs the proxy-auth Fetch-Metadata/Origin CSRF
-// checks (auth-routes); and pkg/registry/ with cmd/grain-registry/, which
+// checks (auth-routes); and pkg/hub/ with cmd/grain-hub/, which
 // verify front-door IAP assertions, decide entry visibility and
 // X-Grain-On-Behalf-Of delegation, sign X-Grain-Registry-Assertion JWTs,
 // strip edge credentials and IAP cookies before forwarding over tunnels,
@@ -409,7 +409,7 @@ var Categories = []Category{
 			// grain-registry: the IAP front door, entry visibility and
 			// on-behalf-of delegation, the assertion signer, the edge
 			// credential stripping before a tunnel, and grc_ credentials.
-			"pkg/registry/", "cmd/grain-registry/",
+			"pkg/hub/", "cmd/grain-hub/",
 		},
 	},
 	{

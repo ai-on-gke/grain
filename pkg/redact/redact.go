@@ -243,7 +243,7 @@ var patterns = []pattern{
 	},
 	{
 		"registry token header",
-		regexp.MustCompile(`(?i)(x-grain-registry-token\s*[:=]\s*)\S+`),
+		regexp.MustCompile(`(?i)(x-grain-(?:hub|registry)-token\s*[:=]\s*)\S+`),
 		"${1}[redacted: registry token]",
 	},
 	{"bearer token", regexp.MustCompile(`(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]{8,}`), "${1}[redacted: bearer token]"},

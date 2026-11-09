@@ -254,8 +254,8 @@ func TestGitHubCIChangesPathClassification(t *testing.T) {
 			wantEnabled: []string{"frontend", "go_program"},
 		},
 		{
-			name:        "ui-registry component enables frontend and go_program only",
-			files:       []string{"ui-registry/src/App.jsx"},
+			name:        "ui-hub component enables frontend and go_program only",
+			files:       []string{"ui-hub/src/App.jsx"},
 			wantEnabled: []string{"frontend", "go_program"},
 		},
 		{
@@ -368,8 +368,8 @@ func TestGitHubCIChangesMirrorsGrainTestsWorkflowPaths(t *testing.T) {
 		"ui/src/App.jsx",
 		"ui/src/state.js",
 		"ui/src/taskAttributes.js",
-		"ui-registry/package.json",
-		"ui-registry/src/App.jsx",
+		"ui-hub/package.json",
+		"ui-hub/src/App.jsx",
 		"ui-shared/index.js",
 		"pkg/orchestrator/foo.go",
 		"pkg/ci/paths.go",

@@ -26,7 +26,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ai-on-gke/grain/pkg/registryauth"
+	"github.com/ai-on-gke/grain/pkg/hubauth"
 )
 
 // googleToken makes registryauth hand out token (or fail, when token is
@@ -34,18 +34,18 @@ import (
 func googleToken(t *testing.T, token string) *int {
 	t.Helper()
 	asked := new(int)
-	saved := registryauth.TokenSource
-	registryauth.TokenSource = func(context.Context) (string, error) {
+	saved := hubauth.TokenSource
+	hubauth.TokenSource = func(context.Context) (string, error) {
 		*asked++
 		if token == "" {
 			return "", errors.New("no credentials here")
 		}
 		return token, nil
 	}
-	registryauth.ResetCache()
+	hubauth.ResetCache()
 	t.Cleanup(func() {
-		registryauth.TokenSource = saved
-		registryauth.ResetCache()
+		hubauth.TokenSource = saved
+		hubauth.ResetCache()
 	})
 	return asked
 }

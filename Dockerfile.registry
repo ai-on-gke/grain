@@ -12,12 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Multi-stage build for the grain-registry container image.
+# DEPRECATED: Dockerfile.registry is Dockerfile.hub under its name from
+# before the Grain Registry was renamed the Grain Hub, kept for one
+# release so a deployment that builds the hub image with
+# `-f Dockerfile.registry` keeps working. Build Dockerfile.hub instead;
+# this file goes in a future release. Everything below this paragraph is
+# Dockerfile.hub verbatim (tests/deploy/hub_rename_test.go holds it so).
+
+# Multi-stage build for the grain-hub container image (the Grain Hub,
+# formerly the Grain Registry).
 #
-# Build:  make image-registry                      (tags grain-registry:dev)
-#         make image-registry IMAGE_REGISTRY=my/grain-registry:tag
+# Build:  make image-hub                      (tags grain-hub:dev)
+#         make image-hub IMAGE_HUB=my/grain-hub:tag
 # Run:    docker run --rm -p 8080:8080 -p 8081:8081 -p 8082:8082 \
-#           grain-registry:dev -config /etc/grain/registry.yaml
+#           grain-hub:dev -config /etc/grain/hub.yaml
+#
+# The image installs the binary as /usr/local/bin/grain-hub and, for one
+# release, also as /usr/local/bin/grain-registry (a symlink), so a
+# manifest whose command still names grain-registry keeps working.
 
 ARG GO_VERSION=1.26.10
 ARG GO_IMAGE=golang
@@ -28,7 +40,7 @@ FROM ${GO_IMAGE}:${GO_VERSION}-bookworm@${GO_IMAGE_DIGEST} AS build
 
 ENV GOTOOLCHAIN=local
 
-# ui-registry/ is React+Vite and must be built into pkg/registry/server/static
+# ui-hub/ is React+Vite and must be built into pkg/hub/server/static
 # before `go build` embeds it.
 RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -38,11 +50,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm ca-c
 # when one is staged. Only this stage: the runtime stage below installs
 # its own ca-certificates and must never carry that CA, or every
 # published image would trust whoever holds the deployment's key.
-COPY Dockerfile.registry .grain-ca.cr[t] /tmp/
+COPY Dockerfile.hub .grain-ca.cr[t] /tmp/
 RUN if [ -f /tmp/.grain-ca.crt ]; then \
         cp /tmp/.grain-ca.crt /usr/local/share/ca-certificates/grain-ca.crt && \
         update-ca-certificates; \
-    fi && rm -f /tmp/.grain-ca.crt /tmp/Dockerfile.registry
+    fi && rm -f /tmp/.grain-ca.crt /tmp/Dockerfile.hub
 ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 
 WORKDIR /src
@@ -52,10 +64,14 @@ RUN git config --global --add safe.directory /src
 ARG BUILDVCS=auto
 ARG RELEASE=
 ARG EDITION=
-ARG MAIN_GRAIN_REGISTRY=./cmd/grain-registry
+# MAIN_GRAIN_HUB is the main package to build; MAIN_GRAIN_REGISTRY is its
+# pre-rename name, still honoured for a release when MAIN_GRAIN_HUB is
+# not given.
+ARG MAIN_GRAIN_REGISTRY=
+ARG MAIN_GRAIN_HUB=
 RUN set -eu; \
-    find pkg/registry/server/static -mindepth 1 -not -name '.gitignore' -not -name '.gitkeep' -not -name 'placeholder.html' -delete; \
-    (cd ui-registry && npm ci --omit=dev && npm run build); \
+    find pkg/hub/server/static -mindepth 1 -not -name '.gitignore' -not -name '.gitkeep' -not -name 'placeholder.html' -delete; \
+    (cd ui-hub && npm ci --omit=dev && npm run build); \
     vcs="$(./scripts/buildvcs.sh "${BUILDVCS}")"; \
     ldflags="-s -w"; \
     if [ -n "${RELEASE}" ]; then \
@@ -64,13 +80,13 @@ RUN set -eu; \
     if [ -n "${EDITION}" ]; then \
         ldflags="$ldflags -X github.com/ai-on-gke/grain/pkg/version.Edition=${EDITION}"; \
     fi; \
-    CGO_ENABLED=0 go build -buildvcs="$vcs" -ldflags="$ldflags" -o /out/grain-registry "${MAIN_GRAIN_REGISTRY}"
+    CGO_ENABLED=0 go build -buildvcs="$vcs" -ldflags="$ldflags" -o /out/grain-hub "${MAIN_GRAIN_HUB:-${MAIN_GRAIN_REGISTRY:-./cmd/grain-hub}}"
 
 FROM ${RUNTIME_IMAGE}
 
 LABEL org.opencontainers.image.source="https://github.com/bwsalmon/grain" \
-      org.opencontainers.image.title="grain-registry" \
-      org.opencontainers.image.description="The grain multi-instance registry, directory, and tunnel router."
+      org.opencontainers.image.title="grain-hub" \
+      org.opencontainers.image.description="The Grain Hub: grain's multi-instance directory and tunnel router."
 
 RUN apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update && \
     DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends \
@@ -81,7 +97,8 @@ RUN apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https
 RUN groupadd --gid 1000 grain && \
     useradd --uid 1000 --gid 1000 --create-home --home-dir /var/lib/grain --shell /bin/bash grain
 
-COPY --from=build /out/grain-registry /usr/local/bin/grain-registry
+COPY --from=build /out/grain-hub /usr/local/bin/grain-hub
+RUN ln -s grain-hub /usr/local/bin/grain-registry
 
 ARG GIT_REVISION=
 ARG RELEASE=
@@ -93,4 +110,4 @@ WORKDIR /var/lib/grain
 
 EXPOSE 8080 8081 8082
 
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/grain-registry"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/grain-hub"]

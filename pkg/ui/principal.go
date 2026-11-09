@@ -40,6 +40,10 @@ const IAPAssertionHeader = webauth.IAPAssertionHeader
 // RegistryAssertionHeader is the HTTP request header holding the grain-registry JWT assertion.
 const RegistryAssertionHeader = webauth.RegistryAssertionHeader
 
+// HubAssertionHeader is RegistryAssertionHeader's name since the Grain
+// Registry became the Grain Hub; either is read (webauth.HubAssertion).
+const HubAssertionHeader = webauth.HubAssertionHeader
+
 // GoogleIAPCertURL is the Google endpoint serving public keys in PEM format.
 const GoogleIAPCertURL = webauth.GoogleIAPCertURL
 
@@ -60,7 +64,7 @@ var PlaintextIdentityHeaders = []string{
 }
 
 // RegistryConfig holds request-level or server-level registry JWT verification
-// configuration (-ui-registry-issuer, -ui-registry-audience, -ui-registry-keys-url).
+// configuration (-ui-hub-issuer, -ui-hub-audience, -ui-hub-keys-url).
 type RegistryConfig = webauth.RegistryConfig
 
 // WithRegistryConfig attaches a RegistryConfig to ctx.
@@ -86,13 +90,13 @@ type IAPConfig struct {
 	// IAP's PEM map or a JWK set. Empty means $GRAIN_IAP_KEYS_URL, and
 	// then GoogleIAPCertURL.
 	KeysURL string
-	// RegistryIssuer is Config.RegistryIssuer (-ui-registry-issuer): the
+	// RegistryIssuer is Config.RegistryIssuer (-ui-hub-issuer): the
 	// exact iss claim a signed X-Grain-Registry-Assertion must carry.
 	RegistryIssuer string
-	// RegistryAudience is Config.RegistryAudience (-ui-registry-audience):
+	// RegistryAudience is Config.RegistryAudience (-ui-hub-audience):
 	// the single aud URL a signed X-Grain-Registry-Assertion must carry.
 	RegistryAudience string
-	// RegistryKeysURL is Config.RegistryKeysURL (-ui-registry-keys-url):
+	// RegistryKeysURL is Config.RegistryKeysURL (-ui-hub-keys-url):
 	// the JWKS URL publishing the registry's ES256 public keys.
 	RegistryKeysURL string
 	// RequireVerifier is Config.RequireVerifier (-ui-require-verifier):
@@ -336,6 +340,7 @@ var testSourceNets []*net.IPNet
 var (
 	proxyIdentityHeaders = []string{
 		IAPAssertionHeader,
+		HubAssertionHeader,
 		RegistryAssertionHeader,
 		"X-Goog-Authenticated-User-Email",
 		"X-Goog-Authenticated-User-Id",
@@ -487,7 +492,7 @@ func unverifiedIdentity(r *http.Request, proxyOnly bool) string {
 			}
 			if v.Name() == string(AuthMethodRegistry) {
 				return fmt.Sprintf("its %s did not verify against this deployment's registry audience, issuer and keys "+
-					"(-ui-registry-audience, -ui-registry-issuer, -ui-registry-keys-url)", h)
+					"(-ui-hub-audience, -ui-hub-issuer, -ui-hub-keys-url)", h)
 			}
 			return fmt.Sprintf("its %s header did not verify (%s)", h, v.Name())
 		}
@@ -496,9 +501,9 @@ func unverifiedIdentity(r *http.Request, proxyOnly bool) string {
 		return fmt.Sprintf("its %s did not verify against this deployment's IAP audience, issuer and keys "+
 			"(-ui-iap-audience, -ui-iap-issuer, -ui-iap-keys-url)", IAPAssertionHeader)
 	}
-	if strings.TrimSpace(r.Header.Get(RegistryAssertionHeader)) != "" {
-		return fmt.Sprintf("its %s did not verify against this deployment's registry audience, issuer and keys "+
-			"(-ui-registry-audience, -ui-registry-issuer, -ui-registry-keys-url)", RegistryAssertionHeader)
+	if webauth.HubAssertion(r.Header) != "" {
+		return fmt.Sprintf("its %s did not verify against this deployment's hub audience, issuer and keys "+
+			"(-ui-hub-audience, -ui-hub-issuer, -ui-hub-keys-url)", HubAssertionHeader)
 	}
 	if h, id, why, _ := ignoredIdentityHeader(r, proxyOnly); h != "" {
 		return fmt.Sprintf("it names %q only in the unsigned %s header, %s", id, h, why)

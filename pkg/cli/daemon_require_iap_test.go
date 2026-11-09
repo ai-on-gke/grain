@@ -296,9 +296,9 @@ func TestCheckConfigRegistryVerifierFlagsAndEnv(t *testing.T) {
 
 	cfg, _, _, err := parseDaemonArgs([]string{
 		"-data-dir=/var/lib/grain/data",
-		"-ui-registry-issuer=https://grain.example.com",
-		"-ui-registry-audience=https://my-grain.grain.example.com",
-		"-ui-registry-keys-url=https://grain.example.com/.well-known/jwks.json",
+		"-ui-hub-issuer=https://grain.example.com",
+		"-ui-hub-audience=https://my-grain.grain.example.com",
+		"-ui-hub-keys-url=https://grain.example.com/.well-known/jwks.json",
 		"-ui-require-verifier=registry",
 	})
 	if err != nil {
@@ -345,14 +345,14 @@ func TestCheckConfigRegistryVerifierFlagsAndEnv(t *testing.T) {
 		t.Fatalf("checkConfig(registry env vars): %v", err)
 	}
 
-	// grain demo also accepts -ui-registry-issuer, -ui-registry-audience, -ui-registry-keys-url with -ui-require-verifier=registry.
+	// grain demo also accepts -ui-hub-issuer, -ui-hub-audience, -ui-hub-keys-url with -ui-require-verifier=registry.
 	t.Setenv("GRAIN_REGISTRY_ISSUER", "")
 	t.Setenv("GRAIN_REGISTRY_AUDIENCE", "")
 	t.Setenv("GRAIN_REGISTRY_KEYS_URL", "")
 	demoOpts, err := parseDemoFlags([]string{
-		"-ui-registry-issuer=https://grain.example.com",
-		"-ui-registry-audience=https://my-grain.grain.example.com",
-		"-ui-registry-keys-url=https://grain.example.com/.well-known/jwks.json",
+		"-ui-hub-issuer=https://grain.example.com",
+		"-ui-hub-audience=https://my-grain.grain.example.com",
+		"-ui-hub-keys-url=https://grain.example.com/.well-known/jwks.json",
 		"-ui-require-verifier=registry",
 	})
 	if err != nil {

@@ -25,9 +25,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/hubauth"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/registryauth"
 	"github.com/ai-on-gke/grain/pkg/sandboximage"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 	"github.com/ai-on-gke/grain/pkg/version"
@@ -230,7 +230,7 @@ func checkImageManifestUncached(ctx context.Context, imageRef string) error {
 	}
 	// Resolved before the probe's own deadline: a token lookup can take
 	// longer than the HEAD it is for, and is cached for later probes.
-	googleToken := registryauth.TokenFor(ctx, host)
+	googleToken := hubauth.TokenFor(ctx, host)
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 

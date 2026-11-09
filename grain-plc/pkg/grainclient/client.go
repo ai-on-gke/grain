@@ -28,7 +28,7 @@ import (
 
 	"github.com/ai-on-gke/grain/grain-plc/pkg/perf"
 	"github.com/ai-on-gke/grain/grain-plc/pkg/plcseams"
-	registryapi "github.com/ai-on-gke/grain/pkg/registry/api"
+	registryapi "github.com/ai-on-gke/grain/pkg/hub/api"
 )
 
 // DefaultDirectoryCacheTTL matches the 30 s replica cache decision.
@@ -65,7 +65,7 @@ type Config struct {
 	Perf              *perf.Recorder
 }
 
-// Client wraps pkg/registry/api.Client and provides InstanceClient handles for
+// Client wraps pkg/hub/api.Client and provides InstanceClient handles for
 // Grain daemons discovered via the registry or configured directly.
 type Client struct {
 	cfg        Config

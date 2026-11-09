@@ -23,19 +23,19 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ai-on-gke/grain/pkg/registryauth"
+	"github.com/ai-on-gke/grain/pkg/hubauth"
 )
 
 // An Artifact Registry image is read with the host's Google token, and
 // the token stays on the registry: the config blob's redirect to storage
 // on another host is followed without it.
 func TestRegistryReadsSendAGoogleTokenOnlyToTheRegistry(t *testing.T) {
-	saved := registryauth.TokenSource
-	registryauth.TokenSource = func(context.Context) (string, error) { return "ya-test-token", nil }
-	registryauth.ResetCache()
+	saved := hubauth.TokenSource
+	hubauth.TokenSource = func(context.Context) (string, error) { return "ya-test-token", nil }
+	hubauth.ResetCache()
 	t.Cleanup(func() {
-		registryauth.TokenSource = saved
-		registryauth.ResetCache()
+		hubauth.TokenSource = saved
+		hubauth.ResetCache()
 	})
 
 	const configDigest = "sha256:c0ffee"

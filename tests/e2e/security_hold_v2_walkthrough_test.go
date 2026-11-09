@@ -142,7 +142,7 @@ func (w *holdWorld) clearedAtA(task model.Task) string {
 	// owner-trust policy and the gma_ token model and handlers to
 	// auth-routes, task 3026; v21 only adds the release-asset publisher,
 	// its train workflow and install-grain.sh, task 2990; v22 only adds
-	// pkg/webauth/ to auth-routes and pkg/registry/ and cmd/grain-registry/
+	// pkg/webauth/ to auth-routes and pkg/hub/ and cmd/grain-hub/
 	// to credential-proxy, task 3479; v23 only adds the human-review
 	// hold, the director floor and on_behalf_of.go to auth-routes,
 	// task 3329; v24 only adds scripts/build-cli.sh to

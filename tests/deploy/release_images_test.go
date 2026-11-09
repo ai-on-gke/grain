@@ -306,11 +306,12 @@ func TestReleaseImagesDryRun(t *testing.T) {
 			}
 			containsRun(t, out, "[dry-run]")
 			containsRun(t, out, "repository: bwsalmon/grain")
-			containsRun(t, out, "phase 'all': would build and publish docker.io/grainai/sandbox:sha-0123456, docker.io/grainai/sandbox-k8s:sha-0123456, docker.io/grainai/grain:sha-0123456 and docker.io/grainai/registry:sha-0123456 to docker.io")
+			containsRun(t, out, "phase 'all': would build and publish docker.io/grainai/sandbox:sha-0123456, docker.io/grainai/sandbox-k8s:sha-0123456, docker.io/grainai/grain:sha-0123456, docker.io/grainai/hub:sha-0123456 and docker.io/grainai/registry:sha-0123456 to docker.io")
 			containsRun(t, out, "grain=docker.io/grainai/grain:sha-0123456")
 			containsRun(t, out, "registry=docker.io/grainai/registry:sha-0123456")
 			containsRun(t, out, "docker.io/grainai/grain:sha-0123456 from ./cmd/grain (install track oss)")
-			containsRun(t, out, "docker.io/grainai/registry:sha-0123456 from ./cmd/grain-registry (install track oss)")
+			containsRun(t, out, "hub=docker.io/grainai/hub:sha-0123456")
+			containsRun(t, out, "docker.io/grainai/hub:sha-0123456 from ./cmd/grain-hub (install track oss), also published as docker.io/grainai/registry:sha-0123456")
 			if strings.Contains(out, "google-grain") {
 				t.Errorf("dry-run mentioned google-grain:\n%s", out)
 			}
@@ -530,8 +531,8 @@ func mapKeys(m map[string]string) []string {
 // tag of every one of them.
 func TestReleaseImagesDryRunPushNamesDaemonAndSandboxImages(t *testing.T) {
 	for phase, want := range map[string]string{
-		"build": "would build docker.io/grainai/sandbox:sha-0123456, docker.io/grainai/sandbox-k8s:sha-0123456, docker.io/grainai/grain:sha-0123456 and docker.io/grainai/registry:sha-0123456",
-		"push":  "would publish and sign docker.io/grainai/grain:sha-0123456 and docker.io/grainai/registry:sha-0123456 to docker.io, and move the main tags of the sandbox, sandbox-k8s, grain and registry images",
+		"build": "would build docker.io/grainai/sandbox:sha-0123456, docker.io/grainai/sandbox-k8s:sha-0123456, docker.io/grainai/grain:sha-0123456 and docker.io/grainai/hub:sha-0123456 (also tagged docker.io/grainai/registry:sha-0123456)",
+		"push":  "would publish and sign docker.io/grainai/grain:sha-0123456, docker.io/grainai/hub:sha-0123456 and docker.io/grainai/registry:sha-0123456 to docker.io, and move the main tags of the sandbox, sandbox-k8s, grain, hub and registry images",
 	} {
 		t.Run(phase, func(t *testing.T) {
 			out, docker, err := releaseImagesRunArgs(t, []string{"--dry-run", phase}, map[string]string{"GRAIN_CI": "true"})

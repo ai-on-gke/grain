@@ -29,7 +29,7 @@ import (
 const coreModulePrefix = "github.com/ai-on-gke/grain/"
 
 var allowedCorePackages = map[string]bool{
-	"pkg/registry/api":     true,
+	"pkg/hub/api":          true,
 	"pkg/tunnel/wsupgrade": true,
 	"pkg/tunnel/mux":       true,
 	"pkg/apierror":         true,
@@ -89,7 +89,7 @@ func TestGrainPLCImportsOnlyPublicCoreAPIs(t *testing.T) {
 	sort.Strings(forbidden)
 	if len(forbidden) > 0 {
 		t.Fatalf("grain-plc imports internal core packages:\n\t%s\n\n"+
-			"grain-plc may import only pkg/registry/api from github.com/ai-on-gke/grain.",
+			"grain-plc may import only pkg/hub/api from github.com/ai-on-gke/grain.",
 			strings.Join(forbidden, "\n\t"))
 	}
 }

@@ -808,7 +808,7 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     116,
-		Description: "add grain_config.registry for connected-entry self-registration and heartbeat settings (design/design/registry.design.md)",
+		Description: "add grain_config.registry for connected-entry self-registration and heartbeat settings (design/design/hub.design.md)",
 		Statements: []string{
 			"ALTER TABLE `grain_config` ADD COLUMN `registry` TEXT NOT NULL DEFAULT ''",
 		},

@@ -88,7 +88,7 @@ const (
 	OpenAIAPIKeySecret = "openai-api-key"
 	// RegistryRegistrationTokenSecret holds the per-entry registration
 	// credential ("grc_...") a connected grain authenticates its registry
-	// heartbeats with (design/design/registry.design.md). Stored under
+	// heartbeats with (design/design/hub.design.md). Stored under
 	// AgentCredentialKey ("value") and never exported into grain/config.
 	RegistryRegistrationTokenSecret = "registry-registration-token"
 	// AgentCredentialKey is the one key each of the secrets above holds.

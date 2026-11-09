@@ -156,7 +156,7 @@ func TestReleaseImagesDiscardRCMarksWithoutMovingTheChannel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discard-rc --dry-run failed: %v\n%s", err, out)
 	}
-	containsRun(t, out, "would tag docker.io/grainai/{grain,sandbox,sandbox-k8s,registry}:v1.6.0-rc.1 as v1.6.0-rc.1-discarded, and leave candidate and rc where they are")
+	containsRun(t, out, "would tag docker.io/grainai/{grain,sandbox,sandbox-k8s,hub,registry}:v1.6.0-rc.1 as v1.6.0-rc.1-discarded, and leave candidate and rc where they are")
 	if docker != "" {
 		t.Errorf("a dry run asked docker for something:\n%s", docker)
 	}
