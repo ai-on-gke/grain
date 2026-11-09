@@ -806,7 +806,6 @@ var neverAttributedRoutes = map[string]bool{
 	// Checks, tests and previews: they report what a change would do and
 	// write nothing.
 	"POST /api/agent-keys/{framework}/check": true,
-	"POST /api/capabilities/{id}/check":      true,
 	"POST /api/capability-grants/check":      true,
 	"POST /api/capability-policy/preview":    true,
 	"POST /api/capability-servers/test":      true,

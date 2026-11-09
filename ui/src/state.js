@@ -1449,19 +1449,10 @@ export function configuredCapabilities(offered, selected) {
   return (offered || []).filter((c) => c.ready !== false || held.has(c.id));
 }
 
-// NO_CAPABILITIES_HINT is what a picker says when configuredCapabilities
-// has left it with nothing at all -- which, with every in-process
-// capability core shipped retired onto a capability server method, is
-// what core always offers. An empty menu reads as a broken pane, so it
+// NO_CAPABILITIES_HINT is what the repo CI-capabilities picker says when
+// configuredCapabilities has left it with nothing at all. An empty menu reads as a broken pane, so it
 // says where access is granted instead.
 export const NO_CAPABILITIES_HINT = "None offered -- grant access under Grants";
-
-// LEGACY_CAPABILITIES_HINT sits under every in-process capability
-// checklist: those ids are being converted to capability server methods
-// or api scopes (design/design/unified-grants.design.md), so new access belongs
-// under Grants rather than here.
-export const LEGACY_CAPABILITIES_HINT =
-  "Legacy in-process capabilities, each being converted to a server method or API scope. Add new access under Grants.";
 
 // capabilityRows is the listing any capability picker has to be built
 // from: the rows this build offers and this deployment has configured

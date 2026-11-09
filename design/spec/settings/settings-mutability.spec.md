@@ -319,7 +319,7 @@ Every per-repo setter goes through `putRepoConfig` (class **S** on `repo_config`
 | Rotate managed token | Action — `POST /api/capability-servers/rotate-managed` | No — secret material | Unlocked (Secret; —) | No | |
 | Capability policy | Yes — Capabilities → policy; `PUT /api/capability-policy` | Yes — `settings/capabilities.yml` (over `grain_config.capability_policy`) | Locked (S) / read-only | Yes | |
 | API scope sets | Yes — Capabilities → API scope sets; `PUT /api/api-scope-sets`, `POST /api/api-scope-sets/delete` | Yes — `tables/api_scope_set.json` / `settings/capabilities.yml` | Locked (S) / read-only | Yes | Validated by `statecheck.APIScopeSets`. |
-| Tests, previews, grant checks | Action — `POST /api/capability-servers/{test,test-script,gchat-test}`, `/api/capability-policy/preview`, `/api/capability-grants/check`, `/api/capabilities/{id}/check` | No — action | Unlocked (Action) | No | |
+| Tests, previews, grant checks | Action — `POST /api/capability-servers/{test,test-script,gchat-test}`, `/api/capability-policy/preview`, `/api/capability-grants/check` | No — action | Unlocked (Action) | No | |
 
 ### 3.17 CI (`/settings/ci`)
 
