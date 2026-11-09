@@ -281,7 +281,10 @@ func watchPendingReleases(ctx context.Context, store *model.Store, tags github.R
 		subject := model.NotificationSubject(model.FamilyReleasePending, version)
 		failure := dispatchFailures[version]
 		if open := openBySubject(all, subject); open != nil {
-			if failure == nil || strings.Contains(open.Body, failure.Header()) {
+			// The failure block heads the body (FormatBlock is prepended),
+			// so only a body that starts with this header has it already;
+			// the same words quoted in release notes further down do not.
+			if failure == nil || strings.HasPrefix(open.Body, failure.Header()) {
 				continue // raised already, by this or by the train's own run
 			}
 		}

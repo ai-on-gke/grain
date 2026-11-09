@@ -168,19 +168,27 @@ export function pendingReleaseOf(n) {
       ? "Release notes list breaking changes; approving needs allow_breaking."
       : breakingLine
     : null;
-  const dispatchMatch = lines
-    .find((l) => l.startsWith("DISPATCH FAILED ("))
-    ?.match(/^DISPATCH FAILED \(([^)]+)\):\s*(.+)$/);
+  // The failure block is only ever the head of the body: the orchestrator
+  // prepends it (FormatBlock) ahead of the staging sentence, the tag
+  // message and the release notes. Those follow it and are written by the
+  // repository -- release notes by agents -- so a "DISPATCH FAILED (",
+  // "Remedy: " or "Run URL: " line further down is quoted text, never a
+  // banner, a remedy or a link. Nor is one in a notification an agent
+  // raised.
+  const block = dispatchFailureBlock(lines);
+  const dispatchMatch = String(n.raisedBy || "").startsWith("agent:")
+    ? null
+    : block.header?.match(/^DISPATCH FAILED \(([^)]+)\):\s*(.+)$/);
   let dispatchFailure = null;
   if (dispatchMatch) {
     const runId = dispatchMatch[1];
     const message = dispatchMatch[2];
-    const remedyLine = lines.find((l) => l.startsWith("Remedy: "));
-    const remedy = remedyLine ? remedyLine.slice("Remedy: ".length) : null;
-    const urlLine = lines.find((l) => l.startsWith("Run URL: "));
-    const runUrl = urlLine ? urlLine.slice("Run URL: ".length) : null;
+    const remedy = block.remedy;
+    const runUrl = safeRunUrl(block.runUrl);
     const needsApprovalKey =
-      /GRAIN_RELEASE_APPROVAL_KEY|\/api\/release-approval-key/.test(rawBody);
+      /GRAIN_RELEASE_APPROVAL_KEY|\/api\/release-approval-key/.test(
+        [block.header, block.remedy || ""].join("\n"),
+      );
     dispatchFailure = {
       runId,
       message,
@@ -197,6 +205,45 @@ export function pendingReleaseOf(n) {
     breaking,
     dispatchFailure,
   };
+}
+
+// dispatchFailureBlock reads the failure block the orchestrator prepends
+// to a release.pending body: a first non-blank line "DISPATCH FAILED
+// (<run>): <reason>", then any "Remedy: " and "Run URL: " lines directly
+// under it. It reads nothing past the first line that is neither, so
+// lookalike lines in the release notes below are never taken for it.
+function dispatchFailureBlock(lines) {
+  const block = { header: null, remedy: null, runUrl: null };
+  let i = 0;
+  while (i < lines.length && lines[i] === "") i++;
+  if (i >= lines.length || !lines[i].startsWith("DISPATCH FAILED (")) {
+    return block;
+  }
+  block.header = lines[i];
+  for (i++; i < lines.length; i++) {
+    const l = lines[i];
+    if (l.startsWith("Remedy: ") && block.remedy === null) {
+      block.remedy = l.slice("Remedy: ".length);
+    } else if (l.startsWith("Run URL: ") && block.runUrl === null) {
+      block.runUrl = l.slice("Run URL: ".length).trim();
+    } else {
+      break;
+    }
+  }
+  return block;
+}
+
+// safeRunUrl is url when it is an absolute http(s) URL, else null: the
+// failure banner links the run, and a javascript: or data: URL there
+// would run in grain's own origin when clicked.
+function safeRunUrl(url) {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" || u.protocol === "http:" ? u.href : null;
+  } catch {
+    return null;
+  }
 }
 
 // decideRelease approves (or rejects) a pending release, after asking:
