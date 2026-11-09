@@ -541,23 +541,40 @@ func cmdRegistryTransfer(ctx context.Context, c *ui.HTTPClient, out *printer, ar
 	to := fs.String("to", "", "email of the new individual owner to offer transfer to")
 	ownerGroup := fs.String("owner-group", "", "optional co-owning group to set alongside transfer")
 	clearGroup := fs.Bool("clear-owner-group", false, "clear the entry's co-owning group")
+	cancel := fs.Bool("cancel", false, "withdraw the entry's pending transfer offer instead of making one")
 
 	rest, err := parseArgs(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(rest) != 1 {
-		return errors.New("usage: grain registry transfer -to <email> [-owner-group <group>] [-clear-owner-group] <name>")
+		return errors.New("usage: grain registry transfer -to <email> [-owner-group <group>] [-clear-owner-group] <name> | -cancel <name>")
 	}
 	name := strings.TrimSpace(rest[0])
 	target := strings.TrimSpace(*to)
-	if target == "" {
-		return errors.New("transfer requires -to <email>")
+	if *cancel {
+		if target != "" || strings.TrimSpace(*ownerGroup) != "" || *clearGroup {
+			return errors.New("transfer -cancel withdraws a pending offer and takes no -to, -owner-group or -clear-owner-group")
+		}
+	} else if target == "" {
+		return errors.New("transfer requires -to <email> (or -cancel to withdraw a pending offer)")
 	}
 
 	regClient, _, err := tf.client(ctx, c)
 	if err != nil {
 		return err
+	}
+	if *cancel {
+		updated, err := regClient.OfferTransfer(ctx, name, api.TransferRequest{Cancel: true})
+		if err != nil {
+			return err
+		}
+		if out.json {
+			out.encode(updated)
+			return nil
+		}
+		fmt.Printf("cancelled the pending ownership transfer of %s\n", updated.Name)
+		return nil
 	}
 	updated, err := regClient.OfferTransfer(ctx, name, api.TransferRequest{
 		To:              target,

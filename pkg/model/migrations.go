@@ -913,6 +913,12 @@ var Migrations = []Migration{
 			"noting affected templates and schedules so the state repository a store exports loads again",
 		Up: MigrateCatalogueDisabledGrants,
 	},
+	{
+		Version: 129,
+		Description: "rewrite retired capability names in task_grant_wait (such as github-sandbox) " +
+			"that earlier rewriteLegacyGrantsMulti migrations left under their retired names",
+		Up: migrateRetiredGrantWaits,
+	},
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as

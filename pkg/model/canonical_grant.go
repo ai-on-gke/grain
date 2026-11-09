@@ -390,6 +390,72 @@ func SplitRequestGrants(grants []Grant, legacy GrantSpelling) (RequestGrants, er
 	return out, nil
 }
 
+// DecodeRequestGrantsJSON reads a raw JSON grants: list -- each entry a grant
+// string or a {capability, with} object -- into RequestGrants via
+// SplitRequestGrants. An empty grants: list sets Capabilities to an empty
+// non-nil slice (and refuses when legacy.Capabilities is also true).
+func DecodeRequestGrantsJSON(raw json.RawMessage, legacy GrantSpelling) (RequestGrants, error) {
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return RequestGrants{}, fmt.Errorf("grants must be a list")
+	}
+	grants := make([]Grant, 0, len(items))
+	for _, item := range items {
+		names, err := CapabilityEntryNames(item)
+		if err != nil {
+			return RequestGrants{}, fmt.Errorf("grants: %v", err)
+		}
+		for _, s := range names {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			if !IsCapabilityRef(s) {
+				grants = append(grants, Grant{Capability: s})
+				continue
+			}
+			spec, err := CapabilityGrantSpec(s)
+			if err != nil {
+				return RequestGrants{}, fmt.Errorf("grants: %v", err)
+			}
+			g := Grant{Capability: spec.Capability}
+			if spec.With != nil {
+				g.With, _ = json.Marshal(spec.With)
+			}
+			grants = append(grants, g)
+		}
+	}
+	out, err := SplitRequestGrants(grants, legacy)
+	if err != nil {
+		return RequestGrants{}, err
+	}
+	if len(items) == 0 {
+		if legacy.Capabilities {
+			return RequestGrants{}, fmt.Errorf("grants: grants and capabilities both name capability grants; send one")
+		}
+		out.Capabilities = []string{}
+	}
+	return out, nil
+}
+
+// DecodeRawRequestGrants decodes an unmarshaled tool-call grants argument (from
+// map[string]any) using DecodeRequestGrantsJSON. Returns present=false when raw
+// is nil.
+func DecodeRawRequestGrants(raw any, legacy GrantSpelling) (out RequestGrants, present bool, err error) {
+	if raw == nil {
+		return RequestGrants{}, false, nil
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return RequestGrants{}, true, fmt.Errorf("grants must be a list")
+	}
+	if bytes.Equal(bytes.TrimSpace(encoded), []byte("null")) {
+		return RequestGrants{}, false, nil
+	}
+	out, err = DecodeRequestGrantsJSON(encoded, legacy)
+	return out, true, err
+}
+
 // Equal reports whether g and o are the same grant come by the same way:
 // equal Capability, With and Via, and the same Folder pointer -- what ==
 // compared before Grant held a json.RawMessage, which == cannot.

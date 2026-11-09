@@ -331,12 +331,25 @@ func startHostd(ctx context.Context, cfg ServerConfig, opts DialOptions) (*stdio
 		return nil, fmt.Errorf("capability server %s is set to run: host: %w", cfg.Command, err)
 	}
 	offered := false
+	hasAnyCap := false
 	for _, o := range offers {
-		offered = offered || (o.Kind == hostd.KindCapability && o.Name == cfg.Command)
+		if o.Kind == hostd.KindCapability {
+			hasAnyCap = true
+			offered = offered || o.Name == cfg.Command
+		}
 	}
 	if !offered {
-		return nil, fmt.Errorf("capability server %s is set to run: host, but grain hostd's allowlist (%s) offers no capability entry %q: %s",
-			cfg.Command, hostd.DefaultAllowlistPath, cfg.Command, hostd.MissingEntryHelp(cfg.Command))
+		if hello, herr := opts.Hostd.Hello(ctx); herr == nil && hello.AgentsOnly {
+			return nil, fmt.Errorf("capability server %s is set to run: host, but this host runs agent CLIs only (grain-agentd) "+
+				"and its allowlist may not name capabilities: place the server on a host enrolled with `grain host`, or run it in the container",
+				cfg.Command)
+		}
+		help := hostd.MissingEntryHelp(cfg.Command)
+		if !hasAnyCap && cfg.Hostd != "" {
+			help += "; if this host runs grain-agentd, it runs agent CLIs only and the server needs a host enrolled with `grain host`"
+		}
+		return nil, fmt.Errorf("capability server %s is set to run: host, but the host agent's allowlist (%s) offers no capability entry %q: %s",
+			cfg.Command, hostd.DefaultAllowlistPath, cfg.Command, help)
 	}
 	env := make([]string, 0, len(cfg.Env))
 	for k, v := range cfg.Env {

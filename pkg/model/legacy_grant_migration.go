@@ -83,6 +83,20 @@ func rewriteLegacyGrantsMulti(renames map[string][]string) func(ctx context.Cont
 				}
 			}
 		}
+		if hasWait, err := migrationTableExists(ctx, tx, "task_grant_wait"); err != nil {
+			return err
+		} else if hasWait {
+			for from, tos := range renames {
+				if len(tos) == 0 {
+					continue
+				}
+				if _, err := tx.ExecContext(ctx,
+					"UPDATE `task_grant_wait` SET `capability` = ? WHERE `capability` = ?",
+					tos[0], from); err != nil {
+					return fmt.Errorf("task_grant_wait: rewriting %s to %s: %w", from, tos[0], err)
+				}
+			}
+		}
 		if err := rewriteCapabilityListColumnMulti(ctx, tx, "grain_config", []string{"id"}, "default_capabilities", renames); err != nil {
 			return err
 		}
@@ -332,4 +346,118 @@ func legacyRepoAccessRenames(ctx context.Context, tx *sql.Tx) (map[string][]stri
 		}
 	}
 	return renames, nil
+}
+
+// retiredGrantWaitRenames is migration 129's frozen map of retired capability
+// names that earlier rewriteLegacyGrantsMulti migrations (67-124) rewrote in
+// task_grant without updating task_grant_wait.
+var retiredGrantWaitRenames = map[string]string{
+	"team-broadcast":              APIGrantPrefix + "team-broadcast",
+	"dispatch-control":            APIGrantPrefix + "dispatch-control",
+	"pipeline-control":            APIGrantPrefix + "pipeline-control",
+	"memory":                      APIGrantPrefix + "memory",
+	"release-notes":               APIGrantPrefix + "release-notes",
+	"grain-log":                   GrainJournalGrant,
+	"deployment-health":           APIGrantPrefix + "deployment:read",
+	"db-read":                     GrainSQLReadGrant,
+	"db-write":                    GrainSQLWriteGrant,
+	"self-upgrade":                APIGrantPrefix + "self-upgrade",
+	"test-quarantine":             APIGrantPrefix + "test-quarantine",
+	"self-repair":                 GrainHostExecGrant,
+	"corp-research":               CorpResearchGrant,
+	"git-push-any-ref":            GitPushAnyRefGrant,
+	"gcp-key":                     GCPKeySandboxAgentGrant,
+	GrainCICapability:             GrainCIGrant,
+	"claude-proxy":                ModelProxyGrant("claude"),
+	"openai-proxy":                ModelProxyGrant("openai"),
+	"gemini-proxy":                ModelProxyGrant("gemini"),
+	"image-signing":               ImageSigningRef + "={}",
+	"registry-push":               RegistryPushRef + "={}",
+	CapabilityPackagePublish:      PackagePublishRef + "={}",
+	"gemini-key":                  GCPGeminiKeyGrant,
+	SelfDebugCapability:           APIGrantPrefix + "self-debug",
+	"bootstrap-playbooks":         BootstrapPlaybooksGrant,
+	"read-issues":                 GitHubReadIssuesGrant,
+	LegacyGitHubSandboxCapability: GitHubSandboxRepoGrant,
+}
+
+func retiredGrantWaitTarget(cap string) (string, bool) {
+	trimmed := strings.TrimSpace(cap)
+	if to, ok := retiredGrantWaitRenames[trimmed]; ok {
+		return to, true
+	}
+	if repo, ok := RepoReadTarget(trimmed); ok {
+		return RepoReadGrant(repo), true
+	}
+	if repo, ok := RepoWriteTarget(trimmed); ok {
+		return RepoWriteGrant(repo), true
+	}
+	if keyName, ok := GCPKeyName(trimmed); ok {
+		if keyName == "" || keyName == "default" {
+			return GCPKeySandboxAgentGrant, true
+		}
+		if validLegacyGCPKeyParam(keyName) {
+			return GCPKeyServerGrant(keyName), true
+		}
+	}
+	if credName, ok := LegacyGitCredentialName(trimmed); ok && ValidGitCredentialName(credName) {
+		return RepoCredentialGrant(credName), true
+	}
+	return "", false
+}
+
+// migrateRetiredGrantWaits is schema migration 129's Up: rewrites any
+// task_grant_wait rows left under a retired capability name by stores that
+// migrated through 67-124 before rewriteLegacyGrantsMulti updated
+// task_grant_wait.
+func migrateRetiredGrantWaits(ctx context.Context, tx *sql.Tx) error {
+	hasWait, err := migrationTableExists(ctx, tx, "task_grant_wait")
+	if err != nil || !hasWait {
+		return err
+	}
+	type waitRow struct {
+		taskID, cap string
+	}
+	var waits []waitRow
+	rows, err := tx.QueryContext(ctx, "SELECT `task_id`, `capability` FROM `task_grant_wait` ORDER BY `task_id`")
+	if err != nil {
+		return fmt.Errorf("task_grant_wait: reading rows: %w", err)
+	}
+	for rows.Next() {
+		var r waitRow
+		if err := rows.Scan(&r.taskID, &r.cap); err != nil {
+			rows.Close()
+			return fmt.Errorf("task_grant_wait: scanning row: %w", err)
+		}
+		waits = append(waits, r)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("task_grant_wait: iterating rows: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, w := range waits {
+		if _, isAdm := LegacyAdmissionAlias(w.cap); isAdm {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM `task_grant_wait` WHERE `task_id` = ?", w.taskID); err != nil {
+				return fmt.Errorf("task_grant_wait %s: deleting retired admission wait: %w", w.taskID, err)
+			}
+			continue
+		}
+		if _, isHost := LegacyHostingAlias(w.cap); isHost {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM `task_grant_wait` WHERE `task_id` = ?", w.taskID); err != nil {
+				return fmt.Errorf("task_grant_wait %s: deleting retired hosting wait: %w", w.taskID, err)
+			}
+			continue
+		}
+		if to, ok := retiredGrantWaitTarget(w.cap); ok && to != w.cap {
+			if _, err := tx.ExecContext(ctx,
+				"UPDATE `task_grant_wait` SET `capability` = ? WHERE `task_id` = ?",
+				to, w.taskID); err != nil {
+				return fmt.Errorf("task_grant_wait %s: rewriting %s to %s: %w", w.taskID, w.cap, to, err)
+			}
+		}
+	}
+	return nil
 }

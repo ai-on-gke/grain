@@ -71,7 +71,7 @@ const registryUsage = `usage: grain registry <subcommand> [args]
   stop              [-registry-url <url>] <name>
   start             [-registry-url <url>] <name>
   transfer          [-registry-url <url>] -to <email> [-owner-group <group>]
-                    [-clear-owner-group] <name>
+                    [-clear-owner-group] <name> | -cancel <name>
   accept-transfer   [-registry-url <url>] <name>
   delegating-apps   list | create -principal <sa-email> [flags] <name> | disable <name> | enable <name>
                     (registry admins; see grain registry delegating-apps help)

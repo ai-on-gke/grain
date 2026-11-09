@@ -1,0 +1,34 @@
+### no -author: signs as the token's owner (forge profile name)
+$ sh -c echo gho_walkthrough_4331 | GRAIN_TOKEN=<access-code> /home/debian/bin/grain --server http://127.0.0.1:4301 git-login -with-token -host 127.0.0.1:4331 -base-url http://127.0.0.1:4331 -scope acme/allowed 
+    Authenticated to 127.0.0.1:4331 as Dana Owner: this deployment now clones, pushes, and signs new pull requests and comments as "Signed by Dana Owner (via Grain)".
+    -> exit=0
+    stored: {"host":"127.0.0.1:4331","kind":"github","base_url":"http://127.0.0.1:4331","author":"Dana Owner"}
+### explicit -author overrides
+$ sh -c echo gho_walkthrough_4331 | GRAIN_TOKEN=<access-code> /home/debian/bin/grain --server http://127.0.0.1:4301 git-login -with-token -host 127.0.0.1:4331 -base-url http://127.0.0.1:4331 -scope acme/allowed -author "Release Bot Override"
+    Authenticated to 127.0.0.1:4331 as Release Bot Override: this deployment now clones, pushes, and signs new pull requests and comments as "Signed by Release Bot Override (via Grain)".
+    -> exit=0
+    stored: {"host":"127.0.0.1:4331","kind":"github","base_url":"http://127.0.0.1:4331","author":"Release Bot Override"}
+### no -author again after an explicit one: back to the owner (not the stale override)
+$ sh -c echo gho_walkthrough_4331 | GRAIN_TOKEN=<access-code> /home/debian/bin/grain --server http://127.0.0.1:4301 git-login -with-token -host 127.0.0.1:4331 -base-url http://127.0.0.1:4331 -scope acme/allowed 
+    Authenticated to 127.0.0.1:4331 as Dana Owner: this deployment now clones, pushes, and signs new pull requests and comments as "Signed by Dana Owner (via Grain)".
+    -> exit=0
+    stored: {"host":"127.0.0.1:4331","kind":"github","base_url":"http://127.0.0.1:4331","author":"Dana Owner"}
+### the token is not readable back
+$ sh -c GRAIN_TOKEN=<access-code> /home/debian/bin/grain --server http://127.0.0.1:4301 -json deployment 2>/dev/null | grep -c gho_walkthrough; curl -s -H 'Authorization: Bearer <access-code>' http://127.0.0.1:4301/api/github-tokens | grep -c gho_walkthrough
+    0
+    0
+    -> exit=1
+### forge saw the token only on /api/v3/user
+$ sh -c curl -s 127.0.0.1:4331/_log | jq -c '[.[] | .path] | unique'
+    ["/api/v3/user"]
+    -> exit=0
+### a [bot] profile name is never used as a human signature
+$ sh -c echo gho_walkthrough_4332 | GRAIN_TOKEN=<access-code> /home/debian/bin/grain --server http://127.0.0.1:4301 git-login -with-token -host 127.0.0.1:4332 -base-url http://127.0.0.1:4332 -scope acme/allowed 
+    Authenticated to 127.0.0.1:4332: this deployment now clones, pushes, and calls GitHub with the delegated token (commits authored as <daemon-host git user.name>); the host reported no person's name for it, so pull requests and comments are not signed -- pass -author to sign them.
+    -> exit=0
+    stored: {"host":"127.0.0.1:4332","kind":"github","base_url":"http://127.0.0.1:4332"}
+### a profile with no name
+$ sh -c echo gho_walkthrough_4333 | GRAIN_TOKEN=<access-code> /home/debian/bin/grain --server http://127.0.0.1:4301 git-login -with-token -host 127.0.0.1:4333 -base-url http://127.0.0.1:4333 -scope acme/allowed 
+    Authenticated to 127.0.0.1:4333 as nameless: this deployment now clones, pushes, and signs new pull requests and comments as "Signed by nameless (via Grain)".
+    -> exit=0
+    stored: {"host":"127.0.0.1:4333","kind":"github","base_url":"http://127.0.0.1:4333","author":"nameless"}

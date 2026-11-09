@@ -233,7 +233,7 @@ func (c *Client) PullRequestStatus(ctx context.Context, pr string, threads bool)
 // writePullRequestError answers a pull-request route's failure.
 func writePullRequestError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, errPullRequestAdoptUnavailable):
+	case errors.Is(err, errPullRequestAdoptUnavailable), errors.Is(err, model.ErrPullRequestNotFound):
 		writeError(w, http.StatusNotFound, err)
 	case errors.Is(err, model.ErrPullRequestConflict):
 		writeError(w, http.StatusConflict, err)

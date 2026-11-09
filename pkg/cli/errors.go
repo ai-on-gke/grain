@@ -163,6 +163,11 @@ func classifyStatus(code int) (int, string, string) {
 		return exitUsage, "unprocessable", ""
 	case code == http.StatusNotFound:
 		return exitUsage, "not_found", ""
+	case code == http.StatusTooManyRequests:
+		// The daemon's per-token rate limit (externalAgentLimiter): the
+		// same command succeeds unchanged once the bucket refills, so it
+		// is not a usage error an agent should rewrite its request over.
+		return exitFailed, "rate_limited", ""
 	case code >= 400 && code < 500:
 		return exitUsage, "invalid_request", ""
 	default:

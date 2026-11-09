@@ -131,6 +131,24 @@ func TestIdentityTrailersNameOnlyVerifiedPeopleOrTheOperator(t *testing.T) {
 		{"a task an agent filed for alice", model.Task{
 			Creator: "alice@example.com", Origin: filedBy(model.Principal{Kind: model.PrincipalAgent, ID: "12", Source: model.SourceSandbox}),
 		}, "Requested-by: alice@example.com"},
+		// docs/test-runs/2026-11-08-attribution-external-rails.md F1: a
+		// gma_ credential the access code minted naming owner alice
+		// (owner_source access-code) files with Creator alice and an
+		// unverified on-behalf-of: nobody verified alice asked for it.
+		{"an external credential whose owner the access code only named", model.Task{
+			Creator: "alice@example.com",
+			Origin: model.Origin{Attribution: model.Attribution{
+				Actor:      model.Principal{Kind: model.PrincipalAgent, ID: "external:t3-named", Source: model.SourceExternalToken},
+				OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com", Source: model.SourceAccessCode},
+			}},
+		}, ""},
+		{"an external credential a verified alice owns", model.Task{
+			Creator: "alice@example.com",
+			Origin: model.Origin{Attribution: model.Attribution{
+				Actor:      model.Principal{Kind: model.PrincipalAgent, ID: "external:t1-alice", Source: model.SourceExternalToken},
+				OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com", Source: model.SourceToken},
+			}},
+		}, "Requested-by: alice@example.com"},
 	} {
 		if got := strings.Join(identityTrailers(c.task), "\n"); got != c.want {
 			t.Errorf("%s: trailers = %q, want %q", c.name, got, c.want)

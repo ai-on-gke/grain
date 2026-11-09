@@ -1,0 +1,125 @@
+== the daemon pins release 'v3.2.0-dev.2537+45412c2' at 'http://127.0.0.1:4302/releases'
+== GET /cli/install.sh: public (no credential), headers, HEAD
+### GET without a credential
+$ sh -c curl -s -D - -o /dev/null http://127.0.0.1:4301/cli/install.sh | tr -d '\r' | grep -iE '^(HTTP|content-type|cache-control|x-content-type-options)'
+    HTTP/1.1 200 OK
+    Cache-Control: no-store
+    Content-Type: text/x-shellscript; charset=utf-8
+    X-Content-Type-Options: nosniff
+    -> exit=0
+### GET with a wrong bearer
+$ curl -s -o /dev/null -w %{http_code}\n -H Authorization: Bearer nope http://127.0.0.1:4301/cli/install.sh
+    200
+    -> exit=0
+### GET with the access code
+$ curl -s -o /dev/null -w %{http_code}\n -H Authorization: Bearer <access-code> http://127.0.0.1:4301/cli/install.sh
+    200
+    -> exit=0
+### HEAD
+$ curl -s -I -o /dev/null -w %{http_code}\n http://127.0.0.1:4301/cli/install.sh
+    200
+    -> exit=0
+### served script holds no access code
+$ sh -c curl -fsS http://127.0.0.1:4301/cli/install.sh | grep -c -- '<access-code>' || true
+    0
+    -> exit=0
+### shellcheck-free syntax check (sh -n)
+$ sh -c curl -fsS http://127.0.0.1:4301/cli/install.sh | sh -n && echo ok
+    ok
+    -> exit=0
+== clean install into GRAIN_INSTALL_DIR
+### curl | GRAIN_INSTALL_DIR=/tmp/grain-install-test sh
+$ sh -c curl -fsSL http://127.0.0.1:4301/cli/install.sh | GRAIN_INSTALL_DIR=/tmp/grain-install-test sh
+    grain install: downloading grain v3.2.0-dev.2537+45412c2 for linux/amd64
+    grain install: installed /tmp/grain-install-test/grain (v3.2.0-dev.2537+45412c2)
+    grain install: /tmp/grain-install-test is not on your PATH; add it, e.g. export PATH="/tmp/grain-install-test:$PATH"
+    -> exit=0
+### mode
+$ stat -c %a %n /tmp/grain-install-test/grain
+    755 /tmp/grain-install-test/grain
+    -> exit=0
+### grain version
+$ /tmp/grain-install-test/grain version
+    v3.2.0-dev.2537+45412c2 · 45412c2 · 2026-11-08 22:37Z
+    -> exit=0
+### no temp file left beside it
+$ ls -A /tmp/grain-install-test
+    grain
+    -> exit=0
+    tar invocations so far: 1
+== the plan's INSTALL_DIR= spelling (the script reads GRAIN_INSTALL_DIR)
+### curl | INSTALL_DIR=/tmp/grain-install-test2 sh
+$ sh -c curl -fsSL http://127.0.0.1:4301/cli/install.sh | INSTALL_DIR=/tmp/grain-install-test2 sh
+    grain install: downloading grain v3.2.0-dev.2537+45412c2 for linux/amd64
+    grain install: installed /tmp/grain-install.15jUlC/home/.local/bin/grain (v3.2.0-dev.2537+45412c2)
+    grain install: /tmp/grain-install.15jUlC/home/.local/bin is not on your PATH; add it, e.g. export PATH="/tmp/grain-install.15jUlC/home/.local/bin:$PATH"
+    -> exit=0
+### INSTALL_DIR was ignored
+$ sh -c ls /tmp/grain-install-test2 2>&1; ls -l /tmp/grain-install.15jUlC/home/.local/bin/grain
+    ls: cannot access '/tmp/grain-install-test2': No such file or directory
+    -rwxr-xr-x 1 debian debian 101925843 Nov  8 22:42 /tmp/grain-install.15jUlC/home/.local/bin/grain
+    -> exit=0
+== reinstall over an existing binary (atomic rename)
+### reinstall
+$ sh -c curl -fsSL http://127.0.0.1:4301/cli/install.sh | GRAIN_INSTALL_DIR=/tmp/grain-install-test sh
+    grain install: downloading grain v3.2.0-dev.2537+45412c2 for linux/amd64
+    grain install: installed /tmp/grain-install-test/grain (v3.2.0-dev.2537+45412c2)
+    grain install: /tmp/grain-install-test is not on your PATH; add it, e.g. export PATH="/tmp/grain-install-test:$PATH"
+    -> exit=0
+### mode after reinstall
+$ stat -c %a /tmp/grain-install-test/grain
+    755
+    -> exit=0
+== tampered archive: one byte flipped
+### curl | sh (tampered)
+$ sh -c curl -fsSL http://127.0.0.1:4301/cli/install.sh | GRAIN_INSTALL_DIR=/tmp/grain-install-tamper sh
+    grain install: downloading grain v3.2.0-dev.2537+45412c2 for linux/amd64
+    grain install: grain-linux-amd64.tar.gz has sha256 6b94d9b42d6424029e02aaff47c6921ece45b6961a30386bddfdf77121458a69, not the 0d9dad74ff487d22b91ab97ef03c5c5764c34b4d022a8af261770ccb87ae05f4 checksums.txt names: not installing it
+    -> exit=1
+### nothing installed
+$ sh -c ls /tmp/grain-install-tamper 2>&1 || true
+    ls: cannot access '/tmp/grain-install-tamper': No such file or directory
+    -> exit=0
+    tar invocations so far: 0
+== tampered archive with a matching forged checksum line removed for it
+### curl | sh (checksums.txt names no grain-linux-amd64.tar.gz)
+$ sh -c curl -fsSL http://127.0.0.1:4301/cli/install.sh | GRAIN_INSTALL_DIR=/tmp/grain-install-tamper sh
+    grain install: downloading grain v3.2.0-dev.2537+45412c2 for linux/amd64
+    grain install: checksums.txt for v3.2.0-dev.2537+45412c2 names no grain-linux-amd64.tar.gz
+    -> exit=1
+    tar invocations so far: 0
+== checksums.txt missing
+### curl | sh (no checksums.txt)
+$ sh -c curl -fsSL http://127.0.0.1:4301/cli/install.sh | GRAIN_INSTALL_DIR=/tmp/grain-install-tamper sh
+    grain install: downloading grain v3.2.0-dev.2537+45412c2 for linux/amd64
+    curl: (22) The requested URL returned error: 404
+    grain install: could not download http://127.0.0.1:4302/releases/v3.2.0-dev.2537+45412c2/checksums.txt
+    -> exit=1
+### nothing installed
+$ sh -c ls /tmp/grain-install-tamper 2>&1 || true
+    ls: cannot access '/tmp/grain-install-tamper': No such file or directory
+    -> exit=0
+    tar invocations so far: 0
+== archive missing (release not mirrored for this arch)
+### curl | sh (no archive)
+$ sh -c curl -fsSL http://127.0.0.1:4301/cli/install.sh | GRAIN_INSTALL_DIR=/tmp/grain-install-tamper sh
+    grain install: downloading grain v3.2.0-dev.2537+45412c2 for linux/amd64
+    curl: (22) The requested URL returned error: 404
+    grain install: could not download http://127.0.0.1:4302/releases/v3.2.0-dev.2537+45412c2/grain-linux-amd64.tar.gz
+    -> exit=1
+== an archive that verifies but holds no grain binary
+### GRAIN_CLI_VERSION=v0.0.0-evil
+$ sh -c curl -fsSL http://127.0.0.1:4301/cli/install.sh | GRAIN_CLI_VERSION=v0.0.0-evil GRAIN_INSTALL_DIR=/tmp/grain-install-tamper sh
+    grain install: downloading grain v0.0.0-evil for linux/amd64
+    /usr/bin/tar: grain: Not found in archive
+    /usr/bin/tar: Exiting with failure status due to previous errors
+    grain install: grain-linux-amd64.tar.gz holds no grain binary
+    -> exit=1
+== restored mirror installs again
+### curl | sh (restored)
+$ sh -c curl -fsSL http://127.0.0.1:4301/cli/install.sh | GRAIN_INSTALL_DIR=/tmp/grain-install-test sh && /tmp/grain-install-test/grain version
+    grain install: downloading grain v3.2.0-dev.2537+45412c2 for linux/amd64
+    grain install: installed /tmp/grain-install-test/grain (v3.2.0-dev.2537+45412c2)
+    grain install: /tmp/grain-install-test is not on your PATH; add it, e.g. export PATH="/tmp/grain-install-test:$PATH"
+    v3.2.0-dev.2537+45412c2 · 45412c2 · 2026-11-08 22:37Z
+    -> exit=0
