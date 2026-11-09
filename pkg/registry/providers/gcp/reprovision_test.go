@@ -48,10 +48,32 @@ func TestProvisionPostgresACLsTwiceAsNonSuperuserAdmin(t *testing.T) {
 	}
 
 	const iamUser = "grain-sa-retry-vm@test-proj.iam"
-	for i, pw := range []string{"first-password", "second-password"} {
-		if err := res.provisionPostgresACLs(ctx, "sql-pool-01", "grain_retry_vm", iamUser, pw); err != nil {
-			t.Fatalf("provision #%d as non-superuser admin: %v", i+1, err)
-		}
+	if err := res.provisionPostgresACLs(ctx, "sql-pool-01", "grain_retry_vm", iamUser, "first-password"); err != nil {
+		t.Fatalf("provision #1 as non-superuser admin: %v", err)
+	}
+	// Between the two provisions the instance's daemon has run and created its
+	// schema (objects the role owns), and the admin has created a table too.
+	roleDB, err := open(iamUser, "grain_retry_vm")
+	if err != nil {
+		t.Fatalf("open as role: %v", err)
+	}
+	defer roleDB.Close()
+	if _, err := roleDB.ExecContext(ctx, `CREATE TABLE task (id SERIAL PRIMARY KEY, title TEXT)`); err != nil {
+		t.Fatalf("role creating its own table: %v", err)
+	}
+	adminInst, err := open("tenant_admin", "grain_retry_vm")
+	if err != nil {
+		t.Fatalf("open as admin: %v", err)
+	}
+	defer adminInst.Close()
+	if _, err := adminInst.ExecContext(ctx, `CREATE TABLE restored (id INT)`); err != nil {
+		t.Fatalf("admin creating a table: %v", err)
+	}
+	if err := res.provisionPostgresACLs(ctx, "sql-pool-01", "grain_retry_vm", iamUser, "second-password"); err != nil {
+		t.Fatalf("provision #2 as non-superuser admin, after the daemon created tables: %v", err)
+	}
+	if _, err := roleDB.ExecContext(ctx, `INSERT INTO restored VALUES (1)`); err != nil {
+		t.Fatalf("role writing the admin-created table after re-provision: %v", err)
 	}
 	var connLimit int
 	var rolSuper, rolCreateDB, rolCreateRole, rolCanLogin bool
@@ -76,7 +98,7 @@ func TestProvisionPostgresACLsTwiceAsNonSuperuserAdmin(t *testing.T) {
 			return open("postgres", dbName)
 		},
 	}
-	err := superRes.provisionPostgresACLs(ctx, "sql-pool-01", "grain_foreign_vm", foreign, "pw")
+	err = superRes.provisionPostgresACLs(ctx, "sql-pool-01", "grain_foreign_vm", foreign, "pw")
 	if !errors.Is(err, ErrOutOfScope) {
 		t.Fatalf("provision over a BYPASSRLS role: err = %v, want ErrOutOfScope", err)
 	}

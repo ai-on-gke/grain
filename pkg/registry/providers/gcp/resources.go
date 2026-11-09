@@ -940,12 +940,51 @@ func (r *GCPInstanceResources) provisionPostgresACLs(ctx context.Context, sqlIns
 	schemaStatements := []string{
 		`REVOKE ALL ON SCHEMA public FROM PUBLIC`,
 		fmt.Sprintf(`GRANT USAGE, CREATE ON SCHEMA public TO %s`, quotedRole),
-		fmt.Sprintf(`GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO %s`, quotedRole),
-		fmt.Sprintf(`GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO %s`, quotedRole),
 		fmt.Sprintf(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO %s`, quotedRole),
 		fmt.Sprintf(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO %s`, quotedRole),
 	}
 	for _, stmt := range schemaStatements {
+		if _, err := instDB.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("gcp sql: executing schema ACL on %s (%q): %w", dbName, stmt, err)
+		}
+	}
+
+	// Grant on the existing tables and sequences someone other than the
+	// instance role owns (a restored dump, anything the admin created). This
+	// replaces GRANT ... ON ALL TABLES/SEQUENCES IN SCHEMA public: on a
+	// re-provision the schema also holds everything the instance's daemon
+	// created, which the role owns and needs no grant on, and a non-superuser
+	// admin (Cloud SQL's) may not grant on another role's objects at all, so the
+	// blanket form failed every re-provision once the daemon had run.
+	rows, err := instDB.QueryContext(ctx, `
+SELECT c.relname, c.relkind = 'S'
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
+  AND pg_get_userbyid(c.relowner) <> $1
+ORDER BY c.relname`, iamUser)
+	if err != nil {
+		return fmt.Errorf("gcp sql: listing objects to grant on in %s: %w", dbName, err)
+	}
+	var grants []string
+	for rows.Next() {
+		var name string
+		var isSeq bool
+		if err := rows.Scan(&name, &isSeq); err != nil {
+			rows.Close()
+			return fmt.Errorf("gcp sql: listing objects to grant on in %s: %w", dbName, err)
+		}
+		kind := "TABLE"
+		if isSeq {
+			kind = "SEQUENCE"
+		}
+		grants = append(grants, fmt.Sprintf(`GRANT ALL PRIVILEGES ON %s public.%s TO %s`, kind, quotePGIdent(name), quotedRole))
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("gcp sql: listing objects to grant on in %s: %w", dbName, err)
+	}
+	rows.Close()
+	for _, stmt := range grants {
 		if _, err := instDB.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("gcp sql: executing schema ACL on %s (%q): %w", dbName, stmt, err)
 		}
