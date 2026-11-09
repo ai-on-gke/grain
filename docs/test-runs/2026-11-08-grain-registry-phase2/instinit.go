@@ -104,7 +104,7 @@ func main() {
 			}
 			_, _ = w.Write(grainConfig)
 		case r.URL.Path == "/computeMetadata/v1/instance/service-accounts/default/token":
-			_, _ = w.Write([]byte(`{"access_token":"walk-oauth-token","token_type":"Bearer","expires_in":3600}`))
+			_, _ = w.Write([]byte(`{"access_token":"walk-oauth-token","token_type":"Bearer","expires_in": 3600}`))
 		case r.URL.Path == "/computeMetadata/v1/instance/service-accounts/default/email":
 			_, _ = w.Write([]byte(bundle.ServiceAccountEmail))
 		case strings.HasPrefix(r.URL.Path, smPrefix) && strings.HasSuffix(r.URL.Path, "/versions/latest:access"):
