@@ -281,9 +281,9 @@ Every normative requirement below is derived from the implementation on `main` a
 
 ## 8. ES256 Identity Assertions, JWKS Discovery, and Delegated Identity (`act`)
 
-### 8.1 ES256 `X-Grain-Registry-Assertion` signing, 30s replica cache, and JWKS endpoint {#REG-20}
+### 8.1 ES256 `X-Grain-Hub-Assertion` / `X-Grain-Registry-Assertion` signing, 30s replica cache, and JWKS endpoint {#REG-20}
 
-1. When proxying an authenticated request to a hosted `instance` or `connected` entry, `Router` MUST mint an ES256-signed JWT in header `X-Grain-Registry-Assertion` with claims:
+1. When proxying an authenticated request to a hosted `instance` or `connected` entry, `Router` MUST mint an ES256-signed JWT in headers `X-Grain-Hub-Assertion` and `X-Grain-Registry-Assertion` (after stripping any caller-supplied copies of either header) with claims:
    - `iss`: `https://<registry_host>`
    - `aud`: `https://<entry>.<instance_domain>`
    - `sub`: verified caller email
@@ -298,14 +298,16 @@ Every normative requirement below is derived from the implementation on `main` a
 **Pinned by:**
 - `pkg/hub/providers/gcp/gcp_test.go`: `TestKMSSignerSignAssertionAndJWKS`
 - `pkg/hub/hub_test.go`: `TestCachingSignerActClaimAndInvalidation`, `TestRouterReverseProxyAndHeaderSanitization`
+- `pkg/hub/server/hub_rename_test.go`: `TestSanitizeProxyRequestSendsTheAssertionUnderBothNames`
 
 ### 8.2 Downstream `registry` verifier on `grain` daemons {#REG-21}
 
-1. Every `grain` daemon configured with `-hub-url` / `-registry-jwks-url` and `-registry-audience` MUST register the `registry` `IdentityVerifier` (`Headers() == ["X-Grain-Registry-Assertion"]`, `AccessCodeWins() == false`) (`pkg/ui/registry_verifier.go`).
-2. The `registry` verifier MUST validate the ES256 signature against the registry's JWKS, enforce exact `iss` and `aud` match, validate `exp`/`iat`/`nbf` with `30s` clock-skew tolerance, and reject any forged or expired assertion with `401 Unauthorized` without falling back to an access code or plaintext header.
+1. Every `grain` daemon configured with `-ui-hub-issuer`, `-ui-hub-audience`, and `-ui-hub-keys-url` (or their deprecated `-ui-registry-*` / `$GRAIN_REGISTRY_*` aliases) MUST register the `registry` `IdentityVerifier` (`Headers() == ["X-Grain-Hub-Assertion", "X-Grain-Registry-Assertion"]`, `AccessCodeWins() == false`) (`pkg/webauth/hub.go`, `pkg/ui/verifier.go`).
+2. The `registry` verifier MUST validate the ES256 signature against the registry's JWKS, enforce exact `iss` and `aud` match, validate `exp`/`iat`/`nbf` with `30s` clock-skew tolerance, reject conflicting `X-Grain-Hub-Assertion` and `X-Grain-Registry-Assertion` headers or multiple distinct values on either header, and reject any forged or expired assertion with `401 Unauthorized` without falling back to an access code or plaintext header.
 
 **Pinned by:**
 - `pkg/ui/hub_verifier_test.go`: `TestRegistryVerifierAcceptsValidAssertionAndRefusesTampered`
+- `pkg/webauth/hub_rename_test.go`: `TestRegistryVerifierRefusesConflictingHubAndRegistryAssertions`
 - `pkg/ui/delegation_test.go`: `TestRegistryVerifierExposesPersonAndDelegatingApp`, `TestRegistryVerifierRefusesMalformedOrNestedAct`
 
 ### 8.3 RFC 8693 `act` delegated identity and per-person consent grants {#REG-22}

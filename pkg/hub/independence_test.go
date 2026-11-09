@@ -228,15 +228,17 @@ func checkGrainPLCImportsOnlyRegistryAPI(deps []string) []string {
 }
 
 func TestRegistryDoesNotImportDaemonPackages(t *testing.T) {
-	roots := []string{"./pkg/hub/...", "./pkg/webauth/..."}
-	if info, err := os.Stat(filepath.Join(repoRootDir(t), "cmd", "grain-registry")); err == nil && info.IsDir() {
-		roots = append(roots, "./cmd/grain-hub/...")
+	roots := []string{"./pkg/hub/...", "./pkg/hubenv/...", "./pkg/webauth/..."}
+	for _, cmdDir := range []string{"grain-hub", "grain-registry"} {
+		if info, err := os.Stat(filepath.Join(repoRootDir(t), "cmd", cmdDir)); err == nil && info.IsDir() {
+			roots = append(roots, "./cmd/"+cmdDir+"/...")
+		}
 	}
 	args := append([]string{"-deps", "-test=false"}, roots...)
 	deps := runGoList(t, args...)
 	if bad := checkRegistryIsolation(deps); len(bad) > 0 {
 		t.Fatalf("registry/webauth packages transitively import forbidden grain packages:\n\t%s\n\n"+
-			"cmd/grain-hub, pkg/hub/..., and pkg/webauth must remain isolated from daemon/sandbox/model packages "+
+			"cmd/grain-hub, cmd/grain-registry, pkg/hub/..., pkg/hubenv, and pkg/webauth must remain isolated from daemon/sandbox/model packages "+
 			"(design/design/hub.design.md §Import-boundary test).",
 			strings.Join(bad, "\n\t"))
 	}
