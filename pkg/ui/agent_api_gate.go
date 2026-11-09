@@ -2719,6 +2719,14 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	if err != nil {
 		return call, fmt.Errorf("external agent %q has invalid grants: %w", tok.Name, err)
 	}
+	if role := accessRoleFromContext(ctx); role != nil && !role.Full {
+		// A token presented inside a verified session never reaches past
+		// that session's role (resolveMCPCallerAccess narrows it the same
+		// way), so the multi-scope checks below -- externalApprovalRail's
+		// tasks:admin, a task PATCH's capabilities:admin, tasks:admin and
+		// capabilities:detach -- read the narrower of the two.
+		set = set.Intersect(role.set).Without(role.deny)
+	}
 	call.grants = set
 	adminPatch := tasksAdminAllowsTaskPatch(set, pattern)
 	detach := capabilitiesDetachAllowsRoute(set, pattern)
