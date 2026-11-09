@@ -1836,11 +1836,37 @@ func TestSessionWarmSandboxCapacityEvictionEvictsOldestIdleFirst(t *testing.T) {
 	}
 }
 
+// inProcessExchangeIdleTTL is the session idle TTL the in-process
+// continuation tests store while their turns are exchanged. Turn 1's wait
+// has to outlast the test's own GetObservation + AddComment before the next
+// message lands, which under -race -shuffle=on with the package's parallel
+// tests contending on SQLite has taken 4-8s -- past the 1-2s these tests
+// used to wait, ending the run on turn 1. The wait after the final turn is
+// not left to run this out: that turn calls endInProcessSessionWait.
+const inProcessExchangeIdleTTL = 30 * time.Second
+
+// endInProcessSessionWait is called from a session's final turn: it
+// shortens the stored session idle TTL, which an in-process wait re-reads
+// every CancelPollInterval when its Config.SessionSandboxIdleTTL came from
+// the store, so the wait after this turn ends at once and the run with it.
+// Only for a deps.Config that leaves SessionSandboxIdleTTL unset.
+func endInProcessSessionWait(t *testing.T, ctx context.Context, store *model.Store) {
+	cfg, err := store.GetConfig(ctx)
+	if err != nil || cfg == nil {
+		t.Errorf("reading settings to end the session's wait: %v", err)
+		return
+	}
+	cfg.SessionSandboxIdleTTL = time.Millisecond
+	if err := store.PutConfig(ctx, *cfg); err != nil {
+		t.Errorf("shortening the session idle TTL to end the session's wait: %v", err)
+	}
+}
+
 func TestInProcessSessionContinuationKeepsRunAliveAcrossTurns(t *testing.T) {
 	t.Parallel()
 	store, ctx := openStore(t)
 	settings(t, store, func(cfg *model.Config) {
-		cfg.SessionSandboxIdleTTL = 30 * time.Minute
+		cfg.SessionSandboxIdleTTL = inProcessExchangeIdleTTL
 		cfg.ConsoleSessions = []model.ConsoleSession{{
 			ID: model.DirectorSessionID, Title: "Director",
 			Capabilities: []string{}, NetworkAccess: model.NetworkOpen,
@@ -1854,6 +1880,9 @@ func TestInProcessSessionContinuationKeepsRunAliveAcrossTurns(t *testing.T) {
 	ag := &recordingSessionAgent{
 		onTurn: func(turn int, cfg agent.RunConfig) (*agent.Result, error) {
 			seenPrompts = append(seenPrompts, cfg.ContinuePrompt)
+			if turn == 2 {
+				endInProcessSessionWait(t, ctx, store)
+			}
 			if turn == 1 {
 				// Once the run is parked in its in-process idle wait after
 				// turn 1 -- it marks the question pending when it has relayed
@@ -1905,13 +1934,11 @@ func TestInProcessSessionContinuationKeepsRunAliveAcrossTurns(t *testing.T) {
 		Config: orchestrator.Config{
 			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
 			Capabilities: orchestrator.SessionTestRegistry(),
-			// The message wakes the wait the moment it lands
-			// (Store.CommentAdded), so this only bounds the idle wait after
-			// turn 2 that ends the run, and need only outlast a loaded
-			// runner's posting of the message after turn 1.
-			SessionSandboxIdleTTL: 2 * time.Second,
-			WaitForSessionReply:   true,
-			CancelPollInterval:    20 * time.Millisecond,
+			// SessionSandboxIdleTTL is left to the stored setting
+			// (inProcessExchangeIdleTTL), which turn 2 shortens to end the
+			// run (endInProcessSessionWait).
+			WaitForSessionReply: true,
+			CancelPollInterval:  20 * time.Millisecond,
 		},
 	}
 
@@ -2026,6 +2053,9 @@ func TestMeasureSessionTurnLatencyBeforeAndAfter(t *testing.T) {
 		ag := &recordingSessionAgent{
 			onTurn: func(turn int, cfg agent.RunConfig) (*agent.Result, error) {
 				if turn == 2 {
+					if inProcess {
+						endInProcessSessionWait(t, ctx, store)
+					}
 					// Simulate the agent's first tool call on turn 2.
 					if len(cfg.Tools) > 0 {
 						_ = cfg.Tools[0].Handler(ctx, map[string]any{"path": "."})
@@ -2076,6 +2106,11 @@ func TestMeasureSessionTurnLatencyBeforeAndAfter(t *testing.T) {
 				CancelPollInterval:    5 * time.Millisecond,
 			},
 		}
+		if inProcess {
+			// The stored setting, read live, so turn 2 can end the wait
+			// (endInProcessSessionWait).
+			deps.Config.SessionSandboxIdleTTL = 0
+		}
 
 		t1 := baseTime.Add(time.Minute)
 		replyToSession(t, store, director.ID, t1)
@@ -2125,7 +2160,7 @@ func TestMeasureSessionTurnLatencyBeforeAndAfter(t *testing.T) {
 	}
 	cold := best("before (cold sandbox acquire + setup)", -1*time.Second, false, 200*time.Millisecond)
 	warm := best("after (warm sandbox reuse)", 30*time.Minute, false, 200*time.Millisecond)
-	inProc := best("after (in-process session continuation)", time.Second, true, 200*time.Millisecond)
+	inProc := best("after (in-process session continuation)", inProcessExchangeIdleTTL, true, 200*time.Millisecond)
 
 	if cold.acquires != 2 || cold.runs != 2 || cold.reused {
 		t.Errorf("cold path: acquires=%d runs=%d reused=%v, want a fresh sandbox for each of 2 runs",

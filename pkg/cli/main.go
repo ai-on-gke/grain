@@ -462,7 +462,7 @@ Commands:
                                        block until a run has a verdict (-timeout, default 30m), with each
                                        failing job and any shared fault: exit 0 green, 1 red, 5 timed out
   ci retrigger <run-id> [-jobs j1,j2]  rerun a run's failed jobs (or -jobs) once, bypassing the job cache
-  ci test-history <test> [-repo r] [-limit N]
+  ci test-history <test> [-repo r] [-limit N] [-provider grain|github-actions]
                                        pass, fail and flake history of one test across recent runs
   merge-queue [-repo owner/name]       queued pull requests, the batches and CI testing them, and held
                                        merge gates (deploy://merge-queue; see mergequeue.go)

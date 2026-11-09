@@ -1204,6 +1204,29 @@ func TestListWorkflowRunsScopesToTheHeadSHA(t *testing.T) {
 	}
 }
 
+// WorkflowRunsOnCommit keeps what ListWorkflowRuns drops -- each run's id
+// and attempt -- so a caller can read the run's jobs next.
+func TestWorkflowRunsOnCommitKeepsRunIDsAndAttempts(t *testing.T) {
+	body := map[string]any{"workflow_runs": []any{
+		map[string]any{"id": 77, "name": "nightly", "head_sha": "abc123", "status": "completed",
+			"conclusion": "failure", "run_attempt": 2},
+		map[string]any{"id": 78, "name": "tests", "head_sha": "abc123", "status": "in_progress"},
+	}}
+	transport := NewFakeTransport(ApiResponse{Status: 200, Body: mustJSON(t, body)})
+	client := NewClient(transport, StaticToken{strPtr("t")})
+	runs, err := client.WorkflowRunsOnCommit("o", "r", "abc123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "/repos/o/r/actions/runs?head_sha=abc123&per_page=100"; transport.Calls[0].Path != want {
+		t.Fatalf("got %s, want %s", transport.Calls[0].Path, want)
+	}
+	if len(runs) != 2 || runs[0].ID != 77 || runs[0].Name != "nightly" || runs[0].RunAttempt != 2 ||
+		runs[0].Conclusion != "failure" || runs[1].ID != 78 || runs[1].RunAttempt != 1 {
+		t.Fatalf("got %+v", runs)
+	}
+}
+
 func TestListWorkflowRunsToleratesAStillRunningRunWithNoConclusion(t *testing.T) {
 	body := map[string]any{"workflow_runs": []any{
 		map[string]any{"name": "tests", "status": "in_progress", "conclusion": nil},
