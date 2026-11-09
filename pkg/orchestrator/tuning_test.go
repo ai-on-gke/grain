@@ -203,10 +203,12 @@ func TestRelayProposedTasksTuningValidationAndRecording(t *testing.T) {
 			{
 				Name: "propose_task",
 				Arguments: map[string]any{
-					"title":            "Tune max_workers to 4",
-					"body":             "Proposal to increase max_workers to 4 based on contention metrics",
-					"target_parameter": "max_workers",
-					"proposed_value":   "4",
+					"title": "Tune max_workers to 4",
+					"body":  "Proposal to increase max_workers to 4 based on contention metrics",
+					"template_fields": map[string]any{
+						"target_parameter": "max_workers",
+						"proposed_value":   "4",
+					},
 				},
 			},
 		},
@@ -249,10 +251,12 @@ func TestRelayProposedTasksTuningValidationAndRecording(t *testing.T) {
 			{
 				Name: "propose_task",
 				Arguments: map[string]any{
-					"title":            "Tune made_up_parameter to 99",
-					"body":             "LLM hallucinated parameter",
-					"target_parameter": "made_up_parameter",
-					"proposed_value":   "99",
+					"title": "Tune made_up_parameter to 99",
+					"body":  "LLM hallucinated parameter",
+					"template_fields": map[string]any{
+						"target_parameter": "made_up_parameter",
+						"proposed_value":   "99",
+					},
 				},
 			},
 		},

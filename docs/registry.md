@@ -227,7 +227,7 @@ grain registry create \
   form (`/new?kind=connected` opens the connected-entry form instead),
   with the name field pre-filled with a random `grain-<6hex>` name that
   you can type over or regenerate; availability is checked as you type.
-  When the registry has no VM shapes configured, the form falls back to
+  When the hub has no VM shapes configured, the form falls back to
   registering a connected entry.
 - **Weighted shapes and custom boot disks.** Each shape (`small`,
   `standard`, `large`, etc.) specifies machine type, default boot disk size,
@@ -343,8 +343,8 @@ Hosted instances move through a narrow state machine:
     `720h`). During that 30-day hold, the former owner can reuse the
     name, and no other user can claim it until both `reserved_until` has
     expired and the instance has been purged.
-  - Deleted entries drop out of **My entries** in the registry UI as
-    soon as they are deleted. Registry admins still see them on the
+  - Deleted entries drop out of **My entries** in the hub UI as
+    soon as they are deleted. Hub admins still see them on the
     Admin page, where they can restore or purge them.
 
 ---

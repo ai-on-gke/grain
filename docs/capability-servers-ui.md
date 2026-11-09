@@ -234,7 +234,9 @@ deletable under **Other secrets**. The tab's old addresses
 (`/settings/credentials`, `/settings/legacy-capabilities`, `/settings/secrets`,
 `/admin/integrations`) resolve to Settings → Capabilities. Which capabilities
 every new task starts with is chosen in **Settings → Tasks**, under **Default
-capabilities**.
+grants** (a Grants picker; the empty **Default legacy capabilities** menu
+beside it is removed, and a bare id the defaults already hold is kept as it
+is when they are saved).
 
 ## The API behind these pages
 
