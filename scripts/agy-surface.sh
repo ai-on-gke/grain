@@ -175,13 +175,14 @@ fi
 # installed into, and the checkout it was run from. What is left should be
 # the same bytes on a laptop and on a runner. It also drops the vendor's
 # LINT.IfChange / LINT.ThenChange markers its bundled guides carry, and
-# replaces the internal workspace path one of them mentions: both point
+# replaces the internal workspace path and flag `agy acp` mentions: they point
 # into Google's internal source tree, which this repository may not name
 # (tests/hygiene's TestCoreSaysNoGoogleTokens), and say nothing about agy.
-# The bracket in that pattern keeps this file from naming it either.
+# The brackets in those patterns keep this file from naming them either.
 scrub() {
   sed -e '/<!-- LINT\.\(IfChange\|ThenChange\)(.*-->/d' \
       -e 's#/google/[s]rc/cloud/#$INTERNAL_WORKSPACE/#g' \
+      -e 's/is_google[3]_workspace/is_$INTERNAL_WORKSPACE/g' \
       -e 's/\x1b\[[0-9;?]*[a-zA-Z]//g' \
       -e 's/\r$//' \
       -e "s#${probe_root}#\$PROBE#g" \

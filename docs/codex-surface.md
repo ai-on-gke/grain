@@ -33,20 +33,20 @@ this document can answer about itself.
 
 ``````console
 $ codex --version
-codex-cli 0.166.0
+codex-cli 0.167.0
 ``````
 
 ``````console
 path   /opt/codex/codex-x86_64-unknown-linux-musl
-size   319346888 bytes
-sha256 b8a11fedf24b2dfb59a70c9e52b030f9a508dcd49cd2dd0d41956f4c785156b8
+size   320575976 bytes
+sha256 cdcb45aaa01d0f14e298985e09465aebccd47f64ecd298aea44814af7b62bbda
 ``````
 
 The release this capture is of, against the release the image carries:
 
 ``````console
-pinned by the Dockerfile   rust-v0.166.0
-captured here              codex-cli 0.166.0
+pinned by the Dockerfile   rust-v0.167.0
+captured here              codex-cli 0.167.0
 ``````
 
 And one line codex prints ahead of almost everything, which every capture below has had removed from it and which is worth reading once. Every probe in this document runs with a `CODEX_HOME` under `/tmp`, because that is what `writeConfig` gives a real run -- `os.MkdirTemp("")` -- so this is what a grain run gets too:
@@ -67,7 +67,7 @@ Usage: codex [OPTIONS] [PROMPT]
        codex [OPTIONS] <COMMAND> [ARGS]
 
 Commands:
-  agents            Browse all agent sessions on the shared local app-server daemon
+  agents            Open the agent command center to browse and switch sessions
   exec              Run Codex non-interactively [aliases: e]
   review            Run a code review non-interactively
   login             Manage login
@@ -324,7 +324,7 @@ Options:
 
 ``````console
 $ codex agents --help
-Browse all agent sessions on the shared local app-server daemon
+Open the agent command center to browse and switch sessions
 
 Usage: codex agents [OPTIONS]
 
@@ -336,6 +336,9 @@ Options:
           
           Examples: - `-c model="o3"` - `-c 'sandbox_permissions=["disk-full-read-access"]'` - `-c
           shell_environment_policy.inherit=all`
+
+      --no-daemon
+          Run the agents overview with an embedded app server
 
       --enable <FEATURE>
           Enable a feature (repeatable). Equivalent to `-c features.<name>=true`

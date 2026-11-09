@@ -107,7 +107,7 @@ Nested MCP calls continue to be recorded and parsed as Grain tool calls.
 ## Future features and compatibility
 
 Stock Codex does not expose a universal default-deny dispatcher allowlist.
-This is an audited configuration for **codex-cli 0.166.0**, not an OS-level
+This is an audited configuration for **codex-cli 0.167.0**, not an OS-level
 isolation boundary around the trusted CLI itself. Grain refuses both older
 and newer CLI versions before starting an agent. An older binary could
 ignore the configuration; a newer one could add non-environment-backed
