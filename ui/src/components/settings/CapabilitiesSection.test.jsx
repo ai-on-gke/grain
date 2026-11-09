@@ -20,12 +20,31 @@ import { SettingsRoleRefusalContext } from "./SettingsCard.jsx";
 
 vi.mock("../../api.js", () => ({ default: vi.fn() }));
 
+const panelProps = vi.hoisted(() => ({
+  servers: null,
+  policy: null,
+  scopeSets: null,
+}));
+
 vi.mock("../CapabilityServersPanel.jsx", () => ({
-  default: () => null,
+  default: (props) => {
+    panelProps.servers = props;
+    return null;
+  },
   serverPath: (id) => `/settings/capabilities/${encodeURIComponent(id)}`,
 }));
-vi.mock("../CapabilityPolicyEditor.jsx", () => ({ default: () => null }));
-vi.mock("../ApiScopeSetsPanel.jsx", () => ({ default: () => null }));
+vi.mock("../CapabilityPolicyEditor.jsx", () => ({
+  default: (props) => {
+    panelProps.policy = props;
+    return null;
+  },
+}));
+vi.mock("../ApiScopeSetsPanel.jsx", () => ({
+  default: (props) => {
+    panelProps.scopeSets = props;
+    return null;
+  },
+}));
 
 // Every in-process provider the 2026-11-04 range retired keeps its bare
 // name as a one-release alias, and Settings -> Capabilities says so for
@@ -145,5 +164,20 @@ describe("CapabilitiesSection Deployment credentials gating", () => {
     expect(screen.getByTestId("credentials-read-only")).toHaveTextContent(
       /Needs settings:write.*Needs secrets:write/,
     );
+  });
+
+  // 2026-11-09 connections walkthrough: saving or removing an API scope set,
+  // capability policy or capability server refreshes App's config (s.onSaved)
+  // so GrantsPicker menus reflect added, edited and deleted entries without a
+  // full page reload.
+  it("forwards s.onSaved to ApiScopeSetsPanel, CapabilityPolicyEditor and CapabilityServersPanel", () => {
+    const onSaved = vi.fn();
+    render(
+      <CapabilitiesSection s={sectionState({ onSaved })} claimedSecrets={[]} />,
+    );
+    expect(panelProps.scopeSets.onSaved).toBe(onSaved);
+    expect(panelProps.policy.onSaved).toBe(onSaved);
+    panelProps.servers.onChanged();
+    expect(onSaved).toHaveBeenCalledTimes(1);
   });
 });
