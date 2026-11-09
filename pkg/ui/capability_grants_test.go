@@ -296,11 +296,12 @@ func TestCheckCapabilityGrants(t *testing.T) {
 		map[string]any{"grant": "https://capabilities.example.com/retired#old"},
 		map[string]any{"grant": "gcp-key"},
 		map[string]any{"grant": "read-issues"},
+		map[string]any{"grant": "self-debug"},
 	}}, &out)
-	if code != 200 || len(out) != 6 {
+	if code != 200 || len(out) != 7 {
 		t.Fatalf("%d %+v", code, out)
 	}
-	if out[0].Recorded != grantTestCap+`#key={"account":"prod","scopes":["all"]}` || out[0].Error != "" || out[0].Changed {
+	if out[0].Recorded != grantTestCap+`#key={"account":"prod","scopes":["all"]}` || out[0].Error != "" || out[0].Changed || len(out[0].AliasOf) != 0 {
 		t.Errorf("a fresh grant: %+v", out[0])
 	}
 	if !out[1].Changed || out[1].Error != "" {
@@ -312,11 +313,14 @@ func TestCheckCapabilityGrants(t *testing.T) {
 	if !out[3].Unchecked {
 		t.Errorf("a grant of an unattached server: %+v", out[3])
 	}
-	if out[4].Recorded != model.GCPKeySandboxAgentGrant || out[4].Error != "" {
+	if out[4].Recorded != model.GCPKeySandboxAgentGrant || out[4].Error != "" || !slices.Equal(out[4].AliasOf, []string{model.GCPKeySandboxAgentGrant}) {
 		t.Errorf("retired gcp-key alias: %+v", out[4])
 	}
-	if out[5].Recorded != model.GitHubReadIssuesGrant || out[5].Error != "" {
+	if out[5].Recorded != model.GitHubReadIssuesGrant || out[5].Error != "" || !slices.Equal(out[5].AliasOf, []string{model.GitHubReadIssuesGrant}) {
 		t.Errorf("retired read-issues alias: %+v", out[5])
+	}
+	if out[6].Error != "" || !slices.Equal(out[6].AliasOf, model.SelfDebugGrants()) {
+		t.Errorf("retired self-debug multi-grant alias: %+v", out[6])
 	}
 }
 

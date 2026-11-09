@@ -146,11 +146,15 @@ test("serves embedded ui-registry under strict CSP and walks through all views w
   await grantsSection.getByLabel("Include revoked grants").check();
   await expect(grantsSection).toContainText("dlg_a1b2c3d4e5f60000");
 
-  // Revoke triage-bot grant and re-grant consent
+  // Revoke triage-bot grant (confirming in ConfirmDialog) and re-grant consent
   const triageRow = grantsSection.locator("tr", {
     hasText: "dlg_a1b2c3d4e5f60002",
   });
   await triageRow.getByRole("button", { name: "Revoke" }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Revoke grant" })
+    .click();
   await expect(
     page.getByText(/Revoked consent grant dlg_a1b2c3d4e5f60002/i),
   ).toBeVisible();
@@ -461,5 +465,144 @@ test("brands the hub header and favicon with the grain mark in light and dark", 
       expect(res.status(), asset).toBe(200);
     }
     await context.close();
+  }
+});
+
+test("focuses Cancel, traps Tab, cancels on Escape, and restores focus across every ConfirmDialog at desktop and phone in light and dark", async ({
+  browser,
+}) => {
+  const viewports = [
+    { name: "desktop", width: 1440, height: 900, isMobile: false },
+    { name: "phone", width: 390, height: 844, isMobile: true },
+  ];
+  const themes = ["light", "dark"];
+
+  // Helper that exercises opening a confirmation dialog from `opener`, checks
+  // initial focus on Cancel, viewport fit, Tab + Shift+Tab staying inside the
+  // dialog, Escape closing without mutating state, and focus returning to `opener`.
+  async function assertDialogKeyboardContract(page, vp, opener, expectedTitle) {
+    await opener.scrollIntoViewIfNeeded();
+    await opener.focus();
+    await page.evaluate(() => {
+      document.activeElement?.setAttribute("data-test-opener", "1");
+    });
+    await opener.click();
+
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText(expectedTitle);
+
+    const box = await dialog.boundingBox();
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(vp.width + 1);
+
+    const cancelBtn = dialog.getByRole("button", { name: "Cancel" });
+    await expect(cancelBtn).toBeFocused();
+
+    // Press Tab 4 times and Shift+Tab 2 times: focus must always stay inside the dialog.
+    for (const key of ["Tab", "Tab", "Tab", "Tab", "Shift+Tab", "Shift+Tab"]) {
+      await page.keyboard.press(key);
+      const inside = await dialog.evaluate((el) =>
+        el.contains(document.activeElement),
+      );
+      expect(inside, `${expectedTitle} (${vp.name}) ${key}`).toBe(true);
+    }
+
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+
+    const returnedToOpener = await page.evaluate(
+      () => document.activeElement?.getAttribute("data-test-opener") === "1",
+    );
+    expect(returnedToOpener, `${expectedTitle} (${vp.name}) focus return`).toBe(
+      true,
+    );
+    await page.evaluate(() => {
+      document
+        .querySelectorAll("[data-test-opener]")
+        .forEach((el) => el.removeAttribute("data-test-opener"));
+    });
+  }
+
+  for (const vp of viewports) {
+    for (const theme of themes) {
+      const context = await browser.newContext({
+        viewport: { width: vp.width, height: vp.height },
+        colorScheme: theme,
+        isMobile: vp.isMobile,
+        hasTouch: vp.isMobile,
+      });
+      await context.addInitScript(
+        ([k, v]) => localStorage.setItem(k, v),
+        ["grain.themeMode", theme],
+      );
+      const page = await context.newPage();
+      const pageErrors = [];
+      page.on("pageerror", (err) => pageErrors.push(err.message));
+
+      // 1. My Entries (/): Stop and Delete confirmations
+      await page.goto(demo.url);
+      await assertDialogKeyboardContract(
+        page,
+        vp,
+        page.getByRole("button", { name: "Stop platform-vm" }),
+        "Stop platform-vm?",
+      );
+      const platformRow = page
+        .locator("tr", { hasText: "platform-vm" })
+        .first();
+      await assertDialogKeyboardContract(
+        page,
+        vp,
+        platformRow.getByRole("button", { name: "Delete" }),
+        "Delete platform-vm?",
+      );
+
+      // 2. Entry Detail (/entries/platform-vm): Stop instance and Delete entry...
+      await page.goto(`${demo.url}/entries/platform-vm`);
+      await assertDialogKeyboardContract(
+        page,
+        vp,
+        page.getByRole("button", { name: "Stop instance" }),
+        "Stop platform-vm?",
+      );
+      await assertDialogKeyboardContract(
+        page,
+        vp,
+        page.getByRole("button", { name: "Delete entry..." }),
+        "Delete platform-vm?",
+      );
+
+      // 3. Entry Detail (/entries/alice-workstation): Revoke credential confirmation
+      await page.goto(`${demo.url}/entries/alice-workstation`);
+      await assertDialogKeyboardContract(
+        page,
+        vp,
+        page.getByRole("button", { name: "Revoke" }).first(),
+        "Revoke registration credential?",
+      );
+
+      // 4. Apps acting for you (/grants): Revoke consent grant confirmation
+      await page.goto(`${demo.url}/grants`);
+      const grantsSection = page.getByTestId("person-grants-section");
+      await assertDialogKeyboardContract(
+        page,
+        vp,
+        grantsSection.getByRole("button", { name: "Revoke" }).first(),
+        "Revoke consent for",
+      );
+
+      // 5. Admin (/admin): Hard purge confirmation
+      await page.goto(`${demo.url}/admin`);
+      await assertDialogKeyboardContract(
+        page,
+        vp,
+        page.getByRole("button", { name: "Hard purge" }).first(),
+        "Hard purge alice-sandbox-old?",
+      );
+
+      expect(pageErrors).toEqual([]);
+      await context.close();
+    }
   }
 });

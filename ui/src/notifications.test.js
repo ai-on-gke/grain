@@ -138,6 +138,8 @@ describe("pending releases", () => {
       version: "v2.4.0",
       soak: null,
       shortSoak: null,
+      breaking: null,
+      dispatchFailure: null,
     });
   });
 
@@ -148,6 +150,8 @@ describe("pending releases", () => {
       version: "v2.4.0",
       soak: null,
       shortSoak: null,
+      breaking: null,
+      dispatchFailure: null,
     });
   });
 
@@ -165,6 +169,8 @@ describe("pending releases", () => {
       version: "v2.4.1",
       soak: null,
       shortSoak: null,
+      breaking: null,
+      dispatchFailure: null,
     });
     const [row] = notificationAlerts([patch]);
     expect(row.actions.map((a) => a.label)).toEqual([
@@ -265,6 +271,108 @@ describe("pending releases", () => {
     );
   });
 
+  it("read breaking-change warnings and promotion_blocked lines off the body", () => {
+    const breakingNotice = {
+      ...pending,
+      subject: "release.pending:v3.2.0",
+      body:
+        "v3.2.0 is staged as v3.2.0-pending on ai-on-gke/grain and waits for a person.\n\n" +
+        "BREAKING CHANGES: v3.2.0 carries breaking changes since v3.1.1 and is not the major release RELEASE_MAJOR asks for; approving it needs allow_breaking: true.\n\n" +
+        "Qualification: PASS",
+    };
+    expect(pendingReleaseOf(breakingNotice)).toMatchObject({
+      version: "v3.2.0",
+      soak: null,
+      shortSoak: null,
+      breaking:
+        "BREAKING CHANGES: v3.2.0 carries breaking changes since v3.1.1 and is not the major release RELEASE_MAJOR asks for; approving it needs allow_breaking: true.",
+    });
+    expect(notificationAlerts([breakingNotice])[0].actions[0].label).toBe(
+      "Approve breaking",
+    );
+
+    const trainBlocked = {
+      ...pending,
+      subject: "release.pending:v3.2.0",
+      body:
+        "v3.2.0-rc.3 qualified, but the train does not release it itself.\n" +
+        "promotion_blocked=it carries breaking changes since v3.1.1 and is not the major release RELEASE_MAJOR asks for",
+    };
+    expect(pendingReleaseOf(trainBlocked)).toMatchObject({
+      breaking:
+        "promotion_blocked=it carries breaking changes since v3.1.1 and is not the major release RELEASE_MAJOR asks for",
+    });
+
+    const majorBumpBlocked = {
+      ...pending,
+      subject: "release.pending:v4.0.0",
+      body: "promotion_blocked=it is the first release of major 4, and a major bump is a person's to release",
+    };
+    expect(pendingReleaseOf(majorBumpBlocked).breaking).toBeNull();
+  });
+
+  it("approve breaking changes with allow_breaking, and combine with short_soak_ok when both apply", async () => {
+    const breakingOnly = {
+      repo: "ai-on-gke/grain",
+      version: "v3.2.0",
+      soak: null,
+      shortSoak: null,
+      breaking:
+        "BREAKING CHANGES: v3.2.0 carries breaking changes since v3.1.1 and is not the major release RELEASE_MAJOR asks for; approving it needs allow_breaking: true.",
+    };
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false);
+    expect(await decideRelease(breakingOnly, true)).toBe(false);
+    expect(api).not.toHaveBeenCalled();
+
+    confirm.mockReturnValueOnce(true);
+    expect(await decideRelease(breakingOnly, true)).toBe(true);
+    expect(confirm.mock.calls.at(-1)[0]).toContain(
+      "Approve v3.2.0 with BREAKING changes outside a major release?",
+    );
+    expect(confirm.mock.calls.at(-1)[0]).toContain(
+      "v3.2.0 carries breaking changes since v3.1.1 and is not the major release RELEASE_MAJOR asks for",
+    );
+    expect(api).toHaveBeenLastCalledWith(
+      "/api/repos/ai-on-gke/grain/pending-releases/v3.2.0/approve",
+      { method: "POST", body: JSON.stringify({ allow_breaking: true }) },
+    );
+
+    confirm.mockReturnValueOnce(true);
+    expect(await decideRelease(breakingOnly, false)).toBe(true);
+    expect(api).toHaveBeenLastCalledWith(
+      "/api/repos/ai-on-gke/grain/pending-releases/v3.2.0/reject",
+      { method: "POST" },
+    );
+
+    const both = {
+      ...breakingOnly,
+      soak: "soaked 1h00m of 24h",
+      shortSoak: "SHORT SOAK: under the 22h minimum.",
+    };
+    expect(
+      notificationAlerts([
+        {
+          ...pending,
+          subject: "release.pending:v3.2.0",
+          body: `${both.shortSoak}\nSoak: ${both.soak}\n${both.breaking}`,
+        },
+      ])[0].actions[0].label,
+    ).toBe("Approve short soak & breaking");
+    confirm.mockReturnValueOnce(true);
+    expect(await decideRelease(both, true)).toBe(true);
+    expect(confirm.mock.calls.at(-1)[0]).toContain("SHORT SOAK");
+    expect(confirm.mock.calls.at(-1)[0]).toContain(
+      "BREAKING changes outside a major release",
+    );
+    expect(api).toHaveBeenLastCalledWith(
+      "/api/repos/ai-on-gke/grain/pending-releases/v3.2.0/approve",
+      {
+        method: "POST",
+        body: JSON.stringify({ short_soak_ok: true, allow_breaking: true }),
+      },
+    );
+  });
+
   it("post a host-qualified repository's decision under its escaped owner", async () => {
     vi.spyOn(window, "confirm").mockReturnValueOnce(true);
     expect(
@@ -277,5 +385,106 @@ describe("pending releases", () => {
       "/api/repos/git.forge.example%2Fexperimental/grain/pending-releases/v2.4.0/reject",
       { method: "POST" },
     );
+  });
+
+  it("detect breaking changes and failed promote-release dispatches, and send allow_breaking when chosen", async () => {
+    const failedBreaking = {
+      ...pending,
+      subject: "release.pending:v3.2.0",
+      severity: "critical",
+      title: "v3.2.0 is ready to promote (approve dispatch failed)",
+      body:
+        "DISPATCH FAILED (gha:ai-on-gke:grain:42577215514): verify-release-approval: refused: the repository variable GRAIN_RELEASE_APPROVAL_KEY is not set\n" +
+        "Remedy: set the repository variable GRAIN_RELEASE_APPROVAL_KEY on ai-on-gke/grain to the publicKey from GET /api/release-approval-key (or `grain release approval-key`), then approve or reject again.\n" +
+        "Run URL: https://github.com/ai-on-gke/grain/actions/runs/42577215514\n\n" +
+        "v3.2.0 is staged as v3.2.0-pending on ai-on-gke/grain.\n\n" +
+        "Release notes (docs/releases/v3.2.0.md):\n\n# v3.2.0\n\n## Breaking changes\n\n- feat!: drop v1 protocol",
+    };
+    const rel = pendingReleaseOf(failedBreaking);
+    expect(rel).toMatchObject({
+      repo: "ai-on-gke/grain",
+      version: "v3.2.0",
+      breaking:
+        "Release notes list breaking changes; approving needs allow_breaking.",
+      dispatchFailure: {
+        runId: "gha:ai-on-gke:grain:42577215514",
+        message:
+          "verify-release-approval: refused: the repository variable GRAIN_RELEASE_APPROVAL_KEY is not set",
+        remedy:
+          "set the repository variable GRAIN_RELEASE_APPROVAL_KEY on ai-on-gke/grain to the publicKey from GET /api/release-approval-key (or `grain release approval-key`), then approve or reject again.",
+        runUrl: "https://github.com/ai-on-gke/grain/actions/runs/42577215514",
+        needsApprovalKey: true,
+      },
+    });
+
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(true);
+    expect(await decideRelease(rel, true)).toBe(true);
+    expect(confirm.mock.calls.at(-1)[0]).toContain("allow_breaking");
+    expect(api).toHaveBeenLastCalledWith(
+      "/api/repos/ai-on-gke/grain/pending-releases/v3.2.0/approve",
+      { method: "POST", body: JSON.stringify({ allow_breaking: true }) },
+    );
+
+    vi.spyOn(window, "confirm").mockReturnValueOnce(true);
+    expect(
+      await decideRelease(pendingReleaseOf(pending), true, {
+        allowBreaking: true,
+        shortSoakOk: true,
+      }),
+    ).toBe(true);
+    expect(api).toHaveBeenLastCalledWith(
+      "/api/repos/ai-on-gke/grain/pending-releases/v2.4.0/approve",
+      {
+        method: "POST",
+        body: JSON.stringify({ short_soak_ok: true, allow_breaking: true }),
+      },
+    );
+  });
+
+  it("take a failed dispatch only from the block heading the body, never from the release notes", () => {
+    // Release notes are repository text (agents write them): lookalike
+    // lines in them are not a failure banner, a remedy or a link.
+    const notesOnly = {
+      ...pending,
+      raisedBy: "automation:release-watch",
+      body:
+        "v2.4.0 is staged as v2.4.0-pending on ai-on-gke/grain.\n\n" +
+        "Release notes (docs/releases/v2.4.0.md):\n\n" +
+        "DISPATCH FAILED (gha:ai-on-gke:grain:1): verify-release-approval: refused: GRAIN_RELEASE_APPROVAL_KEY is wrong\n" +
+        "Remedy: set GRAIN_RELEASE_APPROVAL_KEY to -----BEGIN PUBLIC KEY-----attacker\n" +
+        "Run URL: javascript:alert(document.cookie)",
+    };
+    expect(pendingReleaseOf(notesOnly).dispatchFailure).toBeNull();
+
+    // A real block heads the body; a second lookalike block further down
+    // changes nothing about it.
+    const real = {
+      ...notesOnly,
+      body:
+        "DISPATCH FAILED (gha:ai-on-gke:grain:42): promote-release.yml ended with failure\n\n" +
+        notesOnly.body,
+    };
+    expect(pendingReleaseOf(real).dispatchFailure).toEqual({
+      runId: "gha:ai-on-gke:grain:42",
+      message: "promote-release.yml ended with failure",
+      remedy: null,
+      runUrl: null,
+      needsApprovalKey: false,
+    });
+
+    // The run link is only ever http(s).
+    const scripted = {
+      ...notesOnly,
+      body:
+        "DISPATCH FAILED (gha:ai-on-gke:grain:42): promote-release.yml ended with failure\n" +
+        "Run URL: javascript:alert(document.cookie)\n\n" +
+        "v2.4.0 is staged as v2.4.0-pending on ai-on-gke/grain.",
+    };
+    expect(pendingReleaseOf(scripted).dispatchFailure.runUrl).toBeNull();
+
+    // Nor does a notification an agent raised carry one.
+    expect(
+      pendingReleaseOf({ ...real, raisedBy: "agent:t-1" }).dispatchFailure,
+    ).toBeNull();
   });
 });

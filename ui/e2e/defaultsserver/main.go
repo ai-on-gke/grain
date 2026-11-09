@@ -25,6 +25,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
@@ -37,10 +38,19 @@ func main() {
 		dataDir    = flag.String("data-dir", "", "persistent deployment data directory")
 		defaultSet bool
 		defaults   string
+		bareGrants [][2]string
 	)
 	flag.Func("default-filters", "deployment task-list default query (empty clears it)", func(value string) error {
 		defaultSet = true
 		defaults = value
+		return nil
+	})
+	flag.Func("seed-bare-grant", "plant a bare capability grant on a seeded task as <task_id>=<capability>", func(value string) error {
+		taskID, capID, ok := strings.Cut(value, "=")
+		if !ok || strings.TrimSpace(taskID) == "" || strings.TrimSpace(capID) == "" {
+			return fmt.Errorf("want <task_id>=<capability>, got %q", value)
+		}
+		bareGrants = append(bareGrants, [2]string{strings.TrimSpace(taskID), strings.TrimSpace(capID)})
 		return nil
 	})
 	flag.Parse()
@@ -88,6 +98,14 @@ func main() {
 	}
 	if len(tasks) == 0 {
 		seed(ctx, client)
+	}
+	for _, bg := range bareGrants {
+		if err := store.UpdateTask(ctx, bg[0], func(t *model.Task) error {
+			t.Grants = append(t.Grants, model.Grant{Capability: bg[1], Via: model.GrantByLabel})
+			return nil
+		}); err != nil {
+			log.Fatalf("planting bare grant %q on task %s: %v", bg[1], bg[0], err)
+		}
 	}
 
 	listener, err := net.Listen("tcp", *addr)

@@ -1292,10 +1292,10 @@ _No flags._
 
 Self-registers a grain deployment in a grain registry (`design/design/registry.design.md`), queries the organization directory and path router, and manages hosted (`instance`) and self-registered (`connected`) entries.
 - `status` (also bare `grain registry`) calls `GET /api/registry` and prints connection state, registry URL, entry metadata, last heartbeat, active and awaiting-reply task counts, any heartbeat error or scope conflicts, and advertised `(repo, path_prefix, role)` scopes.
-- `list` calls `GET /api/entries` for the caller's entries (or `-all` for admins), with optional `-owner`, `-owner-group`, `-kind`, `-status`, `-listed`, `-conflict`, and `-include-deleted` filters.
+- `list` calls `GET /api/entries` for the caller's entries (or `-all` for admins), with optional `-owner`, `-owner-group`, `-kind`, `-status`, `-listed`, `-conflict`, and `-include-deleted` filters, appending `detail=<status_detail>` when an entry carries a lifecycle or health detail.
 - `directory` calls `GET /api/directory` across listed catalog entries with optional `-q`, `-repo`, `-tag`, `-status`, `-kind`, `-host-kind`, `-owner`, and `-limit` filters.
 - `route` calls `GET /api/route` to resolve the primary and ranked candidate entries covering `-repo` and `-path` (with optional `-include-offline`).
-- `show` calls `GET /api/entries/{name}` and prints full metadata, tunnel status, scopes, conflicts, and credential metadata.
+- `show` calls `GET /api/entries/{name}` and prints full metadata, lifecycle step and `status_detail`/`health_detail` (`Step:`, `Detail:`, `Health:`), boot disk size (`Disk:`), tunnel status, scopes, conflicts, and credential metadata.
 - `create` calls `POST /api/entries` (`kind = "instance"`) to provision a hosted VM entry (generating a random name when `<name>` is omitted).
 - `register` creates or updates a `connected` entry on the registry (`POST /api/entries` or `PATCH /api/entries/{name}` / `POST /api/entries/{name}/credentials/rotate`), updates `Registry` in `POST /api/settings` (clearing any previous registry URL before swapping credentials when retargeting), stores any minted `grc_...` registration credential in the daemon's secret store under `registry-registration-token` (`PUT /api/secrets/registry-registration-token/value`), and runs an immediate heartbeat via `POST /api/registry/heartbeat`. `-standalone` registers on the registry without contacting a local daemon and prints the `-registry-connect` configuration snippet.
 - `unregister` deletes the entry on the registry (`DELETE /api/entries/{name}` unless `-keep-remote` is given), clears `Registry` in `POST /api/settings`, and deletes `registry-registration-token` from the daemon's secret store.
@@ -2400,9 +2400,9 @@ _No flags._
 |---|---|---|---|---|
 | `-admin-account` | string |  |  | deprecated and ignored: this build is single-tenant only, with no system admins to set up |
 | `-admin-user` | string |  |  | deprecated and ignored: this build is single-tenant only, with no system admins to set up |
-| `-claude-cli-sha256-amd64` | string | `"fd13c70000fec3f2116dfbcbb6121210b4a29328bf0e46210a59dd594a67d824"` |  | expected sha256 of the linux-x64 claude release |
-| `-claude-cli-sha256-arm64` | string | `"55cdb8e162d190432696ea54010e0fca2e18d06fa7a7127fd563b9ffd4f22624"` |  | expected sha256 of the linux-arm64 claude release |
-| `-claude-cli-version` | string | `"2.1.316"` |  | claude CLI release to install |
+| `-claude-cli-sha256-amd64` | string | `"dabafec82ca1319fa43d8be36a10fc61b1d11821cb98ad5df04ad95e199b8eed"` |  | expected sha256 of the linux-x64 claude release |
+| `-claude-cli-sha256-arm64` | string | `"a7e687fd1cb054d651c7588223de3786c99d4c682365e3c3ae1e59ce7f3a591f"` |  | expected sha256 of the linux-arm64 claude release |
+| `-claude-cli-version` | string | `"2.1.319"` |  | claude CLI release to install |
 | `-claude-home` | string |  |  | $HOME for the claude installer (default <data-dir>/claude) |
 | `-daemon-arg` | value |  |  | extra argument appended to the daemon's own command line, repeatable |
 | `-daemon-group` | string |  |  | run the daemon as this group (systemd Group=) instead of -daemon-user's own name; only meaningful alongside -daemon-user |
