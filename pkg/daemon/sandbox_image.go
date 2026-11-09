@@ -26,7 +26,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ai-on-gke/grain/pkg/hubauth"
+	"github.com/ai-on-gke/grain/pkg/registryauth"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/k8s"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -571,7 +571,7 @@ var (
 	mirroredSandboxImages    = map[string]string{}
 	mirroredSandboxWarned    = map[string]bool{}
 	sandboxMirrorDockerCmd   = []string{"docker"}
-	sandboxMirrorTokenSource = hubauth.Token
+	sandboxMirrorTokenSource = registryauth.Token
 	mirrorSandboxImageFunc   = defaultMirrorSandboxImage
 	// cleanMirroredSandboxImagesFunc runs after every mirror that
 	// succeeded; tests replace it.
@@ -738,8 +738,8 @@ func inspectMirroredRepoDigest(ctx context.Context, inspectRef, mirrorRepo, targ
 }
 
 func sandboxMirrorLogin(ctx context.Context, imageRef string) error {
-	host := hubauth.HostOf(imageRef)
-	if !hubauth.IsGoogleRegistry(host) || sandboxMirrorTokenSource == nil {
+	host := registryauth.HostOf(imageRef)
+	if !registryauth.IsGoogleRegistry(host) || sandboxMirrorTokenSource == nil {
 		return nil
 	}
 	token, err := sandboxMirrorTokenSource(ctx)
@@ -839,7 +839,7 @@ func logCustomSandboxImage(ctx context.Context, cfg Config, image, stock string,
 // image (ubuntu:24.04) has no namespace and is not one of these.
 func localOnlyImageRef(ref string) bool {
 	ref = strings.TrimSpace(ref)
-	return ref != "" && strings.Contains(ref, "/") && hubauth.HostOf(ref) == ""
+	return ref != "" && strings.Contains(ref, "/") && registryauth.HostOf(ref) == ""
 }
 
 // refuseLocalOnlyPodImage is the error a Kubernetes backend fails with

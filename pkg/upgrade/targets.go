@@ -40,7 +40,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/hubauth"
+	"github.com/ai-on-gke/grain/pkg/registryauth"
 	"github.com/ai-on-gke/grain/pkg/version"
 )
 
@@ -701,7 +701,7 @@ var registryClient = &http.Client{Timeout: 15 * time.Second}
 func ListRegistryTags(ctx context.Context, repository string) ([]string, error) {
 	host, name := registryLocation(repository)
 	next := "https://" + host + "/v2/" + name + "/tags/list?n=1000"
-	token := hubauth.TokenFor(ctx, host)
+	token := registryauth.TokenFor(ctx, host)
 	exchanged := false
 	var tags []string
 	for page := 0; next != "" && page < 20; page++ {

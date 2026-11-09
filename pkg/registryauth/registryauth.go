@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package hubauth finds the credential an image registry wants when
+// Package registryauth finds the credential an image registry wants when
 // the anonymous token exchange will not do: a Google OAuth2 access token
 // for Artifact Registry (*-docker.pkg.dev) and Container Registry
 // (gcr.io), whose private repositories answer an anonymous pull-scoped
@@ -23,7 +23,7 @@
 // one -- and otherwise the GCE metadata server's token for the
 // VM's attached service account. Neither is required; with no token the
 // caller goes on anonymously, which is all a public image ever needed.
-package hubauth
+package registryauth
 
 import (
 	"context"

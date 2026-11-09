@@ -11,7 +11,7 @@
 > | `Dockerfile.registry` | `Dockerfile.hub` (`Dockerfile.registry` is a verbatim copy for now) |
 > | image `docker.io/grainai/registry` | `docker.io/grainai/hub` (releases publish both, same tags and signatures) |
 > | `make image-registry`, `IMAGE_REGISTRY`, `MAIN_grain-registry` | `make image-hub`, `IMAGE_HUB`, `MAIN_grain-hub` |
-> | `ui-registry/`, `pkg/registry/...`, `pkg/registryauth` | `ui-hub/`, `pkg/hub/...`, `pkg/hubauth` |
+> | `ui-registry/`, `pkg/registry/...` | `ui-hub/`, `pkg/hub/...` |
 > | `grain registry <subcommand>` | `grain hub <subcommand>` |
 > | daemon `-registry-url`, `-registry-entry`, `-registry-auth-mode`, `-registry-oidc-audience`, `-registry-token-file`, `-registry-display-name`, `-registry-purpose`, `-registry-host-kind`, `-registry-listed`, `-registry-connect` | `-hub-url`, `-hub-entry`, `-hub-auth-mode`, `-hub-oidc-audience`, `-hub-token-file`, `-hub-display-name`, `-hub-purpose`, `-hub-host-kind`, `-hub-listed`, `-hub-connect` |
 > | `-ui-registry-issuer`, `-ui-registry-audience`, `-ui-registry-keys-url` (daemon and `grain demo`) | `-ui-hub-issuer`, `-ui-hub-audience`, `-ui-hub-keys-url` |
@@ -29,7 +29,9 @@
 > `grain-registry` label on hub-managed VMs and disks, the
 > `registry-registration-token` secret name, the `registry` identity
 > verifier name (`-ui-require-verifier=registry`), the daemon's
-> `/api/registry` endpoints, and the hub's database tables.
+> `/api/registry` endpoints, and the hub's database tables. `pkg/registryauth`
+> keeps its name too: it authenticates to container image registries
+> (Artifact Registry, gcr.io), not to the Grain Hub.
 
 A grain deployment is single-tenant ([`docs/access-code.md`](access-code.md)).
 Across an engineering organization, running many single-tenant grains

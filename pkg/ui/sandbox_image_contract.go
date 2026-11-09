@@ -25,7 +25,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/hubauth"
+	"github.com/ai-on-gke/grain/pkg/registryauth"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/sandboximage"
 )
@@ -202,7 +202,7 @@ func FetchImageLabels(ctx context.Context, imageRef string) (map[string]string, 
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	r := &registryReader{client: &http.Client{Timeout: 10 * time.Second, Transport: registryTransport}, base: "https://" + host + "/v2/" + repo, token: hubauth.TokenFor(ctx, host)}
+	r := &registryReader{client: &http.Client{Timeout: 10 * time.Second, Transport: registryTransport}, base: "https://" + host + "/v2/" + repo, token: registryauth.TokenFor(ctx, host)}
 	if isLoopbackRegistryHost(host) {
 		r.base = "http://" + host + "/v2/" + repo
 	}

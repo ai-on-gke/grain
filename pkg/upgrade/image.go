@@ -46,7 +46,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/hubauth"
+	"github.com/ai-on-gke/grain/pkg/registryauth"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 )
 
@@ -451,14 +451,14 @@ func (u *Upgrader) pullImage(ctx context.Context, p *progress, step, ref string)
 	// pullable image: docker would resolve it to Docker Hub, where anybody
 	// may have published that name. Images from Docker Hub are named with
 	// an explicit docker.io/ host.
-	if hubauth.HostOf(ref) == "" {
+	if registryauth.HostOf(ref) == "" {
 		return fmt.Errorf("refusing to pull %s: it names no registry host, so it is a local tag a release asset loads rather than an image to pull (docker would fetch it from Docker Hub); publish it on the release or name its registry", ref)
 	}
 	argv := u.cfg.Image.PullCmd
 	if len(argv) == 0 {
 		argv = []string{"docker", "pull"}
-		if host := hubauth.HostOf(ref); hubauth.IsGoogleRegistry(host) {
-			if token, err := hubauth.Token(ctx); err != nil {
+		if host := registryauth.HostOf(ref); registryauth.IsGoogleRegistry(host) {
+			if token, err := registryauth.Token(ctx); err != nil {
 				p.logf("%s: no Google access token for %s, pulling anonymously: %v", step, host, err)
 			} else if err := dockerLogin(ctx, host, token); err != nil {
 				p.logf("%s: docker login to %s failed, pulling anyway: %v", step, host, err)
@@ -482,8 +482,8 @@ func (u *Upgrader) pushImage(ctx context.Context, p *progress, step, ref string)
 	argv := u.cfg.Image.PushCmd
 	if len(argv) == 0 {
 		argv = []string{"docker", "push"}
-		if host := hubauth.HostOf(ref); hubauth.IsGoogleRegistry(host) {
-			if token, err := hubauth.Token(ctx); err != nil {
+		if host := registryauth.HostOf(ref); registryauth.IsGoogleRegistry(host) {
+			if token, err := registryauth.Token(ctx); err != nil {
 				p.logf("%s: no Google access token for %s, pushing with existing credentials: %v", step, host, err)
 			} else if err := dockerLogin(ctx, host, token); err != nil {
 				p.logf("%s: docker login to %s failed, pushing anyway: %v", step, host, err)
@@ -543,7 +543,7 @@ func (u *Upgrader) mirrorSandboxImage(ctx context.Context, p *progress, step, sa
 // stdin so it is never on a command line. A variable so tests can see
 // the login without a docker.
 var dockerLogin = func(ctx context.Context, host, token string) error {
-	cmd := newCommand(ctx, "", "docker", "login", "-u", hubauth.GoogleUser, "--password-stdin", "https://"+host)
+	cmd := newCommand(ctx, "", "docker", "login", "-u", registryauth.GoogleUser, "--password-stdin", "https://"+host)
 	cmd.Stdin = strings.NewReader(token)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))

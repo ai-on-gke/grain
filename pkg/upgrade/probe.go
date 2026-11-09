@@ -22,7 +22,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/hubauth"
+	"github.com/ai-on-gke/grain/pkg/registryauth"
 )
 
 // What the daily automatic upgrade asks before it holds the queue
@@ -205,7 +205,7 @@ func RegistryManifestDigest(ctx context.Context, ref string) (string, error) {
 	host, name := registryLocation(repository)
 	target := "https://" + host + "/v2/" + name + "/manifests/" + tag
 	header := http.Header{"Accept": {strings.Join(manifestAccept, ", ")}}
-	token := hubauth.TokenFor(ctx, host)
+	token := registryauth.TokenFor(ctx, host)
 	exchanged := false
 	for attempt := 0; attempt < 2; attempt++ {
 		resp, err := registryDo(ctx, http.MethodHead, target, token, header)
