@@ -59,7 +59,7 @@ func TestProcessResultAppliesDefaultsToProposedTasks(t *testing.T) {
 	for _, grant := range proposal.Grants {
 		got[grant.Capability] = grant.Via
 	}
-	for _, capability := range []string{"api:self-debug", model.GrainSourceGrant, grainci.Grant} {
+	for _, capability := range []string{model.APIRef("self-debug"), model.GrainSourceGrant, grainci.Grant} {
 		if via, ok := got[capability]; !ok || via != model.GrantByDefault {
 			t.Errorf("%s grant = %q, %v; want %q, true", capability, via, ok, model.GrantByDefault)
 		}
@@ -236,7 +236,7 @@ func TestProcessResultAttachesRequestedCapabilitiesToProposedTasks(t *testing.T)
 	for _, grant := range proposal.Grants {
 		got[grant.Capability] = grant.Via
 	}
-	for _, defCap := range []string{"api:self-debug", model.GrainSourceGrant} {
+	for _, defCap := range []string{model.APIRef("self-debug"), model.GrainSourceGrant} {
 		if got[defCap] != model.GrantByDefault {
 			t.Errorf("%s via = %q, want GrantByDefault (grants=%+v)", defCap, got[defCap], proposal.Grants)
 		}

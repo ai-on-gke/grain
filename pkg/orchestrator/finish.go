@@ -1966,7 +1966,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			// so unapproved (model.EscalatedCapabilities).
 			//
 			// Retired one-release aliases expand via CanonicalLegacyGrants
-			// and canonical api#* references normalize via StoredGrantSpelling,
+			// and api grants are written as canonical api#* references,
 			// matching ui.Client.creationGrants so a relayed proposal stores
 			// the exact same grant set as its live twin.
 			for _, expanded := range expandProposalGrant(cap) {
@@ -2706,8 +2706,8 @@ func proposalSeeding(ctx context.Context, store *model.Store, target *model.Repo
 }
 
 // expandProposalGrant expands retired one-release capability aliases via
-// model.CanonicalLegacyGrants, rewrites api#* references to stored api:<scope>
-// form via model.StoredGrantSpelling, and normalizes in-process capability
+// model.CanonicalLegacyGrants, writes api and repository grants in either
+// spelling as their canonical references, and normalizes in-process capability
 // references to recorded form, matching ui.Client.normalizeCapabilityIDs.
 // grain-ci / grain#ci is omitted so the target repository's CI Mode decides it.
 func expandProposalGrant(cap string) []string {
@@ -2718,9 +2718,20 @@ func expandProposalGrant(cap string) []string {
 	expanded := model.CanonicalLegacyGrants(cap)
 	out := make([]string, 0, len(expanded))
 	for _, part := range expanded {
-		part = model.StoredGrantSpelling(part)
+		part = strings.TrimSpace(part)
 		if part == "" || grainci.IsGrant(part) {
 			continue
+		}
+		// An api or repository grant in either spelling is written as its
+		// canonical reference (unified-grants slice 3), as
+		// model.NormalizeCapabilityNames writes it for the live call; one
+		// that does not parse is kept as given, for the filing checks to
+		// refuse as they would live.
+		if strings.HasPrefix(part, model.APIGrantPrefix) || model.IsAPIGrantRef(part) ||
+			strings.HasPrefix(part, model.RepoReadCapabilityPrefix) || strings.HasPrefix(part, model.RepoWriteCapabilityPrefix) {
+			if names, err := model.NormalizeCapabilityNames([]string{part}, nil); err == nil && len(names) == 1 {
+				part = names[0]
+			}
 		}
 		if model.IsCapabilityRef(part) && grainserver.IsInProcessGrant(part) {
 			if names, err := model.NormalizeCapabilityNames([]string{part}, grainserver.Lookup(nil)); err == nil && len(names) == 1 {
