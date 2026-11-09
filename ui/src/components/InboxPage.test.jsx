@@ -1716,3 +1716,159 @@ describe("InboxPage for a limited role", () => {
     ).toBeEnabled();
   });
 });
+
+describe("InboxPage pending releases under Asked", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    api.mockReset();
+  });
+
+  const pendingV320 = {
+    id: 41,
+    subject: "release.pending:v3.2.0",
+    family: "release.pending",
+    severity: "warning",
+    title: "v3.2.0 is ready to promote",
+    body:
+      "v3.2.0 is staged as v3.2.0-pending on ai-on-gke/grain and waits for a person.\n\n" +
+      "Qualification: PASS",
+    repo: "ai-on-gke/grain",
+    raisedAt: "2026-11-09T07:00:00Z",
+    raiseCount: 1,
+    actions: ["approve-release", "reject-release"],
+  };
+
+  const otherNotification = {
+    id: 42,
+    subject: "pipeline.merge-stalled:11",
+    family: "pipeline.merge-stalled",
+    severity: "warning",
+    title: "The merge of task 11 has stalled",
+    body: "acme/widgets#15 has been in `merging` past its patience.",
+    taskId: "11",
+    raisedAt: "2026-11-09T06:00:00Z",
+    raiseCount: 1,
+    actions: ["retry-merge", "open-task"],
+  };
+
+  it("lists pending releases expanded under Asked, separate from collapsed Notifications, with allow-breaking and short-soak options", async () => {
+    const user = userEvent.setup();
+    const onNotificationsChanged = vi.fn();
+    api.mockImplementation((path) =>
+      path === "/api/local-script-approvals"
+        ? Promise.resolve([])
+        : Promise.resolve({}),
+    );
+
+    renderInbox({
+      tasks: [],
+      notifications: [pendingV320, otherNotification],
+      onNotificationsChanged,
+    });
+
+    const askedSection = screen.getByTestId("inbox-pending-releases");
+    expect(
+      within(askedSection).getByRole("heading", {
+        name: "Asked: approve a release",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(askedSection).getByRole("button", {
+        name: /Asked: approve a release/i,
+      }),
+    ).toHaveAttribute("aria-expanded", "true");
+
+    const item = within(askedSection).getByTestId("inbox-pending-release");
+    expect(
+      within(item).getByText("v3.2.0 is ready to promote"),
+    ).toBeInTheDocument();
+    expect(
+      within(item).queryByRole("button", { name: "Acknowledge" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(item).queryByRole("button", { name: "Investigate" }),
+    ).not.toBeInTheDocument();
+
+    // Notifications holds only non-release operator notifications and stays collapsed.
+    const notifSection = screen.getByTestId("inbox-notifications");
+    const notifToggle = within(notifSection).getByRole("button", {
+      name: /Notifications/i,
+    });
+    expect(within(notifToggle).getByText("1")).toHaveClass("count");
+    await user.click(notifToggle);
+    expect(
+      within(notifSection).queryByText("v3.2.0 is ready to promote"),
+    ).not.toBeInTheDocument();
+
+    // Checking Allow breaking changes posts allow_breaking: true to the person-only route.
+    const allowBreaking = within(item).getByRole("checkbox", {
+      name: /Allow breaking changes/i,
+    });
+    expect(allowBreaking).not.toBeChecked();
+    await user.click(allowBreaking);
+    expect(allowBreaking).toBeChecked();
+
+    vi.spyOn(window, "confirm").mockReturnValueOnce(true);
+    await user.click(within(item).getByRole("button", { name: "Approve" }));
+
+    await waitFor(() => {
+      expect(api).toHaveBeenCalledWith(
+        "/api/repos/ai-on-gke/grain/pending-releases/v3.2.0/approve",
+        {
+          method: "POST",
+          body: JSON.stringify({ allow_breaking: true }),
+        },
+      );
+    });
+    expect(onNotificationsChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a failed promote-release.yml dispatch against the item and fetches GET /api/release-approval-key", async () => {
+    const user = userEvent.setup();
+    api.mockImplementation((path) => {
+      if (path === "/api/local-script-approvals") return Promise.resolve([]);
+      if (path === "/api/release-approval-key") {
+        return Promise.resolve({
+          variable: "GRAIN_RELEASE_APPROVAL_KEY",
+          publicKey:
+            "-----BEGIN PUBLIC KEY-----\nMkwEwYHKoZIzj0CAQ...\n-----END PUBLIC KEY-----",
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    const failedItem = {
+      ...pendingV320,
+      severity: "critical",
+      title: "v3.2.0 is ready to promote (approve dispatch failed)",
+      body:
+        "DISPATCH FAILED (gha:ai-on-gke:grain:42577215514): verify-release-approval: refused: the repository variable GRAIN_RELEASE_APPROVAL_KEY is not set\n" +
+        "Remedy: set the repository variable GRAIN_RELEASE_APPROVAL_KEY on ai-on-gke/grain to the publicKey from GET /api/release-approval-key (or `grain release approval-key`), then approve or reject again.\n" +
+        "Run URL: https://github.com/ai-on-gke/grain/actions/runs/42577215514\n\n" +
+        "v3.2.0 is staged as v3.2.0-pending on ai-on-gke/grain.\n\n" +
+        "Release notes (docs/releases/v3.2.0.md):\n\n# v3.2.0\n\n## Breaking changes\n\n- feat!: drop v1 protocol",
+    };
+
+    renderInbox({ tasks: [], notifications: [failedItem] });
+
+    const failureAlert = screen.getByTestId("inbox-release-dispatch-failure");
+    expect(failureAlert).toHaveTextContent("gha:ai-on-gke:grain:42577215514");
+    expect(failureAlert).toHaveTextContent(
+      "verify-release-approval: refused: the repository variable GRAIN_RELEASE_APPROVAL_KEY is not set",
+    );
+    expect(failureAlert).toHaveTextContent("GET /api/release-approval-key");
+
+    // Breaking changes detected from release notes pre-selects Allow breaking changes.
+    expect(
+      screen.getByRole("checkbox", { name: /Allow breaking changes/i }),
+    ).toBeChecked();
+
+    await user.click(
+      within(failureAlert).getByRole("button", { name: "Show approval key" }),
+    );
+    expect(
+      await within(failureAlert).findByText(/BEGIN PUBLIC KEY/),
+    ).toBeInTheDocument();
+    expect(api).toHaveBeenCalledWith("/api/release-approval-key");
+  });
+});

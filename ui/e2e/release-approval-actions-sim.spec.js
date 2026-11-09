@@ -82,11 +82,14 @@ test("an Actions repo's pending patch release is approved from the Inbox through
   const before = (await dispatches()).length;
 
   await page.goto("/inbox");
-  const section = page.getByTestId("inbox-notifications");
+  const section = page.getByTestId("inbox-pending-releases");
   await expect(section).toBeVisible();
-  await section.locator(".inbox-group-toggle").click();
+  await expect(section.locator(".inbox-group-toggle")).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
   const patchRow = section
-    .getByTestId("inbox-notification")
+    .getByTestId("inbox-pending-release")
     .filter({ hasText: "v2.9.1 is ready to promote" });
   await expect(patchRow).toBeVisible();
   page.once("dialog", (dialog) => dialog.accept());
@@ -135,7 +138,7 @@ test("an Actions repo's pending patch release is approved from the Inbox through
 
   // Reject the minor release from the Inbox.
   const minorRow = section
-    .getByTestId("inbox-notification")
+    .getByTestId("inbox-pending-release")
     .filter({ hasText: "v2.10.0 is ready to promote" });
   await expect(minorRow).toBeVisible();
   page.once("dialog", (dialog) => dialog.accept());
@@ -146,5 +149,74 @@ test("an Actions repo's pending patch release is approved from the Inbox through
   expect(sent[sent.length - 1].inputs).toMatchObject({
     version: "v2.10.0",
     decision: "reject",
+  });
+
+  // Stage v3.2.0-pending with breaking changes and a failed promote-release.yml
+  // dispatch: the Inbox shows the failed run, GRAIN_RELEASE_APPROVAL_KEY +
+  // GET /api/release-approval-key, lets the operator inspect the key, and
+  // approves with allow_breaking=true.
+  await ok(
+    await page.request.post(`${SIM}/git/refs`, {
+      data: { ref: "refs/tags/v3.2.0-pending", sha: commit },
+    }),
+    "tag v3.2.0-pending",
+  );
+  await ok(
+    await page.request.post("/api/notifications", {
+      data: {
+        subject: "release.pending:v3.2.0",
+        severity: "critical",
+        title: "v3.2.0 is ready to promote (approve dispatch failed)",
+        body:
+          "DISPATCH FAILED (gha:acme:widgets:42577215514): verify-release-approval: refused: the repository variable GRAIN_RELEASE_APPROVAL_KEY is not set\n" +
+          "Remedy: set the repository variable GRAIN_RELEASE_APPROVAL_KEY on acme/widgets to the publicKey from GET /api/release-approval-key (or `grain release approval-key`), then approve or reject again.\n\n" +
+          "v3.2.0 is staged as v3.2.0-pending on acme/widgets.\n\n" +
+          "Release notes (docs/releases/v3.2.0.md):\n\n# v3.2.0\n\n## Breaking changes\n\n- feat!: drop v1 protocol",
+        repo: "acme/widgets",
+        actions: ["approve-release", "reject-release"],
+      },
+    }),
+    "raise v3.2.0 failed dispatch",
+  );
+  await page.reload();
+  const v320Row = section
+    .getByTestId("inbox-pending-release")
+    .filter({ hasText: "v3.2.0 is ready to promote" });
+  await expect(v320Row).toBeVisible();
+  const failureBanner = v320Row.getByTestId("inbox-release-dispatch-failure");
+  await expect(failureBanner).toContainText("gha:acme:widgets:42577215514");
+  await expect(failureBanner).toContainText(
+    "verify-release-approval: refused: the repository variable GRAIN_RELEASE_APPROVAL_KEY is not set",
+  );
+  await expect(failureBanner).toContainText("GET /api/release-approval-key");
+  await failureBanner
+    .getByRole("button", { name: "Show approval key" })
+    .click();
+  await expect(failureBanner.locator(".inbox-approval-key")).toContainText(
+    "BEGIN PUBLIC KEY",
+  );
+  await expect(
+    v320Row.getByRole("checkbox", { name: /Allow breaking changes/i }),
+  ).toBeChecked();
+
+  // Verify the expanded key and failure banner fit inside a 390px phone viewport without horizontal scroll.
+  await page.setViewportSize({ width: 390, height: 844 });
+  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }));
+  expect(scrollWidth).toBeLessThanOrEqual(clientWidth + 1);
+  await page.setViewportSize({ width: 1440, height: 900 });
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await v320Row.getByRole("button", { name: "Approve" }).click();
+  await expect(v320Row).toHaveCount(0);
+  sent = await dispatches();
+  expect(sent).toHaveLength(before + 3);
+  expect(sent[sent.length - 1].inputs).toMatchObject({
+    version: "v3.2.0",
+    decision: "approve",
+    allow_breaking: "true",
+    short_soak_ok: "false",
   });
 });

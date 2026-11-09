@@ -618,6 +618,7 @@ export default function Sidebar({
   // pages read.
   unseenClosed = null,
   notificationCount = 0,
+  pendingReleaseCount = 0,
   schedules = [],
   templates = [],
   suites = [],
@@ -835,10 +836,17 @@ export default function Sidebar({
       ? config.pendingLocalScripts
       : 0;
   const inboxCount =
-    waitingTasks + notificationCount + syncFailing + localScripts;
+    waitingTasks +
+    pendingReleaseCount +
+    notificationCount +
+    syncFailing +
+    localScripts;
   const inboxTitle = [
     waitingTasks > 0
       ? `${waitingTasks} task${waitingTasks === 1 ? "" : "s"} waiting on you`
+      : "",
+    pendingReleaseCount > 0
+      ? `${pendingReleaseCount} pending release${pendingReleaseCount === 1 ? "" : "s"} awaiting approval`
       : "",
     notificationCount > 0
       ? `${notificationCount} notification${notificationCount === 1 ? "" : "s"}`

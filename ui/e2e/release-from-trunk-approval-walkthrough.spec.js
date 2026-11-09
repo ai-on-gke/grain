@@ -71,13 +71,16 @@ test("pending releases: approved from Inbox and Alerts, rejected, and refused to
     );
   };
 
-  // 1. Approve the seeded v2.4.0 pending release from the Inbox.
+  // 1. Approve the seeded v2.4.0 pending release from the Inbox ("Asked: approve a release").
   await page.goto("/inbox");
-  const section = page.getByTestId("inbox-notifications");
+  const section = page.getByTestId("inbox-pending-releases");
   await expect(section).toBeVisible();
-  await section.locator(".inbox-group-toggle").click();
+  await expect(section.locator(".inbox-group-toggle")).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
   const v240Row = section
-    .getByTestId("inbox-notification")
+    .getByTestId("inbox-pending-release")
     .filter({ hasText: "v2.4.0 is ready to promote" });
   await expect(v240Row).toBeVisible();
 
@@ -146,7 +149,7 @@ test("pending releases: approved from Inbox and Alerts, rejected, and refused to
   await raisePendingRelease("v2.6.0");
   await page.goto("/inbox");
   const v260Row = section
-    .getByTestId("inbox-notification")
+    .getByTestId("inbox-pending-release")
     .filter({ hasText: "v2.6.0 is ready to promote" });
   await expect(v260Row).toBeVisible();
 
@@ -188,7 +191,7 @@ test("pending releases: approved from Inbox and Alerts, rejected, and refused to
   );
   await page.goto("/inbox");
   const v280Row = section
-    .getByTestId("inbox-notification")
+    .getByTestId("inbox-pending-release")
     .filter({ hasText: "v2.8.0 is ready to promote" });
   await expect(v280Row).toBeVisible();
   const soak = v280Row.getByTestId("inbox-release-soak");
@@ -233,7 +236,7 @@ test("pending releases: approved from Inbox and Alerts, rejected, and refused to
   );
   await page.goto("/inbox");
   const v241Row = section
-    .getByTestId("inbox-notification")
+    .getByTestId("inbox-pending-release")
     .filter({ hasText: "v2.4.1 is ready to promote" });
   await expect(v241Row).toBeVisible();
   await expect(v241Row.getByTestId("inbox-release-soak")).toHaveCount(0);

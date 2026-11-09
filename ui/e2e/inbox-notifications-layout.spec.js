@@ -75,7 +75,10 @@ test("the Inbox lists open notifications above the tasks, with their actions in 
       await toggle.click();
     }
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
-    await expect(rows).toHaveCount(3);
+    await expect(rows).toHaveCount(2);
+    await expect(
+      rows.filter({ hasText: "v2.4.0 is ready to promote" }),
+    ).toHaveCount(0);
 
     const warning = rows.filter({ hasText: "A merge has been stalled" });
     await expect(
@@ -88,9 +91,23 @@ test("the Inbox lists open notifications above the tasks, with their actions in 
       warning.getByRole("button", { name: "Open task" }),
     ).toBeVisible();
 
-    // A pending release leads with what it asks for, Approve then Reject,
-    // on one line with the rest of its actions and inside its row.
-    const release = rows.filter({ hasText: "v2.4.0 is ready to promote" });
+    // A pending release lives under "Asked: approve a release" (expanded by
+    // default, never folded inside Notifications) and leads with Approve then
+    // Reject on one line inside its row, with no Acknowledge button.
+    const releaseSection = page.getByTestId("inbox-pending-releases");
+    await expect(releaseSection).toBeVisible();
+    const releaseToggle = releaseSection.locator(".inbox-group-toggle");
+    await expect(releaseToggle).toHaveAttribute("aria-expanded", "true");
+    await expect(releaseToggle.locator("h3")).toHaveText(
+      "Asked: approve a release",
+    );
+    const release = releaseSection
+      .getByTestId("inbox-pending-release")
+      .filter({ hasText: "v2.4.0 is ready to promote" });
+    await expect(release).toBeVisible();
+    await expect(
+      release.getByRole("button", { name: "Acknowledge" }),
+    ).toHaveCount(0);
     const approve = release.getByRole("button", { name: "Approve" });
     const reject = release.getByRole("button", { name: "Reject" });
     await expect(approve).toBeVisible();
@@ -98,18 +115,24 @@ test("the Inbox lists open notifications above the tasks, with their actions in 
     const releaseBox = await release.boundingBox();
     const approveBox = await approve.boundingBox();
     const rejectBox = await reject.boundingBox();
-    const ackBox = await release
-      .getByRole("button", { name: "Acknowledge" })
-      .boundingBox();
     expect(approveBox.x).toBeLessThan(rejectBox.x);
-    expect(rejectBox.x).toBeLessThan(ackBox.x);
     expect(Math.abs(approveBox.y - rejectBox.y)).toBeLessThanOrEqual(1);
-    for (const box of [approveBox, rejectBox, ackBox]) {
+    for (const box of [approveBox, rejectBox]) {
       expect(box.x).toBeGreaterThanOrEqual(releaseBox.x - 1);
       expect(box.x + box.width).toBeLessThanOrEqual(
         releaseBox.x + releaseBox.width + 1,
       );
     }
+    const optionsBox = await release
+      .locator(".inbox-release-options")
+      .boundingBox();
+    expect(optionsBox.x).toBeGreaterThanOrEqual(releaseBox.x - 1);
+    expect(optionsBox.x + optionsBox.width).toBeLessThanOrEqual(
+      releaseBox.x + releaseBox.width + 1,
+    );
+    expect(releaseBox.x + releaseBox.width).toBeLessThanOrEqual(
+      viewport.width + 1,
+    );
 
     // Acknowledged: still listed, marked, and with nothing to acknowledge.
     const acked = rows.filter({ hasText: "webkit e2e job looks flaky" });

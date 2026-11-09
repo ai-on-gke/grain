@@ -138,6 +138,8 @@ describe("pending releases", () => {
       version: "v2.4.0",
       soak: null,
       shortSoak: null,
+      breaking: null,
+      dispatchFailure: null,
     });
   });
 
@@ -148,6 +150,8 @@ describe("pending releases", () => {
       version: "v2.4.0",
       soak: null,
       shortSoak: null,
+      breaking: null,
+      dispatchFailure: null,
     });
   });
 
@@ -165,6 +169,8 @@ describe("pending releases", () => {
       version: "v2.4.1",
       soak: null,
       shortSoak: null,
+      breaking: null,
+      dispatchFailure: null,
     });
     const [row] = notificationAlerts([patch]);
     expect(row.actions.map((a) => a.label)).toEqual([
@@ -276,6 +282,60 @@ describe("pending releases", () => {
     expect(api).toHaveBeenCalledWith(
       "/api/repos/git.forge.example%2Fexperimental/grain/pending-releases/v2.4.0/reject",
       { method: "POST" },
+    );
+  });
+
+  it("detect breaking changes and failed promote-release dispatches, and send allow_breaking when chosen", async () => {
+    const failedBreaking = {
+      ...pending,
+      subject: "release.pending:v3.2.0",
+      severity: "critical",
+      title: "v3.2.0 is ready to promote (approve dispatch failed)",
+      body:
+        "DISPATCH FAILED (gha:ai-on-gke:grain:42577215514): verify-release-approval: refused: the repository variable GRAIN_RELEASE_APPROVAL_KEY is not set\n" +
+        "Remedy: set the repository variable GRAIN_RELEASE_APPROVAL_KEY on ai-on-gke/grain to the publicKey from GET /api/release-approval-key (or `grain release approval-key`), then approve or reject again.\n" +
+        "Run URL: https://github.com/ai-on-gke/grain/actions/runs/42577215514\n\n" +
+        "v3.2.0 is staged as v3.2.0-pending on ai-on-gke/grain.\n\n" +
+        "Release notes (docs/releases/v3.2.0.md):\n\n# v3.2.0\n\n## Breaking changes\n\n- feat!: drop v1 protocol",
+    };
+    const rel = pendingReleaseOf(failedBreaking);
+    expect(rel).toMatchObject({
+      repo: "ai-on-gke/grain",
+      version: "v3.2.0",
+      breaking:
+        "Release notes list breaking changes; approving needs allow_breaking.",
+      dispatchFailure: {
+        runId: "gha:ai-on-gke:grain:42577215514",
+        message:
+          "verify-release-approval: refused: the repository variable GRAIN_RELEASE_APPROVAL_KEY is not set",
+        remedy:
+          "set the repository variable GRAIN_RELEASE_APPROVAL_KEY on ai-on-gke/grain to the publicKey from GET /api/release-approval-key (or `grain release approval-key`), then approve or reject again.",
+        runUrl: "https://github.com/ai-on-gke/grain/actions/runs/42577215514",
+        needsApprovalKey: true,
+      },
+    });
+
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(true);
+    expect(await decideRelease(rel, true)).toBe(true);
+    expect(confirm.mock.calls.at(-1)[0]).toContain("allow_breaking");
+    expect(api).toHaveBeenLastCalledWith(
+      "/api/repos/ai-on-gke/grain/pending-releases/v3.2.0/approve",
+      { method: "POST", body: JSON.stringify({ allow_breaking: true }) },
+    );
+
+    vi.spyOn(window, "confirm").mockReturnValueOnce(true);
+    expect(
+      await decideRelease(pendingReleaseOf(pending), true, {
+        allowBreaking: true,
+        shortSoakOk: true,
+      }),
+    ).toBe(true);
+    expect(api).toHaveBeenLastCalledWith(
+      "/api/repos/ai-on-gke/grain/pending-releases/v2.4.0/approve",
+      {
+        method: "POST",
+        body: JSON.stringify({ short_soak_ok: true, allow_breaking: true }),
+      },
     );
   });
 });
