@@ -45,7 +45,14 @@ failures=0
 cases=0
 out=""
 status=0
+# The train's clock: noon on the operator's release day
+# (RELEASE_DAY_TZ, America/Los_Angeles by default), the newest one not in
+# the future, so that "3h ago" and "1h ago" fall on the same release day
+# whenever the cases run. The day-boundary cases set their own.
 now="$(date +%s)"
+noon="$(TZ=America/Los_Angeles date -d "$(TZ=America/Los_Angeles date -d "@$now" +%F) 12:00" +%s)"
+[ "$noon" -le "$now" ] || noon="$(TZ=America/Los_Angeles date -d "$(TZ=America/Los_Angeles date -d "@$((now - 86400))" +%F) 12:00" +%s)"
+now="$noon"
 
 iso() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ; }
 
@@ -383,54 +390,65 @@ expect "red, later run" "publishes rc.2" images_were "rc v2.3.0-rc.2"
 out="$(git -C "$work/remote.git" for-each-ref --format='%(contents)' refs/tags/v2.3.0-rc.1-discarded)"
 expect "red" "the discard tag records the failing job" has "upgrade-test: failed again on its retry"
 
-# --- rc.2 red too: the release/v2.3.0 convergence branch, from rc.2 ---
+# --- rc.2 red too: rc.3 from main at once, no convergence branch ---
+# The day has not released, so a red rc never stalls it: the run after the
+# drop cuts the next rc from main's newest known-good commit.
 qualification fail "$c4"
 : > "$work/images.log"
 : > "$work/train.out"
 train RELEASE_TRAIN_OUTPUT="$work/train.out"
-expect "converge" "exits 0" eq "$status" 0
-expect "converge" "marks rc.2 discarded" eq "$(remote_tag v2.3.0-rc.2-discarded)" "$c4"
-expect "converge" "makes release/v2.3.0 from rc.2" eq "$(git -C "$work/remote.git" rev-parse -q --verify refs/heads/release/v2.3.0)" "$c4"
-expect "converge" "outputs it" grep -qxF "convergence_branch=release/v2.3.0" "$work/train.out"
-expect "converge" "cuts no rc.3 before a fix is on it" eq "$(remote_tag v2.3.0-rc.3)" ""
-
-# A fix cherry-picked onto the branch, green on release.yml alone.
+expect "rc.2 red" "exits 0" eq "$status" 0
+expect "rc.2 red" "marks rc.2 discarded" eq "$(remote_tag v2.3.0-rc.2-discarded)" "$c4"
+expect "rc.2 red" "makes no release/v2.3.0" eq "$(git -C "$work/remote.git" rev-parse -q --verify refs/heads/release/v2.3.0 || true)" ""
+expect "rc.2 red" "outputs no convergence branch" not grep -q "^convergence_branch=" "$work/train.out"
 (
   cd "$work/seed"
-  git fetch -q origin release/v2.3.0
-  git checkout -q -b release/v2.3.0 FETCH_HEAD
-  git commit -q --allow-empty -m "fix: the regression" -m "Backported-from: 1234567"
-  git push -q origin release/v2.3.0
-  git checkout -q main
+  git commit -q --allow-empty -m "fix: the regression"
+  git push -q origin main
 )
-fix="$(git -C "$work/remote.git" rev-parse refs/heads/release/v2.3.0)"
-cat > "$work/runs.json" <<EOF
-{"runs":[{"id":"b","commit":"$fix","ref":"release/v2.3.0","startedAt":"$(iso $((now - 600)))","jobs":[{"workflowPath":".github/workflows/release.yml","jobId":"release","conclusion":"success"}]}]}
-EOF
+c5="$(git -C "$work/seed" rev-parse HEAD)"
+runs "$c3" "$c4" "$c5"
 : > "$work/images.log"
 train
-expect "converge, fixed" "exits 0" eq "$status" 0
-expect "converge, fixed" "cuts rc.3 on the branch's fix" eq "$(remote_tag v2.3.0-rc.3)" "$fix"
-expect "converge, fixed" "says where it was cut" has "converges on release/v2.3.0"
-expect "converge, fixed" "publishes it" images_were "rc v2.3.0-rc.3"
+expect "rc.2 red, next run" "exits 0" eq "$status" 0
+expect "rc.2 red, next run" "cuts rc.3 on main's newest green commit" eq "$(remote_tag v2.3.0-rc.3)" "$c5"
+expect "rc.2 red, next run" "says where it was cut" has "cutting v2.3.0-rc.3 on ${c5:0:12}"
+expect "rc.2 red, next run" "publishes it" images_were "rc v2.3.0-rc.3"
 
-# rc.3 red as well: RELEASE_MAX_RC_ATTEMPTS (3) is spent; a person decides.
-qualification fail "$fix"
+# rc.3 red as well: RELEASE_MAX_RC_ATTEMPTS (3) is spent, so a person is
+# told -- but the train does not stop for the day: rc.4 is cut from main.
+qualification fail "$c5"
+train
+expect "escalated" "drops rc.3" eq "$(remote_tag v2.3.0-rc.3-discarded)" "$c5"
+(
+  cd "$work/seed"
+  git commit -q --allow-empty -m "fix: the other regression"
+  git push -q origin main
+)
+c6="$(git -C "$work/seed" rev-parse HEAD)"
+runs "$c5" "$c6"
 : > "$work/train.out"
 train RELEASE_TRAIN_OUTPUT="$work/train.out"
-expect "escalated" "exits 1" eq "$status" 1
-expect "escalated" "says so" has "has had 3 release candidates dropped, RELEASE_MAX_RC_ATTEMPTS (3)"
+expect "escalated" "exits 0" eq "$status" 0
+expect "escalated" "says so" has "has had 3 release candidates dropped, past RELEASE_MAX_RC_ATTEMPTS (3)"
 expect "escalated" "outputs it" grep -qxF "escalated_version=v2.3.0" "$work/train.out"
-expect "escalated" "cuts no rc.4" eq "$(remote_tag v2.3.0-rc.4)" ""
+expect "escalated" "and still cuts rc.4 from main" eq "$(remote_tag v2.3.0-rc.4)" "$c6"
+qualification fail "$c6"
+train
+expect "escalated, rc.4 red" "drops rc.4" eq "$(remote_tag v2.3.0-rc.4-discarded)" "$c6"
+runs "$c6" "$c1"
+: > "$work/train.out"
+train RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "escalated, rc.4 red" "escalates only once" not grep -q "^escalated_version=" "$work/train.out"
 
 # A qualified rc.3 is promoted from the branch, and approve deletes it.
 setup ""
-tag_remote v2.3.0-rc.1 "$c1"
-tag_remote v2.3.0-rc.1-discarded "$c1"
-tag_remote v2.3.0-rc.2 "$c2"
-tag_remote v2.3.0-rc.2-discarded "$c2"
+tag_remote v2.3.0-rc.1 "$c1" 3
+tag_remote v2.3.0-rc.1-discarded "$c1" 3
+tag_remote v2.3.0-rc.2 "$c2" 2
+tag_remote v2.3.0-rc.2-discarded "$c2" 2
 git -C "$work/seed" push -q origin "$c2:refs/heads/release/v2.3.0"
-tag_remote v2.3.0-rc.3 "$c2"
+tag_remote v2.3.0-rc.3 "$c2" 1
 qualification pass "$c2"
 train
 expect "rc.3 qualifies" "stages v2.3.0-pending" eq "$(remote_tag v2.3.0-pending)" "$c2"
@@ -438,7 +456,7 @@ approve() { # approve <approve|reject> <version> [VAR=value...]
   local what="$1" v="$2"
   shift 2
   status=0
-  out="$(cd "$work/clone" && env RELEASE_IMAGES="$work/images.sh" "$@" bash "$train" "$what" "$v" 2>&1)" || status=$?
+  out="$(cd "$work/clone" && env RELEASE_IMAGES="$work/images.sh" RELEASE_NOW="$now" "$@" bash "$train" "$what" "$v" 2>&1)" || status=$?
 }
 approve approve v2.3.0 GRAIN_CI_REQUESTED_BY_KIND=human GRAIN_CI_REQUESTED_BY=alice@example.com
 expect "rc.3 approved" "exits 0" eq "$status" 0
@@ -707,13 +725,14 @@ expect "app none" "reads no check run" not has "IGNORED grain/release-qualificat
 expect "app none" "qualifies the rc on Stage 1" has "Qualification: PASS v2.3.0-rc.1"
 
 # --- a hand-cut rc.1 of the next version still waits out the interval ---
+# (on a day that may release more than once: RELEASE_MAX_PER_DAY=0)
 setup ""
 tag_remote v2.3.0-rc.1 "$c2" 3
 git -C "$work/seed" push -q --force origin "$c2:refs/heads/candidate"
 tag_remote v2.4.0-rc.1 "$c3" 1
 qualification pass "$c2"
 runs "$c2" "$c4"
-train
+train RELEASE_MAX_PER_DAY=0 RELEASE_MIN_INTERVAL_MINUTES=120
 expect "hand-cut next rc.1" "exits 0" eq "$status" 0
 expect "hand-cut next rc.1" "still waits RELEASE_MIN_INTERVAL_MINUTES" has "under RELEASE_MIN_INTERVAL_MINUTES (120)"
 expect "hand-cut next rc.1" "so cuts no v2.4.0-rc.2 inside it" eq "$(remote_tag v2.4.0-rc.2)" ""
@@ -733,7 +752,8 @@ expect "qualified" "leaves latest alone" eq "$(remote_tag latest)" "$c0"
 expect "qualified" "stages its images; promotes nothing" images_were "pending v2.3.0"
 expect "qualified" "outputs the pending version" grep -qxF "pending_version=v2.3.0" "$work/train.out"
 expect "qualified" "says a person approves it" has "no notification that v2.3.0 is ready to promote: approve it with \`grain release approve v2.3.0\`"
-expect "qualified" "waits RELEASE_MIN_INTERVAL_MINUTES before the next rc" has "under RELEASE_MIN_INTERVAL_MINUTES (120)"
+expect "qualified" "stops cutting for the day: a staged release is the day's" has "has released v2.3.0, RELEASE_MAX_PER_DAY (1); nothing is cut until the next day starts in America/Los_Angeles"
+expect "qualified" "outputs it" grep -qxF "day_done=$(TZ=America/Los_Angeles date -d "@$now" +%F)" "$work/train.out"
 expect "qualified" "so cuts no v2.4.0-rc.1 yet" eq "$(remote_tag v2.4.0-rc.1)" ""
 msg="$(git -C "$work/remote.git" for-each-ref --format='%(contents)' refs/tags/v2.3.0-pending)"
 out="$msg"
@@ -741,8 +761,10 @@ expect "qualified" "the pending tag names the rc it came from" has "From v2.3.0-
 expect "qualified" "and records the qualification for approve" has "Qualification: PASS"
 
 # --- later, while v2.3.0 is pending, the next minor's rc is cut ---
+# (with no daily cap, RELEASE_MAX_PER_DAY=0, as before 2026-11-09: the
+# person's path below is the same whatever the cap)
 : > "$work/images.log"
-train RELEASE_MIN_INTERVAL_MINUTES=0
+train RELEASE_MAX_PER_DAY=0
 expect "pending, next rc" "exits 0" eq "$status" 0
 expect "pending, next rc" "says v2.3.0 is pending" has "v2.3.0 (${c2:0:12}, from v2.3.0-rc.1) is pending a person's approval"
 expect "pending, next rc" "keeps it pending" eq "$(remote_tag v2.3.0-pending)" "$c2"
@@ -752,7 +774,7 @@ expect "pending, next rc" "publishes the rc" images_were "rc v2.4.0-rc.1"
 # --- the next rc qualifying waits behind the pending release ---
 qualification pass "$c4"
 : > "$work/images.log"
-train
+train RELEASE_MAX_PER_DAY=0
 expect "pending, next rc passes" "exits 0" eq "$status" 0
 expect "pending, next rc passes" "says it waits" has "v2.4.0-rc.1 qualified, but v2.3.0 is still pending approval"
 expect "pending, next rc passes" "stages no v2.4.0-pending" eq "$(remote_tag v2.4.0-pending)" ""
@@ -787,12 +809,13 @@ msg="$(git -C "$work/remote.git" for-each-ref --format='%(contents)' refs/tags/v
 out="$msg"
 expect "approve" "the release tag names who approved it" has "approved by alice@example.com"
 expect "approve" "and no short-soak override" eval '! has "short soak"'
+expect "approve" "and no daily-cap bypass, the day being otherwise empty" eval '! has "bypasses the cap"'
 approve approve v2.3.0 GRAIN_CI_REQUESTED_BY_KIND=human
 expect "approve twice" "is refused: nothing is pending" eq "$status" 1
 
 # --- after approval the train carries on with the next minor ---
 : > "$work/images.log"
-train
+train RELEASE_MAX_PER_DAY=0
 expect "after approve" "v2.4.0-rc.1 may now be staged" eq "$(remote_tag v2.4.0-pending)" "$c4"
 expect "after approve" "stages it" images_were "pending v2.4.0"
 
@@ -803,7 +826,7 @@ qualification pass "$c2"
 runs "$c2" "$c3"
 train
 expect "reject" "v2.3.0 is pending" eq "$(remote_tag v2.3.0-pending)" "$c2"
-train FORCE=true
+train RELEASE_MAX_PER_DAY=0
 expect "reject" "v2.4.0-rc.1 was cut on top of it" eq "$(remote_tag v2.4.0-rc.1)" "$c3"
 : > "$work/images.log"
 approve reject v2.3.0 GRAIN_CI_REQUESTED_BY_KIND=agent
@@ -892,20 +915,20 @@ train
 expect "strictly newer" "drops rc.1" eq "$(remote_tag v2.3.0-rc.1-discarded)" "$c3"
 expect "strictly newer" "cuts no rc.2 at or behind the dropped rc" eq "$(remote_tag v2.3.0-rc.2)" ""
 
-# --- the minimum interval between releases ---
+# --- the minimum interval between releases, on a day that may release again ---
 setup ""
 tag_remote v2.2.0 "$c1" 1
 runs "$c3"
-train
+train RELEASE_MAX_PER_DAY=2 RELEASE_MIN_INTERVAL_MINUTES=120
 expect "interval" "exits 0" eq "$status" 0
 expect "interval" "says the last release is too recent" has "v2.2.0 was tagged 60m ago, under RELEASE_MIN_INTERVAL_MINUTES (120)"
 expect "interval" "cuts nothing" eq "$(remote_tag v2.3.0-rc.1)" ""
-train RELEASE_MIN_INTERVAL_MINUTES=30
+train RELEASE_MAX_PER_DAY=2 RELEASE_MIN_INTERVAL_MINUTES=30
 expect "interval, shorter" "cuts once the interval has passed" eq "$(remote_tag v2.3.0-rc.1)" "$c3"
 setup ""
 tag_remote v2.2.0 "$c1" 1
 runs "$c3"
-train FORCE=true
+train RELEASE_MAX_PER_DAY=2 RELEASE_MIN_INTERVAL_MINUTES=120 FORCE=true
 expect "interval, forced" "FORCE=true cuts inside the interval" eq "$(remote_tag v2.3.0-rc.1)" "$c3"
 
 # --- every trunk release increments minor; docs/chores/tests alone wait ---
@@ -1278,7 +1301,7 @@ expect "auto-promote" "moves latest onto it" eq "$(remote_tag latest)" "$c2"
 expect "auto-promote" "stages no -pending" eq "$(remote_tag v2.3.0-pending)" ""
 expect "auto-promote" "promotes its images" images_were "promote v2.3.0"
 expect "auto-promote" "outputs the release" grep -qxF "promoted_version=v2.3.0" "$work/train.out"
-expect "auto-promote" "then waits the interval before v2.4.0-rc.1" eq "$(remote_tag v2.4.0-rc.1)" ""
+expect "auto-promote" "then cuts no v2.4.0-rc.1 that day" eq "$(remote_tag v2.4.0-rc.1)" ""
 out="$(git -C "$work/remote.git" for-each-ref --format='%(contents)' refs/tags/v2.3.0)"
 expect "auto-promote" "the release tag names its rc" has "Promoted-From: v2.3.0-rc.1"
 expect "auto-promote" "and records the qualification" has "Qualification: PASS"
@@ -1348,9 +1371,16 @@ expect "verify, a major bump RELEASE_MAJOR asks for" "says why" has "first relea
 git -C "$work/seed" push -q origin :refs/tags/v3.0.0 :refs/tags/v3.0.0-rc.1
 git -C "$work/clone" tag -d v3.0.0 v3.0.0-rc.1 >/dev/null
 
-# The next run, the interval over: the next minor's rc.1 after the release.
+# The next run, the same day: the day has had its release, so nothing is
+# cut, however much is green on main.
 : > "$work/images.log"
-train RELEASE_PUSH_GRANT=train RELEASE_MIN_INTERVAL_MINUTES=0
+train RELEASE_PUSH_GRANT=train
+expect "auto-promote, same day" "exits 0" eq "$status" 0
+expect "auto-promote, same day" "cuts nothing after the day's release" eq "$(remote_tag v2.4.0-rc.1)" ""
+expect "auto-promote, same day" "says the day is done" has "has released v2.3.0, RELEASE_MAX_PER_DAY (1); nothing is cut"
+expect "auto-promote, same day" "publishes nothing" images_were ""
+# The first run of the next day: the next minor's rc.1 after the release.
+train RELEASE_PUSH_GRANT=train RELEASE_NOW=$((now + 13 * 3600))
 expect "auto-promote, next" "exits 0" eq "$status" 0
 expect "auto-promote, next" "targets v2.4.0 after v2.3.0" has "newest promoted release v2.3.0"
 expect "auto-promote, next" "cuts v2.4.0-rc.1 past the release" eq "$(remote_tag v2.4.0-rc.1)" "$c4"
@@ -1429,20 +1459,163 @@ expect "auto, breaking" "releases no v2.3.0" eq "$(remote_tag v2.3.0)" ""
 expect "auto, breaking" "stages it for a person" eq "$(remote_tag v2.3.0-pending)" "$c3"
 expect "auto, breaking" "says why" has "carries breaking changes since v2.1.0"
 
-# RELEASE_MIN_INTERVAL_MINUTES: v2.1.0 was released 48h ago.
+# RELEASE_MIN_INTERVAL_MINUTES, with no daily cap: v2.1.0 was released 48h ago.
 setup ""
 qualified_rc v2.3.0-rc.1 "$c2"
 : > "$work/images.log"
 : > "$work/train.out"
-train RELEASE_MIN_INTERVAL_MINUTES=$((49 * 60)) RELEASE_TRAIN_OUTPUT="$work/train.out"
+train RELEASE_MAX_PER_DAY=0 RELEASE_MIN_INTERVAL_MINUTES=$((49 * 60)) RELEASE_TRAIN_OUTPUT="$work/train.out"
 expect "auto, interval" "exits 0" eq "$status" 0
 expect "auto, interval" "releases nothing yet" eq "$(remote_tag v2.3.0)" ""
 expect "auto, interval" "stages nothing either" eq "$(remote_tag v2.3.0-pending)" ""
 expect "auto, interval" "says it waits" has "under RELEASE_MIN_INTERVAL_MINUTES (2940); a later run releases it"
 expect "auto, interval" "outputs it" grep -qxF "promotion_waits=v2.3.0" "$work/train.out"
 expect "auto, interval" "publishes nothing" images_were ""
-train
+train RELEASE_MAX_PER_DAY=0
 expect "auto, interval over" "then releases it" eq "$(remote_tag v2.3.0)" "$c2"
+
+# --- the daily cap (playbook section 7, operator 2026-11-09) ---
+# At most RELEASE_MAX_PER_DAY (1) releases per calendar day in
+# RELEASE_DAY_TZ (America/Los_Angeles); never a release of an rc held over
+# from the day before; a red rc is re-cut at once while the day has not
+# released, and nothing is cut once it has.
+tag_at() { # tag_at <tag> <commit> <unix seconds> [<message>...]: an annotated tag on the remote, made then
+  local t="$1" sha="$2" at="$3" m
+  shift 3
+  local msgs=(-m "$t")
+  for m in "$@"; do msgs+=(-m "$m"); done
+  (
+    cd "$work/seed"
+    GIT_COMMITTER_DATE="@$at +0000" git tag -a "$t" "$sha" "${msgs[@]}"
+    git push -q origin "refs/tags/$t"
+  )
+}
+day="$(TZ=America/Los_Angeles date -d "@$now" +%F)"
+midnight="$(TZ=America/Los_Angeles date -d "$day 00:00" +%s)" # the start of $day, Pacific
+
+# A second qualified rc the same day is dropped, not held for tomorrow.
+setup ""
+tag_remote v2.2.0 "$c1" 4
+qualified_rc v2.3.0-rc.1 "$c2"
+runs "$c2" "$c4"
+: > "$work/images.log"
+: > "$work/train.out"
+train RELEASE_PUSH_GRANT=train RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "cap, second rc" "exits 0" eq "$status" 0
+expect "cap, second rc" "releases no second release that day" eq "$(remote_tag v2.3.0)" ""
+expect "cap, second rc" "stages none either" eq "$(remote_tag v2.3.0-pending)" ""
+expect "cap, second rc" "leaves latest alone" eq "$(remote_tag latest)" "$c0"
+expect "cap, second rc" "drops the rc rather than hold it" eq "$(remote_tag v2.3.0-rc.1-discarded)" "$c2"
+expect "cap, second rc" "outputs why" grep -qxF "discard_reason=daily-cap" "$work/train.out"
+expect "cap, second rc" "says the cap is why" has "$day (America/Los_Angeles) has already released v2.2.0, RELEASE_MAX_PER_DAY (1)"
+expect "cap, second rc" "marks its images" images_were "discard-rc v2.3.0-rc.1"
+expect "cap, second rc" "and cuts nothing more that day" eq "$(remote_tag v2.3.0-rc.2)" ""
+expect "cap, second rc" "outputs the day is done" grep -qxF "day_done=$day" "$work/train.out"
+out="$(git -C "$work/remote.git" for-each-ref --format='%(contents)' refs/tags/v2.3.0-rc.1-discarded)"
+expect "cap, second rc" "the discard tag names the cap" has "Discard-Reason: daily-cap"
+# Later the same day: still nothing.
+: > "$work/images.log"
+train RELEASE_PUSH_GRANT=train RELEASE_NOW=$((now + 11 * 3600))
+expect "cap, later that day" "cuts nothing" eq "$(remote_tag v2.3.0-rc.2)" ""
+expect "cap, later that day" "releases nothing" eq "$(remote_tag v2.3.0)" ""
+# The first run of the next day: no carry-over, a fresh cut from main's
+# newest known-good commit (rc.1 was not red, so nothing holds it).
+qualification pass "$c2"
+: > "$work/images.log"
+: > "$work/train.out"
+train RELEASE_PUSH_GRANT=train RELEASE_NOW=$((midnight + 86400 + 300)) RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "cap, next day" "exits 0" eq "$status" 0
+expect "cap, next day" "releases no carried-over rc" eq "$(remote_tag v2.3.0)" ""
+expect "cap, next day" "cuts a fresh rc on main's newest green commit" eq "$(remote_tag v2.3.0-rc.2)" "$c4"
+expect "cap, next day" "publishes it" images_were "rc v2.3.0-rc.2"
+expect "cap, next day" "waits for no grain/rc-hold" not grep -q "^rc_held=" "$work/train.out"
+
+# An rc cut the day before is never released, even once it qualifies: the
+# first run after midnight Pacific drops it and cuts a fresh one -- here on
+# the same commit, nothing newer being green.
+setup ""
+tag_at v2.3.0-rc.1 "$c2" $((midnight - 1800))
+git -C "$work/seed" push -q --force origin "$c2:refs/heads/candidate"
+qualification pass "$c2"
+runs "$c2"
+: > "$work/images.log"
+: > "$work/train.out"
+train RELEASE_PUSH_GRANT=train RELEASE_NOW=$((midnight - 60)) DRY_RUN=true RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "day boundary, before midnight" "releases the rc on the day it was cut" grep -qxF "promoted_version=v2.3.0" "$work/train.out"
+: > "$work/train.out"
+train RELEASE_PUSH_GRANT=train RELEASE_NOW=$((midnight + 1800)) RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "day boundary, held over" "exits 0" eq "$status" 0
+expect "day boundary, held over" "releases nothing" eq "$(remote_tag v2.3.0)" ""
+expect "day boundary, held over" "drops the rc from the day before" eq "$(remote_tag v2.3.0-rc.1-discarded)" "$c2"
+expect "day boundary, held over" "outputs why" grep -qxF "discard_reason=held-over" "$work/train.out"
+expect "day boundary, held over" "says when it was cut" has "it was cut on $(TZ=America/Los_Angeles date -d "@$((midnight - 1800))" +%F) (America/Los_Angeles)"
+expect "day boundary, held over" "cuts a fresh rc the same run" eq "$(remote_tag v2.3.0-rc.2)" "$c2"
+expect "day boundary, held over" "marks and publishes" images_were "discard-rc v2.3.0-rc.1|rc v2.3.0-rc.2"
+# The day is RELEASE_DAY_TZ's, not UTC's: 30 minutes either side of
+# midnight Pacific is one UTC day, so in UTC the same rc would release.
+setup ""
+tag_at v2.3.0-rc.1 "$c2" $((midnight - 1800))
+qualification pass "$c2"
+runs "$c2"
+: > "$work/train.out"
+train RELEASE_NOW=$((midnight + 1800)) RELEASE_DAY_TZ=UTC DRY_RUN=true RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "day boundary, UTC" "releases it: in UTC it is still the day it was cut" grep -qxF "promoted_version=v2.3.0" "$work/train.out"
+expect "day boundary, UTC" "drops nothing" not grep -q "^discarded_rc=" "$work/train.out"
+train RELEASE_DAY_TZ=Mars/Olympus_Mons
+expect "day zone, unknown" "is refused" eq "$status" 1
+expect "day zone, unknown" "says why" has "RELEASE_DAY_TZ is \"Mars/Olympus_Mons\", which is no time zone"
+expect "day zone, unknown" "does nothing" eq "$(remote_tag v2.3.0-rc.1-discarded)" ""
+
+# A red rc, while the day has not released, is re-cut at once from main's
+# newest known-good commit: no interval between attempts (RELEASE_MIN_INTERVAL_MINUTES
+# is set to show it does not apply), and no grain/rc-hold to wait for with
+# RELEASE_QUALIFICATION_APP=none.
+setup ""
+qualified_rc v2.3.0-rc.1 "$c2"
+qualification fail "$c2"
+runs "$c2" "$c3"
+: > "$work/images.log"
+train RELEASE_PUSH_GRANT=train RELEASE_QUALIFICATION_APP=none RELEASE_MIN_INTERVAL_MINUTES=600
+expect "cap, red re-cut" "exits 0" eq "$status" 0
+expect "cap, red re-cut" "drops the red rc" eq "$(remote_tag v2.3.0-rc.1-discarded)" "$c2"
+expect "cap, red re-cut" "cuts rc.2 in the same run" eq "$(remote_tag v2.3.0-rc.2)" "$c3"
+expect "cap, red re-cut" "publishes it" images_were "discard-rc v2.3.0-rc.1|rc v2.3.0-rc.2"
+qualification pass "$c3"
+: > "$work/images.log"
+train RELEASE_PUSH_GRANT=train RELEASE_QUALIFICATION_APP=none
+expect "cap, red re-cut" "releases rc.2: the day's release" eq "$(remote_tag v2.3.0)" "$c3"
+runs "$c3" "$c4"
+train RELEASE_PUSH_GRANT=train RELEASE_QUALIFICATION_APP=none
+expect "cap, red re-cut" "then cuts nothing more that day" eq "$(remote_tag v2.4.0-rc.1)" ""
+
+# RELEASE_DAY_CAP_EXEMPT: an rc in qualification when the cap came in
+# releases as it would have before.
+setup ""
+tag_remote v2.2.0 "$c1" 4
+qualified_rc v2.3.0-rc.1 "$c2"
+train RELEASE_DAY_CAP_EXEMPT="v2.3.0-rc.1"
+expect "cap, exempt rc" "exits 0" eq "$status" 0
+expect "cap, exempt rc" "releases it past the cap" eq "$(remote_tag v2.3.0)" "$c2"
+expect "cap, exempt rc" "says why" has "RELEASE_DAY_CAP_EXEMPT names v2.3.0-rc.1; the cap does not hold it"
+
+# A person's approval goes past the cap, and says so.
+setup ""
+tag_remote v2.2.0 "$c1" 4
+tag_remote v2.3.0-rc.1 "$c2" 3
+tag_at v2.3.0-pending "$c2" $((now - 3 * 3600)) "Qualification: PASS"
+: > "$work/train.out"
+approve approve v2.3.0 GRAIN_CI_REQUESTED_BY_KIND=human GRAIN_CI_REQUESTED_BY=alice@example.com RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "cap, approve" "exits 0" eq "$status" 0
+expect "cap, approve" "releases it the same day" eq "$(remote_tag v2.3.0)" "$c2"
+expect "cap, approve" "logs that it bypassed the cap" has "has already released v2.2.0, RELEASE_MAX_PER_DAY (1); alice@example.com's approval bypasses the cap"
+expect "cap, approve" "outputs it" grep -qxF "day_cap_bypassed=v2.3.0" "$work/train.out"
+out="$(git -C "$work/remote.git" for-each-ref --format='%(contents)' refs/tags/v2.3.0)"
+expect "cap, approve" "the release tag records it" has "released past RELEASE_MAX_PER_DAY (1): $day (America/Los_Angeles) had already released v2.2.0"
+# ... and counts as the day's release: the train cuts nothing more today.
+runs "$c2" "$c4"
+train
+expect "cap, after approve" "cuts nothing more that day" eq "$(remote_tag v2.4.0-rc.1)" ""
+expect "cap, after approve" "says the day is done" has "has released v2.2.0 v2.3.0, RELEASE_MAX_PER_DAY (1)"
 
 # Wrong commit: a train that tagged the release anywhere but on the
 # qualified rc's own commit, or pushed another commit to it, is refused

@@ -241,7 +241,7 @@ What takes judgement is the steward's. Woken by
 2. **Files the fix or the revert at the front of the queue**
    (`propose_task` with `at_front: true` and a `main` target; a priority
    above its own would wait for a person). As soon as qualification concludes
-   failure on `rc.N` (`N < RELEASE_MAX_RC_ATTEMPTS`), the reconciler posts
+   failure on any `rc.N`, including past `RELEASE_MAX_RC_ATTEMPTS`, the reconciler posts
    check run `grain/rc-hold` in progress ("triage pending") on the red
    candidate's commit -- the floor the train cuts `rc.(N+1)` after -- before
    posting the completed `grain/release-qualification` failure; Phase 2 reads
@@ -258,22 +258,28 @@ What takes judgement is the steward's. Woken by
    hold to lift. If `main` is red too, the base-branch repair is the fix and
    the steward files no other (naming `vX.Y.Z-rc.N` in its report): the train
    cuts only known-good commits, so a red `main` already holds it.
-3. **Converges `rc.3` on `release/vX.Y.Z` when trunk churn broke `rc.2`.**
-   The train makes `release/vX.Y.Z` from `rc.2`'s commit and cuts `rc.3`
-   from it (playbook §5). When `rc.2` failed on a regression `rc.1` did not
-   have, the steward files the fix on `main` first. It then files a
-   cherry-pick of it onto `release/vX.Y.Z` (`branch: release/vX.Y.Z`,
-   `Backported-from: <main_sha>`, `depends_on` the fix) under the same
-   blocker title. When `rc.2` failed the way `rc.1` did, the steward says
-   that `rc.1`'s fix did not work.
+3. **Compares each candidate with the one before.** Every candidate is
+   cut from `main`'s newest known-good commit (playbook §5); there is no
+   `release/vX.Y.Z` convergence branch, so fixes land on `main` only and
+   the next cut picks them up without a backport. When `rc.N` failed on a
+   regression `rc.(N-1)` did not have, trunk churn broke it and the steward
+   triages the range new since `rc.(N-1)`. When it failed the same way, the
+   steward says that the earlier fix did not work. A candidate tagged
+   `-discarded` with `Discard-Reason: daily-cap` or `Discard-Reason:
+   held-over` was dropped by the daily cap without being judged (playbook
+   §7): the reconciler raises nothing for it, it holds nothing, and it
+   counts toward no escalation.
 4. **Escalates after three red candidates.** When `rc.3` is red, the
    reconciler raises `pipeline.release-escalated:vX.Y.Z` (critical) to the
-   person's Inbox. It carries each red candidate's summary, and the train
-   cuts no more of the version. The steward files no more blockers. It
-   adds its triage as `agent.<task>:release-escalated:vX.Y.Z`: the suspect
-   commits of each candidate, whether they share a cause, and whether to
-   reset or advance. A person decides. The escalation clears once a
-   candidate is cut past it or the version is promoted.
+   person's Inbox, once. It carries each red candidate's summary. It is a
+   threshold, not a stop: the train keeps cutting `rc.4`, `rc.5` and on
+   from `main` while the day has not released, and the steward keeps
+   triaging each red one and filing blockers, which hold the next cut as
+   before. It adds its triage as `agent.<task>:release-escalated:vX.Y.Z`:
+   the suspect commits of each candidate, whether they share a cause, and
+   what would make the version converge. A person decides. The escalation
+   clears once the version is promoted or a candidate of a later version
+   is cut.
 
 On `pipeline.flake-budget` it proposes one de-flake task for the item. On
 `pipeline.release-infra-stalled` it names the failing runner, quota or
