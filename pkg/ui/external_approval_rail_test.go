@@ -261,3 +261,48 @@ func TestExternalAgentRunNowOnANoRepoTaskNeedsUnlimitedTasksAdmin(t *testing.T) 
 	}
 	wantQueued(t, client, "954")
 }
+
+// run-now's implicit approval asks for the reason approve does: approve
+// is destructive under tasks:admin and refused without one, and run-now
+// on an unapproved task used to approve it with none
+// (docs/test-runs/2026-11-09-external-agent-rails.md, F1). Run-now of an
+// approved task approves nothing and still needs no reason.
+func TestExternalAgentRunNowApprovalNeedsAReasonAsApproveDoes(t *testing.T) {
+	srv, client := testServer(t)
+	enableExternalAgentAPI(t, client.Store)
+	token := railCredential(t, client, "reasonless", "tasks:read", "dispatch:write", "tasks:admin")
+	for _, id := range []string{"960", "961", "962", "963", "964"} {
+		railTask(t, client, id, "", nil)
+	}
+	bare := func(id, action string) (int, string) {
+		rec := fileAsExternal(t, srv, token, "/api/tasks/"+id+"/"+action, `{}`, nil)
+		return rec.Code, rec.Body.String()
+	}
+	if code, body := bare("960", "approve"); code != http.StatusForbidden || !strings.Contains(body, "give a reason") {
+		t.Errorf("approve without a reason: %d %s, want 403 asking for a reason", code, body)
+	}
+	if code, body := bare("960", "run-now"); code != http.StatusForbidden || !strings.Contains(body, "give a reason") {
+		t.Errorf("run-now of an unapproved task without a reason: %d %s, want 403 asking for a reason", code, body)
+	}
+	out, isErr := callControllerTool(t, srv, map[string]string{"Authorization": "Bearer " + token}, ui.ToolGrainInvoke, map[string]any{
+		"tool": "api_run_now", "arguments": map[string]any{"id": "961"},
+	})
+	if !isErr || !strings.Contains(out, "give a reason") {
+		t.Errorf("grain_invoke api_run_now of an unapproved task without a reason: isErr=%v %s, want a refusal asking for a reason", isErr, out)
+	}
+	wantProposed(t, client, "960")
+	wantProposed(t, client, "961")
+
+	if code, body := externalTaskAction(t, srv, token, "962", "run-now"); code != http.StatusOK {
+		t.Errorf("run-now of an unapproved task with a reason: %d %s, want 200", code, body)
+	}
+	if code, body := externalTaskAction(t, srv, token, "963", "approve"); code != http.StatusOK {
+		t.Errorf("approve with a reason: %d %s, want 200", code, body)
+	}
+	if rec := do(t, srv, http.MethodPost, "/api/tasks/964/approve", ""); rec.Code != http.StatusOK {
+		t.Fatalf("a person approving task 964: %d %s", rec.Code, rec.Body.String())
+	}
+	if code, body := bare("964", "run-now"); code != http.StatusOK {
+		t.Errorf("run-now of an approved task without a reason: %d %s, want 200", code, body)
+	}
+}
