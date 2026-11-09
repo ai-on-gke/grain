@@ -802,6 +802,10 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	runNowStale, err := c.Store.RunNowStale(ctx)
+	if err != nil {
+		return nil, err
+	}
 	// And once more for what each running task says it is doing: one
 	// query over the live runs that have a synopsis, rather than a read
 	// per task, on the same reasoning as the three above.
@@ -889,6 +893,7 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 			reviewNames[t.ReviewTemplateID], spans[t.ID], c.stallNote(states[t.ID], stateTimes[t.ID], now))
 		if at, ok := runNow[t.ID]; ok {
 			task.RunNowAt = &at
+			task.RunNowStale = runNowStale[t.ID]
 		}
 		task.TurnStopped = task.State == model.StateAwaitingReply && turnsStopped[t.ID]
 		if task.State == model.StateAwaitingReply {
@@ -1211,6 +1216,7 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 	task.Goal = goal
 	if obs != nil {
 		task.RunNowAt = obs.RunNowAt
+		task.RunNowStale = runNowStale(obs.RunNowAt, runs)
 	}
 	// Which ask an awaiting_reply task is parked on, before its reason,
 	// which is told apart by it (withReasons).
@@ -1479,6 +1485,7 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 	detail.PullRequestEvents = pullRequestEventsFrom(obs)
 	if obs != nil {
 		detail.RunNowAt = obs.RunNowAt
+		detail.RunNowStale = runNowStale(obs.RunNowAt, runs)
 	}
 	detail.PendingSecret = c.pendingSecretFor(obs)
 	if obs != nil {
@@ -7485,10 +7492,29 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 			return err
 		}
 	}
+	// A request is stamped later than every run of the task has started,
+	// and later than any request already standing, which it replaces: that
+	// is what makes it the person asking again, started at once
+	// (dispatch.runNowEligible), rather than a request a run already
+	// spent, held to that run's backoff. A clock that has not moved past
+	// either is nudged a microsecond beyond it.
+	at := now
+	if runs, err := c.Store.Runs(ctx, id); err != nil {
+		return err
+	} else {
+		for i := range runs {
+			if !at.After(runs[i].StartedAt) {
+				at = runs[i].StartedAt.Add(time.Microsecond)
+			}
+		}
+	}
 	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
-		o.RunNowAt = &now
+		if o.RunNowAt != nil && !at.After(*o.RunNowAt) {
+			at = o.RunNowAt.Add(time.Microsecond)
+		}
+		o.RunNowAt = &at
 		o.CompletedAt = nil
-		o.RetryRequestedAt = &now
+		o.RetryRequestedAt = &at
 		o.PendingQuestionCommentID = nil
 		o.PendingSecret = ""
 		o.PendingAccess = nil
@@ -7519,6 +7545,20 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 		c.Config.Wake()
 	}
 	return nil
+}
+
+// runNowStale is ui.Task.RunNowStale for one task: whether runNowAt is
+// no newer than the start of one of runs.
+func runNowStale(runNowAt *time.Time, runs []model.Run) bool {
+	if runNowAt == nil {
+		return false
+	}
+	for i := range runs {
+		if !runNowAt.After(runs[i].StartedAt) {
+			return true
+		}
+	}
+	return false
 }
 
 // agentMayApprove refuses the approval RunNow would grant task when the
@@ -7741,10 +7781,15 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 			if o.ClosedAt == nil {
 				o.ClosedAt = &now
 			}
+			// A closed task is never started (Store.RunNow), so a
+			// request standing on it can only block the one a person
+			// makes after reopening it (task 3557).
+			o.RunNowAt = nil
 			obs = o
 			return
 		}
 		o.ClosedAt = nil
+		o.RunNowAt = nil
 	}); err != nil {
 		return err
 	}

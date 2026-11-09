@@ -197,12 +197,15 @@ func keepsStanding(t *testing.T, sc standingCase, end ending) {
 		StartedAt: standingNow.Add(-time.Hour)}, model.Limits{}); err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{"t0", "t1"} {
-		if err := store.PutTask(ctx, stdTask(id)); err != nil {
+	for i, id := range []string{"t0", "t1"} {
+		tk := stdTask(id)
+		tk.OrderKey = float64(i + 1)
+		if err := store.PutTask(ctx, tk); err != nil {
 			t.Fatal(err)
 		}
 	}
 	subject := stdTask("subject")
+	subject.OrderKey = 3
 	subject.Grants = []model.Grant{{Capability: "memory", Via: model.GrantByLabel}}
 	if err := store.PutTask(ctx, subject); err != nil {
 		t.Fatal(err)
@@ -288,11 +291,27 @@ func keepsStanding(t *testing.T, sc standingCase, end ending) {
 		t.Fatalf("run recorded as (%q, suspend_kind %q), want (%q, %q)",
 			last.Outcome, last.SuspendKind, end.outcome, end.kind)
 	}
+	// A Run now request is worth one run: a kind in which the agent ran
+	// its turn spent it (model.SuspensionKind.KeepsRunNow), and the rest
+	// of the standing is still byte for byte what it was.
+	spent := false
+	if sc.name == "run-now" && end.kind != "" {
+		_, kept := end.kind.KeepsRunNow()
+		spent = !kept
+	}
 	after, err := store.DispatchStandingJSON(ctx, "subject")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after != before {
+	if spent {
+		st, err := store.DispatchStanding(ctx, "subject")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.RunNowAt != nil {
+			t.Fatalf("Run now request after a %s suspension = %v, want it spent", end.name, st.RunNowAt)
+		}
+	} else if after != before {
 		t.Fatalf("standing after the run ended:\n  %s\nwant it byte for byte as it was:\n  %s", after, before)
 	}
 	if end.kind != "" {
@@ -318,6 +337,15 @@ func keepsStanding(t *testing.T, sc standingCase, end ending) {
 	got, err = dispatch.Cycle(ctx, store, limits, standingNow.Add(2*time.Hour))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if spent && !subject.IsDurable() {
+		// With its request spent the subject has only its backlog place,
+		// behind t0's. (A durable one is still admitted ahead of the
+		// backlog by its admission, which no run spends.)
+		if len(got) == 0 || got[0].TaskID != "t0" {
+			t.Fatalf("cycle after the run spent its request started %+v, want the backlog's t0 first", got)
+		}
+		return
 	}
 	if len(got) == 0 || got[0].TaskID != "subject" {
 		t.Fatalf("cycle after the run ended started %+v, want subject first", got)

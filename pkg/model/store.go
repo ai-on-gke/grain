@@ -267,6 +267,11 @@ func (s *Store) Init(ctx context.Context) error {
 		return fmt.Errorf("initializing grain instance id: %w", err)
 	}
 	if version != 0 {
+		// A store already in use may carry Run now stamps a run spent
+		// that older builds left standing (clearSpentRunNow).
+		if err := s.clearSpentRunNow(ctx); err != nil {
+			return fmt.Errorf("clearing spent run-now requests: %w", err)
+		}
 		return nil
 	}
 	if err := s.write(ctx, "enforce task owner constraint", func(tx *sql.Tx) error {
@@ -1646,6 +1651,34 @@ func (s *Store) RunNowRequested(ctx context.Context) (map[string]time.Time, erro
 				return err
 			}
 			out[id] = at
+			return nil
+		})
+	return out, err
+}
+
+// RunNowStale is the tasks among RunNowRequested whose request is no
+// newer than the start of a run of theirs: a run already started for it,
+// that gave it back without doing the work (RunNowSurvives,
+// SuspensionKind.KeepsRunNow). dispatch.runNowEligible holds such a
+// request to the retry backoff or its suspension's resume time rather
+// than starting it on the next cycle, so the UI keeps Run now offered for
+// it -- pressing it again re-stamps the request, which starts at once --
+// and says what holds the task instead of promising the next cycle.
+func (s *Store) RunNowStale(ctx context.Context) (map[string]bool, error) {
+	out := map[string]bool{}
+	err := each(ctx, s.db,
+		"SELECT `o`.`task_id`, `o`.`run_now_at`, `r`.`started_at` FROM `task_observation` AS `o` "+
+			"JOIN `task_run` AS `r` ON `r`.`task_id` = `o`.`task_id` "+
+			"WHERE `o`.`run_now_at` IS NOT NULL AND `o`.`closed_at` IS NULL", nil,
+		func(rows *sql.Rows) error {
+			var id string
+			var at, started time.Time
+			if err := rows.Scan(&id, &at, &started); err != nil {
+				return err
+			}
+			if !at.After(started) {
+				out[id] = true
+			}
 			return nil
 		})
 	return out, err
