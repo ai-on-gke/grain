@@ -102,8 +102,15 @@ export const SETTINGS_GROUPS = [
       { id: "engine", label: "Engine" },
       {
         id: "registry",
-        label: "Registry",
-        keywords: ["registry", "heartbeat", "directory", "scopes", "connected"],
+        label: "Hub",
+        keywords: [
+          "hub",
+          "registry",
+          "heartbeat",
+          "directory",
+          "scopes",
+          "connected",
+        ],
       },
       { id: "config-repo", label: "Config repo" },
     ],

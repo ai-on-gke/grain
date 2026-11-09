@@ -251,7 +251,7 @@ type QuotasConfig struct {
 func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("reading registry config %s: %w", path, err)
+		return nil, fmt.Errorf("reading hub config %s: %w", path, err)
 	}
 	return ParseConfig(data)
 }
