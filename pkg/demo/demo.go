@@ -37,7 +37,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/daemon"
@@ -143,16 +142,13 @@ type Options struct {
 	// ExternalConfigBranch is its branch, "main" when empty.
 	ExternalConfigRepo   string
 	ExternalConfigBranch string
+	// ConfigChange is -config-change (demo_config_change.go): a real,
+	// throwaway grain/config and two tasks parked on proposal branches
+	// of it, so the config-change card's Approve & Apply and Reject work.
+	ConfigChange bool
 	// Qualification is -qualification (demo_qualification.go): a release
 	// candidate whose qualification run waits for approval.
 	Qualification bool
-	// LegacyCapability is -legacy-capability: register LegacyCapabilityID,
-	// a made-up provider with nothing to mint, the way an edition
-	// contributes one (capability.RegisterProvider). Every legacy provider
-	// core shipped has been retired onto a capability server method, so
-	// without it the Legacy capabilities pickers -- still how an edition's
-	// providers are granted -- have no row to show or exercise.
-	LegacyCapability bool
 	// SecretsStore is -secrets-store (demo_qualification.go): a real
 	// secrets store in the demo's throwaway directory.
 	SecretsStore bool
@@ -275,14 +271,6 @@ const demoGitHubToken = "ghp_demo_secret_token_acme_widgets"
 // "grain demo: ...", ready for the command to print as it is.
 func Run(opts Options) error {
 	repo := opts.Repo
-	if opts.LegacyCapability {
-		defer capability.RegisterProvider(capability.Registration{
-			ID:          LegacyCapabilityID,
-			Name:        LegacyCapabilityName,
-			Description: "A made-up legacy capability this demo registers, as an edition would, with nothing to mint",
-			New:         func() model.CapabilityProvider { return &legacyCapability{} },
-		})()
-	}
 	cfg := ui.Config{
 		Actor:         ui.DefaultActor(daemon.ActorID(opts.Actor)),
 		DefaultTarget: &repo,
@@ -530,10 +518,8 @@ func Run(opts Options) error {
 		client, _ := cfg.GitHubBranches.(github.Client)
 		baseBranch = configureBaseBranchDemo(store, repo, cfg.CI.(*demoFakeCI), client)
 	}
-	// Stand-ins for what sits outside grain (demo_scenarios.go): a
-	// credential's issuer, on every demo; a fresh install's missing
-	// setup and a provider's usage limit, on request.
-	cfg.CapabilityChecks = demoCapabilityChecks{}
+	// Stand-ins for what sits outside grain (demo_scenarios.go): a fresh
+	// install's missing setup and a provider's usage limit, on request.
 	// -staging: two staging environments for the rail's Staging group
 	// (demo_persistent_sandboxes.go). Off by default, where System ->
 	// Sandboxes says it has no sandbox backend to report on.
@@ -631,6 +617,22 @@ func Run(opts Options) error {
 		// Only now, past every seed above: the seeds write configuration
 		// through the same client guard this turns into a refusal.
 		cfg.StateRepo = newExternalConfigRepo(opts.ExternalConfigRepo, opts.ExternalConfigBranch)
+		// And which repository that is, in owner/name form, the way a
+		// daemon wires both from one state manager (daemon's
+		// ui_server.go, StateRepoRef: settingsRepo). Without it
+		// /api/config named no configRepo and the config repository's
+		// own page offered to remove it (2026-11-08 walkthrough, task
+		// 3613).
+		if ref, ok := newExternalConfigRepo(opts.ExternalConfigRepo, opts.ExternalConfigBranch).ref(); ok {
+			cfg.StateRepoRef = func() model.RepoRef { return ref }
+		}
+	}
+	if opts.ConfigChange {
+		// Past every seed too, so grain/config is exported from the
+		// demo's finished configuration.
+		if err := configureConfigChangeDemo(ctx, dir, db, store, &cfg); err != nil {
+			return fmt.Errorf("grain demo: -config-change: %v", err)
+		}
 	}
 	ghCalls.enableLive()
 	var simClient github.Client
@@ -2950,27 +2952,4 @@ func processDemoGitHubWebhooks(ctx context.Context, store *model.Store, events o
 		GitHubEvents: events,
 	}
 	return runDemoReconcilers(ctx, deps, now, "github-events", "takeovers")
-}
-
-// LegacyCapabilityID and LegacyCapabilityName are -legacy-capability's
-// made-up provider (Options.LegacyCapability).
-const (
-	LegacyCapabilityID   = "example-legacy"
-	LegacyCapabilityName = "Example legacy capability"
-)
-
-// legacyCapability is -legacy-capability's provider: a grant with nothing
-// to mint or place.
-type legacyCapability struct {
-	model.BaseCapability
-}
-
-func (*legacyCapability) Spec() model.CapabilitySpec {
-	return model.CapabilitySpec{
-		Name:        LegacyCapabilityID,
-		Label:       LegacyCapabilityName,
-		Description: "A made-up legacy capability this demo registers, as an edition would, with nothing to mint",
-		Source:      model.GrantByLabel,
-		Provision:   model.ProvisionGrant,
-	}
 }

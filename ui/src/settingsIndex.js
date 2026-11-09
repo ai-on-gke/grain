@@ -534,35 +534,35 @@ export const SETTINGS_INDEX = [
   },
   {
     id: "githubHost",
-    section: "credentials",
+    section: "capabilities",
     anchor: "credentials",
     label: "GitHub host",
     keywords: [],
   },
   {
     id: "githubInsecureHttp",
-    section: "credentials",
+    section: "capabilities",
     anchor: "credentials",
     label: "Speak plain HTTP to GitHub host",
     keywords: [],
   },
   {
     id: "gcpProject",
-    section: "credentials",
+    section: "capabilities",
     anchor: "credentials",
     label: "GCP project",
     keywords: ["gcp", "gemini"],
   },
   {
     id: "gcpServiceAccountEmail",
-    section: "credentials",
+    section: "capabilities",
     anchor: "credentials",
     label: "GCP service account email",
     keywords: [],
   },
   {
     id: "gcpServiceAccountCount",
-    section: "credentials",
+    section: "capabilities",
     anchor: "credentials",
     label: "GCP service account count",
     keywords: [],
@@ -571,64 +571,64 @@ export const SETTINGS_INDEX = [
     id: "registryUrl",
     section: "registry",
     anchor: "registry-config",
-    label: "Registry URL",
-    keywords: ["registry", "heartbeat", "directory"],
+    label: "Hub URL",
+    keywords: ["hub", "registry", "heartbeat", "directory"],
   },
   {
     id: "registryEntry",
     section: "registry",
     anchor: "registry-config",
     label: "Entry name",
-    keywords: ["registry", "entry", "connected"],
+    keywords: ["hub", "registry", "entry", "connected"],
   },
   {
     id: "registryAuthMode",
     section: "registry",
     anchor: "registry-config",
     label: "Credential source",
-    keywords: ["registry", "token", "oidc"],
+    keywords: ["hub", "registry", "token", "oidc"],
   },
   {
     id: "registryHostKind",
     section: "registry",
     anchor: "registry-config",
     label: "Host kind",
-    keywords: ["registry", "workstation", "kubernetes"],
+    keywords: ["hub", "registry", "workstation", "kubernetes"],
   },
   {
     id: "registryOidcAudience",
     section: "registry",
     anchor: "registry-config",
     label: "OIDC audience",
-    keywords: ["registry", "oidc", "audience"],
+    keywords: ["hub", "registry", "oidc", "audience"],
   },
   {
     id: "registryDisplayName",
     section: "registry",
     anchor: "registry-config",
     label: "Display name",
-    keywords: ["registry", "catalog"],
+    keywords: ["hub", "registry", "catalog"],
   },
   {
     id: "registryPurpose",
     section: "registry",
     anchor: "registry-config",
     label: "Purpose",
-    keywords: ["registry", "catalog", "description"],
+    keywords: ["hub", "registry", "catalog", "description"],
   },
   {
     id: "registryListed",
     section: "registry",
     anchor: "registry-config",
-    label: "Listed in registry directory",
-    keywords: ["registry", "directory", "listed"],
+    label: "Listed in hub directory",
+    keywords: ["hub", "registry", "directory", "listed"],
   },
   {
     id: "card:registry:status",
     section: "registry",
     anchor: "registry-status",
-    label: "Registry connection",
-    keywords: ["registry", "heartbeat", "status", "scopes"],
+    label: "Hub connection",
+    keywords: ["hub", "registry", "heartbeat", "status", "scopes"],
     card: true,
   },
   {
@@ -636,7 +636,14 @@ export const SETTINGS_INDEX = [
     section: "registry",
     anchor: "registry-scopes",
     label: "Scope overrides",
-    keywords: ["registry", "scopes", "path prefix", "primary", "secondary"],
+    keywords: [
+      "hub",
+      "registry",
+      "scopes",
+      "path prefix",
+      "primary",
+      "secondary",
+    ],
     card: true,
   },
   {
@@ -841,8 +848,8 @@ export const SETTINGS_INDEX = [
     id: "defaultCapabilities",
     section: "tasks",
     anchor: "task-defaults",
-    label: "Default capabilities",
-    keywords: ["capabilities"],
+    label: "Default grants",
+    keywords: ["capabilities", "grants"],
   },
   {
     id: "newestFirst",
@@ -897,10 +904,10 @@ export const SETTINGS_INDEX = [
     card: true,
   },
   {
-    id: "card:credentials:credentials",
-    section: "credentials",
+    id: "card:capabilities:credentials",
+    section: "capabilities",
     anchor: "credentials",
-    label: "Legacy capabilities",
+    label: "Deployment credentials",
     keywords: [
       "credentials",
       "legacy capabilities",
@@ -978,7 +985,7 @@ const SETTING_BY_ID = new Map(
 // unrunnable), or null for a key no section draws. target is what a link
 // to the setting scrolls to: the field itself (its data-setting-id), as
 // the filter's own pick does, since a card's top can be a screen or more
-// above a field near its foot (Legacy capabilities' GitHub host).
+// above a field near its foot (Deployment credentials' GitHub host).
 export function settingLocation(id) {
   const entry = SETTING_BY_ID.get(id);
   if (!entry) return null;

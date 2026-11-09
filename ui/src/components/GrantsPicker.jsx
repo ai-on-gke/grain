@@ -51,6 +51,7 @@ import {
   groupApiRows,
   isApiGrant,
   splitApiGrant,
+  storedApiGrant,
 } from "../apiGrants.js";
 import {
   describeGrant,
@@ -173,10 +174,16 @@ export default function GrantsPicker({
 }) {
   const all = grants || [];
   const apiHeld = useMemo(() => all.filter(isApiGrant), [all]);
-  const refs = useMemo(() => all.filter(isCapabilityRef), [all]);
+  const refs = useMemo(
+    () => all.filter((id) => isCapabilityRef(id) && !isApiGrant(id)),
+    [all],
+  );
   const offered = config?.capabilities || [];
   const { presets, areas } = groupApiRows(offered);
-  const apiRowOf = (id) => offered.find((c) => c.id === splitApiGrant(id)[0]);
+  const apiRowOf = (id) => {
+    const [target] = splitApiGrant(id);
+    return offered.find((c) => splitApiGrant(c.id)[0] === target);
+  };
   const repos = config?.targetRepos || [];
 
   const [methods, setMethods] = useState(null);
@@ -347,9 +354,9 @@ export default function GrantsPicker({
 
   const toggleApi = (row) => {
     const id = apiGrantId(row.id, apiRepo);
-    onApiChange(
-      apiHeld.includes(id) ? apiHeld.filter((s) => s !== id) : [...apiHeld, id],
-    );
+    const held = apiHeld.some((s) => storedApiGrant(s) === id);
+    const rest = apiHeld.filter((s) => storedApiGrant(s) !== id);
+    onApiChange(held ? rest : [...rest, id]);
   };
 
   const closeMenu = useCallback((focusButton = false) => {
@@ -630,7 +637,10 @@ export default function GrantsPicker({
   const shownMethods = sortByDisplay(
     formCapabilities,
     (methods || []).filter(
-      (m) => formOffers(m.ref) && matches(m.ref, m.method, m.description),
+      (m) =>
+        !isApiGrant(m.ref) &&
+        formOffers(m.ref) &&
+        matches(m.ref, m.method, m.description),
     ),
     (m) => m.ref,
   );
@@ -643,8 +653,9 @@ export default function GrantsPicker({
     });
 
   const apiItem = (row) => {
+    const id = apiGrantId(row.id, apiRepo);
     const name = row.displayLabel || apiShortName(row.id);
-    const held = apiHeld.includes(apiGrantId(row.id, apiRepo));
+    const held = apiHeld.some((s) => storedApiGrant(s) === id);
     return (
       <MenuItem
         key={row.id}
@@ -816,9 +827,10 @@ export default function GrantsPicker({
   };
 
   const anyApi = presets.length > 0 || areas.length > 0;
-  const anyMethods = (methods || []).length > 0;
+  const anyMethods = (methods || []).some((m) => !isApiGrant(m.ref));
   const held = apiHeld.length + refs.length + drafts.length;
-  if (!anyApi && !anyMethods && held === 0 && !loadError && count === 0)
+  const stillLoading = count > 0 && methods === null;
+  if (!anyApi && !anyMethods && held === 0 && !loadError && !stillLoading)
     return null;
 
   const regionId = `${idPrefix}-grants`;
@@ -966,6 +978,14 @@ export default function GrantsPicker({
           {menuGroups.flatMap((g) => [
             <ListSubheader
               key={g.key}
+              // A group's title sits among the menu's items (MenuList moves
+              // focus over direct children only, so it cannot wrap them in
+              // a role="group"). As a bare <li> it was a list item with no
+              // list inside role="menu": axe's listitem and
+              // aria-required-children (2026-11-08 walkthrough, F3). A
+              // named separator is a child a menu may own.
+              role="separator"
+              aria-label={g.title}
               className={
                 g.kind === "api" && g.area ? "api-scope-area" : undefined
               }

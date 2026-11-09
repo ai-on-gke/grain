@@ -1,0 +1,81 @@
+PASS	0.1	external agent API on	true
+PASS	1.1	T1 minted by IAP-verified alice	gma_5ed4f736e03772cee239deca5e56c5f8
+PASS	1.2	T1 row: owner alice, owner_source iap	t1-alice|alice@example.com|iap
+PASS	1.3	T2 minted with the access code	gma_4456fe564bfda22cbbe0e91f47a22cab
+PASS	1.4	T2 row: no owner	t2-code||
+PASS	1.5	T3 minted with the access code naming alice	gma_3f532f5bc1b9f36ba4d9be728cd28747
+PASS	1.6	T3 row: owner alice, owner_source unverified (access-code)	t3-named|alice@example.com|access-code
+PASS	1.7	self-service mint under the access code naming alice is refused	403 a self-service credential minted without a verified sign-in acts for nobody, not "alice@example.com" 
+grain login --issue-token: signed in to http://127.0.0.1:4291 as context walk (external-token)
+PASS	1.8	grain login --issue-token under the access code mints an unowned token	cli-debuerreotype-walk-to7h9r||
+PASS	1.9	T1's filing: on_behalf_of alice, source token (OwnerPrincipal of an iap owner_source: Verified)	alice@example.com <- agent:external:t1-alice:external-token for human:alice@example.com:token
+PASS	1.10	T2's filing: on behalf of nobody	owner@example.com <- agent:external:t2-code:external-token for ::
+PASS	1.11	T3's filing: on-behalf-of alice only with the unverified access-code source	alice@example.com <- agent:external:t3-named:external-token for human:alice@example.com:access-code
+INFO	1.12	T3 filing creator (Requested-by source before the F1 fix): alice@example.com
+T3 filing view: {"author":"external:t3-named","authorKind":"agent","authorLabel":"external agent t3-named","owner":"alice@example.com"}
+T3 whoami: {"acceptedAuth":["access-code","external-token","iap"],"externalAgentApi":true,"version":"v0.0.0-20261108225153-29f0a82830c8+dirty","authenticated":true,"principal":"agent:external:t3-named","tokenId":"3","owner":"alice@example.com","resolvedScopes":["dispatch:write@acme/widgets","tasks:admin@acme/w
+PASS	2.1	T1 (tasks:admin) as alice=grain/operator	file:201 admin:200 read:200
+grain: role "grain/developer" is no scope set in effect (Settings -> Scope sets, or a built-in such as grain/operator or grain/viewer)
+PASS	2.2	grain/developer is not a shipped set (refused, role unchanged)	grain/operator
+user:alice@example.com: role grain/operator -> grain/contributor
+PASS	2.3	alice demoted to grain/contributor (no restart)	grain/contributor
+PASS	2.4	T1 (tasks:admin) refused on the very next request	file:403 admin:403 read:403
+PASS	2.5	the refusal names the scope and the role	external agent token t1-alice is wider than its owner's current role: it grants tasks:admin, which alice@example.com (role grain/contributor) does not hold; re-issue it within grain/contributor 
+PASS	2.6	t1-write (within contributor) files, cannot approve	file:201 admin:403 read:200
+user:alice@example.com: role grain/contributor -> grain/viewer
+PASS	2.7	alice demoted to grain/viewer	grain/viewer
+PASS	2.8	t1-write refused once wider than viewer	file:403 admin:403 read:403
+PASS	2.9	t1-read (within viewer) reads only	file:403 admin:403 read:200
+removed user:alice@example.com
+PASS	2.10	t1-read once alice is denied: 403 on everything	file:403 admin:403 read:403
+PASS	2.11	the denial says alice holds no role	external agent token t1-read acts for alice@example.com, who holds no role on this deployment: principal "alice@example.com" is not on the allowed users and groups list (Settings -> Access); add them back in Settings -> 
+PASS	2.12	a token owned by never-listed charlie is refused, even filing	403 external agent token t-charlie acts for charlie@example.com, who holds no role on this deployment: principal "charlie@example.com" is not on the allowed users and groups list (Settings -> Access); add them back in Se
+PASS	2.13	the unowned T2 is not refused for being unlisted	200
+allowed user:alice@example.com as grain/operator
+PASS	2.14	alice re-allowed as operator: T1 works again, no restart	file:201 admin:200 read:200
+PASS	3.1	right code + alice's assertion: 403, no cookie	403|cc292f255827|0
+PASS	3.2	wrong code + alice's assertion: 403, no cookie	403|cc292f255827|0
+PASS	3.3	identical responses (no code-comparison oracle)	403|cc292f255827|0
+Proposed task #16 is visible now: /tasks/16. It is filed unapproved because your permission does not cover it: your task is not an auto-merge job and is not a standing session allowed to queue its own work. It waits until a human approves it.
+Proposed task #17 is visible now: /tasks/17. It is filed unapproved because your permission does not cover it: your task is not an auto-merge job and is not a standing session allowed to queue its own work. It waits until a human approves it.
+Proposed task #18 is visible now: /tasks/18. It is filed unapproved because your permission does not cover it: your task is not an auto-merge job and is not a standing session allowed to queue its own work. It waits until a human approves it.
+Proposed task #21 is visible now: /tasks/21. It is filed unapproved because you asked to hold it (hold_for_approval), and your permission would not have covered it anyway: your task is not an auto-merge job and is not a standing session allowed to queue its own work. It waits until a human approves it.
+PASS	4.0	P3 carries hold-requested	hold-requested proposal:20:7dd86fcfb23de63cb712756b7c3e038aa8c1c1f08ddd8514f3e8e3402cdee95b 
+P1=15 P1U=19 HOLDER=20 P2=16 P2X=17 P2B=18 P3=21 P4=22 P5=23 U1=24 U2=25 U3=26
+PASS	4.P1u.approve	REST approve P1u refused by externalApprovalRail	403 external:t4-admin cannot approve task 19: it filed it, and an external agent credential never approves its own filings, directly or through the tasks they proposed, even under api:tasks:admin or dispatch:write -- a p
+PASS	4.P1u.run-now	REST run-now P1u refused by externalApprovalRail	403 external:t4-admin cannot approve task 19: it filed it, and an external agent credential never approves its own filings, directly or through the tasks they proposed, even under api:tasks:admin or dispatch:write -- a p
+PASS	4.P1u.api_approve	MCP grain_invoke api_approve P1u refused	true|api_approve failed: HTTP 403: external:t4-admin cannot approve task 19: it filed it, and an external agent credential never approves its own filings, directly or through the tasks they proposed, even under api:tasks
+PASS	4.P1u.api_run_now	MCP grain_invoke api_run_now P1u refused	true|api_run_now failed: HTTP 403: external:t4-admin cannot approve task 19: it filed it, and an external agent credential never approves its own filings, directly or through the tasks they proposed, even under api:tasks
+PASS	4.P1u.unchanged	P1u's approval unchanged	
+PASS	4.P2.approve	REST approve P2 refused by externalApprovalRail	403 external:t4-admin cannot approve task 16: it filed task 15, which is in the chain that proposed it (15), and an external agent credential never approves its own filings, directly or through the tasks they proposed, e
+PASS	4.P2.run-now	REST run-now P2 refused by externalApprovalRail	403 external:t4-admin cannot approve task 16: it filed task 15, which is in the chain that proposed it (15), and an external agent credential never approves its own filings, directly or through the tasks they proposed, e
+PASS	4.P2.api_approve	MCP grain_invoke api_approve P2 refused	true|api_approve failed: HTTP 403: external:t4-admin cannot approve task 16: it filed task 15, which is in the chain that proposed it (15), and an external agent credential never approves its own filings, directly or thr
+PASS	4.P2.api_run_now	MCP grain_invoke api_run_now P2 refused	true|api_run_now failed: HTTP 403: external:t4-admin cannot approve task 16: it filed task 15, which is in the chain that proposed it (15), and an external agent credential never approves its own filings, directly or thr
+PASS	4.P2.unchanged	P2's approval unchanged	
+PASS	4.P2b.approve	REST approve P2b refused by externalApprovalRail	403 external:t4-admin cannot approve task 18: it filed task 15, which is in the chain that proposed it (15 → 17), and an external agent credential never approves its own filings, directly or through the tasks they prop
+PASS	4.P2b.run-now	REST run-now P2b refused by externalApprovalRail	403 external:t4-admin cannot approve task 18: it filed task 15, which is in the chain that proposed it (15 → 17), and an external agent credential never approves its own filings, directly or through the tasks they prop
+PASS	4.P2b.api_approve	MCP grain_invoke api_approve P2b refused	true|api_approve failed: HTTP 403: external:t4-admin cannot approve task 18: it filed task 15, which is in the chain that proposed it (15 → 17), and an external agent credential never approves its own filings, directly
+PASS	4.P2b.api_run_now	MCP grain_invoke api_run_now P2b refused	true|api_run_now failed: HTTP 403: external:t4-admin cannot approve task 18: it filed task 15, which is in the chain that proposed it (15 → 17), and an external agent credential never approves its own filings, directly
+PASS	4.P2b.unchanged	P2b's approval unchanged	
+PASS	4.P3.approve	REST approve P3 refused by externalApprovalRail	403 external:t4-admin cannot approve task 21: it is held for a person (it was filed with hold_for_approval), and an external agent credential, even one a person owns, never approves a task held for a person, even under a
+PASS	4.P3.run-now	REST run-now P3 refused by externalApprovalRail	403 external:t4-admin cannot approve task 21: it is held for a person (it was filed with hold_for_approval), and an external agent credential, even one a person owns, never approves a task held for a person, even under a
+PASS	4.P3.api_approve	MCP grain_invoke api_approve P3 refused	true|api_approve failed: HTTP 403: external:t4-admin cannot approve task 21: it is held for a person (it was filed with hold_for_approval), and an external agent credential, even one a person owns, never approves a task 
+PASS	4.P3.api_run_now	MCP grain_invoke api_run_now P3 refused	true|api_run_now failed: HTTP 403: external:t4-admin cannot approve task 21: it is held for a person (it was filed with hold_for_approval), and an external agent credential, even one a person owns, never approves a task 
+PASS	4.P3.unchanged	P3's approval unchanged	
+PASS	4.P4.approve	REST approve P4 refused by externalApprovalRail	403 external:t4-admin cannot approve task 22: it is held for a person (it sets admission to `durable`, which only a person may give a task), and an external agent credential, even one a person owns, never approves a task
+PASS	4.P4.run-now	REST run-now P4 refused by externalApprovalRail	403 external:t4-admin cannot approve task 22: it is held for a person (it sets admission to `durable`, which only a person may give a task), and an external agent credential, even one a person owns, never approves a task
+PASS	4.P4.api_approve	MCP grain_invoke api_approve P4 refused	true|api_approve failed: HTTP 403: external:t4-admin cannot approve task 22: it is held for a person (it sets admission to `durable`, which only a person may give a task), and an external agent credential, even one a per
+PASS	4.P4.api_run_now	MCP grain_invoke api_run_now P4 refused	true|api_run_now failed: HTTP 403: external:t4-admin cannot approve task 22: it is held for a person (it sets admission to `durable`, which only a person may give a task), and an external agent credential, even one a per
+PASS	4.P4.unchanged	P4's approval unchanged	
+PASS	4.P5.approve	REST approve P5 refused by externalApprovalRail	403 external:t4-admin cannot approve task 23: it is held for a person (it has auto-merge enabled, which would land its change without review), and an external agent credential, even one a person owns, never approves a ta
+PASS	4.P5.run-now	REST run-now P5 refused by externalApprovalRail	403 external:t4-admin cannot approve task 23: it is held for a person (it has auto-merge enabled, which would land its change without review), and an external agent credential, even one a person owns, never approves a ta
+PASS	4.P5.api_approve	MCP grain_invoke api_approve P5 refused	true|api_approve failed: HTTP 403: external:t4-admin cannot approve task 23: it is held for a person (it has auto-merge enabled, which would land its change without review), and an external agent credential, even one a p
+PASS	4.P5.api_run_now	MCP grain_invoke api_run_now P5 refused	true|api_run_now failed: HTTP 403: external:t4-admin cannot approve task 23: it is held for a person (it has auto-merge enabled, which would land its change without review), and an external agent credential, even one a p
+PASS	4.P5.unchanged	P5's approval unchanged	
+PASS	4.P1.approve	REST approve of the approved P1 refused (its own filing)	403 external:t4-admin cannot approve task 15: it filed it, and an external agent credential never approves its own filings, directly or through the tasks they proposed, even under api:tasks:admin or dispatch:write -- a p
+PASS	4.P1.run-now	REST run-now of the approved P1: no approval involved, allowed	200 
+PASS	4.U1	REST approve of an unrelated standard task in scope succeeds	200 
+PASS	4.U2	REST run-now of an unrelated standard task in scope succeeds	200 
+PASS	4.U3	MCP grain_invoke api_approve of an unrelated standard task succeeds	false|{"id":"26","title":"U3 unrelated standard","author":"alice@example.com","authorKind":"human","authorSource":"iap","authorLabel":"alice@example.com","approvedBy":"external:t4-admin","approvedByKind":"agent","approve
+PASS	4.U3.state	U3 approved on behalf of alice	agent:external:t4-admin
+FAILS=0

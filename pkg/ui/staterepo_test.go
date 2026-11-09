@@ -774,3 +774,29 @@ func TestBrowsingWithoutAStateRepositorySaysSo(t *testing.T) {
 		}
 	}
 }
+
+// A deployment on an external config repo with no StateRepoRef wired
+// still names its config repo in owner/name form, the form the repos
+// pane compares repository names against -- not the raw remote URL,
+// which matched no repository, so the config repo's own page offered
+// Remove (docs/test-runs/2026-11-08-repository-release-memory-ui.md,
+// task 3613).
+func TestExternalConfigRepoDeploymentNamesItsConfigRepoAsOwnerName(t *testing.T) {
+	t.Parallel()
+	fake := &fakeStateRepo{status: ui.StateRepoStatus{
+		Remote: "https://github.com/acme/grain-config.git",
+		Branch: "main",
+	}}
+	srv := stateRepoServer(t, fake)
+	rec := do(t, srv, http.MethodGet, "/api/deployment", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/deployment status %d: %s", rec.Code, rec.Body)
+	}
+	got := decode[ui.Team](t, rec)
+	if got.ConfigRepo != "acme/grain-config" {
+		t.Errorf("GET /api/deployment configRepo = %q, want acme/grain-config", got.ConfigRepo)
+	}
+	if got.ConfigCloneURL != "https://github.com/acme/grain-config.git" {
+		t.Errorf("GET /api/deployment configCloneURL = %q, want the remote", got.ConfigCloneURL)
+	}
+}

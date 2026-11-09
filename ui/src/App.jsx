@@ -106,6 +106,8 @@ import SystemPage from "./components/SystemPage.jsx";
 import {
   DEFAULT_SETTINGS_SECTION,
   oldAdminDestination,
+  settingsAliasAnchor,
+  settingsAliasAnchorAt,
   settingsSectionFor,
   systemDestination,
   settingsSectionLabel,
@@ -147,6 +149,17 @@ import {
 // Exported for App.test.jsx, whose poll test runs a fake clock forward
 // by exactly this rather than by a 3000 written out again beside it.
 export const POLL_INTERVAL_MS = 3000;
+
+// CONFIG_POLL_TIMEOUT_MS is how long the main poll waits for its
+// GET /api/config before counting the daemon unreachable
+// (grain/task-3619). The handler is a handful of small store reads
+// (the config row, repo configs and workflows, custom fields) that a
+// healthy deployment answers in milliseconds, so ten seconds leaves a
+// busy store, a slow link and a GC pause plenty of room; and the
+// two-failure streak noteUnreachable asks for means one slow answer
+// never raises the banner. Two in a row do, about 25 seconds after a
+// daemon stops answering (two timeouts and the tick between them).
+export const CONFIG_POLL_TIMEOUT_MS = 10_000;
 
 // HIDDEN_POLL_EVERY is how many of those ticks a hidden tab lets pass
 // between reads of the task list, and it reads nothing else. A
@@ -312,7 +325,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // this line differs between the two -- the phone layout is the same
   // views in a shell that fits, not a second UI.
   const isPhone = useIsPhone();
-  const { addPinnedItem } = usePinnedNav();
+  const { addPinnedItem, removePinnedItem } = usePinnedNav();
   // ...and the same answer, published on <html> for the stylesheet, the
   // way AppThemeProvider publishes the resolved light/dark mode. The
   // rules a phone needs are mostly plain CSS -- padding, wrapping, how
@@ -321,7 +334,12 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // attribute also reaches what a media query would reach anyway but a
   // class on the shell below would not: the overlay panes, which MUI
   // renders into a portal outside this tree.
-  useEffect(() => {
+  //
+  // useLayoutEffect rather than useEffect so the attribute lands in the
+  // same commit as PhoneNav/Sidebar, before the browser paints or any
+  // post-commit measurement reads it: a passive effect left a frame with
+  // PhoneNav inside a row-oriented .app-body and desktop gutters.
+  useLayoutEffect(() => {
     document.documentElement.dataset.phone = isPhone ? "true" : "false";
   }, [isPhone]);
   // The desktop rail folded down to its icons, remembered per browser
@@ -332,7 +350,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const sidebarCollapsed = !isPhone && sidebarCollapsedChoice;
   // The pane anything you open fills starts where the rail ends
   // (Overlay.jsx), so it reads the rail's width off the same variable.
-  useEffect(() => {
+  useLayoutEffect(() => {
     document.documentElement.style.setProperty(
       "--sidebar-width",
       `${sidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_WIDTH}px`,
@@ -743,7 +761,14 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const noteUnreachable = useCallback(
     (source, err, { immediate = false } = {}) => {
       const prev = unreachableStreak.current.get(source);
-      const firstSeenAt = prev ? prev.firstSeenAt : new Date();
+      // A request that timed out says when it was asked (api.js's
+      // sentAt), which is when the silence began rather than when the
+      // wait for it gave up.
+      const firstSeenAt = prev
+        ? prev.firstSeenAt
+        : err?.sentAt instanceof Date
+          ? err.sentAt
+          : new Date();
       const count = (prev ? prev.count : 0) + 1;
       unreachableStreak.current.set(source, { count, firstSeenAt });
       if (!immediate && !restartingRef.current && count < 2) {
@@ -868,7 +893,11 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const [settingsSection, setSettingsSection] = useState(
     () => parsePath(window.location.pathname).settingsSection || "",
   );
-  const [settingsAnchor, setSettingsAnchor] = useState("");
+  // A retired alias with no #hash of its own (/settings/credentials) names
+  // a card on its section, which it scrolls to rather than to the top.
+  const [settingsAnchor, setSettingsAnchor] = useState(() =>
+    settingsAliasAnchorAt(window.location.pathname, window.location.hash),
+  );
   // settingsItem is one item of the open section, in the path after it:
   // the capability server /settings/capabilities/<id> opens.
   const [settingsItem, setSettingsItem] = useState(
@@ -1379,7 +1408,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // the task detail over whatever the reader was looking at -- a message
   // sent in a chat should leave them in the chat.
   const sessionAct = useCallback(
-    async (mutate) => {
+    async (mutate, taskId) => {
       sessionTaskSeq.current += 1;
       try {
         await mutate();
@@ -1388,7 +1417,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
         return false;
       }
       try {
-        await loadSessionTask();
+        await loadSessionTask(taskId || openSessionTaskIdRef.current);
         await refreshList();
       } catch (err) {
         showError(err);
@@ -1470,44 +1499,59 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // response: the target repo allowlist, the deployment-wide default
   // capabilities and task defaults the new-task form starts from, and
   // the deployment's own prompt extension.
-  const refreshConfig = useCallback(async () => {
-    try {
-      const next = await api("/api/config");
-      if (next && typeof next === "object") {
-        restartingRef.current = Boolean(next.restarting);
-      }
-      if (next?.accessDenied || next?.allowed === false) {
-        setAccessDenied(true);
-        setDeniedUser(next?.actor || null);
-      }
-      const nextCommit = next?.version?.commit;
-      if (nextCommit) {
-        if (activeCommitRef.current && activeCommitRef.current !== nextCommit) {
-          onReload();
-          return;
+  //
+  // opts goes to api() as it is: the main poll's own read passes a
+  // timeout (CONFIG_POLL_TIMEOUT_MS), and nothing else does.
+  const fetchConfig = useCallback(
+    async (opts) => {
+      try {
+        const next = await (opts
+          ? api("/api/config", opts)
+          : api("/api/config"));
+        if (next && typeof next === "object") {
+          restartingRef.current = Boolean(next.restarting);
         }
-        activeCommitRef.current = nextCommit;
+        if (next?.accessDenied || next?.allowed === false) {
+          setAccessDenied(true);
+          setDeniedUser(next?.actor || null);
+        }
+        const nextCommit = next?.version?.commit;
+        if (nextCommit) {
+          if (
+            activeCommitRef.current &&
+            activeCommitRef.current !== nextCommit
+          ) {
+            onReload();
+            return;
+          }
+          activeCommitRef.current = nextCommit;
+        }
+        // Kept when unchanged, for refreshList's reason and one of its own:
+        // config is the second argument to every narrowing on screen, so a
+        // new object each tick invalidates the panels' answers even when the
+        // tasks are the identical array (taskFilters.js's narrowTasks keys
+        // on both).
+        setConfig((prev) => keepIfSame(prev, next));
+        setConfigError(null);
+      } catch (err) {
+        setConfigError(err);
+        if (
+          String(err?.message || "").includes("403") ||
+          String(err?.message || "")
+            .toLowerCase()
+            .includes("access denied")
+        ) {
+          setAccessDenied(true);
+        }
+        throw err;
       }
-      // Kept when unchanged, for refreshList's reason and one of its own:
-      // config is the second argument to every narrowing on screen, so a
-      // new object each tick invalidates the panels' answers even when the
-      // tasks are the identical array (taskFilters.js's narrowTasks keys
-      // on both).
-      setConfig((prev) => keepIfSame(prev, next));
-      setConfigError(null);
-    } catch (err) {
-      setConfigError(err);
-      if (
-        String(err?.message || "").includes("403") ||
-        String(err?.message || "")
-          .toLowerCase()
-          .includes("access denied")
-      ) {
-        setAccessDenied(true);
-      }
-      throw err;
-    }
-  }, [onReload]);
+    },
+    [onReload],
+  );
+  // Every other caller hands refreshConfig on as a callback, and a
+  // callback's arguments are whatever its caller passes, so it takes
+  // none.
+  const refreshConfig = useCallback(() => fetchConfig(), [fetchConfig]);
 
   // refreshAfterCreate is what the new-task form is given instead of
   // refreshList alone: filing a task now also writes a setting this
@@ -2215,7 +2259,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // reported here and rethrown, so the page keeps the message in its
   // composer.
   const startStandingSession = useCallback(
-    async ({ title, message, attachments = [], model, pin = false }) => {
+    async (
+      { title, message, attachments = [], model, pin = false },
+      takeHandoff,
+    ) => {
       let res;
       try {
         res = await api("/api/console-sessions", {
@@ -2243,6 +2290,35 @@ function AppContent({ onReload = () => window.location.reload() }) {
         listed.filter((s) => !known.has(s.id)).at(-1)?.id ||
         listed.at(-1)?.id;
       if (created) {
+        const createdRow = listed.find((s) => s.id === created);
+        if (createdRow?.taskId) {
+          openSessionTaskIdRef.current = createdRow.taskId;
+          try {
+            const detail = await api(`/api/tasks/${createdRow.taskId}`);
+            if (detail) {
+              sessionTaskSeq.current += 1;
+              setSessionTask(detail);
+            }
+          } catch {
+            // Best-effort preload; the session pane's effect retries if needed.
+          }
+        }
+        const handoff = takeHandoff?.();
+        if (
+          handoff &&
+          (handoff.draft?.text ||
+            handoff.attachments?.length > 0 ||
+            handoff.queued?.length > 0)
+        ) {
+          setSessionPrompt({
+            sessionId: created,
+            text: handoff.draft?.text || "",
+            html: handoff.draft?.html ?? handoff.draft?.text ?? "",
+            attachments: handoff.attachments || [],
+            queued: handoff.queued || [],
+            consumeOnApply: true,
+          });
+        }
         if (pin) addPinnedItem({ kind: "session", id: created });
         openStandingSession(created);
       }
@@ -2261,6 +2337,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
 
   const deleteStandingSession = useCallback(
     async (deletedId) => {
+      removePinnedItem({ kind: "session", id: deletedId });
       await Promise.all([refreshSessions(), refreshList()]);
       if (openSessionId === deletedId) {
         // null rather than "director": the first session this deployment
@@ -2275,7 +2352,14 @@ function AppContent({ onReload = () => window.location.reload() }) {
         if (view === "session") setViewAndCloseOpen("session");
       }
     },
-    [refreshSessions, refreshList, openSessionId, view, setViewAndCloseOpen],
+    [
+      removePinnedItem,
+      refreshSessions,
+      refreshList,
+      openSessionId,
+      view,
+      setViewAndCloseOpen,
+    ],
   );
 
   const consumeSessionPrompt = useCallback((request) => {
@@ -2432,6 +2516,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // exactly the half-fetched page this is about. The first failure is
   // worth one error banner; the rest of the shell renders on whatever
   // did land, as it did before.
+  const shellLoadedRef = useRef(false);
   useEffect(() => {
     (async () => {
       const results = await Promise.allSettled([
@@ -2452,6 +2537,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       } else {
         noteReached("shell");
       }
+      shellLoadedRef.current = true;
       setLoaded(true);
     })();
   }, [
@@ -2468,17 +2554,28 @@ function AppContent({ onReload = () => window.location.reload() }) {
     noteReached,
   ]);
 
-  // The suite runs, fetched on the way into the suites page rather than
-  // at mount with the five lists above: they are the one list nothing
-  // outside that page shows, so paying for them on every cold load of
-  // every other view would buy nothing. Until now they arrived on the
-  // first poll tick, which left the page's own runs list blank for a
-  // few seconds after every visit -- and left a link straight to one
-  // run's pane (/suites/runs/7) with nothing to open.
+  // The suite runs, fetched on the way into Processes rather than at mount
+  // with the lists above: nothing outside Processes shows them. When
+  // entering Processes from another view after the initial shell load,
+  // schedules, templates and suites are refreshed alongside suiteRuns and
+  // triggers as well -- switching view resets the background poll's timer,
+  // which otherwise left newly synced .grain/ declarations stale beside
+  // fresh triggers until the next poll tick.
   useEffect(() => {
     if (view !== "processes") return;
-    refreshSuiteRuns().catch(showError);
-  }, [view, refreshSuiteRuns, showError]);
+    const refreshes = [refreshSuiteRuns()];
+    if (shellLoadedRef.current) {
+      refreshes.push(refreshSchedules(), refreshTemplates(), refreshSuites());
+    }
+    Promise.all(refreshes).catch(showError);
+  }, [
+    view,
+    refreshSuiteRuns,
+    refreshSchedules,
+    refreshTemplates,
+    refreshSuites,
+    showError,
+  ]);
 
   // The triggers, read on the way into Processes from every repository
   // the loaded schedules, templates and suites were declared in. A
@@ -2555,7 +2652,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       if (pollTick.current % pollBackoff.current !== 0) return;
       polling.current = true;
       try {
-        // refreshConfig here (not just at mount) is what keeps
+        // The config read here (not just at mount) is what keeps
         // config.reconcilerDown -- and the banner it drives, below --
         // current: it is the one /api/config field that can flip from
         // false to true mid-session, on a process this same UI is still
@@ -2565,9 +2662,15 @@ function AppContent({ onReload = () => window.location.reload() }) {
         // agent's usage limit is met and disappears again when the
         // provider's window resets, with nothing on this end to notice
         // either (grain/task-132).
+        //
+        // Bounded, unlike the rest of the tick: a daemon that holds the
+        // connection open and never answers (deadlocked, stopped, or a
+        // proxy in front of it doing the holding) would otherwise keep
+        // this tick waiting forever, and the banner below can only come
+        // up when a tick fails (grain/task-3619).
         await Promise.all([
           refreshList(),
-          refreshConfig(),
+          fetchConfig({ timeout: CONFIG_POLL_TIMEOUT_MS }),
           refreshCIRuns(),
           refreshSessions(),
         ]);
@@ -2667,7 +2770,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
     taskLoadError,
     pollDenied,
     refreshBoards,
-    refreshConfig,
+    fetchConfig,
     refreshCIRuns,
     refreshList,
     refreshSessions,
@@ -3029,7 +3132,13 @@ function AppContent({ onReload = () => window.location.reload() }) {
         const keptHash =
           view === "repos" && openRepo && isRepoTab(hash.replace(/^#/, ""))
             ? ""
-            : hash;
+            : hash ||
+              // The first write on an alias that named a card
+              // (/settings/credentials) says which, so the corrected
+              // address still opens that card when reloaded or shared.
+              (!mountedRef.current && view === "settings" && settingsAnchor
+                ? `#${settingsAnchor}`
+                : "");
         window.history.replaceState(entry, "", path + keptHash);
       }
     }
@@ -3499,7 +3608,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       if (leavingLosesEdits() && !window.confirm(DISCARD_PROMPT)) return;
       setSettingsSection(dest.settingsSection);
       setSettingsItem("");
-      setSettingsAnchor(anchor);
+      setSettingsAnchor(anchor || settingsAliasAnchor(asked));
       setViewAndCloseOpen("settings");
     },
     [setViewAndCloseOpen, openSystem],
@@ -4081,9 +4190,14 @@ function AppContent({ onReload = () => window.location.reload() }) {
                               section={settingsSection}
                               anchor={settingsAnchor}
                               item={settingsItem}
-                              onItem={setSettingsItem}
-                              onSection={(next) => {
+                              onItem={(next) => {
+                                // A card the section was opened at is
+                                // not one of its items' pages.
                                 setSettingsAnchor("");
+                                setSettingsItem(next);
+                              }}
+                              onSection={(next, nextAnchor = "") => {
+                                setSettingsAnchor(nextAnchor);
                                 setSettingsItem("");
                                 setSettingsSection(next);
                               }}

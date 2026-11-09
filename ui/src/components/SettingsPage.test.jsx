@@ -77,10 +77,12 @@ describe("SettingsPage", () => {
     expect(labels).toEqual(
       SETTINGS_GROUPS.flatMap((g) => g.sections.map((s) => s.label)),
     );
+    // No Legacy capabilities: that tab was retired, its Deployment
+    // credentials card moved onto Capabilities.
+    expect(labels).not.toContain("Legacy capabilities");
     expect(labels).toEqual([
       "Models",
       "Sandboxes",
-      "Legacy capabilities",
       "Access",
       "Hosts",
       "CLI",
@@ -89,7 +91,7 @@ describe("SettingsPage", () => {
       "Upgrade",
       "Caches",
       "Engine",
-      "Registry",
+      "Hub",
       "Config repo",
       "General",
       "Git",
@@ -391,6 +393,79 @@ describe("SettingsPage", () => {
     expect(onSection).toHaveBeenCalledWith("preferences");
   });
 
+  it("keeps the tablet Section picker on the current section when a dirty leave is cancelled", async () => {
+    window.matchMedia = (query) => ({
+      matches: query !== PHONE_QUERY && query.includes("899"),
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    try {
+      const user = userEvent.setup();
+      const { onSection } = setup({ section: "agents" });
+      const promptBox = await screen.findByLabelText(
+        "Standing instructions for every run",
+      );
+      await user.type(promptBox, " stay here");
+
+      const picker = screen.getByRole("combobox", { name: "Section" });
+      expect(picker).toHaveValue("Agents");
+      await chooseOption(user, picker, "general");
+      expect(confirmSpy).toHaveBeenCalled();
+      expect(onSection).not.toHaveBeenCalled();
+      expect(picker).toHaveValue("Agents");
+    } finally {
+      confirmSpy.mockRestore();
+    }
+  });
+
+  // Agents' Commit identity and CLI's Sign in pointers were bare hrefs:
+  // they reloaded the app and skipped the dirty-card prompt.
+  it("opens Git from Agents and Agents from CLI in place, asking first when dirty", async () => {
+    const confirmSpy = vi
+      .spyOn(window, "confirm")
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+    try {
+      const user = userEvent.setup();
+      const { onSection, rerender } = setup({ section: "agents" });
+      const promptBox = await screen.findByLabelText(
+        "Standing instructions for every run",
+      );
+      await user.type(promptBox, " dirty edit");
+
+      const gitLink = screen.getByRole("link", { name: /Settings → Git/ });
+      await user.click(gitLink);
+      expect(confirmSpy).toHaveBeenCalledTimes(1);
+      expect(onSection).not.toHaveBeenCalled();
+
+      await user.click(gitLink);
+      expect(confirmSpy).toHaveBeenCalledTimes(2);
+      expect(onSection).toHaveBeenCalledWith("git");
+
+      onSection.mockClear();
+      rerender(
+        <PreferencesProvider>
+          <SettingsPage
+            config={{}}
+            section="cli"
+            onSection={onSection}
+            showError={vi.fn()}
+          />
+        </PreferencesProvider>,
+      );
+      await user.click(
+        await screen.findByTestId("cli-external-agent-api-link"),
+      );
+      expect(onSection).toHaveBeenCalledWith("agents", "external-agents");
+    } finally {
+      confirmSpy.mockRestore();
+    }
+  });
+
   it("edits max worker agents (10 by default) in the Engine section", async () => {
     const user = userEvent.setup();
     setup({ section: "engine" });
@@ -630,7 +705,7 @@ describe("SettingsPage", () => {
       <PreferencesProvider>
         <SettingsPage
           config={{}}
-          section="credentials"
+          section="capabilities"
           onSection={vi.fn()}
           onSaved={onSaved}
           showError={vi.fn()}
@@ -678,7 +753,7 @@ describe("SettingsPage", () => {
       <PreferencesProvider>
         <SettingsPage
           config={{}}
-          section="credentials"
+          section="capabilities"
           onSection={vi.fn()}
           showError={vi.fn()}
         />
@@ -692,6 +767,80 @@ describe("SettingsPage", () => {
     expect(within(used).getByRole("link", { name: id })).toBeInTheDocument();
     expect(
       within(used).queryByRole("button", { name: "Delete secret" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps secrets from retired legacy capability statuses visible under Other secrets", async () => {
+    api.mockImplementation((path, init) => {
+      if (path === "/api/settings" && !init?.method) {
+        return Promise.resolve({
+          ...settings,
+          agentBackends: [{ id: "gemini-1", framework: "gemini" }],
+          capabilities: [
+            {
+              id: "github-sandbox",
+              secrets: [
+                {
+                  name: "github-app/app-id",
+                  secret: "github-app",
+                  key: "app-id",
+                  set: true,
+                },
+                {
+                  name: "github-app/private-key",
+                  secret: "github-app",
+                  key: "private-key",
+                  set: true,
+                },
+              ],
+            },
+            {
+              id: "registry-push",
+              secrets: [
+                {
+                  name: "registry-push",
+                  secret: "registry-push",
+                  key: "value",
+                  set: true,
+                },
+              ],
+            },
+          ],
+        });
+      }
+      if (path === "/api/secrets" && !init?.method) {
+        return Promise.resolve({
+          enabled: true,
+          secrets: [
+            { name: "github-app", keys: ["app-id", "private-key"] },
+            { name: "registry-push", keys: ["value"] },
+            { name: "registry-registration-token", keys: ["value"] },
+            { name: "agent-backend-gemini-1", keys: ["value"] },
+          ],
+        });
+      }
+      return Promise.resolve({});
+    });
+    render(
+      <PreferencesProvider>
+        <SettingsPage
+          config={{}}
+          section="capabilities"
+          onSection={vi.fn()}
+          showError={vi.fn()}
+        />
+      </PreferencesProvider>,
+    );
+    const card = await screen.findByTestId("deployment-credentials");
+    expect(await within(card).findByText("github-app")).toBeInTheDocument();
+    expect(within(card).getByText("app-id")).toBeInTheDocument();
+    expect(within(card).getByText("private-key")).toBeInTheDocument();
+    expect(within(card).getByText("registry-push")).toBeInTheDocument();
+    expect(
+      within(card).queryByText("registry-registration-token"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(card).queryByText("agent-backend-gemini-1"),
     ).not.toBeInTheDocument();
   });
 
@@ -1081,8 +1230,8 @@ describe("SettingsPage", () => {
       expect(screen.getByLabelText("Sandbox vCPUs")).toBeEnabled();
     });
 
-    it("locks Legacy capabilities' GitHub host and GCP project", async () => {
-      setupLocked("credentials");
+    it("locks Deployment credentials' GitHub host and GCP project", async () => {
+      setupLocked("capabilities");
       expect(await screen.findByLabelText("GitHub host")).toBeDisabled();
       expect(screen.getByLabelText(/GCP project/)).toBeDisabled();
     });

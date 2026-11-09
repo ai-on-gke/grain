@@ -16,6 +16,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import api from "../../api.js";
 import RegistrySection from "./RegistrySection.jsx";
+import { TimeZoneProvider } from "../../TimeZoneContext.jsx";
 
 vi.mock("../../api.js", () => ({
   default: vi.fn(),
@@ -145,5 +146,46 @@ describe("RegistrySection", () => {
     fireEvent.keyDown(selects[0], { key: "ArrowDown" });
     expect(screen.queryByRole("listbox")).toBeNull();
     expect(saveChoice).not.toHaveBeenCalled();
+  });
+
+  // "Last heartbeat" printed a raw ISO UTC timestamp whatever time zone
+  // this browser chose (2026-11-08 settings walkthrough).
+  it("prints the last heartbeat in this browser's chosen time zone", async () => {
+    const hb = "2026-11-05T07:50:00Z";
+    api.mockResolvedValue({
+      enabled: true,
+      state: "connected",
+      lastHeartbeatAt: hb,
+      heartbeatIntervalSeconds: 15,
+      health: "ok",
+      activeTasks: 0,
+      awaitingReplyTasks: 0,
+    });
+    const s = {
+      settings: {
+        registry: {
+          url: "https://registry.grain.example.com",
+          entry: "acme-widgets",
+        },
+      },
+      saveChoice: vi.fn(),
+      onEnterKey: () => {},
+      reloadSettings: vi.fn(),
+      showError: vi.fn(),
+      onSaved: vi.fn(),
+    };
+    render(
+      <TimeZoneProvider zone="Asia/Tokyo">
+        <RegistrySection s={s} />
+      </TimeZoneProvider>,
+    );
+    const inTokyo = new Date(hb).toLocaleString(undefined, {
+      timeZone: "Asia/Tokyo",
+    });
+    await screen.findByText(
+      new RegExp(
+        `Last heartbeat ${inTokyo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
+      ),
+    );
   });
 });

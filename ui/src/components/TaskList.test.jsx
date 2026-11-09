@@ -563,6 +563,28 @@ describe("TaskList", () => {
     ).not.toBeInTheDocument();
   });
 
+  // A task filed against a fork head label is about that fork's pull
+  // request (ui.Task.ExternalPullRequests); its row says which, outlined
+  // as on the task page, and a task with none carries no such chip.
+  it("names the external pull request a task is about on its row", () => {
+    renderList({
+      narrowing: NO_NARROWING,
+      tasks: [
+        { ...tasks[0], externalPullRequests: ["acme/widgets#41"] },
+        tasks[1],
+      ],
+    });
+    const chips = screen.getAllByTestId("task-external-pr-chip");
+    expect(chips).toHaveLength(1);
+    expect(chips[0]).toHaveTextContent("acme/widgets#41");
+    expect(chips[0]).toHaveClass("MuiChip-outlined");
+    expect(chips[0]).toHaveAttribute(
+      "title",
+      expect.stringContaining("acme/widgets#41"),
+    );
+    expect(chips[0].closest("a")).toBeNull();
+  });
+
   it("shows an empty message when nothing matches the filter", () => {
     renderList({ tasks: [] });
     expect(screen.getByText("No tasks in this state.")).toBeInTheDocument();
@@ -977,7 +999,7 @@ describe("TaskList", () => {
         // it is already in gets no slot, because tapping it would
         // promise a move and make none.
         expect(slots().map((b) => b.getAttribute("aria-label"))).toEqual([
-          "Move here, above First",
+          "Move here, above task 1, “First”",
           "Move here, to the end of the list",
         ]);
       });
@@ -989,7 +1011,9 @@ describe("TaskList", () => {
 
         await user.click(screen.getByRole("button", { name: "Move task 3" }));
         await user.click(
-          screen.getByRole("button", { name: "Move here, above Second" }),
+          screen.getByRole("button", {
+            name: "Move here, above task 2, “Second”",
+          }),
         );
 
         expect(onReorder).toHaveBeenCalledWith([3], 1, 2);
@@ -1025,7 +1049,9 @@ describe("TaskList", () => {
         expect(screen.getByText(/Moving 2 tasks/)).toBeInTheDocument();
 
         await user.click(
-          screen.getByRole("button", { name: "Move here, above Second" }),
+          screen.getByRole("button", {
+            name: "Move here, above task 2, “Second”",
+          }),
         );
         expect(onReorder).toHaveBeenCalledWith([1, 3], null, 2);
       });

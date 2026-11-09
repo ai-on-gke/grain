@@ -493,6 +493,28 @@ func TestWritesBesidesDropsTheRepoTheTaskIsFiledAgainst(t *testing.T) {
 	}
 }
 
+func TestReadsBesidesDropsTheRepoTheTaskIsFiledAgainst(t *testing.T) {
+	widgets := RepoRef{Owner: "acme", Name: "widgets"}
+	reads := []RepoRef{
+		{Owner: "ACME", Name: "Widgets"},
+		{Owner: "acme", Name: "gadgets"},
+	}
+	got := ReadsBesides(reads, widgets)
+	if len(got) != 1 || got[0].Name != "gadgets" {
+		t.Fatalf("ReadsBesides = %+v, want only acme/gadgets", got)
+	}
+	// An unbound preview (zero RepoRef) keeps every read intact.
+	if got := ReadsBesides(reads, RepoRef{}); len(got) != 2 {
+		t.Errorf("ReadsBesides(unbound) = %+v, want both entries", got)
+	}
+	if got := ReadsBesides(reads, RepoRef{Owner: "acme", Name: "elsewhere"}); len(got) != 2 {
+		t.Errorf("ReadsBesides(elsewhere) = %+v, want both entries", got)
+	}
+	if got := ReadsBesides([]RepoRef{widgets}, widgets); got != nil {
+		t.Errorf("ReadsBesides(only target) = %+v, want nil", got)
+	}
+}
+
 // ParseRepo's own gate: a paste that is not owner/name is either
 // normalised to it or refused here, because nothing downstream of this
 // function looks at a RepoRef again before building a clone URL out of

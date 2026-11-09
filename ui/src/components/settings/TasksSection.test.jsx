@@ -87,20 +87,17 @@ describe("TasksSection", () => {
     );
   });
 
-  it("offers a build default capability missing from the defaults", async () => {
-    const user = userEvent.setup();
-    const s = section({
-      defaultCapabilities: ["gcp-key"],
-      capabilities: [
-        { id: "gcp-key", name: "GCP key" },
-        { id: "gemini-key", name: "Gemini key", buildDefault: true },
-      ],
-    });
-    render(<TasksSection s={s} config={{}} />);
-    await user.click(screen.getByRole("button", { name: "Add to defaults" }));
-    expect(s.saveChoice).toHaveBeenCalledWith({
-      defaultCapabilities: ["gcp-key", "gemini-key"],
-    });
+  // Core offers no bare in-process capability (ui.OfferedCapabilities is
+  // empty), so the default-legacy-capabilities picker was always an
+  // empty menu and is gone; default grants are GrantsPicker's alone.
+  it("draws no Default legacy capabilities picker", () => {
+    render(<TasksSection s={section({ capabilities: [] })} config={{}} />);
+    expect(
+      screen.queryByRole("combobox", { name: "Default legacy capabilities" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Settings → Legacy capabilities/i),
+    ).not.toBeInTheDocument();
   });
 
   it("lists the deployment's task fields and the tasks a field strands", async () => {
@@ -148,13 +145,9 @@ describe("TasksSection", () => {
         }}
       />,
     );
-    const legacy = document.querySelector(
-      '[data-setting-id="defaultCapabilities"]',
-    );
-    expect(within(legacy).getByText("GCP key")).toBeInTheDocument();
-    expect(legacy).not.toHaveTextContent("api:tasks:read");
-    expect(legacy).not.toHaveTextContent("cloud-key");
-    expect(legacy).toHaveTextContent("Default legacy capabilities");
+    expect(
+      screen.queryByRole("combobox", { name: "Default legacy capabilities" }),
+    ).not.toBeInTheDocument();
 
     const grants = screen.getByTestId("default-grants");
     expect(within(grants).getByLabelText("api:tasks:read")).toBeInTheDocument();

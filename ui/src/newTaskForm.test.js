@@ -123,5 +123,21 @@ describe("resolveNewTaskForm", () => {
       "https://x.example/s#mint",
       "corp-research",
     ]);
+
+    const refCaps = {
+      offered: ["https://grain.dev/capabilities/api#ci:read"],
+      hidden: ["https://grain.dev/capabilities/api#tasks:admin"],
+      display: {
+        "https://grain.dev/capabilities/api#ci:read": { order: 1 },
+      },
+    };
+    expect(pickerAllows(refCaps, "api:ci:read")).toBe(true);
+    expect(pickerAllows(refCaps, "api:tasks:admin")).toBe(false);
+    expect(
+      pickerAllows(
+        caps,
+        'https://grain.dev/capabilities/api#task-reader={"repo":"a/b"}',
+      ),
+    ).toBe(false);
   });
 });

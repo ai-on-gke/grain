@@ -14,11 +14,6 @@
 
 import { expect, test } from "./fixtures.js";
 
-// -legacy-capability registers example-legacy, a made-up provider with
-// nothing to mint, so the director's capability list has a row to tick:
-// every legacy provider core shipped has been retired onto a server method.
-test.use({ demoArgs: ["-legacy-capability"] });
-
 // A standing session's run stays open across messages while its agent
 // waits in the chat tool, and a run keeps the grants it started with
 // (ConsoleSessionPage.jsx, liveRunKey). So a change saved while a run is
@@ -96,7 +91,15 @@ for (const [name, size] of Object.entries(SIZES)) {
     const panel = page.locator("#director-capabilities-content");
     await expect(panel).toContainText("A run is open on this session now");
 
-    await panel.getByRole("checkbox").first().click();
+    // Core offers no bare capability to tick, so the grant saved is an
+    // agent API one, added from GrantsPicker's own menu.
+    await panel
+      .getByTestId("session-director-grants")
+      .getByRole("button", { name: "Add grant…" })
+      .click();
+    const menu = page.getByRole("menu", { name: "Grants to add" });
+    await menu.locator(".api-grant-row").first().click();
+    if (await menu.isVisible()) await page.keyboard.press("Escape");
     const banner = page.locator(".console-session-pending");
     await expect(banner).toBeVisible();
     await expect(banner).toContainText("does not have it");

@@ -1,0 +1,87 @@
+PUT /api/config externalAgentApi -> 200
+signed in to http://127.0.0.1:45899 as context race (external-token)
+script-runs -> 204
+task 6; 20 iterations; each turn lingers 1500ms after its ask
+
+iter  wait-exit  wake-ms   reply     show-line
+1     0          1673      0         reason: awaiting_reply/question [Reply]
+2     0          1704      0         reason: awaiting_reply/question [Reply]
+3     0          1704      0         reason: awaiting_reply/question [Reply]
+4     0          1653      0         reason: awaiting_reply/question [Reply]
+5     0          1664      0         reason: awaiting_reply/question [Reply]
+6     0          1632      0         reason: awaiting_reply/question [Reply]
+7     0          1665      0         reason: awaiting_reply/question [Reply]
+8     0          1650      0         reason: awaiting_reply/question [Reply]
+9     0          1653      0         reason: awaiting_reply/question [Reply]
+10    0          1676      0         reason: awaiting_reply/question [Reply]
+11    0          1668      0         reason: awaiting_reply/question [Reply]
+12    0          1677      0         reason: awaiting_reply/question [Reply]
+13    0          1651      0         reason: awaiting_reply/question [Reply]
+14    0          1634      0         reason: awaiting_reply/question [Reply]
+15    0          1657      0         reason: awaiting_reply/question [Reply]
+16    0          1718      0         reason: awaiting_reply/question [Reply]
+17    0          1652      0         reason: awaiting_reply/question [Reply]
+18    0          1685      0         reason: awaiting_reply/question [Reply]
+19    0          1645      0         reason: awaiting_reply/question [Reply]
+20    0          1643      0         reason: awaiting_reply/question [Reply]
+
+== control: 5 iterations replying the moment the task's *state* reads awaiting_reply
+   (polling grain show, not grain wait) -- does the stored state ever read awaiting_reply while the attempt lingers 1500ms?
+iter  seen-ms   reply     said
+1     1713      0         6 park-settled race
+state:      queued
+reason:     queued/ready (a worker slot (max_workers) and a sandbox) [Run now]
+owner:      console-rest-e2e-operator
+repo
+2     1680      0         6 park-settled race
+state:      queued
+reason:     queued/ready (a worker slot (max_workers) and a sandbox) [Run now]
+owner:      console-rest-e2e-operator
+repo
+3     1694      0         6 park-settled race
+state:      queued
+reason:     queued/ready (a worker slot (max_workers) and a sandbox) [Run now]
+owner:      console-rest-e2e-operator
+repo
+4     1668      0         6 park-settled race
+state:      queued
+reason:     queued/ready (a worker slot (max_workers) and a sandbox) [Run now]
+owner:      console-rest-e2e-operator
+repo
+5     1685      0         6 park-settled race
+state:      queued
+reason:     queued/ready (a worker slot (max_workers) and a sandbox) [Run now]
+owner:      console-rest-e2e-operator
+repo
+   control: 0/5 replies refused while the attempt was still live
+
+== the secret and access sub-cases
+wait (secret) exit=0
+    6 park-settled race
+    state:      awaiting_reply
+    reason:     awaiting_reply/question [Reply]
+    owner:      console-rest-e2e-operator
+    repo:       acme/widgets
+    priority:   5
+    auto-merge: false
+    
+    {"state":"awaiting_reply","derivedState":null,"statusReason":null,"reason":{"reason":"awaiting_reply/question","class":"awaiting a person","control":"Reply"},"awaitingReply":null}
+    plain reply to a secret request -> exit=2 grain: grain server: task 6 is parked on a secret request (race-deploy-key), not a question: set it in the encrypted secret input on /tasks/6 -- grain reply never posts a credential into a conversation (409 Conflict)
+    operator PUT secret (immediately after wake) -> 200
+wait (access) exit=0
+    6 park-settled race
+    state:      awaiting_reply
+    reason:     awaiting_reply/access_request [Grant]
+    owner:      console-rest-e2e-operator
+    repo:       acme/widgets
+    priority:   5
+    auto-merge: false
+    
+    operator grant (immediately after wake) -> 200
+wait (closing comment) exit=0
+    6 park-settled race
+    state:      awaiting_reply
+    reason:     awaiting_reply/answered [Reply]
+    owner:      console-rest-e2e-operator
+
+== grain wait: 20 iterations, 0 x 409 "not parked", 0 failed wait/reply; control (state polling): 0/5 refused

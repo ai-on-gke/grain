@@ -23,10 +23,11 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import App, { POLL_INTERVAL_MS } from "./App.jsx";
+import App, { CONFIG_POLL_TIMEOUT_MS, POLL_INTERVAL_MS } from "./App.jsx";
 import api from "./api.js";
 import { initialTasks, resetAppTestState, setupApi } from "./appTestHarness.js";
 import { runTimers } from "./testClock.js";
+import { formatTime } from "./time.js";
 
 // A pass-through: only the default fetch wrapper is faked, so
 // isUnreachable/unreachableReason -- which App.jsx's poll calls on
@@ -106,6 +107,63 @@ describe("App resilience", () => {
     // grown past POLL_INTERVAL_MS by now, and recovery is only as fast
     // as the next tick it actually lets through.
     await runTimers(POLL_INTERVAL_MS * 10);
+    expect(screen.queryByText(/cannot be reached/i)).toBeNull();
+  });
+
+  // grain/task-3619: a daemon that accepts the connection and then never
+  // answers (stopped, deadlocked, a proxy holding the socket) left the
+  // poll waiting on its first unanswered request forever, so the banner
+  // never came up. The poll's /api/config goes through the real api()
+  // here, over a fetch that never answers, so its own timeout is what
+  // ends the wait.
+  it("says grain is out of reach when it stops answering, and clears when it answers", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { default: realApi } = await vi.importActual("./api.js");
+    setupApi(initialTasks);
+    const base = api.getMockImplementation();
+    let hung = false;
+    const silent = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_path, init) =>
+          new Promise((_resolve, reject) => {
+            silent.push({ init, at: Date.now() });
+            init.signal?.addEventListener("abort", () =>
+              reject(new DOMException("aborted", "AbortError")),
+            );
+          }),
+      ),
+    );
+    api.mockImplementation((p, opts) =>
+      hung && p === "/api/config" ? realApi(p, opts) : base(p, opts),
+    );
+    render(<App />);
+    await runTimers();
+    expect(screen.getByText("Fix bug")).toBeInTheDocument();
+
+    hung = true;
+    // The first unanswered tick, past its timeout: one slow answer is
+    // not an outage.
+    await runTimers(POLL_INTERVAL_MS + CONFIG_POLL_TIMEOUT_MS);
+    expect(silent.length).toBeGreaterThan(0);
+    expect(silent.every(({ init }) => init.signal)).toBe(true);
+    expect(screen.queryByText(/cannot be reached/i)).toBeNull();
+    // The second is.
+    await runTimers(POLL_INTERVAL_MS + CONFIG_POLL_TIMEOUT_MS);
+    expect(
+      screen.getByText(/accepted the connection but sent no answer/i),
+    ).toBeInTheDocument();
+    // "Since" is when the first unanswered request was asked, not when
+    // the wait for it ran out.
+    expect(screen.getByTestId("disconnected-banner")).toHaveTextContent(
+      `since ${formatTime(new Date(silent[0].at))}`,
+    );
+    expect(screen.getByText("Fix bug")).toBeInTheDocument();
+
+    hung = false;
+    await runTimers(POLL_INTERVAL_MS * 12);
     expect(screen.queryByText(/cannot be reached/i)).toBeNull();
   });
 

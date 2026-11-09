@@ -580,6 +580,18 @@ export function MoveHandle({ label, picked, disabled, onToggle, landed }) {
   );
 }
 
+// taskSlotName is what a slot says it sits above when the row under it
+// is a task: its id, the way the handle that picked it up says "Move
+// task 7", and then its title. A title alone was the label once, and two
+// tasks are often called the same thing -- every board request starts
+// out as "Add a board" -- so a column holding two of them offered two
+// slots a screen reader could not tell apart, and an untitled task's
+// slot read "above , in Waiting". PanelBoard's "panel 2, “Inherit”" is
+// the same shape, for the same reason.
+export function taskSlotName(t) {
+  return t.title ? `task ${t.id}, “${t.title}”` : `task ${t.id}`;
+}
+
 // MoveSlot is one place the picked-up rows can go: an element of its own
 // between two rows, because that is where the block would land.
 //

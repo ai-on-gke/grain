@@ -1006,14 +1006,49 @@ jobs:
 
       - name: Install shellcheck and actionlint
         run: |
+          set -euo pipefail
           # Pin ShellCheck to v0.9.0 (matching Debian Bookworm in Granulefile) so
           # newer ShellCheck releases on ubuntu-latest (0.11.0+) do not fail on
-          # unmodified scripts.
-          curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.9.0/shellcheck-v0.9.0.linux.x86_64.tar.xz \
-            | sudo tar -xJ --strip-components=1 -C /usr/local/bin shellcheck-v0.9.0/shellcheck
+          # unmodified scripts. Fall back to the digest-pinned upstream container
+          # image when GitHub Releases downloads return HTTP 504.
+          if curl -4 -fsSL --max-time 60 --retry 2 --retry-max-time 45 --retry-connrefused --retry-all-errors \
+            https://github.com/koalaman/shellcheck/releases/download/v0.9.0/shellcheck-v0.9.0.linux.x86_64.tar.xz \
+            -o /tmp/shellcheck.tar.xz; then
+            sudo tar -xJf /tmp/shellcheck.tar.xz --strip-components=1 -C /usr/local/bin shellcheck-v0.9.0/shellcheck
+            rm -f /tmp/shellcheck.tar.xz
+          else
+            rm -f /tmp/shellcheck.tar.xz
+            sc_image="docker.io/koalaman/shellcheck:v0.9.0@sha256:f35e8987b02760d4e76fc99a68ad5c42cc10bb32f3dd2143a3cf92f1e5446a45"
+            docker pull "$sc_image"
+            cid="$(docker create "$sc_image")"
+            docker cp "$cid:/bin/shellcheck" /tmp/shellcheck
+            docker rm "$cid" >/dev/null
+            echo "7087178d54de6652b404c306233264463cb9e7a9afeb259bb663cc4dbfd64149  /tmp/shellcheck" | sha256sum -c -
+            sudo install -m 0755 /tmp/shellcheck /usr/local/bin/shellcheck
+            rm -f /tmp/shellcheck
+          fi
           if ! command -v actionlint >/dev/null 2>&1; then
-            curl -fsSL https://github.com/rhysd/actionlint/releases/download/v1.7.4/actionlint_1.7.4_linux_amd64.tar.gz \
-              | sudo tar -xz -C /usr/local/bin actionlint
+            if curl -4 -fsSL --max-time 60 --retry 2 --retry-max-time 45 --retry-connrefused --retry-all-errors \
+              https://github.com/rhysd/actionlint/releases/download/v1.7.4/actionlint_1.7.4_linux_amd64.tar.gz \
+              -o /tmp/actionlint.tar.gz; then
+              sudo tar -xzf /tmp/actionlint.tar.gz -C /usr/local/bin actionlint
+              rm -f /tmp/actionlint.tar.gz
+            elif command -v go >/dev/null 2>&1; then
+              rm -f /tmp/actionlint.tar.gz
+              GOBIN=/tmp/actionlint-bin go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.4
+              sudo install -m 0755 /tmp/actionlint-bin/actionlint /usr/local/bin/actionlint
+              rm -rf /tmp/actionlint-bin
+            else
+              rm -f /tmp/actionlint.tar.gz
+              al_image="docker.io/rhysd/actionlint:1.7.4@sha256:82244e1db1c60d82c7792180a48dd0bcb838370bb589d53ff132503fc9485868"
+              docker pull "$al_image"
+              cid="$(docker create "$al_image")"
+              docker cp "$cid:/usr/local/bin/actionlint" /tmp/actionlint
+              docker rm "$cid" >/dev/null
+              echo "ccecc05e701f9f6453b412f074a6ebd99e0556845068c55a226ce5a93acbde86  /tmp/actionlint" | sha256sum -c -
+              sudo install -m 0755 /tmp/actionlint /usr/local/bin/actionlint
+              rm -f /tmp/actionlint
+            fi
           fi
           /usr/local/bin/shellcheck --version
           actionlint -version

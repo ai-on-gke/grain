@@ -1053,7 +1053,7 @@ func (s *Server) handleCreateEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !caller.CanCreate && !caller.IsAdmin {
-		writeJSONError(w, http.StatusForbidden, "forbidden", "caller is not permitted to create registry entries")
+		writeJSONError(w, http.StatusForbidden, "forbidden", "caller is not permitted to create hub entries")
 		return
 	}
 	if s.store == nil {
@@ -1200,7 +1200,17 @@ func (s *Server) handleGetEntry(w http.ResponseWriter, r *http.Request) {
 	isPendingOwner := entry.PendingOwner != "" && strings.EqualFold(entry.PendingOwner, caller.Email)
 
 	if !isManager && !isPendingOwner {
-		if !entry.Listed || entry.LifecycleState == api.StateDeleted || entry.DeletedAt != nil {
+		// Somebody else's deleted entry is gone as far as this caller is
+		// concerned: answer 404 rather than 403, so `grain registry register`
+		// goes on to claim a name whose reservation has lapsed or been
+		// released instead of stopping at "permission to view", and so the
+		// tombstone's existence is not disclosed (GET /api/names reports
+		// reservations).
+		if entry.LifecycleState == api.StateDeleted || entry.DeletedAt != nil {
+			writeJSONError(w, http.StatusNotFound, "not_found", fmt.Sprintf("entry %q not found", name))
+			return
+		}
+		if !entry.Listed {
 			writeJSONError(w, http.StatusForbidden, "forbidden", "caller does not have permission to view this entry")
 			return
 		}
@@ -1580,6 +1590,14 @@ func (s *Server) handleReplaceEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Shapes, boot disks and VM replacement only mean something for hosted
+	// instances: a connected entry's grain runs on its owner's machine, and
+	// putting it into "replacing" stops the registry routing to its tunnel.
+	if entry.Kind != api.KindInstance {
+		writeJSONError(w, http.StatusBadRequest, "invalid_entry_kind", "only kind=\"instance\" entries can be resized or replaced")
+		return
+	}
+
 	var req api.ReplaceEntryRequest
 	if r.Body != nil && r.Body != http.NoBody {
 		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req)
@@ -1771,7 +1789,7 @@ func (s *Server) handleOfferTransfer(w http.ResponseWriter, r *http.Request) {
 
 	if req.Force {
 		if !caller.IsAdmin {
-			writeJSONError(w, http.StatusForbidden, "forbidden", "only registry admins may force-transfer entry ownership")
+			writeJSONError(w, http.StatusForbidden, "forbidden", "only hub admins may force-transfer entry ownership")
 			return
 		}
 		if targetOwner == "" {

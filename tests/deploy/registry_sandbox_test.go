@@ -561,10 +561,17 @@ func TestRegistrySandboxHostedProjectWiring(t *testing.T) {
 		`source_ranges = [google_compute_subnetwork.hosted[0].ip_cidr_range]`,
 		`"roles/compute.instanceAdmin.v1"`,
 		`"roles/iam.serviceAccountAdmin"`,
-		`"roles/iam.serviceAccountUser"`,
 	} {
 		if !strings.Contains(hosted, want) {
 			t.Errorf("hosted.tf missing %q", want)
+		}
+	}
+	// The registry grants itself actAs on each instance account it creates
+	// (compute.grant_self_act_as); a project-wide serviceAccountUser would let
+	// it act as any account in the hosted project.
+	for name, body := range map[string]string{"hosted.tf": hosted, "kms.tf": read("kms.tf")} {
+		if strings.Contains(body, `"roles/iam.serviceAccountUser"`) {
+			t.Errorf("%s must not grant the registry roles/iam.serviceAccountUser project-wide", name)
 		}
 	}
 	if strings.Contains(hosted, "source_tags") {
@@ -597,6 +604,52 @@ func TestRegistrySandboxHostedProjectWiring(t *testing.T) {
 	for _, want := range []string{"--hosted-project)", "--hosted-credentials)", "hosted_project_id: $hosted_project_id"} {
 		if !strings.Contains(up, want) {
 			t.Errorf("up.sh missing %q", want)
+		}
+	}
+}
+
+// TestRegistrySandboxInstancePoolConnectionsRequireTLS guards the shared
+// hosted-instance PostgreSQL pool against cleartext connections: the
+// registry's admin connection carries the pool superuser password and every
+// generated role password (ALTER ROLE ... PASSWORD), and hosted VMs send
+// their own password and every query, so none of them may cross the VPC
+// with sslmode=disable, and the pool must serve TLS for them to connect.
+func TestRegistrySandboxInstancePoolConnectionsRequireTLS(t *testing.T) {
+	filesDir := filepath.Join("..", "..", "deploy", "test", "registry-sandbox", "files")
+	read := func(name string) string {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(filesDir, name))
+		if err != nil {
+			t.Fatalf("reading %s: %v", name, err)
+		}
+		return string(data)
+	}
+
+	cleartextRemoteDSN := regexp.MustCompile(`postgres://[^"'\s]*@([^:/"'\s]+)[^"'\s]*sslmode=disable`)
+	for _, name := range []string{"startup.sh", "hosted-vm-startup.sh", "sql-startup.sh"} {
+		for i, line := range strings.Split(read(name), "\n") {
+			m := cleartextRemoteDSN.FindStringSubmatch(line)
+			if m == nil || m[1] == "127.0.0.1" || m[1] == "localhost" {
+				continue
+			}
+			t.Errorf("files/%s:%d connects to %s with sslmode=disable; use sslmode=require: %s", name, i+1, m[1], strings.TrimSpace(line))
+		}
+	}
+
+	if startup := read("startup.sh"); !regexp.MustCompile(`admin_dsn_template: "postgres://[^"]*\?sslmode=require"`).MatchString(startup) {
+		t.Errorf("files/startup.sh admin_dsn_template must use sslmode=require")
+	}
+	hosted := read("hosted-vm-startup.sh")
+	if !strings.Contains(hosted, "?sslmode=require") {
+		t.Errorf("files/hosted-vm-startup.sh GRAIN_DB_DSN must use sslmode=require")
+	}
+	if strings.Contains(hosted, ".GRAIN_DB_PASSWORD //") {
+		t.Errorf("files/hosted-vm-startup.sh must not read the database password from grain-config metadata")
+	}
+	sqlStartup := read("sql-startup.sh")
+	for _, want := range []string{"-c ssl=on", "-c ssl_cert_file=", "-c ssl_key_file="} {
+		if !strings.Contains(sqlStartup, want) {
+			t.Errorf("files/sql-startup.sh must start postgres with %q", want)
 		}
 	}
 }

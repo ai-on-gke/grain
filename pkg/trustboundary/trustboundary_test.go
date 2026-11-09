@@ -117,7 +117,7 @@ func TestClassifyWhatTheRepoWideReviewFoundOutsideV1(t *testing.T) {
 
 func TestClassifyLeavesOrdinaryPathsAlone(t *testing.T) {
 	for _, p := range []string{
-		"pkg/ui/client.go", "pkg/ui/tasks.go", "README.md", "scripts/build-cli.sh",
+		"pkg/ui/client.go", "pkg/ui/tasks.go", "README.md",
 		"docs/deploy.md", "pkg/orchestratorx/a.go", "web/src/App.tsx",
 		"pkg/cifault/fault.go", "tests/e2e/x_test.go", "pkg/ui/auth_test_helpers.txt",
 	} {
@@ -259,6 +259,10 @@ var knownBoundaryFiles = []string{
 	"pkg/registry/store/delegation.go", "pkg/registry/delegation_admin.go", "pkg/registry/server.go",
 	"pkg/model/human_review_hold.go", "pkg/ui/human_review.go",
 	"pkg/model/director_floor.go", "pkg/ui/on_behalf_of.go",
+	"scripts/build-cli.sh",
+	"pkg/model/canonical_grant.go", "pkg/model/auto_submit.go",
+	"pkg/ui/cli_install.sh", "pkg/ui/cli_install.go",
+	"scripts/buildvcs.sh", "scripts/configure-dockerhub-auth.sh", "scripts/release-image-repos.sh",
 }
 
 // Entries ending in "/" are directories: every .go file under them, as it
@@ -412,6 +416,39 @@ func TestNewAuthorizationFilesAreClassified(t *testing.T) {
 	}
 }
 
+// v26: the workstation CLI installer, served unauthenticated and piped into
+// sh like its hostd counterpart, and the helpers the release builds and
+// workflows run or source. v25 classified none of them, so a change to any
+// merged itself.
+func TestCLIInstallerAndReleaseHelpersAreClassified(t *testing.T) {
+	if Version != "trust-boundary/v26" {
+		t.Errorf("Version = %q, want trust-boundary/v26", Version)
+	}
+	for p, want := range map[string]string{
+		"pkg/ui/cli_install.sh":               "setup-scripts",
+		"pkg/ui/cli_install.go":               "setup-scripts",
+		"scripts/buildvcs.sh":                 "release-machinery",
+		"scripts/configure-dockerhub-auth.sh": "release-machinery",
+		"scripts/release-image-repos.sh":      "release-machinery",
+	} {
+		got := categoryIDs(Classify([]string{p}))
+		if !reflect.DeepEqual(got, []string{want}) {
+			t.Errorf("Classify(%q) = %v, want [%s]", p, got, want)
+		}
+	}
+	defined := funcFiles(t, "pkg/ui")
+	for _, name := range []string{"cliInstallRoute", "renderCLIInstallScript"} {
+		file, ok := defined[name]
+		if !ok {
+			t.Errorf("pkg/ui: no func or method %s -- update this test to where it went", name)
+			continue
+		}
+		if Classify([]string{file}) == nil {
+			t.Errorf("%s is defined in %s, which Classify leaves unclassified", name, file)
+		}
+	}
+}
+
 // funcFiles maps each func and method name declared in dir's non-test Go
 // files (dir relative to the repository root) to the repository path of
 // the file declaring it.
@@ -479,8 +516,11 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 		".grain/workflows/promote.yml", ".github/workflows/promote.yml",
 		".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",
 		// v21: the release-asset publisher and the workflow that runs it
-		// on the train's tag pushes.
-		"scripts/release-assets.sh", ".github/workflows/release-train-assets.yml",
+		// on the train's tag pushes; v24: the CLI archive builder whose
+		// output they publish on every release.
+		"scripts/release-assets.sh", "scripts/build-cli.sh", ".github/workflows/release-train-assets.yml",
+		// v26: the helpers the release builds and workflows run or source.
+		"scripts/buildvcs.sh", "scripts/configure-dockerhub-auth.sh", "scripts/release-image-repos.sh",
 	}
 	for _, p := range reviewed {
 		got := Classify([]string{p})
@@ -512,8 +552,8 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 // reach, the approval-callback tokens and the daemon's UI listeners. v16
 // classified none of them, so a change to any merged itself.
 func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v23" {
-		t.Errorf("Version = %q, want trust-boundary/v23", Version)
+	if Version != "trust-boundary/v26" {
+		t.Errorf("Version = %q, want trust-boundary/v26", Version)
 	}
 	for _, p := range []string{
 		"pkg/ui/access_roles.go",
@@ -562,8 +602,8 @@ func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
 // reference/policy, catalogue and template-grant admission files in
 // pkg/model/ classify under capabilities-secrets.
 func TestPlaybooksAndCapabilityAdmissionFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v23" {
-		t.Errorf("Version = %q, want trust-boundary/v23", Version)
+	if Version != "trust-boundary/v26" {
+		t.Errorf("Version = %q, want trust-boundary/v26", Version)
 	}
 	for _, p := range []string{
 		"pkg/playbooks/playbooks.go",
@@ -598,8 +638,8 @@ func TestPlaybooksAndCapabilityAdmissionFilesAreClassified(t *testing.T) {
 // bearer token model and lifecycle handlers classify under auth-routes, while
 // the provenance-only X-Grain-Client / FiledVia helpers stay unclassified.
 func TestOwnerTrustAndExternalAgentTokenFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v23" {
-		t.Errorf("Version = %q, want trust-boundary/v23", Version)
+	if Version != "trust-boundary/v26" {
+		t.Errorf("Version = %q, want trust-boundary/v26", Version)
 	}
 	for _, p := range []string{
 		"pkg/model/owner_trust.go",
@@ -659,8 +699,8 @@ func TestOwnerTrustAndExternalAgentTokenFilesAreClassified(t *testing.T) {
 // (credential-proxy). v21 classified none of them, so a change to any merged
 // itself.
 func TestRegistryFrontDoorIsClassified(t *testing.T) {
-	if Version != "trust-boundary/v23" {
-		t.Errorf("Version = %q, want trust-boundary/v23", Version)
+	if Version != "trust-boundary/v26" {
+		t.Errorf("Version = %q, want trust-boundary/v26", Version)
 	}
 	for p, want := range map[string]string{
 		"pkg/webauth/iap.go":                "auth-routes",
@@ -692,8 +732,8 @@ func TestRegistryFrontDoorIsClassified(t *testing.T) {
 // left out -- the human-review hold an agent may raise but never release,
 // the director's Tier 3 floor, and agent on-behalf-of attribution.
 func TestWebauthAndRegistryIdentityFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v23" {
-		t.Errorf("Version = %q, want trust-boundary/v23", Version)
+	if Version != "trust-boundary/v26" {
+		t.Errorf("Version = %q, want trust-boundary/v26", Version)
 	}
 	for p, want := range map[string]string{
 		"pkg/webauth/iap.go":               "auth-routes",
@@ -738,6 +778,40 @@ func TestWebauthAndRegistryIdentityFilesAreClassified(t *testing.T) {
 			if got := categoryIDs(Classify([]string{file})); !reflect.DeepEqual(got, []string{"auth-routes"}) {
 				t.Errorf("%s is defined in %s, Classify = %v, want [auth-routes]", name, file, got)
 			}
+		}
+	}
+}
+
+// v25 (task 3644, finding 1 of the 2026-11-08 second security review of
+// main, task 3584): pkg/model/canonical_grant.go, which every grant
+// predicate reads through since #927, matched nothing, so a pull request
+// touching only it merged with no security review. auto_submit.go
+// (EscalatedCapabilities) is the same shape.
+func TestCanonicalGrantIsClassified(t *testing.T) {
+	if Version != "trust-boundary/v26" {
+		t.Errorf("Version = %q, want trust-boundary/v26", Version)
+	}
+	for _, p := range []string{"pkg/model/canonical_grant.go", "pkg/model/auto_submit.go"} {
+		matches := Classify([]string{p})
+		if len(matches) != 1 || matches[0].Category.ID != "capabilities-secrets" {
+			t.Errorf("Classify(%q) = %v, want exactly one match in capabilities-secrets", p, categoryIDs(matches))
+		}
+	}
+
+	// The predicates by name, so a move out of these files fails here
+	// rather than at the next audit.
+	defined := funcFiles(t, "pkg/model")
+	for _, name := range []string{
+		"CanonicalGrant", "CanonicalGrantKey", "LegacyGrantString", "StoredGrantSpelling",
+		"SplitRequestGrants", "EscalatedCapabilities",
+	} {
+		file, ok := defined[name]
+		if !ok {
+			t.Errorf("pkg/model: no func or method %s -- update this test to where it went", name)
+			continue
+		}
+		if got := categoryIDs(Classify([]string{file})); !reflect.DeepEqual(got, []string{"capabilities-secrets"}) {
+			t.Errorf("%s is defined in %s, Classify = %v, want [capabilities-secrets]", name, file, got)
 		}
 	}
 }

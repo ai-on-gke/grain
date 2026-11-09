@@ -260,8 +260,8 @@ describe("CapabilityServersPanel", () => {
       expect.stringContaining("docs/capability-servers-ui.md"),
     );
     expect(
-      within(intro).getByRole("link", { name: "Legacy capabilities" }),
-    ).toHaveAttribute("href", "/settings/credentials");
+      within(intro).getByRole("link", { name: "Deployment credentials" }),
+    ).toHaveAttribute("href", "/settings/capabilities#credentials");
     const glossary = screen.getByTestId("capability-glossary");
     for (const term of [
       "built-in",

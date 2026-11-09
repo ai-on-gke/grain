@@ -860,7 +860,7 @@ export function SandboxOvercommitStatus({ budget, overcommit, sx }) {
           )}
           {" · "}OOM kills: {oomKills}
           {oomKills > 0 && oc?.lastOomAt
-            ? ` (last ${new Date(oc.lastOomAt).toLocaleString()})`
+            ? ` (last ${formatDateTime(oc.lastOomAt, zone)})`
             : ""}
         </Typography>
       </Box>
@@ -1089,6 +1089,7 @@ const STANDING_SANDBOXES_DOC =
 // what they are and points to the director chat and
 // tables/standing_sandbox.json.
 function StandingSandboxesPanel({ standing, onOpenSession }) {
+  const zone = useTimeZone();
   const list = Array.isArray(standing) ? standing : [];
   const directorHref = buildPath({ view: "session", sessionId: "director" });
   return (
@@ -1205,12 +1206,12 @@ function StandingSandboxesPanel({ standing, onOpenSession }) {
                         {s.failures > 1
                           ? `${s.failures} failed launches in a row; `
                           : ""}
-                        next attempt {new Date(s.nextAttempt).toLocaleString()}
+                        next attempt {formatDateTime(s.nextAttempt, zone)}
                       </Typography>
                     )}
                   </TableCell>
                   <TableCell sx={{ whiteSpace: "nowrap" }}>
-                    {s.startedAt ? new Date(s.startedAt).toLocaleString() : "—"}
+                    {s.startedAt ? formatDateTime(s.startedAt, zone) : "—"}
                   </TableCell>
                   <TableCell>{s.restarts}</TableCell>
                 </TableRow>
@@ -1458,12 +1459,13 @@ function BaseBranchPublishingAlerts({ publishing }) {
 // host, with the command that fixes it. An error rather than
 // a warning: nothing is dispatched successfully until somebody acts.
 function HostCredentialsAlert({ warning }) {
+  const zone = useTimeZone();
   if (!warning) return null;
   return (
     <Alert severity="error" sx={{ mb: "1rem" }}>
       {warning.detail}
       {warning.runs > 1 &&
-        ` — ${warning.runs} runs have failed this way since ${new Date(warning.since).toLocaleString()}.`}{" "}
+        ` — ${warning.runs} runs have failed this way since ${formatDateTime(warning.since, zone)}.`}{" "}
       Tasks it stopped are parked; reply on each once that has been run.
     </Alert>
   );
@@ -1567,6 +1569,7 @@ export default function SandboxHealthPage({
   standalone = false,
   onOpenSession,
 }) {
+  const zone = useTimeZone();
   const [data, setData] = useState(null);
   // The live table's rows for standing sandboxes, by the sandbox each
   // runs as (StandingSandboxStatus.Sandbox).
@@ -1699,7 +1702,7 @@ export default function SandboxHealthPage({
           sx={{ whiteSpace: "nowrap" }}
           title={
             s.startedAt
-              ? `Started ${new Date(s.startedAt).toLocaleString()}`
+              ? `Started ${formatDateTime(s.startedAt, zone)}`
               : undefined
           }
         >

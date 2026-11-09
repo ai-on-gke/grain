@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
   Box,
@@ -31,6 +31,8 @@ import {
 import api from "../../api.js";
 import CopyButton from "../CopyButton.jsx";
 import SettingsCard from "./SettingsCard.jsx";
+import { formatDateTime } from "../../time.js";
+import { useTimeZone } from "../../TimeZoneContext.jsx";
 
 // formatLabels is a host's labels as the label field takes them:
 // "k=v,k2=v2", sorted.
@@ -61,6 +63,21 @@ export function parsePrincipals(text) {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+// parseNonNegativeInt reads a whole number >= 0, returning emptyVal when
+// blank or throwing saying what is wrong with it.
+export function parseNonNegativeInt(text, label, emptyVal = undefined) {
+  const s = String(text ?? "").trim();
+  if (!s) return emptyVal;
+  if (!/^\d+$/.test(s)) {
+    throw new Error(`${label} "${s}" must be a non-negative whole number`);
+  }
+  const n = Number(s);
+  if (!Number.isSafeInteger(n)) {
+    throw new Error(`${label} "${s}" is out of range`);
+  }
+  return n;
 }
 
 // installCommand is the legacy per-host token installer line from this
@@ -187,12 +204,28 @@ export function deletedLines(deleted) {
 // HostdsSection is Settings → Hosts: shared --join enrollment codes ("Invite
 // hosts"), pending join requests ("Pending"), the host registry
 // ("Hosts"), and legacy per-host token registration.
-export default function HostdsSection({ showError }) {
+export default function HostdsSection({ showError, dismissError }) {
+  const zone = useTimeZone();
   const [hostds, setHostds] = useState(null);
   const [codes, setCodes] = useState([]);
   const [selectedCodeName, setSelectedCodeName] = useState("");
   const [pending, setPending] = useState([]);
   const [ownerAccess, setOwnerAccess] = useState(true);
+
+  const raisedRef = useRef(null);
+  const raise = useCallback(
+    (err) => {
+      const message = err?.message || String(err);
+      raisedRef.current = String(message);
+      showError?.(err);
+    },
+    [showError],
+  );
+  const settle = useCallback(() => {
+    if (raisedRef.current === null) return;
+    dismissError?.(raisedRef.current);
+    raisedRef.current = null;
+  }, [dismissError]);
 
   // New enrollment code form state.
   const [showNewCode, setShowNewCode] = useState(false);
@@ -261,9 +294,10 @@ export default function HostdsSection({ showError }) {
     setBusy(true);
     try {
       await fn();
+      settle();
       await load();
     } catch (err) {
-      showError?.(err);
+      raise(err);
     } finally {
       setBusy(false);
     }
@@ -284,10 +318,15 @@ export default function HostdsSection({ showError }) {
         default_labels: parseLabels(codeLabels),
         allowed_principals: parsePrincipals(codePrincipals),
       };
+      const maxUses = parseNonNegativeInt(codeMaxUses, "max uses");
+      const defaultCapacity = parseNonNegativeInt(
+        codeCapacity,
+        "default capacity",
+      );
       if (codeExpiresIn.trim()) body.expires_in = codeExpiresIn.trim();
-      if (codeMaxUses.trim()) body.max_uses = Number(codeMaxUses.trim());
-      if (codeCapacity.trim())
-        body.default_capacity = Number(codeCapacity.trim());
+      if (maxUses !== undefined) body.max_uses = maxUses;
+      if (defaultCapacity !== undefined)
+        body.default_capacity = defaultCapacity;
       const created = await api("/api/hostds/enrollment-codes", {
         method: "POST",
         body: JSON.stringify(body),
@@ -336,10 +375,8 @@ export default function HostdsSection({ showError }) {
       const body = {
         name: d.name.trim(),
         labels: parseLabels(d.labels),
+        capacity: parseNonNegativeInt(d.capacity, "host capacity", 0),
       };
-      if (String(d.capacity).trim() !== "") {
-        body.capacity = Number(String(d.capacity).trim());
-      }
       await api(`/api/hostds/pending/${encodeURIComponent(p.id)}/accept`, {
         method: "POST",
         body: JSON.stringify(body),
@@ -386,9 +423,10 @@ export default function HostdsSection({ showError }) {
       const install = await api(
         `/api/hostds/${encodeURIComponent(h.name)}/install`,
       );
+      settle();
       setShown({ name: h.name, install });
     } catch (err) {
-      showError?.(err);
+      raise(err);
     }
   };
 
@@ -454,11 +492,8 @@ export default function HostdsSection({ showError }) {
         owner: editing.owner.trim(),
         labels: parseLabels(editing.labels),
       };
-      if (
-        editing.capacity !== undefined &&
-        String(editing.capacity).trim() !== ""
-      ) {
-        body.capacity = Number(String(editing.capacity).trim());
+      if (editing.capacity !== undefined) {
+        body.capacity = parseNonNegativeInt(editing.capacity, "capacity", 0);
       }
       await api(`/api/hostds/${encodeURIComponent(editing.name)}`, {
         method: "PATCH",
@@ -525,7 +560,10 @@ export default function HostdsSection({ showError }) {
                   ))}
                   <Button
                     size="small"
-                    onClick={() => setShowNewCode((v) => !v)}
+                    onClick={() => {
+                      if (showNewCode) settle();
+                      setShowNewCode((v) => !v);
+                    }}
                   >
                     {showNewCode ? "Cancel new code" : "New code"}
                   </Button>
@@ -535,7 +573,10 @@ export default function HostdsSection({ showError }) {
                   <Button
                     size="small"
                     variant="outlined"
-                    onClick={() => setShowNewCode((v) => !v)}
+                    onClick={() => {
+                      if (showNewCode) settle();
+                      setShowNewCode((v) => !v);
+                    }}
                   >
                     {showNewCode ? "Cancel new code" : "New enrollment code"}
                   </Button>
@@ -999,7 +1040,10 @@ export default function HostdsSection({ showError }) {
                           </Button>
                           <Button
                             size="small"
-                            onClick={() => setRenaming(null)}
+                            onClick={() => {
+                              settle();
+                              setRenaming(null);
+                            }}
                           >
                             Cancel
                           </Button>
@@ -1087,11 +1131,7 @@ export default function HostdsSection({ showError }) {
                       <Box>{connectionText(h)}</Box>
                       {h.last_seen_at ? (
                         <Typography variant="caption" color="text.secondary">
-                          Last check-in{" "}
-                          {new Date(h.last_seen_at)
-                            .toISOString()
-                            .replace("T", " ")
-                            .slice(0, 16)}
+                          Last check-in {formatDateTime(h.last_seen_at, zone)}
                         </Typography>
                       ) : null}
                     </TableCell>
@@ -1132,7 +1172,13 @@ export default function HostdsSection({ showError }) {
                           <Button size="small" disabled={busy} onClick={save}>
                             Save
                           </Button>
-                          <Button size="small" onClick={() => setEditing(null)}>
+                          <Button
+                            size="small"
+                            onClick={() => {
+                              settle();
+                              setEditing(null);
+                            }}
+                          >
                             Cancel
                           </Button>
                         </>

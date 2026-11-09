@@ -216,6 +216,30 @@ describe("ProcessesList", () => {
     );
   });
 
+  // The server sends system: true on a workflow schedule, since it fires
+  // a system:workflow-review:* template (pkg/ui/schedules.go), so the
+  // row drew the lock and its "can be paused" tooltip on a schedule the
+  // repository declares and nobody can pause from here (2026-11-08
+  // walkthrough, task 3614).
+  it("does not mark a declared workflow schedule as one of grain's own", () => {
+    render(
+      <Harness
+        schedules={schedules.map((s) =>
+          s.workflowReview ? { ...s, system: true } : s,
+        )}
+      />,
+    );
+    const workflow = rowsOf("workflow")[0];
+    expect(within(workflow).queryByText("🔒 System")).toBeNull();
+    expect(workflow.querySelector(".declared-chip")).toHaveTextContent(
+      "Declared by acme/widgets",
+    );
+    const system = [...rowsOf("schedule")].find((r) =>
+      r.textContent.includes("Upgrade check"),
+    );
+    expect(within(system).getByText("🔒 System")).toBeTruthy();
+  });
+
   it("asks for the kind on New, and offers only what has a form", async () => {
     const user = userEvent.setup();
     render(<Harness />);
@@ -279,6 +303,53 @@ describe("ProcessesList", () => {
     expect(await screen.findByRole("dialog")).toHaveTextContent(
       "You can change how often it runs",
     );
+  });
+
+  // A declared schedule can carry capabilities beside its template
+  // (docs/declarations.md). Its preview used to leave them out of the
+  // draft it posted, so "What this schedule files" showed the template's
+  // grants alone, under a note calling a file nobody can edit here
+  // "as edited above, not as saved" (2026-11-08 walkthrough, task 3614).
+  it("previews a declared schedule with its own capabilities, as declared", async () => {
+    const user = userEvent.setup();
+    const declared = {
+      id: "repo:schedule:acme:widgets:bump",
+      title: "Declared bump",
+      repo: "acme/widgets",
+      base: "main",
+      recurrence: { kind: "daily", timeOfDay: "04:30" },
+      templateId: "template-1",
+      templateName: "Bump",
+      capabilities: ["api:ci-read@acme/widgets"],
+      enabled: true,
+      nextRunAt: "2030-10-22T04:30:00Z",
+      declaredIn: { repo: "acme/widgets", path: ".grain/schedules/bump.yml" },
+    };
+    api.mockImplementation((path) =>
+      Promise.resolve(
+        path === "/api/schedules/composition"
+          ? {
+              kind: "task",
+              tasks: [{ title: "Bump deps", fields: [] }],
+            }
+          : {},
+      ),
+    );
+    render(<Harness schedules={[declared]} suites={[]} />);
+    await user.click(screen.getByText("Declared bump"));
+    const pane = await screen.findByRole("dialog");
+    expect(
+      await within(pane).findByText("declared in .grain/schedules/bump.yml"),
+    ).toBeTruthy();
+    expect(pane).not.toHaveTextContent("as edited above, not as saved");
+    const posted = api.mock.calls.filter(
+      ([path, opts]) =>
+        path === "/api/schedules/composition" && opts?.method === "POST",
+    );
+    expect(posted.length).toBeGreaterThan(0);
+    const body = JSON.parse(posted[posted.length - 1][1].body);
+    expect(body.templateId).toBe("template-1");
+    expect(body.capabilities).toEqual(["api:ci-read@acme/widgets"]);
   });
 
   it("opens each kind's own overlay from its row", async () => {
@@ -384,15 +455,19 @@ describe("ProcessesList", () => {
     expect(onRefreshRuns).toHaveBeenCalledTimes(1);
     expect(onRefreshTasks).toHaveBeenCalledTimes(1);
 
-    // 2. Saving a template refreshes both templates and schedules.
+    // 2. Saving a template refreshes templates, schedules, and suites
+    // (whose items carry resolved templateName used by the toolbar filter).
     onRefreshSchedules.mockClear();
+    onRefreshSuites.mockClear();
     await user.click(screen.getByRole("link", { name: "Bump" }));
     await user.click(await screen.findByRole("button", { name: "Save" }));
     expect(onRefreshTemplates).toHaveBeenCalledTimes(1);
     expect(onRefreshSchedules).toHaveBeenCalledTimes(1);
+    expect(onRefreshSuites).toHaveBeenCalledTimes(1);
 
     // 3. Saving a suite refreshes both suites and schedules.
     onRefreshSchedules.mockClear();
+    onRefreshSuites.mockClear();
     await user.click(screen.getByRole("link", { name: "Qualify" }));
     await user.click(await screen.findByRole("button", { name: "Save" }));
     expect(onRefreshSuites).toHaveBeenCalledTimes(1);

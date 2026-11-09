@@ -53,6 +53,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { flushSync } from "react-dom";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App, {
@@ -842,6 +843,40 @@ describe("App", () => {
         screen.queryByRole("button", { name: "Open navigation" }),
       ).toBeNull();
     });
+
+    it("updates data-phone in the same commit as the shell when the viewport crosses the breakpoint", async () => {
+      let phone = false;
+      const listeners = new Set();
+      window.matchMedia = (query) => ({
+        get matches() {
+          return query === PHONE_QUERY && phone;
+        },
+        media: query,
+        addEventListener: (_type, fn) => listeners.add(fn),
+        removeEventListener: (_type, fn) => listeners.delete(fn),
+        addListener: (fn) => listeners.add(fn),
+        removeListener: (fn) => listeners.delete(fn),
+      });
+
+      setupApi();
+      render(<App />);
+      await screen.findByText("Fix bug");
+      expect(document.documentElement.dataset.phone).toBe("false");
+
+      // flushSync commits DOM mutations and useLayoutEffect without
+      // flushing passive useEffect hooks: data-phone must already match
+      // PhoneNav before paint rather than a passive effect later.
+      act(() => {
+        flushSync(() => {
+          phone = true;
+          for (const fn of listeners) fn({ matches: true });
+        });
+        expect(
+          screen.getByRole("button", { name: "Open navigation" }),
+        ).toBeInTheDocument();
+        expect(document.documentElement.dataset.phone).toBe("true");
+      });
+    });
   });
 
   // grain/task-81: a board's folder and its place in that folder are
@@ -1494,6 +1529,97 @@ describe("App", () => {
         kind: "session",
         id: "release-planning",
       });
+    },
+  );
+
+  it(
+    "removes a deleted standing session's sidebar pin so Customize sidebar and later sessions with the same slug do not inherit it",
+    { timeout: 60000 },
+    async () => {
+      localStorage.setItem(
+        "grain.pinned",
+        JSON.stringify([
+          { kind: "view", id: "inbox" },
+          { kind: "session", id: "release-planning" },
+          { kind: "session", id: "ops-triage" },
+        ]),
+      );
+      window.history.pushState({}, "", "/session/release-planning");
+      setupApi();
+      vi.stubGlobal(
+        "confirm",
+        vi.fn(() => true),
+      );
+      const rest = api.getMockImplementation();
+      let sessionsState = [
+        { id: "director", title: "Director", taskId: "session-1" },
+        {
+          id: "release-planning",
+          title: "Release planning",
+          taskId: "session-2",
+        },
+        {
+          id: "ops-triage",
+          title: "Ops triage",
+          taskId: "session-3",
+        },
+      ];
+      api.mockImplementation((path, opts) => {
+        const method = opts?.method || "GET";
+        if (path === "/api/console-sessions" && method === "GET") {
+          return Promise.resolve({ sessions: sessionsState });
+        }
+        const delMatch = path.match(/^\/api\/console-sessions\/([\w-]+)$/);
+        if (delMatch && method === "DELETE") {
+          sessionsState = sessionsState.filter((s) => s.id !== delMatch[1]);
+          return Promise.resolve({ ok: true });
+        }
+        if (path === "/api/tasks/session-2" && method === "GET") {
+          return Promise.resolve({
+            id: "session-2",
+            title: "Release planning",
+            state: "awaiting_reply",
+            interactive: true,
+            consoleSession: "release-planning",
+            comments: [],
+          });
+        }
+        if (path === "/api/tasks/session-1" && method === "GET") {
+          return Promise.resolve({
+            id: "session-1",
+            title: "Director",
+            state: "awaiting_reply",
+            interactive: true,
+            consoleSession: "director",
+            comments: [],
+          });
+        }
+        return rest(path, opts);
+      });
+
+      render(<App />);
+      await screen.findByLabelText("Message");
+      fireEvent.click(screen.getByText("Delete session"));
+
+      await waitFor(() =>
+        expect(window.location.pathname).not.toBe("/session/release-planning"),
+      );
+      expect(JSON.parse(localStorage.getItem("grain.pinned"))).toEqual([
+        { kind: "view", id: "inbox" },
+        { kind: "session", id: "ops-triage" },
+      ]);
+
+      // Deleting from /sessions cleans up that session's pin too.
+      fireEvent.click(screen.getByText("Sessions"));
+      const listDeleteBtn = await screen.findByLabelText(
+        "Delete session Ops triage",
+      );
+      fireEvent.click(listDeleteBtn);
+      await waitFor(() =>
+        expect(JSON.parse(localStorage.getItem("grain.pinned"))).toEqual([
+          { kind: "view", id: "inbox" },
+        ]),
+      );
     },
   );
 

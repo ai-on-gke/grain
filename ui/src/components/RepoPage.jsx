@@ -54,11 +54,10 @@ import GrantsPicker from "./GrantsPicker.jsx";
 import ReadOnlyGrants from "./ReadOnlyGrants.jsx";
 import { ConfigManagedNotice } from "./ConfigRepoLink.jsx";
 import { localGrantHandlers } from "./capabilityMethods.js";
-import { isApiGrant, withoutApiRows } from "../apiGrants.js";
+import { isApiGrant } from "../apiGrants.js";
 import { isCapabilityRef } from "../capabilityArgs.js";
 import { buildPath } from "../paths.js";
 import {
-  LEGACY_CAPABILITIES_HINT,
   NO_CAPABILITIES_HINT,
   STATE_LABELS,
   displayCounts,
@@ -770,15 +769,17 @@ export default function RepoPage({
   });
 
   // The repo's own defaults hold all three kinds a task's capabilities
-  // do: the legacy in-process ids are the checklist's, and the agent
-  // API's grants and capability server methods (with their with:
-  // arguments) are GrantsPicker's, each list saved whole with the
-  // other's entries kept.
+  // do: legacy in-process ids, and the agent API's grants and capability
+  // server methods (with their with: arguments), which GrantsPicker
+  // edits. Core offers no bare in-process capability any more, so a
+  // stored legacy id has no picker of its own and is saved back as it is.
   const capsLegacy = capsSelection.filter(
     (id) => !isCapabilityRef(id) && !isApiGrant(id),
   );
   const capsApi = capsSelection.filter(isApiGrant);
-  const capsRefs = capsSelection.filter(isCapabilityRef);
+  const capsRefs = capsSelection.filter(
+    (id) => isCapabilityRef(id) && !isApiGrant(id),
+  );
   const capsMethods = localGrantHandlers(capsRefs, (refs) => {
     const next = [...capsLegacy, ...capsApi, ...refs];
     setCapsSelection(next);
@@ -802,12 +803,7 @@ export default function RepoPage({
     return saveCICapabilities(next);
   });
 
-  // The rows the default-capabilities picker below is drawn from, held
-  // here so the picker and its own "nothing to pick" line agree about
-  // what it is offering.
-  const capsRows = withoutApiRows(
-    capabilityRows(config?.capabilities, capsLegacy),
-  );
+  // The rows the CI-capabilities picker below is drawn from.
   const allCICapabilities =
     config?.ciCapabilities || config?.capabilities || [];
   const ciCapsRows = capabilityRows(
@@ -2301,107 +2297,6 @@ export default function RepoPage({
               </Typography>
             ) : (
               <Stack spacing={1}>
-                <FormControl fullWidth size="small">
-                  <InputLabel id="repo-capabilities-label">
-                    Default capabilities
-                  </InputLabel>
-                  <Select
-                    labelId="repo-capabilities-label"
-                    disabled={readOnly}
-                    inputProps={{
-                      "aria-describedby": refusedBy(readOnly),
-                    }}
-                    label="Default capabilities"
-                    multiple
-                    value={capsLegacy}
-                    onChange={(e) => {
-                      const picked =
-                        typeof e.target.value === "string"
-                          ? e.target.value.split(",")
-                          : e.target.value;
-                      const next = [...picked, ...capsApi, ...capsRefs];
-                      setCapsSelection(next);
-                      saveCapabilities(next);
-                    }}
-                    renderValue={(chosen) => (
-                      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-                        {chosen.map((id) => (
-                          <GrantChip
-                            key={id}
-                            grant={id}
-                            config={config}
-                            tabIndex={-1}
-                          />
-                        ))}
-                      </Box>
-                    )}
-                  >
-                    {/* The same grantable-only listing Settings' own
-                        default-capabilities picker offers, and for the same
-                        reason: a default no task can be granted by hand
-                        would fail at every filing, and PUT rejects one
-                        anyway. It needs no filter of its own to say that,
-                        unlike Settings' settings.capabilities:
-                        config.capabilities *is* ui.OfferedCapabilities,
-                        which is what "grantable" means, where that one
-                        reports every provider grain ships and flags the
-                        ungrantable ones. A capability the deployment
-                        already defaults is still offered rather than
-                        hidden -- ticking it here is how a repo keeps it if
-                        the deployment-wide entry is later dropped -- and
-                        says so in its own row, so nobody reads a blank box
-                        as "not on here". What is left out is a capability
-                        this deployment has not configured at all, which is
-                        a default that would fail every task filed against
-                        this repo (configuredCapabilities, state.js); one
-                        this repo already names stays, warning and all. An
-                        id this repo stored before the build retired it
-                        gets a row too, purely so it can be unticked
-                        (capabilityRows, state.js). */}
-                    {capsRows.length === 0 && (
-                      <MenuItem disabled>{NO_CAPABILITIES_HINT}</MenuItem>
-                    )}
-                    {capsRows.map((c) => (
-                      <MenuItem key={c.id} value={c.id} title={c.description}>
-                        <Checkbox
-                          checked={capsSelection.includes(c.id)}
-                          size="small"
-                        />
-                        <ListItemText
-                          primary={c.name}
-                          secondary={
-                            c.retired
-                              ? c.description
-                              : /* A default this deployment cannot honour is worth
-                               more warning here than on one task, not less: it
-                               fails every task filed against this repo, and the
-                               person who set it is not the one who sees them
-                               fail. */
-                                capabilityUnavailableHint(c) ||
-                                ((
-                                  caps.deploymentDefaultCapabilities || []
-                                ).includes(c.id)
-                                  ? "already a deployment default -- on here either way"
-                                  : null)
-                          }
-                          secondaryTypographyProps={
-                            capabilityUnavailableHint(c)
-                              ? { color: "warning.main" }
-                              : undefined
-                          }
-                        />
-                      </MenuItem>
-                    ))}
-                  </Select>
-                  <FormHelperText>
-                    Added to this deployment&apos;s own defaults, never
-                    subtracted from them -- a repo can only widen what a task
-                    filed against it starts with. Whoever files one can still
-                    untick any of these on the new-task form, and tasks already
-                    filed keep what they were filed with.{" "}
-                    {LEGACY_CAPABILITIES_HINT}
-                  </FormHelperText>
-                </FormControl>
                 <Box>
                   <Typography variant="body2" sx={{ mb: 0.5 }}>
                     Default grants
@@ -2428,6 +2323,13 @@ export default function RepoPage({
                       policyRepo={repo}
                     />
                   )}
+                  <FormHelperText>
+                    Added to this deployment&apos;s own defaults, never
+                    subtracted from them -- a repo can only widen what a task
+                    filed against it starts with. Whoever files one can still
+                    remove any of these on the new-task form, and tasks already
+                    filed keep what they were filed with.
+                  </FormHelperText>
                 </Box>
                 <Typography variant="body2" color="text.secondary">
                   A task filed against {repo} starts with:{" "}
@@ -2965,7 +2867,21 @@ export default function RepoPage({
             readOnly={readOnly}
             describedBy={refusedBy(readOnly)}
             refreshKey={releaseToggles}
-            onSaved={() => setOwnershipSaves((n) => n + 1)}
+            onSaved={() => {
+              setOwnershipSaves((n) => n + 1);
+              // Who runs this repository's standing work decides whether
+              // its base branch is judged here at all: switching it (or
+              // the Base-branch check item) off is the server's word that
+              // the unjudged-gate warning no longer applies
+              // (pkg/ui/basebranchgate.go, baseCheckSwitchedOff), and on
+              // again that it does. Re-read the shell's gates now, as the
+              // CI Mode and Watch default branch saves do, rather than
+              // leaving the warning, the CI tab's dot and the overview's
+              // CI gate stale until a reload (2026-11-08 walkthrough,
+              // task 3613). ownershipSaves above already re-reads the
+              // release pane, so this skips gateCheck.
+              Promise.resolve(onRefreshGates()).catch(() => {});
+            }}
             showError={showError}
           />
 

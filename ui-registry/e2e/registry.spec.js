@@ -78,7 +78,25 @@ test("serves embedded ui-registry under strict CSP and walks through all views w
     page.getByRole("heading", { name: "Create or Register a Grain Entry" }),
   ).toBeVisible();
 
+  // Hosted VM is the default; the name field is pre-filled with a random
+  // name and directly editable.
+  await expect(
+    page.getByRole("button", { name: /Hosted VM \(instance\)/ }),
+  ).toHaveClass(/reg-mode-card-active/);
   const nameInput = page.getByLabel(/Entry subdomain name/i);
+  await expect(nameInput).toHaveValue(/^grain-[0-9a-f]{6}$/);
+  // The regenerate button sits on the input's row, to its right.
+  const regen = page.getByRole("button", {
+    name: "Generate another random name",
+  });
+  const [ib, rb] = [await nameInput.boundingBox(), await regen.boundingBox()];
+  expect(rb.x).toBeGreaterThanOrEqual(ib.x + ib.width);
+  expect(Math.abs(ib.y + ib.height / 2 - (rb.y + rb.height / 2))).toBeLessThan(
+    2,
+  );
+  await page
+    .getByRole("button", { name: /Self-registered grain \(connected\)/ })
+    .click();
   await nameInput.fill("e2e-workstation");
   await expect(page.getByTestId("name-availability-status")).toHaveText("free");
   await expect(page.getByText(/-registry-entry e2e-workstation/)).toBeVisible();
@@ -97,11 +115,10 @@ test("serves embedded ui-registry under strict CSP and walks through all views w
   await page.getByRole("button", { name: "Rotate token" }).click();
   await expect(page.getByTestId("rotated-token-banner")).toContainText("grc_");
 
-  // 4b. Hosted VM creation with custom boot disk size (/new?kind=instance)
-  await page.goto(`${demo.url}/new?kind=instance`);
+  // 4b. Hosted VM creation (the /new default) with custom boot disk size
+  await page.goto(`${demo.url}/new`);
   const createDiskInput = page.getByLabel(/Boot disk size \(GB\)/i);
   await expect(createDiskInput).toHaveValue("100");
-  await page.getByRole("button", { name: "Choose custom name" }).click();
   await page.getByLabel(/Entry subdomain name/i).fill("e2e-hosted-vm");
   await expect(page.getByTestId("name-availability-status")).toHaveText("free");
   await createDiskInput.fill("250");
@@ -152,7 +169,7 @@ test("serves embedded ui-registry under strict CSP and walks through all views w
   // 6. Admin (/admin) + Delegating Apps controls
   await page.getByRole("button", { name: "Admin" }).click();
   await expect(
-    page.getByRole("heading", { name: "Registry Administration" }),
+    page.getByRole("heading", { name: "Hub Administration" }),
   ).toBeVisible();
   await expect(
     page.getByText("registry-us-central1-a-01").first(),
@@ -188,7 +205,7 @@ test("serves embedded ui-registry under strict CSP and walks through all views w
   // 7. Status (/status)
   await page.getByRole("button", { name: "Status" }).click();
   await expect(
-    page.getByRole("heading", { name: "Registry Service Status" }),
+    page.getByRole("heading", { name: "Hub Service Status" }),
   ).toBeVisible();
   await expect(page.getByText("*.grain.example.com")).toBeVisible();
 
@@ -384,5 +401,65 @@ test("lays out delegation screens without overflow or misalignment at desktop an
 
       await context.close();
     }
+  }
+});
+
+test("brands the hub header and favicon with the grain mark in light and dark", async ({
+  browser,
+}) => {
+  for (const [theme, width] of [
+    ["light", 1440],
+    ["dark", 1440],
+    ["light", 390],
+    ["dark", 390],
+  ]) {
+    const context = await browser.newContext({
+      colorScheme: theme,
+      viewport: { width, height: 844 },
+    });
+    await context.addInitScript(
+      ([k, v]) => localStorage.setItem(k, v),
+      ["grain.themeMode", theme],
+    );
+    const page = await context.newPage();
+    await page.goto(demo.url);
+    await expect(page).toHaveTitle("Grain Hub");
+
+    const brand = page.getByRole("button", { name: "Grain Hub" });
+    await expect(brand).toBeVisible();
+    const mark = brand.locator("img.reg-brand-mark");
+    await expect(mark).toHaveAttribute("src", `/grain-mark-${theme}.svg`);
+    // Loaded, not a broken image: the file is ui/public's, copied in by
+    // vite's publicDir, and served by the embedded static handler.
+    await expect
+      .poll(() => mark.evaluate((img) => img.complete && img.naturalWidth))
+      .toBeGreaterThan(0);
+    const box = await mark.boundingBox();
+    expect(Math.round(box.width)).toBe(28);
+    expect(Math.round(box.height)).toBe(28);
+    // The mark sits beside the name, centred on it, inside the top bar.
+    const label = await brand.getByText("Grain Hub").boundingBox();
+    expect(box.x + box.width).toBeLessThanOrEqual(label.x);
+    expect(
+      Math.abs(box.y + box.height / 2 - (label.y + label.height / 2)),
+    ).toBeLessThanOrEqual(1);
+    const bar = await page.locator(".reg-topbar").boundingBox();
+    expect(box.y).toBeGreaterThanOrEqual(bar.y);
+    expect(box.y + box.height).toBeLessThanOrEqual(bar.y + bar.height);
+    expect(box.x).toBeGreaterThanOrEqual(0);
+
+    await expect(page.locator("link#favicon")).toHaveAttribute(
+      "href",
+      `/grain-mark-${theme}.svg`,
+    );
+    for (const asset of [
+      `/grain-mark-${theme}.svg`,
+      `/grain-mark-${theme}.png`,
+      "/apple-touch-icon.png",
+    ]) {
+      const res = await page.request.get(`${demo.url}${asset}`);
+      expect(res.status(), asset).toBe(200);
+    }
+    await context.close();
   }
 });

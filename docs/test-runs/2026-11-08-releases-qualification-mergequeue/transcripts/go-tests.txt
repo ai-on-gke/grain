@@ -1,0 +1,19 @@
+--- PASS: TestAnActionsRepoThatNeverSetACIModeRaisesReleasePending (0.04s)
+--- PASS: TestClassifyMergeRefusal (0.00s)
+--- PASS: TestAMergeRefusedForAnUnresolvedConversationSendsTheTaskBackWithTheThreads (0.37s)
+--- PASS: TestAnUnresolvedConversationTheRunLeftOpenIsHandedToAPerson (0.28s)
+--- PASS: TestAnUnresolvedConversationSendBackLeavesOutGrainsDraftReview (0.20s)
+--- PASS: TestAnUnresolvedConversationIsNotSentBackBlindWhenCommentsCannotBeRead (0.22s)
+--- PASS: TestTriagePendingHoldCompletesAfterGraceWindowOrInboxClear (0.04s)
+--- PASS: TestWalkthroughUnresolvedConversationLoopSendsBackOnceAndMergesOnResolve (0.36s)
+--- PASS: TestWalkthroughUnresolvedConversationLeftOpenIsHandedOffWithoutLooping (0.48s)
+--- PASS: TestReleaseQualificationRerunsAnInfraVerdict (0.06s)
+--- PASS: TestARedCandidateRaisesRCFailedAndHoldsTheNextUntilItsBlockersLand (0.07s)
+--- PASS: TestTriagePendingHoldCompletesWhenStewardTriagesWithNoBlockerOrCleared (0.08s)
+--- PASS: TestANeutralCandidateRequalifiesOnceTheInfraStallIsAckedOrCleared (0.14s)
+PASS
+ok  	github.com/ai-on-gke/grain/pkg/orchestrator	2.262s
+ok  	github.com/ai-on-gke/grain/pkg/gitproxy	2.039s
+ok  	github.com/ai-on-gke/grain/pkg/sandboxcli	0.088s
+ok  	github.com/ai-on-gke/grain/pkg/mcp	0.359s
+ok  	github.com/ai-on-gke/grain/pkg/forge	0.006s

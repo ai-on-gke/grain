@@ -36,7 +36,7 @@ const PINS = [
   "System → Sandboxes",
   "Settings",
   "Settings → General",
-  "Settings → Legacy capabilities",
+  "Settings → Capabilities",
 ];
 
 async function openPinnedOverlay(page) {
@@ -126,7 +126,7 @@ test.describe("Pinned System and Settings sub-targets", () => {
         "system/sandboxes",
         "settings",
         "settings/general",
-        "settings/credentials",
+        "settings/capabilities",
       ]),
     );
 
@@ -139,10 +139,13 @@ test.describe("Pinned System and Settings sub-targets", () => {
       ["/system/logs", "/system/logs", ["System"]],
       ["/settings", "/settings/models", ["Settings"]],
       ["/settings/general", "/settings/general", ["General"]],
+      ["/settings/capabilities", "/settings/capabilities", ["Capabilities"]],
+      // The retired Legacy capabilities tab's address lands on, and
+      // lights, Capabilities, at the Deployment credentials card it was.
       [
         "/settings/credentials",
-        "/settings/credentials",
-        ["Legacy capabilities"],
+        "/settings/capabilities#credentials",
+        ["Capabilities"],
       ],
     ];
     for (const reload of [false, true]) {
@@ -163,8 +166,8 @@ test.describe("Pinned System and Settings sub-targets", () => {
     await expect(page).toHaveURL(/\/system$/);
     await aside.getByRole("button", { name: /^Sandboxes/ }).click();
     await expect(page).toHaveURL(/\/system\/sandboxes$/);
-    await aside.getByRole("button", { name: /^Legacy capabilities/ }).click();
-    await expect(page).toHaveURL(/\/settings\/credentials$/);
+    await aside.getByRole("button", { name: /^Capabilities/ }).click();
+    await expect(page).toHaveURL(/\/settings\/capabilities$/);
     await aside.getByRole("button", { name: /^General/ }).click();
     await expect(page).toHaveURL(/\/settings\/general$/);
   });
@@ -183,7 +186,7 @@ test.describe("Pinned System and Settings sub-targets", () => {
           { kind: "view", id: "system" },
           { kind: "view", id: "system", tab: "sandboxes" },
           { kind: "view", id: "system", tab: "sandboxes" },
-          { kind: "view", id: "settings", section: "credentials" },
+          { kind: "view", id: "settings", section: "capabilities" },
           { kind: "view", id: "settings", section: 7 },
           { kind: "view", id: "system", tab: "" },
           { kind: "nonsense", id: "system" },
@@ -208,12 +211,12 @@ test.describe("Pinned System and Settings sub-targets", () => {
       await expect
         .poll(() => selected(page))
         .toEqual(["Sandboxes", "Sandboxes"]);
-      await page.goto("/settings/credentials");
-      await expect(page).toHaveURL(/\/settings\/credentials$/);
+      await page.goto("/settings/capabilities");
+      await expect(page).toHaveURL(/\/settings\/capabilities$/);
       if (viewport === PHONE) {
         await page.getByRole("button", { name: "Open navigation" }).click();
       }
-      await expect.poll(() => selected(page)).toEqual(["Legacy capabilities"]);
+      await expect.poll(() => selected(page)).toEqual(["Capabilities"]);
     }
     expect(errors).toEqual([]);
   });
@@ -682,3 +685,83 @@ for (const theme of ["light", "dark"]) {
     });
   });
 }
+
+test.describe("Deleted standing session removes its sidebar pin", () => {
+  test.afterEach(async ({ page }) => {
+    await page.evaluate(async () => {
+      localStorage.removeItem("grain.pinned");
+      await fetch("/api/console-sessions/pinned-ops-audit", {
+        method: "DELETE",
+      }).catch(() => {});
+    });
+  });
+
+  test("deleting a pinned standing session clears its pin from Customize sidebar and prevents same-slug resurrection", async ({
+    page,
+  }) => {
+    await page.setViewportSize(DESKTOP);
+    await page.goto("/session/new");
+
+    await page.getByLabel("Session name").fill("Pinned Ops Audit");
+    await page.getByLabel("Pin to sidebar").click();
+    await expect(page.getByLabel("Pin to sidebar")).toBeChecked();
+    await page.getByRole("button", { name: "Create session" }).click();
+
+    await expect(page).toHaveURL(/\/session\/pinned-ops-audit$/);
+    const pinnedButton = page
+      .locator("aside nav")
+      .first()
+      .getByRole("button", { name: "Pinned Ops Audit" });
+    await expect(pinnedButton).toBeVisible();
+    await expect(pinnedButton).toHaveAttribute("aria-current", "page");
+
+    page.once("dialog", (d) => d.accept());
+    await page.getByRole("button", { name: "Delete session" }).click();
+    await expect(page).not.toHaveURL(/\/session\/pinned-ops-audit$/);
+
+    const storedPins = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem("grain.pinned") || "[]"),
+    );
+    expect(
+      storedPins.filter(
+        (p) => p.kind === "session" && p.id === "pinned-ops-audit",
+      ),
+    ).toEqual([]);
+
+    await page
+      .locator("aside")
+      .getByRole("button", { name: "Customize sidebar" })
+      .click();
+    const dialog = page.getByRole("dialog");
+    await expect(
+      dialog.getByRole("heading", { name: "Customize sidebar" }),
+    ).toBeVisible();
+    await expect(dialog.getByText("pinned-ops-audit")).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+
+    // Creating a new session with the same title and Pin to sidebar unchecked
+    // reuses the slug on the server and must stay unpinned on desktop and phone.
+    await page.goto("/session/new");
+    await page.getByLabel("Session name").fill("Pinned Ops Audit");
+    await expect(page.getByLabel("Pin to sidebar")).not.toBeChecked();
+    await page.getByRole("button", { name: "Create session" }).click();
+
+    await expect(page).toHaveURL(/\/session\/pinned-ops-audit$/);
+    await expect(
+      page
+        .locator("aside nav")
+        .first()
+        .getByRole("button", { name: "Pinned Ops Audit" }),
+    ).toHaveCount(0);
+
+    await page.setViewportSize(PHONE);
+    await page.getByRole("button", { name: "Open navigation" }).click();
+    const drawer = page.getByRole("dialog", { name: "Navigation" });
+    await expect(drawer).toBeVisible();
+    await expect(
+      drawer.getByRole("button", { name: "Pinned Ops Audit" }),
+    ).toHaveCount(0);
+    await page.keyboard.press("Escape");
+  });
+});

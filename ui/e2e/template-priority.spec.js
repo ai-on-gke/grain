@@ -76,7 +76,7 @@ test("a template's task priority is set, previewed, filed and cleared from the f
     const label = dialog.locator("dt", { hasText: /^Task priority$/ });
     await expect(label).toBeVisible();
     const row = label.locator("xpath=..");
-    await expect(row.locator("dd")).toHaveText("8");
+    await expect(row.locator("dd .composition-value")).toHaveText("8");
     await expect(row).toContainText("from the template");
     await dialog.getByRole("button", { name: /create task/i }).click();
     await expect(page).toHaveURL(/\/tasks\/\d+/);

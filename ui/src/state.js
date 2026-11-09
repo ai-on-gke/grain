@@ -1428,8 +1428,7 @@ export const RETIRED_CAPABILITY_HINT =
 // everywhere with a warning under it (capabilityUnavailableHint). That
 // is a row nobody can do anything useful with in the pane they are
 // standing in: ticking it files work that fails to dispatch, and the fix
-// is on Settings > Legacy capabilities either way, which is the one pane that
-// still lists every capability with its own reason for not being ready.
+// is on Settings > Capabilities either way, under Deployment credentials.
 // So a picker hides it instead of explaining it.
 //
 // Already-selected ids survive the filter, for the reason capabilityRows
@@ -1450,20 +1449,10 @@ export function configuredCapabilities(offered, selected) {
   return (offered || []).filter((c) => c.ready !== false || held.has(c.id));
 }
 
-// NO_CAPABILITIES_HINT is what a picker says when configuredCapabilities
-// has left it with nothing at all: a deployment that has configured none
-// of them, which is a perfectly ordinary state for a new one. An empty
-// menu reads as a broken pane, and the pane that is not empty -- the one
-// listing every capability with what it still needs -- is worth naming.
-export const NO_CAPABILITIES_HINT =
-  "None configured -- set one up in Settings > Legacy capabilities";
-
-// LEGACY_CAPABILITIES_HINT sits under every in-process capability
-// checklist: those ids are being converted to capability server methods
-// or api scopes (design/design/unified-grants.design.md), so new access belongs
-// under Grants rather than here.
-export const LEGACY_CAPABILITIES_HINT =
-  "Legacy in-process capabilities, each being converted to a server method or API scope. Add new access under Grants.";
+// NO_CAPABILITIES_HINT is what the repo CI-capabilities picker says when
+// configuredCapabilities has left it with nothing at all. An empty menu reads as a broken pane, so it
+// says where access is granted instead.
+export const NO_CAPABILITIES_HINT = "None offered -- grant access under Grants";
 
 // capabilityRows is the listing any capability picker has to be built
 // from: the rows this build offers and this deployment has configured
@@ -1535,7 +1524,7 @@ export function capabilityUnavailableHint(c) {
   const needs = c.needs || [];
   const gap =
     needs.length > 0 ? ` -- needs ${needs.join(", ")}` : " on this deployment";
-  return `Not ready${gap}. A task holding this will fail to dispatch until that is set (Settings > Legacy capabilities).`;
+  return `Not ready${gap}. A task holding this will fail to dispatch until that is set (Settings > Capabilities).`;
 }
 
 // unionCapabilities composes the two layers of default capabilities the

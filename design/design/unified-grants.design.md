@@ -148,8 +148,9 @@ once with a fidelity test.**
   accepted on task create and edit (`CreateTaskRequest`,
   `UpdateTaskRequest`); a list naming only repository access leaves
   capabilities alone. §2.1.3's method grammar gained `:` for `…/api`.
-  The React grant helpers (`ui/src/apiGrants.js`) still read only the
-  `api:` spelling, which is all this slice ever writes.
+  The React grant helpers (`ui/src/apiGrants.js`) read both spellings as
+  of task 3607 while still writing the `api:` spelling that this slice
+  stores.
 - **Slice 3 (write one).** Writers switch to references. This is the
   first change an older binary cannot read, so it lands in the release
   after slice 2 ships.
@@ -186,6 +187,14 @@ capabilities**. They are converted, not merged as they are.
 This is the per-capability list, with what each one becomes. The
 providers still registered on `main` (`daemon.CapabilityProviders`) are
 the rows not marked **done**:
+
+**Status (task 2876):** every row that minted a credential is done. The
+`capability.RegisterProvider` seam and the Settings → Legacy capabilities
+tab are removed; the tab's GitHub host, GCP settings and secrets are the
+Deployment credentials card on Settings → Capabilities. The bare names
+remain one-release aliases (no promoted release contains every
+conversion yet), and the task forms' empty Legacy capabilities checklist
+is still to be removed.
 
 | In-process id | Becomes (proposed) | Kind of change |
 |---|---|---|

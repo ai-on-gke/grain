@@ -25,7 +25,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
 	"github.com/ai-on-gke/grain/pkg/capability/ciapi"
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
@@ -71,7 +70,6 @@ func CapabilityProviders(cfg Config, _ *model.Store, _ map[string]*modelproxy.En
 	githubsandbox.Configure(githubsandbox.Config{
 		Host: cfg.GithubHost, InsecureHTTP: cfg.GithubInsecureHTTP,
 	})
-	providers = append(providers, admincaps.Providers()...)
 	// bootstrap-playbooks is no longer a provider here: it was retired onto
 	// the config-map server's config-map {"config_maps":["bootstrap"]}
 	// (schema migration 118), which places the same embedded playbooks.
@@ -113,15 +111,6 @@ func CapabilityProviders(cfg Config, _ *model.Store, _ map[string]*modelproxy.En
 	// retired onto the in-process repo server's repo#credential (schema
 	// migration 120).
 	return providers
-}
-
-// missingCapabilityProviderConfig is the deployment configuration that
-// gates a provider above. Keep the diagnosis for an absent provider on
-// this same predicate: if registration gains a prerequisite, a credential
-// check must name the same prerequisite. No provider has one since
-// gemini-key was retired onto the gcp server (schema migration 103).
-func missingCapabilityProviderConfig(Config, string) []string {
-	return nil
 }
 
 // gitHubCredentialLadder loads dataDir's GitHub credential ladder -- the

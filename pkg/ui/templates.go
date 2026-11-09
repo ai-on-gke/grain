@@ -652,11 +652,13 @@ func (c *Client) fromTemplate(ctx context.Context, req CreateTaskRequest) (Creat
 		for _, r := range comp.Reads {
 			req.Reads = append(req.Reads, r.String())
 		}
+		req.readsFromTemplate = len(comp.Reads) > 0
 	}
 	if len(req.Writes) == 0 {
 		for _, w := range comp.Writes {
 			req.Writes = append(req.Writes, WriteTarget{Repo: w.Repo.String(), Base: w.Base})
 		}
+		req.writesFromTemplate = len(comp.Writes) > 0
 	}
 	if len(req.CustomFields) == 0 {
 		req.CustomFields = customFieldValues(comp.CustomFields)

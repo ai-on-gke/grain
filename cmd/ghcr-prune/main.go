@@ -28,7 +28,10 @@
 //	             which is the cache that keeps most commits from booting
 //	             a VM for nine minutes
 //	guest-base   <hash>, one per vendored granule tree: the granule base
-//	             image that guest cache is built on top of
+//	             image that guest cache is built on top of. On Docker Hub
+//	             (sandbox-base) it also carries the same sha-<short>,
+//	             branch, `latest`, v<x>.<y>.<z> and signature names as
+//	             the other packages, and those are read the same way
 //
 // Nothing deleted any of it. This command is what the scheduled
 // prune-packages.yml runs.

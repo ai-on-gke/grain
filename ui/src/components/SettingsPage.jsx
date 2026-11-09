@@ -47,7 +47,6 @@ import TasksSection from "./settings/TasksSection.jsx";
 import RepositoriesSection from "./settings/RepositoriesSection.jsx";
 import GitSection from "./settings/GitSection.jsx";
 import CapabilitiesSection from "./settings/CapabilitiesSection.jsx";
-import CredentialsSection from "./settings/CredentialsSection.jsx";
 import EngineSection from "./settings/EngineSection.jsx";
 import CISection from "./settings/CISection.jsx";
 import SandboxesSection from "./settings/SandboxesSection.jsx";
@@ -117,7 +116,6 @@ const SECTION_WRITE_SCOPE = {
   registry: "settings:write",
   sandboxes: "settings:write",
   caches: "settings:write",
-  credentials: "settings:write",
   "config-repo": "settings:write",
   models: "connections:write",
   git: "connections:write",
@@ -125,6 +123,15 @@ const SECTION_WRITE_SCOPE = {
   memory: "memory:write",
   capabilities: "capabilities:admin",
   hostds: "capabilities:admin",
+};
+
+// SECTION_ROLE_READ_ONLY says what a refused section's note covers,
+// where that is not the whole section: Capabilities' Deployment
+// credentials card follows settings:write and secrets:write instead
+// (CredentialsSection), and says so itself where those are refused.
+const SECTION_ROLE_READ_ONLY = {
+  capabilities:
+    "Capability servers, the capability policy and API scope sets are read-only for you.",
 };
 
 // Sections that read GET /api/settings, and so wait for it.
@@ -135,7 +142,6 @@ const READS_SETTINGS = new Set([
   "agents",
   "tasks",
   "capabilities",
-  "credentials",
   "engine",
   "registry",
   "ci",
@@ -225,13 +231,24 @@ export default function SettingsPage({
     : "";
   const readOnly = external || configManaged || Boolean(roleRefusal);
   s.readOnly = readOnly;
+  // What is read-only for everybody, whatever their role: the
+  // Deployment credentials card follows its own write scopes rather than
+  // Capabilities' capabilities:admin (below), so it reads this instead.
+  s.readOnlyForAnyRole = external || configManaged;
   // configLocked is for the sections that mix bootstrap settings with
-  // config-managed ones (Engine, Sandboxes, Legacy capabilities): the
+  // config-managed ones (Engine, Sandboxes, Capabilities' Deployment credentials): the
   // API refuses a change to the config-managed fields while this is on
   // (settings-mutability.spec.md D-1, D-2), so those fields are drawn
   // read-only one by one and the bootstrap ones beside them stay
   // editable.
   s.configLocked = configRepoOnly;
+  // Capabilities' Deployment credentials card writes through routes of
+  // its own instead of the section's capabilities:admin -- PUT
+  // /api/settings and /api/secrets (pkg/ui/route_scopes.go) -- so it is
+  // gated on what the role refuses there (CredentialsSection), and is
+  // writable to a role holding those scopes without capabilities:admin.
+  s.settingsWriteRefusal = accessDeniedReason(config, "settings:write");
+  s.secretsWriteRefusal = accessDeniedReason(config, "secrets:write");
 
   useEffect(() => {
     if (READS_SETTINGS.has(current) && !settings) reloadSettings();
@@ -299,14 +316,22 @@ export default function SettingsPage({
     return () => observer.disconnect();
   }, [focusTarget, current, settings]);
 
-  const go = (next) => {
-    if (next === current) return true;
-    if (
-      (s.dirtyCards.length > 0 || leavingLosesEdits()) &&
-      !window.confirm(DISCARD_PROMPT)
-    )
-      return false;
-    onSection(next);
+  // go opens section next, asking first when an edit would be lost. A
+  // nextAnchor (a card or field id) rides along as the address's #hash
+  // (GitSection's note opens Capabilities at its Deployment credentials
+  // card; CLI's Sign in opens Agents at External agents) and is scrolled
+  // to once it is drawn.
+  const go = (next, nextAnchor = "") => {
+    if (next !== current) {
+      if (
+        (s.dirtyCards.length > 0 || leavingLosesEdits()) &&
+        !window.confirm(DISCARD_PROMPT)
+      )
+        return false;
+      if (nextAnchor) onSection(next, nextAnchor);
+      else onSection(next);
+    }
+    if (nextAnchor) setFocusTarget(nextAnchor);
     return true;
   };
 
@@ -628,13 +653,13 @@ export default function SettingsPage({
         );
         break;
       case "hostds":
-        body = <HostdsSection {...common} />;
+        body = <HostdsSection {...common} dismissError={dismissError} />;
         break;
       case "audit":
         body = <AuditSection />;
         break;
       case "cli":
-        body = <CLISection s={s} config={config} />;
+        body = <CLISection s={s} config={config} onSection={go} />;
         break;
       case "config-repo":
         body = (
@@ -673,7 +698,7 @@ export default function SettingsPage({
         );
         break;
       case "agents":
-        body = <AgentsSection s={s} />;
+        body = <AgentsSection s={s} onSection={go} />;
         break;
       case "memory":
         body = <MemorySection {...common} s={s} tasks={tasks} />;
@@ -689,19 +714,20 @@ export default function SettingsPage({
         );
         break;
       case "capabilities":
-        body = <CapabilitiesSection {...common} item={item} onItem={onItem} />;
-        break;
-      case "credentials":
         body = (
-          <CredentialsSection
+          <CapabilitiesSection
+            {...common}
             s={s}
+            item={item}
+            onItem={onItem}
+            // Only secrets a live control elsewhere in Settings owns:
+            // CapabilitiesPanel is retired, so secrets reported on
+            // settings.capabilities (github-app, registry-push, cosign-*)
+            // have no per-capability field and stay visible in SecretsPanel.
             claimedSecrets={[
               "registry-registration-token",
               ...(settings?.agentBackends || []).map(
                 (backend) => `agent-backend-${backend.id}`,
-              ),
-              ...(settings?.capabilities || []).flatMap((c) =>
-                (c.secrets || []).map((sec) => sec.secret),
               ),
             ]}
           />
@@ -796,7 +822,7 @@ export default function SettingsPage({
             sx={{ mb: 2 }}
             data-testid="settings-role-read-only"
           >
-            {`Read-only for you. ${roleRefusal} An operator can change your role in Settings → Access.`}
+            {`${SECTION_ROLE_READ_ONLY[current] || "Read-only for you."} ${roleRefusal} An operator can change your role in Settings → Access.`}
           </Alert>
         )}
         <SettingsRoleRefusalContext.Provider value={roleRefusal}>

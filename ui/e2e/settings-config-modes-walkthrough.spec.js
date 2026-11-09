@@ -107,7 +107,6 @@ for (const [name, viewport] of [
 }
 
 for (const [section, label] of [
-  ["tasks", "Default legacy capabilities"],
   ["general", "Upgrade automatically"],
   // Registry drew its locked cards in a bare disabled fieldset, which a
   // MUI Select does not obey (2026-11-07 settings walkthrough).
@@ -143,10 +142,10 @@ test("an unlocked card's select still opens from the keyboard", async ({
 }) => {
   await page.setViewportSize(DESKTOP);
   await withConfig(page, { configRepoOnly: false, settingsLocked: false });
-  await page.goto("/settings/tasks");
+  await page.goto("/settings/general");
   const select = page
     .getByTestId("settings-section")
-    .getByRole("combobox", { name: "Default legacy capabilities" });
+    .getByRole("combobox", { name: "Upgrade automatically" });
   await expect(select).toBeVisible();
   await expect(select).not.toHaveAttribute("aria-disabled", "true");
   await select.focus();
@@ -211,4 +210,54 @@ test("a setting refused for the config repo opens the refusal dialog", async ({
     page.getByRole("button", { name: "Retry", exact: true }),
   ).toHaveCount(0);
   await expect(box).toBeChecked({ checked: before });
+});
+
+// Deployment credentials (Settings → Capabilities, formerly Legacy
+// capabilities) wrapped its GitHub and GCP config fields in a bare
+// <Box component="fieldset" disabled> instead of <ReadOnlyFieldset>, leaving
+// githubInsecureHttp without [data-settings-readonly] dimming when locked
+// (docs/test-runs/2026-11-08-user-system-settings.md).
+test("a locked Deployment credentials card dims config fields via ReadOnlyFieldset while keeping secrets editable", async ({
+  page,
+}) => {
+  await withConfig(page, { configRepoOnly: true, settingsLocked: true });
+  for (const viewport of [DESKTOP, PHONE]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/settings/credentials");
+    // The retired address opens Capabilities at the card it stands for.
+    await expect(page).toHaveURL(/\/settings\/capabilities#credentials$/);
+
+    const card = page.getByTestId("deployment-credentials");
+    const box = card.locator("input[name=githubInsecureHttp]");
+    await expect(box).toBeDisabled();
+    expect(
+      await box.evaluate((el) =>
+        Boolean(el.closest("[data-settings-readonly]")),
+      ),
+    ).toBe(true);
+    expect(
+      await box.evaluate(
+        (el) => getComputedStyle(el.closest(".MuiCheckbox-root")).opacity,
+      ),
+    ).toBe("0.5");
+
+    const otherSecrets = card.locator("#other-secrets");
+    await expect(otherSecrets).toBeVisible();
+    expect(
+      await otherSecrets.evaluate((el) =>
+        Boolean(el.closest("[data-settings-readonly]")),
+      ),
+    ).toBe(false);
+
+    const cardRect = await card.boundingBox();
+    expect(cardRect.x).toBeGreaterThanOrEqual(0);
+    expect(cardRect.x + cardRect.width).toBeLessThanOrEqual(viewport.width);
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth -
+          document.documentElement.clientWidth,
+      ),
+    ).toBe(0);
+  }
 });

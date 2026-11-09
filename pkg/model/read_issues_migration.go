@@ -41,5 +41,8 @@ func migrateReadIssuesGrants(ctx context.Context, tx *sql.Tx) error {
 	if err := rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities", readIssuesRenames); err != nil {
 		return err
 	}
-	return rewritePolicyRenames(ctx, tx, readIssuesRenames, GitHubReadIssuesRef)
+	if err := rewritePolicyRenames(ctx, tx, readIssuesRenames, GitHubReadIssuesRef); err != nil {
+		return err
+	}
+	return MigrateCatalogueDisabledGrants(ctx, tx)
 }

@@ -136,13 +136,16 @@ describe("SecretsPanel", () => {
     );
   });
 
-  it("says capability servers' own secrets live on Settings → Capabilities", async () => {
+  it("says capability servers' own secrets live under Capability servers above", async () => {
     api.mockResolvedValueOnce({ enabled: true, secrets: [] });
     render(<SecretsPanel showError={() => {}} />);
 
     expect(
-      await screen.findByRole("link", { name: "Settings → Capabilities" }),
-    ).toHaveAttribute("href", "/settings/capabilities");
+      await screen.findByRole("link", { name: "Capability servers" }),
+    ).toHaveAttribute("href", "/settings/capabilities#capability-servers");
+    expect(
+      screen.queryByText(/each capability's own beside it here/i),
+    ).not.toBeInTheDocument();
   });
 
   it("leaves repository release secrets on their repository page", async () => {
@@ -292,5 +295,70 @@ describe("SecretsPanel", () => {
       "Secret and key names cannot be blank",
     );
     expect(api).toHaveBeenCalledTimes(1);
+  });
+
+  // 2026-11-08 connections walkthrough: removing a capability server on
+  // Settings → Capabilities left its secret listed under "Used by
+  // capability servers", linking to the gone server, until a reload.
+  it("reads the store again when refreshKey changes", async () => {
+    const id = "https://walk.example/caps/cloud";
+    api
+      .mockResolvedValueOnce({
+        enabled: true,
+        secrets: [
+          {
+            name: "capability-server-1234",
+            keys: ["apiToken"],
+            capabilityServers: [id],
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ enabled: true, secrets: [] });
+    const { rerender } = render(
+      <SecretsPanel showError={() => {}} refreshKey={0} />,
+    );
+    expect(
+      await screen.findByRole("list", {
+        name: "Secrets used by capability servers",
+      }),
+    ).toHaveTextContent(id);
+    rerender(<SecretsPanel showError={() => {}} refreshKey={1} />);
+    expect(
+      await screen.findByText("No other secrets set."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("list", {
+        name: "Secrets used by capability servers",
+      }),
+    ).toBeNull();
+    expect(api).toHaveBeenCalledTimes(2);
+  });
+
+  // 2026-11-08 deployment credentials walkthrough: a role without
+  // secrets:write was offered Delete secret, key deletes and Set secret,
+  // each refused by the server with 403.
+  it("draws its controls disabled, saying why, when readOnly", async () => {
+    api.mockResolvedValueOnce({
+      enabled: true,
+      secrets: [{ name: "github-app", keys: ["app-id"] }],
+    });
+    const { container } = render(
+      <SecretsPanel
+        showError={() => {}}
+        readOnly
+        readOnlyReason="Needs secrets:write, which your role grain/viewer does not grant."
+      />,
+    );
+    expect(await screen.findByText("github-app")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Delete secret" }),
+    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Set secret" })).toBeDisabled();
+    expect(screen.getByLabelText("Secret")).toBeDisabled();
+    expect(container.querySelector(".MuiChip-deletable")).toBeNull();
+    expect(container.querySelector("[data-settings-readonly]")).toHaveAttribute(
+      "title",
+      "Needs secrets:write, which your role grain/viewer does not grant.",
+    );
   });
 });

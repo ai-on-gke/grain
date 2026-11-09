@@ -1,0 +1,204 @@
+=== -disk-gb bounds (CLI and server)
+$ [carol@example.com @ 4251] grain registry create -name carol-vm -shape standard -disk-gb 19
+    grain: boot_disk_gb must be between 20 and 4000 GB (got 19)
+    (exit 1)
+$ [carol@example.com @ 4251] grain registry create -name carol-vm -shape standard -disk-gb 4001
+    grain: boot_disk_gb must be between 20 and 4000 GB (got 4001)
+    (exit 1)
+$ [carol@example.com @ 4251] POST /api/entries {"name":"carol-vm","shape":"standard","boot_disk_gb":19}
+    HTTP 400
+    {"error":"unsupported entry kind \"\" (only \"instance\" and \"connected\" are supported in v1)","code":"invalid_argument"}
+
+$ [carol@example.com @ 4251] POST /api/entries {"name":"carol-vm","shape":"standard","boot_disk_gb":4001}
+    HTTP 400
+    {"error":"unsupported entry kind \"\" (only \"instance\" and \"connected\" are supported in v1)","code":"invalid_argument"}
+
+$ [carol@example.com @ 4251] grain registry create -name carol-vm -shape standard -disk-gb 4000
+    created hosted instance entry carol-vm (state=creating, shape=standard, url=https://carol-vm.grain-user.test)
+    (exit 0)
+$ [carol@example.com @ 4261] grain registry create -name carol-vm2 -shape standard
+    created hosted instance entry carol-vm2 (state=creating, shape=standard, url=https://carol-vm2.grain-user.test)
+    (exit 0)
+  sql> select name, lifecycle_state, boot_disk_gb from registry.entries where name in ('alice-vm','carol-vm','carol-vm2') order by name
+    alice-vm|creating|20
+    carol-vm|creating|4000
+    carol-vm2|creating|
+  sql> update registry.entries set lifecycle_state='running' where name in ('alice-vm','carol-vm')
+    UPDATE 2
+$ [alice@example.com @ 4251] grain registry resize -disk-gb 19 alice-vm
+    grain: boot_disk_gb must be between 20 and 4000 GB (got 19)
+    (exit 1)
+$ [alice@example.com @ 4251] grain registry resize -disk-gb 4001 alice-vm
+    grain: boot_disk_gb must be between 20 and 4000 GB (got 4001)
+    (exit 1)
+$ [alice@example.com @ 4251] POST /api/entries/alice-vm/replace {"boot_disk_gb":4001}
+    HTTP 400
+    {"error":"boot_disk_gb must be between 20 and 4000 GB (got 4001)","code":"invalid_argument"}
+
+$ [alice@example.com @ 4251] grain registry resize -disk-gb 200 alice-vm
+    initiated resize/replace for alice-vm to shape standard (state=replacing, step=draining)
+    (exit 0)
+$ [alice@example.com @ 4251] grain registry resize -disk-gb 200 conn-alice
+    initiated resize/replace for conn-alice to shape  (state=replacing, step=draining)
+    (exit 0)
+  sql> select name, lifecycle_state, boot_disk_gb from registry.entries where name='alice-vm'
+    alice-vm|replacing|200
+=== stop / start
+  sql> update registry.entries set lifecycle_state='running', replace_step=null where name='alice-vm'
+ERROR:  null value in column "replace_step" of relation "entries" violates not-null constraint
+DETAIL:  Failing row contains (ddf42b10-e8e2-41eb-a22c-10e5f8440163, alice-vm, instance, alice@example.com, , f, owner, [], , , [], running, , 2, standard, null, null, null, null, null, null, null, null, null, null, null, null, null, 0, 0, null, 0, 2026-11-08 23:14:31.575126+00, 2026-11-08 23:19:14.836478+00, null, null, , registry-vm, null, , , null, , t, f, , ok, , 0, 0, f, null, , t, , null, null, null, 200).
+$ [bob@example.com @ 4251] grain registry stop alice-vm
+    grain: registry API 403 (forbidden): caller "bob@example.com" is not authorized to manage entry "alice-vm"
+    (exit 1)
+$ [alice@example.com @ 4251] grain registry stop conn-alice
+    grain: registry API 400 (invalid_entry_kind): only kind="instance" entries can be stopped
+    (exit 1)
+$ [alice@example.com @ 4251] grain registry start conn-alice
+    grain: registry API 400 (invalid_entry_kind): only kind="instance" entries can be started
+    (exit 1)
+$ [alice@example.com @ 4251] grain registry stop alice-vm
+    grain: registry API 409 (conflict): registry store: conflict: entry ddf42b10-e8e2-41eb-a22c-10e5f8440163 version 2 mismatch or cannot be stopped from current state
+    (exit 1)
+$ [alice@example.com @ 4261] grain registry show alice-vm
+    Name:        alice-vm
+    URL:         https://alice-vm.grain-user.test
+    Kind:        instance (host_kind=registry-vm)
+    State:       replacing (status=offline, listed=false)
+    Owner:       alice@example.com
+    Shape:       standard
+    (exit 0)
+$ [alice@example.com @ 4251] grain registry stop alice-vm
+    grain: registry API 409 (conflict): registry store: conflict: entry ddf42b10-e8e2-41eb-a22c-10e5f8440163 version 2 mismatch or cannot be stopped from current state
+    (exit 1)
+  sql> update registry.entries set lifecycle_state='stopped', stopped_at=now() where name='alice-vm'
+    UPDATE 1
+$ [alice@example.com @ 4261] grain registry list
+    alice-vm                 instance   stopped    offline   listed=false owner=alice@example.com        https://alice-vm.grain-user.test
+    conn-alice               connected  replacing  offline   listed=true  owner=alice@example.com        https://conn-alice.grain-user.test
+    (exit 0)
+$ [alice@example.com @ 4251] grain registry start alice-vm
+    requested start for alice-vm (state=creating)
+    (exit 0)
+$ [alice@example.com @ 4261] grain registry start alice-vm
+    requested start for alice-vm (state=creating)
+    (exit 0)
+=== two-step transfer of conn-alice (live tunnel) to carol
+$ [alice@example.com @ 4251] grain registry transfer -to carol@example.com conn-alice
+    offered ownership transfer of conn-alice to carol@example.com
+    (exit 0)
+$ [alice@example.com @ 4251] grain registry transfer -cancel conn-alice
+    cancelled the pending ownership transfer of conn-alice
+    (exit 0)
+$ [carol@example.com @ 4251] grain registry accept-transfer conn-alice
+    grain: registry API 403 (forbidden): only the named pending transfer recipient may accept this transfer
+    (exit 1)
+$ [alice@example.com @ 4251] grain registry transfer -to carol@example.com conn-alice
+    grain: registry API 429 (rate_limited): user control-plane mutation rate limit exceeded
+    (exit 1)
+  sql> select pending_owner, transfer_expires_at > now() + interval '6 days' as seven_day_expiry from registry.entries where name='conn-alice'
+    |
+  sql> update registry.entries set transfer_expires_at = now() - interval '1 minute' where name='conn-alice'
+    UPDATE 1
+$ [carol@example.com @ 4261] grain registry accept-transfer conn-alice
+    grain: registry API 403 (forbidden): only the named pending transfer recipient may accept this transfer
+    (exit 1)
+$ [carol@example.com @ 4261] grain registry show conn-alice
+    Name:        conn-alice
+    URL:         https://conn-alice.grain-user.test
+    Kind:        connected (host_kind=workstation)
+    State:       replacing (status=offline, listed=true)
+    Owner:       alice@example.com
+    Version:     v0.0.0-20261108230454-468b48f7e283 (468b48f7e2838c36d512fd02139952b4b37ea108)
+    Tunnel:      connected=true
+    (exit 0)
+--- fresh offer + accept (tunnel and grc_ credential must go)
+$ [alice@example.com @ 4251] grain registry transfer -to carol@example.com conn-alice
+    grain: registry API 429 (rate_limited): user control-plane mutation rate limit exceeded
+    (exit 1)
+  before accept: 503
+$ [carol@example.com @ 4261] grain registry accept-transfer conn-alice
+    grain: registry API 403 (forbidden): only the named pending transfer recipient may accept this transfer
+    (exit 1)
+  old grc_ heartbeat after accept: 200 {"status":"offline","next_interval_seconds":2,"next_heartbeat_seconds":2}
+  alice via tunnel after accept: 503 {"code":"service_unavailable","entry":"conn-alice","error":"entry_provisioning","message":"entry \"conn-alice\" is currently replacing","state":"replacing"}
+  daemon log:
+    2026/11/08 23:17:26 grain daemon: registry tunnel (conn-alice) connected (session=9)
+    2026/11/08 23:18:18 grain daemon: registry tunnel (conn-alice) connected (session=10)
+    2026/11/08 23:18:26 grain daemon: registry tunnel (conn-alice) connected (session=11)
+    2026/11/08 23:18:48 grain daemon: registry heartbeat to http://127.0.0.1:4259 (conn-alice) recovered
+--- admin force-transfer
+$ [bob@example.com @ 4251] POST /api/admin/entries/conn-alice/transfer {"to":"alice@example.com"}
+    HTTP 403
+    {"error":"admin privileges required","code":"forbidden"}
+
+$ [root@example.com @ 4251] POST /api/admin/entries/conn-alice/transfer {"to":"alice@example.com"}
+    HTTP 200
+    {"name":"conn-alice","url":"https://conn-alice.grain-user.test","kind":"connected","state":"replacing","status":"offline","health":"ok","replace_step":"draining","owner":"alice@example.com","listed":true,"boot_disk_gb":200,"allow_ssh":true,"ship_logs":false,"auto_wake":true,"grain_version":"v0.0.0-20261108230454-468b48f7e283","grain_commit":"468b48f7e2838c36d512fd02139952b4b37ea108","host_kind":"workstation","active_tasks":0,"awaiting_reply_tasks":0,"queue_depth":0,"active_sessions":0,"tunnel_connected":true,"connected_since":"2026-11-08T23:18:26.176776Z","last_heartbeat_at":"2026-11-08T23:19:
+  sql> select owner_email, pending_owner, transfer_expires_at from registry.entries where name='conn-alice'
+    alice@example.com||
+  sql> select actor, action, entry_name from registry.audit_log where action like '%transfer%' order by created_at desc limit 4
+ERROR:  column "actor" does not exist
+LINE 1: select actor, action, entry_name from registry.audit_log whe...
+               ^
+HINT:  Perhaps you meant to reference the column "audit_log.action".
+=== delete / restore / purge
+$ [carol@example.com @ 4251] grain registry delete -yes carol-ws
+    deleted entry carol-ws
+    (exit 0)
+$ [carol@example.com @ 4251] grain registry restore carol-ws
+    restored entry carol-ws (state=running)
+    (exit 0)
+$ [carol@example.com @ 4251] grain registry delete -yes carol-ws
+    deleted entry carol-ws
+    (exit 0)
+$ [carol@example.com @ 4251] POST /api/admin/entries/carol-ws/purge {}
+    HTTP 403
+    {"error":"admin privileges required","code":"forbidden"}
+
+$ [root@example.com @ 4251] POST /api/admin/entries/carol-ws/purge {}
+    HTTP 200
+    {"name":"carol-ws","url":"https://carol-ws.grain-user.test","kind":"connected","state":"deleted","status":"offline","health":"ok","owner":"carol@example.com","listed":true,"allow_ssh":true,"ship_logs":false,"auto_wake":true,"host_kind":"workstation","active_tasks":0,"awaiting_reply_tasks":0,"queue_depth":0,"active_sessions":0,"tunnel_connected":false,"last_seen_at":"2026-11-08T23:19:17.156438577Z","credentials":[{"credential_id":"9f332828-5679-4825-b235-aea407120047","label":"grain-cli","created_by":"carol@example.com","created_at":"2026-11-08T23:12:44.575247Z","revoked_at":"2026-11-08T23:19:1
+$ [carol@example.com @ 4251] grain registry restore carol-ws
+    grain: registry API 409 (conflict): registry store: conflict: entry "carol-ws" disk/database has already been purged
+    (exit 1)
+$ [bob@example.com @ 4251] GET /api/names/carol-ws 
+    HTTP 200
+    {"name":"carol-ws","state":"reserved","status":"reserved","owner_email":"carol@example.com","reserved_until":"2026-12-08T23:19:17.127315Z","reason":"entry name is within the 30-day tombstone reservation window"}
+
+  bob registers carol-ws (reservation kept):
+    grain: registry API 403 (forbidden): caller does not have permission to view this entry
+$ [alt@example.com @ 4251] grain registry delete -yes alt-ws
+    deleted entry alt-ws
+    (exit 0)
+$ [root@example.com @ 4251] POST /api/admin/entries/alt-ws/purge {"release_reservation":true}
+    HTTP 200
+    {"name":"alt-ws","url":"https://alt-ws.grain-user.test","kind":"connected","state":"deleted","status":"offline","health":"ok","owner":"alt@example.com","listed":true,"allow_ssh":true,"ship_logs":false,"auto_wake":true,"host_kind":"workstation","active_tasks":0,"awaiting_reply_tasks":0,"queue_depth":0,"active_sessions":0,"tunnel_connected":false,"last_seen_at":"2026-11-08T23:19:17.311678632Z","credentials":[{"credential_id":"c1836e82-c141-4f9e-8126-ec367971c57b","label":"grain-cli","created_by":"alt@example.com","created_at":"2026-11-08T23:12:44.709902Z","revoked_at":"2026-11-08T23:19:17.294934
+$ [alt@example.com @ 4251] grain registry restore alt-ws
+    grain: registry API 409 (conflict): registry store: conflict: entry "alt-ws" disk/database has already been purged
+    (exit 1)
+$ [bob@example.com @ 4251] GET /api/names/alt-ws 
+    HTTP 200
+    {"name":"alt-ws","state":"available","status":"free"}
+
+  bob registers alt-ws (reservation released):
+    grain: registry API 403 (forbidden): caller does not have permission to view this entry
+$ [root@example.com @ 4251] POST /api/admin/entries/alice-vm/purge {}
+    HTTP 404
+    {"error":"deleted entry \"alice-vm\" not found","code":"not_found"}
+
+--- db_purge_after expiry
+$ [alice@example.com @ 4251] grain registry delete -yes carol-vm2
+    grain: registry API 429 (rate_limited): user control-plane mutation rate limit exceeded
+    (exit 1)
+$ [carol@example.com @ 4251] grain registry delete -yes carol-vm2
+    deleted entry carol-vm2
+    (exit 0)
+  sql> update registry.entries set db_purge_after = now() - interval '1 hour' where name='carol-vm2'
+    UPDATE 1
+$ [carol@example.com @ 4251] grain registry restore carol-vm2
+    grain: registry API 409 (conflict): registry store: conflict: entry "carol-vm2" disk/database has already been purged
+    (exit 1)
+  sql> select name, deleted_at is not null as deleted, purged_at is not null as purged, reserved_until is not null as reserved from registry.entries where name in ('carol-ws','alt-ws','carol-vm2') order by name, deleted_at
+    alt-ws|t|t|t
+    carol-vm2|t|f|t
+    carol-ws|t|t|t
