@@ -72,13 +72,27 @@ func sameGrantMeaning(t *testing.T, what string, before, after []string) {
 	for _, name := range before {
 		to := retiredAs(name)
 		retired := len(to) != 1 || to[0] != name
-		if !retired && !slices.Contains(after, name) {
+		if !retired && !slices.Contains(after, canonical(name)) {
 			t.Errorf("%s: %q, which is not retired, was lost (%v -> %v)", what, name, before, after)
 		}
 		if retired && slices.Contains(after, name) {
 			t.Errorf("%s: retired %q survived the migration as itself rather than as %v", what, name, to)
 		}
 	}
+}
+
+// canonical is name as migration 131 stores it (model.CanonicalStoredGrant):
+// every migration test here runs the store up to model.SchemaVersion, so an
+// api:<what> a retirement wrote is read back as its reference.
+func canonical(name string) string {
+	out, _ := model.CanonicalStoredGrant(name)
+	return out
+}
+
+// canonicals is canonical over names, each kept once.
+func canonicals(names []string) []string {
+	out, _ := model.CanonicalStoredGrants(names)
+	return out
 }
 
 // retiredGrants are the in-process capabilities a store migration
@@ -89,15 +103,15 @@ var retiredGrants = []struct {
 	legacy  string
 	to      []string
 }{
-	{67, "team-broadcast", []string{"api:team-broadcast"}},
-	{68, "dispatch-control", []string{"api:dispatch-control"}},
-	{69, "pipeline-control", []string{"api:pipeline-control"}},
-	{71, "memory", []string{"api:memory"}},
-	{72, "release-notes", []string{"api:release-notes"}},
-	{75, "self-upgrade", []string{"api:self-upgrade"}},
-	{76, "test-quarantine", []string{"api:test-quarantine"}},
+	{67, "team-broadcast", canonicals([]string{"api:team-broadcast"})},
+	{68, "dispatch-control", canonicals([]string{"api:dispatch-control"})},
+	{69, "pipeline-control", canonicals([]string{"api:pipeline-control"})},
+	{71, "memory", canonicals([]string{"api:memory"})},
+	{72, "release-notes", canonicals([]string{"api:release-notes"})},
+	{75, "self-upgrade", canonicals([]string{"api:self-upgrade"})},
+	{76, "test-quarantine", canonicals([]string{"api:test-quarantine"})},
 	{80, "grain-log", []string{model.GrainJournalGrant}},
-	{81, "deployment-health", []string{"api:deployment:read", model.GrainHealthGrant}},
+	{81, "deployment-health", canonicals([]string{"api:deployment:read", model.GrainHealthGrant})},
 	{82, "db-read", []string{model.GrainSQLReadGrant}},
 	{82, "db-write", []string{model.GrainSQLWriteGrant}},
 	{84, "self-repair", []string{model.GrainHostExecGrant}},
@@ -116,7 +130,7 @@ var retiredGrants = []struct {
 	{101, "registry-push", []string{model.RegistryPushRef + "={}"}},
 	{101, "package-publish", []string{model.PackagePublishRef + "={}"}},
 	{103, "gemini-key", []string{model.GCPGeminiKeyGrant}},
-	{115, "self-debug", []string{"api:self-debug", model.GrainSourceGrant}},
+	{115, "self-debug", canonicals([]string{"api:self-debug", model.GrainSourceGrant})},
 	{118, "bootstrap-playbooks", []string{model.BootstrapPlaybooksGrant}},
 	{120, "github-credential:release-bot", []string{model.RepoCredentialGrant("release-bot")}},
 	{121, "read-issues", []string{model.GitHubReadIssuesGrant}},
@@ -200,7 +214,7 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 			sameGrantMeaning(t, table+" "+id, before, got[id])
 		}
 	}
-	wantSorted := slices.Clone(replacements)
+	wantSorted := canonicals(replacements)
 	sort.Strings(wantSorted)
 	if got := grantRows(t, ctx, db, "task_grant", "task_id")["2"]; !slices.Equal(got, wantSorted) {
 		t.Errorf("task 2, holding both spellings, holds %v after the migration, want %v once", got, wantSorted)
@@ -210,7 +224,7 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := append(slices.Clone(replacements), "release-gate-read"); !slices.Equal(after.DefaultCapabilities, want) {
+	if want := canonicals(append(slices.Clone(replacements), "release-gate-read")); !slices.Equal(after.DefaultCapabilities, want) {
 		t.Errorf("default capabilities = %v, want %v", after.DefaultCapabilities, want)
 	}
 	if len(after.ConsoleSessions) != len(cfg.ConsoleSessions) {
@@ -223,7 +237,7 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 		}
 		sameGrantMeaning(t, "console session "+s.ID, was.Capabilities, s.Capabilities)
 	}
-	if got, want := after.ConsoleSessions[1].Capabilities, replacements; !slices.Equal(got, want) {
+	if got, want := after.ConsoleSessions[1].Capabilities, canonicals(replacements); !slices.Equal(got, want) {
 		t.Errorf("steward capabilities = %v, want %v", got, want)
 	}
 
@@ -231,11 +245,11 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := append([]string{"release-gate-read"}, replacements...); !slices.Equal(repo.DefaultCapabilities, want) {
+	if want := canonicals(append([]string{"release-gate-read"}, replacements...)); !slices.Equal(repo.DefaultCapabilities, want) {
 		t.Errorf("repo default capabilities = %v, want %v", repo.DefaultCapabilities, want)
 	}
 	// Migrations 83 to 86 rewrite retired names in repo_config.ci_capabilities as well.
-	if want := append([]string{"release-gate-read"}, replacements...); !slices.Equal(repo.CICapabilities, want) {
+	if want := canonicals(append([]string{"release-gate-read"}, replacements...)); !slices.Equal(repo.CICapabilities, want) {
 		t.Errorf("repo CI capabilities = %v, want %v", repo.CICapabilities, want)
 	}
 	sameGrantMeaning(t, "repo CI capabilities", []string{"release-gate-read", legacy}, repo.CICapabilities)
@@ -328,7 +342,7 @@ func TestMigration86RewritesCorpResearchIdempotently(t *testing.T) {
 	after := storedGrantState(t, ctx, db)
 
 	corp := model.CorpResearchGrant
-	wantTasks := map[string][]string{"1": {corp, "release-gate-read"}, "2": {corp}, "3": {"api:tasks:write"}}
+	wantTasks := map[string][]string{"1": {corp, "release-gate-read"}, "2": {corp}, "3": {canonical("api:tasks:write")}}
 	if got := after["task_grant"]; !equalRows(got.(map[string][]string), wantTasks) {
 		t.Errorf("task grants = %v, want %v", got, wantTasks)
 	}
@@ -342,7 +356,7 @@ func TestMigration86RewritesCorpResearchIdempotently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"release-gate-read", corp, "api:tasks:read"}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
+	if want := []string{"release-gate-read", corp, canonical("api:tasks:read")}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
 		t.Errorf("default capabilities = %v, want %v", gotCfg.DefaultCapabilities, want)
 	}
 	if got, want := gotCfg.ConsoleSessions[0].Capabilities, []string{corp, "release-gate-read"}; !slices.Equal(got, want) {
@@ -367,7 +381,7 @@ func TestMigration86RewritesCorpResearchIdempotently(t *testing.T) {
 		!slices.Equal(got.Capabilities, want.Capabilities) {
 		t.Errorf("quiet session = %+v, want it unchanged from %+v", got, want)
 	}
-	if got := after["task_grant"].(map[string][]string)["3"]; !slices.Equal(got, before["task_grant"].(map[string][]string)["3"]) {
+	if got := after["task_grant"].(map[string][]string)["3"]; !slices.Equal(got, canonicals(before["task_grant"].(map[string][]string)["3"])) {
 		t.Errorf("task 3, holding no corp-research, holds %v after the migration", got)
 	}
 
@@ -613,8 +627,8 @@ func TestSchema65StoreAndStateRepoImportRewriteCICapabilities(t *testing.T) {
 		if err != nil || got == nil {
 			t.Fatalf("GetRepoConfig: %v, %+v", err, got)
 		}
-		if !slices.Equal(got.CICapabilities, []string{"api:release-notes"}) {
-			t.Errorf("repo_config.ci_capabilities = %v, want [api:release-notes]", got.CICapabilities)
+		if !slices.Equal(got.CICapabilities, []string{canonical("api:release-notes")}) {
+			t.Errorf("repo_config.ci_capabilities = %v, want [%s]", got.CICapabilities, canonical("api:release-notes"))
 		}
 	})
 
@@ -629,8 +643,8 @@ func TestSchema65StoreAndStateRepoImportRewriteCICapabilities(t *testing.T) {
 		if err != nil || got == nil {
 			t.Fatalf("GetRepoConfig: %v, %+v", err, got)
 		}
-		if !slices.Equal(got.CICapabilities, []string{"api:release-notes"}) {
-			t.Errorf("repo_config.ci_capabilities after state-repo import = %v, want [api:release-notes]", got.CICapabilities)
+		if !slices.Equal(got.CICapabilities, []string{canonical("api:release-notes")}) {
+			t.Errorf("repo_config.ci_capabilities after state-repo import = %v, want [%s]", got.CICapabilities, canonical("api:release-notes"))
 		}
 	})
 }

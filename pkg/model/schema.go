@@ -622,7 +622,12 @@ import "strconv"
 // run that reported its provider usage; `usage_capacity`, the usage a
 // (connection, model) window had consumed when its provider refused it;
 // and `usage_setting`, the operator's budgets and concurrency mode.
-const SchemaVersion = 130
+// 131 changes no table: it rewrites every grant still stored as
+// `api:<what>[@repo]` (or a non-canonical api reference), `repo-read:` or
+// `repo-write:` to its canonical `https://grain.dev/capabilities/api#…` /
+// `…/repo#read|#write` reference, slice 4 of
+// design/design/unified-grants.design.md (canonical_grant_migration.go).
+const SchemaVersion = 131
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or

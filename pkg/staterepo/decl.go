@@ -100,6 +100,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -428,7 +430,36 @@ func (d declDocument) rows(k declKind, table string) ([]map[string]any, error) {
 				if err != nil {
 					return nil, err
 				}
-				out = append(out, rows...)
+				if f.shape == shapeGrants {
+					// A task-level repository grant is reads:/writes:
+					// spelt as a grant, and lands in those tables instead.
+					rows = slices.DeleteFunc(rows, func(r map[string]any) bool {
+						_, _, projected := projectedRepoRow(r)
+						return projected
+					})
+				}
+				if f.shape == shapeRepos || f.shape == shapeWrites {
+					out = appendUniqueRows(out, rows)
+				} else {
+					out = append(out, rows...)
+				}
+			case f.shape == shapeGrants && (strings.HasSuffix(table, "_read") || strings.HasSuffix(table, "_write")) && slices.Contains(k.companions, table):
+				// unified-grants §3: `grants:` and `reads:`/`writes:` are one
+				// key on import. A …/repo#read {repo} or …/repo#write {repo,
+				// base} under grants: is a row of the read or write table, and
+				// one both lists name is held once.
+				rows, err := decodeCompanion(d.path, id, k.parent, f, node, &items)
+				if err != nil {
+					return nil, err
+				}
+				var projected []map[string]any
+				for _, r := range rows {
+					if kind, repoRow, ok := projectedRepoRow(r); ok && strings.HasSuffix(table, "_"+kind) {
+						repoRow[k.parent] = id
+						projected = append(projected, repoRow)
+					}
+				}
+				out = appendUniqueRows(out, projected)
 			case f.table == "suite_item":
 				// Counted even when another table is being read, so that
 				// the ids a suite's items get do not depend on which
@@ -442,6 +473,53 @@ func (d declDocument) rows(k declKind, table string) ([]map[string]any, error) {
 	}
 	out = append(out, d.orphans[table]...)
 	return out, nil
+}
+
+// projectedRepoRow is a grant row that is a task-level repository grant
+// -- …/repo#read {repo}, or …/repo#write {repo, base} -- as the row of the
+// read ("read") or write ("write") table it stands for (model.TaskRepoGrants'
+// inverse). ok is false for every other grant, a CI job's {repo}-only
+// #write and a #write widening refs among them.
+func projectedRepoRow(r map[string]any) (kind string, row map[string]any, ok bool) {
+	capability, isText := r["capability"].(string)
+	if !isText {
+		return "", nil, false
+	}
+	g := model.CanonicalGrant(capability)
+	if g.Capability != model.RepoReadRef && g.Capability != model.RepoWriteRef {
+		return "", nil, false
+	}
+	var with map[string]any
+	if err := json.Unmarshal(g.With, &with); err != nil {
+		return "", nil, false
+	}
+	repo, base, hasBase, err := model.RepoGrantArgs(g)
+	if err != nil {
+		return "", nil, false
+	}
+	owner, name := repo.String(), ""
+	if i := strings.LastIndex(owner, "/"); i >= 0 {
+		owner, name = owner[:i], owner[i+1:]
+	}
+	switch {
+	case g.Capability == model.RepoReadRef && !hasBase && len(with) == 1:
+		return "read", map[string]any{"owner": owner, "name": name}, true
+	case g.Capability == model.RepoWriteRef && hasBase && len(with) == 2:
+		return "write", map[string]any{"owner": owner, "name": name, "base": base}, true
+	}
+	return "", nil, false
+}
+
+// appendUniqueRows is out with each of rows not already in it appended: the
+// read and write tables are sets, and an entry `reads:` and `grants:` both
+// name is one row.
+func appendUniqueRows(out, rows []map[string]any) []map[string]any {
+	for _, r := range rows {
+		if !slices.ContainsFunc(out, func(o map[string]any) bool { return reflect.DeepEqual(o, r) }) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func (d declDocument) entryID(k declKind, i int, entry map[string]*yaml.Node) (string, error) {
@@ -1439,6 +1517,16 @@ func decodeCompanion(path, id, parent string, f declFieldShape, node *yaml.Node,
 				row["folder"] = folder
 			}
 			if name, isText := capability.(string); isText {
+				// {capability, with} is the unified grant's own shape
+				// (unified-grants §1): the with: arguments fold into the
+				// stored <reference>=<json> string.
+				if with, ok := named["with"]; ok && with != nil {
+					data, err := json.Marshal(with)
+					if err != nil {
+						return nil, fail(fmt.Sprintf("%s: with: %v", name, err))
+					}
+					name = model.CanonicalGrant(strings.TrimSpace(name) + "=" + string(data)).Key()
+				}
 				for _, capID := range model.CanonicalLegacyGrants(name) {
 					out = append(out, map[string]any{
 						parent:       id,

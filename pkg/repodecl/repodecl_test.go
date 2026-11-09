@@ -20,6 +20,8 @@ package repodecl_test
 
 import (
 	"github.com/ai-on-gke/grain/pkg/declschema"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -140,7 +142,6 @@ func TestADeclarationMayNotWidenWhatItsWorkTouches(t *testing.T) {
 		"target: somebody/else",
 		"reads: [somebody/else]",
 		"writes: [somebody/else]",
-		"grants: [gcp-key]",
 	} {
 		msg := loadErr(t, map[string]string{
 			".grain/templates/nightly.yml": "title: Bump dependencies\n" + field + "\n",
@@ -267,6 +268,43 @@ func TestAScheduleAcceptsCapabilities(t *testing.T) {
 	}
 	if sched.Grants[1].Capability != "package-publish" || sched.Grants[1].Via != ".grain/schedules/it.yml" {
 		t.Errorf("Grants[1] = %+v, want package-publish via .grain/schedules/it.yml", sched.Grants[1])
+	}
+}
+
+// `grants:` is `capabilities:`' unified spelling (unified-grants §3): the
+// same entries, under the same rule, and an entry both keys name -- in
+// either spelling -- is held once.
+func TestGrantsIsCapabilitiesUnifiedSpelling(t *testing.T) {
+	declared := load(t, map[string]string{
+		".grain/templates/nightly.yml": "title: Bump dependencies\n" +
+			"capabilities: [\"repo-read:acme/docs\"]\n" +
+			"grants:\n" +
+			"  - capability: https://grain.dev/capabilities/repo#read\n    with: {repo: acme/docs}\n" +
+			"  - capability: https://grain.dev/capabilities/repo#write\n    with: {repo: acme/site}\n",
+		".grain/schedules/it.yml": "template: nightly\ncapabilities: [\"package-publish\"]\n" +
+			"grants: [\"package-publish\", \"gcp-key:deploy\"]\nevery:\n  hours: 6\n",
+	})
+	tmpl := declared.Templates[0].Template
+	if want := []model.RepoRef{{Owner: "acme", Name: "docs"}}; !slices.EqualFunc(tmpl.Reads, want, model.RepoRef.Same) {
+		t.Errorf("Reads = %v, want %v once", tmpl.Reads, want)
+	}
+	if want := []model.WriteTarget{{Repo: model.RepoRef{Owner: "acme", Name: "site"}}}; !reflect.DeepEqual(tmpl.Writes, want) {
+		t.Errorf("Writes = %v, want %v", tmpl.Writes, want)
+	}
+	sched := declared.Schedules[0].Schedule
+	var got []string
+	for _, g := range sched.Grants {
+		got = append(got, g.Capability)
+	}
+	if want := []string{"package-publish", "gcp-key:deploy"}; !slices.Equal(got, want) {
+		t.Errorf("schedule Grants = %v, want %v", got, want)
+	}
+
+	msg := loadErr(t, map[string]string{
+		".grain/templates/nightly.yml": "title: Bump dependencies\ngrants: [\"https://grain.dev/capabilities/repo#target={\\\"repo\\\":\\\"acme/x\\\",\\\"base\\\":\\\"\\\"}\"]\n",
+	})
+	if !strings.Contains(msg, "always target the declaring repository") {
+		t.Errorf("a #target under grants: error = %q, want capabilities:' refusal", msg)
 	}
 }
 
@@ -731,9 +769,9 @@ func TestADeclarationDoesNotWriteWhatGrainKeeps(t *testing.T) {
 // capabilities has made one mistake.
 func TestRefusalsAreGroupedByReason(t *testing.T) {
 	msg := loadErr(t, map[string]string{
-		".grain/templates/nightly.yml": "title: Bump dependencies\nreads: [somebody/else]\ngrants: [gcp-key]\nid: template-7\n",
+		".grain/templates/nightly.yml": "title: Bump dependencies\nreads: [somebody/else]\nwrites: [somebody/else]\nid: template-7\n",
 	})
-	if !strings.Contains(msg, "grants, reads:") {
+	if !strings.Contains(msg, "reads, writes:") {
 		t.Errorf("error = %q, want both reach keys named in one sentence", msg)
 	}
 	if strings.Count(msg, "never what that work may touch") != 1 {

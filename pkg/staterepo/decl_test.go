@@ -31,6 +31,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -280,12 +281,100 @@ func TestAHandEditOfASettingsDocumentIsApplied(t *testing.T) {
 		t.Errorf("the title did not land: %q", tmpl.Title)
 	}
 	// self-debug lands as what it became (model.SelfDebugGrants).
-	if len(tmpl.Grants) != 3 || tmpl.Grants[0].Capability != "api:memory" || tmpl.Grants[1].Capability != model.APIRef("self-debug") ||
+	// api:memory lands as its reference too: an import is migration 131's
+	// rewrite as well (model.MigrateCanonicalGrants).
+	if len(tmpl.Grants) != 3 || tmpl.Grants[0].Capability != model.APIRef("memory") || tmpl.Grants[1].Capability != model.APIRef("self-debug") ||
 		tmpl.Grants[2].Capability != model.GrainSourceGrant {
 		t.Errorf("the grants did not land: %+v", tmpl.Grants)
 	}
 	if len(tmpl.Fields) != 1 || tmpl.Fields[0].Name != "area" || tmpl.Fields[0].Default != "ui" {
 		t.Errorf("the inputs did not land: %+v", tmpl.Fields)
+	}
+}
+
+// unified-grants §3: grain/config's `grants:` and `reads:`/`writes:` are
+// one key on import. A task-level repository grant under grants: lands
+// in template_read / template_write, an entry both lists name is held
+// once, {capability, with} folds into the stored reference, a legacy api:
+// spelling is stored as its reference, and the next export writes
+// grants: beside reads: and writes:, which an older binary still reads.
+func TestSettingsGrantsAndReadsWritesAreOneKey(t *testing.T) {
+	ctx := context.Background()
+	store, db := openDB(t)
+	remote := bareRemote(t)
+	repo, err := staterepo.Open(ctx, staterepo.Config{Dir: filepath.Join(t.TempDir(), "state"), Remote: remote})
+	if err != nil {
+		t.Fatalf("opening: %v", err)
+	}
+	if err := store.PutTemplate(ctx, model.Template{ID: "tpl-1", Name: "nightly", Title: "Run the nightly sweep", CreatedAt: now}); err != nil {
+		t.Fatalf("putting a template: %v", err)
+	}
+	if err := staterepo.Load(ctx, repo, db, model.SchemaVersion); err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+
+	work := filepath.Join(t.TempDir(), "clone")
+	git(t, "", "clone", "--quiet", remote, work)
+	editSettings(t, work, "template", func(entries []map[string]any) {
+		for _, entry := range entries {
+			if entry["id"] != "tpl-1" {
+				continue
+			}
+			entry["reads"] = []any{"acme/docs"}
+			entry["grants"] = []any{
+				"api:ci:read@acme/widgets",
+				map[string]any{"capability": model.RepoReadRef, "with": map[string]any{"repo": "acme/docs"}},
+				map[string]any{"capability": model.RepoReadRef, "with": map[string]any{"repo": "acme/tools"}},
+				model.RepoWriteRef + `={"base":"main","repo":"acme/site"}`,
+				map[string]any{"capability": model.APIRef("tasks:read"), "with": map[string]any{}},
+			}
+		}
+	})
+	git(t, work, "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-am", "Spell the nightly sweep's grants as one list")
+	git(t, work, "push", "--quiet", "origin", "main")
+
+	if applied, err := staterepo.Apply(ctx, repo, db, model.SchemaVersion); err != nil || !applied {
+		t.Fatalf("applying: applied=%v err=%v", applied, err)
+	}
+	tmpl, err := store.GetTemplate(ctx, "tpl-1")
+	if err != nil || tmpl == nil {
+		t.Fatalf("reading the template back: %v %v", tmpl, err)
+	}
+	var reads []string
+	for _, r := range tmpl.Reads {
+		reads = append(reads, r.String())
+	}
+	if strings.Join(reads, " ") != "acme/docs acme/tools" {
+		t.Errorf("Reads = %v, want acme/docs once and acme/tools", reads)
+	}
+	if len(tmpl.Writes) != 1 || tmpl.Writes[0].Repo.String() != "acme/site" || tmpl.Writes[0].Base != "main" {
+		t.Errorf("Writes = %+v, want acme/site on main", tmpl.Writes)
+	}
+	var grants []string
+	for _, g := range tmpl.Grants {
+		grants = append(grants, g.Capability)
+	}
+	if want := []string{model.APIGrantString("ci:read", "acme/widgets"), model.APIRef("tasks:read")}; strings.Join(grants, " ") != strings.Join(want, " ") {
+		t.Errorf("Grants = %v, want %v", grants, want)
+	}
+
+	out := t.TempDir()
+	if err := staterepo.Export(ctx, db, out); err != nil {
+		t.Fatalf("exporting again: %v", err)
+	}
+	_, _, entries := settingsDocument(t, out, "template")
+	for _, entry := range entries {
+		if entry["id"] != "tpl-1" {
+			continue
+		}
+		for _, key := range []string{"reads", "writes", "grants"} {
+			if _, ok := entry[key]; !ok {
+				t.Errorf("the export carries no %s: for the template: %v", key, entry)
+			}
+		}
+		if got, want := entry["grants"], []any{model.APIGrantString("ci:read", "acme/widgets"), model.APIRef("tasks:read")}; !reflect.DeepEqual(got, want) {
+			t.Errorf("exported grants: = %#v, want %#v (the repository access stays under reads: and writes:)", got, want)
+		}
 	}
 }
 

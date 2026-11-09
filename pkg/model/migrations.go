@@ -930,6 +930,13 @@ var Migrations = []Migration{
 			usageSettingTable,
 		},
 	},
+	{
+		Version: 131,
+		Description: "rewrite every stored grant still spelled api:<what>[@repo] (or a non-canonical api reference), repo-read:<repo> or repo-write:<repo> " +
+			"to https://grain.dev/capabilities/api#<what>[{repo}] and repo#read / #write {repo} across the grant tables, task_grant_wait, " +
+			"default and CI capability lists and console sessions (unified-grants slice 4)",
+		Up: migrateCanonicalGrants,
+	},
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as

@@ -10,7 +10,11 @@ spelling, writers across `pkg/model`, `pkg/ui`, `pkg/cli`,
 (with `{repo}` when repository-limited) and `…/repo#read`/`#write`
 references, `GrantsPicker.jsx` edits `with: {repo}` inline on `…/api`
 grants, and the fidelity fixture is `pkg/model/canonical_grant_test.go`.
-Slices 4–5 have not started, and
+Slice 4 (migrate once) is implemented in [Task #3321](/tasks/3321):
+schema migration 131, grain/config's `grants:` read as one key with
+`reads:`/`writes:`, `grants:` in `.grain/` templates and schedules, and
+the `release-gate-read` provider retired (§3's "As built" notes say what
+it does and what it left for slice 5). Slice 5 has not started, and
 slice 6, the per-capability conversions of §4, is mostly done; §4's
 table says which, and the remaining slices and conversions are filed from
 [Task #3274](/tasks/3274). The overview of capabilities as a whole is
@@ -189,17 +193,62 @@ once with a fidelity test.**
   old again must be byte-identical, and the approval predicates above
   must return the same answer on both forms for every (proposer, child)
   pair in the fixture.
+  *As built ([Task #3321](/tasks/3321)):* schema migration 131
+  (`model.MigrateCanonicalGrants`, `canonical_grant_migration.go`) reads
+  every grant string off the store, as migration 88 did, and rewrites
+  each one `CanonicalStoredGrant` changes -- `api:<what>[@repo]`, an api
+  reference in a non-canonical spelling (`={}`, an unprinted repo), and
+  any `repo-read:`/`repo-write:` a state-repository import brought in
+  after 88 -- in `task_grant`, `template_grant`, `schedule_grant`,
+  `task_grant_wait`, both `default_capabilities`, `ci_capabilities` and the
+  console sessions' capabilities and `declinedDefaults`. A row whose
+  reference its owner already holds is dropped. Bare in-process names
+  (`release-gate-read` among them) and every other reference are left as
+  they are. A grain/config import at the current schema runs the same
+  rewrite, so a mixed-version or hand-edited file's legacy spellings land
+  as one key with their references. The fidelity test is
+  `pkg/model/sqlite/canonical_grant_migration_test.go`: every migrated row
+  is its reference, old → `CanonicalGrant` → old is byte-identical, the
+  approval predicates (`GrantsSubsetOf`, `EscalatedCapabilities`,
+  `LandsWhereGranted`, `ReviewGrants`, `TemplateWithinTask`, dangerous and
+  person-only, the capability policy, the api scope set) answer every
+  (proposer, child) pair alike before and after, and a second run is a
+  no-op; the earlier migration tests read their expectations through
+  `CanonicalStoredGrant` since every store now ends at 131. Not done here:
+  `task_read`/`task_write` (and the template and schedule tables) are
+  **not** projected into grant rows. A `…/repo#read` grant row outside
+  CI is refused by the capability policy (`CIOnlyRefusal`), and the
+  `task_ready` view, dispatch, liveness and metrics join those tables
+  directly, so moving the storage is slice 5's, with the picker that
+  edits it; until then `TaskRepoGrants` is the projection, as for
+  `#target` (Q2).
 - **State-repo export (grain/config).** The exported YAML gains
   `grants:` lists. `capabilities:`, `reads:` and `writes:` keep being
   read (`declschema`), and for a release keep being *written* beside
   `grants:`, so a grain/config shared by two versions round-trips. The
   import merge
   treats the two spellings as one key.
+  *As built ([Task #3321](/tasks/3321)):* a template's or schedule's
+  `grants:` (template_grant/schedule_grant) is exported in canonical
+  references, and on import an entry that is a task-level repository
+  grant -- `…/repo#read {repo}` or `…/repo#write {repo, base}`, as a
+  string or `{capability, with}` -- is a row of the read or write table,
+  and one `reads:`/`writes:` already names is held once
+  (`pkg/staterepo/decl.go`, `projectedRepoRow`). The export keeps
+  repository access under `reads:` and `writes:` only for now: the
+  previous release reads every `grants:` entry as a grant row
+  (`decodeCompanion`), so writing `#read`/`#write` there would hand its
+  template tasks a CI-only grant. Writing them into `grants:` as well
+  lands with slice 5, a release after this reader.
 - **Repository declarations.** `.grain/templates/*.yml` and
   `.grain/schedules/*.yml` accept `grants:` beside `capabilities:`,
   `reads:`, `writes:` and `push:` indefinitely. These live in other
   people's repositories, so nothing is migrated there, and `push:` stays
   the way a declaration widens refs.
+  *As built ([Task #3321](/tasks/3321)):* `grants:` is accepted in a
+  repository (`declschema`, `repodecl.declaredGrants`) as the unified
+  spelling of `capabilities:`, read as one list with it and held to its
+  rule; `reads:` and `writes:` stay refused there, as they always were.
 - **API presets** need nothing. They become methods of `…/api`, and the
   alias table (`apiAliasCapabilities`) keeps `self-upgrade` and
   `pipeline-control` meaning their presets until §4 retires them.
@@ -247,7 +296,7 @@ is removed too (PR #985).
 | `console` | task setting `hosting: unattended \| console` (§4.1) | **done** (task 3145): a `hosting` column (`unattended \| console`) on tasks, templates and schedules, with `default_hosting` on repository and deployment settings and `hosting` on console sessions; `Task.HasConsole` is `NormalizeHosting(Hosting) == HostingConsole` (`pkg/orchestrator/console.go`), separate from `Interactive` and with no person-only rule, and each change is a `hosting-changed` task event with old value, new value and actor. Schema migration 123 moved stored `console` grants from tasks, templates, schedules, default/CI capability lists and console sessions into the column and dropped the catalogue and policy entries (Q10); `pkg/capability/console` and its `daemon.CapabilityProviders` entry are removed, the task pane has a **Hosting** select (`Unattended` / `Interactive console`), as do the template and schedule editors (`HostingField`, task 3319; a console session is always `console`), and the bare name is a one-release input alias mapped to `console` with a deprecation warning |
 | `priority-dispatch` | task setting `admission: standard \| bypass` (§4.1) | **done** (task 3144): an `admission` column (`standard \| bypass \| durable`) on tasks, templates and schedules, with `default_admission` on repository and deployment settings; `Task.HasPriorityDispatch` is `Admission >= bypass` and `priorityDispatchTaskSQL` the column predicate. Only a person may raise it above `standard` (agent-filed tasks and proposals asking for more wait for a person; the pipeline steward template and console sessions set it by construction), and each change is an `admission-changed` task event with old value, new value and actor. Schema migration 122 moved stored grants from tasks, templates, schedules, default capability lists and console sessions into the column and dropped the catalogue and policy entries (Q10); `pkg/capability/prioritydispatch` and its `daemon.CapabilityProviders` entry are removed, the task pane's toggle is an **Admission** select, and the bare name is a one-release input alias mapped to `bypass` with a deprecation warning |
 | `durable` | task setting `admission: durable` (§4.1) | **done** (task 3144): with `priority-dispatch` above; `Task.IsDurable` is `Admission == durable` and `durableTaskSQL` the column predicate, a row holding both grants migrated to `durable`, `pkg/capability/durable` and its `daemon.CapabilityProviders` entry removed, and the bare name a one-release input alias mapped to `durable` with a deprecation warning |
-| `release-gate-read` (CI) | `…/api#release-gate-read` preset | **already an alias**: the bare name is read as `api:release-gate-read` and served through `ciapi.NewAlias`, which `daemon.CapabilityProviders` still registers. It retires with api grants becoming references (slices 2–4) |
+| `release-gate-read` (CI) | `…/api#release-gate-read` preset | **done** (task 3321, slice 4): `ciapi.NewAlias` is no longer registered in `daemon.CapabilityProviders`, which now registers nothing. A CI job's `release-gate-read`, `api:release-gate-read` and `…/api#release-gate-read` all resolve through `ciapi.DynamicProvider` (the bare name via `ciapi.Aliases`), so `.grain/workflows` keep declaring it, and it stays a bare string in stored CI capability lists |
 | `db-read`, `db-write` | `…/grain#sql` `{write: bool}` | **done** (task 2037): providers removed, `https://grain.dev/capabilities/grain#sql` (`{write: bool}`, with `write: true` dangerous) added on the in-process `…/grain` server, stored grants rewritten to `https://grain.dev/capabilities/grain#sql={"write":false}` / `{"write":true}` by schema migration 82 |
 | `grain-ci` | `…/grain#ci` | **done** (task 2364): provider removed, `https://grain.dev/capabilities/grain#ci` added on the in-process `…/grain` server (still granted solely from a repository's CI Mode and refused when attached by hand), stored grants rewritten to `https://grain.dev/capabilities/grain#ci={}` by schema migration 96 (repo_config.ci_capabilities included) |
 | `image-signing`, `registry-push`, `package-publish` (CI) | `…/release#image-signing`, `…/release#registry-push`, `…/release#package-publish` | **done** (task 2432): the three providers removed from the daemon's registry; `…/release` is an in-process server (`pkg/capability/release`) whose mints are the retired providers' own Resolve and Materialize for the CI job in the mint's context (`model.WithCIMint`). The CI-only, event (image-signing: `release`; the others: `release`, `workflow_dispatch`, and package-publish grain's trusted schedule) and repository-list rules are declared by the server (`capability.Method.CI`, `model.CIGrantRule`) and enforced ahead of `capability_policy`, which can only narrow them. Stored grants rewritten to `…#<name>={}` by schema migration 101; the bare names remain one-release aliases |
