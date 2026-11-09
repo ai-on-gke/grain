@@ -47,7 +47,11 @@ export default function CapabilitiesSection({
   // (2026-11-08 connections walkthrough: a removed server's secret stayed
   // listed, linking to the gone server, until a reload).
   const [secretsSeq, setSecretsSeq] = useState(0);
-  const serversChanged = useCallback(() => setSecretsSeq((n) => n + 1), []);
+  const onSaved = s?.onSaved;
+  const serversChanged = useCallback(() => {
+    setSecretsSeq((n) => n + 1);
+    onSaved?.();
+  }, [onSaved]);
   return (
     <>
       <Alert
@@ -159,12 +163,14 @@ export default function CapabilitiesSection({
         <CapabilityPolicyEditor
           showError={effectiveShowError}
           readOnly={effectiveReadOnly}
+          onSaved={onSaved}
         />
       </SettingsCard>
       <SettingsCard title="API scope sets" anchor="api-scope-sets">
         <ApiScopeSetsPanel
           showError={effectiveShowError}
           readOnly={effectiveReadOnly}
+          onSaved={onSaved}
         />
       </SettingsCard>
       {/* The Deployment credentials card writes through PUT /api/settings
