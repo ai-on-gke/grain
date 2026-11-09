@@ -396,7 +396,8 @@ Commands:
                                        -field name=value sets one of the fields this deployment
                                        declares, repeatably -- "grain create -h" lists them)
   update <id> [flags]                  edit a task's title or fields, -field name=value included
-  approve <id>                         accept a proposed task (proposed -> queued)
+  approve [-reason r] <id>             accept a proposed task (proposed -> queued); an external agent
+                                       credential (gma_) must give -reason
   withdraw <id>                        withdraw a queued task's approval (queued -> proposed)
   defer [-until <date>] <id>           put a task aside without closing it (proposed/queued -> deferred);
                                        deferred tasks are hidden from task lists until asked for, and
@@ -419,7 +420,7 @@ Commands:
                                        withdrawn if anything else is pushed before the merge
   pr adopt|review|status <pr>          adopt (-mode review-only|finish), review (-design) or report on
                                        (-threads) a pull request grain did not open (see prcmd.go)
-  run-now <id>                         start a run of this task next, ahead of the queue and whatever
+  run-now [-reason r] <id>             start a run of this task next, ahead of the queue and whatever
                                        its state says -- including sending a finished or merging task
                                        back to an agent for more work on its own branch
   config                               show the capabilities this deployment offers
