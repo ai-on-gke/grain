@@ -300,6 +300,24 @@ func WriteTargetsOfGrants(grants []Grant) []WriteTarget {
 // grant, for SplitRequestGrants.
 type GrantSpelling struct {
 	Capabilities, Reads, Writes, Target bool
+	// TargetFields names the target-setting field(s) the request sent
+	// alongside grants ("repo", "branch", "base", "no_repo", "noRepo", or
+	// a change-target kind). Non-empty implies Target; when Target is true
+	// and TargetFields is empty, the refusal falls back to "repo".
+	TargetFields []string
+}
+
+func targetFieldsPhrase(fields []string) string {
+	switch len(fields) {
+	case 0:
+		return "repo field"
+	case 1:
+		return fields[0] + " field"
+	case 2:
+		return fields[0] + " and " + fields[1] + " fields"
+	default:
+		return strings.Join(fields[:len(fields)-1], ", ") + " and " + fields[len(fields)-1] + " fields"
+	}
 }
 
 // RequestGrants is a request's grants: list, sorted into the fields that
@@ -351,8 +369,8 @@ func SplitRequestGrants(grants []Grant, legacy GrantSpelling) (RequestGrants, er
 			if out.Target != nil {
 				return RequestGrants{}, fmt.Errorf("grants: more than one %s", RepoTargetRef)
 			}
-			if legacy.Target {
-				return RequestGrants{}, fmt.Errorf("grants: %s and the request's repo field both name the task's repository; send one", RepoTargetRef)
+			if legacy.Target || len(legacy.TargetFields) > 0 {
+				return RequestGrants{}, fmt.Errorf("grants: %s and the request's %s both name the task's repository; send one", RepoTargetRef, targetFieldsPhrase(legacy.TargetFields))
 			}
 			out.Target = &WriteTarget{Repo: repo, Base: base}
 			continue
