@@ -1389,8 +1389,8 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 
 	// Seed VM shapes and the shared Cloud SQL pool row so instance creations and allocations work.
 	if err := st.SeedShapes(ctx, []store.ShapeRow{
-		{Name: "standard", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1, Description: "Standard VM"},
-		{Name: "large", MachineType: "e2-standard-8", BootDiskGB: 100, QuotaUnits: 2, Description: "Large VM"},
+		{Name: "standard", MachineType: "n2-standard-4", BootDiskGB: 50, QuotaUnits: 1, Description: "Standard VM"},
+		{Name: "large", MachineType: "n2-standard-8", BootDiskGB: 100, QuotaUnits: 2, Description: "Large VM"},
 	}); err != nil {
 		t.Fatalf("SeedShapes: %v", err)
 	}
@@ -1467,8 +1467,8 @@ func TestRegistryEndToEndStep15(t *testing.T) {
 			DrainTimeout:       5 * time.Second,
 			HealthTimeout:      30 * time.Second,
 			Shapes: []registry.Shape{
-				{Name: "standard", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
-				{Name: "large", MachineType: "e2-standard-8", BootDiskGB: 100, QuotaUnits: 2},
+				{Name: "standard", MachineType: "n2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
+				{Name: "large", MachineType: "n2-standard-8", BootDiskGB: 100, QuotaUnits: 2},
 			},
 		},
 		Quotas: registry.QuotasConfig{
@@ -2887,7 +2887,7 @@ func TestMultiReplicaDelegationCacheEviction(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 
 	if err := st.SeedShapes(ctx, []store.ShapeRow{
-		{Name: "standard", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
+		{Name: "standard", MachineType: "n2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
 	}); err != nil {
 		t.Fatalf("SeedShapes: %v", err)
 	}
@@ -2975,7 +2975,7 @@ func TestMultiReplicaDelegationCacheEviction(t *testing.T) {
 			Zones:        []string{"us-central1-a"},
 			DefaultShape: "standard",
 			Shapes: []registry.Shape{
-				{Name: "standard", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
+				{Name: "standard", MachineType: "n2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
 			},
 		},
 		Quotas: registry.QuotasConfig{

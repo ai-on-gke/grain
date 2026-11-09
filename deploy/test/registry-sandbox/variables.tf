@@ -142,7 +142,7 @@ variable "instance_domain" {
 }
 
 variable "machine_type" {
-  description = "GCE machine type for the single test registry + PostgreSQL VM."
+  description = "GCE machine type for the single test registry + PostgreSQL VM. This VM only runs the control plane and needs no nested virtualization, so a small E2 type is fine here; hosted grain VMs take their machine types from the N2/C4 compute.shapes in files/startup.sh instead."
   type        = string
   default     = "e2-small"
 }
@@ -154,7 +154,7 @@ variable "boot_disk_gb" {
 }
 
 variable "sql_machine_type" {
-  description = "GCE machine type for the shared instance_sql PostgreSQL pool VM."
+  description = "GCE machine type for the shared instance_sql PostgreSQL pool VM. It runs only PostgreSQL and needs no nested virtualization, so a small E2 type is fine here."
   type        = string
   default     = "e2-small"
 }

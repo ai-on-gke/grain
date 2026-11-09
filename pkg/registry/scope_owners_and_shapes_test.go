@@ -114,7 +114,7 @@ compute:
 
 	// Seed one valid shape ("small") so we can create an instance and test PATCH + replace.
 	if err := st.SeedShapes(ctx, []store.ShapeRow{
-		{Name: "small", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
+		{Name: "small", MachineType: "n2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
 	}); err != nil {
 		t.Fatalf("SeedShapes: %v", err)
 	}
