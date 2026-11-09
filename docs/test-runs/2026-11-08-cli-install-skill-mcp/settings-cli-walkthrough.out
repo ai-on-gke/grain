@@ -1,0 +1,290 @@
+
+== normal (http://127.0.0.1:4311); externalAgentApi was false; configRepoOnly=false
+PASS  normal desktop light: operator turns the API off  -- 200
+PASS  normal desktop light: cli-install-command text
+PASS  normal desktop light: cli-install-command inside viewport  -- x=505.0 w=696.8
+PASS  normal desktop light: copy cli-install-command
+PASS  normal desktop light: cli-login-command text
+PASS  normal desktop light: cli-login-command inside viewport  -- x=505.0 w=696.8
+PASS  normal desktop light: copy cli-login-command
+PASS  normal desktop light: cli-skill-command-jetski text
+PASS  normal desktop light: cli-skill-command-jetski inside viewport  -- x=505.0 w=696.8
+PASS  normal desktop light: copy cli-skill-command-jetski
+PASS  normal desktop light: cli-skill-command-claude text
+PASS  normal desktop light: cli-skill-command-claude inside viewport  -- x=505.0 w=696.8
+PASS  normal desktop light: copy cli-skill-command-claude
+PASS  normal desktop light: cli-skill-command-codex text
+PASS  normal desktop light: cli-skill-command-codex inside viewport  -- x=505.0 w=696.8
+PASS  normal desktop light: copy cli-skill-command-codex
+PASS  normal desktop light: cli-skill-command-gemini text
+PASS  normal desktop light: cli-skill-command-gemini inside viewport  -- x=505.0 w=696.8
+PASS  normal desktop light: copy cli-skill-command-gemini
+PASS  normal desktop light: external-agent-API-off note shown
+PASS  normal desktop light: no horizontal overflow  -- scrollWidth=1440 viewport=1440
+PASS  normal desktop light: link lands on /settings/agents#external-agents  -- http://127.0.0.1:4311/settings/agents#external-agents
+PASS  normal desktop light: Accept external agents is off
+PASS  normal desktop light: the switch is on screen  -- y=612
+PASS  normal desktop light agents: no horizontal overflow  -- scrollWidth=1440 viewport=1440
+PASS  normal desktop light: switch saved externalAgentApi=true
+PASS  normal desktop light (on): cli-install-command text
+PASS  normal desktop light (on): cli-install-command inside viewport  -- x=505.0 w=696.8
+PASS  normal desktop light (on): copy cli-install-command
+PASS  normal desktop light (on): cli-login-command text
+PASS  normal desktop light (on): cli-login-command inside viewport  -- x=505.0 w=696.8
+PASS  normal desktop light (on): copy cli-login-command
+PASS  normal desktop light (on): cli-skill-command-jetski text
+PASS  normal desktop light (on): cli-skill-command-jetski inside viewport  -- x=505.0 w=696.8
+PASS  normal desktop light (on): copy cli-skill-command-jetski
+PASS  normal desktop light (on): cli-skill-command-claude text
+PASS  normal desktop light (on): cli-skill-command-claude inside viewport  -- x=505.0 w=696.8
+PASS  normal desktop light (on): copy cli-skill-command-claude
+PASS  normal desktop light (on): cli-skill-command-codex text
+PASS  normal desktop light (on): cli-skill-command-codex inside viewport  -- x=505.0 w=696.8
+PASS  normal desktop light (on): copy cli-skill-command-codex
+PASS  normal desktop light (on): cli-skill-command-gemini text
+PASS  normal desktop light (on): cli-skill-command-gemini inside viewport  -- x=505.0 w=696.8
+PASS  normal desktop light (on): copy cli-skill-command-gemini
+PASS  normal desktop light (on): external-agent-API-off note absent
+PASS  normal desktop light (on): no horizontal overflow  -- scrollWidth=1440 viewport=1440
+PASS  normal desktop dark: operator turns the API off  -- 200
+PASS  normal desktop dark: cli-install-command text
+PASS  normal desktop dark: cli-install-command inside viewport  -- x=505.0 w=696.8
+PASS  normal desktop dark: copy cli-install-command
+PASS  normal desktop dark: cli-login-command text
+PASS  normal desktop dark: cli-login-command inside viewport  -- x=505.0 w=696.8
+PASS  normal desktop dark: copy cli-login-command
+PASS  normal desktop dark: cli-skill-command-jetski text
+PASS  normal desktop dark: cli-skill-command-jetski inside viewport  -- x=505.0 w=696.8
+PASS  normal desktop dark: copy cli-skill-command-jetski
+PASS  normal desktop dark: cli-skill-command-claude text
+PASS  normal desktop dark: cli-skill-command-claude inside viewport  -- x=505.0 w=696.8
+PASS  normal desktop dark: copy cli-skill-command-claude
+PASS  normal desktop dark: cli-skill-command-codex text
+PASS  normal desktop dark: cli-skill-command-codex inside viewport  -- x=505.0 w=696.8
+PASS  normal desktop dark: copy cli-skill-command-codex
+PASS  normal desktop dark: cli-skill-command-gemini text
+PASS  normal desktop dark: cli-skill-command-gemini inside viewport  -- x=505.0 w=696.8
+PASS  normal desktop dark: copy cli-skill-command-gemini
+PASS  normal desktop dark: external-agent-API-off note shown
+PASS  normal desktop dark: no horizontal overflow  -- scrollWidth=1440 viewport=1440
+PASS  normal desktop dark: link lands on /settings/agents#external-agents  -- http://127.0.0.1:4311/settings/agents#external-agents
+PASS  normal desktop dark: Accept external agents is off
+PASS  normal desktop dark: the switch is on screen  -- y=612
+PASS  normal desktop dark agents: no horizontal overflow  -- scrollWidth=1440 viewport=1440
+PASS  normal desktop dark: switch saved externalAgentApi=true
+PASS  normal desktop dark (on): cli-install-command text
+PASS  normal desktop dark (on): cli-install-command inside viewport  -- x=505.0 w=696.8
+PASS  normal desktop dark (on): copy cli-install-command
+PASS  normal desktop dark (on): cli-login-command text
+PASS  normal desktop dark (on): cli-login-command inside viewport  -- x=505.0 w=696.8
+PASS  normal desktop dark (on): copy cli-login-command
+PASS  normal desktop dark (on): cli-skill-command-jetski text
+PASS  normal desktop dark (on): cli-skill-command-jetski inside viewport  -- x=505.0 w=696.8
+PASS  normal desktop dark (on): copy cli-skill-command-jetski
+PASS  normal desktop dark (on): cli-skill-command-claude text
+PASS  normal desktop dark (on): cli-skill-command-claude inside viewport  -- x=505.0 w=696.8
+PASS  normal desktop dark (on): copy cli-skill-command-claude
+PASS  normal desktop dark (on): cli-skill-command-codex text
+PASS  normal desktop dark (on): cli-skill-command-codex inside viewport  -- x=505.0 w=696.8
+PASS  normal desktop dark (on): copy cli-skill-command-codex
+PASS  normal desktop dark (on): cli-skill-command-gemini text
+PASS  normal desktop dark (on): cli-skill-command-gemini inside viewport  -- x=505.0 w=696.8
+PASS  normal desktop dark (on): copy cli-skill-command-gemini
+PASS  normal desktop dark (on): external-agent-API-off note absent
+PASS  normal desktop dark (on): no horizontal overflow  -- scrollWidth=1440 viewport=1440
+PASS  normal phone light: operator turns the API off  -- 200
+PASS  normal phone light: cli-install-command text
+PASS  normal phone light: cli-install-command inside viewport  -- x=25.0 w=292.0
+PASS  normal phone light: copy cli-install-command
+PASS  normal phone light: cli-login-command text
+PASS  normal phone light: cli-login-command inside viewport  -- x=25.0 w=292.0
+PASS  normal phone light: copy cli-login-command
+PASS  normal phone light: cli-skill-command-jetski text
+PASS  normal phone light: cli-skill-command-jetski inside viewport  -- x=25.0 w=292.0
+PASS  normal phone light: copy cli-skill-command-jetski
+PASS  normal phone light: cli-skill-command-claude text
+PASS  normal phone light: cli-skill-command-claude inside viewport  -- x=25.0 w=292.0
+PASS  normal phone light: copy cli-skill-command-claude
+PASS  normal phone light: cli-skill-command-codex text
+PASS  normal phone light: cli-skill-command-codex inside viewport  -- x=25.0 w=292.0
+PASS  normal phone light: copy cli-skill-command-codex
+PASS  normal phone light: cli-skill-command-gemini text
+PASS  normal phone light: cli-skill-command-gemini inside viewport  -- x=25.0 w=292.0
+PASS  normal phone light: copy cli-skill-command-gemini
+PASS  normal phone light: external-agent-API-off note shown
+PASS  normal phone light: no horizontal overflow  -- scrollWidth=390 viewport=390
+PASS  normal phone light: link lands on /settings/agents#external-agents  -- http://127.0.0.1:4311/settings/agents#external-agents
+PASS  normal phone light: Accept external agents is off
+PASS  normal phone light: the switch is on screen  -- y=463
+PASS  normal phone light agents: no horizontal overflow  -- scrollWidth=390 viewport=390
+PASS  normal phone light: switch saved externalAgentApi=true
+PASS  normal phone light (on): cli-install-command text
+PASS  normal phone light (on): cli-install-command inside viewport  -- x=25.0 w=292.0
+PASS  normal phone light (on): copy cli-install-command
+PASS  normal phone light (on): cli-login-command text
+PASS  normal phone light (on): cli-login-command inside viewport  -- x=25.0 w=292.0
+PASS  normal phone light (on): copy cli-login-command
+PASS  normal phone light (on): cli-skill-command-jetski text
+PASS  normal phone light (on): cli-skill-command-jetski inside viewport  -- x=25.0 w=292.0
+PASS  normal phone light (on): copy cli-skill-command-jetski
+PASS  normal phone light (on): cli-skill-command-claude text
+PASS  normal phone light (on): cli-skill-command-claude inside viewport  -- x=25.0 w=292.0
+PASS  normal phone light (on): copy cli-skill-command-claude
+PASS  normal phone light (on): cli-skill-command-codex text
+PASS  normal phone light (on): cli-skill-command-codex inside viewport  -- x=25.0 w=292.0
+PASS  normal phone light (on): copy cli-skill-command-codex
+PASS  normal phone light (on): cli-skill-command-gemini text
+PASS  normal phone light (on): cli-skill-command-gemini inside viewport  -- x=25.0 w=292.0
+PASS  normal phone light (on): copy cli-skill-command-gemini
+PASS  normal phone light (on): external-agent-API-off note absent
+PASS  normal phone light (on): no horizontal overflow  -- scrollWidth=390 viewport=390
+PASS  normal phone dark: operator turns the API off  -- 200
+PASS  normal phone dark: cli-install-command text
+PASS  normal phone dark: cli-install-command inside viewport  -- x=25.0 w=292.0
+PASS  normal phone dark: copy cli-install-command
+PASS  normal phone dark: cli-login-command text
+PASS  normal phone dark: cli-login-command inside viewport  -- x=25.0 w=292.0
+PASS  normal phone dark: copy cli-login-command
+PASS  normal phone dark: cli-skill-command-jetski text
+PASS  normal phone dark: cli-skill-command-jetski inside viewport  -- x=25.0 w=292.0
+PASS  normal phone dark: copy cli-skill-command-jetski
+PASS  normal phone dark: cli-skill-command-claude text
+PASS  normal phone dark: cli-skill-command-claude inside viewport  -- x=25.0 w=292.0
+PASS  normal phone dark: copy cli-skill-command-claude
+PASS  normal phone dark: cli-skill-command-codex text
+PASS  normal phone dark: cli-skill-command-codex inside viewport  -- x=25.0 w=292.0
+PASS  normal phone dark: copy cli-skill-command-codex
+PASS  normal phone dark: cli-skill-command-gemini text
+PASS  normal phone dark: cli-skill-command-gemini inside viewport  -- x=25.0 w=292.0
+PASS  normal phone dark: copy cli-skill-command-gemini
+PASS  normal phone dark: external-agent-API-off note shown
+PASS  normal phone dark: no horizontal overflow  -- scrollWidth=390 viewport=390
+PASS  normal phone dark: link lands on /settings/agents#external-agents  -- http://127.0.0.1:4311/settings/agents#external-agents
+PASS  normal phone dark: Accept external agents is off
+PASS  normal phone dark: the switch is on screen  -- y=463
+PASS  normal phone dark agents: no horizontal overflow  -- scrollWidth=390 viewport=390
+PASS  normal phone dark: switch saved externalAgentApi=true
+PASS  normal phone dark (on): cli-install-command text
+PASS  normal phone dark (on): cli-install-command inside viewport  -- x=25.0 w=292.0
+PASS  normal phone dark (on): copy cli-install-command
+PASS  normal phone dark (on): cli-login-command text
+PASS  normal phone dark (on): cli-login-command inside viewport  -- x=25.0 w=292.0
+PASS  normal phone dark (on): copy cli-login-command
+PASS  normal phone dark (on): cli-skill-command-jetski text
+PASS  normal phone dark (on): cli-skill-command-jetski inside viewport  -- x=25.0 w=292.0
+PASS  normal phone dark (on): copy cli-skill-command-jetski
+PASS  normal phone dark (on): cli-skill-command-claude text
+PASS  normal phone dark (on): cli-skill-command-claude inside viewport  -- x=25.0 w=292.0
+PASS  normal phone dark (on): copy cli-skill-command-claude
+PASS  normal phone dark (on): cli-skill-command-codex text
+PASS  normal phone dark (on): cli-skill-command-codex inside viewport  -- x=25.0 w=292.0
+PASS  normal phone dark (on): copy cli-skill-command-codex
+PASS  normal phone dark (on): cli-skill-command-gemini text
+PASS  normal phone dark (on): cli-skill-command-gemini inside viewport  -- x=25.0 w=292.0
+PASS  normal phone dark (on): copy cli-skill-command-gemini
+PASS  normal phone dark (on): external-agent-API-off note absent
+PASS  normal phone dark (on): no horizontal overflow  -- scrollWidth=390 viewport=390
+
+== external-config-repo (http://127.0.0.1:4312); externalAgentApi was false; configRepoOnly=true
+PASS  external-config-repo desktop light: cli-install-command text
+PASS  external-config-repo desktop light: cli-install-command inside viewport  -- x=505.0 w=696.8
+PASS  external-config-repo desktop light: copy cli-install-command
+PASS  external-config-repo desktop light: cli-login-command text
+PASS  external-config-repo desktop light: cli-login-command inside viewport  -- x=505.0 w=696.8
+PASS  external-config-repo desktop light: copy cli-login-command
+PASS  external-config-repo desktop light: cli-skill-command-jetski text
+PASS  external-config-repo desktop light: cli-skill-command-jetski inside viewport  -- x=505.0 w=696.8
+PASS  external-config-repo desktop light: copy cli-skill-command-jetski
+PASS  external-config-repo desktop light: cli-skill-command-claude text
+PASS  external-config-repo desktop light: cli-skill-command-claude inside viewport  -- x=505.0 w=696.8
+PASS  external-config-repo desktop light: copy cli-skill-command-claude
+PASS  external-config-repo desktop light: cli-skill-command-codex text
+PASS  external-config-repo desktop light: cli-skill-command-codex inside viewport  -- x=505.0 w=696.8
+PASS  external-config-repo desktop light: copy cli-skill-command-codex
+PASS  external-config-repo desktop light: cli-skill-command-gemini text
+PASS  external-config-repo desktop light: cli-skill-command-gemini inside viewport  -- x=505.0 w=696.8
+PASS  external-config-repo desktop light: copy cli-skill-command-gemini
+PASS  external-config-repo desktop light: external-agent-API-off note shown
+PASS  external-config-repo desktop light: no horizontal overflow  -- scrollWidth=1440 viewport=1440
+PASS  external-config-repo desktop light: external-config-repo banner names the file to edit  -- Edit tables/grain_config.json in acme/grain-config (main), then open a pull request there; grain applies it on its next sync.
+PASS  external-config-repo desktop light: Accept external agents switch is read-only
+PASS  external-config-repo desktop light agents: no horizontal overflow  -- scrollWidth=1440 viewport=1440
+PASS  external-config-repo desktop light: notice inside viewport  -- x=488.0 w=760.0
+PASS  external-config-repo desktop light: PUT is refused 409 with the edit to commit  -- 409
+PASS  external-config-repo desktop dark: cli-install-command text
+PASS  external-config-repo desktop dark: cli-install-command inside viewport  -- x=505.0 w=696.8
+PASS  external-config-repo desktop dark: copy cli-install-command
+PASS  external-config-repo desktop dark: cli-login-command text
+PASS  external-config-repo desktop dark: cli-login-command inside viewport  -- x=505.0 w=696.8
+PASS  external-config-repo desktop dark: copy cli-login-command
+PASS  external-config-repo desktop dark: cli-skill-command-jetski text
+PASS  external-config-repo desktop dark: cli-skill-command-jetski inside viewport  -- x=505.0 w=696.8
+PASS  external-config-repo desktop dark: copy cli-skill-command-jetski
+PASS  external-config-repo desktop dark: cli-skill-command-claude text
+PASS  external-config-repo desktop dark: cli-skill-command-claude inside viewport  -- x=505.0 w=696.8
+PASS  external-config-repo desktop dark: copy cli-skill-command-claude
+PASS  external-config-repo desktop dark: cli-skill-command-codex text
+PASS  external-config-repo desktop dark: cli-skill-command-codex inside viewport  -- x=505.0 w=696.8
+PASS  external-config-repo desktop dark: copy cli-skill-command-codex
+PASS  external-config-repo desktop dark: cli-skill-command-gemini text
+PASS  external-config-repo desktop dark: cli-skill-command-gemini inside viewport  -- x=505.0 w=696.8
+PASS  external-config-repo desktop dark: copy cli-skill-command-gemini
+PASS  external-config-repo desktop dark: external-agent-API-off note shown
+PASS  external-config-repo desktop dark: no horizontal overflow  -- scrollWidth=1440 viewport=1440
+PASS  external-config-repo desktop dark: external-config-repo banner names the file to edit  -- Edit tables/grain_config.json in acme/grain-config (main), then open a pull request there; grain applies it on its next sync.
+PASS  external-config-repo desktop dark: Accept external agents switch is read-only
+PASS  external-config-repo desktop dark agents: no horizontal overflow  -- scrollWidth=1440 viewport=1440
+PASS  external-config-repo desktop dark: notice inside viewport  -- x=488.0 w=760.0
+PASS  external-config-repo desktop dark: PUT is refused 409 with the edit to commit  -- 409
+PASS  external-config-repo phone light: cli-install-command text
+PASS  external-config-repo phone light: cli-install-command inside viewport  -- x=25.0 w=292.0
+PASS  external-config-repo phone light: copy cli-install-command
+PASS  external-config-repo phone light: cli-login-command text
+PASS  external-config-repo phone light: cli-login-command inside viewport  -- x=25.0 w=292.0
+PASS  external-config-repo phone light: copy cli-login-command
+PASS  external-config-repo phone light: cli-skill-command-jetski text
+PASS  external-config-repo phone light: cli-skill-command-jetski inside viewport  -- x=25.0 w=292.0
+PASS  external-config-repo phone light: copy cli-skill-command-jetski
+PASS  external-config-repo phone light: cli-skill-command-claude text
+PASS  external-config-repo phone light: cli-skill-command-claude inside viewport  -- x=25.0 w=292.0
+PASS  external-config-repo phone light: copy cli-skill-command-claude
+PASS  external-config-repo phone light: cli-skill-command-codex text
+PASS  external-config-repo phone light: cli-skill-command-codex inside viewport  -- x=25.0 w=292.0
+PASS  external-config-repo phone light: copy cli-skill-command-codex
+PASS  external-config-repo phone light: cli-skill-command-gemini text
+PASS  external-config-repo phone light: cli-skill-command-gemini inside viewport  -- x=25.0 w=292.0
+PASS  external-config-repo phone light: copy cli-skill-command-gemini
+PASS  external-config-repo phone light: external-agent-API-off note shown
+PASS  external-config-repo phone light: no horizontal overflow  -- scrollWidth=390 viewport=390
+PASS  external-config-repo phone light: external-config-repo banner names the file to edit  -- Edit tables/grain_config.json in acme/grain-config (main), then open a pull request there; grain applies it on its next sync.
+PASS  external-config-repo phone light: Accept external agents switch is read-only
+PASS  external-config-repo phone light agents: no horizontal overflow  -- scrollWidth=390 viewport=390
+PASS  external-config-repo phone light: notice inside viewport  -- x=12.0 w=366.0
+PASS  external-config-repo phone light: PUT is refused 409 with the edit to commit  -- 409
+PASS  external-config-repo phone dark: cli-install-command text
+PASS  external-config-repo phone dark: cli-install-command inside viewport  -- x=25.0 w=292.0
+PASS  external-config-repo phone dark: copy cli-install-command
+PASS  external-config-repo phone dark: cli-login-command text
+PASS  external-config-repo phone dark: cli-login-command inside viewport  -- x=25.0 w=292.0
+PASS  external-config-repo phone dark: copy cli-login-command
+PASS  external-config-repo phone dark: cli-skill-command-jetski text
+PASS  external-config-repo phone dark: cli-skill-command-jetski inside viewport  -- x=25.0 w=292.0
+PASS  external-config-repo phone dark: copy cli-skill-command-jetski
+PASS  external-config-repo phone dark: cli-skill-command-claude text
+PASS  external-config-repo phone dark: cli-skill-command-claude inside viewport  -- x=25.0 w=292.0
+PASS  external-config-repo phone dark: copy cli-skill-command-claude
+PASS  external-config-repo phone dark: cli-skill-command-codex text
+PASS  external-config-repo phone dark: cli-skill-command-codex inside viewport  -- x=25.0 w=292.0
+PASS  external-config-repo phone dark: copy cli-skill-command-codex
+PASS  external-config-repo phone dark: cli-skill-command-gemini text
+PASS  external-config-repo phone dark: cli-skill-command-gemini inside viewport  -- x=25.0 w=292.0
+PASS  external-config-repo phone dark: copy cli-skill-command-gemini
+PASS  external-config-repo phone dark: external-agent-API-off note shown
+PASS  external-config-repo phone dark: no horizontal overflow  -- scrollWidth=390 viewport=390
+PASS  external-config-repo phone dark: external-config-repo banner names the file to edit  -- Edit tables/grain_config.json in acme/grain-config (main), then open a pull request there; grain applies it on its next sync.
+PASS  external-config-repo phone dark: Accept external agents switch is read-only
+PASS  external-config-repo phone dark agents: no horizontal overflow  -- scrollWidth=390 viewport=390
+PASS  external-config-repo phone dark: notice inside viewport  -- x=12.0 w=366.0
+PASS  external-config-repo phone dark: PUT is refused 409 with the edit to commit  -- 409
+
+== 284 checks, 0 failed
