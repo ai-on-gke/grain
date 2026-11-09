@@ -17,6 +17,9 @@ paths:
   - scripts/patch-tag-guard.sh
   - scripts/build-version.sh
   - scripts/grain-ci-host.sh
+  - scripts/buildvcs.sh
+  - scripts/configure-dockerhub-auth.sh
+  - scripts/release-image-repos.sh
   - scripts/release-train-actions.sh
   - scripts/release-assets.sh
   - scripts/build-cli.sh
