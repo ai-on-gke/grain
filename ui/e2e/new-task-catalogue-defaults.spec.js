@@ -49,7 +49,7 @@ async function openStandalone(page, title) {
   await chooseOption(page.getByLabel(/^Repos/), "none");
   const note = page.getByTestId("new-task-catalogue-refused");
   await expect(note).toHaveText(
-    "settings/capabilities.yml refuses api:self-debug on a task with no repo, so that default is left off this task.",
+    "settings/capabilities.yml refuses https://grain.dev/capabilities/api#self-debug on a task with no repo, so that default is left off this task.",
   );
   return { note };
 }
@@ -122,6 +122,9 @@ test("a No repo task leaves off a default the catalogue refuses there", async ({
         ]),
       );
       expect(detail.capabilities).not.toContain("api:self-debug");
+      expect(detail.capabilities).not.toContain(
+        "https://grain.dev/capabilities/api#self-debug",
+      );
     }
     // On the repo the catalogue grants it to, nothing is refused.
     {

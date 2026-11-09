@@ -239,7 +239,8 @@ test("saves a grant removed from a session during a live run", async ({
   page,
   request,
 }) => {
-  const removed = "api:capabilities:detach";
+  const removed = "https://grain.dev/capabilities/api#capabilities:detach";
+  const removedLabel = "api:capabilities:detach";
   const before = (
     await (await request.get("/api/console-sessions")).json()
   ).sessions.find((s) => s.id === "director");
@@ -261,7 +262,7 @@ test("saves a grant removed from a session during a live run", async ({
         r.request().method() === "PUT" &&
         /\/api\/console-sessions\/director$/.test(r.url()),
     );
-    await page.getByRole("button", { name: `Remove ${removed}` }).click();
+    await page.getByRole("button", { name: `Remove ${removedLabel}` }).click();
     expect((await saved).status()).toBe(200);
     const { sessions } = await (
       await request.get("/api/console-sessions")

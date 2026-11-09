@@ -54,7 +54,7 @@ import GrantsPicker from "./GrantsPicker.jsx";
 import ReadOnlyGrants from "./ReadOnlyGrants.jsx";
 import { ConfigManagedNotice } from "./ConfigRepoLink.jsx";
 import { localGrantHandlers } from "./capabilityMethods.js";
-import { isApiGrant } from "../apiGrants.js";
+import { isApiGrant, isLegacyApiGrant } from "../apiGrants.js";
 import { isCapabilityRef } from "../capabilityArgs.js";
 import { buildPath } from "../paths.js";
 import {
@@ -774,10 +774,8 @@ export default function RepoPage({
   // and edits.
   const isBareGrant = (id) => !isCapabilityRef(id) && !isApiGrant(id);
   const capsLegacy = capsSelection.filter(isBareGrant);
-  const capsApi = capsSelection.filter(isApiGrant);
-  const capsRefs = capsSelection.filter(
-    (id) => isCapabilityRef(id) && !isApiGrant(id),
-  );
+  const capsApi = capsSelection.filter(isLegacyApiGrant);
+  const capsRefs = capsSelection.filter(isCapabilityRef);
   const capsMethods = localGrantHandlers(
     [...capsLegacy, ...capsRefs],
     (rest) => {

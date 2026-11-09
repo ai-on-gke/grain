@@ -241,7 +241,11 @@ func TestAgentAPICannotEscalate(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, g := range task.Grants {
-		if !slices.Contains([]string{"api:tasks:read", "api:tasks:read@acme/widgets", model.GCPKeySandboxAgentGrant}, g.Capability) {
+		if !slices.Contains([]string{
+			model.APIRef("tasks:read"),
+			model.APIGrantString("tasks:read", "acme/widgets"),
+			model.GCPKeySandboxAgentGrant,
+		}, g.Capability) {
 			t.Errorf("task 2 was granted %s by an agent", g.Capability)
 		}
 	}

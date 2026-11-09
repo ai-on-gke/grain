@@ -648,7 +648,7 @@ esac
 // `list_ci_runs` / `get_ci_log` must carry repo-scoped api:ci-read@ai-on-gke/grain.
 func TestReleaseAndQualificationTemplatesHoldScopedCIRead(t *testing.T) {
 	decl := declarations(t)
-	want := model.APIGrantPrefix + "ci-read@" + model.GrainSourceRepo().String()
+	want := model.APIGrantString("ci-read", model.GrainSourceRepo().String())
 	need := map[string]bool{
 		".grain/templates/release-train.yml":                false,
 		".grain/templates/release-watchdog.yml":             false,
@@ -662,7 +662,7 @@ func TestReleaseAndQualificationTemplatesHoldScopedCIRead(t *testing.T) {
 		need[tmpl.Path] = true
 		var caps []string
 		for _, g := range tmpl.Template.Grants {
-			caps = append(caps, g.Capability)
+			caps = append(caps, model.CanonicalGrantKey(g.Capability))
 			if model.IsGrainCIGrant(g.Capability) {
 				t.Errorf("%s carries %q, which applyGrainCIGrant strips on ci_mode: github", tmpl.Path, g.Capability)
 			}

@@ -332,14 +332,15 @@ test("removing a scope set lists the task, template, schedule and workflow job h
       await expect(dialog).toContainText(
         `4 grants hold ${GRANT}, and will grant nothing once it is removed:`,
       );
-      for (const holder of [
-        `task:${made.task}`,
-        `template:${made.template}`,
-        `schedule:${made.schedule}`,
-        "workflow:acme/widgets:.grain/workflows/e2e-holders.yml#lint",
+      const canonicalGrant = `https://grain.dev/capabilities/api#${SET}`;
+      for (const [holder, expectedGrant] of [
+        [`task:${made.task}`, canonicalGrant],
+        [`template:${made.template}`, canonicalGrant],
+        [`schedule:${made.schedule}`, canonicalGrant],
+        ["workflow:acme/widgets:.grain/workflows/e2e-holders.yml#lint", GRANT],
       ]) {
         await expect(dialog.locator(`[data-holder="${holder}"]`)).toContainText(
-          GRANT,
+          expectedGrant,
         );
       }
       const box = await dialog.boundingBox();

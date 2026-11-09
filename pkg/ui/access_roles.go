@@ -223,7 +223,7 @@ func resolveAccessRoles(who string, roles []string) *accessRole {
 			a.Missing = append(a.Missing, role)
 			continue
 		}
-		grants = append(grants, model.APIGrantPrefix+role)
+		grants = append(grants, model.APIRef(role))
 		for sc := range roleDenies(role) {
 			a.deny[sc] = true
 		}
@@ -241,7 +241,7 @@ func resolveAccessRoles(who string, roles []string) *accessRole {
 	return a
 }
 
-// roleGrantList is the api:<role> list resolveAccessRoles built, or -- when a
+// roleGrantList is the .../api#<role> list resolveAccessRoles built, or -- when a
 // role's deny vetoed a scope -- the remaining per-scope grants from set so
 // grant-escalation checks cannot pass on a vetoed scope.
 func roleGrantList(grants []string, set APIGrantSet, deny map[APIScope]bool) []string {
@@ -252,11 +252,11 @@ func roleGrantList(grants []string, set APIGrantSet, deny map[APIScope]bool) []s
 	for _, sc := range set.Scopes() {
 		repos := set.Repos(sc)
 		if len(repos) == 0 {
-			out = append(out, model.APIGrantPrefix+string(sc))
+			out = append(out, model.APIRef(string(sc)))
 			continue
 		}
 		for _, r := range repos {
-			out = append(out, model.APIGrantPrefix+string(sc)+"@"+r)
+			out = append(out, model.APIGrantString(string(sc), r))
 		}
 	}
 	return out
@@ -365,11 +365,11 @@ func grantListFromSet(set APIGrantSet) []string {
 	for _, sc := range set.Scopes() {
 		repos := set.Repos(sc)
 		if len(repos) == 0 {
-			out = append(out, model.APIGrantPrefix+string(sc))
+			out = append(out, model.APIRef(string(sc)))
 			continue
 		}
 		for _, r := range repos {
-			out = append(out, model.APIGrantPrefix+string(sc)+"@"+r)
+			out = append(out, model.APIGrantString(string(sc), r))
 		}
 	}
 	return out

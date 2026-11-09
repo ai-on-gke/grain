@@ -145,8 +145,8 @@ func TestRelayProposedTasksUnifiedGrantsEquivalenceAndNormalization(t *testing.T
 	if capsRef.Approval == nil || !capsRef.AutoMerge {
 		t.Errorf("caps-api-ref proposal held unexpectedly: approval=%+v autoMerge=%v", capsRef.Approval, capsRef.AutoMerge)
 	}
-	if len(capsRef.Grants) != 1 || capsRef.Grants[0].Capability != "api:tasks:read@acme/app" {
-		t.Errorf("caps-api-ref Grants = %+v, want [api:tasks:read@acme/app]", capsRef.Grants)
+	if want := model.APIGrantString("tasks:read", "acme/app"); len(capsRef.Grants) != 1 || capsRef.Grants[0].Capability != want {
+		t.Errorf("caps-api-ref Grants = %+v, want [%s]", capsRef.Grants, want)
 	}
 
 	bareLegacy := byTitle["Bare legacy capability name"]
@@ -154,7 +154,7 @@ func TestRelayProposedTasksUnifiedGrantsEquivalenceAndNormalization(t *testing.T
 		t.Errorf("bare-legacy-cap proposal approved unexpectedly: %+v", bareLegacy.Approval)
 	}
 	wantExpanded := []model.Grant{
-		{Capability: "api:self-debug", Via: model.GrantByLabel},
+		{Capability: model.APIRef("self-debug"), Via: model.GrantByLabel},
 		{Capability: model.GrainHostExecGrant, Via: model.GrantByLabel},
 		{Capability: model.GrainSourceGrant, Via: model.GrantByLabel},
 	}

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { isApiGrant, withoutApiRows } from "../apiGrants.js";
+import { isLegacyApiGrant, withoutApiRows } from "../apiGrants.js";
 import GrantsPicker from "./GrantsPicker.jsx";
 import { localGrantHandlers } from "./capabilityMethods.js";
 import { isStaleEdit } from "./StaleEdit.jsx";
@@ -267,7 +267,7 @@ export default function ConsoleSessionPage({
   // bare capability id not offered as a checkbox above) as GrantsPicker
   // changes them, keeping everything else it holds.
   const isPickerNonApi = (id) =>
-    !isApiGrant(id) && !legacyBoxes.some((c) => c.id === id);
+    !isLegacyApiGrant(id) && !legacyBoxes.some((c) => c.id === id);
   const methodGrants = localGrantHandlers(
     (session?.capabilities || []).filter(isPickerNonApi),
     (refs) =>
@@ -529,7 +529,10 @@ export default function ConsoleSessionPage({
           )}
           onApiChange={(next) =>
             saveCapabilities(
-              replacing((session.capabilities || []).filter(isApiGrant), next),
+              replacing(
+                (session.capabilities || []).filter(isLegacyApiGrant),
+                next,
+              ),
               "api",
             )
           }

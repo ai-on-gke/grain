@@ -22,7 +22,7 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import { isApiGrant } from "../../apiGrants.js";
+import { isApiGrant, isLegacyApiGrant } from "../../apiGrants.js";
 import { isCapabilityRef } from "../../capabilityArgs.js";
 import GrantsPicker from "../GrantsPicker.jsx";
 import ReadOnlyGrants from "../ReadOnlyGrants.jsx";
@@ -140,10 +140,8 @@ export default function TasksSection({
   // edited with GrantsPicker.
   const isBareGrant = (id) => !isCapabilityRef(id) && !isApiGrant(id);
   const legacyDefaults = defaultCapabilities.filter(isBareGrant);
-  const apiDefaults = defaultCapabilities.filter(isApiGrant);
-  const refDefaults = defaultCapabilities.filter(
-    (id) => isCapabilityRef(id) && !isApiGrant(id),
-  );
+  const apiDefaults = defaultCapabilities.filter(isLegacyApiGrant);
+  const refDefaults = defaultCapabilities.filter(isCapabilityRef);
   const methodDefaults = localGrantHandlers(
     [...legacyDefaults, ...refDefaults],
     (rest) =>

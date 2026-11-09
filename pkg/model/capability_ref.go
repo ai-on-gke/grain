@@ -189,6 +189,14 @@ func CheckCapabilityGrantArgsOffline(s string) error {
 	if _, err := protocol.ParseRef(spec.Capability); err != nil {
 		return err
 	}
+	if spec.Capability == APICapabilityServerID {
+		return fmt.Errorf("capability reference %q must name a #<scope> method", spec.Capability)
+	}
+	if IsAPIGrantRef(spec.Capability) {
+		if _, ok := LegacyGrantString(CanonicalGrant(s)); !ok {
+			return fmt.Errorf("capability grant %q: with may carry only a valid \"repo\" (owner/name)", s)
+		}
+	}
 	if err := CheckGCPKeyGrantArgs(spec, ""); err != nil {
 		return err
 	}
@@ -220,11 +228,17 @@ func NormalizeCapabilityNames(names []string, lookup protocol.Lookup) ([]string,
 	out := make([]string, 0, len(names))
 	seen := map[string]bool{}
 	for _, name := range names {
-		name, err := storedAPIGrant(name)
+		written, isAPI, err := canonicalWrittenGrant(name)
 		if err != nil {
+			if isAPI && lookup != nil && IsCapabilityRef(strings.TrimSpace(name)) {
+				if _, nerr := normalizeCapabilityRef(name, lookup); nerr != nil {
+					return nil, nerr
+				}
+			}
 			return nil, err
 		}
-		if IsCapabilityRef(name) {
+		name = written
+		if !isAPI && IsCapabilityRef(name) {
 			recorded, err := normalizeCapabilityRef(name, lookup)
 			if err != nil {
 				return nil, err
@@ -243,17 +257,39 @@ func NormalizeCapabilityNames(names []string, lookup protocol.Lookup) ([]string,
 	return out, nil
 }
 
-// storedAPIGrant is s with an api reference rewritten to the
-// api:<what>[@repo] slice 2 stores (StoredGrantSpelling), refused when it
-// names nothing of docs/agent-api.md; every other string unchanged.
-func storedAPIGrant(s string) (string, error) {
-	if _, isAPI := apiMethodOf(CapabilityGrantRef(s)); !isAPI {
-		return s, nil
+// canonicalWrittenGrant rewrites legacy api: / repo-read: / repo-write:
+// strings and https://grain.dev/capabilities/api#... references into their
+// canonical EncodeCapabilityGrant form (unified-grants §1, §3), refusing an
+// api grant that names nothing of docs/agent-api.md; every other string is
+// returned unchanged.
+func canonicalWrittenGrant(s string) (written string, isAPI bool, err error) {
+	trimmed := strings.TrimSpace(s)
+	_, refIsAPI := apiMethodOf(CapabilityGrantRef(trimmed))
+	if strings.HasPrefix(trimmed, APIGrantPrefix) || refIsAPI {
+		_, ok, err := ParseAPIGrant(trimmed)
+		if err != nil {
+			return "", true, err
+		}
+		if !ok {
+			return "", true, fmt.Errorf("unknown API grant %q (see docs/agent-api.md)", s)
+		}
+		return CanonicalGrant(trimmed).Key(), true, nil
 	}
-	if _, _, err := ParseAPIGrant(s); err != nil {
-		return "", err
+	if repo, ok := strings.CutPrefix(trimmed, RepoReadCapabilityPrefix); ok {
+		r, err := ParseRepo(repo)
+		if err != nil {
+			return "", false, fmt.Errorf("invalid %s capability %q: %w", RepoReadCapabilityPrefix, s, err)
+		}
+		return RepoReadGrant(r), false, nil
 	}
-	return StoredGrantSpelling(s), nil
+	if repo, ok := strings.CutPrefix(trimmed, RepoWriteCapabilityPrefix); ok {
+		r, err := ParseRepo(repo)
+		if err != nil {
+			return "", false, fmt.Errorf("invalid %s capability %q: %w", RepoWriteCapabilityPrefix, s, err)
+		}
+		return RepoWriteGrant(r), false, nil
+	}
+	return s, false, nil
 }
 
 func normalizeCapabilityRef(s string, lookup protocol.Lookup) (string, error) {
@@ -290,12 +326,12 @@ func NormalizeCapabilityGrants(grants []Grant, lookup protocol.Lookup) ([]Grant,
 		if g.With != nil {
 			g.Capability, g.With = g.Key(), nil
 		}
-		stored, err := storedAPIGrant(g.Capability)
+		written, isAPI, err := canonicalWrittenGrant(g.Capability)
 		if err != nil {
 			return nil, err
 		}
-		g.Capability = stored
-		if IsCapabilityRef(g.Capability) {
+		g.Capability = written
+		if !isAPI && IsCapabilityRef(g.Capability) {
 			recorded, err := normalizeCapabilityRef(g.Capability, lookup)
 			if err != nil {
 				return nil, err
@@ -365,10 +401,12 @@ func CapabilityGrants(grants []Grant, lookup protocol.Lookup) ([]protocol.Grant,
 	return normalized, nil
 }
 
-// HasCapabilityRef reports whether any of grants is a reference.
+// HasCapabilityRef reports whether any of grants is a pass-minting capability
+// reference (excluding https://grain.dev/capabilities/api#..., which mints
+// nothing and is served as the run's api_* tools).
 func HasCapabilityRef(grants []Grant) bool {
 	for _, g := range grants {
-		if IsCapabilityRef(g.Capability) {
+		if IsCapabilityRef(g.Capability) && !IsAPIGrantRef(g.Capability) {
 			return true
 		}
 	}
@@ -1082,7 +1120,7 @@ func APIWithGrantNames(with map[string]any) ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("api capability: with.repo: %v", err)
 		}
-		repo = "@" + ref.String()
+		repo = ref.String()
 	}
 	for key, v := range with {
 		switch key {
@@ -1099,7 +1137,7 @@ func APIWithGrantNames(with map[string]any) ([]string, error) {
 						return nil, fmt.Errorf("api capability: %q is no scope set (docs/agent-api.md)", set)
 					}
 				}
-				names = append(names, APIGrantPrefix+set+repo)
+				names = append(names, APIGrantString(set, repo))
 			}
 		case "scopes", "scope":
 			patterns, err := strs(key, v)
@@ -1112,7 +1150,7 @@ func APIWithGrantNames(with map[string]any) ([]string, error) {
 					return nil, fmt.Errorf("api capability: %w", err)
 				}
 				for _, sc := range scopes {
-					names = append(names, APIGrantPrefix+string(sc)+repo)
+					names = append(names, APIGrantString(string(sc), repo))
 				}
 			}
 		default:

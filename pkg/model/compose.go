@@ -758,7 +758,7 @@ func applyGrainCIGrant(comp *Composition, usesGrainCI bool) {
 		}
 		if !APIGrantsOf(names).Allows("ci:read", repo) {
 			filteredGrants = append(filteredGrants, Grant{
-				Capability: APIGrantPrefix + "ci-read@" + repo,
+				Capability: APIGrantString("ci-read", repo),
 				Via:        GrantByGrain,
 			})
 			filteredSources = append(filteredSources, requestedFrom)
@@ -820,7 +820,7 @@ func applyWorkflowReviewCIReadGrant(comp *Composition, from CompositionLayer) {
 	}
 	hadGrants := len(comp.Grants) > 0
 	comp.Grants = append(slices.Clip(comp.Grants), Grant{
-		Capability: APIGrantPrefix + "ci-read@" + repo,
+		Capability: APIGrantString("ci-read", repo),
 		Via:        GrantByGrain,
 	})
 	comp.GrantSources = append(sources, from)

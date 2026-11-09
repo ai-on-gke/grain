@@ -53,7 +53,7 @@ import (
 // repository's CI Mode -- whether grain runs its workflows and holds the
 // merge queue on them -- rather than a read, and which nobody may attach
 // by hand.
-const ConsoleSessionCIReadGrant = APIGrantPrefix + "ci-read"
+const ConsoleSessionCIReadGrant = APICapabilityServerID + "#ci-read"
 
 // consoleSessionDefaultGrants are the capabilities every session's task
 // is granted GrantByDefault unless the session declines them. Unlike the
@@ -67,9 +67,13 @@ var consoleSessionDefaultGrants = []string{ConsoleSessionCIReadGrant}
 func ConsoleSessionDefaultGrants() []string { return slices.Clone(consoleSessionDefaultGrants) }
 
 // IsConsoleSessionDefaultGrant reports whether id is one of
-// ConsoleSessionDefaultGrants.
+// ConsoleSessionDefaultGrants, in either its canonical .../api# or legacy
+// api: spelling.
 func IsConsoleSessionDefaultGrant(id string) bool {
-	return slices.Contains(consoleSessionDefaultGrants, id)
+	key := CanonicalGrantKey(id)
+	return slices.ContainsFunc(consoleSessionDefaultGrants, func(d string) bool {
+		return CanonicalGrantKey(d) == key
+	})
 }
 
 // ReadsAllRepos reports whether the session reads every repository this
@@ -77,9 +81,12 @@ func IsConsoleSessionDefaultGrant(id string) bool {
 func (s ConsoleSession) ReadsAllRepos() bool { return s.ReadsAll == nil || *s.ReadsAll }
 
 // DeclinesDefault reports whether the session has opted out of default
-// grant id (DeclinedDefaults).
+// grant id (DeclinedDefaults), matching across canonical and legacy spellings.
 func (s ConsoleSession) DeclinesDefault(id string) bool {
-	return slices.Contains(s.DeclinedDefaults, id)
+	key := CanonicalGrantKey(id)
+	return slices.ContainsFunc(s.DeclinedDefaults, func(d string) bool {
+		return CanonicalGrantKey(d) == key
+	})
 }
 
 // consoleSessionDefaultGrantsFor is the default grants session is given
@@ -87,7 +94,10 @@ func (s ConsoleSession) DeclinesDefault(id string) bool {
 func consoleSessionDefaultGrantsFor(session ConsoleSession) []string {
 	var out []string
 	for _, id := range consoleSessionDefaultGrants {
-		if session.DeclinesDefault(id) || slices.Contains(session.Capabilities, id) {
+		key := CanonicalGrantKey(id)
+		if session.DeclinesDefault(id) || slices.ContainsFunc(session.Capabilities, func(c string) bool {
+			return CanonicalGrantKey(c) == key
+		}) {
 			continue
 		}
 		out = append(out, id)

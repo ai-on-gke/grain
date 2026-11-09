@@ -1068,6 +1068,57 @@ func TestPatchTouchesTaskGrantsCoversPriorityDispatch(t *testing.T) {
 	}
 }
 
+func TestExternalTemplateWithinMatchesBothAPIGrantSpellings(t *testing.T) {
+	tok := &model.ExternalAgentToken{Name: "bot"}
+	allowAcme := func(r string) bool { return r == "acme/widgets" }
+
+	// Credential holds canonical .../api#ci:read={"repo":"acme/widgets"},
+	// declared .grain/templates/*.yml holds legacy api:ci:read@acme/widgets.
+	if err := externalTemplateWithin(
+		tok,
+		[]string{model.APIGrantString("ci:read", "acme/widgets")},
+		model.Template{ID: "t", Grants: []model.Grant{{Capability: "api:ci:read@acme/widgets"}}},
+		allowAcme,
+	); err != nil {
+		t.Errorf("canonical held vs legacy template grant refused: %v", err)
+	}
+	// Legacy held vs canonical template grant.
+	if err := externalTemplateWithin(
+		tok,
+		[]string{"api:ci:read@acme/widgets"},
+		model.Template{ID: "t", Grants: []model.Grant{{Capability: model.APIGrantString("ci:read", "acme/widgets")}}},
+		allowAcme,
+	); err != nil {
+		t.Errorf("legacy held vs canonical template grant refused: %v", err)
+	}
+	// Mismatched repo is still refused.
+	if err := externalTemplateWithin(
+		tok,
+		[]string{model.APIGrantString("ci:read", "acme/widgets")},
+		model.Template{ID: "t", Grants: []model.Grant{{Capability: "api:ci:read@acme/other"}}},
+		allowAcme,
+	); err == nil {
+		t.Error("template escalating repo scope was admitted")
+	}
+}
+
+func TestCapabilityByIDRejectsMalformedAPIServerRefs(t *testing.T) {
+	c := &Client{}
+	for _, bad := range []string{
+		model.APICapabilityServerID,
+		model.APIRef("ci:write") + `={"bogus":1}`,
+		model.APIRef("ci:write") + `={"repo":"not-a-repo"}`,
+		model.APIRef("tasks:fly"),
+	} {
+		if got, ok := c.capabilityByID(bad); ok {
+			t.Errorf("capabilityByID(%q) = %+v, true; want false", bad, got)
+		}
+	}
+	if _, ok := c.capabilityByID(model.APIGrantString("ci:write", "acme/widgets")); !ok {
+		t.Error("capabilityByID rejected valid canonical repo-limited api grant")
+	}
+}
+
 // agentAPISingleReadRoutes are the scoped GET routes that read one record,
 // one file, one health/status snapshot, a fixed-size enum, or a capped
 // namespace path rather than a growing collection. Every other scoped GET

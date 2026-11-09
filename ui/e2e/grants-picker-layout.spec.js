@@ -57,31 +57,33 @@ for (const [label, size] of [
 
     const section = page.getByTestId(`task-${task.id}-grants`);
     await section.scrollIntoViewIfNeeded();
-    const lines = section.locator(".grants-held .grant-line[data-grant]");
-    await expect(lines).toHaveCount(3);
+    const sections = section.locator(".grants-held .grant-section[data-grant]");
+    await expect(sections).toHaveCount(4);
     const box = await section.boundingBox();
     let previous = null;
-    for (const line of await lines.all()) {
-      const c = await line.boundingBox();
+    for (const s of await sections.all()) {
+      const c = await s.boundingBox();
       expect(c.x).toBeGreaterThanOrEqual(box.x - 0.5);
       expect(c.x + c.width).toBeLessThanOrEqual(box.x + box.width + 0.5);
-      // One line each, stacked: no option to set, so no second row.
-      expect(c.height).toBeLessThanOrEqual(44);
       if (previous)
         expect(c.y).toBeGreaterThanOrEqual(previous.y + previous.height - 0.5);
       previous = c;
-      // The remove button sits on the line, at its right-hand end.
-      const remove = await line
-        .getByRole("button", { name: /^Remove / })
-        .boundingBox();
+      // The remove button sits at the right-hand end of the section header.
+      const remove = await s.locator("button.grant-remove").boundingBox();
       expect(remove.y).toBeGreaterThanOrEqual(c.y - 0.5);
       expect(remove.y + remove.height).toBeLessThanOrEqual(
         c.y + c.height + 0.5,
       );
       expect(remove.x + remove.width).toBeGreaterThan(c.x + c.width - 48);
     }
-    // A grant with arguments is a section with its form inline, inside
-    // the section too, its inputs included.
+    // Both a repository-limited API grant and a server method grant edit
+    // their with: arguments inline inside their sections.
+    const repoLimitedApi = section.locator(
+      '.grants-held .grant-section[data-grant=\'https://grain.dev/capabilities/api#task-admin={"repo":"acme/widgets"}\']',
+    );
+    await expect(repoLimitedApi.getByLabel(/^repo/)).toHaveValue(
+      "acme/widgets",
+    );
     const args = section.locator(
       `.grants-held .grant-section[data-grant^="${CLOUD_KEY}="]`,
     );
@@ -91,9 +93,13 @@ for (const [label, size] of [
       expect(c.x).toBeGreaterThanOrEqual(box.x - 0.5);
       expect(c.x + c.width).toBeLessThanOrEqual(box.x + box.width + 0.5);
     }
-    // A dangerous scope says so on its line.
+    // A dangerous scope says so on its section.
     await expect(
-      section.locator('[data-grant="api:merge:force"]').getByText("dangerous"),
+      section
+        .locator(
+          '[data-grant="https://grain.dev/capabilities/api#merge:force"]',
+        )
+        .getByText(/Dangerous:/),
     ).toBeVisible();
     // Nothing in the section pushes the page sideways.
     expect(box.x + box.width).toBeLessThanOrEqual(size.width);
@@ -142,7 +148,9 @@ test("one search on the new task overlay reaches both an API scope and a server 
   await expect(draft.getByLabel(/^project/)).toBeVisible();
   await draft.getByRole("button", { name: "Remove cloud-key draft" }).click();
   await expect(draft).toHaveCount(0);
-  await expect(held.locator('[data-grant="api:ci:read"]')).toBeVisible();
+  await expect(
+    held.locator('[data-grant="https://grain.dev/capabilities/api#ci:read"]'),
+  ).toBeVisible();
   await expect(held.locator(`[data-grant^="${KEY}"]`)).toHaveCount(0);
 });
 

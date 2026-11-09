@@ -1,11 +1,16 @@
 # Unified grants: one grant model, one Grants picker
 
-Status: design, with slice 1 (UI only) landed alongside it (task 1060)
-and slice 2 (read both) landed from task 3304: `model.Grant` is
+Status: design, with slice 1 (UI only) landed alongside it (task 1060),
+slice 2 (read both) landed from task 3304, and slice 3 (write canonical
+references) implemented in [Task #3317](/tasks/3317) (held to merge
+after slice 2 ships in a release): `model.Grant` is
 `{Capability, With, Via, Folder}`, `model.CanonicalGrant` reads every
-spelling, `…/api` and the task-level `…/repo#target`/`#read`/`#write`
-are in-process servers, and the fidelity fixture is
-`pkg/model/canonical_grant_test.go`. Slices 3–5 have not started, and
+spelling, writers across `pkg/model`, `pkg/ui`, `pkg/cli`,
+`pkg/repodecl` and `pkg/orchestrator` record canonical `…/api#<what>`
+(with `{repo}` when repository-limited) and `…/repo#read`/`#write`
+references, `GrantsPicker.jsx` edits `with: {repo}` inline on `…/api`
+grants, and the fidelity fixture is `pkg/model/canonical_grant_test.go`.
+Slices 4–5 have not started, and
 slice 6, the per-capability conversions of §4, is mostly done; §4's
 table says which, and the remaining slices and conversions are filed from
 [Task #3274](/tasks/3274). The overview of capabilities as a whole is
@@ -154,6 +159,26 @@ once with a fidelity test.**
 - **Slice 3 (write one).** Writers switch to references. This is the
   first change an older binary cannot read, so it lands in the release
   after slice 2 ships.
+  *As built ([Task #3317](/tasks/3317)):* `NormalizeCapabilityNames` and
+  `NormalizeCapabilityGrants` canonicalize `api:<what>[@repo]` and
+  `…/api#<what>[=...]` to `https://grain.dev/capabilities/api#<what>`
+  (omitting empty `with:` and encoding `={"repo":"<owner/name>"}` when
+  repository-limited) and rewrite `repo-read:<repo>` /
+  `repo-write:<repo>` to `…/repo#read` / `…/repo#write`. Writers across
+  `pkg/model` (defaults, console sessions, system templates, external
+  agent tokens, `{capability: api, with: ...}` and scope-set helpers,
+  proposal seeding, `SplitRequestGrants`), `pkg/repodecl`, `pkg/ui`,
+  `pkg/cli` (brace-aware comma splitting for `-default-capabilities` and
+  `grain repo capabilities -set`), and `pkg/orchestrator` emit canonical
+  references, while `model.CanonicalGrant` continues reading legacy
+  `api:`, `repo-read:`, and `repo-write:` strings from unmigrated store
+  rows and `.grain/` declarations. `protocol.ValidMethod` gained `.` and
+  `/` segments (`len <= 63`) and `grainserver` lists `APIScopeSetsInEffect()`
+  live on `https://grain.dev/capabilities/api` so slash-named scope sets
+  (`ops/triage`, `grain/task-admin`) normalize and list as methods.
+  `GrantsPicker.jsx` drops the top-level "Grain API grants apply to"
+  dropdown and edits `with: {repo}` inline on `…/api#<what>` sections
+  while still rendering and removing unmigrated `api:` lines.
 - **Slice 4 (migrate once).** One store migration rewrites
   `task_grant`, `schedule_grant`, `template_grant`, repo config's
   `default_capabilities` / `ci_capabilities`, console sessions'
@@ -366,10 +391,11 @@ template editor and the schedule editor (`GrantsPicker.jsx`).
   repository access. A method is granted at once when its defaults
   (`initialValue`) already pass; one with a required argument still to
   fill in is a draft section in the list until it passes, then granted.
-  The API repository limit is the "Grain API grants apply to" select
-  until api grants carry `with: {repo}`. Then it becomes their argument
-  form like any other. The menu re-reads `GET /api/capability-methods`
-  every time it opens (task 1056).
+  The API repository limit is edited inline via `with: {repo}` on each
+  `https://grain.dev/capabilities/api#<what>` section alongside
+  capability server methods (the former "Grain API grants apply to"
+  select was retired in slice 3, [Task #3317](/tasks/3317)). The menu
+  re-reads `GET /api/capability-methods` every time it opens (task 1056).
 - **Repo access** becomes a grant whose form picks repository, branch
   and read/write. The target repository stays its own field at the top
   of the form (it decides the branch, the clone and the pull request),

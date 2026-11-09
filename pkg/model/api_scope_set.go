@@ -532,11 +532,11 @@ func APIScopeSetWriteGrantNames(set APIScopeSet) ([]string, error) {
 	for _, sc := range r.Resolved {
 		lim, limited := r.RepoLimits[sc]
 		if !limited {
-			out = append(out, APIGrantPrefix+string(sc))
+			out = append(out, APIRef(string(sc)))
 			continue
 		}
 		for _, repo := range lim {
-			out = append(out, APIGrantPrefix+string(sc)+"@"+repo)
+			out = append(out, APIGrantString(string(sc), repo))
 		}
 	}
 	return out, nil
@@ -558,11 +558,7 @@ func APIScopeSetGrantNames(name string) []string {
 	var out []string
 	for _, sc := range g.Scopes {
 		for _, repo := range g.ReposOf(sc) {
-			n := APIGrantPrefix + string(sc)
-			if repo != "" {
-				n += "@" + repo
-			}
-			out = append(out, n)
+			out = append(out, APIGrantString(string(sc), repo))
 		}
 	}
 	return out

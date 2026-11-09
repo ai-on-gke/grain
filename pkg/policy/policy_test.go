@@ -267,6 +267,22 @@ func TestCheckCapabilityPatterns(t *testing.T) {
 		{`deny: [` + strconvQuote(model.BootstrapPlaybooksGrant) + `]`, model.SkillCapabilityServerID + `#skill`, "forbids capability"},
 		{`deny: [` + strconvQuote(model.BootstrapPlaybooksGrant) + `]`, model.SkillCapabilityServerID + `#skill={"skills":["ops"]}`, ""},
 		{`deny: [` + strconvQuote(model.SkillCapabilityServerID+"#*") + `]`, model.ConfigMapRef + `={"secrets":["prod"]}`, "forbids capability"},
+		// Agent API grants match across legacy api:<what>[@repo] and canonical
+		// https://grain.dev/capabilities/api#<what>[={"repo":...}] spellings.
+		{"deny: [api:*]", model.APIRef("secrets:write"), "forbids capability"},
+		{"deny: [api:*]", model.APIGrantString("ci:write", "acme/widgets"), "forbids capability"},
+		{"deny: [api:secrets:write]", model.APIRef("secrets:write"), "forbids capability"},
+		{"deny: [api:ci:write@acme/*]", model.APIGrantString("ci:write", "acme/widgets"), "forbids capability"},
+		{"deny: [api:ci:write@acme/*]", model.APIGrantString("ci:write", "other/widgets"), ""},
+		{`deny: [` + strconvQuote(model.APIRef("secrets:write")) + `]`, "api:secrets:write", "forbids capability"},
+		{`deny: [` + strconvQuote(model.APICapabilityServerID+"#*") + `]`, "api:ci:read@acme/widgets", "forbids capability"},
+		{"deny: [self-*]", "api:self-debug", "forbids capability"},
+		{"deny: [self-*]", model.APIRef("self-debug"), "forbids capability"},
+		{"allow: [api:ci-read]", model.APIRef("ci-read"), ""},
+		{"allow: [self-debug]", "api:self-debug", ""},
+		{"allow: [self-debug]", model.APIRef("self-debug"), ""},
+		{`allow: ["*"]`, model.APICapabilityServerID, "must name a #<scope> method"},
+		{`allow: ["*"]`, model.APIRef("ci:write") + `={"bogus":1}`, `only a valid "repo"`},
 	}
 	for _, c := range cases {
 		p := mustParse(t, "repos: [acme/widgets, other/widgets, ai-on-gke/grain]\ncapabilities:\n  "+c.rules+"\n")

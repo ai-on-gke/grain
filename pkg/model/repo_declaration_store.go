@@ -263,7 +263,7 @@ func canonicalizeDeclaredGrants(repo RepoRef, grants []Grant) []Grant {
 				continue
 			}
 			if IsGrainCIGrant(cap) && !repo.IsZero() {
-				cap = APIGrantPrefix + "ci-read@" + repo.String()
+				cap = APIGrantString("ci-read", repo.String())
 			}
 			if seen[cap] {
 				continue

@@ -360,6 +360,7 @@ func TestRunCycleForwardsAllKnownToolGrants(t *testing.T) {
 		model.SelfDebugCapability,
 		model.GrainSourceGrant,
 		model.APIGrantPrefix + "self-debug",
+		model.APIRef("self-debug"),
 		grainlog.CapabilityName,
 		model.GrainJournalGrant,
 		deploymenthealth.CapabilityName,

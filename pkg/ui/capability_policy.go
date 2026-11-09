@@ -135,7 +135,9 @@ func (c *Client) PreviewCapabilityPolicy(ctx context.Context, next model.Capabil
 		configured = cfg.MCPServers
 	}
 	configured, _ = intree.EnsureBuiltins(configured)
-	holders, err := c.grantHolders(ctx, model.IsCapabilityRef)
+	holders, err := c.grantHolders(ctx, func(s string) bool {
+		return model.IsCapabilityRef(model.CanonicalGrantKey(s))
+	})
 	if err != nil {
 		return CapabilityPolicyPreview{}, err
 	}
@@ -492,7 +494,7 @@ func (d DroppedDefault) Note() string {
 // attached to the task stored as id: 400 for one it denies the task. A
 // task that is not there is the edit's own error to report.
 func (c *Client) policyEditRefusalFor(ctx context.Context, id, grant string) error {
-	if !model.IsCapabilityRef(grant) {
+	if !model.IsCapabilityRef(model.CanonicalGrantKey(grant)) {
 		return nil
 	}
 	task, err := c.Store.GetTask(ctx, model.NormalizeTaskID(id))

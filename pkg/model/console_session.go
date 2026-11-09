@@ -458,22 +458,22 @@ func defaultConsoleSessionCapabilities() []string {
 // capabilities are in.
 func DefaultConsoleSessions() []ConsoleSession {
 	caps := []string{
-		APIGrantPrefix + "self-debug",
+		APIRef("self-debug"),
 		GrainSourceGrant,
 		GrainJournalGrant,
-		APIGrantPrefix + "deployment:read",
+		APIRef("deployment:read"),
 		GrainHealthGrant,
 		BootstrapPlaybooksGrant,
-		APIGrantPrefix + "task-admin",
-		APIGrantPrefix + "capabilities:read",
-		APIGrantPrefix + "capabilities:detach",
-		APIGrantPrefix + "settings:read",
-		APIGrantPrefix + "repos:read",
-		APIGrantPrefix + "releases:read",
-		APIGrantPrefix + "schedules:read",
-		APIGrantPrefix + "templates:read",
-		APIGrantPrefix + "suites:read",
-		APIGrantPrefix + "dispatch:read",
+		APIRef("task-admin"),
+		APIRef("capabilities:read"),
+		APIRef("capabilities:detach"),
+		APIRef("settings:read"),
+		APIRef("repos:read"),
+		APIRef("releases:read"),
+		APIRef("schedules:read"),
+		APIRef("templates:read"),
+		APIRef("suites:read"),
+		APIRef("dispatch:read"),
 	}
 	for _, id := range defaultConsoleSessionCapabilities() {
 		if !slices.Contains(caps, id) {
@@ -508,7 +508,11 @@ func MissingShippedConsoleSessionCapabilities(id string, held []string) []string
 	}
 	var missing []string
 	for _, capID := range def.Capabilities {
-		if capID == "" || slices.Contains(held, capID) || slices.Contains(missing, capID) {
+		if capID == "" || slices.Contains(missing, capID) {
+			continue
+		}
+		key := CanonicalGrantKey(capID)
+		if slices.ContainsFunc(held, func(h string) bool { return h == capID || CanonicalGrantKey(h) == key }) {
 			continue
 		}
 		missing = append(missing, capID)

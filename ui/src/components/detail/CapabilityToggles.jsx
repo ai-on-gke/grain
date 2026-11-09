@@ -15,7 +15,7 @@
 import { useState } from "react";
 import { Alert, Button } from "@mui/material";
 import api from "../../api.js";
-import { isApiGrant } from "../../apiGrants.js";
+import { isLegacyApiGrant } from "../../apiGrants.js";
 import GrantsPicker from "../GrantsPicker.jsx";
 
 export default function CapabilityToggles({ t, config, act }) {
@@ -23,7 +23,7 @@ export default function CapabilityToggles({ t, config, act }) {
   // Capability server grants, with their arguments, the agent API's grants
   // (apiGrants.js), and any bare capability id an older store still holds
   // are GrantsPicker's below, one list.
-  const apiSelected = held.filter(isApiGrant);
+  const apiSelected = held.filter(isLegacyApiGrant);
   const [capabilitiesChanged, setCapabilitiesChanged] = useState(false);
   const [restarting, setRestarting] = useState(false);
 

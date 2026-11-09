@@ -35,22 +35,22 @@ func TestCoreBuildDefaultsNoCapabilityOn(t *testing.T) {
 		t.Errorf("a fresh core deployment's DefaultCapabilities = %v, want none", got)
 	}
 	wantDirector := []string{
-		"api:self-debug",
+		model.APIRef("self-debug"),
 		model.GrainSourceGrant,
 		model.GrainJournalGrant,
-		"api:deployment:read",
+		model.APIRef("deployment:read"),
 		model.GrainHealthGrant,
 		model.BootstrapPlaybooksGrant,
-		"api:task-admin",
-		"api:capabilities:read",
-		"api:capabilities:detach",
-		"api:settings:read",
-		"api:repos:read",
-		"api:releases:read",
-		"api:schedules:read",
-		"api:templates:read",
-		"api:suites:read",
-		"api:dispatch:read",
+		model.APIRef("task-admin"),
+		model.APIRef("capabilities:read"),
+		model.APIRef("capabilities:detach"),
+		model.APIRef("settings:read"),
+		model.APIRef("repos:read"),
+		model.APIRef("releases:read"),
+		model.APIRef("schedules:read"),
+		model.APIRef("templates:read"),
+		model.APIRef("suites:read"),
+		model.APIRef("dispatch:read"),
 	}
 	if got := model.DefaultConsoleSessions()[0].Capabilities; !slices.Equal(got, wantDirector) {
 		t.Errorf("a fresh core deployment's Director capabilities = %v, want %v", got, wantDirector)

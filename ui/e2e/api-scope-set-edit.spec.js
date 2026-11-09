@@ -153,7 +153,9 @@ test("removing a scope set a task holds asks first, and Cancel keeps it", async 
       );
       await expect(
         dialog.locator(`[data-holder="task:${taskID}"]`),
-      ).toContainText(`api:${HELD}@acme/widgets`);
+      ).toContainText(
+        `https://grain.dev/capabilities/api#${HELD}={"repo":"acme/widgets"}`,
+      );
 
       // The dialog and both of its buttons fit the viewport.
       const box = await dialog.boundingBox();

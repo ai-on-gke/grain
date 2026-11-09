@@ -954,7 +954,7 @@ func TestDeclaredHostingAndLegacyCapabilityAlias(t *testing.T) {
 // repository: grain#ci itself is stripped by applyGrainCIGrant on a
 // ci_mode: github repository and refused by CreateTask.
 func TestDeclaredGrainCICapabilityMapsToRepoScopedCIRead(t *testing.T) {
-	want := model.APIGrantPrefix + "ci-read@" + repo.String()
+	want := model.APIGrantString("ci-read", repo.String())
 	for _, entry := range []string{"grain-ci", model.GrainCIRef, model.GrainCIGrant} {
 		declared := load(t, map[string]string{
 			".grain/templates/train.yml": "title: Run train\ncapabilities:\n  - '" + entry + "'\n",

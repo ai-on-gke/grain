@@ -616,13 +616,40 @@ func capabilityAdmitter(deps Deps, admit dispatch.Admitter) dispatch.Admitter {
 // model-proxy -- forwards with the run's own team connection exactly as
 // the retired in-process <vendor>-proxy providers did. A nil connectionOf
 // is a run on no connection.
+func isAPIServerGrant(s string) bool {
+	if _, ok, _ := model.ParseAPIGrant(s); ok {
+		return true
+	}
+	return model.CapabilityGrantRef(strings.TrimSpace(s)) == model.APICapabilityServerID
+}
+
+func hasAPIGrant(grants []model.Grant) bool {
+	return slices.ContainsFunc(grants, func(g model.Grant) bool {
+		return isAPIServerGrant(g.Capability)
+	})
+}
+
+func checkAPIGrantsPolicy(policy model.CapabilityPolicy, configured map[string]protocol.ServerConfig, task model.Task) error {
+	subject := model.CapabilitySubject{Repo: task.Target, Kind: model.CapabilityRunTask}
+	for _, g := range task.Grants {
+		if !isAPIServerGrant(g.Capability) {
+			continue
+		}
+		canon := model.CanonicalGrantKey(g.Capability)
+		if err := policy.Permits(canon, subject, configured); err != nil {
+			return &grainRefusalError{Grant: model.CapabilityGrantRef(canon), Reason: err.Error()}
+		}
+	}
+	return nil
+}
+
 func capabilityAdmitterFor(deps Deps, admit dispatch.Admitter, connectionOf func(runID string) string) dispatch.Admitter {
 	passes := deps.capabilityPasses()
 	return func(ctx context.Context, candidate dispatch.Candidate) (dispatch.Admission, error) {
 		// Read before admit rather than after it, so that nothing admit
 		// reserves is left outstanding by a read failing in between.
 		task, err := deps.Store.GetTask(ctx, candidate.TaskID)
-		if err != nil || task == nil || !model.HasCapabilityRef(task.Grants) {
+		if err != nil || task == nil || (!model.HasCapabilityRef(task.Grants) && !hasAPIGrant(task.Grants)) {
 			return admit(ctx, candidate)
 		}
 		adm, err := admit(ctx, candidate)
@@ -640,6 +667,27 @@ func capabilityAdmitterFor(deps Deps, admit dispatch.Admitter, connectionOf func
 			_ = deps.Store.SetGrantWait(ctx, model.GrantWait{TaskID: task.ID, Capability: b.grant,
 				Resource: b.reason, WaitingAt: at})
 			return decline("capability pass "+b.grant, "backing off: "+b.reason)
+		}
+		if !model.HasCapabilityRef(task.Grants) {
+			cfg, err := deps.Store.GetConfig(ctx)
+			if err != nil {
+				perr := &protocol.TransientError{Grant: "capabilities", Err: err}
+				if serr := admissionMintFailed(ctx, deps, passes, *task, perr, at); serr != nil {
+					log.Printf("orchestrator: task %s: recording its failed capability admission: %v", task.ID, serr)
+				}
+				return decline("capability pass", perr.Error())
+			}
+			if cfg != nil {
+				configured, _ := intree.EnsureBuiltins(cfg.MCPServers)
+				if err := checkAPIGrantsPolicy(cfg.CapabilityPolicy, configured, *task); err != nil {
+					if serr := admissionMintFailed(ctx, deps, passes, *task, err, at); serr != nil {
+						log.Printf("orchestrator: task %s: recording its failed capability admission: %v", task.ID, serr)
+					}
+					return decline("capability pass", err.Error())
+				}
+			}
+			passes.clearBackoff(task.ID)
+			return adm, nil
 		}
 		// The servers this task's run mints through: run: host ones on
 		// the hostd its run is routed to. One that cannot be reached now
@@ -817,6 +865,9 @@ func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candida
 		if err := policy.Permits(model.RecordedCapabilityGrant(g), subject, configured); err != nil {
 			return nil, &grainRefusalError{Grant: g.Ref.String(), Reason: err.Error()}
 		}
+	}
+	if err := checkAPIGrantsPolicy(policy, configured, task); err != nil {
+		return nil, err
 	}
 	// What a local-scripts declaration became on host-script stays withheld
 	// from scheduled runs, whose prompt can come from an untrusted source.

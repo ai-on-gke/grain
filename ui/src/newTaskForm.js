@@ -192,7 +192,7 @@ export function formFieldsIn(resolved, visibility) {
   ).sort((a, b) => resolved.fields[a].order - resolved.fields[b].order);
 }
 
-// grantNames is what the picker's offered and hidden lists name a grant
+// grantNames is what the picker's offered, hidden and display lists name a grant
 // by: an api grant in either its api:<name> or
 // https://grain.dev/capabilities/api#<name> spelling (without @repo or
 // with:), and a capability server method by its server as well as by
@@ -211,7 +211,10 @@ function grantNames(id) {
     }
   }
   const hash = bare.indexOf("#");
-  if (hash > 0) out.push(bare.slice(0, hash));
+  if (hash > 0) {
+    const server = bare.slice(0, hash);
+    if (!out.includes(server)) out.push(server);
+  }
   return out;
 }
 

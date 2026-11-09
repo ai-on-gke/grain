@@ -585,7 +585,43 @@ func splitRepoList(s string) []string {
 	if strings.TrimSpace(s) == "" {
 		return []string{}
 	}
-	return strings.Split(s, ",")
+	var out []string
+	depth := 0
+	inQuote := false
+	escaped := false
+	start := 0
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if inQuote {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inQuote = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inQuote = true
+		case '{', '[':
+			depth++
+		case '}', ']':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				out = append(out, s[start:i])
+				start = i + 1
+			}
+		}
+	}
+	out = append(out, s[start:])
+	return out
 }
 
 // checkAgentCredential is `grain settings -check-agent-key <framework>`:
