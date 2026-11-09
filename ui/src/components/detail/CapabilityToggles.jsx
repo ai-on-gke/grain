@@ -20,10 +20,9 @@ import GrantsPicker from "../GrantsPicker.jsx";
 
 export default function CapabilityToggles({ t, config, act }) {
   const held = t.capabilities || [];
-  // Capability server grants, with their arguments, and the agent API's
-  // grants (apiGrants.js) are GrantsPicker's below, one chip list. Core
-  // offers no bare in-process capability any more, so there is no
-  // checklist for those: one a task already holds is left alone.
+  // Capability server grants, with their arguments, the agent API's grants
+  // (apiGrants.js), and any bare capability id an older store still holds
+  // are GrantsPicker's below, one list.
   const apiSelected = held.filter(isApiGrant);
   const [capabilitiesChanged, setCapabilitiesChanged] = useState(false);
   const [restarting, setRestarting] = useState(false);

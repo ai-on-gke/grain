@@ -1,0 +1,190 @@
+environment up under /tmp/gr-walk-3745 (scope_owners=0)
+daemon pid 7323
+
+=== 1. Connected entry resize & upgrade refusals on both replicas ===
+  tunnel before (via A): 200 {"actor":{"kind":"human","id":"alice@example.com","source":"registry","label":"alice@example.com"},"onBehalfOf":null,"source":"registry","verified":true,"allowe
+  tunnel before (via B): 200 {"actor":{"kind":"human","id":"alice@example.com","source":"registry","label":"alice@example.com"},"onBehalfOf":null,"source":"registry","verified":true,"allowe
+  sql> select name, kind, lifecycle_state, boot_disk_gb, coalesce(replace_step,''), coalesce(target_version,'') from registry.entries where name='conn-alice'
+    conn-alice|connected|running|||
+$ [alice@example.com @ 4251] grain registry resize -disk-gb 200 conn-alice
+    grain: registry API 400 (invalid_entry_kind): only kind="instance" entries can be resized or replaced
+    (exit 1)
+$ [alice@example.com @ 4261] grain registry resize -disk-gb 200 conn-alice
+    grain: registry API 400 (invalid_entry_kind): only kind="instance" entries can be resized or replaced
+    (exit 1)
+$ [alice@example.com @ 4251] POST /api/entries/conn-alice/replace {"shape":"standard","boot_disk_gb":200}
+    HTTP 400
+    {"error":"only kind=\"instance\" entries can be resized or replaced","code":"invalid_entry_kind"}
+
+$ [alice@example.com @ 4261] POST /api/entries/conn-alice/replace {"shape":"standard","boot_disk_gb":200}
+    HTTP 400
+    {"error":"only kind=\"instance\" entries can be resized or replaced","code":"invalid_entry_kind"}
+
+$ [alice@example.com @ 4251] grain registry upgrade -version v3.2.0 conn-alice
+    requested upgrade for conn-alice (target_version=v3.2.0, state=running)
+    (exit 0)
+$ [alice@example.com @ 4261] grain registry upgrade -version v3.2.0 conn-alice
+    requested upgrade for conn-alice (target_version=v3.2.0, state=running)
+    (exit 0)
+  sql> select name, kind, lifecycle_state, boot_disk_gb, coalesce(replace_step,''), coalesce(target_version,'') from registry.entries where name='conn-alice'
+    conn-alice|connected|running|||v3.2.0
+  tunnel after (via A): 200 {"actor":{"kind":"human","id":"alice@example.com","source":"registry","label":"alice@example.com"},"onBehalfOf":null,"source":"registry","verified":true,"allowe
+  tunnel after (via B): 200 {"actor":{"kind":"human","id":"alice@example.com","source":"registry","label":"alice@example.com"},"onBehalfOf":null,"source":"registry","verified":true,"allowe
+
+=== 2. Two-step transfer offer, -cancel, accept-transfer & flag conflicts across both replicas ===
+$ [alice @ 4251] grain registry register -standalone xfer-walk
+    registered connected entry xfer-walk on http://127.0.0.1:4251
+    registration token written to /tmp/gr-walk-3745/xfer-walk.token
+    outbound tunnel config snippet:
+      grain daemon -registry-url http://127.0.0.1:4251 -registry-entry xfer-walk -registry-token-file /tmp/gr-walk-3745/xfer-walk.token -registry-connect \
+        -ui-require-verifier=registry -ui-registry-issuer=grain-registry -ui-registry-audience=https://xfer-walk.grain-user.test -ui-registry-keys-url=http://127.0.0.1:4251/.well-known/jwks.json
+--- offer on replica A, inspect on replica B, cancel on replica B
+$ [alice@example.com @ 4251] grain registry transfer -to bob@example.com xfer-walk
+    offered ownership transfer of xfer-walk to bob@example.com
+    (exit 0)
+$ [alice@example.com @ 4261] grain registry show xfer-walk
+    Name:        xfer-walk
+    URL:         https://xfer-walk.grain-user.test
+    Kind:        connected (host_kind=workstation)
+    State:       running (status=offline, listed=true)
+    Owner:       alice@example.com
+    PendingTransfer: bob@example.com
+    Tunnel:      connected=false
+    (exit 0)
+$ [alice@example.com @ 4261] grain registry transfer -cancel xfer-walk
+    cancelled the pending ownership transfer of xfer-walk
+    (exit 0)
+$ [alice@example.com @ 4251] grain registry show xfer-walk
+    Name:        xfer-walk
+    URL:         https://xfer-walk.grain-user.test
+    Kind:        connected (host_kind=workstation)
+    State:       running (status=offline, listed=true)
+    Owner:       alice@example.com
+    Tunnel:      connected=false
+    (exit 0)
+$ [bob@example.com @ 4251] grain registry accept-transfer xfer-walk
+    grain: registry API 403 (forbidden): only the named pending transfer recipient may accept this transfer
+    (exit 1)
+$ [bob@example.com @ 4261] grain registry accept-transfer xfer-walk
+    grain: registry API 403 (forbidden): only the named pending transfer recipient may accept this transfer
+    (exit 1)
+--- offer on replica B, cancel on replica A, bob accept-transfer on B
+$ [alice@example.com @ 4261] grain registry transfer -to bob@example.com xfer-walk
+    offered ownership transfer of xfer-walk to bob@example.com
+    (exit 0)
+$ [alice@example.com @ 4251] grain registry transfer -cancel xfer-walk
+    cancelled the pending ownership transfer of xfer-walk
+    (exit 0)
+$ [bob@example.com @ 4261] grain registry accept-transfer xfer-walk
+    grain: registry API 403 (forbidden): only the named pending transfer recipient may accept this transfer
+    (exit 1)
+  sql> select name, owner_email, coalesce(pending_owner,''), transfer_expires_at is not null as has_expiry from registry.entries where name='xfer-walk'
+    xfer-walk|alice@example.com||f
+--- -cancel combined with -to or -owner-group refused locally
+$ [alice@example.com @ 4251] grain registry transfer -cancel -to bob@example.com xfer-walk
+    grain: transfer -cancel withdraws a pending offer and takes no -to, -owner-group or -clear-owner-group
+    (exit 1)
+$ [alice@example.com @ 4261] grain registry transfer -cancel -owner-group group:eng@example.com xfer-walk
+    grain: transfer -cancel withdraws a pending offer and takes no -to, -owner-group or -clear-owner-group
+    (exit 1)
+
+=== 3. Tombstone 404 & re-registration after admin purge across both replicas ===
+$ [alice@example.com @ 4251] grain registry register -standalone reclaim-a
+    registered connected entry reclaim-a on http://127.0.0.1:4251
+    registration token written to /tmp/gr-walk-3745/reclaim-a-alice.token
+    outbound tunnel config snippet:
+      grain daemon -registry-url http://127.0.0.1:4251 -registry-entry reclaim-a -registry-token-file /tmp/gr-walk-3745/reclaim-a-alice.token -registry-connect \
+        -ui-require-verifier=registry -ui-registry-issuer=grain-registry -ui-registry-audience=https://reclaim-a.grain-user.test -ui-registry-keys-url=http://127.0.0.1:4251/.well-known/jwks.json
+    (exit 0)
+$ [alice@example.com @ 4261] grain registry delete -yes reclaim-a
+    deleted entry reclaim-a
+    (exit 0)
+--- tombstone visibility before purge (bob gets 404 on A and B; owner alice gets 200)
+$ [bob@example.com @ 4251] GET /api/entries/reclaim-a 
+    HTTP 404
+    {"error":"entry \"reclaim-a\" not found","code":"not_found"}
+
+$ [bob@example.com @ 4261] GET /api/entries/reclaim-a 
+    HTTP 404
+    {"error":"entry \"reclaim-a\" not found","code":"not_found"}
+
+$ [alice@example.com @ 4251] GET /api/entries/reclaim-a 
+    HTTP 200
+    {"name":"reclaim-a","url":"https://reclaim-a.grain-user.test","kind":"connected","state":"deleted","status":"offline","health":"ok","owner":"alice@example.com","listed":true,"allow_ssh":true,"ship_logs":false,"auto_wake":true,"host_kind":"workstation","active_tasks":0,"awaiting_reply_tasks":0,"queue_depth":0,"active_sessions":0,"tunnel_connected":false,"last_seen_at":"2026-11-09T08:36:53.189337049Z","credentials":[{"credential_id":"b3b540eb-9c8f-4628-87c4-8d4bb1841eb4","label":"grain-cli","created_by":"alice@example.com","created_at":"2026-11-09T08:36:53.144453Z","revoked_at":"2026-11-09T08:36
+--- before reservation release, bob gets name_reserved (not 403 forbidden)
+$ [bob@example.com @ 4261] grain registry register -standalone reclaim-a
+    grain: registry API 409 (name_reserved): registry store: entry name is reserved by a recently deleted entry: entry "reclaim-a" is reserved until 2026-12-09T08:36:53Z
+    (exit 1)
+--- admin purge on replica A with release_reservation=true, bob registers on replica B
+$ [root@example.com @ 4251] POST /api/admin/entries/reclaim-a/purge {"release_reservation":true}
+    HTTP 200
+    {"name":"reclaim-a","url":"https://reclaim-a.grain-user.test","kind":"connected","state":"deleted","status":"offline","health":"ok","owner":"alice@example.com","listed":true,"allow_ssh":true,"ship_logs":false,"auto_wake":true,"host_kind":"workstation","active_tasks":0,"awaiting_reply_tasks":0,"queue_depth":0,"active_sessions":0,"tunnel_connected":false,"last_seen_at":"2026-11-09T08:36:53.278963377Z","credentials":[{"credential_id":"b3b540eb-9c8f-4628-87c4-8d4bb1841eb4","label":"grain-cli","created_by":"alice@example.com","created_at":"2026-11-09T08:36:53.144453Z","revoked_at":"2026-11-09T08:36
+$ [bob@example.com @ 4251] GET /api/entries/reclaim-a 
+    HTTP 404
+    {"error":"entry \"reclaim-a\" not found","code":"not_found"}
+
+$ [bob@example.com @ 4261] GET /api/entries/reclaim-a 
+    HTTP 404
+    {"error":"entry \"reclaim-a\" not found","code":"not_found"}
+
+$ [bob@example.com @ 4251] GET /api/names/reclaim-a 
+    HTTP 200
+    {"name":"reclaim-a","state":"available","status":"free"}
+
+$ [bob@example.com @ 4261] GET /api/names/reclaim-a 
+    HTTP 200
+    {"name":"reclaim-a","state":"available","status":"free"}
+
+$ [bob@example.com @ 4261] grain registry register -standalone reclaim-a
+    registered connected entry reclaim-a on http://127.0.0.1:4261
+    registration token written to /tmp/gr-walk-3745/reclaim-a-bob.token
+    outbound tunnel config snippet:
+      grain daemon -registry-url http://127.0.0.1:4261 -registry-entry reclaim-a -registry-token-file /tmp/gr-walk-3745/reclaim-a-bob.token -registry-connect \
+        -ui-require-verifier=registry -ui-registry-issuer=grain-registry -ui-registry-audience=https://reclaim-a.grain-user.test -ui-registry-keys-url=http://127.0.0.1:4261/.well-known/jwks.json
+    (exit 0)
+$ [bob@example.com @ 4251] grain registry show reclaim-a
+    Name:        reclaim-a
+    URL:         https://reclaim-a.grain-user.test
+    Kind:        connected (host_kind=workstation)
+    State:       running (status=offline, listed=true)
+    Owner:       bob@example.com
+    Tunnel:      connected=false
+    (exit 0)
+--- reverse direction: carol registers on B, deletes on A, admin purges on B, bob registers on A
+$ [carol@example.com @ 4261] grain registry register -standalone reclaim-b
+    registered connected entry reclaim-b on http://127.0.0.1:4261
+    registration token written to /tmp/gr-walk-3745/reclaim-b-carol.token
+    outbound tunnel config snippet:
+      grain daemon -registry-url http://127.0.0.1:4261 -registry-entry reclaim-b -registry-token-file /tmp/gr-walk-3745/reclaim-b-carol.token -registry-connect \
+        -ui-require-verifier=registry -ui-registry-issuer=grain-registry -ui-registry-audience=https://reclaim-b.grain-user.test -ui-registry-keys-url=http://127.0.0.1:4261/.well-known/jwks.json
+    (exit 0)
+$ [carol@example.com @ 4251] grain registry delete -yes reclaim-b
+    deleted entry reclaim-b
+    (exit 0)
+$ [root@example.com @ 4261] POST /api/admin/entries/reclaim-b/purge {"release_reservation":true}
+    HTTP 200
+    {"name":"reclaim-b","url":"https://reclaim-b.grain-user.test","kind":"connected","state":"deleted","status":"offline","health":"ok","owner":"carol@example.com","listed":true,"allow_ssh":true,"ship_logs":false,"auto_wake":true,"host_kind":"workstation","active_tasks":0,"awaiting_reply_tasks":0,"queue_depth":0,"active_sessions":0,"tunnel_connected":false,"last_seen_at":"2026-11-09T08:36:53.515477415Z","credentials":[{"credential_id":"576d51f7-f408-4a89-af2e-c56a785d6799","label":"grain-cli","created_by":"carol@example.com","created_at":"2026-11-09T08:36:53.461175Z","revoked_at":"2026-11-09T08:36
+$ [bob@example.com @ 4251] grain registry register -standalone reclaim-b
+    registered connected entry reclaim-b on http://127.0.0.1:4251
+    registration token written to /tmp/gr-walk-3745/reclaim-b-bob.token
+    outbound tunnel config snippet:
+      grain daemon -registry-url http://127.0.0.1:4251 -registry-entry reclaim-b -registry-token-file /tmp/gr-walk-3745/reclaim-b-bob.token -registry-connect \
+        -ui-require-verifier=registry -ui-registry-issuer=grain-registry -ui-registry-audience=https://reclaim-b.grain-user.test -ui-registry-keys-url=http://127.0.0.1:4251/.well-known/jwks.json
+    (exit 0)
+$ [bob@example.com @ 4261] grain registry show reclaim-b
+    Name:        reclaim-b
+    URL:         https://reclaim-b.grain-user.test
+    Kind:        connected (host_kind=workstation)
+    State:       running (status=offline, listed=true)
+    Owner:       bob@example.com
+    Tunnel:      connected=false
+    (exit 0)
+
+=== 4. grain access list prints label= for a delegate on the connected daemon ===
+$ grain access allow --label ci-bot --role grain/delegated --reason 'walk delegated ci-bot' delegate:ci-bot@walk-proj.iam.gserviceaccount.com
+    allowed delegate:ci-bot@walk-proj.iam.gserviceaccount.com as grain/delegated
+$ grain access list
+    user:alice@example.com	grain/operator	added by -ui-allowed-principals	2026-11-09T08:36:21Z
+    delegate:ci-bot@walk-proj.iam.gserviceaccount.com	grain/delegated	added by the access code	2026-11-09T08:36:53Z	walk delegated ci-bot	label=ci-bot
+$ grain -json access list
+    {"entry":"delegate:ci-bot@walk-proj.iam.gserviceaccount.com","addedBy":"the access code","addedAt":"2026-11-09T08:36:53.625466452Z","reason":"walk delegated ci-bot","role":"grain/delegated","label":"ci-bot"}

@@ -154,3 +154,83 @@ func TestOthersDeletedEntryReadsAsNotFound(t *testing.T) {
 		t.Fatalf("bob GET of his new old-box = %+v, %v", got, err)
 	}
 }
+
+// TestUpgradeRefusesConnectedEntries covers the 2026-11-09 registry walkthrough
+// finding: POST /api/entries/{name}/upgrade (`grain registry upgrade`) accepted
+// `connected` entries and stored `target_version` on them even though only
+// hosted `instance` VMs are upgraded by the reconciler.
+func TestUpgradeRefusesConnectedEntries(t *testing.T) {
+	ctx, st, clientFor := newWalkthroughRegistry(t)
+	cli := clientFor("alice@example.com")
+
+	if _, err := cli.CreateEntry(ctx, api.CreateEntryRequest{Name: "alice-laptop", Kind: api.KindConnected}); err != nil {
+		t.Fatalf("CreateEntry connected: %v", err)
+	}
+	if _, err := cli.UpgradeEntry(ctx, "alice-laptop", api.UpgradeEntryRequest{TargetVersion: "v3.2.0"}); err == nil || !strings.Contains(err.Error(), "invalid_entry_kind") {
+		t.Fatalf("UpgradeEntry on a connected entry = %v, want invalid_entry_kind", err)
+	}
+	got, err := st.GetEntryByName(ctx, "alice-laptop")
+	if err != nil {
+		t.Fatalf("GetEntryByName: %v", err)
+	}
+	if got.TargetVersion != "" {
+		t.Fatalf("connected entry target_version = %q after refused upgrade, want empty", got.TargetVersion)
+	}
+
+	if _, err := cli.CreateEntry(ctx, api.CreateEntryRequest{Name: "alice-vm", Kind: api.KindInstance, Shape: "small"}); err != nil {
+		t.Fatalf("CreateEntry instance: %v", err)
+	}
+	if _, err := cli.UpgradeEntry(ctx, "alice-vm", api.UpgradeEntryRequest{TargetVersion: "v3.2.0"}); err != nil {
+		t.Fatalf("UpgradeEntry on a hosted instance: %v", err)
+	}
+}
+
+// TestListEntriesRedactsStatusDetailForPendingTransferRecipient verifies that
+// GET /api/entries redacts status_detail and credentials for a pending transfer
+// recipient who does not yet manage the entry, matching GET /api/entries/{name}.
+func TestListEntriesRedactsStatusDetailForPendingTransferRecipient(t *testing.T) {
+	ctx, st, clientFor := newWalkthroughRegistry(t)
+	alice, bob, admin := clientFor("alice@example.com"), clientFor("bob@example.com"), clientFor("admin@example.com")
+
+	if _, err := alice.CreateEntry(ctx, api.CreateEntryRequest{Name: "xfer-vm", Kind: api.KindInstance, Shape: "small"}); err != nil {
+		t.Fatalf("CreateEntry: %v", err)
+	}
+	row, err := st.GetEntryByName(ctx, "xfer-vm")
+	if err != nil {
+		t.Fatalf("GetEntryByName: %v", err)
+	}
+	const secretReason = "waiting for service account gi-xfer-vm@acme-prod.iam.gserviceaccount.com to propagate"
+	if _, err := st.DB().ExecContext(ctx, `UPDATE registry.entries SET status_reason = $1 WHERE id = $2`, secretReason, row.ID); err != nil {
+		t.Fatalf("set status_reason: %v", err)
+	}
+	if _, err := alice.OfferTransfer(ctx, "xfer-vm", api.TransferRequest{To: "bob@example.com"}); err != nil {
+		t.Fatalf("OfferTransfer: %v", err)
+	}
+
+	bobShow, err := bob.GetEntry(ctx, "xfer-vm")
+	if err != nil {
+		t.Fatalf("bob GetEntry: %v", err)
+	}
+	if bobShow.StatusDetail != "" {
+		t.Fatalf("bob GetEntry StatusDetail = %q, want redacted empty", bobShow.StatusDetail)
+	}
+	bobList, err := bob.ListEntries(ctx, api.ListEntriesQuery{Mine: true})
+	if err != nil {
+		t.Fatalf("bob ListEntries: %v", err)
+	}
+	if len(bobList) != 1 || bobList[0].Name != "xfer-vm" {
+		t.Fatalf("bob ListEntries = %+v, want [xfer-vm]", bobList)
+	}
+	if bobList[0].StatusDetail != "" {
+		t.Fatalf("bob ListEntries StatusDetail = %q, want redacted empty", bobList[0].StatusDetail)
+	}
+
+	aliceList, err := alice.ListEntries(ctx, api.ListEntriesQuery{Mine: true})
+	if err != nil || len(aliceList) != 1 || aliceList[0].StatusDetail != secretReason {
+		t.Fatalf("alice ListEntries = %+v, %v, want StatusDetail=%q", aliceList, err, secretReason)
+	}
+	adminList, err := admin.ListEntries(ctx, api.ListEntriesQuery{All: true})
+	if err != nil || len(adminList) != 1 || adminList[0].StatusDetail != secretReason {
+		t.Fatalf("admin ListEntries = %+v, %v, want StatusDetail=%q", adminList, err, secretReason)
+	}
+}
