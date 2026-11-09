@@ -884,12 +884,53 @@ func TestTheDockerfileCarriesEveryBinaryGrainShellsOutTo(t *testing.T) {
 	// CAP_NET_BIND_SERVICE reaches a non-root process in a container only
 	// through a file capability -- --cap-add alone grants it nothing, so
 	// the default -ui-addr (port 80), and the package cache's 53, 443 and
-	// 80, would all fail to bind without this.
-	contains(t, text, "setcap cap_net_bind_service=+ep /usr/local/bin/grain")
+	// 80, would all fail to bind without this. Set on /src/bin/grain in the
+	// build stage before COPY so the runtime image does not copy up the
+	// grain binary into a second layer.
+	contains(t, text, "setcap cap_net_bind_service=+ep /src/bin/grain")
+	contains(t, text, "COPY --from=build /src/bin/grain /usr/local/bin/grain")
 	// The entrypoint is the binary, so `docker run <image> schema-version`
 	// runs the CLI -- which is how setup.sh's own wrapper and pkg/upgrade's
 	// image health check both invoke it.
 	contains(t, text, `"/usr/local/bin/grain"]`)
+}
+
+func TestTheDaemonImageAvoidsDuplicateCapabilityLayersAndUnusedDefaultCluster(t *testing.T) {
+	code := stripComments(read(t, "Dockerfile"))
+	runtime := code[strings.LastIndex(code, "\nFROM "):]
+
+	// Running setcap on /usr/local/bin/grain after COPY copies the entire
+	// binary into a second OCI layer (~75-105MB duplicated). Keep the setcap
+	// in the build stage before COPY, and setcap /usr/sbin/nft in the single
+	// runtime apt layer.
+	absent(t, runtime, "setcap cap_net_bind_service=+ep /usr/local/bin/grain")
+	if got := strings.Count(runtime, "apt-get install"); got != 2 {
+		t.Errorf("runtime stage runs apt-get install %d times, want 2 (base packages + PGDG postgresql-16 in one RUN)", got)
+	}
+
+	// postgresql-common's postinst otherwise creates a 38MB unused cluster at
+	// /var/lib/postgresql/16/main; embedded clusters initdb under <data-dir>/postgres.
+	contains(t, runtime, "create_main_cluster = false")
+
+	// Go binaries compiled for the daemon image strip DWARF and symbol tables
+	// (-s -w) and build paths (-trimpath) while keeping .gopclntab and .go.buildinfo.
+	makefile := stripComments(read(t, "Makefile"))
+	contains(t, makefile, "$(strip -s -w")
+	contains(t, makefile, " -trimpath ")
+	for _, target := range []string{"/out/granule", "/out/github-webhook", "/out/grain-sandbox"} {
+		found := false
+		for _, line := range strings.Split(code, "\n") {
+			if strings.Contains(line, "go build") && strings.Contains(line, target) {
+				found = true
+				if !strings.Contains(line, "-trimpath") || !strings.Contains(line, "-s -w") {
+					t.Errorf("Dockerfile builds %s without -trimpath and -s -w: %q", target, strings.TrimSpace(line))
+				}
+			}
+		}
+		if !found {
+			t.Errorf("Dockerfile has no go build line for %s", target)
+		}
+	}
 }
 
 // The privileged ports this daemon binds are not only the UI's.
