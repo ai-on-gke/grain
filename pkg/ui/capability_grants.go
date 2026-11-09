@@ -348,7 +348,14 @@ func (s *Server) handleListCapabilityMethods(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusBadRequest, fmt.Errorf("kind %q is not task, process or ci", kind))
 			return
 		}
-		subject := model.CapabilitySubject{Kind: kind}
+		// A listing names a run kind and a repository, never a CI job's
+		// trigger event: the CI capabilities picker grants to every job
+		// the repository runs, so an event-gated rule (release#registry-
+		// push, for release jobs) is not a refusal of the whole list.
+		// Judged as an event-less run it was, and the picker disabled
+		// every release method with "this is a unnamed run" (2026-11-09
+		// repository walkthrough).
+		subject := model.CapabilitySubject{Kind: kind, AnyEvent: kind == model.CapabilityRunCI}
 		if repo := strings.TrimSpace(q.Get("repo")); repo != "" {
 			ref, err := model.ParseRepo(repo)
 			if err != nil {

@@ -1346,7 +1346,19 @@ export function issueUrl(ref) {
 // Leave an undeclared base out: the server resolves it from the
 // repository, so this works for repos whose default branch is not `main`.
 export function internalPullRequestUrl(repo, branch, base = "") {
-  return `/repos/${repo}/compare/${base ? `${base}...${branch}` : branch}`;
+  const head = comparisonRefSegment(branch);
+  return `/repos/${repo}/compare/${base ? `${comparisonRefSegment(base)}...${head}` : head}`;
+}
+
+// comparisonRefSegment is one ref as a compare path spells it: its "/"
+// left literal, the way github.com's compare URLs write a branch name,
+// and everything else a path cannot carry escaped. Git allows "#", "?"
+// and "%" in a branch name (fix/#123 is a common one), and written
+// plainly the first two end the path: the page opened in-app, but a
+// reload or a shared link compared fix/ instead (2026-11-09 repository
+// walkthrough). paths.js decodes each ref on the way back in.
+export function comparisonRefSegment(ref) {
+  return encodeURIComponent(ref).replace(/%2F/gi, "/");
 }
 
 // repoUrl turns "owner/name" or "host/owner/name" -- the way a repo is

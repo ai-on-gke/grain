@@ -217,6 +217,25 @@ test("the issue importer imports, dedups and queues the sim's issues", async ({
     expect(queued.state).toBe("queued");
     expect(queued.awaitingImportApproval ?? false).toBe(false);
 
+    // A source GitHub has no such repository for: the pass read
+    // nothing, and says so rather than "Read 0 open issues ... Some
+    // could not be imported" (2026-11-09 repository walkthrough).
+    await section.getByLabel("Source repository").fill("acme/missing-3716");
+    await section.getByRole("button", { name: "Save" }).click();
+    await expect(
+      section.getByText(/reads the open issues of acme\/missing-3716/),
+    ).toBeVisible();
+    status = await importNow(page, section);
+    await expect(status).toHaveText(
+      /^Could not read the open issues on acme\/missing-3716: .*404/,
+    );
+    await expect(section.getByText(/Read 0 open issues/)).toHaveCount(0);
+    await section.getByLabel("Source repository").fill("acme-upstream/widgets");
+    await section.getByRole("button", { name: "Save" }).click();
+    await expect(
+      section.getByText(/reads the open issues of acme-upstream\/widgets/),
+    ).toBeVisible();
+
     // The section, and the outcome line, still fit a phone.
     await page.setViewportSize({ width: 390, height: 844 });
     await expectInside(status, section);
