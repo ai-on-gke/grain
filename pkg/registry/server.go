@@ -997,26 +997,31 @@ func (s *Server) handleGetEntries(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		isManager := caller.IsAdmin
 		if !caller.IsAdmin || mineOnly {
-			isOwnerOrPending := strings.EqualFold(e.OwnerEmail, caller.Email) ||
-				(e.PendingOwner != "" && strings.EqualFold(e.PendingOwner, caller.Email))
-			if !isOwnerOrPending {
-				if normalizeGroupSpec(e.OwnerGroup) == "" {
-					continue
-				}
+			isOwner := strings.EqualFold(e.OwnerEmail, caller.Email)
+			isPending := e.PendingOwner != "" && strings.EqualFold(e.PendingOwner, caller.Email)
+			inOwnerGroup := false
+			if !isOwner && normalizeGroupSpec(e.OwnerGroup) != "" {
 				ok, err := s.isGroupMember(r.Context(), e.OwnerGroup, caller.Email)
 				if err != nil {
 					w.Header().Set("Retry-After", "5")
 					writeJSONError(w, http.StatusServiceUnavailable, "unavailable", "authorization lookup temporarily unavailable")
 					return
 				}
-				if !ok {
-					continue
-				}
+				inOwnerGroup = ok
+			}
+			isManager = caller.IsAdmin || isOwner || inOwnerGroup
+			if !isOwner && !isPending && !inOwnerGroup {
+				continue
 			}
 		}
 
 		apiEntry := s.enrichAPIEntry(r.Context(), e, caller.IsAdmin)
+		if !isManager && !caller.IsAdmin {
+			apiEntry.Credentials = nil
+			apiEntry.StatusDetail = ""
+		}
 		if statusFilter != "" && !strings.EqualFold(string(apiEntry.Status), statusFilter) && !strings.EqualFold(string(apiEntry.State), statusFilter) {
 			continue
 		}
@@ -1551,6 +1556,10 @@ func (s *Server) handleUpgradeEntry(w http.ResponseWriter, r *http.Request) {
 	name := strings.ToLower(strings.TrimSpace(r.PathValue("name")))
 	entry, ok := s.loadAndAuthorizeManagedEntry(w, r, caller, name, false)
 	if !ok {
+		return
+	}
+	if entry.Kind != api.KindInstance {
+		writeJSONError(w, http.StatusBadRequest, "invalid_entry_kind", "only kind=\"instance\" entries can be upgraded")
 		return
 	}
 

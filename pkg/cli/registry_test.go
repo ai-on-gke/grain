@@ -1194,3 +1194,78 @@ func TestRegistryCLITransferCancel(t *testing.T) {
 		t.Fatalf("transfer requests = %+v, want exactly one {cancel: true} with no target", bodies)
 	}
 }
+
+// TestRegistryCLIListAndShowPrintStatusDetail covers the 2026-11-09 walkthrough
+// fix: plain-text `grain registry list` and `grain registry show` print an
+// entry's `status_detail` (such as a service-account propagation retry reason
+// while `creating` or a failure reason when `failed`), plus `replace_step`,
+// `health_detail`, and `boot_disk_gb` on `show`.
+func TestRegistryCLIListAndShowPrintStatusDetail(t *testing.T) {
+	ctx := context.Background()
+	const propReason = "waiting for service account gi-late-vm@acme-prod.iam.gserviceaccount.com to propagate before creating the GCE instance (attempt 1 failed, retrying in 5s)"
+	entry := api.Entry{
+		Name:         "late-vm",
+		URL:          "https://late-vm.grain.example.com",
+		Kind:         api.KindInstance,
+		HostKind:     api.HostKindRegistryVM,
+		State:        api.StateCreating,
+		Status:       api.StatusOffline,
+		StatusDetail: propReason,
+		HealthDetail: "boot probe pending",
+		ReplaceStep:  api.ReplaceStepCreatingVM,
+		Owner:        "alice@example.com",
+		Listed:       true,
+		Shape:        "n2-standard-2",
+		BootDiskGB:   120,
+	}
+	regSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/entries":
+			_ = json.NewEncoder(w).Encode(api.ListEntriesResponse{Entries: []api.Entry{entry}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/entries/late-vm":
+			_ = json.NewEncoder(w).Encode(entry)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer regSrv.Close()
+	prevClient := registryHTTPClient
+	prevOIDC := registryOIDCToken
+	registryHTTPClient = regSrv.Client()
+	registryOIDCToken = func(ctx context.Context, registryURL, audience string) (string, error) {
+		return "oidc-test-token", nil
+	}
+	t.Cleanup(func() {
+		registryHTTPClient = prevClient
+		registryOIDCToken = prevOIDC
+	})
+
+	var listErr error
+	listOut := captureStdout(t, func() {
+		listErr = cmdRegistry(ctx, nil, &printer{}, []string{"list", "-registry-url", regSrv.URL})
+	})
+	if listErr != nil {
+		t.Fatalf("grain registry list: %v", listErr)
+	}
+	if !strings.Contains(listOut, "detail="+propReason) {
+		t.Fatalf("grain registry list output missing detail=%q:\n%s", propReason, listOut)
+	}
+
+	var showErr error
+	showOut := captureStdout(t, func() {
+		showErr = cmdRegistry(ctx, nil, &printer{}, []string{"show", "-registry-url", regSrv.URL, "late-vm"})
+	})
+	if showErr != nil {
+		t.Fatalf("grain registry show: %v", showErr)
+	}
+	for _, want := range []string{
+		"Step:        creating_vm",
+		"Detail:      " + propReason,
+		"Health:      boot probe pending",
+		"Disk:        120 GB",
+	} {
+		if !strings.Contains(showOut, want) {
+			t.Fatalf("grain registry show output missing %q:\n%s", want, showOut)
+		}
+	}
+}

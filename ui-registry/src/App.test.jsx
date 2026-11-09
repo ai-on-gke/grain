@@ -1421,11 +1421,27 @@ describe("Grain Hub UI", () => {
       ttl_seconds: 7 * 86400,
     });
 
-    // Revoke active grant by ID -> DELETE /api/delegation-grants/<id>
+    // Revoke active grant by ID -> ConfirmDialog (Escape cancels and restores
+    // focus; confirming sends DELETE /api/delegation-grants/<id>).
     const revokeButtons = within(grantsSection).getAllByRole("button", {
       name: "Revoke",
     });
+    revokeButtons[0].focus();
     fireEvent.click(revokeButtons[0]);
+    let revokeDialog = await screen.findByRole("dialog");
+    expect(revokeDialog).toHaveTextContent(/Revoke consent for triage-bot\?/i);
+    expect(
+      within(revokeDialog).getByRole("button", { name: "Cancel" }),
+    ).toHaveFocus();
+    fireEvent.keyDown(document.activeElement, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(revokeButtons[0]).toHaveFocus();
+
+    fireEvent.click(revokeButtons[0]);
+    revokeDialog = await screen.findByRole("dialog");
+    fireEvent.click(
+      within(revokeDialog).getByRole("button", { name: "Revoke grant" }),
+    );
 
     await waitFor(() => {
       expect(
@@ -1630,5 +1646,140 @@ describe("Grain Hub UI", () => {
     expect(
       screen.queryByRole("button", { name: /^Create hosted VM$/i }),
     ).not.toBeInTheDocument();
+  });
+
+  it("confirms Hard purge on Admin and credential Revoke on Entry Detail with keyboard focus and Escape", async () => {
+    const purgeCalls = [];
+    const revokeCredCalls = [];
+    const deletedEntry = {
+      ...sampleEntries[0],
+      name: "retired-vm",
+      state: "deleted",
+      status: "offline",
+      deleted_at: "2026-11-08T00:00:00Z",
+      db_purge_after: "2026-11-15T00:00:00Z",
+    };
+    const connectedWithCred = {
+      ...sampleEntries[1],
+      credentials: [
+        {
+          credential_id: "cred-live-01",
+          label: "laptop-tunnel",
+          created_by: "alice@example.com",
+          created_at: "2026-11-01T00:00:00Z",
+        },
+      ],
+    };
+
+    globalThis.fetch = createFetchMock({
+      "GET /api/entries?all=1&include_deleted=true": () =>
+        new Response(
+          JSON.stringify({ entries: [...sampleEntries, deletedEntry] }),
+          { status: 200 },
+        ),
+      "POST /api/admin/entries/retired-vm/purge": async (_url, init) => {
+        const body = JSON.parse(init.body || "{}");
+        purgeCalls.push(body);
+        deletedEntry.purged_at = "2026-11-09T00:00:00Z";
+        return new Response(JSON.stringify(deletedEntry), { status: 200 });
+      },
+      "GET /api/entries/alice-workstation": () =>
+        new Response(JSON.stringify(connectedWithCred), { status: 200 }),
+      "DELETE /api/entries/alice-workstation/credentials/cred-live-01":
+        async () => {
+          revokeCredCalls.push("cred-live-01");
+          connectedWithCred.credentials[0].revoked_at = "2026-11-09T00:00:00Z";
+          return new Response(null, { status: 204 });
+        },
+    });
+
+    // 1. Admin Hard purge confirmation: Cancel focused, Tab cycles, Escape cancels, confirm purges.
+    const { unmount } = renderApp("/admin");
+    const purgeBtn = await screen.findByRole("button", { name: "Hard purge" });
+    purgeBtn.focus();
+    fireEvent.click(purgeBtn);
+    let dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("Hard purge retired-vm?");
+    const cancelBtn = within(dialog).getByRole("button", { name: "Cancel" });
+    expect(cancelBtn).toHaveFocus();
+    fireEvent.keyDown(document.activeElement, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(purgeBtn).toHaveFocus();
+    expect(purgeCalls).toEqual([]);
+
+    fireEvent.click(purgeBtn);
+    dialog = await screen.findByRole("dialog");
+    fireEvent.click(
+      within(dialog).getByLabelText(/Release the 30-day name reservation/i),
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Hard purge" }));
+    await screen.findByText(/Hard-purged retained resources for retired-vm\./);
+    expect(purgeCalls).toEqual([
+      { confirm: "retired-vm", force: true, release_reservation: false },
+    ]);
+    unmount();
+
+    // 2. Entry Detail credential Revoke confirmation: Cancel focused, Escape cancels, confirm revokes.
+    renderApp("/entries/alice-workstation");
+    const revokeBtn = await screen.findByRole("button", { name: "Revoke" });
+    revokeBtn.focus();
+    fireEvent.click(revokeBtn);
+    dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("Revoke registration credential?");
+    expect(
+      within(dialog).getByRole("button", { name: "Cancel" }),
+    ).toHaveFocus();
+    fireEvent.keyDown(document.activeElement, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(revokeBtn).toHaveFocus();
+    expect(revokeCredCalls).toEqual([]);
+
+    fireEvent.click(revokeBtn);
+    dialog = await screen.findByRole("dialog");
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Revoke credential" }),
+    );
+    await screen.findByText("Revoked credential cred-live-01.");
+    expect(revokeCredCalls).toEqual(["cred-live-01"]);
+  });
+
+  it("renders a creating instance's service-account propagation status_detail in My Entries and Entry Detail", async () => {
+    const propDetail =
+      "waiting for service account gi-late-vm@acme-prod.iam.gserviceaccount.com to propagate before creating the GCE instance (attempt 1 failed, retrying in 5s)";
+    const creatingEntry = {
+      ...sampleEntries[0],
+      name: "late-vm",
+      display_name: "Late VM",
+      state: "creating",
+      status: "offline",
+      status_detail: propDetail,
+      health_detail: "previous probe ok",
+    };
+
+    globalThis.fetch = createFetchMock({
+      "GET /api/entries?mine=1": () =>
+        new Response(JSON.stringify({ entries: [creatingEntry] }), {
+          status: 200,
+        }),
+      "GET /api/entries/late-vm": () =>
+        new Response(JSON.stringify(creatingEntry), { status: 200 }),
+    });
+
+    const { unmount } = renderApp("/");
+    expect(
+      await screen.findByTestId("status-detail-late-vm"),
+    ).toHaveTextContent(propDetail);
+    unmount();
+
+    renderApp("/entries/late-vm");
+    const banner = await screen.findByTestId("lifecycle-status-banner");
+    expect(banner).toHaveTextContent("Provisioning instance:");
+    expect(banner).toHaveTextContent(propDetail);
+    expect(screen.getByTestId("entry-status-detail")).toHaveTextContent(
+      propDetail,
+    );
+    expect(screen.getByTestId("entry-health-detail")).toHaveTextContent(
+      "previous probe ok",
+    );
   });
 });
