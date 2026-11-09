@@ -2052,7 +2052,8 @@ describe("RepoPage", () => {
         open: 0,
         imported: [],
         skipped: 0,
-        error: "listing open issues on acme/gone: GitHub answered 404: Not Found",
+        error:
+          "listing open issues on acme/gone: GitHub answered 404: Not Found",
       },
       {
         repo: "acme/widgets",
@@ -2071,7 +2072,9 @@ describe("RepoPage", () => {
     const user = userEvent.setup();
     renderPage({ tab: "agents" });
 
-    const now = await screen.findByRole("button", { name: "Import issues now" });
+    const now = await screen.findByRole("button", {
+      name: "Import issues now",
+    });
     await user.click(now);
     const failed = await screen.findByText(
       "Could not read the open issues on acme/gone: listing open issues on acme/gone: GitHub answered 404: Not Found",
