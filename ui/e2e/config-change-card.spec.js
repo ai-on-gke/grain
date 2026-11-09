@@ -13,6 +13,9 @@
 // limitations under the License.
 
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { test, expect } from "./fixtures.js";
 
 // The config-change card (PendingConfigChange.jsx), end to end: `grain
@@ -247,4 +250,149 @@ test("the demo's git proxy serves grain/config as a session reaches it", async (
   });
   const status = await (await request.get("/api/state-repo")).json();
   expect(refs).toContain(`${status.head}\trefs/heads/main`);
+});
+
+test("after a 422 conflict refusal, the card drops Schema valid, disables Approve & Apply and survives a reload", async ({
+  page,
+  request,
+}) => {
+  const beforeSettings = await (await request.get("/api/settings")).json();
+  const initialInterval = beforeSettings.pollInterval || "10s";
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "grain-stale-proposal-"));
+
+  try {
+    const filed = await request.post("/api/tasks", {
+      data: {
+        title: `Conflicting poll proposal ${Date.now()}`,
+        writes: [{ repo: "grain/config" }],
+        approved: true,
+      },
+    });
+    expect(filed.ok()).toBeTruthy();
+    const task = await filed.json();
+
+    const started = await request.post("/api/e2e/git-proxy/runs", {
+      data: { taskId: task.id },
+    });
+    expect(started.ok()).toBeTruthy();
+    const run = await started.json();
+
+    const auth = `http.extraHeader=Authorization: Basic ${Buffer.from(
+      `x:${run.token}`,
+    ).toString("base64")}`;
+    const git = (...args) =>
+      execFileSync("git", ["-c", auth, ...args], {
+        cwd: work,
+        encoding: "utf8",
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+      }).trim();
+
+    const branch = `grain/config/${task.id}/stale-poll`;
+    const configRemote = new URL("/grain/config.git", run.remote).toString();
+    git("clone", "--quiet", "--branch", "main", configRemote, ".");
+    git("checkout", "--quiet", "-b", branch);
+    const configPath = path.join(work, "tables", "grain_config.json");
+    const raw = fs.readFileSync(configPath, "utf8");
+    const updated = raw.replace(
+      /"poll_interval_ms": \d+/,
+      '"poll_interval_ms": 45000',
+    );
+    expect(updated).not.toBe(raw);
+    fs.writeFileSync(configPath, updated);
+    git(
+      "-c",
+      "user.name=grain e2e",
+      "-c",
+      "user.email=e2e@grain.invalid",
+      "commit",
+      "--quiet",
+      "-am",
+      "Raise poll interval to 45s",
+    );
+    git("push", "--quiet", "origin", `HEAD:refs/heads/${branch}`);
+    const headSha = git("rev-parse", "HEAD");
+
+    const proposed = await request.post(`/api/tasks/${task.id}/config-change`, {
+      data: {
+        summary: "Raise poll interval to 45s",
+        branch,
+        headSha,
+      },
+    });
+    expect(proposed.ok()).toBeTruthy();
+
+    // Open the task while its proposal-time validation is still green, then
+    // advance grain/config's main on the same line via PUT /api/settings.
+    await page.goto(`/tasks/${task.id}`);
+    const card = page.getByRole("region", {
+      name: "Config change waiting for your approval",
+    });
+    await expect(card).toBeVisible();
+    const validation = card.getByTestId("config-change-validation");
+    await expect(validation).toContainText("Schema valid");
+    await expect(
+      card.getByRole("button", { name: "Approve & Apply" }),
+    ).toBeEnabled();
+
+    const put = await request.put("/api/settings", {
+      data: { pollInterval: "22s" },
+    });
+    expect(put.ok()).toBeTruthy();
+
+    const refused = page.waitForResponse(
+      (r) =>
+        r.url().endsWith(`/api/tasks/${task.id}/config-change/approve`) &&
+        r.request().method() === "POST",
+    );
+    await card.getByRole("button", { name: "Approve & Apply" }).click();
+    expect((await refused).status()).toBe(422);
+
+    await expect(validation).not.toContainText("Schema valid");
+    await expect(validation).toContainText(
+      "Stored validation no longer holds:",
+    );
+    await expect(validation).toContainText(
+      "the change conflicts with the current main",
+    );
+    await expect(validation).toContainText("Reject");
+    await expect(
+      card.getByRole("button", { name: "Approve & Apply" }),
+    ).toBeDisabled();
+    await expect(
+      card.getByRole("button", { name: "Reject", exact: true }),
+    ).toBeEnabled();
+
+    // Layout check: the error banner and buttons stay inside the card.
+    const cardBox = await card.boundingBox();
+    const bannerBox = await validation.boundingBox();
+    expect(bannerBox.x).toBeGreaterThanOrEqual(cardBox.x);
+    expect(bannerBox.x + bannerBox.width).toBeLessThanOrEqual(
+      cardBox.x + cardBox.width + 1,
+    );
+
+    // Reloading reads the persisted validation back from the task rather
+    // than reverting to proposal-time "Schema valid".
+    await page.reload();
+    await expect(card).toBeVisible();
+    await expect(validation).not.toContainText("Schema valid");
+    await expect(validation).toContainText(
+      "Stored validation no longer holds:",
+    );
+    await expect(
+      card.getByRole("button", { name: "Approve & Apply" }),
+    ).toBeDisabled();
+
+    // Reject clears the stale proposal and relays the rebase request.
+    await card.getByRole("button", { name: "Reject", exact: true }).click();
+    await card
+      .getByLabel("Why are you rejecting it?")
+      .fill("Rebase onto origin/main and propose it again");
+    await card.getByRole("button", { name: "Reject change" }).click();
+    await expect(card).toHaveCount(0);
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+    await request.put("/api/settings", {
+      data: { pollInterval: initialInterval },
+    });
+  }
 });
