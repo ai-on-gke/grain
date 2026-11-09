@@ -582,6 +582,15 @@ func (c *GCECompute) CreateInstance(ctx context.Context, spec registry.InstanceS
 			// failing the entry; the insert operation failed, so no VM was left behind.
 			return nil, &serviceAccountNotReadyError{err: fmt.Errorf("gcp compute: inserting instance %s in %s: %w", vmName, zone, err)}
 		}
+		if isServiceAccountAccessDenied(err) {
+			// The registry's actAs grant on the account (compute.grant_self_act_as) was
+			// most likely made moments ago and IAM has not applied it yet; it takes up to
+			// a minute or so. Retry like an unpropagated account, but say what is missing
+			// in case it never arrives.
+			return nil, &serviceAccountNotReadyError{err: fmt.Errorf(
+				"gcp compute: inserting instance %s in %s: %w (the registry needs iam.serviceAccounts.actAs on %s: with compute.grant_self_act_as on it grants itself %s there, and a new binding can take a minute to apply)",
+				vmName, zone, err, spec.ServiceAccount, "roles/iam.serviceAccountUser")}
+		}
 		return nil, fmt.Errorf("gcp compute: inserting instance %s in %s: %w", vmName, zone, err)
 	}
 
@@ -957,6 +966,20 @@ func isServiceAccountNotFound(err error, saEmail string) bool {
 		strings.Contains(msg, "was not found") ||
 		strings.Contains(msg, "notfound") ||
 		strings.Contains(msg, "does not exist")
+}
+
+// isServiceAccountAccessDenied reports whether an instances.insert failure is GCE refusing
+// to attach the instance's service account because the caller lacks
+// iam.serviceAccounts.actAs on it: a failed operation with code
+// SERVICE_ACCOUNT_ACCESS_DENIED ("The user does not have access to service account
+// '<sa>'..."), or the same message on a synchronous 4xx.
+func isServiceAccountAccessDenied(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "service_account_access_denied") ||
+		strings.Contains(msg, "does not have access to service account")
 }
 
 func extractZoneFromURL(rawURL string) string {
