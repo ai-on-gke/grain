@@ -23,6 +23,7 @@ import {
   Typography,
 } from "@mui/material";
 import api from "../../api.js";
+import AccessGate from "../AccessGate.jsx";
 import DiffView from "../DiffView.jsx";
 
 // PendingConfigChange is what a session's propose_config_change call
@@ -37,7 +38,11 @@ import DiffView from "../DiffView.jsx";
 // rendered. Reject deletes the branch and hands the session the reason.
 // Either posts the decision into the conversation, which is what wakes
 // the session. Both endpoints answer a person only -- an agent cannot
-// approve its own change.
+// approve its own change -- and only one whose role holds settings:write
+// (pkg/ui/access_roles.go), so a role without it is shown both buttons
+// disabled, with the missing scope named (AccessGate), rather than
+// offered a decision the server refuses
+// (docs/test-runs/2026-11-09-demo-config-change.md, finding 2).
 //
 // t.pendingConfigChange is nil for almost every task, and this renders
 // nothing for those.
@@ -187,24 +192,28 @@ export default function PendingConfigChange({ t, act }) {
         </Stack>
       ) : (
         <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
-          <Button
-            type="button"
-            variant="contained"
-            color="success"
-            disabled={busy || !validation.ok}
-            onClick={() => decide("approve", {})}
-          >
-            Approve &amp; Apply
-          </Button>
-          <Button
-            type="button"
-            variant="outlined"
-            color="error"
-            disabled={busy}
-            onClick={() => setRejecting(true)}
-          >
-            Reject
-          </Button>
+          <AccessGate scope="settings:write">
+            <Button
+              type="button"
+              variant="contained"
+              color="success"
+              disabled={busy || !validation.ok}
+              onClick={() => decide("approve", {})}
+            >
+              Approve &amp; Apply
+            </Button>
+          </AccessGate>
+          <AccessGate scope="settings:write">
+            <Button
+              type="button"
+              variant="outlined"
+              color="error"
+              disabled={busy}
+              onClick={() => setRejecting(true)}
+            >
+              Reject
+            </Button>
+          </AccessGate>
         </Stack>
       )}
     </Alert>

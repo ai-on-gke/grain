@@ -159,6 +159,7 @@ func cmdForceMerge(ctx context.Context, c *ui.HTTPClient, out *printer, args []s
 // it. See ui.Client.RunNow.
 func cmdRunNow(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain run-now", flag.ContinueOnError)
+	reason := fs.String("reason", "", "why: sent as X-Grain-Acting-Reason, which an external agent credential (gma_) must give when run-now approves an unapproved task")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -169,6 +170,7 @@ func cmdRunNow(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 	if err != nil {
 		return err
 	}
+	c.ActingReason = *reason
 	if err := c.RunNow(ctx, id); err != nil {
 		return err
 	}

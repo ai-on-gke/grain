@@ -1,0 +1,22 @@
+=== grain-s127
+PUT /api/github-tokens/default -> 200 {"enabled":true,"dir":
+POST /api/repos -> 200 {"configured":true,"pollInterval":"10
+PUT /api/settings -> 200 {"configured":true,"pollInterval":"10s","pollIntervalDefault":"10s","maxWorkers":10,"maxMergesP
+PUT /api/repos/acme/widgets/settings -> 200 {"repo":"acme/widgets","ciCapabilities":["https://grain.dev/capabilities/git
+POST /api/templates -> 201 {"id":"template-1","name":"probe-template","title":"probe","description":"probe","repo":"acme
+POST /api/schedules -> 201 {"id":"sched-1","title":"probe","description":"probe","repo":"acme/widgets","autoMerge":false
+PUT /api/capability-policy -> 400 {"error":"catalogue: defaults.task: capability https://grain.dev/capabilities/github#read-issues={} is disabled in settings/capabilities.yml (in_process.read-issues, the capability it replaced); defaults.repos[acme/widgets].task: capability https://grain.dev/capabilities/github#read-issues={} is dis
+# stored afterwards: in_process.read-issues and the grant in default_capabilities
+null
+["https://grain.dev/capabilities/github#read-issues={}"]
+=== grain-rc32
+PUT /api/github-tokens/default -> 200 {"enabled":true,"dir":
+POST /api/repos -> 200 {"configured":true,"pollInterval":"10
+PUT /api/settings -> 400 {"error":"capability https://grain.dev/capabilities/github is not configured in mcpServers"} 
+PUT /api/repos/acme/widgets/settings -> 400 {"error":"capability https://grain.dev/capabilities/github is not configured
+POST /api/templates -> 400 {"error":"capability https://grain.dev/capabilities/github is not configured in mcpServers"} 
+POST /api/schedules -> 400 {"error":"capability https://grain.dev/capabilities/github is not configured in mcpServers"} 
+PUT /api/capability-policy -> 200 {"policy":{"catalogue":{"defaults":{},"inProcess":{"read-issues":{"enabled":false}},"apiScopes":{}}}} 
+# stored afterwards: in_process.read-issues and the grant in default_capabilities
+{"read-issues":{"enabled":false}}
+null

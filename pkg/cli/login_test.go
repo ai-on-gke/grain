@@ -206,6 +206,43 @@ func TestGrainLoginIssueTokenSelfServiceNonAdminAndLogoutRevokes(t *testing.T) {
 	}
 }
 
+// TestGrainLoginRefusesFlagsItWouldIgnore: --refresh beside --token-stdin,
+// and --scope-set/--repos/--expires without --issue-token, used to be
+// dropped silently (docs/test-runs/2026-11-09-external-agent-rails.md,
+// F3). Each is a usage refusal with its own code that leaves the
+// contexts file byte-for-byte as it was and rotates nothing.
+func TestGrainLoginRefusesFlagsItWouldIgnore(t *testing.T) {
+	ts, _ := loginServer(t)
+	if err := runCLI([]string{"login", ts.URL, "--name", "team", "--auth", "test-sso", "--issue-token"}); err != nil {
+		t.Fatal(err)
+	}
+	path, _ := contextConfigPath()
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginStdin = strings.NewReader("gma_notarealtoken\n")
+	t.Cleanup(func() { loginStdin = os.Stdin })
+	for _, tc := range []struct {
+		args []string
+		code string
+	}{
+		{[]string{"login", "--refresh", "--token-stdin", "--name", "team"}, "token_stdin_refresh"},
+		{[]string{"login", ts.URL, "--name", "fresh", "--auth", "test-sso", "--scope-set", "grain/viewer"}, "needs_issue_token"},
+		{[]string{"login", ts.URL, "--name", "fresh", "--auth", "test-sso", "--repos", "acme/widgets"}, "needs_issue_token"},
+		{[]string{"login", "--refresh", "--name", "team", "--expires", "7d"}, "needs_issue_token"},
+	} {
+		err := runCLI(tc.args)
+		_, code, _ := classifyError(err)
+		if exitOf(err) != exitUsage || code != tc.code {
+			t.Errorf("grain %s = %v (%s), want exit %d code %s", strings.Join(tc.args, " "), err, code, exitUsage, tc.code)
+		}
+	}
+	if after, _ := os.ReadFile(path); string(after) != string(before) {
+		t.Errorf("a refused login changed %s:\n%s\nwant\n%s", path, after, before)
+	}
+}
+
 // A server URL carrying userinfo (http://user:pass@host) is kept as given
 // in config.json (0600), but `grain login` never prints the password back
 // (docs/test-runs/2026-11-08-cli-install-skill-mcp.md).

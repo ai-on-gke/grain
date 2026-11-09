@@ -1,0 +1,94 @@
+DELETE docker.io/grainai/sandbox-base:5dcd8cc4d50e5de1
+DELETE docker.io/grainai/sandbox-base:49f30e02d4f320ed
+DELETE docker.io/grainai/sandbox-base:c2462b78f595926c
+DELETE docker.io/grainai/sandbox-base:228927803ace7c24
+DELETE docker.io/grainai/grain:grain..098073e4..task-3600-old
+DELETE docker.io/grainai/grain:sha-dead001
+DELETE docker.io/grainai/sandbox:grain..098073e4..task-3600-old
+DELETE docker.io/grainai/sandbox:sha-dead001
+DELETE docker.io/grainai/sandbox-base:grain..098073e4..task-3600-old
+DELETE docker.io/grainai/sandbox-base:sha-dead001
+DELETE docker.io/grainai/sandbox-k8s:grain..098073e4..task-3600-old
+DELETE docker.io/grainai/sandbox-k8s:sha-dead001
+DELETE docker.io/grainai/grain:sha-f78be38
+DELETE docker.io/grainai/sandbox:sha-f78be38
+DELETE docker.io/grainai/sandbox-base:sha-f78be38
+DELETE docker.io/grainai/sandbox-k8s:sha-f78be38
+DELETE docker.io/grainai/grain:sha-6f28b6f
+DELETE docker.io/grainai/sandbox:sha-6f28b6f
+DELETE docker.io/grainai/sandbox-base:sha-6f28b6f
+DELETE docker.io/grainai/sandbox-k8s:sha-6f28b6f
+DELETE docker.io/grainai/grain:sha-c083589
+DELETE docker.io/grainai/sandbox:sha-c083589
+DELETE docker.io/grainai/sandbox-base:sha-c083589
+DELETE docker.io/grainai/sandbox-k8s:sha-c083589
+DELETE docker.io/grainai/grain:sha-9377c49
+DELETE docker.io/grainai/sandbox:sha-9377c49
+DELETE docker.io/grainai/sandbox-base:sha-9377c49
+DELETE docker.io/grainai/sandbox-k8s:sha-9377c49
+DELETE docker.io/grainai/grain:sha-0f857ee
+DELETE docker.io/grainai/sandbox:sha-0f857ee
+DELETE docker.io/grainai/sandbox-base:sha-0f857ee
+DELETE docker.io/grainai/sandbox-k8s:sha-0f857ee
+DELETE docker.io/grainai/grain:sha-d154bec
+DELETE docker.io/grainai/sandbox:sha-d154bec
+DELETE docker.io/grainai/sandbox-base:sha-d154bec
+DELETE docker.io/grainai/sandbox-k8s:sha-d154bec
+DELETE docker.io/grainai/grain:sha-e9a6b46
+DELETE docker.io/grainai/sandbox:sha-e9a6b46
+DELETE docker.io/grainai/sandbox-base:sha-e9a6b46
+DELETE docker.io/grainai/sandbox-k8s:sha-e9a6b46
+DELETE docker.io/grainai/grain:sha-93ff1d8
+DELETE docker.io/grainai/sandbox:sha-93ff1d8
+DELETE docker.io/grainai/sandbox-base:sha-93ff1d8
+DELETE docker.io/grainai/sandbox-k8s:sha-93ff1d8
+DELETE docker.io/grainai/grain:v3.2.0-rc.1
+DELETE docker.io/grainai/grain:v3.2.0-rc.1-discarded
+DELETE docker.io/grainai/sandbox:v3.2.0-rc.1
+DELETE docker.io/grainai/sandbox:v3.2.0-rc.1-discarded
+DELETE docker.io/grainai/sandbox-base:v3.2.0-rc.1
+DELETE docker.io/grainai/sandbox-base:v3.2.0-rc.1-discarded
+DELETE docker.io/grainai/sandbox-k8s:v3.2.0-rc.1
+DELETE docker.io/grainai/sandbox-k8s:v3.2.0-rc.1-discarded
+DELETE docker.io/grainai/grain:v3.2.0-pending
+DELETE docker.io/grainai/sandbox:v3.2.0-pending
+DELETE docker.io/grainai/sandbox-base:v3.2.0-pending
+DELETE docker.io/grainai/sandbox-k8s:v3.2.0-pending
+DELETE docker.io/grainai/grain:sha256-283bb9deef02e6843abfb538efa1eca70801bd8a701c3f98191e123496339247.sig
+DELETE docker.io/grainai/sandbox:sha256-283bb9deef02e6843abfb538efa1eca70801bd8a701c3f98191e123496339247.sig
+DELETE docker.io/grainai/sandbox-base:sha256-283bb9deef02e6843abfb538efa1eca70801bd8a701c3f98191e123496339247.sig
+DELETE docker.io/grainai/sandbox-k8s:sha256-283bb9deef02e6843abfb538efa1eca70801bd8a701c3f98191e123496339247.sig
+DELETE docker.io/grainai/grain:sha256-f35c420a2ed9c23b200dc6902437128ff9b13bb80c8f852bac750384a3747ebc.sig
+DELETE docker.io/grainai/sandbox:sha256-cef471543fa833fa6b188c369013edfa8d2e17a82cf7a28de77499c22a1e5865.sig
+DELETE docker.io/grainai/sandbox-base:sha256-bd2c2da9b2613e34ea4202b860433e839d5daf06314f65b380b3830f30145011.sig
+DELETE docker.io/grainai/sandbox-k8s:sha256-1fe23ed36ba9fd849039844232cf71abdce31ce7c8c666e4738ca0f3f5729cda.sig
+DELETE ghcr.io/ai-on-gke/grain/guest-base id=300 tags=[5dcd8cc4d50e5de1]
+DELETE ghcr.io/ai-on-gke/grain/guest-base id=299 tags=[49f30e02d4f320ed]
+DELETE ghcr.io/ai-on-gke/grain/guest-base id=298 tags=[c2462b78f595926c]
+DELETE ghcr.io/ai-on-gke/grain/guest-base id=297 tags=[228927803ace7c24]
+DELETE ghcr.io/ai-on-gke/grain/grain id=206 tags=[grain..098073e4..task-3600-old sha-dead001]
+DELETE ghcr.io/ai-on-gke/grain/guest-base id=255 tags=[grain..098073e4..task-3600-old sha-dead001]
+DELETE ghcr.io/ai-on-gke/grain/grain id=241 tags=[sha-f78be38]
+DELETE ghcr.io/ai-on-gke/grain/guest-base id=290 tags=[sha-f78be38]
+DELETE ghcr.io/ai-on-gke/grain/grain id=240 tags=[sha-6f28b6f]
+DELETE ghcr.io/ai-on-gke/grain/guest-base id=289 tags=[sha-6f28b6f]
+DELETE ghcr.io/ai-on-gke/grain/grain id=239 tags=[sha-c083589]
+DELETE ghcr.io/ai-on-gke/grain/guest-base id=288 tags=[sha-c083589]
+DELETE ghcr.io/ai-on-gke/grain/grain id=238 tags=[sha-9377c49]
+DELETE ghcr.io/ai-on-gke/grain/guest-base id=287 tags=[sha-9377c49]
+DELETE ghcr.io/ai-on-gke/grain/grain id=237 tags=[sha-0f857ee]
+DELETE ghcr.io/ai-on-gke/grain/guest-base id=286 tags=[sha-0f857ee]
+DELETE ghcr.io/ai-on-gke/grain/grain id=236 tags=[sha-d154bec]
+DELETE ghcr.io/ai-on-gke/grain/guest-base id=285 tags=[sha-d154bec]
+DELETE ghcr.io/ai-on-gke/grain/grain id=235 tags=[sha-e9a6b46]
+DELETE ghcr.io/ai-on-gke/grain/guest-base id=284 tags=[sha-e9a6b46]
+DELETE ghcr.io/ai-on-gke/grain/grain id=234 tags=[sha-93ff1d8]
+DELETE ghcr.io/ai-on-gke/grain/guest-base id=283 tags=[sha-93ff1d8]
+DELETE ghcr.io/ai-on-gke/grain/grain id=203 tags=[v3.2.0-rc.1 v3.2.0-rc.1-discarded]
+DELETE ghcr.io/ai-on-gke/grain/guest-base id=252 tags=[v3.2.0-rc.1 v3.2.0-rc.1-discarded]
+DELETE ghcr.io/ai-on-gke/grain/grain id=204 tags=[v3.2.0-pending]
+DELETE ghcr.io/ai-on-gke/grain/guest-base id=253 tags=[v3.2.0-pending]
+DELETE ghcr.io/ai-on-gke/grain/grain id=243 tags=[sha256-283bb9deef02e6843abfb538efa1eca70801bd8a701c3f98191e123496339247.sig]
+DELETE ghcr.io/ai-on-gke/grain/guest-base id=292 tags=[sha256-283bb9deef02e6843abfb538efa1eca70801bd8a701c3f98191e123496339247.sig]
+DELETE ghcr.io/ai-on-gke/grain/grain id=242 tags=[sha256-d58e8494cb673540c417c47c4a262add487fe893eb3481282f38ba955792160c.sig]
+DELETE ghcr.io/ai-on-gke/grain/guest-base id=291 tags=[sha256-d864d03a536c39f2563183f359b02050f1d57e2229c8b330196391c4e079fb84.sig]

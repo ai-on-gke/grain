@@ -1,0 +1,8 @@
+release-from-trunk: fetching origin's main, candidate and tags
+release-from-trunk: major 3 (floor minor 0); newest promoted release v3.1.1; v3.2.0 pending approval; next minor v3.3.0; notes from v3.1.1
+release-from-trunk: v3.2.0 (cba7d44bb42b, from v3.2.0-rc.3) is pending a person's approval; this run neither promotes nor supersedes it
+release-from-trunk: no release gate, so no notification that v3.2.0 is ready to promote: approve it with `grain release approve v3.2.0`
+release-from-trunk: phase 1: nothing in qualification; the next rc must be after the pending v3.2.0 (cba7d44bb42b)
+release-from-trunk: phase 2: the newest release is off main's history; the next rc must be after where it left main (6045a6a0db43)
+release-from-trunk: phase 2: v3.2.0 was tagged 32m ago, under RELEASE_MIN_INTERVAL_MINUTES (120); nothing to cut yet (FORCE=true cuts anyway)
+exit=0 images=[] remote-tags-after=[v3.2.0-pending v3.2.0-rc.1 v3.2.0-rc.1-discarded v3.2.0-rc.2 v3.2.0-rc.2-discarded v3.2.0-rc.3]

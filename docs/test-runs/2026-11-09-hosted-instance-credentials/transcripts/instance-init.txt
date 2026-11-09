@@ -1,0 +1,76 @@
+
+### 1a. new-style grain-config (db_password_secret) boots
+grain-instance-init.sh exit=0
+  stderr: grain-instance-init: wrote /tmp/hic/run-new/etc/daemon.env for instance walk1 (owner alice@example.com)
+grain-config carries the password? 0
+daemon.env mode: 600
+GRAIN_DB_DSN=postgres://gi_walk1:<PASSWORD>@127.0.0.1:5432/grain_walk1?sslmode=require
+password in stdout/stderr: 0
+password in stub request log: 0
+requests this run:
+  GET /compute/v1/projects/made-up-proj/zones/us-central1-a/instances -> 200
+  GET /iam/v1/projects/made-up-proj/serviceAccounts/gi-walk-late@made-up-proj.iam.gserviceaccount.com -> 404
+  POST /iam/v1/projects/made-up-proj/serviceAccounts -> 200
+  POST /sm/v1/projects/made-up-proj/secrets?secretId=grain-inst-walk-late-db-password -> 200
+  POST /sm/v1/projects/made-up-proj/secrets/grain-inst-walk-late-db-password:addVersion -> 200
+  GET /compute/v1/projects/made-up-proj/zones/us-central1-a/instances -> 200
+  GET /compute/v1/projects/made-up-proj/zones/us-central1-a/instances -> 200
+  GET /compute/v1/projects/made-up-proj/zones/us-central1-a/instances -> 200
+  GET /compute/v1/projects/made-up-proj/zones/us-central1-a/instances -> 200
+  GET /compute/v1/projects/made-up-proj/zones/us-central1-a/instances -> 200
+  GET /computeMetadata/v1/instance/attributes/grain-config -> 200
+  GET /computeMetadata/v1/instance/service-accounts/default/token -> 200
+  GET /sm/v1/projects/made-up-proj/secrets/grain-inst-walk1-db-password/versions/latest:access -> 200
+
+### 1b. the DSN is TLS-only: psql and pgx against the TLS pool, then a non-TLS server
+  psql tls: gi_walk1|t|TLSv1.3
+  pgx tls: connected as gi_walk1, ssl=true
+  psql plain: psql: error: connection to server at "127.0.0.1", port 4272 failed: server does not support SSL, but SSL was required
+  pgx plain: refused: failed to connect to `user=gi_walk1 database=grain_walk1`: 127.0.0.1:4272 (127.0.0.1): tls error: server refused TLS connection
+  pgx plain: exit status 1
+  psql sslmode=disable vs hostssl-only pool: psql: error: connection to server at "127.0.0.1", port 5432 failed: FATAL:  no pg_hba.conf entry for host "127.0.0.1", user "gi_walk1", database "grain_walk1", no encryption
+
+### 1c. Secret Manager answers 403 on the password read (count=1)
+grain-instance-init.sh exit=1
+  stderr: grain-instance-init: ERROR: Secret Manager access projects/made-up-proj/secrets/grain-inst-walk1-db-password failed (HTTP 403): {"error":{"code":403,"message":"stubbed Secret Manager failure","status":"Forbidden"}}
+  stderr: grain-instance-init: ERROR: unable to read projects/made-up-proj/secrets/grain-inst-walk1-db-password
+daemon.env written: no
+password in output: 0
+
+### 1c. Secret Manager answers 404 on the password read (count=1)
+grain-instance-init.sh exit=1
+  stderr: grain-instance-init: ERROR: grain-config sets db_password_secret, but Secret Manager secret projects/made-up-proj/secrets/grain-inst-walk1-db-password has no version
+daemon.env written: no
+password in output: 0
+
+### 1c. Secret Manager answers 503 on the password read (count=-1)
+grain-instance-init.sh exit=1
+  stderr: grain-instance-init: Secret Manager access projects/made-up-proj/secrets/grain-inst-walk1-db-password returned HTTP 503; retrying in 1s (attempt 1/6)
+  stderr: grain-instance-init: Secret Manager access projects/made-up-proj/secrets/grain-inst-walk1-db-password returned HTTP 503; retrying in 2s (attempt 2/6)
+  stderr: grain-instance-init: Secret Manager access projects/made-up-proj/secrets/grain-inst-walk1-db-password returned HTTP 503; retrying in 4s (attempt 3/6)
+  stderr: grain-instance-init: Secret Manager access projects/made-up-proj/secrets/grain-inst-walk1-db-password returned HTTP 503; retrying in 8s (attempt 4/6)
+  stderr: grain-instance-init: Secret Manager access projects/made-up-proj/secrets/grain-inst-walk1-db-password returned HTTP 503; retrying in 16s (attempt 5/6)
+  stderr: grain-instance-init: ERROR: Secret Manager access projects/made-up-proj/secrets/grain-inst-walk1-db-password failed (HTTP 503): {"error":{"code":503,"message":"stubbed Secret Manager failure","status":"Service Unavailable"}}
+  stderr: grain-instance-init: ERROR: unable to read projects/made-up-proj/secrets/grain-inst-walk1-db-password
+daemon.env written: no
+password in output: 0
+
+### 1c''. Secret Manager answers 503 twice, then recovers
+grain-instance-init.sh exit=0
+  stderr: grain-instance-init: Secret Manager access projects/made-up-proj/secrets/grain-inst-walk1-db-password returned HTTP 503; retrying in 1s (attempt 1/6)
+  stderr: grain-instance-init: Secret Manager access projects/made-up-proj/secrets/grain-inst-walk1-db-password returned HTTP 503; retrying in 2s (attempt 2/6)
+  stderr: grain-instance-init: wrote /tmp/hic/run-sm503x2/etc/daemon.env for instance walk1 (owner alice@example.com)
+daemon.env written: yes
+
+### 1c'. the secret exists but has no version (404 from the stub's own store)
+grain-instance-init.sh exit=1
+  stderr: grain-instance-init: ERROR: grain-config sets db_password_secret, but Secret Manager secret projects/made-up-proj/secrets/grain-inst-walk1-db-password has no version
+
+### 1d. pre-existing instance: metadata still carries GRAIN_DB_PASSWORD and an sslmode=disable db_dsn
+grain-instance-init.sh exit=0
+  stderr: grain-instance-init: wrote /tmp/hic/run-old/etc/daemon.env for instance walk1 (owner alice@example.com)
+GRAIN_DB_DSN=postgres://gi_walk1:<PASSWORD>@127.0.0.1:4272/grain_walk1?sslmode=disable
+  old-style DSN against a plain (host) pool: gi_walk1
+  old-style DSN against a hostssl-only pool: psql: error: connection to server at "127.0.0.1", port 5432 failed: FATAL:  no pg_hba.conf entry for host "127.0.0.1", user "gi_walk1", database "grain_walk1", no encryption
+password in stdout/stderr: 0
+after replacement grain-config is the new one: password in metadata = 0

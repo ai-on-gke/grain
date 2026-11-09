@@ -1,0 +1,112 @@
+# schema
+87
+# task_grant
+2 | api:test-quarantine | label
+2 | read-issues | label
+3 | github-sandbox | label
+# template_grant
+template-1 | api:test-quarantine | label
+template-1 | read-issues | label
+# schedule_grant
+sched-1 | api:test-quarantine | label
+sched-1 | read-issues | label
+# grain_config.default_capabilities
+read-issues
+api:test-quarantine
+# repo_config
+acme/widgets | default | read-issues
+acme/widgets | default | api:test-quarantine
+acme/widgets | ci | api:test-quarantine
+acme/widgets | ci | read-issues
+# console_sessions (id: capabilities)
+# capability_policy
+{
+ "catalogue": {
+  "defaults": {
+   "ci": [
+    "read-issues"
+   ],
+   "repos": {
+    "acme/widgets": {
+     "ci": [
+      "read-issues",
+      "api:test-quarantine"
+     ],
+     "task": [
+      "read-issues"
+     ]
+    }
+   },
+   "task": [
+    "read-issues",
+    "api:test-quarantine"
+   ]
+  },
+  "inProcess": {
+   "read-issues": {
+    "enabled": false
+   }
+  }
+ }
+}
+# mcp_servers
+{
+ "https://grain.dev/capabilities/config-map": {
+  "args": [
+   "capability",
+   "config-map"
+  ],
+  "builtin": "config-map",
+  "command": "grain"
+ },
+ "https://grain.dev/capabilities/gchat": {
+  "args": [
+   "capability",
+   "gchat",
+   "-listen",
+   "127.0.0.1:4251"
+  ],
+  "builtin": "gchat",
+  "command": "grain"
+ },
+ "https://grain.dev/capabilities/gcp": {
+  "args": [
+   "capability",
+   "gcp"
+  ],
+  "builtin": "gcp",
+  "command": "grain"
+ },
+ "https://grain.dev/capabilities/git": {
+  "args": [
+   "capability",
+   "git"
+  ],
+  "builtin": "git",
+  "command": "grain"
+ },
+ "https://grain.dev/capabilities/host-script": {
+  "args": [
+   "capability",
+   "host-script"
+  ],
+  "builtin": "host-script",
+  "command": "grain"
+ },
+ "https://grain.dev/capabilities/model-proxy": {
+  "args": [
+   "capability",
+   "model-proxy"
+  ],
+  "builtin": "model-proxy",
+  "command": "grain"
+ }
+}
+# agent_backends
+[]
+# admission (absent before schema 122)
+# task notes (task_comment by grain)
+# template/schedule notes (bodies mentioning grain:)
+# task_grant_wait (task, capability, resource)
+2 | github-sandbox | github-app
+3 | github-sandbox | github-app

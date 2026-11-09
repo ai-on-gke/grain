@@ -1,0 +1,430 @@
+[
+  {
+    "id": "shot.home-1440-light",
+    "desc": "home-1440-light: banner covers neither the phone nav nor the composer, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "banner": {
+        "x": 0,
+        "y": 0,
+        "width": 1440,
+        "height": 48.015625,
+        "top": 0,
+        "right": 1440,
+        "bottom": 48.015625,
+        "left": 0
+      },
+      "appBar": null,
+      "composer": null,
+      "scrollW": 1440
+    }
+  },
+  {
+    "id": "shot.tasks-1440-light",
+    "desc": "tasks-1440-light: banner covers neither the phone nav nor the composer, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "banner": {
+        "x": 0,
+        "y": 0,
+        "width": 1440,
+        "height": 48.015625,
+        "top": 0,
+        "right": 1440,
+        "bottom": 48.015625,
+        "left": 0
+      },
+      "appBar": null,
+      "composer": null,
+      "scrollW": 1440
+    }
+  },
+  {
+    "id": "shot.task-1440-light",
+    "desc": "task-1440-light: banner covers neither the phone nav nor the composer, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "banner": {
+        "x": 0,
+        "y": 0,
+        "width": 1440,
+        "height": 48.015625,
+        "top": 0,
+        "right": 1440,
+        "bottom": 48.015625,
+        "left": 0
+      },
+      "appBar": null,
+      "composer": null,
+      "scrollW": 1440
+    }
+  },
+  {
+    "id": "shot.session-1440-light",
+    "desc": "session-1440-light: banner covers neither the phone nav nor the composer, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "banner": {
+        "x": 0,
+        "y": 0,
+        "width": 1440,
+        "height": 48.015625,
+        "top": 0,
+        "right": 1440,
+        "bottom": 48.015625,
+        "left": 0
+      },
+      "appBar": null,
+      "composer": {
+        "x": 262,
+        "y": 763.421875,
+        "width": 1148,
+        "height": 50.078125,
+        "top": 763.421875,
+        "right": 1410,
+        "bottom": 813.5,
+        "left": 262
+      },
+      "scrollW": 1440
+    }
+  },
+  {
+    "id": "shot.home-390-light",
+    "desc": "home-390-light: banner covers neither the phone nav nor the composer, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "banner": {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 128.078125,
+        "top": 0,
+        "right": 390,
+        "bottom": 128.078125,
+        "left": 0
+      },
+      "appBar": {
+        "x": 0,
+        "y": 128.078125,
+        "width": 390,
+        "height": 57,
+        "top": 128.078125,
+        "right": 390,
+        "bottom": 185.078125,
+        "left": 0
+      },
+      "composer": null,
+      "scrollW": 390
+    }
+  },
+  {
+    "id": "shot.tasks-390-light",
+    "desc": "tasks-390-light: banner covers neither the phone nav nor the composer, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "banner": {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 128.078125,
+        "top": 0,
+        "right": 390,
+        "bottom": 128.078125,
+        "left": 0
+      },
+      "appBar": {
+        "x": 0,
+        "y": 128.078125,
+        "width": 390,
+        "height": 57,
+        "top": 128.078125,
+        "right": 390,
+        "bottom": 185.078125,
+        "left": 0
+      },
+      "composer": null,
+      "scrollW": 390
+    }
+  },
+  {
+    "id": "shot.task-390-light",
+    "desc": "task-390-light: banner covers neither the phone nav nor the composer, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "banner": {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 128.078125,
+        "top": 0,
+        "right": 390,
+        "bottom": 128.078125,
+        "left": 0
+      },
+      "appBar": {
+        "x": 0,
+        "y": 128.078125,
+        "width": 390,
+        "height": 57,
+        "top": 128.078125,
+        "right": 390,
+        "bottom": 185.078125,
+        "left": 0
+      },
+      "composer": null,
+      "scrollW": 390
+    }
+  },
+  {
+    "id": "shot.session-390-light",
+    "desc": "session-390-light: banner covers neither the phone nav nor the composer, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "banner": {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 128.078125,
+        "top": 0,
+        "right": 390,
+        "bottom": 128.078125,
+        "left": 0
+      },
+      "appBar": {
+        "x": 0,
+        "y": 128.078125,
+        "width": 390,
+        "height": 57,
+        "top": 128.078125,
+        "right": 390,
+        "bottom": 185.078125,
+        "left": 0
+      },
+      "composer": {
+        "x": 16.390625,
+        "y": 670.28125,
+        "width": 357.21875,
+        "height": 50.078125,
+        "top": 670.28125,
+        "right": 373.609375,
+        "bottom": 720.359375,
+        "left": 16.390625
+      },
+      "scrollW": 390
+    }
+  },
+  {
+    "id": "shot.home-1440-dark",
+    "desc": "home-1440-dark: banner covers neither the phone nav nor the composer, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "banner": {
+        "x": 0,
+        "y": 0,
+        "width": 1440,
+        "height": 48.015625,
+        "top": 0,
+        "right": 1440,
+        "bottom": 48.015625,
+        "left": 0
+      },
+      "appBar": null,
+      "composer": null,
+      "scrollW": 1440
+    }
+  },
+  {
+    "id": "shot.tasks-1440-dark",
+    "desc": "tasks-1440-dark: banner covers neither the phone nav nor the composer, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "banner": {
+        "x": 0,
+        "y": 0,
+        "width": 1440,
+        "height": 48.015625,
+        "top": 0,
+        "right": 1440,
+        "bottom": 48.015625,
+        "left": 0
+      },
+      "appBar": null,
+      "composer": null,
+      "scrollW": 1440
+    }
+  },
+  {
+    "id": "shot.task-1440-dark",
+    "desc": "task-1440-dark: banner covers neither the phone nav nor the composer, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "banner": {
+        "x": 0,
+        "y": 0,
+        "width": 1440,
+        "height": 48.015625,
+        "top": 0,
+        "right": 1440,
+        "bottom": 48.015625,
+        "left": 0
+      },
+      "appBar": null,
+      "composer": null,
+      "scrollW": 1440
+    }
+  },
+  {
+    "id": "shot.session-1440-dark",
+    "desc": "session-1440-dark: banner covers neither the phone nav nor the composer, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "banner": {
+        "x": 0,
+        "y": 0,
+        "width": 1440,
+        "height": 48.015625,
+        "top": 0,
+        "right": 1440,
+        "bottom": 48.015625,
+        "left": 0
+      },
+      "appBar": null,
+      "composer": {
+        "x": 262,
+        "y": 763.421875,
+        "width": 1148,
+        "height": 50.078125,
+        "top": 763.421875,
+        "right": 1410,
+        "bottom": 813.5,
+        "left": 262
+      },
+      "scrollW": 1440
+    }
+  },
+  {
+    "id": "shot.home-390-dark",
+    "desc": "home-390-dark: banner covers neither the phone nav nor the composer, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "banner": {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 128.078125,
+        "top": 0,
+        "right": 390,
+        "bottom": 128.078125,
+        "left": 0
+      },
+      "appBar": {
+        "x": 0,
+        "y": 128.078125,
+        "width": 390,
+        "height": 57,
+        "top": 128.078125,
+        "right": 390,
+        "bottom": 185.078125,
+        "left": 0
+      },
+      "composer": null,
+      "scrollW": 390
+    }
+  },
+  {
+    "id": "shot.tasks-390-dark",
+    "desc": "tasks-390-dark: banner covers neither the phone nav nor the composer, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "banner": {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 128.078125,
+        "top": 0,
+        "right": 390,
+        "bottom": 128.078125,
+        "left": 0
+      },
+      "appBar": {
+        "x": 0,
+        "y": 128.078125,
+        "width": 390,
+        "height": 57,
+        "top": 128.078125,
+        "right": 390,
+        "bottom": 185.078125,
+        "left": 0
+      },
+      "composer": null,
+      "scrollW": 390
+    }
+  },
+  {
+    "id": "shot.task-390-dark",
+    "desc": "task-390-dark: banner covers neither the phone nav nor the composer, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "banner": {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 128.078125,
+        "top": 0,
+        "right": 390,
+        "bottom": 128.078125,
+        "left": 0
+      },
+      "appBar": {
+        "x": 0,
+        "y": 128.078125,
+        "width": 390,
+        "height": 57,
+        "top": 128.078125,
+        "right": 390,
+        "bottom": 185.078125,
+        "left": 0
+      },
+      "composer": null,
+      "scrollW": 390
+    }
+  },
+  {
+    "id": "shot.session-390-dark",
+    "desc": "session-390-dark: banner covers neither the phone nav nor the composer, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "banner": {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 128.078125,
+        "top": 0,
+        "right": 390,
+        "bottom": 128.078125,
+        "left": 0
+      },
+      "appBar": {
+        "x": 0,
+        "y": 128.078125,
+        "width": 390,
+        "height": 57,
+        "top": 128.078125,
+        "right": 390,
+        "bottom": 185.078125,
+        "left": 0
+      },
+      "composer": {
+        "x": 16.390625,
+        "y": 670.28125,
+        "width": 357.21875,
+        "height": 50.078125,
+        "top": 670.28125,
+        "right": 373.609375,
+        "bottom": 720.359375,
+        "left": 16.390625
+      },
+      "scrollW": 390
+    }
+  }
+]

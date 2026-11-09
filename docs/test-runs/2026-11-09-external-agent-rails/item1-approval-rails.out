@@ -1,0 +1,122 @@
+PASS	0.1	three gma_ credentials minted	gma_REDACTED gma_REDACTED gma_REDACTED
+PASS	1.a.norepo.rest.approve	approve refused(403) -> proposed	refuse
+PASS	1.a.norepo.rest.run-now	run-now refused(403) -> proposed	refuse
+PASS	1.a.norepo.rest.agree	approve and run-now agree	refuse
+PASS	1.a.norepo.rest.left	refused run-now leaves task 3 proposed	proposed
+PASS	1.a.norepo.rest.apleft	refused approve leaves task 2 proposed	proposed
+PASS	1.a.norepo.mcp.approve	approve refused -> proposed	refuse
+PASS	1.a.norepo.mcp.run-now	run-now refused -> proposed	refuse
+PASS	1.a.norepo.mcp.agree	approve and run-now agree	refuse
+PASS	1.a.norepo.mcp.left	refused run-now leaves task 5 proposed	proposed
+PASS	1.a.norepo.mcp.apleft	refused approve leaves task 4 proposed	proposed
+PASS	1.a.norepo.cli.approve	approve refused(exit 3) -> proposed	refuse
+PASS	1.a.norepo.cli.run-now	run-now refused(exit 3) -> proposed	refuse
+PASS	1.a.norepo.cli.agree	approve and run-now agree	refuse
+PASS	1.a.norepo.cli.left	refused run-now leaves task 7 proposed	proposed
+PASS	1.a.norepo.cli.apleft	refused approve leaves task 6 proposed	proposed
+PASS	1.a.widgets.rest.approve	approve ok -> queued	allow
+PASS	1.a.widgets.rest.run-now	run-now ok -> queued	allow
+PASS	1.a.widgets.rest.agree	approve and run-now agree	allow
+PASS	1.a.widgets.mcp.approve	approve ok -> queued	allow
+PASS	1.a.widgets.mcp.run-now	run-now ok -> queued	allow
+PASS	1.a.widgets.mcp.agree	approve and run-now agree	allow
+PASS	1.a.widgets.cli.approve	approve ok -> queued	allow
+PASS	1.a.widgets.cli.run-now	run-now ok -> queued	allow
+PASS	1.a.widgets.cli.agree	approve and run-now agree	allow
+PASS	1.a.other.rest.approve	approve refused(403) -> proposed	refuse
+PASS	1.a.other.rest.run-now	run-now refused(403) -> proposed	refuse
+PASS	1.a.other.rest.agree	approve and run-now agree	refuse
+PASS	1.a.other.rest.left	refused run-now leaves task 15 proposed	proposed
+PASS	1.a.other.rest.apleft	refused approve leaves task 14 proposed	proposed
+PASS	1.a.other.mcp.approve	approve refused -> proposed	refuse
+PASS	1.a.other.mcp.run-now	run-now refused -> proposed	refuse
+PASS	1.a.other.mcp.agree	approve and run-now agree	refuse
+PASS	1.a.other.mcp.left	refused run-now leaves task 17 proposed	proposed
+PASS	1.a.other.mcp.apleft	refused approve leaves task 16 proposed	proposed
+PASS	1.a.other.cli.approve	approve refused(exit 3) -> proposed	refuse
+PASS	1.a.other.cli.run-now	run-now refused(exit 3) -> proposed	refuse
+PASS	1.a.other.cli.agree	approve and run-now agree	refuse
+PASS	1.a.other.cli.left	refused run-now leaves task 19 proposed	proposed
+PASS	1.a.other.cli.apleft	refused approve leaves task 18 proposed	proposed
+PASS	1.b.norepo.rest.approve	approve ok -> queued	allow
+PASS	1.b.norepo.rest.run-now	run-now ok -> queued	allow
+PASS	1.b.norepo.rest.agree	approve and run-now agree	allow
+PASS	1.b.norepo.mcp.approve	approve ok -> queued	allow
+PASS	1.b.norepo.mcp.run-now	run-now ok -> queued	allow
+PASS	1.b.norepo.mcp.agree	approve and run-now agree	allow
+PASS	1.b.norepo.cli.approve	approve ok -> queued	allow
+PASS	1.b.norepo.cli.run-now	run-now ok -> queued	allow
+PASS	1.b.norepo.cli.agree	approve and run-now agree	allow
+PASS	1.b.widgets.rest.approve	approve ok -> queued	allow
+PASS	1.b.widgets.rest.run-now	run-now ok -> queued	allow
+PASS	1.b.widgets.rest.agree	approve and run-now agree	allow
+PASS	1.b.widgets.mcp.approve	approve ok -> queued	allow
+PASS	1.b.widgets.mcp.run-now	run-now ok -> queued	allow
+PASS	1.b.widgets.mcp.agree	approve and run-now agree	allow
+PASS	1.b.widgets.cli.approve	approve ok -> queued	allow
+PASS	1.b.widgets.cli.run-now	run-now ok -> queued	allow
+PASS	1.b.widgets.cli.agree	approve and run-now agree	allow
+PASS	1.b.other.rest.approve	approve ok -> queued	allow
+PASS	1.b.other.rest.run-now	run-now ok -> queued	allow
+PASS	1.b.other.rest.agree	approve and run-now agree	allow
+PASS	1.b.other.mcp.approve	approve ok -> queued	allow
+PASS	1.b.other.mcp.run-now	run-now ok -> queued	allow
+PASS	1.b.other.mcp.agree	approve and run-now agree	allow
+PASS	1.b.other.cli.approve	approve ok -> queued	allow
+PASS	1.b.other.cli.run-now	run-now ok -> queued	allow
+PASS	1.b.other.cli.agree	approve and run-now agree	allow
+PASS	1.c.norepo.rest.approve	approve refused(403) -> proposed	refuse
+PASS	1.c.norepo.rest.run-now	run-now refused(403) -> proposed	refuse
+PASS	1.c.norepo.rest.agree	approve and run-now agree	refuse
+PASS	1.c.norepo.rest.left	refused run-now leaves task 39 proposed	proposed
+PASS	1.c.norepo.rest.apleft	refused approve leaves task 38 proposed	proposed
+PASS	1.c.norepo.mcp.approve	approve refused -> proposed	refuse
+PASS	1.c.norepo.mcp.run-now	run-now refused -> proposed	refuse
+PASS	1.c.norepo.mcp.agree	approve and run-now agree	refuse
+PASS	1.c.norepo.mcp.left	refused run-now leaves task 41 proposed	proposed
+PASS	1.c.norepo.mcp.apleft	refused approve leaves task 40 proposed	proposed
+PASS	1.c.norepo.cli.approve	approve refused(exit 3) -> proposed	refuse
+PASS	1.c.norepo.cli.run-now	run-now refused(exit 3) -> proposed	refuse
+PASS	1.c.norepo.cli.agree	approve and run-now agree	refuse
+PASS	1.c.norepo.cli.left	refused run-now leaves task 43 proposed	proposed
+PASS	1.c.norepo.cli.apleft	refused approve leaves task 42 proposed	proposed
+PASS	1.c.widgets.rest.approve	approve refused(403) -> proposed	refuse
+PASS	1.c.widgets.rest.run-now	run-now refused(403) -> proposed	refuse
+PASS	1.c.widgets.rest.agree	approve and run-now agree	refuse
+PASS	1.c.widgets.rest.left	refused run-now leaves task 45 proposed	proposed
+PASS	1.c.widgets.rest.apleft	refused approve leaves task 44 proposed	proposed
+PASS	1.c.widgets.mcp.approve	approve refused -> proposed	refuse
+PASS	1.c.widgets.mcp.run-now	run-now refused -> proposed	refuse
+PASS	1.c.widgets.mcp.agree	approve and run-now agree	refuse
+PASS	1.c.widgets.mcp.left	refused run-now leaves task 47 proposed	proposed
+PASS	1.c.widgets.mcp.apleft	refused approve leaves task 46 proposed	proposed
+PASS	1.c.widgets.cli.approve	approve refused(exit 3) -> proposed	refuse
+PASS	1.c.widgets.cli.run-now	run-now refused(exit 3) -> proposed	refuse
+PASS	1.c.widgets.cli.agree	approve and run-now agree	refuse
+PASS	1.c.widgets.cli.left	refused run-now leaves task 49 proposed	proposed
+PASS	1.c.widgets.cli.apleft	refused approve leaves task 48 proposed	proposed
+PASS	1.c.other.rest.approve	approve refused(403) -> proposed	refuse
+PASS	1.c.other.rest.run-now	run-now refused(403) -> proposed	refuse
+PASS	1.c.other.rest.agree	approve and run-now agree	refuse
+PASS	1.c.other.rest.left	refused run-now leaves task 51 proposed	proposed
+PASS	1.c.other.rest.apleft	refused approve leaves task 50 proposed	proposed
+PASS	1.c.other.mcp.approve	approve refused -> proposed	refuse
+PASS	1.c.other.mcp.run-now	run-now refused -> proposed	refuse
+PASS	1.c.other.mcp.agree	approve and run-now agree	refuse
+PASS	1.c.other.mcp.left	refused run-now leaves task 53 proposed	proposed
+PASS	1.c.other.mcp.apleft	refused approve leaves task 52 proposed	proposed
+PASS	1.c.other.cli.approve	approve refused(exit 3) -> proposed	refuse
+PASS	1.c.other.cli.run-now	run-now refused(exit 3) -> proposed	refuse
+PASS	1.c.other.cli.agree	approve and run-now agree	refuse
+PASS	1.c.other.cli.left	refused run-now leaves task 55 proposed	proposed
+PASS	1.c.other.cli.apleft	refused approve leaves task 54 proposed	proposed
+PASS	1.noreason.approve	REST approve under (b) with no X-Grain-Acting-Reason: 403 asking for one	403 POST /api/tasks/{id}/approve is destructive (scope tasks:admin): give a reason 
+PASS	1.noreason.approve.left	task 56 left proposed	proposed
+PASS	1.noreason.run-now	REST run-now under (b) with no X-Grain-Acting-Reason: 403 asking for one	403 external:shape-b cannot run task 57 now without a reason: it is not approved, and run-now would approve it first, which is destructive (scope tasks:admin) as POST /api/tasks/{id}/approve is: give a reason (X-Grain-Ac
+PASS	1.noreason.run-now.left	task 57 left proposed	proposed
+grain mcp tools: propose_task,read_grain_task,list_grain_tasks,wait_for_task,reply_to_task,comment_on_task,grain_inbox,ci_runs,ci_log,merge_queue,fs_read,fs_grep,adopt_pull_request
+PASS	1.mcp.tools	grain mcp offers no approve/run-now tool (nothing to compare)	propose_task,read_grain_task,list_grain_tasks,wait_for_task,reply_to_task,comment_on_task,grain_inbox,ci_runs,ci_log,merge_queue,fs_read,fs_grep,adopt_pull_request
+3 grain: external:shape-c cannot run task 43 now: it is not approved, and run-now would approve it first, which an external agent credential may only do under tasks:admin -- approve it under tasks:admin, or a person approves it (docs/agent-api.md) 
+3 grain: external:shape-c cannot run task 49 now: it is not approved, and run-now would approve it first, which an external agent credential may only do under tasks:admin -- approve it under tasks:admin, or a person approves it (docs/agent-api.md) 
+3 grain: external:shape-c cannot run task 55 now: it is not approved, and run-now would approve it first, which an external agent credential may only do under tasks:admin -- approve it under tasks:admin, or a person approves it (docs/agent-api.md) 
+FAILS=0
