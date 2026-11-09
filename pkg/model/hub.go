@@ -28,75 +28,75 @@ import (
 	"github.com/ai-on-gke/grain/pkg/hub/api"
 )
 
-// RegistryAuthMode selects how a connected grain authenticates to a grain hub.
-type RegistryAuthMode string
+// HubAuthMode selects how a connected grain authenticates to a grain hub.
+type HubAuthMode string
 
 const (
-	// RegistryAuthToken authenticates heartbeats with the per-entry
+	// HubAuthToken authenticates heartbeats with the per-entry
 	// "grc_..." registration credential kept in pkg/secrets under
-	// secrets.RegistryRegistrationTokenSecret ("registry-registration-token").
-	RegistryAuthToken RegistryAuthMode = "token"
-	// RegistryAuthOIDC authenticates requests with an OIDC ID token minted
+	// secrets.HubRegistrationTokenSecret ("registry-registration-token").
+	HubAuthToken HubAuthMode = "token"
+	// HubAuthOIDC authenticates requests with an OIDC ID token minted
 	// for OIDCAudience (or URL when OIDCAudience is empty).
-	RegistryAuthOIDC RegistryAuthMode = "oidc"
+	HubAuthOIDC HubAuthMode = "oidc"
 )
 
-// NormalizeRegistryAuthMode validates mode, defaulting empty to RegistryAuthToken.
-func NormalizeRegistryAuthMode(mode RegistryAuthMode) (RegistryAuthMode, error) {
-	switch m := RegistryAuthMode(strings.ToLower(strings.TrimSpace(string(mode)))); m {
-	case "", RegistryAuthToken:
-		return RegistryAuthToken, nil
-	case RegistryAuthOIDC:
-		return RegistryAuthOIDC, nil
+// NormalizeHubAuthMode validates mode, defaulting empty to HubAuthToken.
+func NormalizeHubAuthMode(mode HubAuthMode) (HubAuthMode, error) {
+	switch m := HubAuthMode(strings.ToLower(strings.TrimSpace(string(mode)))); m {
+	case "", HubAuthToken:
+		return HubAuthToken, nil
+	case HubAuthOIDC:
+		return HubAuthOIDC, nil
 	default:
-		return "", fmt.Errorf("unknown registry authMode %q (must be %q or %q)", mode, RegistryAuthToken, RegistryAuthOIDC)
+		return "", fmt.Errorf("unknown registry authMode %q (must be %q or %q)", mode, HubAuthToken, HubAuthOIDC)
 	}
 }
 
-// RegistryScopeRule customizes or adds an advertised scope in Settings without
+// HubScopeRule customizes or adds an advertised scope in Settings without
 // creating a second repository configuration source of truth:
-//   - Any configured repository with no matching RegistryScopeRule reports
+//   - Any configured repository with no matching HubScopeRule reports
 //     (repo, path_prefix: "", role) derived automatically from RepoConfig.Work.
 //   - One or more non-excluded rules for a configured repository override its
 //     whole-repo entry (for example narrowing path_prefix to "pkg/autoscaler"
 //     or overriding role; leaving Role empty inherits the RepoConfig.Work role).
 //   - Exclude: true omits that repository (or path_prefix) from advertisement.
 //   - A rule naming a repository outside TargetRepos adds that scope.
-type RegistryScopeRule struct {
+type HubScopeRule struct {
 	Repo       string        `json:"repo"`
 	PathPrefix string        `json:"pathPrefix"`
 	Role       api.ScopeRole `json:"role,omitempty"`
 	Exclude    bool          `json:"exclude,omitempty"`
 }
 
-// RegistryConfig holds the deployment's connected-entry registry settings
+// HubConfig holds the deployment's connected-entry registry settings
 // (design/design/hub.design.md, "Connected entries"), stored as JSON in
 // grain_config.registry. Secret material ("grc_..." tokens) never lives here;
 // it is stored exclusively in pkg/secrets.
-type RegistryConfig struct {
-	URL          string              `json:"url,omitempty"`
-	Entry        string              `json:"entry,omitempty"`
-	AuthMode     RegistryAuthMode    `json:"authMode,omitempty"`
-	OIDCAudience string              `json:"oidcAudience,omitempty"`
-	DisplayName  string              `json:"displayName,omitempty"`
-	Purpose      string              `json:"purpose,omitempty"`
-	HostKind     api.HostKind        `json:"hostKind,omitempty"`
-	Listed       bool                `json:"listed,omitempty"`
-	OwnerGroup   string              `json:"ownerGroup,omitempty"`
-	Tags         []string            `json:"tags,omitempty"`
-	Scopes       []RegistryScopeRule `json:"scopes,omitempty"`
+type HubConfig struct {
+	URL          string         `json:"url,omitempty"`
+	Entry        string         `json:"entry,omitempty"`
+	AuthMode     HubAuthMode    `json:"authMode,omitempty"`
+	OIDCAudience string         `json:"oidcAudience,omitempty"`
+	DisplayName  string         `json:"displayName,omitempty"`
+	Purpose      string         `json:"purpose,omitempty"`
+	HostKind     api.HostKind   `json:"hostKind,omitempty"`
+	Listed       bool           `json:"listed,omitempty"`
+	OwnerGroup   string         `json:"ownerGroup,omitempty"`
+	Tags         []string       `json:"tags,omitempty"`
+	Scopes       []HubScopeRule `json:"scopes,omitempty"`
 }
 
 // Enabled reports whether both a registry URL and an entry name are configured.
-func (c RegistryConfig) Enabled() bool {
+func (c HubConfig) Enabled() bool {
 	return strings.TrimSpace(c.URL) != "" && strings.TrimSpace(c.Entry) != ""
 }
 
 // Empty reports whether all fields of c are zero-valued.
-func (c RegistryConfig) Empty() bool {
+func (c HubConfig) Empty() bool {
 	return strings.TrimSpace(c.URL) == "" &&
 		strings.TrimSpace(c.Entry) == "" &&
-		(c.AuthMode == "" || c.AuthMode == RegistryAuthToken) &&
+		(c.AuthMode == "" || c.AuthMode == HubAuthToken) &&
 		strings.TrimSpace(c.OIDCAudience) == "" &&
 		strings.TrimSpace(c.DisplayName) == "" &&
 		strings.TrimSpace(c.Purpose) == "" &&
@@ -107,16 +107,16 @@ func (c RegistryConfig) Empty() bool {
 		len(c.Scopes) == 0
 }
 
-// EffectiveAuthMode returns c.AuthMode, defaulting to RegistryAuthToken.
-func (c RegistryConfig) EffectiveAuthMode() RegistryAuthMode {
-	if c.AuthMode == RegistryAuthOIDC {
-		return RegistryAuthOIDC
+// EffectiveAuthMode returns c.AuthMode, defaulting to HubAuthToken.
+func (c HubConfig) EffectiveAuthMode() HubAuthMode {
+	if c.AuthMode == HubAuthOIDC {
+		return HubAuthOIDC
 	}
-	return RegistryAuthToken
+	return HubAuthToken
 }
 
 // EffectiveHostKind returns c.HostKind, defaulting to api.HostKindOther.
-func (c RegistryConfig) EffectiveHostKind() api.HostKind {
+func (c HubConfig) EffectiveHostKind() api.HostKind {
 	if c.HostKind == "" {
 		return api.HostKindOther
 	}
@@ -124,67 +124,67 @@ func (c RegistryConfig) EffectiveHostKind() api.HostKind {
 }
 
 // EffectiveAudience returns the OIDC audience (OIDCAudience when set, else URL).
-func (c RegistryConfig) EffectiveAudience() string {
+func (c HubConfig) EffectiveAudience() string {
 	if aud := strings.TrimSpace(c.OIDCAudience); aud != "" {
 		return aud
 	}
 	return strings.TrimSpace(c.URL)
 }
 
-// NormalizeRegistryConfig validates and canonicalizes cfg.
-func NormalizeRegistryConfig(cfg RegistryConfig, allowInsecureHTTP bool) (RegistryConfig, error) {
-	var out RegistryConfig
+// NormalizeHubConfig validates and canonicalizes cfg.
+func NormalizeHubConfig(cfg HubConfig, allowInsecureHTTP bool) (HubConfig, error) {
+	var out HubConfig
 
 	if rawURL := strings.TrimSpace(cfg.URL); rawURL != "" {
-		u, err := api.ValidateRegistryURL(rawURL, allowInsecureHTTP)
+		u, err := api.ValidateHubURL(rawURL, allowInsecureHTTP)
 		if err != nil {
-			return RegistryConfig{}, fmt.Errorf("registry url: %w", err)
+			return HubConfig{}, fmt.Errorf("registry url: %w", err)
 		}
 		out.URL = u
 	}
 
 	if entry := strings.ToLower(strings.TrimSpace(cfg.Entry)); entry != "" {
 		if err := api.ValidateEntryName(entry); err != nil {
-			return RegistryConfig{}, fmt.Errorf("registry entry: %w", err)
+			return HubConfig{}, fmt.Errorf("registry entry: %w", err)
 		}
 		out.Entry = entry
 	}
 
 	if out.URL != "" && out.Entry == "" {
-		return RegistryConfig{}, fmt.Errorf("registry entry name is required when registry url is set")
+		return HubConfig{}, fmt.Errorf("registry entry name is required when registry url is set")
 	}
 
-	authMode, err := NormalizeRegistryAuthMode(cfg.AuthMode)
+	authMode, err := NormalizeHubAuthMode(cfg.AuthMode)
 	if err != nil {
-		return RegistryConfig{}, err
+		return HubConfig{}, err
 	}
-	if authMode != RegistryAuthToken {
+	if authMode != HubAuthToken {
 		out.AuthMode = authMode
 	}
 
 	if aud := strings.TrimSpace(cfg.OIDCAudience); aud != "" {
 		if containsSpaceOrControl(aud) || len(aud) > 512 {
-			return RegistryConfig{}, fmt.Errorf("registry oidcAudience must be at most 512 non-whitespace characters")
+			return HubConfig{}, fmt.Errorf("registry oidcAudience must be at most 512 non-whitespace characters")
 		}
 		out.OIDCAudience = aud
 	}
 
 	if dn := strings.TrimSpace(cfg.DisplayName); dn != "" {
 		if utf8.RuneCountInString(dn) > api.MaxDisplayNameRunes {
-			return RegistryConfig{}, fmt.Errorf("registry displayName must be at most %d characters", api.MaxDisplayNameRunes)
+			return HubConfig{}, fmt.Errorf("registry displayName must be at most %d characters", api.MaxDisplayNameRunes)
 		}
 		if hasControlChars(dn, false) {
-			return RegistryConfig{}, fmt.Errorf("registry displayName must not contain control characters")
+			return HubConfig{}, fmt.Errorf("registry displayName must not contain control characters")
 		}
 		out.DisplayName = dn
 	}
 
 	if purpose := strings.TrimSpace(cfg.Purpose); purpose != "" {
 		if utf8.RuneCountInString(purpose) > api.MaxPurposeRunes {
-			return RegistryConfig{}, fmt.Errorf("registry purpose must be at most %d characters", api.MaxPurposeRunes)
+			return HubConfig{}, fmt.Errorf("registry purpose must be at most %d characters", api.MaxPurposeRunes)
 		}
 		if hasControlChars(purpose, true) {
-			return RegistryConfig{}, fmt.Errorf("registry purpose must not contain control characters")
+			return HubConfig{}, fmt.Errorf("registry purpose must not contain control characters")
 		}
 		out.Purpose = purpose
 	}
@@ -195,7 +195,7 @@ func NormalizeRegistryConfig(cfg RegistryConfig, allowInsecureHTTP bool) (Regist
 		case api.HostKindWorkstation, api.HostKindKubernetes, api.HostKindOther:
 			out.HostKind = normHK
 		default:
-			return RegistryConfig{}, fmt.Errorf("registry hostKind %q must be workstation, kubernetes, or other", cfg.HostKind)
+			return HubConfig{}, fmt.Errorf("registry hostKind %q must be workstation, kubernetes, or other", cfg.HostKind)
 		}
 	}
 
@@ -203,7 +203,7 @@ func NormalizeRegistryConfig(cfg RegistryConfig, allowInsecureHTTP bool) (Regist
 
 	if og := strings.TrimSpace(cfg.OwnerGroup); og != "" {
 		if containsSpaceOrControl(og) || len(og) > 256 {
-			return RegistryConfig{}, fmt.Errorf("registry ownerGroup must be at most 256 non-whitespace characters")
+			return HubConfig{}, fmt.Errorf("registry ownerGroup must be at most 256 non-whitespace characters")
 		}
 		out.OwnerGroup = og
 	}
@@ -221,25 +221,25 @@ func NormalizeRegistryConfig(cfg RegistryConfig, allowInsecureHTTP bool) (Regist
 		}
 	}
 	if err := api.ValidateCatalogMetadata(out.DisplayName, out.Purpose, tags); err != nil {
-		return RegistryConfig{}, fmt.Errorf("registry metadata: %w", err)
+		return HubConfig{}, fmt.Errorf("registry metadata: %w", err)
 	}
 	out.Tags = tags
 
-	rules, err := NormalizeRegistryScopeRules(cfg.Scopes)
+	rules, err := NormalizeHubScopeRules(cfg.Scopes)
 	if err != nil {
-		return RegistryConfig{}, err
+		return HubConfig{}, err
 	}
 	out.Scopes = rules
 
 	return out, nil
 }
 
-// NormalizeRegistryScopeRules validates, canonicalizes, and deduplicates rules.
-func NormalizeRegistryScopeRules(rules []RegistryScopeRule) ([]RegistryScopeRule, error) {
+// NormalizeHubScopeRules validates, canonicalizes, and deduplicates rules.
+func NormalizeHubScopeRules(rules []HubScopeRule) ([]HubScopeRule, error) {
 	if len(rules) == 0 {
 		return nil, nil
 	}
-	out := make([]RegistryScopeRule, 0, len(rules))
+	out := make([]HubScopeRule, 0, len(rules))
 	type key struct{ repo, prefix string }
 	seen := make(map[key]bool, len(rules))
 	for i, r := range rules {
@@ -266,7 +266,7 @@ func NormalizeRegistryScopeRules(rules []RegistryScopeRule) ([]RegistryScopeRule
 			return nil, fmt.Errorf("registry scopes[%d]: duplicate rule for %s (pathPrefix %q)", i, repo, prefix)
 		}
 		seen[k] = true
-		out = append(out, RegistryScopeRule{
+		out = append(out, HubScopeRule{
 			Repo:       repo,
 			PathPrefix: prefix,
 			Role:       role,
@@ -288,9 +288,9 @@ func hasControlChars(s string, allowNewline bool) bool {
 	return false
 }
 
-// EncodeRegistryConfig serializes cfg as JSON for grain_config.registry, or ""
+// EncodeHubConfig serializes cfg as JSON for grain_config.registry, or ""
 // when cfg is empty.
-func EncodeRegistryConfig(cfg RegistryConfig) (string, error) {
+func EncodeHubConfig(cfg HubConfig) (string, error) {
 	if cfg.Empty() {
 		return "", nil
 	}
@@ -301,37 +301,37 @@ func EncodeRegistryConfig(cfg RegistryConfig) (string, error) {
 	return string(b), nil
 }
 
-// DecodeRegistryConfig parses grain_config.registry JSON back into RegistryConfig.
-func DecodeRegistryConfig(raw string) (RegistryConfig, error) {
+// DecodeHubConfig parses grain_config.registry JSON back into HubConfig.
+func DecodeHubConfig(raw string) (HubConfig, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return RegistryConfig{}, nil
+		return HubConfig{}, nil
 	}
-	var cfg RegistryConfig
+	var cfg HubConfig
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		return RegistryConfig{}, fmt.Errorf("decoding registry config: %w", err)
+		return HubConfig{}, fmt.Errorf("decoding registry config: %w", err)
 	}
 	return cfg, nil
 }
 
-// RegistryScopeOrigin explains why an advertised scope is present.
-type RegistryScopeOrigin string
+// HubScopeOrigin explains why an advertised scope is present.
+type HubScopeOrigin string
 
 const (
-	RegistryScopeFromRepoConfig RegistryScopeOrigin = "repo_config"
-	RegistryScopeOverridden     RegistryScopeOrigin = "override"
-	RegistryScopeAdded          RegistryScopeOrigin = "added"
+	HubScopeFromRepoConfig HubScopeOrigin = "repo_config"
+	HubScopeOverridden     HubScopeOrigin = "override"
+	HubScopeAdded          HubScopeOrigin = "added"
 )
 
-// RegistryAdvertisedScope pairs a normalized api.Scope with its derivation origin.
-type RegistryAdvertisedScope struct {
-	Repo       string              `json:"repo"`
-	PathPrefix string              `json:"pathPrefix"`
-	Role       api.ScopeRole       `json:"role"`
-	Origin     RegistryScopeOrigin `json:"origin"`
+// HubAdvertisedScope pairs a normalized api.Scope with its derivation origin.
+type HubAdvertisedScope struct {
+	Repo       string         `json:"repo"`
+	PathPrefix string         `json:"pathPrefix"`
+	Role       api.ScopeRole  `json:"role"`
+	Origin     HubScopeOrigin `json:"origin"`
 }
 
-// DeriveRegistryScopes computes the scopes this grain advertises to the registry
+// DeriveHubScopes computes the scopes this grain advertises to the registry
 // without inventing a second source of truth (design/design/hub.design.md,
 // "Catalog metadata and scopes"):
 //  1. Configured repositories come from targetRepos and localRepos (falling back
@@ -339,17 +339,17 @@ type RegistryAdvertisedScope struct {
 //  2. Each configured repository's default role is "primary" when
 //     RepoConfig.Work.RunsByDefault() is true ("", "on") and "secondary" when
 //     RepoConfig.Work.Default is "off".
-//  3. Optional rules in Settings (RegistryConfig.Scopes) can narrow a configured
+//  3. Optional rules in Settings (HubConfig.Scopes) can narrow a configured
 //     repository to sub-path prefixes, override its role (or inherit the
 //     work-ownership role when rule.Role == ""), exclude a repository, or add
 //     extra scopes.
-func DeriveRegistryScopes(
+func DeriveHubScopes(
 	targetRepos []string,
 	localRepos []string,
 	stateRepo RepoRef,
 	repoConfigs []RepoConfig,
-	rules []RegistryScopeRule,
-) []RegistryAdvertisedScope {
+	rules []HubScopeRule,
+) []HubAdvertisedScope {
 	roleByRepo := make(map[string]api.ScopeRole, len(repoConfigs))
 	for i := range repoConfigs {
 		rc := &repoConfigs[i]
@@ -391,7 +391,7 @@ func DeriveRegistryScopes(
 		}
 	}
 
-	rulesByRepo := make(map[string][]RegistryScopeRule)
+	rulesByRepo := make(map[string][]HubScopeRule)
 	for _, r := range rules {
 		normRepo, err := api.NormalizeRepo(r.Repo)
 		if err != nil {
@@ -418,15 +418,15 @@ func DeriveRegistryScopes(
 		return api.RolePrimary
 	}
 
-	var out []RegistryAdvertisedScope
+	var out []HubAdvertisedScope
 	for repo := range configured {
 		repoRules, hasRules := rulesByRepo[repo]
 		if !hasRules {
-			out = append(out, RegistryAdvertisedScope{
+			out = append(out, HubAdvertisedScope{
 				Repo:       repo,
 				PathPrefix: "",
 				Role:       defaultRoleFor(repo),
-				Origin:     RegistryScopeFromRepoConfig,
+				Origin:     HubScopeFromRepoConfig,
 			})
 			continue
 		}
@@ -438,11 +438,11 @@ func DeriveRegistryScopes(
 			if role == "" {
 				role = defaultRoleFor(repo)
 			}
-			out = append(out, RegistryAdvertisedScope{
+			out = append(out, HubAdvertisedScope{
 				Repo:       repo,
 				PathPrefix: r.PathPrefix,
 				Role:       role,
-				Origin:     RegistryScopeOverridden,
+				Origin:     HubScopeOverridden,
 			})
 		}
 	}
@@ -459,16 +459,16 @@ func DeriveRegistryScopes(
 			if role == "" {
 				role = defaultRoleFor(repo)
 			}
-			out = append(out, RegistryAdvertisedScope{
+			out = append(out, HubAdvertisedScope{
 				Repo:       repo,
 				PathPrefix: r.PathPrefix,
 				Role:       role,
-				Origin:     RegistryScopeAdded,
+				Origin:     HubScopeAdded,
 			})
 		}
 	}
 
-	slices.SortFunc(out, func(a, b RegistryAdvertisedScope) int {
+	slices.SortFunc(out, func(a, b HubAdvertisedScope) int {
 		if c := strings.Compare(a.Repo, b.Repo); c != 0 {
 			return c
 		}
@@ -479,7 +479,7 @@ func DeriveRegistryScopes(
 
 // ToScopeInputs converts advertised scopes into wire api.ScopeInput items for
 // entry creation and scope-declaration requests.
-func ToScopeInputs(scopes []RegistryAdvertisedScope) []api.ScopeInput {
+func ToScopeInputs(scopes []HubAdvertisedScope) []api.ScopeInput {
 	out := make([]api.ScopeInput, len(scopes))
 	for i, s := range scopes {
 		out[i] = api.ScopeInput{
@@ -493,7 +493,7 @@ func ToScopeInputs(scopes []RegistryAdvertisedScope) []api.ScopeInput {
 
 // ToHeartbeatScopes converts advertised scopes into wire api.HeartbeatScope
 // items for connected-entry heartbeats and instance status probes.
-func ToHeartbeatScopes(scopes []RegistryAdvertisedScope) []api.HeartbeatScope {
+func ToHeartbeatScopes(scopes []HubAdvertisedScope) []api.HeartbeatScope {
 	out := make([]api.HeartbeatScope, len(scopes))
 	for i, s := range scopes {
 		out[i] = api.HeartbeatScope{
@@ -505,48 +505,48 @@ func ToHeartbeatScopes(scopes []RegistryAdvertisedScope) []api.HeartbeatScope {
 	return out
 }
 
-// RegistryConnectionState summarizes a grain daemon's live registry connection state.
-type RegistryConnectionState string
+// HubConnectionState summarizes a grain daemon's live registry connection state.
+type HubConnectionState string
 
 const (
-	RegistryStateDisabled   RegistryConnectionState = "disabled"
-	RegistryStateConnecting RegistryConnectionState = "connecting"
-	RegistryStateConnected  RegistryConnectionState = "connected"
-	RegistryStateDegraded   RegistryConnectionState = "degraded"
-	RegistryStateError      RegistryConnectionState = "error"
+	HubStateDisabled   HubConnectionState = "disabled"
+	HubStateConnecting HubConnectionState = "connecting"
+	HubStateConnected  HubConnectionState = "connected"
+	HubStateDegraded   HubConnectionState = "degraded"
+	HubStateError      HubConnectionState = "error"
 )
 
-// RegistrySnapshot reports a deployment's current connected-entry registration
+// HubSnapshot reports a deployment's current connected-entry registration
 // and heartbeat status for GET /api/registry, Settings, `grain hub status`,
 // and `grain health`.
-type RegistrySnapshot struct {
-	Enabled                  bool                      `json:"enabled"`
-	State                    RegistryConnectionState   `json:"state"`
-	Config                   RegistryConfig            `json:"config"`
-	EffectiveHostKind        api.HostKind              `json:"effectiveHostKind,omitempty"`
-	TokenConfigured          bool                      `json:"tokenConfigured"`
-	CredentialSource         string                    `json:"credentialSource,omitempty"`
-	RegistryStatus           api.EntryStatus           `json:"registryStatus,omitempty"`
-	Registered               bool                      `json:"registered"`
-	LastHeartbeatAt          *time.Time                `json:"lastHeartbeatAt,omitempty"`
-	LastAttemptAt            *time.Time                `json:"lastAttemptAt,omitempty"`
-	NextHeartbeatAt          *time.Time                `json:"nextHeartbeatAt,omitempty"`
-	HeartbeatIntervalSeconds int                       `json:"heartbeatIntervalSeconds,omitempty"`
-	ConsecutiveFailures      int                       `json:"consecutiveFailures,omitempty"`
-	LastError                string                    `json:"lastError,omitempty"`
-	ScopeConflicts           []api.ScopeConflict       `json:"scopeConflicts,omitempty"`
-	GrainVersion             string                    `json:"grainVersion,omitempty"`
-	GrainCommit              string                    `json:"grainCommit,omitempty"`
-	Health                   api.HealthState           `json:"health,omitempty"`
-	HealthDetail             string                    `json:"healthDetail,omitempty"`
-	ActiveTasks              int                       `json:"activeTasks"`
-	AwaitingReplyTasks       int                       `json:"awaitingReplyTasks"`
-	AdvertisedScopes         []RegistryAdvertisedScope `json:"advertisedScopes"`
+type HubSnapshot struct {
+	Enabled                  bool                 `json:"enabled"`
+	State                    HubConnectionState   `json:"state"`
+	Config                   HubConfig            `json:"config"`
+	EffectiveHostKind        api.HostKind         `json:"effectiveHostKind,omitempty"`
+	TokenConfigured          bool                 `json:"tokenConfigured"`
+	CredentialSource         string               `json:"credentialSource,omitempty"`
+	HubStatus                api.EntryStatus      `json:"registryStatus,omitempty"`
+	Registered               bool                 `json:"registered"`
+	LastHeartbeatAt          *time.Time           `json:"lastHeartbeatAt,omitempty"`
+	LastAttemptAt            *time.Time           `json:"lastAttemptAt,omitempty"`
+	NextHeartbeatAt          *time.Time           `json:"nextHeartbeatAt,omitempty"`
+	HeartbeatIntervalSeconds int                  `json:"heartbeatIntervalSeconds,omitempty"`
+	ConsecutiveFailures      int                  `json:"consecutiveFailures,omitempty"`
+	LastError                string               `json:"lastError,omitempty"`
+	ScopeConflicts           []api.ScopeConflict  `json:"scopeConflicts,omitempty"`
+	GrainVersion             string               `json:"grainVersion,omitempty"`
+	GrainCommit              string               `json:"grainCommit,omitempty"`
+	Health                   api.HealthState      `json:"health,omitempty"`
+	HealthDetail             string               `json:"healthDetail,omitempty"`
+	ActiveTasks              int                  `json:"activeTasks"`
+	AwaitingReplyTasks       int                  `json:"awaitingReplyTasks"`
+	AdvertisedScopes         []HubAdvertisedScope `json:"advertisedScopes"`
 }
 
-// RegistryTaskCounts returns the current counts of running ("active") and
+// HubTaskCounts returns the current counts of running ("active") and
 // awaiting-reply tasks in the store, read directly from the task_state view.
-func (s *Store) RegistryTaskCounts(ctx context.Context) (active int, awaitingReply int, err error) {
+func (s *Store) HubTaskCounts(ctx context.Context) (active int, awaitingReply int, err error) {
 	err = each(ctx, s.db,
 		"SELECT `state`, COUNT(*) FROM `task_state` WHERE `state` IN (?, ?) GROUP BY `state`",
 		[]any{string(StateRunning), string(StateAwaitingReply)},

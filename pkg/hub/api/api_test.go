@@ -253,7 +253,7 @@ func TestConnectMuxThroughTLSAndHTTPProxyAndMuxListener(t *testing.T) {
 	// 1. Start a mock grain-registry TLS server that upgrades /api/entries/alice/connect,
 	//    runs server-side mux, and exposes an HTTP reverse-proxy handler over the mux.
 	serverMuxCh := make(chan *mux.Mux, 1)
-	registryTLS := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	hubTLS := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/entries/alice/connect" {
 			http.NotFound(w, r)
 			return
@@ -283,7 +283,7 @@ func TestConnectMuxThroughTLSAndHTTPProxyAndMuxListener(t *testing.T) {
 		serverMuxCh <- m
 		<-m.Done()
 	}))
-	defer registryTLS.Close()
+	defer hubTLS.Close()
 
 	// 2. Start an HTTP CONNECT forward proxy requiring Basic Proxy-Authorization.
 	var proxyConnects atomic.Int32
@@ -327,12 +327,12 @@ func TestConnectMuxThroughTLSAndHTTPProxyAndMuxListener(t *testing.T) {
 	}()
 
 	rootPool := x509.NewCertPool()
-	rootPool.AddCert(registryTLS.Certificate())
+	rootPool.AddCert(hubTLS.Certificate())
 	proxyURL, _ := url.Parse("http://corpuser:corppass@" + proxyLn.Addr().String())
 
 	// 3. Connect from simulated local grain daemon via ConnectMux + MuxListener!
 	sess, err := api.ConnectMux(context.Background(), api.ConnectConfig{
-		BaseURL:           registryTLS.URL,
+		BaseURL:           hubTLS.URL,
 		Entry:             "alice",
 		RegistrationToken: "grc_live_tok",
 		IDToken:           func(context.Context) (string, error) { return "proxy-id-tok", nil },
@@ -461,8 +461,8 @@ func TestClientRejectsMetadataURLsAndDoesNotFollowRedirects(t *testing.T) {
 		"https://metadata.google.internal",
 		"https://grain.example.com?foo=1",
 	} {
-		if _, err := api.ValidateRegistryURL(bad, false); err == nil {
-			t.Errorf("ValidateRegistryURL(%q) = nil, want error", bad)
+		if _, err := api.ValidateHubURL(bad, false); err == nil {
+			t.Errorf("ValidateHubURL(%q) = nil, want error", bad)
 		}
 		if res, err := api.DialConnect(context.Background(), api.ConnectConfig{
 			BaseURL:           bad,

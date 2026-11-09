@@ -33,9 +33,9 @@ func generateRandomInstanceName() string {
 	return "grain-" + hex.EncodeToString(b[:])
 }
 
-func cmdRegistryCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+func cmdHubCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain hub create", flag.ContinueOnError)
-	tf := bindRegistryTargetFlags(fs)
+	tf := bindHubTargetFlags(fs)
 	nameFlag := fs.String("name", "", "entry name (defaults to a random generated name when omitted)")
 	shape := fs.String("shape", "", "VM shape name (defaults to registry default shape)")
 	diskGB := fs.Int("disk-gb", 0, "boot disk size in GB (20..4000; defaults to shape default)")
@@ -119,9 +119,9 @@ func cmdRegistryCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args
 	return nil
 }
 
-func cmdRegistryUpdate(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+func cmdHubUpdate(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain hub update", flag.ContinueOnError)
-	tf := bindRegistryTargetFlags(fs)
+	tf := bindHubTargetFlags(fs)
 	displayName := fs.String("display-name", "", "human-readable display name")
 	purpose := fs.String("purpose", "", "short purpose description")
 	hostKind := fs.String("host-kind", "", "connected entry host kind: workstation, kubernetes, or other")
@@ -208,9 +208,9 @@ func cmdRegistryUpdate(ctx context.Context, c *ui.HTTPClient, out *printer, args
 	return nil
 }
 
-func cmdRegistryScopes(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+func cmdHubScopes(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain hub scopes", flag.ContinueOnError)
-	tf := bindRegistryTargetFlags(fs)
+	tf := bindHubTargetFlags(fs)
 	var setFlags multiStringFlag
 	fs.Var(&setFlags, "set", "declared scope <owner/repo>[:<path_prefix>[:<primary|secondary>]] (repeatable)")
 	clear := fs.Bool("clear", false, "clear all declared scope overrides on the entry")
@@ -277,9 +277,9 @@ func cmdRegistryScopes(ctx context.Context, c *ui.HTTPClient, out *printer, args
 	return nil
 }
 
-func cmdRegistryRotateCredential(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+func cmdHubRotateCredential(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain hub rotate-credential", flag.ContinueOnError)
-	tf := bindRegistryTargetFlags(fs)
+	tf := bindHubTargetFlags(fs)
 	label := fs.String("label", "", "optional label for the new grc_... credential")
 	credID := fs.String("cred-id", "", "specific credential UUID to replace or expire")
 	revokePrev := fs.Bool("revoke-previous", false, "immediately revoke previous active credentials")
@@ -332,9 +332,9 @@ func cmdRegistryRotateCredential(ctx context.Context, c *ui.HTTPClient, out *pri
 	return nil
 }
 
-func cmdRegistryUpgrade(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+func cmdHubUpgrade(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain hub upgrade", flag.ContinueOnError)
-	tf := bindRegistryTargetFlags(fs)
+	tf := bindHubTargetFlags(fs)
 	ver := fs.String("version", "", "target grain release version (defaults to registry's current pinned release)")
 
 	rest, err := parseArgs(fs, args)
@@ -364,9 +364,9 @@ func cmdRegistryUpgrade(ctx context.Context, c *ui.HTTPClient, out *printer, arg
 	return nil
 }
 
-func cmdRegistryResize(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+func cmdHubResize(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain hub resize", flag.ContinueOnError)
-	tf := bindRegistryTargetFlags(fs)
+	tf := bindHubTargetFlags(fs)
 	shapeFlag := fs.String("shape", "", "target VM shape name")
 	diskGB := fs.Int("disk-gb", 0, "boot disk size in GB (20..4000; defaults to shape default)")
 	ver := fs.String("version", "", "optional target grain version to apply during replacement")
@@ -413,9 +413,9 @@ func cmdRegistryResize(ctx context.Context, c *ui.HTTPClient, out *printer, args
 	return nil
 }
 
-func cmdRegistryDelete(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+func cmdHubDelete(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain hub delete", flag.ContinueOnError)
-	tf := bindRegistryTargetFlags(fs)
+	tf := bindHubTargetFlags(fs)
 	confirm := fs.String("confirm", "", "type the entry name to confirm deletion")
 	yes := fs.Bool("yes", false, "confirm deletion without repeating the entry name")
 	deleteDisk := fs.Bool("delete-disk", false, "immediately purge the instance database/disk instead of retaining it for the 30-day restore window")
@@ -458,9 +458,9 @@ func cmdRegistryDelete(ctx context.Context, c *ui.HTTPClient, out *printer, args
 	return nil
 }
 
-func cmdRegistryRestore(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+func cmdHubRestore(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain hub restore", flag.ContinueOnError)
-	tf := bindRegistryTargetFlags(fs)
+	tf := bindHubTargetFlags(fs)
 
 	rest, err := parseArgs(fs, args)
 	if err != nil {
@@ -487,23 +487,23 @@ func cmdRegistryRestore(ctx context.Context, c *ui.HTTPClient, out *printer, arg
 	return nil
 }
 
-// cmdRegistryStop implements `grain hub stop <name>`: it halts a hosted
+// cmdHubStop implements `grain hub stop <name>`: it halts a hosted
 // instance's VM while the registry keeps its externalised state (database,
 // secrets, config repository), so the entry costs no VM compute until it is
 // started again or woken by a visit.
-func cmdRegistryStop(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
-	return cmdRegistryPower(ctx, c, out, args, "stop")
+func cmdHubStop(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+	return cmdHubPower(ctx, c, out, args, "stop")
 }
 
-// cmdRegistryStart implements `grain hub start <name>`: it boots a
+// cmdHubStart implements `grain hub start <name>`: it boots a
 // stopped hosted instance back onto a VM with its prior state.
-func cmdRegistryStart(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
-	return cmdRegistryPower(ctx, c, out, args, "start")
+func cmdHubStart(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+	return cmdHubPower(ctx, c, out, args, "start")
 }
 
-func cmdRegistryPower(ctx context.Context, c *ui.HTTPClient, out *printer, args []string, verb string) error {
+func cmdHubPower(ctx context.Context, c *ui.HTTPClient, out *printer, args []string, verb string) error {
 	fs := flag.NewFlagSet("grain hub "+verb, flag.ContinueOnError)
-	tf := bindRegistryTargetFlags(fs)
+	tf := bindHubTargetFlags(fs)
 
 	rest, err := parseArgs(fs, args)
 	if err != nil {
@@ -535,9 +535,9 @@ func cmdRegistryPower(ctx context.Context, c *ui.HTTPClient, out *printer, args 
 	return nil
 }
 
-func cmdRegistryTransfer(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+func cmdHubTransfer(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain hub transfer", flag.ContinueOnError)
-	tf := bindRegistryTargetFlags(fs)
+	tf := bindHubTargetFlags(fs)
 	to := fs.String("to", "", "email of the new individual owner to offer transfer to")
 	ownerGroup := fs.String("owner-group", "", "optional co-owning group to set alongside transfer")
 	clearGroup := fs.Bool("clear-owner-group", false, "clear the entry's co-owning group")
@@ -593,9 +593,9 @@ func cmdRegistryTransfer(ctx context.Context, c *ui.HTTPClient, out *printer, ar
 	return nil
 }
 
-func cmdRegistryAcceptTransfer(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+func cmdHubAcceptTransfer(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain hub accept-transfer", flag.ContinueOnError)
-	tf := bindRegistryTargetFlags(fs)
+	tf := bindHubTargetFlags(fs)
 
 	rest, err := parseArgs(fs, args)
 	if err != nil {

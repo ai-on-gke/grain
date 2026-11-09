@@ -69,7 +69,7 @@ func whoami(r *http.Request) WhoamiResponse {
 		w := wirePrincipal(*b)
 		resp.OnBehalfOf = &w
 	}
-	if del := delegatedIdentityFromContext(r.Context()); del != nil && who.Actor.Kind == model.PrincipalService && who.Actor.Source == model.SourceRegistry {
+	if del := delegatedIdentityFromContext(r.Context()); del != nil && who.Actor.Kind == model.PrincipalService && who.Actor.Source == model.SourceHub {
 		resp.Via = del.ViaLabel
 	}
 	return resp

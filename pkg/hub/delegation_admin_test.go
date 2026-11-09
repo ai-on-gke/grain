@@ -34,7 +34,7 @@ import (
 // the admin and grant endpoints and then ask the policy what they changed.
 func newDelegationAdminTestServer(t *testing.T) (http.Handler, *store.Store, *ConsentDelegationPolicy, *CachingSigner) {
 	t.Helper()
-	pgURL := startEphemeralPostgresForRegistryTest(t)
+	pgURL := startEphemeralPostgresForHubTest(t)
 	ctx := context.Background()
 	st, err := store.Open(ctx, pgURL, store.DefaultThresholds())
 	if err != nil {
@@ -285,12 +285,12 @@ func TestDelegatingAppAdminAPIAndPersonGrants(t *testing.T) {
 
 	// 6. Disabling the app stops it acting, stops new grants, and drops cached
 	// assertions for that app on the local replica; enabling restores it.
-	claims := RegistryClaims{
+	claims := HubClaims{
 		Audience: "https://alice-vm.instances.example.com",
 		Subject:  alice, Email: alice, Kind: "human",
 		Actor: &DelegationActor{Sub: planner, Kind: "service", App: "planner", Grant: grant.ID, Access: "read"},
 	}
-	otherAppClaims := RegistryClaims{
+	otherAppClaims := HubClaims{
 		Audience: "https://alice-vm.instances.example.com",
 		Subject:  alice, Email: alice, Kind: "human",
 		Actor: &DelegationActor{Sub: "triage@proj.iam.gserviceaccount.com", Kind: "service", App: "triage", Grant: "dlg_other", Access: "read"},

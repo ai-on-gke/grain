@@ -453,7 +453,7 @@ func (s *Server) admitVerifiedPrincipal(ctx context.Context, id VerifiedIdentity
 				personEmail: personEmail,
 				appEmail:    appEmail,
 				label:       delegateDisplayLabel(id.Via),
-				verifier:    string(AuthMethodRegistry),
+				verifier:    string(AuthMethodHub),
 			}
 			logRefusedDelegate(personEmail, appEmail)
 			return de

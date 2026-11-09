@@ -236,13 +236,13 @@ type Config struct {
 	UiIAPAudience string
 	UiIAPIssuer   string
 	UiIAPKeysURL  string
-	// UiRegistryIssuer, UiRegistryAudience and UiRegistryKeysURL are
+	// UiHubIssuer, UiHubAudience and UiHubKeysURL are
 	// -ui-hub-issuer, -ui-hub-audience and -ui-hub-keys-url:
 	// what a signed X-Grain-Registry-Assertion must carry, and where the
-	// registry's ES256 JWKS is published (ui.Config.RegistryIssuer and the rest).
-	UiRegistryIssuer   string
-	UiRegistryAudience string
-	UiRegistryKeysURL  string
+	// registry's ES256 JWKS is published (ui.Config.HubIssuer and the rest).
+	UiHubIssuer   string
+	UiHubAudience string
+	UiHubKeysURL  string
 	// UiRequireVerifier is -ui-require-verifier (ui.Config.RequireVerifier):
 	// network callers must sign in through the named IdentityVerifier, and
 	// the access code works over unforwarded loopback only.
@@ -895,13 +895,13 @@ type Config struct {
 
 	// Registry configures self-registration and background heartbeats to a
 	// grain hub (model.Config.Registry, design/design/hub.design.md).
-	// RegistryTokenFile is the optional flags-only path to a registration
+	// HubTokenFile is the optional flags-only path to a registration
 	// credential file when secret registry-registration-token is not set.
-	// RegistryConnect (-hub-connect / $GRAIN_HUB_CONNECT) enables
+	// HubConnect (-hub-connect / $GRAIN_HUB_CONNECT) enables
 	// the outbound tunnel supervisor dialing wss://<registry-host>/api/entries/<name>/connect.
-	Registry          model.RegistryConfig
-	RegistryTokenFile string
-	RegistryConnect   bool
+	Hub          model.HubConfig
+	HubTokenFile string
+	HubConnect   bool
 }
 
 // limits is the sandbox pool this deployment is rationing right now --
@@ -1002,7 +1002,7 @@ func (c Config) ChangesFrom(prev Config) []string {
 	note("k8s-priority-class-interactive", prev.K8sPriorityClasses.Interactive, c.K8sPriorityClasses.Interactive)
 	note("k8s-priority-class-agent", prev.K8sPriorityClasses.Agent, c.K8sPriorityClasses.Agent)
 	note("k8s-priority-class-ci", prev.K8sPriorityClasses.CI, c.K8sPriorityClasses.CI)
-	note("registry", prev.Registry, c.Registry)
+	note("registry", prev.Hub, c.Hub)
 	return changes
 }
 
@@ -1280,13 +1280,13 @@ func (c Config) logStoreOverrides(mc model.Config) {
 	// moves with 'grain hub register' (which retargets, re-mints and
 	// clears the old credential) or Settings -> Registry, so say that
 	// rather than send an operator to a command that cannot do it.
-	warnRegistry := func(flag string, flagVal, storedVal string) {
+	warnHub := func(flag string, flagVal, storedVal string) {
 		if flagVal != "" && flagVal != storedVal {
 			log.Printf("loadConfig: ignoring -%s=%v, stored config already has %v -- use 'grain hub register -hub-url <url> -entry <name>' or Settings -> Hub to change it", flag, flagVal, storedVal)
 		}
 	}
-	warnRegistry("hub-url", c.Registry.URL, mc.Registry.URL)
-	warnRegistry("hub-entry", c.Registry.Entry, mc.Registry.Entry)
+	warnHub("hub-url", c.Hub.URL, mc.Hub.URL)
+	warnHub("hub-entry", c.Hub.Entry, mc.Hub.Entry)
 }
 
 // limits is this configuration's whole sandbox pool, as everything that
@@ -1588,7 +1588,7 @@ func (c Config) ToModelConfig() model.Config {
 	mc.K8sPriorityClassInteractive = c.K8sPriorityClasses.Interactive
 	mc.K8sPriorityClassAgent = c.K8sPriorityClasses.Agent
 	mc.K8sPriorityClassCI = c.K8sPriorityClasses.CI
-	mc.Registry = c.Registry
+	mc.Hub = c.Hub
 	return mc
 }
 
@@ -1753,7 +1753,7 @@ func (c Config) WithModelConfig(mc model.Config) Config {
 		Agent:       mc.K8sPriorityClassAgent,
 		CI:          mc.K8sPriorityClassCI,
 	}
-	c.Registry = mc.Registry
+	c.Hub = mc.Hub
 	return c
 }
 

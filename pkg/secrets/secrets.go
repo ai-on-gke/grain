@@ -86,11 +86,11 @@ const (
 	// account's key, and a second framework built on one would want this
 	// same secret rather than a copy of it under another name.
 	OpenAIAPIKeySecret = "openai-api-key"
-	// RegistryRegistrationTokenSecret holds the per-entry registration
+	// HubRegistrationTokenSecret holds the per-entry registration
 	// credential ("grc_...") a connected grain authenticates its registry
 	// heartbeats with (design/design/hub.design.md). Stored under
 	// AgentCredentialKey ("value") and never exported into grain/config.
-	RegistryRegistrationTokenSecret = "registry-registration-token"
+	HubRegistrationTokenSecret = "registry-registration-token"
 	// AgentCredentialKey is the one key each of the secrets above holds.
 	// "value" rather than a per-secret name ("api-key", "token")
 	// so nothing has to remember which is which: the secret's own name

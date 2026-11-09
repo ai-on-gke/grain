@@ -66,8 +66,8 @@ type Options struct {
 	// with it, as on a real deployment (docs/access-code.md). Empty keeps
 	// it beside the throwaway store and logs it.
 	AccessCodeFile string
-	// IAPAudience, IAPIssuer, IAPKeysURL, RegistryIssuer, RegistryAudience,
-	// RegistryKeysURL, RequireVerifier, RequireIAP and AllowedPrincipals are
+	// IAPAudience, IAPIssuer, IAPKeysURL, HubIssuer, HubAudience,
+	// HubKeysURL, RequireVerifier, RequireIAP and AllowedPrincipals are
 	// the daemon's -ui-iap-audience, -ui-iap-issuer, -ui-iap-keys-url,
 	// -ui-hub-issuer, -ui-hub-audience, -ui-hub-keys-url,
 	// -ui-require-verifier, -ui-require-iap and -ui-allowed-principals, so
@@ -77,9 +77,9 @@ type Options struct {
 	IAPAudience       string
 	IAPIssuer         string
 	IAPKeysURL        string
-	RegistryIssuer    string
-	RegistryAudience  string
-	RegistryKeysURL   string
+	HubIssuer         string
+	HubAudience       string
+	HubKeysURL        string
 	RequireVerifier   string
 	RequireIAP        bool
 	AllowedPrincipals []string
@@ -284,9 +284,9 @@ func Run(opts Options) error {
 		IAPAudience:       opts.IAPAudience,
 		IAPIssuer:         opts.IAPIssuer,
 		IAPKeysURL:        opts.IAPKeysURL,
-		RegistryIssuer:    opts.RegistryIssuer,
-		RegistryAudience:  opts.RegistryAudience,
-		RegistryKeysURL:   opts.RegistryKeysURL,
+		HubIssuer:         opts.HubIssuer,
+		HubAudience:       opts.HubAudience,
+		HubKeysURL:        opts.HubKeysURL,
 		RequireVerifier:   opts.RequireVerifier,
 		RequireIAP:        opts.RequireIAP,
 		AllowedPrincipals: opts.AllowedPrincipals,
@@ -443,7 +443,7 @@ func Run(opts Options) error {
 		storedCfg.GitHubInsecureHTTP = true
 	}
 	if !opts.Unconfigured {
-		configureRegistryDemo(&storedCfg, store, &cfg)
+		configureHubDemo(&storedCfg, store, &cfg)
 	}
 	// cfg.Secrets is read at each lookup, so -secrets-store's store,
 	// configured below, is the one a saved server configuration uses.

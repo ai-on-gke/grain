@@ -91,7 +91,7 @@ func (a signerAdapter) SignAssertion(ctx context.Context, claims server.Assertio
 			Access: claims.Actor.Access,
 		}
 	}
-	return a.signer.SignAssertion(ctx, RegistryClaims{
+	return a.signer.SignAssertion(ctx, HubClaims{
 		Issuer:   claims.Issuer,
 		Audience: claims.Audience,
 		Subject:  claims.Subject,
@@ -106,8 +106,8 @@ func (a signerAdapter) SignPeerToken(ctx context.Context, replicaID string, ttl 
 		ttl = server.PeerTokenTTL
 	}
 	now := time.Now().UTC()
-	return a.signer.SignAssertion(ctx, RegistryClaims{
-		Issuer:    RegistryAssertionIssuer,
+	return a.signer.SignAssertion(ctx, HubClaims{
+		Issuer:    HubAssertionIssuer,
 		Audience:  server.PeerAuthAudience,
 		Subject:   replicaID,
 		Kind:      "service",
@@ -123,7 +123,7 @@ func (a signerAdapter) VerifyPeerToken(ctx context.Context, token string) (strin
 	if err != nil {
 		return "", err
 	}
-	claims, err := VerifyRegistryAssertion(token, jwksDoc, server.PeerAuthAudience, time.Now().UTC())
+	claims, err := VerifyHubAssertion(token, jwksDoc, server.PeerAuthAudience, time.Now().UTC())
 	if err != nil {
 		return "", err
 	}
@@ -198,7 +198,7 @@ func NewServer(opts ServerOptions) (*Server, error) {
 	}
 
 	rt, err := server.NewRouter(server.RouterOptions{
-		RegistryHost:      opts.Config.Host,
+		HubHost:           opts.Config.Host,
 		InstanceDomain:    opts.Config.InstanceDomain,
 		IAPAudience:       opts.Config.Auth.IAPAudience,
 		ReplicaID:         opts.ReplicaID,
@@ -451,7 +451,7 @@ func (s *Server) Handler() http.Handler {
 				writeJSONError(w, http.StatusForbidden, "csrf_failed", err.Error())
 				return
 			}
-			if server.ExtractRegistryToken(r) == "" {
+			if server.ExtractHubToken(r) == "" {
 				if err := server.VerifyPreStripCSRF(r, s.cfg.Host); err != nil {
 					s.metrics.IncRequests(http.StatusForbidden)
 					writeJSONError(w, http.StatusForbidden, "csrf_failed", err.Error())

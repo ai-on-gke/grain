@@ -131,7 +131,7 @@ var settingsAppliedLive = map[string]string{
 	"ownerTrust":            "Client.CreateTask, which reads grain_config as each external agent filing is made (ownerTrustApproves)",
 	"autoGrantContextReads": "Client.CreateTask and Client.UpdateTask, which read grain_config on each task filing or edit (resolveContextLinksAndReads)",
 	"settingsLocked":        "pkg/ui, which reads grain_config per request (settingsLocked)",
-	"registry":              "the registry heartbeat manager (pkg/daemon's liveConfig.Refresh and TriggerRegistrySync)",
+	"registry":              "the registry heartbeat manager (pkg/daemon's liveConfig.Refresh and TriggerHubSync)",
 }
 
 func TestEverySettingIsEitherAppliedLiveOrRestartOnly(t *testing.T) {

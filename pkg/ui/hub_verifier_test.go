@@ -35,7 +35,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-func newRegistryJWKSServer(t *testing.T) (*ecdsa.PrivateKey, *rsa.PrivateKey, *atomic.Bool, *httptest.Server) {
+func newHubJWKSServer(t *testing.T) (*ecdsa.PrivateKey, *rsa.PrivateKey, *atomic.Bool, *httptest.Server) {
 	t.Helper()
 	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -91,7 +91,7 @@ func r503Ctx(t *testing.T) context.Context {
 	})
 }
 
-func signRegistryES256(t *testing.T, key *ecdsa.PrivateKey, kid string, claims ui.RegistryClaims) string {
+func signHubES256(t *testing.T, key *ecdsa.PrivateKey, kid string, claims ui.HubClaims) string {
 	t.Helper()
 	tok := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
 	if kid != "" {
@@ -104,11 +104,11 @@ func signRegistryES256(t *testing.T, key *ecdsa.PrivateKey, kid string, claims u
 	return s
 }
 
-func TestRegistryIdentityVerifierEndToEnd(t *testing.T) {
+func TestHubIdentityVerifierEndToEnd(t *testing.T) {
 	ui.ResetIAPConfig()
 	t.Cleanup(ui.ResetIAPConfig)
 
-	ecKey, rsaKey, failJWKS, jwksSrv := newRegistryJWKSServer(t)
+	ecKey, rsaKey, failJWKS, jwksSrv := newHubJWKSServer(t)
 
 	const (
 		issuer     = "https://grain.example.com"
@@ -118,9 +118,9 @@ func TestRegistryIdentityVerifierEndToEnd(t *testing.T) {
 
 	srv, client := testServer(t)
 	client.Config.Actor = ui.DefaultActor("owner@example.com")
-	client.Config.RegistryIssuer = issuer
-	client.Config.RegistryAudience = audience
-	client.Config.RegistryKeysURL = jwksSrv.URL
+	client.Config.HubIssuer = issuer
+	client.Config.HubAudience = audience
+	client.Config.HubKeysURL = jwksSrv.URL
 	client.Config.RequireVerifier = "registry"
 	client.Config.AllowedPrincipals = []string{"user:alice@example.com"}
 	client.Config.ProvisionedServiceAccounts = []string{"ci-bot@proj.iam.gserviceaccount.com"}
@@ -134,8 +134,8 @@ func TestRegistryIdentityVerifierEndToEnd(t *testing.T) {
 	}
 
 	now := time.Now()
-	validClaims := func(email string, kind model.PrincipalKind) ui.RegistryClaims {
-		return ui.RegistryClaims{
+	validClaims := func(email string, kind model.PrincipalKind) ui.HubClaims {
+		return ui.HubClaims{
 			RegisteredClaims: jwt.RegisteredClaims{
 				Issuer:    issuer,
 				Audience:  jwt.ClaimStrings{audience},
@@ -153,7 +153,7 @@ func TestRegistryIdentityVerifierEndToEnd(t *testing.T) {
 
 	// 1. Initial JWKS fetch failure returns 503 Service Unavailable with Retry-After: 5.
 	failJWKS.Store(true)
-	tokAlice := signRegistryES256(t, ecKey, "reg-key-1", validClaims("Alice@Example.com", model.PrincipalHuman))
+	tokAlice := signHubES256(t, ecKey, "reg-key-1", validClaims("Alice@Example.com", model.PrincipalHuman))
 	r503 := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
 	r503.RemoteAddr = "203.0.113.10:4242"
 	r503.Header.Set(ui.RegistryAssertionHeader, tokAlice)
@@ -181,18 +181,18 @@ func TestRegistryIdentityVerifierEndToEnd(t *testing.T) {
 	if err := json.Unmarshal(wUser.Body.Bytes(), &userResp); err != nil {
 		t.Fatalf("unmarshal /api/auth/user: %v", err)
 	}
-	if !userResp.Authenticated || userResp.User != "alice@example.com" || userResp.AuthMethod != ui.AuthMethodRegistry {
+	if !userResp.Authenticated || userResp.User != "alice@example.com" || userResp.AuthMethod != ui.AuthMethodHub {
 		t.Fatalf("/api/auth/user = %+v, want authenticated alice@example.com via registry", userResp)
 	}
 
 	// Verify ExtractPrincipal and PrincipalLabel on the registry assertion request.
 	rExtract := rUser.WithContext(ui.WithIAPConfig(rUser.Context(), ui.IAPConfig{
-		RegistryIssuer:   issuer,
-		RegistryAudience: audience,
-		RegistryKeysURL:  jwksSrv.URL,
+		HubIssuer:   issuer,
+		HubAudience: audience,
+		HubKeysURL:  jwksSrv.URL,
 	}))
 	pAlice, ok := ui.ExtractPrincipal(rExtract)
-	if !ok || pAlice != (model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com", Source: model.SourceRegistry}) || !pAlice.Verified() {
+	if !ok || pAlice != (model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com", Source: model.SourceHub}) || !pAlice.Verified() {
 		t.Fatalf("ExtractPrincipal = (%+v, %v), want verified registry principal alice@example.com", pAlice, ok)
 	}
 	if got := ui.PrincipalLabel(pAlice, nil); got != "alice@example.com" {
@@ -200,7 +200,7 @@ func TestRegistryIdentityVerifierEndToEnd(t *testing.T) {
 	}
 
 	// 3. Valid service account registry JWT authenticates as PrincipalService with Source="registry".
-	tokSA := signRegistryES256(t, ecKey, "reg-key-1", validClaims("ci-bot@proj.iam.gserviceaccount.com", ""))
+	tokSA := signHubES256(t, ecKey, "reg-key-1", validClaims("ci-bot@proj.iam.gserviceaccount.com", ""))
 	rSA := httptest.NewRequest(http.MethodGet, "/api/auth/user", nil)
 	rSA.RemoteAddr = "203.0.113.10:4242"
 	rSA.Header.Set(ui.RegistryAssertionHeader, tokSA)
@@ -213,22 +213,22 @@ func TestRegistryIdentityVerifierEndToEnd(t *testing.T) {
 	if err := json.Unmarshal(wSA.Body.Bytes(), &saResp); err != nil {
 		t.Fatalf("unmarshal service account /api/auth/user: %v", err)
 	}
-	if !saResp.Authenticated || saResp.User != "ci-bot@proj.iam.gserviceaccount.com" || saResp.AuthMethod != ui.AuthMethodRegistry {
+	if !saResp.Authenticated || saResp.User != "ci-bot@proj.iam.gserviceaccount.com" || saResp.AuthMethod != ui.AuthMethodHub {
 		t.Fatalf("service account response = %+v", saResp)
 	}
 	rSAExtract := rSA.WithContext(ui.WithIAPConfig(rSA.Context(), ui.IAPConfig{
-		RegistryIssuer:   issuer,
-		RegistryAudience: audience,
-		RegistryKeysURL:  jwksSrv.URL,
+		HubIssuer:   issuer,
+		HubAudience: audience,
+		HubKeysURL:  jwksSrv.URL,
 	}))
 	pSA, ok := ui.ExtractPrincipal(rSAExtract)
-	if !ok || pSA != (model.Principal{Kind: model.PrincipalService, ID: "ci-bot@proj.iam.gserviceaccount.com", Source: model.SourceRegistry}) || !pSA.Verified() {
+	if !ok || pSA != (model.Principal{Kind: model.PrincipalService, ID: "ci-bot@proj.iam.gserviceaccount.com", Source: model.SourceHub}) || !pSA.Verified() {
 		t.Fatalf("ExtractPrincipal(SA) = (%+v, %v)", pSA, ok)
 	}
 
 	// 4. AccessCodeWins() == false: when both X-Grain-Registry-Assertion and an access code are sent,
 	//    the registry identity wins (and an unallowlisted registry principal gets 403 even with a valid access code).
-	tokOutsider := signRegistryES256(t, ecKey, "reg-key-1", validClaims("mallory@example.com", model.PrincipalHuman))
+	tokOutsider := signHubES256(t, ecKey, "reg-key-1", validClaims("mallory@example.com", model.PrincipalHuman))
 	rOutsider := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
 	rOutsider.RemoteAddr = "127.0.0.1:4242"
 	rOutsider.Header.Set(ui.RegistryAssertionHeader, tokOutsider)
@@ -273,14 +273,14 @@ func TestRegistryIdentityVerifierEndToEnd(t *testing.T) {
 	withAct.Act = json.RawMessage(`{"sub":"service@example.com"}`)
 
 	badTokens := map[string]string{
-		"wrong-key-signature": signRegistryES256(t, otherEC, "reg-key-1", validClaims("alice@example.com", model.PrincipalHuman)),
+		"wrong-key-signature": signHubES256(t, otherEC, "reg-key-1", validClaims("alice@example.com", model.PrincipalHuman)),
 		"rs256-alg":           rsSigned,
-		"wrong-audience":      signRegistryES256(t, ecKey, "reg-key-1", wrongAud),
-		"multi-audience":      signRegistryES256(t, ecKey, "reg-key-1", multiAud),
-		"wrong-issuer":        signRegistryES256(t, ecKey, "reg-key-1", wrongIss),
-		"expired":             signRegistryES256(t, ecKey, "reg-key-1", expired),
-		"lifetime-over-5m":    signRegistryES256(t, ecKey, "reg-key-1", tooLong),
-		"reserved-act-claim":  signRegistryES256(t, ecKey, "reg-key-1", withAct),
+		"wrong-audience":      signHubES256(t, ecKey, "reg-key-1", wrongAud),
+		"multi-audience":      signHubES256(t, ecKey, "reg-key-1", multiAud),
+		"wrong-issuer":        signHubES256(t, ecKey, "reg-key-1", wrongIss),
+		"expired":             signHubES256(t, ecKey, "reg-key-1", expired),
+		"lifetime-over-5m":    signHubES256(t, ecKey, "reg-key-1", tooLong),
+		"reserved-act-claim":  signHubES256(t, ecKey, "reg-key-1", withAct),
 	}
 	for name, badTok := range badTokens {
 		rBad := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
@@ -319,18 +319,18 @@ func TestRegistryIdentityVerifierEndToEnd(t *testing.T) {
 	}
 }
 
-func TestRegistryVerifierExposesPersonAndDelegatingApp(t *testing.T) {
+func TestHubVerifierExposesPersonAndDelegatingApp(t *testing.T) {
 	ui.ResetIAPConfig()
 	t.Cleanup(ui.ResetIAPConfig)
 
-	ecKey, _, _, jwksSrv := newRegistryJWKSServer(t)
+	ecKey, _, _, jwksSrv := newHubJWKSServer(t)
 	const (
 		issuer   = "https://grain.example.com"
 		audience = "https://my-grain.grain.example.com"
 	)
 
 	now := time.Now().Truncate(time.Second)
-	claims := ui.RegistryClaims{
+	claims := ui.HubClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    issuer,
 			Subject:   "alice@example.com",
@@ -350,12 +350,12 @@ func TestRegistryVerifierExposesPersonAndDelegatingApp(t *testing.T) {
 			"access": "write"
 		}`),
 	}
-	tok := signRegistryES256(t, ecKey, "reg-key-1", claims)
+	tok := signHubES256(t, ecKey, "reg-key-1", claims)
 
-	verifier := webauth.NewRegistryVerifier(
-		webauth.WithRegistryIssuer(issuer),
-		webauth.WithRegistryAudience(audience),
-		webauth.WithRegistryKeysURL(jwksSrv.URL),
+	verifier := webauth.NewHubVerifier(
+		webauth.WithHubIssuer(issuer),
+		webauth.WithHubAudience(audience),
+		webauth.WithHubKeysURL(jwksSrv.URL),
 	)
 
 	r := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
@@ -386,18 +386,18 @@ func TestRegistryVerifierExposesPersonAndDelegatingApp(t *testing.T) {
 	claimsRead := claims
 	claimsRead.Act = json.RawMessage(`{"sub":"slack-bot@proj.iam.gserviceaccount.com","kind":"service","access":"read"}`)
 	rRead := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
-	rRead.Header.Set(ui.RegistryAssertionHeader, signRegistryES256(t, ecKey, "reg-key-1", claimsRead))
+	rRead.Header.Set(ui.RegistryAssertionHeader, signHubES256(t, ecKey, "reg-key-1", claimsRead))
 	idRead, err := verifier.Verify(rRead)
 	if err != nil || idRead.Via == nil || idRead.Via.Access != "read" {
 		t.Fatalf("verifier.Verify(read) = %+v, %v; want Via.Access=read", idRead, err)
 	}
 }
 
-func TestRegistryVerifierRefusesMalformedOrNestedAct(t *testing.T) {
+func TestHubVerifierRefusesMalformedOrNestedAct(t *testing.T) {
 	ui.ResetIAPConfig()
 	t.Cleanup(ui.ResetIAPConfig)
 
-	ecKey, _, _, jwksSrv := newRegistryJWKSServer(t)
+	ecKey, _, _, jwksSrv := newHubJWKSServer(t)
 	const (
 		issuer     = "https://grain.example.com"
 		audience   = "https://my-grain.grain.example.com"
@@ -406,9 +406,9 @@ func TestRegistryVerifierRefusesMalformedOrNestedAct(t *testing.T) {
 
 	srv, client := testServer(t)
 	client.Config.Actor = ui.DefaultActor("owner@example.com")
-	client.Config.RegistryIssuer = issuer
-	client.Config.RegistryAudience = audience
-	client.Config.RegistryKeysURL = jwksSrv.URL
+	client.Config.HubIssuer = issuer
+	client.Config.HubAudience = audience
+	client.Config.HubKeysURL = jwksSrv.URL
 	client.Config.AllowedPrincipals = []string{"user:alice@example.com"}
 	ui.SetAccessCodeForTest(srv, accessCode)
 	if _, err := client.AllowPrincipal(r503Ctx(t), ui.AllowPrincipalRequest{
@@ -420,8 +420,8 @@ func TestRegistryVerifierRefusesMalformedOrNestedAct(t *testing.T) {
 	}
 
 	now := time.Now().Truncate(time.Second)
-	mkClaims := func(sub string, kind model.PrincipalKind, act string) ui.RegistryClaims {
-		return ui.RegistryClaims{
+	mkClaims := func(sub string, kind model.PrincipalKind, act string) ui.HubClaims {
+		return ui.HubClaims{
 			RegisteredClaims: jwt.RegisteredClaims{
 				Issuer:    issuer,
 				Subject:   sub,
@@ -436,7 +436,7 @@ func TestRegistryVerifierRefusesMalformedOrNestedAct(t *testing.T) {
 		}
 	}
 
-	cases := map[string]ui.RegistryClaims{
+	cases := map[string]ui.HubClaims{
 		"non-object-string":    mkClaims("alice@example.com", model.PrincipalHuman, `"slack-bot@proj.iam.gserviceaccount.com"`),
 		"non-object-array":     mkClaims("alice@example.com", model.PrincipalHuman, `["slack-bot@proj.iam.gserviceaccount.com"]`),
 		"null-act":             mkClaims("alice@example.com", model.PrincipalHuman, `null`),
@@ -450,7 +450,7 @@ func TestRegistryVerifierRefusesMalformedOrNestedAct(t *testing.T) {
 	}
 
 	for name, c := range cases {
-		tok := signRegistryES256(t, ecKey, "reg-key-1", c)
+		tok := signHubES256(t, ecKey, "reg-key-1", c)
 		r := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
 		r.RemoteAddr = "127.0.0.1:4242"
 		r.Header.Set(ui.RegistryAssertionHeader, tok)

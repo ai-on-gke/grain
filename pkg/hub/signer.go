@@ -37,12 +37,12 @@ import (
 )
 
 const (
-	// RegistryAssertionIssuer is the fixed `iss` claim in hub assertions.
+	// HubAssertionIssuer is the fixed `iss` claim in hub assertions.
 	// It keeps its "grain-registry" spelling through the Grain Hub rename:
 	// every daemon configured with -ui-hub-issuer (or the old
 	// -ui-registry-issuer) names it, and changing it would stop every
 	// assertion already minted, and every one minted after, verifying.
-	RegistryAssertionIssuer = "grain-registry"
+	HubAssertionIssuer = "grain-registry"
 
 	// HubAssertionHeader is the HTTP header carrying the signed hub JWT.
 	HubAssertionHeader = "X-Grain-Hub-Assertion"
@@ -54,9 +54,9 @@ const (
 	AssertionNotBeforeSkew = 30 * time.Second
 )
 
-// RegistryClaims represents the JWT payload signed by the registry (`ES256`)
+// HubClaims represents the JWT payload signed by the registry (`ES256`)
 // and attached as `X-Grain-Registry-Assertion`.
-type RegistryClaims struct {
+type HubClaims struct {
 	Issuer    string           `json:"iss"`
 	Audience  string           `json:"aud"`
 	Subject   string           `json:"sub"`
@@ -317,13 +317,13 @@ func JWKToPublicKey(jwk JSONWebKey) (*ecdsa.PublicKey, error) {
 }
 
 // CompleteClaims populates default `iss`, `iat`, `nbf`, `exp`, `kind`, and `jti`
-// fields on RegistryClaims before signing.
-func CompleteClaims(claims RegistryClaims, now time.Time, ttl time.Duration) RegistryClaims {
+// fields on HubClaims before signing.
+func CompleteClaims(claims HubClaims, now time.Time, ttl time.Duration) HubClaims {
 	if ttl <= 0 {
 		ttl = DefaultJWTTTL
 	}
 	if claims.Issuer == "" {
-		claims.Issuer = RegistryAssertionIssuer
+		claims.Issuer = HubAssertionIssuer
 	}
 	if claims.Kind == "" {
 		claims.Kind = "human"
@@ -351,7 +351,7 @@ func randomJTI() string {
 
 // EncodeUnsignedJWT constructs the `base64url(header) + "." + base64url(payload)`
 // signing input for ES256 and returns both the signing input and its SHA-256 digest.
-func EncodeUnsignedJWT(kid string, claims RegistryClaims) (signingInput string, digest [32]byte, err error) {
+func EncodeUnsignedJWT(kid string, claims HubClaims) (signingInput string, digest [32]byte, err error) {
 	hdr := struct {
 		Alg string `json:"alg"`
 		Typ string `json:"typ"`
@@ -374,8 +374,8 @@ func EncodeUnsignedJWT(kid string, claims RegistryClaims) (signingInput string, 
 	return signingInput, digest, nil
 }
 
-// SignAssertion signs RegistryClaims with the active local P-256 private key using JWS ES256 (`R || S`).
-func (s *LocalSigner) SignAssertion(_ context.Context, claims RegistryClaims) (string, error) {
+// SignAssertion signs HubClaims with the active local P-256 private key using JWS ES256 (`R || S`).
+func (s *LocalSigner) SignAssertion(_ context.Context, claims HubClaims) (string, error) {
 	now := time.Now()
 	if s.nowFn != nil {
 		now = s.nowFn()
@@ -475,7 +475,7 @@ func NewCachingSigner(inner Signer, cacheTTL time.Duration) *CachingSigner {
 //
 // When RequestID or JWTID is explicitly populated on claims, caching is bypassed
 // so caller-supplied per-request correlation IDs are never aliased across requests.
-func (c *CachingSigner) SignAssertion(ctx context.Context, claims RegistryClaims) (string, error) {
+func (c *CachingSigner) SignAssertion(ctx context.Context, claims HubClaims) (string, error) {
 	if claims.RequestID != "" || claims.JWTID != "" || claims.ExpiresAt != 0 {
 		return c.inner.SignAssertion(ctx, claims)
 	}
@@ -587,9 +587,9 @@ func (c *CachingSigner) InvalidateActor(actorSub string) {
 	c.mu.Unlock()
 }
 
-// VerifyRegistryAssertion verifies a JWS ES256 registry assertion against a JWKS
+// VerifyHubAssertion verifies a JWS ES256 registry assertion against a JWKS
 // and validates its issuer, audience, and time bounds (`nbf` and `exp`).
-func VerifyRegistryAssertion(token string, jwks *JSONWebKeySet, expectedAud string, now time.Time) (*RegistryClaims, error) {
+func VerifyHubAssertion(token string, jwks *JSONWebKeySet, expectedAud string, now time.Time) (*HubClaims, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return nil, errors.New("jwt: expected 3 dot-separated segments")
@@ -643,11 +643,11 @@ func VerifyRegistryAssertion(token string, jwks *JSONWebKeySet, expectedAud stri
 	if err != nil {
 		return nil, fmt.Errorf("jwt: decode payload: %w", err)
 	}
-	var claims RegistryClaims
+	var claims HubClaims
 	if err := json.Unmarshal(payloadJSON, &claims); err != nil {
 		return nil, fmt.Errorf("jwt: unmarshal claims: %w", err)
 	}
-	if claims.Issuer != RegistryAssertionIssuer {
+	if claims.Issuer != HubAssertionIssuer {
 		return nil, fmt.Errorf("jwt: unexpected iss %q", claims.Issuer)
 	}
 	if expectedAud != "" && claims.Audience != expectedAud {

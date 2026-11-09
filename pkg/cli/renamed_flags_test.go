@@ -63,14 +63,14 @@ func TestDaemonAcceptsThePreRenameRegistryFlags(t *testing.T) {
 	if err != nil || len(unknown) != 0 {
 		t.Fatalf("parseDaemonArgs = %v, unknown=%v", err, unknown)
 	}
-	if cfg.Registry.URL != "https://hub.example.com" || cfg.Registry.Entry != "team-alpha" ||
-		cfg.Registry.HostKind != "kubernetes" || cfg.Registry.Listed ||
-		cfg.RegistryTokenFile != "/etc/grain/reg.token" {
-		t.Fatalf("parsed hub config = %+v (tokenFile=%q)", cfg.Registry, cfg.RegistryTokenFile)
+	if cfg.Hub.URL != "https://hub.example.com" || cfg.Hub.Entry != "team-alpha" ||
+		cfg.Hub.HostKind != "kubernetes" || cfg.Hub.Listed ||
+		cfg.HubTokenFile != "/etc/grain/reg.token" {
+		t.Fatalf("parsed hub config = %+v (tokenFile=%q)", cfg.Hub, cfg.HubTokenFile)
 	}
-	if cfg.UiRegistryIssuer != "grain-registry" || cfg.UiRegistryAudience != "https://team-alpha.example.com" ||
-		cfg.UiRegistryKeysURL != "https://hub.example.com/.well-known/jwks.json" {
-		t.Fatalf("ui hub verifier = %q %q %q", cfg.UiRegistryIssuer, cfg.UiRegistryAudience, cfg.UiRegistryKeysURL)
+	if cfg.UiHubIssuer != "grain-registry" || cfg.UiHubAudience != "https://team-alpha.example.com" ||
+		cfg.UiHubKeysURL != "https://hub.example.com/.well-known/jwks.json" {
+		t.Fatalf("ui hub verifier = %q %q %q", cfg.UiHubIssuer, cfg.UiHubAudience, cfg.UiHubKeysURL)
 	}
 	for _, old := range []string{"-registry-url", "-registry-entry", "-ui-registry-issuer"} {
 		if n := strings.Count(warnings.String(), old+" is deprecated"); n != 1 {
@@ -115,8 +115,8 @@ func TestDaemonReadsThePreRenameRegistryEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Registry.URL != "https://env-old.example.com" || cfg.Registry.Entry != "env-grain" {
-		t.Fatalf("old env fallback = %+v", cfg.Registry)
+	if cfg.Hub.URL != "https://env-old.example.com" || cfg.Hub.Entry != "env-grain" {
+		t.Fatalf("old env fallback = %+v", cfg.Hub)
 	}
 	if !strings.Contains(warnings.String(), "$GRAIN_REGISTRY_URL is deprecated") {
 		t.Errorf("no deprecation warning for $GRAIN_REGISTRY_URL:\n%s", warnings)
@@ -127,8 +127,8 @@ func TestDaemonReadsThePreRenameRegistryEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Registry.URL != "https://env-new.example.com" {
-		t.Fatalf("$GRAIN_HUB_URL should win over $GRAIN_REGISTRY_URL, got %q", cfg.Registry.URL)
+	if cfg.Hub.URL != "https://env-new.example.com" {
+		t.Fatalf("$GRAIN_HUB_URL should win over $GRAIN_REGISTRY_URL, got %q", cfg.Hub.URL)
 	}
 }
 

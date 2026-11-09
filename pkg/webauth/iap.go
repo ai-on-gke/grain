@@ -216,7 +216,7 @@ func ResetIAPConfig() {
 	iapHTTPClient = &http.Client{Timeout: 5 * time.Second}
 	googleIAPCertURL = GoogleIAPCertURL
 	iapMu.Unlock()
-	ResetRegistryConfig()
+	ResetHubConfig()
 }
 
 // IAPKeysURL returns the public-key endpoint URL active for ctx.
