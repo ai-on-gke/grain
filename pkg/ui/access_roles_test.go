@@ -1112,7 +1112,7 @@ func TestLimitedRoleApprovalIsHeldToTasksAdminAndTheRolesCeiling(t *testing.T) {
 	}
 	actions := []struct{ route, tool string }{{"approve", "api_approve"}, {"run-now", "api_run_now"}}
 	n := 0
-	next := func() string { n++; return "9" + strconv.Itoa(1000+n)[1:] }
+	next := func() string { n++; return "9" + strconv.Itoa(1000 + n)[1:] }
 
 	defaultReviewID := model.DefaultReviewTemplateID(widgets)
 	for _, tmpl := range []model.Template{
