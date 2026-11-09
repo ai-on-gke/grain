@@ -2,6 +2,7 @@ name: Prune GHCR packages
 title: Audit Docker Hub image retention and release.yml's prune step
 base: main
 auto-merge: true
+nothing-needed: close
 capabilities: ["api:ci-read@ai-on-gke/grain"]
 body: |
   Audit the Docker Hub image retention policy for `docker.io/grainai/*` and
@@ -61,6 +62,10 @@ body: |
     invariant held, and what the prune step's logs say.
   - If the step is refused or the token is missing, that is an operator
     fix to the `DOCKER_PAT` repository secret (a Docker Hub access token
-    with Read, Write, Delete on `grainai`), not a code change: say so in
-    the closing note for a person to act on.
-  - If nothing is wrong, close with `nothing_needed` and the counts.
+    with Read, Write, Delete on `grainai`), not a code change: raise an
+    Inbox notification with
+    `grain notify --subject prune-packages --severity warning --title "Docker Hub prune step needs DOCKER_PAT repair" --body "<summary>"`
+    for a person to act on.
+  - Finish with `nothing_needed` (never `comment_on_issue`, which parks a
+    branchless task in `awaiting_reply` and holds the weekly `overlap: skip`
+    schedule) passing the dry-run counts and findings as its `reason`.

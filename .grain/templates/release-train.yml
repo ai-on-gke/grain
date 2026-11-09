@@ -1,6 +1,15 @@
 name: Release train
 title: Run the release train (check, release, cut)
 base: main
+# Grain's declared template schema supports `nothing-needed: close|ack`
+# (model.NothingNeededAction): there is no close-on-comment template setting
+# (a branchless `comment_on_issue` sets CompletedAt without ClosedAt, which
+# model.AwaitsAck derives as `awaiting_reply` and holds the `overlap: skip`
+# schedule), and `goal:` is settings-only (declschema) and rests on its goal
+# rather than closing (orchestrator.restOnGoal). `nothing-needed: close`
+# relays `nothing_needed`'s full reason into the task conversation and closes
+# the task outright so a finished tick never stalls the 20-minute train.
+nothing-needed: close
 # Reads main's tests.yml / release.yml / nightly.yml verdicts (GitHub
 # Actions runs) and the rc's grain/release-qualification check run through
 # grain's own forge connection: `grain ci list --format github|github-jobs`
@@ -84,17 +93,24 @@ body: |
   - **cut**: tag the newest known-good `main` commit `vX.Y.Z-rc.N` and
     force-move `refs/heads/candidate` onto it.
 
-  Then end the task by the last line it printed:
+  Then end the task by the last line it printed, always closing with
+  `nothing_needed` (never `comment_on_issue`, which parks a branchless task
+  in `awaiting_reply` and holds the 20-minute `overlap: skip` schedule):
 
   - `RELEASE_TRAIN_RESULT=noop`: call `nothing_needed`, with the train's
     one-line reason (its last `phase` line). Do not investigate further.
-  - `RELEASE_TRAIN_RESULT=acted`: call `comment_on_issue` with what it did,
-    from its `output` lines: the rc it cut (and the commit), the rc it
-    released as `vX.Y.0` or staged as `-pending` and why, or the rc it
+  - `RELEASE_TRAIN_RESULT=acted`: call `nothing_needed` with the full report
+    of what it did, from its `output` lines: the rc it cut (and the commit),
+    the rc it released as `vX.Y.0` or staged as `-pending` and why (a staged
+    release already raises `release.pending` in the Inbox), or the rc it
     dropped and the failing jobs.
-  - `RELEASE_TRAIN_RESULT=failed`: call `comment_on_issue` with the
-    script's output. `escalated_version=` means `RELEASE_MAX_RC_ATTEMPTS`
-    rcs of that version were dropped and a person decides.
+  - `RELEASE_TRAIN_RESULT=failed`: raise an Inbox notification first with
+    `grain notify --severity warning --subject <subject> --title "Release train tick failed: <one-line error>" --body "<the script's output>"`
+    (use `--subject release-escalated:<version>` when `escalated_version=<version>`
+    was printed -- meaning `RELEASE_MAX_RC_ATTEMPTS` rcs of that version were
+    dropped and a person decides -- and `--subject release-train-failed`
+    otherwise), then call `nothing_needed` with the script's output so the
+    task closes rather than stalling future ticks.
 
   Never re-run it with different settings, never write, edit or filter a
   verdict file, never run the script's `approve`, `reject` or `rollback`

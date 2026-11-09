@@ -247,15 +247,29 @@ func TestTheReleaseTrainIsScheduledContinuously(t *testing.T) {
 	if sched.Overlap != model.OverlapSkip {
 		t.Errorf("the release-train schedule's overlap is %q, want skip: two ticks would race for the same tags", sched.Overlap)
 	}
-	var body string
-	for _, tmpl := range decl.Templates {
-		if tmpl.Path == ".grain/templates/release-train.yml" {
-			body = tmpl.Template.Body
+	var trainTmpl *model.Template
+	for i := range decl.Templates {
+		if decl.Templates[i].Path == ".grain/templates/release-train.yml" {
+			trainTmpl = &decl.Templates[i].Template
 		}
 	}
+	if trainTmpl == nil {
+		t.Fatal(".grain/templates/release-train.yml is not declared")
+	}
+	if got := trainTmpl.NothingNeededAction.Resolved(); got != model.NothingNeededClose {
+		t.Errorf("release-train nothing-needed resolves to %q, want %q so acted/noop/failed ticks close and free the overlap: skip schedule",
+			got, model.NothingNeededClose)
+	}
+	body := trainTmpl.Body
 	contains(t, body, "bash ~/work/scripts/release-train-task.sh")
-	contains(t, body, "RELEASE_TRAIN_RESULT=noop")
+	for _, outcome := range []string{"RELEASE_TRAIN_RESULT=noop", "RELEASE_TRAIN_RESULT=acted", "RELEASE_TRAIN_RESULT=failed"} {
+		contains(t, body, outcome)
+	}
 	contains(t, body, "nothing_needed")
+	contains(t, body, "grain notify")
+	if strings.Contains(body, "call `comment_on_issue`") {
+		t.Errorf("release-train.yml still instructs calling comment_on_issue, which parks a branchless tick in awaiting_reply and stalls the 20-minute train")
+	}
 }
 
 // The train's grant reaches the release now (playbook §1): vM.Y.0 created,

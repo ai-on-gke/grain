@@ -2,6 +2,7 @@ name: Nightly new features test plan
 title: Generate nightly new features test plan and walkthrough tasks
 base: main
 auto-merge: true
+nothing-needed: close
 body: |
   Audit newly merged features on `main` submitted over the previous day,
   design comprehensive end-to-end tests and walkthrough procedures covering
@@ -51,3 +52,12 @@ body: |
       tests, and run CI checks.
     - Instruct the agent to record execution steps, findings, outcomes, and environment
       details in a dated test run report in `docs/test-runs/YYYY-MM-DD-<feature>.md`.
+
+  ## 4. Finish
+
+  - If new commits were covered, push the test-plan branch and wait for CI
+    checks to pass (`grain pr open` and `grain ci wait`).
+  - If no commits merged into `main` since the previous test plan in
+    `docs/test-plans/`, call `nothing_needed` naming the latest commit
+    checked (never `comment_on_issue`, which parks a branchless task in
+    `awaiting_reply` and holds the daily `overlap: skip` schedule).
