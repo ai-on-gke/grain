@@ -393,6 +393,11 @@ only re-stamp the daemon images with the release name and retag.
 - **What the tags mean:** `latest` is the last promoted release and never
   `main`'s head. `main` is the head of `main`. `candidate`/`rc` is the
   current rc. `vX.Y.Z` is one release, kept forever by `cmd/ghcr-prune`.
+  A staged `vX.Y.Z-pending` build is kept whatever its age until the same
+  version also carries `vX.Y.Z-rejected` (`discard-pending`); approving it
+  retags it `vX.Y.Z`, which is kept from then on. `latest`, `vX.Y.Z`,
+  `sha-<short>` and signature tags are kept the same way on the base
+  packages (`sandbox-base`, `guest-base`) as on every other image.
 - **`latest` follows the git tag.** `.grain/workflows/promote.yml`
   (`scripts/release-images.sh promote`) publishes the release the git
   `latest` tag names, as `vX.Y.Z` and `latest`. It runs on every `release`
