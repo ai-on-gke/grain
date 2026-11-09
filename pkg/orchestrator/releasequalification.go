@@ -47,6 +47,11 @@ package orchestrator
 // not raised for it. A suite without the stanza is a gate only when it
 // is named `release-qualification`, and then with every default.
 //
+// Stage 1 is watched as well as waited on (releasestage1.go): a
+// candidate that goes red there, flakes a job, or stalls on
+// infrastructure raises the same notifications and hold a Stage 2 verdict
+// does, with or without a GitHub App to post check runs as.
+//
 // Everything here is outbound: grain asks GitHub, through the
 // repository's own forge connection, and nothing on a GitHub runner has
 // to reach grain. That is what lets the release train drop
@@ -442,7 +447,8 @@ func syncRepoReleaseQualification(ctx context.Context, store *model.Store, forge
 	if ok {
 		current = rc.String()
 	}
-	holds := syncRedRCHolds(ctx, store, forge, repo, commits, current, now)
+	holds := errors.Join(syncDiscardedStage1(ctx, store, forge, gate, commits, now),
+		syncRedRCHolds(ctx, store, forge, repo, commits, current, now))
 	if !ok {
 		return holds
 	}
@@ -505,15 +511,22 @@ func qualifyCandidate(ctx context.Context, store *model.Store, forge ReleaseQual
 	if err != nil {
 		return fmt.Errorf("reading which GitHub App posts %s on %s: %w", checkName, rcTag, err)
 	}
+	baseTag := model.QualificationTag(gate.stem, repo, cand.key)
 	if app == "" {
-		return fmt.Errorf("not qualifying %s: its forge connection is not a GitHub App grain can name, so its own %s could not be told from one anything else posted",
-			rcTag, checkName)
+		// No check run of grain's can be told from anybody else's, so Stage 2
+		// cannot run; Stage 1's notifications need none, and are raised
+		// all the same (releasestage1.go).
+		q := rcQualification{store: store, forge: forge, repo: repo, suite: gate.suite, rcTag: rcTag, sha: sha,
+			tag: model.QualificationAttemptTag(baseTag, 1), now: now, check: checkName, release: cand.release,
+			notifyKey: cand.notifyKey}
+		_, stage1 := q.watchStage1(ctx, gate.cfg, commits, cand.rc, 1)
+		return errors.Join(stage1, fmt.Errorf("not qualifying %s: its forge connection is not a GitHub App grain can name, so its own %s could not be told from one anything else posted",
+			rcTag, checkName))
 	}
 	checks, err := forge.ListCheckRuns(repo.Owner, repo.Name, sha)
 	if err != nil {
 		return fmt.Errorf("reading checks on %s: %w", rcTag, err)
 	}
-	baseTag := model.QualificationTag(gate.stem, repo, cand.key)
 	attempt, check := latestAttemptCheckRun(checks, checkName, app, baseTag)
 	if check != nil && check.Status == "completed" {
 		if check.Conclusion == nil || *check.Conclusion != model.ConclusionNeutral {
@@ -555,12 +568,9 @@ func qualifyCandidate(ctx context.Context, store *model.Store, forge ReleaseQual
 	}
 
 	if len(runs) == 0 {
-		green, err := stage1Green(forge, repo, sha, gate.cfg)
-		if err != nil {
-			return fmt.Errorf("reading Stage 1 on %s: %w", rcTag, err)
-		}
-		if !green {
-			return nil
+		green, err := q.watchStage1(ctx, gate.cfg, commits, cand.rc, attempt)
+		if err != nil || !green {
+			return err
 		}
 		gates := items
 		if len(items) > 1 {
@@ -597,7 +607,7 @@ func qualifyCandidate(ctx context.Context, store *model.Store, forge ReleaseQual
 	switch d.Conclusion {
 	case model.ConclusionFailure:
 		if cand.rc != nil {
-			if err := q.raiseRCFailed(ctx, commits, *cand.rc, d.Lines); err != nil {
+			if err := q.raiseRCFailed(ctx, commits, *cand.rc, stage2Failure(q.check), d.Lines); err != nil {
 				return err
 			}
 		}
