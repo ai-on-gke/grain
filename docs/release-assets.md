@@ -237,24 +237,84 @@ here deletes any of those images, and Docker Hub keeps receiving every
 build. The core loader's `release-assets` source maps both repositories to
 this one's releases and falls back to the registry when a release has no
 manifest, so an install whose running build contains that loader moves
-over on its next upgrade.
+over on its next upgrade, with no configuration: it keeps its channel,
+reads `latest` through GitHub's latest release and `main` through
+`channel-main`, and pulls from `docker.io/grainai/grain` (never GHCR) when
+it falls back, since the oss track maps the legacy repository there
+(`installtrack.RepositoryForTrack`).
+
+### The GHCR bridge
 
 An install still running a build from before the loader and the Docker Hub
-alias table only ever looks at GHCR, whose tags stopped moving when the
-GHCR pipeline broke. It can reach the new loader only through one last
-GHCR publish of a current `main` build — an operator step, from a scratch
-clone at that commit, with a `bwsalmon` classic PAT holding
-`write:packages`:
+alias table -- v3.1.1 and older, every one of which was published only to
+`ghcr.io/bwsalmon/grain/*` -- only ever polls
+`ghcr.io/bwsalmon/grain/grain:<channel>`, whose tags stopped moving when the
+GHCR pipeline broke. It reaches the loader through one last GHCR publish:
+`scripts/ghcr-bridge.sh`, run once per channel by an operator holding a
+`bwsalmon` classic PAT with `write:packages`. It builds nothing. It copies
+images already on Docker Hub registry-side, by digest
+(`docker buildx imagetools create`), and refuses before writing anything
+unless the daemon contains the loader (task 2951) and knows
+`-upgrade-image-source`, and its stamped guest is the `sandbox:sha-<7>` it
+pins. It copies the daemon to `grain`, and the sandbox images to the names
+the old flow used, `guest` and `k8s-sandbox`, under the same tags, and
+checks every copy's digest on GHCR against its source. It deletes nothing.
+
+| Channel an install follows | What it needs | Command |
+| --- | --- | --- |
+| `main` | `:main`, `:sha-<7>` from a current `main` build | `scripts/ghcr-bridge.sh main` (copies `docker.io/grainai/grain:main`) |
+| `latest` (most installs) | `:latest`, `:vX.Y.Z` from the first **promoted** release containing the loader, never a `main` build | `scripts/ghcr-bridge.sh latest vX.Y.Z`, once the train has promoted it: refused unless git tag `vX.Y.Z` contains the loader and `docker.io/grainai/grain:vX.Y.Z` is the digest `docker.io/grainai/grain:latest` names |
+| `candidate` / `rc` | the same release as `latest` | written by the `latest` step: GHCR's `:candidate` has been `v3.1.0`, the same digest as `:latest`, since 2026-11-02, so an install on it is moved no further than `latest` is. Once bridged, it reads `channel-candidate`, which the OSS publisher does not write, and falls back to `docker.io/grainai/grain:candidate` |
+| a pinned `vX.Y.Z`, or auto-upgrade off | nothing pushed | re-run the installer (below) |
+| Kubernetes (`deploy/kubernetes`) | the same `:main` / `:latest` tags | none beyond those: the Kubernetes path upgrades from a registry only (`pkg/upgrade/kube.go`), and once bridged it moves the Deployment onto `docker.io/grainai/grain`. A cluster that mirrors its images follows [Kubernetes](#kubernetes) instead |
+
+From a clone of this repository with its tags fetched:
 
 ```sh
-export RELEASE_IMAGE_REPO=bwsalmon/grain GRAIN_CI_REPO=ai-on-gke/grain \
-  PACKAGE_PUBLISH_REGISTRY=ghcr.io PACKAGE_PUBLISH_USERNAME=bwsalmon \
-  PACKAGE_PUBLISH_TOKEN=<pat>
-GRAIN_CI_REF=main bash scripts/release-images.sh all        # :sha-<7>, :main
-GRAIN_CI_REF=candidate bash scripts/release-images.sh all   # only if an install follows candidate
-# once a release containing the loader is promoted (git tag latest on it):
-bash scripts/release-images.sh promote vX.Y.Z               # :vX.Y.Z, :latest
+git fetch origin --tags
+echo "$PAT" | docker login ghcr.io -u bwsalmon --password-stdin
+DRY_RUN=1 scripts/ghcr-bridge.sh main     # every check, no writes, no login needed
+scripts/ghcr-bridge.sh main
+# once the train has promoted vX.Y.Z (docker.io/grainai/grain:latest is it):
+DRY_RUN=1 scripts/ghcr-bridge.sh latest vX.Y.Z
+scripts/ghcr-bridge.sh latest vX.Y.Z
+docker logout ghcr.io
 ```
 
-Once such an install has upgraded, it reads release assets (and Docker Hub
-as the fallback) and never needs GHCR again.
+Each run prints a row for the record below. Once an install has taken the
+bridge, it never reads GHCR again.
+
+**Pinned installs and installs with auto-upgrade off** have nothing to
+follow. Re-running the installer moves them onto release assets:
+`scripts/setup.sh` on a host install (it installs from this repository's
+release assets and keeps the data directory), or
+`scripts/install-grain.sh -version vX.Y.Z` for the CLI alone.
+
+**Verified, 2026-11-08,** against the `main` build `46ab9012bbc0`
+(`docker.io/grainai/grain:sha-46ab901`, schema 125):
+
+- Real GHCR `v3.1.0` (schema 87, the `latest` baseline) and `v3.0.0`
+  (the floor) images upgraded onto it with their tasks and comments intact
+  (`TestUpgradeFromReleasedVersions` with
+  `GRAIN_UPGRADE_RELEASE_IMAGE=ghcr.io/bwsalmon/grain/grain`).
+- An upgrader configured as a bridged install (`-upgrade-image`
+  `ghcr.io/bwsalmon/grain/grain`, oss track, no source set) defaults to
+  `release-assets` from `github.com/ai-on-gke/grain`, falling back to
+  `docker.io/grainai/grain`. On `main`, it resolved `channel-main`'s schema-2
+  manifest to `sha-46ab9012bbc0`, loaded the daemon and guest tarballs from
+  it, and left its ref file at `docker.io/grainai/grain:main`. On `latest`,
+  GitHub had no latest release yet (v3.1.x carry no `images.json`), so it
+  fell back to the registry, as it will until a promoted release carries a
+  manifest.
+- `scripts/ghcr-bridge.sh main` copied into a stand-in registry kept every
+  digest.
+
+### Last GHCR publish
+
+The bridge is the last thing ever published under `ghcr.io/bwsalmon/grain`.
+Its rows are recorded here as the operator runs it:
+
+| Date (UTC) | Channel | GHCR tags | Commit | `grain` digest | `guest` / `k8s-sandbox` digests |
+| --- | --- | --- | --- | --- | --- |
+| _not yet run_ | `main` | | | | |
+| _waiting for the first promoted release with the loader_ | `latest` | | | | |
