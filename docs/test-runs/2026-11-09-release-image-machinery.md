@@ -34,7 +34,7 @@ Result ([`logs/codex-builds/summary.txt`](2026-11-09-release-image-machinery/log
 | `html200-api` | download 504s, API answers `200 text/html` | ✅ via npm ("has no asset URL") | 1 | 1 | npm binaries, no `codex-release.json` |
 | `html200-all` | every host answers 200 HTML | ❌ digest mismatch | 0 | 0 | — |
 
-The request logs (`logs/codex-builds/*.requests.log`) show:
+The request logs (`logs/codex-builds/{root,k8s-sandbox}-dockerfile-<mode>.requests.log`; build logs beside them as `.build.log`) show:
 - No request carried an `Authorization` header.
 - The healthy path made **no** `api.github.com` call, so it spends none of the 60/hour unauthenticated quota.
 - The API path sent `Accept: application/vnd.github+json` for the release lookup and `Accept: application/octet-stream` for the asset. It followed the 302 to `release-assets.githubusercontent.com`.
