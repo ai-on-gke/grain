@@ -702,9 +702,34 @@ function renderApp(initialPath = "/") {
   );
 }
 
-describe("Grain Registry UI", () => {
+describe("Grain Hub UI", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("brands the header and favicon with the grain mark for the resolved theme", async () => {
+    globalThis.fetch = createFetchMock();
+    const svg = document.createElement("link");
+    svg.id = "favicon";
+    const png = document.createElement("link");
+    png.id = "favicon-png";
+    document.head.append(svg, png);
+    try {
+      localStorage.setItem("grain.themeMode", "dark");
+      const { container } = renderApp("/");
+      const brand = screen.getByRole("button", { name: "Grain Hub" });
+      const mark = container.querySelector(".reg-brand img.reg-brand-mark");
+      expect(brand).toContainElement(mark);
+      expect(mark).toHaveAttribute("src", "/grain-mark-dark.svg");
+      await waitFor(() => {
+        expect(svg.getAttribute("href")).toBe("/grain-mark-dark.svg");
+      });
+      expect(png.getAttribute("href")).toBe("/grain-mark-dark.png");
+    } finally {
+      localStorage.removeItem("grain.themeMode");
+      svg.remove();
+      png.remove();
+    }
   });
 
   it("renders My entries view with quota summary, pending transfer banner, and delete confirmation modal", async () => {
@@ -895,7 +920,7 @@ describe("Grain Registry UI", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByRole("heading", { name: "Registry Administration" }),
+        screen.getByRole("heading", { name: "Hub Administration" }),
       ).toBeInTheDocument();
     });
     expect(
@@ -907,7 +932,7 @@ describe("Grain Registry UI", () => {
     fireEvent.click(screen.getByRole("button", { name: "Status" }));
     await waitFor(() => {
       expect(
-        screen.getByRole("heading", { name: "Registry Service Status" }),
+        screen.getByRole("heading", { name: "Hub Service Status" }),
       ).toBeInTheDocument();
     });
     expect(screen.getByText("*.grain.example.com")).toBeInTheDocument();

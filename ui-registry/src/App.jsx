@@ -24,6 +24,7 @@ import {
   StatusPill,
   ThemeModeToggle,
   formatRelativeAge,
+  useThemeMode,
 } from "@grain/ui-shared";
 import {
   acceptTransfer,
@@ -807,9 +808,7 @@ function MyEntriesView({ me, onNavigateEntry, onNavigateNew, onRefreshMe }) {
           <div className="reg-stat-label">Signed-in Principal</div>
           <div className="reg-stat-value">{me?.email || "anonymous"}</div>
           <div className="reg-stat-meta">
-            {me?.is_registry_admin
-              ? "Registry administrator"
-              : "Standard creator"}
+            {me?.is_registry_admin ? "Hub administrator" : "Standard creator"}
           </div>
         </div>
       </div>
@@ -856,7 +855,7 @@ function MyEntriesView({ me, onNavigateEntry, onNavigateNew, onRefreshMe }) {
         <div className="reg-card">Loading your entries...</div>
       ) : (
         <SortableTable
-          emptyMessage="You do not own or co-own any registry entries yet."
+          emptyMessage="You do not own or co-own any hub entries yet."
           rowKey={(e) => e.name}
           rows={entries}
           columns={[
@@ -1245,7 +1244,7 @@ function CreateRegisterView({
               <div className="reg-banner reg-banner-warning">
                 <span>
                   <strong>One-time registration token (`grc_…`):</strong> Save
-                  this token now; the registry stores only its SHA-256 hash and
+                  this token now; the hub stores only its SHA-256 hash and
                   cannot display it again.
                 </span>
               </div>
@@ -1297,8 +1296,8 @@ function CreateRegisterView({
         >
           <div className="reg-mode-title">Hosted VM (instance)</div>
           <div className="reg-mode-desc">
-            Provision a dedicated GCE VM and Cloud SQL database managed by
-            grain-registry and routed over private VPC HTTP.
+            Provision a dedicated GCE VM and Cloud SQL database managed by the
+            hub and routed over private VPC HTTP.
           </div>
         </button>
       </div>
@@ -1890,7 +1889,7 @@ function EntryDetailView({
     return (
       <EmptyState
         title={`Entry "${entryName}" not found`}
-        description={error || "The requested registry entry does not exist."}
+        description={error || "The requested hub entry does not exist."}
         action={
           <button type="button" className="gs-btn" onClick={onBack}>
             Back to entries
@@ -3034,9 +3033,7 @@ function AdminView({ onNavigateEntry }) {
 
   if (loading && !summary) {
     return (
-      <div className="reg-card">
-        Loading registry administration overview...
-      </div>
+      <div className="reg-card">Loading hub administration overview...</div>
     );
   }
 
@@ -3045,7 +3042,7 @@ function AdminView({ onNavigateEntry }) {
   return (
     <div>
       <PageHeader
-        title="Registry Administration"
+        title="Hub Administration"
         subtitle="Inspect active outbound tunnels per replica, organization-wide entries, owners & quotas, scope conflicts, shared Cloud SQL pool, orphan VMs, retention recovery, delegating apps, and control-plane audit logs."
       />
 
@@ -3473,10 +3470,10 @@ function AdminView({ onNavigateEntry }) {
 
       <section className="reg-section reg-card">
         <h2 className="reg-section-title">
-          All Registry Entries & Retention Recovery ({allEntries.length})
+          All Hub Entries & Retention Recovery ({allEntries.length})
         </h2>
         <SortableTable
-          emptyMessage="No entries in registry."
+          emptyMessage="No entries in the hub."
           rowKey={(e) => e.name}
           rows={allEntries}
           columns={[
@@ -3616,7 +3613,7 @@ function AdminView({ onNavigateEntry }) {
         <p className="reg-section-desc">
           Register and govern machine service accounts permitted to act on
           behalf of consenting users via <code>X-Grain-Act-As</code>. Enter a
-          bare service-account email; the registry normalizes and stores{" "}
+          bare service-account email; the hub normalizes and stores{" "}
           <code>serviceAccount:&lt;email&gt;</code>.
         </p>
 
@@ -4136,7 +4133,7 @@ function AppsActingForYouView({ onNavigateEntry }) {
                 required
               />
               <span className="reg-hint">
-                Short app name registered by a registry administrator.
+                Short app name registered by a hub administrator.
               </span>
             </div>
 
@@ -4427,7 +4424,7 @@ function StatusView() {
   return (
     <div>
       <PageHeader
-        title="Registry Service Status"
+        title="Hub Service Status"
         subtitle="Control-plane health, active replica heartbeats, fleet version distribution, and VM shape catalog."
       />
 
@@ -4463,8 +4460,7 @@ function StatusView() {
             {statusData?.active_tunnels ?? 0}
           </div>
           <div className="reg-stat-meta">
-            Across {(statusData?.replicas || []).length} active registry
-            replicas
+            Across {(statusData?.replicas || []).length} active hub replicas
           </div>
         </div>
         <div className="reg-stat-card">
@@ -4472,14 +4468,12 @@ function StatusView() {
           <div className="reg-stat-value reg-mono">
             *.{statusData?.instance_domain || "grain.example.com"}
           </div>
-          <div className="reg-stat-meta">
-            Host: {statusData?.host || "registry"}
-          </div>
+          <div className="reg-stat-meta">Host: {statusData?.host || "hub"}</div>
         </div>
       </div>
 
       <section className="reg-section">
-        <h2 className="reg-section-title">Registry Replicas</h2>
+        <h2 className="reg-section-title">Hub Replicas</h2>
         <SortableTable
           emptyMessage="No replicas registered."
           rowKey={(r) => r.replica_id}
@@ -4573,6 +4567,32 @@ function StatusView() {
   );
 }
 
+// HubMark is the grain mark, the same still files the grain instance UI
+// draws in its sidebar and tab (ui/public/grain-mark-*.svg, served here
+// too through vite.config.js's publicDir). It follows the resolved theme:
+// bronze on a light ground, wheat on a dark one, and swaps the favicon
+// hrefs in index.html to match, as ui/src/AppThemeProvider.jsx does.
+function HubMark() {
+  const { resolvedMode } = useThemeMode();
+  const mode = resolvedMode === "dark" ? "dark" : "light";
+  useEffect(() => {
+    const svg = document.getElementById("favicon");
+    if (svg) svg.href = `/grain-mark-${mode}.svg`;
+    const png = document.getElementById("favicon-png");
+    if (png) png.href = `/grain-mark-${mode}.png`;
+  }, [mode]);
+  return (
+    <img
+      className="reg-brand-mark"
+      src={`/grain-mark-${mode}.svg`}
+      alt=""
+      aria-hidden="true"
+      width={28}
+      height={28}
+    />
+  );
+}
+
 export default function App() {
   const [route, setRoute] = useState(() =>
     parseRouteFromPathname(
@@ -4632,12 +4652,10 @@ export default function App() {
               className="reg-brand"
               onClick={() => navigate("/")}
             >
-              <span className="reg-brand-mark" aria-hidden="true">
-                G
-              </span>
-              <span>Grain Registry</span>
+              <HubMark />
+              <span>Grain Hub</span>
             </button>
-            <nav className="reg-nav" aria-label="Registry navigation">
+            <nav className="reg-nav" aria-label="Hub navigation">
               <button
                 type="button"
                 className={

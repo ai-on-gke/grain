@@ -152,7 +152,7 @@ test("serves embedded ui-registry under strict CSP and walks through all views w
   // 6. Admin (/admin) + Delegating Apps controls
   await page.getByRole("button", { name: "Admin" }).click();
   await expect(
-    page.getByRole("heading", { name: "Registry Administration" }),
+    page.getByRole("heading", { name: "Hub Administration" }),
   ).toBeVisible();
   await expect(
     page.getByText("registry-us-central1-a-01").first(),
@@ -188,7 +188,7 @@ test("serves embedded ui-registry under strict CSP and walks through all views w
   // 7. Status (/status)
   await page.getByRole("button", { name: "Status" }).click();
   await expect(
-    page.getByRole("heading", { name: "Registry Service Status" }),
+    page.getByRole("heading", { name: "Hub Service Status" }),
   ).toBeVisible();
   await expect(page.getByText("*.grain.example.com")).toBeVisible();
 
