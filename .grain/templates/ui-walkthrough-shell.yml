@@ -9,8 +9,9 @@ body: |
 
   ## Coverage
 
-  - At representative desktop, iPad/tablet and narrow phone widths, use
-    the real navigation controls to visit Inbox, the task
+  - At representative desktop, iPad/tablet and narrow phone widths
+    (including resizing between desktop and phone viewports), use the
+    real navigation controls to visit Inbox, the task
     list/detail/new-task screens, Boards and each major visualization,
     Sessions and a session, Repos and a repo's tabs, Processes, CI,
     every Settings section group and every System tab (Metrics
@@ -20,30 +21,41 @@ body: |
     `settings / <section>`, `system / <tab>`, `task <id>`), then the
     page's own count, search and filters on the left and its actions
     ("New", "Add repo", "New board") at the right, then the global
-    alerts bell, System and Settings buttons (plus the signed-in email
-    badge and its Access settings / Log out menu when behind verified
-    identity) at the very end, none of them hidden or clipped. When the
+    alerts bell, System (with its unbacked-config-repo dot) and Settings
+    buttons at the very end, none of them hidden or clipped. When the
     page's row does not fit, the "More page actions" button opens the
-    rest as a menu (closing on Escape and outside presses) rather than
-    the rail growing a second row; counts sit level with the title. There
-    is no team, team switcher, Admin mode switch or "All teams" anywhere,
+    rest as a menu (opening automatically on `Tab` into a wrapped action,
+    and closing on Escape, focus-out and outside presses) rather than the
+    rail growing a second row; counts sit level with the title. There is
+    no team, team switcher, Admin mode switch or "All teams" anywhere,
     and an old `/t/<team>/...` link opens its team-less page.
-  - On a phone: the bar (menu, grain mark, alerts bell, Settings and New
-    task, with the page title heading below the bar) and the navigation
-    drawer, a modal dialog that keeps itself open for the create menu,
-    staging-pin taps and Customize pinned items and closes on navigation,
-    with the System row and the build stamp at its foot.
+  - On a phone: the bar (menu, grain mark, environment chip when set,
+    alerts bell, Settings and New task, plus the slim stale-tasks retry
+    row beneath the controls when `/api/tasks` stops refreshing, with the
+    page title heading below the bar) and the navigation drawer, a modal
+    dialog that keeps itself open for the create menu, staging-pin taps
+    and Customize pinned items and closes on click/keyboard navigation,
+    with the System row, `Signed in as <email>` (opening Settings →
+    Access) with `Log out` stacked underneath so the full address fits,
+    and the build stamp at its foot.
   - The rail: Collapse sidebar / Expand sidebar and the `[` keyboard
     shortcut (persisted across reloads, and ignored while typing into a
     field), the create menu (New task, New session, New board), pinned
-    items and Customize, Tasks with its active state views and Blocked
-    counts, Boards and pinned Sessions (with `/sessions` opening the full
-    list), Processes and Repos with their counts, CI, the Staging list of
+    items and Customize (updating other open tabs), Tasks with its active
+    state views, Blocked counts and `"not refreshing"` stale notice,
+    Boards and pinned Sessions (with `/sessions` opening the full list),
+    Processes and Repos with their counts, CI, the Staging list of
     staging environments (each linked to its host port or `/staging/`
     sub-path, pinnable, and marked when the port is not reachable through
-    this proxy), and the build stamp linked to Settings → Upgrade.
+    this proxy), the `UserTile` at the foot of the rail (`GET /api/whoami`
+    label -- verified email, or `operator` with `(access code)` /
+    `(local)` -- opening Settings → Access, folded to an icon with
+    tooltip when collapsed, plus compact `Log out` when behind verified
+    identity), and the build stamp linked to Settings → Upgrade.
   - Verify rail and drawer behaviour, selected state and counts, the
-    banners (the disconnected banner and the host-mode install notice
+    banners (the disconnected banner -- including when a daemon accepts
+    or holds connections without answering, and clearing without a reload
+    once it answers again -- and the host-mode install notice
     together, and the error snackbar above them) and the alerts panel
     staying off a phone's edge, tab-strip scrolling, overlay sizing and
     back controls, sticky actions, nested scrolling, long
@@ -52,27 +64,39 @@ body: |
     controls, no overlap, no horizontal page overflow, no clipped footer
     or build stamp, and no accidental background scrolling.
   - Exercise the mouse, keyboard-only and coarse-pointer/touch paths,
+    role-gated shell rendering for a viewer role without write scopes,
     and the WebKit path where it is supported. Check focus restoration
-    (including when a declined discard prompt hands focus back), Escape
-    and back behaviour, accessible names, confirmation dialogs, and
-    reduced-motion, dark and light rendering.
+    (including when `Escape` closes an inner menu like `Add grant…`
+    without closing the overlay, and when a declined discard prompt hands
+    focus back), Escape and back behaviour, accessible names,
+    confirmation dialogs, and reduced-motion (session typing dots held
+    still), dark and light WCAG AA contrast rendering.
   - Sessions (`/sessions`) and interactive task chat: New session (from
-    the create menu and the Sessions page) opens an empty chat with the
-    composer focused, a Session name field, the model to run on and Pin
-    to sidebar; send the first message and confirm the session is named,
-    pinned if asked, and lit in the rail. Open and direct-link sessions
-    (`/director` included, and a deep link to a deleted session, which
-    lists the sessions rather than another's chat), send and render
+    the create menu and the Sessions page, keeping `Send` reachable on
+    short phones) opens an empty chat with the composer focused, a
+    Session name field, the model to run on and Pin to sidebar; send the
+    first message (and queue follow-up sends or drafts while it starts)
+    and confirm the first message shows immediately as sending, queued
+    sends and drafts carry into the opened session, and the session is
+    named, pinned if asked, and lit in the rail. Open and direct-link
+    sessions (`/director` included, a failed `/api/console-sessions` read
+    reporting the load error on `/sessions` rather than an empty state,
+    and a deep link to a deleted session,
+    which lists the sessions rather than another's chat), send and render
     messages and markdown (confirming optimistic sending bubbles,
-    back-to-back queued sends, failed-send retry, and inline config-repo
-    change approval cards), inspect status/reconnect/exit behaviour and
-    the work tree of what the session filed, edit a standing session's
-    live capabilities/repos/network/model controls (confirming the
-    next-run notice and stop-open-run offer when a run is in flight),
-    exercise Start a fresh chat (with and without summary handover when
-    offered) and Delete with its confirmation, exercise Pause and Resume
-    on a task-bound interactive chat, switch sessions, and verify that
-    the rail updates.
+    back-to-back queued sends, failed-send retry, and inline
+    `request_access`, local-script and config-repo change approval
+    cards), inspect status/reconnect/exit behaviour and the work tree of
+    what the session filed, edit a standing session's live
+    capabilities/repos/network/model controls (confirming default
+    read-all working repos and CI, `Adopt shipped defaults` when Tier 1
+    defaults are missing, stale-tab conflict retry, the warning when
+    `"none"` network cannot be honoured, and the next-run notice and
+    stop-open-run offer when a run is in flight), exercise Start a fresh
+    chat (with and without summary handover when offered) and Delete with
+    its confirmation (confirming deleting a pinned session removes its
+    sidebar pin), exercise Pause and Resume on a task-bound interactive
+    chat, switch sessions, and verify that the rail updates.
   - The demo may not provide session managers, live streams, banners or
     device metrics. Intercept only those external or live boundaries,
     with realistic incremental, disconnect, empty and error states; keep
