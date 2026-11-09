@@ -453,6 +453,12 @@ describe("internalPullRequestUrl", () => {
       internalPullRequestUrl("acme/widgets", "grain/task-12", "release/v1"),
     ).toBe("/repos/acme/widgets/compare/release/v1...grain/task-12");
   });
+
+  it("escapes what a branch name can carry and a path cannot", () => {
+    expect(internalPullRequestUrl("acme/widgets", "fix/#123", "main")).toBe(
+      "/repos/acme/widgets/compare/main...fix/%23123",
+    );
+  });
 });
 
 describe("repoUrl", () => {
