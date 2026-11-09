@@ -197,3 +197,22 @@ func TestGrainLoginIssueTokenSelfServiceNonAdminAndLogoutRevokes(t *testing.T) {
 		t.Errorf("whoami with an expired token = %v", err)
 	}
 }
+
+// A server URL carrying userinfo (http://user:pass@host) is kept as given
+// in config.json (0600), but `grain login` never prints the password back
+// (docs/test-runs/2026-11-08-cli-install-skill-mcp.md).
+func TestGrainLoginDoesNotEchoURLUserinfo(t *testing.T) {
+	ts, _ := loginServer(t)
+	withUserinfo := strings.Replace(ts.URL, "http://", "http://u5er:pa55w0rd@", 1)
+	out := captureStdout(t, func() {
+		if err := runCLI([]string{"login", withUserinfo, "--name", "team", "--auth", "test-sso", "--issue-token", "--expires", "7d"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if strings.Contains(out, "pa55w0rd") || strings.Contains(out, "u5er") {
+		t.Fatalf("login printed the URL's userinfo: %q", out)
+	}
+	if !strings.Contains(out, "signed in to "+ts.URL+" as context team") {
+		t.Fatalf("login output = %q, want the scrubbed server URL", out)
+	}
+}

@@ -161,13 +161,18 @@ var releaseTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 // tag (someone pinning a build they care about, a mirror's own name)
 // outlives a rule that has never heard of it, and the cost of the
 // mistake is disk rather than an image somebody was relying on.
+//
+// The spellings that mean the same thing on every package are read
+// first, base package included. sandbox-base is no longer only a cache:
+// scripts/release-images.sh publishes it beside sandbox and grain with
+// the same `latest`, v<x>.<y>.<z>, sha-<short>, branch and cosign
+// signature tags. Reading every non-hash tag on it as KindBranch put
+// the promoted `sandbox-base:latest` and `:v3.1.0` up for deletion two
+// days after promotion (no branch is called `latest`), while the
+// matching grain, sandbox and sandbox-k8s versions were kept, and left
+// its sha- tags out of the -keep-commits ranking. Only a bare hex tag
+// on a base package is its granule cache key (KindBase).
 func classify(pkg, tag string) TagKind {
-	if isBasePackage(pkg) {
-		if hashTag.MatchString(tag) {
-			return KindBase
-		}
-		return KindBranch
-	}
 	switch {
 	case sigTag.MatchString(tag):
 		return KindSignature
@@ -179,6 +184,8 @@ func classify(pkg, tag string) TagKind {
 		return KindCommit
 	case inputsTag.MatchString(tag):
 		return KindInputs
+	case isBasePackage(pkg) && hashTag.MatchString(tag):
+		return KindBase
 	default:
 		return KindBranch
 	}

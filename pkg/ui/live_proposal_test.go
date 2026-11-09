@@ -143,6 +143,62 @@ func TestLiveProposalWithNoBaseFromAParentFiledOnTheDefaultBranchIsQueued(t *tes
 	}
 }
 
+// A live proposal held only because it lands off its auto-merge parent's
+// branch says so, as the end-of-run relay's identical proposal does
+// (model.OtherBranchQueueNote) -- the relay skips one filed live, so the
+// note is CreateTask's to write. One on the parent's branch is queued with
+// no note (docs/test-runs/2026-11-08-attribution-external-rails.md F2).
+func TestLiveProposalHeldOnlyForItsBranchSaysWhy(t *testing.T) {
+	client, _, ctx := testClient(t)
+	client.Config.GitHubDefaultBranches = fakeDefaultBranches{"acme/widgets": "trunk"}
+	// AutoMerge on each proposal is what the daemon's propose_task passes
+	// for an auto-merge parent (pkg/daemon/mcpserver.go); CreateTask caps it.
+	onRelease, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "release fixer", Approved: true, Repo: "acme/widgets", Base: "release/v1", AutoMerge: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "on trunk", Description: "do it", ProposedBy: onRelease.ID, AutoMerge: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held.State != model.StateProposed || held.AutoMerge {
+		t.Errorf("state = %s, autoMerge = %v, want proposed without auto-merge", held.State, held.AutoMerge)
+	}
+	if !strings.Contains(held.Description, "grain: task "+onRelease.ID+", which proposed this, may queue") ||
+		!strings.Contains(held.Description, "`release/v1` in `acme/widgets`") ||
+		!strings.Contains(held.Description, "the default branch of `acme/widgets`") {
+		t.Errorf("description = %q, want the [grain] note naming release/v1 and the default branch", held.Description)
+	}
+
+	onTrunk, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "trunk fixer", Approved: true, Repo: "acme/widgets", Base: "trunk", AutoMerge: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "also trunk", Description: "do it", ProposedBy: onTrunk.ID, AutoMerge: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued.State != model.StateQueued || !queued.AutoMerge || queued.Base != "" {
+		t.Errorf("state = %s, autoMerge = %v, base = %q, want queued with auto-merge and base \"\"", queued.State, queued.AutoMerge, queued.Base)
+	}
+	if strings.Contains(queued.Description, "may queue the work it splits out") {
+		t.Errorf("description = %q, want no landing note on a queued proposal", queued.Description)
+	}
+
+	// hold_for_approval says why itself; the landing note is not added on top.
+	asked, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "held anyway", Description: "do it", ProposedBy: onRelease.ID, HoldForApproval: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(asked.Description, "may queue the work it splits out") {
+		t.Errorf("description = %q, want no landing note on a hold_for_approval proposal", asked.Description)
+	}
+}
+
 // And a task nobody trusted with an unreviewed merge passes on neither
 // half of it, which is the ordinary case and the one that keeps
 // propose_task's contract intact for every deployment that never turns

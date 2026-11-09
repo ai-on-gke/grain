@@ -1,0 +1,32 @@
+=== boot (postgres) ===
+daemon 49081 on 127.0.0.1:4493 (postgres), githubsim on 127.0.0.1:4503
+jq: error (at <stdin>:1): Cannot iterate over null (null)
+acme/widgets                   allowlisted  no tasks
+PASS: watcher polled acme/widgets (ci_mode unset, no .grain/workflows) once repo was added
+acme/widgets
+=== 3A. v1.4.0-pending approved from the CLI before the watcher's next poll ===
+approve #1 rc=2: grain: v1.4.0 was already answered: debian dispatched promote-release.yml for it at 2026-11-08T22:52:42Z; watch that run rather than starting another
+approve #2 rc=0: approved v1.4.0: promote-release is tagging it and moving latest onto it
+dispatched acme/widgets's promote-release.yml on main for v1.4.0 (v1.4.0-pending at 5cde2dcc3f02), signed for debian
+PASS: exactly one of two concurrent approves succeeded
+note: watcher polled in between
+PASS: promote-release.yml dispatched once for v1.4.0
+PASS: a third approve is refused: grain: v1.4.0 was already answered: debian dispatched promote-release.yml for it at 2026-11-08T22:52:42Z; watch that run rather than starting another
+tick 1 (restart): release.pending:v1.4.0 open=0 dispatches=1
+tick 2 (restart): release.pending:v1.4.0 open=0 dispatches=1
+tick 3 (restart): release.pending:v1.4.0 open=0 dispatches=1
+PASS: release.pending:v1.4.0 never raised across 3 watcher polls / restarts
+PASS: still one promote-release.yml dispatch for v1.4.0 after restarts
+PASS: approve after restart refused: grain: v1.4.0 was already answered: debian dispatched promote-release.yml for it at 2026-11-08T22:52:42Z; watch that run rather than starting another
+=== 3B. v1.4.1-pending raised by the watcher first, then approved ===
+PASS: watcher raised release.pending:v1.4.1
+{"subject":"release.pending:v1.4.1","title":"v1.4.1 is ready to promote","severity":"warning"}
+
+PASS: CLI approve of v1.4.1: approved v1.4.1: promote-release is tagging it and moving latest onto it
+dispatched acme/widgets's promote-release.yml on main for v1.4.1 (v1.4.1-pending at 5cde2dcc3f02), signed for debian
+PASS: release.pending:v1.4.1 cleared on approve
+PASS: release.pending:v1.4.1 did not re-raise across 2 more polls / restarts (tag still on the remote)
+PASS: one promote-release.yml dispatch for v1.4.1
+{"workflow":"promote-release.yml","ref":"main","version":"v1.4.0","decision":"approve"}
+{"workflow":"promote-release.yml","ref":"main","version":"v1.4.1","decision":"approve"}
+item3 (postgres): 12 passed, 0 failed

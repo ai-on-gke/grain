@@ -980,21 +980,8 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 						"type": "string",
 					},
 				},
-				"capabilities": map[string]any{
-					"type": "array",
-					"items": map[string]any{"anyOf": []any{
-						map[string]any{"type": "string"},
-						map[string]any{
-							"type": "object",
-							"properties": map[string]any{
-								"capability": map[string]any{"type": "string"},
-								"with":       map[string]any{"type": "object"},
-							},
-							"required":             []string{"capability"},
-							"additionalProperties": false,
-						},
-					}},
-				},
+				"capabilities":      map[string]any{"type": "array", "items": map[string]any{}},
+				"grants":            map[string]any{"type": "array", "items": map[string]any{}},
 				"model":             map[string]any{"type": "string"},
 				"agent_framework":   map[string]any{"type": "string"},
 				"not_before":        map[string]any{"type": "string"},
@@ -1071,7 +1058,7 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 				}
 				designs = append(designs, raw)
 			}
-			model, _ := argString(args, "model")
+			modelName, _ := argString(args, "model")
 			agentFramework, _ := argString(args, "agent_framework")
 			var notBefore *time.Time
 			if raw, _ := argString(args, "not_before"); strings.TrimSpace(raw) != "" {
@@ -1089,6 +1076,36 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 			capabilities, err := argCapabilities(args, "capabilities")
 			if err != nil {
 				return Result{Text: err.Error(), IsError: true}
+			}
+			reads := argStringSlice(args, "reads")
+			writes := argWrites(args, "writes")
+			decodedGrants, hasGrants, err := model.DecodeRawRequestGrants(args["grants"], model.GrantSpelling{
+				Capabilities: args["capabilities"] != nil,
+				Reads:        args["reads"] != nil,
+				Writes:       args["writes"] != nil,
+				Target:       strings.TrimSpace(repo) != "" || strings.TrimSpace(branch) != "" || noRepo || changeTarget != nil,
+			})
+			if err != nil {
+				return Result{Text: err.Error(), IsError: true}
+			}
+			if hasGrants {
+				if decodedGrants.Capabilities != nil {
+					capabilities = decodedGrants.Capabilities
+				}
+				for _, r := range decodedGrants.Reads {
+					reads = append(reads, r.String())
+				}
+				for _, w := range decodedGrants.Writes {
+					writes = append(writes, WriteTarget{Repo: w.Repo.String(), Base: w.Base})
+				}
+				if decodedGrants.Target != nil {
+					repo = decodedGrants.Target.Repo.String()
+					branch = decodedGrants.Target.Base
+				}
+			}
+			if changeTarget != nil && len(writes) > 0 {
+				return Result{Text: fmt.Sprintf("%s cannot be combined with writes: a %s task's change is a CL in a %s workspace, "+
+					"with no git repository, branch, pull request or base branch", changeTarget.Kind, changeTarget.Kind, changeTarget.Kind), IsError: true}
 			}
 			if err := refuseReviewOfGrants(capabilities); err != nil {
 				return Result{Text: err.Error(), IsError: true}
@@ -1109,9 +1126,9 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 				DependsOn:           argStringSlice(args, "depends_on"),
 				Capabilities:        capabilities,
 				CustomFields:        argCustomFields(args, "custom_fields"),
-				Reads:               argStringSlice(args, "reads"),
+				Reads:               reads,
 				Designs:             designs,
-				Writes:              argWrites(args, "writes"),
+				Writes:              writes,
 				ReviewTemplateID:    strings.TrimSpace(reviewTemplateID),
 				SandboxCPUs:         cpus,
 				SandboxMemoryMB:     memoryMB,
@@ -1119,7 +1136,7 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 				NetworkAccess:       networkAccess,
 				NothingNeededAction: strings.TrimSpace(nothingNeeded),
 				Goal:                goal,
-				Model:               strings.TrimSpace(model),
+				Model:               strings.TrimSpace(modelName),
 				AgentFramework:      strings.TrimSpace(agentFramework),
 				NotBefore:           notBefore,
 			}

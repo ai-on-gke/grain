@@ -1146,6 +1146,22 @@ describe("Grain Registry UI", () => {
       fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
       expect(calls).toEqual([]);
 
+      // Escape cancels too: the dialog opens with focus on Cancel, Escape
+      // closes it without a request, and focus returns to the Stop button.
+      const stopButton = screen.getByRole("button", {
+        name: "Stop platform-vm",
+      });
+      stopButton.focus();
+      fireEvent.click(stopButton);
+      dialog = await screen.findByRole("dialog");
+      expect(
+        within(dialog).getByRole("button", { name: "Cancel" }),
+      ).toHaveFocus();
+      fireEvent.keyDown(document.activeElement, { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(stopButton).toHaveFocus();
+      expect(calls).toEqual([]);
+
       fireEvent.click(screen.getByRole("button", { name: "Stop platform-vm" }));
       dialog = await screen.findByRole("dialog");
       fireEvent.click(
