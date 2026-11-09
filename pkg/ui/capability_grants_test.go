@@ -546,6 +546,37 @@ func TestSetCapabilityGrantRefusesAGrantThePolicyDenies(t *testing.T) {
 	}
 }
 
+// The listing for a repository's CI capabilities names no trigger event,
+// since the list grants to every job the repository runs: a method whose
+// own server hands it only to release jobs is not refused there, as it
+// was when the listing judged an event-less run and the picker disabled
+// every release method (2026-11-09 repository walkthrough). A task is
+// still refused it.
+func TestCapabilityMethodsForCIDoNotRefuseAnEventGatedMethod(t *testing.T) {
+	ts, _ := grantTestServer(t)
+	t.Cleanup(model.RegisterCIGrantRule(grantTestCap+"#key", model.CIGrantRule{Events: []string{"release"}, RepoGranted: true}))
+	refusal := func(path string) string {
+		t.Helper()
+		var methods []ui.CapabilityMethod
+		if code := postJSON(t, ts, "GET", path, nil, &methods); code != 200 {
+			t.Fatalf("GET %s: %d", path, code)
+		}
+		for _, m := range methods {
+			if m.Method == "key" {
+				return m.PolicyRefusal
+			}
+		}
+		t.Fatalf("GET %s listed no key method", path)
+		return ""
+	}
+	if got := refusal("/api/capability-methods?repo=acme/widgets&kind=ci"); got != "" {
+		t.Errorf("acme/widgets CI: %q, want the release-only method offered", got)
+	}
+	if got := refusal("/api/capability-methods?repo=acme/widgets&kind=task"); !strings.Contains(got, "CI capability") {
+		t.Errorf("acme/widgets task: %q, want the CI-only refusal", got)
+	}
+}
+
 // The method listing asked for one run says which methods the policy
 // denies it, and why; one that names no run says nothing about policy.
 func TestCapabilityMethodsMarkWhatThePolicyDenies(t *testing.T) {

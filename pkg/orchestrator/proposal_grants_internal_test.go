@@ -15,10 +15,13 @@
 package orchestrator
 
 import (
+	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -152,5 +155,189 @@ func TestRelayProposedTasksUnifiedGrantsEquivalenceAndNormalization(t *testing.T
 	}
 	if len(bareLegacy.Grants) != 1 || bareLegacy.Grants[0].Capability != "self-repair" || bareLegacy.Grants[0].Via != model.GrantByLabel {
 		t.Errorf("bare-legacy-cap Grants = %+v, want [{Capability:self-repair Via:label}]", bareLegacy.Grants)
+	}
+}
+
+func TestRelayProposedTasksAgreesWithCallTimeRefusalsAndFieldNames(t *testing.T) {
+	captured := logToTest(t)
+	t.Cleanup(model.RegisterChangeTarget(model.ChangeTargetRegistration{Kind: "monorepo"}))
+
+	store, ctx := openTreeStore(t)
+	now := time.Date(2026, 11, 9, 7, 0, 0, 0, time.UTC)
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: widgets}); err != nil {
+		t.Fatal(err)
+	}
+	parent := model.Task{
+		ID:     "20",
+		Title:  "Walkthrough parent",
+		Body:   "Parent task",
+		Target: &widgets,
+		Base:   "main",
+	}
+	if err := store.PutTask(ctx, parent); err != nil {
+		t.Fatal(err)
+	}
+
+	var proposeTool mcp.Tool
+	for _, tool := range mcp.NewMockTools(&mcp.MockSink{}, nil) {
+		if tool.Name == "propose_task" {
+			proposeTool = tool
+			break
+		}
+	}
+	if proposeTool.Handler == nil {
+		t.Fatal("missing propose_task in NewMockTools")
+	}
+
+	target := map[string]any{
+		"capability": model.RepoTargetRef,
+		"with":       map[string]any{"repo": "acme/widgets", "base": "main"},
+	}
+	read := map[string]any{
+		"capability": model.RepoReadRef,
+		"with":       map[string]any{"repo": "acme/widgets"},
+	}
+	write := map[string]any{
+		"capability": model.RepoWriteRef,
+		"with":       map[string]any{"repo": "acme/widgets", "base": "main"},
+	}
+
+	refusedShapes := []struct {
+		name    string
+		extra   map[string]any
+		wantErr string
+		wantLog string
+	}{
+		{
+			name:    "base + repo#target (undeclared argument)",
+			extra:   map[string]any{"base": "main", "grants": []any{target}},
+			wantErr: `unknown argument "base" (did you mean "branch"?)`,
+			wantLog: `skipping proposed task with invalid arguments: propose_task: unknown argument "base" (did you mean "branch"?)`,
+		},
+		{
+			name:    "base without grants (undeclared argument)",
+			extra:   map[string]any{"base": "release/v3.2.0"},
+			wantErr: `unknown argument "base" (did you mean "branch"?)`,
+			wantLog: `skipping proposed task with invalid arguments: propose_task: unknown argument "base" (did you mean "branch"?)`,
+		},
+		{
+			name:    "writes entry with branch instead of base",
+			extra:   map[string]any{"writes": []any{map[string]any{"repo": "acme/widgets", "branch": "main"}}},
+			wantErr: `writes[0]: unknown field "branch" (did you mean "base"?)`,
+			wantLog: `skipping proposed task with invalid arguments: propose_task: writes[0]: unknown field "branch" (did you mean "base"?)`,
+		},
+		{
+			name:    "capabilities + empty grants",
+			extra:   map[string]any{"capabilities": []any{"api:ci-read"}, "grants": []any{}},
+			wantErr: "grants: grants and capabilities both name capability grants; send one",
+			wantLog: "skipping proposed task with invalid grants: grants: grants and capabilities both name capability grants; send one",
+		},
+		{
+			name:    "reads: [] + repo#read",
+			extra:   map[string]any{"reads": []any{}, "grants": []any{read}},
+			wantErr: "grants: https://grain.dev/capabilities/repo#read and reads both name read access; send one",
+			wantLog: "skipping proposed task with invalid grants: grants: https://grain.dev/capabilities/repo#read and reads both name read access; send one",
+		},
+		{
+			name:    "writes: [] + repo#write",
+			extra:   map[string]any{"writes": []any{}, "grants": []any{write}},
+			wantErr: "grants: https://grain.dev/capabilities/repo#write and writes both name write targets; send one",
+			wantLog: "skipping proposed task with invalid grants: grants: https://grain.dev/capabilities/repo#write and writes both name write targets; send one",
+		},
+		{
+			name:    "repo + repo#target",
+			extra:   map[string]any{"repo": "acme/widgets", "grants": []any{target}},
+			wantErr: "grants: https://grain.dev/capabilities/repo#target and the request's repo field both name the task's repository; send one",
+			wantLog: "skipping proposed task with invalid grants: grants: https://grain.dev/capabilities/repo#target and the request's repo field both name the task's repository; send one",
+		},
+		{
+			name:    "branch + repo#target",
+			extra:   map[string]any{"branch": "main", "grants": []any{target}},
+			wantErr: "grants: https://grain.dev/capabilities/repo#target and the request's branch field both name the task's repository; send one",
+			wantLog: "skipping proposed task with invalid grants: grants: https://grain.dev/capabilities/repo#target and the request's branch field both name the task's repository; send one",
+		},
+		{
+			name:    "no_repo + repo#target",
+			extra:   map[string]any{"no_repo": true, "grants": []any{target}},
+			wantErr: "grants: https://grain.dev/capabilities/repo#target and the request's no_repo field both name the task's repository; send one",
+			wantLog: "skipping proposed task with invalid grants: grants: https://grain.dev/capabilities/repo#target and the request's no_repo field both name the task's repository; send one",
+		},
+		{
+			name:    "change target + repo#target",
+			extra:   map[string]any{"monorepo": map[string]any{}, "grants": []any{target}},
+			wantErr: "grants: https://grain.dev/capabilities/repo#target and the request's monorepo field both name the task's repository; send one",
+			wantLog: "skipping proposed task with invalid grants: grants: https://grain.dev/capabilities/repo#target and the request's monorepo field both name the task's repository; send one",
+		},
+		{
+			name:    "change target + repo#write in grants",
+			extra:   map[string]any{"monorepo": map[string]any{}, "grants": []any{write}},
+			wantErr: "monorepo cannot be combined with writes",
+			wantLog: "skipping proposed task with invalid grants: monorepo cannot be combined with writes",
+		},
+		{
+			name:    "non-list grants",
+			extra:   map[string]any{"grants": "api:ci-read"},
+			wantErr: "grants must be a list",
+			wantLog: "skipping proposed task with invalid grants: grants must be a list",
+		},
+		{
+			name:    "duplicate repo#target",
+			extra:   map[string]any{"grants": []any{target, target}},
+			wantErr: "grants: more than one https://grain.dev/capabilities/repo#target",
+			wantLog: "skipping proposed task with invalid grants: grants: more than one https://grain.dev/capabilities/repo#target",
+		},
+	}
+
+	// Pass IsError: false on every ToolCall to exercise relayProposedTasks' own
+	// guards (matching harnesses/streams that omit isError on tool steps).
+	var calls []agent.ToolCall
+	for _, tc := range refusedShapes {
+		args := map[string]any{
+			"title": "refused: " + tc.name,
+			"body":  "should not be filed",
+		}
+		for k, v := range tc.extra {
+			args[k] = v
+		}
+		res := proposeTool.Handler(context.Background(), args)
+		if !res.IsError || !strings.Contains(res.Text, tc.wantErr) {
+			t.Errorf("%s (call-time): got isError=%v %q, want substring %q", tc.name, res.IsError, res.Text, tc.wantErr)
+		}
+		calls = append(calls, agent.ToolCall{Name: "propose_task", Arguments: args})
+	}
+
+	controlArgs := map[string]any{
+		"title":  "control: grants only",
+		"body":   "should be filed",
+		"grants": []any{"api:ci-read"},
+	}
+	if res := proposeTool.Handler(context.Background(), controlArgs); res.IsError {
+		t.Fatalf("control call-time refused unexpectedly: %s", res.Text)
+	}
+	calls = append(calls, agent.ToolCall{Name: "propose_task", Arguments: controlArgs})
+
+	if err := relayProposedTasks(ctx, store, nil, nil, parent, &agent.Result{ToolCalls: calls}, now); err != nil {
+		t.Fatalf("relayProposedTasks: %v", err)
+	}
+
+	tasks, err := store.ListTasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var childTitles []string
+	for _, tk := range tasks {
+		if tk.ID != parent.ID {
+			childTitles = append(childTitles, tk.Title)
+		}
+	}
+	if len(childTitles) != 1 || childTitles[0] != "control: grants only" {
+		t.Fatalf("filed children = %v, want only [\"control: grants only\"]", childTitles)
+	}
+
+	logged := captured.String()
+	for _, tc := range refusedShapes {
+		if !strings.Contains(logged, tc.wantLog) {
+			t.Errorf("%s (relay log): missing %q in log:\n%s", tc.name, tc.wantLog, logged)
+		}
 	}
 }

@@ -15,6 +15,7 @@
 package model_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -154,5 +155,41 @@ func TestCIGrantRuleWithoutTaskGrantableRefusedToTasks(t *testing.T) {
 	ci := model.CapabilitySubject{Kind: model.CapabilityRunCI, Event: "push"}
 	if reason := model.CIGrantRuleRefusal(ref+"={}", ci); reason != "" {
 		t.Errorf("CIGrantRuleRefusal(ci push) = %q, want a CI grant", reason)
+	}
+}
+
+// TestCIGrantRuleNotJudgedForAnyEvent: a CI subject whose trigger event
+// is not known yet (the repository's CI capabilities picker) is not
+// refused an event-gated method, since some job of the repository's is
+// admitted it; a job with no event, or the wrong one, still is, and so
+// is a task, and a capability policy deny rule still applies
+// (2026-11-09 repository walkthrough).
+func TestCIGrantRuleNotJudgedForAnyEvent(t *testing.T) {
+	const gated = "https://example.test/capabilities/ci-grant-rule-any-event#sign"
+	t.Cleanup(model.RegisterCIGrantRule(gated, model.CIGrantRule{Events: []string{"release"}, RepoGranted: true}))
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	anyEvent := model.CapabilitySubject{Kind: model.CapabilityRunCI, Repo: &repo, AnyEvent: true}
+	if reason := model.CIGrantRuleRefusal(gated, anyEvent); reason != "" {
+		t.Errorf("CIGrantRuleRefusal(any event) = %q, want admitted", reason)
+	}
+	var policy model.CapabilityPolicy
+	if err := policy.Permits(gated, anyEvent); err != nil {
+		t.Errorf("Permits(any event) = %v, want admitted", err)
+	}
+	noEvent := model.CapabilitySubject{Kind: model.CapabilityRunCI, Repo: &repo}
+	if reason := model.CIGrantRuleRefusal(gated, noEvent); !strings.Contains(reason, "this is a run with no trigger event") {
+		t.Errorf("CIGrantRuleRefusal(no event) = %q, want the rule's refusal of an event-less run", reason)
+	}
+	push := model.CapabilitySubject{Kind: model.CapabilityRunCI, Repo: &repo, Event: "push"}
+	if reason := model.CIGrantRuleRefusal(gated, push); !strings.Contains(reason, "this is a push run") {
+		t.Errorf("CIGrantRuleRefusal(push) = %q, want refused", reason)
+	}
+	task := model.CapabilitySubject{Kind: model.CapabilityRunTask, Repo: &repo, AnyEvent: true}
+	if model.CIGrantRuleRefusal(gated, task) == "" {
+		t.Error("CIGrantRuleRefusal admitted an event-gated method to a task")
+	}
+	deny := model.CapabilityPolicy{Rules: []model.CapabilityPolicyRule{{Capability: gated, Deny: true}}}
+	if err := deny.Permits(gated, anyEvent); err == nil {
+		t.Error("a deny rule did not apply to a CI subject with any event")
 	}
 }

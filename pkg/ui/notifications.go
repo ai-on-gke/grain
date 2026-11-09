@@ -491,8 +491,8 @@ func (s *Server) handleListNotifications(w http.ResponseWriter, r *http.Request)
 
 // pendingReleaseFamily is the release train's "approve this release"
 // notification family, whose body the UI reads more of than its first
-// line (ui/src/notifications.js's pendingReleaseOf: the Soak and SHORT
-// SOAK lines).
+// line (ui/src/notifications.js's pendingReleaseOf: the Soak, SHORT SOAK
+// and BREAKING CHANGES lines).
 const pendingReleaseFamily = "release.pending"
 
 // listNotificationBody is n's body as a polled list needs it: the UI's
