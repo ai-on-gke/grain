@@ -106,11 +106,18 @@ install -d -m 0700 /etc/grain-daemon
 # The registry keeps the database password out of grain-config (GCE metadata
 # is readable by anyone with compute.instances.get) and names the Secret
 # Manager secret holding it instead; read it with this VM's own token.
+# Transient failures (429/5xx, refused connections) are retried; anything
+# else fails closed before daemon.env is written.
 sm_token="$(curl -fsSL -H "${META_HDR}" "${META_URL}/instance/service-accounts/default/token" | jq -r '.access_token')"
-db_pw="$(curl -fsSL -H @<(printf 'Authorization: Bearer %s\n' "${sm_token}") \
-  "https://secretmanager.googleapis.com/v1/${db_pw_secret#/}/versions/latest:access" \
-  | jq -r '.payload.data // empty' | base64 -d | tr -d '\r\n')"
+if ! db_pw_json="$(curl -fsSL --retry 5 --retry-delay 2 --retry-connrefused \
+  -H @<(printf 'Authorization: Bearer %s\n' "${sm_token}") \
+  "https://secretmanager.googleapis.com/v1/${db_pw_secret#/}/versions/latest:access")"; then
+  echo "grain-hosted-vm-reconcile: reading database password secret ${db_pw_secret} from Secret Manager failed" >&2
+  exit 1
+fi
 unset sm_token
+db_pw="$(jq -r '.payload.data // empty' <<<"${db_pw_json}" | base64 -d | tr -d '\r\n')"
+unset db_pw_json
 if [[ -z "${db_pw}" ]]; then
   echo "grain-hosted-vm-reconcile: database password secret ${db_pw_secret} is empty or unreadable" >&2
   exit 1
