@@ -28,8 +28,8 @@ const accessUsage = `usage: grain access <list|allow|role|deny> [args]
 
   list
   allow [--role <set>] [--reason <why>] [--label <name>] <user:<email>|group:<email>|serviceAccount:<email>|delegate:<email>>
-  role  [--reason <why>] <entry> <set>
-  deny  <user:<email>|group:<email>|serviceAccount:<email>|delegate:<email>>
+  role  [--reason <why>] [--confirm-self] <entry> <set>
+  deny  [--reason <why>] [--confirm-self] <user:<email>|group:<email>|serviceAccount:<email>|delegate:<email>>
 
 Manage the allowed users, groups and delegating apps list (Settings -> Access):
 who may sign in when authenticated by Cloud IAP or another registered
@@ -39,8 +39,15 @@ default for user:/group:/serviceAccount:), grain/delegated (the default for
 delegate:), grain/contributor, grain/viewer, or one the deployment declares.
 Adding an existing entry is a no-op; 'role' changes an entry's role.
 
-A role holding a dangerous scope -- grain/operator among them -- is
-assigned only with the access code, and needs --reason. A serviceAccount:
+A change involving a role that holds a dangerous scope -- grain/operator
+among them -- or denies scopes needs --reason, and is recorded with it in
+Settings -> Access history. With the access code anything may be changed.
+Signed in as a person, you may change another entry only when your own
+role holds every scope of its current and new role; you may not widen, or
+add or lift a deny on, an entry that matches you (your user: entry or a
+group you are in), and narrowing one needs --confirm-self; and the last
+entry holding a full admin role is never removed or narrowed (the access
+code still can). Agents never change this list. A serviceAccount:
 or delegate: entry always needs --reason; for delegate:, --label sets an
 optional short identifier matching [a-z][a-z0-9-]{0,31}. Accounts whose keys
 grain hands to tasks (the gcp-key pools) are always refused, whatever their
@@ -124,15 +131,16 @@ func cmdAccess(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 		return nil
 	case "role":
 		fs := flag.NewFlagSet("grain access role", flag.ContinueOnError)
-		reason := fs.String("reason", "", "why the role changes (required for a role with a dangerous scope)")
+		reason := fs.String("reason", "", "why the role changes (required when either role holds a dangerous scope or denies scopes)")
+		confirmSelf := fs.Bool("confirm-self", false, "confirm narrowing an entry that matches you")
 		rest, err := parseArgs(fs, subArgs)
 		if err != nil {
 			return err
 		}
 		if len(rest) != 2 {
-			return errors.New("usage: grain access role [--reason <why>] <user:<email>|group:<email>|serviceAccount:<email>> <set>")
+			return errors.New("usage: grain access role [--reason <why>] [--confirm-self] <user:<email>|group:<email>|serviceAccount:<email>> <set>")
 		}
-		resp, err := c.SetPrincipalRole(ctx, rest[0], ui.SetPrincipalRoleRequest{Role: rest[1], Reason: *reason})
+		resp, err := c.SetPrincipalRole(ctx, rest[0], ui.SetPrincipalRoleRequest{Role: rest[1], Reason: *reason, ConfirmSelf: *confirmSelf})
 		if err != nil {
 			return err
 		}
@@ -148,14 +156,16 @@ func cmdAccess(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 		return nil
 	case "deny", "remove", "rm":
 		fs := flag.NewFlagSet("grain access deny", flag.ContinueOnError)
+		reason := fs.String("reason", "", "why the entry is removed (required when its role holds a dangerous scope or denies scopes)")
+		confirmSelf := fs.Bool("confirm-self", false, "confirm removing an entry that matches you")
 		rest, err := parseArgs(fs, subArgs)
 		if err != nil {
 			return err
 		}
 		if len(rest) != 1 {
-			return errors.New("usage: grain access deny <user:<email>|group:<email>|serviceAccount:<email>>")
+			return errors.New("usage: grain access deny [--reason <why>] [--confirm-self] <user:<email>|group:<email>|serviceAccount:<email>>")
 		}
-		resp, err := c.DenyPrincipal(ctx, rest[0])
+		resp, err := c.DenyPrincipalWith(ctx, rest[0], ui.DenyPrincipalOptions{Reason: *reason, ConfirmSelf: *confirmSelf})
 		if err != nil {
 			return err
 		}
