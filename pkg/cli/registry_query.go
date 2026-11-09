@@ -242,8 +242,12 @@ func cmdRegistryList(ctx context.Context, c *ui.HTTPClient, out *printer, args [
 		if urlStr == "" {
 			urlStr = "-"
 		}
-		fmt.Printf("%-24s %-10s %-10s %-9s listed=%-5t owner=%-24s %s\n",
+		line := fmt.Sprintf("%-24s %-10s %-10s %-9s listed=%-5t owner=%-24s %s",
 			e.Name, e.Kind, e.State, e.Status, e.Listed, e.Owner, urlStr)
+		if detail := strings.Join(strings.Fields(e.StatusDetail), " "); detail != "" {
+			line += "  detail=" + detail
+		}
+		fmt.Println(line)
 	}
 	return nil
 }
@@ -399,6 +403,15 @@ func cmdRegistryShow(ctx context.Context, c *ui.HTTPClient, out *printer, args [
 	}
 	fmt.Printf("Kind:        %s (host_kind=%s)\n", entry.Kind, entry.HostKind)
 	fmt.Printf("State:       %s (status=%s, listed=%t)\n", entry.State, entry.Status, entry.Listed)
+	if entry.ReplaceStep != "" {
+		fmt.Printf("Step:        %s\n", entry.ReplaceStep)
+	}
+	if detail := strings.TrimSpace(entry.StatusDetail); detail != "" {
+		fmt.Printf("Detail:      %s\n", detail)
+	}
+	if hDetail := strings.TrimSpace(entry.HealthDetail); hDetail != "" && hDetail != strings.TrimSpace(entry.StatusDetail) {
+		fmt.Printf("Health:      %s\n", hDetail)
+	}
 	if entry.DisplayName != "" {
 		fmt.Printf("Display:     %s\n", entry.DisplayName)
 	}
@@ -414,6 +427,9 @@ func cmdRegistryShow(ctx context.Context, c *ui.HTTPClient, out *printer, args [
 	}
 	if entry.Shape != "" {
 		fmt.Printf("Shape:       %s\n", entry.Shape)
+	}
+	if entry.BootDiskGB > 0 {
+		fmt.Printf("Disk:        %d GB\n", entry.BootDiskGB)
 	}
 	if entry.GrainVersion != "" {
 		fmt.Printf("Version:     %s (%s)\n", entry.GrainVersion, entry.GrainCommit)

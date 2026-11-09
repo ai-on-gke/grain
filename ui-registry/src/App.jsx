@@ -89,13 +89,16 @@ function canStartEntry(e) {
   return Boolean(e) && e.kind === "instance" && STARTABLE_STATES.has(e.state);
 }
 
-// reachabilityStatus is what the Reachability pill shows: a deleted, stopped
-// or stopping entry says so rather than a bare "offline".
+// reachabilityStatus is what the Reachability pill shows: a deleted, stopped,
+// stopping, creating, replacing, or failed entry says so rather than a bare "offline".
 function reachabilityStatus(e) {
   if (
     e.state === "deleted" ||
     e.state === "stopped" ||
-    e.state === "stopping"
+    e.state === "stopping" ||
+    e.state === "creating" ||
+    e.state === "replacing" ||
+    e.state === "failed"
   ) {
     return e.state;
   }
@@ -893,11 +896,25 @@ function MyEntriesView({ me, onNavigateEntry, onNavigateNew, onRefreshMe }) {
               header: "Reachability",
               sortValue: (e) => e.status,
               render: (e) => (
-                <StatusPill
-                  status={reachabilityStatus(e)}
-                  ageSeconds={e.heartbeat_age_seconds}
-                  detail={e.status_detail}
-                />
+                <div>
+                  <StatusPill
+                    status={reachabilityStatus(e)}
+                    ageSeconds={e.heartbeat_age_seconds}
+                    detail={e.status_detail}
+                  />
+                  {e.status_detail &&
+                  (e.state === "creating" ||
+                    e.state === "replacing" ||
+                    e.state === "failed" ||
+                    e.status === "degraded") ? (
+                    <div
+                      className="reg-hint reg-status-detail"
+                      data-testid={`status-detail-${e.name}`}
+                    >
+                      {e.status_detail}
+                    </div>
+                  ) : null}
+                </div>
               ),
             },
             {
@@ -1597,6 +1614,7 @@ function EntryDetailView({
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const [stopDialogOpen, setStopDialogOpen] = useState(false);
+  const [revokeCredTarget, setRevokeCredTarget] = useState(null);
 
   const syncFromEntry = (data) => {
     setEntry(data);
@@ -1726,7 +1744,10 @@ function EntryDetailView({
     }
   };
 
-  const handleRevokeCredential = async (credId) => {
+  const handleConfirmRevokeCredential = async () => {
+    if (!revokeCredTarget) return;
+    const credId = revokeCredTarget.credential_id;
+    setRevokeCredTarget(null);
     setError("");
     setNotice("");
     try {
@@ -2026,6 +2047,32 @@ function EntryDetailView({
         </div>
       ) : null}
 
+      {entry.status_detail &&
+      (entry.state === "creating" ||
+        entry.state === "replacing" ||
+        entry.state === "failed") ? (
+        <div
+          className={
+            entry.state === "failed"
+              ? "reg-banner reg-banner-danger"
+              : "reg-banner reg-banner-info"
+          }
+          data-testid="lifecycle-status-banner"
+          role={entry.state === "failed" ? "alert" : "status"}
+        >
+          <div className="reg-banner-body">
+            <strong>
+              {entry.state === "creating"
+                ? "Provisioning instance:"
+                : entry.state === "replacing"
+                  ? "Replacing instance:"
+                  : "Instance provisioning failed:"}
+            </strong>{" "}
+            {entry.status_detail}
+          </div>
+        </div>
+      ) : null}
+
       {entry.pending_owner ? (
         <div
           className="reg-banner reg-banner-info"
@@ -2147,10 +2194,21 @@ function EntryDetailView({
           </div>
         </div>
 
-        {entry.health_detail || entry.status_detail ? (
-          <div className="reg-hint">
-            Health detail:{" "}
-            <strong>{entry.health_detail || entry.status_detail}</strong>
+        {entry.status_detail ? (
+          <div
+            className="reg-hint reg-detail-line"
+            data-testid="entry-status-detail"
+          >
+            Status detail: <strong>{entry.status_detail}</strong>
+          </div>
+        ) : null}
+
+        {entry.health_detail && entry.health_detail !== entry.status_detail ? (
+          <div
+            className="reg-hint reg-detail-line"
+            data-testid="entry-health-detail"
+          >
+            Health detail: <strong>{entry.health_detail}</strong>
           </div>
         ) : null}
 
@@ -2594,7 +2652,7 @@ function EntryDetailView({
                       <button
                         type="button"
                         className="gs-btn gs-btn-sm gs-btn-danger"
-                        onClick={() => handleRevokeCredential(c.credential_id)}
+                        onClick={() => setRevokeCredTarget(c)}
                       >
                         Revoke
                       </button>
@@ -2707,12 +2765,32 @@ function EntryDetailView({
       />
 
       <ConfirmDialog
+        open={Boolean(revokeCredTarget)}
+        title="Revoke registration credential?"
+        confirmLabel="Revoke credential"
+        danger
+        onCancel={() => setRevokeCredTarget(null)}
+        onConfirm={handleConfirmRevokeCredential}
+      >
+        <p>
+          Revoking credential{" "}
+          <span className="reg-mono">{revokeCredTarget?.credential_id}</span> (
+          {revokeCredTarget?.label || "default"}) on{" "}
+          <strong>{entry.name}</strong> immediately disconnects any outbound
+          tunnel using it and cannot be undone.
+        </p>
+      </ConfirmDialog>
+
+      <ConfirmDialog
         open={deleteDialogOpen}
         title={`Delete ${entry.name}?`}
         confirmLabel="Delete entry"
         danger
         disabled={deleteConfirmText.trim() !== entry.name}
-        onCancel={() => setDeleteDialogOpen(false)}
+        onCancel={() => {
+          setDeleteDialogOpen(false);
+          setDeleteConfirmText("");
+        }}
         onConfirm={handleDeleteConfirm}
       >
         <p>
@@ -2753,6 +2831,10 @@ function AdminView({ onNavigateEntry }) {
   const [forceTransferEntryName, setForceTransferEntryName] = useState("");
   const [forceTransferTo, setForceTransferTo] = useState("");
   const [forceClearGroup, setForceClearGroup] = useState(false);
+
+  // Hard purge confirmation state
+  const [purgeTarget, setPurgeTarget] = useState(null);
+  const [purgeReleaseReservation, setPurgeReleaseReservation] = useState(true);
 
   // Delegating apps state
   const [delegatingApps, setDelegatingApps] = useState([]);
@@ -2906,7 +2988,11 @@ function AdminView({ onNavigateEntry }) {
     }
   };
 
-  const handleHardPurge = async (entryName, releaseReservation = true) => {
+  const handleConfirmHardPurge = async () => {
+    if (!purgeTarget) return;
+    const entryName = purgeTarget.name;
+    const releaseReservation = purgeReleaseReservation;
+    setPurgeTarget(null);
     setError("");
     setNotice("");
     try {
@@ -3539,7 +3625,10 @@ function AdminView({ onNavigateEntry }) {
                     <button
                       type="button"
                       className="gs-btn gs-btn-sm gs-btn-danger"
-                      onClick={() => handleHardPurge(e.name, true)}
+                      onClick={() => {
+                        setPurgeTarget(e);
+                        setPurgeReleaseReservation(true);
+                      }}
                     >
                       Hard purge
                     </button>
@@ -3931,6 +4020,33 @@ function AdminView({ onNavigateEntry }) {
           ]}
         />
       </section>
+
+      <ConfirmDialog
+        open={Boolean(purgeTarget)}
+        title={`Hard purge ${purgeTarget?.name || ""}?`}
+        confirmLabel="Hard purge"
+        danger
+        onCancel={() => setPurgeTarget(null)}
+        onConfirm={handleConfirmHardPurge}
+      >
+        <p>
+          Hard-purging <strong>{purgeTarget?.name}</strong> permanently destroys
+          its retained database, Secret Manager secrets, storage prefix, and
+          configuration repository. Once purged, the entry can no longer be
+          restored.
+        </p>
+        <label className="reg-checkbox-row">
+          <input
+            type="checkbox"
+            checked={purgeReleaseReservation}
+            onChange={(e) => setPurgeReleaseReservation(e.target.checked)}
+          />
+          <span>
+            Release the 30-day name reservation so another owner can claim{" "}
+            <span className="reg-mono">{purgeTarget?.name}</span>
+          </span>
+        </label>
+      </ConfirmDialog>
     </div>
   );
 }
@@ -3951,6 +4067,7 @@ function AppsActingForYouView({ onNavigateEntry }) {
   const [ttlUnit, setTtlUnit] = useState("days");
   const [submittingGrant, setSubmittingGrant] = useState(false);
   const [revokingId, setRevokingId] = useState("");
+  const [revokeGrantTarget, setRevokeGrantTarget] = useState(null);
 
   const loadGrants = useCallback(async (withRevoked) => {
     setLoading(true);
@@ -4058,7 +4175,10 @@ function AppsActingForYouView({ onNavigateEntry }) {
     }
   };
 
-  const handleRevokeGrant = async (grant) => {
+  const handleConfirmRevokeGrant = async () => {
+    if (!revokeGrantTarget) return;
+    const grant = revokeGrantTarget;
+    setRevokeGrantTarget(null);
     setError("");
     setNotice("");
     setRevokingId(grant.id);
@@ -4357,7 +4477,7 @@ function AppsActingForYouView({ onNavigateEntry }) {
                           type="button"
                           className="gs-btn gs-btn-sm gs-btn-danger"
                           disabled={revokingId === g.id}
-                          onClick={() => handleRevokeGrant(g)}
+                          onClick={() => setRevokeGrantTarget(g)}
                         >
                           {revokingId === g.id ? "Revoking..." : "Revoke"}
                         </button>
@@ -4370,6 +4490,26 @@ function AppsActingForYouView({ onNavigateEntry }) {
           />
         )}
       </section>
+
+      <ConfirmDialog
+        open={Boolean(revokeGrantTarget)}
+        title={`Revoke consent for ${revokeGrantTarget?.app || ""}?`}
+        confirmLabel="Revoke grant"
+        danger
+        onCancel={() => setRevokeGrantTarget(null)}
+        onConfirm={handleConfirmRevokeGrant}
+      >
+        <p>
+          Revoking consent grant{" "}
+          <span className="reg-mono">{revokeGrantTarget?.id}</span> immediately
+          stops <strong>{revokeGrantTarget?.app}</strong> from acting on your
+          behalf across{" "}
+          <span className="reg-mono">
+            {(revokeGrantTarget?.entries || []).join(", ") || "your entries"}
+          </span>
+          .
+        </p>
+      </ConfirmDialog>
     </div>
   );
 }

@@ -167,6 +167,27 @@ body {
   color: var(--text);
 }
 
+.reg-banner-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.reg-status-detail {
+  margin-top: 4px;
+  min-width: 22ch;
+  max-width: 38ch;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.reg-detail-line {
+  overflow-wrap: anywhere;
+}
+
 .reg-card {
   background: var(--bg);
   border: 1px solid var(--border);
