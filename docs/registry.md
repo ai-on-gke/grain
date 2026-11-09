@@ -223,6 +223,12 @@ grain registry create \
   naming friction and squatting on common words. You can also pass a
   custom DNS label (`[a-z][a-z0-9-]{1,30}[a-z0-9]`, no `--`, not in the
   reserved name list).
+- **The UI defaults to a hosted VM.** `/new` opens on the Hosted VM
+  form (`/new?kind=connected` opens the connected-entry form instead),
+  with the name field pre-filled with a random `grain-<6hex>` name that
+  you can type over or regenerate; availability is checked as you type.
+  When the registry has no VM shapes configured, the form falls back to
+  registering a connected entry.
 - **Weighted shapes and custom boot disks.** Each shape (`small`,
   `standard`, `large`, etc.) specifies machine type, default boot disk size,
   and an integer quota weight (`quota_units`) charged against the owner's
@@ -337,6 +343,9 @@ Hosted instances move through a narrow state machine:
     `720h`). During that 30-day hold, the former owner can reuse the
     name, and no other user can claim it until both `reserved_until` has
     expired and the instance has been purged.
+  - Deleted entries drop out of **My entries** in the registry UI as
+    soon as they are deleted. Registry admins still see them on the
+    Admin page, where they can restore or purge them.
 
 ---
 

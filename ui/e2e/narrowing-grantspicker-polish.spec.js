@@ -18,7 +18,8 @@
 // viewer was known; F2 a repo condition spelled in another case matched
 // nothing (the removed-repo count link on /repos/ACME/...); F3 the Add
 // grant… menu's group titles were axe listitem / aria-required-children
-// violations.
+// violations; F4 the "What this files" preview's <dl> rows held their
+// source chip beside the <dt> and <dd> (axe definition-list, dlitem).
 
 import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "./fixtures.js";
@@ -92,4 +93,18 @@ test("Add grant…'s menu passes axe's list structure rules", async ({
     "aria-required-children",
   ]);
   expect(grants.violations.map((v) => v.id)).toEqual([]);
+});
+
+test("the What this files preview passes axe's definition list rules", async ({
+  page,
+}) => {
+  await page.goto("/processes/schedules/sched-2");
+  const dl = page.locator("dl").filter({ has: page.locator("dt") });
+  await expect(dl.first()).toBeVisible();
+  // A row's source chip sits inside its <dd>, after the value.
+  const row = dl.locator("dt").first().locator("xpath=..");
+  await expect(row.locator("dd .composition-value").first()).toBeVisible();
+  await expect(row.locator("dd .MuiChip-root").first()).toBeVisible();
+  const preview = await axeRules(page, "dl", ["definition-list", "dlitem"]);
+  expect(preview.violations.map((v) => v.id)).toEqual([]);
 });

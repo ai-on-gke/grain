@@ -22,6 +22,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1048,5 +1049,155 @@ func TestAccessCodeSignInBehindIAPSaysTheVerifiedRoleApplies(t *testing.T) {
 		map[string]string{"Content-Type": "application/json"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("sign-in by code without an assertion = %d %s, want 200", rec.Code, rec.Body)
+	}
+}
+
+// A limited role approves a stored task -- POST /api/tasks/{id}/approve, or
+// POST /api/tasks/{id}/run-now on one with no approval yet -- only with
+// tasks:admin on its repository and only when the role could have filed it
+// approved itself, over REST, POST /api/mcp's grain_invoke and POST /mcp
+// behind a verified session carrying a wider gma_ token.
+func TestLimitedRoleApprovalIsHeldToTasksAdminAndTheRolesCeiling(t *testing.T) {
+	ctx := context.Background()
+	installScopeSets(t,
+		model.APIScopeSet{
+			Name:    "dispatcher",
+			Scopes:  []string{"tasks:read", "tasks:write", "dispatch:read", "dispatch:write"},
+			Version: 1,
+		},
+		model.APIScopeSet{
+			Name:    "widgets-admin",
+			Scopes:  []string{"tasks:read", "tasks:write", "tasks:admin", "dispatch:read", "dispatch:write"},
+			Repos:   []string{"acme/widgets"},
+			Version: 1,
+		},
+	)
+	h := newRoleHarness(t)
+	enableExternalAgentAPI(t, h.client.Store)
+	h.allow(t, "user:dee@example.com", "dispatcher")
+	h.allow(t, "user:wade@example.com", "widgets-admin")
+	h.allow(t, "user:operator@example.com", "grain/operator")
+
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	gadgets := model.RepoRef{Owner: "acme", Name: "gadgets"}
+	seed := func(id string, edit func(*model.Task)) string {
+		t.Helper()
+		task := model.Task{ID: id, Intent: model.IntentImplement, Title: "task " + id, Target: &widgets}
+		if edit != nil {
+			edit(&task)
+		}
+		if err := h.client.Store.PutTask(ctx, task); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	approved := func(task *model.Task) {
+		task.Approval = &model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"}}
+	}
+	actions := []struct{ route, tool string }{{"approve", "api_approve"}, {"run-now", "api_run_now"}}
+	n := 0
+	next := func() string { n++; return "9" + strings.Repeat("0", 2-len(strconv.Itoa(n))) + strconv.Itoa(n) }
+
+	// dispatch:write without tasks:admin runs an approved task now but
+	// cannot approve one by running it.
+	for _, surface := range []string{"rest", "api-mcp"} {
+		id := seed(next(), nil)
+		var out string
+		var refused bool
+		if surface == "rest" {
+			code, body := h.call("dee@example.com", http.MethodPost, "/api/tasks/"+id+"/run-now", `{}`)
+			out, refused = body, code == http.StatusForbidden
+		} else {
+			out, refused = callControllerTool(t, h.srv, h.as("dee@example.com"), ui.ToolGrainInvoke, map[string]any{
+				"tool": "api_run_now", "arguments": map[string]any{"id": id}, "reason": "testing the role ceiling",
+			})
+		}
+		if !refused || !strings.Contains(out, "tasks:admin") || !strings.Contains(out, "dispatcher") {
+			t.Errorf("%s: dispatcher run-now on unapproved task %s: refused=%v %s, want refusal naming tasks:admin and the role", surface, id, refused, out)
+		}
+		if task, err := h.client.Store.GetTask(ctx, id); err != nil || task == nil || task.Approval != nil {
+			t.Errorf("%s: task %s was approved by a refused run-now: %+v %v", surface, id, task, err)
+		}
+	}
+	okID := seed(next(), approved)
+	if code, body := h.call("dee@example.com", http.MethodPost, "/api/tasks/"+okID+"/run-now", `{}`); code == http.StatusForbidden {
+		t.Errorf("dispatcher run-now on approved task: %d %s, want it let through on dispatch:write", code, body)
+	}
+
+	// tasks:admin on the repository approves a plain task by either route.
+	for _, a := range actions {
+		id := seed(next(), nil)
+		if code, body := h.call("wade@example.com", http.MethodPost, "/api/tasks/"+id+"/"+a.route, `{}`); code == http.StatusForbidden {
+			t.Errorf("widgets-admin %s on a plain task: %d %s, want it allowed", a.route, code, body)
+		}
+	}
+
+	// ... but not one carrying what the role could not have filed approved.
+	ceilings := []struct {
+		name, want string
+		edit       func(*model.Task)
+	}{
+		{"autoMerge", "autoMerge", func(t *model.Task) { t.AutoMerge = true }},
+		{"keepRunning", "keepRunning", func(t *model.Task) { t.KeepRunning = true }},
+		{"durable", model.DurableCapability, func(t *model.Task) { t.Admission = model.AdmissionDurable }},
+		{"dangerousGrant", "api:settings:write", func(t *model.Task) {
+			t.Grants = []model.Grant{{Capability: "api:settings:write", Via: model.GrantByLabel}}
+		}},
+		{"writes", "acme/gadgets", func(t *model.Task) { t.Writes = []model.WriteTarget{{Repo: gadgets}} }},
+		{"reads", "acme/gadgets", func(t *model.Task) { t.Reads = []model.RepoRef{gadgets} }},
+	}
+	for _, c := range ceilings {
+		for _, a := range actions {
+			for _, surface := range []string{"rest", "api-mcp"} {
+				id := seed(next(), c.edit)
+				var out string
+				var refused bool
+				if surface == "rest" {
+					code, body := h.call("wade@example.com", http.MethodPost, "/api/tasks/"+id+"/"+a.route, `{}`)
+					out, refused = body, code == http.StatusForbidden
+				} else {
+					out, refused = callControllerTool(t, h.srv, h.as("wade@example.com"), ui.ToolGrainInvoke, map[string]any{
+						"tool": a.tool, "arguments": map[string]any{"id": id}, "reason": "testing the role ceiling",
+					})
+				}
+				if !refused || !strings.Contains(out, c.want) || !strings.Contains(out, "widgets-admin") {
+					t.Errorf("%s %s %s: refused=%v %s, want refusal naming %s and the role", surface, a.route, c.name, refused, out, c.want)
+				}
+				if task, err := h.client.Store.GetTask(ctx, id); err != nil || task == nil || task.Approval != nil {
+					t.Errorf("%s %s %s: task %s was approved: %+v %v", surface, a.route, c.name, id, task, err)
+				}
+			}
+		}
+	}
+
+	// A verified dispatcher session carrying an operator's gma_ token holding
+	// tasks:admin is held to the session's role, on REST and on POST /mcp.
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	issued, err := h.client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+		Name:   "operator-admin",
+		Scopes: []string{"tasks:read", "tasks:write", "tasks:admin", "dispatch:read", "dispatch:write"},
+		Owner:  "operator@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	withToken := h.as("dee@example.com")
+	withToken["Authorization"] = "Bearer " + issued.Token
+	withToken[ui.ActingReasonHeader] = "testing the role ceiling"
+	for _, a := range actions {
+		id := seed(next(), nil)
+		rec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, "/api/tasks/"+id+"/"+a.route, `{}`, withToken)
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "tasks:admin") {
+			t.Errorf("REST %s as dispatcher with an admin token: %d %s, want 403 naming tasks:admin", a.route, rec.Code, rec.Body.String())
+		}
+		id = seed(next(), nil)
+		rec = serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, "/mcp",
+			`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"`+a.tool+`","arguments":{"id":"`+id+`"}}}`, withToken)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"isError":true`) || !strings.Contains(rec.Body.String(), "tasks:admin") {
+			t.Errorf("POST /mcp %s as dispatcher with an admin token: %d %s, want a tool error naming tasks:admin", a.tool, rec.Code, rec.Body.String())
+		}
+		if task, err := h.client.Store.GetTask(ctx, id); err != nil || task == nil || task.Approval != nil {
+			t.Errorf("POST /mcp %s: task %s was approved: %+v %v", a.tool, id, task, err)
+		}
 	}
 }
