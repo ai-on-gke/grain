@@ -68,7 +68,7 @@ PASS	2.8b.cfg	--repos and --expires without --issue-token: config untouched	850e
 PASS	2.11	config still the seeded one after all refusals	850ef88b4b3ff794
 PASS	2.12	login --help: --token-stdin says not with --issue-token	Usage of login:   -auth string     	how to sign in: access-code, or a credential source this build registers   -expires string     	how long --issue-token's token lasts (30d, 12h, ...) (default "30d")   -issue-token     	mint a scoped gma_ token for this workstation and keep it   -name string     	t
 PASS	2.13	grain -token CODE login <url> --issue-token: exit 0	0 signed in to http://127.0.0.1:4291 as context doc (external-token) 
-PASS	2.14	the stored credential is a gma_ token	gma_98c6e25a5802620cb048bf89a63e2880
+PASS	2.14	the stored credential is a gma_ token	gma_REDACTED
 PASS	2.15	grain --context doc list with the minted token: exit 0	0
 PASS	2.16	the daemon saw the gma_ credential	external:
 FAILS=0

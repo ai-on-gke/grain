@@ -1,4 +1,4 @@
-PASS	0.1	three gma_ credentials minted	gma_414c2a28d696e11b8b2a45055ecd17a9 gma_78f0cb80e98bf8f665ec7c3defdec45f gma_364c19f7ed568926f742a69495d95120
+PASS	0.1	three gma_ credentials minted	gma_REDACTED gma_REDACTED gma_REDACTED
 PASS	1.a.norepo.rest.approve	approve refused(403) -> proposed	refuse
 PASS	1.a.norepo.rest.run-now	run-now refused(403) -> proposed	refuse
 PASS	1.a.norepo.rest.agree	approve and run-now agree	refuse

@@ -39,7 +39,7 @@ FAILS=0
 check() { # id desc expected-regex got
 	local res=PASS
 	[[ $4 =~ $3 ]] || { res=FAIL; FAILS=$((FAILS + 1)); }
-	printf '%s\t%s\t%s\t%s\n' "$res" "$1" "$2" "${4:0:220}" | tee -a "$OUT"
+	printf '%s\t%s\t%s\t%s\n' "$res" "$1" "$2" "${4:0:220}" | sed -E 's/gma_[A-Za-z0-9_]+/gma_REDACTED/g' | tee -a "$OUT"
 }
 err() { jq -r '.error // empty' "$BODY" 2>/dev/null | tr '\n' ' '; }
 mint() { # caller(email|code) body -> token

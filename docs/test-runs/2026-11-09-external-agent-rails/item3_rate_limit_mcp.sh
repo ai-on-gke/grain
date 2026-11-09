@@ -40,7 +40,7 @@ FAILS=0
 check() { # id desc expected-regex got
 	local res=PASS
 	[[ $4 =~ $3 ]] || { res=FAIL; FAILS=$((FAILS + 1)); }
-	printf '%s\t%s\t%s\t%s\n' "$res" "$1" "$2" "${4:0:300}" | tee -a "$OUT"
+	printf '%s\t%s\t%s\t%s\n' "$res" "$1" "$2" "${4:0:300}" | sed -E 's/gma_[A-Za-z0-9_]+/gma_REDACTED/g' | tee -a "$OUT"
 }
 code PUT /api/settings '{"externalAgentApi":true}' >/dev/null
 "$GRAIN" -token "$CODE" login "$DAEMON" --name rl1 --issue-token >/dev/null 2>&1
