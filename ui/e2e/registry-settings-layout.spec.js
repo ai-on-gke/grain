@@ -26,9 +26,7 @@ for (const [name, viewport] of [
   ["desktop", DESKTOP],
   ["phone", PHONE],
 ]) {
-  test(`the hub settings section fits a ${name} screen`, async ({
-    page,
-  }) => {
+  test(`the hub settings section fits a ${name} screen`, async ({ page }) => {
     const pageErrors = [];
     page.on("pageerror", (err) => pageErrors.push(String(err)));
 
