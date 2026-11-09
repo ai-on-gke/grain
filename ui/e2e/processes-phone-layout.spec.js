@@ -138,7 +138,9 @@ test.describe("A template's Use… preview on a phone", () => {
       }));
       expect(widths.scroll).toBeLessThanOrEqual(widths.client);
       const rowBox = await row.boundingBox();
-      const source = await row.locator(":scope > .MuiChip-root").boundingBox();
+      const source = await row
+        .locator(":scope > dd > .MuiChip-root")
+        .boundingBox();
       expect(source.x + source.width).toBeLessThanOrEqual(
         rowBox.x + rowBox.width + 1,
       );
