@@ -263,7 +263,7 @@ func TestGCEComputeProvisionScopeAndLifecycle(t *testing.T) {
 		Zone: "europe-west1-b",
 		Shape: registry.Shape{
 			Name:        "medium",
-			MachineType: "e2-standard-8",
+			MachineType: "n2-standard-8",
 			BootDiskGB:  100,
 		},
 		Generation: 1,
@@ -278,7 +278,7 @@ func TestGCEComputeProvisionScopeAndLifecycle(t *testing.T) {
 		Zone: "us-central1-a",
 		Shape: registry.Shape{
 			Name:         "medium",
-			MachineType:  "e2-standard-8",
+			MachineType:  "n2-standard-8",
 			BootDiskGB:   100,
 			BootDiskIOPS: 3000,
 		},
@@ -907,7 +907,7 @@ func TestGCPInstanceResourcesAndPostgresIsolation(t *testing.T) {
 		t.Fatalf("SeedSQLInstances: %v", err)
 	}
 	if err := st.SeedShapes(ctx, []store.ShapeRow{
-		{Name: "medium", MachineType: "e2-standard-8", BootDiskGB: 100, QuotaUnits: 1},
+		{Name: "medium", MachineType: "n2-standard-8", BootDiskGB: 100, QuotaUnits: 1},
 	}); err != nil {
 		t.Fatalf("SeedShapes: %v", err)
 	}

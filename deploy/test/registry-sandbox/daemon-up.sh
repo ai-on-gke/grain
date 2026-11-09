@@ -28,7 +28,7 @@ ENTRY_NAME="${ENTRY_NAME:-sandbox-daemon}"
 NAME_PREFIX="${NAME_PREFIX:-grain-reg}"
 REGION="${REGION:-us-central1}"
 ZONE="${ZONE:-us-central1-a}"
-MACHINE_TYPE="${MACHINE_TYPE:-e2-small}"
+MACHINE_TYPE="${MACHINE_TYPE:-n2-standard-2}"
 BOOT_DISK_GB="${BOOT_DISK_GB:-20}"
 AR_LOCATION="${AR_LOCATION:-us}"
 AR_REPO="${AR_REPO:-grain}"
@@ -61,7 +61,7 @@ Options:
   --repo <owner/name>        Repository advertised by the test daemon for /api/route (repeatable; default: ai-on-gke/grain)
   --display-name <text>      Display name in the registry catalog (default: Sandbox Test Daemon (<entry>))
   --purpose <text>           Purpose description in the registry catalog
-  --machine-type <type>      GCE machine type for the test daemon VM (default: e2-small)
+  --machine-type <type>      GCE machine type for the test daemon VM (default: n2-standard-2; e2-* is refused, no nested virtualization)
   --boot-disk-gb <gb>        Boot disk size in GiB, 10-200 (default: 20)
   --prefix <prefix>          Sandbox registry resource prefix (default: grain-reg)
   --region <region>          GCP region of the sandbox subnet (default: us-central1)
@@ -258,6 +258,11 @@ fi
 
 if ! [[ "${MACHINE_TYPE}" =~ ^[a-z][a-z0-9-]{1,40}[a-z0-9]$ ]]; then
   echo "daemon-up.sh: invalid --machine-type '${MACHINE_TYPE}'" >&2
+  exit 2
+fi
+
+if [[ "${MACHINE_TYPE}" == e2-* ]]; then
+  echo "daemon-up.sh: --machine-type '${MACHINE_TYPE}': E2 machine types do not support nested virtualization; use an N2 or C4 machine type (for example n2-standard-2)" >&2
   exit 2
 fi
 

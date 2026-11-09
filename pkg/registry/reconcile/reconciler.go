@@ -1452,7 +1452,7 @@ func (r *Reconciler) resolveShape(ctx context.Context, shapeName string) registr
 	}
 	return registry.Shape{
 		Name:        "default",
-		MachineType: "e2-standard-4",
+		MachineType: "n2-standard-4",
 		BootDiskGB:  50,
 		QuotaUnits:  1,
 	}

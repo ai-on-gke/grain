@@ -198,8 +198,6 @@ func TestValidateMachineType(t *testing.T) {
 		"c4-standard-16",
 		"c4-standard-48",
 		"c4-standard-96",
-		"e2-standard-4",
-		"e2-small",
 		"zones/us-central1-a/machineTypes/n2-standard-8",
 	}
 	for _, mt := range valid {
@@ -220,6 +218,68 @@ func TestValidateMachineType(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "machine_type") {
 			t.Errorf("ValidateMachineType(%q) = %v, want machine_type error", mt, err)
 		}
+	}
+
+	// E2 machine types cannot run nested virtualization, which every hosted VM
+	// is created with, so they are refused with an error naming N2 / C4.
+	noNestedVirt := []string{
+		"e2-standard-2",
+		"e2-standard-4",
+		"e2-standard-8",
+		"e2-highmem-4",
+		"e2-micro",
+		"e2-small",
+		"e2-medium",
+		"zones/us-central1-a/machineTypes/e2-standard-4",
+	}
+	for _, mt := range noNestedVirt {
+		err := ValidateMachineType(mt)
+		if !errors.Is(err, ErrNoNestedVirtualization) {
+			t.Errorf("ValidateMachineType(%q) = %v, want ErrNoNestedVirtualization", mt, err)
+			continue
+		}
+		if !strings.Contains(err.Error(), "N2 or C4") {
+			t.Errorf("ValidateMachineType(%q) error %q does not point at N2 / C4 machine types", mt, err)
+		}
+	}
+}
+
+func TestGCEComputeRejectsE2Shapes(t *testing.T) {
+	srv, state := newFakeGCEServer(t)
+	ctx := context.Background()
+	base := registry.ComputeConfig{
+		Provider:   "gce",
+		Project:    "test-proj",
+		Region:     "us-central1",
+		Zones:      []string{"us-central1-a"},
+		VMPrefix:   "grain-vm-",
+		RegistryID: "grain.example.com",
+	}
+
+	withE2 := base
+	withE2.Shapes = []registry.Shape{{Name: "small", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1}}
+	if _, err := NewGCECompute(ctx, withE2, WithComputeBaseURL(srv.URL+"/compute/v1"), WithComputeHTTPClient(srv.Client())); !errors.Is(err, ErrNoNestedVirtualization) {
+		t.Fatalf("NewGCECompute with an e2 shape = %v, want ErrNoNestedVirtualization", err)
+	}
+
+	comp, err := NewGCECompute(ctx, base, WithComputeBaseURL(srv.URL+"/compute/v1"), WithComputeHTTPClient(srv.Client()))
+	if err != nil {
+		t.Fatalf("NewGCECompute: %v", err)
+	}
+	_, err = comp.CreateInstance(ctx, registry.InstanceSpec{
+		Name:           "legacy-e2",
+		Zone:           "us-central1-a",
+		Shape:          registry.Shape{Name: "legacy", MachineType: "e2-standard-4", BootDiskGB: 50},
+		ServiceAccount: "grain-sa-legacy-e2@test-proj.iam.gserviceaccount.com",
+		Generation:     1,
+	})
+	if !errors.Is(err, ErrNoNestedVirtualization) {
+		t.Fatalf("CreateInstance on e2-standard-4 = %v, want ErrNoNestedVirtualization", err)
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if raw := state.instances["test-proj/us-central1-a/grain-vm-legacy-e2"]; raw != nil {
+		t.Fatalf("an e2 instance reached the compute API: %+v", raw)
 	}
 }
 

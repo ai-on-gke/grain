@@ -1262,9 +1262,13 @@ compute:
   drain_timeout: 2m
   health_timeout: 10m
   status_poll_interval: 15s
+  # Hosted VMs run with nested virtualization (/dev/kvm for Granule
+  # microVMs), so shapes must use a machine type that supports it, such as
+  # N2 or C4. E2 machine types (e2-standard-*, e2-small, ...) do not, and
+  # the gce provider refuses them.
   shapes:
     - name: small
-      machine_type: e2-standard-4
+      machine_type: n2-standard-4
       boot_disk_gb: 100
       quota_units: 1
       description: "4 vCPU, 16 GB RAM"

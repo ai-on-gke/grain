@@ -329,6 +329,24 @@ ALTER TABLE registry.entries
     ADD COLUMN IF NOT EXISTS boot_disk_gb INT;
 `,
 	},
+	{
+		// Hosted VMs run with nested virtualization, which GCE's E2 machine
+		// types do not support, so a shape row seeded by an older config with an
+		// e2-* machine type can never provision. Move each onto its N2
+		// equivalent (e2-standard-8 -> n2-standard-8; the shared-core
+		// e2-micro/small/medium -> n2-standard-2), keeping any zonal
+		// "zones/<z>/machineTypes/" prefix. Shapes still in configuration are
+		// re-seeded from it at startup, and configuration now refuses e2-*.
+		version: 8,
+		name:    "replace_e2_shape_machine_types",
+		upSQL: `
+UPDATE registry.shapes
+SET machine_type = regexp_replace(
+        regexp_replace(machine_type, '(^|/)e2-(micro|small|medium)$', '\1n2-standard-2'),
+        '(^|/)e2-', '\1n2-')
+WHERE machine_type ~ '(^|/)e2-';
+`,
+	},
 }
 
 // migrateLockKey is the pg_advisory_lock key every grain-registry replica takes

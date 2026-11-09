@@ -107,7 +107,14 @@ type GCECompute struct {
 	pollInterval  time.Duration
 }
 
-var gceMachineTypeRe = regexp.MustCompile(`^[a-z][a-z0-9]*-(standard|highmem|highcpu|megamem|ultramem|custom)-[0-9]+(-[a-z0-9]+)*$|^e2-(micro|small|medium)$`)
+var gceMachineTypeRe = regexp.MustCompile(`^[a-z][a-z0-9]*-(standard|highmem|highcpu|megamem|ultramem|custom)-[0-9]+(-[a-z0-9]+)*$`)
+
+// ErrNoNestedVirtualization is wrapped by ValidateMachineType when a machine
+// type cannot host nested virtualization. Hosted VMs are always created with
+// advancedMachineFeatures.enableNestedVirtualization so grain can run Granule
+// microVMs and gVisor KVM sandboxes on /dev/kvm, and GCE rejects that (or the
+// VM's sandboxes fail at runtime) on E2 machine types.
+var ErrNoNestedVirtualization = errors.New("machine type does not support nested virtualization")
 
 // BaseMachineType extracts the bare GCE machine type name (e.g. "n2-standard-4" or "c4-standard-8")
 // from either a bare name or a zonal/project resource path.
@@ -119,12 +126,16 @@ func BaseMachineType(machineType string) string {
 	return mt
 }
 
-// ValidateMachineType checks that `machineType` is a valid GCE machine type (including
-// `n2-standard-*`, `c4-standard-*`, and standard E2/N2D/C3 series shapes).
+// ValidateMachineType checks that `machineType` is a valid GCE machine type for a
+// hosted VM (for example `n2-standard-*` or `c4-standard-*`). E2 machine types are
+// rejected because they do not support nested virtualization.
 func ValidateMachineType(machineType string) error {
 	base := BaseMachineType(machineType)
 	if base == "" {
 		return errors.New("gcp compute: machine_type is required")
+	}
+	if strings.HasPrefix(base, "e2-") {
+		return fmt.Errorf("gcp compute: machine_type %q: %w; use an N2 or C4 machine type (for example n2-standard-4 or c4-standard-4)", machineType, ErrNoNestedVirtualization)
 	}
 	if !gceMachineTypeRe.MatchString(base) {
 		return fmt.Errorf("gcp compute: invalid machine_type %q", machineType)
@@ -454,7 +465,7 @@ func (c *GCECompute) CreateInstance(ctx context.Context, spec registry.InstanceS
 
 	machineType := strings.TrimSpace(spec.Shape.MachineType)
 	if machineType == "" {
-		machineType = "e2-standard-4"
+		machineType = "n2-standard-4"
 	}
 	if err := ValidateMachineType(machineType); err != nil {
 		return nil, err
