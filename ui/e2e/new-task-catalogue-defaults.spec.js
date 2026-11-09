@@ -49,7 +49,7 @@ async function openStandalone(page, title) {
   await chooseOption(page.getByLabel(/^Repos/), "none");
   const note = page.getByTestId("new-task-catalogue-refused");
   await expect(note).toHaveText(
-    "settings/capabilities.yml refuses api:self-debug on a task with no repo, so that default is left off this task.",
+    "settings/capabilities.yml refuses https://grain.dev/capabilities/api#self-debug on a task with no repo, so that default is left off this task.",
   );
   return { note };
 }
