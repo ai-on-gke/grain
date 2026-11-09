@@ -16,6 +16,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import PendingConfigChange from "./PendingConfigChange.jsx";
+import { AccessConfigProvider } from "../../AccessContext.jsx";
 import api from "../../api.js";
 
 vi.mock("../../api.js", () => ({ default: vi.fn().mockResolvedValue(null) }));
@@ -128,5 +129,40 @@ describe("PendingConfigChange", () => {
     expect(
       screen.getByRole("button", { name: "Approve & Apply" }),
     ).toBeDisabled();
+  });
+
+  it("offers a role without settings:write neither decision, and says why", async () => {
+    const user = userEvent.setup();
+    const viewer = {
+      access: {
+        role: "grain/viewer",
+        roles: ["grain/viewer"],
+        full: false,
+        scopes: ["settings:read", "tasks:read"],
+      },
+    };
+    render(
+      <AccessConfigProvider config={viewer}>
+        <PendingConfigChange
+          t={{ id: "42", pendingConfigChange: pending() }}
+          act={act}
+        />
+      </AccessConfigProvider>,
+    );
+    const approve = screen.getByRole("button", { name: "Approve & Apply" });
+    const reject = screen.getByRole("button", { name: "Reject" });
+    expect(approve).toBeDisabled();
+    expect(reject).toBeDisabled();
+    expect(approve.closest("[data-access-denied]")).toHaveAttribute(
+      "data-access-denied",
+      "settings:write",
+    );
+    await user.hover(reject.closest("[data-access-denied]"));
+    expect(
+      await screen.findByText(
+        "Needs settings:write, which your role grain/viewer does not grant.",
+      ),
+    ).toBeInTheDocument();
+    expect(api).not.toHaveBeenCalled();
   });
 });
