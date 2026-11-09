@@ -68,7 +68,7 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:4271", "listen address")
 	state := flag.String("state", "/tmp/hic/stub", "directory for the request log")
 	vmIP := flag.String("vm-ip", "127.0.0.1", "networkIP reported for created instances")
-	vmAddr := flag.String("vm-addr", "", "also serve a healthy hosted VM's /healthz and /api/registry/status here (e.g. 127.0.0.1:8080)")
+	vmAddr := flag.String("vm-addr", "", "also serve a healthy hosted VM's /healthz and /api/registry/status here (the gce provider probes networkIP on gcp.InstanceHTTPPort; provision-walk.sh passes it)")
 	flag.Parse()
 	if *vmAddr != "" {
 		go func() {
