@@ -231,7 +231,7 @@ func (s *RegistryTunnelSupervisor) RunTunnel(ctx context.Context, cfg api.Connec
 			delay := s.ComputeBackoff(consecutiveFailures, err)
 			if consecutiveFailures == 1 || consecutiveFailures%10 == 0 {
 				redactedErr, _ := (*redact.Redactor)(nil).Text(err.Error())
-				s.opts.Logf("grain daemon: registry tunnel (%s) dial failed (attempt %d, retrying in %s): %s",
+				s.opts.Logf("grain daemon: hub tunnel (%s) dial failed (attempt %d, retrying in %s): %s",
 					dialCfg.Entry, consecutiveFailures, delay.Round(10*time.Millisecond), redactedErr)
 			}
 			if !s.sleep(ctx, delay) {
@@ -241,7 +241,7 @@ func (s *RegistryTunnelSupervisor) RunTunnel(ctx context.Context, cfg api.Connec
 		}
 
 		active := s.startSessionServer(sess)
-		s.opts.Logf("grain daemon: registry tunnel (%s) connected (session=%s)", dialCfg.Entry, sess.SessionID)
+		s.opts.Logf("grain daemon: hub tunnel (%s) connected (session=%s)", dialCfg.Entry, sess.SessionID)
 
 		// Supervise active session (and any proactive 23h ± 30m replacement rotations)
 		// until the active session drops or ctx is cancelled.
@@ -299,7 +299,7 @@ func (s *RegistryTunnelSupervisor) runActiveSessionLoop(
 				rotateFailures++
 				retryDelay := s.ComputeBackoff(rotateFailures, err)
 				redactedErr, _ := (*redact.Redactor)(nil).Text(err.Error())
-				s.opts.Logf("grain daemon: registry tunnel (%s) rotation dial failed (retrying in %s): %s",
+				s.opts.Logf("grain daemon: hub tunnel (%s) rotation dial failed (retrying in %s): %s",
 					dialCfg.Entry, retryDelay.Round(10*time.Millisecond), redactedErr)
 				rotateTimer.Reset(retryDelay)
 				continue
@@ -312,7 +312,7 @@ func (s *RegistryTunnelSupervisor) runActiveSessionLoop(
 			if s.opts.OnSessionRotate != nil {
 				s.opts.OnSessionRotate(oldActive.sess.SessionID, newActive.sess.SessionID)
 			}
-			s.opts.Logf("grain daemon: registry tunnel (%s) rotated session %s -> %s (draining old session up to %s)",
+			s.opts.Logf("grain daemon: hub tunnel (%s) rotated session %s -> %s (draining old session up to %s)",
 				dialCfg.Entry, oldActive.sess.SessionID, newActive.sess.SessionID, s.opts.DrainTimeout)
 
 			drainWG.Add(1)
