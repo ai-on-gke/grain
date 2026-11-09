@@ -971,4 +971,50 @@ describe("GrantsPicker", () => {
     ]);
     expect(onRemove).not.toHaveBeenCalled();
   });
+
+  // docs/test-plans/2026-11-09.md §1 item 3: when GET
+  // /api/capability-methods lists nothing but grain's own api
+  // references, they are not a generic method group, so the menu says
+  // there is nothing to grant -- and a picker with nothing to offer and
+  // nothing held is not drawn at all.
+  it("says there is nothing to grant when api references are the only methods", async () => {
+    const apiOnly = [
+      "https://grain.dev/capabilities/api#tasks:read",
+      "https://grain.dev/capabilities/api#ci-read",
+    ].map((ref) => ({
+      ref,
+      capability: "https://grain.dev/capabilities/api",
+      method: ref.split("#")[1],
+      args: null,
+    }));
+    serve({ current: apiOnly });
+    const user = userEvent.setup();
+    const { container, rerender } = render(
+      <GrantsPicker
+        grants={["https://grain.dev/capabilities/api#tasks:read"]}
+        config={{ capabilityMethods: 2 }}
+        onApiChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onRemove={vi.fn()}
+      />,
+    );
+    await user.click(await screen.findByRole("button", { name: "Add grant…" }));
+    const menu = await screen.findByRole("menu", { name: "Grants to add" });
+    expect(within(menu).getByText("Nothing to grant")).toBeInTheDocument();
+    expect(menu.querySelectorAll(".method-grant-row")).toHaveLength(0);
+    await user.keyboard("{Escape}");
+
+    rerender(
+      <GrantsPicker
+        grants={[]}
+        config={{ capabilityMethods: 2 }}
+        onApiChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onRemove={vi.fn()}
+      />,
+    );
+    await waitFor(() =>
+      expect(container.querySelector('[role="group"]')).toBeNull(),
+    );
+  });
 });

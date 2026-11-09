@@ -919,6 +919,17 @@ var Migrations = []Migration{
 			"that earlier rewriteLegacyGrantsMulti migrations left under their retired names",
 		Up: migrateRetiredGrantWaits,
 	},
+	{
+		Version:     130,
+		Description: "add task_run_usage, usage_capacity and usage_setting for per-run token accounting and connection budgets (tokenusage.go)",
+		Statements: []string{
+			taskRunUsageTable,
+			taskRunUsageFinishedIndex,
+			taskRunUsageTaskIndex,
+			usageCapacityTable,
+			usageSettingTable,
+		},
+	},
 }
 
 // schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as

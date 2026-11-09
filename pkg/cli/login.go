@@ -161,7 +161,7 @@ func cmdLogin(ctx context.Context, base *ui.HTTPClient, out *printer, sel select
 	scopeSet := fs.String("scope-set", defaultLoginScopeSet, "the scope set --issue-token mints")
 	repos := fs.String("repos", "", "comma-separated repositories --issue-token limits the token to")
 	expires := fs.String("expires", "30d", "how long --issue-token's token lasts (30d, 12h, ...)")
-	tokenStdin := fs.Bool("token-stdin", false, "read a gma_ token (or, with --auth access-code, the access code) from stdin and store it; not with --issue-token")
+	tokenStdin := fs.Bool("token-stdin", false, "read a gma_ token (or, with --auth access-code, the access code) from stdin and store it; not with --issue-token or --refresh")
 	refresh := fs.Bool("refresh", false, "re-mint the context's expired or expiring token")
 	auth := fs.String("auth", "", "how to sign in: access-code, or a credential source this build registers")
 	rest, err := parseArgs(fs, args)
@@ -204,6 +204,28 @@ func cmdLogin(ctx context.Context, base *ui.HTTPClient, out *printer, sel select
 		return &cliError{exit: exitUsage, code: "token_stdin_issue_token", fix: "grain -token CODE login " + server + " --issue-token",
 			err: fmt.Errorf("--token-stdin and --issue-token do not combine: --token-stdin stores the secret it reads; "+
 				"to mint a gma_ token with an access code, pass the code with -token: grain -token CODE login %s --issue-token", server)}
+	}
+	if *tokenStdin && *refresh {
+		// --token-stdin replaces the context's credential with what stdin
+		// holds; --refresh would have been silently ignored.
+		return &cliError{exit: exitUsage, code: "token_stdin_refresh", fix: "grain login --refresh",
+			err: fmt.Errorf("--token-stdin and --refresh do not combine: --refresh re-mints the context's own token, " +
+				"--token-stdin stores the one stdin holds; pass one of them")}
+	}
+	if !*issue {
+		// --scope-set, --repos and --expires shape the token --issue-token
+		// mints; without it (a --refresh rotation keeps the token's own)
+		// they would be silently ignored.
+		var stray []string
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "scope-set" || f.Name == "repos" || f.Name == "expires" {
+				stray = append(stray, "--"+f.Name)
+			}
+		})
+		if len(stray) > 0 {
+			return &cliError{exit: exitUsage, code: "needs_issue_token", fix: "grain login " + server + " --issue-token " + strings.Join(stray, " ") + " ...",
+				err: fmt.Errorf("%s only shape the token --issue-token mints; add --issue-token", strings.Join(stray, ", "))}
+		}
 	}
 	if *name == "" {
 		*name = contextSlug(u.Hostname())

@@ -127,6 +127,19 @@ const (
 	// BuildPlan -- since a deployment verifying signatures refuses a
 	// kept image whose signature was pruned out from under it.
 	KindSignature
+	// KindPending is v<major>.<minor>.<patch>-pending: the stamped build
+	// scripts/release-images.sh `pending` stages for a person to approve,
+	// which `promote` then only retags (so approving builds and tests
+	// nothing). No branch is called that, so as KindBranch it lived for
+	// the age window alone: an approval more than 48 hours after staging
+	// -- a weekend -- would find grain:v3.2.0-pending pruned, and promote
+	// would rebuild the release instead of publishing the build it
+	// staged (docs/test-runs/2026-11-09-release-image-machinery.md).
+	// Live until a person decides: approving retags the same version
+	// vX.Y.Z (KindRelease keeps it from then on), and rejecting marks it
+	// vX.Y.Z-rejected (discard-pending), which is what hands it back to
+	// the window here.
+	KindPending
 )
 
 // BasePackage is the package whose bare hex tags are granule base cache keys
@@ -151,6 +164,10 @@ var (
 // releaseTag is v<major>.<minor>.<patch> exactly: an rc (v1.6.0-rc.1) is
 // not a release, and nothing retags one.
 var releaseTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
+
+// pendingTag is v<major>.<minor>.<patch>-pending, the staged release; its
+// submatch is the release it stages.
+var pendingTag = regexp.MustCompile(`^(v[0-9]+\.[0-9]+\.[0-9]+)-pending$`)
 
 // classify says what a tag is for, given the package it is on.
 //
@@ -180,6 +197,8 @@ func classify(pkg, tag string) TagKind {
 		return KindShared
 	case releaseTag.MatchString(tag):
 		return KindRelease
+	case pendingTag.MatchString(tag):
+		return KindPending
 	case commitTag.MatchString(tag):
 		return KindCommit
 	case inputsTag.MatchString(tag):
@@ -337,16 +356,20 @@ func BuildPlan(versions []Version, liveBranches map[string]bool, p Policy, now t
 
 	// live reports whether one tag is a name something may still
 	// resolve, and says why in words meant for the run's log.
-	live := func(pkg, tag string) (bool, string) {
+	live := func(v Version, tag string) (bool, string) {
 		age := short(now.Sub(times[tag]))
 		if p.Deployed[tag] {
 			return true, fmt.Sprintf("%q is the build a deployment is running", tag)
 		}
-		switch classify(pkg, tag) {
+		switch classify(v.Package, tag) {
 		case KindShared:
 			return true, fmt.Sprintf("%q is the name every deployment resolves", tag)
 		case KindRelease:
 			return true, fmt.Sprintf("%q is a promoted release", tag)
+		case KindPending:
+			if !hasTag(v, pendingTag.FindStringSubmatch(tag)[1]+"-rejected") {
+				return true, fmt.Sprintf("%q is a staged release nobody has approved or rejected yet", tag)
+			}
 		case KindBranch:
 			if liveBranches[tag] {
 				return true, fmt.Sprintf("%q is a branch that still exists, and this is the build it names", tag)
@@ -413,7 +436,7 @@ func BuildPlan(versions []Version, liveBranches map[string]bool, p Policy, now t
 		var dead []string
 		kept := ""
 		for _, tag := range v.Tags {
-			ok, why := live(v.Package, tag)
+			ok, why := live(v, tag)
 			if ok {
 				kept = why
 				break
@@ -457,6 +480,15 @@ func BuildPlan(versions []Version, liveBranches map[string]bool, p Policy, now t
 		}
 	}
 	return plan
+}
+
+func hasTag(v Version, tag string) bool {
+	for _, t := range v.Tags {
+		if t == tag {
+			return true
+		}
+	}
+	return false
 }
 
 // signedDigest is the digest v is the cosign signature of -- "sha256:..."

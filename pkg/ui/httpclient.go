@@ -84,6 +84,10 @@ type HTTPClient struct {
 	ContextToken func(ctx context.Context) (string, error)
 	// User is the optional identity to send in proxy identity headers (e.g. X-Forwarded-User).
 	User string
+	// ActingReason, when set, is sent as X-Grain-Acting-Reason: the
+	// reason the agent API gate asks an external agent credential for
+	// on a destructive route (`grain approve -reason`).
+	ActingReason string
 	// RetryPolicy is how long a call waits out a daemon that is not
 	// answering. nil means DefaultRetryPolicy; &NoRetry is one attempt.
 	RetryPolicy *RetryPolicy
@@ -137,6 +141,9 @@ func (c *HTTPClient) prepareRequest(ctx context.Context, req *http.Request) erro
 	}
 	if c.User != "" {
 		req.Header.Set("X-Forwarded-User", c.User)
+	}
+	if reason := strings.TrimSpace(c.ActingReason); reason != "" {
+		req.Header.Set(ActingReasonHeader, strings.NewReplacer("\r", " ", "\n", " ").Replace(reason))
 	}
 	if req.Header.Get("User-Agent") == "" {
 		req.Header.Set("User-Agent", "grain-cli")
@@ -697,6 +704,13 @@ func (c *HTTPClient) statusError(resp *http.Response, plainText bool) error {
 	}
 	if resp.StatusCode == http.StatusUnauthorized && IsLoopbackURL(c.BaseURL) {
 		message += loopbackUnauthorizedHint()
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		// The external-agent rate limit says when the bucket refills;
+		// a caller (an agent reading the CLI's error) should hear it.
+		if after, err := strconv.Atoi(strings.TrimSpace(resp.Header.Get("Retry-After"))); err == nil && after > 0 {
+			message += fmt.Sprintf("; retry in %ds", after)
+		}
 	}
 	if resp.StatusCode == http.StatusBadRequest {
 		lower := strings.ToLower(string(body))

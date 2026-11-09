@@ -1,0 +1,20 @@
+config /tmp/hic/registry.yaml is valid
+### SA_DELAY=20: grain registry create walk-late2
+  created hosted instance entry walk-late2 (state=creating, shape=n2-standard-2, url=https://walk-late2.grain-user.test)
+  t+0s: state=creating status_detail=
+  t+16s: state=creating status_detail=waiting for service account gi-walk-late2@made-up-proj.iam.gserviceaccount.com to propagate before creating the GCE instance (attempt 1 failed, retrying in 5s): gcp compute: inserting instance grain-vm-walk-late2 in us-central1-a: GCE operation op-2 failed (EXTERNAL_RESOURCE_NOT_FOUND): The resource 'gi-walk-late2@made-up-proj.iam.gserviceaccount.com' of type 'serviceAccount' was not found.
+  t+26s: state=creating status_detail=waiting for service account gi-walk-late2@made-up-proj.iam.gserviceaccount.com to propagate before creating the GCE instance (attempt 2 failed, retrying in 10s): gcp compute: inserting instance grain-vm-walk-late2 in us-central1-a: GCE operation op-4 failed (EXTERNAL_RESOURCE_NOT_FOUND): The resource 'gi-walk-late2@made-up-proj.iam.gserviceaccount.com' of type 'serviceAccount' was not found.
+  t+41s: state=running status_detail=
+### grain registry show walk-late2
+  Name:        walk-late2
+  URL:         https://walk-late2.grain-user.test
+  Kind:        instance (host_kind=registry-vm)
+  State:       running (status=online, listed=false)
+  Owner:       alice@example.com
+  Shape:       n2-standard-2
+  Version:     v3.2.0-walk ()
+### stub: Compute inserts, Secret Manager versions, SA creations
+  instance inserts (all walks so far): 7
+  projects/made-up-proj/secrets/grain-inst-walk-late2-db-password: 1 version(s)
+### tenant role on the TLS pool
+  gi-walk-late2@made-up-proj.iam|t

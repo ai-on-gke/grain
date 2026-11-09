@@ -1,0 +1,38 @@
+release-from-trunk: fetching origin's main, candidate and tags
+release-from-trunk: major 3 (floor minor 0); newest promoted release v3.1.1; next minor v3.2.0; notes from v3.1.1
+release-from-trunk: phase 1: v3.2.0-rc.3 (cba7d44bb42b) is in qualification; asking the qualification gate
+release-from-trunk: RELEASE_QUALIFICATION_APP=none, so no grain/release-qualification check run is read for v3.2.0-rc.3: Stage 1 alone qualifies it
+  Qualification of v3.2.0-rc.3 (cba7d44bb42b).
+  PASS cmd-grain-stress: passed (success)
+  PASS go-long: passed (success)
+  PASS installer-variants: passed (success)
+  PASS loadtest: passed (success)
+  PASS long-sim: passed (success)
+  PASS long-term-test: passed (success)
+  PASS merge-stress: passed (success)
+  PASS postgres-stress: passed (success)
+  PASS scalability: passed (success)
+  PASS staterepo-soak: passed (success)
+  PASS tunnel-stress: passed (success)
+  PASS ui-e2e-long: passed (success)
+  PASS upgrade-test: passed (success)
+  PASS vulns: passed (success)
+  SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)
+  Qualification: PASS v3.2.0-rc.3.
+  v3.2.0: breaking changes since v3.1.1:
+  - refactor(models)!: remove the custom command connection type (#645)
+    - custom command connections (framework "custom") are
+  /tmp/rim-train/clone/scripts/release-notes.sh: refusing to promote v3.2.0: it carries breaking changes, and it is not a major release.
+    v3.1.1 is major 3, v3.2.0 is major 3, and scripts/release.conf at cba7d44bb42bfacad6458c3cefee7becf8f38bd7 has RELEASE_MAJOR=3.
+    To release them, raise RELEASE_MAJOR in scripts/release.conf above 3 and cut again,
+    or have a person set RELEASE_ALLOW_BREAKING=v3.2.0 for this one promotion.
+release-from-trunk: phase 1: v3.2.0-rc.3 qualified, but the train does not release it itself: it carries breaking changes since v3.1.1 and is not the major release RELEASE_MAJOR asks for; staging v3.2.0-pending for a person to approve (v3.2.0 and latest are not touched)
+release-from-trunk: output promotion_blocked=it carries breaking changes since v3.1.1 and is not the major release RELEASE_MAJOR asks for
+release-from-trunk: [dry-run] would git push origin refs/tags/v3.2.0-pending
+release-from-trunk: output pending_version=v3.2.0
+release-from-trunk: [dry-run] would run release-images.sh pending v3.2.0
+release-from-trunk: RELEASE_NOTES_TASK=off: no release-notes task for v3.2.0 (notes from v3.1.1)
+release-from-trunk: no release gate, so no notification that v3.2.0 is ready to promote: approve it with `grain release approve v3.2.0`
+release-from-trunk: phase 2: the newest release is off main's history; the next rc must be after where it left main (6045a6a0db43)
+release-from-trunk: phase 2: v3.2.0 was tagged 0m ago, under RELEASE_MIN_INTERVAL_MINUTES (120); nothing to cut yet (FORCE=true cuts anyway)
+exit=0 images=[] remote-tags-after=[v3.2.0-rc.1 v3.2.0-rc.1-discarded v3.2.0-rc.2 v3.2.0-rc.2-discarded v3.2.0-rc.3]

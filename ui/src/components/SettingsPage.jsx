@@ -73,7 +73,7 @@ import {
   isConfigRepoSection,
   settingsSectionLabel,
 } from "../settingsSections.js";
-import { matchSettings } from "../settingsIndex.js";
+import { SETTINGS_INDEX, matchSettings } from "../settingsIndex.js";
 import { statusLine, useSettingsSection } from "../useSettingsSection.js";
 import { leavingLosesEdits } from "../unsavedEdits.js";
 import { settingLabel } from "../settingsPlan.js";
@@ -286,9 +286,17 @@ export default function SettingsPage({
   useEffect(() => {
     if (!focusTarget) return;
     const reveal = () => {
+      // A setting hidden while its parent mode is off (Automatic upgrade
+      // time of day when Automatic upgrades is off; the fixed or auto
+      // overcommit bounds of the inactive Overcommit mode) has no input in
+      // the DOM once its card has drawn: reveal that card instead.
+      const cardAnchor = SETTINGS_INDEX.find(
+        (e) => e.id === focusTarget && e.section === current && !e.card,
+      )?.anchor;
       const el =
         document.querySelector(`[data-setting-id="${focusTarget}"]`) ||
-        document.getElementById(focusTarget);
+        document.getElementById(focusTarget) ||
+        (cardAnchor ? document.getElementById(cardAnchor) : null);
       if (!el) return false;
       // Centre a field or a short card; a card taller than the screen
       // (Sandboxes → Kubernetes) is aligned to its top instead, since
@@ -322,7 +330,7 @@ export default function SettingsPage({
   // card; CLI's Sign in opens Agents at External agents) and is scrolled
   // to once it is drawn.
   const go = (next, nextAnchor = "") => {
-    if (next !== current) {
+    if (next !== current || Boolean(item)) {
       if (
         (s.dirtyCards.length > 0 || leavingLosesEdits()) &&
         !window.confirm(DISCARD_PROMPT)
@@ -336,14 +344,17 @@ export default function SettingsPage({
   };
 
   const pick = (entry) => {
-    if (!go(entry.section)) return;
+    const target = entry.card ? entry.anchor : entry.id;
+    const sameSection = entry.section === current && !item;
+    if (!go(entry.section, target)) return;
     setFilter("");
-    setFocusTarget(entry.card ? entry.anchor : entry.id);
-    window.history.replaceState(
-      window.history.state,
-      "",
-      `/settings/${entry.section}#${entry.card ? entry.anchor : entry.id}`,
-    );
+    if (sameSection) {
+      window.history.replaceState(
+        window.history.state,
+        "",
+        `/settings/${entry.section}#${target}`,
+      );
+    }
   };
 
   const filterBox = (
@@ -753,8 +764,7 @@ export default function SettingsPage({
           <UpgradeSection
             {...common}
             onOpenUpdates={() => {
-              if (!go("general")) return;
-              setFocusTarget("updates");
+              go("general", "updates");
             }}
           />
         );

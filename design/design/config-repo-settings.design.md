@@ -541,7 +541,7 @@ From `ui/src/components/NewTaskOverlay.jsx` and `ui/src/components/GrantsPicker.
 | `autoMerge` | `Checkbox` ("Auto-merge once checks pass") | `shown` (when git repo target) | `!!config.autoMergeByDefault` |
 | `noPort` | `Checkbox` ("Don't port to the repo's paired branches") | `shown` (when git repo target) | `false` |
 | `fixesBaseBranch` | `Checkbox` ("This fixes a red `<branch>`") | `shown` (when `!noRepo`) | `false` |
-| `legacyCapabilities` | `Select` multiple ("Legacy capabilities" — in-process capability IDs) | `shown` | `defaultCapabilitiesFor(config, repo)` filtered to legacy IDs |
+| `legacyCapabilities` | None: the "Legacy capabilities" select is removed (PR #985), and the id is read as an alias of `grants` | — | — |
 | `grants` | `GrantsPicker` ("Grants" — `api:` presets/scopes and `<server>#<method>` capability grants with `with:` args) | `shown` | `defaultCapabilitiesFor(config, repo)` filtered to `api:` + capability refs |
 | `model` | `ModelSelect` ("Model") | `shown` (when `models.length > 0`) | `""` (deployment default rotation) |
 | `dependsOn` | `TaskPicker` ("Depends on") | `shown` | `[]` |

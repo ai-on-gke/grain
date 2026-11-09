@@ -758,6 +758,11 @@ var attributedRoutes = map[string]attributedRoute{
 		agentGrants: []string{"api:settings:write"},
 		recorded:    lastConfigAudit,
 	},
+	"PUT /api/usage/settings": {
+		body:        `{"mode":"auto","minWorkers":2}`,
+		agentGrants: []string{"api:settings:write"},
+		recorded:    lastConfigAudit,
+	},
 	"PUT /api/repos/{owner}/{name}/merge-on-green": {
 		path:        "/api/repos/acme/widgets/merge-on-green",
 		body:        `{"enabled":true}`,

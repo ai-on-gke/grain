@@ -35,6 +35,7 @@ import ModelBackendPage, {
 import CLIRunLocations from "./CLIRunLocations.jsx";
 import ModelDefaults from "./ModelDefaults.jsx";
 import SettingsCard, { SettingsReadOnlyContext } from "./SettingsCard.jsx";
+import UsageCard from "./UsageCard.jsx";
 
 // ModelsSection is Settings → Models (design/design/settings-panel.design.md
 // §3.2): the deployment's provider connections, then the default model
@@ -648,6 +649,9 @@ export default function ModelsSection({ config, onSaved, showError }) {
           }}
           onSave={saveDeployment}
         />
+      </SettingsCard>
+      <SettingsCard title="Token usage and budgets" anchor="usage">
+        <UsageCard showError={showError} />
       </SettingsCard>
       <SettingsCard title="Where each agent CLI runs" anchor="cli-run">
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>

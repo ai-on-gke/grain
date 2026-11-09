@@ -1028,6 +1028,26 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	}); err != nil {
 		t.Fatalf("recording a usage-limit pause: %v", err)
 	}
+	// Token accounting (model/tokenusage.go): a run's usage, a learned
+	// capacity with its reset, and the operator's usage settings.
+	if err := store.RecordRunUsage(ctx, model.RunUsage{
+		RunID: "run-usage-1", TaskID: "1", Connection: "agy-1", Team: model.DefaultTeamID, Model: "gemini-3-pro",
+		Framework: "antigravity", Hostd: "laptop", InputTokens: 1000, OutputTokens: 200, CacheReadTokens: 5000,
+		CacheWriteTokens: 30, CostUSD: 0.5, Turns: 4, StartedAt: sub, FinishedAt: sub.Add(20 * time.Minute),
+	}); err != nil {
+		t.Fatalf("recording run usage: %v", err)
+	}
+	if err := store.RecordUsageCapacity(ctx, model.UsageCapacity{
+		Connection: "agy-1", Model: "gemini-3-pro", Tokens: 900000, Window: 5 * time.Hour, ObservedAt: sub, ResetAt: sub.Add(13 * time.Hour),
+	}); err != nil {
+		t.Fatalf("recording a usage capacity: %v", err)
+	}
+	if err := store.PutUsageSettings(ctx, model.UsageSettings{
+		Mode: model.UsageModeAuto, MinWorkers: 2, RetentionDays: 14,
+		Budgets: []model.TokenBudget{{Connection: "agy-1", Model: "gemini-3-pro", Tokens: 1000000, Window: "5h"}},
+	}, sub); err != nil {
+		t.Fatalf("recording usage settings: %v", err)
+	}
 	// What grain CI last made of a branch things merge into
 	// (model.BaseBranchCI): a failure, with every optional column filled
 	// -- a finish time, a detail, the merge that started it, the repair

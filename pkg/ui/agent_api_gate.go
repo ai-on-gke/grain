@@ -846,11 +846,14 @@ func (s *Server) agentApprovalRail(ctx context.Context, acting *model.Task, targ
 //     approval, so it asks for exactly the scope the approve route's own
 //     scope check does (set.Allows("tasks:admin", repo)), and the two
 //     routes agree on every unapproved task. tasks:admin held only for
-//     some repositories never approves a task that names none.
+//     some repositories never approves a task that names none;
+//   - on run-now, the call gives no reason (X-Grain-Acting-Reason):
+//     approve is destructive under tasks:admin and refused without one,
+//     so the implicit approval asks for it too.
 //
 // An already-approved target passes run-now straight through, as it does
 // for a task's run, so dispatch:write still jumps queued work ahead.
-func (s *Server) externalApprovalRail(ctx context.Context, principal string, set APIGrantSet, repo, target string, onlyIfUnapproved bool) error {
+func (s *Server) externalApprovalRail(ctx context.Context, principal string, set APIGrantSet, repo, target, reason string, onlyIfUnapproved bool) error {
 	id := model.NormalizeTaskID(target)
 	task, err := s.tasks.Store.GetTask(ctx, id)
 	if err != nil {
@@ -863,6 +866,11 @@ func (s *Server) externalApprovalRail(ctx context.Context, principal string, set
 		return fmt.Errorf("%s cannot run task %s now: it is not approved, and run-now would approve it first, which "+
 			"an external agent credential may only do under tasks:admin -- approve it under tasks:admin, or a person "+
 			"approves it (docs/agent-api.md)", principal, task.ID)
+	}
+	if onlyIfUnapproved && reason == "" {
+		return fmt.Errorf("%s cannot run task %s now without a reason: it is not approved, and run-now would approve it "+
+			"first, which is destructive (scope tasks:admin) as POST /api/tasks/{id}/approve is: give a reason "+
+			"(X-Grain-Acting-Reason, grain_invoke's reason, grain run-now -reason)", principal, task.ID)
 	}
 	return s.tasks.externalApprovalRefusal(ctx, principal, *task)
 }
@@ -2813,7 +2821,7 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	if (IsDangerousAPIScope(scope) || method == http.MethodDelete) && call.reason == "" {
 		return call, fmt.Errorf("%s is destructive (scope %s): give a reason", pattern, scope)
 	}
-	if err := s.externalAgentRails(ctx, tok, set, call.repo, pattern, method, scope, call.targetTask, body); err != nil {
+	if err := s.externalAgentRails(ctx, tok, set, call.repo, pattern, method, scope, call.targetTask, call.reason, body); err != nil {
 		return call, err
 	}
 	if err := agentGrantEscalationFrom(held, pattern, body, s.storedFieldGrants(ctx, pattern, call.repo), s.tasks.normalizeCapabilityID); err != nil {
@@ -2974,7 +2982,7 @@ func (s *Server) externalAgentCallRepo(ctx context.Context, r *http.Request, pat
 	return "", nil, nil
 }
 
-func (s *Server) externalAgentRails(ctx context.Context, tok *model.ExternalAgentToken, set APIGrantSet, repo, pattern, method string, scope APIScope, target string, body []byte) error {
+func (s *Server) externalAgentRails(ctx context.Context, tok *model.ExternalAgentToken, set APIGrantSet, repo, pattern, method string, scope APIScope, target, reason string, body []byte) error {
 	if method == http.MethodGet {
 		return nil
 	}
@@ -2994,7 +3002,7 @@ func (s *Server) externalAgentRails(ctx context.Context, tok *model.ExternalAgen
 		}
 	}
 	if (pattern == approveTaskRoute || pattern == runNowTaskRoute) && target != "" {
-		if err := s.externalApprovalRail(ctx, principal, set, repo, target, pattern == runNowTaskRoute); err != nil {
+		if err := s.externalApprovalRail(ctx, principal, set, repo, target, reason, pattern == runNowTaskRoute); err != nil {
 			return err
 		}
 	}

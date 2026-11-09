@@ -1,0 +1,57 @@
+== sandbox container: grain-sandbox-15-1 (grain-sbx:walk)
+== item 4: gcloud on the placed config
+-rw------- 1 debian debian 445 Nov  9 04:26 /home/debian/.gcp-service-account.json
+{
+  "audience": "//grain.dev/capabilities/gcp/permission-sets/org-deploy",
+  "credential_source": {
+    "file": "/home/debian/.gcp-token/grain-15-1-0/org-deploy.token"
+  },
+  "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+  "token_info_url": "http://127.0.0.1:4252/runs/grain-15-1-0/introspect",
+  "token_url": "http://127.0.0.1:4252/runs/grain-15-1-0/token",
+  "type": "external_account",
+  "universe_domain": "googleapis.com"
+}
+-- gcloud config list (what activate.sh set)
+[auth]
+credential_file_override = /home/debian/.gcp-service-account.json
+[component_manager]
+disable_update_check = True
+[core]
+project = walk-proj
+
+Your active configuration is: [default]
+-- gcloud auth print-access-token
+tok-11-<cut><cut>
+-- a second credential_file_override command: gcloud auth list
+
+No credentialed accounts.
+
+To login, run:
+  $ gcloud auth login `ACCOUNT`
+
+token_info_url: http://127.0.0.1:4252/runs/grain-15-1-0/introspect
+-- introspect the live token at token_info_url (inside the container)
+{"active":true,"exp":1794202020,"username":"deployer@walk-proj.iam.gserviceaccount.com"}
+ HTTP 200
+-- introspect the same token at another attempt's path (http://127.0.0.1:4252/runs/grain-999-1-0/introspect)
+{"active":false}
+ HTTP 200
+== item 3: propose_task through the run's own grain MCP server
+grain mcpserver: -grant "https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"org-deploy\",\"primary\":true}" names no capability this binary serves tools for (known: self-debug, https://grain.dev/capabilities/grain#source, https://grain.dev/capabilities/grain#source={}, grain-log, https://grain.dev/capabilities/grain#journal, https://grain.dev/capabilities/grain#journal={}, grain-ci, https://grain.dev/capabilities/grain#ci, https://grain.dev/capabilities/grain#ci={}, deployment-health, https://grain.dev/capabilities/grain#health, https://grain.dev/capabilities/grain#health={}, read-issues, https://grain.dev/capabilities/github#read-issues, https://grain.dev/capabilities/github#read-issues={}, db-read, db-write, https://grain.dev/capabilities/grain#sql, https://grain.dev/capabilities/grain#sql={}, https://grain.dev/capabilities/grain#sql={"write":false}, https://grain.dev/capabilities/grain#sql={"write":true}, self-repair, https://grain.dev/capabilities/grain#host-exec, https://grain.dev/capabilities/grain#host-exec={}); this run gets no tools from it
+grain mcpserver: pull_request_status and wait_for_checks are unavailable this run: -pr-upstream-repo "/": repo must be owner/name, got "/" (one on another git host is host/owner/name)
+--- propose_task [capabilities + grants: []] {"capabilities": ["api:ci-read"], "grants": []}
+    -> isError=True grants: grants and capabilities both name capability grants; send one
+--- propose_task [reads: [] + grants:] {"reads": [], "grants": [{"capability": "https://grain.dev/capabilities/repo#read", "with": {"repo": "acme/widgets"}}]}
+    -> isError=True grants: https://grain.dev/capabilities/repo#read and reads both name read access; send one
+--- propose_task [base + repo#target] {"base": "main", "grants": [{"capability": "https://grain.dev/capabilities/repo#target", "with": {"repo": "acme/widgets", "base": "main"}}]}
+    -> isError=False Recorded (1 proposed task(s) so far this run). Each is filed as a real task in grain's queue when this run finishes -- unapproved until a human approves it there, unless your own task's permission already covers it.
+--- propose_task [branch + repo#target] {"branch": "main", "grants": [{"capability": "https://grain.dev/capabilities/repo#target", "with": {"repo": "acme/widgets", "base": "main"}}]}
+    -> isError=True grants: https://grain.dev/capabilities/repo#target and the request's repo field both name the task's repository; send one
+--- propose_task [repo + repo#target] {"repo": "acme/widgets", "grants": [{"capability": "https://grain.dev/capabilities/repo#target", "with": {"repo": "acme/widgets", "base": "main"}}]}
+    -> isError=True grants: https://grain.dev/capabilities/repo#target and the request's repo field both name the task's repository; send one
+--- propose_task [no_repo + repo#target] {"no_repo": true, "grants": [{"capability": "https://grain.dev/capabilities/repo#target", "with": {"repo": "acme/widgets", "base": "main"}}]}
+    -> isError=True grants: https://grain.dev/capabilities/repo#target and the request's repo field both name the task's repository; send one
+--- propose_task [control: grants only] {"grants": ["api:ci-read"]}
+    -> isError=False Recorded (2 proposed task(s) so far this run). Each is filed as a real task in grain's queue when this run finishes -- unapproved until a human approves it there, unless your own task's permission already covers it.
+== 2026-11-09T04:27:01Z done

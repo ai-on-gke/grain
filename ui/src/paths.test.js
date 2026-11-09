@@ -272,6 +272,27 @@ describe("parsePath", () => {
     });
   });
 
+  it("escapes a ref's # and ? so a reload compares the same branch", () => {
+    // Written plainly, "#" began the fragment: the page opened in-app,
+    // but reloading it compared fix/ (2026-11-09 repository walkthrough).
+    const path = buildPath({
+      view: "repos",
+      repo: "acme/widgets",
+      repoComparison: { base: "release/1.0", head: "fix/#123-what?" },
+    });
+    expect(path).toBe(
+      "/repos/acme/widgets/compare/release/1.0...fix/%23123-what%3F",
+    );
+    const url = new URL(path, "http://grain.test");
+    expect(url.hash).toBe("");
+    expect(url.search).toBe("");
+    expect(parsePath(url.pathname)).toEqual({
+      view: "repos",
+      repo: "acme/widgets",
+      repoComparison: { base: "release/1.0", head: "fix/#123-what?" },
+    });
+  });
+
   it("falls back to the repo page for a comparison naming no head", () => {
     expect(parsePath("/repos/acme/widgets/compare")).toEqual({
       view: "repos",

@@ -2027,6 +2027,69 @@ describe("RepoPage", () => {
     ).toBeInTheDocument();
   });
 
+  it("says an import whose source could not be listed read nothing", async () => {
+    // A missing source repository used to answer "Read 0 open issues
+    // ... Some could not be imported", as if the source had no issues
+    // and some of them failed (2026-11-09 repository walkthrough).
+    routeApi({
+      upToDate: {
+        repo: "acme/widgets",
+        issueImport: {
+          enabled: true,
+          approved: false,
+          repo: "acme/gone",
+          label: "",
+          intervalSeconds: 0,
+          effectiveIntervalSeconds: 600,
+        },
+      },
+    });
+    const listing = api.getMockImplementation();
+    const answers = [
+      {
+        repo: "acme/widgets",
+        source: "acme/gone",
+        open: 0,
+        imported: [],
+        skipped: 0,
+        error:
+          "listing open issues on acme/gone: GitHub answered 404: Not Found",
+      },
+      {
+        repo: "acme/widgets",
+        source: "acme/gone",
+        open: 2,
+        imported: ["7"],
+        skipped: 0,
+        error: "filing issue #9: store is read-only",
+      },
+    ];
+    api.mockImplementation((path, opts) =>
+      opts && /\/import-issues$/.test(path)
+        ? Promise.resolve(answers.shift())
+        : listing(path, opts),
+    );
+    const user = userEvent.setup();
+    renderPage({ tab: "agents" });
+
+    const now = await screen.findByRole("button", {
+      name: "Import issues now",
+    });
+    await user.click(now);
+    const failed = await screen.findByText(
+      "Could not read the open issues on acme/gone: listing open issues on acme/gone: GitHub answered 404: Not Found",
+    );
+    expect(failed).toHaveAttribute("role", "status");
+    expect(screen.queryByText(/Read 0 open issues/)).not.toBeInTheDocument();
+
+    await user.click(now);
+    expect(
+      await screen.findByText(
+        "Read 2 open issues on acme/gone: imported 1, 0 already imported. Some could not be imported: filing issue #9: store is read-only",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("switching issue import on saves the label typed before it", async () => {
     // The first pass runs on the next cycle, so a label typed but not
     // saved has to go with the switch, or that pass reads every open

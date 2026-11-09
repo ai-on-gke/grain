@@ -52,6 +52,8 @@ GRAIN_ACCESS_TOKEN="${GRAIN_ACCESS_TOKEN:-}"
 GRAIN_SQL_PROXY_TIMEOUT="${GRAIN_SQL_PROXY_TIMEOUT:-60}"
 GRAIN_SKIP_TMPFS_MOUNT="${GRAIN_SKIP_TMPFS_MOUNT:-0}"
 GRAIN_SKIP_SYSTEMCTL="${GRAIN_SKIP_SYSTEMCTL:-0}"
+GRAIN_SM_ATTEMPTS="${GRAIN_SM_ATTEMPTS:-6}"
+GRAIN_SM_RETRY_DELAY="${GRAIN_SM_RETRY_DELAY:-1}"
 
 log() {
   echo "grain-instance-init: $*" >&2
@@ -193,20 +195,35 @@ encode_base64() {
 # sm_access_latest fetches the latest version of a Secret Manager secret
 # resource (projects/<project>/secrets/<name>). Returns 0 and prints the
 # decoded secret payload on HTTP 200; returns 44 on HTTP 404; exits on any
-# other error.
+# other error. A transient failure (no connection, HTTP 429 or 5xx) is
+# retried GRAIN_SM_ATTEMPTS times with doubling delays: this unit runs once
+# per boot and grain-daemon.service starts after it whether or not it
+# succeeded, so a single Secret Manager blip must not leave the VM without
+# its daemon.env.
 sm_access_latest() {
   local secret_name="$1"
   local token="$2"
   local body_file
   body_file="$(mktemp)"
   local url="${GRAIN_SM_API_URL%/}/v1/${secret_name#/}/versions/latest:access"
-  local http_code
-  http_code="$(
-    curl -sS -o "$body_file" -w '%{http_code}' \
-      -H "Authorization: Bearer ${token}" \
-      -H "Accept: application/json" \
-      "$url" 2>/dev/null || echo "000"
-  )"
+  local http_code attempt=1 delay="$GRAIN_SM_RETRY_DELAY"
+  while :; do
+    http_code="$(
+      curl -sS -o "$body_file" -w '%{http_code}' \
+        -H "Authorization: Bearer ${token}" \
+        -H "Accept: application/json" \
+        "$url" 2>/dev/null || echo "000"
+    )"
+    case "$http_code" in
+      000 | 429 | 5??) ;;
+      *) break ;;
+    esac
+    [ "$attempt" -lt "$GRAIN_SM_ATTEMPTS" ] || break
+    log "Secret Manager access ${secret_name} returned HTTP ${http_code}; retrying in ${delay}s (attempt ${attempt}/${GRAIN_SM_ATTEMPTS})"
+    sleep "$delay"
+    attempt=$((attempt + 1))
+    delay=$((delay * 2))
+  done
   if [ "$http_code" = "200" ]; then
     local b64
     b64="$(jq -r '.payload.data // empty' "$body_file")"

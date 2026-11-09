@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -208,3 +209,58 @@ func clientError(t *testing.T, status int) error {
 }
 
 func mustErr(_ string, err error) error { return err }
+
+// A 429 from the external-agent rate limit carries Retry-After; the
+// CLI's error says it, so an agent reading -json knows when the same
+// command will go through (docs/test-runs/2026-11-09-external-agent-rails.md, F4).
+func TestRateLimitedErrorSaysWhenToRetry(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "17")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = fmt.Fprint(w, `{"error":"external agent \"x\" exceeded rate limit (60 requests/minute)"}`)
+	}))
+	t.Cleanup(srv.Close)
+	code, _, stderr := runForExit(t, []string{"-token", testAccessCode, "-server", srv.URL, "list", "--json"})
+	var got jsonError
+	if err := json.Unmarshal([]byte(stderr), &got); err != nil {
+		t.Fatalf("stderr = %q: %v", stderr, err)
+	}
+	if code != exitFailed || got.Error.Code != "rate_limited" || !strings.Contains(got.Error.Message, "retry in 17s") {
+		t.Errorf("rate-limited grain list = exit %d %+v, want exit %d, rate_limited, naming \"retry in 17s\"", code, got.Error, exitFailed)
+	}
+}
+
+// grain approve -reason and grain run-now -reason send the reason as
+// X-Grain-Acting-Reason, the one place the agent API gate reads it: an
+// external agent credential could not approve from the CLI at all
+// without it (docs/test-runs/2026-11-09-external-agent-rails.md, F2).
+func TestApproveAndRunNowSendTheirReason(t *testing.T) {
+	var mu sync.Mutex
+	seen := map[string]string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			mu.Lock()
+			seen[r.URL.Path] = r.Header.Get(ui.ActingReasonHeader)
+			mu.Unlock()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"id":"42","title":"t","state":"queued"}`)
+	}))
+	t.Cleanup(srv.Close)
+	for _, verb := range []string{"approve", "run-now"} {
+		runForExit(t, []string{"-token", "gma_test", "-server", srv.URL, verb, "-reason", "ship the fix\nnow", "42"})
+	}
+	runForExit(t, []string{"-token", "gma_test", "-server", srv.URL, "approve", "43"})
+	mu.Lock()
+	defer mu.Unlock()
+	for path, want := range map[string]string{
+		"/api/tasks/42/approve": "ship the fix now",
+		"/api/tasks/42/run-now": "ship the fix now",
+		"/api/tasks/43/approve": "",
+	} {
+		if got, ok := seen[path]; !ok || got != want {
+			t.Errorf("POST %s sent %s %q (sent: %v), want %q", path, ui.ActingReasonHeader, got, ok, want)
+		}
+	}
+}

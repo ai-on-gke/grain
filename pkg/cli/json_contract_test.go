@@ -62,6 +62,7 @@ func TestEveryExternalVerbSupportsJSONOutput(t *testing.T) {
 		{"reopen", server, []string{"reopen", "2"}},
 		{"metrics", server, []string{"metrics"}},
 		{"failures", server, []string{"failures"}},
+		{"usage", server, []string{"usage"}},
 		{"pause", server, []string{"pause"}},
 		{"resume", server, []string{"resume", "2"}},
 		{"config", server, []string{"config"}},

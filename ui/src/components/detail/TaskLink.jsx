@@ -13,21 +13,37 @@
 // limitations under the License.
 
 import { Link } from "@mui/material";
+import { useReturnFocus } from "../ListPrimitives.jsx";
 
 // TaskLink is a link from one task's pane to another task: a plain click
 // opens it in place, the way every other task link does, while the href
 // names the task itself, so a middle click, a modified click, "open in
 // new tab" and "copy link" all reach it too -- an href of "#" sent each
 // of those to the pane already open instead.
-export default function TaskLink({ id, onOpenTask, children }) {
+//
+// returnFocus, a tag, opts it into useReturnFocus: a link on a page the
+// task replaces -- a report's task references -- takes focus back when
+// Back remounts that page. Left out (null), the link never takes focus
+// on mounting, which suits a task pane's links: the pane hands focus
+// back itself.
+export default function TaskLink({
+  id,
+  onOpenTask,
+  children,
+  returnFocus = null,
+}) {
+  const href = `/tasks/${encodeURIComponent(id)}`;
+  const [ref, remember] = useReturnFocus(href, returnFocus);
   return (
     <Link
-      href={`/tasks/${encodeURIComponent(id)}`}
+      ref={ref}
+      href={href}
       onClick={(e) => {
         if (!onOpenTask) return;
         if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)
           return;
         e.preventDefault();
+        remember();
         onOpenTask(id);
       }}
     >

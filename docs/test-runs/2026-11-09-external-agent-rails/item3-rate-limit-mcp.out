@@ -1,0 +1,17 @@
+PASS	3.0	three contexts minted	rl1 rl2 rl3
+PASS	3.1	CLI: the 31st grain list (61st request: each list is two calls) fails	31 1 {"error":{"code":"rate_limited","message":"grain server: external agent \"cli-debuerreotype-rl1-to7uci\" exceeded rate limit (60 requests/minute); retry in 1s (429 Too Many Requests)"}} 
+PASS	3.2	CLI: exit 1	31 1 {"error":{"code":"rate_limited","message":"grain server: external agent \"cli-debuerreotype-rl1-to7uci\" exceeded rate limit (60 requests/minute); retry in 1s (429 Too Many Requests)"}} 
+PASS	3.3	CLI: code rate_limited	31 1 {"error":{"code":"rate_limited","message":"grain server: external agent \"cli-debuerreotype-rl1-to7uci\" exceeded rate limit (60 requests/minute); retry in 1s (429 Too Many Requests)"}} 
+PASS	3.4	CLI: a retry hint (Retry-After)	31 1 {"error":{"code":"rate_limited","message":"grain server: external agent \"cli-debuerreotype-rl1-to7uci\" exceeded rate limit (60 requests/minute); retry in 1s (429 Too Many Requests)"}} 
+PASS	3.5	a second credential (rl2) is unaffected	0
+PASS	3.6	grain mcp: exit 0 once stdin closes after 70 calls	0
+PASS	3.7	grain mcp: no 'grain: EOF' on stderr	
+PASS	3.8	grain mcp: a call past 60/min is a tool error naming the limit and when to retry	{"id":31,"text":"grain server: external agent \"cli-debuerreotype-rl3-to7uci\" exceeded rate limit (60 requests/minute); retry in 1s (429 Too Many Requests)"}
+PASS	3.9	grain mcp: calls before the first refusal (each list_grain_tasks may cost more than one request)	{"id":31,"text":"grain server: external agent \"cli-debuerreotype-rl3-to7uci\" exceeded rate limit (60 requests/minute); retry in 1s (429 Too Many Requests)"}
+PASS	3.10	rl2 still unaffected after rl3's burst	0
+PASS	3.11	grain mcp: exit 0 when the client disconnects mid-call	0
+PASS	3.12	grain mcp: stderr clean on disconnect	
+first CLI refusal: 31 1 {"error":{"code":"rate_limited","message":"grain server: external agent \"cli-debuerreotype-rl1-to7uci\" exceeded rate limit (60 requests/minute); retry in 1s (429 Too Many Requests)"}} 
+first MCP refusal: {"id":31,"text":"grain server: external agent \"cli-debuerreotype-rl3-to7uci\" exceeded rate limit (60 requests/minute); retry in 1s (429 Too Many Requests)"}
+mid-call disconnect stderr: 
+FAILS=0

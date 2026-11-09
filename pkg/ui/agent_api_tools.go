@@ -87,6 +87,7 @@ const APIToolPrefix = "api_"
 // its handler name, method and path.
 var routeDocs = map[string]string{
 	"PUT /api/settings":                                                    "Change deployment settings: only the fields given are changed, the rest keep their values.",
+	"PUT /api/usage/settings":                                              "Replace the token usage settings: the concurrency mode (advisory, auto or off), the automatic cap's floor, per-run usage retention and the connection budgets.",
 	"POST /api/settings":                                                   "Change deployment settings, as PUT /api/settings does: only the fields given are changed.",
 	"POST /api/settings/plan":                                              "Preview a settings change without saving it: what the given fields would change, and what it would take to apply.",
 	"PUT /api/settings/cli-run":                                            "Set the per-framework settings for agent CLI runs, keyed by framework.",
@@ -309,6 +310,7 @@ var routeDocs = map[string]string{
 // a route with none takes no body.
 var routeBodies = map[string]any{
 	"PUT /api/settings":             UpdateSettingsRequest{},
+	"PUT /api/usage/settings":       model.UsageSettings{},
 	"POST /api/settings":            UpdateSettingsRequest{},
 	"POST /api/settings/plan":       UpdateSettingsRequest{},
 	"PUT /api/settings/cli-run":     updateCLIRunSettingsRequest{},

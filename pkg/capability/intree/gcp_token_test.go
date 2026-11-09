@@ -373,14 +373,12 @@ func TestGCPTokenModeIntrospectAndRealGcloud(t *testing.T) {
 		t.Fatalf("introspect = %d %v, want 200 active=true username=%s", iResp.StatusCode, iBody, testOrgSA)
 	}
 
-	badResp, err := http.PostForm(cfg.TokenInfoURL, url.Values{"token": {"not-a-minted-token"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	badResp.Body.Close()
-	if badResp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("introspect(unknown) = %d, want 401", badResp.StatusCode)
-	}
+	// RFC 7662 §2.2: a token the endpoint does not recognise -- never
+	// minted, or minted for another attempt -- is {"active": false} with
+	// 200, and nothing else about it.
+	assertInactive(t, "introspect(unknown)", cfg.TokenInfoURL, "not-a-minted-token")
+	otherAttempt := strings.Replace(cfg.TokenInfoURL, "/runs/e7-gcloud-0/", "/runs/e7-other-0/", 1)
+	assertInactive(t, "introspect(another attempt's path)", otherAttempt, mintedTok)
 
 	if gcloudPath, err := exec.LookPath("gcloud"); err == nil {
 		dir := t.TempDir()
@@ -428,12 +426,24 @@ func TestGCPTokenModeIntrospectAndRealGcloud(t *testing.T) {
 	if _, err := ps.Release(context.Background(), "gcp-key", "e7-gcloud-0"); err != nil {
 		t.Fatal(err)
 	}
-	afterResp, err := http.PostForm(cfg.TokenInfoURL, url.Values{"token": {mintedTok}})
+	assertInactive(t, "introspect after release", cfg.TokenInfoURL, mintedTok)
+}
+
+// assertInactive posts token to an introspection endpoint and wants RFC
+// 7662's answer for a token it does not recognise: 200 and exactly
+// {"active": false}.
+func assertInactive(t *testing.T, what, endpoint, token string) {
+	t.Helper()
+	resp, err := http.PostForm(endpoint, url.Values{"token": {token}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	afterResp.Body.Close()
-	if afterResp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("introspect after release = %d, want 401", afterResp.StatusCode)
+	defer resp.Body.Close()
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("%s: decoding the answer: %v", what, err)
+	}
+	if resp.StatusCode != http.StatusOK || len(body) != 1 || body["active"] != false {
+		t.Fatalf("%s = %d %v, want 200 {\"active\": false}", what, resp.StatusCode, body)
 	}
 }

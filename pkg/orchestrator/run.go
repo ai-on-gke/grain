@@ -3741,6 +3741,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		end := classifyRunEnd(ctx, store, cfg, task, d.RunID, result, runErr, context.Cause(agentCtx),
 			credited, runScope, agentStartedAt)
 		end = applySandboxOOM(ctx, store, cfg, task, d.RunID, end)
+		recordRunUsage(ctx, store, task.ID, d.RunID, runScope, result, agentStartedAt, cfg.now())
 		if end.suspend == model.SuspendContext {
 			session := resumableSession
 			if session == "" {

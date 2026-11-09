@@ -58,6 +58,7 @@ import GanttChart from "./GanttChart.jsx";
 import Sparkline from "./Sparkline.jsx";
 import StateDot, { isLiveRunning } from "./StateDot.jsx";
 import {
+  FollowLink,
   ListEmpty,
   TasksLoadError,
   tasksLoadFailed,
@@ -304,7 +305,13 @@ function ListPanel({ tasks, config, narrowing, onOpenTask, partial = false }) {
 // Each count is a link into the list narrowed to that column's states,
 // on top of whatever the panel is already narrowed to: "eleven waiting"
 // is a number worth clicking, and what it opens should be those eleven.
-function StatesPanel({ tasks, narrowing, onOpen, partial = false }) {
+function StatesPanel({
+  tasks,
+  narrowing,
+  onOpen,
+  partial = false,
+  panelKey = "",
+}) {
   const columns = useMemo(() => loadColumns() || defaultColumns(), []);
   const { cards, hidden } = groupIntoColumns(tasks, columns);
   return (
@@ -319,26 +326,21 @@ function StatesPanel({ tasks, narrowing, onOpen, partial = false }) {
           ],
         };
         return (
-          <a
+          <FollowLink
             className="panel-state"
             key={c.id}
             href={buildPath({ view: "tasks", narrowing: asked })}
             // A real href so a count can be copied and sent, followed
             // in-app when it is simply clicked -- DetailOverlay's own
-            // treatment of the link it offers.
-            onClick={(e) => {
-              if (
-                !onOpen ||
-                e.button !== 0 ||
-                e.metaKey ||
-                e.ctrlKey ||
-                e.shiftKey ||
-                e.altKey
-              )
-                return;
-              e.preventDefault();
-              onOpen({ view: "tasks", narrowing: asked });
-            }}
+            // treatment of the link it offers. Tagged with the panel and
+            // the column, so Back puts focus on this count and not on
+            // another link to the same list (useReturnFocus).
+            tag={`${panelKey}:state:${c.id}`}
+            onFollow={
+              onOpen
+                ? () => onOpen({ view: "tasks", narrowing: asked })
+                : undefined
+            }
           >
             <span
               className="panel-state-count"
@@ -370,7 +372,7 @@ function StatesPanel({ tasks, narrowing, onOpen, partial = false }) {
               )}
               {c.title}
             </span>
-          </a>
+          </FollowLink>
         );
       })}
       {hidden > 0 && (
@@ -605,6 +607,7 @@ function Panel({
             tasks={narrowed}
             narrowing={narrowing}
             onOpen={onOpen}
+            panelKey={panel.key}
             partial={partial}
           />
         );
@@ -710,34 +713,28 @@ function Panel({
             </button>
           </AccessGate>
         )}
-        <a
+        <FollowLink
           className="panel-open"
           href={panelPath(panel, asked)}
+          // Two panels following the dashboard's own question have an
+          // "Open" to the same list, so the panel tags it: Back puts
+          // focus on the one that was followed (useReturnFocus).
+          tag={`${panel.key}:open`}
           // An anchor is a drag source of its own, and this one sits
           // inside a header that is the panel's: without this, dragging
           // from "Open" hands the browser a URL to drop somewhere
           // instead of moving the panel. Refusing it lets the drag fall
           // through to the header, which is the gesture that was meant.
           draggable={false}
-          onClick={(e) => {
-            if (
-              !onOpen ||
-              e.button !== 0 ||
-              e.metaKey ||
-              e.ctrlKey ||
-              e.shiftKey ||
-              e.altKey
-            )
-              return;
-            e.preventDefault();
-            // The destination the href was built from, so the in-app
-            // click and the copyable link open the same thing -- the
-            // list for three kinds, the report for the throughput one.
-            onOpen(panelDestination(panel, asked));
-          }}
+          // The destination the href was built from, so the in-app
+          // click and the copyable link open the same thing -- the
+          // list for three kinds, the report for the throughput one.
+          onFollow={
+            onOpen ? () => onOpen(panelDestination(panel, asked)) : undefined
+          }
         >
           Open
-        </a>
+        </FollowLink>
       </header>
       {rangeNote && (
         <Typography

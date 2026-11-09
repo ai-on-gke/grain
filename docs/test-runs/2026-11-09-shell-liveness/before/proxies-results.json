@@ -1,0 +1,294 @@
+[
+  {
+    "id": "socat.before",
+    "desc": "socat stopped: no banner before the stop",
+    "ok": true,
+    "got": null
+  },
+  {
+    "id": "socat.banner",
+    "desc": "socat stopped: banner rises within 10 s timeout x2 + poll ticks (<= 35 s)",
+    "ok": true,
+    "got": {
+      "ms": 23446
+    }
+  },
+  {
+    "id": "socat.text",
+    "desc": "socat stopped: banner text",
+    "note": true,
+    "got": "This deployment cannot be reached: it accepted the connection but sent no answer within 10 seconds. Unreachable since 3:49:34 AM -- retrying automatically; this page will pick back up on its own once it answers again."
+  },
+  {
+    "id": "socat.oneConfig",
+    "desc": "socat stopped: at most one GET /api/config in flight at a time while stopped",
+    "ok": true,
+    "got": {
+      "maxConfig": 1,
+      "configSent": 3
+    }
+  },
+  {
+    "id": "socat.pileup",
+    "desc": "socat stopped: most /api/ requests in flight at once while stopped, and what was sent",
+    "note": true,
+    "got": {
+      "maxApi": 14,
+      "inFlightAtCont": 14,
+      "sent": {
+        "GET /api/tasks": 5,
+        "GET /api/config": 5,
+        "GET /api/ci/runs": 5,
+        "GET /api/console-sessions": 5,
+        "GET /api/restart-watch": 3,
+        "GET /api/persistent-sandboxes": 3,
+        "GET /api/notifications": 1
+      }
+    }
+  },
+  {
+    "id": "socat.clear",
+    "desc": "socat stopped: banner clears with no reload after CONT",
+    "ok": true,
+    "got": {
+      "ms": 113
+    }
+  },
+  {
+    "id": "socat.noReload",
+    "desc": "socat stopped: page was not reloaded",
+    "ok": true,
+    "got": null
+  },
+  {
+    "id": "socat.after",
+    "desc": "socat stopped: /api/ still in flight 3 s after the clear",
+    "note": true,
+    "got": {
+      "api": 0,
+      "config": 0
+    }
+  },
+  {
+    "id": "stall.before",
+    "desc": "proxy stall: no banner before the stop",
+    "ok": true,
+    "got": null
+  },
+  {
+    "id": "stall.banner",
+    "desc": "proxy stall: banner rises within 10 s timeout x2 + poll ticks (<= 35 s)",
+    "ok": true,
+    "got": {
+      "ms": 23440
+    }
+  },
+  {
+    "id": "stall.text",
+    "desc": "proxy stall: banner text",
+    "note": true,
+    "got": "This deployment cannot be reached: it accepted the connection but sent no answer within 10 seconds. Unreachable since 3:50:26 AM -- retrying automatically; this page will pick back up on its own once it answers again."
+  },
+  {
+    "id": "stall.oneConfig",
+    "desc": "proxy stall: at most one GET /api/config in flight at a time while stopped",
+    "ok": true,
+    "got": {
+      "maxConfig": 1,
+      "configSent": 3
+    }
+  },
+  {
+    "id": "stall.pileup",
+    "desc": "proxy stall: most /api/ requests in flight at once while stopped, and what was sent",
+    "note": true,
+    "got": {
+      "maxApi": 14,
+      "inFlightAtCont": 14,
+      "sent": {
+        "GET /api/tasks": 5,
+        "GET /api/config": 5,
+        "GET /api/ci/runs": 5,
+        "GET /api/console-sessions": 5,
+        "GET /api/restart-watch": 3,
+        "GET /api/persistent-sandboxes": 3,
+        "GET /api/notifications": 1
+      }
+    }
+  },
+  {
+    "id": "stall.clear",
+    "desc": "proxy stall: banner clears with no reload after CONT",
+    "ok": true,
+    "got": {
+      "ms": 168
+    }
+  },
+  {
+    "id": "stall.noReload",
+    "desc": "proxy stall: page was not reloaded",
+    "ok": true,
+    "got": null
+  },
+  {
+    "id": "stall.after",
+    "desc": "proxy stall: /api/ still in flight 3 s after the clear",
+    "note": true,
+    "got": {
+      "api": 0,
+      "config": 0
+    }
+  },
+  {
+    "id": "headers.before",
+    "desc": "proxy headers: no banner before the stop",
+    "ok": true,
+    "got": null
+  },
+  {
+    "id": "headers.banner",
+    "desc": "proxy headers: banner rises within 10 s timeout x2 + poll ticks (<= 35 s)",
+    "ok": true,
+    "got": {
+      "ms": 23443
+    }
+  },
+  {
+    "id": "headers.text",
+    "desc": "proxy headers: banner text",
+    "note": true,
+    "got": "This deployment cannot be reached: it accepted the connection but sent no answer within 10 seconds. Unreachable since 3:51:17 AM -- retrying automatically; this page will pick back up on its own once it answers again."
+  },
+  {
+    "id": "headers.oneConfig",
+    "desc": "proxy headers: at most one GET /api/config in flight at a time while stopped",
+    "ok": true,
+    "got": {
+      "maxConfig": 1,
+      "configSent": 3
+    }
+  },
+  {
+    "id": "headers.pileup",
+    "desc": "proxy headers: most /api/ requests in flight at once while stopped, and what was sent",
+    "note": true,
+    "got": {
+      "maxApi": 14,
+      "inFlightAtCont": 14,
+      "sent": {
+        "GET /api/tasks": 5,
+        "GET /api/config": 5,
+        "GET /api/ci/runs": 5,
+        "GET /api/console-sessions": 5,
+        "GET /api/restart-watch": 3,
+        "GET /api/persistent-sandboxes": 3,
+        "GET /api/notifications": 1
+      }
+    }
+  },
+  {
+    "id": "headers.clear",
+    "desc": "proxy headers: banner clears with no reload after CONT",
+    "ok": true,
+    "got": {
+      "ms": 175
+    }
+  },
+  {
+    "id": "headers.noReload",
+    "desc": "proxy headers: page was not reloaded",
+    "ok": true,
+    "got": null
+  },
+  {
+    "id": "headers.after",
+    "desc": "proxy headers: /api/ still in flight 3 s after the clear",
+    "note": true,
+    "got": {
+      "api": 0,
+      "config": 0
+    }
+  },
+  {
+    "id": "prefix.strict",
+    "desc": "UI under /grain/ behind a strict path-prefix proxy: shell mounted? requests outside the prefix",
+    "note": true,
+    "got": {
+      "shellMounted": false,
+      "outside": [
+        "/assets/index-B9MWCEaR.js",
+        "/assets/index-49Ci2F2u.css"
+      ]
+    }
+  },
+  {
+    "id": "prefix.before",
+    "desc": "prefix proxy stall: no banner before the stop",
+    "ok": true,
+    "got": null
+  },
+  {
+    "id": "prefix.banner",
+    "desc": "prefix proxy stall: banner rises within 10 s timeout x2 + poll ticks (<= 35 s)",
+    "ok": true,
+    "got": {
+      "ms": 23431
+    }
+  },
+  {
+    "id": "prefix.text",
+    "desc": "prefix proxy stall: banner text",
+    "note": true,
+    "got": "This deployment cannot be reached: it accepted the connection but sent no answer within 10 seconds. Unreachable since 3:52:14 AM -- retrying automatically; this page will pick back up on its own once it answers again."
+  },
+  {
+    "id": "prefix.oneConfig",
+    "desc": "prefix proxy stall: at most one GET /api/config in flight at a time while stopped",
+    "ok": true,
+    "got": {
+      "maxConfig": 1,
+      "configSent": 3
+    }
+  },
+  {
+    "id": "prefix.pileup",
+    "desc": "prefix proxy stall: most /api/ requests in flight at once while stopped, and what was sent",
+    "note": true,
+    "got": {
+      "maxApi": 14,
+      "inFlightAtCont": 14,
+      "sent": {
+        "GET /api/tasks": 5,
+        "GET /api/config": 5,
+        "GET /api/ci/runs": 5,
+        "GET /api/console-sessions": 5,
+        "GET /api/restart-watch": 3,
+        "GET /api/persistent-sandboxes": 3,
+        "GET /api/notifications": 1
+      }
+    }
+  },
+  {
+    "id": "prefix.clear",
+    "desc": "prefix proxy stall: banner clears with no reload after CONT",
+    "ok": true,
+    "got": {
+      "ms": 112
+    }
+  },
+  {
+    "id": "prefix.noReload",
+    "desc": "prefix proxy stall: page was not reloaded",
+    "ok": true,
+    "got": null
+  },
+  {
+    "id": "prefix.after",
+    "desc": "prefix proxy stall: /api/ still in flight 3 s after the clear",
+    "note": true,
+    "got": {
+      "api": 0,
+      "config": 0
+    }
+  }
+]

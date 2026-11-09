@@ -255,12 +255,15 @@ func (t *gcpTokens) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		account, exp, ok := t.lookupMinted(attemptID, r.PostForm.Get("token"), m.Now())
-		if !ok {
-			stsError(w, http.StatusUnauthorized, "invalid_grant", "this grant's token is unknown or released")
-			return
-		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
+		if !ok {
+			// RFC 7662 §2.2: a token that is unknown, expired, released or
+			// another attempt's is answered {"active": false}, not an
+			// error, and the answer says nothing more about it.
+			json.NewEncoder(w).Encode(map[string]any{"active": false})
+			return
+		}
 		json.NewEncoder(w).Encode(map[string]any{
 			"active":   true,
 			"username": account,

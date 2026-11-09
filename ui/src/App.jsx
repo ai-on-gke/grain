@@ -444,6 +444,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // Whether the sessions have answered once: until they have, a session
   // view opened on a link has nothing to say the session is missing.
   const [sessionsLoaded, setSessionsLoaded] = useState(false);
+  // Why /api/console-sessions last failed, null once it answers: the
+  // Sessions page says so in place of "No interactive sessions yet."
+  // (SessionsPage.jsx).
+  const [sessionsError, setSessionsError] = useState(null);
   const [sessionCapabilities, setSessionCapabilities] = useState([]);
   // The network settings a session may be given, off the same response:
   // the pane's own select draws these rather than hard-coding the two
@@ -1082,54 +1086,60 @@ function AppContent({ onReload = () => window.location.reload() }) {
     return () => clearTimeout(t);
   }, [error]);
 
-  const refreshList = useCallback(async () => {
-    // Conditional: the server answers a poll that already holds the
-    // current list with a 304 and no body (pkg/ui/task_list_cache.go),
-    // which on a real deployment's history is 1.7 MB and a JSON parse
-    // this tab does not do. There is nothing to set and nothing to
-    // prune when it does -- the ids below would be the same ids -- so
-    // the tick ends here.
-    let next;
-    try {
-      next = await api("/api/tasks", { poll: true });
-    } catch (err) {
-      setTasksError(
-        isUnreachable(err) && !err?.explained
-          ? unreachableReason(err)
-          : String(err?.message || err),
-      );
-      throw err;
-    }
-    setTasksError(null);
-    setTasksListed(true);
-    if (next === UNCHANGED) return;
-    // The array already held when this poll brought back the same tasks
-    // (poll.js). It is the identity every view downstream is keyed on --
-    // most of all the dashboard's, whose panels memoise their answers on
-    // it (taskFilters.js's narrowTasks) -- so handing over a fresh array
-    // of identical rows every three seconds is what made a quiet tab
-    // expensive. Still worth doing beside the 304: that covers the
-    // endpoint's own bytes, this covers a change those views do not care
-    // about.
-    setLiveTasks((prev) => keepIfSame(prev, next));
-    const ids = new Set(next.map((t) => String(t.id)));
-    // A task that has dropped out of the live list has most likely
-    // closed: ask for the newest closed page now rather than up to a
-    // minute from now, so a view showing closed work does not lose it.
-    const before = liveIdsRef.current;
-    liveIdsRef.current = ids;
-    if (before && [...before].some((id) => !ids.has(id))) refreshClosed();
-    // Drop any selected id the store no longer reports, so a stale
-    // selection never quietly outlives the task it named.
-    setSelected((prev) => {
-      const kept = new Set(
-        [...prev].filter(
-          (id) => ids.has(String(id)) || closedIdsRef.current.has(String(id)),
-        ),
-      );
-      return kept.size === prev.size ? prev : kept;
-    });
-  }, [refreshClosed]);
+  const refreshList = useCallback(
+    async (opts) => {
+      // Conditional: the server answers a poll that already holds the
+      // current list with a 304 and no body (pkg/ui/task_list_cache.go),
+      // which on a real deployment's history is 1.7 MB and a JSON parse
+      // this tab does not do. There is nothing to set and nothing to
+      // prune when it does -- the ids below would be the same ids -- so
+      // the tick ends here.
+      let next;
+      try {
+        next = await api("/api/tasks", { poll: true, signal: opts?.signal });
+      } catch (err) {
+        // Given up on by the poll tick that asked (its signal, below):
+        // that tick has already said why, and this read failed nothing.
+        if (opts?.signal?.aborted) throw err;
+        setTasksError(
+          isUnreachable(err) && !err?.explained
+            ? unreachableReason(err)
+            : String(err?.message || err),
+        );
+        throw err;
+      }
+      setTasksError(null);
+      setTasksListed(true);
+      if (next === UNCHANGED) return;
+      // The array already held when this poll brought back the same tasks
+      // (poll.js). It is the identity every view downstream is keyed on --
+      // most of all the dashboard's, whose panels memoise their answers on
+      // it (taskFilters.js's narrowTasks) -- so handing over a fresh array
+      // of identical rows every three seconds is what made a quiet tab
+      // expensive. Still worth doing beside the 304: that covers the
+      // endpoint's own bytes, this covers a change those views do not care
+      // about.
+      setLiveTasks((prev) => keepIfSame(prev, next));
+      const ids = new Set(next.map((t) => String(t.id)));
+      // A task that has dropped out of the live list has most likely
+      // closed: ask for the newest closed page now rather than up to a
+      // minute from now, so a view showing closed work does not lose it.
+      const before = liveIdsRef.current;
+      liveIdsRef.current = ids;
+      if (before && [...before].some((id) => !ids.has(id))) refreshClosed();
+      // Drop any selected id the store no longer reports, so a stale
+      // selection never quietly outlives the task it named.
+      setSelected((prev) => {
+        const kept = new Set(
+          [...prev].filter(
+            (id) => ids.has(String(id)) || closedIdsRef.current.has(String(id)),
+          ),
+        );
+        return kept.size === prev.size ? prev : kept;
+      });
+    },
+    [refreshClosed],
+  );
 
   const retryTasks = useCallback(() => {
     refreshList().catch(showError);
@@ -1236,9 +1246,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // every few seconds to draw one figure (grain/task-289). The count
   // below still reads the conclusion, so a widened answer would not
   // break it.
-  const refreshCIRuns = useCallback(async () => {
+  const refreshCIRuns = useCallback(async (opts) => {
     const next = await api(
       "/api/ci/runs?conclusion=running&conclusion=pending",
+      { signal: opts?.signal },
     );
     setCIRuns((prev) => keepIfSame(prev, next?.runs || []));
   }, []);
@@ -1246,8 +1257,8 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // The base branches nothing is judging. Kept when unchanged, like the
   // lists above: this answers the same way for hours at a time, and the
   // inbox should not re-render every minute to say so.
-  const refreshBaseBranchGates = useCallback(async () => {
-    const next = await api("/api/base-branch-gates");
+  const refreshBaseBranchGates = useCallback(async (opts) => {
+    const next = await api("/api/base-branch-gates", opts);
     setBaseBranchGates((prev) => keepIfSame(prev, (next && next.gates) || []));
     setGatesLoaded(true);
   }, []);
@@ -1302,14 +1313,29 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const applySessions = useCallback((next) => {
     sessionsSeq.current += 1;
     sessionsWritten.current = sessionsSeq.current;
+    setSessionsError(null);
     setSessions((prev) => keepIfSame(prev, next));
   }, []);
-  const refreshSessions = useCallback(async () => {
+  const refreshSessions = useCallback(async (opts) => {
     sessionsSeq.current += 1;
     const seq = sessionsSeq.current;
-    const res = await api("/api/console-sessions");
+    let res;
+    try {
+      res = await api("/api/console-sessions", { signal: opts?.signal });
+    } catch (err) {
+      if (opts?.signal?.aborted) throw err;
+      if (seq >= sessionsWritten.current) {
+        setSessionsError(
+          isUnreachable(err) && !err?.explained
+            ? unreachableReason(err)
+            : String(err?.message || err),
+        );
+      }
+      throw err;
+    }
     if (seq < sessionsWritten.current) return null;
     sessionsWritten.current = seq;
+    setSessionsError(null);
     const next = (res && res.sessions) || [];
     setSessions((prev) => keepIfSame(prev, next));
     setSessionsLoaded(true);
@@ -2651,6 +2677,16 @@ function AppContent({ onReload = () => window.location.reload() }) {
       pollTick.current += 1;
       if (pollTick.current % pollBackoff.current !== 0) return;
       polling.current = true;
+      // The tick's own reads, given up on together when it fails as
+      // unreachable. Only the config read below has a timeout, so
+      // without this the rest of a failed tick stayed open for as long
+      // as whatever held them did, one more set every tick: over
+      // HTTP/1.1 a browser opens six connections to a host, and once
+      // held reads filled them every later config read queued behind
+      // them and timed out without ever being sent, so a daemon (or a
+      // proxy) answering new requests again never took the banner down
+      // (docs/test-runs/2026-11-09-shell-liveness.md, finding 1).
+      const tick = new AbortController();
       try {
         // The config read here (not just at mount) is what keeps
         // config.reconcilerDown -- and the banner it drives, below --
@@ -2669,10 +2705,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
         // this tick waiting forever, and the banner below can only come
         // up when a tick fails (grain/task-3619).
         await Promise.all([
-          refreshList(),
+          refreshList({ signal: tick.signal }),
           fetchConfig({ timeout: CONFIG_POLL_TIMEOUT_MS }),
-          refreshCIRuns(),
-          refreshSessions(),
+          refreshCIRuns({ signal: tick.signal }),
+          refreshSessions({ signal: tick.signal }),
         ]);
         if (openTaskId !== null && taskLoadError?.id === openTaskId) {
           // A task the address bar asked for that failed to load: try it
@@ -2743,6 +2779,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
         noteReached("shell");
       } catch (err) {
         if (isUnreachable(err)) {
+          tick.abort();
           if (noteUnreachable("shell", err)) {
             pollBackoff.current = Math.min(pollBackoff.current * 2, 10);
           }
@@ -2869,7 +2906,11 @@ function AppContent({ onReload = () => window.location.reload() }) {
     const load = () => {
       if (document.visibilityState === "hidden" && !notificationsEnabled())
         return;
-      refreshBaseBranchGates().catch((err) => {
+      // Bounded like the poll's config read, and for the same reason: a
+      // read nobody gives up on holds one of the browser's connections
+      // to the daemon for as long as the daemon (or a proxy) does.
+      const opts = { timeout: CONFIG_POLL_TIMEOUT_MS };
+      refreshBaseBranchGates(opts).catch((err) => {
         // Quiet, like the poll itself. A deployment whose store is
         // unreachable has a banner already, and a second one a minute
         // saying the same thing would only push the first off the
@@ -3660,7 +3701,12 @@ function AppContent({ onReload = () => window.location.reload() }) {
       // Not in a hidden tab: nobody is looking at the dots.
       if (document.visibilityState === "hidden") return;
       try {
-        const res = await api("/api/persistent-sandboxes");
+        // Bounded, as the gate poll above is: unanswered, a read every
+        // STAGING_INTERVAL_MS would otherwise pile up on held
+        // connections.
+        const res = await api("/api/persistent-sandboxes", {
+          timeout: CONFIG_POLL_TIMEOUT_MS,
+        });
         if (live)
           setPersistentSandboxes((prev) =>
             keepIfSame(prev, Array.isArray(res) ? res : []),
@@ -4145,6 +4191,8 @@ function AppContent({ onReload = () => window.location.reload() }) {
                             // deleted from inside leaves it.
                             onDeleted={deleteStandingSession}
                             showError={showError}
+                            loadError={sessionsError}
+                            onRetry={() => refreshSessions().catch(showError)}
                           />
                         ) : view === "session" ? (
                           /* A standing session's own pane: the chat, and what the

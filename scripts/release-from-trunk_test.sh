@@ -644,6 +644,10 @@ for app_setting in none conf-none; do
   expect "rc-hold, app $app_setting" "cuts rc.2" eq "$(remote_tag v2.3.0-rc.2)" "$c3"
   expect "rc-hold, app $app_setting" "publishes rc.2" images_were "rc v2.3.0-rc.2"
   expect "rc-hold, app $app_setting" "emits no rc_held" no_line '^rc_held=' "$work/train.out"
+  # The cut's own summary says Stage 2 is skipped rather than promising it
+  # (docs/test-runs/2026-11-09-release-image-machinery.md).
+  expect "rc-hold, app $app_setting" "says Stage 1 alone qualifies rc.2" has "nightly.yml qualifies it (Stage 1) alone: RELEASE_QUALIFICATION_APP=none skips grain/release-qualification (Stage 2)"
+  expect "rc-hold, app $app_setting" "promises no Stage 2" not has "then grain/release-qualification (Stage 2)"
 done
 
 # --- a same-named check run from another app qualifies nothing ---
