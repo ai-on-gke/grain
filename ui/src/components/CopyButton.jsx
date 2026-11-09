@@ -25,6 +25,9 @@ export default function CopyButton({
   size = "small",
   className,
   sx,
+  // icon is what the button shows before it is pressed: a copy glyph by
+  // default, a link one for a "Copy link" (commentLinks.js).
+  icon: Icon = ContentCopyIcon,
 }) {
   const [copied, setCopied] = useState(false);
   const timerRef = useRef(null);
@@ -115,7 +118,7 @@ export default function CopyButton({
         {copied ? (
           <CheckIcon sx={{ fontSize: "0.95rem" }} />
         ) : (
-          <ContentCopyIcon sx={{ fontSize: "0.95rem" }} />
+          <Icon sx={{ fontSize: "0.95rem" }} />
         )}
       </IconButton>
     </Tooltip>

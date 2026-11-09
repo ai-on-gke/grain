@@ -14,6 +14,7 @@
 
 import { useRef, useState } from "react";
 import { Button, Link, TextField } from "@mui/material";
+import LinkIcon from "@mui/icons-material/Link";
 import api from "../../api.js";
 import { useTimeZone } from "../../TimeZoneContext.jsx";
 import { useTimelineOrder } from "../../TimelineOrderContext.jsx";
@@ -38,6 +39,7 @@ import ExpandableMarkdown from "../ExpandableMarkdown.jsx";
 import StateDot from "../StateDot.jsx";
 import { linkTaskRefs, taskRefFromHref } from "../../taskRefs.js";
 import { commentAuthor, transitionActor } from "../../principal.js";
+import { commentUrl } from "../../commentLinks.js";
 
 // OUTCOME_BADGES covers model.Run's own outcome vocabulary, the same
 // one state.js's OUTCOME_LABELS gives the words for -- see that map's
@@ -693,6 +695,9 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
     const at = timelineTime(c.createdAt);
     return {
       key: `comment-${i}`,
+      // The comment's own id, which a /tasks/<id>#comment=<id> link
+      // names (commentLinks.js) and the entry is marked with.
+      commentId: c.id,
       at,
       sortAt: at,
       rank: RANK.comment,
@@ -705,14 +710,25 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
               {c.filedVia ? ` · from ${c.filedVia}` : ""}
               {c.handover ? " · handover" : ""}
             </span>
-            {c.body && (
-              <CopyButton
-                text={c.body}
-                label="Copy comment"
-                size="small"
-                className="timeline-comment-copy"
-              />
-            )}
+            <span className="timeline-comment-actions">
+              {c.id != null && (
+                <CopyButton
+                  text={commentUrl(t.id, c.id)}
+                  label="Copy link"
+                  icon={LinkIcon}
+                  size="small"
+                  className="timeline-comment-copy timeline-comment-link"
+                />
+              )}
+              {c.body && (
+                <CopyButton
+                  text={c.body}
+                  label="Copy comment"
+                  size="small"
+                  className="timeline-comment-copy"
+                />
+              )}
+            </span>
           </div>
           {/* Why an agent is summarising a conversation somebody can
               already read: grain asked it to, because this thread is
@@ -943,6 +959,10 @@ export default function Timeline({ t, act, showError, onOpenTask }) {
                   : "timeline-item"
               }
               key={e.key}
+              {...(e.commentId != null && {
+                id: `comment-${e.commentId}`,
+                "data-comment-id": e.commentId,
+              })}
               // An attempt's whole entry takes a pointer's click, but it
               // stays a listitem -- a button in its place would take the
               // list's count away from a screen reader -- and the button

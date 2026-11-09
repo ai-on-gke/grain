@@ -17,6 +17,7 @@ import PendingConfigChange from "./detail/PendingConfigChange.jsx";
 import PendingAccess from "./detail/PendingAccess.jsx";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Box, Button, Typography } from "@mui/material";
+import LinkIcon from "@mui/icons-material/Link";
 import {
   ChatContainer,
   MainContainer,
@@ -39,6 +40,7 @@ import api from "../api.js";
 import fileToAttachment from "../attachments.js";
 import { awaitsReply, chatEntries, typingNote, working } from "../chat.js";
 import { nameScrollbars } from "../chatScrollbars.js";
+import { commentUrl } from "../commentLinks.js";
 import { useTimeZone } from "../TimeZoneContext.jsx";
 import { formatDateTime } from "../time.js";
 import { isTaskPaused } from "../state.js";
@@ -348,6 +350,7 @@ export default function TaskChat({
           ) : (
             <Message
               key={e.key}
+              data-comment-id={e.commentId ?? undefined}
               className={
                 e.pending
                   ? `task-chat-pending task-chat-${e.pending}`
@@ -380,9 +383,20 @@ export default function TaskChat({
               <Message.CustomContent>
                 <div className="task-chat-message-content">
                   <Markdown className="task-chat-body">{e.body}</Markdown>
-                  {e.direction === "incoming" && e.body && (
+                  {((e.direction === "incoming" && e.body) ||
+                    (e.commentId != null && !e.pending)) && (
                     <div className="task-chat-actions">
-                      <CopyButton text={e.body} label="Copy response" />
+                      {e.direction === "incoming" && e.body && (
+                        <CopyButton text={e.body} label="Copy response" />
+                      )}
+                      {e.commentId != null && !e.pending && (
+                        <CopyButton
+                          text={commentUrl(t.id, e.commentId)}
+                          label="Copy link"
+                          icon={LinkIcon}
+                          className="task-chat-link"
+                        />
+                      )}
                     </div>
                   )}
                 </div>
