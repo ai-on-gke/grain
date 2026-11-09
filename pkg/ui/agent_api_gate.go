@@ -3079,12 +3079,23 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 // holds, never a grant only a person may give, and push or read access only
 // to repositories the credential covers.
 func externalTemplateWithin(tok *model.ExternalAgentToken, held []string, tmpl model.Template, allowedRepo func(string) bool) error {
+	heldKeys := make([]string, 0, len(held))
+	for _, h := range held {
+		for _, c := range model.CanonicalLegacyGrants(h) {
+			heldKeys = append(heldKeys, model.CanonicalGrantKey(c))
+		}
+	}
 	for _, g := range tmpl.Grants {
 		if model.IsPersonOnlyGrant(g.Capability) {
 			return fmt.Errorf("template %s grants %s, which only a person may give", tmpl.ID, g.Capability)
 		}
-		if !slices.Contains(held, g.Capability) {
-			return fmt.Errorf("template %s grants %s, which external agent %q does not hold", tmpl.ID, g.Capability, tok.Name)
+		for _, needed := range model.CanonicalLegacyGrants(g.Capability) {
+			if model.IsPersonOnlyGrant(needed) {
+				return fmt.Errorf("template %s grants %s, which only a person may give", tmpl.ID, g.Capability)
+			}
+			if !slices.Contains(heldKeys, model.CanonicalGrantKey(needed)) {
+				return fmt.Errorf("template %s grants %s, which external agent %q does not hold", tmpl.ID, g.Capability, tok.Name)
+			}
 		}
 	}
 	for _, w := range tmpl.Writes {

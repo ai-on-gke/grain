@@ -129,9 +129,9 @@ func investigateNotificationTemplate() *Template {
 			"whether it is still true, and what a person should do about it. Report that in your " +
 			"closing note.",
 		Grants: []Grant{
-			{Capability: APIGrantPrefix + "self-debug", Via: GrantByGrain},
+			{Capability: APIRef("self-debug"), Via: GrantByGrain},
 			{Capability: GrainSourceGrant, Via: GrantByGrain},
-			{Capability: APIGrantPrefix + "ci-read", Via: GrantByGrain},
+			{Capability: APIRef("ci-read"), Via: GrantByGrain},
 		},
 	}
 }

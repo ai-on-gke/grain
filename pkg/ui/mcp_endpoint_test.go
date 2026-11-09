@@ -862,8 +862,9 @@ func TestControllerMCPSubmitTaskForwardsGrants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(got.Capabilities, "api:ci-read") {
-		t.Fatalf("task filed with grants [api:ci-read] holds %v", got.Capabilities)
+	// Slice 3 records the canonical reference for the legacy name it was given.
+	if !slices.Contains(got.Capabilities, model.APIRef("ci-read")) {
+		t.Fatalf("task filed with grants [api:ci-read] holds %v, want %s", got.Capabilities, model.APIRef("ci-read"))
 	}
 
 	target := map[string]any{"capability": model.RepoTargetRef, "with": map[string]any{"repo": "acme/widgets", "base": "main"}}

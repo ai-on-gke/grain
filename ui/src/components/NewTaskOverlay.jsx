@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import AccessGate from "./AccessGate.jsx";
-import { isApiGrant } from "../apiGrants.js";
+import { isApiGrant, isLegacyApiGrant } from "../apiGrants.js";
 import GrantsPicker from "./GrantsPicker.jsx";
 import { checkGrants, localGrantHandlers } from "./capabilityMethods.js";
 import { isCapabilityRef } from "../capabilityArgs.js";
@@ -432,10 +432,8 @@ export default function NewTaskOverlay({
   // removed or left as it is.
   const isBareGrant = (id) => !isCapabilityRef(id) && !isApiGrant(id);
   const capabilityIds = capabilities.filter(isBareGrant);
-  const apiIds = capabilities.filter(isApiGrant);
-  const capabilityRefs = capabilities.filter(
-    (id) => isCapabilityRef(id) && !isApiGrant(id),
-  );
+  const apiIds = capabilities.filter(isLegacyApiGrant);
+  const capabilityRefs = capabilities.filter(isCapabilityRef);
   const formCapabilities = taskForm.capabilities;
   const methodGrants = localGrantHandlers(
     [...capabilityIds, ...capabilityRefs],

@@ -59,7 +59,7 @@ func TestMigration115RewritesSelfDebugInTheCatalogue(t *testing.T) {
 	if cat == nil {
 		t.Fatal("the catalogue was dropped")
 	}
-	became := model.SelfDebugGrants()
+	became := []string{"api:self-debug", model.GrainSourceGrant}
 	if want := append([]string{"release-gate-read"}, became...); !slices.Equal(cat.Defaults.Task, want) {
 		t.Errorf("defaults.task = %v, want %v", cat.Defaults.Task, want)
 	}

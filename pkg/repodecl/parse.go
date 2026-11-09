@@ -485,7 +485,7 @@ func parseCapabilities(f file, repo model.RepoRef, caps []string) ([]model.RepoR
 					continue
 				}
 			}
-			ciRead := model.APIGrantPrefix + "ci-read@" + repo.String()
+			ciRead := model.APIGrantString("ci-read", repo.String())
 			if !seenGrants[ciRead] {
 				seenGrants[ciRead] = true
 				grants = append(grants, model.Grant{Capability: ciRead, Via: model.GrantSource(f.path)})

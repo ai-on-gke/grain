@@ -381,6 +381,9 @@ test("request_access end-to-end grant/deny, earlier partial decision, refusals, 
     const turn2 = afterTurn2.runs[1];
     expect(turn2.reads).toEqual(["acme/docs"]);
     expect(turn2.networkAccess).toBe("open");
+    expect(turn2.grants || []).not.toContain(
+      "https://grain.dev/capabilities/api#tasks:admin",
+    );
     expect(turn2.grants || []).not.toContain("api:tasks:admin");
     // The decision comment in Turn 2's prompt lists both granted and declined items.
     expect(turn2.prompt).toContain("Access request granted:");
@@ -598,8 +601,12 @@ test("request_access end-to-end grant/deny, earlier partial decision, refusals, 
       await request.get(`/e2e/runs?task=${chatTask.id}`)
     ).json();
     expect(chatRuns.runs[1].reads).toEqual(["acme/lib"]);
-    expect(chatRuns.runs[1].grants || []).toContain("api:memory");
-    expect(chatRuns.runs[1].grants || []).not.toContain("api:tasks:admin");
+    expect(chatRuns.runs[1].grants || []).toContain(
+      "https://grain.dev/capabilities/api#memory",
+    );
+    expect(chatRuns.runs[1].grants || []).not.toContain(
+      "https://grain.dev/capabilities/api#tasks:admin",
+    );
   } finally {
     for (const id of createdTaskIds) {
       await request

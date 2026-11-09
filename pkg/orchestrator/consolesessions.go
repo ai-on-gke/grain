@@ -986,14 +986,21 @@ func consoleSessionSnapshotEqual(a, b model.ConsoleSessionConfigSnapshot) bool {
 		slices.Equal(a.AutoReads, b.AutoReads)
 }
 
+func containsConsoleGrantKey(list []string, capability string) bool {
+	key := model.CanonicalGrantKey(capability)
+	return slices.ContainsFunc(list, func(s string) bool {
+		return model.CanonicalGrantKey(s) == key
+	})
+}
+
 func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSession,
 	prev model.ConsoleSessionConfigSnapshot, hasPrev bool) []model.Grant {
 
 	removedSession := map[string]bool{}
 	if hasPrev {
 		for _, c := range prev.Capabilities {
-			if c != "" && !slices.Contains(session.Capabilities, c) {
-				removedSession[c] = true
+			if c != "" && !containsConsoleGrantKey(session.Capabilities, c) {
+				removedSession[model.CanonicalGrantKey(c)] = true
 			}
 		}
 	}
@@ -1008,22 +1015,23 @@ func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSessi
 		if _, isLegacyHost := model.LegacyHostingAlias(g.Capability); isLegacyHost {
 			continue
 		}
-		if g.Capability == "" || seen[g.Capability] {
+		key := model.CanonicalGrantKey(g.Capability)
+		if g.Capability == "" || seen[key] {
 			continue
 		}
 		if g.Via == model.GrantByGrain {
-			if hasPrev && removedSession[g.Capability] {
+			if hasPrev && removedSession[key] {
 				continue
 			}
-			if !hasPrev && !slices.Contains(session.Capabilities, g.Capability) {
+			if !hasPrev && !containsConsoleGrantKey(session.Capabilities, g.Capability) {
 				continue
 			}
 		}
-		if g.Via == model.GrantByDefault && !slices.Contains(session.Capabilities, g.Capability) &&
+		if g.Via == model.GrantByDefault && !containsConsoleGrantKey(session.Capabilities, g.Capability) &&
 			(!model.IsConsoleSessionDefaultGrant(g.Capability) || session.DeclinesDefault(g.Capability)) {
 			continue
 		}
-		seen[g.Capability] = true
+		seen[key] = true
 		out = append(out, g)
 	}
 
@@ -1033,13 +1041,14 @@ func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSessi
 	// since -- and never one that was given them and no longer holds them,
 	// which is an operator having removed one from the task.
 	for _, name := range model.ConsoleSessionDefaultGrants() {
-		if seen[name] || session.DeclinesDefault(name) {
+		key := model.CanonicalGrantKey(name)
+		if seen[key] || session.DeclinesDefault(name) {
 			continue
 		}
-		if hasPrev && slices.Contains(prev.OfferedDefaults, name) {
+		if hasPrev && containsConsoleGrantKey(prev.OfferedDefaults, name) {
 			continue
 		}
-		seen[name] = true
+		seen[key] = true
 		out = append(out, model.Grant{Capability: name, Via: model.GrantByDefault})
 	}
 
@@ -1051,11 +1060,12 @@ func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSessi
 		if _, isLegacyHost := model.LegacyHostingAlias(name); isLegacyHost {
 			continue
 		}
-		if name == "" || seen[name] {
+		key := model.CanonicalGrantKey(name)
+		if name == "" || seen[key] {
 			continue
 		}
-		if !hasPrev || !slices.Contains(prev.Capabilities, name) {
-			seen[name] = true
+		if !hasPrev || !containsConsoleGrantKey(prev.Capabilities, name) {
+			seen[key] = true
 			out = append(out, model.Grant{Capability: name, Via: model.GrantByGrain})
 		}
 	}

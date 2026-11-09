@@ -387,11 +387,11 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 						if g.Capability == "" || legacyAdm || legacyHost {
 							continue
 						}
-						if g.Via == model.GrantByDefault && !slices.Contains(s.Capabilities, g.Capability) &&
+						if g.Via == model.GrantByDefault && !containsSessionGrantKey(s.Capabilities, g.Capability) &&
 							(!model.IsConsoleSessionDefaultGrant(g.Capability) || s.DeclinesDefault(g.Capability)) {
 							continue
 						}
-						if !slices.Contains(capabilities, g.Capability) {
+						if !containsSessionGrantKey(capabilities, g.Capability) {
 							capabilities = append(capabilities, g.Capability)
 						}
 					}
@@ -787,10 +787,10 @@ func (c *Client) updateConsoleSession(ctx context.Context, id string, req Update
 		// unticked: declined, so it stays off when the session's task is
 		// filed again, and ticked again, no longer.
 		declined := slices.DeleteFunc(slices.Clone(session.DeclinedDefaults), func(id string) bool {
-			return model.IsConsoleSessionDefaultGrant(id) && slices.Contains(ids, id)
+			return model.IsConsoleSessionDefaultGrant(id) && containsSessionGrantKey(ids, id)
 		})
 		for _, id := range model.ConsoleSessionDefaultGrants() {
-			if !slices.Contains(ids, id) && !slices.Contains(declined, id) {
+			if !containsSessionGrantKey(ids, id) && !containsSessionGrantKey(declined, id) {
 				declined = append(declined, id)
 			}
 		}
@@ -1168,11 +1168,18 @@ func (c *Client) sandboxesIsolateNetwork() bool {
 // from the task: given already, so one an operator then removes is not
 // given back, while one the task never had still reaches it on the next
 // sync.
+func containsSessionGrantKey(list []string, capability string) bool {
+	key := model.CanonicalGrantKey(capability)
+	return slices.ContainsFunc(list, func(s string) bool {
+		return model.CanonicalGrantKey(s) == key
+	})
+}
+
 func consoleSessionHeldDefaults(grants []model.Grant) []string {
 	var out []string
 	for _, g := range grants {
-		if model.IsConsoleSessionDefaultGrant(g.Capability) && !slices.Contains(out, g.Capability) {
-			out = append(out, g.Capability)
+		if model.IsConsoleSessionDefaultGrant(g.Capability) && !containsSessionGrantKey(out, g.Capability) {
+			out = append(out, model.CanonicalGrantKey(g.Capability))
 		}
 	}
 	return out

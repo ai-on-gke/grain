@@ -54,12 +54,12 @@ describe("DetailOverlay capabilities", () => {
     expect(screen.queryByLabelText("Legacy capabilities")).toBeNull();
     const grants = screen.getByTestId("task-12-grants");
     const apiLine = within(grants).getByLabelText(
-      "api:ci:read on acme/widgets",
+      "api:ci:read · repo: acme/widgets",
     );
     await user.click(within(apiLine).getByRole("button", { name: /remove/i }));
     expect(api).toHaveBeenCalledWith("/api/tasks/12/capabilities", {
       method: "POST",
-      body: JSON.stringify({ id: refGrant, attach: false }),
+      body: JSON.stringify({ grant: refGrant, attach: false }),
     });
 
     const bareLine = within(grants).getByLabelText("web-search");

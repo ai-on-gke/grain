@@ -18,20 +18,20 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 )
 
-// This file is slice 2 of design/design/unified-grants.design.md (§1-§3):
-// every grant a task can hold read as one shape, a capability reference
-// plus its normalized with: arguments, whichever of today's spellings it
-// was stored in.
+// This file is slices 2-3 of design/design/unified-grants.design.md (§1-§3):
+// every grant a task can hold read and written as one shape, a capability
+// reference plus its normalized with: arguments, while readers still accept
+// legacy api: / repo-read: / repo-write: strings from unmigrated store rows
+// and .grain/ declarations.
 //
-// Slice 2 reads both shapes and writes one -- today's. CanonicalGrant is
-// how a reader turns any stored string into the unified shape;
-// LegacyGrantString is how a writer turns a unified grant back into the
-// string an older binary already reads (api:<scope>[@repo], or a Reads /
-// Writes entry for repository access), so a store this binary writes is
-// one an older binary sees nothing new in.
+// CanonicalGrant turns any stored string into the unified shape; writers emit
+// CanonicalGrant(...).Key() (EncodeCapabilityGrant's form); StoredGrantSpelling
+// and LegacyGrantString keep internal comparisons identical across both
+// spellings until slice 4 retires the legacy strings.
 
 // APICapabilityServerID is the canonical capability_id of grain's own
 // agent API as an in-process capability server: one method per scope,
@@ -42,6 +42,27 @@ const APICapabilityServerID = "https://grain.dev/capabilities/api"
 // APIRef is the reference of the api server's method for a scope, preset
 // or scope set name: https://grain.dev/capabilities/api#<what>.
 func APIRef(what string) string { return APICapabilityServerID + "#" + what }
+
+// APIGrantString is the canonical grant string (EncodeCapabilityGrant's form)
+// for a scope, preset or scope set name, optionally limited to repo
+// (owner/name, canonicalized via ParseRepo when valid).
+func APIGrantString(what, repo string) string {
+	repo = strings.TrimSpace(repo)
+	if repo == "" {
+		return APIRef(what)
+	}
+	if r, err := ParseRepo(repo); err == nil {
+		repo = r.String()
+	}
+	return (Grant{Capability: APIRef(what), With: repoWith(repo)}).Key()
+}
+
+// IsAPIGrantRef reports whether s is a capability grant targeting the
+// in-process https://grain.dev/capabilities/api server.
+func IsAPIGrantRef(s string) bool {
+	what, ok := apiMethodOf(CapabilityGrantRef(s))
+	return ok && what != ""
+}
 
 // The repo server's task-level repository access (unified-grants §1):
 // #target is the one repository and base branch a task works on, a
@@ -104,7 +125,13 @@ func CanonicalGrant(s string) Grant {
 	if spec.With != nil {
 		with := spec.With
 		if what, ok := apiMethodOf(spec.Capability); ok && what != "" {
+			if len(with) == 0 {
+				return g
+			}
 			if r, isString := with["repo"].(string); isString && len(with) == 1 {
+				if strings.TrimSpace(r) == "" {
+					return g
+				}
 				if ref, err := ParseRepo(r); err == nil {
 					with = map[string]any{"repo": ref.String()}
 				}
@@ -175,6 +202,9 @@ func LegacyGrantString(g Grant) (s string, ok bool) {
 	if len(with) != 1 || !isString {
 		return "", false
 	}
+	if strings.TrimSpace(repo) == "" {
+		return APIGrantPrefix + what, true
+	}
 	r, err := ParseRepo(repo)
 	if err != nil {
 		return "", false
@@ -195,6 +225,39 @@ func StoredGrantSpelling(s string) string {
 		return legacy
 	}
 	return s
+}
+
+// APIGrantSpellings is every spelling of capability's agent API grant --
+// the canonical https://grain.dev/capabilities/api#<what>[={"repo":...}]
+// reference and the legacy api:<what>[@<repo>] form -- with capability
+// itself first, so a rule written in either matches a grant held in the
+// other. Just capability for anything else.
+func APIGrantSpellings(capability string) []string {
+	out := []string{capability}
+	add := func(s string) {
+		if s != "" && !slices.Contains(out, s) {
+			out = append(out, s)
+		}
+	}
+	trimmed := strings.TrimSpace(capability)
+	probe := trimmed
+	if len(trimmed) > len(APIGrantPrefix) && strings.EqualFold(trimmed[:len(APIGrantPrefix)], APIGrantPrefix) {
+		probe = APIGrantPrefix + trimmed[len(APIGrantPrefix):]
+	} else if ref, with, hasWith := strings.Cut(trimmed, "="); strings.EqualFold(CapabilityGrantRef(ref), APICapabilityServerID) ||
+		(len(ref) > len(APICapabilityServerID)+1 && strings.EqualFold(ref[:len(APICapabilityServerID)+1], APICapabilityServerID+"#")) {
+		probe = APICapabilityServerID + ref[len(APICapabilityServerID):]
+		if hasWith {
+			probe += "=" + with
+		}
+	}
+	g := CanonicalGrant(probe)
+	if _, isAPI := apiMethodOf(g.Capability); isAPI {
+		add(g.Key())
+		if legacy, ok := LegacyGrantString(g); ok {
+			add(legacy)
+		}
+	}
+	return out
 }
 
 // storedGrantSpellings is grants with each Capability in its stored
@@ -332,7 +395,7 @@ type RequestGrants struct {
 
 // SplitRequestGrants sorts an API request's grants: [{capability, with}]
 // into the stored fields: an api or other capability reference (or bare
-// name) into Capabilities, in its stored spelling (LegacyGrantString);
+// name) into Capabilities, in canonical reference form (EncodeCapabilityGrant);
 // #read {repo} into Reads; #write {repo, base} into Writes; #target
 // {repo, base} into Target. A CI job's {repo}-only #write, and a
 // #write {refs, force}, stay capabilities.
@@ -396,10 +459,13 @@ func SplitRequestGrants(grants []Grant, legacy GrantSpelling) (RequestGrants, er
 				continue
 			}
 		}
-		s, ok := LegacyGrantString(g)
-		if !ok {
+		if _, ok := LegacyGrantString(g); !ok {
 			return RequestGrants{}, fmt.Errorf("grants: %s takes only a repo", g.Capability)
 		}
+		if strings.HasPrefix(g.Capability, APIGrantPrefix) && len(g.With) > 0 {
+			return RequestGrants{}, fmt.Errorf("grants: %s: only a capability reference (https://...) takes with: arguments", g.Capability)
+		}
+		s := CanonicalGrant(g.Key()).Key()
 		if legacy.Capabilities {
 			return RequestGrants{}, fmt.Errorf("grants: %s and capabilities both name capability grants; send one", g.Capability)
 		}

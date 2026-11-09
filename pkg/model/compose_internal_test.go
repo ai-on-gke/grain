@@ -103,8 +103,9 @@ func TestWorkflowReviewCompositionGrantsRepoScopedCIReadWithoutGrainCI(t *testin
 	}
 	applyWorkflowReviewCIReadGrant(&comp, from)
 
-	if len(comp.Grants) != 1 || comp.Grants[0].Capability != "api:ci-read@acme/widgets" || comp.Grants[0].Via != GrantByGrain {
-		t.Fatalf("comp.Grants = %+v, want [{Capability:api:ci-read@acme/widgets Via:grain}]", comp.Grants)
+	wantGrant := APIGrantString("ci-read", "acme/widgets")
+	if len(comp.Grants) != 1 || comp.Grants[0].Capability != wantGrant || comp.Grants[0].Via != GrantByGrain {
+		t.Fatalf("comp.Grants = %+v, want [{Capability:%s Via:grain}]", comp.Grants, wantGrant)
 	}
 	if len(comp.GrantSources) != 1 || comp.GrantSources[0] != LayerTemplate {
 		t.Errorf("comp.GrantSources = %v, want [%q]", comp.GrantSources, LayerTemplate)
@@ -137,8 +138,8 @@ func TestWorkflowReviewCompositionGrantsRepoScopedCIReadWithoutGrainCI(t *testin
 		t.Fatalf("scheduleReviewsWorkflowRun(custom) = (%q, %v), want (%q, true)", from, ok, LayerSchedule)
 	}
 	applyWorkflowReviewCIReadGrant(&customComp, from)
-	if len(customComp.Grants) != 1 || customComp.Grants[0].Capability != "api:ci-read@acme/widgets" {
-		t.Fatalf("customComp.Grants = %+v, want [api:ci-read@acme/widgets]", customComp.Grants)
+	if len(customComp.Grants) != 1 || customComp.Grants[0].Capability != wantGrant {
+		t.Fatalf("customComp.Grants = %+v, want [%s]", customComp.Grants, wantGrant)
 	}
 	if customComp.Sources.Grants != LayerSchedule || len(customComp.GrantSources) != 1 || customComp.GrantSources[0] != LayerSchedule {
 		t.Errorf("customComp sources = %q / %v, want %q", customComp.Sources.Grants, customComp.GrantSources, LayerSchedule)
@@ -174,7 +175,7 @@ func TestApplyGrainCIGrantKeepsCIReadForARequestedGrainCI(t *testing.T) {
 	comp := ComposeScheduleTask(sched, &tmpl)
 	applyGrainCIGrant(&comp, false)
 
-	want := []Grant{{Capability: "self-debug", Via: GrantByLabel}, {Capability: "api:ci-read@acme/widgets", Via: GrantByGrain}}
+	want := []Grant{{Capability: "self-debug", Via: GrantByLabel}, {Capability: APIGrantString("ci-read", "acme/widgets"), Via: GrantByGrain}}
 	if len(comp.Grants) != len(want) || !comp.Grants[0].Equal(want[0]) || !comp.Grants[1].Equal(want[1]) {
 		t.Fatalf("Grants = %+v, want %+v", comp.Grants, want)
 	}

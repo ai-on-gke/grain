@@ -60,26 +60,38 @@ func TestLegacyGrantStringRefusesArgumentsNoSpellingCarries(t *testing.T) {
 	}
 }
 
-// TestWritersKeepTodaysSpelling is slice 2's "write one": a reference
-// sent in is recorded as the api:<scope> an older binary reads.
-func TestWritersKeepTodaysSpelling(t *testing.T) {
+// TestWritersEmitCanonicalReferences is slice 3's writer contract: both
+// legacy api:/repo-read:/repo-write: strings and canonical references are
+// recorded in canonical EncodeCapabilityGrant form.
+func TestWritersEmitCanonicalReferences(t *testing.T) {
 	names, err := NormalizeCapabilityNames([]string{
-		APIRef("ci:write") + `={"repo":"acme/widgets"}`, "api:ci:write@acme/widgets", APIRef("task-admin"),
+		APIRef("ci:write") + `={"repo":"acme/widgets"}`, "api:ci:write@acme/widgets", APIRef("task-admin"), "api:task-admin",
+		"repo-read:acme/docs", "repo-write:acme/site",
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"api:ci:write@acme/widgets", "api:task-admin"}; !slices.Equal(names, want) {
-		t.Errorf("NormalizeCapabilityNames = %v, want %v", names, want)
+	wantNames := []string{
+		APIGrantString("ci:write", "acme/widgets"),
+		APIRef("task-admin"),
+		RepoReadGrant(RepoRef{Owner: "acme", Name: "docs"}),
+		RepoWriteGrant(RepoRef{Owner: "acme", Name: "site"}),
+	}
+	if !slices.Equal(names, wantNames) {
+		t.Errorf("NormalizeCapabilityNames = %v, want %v", names, wantNames)
 	}
 	grants, err := NormalizeCapabilityGrants([]Grant{
 		{Capability: APIRef("merge:force"), Via: GrantByLabel},
+		{Capability: "api:ci:read@acme/widgets", Via: GrantByDefault},
 		{Capability: APIRef("ci:read"), With: json.RawMessage(`{"repo":"acme/widgets"}`), Via: GrantByDefault},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []Grant{{Capability: "api:merge:force", Via: GrantByLabel}, {Capability: "api:ci:read@acme/widgets", Via: GrantByDefault}}
+	want := []Grant{
+		{Capability: APIRef("merge:force"), Via: GrantByLabel},
+		{Capability: APIGrantString("ci:read", "acme/widgets"), Via: GrantByDefault},
+	}
 	if !slices.EqualFunc(grants, want, Grant.Equal) {
 		t.Errorf("NormalizeCapabilityGrants = %+v, want %+v", grants, want)
 	}
@@ -97,7 +109,7 @@ func TestSplitRequestGrants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"api:ci:write@acme/widgets", GitPushAnyRefGrant, "self-debug"}; !slices.Equal(got.Capabilities, want) {
+	if want := []string{APIGrantString("ci:write", "acme/widgets"), GitPushAnyRefGrant, "self-debug"}; !slices.Equal(got.Capabilities, want) {
 		t.Errorf("Capabilities = %v, want %v", got.Capabilities, want)
 	}
 	if len(got.Reads) != 1 || got.Reads[0].String() != "acme/docs" {
@@ -285,6 +297,9 @@ func predicates(child, parent Task) string {
 	fmt.Fprintf(&b, "ungrantedWrites=%v ", UngrantedWrites(child, parent))
 	fmt.Fprintf(&b, "ungrantedReads=%v ", UngrantedReads(child, parent))
 	fmt.Fprintf(&b, "sameBranch=%v ", SameBranch(child, parent))
+	tmplErr := TemplateWithinTask(parent, Template{ID: "tmpl", Grants: child.Grants, Reads: child.Reads, Writes: child.Writes})
+	kept, dropped := ReviewGrants(child.Grants, parent)
+	fmt.Fprintf(&b, "tmplWithin=%v reviewKept=%d reviewDropped=%d ", tmplErr == nil, len(kept), len(dropped))
 	for _, g := range child.Grants {
 		fmt.Fprintf(&b, "[dangerous=%v personOnly=%v api=%v",
 			IsDangerousGrant(g.Capability), IsPersonOnlyGrant(g.Capability), IsDangerousAPIGrant(g.Capability))

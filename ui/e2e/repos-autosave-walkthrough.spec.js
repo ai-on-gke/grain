@@ -141,7 +141,10 @@ test.describe("Walkthrough: Auto-Saving Repo Pane & Sidebar Release Stamp (docs/
         `/api/repos/${targetRepo}/capabilities`,
       );
       expect(capsRes.ok()).toBe(true);
-      expect((await capsRes.json()).defaultCapabilities).toContain(addedGrant);
+      // Stored as the canonical reference the api:<scope> row stands for.
+      expect((await capsRes.json()).defaultCapabilities).toContain(
+        `https://grain.dev/capabilities/api#${addedGrant.replace(/^api:/, "")}`,
+      );
     });
   });
 });

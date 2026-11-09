@@ -590,7 +590,7 @@ func RetiredInProcessPreset(name string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	preset, isAPI := strings.CutPrefix(to, APIGrantPrefix)
+	preset, isAPI := strings.CutPrefix(StoredGrantSpelling(to), APIGrantPrefix)
 	if !isAPI {
 		return "", false
 	}
@@ -601,13 +601,16 @@ func RetiredInProcessPreset(name string) (string, bool) {
 }
 
 // retiredInProcessNames are the retired bare capabilities whose
-// replacement is g: an api: grant (any @repo limit aside), or a recorded
-// capability-server grant such as grain#host-exec={} or repo#read/#write
-// {repo}. Sorted.
+// replacement is g: an api: / .../api# grant (any @repo / {repo} limit aside),
+// or a recorded capability-server grant such as grain#host-exec={} or
+// repo#read/#write {repo}. Sorted.
 func retiredInProcessNames(g string) []string {
 	grant := strings.TrimSpace(g)
 	var out []string
-	if IsCapabilityRef(grant) {
+	if IsAPIGrantRef(grant) || strings.HasPrefix(grant, APIGrantPrefix) {
+		what, _, _ := strings.Cut(strings.TrimPrefix(StoredGrantSpelling(grant), APIGrantPrefix), "@")
+		grant = APIGrantPrefix + canonicalPresetKey(what)
+	} else if IsCapabilityRef(grant) {
 		if repo, ok := RepoReadTarget(grant); ok {
 			out = append(out, RepoReadCapabilityPrefix+repo.String())
 		} else if CapabilityGrantRef(grant) == RepoReadRef {
@@ -620,12 +623,9 @@ func retiredInProcessNames(g string) []string {
 		if pg, ok := recordedCapabilityGrant(grant); ok {
 			grant = RecordedCapabilityGrant(pg)
 		}
-	} else {
-		what, _, _ := strings.Cut(strings.TrimPrefix(grant, APIGrantPrefix), "@")
-		grant = APIGrantPrefix + canonicalPresetKey(what)
 	}
 	for legacy, to := range allLegacyGrantReplacements() {
-		if to == grant {
+		if StoredGrantSpelling(to) == grant {
 			out = append(out, legacy)
 			continue
 		}
@@ -642,7 +642,7 @@ func retiredInProcessNames(g string) []string {
 		}
 	}
 	for legacy, tos := range legacyGrantMultiReplacements {
-		if slices.Contains(tos, grant) {
+		if slices.ContainsFunc(tos, func(t string) bool { return StoredGrantSpelling(t) == grant }) {
 			out = append(out, legacy)
 		}
 	}

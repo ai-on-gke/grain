@@ -91,7 +91,7 @@ type APIScopeSetUsage struct {
 // apiGrantSetName is the scope set or preset an api grant names, without
 // its @repo, or "" for a grant that is not an api grant.
 func apiGrantSetName(grant string) string {
-	rest, ok := strings.CutPrefix(strings.TrimSpace(grant), model.APIGrantPrefix)
+	rest, ok := strings.CutPrefix(model.StoredGrantSpelling(strings.TrimSpace(grant)), model.APIGrantPrefix)
 	if !ok {
 		return ""
 	}

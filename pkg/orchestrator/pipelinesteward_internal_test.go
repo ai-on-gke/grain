@@ -87,7 +87,7 @@ func TestThePipelineStewardHoldsTheDocumentedPresetsAndNothingDangerous(t *testi
 	for _, g := range tmpl.Grants {
 		names = append(names, g.Capability)
 	}
-	for _, want := range []string{"api:task-admin", "api:dispatch-control", "api:ci-read", "api:self-debug", model.GrainSourceGrant} {
+	for _, want := range []string{model.APIRef("task-admin"), model.APIRef("dispatch-control"), model.APIRef("ci-read"), model.APIRef("self-debug"), model.GrainSourceGrant} {
 		if !slices.Contains(names, want) {
 			t.Errorf("grants = %v, want %s", names, want)
 		}

@@ -62,24 +62,25 @@ also have left it off.
 
 ## Granting scopes
 
-A grant is one capability name per scope or preset:
+Each scope, preset and [scope set](#scope-sets) is a method of grain's
+in-process capability server `https://grain.dev/capabilities/api`
+([unified-grants.design.md](../design/design/unified-grants.design.md) §1),
+with an optional `repo` argument limiting it to one repository:
 
-| Grant | Grants |
-|---|---|
-| `api:tasks:write` | one scope, on every repository |
-| `api:task-admin` | a preset's scopes |
-| `api:ci:write@bwsalmon/grain` | a scope or preset on one repository only |
-| `api:ops/triage` | a [scope set](#scope-sets)'s resolved scopes |
+| Stored grant | Legacy input alias | Grants |
+|---|---|---|
+| `https://grain.dev/capabilities/api#tasks:write` | `api:tasks:write` | one scope, on every repository |
+| `https://grain.dev/capabilities/api#task-admin` | `api:task-admin` | a preset's scopes |
+| `https://grain.dev/capabilities/api#ci:write={"repo":"bwsalmon/grain"}` | `api:ci:write@bwsalmon/grain` | a scope or preset on one repository only |
+| `https://grain.dev/capabilities/api#ops/triage` | `api:ops/triage` | a [scope set](#scope-sets)'s resolved scopes |
 
-Each scope and preset is also a method of grain's in-process capability
-server `https://grain.dev/capabilities/api`
-([unified-grants.design.md](../design/design/unified-grants.design.md) §1):
-`https://grain.dev/capabilities/api#ci:write` with `{repo: bwsalmon/grain}`
-is the same grant as `api:ci:write@bwsalmon/grain`, and every check that
-reads grants (admission, the proposal and approval rules, the capability
-policy) reads the two as one. `GET /api/capability-methods` lists the
-server. For now grain still records the `api:` spelling, so a reference
-sent in is stored as the `api:` name it stands for.
+`GET /api/capability-methods` lists the server alongside other capability
+servers. Writers across the UI, CLI, REST API and orchestrator record the
+canonical `https://grain.dev/capabilities/api#<scope-or-preset>` reference
+(with `={"repo":"<owner/name>"}` when repository-limited, omitting empty
+`with:` arguments), while `model.CanonicalGrant` continues reading both
+canonical references and legacy `api:<scope>[@repo]` strings from
+unmigrated store rows and `.grain/` declarations.
 
 A template, schedule or task can also write the grant as the `api`
 capability with arguments, which is the same thing spelled for a
@@ -92,10 +93,13 @@ capabilities:
   - {capability: api, with: {scopes: ["ci:read", "tasks:*"]}}
 ```
 
-Each entry becomes the grant names above (`api:ops/triage`,
-`api:grain/ci-read@bwsalmon/grain`, `api:ci:read`, `api:tasks:read`,
-...) when it is read, so admission, policy and the proposal gate see
-nothing new. A `set` naming no set is refused there and then.
+Each entry becomes the canonical grant references above
+(`https://grain.dev/capabilities/api#ops/triage`,
+`https://grain.dev/capabilities/api#grain/ci-read={"repo":"bwsalmon/grain"}`,
+`https://grain.dev/capabilities/api#ci:read`,
+`https://grain.dev/capabilities/api#tasks:read`, ...) when it is read, so
+admission, policy and the proposal gate see one grant shape. A `set`
+naming no set is refused there and then.
 
 Grant several names for several scopes, or several repositories. A task
 whose only grant for a scope is repo-limited reaches just those

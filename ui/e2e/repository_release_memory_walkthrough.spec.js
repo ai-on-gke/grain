@@ -364,9 +364,12 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
         .filter({ hasText: /GitHub sandbox/i }),
     ).toBeVisible();
     await page.getByRole("tab", { name: "Agents" }).click();
+    // The menu row is named api:<scope>; slice 3 stores and shows the
+    // grant as its canonical https://grain.dev/capabilities/api#<scope>.
+    const keptGrant = `https://grain.dev/capabilities/api#${addedGrant.replace(/^api:/, "")}`;
     const kept = page
       .getByTestId("repo-default-grants")
-      .locator(`[data-grant="${addedGrant}"]`);
+      .locator(`[data-grant="${keptGrant}"]`);
     await expect(kept).toBeVisible();
     // Take it off again: every spec file a worker runs shares one demo
     // store, and a repo default would follow every acme/widgets task.

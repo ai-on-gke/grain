@@ -61,7 +61,7 @@ func TestLiveAndRelayedProposalsStoreIdenticalGrants(t *testing.T) {
 				"capabilities": []any{"self-debug"},
 			},
 			wantGrants: []model.Grant{
-				{Capability: "api:self-debug", Via: model.GrantByLabel},
+				{Capability: model.APIRef("self-debug"), Via: model.GrantByLabel},
 				{Capability: model.GrainSourceGrant, Via: model.GrantByLabel},
 			},
 			wantState:     model.StateQueued,
@@ -81,7 +81,7 @@ func TestLiveAndRelayedProposalsStoreIdenticalGrants(t *testing.T) {
 				"capabilities": []any{"self-debug"},
 			},
 			wantGrants: []model.Grant{
-				{Capability: "api:self-debug", Via: model.GrantByLabel},
+				{Capability: model.APIRef("self-debug"), Via: model.GrantByLabel},
 				{Capability: model.GrainSourceGrant, Via: model.GrantByLabel},
 			},
 			wantState:     model.StateQueued,
@@ -99,7 +99,7 @@ func TestLiveAndRelayedProposalsStoreIdenticalGrants(t *testing.T) {
 				"capabilities": []any{"self-debug"},
 			},
 			wantGrants: []model.Grant{
-				{Capability: "api:self-debug", Via: model.GrantByLabel},
+				{Capability: model.APIRef("self-debug"), Via: model.GrantByLabel},
 				{Capability: model.GrainSourceGrant, Via: model.GrantByLabel},
 			},
 			wantState:     model.StateProposed,
@@ -138,7 +138,7 @@ func TestLiveAndRelayedProposalsStoreIdenticalGrants(t *testing.T) {
 				"capabilities": []any{"self-upgrade"},
 			},
 			wantGrants: []model.Grant{
-				{Capability: "api:self-upgrade", Via: model.GrantByLabel},
+				{Capability: model.APIRef("self-upgrade"), Via: model.GrantByLabel},
 			},
 			wantState:     model.StateProposed,
 			wantAutoMerge: false,
@@ -165,9 +165,9 @@ func TestLiveAndRelayedProposalsStoreIdenticalGrants(t *testing.T) {
 				},
 			},
 			wantGrants: []model.Grant{
-				{Capability: "api:memory", Via: model.GrantByLabel},
-				{Capability: "api:self-debug", Via: model.GrantByDefault},
-				{Capability: "api:tasks:read@acme/widgets", Via: model.GrantByLabel},
+				{Capability: model.APIRef("memory"), Via: model.GrantByLabel},
+				{Capability: model.APIRef("self-debug"), Via: model.GrantByDefault},
+				{Capability: model.APIGrantString("tasks:read", "acme/widgets"), Via: model.GrantByLabel},
 				{Capability: model.GrainSourceGrant, Via: model.GrantByDefault},
 			},
 			wantState:     model.StateQueued,

@@ -111,7 +111,7 @@ var PipelineStewardAPIPresets = []string{"task-admin", "dispatch-control", "ci-r
 func pipelineStewardTemplate(stateRepo RepoRef) *Template {
 	grants := make([]Grant, 0, len(PipelineStewardAPIPresets)+2)
 	for _, preset := range PipelineStewardAPIPresets {
-		grants = append(grants, Grant{Capability: APIGrantPrefix + preset, Via: GrantByGrain})
+		grants = append(grants, Grant{Capability: APIRef(preset), Via: GrantByGrain})
 	}
 	// What self-debug became (SelfDebugGrants): its api preset for the
 	// task readers and grain#source for grain's own source.

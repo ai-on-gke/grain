@@ -1603,7 +1603,7 @@ func grainCLIGrantBullets(grants []model.Grant) string {
 	for _, g := range grants {
 		held[g.Capability] = true
 		names = append(names, g.Capability)
-		if strings.HasPrefix(g.Capability, model.APIGrantPrefix) {
+		if strings.HasPrefix(g.Capability, model.APIGrantPrefix) || model.IsAPIGrantRef(g.Capability) {
 			api = true
 		}
 	}
@@ -4398,7 +4398,7 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 // serves no MCP tool at all may be read by the run's agent framework
 // instead (agent/antigravity's host-tool grants).
 var toolGrants = []string{
-	grainserver.LegacySelfDebug, grainserver.SourceRef, grainserver.SourceGrant, selfDebugAPIGrant, grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant,
+	grainserver.LegacySelfDebug, grainserver.SourceRef, grainserver.SourceGrant, model.APIGrantPrefix + "self-debug", selfDebugAPIGrant, grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant,
 	grainserver.LegacyGrainCI, grainserver.CIRef, grainserver.CIGrant, deploymenthealth.CapabilityName, grainserver.HealthRef, grainserver.HealthGrant,
 	grainserver.LegacyReadIssues, grainserver.ReadIssuesRef, grainserver.ReadIssuesGrant,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
@@ -4414,7 +4414,7 @@ var toolGrants = []string{
 func runGrants(task model.Task) []string {
 	var grants []string
 	for _, grant := range append(slices.Clone(toolGrants), capability.RunGrants()...) {
-		if hasGrant(task, grant) {
+		if slices.ContainsFunc(task.Grants, func(g model.Grant) bool { return g.Capability == grant }) {
 			grants = append(grants, grant)
 		}
 	}
@@ -4515,7 +4515,7 @@ func runGitCredential(ctx context.Context, store *model.Store, task model.Task) 
 // the same line for the same reason).
 // selfDebugAPIGrant is the api preset the retired self-debug became the
 // REST half of (model.SelfDebugGrants).
-const selfDebugAPIGrant = model.APIGrantPrefix + "self-debug"
+const selfDebugAPIGrant = model.APICapabilityServerID + "#self-debug"
 
 // hasGrainSource reports whether task holds grain#source in any spelling,
 // the retired bare self-debug included (model.IsGrainSourceGrant): what
@@ -4530,8 +4530,9 @@ func hasGrainSource(task model.Task) bool {
 }
 
 func hasGrant(task model.Task, capability string) bool {
+	want := model.CanonicalGrantKey(capability)
 	for _, g := range task.Grants {
-		if g.Capability == capability {
+		if g.Capability == capability || model.CanonicalGrantKey(g.Capability) == want {
 			return true
 		}
 	}
