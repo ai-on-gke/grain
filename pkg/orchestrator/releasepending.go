@@ -45,6 +45,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -69,7 +70,18 @@ const (
 var releasePendingNotifier = model.PrincipalString(model.Principal{Kind: model.PrincipalAutomation, ID: "release-watch"})
 
 var pendingTagPattern = regexp.MustCompile(`^(v[0-9]+\.[0-9]+\.[0-9]+)-pending$`)
+var retractedTagPattern = regexp.MustCompile(`^(v[0-9]+\.[0-9]+\.[0-9]+)-retracted$`)
 var releaseTagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
+var breakingSubjectPattern = regexp.MustCompile(`^[A-Za-z]+(\([^)]*\))?!: `)
+var mergePullRequestPattern = regexp.MustCompile(`^Merge pull request #[0-9]+ `)
+var breakingTrailerPattern = regexp.MustCompile(`^BREAKING[ -]CHANGE:`)
+var releaseMajorConfPattern = regexp.MustCompile(`^RELEASE_MAJOR="?([0-9]+)"?[ \t]*(?:#.*)?$`)
+var releaseNeverPromoteQuotedPattern = regexp.MustCompile(`^RELEASE_NEVER_PROMOTE="([^"]*)"[ \t]*(?:#.*)?$`)
+var releaseNeverPromoteBarePattern = regexp.MustCompile(`^RELEASE_NEVER_PROMOTE=([^"#\r\n]*?)[ \t]*(?:#.*)?$`)
+
+type releaseCommitComparer interface {
+	CompareCommits(owner, repo, base, head string) ([]github.Commit, error)
+}
 
 // releasePendingPolled is when each repository's tags were last read,
 // keyed by the store (model.Store.ID) and the repository, so that two
@@ -105,6 +117,7 @@ func reconcileReleasePending(ctx context.Context, deps Deps, now time.Time) erro
 		return nil // a forge connection that cannot read tags raises nothing
 	}
 	files, _ := deps.Client.(github.FileReader)
+	comparer, _ := deps.Client.(releaseCommitComparer)
 	configs, err := deps.Store.ListRepoConfigs(ctx)
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading repo configs: %w", err)
@@ -165,7 +178,7 @@ func reconcileReleasePending(ctx context.Context, deps Deps, now time.Time) erro
 			continue
 		}
 		releasePendingPolled.Store(key, now)
-		if err := watchPendingReleases(ctx, deps.Store, tags, files, repo, now); err != nil {
+		if err := watchPendingReleases(ctx, deps.Store, tags, files, comparer, repo, now); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -175,18 +188,21 @@ func reconcileReleasePending(ctx context.Context, deps Deps, now time.Time) erro
 // watchPendingReleases raises and clears release.pending for repo from
 // its tags as they stand now.
 func watchPendingReleases(ctx context.Context, store *model.Store, tags github.ReleaseTagReader,
-	files github.FileReader, repo model.RepoRef, now time.Time) error {
+	files github.FileReader, comparer releaseCommitComparer, repo model.RepoRef, now time.Time) error {
 	refs, err := tags.ListMatchingTags(repo.StoredOwner(), repo.Name, "v")
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading %s's release tags: %w", repo, github.Readable(err))
 	}
 	released := map[string]bool{}
+	retracted := map[string]bool{}
 	pending := map[string]github.TagRef{}
 	for _, t := range refs {
 		if releaseTagPattern.MatchString(t.Name) {
 			released[t.Name] = true
 		} else if m := pendingTagPattern.FindStringSubmatch(t.Name); m != nil {
 			pending[m[1]] = t
+		} else if m := retractedTagPattern.FindStringSubmatch(t.Name); m != nil {
+			retracted[m[1]] = true
 		}
 	}
 	all, err := store.ListNotifications(ctx, model.NotificationFilter{Family: model.FamilyReleasePending, Limit: 1000})
@@ -241,7 +257,7 @@ func watchPendingReleases(ctx context.Context, store *model.Store, tags github.R
 			Subject:  subject,
 			Severity: model.NotificationWarning,
 			Title:    version + " is ready to promote",
-			Body:     pendingReleaseBody(files, repo, version, message),
+			Body:     pendingReleaseBody(files, comparer, repo, released, retracted, version, commit, message),
 			Repo:     repo.String(),
 			RaisedBy: releasePendingNotifier,
 			Actions:  model.ReleasePendingActions,
@@ -357,21 +373,29 @@ func releaseAnsweredAfter(all []model.Notification, repo model.RepoRef, version 
 	return false
 }
 
-// pendingReleaseBody is what the notification says: what the -pending
-// tag says of itself, and the release notes, from docs/releases/<v>.md
-// on trunk when they have merged.
-func pendingReleaseBody(files github.FileReader, repo model.RepoRef, version, tagMessage string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s is staged as %s-pending on %s and waits for a person: Approve tags %s, moves latest onto it "+
-		"and publishes its images (GitHub Actions promote-release.yml); Reject drops it.\n\n", version, version, repo, version)
-	if msg := strings.TrimSpace(tagMessage); msg != "" {
-		b.WriteString(msg + "\n\n")
-	}
+// pendingReleaseBody is what the notification says: any breaking-change
+// gate warning (when the pending release carries breaking changes outside
+// the major release RELEASE_MAJOR asks for, so approving it needs
+// allow_breaking: true), what the -pending tag says of itself, and the
+// release notes, from docs/releases/<v>.md on trunk when they have merged.
+func pendingReleaseBody(files github.FileReader, comparer releaseCommitComparer, repo model.RepoRef,
+	released, retracted map[string]bool, version, commit, tagMessage string) string {
 	notesPath := "docs/releases/" + version + ".md"
 	var notes []byte
 	found := false
 	if files != nil {
 		notes, found, _ = files.ReadFile(repo.StoredOwner(), repo.Name, "main", notesPath)
+	}
+	breaking := pendingReleaseBreakingWarning(files, comparer, repo, released, retracted, version, commit, tagMessage, string(notes))
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s is staged as %s-pending on %s and waits for a person: Approve tags %s, moves latest onto it "+
+		"and publishes its images (GitHub Actions promote-release.yml); Reject drops it.\n\n", version, version, repo, version)
+	if breaking != "" {
+		b.WriteString(breaking + "\n\n")
+	}
+	if msg := strings.TrimSpace(tagMessage); msg != "" {
+		b.WriteString(msg + "\n\n")
 	}
 	if !found {
 		fmt.Fprintf(&b, "Release notes: %s has not merged yet; merge the release-notes task's pull request before approving.\n", notesPath)
@@ -383,4 +407,155 @@ func pendingReleaseBody(files github.FileReader, repo model.RepoRef, version, ta
 	}
 	fmt.Fprintf(&b, "Release notes (%s):\n\n%s\n", notesPath, text)
 	return b.String()
+}
+
+// pendingReleaseBreakingWarning mirrors scripts/release-from-trunk.sh and
+// scripts/release-notes.sh check-breaking: when version carries breaking
+// changes since the newest non-retracted, non-RELEASE_NEVER_PROMOTE
+// release before it without being a major bump RELEASE_MAJOR asks for,
+// promote-release.yml refuses an approval unless allow_breaking is true.
+func pendingReleaseBreakingWarning(files github.FileReader, comparer releaseCommitComparer, repo model.RepoRef,
+	released, retracted map[string]bool, version, commit, tagMessage, mergedNotes string) string {
+	for _, line := range strings.Split(tagMessage, "\n") {
+		l := strings.TrimSpace(line)
+		if strings.HasPrefix(l, "BREAKING CHANGES:") ||
+			(strings.Contains(l, "carries breaking changes") && strings.Contains(l, "is not the major release RELEASE_MAJOR asks for")) {
+			return ""
+		}
+	}
+	confMajor, hasConfMajor, neverPromotes := readReleaseConf(files, repo, commit)
+	notesBase := newestNotesBase(released, retracted, neverPromotes, version)
+	if notesBase == "" {
+		return ""
+	}
+	prevMajor, okPrev := parseSemverMajor(notesBase)
+	newMajor, okNew := parseSemverMajor(version)
+	if okPrev && okNew && hasConfMajor && newMajor > prevMajor && confMajor >= newMajor {
+		return ""
+	}
+	hasBreaking := false
+	compared := false
+	if comparer != nil && commit != "" {
+		if commits, err := comparer.CompareCommits(repo.StoredOwner(), repo.Name, notesBase, commit); err == nil {
+			compared = true
+			hasBreaking = slices.ContainsFunc(commits, commitIsBreaking)
+		}
+	}
+	if !compared && strings.Contains("\n"+strings.ReplaceAll(mergedNotes, "\r\n", "\n")+"\n", "\n## Breaking changes\n") {
+		hasBreaking = true
+	}
+	if !hasBreaking {
+		return ""
+	}
+	return fmt.Sprintf("BREAKING CHANGES: %s carries breaking changes since %s and is not the major release RELEASE_MAJOR asks for; approving it needs allow_breaking: true.",
+		version, notesBase)
+}
+
+func readReleaseConf(files github.FileReader, repo model.RepoRef, commit string) (major int, hasMajor bool, never map[string]bool) {
+	never = map[string]bool{}
+	if files == nil {
+		return 0, false, never
+	}
+	var raw []byte
+	var ok bool
+	if commit != "" {
+		raw, ok, _ = files.ReadFile(repo.StoredOwner(), repo.Name, commit, "scripts/release.conf")
+	}
+	if !ok {
+		raw, ok, _ = files.ReadFile(repo.StoredOwner(), repo.Name, "main", "scripts/release.conf")
+	}
+	if !ok {
+		return 0, false, never
+	}
+	var neverRaw string
+	for _, line := range strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n") {
+		l := strings.TrimSpace(line)
+		if m := releaseMajorConfPattern.FindStringSubmatch(l); m != nil {
+			if n, err := strconv.Atoi(m[1]); err == nil {
+				major, hasMajor = n, true
+			}
+		} else if m := releaseNeverPromoteQuotedPattern.FindStringSubmatch(l); m != nil {
+			neverRaw = m[1]
+		} else if m := releaseNeverPromoteBarePattern.FindStringSubmatch(l); m != nil {
+			neverRaw = m[1]
+		}
+	}
+	for _, tag := range strings.Fields(neverRaw) {
+		never[tag] = true
+	}
+	return major, hasMajor, never
+}
+
+func newestNotesBase(released, retracted, never map[string]bool, target string) string {
+	best := ""
+	for v := range released {
+		if retracted[v] || never[v] || !semverLess(v, target) {
+			continue
+		}
+		if best == "" || semverLess(best, v) {
+			best = v
+		}
+	}
+	return best
+}
+
+func parseSemverParts(v string) ([3]int, bool) {
+	parts := strings.Split(strings.TrimPrefix(v, "v"), ".")
+	if len(parts) != 3 {
+		return [3]int{}, false
+	}
+	var out [3]int
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return [3]int{}, false
+		}
+		out[i] = n
+	}
+	return out, true
+}
+
+func parseSemverMajor(v string) (int, bool) {
+	parts, ok := parseSemverParts(v)
+	return parts[0], ok
+}
+
+func semverLess(a, b string) bool {
+	pa, oka := parseSemverParts(a)
+	pb, okb := parseSemverParts(b)
+	if !oka || !okb {
+		return a < b
+	}
+	for i := range 3 {
+		if pa[i] != pb[i] {
+			return pa[i] < pb[i]
+		}
+	}
+	return false
+}
+
+func commitIsBreaking(c github.Commit) bool {
+	msg := strings.ReplaceAll(c.Message, "\r\n", "\n")
+	subject, rest, _ := strings.Cut(msg, "\n")
+	if breakingSubjectPattern.MatchString(subject) {
+		return true
+	}
+	if mergePullRequestPattern.MatchString(subject) {
+		for _, line := range strings.Split(rest, "\n") {
+			t := strings.TrimSpace(line)
+			if t == "" {
+				continue
+			}
+			if breakingSubjectPattern.MatchString(t) {
+				return true
+			}
+			break
+		}
+	}
+	for _, line := range strings.Split(msg, "\n") {
+		if breakingTrailerPattern.MatchString(line) {
+			return true
+		}
+	}
+	return false
 }
