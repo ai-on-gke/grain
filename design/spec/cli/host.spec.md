@@ -188,7 +188,7 @@ Calls `PATCH /api/tasks/{id}` (`UpdateTask`) and prints the task the `PATCH` ret
 
 ### 3.5 State changes with no flags of their own {#CLI-26}
 
-Each of these takes `<id>`, calls the route, and prints the task:
+Each of these takes `<id>`, calls the route, and prints the task. `approve` and `run-now` also take `-reason`, sent as `X-Grain-Acting-Reason`: the agent API gate refuses an external agent credential (`gma_`) that approves without one, and run-now of an unapproved task is an approval:
 
 | Command | Route | Scope |
 |---|---|---|
@@ -202,7 +202,9 @@ Each of these takes `<id>`, calls the route, and prints the task:
 | `capability <id> <capability-id> attach\|detach` | `POST /api/tasks/{id}/capabilities`. A bad verb gets `third argument must be attach or detach, got "<x>"`; fewer than three arguments get `usage: grain capability <id> <capability-id> attach\|detach` | admin |
 
 <!-- BEGIN GENERATED FLAGS: grain approve -->
-_No flags._
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-reason` | string |  |  | why: sent as X-Grain-Acting-Reason, which an external agent credential (gma_) must give to approve |
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain withdraw -->
@@ -222,7 +224,9 @@ _No flags._
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain run-now -->
-_No flags._
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-reason` | string |  |  | why: sent as X-Grain-Acting-Reason, which an external agent credential (gma_) must give when run-now approves an unapproved task |
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain resume -->
@@ -1185,6 +1189,7 @@ These sign a workstation in to a deployment as a named context, and say who it i
 - `grain context` needs no daemon. It reads and writes `$XDG_CONFIG_HOME/grain/config.json` and the credentials kept beside it.
 - `grain login` defaults `--scope-set` to `grain/external-dev` and `--expires` to `30d`. `--auth` names `access-code` or a source a wrapper registered with `cli.RegisterCredentialSource`.
 - `--token-stdin` stores the secret it reads as the context's credential, so `grain login` refuses it beside `--issue-token` with exit `2` (`token_stdin_issue_token`) and names the form that mints with an access code: `grain -token CODE login <url> --issue-token`.
+- It refuses `--token-stdin` beside `--refresh` the same way (exit `2`, `token_stdin_refresh`), and `--scope-set`, `--repos` or `--expires` without `--issue-token` (exit `2`, `needs_issue_token`): each would otherwise be ignored. A refused login writes nothing.
 - `grain logout --local` forgets the credential without revoking its token on the server.
 
 #### `grain context list|use|show|delete`
@@ -1205,7 +1210,7 @@ _No flags._
 | `-refresh` | bool |  |  | re-mint the context's expired or expiring token |
 | `-repos` | string |  |  | comma-separated repositories --issue-token limits the token to |
 | `-scope-set` | string | `"grain/external-dev"` |  | the scope set --issue-token mints |
-| `-token-stdin` | bool |  |  | read a gma_ token (or, with --auth access-code, the access code) from stdin and store it; not with --issue-token |
+| `-token-stdin` | bool |  |  | read a gma_ token (or, with --auth access-code, the access code) from stdin and store it; not with --issue-token or --refresh |
 <!-- END GENERATED FLAGS -->
 
 #### `grain logout [<ctx>]`

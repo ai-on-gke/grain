@@ -1,0 +1,122 @@
+[
+  {
+    "id": "phone.chromium.reload",
+    "desc": "chromium: every frame after a reload at each width (x20, light+dark) has data-phone == media query == AppBar == !rail, theme and gutter right",
+    "ok": true,
+    "got": {
+      "bad": [],
+      "steady": {
+        "1440x900": 232,
+        "390x844": 0,
+        "844x390": 0
+      }
+    }
+  },
+  {
+    "id": "phone.chromium.box.390x844",
+    "desc": "chromium 390x844: AppBar and rail boxes",
+    "note": true,
+    "got": {
+      "phone": "true",
+      "bar": {
+        "x": 0,
+        "y": 0,
+        "w": 390
+      },
+      "rail": null
+    }
+  },
+  {
+    "id": "phone.chromium.box.844x390",
+    "desc": "chromium 844x390: AppBar and rail boxes",
+    "note": true,
+    "got": {
+      "phone": "true",
+      "bar": {
+        "x": 0,
+        "y": 0,
+        "w": 844
+      },
+      "rail": null
+    }
+  },
+  {
+    "id": "phone.chromium.box.1440x900",
+    "desc": "chromium 1440x900: AppBar and rail boxes",
+    "note": true,
+    "got": {
+      "phone": "false",
+      "bar": null,
+      "rail": {
+        "x": 0,
+        "w": 232
+      }
+    }
+  },
+  {
+    "id": "phone.chromium.live",
+    "desc": "chromium: no frame disagrees during 20 live resizes/rotations",
+    "ok": true,
+    "got": []
+  },
+  {
+    "id": "phone.webkit.reload",
+    "desc": "webkit: every frame after a reload at each width (x20, light+dark) has data-phone == media query == AppBar == !rail, theme and gutter right",
+    "ok": true,
+    "got": {
+      "bad": [],
+      "steady": {
+        "1440x900": 232,
+        "390x844": 0,
+        "844x390": 0
+      }
+    }
+  },
+  {
+    "id": "phone.webkit.box.390x844",
+    "desc": "webkit 390x844: AppBar and rail boxes",
+    "note": true,
+    "got": {
+      "phone": "true",
+      "bar": {
+        "x": 0,
+        "y": 0,
+        "w": 390
+      },
+      "rail": null
+    }
+  },
+  {
+    "id": "phone.webkit.box.844x390",
+    "desc": "webkit 844x390: AppBar and rail boxes",
+    "note": true,
+    "got": {
+      "phone": "true",
+      "bar": {
+        "x": 0,
+        "y": 0,
+        "w": 844
+      },
+      "rail": null
+    }
+  },
+  {
+    "id": "phone.webkit.box.1440x900",
+    "desc": "webkit 1440x900: AppBar and rail boxes",
+    "note": true,
+    "got": {
+      "phone": "false",
+      "bar": null,
+      "rail": {
+        "x": 0,
+        "w": 232
+      }
+    }
+  },
+  {
+    "id": "phone.webkit.live",
+    "desc": "webkit: no frame disagrees during 20 live resizes/rotations",
+    "ok": true,
+    "got": []
+  }
+]

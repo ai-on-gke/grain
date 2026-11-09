@@ -32,6 +32,12 @@ import { repoApiRoot } from "./repoApi.js";
 // share it, so a raise shows up in both within one poll.
 const POLL_MS = 30000;
 
+// POLL_TIMEOUT_MS bounds each read, App.jsx's CONFIG_POLL_TIMEOUT_MS
+// for the same reason: a read nothing gives up on holds one of the
+// browser's few connections to the daemon for as long as the daemon, or
+// a proxy in front of it, keeps it open.
+const POLL_TIMEOUT_MS = 10_000;
+
 // useOpenNotifications is the open notifications, newest first, and a
 // function that re-reads them now. A failed read keeps the last list. A
 // hidden tab skips the poll, like the rest of the app's, and catches up
@@ -40,7 +46,10 @@ export function useOpenNotifications() {
   const [list, setList] = useState([]);
   const reload = useCallback(async () => {
     try {
-      const next = await api("/api/notifications?open=1&fields=list");
+      // Bounded, as App.jsx's background polls are (POLL_TIMEOUT_MS).
+      const next = await api("/api/notifications?open=1&fields=list", {
+        timeout: POLL_TIMEOUT_MS,
+      });
       setList(Array.isArray(next) ? next : []);
     } catch {
       // The daemon being unreachable is DisconnectedBanner's to say.
