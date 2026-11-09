@@ -717,7 +717,7 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
                   label="Copy link"
                   icon={LinkIcon}
                   size="small"
-                  className="timeline-comment-copy timeline-comment-link"
+                  className="timeline-comment-link"
                 />
               )}
               {c.body && (
