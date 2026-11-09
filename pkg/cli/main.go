@@ -491,8 +491,8 @@ Commands:
                                        snippet, accept or reject the hosts that join, and manage hosts
   host register|install|set-owner      the legacy host registry: register a host with its owner, the
                                        identity it dials in through IAP as, and print how to install it
-  registry status|register|unregister  self-register this deployment with a grain registry and inspect
-                                       heartbeats and self-reported scopes (Settings -> Registry)
+  registry status|register|unregister  self-register this deployment with a Grain Hub and inspect
+                                       heartbeats and self-reported scopes (Settings -> Hub)
   access list|allow|deny               the allowed users and groups list (Settings -> Access): who may
                                        sign in through IAP or another identity verifier
   broadcast [-all] <message...>        send a notice to all running task agents (or with -all, all active tasks)
