@@ -90,6 +90,17 @@ func TestRelayProposedTasksUnifiedGrantsEquivalenceAndNormalization(t *testing.T
 				},
 			},
 		},
+		{
+			Name: "propose_task",
+			Arguments: map[string]any{
+				"id":           "bare-legacy-cap",
+				"title":        "Bare legacy capability name",
+				"body":         "Must keep bare capability label intact rather than expanding retired aliases",
+				"repo":         "acme/app",
+				"branch":       "main",
+				"capabilities": []any{"self-repair"},
+			},
+		},
 	}}
 
 	if err := relayProposedTasks(ctx, store, nil, nil, parent, result, now); err != nil {
@@ -110,8 +121,8 @@ func TestRelayProposedTasksUnifiedGrantsEquivalenceAndNormalization(t *testing.T
 			byTitle[tk.Title] = tk
 		}
 	}
-	if len(byTitle) != 3 {
-		t.Fatalf("filed %d child tasks (%v), want 3", len(byTitle), byTitle)
+	if len(byTitle) != 4 {
+		t.Fatalf("filed %d child tasks (%v), want 4", len(byTitle), byTitle)
 	}
 
 	equiv := byTitle["Equivalent via grants"]
@@ -133,5 +144,13 @@ func TestRelayProposedTasksUnifiedGrantsEquivalenceAndNormalization(t *testing.T
 	}
 	if len(capsRef.Grants) != 1 || capsRef.Grants[0].Capability != "api:tasks:read@acme/app" {
 		t.Errorf("caps-api-ref Grants = %+v, want [api:tasks:read@acme/app]", capsRef.Grants)
+	}
+
+	bareLegacy := byTitle["Bare legacy capability name"]
+	if bareLegacy.Approval != nil {
+		t.Errorf("bare-legacy-cap proposal approved unexpectedly: %+v", bareLegacy.Approval)
+	}
+	if len(bareLegacy.Grants) != 1 || bareLegacy.Grants[0].Capability != "self-repair" || bareLegacy.Grants[0].Via != model.GrantByLabel {
+		t.Errorf("bare-legacy-cap Grants = %+v, want [{Capability:self-repair Via:label}]", bareLegacy.Grants)
 	}
 }

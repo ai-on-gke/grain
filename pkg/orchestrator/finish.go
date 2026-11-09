@@ -1964,27 +1964,22 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			// here would otherwise file a proposal against a non-grain
 			// repo holding a grant its proposer was given by grain, and
 			// so unapproved (model.EscalatedCapabilities).
+			cap = model.StoredGrantSpelling(cap)
 			if cap == "" || grainci.IsGrant(cap) {
 				continue
 			}
-			for _, expanded := range model.CanonicalLegacyGrants(cap) {
-				expanded = model.StoredGrantSpelling(expanded)
-				if expanded == "" || grainci.IsGrant(expanded) {
-					continue
+			found := false
+			for _, g := range grants {
+				if g.Capability == cap {
+					found = true
+					break
 				}
-				found := false
-				for _, g := range grants {
-					if g.Capability == expanded {
-						found = true
-						break
-					}
-				}
-				if !found {
-					grants = append(grants, model.Grant{
-						Capability: expanded,
-						Via:        model.GrantByLabel,
-					})
-				}
+			}
+			if !found {
+				grants = append(grants, model.Grant{
+					Capability: cap,
+					Via:        model.GrantByLabel,
+				})
 			}
 		}
 		customFields, droppedFields, err := proposedCustomFields(ctx, store, p)
