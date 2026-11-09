@@ -902,10 +902,26 @@ test.describe("Recurring and Composed Work Automation UI Walkthrough", () => {
     await expect(
       pane.getByRole("button", { name: "+ New template" }),
     ).toBeDisabled();
+    await expect(
+      pane.getByRole("button", { name: "+ New template" }),
+    ).toHaveCSS("pointer-events", "none");
     await expect(pane.locator('input[name="maxPasses"]')).toBeDisabled();
     await expect(pane.locator('input[name="name"]')).toHaveValue(
       "Smoke Verification Suite",
     );
+    // Locked templates (repository-declared and grain's built-in system ones)
+    // pass disabled to GrantsPicker, so Add grant… and Remove buttons are not
+    // rendered as dead active controls inside the disabled fieldset.
+    for (const lockedPath of [
+      "/templates/repo:template:acme:widgets:nightly",
+      "/templates/system:gke-sandbox-cluster",
+    ]) {
+      await page.goto(lockedPath);
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await expect(
+        page.getByRole("dialog").getByRole("button", { name: "Add grant…" }),
+      ).toHaveCount(0);
+    }
     // Nor do its selects take a choice from the keyboard (2026-10-11
     // walkthrough): only the pointer was kept off them, so a select
     // reached by focus opened on ArrowDown and changed what it showed.
