@@ -444,6 +444,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // Whether the sessions have answered once: until they have, a session
   // view opened on a link has nothing to say the session is missing.
   const [sessionsLoaded, setSessionsLoaded] = useState(false);
+  // Why /api/console-sessions last failed, null once it answers: the
+  // Sessions page says so in place of "No interactive sessions yet."
+  // (SessionsPage.jsx).
+  const [sessionsError, setSessionsError] = useState(null);
   const [sessionCapabilities, setSessionCapabilities] = useState([]);
   // The network settings a session may be given, off the same response:
   // the pane's own select draws these rather than hard-coding the two
@@ -1309,14 +1313,29 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const applySessions = useCallback((next) => {
     sessionsSeq.current += 1;
     sessionsWritten.current = sessionsSeq.current;
+    setSessionsError(null);
     setSessions((prev) => keepIfSame(prev, next));
   }, []);
   const refreshSessions = useCallback(async (opts) => {
     sessionsSeq.current += 1;
     const seq = sessionsSeq.current;
-    const res = await api("/api/console-sessions", { signal: opts?.signal });
+    let res;
+    try {
+      res = await api("/api/console-sessions", { signal: opts?.signal });
+    } catch (err) {
+      if (opts?.signal?.aborted) throw err;
+      if (seq >= sessionsWritten.current) {
+        setSessionsError(
+          isUnreachable(err) && !err?.explained
+            ? unreachableReason(err)
+            : String(err?.message || err),
+        );
+      }
+      throw err;
+    }
     if (seq < sessionsWritten.current) return null;
     sessionsWritten.current = seq;
+    setSessionsError(null);
     const next = (res && res.sessions) || [];
     setSessions((prev) => keepIfSame(prev, next));
     setSessionsLoaded(true);
@@ -4172,6 +4191,8 @@ function AppContent({ onReload = () => window.location.reload() }) {
                             // deleted from inside leaves it.
                             onDeleted={deleteStandingSession}
                             showError={showError}
+                            loadError={sessionsError}
+                            onRetry={() => refreshSessions().catch(showError)}
                           />
                         ) : view === "session" ? (
                           /* A standing session's own pane: the chat, and what the

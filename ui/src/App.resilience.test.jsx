@@ -543,4 +543,52 @@ describe("App resilience", () => {
     expect(screen.queryByText(/The tasks could not be loaded/)).toBeNull();
     expect(screen.getByText("Fix bug")).toBeInTheDocument();
   });
+
+  it("reports a failed /api/console-sessions load on /sessions instead of claiming no sessions exist, then recovers on Retry", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    window.history.replaceState(null, "", "/sessions");
+    setupApi(initialTasks);
+    const base = api.getMockImplementation();
+    let failSessions = true;
+    api.mockImplementation((p, opts) => {
+      if (p === "/api/console-sessions") {
+        if (failSessions) {
+          const err = new Error("console session manager is still starting");
+          err.status = 503;
+          err.explained = true;
+          return Promise.reject(err);
+        }
+        return Promise.resolve({
+          sessions: [{ id: "director", title: "Director", taskId: "1" }],
+          capabilities: [],
+          networkAccessOptions: ["open", "none"],
+        });
+      }
+      return base(p, opts);
+    });
+
+    render(<App />);
+    await runTimers();
+
+    // Advance past the 5-second transient error snackbar: /sessions must still
+    // explain that sessions failed to load rather than claiming 0 sessions.
+    await runTimers(6000);
+    expect(document.querySelector(".error-banner")).toBeNull();
+    expect(screen.queryByText("No interactive sessions yet.")).toBeNull();
+    expect(
+      screen.getByText(
+        "The sessions could not be loaded (console session manager is still starting).",
+      ),
+    ).toBeInTheDocument();
+
+    failSessions = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await runTimers();
+
+    expect(screen.queryByText(/The sessions could not be loaded/)).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Open session Director" }),
+    ).toBeInTheDocument();
+  });
 });
