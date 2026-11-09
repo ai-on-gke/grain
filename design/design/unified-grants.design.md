@@ -193,8 +193,8 @@ the rows not marked **done**:
 tab are removed; the tab's GitHub host, GCP settings and secrets are the
 Deployment credentials card on Settings → Capabilities. The bare names
 remain one-release aliases (no promoted release contains every
-conversion yet), and the task forms' empty Legacy capabilities checklist
-is still to be removed.
+conversion yet). The task forms' empty Legacy capabilities checklist
+is removed too (PR #985).
 
 | In-process id | Becomes (proposed) | Kind of change |
 |---|---|---|
