@@ -978,6 +978,14 @@ export default function GrantsPicker({
           {menuGroups.flatMap((g) => [
             <ListSubheader
               key={g.key}
+              // A group's title sits among the menu's items (MenuList moves
+              // focus over direct children only, so it cannot wrap them in
+              // a role="group"). As a bare <li> it was a list item with no
+              // list inside role="menu": axe's listitem and
+              // aria-required-children (2026-11-08 walkthrough, F3). A
+              // named separator is a child a menu may own.
+              role="separator"
+              aria-label={g.title}
               className={
                 g.kind === "api" && g.area ? "api-scope-area" : undefined
               }
