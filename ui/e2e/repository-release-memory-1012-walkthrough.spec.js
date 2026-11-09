@@ -46,9 +46,7 @@ test("a repo page is the main landmark and edits the deployment's defaults for t
   await expect(
     main.getByLabel("Prompt extension for acme/widgets", { exact: true }),
   ).toBeVisible();
-  await expect(
-    main.getByRole("combobox", { name: "Default capabilities", exact: true }),
-  ).toBeVisible();
+  await expect(main.getByTestId("repo-default-grants")).toBeVisible();
 });
 
 // A repo's prompt extension saves as it is left. Clicking anywhere else

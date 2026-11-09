@@ -364,25 +364,13 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		// or clearing it can never touch an operator-managed file.
 		CodexAuthFile:         ManagedCodexAuthFile(cfg.DataDir),
 		CodexAuthFallbackFile: cfg.CodexAuthFile,
-		// The "test this credential" action on that same tab
-		// (ui.Config.CapabilityChecks): the pane that says **Ready**
-		// because a secret is set, given a way to ask the far end
-		// whether the key inside it still works. Wired here rather than
-		// behind a gate like PullRequests below, because it needs
-		// nothing the reconcile loop builds -- the providers come from
-		// the live configuration and the credentials from this same
-		// secrets directory (and, for a named GitHub token, from the
-		// ladder above), all available before (and regardless of
-		// whether) that loop ever starts.
-		CapabilityChecks: CapabilityCheckAdapter{Live: live, Creds: uiSecrets},
 		// What every task read asks whether a task's own state has stood
 		// for longer than that state should take (ui.Config.Stall). The
 		// answer is the orchestrator's -- it is the package that knows
 		// which component ought to have ended each wait and how long
 		// each one is given (its liveness.go) -- and the UI is what puts
 		// it on the row, so the two are joined here rather than by
-		// either reaching for the other. Wired unconditionally, like
-		// CapabilityChecks above: it reads nothing but the state, the
+		// either reaching for the other. Wired unconditionally: it reads nothing but the state, the
 		// timestamps the store already holds and the clock, none of
 		// which waits on the reconcile loop.
 		Stall: orchestrator.TaskStallNote,
@@ -403,7 +391,7 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		// The Gemini model field's own picker (ui.Config.AgentModels):
 		// the model names agy will accept are agy's to say, and this
 		// deployment has the binary right here. Wired unconditionally,
-		// like CapabilityChecks above and for the same reason -- it
+		// like AgentKeyChecks above and for the same reason -- it
 		// needs nothing the reconcile loop builds, just the live
 		// configuration and this same secrets directory -- and a
 		// deployment whose image somehow has no agy gets that sentence

@@ -45,20 +45,17 @@ test("grain-ci: not in the repo page's picker, and naming it is refused with the
       data: { repo: "acme/widgets", branch: "main" },
     });
 
-  // The repo's default-capabilities picker offers no grain CI row.
+  // The repo's defaults are GrantsPicker's alone: there is no legacy
+  // default-capabilities picker to offer a grain CI row.
   await page.goto("/repo/acme/widgets");
   await expect(
     page.getByRole("heading", { name: "acme/widgets" }),
   ).toBeVisible();
   await page.getByRole("tab", { name: "Agents" }).click();
-  const defaults = page.getByRole("combobox", {
-    name: "Default capabilities",
-  });
-  await defaults.click();
-  await expect(page.getByRole("listbox")).toBeVisible();
-  await expect(page.getByRole("option", { name: /^grain CI/ })).toHaveCount(0);
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("listbox")).toBeHidden();
+  await expect(page.getByTestId("repo-default-grants")).toBeVisible();
+  await expect(
+    page.getByRole("combobox", { name: "Default capabilities" }),
+  ).toHaveCount(0);
 
   // Naming it anyway -- an old script, `grain repo capabilities -set` --
   // is refused, and the refusal names the switch rather than calling a

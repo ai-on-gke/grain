@@ -14,10 +14,6 @@
 
 import { test, expect } from "./fixtures.js";
 
-// -legacy-capability registers example-legacy, a made-up provider with
-// nothing to mint, so the Legacy capabilities pickers have a row: every
-// legacy provider core shipped has been retired onto a server method.
-test.use({ demoArgs: ["-legacy-capability"] });
 import { chooseOption } from "./searchSelect.js";
 import { execFileSync } from "node:child_process";
 
@@ -339,23 +335,23 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
     await page.keyboard.press("Escape");
     await expect(page.locator(".MuiAlert-filledError")).not.toBeVisible();
 
-    // Default Capabilities
+    // Default grants (GrantsPicker saves each change as it is made)
     await page.getByRole("tab", { name: "Agents" }).click();
-    const defCapsSelect = page.getByRole("combobox", {
-      name: "Default capabilities",
-    });
-    await expect(defCapsSelect).toBeVisible();
-    await defCapsSelect.click();
+    const defaultGrants = page.getByTestId("repo-default-grants");
+    await defaultGrants.getByRole("button", { name: "Add grant…" }).click();
+    const grantMenu = page.getByRole("menu", { name: "Grants to add" });
+    const apiRow = grantMenu
+      .locator(".api-grant-row:not([aria-disabled='true'])")
+      .first();
+    const addedGrant = await apiRow.getAttribute("data-api-grant");
     const defCapsSaved = page.waitForResponse(
       (res) =>
         res.request().method() === "PUT" &&
         /\/api\/repos\/acme\/widgets\/capabilities(\?|$)/.test(res.url()),
     );
-    await page
-      .getByRole("option", { name: /Example legacy capability/i })
-      .click();
+    await apiRow.click();
     expect((await defCapsSaved).ok()).toBeTruthy();
-    await page.keyboard.press("Escape");
+    if (await grantMenu.isVisible()) await page.keyboard.press("Escape");
     await expect(page.locator(".MuiAlert-filledError")).not.toBeVisible();
 
     // Reload and verify persistence
@@ -368,12 +364,19 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
         .filter({ hasText: /GitHub sandbox/i }),
     ).toBeVisible();
     await page.getByRole("tab", { name: "Agents" }).click();
-    await expect(
-      page
-        .getByRole("tabpanel", { name: "Agents" })
-        .locator(".MuiChip-root")
-        .filter({ hasText: /Example legacy capability/i }),
-    ).toBeVisible();
+    const kept = page
+      .getByTestId("repo-default-grants")
+      .locator(`[data-grant="${addedGrant}"]`);
+    await expect(kept).toBeVisible();
+    // Take it off again: every spec file a worker runs shares one demo
+    // store, and a repo default would follow every acme/widgets task.
+    const defCapsCleared = page.waitForResponse(
+      (res) =>
+        res.request().method() === "PUT" &&
+        /\/api\/repos\/acme\/widgets\/capabilities(\?|$)/.test(res.url()),
+    );
+    await kept.getByRole("button", { name: /^Remove / }).click();
+    expect((await defCapsCleared).ok()).toBeTruthy();
 
     // 2.5 Prompt Extension and Setup Command
     const promptInput = page.getByLabel("Prompt extension for acme/widgets");
