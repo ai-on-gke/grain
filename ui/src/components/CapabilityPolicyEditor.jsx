@@ -200,7 +200,11 @@ function RuleRow({ rule, index, onChange, onRemove, readOnly }) {
   );
 }
 
-export default function CapabilityPolicyEditor({ showError, readOnly }) {
+export default function CapabilityPolicyEditor({
+  showError,
+  readOnly,
+  onSaved,
+}) {
   const [rules, setRules] = useState(null);
   const [catalogue, setCatalogue] = useState(null);
   const [dirty, setDirty] = useState(false);
@@ -246,6 +250,7 @@ export default function CapabilityPolicyEditor({ showError, readOnly }) {
       setCatalogue(data?.policy?.catalogue || null);
       setDirty(false);
       setPreview(null);
+      await onSaved?.();
     } catch (err) {
       showError(err);
     } finally {

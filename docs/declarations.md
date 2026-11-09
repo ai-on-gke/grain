@@ -354,6 +354,13 @@ requesting unauthorized capabilities:
 - Grain's configuration repository (`grain/config`) is refused in
   declarations. There is no other: a `grain/config-<team>` name is an
   ordinary repository name, which nothing serves.
+- Request-field projections under `https://grain.dev/capabilities/repo` are
+  refused at parse time: `repo#target` (a declaration's tasks always target
+  the declaring repository, and its branch is `base:`), and `repo#read` or
+  `repo#write` carrying `base` (extra repository writes always land on that
+  repository's default branch). A repository that already declares one keeps
+  its previously synced declarations on the next sync and records the refusal
+  in `repo_declaration_sync.last_error`.
 
 **Schedules.** Schedules may also declare capabilities in `capabilities:` (for example,
 capabilities needed specifically when firing this schedule). In a schedule firing,
