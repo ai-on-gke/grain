@@ -150,6 +150,17 @@ import {
 // by exactly this rather than by a 3000 written out again beside it.
 export const POLL_INTERVAL_MS = 3000;
 
+// CONFIG_POLL_TIMEOUT_MS is how long the main poll waits for its
+// GET /api/config before counting the daemon unreachable
+// (grain/task-3619). The handler is a handful of small store reads
+// (the config row, repo configs and workflows, custom fields) that a
+// healthy deployment answers in milliseconds, so ten seconds leaves a
+// busy store, a slow link and a GC pause plenty of room; and the
+// two-failure streak noteUnreachable asks for means one slow answer
+// never raises the banner. Two in a row do, about 25 seconds after a
+// daemon stops answering (two timeouts and the tick between them).
+export const CONFIG_POLL_TIMEOUT_MS = 10_000;
+
 // HIDDEN_POLL_EVERY is how many of those ticks a hidden tab lets pass
 // between reads of the task list, and it reads nothing else. A
 // background tab otherwise polls not at all, which is right for
@@ -750,7 +761,14 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const noteUnreachable = useCallback(
     (source, err, { immediate = false } = {}) => {
       const prev = unreachableStreak.current.get(source);
-      const firstSeenAt = prev ? prev.firstSeenAt : new Date();
+      // A request that timed out says when it was asked (api.js's
+      // sentAt), which is when the silence began rather than when the
+      // wait for it gave up.
+      const firstSeenAt = prev
+        ? prev.firstSeenAt
+        : err?.sentAt instanceof Date
+          ? err.sentAt
+          : new Date();
       const count = (prev ? prev.count : 0) + 1;
       unreachableStreak.current.set(source, { count, firstSeenAt });
       if (!immediate && !restartingRef.current && count < 2) {
@@ -1481,44 +1499,59 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // response: the target repo allowlist, the deployment-wide default
   // capabilities and task defaults the new-task form starts from, and
   // the deployment's own prompt extension.
-  const refreshConfig = useCallback(async () => {
-    try {
-      const next = await api("/api/config");
-      if (next && typeof next === "object") {
-        restartingRef.current = Boolean(next.restarting);
-      }
-      if (next?.accessDenied || next?.allowed === false) {
-        setAccessDenied(true);
-        setDeniedUser(next?.actor || null);
-      }
-      const nextCommit = next?.version?.commit;
-      if (nextCommit) {
-        if (activeCommitRef.current && activeCommitRef.current !== nextCommit) {
-          onReload();
-          return;
+  //
+  // opts goes to api() as it is: the main poll's own read passes a
+  // timeout (CONFIG_POLL_TIMEOUT_MS), and nothing else does.
+  const fetchConfig = useCallback(
+    async (opts) => {
+      try {
+        const next = await (opts
+          ? api("/api/config", opts)
+          : api("/api/config"));
+        if (next && typeof next === "object") {
+          restartingRef.current = Boolean(next.restarting);
         }
-        activeCommitRef.current = nextCommit;
+        if (next?.accessDenied || next?.allowed === false) {
+          setAccessDenied(true);
+          setDeniedUser(next?.actor || null);
+        }
+        const nextCommit = next?.version?.commit;
+        if (nextCommit) {
+          if (
+            activeCommitRef.current &&
+            activeCommitRef.current !== nextCommit
+          ) {
+            onReload();
+            return;
+          }
+          activeCommitRef.current = nextCommit;
+        }
+        // Kept when unchanged, for refreshList's reason and one of its own:
+        // config is the second argument to every narrowing on screen, so a
+        // new object each tick invalidates the panels' answers even when the
+        // tasks are the identical array (taskFilters.js's narrowTasks keys
+        // on both).
+        setConfig((prev) => keepIfSame(prev, next));
+        setConfigError(null);
+      } catch (err) {
+        setConfigError(err);
+        if (
+          String(err?.message || "").includes("403") ||
+          String(err?.message || "")
+            .toLowerCase()
+            .includes("access denied")
+        ) {
+          setAccessDenied(true);
+        }
+        throw err;
       }
-      // Kept when unchanged, for refreshList's reason and one of its own:
-      // config is the second argument to every narrowing on screen, so a
-      // new object each tick invalidates the panels' answers even when the
-      // tasks are the identical array (taskFilters.js's narrowTasks keys
-      // on both).
-      setConfig((prev) => keepIfSame(prev, next));
-      setConfigError(null);
-    } catch (err) {
-      setConfigError(err);
-      if (
-        String(err?.message || "").includes("403") ||
-        String(err?.message || "")
-          .toLowerCase()
-          .includes("access denied")
-      ) {
-        setAccessDenied(true);
-      }
-      throw err;
-    }
-  }, [onReload]);
+    },
+    [onReload],
+  );
+  // Every other caller hands refreshConfig on as a callback, and a
+  // callback's arguments are whatever its caller passes, so it takes
+  // none.
+  const refreshConfig = useCallback(() => fetchConfig(), [fetchConfig]);
 
   // refreshAfterCreate is what the new-task form is given instead of
   // refreshList alone: filing a task now also writes a setting this
@@ -2619,7 +2652,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       if (pollTick.current % pollBackoff.current !== 0) return;
       polling.current = true;
       try {
-        // refreshConfig here (not just at mount) is what keeps
+        // The config read here (not just at mount) is what keeps
         // config.reconcilerDown -- and the banner it drives, below --
         // current: it is the one /api/config field that can flip from
         // false to true mid-session, on a process this same UI is still
@@ -2629,9 +2662,15 @@ function AppContent({ onReload = () => window.location.reload() }) {
         // agent's usage limit is met and disappears again when the
         // provider's window resets, with nothing on this end to notice
         // either (grain/task-132).
+        //
+        // Bounded, unlike the rest of the tick: a daemon that holds the
+        // connection open and never answers (deadlocked, stopped, or a
+        // proxy in front of it doing the holding) would otherwise keep
+        // this tick waiting forever, and the banner below can only come
+        // up when a tick fails (grain/task-3619).
         await Promise.all([
           refreshList(),
-          refreshConfig(),
+          fetchConfig({ timeout: CONFIG_POLL_TIMEOUT_MS }),
           refreshCIRuns(),
           refreshSessions(),
         ]);
@@ -2731,7 +2770,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
     taskLoadError,
     pollDenied,
     refreshBoards,
-    refreshConfig,
+    fetchConfig,
     refreshCIRuns,
     refreshList,
     refreshSessions,
