@@ -20,6 +20,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -330,8 +331,13 @@ func TestTheLastRedAttemptEscalatesTheVersion(t *testing.T) {
 	failItemTwice(t, ctx, store, forge, repo, "v1.4.0-rc.3", "qualification-mergequeue", baseTime)
 
 	n := openNotification(t, ctx, store, model.FamilyRCFailed, "v1.4.0-rc.3")
-	if n == nil || !strings.Contains(n.Body, "last attempt") || strings.Contains(n.Body, "holds v1.4.0-rc.4") {
-		t.Fatalf("rc-failed is %+v, want it to say rc.3 was the last attempt", n)
+	if n == nil || !strings.Contains(n.Body, "has used RELEASE_MAX_RC_ATTEMPTS") || !strings.Contains(n.Body, "holds v1.4.0-rc.4") {
+		t.Fatalf("rc-failed is %+v, want it to say v1.4.0 escalated and hold rc.4", n)
+	}
+	// The threshold is not a stop: the train cuts rc.4 after it, so rc.3's
+	// hold is posted like any other red candidate's.
+	if hold := forge.checkNamed(model.ReleaseHoldCheckName); hold == nil || hold.Status != "in_progress" {
+		t.Fatalf("hold on rc.3 is %+v, want triage pending", hold)
 	}
 	e := openNotification(t, ctx, store, model.FamilyReleaseEscalated, "v1.4.0")
 	if e == nil {
@@ -339,6 +345,9 @@ func TestTheLastRedAttemptEscalatesTheVersion(t *testing.T) {
 	}
 	if e.Severity != model.NotificationCritical {
 		t.Errorf("escalation is %s, want critical", e.Severity)
+	}
+	if !strings.Contains(e.Title, "the train keeps cutting it from main") || strings.Contains(e.Body, "cuts no more") {
+		t.Errorf("escalation says the train stops: %q\n%s", e.Title, e.Body)
 	}
 	for _, want := range []string{"### v1.4.0-rc.2", "rc.2 broke the merge queue", "### v1.4.0-rc.3",
 		"qualification-mergequeue: fail"} {
@@ -350,13 +359,96 @@ func TestTheLastRedAttemptEscalatesTheVersion(t *testing.T) {
 		t.Errorf("escalation lists the candidates out of order:\n%s", e.Body)
 	}
 
-	// A person cuts rc.4 by hand: the train is moving again.
+	// The train cuts rc.4 by itself: the escalation is raised once, and
+	// stands while the version keeps failing.
 	forge.tags = append(forge.tags,
 		github.Tag{Name: "v1.4.0-rc.3-discarded", SHA: rqSHA},
 		github.Tag{Name: "v1.4.0-rc.4", SHA: strings.Repeat("5", 40)})
 	syncQualification(t, ctx, store, forge, baseTime.Add(time.Minute))
+	if again := openNotification(t, ctx, store, model.FamilyReleaseEscalated, "v1.4.0"); again == nil || again.ID != e.ID {
+		t.Fatalf("escalation after rc.4 was cut is %+v, want %d still open", again, e.ID)
+	}
+
+	// v1.4.0 releases: the escalation is over.
+	forge.tags = append(forge.tags, github.Tag{Name: "v1.4.0", SHA: strings.Repeat("5", 40)})
+	syncQualification(t, ctx, store, forge, baseTime.Add(2*time.Minute))
 	if e := openNotification(t, ctx, store, model.FamilyReleaseEscalated, "v1.4.0"); e != nil {
-		t.Fatalf("escalation still open after rc.4 was cut: %+v", e)
+		t.Fatalf("escalation still open after v1.4.0 was released: %+v", e)
+	}
+}
+
+// Past RELEASE_MAX_RC_ATTEMPTS a red candidate's open [rc-blocker] tasks
+// still hold the next cut: the train cuts rc.5 after a red rc.4.
+func TestARedCandidatePastTheThresholdIsStillHeld(t *testing.T) {
+	t.Parallel()
+	store, ctx, repo, forge := newStage1Repo(t)
+	rc4 := "v1.4.0-rc.4"
+	forge.tags = []github.Tag{{Name: "v1.3.0", SHA: strings.Repeat("3", 40)}}
+	for i := 1; i <= 3; i++ {
+		sha := strings.Repeat(fmt.Sprint(i), 40)
+		forge.tags = append(forge.tags, github.Tag{Name: fmt.Sprintf("v1.4.0-rc.%d", i), SHA: sha},
+			github.Tag{Name: fmt.Sprintf("v1.4.0-rc.%d-discarded", i), SHA: sha})
+	}
+	forge.tags = append(forge.tags, github.Tag{Name: rc4, SHA: rqSHA})
+	forge.nightly = "failure"
+	forge.jobs[rqSHA] = []github.ActionsRunJob{
+		nightlyJob(rqSHA, "sustained load", 1, "failure"),
+		nightlyJob(rqSHA, "sustained load", 2, "failure"),
+	}
+	syncStage1(t, ctx, store, forge, baseTime)
+	if n := openNotification(t, ctx, store, model.FamilyRCFailed, rc4); n == nil || !strings.Contains(n.Body, "holds v1.4.0-rc.5") {
+		t.Fatalf("rc-failed for rc.4 is %+v, want it to hold rc.5", n)
+	}
+	if e := openNotification(t, ctx, store, model.FamilyReleaseEscalated, "v1.4.0"); e == nil {
+		t.Fatal("no pipeline.release-escalated:v1.4.0 for a red rc.4")
+	}
+	blocker, err := store.NewTaskID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutTask(ctx, model.Task{
+		ID: blocker, Title: model.RCBlockerMarker(rc4) + " revert the load regression", Body: "revert", Target: &repo,
+		CreatedAt: &baseTime,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	syncStage1(t, ctx, store, forge, baseTime.Add(2*time.Hour))
+	hold := forge.checkNamed(model.ReleaseHoldCheckName)
+	if hold == nil || hold.Status != "in_progress" || !strings.Contains(hold.Output, "v1.4.0-rc.5 is held until these blockers") {
+		t.Fatalf("hold past the threshold is %+v, want rc.5 held on the open blocker", hold)
+	}
+}
+
+// A candidate the daily cap dropped (`Discard-Reason: daily-cap` or
+// `held-over`, playbook §7) is not red, even when its Stage 1 run failed:
+// it raises no pipeline.rc-failed, posts no hold, and counts toward no
+// escalation.
+func TestADailyCapDropIsNotARedCandidate(t *testing.T) {
+	t.Parallel()
+	for _, reason := range []string{"daily-cap", "held-over"} {
+		t.Run(reason, func(t *testing.T) {
+			t.Parallel()
+			store, ctx, repo, forge := newQualificationRepo(t)
+			forge.nightly = "failure"
+			forge.tags = append(forge.tags, github.Tag{Name: rqTag + "-discarded", SHA: rqSHA})
+			forge.messages = map[string]string{
+				rqTag + "-discarded": "Release candidate " + rqTag + " dropped: the day has released\n\nDiscard-Reason: " + reason + "\n",
+			}
+			syncQualification(t, ctx, store, forge, baseTime)
+			if n := openNotification(t, ctx, store, model.FamilyRCFailed, rqTag); n != nil {
+				t.Fatalf("a %s drop raised %+v", reason, n)
+			}
+			if hold := forge.checkNamed(model.ReleaseHoldCheckName); hold != nil {
+				t.Fatalf("a %s drop posted hold %+v", reason, hold)
+			}
+			failed, err := store.ListNotifications(ctx, model.NotificationFilter{Family: model.FamilyRCFailed, Limit: 10})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(failed) != 0 {
+				t.Fatalf("a %s drop left rc-failed notifications %+v for %s", reason, failed, repo)
+			}
+		})
 	}
 }
 
@@ -681,8 +773,8 @@ func TestARedStage1RaisesRCFailedAndHoldsTheNext(t *testing.T) {
 	}
 }
 
-// The version's last candidate red in Stage 1 escalates the version, and
-// holds nothing: the train cuts no rc.4.
+// The version's RELEASE_MAX_RC_ATTEMPTS-th candidate red in Stage 1
+// escalates the version, and is held like any other: the train cuts rc.4.
 func TestARedStage1OnTheLastAttemptEscalates(t *testing.T) {
 	t.Parallel()
 	store, ctx, _, forge := newStage1Repo(t)
@@ -702,15 +794,15 @@ func TestARedStage1OnTheLastAttemptEscalates(t *testing.T) {
 	}
 	syncStage1(t, ctx, store, forge, baseTime)
 	if n := openNotification(t, ctx, store, model.FamilyRCFailed, "v1.4.0-rc.3"); n == nil ||
-		!strings.Contains(n.Body, "This was the version's last attempt") {
-		t.Fatalf("rc-failed for rc.3 is %+v, want it raised as the last attempt", n)
+		!strings.Contains(n.Body, "v1.4.0 has used RELEASE_MAX_RC_ATTEMPTS") {
+		t.Fatalf("rc-failed for rc.3 is %+v, want it to say the version escalated", n)
 	}
 	e := openNotification(t, ctx, store, model.FamilyReleaseEscalated, "v1.4.0")
 	if e == nil || e.Severity != model.NotificationCritical {
 		t.Fatalf("release-escalated is %+v, want critical", e)
 	}
-	if hold := forge.checkNamed(model.ReleaseHoldCheckName); hold != nil {
-		t.Fatalf("posted hold %+v on the last attempt, which cuts no next candidate", hold)
+	if hold := forge.checkNamed(model.ReleaseHoldCheckName); hold == nil || hold.Status != "in_progress" {
+		t.Fatalf("hold on rc.3 is %+v, want triage pending: the train cuts rc.4 after it", hold)
 	}
 }
 

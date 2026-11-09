@@ -223,8 +223,8 @@ const (
 	FamilyReleaseInfraStalled = "pipeline.release-infra-stalled"
 	// FamilyReleaseEscalated is a version that used
 	// ReleaseMaxRCAttempts candidates and is still red, "<vX.Y.Z>"
-	// (playbook §5): the train cuts no more of it until a person resets
-	// or advances it.
+	// (playbook §5), raised once: the train keeps cutting candidates of it
+	// from main, and a person is asked why it keeps failing.
 	FamilyReleaseEscalated = "pipeline.release-escalated"
 	// FamilyMergeStalled is a merge-queue entry handed to a person past
 	// its patience, "<task>".
