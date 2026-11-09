@@ -1051,7 +1051,7 @@ func (s *Server) handleGetActionsRun(w http.ResponseWriter, r *http.Request, id 
 // Actions run. Listed only: an Actions artifact downloads as a zip from
 // a redirect, sometimes gigabytes, and is fetched from its run's page
 // rather than through grain.
-func (s *Server) handleListActionsArtifacts(w http.ResponseWriter, r *http.Request, id string) {
+func (s *Server) handleListActionsArtifacts(w http.ResponseWriter, r *http.Request, id string, list listQuery) {
 	repoText, runID, ok := ParseActionsRunID(id)
 	if !ok {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("%q is not a GitHub Actions run id", id))
@@ -1087,7 +1087,7 @@ func (s *Server) handleListActionsArtifacts(w http.ResponseWriter, r *http.Reque
 		}
 		out = append(out, ci.Artifact{Run: id, Name: a.Name, Bytes: a.Bytes, CollectedAt: a.CreatedAt, Note: note})
 	}
-	writeJSON(w, http.StatusOK, CIRunArtifactsResponse{Enabled: true, Available: true, Artifacts: out})
+	writeCIRunArtifacts(w, true, true, out, list)
 }
 
 // actionsArtifactNote is why an Actions artifact is listed and not served.

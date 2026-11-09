@@ -1247,22 +1247,44 @@ func (c *Client) nameDependents(ctx context.Context, deps []dependent) (string, 
 // --- handlers ------------------------------------------------------------
 
 func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
-	list, err := s.tasks.ListTemplates(r.Context())
+	summary := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("fields")), "summary")
+	defaultLimit := listPageTiny
+	if summary {
+		defaultLimit = listPageMedium
+	}
+	list, err := parseListQuery(r, defaultLimit)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	templates, err := s.tasks.ListTemplates(r.Context())
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
 	if call, ok := agentCallFromContext(r.Context()); ok && !call.grants.Allows("templates:read", "") {
-		filtered := make([]Template, 0, len(list))
-		for _, t := range list {
+		filtered := make([]Template, 0, len(templates))
+		for _, t := range templates {
 			if !templateAllowedForGrants(t, call.grants) {
 				continue
 			}
 			filtered = append(filtered, t)
 		}
-		list = filtered
+		templates = filtered
 	}
-	writeJSON(w, http.StatusOK, list)
+	if repo := strings.TrimSpace(r.URL.Query().Get("repo")); repo != "" {
+		templates = filterList(templates, func(t Template) bool { return strings.EqualFold(t.Repo, repo) })
+	}
+	templates = filterList(templates, func(t Template) bool {
+		return list.matches(t.ID, t.Name, t.Title, t.Repo)
+	})
+	if summary {
+		for i := range templates {
+			templates[i].Description = ""
+		}
+		list.Paged = true
+	}
+	writeList(w, templates, list)
 }
 
 func templateAllowedForGrants(t Template, grants APIGrantSet) bool {

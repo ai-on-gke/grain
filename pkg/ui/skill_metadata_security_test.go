@@ -208,12 +208,20 @@ func TestExternalAgentSkillMetadataEndpointsEnforceRepoAndSettingsBoundaries(t *
 			if tmplRec.Code != http.StatusOK {
 				t.Fatalf("GET /api/templates status = %d: %s", tmplRec.Code, tmplRec.Body.String())
 			}
-			var gotTemplates []ui.Template
-			if err := json.Unmarshal(tmplRec.Body.Bytes(), &gotTemplates); err != nil {
+			var page ui.ListPage[ui.Template]
+			if err := json.Unmarshal(tmplRec.Body.Bytes(), &page); err != nil {
 				t.Fatalf("unmarshal templates: %v", err)
 			}
+			// An agent's call is paged (5 templates by default), and the
+			// forbidden set seeded above is larger than a page, so a leak
+			// could sit past the cut: the whole answer has to fit one page
+			// for the id check below to see every template admitted.
+			if page.Truncated || page.NextCursor != "" || page.Total != len(page.Items) {
+				t.Errorf("GET /api/templates answered more templates than its page shows (total %d, %d listed, truncated %v): %s",
+					page.Total, len(page.Items), page.Truncated, tmplRec.Body.String())
+			}
 			var ids []string
-			for _, tmpl := range gotTemplates {
+			for _, tmpl := range page.Items {
 				ids = append(ids, tmpl.ID)
 			}
 			for _, forbiddenID := range []string{

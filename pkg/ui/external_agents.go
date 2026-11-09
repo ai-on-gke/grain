@@ -656,12 +656,20 @@ func tokenWriter(r *http.Request) string {
 }
 
 func (s *Server) handleListExternalAgentTokens(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageMedium)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	tokens, err := s.tasks.ListExternalAgentTokens(r.Context())
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, tokens)
+	tokens = filterList(tokens, func(t ExternalAgentTokenView) bool {
+		return list.matches(t.ID, t.Name, t.Owner, t.ScopeSet)
+	})
+	writeList(w, tokens, list)
 }
 
 func (s *Server) handleCreateExternalAgentToken(w http.ResponseWriter, r *http.Request) {

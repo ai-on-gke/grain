@@ -6582,19 +6582,27 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 	if task == nil {
 		return &NotFoundError{ID: id}
 	}
-	if _, _, err := c.Store.AddCommentWithAttachments(ctx, model.Comment{
+	commentID, _, err := c.Store.AddCommentWithAttachments(ctx, model.Comment{
 		TaskID:    id,
 		Author:    by,
 		Body:      body,
 		CreatedAt: now,
 		FiledVia:  filedViaFromContext(ctx),
-	}, attachments); err != nil {
+	}, attachments)
+	if err != nil {
 		return err
 	}
 
 	obs, err := c.Store.GetObservation(ctx, id)
 	if err != nil {
 		return err
+	}
+	// If a live run already read and marked this comment delivered before
+	// post-comment wake/un-park ran, any deferral or park now on the task
+	// was written after this comment was answered; waking or un-parking it
+	// here would dispatch a spurious second run for an answered message.
+	if commentID > 0 && obs != nil && obs.DeliveredCommentID != nil && *obs.DeliveredCommentID >= commentID {
+		return nil
 	}
 	// A run that stopped with resume_later(when: {message: true}) -- or a
 	// console session that ParkConsoleSessionTask both parked on a question
@@ -6613,7 +6621,7 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 	}
 	isPerson := attributedHuman(by) != nil
 	if reopenAck && isPerson {
-		reopened, err := c.reopenAcknowledgeable(ctx, id, now)
+		reopened, err := c.reopenAcknowledgeable(ctx, id, commentID, now)
 		if err != nil || reopened {
 			return err
 		}
@@ -6645,12 +6653,21 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 	// in the queue must not still be offering a box that writes a value
 	// nothing is waiting for. Answering "not this one, use the staging
 	// key" in words is a legitimate answer to a request for a secret.
+	var skipped bool
 	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
+		if commentID > 0 && ((o.DeliveredCommentID != nil && *o.DeliveredCommentID >= commentID) ||
+			(o.PendingQuestionCommentID != nil && *o.PendingQuestionCommentID > commentID)) {
+			skipped = true
+			return
+		}
 		o.PendingQuestionCommentID = nil
 		o.PendingSecret = ""
 		o.PendingAccess = nil
 	}); err != nil {
 		return err
+	}
+	if skipped {
+		return nil
 	}
 	// The task is dispatchable as of this instant, and somebody is
 	// waiting on the cycle that will notice. Asked for here rather than
@@ -6692,7 +6709,7 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 // it: a task that may not be worked in is re-parked with grain's
 // sentence saying why, rather than queued for a dispatch that would
 // refuse it.
-func (c *Client) reopenAcknowledgeable(ctx context.Context, id string, now time.Time) (reopened bool, err error) {
+func (c *Client) reopenAcknowledgeable(ctx context.Context, id string, commentID int64, now time.Time) (reopened bool, err error) {
 	state, err := c.Store.State(ctx, id)
 	if err != nil {
 		return false, err
@@ -6707,7 +6724,13 @@ func (c *Client) reopenAcknowledgeable(ctx context.Context, id string, now time.
 	if task == nil {
 		return false, &NotFoundError{ID: id}
 	}
+	var skipped bool
 	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
+		if commentID > 0 && ((o.DeliveredCommentID != nil && *o.DeliveredCommentID >= commentID) ||
+			(o.PendingQuestionCommentID != nil && *o.PendingQuestionCommentID > commentID)) {
+			skipped = true
+			return
+		}
 		o.CompletedAt = nil
 		o.RetryRequestedAt = &now
 		o.PendingQuestionCommentID = nil
@@ -6715,6 +6738,9 @@ func (c *Client) reopenAcknowledgeable(ctx context.Context, id string, now time.
 		o.PendingAccess = nil
 	}); err != nil {
 		return false, err
+	}
+	if skipped {
+		return false, nil
 	}
 	allowed := c.teamTargetRepos(ctx, model.DefaultTeamID)
 	if task.Target != nil && !targetAllowed(allowed, *task.Target) {
@@ -6944,7 +6970,7 @@ func (c *Client) retry(ctx context.Context, id string) error {
 		return validationErrorf("%s was stopped by an operator: only a person can resume it, by replying or pressing Retry", id)
 	}
 	if stopped {
-		reopened, err := c.reopenAcknowledgeable(ctx, id, now)
+		reopened, err := c.reopenAcknowledgeable(ctx, id, 0, now)
 		if err != nil || reopened {
 			return err
 		}

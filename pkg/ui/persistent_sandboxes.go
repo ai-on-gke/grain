@@ -71,9 +71,14 @@ func (s *Server) persistentSandboxes(w http.ResponseWriter) (PersistentSandboxes
 
 // handleListPersistentSandboxes is GET /api/persistent-sandboxes.
 func (s *Server) handleListPersistentSandboxes(w http.ResponseWriter, r *http.Request) {
+	page, err := parseListQuery(r, listPageMedium)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	ps := s.tasks.Config.PersistentSandboxes
 	if ps == nil {
-		writeJSON(w, http.StatusOK, []model.PersistentSandboxStatus{})
+		writeList(w, []model.PersistentSandboxStatus{}, page)
 		return
 	}
 	list, err := ps.List(r.Context())
@@ -81,10 +86,10 @@ func (s *Server) handleListPersistentSandboxes(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if list == nil {
-		list = []model.PersistentSandboxStatus{}
-	}
-	writeJSON(w, http.StatusOK, list)
+	list = filterList(list, func(st model.PersistentSandboxStatus) bool {
+		return page.matches(st.Name, st.Repo, st.State)
+	})
+	writeList(w, list, page)
 }
 
 // handlePersistentSandboxLogs is GET /api/persistent-sandboxes/{name}/logs:

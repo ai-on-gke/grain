@@ -2447,6 +2447,15 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	if q.owner != "" {
 		q.owner = s.tasks.resolveOwnerFilter(r.Context(), q.owner)
 	}
+	if isAgentListCaller(r) && !r.URL.Query().Has("fields") {
+		q.paged = true
+		if !r.URL.Query().Has("limit") {
+			q.limit = listPageLarge
+		} else if q.limit > listPageMax {
+			q.limit = listPageMax
+		}
+		narrowed = true
+	}
 	if narrowed {
 		s.handleFilteredTaskList(w, r, q)
 		return
@@ -2476,16 +2485,21 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 
 // TaskStatesResponse is the paginated response for GET /api/tasks/states.
 type TaskStatesResponse struct {
-	States  map[string]model.State `json:"states"`
-	Cursor  string                 `json:"cursor,omitempty"`
-	HasMore bool                   `json:"hasMore,omitempty"`
+	States     map[string]model.State `json:"states"`
+	Cursor     string                 `json:"cursor,omitempty"`
+	NextCursor string                 `json:"nextCursor,omitempty"`
+	HasMore    bool                   `json:"hasMore,omitempty"`
+	Truncated  bool                   `json:"truncated,omitempty"`
 }
 
 func (s *Server) handleTaskStates(w http.ResponseWriter, r *http.Request) {
 	limit := 1000
+	if isAgentListCaller(r) {
+		limit = 250
+	}
 	if l := r.URL.Query().Get("limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
-			limit = parsed
+			limit = min(parsed, listPageMax)
 		}
 	}
 	cursor := r.URL.Query().Get("cursor")
@@ -2500,9 +2514,11 @@ func (s *Server) handleTaskStates(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, TaskStatesResponse{
-		States:  states,
-		Cursor:  nextCursor,
-		HasMore: nextCursor != "",
+		States:     states,
+		Cursor:     nextCursor,
+		NextCursor: nextCursor,
+		HasMore:    nextCursor != "",
+		Truncated:  nextCursor != "",
 	})
 }
 

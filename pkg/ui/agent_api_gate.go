@@ -627,8 +627,14 @@ var agentRepoDefaultRoutes = map[string]bool{
 	"GET /api/ci/runs":                 true,
 	"GET /api/ci/workflows":            true,
 	"GET /api/merge-batches":           true,
+	"GET /api/base-branch-gates":       true,
 	"GET /api/pipeline/changes":        true,
+	"GET /api/memory":                  true,
 	"GET /api/memory/documents/{name}": true,
+	"GET /api/memory/documents":        true,
+	"GET /api/templates":               true,
+	"GET /api/suite-runs":              true,
+	"GET /api/ci/faults":               true,
 }
 
 // sandboxChannelGuard enforces the additional restrictions required when an

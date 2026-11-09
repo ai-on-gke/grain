@@ -33,8 +33,12 @@ type AccessPrincipalsResponse struct {
 	Entries            []model.AllowedPrincipal `json:"entries"`
 	DroppedFlagEntries []string                 `json:"droppedFlagEntries,omitempty"`
 	// Roles are the scope sets in effect that an entry can be given, for
-	// the role picker: built-ins first, then by name.
-	Roles []AccessRoleChoice `json:"roles"`
+	// the role picker: built-ins first, then by name. Omitted on paged
+	// calls so agent pages stay compact.
+	Roles      []AccessRoleChoice `json:"roles,omitempty"`
+	Total      int                `json:"total,omitempty"`
+	Truncated  bool               `json:"truncated,omitempty"`
+	NextCursor string             `json:"nextCursor,omitempty"`
 }
 
 // AccessRoleChoice is one scope set offered as a role.
@@ -547,10 +551,26 @@ func (c *Client) auditAccessChange(ctx context.Context, summary string) {
 }
 
 func (s *Server) handleListAccessPrincipals(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageMedium)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	out, err := s.tasks.ListAllowedPrincipals(r.Context())
 	if err != nil {
 		writeClientError(w, err)
 		return
+	}
+	if list.Paged {
+		matched := filterList(out.Entries, func(p model.AllowedPrincipal) bool {
+			return list.matches(p.Entry, p.Role, p.Reason, p.AddedBy)
+		})
+		page := pageOf(matched, list)
+		out.Entries = page.Items
+		out.Roles = nil
+		out.Total = page.Total
+		out.Truncated = page.Truncated
+		out.NextCursor = page.NextCursor
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -612,8 +632,19 @@ func (s *Server) handleDenyPrincipal(w http.ResponseWriter, r *http.Request) {
 // ListAllowedPrincipals is GET /api/access/principals.
 func (c *HTTPClient) ListAllowedPrincipals(ctx context.Context) (AccessPrincipalsResponse, error) {
 	var out AccessPrincipalsResponse
-	err := c.do(ctx, http.MethodGet, "/api/access/principals", nil, &out)
-	return out, err
+	if err := c.do(ctx, http.MethodGet, "/api/access/principals", nil, &out); err != nil {
+		return out, err
+	}
+	for out.Truncated && out.NextCursor != "" {
+		var page AccessPrincipalsResponse
+		if err := c.do(ctx, http.MethodGet, "/api/access/principals?cursor="+url.QueryEscape(out.NextCursor), nil, &page); err != nil {
+			return out, err
+		}
+		out.Entries = append(out.Entries, page.Entries...)
+		out.Truncated = page.Truncated
+		out.NextCursor = page.NextCursor
+	}
+	return out, nil
 }
 
 // AllowPrincipal is POST /api/access/principals.

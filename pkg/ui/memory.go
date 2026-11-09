@@ -487,12 +487,24 @@ func (c *Client) requireMemoryGrant(ctx context.Context, id, repo string) error 
 // handleListMemories answers GET /api/memory. An old client's ?team= is
 // ignored: there is one deployment's memory to list.
 func (s *Server) handleListMemories(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageTiny)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	memories, err := s.tasks.ListMemories(r.Context())
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, memories)
+	if values, scoped := r.URL.Query()["repo"]; scoped && len(values) > 0 {
+		repo := strings.TrimSpace(values[0])
+		memories = filterList(memories, func(m Memory) bool { return strings.EqualFold(m.Repo, repo) })
+	}
+	memories = filterList(memories, func(m Memory) bool {
+		return list.matches(m.Repo, m.UpdatedBy, m.Text)
+	})
+	writeList(w, memories, list)
 }
 
 // handlePutMemory answers PUT /api/memory.
@@ -519,12 +531,24 @@ func (s *Server) handlePutMemory(w http.ResponseWriter, r *http.Request) {
 // handleListMemoryDocuments answers GET /api/memory/documents: every
 // scope's documents without their text.
 func (s *Server) handleListMemoryDocuments(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageMedium)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	docs, err := s.tasks.ListMemoryDocuments(r.Context())
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, docs)
+	// ?repo= keeps one scope's documents: a repository's by owner/name,
+	// or the deployment's own when it is given empty.
+	if values, scoped := r.URL.Query()["repo"]; scoped && len(values) > 0 {
+		repo := strings.TrimSpace(values[0])
+		docs = filterList(docs, func(d MemoryDocument) bool { return strings.EqualFold(d.Repo, repo) })
+	}
+	docs = filterList(docs, func(d MemoryDocument) bool { return list.matches(d.Name, d.Repo, d.Summary) })
+	writeList(w, docs, list)
 }
 
 // handleGetMemoryDocument answers GET /api/memory/documents/{name}, with

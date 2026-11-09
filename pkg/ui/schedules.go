@@ -2361,7 +2361,16 @@ func (c *Client) DeleteSchedule(ctx context.Context, id string) error {
 // order it asks for. A filter it cannot read is a 400 naming what is
 // wrong with it rather than a list that looks like it matched.
 func (s *Server) handleListSchedules(w http.ResponseWriter, r *http.Request) {
-	filter, err := schedulefilter.ParseQuery(r.URL.Query())
+	page, err := parsePageBounds(r, listPageSmall)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	q := r.URL.Query()
+	// Touch the schedulefilter query keys directly so routeHandlerInputs
+	// sees the full vocabulary GET /api/schedules accepts.
+	_, _, _, _ = q.Get("q"), q.Get("kind"), q.Get("sort"), q["f"]
+	filter, err := schedulefilter.ParseQuery(q)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -2382,7 +2391,7 @@ func (s *Server) handleListSchedules(w http.ResponseWriter, r *http.Request) {
 		loc := model.LoadLocation(model.TimeZoneOrDefault(zone))
 		list = schedulefilter.Apply(filter, list, scheduleFacts, s.tasks.now(), loc)
 	}
-	writeJSON(w, http.StatusOK, list)
+	writeList(w, list, page)
 }
 
 func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {

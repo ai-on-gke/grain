@@ -384,12 +384,20 @@ func (s *Server) handlePreviewCapabilityPolicy(w http.ResponseWriter, r *http.Re
 }
 
 func (s *Server) handleCapabilityServerUsage(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageLarge)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	out, err := s.tasks.CapabilityServerUsage(r.Context())
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	out = filterList(out, func(u CapabilityServerUsage) bool {
+		return list.matches(u.ID)
+	})
+	writeList(w, out, list)
 }
 
 // CapabilityPolicy is GET /api/capability-policy.
@@ -415,9 +423,7 @@ func (c *HTTPClient) PreviewCapabilityPolicy(ctx context.Context, p model.Capabi
 
 // CapabilityServerUsage is GET /api/capability-servers/usage.
 func (c *HTTPClient) CapabilityServerUsage(ctx context.Context) ([]CapabilityServerUsage, error) {
-	var out []CapabilityServerUsage
-	err := c.do(ctx, http.MethodGet, "/api/capability-servers/usage", nil, &out)
-	return out, err
+	return doList[CapabilityServerUsage](c, ctx, "/api/capability-servers/usage")
 }
 
 // capabilityPolicyFor is the stored policy and the configured servers
