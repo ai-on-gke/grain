@@ -1,0 +1,42 @@
+=== caps-and-grants
+caps-and-grants, read as acme/widgets (from -repo)
+.grain/templates/t.yml: grants: a repository's own declarations say what work to do in it and when, never what that work may touch -- a task filed from this file targets this repository, holds the capabilities this deployment already gives tasks here, and reaches another repository only where a template says `capabilities: ["repo-read:<owner>/<repo>", "repo-write:<owner>/<repo>"]`, which its team's own GitHub credential then has to allow. A template that needs more than that belongs in grain's own settings
+Nothing is declared while any of it is refused: grain keeps the declarations it already had and records the reason (repo_declaration_sync.last_error).
+grain: 1 problem with this repository's declarations -- see above
+exit=1
+=== reads-and-grants
+reads-and-grants, read as acme/widgets (from -repo)
+.grain/templates/t.yml: grants, reads: a repository's own declarations say what work to do in it and when, never what that work may touch -- a task filed from this file targets this repository, holds the capabilities this deployment already gives tasks here, and reaches another repository only where a template says `capabilities: ["repo-read:<owner>/<repo>", "repo-write:<owner>/<repo>"]`, which its team's own GitHub credential then has to allow. A template that needs more than that belongs in grain's own settings
+Nothing is declared while any of it is refused: grain keeps the declarations it already had and records the reason (repo_declaration_sync.last_error).
+grain: 1 problem with this repository's declarations -- see above
+exit=1
+=== base-and-target
+base-and-target, read as acme/widgets (from -repo)
+template t  .grain/templates/t.yml
+  id:         repo:template:acme:widgets:t
+  name:       Mixed template
+  title:      base + repo#target
+  base:       main
+  auto-merge: false
+Well-formed. Grain reads these once an operator turns declarations on for acme/widgets (`grain repo`, or the repository's own settings page); until then they are just files.
+exit=0
+=== target-only
+target-only, read as acme/widgets (from -repo)
+template t  .grain/templates/t.yml
+  id:         repo:template:acme:widgets:t
+  name:       Mixed template
+  title:      repo#target under capabilities, no base
+  base:       (the repository's default branch)
+  auto-merge: false
+Well-formed. Grain reads these once an operator turns declarations on for acme/widgets (`grain repo`, or the repository's own settings page); until then they are just files.
+exit=0
+=== control
+control, read as acme/widgets (from -repo)
+template t  .grain/templates/t.yml
+  id:         repo:template:acme:widgets:t
+  name:       Control template
+  title:      control
+  base:       (the repository's default branch)
+  auto-merge: false
+Well-formed. Grain reads these once an operator turns declarations on for acme/widgets (`grain repo`, or the repository's own settings page); until then they are just files.
+exit=0

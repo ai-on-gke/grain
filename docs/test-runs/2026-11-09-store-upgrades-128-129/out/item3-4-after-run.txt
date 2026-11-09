@@ -1,0 +1,22 @@
+# task 15, after the run ended: POST http://127.0.0.1:4252/runs/grain-15-1-0/introspect (the run's own token, from the host)
+{"active":false}
+ HTTP 200
+# token endpoint after the run ended
+{"error":"invalid_grant","error_description":"this grant's token is unknown or released"}
+ HTTP 401
+# relay at run end (daemon log)
+orchestrator: skipping proposed task with invalid grants: grants: grants and capabilities both name capability grants; send one
+orchestrator: skipping proposed task with invalid grants: grants: https://grain.dev/capabilities/repo#read and reads both name read access; send one
+orchestrator: skipping proposed task with invalid grants: grants: https://grain.dev/capabilities/repo#target and the request's repo field both name the task's repository; send one
+orchestrator: skipping proposed task with invalid grants: grants: https://grain.dev/capabilities/repo#target and the request's repo field both name the task's repository; send one
+orchestrator: skipping proposed task with invalid grants: grants: https://grain.dev/capabilities/repo#target and the request's repo field both name the task's repository; send one
+# proposals task 15 filed
+{"id":"2","title":"walk: gcp token mode + propose shapes","state":"awaiting_reply","repo":"acme/widgets","base":"main","capabilities":["https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"org-deploy\",\"primary\":true}"]}
+{"id":"3","title":"walk: base + repo#target","state":"proposed","repo":"acme/widgets","base":"main","capabilities":[]}
+{"id":"4","title":"walk: control: grants only","state":"proposed","repo":"acme/widgets","base":null,"capabilities":["api:ci-read"]}
+{"id":"5","title":"walk: gcp token mode + propose shapes","state":"awaiting_reply","repo":"acme/widgets","base":"main","capabilities":["https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"org-deploy\",\"primary\":true}"]}
+{"id":"6","title":"walk: base + repo#target","state":"proposed","repo":"acme/widgets","base":"main","capabilities":[]}
+{"id":"7","title":"walk: control: grants only","state":"proposed","repo":"acme/widgets","base":null,"capabilities":["api:ci-read"]}
+{"id":"15","title":"walk: gcp token mode + propose shapes","state":"awaiting_reply","repo":"acme/widgets","base":"main","capabilities":["https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"org-deploy\",\"primary\":true}"]}
+{"id":"16","title":"walk: base + repo#target","state":"proposed","repo":"acme/widgets","base":"main","capabilities":[]}
+{"id":"17","title":"walk: control: grants only","state":"proposed","repo":"acme/widgets","base":null,"capabilities":["api:ci-read"]}
