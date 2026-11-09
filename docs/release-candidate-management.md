@@ -390,7 +390,7 @@ only re-stamp the daemon images with the release name and retag.
 
 - **Daemon and sandbox images** are published to Docker Hub under `docker.io/grainai/*`
   (`grain`, `sandbox`, `sandbox-base`, `sandbox-k8s`, `sandbox-k8s-base`, with
-  and `docker.io/grainai/registry`, the `grain-registry` image, which `promote`
+  and `docker.io/grainai/hub`, the `grain-hub` image (also published as its pre-rename `docker.io/grainai/registry` for one release), which `promote`
   and `rc` rebuild and stamp alongside `grain`).
   `docker.io/grainai/grain` is the core build (`./cmd/grain`, the
   `oss` install track). A wrapper distribution's

@@ -226,7 +226,7 @@ func requireVerifierServer(t *testing.T, requireVerifier string) (srv *ui.Server
 	return srv, cookie
 }
 
-// Task 3192 (registry.design.md step 2): -ui-require-verifier generalises
+// Task 3192 (hub.design.md step 2): -ui-require-verifier generalises
 // -ui-require-iap to any IdentityVerifier (such as "registry") using a single
 // rule in accessCodeAccepted: network bearer/header/cookie access codes and
 // the login form are disabled, unproxied loopback keeps break-glass access,

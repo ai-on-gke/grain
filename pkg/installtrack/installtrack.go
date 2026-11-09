@@ -61,7 +61,11 @@ const (
 	DefaultOSSSandboxBaseRepository    = "docker.io/grainai/sandbox-base"
 	DefaultOSSK8sSandboxRepository     = "docker.io/grainai/sandbox-k8s"
 	DefaultOSSK8sSandboxBaseRepository = "docker.io/grainai/sandbox-k8s-base"
-	DefaultOSSRegistryRepository       = "docker.io/grainai/registry"
+	DefaultOSSHubRepository            = "docker.io/grainai/hub"
+	// DefaultOSSRegistryRepository is DefaultOSSHubRepository's name
+	// from before the Grain Registry was renamed the Grain Hub; releases
+	// publish both, with the same tags, for one release.
+	DefaultOSSRegistryRepository = "docker.io/grainai/registry"
 
 	// OSSImageRepoEnv overrides DefaultOSSGrainRepository.
 	OSSImageRepoEnv = "GRAIN_OSS_IMAGE_REPO"
@@ -81,6 +85,7 @@ var ossImageRepositories = []ossImageRepoAlias{
 	{oss: DefaultOSSSandboxBaseRepository, legacy: []string{LegacyGuestBaseRepository, "ghcr.io/ai-on-gke/grain/guest-base"}},
 	{oss: DefaultOSSK8sSandboxRepository, legacy: []string{LegacyK8sSandboxRepository, "ghcr.io/ai-on-gke/grain/k8s-sandbox"}},
 	{oss: DefaultOSSK8sSandboxBaseRepository, legacy: []string{LegacyK8sSandboxBaseRepository, "ghcr.io/ai-on-gke/grain/k8s-sandbox-base"}},
+	{oss: DefaultOSSHubRepository},
 	{oss: DefaultOSSRegistryRepository},
 }
 

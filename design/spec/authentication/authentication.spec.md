@@ -92,15 +92,16 @@ Every normative requirement below is derived from the implementation on `main` a
 - `pkg/ui/mutating_routes_test.go`: `TestEveryMutatingRouteIsAttributed`
 - `pkg/ui/request_actor_source_test.go`: `TestNothingOutsideRequestActorReadsTheActor`
 
-### 2.4 `registry` `IdentityVerifier` (`X-Grain-Registry-Assertion`) {#AU-5B}
+### 2.4 `registry` `IdentityVerifier` (`X-Grain-Hub-Assertion` / `X-Grain-Registry-Assertion`) {#AU-5B}
 
-1. The built-in `"registry"` `IdentityVerifier` (`pkg/webauth/registry.go`, `pkg/ui/verifier.go`) MUST be active when `-ui-registry-issuer` (`$GRAIN_REGISTRY_ISSUER`), `-ui-registry-audience` (`$GRAIN_REGISTRY_AUDIENCE`), and `-ui-registry-keys-url` (`$GRAIN_REGISTRY_KEYS_URL`) are all configured (`daemon.CheckUIRegistryVerifier` refuses partial configuration or comma-separated issuer/audience values at startup). It inspects `X-Grain-Registry-Assertion` (`ui.RegistryAssertionHeader`), reports `Name() == "registry"` (`ui.AuthMethodRegistry`, `model.SourceRegistry`), and sets `AccessCodeWins() == false`.
+1. The built-in `"registry"` `IdentityVerifier` (`pkg/webauth/hub.go`, `pkg/ui/verifier.go`) MUST be active when `-ui-hub-issuer` (`$GRAIN_HUB_ISSUER`), `-ui-hub-audience` (`$GRAIN_HUB_AUDIENCE`), and `-ui-hub-keys-url` (`$GRAIN_HUB_KEYS_URL`) (or their deprecated `-ui-registry-*` / `$GRAIN_REGISTRY_*` aliases) are all configured (`daemon.CheckUIRegistryVerifier` refuses partial configuration or comma-separated issuer/audience values at startup). It inspects `X-Grain-Hub-Assertion` (`ui.HubAssertionHeader`) and `X-Grain-Registry-Assertion` (`ui.RegistryAssertionHeader`) (`Headers() == webauth.HubAssertionHeaders`), refuses requests carrying conflicting values across the two headers or multiple distinct values on either header, reports `Name() == "registry"` (`ui.AuthMethodRegistry`, `model.SourceRegistry`), and sets `AccessCodeWins() == false`.
 2. Signature verification MUST fetch RFC 7517 JWKS keys via `pkg/jwks` (cached for `1h`, refetched on unknown `kid` at most once per `1m`, retaining stale cached keys on refresh failure, and returning a `VerifierUnavailableError` (`503` with `Retry-After: 5`) when the initial JWKS fetch fails before any keys are cached) and MUST pin the algorithm to `ES256` on an ECDSA P-256 key (`RS256`, `HS256`, and `none` rejected).
-3. The verifier MUST enforce exact `iss` equality against `-ui-registry-issuer`, single-audience equality (`len(aud) == 1 && aud[0] == -ui-registry-audience`), require `exp` and `iat` with `30s` clock-skew tolerance on `exp`, `nbf`, and `iat` and `0 < exp - iat <= 5m`, reject any token carrying the reserved `act` claim (`401`) until delegated-identity support is enabled, and normalize/classify `sub`/`email`/`kind` into `model.Principal{Kind: kind, ID: email, Source: "registry"}`.
+3. The verifier MUST enforce exact `iss` equality against `-ui-hub-issuer`, single-audience equality (`len(aud) == 1 && aud[0] == -ui-hub-audience`), require `exp` and `iat` with `30s` clock-skew tolerance on `exp`, `nbf`, and `iat` and `0 < exp - iat <= 5m`, reject any token carrying the reserved `act` claim (`401`) until delegated-identity support is enabled, and normalize/classify `sub`/`email`/`kind` into `model.Principal{Kind: kind, ID: email, Source: "registry"}`.
 
 **Pinned by:**
 - `pkg/webauth/webauth_test.go`: `TestRegistryVerifier`
-- `pkg/ui/registry_verifier_test.go`: `TestRegistryIdentityVerifierEndToEnd`
+- `pkg/webauth/hub_rename_test.go`: `TestRegistryVerifierRefusesConflictingHubAndRegistryAssertions`
+- `pkg/ui/hub_verifier_test.go`: `TestRegistryIdentityVerifierEndToEnd`
 - `pkg/cli/daemon_require_iap_test.go`: `TestCheckConfigRegistryVerifierFlagsAndEnv`
 
 ---
@@ -338,7 +339,7 @@ Every normative requirement below is derived from the implementation on `main` a
 
 ## 11. Delegated (On-Behalf-Of) Identity via the Registry
 
-Design: [`authentication.design.md`](../../design/authentication.design.md) §6 and [`registry.design.md`](../../design/registry.design.md) *Delegated identity*.
+Design: [`authentication.design.md`](../../design/authentication.design.md) §6 and [`hub.design.md`](../../design/hub.design.md) *Delegated identity*.
 
 ### 11.1 `act` claim parsing and `VerifiedIdentity.Via` {#AU-22}
 
@@ -350,9 +351,9 @@ Design: [`authentication.design.md`](../../design/authentication.design.md) §6 
    - `act` contains no nested `act`; and
    - the top-level `kind == "human"`, with a top-level `sub`/`email` that classifies as `model.PrincipalHuman`.
 3. Any other present `act` MUST fail verification with `401` (`writeAssertionRefused`), with no fallback to the access code, a `gma_…` token, a session cookie or an open route (`AU-2`).
-4. All other `registry` verifier checks MUST be unchanged for delegated assertions: `iss`, a single `aud` equal to `-ui-registry-audience`, `ES256`, `exp - iat <= 5 min` and 30 s skew.
+4. All other `registry` verifier checks MUST be unchanged for delegated assertions: `iss`, a single `aud` equal to `-ui-hub-audience`, `ES256`, `exp - iat <= 5 min` and 30 s skew.
 
-**Pinned by:** `pkg/ui/registry_verifier_test.go`: `TestRegistryVerifierExposesPersonAndDelegatingApp`, `TestRegistryVerifierRefusesMalformedOrNestedAct`.
+**Pinned by:** `pkg/ui/hub_verifier_test.go`: `TestRegistryVerifierExposesPersonAndDelegatingApp`, `TestRegistryVerifierRefusesMalformedOrNestedAct`.
 
 ### 11.2 `delegate:` allowlist entries {#AU-23}
 
@@ -455,7 +456,7 @@ Design: [`authentication.design.md`](../../design/authentication.design.md) §6 
 
 ## 13. Sources
 
-- Design document: [`design/design/authentication.design.md`](../../design/authentication.design.md) (§6 for `AU-22`–`AU-27`, with [`design/design/registry.design.md`](../../design/registry.design.md) *Delegated identity*)
-- Companion designs & specs: [`design/design/operator-attribution.design.md`](../../design/operator-attribution.design.md), [`design/spec/operator-attribution/operator-attribution.spec.md`](../operator-attribution/operator-attribution.spec.md), [`design/design/registry.design.md`](../../design/registry.design.md), [`design/design/simple-config.design.md`](../../design/simple-config.design.md), [`docs/access-code.md`](../../../docs/access-code.md)
+- Design document: [`design/design/authentication.design.md`](../../design/authentication.design.md) (§6 for `AU-22`–`AU-27`, with [`design/design/hub.design.md`](../../design/hub.design.md) *Delegated identity*)
+- Companion designs & specs: [`design/design/operator-attribution.design.md`](../../design/operator-attribution.design.md), [`design/spec/operator-attribution/operator-attribution.spec.md`](../operator-attribution/operator-attribution.spec.md), [`design/design/hub.design.md`](../../design/hub.design.md), [`design/design/simple-config.design.md`](../../design/simple-config.design.md), [`docs/access-code.md`](../../../docs/access-code.md)
 - Walkthrough evidence: [`docs/test-runs/2026-11-02-verified-identity.md`](../../../docs/test-runs/2026-11-02-verified-identity.md), [`docs/test-runs/2026-11-02-iap-end-to-end.md`](../../../docs/test-runs/2026-11-02-iap-end-to-end.md), [`docs/test-runs/2026-11-03-iap-deployment.md`](../../../docs/test-runs/2026-11-03-iap-deployment.md)
 - Implementation packages: `pkg/ui` (`verifier.go`, `principal.go`, `assertion_diagnostics.go`, `allowlist.go`, `accesscode.go`, `csrf.go`, `principalrefusal.go`, `auth.go`, `server.go`, `request_actor.go`, `principal_label.go`, `external_agents.go`, `httpclient.go`, `hostd_connect.go`, `hostds.go`), `pkg/model/task.go`, `pkg/hostd` (`connect_identity.go`, `remote.go`, `dialout.go`, `iap_auth.go`), `pkg/daemon/ui_server.go`, `pkg/cli` (`daemon.go`, `cliconn.go`, `accesscode.go`, `hostd.go`, `hostds.go`)

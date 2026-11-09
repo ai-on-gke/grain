@@ -45,8 +45,8 @@ import (
 	"google.golang.org/api/idtoken"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/hub/api"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/registry/api"
 )
 
 // HTTPClient is Client's method surface (bwsalmon/agents#363) spoken over
@@ -1977,7 +1977,7 @@ func (c *HTTPClient) GetRegistry(ctx context.Context) (model.RegistrySnapshot, e
 }
 
 // TriggerRegistryHeartbeat triggers an immediate registration/heartbeat step
-// against the configured grain registry -- POST /api/registry/heartbeat.
+// against the configured grain hub -- POST /api/registry/heartbeat.
 func (c *HTTPClient) TriggerRegistryHeartbeat(ctx context.Context) (model.RegistrySnapshot, error) {
 	var snap model.RegistrySnapshot
 	if err := c.do(ctx, http.MethodPost, "/api/registry/heartbeat", nil, &snap); err != nil {

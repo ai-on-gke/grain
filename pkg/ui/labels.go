@@ -1089,17 +1089,17 @@ type Config struct {
 	// PEM map or JWK set); empty means GoogleIAPCertURL.
 	IAPKeysURL string
 	// RegistryIssuer is the expected iss claim for verifying grain-registry
-	// JWT assertions (X-Grain-Registry-Assertion) (-ui-registry-issuer /
-	// $GRAIN_REGISTRY_ISSUER). All three of RegistryIssuer,
+	// JWT assertions (X-Grain-Registry-Assertion) (-ui-hub-issuer /
+	// $GRAIN_HUB_ISSUER). All three of RegistryIssuer,
 	// RegistryAudience, and RegistryKeysURL must be set to enable the
 	// built-in "registry" IdentityVerifier.
 	RegistryIssuer string
 	// RegistryAudience is the single expected aud URL for verifying
-	// grain-registry JWT assertions (-ui-registry-audience /
-	// $GRAIN_REGISTRY_AUDIENCE).
+	// grain-registry JWT assertions (-ui-hub-audience /
+	// $GRAIN_HUB_AUDIENCE).
 	RegistryAudience string
 	// RegistryKeysURL is the JWKS endpoint URL publishing grain-registry's
-	// ES256 public keys (-ui-registry-keys-url / $GRAIN_REGISTRY_KEYS_URL).
+	// ES256 public keys (-ui-hub-keys-url / $GRAIN_HUB_KEYS_URL).
 	RegistryKeysURL string
 	// AllowedPrincipals, when non-empty, is the allowlist of user:,
 	// serviceAccount:, group:, and domain: entries admitted when a request

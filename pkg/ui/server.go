@@ -124,7 +124,7 @@ func NewServerWithClient(client *Client) *Server {
 const maxTunnelRequestBodyBytes = 64 << 20 // 64 MiB cap on non-upgraded tunnel request bodies
 
 // RegistryTunnelHandler returns an http.Handler for serving accepted mux
-// streams on an outbound registry tunnel (-registry-connect). Every tunneled
+// streams on an outbound registry tunnel (-hub-connect). Every tunneled
 // request is gated unconditionally behind the "registry" IdentityVerifier
 // (X-Grain-Registry-Assertion, Source == "registry")—including open routes like
 // /api/config, /api/auth/*, and /api/hostd/connect—and loopback or access-code

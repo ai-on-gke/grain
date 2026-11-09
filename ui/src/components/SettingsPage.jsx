@@ -53,7 +53,7 @@ import SandboxesSection from "./settings/SandboxesSection.jsx";
 import CachesSection from "./settings/CachesSection.jsx";
 import PreferencesSection from "./settings/PreferencesSection.jsx";
 import UpgradeSection from "./settings/UpgradeSection.jsx";
-import RegistrySection from "./settings/RegistrySection.jsx";
+import HubSection from "./settings/HubSection.jsx";
 import {
   SettingsReadOnlyContext,
   SettingsRoleRefusalContext,
@@ -748,7 +748,7 @@ export default function SettingsPage({
         body = <EngineSection s={s} />;
         break;
       case "registry":
-        body = <RegistrySection s={s} />;
+        body = <HubSection s={s} />;
         break;
       case "ci":
         body = <CISection s={s} />;

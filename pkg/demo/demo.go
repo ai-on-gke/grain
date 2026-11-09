@@ -69,7 +69,7 @@ type Options struct {
 	// IAPAudience, IAPIssuer, IAPKeysURL, RegistryIssuer, RegistryAudience,
 	// RegistryKeysURL, RequireVerifier, RequireIAP and AllowedPrincipals are
 	// the daemon's -ui-iap-audience, -ui-iap-issuer, -ui-iap-keys-url,
-	// -ui-registry-issuer, -ui-registry-audience, -ui-registry-keys-url,
+	// -ui-hub-issuer, -ui-hub-audience, -ui-hub-keys-url,
 	// -ui-require-verifier, -ui-require-iap and -ui-allowed-principals, so
 	// the demo can be put behind a signing proxy (a real IAP, grain-registry,
 	// or a test issuer) and sign callers in as a deployment does

@@ -556,7 +556,7 @@ import "strconv"
 // 116 adds `grain_config`.`registry` (model.Config.Registry): the connected
 // entry settings (registry URL, entry name, auth mode, catalog metadata, and
 // scope overrides) for daemon self-registration and heartbeating
-// (design/design/registry.design.md).
+// (design/design/hub.design.md).
 //
 // 117 adds shared host enrollment codes (`host_enrollment_code`), pending
 // join requests (`host_join_request`), key-bound host metadata
@@ -727,7 +727,7 @@ const integrationEventTable = `CREATE TABLE IF NOT EXISTS ` + "`integration_even
 )`
 
 // secretEntriesTable is the `secret_entries` catalogue for
-// -secrets-backend=secretmanager (design/design/registry.design.md, "Secrets in
+// -secrets-backend=secretmanager (design/design/hub.design.md, "Secrets in
 // Secret Manager"): non-secret metadata (secret name, key name, Secret Manager
 // secret ID, and active version number) so List, Has, and bare-name Resolve
 // never call project-wide secretmanager.secrets.list. Secret values are never

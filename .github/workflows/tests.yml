@@ -178,8 +178,8 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
-            ui-registry/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-registry/package-lock.json') }}
+            ui-hub/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-hub/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -199,7 +199,7 @@ jobs:
         run: make fmt
 
       - name: Fill the npm cache from the registry
-        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-registry
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-hub
 
       - name: Build frontend
         run: make frontend
@@ -256,8 +256,8 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
-            ui-registry/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-registry/package-lock.json') }}
+            ui-hub/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-hub/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -317,7 +317,7 @@ jobs:
           git config --global user.email "grain-ci@example.com"
 
       - name: Fill the npm cache from the registry
-        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-registry
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-hub
 
       - name: Build frontend
         run: make frontend
@@ -543,7 +543,7 @@ jobs:
         run: |
           set +e
           GRAIN_GOTEST_LOG=/tmp/go-unit.log ./scripts/run-go-tests.sh go test -race -timeout 25m \
-            ./cmd/checkpost/... ./cmd/ghcr-prune/... ./cmd/github-webhook/... ./cmd/grain-agentd/... ./cmd/grain-connect/... ./cmd/grain-registry/... ./cmd/grain-sandbox/... ./cmd/grit/... \
+            ./cmd/checkpost/... ./cmd/ghcr-prune/... ./cmd/github-webhook/... ./cmd/grain-agentd/... ./cmd/grain-connect/... ./cmd/grain-hub/... ./cmd/grain-registry/... ./cmd/grain-sandbox/... ./cmd/grit/... \
             ./docs/releases/... ./tests/hygiene/... ./tests/container/... ./tests/installer/... \
             ./pkg/access/... ./pkg/actionscache/... ./pkg/agent/... ./pkg/agentd/... ./pkg/apierror/... ./pkg/attest/... \
             ./pkg/authfix/... ./pkg/backup/... ./pkg/capability/... ./pkg/change/... ./pkg/checkpost/... \
@@ -554,7 +554,7 @@ jobs:
             ./pkg/hosttop/... ./pkg/iapreconciler/... ./pkg/installtrack/... ./pkg/jwks/... \
             ./pkg/k8s/... ./pkg/kubectlgate/... ./pkg/lifecycle/... ./pkg/localexec/... ./pkg/mcp/... \
             ./pkg/metrics/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/nsclient/... ./pkg/objectstore/... ./pkg/pkgcache/... ./pkg/playbooks/... \
-            ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/redact/... ./pkg/registry/... ./pkg/registryauth/... \
+            ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/redact/... ./pkg/hub/... ./pkg/registryauth/... ./pkg/hubenv/... \
             ./pkg/releaseapproval/... ./pkg/releasenotes/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
             ./pkg/sandboxaccess/... ./pkg/sandboxaddr/... ./pkg/sandboxcli/... ./pkg/sandboximage/... ./pkg/schedulefilter/... ./pkg/secrets/... \
             ./pkg/secretsrepo/... ./pkg/statemachine/... ./pkg/sysstat/... \
@@ -751,7 +751,7 @@ jobs:
       - name: Test
         env:
           GRAIN_REQUIRE_POSTGRES: "1"
-        run: ./scripts/run-go-tests.sh go test -count=1 -timeout 15m -exec "$PWD/scripts/exec-unprivileged.sh" ./pkg/model/postgres/... ./pkg/model/ ./pkg/registry/store/...
+        run: ./scripts/run-go-tests.sh go test -count=1 -timeout 15m -exec "$PWD/scripts/exec-unprivileged.sh" ./pkg/model/postgres/... ./pkg/model/ ./pkg/hub/store/...
 
   run-host:
     name: run host
@@ -873,13 +873,13 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
-            ui-registry/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-registry/package-lock.json') }}
+            ui-hub/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-hub/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
       - name: Fill the npm cache from the registry
-        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-registry && ./scripts/warm-npm-cache.sh ui-registry
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-hub && ./scripts/warm-npm-cache.sh ui-hub
 
       - name: Build frontend
         run: make frontend
@@ -892,7 +892,7 @@ jobs:
         run: npm test -- --maxWorkers=4
 
       - name: Test registry frontend
-        working-directory: ui-registry
+        working-directory: ui-hub
         run: npm ci && npm test -- --maxWorkers=4
 
   ui-e2e:
@@ -943,8 +943,8 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
-            ui-registry/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-registry/package-lock.json') }}
+            ui-hub/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-hub/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -964,7 +964,7 @@ jobs:
           sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
 
       - name: Fill the npm cache from the registry
-        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-registry
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-hub
 
       - name: Build frontend
         run: make frontend
@@ -1155,8 +1155,8 @@ jobs:
           path: |
             ~/.npm
             ui/node_modules
-            ui-registry/node_modules
-          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-registry/package-lock.json') }}
+            ui-hub/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-hub/package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
 
@@ -1166,7 +1166,7 @@ jobs:
           sudo git config --system user.email "grain-ci@example.com"
           git config --global user.name "grain-ci"
           git config --global user.email "grain-ci@example.com"
-          ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-registry
+          ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-hub
 
       - name: Configure authenticated Docker Hub pulls
         env:

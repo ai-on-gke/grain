@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v26"
+const Version = "trust-boundary/v27"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -81,6 +81,14 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v27 adds pkg/hubenv/ to auth-routes and keeps cmd/grain-registry/ and
+// pkg/registry/ alongside pkg/hub/ and cmd/grain-hub/ in credential-proxy
+// (task 3762, found in the security review of task 3710): pkg/hubenv/ reads
+// GRAIN_HUB_{ISSUER,AUDIENCE,KEYS_URL,TOKEN,URL,ENTRY,CONNECT,CONFIG} and
+// their pre-rename GRAIN_REGISTRY_* spellings for pkg/webauth/, pkg/daemon/
+// and pkg/hub/, and cmd/grain-registry/ stays a live shim binary for one
+// release.
 //
 // v26 adds what the security review of task 3597 (task 3624) found beside
 // scripts/build-cli.sh: the workstation CLI installer (pkg/ui/cli_install.sh,
@@ -128,7 +136,7 @@ type Category struct {
 // review of task 3284): pkg/webauth/, which verifies Cloud IAP JWTs and
 // X-Grain-Registry-Assertion ES256 JWTs, admits domains, groups and
 // service principals, and runs the proxy-auth Fetch-Metadata/Origin CSRF
-// checks (auth-routes); and pkg/registry/ with cmd/grain-registry/, which
+// checks (auth-routes); and pkg/hub/ with cmd/grain-hub/, which
 // verify front-door IAP assertions, decide entry visibility and
 // X-Grain-On-Behalf-Of delegation, sign X-Grain-Registry-Assertion JWTs,
 // strip edge credentials and IAP cookies before forwarding over tunnels,
@@ -275,7 +283,7 @@ var Categories = []Category{
 	{
 		ID:          "auth-routes",
 		Description: "authentication, principals, request guards and the UI/API route table",
-		prefixes:    []string{"pkg/access/", "pkg/iapreconciler/", "pkg/policy/", "pkg/jwks/", "pkg/webauth/"},
+		prefixes:    []string{"pkg/access/", "pkg/iapreconciler/", "pkg/policy/", "pkg/jwks/", "pkg/webauth/", "pkg/hubenv/"},
 		files: []string{
 			"pkg/ui/server.go", "pkg/ui/principal.go", "pkg/ui/request_actor.go", "pkg/ui/access.go",
 			"pkg/ui/accesscode.go", "pkg/ui/single_tenant.go",
@@ -406,10 +414,11 @@ var Categories = []Category{
 		prefixes: []string{
 			"pkg/gitproxy/", "pkg/modelproxy/", "pkg/pkgcache/", "pkg/relay/", "pkg/tunnel/",
 			"cmd/grain-relay/", "cmd/grain-connect/",
-			// grain-registry: the IAP front door, entry visibility and
-			// on-behalf-of delegation, the assertion signer, the edge
-			// credential stripping before a tunnel, and grc_ credentials.
-			"pkg/registry/", "cmd/grain-registry/",
+			// grain-hub (and its pre-rename grain-registry shim and package path):
+			// the IAP front door, entry visibility and on-behalf-of delegation,
+			// the assertion signer, the edge credential stripping before a tunnel,
+			// and grc_ credentials.
+			"pkg/hub/", "cmd/grain-hub/", "pkg/registry/", "cmd/grain-registry/",
 		},
 	},
 	{

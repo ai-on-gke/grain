@@ -156,7 +156,7 @@ type LiveConfig struct {
 	// pinned task's run is routed to; Refresh hands it each mcp_servers
 	// too. Nil beside a nil capabilityServers.
 	hostdCapabilityServers *hostdCapabilityServers
-	// registry is the background grain registry manager (registry.go);
+	// registry is the background grain hub manager (registry.go);
 	// Refresh notifies it whenever grain_config.registry or target_repos changes.
 	registry *RegistryManager
 

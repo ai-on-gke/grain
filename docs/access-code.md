@@ -24,7 +24,7 @@ network listener takes depends on two settings:
 | **No IAP** | neither | accepted from anywhere, as below | not checked (logged and ignored) |
 | **IAP, code still accepted** | `-ui-iap-audience` | accepted from anywhere | verified, and its person is signed in |
 | **IAP required** | `-ui-iap-audience` and `-ui-require-iap` | only over loopback with no forwarding headers ([break-glass](#break-glass-over-loopback)) | verified, and its person is signed in |
-| **Hub required** | `-ui-registry-{issuer,audience,keys-url}` and `-ui-require-verifier=registry` | only over loopback with no forwarding headers ([break-glass SSH](#break-glass-ssh-on-registry-hosted-instances)) | `X-Grain-Registry-Assertion` verified, and its person is signed in |
+| **Hub required** | `-ui-hub-{issuer,audience,keys-url}` and `-ui-require-verifier=registry` | only over loopback with no forwarding headers ([break-glass SSH](#break-glass-ssh-on-registry-hosted-instances)) | `X-Grain-Registry-Assertion` verified, and its person is signed in |
 
 - **No IAP.** Local and standalone deployments. Everything on this page
   applies as written.
@@ -56,15 +56,15 @@ network listener takes depends on two settings:
   network listener to the access code the same way, and the daemon
   refuses to start unless an `IdentityVerifier` of that name is active
   (for `iap`, an IAP audience; for `registry`, all three of
-  `-ui-registry-issuer`, `-ui-registry-audience` and
-  `-ui-registry-keys-url`; otherwise one a wrapper build registered).
+  `-ui-hub-issuer`, `-ui-hub-audience` and
+  `-ui-hub-keys-url`; otherwise one a wrapper build registered).
   Any active verifier's assertion still signs its caller in.
 - **Behind the Grain Hub (`-ui-require-verifier=registry`).**
-  Core ships a built-in `registry` verifier ([`docs/registry.md`](registry.md))
-  alongside `iap`, active when `-ui-registry-issuer`
-  (`GRAIN_REGISTRY_ISSUER`), `-ui-registry-audience`
-  (`GRAIN_REGISTRY_AUDIENCE`) and `-ui-registry-keys-url`
-  (`GRAIN_REGISTRY_KEYS_URL`) are all set. It verifies the short-lived
+  Core ships a built-in `registry` verifier ([`docs/hub.md`](hub.md))
+  alongside `iap`, active when `-ui-hub-issuer`
+  (`GRAIN_HUB_ISSUER`), `-ui-hub-audience`
+  (`GRAIN_HUB_AUDIENCE`) and `-ui-hub-keys-url`
+  (`GRAIN_HUB_KEYS_URL`) are all set. It verifies the short-lived
   ES256 `X-Grain-Registry-Assertion` JWT that `grain-registry` signs on
   every proxied request to `https://<name>.<instance-domain>/`, checking
   the signature against the hub's JWKS
@@ -77,7 +77,7 @@ network listener takes depends on two settings:
   `-ui-require-verifier=registry`, closing the network listener to the
   access code while keeping unforwarded loopback open for break-glass SSH
   ([Break-glass SSH on registry-hosted instances](#break-glass-ssh-on-registry-hosted-instances)).
-  On external `connected` grains running `-registry-connect`, streams
+  On external `connected` grains running `-hub-connect`, streams
   arriving over the outbound `/api/entries/<name>/connect` tunnel are
   served in-process over a `MuxListener` (`RemoteAddr` is
   `stream-<id>-remote`, never `127.0.0.1`) behind a mandatory
@@ -115,7 +115,7 @@ kubectl -n grain exec deploy/grain -- env GRAIN_SERVER=http://127.0.0.1:8080 GRA
 ### Break-glass SSH on registry-hosted instances
 
 Hosted VM instances provisioned by `grain-registry` (`kind = instance`,
-[`docs/registry.md`](registry.md)) run with
+[`docs/hub.md`](hub.md)) run with
 `-ui-require-verifier=registry` and have no external IP address, so the
 access code is never accepted over `https://<name>.<instance-domain>/` or
 over the VPC listener when proxy headers are present.
@@ -159,11 +159,11 @@ you rotate it.
 Break-glass SSH stays bound to the entry's individual accountable
 `owner` (not pooled across `owner_group` by default) so root shell access
 remains individually attributable; when ownership is transferred
-(`grain registry transfer` / `grain registry accept-transfer`), the
+(`grain hub transfer` / `grain hub accept-transfer`), the
 hub revokes the previous owner's SSH bindings and grants them to the
 new owner. Deployments that forbid shell access to hosted VMs can disable
 break-glass SSH across the hub (`compute.ssh_break_glass: false`) or
-per entry (`grain registry update -allow-ssh=false <name>`).
+per entry (`grain hub update -allow-ssh=false <name>`).
 
 ## Who is let in
 

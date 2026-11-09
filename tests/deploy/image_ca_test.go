@@ -31,7 +31,7 @@ var dockerFromLine = regexp.MustCompile(`(?mi)^FROM\s`)
 // holds the deployment's key. (The sandbox images are built to run behind
 // that proxy and are deliberately not listed here.)
 func TestPublishedServiceImagesDoNotTrustTheBuildCA(t *testing.T) {
-	for _, name := range []string{"Dockerfile", "Dockerfile.registry"} {
+	for _, name := range []string{"Dockerfile", "Dockerfile.hub", "Dockerfile.registry"} {
 		code := stripComments(read(t, name))
 		froms := dockerFromLine.FindAllStringIndex(code, -1)
 		if len(froms) < 2 {

@@ -254,9 +254,9 @@ var knownBoundaryFiles = []string{
 	"pkg/model/capability_catalogue.go", "pkg/model/template_grants.go",
 	"pkg/model/owner_trust.go", "pkg/model/external_agent_token.go",
 	"pkg/ui/external_agents.go",
-	"pkg/webauth/", "pkg/registry/", "cmd/grain-registry/",
-	"pkg/registry/signer.go", "pkg/registry/server/router.go", "pkg/registry/server/proxy.go",
-	"pkg/registry/store/delegation.go", "pkg/registry/delegation_admin.go", "pkg/registry/server.go",
+	"pkg/webauth/", "pkg/hubenv/", "pkg/hub/", "cmd/grain-hub/", "cmd/grain-registry/",
+	"pkg/hub/signer.go", "pkg/hub/server/router.go", "pkg/hub/server/proxy.go",
+	"pkg/hub/store/delegation.go", "pkg/hub/delegation_admin.go", "pkg/hub/server.go",
 	"pkg/model/human_review_hold.go", "pkg/ui/human_review.go",
 	"pkg/model/director_floor.go", "pkg/ui/on_behalf_of.go",
 	"scripts/build-cli.sh",
@@ -421,7 +421,7 @@ func TestNewAuthorizationFilesAreClassified(t *testing.T) {
 // workflows run or source. v25 classified none of them, so a change to any
 // merged itself.
 func TestCLIInstallerAndReleaseHelpersAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v26" {
+	if Version != "trust-boundary/v27" {
 		t.Errorf("Version = %q, want trust-boundary/v26", Version)
 	}
 	for p, want := range map[string]string{
@@ -552,7 +552,7 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 // reach, the approval-callback tokens and the daemon's UI listeners. v16
 // classified none of them, so a change to any merged itself.
 func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v26" {
+	if Version != "trust-boundary/v27" {
 		t.Errorf("Version = %q, want trust-boundary/v26", Version)
 	}
 	for _, p := range []string{
@@ -602,7 +602,7 @@ func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
 // reference/policy, catalogue and template-grant admission files in
 // pkg/model/ classify under capabilities-secrets.
 func TestPlaybooksAndCapabilityAdmissionFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v26" {
+	if Version != "trust-boundary/v27" {
 		t.Errorf("Version = %q, want trust-boundary/v26", Version)
 	}
 	for _, p := range []string{
@@ -638,7 +638,7 @@ func TestPlaybooksAndCapabilityAdmissionFilesAreClassified(t *testing.T) {
 // bearer token model and lifecycle handlers classify under auth-routes, while
 // the provenance-only X-Grain-Client / FiledVia helpers stay unclassified.
 func TestOwnerTrustAndExternalAgentTokenFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v26" {
+	if Version != "trust-boundary/v27" {
 		t.Errorf("Version = %q, want trust-boundary/v26", Version)
 	}
 	for _, p := range []string{
@@ -693,27 +693,27 @@ func TestOwnerTrustAndExternalAgentTokenFilesAreClassified(t *testing.T) {
 
 // v22 (task 3479, found in the security review of task 3284): grain-registry's
 // front door. pkg/webauth/ verifies IAP and registry-assertion JWTs, admits
-// principals and checks proxy-auth CSRF (auth-routes); pkg/registry/ and
-// cmd/grain-registry/ decide visibility and delegation, sign assertions,
+// principals and checks proxy-auth CSRF (auth-routes); pkg/hub/ and
+// cmd/grain-hub/ decide visibility and delegation, sign assertions,
 // strip edge credentials before a tunnel and authenticate grc_ credentials
 // (credential-proxy). v21 classified none of them, so a change to any merged
 // itself.
 func TestRegistryFrontDoorIsClassified(t *testing.T) {
-	if Version != "trust-boundary/v26" {
+	if Version != "trust-boundary/v27" {
 		t.Errorf("Version = %q, want trust-boundary/v26", Version)
 	}
 	for p, want := range map[string]string{
-		"pkg/webauth/iap.go":                "auth-routes",
-		"pkg/webauth/registry.go":           "auth-routes",
-		"pkg/webauth/admission.go":          "auth-routes",
-		"pkg/webauth/csrf.go":               "auth-routes",
-		"pkg/registry/signer.go":            "credential-proxy",
-		"pkg/registry/server/router.go":     "credential-proxy",
-		"pkg/registry/server/proxy.go":      "credential-proxy",
-		"pkg/registry/server/tunnel.go":     "credential-proxy",
-		"pkg/registry/store/store.go":       "credential-proxy",
-		"pkg/registry/providers/gcp/kms.go": "credential-proxy",
-		"cmd/grain-registry/main.go":        "credential-proxy",
+		"pkg/webauth/iap.go":           "auth-routes",
+		"pkg/webauth/hub.go":           "auth-routes",
+		"pkg/webauth/admission.go":     "auth-routes",
+		"pkg/webauth/csrf.go":          "auth-routes",
+		"pkg/hub/signer.go":            "credential-proxy",
+		"pkg/hub/server/router.go":     "credential-proxy",
+		"pkg/hub/server/proxy.go":      "credential-proxy",
+		"pkg/hub/server/tunnel.go":     "credential-proxy",
+		"pkg/hub/store/store.go":       "credential-proxy",
+		"pkg/hub/providers/gcp/kms.go": "credential-proxy",
+		"cmd/grain-hub/main.go":        "credential-proxy",
 	} {
 		if got := categoryIDs(Classify([]string{p})); !reflect.DeepEqual(got, []string{want}) {
 			t.Errorf("Classify(%q) = %v, want [%s]", p, got, want)
@@ -721,8 +721,8 @@ func TestRegistryFrontDoorIsClassified(t *testing.T) {
 	}
 
 	// Control: the registry's React app is UI, not the front door.
-	if got := Classify([]string{"ui-registry/src/App.jsx"}); got != nil {
-		t.Errorf("Classify(ui-registry/src/App.jsx) = %v, want nothing", categoryIDs(got))
+	if got := Classify([]string{"ui-hub/src/App.jsx"}); got != nil {
+		t.Errorf("Classify(ui-hub/src/App.jsx) = %v, want nothing", categoryIDs(got))
 	}
 }
 
@@ -732,25 +732,25 @@ func TestRegistryFrontDoorIsClassified(t *testing.T) {
 // left out -- the human-review hold an agent may raise but never release,
 // the director's Tier 3 floor, and agent on-behalf-of attribution.
 func TestWebauthAndRegistryIdentityFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v26" {
+	if Version != "trust-boundary/v27" {
 		t.Errorf("Version = %q, want trust-boundary/v26", Version)
 	}
 	for p, want := range map[string]string{
-		"pkg/webauth/iap.go":               "auth-routes",
-		"pkg/webauth/registry.go":          "auth-routes",
-		"pkg/webauth/csrf.go":              "auth-routes",
-		"pkg/webauth/admission.go":         "auth-routes",
-		"pkg/webauth/groups.go":            "auth-routes",
-		"pkg/registry/server/router.go":    "credential-proxy",
-		"pkg/registry/server/proxy.go":     "credential-proxy",
-		"pkg/registry/signer.go":           "credential-proxy",
-		"pkg/registry/store/delegation.go": "credential-proxy",
-		"pkg/registry/delegation_admin.go": "credential-proxy",
-		"pkg/registry/server.go":           "credential-proxy",
-		"pkg/model/human_review_hold.go":   "auth-routes",
-		"pkg/ui/human_review.go":           "auth-routes",
-		"pkg/model/director_floor.go":      "auth-routes",
-		"pkg/ui/on_behalf_of.go":           "auth-routes",
+		"pkg/webauth/iap.go":             "auth-routes",
+		"pkg/webauth/hub.go":             "auth-routes",
+		"pkg/webauth/csrf.go":            "auth-routes",
+		"pkg/webauth/admission.go":       "auth-routes",
+		"pkg/webauth/groups.go":          "auth-routes",
+		"pkg/hub/server/router.go":       "credential-proxy",
+		"pkg/hub/server/proxy.go":        "credential-proxy",
+		"pkg/hub/signer.go":              "credential-proxy",
+		"pkg/hub/store/delegation.go":    "credential-proxy",
+		"pkg/hub/delegation_admin.go":    "credential-proxy",
+		"pkg/hub/server.go":              "credential-proxy",
+		"pkg/model/human_review_hold.go": "auth-routes",
+		"pkg/ui/human_review.go":         "auth-routes",
+		"pkg/model/director_floor.go":    "auth-routes",
+		"pkg/ui/on_behalf_of.go":         "auth-routes",
 		// Contrast: the pkg/ui files the web-auth code moved out of.
 		"pkg/ui/csrf.go":      "auth-routes",
 		"pkg/ui/verifier.go":  "auth-routes",
@@ -788,7 +788,7 @@ func TestWebauthAndRegistryIdentityFilesAreClassified(t *testing.T) {
 // touching only it merged with no security review. auto_submit.go
 // (EscalatedCapabilities) is the same shape.
 func TestCanonicalGrantIsClassified(t *testing.T) {
-	if Version != "trust-boundary/v26" {
+	if Version != "trust-boundary/v27" {
 		t.Errorf("Version = %q, want trust-boundary/v26", Version)
 	}
 	for _, p := range []string{"pkg/model/canonical_grant.go", "pkg/model/auto_submit.go"} {
@@ -812,6 +812,25 @@ func TestCanonicalGrantIsClassified(t *testing.T) {
 		}
 		if got := categoryIDs(Classify([]string{file})); !reflect.DeepEqual(got, []string{"capabilities-secrets"}) {
 			t.Errorf("%s is defined in %s, Classify = %v, want [capabilities-secrets]", name, file, got)
+		}
+	}
+}
+
+// v27 (task 3762, security review of task 3710): the Grain Hub rename
+// extracted GRAIN_HUB_* / GRAIN_REGISTRY_* lookups into pkg/hubenv/
+// (read by pkg/webauth/, pkg/daemon/ and pkg/hub/) and kept
+// cmd/grain-registry/ as a compatibility shim binary for one release.
+func TestHubRenameShimAndEnvFilesAreClassified(t *testing.T) {
+	if Version != "trust-boundary/v27" {
+		t.Errorf("Version = %q, want trust-boundary/v27", Version)
+	}
+	for p, want := range map[string]string{
+		"pkg/hubenv/hubenv.go":       "auth-routes",
+		"cmd/grain-registry/main.go": "credential-proxy",
+		"pkg/registry/server.go":     "credential-proxy",
+	} {
+		if got := categoryIDs(Classify([]string{p})); !reflect.DeepEqual(got, []string{want}) {
+			t.Errorf("Classify(%q) = %v, want [%s]", p, got, want)
 		}
 	}
 }

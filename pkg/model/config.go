@@ -953,7 +953,7 @@ type Config struct {
 	// context repository. Stored as JSON in one column.
 	AutoGrantContextReads []string
 	// Registry configures self-registration and periodic heartbeating with a
-	// grain registry as a connected entry (design/design/registry.design.md).
+	// grain hub as a connected entry (design/design/hub.design.md).
 	// Empty -- the default -- disables registry connection. Stored as JSON in
 	// grain_config.registry; registration tokens live in pkg/secrets.
 	Registry RegistryConfig

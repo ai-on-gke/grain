@@ -532,7 +532,7 @@ jobs:
       - &fill-the-npm-cache
         name: Fill the npm cache from the registry
         infrastructure: true
-        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-registry
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-hub
 
       # Before `go build`: pkg/ui go:embeds pkg/ui/static, which is
       # written by the frontend build, so nothing Go here compiles
@@ -597,7 +597,7 @@ jobs:
       - LICENSE
       - NOTICE
       - ui/**
-      - ui-registry/**
+      - ui-hub/**
       - ui-shared/**
     sandbox:
       cpus: 8
@@ -634,7 +634,7 @@ jobs:
       - LICENSE
       - NOTICE
       - ui/**
-      - ui-registry/**
+      - ui-hub/**
       - ui-shared/**
       - "!ui/src/state.js"
       - "!ui/src/taskAttributes.js"
@@ -647,7 +647,7 @@ jobs:
       - name: Test
         run: |
           ./scripts/run-go-tests.sh go test -race -timeout 20m \
-            ./cmd/checkpost/... ./cmd/ghcr-prune/... ./cmd/github-webhook/... ./cmd/grain-agentd/... ./cmd/grain-connect/... ./cmd/grain-registry/... ./cmd/grain-sandbox/... ./cmd/grit/... \
+            ./cmd/checkpost/... ./cmd/ghcr-prune/... ./cmd/github-webhook/... ./cmd/grain-agentd/... ./cmd/grain-connect/... ./cmd/grain-hub/... ./cmd/grain-registry/... ./cmd/grain-sandbox/... ./cmd/grit/... \
             ./docs/releases/... ./tests/hygiene/... ./tests/container/... ./tests/installer/... \
             ./pkg/access/... ./pkg/actionscache/... ./pkg/agent/... ./pkg/agentd/... ./pkg/apierror/... ./pkg/attest/... \
             ./pkg/authfix/... ./pkg/backup/... ./pkg/capability/... ./pkg/change/... ./pkg/checkpost/... \
@@ -658,7 +658,7 @@ jobs:
             ./pkg/hosttop/... ./pkg/iapreconciler/... ./pkg/installtrack/... ./pkg/jwks/... \
             ./pkg/k8s/... ./pkg/kubectlgate/... ./pkg/lifecycle/... ./pkg/localexec/... ./pkg/mcp/... \
             ./pkg/metrics/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/nsclient/... ./pkg/objectstore/... ./pkg/pkgcache/... ./pkg/playbooks/... \
-            ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/redact/... ./pkg/registry/... ./pkg/registryauth/... \
+            ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/redact/... ./pkg/hub/... ./pkg/registryauth/... ./pkg/hubenv/... \
             ./pkg/releaseapproval/... ./pkg/releasenotes/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
             ./pkg/sandboxaccess/... ./pkg/sandboxaddr/... ./pkg/sandboxcli/... ./pkg/sandboximage/... ./pkg/schedulefilter/... ./pkg/secrets/... \
             ./pkg/secretsrepo/... ./pkg/statemachine/... ./pkg/sysstat/... \
@@ -772,7 +772,7 @@ jobs:
       - name: Test
         env:
           GRAIN_REQUIRE_POSTGRES: "1"
-        run: ./scripts/run-go-tests.sh go test -count=1 -timeout 15m -exec "$PWD/scripts/exec-unprivileged.sh" ./pkg/model/postgres/... ./pkg/model/ ./pkg/registry/store/...
+        run: ./scripts/run-go-tests.sh go test -count=1 -timeout 15m -exec "$PWD/scripts/exec-unprivileged.sh" ./pkg/model/postgres/... ./pkg/model/ ./pkg/hub/store/...
 
   run-host:
     capabilities: []
@@ -864,7 +864,7 @@ jobs:
     # a job keyed on the files it reads has to name the script its own
     # first step is, or a change to that script is a cache hit and this
     # job never re-runs against it.
-    paths: [ui/**, ui-registry/**, ui-shared/**, Makefile, scripts/warm-npm-cache.sh]
+    paths: [ui/**, ui-hub/**, ui-shared/**, Makefile, scripts/warm-npm-cache.sh]
     sandbox:
       cpus: 8
       memory-mb: 16384
@@ -890,7 +890,7 @@ jobs:
         run: npm test -- --maxWorkers=4
 
       - name: Test registry frontend
-        working-directory: ui-registry
+        working-directory: ui-hub
         run: npm ci && npm test -- --maxWorkers=4
 
   # The Playwright suite, against a real pkg/ui.Server (`grain demo`) --

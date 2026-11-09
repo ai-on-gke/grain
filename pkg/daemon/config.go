@@ -237,7 +237,7 @@ type Config struct {
 	UiIAPIssuer   string
 	UiIAPKeysURL  string
 	// UiRegistryIssuer, UiRegistryAudience and UiRegistryKeysURL are
-	// -ui-registry-issuer, -ui-registry-audience and -ui-registry-keys-url:
+	// -ui-hub-issuer, -ui-hub-audience and -ui-hub-keys-url:
 	// what a signed X-Grain-Registry-Assertion must carry, and where the
 	// registry's ES256 JWKS is published (ui.Config.RegistryIssuer and the rest).
 	UiRegistryIssuer   string
@@ -894,10 +894,10 @@ type Config struct {
 	networkAccess model.NetworkAccess
 
 	// Registry configures self-registration and background heartbeats to a
-	// grain registry (model.Config.Registry, design/design/registry.design.md).
+	// grain hub (model.Config.Registry, design/design/hub.design.md).
 	// RegistryTokenFile is the optional flags-only path to a registration
 	// credential file when secret registry-registration-token is not set.
-	// RegistryConnect (-registry-connect / $GRAIN_REGISTRY_CONNECT) enables
+	// RegistryConnect (-hub-connect / $GRAIN_HUB_CONNECT) enables
 	// the outbound tunnel supervisor dialing wss://<registry-host>/api/entries/<name>/connect.
 	Registry          model.RegistryConfig
 	RegistryTokenFile string
@@ -1277,16 +1277,16 @@ func (c Config) logStoreOverrides(mc model.Config) {
 	warn("k8s-priority-class-agent", c.K8sPriorityClasses.Agent, mc.K8sPriorityClassAgent)
 	warn("k8s-priority-class-ci", c.K8sPriorityClasses.CI, mc.K8sPriorityClassCI)
 	// 'grain settings' has no registry flags: the stored registry target
-	// moves with 'grain registry register' (which retargets, re-mints and
+	// moves with 'grain hub register' (which retargets, re-mints and
 	// clears the old credential) or Settings -> Registry, so say that
 	// rather than send an operator to a command that cannot do it.
 	warnRegistry := func(flag string, flagVal, storedVal string) {
 		if flagVal != "" && flagVal != storedVal {
-			log.Printf("loadConfig: ignoring -%s=%v, stored config already has %v -- use 'grain registry register -registry-url <url> -entry <name>' or Settings -> Hub to change it", flag, flagVal, storedVal)
+			log.Printf("loadConfig: ignoring -%s=%v, stored config already has %v -- use 'grain hub register -hub-url <url> -entry <name>' or Settings -> Hub to change it", flag, flagVal, storedVal)
 		}
 	}
-	warnRegistry("registry-url", c.Registry.URL, mc.Registry.URL)
-	warnRegistry("registry-entry", c.Registry.Entry, mc.Registry.Entry)
+	warnRegistry("hub-url", c.Registry.URL, mc.Registry.URL)
+	warnRegistry("hub-entry", c.Registry.Entry, mc.Registry.Entry)
 }
 
 // limits is this configuration's whole sandbox pool, as everything that

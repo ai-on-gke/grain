@@ -136,8 +136,8 @@ func registeredVerifiersSnapshot() []IdentityVerifier {
 
 // HasActiveVerifier reports whether an IdentityVerifier with Name() == name
 // is active for ctx (built-in IAP when an IAP audience is configured, built-in
-// registry when -ui-registry-issuer, -ui-registry-audience, and
-// -ui-registry-keys-url are all configured, or an IdentityVerifier registered
+// registry when -ui-hub-issuer, -ui-hub-audience, and
+// -ui-hub-keys-url are all configured, or an IdentityVerifier registered
 // via RegisterIdentityVerifier).
 func HasActiveVerifier(ctx context.Context, name string) bool {
 	name = strings.TrimSpace(name)
@@ -159,8 +159,8 @@ func registryVerifierEnabled(ctx context.Context) bool {
 // activeVerifiers returns the verifiers active for ctx in evaluation order.
 // IAP is registered first by default whenever an IAP audience is configured
 // (-ui-iap-audience / $GRAIN_IAP_AUDIENCE / Config.IAPAudience), followed by
-// the built-in registry verifier whenever all three of -ui-registry-issuer,
-// -ui-registry-audience, and -ui-registry-keys-url are configured, unless an
+// the built-in registry verifier whenever all three of -ui-hub-issuer,
+// -ui-hub-audience, and -ui-hub-keys-url are configured, unless an
 // explicit verifier of the same name has been registered via
 // RegisterIdentityVerifier.
 func activeVerifiers(ctx context.Context) []IdentityVerifier {
@@ -305,7 +305,7 @@ func (v *registryVerifier) Name() string {
 }
 
 func (v *registryVerifier) Headers() []string {
-	return []string{RegistryAssertionHeader}
+	return webauth.HubAssertionHeaders
 }
 
 func (v *registryVerifier) AccessCodeWins() bool {
@@ -418,8 +418,8 @@ func verifyCallerNow(r *http.Request) callerVerification {
 	// unsigned plaintext header.
 	if raw := strings.TrimSpace(r.Header.Get(IAPAssertionHeader)); raw != "" {
 		logRefusedAssertion(raw, "", errors.New("no IAP audience is configured (GRAIN_IAP_AUDIENCE / -ui-iap-audience), so no assertion can be verified"))
-	} else if raw := strings.TrimSpace(r.Header.Get(RegistryAssertionHeader)); raw != "" {
-		logRefusedVerifierHeader(string(AuthMethodRegistry), RegistryAssertionHeader, errors.New("no registry verifier is configured (-ui-registry-issuer, -ui-registry-audience, -ui-registry-keys-url), so no assertion can be verified"))
+	} else if raw := webauth.HubAssertion(r.Header); raw != "" {
+		logRefusedVerifierHeader(string(AuthMethodRegistry), HubAssertionHeader, errors.New("no registry verifier is configured (-ui-hub-issuer, -ui-hub-audience, -ui-hub-keys-url), so no assertion can be verified"))
 	} else {
 		logIgnoredIdentityHeader(r)
 	}
@@ -526,7 +526,7 @@ func verifyRegistryTunnelCaller(r *http.Request) callerVerification {
 		}
 	}
 	if regVerifier == nil {
-		err := errors.New("no registry IdentityVerifier is configured (-ui-registry-issuer, -ui-registry-audience, -ui-registry-keys-url)")
+		err := errors.New("no registry IdentityVerifier is configured (-ui-hub-issuer, -ui-hub-audience, -ui-hub-keys-url)")
 		logRefusedVerifierHeader(string(AuthMethodRegistry), RegistryAssertionHeader, err)
 		return callerVerification{
 			present: true,

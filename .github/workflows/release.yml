@@ -134,7 +134,16 @@ jobs:
           short="${COMMIT:0:7}"
           images=(sandbox sandbox-k8s grain)
           names="sandbox,sandbox-k8s,grain"
-          if git cat-file -e "${COMMIT}:Dockerfile.registry" 2>/dev/null &&
+          # The hub image: a commit since the Grain Hub rename builds it
+          # from Dockerfile.hub (build_hub_image) and publishes it as hub
+          # and, for one release, as registry too; one before the rename
+          # built it from Dockerfile.registry (build_registry_image) as
+          # registry alone.
+          if git cat-file -e "${COMMIT}:Dockerfile.hub" 2>/dev/null &&
+             git show "${COMMIT}:scripts/release-images.sh" 2>/dev/null | grep -q '^build_hub_image()'; then
+            images+=(hub registry)
+            names="sandbox,sandbox-k8s,grain,hub,registry"
+          elif git cat-file -e "${COMMIT}:Dockerfile.registry" 2>/dev/null &&
              git show "${COMMIT}:scripts/release-images.sh" 2>/dev/null | grep -q '^build_registry_image()'; then
             images+=(registry)
             names="sandbox,sandbox-k8s,grain,registry"

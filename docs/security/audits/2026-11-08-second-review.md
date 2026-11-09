@@ -98,7 +98,7 @@ notes); the other 30 touch at least one classified path.
 | 04:24 | `30721c0e` | #887 / 3493 | wip(test-runs): §9 walkthrough items 1-3 and bug fixes F1-F5 | merge-gate(2) release-machinery(1) state-repo(8) upgrade-images(2) |
 | 04:24 | `0345d79b` | #885 / 3479 | feat(trustboundary): classify grain-registry's front door (v22) | hold-policy(2) |
 | 04:23 | `665dd100` | #886 / 3538 | fix(capabilities): let github#sandbox-repo mint through MintPass and release its repository | auth-routes(1) capabilities-secrets(10) merge-gate(1) |
-| 04:22 | `608eda10` | #878 / 3539 | feat(registry): add grain registry stop and start | credential-proxy(2) |
+| 04:22 | `608eda10` | #878 / 3539 | feat(registry): add grain hub stop and start | credential-proxy(2) |
 | 04:22 | `44303daa` | #880 / 3547 | feat(ui,cli): narrow and sort the task list by admission | — |
 | 04:21 | `51dab543` | #882 / 3548 | fix(ui): ask the server for owner and externalRef conditions over closed work | — |
 | 04:20 | `b0ba37fa` | #881 / 3549 | docs(capabilities): add keyless GCP token access design and spec | — |
@@ -115,16 +115,16 @@ notes); the other 30 touch at least one classified path.
 | Sandbox backends (`pkg/k8s`, `k8s_granule_sandboxes.go`, `pkg/granule`, `third_party/granule`) | — | Not touched in this range. `pkg/hostd` (`exec-sandbox`) was: #915 wording and `AgentsOnly`; #892 the silent credential renewal now runs on the credential's own schedule across reconnects (`renewDue`, `RenewedAt` from the token file's mtime) -- an availability fix for a 30-day credential; no change to what a host runs or admits. |
 | Release and secrets gating (`pkg/ci`, `pkg/upgrade`, `scripts/release-*.sh`, `scripts/candidate-gate.sh`, `scripts/release.conf`, `.github/workflows/*`, `pkg/secrets`) | #922, #911, #941, #887, #886, #912 | #922 (itself a security review's outcome, task 3585): `RELEASE_QUALIFICATION_APP=none` is an *explicit* opt-in only -- from the environment or `scripts/release.conf` **as `main` has it** (`git show "$main_ref:scripts/release.conf"`); empty or unset still exits 64 / refuses `grain/rc-hold`. #911: CLI archives are built in a `contents: read` job and uploaded by a separate `contents: write` job in the same run, every action pinned by SHA, inputs passed through `env:` not inline. #941: every download fallback (cosign, shellcheck, actionlint, codex) is a digest-pinned container image or npm tarball with the extracted binary `sha256sum -c`'d before use. #887: `requiredReleaseAsset` (the configured single `Asset` or `images.json`) decides "published"; `retag_image --prefer-index=false` keeps the signed digest. #886: `pkg/ci/workflows.go` canonicalises with `CanonicalCIGrant`. #912: a catalogued Secret Manager key gone upstream (404 / destroyed / disabled, **only** when the body is a Google API error) no longer fails `KnownValues` (redaction) as a whole; the last value this process read is retained for redaction; any other failure still fails closed. |
 | State-repo sync (`pkg/staterepo`, `pkg/repodecl`, `statecheck`) | #887, #925 | #887 adds `gitref_forbidden.go`: a merged settings change (the third way in, after `POST/PATCH /api/schedules` and `grain state check`) that enables a `git_ref` schedule watching grain's own config repository, a retired `grain/config-<team>` alias, or the encrypted secrets backup repository is refused by `applySettingsFromDirs` (`forbiddenGitRefImport`) and by `statecheck.GitRefSchedules`; `decodeRecurrence` now runs `Recurrence.Validate`. #925 as above. |
-| `pkg/trustboundary` and the security hold | #885 (v22), #908 (v23) | Additive: `pkg/webauth/` → `auth-routes`; `pkg/registry/`, `cmd/grain-registry/` → `credential-proxy`; the human-review hold, director floor and `on_behalf_of.go` → `auth-routes`. `securityhold.go` unchanged. |
+| `pkg/trustboundary` and the security hold | #885 (v22), #908 (v23) | Additive: `pkg/webauth/` → `auth-routes`; `pkg/hub/`, `cmd/grain-hub/` → `credential-proxy`; the human-review hold, director floor and `on_behalf_of.go` → `auth-routes`. `securityhold.go` unchanged. |
 | Path containment (`pkg/safepath` and callers) | — | Not touched. |
-| Also read (classified `credential-proxy` since v22): the registry (`pkg/registry/...`) | #883, #878, #914 | #883 brings GCE-hosted instances up live: per-instance service account, Cloud SQL user/database, Secret Manager prefix, GCS folder, `startup-script` metadata, `BindProjectIAM`/`CloudSQLAdmin` config switches, `BootDiskGB` (range-validated 20–4000). #914 builds the `grain-config` metadata `grain-instance-init.sh` boots from (`InstanceGrainConfig`). #878 adds `grain registry stop/start` (demo). See finding 2. |
+| Also read (classified `credential-proxy` since v22): the registry (`pkg/hub/...`) | #883, #878, #914 | #883 brings GCE-hosted instances up live: per-instance service account, Cloud SQL user/database, Secret Manager prefix, GCS folder, `startup-script` metadata, `BindProjectIAM`/`CloudSQLAdmin` config switches, `BootDiskGB` (range-validated 20–4000). #914 builds the `grain-config` metadata `grain-instance-init.sh` boots from (`InstanceGrainConfig`). #878 adds `grain hub stop/start` (demo). See finding 2. |
 
 ## Tests run
 
 | Suite | Result |
 | --- | --- |
 | `go test ./pkg/trustboundary/... ./tests/security/...` | `ok` (trustboundary 2.0s, tests/security 26.9s) |
-| `go test ./pkg/ui/ ./pkg/model/ ./pkg/capability/... ./pkg/hostd/ ./pkg/secrets/ ./pkg/staterepo/... ./pkg/gitproxy/ ./pkg/registry/... ./pkg/upgrade/ ./pkg/repodecl/ ./pkg/ci/` | `ok`, all 41 packages (pkg/ui 120s, pkg/gitproxy 66s, pkg/staterepo 28s, pkg/ci 24s) |
+| `go test ./pkg/ui/ ./pkg/model/ ./pkg/capability/... ./pkg/hostd/ ./pkg/secrets/ ./pkg/staterepo/... ./pkg/gitproxy/ ./pkg/hub/... ./pkg/upgrade/ ./pkg/repodecl/ ./pkg/ci/` | `ok`, all 41 packages (pkg/ui 120s, pkg/gitproxy 66s, pkg/staterepo 28s, pkg/ci 24s) |
 
 No failures, security or environmental. `pkg/orchestrator` and `pkg/daemon`
 were not run as whole packages (they take longer than this run's budget
@@ -229,19 +229,19 @@ hold is refused exactly as the `writes:`/`reads:`/`repo:` spelling is.
 
 **Who can do what.** On a registry deployment with
 `instance_sql.cloud_sql_admin: false` -- which is what the reference
-test deployment `deploy/test/registry-sandbox/files/startup.sh:261`
+test deployment `deploy/test/hub-sandbox/files/startup.sh:261`
 sets, so it is the exercised path, not a corner -- `GCPInstanceResources.Provision`
-(`pkg/registry/providers/gcp/resources.go:394-406`, #883) generates a
+(`pkg/hub/providers/gcp/resources.go:394-406`, #883) generates a
 24-byte random password for the per-instance database role and returns
 it in `InstanceResourceBundle.DatabasePassword`. `InstanceGrainConfig`
-(`pkg/registry/reconcile/reconciler.go:1271-1301`, #914) then puts it
+(`pkg/hub/reconcile/reconciler.go:1271-1301`, #914) then puts it
 into the VM's startup environment **twice**: as `GRAIN_DB_PASSWORD`, and
 inside `db_dsn` as
 `postgres://<user>:<password>@<sql-private-ip>:5432/<db>?sslmode=disable`.
-`GCECompute.CreateInstance` (`pkg/registry/providers/gcp/compute.go:493-505`)
+`GCECompute.CreateInstance` (`pkg/hub/providers/gcp/compute.go:493-505`)
 serialises that map as the instance metadata item `grain-config`, which
 `scripts/grain-instance-init.sh:132` and
-`deploy/test/registry-sandbox/files/hosted-vm-startup.sh:60-71` read back
+`deploy/test/hub-sandbox/files/hosted-vm-startup.sh:60-71` read back
 from the metadata server.
 
 GCE instance metadata is not a secret store: anyone holding
@@ -262,13 +262,13 @@ script fetches `config_repo` credentials that way,
 `grain-instance-init.sh:279`), so a secret store for this value is
 already wired.
 
-**Reproduced.** A throwaway `pkg/registry/reconcile` test (not
+**Reproduced.** A throwaway `pkg/hub/reconcile` test (not
 committed) called `InstanceGrainConfig` with a bundle whose
 `DatabasePassword` was `SECRET-PW-0123` and found the string twice in
 the JSON that becomes `grain-config` (as `GRAIN_DB_PASSWORD` and inside
 `db_dsn`), with `db_dsn` carrying `sslmode=disable`. The merged test
 `TestGrainInstanceInitBootsFromReconcilerMetadata/built-in_password_user`
-(`pkg/registry/reconcile/instance_init_test.go:73-85`) asserts the same
+(`pkg/hub/reconcile/instance_init_test.go:73-85`) asserts the same
 shape as intended behaviour, so this is by design, not a slip -- which
 is why it is a finding rather than a bug report.
 
@@ -280,7 +280,7 @@ project viewer, and guards a tenant's entire state.
 
 **Fix task filed:** `fix(security): keep a hosted instance's database
 password out of GCE metadata and require TLS on its DSN` --
-`auto_merge: true` (`pkg/registry/` is `credential-proxy`, so the
+`auto_merge: true` (`pkg/hub/` is `credential-proxy`, so the
 security hold reviews it; nothing it touches is `hold-policy`). Write
 the generated password as a Secret Manager version under the instance's
 `SecretPrefix` (the bundle already carries it and the VM's service
@@ -293,7 +293,7 @@ default). Regression test: extend
 `TestGrainInstanceInitBootsFromReconcilerMetadata/built-in_password_user`
 to assert the password string does **not** appear in the
 `InstanceGrainConfig` JSON and that the DSN the init script derives
-carries `sslmode=require`, and add a `pkg/registry/providers/gcp` test
+carries `sslmode=require`, and add a `pkg/hub/providers/gcp` test
 that `CreateInstance`'s metadata items never contain
 `bundle.DatabasePassword`.
 
@@ -519,7 +519,7 @@ Read in full, with what it calls across the boundary; nothing to report.
   to true and only *narrow* when set false; `BootDiskGB` is validated in
   `RequestEntryReplaceWithDisk` (and `ValidateBootDiskGB` in `Store.CreateEntry`, `store.go:1199`);
   `startup_script` comes from the registry's own config file; the
-  `deploy/test/registry-sandbox/` Terraform and scripts are a test
+  `deploy/test/hub-sandbox/` Terraform and scripts are a test
   deployment's, read for what they feed the registry (finding 2's
   `cloud_sql_admin: false`).
 - **Unclassified pull requests** (#880 admission narrowing, #898
@@ -534,7 +534,7 @@ Read in full, with what it calls across the boundary; nothing to report.
   "Tests run"); the changed files in them were read.
 - `grain-plc/pkg/grainclient/wire.go` (new, #917's branch): the PLC
   client's wire types; an isolated module outside the brief's surfaces.
-- The `ui-registry` React app and Playwright specs added by #883: UI.
+- The `ui-hub` React app and Playwright specs added by #883: UI.
 - Whether GCE Admin Activity audit logs record `metadata.items` values
   for `instances.insert` was not verified against a live project in
   this sandbox (no GCP access); finding 2 stands on

@@ -758,12 +758,19 @@ type Settings struct {
 	// settings are locked in the UI and REST API in favour of config
 	// repository pull requests. False by default.
 	SettingsLocked bool `json:"settingsLocked"`
-	// Registry holds the deployment's connected-entry grain registry
+	// Registry holds the deployment's connected-entry grain hub
 	// settings (model.Config.Registry). RegistryTokenSet reports whether
 	// the registration credential secret ("registry-registration-token") is
 	// populated in pkg/secrets.
+	//
+	// Hub and HubTokenSet are the same two under the names the Grain Hub
+	// has had since it stopped being the Grain Registry. Both spellings are
+	// served for a release, so a UI or script written against either reads
+	// what it expects; registry and registryTokenSet then go.
 	Registry         model.RegistryConfig `json:"registry"`
 	RegistryTokenSet bool                 `json:"registryTokenSet"`
+	Hub              model.RegistryConfig `json:"hub"`
+	HubTokenSet      bool                 `json:"hubTokenSet"`
 	// ConfigRepoOnly is GET /api/config's configRepoOnly for this row:
 	// whether the API refuses its non-bootstrap writes in favour of a
 	// config pull request. Unlike SettingsLocked it is false without a
@@ -1211,6 +1218,8 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		Unrunnable:                         unrunnable,
 		Registry:                           cfg.Registry,
 		RegistryTokenSet:                   c.registryTokenSet(),
+		Hub:                                cfg.Registry,
+		HubTokenSet:                        c.registryTokenSet(),
 	}
 	c.resolveSandboxImageFields(ctx, cfg, sandboxImgDefault, granuleImgDefault).apply(&out)
 	out.K8sGranuleImageEffective = effectiveGranule
@@ -1486,6 +1495,8 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			SettingsLocked:                     def.SettingsLocked,
 			Registry:                           def.Registry,
 			RegistryTokenSet:                   c.registryTokenSet(),
+			Hub:                                def.Registry,
+			HubTokenSet:                        c.registryTokenSet(),
 			RestartRequired:                    restartRequiredKeys(),
 		}
 		c.resolveSandboxImageFields(ctx, def, sandboxImgDefault, granuleImgDefault).apply(&out)
@@ -1604,7 +1615,10 @@ type UpdateSettingsRequest struct {
 	DeploymentID          *string               `json:"deploymentId"`
 	DefaultCapabilities   *[]string             `json:"defaultCapabilities"`
 	SettingsLocked        *bool                 `json:"settingsLocked"`
-	Registry              *model.RegistryConfig `json:"registry"`
+	// Registry is the Grain Hub connection, sent as "hub" -- or, for a
+	// release, as "registry", its name before the Grain Registry was
+	// renamed the Grain Hub. "hub" wins when a request carries both.
+	Registry *model.RegistryConfig `json:"registry"`
 }
 
 func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
@@ -1614,6 +1628,15 @@ func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*r = UpdateSettingsRequest(p)
+	var renamed struct {
+		Hub *model.RegistryConfig `json:"hub"`
+	}
+	if err := json.Unmarshal(data, &renamed); err != nil {
+		return err
+	}
+	if renamed.Hub != nil {
+		r.Registry = renamed.Hub
+	}
 	var snake struct {
 		SettingsLocked        *bool     `json:"settings_locked"`
 		DefaultCapabilities   *[]string `json:"default_capabilities"`

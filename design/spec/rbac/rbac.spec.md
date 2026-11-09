@@ -112,7 +112,7 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "S
    - **Pinned owner protection:** A request MUST NOT delete `user:<deploymentOwner>` or set its role below `admin` when `-deployment-owner` is set.
    - **At least one human admin:** When `-deployment-owner` is empty, the resulting `allowed_principal` table MUST retain at least one `user:<email>` row with `role = "admin"`.
    - **No self-lockout:** A human `admin` caller MUST NOT delete or demote the entry that grants their own `admin` role unless `-deployment-owner` equals their email or another `user:<caller-email>` row with `role = "admin"` remains.
-5. On a registry-managed instance ([`registry.design.md`](../../design/registry.design.md)), `grain-registry` passes `entries.owner` as `-deployment-owner`; transferring `entries.owner` updates `-deployment-owner` on VM replacement, automatically transferring the immutable `admin` floor to the new owner.
+5. On a registry-managed instance ([`hub.design.md`](../../design/hub.design.md)), `grain-registry` passes `entries.owner` as `-deployment-owner`; transferring `entries.owner` updates `-deployment-owner` on VM replacement, automatically transferring the immutable `admin` floor to the new owner.
 
 ### 1.6 Break-glass access code and loopback callers {#RB-6}
 
@@ -819,7 +819,7 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
   - [`design/design/operator-attribution.design.md`](../../design/operator-attribution.design.md) and [`design/spec/operator-attribution/operator-attribution.spec.md`](../operator-attribution/operator-attribution.spec.md)
   - [`design/design/attribution.design.md`](../../design/attribution.design.md)
   - [`design/design/simple-config.design.md`](../../design/simple-config.design.md)
-  - [`design/design/registry.design.md`](../../design/registry.design.md)
+  - [`design/design/hub.design.md`](../../design/hub.design.md)
   - [`design/design/director.design.md`](../../design/director.design.md) and [`design/spec/director/director-capabilities.spec.md`](../director/director-capabilities.spec.md)
   - [`design/design/external-cli.design.md`](../../design/external-cli.design.md) and [`docs/agent-api.md`](../../../docs/agent-api.md)
 - Route and policy tables inspected on `main`: `pkg/ui/server.go`, `pkg/ui/route_scopes.go`, `pkg/ui/agent_api_gate.go`, `pkg/ui/agent_api_tools.go`, `pkg/ui/allowlist.go`, `pkg/ui/accesscode.go`, `pkg/ui/request_actor.go`, `pkg/ui/external_agents.go`, `pkg/model/agent_api.go`, `pkg/model/auto_submit.go`, `pkg/model/priority_dispatch.go`, `ui/src/paths.js`, `ui/src/settingsSections.js`, `pkg/cli/main.go`.

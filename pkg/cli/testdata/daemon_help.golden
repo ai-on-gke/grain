@@ -161,6 +161,26 @@ Usage of grain daemon:
     	the host name a host dialing in with -hostd-token-file's shared token is known by (default "remote")
   -hostd-token-owner string
     	the owner of -hostd-token-name's host: the email or service account a host dialing in with the shared token through IAP (or another identity verifier's proxy) must be verified as. A remote host with no owner is refused; one over loopback is not
+  -hub-auth-mode string
+    	credential mode for registry heartbeats: "token" (secret registry-registration-token, -hub-token-file, or $GRAIN_HUB_TOKEN) or "oidc" (ID token for -hub-oidc-audience) (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that)
+  -hub-connect
+    	supervise an outbound wss://<registry-host>/api/entries/<name>/connect tunnel and serve accepted mux streams in-process behind the hub assertion verifier gate ($GRAIN_HUB_CONNECT; requires -ui-hub-issuer, -ui-hub-audience, and -ui-hub-keys-url)
+  -hub-display-name string
+    	human-readable display name advertised in the hub directory (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that)
+  -hub-entry string
+    	entry name this daemon registers and heartbeats as in the Grain Hub ($GRAIN_HUB_ENTRY) (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that)
+  -hub-host-kind string
+    	connected entry host kind advertised to the hub: "workstation", "kubernetes", or "other" (defaults to the active sandbox backend) (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that)
+  -hub-listed
+    	include this connected entry in default hub directory listings (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that) (default true)
+  -hub-oidc-audience string
+    	OIDC ID token audience when -hub-auth-mode=oidc (defaults to -hub-url) (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that)
+  -hub-purpose string
+    	short description of this grain deployment's purpose in the hub directory (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that)
+  -hub-token-file string
+    	fallback file holding a grc_... registration credential when secret registry-registration-token is unset ($GRAIN_HUB_TOKEN is also consulted)
+  -hub-url string
+    	base URL of the Grain Hub this daemon self-registers with ($GRAIN_HUB_URL; empty disables heartbeats) (seeds stored configuration on first use; edit in Settings or with 'grain hub' after that)
   -iap-backend-service string
     	GCP Compute backend service name for dynamic IAP IAM reconciliation; empty disables IAP reconciliation (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
   -iap-resource string
@@ -285,26 +305,26 @@ Usage of grain daemon:
     	PostgreSQL connection URL (alias for -db-driver=postgres -db-dsn=URL)
   -reboot-cmd sudo systemctl reboot
     	one argument of the command the UI's reboot-host button runs -- repeat for every argument. Defaults to sudo systemctl reboot.
-  -registry-auth-mode string
-    	credential mode for registry heartbeats: "token" (secret registry-registration-token, -registry-token-file, or $GRAIN_REGISTRY_TOKEN) or "oidc" (ID token for -registry-oidc-audience) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
+  -registry-auth-mode value
+    	deprecated: renamed to -hub-auth-mode
   -registry-connect
-    	supervise an outbound wss://<registry-host>/api/entries/<name>/connect tunnel and serve accepted mux streams in-process behind the hub assertion verifier gate ($GRAIN_REGISTRY_CONNECT; requires -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url)
-  -registry-display-name string
-    	human-readable display name advertised in the hub directory (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
-  -registry-entry string
-    	entry name this daemon registers and heartbeats as in the Grain Hub ($GRAIN_REGISTRY_ENTRY) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
-  -registry-host-kind string
-    	connected entry host kind advertised to the hub: "workstation", "kubernetes", or "other" (defaults to the active sandbox backend) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
+    	deprecated: renamed to -hub-connect
+  -registry-display-name value
+    	deprecated: renamed to -hub-display-name
+  -registry-entry value
+    	deprecated: renamed to -hub-entry
+  -registry-host-kind value
+    	deprecated: renamed to -hub-host-kind
   -registry-listed
-    	include this connected entry in default hub directory listings (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) (default true)
-  -registry-oidc-audience string
-    	OIDC ID token audience when -registry-auth-mode=oidc (defaults to -registry-url) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
-  -registry-purpose string
-    	short description of this grain deployment's purpose in the hub directory (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
-  -registry-token-file string
-    	fallback file holding a grc_... registration credential when secret registry-registration-token is unset ($GRAIN_REGISTRY_TOKEN is also consulted)
-  -registry-url string
-    	base URL of the Grain Hub this daemon self-registers with ($GRAIN_REGISTRY_URL; empty disables heartbeats) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
+    	deprecated: renamed to -hub-listed
+  -registry-oidc-audience value
+    	deprecated: renamed to -hub-oidc-audience
+  -registry-purpose value
+    	deprecated: renamed to -hub-purpose
+  -registry-token-file value
+    	deprecated: renamed to -hub-token-file
+  -registry-url value
+    	deprecated: renamed to -hub-url
   -relay-audience string
     	removed: the rendezvous relay is gone. The daemon refuses to start with this set
   -relay-auth-token-file string
@@ -385,6 +405,12 @@ Usage of grain daemon:
     	deprecated: imported once on first start when the database allowlist is empty (user:<email> and group:<email> only; serviceAccount: and domain: entries are logged and dropped), then ignored. Manage allowed users and groups in Settings -> Access or with 'grain access'
   -ui-cloud-identity-endpoint string
     	resolve allowed group: entries against this Cloud Identity API base URL (a test stand-in) rather than https://cloudidentity.googleapis.com; defaults to $GRAIN_CLOUD_IDENTITY_ENDPOINT
+  -ui-hub-audience string
+    	the single audience URL a signed X-Grain-Hub-Assertion must carry (e.g. "https://<name>.<instance-domain>"); defaults to $GRAIN_HUB_AUDIENCE
+  -ui-hub-issuer string
+    	the exact issuer URL a signed X-Grain-Hub-Assertion must carry for the UI/API to accept the identity in it (e.g. "https://grain.example.com"); defaults to $GRAIN_HUB_ISSUER. All three of -ui-hub-issuer, -ui-hub-audience, and -ui-hub-keys-url must be set to enable the "registry" IdentityVerifier
+  -ui-hub-keys-url string
+    	where the hub's ES256 signing keys are published as a JWK set (e.g. "https://grain.example.com/.well-known/jwks.json"); defaults to $GRAIN_HUB_KEYS_URL
   -ui-iap-audience string
     	the audience a signed X-Goog-IAP-JWT-Assertion must carry for the UI/API to accept the identity in it, or several separated by commas -- IAP's /projects/NUMBER/global/backendServices/ID or /projects/NUMBER/apps/PROJECT, or what a BeyondCorp tunnel's assertion names (the proxy's own docs); defaults to $GRAIN_IAP_AUDIENCE. With none, no assertion is accepted
   -ui-iap-issuer string
@@ -393,12 +419,12 @@ Usage of grain daemon:
     	where the signing keys for those assertions are published (IAP's PEM map or a JWK set); defaults to $GRAIN_IAP_KEYS_URL, then https://www.gstatic.com/iap/verify/public_key
   -ui-open
     	open the UI in the system's default browser once it's listening
-  -ui-registry-audience string
-    	the single audience URL a signed X-Grain-Registry-Assertion must carry (e.g. "https://<name>.<instance-domain>"); defaults to $GRAIN_REGISTRY_AUDIENCE
-  -ui-registry-issuer string
-    	the exact issuer URL a signed X-Grain-Registry-Assertion must carry for the UI/API to accept the identity in it (e.g. "https://grain.example.com"); defaults to $GRAIN_REGISTRY_ISSUER. All three of -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url must be set to enable the "registry" IdentityVerifier
-  -ui-registry-keys-url string
-    	where the hub's ES256 signing keys are published as a JWK set (e.g. "https://grain.example.com/.well-known/jwks.json"); defaults to $GRAIN_REGISTRY_KEYS_URL
+  -ui-registry-audience value
+    	deprecated: renamed to -ui-hub-audience
+  -ui-registry-issuer value
+    	deprecated: renamed to -ui-hub-issuer
+  -ui-registry-keys-url value
+    	deprecated: renamed to -ui-hub-keys-url
   -ui-require-iap
     	accept the access code (bearer or grain_access cookie) only from loopback with no forwarding or proxy headers, and serve no "Enter access code" page, so network callers sign in through IAP alone (docs/access-code.md); needs -ui-iap-audience or $GRAIN_IAP_AUDIENCE. Defaults to $GRAIN_REQUIRE_IAP
   -ui-require-verifier string

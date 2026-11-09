@@ -270,9 +270,13 @@ func Main() {
 // longer shows: "hostd" (the host agent) and "hostds" (the host
 // registry) are both "host" now, which users see. Neither is in usage
 // or the CLI spec; both keep working for scripts and installed units.
+//
+// "registry" is "hub" now that the Grain Registry is the Grain Hub; it
+// warns (warnDeprecatedCommand) and goes after a release.
 var hiddenCommandAliases = map[string]string{
-	"hostd":  "host",
-	"hostds": "host",
+	"hostd":    "host",
+	"hostds":   "host",
+	"registry": "hub",
 }
 
 // canonicalCommand is the command word cmd is spelled as now.
@@ -494,7 +498,7 @@ Commands:
                                        snippet, accept or reject the hosts that join, and manage hosts
   host register|install|set-owner      the legacy host registry: register a host with its owner, the
                                        identity it dials in through IAP as, and print how to install it
-  registry status|register|unregister  self-register this deployment with a Grain Hub and inspect
+  hub status|register|unregister       self-register this deployment with a Grain Hub and inspect
                                        heartbeats and self-reported scopes (Settings -> Hub)
   access list|allow|deny               the allowed users and groups list (Settings -> Access): who may
                                        sign in through IAP or another identity verifier
@@ -652,6 +656,7 @@ func runCLI(args []string) error {
 // dispatchCLI runs one task-CLI command against c.
 func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.FlagSet, sel selectedContext, rest []string) error {
 	cmd, cmdArgs := canonicalCommand(rest[0]), rest[1:]
+	warnDeprecatedCommand(rest[0], cmd)
 	switch cmd {
 	case "context", "whoami", "login", "logout":
 		return dispatchSignIn(ctx, c, out, sel, cmd, cmdArgs)
@@ -731,7 +736,7 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdCapabilityServers(ctx, c, out, cmdArgs)
 	case "host":
 		return cmdHostds(ctx, c, out, cmdArgs)
-	case "registry":
+	case "hub":
 		return cmdRegistry(ctx, c, out, cmdArgs)
 	case "access":
 		return cmdAccess(ctx, c, out, cmdArgs)

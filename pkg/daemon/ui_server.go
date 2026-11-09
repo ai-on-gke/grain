@@ -69,9 +69,9 @@ func checkUIAllowedPrincipalsWithPool(cfg Config, gcpPoolEmails []string) error 
 	return nil
 }
 
-// CheckUIRegistryVerifier validates -ui-registry-issuer, -ui-registry-audience,
-// and -ui-registry-keys-url (or $GRAIN_REGISTRY_ISSUER,
-// $GRAIN_REGISTRY_AUDIENCE, and $GRAIN_REGISTRY_KEYS_URL): if any is set, all
+// CheckUIRegistryVerifier validates -ui-hub-issuer, -ui-hub-audience,
+// and -ui-hub-keys-url (or $GRAIN_HUB_ISSUER,
+// $GRAIN_HUB_AUDIENCE, and $GRAIN_HUB_KEYS_URL): if any is set, all
 // three must be set, and neither issuer nor audience may contain commas.
 func CheckUIRegistryVerifier(cfg Config) error {
 	ctx := ui.WithIAPConfig(context.Background(), ui.IAPConfig{
@@ -98,29 +98,29 @@ func CheckUIRegistryVerifier(cfg Config) error {
 	}
 	var missing []string
 	if iss == "" {
-		missing = append(missing, "-ui-registry-issuer")
+		missing = append(missing, "-ui-hub-issuer")
 	}
 	if aud == "" {
-		missing = append(missing, "-ui-registry-audience")
+		missing = append(missing, "-ui-hub-audience")
 	}
 	if keysURL == "" {
-		missing = append(missing, "-ui-registry-keys-url")
+		missing = append(missing, "-ui-hub-keys-url")
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("incomplete registry verifier configuration: missing %s (set all three of -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url, or none)", strings.Join(missing, ", "))
+		return fmt.Errorf("incomplete registry verifier configuration: missing %s (set all three of -ui-hub-issuer, -ui-hub-audience, and -ui-hub-keys-url, or none)", strings.Join(missing, ", "))
 	}
 	if strings.Contains(iss, ",") {
-		return errors.New("-ui-registry-issuer must be a single issuer URL, not a comma-separated list")
+		return errors.New("-ui-hub-issuer must be a single issuer URL, not a comma-separated list")
 	}
 	if strings.Contains(aud, ",") {
-		return errors.New("-ui-registry-audience must be a single URL (https://<name>.<instance-domain>), not a comma-separated list")
+		return errors.New("-ui-hub-audience must be a single URL (https://<name>.<instance-domain>), not a comma-separated list")
 	}
 	return nil
 }
 
-// CheckRegistryConnect validates -registry-connect: starting with
-// -registry-connect requires an active "registry" IdentityVerifier
-// (-ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url, or a
+// CheckRegistryConnect validates -hub-connect: starting with
+// -hub-connect requires an active "registry" IdentityVerifier
+// (-ui-hub-issuer, -ui-hub-audience, and -ui-hub-keys-url, or a
 // registered "registry" IdentityVerifier) so incoming tunnel streams can never
 // be served without X-Grain-Registry-Assertion verification.
 func CheckRegistryConnect(cfg Config) error {
@@ -141,7 +141,7 @@ func CheckRegistryConnect(cfg Config) error {
 	if ui.HasActiveVerifier(ctx, string(ui.AuthMethodRegistry)) {
 		return nil
 	}
-	return errors.New("-registry-connect requires -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url")
+	return errors.New("-hub-connect requires -ui-hub-issuer, -ui-hub-audience, and -ui-hub-keys-url")
 }
 
 // CheckUIRequireVerifier validates -ui-require-verifier (and its
@@ -185,7 +185,7 @@ func CheckUIRequireVerifier(cfg Config) error {
 			"/projects/NUMBER/global/backendServices/ID, or drop -ui-require-verifier to keep accepting the access code over the network")
 	}
 	if req == string(ui.AuthMethodRegistry) {
-		return fmt.Errorf("-ui-require-verifier=%q names no active IdentityVerifier: set -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url first, or drop -ui-require-verifier to keep accepting the access code over the network", req)
+		return fmt.Errorf("-ui-require-verifier=%q names no active IdentityVerifier: set -ui-hub-issuer, -ui-hub-audience, and -ui-hub-keys-url first, or drop -ui-require-verifier to keep accepting the access code over the network", req)
 	}
 	return fmt.Errorf("-ui-require-verifier=%q names no active IdentityVerifier: configure that verifier first, or drop -ui-require-verifier to keep accepting the access code over the network", req)
 }
