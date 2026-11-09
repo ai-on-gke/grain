@@ -148,8 +148,16 @@ func TestGrainLoginIssueTokenSelfServiceNonAdminAndLogoutRevokes(t *testing.T) {
 	if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "--issue-token") {
 		t.Errorf("login with the access code = %v, want a refusal pointing at --issue-token", err)
 	}
+	// Nor is an access code piped to --token-stdin beside --issue-token:
+	// that combination is refused rather than storing the code.
+	loginStdin = strings.NewReader(testAccessCode + "\n")
+	t.Cleanup(func() { loginStdin = os.Stdin })
+	err = runCLI([]string{"login", ts.URL, "--name", "piped", "--auth", "access-code", "--issue-token", "--token-stdin"})
+	if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "grain -token CODE login "+ts.URL+" --issue-token") {
+		t.Errorf("login --issue-token --token-stdin = %v, want a usage refusal naming the -token form", err)
+	}
 	cfg, _ = loadContexts()
-	for _, n := range []string{"ops", "elsewhere", "ac"} {
+	for _, n := range []string{"ops", "elsewhere", "ac", "piped"} {
 		if _, ok := cfg.Contexts[n]; ok {
 			t.Errorf("a refused login left context %q", n)
 		}

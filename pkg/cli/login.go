@@ -161,7 +161,7 @@ func cmdLogin(ctx context.Context, base *ui.HTTPClient, out *printer, sel select
 	scopeSet := fs.String("scope-set", defaultLoginScopeSet, "the scope set --issue-token mints")
 	repos := fs.String("repos", "", "comma-separated repositories --issue-token limits the token to")
 	expires := fs.String("expires", "30d", "how long --issue-token's token lasts (30d, 12h, ...)")
-	tokenStdin := fs.Bool("token-stdin", false, "read a gma_ token (or, with --auth access-code, the access code) from stdin")
+	tokenStdin := fs.Bool("token-stdin", false, "read a gma_ token (or, with --auth access-code, the access code) from stdin and store it; not with --issue-token")
 	refresh := fs.Bool("refresh", false, "re-mint the context's expired or expiring token")
 	auth := fs.String("auth", "", "how to sign in: access-code, or a credential source this build registers")
 	rest, err := parseArgs(fs, args)
@@ -196,6 +196,14 @@ func cmdLogin(ctx context.Context, base *ui.HTTPClient, out *printer, sel select
 	u, err := url.Parse(server)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return usageErrorf("grain login needs the deployment's URL (https://grain.example.com), not %q", server)
+	}
+	if *tokenStdin && *issue {
+		// --token-stdin stores what stdin holds as the credential, so an
+		// access code piped in alongside --issue-token would be kept as
+		// it is rather than spent on minting a gma_ token.
+		return &cliError{exit: exitUsage, code: "token_stdin_issue_token", fix: "grain -token CODE login " + server + " --issue-token",
+			err: fmt.Errorf("--token-stdin and --issue-token do not combine: --token-stdin stores the secret it reads; "+
+				"to mint a gma_ token with an access code, pass the code with -token: grain -token CODE login %s --issue-token", server)}
 	}
 	if *name == "" {
 		*name = contextSlug(u.Hostname())
