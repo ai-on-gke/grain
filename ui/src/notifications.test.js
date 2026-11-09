@@ -138,6 +138,7 @@ describe("pending releases", () => {
       version: "v2.4.0",
       soak: null,
       shortSoak: null,
+      breaking: null,
     });
   });
 
@@ -148,6 +149,7 @@ describe("pending releases", () => {
       version: "v2.4.0",
       soak: null,
       shortSoak: null,
+      breaking: null,
     });
   });
 
@@ -165,6 +167,7 @@ describe("pending releases", () => {
       version: "v2.4.1",
       soak: null,
       shortSoak: null,
+      breaking: null,
     });
     const [row] = notificationAlerts([patch]);
     expect(row.actions.map((a) => a.label)).toEqual([
@@ -262,6 +265,108 @@ describe("pending releases", () => {
     expect(api).toHaveBeenLastCalledWith(
       "/api/repos/ai-on-gke/grain/pending-releases/v2.4.0/reject",
       { method: "POST" },
+    );
+  });
+
+  it("read breaking-change warnings and promotion_blocked lines off the body", () => {
+    const breakingNotice = {
+      ...pending,
+      subject: "release.pending:v3.2.0",
+      body:
+        "v3.2.0 is staged as v3.2.0-pending on ai-on-gke/grain and waits for a person.\n\n" +
+        "BREAKING CHANGES: v3.2.0 carries breaking changes since v3.1.1 and is not the major release RELEASE_MAJOR asks for; approving it needs allow_breaking: true.\n\n" +
+        "Qualification: PASS",
+    };
+    expect(pendingReleaseOf(breakingNotice)).toMatchObject({
+      version: "v3.2.0",
+      soak: null,
+      shortSoak: null,
+      breaking:
+        "BREAKING CHANGES: v3.2.0 carries breaking changes since v3.1.1 and is not the major release RELEASE_MAJOR asks for; approving it needs allow_breaking: true.",
+    });
+    expect(notificationAlerts([breakingNotice])[0].actions[0].label).toBe(
+      "Approve breaking",
+    );
+
+    const trainBlocked = {
+      ...pending,
+      subject: "release.pending:v3.2.0",
+      body:
+        "v3.2.0-rc.3 qualified, but the train does not release it itself.\n" +
+        "promotion_blocked=it carries breaking changes since v3.1.1 and is not the major release RELEASE_MAJOR asks for",
+    };
+    expect(pendingReleaseOf(trainBlocked)).toMatchObject({
+      breaking:
+        "promotion_blocked=it carries breaking changes since v3.1.1 and is not the major release RELEASE_MAJOR asks for",
+    });
+
+    const majorBumpBlocked = {
+      ...pending,
+      subject: "release.pending:v4.0.0",
+      body: "promotion_blocked=it is the first release of major 4, and a major bump is a person's to release",
+    };
+    expect(pendingReleaseOf(majorBumpBlocked).breaking).toBeNull();
+  });
+
+  it("approve breaking changes with allow_breaking, and combine with short_soak_ok when both apply", async () => {
+    const breakingOnly = {
+      repo: "ai-on-gke/grain",
+      version: "v3.2.0",
+      soak: null,
+      shortSoak: null,
+      breaking:
+        "BREAKING CHANGES: v3.2.0 carries breaking changes since v3.1.1 and is not the major release RELEASE_MAJOR asks for; approving it needs allow_breaking: true.",
+    };
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false);
+    expect(await decideRelease(breakingOnly, true)).toBe(false);
+    expect(api).not.toHaveBeenCalled();
+
+    confirm.mockReturnValueOnce(true);
+    expect(await decideRelease(breakingOnly, true)).toBe(true);
+    expect(confirm.mock.calls.at(-1)[0]).toContain(
+      "Approve v3.2.0 with BREAKING changes outside a major release?",
+    );
+    expect(confirm.mock.calls.at(-1)[0]).toContain(
+      "v3.2.0 carries breaking changes since v3.1.1 and is not the major release RELEASE_MAJOR asks for",
+    );
+    expect(api).toHaveBeenLastCalledWith(
+      "/api/repos/ai-on-gke/grain/pending-releases/v3.2.0/approve",
+      { method: "POST", body: JSON.stringify({ allow_breaking: true }) },
+    );
+
+    confirm.mockReturnValueOnce(true);
+    expect(await decideRelease(breakingOnly, false)).toBe(true);
+    expect(api).toHaveBeenLastCalledWith(
+      "/api/repos/ai-on-gke/grain/pending-releases/v3.2.0/reject",
+      { method: "POST" },
+    );
+
+    const both = {
+      ...breakingOnly,
+      soak: "soaked 1h00m of 24h",
+      shortSoak: "SHORT SOAK: under the 22h minimum.",
+    };
+    expect(
+      notificationAlerts([
+        {
+          ...pending,
+          subject: "release.pending:v3.2.0",
+          body: `${both.shortSoak}\nSoak: ${both.soak}\n${both.breaking}`,
+        },
+      ])[0].actions[0].label,
+    ).toBe("Approve short soak & breaking");
+    confirm.mockReturnValueOnce(true);
+    expect(await decideRelease(both, true)).toBe(true);
+    expect(confirm.mock.calls.at(-1)[0]).toContain("SHORT SOAK");
+    expect(confirm.mock.calls.at(-1)[0]).toContain(
+      "BREAKING changes outside a major release",
+    );
+    expect(api).toHaveBeenLastCalledWith(
+      "/api/repos/ai-on-gke/grain/pending-releases/v3.2.0/approve",
+      {
+        method: "POST",
+        body: JSON.stringify({ short_soak_ok: true, allow_breaking: true }),
+      },
     );
   });
 
