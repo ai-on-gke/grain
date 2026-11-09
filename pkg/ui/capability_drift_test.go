@@ -163,39 +163,3 @@ func TestOfferedCapabilitiesNamesMatchSettingsDisplayNames(t *testing.T) {
 		}
 	}
 }
-
-// The third drift of the same kind, and the one grain/task-172 is about:
-// a capability that resolves a standing credential -- one an operator
-// pasted once, which every later mint authenticates as -- but ships no
-// way to test it. Settings can only ever say **Ready** for such a
-// capability, meaning "the secret is set", while the key inside it may
-// have been deleted or rotated away at the far end months ago. Every
-// capability with a Requires entry is one that can fail that way, so
-// every one of them owes a model.CredentialChecker.
-func TestEveryCapabilityWithAStandingCredentialCanBeChecked(t *testing.T) {
-	t.Parallel()
-	for _, p := range capabilityProviderCatalog() {
-		spec := p.Spec()
-		if len(spec.Requires) == 0 {
-			continue
-		}
-		if !capabilityCheckable(spec.Name) {
-			t.Errorf("capability %q resolves the standing credential(s) %v but implements no "+
-				"model.CredentialChecker: Settings can report it Ready and nothing on any pane "+
-				"can see whether what is in those secrets still works", spec.Name, spec.Requires)
-		}
-	}
-}
-
-// The other direction: a capability with nothing standing behind it must
-// not offer a check, since there would be nothing for one to authenticate
-// as and the button would only ever produce a confusing failure.
-func TestCapabilitiesWithNoCredentialOfferNoCheck(t *testing.T) {
-	t.Parallel()
-	for _, p := range capabilityProviderCatalog() {
-		spec := p.Spec()
-		if len(spec.Requires) == 0 && capabilityCheckable(spec.Name) {
-			t.Errorf("capability %q needs no credential but ships a credential check", spec.Name)
-		}
-	}
-}

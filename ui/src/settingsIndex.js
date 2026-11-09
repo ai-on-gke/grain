@@ -841,8 +841,8 @@ export const SETTINGS_INDEX = [
     id: "defaultCapabilities",
     section: "tasks",
     anchor: "task-defaults",
-    label: "Default capabilities",
-    keywords: ["capabilities"],
+    label: "Default grants",
+    keywords: ["capabilities", "grants"],
   },
   {
     id: "newestFirst",
