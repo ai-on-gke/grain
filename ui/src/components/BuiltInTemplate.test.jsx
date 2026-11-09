@@ -100,7 +100,7 @@ describe("a built-in template", () => {
     );
   });
 
-  it("opens read-only, with no Save or Delete", async () => {
+  it("opens read-only, with no Save, Delete or GrantsPicker edit buttons", async () => {
     routeApi();
     const user = userEvent.setup();
     render(
@@ -111,6 +111,86 @@ describe("a built-in template", () => {
     expect(screen.getByText(/built into grain/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
+    expect(
+      screen.queryByRole("button", { name: "Add grant…" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Remove .*host-exec/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Add another/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("omits GrantsPicker edit controls on repository-declared templates and schedules", async () => {
+    routeApi();
+    const user = userEvent.setup();
+    const declaredTemplate = {
+      id: "repo:template:acme:widgets:bump",
+      name: "Declared dependency bump",
+      title: "Bump dependencies",
+      description: "Upgrade dependencies.",
+      repo: "acme/widgets",
+      capabilities: ["api:tasks:read"],
+      declaredIn: {
+        repo: "acme/widgets",
+        path: ".grain/templates/bump.yml",
+      },
+    };
+    const declaredSchedule = {
+      id: "repo:schedule:acme:widgets:raw",
+      title: "Declared raw audit",
+      description: "Audit repo.",
+      repo: "acme/widgets",
+      recurrence: { kind: "daily", timeOfDay: "03:00" },
+      enabled: true,
+      capabilities: ["api:tasks:read"],
+      declaredIn: {
+        repo: "acme/widgets",
+        path: ".grain/schedules/raw.yml",
+      },
+    };
+    const [openScheduleId, setOpenScheduleId] = [
+      "repo:schedule:acme:widgets:raw",
+      vi.fn(),
+    ];
+
+    const { unmount } = render(
+      <ControlledList
+        query={{ kinds: ["template"] }}
+        templates={[declaredTemplate]}
+      />,
+    );
+    await user.click(screen.getByText("Declared dependency bump"));
+    expect(
+      screen.getByText(/cannot be edited or deleted here/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Add grant…" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Remove api:tasks:read/i }),
+    ).not.toBeInTheDocument();
+    unmount();
+
+    render(
+      <ProcessesList
+        schedules={[declaredSchedule]}
+        openScheduleId={openScheduleId}
+        onOpenSchedule={setOpenScheduleId}
+        onRefreshSchedules={noop}
+        showError={noop}
+      />,
+    );
+    expect(
+      screen.getByText(/cannot be edited or deleted here/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Add grant…" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Remove api:tasks:read/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("is not offered to a new schedule", async () => {
