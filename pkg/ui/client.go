@@ -344,11 +344,30 @@ func (r *CreateTaskRequest) UnmarshalJSON(data []byte) error {
 		Alias
 		RawPriority json.RawMessage `json:"priority,omitempty"`
 		RawGrants   json.RawMessage `json:"grants,omitempty"`
+		// capabilities: is read as propose_task reads it
+		// (model.CapabilityEntries): strings and {capability, with}
+		// objects alike, so an object a bare name was wrapped in is
+		// refused saying how to write it, not with a Go decoding error.
+		RawCapabilities json.RawMessage `json:"capabilities,omitempty"`
 	}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
 	*r = CreateTaskRequest(aux.Alias)
+	if present(aux.RawCapabilities) {
+		var entries any
+		if err := json.Unmarshal(aux.RawCapabilities, &entries); err != nil {
+			return validationErrorf("capabilities: %v", err)
+		}
+		caps, err := model.CapabilityEntries(entries)
+		if err != nil {
+			return validationErrorf("%v", err)
+		}
+		if caps == nil {
+			caps = []string{}
+		}
+		r.Capabilities = &caps
+	}
 	if present(aux.RawGrants) {
 		got, err := decodeRequestGrants(aux.RawGrants, model.GrantSpelling{
 			Capabilities: r.Capabilities != nil,
