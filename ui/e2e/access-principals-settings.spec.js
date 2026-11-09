@@ -103,6 +103,48 @@ for (const [name, viewport] of [
       expect(roleBox.x).toBeGreaterThan(inputBox.x + inputBox.width - 1);
       expect(reasonBox.x).toBeGreaterThan(roleBox.x + roleBox.width - 1);
     }
+
+    // The access history sits in its own card below the list.
+    const history = await page.locator("#access-history").boundingBox();
+    expect(history.y).toBeGreaterThan(card.y + card.height - 1);
+    expect(history.x + history.width).toBeLessThanOrEqual(viewport.width + 1);
+
+    // Removing an operator entry opens the reason panel inside the card,
+    // its reason field and buttons within it, without sideways scroll;
+    // Cancel closes it and removes nothing.
+    await page
+      .getByRole("button", { name: "Remove user:alice@example.com" })
+      .click();
+    const panel = page.getByTestId("access-change-panel");
+    await expect(panel).toBeVisible();
+    const panelBox = await panel.boundingBox();
+    expect(panelBox.x).toBeGreaterThanOrEqual(card.x - 1);
+    expect(panelBox.x + panelBox.width).toBeLessThanOrEqual(
+      card.x + card.width + 1,
+    );
+    for (const el of [
+      page.getByTestId("access-change-reason"),
+      page.getByTestId("access-change-apply"),
+    ]) {
+      const box = await el.boundingBox();
+      expect(box.x).toBeGreaterThanOrEqual(panelBox.x - 1);
+      expect(box.x + box.width).toBeLessThanOrEqual(
+        panelBox.x + panelBox.width + 1,
+      );
+    }
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth >
+          document.documentElement.clientWidth + 1,
+      ),
+      "the page scrolls sideways with the reason panel open",
+    ).toBe(false);
+    await panel.getByRole("button", { name: "Cancel" }).click();
+    await expect(panel).toHaveCount(0);
+    await expect(
+      page.getByTestId("principal-row-user:alice@example.com"),
+    ).toBeVisible();
   });
 }
 
