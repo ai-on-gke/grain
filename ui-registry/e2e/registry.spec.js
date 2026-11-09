@@ -386,3 +386,63 @@ test("lays out delegation screens without overflow or misalignment at desktop an
     }
   }
 });
+
+test("brands the hub header and favicon with the grain mark in light and dark", async ({
+  browser,
+}) => {
+  for (const [theme, width] of [
+    ["light", 1440],
+    ["dark", 1440],
+    ["light", 390],
+    ["dark", 390],
+  ]) {
+    const context = await browser.newContext({
+      colorScheme: theme,
+      viewport: { width, height: 844 },
+    });
+    await context.addInitScript(
+      ([k, v]) => localStorage.setItem(k, v),
+      ["grain.themeMode", theme],
+    );
+    const page = await context.newPage();
+    await page.goto(demo.url);
+    await expect(page).toHaveTitle("Grain Hub");
+
+    const brand = page.getByRole("button", { name: "Grain Hub" });
+    await expect(brand).toBeVisible();
+    const mark = brand.locator("img.reg-brand-mark");
+    await expect(mark).toHaveAttribute("src", `/grain-mark-${theme}.svg`);
+    // Loaded, not a broken image: the file is ui/public's, copied in by
+    // vite's publicDir, and served by the embedded static handler.
+    await expect
+      .poll(() => mark.evaluate((img) => img.complete && img.naturalWidth))
+      .toBeGreaterThan(0);
+    const box = await mark.boundingBox();
+    expect(Math.round(box.width)).toBe(28);
+    expect(Math.round(box.height)).toBe(28);
+    // The mark sits beside the name, centred on it, inside the top bar.
+    const label = await brand.getByText("Grain Hub").boundingBox();
+    expect(box.x + box.width).toBeLessThanOrEqual(label.x);
+    expect(
+      Math.abs(box.y + box.height / 2 - (label.y + label.height / 2)),
+    ).toBeLessThanOrEqual(1);
+    const bar = await page.locator(".reg-topbar").boundingBox();
+    expect(box.y).toBeGreaterThanOrEqual(bar.y);
+    expect(box.y + box.height).toBeLessThanOrEqual(bar.y + bar.height);
+    expect(box.x).toBeGreaterThanOrEqual(0);
+
+    await expect(page.locator("link#favicon")).toHaveAttribute(
+      "href",
+      `/grain-mark-${theme}.svg`,
+    );
+    for (const asset of [
+      `/grain-mark-${theme}.svg`,
+      `/grain-mark-${theme}.png`,
+      "/apple-touch-icon.png",
+    ]) {
+      const res = await page.request.get(`${demo.url}${asset}`);
+      expect(res.status(), asset).toBe(200);
+    }
+    await context.close();
+  }
+});
