@@ -32,7 +32,7 @@ CI & PULL REQUEST (scoped to this task's repository and branch):
                                          A commit's check runs on the forge, every attempt of each
   grain ci log [<run-id> | --task <id>] [--repo <r>] [--job <j>] [--step <s>] [--attempt K] [--tail N | --lines N]
                                          List a run's jobs and steps, or print one step's log
-  grain ci test-history <test-name> [--limit N]
+  grain ci test-history <test-name> [--limit N] [--provider grain|github-actions]
                                          Pass/fail/flake history across recent CI runs
   grain ci artifact <job> <name> [-o <dest>] [--run <run-id> | --task <id>] [--repo <r>]
                                          Download a CI artifact
@@ -245,7 +245,7 @@ var sandboxCommandHelp = map[string]string{
 	"ci log": "grain ci log [<run-id> | --task <id>] [--repo owner/name] [--job <j>] [--step <s>] [--attempt K] [--tail N | --lines N]\n\nWith no run, the latest run on this task's branch (or --task's). A run is found in whichever\nrepository it belongs to that this task may read CI for; --repo names it outright. With no job, list the run's jobs;\nwith a job and no step, list its step logs; with both, print that step's log. A GitHub Actions run\n(gha:..., or its bare GitHub run id) keeps one log per job: --job prints it, and --step the lines that step\nwrote, found by the step's start and end times (--tail and --lines work on either as on any log).\n\n" +
 		byteRangeHelp + "\n" +
 		"  grain ci log --job go\n  grain ci log --job go --step Test --tail 8000\n  grain ci log --job go --step Test -n 50\n",
-	"ci test-history": "grain ci test-history <test-name> [--limit N] [--repo owner/name]\n\nPass, fail and flake history of one test across recent CI runs.\n",
+	"ci test-history": "grain ci test-history <test-name> [--limit N] [--repo owner/name] [--provider grain|github-actions]\n\nPass, fail and flake history of one test across recent CI runs. For a repository whose CI is\nGitHub Actions (ci_mode github) the runs are its workflow runs, with what grain recorded of\ntheir failed jobs' logs, and grain CI's older runs of it are left out (--provider grain reads\nthem). Grain keeps no log of an Actions job that passed, so there a test's failures are counted\nand its passes are not: the report names each source's runs and the window they span.\n",
 	"ci artifact":     "grain ci artifact <job> <name> [-o <dest>] [--run <run-id> | --task <id>] [--repo owner/name]\n\nDownload a stored CI artifact, to <dest> or stdout. With no run, the latest run on this task's branch (or --task's).\n",
 	"pr status":       "grain pr status [--task <id> | --ref <branch> [--repo owner/name]]\n\nThe latest grain CI run on this task's branch and each job's verdict -- or on another task's\nbranch (--task), or any branch (--ref, in --repo or this task's repository), where this task may read CI.\n",
 	"pr base-status":  "grain pr base-status\n\nThe latest grain CI run on this task's base branch and each job's verdict.\n",

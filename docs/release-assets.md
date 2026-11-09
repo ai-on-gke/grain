@@ -169,16 +169,16 @@ commit the git tag `latest` names, with copies of that commit's
 existed has no `sha-<short>` release; the automatic run warns and skips
 it, and asking for it by name fails.
 
-`promote.yml` and `publish-release.yml`, and `release-train-assets.yml`
-for an rc tag, also build the release's grain CLI in a `cli` job holding
-only `contents: read` (`scripts/build-cli.sh`, `RELEASE=<release>`) and
-hand it to a `cli-assets` job that runs `scripts/release-assets.sh
-cli-publish` once the release itself is published. `promote-release.yml`
-builds none: a release it approves gets its CLI from `promote.yml`'s next
-run, which publishes it for the release the git tag `latest` names. Both
-jobs are skipped once the release carries its `checksums.txt`;
-`promote.yml`'s automatic run skips a release that does not exist
-(`RELEASE_CLI_SKIP_UNRELEASED=true`), as `promote` does. Every
+`promote.yml`, `promote-release.yml` and `publish-release.yml`, and
+`release-train-assets.yml` for an rc tag, also build the release's grain
+CLI in a `cli` job holding only `contents: read` (`scripts/build-cli.sh`,
+`RELEASE=<release>`) and hand it to a `cli-assets` job that runs
+`scripts/release-assets.sh cli-publish` once the release itself is
+published, so `GET /cli/install.sh` works as soon as a promotion or rc
+publish finishes. Both jobs are skipped once the release carries its
+`checksums.txt`; `promote.yml`'s automatic run skips both building and
+publishing when neither the GitHub Release nor its `sha-<short>` assets
+exist (`RELEASE_CLI_SKIP_UNRELEASED=true`), as `promote` does. Every
 `cli-assets` job queues in one concurrency group per release
 (`grain-cli-assets-<release>`), so no two runs upload the same release's
 CLI at once.

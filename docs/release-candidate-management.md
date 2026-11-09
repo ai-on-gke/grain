@@ -165,7 +165,13 @@ qualification, or that a person rejects, is dropped and a later run cuts
   run from `RELEASE_QUALIFICATION_APP` is not `completed`, Phase 2 cuts nothing, logs
   `phase 2: vX.Y.0-rc.(N+1) is held by grain/rc-hold on <floor>: <summary>`,
   emits `rc_held=vX.Y.0-rc.(N+1)` and exits 0. No check run from
-  `RELEASE_QUALIFICATION_APP` means no hold.
+  `RELEASE_QUALIFICATION_APP` means no hold, except in the run whose Phase 1
+  dropped `rc.N` itself: grain has not read the red verdict yet, so that run
+  logs `phase 2: vX.Y.0-rc.(N+1) waits for the next run: ...`, emits
+  `rc_held=vX.Y.0-rc.(N+1)` and cuts nothing, and the next run reads the hold
+  (or, with grain down and still no hold, cuts). Stage 1 is watched as well as
+  Stage 2 (`pkg/orchestrator/releasestage1.go`): a `nightly.yml` job that
+  fails its one retry raises `pipeline.rc-failed` and posts the same hold.
 - **Converging `rc.3` on `release/vX.Y.0`.** After `rc.2` is dropped, Phase 2
   creates the short-lived `release/vX.Y.0` branch from `rc.2`'s commit and
   cuts `rc.3` from cherry-picked `fix:` commits (`Backported-from: <sha>`) on
