@@ -162,6 +162,17 @@ func configureGitProxyDemo(dir string, store *model.Store, repo model.RepoRef, b
 		CLI:         cliBackend,
 		WaitCredit:  p,
 		API:         api,
+		// grain/config, served from the controller's own checkout as the
+		// daemon serves it (pkg/daemon/servers.go), once -config-change
+		// has made it a real repository. Without it the remote
+		// POST /api/e2e/git-proxy/runs hands a grain/config task was
+		// forwarded to the simulated GitHub, which answered 404
+		// (docs/test-runs/2026-11-09-demo-config-change.md, finding 1).
+		Local: &gitproxy.LocalRepository{
+			Owner: model.ConfigRepo().Owner, Name: model.ConfigRepo().Name,
+			Dir:     daemon.StateRepoDir(dir),
+			Enabled: func() bool { return demoStateRepoIsReal(dir) },
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("building the git proxy: %w", err)
