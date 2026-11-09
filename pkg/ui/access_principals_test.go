@@ -200,8 +200,12 @@ func TestAllowedPrincipalsLiveEnforcementEqualPrivilegesAndIdempotency(t *testin
 	if rec := serveFrom(srv, "203.0.113.10:443", http.MethodPost, "/api/access/principals", `{"entry":"user:bob@example.com","role":"grain/contributor"}`, aliceHeaders); rec.Code != http.StatusCreated {
 		t.Fatalf("listed user POST bob: got %d, want 201: %s", rec.Code, rec.Body)
 	}
-	if rec := serveFrom(srv, "203.0.113.10:443", http.MethodPost, "/api/access/principals", `{"entry":"user:carol@example.com","reason":"x"}`, aliceHeaders); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "access-code admin") {
-		t.Fatalf("listed user POST carol at grain/operator: got %d %s, want 403 naming the access-code admin", rec.Code, rec.Body)
+	// alice holds grain/operator, so alice may give it -- with a reason.
+	if rec := serveFrom(srv, "203.0.113.10:443", http.MethodPost, "/api/access/principals", `{"entry":"user:carol@example.com"}`, aliceHeaders); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "reason") {
+		t.Fatalf("listed user POST carol at grain/operator without a reason: got %d %s, want 400 naming the reason", rec.Code, rec.Body)
+	}
+	if rec := serveFrom(srv, "203.0.113.10:443", http.MethodPost, "/api/access/principals", `{"entry":"user:carol@example.com","reason":"x"}`, aliceHeaders); rec.Code != http.StatusCreated {
+		t.Fatalf("listed user POST carol at grain/operator with a reason: got %d %s, want 201", rec.Code, rec.Body)
 	}
 
 	// 4. Group member teammate@example.com is immediately admitted without restart;
@@ -228,13 +232,14 @@ func TestAllowedPrincipalsLiveEnforcementEqualPrivilegesAndIdempotency(t *testin
 		t.Fatalf("removed bob GET /api/tasks: got %d, want 403: %s", rec.Code, rec.Body)
 	}
 
-	// 6. An entry at grain/operator -- alice's own -- only the access code
-	// removes; removing the last entry leaves the access code working.
+	// 6. alice's own entry at grain/operator: alice removes it only with a
+	// reason and a confirmation; the access code removes it outright, and
+	// removing every entry leaves the access code working.
 	if rec := serveFrom(srv, "203.0.113.10:443", http.MethodDelete, "/api/access/principals/"+url.PathEscape("group:team@example.com"), "", aliceHeaders); rec.Code != http.StatusOK {
 		t.Fatalf("listed user DELETE group: got %d, want 200: %s", rec.Code, rec.Body)
 	}
-	if rec := serveFrom(srv, "203.0.113.10:443", http.MethodDelete, "/api/access/principals/"+url.PathEscape("user:alice@example.com"), "", aliceHeaders); rec.Code != http.StatusForbidden {
-		t.Fatalf("listed user self-DELETE at grain/operator: got %d, want 403: %s", rec.Code, rec.Body)
+	if rec := serveFrom(srv, "203.0.113.10:443", http.MethodDelete, "/api/access/principals/"+url.PathEscape("user:alice@example.com")+"?reason=leaving", "", aliceHeaders); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "confirm_self") {
+		t.Fatalf("listed user self-DELETE at grain/operator unconfirmed: got %d, want 403 confirm_self: %s", rec.Code, rec.Body)
 	}
 	if rec := serveFrom(srv, "127.0.0.1:4242", http.MethodDelete, "/api/access/principals/"+url.PathEscape("user:alice@example.com"), "", bearer); rec.Code != http.StatusOK {
 		t.Fatalf("access code DELETE alice (last entry): got %d, want 200: %s", rec.Code, rec.Body)

@@ -132,6 +132,20 @@ type accessRole struct {
 	DelegatingApp string
 	ViaLabel      string
 	ViaAccess     string
+	// matches reports whether an allowlist entry admits this session --
+	// its own user: entry, or a group: it is a member of -- so a change
+	// to the list can tell an entry that is the caller's own
+	// (docs/design/access-rbac.md §3). Nil matches the user: entry only.
+	matches func(ctx context.Context, entry string) (bool, error)
+}
+
+// matchesEntry reports whether entry admits the session a describes. A
+// group whose membership cannot be looked up is reported with the error.
+func (a *accessRole) matchesEntry(ctx context.Context, entry string) (bool, error) {
+	if a.matches != nil {
+		return a.matches(ctx, entry)
+	}
+	return strings.EqualFold(entry, "user:"+a.Who), nil
 }
 
 // allows reports whether the role grants scope on repo.
@@ -473,9 +487,35 @@ func (s *Server) admitVerifiedPrincipal(ctx context.Context, id VerifiedIdentity
 		return err
 	}
 	if slot, ok := ctx.Value(accessRoleSlotKey{}).(*accessRoleSlot); ok && slot != nil {
-		slot.role = resolveAccessRoles(normalizeIdentityEmail(id.Email), roles)
+		email := normalizeIdentityEmail(id.Email)
+		slot.role = resolveAccessRoles(email, roles)
+		slot.role.matches = s.entryMatcher(id.Kind, email)
 	}
 	return nil
+}
+
+// entryMatcher is accessRole.matches for a verified session of kind as
+// email: the entry naming it directly, or a group: entry it is a member of
+// (groups never admit a service account, docs/design/access-rbac.md §2).
+func (s *Server) entryMatcher(kind model.PrincipalKind, email string) func(ctx context.Context, entry string) (bool, error) {
+	return func(ctx context.Context, entry string) (bool, error) {
+		prefix, value, ok := strings.Cut(entry, ":")
+		if !ok {
+			return false, nil
+		}
+		switch prefix {
+		case "user":
+			return kind == model.PrincipalHuman && strings.EqualFold(value, email), nil
+		case "serviceAccount":
+			return kind == model.PrincipalService && strings.EqualFold(value, email), nil
+		case "group":
+			if kind != model.PrincipalHuman {
+				return false, nil
+			}
+			return s.groupChecker().IsMember(ctx, value, email)
+		}
+		return false, nil
+	}
 }
 
 // externalTokenOwnerCap refuses an external agent token wider than its

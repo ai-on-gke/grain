@@ -604,10 +604,14 @@ var routeQueries = map[string]map[string]string{
 	"GET /api/deployment/config-audit": listQueryDocs("actor, surface or summary", listPageLarge, nil),
 	"GET /api/external-agents/tokens":  listQueryDocs("id, name, owner or scope set", listPageMedium, nil),
 	"GET /api/access/principals":       listObjectQueryDocs("principal entry, role, reason or addedBy", listPageMedium, nil),
-	"GET /api/hostds":                  listQueryDocs("host name or owner", listPageMedium, nil),
-	"GET /api/gcp-keys":                listQueryDocs("key name, project id or service account email", listPageMedium, nil),
-	"GET /api/github-tokens":           listObjectQueryDocs("credential name, capability or connection scope", listPageMedium, nil),
-	"GET /api/secrets":                 listObjectQueryDocs("secret name or key", listPageMedium, nil),
+	"DELETE /api/access/principals/{entry}": {
+		"reason":      "Why the entry is removed; required when its role holds a dangerous scope or denies scopes and a signed-in admin removes it.",
+		"confirmSelf": "1 to confirm removing an entry that matches the caller itself.",
+	},
+	"GET /api/hostds":        listQueryDocs("host name or owner", listPageMedium, nil),
+	"GET /api/gcp-keys":      listQueryDocs("key name, project id or service account email", listPageMedium, nil),
+	"GET /api/github-tokens": listObjectQueryDocs("credential name, capability or connection scope", listPageMedium, nil),
+	"GET /api/secrets":       listObjectQueryDocs("secret name or key", listPageMedium, nil),
 	"GET /api/agent-models": listObjectQueryDocs("model id, label or family", listPageMedium, map[string]string{
 		"framework": "Only this framework's models.",
 		"backend":   "Only this model connection's models.",

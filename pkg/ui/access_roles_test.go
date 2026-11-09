@@ -296,7 +296,7 @@ func TestEntriesFromBeforeRolesKeepFullAccess(t *testing.T) {
 	}
 }
 
-func TestOnlyTheAccessCodeLiftsADeny(t *testing.T) {
+func TestAnAdminLiftsADenyOnlyOnOthersAndWithAReason(t *testing.T) {
 	installScopeSets(t,
 		model.APIScopeSet{Name: "contractors", Includes: []string{"grain/viewer"}, Deny: []string{"tasks:write"}, Version: 1},
 		model.APIScopeSet{Name: "access-admins", Includes: []string{"grain/contributor"}, Scopes: []string{"access:write"}, Version: 1})
@@ -311,21 +311,124 @@ func TestOnlyTheAccessCodeLiftsADeny(t *testing.T) {
 	if got := h.access(t, "lead@example.com"); got == nil || slices.Contains(got.Scopes, "tasks:write") {
 		t.Fatalf("lead's access = %+v, want tasks:write withheld by the contractors group", got)
 	}
-	// The deny grants nothing, so it is "no wider" than anybody's role;
-	// re-roling or removing it would still give lead -- and everybody
-	// else in the group -- what it withholds.
+	// lead is in the group: lifting its deny would widen lead, so lead
+	// may not, reason or none.
 	group := "/api/access/principals/" + url.PathEscape("group:contractors@example.com")
-	for _, as := range []string{"lead@example.com", "ops@example.com"} {
-		if code, body := h.call(as, http.MethodPatch, group, `{"role":"grain/viewer"}`); code != http.StatusForbidden || !strings.Contains(body, "denies") {
-			t.Fatalf("%s PATCH a denying entry: %d %s, want 403", as, code, body)
-		}
-		if code, body := h.call(as, http.MethodDelete, group, ""); code != http.StatusForbidden || !strings.Contains(body, "denies") {
-			t.Fatalf("%s DELETE a denying entry: %d %s, want 403", as, code, body)
+	if code, body := h.call("lead@example.com", http.MethodPatch, group, `{"role":"grain/viewer","reason":"done"}`); code != http.StatusForbidden || !strings.Contains(body, "yourself") {
+		t.Fatalf("lead PATCH a denying entry matching lead: %d %s, want 403", code, body)
+	}
+	if code, body := h.call("lead@example.com", http.MethodDelete, group+"?reason=done", ""); code != http.StatusForbidden || !strings.Contains(body, "yourself") {
+		t.Fatalf("lead DELETE a denying entry matching lead: %d %s, want 403", code, body)
+	}
+	// ops is not in it, and holds tasks:write: ops lifts it with a reason.
+	if code, body := h.call("ops@example.com", http.MethodPatch, group, `{"role":"grain/viewer"}`); code != http.StatusBadRequest || !strings.Contains(body, "reason") {
+		t.Fatalf("ops PATCH a denying entry without a reason: %d %s, want 400", code, body)
+	}
+	if code, body := h.call("ops@example.com", http.MethodDelete, group, ""); code != http.StatusBadRequest || !strings.Contains(body, "reason") {
+		t.Fatalf("ops DELETE a denying entry without a reason: %d %s, want 400", code, body)
+	}
+	if code, body := h.call("ops@example.com", http.MethodDelete, group+"?reason=contract+ended", ""); code != http.StatusOK {
+		t.Fatalf("ops DELETE a denying entry with a reason: %d %s", code, body)
+	}
+	// ... and adds one back on others the same way.
+	if code, body := h.call("ops@example.com", http.MethodPost, "/api/access/principals", `{"entry":"group:contractors@example.com","role":"contractors","reason":"new contract"}`); code != http.StatusCreated {
+		t.Fatalf("ops POST a denying entry with a reason: %d %s", code, body)
+	}
+	audits, err := h.client.Store.ConfigAudit(context.Background(), 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawRemove bool
+	for _, a := range audits {
+		if a.Surface == "access" && a.By.ID == "ops@example.com" && a.Summary == "removed group:contractors@example.com (was contractors) (contract ended)" {
+			sawRemove = true
 		}
 	}
-	bearer := map[string]string{"Authorization": "Bearer " + testAccessCode, "Content-Type": "application/json"}
-	if rec := serveFrom(h.srv, "127.0.0.1:4242", http.MethodDelete, group, "", bearer); rec.Code != http.StatusOK {
-		t.Fatalf("access code DELETE a denying entry: %d %s", rec.Code, rec.Body.String())
+	if !sawRemove {
+		t.Fatalf("config_audit = %+v, want the removal with its old role and reason", audits)
+	}
+}
+
+// TestAVerifiedAdminChangesAnotherAdmin is the operator signed in through
+// a verifier changing another admin's role (docs/design/access-rbac.md
+// §3): allowed and audited with a reason, refused without one, refused
+// when it widens the caller's own entry, when it leaves no full admin, when
+// the caller's own role is narrower, and to an agent.
+func TestAVerifiedAdminChangesAnotherAdmin(t *testing.T) {
+	installScopeSets(t, model.APIScopeSet{Name: "access-admins", Includes: []string{"grain/contributor"},
+		Scopes: []string{"access:write"}, Version: 1})
+	h := newRoleHarness(t)
+	h.client.Config.GroupChecker = groupCheckerFunc(func(_ context.Context, group, member string) (bool, error) {
+		return group == "admins@example.com" && member == "ops@example.com", nil
+	})
+	h.allow(t, "user:ops@example.com", model.DefaultAccessRole)
+	h.allow(t, "user:other@example.com", model.DefaultAccessRole)
+	h.allow(t, "user:lead@example.com", "access-admins")
+	path := func(entry string) string { return "/api/access/principals/" + url.PathEscape(entry) }
+
+	// Another admin: needs a reason, then is changed and audited.
+	if code, body := h.call("ops@example.com", http.MethodPatch, path("user:other@example.com"), `{"role":"grain/viewer"}`); code != http.StatusBadRequest || !strings.Contains(body, "reason") {
+		t.Fatalf("ops PATCH another admin without a reason: %d %s, want 400", code, body)
+	}
+	if code, body := h.call("ops@example.com", http.MethodPatch, path("user:other@example.com"), `{"role":"grain/viewer","reason":"left the on-call rota"}`); code != http.StatusOK {
+		t.Fatalf("ops PATCH another admin with a reason: %d %s", code, body)
+	}
+	if code, body := h.call("ops@example.com", http.MethodPatch, path("user:other@example.com"), `{"role":"grain/operator","reason":"back on call"}`); code != http.StatusOK {
+		t.Fatalf("ops PATCH another entry up to grain/operator: %d %s", code, body)
+	}
+	audits, err := h.client.Store.ConfigAudit(context.Background(), 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawDown, sawUp bool
+	for _, a := range audits {
+		if a.Surface != "access" || a.By.Kind != model.PrincipalHuman || a.By.ID != "ops@example.com" || a.At.IsZero() {
+			continue
+		}
+		sawDown = sawDown || a.Summary == "role user:other@example.com grain/operator -> grain/viewer (left the on-call rota)"
+		sawUp = sawUp || a.Summary == "role user:other@example.com grain/viewer -> grain/operator (back on call)"
+	}
+	if !sawDown || !sawUp {
+		t.Fatalf("config_audit = %+v, want both changes by ops with old and new role and reason", audits)
+	}
+
+	// A narrower caller neither changes an admin nor gives the role.
+	if code, body := h.call("lead@example.com", http.MethodPatch, path("user:other@example.com"), `{"role":"grain/viewer","reason":"x"}`); code != http.StatusForbidden || !strings.Contains(body, "wider than") {
+		t.Fatalf("lead PATCH an admin: %d %s, want 403", code, body)
+	}
+	if code, body := h.call("lead@example.com", http.MethodPost, "/api/access/principals", `{"entry":"user:new@example.com","reason":"x"}`); code != http.StatusForbidden || !strings.Contains(body, "wider than") {
+		t.Fatalf("lead POST at grain/operator: %d %s, want 403", code, body)
+	}
+
+	// Self: widening an entry matching the caller is refused, even a
+	// group the caller is in; narrowing it asks for confirmation.
+	h.allow(t, "group:admins@example.com", "grain/viewer")
+	if code, body := h.call("ops@example.com", http.MethodPatch, path("group:admins@example.com"), `{"role":"grain/contributor","reason":"x"}`); code != http.StatusForbidden || !strings.Contains(body, "self_escalation") {
+		t.Fatalf("ops PATCH its own group wider: %d %s, want 403 self_escalation", code, body)
+	}
+	if code, body := h.call("ops@example.com", http.MethodDelete, path("group:admins@example.com"), ""); code != http.StatusForbidden || !strings.Contains(body, "confirm_self") {
+		t.Fatalf("ops DELETE its own group unconfirmed: %d %s, want 403 confirm_self", code, body)
+	}
+	if code, body := h.call("ops@example.com", http.MethodDelete, path("group:admins@example.com")+"?confirmSelf=1", ""); code != http.StatusOK {
+		t.Fatalf("ops DELETE its own group confirmed: %d %s", code, body)
+	}
+
+	// The last full admin is never removed or narrowed by a session.
+	if code, body := h.call("ops@example.com", http.MethodDelete, path("user:other@example.com")+"?reason=offboarded", ""); code != http.StatusOK {
+		t.Fatalf("ops DELETE another admin: %d %s", code, body)
+	}
+	if code, body := h.call("ops@example.com", http.MethodPatch, path("user:ops@example.com"), `{"role":"grain/viewer","reason":"x","confirmSelf":true}`); code != http.StatusForbidden || !strings.Contains(body, "last_admin") || !strings.Contains(body, "access code") {
+		t.Fatalf("ops PATCH the last admin narrower: %d %s, want 403 last_admin naming the access code", code, body)
+	}
+	if code, body := h.call("ops@example.com", http.MethodDelete, path("user:ops@example.com")+"?reason=x&confirmSelf=1", ""); code != http.StatusForbidden || !strings.Contains(body, "last_admin") {
+		t.Fatalf("ops DELETE the last admin: %d %s, want 403 last_admin", code, body)
+	}
+
+	// An agent, even with a person-granted access:write and a reason,
+	// changes nothing.
+	seedAPITask(t, h.client, "9", "acme/widgets", "api:access:read", "api:access:write")
+	if code, body := asAgent(t, h.srv, "9", http.MethodPatch, path("user:lead@example.com"), `{"role":"grain/viewer","reason":"x"}`, "rotation"); code != http.StatusForbidden {
+		t.Fatalf("agent PATCH: %d %s, want 403", code, body)
 	}
 }
 
@@ -353,11 +456,15 @@ func TestRoleAssignmentRules(t *testing.T) {
 	if code, body := viaCode(http.MethodPatch, entry, `{"role":"no/such-set","reason":"x"}`); code != http.StatusBadRequest {
 		t.Fatalf("PATCH to a role naming no set: %d %s", code, body)
 	}
-	// A verified operator gives no role holding a dangerous scope.
-	if code, body := h.call("ops@example.com", http.MethodPatch, entry, `{"role":"grain/operator","reason":"promote"}`); code != http.StatusForbidden || !strings.Contains(body, "access-code admin") {
+	// A verified operator gives a role holding a dangerous scope only
+	// with a reason.
+	if code, body := h.call("ops@example.com", http.MethodPatch, entry, `{"role":"grain/operator"}`); code != http.StatusBadRequest || !strings.Contains(body, "reason") {
+		t.Fatalf("verified operator PATCH to grain/operator without a reason: %d %s", code, body)
+	}
+	if code, body := h.call("ops@example.com", http.MethodPatch, entry, `{"role":"grain/operator","reason":"promote"}`); code != http.StatusOK {
 		t.Fatalf("verified operator PATCH to grain/operator: %d %s", code, body)
 	}
-	if code, body := h.call("ops@example.com", http.MethodPatch, entry, `{"role":"grain/contributor"}`); code != http.StatusOK {
+	if code, body := h.call("ops@example.com", http.MethodPatch, entry, `{"role":"grain/contributor","reason":"demote"}`); code != http.StatusOK {
 		t.Fatalf("verified operator PATCH to grain/contributor: %d %s", code, body)
 	}
 	// access-admins holds access:write, so it is a person-only role
@@ -374,9 +481,13 @@ func TestRoleAssignmentRules(t *testing.T) {
 	if code, body := viaCode(http.MethodPatch, entry, `{"role":"grain/operator","reason":"on-call"}`); code != http.StatusOK {
 		t.Fatalf("access code PATCH to grain/operator with a reason: %d %s", code, body)
 	}
-	// An entry at a dangerous role only the access code removes.
-	if code, _ := h.call("ops@example.com", http.MethodDelete, entry, ""); code != http.StatusForbidden {
-		t.Fatalf("verified operator DELETE an operator entry: %d, want 403", code)
+	// An entry at a dangerous role a verified session removes only with
+	// a reason, and only when its own role is no narrower.
+	if code, body := h.call("lead@example.com", http.MethodDelete, entry+"?reason=x", ""); code != http.StatusForbidden {
+		t.Fatalf("access-admins DELETE an operator entry: %d %s, want 403", code, body)
+	}
+	if code, body := h.call("ops@example.com", http.MethodDelete, entry, ""); code != http.StatusBadRequest {
+		t.Fatalf("verified operator DELETE an operator entry without a reason: %d %s, want 400", code, body)
 	}
 
 	audits, err := h.client.Store.ConfigAudit(context.Background(), 20)
