@@ -135,6 +135,12 @@ func configureConfigChangeDemo(ctx context.Context, dir string, db *sql.DB, stor
 	}
 	cfg.StateRepo = manager
 	cfg.StateRepoRef = func() model.RepoRef { return model.ConfigRepo() }
+	// The daemon lists grain/config's branches from this same checkout
+	// (daemon.repoBranchGate); without it every page about a config task
+	// asked for them, got "branch listing is not available for the
+	// internal config repository" and logged the 404 (2026-11-09 intake
+	// walkthrough).
+	cfg.RepoBranches = configRepoBranches{local: manager, next: cfg.RepoBranches}
 
 	client := ui.NewClient(*cfg, store)
 	for _, p := range configChangeDemoProposals() {
@@ -143,6 +149,28 @@ func configureConfigChangeDemo(ctx context.Context, dir string, db *sql.DB, stor
 		}
 	}
 	return nil
+}
+
+// configRepoBranches is ui.Config.RepoBranches for -config-change: the
+// throwaway grain/config's branches from its own checkout, as the
+// daemon's repoBranchGate reads them, and every other repository left to
+// whatever source was there before.
+type configRepoBranches struct {
+	local interface {
+		Branches(ctx context.Context) ([]string, error)
+	}
+	next ui.RepoBranchSource
+}
+
+func (b configRepoBranches) RepoBranches(ctx context.Context, repo model.RepoRef) ([]string, bool, error) {
+	if model.IsConfigRepo(repo) {
+		names, err := b.local.Branches(ctx)
+		return names, true, err
+	}
+	if b.next == nil {
+		return nil, false, nil
+	}
+	return b.next.RepoBranches(ctx, repo)
 }
 
 // seedConfigChangeProposal files p's task, pushes its proposal branch

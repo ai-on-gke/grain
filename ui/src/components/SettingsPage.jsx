@@ -125,6 +125,15 @@ const SECTION_WRITE_SCOPE = {
   hostds: "capabilities:admin",
 };
 
+// SECTION_ROLE_READ_ONLY says what a refused section's note covers,
+// where that is not the whole section: Capabilities' Deployment
+// credentials card follows settings:write and secrets:write instead
+// (CredentialsSection), and says so itself where those are refused.
+const SECTION_ROLE_READ_ONLY = {
+  capabilities:
+    "Capability servers, the capability policy and API scope sets are read-only for you.",
+};
+
 // Sections that read GET /api/settings, and so wait for it.
 const READS_SETTINGS = new Set([
   "general",
@@ -222,6 +231,10 @@ export default function SettingsPage({
     : "";
   const readOnly = external || configManaged || Boolean(roleRefusal);
   s.readOnly = readOnly;
+  // What is read-only for everybody, whatever their role: the
+  // Deployment credentials card follows its own write scopes rather than
+  // Capabilities' capabilities:admin (below), so it reads this instead.
+  s.readOnlyForAnyRole = external || configManaged;
   // configLocked is for the sections that mix bootstrap settings with
   // config-managed ones (Engine, Sandboxes, Capabilities' Deployment credentials): the
   // API refuses a change to the config-managed fields while this is on
@@ -230,9 +243,10 @@ export default function SettingsPage({
   // editable.
   s.configLocked = configRepoOnly;
   // Capabilities' Deployment credentials card writes through routes of
-  // their own beside the section's capabilities:admin -- PUT
+  // its own instead of the section's capabilities:admin -- PUT
   // /api/settings and /api/secrets (pkg/ui/route_scopes.go) -- so it is
-  // told what the role refuses there too (CredentialsSection).
+  // gated on what the role refuses there (CredentialsSection), and is
+  // writable to a role holding those scopes without capabilities:admin.
   s.settingsWriteRefusal = accessDeniedReason(config, "settings:write");
   s.secretsWriteRefusal = accessDeniedReason(config, "secrets:write");
 
@@ -808,7 +822,7 @@ export default function SettingsPage({
             sx={{ mb: 2 }}
             data-testid="settings-role-read-only"
           >
-            {`Read-only for you. ${roleRefusal} An operator can change your role in Settings → Access.`}
+            {`${SECTION_ROLE_READ_ONLY[current] || "Read-only for you."} ${roleRefusal} An operator can change your role in Settings → Access.`}
           </Alert>
         )}
         <SettingsRoleRefusalContext.Provider value={roleRefusal}>
