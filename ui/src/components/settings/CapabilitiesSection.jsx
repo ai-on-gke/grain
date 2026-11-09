@@ -17,7 +17,10 @@ import { Alert } from "@mui/material";
 import CapabilityServersPanel from "../CapabilityServersPanel.jsx";
 import CapabilityPolicyEditor from "../CapabilityPolicyEditor.jsx";
 import ApiScopeSetsPanel from "../ApiScopeSetsPanel.jsx";
-import SettingsCard, { SettingsReadOnlyContext } from "./SettingsCard.jsx";
+import SettingsCard, {
+  SettingsReadOnlyContext,
+  SettingsRoleRefusalContext,
+} from "./SettingsCard.jsx";
 import CredentialsSection from "./CredentialsSection.jsx";
 
 // CapabilitiesSection is Settings → Capabilities: the capability-server
@@ -164,12 +167,19 @@ export default function CapabilitiesSection({
           readOnly={effectiveReadOnly}
         />
       </SettingsCard>
+      {/* The Deployment credentials card writes through PUT /api/settings
+          and /api/secrets, not the capabilities:admin routes above, so the
+          section's refusal does not reach it: it holds its fields to
+          settings:write and its secrets to secrets:write itself
+          (2026-11-08 deployment credentials walkthrough, F5). */}
       {s?.settings && (
-        <CredentialsSection
-          s={s}
-          claimedSecrets={claimedSecrets}
-          secretsSeq={secretsSeq}
-        />
+        <SettingsRoleRefusalContext.Provider value="">
+          <CredentialsSection
+            s={s}
+            claimedSecrets={claimedSecrets}
+            secretsSeq={secretsSeq}
+          />
+        </SettingsRoleRefusalContext.Provider>
       )}
     </>
   );

@@ -239,7 +239,7 @@ variable "hosted_subnet_cidr" {
 }
 
 variable "manage_hosted_project_iam" {
-  description = "Bind roles/compute.instanceAdmin.v1, roles/iam.serviceAccountAdmin and roles/iam.serviceAccountUser in hosted_project_id to the registry VM service account (requires resourcemanager.projects.setIamPolicy there). Set false when an administrator grants them out of band (see README)."
+  description = "Bind roles/compute.instanceAdmin.v1 and roles/iam.serviceAccountAdmin in hosted_project_id to the registry VM service account (requires resourcemanager.projects.setIamPolicy there). Set false when an administrator grants them out of band (see README)."
   type        = bool
   default     = false
 }
