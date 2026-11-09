@@ -211,7 +211,7 @@ func TestRegistryCLIRegisterStatusUnregister(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	if !strings.Contains(outText, "Registry: disabled") {
+	if !strings.Contains(outText, "Hub: disabled") {
 		t.Fatalf("initial status = %q, want disabled", outText)
 	}
 
