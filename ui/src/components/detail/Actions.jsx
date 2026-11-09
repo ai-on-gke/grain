@@ -96,10 +96,46 @@ function sentenceCase(s) {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 }
 
+// runNowIsStale is whether t's Run now request is one a run was already
+// started for and gave back (ui.Task.RunNowStale): no newer than the
+// start of one of t's attempts. Dispatch holds such a request to the
+// retry backoff or its suspension's resume time, so the pane keeps Run
+// now offered -- pressing it re-stamps the request, which starts at once
+// -- and says what holds the task rather than promising the next cycle.
+// The attempts are read too, for a server that does not send the flag.
+export function runNowIsStale(t) {
+  if (!t?.runNowAt) return false;
+  if (t.runNowStale) return true;
+  const asked = Date.parse(t.runNowAt);
+  if (!Number.isFinite(asked) || !Array.isArray(t.attempts)) return false;
+  return t.attempts.some((a) => {
+    const started = Date.parse(a?.startedAt);
+    return Number.isFinite(started) && asked <= started;
+  });
+}
+
+// runNowHint is what the pane says under Run now while t has a request
+// standing: that it was asked for, or -- for a stale one -- what is
+// actually holding the task.
+function runNowHint(t, stale) {
+  if (isTaskPaused(t)) {
+    return "Asked for a run. It starts ahead of the queue once this task is resumed.";
+  }
+  if (!stale) {
+    return "Asked for a run. It starts on the next dispatch cycle, or as soon as there is capacity for it.";
+  }
+  const holding =
+    t.activityBySetup && t.activity
+      ? ` It is ${t.activity.replace(/^waiting: /, "")}.`
+      : " It waits out the retry backoff that run earned.";
+  return `A run was already started for the last Run now and gave it back.${holding} Press Run now to start it now.`;
+}
+
 export default function Actions({ t, config, act, onOpenTask }) {
   const zone = useTimeZone();
   const closable = closablePullRequest(t);
   const frameworkPaused = taskPause(t, config);
+  const staleRunNow = runNowIsStale(t);
   const [closePullRequest, setClosePullRequest] = useState(false);
   // The wake date beside the Defer button, local to this overlay for
   // closePullRequest's own reason: it is a choice about this deferral,
@@ -880,7 +916,7 @@ export default function Actions({ t, config, act, onOpenTask }) {
         <AccessGate scope="dispatch:write" repo={t.repo}>
           <Button
             variant="outlined"
-            disabled={Boolean(t.runNowAt)}
+            disabled={Boolean(t.runNowAt) && !staleRunNow}
             title={
               t.pullRequest
                 ? `Put an agent on this task next, ahead of the queue. Work continues on the branch ${t.pullRequest} is open from, and nothing merges it while that run is in flight.`
@@ -900,13 +936,10 @@ export default function Actions({ t, config, act, onOpenTask }) {
       {/* The seconds between the click and a dispatch cycle picking the
           task up, which is the one stretch where a button that worked
           looks like one that did not (ui.TaskDetail.RunNowAt -- the
-          request, cleared the moment its run starts). */}
+          request, cleared the moment its run starts) -- or, for a request
+          a run already gave back, what is holding the task now. */}
       {t.runNowAt && t.state !== "running" && (
-        <p className="hint">
-          {isTaskPaused(t)
-            ? "Asked for a run. It starts ahead of the queue once this task is resumed."
-            : "Asked for a run. It starts on the next dispatch cycle, or as soon as there is capacity for it."}
-        </p>
+        <p className="hint run-now-hint">{runNowHint(t, staleRunNow)}</p>
       )}
       {/* Manual mode: under a pause Run now passes, this is the button
           that starts this task, and nothing else will; under an
