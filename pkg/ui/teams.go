@@ -55,9 +55,10 @@ type Team struct {
 	DefaultModels    []string `json:"defaultModels,omitempty"`
 	// ModelSettings is the deployment's per-model settings
 	// (model.Config.ModelSettings, docs/connections-and-models.md).
-	ModelSettings  []model.ModelSetting      `json:"modelSettings,omitempty"`
-	GitCredential  string                    `json:"gitCredential,omitempty"`
-	GitConnections []model.TeamGitConnection `json:"gitConnections,omitempty"`
+	ModelSettings            []model.ModelSetting      `json:"modelSettings,omitempty"`
+	GitCredential            string                    `json:"gitCredential,omitempty"`
+	GitConnections           []model.TeamGitConnection `json:"gitConnections,omitempty"`
+	RequireUserGitCredential bool                      `json:"requireUserGitCredential,omitempty"`
 	// HasGitCredential is whether the deployment holds any git
 	// connection on its default host -- GitConnections or the legacy
 	// GitCredential (model.Config.HasGitConnectionOn). It is what the
@@ -105,25 +106,26 @@ func teamFrom(cfg model.Config, defaultHost string) Team {
 	configCloneURL := "/" + configRepo + ".git"
 	cloneCommand := "git clone " + configCloneURL
 	return Team{
-		ID:               model.DefaultTeamID,
-		Name:             cfg.EnvironmentName,
-		ConfigRepo:       configRepo,
-		ConfigCloneURL:   configCloneURL,
-		CloneCommand:     cloneCommand,
-		RepairTemplateID: cfg.RepairTemplateID,
-		AgentFramework:   cfg.AgentFramework,
-		AgentBackendID:   cfg.AgentBackendID,
-		DefaultModel:     model.NormalizeDefaultModel(cfg.DefaultModel),
-		DefaultModels:    cfg.DefaultModels(),
-		ModelSettings:    cfg.ModelSettings,
-		GitCredential:    cfg.GitCredential,
-		GitConnections:   cfg.GitConnections,
-		HasGitCredential: cfg.HasGitConnectionOn("", defaultHost),
-		AgentGitName:     cfg.AgentGitName,
-		AgentGitEmail:    cfg.AgentGitEmail,
-		TargetRepos:      cfg.TargetRepos,
-		Repos:            []TeamRepoAssociation{},
-		AssociatedRepos:  []TeamRepoAssociation{},
+		ID:                       model.DefaultTeamID,
+		Name:                     cfg.EnvironmentName,
+		ConfigRepo:               configRepo,
+		ConfigCloneURL:           configCloneURL,
+		CloneCommand:             cloneCommand,
+		RepairTemplateID:         cfg.RepairTemplateID,
+		AgentFramework:           cfg.AgentFramework,
+		AgentBackendID:           cfg.AgentBackendID,
+		DefaultModel:             model.NormalizeDefaultModel(cfg.DefaultModel),
+		DefaultModels:            cfg.DefaultModels(),
+		ModelSettings:            cfg.ModelSettings,
+		GitCredential:            cfg.GitCredential,
+		GitConnections:           cfg.GitConnections,
+		RequireUserGitCredential: cfg.RequireUserGitCredential,
+		HasGitCredential:         cfg.HasGitConnectionOn("", defaultHost),
+		AgentGitName:             cfg.AgentGitName,
+		AgentGitEmail:            cfg.AgentGitEmail,
+		TargetRepos:              cfg.TargetRepos,
+		Repos:                    []TeamRepoAssociation{},
+		AssociatedRepos:          []TeamRepoAssociation{},
 	}
 }
 
@@ -312,13 +314,14 @@ type UpdateTeamRequest struct {
 	DefaultModel   *string   `json:"defaultModel,omitempty"`
 	DefaultModels  *[]string `json:"defaultModels,omitempty"`
 	// ModelSettings replaces model.Config.ModelSettings when present.
-	ModelSettings  *[]model.ModelSetting      `json:"modelSettings,omitempty"`
-	GitCredential  *string                    `json:"gitCredential,omitempty"`
-	GitConnections *[]model.TeamGitConnection `json:"gitConnections,omitempty"`
-	AgentGitName   *string                    `json:"agentGitName,omitempty"`
-	AgentGitEmail  *string                    `json:"agentGitEmail,omitempty"`
-	TargetRepos    *[]string                  `json:"targetRepos,omitempty"`
-	User           string                     `json:"user,omitempty"`
+	ModelSettings            *[]model.ModelSetting      `json:"modelSettings,omitempty"`
+	GitCredential            *string                    `json:"gitCredential,omitempty"`
+	GitConnections           *[]model.TeamGitConnection `json:"gitConnections,omitempty"`
+	RequireUserGitCredential *bool                      `json:"requireUserGitCredential,omitempty"`
+	AgentGitName             *string                    `json:"agentGitName,omitempty"`
+	AgentGitEmail            *string                    `json:"agentGitEmail,omitempty"`
+	TargetRepos              *[]string                  `json:"targetRepos,omitempty"`
+	User                     string                     `json:"user,omitempty"`
 }
 
 // GetTeam is the deployment in the team shape, for id the default team's
@@ -437,6 +440,9 @@ func (c *Client) applyDeploymentSettings(cfg *model.Config, req UpdateTeamReques
 	}
 	if req.AgentGitEmail != nil {
 		cfg.AgentGitEmail = strings.TrimSpace(*req.AgentGitEmail)
+	}
+	if req.RequireUserGitCredential != nil {
+		cfg.RequireUserGitCredential = *req.RequireUserGitCredential
 	}
 	if req.GitCredential != nil {
 		gitCred := strings.TrimSpace(*req.GitCredential)
