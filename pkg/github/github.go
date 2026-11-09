@@ -3177,6 +3177,40 @@ func (c *RESTClient) ListWorkflowRuns(owner, repo, headSHA string) ([]CheckRun, 
 	return runs, nil
 }
 
+// WorkflowRunsOnCommit is every workflow run on headSHA, newest first, as
+// whole runs: ListWorkflowRuns' answer with the run ids and attempts it
+// leaves out, so a caller can go on to read each run's jobs
+// (ListActionsJobAttempts). Release qualification reads Stage 1
+// (nightly.yml) that way, job by job.
+func (c *RESTClient) WorkflowRunsOnCommit(owner, repo, headSHA string) ([]WorkflowRun, error) {
+	var runs []WorkflowRun
+	path := fmt.Sprintf("/repos/%s/%s/actions/runs?head_sha=%s&per_page=100",
+		owner, repo, url.QueryEscape(headSHA))
+	for path != "" {
+		resp, err := c.get(owner, repo, path)
+		if err != nil {
+			return nil, err
+		}
+		if resp.Status == 404 {
+			return runs, nil
+		}
+		if resp.Status != 200 {
+			return nil, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+		}
+		var data struct {
+			WorkflowRuns []workflowRunJSON `json:"workflow_runs"`
+		}
+		if err := json.Unmarshal(resp.Body, &data); err != nil {
+			return nil, err
+		}
+		for _, item := range data.WorkflowRuns {
+			runs = append(runs, item.run())
+		}
+		path = nextPagePath(resp.Headers["Link"])
+	}
+	return runs, nil
+}
+
 // WorkflowFileRuns returns the most recent runs of one workflow file,
 // newest first and at most limit of them, shaped as CheckRuns like
 // ListWorkflowRuns' are.
