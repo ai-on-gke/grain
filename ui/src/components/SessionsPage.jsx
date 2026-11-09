@@ -54,6 +54,12 @@ import ChipStrip from "./ChipStrip.jsx";
 // page's, the same exchange a session's own pane makes
 // (ConsoleSessionPage.jsx's handleDelete), so the two read the same
 // however a session is got rid of. Errors go to showError.
+// `loadError` is why /api/console-sessions last failed, null once it
+// answers. With no sessions to show it takes the empty state's place:
+// "No interactive sessions yet." and its + New session button are an
+// answer about the store, and a list that never arrived is no answer at
+// all -- read as one, it sent the reader off to create a session that
+// already exists (matching BoardsPage and TasksLoadError).
 export default function SessionsPage({
   sessions = [],
   tasks = [],
@@ -62,7 +68,10 @@ export default function SessionsPage({
   onNewSession,
   onDeleted,
   showError,
+  loadError = null,
+  onRetry,
 }) {
+  const loadFailed = loadError !== null && sessions.length === 0;
   const [search, setSearch] = useState("");
   // The id of the session whose delete is in flight, so that one row's
   // control is held while the request runs and the others are not.
@@ -104,7 +113,7 @@ export default function SessionsPage({
     <div className="main-column" role="main">
       <ListHeader
         title="Sessions"
-        count={visible.length}
+        count={loadFailed ? null : visible.length}
         icon={<ItemGlyph kind="sessions" size={20} />}
         action={
           onNewSession ? (
@@ -146,7 +155,18 @@ export default function SessionsPage({
         </ListToolbar>
       )}
 
-      {visible.length === 0 ? (
+      {loadFailed ? (
+        <div className="empty tasks-load-error" role="alert">
+          <span className="tasks-load-error-text">
+            {`The sessions could not be loaded (${loadError}).`}
+          </span>
+          {onRetry && (
+            <Button size="small" variant="outlined" onClick={onRetry}>
+              Retry
+            </Button>
+          )}
+        </div>
+      ) : visible.length === 0 ? (
         <ListEmpty>
           <Box
             component="span"

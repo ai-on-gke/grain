@@ -1113,7 +1113,15 @@ export default function RepoPage({
       const out = await api(`${root}/import-issues`, { method: "POST" });
       const n = (out.imported || []).length;
       let text = `Read ${out.open} open issue${out.open === 1 ? "" : "s"} on ${out.source}: imported ${n}, ${out.skipped} already imported.`;
-      if (out.error) text += ` Some could not be imported: ${out.error}`;
+      // An error with nothing open is the listing itself failing -- a
+      // per-issue failure needs an issue to fail on -- so nothing was
+      // read and there is no "some" (orchestrator.importIssues). Saying
+      // "Read 0 open issues" read as a source with no issues, which a
+      // missing source repository is not (2026-11-09 repository
+      // walkthrough).
+      if (out.error && !out.open)
+        text = `Could not read the open issues on ${out.source}: ${out.error}`;
+      else if (out.error) text += ` Some could not be imported: ${out.error}`;
       setImportOutcome({ error: Boolean(out.error), text });
     } catch (err) {
       setImportOutcome({ error: true, text: String(err?.message || err) });

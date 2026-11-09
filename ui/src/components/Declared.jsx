@@ -116,7 +116,16 @@ export function DeclaredFields({ declaredIn, children }) {
         m: 0,
         minWidth: 0,
         ...(declaredIn && {
-          "& .MuiSelect-select, & .MuiAutocomplete-root": {
+          "& .MuiSelect-select, & .MuiAutocomplete-root, & .MuiChip-deleteIcon":
+            {
+              pointerEvents: "none",
+            },
+          // A disabled <fieldset> disables every native <button> under it
+          // without putting MUI's .Mui-disabled class on it, which left
+          // "+ New template" and "+ Add input" drawn in full primary colour.
+          "& .MuiButtonBase-root:disabled": {
+            color: "action.disabled",
+            borderColor: "action.disabledBackground",
             pointerEvents: "none",
           },
         }),
