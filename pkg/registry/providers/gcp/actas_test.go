@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 
 	"github.com/ai-on-gke/grain/pkg/registry"
@@ -476,6 +477,35 @@ func TestADCPrincipalDetector(t *testing.T) {
 		got, err := d.detect(ctx)
 		if err != nil || got != "serviceAccount:registry@test-proj.iam.gserviceaccount.com" {
 			t.Fatalf("detect = %q, %v", got, err)
+		}
+	})
+
+	t.Run("tokeninfo gets the token in the body, never the URL", func(t *testing.T) {
+		const secret = "ya29.registry-secret-token"
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost || strings.Contains(r.URL.RawQuery, secret) {
+				http.Error(w, "token in URL", http.StatusBadRequest)
+				return
+			}
+			if err := r.ParseForm(); err != nil || r.PostForm.Get("access_token") != secret {
+				http.Error(w, "no token in body", http.StatusBadRequest)
+				return
+			}
+			_, _ = w.Write([]byte(`{"email":"someone@example.com"}`))
+		}))
+		t.Cleanup(srv.Close)
+		ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: secret})
+		d := &adcPrincipalDetector{tokenInfoURL: srv.URL, httpClient: srv.Client()}
+		got, err := d.fromTokenInfo(ctx, ts)
+		if err != nil || got != "user:someone@example.com" {
+			t.Fatalf("fromTokenInfo = %q, %v", got, err)
+		}
+
+		// A transport failure must not quote the token back in its error.
+		d = &adcPrincipalDetector{tokenInfoURL: "http://127.0.0.1:1/tokeninfo", httpClient: http.DefaultClient}
+		_, err = d.fromTokenInfo(ctx, ts)
+		if err == nil || strings.Contains(err.Error(), secret) {
+			t.Fatalf("fromTokenInfo error = %v, want an error without the access token", err)
 		}
 	})
 

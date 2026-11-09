@@ -376,10 +376,14 @@ func (d *adcPrincipalDetector) fromTokenInfo(ctx context.Context, ts oauth2.Toke
 	if err != nil {
 		return "", fmt.Errorf("minting an access token: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.tokenInfoURL+"?access_token="+url.QueryEscape(tok.AccessToken), nil)
+	// The token goes in a POST body, never the URL: a transport error (*url.Error)
+	// quotes the request URL, and this error ends up in an entry's status_reason.
+	form := url.Values{"access_token": {tok.AccessToken}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.tokenInfoURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", err
 	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := d.httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("tokeninfo: %w", err)

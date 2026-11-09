@@ -569,8 +569,10 @@ func TestRegistrySandboxHostedProjectWiring(t *testing.T) {
 	// The registry grants itself actAs on each instance account it creates
 	// (compute.grant_self_act_as); a project-wide serviceAccountUser would let
 	// it act as any account in the hosted project.
-	if strings.Contains(hosted, `"roles/iam.serviceAccountUser",`) {
-		t.Errorf("hosted.tf must not grant the registry roles/iam.serviceAccountUser project-wide")
+	for name, body := range map[string]string{"hosted.tf": hosted, "kms.tf": read("kms.tf")} {
+		if strings.Contains(body, `"roles/iam.serviceAccountUser"`) {
+			t.Errorf("%s must not grant the registry roles/iam.serviceAccountUser project-wide", name)
+		}
 	}
 	if strings.Contains(hosted, "source_tags") {
 		t.Errorf("hosted.tf must not use source_tags: tags do not match across VPC peering")
