@@ -1112,7 +1112,51 @@ func TestLimitedRoleApprovalIsHeldToTasksAdminAndTheRolesCeiling(t *testing.T) {
 	}
 	actions := []struct{ route, tool string }{{"approve", "api_approve"}, {"run-now", "api_run_now"}}
 	n := 0
-	next := func() string { n++; return "9" + strings.Repeat("0", 2-len(strconv.Itoa(n))) + strconv.Itoa(n) }
+	next := func() string { n++; return "9" + strconv.Itoa(1000 + n)[1:] }
+
+	defaultReviewID := model.DefaultReviewTemplateID(widgets)
+	for _, tmpl := range []model.Template{
+		{
+			ID:     "heavy-review",
+			Name:   "heavy review",
+			Title:  "heavy review",
+			Writes: []model.WriteTarget{{Repo: gadgets}},
+			Reads:  []model.RepoRef{gadgets},
+			Grants: []model.Grant{{Capability: "api:tasks:write", Via: model.GrantByLabel}},
+		},
+		{
+			ID:     "gadgets-write-review",
+			Name:   "gadgets write review",
+			Title:  "gadgets write review",
+			Writes: []model.WriteTarget{{Repo: gadgets}},
+		},
+		{
+			ID:    "gadgets-read-review",
+			Name:  "gadgets read review",
+			Title: "gadgets read review",
+			Reads: []model.RepoRef{gadgets},
+		},
+		{
+			ID:     defaultReviewID,
+			Name:   "default review",
+			Title:  "default review",
+			Writes: []model.WriteTarget{{Repo: gadgets}},
+			Reads:  []model.RepoRef{gadgets},
+			Grants: []model.Grant{{Capability: "api:tasks:write", Via: model.GrantByLabel}},
+		},
+	} {
+		if err := h.client.Store.PutTemplate(ctx, tmpl); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Control: filing a task naming heavy-review is refused on POST /api/tasks
+	// for the same role, so filing and approving enforce the same ceiling.
+	if code, body := h.call("wade@example.com", http.MethodPost, "/api/tasks",
+		`{"title":"t","body":"b","repo":"acme/widgets","reviewTemplateId":"heavy-review"}`); code != http.StatusForbidden ||
+		!strings.Contains(body, "reviewTemplateId") || !strings.Contains(body, "widgets-admin") {
+		t.Fatalf("widgets-admin POST /api/tasks with heavy-review: %d %s, want 403 naming reviewTemplateId and the role", code, body)
+	}
 
 	// dispatch:write without tasks:admin runs an approved task now but
 	// cannot approve one by running it.
@@ -1140,11 +1184,19 @@ func TestLimitedRoleApprovalIsHeldToTasksAdminAndTheRolesCeiling(t *testing.T) {
 		t.Errorf("dispatcher run-now on approved task: %d %s, want it let through on dispatch:write", code, body)
 	}
 
-	// tasks:admin on the repository approves a plain task by either route.
+	// tasks:admin on the repository approves a plain task or one naming the
+	// repository's own default review template by either route.
 	for _, a := range actions {
 		id := seed(next(), nil)
 		if code, body := h.call("wade@example.com", http.MethodPost, "/api/tasks/"+id+"/"+a.route, `{}`); code == http.StatusForbidden {
 			t.Errorf("widgets-admin %s on a plain task: %d %s, want it allowed", a.route, code, body)
+		}
+		defID := seed(next(), func(t *model.Task) { t.ReviewTemplateID = defaultReviewID })
+		if code, body := h.call("wade@example.com", http.MethodPost, "/api/tasks/"+defID+"/"+a.route, `{}`); code >= 300 {
+			t.Errorf("widgets-admin %s on task naming default review template: %d %s, want 2xx", a.route, code, body)
+		}
+		if task, err := h.client.Store.GetTask(ctx, defID); err != nil || task == nil || task.Approval == nil {
+			t.Errorf("widgets-admin %s on task %s naming default review template did not approve it: %+v %v", a.route, defID, task, err)
 		}
 	}
 
@@ -1161,6 +1213,9 @@ func TestLimitedRoleApprovalIsHeldToTasksAdminAndTheRolesCeiling(t *testing.T) {
 		}},
 		{"writes", "acme/gadgets", func(t *model.Task) { t.Writes = []model.WriteTarget{{Repo: gadgets}} }},
 		{"reads", "acme/gadgets", func(t *model.Task) { t.Reads = []model.RepoRef{gadgets} }},
+		{"reviewTemplateId", "reviewTemplateId", func(t *model.Task) { t.ReviewTemplateID = "heavy-review" }},
+		{"reviewTemplateWrites", "reviewTemplateId", func(t *model.Task) { t.ReviewTemplateID = "gadgets-write-review" }},
+		{"reviewTemplateReads", "reviewTemplateId", func(t *model.Task) { t.ReviewTemplateID = "gadgets-read-review" }},
 	}
 	for _, c := range ceilings {
 		for _, a := range actions {

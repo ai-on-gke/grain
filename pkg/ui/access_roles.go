@@ -942,8 +942,8 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 // POST /api/tasks/{id}/approve, or POST /api/tasks/{id}/run-now on a task
 // with no approval yet (Client.RunNow approves it first) -- unless the role
 // could have filed task approved itself: it needs tasks:admin on task's
-// repository, and every grant, setting, write and read task carries must be
-// one filingEscalation would have let it set on POST /api/tasks.
+// repository, and every grant, setting, write, read and review template task
+// carries must be one filingEscalation would have let it set on POST /api/tasks.
 func (s *Server) roleApprovalWithin(ctx context.Context, a *accessRole, task model.Task,
 	allowedRepo func(APIScope, string) bool, normalize func(string) (string, error)) error {
 	repo := taskRepo(&task)
@@ -991,6 +991,16 @@ func (s *Server) roleApprovalWithin(ctx context.Context, a *accessRole, task mod
 		if !allowedRepo("tasks:read", rd.String()) {
 			return fmt.Errorf("%s cannot approve task %s (reads): role does not hold tasks:read on %s",
 				a.label(), task.ID, rd)
+		}
+	}
+	if id := strings.TrimSpace(task.ReviewTemplateID); id != "" &&
+		!(task.Target != nil && id == model.DefaultReviewTemplateID(*task.Target)) {
+		if tmpl := s.gateTemplate(ctx, id); tmpl != nil &&
+			!(task.Target != nil && tmpl.ID == model.DefaultReviewTemplateID(*task.Target)) {
+			if err := roleTemplateWithin(a, "reviewTemplateId", *tmpl, allowedRepo, normalize); err != nil {
+				why := strings.TrimPrefix(err.Error(), a.label()+" cannot set reviewTemplateId: ")
+				return fmt.Errorf("%s cannot approve task %s (reviewTemplateId): %s", a.label(), task.ID, why)
+			}
 		}
 	}
 	return nil
