@@ -531,6 +531,11 @@ func Reconcilers() []Reconciler {
 		// repository's ref moves rather than when a clock comes round
 		// (reconcileGitRefSchedules).
 		{Name: "git-ref-schedules", Reconcile: reconcileGitRefSchedules},
+		// Outbound per-release docs/releases/vX.Y.Z.md task filing for
+		// repositories declaring .grain/templates/release-notes.yml
+		// (releasenotes.go). Before "target-repos" and "dispatch" so a
+		// task filed this tick is checked and dispatchable this tick.
+		{Name: "release-notes", Reconcile: reconcileReleaseNotes},
 		// Immediately after "schedule", so that a workflow schedule which
 		// came due on this tick has its CI run started on this tick
 		// rather than on the next one -- and so that the run finishing
