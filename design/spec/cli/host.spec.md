@@ -943,7 +943,7 @@ This is grain's own CI, from the operator's side.
 - `artifact` (`artifacts`) downloads from `/api/ci/runs/{id}/artifacts/{job}/{name}`.
 - `wait (<run-id> | -pr <url|owner/name#n> | -ref <branch> -repo <owner/name>) [-jobs j1,j2]` ([external-cli #XC-26](../external-cli/external-cli.spec.md#XC-26)) polls `GET /api/ci/runs/{id}` until the run, or every job `-jobs` names, has a verdict. `-pr` and `-ref` attach to the newest run on that branch still in flight, else the newest; `-pr` finds the branch from the grain task tracking the pull request (`GET /api/tasks`). It waits the global `-timeout` (default `30m`) as a whole and accrues no wait credit. It prints the sandbox's wait answer (`gitproxy.CLIWaitResponse`, as [`grain ci wait` in a sandbox](sandbox.spec.md#CLI-91) reads it) plus `repo`, `ref` and `failing` (each failing job's step, failing tests and any shared fault from `GET /api/ci/faults`). It exits `0` green, `1` on `failure`/`cancelled`/`timed_out`, and `5` when `-timeout` runs out while the run is still going.
 - `retrigger <run-id> [-jobs j1,j2]` (`ci:write`) reruns the run's failed jobs (or the named ones) once, uncached: `POST /api/ci/runs` with the run's repository, branch, commit and push/pull_request event, and `recheck`. GitHub Actions runs are refused. The sandbox's form is [#CLI-92](sandbox.spec.md#CLI-92).
-- `test-history <test-name> [-repo r] [-limit N]` reads up to `-limit` (at most 100) of the newest runs, each in full, and prints `ci.QueryTestHistory`'s report, the [sandbox's `grain ci test-history`](sandbox.spec.md#CLI-89) rendering (`-json`: the report).
+- `test-history <test-name> [-repo r] [-limit N] [-provider grain|github-actions]` reads up to `-limit` (at most 100) of the newest runs, each in full, and prints `ci.QueryTestHistory`'s report, the [sandbox's `grain ci test-history`](sandbox.spec.md#CLI-89) rendering (`-json`: the report). For a `-repo` whose CI mode is `github` (`GET /api/repos/{owner}/{name}/capabilities`) and no `-provider`, it reads that repository's GitHub Actions runs alone -- each read in full carries the failing log tails grain recorded of its jobs -- and notes how many grain CI runs it left out; the report names each provider's runs and their window, and says that Actions runs count failures only.
 
 <!-- BEGIN GENERATED FLAGS: grain ci -->
 | Flag | Type | Default | Env | Description |
@@ -1041,6 +1041,7 @@ _No flags._
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-limit` | int | `20` |  | how many of the newest runs to look through (at most 100) |
+| `-provider` | string |  |  | only this CI's runs: grain or github-actions (default: github-actions for a -repo whose CI is GitHub Actions, grain otherwise) |
 | `-repo` | string |  |  | only this repository's runs, as owner/name (default: every repository's) |
 <!-- END GENERATED FLAGS -->
 
