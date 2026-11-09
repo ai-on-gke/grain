@@ -93,7 +93,7 @@ compute:
   default_shape: standard
   shapes:
     - name: standard
-      machine_type: e2-standard-4
+      machine_type: n2-standard-4
       boot_disk_gb: 50
       quota_units: 1
 instance_sql:

@@ -47,6 +47,58 @@ WHERE n.nspname = 'registry' AND c.relname = 'entries'`).Scan(&reloptions)
 	}
 }
 
+// TestMigrationReplacesE2ShapeMachineTypes holds migration 8: shape rows an
+// older registry seeded with E2 machine types (which cannot run the nested
+// virtualization every hosted VM needs) move to their N2 equivalents, and
+// rows already on a supported machine type are left alone.
+func TestMigrationReplacesE2ShapeMachineTypes(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	legacy := map[string]string{
+		"legacy-small":  "e2-small",
+		"legacy-micro":  "e2-micro",
+		"legacy-std4":   "e2-standard-4",
+		"legacy-std8":   "e2-standard-8",
+		"legacy-mem16":  "e2-highmem-16",
+		"legacy-zonal":  "zones/us-central1-a/machineTypes/e2-standard-2",
+		"current-n2":    "n2-standard-16",
+		"current-c4":    "c4-standard-8",
+		"current-n2d-x": "n2d-standard-4",
+	}
+	want := map[string]string{
+		"legacy-small":  "n2-standard-2",
+		"legacy-micro":  "n2-standard-2",
+		"legacy-std4":   "n2-standard-4",
+		"legacy-std8":   "n2-standard-8",
+		"legacy-mem16":  "n2-highmem-16",
+		"legacy-zonal":  "zones/us-central1-a/machineTypes/n2-standard-2",
+		"current-n2":    "n2-standard-16",
+		"current-c4":    "c4-standard-8",
+		"current-n2d-x": "n2d-standard-4",
+	}
+	for name, mt := range legacy {
+		if _, err := st.DB().ExecContext(ctx, `INSERT INTO registry.shapes (name, machine_type, boot_disk_gb, quota_units) VALUES ($1, $2, 50, 1)`, name, mt); err != nil {
+			t.Fatalf("inserting legacy shape %s: %v", name, err)
+		}
+	}
+	if _, err := st.DB().ExecContext(ctx, `DELETE FROM registry.schema_migrations WHERE version = 8`); err != nil {
+		t.Fatalf("forgetting migration 8: %v", err)
+	}
+	if err := Migrate(ctx, st.DB()); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	for name, mt := range want {
+		row, err := st.GetShape(ctx, name)
+		if err != nil {
+			t.Fatalf("GetShape(%s): %v", name, err)
+		}
+		if row.MachineType != mt {
+			t.Errorf("shape %s machine_type = %q, want %q", name, row.MachineType, mt)
+		}
+	}
+}
+
 func TestEntryLifecycleQuotasAndTombstoneReservation(t *testing.T) {
 	st := newTestStore(t)
 	ctx := context.Background()
@@ -54,7 +106,7 @@ func TestEntryLifecycleQuotasAndTombstoneReservation(t *testing.T) {
 	st.SetNow(func() time.Time { return now })
 
 	if err := st.SeedShapes(ctx, []ShapeRow{
-		{Name: "small", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
+		{Name: "small", MachineType: "n2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
 		{Name: "large", MachineType: "n2-standard-8", BootDiskGB: 100, QuotaUnits: 2},
 	}); err != nil {
 		t.Fatalf("SeedShapes: %v", err)
@@ -335,8 +387,8 @@ func TestStep12RandomNameScopesCombinationSyncAndAsyncConflictsAndPromotion(t *t
 	st.SetNow(func() time.Time { return now })
 
 	if err := st.SeedShapes(ctx, []ShapeRow{
-		{Name: "small", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
-		{Name: "medium", MachineType: "e2-standard-8", BootDiskGB: 50, QuotaUnits: 2},
+		{Name: "small", MachineType: "n2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
+		{Name: "medium", MachineType: "n2-standard-8", BootDiskGB: 50, QuotaUnits: 2},
 	}); err != nil {
 		t.Fatalf("SeedShapes: %v", err)
 	}
@@ -724,7 +776,7 @@ func TestStep17StopStartAutoWakeAndUpgradeAvailable(t *testing.T) {
 	st.SetNow(func() time.Time { return now })
 
 	if err := st.SeedShapes(ctx, []ShapeRow{
-		{Name: "standard", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
+		{Name: "standard", MachineType: "n2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
 	}); err != nil {
 		t.Fatalf("SeedShapes: %v", err)
 	}
@@ -832,7 +884,7 @@ func TestStep16TwoStepTransfer7DayExpiryRestoreHardPurgeAndAdminRecovery(t *test
 	st.SetNow(func() time.Time { return now })
 
 	if err := st.SeedShapes(ctx, []ShapeRow{
-		{Name: "small", MachineType: "e2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
+		{Name: "small", MachineType: "n2-standard-4", BootDiskGB: 50, QuotaUnits: 1},
 		{Name: "large", MachineType: "n2-standard-8", BootDiskGB: 100, QuotaUnits: 2},
 	}); err != nil {
 		t.Fatalf("SeedShapes: %v", err)
