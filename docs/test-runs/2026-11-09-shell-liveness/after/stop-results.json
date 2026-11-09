@@ -1,0 +1,284 @@
+[
+  {
+    "id": "stop1.before",
+    "desc": "/: no banner before the stop",
+    "ok": true,
+    "got": null
+  },
+  {
+    "id": "stop1.banner",
+    "desc": "/: banner rises within 10 s timeout x2 + poll ticks (<= 35 s)",
+    "ok": true,
+    "got": {
+      "ms": 23441
+    }
+  },
+  {
+    "id": "stop1.text",
+    "desc": "/: banner text",
+    "note": true,
+    "got": "This deployment cannot be reached: it accepted the connection but sent no answer within 10 seconds. Unreachable since 4:30:09 AM -- retrying automatically; this page will pick back up on its own once it answers again."
+  },
+  {
+    "id": "stop1.oneConfig",
+    "desc": "/: at most one GET /api/config in flight at a time while stopped",
+    "ok": true,
+    "got": {
+      "maxConfig": 1,
+      "configSent": 3
+    }
+  },
+  {
+    "id": "stop1.pileup",
+    "desc": "/: most /api/ requests in flight at once while stopped, and what was sent",
+    "note": true,
+    "got": {
+      "maxApi": 7,
+      "inFlightAtCont": 2,
+      "sent": {
+        "GET /api/tasks": 5,
+        "GET /api/config": 5,
+        "GET /api/ci/runs": 5,
+        "GET /api/console-sessions": 5,
+        "GET /api/restart-watch": 3,
+        "GET /api/persistent-sandboxes": 3,
+        "GET /api/notifications": 1
+      }
+    }
+  },
+  {
+    "id": "stop1.clear",
+    "desc": "/: banner clears with no reload after CONT",
+    "ok": true,
+    "got": {
+      "ms": 122
+    }
+  },
+  {
+    "id": "stop1.noReload",
+    "desc": "/: page was not reloaded",
+    "ok": true,
+    "got": null
+  },
+  {
+    "id": "stop1.after",
+    "desc": "/: /api/ still in flight 3 s after the clear",
+    "note": true,
+    "got": {
+      "api": 0,
+      "config": 0
+    }
+  },
+  {
+    "id": "stop2.before",
+    "desc": "/tasks: no banner before the stop",
+    "ok": true,
+    "got": null
+  },
+  {
+    "id": "stop2.banner",
+    "desc": "/tasks: banner rises within 10 s timeout x2 + poll ticks (<= 35 s)",
+    "ok": true,
+    "got": {
+      "ms": 23428
+    }
+  },
+  {
+    "id": "stop2.text",
+    "desc": "/tasks: banner text",
+    "note": true,
+    "got": "This deployment cannot be reached: it accepted the connection but sent no answer within 10 seconds. Unreachable since 4:31:01 AM -- retrying automatically; this page will pick back up on its own once it answers again."
+  },
+  {
+    "id": "stop2.oneConfig",
+    "desc": "/tasks: at most one GET /api/config in flight at a time while stopped",
+    "ok": true,
+    "got": {
+      "maxConfig": 1,
+      "configSent": 3
+    }
+  },
+  {
+    "id": "stop2.pileup",
+    "desc": "/tasks: most /api/ requests in flight at once while stopped, and what was sent",
+    "note": true,
+    "got": {
+      "maxApi": 7,
+      "inFlightAtCont": 2,
+      "sent": {
+        "GET /api/tasks": 5,
+        "GET /api/config": 5,
+        "GET /api/ci/runs": 5,
+        "GET /api/console-sessions": 5,
+        "GET /api/restart-watch": 3,
+        "GET /api/persistent-sandboxes": 3,
+        "GET /api/notifications": 1
+      }
+    }
+  },
+  {
+    "id": "stop2.clear",
+    "desc": "/tasks: banner clears with no reload after CONT",
+    "ok": true,
+    "got": {
+      "ms": 109
+    }
+  },
+  {
+    "id": "stop2.noReload",
+    "desc": "/tasks: page was not reloaded",
+    "ok": true,
+    "got": null
+  },
+  {
+    "id": "stop2.after",
+    "desc": "/tasks: /api/ still in flight 3 s after the clear",
+    "note": true,
+    "got": {
+      "api": 0,
+      "config": 0
+    }
+  },
+  {
+    "id": "stop3.before",
+    "desc": "/tasks/1: no banner before the stop",
+    "ok": true,
+    "got": null
+  },
+  {
+    "id": "stop3.banner",
+    "desc": "/tasks/1: banner rises within 10 s timeout x2 + poll ticks (<= 35 s)",
+    "ok": true,
+    "got": {
+      "ms": 23431
+    }
+  },
+  {
+    "id": "stop3.text",
+    "desc": "/tasks/1: banner text",
+    "note": true,
+    "got": "This deployment cannot be reached: it accepted the connection but sent no answer within 10 seconds. Unreachable since 4:31:53 AM -- retrying automatically; this page will pick back up on its own once it answers again."
+  },
+  {
+    "id": "stop3.oneConfig",
+    "desc": "/tasks/1: at most one GET /api/config in flight at a time while stopped",
+    "ok": true,
+    "got": {
+      "maxConfig": 1,
+      "configSent": 3
+    }
+  },
+  {
+    "id": "stop3.pileup",
+    "desc": "/tasks/1: most /api/ requests in flight at once while stopped, and what was sent",
+    "note": true,
+    "got": {
+      "maxApi": 7,
+      "inFlightAtCont": 2,
+      "sent": {
+        "GET /api/restart-watch": 3,
+        "GET /api/tasks": 5,
+        "GET /api/config": 5,
+        "GET /api/ci/runs": 5,
+        "GET /api/console-sessions": 5,
+        "GET /api/persistent-sandboxes": 3,
+        "GET /api/notifications": 1,
+        "GET /api/tasks/1": 2
+      }
+    }
+  },
+  {
+    "id": "stop3.clear",
+    "desc": "/tasks/1: banner clears with no reload after CONT",
+    "ok": true,
+    "got": {
+      "ms": 282
+    }
+  },
+  {
+    "id": "stop3.noReload",
+    "desc": "/tasks/1: page was not reloaded",
+    "ok": true,
+    "got": null
+  },
+  {
+    "id": "stop3.after",
+    "desc": "/tasks/1: /api/ still in flight 3 s after the clear",
+    "note": true,
+    "got": {
+      "api": 0,
+      "config": 0
+    }
+  },
+  {
+    "id": "stop4.before",
+    "desc": "/session/director: no banner before the stop",
+    "ok": true,
+    "got": null
+  },
+  {
+    "id": "stop4.banner",
+    "desc": "/session/director: banner rises within 10 s timeout x2 + poll ticks (<= 35 s)",
+    "ok": true,
+    "got": {
+      "ms": 23446
+    }
+  },
+  {
+    "id": "stop4.text",
+    "desc": "/session/director: banner text",
+    "note": true,
+    "got": "This deployment cannot be reached: it accepted the connection but sent no answer within 10 seconds. Unreachable since 4:32:45 AM -- retrying automatically; this page will pick back up on its own once it answers again."
+  },
+  {
+    "id": "stop4.oneConfig",
+    "desc": "/session/director: at most one GET /api/config in flight at a time while stopped",
+    "ok": true,
+    "got": {
+      "maxConfig": 1,
+      "configSent": 3
+    }
+  },
+  {
+    "id": "stop4.pileup",
+    "desc": "/session/director: most /api/ requests in flight at once while stopped, and what was sent",
+    "note": true,
+    "got": {
+      "maxApi": 8,
+      "inFlightAtCont": 3,
+      "sent": {
+        "GET /api/tasks": 5,
+        "GET /api/config": 5,
+        "GET /api/ci/runs": 5,
+        "GET /api/console-sessions": 5,
+        "GET /api/tasks/13": 2,
+        "GET /api/restart-watch": 3,
+        "GET /api/persistent-sandboxes": 3,
+        "GET /api/notifications": 1
+      }
+    }
+  },
+  {
+    "id": "stop4.clear",
+    "desc": "/session/director: banner clears with no reload after CONT",
+    "ok": true,
+    "got": {
+      "ms": 91
+    }
+  },
+  {
+    "id": "stop4.noReload",
+    "desc": "/session/director: page was not reloaded",
+    "ok": true,
+    "got": null
+  },
+  {
+    "id": "stop4.after",
+    "desc": "/session/director: /api/ still in flight 3 s after the clear",
+    "note": true,
+    "got": {
+      "api": 0,
+      "config": 0
+    }
+  }
+]
