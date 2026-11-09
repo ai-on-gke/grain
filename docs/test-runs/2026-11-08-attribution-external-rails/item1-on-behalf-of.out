@@ -1,0 +1,40 @@
+director session task: 1
+PASS	1.0	director granted api:tasks:write + api:capabilities:admin (access code, expectCapabilities)	200
+PASS	1.1	alice messages director through IAP	200
+PASS	1.2	bob messages director mid-turn (queued for turn 2)	200
+PASS	1.3	turn 1 is still live after two reconcile ticks	
+PASS	1.4	turn 1 comments	200
+PASS	1.5	turn 1 comment row	agent:1:session for human:alice@example.com:iap
+PASS	1.6	turn 1 comment label	Director for alice@example.com
+PASS	1.7	turn 1 files a task	201
+PASS	1.8	turn 1 filed task's author label	Director for alice@example.com
+PASS	1.9	turn 1 filed task's stored origin	5|grain/62dc6140/task-5-filed-in-turn-1|implement|filed in turn 1||agent|1|human|alice@example.com|session|iap|direct|||||||||||acme|widgets|directive|||0|0|2026-11-08 23:00:20.503501561 +0000 UTC|419
+PASS	1.10	turn 1 closes a task	200
+PASS	1.11	turn 1 close transition label	operator (access code),Director for alice@example.com
+PASS	1.12	turn 1 makes a configuration write (host token)	201
+PASS	1.13	turn 1 config-audit label	Director for alice@example.com
+PASS	1.14	turn 1 config_audit row	agent|1|session|human|alice@example.com|iap
+PASS	2.1	turn 2 comment row	agent:1:session for human:bob@example.com:iap
+PASS	2.2	turn 2 comment label	Director for bob@example.com
+PASS	2.3	turn 2 filed task's author label	Director for bob@example.com
+PASS	2.4	turn 2 close transition label	operator (access code),Director for bob@example.com
+PASS	2.5	turn 2 config-audit label	Director for bob@example.com
+PASS	3.1	access-code message to director	200
+PASS	3.2	access-code message row	human:owner@example.com:access-code for ::
+PASS	3.3	comment answering the access code acts for nobody	agent:1:session for ::
+PASS	3.4	label answering the access code	Director
+PASS	3.5	live turn shown the access code's message acts for nobody	agent:1:session for ::
+PASS	4.1	alice approves through IAP	200
+PASS	4.2	alice-approved run's comment	agent:7:sandbox for human:alice@example.com:iap
+PASS	4.3	alice-approved run's filed follow-up origin	8|grain/62dc6140/task-8-follow-up-of-alice-run|implement|follow-up of alice run||agent|7|human|alice@example.com|sandbox|iap|direct|||||||||||acme|widgets|directive|||0|0|2026-11-08 23:00:21.392599137
+PASS	4.4	access-code-approved run's comment acts for nobody	agent:9:sandbox for ::
+PASS	4.5	run filed pre-approved by the access code acts for nobody	agent:10:sandbox for ::
+grain-queued task 11 approval: {"state":"proposed","approved":null,"approvedBy":null,"approvedByKind":null,"approvedByLabel":null}
+
+INFO	4.6	director filing state with tasksApproved: proposed
+PASS	4.7	director-filed run (unapproved / grain-queued) acts for nobody	agent:11:sandbox for ::
+PASS	5.1	agent naming alice as author is refused	403
+PASS	5.2	agent claiming onBehalfOf (body + headers) is recorded for nobody	agent:9:sandbox for ::
+PASS	5.3	agent carrying alice's IAP assertion stays the agent, for nobody	agent:9:sandbox for ::
+TARGET=2 FILED1=5 FILED2=6 CLOSE1=3 RUN_ALICE=7
+FAILS=0

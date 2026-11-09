@@ -3058,7 +3058,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	keepRunning := req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake)
 	autoMerge, autoSubmit, sessionQueued := req.AutoMerge, false, false
-	var limitNote, ungrantedNote, heldNote, needsPersonNote, personOnlyNote, seededNote, refusal string
+	var limitNote, ungrantedNote, heldNote, needsPersonNote, personOnlyNote, seededNote, landingNote, refusal string
 	var escalated []string
 	if proposedBy != nil {
 		child := model.Task{Target: target, Base: req.Base, Grants: grants, Writes: writes, Admission: askedAdmission, TemplateID: filedFrom}
@@ -3100,6 +3100,18 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		if changeTarget == nil && model.ScratchFixture(child, *proposedBy, pushesScratch) {
 			autoSubmit = true
 			autoMerge = !req.DeclineAutoMerge
+		}
+		// The proposer may queue its proposals and this one asks for
+		// nothing that permission does not cover: it only lands on a
+		// branch the permission does not reach. Said on the proposal, as
+		// orchestrator.relayProposedTasks says it on the identical call
+		// replayed at the end of a run -- which skips this one as already
+		// filed, so without it a live proposal held for its branch alone
+		// reads as grain having forgotten it (2026-11-08 attribution and
+		// external rails walkthrough, F2).
+		if !autoSubmit && !sessionQueues && changeTarget == nil && !req.HoldForApproval &&
+			model.AutoSubmitRefusedOnLanding(child, *proposedBy) {
+			landingNote = model.OtherBranchQueueNote(*proposedBy, model.Task{Target: target, Base: req.Base})
 		}
 		ungrantedWrites := model.UngrantedWrites(child, *proposedBy)
 		ungrantedReads := model.UngrantedReads(child, *proposedBy)
@@ -3234,7 +3246,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		ID:                   id,
 		Intent:               model.IntentImplement,
 		Title:                req.Title,
-		Body:                 req.Description + forkNote + ungrantedNote + seededNote + reviewTemplateNote + limitNote + needsPersonNote + heldNote + personOnlyNote + neverEndingNote + supersedeRefusal + model.OriginKeptNote(req.Origin, target, proposedBy),
+		Body:                 req.Description + forkNote + ungrantedNote + seededNote + reviewTemplateNote + limitNote + needsPersonNote + heldNote + personOnlyNote + landingNote + neverEndingNote + supersedeRefusal + model.OriginKeptNote(req.Origin, target, proposedBy),
 		Origin:               origin,
 		Target:               target,
 		ChangeTarget:         changeTarget,
