@@ -166,7 +166,7 @@ func (p *GitProxy) serveCLIRoute(w http.ResponseWriter, r *http.Request, scope n
 	case route == "ci/checks":
 		p.serveCIChecks(w, r, scope)
 	case route == "ci/test-history":
-		p.serveTestHistory(w, q, scope)
+		p.serveTestHistory(w, r, scope)
 	case route == "pr/status":
 		p.servePRStatus(w, r, scope)
 	case route == "tasks":
@@ -888,7 +888,8 @@ func shortSHA(sha string) string {
 	return sha
 }
 
-func (p *GitProxy) serveTestHistory(w http.ResponseWriter, q url.Values, scope namespace.Scope) {
+func (p *GitProxy) serveTestHistory(w http.ResponseWriter, r *http.Request, scope namespace.Scope) {
+	q := r.URL.Query()
 	test := strings.TrimSpace(q.Get("test"))
 	if test == "" {
 		http.Error(w, "test is required", http.StatusBadRequest)
@@ -899,9 +900,34 @@ func (p *GitProxy) serveTestHistory(w http.ResponseWriter, q url.Values, scope n
 		cliError(w, err)
 		return
 	}
-	page := store.Find(ci.RunFilter{Repo: repo, Descending: true}, cliLimit(q, "limit", 20, 100))
+	f := ci.RunFilter{Repo: repo, Descending: true}
+	switch f.Provider = strings.ToLower(strings.TrimSpace(q.Get("provider"))); f.Provider {
+	case ci.ProviderGrain, ci.ProviderGitHubActions:
+	case "":
+		// A repository whose CI is GitHub Actions has its history there:
+		// grain CI's runs of it are a retired mode's, however many.
+		if p.Namespace.ExternalCI != nil && ci.ExternalCIFor(r.Context(), p.Namespace.ExternalCI, repo) {
+			f.Provider = ci.ProviderGitHubActions
+		}
+	default:
+		cliError(w, fmt.Errorf("%w: %q is not a CI provider: use %s or %s", namespace.ErrBadRequest, q.Get("provider"),
+			ci.ProviderGrain, ci.ProviderGitHubActions))
+		return
+	}
+	page := p.findCIRuns(r.Context(), store, f, cliLimit(q, "limit", 20, 100))
 	report := ci.QueryTestHistory(page.Runs, test)
 	report.Repo = repo
+	if page.note != "" {
+		report.Notes = append(report.Notes, "GitHub Actions: "+page.note)
+	}
+	if f.Provider == ci.ProviderGitHubActions && q.Get("provider") == "" {
+		grain := f
+		grain.Provider = ""
+		if n := store.Find(grain, 1).Matched; n > 0 {
+			report.Notes = append(report.Notes, fmt.Sprintf(
+				"%s's CI is GitHub Actions: its %d Grain CI run(s), from before, are left out (--provider grain reads them)", repo, n))
+		}
+	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	fmt.Fprint(w, report.Render())
 }

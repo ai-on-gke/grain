@@ -84,6 +84,15 @@ func TestTheImageCarriesAPostgresClientThatCanDumpTheDefaultServer(t *testing.T)
 	if err != nil || major < 16 {
 		t.Fatalf("pg_dump major version in image = %q (from %q), want >= 16 to dump setup.sh's postgres:16-bookworm server", majorStr, out)
 	}
+
+	// Installing postgresql-16 must not leave an initialized default cluster
+	// at /var/lib/postgresql/16/main (~38MB of catalog + WAL nothing uses;
+	// embedded clusters run initdb against <data-dir>/postgres).
+	clusterCheck := docker(t, "run", "--rm", "--entrypoint", "sh", image, "-c",
+		`if [ -e /var/lib/postgresql/16/main ]; then echo "LEAKED /var/lib/postgresql/16/main"; exit 1; fi; echo no-default-cluster`)
+	if !strings.Contains(clusterCheck, "no-default-cluster") {
+		t.Fatalf("image carries an unused default PostgreSQL cluster: %s", clusterCheck)
+	}
 }
 
 // The image carries the agy it was built with, and goes on carrying it.

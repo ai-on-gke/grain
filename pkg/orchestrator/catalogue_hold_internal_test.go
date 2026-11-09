@@ -205,7 +205,8 @@ func TestRelayedProposalHoldsARequiresPersonGrant(t *testing.T) {
 	if got.Approval != nil {
 		t.Fatalf("a proposal asking for a grant the catalogue refuses was approved by %+v", got.Approval.Actor)
 	}
-	if !slices.ContainsFunc(got.Grants, func(g model.Grant) bool { return g.Capability == "self-debug" }) {
+	if !slices.ContainsFunc(got.Grants, func(g model.Grant) bool { return g.Capability == "api:self-debug" }) ||
+		!slices.ContainsFunc(got.Grants, func(g model.Grant) bool { return g.Capability == model.GrainSourceGrant }) {
 		t.Fatalf("the refused grant the run asked for was dropped rather than kept for dispatch to hold: %+v", got.Grants)
 	}
 	if !strings.Contains(got.Body, "refuses") {

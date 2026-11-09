@@ -16,6 +16,8 @@ package deploy
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -23,6 +25,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/repodecl"
 	"github.com/ai-on-gke/grain/pkg/trustboundary"
+	"gopkg.in/yaml.v3"
 )
 
 // promoteReleasePath is the person-only last step of a trunk release
@@ -244,15 +247,29 @@ func TestTheReleaseTrainIsScheduledContinuously(t *testing.T) {
 	if sched.Overlap != model.OverlapSkip {
 		t.Errorf("the release-train schedule's overlap is %q, want skip: two ticks would race for the same tags", sched.Overlap)
 	}
-	var body string
-	for _, tmpl := range decl.Templates {
-		if tmpl.Path == ".grain/templates/release-train.yml" {
-			body = tmpl.Template.Body
+	var trainTmpl *model.Template
+	for i := range decl.Templates {
+		if decl.Templates[i].Path == ".grain/templates/release-train.yml" {
+			trainTmpl = &decl.Templates[i].Template
 		}
 	}
+	if trainTmpl == nil {
+		t.Fatal(".grain/templates/release-train.yml is not declared")
+	}
+	if got := trainTmpl.NothingNeededAction.Resolved(); got != model.NothingNeededClose {
+		t.Errorf("release-train nothing-needed resolves to %q, want %q so acted/noop/failed ticks close and free the overlap: skip schedule",
+			got, model.NothingNeededClose)
+	}
+	body := trainTmpl.Body
 	contains(t, body, "bash ~/work/scripts/release-train-task.sh")
-	contains(t, body, "RELEASE_TRAIN_RESULT=noop")
+	for _, outcome := range []string{"RELEASE_TRAIN_RESULT=noop", "RELEASE_TRAIN_RESULT=acted", "RELEASE_TRAIN_RESULT=failed"} {
+		contains(t, body, outcome)
+	}
 	contains(t, body, "nothing_needed")
+	contains(t, body, "grain notify")
+	if strings.Contains(body, "call `comment_on_issue`") {
+		t.Errorf("release-train.yml still instructs calling comment_on_issue, which parks a branchless tick in awaiting_reply and stalls the 20-minute train")
+	}
 }
 
 // The train's grant reaches the release now (playbook §1): vM.Y.0 created,
@@ -361,6 +378,7 @@ func TestPublishReleaseVerifiesBeforeItPublishes(t *testing.T) {
 func TestEveryPublishedReleaseGetsItsGrainCLI(t *testing.T) {
 	for file, releaseJob := range map[string]string{
 		"promote.yml":              "assets",
+		"promote-release.yml":      "assets",
 		"publish-release.yml":      "publish",
 		"release-train-assets.yml": "publish",
 	} {
@@ -370,10 +388,16 @@ func TestEveryPublishedReleaseGetsItsGrainCLI(t *testing.T) {
 			strings.Contains(build, "secrets.") || strings.Contains(build, "github.token") {
 			t.Errorf("%s: the cli job, which runs build-cli.sh, must hold contents: read and no token:\n%s", file, build)
 		}
-		for _, want := range []string{"scripts/build-cli.sh", "release-assets.sh cli-validate", "RELEASE: ", "name: grain-cli"} {
+		for _, want := range []string{
+			"actions/cache@", "~/go/pkg/mod/cache/download", "~/.cache/go-build",
+			"scripts/build-cli.sh", "release-assets.sh cli-validate", "RELEASE: ", "name: grain-cli",
+		} {
 			if !strings.Contains(build, want) {
 				t.Errorf("%s: the cli job does not say %q", file, want)
 			}
+		}
+		if strings.Index(build, "actions/cache@") > strings.Index(build, "actions/setup-go@") {
+			t.Errorf("%s: the cli job must restore actions/cache before actions/setup-go", file)
 		}
 		publish := namedJob(t, text, "cli-assets")
 		for _, want := range []string{"contents: write", "needs: [", releaseJob, "name: grain-cli", "release-assets.sh", "cli-publish"} {
@@ -381,7 +405,7 @@ func TestEveryPublishedReleaseGetsItsGrainCLI(t *testing.T) {
 				t.Errorf("%s: the cli-assets job does not say %q", file, want)
 			}
 		}
-		// One concurrency group per release across the three workflows, so
+		// One concurrency group per release across the four workflows, so
 		// no two runs upload the same release's CLI at once.
 		if !strings.Contains(publish, "group: grain-cli-assets-${{ ") {
 			t.Errorf("%s: the cli-assets job does not queue in the shared grain-cli-assets-<release> group", file)
@@ -389,6 +413,231 @@ func TestEveryPublishedReleaseGetsItsGrainCLI(t *testing.T) {
 		if strings.Contains(publish, "build-cli.sh") || strings.Contains(publish, "setup-go") {
 			t.Errorf("%s: the cli-assets job, which holds contents: write, builds something", file)
 		}
+	}
+}
+
+// Regression for task 3787: when a promoted release has neither a GitHub
+// Release nor sha-<12 hex> release assets (so promote.yml's assets and
+// cli-assets jobs skip it under RELEASE_CLI_SKIP_UNRELEASED), promote.yml's
+// cli job must skip building and uploading the CLI archives instead of
+// compiling and discarding them on every push to main; when either the GitHub
+// Release or the commit's sha-<12 hex> assets exist (or a version was asked
+// for explicitly), it still builds. And promote-release.yml's cli and
+// cli-assets jobs run on human approvals alone.
+func TestPromoteCLISkipsMissingReleaseAndPromoteReleaseGatesCLIOnApprove(t *testing.T) {
+	var promoteWF struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				ID  string `yaml:"id"`
+				Run string `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal([]byte(read(t, ".github", "workflows", "promote.yml")), &promoteWF); err != nil {
+		t.Fatalf("promote.yml does not parse: %v", err)
+	}
+	var resolveScript string
+	for _, step := range promoteWF.Jobs["cli"].Steps {
+		if step.ID == "release" {
+			resolveScript = step.Run
+		}
+	}
+	if resolveScript == "" {
+		t.Fatal("promote.yml cli job has no step with id: release")
+	}
+
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(filepath.Join(dir, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "scripts", "release-assets.sh"),
+		[]byte("#!/usr/bin/env bash\nprintf '%s\\n' \"${2:-v3.2.0}\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	curlStub := `#!/usr/bin/env bash
+status_fmt=false url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -w) status_fmt=true; shift ;;
+    -o | -H) shift ;;
+    -*) ;;
+    *) url="$1" ;;
+  esac
+  shift
+done
+case "$url" in
+  */releases/download/v3.2.0/checksums.txt)
+    [ "${STUB_CHECKSUMS:-404}" = 200 ] && exit 0 || exit 22 ;;
+  */repos/ai-on-gke/grain/releases/tags/v3.2.0)
+    [ "$status_fmt" = true ] && printf '%s' "${STUB_RELEASE_API:-404}"
+    [ "${STUB_RELEASE_API:-404}" = 200 ] && exit 0 || exit 0 ;;
+  */releases/download/sha-*/images.json)
+    [ "${STUB_SHA_IMAGES:-404}" = 200 ] && exit 0 || exit 22 ;;
+  *)
+    echo "unexpected curl url: $url" >&2
+    exit 99 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(binDir, "curl"), []byte(curlStub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	gitEnv := append(os.Environ(),
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com",
+		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
+	)
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"commit", "-q", "--allow-empty", "-m", "release"},
+		{"tag", "-a", "v3.2.0", "-m", "v3.2.0"},
+		{"tag", "-a", "latest", "-m", "latest"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = gitEnv
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	for _, tc := range []struct {
+		name      string
+		env       []string
+		wantBuild string
+		wantLog   string
+	}{
+		{
+			name:      "checksums already published",
+			env:       []string{"STUB_CHECKSUMS=200"},
+			wantBuild: "false",
+			wantLog:   "already carries the grain CLI",
+		},
+		{
+			name:      "automatic run skips when neither GitHub Release nor sha assets exist",
+			env:       []string{"STUB_CHECKSUMS=404", "STUB_RELEASE_API=404", "STUB_SHA_IMAGES=404"},
+			wantBuild: "false",
+			wantLog:   "GitHub Release v3.2.0 does not exist",
+		},
+		{
+			name:      "automatic run builds when GitHub Release exists without sha assets",
+			env:       []string{"STUB_CHECKSUMS=404", "STUB_RELEASE_API=200", "STUB_SHA_IMAGES=404"},
+			wantBuild: "true",
+		},
+		{
+			name:      "automatic run builds when sha assets exist so assets job will create release",
+			env:       []string{"STUB_CHECKSUMS=404", "STUB_RELEASE_API=404", "STUB_SHA_IMAGES=200"},
+			wantBuild: "true",
+		},
+		{
+			name:      "explicit PROMOTE_VERSION builds so cli-assets fails loudly on missing release",
+			env:       []string{"PROMOTE_VERSION=v3.2.0", "STUB_CHECKSUMS=404", "STUB_RELEASE_API=404", "STUB_SHA_IMAGES=404"},
+			wantBuild: "true",
+		},
+	} {
+		outFile := filepath.Join(t.TempDir(), "github_output")
+		env := append([]string{
+			"GITHUB_OUTPUT=" + outFile,
+			"GITHUB_SERVER_URL=https://github.com",
+			"GITHUB_API_URL=https://api.github.com",
+			"GITHUB_REPOSITORY=ai-on-gke/grain",
+		}, tc.env...)
+		cmd := exec.Command("bash", "-c", resolveScript)
+		cmd.Dir = dir
+		cmd.Env = append([]string{"PATH=" + binDir + ":" + os.Getenv("PATH"), "HOME=" + t.TempDir()}, env...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: step failed: %v\n%s", tc.name, err, out)
+		}
+		gotOut, err := os.ReadFile(outFile)
+		if err != nil {
+			t.Fatalf("%s: reading GITHUB_OUTPUT: %v", tc.name, err)
+		}
+		if want := "build=" + tc.wantBuild + "\n"; !strings.Contains(string(gotOut), want) {
+			t.Errorf("%s: GITHUB_OUTPUT = %q, want %q (log: %s)", tc.name, gotOut, want, out)
+		}
+		if tc.wantLog != "" && !strings.Contains(string(out), tc.wantLog) {
+			t.Errorf("%s: log = %q, want substring %q", tc.name, out, tc.wantLog)
+		}
+	}
+
+	prWF := githubPromoteReleaseWorkflow(t)
+	cliJob, ok := prWF.Jobs["cli"]
+	if !ok {
+		t.Fatal("promote-release.yml has no cli job")
+	}
+	if len(cliJob.Needs) != 1 || cliJob.Needs[0] != "approve" {
+		t.Errorf("promote-release.yml cli.needs = %v, want [approve]", cliJob.Needs)
+	}
+	if cliJob.If != "inputs.decision == 'approve' || inputs.decision == ''" {
+		t.Errorf("promote-release.yml cli.if = %q, want approve-only gate", cliJob.If)
+	}
+	cliAssetsJob, ok := prWF.Jobs["cli-assets"]
+	if !ok {
+		t.Fatal("promote-release.yml has no cli-assets job")
+	}
+	if !strings.Contains(cliAssetsJob.If, "inputs.decision == 'approve'") || !strings.Contains(cliAssetsJob.If, "needs.cli.outputs.build == 'true'") {
+		t.Errorf("promote-release.yml cli-assets.if = %q, want approve and build==true gate", cliAssetsJob.If)
+	}
+
+	var prResolveScript string
+	for _, step := range cliJob.Steps {
+		if step.ID == "release" {
+			prResolveScript = step.Run
+		}
+	}
+	if prResolveScript == "" {
+		t.Fatal("promote-release.yml cli job has no step with id: release")
+	}
+	for _, bad := range []string{"v3.2.0\nFOO=bar", "3.2.0", "v3.2.0-pending", ""} {
+		outFile := filepath.Join(t.TempDir(), "github_output")
+		if out, err := runStep(t, dir, prResolveScript,
+			"RELEASE="+bad, "DRY_RUN=true",
+			"GITHUB_OUTPUT="+outFile, "GITHUB_SERVER_URL=https://github.com", "GITHUB_REPOSITORY=ai-on-gke/grain"); err == nil {
+			t.Errorf("promote-release.yml cli release step accepted %q:\n%s", bad, out)
+		}
+	}
+	// In a dry run before v3.3.0 is tagged, cli falls back to v3.3.0-pending;
+	// in a live run without v3.3.0 tagged, it fails closed.
+	cmd := exec.Command("git", "tag", "-a", "v3.3.0-pending", "-m", "pending")
+	cmd.Dir = dir
+	cmd.Env = gitEnv
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git tag v3.3.0-pending: %v\n%s", err, out)
+	}
+	curlPendingStub := strings.ReplaceAll(curlStub, "v3.2.0", "v3.3.0")
+	if err := os.WriteFile(filepath.Join(binDir, "curl"), []byte(curlPendingStub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dryOutFile := filepath.Join(t.TempDir(), "github_output")
+	cmd = exec.Command("bash", "-c", prResolveScript)
+	cmd.Dir = dir
+	cmd.Env = []string{
+		"PATH=" + binDir + ":" + os.Getenv("PATH"), "HOME=" + t.TempDir(),
+		"RELEASE=v3.3.0", "DRY_RUN=true", "STUB_CHECKSUMS=404",
+		"GITHUB_OUTPUT=" + dryOutFile, "GITHUB_SERVER_URL=https://github.com", "GITHUB_REPOSITORY=ai-on-gke/grain",
+	}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("promote-release dry-run cli resolve failed: %v\n%s", err, out)
+	}
+	gotDry, _ := os.ReadFile(dryOutFile)
+	if !strings.Contains(string(gotDry), "ref=refs/tags/v3.3.0-pending\n") || !strings.Contains(string(gotDry), "build=true\n") {
+		t.Errorf("promote-release dry-run cli output = %q, want ref=refs/tags/v3.3.0-pending and build=true", gotDry)
+	}
+	liveOutFile := filepath.Join(t.TempDir(), "github_output")
+	cmd = exec.Command("bash", "-c", prResolveScript)
+	cmd.Dir = dir
+	cmd.Env = []string{
+		"PATH=" + binDir + ":" + os.Getenv("PATH"), "HOME=" + t.TempDir(),
+		"RELEASE=v3.3.0", "DRY_RUN=false", "STUB_CHECKSUMS=404",
+		"GITHUB_OUTPUT=" + liveOutFile, "GITHUB_SERVER_URL=https://github.com", "GITHUB_REPOSITORY=ai-on-gke/grain",
+	}
+	if out, err := cmd.CombinedOutput(); err == nil {
+		t.Errorf("promote-release live cli resolve succeeded without refs/tags/v3.3.0:\n%s", out)
 	}
 }
 
@@ -423,6 +672,57 @@ func TestReleaseAndQualificationTemplatesHoldScopedCIRead(t *testing.T) {
 		}
 	}
 	for path, seen := range need {
+		if !seen {
+			t.Errorf("%s is not declared", path)
+		}
+	}
+}
+
+// Regression for task 3788: release-process-review and release-watchdog
+// inspect watchdog/steward/rc-blocker/flake-budget tasks, notifications,
+// metrics, release-qualification suite runs, and release/candidate status, so
+// both must hold read-only task, deployment, suite, and release scopes (and
+// no dangerous scopes or retired bare `self-debug` prose).
+func TestReleaseReviewAndWatchdogHoldReadOnlyTaskAndSuiteScopes(t *testing.T) {
+	decl := declarations(t)
+	repo := model.GrainSourceRepo().String()
+	wantGrants := []string{
+		model.APIGrantPrefix + "ci-read@" + repo,
+		model.APIGrantPrefix + "self-debug",
+		model.APIGrantPrefix + "suites:read@" + repo,
+		model.APIGrantPrefix + "releases:read@" + repo,
+	}
+	targets := map[string]bool{
+		".grain/templates/release-process-review.yml": false,
+		".grain/templates/release-watchdog.yml":       false,
+	}
+	for _, tmpl := range decl.Templates {
+		if _, ok := targets[tmpl.Path]; !ok {
+			continue
+		}
+		targets[tmpl.Path] = true
+		var caps []string
+		for _, g := range tmpl.Template.Grants {
+			caps = append(caps, g.Capability)
+			parsed, ok, err := model.ParseAPIGrant(g.Capability)
+			if !ok || err != nil {
+				t.Errorf("%s carries non-API or invalid grant %q (ok=%v, err=%v)", tmpl.Path, g.Capability, ok, err)
+				continue
+			}
+			if parsed.Dangerous() {
+				t.Errorf("%s carries dangerous API grant %q", tmpl.Path, g.Capability)
+			}
+		}
+		for _, want := range wantGrants {
+			if !containsString(caps, want) {
+				t.Errorf("%s grants = %v, missing %q", tmpl.Path, caps, want)
+			}
+		}
+		if strings.Contains(tmpl.Template.Body, "`self-debug`") {
+			t.Errorf("%s body still names retired bare `self-debug`; use `api:self-debug`", tmpl.Path)
+		}
+	}
+	for path, seen := range targets {
 		if !seen {
 			t.Errorf("%s is not declared", path)
 		}

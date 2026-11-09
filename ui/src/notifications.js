@@ -139,9 +139,9 @@ export function approveReleaseLabel(release) {
 }
 
 // pendingReleaseOf is the release a notification asks a person to
-// approve, { repo, version, soak, shortSoak, breaking }, or null when it
-// asks nothing of the kind: a minor release (vX.Y.0) or a patch release
-// the train staged (vX.Y.Z, Z >= 1).
+// approve, { repo, version, soak, shortSoak, breaking, dispatchFailure },
+// or null when it asks nothing of the kind: a minor release (vX.Y.0) or a
+// patch release the train staged (vX.Y.Z, Z >= 1).
 //
 // soak ("soaked 1h00m of 24h (FORCE=true)") and shortSoak (the SHORT
 // SOAK warning) are read off the body only for soak-era -pending tags
@@ -151,13 +151,19 @@ export function approveReleaseLabel(release) {
 // CHANGES warning, the train's staged notice / promotion_blocked= output,
 // or a structured breaking field when the release carries breaking changes
 // outside the major release RELEASE_MAJOR asks for.
+//
+// dispatchFailure is set when a previous promote-release.yml dispatch
+// failed (orchestrator's checkPromoteReleaseFailure): the run, its
+// refusal and, for a missing or wrong GRAIN_RELEASE_APPROVAL_KEY, what to
+// set it to.
 export function pendingReleaseOf(n) {
   const family = n?.family || (n?.subject || "").split(":")[0];
   if (family !== PENDING_RELEASE_FAMILY) return null;
   if (!(n.actions || []).includes("approve-release")) return null;
   const version = (n.subject || "").slice(PENDING_RELEASE_FAMILY.length + 1);
   if (!/^v\d+\.\d+\.\d+$/.test(version)) return null;
-  const lines = (n.body || "").split("\n").map((l) => l.trim());
+  const rawBody = n.body || "";
+  const lines = rawBody.split("\n").map((l) => l.trim());
   const soak =
     lines
       .find((l) => l.startsWith("Soak: "))
@@ -171,13 +177,45 @@ export function pendingReleaseOf(n) {
           /is not the major release RELEASE_MAJOR asks for/.test(l)),
     ) ||
     (n.breaking ? String(n.breaking) : null) ||
-    null;
+    (lines.some((l) => /^#{1,3}\s+Breaking changes\b/i.test(l))
+      ? "Release notes list breaking changes; approving needs allow_breaking."
+      : null);
+  // The failure block is only ever the head of the body: the orchestrator
+  // prepends it (FormatBlock) ahead of the staging sentence, the tag
+  // message and the release notes. Those follow it and are written by the
+  // repository -- release notes by agents -- so a "DISPATCH FAILED (",
+  // "Remedy: " or "Run URL: " line further down is quoted text, never a
+  // banner, a remedy or a link. Nor is one in a notification an agent
+  // raised.
+  const block = dispatchFailureBlock(lines);
+  const dispatchMatch = String(n.raisedBy || "").startsWith("agent:")
+    ? null
+    : block.header?.match(/^DISPATCH FAILED \(([^)]+)\):\s*(.+)$/);
+  let dispatchFailure = null;
+  if (dispatchMatch) {
+    const runId = dispatchMatch[1];
+    const message = dispatchMatch[2];
+    const remedy = block.remedy;
+    const runUrl = safeRunUrl(block.runUrl);
+    const needsApprovalKey =
+      /GRAIN_RELEASE_APPROVAL_KEY|\/api\/release-approval-key/.test(
+        [block.header, block.remedy || ""].join("\n"),
+      );
+    dispatchFailure = {
+      runId,
+      message,
+      remedy,
+      runUrl,
+      needsApprovalKey,
+    };
+  }
   return {
     repo: n.repo || "ai-on-gke/grain",
     version,
     soak,
     shortSoak,
     breaking,
+    dispatchFailure,
   };
 }
 
@@ -198,6 +236,45 @@ function breakingDetail(release) {
   return raw.startsWith("it ") ? `It ${raw.slice(3)}` : raw;
 }
 
+// dispatchFailureBlock reads the failure block the orchestrator prepends
+// to a release.pending body: a first non-blank line "DISPATCH FAILED
+// (<run>): <reason>", then any "Remedy: " and "Run URL: " lines directly
+// under it. It reads nothing past the first line that is neither, so
+// lookalike lines in the release notes below are never taken for it.
+function dispatchFailureBlock(lines) {
+  const block = { header: null, remedy: null, runUrl: null };
+  let i = 0;
+  while (i < lines.length && lines[i] === "") i++;
+  if (i >= lines.length || !lines[i].startsWith("DISPATCH FAILED (")) {
+    return block;
+  }
+  block.header = lines[i];
+  for (i++; i < lines.length; i++) {
+    const l = lines[i];
+    if (l.startsWith("Remedy: ") && block.remedy === null) {
+      block.remedy = l.slice("Remedy: ".length);
+    } else if (l.startsWith("Run URL: ") && block.runUrl === null) {
+      block.runUrl = l.slice("Run URL: ".length).trim();
+    } else {
+      break;
+    }
+  }
+  return block;
+}
+
+// safeRunUrl is url when it is an absolute http(s) URL, else null: the
+// failure banner links the run, and a javascript: or data: URL there
+// would run in grain's own origin when clicked.
+function safeRunUrl(url) {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" || u.protocol === "http:" ? u.href : null;
+  } catch {
+    return null;
+  }
+}
+
 // decideRelease approves (or rejects) a pending release, after asking:
 // approving makes it official -- vX.Y.Z tagged, `latest` moved -- and
 // rejecting drops its release candidate. The daemon refuses anybody but
@@ -206,9 +283,14 @@ function breakingDetail(release) {
 // RELEASE_MAJOR major bump is approved with allow_breaking, each only
 // after a question that says so: without them the approve job refuses the
 // release. Resolves to false when the person thought better of it.
-export async function decideRelease(release, approve) {
-  const shortSoakOk = approve && !!release.shortSoak;
-  const allowBreaking = approve && !!release.breaking;
+//
+// options.shortSoakOk and options.allowBreaking, when given, override
+// what the notification implies: the Inbox's own checkboxes.
+export async function decideRelease(release, approve, options = {}) {
+  const shortSoakOk =
+    approve && Boolean(options.shortSoakOk ?? release.shortSoak);
+  const allowBreaking =
+    approve && Boolean(options.allowBreaking ?? release.breaking);
   const question = !approve
     ? `Reject ${release.version}? Its release candidate is dropped, and the next release train run cuts the next one.`
     : shortSoakOk && allowBreaking
@@ -234,6 +316,31 @@ export async function decideRelease(release, approve) {
       : { method: "POST" },
   );
   return true;
+}
+
+export async function fetchReleaseApprovalKey() {
+  return api("/api/release-approval-key");
+}
+
+// pendingReleaseSentence is the staging summary line of a pending release
+// notification, skipping any prepended DISPATCH FAILED header lines that
+// PendingReleasesGroup renders in its own error banner.
+export function pendingReleaseSentence(n) {
+  const line =
+    (n.body || "")
+      .split("\n")
+      .map((l) => l.trim())
+      .find(
+        (l) =>
+          l !== "" &&
+          !l.startsWith("DISPATCH FAILED (") &&
+          !l.startsWith("Remedy: ") &&
+          !l.startsWith("Run URL: "),
+      ) || "";
+  const clean = line
+    .replace(/\[([^\]\n]+)\]\([^)\s]+\)/g, "$1")
+    .replace(/`([^`\n]+)`/g, "$1");
+  return clean || n.subject;
 }
 
 // notificationSentence is a notification's body as one line under its

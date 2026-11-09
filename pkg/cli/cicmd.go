@@ -781,12 +781,12 @@ func cmdCIRetrigger(ctx context.Context, c *ui.HTTPClient, out *printer, args []
 // read and rendered by the same ci.QueryTestHistory the in-sandbox
 // command's answer comes from.
 //
-// Each run is read in full (cicli.TestHistory), since a listing carries
-// no step output and a pass is only ever found there.
+// The runs, and which CI's they are, are cicli.ProviderTestHistory's.
 func cmdCITestHistory(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain ci test-history", flag.ContinueOnError)
 	repo := fs.String("repo", "", "only this repository's runs, as owner/name (default: every repository's)")
 	limit := fs.Int("limit", 20, "how many of the newest runs to look through (at most 100)")
+	provider := fs.String("provider", "", "only this CI's runs: grain or github-actions (default: github-actions for a -repo whose CI is GitHub Actions, grain otherwise)")
 	pos, err := parseArgs(fs, args)
 	if err != nil {
 		return err
@@ -801,12 +801,14 @@ func cmdCITestHistory(ctx context.Context, c *ui.HTTPClient, out *printer, args 
 	if *limit <= 0 {
 		return usageErrorf("-limit must be a positive number of runs, not %d", *limit)
 	}
-	n := min(*limit, 100)
-	page, err := c.FindCIRuns(ctx, ci.RunFilter{Repo: strings.TrimSpace(*repo), Descending: true}, n)
+	if p := strings.ToLower(strings.TrimSpace(*provider)); p != "" && p != ci.ProviderGrain && p != ci.ProviderGitHubActions {
+		return usageErrorf("-provider must be %s or %s, not %q", ci.ProviderGrain, ci.ProviderGitHubActions, *provider)
+	}
+	f := ci.RunFilter{Repo: strings.TrimSpace(*repo), Provider: strings.ToLower(strings.TrimSpace(*provider)), Descending: true}
+	report, err := cicli.ProviderTestHistory(ctx, c, f, min(*limit, 100), test)
 	if err != nil {
 		return err
 	}
-	report := cicli.TestHistory(ctx, c, page.Runs, test, strings.TrimSpace(*repo))
 	out.ciTestHistory(report)
 	return nil
 }

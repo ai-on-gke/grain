@@ -82,11 +82,14 @@ test("an Actions repo's pending patch release is approved from the Inbox through
   const before = (await dispatches()).length;
 
   await page.goto("/inbox");
-  const section = page.getByTestId("inbox-notifications");
+  const section = page.getByTestId("inbox-pending-releases");
   await expect(section).toBeVisible();
-  await section.locator(".inbox-group-toggle").click();
+  await expect(section.locator(".inbox-group-toggle")).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
   const patchRow = section
-    .getByTestId("inbox-notification")
+    .getByTestId("inbox-pending-release")
     .filter({ hasText: "v2.9.1 is ready to promote" });
   await expect(patchRow).toBeVisible();
   page.once("dialog", (dialog) => dialog.accept());
@@ -135,7 +138,7 @@ test("an Actions repo's pending patch release is approved from the Inbox through
 
   // Reject the minor release from the Inbox.
   const minorRow = section
-    .getByTestId("inbox-notification")
+    .getByTestId("inbox-pending-release")
     .filter({ hasText: "v2.10.0 is ready to promote" });
   await expect(minorRow).toBeVisible();
   page.once("dialog", (dialog) => dialog.accept());
@@ -149,8 +152,11 @@ test("an Actions repo's pending patch release is approved from the Inbox through
   });
 
   // A pending release staged because it carries breaking changes outside
-  // RELEASE_MAJOR shows BREAKING beside Approve breaking, asks a confirm
-  // naming the breaking changes, and dispatches allow_breaking=true signed.
+  // RELEASE_MAJOR, whose earlier promote-release.yml dispatch failed, is
+  // listed under "Asked: approve a release" with the failed run and what to
+  // set (GRAIN_RELEASE_APPROVAL_KEY from GET /api/release-approval-key),
+  // shows BREAKING beside Approve breaking, asks a confirm naming the
+  // breaking changes, and dispatches allow_breaking=true signed.
   await ok(
     await page.request.post(`${SIM}/git/refs`, {
       data: { ref: "refs/tags/v3.2.0-pending", sha: commit },
@@ -161,27 +167,43 @@ test("an Actions repo's pending patch release is approved from the Inbox through
     await page.request.post("/api/notifications", {
       data: {
         subject: "release.pending:v3.2.0",
-        severity: "warning",
-        title: "v3.2.0 is ready to promote",
+        severity: "critical",
+        title: "v3.2.0 is ready to promote (approve dispatch failed)",
         body:
+          "DISPATCH FAILED (gha:acme:widgets:42577215514): verify-release-approval: refused: the repository variable GRAIN_RELEASE_APPROVAL_KEY is not set\n" +
+          "Remedy: set the repository variable GRAIN_RELEASE_APPROVAL_KEY on acme/widgets to the publicKey from GET /api/release-approval-key (or `grain release approval-key`), then approve or reject again.\n\n" +
           "v3.2.0 is staged as v3.2.0-pending on acme/widgets and waits for a person.\n\n" +
           "BREAKING CHANGES: v3.2.0 carries breaking changes since v3.1.1 and is not the major release RELEASE_MAJOR asks for; approving it needs allow_breaking: true.",
         repo: "acme/widgets",
         actions: ["approve-release", "reject-release"],
       },
     }),
-    "raise v3.2.0",
+    "raise v3.2.0 failed dispatch",
   );
 
   await page.reload();
   await expect(section).toBeVisible();
-  if ((await section.getByTestId("inbox-notification").count()) === 0) {
-    await section.locator(".inbox-group-toggle").click();
-  }
   const breakingRow = section
-    .getByTestId("inbox-notification")
+    .getByTestId("inbox-pending-release")
     .filter({ hasText: "v3.2.0 is ready to promote" });
   await expect(breakingRow).toBeVisible();
+  const failureBanner = breakingRow.getByTestId(
+    "inbox-release-dispatch-failure",
+  );
+  await expect(failureBanner).toContainText("gha:acme:widgets:42577215514");
+  await expect(failureBanner).toContainText(
+    "verify-release-approval: refused: the repository variable GRAIN_RELEASE_APPROVAL_KEY is not set",
+  );
+  await expect(failureBanner).toContainText("GET /api/release-approval-key");
+  await failureBanner
+    .getByRole("button", { name: "Show approval key" })
+    .click();
+  await expect(failureBanner.locator(".inbox-approval-key")).toContainText(
+    "BEGIN PUBLIC KEY",
+  );
+  await expect(
+    breakingRow.getByRole("checkbox", { name: /Allow breaking changes/i }),
+  ).toBeChecked();
   const badge = breakingRow.getByTestId("inbox-release-soak");
   await expect(badge).toHaveText("BREAKING");
   const approveBreakingBtn = breakingRow.getByRole("button", {

@@ -209,6 +209,14 @@ export default function GrantsPicker({
   const listRef = useRef(null);
   const addButtonRef = useRef(null);
   const restoreFocus = useRef(false);
+  const popoverAction = useRef(null);
+  // Reposition synchronously before paint when filtering or method loading
+  // shrinks a viewport-clamped menu: MUI's own Popover repositions in a
+  // post-paint useEffect, leaving one frame where the filtered row sits above
+  // the repositioned paper so an immediate click lands on the backdrop.
+  useLayoutEffect(() => {
+    if (anchor) popoverAction.current?.updatePosition();
+  }, [anchor, query, methods, offered.length, repos.length, formCapabilities]);
 
   // The method listing is fetched only where there is something in it --
   // /api/config's count says so -- or a grant to show. A change in that
@@ -975,10 +983,12 @@ export default function GrantsPicker({
         </Button>
       )}
       <Popover
+        action={popoverAction}
         open={menuOpen}
         anchorEl={anchor}
         data-open-popover={menuOpen ? "" : undefined}
         onClose={(_event, reason) => closeMenu(reason === "escapeKeyDown")}
+        transitionDuration={0}
         onKeyDown={(e) => {
           if (e.key === "Escape" && !e.defaultPrevented) {
             e.preventDefault();

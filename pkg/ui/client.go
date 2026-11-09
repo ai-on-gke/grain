@@ -816,6 +816,10 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	runNowStale, err := c.Store.RunNowStale(ctx)
+	if err != nil {
+		return nil, err
+	}
 	// And once more for what each running task says it is doing: one
 	// query over the live runs that have a synopsis, rather than a read
 	// per task, on the same reasoning as the three above.
@@ -903,6 +907,7 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 			reviewNames[t.ReviewTemplateID], spans[t.ID], c.stallNote(states[t.ID], stateTimes[t.ID], now))
 		if at, ok := runNow[t.ID]; ok {
 			task.RunNowAt = &at
+			task.RunNowStale = runNowStale[t.ID]
 		}
 		task.TurnStopped = task.State == model.StateAwaitingReply && turnsStopped[t.ID]
 		if task.State == model.StateAwaitingReply {
@@ -1225,6 +1230,7 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 	task.Goal = goal
 	if obs != nil {
 		task.RunNowAt = obs.RunNowAt
+		task.RunNowStale = runNowStale(obs.RunNowAt, runs)
 	}
 	// Which ask an awaiting_reply task is parked on, before its reason,
 	// which is told apart by it (withReasons).
@@ -1493,6 +1499,7 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 	detail.PullRequestEvents = pullRequestEventsFrom(obs)
 	if obs != nil {
 		detail.RunNowAt = obs.RunNowAt
+		detail.RunNowStale = runNowStale(obs.RunNowAt, runs)
 	}
 	detail.PendingSecret = c.pendingSecretFor(obs)
 	if obs != nil {
@@ -3137,7 +3144,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		}
 		sessionQueued = sessionQueues
 		if len(escalated) > 0 || len(ungrantedWrites) > 0 || len(ungrantedReads) > 0 {
-			sessionQueued = false
+			autoSubmit, sessionQueued = false, false
 		}
 		if !autoSubmit {
 			refusal = model.AutoApprovalRefusal(child, *proposedBy, sessionQueues, seeding)
@@ -6582,19 +6589,27 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 	if task == nil {
 		return &NotFoundError{ID: id}
 	}
-	if _, _, err := c.Store.AddCommentWithAttachments(ctx, model.Comment{
+	commentID, _, err := c.Store.AddCommentWithAttachments(ctx, model.Comment{
 		TaskID:    id,
 		Author:    by,
 		Body:      body,
 		CreatedAt: now,
 		FiledVia:  filedViaFromContext(ctx),
-	}, attachments); err != nil {
+	}, attachments)
+	if err != nil {
 		return err
 	}
 
 	obs, err := c.Store.GetObservation(ctx, id)
 	if err != nil {
 		return err
+	}
+	// If a live run already read and marked this comment delivered before
+	// post-comment wake/un-park ran, any deferral or park now on the task
+	// was written after this comment was answered; waking or un-parking it
+	// here would dispatch a spurious second run for an answered message.
+	if commentID > 0 && obs != nil && obs.DeliveredCommentID != nil && *obs.DeliveredCommentID >= commentID {
+		return nil
 	}
 	// A run that stopped with resume_later(when: {message: true}) -- or a
 	// console session that ParkConsoleSessionTask both parked on a question
@@ -6613,7 +6628,7 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 	}
 	isPerson := attributedHuman(by) != nil
 	if reopenAck && isPerson {
-		reopened, err := c.reopenAcknowledgeable(ctx, id, now)
+		reopened, err := c.reopenAcknowledgeable(ctx, id, commentID, now)
 		if err != nil || reopened {
 			return err
 		}
@@ -6645,12 +6660,21 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 	// in the queue must not still be offering a box that writes a value
 	// nothing is waiting for. Answering "not this one, use the staging
 	// key" in words is a legitimate answer to a request for a secret.
+	var skipped bool
 	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
+		if commentID > 0 && ((o.DeliveredCommentID != nil && *o.DeliveredCommentID >= commentID) ||
+			(o.PendingQuestionCommentID != nil && *o.PendingQuestionCommentID > commentID)) {
+			skipped = true
+			return
+		}
 		o.PendingQuestionCommentID = nil
 		o.PendingSecret = ""
 		o.PendingAccess = nil
 	}); err != nil {
 		return err
+	}
+	if skipped {
+		return nil
 	}
 	// The task is dispatchable as of this instant, and somebody is
 	// waiting on the cycle that will notice. Asked for here rather than
@@ -6692,7 +6716,7 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 // it: a task that may not be worked in is re-parked with grain's
 // sentence saying why, rather than queued for a dispatch that would
 // refuse it.
-func (c *Client) reopenAcknowledgeable(ctx context.Context, id string, now time.Time) (reopened bool, err error) {
+func (c *Client) reopenAcknowledgeable(ctx context.Context, id string, commentID int64, now time.Time) (reopened bool, err error) {
 	state, err := c.Store.State(ctx, id)
 	if err != nil {
 		return false, err
@@ -6707,7 +6731,13 @@ func (c *Client) reopenAcknowledgeable(ctx context.Context, id string, now time.
 	if task == nil {
 		return false, &NotFoundError{ID: id}
 	}
+	var skipped bool
 	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
+		if commentID > 0 && ((o.DeliveredCommentID != nil && *o.DeliveredCommentID >= commentID) ||
+			(o.PendingQuestionCommentID != nil && *o.PendingQuestionCommentID > commentID)) {
+			skipped = true
+			return
+		}
 		o.CompletedAt = nil
 		o.RetryRequestedAt = &now
 		o.PendingQuestionCommentID = nil
@@ -6715,6 +6745,9 @@ func (c *Client) reopenAcknowledgeable(ctx context.Context, id string, now time.
 		o.PendingAccess = nil
 	}); err != nil {
 		return false, err
+	}
+	if skipped {
+		return false, nil
 	}
 	allowed := c.teamTargetRepos(ctx, model.DefaultTeamID)
 	if task.Target != nil && !targetAllowed(allowed, *task.Target) {
@@ -6944,7 +6977,7 @@ func (c *Client) retry(ctx context.Context, id string) error {
 		return validationErrorf("%s was stopped by an operator: only a person can resume it, by replying or pressing Retry", id)
 	}
 	if stopped {
-		reopened, err := c.reopenAcknowledgeable(ctx, id, now)
+		reopened, err := c.reopenAcknowledgeable(ctx, id, 0, now)
 		if err != nil || reopened {
 			return err
 		}
@@ -7499,10 +7532,29 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 			return err
 		}
 	}
+	// A request is stamped later than every run of the task has started,
+	// and later than any request already standing, which it replaces: that
+	// is what makes it the person asking again, started at once
+	// (dispatch.runNowEligible), rather than a request a run already
+	// spent, held to that run's backoff. A clock that has not moved past
+	// either is nudged a microsecond beyond it.
+	at := now
+	if runs, err := c.Store.Runs(ctx, id); err != nil {
+		return err
+	} else {
+		for i := range runs {
+			if !at.After(runs[i].StartedAt) {
+				at = runs[i].StartedAt.Add(time.Microsecond)
+			}
+		}
+	}
 	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
-		o.RunNowAt = &now
+		if o.RunNowAt != nil && !at.After(*o.RunNowAt) {
+			at = o.RunNowAt.Add(time.Microsecond)
+		}
+		o.RunNowAt = &at
 		o.CompletedAt = nil
-		o.RetryRequestedAt = &now
+		o.RetryRequestedAt = &at
 		o.PendingQuestionCommentID = nil
 		o.PendingSecret = ""
 		o.PendingAccess = nil
@@ -7533,6 +7585,20 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 		c.Config.Wake()
 	}
 	return nil
+}
+
+// runNowStale is ui.Task.RunNowStale for one task: whether runNowAt is
+// no newer than the start of one of runs.
+func runNowStale(runNowAt *time.Time, runs []model.Run) bool {
+	if runNowAt == nil {
+		return false
+	}
+	for i := range runs {
+		if !runNowAt.After(runs[i].StartedAt) {
+			return true
+		}
+	}
+	return false
 }
 
 // agentMayApprove refuses the approval RunNow would grant task when the
@@ -7646,27 +7712,7 @@ func isExternalAgent(p model.Principal) bool {
 // pipeline steward, durable and holding run_task_now, could propose a task
 // asking for it and then approve that task itself.
 func agentEscalatedCapabilities(task, requester model.Task) []string {
-	held := make(map[string]bool, len(requester.Grants))
-	for _, g := range requester.Grants {
-		held[g.Capability] = true
-	}
-	var out []string
-	for _, g := range task.Grants {
-		if model.IsCapabilityRef(g.Capability) || g.Via == model.GrantByDefault ||
-			(held[g.Capability] && !model.IsPersonOnlyGrant(g.Capability)) {
-			continue
-		}
-		held[g.Capability] = true
-		out = append(out, g.Capability)
-	}
-	childRefs := make([]model.Grant, 0, len(task.Grants))
-	for _, g := range task.Grants {
-		if g.Via == model.GrantByDefault && model.IsGrainCIGrant(g.Capability) {
-			continue
-		}
-		childRefs = append(childRefs, g)
-	}
-	return append(out, model.UncoveredCapabilityRefs(childRefs, requester.Grants)...)
+	return model.AgentEscalatedCapabilities(task, requester)
 }
 
 // runNowComment is what a run-now leaves on the task's own thread. It
@@ -7755,10 +7801,15 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 			if o.ClosedAt == nil {
 				o.ClosedAt = &now
 			}
+			// A closed task is never started (Store.RunNow), so a
+			// request standing on it can only block the one a person
+			// makes after reopening it (task 3557).
+			o.RunNowAt = nil
 			obs = o
 			return
 		}
 		o.ClosedAt = nil
+		o.RunNowAt = nil
 	}); err != nil {
 		return err
 	}

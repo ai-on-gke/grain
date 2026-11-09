@@ -86,6 +86,7 @@ const taskListPageDefault = 100
 type taskListPage struct {
 	Tasks      []Task `json:"tasks"`
 	NextCursor string `json:"nextCursor,omitempty"`
+	Truncated  bool   `json:"truncated"`
 	Total      int    `json:"total"`
 	Merged     int    `json:"merged"`
 	Sessions   int    `json:"sessions"`
@@ -354,6 +355,7 @@ func pageTasks(matched []Task, q taskListQuery) taskListPage {
 		page.Tasks = append(page.Tasks, t)
 	}
 	if end < len(matched) && end > start {
+		page.Truncated = true
 		page.NextCursor = keys[matched[end-1].ID].String()
 	}
 	return page

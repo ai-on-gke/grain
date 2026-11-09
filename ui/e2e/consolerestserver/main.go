@@ -444,7 +444,9 @@ func (s *scriptedSession) Run(ctx context.Context, cfg agent.RunConfig) (*agent.
 		}
 	}
 	if maxID > 0 {
-		_ = s.store.AdvanceDelivered(ctx, cfg.TaskID, maxID, time.Now().UTC())
+		if err := s.store.AdvanceDelivered(ctx, cfg.TaskID, maxID, time.Now().UTC()); err != nil {
+			return nil, err
+		}
 	}
 
 	s.mu.Lock()

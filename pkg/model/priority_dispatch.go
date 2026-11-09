@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // PriorityDispatchCapability is the retired legacy capability name for
@@ -59,7 +60,8 @@ func (t Task) IsDurable() bool {
 // dangerous api grant (IsDangerousGrant), or the one-release input aliases
 // priority-dispatch and durable.
 func IsPersonOnlyGrant(name string) bool {
-	return name == PriorityDispatchCapability || name == DurableCapability || IsDangerousGrant(name)
+	s := strings.TrimSpace(name)
+	return s == PriorityDispatchCapability || s == DurableCapability || IsDangerousGrant(s)
 }
 
 // IsAdminOnlyGrant reports whether name is a grant only a direct human

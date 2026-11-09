@@ -784,6 +784,96 @@ auto-submit do not release it. `POST /api/tasks/{id}/human-review/release`
 agent is refused there, and on Submit or a `PATCH` turning auto-merge on
 while the hold stands. See [merging.design.md](../design/design/merging.design.md#gates).
 
+## Paging a list
+
+An MCP tool result carries about 10 KB before the client elides it, and
+some of the API's lists grow with the deployment rather than with
+anything the caller chose -- what a credential reaches, the memory
+index, a repository's branches -- so no `api_*` list tool answers with
+an unbounded body. Every list route that can grow takes the same three
+parameters, read by `parseListQuery` (`pkg/ui/list_page.go`):
+
+| Parameter | Meaning |
+|---|---|
+| `q` | Only items whose natural key (the table below says which) contains this text, case-insensitively. |
+| `limit` | At most this many items; `0` for every item. An agent's call that names none is paged by default, at the route's own page size (chosen so a default page stays under the cap); a person's unparameterised call gets the whole list in the shape the UI reads. At most 1000. |
+| `cursor` | The `nextCursor` of the previous page. Opaque: pass it back, never build one (`ui.ListCursorFor` exists for a Go caller paging by hand). A cursor the route did not hand out is a 400. |
+
+When a call is paged -- an agent's always (whether through `POST /mcp`,
+`POST /api/mcp`'s `grain_invoke`, or a `gma_` external-agent token), a
+person's when it names `q`, `limit` or `cursor` -- the answer says so
+rather than silently cutting the list short: a route that answered a
+bare list answers `{items, total, truncated, nextCursor}`, and a route
+that answered an object carries `total`, `truncated` and `nextCursor` on
+it. `total` is how many items matched across every page;
+`truncated: true` says this page was cut by the limit, and `nextCursor`
+(absent on the last page) reads on from it.
+
+| Route | Page by default | `q` matches | Other filters |
+|---|---|---|---|
+| `GET /api/deployment/reachable-repos` | 100 | the full name (`owner/name`, or `host/owner/name` on another git host) | `push=true` for only repositories the connection can push to -- those a task can be filed against -- or `push=false` for only those it cannot; `owner=`; `host=` (the deployment's default host, `github.com` unless configured, for the names that spell none). `repos` is the page; `connections` and `errors`, one entry per git connection, are whole. |
+| `GET /api/deployment/git-connections` | 50 | credential, host, kind or scope | `host=` |
+| `GET /api/deployment/secret-audit` | 50 | secret name, key, principal or task id | |
+| `GET /api/deployment/audit-logs` | 20 | kind, resource, credential, principal or task id | |
+| `GET /api/deployment/config-audit` | 20 | actor, surface or summary | |
+| `GET /api/repos/{owner}/{name}/branches` | 50 | the branch's name | |
+| `GET /api/repos/{owner}/{name}/github-branches` | 50 | the branch's name | |
+| `GET /api/repos/{owner}/{name}/workflows` | 5 | workflow path or name | `workflows` is the page. |
+| `GET /api/repos/{owner}/{name}/releases` | 20 | name, latest or prod branch | |
+| `GET /api/repos/{owner}/{name}/releases/{release}/candidates` | 20 | branch, status or release | |
+| `GET /api/tasks` | 20 (`fields=` unset) / 50 (`fields=summary` or `full`) | title, description, labels, branch or id | `repo`, `state`, `owner`, `externalRef`, `filed_via`, `derived_from`, `fields=summary` (recommended for agents; `grain_list_tasks` calls this). |
+| `GET /api/tasks/states`, `GET /api/states` | 250 | | Lightweight `{id, state, repo}` rows; `truncated` and `nextCursor` accompany `hasMore` and `cursor`. |
+| `GET /api/tasks/{id}/messages` | 10 | author, summary or body | `after`, `agents`, `timeout` |
+| `GET /api/inbox` | 20 | task, title, repo, summary, subject or pull request | `repo`, `kind`. `items` is the page. |
+| `GET /api/notifications` | 20 | subject or title | `open`, `family`, `after`, as before |
+| `GET /api/ci/runs` | 10 (`view=full`) / 50 (`view=compact`) | repository, branch, sha, trigger, task id or workflow | `view=compact` (recommended), `repo`, `branch`, `sha`, `status`, `conclusion`, `trigger`, `workflow`, `task_id`, `exclude_trigger`, `created_after`. `runs` is the page. |
+| `GET /api/ci/workflows` | 20 | workflow path, name or job name | `repo`, `ref`. `workflows` is the page. |
+| `GET /api/ci/runs/{id}/artifacts` | 50 | job or artifact name | `artifacts` is the page. |
+| `GET /api/ci/faults` | 20 | digest, kind, job, step, file or repository | `repo=owner/name`. `faults` is the page; `enabled` is as before. |
+| `GET /api/merge-batches` | 20 | repository, branch, ref or run id | `repo=owner/name`. `batches` is the page. |
+| `GET /api/base-branch-gates` | 20 | repository, branch or reason | `repo=owner/name`. `gates` is the page. |
+| `GET /api/memory` | 5 | repository, author or text | `repo=owner/name` for one repository's standing memory; `repo=` (empty) for the deployment's own. |
+| `GET /api/memory/documents` | 50 | name, repo or summary | `repo=owner/name` for one repository's documents; `repo=` (empty) for the deployment's own. |
+| `GET /api/templates` | 5 (`fields=summary`: 50) | id, name, title or repository | `repo=owner/name`; `fields=summary` omits each template's prompt description. |
+| `GET /api/schedules` | 10 | name, repository, cron or target | `kind`, `sort`, `f` |
+| `GET /api/suites` | 20 | id or name | |
+| `GET /api/suite-runs` | 20 | suite name or id | `repo=owner/name` |
+| `GET /api/boards` | 20 | id, name or folder | |
+| `GET /api/release-notes` | 50 | week period, title or author | |
+| `GET /api/release-notes/versions` | 50 | version string | `versions` is the page. |
+| `GET /api/state-repo/files` | 100 | file path | `files` is the page. |
+| `GET /api/capability-methods` | 10 | ref, capability, method or description | `kind`, `repo` |
+| `GET /api/capability-servers` | 10 | capability_id, command or URL | |
+| `GET /api/capability-servers/usage` | 20 | capability_id | |
+| `GET /api/capability-servers/gchat-usage` | 50 | space or transport | `id` |
+| `GET /api/capability-servers/host-entries` | 50 | allowlist entry name | `entries` is the page. |
+| `GET /api/api-scope-sets` | 10 | scope set name or source | `scopeSets` is the page. |
+| `GET /api/api-scope-sets/usage` | 20 | scope set name | |
+| `GET /api/external-agents/tokens` | 50 | id, name, owner or scope set | |
+| `GET /api/access/principals` | 50 | principal entry, role, reason or addedBy | `entries` is the page; `roles` is omitted on paged calls. |
+| `GET /api/hostds` | 50 | host name or owner | |
+| `GET /api/gcp-keys` | 50 | key name, project id or service account email | |
+| `GET /api/github-tokens` | 50 | credential name, capability or connection scope | `credentials` is the page. |
+| `GET /api/secrets` | 50 | secret name or key | `secrets` is the page. |
+| `GET /api/agent-models` | 50 | model id, label or family | `framework`, `backend`. `models` is the page. |
+| `GET /api/persistent-sandboxes` | 50 | sandbox name, repository or state | |
+| `GET /api/console` | 20 | task id, title or repository | `consoles` is the page. |
+| `GET /api/console-sessions` | 5 | session id, title, task id or team | `sessions` is the page; `capabilities` is omitted on paged calls. |
+| `GET /api/upgrade/targets` | 50 | target name or kind | `targets` is the page. |
+
+`GET /api/events` (`limit` default 20 for agents / 100 otherwise, `since`,
+`repo`, `types`), `GET /api/pipeline/changes` (`limit`, `after`) and
+`GET /api/unmatched-failures` (`limit`, `window`) bound event and
+failure windows in their own vocabularies, described on their tools. For
+example, "which repository can I file against?" is one call:
+
+```json
+{"query": {"push": "true", "owner": "gke-labs", "q": "bouncer"}}
+```
+
+and reading every repository a credential reaches is a loop on
+`nextCursor` until the answer carries none.
+
 ## The controller MCP server (`POST /api/mcp`)
 
 `grain-controller` is one stateless Streamable HTTP MCP server on the
@@ -1118,7 +1208,7 @@ task" behave as follows:
 | `POST /api/tasks` (`api_create_task`) | Requires an explicit target in the request body (`repo`, a `templateId` with a target, or `noRepo: true`) because there is no calling task from which to inherit a default repository. |
 | Self-protection on `/api/tasks/{id}/*` | No task ID matches `external:<name>`, so an external agent with the required scope and repository grant can stop, close, retry, pause, or reorder any task in its allowed repositories while still honouring standing-session ownership, pause ownership, and upgrade holds. Approval is the exception: see the next row. |
 | Approving: `POST /api/tasks/{id}/approve` (`api_approve`) and `POST /api/tasks/{id}/run-now` (`api_run_now`) on an unapproved task | The G8 approval rail ([Self-protection rails](#self-protection-rails)) applies to external credentials too, owned or not. An owned credential is its owner's delegate, not its owner, so it never stands in for the person a hold waits for. It is refused (403) a task in its own lineage: one the credential filed (the task's origin names `external:<name>`), or one proposed down the chain of a task it filed. It is also refused a task held for a person: `hold_for_approval`, targeting or writing `grain/config` or a person-held change target, a declared `push:` set, `autoMerge`, a `requires_person` or person-only grant, `keep_running`, an `admission` above `standard`, or a capability, write, read or priority its in-grain proposer doesn't hold. This applies whoever filed the task, a person included. `run-now`'s implicit approval is an approval, so on an unapproved task it needs `tasks:admin` as well as `dispatch:write` and asks the same questions, a reason included (`X-Grain-Acting-Reason`, `grain_invoke`'s `reason`, `grain approve`/`grain run-now -reason`): approve is destructive under `tasks:admin`, so neither approves without one. That is `tasks:admin` on the task's repository, or, for a task with no repository, `tasks:admin` on every repository: a credential holding `tasks:admin` only for some repositories approves neither way a task that names none. Approve and `run-now` therefore give the same answer for any unapproved task, over REST, `POST /mcp` and `POST /api/mcp`'s `grain_invoke`. Any other unapproved task is approved under `tasks:admin`, and an approved task is still jumped ahead by `run-now` under `dispatch:write` alone. Owner-trust approval at filing is unchanged. A person approves the rest. |
-| Single-repo collection reads (`GET /api/tasks`, `GET /api/ci/runs`, `GET /api/ci/workflows`, `GET /api/merge-batches`, `GET /api/pipeline/changes`, `GET /api/memory/documents/{name}`) | When a credential is restricted to a single repository and omits `?repo=`, the query filter defaults automatically to that repository, and the answer holds nothing outside it. A credential restricted to several repositories names one in `?repo=` on each read. |
+| Single-repo collection reads (`GET /api/tasks`, `GET /api/ci/runs`, `GET /api/ci/workflows`, `GET /api/merge-batches`, `GET /api/pipeline/changes`, `GET /api/memory/documents`, `GET /api/memory/documents/{name}`, `GET /api/suite-runs`, `GET /api/ci/faults`) | When a credential is restricted to a single repository and omits `?repo=`, the query filter defaults automatically to that repository, and the answer holds nothing outside it. A credential restricted to several repositories names one in `?repo=` on each read. |
 | External configuration repository (`409 config_managed_externally`) | Works unchanged: when the deployment's configuration lives in an external git repository, configuration-writing tools return `409 Conflict` (`code: "config_managed_externally"`) with the rehearsed git patch to commit. |
 
 ### Worked example

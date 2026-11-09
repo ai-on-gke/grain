@@ -22,8 +22,10 @@ package ui_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -727,6 +729,30 @@ func TestRunNowByAnAgentDoesNotApproveADangerousAPIGrantItHolds(t *testing.T) {
 	if stored, err := store.GetTask(ctx, proposal.ID); err != nil || stored.Approval != nil {
 		t.Fatalf("approval = %+v, err = %v; want it left for a person", stored.Approval, err)
 	}
+
+	// The same refusal applies when the dangerous api grant arrived via
+	// DefaultCapabilities (GrantByDefault) rather than explicit capabilities.
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:                repo,
+		DefaultCapabilities: []string{"self-upgrade"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seededProposal, err := c.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "carries a dangerous default scope", Description: "waits for a person",
+		Repo: repo.String(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.RunNow(agentCtx, seededProposal.ID)
+	if !errors.As(err, &forbidden) || !strings.Contains(err.Error(), "api:self-upgrade") {
+		t.Fatalf("RunNow by an agent on a task with default api:self-upgrade: err = %v, want a refusal naming it", err)
+	}
+	if stored, err := store.GetTask(ctx, seededProposal.ID); err != nil || stored.Approval != nil {
+		t.Fatalf("approval = %+v, err = %v; want it left for a person", stored.Approval, err)
+	}
 }
 
 // Over the agent API (X-Grain-Acting-Task), the acting task is already
@@ -752,5 +778,94 @@ func TestRunNowAndPauseOverAgentAPIRefuseAnotherAgentRequester(t *testing.T) {
 		`{"reason":"spoofed","requestedBy":"2","requestedByKind":"agent"}`, "")
 	if code != http.StatusForbidden {
 		t.Fatalf("POST /api/pipeline-pause naming task 2 as requester: %d %s, want 403", code, body)
+	}
+}
+
+// Task 3557: a request a run was started for and gave back is stale --
+// no newer than that run's start -- and the wire says so, which is what
+// keeps the pane's Run now offered. Pressing it again (POST run-now on a
+// task that already has a request) re-stamps it to now, which is no
+// longer stale; and closing or reopening the task clears a stamp left
+// standing.
+func TestRunNowRestampsAStaleRequestAndCloseReopenClearIt(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	now := baseTime
+	c.Now = func() time.Time { return now }
+	srv := ui.NewServerWithClient(c)
+	task := create(t, c, ctx)
+
+	post := func() ui.Task {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/tasks/"+task.ID+"/run-now", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("POST run-now = %d %s", rec.Code, rec.Body.String())
+		}
+		var out ui.Task
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	if got := post(); got.RunNowAt == nil || !got.RunNowAt.Equal(baseTime) || got.RunNowStale {
+		t.Fatalf("first request: RunNowAt = %v, stale = %v; want %v, not stale", got.RunNowAt, got.RunNowStale, baseTime)
+	}
+	now = baseTime.Add(10 * time.Second)
+	if got := post(); got.RunNowAt == nil || !got.RunNowAt.Equal(now) || got.RunNowStale {
+		t.Fatalf("repeat request: RunNowAt = %v, stale = %v; want re-stamped to %v", got.RunNowAt, got.RunNowStale, now)
+	}
+	asked := now
+
+	// The run it starts never reaches its agent, and gives it back.
+	started := now.Add(time.Minute)
+	if err := store.StartRun(ctx, model.Run{ID: task.ID + "-1", TaskID: task.ID, Attempt: 1, StartedAt: started}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, task.ID+"-1", started.Add(5*time.Second), "setup-failed", "no sandbox"); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := c.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.RunNowAt == nil || !detail.RunNowAt.Equal(asked) || !detail.RunNowStale {
+		t.Fatalf("detail after the run gave it back: RunNowAt = %v, stale = %v; want %v, stale", detail.RunNowAt, detail.RunNowStale, asked)
+	}
+	list, err := c.ListTasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range list {
+		if row.ID == task.ID && !row.RunNowStale {
+			t.Fatalf("list row: RunNowStale = false, want stale")
+		}
+	}
+
+	// Pressing Run now again re-stamps it, past the run's start, even
+	// with a clock that has not moved.
+	now = started
+	got := post()
+	if got.RunNowAt == nil || !got.RunNowAt.After(started) || got.RunNowStale {
+		t.Fatalf("request over a stale one: RunNowAt = %v, stale = %v; want after %v, not stale", got.RunNowAt, got.RunNowStale, started)
+	}
+
+	now = started.Add(time.Minute)
+	if err := c.Close(ctx, task.ID, ui.CloseOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if obs, err := store.GetObservation(ctx, task.ID); err != nil || obs.RunNowAt != nil {
+		t.Fatalf("after Close: RunNowAt = %v (%v), want none", obs.RunNowAt, err)
+	}
+	old := baseTime
+	if err := store.ObserveField(ctx, task.ID, now, func(o *model.Observation) { o.RunNowAt = &old }); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Reopen(ctx, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if reopened, err := c.GetTask(ctx, task.ID); err != nil || reopened.RunNowAt != nil || reopened.RunNowStale {
+		t.Fatalf("after Reopen: RunNowAt = %v, stale = %v (%v); want none", reopened.RunNowAt, reopened.RunNowStale, err)
 	}
 }

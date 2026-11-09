@@ -718,7 +718,7 @@ func renderScopeDetail(access mcpCallerAccess, authorized []APIRoute, q exploreQ
 				routes = append(routes, exploredRouteSchema{
 					Tool: rt.Tool, Method: rt.Method, Path: rt.Path, Scope: rt.Scope,
 					NeedsReason: rt.NeedsReason, AliasOf: rt.AliasOf,
-					Description: rt.Description, InputSchema: rt.inputSchema(),
+					Description: rt.Summary, InputSchema: rt.inputSchema(),
 				})
 			}
 			p["routes"] = routes

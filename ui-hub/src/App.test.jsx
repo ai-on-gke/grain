@@ -737,19 +737,16 @@ describe("Grain Hub UI", () => {
     globalThis.fetch = createFetchMock();
     renderApp("/");
 
+    // Quota summary and entries load from separate /api/me and /api/entries?mine=1 fetches
+    const quotaRegion = screen.getByLabelText("Personal quota usage");
     await waitFor(() => {
       expect(
         screen.getByRole("heading", { name: "My Entries" }),
       ).toBeInTheDocument();
+      expect(quotaRegion).toHaveTextContent("3 / 8");
+      expect(quotaRegion).toHaveTextContent("2 / 20");
+      expect(screen.getByText(/offered transfer of/i)).toBeInTheDocument();
     });
-
-    // Quota summary
-    const quotaRegion = screen.getByLabelText("Personal quota usage");
-    expect(quotaRegion).toHaveTextContent("3 / 8");
-    expect(quotaRegion).toHaveTextContent("2 / 20");
-
-    // Pending incoming transfer banner
-    expect(screen.getByText(/offered transfer of/i)).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Accept transfer" }),
     ).toBeInTheDocument();
@@ -921,10 +918,10 @@ describe("Grain Hub UI", () => {
       expect(
         screen.getByRole("heading", { name: "Hub Administration" }),
       ).toBeInTheDocument();
+      expect(
+        screen.getAllByText("registry-us-central1-a-01").length,
+      ).toBeGreaterThan(0);
     });
-    expect(
-      screen.getAllByText("registry-us-central1-a-01").length,
-    ).toBeGreaterThan(0);
     expect(screen.getAllByText("alice-workstation").length).toBeGreaterThan(0);
 
     // Switch to Status view via nav
@@ -933,8 +930,8 @@ describe("Grain Hub UI", () => {
       expect(
         screen.getByRole("heading", { name: "Hub Service Status" }),
       ).toBeInTheDocument();
+      expect(screen.getByText("*.grain.example.com")).toBeInTheDocument();
     });
-    expect(screen.getByText("*.grain.example.com")).toBeInTheDocument();
     expect(screen.getAllByText("v0.14.2").length).toBeGreaterThan(0);
   });
 
@@ -1355,15 +1352,11 @@ describe("Grain Hub UI", () => {
       screen.getByRole("button", { name: "Apps acting for you" }),
     );
 
+    const grantsSection = await screen.findByTestId("person-grants-section");
     await waitFor(() => {
-      expect(
-        screen.getByRole("heading", { name: "Apps acting for you" }),
-      ).toBeInTheDocument();
+      expect(grantsSection).toHaveTextContent("planner");
+      expect(grantsSection).toHaveTextContent("dlg_a1b2c3d4e5f60001");
     });
-
-    const grantsSection = screen.getByTestId("person-grants-section");
-    expect(grantsSection).toHaveTextContent("planner");
-    expect(grantsSection).toHaveTextContent("dlg_a1b2c3d4e5f60001");
     expect(grantsSection).not.toHaveTextContent("legacy-chat");
 
     // Toggle include_revoked -> GET /api/delegation-grants?include_revoked=true
@@ -1498,7 +1491,9 @@ describe("Grain Hub UI", () => {
     });
 
     const diskInput = await screen.findByLabelText("Boot disk size (GB)");
-    expect(diskInput).toHaveValue(100);
+    await waitFor(() => {
+      expect(diskInput).toHaveValue(100);
+    });
 
     fireEvent.change(screen.getByLabelText("VM Shape"), {
       target: { value: "small" },

@@ -377,6 +377,11 @@ type grantCheckSubject struct {
 // (CapabilityMethod.PolicyRefusal), which is what a picker for a task on
 // that repository offers it by.
 func (s *Server) handleListCapabilityMethods(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageSmall)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	methods := s.tasks.ListCapabilityMethods(r.Context())
 	q := r.URL.Query()
 	if kind := strings.TrimSpace(q.Get("kind")); kind != "" {
@@ -409,7 +414,10 @@ func (s *Server) handleListCapabilityMethods(w http.ResponseWriter, r *http.Requ
 		}
 		methods = marked
 	}
-	writeJSON(w, http.StatusOK, methods)
+	methods = filterList(methods, func(m CapabilityMethod) bool {
+		return list.matches(m.Ref, m.Capability, m.Method, m.Description)
+	})
+	writeList(w, methods, list)
 }
 
 func (s *Server) handleCheckCapabilityGrants(w http.ResponseWriter, r *http.Request) {

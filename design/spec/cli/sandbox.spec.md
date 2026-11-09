@@ -226,15 +226,18 @@ Usage: `grain ci log [<run-id> | --task <id>] [--repo owner/name] [--job <j>] [-
 
 The external `grain ci test-history` is [host #CLI-62](host.spec.md#CLI-62), rendering the same report.
 
-`grain ci test-history <test-name>` sends `GET /cli/ci/test-history?test=<name>[&limit][&repo]`.
+`grain ci test-history <test-name>` sends `GET /cli/ci/test-history?test=<name>[&limit][&repo][&provider]`.
+
+The runs are grain CI's and, for a repository whose CI is GitHub Actions (`ci_mode: github`), its Actions runs (`ci.ExternalRuns`), with the log tails grain recorded of their failed jobs. With no `--provider`, such a repository's history is its Actions runs alone: its grain CI runs are a retired mode's, and the report says how many were left out (`--provider grain` reads them). Grain keeps no log of an Actions job that passed, so an Actions run counts the test's failures and never a pass (`ci.TestHistoryReport.PassesUncounted`); every report names each provider's runs and the window they span (`Sources`).
 
 <!-- BEGIN GENERATED FLAGS: grain ci test-history -->
-Usage: `grain ci test-history <test-name> [--limit N] [--repo owner/name]`
+Usage: `grain ci test-history <test-name> [--limit N] [--repo owner/name] [--provider grain|github-actions]`
 
 | Flag | Type |
 |---|---|
 | `--limit` | count (non-negative integer) |
 | `--repo` | string |
+| `--provider` | string |
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/sandboxcli/sandboxcli_test.go`: `TestSandboxCLIAgainstTheProxy`.

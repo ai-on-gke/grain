@@ -122,7 +122,10 @@ type gitHubTokensResponse struct {
 	DefaultName string `json:"defaultName,omitempty"`
 	// RestartRequired is any row's NeedsRestart, so the pane can show one
 	// banner rather than reading every row to find out whether to.
-	RestartRequired bool `json:"restartRequired"`
+	RestartRequired bool   `json:"restartRequired"`
+	Total           int    `json:"total,omitempty"`
+	Truncated       bool   `json:"truncated,omitempty"`
+	NextCursor      string `json:"nextCursor,omitempty"`
 }
 
 // deploymentGitConnections is the deployment's git connections, nil when
@@ -328,7 +331,40 @@ func (c *Client) gitCredentialGrantHolders(ctx context.Context, name string) ([]
 // deployment's GitHub credentials, the connections naming them and the
 // local directory they live in -- a system administrator's to read.
 func (s *Server) handleListGitHubTokens(w http.ResponseWriter, r *http.Request) {
-	s.respondWithGitHubTokens(w, r)
+	list, err := parseListQuery(r, listPageMedium)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	credentials := s.tasks.Config.Credentials
+	if credentials == nil {
+		writeJSON(w, http.StatusOK, gitHubTokensResponse{Enabled: false, Tokens: []gitHubTokenInfo{}})
+		return
+	}
+	tokens := s.tasks.gitHubTokens(r.Context())
+	restart := false
+	for _, token := range tokens {
+		restart = restart || token.NeedsRestart
+	}
+	resp := gitHubTokensResponse{
+		Enabled:         true,
+		Dir:             credentials.Dir(),
+		Tokens:          tokens,
+		DefaultName:     s.tasks.defaultGitCredential(s.tasks.deploymentGitConnections(r.Context())),
+		RestartRequired: restart,
+	}
+	if list.Paged {
+		matched := filterList(tokens, func(t gitHubTokenInfo) bool {
+			keys := append([]string{t.Name, t.Capability}, t.Connections...)
+			return list.matches(keys...)
+		})
+		page := pageOf(matched, list)
+		resp.Tokens = page.Items
+		resp.Total = page.Total
+		resp.Truncated = page.Truncated
+		resp.NextCursor = page.NextCursor
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 type setGitHubTokenRequest struct {

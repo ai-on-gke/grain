@@ -387,29 +387,29 @@ func clearSuspensionWait(ctx context.Context, store *model.Store, taskID string)
 // person's say-so. A request made since the last run is the person
 // asking again, after seeing how it ended, and is started straight away
 // as a request always was.
-func runNowEligible(ctx context.Context, store *model.Store, req model.RunNowRequest, now time.Time) (bool, error) {
+func runNowEligible(ctx context.Context, store *model.Store, req model.RunNowRequest, now time.Time) (eligible bool, heldUntil *time.Time, err error) {
 	streak, err := store.FailureStreak(ctx, req.TaskID)
 	if err != nil {
-		return false, fmt.Errorf("checking %s's failure streak: %w", req.TaskID, err)
+		return false, nil, fmt.Errorf("checking %s's failure streak: %w", req.TaskID, err)
 	}
 	if streak == nil || req.At.After(streak.LastStartedAt) {
-		return true, nil
+		return true, nil, nil
 	}
 	resumeAt, err := store.SuspensionResumeAt(ctx, req.TaskID)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if resumeAt != nil && now.Before(*resumeAt) {
-		return false, nil
+		return false, resumeAt, nil
 	}
 	if streak.BackoffCount == 0 {
-		return true, nil
+		return true, nil, nil
 	}
 	backoff := retryBackoff(streak.BackoffCount)
 	if req.Priority && streak.LastOutcome == model.SetupFailedOutcome && backoff > maxSetupRetryBackoff {
 		backoff = maxSetupRetryBackoff
 	}
-	return !now.Before(streak.LastFinishedAt.Add(backoff)), nil
+	return !now.Before(streak.LastFinishedAt.Add(backoff)), nil, nil
 }
 
 // Option is one caller's adjustment to a single Cycle call. Variadic
@@ -767,11 +767,22 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 			recordSkipQuotaWait(ctx, store, req.TaskID, why, now)
 			continue
 		}
-		if ok, err := runNowEligible(ctx, store, req, now); err != nil {
+		if ok, heldUntil, err := runNowEligible(ctx, store, req, now); err != nil {
 			return out, fmt.Errorf("dispatch: %w", err)
 		} else if !ok {
+			// Said, as a ready candidate's hold is: a request a run gave
+			// back waits out its suspension or the retry backoff, and the
+			// task's row says which rather than reading "asked for".
+			if heldUntil != nil {
+				setSuspensionWait(ctx, store, req.TaskID, *heldUntil, now)
+				log.Printf("dispatch: run-now request for %s skipped: %s", req.TaskID, heldBySuspensionWhy(*heldUntil))
+			} else {
+				clearSuspensionWait(ctx, store, req.TaskID)
+				log.Printf("dispatch: run-now request for %s skipped: backing off after a run that gave it back", req.TaskID)
+			}
 			continue
 		}
+		clearSuspensionWait(ctx, store, req.TaskID)
 		want := taskShape(ctx, store, limits, req.TaskID)
 		repair := false
 		durable := false
