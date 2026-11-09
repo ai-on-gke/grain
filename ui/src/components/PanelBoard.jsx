@@ -23,7 +23,9 @@ import { STATE_LABELS } from "../state.js";
 import { attributesFor } from "../taskAttributes.js";
 import {
   NO_NARROWING,
+  admitsState,
   defaultFilters,
+  defaultNarrowing,
   describeUnknownConditions,
   narrowTasks,
   unknownConditions,
@@ -42,9 +44,10 @@ import {
 } from "../panels.js";
 import { childRenderKeys } from "../childOrder.js";
 import { panelPlaces } from "../panelOrder.js";
-import { keptQuery } from "../boards.js";
+import { boardNarrowing, keptQuery } from "../boards.js";
 import { reportPath, reportScope, scopeSummary } from "../report.js";
 import { loadView } from "../gantt.js";
+import AccessGate from "./AccessGate.jsx";
 import {
   MoveHandle,
   MoveSlot,
@@ -54,7 +57,12 @@ import {
 import GanttChart from "./GanttChart.jsx";
 import Sparkline from "./Sparkline.jsx";
 import StateDot, { isLiveRunning } from "./StateDot.jsx";
-import { ListEmpty } from "./ListPrimitives.jsx";
+import {
+  FollowLink,
+  ListEmpty,
+  TasksLoadError,
+  tasksLoadFailed,
+} from "./ListPrimitives.jsx";
 import NarrowingBar from "./NarrowingBar.jsx";
 import { TaskRow } from "./TaskList.jsx";
 import { rowFields } from "./CustomFields.jsx";
@@ -235,12 +243,16 @@ const GANTT_PANEL_ROWS = 10;
 // draw the same shape of the same series.
 const METRICS_BUCKETS = 24;
 
+// PARTIAL_COUNT_TITLE is what a count marked "+" says when pointed at.
+const PARTIAL_COUNT_TITLE =
+  "Counts the closed tasks loaded so far; older closed tasks are not counted yet.";
+
 // ListPanel is the flat list, cut to the top few rows. The rows are the
 // list view's own (TaskRow), without the checkbox and the drag handle:
 // selecting and reordering are gestures the list view offers over the
 // same tasks, and a panel is a window onto them rather than a second
 // place to act on them.
-function ListPanel({ tasks, config, narrowing, onOpenTask }) {
+function ListPanel({ tasks, config, narrowing, onOpenTask, partial = false }) {
   if (tasks.length === 0) return <ListEmpty>Nothing here right now.</ListEmpty>;
   // A panel carries its own sort, saved with the panel rather than
   // picked in a toolbar, so a panel that says "the backlog by priority"
@@ -260,7 +272,8 @@ function ListPanel({ tasks, config, narrowing, onOpenTask }) {
           component="p"
           className="panel-list-more"
         >
-          Showing {shown.length} of {tasks.length}.
+          Showing {shown.length} of {tasks.length}
+          {partial ? "+" : ""}.
         </Typography>
       )}
       <ul className="task-list">
@@ -292,7 +305,13 @@ function ListPanel({ tasks, config, narrowing, onOpenTask }) {
 // Each count is a link into the list narrowed to that column's states,
 // on top of whatever the panel is already narrowed to: "eleven waiting"
 // is a number worth clicking, and what it opens should be those eleven.
-function StatesPanel({ tasks, narrowing, onOpen }) {
+function StatesPanel({
+  tasks,
+  narrowing,
+  onOpen,
+  partial = false,
+  panelKey = "",
+}) {
   const columns = useMemo(() => loadColumns() || defaultColumns(), []);
   const { cards, hidden } = groupIntoColumns(tasks, columns);
   return (
@@ -307,28 +326,33 @@ function StatesPanel({ tasks, narrowing, onOpen }) {
           ],
         };
         return (
-          <a
+          <FollowLink
             className="panel-state"
             key={c.id}
             href={buildPath({ view: "tasks", narrowing: asked })}
             // A real href so a count can be copied and sent, followed
             // in-app when it is simply clicked -- DetailOverlay's own
-            // treatment of the link it offers.
-            onClick={(e) => {
-              if (
-                !onOpen ||
-                e.button !== 0 ||
-                e.metaKey ||
-                e.ctrlKey ||
-                e.shiftKey ||
-                e.altKey
-              )
-                return;
-              e.preventDefault();
-              onOpen({ view: "tasks", narrowing: asked });
-            }}
+            // treatment of the link it offers. Tagged with the panel and
+            // the column, so Back puts focus on this count and not on
+            // another link to the same list (useReturnFocus).
+            tag={`${panelKey}:state:${c.id}`}
+            onFollow={
+              onOpen
+                ? () => onOpen({ view: "tasks", narrowing: asked })
+                : undefined
+            }
           >
-            <span className="panel-state-count">{held.length}</span>
+            <span
+              className="panel-state-count"
+              title={
+                partial && c.states.includes("closed")
+                  ? PARTIAL_COUNT_TITLE
+                  : undefined
+              }
+            >
+              {held.length}
+              {partial && c.states.includes("closed") ? "+" : ""}
+            </span>
             <span className="panel-state-title">
               {/* The dot the rest of the UI draws for the first state
                   this column collects: a column is recognised by its
@@ -348,7 +372,7 @@ function StatesPanel({ tasks, narrowing, onOpen }) {
               )}
               {c.title}
             </span>
-          </a>
+          </FollowLink>
         );
       })}
       {hidden > 0 && (
@@ -491,6 +515,10 @@ function scopeNote(scope) {
 function Panel({
   panel,
   asked,
+  // What the dashboard asks before anybody narrows it (keptQuery's own
+  // comparison point), so a throughput panel offers "Keep" only when the
+  // reader's narrowing changes the report it fetches.
+  baseline,
   kept,
   handle,
   // The drag, in two halves: `grip` is what makes the header a drag
@@ -502,6 +530,10 @@ function Panel({
   over,
   picked,
   tasks,
+  tasksFailed = false,
+  tasksError = null,
+  onRetryTasks,
+  closedPartial = false,
   config,
   onOpenTask,
   onOpen,
@@ -509,6 +541,11 @@ function Panel({
   now,
 }) {
   const narrowing = panelNarrowing(panel, asked);
+  // Whether this panel's counts are a floor rather than a total: the
+  // closed tasks are paged in (closedTasks.js), and while some are not
+  // held yet a panel whose question lets closed work through counts
+  // only the ones that are -- so it says "200+" rather than "200".
+  const partial = closedPartial && admitsState(narrowing, config, "closed");
   // The tasks a panel is about: the same resolve/sort/match every task
   // view does, from the one place that does it (taskFilters.js's
   // narrowTasks). Worked out here even though only three of the four
@@ -535,33 +572,47 @@ function Panel({
   let drawn;
   switch (panel.kind) {
     case "gantt":
-      body = (
-        // The tasks the page holds rather than the ones narrowed above,
-        // even though the count beside the heading is the narrowed
-        // length: GanttChart narrows what it is given by the narrowing
-        // it is given, so handing it the answer as well would be the
-        // same filter run twice over 929 tasks -- and asked the same
-        // question of the same list, its own call lands on the answer
-        // this one just computed.
-        <GanttChart
-          tasks={tasks}
-          config={config}
-          narrowing={narrowing}
-          onOpenTask={onOpenTask}
-          now={now}
-          embedded
-          fixedView={ganttView}
-          maxRows={GANTT_PANEL_ROWS}
-        />
-      );
       drawn = ganttView.range;
-      count = narrowed.length;
+      if (tasksFailed) {
+        body = <TasksLoadError error={tasksError} onRetry={onRetryTasks} />;
+      } else {
+        body = (
+          // The tasks the page holds rather than the ones narrowed above,
+          // even though the count beside the heading is the narrowed
+          // length: GanttChart narrows what it is given by the narrowing
+          // it is given, so handing it the answer as well would be the
+          // same filter run twice over 929 tasks -- and asked the same
+          // question of the same list, its own call lands on the answer
+          // this one just computed.
+          <GanttChart
+            tasks={tasks}
+            config={config}
+            narrowing={narrowing}
+            onOpenTask={onOpenTask}
+            now={now}
+            embedded
+            fixedView={ganttView}
+            maxRows={GANTT_PANEL_ROWS}
+          />
+        );
+        count = narrowed.length;
+      }
       break;
     case "states":
-      body = (
-        <StatesPanel tasks={narrowed} narrowing={narrowing} onOpen={onOpen} />
-      );
-      count = narrowed.length;
+      if (tasksFailed) {
+        body = <TasksLoadError error={tasksError} onRetry={onRetryTasks} />;
+      } else {
+        body = (
+          <StatesPanel
+            tasks={narrowed}
+            narrowing={narrowing}
+            onOpen={onOpen}
+            panelKey={panel.key}
+            partial={partial}
+          />
+        );
+        count = narrowed.length;
+      }
       break;
     case "metrics": {
       const scope = reportScope(narrowing, attributesFor(config));
@@ -570,15 +621,20 @@ function Panel({
       break;
     }
     default:
-      body = (
-        <ListPanel
-          tasks={narrowed}
-          config={config}
-          narrowing={narrowing}
-          onOpenTask={onOpenTask}
-        />
-      );
-      count = narrowed.length;
+      if (tasksFailed) {
+        body = <TasksLoadError error={tasksError} onRetry={onRetryTasks} />;
+      } else {
+        body = (
+          <ListPanel
+            tasks={narrowed}
+            config={config}
+            narrowing={narrowing}
+            onOpenTask={onOpenTask}
+            partial={partial}
+          />
+        );
+        count = narrowed.length;
+      }
   }
 
   // Only on a panel that is showing the reader's own narrowing and
@@ -590,7 +646,7 @@ function Panel({
     Boolean(onKeep) &&
     kept &&
     !panel.query &&
-    panelUsesNarrowing(panel, narrowing);
+    panelUsesNarrowing(panel, narrowing, baseline);
 
   // What the row asked for and did not get. "" on every panel whose
   // range was understood, and on every panel that named none, so this
@@ -627,52 +683,58 @@ function Panel({
             (ReorderPickup.jsx). */}
         {handle}
         <h3 className="panel-title">{panelTitle(panel)}</h3>
-        {count !== null && <span className="count">{count}</span>}
-        {keepable && (
-          <button
-            type="button"
-            className="panel-keep"
-            // Named for the reader who cannot see which panel this
-            // button sits in: a dashboard can have several of them at
-            // once, and "Keep" on its own would be several buttons with
-            // one name. The title says what will happen, since the
-            // gesture writes nothing itself -- it opens the task that
-            // does.
-            aria-label={`Keep this narrowing on “${panelTitle(panel)}”`}
-            title={`File the task that makes \`${kept}\` this panel's own question`}
-            onClick={() => onKeep(panel)}
+        {count !== null && (
+          <span
+            className="count"
+            title={partial ? PARTIAL_COUNT_TITLE : undefined}
           >
-            Keep
-          </button>
+            {count}
+            {partial ? "+" : ""}
+          </span>
         )}
-        <a
+        {keepable && (
+          // Keep files a task, so a role without tasks:write is refused
+          // it the way BoardPage's own "Edit board" is.
+          <AccessGate scope="tasks:write" config={config}>
+            <button
+              type="button"
+              className="panel-keep"
+              // Named for the reader who cannot see which panel this
+              // button sits in: a dashboard can have several of them at
+              // once, and "Keep" on its own would be several buttons with
+              // one name. The title says what will happen, since the
+              // gesture writes nothing itself -- it opens the task that
+              // does.
+              aria-label={`Keep this narrowing on “${panelTitle(panel)}”`}
+              title={`File the task that makes \`${kept}\` this panel's own question`}
+              onClick={() => onKeep(panel)}
+            >
+              Keep
+            </button>
+          </AccessGate>
+        )}
+        <FollowLink
           className="panel-open"
           href={panelPath(panel, asked)}
+          // Two panels following the dashboard's own question have an
+          // "Open" to the same list, so the panel tags it: Back puts
+          // focus on the one that was followed (useReturnFocus).
+          tag={`${panel.key}:open`}
           // An anchor is a drag source of its own, and this one sits
           // inside a header that is the panel's: without this, dragging
           // from "Open" hands the browser a URL to drop somewhere
           // instead of moving the panel. Refusing it lets the drag fall
           // through to the header, which is the gesture that was meant.
           draggable={false}
-          onClick={(e) => {
-            if (
-              !onOpen ||
-              e.button !== 0 ||
-              e.metaKey ||
-              e.ctrlKey ||
-              e.shiftKey ||
-              e.altKey
-            )
-              return;
-            e.preventDefault();
-            // The destination the href was built from, so the in-app
-            // click and the copyable link open the same thing -- the
-            // list for three kinds, the report for the throughput one.
-            onOpen(panelDestination(panel, asked));
-          }}
+          // The destination the href was built from, so the in-app
+          // click and the copyable link open the same thing -- the
+          // list for three kinds, the report for the throughput one.
+          onFollow={
+            onOpen ? () => onOpen(panelDestination(panel, asked)) : undefined
+          }
         >
           Open
-        </a>
+        </FollowLink>
       </header>
       {rangeNote && (
         <Typography
@@ -701,6 +763,12 @@ function Panel({
 export default function PanelBoard({
   board,
   tasks,
+  tasksLoaded = true,
+  tasksError = null,
+  onRetryTasks,
+  // closedPartial is useClosedTasks' partial: some closed tasks are not
+  // paged in yet, so a count over closed work is a floor.
+  closedPartial = false,
   config,
   narrowing = NO_NARROWING,
   // A dashboard rendered without one is a dashboard whose toolbar
@@ -720,10 +788,12 @@ export default function PanelBoard({
   now = Date.now(),
 }) {
   const panels = board.panels || [];
+  const tasksFailed = tasksLoadFailed(tasks, tasksLoaded, tasksError);
   // Worked out once for the whole grid rather than per panel: it is a
   // question about the dashboard ("has its reader narrowed it away from
   // what the board says?"), and every panel gets the same answer.
   const kept = keptQuery(board, narrowing, config);
+  const baseline = boardNarrowing(board) || defaultNarrowing(config);
 
   // The two halves of the gesture, held exactly as BoardList holds them.
   // dragKey is the panel a mouse is dragging; overKey is only the
@@ -815,9 +885,11 @@ export default function PanelBoard({
         defaults={defaultFilters(config)}
         searchPlaceholder="Search this dashboard…"
       >
-        <Button size="small" onClick={() => onAddPanel?.(board)}>
-          Add panel
-        </Button>
+        <AccessGate scope="tasks:write" config={config}>
+          <Button size="small" onClick={() => onAddPanel?.(board)}>
+            Add panel
+          </Button>
+        </AccessGate>
       </NarrowingBar>
       {pickedKey !== null && (
         <MovingBar
@@ -846,6 +918,7 @@ export default function PanelBoard({
               <Panel
                 panel={panel}
                 asked={narrowing}
+                baseline={baseline}
                 kept={kept}
                 handle={
                   enabled ? (
@@ -882,6 +955,10 @@ export default function PanelBoard({
                 over={dragKey !== null && overKey === panel.key}
                 picked={pickedKey === panel.key}
                 tasks={tasks}
+                tasksFailed={tasksFailed}
+                tasksError={tasksError}
+                onRetryTasks={onRetryTasks}
+                closedPartial={closedPartial}
                 config={config}
                 onOpenTask={onOpenTask}
                 onOpen={onOpen}

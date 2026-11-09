@@ -32,12 +32,13 @@ Authentication and admission themselves ([`authentication.design.md`](authentica
 
 1. **Done** (tasks 2310, 2311): `model.Principal.Source` (`model.AuthSource`), `Principal.Verified()`, `ui.PrincipalLabel`, the `*_source` database columns, `ui.RequestActor(ctx)`, `TestNothingOutsideRequestActorReadsTheActor`, and `TestEveryMutatingRouteIsAttributed`.
 2. **Done** (task 2309): `extractPrincipal` (`pkg/ui/principal.go`) preserves verified `PrincipalHuman` and `PrincipalService` callers from `IdentityVerifier` implementations ([`authentication.design.md`](authentication.design.md) §2), and mutating routes record them.
-3. **Remaining:** `GET /api/whoami` (`OA-5`) and full `PrincipalLabel` rendering across remaining UI surfaces.
-4. **Remaining:** `OnBehalfOf` population for console sessions and API grants (`OA-10`–`OA-13`). A wrapper distribution registers its signed-proxy `IdentityVerifier`, and attribution follows with no change here.
+3. **Done** (task 2312): `GET /api/whoami` (`OA-5`) and full `PrincipalLabel` rendering across remaining UI surfaces.
+4. **Done** (task 2313): `OnBehalfOf` population for console sessions and API grants. The agent API gate derives it server-side (`agentOnBehalfOf`, `pkg/ui/on_behalf_of.go`) and `RequestActor` returns it, so every write the gate admits carries it. A task view names a session's agent by its title ("director for alice@example.com"). A wrapper distribution registers its signed-proxy `IdentityVerifier`, and attribution follows with no change here.
+5. **Done** (task 2797): an external agent token's on-behalf-of (`ExternalAgentToken.OwnerPrincipal`, spec §2.4).
 
 ## Open questions
 
 - Should the UI show the short username (`alice`) or the full email? The proposal is the full email everywhere it is stored, and a short form in dense UI only when the domain matches the deployment owner's.
 - Should old rows be backfilled? The proposal is no: history keeps saying "operator", because nobody knows who it was.
 - Should there be a per-deployment display-name map (`alice@example.com → Alice Liddell`), held in `grain/config`?
-- Which human does a director turn act for when several people talk to one session?
+- ~~Which human does a director turn act for when several people talk to one session?~~ Answered by spec §2.4: the author of the most recent person's message the turn has been shown (`Observation.DeliveredCommentID`, or what was in the conversation when its run started), and nobody when that author is not verified.

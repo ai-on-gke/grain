@@ -1049,6 +1049,41 @@ describe("DetailOverlay actions", () => {
     vi.unstubAllGlobals();
   });
 
+  // Pause now skips the grace period a run gets to push its work, so
+  // what it has not pushed is lost: it asks first, as Cancel does
+  // (2026-11-08 walkthrough, where one click paused a running task).
+  it("asks before Pause now stops a running task, and pauses only once confirmed", async () => {
+    const act = vi.fn();
+    const confirm = vi.fn().mockReturnValue(false);
+    vi.stubGlobal("confirm", confirm);
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={{ ...baseTask, state: "running" }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Pause now" }));
+    expect(confirm).toHaveBeenCalledWith(
+      expect.stringMatching(/whatever it has not pushed is lost/),
+    );
+    expect(act).not.toHaveBeenCalled();
+
+    confirm.mockReturnValue(true);
+    await user.click(screen.getByRole("button", { name: "Pause now" }));
+    act.mock.calls[0][0]();
+    expect(api).toHaveBeenCalledWith("/api/tasks/12/pause", {
+      method: "POST",
+      body: JSON.stringify({ immediate: true }),
+    });
+    vi.unstubAllGlobals();
+  });
+
   it("shows Close for a queued task, wired to the close endpoint", async () => {
     const act = vi.fn();
     const user = userEvent.setup();
@@ -1313,6 +1348,80 @@ describe("DetailOverlay actions", () => {
     expect(api).toHaveBeenCalledWith("/api/tasks/12", {
       method: "PATCH",
       body: JSON.stringify({ keepRunning: true }),
+    });
+  });
+
+  // The Admission select replaced the priority-dispatch toggle
+  // (unified-grants.design.md §4.1).
+  it("sets a task's admission from the actions column", async () => {
+    const act = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={{ ...baseTask, admission: "standard" }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+        showError={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole("combobox", { name: /Admission/ }));
+    await user.click(screen.getByRole("option", { name: "Bypass queue" }));
+
+    act.mock.calls[0][0]();
+    expect(api).toHaveBeenCalledWith("/api/tasks/12", {
+      method: "PATCH",
+      body: JSON.stringify({ admission: "bypass" }),
+    });
+  });
+
+  it("keeps a console session's admission durable", () => {
+    render(
+      <DetailOverlay
+        task={{ ...baseTask, admission: "durable", consoleSession: "steward" }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+        showError={() => {}}
+      />,
+    );
+
+    const select = screen.getByRole("combobox", { name: /Admission/ });
+    expect(select).toHaveTextContent("Durable");
+    expect(select).toHaveAttribute("aria-disabled", "true");
+  });
+
+  // The Hosting select replaced the console capability
+  // (unified-grants.design.md §4.1).
+  it("sets a task's hosting from the actions column", async () => {
+    const act = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={{ ...baseTask, hosting: "unattended" }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+        showError={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole("combobox", { name: /Hosting/ }));
+    await user.click(
+      screen.getByRole("option", { name: "Interactive console" }),
+    );
+
+    act.mock.calls[0][0]();
+    expect(api).toHaveBeenCalledWith("/api/tasks/12", {
+      method: "PATCH",
+      body: JSON.stringify({ hosting: "console" }),
     });
   });
 

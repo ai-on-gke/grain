@@ -588,3 +588,212 @@ func TestServiceAccountAllowlistEntriesNeedAReasonAndNeverAdmitPoolAccounts(t *t
 		}
 	}
 }
+
+func TestDelegateEntriesNeedAReasonAndAPerson(t *testing.T) {
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
+	t.Setenv("GRAIN_ALLOWED_PRINCIPALS", "")
+
+	priv, pemStr := generateECDSATestKey(t)
+	assertionKeys(t, priv, pemStr, false)
+	ui.SetIAPAudience(tunnelAudience)
+	as := func(email string) map[string]string {
+		return map[string]string{
+			ui.IAPAssertionHeader: signIAPToken(t, priv, tunnelKid, tunnelAudience, email, "sub", ui.GoogleIAPIssuer, time.Now().Add(10*time.Minute)),
+		}
+	}
+
+	srv, client := testServer(t)
+	ui.SetAccessCodeForTest(srv, testAccessCode)
+	ctx := context.Background()
+
+	const (
+		poolSA     = "grain-agent@my-proj.iam.gserviceaccount.com"
+		setSA      = "iap-test-1@acme-pool.iam.gserviceaccount.com"
+		operatorSA = "ops-bot@my-proj.iam.gserviceaccount.com"
+		delegateSA = "slack-bot@my-proj.iam.gserviceaccount.com"
+	)
+	mc := model.DefaultConfig()
+	mc.GCPProject = "my-proj"
+	mc.GCPServiceAccountEmail = poolSA
+	mc.GCPServiceAccountCount = 2
+	mc.MCPServers = map[string]protocol.ServerConfig{
+		model.GCPCapabilityServerID: {
+			Command: "grain",
+			Args:    []string{"capability", "gcp"},
+			Builtin: "gcp",
+			Config: map[string]any{
+				"permission_sets": []any{
+					map[string]any{"name": "iap-test", "project": "acme-pool", "accounts": []any{setSA}},
+				},
+			},
+		},
+	}
+	if err := client.Store.PutConfig(ctx, mc); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.AllowPrincipal(ctx, ui.AllowPrincipalRequest{
+		Entry:  "serviceAccount:" + operatorSA,
+		Role:   model.DefaultAccessRole,
+		Reason: "ops bot",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Missing reason -> 400; invalid email -> 400; invalid label -> 400; gcp-key pool -> 422.
+	for _, tc := range []struct {
+		name string
+		body string
+		want int
+	}{
+		{"missing reason", `{"entry":"delegate:` + delegateSA + `"}`, http.StatusBadRequest},
+		{"human email", `{"entry":"delegate:alice@example.com","reason":"x"}`, http.StatusBadRequest},
+		{"bad label", `{"entry":"delegate:` + delegateSA + `","reason":"x","label":"Bad_Label"}`, http.StatusBadRequest},
+		{"pool SA", `{"entry":"delegate:` + poolSA + `","reason":"x"}`, http.StatusUnprocessableEntity},
+		{"numbered pool SA", `{"entry":"delegate:grain-agent-1@my-proj.iam.gserviceaccount.com","reason":"x"}`, http.StatusUnprocessableEntity},
+		{"permission-set SA", `{"entry":"delegate:` + setSA + `","reason":"x"}`, http.StatusUnprocessableEntity},
+	} {
+		rec := serveFrom(srv, "127.0.0.1:4242", http.MethodPost, "/api/access/principals", tc.body, map[string]string{
+			"Authorization": "Bearer " + testAccessCode,
+		})
+		if rec.Code != tc.want {
+			t.Fatalf("%s: status = %d (%s), want %d", tc.name, rec.Code, rec.Body.String(), tc.want)
+		}
+	}
+
+	// 2. A service account caller (even at grain/operator) is refused when adding a delegate: entry (403 requires_person).
+	recSA := serveFrom(srv, "203.0.113.10:443", http.MethodPost, "/api/access/principals",
+		`{"entry":"delegate:`+delegateSA+`","reason":"added by bot"}`, as(operatorSA))
+	if recSA.Code != http.StatusForbidden || !strings.Contains(recSA.Body.String(), `"requires_person"`) {
+		t.Fatalf("service account adding delegate: = %d %s, want 403 requires_person", recSA.Code, recSA.Body.String())
+	}
+
+	// 3. A human / loopback operator adding delegate: with a reason succeeds and defaults to grain/delegated.
+	recOK := serveFrom(srv, "127.0.0.1:4242", http.MethodPost, "/api/access/principals",
+		`{"entry":"delegate:Slack-Bot@my-proj.iam.gserviceaccount.com","reason":"workspace slack bot","label":"slack-bot"}`,
+		map[string]string{"Authorization": "Bearer " + testAccessCode})
+	if recOK.Code != http.StatusCreated {
+		t.Fatalf("human adding delegate: = %d %s, want 201", recOK.Code, recOK.Body.String())
+	}
+	list, err := client.ListAllowedPrincipals(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *model.AllowedPrincipal
+	for i := range list.Entries {
+		if list.Entries[i].Entry == "delegate:"+delegateSA {
+			found = &list.Entries[i]
+			break
+		}
+	}
+	if found == nil || found.Role != model.DefaultDelegateAccessRole || found.Label != "slack-bot" || found.Reason != "workspace slack bot" {
+		t.Fatalf("delegate entry = %+v, want role=%s label=slack-bot", found, model.DefaultDelegateAccessRole)
+	}
+
+	// 4. MigrateAllowedPrincipals ignores delegate: entries.
+	flagStore, _ := sqlitetest.Open(t)
+	flagClient := ui.NewClient(ui.Config{
+		Actor:             ui.DefaultActor("operator@example.com"),
+		AllowedPrincipals: []string{"user:alice@example.com", "delegate:flag-bot@my-proj.iam.gserviceaccount.com"},
+	}, flagStore)
+	if err := flagClient.MigrateAllowedPrincipals(ctx); err != nil {
+		t.Fatal(err)
+	}
+	listAfterFlag, err := flagClient.ListAllowedPrincipals(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range listAfterFlag.Entries {
+		if strings.Contains(e.Entry, "flag-bot") {
+			t.Fatalf("-ui-allowed-principals imported a delegate: entry: %+v", e)
+		}
+	}
+}
+
+func TestDelegateEntryRoleRefusesDangerousScopes(t *testing.T) {
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
+	t.Setenv("GRAIN_ALLOWED_PRINCIPALS", "")
+
+	srv, _ := testServer(t)
+	ui.SetAccessCodeForTest(srv, testAccessCode)
+	bearer := map[string]string{"Authorization": "Bearer " + testAccessCode}
+
+	const delegateSA = "slack-bot@my-proj.iam.gserviceaccount.com"
+
+	// Custom scope set with a dangerous scope (secrets:write).
+	installScopeSets(t,
+		model.APIScopeSet{
+			Name:        "custom-dangerous",
+			Description: "has secrets:write",
+			Scopes:      []string{"tasks:read", "secrets:write"},
+			Version:     1,
+		},
+		model.APIScopeSet{
+			Name:        "custom-access-write",
+			Description: "has access:write",
+			Scopes:      []string{"tasks:read", "access:write"},
+			Version:     1,
+		},
+		model.APIScopeSet{
+			Name:        "custom-safe",
+			Description: "safe subset",
+			Scopes:      []string{"tasks:read", "tasks:write"},
+			Version:     1,
+		},
+	)
+
+	// 1. grain/operator, custom-dangerous, and custom-access-write are refused with 422 on POST.
+	for _, badRole := range []string{"grain/operator", "custom-dangerous", "custom-access-write"} {
+		rec := serveFrom(srv, "127.0.0.1:4242", http.MethodPost, "/api/access/principals",
+			`{"entry":"delegate:`+delegateSA+`","role":"`+badRole+`","reason":"test"}`, bearer)
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("POST delegate: with role %s = %d %s, want 422", badRole, rec.Code, rec.Body.String())
+		}
+	}
+
+	// 2. Adding at grain/delegated or custom-safe succeeds; PATCH to a dangerous role is also refused with 422.
+	rec := serveFrom(srv, "127.0.0.1:4242", http.MethodPost, "/api/access/principals",
+		`{"entry":"delegate:`+delegateSA+`","role":"custom-safe","reason":"test"}`, bearer)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST delegate: with custom-safe = %d %s, want 201", rec.Code, rec.Body.String())
+	}
+	for _, badRole := range []string{"grain/operator", "custom-dangerous", "custom-access-write"} {
+		recPatch := serveFrom(srv, "127.0.0.1:4242", http.MethodPatch, "/api/access/principals/delegate:"+delegateSA,
+			`{"role":"`+badRole+`"}`, bearer)
+		if recPatch.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("PATCH delegate: to role %s = %d %s, want 422", badRole, recPatch.Code, recPatch.Body.String())
+		}
+	}
+}
+
+func TestDelegateEntryNeverAdmitsADirectCaller(t *testing.T) {
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
+	t.Setenv("GRAIN_ALLOWED_PRINCIPALS", "")
+
+	priv, pemStr := generateECDSATestKey(t)
+	assertionKeys(t, priv, pemStr, false)
+	ui.SetIAPAudience(tunnelAudience)
+
+	srv, client := testServer(t)
+	ctx := context.Background()
+	const delegateSA = "slack-bot@my-proj.iam.gserviceaccount.com"
+
+	if _, err := client.AllowPrincipal(ctx, ui.AllowPrincipalRequest{
+		Entry:  "delegate:" + delegateSA,
+		Role:   "grain/delegated",
+		Reason: "workspace slack bot",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Direct IAP call by the service account (no act claim / no serviceAccount: entry) is refused (403).
+	tok := signIAPToken(t, priv, tunnelKid, tunnelAudience, delegateSA, "sub", ui.GoogleIAPIssuer, time.Now().Add(10*time.Minute))
+	rec := serveFrom(srv, "203.0.113.10:443", http.MethodGet, "/api/tasks", "", map[string]string{
+		ui.IAPAssertionHeader: tok,
+	})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("direct caller with only delegate: entry GET /api/tasks = %d %s, want 403", rec.Code, rec.Body.String())
+	}
+}

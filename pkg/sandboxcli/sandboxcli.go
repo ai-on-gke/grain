@@ -173,7 +173,7 @@ var sandboxCommands = map[string][]string{
 	"help": nil, "-h": nil, "--help": nil,
 	"ls": nil, "read": nil, "grep": nil,
 	"ci":            {"list", "show", "checks", "log", "test-history", "artifact", "wait", "run-job", "retrigger"},
-	"pr":            {"status", "base-status", "open", "reply", "resolve", "review-comment"},
+	"pr":            {"status", "base-status", "open", "reply", "resolve", "threads", "review-comment"},
 	"git":           {"revert"},
 	"merge-queue":   nil,
 	"status":        nil,
@@ -214,6 +214,7 @@ var sandboxCommandFlags = map[string][]string{
 	"pr open":               nil,
 	"pr reply":              {"file", "comment-id"},
 	"pr resolve":            {"thread-id", "comment-id"},
+	"pr threads":            {"unresolved"},
 	"pr review-comment":     {"file", "path", "line"},
 	"git revert":            {"task", "commit", "reason", "C"},
 	"merge-queue":           nil,
@@ -536,6 +537,12 @@ func (c *sandboxCLI) run(args []string) error {
 		return c.prReply(p)
 	case "pr resolve":
 		return c.prResolve(p)
+	case "pr threads":
+		var q url.Values
+		if p.has("unresolved") {
+			q = url.Values{"unresolved": {"1"}}
+		}
+		return c.get("/cli/pr/threads", q, c.out)
 	case "pr review-comment":
 		return c.prReviewComment(p)
 	case "git revert":
@@ -921,7 +928,7 @@ var sandboxBoolFlags = map[string]bool{
 	"i": true, "full": true, "json": true, "all": true, "comments": true,
 	"no-repo": true, "fixes-base-branch": true, "no-port": true, "keep-running": true,
 	"no-follow-up": true, "park": true, "auto-merge": true,
-	"hold-for-approval": true, "at-front": true, "stalled": true,
+	"hold-for-approval": true, "at-front": true, "stalled": true, "unresolved": true,
 }
 
 func parseSandboxArgs(args []string) (sandboxArgs, error) {

@@ -142,6 +142,7 @@ func (s *Server) controllerMCPTools() []mcp.Tool {
 }
 
 type mcpCallerAccess struct {
+	role          *accessRole
 	actingTaskID  string
 	externalToken *model.ExternalAgentToken
 	fullAccess    bool
@@ -153,23 +154,29 @@ type mcpCallerAccess struct {
 
 // resolveMCPCallerAccess is who is calling POST /api/mcp and what routes
 // they reach: the acting task's grants when X-Grain-Acting-Task names
-// one, an external agent token's scopes when the request carries one,
-// and otherwise every non-internal route, for a person or BYO harness
-// the server already admitted.
+// one, an external agent token's scopes when the request carries one, a
+// verified session's role when accessRoleFromContext carries a limited or
+// delegated role (intersected with any token or acting task grants), and
+// otherwise every non-internal route for an unlimited caller.
 func (s *Server) resolveMCPCallerAccess(ctx context.Context) (mcpCallerAccess, error) {
 	outerReq := controllerMCPRequestFromContext(ctx)
 	if outerReq == nil {
 		return mcpCallerAccess{}, errNoOuterRequest
 	}
+	role := accessRoleFromContext(ctx)
 	// An external agent token is the credential, as it is for agentAPIGate:
 	// X-Grain-Acting-Task on a token's request is ignored rather than let
 	// widen the token's scopes to a task's grants.
 	if tok := externalTokenFromContext(ctx); tok != nil {
 		_, set, _, err := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos)
 		if err != nil {
-			return mcpCallerAccess{externalToken: tok}, err
+			return mcpCallerAccess{role: role, externalToken: tok}, err
+		}
+		if role != nil && !role.Full {
+			set = set.Intersect(role.set).Without(role.deny)
 		}
 		return mcpCallerAccess{
+			role:          role,
 			externalToken: tok,
 			grantSet:      set,
 			repoLimits:    slices.Clone(tok.Repos),
@@ -179,11 +186,11 @@ func (s *Server) resolveMCPCallerAccess(ctx context.Context) (mcpCallerAccess, e
 	channel := strings.TrimSpace(outerReq.Header.Get(ChannelHeader))
 	if taskID != "" {
 		if s.tasks == nil || s.tasks.Store == nil {
-			return mcpCallerAccess{actingTaskID: taskID, channel: channel}, errNoAgentAPI
+			return mcpCallerAccess{role: role, actingTaskID: taskID, channel: channel}, errNoAgentAPI
 		}
 		acting, err := s.tasks.Store.GetTask(ctx, taskID)
 		if err != nil || acting == nil {
-			return mcpCallerAccess{actingTaskID: taskID, channel: channel}, fmt.Errorf("acting task %s could not be read: %v", taskID, err)
+			return mcpCallerAccess{role: role, actingTaskID: taskID, channel: channel}, fmt.Errorf("acting task %s could not be read: %v", taskID, err)
 		}
 		held := grantNames(acting.Grants)
 		var set APIGrantSet
@@ -192,32 +199,54 @@ func (s *Server) resolveMCPCallerAccess(ctx context.Context) (mcpCallerAccess, e
 		} else {
 			set = APIGrantsOf(held)
 		}
+		set = model.WithinDirectorFloor(*acting, set)
+		if role != nil && !role.Full {
+			set = set.Intersect(role.set).Without(role.deny)
+		}
 		return mcpCallerAccess{
+			role:         role,
 			actingTaskID: taskID,
 			grantSet:     set,
 			heldGrants:   held,
 			channel:      channel,
 		}, nil
 	}
-	return mcpCallerAccess{fullAccess: true}, nil
+	if role != nil && (!role.Full || role.Delegated) {
+		return mcpCallerAccess{
+			role:       role,
+			grantSet:   role.set,
+			heldGrants: slices.Clone(role.grants),
+		}, nil
+	}
+	return mcpCallerAccess{role: role, fullAccess: true}, nil
 }
 
-// reads reports whether the caller holds scope outright: what each part
-// of grain_filing_context is gated on, as the route serving the same
-// data is (route_scopes.go).
+// reads reports whether the caller holds scope outright across the
+// deployment: what each deployment-wide part of grain_filing_context is
+// gated on, as the route serving the same data is (route_scopes.go).
 func (a mcpCallerAccess) reads(scope APIScope) bool {
+	if a.role != nil && !a.role.Full && !a.role.allows(scope, "") {
+		return false
+	}
 	return a.fullAccess || a.grantSet.Has(scope)
 }
 
 func (a mcpCallerAccess) allowsRoute(rt APIRoute) bool {
+	if !roleAllowsMCPRoute(a.role, rt) {
+		return false
+	}
 	if a.fullAccess {
 		return rt.Scope != "" && rt.Scope != scopeInternal
+	}
+	if a.role != nil && a.role.Full && a.externalToken == nil && a.actingTaskID == "" {
+		return true
 	}
 	if a.externalToken != nil {
 		if _, blocked := isNoTaskContextRoute(rt.Pattern); blocked {
 			return false
 		}
-		return a.grantSet.Has(rt.Scope) || tasksAdminAllowsTaskPatch(a.grantSet, rt.Pattern)
+		return a.grantSet.Has(rt.Scope) || tasksAdminAllowsTaskPatch(a.grantSet, rt.Pattern) ||
+			capabilitiesDetachAllowsRoute(a.grantSet, rt.Pattern)
 	}
 	if a.channel == SandboxCLIChannel {
 		if IsSandboxDeniedScope(rt.Scope) || sandboxChannelGuard(rt.Pattern, nil) != nil {
@@ -226,6 +255,7 @@ func (a mcpCallerAccess) allowsRoute(rt APIRoute) bool {
 	}
 	return a.grantSet.Has(rt.Scope) ||
 		tasksAdminAllowsTaskPatch(a.grantSet, rt.Pattern) ||
+		capabilitiesDetachAllowsRoute(a.grantSet, rt.Pattern) ||
 		agentCapabilityAllowsRoute(a.heldGrants, a.grantSet, rt.Pattern, rt.Scope) ||
 		grainCIReadsRoute(a.heldGrants, rt.Pattern)
 }
@@ -235,10 +265,34 @@ func (a mcpCallerAccess) authorizedRoutes() []APIRoute {
 	out := make([]APIRoute, 0, len(all))
 	for _, rt := range all {
 		if a.allowsRoute(rt) {
-			out = append(out, rt)
+			out = append(out, a.reachedAs(rt))
 		}
 	}
 	return out
+}
+
+// reachedAs is rt labelled with the scope this caller actually reaches it
+// through. A route reached only through a narrower scope's carve-out --
+// capabilities:detach on the capabilities:admin routes
+// (capabilitiesDetachAllowsRoute), tasks:admin's priority patch
+// (tasksAdminAllowsTaskPatch) -- is listed under that scope, so
+// grain_explore_scope does not tell a credential holding only the
+// non-dangerous capabilities:detach that it holds the dangerous
+// capabilities:admin (docs/test-runs/2026-11-07-director-agent-api.md,
+// finding 3). Only the label changes: the gate still authorizes the call
+// against routeScopes and the carve-out's own body rules.
+func (a mcpCallerAccess) reachedAs(rt APIRoute) APIRoute {
+	if a.fullAccess || a.grantSet.Has(rt.Scope) ||
+		(a.role != nil && a.role.Full && a.externalToken == nil && a.actingTaskID == "") {
+		return rt
+	}
+	switch {
+	case capabilitiesDetachAllowsRoute(a.grantSet, rt.Pattern):
+		rt.Scope = "capabilities:detach"
+	case tasksAdminAllowsTaskPatch(a.grantSet, rt.Pattern):
+		rt.Scope = "tasks:admin"
+	}
+	return rt
 }
 
 func scopeDomainGroup(scope APIScope) string {
@@ -450,6 +504,8 @@ func renderScopeOverview(access mcpCallerAccess, authorized []APIRoute) mcp.Resu
 		msg := "No Grain controller API scopes are currently authorized for this caller."
 		if access.actingTaskID != "" {
 			msg += fmt.Sprintf(" Ask a human to grant task %s an api:<scope> or api:<preset> capability (e.g. api:tasks-read, api:task-admin, api:ci-read, api:deployment:read).", access.actingTaskID)
+		} else if access.role != nil && !access.role.Full {
+			msg += fmt.Sprintf(" %s holds no controller API scopes; ask an access-code admin to assign a role that includes them (docs/access-code.md).", access.role.label())
 		}
 		return mcp.Result{Text: msg}
 	}
@@ -833,6 +889,9 @@ func (s *Server) invokeRouteTool() mcp.Tool {
 			if accessErr != nil {
 				return toolFailure(route.Tool, accessErr)
 			}
+			if err := s.authorizeMCPRoleScope(ctx, route.Pattern); err != nil {
+				return toolFailure(route.Tool, err)
+			}
 			if !access.allowsRoute(*route) {
 				return toolFailuref(route.Tool, "HTTP 403: caller holds no grant for scope %s (%s)", route.Scope, route.Pattern)
 			}
@@ -867,6 +926,9 @@ func (s *Server) invokeRouteTool() mcp.Tool {
 				return toolFailure(route.Tool, err)
 			}
 			if expect, ok := expectation(routeArgs); ok && route.takesExpect() {
+				if err := s.authorizeMCPRoleCall(ctx, route.Pattern, rc); err != nil {
+					return toolFailure(route.Tool, err)
+				}
 				id := rc.params["id"]
 				_, data, err := s.dispatchSubrequest(ctx, http.MethodGet, "/api/tasks/"+url.PathEscape(id), nil, "")
 				if err != nil {
@@ -920,12 +982,38 @@ func (a mcpCallerAccess) repoAllowedForContext(repo string) bool {
 		return true
 	}
 	if len(a.repoLimits) > 0 {
-		for _, allowed := range a.repoLimits {
-			if strings.EqualFold(allowed, repo) {
+		allowed := false
+		for _, r := range a.repoLimits {
+			if strings.EqualFold(r, repo) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return false
+		}
+	}
+	if a.role != nil && !a.role.Full {
+		for _, sc := range filingContextScopes {
+			if a.grantSet.Allows(sc, repo) {
 				return true
 			}
 		}
 		return false
+	}
+	return true
+}
+
+func (a mcpCallerAccess) readsTemplates() bool {
+	return a.fullAccess || a.grantSet.Has("templates:read") || a.grantSet.Has("tasks:from-template")
+}
+
+func (a mcpCallerAccess) templateAllowedForContext(repo string) bool {
+	if !a.repoAllowedForContext(repo) {
+		return false
+	}
+	if a.role != nil && !a.role.Full {
+		return a.role.allows("templates:read", repo) || a.role.allows("tasks:from-template", repo)
 	}
 	return true
 }
@@ -950,6 +1038,11 @@ func (s *Server) filingContextTool() mcp.Tool {
 				return toolFailure(ToolGrainFilingContext, err)
 			}
 			if !access.allowsFilingContext() {
+				if role := accessRoleFromContext(ctx); role != nil && !role.Full {
+					if err := s.authorizeMCPRoleScope(ctx, "GET /api/tasks"); err != nil {
+						return toolFailure(ToolGrainFilingContext, err)
+					}
+				}
 				return toolFailuref(ToolGrainFilingContext, "HTTP 403: caller holds no task, template, repo, or deployment read/write scope")
 			}
 			if s.tasks == nil || s.tasks.Store == nil {
@@ -993,6 +1086,7 @@ func (s *Server) filingContextTool() mcp.Tool {
 					candidates = append(candidates, assoc.Repo)
 				}
 				candidates = append(candidates, access.repoLimits...)
+				candidates = append(candidates, access.role.knownRepos()...)
 			}
 			targetRepos := []string{}
 			for _, r := range candidates {
@@ -1031,10 +1125,10 @@ func (s *Server) filingContextTool() mcp.Tool {
 				Fields      []compactTemplateField `json:"fields,omitempty"`
 			}
 			templates := []compactTemplate{}
-			readsTemplates := access.reads("templates:read") || access.reads("tasks:from-template")
+			readsTemplates := access.readsTemplates()
 			if listedTemplates, err := s.tasks.ListTemplates(ctx); err == nil && readsTemplates {
 				for _, tmpl := range listedTemplates {
-					if !access.repoAllowedForContext(tmpl.Repo) {
+					if !access.templateAllowedForContext(tmpl.Repo) {
 						continue
 					}
 					if repoFilter != "" && tmpl.Repo != "" && !strings.EqualFold(tmpl.Repo, repoFilter) {
@@ -1199,6 +1293,10 @@ func (s *Server) submitTaskTool() mcp.Tool {
 					"items":       map[string]any{"type": "string"},
 					"description": "Explicit capability IDs for the task (omit to use deployment defaults).",
 				},
+				"grants": map[string]any{
+					"type":        "array",
+					"description": "Unified grants, each a grant string or a {capability, with} object, as POST /api/tasks takes them (repo#target, repo#read and repo#write included). A request that also names the same kind the old way -- capabilities, reads, writes, or repo/base/no_repo beside repo#target -- is refused.",
+				},
 				"depends_on": map[string]any{
 					"type":        "array",
 					"items":       map[string]any{"type": "string"},
@@ -1233,6 +1331,9 @@ func (s *Server) submitTaskTool() mcp.Tool {
 			},
 		},
 		Handler: func(ctx context.Context, args map[string]any) mcp.Result {
+			if err := s.authorizeMCPRoleScope(ctx, "POST /api/tasks"); err != nil {
+				return toolFailure(ToolGrainSubmitTask, err)
+			}
 			approve := false
 			if v, ok := args["approve"].(bool); ok {
 				approve = v
@@ -1288,6 +1389,12 @@ func (s *Server) submitTaskTool() mcp.Tool {
 				if caps, ok := stringSliceArg(rawCaps); ok {
 					body["capabilities"] = caps
 				}
+			}
+			// grants is forwarded as sent, so POST /api/tasks decodes it --
+			// and refuses a mixed request -- exactly as it would from REST
+			// or grain_invoke, rather than the task being filed without it.
+			if rawGrants, exists := args["grants"]; exists && rawGrants != nil {
+				body["grants"] = rawGrants
 			}
 			if rawDeps, exists := args["depends_on"]; exists && rawDeps != nil {
 				if deps, ok := stringSliceArg(rawDeps); ok {
@@ -1380,6 +1487,9 @@ func (s *Server) listTasksTool() mcp.Tool {
 		},
 		ElisionAdvice: "filter with state, repo, q, or a smaller limit, then inspect one task with grain_get_task",
 		Handler: func(ctx context.Context, args map[string]any) mcp.Result {
+			if err := s.authorizeMCPRoleScope(ctx, "GET /api/tasks"); err != nil {
+				return toolFailure(ToolGrainListTasks, err)
+			}
 			values := url.Values{}
 			if repo, _ := args["repo"].(string); strings.TrimSpace(repo) != "" {
 				values.Set("repo", strings.TrimSpace(repo))
@@ -1450,6 +1560,9 @@ func (s *Server) getTaskTool() mcp.Tool {
 		},
 		ElisionAdvice: "use view='summary' or page comments with view='conversation' and after",
 		Handler: func(ctx context.Context, args map[string]any) mcp.Result {
+			if err := s.authorizeMCPRoleScope(ctx, "GET /api/tasks/{id}"); err != nil {
+				return toolFailure(ToolGrainGetTask, err)
+			}
 			rawID, ok := stringArg(args, "id")
 			if !ok {
 				return toolFailuref(ToolGrainGetTask, "id is required")

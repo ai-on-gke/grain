@@ -42,12 +42,12 @@ When `-upgrade-image-source` / `GRAIN_UPGRADE_IMAGE_SOURCE` is not passed on the
 
 ## Release tag convention and branch ref ambiguity
 
-Moving channels use `channel-<tag>` release tags (`channel-main`, `channel-candidate`, `channel-<branch-with-..>`) alongside immutable `sha-<short>` and promoted `vX.Y.Z` / `latest` releases.
+Moving channels use `channel-<branch>` release tags with `/` mapped to `-` (`channel-main`, `channel-candidate`, `channel-rc-v3.2`) alongside immutable `sha-<short>` and promoted `vX.Y.Z` / `latest` releases. Every GitHub or GitHub Enterprise release tag is backed by a git ref (`refs/tags/<tag>`), and `git-check-ref-format` forbids `..` anywhere in a ref name, so release tags map `/` to `-` while local Docker image tags keep `TagForBranch`'s injective `..` substitution (`<repo>:rc..v3.2`) so `ChannelForRef` can recover the branch name.
 
 Publishing a release whose git tag has the same bare name as a branch (such as `main`) creates `refs/tags/main` next to `refs/heads/main`, which is an ambiguous ref in `git` and forge CLI ref resolvers. To avoid this ambiguity:
 
 - `pkg/upgrade` never resolves release tags via `git` refs; it queries the REST endpoint `/repos/<owner>/<name>/releases/tags/<tag>` directly.
-- For branch channels, `ReleaseTagsForBranch` looks up `channel-<tag>` first and only falls back to `<tag>` on HTTP `404` for compatibility with older releases.
+- For branch channels, `ReleaseTagsForBranch` maps `/` to `-`, looks up `channel-<rel-tag>` first, and only falls back to `<rel-tag>` on HTTP `404` for compatibility with older releases.
 - The `latest` channel is GitHub's own latest-release marker: the loader asks `/repos/<owner>/<name>/releases/latest` and never reads a release or git tag named `latest`.
 
 ## `images.json` schema 2 (contract v2)

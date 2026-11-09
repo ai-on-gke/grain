@@ -467,8 +467,10 @@ func TestATemplatesRepositoryAccessIsTheOnlyReachARepositoryWrites(t *testing.T)
 		for _, f := range s.Fields {
 			for _, k := range f.Keys {
 				// `team:` has no field behind it either, and reaches
-				// nothing: it may only name the default team.
-				if k.In.Has(declschema.Repo) && f.Model == "" && k.Name != "team" {
+				// nothing: it may only name the default team. Nor does a
+				// suite's `qualification:`, whose verdict lands on the
+				// declaring repository's own commit.
+				if k.In.Has(declschema.Repo) && f.Model == "" && k.Name != "team" && k.Name != "qualification" {
 					reach = append(reach, k.Name)
 				}
 			}

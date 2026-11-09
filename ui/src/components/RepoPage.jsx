@@ -54,21 +54,21 @@ import GrantsPicker from "./GrantsPicker.jsx";
 import ReadOnlyGrants from "./ReadOnlyGrants.jsx";
 import { ConfigManagedNotice } from "./ConfigRepoLink.jsx";
 import { localGrantHandlers } from "./capabilityMethods.js";
-import { isApiGrant, withoutApiRows } from "../apiGrants.js";
+import { isApiGrant } from "../apiGrants.js";
 import { isCapabilityRef } from "../capabilityArgs.js";
 import { buildPath } from "../paths.js";
 import {
-  LEGACY_CAPABILITIES_HINT,
   NO_CAPABILITIES_HINT,
   STATE_LABELS,
   displayCounts,
   capabilityName,
   capabilityRows,
   capabilityUnavailableHint,
-  repoRows,
+  repoPageRow,
   repoUrl,
   unionCapabilities,
 } from "../state.js";
+import { useRepoClosedCount, withClosedCount } from "../closedTasks.js";
 import AppIcon from "./AppIcon.jsx";
 import BranchField from "./BranchField.jsx";
 import ItemGlyph, { GlyphLabel } from "./ItemGlyph.jsx";
@@ -95,6 +95,36 @@ import { repoApiRoot } from "../repoApi.js";
 export function sameWorkflowPath(path, typed) {
   const t = (typed || "").trim();
   return t !== "" && (path === t || path.endsWith(`/${t}`));
+}
+
+// issueImportDraftOf is the issue importer's text settings as the form
+// shows them: what was typed, or else what imp (the stored
+// issueImport) says, in the boxes' own shape -- the interval in whole
+// minutes, empty for the default.
+export function issueImportDraftOf(draft, imp) {
+  if (draft) return draft;
+  return {
+    repo: imp?.repo || "",
+    label: imp?.label || "",
+    interval: imp?.intervalSeconds
+      ? String(Math.round(imp.intervalSeconds / 60))
+      : "",
+  };
+}
+
+// issueImportDraftUnsaved reports whether the issue importer's source,
+// label or interval boxes hold something their Save has not stored.
+// Unlike the boxes that save when left, these wait for Save, so leaving
+// the page -- "← Repos", the rail, Back, a reload -- used to take a typed
+// label with it without asking (2026-11-07 repository walkthrough).
+export function issueImportDraftUnsaved(draft, imp) {
+  if (!draft || !imp) return false;
+  const stored = issueImportDraftOf(null, imp);
+  return (
+    draft.repo !== stored.repo ||
+    draft.label !== stored.label ||
+    draft.interval !== stored.interval
+  );
 }
 
 // workflowEditsUnsaved reports whether the CI tab's workflow rows hold
@@ -360,6 +390,9 @@ function RepoOverview({ upToDate, branches, gates, onShowTab }) {
 export default function RepoPage({
   repo,
   tasks,
+  // closedPartial is useClosedTasks' partial: some closed tasks are not
+  // paged in, so this repo's closed count is asked of the server.
+  closedPartial = false,
   config,
   baseBranchGates = [],
   // onOpenComparison opens one comparison of two of this repo's refs --
@@ -399,6 +432,13 @@ export default function RepoPage({
   // box, so a save that succeeds takes down only its own refusal and never
   // an unrelated one shown since.
   const refusals = useRef(new Map());
+  // blurSaving names the boxes that save when they are left (upstream
+  // repository, prompt extension, setup command) whose save is in
+  // flight. Leaving the page by a click blurs the box first, so its
+  // save is already on its way and there is nothing to ask about; the
+  // leave guard below skips those, and asks only about an edit no save
+  // has been started for -- a reload or a closed tab, which blur nothing.
+  const blurSaving = useRef(new Set());
   const refuseSave = (key, err) => {
     refusals.current.set(key, String(err?.message || err));
     showError(err);
@@ -569,14 +609,19 @@ export default function RepoPage({
   // open -- has no row, and gets an empty one rather than crashing the
   // page: its forms still work, since none of them needs the repo to be
   // known first.
-  const row = repoRows(config, tasks).find((r) => r.repo === repo) || {
-    repo,
-    total: 0,
-    counts: {},
-    blocked: 0,
-    configured: false,
-    defaults: false,
-  };
+  //
+  // The closed count is the server's while some closed tasks are not
+  // paged in (closedPartial): the pages held are the newest across every
+  // repo, and counting only those would present a floor as this repo's
+  // total. Until it answers the count says it is a floor ("12+").
+  const closedCount = useRepoClosedCount(repo, closedPartial);
+  const row = withClosedCount(repoPageRow(config, tasks, repo), closedCount);
+  const countFloor = closedPartial && closedCount === null;
+  // Tasks still filed against a repo a restricted deployment no longer
+  // lists (repoPageRow's offList). The count says so rather than reading
+  // as though this were any listed repo's work, since the repo is not on
+  // the Repos list these tasks would otherwise be found from.
+  const offList = row.offList && row.total > 0;
 
   const loadBranches = useCallback(async () => {
     try {
@@ -724,20 +769,27 @@ export default function RepoPage({
   });
 
   // The repo's own defaults hold all three kinds a task's capabilities
-  // do: the legacy in-process ids are the checklist's, and the agent
-  // API's grants and capability server methods (with their with:
-  // arguments) are GrantsPicker's, each list saved whole with the
-  // other's entries kept.
-  const capsLegacy = capsSelection.filter(
-    (id) => !isCapabilityRef(id) && !isApiGrant(id),
-  );
+  // do: held bare capability ids, and the agent API's grants and capability
+  // server methods (with their with: arguments), which GrantsPicker shows
+  // and edits.
+  const isBareGrant = (id) => !isCapabilityRef(id) && !isApiGrant(id);
+  const capsLegacy = capsSelection.filter(isBareGrant);
   const capsApi = capsSelection.filter(isApiGrant);
-  const capsRefs = capsSelection.filter(isCapabilityRef);
-  const capsMethods = localGrantHandlers(capsRefs, (refs) => {
-    const next = [...capsLegacy, ...capsApi, ...refs];
-    setCapsSelection(next);
-    return saveCapabilities(next);
-  });
+  const capsRefs = capsSelection.filter(
+    (id) => isCapabilityRef(id) && !isApiGrant(id),
+  );
+  const capsMethods = localGrantHandlers(
+    [...capsLegacy, ...capsRefs],
+    (rest) => {
+      const next = [
+        ...rest.filter(isBareGrant),
+        ...capsApi,
+        ...rest.filter(isCapabilityRef),
+      ];
+      setCapsSelection(next);
+      return saveCapabilities(next);
+    },
+  );
   // A CI job holds no agent API grant -- there is no agent in it -- so
   // CI's own GrantsPicker is offered capability server methods alone.
   // A reference the CI picker itself offers (the release server's
@@ -756,12 +808,7 @@ export default function RepoPage({
     return saveCICapabilities(next);
   });
 
-  // The rows the default-capabilities picker below is drawn from, held
-  // here so the picker and its own "nothing to pick" line agree about
-  // what it is offering.
-  const capsRows = withoutApiRows(
-    capabilityRows(config?.capabilities, capsLegacy),
-  );
+  // The rows the CI-capabilities picker below is drawn from.
   const allCICapabilities =
     config?.ciCapabilities || config?.capabilities || [];
   const ciCapsRows = capabilityRows(
@@ -899,6 +946,7 @@ export default function RepoPage({
   };
 
   const saveUpstreamRepo = async (upstream) => {
+    blurSaving.current.add("upstream");
     try {
       const updated = await api(`${root}/settings`, {
         method: "PUT",
@@ -911,6 +959,8 @@ export default function RepoPage({
     } catch (err) {
       setUpstreamRepoText(storedUpstreamRepo);
       refuseSave("upstream", err);
+    } finally {
+      blurSaving.current.delete("upstream");
     }
   };
 
@@ -929,6 +979,7 @@ export default function RepoPage({
   // that would go missing.
   const savePromptExtension = async (textToSave) => {
     const val = typeof textToSave === "string" ? textToSave : promptText.trim();
+    blurSaving.current.add("prompt");
     try {
       const updated = await api(`${root}/prompt-extension`, {
         method: "PUT",
@@ -940,6 +991,8 @@ export default function RepoPage({
       await onRefreshConfig();
     } catch (err) {
       refuseSave("prompt", err);
+    } finally {
+      blurSaving.current.delete("prompt");
     }
   };
 
@@ -952,6 +1005,7 @@ export default function RepoPage({
   // it reachable, and clearing the last one is what takes it away.
   const saveSetupCommand = async (cmdToSave) => {
     const val = typeof cmdToSave === "string" ? cmdToSave : setupText.trim();
+    blurSaving.current.add("setup");
     try {
       const updated = await api(`${root}/setup-command`, {
         method: "PUT",
@@ -963,6 +1017,8 @@ export default function RepoPage({
       await onRefreshConfig();
     } catch (err) {
       refuseSave("setup", err);
+    } finally {
+      blurSaving.current.delete("setup");
     }
   };
 
@@ -1025,6 +1081,12 @@ export default function RepoPage({
   // (model.RepoConfig.IssueImport) through PUT .../settings, which
   // leaves every field it is not sent alone. The orchestrator's next
   // cycle reads the row; nothing is imported here.
+  //
+  // Only a save that carried the typed source, label and interval
+  // settles them. The two switches save on their own, and flipping
+  // "Queue imported tasks at once" used to clear a label typed and not
+  // yet saved beside it: the box went back to the stored one without a
+  // word (2026-11-07 repository walkthrough).
   const saveIssueImport = async (fields) => {
     try {
       setUpToDate(
@@ -1034,7 +1096,7 @@ export default function RepoPage({
         }),
       );
       settleSave("issueImport");
-      setImportDraft(null);
+      if ("issueImportLabel" in fields) setImportDraft(null);
       await onRefreshConfig();
     } catch (err) {
       refuseSave("issueImport", err);
@@ -1051,7 +1113,15 @@ export default function RepoPage({
       const out = await api(`${root}/import-issues`, { method: "POST" });
       const n = (out.imported || []).length;
       let text = `Read ${out.open} open issue${out.open === 1 ? "" : "s"} on ${out.source}: imported ${n}, ${out.skipped} already imported.`;
-      if (out.error) text += ` Some could not be imported: ${out.error}`;
+      // An error with nothing open is the listing itself failing -- a
+      // per-issue failure needs an issue to fail on -- so nothing was
+      // read and there is no "some" (orchestrator.importIssues). Saying
+      // "Read 0 open issues" read as a source with no issues, which a
+      // missing source repository is not (2026-11-09 repository
+      // walkthrough).
+      if (out.error && !out.open)
+        text = `Could not read the open issues on ${out.source}: ${out.error}`;
+      else if (out.error) text += ` Some could not be imported: ${out.error}`;
       setImportOutcome({ error: Boolean(out.error), text });
     } catch (err) {
       setImportOutcome({ error: true, text: String(err?.message || err) });
@@ -1248,10 +1318,27 @@ export default function RepoPage({
   // Asked by "← Repos" and App's popstate (leavingLosesEdits) and by the
   // browser's beforeunload, like the Releases tab's job boxes. Read
   // through a ref, since guardLeaving holds the one function it is given.
+  //
+  // It asks about the issue importer's boxes too, which wait for their
+  // own Save, and about a box that saves when left but has not been left
+  // yet: a reload or a closed tab with the cursor still in the prompt
+  // extension used to drop what was typed there without a word
+  // (2026-11-07 repository walkthrough).
+  const blurBoxUnsaved = (key, loaded, text, stored) =>
+    loaded && !blurSaving.current.has(key) && text.trim() !== stored;
   const workflowsUnsaved = useRef(() => false);
   workflowsUnsaved.current = () =>
-    workflows !== null &&
-    workflowEditsUnsaved(workflowEdits, workflows.workflows);
+    (workflows !== null &&
+      workflowEditsUnsaved(workflowEdits, workflows.workflows)) ||
+    issueImportDraftUnsaved(importDraft, upToDate?.issueImport) ||
+    blurBoxUnsaved(
+      "upstream",
+      caps !== null,
+      upstreamRepoText,
+      storedUpstreamRepo,
+    ) ||
+    blurBoxUnsaved("prompt", prompt !== null, promptText, storedPromptText) ||
+    blurBoxUnsaved("setup", setup !== null, setupText, storedSetupText);
   useEffect(() => guardLeaving(() => workflowsUnsaved.current()), []);
 
   const editWorkflow = (index, field, value) => {
@@ -1418,7 +1505,7 @@ export default function RepoPage({
                 key={s}
                 size="small"
                 className={`badge badge-${s}`}
-                label={`${STATE_LABELS[s] || s} ${count}`}
+                label={`${STATE_LABELS[s] || s} ${count}${countFloor && s === "closed" ? "+" : ""}`}
               />
             ))}
             {row.blocked > 0 && (
@@ -1432,7 +1519,9 @@ export default function RepoPage({
           <Link
             variant="caption"
             color="text.secondary"
-            whiteSpace="nowrap"
+            // The off-list sentence is too long to hold on one line of a
+            // phone; the plain count is short enough to keep whole.
+            whiteSpace={offList ? "normal" : "nowrap"}
             href={buildPath({
               view: "tasks",
               narrowing: {
@@ -1442,7 +1531,11 @@ export default function RepoPage({
               },
             })}
           >
-            {row.total} task{row.total === 1 ? "" : "s"} filed here
+            {row.total}
+            {countFloor ? "+" : ""} task{row.total === 1 ? "" : "s"}{" "}
+            {offList
+              ? `still target${row.total === 1 ? "s" : ""} this repo, which is no longer on the target list`
+              : "filed here"}
           </Link>
           <Box sx={{ flex: 1 }} />
           <Button
@@ -1978,7 +2071,7 @@ export default function RepoPage({
                   ) : (
                     <GrantsPicker
                       config={{ ...config, capabilities: [] }}
-                      grants={ciCapsSelection}
+                      grants={ciCapsRefs}
                       onApiChange={() => {}}
                       onSubmit={ciCapsMethods.onSubmit}
                       onRemove={ciCapsMethods.onRemove}
@@ -2217,107 +2310,6 @@ export default function RepoPage({
               </Typography>
             ) : (
               <Stack spacing={1}>
-                <FormControl fullWidth size="small">
-                  <InputLabel id="repo-capabilities-label">
-                    Default capabilities
-                  </InputLabel>
-                  <Select
-                    labelId="repo-capabilities-label"
-                    disabled={readOnly}
-                    inputProps={{
-                      "aria-describedby": refusedBy(readOnly),
-                    }}
-                    label="Default capabilities"
-                    multiple
-                    value={capsLegacy}
-                    onChange={(e) => {
-                      const picked =
-                        typeof e.target.value === "string"
-                          ? e.target.value.split(",")
-                          : e.target.value;
-                      const next = [...picked, ...capsApi, ...capsRefs];
-                      setCapsSelection(next);
-                      saveCapabilities(next);
-                    }}
-                    renderValue={(chosen) => (
-                      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-                        {chosen.map((id) => (
-                          <GrantChip
-                            key={id}
-                            grant={id}
-                            config={config}
-                            tabIndex={-1}
-                          />
-                        ))}
-                      </Box>
-                    )}
-                  >
-                    {/* The same grantable-only listing Settings' own
-                        default-capabilities picker offers, and for the same
-                        reason: a default no task can be granted by hand
-                        would fail at every filing, and PUT rejects one
-                        anyway. It needs no filter of its own to say that,
-                        unlike Settings' settings.capabilities:
-                        config.capabilities *is* ui.OfferedCapabilities,
-                        which is what "grantable" means, where that one
-                        reports every provider grain ships and flags the
-                        ungrantable ones. A capability the deployment
-                        already defaults is still offered rather than
-                        hidden -- ticking it here is how a repo keeps it if
-                        the deployment-wide entry is later dropped -- and
-                        says so in its own row, so nobody reads a blank box
-                        as "not on here". What is left out is a capability
-                        this deployment has not configured at all, which is
-                        a default that would fail every task filed against
-                        this repo (configuredCapabilities, state.js); one
-                        this repo already names stays, warning and all. An
-                        id this repo stored before the build retired it
-                        gets a row too, purely so it can be unticked
-                        (capabilityRows, state.js). */}
-                    {capsRows.length === 0 && (
-                      <MenuItem disabled>{NO_CAPABILITIES_HINT}</MenuItem>
-                    )}
-                    {capsRows.map((c) => (
-                      <MenuItem key={c.id} value={c.id} title={c.description}>
-                        <Checkbox
-                          checked={capsSelection.includes(c.id)}
-                          size="small"
-                        />
-                        <ListItemText
-                          primary={c.name}
-                          secondary={
-                            c.retired
-                              ? c.description
-                              : /* A default this deployment cannot honour is worth
-                               more warning here than on one task, not less: it
-                               fails every task filed against this repo, and the
-                               person who set it is not the one who sees them
-                               fail. */
-                                capabilityUnavailableHint(c) ||
-                                ((
-                                  caps.deploymentDefaultCapabilities || []
-                                ).includes(c.id)
-                                  ? "already a deployment default -- on here either way"
-                                  : null)
-                          }
-                          secondaryTypographyProps={
-                            capabilityUnavailableHint(c)
-                              ? { color: "warning.main" }
-                              : undefined
-                          }
-                        />
-                      </MenuItem>
-                    ))}
-                  </Select>
-                  <FormHelperText>
-                    Added to this deployment&apos;s own defaults, never
-                    subtracted from them -- a repo can only widen what a task
-                    filed against it starts with. Whoever files one can still
-                    untick any of these on the new-task form, and tasks already
-                    filed keep what they were filed with.{" "}
-                    {LEGACY_CAPABILITIES_HINT}
-                  </FormHelperText>
-                </FormControl>
                 <Box>
                   <Typography variant="body2" sx={{ mb: 0.5 }}>
                     Default grants
@@ -2344,6 +2336,13 @@ export default function RepoPage({
                       policyRepo={repo}
                     />
                   )}
+                  <FormHelperText>
+                    Added to this deployment&apos;s own defaults, never
+                    subtracted from them -- a repo can only widen what a task
+                    filed against it starts with. Whoever files one can still
+                    remove any of these on the new-task form, and tasks already
+                    filed keep what they were filed with.
+                  </FormHelperText>
                 </Box>
                 <Typography variant="body2" color="text.secondary">
                   A task filed against {repo} starts with:{" "}
@@ -2584,21 +2583,8 @@ export default function RepoPage({
             ) : (
               (() => {
                 const imp = upToDate.issueImport;
-                const draft = importDraft || {
-                  repo: imp.repo || "",
-                  label: imp.label || "",
-                  interval: imp.intervalSeconds
-                    ? String(Math.round(imp.intervalSeconds / 60))
-                    : "",
-                };
-                const dirty =
-                  importDraft !== null &&
-                  (draft.repo !== (imp.repo || "") ||
-                    draft.label !== (imp.label || "") ||
-                    draft.interval !==
-                      (imp.intervalSeconds
-                        ? String(Math.round(imp.intervalSeconds / 60))
-                        : ""));
+                const draft = issueImportDraftOf(importDraft, imp);
+                const dirty = issueImportDraftUnsaved(importDraft, imp);
                 const edit = (field) => (e) =>
                   setImportDraft({ ...draft, [field]: e.target.value });
                 // The fields as typed, in the shape PUT .../settings takes.
@@ -2894,7 +2880,21 @@ export default function RepoPage({
             readOnly={readOnly}
             describedBy={refusedBy(readOnly)}
             refreshKey={releaseToggles}
-            onSaved={() => setOwnershipSaves((n) => n + 1)}
+            onSaved={() => {
+              setOwnershipSaves((n) => n + 1);
+              // Who runs this repository's standing work decides whether
+              // its base branch is judged here at all: switching it (or
+              // the Base-branch check item) off is the server's word that
+              // the unjudged-gate warning no longer applies
+              // (pkg/ui/basebranchgate.go, baseCheckSwitchedOff), and on
+              // again that it does. Re-read the shell's gates now, as the
+              // CI Mode and Watch default branch saves do, rather than
+              // leaving the warning, the CI tab's dot and the overview's
+              // CI gate stale until a reload (2026-11-08 walkthrough,
+              // task 3613). ownershipSaves above already re-reads the
+              // release pane, so this skips gateCheck.
+              Promise.resolve(onRefreshGates()).catch(() => {});
+            }}
             showError={showError}
           />
 

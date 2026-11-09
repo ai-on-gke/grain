@@ -355,7 +355,11 @@ func IsDraining(err error) bool {
 	return errors.As(err, &r) && r.Draining
 }
 
-func (e *RefusedError) Error() string { return "hostd refused: " + e.Reason }
+// refusedPrefix starts a RefusedError's text, which reaches a task's
+// failure line: the user-facing name, not hostd's.
+const refusedPrefix = "the host agent refused: "
+
+func (e *RefusedError) Error() string { return refusedPrefix + e.Reason }
 
 func refused(format string, args ...any) error {
 	return &RefusedError{Reason: fmt.Sprintf(format, args...)}

@@ -19,6 +19,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -49,6 +50,29 @@ func newExternalConfigRepo(remote, branch string) *externalConfigRepo {
 
 // ExternalConfigRepo is what Client.externalConfigRepo asks first.
 func (r *externalConfigRepo) ExternalConfigRepo() (string, string) { return r.remote, r.branch }
+
+// ref is the repository the remote names, in owner/name form: the last
+// two path segments of an https://host/owner/name(.git) or
+// git@host:owner/name(.git) remote. false for a remote it cannot read
+// that way, which then names no repository rather than a wrong one.
+func (r *externalConfigRepo) ref() (model.RepoRef, bool) {
+	s := strings.TrimSuffix(strings.TrimSuffix(r.remote, "/"), ".git")
+	if i := strings.Index(s, "://"); i >= 0 {
+		s = s[i+3:]
+		slash := strings.IndexByte(s, '/')
+		if slash < 0 {
+			return model.RepoRef{}, false
+		}
+		s = s[slash+1:]
+	} else if colon := strings.IndexByte(s, ':'); colon >= 0 {
+		s = s[colon+1:]
+	}
+	parsed, err := model.ParseRepo(strings.Trim(s, "/"))
+	if err != nil {
+		return model.RepoRef{}, false
+	}
+	return parsed, true
+}
 
 func (r *externalConfigRepo) Status(context.Context) (ui.StateRepoStatus, error) {
 	return ui.StateRepoStatus{Available: true, Mode: "external", Remote: r.remote, Branch: r.branch}, nil

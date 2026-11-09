@@ -1,6 +1,7 @@
 name: Release process review
 title: Weekly review of releases and release pipeline improvements
 base: main
+capabilities: ["api:ci-read@ai-on-gke/grain"]
 body: |
   Review the past week of release pipeline execution on `main` and suggest
   concrete improvements to the release process. Releases go out

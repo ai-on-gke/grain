@@ -49,6 +49,13 @@ func (f *fakeAddenda) append(bodies ...string) {
 	}
 }
 
+func (f *fakeAddenda) appendKind(authorKind, body string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.next++
+	f.comments = append(f.comments, Addendum{ID: f.next, AuthorKind: authorKind, Body: body})
+}
+
 func (f *fakeAddenda) Addenda(ctx context.Context, after int64) ([]Addendum, error) {
 	f.mu.Lock()
 	f.calls++
@@ -431,5 +438,83 @@ func TestDeliveredAddendaAreAcknowledged(t *testing.T) {
 	defer conversation.mu.Unlock()
 	if len(conversation.acked) != 1 || conversation.acked[0] != 2 {
 		t.Errorf("acknowledged %v, want one report through comment 2", conversation.acked)
+	}
+}
+
+// Automation-authored notes -- capability-server drops, capability restarts,
+// CL review thread notices -- are introduced as grain's own note rather than
+// as a person's words, while still staying a single paragraph.
+func TestAutomationAddendaAreFramedAsGrainsOwnNote(t *testing.T) {
+	conversation := &fakeAddenda{}
+	client := addendaClient(t, 0, conversation)
+	conversation.appendKind("automation", "Capability server https://capabilities.example.com/gcp, which minted this run's grant, is down (failed).\n\nThe server is down: grants it minted cannot refresh or release until it re-attaches.")
+
+	got := callAddendaSay(t, client)
+	if !strings.Contains(got, grainAddendaNoticeMarker) {
+		t.Errorf("text = %q, want automation framing %q", got, grainAddendaNoticeMarker)
+	}
+	if !strings.Contains(got, "This is grain's own note, not a person's:") {
+		t.Errorf("text = %q, want it introduced as grain's own note", got)
+	}
+	for _, wrong := range []string{addendaNoticeMarker, "a person's own words"} {
+		if strings.Contains(got, wrong) {
+			t.Errorf("text = %q, must not frame an automation note with %q", got, wrong)
+		}
+	}
+	if !strings.Contains(got, "> Capability server https://capabilities.example.com/gcp") {
+		t.Errorf("text = %q, want the note quoted", got)
+	}
+	// The notice after "the answer\n\n" must remain a single paragraph.
+	_, notice, ok := strings.Cut(got, "the answer\n\n")
+	if !ok || strings.Contains(notice, "\n\n") {
+		t.Errorf("notice = %q, want one paragraph after the tool result", notice)
+	}
+}
+
+// Another agent's message (POST /api/tasks/{id}/agent-messages) is framed as
+// that agent's words -- neither a person's nor grain's.
+func TestAgentAddendaAreFramedAsAnotherAgentsWords(t *testing.T) {
+	notice := addendaNotice([]Addendum{{
+		ID:         1,
+		AuthorKind: "agent",
+		Body:       "[task 768]: Message from task 768 to this task's agent:\n\nrebase after my PR lands",
+	}})
+	if !strings.Contains(notice, agentAddendaNoticeMarker) {
+		t.Errorf("notice = %q, want agent framing %q", notice, agentAddendaNoticeMarker)
+	}
+	if !strings.Contains(notice, "that agent's own words, not a person's and not grain's:") {
+		t.Errorf("notice = %q, want agent provenance stated", notice)
+	}
+	if strings.Contains(notice, "\n\n") {
+		t.Errorf("notice = %q, want one paragraph", notice)
+	}
+}
+
+// When a person's comment and grain's own note arrive in the same poll gap,
+// each keeps its own speaker attribution inside the single paragraph so
+// neither borrows the other's voice.
+func TestMixedHumanAndAutomationAddendaKeepSeparateAttributionInOneParagraph(t *testing.T) {
+	notice := addendaNotice([]Addendum{
+		{ID: 1, AuthorKind: "human", Body: "[alice]: use the staging account"},
+		{ID: 2, AuthorKind: "automation", Body: "Capability server https://capabilities.example.com/gcp is down (failed)."},
+	})
+	if !strings.Contains(notice, mixedAddendaNoticeMarker) {
+		t.Errorf("notice = %q, want mixed framing %q", notice, mixedAddendaNoticeMarker)
+	}
+	for _, want := range []string{
+		"[grain] From a person (their own words, not grain's):\n> [alice]: use the staging account",
+		"[grain] grain's own note (not a person's words):\n> Capability server https://capabilities.example.com/gcp is down (failed).",
+	} {
+		if !strings.Contains(notice, want) {
+			t.Errorf("notice = %q, want %q", notice, want)
+		}
+	}
+	if strings.Contains(notice, "\n\n") {
+		t.Errorf("notice = %q, want one paragraph", notice)
+	}
+	text := withDeadlineNotice("some output\n\n"+timedOutText(t), runDeadlineNotice(3*time.Minute))
+	text = withDeadlineNotice(text, notice)
+	if !RunCommandTimedOut(text) {
+		t.Errorf("RunCommandTimedOut(%q) = false, want the killed marker still found under mixed addenda", text)
 	}
 }

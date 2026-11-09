@@ -173,6 +173,12 @@ type TranscriptObjectStore struct {
 	cache    *objectstore.ReadThroughCache
 	liveDir  string
 	redactor func() (*redact.Redactor, error)
+	// unflushedDir holds the raw streams of finished runs whose run-end
+	// upload failed (FlushRunEnd), under their run IDs, until the periodic
+	// sync gets them into the object store. The orchestrator removes a
+	// run's live file as soon as FlushRunEnd returns, so without this copy
+	// a failed upload would lose the stream for good.
+	unflushedDir string
 
 	mu         sync.Mutex
 	lastSynced map[string]transcriptFileStamp
@@ -199,13 +205,17 @@ func NewTranscriptObjectStore(baseStore objectstore.Store, cacheDir, liveDir str
 	if err != nil {
 		return nil, err
 	}
-	return &TranscriptObjectStore{
+	t := &TranscriptObjectStore{
 		scoped:     scoped,
 		cache:      cache,
 		liveDir:    liveDir,
 		redactor:   redactor,
 		lastSynced: make(map[string]transcriptFileStamp),
-	}, nil
+	}
+	if liveDir != "" {
+		t.unflushedDir = filepath.Clean(liveDir) + ".unflushed"
+	}
+	return t, nil
 }
 
 func (t *TranscriptObjectStore) resolveRedactor() (*redact.Redactor, error) {
@@ -394,7 +404,8 @@ func (t *TranscriptObjectStore) StartPeriodicSync(ctx context.Context, interval 
 }
 
 // SyncChanged uploads any live transcript file in liveDir whose size or mtime
-// changed since the previous sync.
+// changed since the previous sync, and retries the raw stream of every
+// finished run whose run-end upload failed.
 func (t *TranscriptObjectStore) SyncChanged(ctx context.Context) error {
 	return t.syncLiveDir(ctx, false)
 }
@@ -422,6 +433,17 @@ func (t *TranscriptObjectStore) syncLiveDir(ctx context.Context, force bool) err
 		redactorLoaded bool
 		redactor       *redact.Redactor
 	)
+	loadRedactor := func() (*redact.Redactor, error) {
+		if !redactorLoaded {
+			r, err := t.resolveRedactor()
+			if err != nil {
+				return nil, err
+			}
+			redactor = r
+			redactorLoaded = true
+		}
+		return redactor, nil
+	}
 	for _, e := range entries {
 		if !e.Type().IsRegular() || !validTranscriptRunID(e.Name()) {
 			continue
@@ -443,15 +465,11 @@ func (t *TranscriptObjectStore) syncLiveDir(ctx context.Context, force bool) err
 		if err != nil || len(data) == 0 {
 			continue
 		}
-		if !redactorLoaded {
-			r, redactErr := t.resolveRedactor()
-			if redactErr != nil {
-				return redactErr
-			}
-			redactor = r
-			redactorLoaded = true
+		r, redactErr := loadRedactor()
+		if redactErr != nil {
+			return redactErr
 		}
-		redactedData := redactJSONL(redactor, data)
+		redactedData := redactJSONL(r, data)
 		if err := t.scoped.Put(ctx, runID+".jsonl", bytes.NewReader(redactedData)); err != nil {
 			if firstErr == nil {
 				firstErr = err
@@ -469,7 +487,108 @@ func (t *TranscriptObjectStore) syncLiveDir(ctx context.Context, force bool) err
 		}
 	}
 	t.mu.Unlock()
+	if err := t.retryUnflushed(ctx, present, loadRedactor); err != nil && firstErr == nil {
+		firstErr = err
+	}
 	return firstErr
+}
+
+// retryUnflushed uploads each finished run's raw stream and narrative
+// transcript that FlushRunEnd could not, removing each local copy once it is
+// in the object store. A run whose live file is back in liveDir (adopted
+// again after a restart, say) is left to the live sync, and its older copy
+// here dropped rather than let it overwrite the newer stream.
+func (t *TranscriptObjectStore) retryUnflushed(ctx context.Context, live map[string]bool, loadRedactor func() (*redact.Redactor, error)) error {
+	if t.unflushedDir == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(t.unflushedDir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var firstErr error
+	for _, e := range entries {
+		if !e.Type().IsRegular() {
+			continue
+		}
+		name := e.Name()
+		isNarrative := strings.HasSuffix(name, ".md")
+		runID := strings.TrimSuffix(name, ".md")
+		if !validTranscriptRunID(runID) {
+			continue
+		}
+		path := filepath.Join(t.unflushedDir, name)
+		if live[runID] {
+			_ = os.Remove(path)
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if len(data) == 0 {
+			_ = os.Remove(path)
+			continue
+		}
+		r, redactErr := loadRedactor()
+		if redactErr != nil {
+			return redactErr
+		}
+		if isNarrative {
+			redactedNarrative, _ := r.Text(string(data))
+			if err := t.cache.PutBytes(ctx, runID+".md", []byte(redactedNarrative)); err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) && firstErr == nil {
+				firstErr = err
+			}
+			log.Printf("grain daemon: uploaded run %s's narrative transcript to the object store on retry", runID)
+			continue
+		}
+		if err := t.scoped.Put(ctx, runID+".jsonl", bytes.NewReader(redactJSONL(r, data))); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) && firstErr == nil {
+			firstErr = err
+		}
+		log.Printf("grain daemon: uploaded run %s's raw transcript stream to the object store on retry", runID)
+	}
+	return firstErr
+}
+
+// keepUnflushed keeps a copy of name (runID for a raw stream, or runID+".md"
+// for a narrative) for retryUnflushed when a run-end upload failed. Written
+// to a temporary name and renamed, so a retry never reads half a copy.
+func (t *TranscriptObjectStore) keepUnflushed(name string, data []byte) error {
+	if t.unflushedDir == "" {
+		return errors.New("no directory to keep it in for a retry")
+	}
+	if err := os.MkdirAll(t.unflushedDir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(t.unflushedDir, ".tmp-"+name+"-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, filepath.Join(t.unflushedDir, name))
 }
 
 // FlushRunEnd implements orchestrator.TranscriptSink.
@@ -477,30 +596,66 @@ func (t *TranscriptObjectStore) FlushRunEnd(ctx context.Context, runID, rawPath,
 	if t == nil || !validTranscriptRunID(runID) {
 		return false, nil
 	}
-	r, redactErr := t.resolveRedactor()
-	if redactErr != nil {
-		return false, redactErr
-	}
-	var errs []error
+	var raw []byte
 	if rawPath != "" {
 		if linfo, statErr := os.Lstat(rawPath); statErr == nil && linfo.Mode().IsRegular() {
 			if data, readErr := os.ReadFile(rawPath); readErr == nil && len(data) > 0 {
-				redactedData := redactJSONL(r, data)
-				if putErr := t.scoped.Put(ctx, runID+".jsonl", bytes.NewReader(redactedData)); putErr != nil {
-					errs = append(errs, putErr)
-				}
+				raw = data
 			}
 		}
 		t.mu.Lock()
 		delete(t.lastSynced, runID)
 		t.mu.Unlock()
 	}
+	// The caller removes rawPath once this returns, and never writes narrative
+	// to SQLite before secret-store redaction runs, so any raw stream or
+	// narrative that cannot be redacted and uploaded now is kept in
+	// unflushedDir for the periodic sync to retry (retryUnflushed).
+	keepRaw := func(cause error) error {
+		if raw == nil {
+			return cause
+		}
+		if err := t.keepUnflushed(runID, raw); err != nil {
+			return errors.Join(cause, fmt.Errorf("keeping run %s's raw transcript stream for a retry: %w", runID, err))
+		}
+		return fmt.Errorf("%w (raw transcript stream kept for a retry)", cause)
+	}
+	keepNarrative := func(cause error) error {
+		if narrative == "" || t.unflushedDir == "" {
+			return cause
+		}
+		if err := t.keepUnflushed(runID+".md", []byte(narrative)); err != nil {
+			return errors.Join(cause, fmt.Errorf("keeping run %s's narrative transcript for a retry: %w", runID, err))
+		}
+		return fmt.Errorf("%w (narrative transcript kept for a retry)", cause)
+	}
+	r, redactErr := t.resolveRedactor()
+	if redactErr != nil {
+		err := keepRaw(redactErr)
+		if narrative != "" && t.unflushedDir != "" {
+			if nErr := t.keepUnflushed(runID+".md", []byte(narrative)); nErr != nil {
+				err = errors.Join(err, fmt.Errorf("keeping run %s's narrative transcript for a retry: %w", runID, nErr))
+			}
+		}
+		return false, err
+	}
+	var errs []error
+	if raw != nil {
+		if putErr := t.scoped.Put(ctx, runID+".jsonl", bytes.NewReader(redactJSONL(r, raw))); putErr != nil {
+			errs = append(errs, keepRaw(putErr))
+		} else if t.unflushedDir != "" {
+			_ = os.Remove(filepath.Join(t.unflushedDir, runID))
+		}
+	}
 	if narrative != "" {
 		redactedNarrative, _ := r.Text(narrative)
 		if putErr := t.cache.PutBytes(ctx, runID+".md", []byte(redactedNarrative)); putErr != nil {
-			errs = append(errs, putErr)
+			errs = append(errs, keepNarrative(putErr))
 		} else {
 			savedNarrative = true
+			if t.unflushedDir != "" {
+				_ = os.Remove(filepath.Join(t.unflushedDir, runID+".md"))
+			}
 		}
 	}
 	return savedNarrative, errors.Join(errs...)

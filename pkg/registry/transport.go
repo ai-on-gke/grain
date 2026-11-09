@@ -56,16 +56,25 @@ func (t *wsMuxTransport) Name() string {
 }
 
 func (t *wsMuxTransport) Accept(w http.ResponseWriter, r *http.Request) (ConnectSession, error) {
-	conn, err := wsupgrade.Upgrade(w, r, http.Header{
+	hdr := http.Header{
 		api.HeaderConnectProtocol: []string{api.ConnectProtocolVersion},
-	})
+	}
+	if sid := w.Header().Get(api.HeaderTunnelSession); sid != "" {
+		hdr.Set(api.HeaderTunnelSession, sid)
+	}
+	conn, err := wsupgrade.Upgrade(w, r, hdr)
 	if err != nil {
 		return nil, err
 	}
 	m := mux.NewMux(conn, mux.Config{
-		IsServer:         true,
-		MaxStreams:       t.maxConcurrentStreams,
-		MaxBufferedBytes: t.maxBufferedBytes,
+		IsServer:                     true,
+		PingInterval:                 15 * time.Second,
+		PingTimeout:                  15 * time.Second,
+		MaxStreams:                   t.maxConcurrentStreams,
+		MaxPeerInitiatedStreams:      0,
+		DisallowPeerInitiatedStreams: true,
+		MaxPeerStreamViolations:      16,
+		MaxBufferedBytes:             t.maxBufferedBytes,
 	})
 	return &wsMuxSession{m: m}, nil
 }

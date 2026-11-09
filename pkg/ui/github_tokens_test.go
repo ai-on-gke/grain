@@ -47,52 +47,67 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
-// withTokenCapabilities is testClient with the picker listing a real
-// deployment would have on top of the fixed rows: one per named token
-// pkg/cli/daemon.go found under secrets/github.
 func withTokenCapabilities(t *testing.T, names ...string) (*ui.Client, *model.Store, context.Context) {
 	t.Helper()
 	c, store, ctx := testClient(t)
-	c.Config.Capabilities = append(ui.OfferedCapabilities(), ui.GitHubTokenCapabilities(names)...)
+	offered := slices.Clone(names)
+	if offered == nil {
+		offered = []string{}
+	}
+	c.Config.OfferedGitCredentials = offered
 	return c, store, ctx
 }
 
-func TestGitHubTokenCapabilitiesIsOneRowPerNamedToken(t *testing.T) {
+func TestRepoCredentialMethodEnumeratesConfiguredTokens(t *testing.T) {
 	t.Parallel()
-	got := ui.GitHubTokenCapabilities([]string{"release-bot", "", "docs-bot"})
-	want := []ui.Capability{
-		{ID: "github-credential:release-bot", Name: "GitHub token: release-bot",
-			Description: got[0].Description},
-		{ID: "github-credential:docs-bot", Name: "GitHub token: docs-bot",
-			Description: got[1].Description},
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("GitHubTokenCapabilities = %+v, want %+v (an empty name is skipped)", got, want)
-	}
-	for _, capability := range got {
-		if capability.Description == "" {
-			t.Errorf("%s: no description for the picker to show", capability.ID)
+	c, _, ctx := withTokenCapabilities(t, "release-bot", "", "docs-bot")
+	methods := c.ListCapabilityMethods(ctx)
+	var found *ui.CapabilityMethod
+	for i := range methods {
+		if methods[i].Ref == model.RepoCredentialRef {
+			found = &methods[i]
+			break
 		}
 	}
-}
-
-func TestGitHubTokenCapabilitiesAreNoneWithoutExtraTokens(t *testing.T) {
-	t.Parallel()
-	if got := ui.GitHubTokenCapabilities(nil); len(got) != 0 {
-		t.Errorf("GitHubTokenCapabilities(nil) = %+v, want none -- a deployment with only a default token offers no rows", got)
+	if found == nil {
+		t.Fatalf("ListCapabilityMethods missing %s: %+v", model.RepoCredentialRef, methods)
+	}
+	props, _ := found.Args["properties"].(map[string]any)
+	credProp, _ := props["credential"].(map[string]any)
+	enum, _ := credProp["enum"].([]any)
+	if !slices.Equal(enum, []any{"docs-bot", "release-bot"}) {
+		t.Fatalf("repo#credential enum = %v, want [docs-bot release-bot]", enum)
 	}
 }
 
-// The whole path a human takes: tick the token on a task, and the git
-// proxy resolving that task's sandbox is told to use it in place of the
-// owner/repo ladder.
+func TestRepoCredentialMethodHasEmptyEnumWithoutExtraTokens(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := withTokenCapabilities(t)
+	methods := c.ListCapabilityMethods(ctx)
+	for _, m := range methods {
+		if m.Ref == model.RepoCredentialRef {
+			props, _ := m.Args["properties"].(map[string]any)
+			credProp, _ := props["credential"].(map[string]any)
+			enum, ok := credProp["enum"].([]any)
+			if !ok || len(enum) != 0 {
+				t.Fatalf("repo#credential enum = %v (ok=%v), want empty slice", enum, ok)
+			}
+			return
+		}
+	}
+	t.Fatalf("ListCapabilityMethods missing %s", model.RepoCredentialRef)
+}
+
+// Both the canonical repo#credential grant and the one-release
+// github-credential:<name> alias attach and detach cleanly and override the
+// sandbox's git credential.
 func TestAttachingATokenCapabilityOverridesTheSandboxCredential(t *testing.T) {
 	t.Parallel()
-	c, store, ctx := withTokenCapabilities(t, "release-bot")
+	c, store, ctx := withTokenCapabilities(t, "release-bot", "docs-bot")
 	task := create(t, c, ctx)
 
 	if err := c.SetCapability(ctx, task.ID, "github-credential:release-bot", true); err != nil {
-		t.Fatalf("attaching the token capability: %v", err)
+		t.Fatalf("attaching the legacy token alias: %v", err)
 	}
 	if err := store.StartRun(ctx, model.Run{
 		ID: "r1", TaskID: task.ID, Sandbox: "sandbox-0", Attempt: 1, StartedAt: baseTime,
@@ -108,6 +123,11 @@ func TestAttachingATokenCapabilityOverridesTheSandboxCredential(t *testing.T) {
 		t.Fatalf("GitCredentialOverride = %q, %v, want %q true", name, ok, "release-bot")
 	}
 
+	// Attaching a second distinct #credential grant is refused with ErrConflictingGitCredentials.
+	if err := c.SetCapability(ctx, task.ID, model.RepoCredentialGrant("docs-bot"), true); !errors.Is(err, model.ErrConflictingGitCredentials) {
+		t.Fatalf("attaching conflicting credential = %v, want ErrConflictingGitCredentials", err)
+	}
+
 	// Detaching puts the sandbox back on its team's own credential --
 	// and, for a team with none, on nothing at all: there is no
 	// deployment ladder for a team's work to fall back to (grain/task-1592).
@@ -119,41 +139,22 @@ func TestAttachingATokenCapabilityOverridesTheSandboxCredential(t *testing.T) {
 	}
 }
 
-// A token this deployment does not have is rejected the same way any
-// other unknown capability id is -- the picker listing is still the one
-// gate every grant passes through.
 func TestAttachingAnUnconfiguredTokenIsRejected(t *testing.T) {
 	t.Parallel()
 	c, _, ctx := withTokenCapabilities(t, "release-bot")
 	task := create(t, c, ctx)
-	if err := c.SetCapability(ctx, task.ID, "github-credential:not-configured", true); err == nil {
-		t.Fatal("expected attaching a token this deployment has no credential for to be rejected")
+	for _, unconfigured := range []string{
+		"github-credential:not-configured",
+		model.RepoCredentialGrant("not-configured"),
+	} {
+		if err := c.SetCapability(ctx, task.ID, unconfigured, true); err == nil {
+			t.Fatalf("expected attaching unconfigured %q to be rejected", unconfigured)
+		}
 	}
 }
 
-func TestSettingsReportsEachNamedTokenAsAReadyCapability(t *testing.T) {
-	t.Parallel()
-	c, _, ctx := withTokenCapabilities(t, "release-bot")
-
-	got, err := c.GetSettings(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	status := capabilityStatus(t, got.Capabilities, "github-credential:release-bot")
-	if !status.Ready || !status.Grantable {
-		t.Fatalf("release-bot: Ready=%t Grantable=%t, want both true (status: %+v)",
-			status.Ready, status.Grantable, status)
-	}
-	if status.Name != "GitHub token: release-bot" {
-		t.Errorf("Name = %q, want the same name the picker shows", status.Name)
-	}
-	if status.Default {
-		t.Errorf("Default = true, want false -- nothing has defaulted this token (status: %+v)", status)
-	}
-}
-
-// Defaulting one deployment-wide goes through the same validation and
-// the same reporting as every other capability id.
+// Defaulting one deployment-wide normalizes the legacy prefix to
+// repo#credential and seeds it onto newly created tasks.
 func TestANamedTokenCanBeADeploymentDefault(t *testing.T) {
 	t.Parallel()
 	c, _, ctx := withTokenCapabilities(t, "release-bot")
@@ -161,23 +162,20 @@ func TestANamedTokenCanBeADeploymentDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	defaults := []string{"github-credential:release-bot"}
-	got, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &defaults})
+	rawDefaults := []string{"github-credential:release-bot"}
+	wantGrant := model.RepoCredentialGrant("release-bot")
+	got, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &rawDefaults})
 	if err != nil {
 		t.Fatalf("defaulting a named token: %v", err)
 	}
-	if !slices.Equal(got.DefaultCapabilities, defaults) {
-		t.Fatalf("defaultCapabilities = %v, want %v", got.DefaultCapabilities, defaults)
-	}
-	if status := capabilityStatus(t, got.Capabilities, "github-credential:release-bot"); !status.Default {
-		t.Errorf("Default = false on a token every new task is filed with (status: %+v)", status)
+	if !slices.Equal(got.DefaultCapabilities, []string{wantGrant}) {
+		t.Fatalf("defaultCapabilities = %v, want [%s]", got.DefaultCapabilities, wantGrant)
 	}
 
-	// And a task filed afterwards really does carry it, which is what
-	// makes the git proxy use that token for its pushes.
+	// And a task filed afterwards really does carry the canonical grant.
 	task := create(t, c, ctx)
-	if !slices.Contains(task.Capabilities, "github-credential:release-bot") {
-		t.Fatalf("a task filed with the token defaulted holds %v", task.Capabilities)
+	if !slices.Contains(task.Capabilities, wantGrant) {
+		t.Fatalf("a task filed with the token defaulted holds %v, want %s", task.Capabilities, wantGrant)
 	}
 }
 
@@ -230,7 +228,12 @@ func gitHubTokenServer(t *testing.T, patterns, tokens map[string]string, offered
 		}
 	}
 	client.Config.Credentials = credentials
-	client.Config.Capabilities = append(ui.OfferedCapabilities(), ui.GitHubTokenCapabilities(offered)...)
+	offeredList := slices.Clone(offered)
+	if offeredList == nil {
+		offeredList = []string{}
+	}
+	client.Config.OfferedGitCredentials = offeredList
+	client.Config.Capabilities = ui.OfferedCapabilities()
 	return ui.NewServerWithClient(client), credentials, dir
 }
 
@@ -311,8 +314,8 @@ func TestAddingATokenWritesTheFileTheProxyReads(t *testing.T) {
 
 	body := tokenBody(t, rec)
 	row := tokenRow(t, body, "release-bot")
-	if row["capability"] != "github-credential:release-bot" {
-		t.Errorf("capability = %v, want the id a task holds", row["capability"])
+	if row["capability"] != model.RepoCredentialGrant("release-bot") {
+		t.Errorf("capability = %v, want %s", row["capability"], model.RepoCredentialGrant("release-bot"))
 	}
 	if row["present"] != true || row["offered"] != false || row["needsRestart"] != true {
 		t.Errorf("row = %v, want present, not yet offered, and needing a restart", row)
@@ -494,5 +497,81 @@ func writeAppCredentialFile(t *testing.T, dir, name string) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, name+".app.json"), data, 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRemovingACredentialInUseByCanonicalOrLegacyGrantIsRefused(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for name, token := range map[string]string{
+		"bot":         "bot-token",
+		"release-bot": "release-token",
+		"legacy-bot":  "legacy-token",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name+".token"), []byte(token+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	credentials, err := gitproxy.LoadCredentialSet(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, store, ctx := testClient(t)
+	storeSettingsRow(t, client)
+	if err := store.UpdateConfig(ctx, func(cfg *model.Config) error {
+		cfg.GitConnections = []model.TeamGitConnection{{Credential: "bot"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	client.Config.Credentials = credentials
+	client.Config.OfferedGitCredentials = []string{"bot", "release-bot", "legacy-bot"}
+	srv := ui.NewServerWithClient(client)
+
+	// Open task holding canonical repo#credential grant.
+	canonicalTask := create(t, client, ctx)
+	if err := client.SetCapability(ctx, canonicalTask.ID, model.RepoCredentialGrant("release-bot"), true); err != nil {
+		t.Fatalf("attaching canonical grant: %v", err)
+	}
+	rec := do(t, srv, http.MethodDelete, "/api/github-tokens/release-bot", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("DELETE release-bot status = %d, want 400: %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "task "+canonicalTask.ID) {
+		t.Errorf("DELETE release-bot body = %q, want task %s named", rec.Body, canonicalTask.ID)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "release-bot.token")); err != nil {
+		t.Errorf("release-bot.token removed on refused delete: %v", err)
+	}
+
+	// Open task holding un-migrated legacy github-credential:<name> row.
+	filed := baseTime
+	if err := store.PutTask(ctx, model.Task{
+		ID:        "9999",
+		Title:     "Legacy grant holder",
+		Target:    &model.RepoRef{Owner: "bwsalmon", Name: "grain"},
+		CreatedAt: &filed,
+		Origin: model.Origin{Attribution: model.Attribution{
+			Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}}},
+		Binding: model.BindingDirective,
+		Grants:  []model.Grant{{Capability: "github-credential:legacy-bot", Via: model.GrantByLabel}},
+	}); err != nil {
+		t.Fatalf("PutTask legacy: %v", err)
+	}
+	rec = do(t, srv, http.MethodDelete, "/api/github-tokens/legacy-bot", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("DELETE legacy-bot status = %d, want 400: %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "task 9999") {
+		t.Errorf("DELETE legacy-bot body = %q, want task 9999 named", rec.Body)
+	}
+
+	// Once the canonical grant is detached, deleting release-bot succeeds.
+	if err := client.SetCapability(ctx, canonicalTask.ID, model.RepoCredentialGrant("release-bot"), false); err != nil {
+		t.Fatalf("detaching canonical grant: %v", err)
+	}
+	rec = do(t, srv, http.MethodDelete, "/api/github-tokens/release-bot", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE release-bot after detach status = %d, want 200: %s", rec.Code, rec.Body)
 	}
 }

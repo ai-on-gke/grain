@@ -35,6 +35,7 @@ import { DeclaredFields, DeclaredNotice } from "./Declared.jsx";
 import Overlay from "./Overlay.jsx";
 import { StaleEditNotice, isStaleEdit, withReload } from "./StaleEdit.jsx";
 import TemplateOverlay from "./TemplateOverlay.jsx";
+import AccessGate from "./AccessGate.jsx";
 import { useUnsavedEdits } from "../unsavedEdits.js";
 import { templateLabeler } from "../templateLabels.js";
 
@@ -248,13 +249,28 @@ function SuiteOverlay({
               })}
             />
           </FormControl>
-          <Button
-            size="small"
-            onClick={() => setShowNewTemplate(true)}
-            sx={{ mt: -1, mb: 1 }}
+          {/* Gated like every other write on the Processes page
+              (AccessGate.jsx): a role without templates:write is not
+              offered a template it could not save. The wrapper is
+              block-level: an inline one sits in a line box, whose strut
+              put the refused button 6px below the allowed one. */}
+          <AccessGate
+            scope="templates:write"
+            wrapperStyle={{
+              display: "flex",
+              width: "fit-content",
+              marginTop: -8,
+              marginBottom: 8,
+            }}
           >
-            + New template
-          </Button>
+            <Button
+              size="small"
+              onClick={() => setShowNewTemplate(true)}
+              sx={{ mt: -1, mb: 1 }}
+            >
+              + New template
+            </Button>
+          </AccessGate>
 
           <FormControl fullWidth margin="normal" size="small">
             <InputLabel id="suite-mode-label">Run mode</InputLabel>
@@ -343,18 +359,26 @@ function SuiteOverlay({
           direction="row"
           justifyContent={isNew ? "flex-end" : "space-between"}
           alignItems="center"
-          sx={{ mt: 2 }}
+          sx={{ mt: 2, flexWrap: "wrap", gap: 1 }}
         >
+          {/* Delete and Save are suites:write, as the list's own Run and
+              New are (ProcessesList.jsx) -- missed here when the rest of
+              the page's writes were gated, so a grain/viewer opening a
+              suite was offered both and refused only on the click. */}
           {!isNew && (
-            <Button color="error" onClick={remove} disabled={!!declaredIn}>
-              Delete
-            </Button>
+            <AccessGate scope="suites:write">
+              <Button color="error" onClick={remove} disabled={!!declaredIn}>
+                Delete
+              </Button>
+            </AccessGate>
           )}
-          <Stack direction="row" spacing={1}>
+          <Stack direction="row" spacing={1} sx={{ ml: "auto" }}>
             <Button onClick={onClose}>{declaredIn ? "Close" : "Cancel"}</Button>
-            <Button type="submit" variant="contained" disabled={!!declaredIn}>
-              {isNew ? "Add suite" : "Save"}
-            </Button>
+            <AccessGate scope="suites:write">
+              <Button type="submit" variant="contained" disabled={!!declaredIn}>
+                {isNew ? "Add suite" : "Save"}
+              </Button>
+            </AccessGate>
           </Stack>
         </Stack>
       </form>
@@ -373,7 +397,13 @@ function SuiteOverlay({
         path="/api/suites/composition"
         body={suiteRequest()}
         heading="What each pass files"
-        note={isNew ? "as filled in above" : "as edited above, not as saved"}
+        note={
+          isNew
+            ? "as filled in above"
+            : declaredIn
+              ? `declared in ${declaredIn.path}`
+              : "as edited above, not as saved"
+        }
       />
       {showNewTemplate && (
         <TemplateOverlay

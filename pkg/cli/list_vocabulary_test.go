@@ -287,6 +287,22 @@ func TestAttributeValueVocabulariesMatchTheFrontend(t *testing.T) {
 			}
 		}
 	}
+
+	// ORIGIN_LABELS is where a new origin gets its screen name even if
+	// `order` was forgotten, which is how "imported" drifted between the
+	// UI and `grain list`. Keep its keys in step with taskOrigins too.
+	originLabels := regexp.MustCompile(`(?m)^\s*(\w+): "[^"]+",`).FindAllStringSubmatch(
+		jsBlock(t, frontendSource(t, "taskAttributes.js"), "const ORIGIN_LABELS = {", "};"),
+		-1,
+	)
+	var labelled []string
+	for _, m := range originLabels {
+		labelled = append(labelled, m[1])
+	}
+	if strings.Join(labelled, ",") != strings.Join(taskOrigins, ",") {
+		t.Errorf("ORIGIN_LABELS names [%s] and taskOrigins holds [%s]",
+			strings.Join(labelled, ", "), strings.Join(taskOrigins, ", "))
+	}
 }
 
 // --- orders ----------------------------------------------------------

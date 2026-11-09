@@ -319,6 +319,81 @@ func TestDraftScheduleCompositionFollowsTheEdits(t *testing.T) {
 	}
 }
 
+// A template-backed schedule's own admission raises its template's on
+// every firing (model.ComposeScheduleTask), and a repository's declared
+// schedule can say so beside `template:`. The schedule pane previews
+// such a schedule through the draft endpoint, which used to copy the
+// template's content and drop the schedule's admission, so the pane
+// said "bypass, from the template" over a firing that files "durable,
+// from the schedule" (2026-11-07 walkthrough).
+func TestDraftScheduleCompositionKeepsAScheduleAdmissionOverItsTemplates(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+	tmpl := templateForComposition(t, c, ctx, ui.CreateTemplateRequest{
+		Name: "Bump", Title: "Bump the dependencies", Admission: "bypass",
+	})
+	req := ui.CreateScheduleRequest{TemplateID: tmpl.ID, Repo: "acme/widgets"}
+	got, err := c.DraftScheduleComposition(ctx, req)
+	if err != nil {
+		t.Fatalf("composing a draft: %v", err)
+	}
+	wantField(t, got.Tasks[0], "admission", "template", "bypass")
+
+	req.Admission = "durable"
+	got, err = c.DraftScheduleComposition(ctx, req)
+	if err != nil {
+		t.Fatalf("composing a draft with its own admission: %v", err)
+	}
+	wantField(t, got.Tasks[0], "admission", "schedule", "durable")
+
+	// Lower than the template's says nothing: the template's stands.
+	req.Admission = "standard"
+	got, err = c.DraftScheduleComposition(ctx, req)
+	if err != nil {
+		t.Fatalf("composing a draft with a lower admission: %v", err)
+	}
+	wantField(t, got.Tasks[0], "admission", "template", "bypass")
+
+	req.Admission = "eventually"
+	if _, err := c.DraftScheduleComposition(ctx, req); err == nil {
+		t.Error("composing a draft with an unknown admission succeeded, want it refused")
+	}
+}
+
+// The same for hosting: a declared schedule's `hosting: console` beside
+// `template:` is what its firings file, so the pane's preview of it --
+// which composes through the draft -- has to say so too, rather than
+// leaving the row out (2026-11-08 walkthrough).
+func TestDraftScheduleCompositionKeepsAScheduleHostingOverItsTemplates(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+	tmpl := templateForComposition(t, c, ctx, ui.CreateTemplateRequest{
+		Name: "Pair", Title: "Pair on the flaky test",
+	})
+	req := ui.CreateScheduleRequest{TemplateID: tmpl.ID, Repo: "acme/widgets"}
+	got, err := c.DraftScheduleComposition(ctx, req)
+	if err != nil {
+		t.Fatalf("composing a draft: %v", err)
+	}
+	for _, f := range got.Tasks[0].Fields {
+		if f.Name == "hosting" {
+			t.Fatalf("an unattended draft has a hosting row %+v, want none", f)
+		}
+	}
+
+	req.Hosting = "console"
+	got, err = c.DraftScheduleComposition(ctx, req)
+	if err != nil {
+		t.Fatalf("composing a draft with its own hosting: %v", err)
+	}
+	wantField(t, got.Tasks[0], "hosting", "schedule", "console")
+
+	req.Hosting = "somewhere"
+	if _, err := c.DraftScheduleComposition(ctx, req); err == nil {
+		t.Error("composing a draft with an unknown hosting succeeded, want it refused")
+	}
+}
+
 // A draft that names a template resolves it out of the store on every
 // call, exactly as a firing does -- so a preview shows today's template
 // and not a copy taken when the form was opened.
@@ -494,14 +569,14 @@ func TestCompositionCreditsGrainCIToTheRepo(t *testing.T) {
 	draft, err := c.DraftScheduleComposition(ctx, ui.CreateScheduleRequest{
 		Title:        "Weekly Dependency & Vulnerability Audit",
 		Repo:         "acme/widgets",
-		Capabilities: []string{"bootstrap-playbooks"},
+		Capabilities: []string{"read-issues"},
 	})
 	if err != nil {
 		t.Fatalf("composing draft schedule: %v", err)
 	}
 	caps := field(t, draft.Tasks[0], "capabilities")
-	if !slices.Equal(caps.Values, []string{"bootstrap-playbooks", model.GrainCIGrant}) {
-		t.Errorf("values = %v, want [bootstrap-playbooks grain-ci]", caps.Values)
+	if !slices.Equal(caps.Values, []string{model.GitHubReadIssuesGrant, model.GrainCIGrant}) {
+		t.Errorf("values = %v, want [github#read-issues grain-ci]", caps.Values)
 	}
 	if !slices.Equal(caps.Sources, []string{"schedule", "repo"}) {
 		t.Errorf("sources = %v, want [schedule repo]", caps.Sources)
@@ -648,4 +723,37 @@ func TestCompositionShowsKeepRunningWhereItIsOn(t *testing.T) {
 			t.Errorf("a template that does not keep running previews %+v; want no keepRunning row", f)
 		}
 	}
+}
+
+// A schedule naming a template can carry capabilities of its own beside
+// it -- a repository's declared schedule does, with `capabilities:` next
+// to `template:` (docs/declarations.md) -- and its firings are granted
+// both. The draft preview, which is what the schedule pane draws, used to
+// drop the schedule's own and show the template's alone, while the stored
+// schedule's composition showed both (2026-11-08 walkthrough, task 3614).
+// CreateSchedule refuses the pair from a form, so this is the declared
+// schedule's case, which ScheduleOverlay previews with its own fields.
+func TestDraftScheduleCompositionKeepsAScheduleCapabilitiesBesideItsTemplates(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+	tmpl := templateForComposition(t, c, ctx, ui.CreateTemplateRequest{
+		Name: "Audit", Title: "Audit", Capabilities: []string{"gcp-key"},
+	})
+	req := ui.CreateScheduleRequest{
+		TemplateID: tmpl.ID, Repo: "acme/widgets", Base: "main",
+		Capabilities: []string{"read-issues"},
+	}
+	draft, err := c.DraftScheduleComposition(ctx, req)
+	if err != nil {
+		t.Fatalf("composing a draft: %v", err)
+	}
+	caps := field(t, draft.Tasks[0], "capabilities")
+	want := []string{model.GCPKeySandboxAgentGrant, model.GitHubReadIssuesGrant}
+	if !slices.Equal(caps.Values, want) {
+		t.Errorf("draft values = %v, want %v", caps.Values, want)
+	}
+	if !slices.Equal(caps.Sources, []string{"template", "schedule"}) {
+		t.Errorf("draft sources = %v, want [template schedule]", caps.Sources)
+	}
+
 }

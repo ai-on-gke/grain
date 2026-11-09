@@ -84,7 +84,7 @@ Kinds:
 | Remote executors: connected list, join tokens | Executors (`executors`), `ConnectedExecutors`, `ExecutorsPanel` | `/admin/executors` | `GET /api/executors`, `GET`/`POST /api/executors/tokens`, `POST .../{id}/revoke`, `DELETE .../{id}` | D (tokens) and S (connected list) |
 | GitHub host | Integrations & Auth (`integrations`) | `/admin/integrations` | `/api/settings` (`githubHost`) | D |
 | GCP project, service account email, account count | `integrations`, "GCP" | `/admin/integrations` | `/api/settings` | D |
-| Capabilities and their credentials (gcp-key, gemini-key, GitHub tokens, agent keys) | `integrations`, `CapabilitiesPanel` | `/admin/integrations` | `POST /api/capabilities/{id}/check`, `/api/gcp-keys*`, `/api/github-tokens*`, `/api/agent-keys*`, `/api/codex-auth` | D |
+| Capabilities and their credentials (gcp-key, gemini-key, GitHub tokens, agent keys) | `integrations`, `CapabilitiesPanel` | `/admin/integrations` | `/api/gcp-keys*`, `/api/github-tokens*`, `/api/agent-keys*`, `/api/codex-auth` | D |
 | Secrets | `integrations`, `SecretsPanel` | `/admin/integrations` | `GET /api/secrets`, `PUT`/`DELETE /api/secrets/{secret}[/{key}]` | D |
 | Config repo (state repo, secrets repo and key, sync, reset notice) | Config repo (`state`), `StateRepoPanel` | `/admin/state` | `GET /api/state-repo`, `POST /api/state-repo/{sync,secrets-key,secrets-repo,reset-notice}`, `GET /api/state-repo/file[s]` | D |
 | Upgrade check mode, "upgrade check pauses the pipeline" | Upgrade (`upgrade`), `UpgradePanel` | `/admin/upgrade` | `/api/settings` (`upgradeCheckMode`, `upgradeCheckPausesPipeline`) | D |
@@ -622,6 +622,13 @@ one height (77px, with `.content-header`'s `1rem 1.75rem` padding and
       `view === "settings"`. This is the **only** entry point to
       Settings.
 
+   There is no signed-in badge here. The rail used to end with the
+   verified email (`top-bar-user`) and a menu holding Settings → Access
+   and Log out; PR #726 dropped it as a repeat of the sidebar's foot,
+   which says who is signed in on both desktop and phone (§4.3).
+   `page-header-rail-walkthrough.spec.js` and `iap-header-logout.spec.js`
+   check that the rail has no `top-bar-user`.
+
 DOM order is title, page actions, globals, so Tab reaches the page's
 own controls before the buttons every page shares.
 
@@ -666,9 +673,10 @@ Boards
 Sessions
   (sessions)
 Processes        17
-CI
+CI                          ← hidden until Customize shows it
 Repos             6
 ──────────
+operator@example.com  ⎋      ← user tile, Log out (§4.3)
 v1.14.0 · 3f2a1c9            ← build stamp, as today
 ```
 
@@ -680,48 +688,77 @@ v1.14.0 · 3f2a1c9            ← build stamp, as today
   glyph (§5.7).
 - The footer `List` with System and Metrics is gone (System is in the top
   bar, Metrics is in System).
-- The user tile is gone (§6).
+- The browser-chosen username's tile is gone (§6). The tile at the foot
+  of the rail now names the caller from `GET /api/whoami` instead
+  (§4.3).
 - **Customize** (`CustomizeSidebarOverlay`, the one customize control,
   in the Pinned row expanded and as a tune icon on the folded rail) sets
   both what is pinned and which sections show. Each of Pinned, Tasks,
   Boards, Sessions, Processes, CI, Repos and Staging
   (`sidebarSections.js`) can be hidden in this browser, kept as an array
   of ids in `localStorage["grain.sidebar.hidden"]`; nothing stored means
-  everything shows, and an id the build does not know is ignored, so a
-  section added later is never hidden by an old list. A hidden section
+  the default, `DEFAULT_HIDDEN_SECTIONS` (CI alone hidden), while a stored
+  `[]` shows everything, and an id the build does not know is ignored, so
+  a section added later is never hidden by an old list. A hidden section
   loses its row and its rail count, folded or not, but its route still
   opens by URL and a pin of it still shows under Pinned. The Customize
   control itself stays when Pinned is hidden, so the panel can always be
-  put back; Reset to default there shows everything again.
+  put back; Reset to default there goes back to the default, hiding CI
+  again.
+
+**Decision:** CI is hidden from the sidebar by default. *Recommended:
+yes.* This records what PR #726 shipped. `/ci` still opens by URL and
+from a repo's CI tab, and Customize puts the entry back for a browser
+that wants it. Browsers that never customised their sidebar lose the
+entry on upgrade.
 
 ### 4.3 What the footer holds instead
 
-On desktop the footer holds only the build stamp. It is the line that
-sits under the user tile today (`buildStampLabel`, title
-`buildStampTitle`). It becomes a link to `/settings/upgrade`, so "which
-build is this, and is there a newer one" is one click.
+On desktop the footer holds, from top to bottom:
+
+1. **The user tile** (`UserTile`, `data-testid="user-tile"`): who this
+   browser acts as, from `GET /api/whoami`'s label (the verified email,
+   or "operator" with a muted "(access code)" or "(local)";
+   operator-attribution spec §5.4), never a name the browser typed in.
+   Until `/api/whoami` answers, the tile falls back to
+   `verifiedUserEmail(config)`. Clicking it opens Settings → Access.
+   Folded, it is the icon alone, the label its tooltip.
+2. **Log out** (`data-testid="sidebar-logout"`), a compact icon button
+   beside the tile (under it, folded), shown only for a verified identity
+   (`verifiedUserEmail(config)` or `whoami.verified`). It does what the
+   phone's Log out does (below). An access-code or local session has no
+   identity to sign out of here and gets no button.
+3. **The build stamp** (`buildStampLabel`, title `buildStampTitle`), a
+   link to `/settings/upgrade`, so "which build is this, and is there a
+   newer one" is one click. Folded, there is no room for it and it is
+   left off; Settings → Upgrade says the same thing.
+
+This is the only place on desktop that says who is signed in. The header
+rail's email badge (`top-bar-user`) and its menu were dropped in PR #726
+as a repeat of the tile (§4.1).
 
 On a phone (`pinFooter`), the drawer's foot holds a **System** row with
-its unbacked-state dot, then the signed-in row, then the build stamp.
-(Settings is on the bar.)
+its unbacked-state dot, then the signed-in row (or, with no verified
+identity, the user tile), then the build stamp. (Settings is on the bar.)
 
 The **signed-in row** (`data-testid="phone-signed-in"`) is the phone's
-stand-in for the header rail's email badge (`top-bar-user`), which has
-no rail to sit on there. It shows only when `verifiedUserEmail(config)`
-is set -- IAP or another IdentityVerifier vouched for the browser; an
-access-code session has no identity to show and gets no row. It reads
-"Signed in as" over the email, which is ellipsized on one line (the full
-address is the row's title) so a long service-account address never
-widens the 232px drawer. Tapping the row opens Settings → Access; a
-**Log out** button under it, at its right (not beside the address, which
-left the address too little of the drawer to show even
-`owner@example.com` whole), does what the badge menu's Log out does
-(`POST /api/auth/logout`, then `/_gcp_iap/clear_login_cookie` under
-IAP). The drawer is already a menu, so the badge's own menu is not
-repeated. `phone-signed-in-logout.spec.js` checks the row at 390px.
+form of the desktop tile and Log out button. It shows only when
+`verifiedUserEmail(config)` is set -- IAP or another IdentityVerifier
+vouched for the browser; an access-code session gets the user tile
+instead. It reads "Signed in as" over the email, which is ellipsized on
+one line (the full address is the row's title) so a long service-account
+address never widens the 232px drawer. Tapping the row opens Settings →
+Access; a **Log out** button under it, at its right (not beside the
+address, which left the address too little of the drawer to show even
+`owner@example.com` whole), signs out (`POST /api/auth/logout`, then
+`/_gcp_iap/clear_login_cookie` under IAP). `phone-signed-in-logout.spec.js`
+checks the row at 390px.
 
-**Decision:** The footer is the build stamp alone, linked to System →
-Upgrade. *Recommended: yes.*
+**Decision:** The footer is the user tile, a Log out button for a
+verified identity, and the build stamp linked to Settings → Upgrade; the
+header rail carries no signed-in badge. *Recommended: yes.* Amended
+after PR #726, which moved who-is-signed-in off the rail. The original
+decision was the build stamp alone, with the email badge on the rail.
 
 ---
 
@@ -1348,8 +1385,9 @@ answer.
 15. Redirects are kept indefinitely: **yes** (§3.5).
 16. System's entry is a top-bar icon beside the gear, and the drawer foot
     on a phone: **yes** (§4.1).
-17. The footer is the build stamp alone, linked to Settings → Upgrade:
-    **yes** (§4.3).
+17. The footer is the user tile, Log out for a verified identity, and
+    the build stamp linked to Settings → Upgrade, with no signed-in badge
+    on the header rail: **yes** (§4.3, amended after PR #726).
 18. Triggers are listed read-only, by path: **yes** (§5.1).
 19. Templates and suites show derived last and next runs: **yes** (§5.1).
 20. Processes gets a new glyph: **yes** (§5.7).
@@ -1358,3 +1396,5 @@ answer.
 23. Several users' pins in one browser are merged: **yes** (§6.3).
 24. Stages run (a) → (b) → (c) in sequence: **yes** (§7).
 25. Stage (a) waits for #4880 and #4862–#4864: **yes** (§7).
+26. CI is hidden from the sidebar by default, and Reset to default hides
+    it again: **yes** (§4.2).

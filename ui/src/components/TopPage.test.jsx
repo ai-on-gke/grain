@@ -43,6 +43,8 @@ describe("TopPage", () => {
 
     expect(await screen.findByText(/load average: 1.10/)).toBeInTheDocument();
     expect(screen.getByText(/3:20.11 claude/)).toBeInTheDocument();
+    const region = screen.getByRole("region", { name: "Process snapshot" });
+    expect(region).toHaveAttribute("tabIndex", "0");
     expect(api).toHaveBeenCalledWith("/api/host/top?lines=500");
   });
 

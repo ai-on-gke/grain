@@ -1,0 +1,34 @@
+[
+  {
+    "Name": "grain/release-qualification",
+    "Status": "completed",
+    "Conclusion": "success",
+    "HTMLURL": "",
+    "FailureReason": "",
+    "StepsExecuted": 0,
+    "ID": 7001,
+    "CheckSuiteID": 0,
+    "HeadSHA": "c6004bc95553bd1e329f7fe62da0e18aeb711a48",
+    "App": "github-actions",
+    "ExternalID": "",
+    "StartedAt": "2026-11-07T09:18:31Z",
+    "CompletedAt": "2026-11-07T09:18:31Z",
+    "Output": ""
+  },
+  {
+    "Name": "grain/release-qualification",
+    "Status": "completed",
+    "Conclusion": "success",
+    "HTMLURL": "",
+    "FailureReason": "Release qualification of v3.2.0-rc.1: success",
+    "StepsExecuted": 0,
+    "ID": 8001,
+    "CheckSuiteID": 0,
+    "HeadSHA": "c6004bc95553bd1e329f7fe62da0e18aeb711a48",
+    "App": "grain-walkthrough",
+    "ExternalID": "release-qualification:ai-on-gke/grain@v3.2.0-rc.1",
+    "StartedAt": "2026-11-07T08:26:31Z",
+    "CompletedAt": "2026-11-07T09:18:31Z",
+    "Output": "repo:template:ai-on-gke:grain:qualification-mergequeue: pass (task 1, attempt 1)\nrepo:template:ai-on-gke:grain:qualification-ci-diagnostics: pass (task 2, attempt 1)\nrepo:template:ai-on-gke:grain:qualification-base-triage: pass (task 3, attempt 1)\nrepo:template:ai-on-gke:grain:qualification-system-smoke: pass (task 4, attempt 1)"
+  }
+]

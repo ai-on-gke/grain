@@ -55,14 +55,14 @@ func querierRepoUsesGrainCI(ctx context.Context, q querier, repo RepoRef) (bool,
 }
 
 func getRepoConfig(ctx context.Context, q querier, repo RepoRef) (*RepoConfig, error) {
-	var cloneURL, defaultCapabilities, promptExtension, setupCommand, ciCapabilities, releaseSecrets, unfixableChecks, baseBranchCIJobs, postMergeDispatchJobs string
+	var cloneURL, defaultCapabilities, defaultAdmission, defaultHosting, promptExtension, setupCommand, ciCapabilities, releaseSecrets, unfixableChecks, baseBranchCIJobs, postMergeDispatchJobs string
 	var declaredPromptExtension, declaredSetupCommand, workOwnership, workOverrides, ciMode, repairTemplateID, portBranches, declaredPortBranches, portTypes, declaredPortTypes, gitCredential, mergeRecheck, upstreamRepo string
 	var releaseWorkflowsDisabled, declarations, requireBranchUpToDate, ignoreGitHubCI, watchDefaultBranch, mergeOnGreen, baseRepairBypassesHumanGates bool
 	var issueImport IssueImport
 	err := q.QueryRowContext(ctx,
-		"SELECT `clone_url`,`default_capabilities`,`prompt_extension`,`setup_command`,`ci_capabilities`,`release_workflows_disabled`,`work_ownership`,`work_overrides`,`release_secrets`,`declarations`,`require_branch_up_to_date`,`ignore_github_ci`,`watch_default_branch`,`unfixable_checks`,`base_branch_ci_jobs`,`post_merge_dispatch_jobs`,`declared_prompt_extension`,`declared_setup_command`,`ci_mode`,`repair_template_id`,`port_branches`,`declared_port_branches`,`port_types`,`declared_port_types`,`git_credential`,`merge_on_green`,`base_repair_bypasses_human_gates`,`merge_recheck`,`issue_import_enabled`,`issue_import_repo`,`issue_import_label`,`issue_import_approved`,`issue_import_interval_seconds`,`upstream_repo` FROM `repo_config` WHERE `owner` = ? AND `name` = ?",
+		"SELECT `clone_url`,`default_capabilities`,`prompt_extension`,`setup_command`,`ci_capabilities`,`release_workflows_disabled`,`work_ownership`,`work_overrides`,`release_secrets`,`declarations`,`require_branch_up_to_date`,`ignore_github_ci`,`watch_default_branch`,`unfixable_checks`,`base_branch_ci_jobs`,`post_merge_dispatch_jobs`,`declared_prompt_extension`,`declared_setup_command`,`ci_mode`,`repair_template_id`,`port_branches`,`declared_port_branches`,`port_types`,`declared_port_types`,`git_credential`,`merge_on_green`,`base_repair_bypasses_human_gates`,`merge_recheck`,`issue_import_enabled`,`issue_import_repo`,`issue_import_label`,`issue_import_approved`,`issue_import_interval_seconds`,`upstream_repo`,`default_admission`,`default_hosting` FROM `repo_config` WHERE `owner` = ? AND `name` = ?",
 		repo.StoredOwner(), repo.Name).Scan(&cloneURL, &defaultCapabilities, &promptExtension, &setupCommand, &ciCapabilities, &releaseWorkflowsDisabled, &workOwnership, &workOverrides, &releaseSecrets, &declarations, &requireBranchUpToDate, &ignoreGitHubCI, &watchDefaultBranch, &unfixableChecks, &baseBranchCIJobs, &postMergeDispatchJobs, &declaredPromptExtension, &declaredSetupCommand, &ciMode, &repairTemplateID, &portBranches, &declaredPortBranches, &portTypes, &declaredPortTypes, &gitCredential, &mergeOnGreen, &baseRepairBypassesHumanGates, &mergeRecheck,
-		&issueImport.Enabled, &issueImport.Repo, &issueImport.Label, &issueImport.Approved, &issueImport.IntervalSeconds, &upstreamRepo)
+		&issueImport.Enabled, &issueImport.Repo, &issueImport.Label, &issueImport.Approved, &issueImport.IntervalSeconds, &upstreamRepo, &defaultAdmission, &defaultHosting)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			recordUpstreamRepo(repo, "")
@@ -75,6 +75,8 @@ func getRepoConfig(ctx context.Context, q querier, repo RepoRef) (*RepoConfig, e
 		Repo:                         repo,
 		CloneURL:                     cloneURL,
 		DefaultCapabilities:          splitCapabilities(defaultCapabilities),
+		DefaultAdmission:             Admission(strings.TrimSpace(defaultAdmission)),
+		DefaultHosting:               Hosting(strings.TrimSpace(defaultHosting)),
 		CICapabilities:               splitCapabilities(ciCapabilities),
 		Work:                         readWorkOwnership(workOwnership, workOverrides, releaseWorkflowsDisabled),
 		ReleaseSecrets:               splitCSV(releaseSecrets),
@@ -142,11 +144,11 @@ func readWorkOwnership(ownership, overrides string, legacyReleaseDisabled bool) 
 func (s *Store) ListRepoConfigs(ctx context.Context) ([]RepoConfig, error) {
 	var out []RepoConfig
 	err := each(ctx, s.db,
-		"SELECT `owner`,`name`,`clone_url`,`default_capabilities`,`prompt_extension`,`setup_command`,`ci_capabilities`,`release_workflows_disabled`,`work_ownership`,`work_overrides`,`release_secrets`,`declarations`,`require_branch_up_to_date`,`ignore_github_ci`,`watch_default_branch`,`unfixable_checks`,`base_branch_ci_jobs`,`post_merge_dispatch_jobs`,`declared_prompt_extension`,`declared_setup_command`,`ci_mode`,`repair_template_id`,`port_branches`,`declared_port_branches`,`port_types`,`declared_port_types`,`git_credential`,`merge_on_green`,`base_repair_bypasses_human_gates`,`merge_recheck`,`issue_import_enabled`,`issue_import_repo`,`issue_import_label`,`issue_import_approved`,`issue_import_interval_seconds`,`upstream_repo` FROM `repo_config` ORDER BY `owner`,`name`",
+		"SELECT `owner`,`name`,`clone_url`,`default_capabilities`,`prompt_extension`,`setup_command`,`ci_capabilities`,`release_workflows_disabled`,`work_ownership`,`work_overrides`,`release_secrets`,`declarations`,`require_branch_up_to_date`,`ignore_github_ci`,`watch_default_branch`,`unfixable_checks`,`base_branch_ci_jobs`,`post_merge_dispatch_jobs`,`declared_prompt_extension`,`declared_setup_command`,`ci_mode`,`repair_template_id`,`port_branches`,`declared_port_branches`,`port_types`,`declared_port_types`,`git_credential`,`merge_on_green`,`base_repair_bypasses_human_gates`,`merge_recheck`,`issue_import_enabled`,`issue_import_repo`,`issue_import_label`,`issue_import_approved`,`issue_import_interval_seconds`,`upstream_repo`,`default_admission`,`default_hosting` FROM `repo_config` ORDER BY `owner`,`name`",
 		nil,
 		func(rows *sql.Rows) error {
 			var c RepoConfig
-			var defaultCapabilities, ciCapabilities, releaseSecrets, unfixableChecks, baseBranchCIJobs, postMergeDispatchJobs, ciMode, repairTemplateID, portBranches, declaredPortBranches, portTypes, declaredPortTypes string
+			var defaultCapabilities, defaultAdmission, defaultHosting, ciCapabilities, releaseSecrets, unfixableChecks, baseBranchCIJobs, postMergeDispatchJobs, ciMode, repairTemplateID, portBranches, declaredPortBranches, portTypes, declaredPortTypes string
 			var workOwnership, workOverrides, mergeRecheck string
 			var legacyReleaseDisabled bool
 			if err := rows.Scan(&c.Repo.Owner, &c.Repo.Name, &c.CloneURL, &defaultCapabilities,
@@ -155,7 +157,7 @@ func (s *Store) ListRepoConfigs(ctx context.Context) ([]RepoConfig, error) {
 				&c.Declarations, &c.RequireBranchUpToDate, &c.IgnoreGitHubCI, &c.WatchDefaultBranch,
 				&unfixableChecks, &baseBranchCIJobs, &postMergeDispatchJobs,
 				&c.DeclaredPromptExtension, &c.DeclaredSetupCommand, &ciMode, &repairTemplateID, &portBranches, &declaredPortBranches, &portTypes, &declaredPortTypes, &c.GitCredential, &c.MergeOnGreen, &c.BaseRepairBypassesHumanGates, &mergeRecheck,
-				&c.IssueImport.Enabled, &c.IssueImport.Repo, &c.IssueImport.Label, &c.IssueImport.Approved, &c.IssueImport.IntervalSeconds, &c.UpstreamRepo); err != nil {
+				&c.IssueImport.Enabled, &c.IssueImport.Repo, &c.IssueImport.Label, &c.IssueImport.Approved, &c.IssueImport.IntervalSeconds, &c.UpstreamRepo, &defaultAdmission, &defaultHosting); err != nil {
 				return err
 			}
 			c.Repo = RepoFromStored(c.Repo.Owner, c.Repo.Name)
@@ -163,6 +165,8 @@ func (s *Store) ListRepoConfigs(ctx context.Context) ([]RepoConfig, error) {
 			c.MergeRecheck = MergeRecheckMode(mergeRecheck)
 			c.Work = readWorkOwnership(workOwnership, workOverrides, legacyReleaseDisabled)
 			c.DefaultCapabilities = splitCapabilities(defaultCapabilities)
+			c.DefaultAdmission = Admission(strings.TrimSpace(defaultAdmission))
+			c.DefaultHosting = Hosting(strings.TrimSpace(defaultHosting))
 			c.CICapabilities = splitCapabilities(ciCapabilities)
 			c.ReleaseSecrets = splitCSV(releaseSecrets)
 			c.UnfixableChecks = splitCSV(unfixableChecks)
@@ -212,9 +216,9 @@ func putRepoConfig(ctx context.Context, tx *sql.Tx, c RepoConfig) error {
 	// repository somebody deliberately switched off.
 	legacyReleaseDisabled := !RunsWorkItem(&c, ReleaseItem)
 	_, err := tx.ExecContext(ctx,
-		"REPLACE INTO `repo_config` (`owner`,`name`,`clone_url`,`default_capabilities`,`prompt_extension`,`setup_command`,`ci_capabilities`,`release_workflows_disabled`,`work_ownership`,`work_overrides`,`release_secrets`,`declarations`,`require_branch_up_to_date`,`ignore_github_ci`,`watch_default_branch`,`unfixable_checks`,`base_branch_ci_jobs`,`post_merge_dispatch_jobs`,`declared_prompt_extension`,`declared_setup_command`,`ci_mode`,`repair_template_id`,`port_branches`,`declared_port_branches`,`port_types`,`declared_port_types`,`git_credential`,`merge_on_green`,`base_repair_bypasses_human_gates`,`merge_recheck`,`issue_import_enabled`,`issue_import_repo`,`issue_import_label`,`issue_import_approved`,`issue_import_interval_seconds`,`upstream_repo`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+		"REPLACE INTO `repo_config` (`owner`,`name`,`clone_url`,`default_capabilities`,`prompt_extension`,`setup_command`,`ci_capabilities`,`release_workflows_disabled`,`work_ownership`,`work_overrides`,`release_secrets`,`declarations`,`require_branch_up_to_date`,`ignore_github_ci`,`watch_default_branch`,`unfixable_checks`,`base_branch_ci_jobs`,`post_merge_dispatch_jobs`,`declared_prompt_extension`,`declared_setup_command`,`ci_mode`,`repair_template_id`,`port_branches`,`declared_port_branches`,`port_types`,`declared_port_types`,`git_credential`,`merge_on_green`,`base_repair_bypasses_human_gates`,`merge_recheck`,`issue_import_enabled`,`issue_import_repo`,`issue_import_label`,`issue_import_approved`,`issue_import_interval_seconds`,`upstream_repo`,`default_admission`,`default_hosting`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
 		c.Repo.StoredOwner(), c.Repo.Name, c.CloneURL, joinCapabilities(c.DefaultCapabilities), c.PromptExtension, c.SetupCommand, joinCapabilities(c.CICapabilities), legacyReleaseDisabled, string(c.Work.Default), EncodeWorkOverrides(c.Work.Overrides), joinCSV(c.ReleaseSecrets), c.Declarations, c.RequireBranchUpToDate, c.IgnoreGitHubCI, c.WatchDefaultBranch, joinCSV(c.UnfixableChecks), joinCSV(c.BaseBranchCIJobs), joinCSV(c.PostMergeDispatchJobs), c.DeclaredPromptExtension, c.DeclaredSetupCommand, string(c.CIMode), c.RepairTemplateID, joinCSV(c.PortBranches), joinCSV(c.DeclaredPortBranches), EncodePortTypes(c.PortTypes), EncodePortTypes(c.DeclaredPortTypes), c.GitCredential, c.MergeOnGreen, c.BaseRepairBypassesHumanGates, string(c.MergeRecheck),
-		c.IssueImport.Enabled, c.IssueImport.Repo, c.IssueImport.Label, c.IssueImport.Approved, c.IssueImport.IntervalSeconds, c.UpstreamRepo)
+		c.IssueImport.Enabled, c.IssueImport.Repo, c.IssueImport.Label, c.IssueImport.Approved, c.IssueImport.IntervalSeconds, c.UpstreamRepo, string(c.DefaultAdmission), string(c.DefaultHosting))
 	return err
 }
 

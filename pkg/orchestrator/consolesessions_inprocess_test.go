@@ -31,7 +31,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
-	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite/sqlitetest"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
@@ -64,7 +63,7 @@ func inProcessDeps(store *model.Store, fw agent.Framework, ttl, poll time.Durati
 		MaxWorkers: 1,
 		Config: orchestrator.Config{
 			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
+			Capabilities:          orchestrator.SessionTestRegistry(),
 			SessionSandboxIdleTTL: ttl,
 			WaitForSessionReply:   true,
 			CancelPollInterval:    poll,
@@ -329,7 +328,7 @@ func TestAdoptedInProcessSessionRelaysOnlyTheTurnInFlight(t *testing.T) {
 	adoptDeps := orchestrator.Deps{Store: store, Sandboxes: sandboxes, Framework: orchestrator.StaticFramework(fw),
 		Config: orchestrator.Config{
 			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities: orchestrator.SessionTestRegistry(durable.New()),
+			Capabilities: orchestrator.SessionTestRegistry(),
 		}}
 	host := &runhost.Host{Driver: driver, Deployment: "d", Poll: 5 * time.Millisecond}
 	adopted := orchestrator.AdoptedRun{Adoption: runhost.Adoption{

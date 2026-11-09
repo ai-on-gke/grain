@@ -44,6 +44,8 @@ import {
 import { identifierField } from "../identifierField.js";
 import { searchFilter } from "../fuzzy.js";
 import { fetchUpgradeTargets } from "../upgradeTargets.js";
+import { formatDateTime } from "../time.js";
+import { useTimeZone } from "../TimeZoneContext.jsx";
 import { HighlightedText } from "./SearchSelect.jsx";
 
 // STATUS_POLL_MS is how often this panel re-fetches /api/upgrade while
@@ -380,6 +382,7 @@ function sessionLabel(session) {
 // Absent when the daemon sent none: nothing ran across the restart, or
 // the daemon is too old to say.
 function LastRestart({ report }) {
+  const zone = useTimeZone();
   if (!report) return null;
   const adopted = report.adopted || [];
   const lost = report.lost || [];
@@ -394,7 +397,7 @@ function LastRestart({ report }) {
       className="upgrade-last-restart"
     >
       <strong>Last restart</strong>
-      {report.at ? ` (${new Date(report.at).toLocaleString()})` : ""}:{" "}
+      {report.at ? ` (${formatDateTime(report.at, zone)})` : ""}:{" "}
       <span className="upgrade-last-restart-summary">
         {adopted.length} adopted, {lost.length} lost
         {lost.length > 0 && ` (${byFramework(report.lostByFramework)})`}
@@ -1477,7 +1480,13 @@ export default function UpgradePanel({
             upgrade failing, lifts it &mdash; since a run started now would only
             be discarded by the restart this ends in.
           </Typography>
-          <RunningNow running={status.running} />
+          {/* The same fallback the externally managed branch above
+              draws: a daemon that cannot read its image ref file (or an
+              older one that sends no `running`) still runs the build
+              GET /api/config's `version` names, and the pane said nothing at all
+              about where the deployment already was (2026-11-08
+              deployment-operations walkthrough, task 3617). */}
+          <RunningNow running={fallbackRunning} />
           <DiscardedRCAlert
             discardedRc={status.discardedRc || targetsData?.discardedRc}
             disabled={running}
@@ -1898,6 +1907,11 @@ export function AutoUpgradeSettings({ settings, onSave }) {
               if (time && time !== settings.autoUpgradeTime) {
                 onSave({ autoUpgradeTime: time });
               }
+            }}
+            // A text box in Settings commits on blur or Enter; this one
+            // only did on blur (2026-11-07 settings walkthrough).
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.target.blur();
             }}
             fullWidth
             margin="normal"

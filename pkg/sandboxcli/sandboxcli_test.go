@@ -30,7 +30,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability/bootstrap/playbooks"
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -38,6 +37,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/namespace"
+	"github.com/ai-on-gke/grain/pkg/playbooks"
 	"github.com/ai-on-gke/grain/pkg/redact"
 )
 
@@ -334,8 +334,8 @@ func TestSandboxCLIIssuesAndDBAgainstTheProxy(t *testing.T) {
 	if len(queries) != 1 || queries[0] != "SELECT id FROM task" {
 		t.Errorf("queries that reached the database = %q, want only the SELECT", queries)
 	}
-	if _, errOut, code := runAs("tok-bare", "issue", "list"); code != 1 || !strings.Contains(errOut, `"read-issues"`) {
-		t.Errorf("issue list without read-issues: %d %s", code, errOut)
+	if _, errOut, code := runAs("tok-bare", "issue", "list"); code != 1 || !strings.Contains(errOut, `"https://grain.dev/capabilities/github#read-issues"`) {
+		t.Errorf("issue list without github#read-issues: %d %s", code, errOut)
 	}
 }
 

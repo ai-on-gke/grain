@@ -52,12 +52,11 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
-	"github.com/ai-on-gke/grain/pkg/capability/admincaps"
-	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
-	"github.com/ai-on-gke/grain/pkg/capability/durable"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -69,6 +68,11 @@ type scriptedMCPCall struct {
 type scriptedTurn struct {
 	MCPCalls  []scriptedMCPCall `json:"mcpCalls"`
 	FinalText string            `json:"finalText"`
+	// DelayMsBeforeExit holds the turn open this long after its last MCP
+	// call, as a real agent process lingers after ask_question before it
+	// exits: the window in which a parked task's attempt is still live
+	// (the park-settled `grain wait --until awaiting-reply` race, #888).
+	DelayMsBeforeExit int `json:"delayMsBeforeExit,omitempty"`
 }
 
 type recordedToolCall struct {
@@ -89,25 +93,30 @@ type recordedRun struct {
 	ToolCalls     []recordedToolCall `json:"toolCalls"`
 }
 
+type interactiveControl struct {
+	replies    int
+	lastSeenID int64
+	holdNext   bool
+	releaseCh  chan struct{}
+}
+
 // scriptedSession is the session's agent: it answers in plain text and
-// keeps every prompt it was given. When interactiveTaskID is set via
-// /e2e/interactive-control, runs for that task can be held in Running
-// state and answer with all human comments received up to release.
+// keeps every prompt it was given. When interactive control is configured for
+// a task via /e2e/interactive-control, runs for that task can be held in
+// Running state and answer with all human comments received up to release.
 // Tasks queued via /e2e/script-runs execute scripted tool calls through
 // a real `grain mcpserver` subprocess against this server.
 type scriptedSession struct {
-	mu                 sync.Mutex
-	store              *model.Store
-	serverURL          string
-	tokenFile          string
-	prompts            []string
-	interactiveTaskID  string
-	interactiveReplies int
-	holdNext           bool
-	releaseCh          chan struct{}
-	scriptedTurns      map[string][]scriptedTurn
-	scriptedByTitle    map[string][]scriptedTurn
-	runs               []recordedRun
+	mu                    sync.Mutex
+	store                 *model.Store
+	serverURL             string
+	tokenFile             string
+	prompts               []string
+	lastInteractiveTaskID string
+	interactive           map[string]*interactiveControl
+	scriptedTurns         map[string][]scriptedTurn
+	scriptedByTitle       map[string][]scriptedTurn
+	runs                  []recordedRun
 }
 
 func (s *scriptedSession) setServer(serverURL, tokenFile string) {
@@ -272,6 +281,13 @@ func (s *scriptedSession) runScriptedTurn(ctx context.Context, cfg agent.RunConf
 	}
 	_ = stdin.Close()
 	_ = cmd.Wait()
+	if turn.DelayMsBeforeExit > 0 {
+		select {
+		case <-time.After(time.Duration(turn.DelayMsBeforeExit) * time.Millisecond):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 
 	var reads, writes []string
 	grants := append([]string(nil), cfg.Grants...)
@@ -321,27 +337,51 @@ func (s *scriptedSession) runScriptedTurn(ctx context.Context, cfg agent.RunConf
 	}, nil
 }
 
+func closeRelease(ch chan struct{}) {
+	if ch == nil {
+		return
+	}
+	select {
+	case <-ch:
+	default:
+		close(ch)
+	}
+}
+
 func (s *scriptedSession) configureInteractive(taskID string, holdNext, release bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if taskID != "" {
-		s.interactiveTaskID = taskID
+	if taskID == "" {
+		taskID = s.lastInteractiveTaskID
+	}
+	if taskID == "" {
+		return
+	}
+	s.lastInteractiveTaskID = taskID
+	if s.interactive == nil {
+		s.interactive = make(map[string]*interactiveControl)
+	}
+	ctrl := s.interactive[taskID]
+	if ctrl == nil {
+		ctrl = &interactiveControl{}
+		s.interactive[taskID] = ctrl
 	}
 	if holdNext {
-		s.holdNext = true
-		s.releaseCh = make(chan struct{})
+		closeRelease(ctrl.releaseCh)
+		ctrl.holdNext = true
+		ctrl.releaseCh = make(chan struct{})
 	}
-	if release && s.releaseCh != nil {
-		select {
-		case <-s.releaseCh:
-		default:
-			close(s.releaseCh)
-		}
-		s.holdNext = false
+	if release {
+		closeRelease(ctrl.releaseCh)
+		ctrl.releaseCh = nil
+		ctrl.holdNext = false
 	}
 }
 
 func (s *scriptedSession) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	var taskTitle string
 	if tk, err := s.store.GetTask(ctx, cfg.TaskID); err == nil && tk != nil {
 		taskTitle = tk.Title
@@ -362,11 +402,11 @@ func (s *scriptedSession) Run(ctx context.Context, cfg agent.RunConfig) (*agent.
 		s.mu.Unlock()
 		return s.runScriptedTurn(ctx, cfg, turn, serverURL, tokenFile)
 	}
-	isInteractive := s.interactiveTaskID != "" && cfg.TaskID == s.interactiveTaskID
+	ctrl, isInteractive := s.interactive[cfg.TaskID]
 	var waitCh chan struct{}
-	if isInteractive && s.holdNext {
-		waitCh = s.releaseCh
-		s.holdNext = false
+	if isInteractive && ctrl.holdNext {
+		waitCh = ctrl.releaseCh
+		ctrl.holdNext = false
 	}
 	if !isInteractive {
 		s.prompts = append(s.prompts, cfg.Prompt)
@@ -384,18 +424,11 @@ func (s *scriptedSession) Run(ctx context.Context, cfg agent.RunConfig) (*agent.
 		case <-waitCh:
 		}
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 
-	obs, err := s.store.GetObservation(ctx, cfg.TaskID)
-	if err != nil {
-		return nil, err
-	}
-	var deliveredID int64
-	if obs.DeliveredCommentID != nil {
-		deliveredID = *obs.DeliveredCommentID
-	}
+	s.mu.Lock()
+	seenID := ctrl.lastSeenID
+	s.mu.Unlock()
+
 	comments, err := s.store.Comments(ctx, cfg.TaskID)
 	if err != nil {
 		return nil, err
@@ -403,7 +436,7 @@ func (s *scriptedSession) Run(ctx context.Context, cfg agent.RunConfig) (*agent.
 	var received []string
 	var maxID int64
 	for _, c := range comments {
-		if c.Author.Actor.Kind == model.PrincipalHuman && c.ID > deliveredID {
+		if c.Author.Actor.Kind == model.PrincipalHuman && c.ID > seenID {
 			received = append(received, strings.TrimSpace(c.Body))
 			if c.ID > maxID {
 				maxID = c.ID
@@ -415,8 +448,11 @@ func (s *scriptedSession) Run(ctx context.Context, cfg agent.RunConfig) (*agent.
 	}
 
 	s.mu.Lock()
-	s.interactiveReplies++
-	replyNum := s.interactiveReplies
+	if maxID > ctrl.lastSeenID {
+		ctrl.lastSeenID = maxID
+	}
+	ctrl.replies++
+	replyNum := ctrl.replies
 	s.mu.Unlock()
 
 	answer := fmt.Sprintf("Agent chat reply %d: received [%s]", replyNum, strings.Join(received, ", "))
@@ -589,27 +625,47 @@ func run() error {
 	// with orchestrator.ErrTurnStopped, rather than only its stored row
 	// being finished while the scripted agent goes on holding the task.
 	cancellers := orchestrator.NewTaskCancellers()
+	inFlight := &orchestrator.InFlight{}
+	wakeCh := make(chan struct{}, 1)
+	wake := func() {
+		select {
+		case wakeCh <- struct{}{}:
+		default:
+		}
+	}
 	handler := ui.NewServer(ui.Config{
 		TaskCanceller: taskCanceller{cancellers},
+		Wake:          wake,
 		Actor:         model.Principal{Kind: model.PrincipalHuman, ID: "console-rest-e2e-operator"},
-		DefaultTarget: &defaultRepo, Capabilities: ui.OfferedCapabilities(),
+		DefaultTarget: &defaultRepo, Capabilities: append(ui.OfferedCapabilities(), ui.APICapabilities()...),
 		// The run's access code (e2e/global-setup.js): every caller,
 		// loopback included, shows it, as on every grain daemon.
 		LocalAPIToken: os.Getenv("GRAIN_E2E_ACCESS_CODE"),
+		// A secret store, as every daemon has: without one a run parked
+		// on request_secret could never be answered here (PUT
+		// /api/tasks/{id}/secret answered 404 "no local secrets
+		// directory"), so the request_secret -> set -> requeue loop
+		// went unexercised end to end.
+		Secrets: secrets.New(filepath.Join(root, "secrets")),
+		// The orchestrator's sub-cases, as on a daemon and grain demo,
+		// so a parked run's reason names its ask (#782) here too.
+		Reasons: daemon.ReasonClassifier{},
 	}, store)
 	// api grants resolve as on every grain daemon
 	// (ui.AgentAPIDynamicProvider): every console session holds
 	// model.ConsoleSessionCIReadGrant by default.
-	registry := model.NewCapabilityRegistry(append(admincaps.Providers(), bootstrap.New(), durable.New())...)
+	registry := model.NewCapabilityRegistry()
 	registry.RegisterDynamic(ui.AgentAPIDynamicProvider)
 	deps := orchestrator.Deps{
 		Store:     store,
 		Sandboxes: isolatingHostSandboxes{orchestrator.NewHostSandboxes(sandboxRoot)},
 		Framework: orchestrator.StaticFramework(provider),
+		Runs:      inFlight,
 		Config: orchestrator.Config{
-			Capabilities:   registry,
-			GitRemoteBase:  gitServer.URL,
-			TaskCancellers: cancellers,
+			Capabilities:       registry,
+			GitRemoteBase:      gitServer.URL,
+			TaskCancellers:     cancellers,
+			CancelPollInterval: 50 * time.Millisecond,
 		},
 		MaxWorkers: 2,
 	}
@@ -629,6 +685,9 @@ func run() error {
 	}
 	if err := runCycle(); err != nil {
 		return fmt.Errorf("initial console session cycle: %w", err)
+	}
+	if err := inFlight.Wait(ctx); err != nil {
+		return err
 	}
 
 	mux := http.NewServeMux()
@@ -672,10 +731,24 @@ func run() error {
 		provider.configureInteractive(body.TaskID, body.HoldNext, body.ReleaseRun)
 		w.WriteHeader(http.StatusNoContent)
 	})
+	waitIdle := func(waitCtx context.Context, taskID string) error {
+		for inFlight.Busy(taskID) {
+			select {
+			case <-waitCtx.Done():
+				return waitCtx.Err()
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+		return nil
+	}
 	mux.HandleFunc("POST /e2e/end-exchange", func(w http.ResponseWriter, r *http.Request) {
 		id := r.URL.Query().Get("task")
 		if id == "" {
 			http.Error(w, "task is required", http.StatusBadRequest)
+			return
+		}
+		if err := waitIdle(r.Context(), id); err != nil {
+			http.Error(w, err.Error(), http.StatusRequestTimeout)
 			return
 		}
 		cycle.Lock()
@@ -684,6 +757,12 @@ func run() error {
 			o.PendingQuestionCommentID = nil
 		})
 		cycle.Unlock()
+		if err == nil {
+			err = runCycle()
+		}
+		if err == nil {
+			err = waitIdle(r.Context(), id)
+		}
 		if err == nil {
 			err = runCycle()
 		}
@@ -711,6 +790,10 @@ func run() error {
 			select {
 			case <-ctx.Done():
 				return
+			case <-wakeCh:
+				if err := runCycle(); err != nil && ctx.Err() == nil {
+					fmt.Fprintf(os.Stderr, "console rest e2e cycle: %v\n", err)
+				}
 			case <-ticker.C:
 				if err := runCycle(); err != nil && ctx.Err() == nil {
 					fmt.Fprintf(os.Stderr, "console rest e2e cycle: %v\n", err)
@@ -734,5 +817,6 @@ func run() error {
 	defer cancel()
 	_ = httpServer.Shutdown(shutdownCtx)
 	<-cyclesDone
+	_ = inFlight.Wait(shutdownCtx)
 	return nil
 }

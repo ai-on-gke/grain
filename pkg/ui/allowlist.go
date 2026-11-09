@@ -65,11 +65,13 @@ func RegisterGroupMemberChecker(c GroupMemberChecker) (unregister func()) {
 
 // AllowedPrincipalEntry is one parsed entry of -ui-allowed-principals.
 type AllowedPrincipalEntry struct {
-	Prefix string // "user", "serviceAccount", "domain", "group"
+	Prefix string // "user", "serviceAccount", "delegate", "domain", "group"
 	Value  string // lowercased email or domain
 	// Role is the entry's role on the database allowlist
 	// (model.AllowedPrincipal.Role); "" is model.DefaultAccessRole.
 	Role string
+	// Label is an optional short label for a delegate: entry.
+	Label string
 }
 
 // AllowedPrincipalsUsage describes the deprecated -ui-allowed-principals flag.
@@ -416,14 +418,24 @@ func (s *Server) effectiveAllowedPrincipals(ctx context.Context) ([]AllowedPrinc
 	if err != nil {
 		return nil, err
 	}
-	out := make([]AllowedPrincipalEntry, 0, len(rows)+2)
+	out := make([]AllowedPrincipalEntry, 0, len(rows)+3)
+	owner := s.tasks.explicitDeploymentOwnerEmail()
+	if owner != "" {
+		out = append(out, AllowedPrincipalEntry{Prefix: "user", Value: owner, Role: model.DefaultAccessRole})
+	}
 	pool := s.tasks.gcpKeyPoolSet(ctx)
 	for _, r := range rows {
 		prefix, val, _, nErr := model.NormalizeAllowedPrincipalEntry(r.Entry)
-		if nErr != nil || (prefix == "serviceAccount" && pool[val]) {
+		if nErr != nil || ((prefix == "serviceAccount" || prefix == "delegate") && pool[val]) {
 			continue
 		}
-		out = append(out, AllowedPrincipalEntry{Prefix: prefix, Value: val, Role: r.Role})
+		if owner != "" && prefix == "user" && val == owner && (r.Role == "" || r.Role == model.DefaultAccessRole) {
+			continue
+		}
+		if prefix == "delegate" {
+			model.RegisterDelegateLabel(val, r.Label)
+		}
+		out = append(out, AllowedPrincipalEntry{Prefix: prefix, Value: val, Role: r.Role, Label: r.Label})
 	}
 	out = append(out, s.provisionedServiceAccountEntries(ctx)...)
 	return out, nil
@@ -521,8 +533,11 @@ func (s *Server) allowedPrincipalRoles(ctx context.Context, id VerifiedIdentity,
 					// The group's role may veto scopes another entry
 					// grants (access-rbac.md §2): leaving it out would
 					// widen the caller, so refuse rather than guess.
-					return nil, fmt.Errorf("principal %q could not be checked against group %s, whose role %s denies scopes: %w",
-						id.Email, grp.Value, role, err)
+					return nil, &groupAllowlistRefusalError{
+						public: fmt.Sprintf("principal %q could not be checked against group %s, whose role %s denies scopes: group membership lookup unavailable",
+							id.Email, grp.Value, role),
+						cause: err,
+					}
 				}
 				if firstErr == nil {
 					firstErr = err
@@ -537,7 +552,10 @@ func (s *Server) allowedPrincipalRoles(ctx context.Context, id VerifiedIdentity,
 			}
 		}
 		if len(roles) == 0 && firstErr != nil {
-			return nil, fmt.Errorf("principal %q could not be authorized against group allowlist: %w", id.Email, firstErr)
+			return nil, &groupAllowlistRefusalError{
+				public: fmt.Sprintf("principal %q could not be authorized against group allowlist: group membership lookup unavailable", id.Email),
+				cause:  firstErr,
+			}
 		}
 	}
 	if len(roles) > 0 {
@@ -554,11 +572,25 @@ var (
 	refusedPrincipalsLogged = map[string]bool{}
 )
 
+// groupAllowlistRefusalError separates the generic message returned to remote
+// HTTP/UI callers from the underlying Cloud Identity / ADC credential error
+// recorded in the daemon log.
+type groupAllowlistRefusalError struct {
+	public string
+	cause  error
+}
+
+func (e *groupAllowlistRefusalError) Error() string {
+	return e.public
+}
+
 // logRefusedPrincipal logs, once per principal and kind of refusal, a
 // verified identity checkAllowedPrincipal turned away.
 func logRefusedPrincipal(id VerifiedIdentity, err error) {
 	pool := errors.Is(err, errGCPKeyPoolPrincipal)
-	key := normalizeIdentityEmail(id.Email) + "\x00" + fmt.Sprint(pool)
+	var groupErr *groupAllowlistRefusalError
+	hasGroupErr := errors.As(err, &groupErr)
+	key := normalizeIdentityEmail(id.Email) + "\x00" + fmt.Sprint(pool) + "\x00" + fmt.Sprint(hasGroupErr)
 	refusedPrincipalsMu.Lock()
 	seen := refusedPrincipalsLogged[key]
 	if !seen && len(refusedPrincipalsLogged) < 64 {
@@ -573,7 +605,94 @@ func logRefusedPrincipal(id VerifiedIdentity, err error) {
 			"a sandbox's key was presented through the identity proxy; take it off the proxy's access list (iap_members) and rotate the pool's keys", id.Email)
 		return
 	}
+	if hasGroupErr && groupErr.cause != nil {
+		log.Printf("ui: refused verified principal %q (%s): %s: %v", id.Email, id.Kind, groupErr.public, groupErr.cause)
+		return
+	}
 	log.Printf("ui: refused verified principal %q (%s): %v", id.Email, id.Kind, err)
+}
+
+type delegateNotAllowedError struct {
+	personEmail string
+	appEmail    string
+	label       string
+	verifier    string
+}
+
+func (e *delegateNotAllowedError) Error() string {
+	return fmt.Sprintf("delegating app %q is not allowed to act for people on this grain (Settings -> Access)", e.appEmail)
+}
+
+func delegateDisplayLabel(via *DelegatingApp) string {
+	if via == nil {
+		return ""
+	}
+	if name := strings.TrimSpace(via.Name); name != "" {
+		return name
+	}
+	return model.DelegateLabelForEmail(via.Email)
+}
+
+// logRefusedDelegate logs, at most once per (person, delegating app) under
+// the AU-19 bound, a delegated request whose delegating app is not on the
+// delegate: allowlist (AU-24.4).
+func logRefusedDelegate(personEmail, appEmail string) {
+	key := "delegate\x00" + normalizeIdentityEmail(personEmail) + "\x00" + normalizeIdentityEmail(appEmail)
+	refusedPrincipalsMu.Lock()
+	seen := refusedPrincipalsLogged[key]
+	if !seen && len(refusedPrincipalsLogged) < 64 {
+		refusedPrincipalsLogged[key] = true
+	}
+	refusedPrincipalsMu.Unlock()
+	if seen {
+		return
+	}
+	log.Printf("ui: refused delegated request for %q via %q: delegating app is not on the delegate: allowlist (Settings -> Access)", personEmail, appEmail)
+}
+
+// delegateEntryFor looks up a delegate:<email> entry on the allowlist (AU-24.1).
+func (s *Server) delegateEntryFor(ctx context.Context, appEmail string) (AllowedPrincipalEntry, bool, error) {
+	email := normalizeIdentityEmail(appEmail)
+	if email == "" {
+		return AllowedPrincipalEntry{}, false, nil
+	}
+	if s.tasks != nil && s.tasks.gcpKeyPoolSet(ctx)[email] {
+		return AllowedPrincipalEntry{}, false, nil
+	}
+	entries, err := s.effectiveAllowedPrincipals(ctx)
+	if err != nil {
+		return AllowedPrincipalEntry{}, false, err
+	}
+	for _, e := range entries {
+		if e.Prefix == "delegate" && e.Value == email {
+			if e.Role == "" {
+				e.Role = model.DefaultDelegateAccessRole
+			}
+			return e, true, nil
+		}
+	}
+	return AllowedPrincipalEntry{}, false, nil
+}
+
+var (
+	delegateLastUsedMu sync.Mutex
+	delegateLastUsedAt = map[string]time.Time{}
+)
+
+func (s *Server) touchDelegateLastUsed(ctx context.Context, canonicalEntry string) {
+	if s.tasks == nil || s.tasks.Store == nil {
+		return
+	}
+	now := s.tasks.now()
+	delegateLastUsedMu.Lock()
+	last := delegateLastUsedAt[canonicalEntry]
+	if !last.IsZero() && now.Sub(last) < time.Minute && !now.Before(last) {
+		delegateLastUsedMu.Unlock()
+		return
+	}
+	delegateLastUsedAt[canonicalEntry] = now
+	delegateLastUsedMu.Unlock()
+	_ = s.tasks.Store.TouchAllowedPrincipalLastUsed(ctx, canonicalEntry, now)
 }
 
 func (s *Server) groupChecker() GroupMemberChecker {

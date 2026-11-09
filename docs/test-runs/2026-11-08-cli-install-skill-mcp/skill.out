@@ -1,0 +1,484 @@
+== login: an unscoped grain/external-dev token and an @acme/allowed token
+### login dev (unscoped)
+$ env GRAIN_TOKEN=<access-code> /home/debian/bin/grain login http://127.0.0.1:4301 --name dev --issue-token --scope-set grain/external-dev --expires 30d
+    signed in to http://127.0.0.1:4301 as context dev (external-token)
+    -> exit=0
+### login narrow (--repos acme/allowed)
+$ env GRAIN_TOKEN=<access-code> /home/debian/bin/grain login http://127.0.0.1:4301 --name narrow --issue-token --repos acme/allowed --expires 30d
+    signed in to http://127.0.0.1:4301 as context narrow (external-token)
+    -> exit=0
+### whoami narrow
+$ /home/debian/bin/grain --context narrow whoami
+    context: narrow
+    server: http://127.0.0.1:4301
+    principal: agent:external:cli-debuerreotype-narrow-to7hh9
+    scope set: grain/external-dev
+    scopes: ci:read@acme/allowed, ci:write@acme/allowed, deployment:read@acme/allowed, merge:write@acme/allowed, repos:read@acme/allowed, sandboxes:read@acme/allowed, tasks:read@acme/allowed, tasks:write@acme/allowed, templates:read@acme/allowed
+    repos: acme/allowed
+    expires: 2026-12-08T23:05:33Z
+    -> exit=0
+### credential modes
+$ sh -c stat -c '%a %n' /tmp/grain-skill.wcaLRK/home/.config/grain /tmp/grain-skill.wcaLRK/home/.config/grain/config.json /tmp/grain-skill.wcaLRK/home/.config/grain/credentials /tmp/grain-skill.wcaLRK/home/.config/grain/credentials/*
+    700 /tmp/grain-skill.wcaLRK/home/.config/grain
+    600 /tmp/grain-skill.wcaLRK/home/.config/grain/config.json
+    700 /tmp/grain-skill.wcaLRK/home/.config/grain/credentials
+    600 /tmp/grain-skill.wcaLRK/home/.config/grain/credentials/dev
+    600 /tmp/grain-skill.wcaLRK/home/.config/grain/credentials/narrow
+    -> exit=0
+### templates as narrow (GET /api/templates)
+$ sh -c curl -s -H "Authorization: Bearer $(cat /tmp/grain-skill.wcaLRK/home/.config/grain/credentials/narrow)" http://127.0.0.1:4301/api/templates | jq -c '[.[] | {name, repo}]'
+    [{"name":"allowed-new","repo":"acme/allowed"},{"name":"allowed-new","repo":"acme/allowed"},{"name":"allowed-new","repo":"acme/allowed"},{"name":"allowed-fix","repo":"acme/allowed"},{"name":"Set up a GKE sandbox cluster","repo":null}]
+    -> exit=0
+### config as narrow (GET /api/config): deployment-wide fields
+$ sh -c curl -s -H "Authorization: Bearer $(cat /tmp/grain-skill.wcaLRK/home/.config/grain/credentials/narrow)" http://127.0.0.1:4301/api/config | jq -c '{keys: (keys|length), repos: ([.. | strings | select(test("acme/"))] | unique)}'
+    {"keys":32,"repos":["acme/allowed"]}
+    -> exit=0
+== pre-seed a Codex config.toml with comments and [[array_of_tables]] (mode 0640)
+== home installs for the narrow context, with -mcp
+### skill install -claude -mcp
+$ /home/debian/bin/grain --context narrow skill install -claude -mcp
+    installed	/tmp/grain-skill.wcaLRK/home/.claude/skills/grain/SKILL.md	mcp:/tmp/grain-skill.wcaLRK/home/.claude.json
+    -> exit=0
+### skill install -codex -mcp
+$ /home/debian/bin/grain --context narrow skill install -codex -mcp
+    installed	/tmp/grain-skill.wcaLRK/home/.codex/skills/grain/SKILL.md	mcp:/tmp/grain-skill.wcaLRK/home/.codex/config.toml
+    -> exit=0
+### skill install -gemini -mcp
+$ /home/debian/bin/grain --context narrow skill install -gemini -mcp
+    installed	/tmp/grain-skill.wcaLRK/home/.gemini/skills/grain/SKILL.md	mcp:/tmp/grain-skill.wcaLRK/home/.gemini/settings.json
+    -> exit=0
+### skill install -jetski -mcp
+$ /home/debian/bin/grain --context narrow skill install -jetski -mcp
+    installed	/tmp/grain-skill.wcaLRK/home/.gemini/jetski/skills/grain/SKILL.md	mcp:/tmp/grain-skill.wcaLRK/home/.gemini/config/mcp_config.json
+    -> exit=0
+### skill install -dir /tmp/grain-skill.wcaLRK/custom -mcp -json
+$ sh -c /home/debian/bin/grain --context narrow skill install -dir /tmp/grain-skill.wcaLRK/custom -mcp -json | jq -c '{context, server, deploymentDigest, targets: [.targets[] | {agent, skillPath, mcpConfigPath}]}'
+    {"context":"narrow","server":"http://127.0.0.1:4301","deploymentDigest":"941885da505366b3d8844b2807b94ed628d2a6417bff7c7e635a639dfb6a927b","targets":[{"agent":"dir","skillPath":"/tmp/grain-skill.wcaLRK/custom/SKILL.md","mcpConfigPath":"/tmp/grain-skill.wcaLRK/custom/mcp_config.json"}]}
+    -> exit=0
+### written files and modes
+$ sh -c cd /tmp/grain-skill.wcaLRK/home && find . -path ./.config -prune -o -type f -printf '%m %p\n' | sort; stat -c '%m %a %n' /tmp/grain-skill.wcaLRK/custom/* 2>/dev/null; find /tmp/grain-skill.wcaLRK/custom -type f -printf '%m %p\n'
+    600 ./.claude.json
+    600 ./.gemini/config/mcp_config.json
+    600 ./.gemini/settings.json
+    640 ./.codex/config.toml
+    644 ./.claude/skills/grain/SKILL.md
+    644 ./.codex/skills/grain/SKILL.md
+    644 ./.gemini/jetski/skills/grain/SKILL.md
+    644 ./.gemini/skills/grain/SKILL.md
+    /tmp 644 /tmp/grain-skill.wcaLRK/custom/SKILL.md
+    /tmp 600 /tmp/grain-skill.wcaLRK/custom/mcp_config.json
+    600 /tmp/grain-skill.wcaLRK/custom/mcp_config.json
+    644 /tmp/grain-skill.wcaLRK/custom/SKILL.md
+    -> exit=0
+== the repo-narrowed SKILL.md: what it holds and what it must not
+### deployment section
+$ sed -n /^## /,$p /tmp/grain-skill.wcaLRK/home/.claude/skills/grain/SKILL.md
+    ## 1. Attribution & Session Setup
+    
+    Before running `grain` commands in an agent session, export your client identifier and session ID so tasks and comments record `filed_via` provenance (`X-Grain-Client`):
+    
+    ```sh
+    export GRAIN_CLIENT="<tool>/<version>"
+    export GRAIN_CLIENT_SESSION="<session-id>"
+    ```
+    
+    Verify your active context, identity, scopes, and repository limits first:
+    
+    ```sh
+    grain whoami --json
+    ```
+    
+    Pass `--context narrow` (or `export GRAIN_CONTEXT=narrow`) when targeting this deployment explicitly.
+    
+    ## 2. Output Format (`--json`) and Exit Codes `0..5`
+    
+    Always pass `--json` when parsing results programmatically:
+    - With `--json`, `stdout` contains a single valid JSON document using `/api` wire field names (`camelCase`). Human notes and staleness notices go exclusively to `stderr`.
+    - When `--json` fails non-zero, `stderr` emits `{"error": {"code": "...", "message": "...", "fix": "..."}}` (except exit `1` on completed `wait` / `ci wait` / `ci show` queries, which emit the failed entity's JSON result on `stdout`).
+    
+    | Exit code | Meaning |
+    |---:|---|
+    | `0` | Success (for `wait` / `ci wait`, the wake condition was met cleanly). |
+    | `1` | Target entity failed (e.g. CI concluded `failure`/`cancelled`, task closed unmerged/failed) or daemon `5xx`. |
+    | `2` | CLI usage error, invalid flag/argument, state precondition conflict (`400`/`409`/`422`), or unknown context. |
+    | `3` | Authentication or authorization failure (`401`/`403`, expired external token, login redirect, or bad file mode). |
+    | `4` | Daemon unreachable (DNS/TLS error, connection refused, or HTTP connect/response timeout). |
+    | `5` | Blocking `grain wait` or `grain ci wait` timed out (`--timeout` elapsed) before its wake condition was met. |
+    
+    ## 3. Core CLI Verbs
+    
+    - **Tasks & Inbox:**
+      - `grain inbox [--repo <owner/name>] [--kind question|secret|notification|merge-held|proposal] --json`
+      - `grain list [--repo <owner/name>] [--state <state>] [--filter filed_via:has:session=<id>] [--filter derived_from:eq:<owner/name#n>] --json`
+      - `grain get <id> [--comments-since <RFC3339>] --json`
+      - `grain create --repo <owner/name> --title "<title>" [--body "<md>" | --body-file <path|->] [--design <design/...>] [--depends-on <id>] [--field <k=v>] --json`
+      - `grain reply <id> "<answer>" --json` (or `--body-file <path|->`)
+      - `grain comment <id> "<note>" --json`
+      - `grain logs <id> [--attempt <N>] [--tail <N>] [--follow] --json`
+    - **Blocking Waits:**
+      - `grain wait <id...> --until=awaiting-reply,ci-done,closed [--timeout=30m] --json`
+      - `grain wait <id...> --until=merged [--timeout=30m] --json`
+      - If `grain wait` exits `5` (timeout), inspect current task states in the output and re-run the printed `grain wait ...` command to continue waiting.
+    - **Namespace (`ci://`, `task://`, `deploy://`, `config://`, `memory://`):**
+      - `grain fs ls <uri> [--glob <pattern>] --json`
+      - `grain fs read <uri> [--tail <bytes>] [--lines <N>]`
+      - `grain fs grep <regex> <uri> [-i] [-C <N>] [--glob <pattern>] --json`
+    - **CI, Pull Requests & Merge Queue:**
+      - `grain ci list [--repo <owner/name>] [--branch <ref>] --json`
+      - `grain ci show <run-id> --json`
+      - `grain ci wait (<run-id> | --pr <owner/name#n> | --ref <branch> --repo <owner/name>) [--timeout 30m] --json`
+      - `grain ci faults [--repo <owner/name>] --json` and `grain ci test-history <test-name> [--repo <owner/name>] --json` (check shared faults and flake history before blaming your change)
+      - `grain ci retrigger <run-id> [--jobs <j1,j2>] --json`
+      - `grain merge-queue [--repo <owner/name>] --json`
+      - `grain pr adopt <owner/name#n> [--mode review-only|finish] [--spec <design/spec/...>] [--design <design/design/...>] --json`
+      - `grain pr review <owner/name#n> [--design] [--spec <design/spec/...>] --json`
+      - `grain pr status <owner/name#n> [--threads] --json`
+    
+    ## 4. Mandatory Safety Rules
+    
+    1. **Answer parked questions with `grain reply`, NEVER `grain comment`:** When a task is parked in `awaiting-reply` on an `ask_question` prompt, run `grain reply <id> "<answer>"` so Grain records the answer and re-queues the task. `grain comment` only appends a general note and leaves the task parked.
+    2. **Never pass secrets through `grain reply` or `grain comment`:** When a task is parked on a secret request (`request_secret`), `grain reply` will refuse (`409` / exit `2`). Never ask the human to paste secret material into chat or CLI arguments; direct them to enter it in the encrypted input on the root-relative task page `[Task #<id>](/tasks/<id>)`.
+    3. **Never call `grain force-merge`:** Force-merging bypasses merge predicates and is strictly a human operator override (`merge:force`). Inspect held gates with `grain merge-queue` and `grain pr status`, or re-enqueue a dropped change with `grain retry-merge <id>`.
+    4. **Root-relative UI links:** Format all Grain UI references as root-relative paths such as `[Task #42](/tasks/42)` or `[Inbox](/inbox)`, never `http://localhost:...` URLs.
+    
+    ## 5. Active Deployment Metadata
+    
+    - **Context:** `narrow`
+    - **Server:** `http://127.0.0.1:4301`
+    - **Principal:** `agent:external:cli-debuerreotype-narrow-to7hh9`
+    - **Scope set:** `grain/external-dev`
+    - **Held scopes:** `ci:read@acme/allowed`, `ci:write@acme/allowed`, `deployment:read@acme/allowed`, `merge:write@acme/allowed`, `repos:read@acme/allowed`, `sandboxes:read@acme/allowed`, `tasks:read@acme/allowed`, `tasks:write@acme/allowed`, `templates:read@acme/allowed`
+    - **`design/` workflow:** optional (pass `--design <design/...>` / `--spec <design/spec/...>` when targeting a repository with a `design/` directory)
+    
+    ### Reachable Repositories
+    
+    - `acme/allowed` (default target)
+    
+    ### Available Templates
+    
+    - `system:gke-sandbox-cluster` (Set up a GKE sandbox cluster)
+    - `template-1` (allowed-fix) [repo: `acme/allowed`]
+    - `template-4` (allowed-new) [repo: `acme/allowed`]
+    - `template-6` (allowed-new) [repo: `acme/allowed`]
+    - `template-8` (allowed-new) [repo: `acme/allowed`]
+    
+    ### Declared Custom Fields
+    
+    - None declared
+    -> exit=0
+### forbidden strings in each SKILL.md (count per file, all must be 0)
+  /tmp/grain-skill.wcaLRK/home/.claude/skills/grain/SKILL.md
+    acme/secret              0
+    SECRETREPO               0
+    secret-fix               0
+    PEXT-MARKER              0
+    Secret template body     0
+    Authorization: Bearer    0
+    gma_                     0
+    u5er:pa55                0
+    pa55w0rd                 0
+    <access-code> 0
+    gma_<this-context-token> 0
+  /tmp/grain-skill.wcaLRK/home/.codex/skills/grain/SKILL.md
+    acme/secret              0
+    SECRETREPO               0
+    secret-fix               0
+    PEXT-MARKER              0
+    Secret template body     0
+    Authorization: Bearer    0
+    gma_                     0
+    u5er:pa55                0
+    pa55w0rd                 0
+    <access-code> 0
+    gma_<this-context-token> 0
+  /tmp/grain-skill.wcaLRK/home/.gemini/skills/grain/SKILL.md
+    acme/secret              0
+    SECRETREPO               0
+    secret-fix               0
+    PEXT-MARKER              0
+    Secret template body     0
+    Authorization: Bearer    0
+    gma_                     0
+    u5er:pa55                0
+    pa55w0rd                 0
+    <access-code> 0
+    gma_<this-context-token> 0
+  /tmp/grain-skill.wcaLRK/home/.gemini/jetski/skills/grain/SKILL.md
+    acme/secret              0
+    SECRETREPO               0
+    secret-fix               0
+    PEXT-MARKER              0
+    Secret template body     0
+    Authorization: Bearer    0
+    gma_                     0
+    u5er:pa55                0
+    pa55w0rd                 0
+    <access-code> 0
+    gma_<this-context-token> 0
+  /tmp/grain-skill.wcaLRK/custom/SKILL.md
+    acme/secret              0
+    SECRETREPO               0
+    secret-fix               0
+    PEXT-MARKER              0
+    Secret template body     0
+    Authorization: Bearer    0
+    gma_                     0
+    u5er:pa55                0
+    pa55w0rd                 0
+    <access-code> 0
+    gma_<this-context-token> 0
+### allowed template present
+$ grep -c -F allowed-fix /tmp/grain-skill.wcaLRK/home/.claude/skills/grain/SKILL.md
+    1
+    -> exit=0
+== Codex config.toml after -mcp
+### mode (was 0640)
+$ stat -c %a /tmp/grain-skill.wcaLRK/home/.codex/config.toml
+    640
+    -> exit=0
+### diff before -> after
+$ diff -u /tmp/grain-skill.wcaLRK/config.toml.before /tmp/grain-skill.wcaLRK/home/.codex/config.toml
+    --- /tmp/grain-skill.wcaLRK/config.toml.before	2026-11-08 23:05:33.683095177 +0000
+    +++ /tmp/grain-skill.wcaLRK/home/.codex/config.toml	2026-11-08 23:05:33.779095180 +0000
+    @@ -12,3 +12,7 @@
+     [mcp_servers.other]
+     command = "other-mcp"
+     args = ["--flag"]
+    +
+    +[mcp_servers.grain]
+    +command = "/home/debian/bin/grain"
+    +args = ["mcp", "--context", "narrow"]
+    -> exit=1
+### parses as TOML; profiles intact
+$ python3 -c import tomllib,json;d=tomllib.load(open('/tmp/grain-skill.wcaLRK/home/.codex/config.toml','rb'));print(json.dumps({'profiles':d.get('profiles'),'mcp_servers':d.get('mcp_servers')}))
+    {"profiles": [{"name": "fast", "model": "o4-mini"}, {"name": "deep", "model": "o3"}], "mcp_servers": {"other": {"command": "other-mcp", "args": ["--flag"]}, "grain": {"command": "/home/debian/bin/grain", "args": ["mcp", "--context", "narrow"]}}}
+    -> exit=0
+### claude.json mcpServers.grain
+$ sh -c jq -c '.mcpServers' /tmp/grain-skill.wcaLRK/home/.claude.json; stat -c '%a' /tmp/grain-skill.wcaLRK/home/.claude.json
+    {"grain":{"args":["mcp","--context","narrow"],"command":"/home/debian/bin/grain"}}
+    600
+    -> exit=0
+### gemini settings.json
+$ sh -c jq -c '.mcpServers' /tmp/grain-skill.wcaLRK/home/.gemini/settings.json; stat -c '%a' /tmp/grain-skill.wcaLRK/home/.gemini/settings.json
+    {"grain":{"args":["mcp","--context","narrow"],"command":"/home/debian/bin/grain"}}
+    600
+    -> exit=0
+### jetski mcp_config.json
+$ sh -c jq -c '.mcpServers' /tmp/grain-skill.wcaLRK/home/.gemini/config/mcp_config.json; stat -c '%a' /tmp/grain-skill.wcaLRK/home/.gemini/config/mcp_config.json
+    {"grain":{"args":["mcp","--context","narrow"],"command":"/home/debian/bin/grain"}}
+    600
+    -> exit=0
+### no credential in any MCP config
+$ sh -c grep -l -F -e gma_ -e '<access-code>' /tmp/grain-skill.wcaLRK/home/.claude.json /tmp/grain-skill.wcaLRK/home/.codex/config.toml /tmp/grain-skill.wcaLRK/home/.gemini/settings.json /tmp/grain-skill.wcaLRK/home/.gemini/config/mcp_config.json /tmp/grain-skill.wcaLRK/custom/mcp_config.json; echo matches=$?
+    matches=1
+    -> exit=0
+### reinstall is idempotent (codex config unchanged)
+$ sh -c cp /tmp/grain-skill.wcaLRK/home/.codex/config.toml /tmp/grain-skill.wcaLRK/c1; /home/debian/bin/grain --context narrow skill install -codex -mcp >/dev/null; diff /tmp/grain-skill.wcaLRK/c1 /tmp/grain-skill.wcaLRK/home/.codex/config.toml && echo identical
+    identical
+    -> exit=0
+   (waiting 60s for the token's rate-limit bucket to refill)
+== -project installs inside a git checkout
+### one target flag per invocation
+$ /home/debian/bin/grain --context narrow skill install -project -claude -codex -mcp
+    grain: choose at most one target flag (--jetski, --claude, --codex, --gemini, or --dir)
+    -> exit=2
+### skill install -project -claude -mcp
+$ /home/debian/bin/grain --context narrow skill install -project -claude -mcp
+    installed	/tmp/grain-skill.wcaLRK/proj/.claude/skills/grain/SKILL.md	mcp:/tmp/grain-skill.wcaLRK/proj/.mcp.json
+    -> exit=0
+### skill install -project -codex -mcp
+$ /home/debian/bin/grain --context narrow skill install -project -codex -mcp
+    installed	/tmp/grain-skill.wcaLRK/proj/.agents/skills/grain/SKILL.md	mcp:/tmp/grain-skill.wcaLRK/proj/.codex/config.toml
+    -> exit=0
+### skill install -project -gemini -mcp
+$ /home/debian/bin/grain --context narrow skill install -project -gemini -mcp
+    installed	/tmp/grain-skill.wcaLRK/proj/.gemini/skills/grain/SKILL.md	mcp:/tmp/grain-skill.wcaLRK/proj/.gemini/settings.json
+    -> exit=0
+### skill install -project -jetski -mcp
+$ /home/debian/bin/grain --context narrow skill install -project -jetski -mcp
+    installed	/tmp/grain-skill.wcaLRK/proj/.agents/skills/grain/SKILL.md	mcp:/tmp/grain-skill.wcaLRK/proj/.gemini/config/mcp_config.json
+    -> exit=0
+### project files
+$ sh -c cd /tmp/grain-skill.wcaLRK/proj && find . -path ./.git -prune -o -type f -printf '%m %p\n' | sort
+    600 ./.codex/config.toml
+    600 ./.gemini/config/mcp_config.json
+    600 ./.gemini/settings.json
+    600 ./.mcp.json
+    644 ./.agents/skills/grain/SKILL.md
+    644 ./.claude/skills/grain/SKILL.md
+    644 ./.gemini/skills/grain/SKILL.md
+    -> exit=0
+### dir -project -mcp
+$ /home/debian/bin/grain --context narrow skill install -project -dir /tmp/grain-skill.wcaLRK/proj/tools/grain -mcp
+    installed	/tmp/grain-skill.wcaLRK/proj/tools/grain/SKILL.md	mcp:/tmp/grain-skill.wcaLRK/proj/tools/grain/mcp_config.json
+    -> exit=0
+   (waiting 60s for the token's rate-limit bucket to refill)
+== symlinks planted under -project roots are refused
+### claude: .claude/skills -> elsewhere
+$ /home/debian/bin/grain --context narrow skill install -project -claude
+    grain: refusing to follow symlink /tmp/grain-skill.wcaLRK/proj/.claude/skills inside project directory /tmp/grain-skill.wcaLRK/proj
+    -> exit=1
+### nothing written through the link
+$ ls -A /tmp/grain-skill.wcaLRK/elsewhere
+    -> exit=0
+### codex: .agents/skills/grain -> elsewhere
+$ /home/debian/bin/grain --context narrow skill install -project -codex
+    grain: refusing to follow symlink /tmp/grain-skill.wcaLRK/proj/.agents/skills/grain inside project directory /tmp/grain-skill.wcaLRK/proj
+    -> exit=1
+### jetski: .agents/skills/grain -> elsewhere
+$ /home/debian/bin/grain --context narrow skill install -project -jetski
+    grain: refusing to follow symlink /tmp/grain-skill.wcaLRK/proj/.agents/skills/grain inside project directory /tmp/grain-skill.wcaLRK/proj
+    -> exit=1
+### codex: .agents -> elsewhere
+$ /home/debian/bin/grain --context narrow skill install -project -codex
+    grain: refusing to follow symlink /tmp/grain-skill.wcaLRK/proj/.agents inside project directory /tmp/grain-skill.wcaLRK/proj
+    -> exit=1
+### claude -mcp: .mcp.json -> elsewhere
+$ /home/debian/bin/grain --context narrow skill install -project -claude -mcp
+    grain: refusing to follow symlink /tmp/grain-skill.wcaLRK/proj/.mcp.json inside project directory /tmp/grain-skill.wcaLRK/proj
+    -> exit=1
+### nothing written through the links
+$ ls -A /tmp/grain-skill.wcaLRK/elsewhere
+    -> exit=0
+### claude: SKILL.md itself a symlink
+$ /home/debian/bin/grain --context narrow skill install -project -claude
+    grain: refusing to follow symlink /tmp/grain-skill.wcaLRK/proj/.claude/skills/grain/SKILL.md inside project directory /tmp/grain-skill.wcaLRK/proj
+    -> exit=1
+### -project -claude -mcp with no planted links
+$ /home/debian/bin/grain --context narrow skill install -project -claude -mcp
+    installed	/tmp/grain-skill.wcaLRK/proj/.claude/skills/grain/SKILL.md	mcp:/tmp/grain-skill.wcaLRK/proj/.mcp.json
+    -> exit=0
+### -project -codex -mcp with no planted links
+$ /home/debian/bin/grain --context narrow skill install -project -codex -mcp
+    installed	/tmp/grain-skill.wcaLRK/proj/.agents/skills/grain/SKILL.md	mcp:/tmp/grain-skill.wcaLRK/proj/.codex/config.toml
+    -> exit=0
+### -project -gemini -mcp with no planted links
+$ /home/debian/bin/grain --context narrow skill install -project -gemini -mcp
+    installed	/tmp/grain-skill.wcaLRK/proj/.gemini/skills/grain/SKILL.md	mcp:/tmp/grain-skill.wcaLRK/proj/.gemini/settings.json
+    -> exit=0
+### -project -jetski -mcp with no planted links
+$ /home/debian/bin/grain --context narrow skill install -project -jetski -mcp
+    installed	/tmp/grain-skill.wcaLRK/proj/.agents/skills/grain/SKILL.md	mcp:/tmp/grain-skill.wcaLRK/proj/.gemini/config/mcp_config.json
+    -> exit=0
+== URL userinfo is scrubbed
+### login with userinfo in the URL
+$ env GRAIN_TOKEN=<access-code> /home/debian/bin/grain login http://u5er:pa55w0rd@127.0.0.1:4301 --name ui --issue-token --repos acme/allowed --expires 1d
+    signed in to http://127.0.0.1:4301 as context ui (external-token)
+    -> exit=0
+### skill install -dir (ui context)
+$ /home/debian/bin/grain --context ui skill install -dir /tmp/grain-skill.wcaLRK/ui-skill -json
+    {
+      "context": "ui",
+      "server": "http://127.0.0.1:4301",
+      "version": "v0.0.0-20261108225623-00a5fa1ed98a+dirty (unversioned) · 00a5fa1-dirty · 2026-11-08 22:56Z",
+      "deploymentDigest": "5ede479b4561ffb1797010cb1a3e156e18c03ebc920188866f0fea73a02f538b",
+      "targets": [
+        {
+          "agent": "dir",
+          "skillPath": "/tmp/grain-skill.wcaLRK/ui-skill/SKILL.md"
+        }
+      ]
+    }
+    -> exit=0
+### forbidden strings in the ui context's SKILL.md
+    acme/secret              0
+    SECRETREPO               0
+    secret-fix               0
+    PEXT-MARKER              0
+    Secret template body     0
+    Authorization: Bearer    0
+    gma_                     0
+    u5er:pa55                0
+    pa55w0rd                 0
+    <access-code> 0
+    gma_<this-context-token> 0
+### server field in config.json
+$ sh -c jq -c '.contexts' /tmp/grain-skill.wcaLRK/home/.config/grain/config.json
+    {"dev":{"server":"http://127.0.0.1:4301","auth":"external-token","credential":"file:dev","tokenId":"11"},"narrow":{"server":"http://127.0.0.1:4301","auth":"external-token","credential":"file:narrow","tokenId":"12"},"ui":{"server":"http://u5er:pa55w0rd@127.0.0.1:4301","auth":"external-token","credential":"file:ui","tokenId":"13"}}
+    -> exit=0
+== unscoped context: deployment-wide section
+### skill install -dir (dev context)
+$ /home/debian/bin/grain --context dev skill install -dir /tmp/grain-skill.wcaLRK/dev-skill
+    installed	/tmp/grain-skill.wcaLRK/dev-skill/SKILL.md
+    -> exit=0
+### dev SKILL.md names both repos and templates
+$ sh -c grep -c -e acme/secret -e secret-fix /tmp/grain-skill.wcaLRK/dev-skill/SKILL.md; grep -c PEXT-MARKER /tmp/grain-skill.wcaLRK/dev-skill/SKILL.md
+    4
+    0
+    -> exit=1
+   (waiting 60s for the token's rate-limit bucket to refill)
+== status, mutation, staleness
+### skill status -json (fresh)
+$ sh -c /home/debian/bin/grain --context narrow skill status -json | jq -c '{status, reasons, files: [.files[] | {path, status, reasons}]}'
+    {"status":"installed","reasons":null,"files":[{"path":"/tmp/grain-skill.wcaLRK/home/.claude/skills/grain/SKILL.md","status":"installed","reasons":null},{"path":"/tmp/grain-skill.wcaLRK/home/.codex/skills/grain/SKILL.md","status":"installed","reasons":null},{"path":"/tmp/grain-skill.wcaLRK/home/.gemini/skills/grain/SKILL.md","status":"installed","reasons":null},{"path":"/tmp/grain-skill.wcaLRK/home/.gemini/jetski/skills/grain/SKILL.md","status":"installed","reasons":null},{"path":"/tmp/grain-skill.wcaLRK/custom/SKILL.md","status":"installed","reasons":null},{"path":"/tmp/grain-skill.wcaLRK/proj/.claude/skills/grain/SKILL.md","status":"installed","reasons":null},{"path":"/tmp/grain-skill.wcaLRK/proj/.agents/skills/grain/SKILL.md","status":"installed","reasons":null},{"path":"/tmp/grain-skill.wcaLRK/proj/.gemini/skills/grain/SKILL.md","status":"installed","reasons":null},{"path":"/tmp/grain-skill.wcaLRK/proj/tools/grain/SKILL.md","status":"installed","reasons":null}]}
+    -> exit=0
+### list -json while fresh: stderr
+$ sh -c /home/debian/bin/grain --context narrow -json list 2>/tmp/grain-skill.wcaLRK/err.fresh >/tmp/grain-skill.wcaLRK/out.fresh; echo exit=$?; wc -l </tmp/grain-skill.wcaLRK/err.fresh; jq -e type /tmp/grain-skill.wcaLRK/out.fresh
+    exit=0
+    0
+    "array"
+    -> exit=0
+    operator POST /api/templates (acme/allowed) -> 201
+### skill status -json (after adding an allowed template)
+$ sh -c /home/debian/bin/grain --context narrow skill status -json | jq -c '{status, reasons, files: [.files[] | {path, status, reasons}]}'
+    {"status":"stale","reasons":["deployment_digest_mismatch"],"files":[{"path":"/tmp/grain-skill.wcaLRK/home/.claude/skills/grain/SKILL.md","status":"stale","reasons":["deployment_digest_mismatch"]},{"path":"/tmp/grain-skill.wcaLRK/home/.codex/skills/grain/SKILL.md","status":"stale","reasons":["deployment_digest_mismatch"]},{"path":"/tmp/grain-skill.wcaLRK/home/.gemini/skills/grain/SKILL.md","status":"stale","reasons":["deployment_digest_mismatch"]},{"path":"/tmp/grain-skill.wcaLRK/home/.gemini/jetski/skills/grain/SKILL.md","status":"stale","reasons":["deployment_digest_mismatch"]},{"path":"/tmp/grain-skill.wcaLRK/custom/SKILL.md","status":"stale","reasons":["deployment_digest_mismatch"]},{"path":"/tmp/grain-skill.wcaLRK/proj/.claude/skills/grain/SKILL.md","status":"stale","reasons":["deployment_digest_mismatch"]},{"path":"/tmp/grain-skill.wcaLRK/proj/.agents/skills/grain/SKILL.md","status":"stale","reasons":["deployment_digest_mismatch"]},{"path":"/tmp/grain-skill.wcaLRK/proj/.gemini/skills/grain/SKILL.md","status":"stale","reasons":["deployment_digest_mismatch"]},{"path":"/tmp/grain-skill.wcaLRK/proj/tools/grain/SKILL.md","status":"stale","reasons":["deployment_digest_mismatch"]}]}
+    -> exit=0
+### list -json: stdout pure JSON, stderr one line
+$ sh -c /home/debian/bin/grain --context narrow -json list 2>/tmp/grain-skill.wcaLRK/err.stale >/tmp/grain-skill.wcaLRK/out.stale; echo exit=$?; echo stderr-lines=$(wc -l </tmp/grain-skill.wcaLRK/err.stale); cat /tmp/grain-skill.wcaLRK/err.stale; jq -e 'type' /tmp/grain-skill.wcaLRK/out.stale
+    exit=0
+    stderr-lines=1
+    note: grain skill for context narrow is stale; run 'grain skill install'
+    "array"
+    -> exit=0
+### list (text): stderr notice, stdout untouched
+$ sh -c /home/debian/bin/grain --context narrow list 2>/tmp/grain-skill.wcaLRK/err.text >/tmp/grain-skill.wcaLRK/out.text; cat /tmp/grain-skill.wcaLRK/err.text; grep -c 'stale' /tmp/grain-skill.wcaLRK/out.text
+    1 closed not shown -- pass -closed to include them
+    note: grain skill for context narrow is stale; run 'grain skill install'
+    0
+    -> exit=1
+### the notice never names a token
+$ sh -c grep -c -e gma_ -e '<access-code>' /tmp/grain-skill.wcaLRK/err.stale /tmp/grain-skill.wcaLRK/err.text
+    /tmp/grain-skill.wcaLRK/err.stale:0
+    /tmp/grain-skill.wcaLRK/err.text:0
+    -> exit=1
+    operator POST /api/templates (acme/secret) -> 201
+   (waiting 60s for the token's rate-limit bucket to refill)
+### re-install clears it
+$ sh -c for a in claude codex gemini jetski; do /home/debian/bin/grain --context narrow skill install -project -$a -mcp >/dev/null; (cd /tmp/grain-skill.wcaLRK && /home/debian/bin/grain --context narrow skill install -$a -mcp >/dev/null); done; cd /tmp/grain-skill.wcaLRK && /home/debian/bin/grain --context narrow skill install -dir /tmp/grain-skill.wcaLRK/custom -mcp >/dev/null && /home/debian/bin/grain --context narrow skill install -project -dir /tmp/grain-skill.wcaLRK/proj/tools/grain -mcp >/dev/null && cd /tmp/grain-skill.wcaLRK/proj/sub && /home/debian/bin/grain --context narrow skill status -json | jq -c '{status, reasons}'
+    {"status":"installed","reasons":null}
+    -> exit=0
+   (waiting 60s for the token's rate-limit bucket to refill)
+### secret-repo template change after reinstall: narrow digest unaffected?
+$ sh -c /home/debian/bin/grain --context narrow skill status -json | jq -c '{status, reasons}'
+    {"status":"installed","reasons":null}
+    -> exit=0
+    operator PUT acme/secret prompt-extension -> 200
+### secret-repo prompt extension: narrow status
+$ sh -c /home/debian/bin/grain --context narrow skill status -json | jq -c '{status, reasons}'
+    {"status":"installed","reasons":null}
+    -> exit=0
+    operator PUT acme/allowed prompt-extension -> 200
+### allowed-repo prompt extension: narrow status
+$ sh -c /home/debian/bin/grain --context narrow skill status -json | jq -c '{status, reasons}'
+    {"status":"installed","reasons":null}
+    -> exit=0
+### skill status (text)
+$ /home/debian/bin/grain --context narrow skill status
+    installed	/tmp/grain-skill.wcaLRK/home/.claude/skills/grain/SKILL.md
+    installed	/tmp/grain-skill.wcaLRK/home/.codex/skills/grain/SKILL.md
+    installed	/tmp/grain-skill.wcaLRK/home/.gemini/skills/grain/SKILL.md
+    installed	/tmp/grain-skill.wcaLRK/home/.gemini/jetski/skills/grain/SKILL.md
+    installed	/tmp/grain-skill.wcaLRK/custom/SKILL.md
+    installed	/tmp/grain-skill.wcaLRK/proj/.claude/skills/grain/SKILL.md
+    installed	/tmp/grain-skill.wcaLRK/proj/.agents/skills/grain/SKILL.md
+    installed	/tmp/grain-skill.wcaLRK/proj/.gemini/skills/grain/SKILL.md
+    installed	/tmp/grain-skill.wcaLRK/proj/tools/grain/SKILL.md
+    -> exit=0
+### list -json after a version bump: version_mismatch
+$ sh -c sed -i 's/"version":"[^"]*"/"version":"v0.0.1"/' /tmp/grain-skill.wcaLRK/home/.claude/skills/grain/SKILL.md; /home/debian/bin/grain --context narrow skill status -json | jq -c '{status, reasons}'
+    {"status":"stale","reasons":["version_mismatch"]}
+    -> exit=0
+### skill status after deleting a SKILL.md
+$ sh -c rm /tmp/grain-skill.wcaLRK/home/.gemini/skills/grain/SKILL.md; /home/debian/bin/grain --context narrow skill status -json | jq -c '[.files[] | select(.status=="missing") | .path]'
+    ["/tmp/grain-skill.wcaLRK/home/.gemini/skills/grain/SKILL.md"]
+    -> exit=0

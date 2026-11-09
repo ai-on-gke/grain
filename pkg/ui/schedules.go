@@ -208,6 +208,8 @@ type Schedule struct {
 	// is set, kept in sync like the content fields around it.
 	NothingNeededAction string `json:"nothingNeededAction,omitempty"`
 	KeepRunning         bool   `json:"keepRunning,omitempty"`
+	Admission           string `json:"admission,omitempty"`
+	Hosting             string `json:"hosting,omitempty"`
 	// Model is the model every firing asks for (model.Schedule.Model):
 	// this schedule's own choice, which beats its template's. Empty for
 	// a schedule that chose none.
@@ -446,6 +448,8 @@ func scheduleFrom(s model.Schedule, templateName, suiteName string) Schedule {
 		NetworkAccess:        string(s.NetworkAccess),
 		NothingNeededAction:  string(s.NothingNeededAction),
 		KeepRunning:          s.KeepRunning,
+		Admission:            string(s.Admission),
+		Hosting:              string(s.Hosting),
 		Model:                s.Model,
 		CustomFields:         customFieldValues(s.CustomFields),
 		Capabilities:         []string{},
@@ -717,6 +721,8 @@ type CreateScheduleRequest struct {
 	NothingNeededAction string `json:"nothingNeededAction"`
 	KeepRunning         bool   `json:"keepRunning,omitempty"`
 	KeepRunningSnake    *bool  `json:"keep_running,omitempty"`
+	Admission           string `json:"admission,omitempty"`
+	Hosting             string `json:"hosting,omitempty"`
 	// Model is the model every firing asks for (model.Schedule.Model),
 	// or empty to take the template's, and failing that the team's
 	// default. Not content: it is this schedule's own, given alongside
@@ -1048,7 +1054,23 @@ func (c *Client) scheduleFromRequest(ctx context.Context, req CreateScheduleRequ
 		if err != nil {
 			return model.Schedule{}, "", "", err
 		}
-		grants, err := c.grantsFor(req.Capabilities, model.GrantByLabel)
+		admission, err := model.ParseOptionalAdmission(req.Admission)
+		if err != nil {
+			return model.Schedule{}, "", "", validationErrorf("%v", err)
+		}
+		hosting, err := model.ParseOptionalHosting(req.Hosting)
+		if err != nil {
+			return model.Schedule{}, "", "", validationErrorf("%v", err)
+		}
+		capsWithoutLegacy, legacyAdm, hadLegacy := extractLegacyAdmissionCaps("schedule", req.Capabilities)
+		if hadLegacy {
+			admission = model.MaxAdmission(admission, legacyAdm)
+		}
+		capsWithoutLegacy, legacyHosting, hadLegacyHosting := extractLegacyHostingCaps("schedule", capsWithoutLegacy)
+		if hadLegacyHosting {
+			hosting = model.MaxHosting(hosting, legacyHosting)
+		}
+		grants, err := c.grantsFor(capsWithoutLegacy, model.GrantByLabel)
 		if err != nil {
 			return model.Schedule{}, "", "", err
 		}
@@ -1072,6 +1094,8 @@ func (c *Client) scheduleFromRequest(ctx context.Context, req CreateScheduleRequ
 			NetworkAccess:        model.NetworkAccess(req.NetworkAccess),
 			NothingNeededAction:  nothingNeeded,
 			KeepRunning:          req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake),
+			Admission:            admission,
+			Hosting:              hosting,
 			Reads:                reads,
 			Writes:               writes,
 			Grants:               grants,
@@ -1230,6 +1254,10 @@ func refuseSystemScheduleContentEdit(sched model.Schedule, req UpdateScheduleReq
 		refused = "whether its work merges on its own"
 	case keepRunning != nil && *keepRunning != sched.KeepRunning:
 		refused = "whether its tasks keep running"
+	case changes(req.Admission, string(sched.Admission)):
+		refused = "what admission its tasks get"
+	case changes(req.Hosting, string(sched.Hosting)):
+		refused = "what hosting its tasks get"
 	case changes(req.TemplateID, *sched.TemplateID), req.SuiteID != nil:
 		refused = "what it fires"
 	}
@@ -1264,6 +1292,8 @@ type scheduleContentOffered struct {
 
 	NothingNeededAction *string
 	KeepRunning         *bool
+	Admission           *string
+	Hosting             *string
 }
 
 // contentOfferedOnCreate is req's content fields, in the shape
@@ -1302,6 +1332,12 @@ func contentOfferedOnCreate(req CreateScheduleRequest) scheduleContentOffered {
 		on := true
 		out.KeepRunning = &on
 	}
+	if strings.TrimSpace(req.Admission) != "" {
+		out.Admission = &req.Admission
+	}
+	if strings.TrimSpace(req.Hosting) != "" {
+		out.Hosting = &req.Hosting
+	}
 	return out
 }
 
@@ -1320,6 +1356,8 @@ func contentOfferedOnUpdate(req UpdateScheduleRequest) scheduleContentOffered {
 
 		NothingNeededAction: req.NothingNeededAction,
 		KeepRunning:         updateKeepRunningChoice(req),
+		Admission:           req.Admission,
+		Hosting:             req.Hosting,
 	}
 }
 
@@ -1389,6 +1427,12 @@ func refuseIgnoredScheduleContent(kind, name string, effective model.Schedule, g
 	}
 	if given.KeepRunning != nil && *given.KeepRunning != current.KeepRunning {
 		refused = append(refused, "keepRunning")
+	}
+	if given.Admission != nil && strings.TrimSpace(*given.Admission) != current.Admission {
+		refused = append(refused, "admission")
+	}
+	if given.Hosting != nil && strings.TrimSpace(*given.Hosting) != current.Hosting {
+		refused = append(refused, "hosting")
 	}
 	if len(refused) == 0 {
 		return nil
@@ -1492,6 +1536,8 @@ func scheduleContentFromTemplate(t model.Template) model.Schedule {
 
 		NothingNeededAction: t.NothingNeededAction,
 		KeepRunning:         t.KeepRunning,
+		Admission:           t.Admission,
+		Hosting:             t.Hosting,
 	}
 }
 
@@ -1557,6 +1603,8 @@ type UpdateScheduleRequest struct {
 	NothingNeededAction *string `json:"nothingNeededAction,omitempty"`
 	KeepRunning         *bool   `json:"keepRunning,omitempty"`
 	KeepRunningSnake    *bool   `json:"keep_running,omitempty"`
+	Admission           *string `json:"admission,omitempty"`
+	Hosting             *string `json:"hosting,omitempty"`
 	// Model edits CreateScheduleRequest.Model; an empty string clears
 	// the schedule's own choice. Allowed while a template is attached --
 	// it is not content -- and on one of grain's own schedules, whose
@@ -1801,6 +1849,12 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 	var reads []model.RepoRef
 	var writes []model.WriteTarget
 	var nothingNeeded model.NothingNeededAction
+	var chosenAdmission *model.Admission
+	var legacyAdmission model.Admission
+	var hadLegacyAdmission bool
+	var chosenHosting *model.Hosting
+	var legacyHosting model.Hosting
+	var hadLegacyHosting bool
 	if attaching == nil && !suiteBacked {
 		if req.Title != nil && strings.TrimSpace(*req.Title) == "" {
 			return Schedule{}, validationErrorf("title cannot be empty")
@@ -1816,9 +1870,26 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 				return Schedule{}, err
 			}
 		}
+		if req.Admission != nil {
+			adm, err := model.ParseOptionalAdmission(*req.Admission)
+			if err != nil {
+				return Schedule{}, validationErrorf("%v", err)
+			}
+			chosenAdmission = &adm
+		}
+		if req.Hosting != nil {
+			h, err := model.ParseOptionalHosting(*req.Hosting)
+			if err != nil {
+				return Schedule{}, validationErrorf("%v", err)
+			}
+			chosenHosting = &h
+		}
 		if req.Capabilities != nil {
+			var capsWithoutLegacy []string
+			capsWithoutLegacy, legacyAdmission, hadLegacyAdmission = extractLegacyAdmissionCaps("schedule "+id, *req.Capabilities)
+			capsWithoutLegacy, legacyHosting, hadLegacyHosting = extractLegacyHostingCaps("schedule "+id, capsWithoutLegacy)
 			var err error
-			grants, err = c.grantsFor(*req.Capabilities, model.GrantByLabel)
+			grants, err = c.grantsFor(capsWithoutLegacy, model.GrantByLabel)
 			if err != nil {
 				return Schedule{}, err
 			}
@@ -1912,9 +1983,9 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 		} else if attaching != nil {
 			content := scheduleContentFromTemplate(*attaching)
 			s.Title, s.Body, s.AutoMerge, s.Reads, s.Writes, s.Grants, s.CustomFields,
-				s.NetworkAccess, s.NothingNeededAction, s.KeepRunning, s.TemplateID =
+				s.NetworkAccess, s.NothingNeededAction, s.KeepRunning, s.Admission, s.Hosting, s.TemplateID =
 				content.Title, content.Body, content.AutoMerge, content.Reads, content.Writes,
-				content.Grants, content.CustomFields, content.NetworkAccess, content.NothingNeededAction, content.KeepRunning, content.TemplateID
+				content.Grants, content.CustomFields, content.NetworkAccess, content.NothingNeededAction, content.KeepRunning, content.Admission, content.Hosting, content.TemplateID
 		} else {
 			// req.TemplateID != nil here means the empty-string case:
 			// detach, keeping whatever content is already on the row and
@@ -1964,6 +2035,20 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 			}
 			if kr := updateKeepRunningChoice(req); kr != nil && s.TemplateID == nil {
 				s.KeepRunning = *kr
+			}
+			if s.TemplateID == nil {
+				if chosenAdmission != nil {
+					s.Admission = *chosenAdmission
+				}
+				if hadLegacyAdmission {
+					s.Admission = model.MaxAdmission(s.Admission, legacyAdmission)
+				}
+				if chosenHosting != nil {
+					s.Hosting = *chosenHosting
+				}
+				if hadLegacyHosting {
+					s.Hosting = model.MaxHosting(s.Hosting, legacyHosting)
+				}
 			}
 		}
 		// Target and Base are applied on their own, template attached or

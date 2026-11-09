@@ -18,6 +18,7 @@ import api from "../api.js";
 import { configuredCapabilities } from "../state.js";
 import BulkEditOverlay from "./BulkEditOverlay.jsx";
 import SearchSelect from "./SearchSelect.jsx";
+import AccessGate from "./AccessGate.jsx";
 
 // BatchActionsBar is DetailOverlay's Actions and CapabilityToggles, but
 // aimed at every selected task at once instead of the one the overlay
@@ -64,6 +65,9 @@ export default function BatchActionsBar({
   const [capabilityId, setCapabilityId] = useState("");
   const [editing, setEditing] = useState(false);
   const count = selection.length;
+  // The repositories the selection is in: a role limited to some
+  // repositories offers a batch action only where it reaches them all.
+  const repos = selection.map((t) => t.repo).filter(Boolean);
   const hidden = shownIds
     ? selection.filter((t) => !shownIds.has(t.id)).length
     : 0;
@@ -107,101 +111,121 @@ export default function BatchActionsBar({
           </Typography>
         )}
         <>
-          <Button
-            variant="outlined"
-            size="small"
-            onClick={() =>
-              onRun((id) => api(`/api/tasks/${id}/approve`, { method: "POST" }))
-            }
-          >
-            Approve
-          </Button>
+          <AccessGate scope="tasks:admin" repo={repos}>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() =>
+                onRun((id) =>
+                  api(`/api/tasks/${id}/approve`, { method: "POST" }),
+                )
+              }
+            >
+              Approve
+            </Button>
+          </AccessGate>
           {/* Run now for each of them (ui.Client.RunNow: approving and
               undeferring where needed), which is how a paused deployment
               -- manual mode -- is told exactly what to start. Requests
               start oldest first as capacity allows; a running or closed
               task refuses and is counted. */}
-          <Button
-            variant="outlined"
-            size="small"
-            title={
-              config?.pipelinePause?.paused
-                ? "Start the selected tasks now. The deployment is paused, and these are the only tasks that will start."
-                : "Start the selected tasks now, ahead of the queue, approving any that need it."
-            }
-            onClick={() => run("/run-now")}
-          >
-            Run selected now
-          </Button>
-          <Button
-            variant="outlined"
-            size="small"
-            onClick={() => run("/submit")}
-          >
-            Submit
-          </Button>
+          <AccessGate scope="dispatch:write" repo={repos}>
+            <Button
+              variant="outlined"
+              size="small"
+              title={
+                config?.pipelinePause?.paused
+                  ? "Start the selected tasks now. The deployment is paused, and these are the only tasks that will start."
+                  : "Start the selected tasks now, ahead of the queue, approving any that need it."
+              }
+              onClick={() => run("/run-now")}
+            >
+              Run selected now
+            </Button>
+          </AccessGate>
+          <AccessGate scope="tasks:write" repo={repos}>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => run("/submit")}
+            >
+              Submit
+            </Button>
+          </AccessGate>
           {/* Retry merge for each of them (ui.Client.RetryMerge): puts a
               pull request the merge queue gave up on back on the queue.
               A task with no pull request, or a closed one, refuses and is
               counted; one the queue is still driving is left as it is. */}
-          <Button
-            variant="outlined"
-            size="small"
-            title="Put the selected tasks' pull requests back on the merge queue for another try. Tasks without a pull request, and closed tasks, are skipped and counted."
-            onClick={() => run("/retry-merge")}
-          >
-            Retry merge
-          </Button>
-          <Button
-            variant="outlined"
-            size="small"
-            title="Put the selected tasks aside. They stop waiting to run and drop out of the lists until you ask for them."
-            onClick={() => run("/defer")}
-          >
-            Defer
-          </Button>
-          <Button
-            variant="outlined"
-            size="small"
-            onClick={() => run("/undefer")}
-          >
-            Undefer
-          </Button>
-          <Button
-            variant="outlined"
-            size="small"
-            color="error"
-            onClick={() => {
-              const unseen =
-                hidden > 0
-                  ? ` ${hidden} of them ${hidden === 1 ? "is" : "are"} not shown in this view.`
-                  : "";
-              if (!confirm(`Close ${count} task(s)?${unseen}`)) return;
-              run("/close");
-            }}
-          >
-            Close
-          </Button>
-          <Button
-            variant="outlined"
-            size="small"
-            onClick={() => run("/reopen")}
-          >
-            Reopen
-          </Button>
+          <AccessGate scope="merge:write" repo={repos}>
+            <Button
+              variant="outlined"
+              size="small"
+              title="Put the selected tasks' pull requests back on the merge queue for another try. Tasks without a pull request, and closed tasks, are skipped and counted."
+              onClick={() => run("/retry-merge")}
+            >
+              Retry merge
+            </Button>
+          </AccessGate>
+          <AccessGate scope="tasks:write" repo={repos}>
+            <Button
+              variant="outlined"
+              size="small"
+              title="Put the selected tasks aside. They stop waiting to run and drop out of the lists until you ask for them."
+              onClick={() => run("/defer")}
+            >
+              Defer
+            </Button>
+          </AccessGate>
+          <AccessGate scope="tasks:write" repo={repos}>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => run("/undefer")}
+            >
+              Undefer
+            </Button>
+          </AccessGate>
+          <AccessGate scope="tasks:write" repo={repos}>
+            <Button
+              variant="outlined"
+              size="small"
+              color="error"
+              onClick={() => {
+                const unseen =
+                  hidden > 0
+                    ? ` ${hidden} of them ${hidden === 1 ? "is" : "are"} not shown in this view.`
+                    : "";
+                if (!confirm(`Close ${count} task(s)?${unseen}`)) return;
+                run("/close");
+              }}
+            >
+              Close
+            </Button>
+          </AccessGate>
+          <AccessGate scope="tasks:write" repo={repos}>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => run("/reopen")}
+            >
+              Reopen
+            </Button>
+          </AccessGate>
           {/* The one button here that opens something rather than firing
             an endpoint: the fields (repo, base, auto-merge, framework,
             review, prompt extension, and whatever this deployment
             declares) have values to pick, so they need a form -- see
             BulkEditOverlay. */}
-          <Button
-            variant="outlined"
-            size="small"
-            title="Set repo, base branch, auto-merge, framework, review, prompt extension or this deployment's own fields on every selected task at once."
-            onClick={() => setEditing(true)}
-          >
-            Bulk edit…
-          </Button>
+          <AccessGate scope="tasks:write" repo={repos}>
+            <Button
+              variant="outlined"
+              size="small"
+              title="Set repo, base branch, auto-merge, framework, review, prompt extension or this deployment's own fields on every selected task at once."
+              onClick={() => setEditing(true)}
+            >
+              Bulk edit…
+            </Button>
+          </AccessGate>
 
           <SearchSelect
             value={capabilityId}

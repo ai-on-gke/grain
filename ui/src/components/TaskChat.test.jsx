@@ -754,4 +754,51 @@ describe("TaskChat", () => {
     expect(box.textContent).toBe("first, fails");
     vi.unstubAllGlobals();
   });
+
+  it("posts handed-off queued sends once and keeps a handed-off composer draft", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ "Content-Type": "application/json" }),
+      json: async () => ({}),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const onDraftConsumed = vi.fn();
+    const request = {
+      sessionId: "new-session",
+      text: "still typing this third thought",
+      html: "still typing this third thought",
+      attachments: [],
+      queued: [
+        {
+          sent: {
+            html: "second follow-up queued while starting",
+            text: "second follow-up queued while starting",
+          },
+          files: [],
+        },
+      ],
+      consumeOnApply: true,
+    };
+
+    render(
+      <TaskChat
+        t={task()}
+        act={act}
+        draftRequest={request}
+        onDraftConsumed={onDraftConsumed}
+      />,
+    );
+
+    const box = screen.getByRole("textbox", { name: "Message" });
+    expect(box).toHaveTextContent("still typing this third thought");
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/tasks/42/comments");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      body: "second follow-up queued while starting",
+      attachments: [],
+    });
+    expect(box).toHaveTextContent("still typing this third thought");
+    expect(onDraftConsumed).toHaveBeenCalledWith(request);
+    vi.unstubAllGlobals();
+  });
 });

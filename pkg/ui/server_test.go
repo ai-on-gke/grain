@@ -377,7 +377,7 @@ func TestMutatingRoutesRespondWithTheTask(t *testing.T) {
 		// rather than among the proposals.
 		{name: "defer", path: "/defer", want: model.StateDeferred},
 		{name: "undefer", path: "/undefer", want: model.StateQueued},
-		{name: "capability", path: "/capabilities", body: `{"id":"read-issues","attach":true}`, want: model.StateQueued},
+		{name: "capability", path: "/capabilities", body: `{"id":"github-sandbox","attach":true}`, want: model.StateQueued},
 		// Asking for a run leaves the task queued -- the run itself is a
 		// dispatch cycle's to start (ui.Client.RunNow) -- so this row
 		// proves the wiring rather than a transition.
@@ -930,7 +930,7 @@ func TestConfigEndpointReportsDefaultCapabilities(t *testing.T) {
 	srv, client := testServer(t)
 
 	cfg := model.DefaultConfig()
-	cfg.DefaultCapabilities = []string{"read-issues", "scratch-repo"}
+	cfg.DefaultCapabilities = []string{model.GitHubSandboxRepoGrant, "scratch-repo"}
 	if err := client.Store.PutConfig(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -942,7 +942,7 @@ func TestConfigEndpointReportsDefaultCapabilities(t *testing.T) {
 	got := decode[struct {
 		DefaultCapabilities []string `json:"defaultCapabilities"`
 	}](t, rec)
-	if !reflect.DeepEqual(got.DefaultCapabilities, []string{"read-issues"}) {
+	if !reflect.DeepEqual(got.DefaultCapabilities, []string{model.GitHubSandboxRepoGrant}) {
 		t.Fatalf("defaultCapabilities = %v, want [gemini-key]", got.DefaultCapabilities)
 	}
 }
@@ -959,7 +959,7 @@ func TestConfigEndpointReportsRepoDefaultCapabilities(t *testing.T) {
 
 	if err := client.Store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo:                model.RepoRef{Owner: "acme", Name: "widgets"},
-		DefaultCapabilities: []string{"read-issues", "scratch-repo"},
+		DefaultCapabilities: []string{model.GitHubSandboxRepoGrant, "scratch-repo"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -979,7 +979,7 @@ func TestConfigEndpointReportsRepoDefaultCapabilities(t *testing.T) {
 	got := decode[struct {
 		RepoDefaultCapabilities map[string][]string `json:"repoDefaultCapabilities"`
 	}](t, rec)
-	want := map[string][]string{"acme/widgets": {"read-issues"}}
+	want := map[string][]string{"acme/widgets": {model.GitHubSandboxRepoGrant}}
 	if !reflect.DeepEqual(got.RepoDefaultCapabilities, want) {
 		t.Fatalf("repoDefaultCapabilities = %v, want %v", got.RepoDefaultCapabilities, want)
 	}
@@ -1096,7 +1096,7 @@ func TestModelsSettingsCatalogsBackendsAndCredentialsRoundTrip(t *testing.T) {
 
 	for id, credential := range map[string]string{
 		"codex-preview": "sk-preview",
-		"gemini-fast":   "read-issues",
+		"gemini-fast":   "console",
 	} {
 		rec := do(t, srv, http.MethodPut, "/api/agent-backends/"+id+"/credential",
 			`{"value":"  `+credential+`  "}`)

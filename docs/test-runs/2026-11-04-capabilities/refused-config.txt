@@ -1,0 +1,3 @@
+{"error":"capability server https://grain.dev/capabilities/gcp refused this configuration, so it was not saved: configure: server reported an error: permission set \"org\" is configured twice","fields":{"":"configure: server reported an error: permission set \"org\" is configured twice","permission_sets[0]":"configure: server reported an error: permission set \"org\" is configured twice"}}
+
+HTTP 400

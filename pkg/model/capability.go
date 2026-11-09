@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/secrets"
@@ -66,6 +67,22 @@ func (p Placement) EffectiveMode() string {
 		return "600"
 	}
 	return p.Mode
+}
+
+// ProtocolMode is EffectiveMode as the four octal digits a capability
+// protocol placement carries (protocol.Placement.Mode, "0600"), whichever
+// form the provider wrote it in: "600" and "0600" are the same mode, and
+// both are written, so prefixing a "0" is not enough (package-publish's
+// docker credential helper is "0755", which became "00755" and failed the
+// whole mint -- docs/test-runs/2026-11-04-capabilities.md, F5). A mode that
+// does not parse is passed on with the "0" prefix, for the protocol's own
+// validation to refuse as before.
+func (p Placement) ProtocolMode() string {
+	m := p.EffectiveMode()
+	if v, err := strconv.ParseUint(m, 8, 32); err == nil && v <= 0o7777 {
+		return fmt.Sprintf("%04o", v)
+	}
+	return "0" + m
 }
 
 // Resolution is Resolve's answer. The zero value is Honoured, because
@@ -227,6 +244,24 @@ func WithMintRunID(ctx context.Context, runID string) context.Context {
 func MintRunID(ctx context.Context) string {
 	id, _ := ctx.Value(mintRunIDKey{}).(string)
 	return id
+}
+
+type mintCredentialsKey struct{}
+
+// WithMintCredentials is ctx carrying creds, the resolver the run's
+// in-process providers resolved their secrets through
+// (CapabilityContext.Credentials), to a method of an in-process capability
+// server minting for it: the github server's sandbox-repo resolves the
+// GitHub App's two secrets through it, as the retired github-sandbox
+// provider did.
+func WithMintCredentials(ctx context.Context, creds CredentialResolver) context.Context {
+	return context.WithValue(ctx, mintCredentialsKey{}, creds)
+}
+
+// MintCredentials is the resolver WithMintCredentials put in ctx, or nil.
+func MintCredentials(ctx context.Context) CredentialResolver {
+	c, _ := ctx.Value(mintCredentialsKey{}).(CredentialResolver)
+	return c
 }
 
 // CapabilitySpec is a capability's fixed identity: what a grant of it
@@ -588,6 +623,9 @@ func ResolveGrants(ctx context.Context, reg *CapabilityRegistry, cc CapabilityCo
 	granted := make(map[string]Grant, len(cc.Task.Grants))
 	var out []GrantResolution
 	for _, g := range cc.Task.Grants {
+		// An api reference resolves as the api:<scope> it stands for
+		// (CanonicalGrant, design/design/unified-grants.design.md §3).
+		g.Capability = StoredGrantSpelling(g.Capability)
 		// Repository access has no provider: the reference carries
 		// what one decided (IsRepoAccessGrant). It is CI-only, and a CI
 		// job's is honoured by the scope it widens rather than here.
@@ -602,7 +640,7 @@ func ResolveGrants(ctx context.Context, reg *CapabilityRegistry, cc CapabilityCo
 		// provider in reg still answers: its CI job's event gate is the
 		// pass's.
 		if rule, ok := CIGrantRuleFor(g.Capability); ok && (IsCapabilityRef(g.Capability) || !registered(reg, g.Capability)) {
-			if !cc.CI {
+			if !cc.CI && rule.IsCIOnly() {
 				out = append(out, GrantResolution{Grant: g, Resolution: RefusedBecause(CIGrantRuleCIOnlyRefusal(g.Capability, rule))})
 			}
 			continue

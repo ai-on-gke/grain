@@ -36,6 +36,20 @@ func ConfigRepo() RepoRef { return RepoRef{Owner: "grain", Name: "config"} }
 // and a name of that shape is an ordinary repository nothing serves.
 func IsConfigRepo(repo RepoRef) bool { return repo.Same(ConfigRepo()) }
 
+// IsRetiredConfigRepo reports whether repo names a retired per-team
+// grain/config-<team> alias on the default host.
+func IsRetiredConfigRepo(repo RepoRef) bool {
+	cfg := ConfigRepo()
+	return repo.Host == "" && strings.EqualFold(repo.Owner, cfg.Owner) &&
+		len(repo.Name) > len(cfg.Name) && strings.EqualFold(repo.Name[:len(cfg.Name)+1], cfg.Name+"-")
+}
+
+// RetiredConfigRepoReason explains why a retired grain/config-<team>
+// repository cannot be targeted or watched.
+func RetiredConfigRepoReason(repo RepoRef) string {
+	return fmt.Sprintf("%s/%s not found: only %s exists", repo.Owner, repo.Name, ConfigRepo())
+}
+
 // RepoAllowed reports whether target is a repository this deployment may
 // dispatch work into, judged against Config.TargetRepos: always for the
 // controller-local ConfigRepo, always when allowed

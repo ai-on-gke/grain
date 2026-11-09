@@ -100,6 +100,22 @@ func TestA304ToACallersOwnValidatorIsRevalidatedAndFree(t *testing.T) {
 	if c.Sent != 3 || c.Revalidated != 2 {
 		t.Errorf("ledger github-ci-tails = %+v, want Sent 3 Revalidated 2", c)
 	}
+
+	// A separate client constructed over its own transport must never send an
+	// earlier client's If-None-Match, even when the garbage collector reuses
+	// the earlier transport's heap address across tests.
+	fresh := NewFakeTransport(ApiResponse{
+		Status:  http.StatusOK,
+		Headers: map[string]string{"ETag": etag},
+		Body:    []byte(`{"workflow_runs":[{"id":1301,"status":"completed","conclusion":"failure"}]}`),
+	})
+	runs, err := NewClient(fresh, nil).CompletedWorkflowRuns("acme", "widgets", 50)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("fresh client CompletedWorkflowRuns = %+v, %v; want 1 run", runs, err)
+	}
+	if got := fresh.Calls[0].Headers["If-None-Match"]; got != "" {
+		t.Fatalf("fresh client sent If-None-Match %q, want none", got)
+	}
 }
 
 func TestA304IsCountedAsRevalidatedAndFree(t *testing.T) {

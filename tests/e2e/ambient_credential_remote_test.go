@@ -52,7 +52,7 @@ import (
 )
 
 const (
-	ambientSSHCapabilityName = "bootstrap-playbooks"
+	ambientSSHCapabilityName = "ambient-ssh"
 	ambientSSHCredentialName = "ambient-ssh-key"
 )
 
@@ -340,7 +340,7 @@ func TestAmbientCredentialRemoteSurvivesLiveSandboxRecreation(t *testing.T) {
 	recreations := orchestrator.NewSandboxRecreations()
 	daemonClient := ui.NewClient(ui.Config{
 		Actor:           ui.DefaultActor("operator"),
-		Capabilities:    ui.OfferedCapabilities(),
+		Capabilities:    append(ui.OfferedCapabilities(), ui.Capability{ID: ambientSSHCapabilityName, Name: "Ambient SSH"}),
 		Credentials:     credentials,
 		SandboxRecreate: registryBackedRecreator{recreations},
 	}, w.store)

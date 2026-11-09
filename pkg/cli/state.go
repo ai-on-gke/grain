@@ -72,10 +72,11 @@ Commands:
                             Upgrade button does, and rehearse that import first.
                             Prints "prepared FROM TO DIR", "current N" or "none".
                             Stop the daemon first; scripts/setup.sh runs it
-  check DIR                 load a state repository's files into a throwaway
+  check [-migrate] DIR      load a state repository's files into a throwaway
                             database and report what breaks. Needs no -data-dir
-                            and touches nothing; agents use it to validate a
-                            proposed grain/config change
+                            (when set, also checks deployment-specific git_ref
+                            watches) and touches nothing; agents use it to
+                            validate a proposed grain/config change
   key show                  print this installation's secrets public key
   key path                  print where the private key is read from
   key import [-key-file F]  install a secrets private key this operator holds,
@@ -110,7 +111,7 @@ func runState(args []string) error {
 	// on rather than being made to invent one.
 	switch rest[0] {
 	case "check":
-		return stateCheck(ctx, rest[1:])
+		return stateCheck(ctx, *dataDir, rest[1:])
 	}
 	if *dataDir == "" {
 		fs.Usage()
@@ -489,7 +490,7 @@ func stateReformatTo(dataDir string, out io.Writer) error {
 // CI runner needs this binary and a checkout and nothing else:
 //
 //	grain state check .
-func stateCheck(ctx context.Context, args []string) error {
+func stateCheck(ctx context.Context, dataDir string, args []string) error {
 	fs := flag.NewFlagSet("grain state check", flag.ContinueOnError)
 	// -migrate is what an upgrade runs, inside the image it is about to
 	// cut over to, against the dump the running build has just exported
@@ -525,7 +526,7 @@ func stateCheck(ctx context.Context, args []string) error {
 		return errors.New("check takes one directory")
 	}
 
-	return statecheck.Run(ctx, os.Stdout, dir, statecheck.Options{Migrate: *migrate})
+	return statecheck.Run(ctx, os.Stdout, dir, statecheck.Options{Migrate: *migrate, DataDir: dataDir})
 }
 
 // stateKey is the operator's view of the secrets key: the public half,

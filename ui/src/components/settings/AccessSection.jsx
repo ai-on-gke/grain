@@ -32,6 +32,8 @@ import api from "../../api.js";
 import { accessRoleLabel, canAccess } from "../../access.js";
 import AppIcon from "../AppIcon.jsx";
 import SettingsCard from "./SettingsCard.jsx";
+import { formatDateTime } from "../../time.js";
+import { useTimeZone } from "../../TimeZoneContext.jsx";
 
 // actorName is the server-reported actor (GET /api/config's actor) as a
 // person reads it, without its "user:" or "serviceAccount:" kind prefix.
@@ -126,11 +128,12 @@ export function validatePrincipalEntry(raw) {
   return { canonical: `${prefix}:${value}`, error: "" };
 }
 
-function formatAddedAt(iso) {
+// formatAddedAt prints when an entry was added in the time zone this
+// browser chose under Settings → Preferences (the browser's own when it
+// chose none), like every other time a page prints -- not always in UTC.
+function formatAddedAt(iso, zone) {
   if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toISOString().replace("T", " ").slice(0, 16) + " UTC";
+  return formatDateTime(iso, zone) || iso;
 }
 
 function describeRemovalWarning(targetEntry, entriesCount, signedInEmail) {
@@ -611,6 +614,7 @@ function roleOptions(roles, current) {
 function RoleChip({ role }) {
   return (
     <Chip
+      component="span"
       size="small"
       label={role}
       variant="outlined"
@@ -632,6 +636,7 @@ function PrincipalTable({
   showReason = false,
   testid,
 }) {
+  const zone = useTimeZone();
   return (
     <Table size="small" data-testid={testid}>
       <TableHead>
@@ -694,7 +699,7 @@ function PrincipalTable({
             </TableCell>
             <TableCell>{item.addedBy || "—"}</TableCell>
             <TableCell sx={{ whiteSpace: "nowrap" }}>
-              {formatAddedAt(item.addedAt)}
+              {formatAddedAt(item.addedAt, zone)}
             </TableCell>
             {canWrite ? (
               <TableCell align="right">

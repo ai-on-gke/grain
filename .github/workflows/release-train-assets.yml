@@ -1,0 +1,206 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Publishes the release train's names as GitHub release assets
+# (docs/release-assets.md) when the train pushes their git tags. The train
+# itself -- the grain task .grain/templates/release-train.yml files -- runs
+# with RELEASE_IMAGES=off and publishes nothing; what it pushes is tags:
+#
+#   vX.Y.Z-rc.N            -> release vX.Y.Z-rc.N, and channel-candidate when
+#                             it is the newest rc
+#   vX.Y.Z-pending         -> release vX.Y.Z-pending (version vX.Y.Z)
+#   vX.Y.Z-rc.N-discarded  -> release vX.Y.Z-rc.N-discarded
+#   vX.Y.Z-retracted       -> release vX.Y.Z-retracted
+#
+# Each is the sha-<short> release.yml published for the tag's commit, with
+# only images.json's version and createdAt changed: no image is built here.
+#
+# An rc (vX.Y.Z-rc.N, not -discarded) also gets the grain CLI its daemon's
+# GET /cli/install.sh fetches: the cli job builds scripts/build-cli.sh's
+# four archives and checksums.txt from the tag, stamped with the rc as its
+# daemon is, holding nothing but `contents: read`; cli-assets uploads them
+# once publish has published the rc's release
+# (scripts/release-assets.sh cli-publish).
+# vX.Y.Z and latest are promote.yml's and promote-release.yml's: train-tag
+# refuses them, so neither a tag push nor a dispatch here promotes a release.
+# It also refuses a tag that has not been pushed -- publishing a release on
+# a missing tag creates it -- so a dispatch cannot plant the -discarded or
+# -retracted markers release-from-trunk.sh reads.
+
+name: release-train-assets
+
+on:
+  push:
+    tags:
+      - "v*-rc.*"
+      - "v*-pending"
+      - "v*-retracted"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The release-train tag to publish (vX.Y.Z-rc.N, vX.Y.Z-pending, vX.Y.Z-rc.N-discarded, vX.Y.Z-retracted)"
+        required: true
+        type: string
+      dry_run:
+        description: "Plan the release writes without making them"
+        required: false
+        default: false
+        type: boolean
+
+# Nothing at the workflow level: `contents: write` is held by the jobs
+# that run release-assets.sh, as in release.yml and promote.yml.
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: publish release-train assets
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    concurrency:
+      group: ${{ github.workflow }}-candidate
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Publish the tag's release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          RELEASE_ASSETS_DIR: /tmp/release-assets
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-}"
+          if [ -z "$tag" ]; then
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+          args=()
+          if [ "${INPUT_DRY_RUN:-false}" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          bash ./scripts/release-assets.sh "${args[@]}" train-tag "$tag"
+
+  cli:
+    name: build the rc's grain CLI
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      rc: ${{ steps.rc.outputs.rc }}
+    steps:
+      - name: Resolve the rc and whether it still needs its CLI
+        id: rc
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-}"
+          if [ -z "$tag" ]; then
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+          # Only an rc is a release a daemon reports: the markers and a
+          # pending release (rebuilt as vX.Y.Z when promoted) carry none.
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]; then
+            echo "release-train-assets: ${tag@Q} is not an rc; it carries no grain CLI"
+            exit 0
+          fi
+          if curl -fsSIL -o /dev/null "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${tag}/checksums.txt"; then
+            echo "release-train-assets: ${tag} already carries the grain CLI"
+            exit 0
+          fi
+          echo "rc=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        if: steps.rc.outputs.rc != ''
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Go
+        if: steps.rc.outputs.rc != ''
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build the grain CLI
+        if: steps.rc.outputs.rc != ''
+        env:
+          RELEASE: ${{ steps.rc.outputs.rc }}
+        run: |
+          set -euo pipefail
+          bash ./scripts/build-cli.sh --ref "refs/tags/${RELEASE}" "${RUNNER_TEMP}/release-cli"
+          bash ./scripts/release-assets.sh cli-validate "${RUNNER_TEMP}/release-cli"
+
+      - name: Hand the archives to cli-assets
+        if: steps.rc.outputs.rc != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: grain-cli
+          path: |
+            ${{ runner.temp }}/release-cli/*.tar.gz
+            ${{ runner.temp }}/release-cli/checksums.txt
+          if-no-files-found: error
+          retention-days: 1
+
+  cli-assets:
+    name: publish the rc's grain CLI
+    needs: [publish, cli]
+    if: needs.cli.outputs.rc != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    # One group per release, shared by promote.yml, publish-release.yml and
+    # release-train-assets.yml (concurrency groups span a repository's
+    # workflows): cli-publish replaces archives left without checksums.txt,
+    # so two runs uploading to the same release at once could leave one
+    # run's archive beside the other's checksums.txt.
+    concurrency:
+      group: grain-cli-assets-${{ needs.cli.outputs.rc }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch the archives cli built
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: grain-cli
+          path: ${{ runner.temp }}/release-cli
+
+      - name: Publish the grain CLI
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          RELEASE_VERSION: ${{ needs.cli.outputs.rc }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ "${INPUT_DRY_RUN:-false}" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          bash ./scripts/release-assets.sh "${args[@]}" cli-publish "${RELEASE_VERSION}" "${RUNNER_TEMP}/release-cli"

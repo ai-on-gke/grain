@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   Box,
   Button,
@@ -70,6 +70,8 @@ export default function NewSessionPage({ config = {}, onStart }) {
   const [sessionName, setSessionName] = useState("");
   const [pin, setPin] = useState(false);
   const [starting, setStarting] = useState(false);
+  const startingRef = useRef(false);
+  const handoffRef = useRef(null);
 
   // The chat window draws a task; this one has none yet. A synthetic
   // one with nothing said in it draws as an empty transcript with the
@@ -84,23 +86,34 @@ export default function NewSessionPage({ config = {}, onStart }) {
 
   // start is both ways in: the name alone (no message), or the first
   // message with whatever name was typed. It answers whether the
-  // session started, so the composer keeps a message that did not go.
-  const start = async (first = {}) => {
-    if (starting) return false;
+  // session started, so the composer keeps a message that did not go,
+  // and passes a handoff callback so any follow-up sends or draft typed
+  // while POST /api/console-sessions is in flight carry into the opened
+  // session's chat rather than vanishing when this page unmounts.
+  const start = async (first = {}, { holdChat = false } = {}) => {
+    if (startingRef.current) return false;
+    startingRef.current = true;
     setStarting(true);
+    const releaseChat = holdChat ? handoffRef.current?.hold?.() : null;
     try {
-      await onStart({
-        title: sessionName.trim(),
-        ...first,
-        model: chosenModel || undefined,
-        pin,
-      });
+      await onStart(
+        {
+          title: sessionName.trim(),
+          ...first,
+          model: chosenModel || undefined,
+          pin,
+        },
+        () => handoffRef.current?.take?.(),
+      );
+      releaseChat?.();
       return true;
     } catch {
       // onStart reports the failure in the shell's banner (App.jsx's
       // startStandingSession); false puts the message back in the box.
+      releaseChat?.({ failed: true });
       return false;
     } finally {
+      startingRef.current = false;
       setStarting(false);
     }
   };
@@ -110,7 +123,7 @@ export default function NewSessionPage({ config = {}, onStart }) {
   const canCreate = sessionName.trim() !== "" && !starting;
   const create = (e) => {
     e?.preventDefault();
-    if (canCreate) start();
+    if (canCreate) start({}, { holdChat: true });
   };
 
   return (
@@ -191,6 +204,7 @@ export default function NewSessionPage({ config = {}, onStart }) {
         <TaskChat
           t={draft}
           onSend={send}
+          handoffRef={handoffRef}
           placeholder="Ask anything…"
           actions={
             <Box

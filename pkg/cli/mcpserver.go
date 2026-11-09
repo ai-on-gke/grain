@@ -104,11 +104,12 @@
 // that remains forks a CLI and ignores agent.RunConfig.Tools, so a
 // capability granted tools no running agent could call.
 //
-// -grant self-debug adds that capability's own read-only tools:
-// read_grain_source and list_grain_source, reading the checkout
-// -grain-src-dir names (pkg/capability/selfdebug).
+// -grant https://grain.dev/capabilities/grain#source={} (once the
+// source half of self-debug) names grain's own checkout, -grain-src-dir,
+// which the run reads as grain-src/ and src://.
 //
-// That grant turns on a second half as well -- list_grain_tasks,
+// -grant api:self-debug (the REST half of self-debug, which the retired
+// bare name still reads as) turns on list_grain_tasks,
 // read_grain_task, read_grain_task_prompt and read_grain_task_transcript,
 // reading grain's *other* tasks over -server, plus read_grain_metrics,
 // reading what this deployment measures about itself over that same
@@ -136,14 +137,9 @@
 // roster and refuses every call, rather than answering with a journal it
 // could not clean.
 //
-// -grant bootstrap-playbooks adds list_bootstrap_playbooks and
-// read_bootstrap_playbook, the runbooks for grain's own setup flows
-// (pkg/capability/bootstrap). It needs no hop of any kind: the playbooks
-// are markdown embedded in this very binary, so this process is already
-// holding everything the tools read.
-//
-// Both are read-only, which is why both can be served from here with no
-// further hop. pkg/capability/selfrepair's run_host_command is served
+// Both api:self-debug and grain#journal are read-only, which is why both can be
+// served from here with no further hop. pkg/capability/selfrepair's
+// run_host_command is served
 // too, but only beside chat (see -interactive above), because its one
 // tool blocks on a human's reply in the task's own chat.
 //
@@ -179,7 +175,7 @@ import (
 // that flag, and agent.RunConfig.Grants for how a Framework learns it).
 // Everything either set exposes is read-only, so there is no
 // confirmation step, matching pkg/capability/selfdebug and
-// pkg/capability/bootstrap and unlike pkg/capability/selfrepair.
+// unlike pkg/capability/selfrepair.
 //
 // A deployment with no checkout of grain's source to point at (srcDir
 // "") still gets both of self-debug's tools, each refusing the call with
@@ -197,11 +193,6 @@ import (
 // cannot make it. Failing closed is the only direction that fails safe:
 // an unread journal costs a run one answer, and an unredacted one cannot
 // be taken back out of a model's context or a sandbox's network.
-//
-// bootstrap-playbooks has nothing that can be missing at all: its
-// playbooks are markdown embedded in this binary, so its tools read what
-// this process is already holding and depend on no flag but the grant
-// itself.
 func grantedTools(grants daemon.GrantNames, srcDir, secretsDir, taskID string) []mcp.Tool {
 	return daemon.GrantedDaemonTools(grants, srcDir, secretsDir, "", taskID, nil)
 }

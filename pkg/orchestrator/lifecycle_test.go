@@ -32,7 +32,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
-	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
@@ -285,7 +284,7 @@ func TestRunCycleReleasesTheSandboxAfterAFailedDispatch(t *testing.T) {
 }
 
 // TestRunCycleDispatchesAGrantWithNoPlacementOntoANonRootedSandbox is a
-// regression test for bwsalmon/agents#643: a grant like self-debug or
+// regression test for bwsalmon/agents#643: a grant like priority-dispatch or
 // self-repair materializes no SideSandbox placement at all, so a task
 // holding one must still dispatch cleanly onto a sandbox with no local
 // directory (recordingSandbox is one; see its own doc comment). Before
@@ -298,7 +297,8 @@ func TestRunCycleDispatchesAGrantWithNoPlacementOntoANonRootedSandbox(t *testing
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	task := filedTask(t, ctx, store, "t1", repo)
 	task.Interactive = true
-	task.Grants = []model.Grant{{Capability: bootstrap.CapabilityName, Via: model.GrantByLabel}}
+	cap := &fakeCapability{name: "no-placement"}
+	task.Grants = []model.Grant{{Capability: cap.name, Via: model.GrantByLabel}}
 	if err := store.PutTask(ctx, task); err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +307,7 @@ func TestRunCycleDispatchesAGrantWithNoPlacementOntoANonRootedSandbox(t *testing
 	deps := orchestrator.Deps{
 		Store: store, Client: client, Sandboxes: sandboxes,
 		Framework:  completesWithAComment(),
-		Config:     orchestrator.Config{Capabilities: model.NewCapabilityRegistry(bootstrap.New())},
+		Config:     orchestrator.Config{Capabilities: model.NewCapabilityRegistry(cap)},
 		MaxWorkers: 1,
 	}
 

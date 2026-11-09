@@ -19,6 +19,14 @@
 // repo's and the template's, into one map of fields NewTaskOverlay.jsx
 // draws from. With no configuration it is the form exactly as built.
 
+import {
+  API_CAPABILITY_SERVER,
+  API_GRANT_PREFIX,
+  API_REF_PREFIX,
+  isApiGrant,
+  splitApiGrant,
+} from "./apiGrants.js";
+
 // The form's own placement of every field, in the order it draws them.
 // Orders leave room between fields for a configuration to slot others
 // in. "Advanced options" sits at ADVANCED_ORDER among the shown fields.
@@ -184,13 +192,24 @@ export function formFieldsIn(resolved, visibility) {
   ).sort((a, b) => resolved.fields[a].order - resolved.fields[b].order);
 }
 
-// grantRefOf is what the picker's offered and hidden lists name a grant
-// by: an api grant without its @repo, and a capability server method by
-// its server as well as by itself.
+// grantNames is what the picker's offered and hidden lists name a grant
+// by: an api grant in either its api:<name> or
+// https://grain.dev/capabilities/api#<name> spelling (without @repo or
+// with:), and a capability server method by its server as well as by
+// itself.
 function grantNames(id) {
   const g = String(id || "").trim();
-  const bare = g.split("@")[0];
+  const bare = g.split("@")[0].split("=")[0];
   const out = [g, bare];
+  if (isApiGrant(g)) {
+    const [apiBase] = splitApiGrant(g);
+    if (apiBase.startsWith(API_GRANT_PREFIX)) {
+      const what = apiBase.slice(API_GRANT_PREFIX.length);
+      if (what) {
+        out.push(apiBase, `${API_REF_PREFIX}${what}`, API_CAPABILITY_SERVER);
+      }
+    }
+  }
   const hash = bare.indexOf("#");
   if (hash > 0) out.push(bare.slice(0, hash));
   return out;

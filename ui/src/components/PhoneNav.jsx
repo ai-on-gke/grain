@@ -17,14 +17,17 @@ import {
   AppBar,
   Badge,
   Box,
+  ButtonBase,
   Chip,
   Drawer,
   IconButton,
   Toolbar,
   Typography,
 } from "@mui/material";
+import { alpha } from "@mui/material/styles";
 import AppIcon from "./AppIcon.jsx";
 import GrainMark from "./GrainMark.jsx";
+import AccessGate from "./AccessGate.jsx";
 import { stateDot } from "./UnbackedStateDot.jsx";
 
 // PhoneNav is what the sidebar becomes on a phone (phone.js): the rail
@@ -61,6 +64,19 @@ export default function PhoneNav({
   // foot of the drawer.
   onOpenSettings,
   settingsOpen = false,
+  // tasksStale is the failing poll's error while the views go on drawing
+  // the last task list read (a mid-session /api/tasks outage), null
+  // otherwise. The rail's Tasks entries say "not refreshing" then
+  // (Sidebar.jsx), but on a phone the rail is in the drawer, so nothing
+  // on screen said the list was stale until somebody opened it
+  // (2026-11-07 walkthrough, F7). The bar says it too, on a slim row of
+  // its own under the controls, and tapping it asks again, as the rail's
+  // entry does (onRetryTasks). Its own row rather than a chip beside the
+  // controls: at 390 px the menu, mark, bell, gear and "+" leave the
+  // wordmark ~126 px, and with an environment chip as well a chip there
+  // squeezed the wordmark to nothing.
+  tasksStale = null,
+  onRetryTasks,
   children,
 }) {
   const [open, setOpen] = useState(false);
@@ -180,22 +196,71 @@ export default function PhoneNav({
             </IconButton>
           )}
           {onOpenNewTask && (
-            <IconButton
-              size="small"
-              className="header-control-icon"
-              aria-label="New task"
-              onClick={onOpenNewTask}
-              sx={{
-                bgcolor: "primary.main",
-                color: "primary.contrastText",
-                borderRadius: 1.5,
-                "&:hover": { bgcolor: "primary.dark" },
-              }}
-            >
-              <AppIcon name="add" size={20} />
-            </IconButton>
+            <AccessGate scope="tasks:write" config={config}>
+              <IconButton
+                size="small"
+                className="header-control-icon"
+                aria-label="New task"
+                onClick={onOpenNewTask}
+                sx={{
+                  bgcolor: "primary.main",
+                  color: "primary.contrastText",
+                  borderRadius: 1.5,
+                  "&:hover": { bgcolor: "primary.dark" },
+                  "&.Mui-disabled": {
+                    bgcolor: "action.disabledBackground",
+                    color: "action.disabled",
+                  },
+                }}
+              >
+                <AppIcon name="add" size={20} />
+              </IconButton>
+            </AccessGate>
           )}
         </Toolbar>
+        {tasksStale ? (
+          <ButtonBase
+            data-testid="phone-tasks-stale"
+            aria-label="Task list not refreshing: showing the last list read. Retry"
+            title={`Tasks could not be refreshed (${tasksStale}); showing the last list read — tap to retry`}
+            onClick={onRetryTasks}
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 0.75,
+              width: "100%",
+              minHeight: 32,
+              px: 1.5,
+              borderTop: 1,
+              borderColor: "divider",
+              color: "warning.main",
+              bgcolor: (theme) => alpha(theme.palette.warning.main, 0.06),
+              typography: "body2",
+              fontWeight: 600,
+              textAlign: "left",
+            }}
+          >
+            <AppIcon name="refresh" size={16} />
+            <Box
+              component="span"
+              sx={{
+                flex: 1,
+                minWidth: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              Task list not refreshing
+            </Box>
+            <Box
+              component="span"
+              sx={{ flex: "none", textDecoration: "underline" }}
+            >
+              Retry
+            </Box>
+          </ButtonBase>
+        ) : null}
       </AppBar>
 
       <Drawer

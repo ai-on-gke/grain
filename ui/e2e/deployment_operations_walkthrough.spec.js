@@ -360,7 +360,7 @@ test.describe("Deployment Settings and Operations Walkthrough", () => {
     // name and key once set, never by value, and deleting it takes it off
     // the list again.
     await page.goto("/admin");
-    await page.getByTestId("settings-nav-credentials").click();
+    await page.getByTestId("settings-nav-capabilities").click();
     await page.getByLabel("Secret", { exact: true }).fill("ops-walkthrough");
     await page.getByLabel("Key", { exact: true }).fill("token");
     await page
@@ -488,7 +488,10 @@ test.describe("Deployment Settings and Operations Walkthrough", () => {
     page.once("dialog", (dialog) => dialog.accept());
     await cancelBtn.click();
     await expect.poll(() => runConclusion(page, cancelledId)).toBe("cancelled");
-    await expect(cancelBtn).toHaveCount(0);
+    // DELETE answers 202 and the conclusion lands after it, so the pane
+    // only sees it on its next poll (REFRESH_MS, 5s) -- as long as
+    // expect's own default, which made this race.
+    await expect(cancelBtn).toHaveCount(0, { timeout: 15_000 });
 
     // A run that finishes, inspected from the list down to its step's
     // own output.
@@ -643,22 +646,25 @@ test.describe("Deployment Settings and Operations Walkthrough", () => {
     // Operator notification on System → Health immediately refreshes and clears
     // when acknowledged without waiting for the 30s notification poll.
     let notifAcked = false;
-    await page.route("**/api/notifications?open=1", async (route) => {
-      await route.fulfill({
-        status: 200,
-        json: [
-          {
-            id: "notif-e2e-1",
-            subject: "runner-quota",
-            severity: "warning",
-            title: "CI runner quota exhausted",
-            body: "No cloud runners available in us-central1.",
-            raisedAt: "2026-10-26T15:00:00Z",
-            ...(notifAcked ? { ackedAt: "2026-10-26T15:05:00Z" } : {}),
-          },
-        ],
-      });
-    });
+    await page.route(
+      "**/api/notifications?open=1&fields=list",
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          json: [
+            {
+              id: "notif-e2e-1",
+              subject: "runner-quota",
+              severity: "warning",
+              title: "CI runner quota exhausted",
+              body: "No cloud runners available in us-central1.",
+              raisedAt: "2026-10-26T15:00:00Z",
+              ...(notifAcked ? { ackedAt: "2026-10-26T15:05:00Z" } : {}),
+            },
+          ],
+        });
+      },
+    );
     await page.route("**/api/notifications/notif-e2e-1/ack", async (route) => {
       notifAcked = true;
       await route.fulfill({ status: 200, json: { status: "ok" } });
@@ -673,7 +679,7 @@ test.describe("Deployment Settings and Operations Walkthrough", () => {
       "data-severity",
       "warning",
     );
-    await page.unroute("**/api/notifications?open=1");
+    await page.unroute("**/api/notifications?open=1&fields=list");
     await page.unroute("**/api/notifications/notif-e2e-1/ack");
 
     await page.getByRole("tab", { name: "Power" }).click();

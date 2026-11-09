@@ -267,30 +267,43 @@ func cmdGitLogin(ctx context.Context, c *ui.HTTPClient, out *printer, args []str
 		return nil
 	}
 
-	resolvedAuthor := strings.TrimSpace(*author)
+	resolvedAuthor, commitName := strings.TrimSpace(*author), ""
 	if resolvedAuthor == "" {
 		if conns, cerr := c.ListDeploymentGitConnections(ctx); cerr == nil {
-			for _, conn := range conns {
-				if model.SameGitHost(conn.Host, *host, model.DefaultGitHost) && strings.EqualFold(conn.Scope, strings.TrimSpace(*scope)) {
-					if conn.Status.Author != "" {
-						resolvedAuthor = conn.Status.Author
-						break
-					}
-					if conn.Status.CommitName != "" {
-						resolvedAuthor = conn.Status.CommitName
-						break
-					}
-				}
-			}
+			resolvedAuthor, commitName = gitLoginSignature(conns, *host, *scope)
 		}
 	}
-	if resolvedAuthor != "" {
-		fmt.Printf("Authenticated to %s as %s: this deployment now clones, pushes, and signs new pull requests and comments as %q.\n",
-			*host, resolvedAuthor, github.PullRequestSignatureLine(resolvedAuthor))
-		return nil
-	}
-	fmt.Printf("Authenticated to %s: this deployment now clones, pushes, and calls GitHub with the delegated token.\n", *host)
+	fmt.Println(gitLoginSummary(*host, resolvedAuthor, commitName))
 	return nil
+}
+
+// gitLoginSignature is who the deployment now signs pull requests and
+// comments as for the connection on host/scope -- the recorded Author
+// (gitproxy.CredentialSet.AuthorOf, the same field the GitHub client signs
+// with) -- and, apart from it, who its commits are authored by. The commit
+// identity is never the signature: it can be this host's git user.name,
+// and printing it as one told an operator a bot-owned token's pull
+// requests would be signed by them when they are not signed at all.
+func gitLoginSignature(conns []ui.TeamGitConnectionView, host, scope string) (author, commitName string) {
+	for _, conn := range conns {
+		if model.SameGitHost(conn.Host, host, model.DefaultGitHost) && strings.EqualFold(conn.Scope, strings.TrimSpace(scope)) {
+			return conn.Status.Author, conn.Status.CommitName
+		}
+	}
+	return "", ""
+}
+
+// gitLoginSummary is the line `grain git-login` ends on.
+func gitLoginSummary(host, author, commitName string) string {
+	if author != "" {
+		return fmt.Sprintf("Authenticated to %s as %s: this deployment now clones, pushes, and signs new pull requests and comments as %q.",
+			host, author, github.PullRequestSignatureLine(author))
+	}
+	line := fmt.Sprintf("Authenticated to %s: this deployment now clones, pushes, and calls GitHub with the delegated token", host)
+	if commitName != "" {
+		line += fmt.Sprintf(" (commits authored as %s)", commitName)
+	}
+	return line + "; the host reported no person's name for it, so pull requests and comments are not signed -- pass -author to sign them."
 }
 
 func runGitLoginDeviceFlow(ctx context.Context, host, baseURL, clientID, rawScopes string) (string, error) {

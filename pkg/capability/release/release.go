@@ -166,7 +166,7 @@ func method(name, display, description string, rule model.CIGrantRule, current f
 				}
 				resp := &protocol.MintResponse{Status: protocol.StatusOK}
 				for _, pl := range mat.Placements {
-					resp.Placements = append(resp.Placements, protocol.Placement{Path: pl.Path, Mode: "0" + pl.EffectiveMode(), Content: pl.Content})
+					resp.Placements = append(resp.Placements, protocol.Placement{Path: pl.Path, Mode: pl.ProtocolMode(), Content: pl.Content})
 				}
 				mu.Lock()
 				leases[attemptID] = held{p: p, lease: mat.Lease, resp: resp}

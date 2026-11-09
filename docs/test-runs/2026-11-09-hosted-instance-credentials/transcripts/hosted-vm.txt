@@ -1,0 +1,28 @@
+### hosted-vm: new-style grain-config
+reconcile exit=1
+  out: grain-hosted-vm-reconcile: grain-daemon failed health check; recent container logs:
+daemon.env: 600 postgres://gi_walk1:<PASSWORD>@127.0.0.1:5432/grain_walk1?sslmode=require
+  psql: gi_walk1|t
+password in script output: 0
+password on any docker command line: 0
+### hosted-vm: Secret Manager 403
+reconcile exit=1
+  out: curl: (22) The requested URL returned error: 403
+  out: grain-hosted-vm-reconcile: reading database password secret projects/made-up-proj/secrets/grain-inst-walk1-db-password from Secret Manager failed
+daemon.env written: no; docker run issued: 0
+### hosted-vm: Secret Manager 503
+reconcile exit=1
+  out: curl: (22) The requested URL returned error: 503
+  out: curl: (22) The requested URL returned error: 503
+  out: curl: (22) The requested URL returned error: 503
+  out: grain-hosted-vm-reconcile: reading database password secret projects/made-up-proj/secrets/grain-inst-walk1-db-password from Secret Manager failed
+daemon.env written: no; docker run issued: 0
+### hosted-vm: Secret Manager 503 twice, then recovers
+reconcile exit=1
+  out: curl: (22) The requested URL returned error: 503
+  out: curl: (22) The requested URL returned error: 503
+  out: grain-hosted-vm-reconcile: grain-daemon failed health check; recent container logs:
+daemon.env written: yes; docker run issued: 1
+### hosted-vm: pre-existing metadata (GRAIN_DB_PASSWORD, no secret name) under the new script
+reconcile exit=1
+  out: grain-hosted-vm-reconcile: incomplete grain-config metadata on hosted VM

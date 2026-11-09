@@ -79,6 +79,59 @@ func checkDeclarations(t *testing.T, out *printer, args ...string) (string, erro
 	return text, err
 }
 
+// Admission and hosting reach the text summary, both when a file sets
+// them and when a retired grant name (priority-dispatch, durable, console)
+// is folded into them: before, only --json carried them, so a template
+// declaring `durable` printed nothing that said its tasks would be durable
+// (docs/test-runs/2026-11-07-capabilities-fencing-admission.md, F2).
+func TestDeclarationsCheckPrintsAdmissionAndHosting(t *testing.T) {
+	dir := t.TempDir()
+	write := func(path, text string) {
+		t.Helper()
+		full := filepath.Join(dir, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(".grain/templates/set.yml", "title: Set\nadmission: bypass\nhosting: console\n")
+	write(".grain/templates/legacy.yml", "title: Legacy\ncapabilities:\n  - durable\n")
+	write(".grain/templates/plain.yml", "title: Plain\n")
+	write(".grain/schedules/nightly.yml", "template: plain\ndaily:\n  at: \"03:00\"\nadmission: durable\n")
+	out, err := checkDeclarations(t, &printer{}, "-repo", "acme/widgets", dir)
+	if err != nil {
+		t.Fatalf("check: %v\n%s", err, out)
+	}
+	section := func(header string) string {
+		i := strings.Index(out, header)
+		if i < 0 {
+			t.Fatalf("output has no %q section:\n%s", header, out)
+		}
+		rest := out[i+len(header):]
+		if j := strings.Index(rest, "\n\n"); j >= 0 {
+			rest = rest[:j]
+		}
+		return rest
+	}
+	for header, want := range map[string][]string{
+		"template set ":     {"admission:  bypass", "hosting:    console"},
+		"template legacy ":  {"admission:  durable"},
+		"schedule nightly ": {"admission:  durable"},
+	} {
+		got := section(header)
+		for _, w := range want {
+			if !strings.Contains(got, w) {
+				t.Errorf("%s section does not say %q:\n%s", header, w, got)
+			}
+		}
+	}
+	if got := section("template plain "); strings.Contains(got, "admission:") || strings.Contains(got, "hosting:") {
+		t.Errorf("a template that sets neither still prints one:\n%s", got)
+	}
+}
+
 // A tree that parses is printed in full: the id each file gets, what a
 // suite runs, and the cadence -- the three things somebody writing one
 // cannot work out by reading the file, since two of them are derived
@@ -325,5 +378,49 @@ func TestDeclarationsCheckDefaultsToTheWorkingDirectory(t *testing.T) {
 		if !strings.Contains(out, "repo:suite:acme:widgets:sweep") {
 			t.Errorf("grain declarations %v read nothing:\n%s", args, out)
 		}
+	}
+}
+
+// A template or schedule naming repo#target under capabilities: is refused by
+// `grain declarations check` with the declaration-level reason and the
+// sync-keep-last-good notice, rather than passing lint and failing every
+// filing (docs/test-runs/2026-11-09-store-upgrades-128-129.md, O3).
+func TestDeclarationsCheckRefusesRepoTargetUnderCapabilities(t *testing.T) {
+	dir := t.TempDir()
+	tmplPath := filepath.Join(dir, ".grain", "templates", "t.yml")
+	if err := os.MkdirAll(filepath.Dir(tmplPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "name: Mixed template\ntitle: base + repo#target\nbody: shape\nbase: main\ncapabilities:\n" +
+		"  - 'https://grain.dev/capabilities/repo#target={\"repo\":\"acme/widgets\",\"base\":\"main\"}'\n"
+	if err := os.WriteFile(tmplPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := checkDeclarations(t, &printer{}, "-repo", "acme/widgets", dir)
+	if err == nil {
+		t.Fatalf("check accepted repo#target under capabilities:\n%s", out)
+	}
+	for _, want := range []string{
+		".grain/templates/t.yml",
+		model.RepoTargetRef,
+		"always target the declaring repository (acme/widgets), and its base is `base:`",
+		"repo_declaration_sync.last_error",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("text output missing %q:\n%s", want, out)
+		}
+	}
+
+	jsonOut, err := checkDeclarations(t, &printer{json: true}, "-repo", "acme/widgets", dir)
+	if err == nil {
+		t.Fatalf("json check accepted repo#target under capabilities:\n%s", jsonOut)
+	}
+	var view declarationsView
+	if err := json.Unmarshal([]byte(jsonOut), &view); err != nil {
+		t.Fatalf("unmarshal %q: %v", jsonOut, err)
+	}
+	if view.OK || len(view.Errors) != 1 || !strings.Contains(view.Errors[0], "base is `base:`") {
+		t.Errorf("view = %+v, want ok=false and repo#target refusal", view)
 	}
 }

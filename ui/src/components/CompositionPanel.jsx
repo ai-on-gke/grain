@@ -70,6 +70,8 @@ const LABELS = {
   model: "Model",
   autoMerge: "Auto-merge",
   keepRunning: "Keep running",
+  admission: "Admission",
+  hosting: "Hosting",
   approval: "Approval",
   priority: "Task priority",
 };
@@ -116,6 +118,11 @@ const VALUES = {
     none: "none (this deployment only)",
   },
   nothingNeeded: { ack: "leave for acknowledgement" },
+  // The task pane's own Admission select words it "Bypass queue"
+  // (detail/Actions.jsx); "durable" reads the same either way.
+  admission: { bypass: "bypass queue" },
+  // ...and its Hosting select (HostingField) "Interactive console".
+  hosting: { console: "interactive console" },
 };
 
 // passes says how many times the tasks below are filed. A suite run
@@ -242,11 +249,21 @@ function ComposedTaskCard({ task, index, total }) {
               >
                 {LABELS[field.name] || field.name}
               </Typography>
+              {/* A <dl> row holds only its <dt> and <dd> (axe
+                  definition-list, dlitem), so the source chip sits inside
+                  the <dd>, after the value in its own .composition-value. */}
               {groups.length === 1 ? (
-                <>
+                <Stack
+                  component="dd"
+                  direction="row"
+                  spacing={1}
+                  alignItems="baseline"
+                  sx={{ m: 0, flex: 1, minWidth: 0 }}
+                >
                   <Typography
-                    component="dd"
+                    component="span"
                     variant="body2"
+                    className="composition-value"
                     sx={{ m: 0, flex: 1, minWidth: 0, wordBreak: "break-word" }}
                   >
                     {fieldValue({ ...field, source: groups[0].source })}
@@ -256,7 +273,7 @@ function ComposedTaskCard({ task, index, total }) {
                     variant="outlined"
                     label={SOURCES[groups[0].source] || groups[0].source}
                   />
-                </>
+                </Stack>
               ) : (
                 <Stack
                   component="dd"
@@ -272,6 +289,7 @@ function ComposedTaskCard({ task, index, total }) {
                     >
                       <Typography
                         variant="body2"
+                        className="composition-value"
                         sx={{
                           m: 0,
                           flex: 1,

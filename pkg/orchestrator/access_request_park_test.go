@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
-	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
@@ -130,7 +129,7 @@ func TestPersistentSessionTurnLoopStopsOnAccessRequest(t *testing.T) {
 				}
 				// Turn 2 calls request_access while ResumableSession is active;
 				// continueSessionTurns must break immediately instead of waiting out
-				// the 5s SessionSandboxIdleTTL or continuing in-process.
+				// the 30s SessionSandboxIdleTTL or continuing in-process.
 				return &agent.Result{
 					FinalText:        "asking for access",
 					Transcript:       "asking for access",
@@ -155,9 +154,13 @@ func TestPersistentSessionTurnLoopStopsOnAccessRequest(t *testing.T) {
 			Framework:  orchestrator.StaticFramework(ag),
 			MaxWorkers: 1,
 			Config: orchestrator.Config{
-				StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-				Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
-				SessionSandboxIdleTTL: 5 * time.Second,
+				StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+				Capabilities: orchestrator.SessionTestRegistry(),
+				// Long enough that waiting it out is unmistakable next to
+				// the elapsed bound below, which has to leave room for a
+				// -race build of the whole package running in parallel on
+				// a loaded CI runner (two turns take ~2s there unloaded).
+				SessionSandboxIdleTTL: 30 * time.Second,
 				WaitForSessionReply:   true,
 				CancelPollInterval:    20 * time.Millisecond,
 			},
@@ -169,7 +172,7 @@ func TestPersistentSessionTurnLoopStopsOnAccessRequest(t *testing.T) {
 		if err := orchestrator.RunCycle(ctx, deps, t1.Add(time.Second)); err != nil {
 			t.Fatalf("RunCycle: %v", err)
 		}
-		if elapsed := time.Since(start); elapsed >= 3*time.Second {
+		if elapsed := time.Since(start); elapsed >= 15*time.Second {
 			t.Fatalf("RunCycle took %v, want immediate break on request_access rather than waiting out SessionSandboxIdleTTL", elapsed)
 		}
 		if len(ag.configs) != 2 {
@@ -229,7 +232,7 @@ func TestPersistentSessionTurnLoopStopsOnAccessRequest(t *testing.T) {
 			MaxWorkers: 1,
 			Config: orchestrator.Config{
 				StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-				Capabilities: orchestrator.SessionTestRegistry(durable.New()),
+				Capabilities: orchestrator.SessionTestRegistry(),
 			},
 		}
 

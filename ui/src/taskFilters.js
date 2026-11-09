@@ -488,8 +488,10 @@ export function describeUnknownConditions(unknown) {
 // matchesFilters is whether one task survives every condition currently
 // set plus the search box -- the second half of every view's own
 // `matches`, whose first half is that view's own question about state.
-// The search is over the title and the id, which is what somebody
-// typing "287" or "kanban" is reaching for.
+// The search is over the title, the id and the external reference,
+// which is what somebody typing "287", "kanban" or "CA-204" is reaching
+// for (pkg/ui's taskListQuery searches closed work the same way, and
+// descriptions too).
 //
 // `searchIn` is what a list of something other than tasks searches
 // instead: the CI pane narrows runs with these same conditions
@@ -503,8 +505,80 @@ export function matchesFilters(t, conditions, q, config, searchIn = null) {
   if (q === "") return true;
   if (searchIn) return String(searchIn(t)).toLowerCase().includes(q);
   return (
-    t.title.toLowerCase().includes(q) || String(t.id).toLowerCase().includes(q)
+    t.title.toLowerCase().includes(q) ||
+    String(t.id).toLowerCase().includes(q) ||
+    String(t.externalRef || "")
+      .toLowerCase()
+      .includes(q) ||
+    // A closed task the server's search found for this very text
+    // (closedTasks.js's markSearchHits): GET /api/tasks?search= matches
+    // a description too, and a listed task carries none to match here.
+    t.searchHit === q
   );
+}
+
+// admitsState is whether narrowing's State conditions let a task in
+// `state` through -- the question a view asks before it pages closed
+// work in for a list that could show it (closedTasks.js): the default
+// narrowing sets closed tasks aside, and a list that cannot show one
+// has no use for older pages or a server search of them. Only the State
+// conditions are asked, since every other one is about a task this
+// question does not have.
+export function admitsState(narrowing, config, state) {
+  const conditions = resolveConditions(
+    narrowing?.filters || [],
+    attributesFor(config),
+  ).filter(({ attr }) => attr.id === "state");
+  return matchesFilters({ id: "", title: "", state }, conditions, "", config);
+}
+
+// CLOSED_SERVER_ATTRS is the attributes GET /api/tasks can narrow closed
+// work by itself (pkg/ui's taskListQuery: ?owner= and ?externalRef=).
+const CLOSED_SERVER_ATTRS = ["owner", "externalRef"];
+
+// closedServerFilters is what of narrowing the server can answer over
+// closed work: for owner and externalRef, the one value a single "is any
+// of" condition on that attribute names -- `owner:any:me` read as the
+// viewer, the way the list itself reads it -- and "" for an attribute
+// with no such condition (none, several, another comparison, several
+// values, or "Not set"). useClosedTasks asks the server with these
+// (closedTasks.js), so a condition matching a task deep in closed work
+// finds it in one request rather than by paging through every closed
+// page (2026-11-07 walkthrough, F6). What comes back is still narrowed
+// by the views' own matchesFilters, so the server only has to answer
+// a superset of what the condition keeps -- and it does: it compares an
+// owner case-insensitively and an external reference exactly.
+export function closedServerFilters(narrowing, config) {
+  const out = { owner: "", externalRef: "" };
+  const conditions = resolveConditions(
+    narrowing?.filters || [],
+    attributesFor(config),
+  );
+  for (const id of CLOSED_SERVER_ATTRS) {
+    const on = conditions.filter(({ attr }) => attr.id === id);
+    if (on.length !== 1) continue;
+    const { attr, cond } = on[0];
+    if (cond.op !== "any" || (cond.values || []).length !== 1) continue;
+    const [value] = cond.values;
+    if (value === NONE || String(value).trim() === "") continue;
+    // "me" is the viewer, which only GET /api/config says. Before it has
+    // answered, expand reads "me" as its fallback "operator", and the
+    // list asked the server for owner=operator -- somebody else's closed
+    // work, or nothing -- on every cold load of an `owner:any:me` link,
+    // then asked again once the viewer was known (2026-11-08
+    // walkthrough, F1). Wait for the viewer instead.
+    if (
+      !config &&
+      id === "owner" &&
+      String(value).trim().toLowerCase() === "me"
+    ) {
+      continue;
+    }
+    const wanted = attr.expand ? attr.expand(value, config) : [value];
+    if (wanted.length !== 1 || !String(wanted[0]).trim()) continue;
+    out[id] = String(wanted[0]).trim();
+  }
+  return out;
 }
 
 // unknownValues is the values a condition names that its attribute's

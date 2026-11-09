@@ -511,16 +511,17 @@ func TestRunNowByAnAgentDoesNotApproveAGrantItDidNotName(t *testing.T) {
 	}
 }
 
-// priority-dispatch is a person's to give even to an agent whose own task
-// holds it (model.IsPersonOnlyGrant): the pipeline steward holds it and
-// run_task_now both, and must not be able to propose a task naming it and
-// then approve that task through Run now.
+// Admission above standard (bypass, what priority-dispatch was) is a
+// person's to give even to an agent whose own task has it
+// (unified-grants.design.md §4.1): the pipeline steward has it and
+// run_task_now both, and must not be able to propose a task asking for it
+// and then approve that task through Run now.
 func TestRunNowByAnAgentDoesNotApprovePriorityDispatchEvenHoldingIt(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
 	requester := create(t, c, ctx)
 	if err := store.UpdateTask(ctx, requester.ID, func(t *model.Task) error {
-		t.Grants = append(t.Grants, model.Grant{Capability: model.PriorityDispatchCapability, Via: model.GrantByGrain})
+		t.Admission = model.AdmissionBypass
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -529,7 +530,7 @@ func TestRunNowByAnAgentDoesNotApprovePriorityDispatchEvenHoldingIt(t *testing.T
 
 	task := create(t, c, ctx)
 	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
-		t.Grants = append(t.Grants, model.Grant{Capability: model.PriorityDispatchCapability, Via: model.GrantByLabel})
+		t.Admission = model.AdmissionBypass
 		t.Approval = nil
 		return nil
 	}); err != nil {
@@ -537,8 +538,8 @@ func TestRunNowByAnAgentDoesNotApprovePriorityDispatchEvenHoldingIt(t *testing.T
 	}
 	err := c.RunNow(agentCtx, task.ID)
 	var forbidden *ui.ForbiddenError
-	if !errors.As(err, &forbidden) || !strings.Contains(err.Error(), model.PriorityDispatchCapability) {
-		t.Fatalf("RunNow by an agent holding priority-dispatch on a proposal naming it: err = %v, want a refusal naming it", err)
+	if !errors.As(err, &forbidden) || !strings.Contains(err.Error(), "admission bypass") {
+		t.Fatalf("RunNow by an agent with bypass admission on a proposal asking for it: err = %v, want a refusal naming it", err)
 	}
 	if stored, err := store.GetTask(ctx, task.ID); err != nil || stored.Approval != nil {
 		t.Fatalf("approval = %+v, err = %v; want it left for a person", stored.Approval, err)

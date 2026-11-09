@@ -18,6 +18,7 @@ import {
   Button,
   Checkbox,
   FormControlLabel,
+  MenuItem,
   Stack,
   TextField,
 } from "@mui/material";
@@ -34,8 +35,20 @@ import {
 import { heldForRunNow, pausedUntil, pauseSubject } from "../../alerts.js";
 import { forceMergeOffered } from "../../taskWrites.js";
 import TaskLink from "./TaskLink.jsx";
+import AccessGate from "../AccessGate.jsx";
 import { ReviewActions } from "../ClReview.jsx";
 import ClSubmitActions from "../ClSubmit.jsx";
+import { HOSTING_HELP } from "../HostingField.jsx";
+
+// ADMISSION_HELP explains each admission value under the task pane's
+// Admission select (design/design/unified-grants.design.md §4.1).
+const ADMISSION_HELP = {
+  standard: "Queued with ordinary work, under the worker limit.",
+  bypass:
+    "Admitted past the worker and merger limits and a pipeline pause; still charged to the sandbox budget.",
+  durable:
+    "Bypass queue, plus no wall-clock deadline: suspended when idle and counted under the durable limit.",
+};
 
 // closePullRequest is deliberately local state that dies with the
 // overlay, and starts false every time it is mounted: it is a choice
@@ -183,17 +196,19 @@ export default function Actions({ t, config, act, onOpenTask }) {
           directly onto the queue at that date without Undefer clearing
           deferredUntil first. */}
       {(t.state === "proposed" || (t.state === "deferred" && !t.approved)) && (
-        <Button
-          variant="contained"
-          onClick={() =>
-            act(
-              () => api(`/api/tasks/${t.id}/approve`, { method: "POST" }),
-              t.id,
-            )
-          }
-        >
-          Approve
-        </Button>
+        <AccessGate scope="tasks:admin" repo={t.repo}>
+          <Button
+            variant="contained"
+            onClick={() =>
+              act(
+                () => api(`/api/tasks/${t.id}/approve`, { method: "POST" }),
+                t.id,
+              )
+            }
+          >
+            Approve
+          </Button>
+        </AccessGate>
       )}
       {/* Approve's own undo, offered on the states it applies to: a
           queued task, or an approved deferred one, has been approved and
@@ -202,18 +217,22 @@ export default function Actions({ t, config, act, onOpenTask }) {
           it (Client.WithdrawApproval, which refuses the states this
           button is never shown for). */}
       {(t.state === "queued" || (t.state === "deferred" && t.approved)) && (
-        <Button
-          variant="outlined"
-          onClick={() =>
-            act(
-              () =>
-                api(`/api/tasks/${t.id}/withdraw-approval`, { method: "POST" }),
-              t.id,
-            )
-          }
-        >
-          Withdraw approval
-        </Button>
+        <AccessGate scope="tasks:write" repo={t.repo}>
+          <Button
+            variant="outlined"
+            onClick={() =>
+              act(
+                () =>
+                  api(`/api/tasks/${t.id}/withdraw-approval`, {
+                    method: "POST",
+                  }),
+                t.id,
+              )
+            }
+          >
+            Withdraw approval
+          </Button>
+        </AccessGate>
       )}
       {/* Putting a task aside, and picking it back up: offered on
           exactly the states ui.Client.Defer accepts, which are the two a
@@ -246,13 +265,15 @@ export default function Actions({ t, config, act, onOpenTask }) {
               zone ? `, ${zoneAbbreviation(zone) || zone}` : ""
             }. Leave it empty to keep it aside until you say otherwise.`}
           />
-          <Button
-            variant="outlined"
-            title="Put this task aside for later. It stops waiting to run and drops out of the lists until you ask for it -- or until the date above, if you set one -- and nothing about it is lost."
-            onClick={defer}
-          >
-            Defer
-          </Button>
+          <AccessGate scope="tasks:write" repo={t.repo}>
+            <Button
+              variant="outlined"
+              title="Put this task aside for later. It stops waiting to run and drops out of the lists until you ask for it -- or until the date above, if you set one -- and nothing about it is lost."
+              onClick={defer}
+            >
+              Defer
+            </Button>
+          </AccessGate>
         </>
       )}
       {t.state === "deferred" && (
@@ -268,18 +289,20 @@ export default function Actions({ t, config, act, onOpenTask }) {
                 : ", back into the proposals for someone to approve."}
             </p>
           )}
-          <Button
-            variant="contained"
-            title="Pick this task back up now. It returns to the queue, or to the proposals, exactly as it was left, and forgets any date it was going to wake on."
-            onClick={() =>
-              act(
-                () => api(`/api/tasks/${t.id}/undefer`, { method: "POST" }),
-                t.id,
-              )
-            }
-          >
-            Undefer
-          </Button>
+          <AccessGate scope="tasks:write" repo={t.repo}>
+            <Button
+              variant="contained"
+              title="Pick this task back up now. It returns to the queue, or to the proposals, exactly as it was left, and forgets any date it was going to wake on."
+              onClick={() =>
+                act(
+                  () => api(`/api/tasks/${t.id}/undefer`, { method: "POST" }),
+                  t.id,
+                )
+              }
+            >
+              Undefer
+            </Button>
+          </AccessGate>
         </>
       )}
       {/* An operator's pause (ui.Client.Pause): offered in every open
@@ -290,37 +313,47 @@ export default function Actions({ t, config, act, onOpenTask }) {
           handover; "Pause now" skips it. */}
       {t.state !== "closed" && !isTaskPaused(t) && (
         <>
-          <Button
-            variant="outlined"
-            data-testid="pause-task"
-            title="Pause this task. It stops being dispatched and lets go of its sandbox, CI and merge-queue slot, and keeps its place. A running task is first told to push its work and write its handover."
-            onClick={() =>
-              act(
-                () => api(`/api/tasks/${t.id}/pause`, { method: "POST" }),
-                t.id,
-              )
-            }
-          >
-            Pause
-          </Button>
-          {t.state === "running" && (
+          <AccessGate scope="tasks:write" repo={t.repo}>
             <Button
               variant="outlined"
-              color="warning"
-              title="Pause this task and stop its run at once, without the grace period. Whatever the run has not pushed is lost."
+              data-testid="pause-task"
+              title="Pause this task. It stops being dispatched and lets go of its sandbox, CI and merge-queue slot, and keeps its place. A running task is first told to push its work and write its handover."
               onClick={() =>
                 act(
-                  () =>
-                    api(`/api/tasks/${t.id}/pause`, {
-                      method: "POST",
-                      body: JSON.stringify({ immediate: true }),
-                    }),
+                  () => api(`/api/tasks/${t.id}/pause`, { method: "POST" }),
                   t.id,
                 )
               }
             >
-              Pause now
+              Pause
             </Button>
+          </AccessGate>
+          {t.state === "running" && (
+            <AccessGate scope="tasks:write" repo={t.repo}>
+              <Button
+                variant="outlined"
+                color="warning"
+                title="Pause this task and stop its run at once, without the grace period. Whatever the run has not pushed is lost."
+                onClick={() =>
+                  // Asked first, as Cancel is: unlike Pause, this one
+                  // throws away whatever the run has not pushed, and
+                  // Resume cannot bring that back.
+                  confirm(
+                    `Pause ${t.id} now? Its run is stopped at once, without the grace period to push its work and write its handover; whatever it has not pushed is lost. Resume picks the task back up where it was left.`,
+                  ) &&
+                  act(
+                    () =>
+                      api(`/api/tasks/${t.id}/pause`, {
+                        method: "POST",
+                        body: JSON.stringify({ immediate: true }),
+                      }),
+                    t.id,
+                  )
+                }
+              >
+                Pause now
+              </Button>
+            </AccessGate>
           )}
         </>
       )}
@@ -329,19 +362,21 @@ export default function Actions({ t, config, act, onOpenTask }) {
           <p className="hint" data-testid="paused-note">
             {pausedDescription(t)}.
           </p>
-          <Button
-            variant="contained"
-            data-testid="resume-task"
-            title="Resume this task: it returns to exactly the state and place it had when it was paused."
-            onClick={() =>
-              act(
-                () => api(`/api/tasks/${t.id}/resume`, { method: "POST" }),
-                t.id,
-              )
-            }
-          >
-            Resume
-          </Button>
+          <AccessGate scope="tasks:write" repo={t.repo}>
+            <Button
+              variant="contained"
+              data-testid="resume-task"
+              title="Resume this task: it returns to exactly the state and place it had when it was paused."
+              onClick={() =>
+                act(
+                  () => api(`/api/tasks/${t.id}/resume`, { method: "POST" }),
+                  t.id,
+                )
+              }
+            >
+              Resume
+            </Button>
+          </AccessGate>
         </>
       )}
       {/* Once a task's run has produced a pull request, submitting is
@@ -386,25 +421,27 @@ export default function Actions({ t, config, act, onOpenTask }) {
               </li>
             ))}
           </ul>
-          <Button
-            variant="outlined"
-            color="inherit"
-            size="small"
-            sx={{ mt: 1, whiteSpace: "nowrap" }}
-            data-testid="release-human-review"
-            title="Release the hold without merging: recorded with your name. It merges itself again only where grain would have let it; Submit merges it."
-            onClick={() =>
-              act(
-                () =>
-                  api(`/api/tasks/${t.id}/human-review/release`, {
-                    method: "POST",
-                  }),
-                t.id,
-              )
-            }
-          >
-            Release hold
-          </Button>
+          <AccessGate scope="tasks:write" repo={t.repo}>
+            <Button
+              variant="outlined"
+              color="inherit"
+              size="small"
+              sx={{ mt: 1, whiteSpace: "nowrap" }}
+              data-testid="release-human-review"
+              title="Release the hold without merging: recorded with your name. It merges itself again only where grain would have let it; Submit merges it."
+              onClick={() =>
+                act(
+                  () =>
+                    api(`/api/tasks/${t.id}/human-review/release`, {
+                      method: "POST",
+                    }),
+                  t.id,
+                )
+              }
+            >
+              Release hold
+            </Button>
+          </AccessGate>
         </Alert>
       )}
       {t.pullRequest &&
@@ -514,22 +551,24 @@ export default function Actions({ t, config, act, onOpenTask }) {
           the CL is submittable (ClSubmit.jsx). */}
       {t.clSubmit && <ClSubmitActions t={t} act={act} />}
       {t.pullRequest && !t.autoMerge && (
-        <Button
-          variant={t.reviewQuestions ? "outlined" : "contained"}
-          title={
-            t.reviewQuestions
-              ? "Submit the change as it stands, leaving the review's questions open."
-              : undefined
-          }
-          onClick={() =>
-            act(
-              () => api(`/api/tasks/${t.id}/submit`, { method: "POST" }),
-              t.id,
-            )
-          }
-        >
-          {t.reviewQuestions ? "Ship as is" : "Submit"}
-        </Button>
+        <AccessGate scope="tasks:write" repo={t.repo}>
+          <Button
+            variant={t.reviewQuestions ? "outlined" : "contained"}
+            title={
+              t.reviewQuestions
+                ? "Submit the change as it stands, leaving the review's questions open."
+                : undefined
+            }
+            onClick={() =>
+              act(
+                () => api(`/api/tasks/${t.id}/submit`, { method: "POST" }),
+                t.id,
+              )
+            }
+          >
+            {t.reviewQuestions ? "Ship as is" : "Submit"}
+          </Button>
+        </AccessGate>
       )}
       {/* The flag Submit sets, as the flag rather than as the button:
           ui.Client.Submit is `task.AutoMerge = true` and nothing else, so
@@ -547,56 +586,134 @@ export default function Actions({ t, config, act, onOpenTask }) {
           also where the autoMergeDegraded warning below has always been,
           and that warning keys off the flag itself, so it goes on
           applying whichever of the two set it. */}
-      <FormControlLabel
-        control={
-          <Checkbox
-            size="small"
-            checked={!!t.autoMerge}
-            // The flag to send is computed from the task, not read back
-            // off the event's own checkbox: the box is controlled by
-            // t.autoMerge, so by the time act() runs the request the DOM
-            // has already snapped back to what the task still says.
-            onChange={() =>
-              act(
-                () =>
-                  api(`/api/tasks/${t.id}`, {
-                    method: "PATCH",
-                    body: JSON.stringify({ autoMerge: !t.autoMerge }),
-                  }),
-                t.id,
-              )
-            }
-          />
-        }
-        label="Auto-merge once checks pass"
-        title="The same flag Submit sets: grain puts this task's pull request on the merge queue and merges it once its checks pass. Untick to take it back off."
-        sx={{ display: "flex", m: 0 }}
-        slotProps={{ typography: { fontSize: "0.8rem" } }}
-      />
-      {t.state !== "closed" && (
+      <AccessGate scope="tasks:write" repo={t.repo}>
         <FormControlLabel
           control={
             <Checkbox
               size="small"
-              name="keepRunning"
-              checked={!!t.keepRunning}
+              checked={!!t.autoMerge}
+              // The flag to send is computed from the task, not read back
+              // off the event's own checkbox: the box is controlled by
+              // t.autoMerge, so by the time act() runs the request the DOM
+              // has already snapped back to what the task still says.
               onChange={() =>
                 act(
                   () =>
                     api(`/api/tasks/${t.id}`, {
                       method: "PATCH",
-                      body: JSON.stringify({ keepRunning: !t.keepRunning }),
+                      body: JSON.stringify({ autoMerge: !t.autoMerge }),
                     }),
                   t.id,
                 )
               }
             />
           }
-          label="Keep running"
-          title="Immediately restart this task when its run exits rather than closing or resting it."
+          label="Auto-merge once checks pass"
+          title="The same flag Submit sets: grain puts this task's pull request on the merge queue and merges it once its checks pass. Untick to take it back off."
           sx={{ display: "flex", m: 0 }}
           slotProps={{ typography: { fontSize: "0.8rem" } }}
         />
+      </AccessGate>
+      {t.state !== "closed" && (
+        <AccessGate scope="tasks:write" repo={t.repo}>
+          <FormControlLabel
+            control={
+              <Checkbox
+                size="small"
+                name="keepRunning"
+                checked={!!t.keepRunning}
+                onChange={() =>
+                  act(
+                    () =>
+                      api(`/api/tasks/${t.id}`, {
+                        method: "PATCH",
+                        body: JSON.stringify({ keepRunning: !t.keepRunning }),
+                      }),
+                    t.id,
+                  )
+                }
+              />
+            }
+            label="Keep running"
+            title="Immediately restart this task when its run exits rather than closing or resting it."
+            sx={{ display: "flex", m: 0 }}
+            slotProps={{ typography: { fontSize: "0.8rem" } }}
+          />
+        </AccessGate>
+      )}
+      {/* Admission (model.Task.Admission, ui.UpdateTaskRequest.Admission,
+          design/design/unified-grants.design.md §4.1): the task setting
+          that replaced the priority-dispatch and durable grants. Each
+          value includes the one before it. Only a person may raise it
+          above Standard; a console session is Durable by construction. */}
+      {t.state !== "closed" && (
+        <AccessGate scope="tasks:write" repo={t.repo}>
+          <TextField
+            select
+            size="small"
+            name="admission"
+            label="Admission"
+            value={t.admission || "standard"}
+            disabled={!!t.consoleSession}
+            onChange={(e) => {
+              const admission = e.target.value;
+              if (admission === (t.admission || "standard")) return;
+              act(
+                () =>
+                  api(`/api/tasks/${t.id}`, {
+                    method: "PATCH",
+                    body: JSON.stringify({ admission }),
+                  }),
+                t.id,
+              );
+            }}
+            helperText={ADMISSION_HELP[t.admission || "standard"]}
+            slotProps={{
+              htmlInput: { "aria-label": "Admission" },
+              formHelperText: { sx: { fontSize: "0.7rem" } },
+            }}
+          >
+            <MenuItem value="standard">Standard</MenuItem>
+            <MenuItem value="bypass">Bypass queue</MenuItem>
+            <MenuItem value="durable">Durable</MenuItem>
+          </TextField>
+        </AccessGate>
+      )}
+      {/* Hosting (model.Task.Hosting, ui.UpdateTaskRequest.Hosting,
+          design/design/unified-grants.design.md §4.1): the task setting
+          that replaced the console capability. Separate from Interactive:
+          it chooses whether dispatch hands the agent a prompt unattended
+          or starts its CLI on a terminal in the UI. */}
+      {t.state !== "closed" && (
+        <AccessGate scope="tasks:write" repo={t.repo}>
+          <TextField
+            select
+            size="small"
+            name="hosting"
+            label="Hosting"
+            value={t.hosting || "unattended"}
+            onChange={(e) => {
+              const hosting = e.target.value;
+              if (hosting === (t.hosting || "unattended")) return;
+              act(
+                () =>
+                  api(`/api/tasks/${t.id}`, {
+                    method: "PATCH",
+                    body: JSON.stringify({ hosting }),
+                  }),
+                t.id,
+              );
+            }}
+            helperText={HOSTING_HELP[t.hosting || "unattended"]}
+            slotProps={{
+              htmlInput: { "aria-label": "Hosting" },
+              formHelperText: { sx: { fontSize: "0.7rem" } },
+            }}
+          >
+            <MenuItem value="unattended">Unattended</MenuItem>
+            <MenuItem value="console">Interactive console</MenuItem>
+          </TextField>
+        </AccessGate>
       )}
       {/* "This fixes a red <base>" (ui.UpdateTaskRequest.FixesBaseBranch,
           grain/task-3451): while a base branch is red, grain makes the
@@ -606,36 +723,38 @@ export default function Actions({ t, config, act, onOpenTask }) {
           back. grain's own repair of the branch is one by definition, and
           cannot be unticked. */}
       {t.repo && t.state !== "closed" && (
-        <FormControlLabel
-          control={
-            <Checkbox
-              size="small"
-              name="fixesBaseBranch"
-              checked={!!t.fixesBaseBranch}
-              disabled={!!t.grainBaseRepair}
-              onChange={() =>
-                act(
-                  () =>
-                    api(`/api/tasks/${t.id}`, {
-                      method: "PATCH",
-                      body: JSON.stringify({
-                        fixesBaseBranch: !t.fixesBaseBranch,
+        <AccessGate scope="tasks:write" repo={t.repo}>
+          <FormControlLabel
+            control={
+              <Checkbox
+                size="small"
+                name="fixesBaseBranch"
+                checked={!!t.fixesBaseBranch}
+                disabled={!!t.grainBaseRepair}
+                onChange={() =>
+                  act(
+                    () =>
+                      api(`/api/tasks/${t.id}`, {
+                        method: "PATCH",
+                        body: JSON.stringify({
+                          fixesBaseBranch: !t.fixesBaseBranch,
+                        }),
                       }),
-                    }),
-                  t.id,
-                )
-              }
-            />
-          }
-          label={`This fixes a red ${t.base || "main"}`}
-          title={
-            t.grainBaseRepair
-              ? "grain filed this task to repair the branch it lands on, so it is that branch's repair by definition."
-              : "While the branch a task lands on is red, grain makes the work aimed at it wait on that branch's repair task. Tick this for a task that is itself fixing the branch: it stops waiting, counts as the branch's repair, and is left open with a comment, not closed, when the branch goes green."
-          }
-          sx={{ display: "flex", m: 0 }}
-          slotProps={{ typography: { fontSize: "0.8rem" } }}
-        />
+                    t.id,
+                  )
+                }
+              />
+            }
+            label={`This fixes a red ${t.base || "main"}`}
+            title={
+              t.grainBaseRepair
+                ? "grain filed this task to repair the branch it lands on, so it is that branch's repair by definition."
+                : "While the branch a task lands on is red, grain makes the work aimed at it wait on that branch's repair task. Tick this for a task that is itself fixing the branch: it stops waiting, counts as the branch's repair, and is left open with a comment, not closed, when the branch goes green."
+            }
+            sx={{ display: "flex", m: 0 }}
+            slotProps={{ typography: { fontSize: "0.8rem" } }}
+          />
+        </AccessGate>
       )}
       {/* The one field on this page an edit does reach mid-run, and the
           reason it is worth saying: auto-merge is read after the run,
@@ -678,18 +797,20 @@ export default function Actions({ t, config, act, onOpenTask }) {
           puts it back on, and this is what asks the queue to try again
           once it is. */}
       {t.mergeQueueBlockedAt && t.autoMerge && t.state !== "closed" && (
-        <Button
-          variant="contained"
-          title="Put this pull request back on the merge queue. Its checks are read again (and grain's own CI run again, where its last answer was anything but a pass), its base branch merged in if it has fallen behind, and it gets one more repair run of its own if that is not enough."
-          onClick={() =>
-            act(
-              () => api(`/api/tasks/${t.id}/retry-merge`, { method: "POST" }),
-              t.id,
-            )
-          }
-        >
-          Retry merge
-        </Button>
+        <AccessGate scope="merge:write" repo={t.repo}>
+          <Button
+            variant="contained"
+            title="Put this pull request back on the merge queue. Its checks are read again (and grain's own CI run again, where its last answer was anything but a pass), its base branch merged in if it has fallen behind, and it gets one more repair run of its own if that is not enough."
+            onClick={() =>
+              act(
+                () => api(`/api/tasks/${t.id}/retry-merge`, { method: "POST" }),
+                t.id,
+              )
+            }
+          >
+            Retry merge
+          </Button>
+        </AccessGate>
       )}
       {/* And the override of the queue's own decision, which is a
           different thing from asking it to try again: "Retry merge"
@@ -712,28 +833,35 @@ export default function Actions({ t, config, act, onOpenTask }) {
       {t.state !== "closed" &&
         (t.pullRequest || (t.state === "running" && t.ci?.commit)) &&
         forceMergeOffered(config, t) && (
-          <Button
-            variant="outlined"
-            color="warning"
-            title="Merge this change now, overriding the merge queue's own decision. A reason is required and is recorded on the task and on the pull request, along with what was not green at the time. A branch that does not merge cleanly is still refused: no override can authorise a merge GitHub will not perform."
-            onClick={forceMerge}
-          >
-            Force merge
-          </Button>
+          <AccessGate scope="merge:force" repo={t.repo}>
+            <Button
+              variant="outlined"
+              color="warning"
+              title="Merge this change now, overriding the merge queue's own decision. A reason is required and is recorded on the task and on the pull request, along with what was not green at the time. A branch that does not merge cleanly is still refused: no override can authorise a merge GitHub will not perform."
+              onClick={forceMerge}
+            >
+              Force merge
+            </Button>
+          </AccessGate>
         )}
       {/* Retry also resumes a turn an operator stopped (ui.Client.Retry),
           which is what the stopped task's status line and its merge-queue
           row ("reply or press Retry to resume") offer. */}
       {(t.state === "failed" ||
         (t.state === "awaiting_reply" && t.turnStopped)) && (
-        <Button
-          variant="contained"
-          onClick={() =>
-            act(() => api(`/api/tasks/${t.id}/retry`, { method: "POST" }), t.id)
-          }
-        >
-          Retry
-        </Button>
+        <AccessGate scope="tasks:write" repo={t.repo}>
+          <Button
+            variant="contained"
+            onClick={() =>
+              act(
+                () => api(`/api/tasks/${t.id}/retry`, { method: "POST" }),
+                t.id,
+              )
+            }
+          >
+            Retry
+          </Button>
+        </AccessGate>
       )}
       {/* "Work on this one next", which is the one thing every other
           button here cannot say: the queue picks what runs, in the
@@ -749,23 +877,25 @@ export default function Actions({ t, config, act, onOpenTask }) {
           back to an agent. Nothing else here sends one back except the
           queue's own repair, which is automatic and granted once. */}
       {t.state !== "closed" && t.state !== "running" && (
-        <Button
-          variant="outlined"
-          disabled={Boolean(t.runNowAt)}
-          title={
-            t.pullRequest
-              ? `Put an agent on this task next, ahead of the queue. Work continues on the branch ${t.pullRequest} is open from, and nothing merges it while that run is in flight.`
-              : "Put an agent on this task next, ahead of the queue and whatever its state says -- a blocked, deferred or unapproved task is started all the same, including one waiting on the repair of the red branch it lands on."
-          }
-          onClick={() =>
-            act(
-              () => api(`/api/tasks/${t.id}/run-now`, { method: "POST" }),
-              t.id,
-            )
-          }
-        >
-          Run now
-        </Button>
+        <AccessGate scope="dispatch:write" repo={t.repo}>
+          <Button
+            variant="outlined"
+            disabled={Boolean(t.runNowAt)}
+            title={
+              t.pullRequest
+                ? `Put an agent on this task next, ahead of the queue. Work continues on the branch ${t.pullRequest} is open from, and nothing merges it while that run is in flight.`
+                : "Put an agent on this task next, ahead of the queue and whatever its state says -- a blocked, deferred or unapproved task is started all the same, including one waiting on the repair of the red branch it lands on."
+            }
+            onClick={() =>
+              act(
+                () => api(`/api/tasks/${t.id}/run-now`, { method: "POST" }),
+                t.id,
+              )
+            }
+          >
+            Run now
+          </Button>
+        </AccessGate>
       )}
       {/* The seconds between the click and a dispatch cycle picking the
           task up, which is the one stretch where a button that worked
@@ -833,41 +963,47 @@ export default function Actions({ t, config, act, onOpenTask }) {
         />
       )}
       {t.state === "closed" ? (
-        <Button
-          variant="outlined"
-          onClick={() =>
-            act(
-              () => api(`/api/tasks/${t.id}/reopen`, { method: "POST" }),
-              t.id,
-            )
-          }
-        >
-          Reopen
-        </Button>
+        <AccessGate scope="tasks:write" repo={t.repo}>
+          <Button
+            variant="outlined"
+            onClick={() =>
+              act(
+                () => api(`/api/tasks/${t.id}/reopen`, { method: "POST" }),
+                t.id,
+              )
+            }
+          >
+            Reopen
+          </Button>
+        </AccessGate>
       ) : t.state === "running" ? (
         // Closing a running task stops it from ever being re-dispatched
         // or opened as a pull request, and cancels the run in flight --
         // "Cancel" is that same close call, surfaced under a name that
         // matches what a running task's close button actually does.
-        <Button
-          variant="outlined"
-          color="error"
-          onClick={() => {
-            if (
-              !confirm(
-                cancelPrompt(closable && closePullRequest ? closable : null),
+        <AccessGate scope="tasks:write" repo={t.repo}>
+          <Button
+            variant="outlined"
+            color="error"
+            onClick={() => {
+              if (
+                !confirm(
+                  cancelPrompt(closable && closePullRequest ? closable : null),
+                )
               )
-            )
-              return;
-            close();
-          }}
-        >
-          Cancel
-        </Button>
+                return;
+              close();
+            }}
+          >
+            Cancel
+          </Button>
+        </AccessGate>
       ) : (
-        <Button variant="outlined" color="error" onClick={close}>
-          Close
-        </Button>
+        <AccessGate scope="tasks:write" repo={t.repo}>
+          <Button variant="outlined" color="error" onClick={close}>
+            Close
+          </Button>
+        </AccessGate>
       )}
     </Stack>
   );

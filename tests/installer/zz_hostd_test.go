@@ -171,8 +171,10 @@ func TestGoogleTrackRunsAgyThroughHostdAndMigratesFromHostMode(t *testing.T) {
 	}
 
 	backends := []model.AgentBackend{
+		// Ambient on a CLI through grain hostd names the host whose
+		// login it is (model.CheckAmbientPlacement): the co-located one.
 		{ID: "hostd-agy", Name: "agy through hostd", Framework: model.AgentFrameworkAntigravity,
-			AuthMode: model.AntigravityAuthAmbient, Models: []string{"fake-agy-model"}},
+			AuthMode: model.AntigravityAuthAmbient, Hostd: model.LocalHostd, Models: []string{"fake-agy-model"}},
 		// Ambient: the fake needs no token, and with none grain would
 		// refuse the run before starting it.
 		{ID: "container-claude", Name: "claude in the container", Framework: model.AgentFrameworkClaude,

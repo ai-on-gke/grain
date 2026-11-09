@@ -1,0 +1,206 @@
+[
+  {
+    "id": "ui1.comment.desktop.light",
+    "desc": "/tasks/2 shows \"Director for alice@example.com\" inside the viewport, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "visible": true,
+      "box": {
+        "x": 284,
+        "y": 515.171875,
+        "width": 224.953125,
+        "height": 19.1875
+      },
+      "overflow": false
+    }
+  },
+  {
+    "id": "ui1.close.desktop.light",
+    "desc": "/tasks/3 shows \"Director for alice@example.com\" inside the viewport, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "visible": true,
+      "box": {
+        "x": 284,
+        "y": 482.46875,
+        "width": 840,
+        "height": 19.1875
+      },
+      "overflow": false
+    }
+  },
+  {
+    "id": "ui1.filed.desktop.light",
+    "desc": "/tasks/5 shows \"Director for alice@example.com\" inside the viewport, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "visible": true,
+      "box": {
+        "x": 1225.296875,
+        "y": 481.171875,
+        "width": 186.703125,
+        "height": 15
+      },
+      "overflow": false
+    }
+  },
+  {
+    "id": "ui1.errors.desktop.light",
+    "desc": "no page errors",
+    "ok": true,
+    "got": []
+  },
+  {
+    "id": "ui1.comment.desktop.dark",
+    "desc": "/tasks/2 shows \"Director for alice@example.com\" inside the viewport, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "visible": true,
+      "box": {
+        "x": 284,
+        "y": 515.171875,
+        "width": 224.953125,
+        "height": 19.1875
+      },
+      "overflow": false
+    }
+  },
+  {
+    "id": "ui1.close.desktop.dark",
+    "desc": "/tasks/3 shows \"Director for alice@example.com\" inside the viewport, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "visible": true,
+      "box": {
+        "x": 284,
+        "y": 482.46875,
+        "width": 840,
+        "height": 19.1875
+      },
+      "overflow": false
+    }
+  },
+  {
+    "id": "ui1.filed.desktop.dark",
+    "desc": "/tasks/5 shows \"Director for alice@example.com\" inside the viewport, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "visible": true,
+      "box": {
+        "x": 1225.296875,
+        "y": 481.171875,
+        "width": 186.703125,
+        "height": 15
+      },
+      "overflow": false
+    }
+  },
+  {
+    "id": "ui1.errors.desktop.dark",
+    "desc": "no page errors",
+    "ok": true,
+    "got": []
+  },
+  {
+    "id": "ui1.comment.phone.light",
+    "desc": "/tasks/2 shows \"Director for alice@example.com\" inside the viewport, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "visible": true,
+      "box": {
+        "x": 40,
+        "y": 450.828125,
+        "width": 224.953125,
+        "height": 19.1875
+      },
+      "overflow": false
+    }
+  },
+  {
+    "id": "ui1.close.phone.light",
+    "desc": "/tasks/3 shows \"Director for alice@example.com\" inside the viewport, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "visible": true,
+      "box": {
+        "x": 40,
+        "y": 611.375,
+        "width": 334,
+        "height": 19.1875
+      },
+      "overflow": false
+    }
+  },
+  {
+    "id": "ui1.filed.phone.light",
+    "desc": "/tasks/5 shows \"Director for alice@example.com\" inside the viewport, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "visible": true,
+      "box": {
+        "x": 187.296875,
+        "y": 452.75,
+        "width": 186.703125,
+        "height": 15
+      },
+      "overflow": false
+    }
+  },
+  {
+    "id": "ui1.errors.phone.light",
+    "desc": "no page errors",
+    "ok": true,
+    "got": []
+  },
+  {
+    "id": "ui1.comment.phone.dark",
+    "desc": "/tasks/2 shows \"Director for alice@example.com\" inside the viewport, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "visible": true,
+      "box": {
+        "x": 40,
+        "y": 450.828125,
+        "width": 224.953125,
+        "height": 19.1875
+      },
+      "overflow": false
+    }
+  },
+  {
+    "id": "ui1.close.phone.dark",
+    "desc": "/tasks/3 shows \"Director for alice@example.com\" inside the viewport, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "visible": true,
+      "box": {
+        "x": 40,
+        "y": 611.375,
+        "width": 334,
+        "height": 19.1875
+      },
+      "overflow": false
+    }
+  },
+  {
+    "id": "ui1.filed.phone.dark",
+    "desc": "/tasks/5 shows \"Director for alice@example.com\" inside the viewport, no horizontal overflow",
+    "ok": true,
+    "got": {
+      "visible": true,
+      "box": {
+        "x": 187.296875,
+        "y": 452.75,
+        "width": 186.703125,
+        "height": 15
+      },
+      "overflow": false
+    }
+  },
+  {
+    "id": "ui1.errors.phone.dark",
+    "desc": "no page errors",
+    "ok": true,
+    "got": []
+  }
+]

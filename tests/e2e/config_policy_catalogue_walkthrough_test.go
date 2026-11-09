@@ -321,8 +321,8 @@ in_process:
 func TestCatalogueProposalReplayWalkthrough(t *testing.T) {
 	t.Parallel()
 	w := newHoldWorld(t, false)
-	parent := w.create("auto-merging parent", true, []string{"bootstrap-playbooks", "read-issues"})
-	if !holds(parent, "bootstrap-playbooks") || !holds(parent, "read-issues") {
+	parent := w.create("auto-merging parent", true, []string{model.GrainHealthGrant, model.GitHubReadIssuesGrant})
+	if !holds(parent, model.GrainHealthGrant) || !holds(parent, model.GitHubReadIssuesGrant) {
 		t.Fatalf("the parent does not hold both grants: %+v", parent.Grants)
 	}
 	// The parent was filed from the template the catalogue keeps read-issues
@@ -331,7 +331,7 @@ func TestCatalogueProposalReplayWalkthrough(t *testing.T) {
 		t.Fatal(err)
 	}
 	importCatalogue(t, w.store, `in_process:
-  bootstrap-playbooks:
+  deployment-health:
     restrictions: {requires_person: true}
   read-issues:
     restrictions: {templates: [walk-ops]}
@@ -349,8 +349,8 @@ func TestCatalogueProposalReplayWalkthrough(t *testing.T) {
 		}
 		steps := w.changeScript(task, "echo 'typo' >> docs/guide.md")
 		return append([]antigravity.Step{
-			propose("needs bootstrap-playbooks", "bootstrap-playbooks"),
-			propose("needs read-issues", "read-issues"),
+			propose("needs health", model.GrainHealthGrant),
+			propose("needs read-issues", model.GitHubReadIssuesGrant),
 			propose("needs nothing"),
 		}, steps...)
 	})
@@ -371,8 +371,8 @@ func TestCatalogueProposalReplayWalkthrough(t *testing.T) {
 		state        model.State
 		note         string
 	}{
-		{"needs bootstrap-playbooks", "bootstrap-playbooks", model.StateProposed, model.CatalogueRequiresPersonNote([]string{"bootstrap-playbooks"})},
-		{"needs read-issues", "read-issues", model.StateProposed, "settings/capabilities.yml refuses what it asked for"},
+		{"needs health", model.GrainHealthGrant, model.StateProposed, model.CatalogueRequiresPersonNote([]string{model.GrainHealthGrant})},
+		{"needs read-issues", model.GitHubReadIssuesGrant, model.StateProposed, "settings/capabilities.yml refuses what it asked for"},
 		{"needs nothing", "", model.StateQueued, ""},
 	} {
 		p, ok := byTitle[tc.title]

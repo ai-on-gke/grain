@@ -330,7 +330,12 @@ func (c *Client) AddTeamGitConnection(ctx context.Context, id string, req AddTea
 		return Team{}, fmt.Errorf("setting credential host: %w", err)
 	}
 	if req.SignAs && author == "" {
-		if id, pending, err := c.Config.Credentials.CredentialGitIdentityWithin(credName, 5*time.Second); err == nil && !pending {
+		// The signature names who owns the credential
+		// (design/design/git-login.design.md), so it comes from the
+		// forge's own answer for the token -- not the commit identity,
+		// which prefers this host's git user.name and would sign a
+		// colleague's token as whoever runs the daemon.
+		if id, pending, err := c.Config.Credentials.CredentialOwnerIdentityWithin(credName, 5*time.Second); err == nil && !pending {
 			if name := strings.TrimSpace(id.Name); name != "" && !strings.HasSuffix(name, "[bot]") {
 				author = name
 				_ = c.Config.Credentials.SetHost(credName, gitproxy.CredentialHost{

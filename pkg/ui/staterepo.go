@@ -369,8 +369,11 @@ func (c *Client) externalConfigRepo(ctx context.Context) (remote, branch string)
 	}
 	if c.Config.StateRepo != nil {
 		if ext, ok := c.Config.StateRepo.(interface{ ExternalConfigRepo() (string, string) }); ok {
-			remote, branch = ext.ExternalConfigRepo()
+			return ext.ExternalConfigRepo()
 		} else if status, err := c.Config.StateRepo.Status(ctx); err == nil {
+			if strings.EqualFold(strings.TrimSpace(status.Mode), "internal") || strings.EqualFold(strings.TrimSpace(status.Mode), "mirror") {
+				return "", ""
+			}
 			remote = strings.TrimSpace(status.Remote)
 			branch = strings.TrimSpace(status.Branch)
 			if branch == "" && remote != "" {
@@ -383,8 +386,9 @@ func (c *Client) externalConfigRepo(ctx context.Context) (remote, branch string)
 			var s struct {
 				Remote string `json:"remote"`
 				Branch string `json:"branch"`
+				Mode   string `json:"mode"`
 			}
-			if json.Unmarshal(raw, &s) == nil {
+			if json.Unmarshal(raw, &s) == nil && !strings.EqualFold(strings.TrimSpace(s.Mode), "mirror") {
 				remote = strings.TrimSpace(s.Remote)
 				branch = strings.TrimSpace(s.Branch)
 				if branch == "" && remote != "" {

@@ -419,7 +419,12 @@ func (c *RESTClient) ActionsJobLog(owner, repo string, jobID int64) (string, err
 		if err != nil {
 			return "", fmt.Errorf("following the job log's redirect to %s: %w", hostOf(loc), redactURLError(err))
 		}
-		if blob.URL == "" {
+		// Named as the transport names a redirect it followed itself: the
+		// API request, then the blob host -- never the signed URL, whose
+		// query is the credential.
+		if resp.URL != "" {
+			blob.URL = resp.URL + " -> " + hostOf(loc)
+		} else {
 			blob.URL = "GET " + hostOf(loc)
 		}
 		resp = blob
@@ -427,7 +432,38 @@ func (c *RESTClient) ActionsJobLog(owner, repo string, jobID int64) (string, err
 	if resp.Status != http.StatusOK {
 		return "", &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
 	}
+	if len(resp.Body) == 0 {
+		// A 200 with nothing in it is not a log, and saying only that it
+		// was empty leaves nobody able to tell which hop lost it: the
+		// forge, the blob store it redirected to, or the transport in
+		// between. So it is an error carrying the status, the hosts, and
+		// the headers that say who answered.
+		return "", fmt.Errorf("%w: %w", ErrEmptyJobLog,
+			&Error{Status: resp.Status, URL: resp.URL, Note: answeredBy(resp.Headers)})
+	}
 	return strings.ToValidUTF8(string(resp.Body), ""), nil
+}
+
+// ErrEmptyJobLog is ActionsJobLog's error for a job log answered 200 with
+// no body. It wraps an *Error naming the status, the host or hosts the
+// answer came from, and what the answer's headers say about who sent it.
+var ErrEmptyJobLog = errors.New("the forge answered the job log with no bytes at all")
+
+// answeredBy is what an answer's headers say about who sent it -- its
+// content type, server and any proxy it passed -- for an error about an
+// answer whose body says nothing ("content-type text/plain, server
+// blobstore"). Empty when the headers name none of them.
+func answeredBy(headers map[string]string) string {
+	var parts []string
+	for _, name := range []string{"Content-Type", "Server", "Via"} {
+		if v := strings.TrimSpace(headerValue(headers, name)); v != "" && !strings.ContainsAny(v, "\r\n") {
+			if len(v) > 80 {
+				v = v[:80]
+			}
+			parts = append(parts, strings.ToLower(name)+" "+v)
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 // redactURLError cuts a *url.Error's URL down to its scheme and host. A

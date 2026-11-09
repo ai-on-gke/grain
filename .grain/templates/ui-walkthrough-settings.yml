@@ -24,7 +24,8 @@ body: |
     becomes a Section select; on a phone a section opens alone under a
     back arrow. Old links land where they should: `/admin` on General,
     `/admin/workflow` on Tasks, `/admin/executors` and
-    `/system/executors` on Hostds, `/admin/upgrade` and
+    `/system/executors` on Hosts (`/settings/hosts` and `/settings/hostds`),
+    `/admin/upgrade` and
     `/system/upgrade` on Settings → Upgrade, and `/memory` on Settings →
     Memory.
   - Filter settings: `/` focuses the box; a label or a helper keyword

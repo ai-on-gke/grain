@@ -3774,9 +3774,9 @@ apart, as [above](#decided-whoever-writes-it-owns-it).
 | Schedules | `schedule`, `schedule_sequence`, `schedule_read`, `schedule_write`, `schedule_grant`, `schedule_custom_field`, `scheduled_firing_skip`, `scheduled_workflow_run` |
 | Suites | `suite`, `suite_sequence`, `suite_item`, `suite_run`, `suite_run_item`, `suite_run_task` |
 | Custom fields and boards | `custom_field`, `board`, `board_sequence`, `board_column`, `board_panel`, `board_section` |
-| Repositories | `repo_config`, `repo_workflow`, `repo_declaration`, `repo_declaration_push`, `repo_declaration_sync`, `repo_path_trigger`, `path_trigger_cursor`, `repo_merge_rules`, `branch` |
+| Repositories | `repo_config`, `repo_workflow`, `repo_declaration`, `repo_declaration_push`, `repo_declaration_qualification`, `repo_declaration_sync`, `repo_path_trigger`, `path_trigger_cursor`, `repo_merge_rules`, `branch` |
 | Base branches and the merge queue | `base_branch_ci`, `base_branch_dispatch`, `base_branch_release`, `merge_batch`, `merge_batch_history`, `merge_gather_history`, `merge_queue_contention`, `force_merge_history` |
-| Releases | `release`, `release_candidate`, `release_note`, `qualification_config`, `qualification_item`, `qualification_item_depends_on`, `qualification_run`, `qualification_task` |
+| Releases | `release`, `release_candidate`, `release_approval`, `release_note`, `qualification_config`, `qualification_item`, `qualification_item_depends_on`, `qualification_run`, `qualification_task` |
 | CI | `ci_run`, `ci_job`, `ci_step`, `ci_step_log_chunk` |
 | Sandboxes and executors | `sandbox_usage`, `standing_sandbox`, `standing_sandbox_env`, `standing_sandbox_secret`, `executor_token`, `executor_token_sequence` |
 | Capabilities | `gcp_key` (the deployment's named GCP keys) |

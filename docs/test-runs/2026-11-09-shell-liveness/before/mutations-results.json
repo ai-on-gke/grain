@@ -1,0 +1,147 @@
+[
+  {
+    "id": "mut.createEnabled",
+    "desc": "Create task enabled before the stop",
+    "note": true,
+    "got": true
+  },
+  {
+    "id": "mut.field",
+    "desc": "Settings field used",
+    "note": true,
+    "got": {
+      "fieldName": "Environment name",
+      "haveField": true
+    }
+  },
+  {
+    "id": "mut.newtask.stopped",
+    "desc": "newtask: banner up while stopped? and the busy controls",
+    "note": true,
+    "got": {
+      "banner": "This deployment cannot be reached: it accepted the connection but sent no answer within 10 seconds. Unreachable since 4:03:53 AM -- retrying automatically; this page will pick back up on its own once it answers again.",
+      "busy": 1,
+      "alerts": [],
+      "createButton": [
+        {
+          "text": "create task",
+          "disabled": true
+        }
+      ],
+      "composer": []
+    }
+  },
+  {
+    "id": "mut.session.stopped",
+    "desc": "session: banner up while stopped? and the busy controls",
+    "note": true,
+    "got": {
+      "banner": "This deployment cannot be reached: it accepted the connection but sent no answer within 10 seconds. Unreachable since 4:03:54 AM -- retrying automatically; this page will pick back up on its own once it answers again.",
+      "busy": 2,
+      "alerts": [],
+      "createButton": [],
+      "composer": [
+        ""
+      ]
+    }
+  },
+  {
+    "id": "mut.settings.stopped",
+    "desc": "settings: banner up while stopped? and the busy controls",
+    "note": true,
+    "got": {
+      "banner": "This deployment cannot be reached: it accepted the connection but sent no answer within 10 seconds. Unreachable since 4:03:52 AM -- retrying automatically; this page will pick back up on its own once it answers again.",
+      "busy": 0,
+      "alerts": [],
+      "createButton": [],
+      "composer": []
+    }
+  },
+  {
+    "id": "mut.sent",
+    "desc": "non-GET requests sent while stopped",
+    "note": true,
+    "got": [
+      "POST /api/tasks",
+      "POST /api/tasks/13/comments",
+      "PUT /api/settings"
+    ]
+  },
+  {
+    "id": "mut.newtask.after",
+    "desc": "newtask: what is on screen 20 s after CONT",
+    "note": true,
+    "got": {
+      "alerts": [],
+      "createButton": [],
+      "composer": []
+    }
+  },
+  {
+    "id": "mut.session.after",
+    "desc": "session: what is on screen 20 s after CONT",
+    "note": true,
+    "got": {
+      "alerts": [],
+      "createButton": [],
+      "composer": [
+        ""
+      ]
+    }
+  },
+  {
+    "id": "mut.settings.after",
+    "desc": "settings: what is on screen 20 s after CONT",
+    "note": true,
+    "got": {
+      "alerts": [],
+      "createButton": [],
+      "composer": []
+    }
+  },
+  {
+    "id": "mut.newtask",
+    "desc": "New task created exactly once after CONT",
+    "ok": true,
+    "got": {
+      "count": 1,
+      "ids": [
+        "20"
+      ]
+    }
+  },
+  {
+    "id": "mut.newtask.dialog",
+    "desc": "New task dialog still open after CONT?",
+    "note": true,
+    "got": {
+      "open": 0
+    }
+  },
+  {
+    "id": "mut.session",
+    "desc": "session message delivered exactly once after CONT",
+    "ok": true,
+    "got": {
+      "occurrences": 1
+    }
+  },
+  {
+    "id": "mut.posted",
+    "desc": "mutations sent (each should be once)",
+    "note": true,
+    "got": [
+      "POST /api/tasks",
+      "POST /api/tasks/13/comments"
+    ]
+  },
+  {
+    "id": "mut.settings",
+    "desc": "config after CONT differs from before?",
+    "note": true,
+    "got": {
+      "changed": true,
+      "hasValue": true
+    }
+  }
+]

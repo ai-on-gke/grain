@@ -61,7 +61,7 @@ package gitproxy
 //
 // So the file tree is the mechanism, everywhere: scripts/setup.sh seeds
 // it, terraform/gcp/deploy/push-secrets.sh feeds that, the bootstrap
-// playbook (pkg/capability/bootstrap/playbooks/github-connections.md)
+// playbook (pkg/playbooks/github-connections.md)
 // walks a human through it, and pkg/ui's Settings pane now writes it
 // through SetToken instead of asking an operator for shell access.
 

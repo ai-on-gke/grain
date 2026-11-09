@@ -457,7 +457,9 @@ func TestReleaseTagsForBranch(t *testing.T) {
 		{"main", []string{"channel-main", "main"}},
 		{"candidate", []string{"channel-candidate", "candidate"}},
 		{"rc", []string{"channel-candidate", "candidate"}},
-		{"release/3.1", []string{"channel-release..3.1", "release..3.1"}},
+		{"release/3.1", []string{"channel-release-3.1", "release-3.1"}},
+		{"rc/v3.2", []string{"channel-rc-v3.2", "rc-v3.2"}},
+		{"channel-rc-v3.2", []string{"channel-rc-v3.2"}},
 		{"latest", []string{"latest"}},
 		{"v3.1.0", []string{"v3.1.0"}},
 		{"v3.1.0-rc.2", []string{"v3.1.0-rc.2"}},
@@ -468,7 +470,7 @@ func TestReleaseTagsForBranch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReleaseTagsForBranch(%q): %v", tc.branch, err)
 		}
-		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+		if !slices.Equal(got, tc.want) {
 			t.Errorf("ReleaseTagsForBranch(%q) = %v, want %v", tc.branch, got, tc.want)
 		}
 	}
@@ -1489,6 +1491,54 @@ func TestReleaseContractV2ChannelPointersAndLatestMarker(t *testing.T) {
 		}
 	})
 
+	t.Run("slashed release branch resolves channel-rc-v3.2 pointer while keeping rc..v3.2 docker tag and channel", func(t *testing.T) {
+		forge := newFakeForgeServer(t, "team", "edition")
+		addV1Release(forge, "sha-111111111111", "github.com/team/edition", testCommit1, "sha-111111111111", daemonRef, testDaemonID1, false)
+		addV2Channel(t, forge, "channel-rc-v3.2", "sha-111111111111")
+
+		dk := newFakeDockerEnv(t)
+		dir := t.TempDir()
+		refFile := filepath.Join(dir, "image.env")
+		u := newUpgrader(t, Config{
+			AllowedBranches: []string{"main", "rc/v*"},
+			Image: &ImageConfig{
+				Repository:   "edition-local/grain",
+				Source:       ImageSourceReleaseAssets,
+				RefFile:      refFile,
+				PullCmd:      []string{"false"},
+				LoadCmd:      dk.loadCmd(map[string][2]string{testCommit1: {daemonRef, testDaemonID1}}),
+				InspectIDCmd: dk.inspectIDCmd(),
+				TagCmd:       dk.tagCmd(),
+				RunCmd:       dk.runCmd(),
+				RemoveCmd:    []string{"true"},
+				ListCmd:      []string{"true"},
+				ReleaseAssets: ReleaseAssetsConfig{
+					Repository:    "github.com/team/edition",
+					ClientForHost: forge.clientFunc("", "", ""),
+				},
+			},
+			HealthCheckArgs: []string{"schema-version"},
+			StatusFile:      filepath.Join(dir, "status.json"),
+		})
+
+		status := runUpgradeToCompletion(t, u, "rc/v3.2")
+		if status.Phase != PhaseOK {
+			t.Fatalf("status = %+v", status)
+		}
+		if want := []string{"channel-rc-v3.2", "sha-111111111111"}; !slices.Equal(forge.lastAskedTags, want) {
+			t.Errorf("GET .../releases/tags/* = %v, want %v", forge.lastAskedTags, want)
+		}
+		if got := dk.getTag("edition-local/grain:rc..v3.2"); got != testDaemonID1 {
+			t.Errorf("edition-local/grain:rc..v3.2 = %q, want %q", got, testDaemonID1)
+		}
+		if got := readFile(t, refFile); got != "GRAIN_IMAGE=edition-local/grain:rc..v3.2\n" {
+			t.Errorf("RefFile = %q, want GRAIN_IMAGE=edition-local/grain:rc..v3.2\\n", got)
+		}
+		if got := u.Channel(); got != "rc/v3.2" {
+			t.Errorf("u.Channel() = %q, want %q", got, "rc/v3.2")
+		}
+	})
+
 	t.Run("latest resolves through the releases/latest marker", func(t *testing.T) {
 		forge := newFakeForgeServer(t, "team", "edition")
 		addV1Release(forge, "v3.2.0", "github.com/team/edition", testCommit1, "v3.2.0", daemonRef, testDaemonID1, false)
@@ -1554,6 +1604,21 @@ func TestSetImageSourceHoldsTheReleaseRepositoryToTheAllowedOnes(t *testing.T) {
 	}})
 	if got := u.EffectiveReleaseAssets().Repository; got != "github.com/ai-on-gke/grain" {
 		t.Fatalf("release repository loaded from the override file = %q, want github.com/ai-on-gke/grain", got)
+	}
+
+	// A private or loopback image repository with no -upgrade-release-repo
+	// derives no allowed release repository at all; refusing an override must
+	// say so plainly instead of rendering an empty "allowed are  (...)".
+	unmapped := New(Config{Image: &ImageConfig{
+		Repository:         "127.0.0.1:4255/x/grain",
+		SourceOverrideFile: filepath.Join(dir, "unmapped-source.json"),
+	}})
+	err := unmapped.SetImageSource(ImageSourceOverride{
+		Mode:              "release-assets",
+		ReleaseRepository: "github.com/acme/grain-fork",
+	})
+	if err == nil || !strings.Contains(err.Error(), "none is configured for this image repository") || strings.Contains(err.Error(), "allowed are ") {
+		t.Fatalf("unmapped SetImageSource error = %v, want 'none is configured for this image repository'", err)
 	}
 }
 
@@ -1904,5 +1969,47 @@ func TestPublishedReleasesSortsNewestFirstAndSkipsPointers(t *testing.T) {
 	}
 	if _, ok := pickPublishedRelease(nil, true); ok {
 		t.Error("pickPublishedRelease(nil) found a release")
+	}
+}
+
+// A deployment told to load one named tarball (-upgrade-release-asset)
+// rather than an images.json manifest counts a release carrying that
+// tarball as published. It used to hold every release to images.json, so
+// such a deployment listed no versions at all and could not upgrade
+// (docs/test-runs/2026-11-07-releases-upgrades-ci.md, Bug F2).
+func TestSingleReleaseAssetCountsAsPublished(t *testing.T) {
+	forge := newFakeForgeServer(t, "team", "edition")
+	forge.releases["v3.2.0"] = &fakeReleaseSpec{
+		tag: "v3.2.0", targetCommitish: testCommit1, id: 10, createdAt: "2026-11-01T10:00:00Z",
+		assets: map[string][]byte{"grain-image.tar.gz": []byte("not really a tarball")},
+	}
+	tagUnpublished(forge, "v3.2.1", testCommit2, "2026-11-02T10:00:00Z", 11)
+	dir := t.TempDir()
+	u := newUpgrader(t, Config{
+		Image: &ImageConfig{
+			Repository: "edition-local/grain",
+			Source:     ImageSourceReleaseAssets,
+			RefFile:    filepath.Join(dir, "image.env"),
+			PullCmd:    []string{"false"},
+			ReleaseAssets: ReleaseAssetsConfig{
+				Repository:    "github.com/team/edition",
+				Asset:         "grain-image.tar.gz",
+				ClientForHost: forge.clientFunc("", "", ""),
+			},
+		},
+		StatusFile: filepath.Join(dir, "status.json"),
+	})
+	if !u.releaseAssetsOnly() {
+		t.Fatal("explicit release-assets with no fallback should load release assets only")
+	}
+	tags, err := u.listReleaseTags(context.Background())
+	if err != nil {
+		t.Fatalf("listReleaseTags: %v", err)
+	}
+	if !slices.Contains(tags, "v3.2.0") {
+		t.Errorf("release tags = %v, want v3.2.0 (it carries the configured grain-image.tar.gz)", tags)
+	}
+	if slices.Contains(tags, "v3.2.1") {
+		t.Errorf("release tags = %v, want v3.2.1 left out (tagged, not published)", tags)
 	}
 }

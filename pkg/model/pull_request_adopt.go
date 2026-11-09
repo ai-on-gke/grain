@@ -41,6 +41,11 @@ var (
 	// what it asks: an unapproved request to upgrade an approved
 	// review-only shepherd to finish. The routes answer 403.
 	ErrPullRequestForbidden = errors.New("pull request request forbidden")
+	// ErrPullRequestNotFound wraps a pull request GitHub answered 404 for:
+	// there is no such pull request, or the deployment's credential
+	// cannot see it. The routes answer 404 rather than a 500 that reads
+	// as grain having failed.
+	ErrPullRequestNotFound = errors.New("pull request not found")
 )
 
 // TakeoverMode is how far a shepherd task may go with the pull request it

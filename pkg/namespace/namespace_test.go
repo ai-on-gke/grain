@@ -29,9 +29,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability/bootstrap/playbooks"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/objectstore"
+	"github.com/ai-on-gke/grain/pkg/playbooks"
 	"github.com/ai-on-gke/grain/pkg/redact"
 )
 

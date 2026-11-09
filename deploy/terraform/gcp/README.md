@@ -174,8 +174,9 @@ itself, against `-target`ed subsets of this same module, with state kept
 on the VM's own data disk (`backend-local.hcl.example`) instead of GCS.
 
 That path is written up as a playbook an agent holding the
-`bootstrap-playbooks` grant can read and act on --
-`pkg/capability/bootstrap/playbooks/gcp-capabilities.md` -- rather than
+`https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}`
+grant can read and act on --
+`pkg/playbooks/gcp-capabilities.md` -- rather than
 repeated here; file an interactive task carrying that grant (plus
 `self-repair`, for the commands the playbook tells it to run) and ask it
 to bootstrap GCP capabilities, or read that file directly.

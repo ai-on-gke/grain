@@ -38,6 +38,8 @@ import (
 // hostd is connected now.
 type HostdView struct {
 	model.Hostd
+	// State is "connected", "offline", or "revoked".
+	State string `json:"state"`
 	// Connection is what the hostd last said when it dialed in; nil for
 	// one that has not connected since the daemon started (and for
 	// local, which does not dial in).
@@ -46,6 +48,12 @@ type HostdView struct {
 	// names: it is not in the registry, so it is listed to be seen and
 	// has no token here to rotate or revoke.
 	Shared bool `json:"shared,omitempty"`
+	// Logins are the agent CLI logins on the hostd's machine
+	// (hostd.Hello.Logins): what a connection with ambient credentials
+	// placed on it spends. LoginsKnown says the hostd said, so an empty
+	// list is "none" -- not "not connected", or "too old to say".
+	Logins      []string `json:"logins,omitempty"`
+	LoginsKnown bool     `json:"loginsKnown,omitempty"`
 }
 
 // CreateHostdRequest is POST /api/hostds.
@@ -58,8 +66,14 @@ type CreateHostdRequest struct {
 // UpdateHostdRequest is PATCH /api/hostds/{name}: a field left out is
 // left as it is.
 type UpdateHostdRequest struct {
-	Owner  *string            `json:"owner,omitempty"`
-	Labels *map[string]string `json:"labels,omitempty"`
+	Owner    *string            `json:"owner,omitempty"`
+	Labels   *map[string]string `json:"labels,omitempty"`
+	Capacity *int               `json:"capacity,omitempty"`
+}
+
+// RenameHostdRequest is POST /api/hostds/{name}/rename.
+type RenameHostdRequest struct {
+	Name string `json:"name"`
 }
 
 // IssuedHostdToken is the answer to creating a hostd or rotating its
@@ -83,6 +97,10 @@ type hostdStatuses interface {
 // (hostd.Remote).
 type hostdDisconnector interface {
 	Disconnect(name string) bool
+}
+
+type hostdSessionRenamer interface {
+	RenameSession(oldName, newName string)
 }
 
 // hostdSharedNamer is the name the deprecated shared token's hostd holds,
@@ -124,7 +142,14 @@ func (c *Client) ListHostds(ctx context.Context) ([]HostdView, error) {
 		v := HostdView{Hostd: h}
 		if st, ok := statuses[h.Name]; ok {
 			v.Connection = &st
+			if st.Connected {
+				v.Logins, v.LoginsKnown = st.Logins, st.LoginsKnown
+			}
 		}
+		if h.Name == model.LocalHostd && !h.Revoked() && c.Config.LocalHostdLogins != nil {
+			v.Logins, v.LoginsKnown = c.Config.LocalHostdLogins(ctx)
+		}
+		v.State = hostdState(h, v.Connection)
 		out = append(out, v)
 	}
 	// The deprecated shared token's hostd has no registry row, but it is
@@ -138,14 +163,31 @@ func (c *Client) ListHostds(ctx context.Context) ([]HostdView, error) {
 		}
 		if st, ok := statuses[v.Name]; ok {
 			v.Connection = &st
+			if st.Connected {
+				v.Logins, v.LoginsKnown = st.Logins, st.LoginsKnown
+			}
 		}
+		v.State = hostdState(v.Hostd, v.Connection)
 		out = append(out, v)
 	}
 	return out, nil
 }
 
+func hostdState(h model.Hostd, conn *hostd.RemoteStatus) string {
+	if h.RevokedAt != nil {
+		return "revoked"
+	}
+	if h.Name == model.LocalHostd || (conn != nil && conn.Connected) {
+		return "connected"
+	}
+	return "offline"
+}
+
 // CreateHostd adds a remote hostd and mints its first token.
 func (c *Client) CreateHostd(ctx context.Context, req CreateHostdRequest) (IssuedHostdToken, error) {
+	if isDelegatedRequest(ctx) {
+		return IssuedHostdToken{}, forbiddenCodeErrorf("requires_person", "enrolling a hostd requires a person acting directly")
+	}
 	name := strings.TrimSpace(req.Name)
 	if err := model.ValidateHostdName(name); err != nil {
 		return IssuedHostdToken{}, validationErrorf("%v", err)
@@ -209,7 +251,7 @@ func (c *Client) RevokeHostd(ctx context.Context, name string) (model.Hostd, err
 	return *h, nil
 }
 
-// UpdateHostd sets name's owner and labels.
+// UpdateHostd sets name's owner, labels, and capacity.
 func (c *Client) UpdateHostd(ctx context.Context, name string, req UpdateHostdRequest) (model.Hostd, error) {
 	if req.Owner != nil {
 		if _, err := model.NormalizeHostdOwner(*req.Owner); err != nil {
@@ -221,14 +263,45 @@ func (c *Client) UpdateHostd(ctx context.Context, name string, req UpdateHostdRe
 			return model.Hostd{}, validationErrorf("%v", err)
 		}
 	}
-	h, err := c.Store.UpdateHostd(ctx, name, req.Owner, req.Labels)
+	if req.Capacity != nil && *req.Capacity < 0 {
+		return model.Hostd{}, validationErrorf("host capacity %d may not be negative", *req.Capacity)
+	}
+	h, err := c.Store.UpdateHostdDetails(ctx, name, model.HostdUpdate{
+		Owner:    req.Owner,
+		Labels:   req.Labels,
+		Capacity: req.Capacity,
+	})
 	if err != nil {
 		return model.Hostd{}, hostdError(err)
 	}
-	c.auditHostd(ctx, name, "set host "+name+"'s owner or labels")
+	c.auditHostd(ctx, name, "updated host "+name+"'s settings")
 	if req.Owner != nil {
 		c.dropSessionNotOwnedBy(name, h.Owner)
 	}
+	return *h, nil
+}
+
+// RenameHostd renames an existing host in the registry and updates any live session.
+func (c *Client) RenameHostd(ctx context.Context, oldName, newName string) (model.Hostd, error) {
+	oldName = strings.TrimSpace(oldName)
+	newName = strings.TrimSpace(newName)
+	if oldName == model.LocalHostd || newName == model.LocalHostd {
+		return model.Hostd{}, validationErrorf("%q is the co-located host's reserved name", model.LocalHostd)
+	}
+	if err := model.ValidateHostdName(newName); err != nil {
+		return model.Hostd{}, validationErrorf("%v", err)
+	}
+	if s, ok := c.Config.HostdRemote.(hostdSharedNamer); ok && s.SharedTokenName() == newName {
+		return model.Hostd{}, validationErrorf("%q is the name -hostd-token-name gives the shared token's host; choose another", newName)
+	}
+	h, err := c.Store.RenameHostd(ctx, oldName, newName)
+	if err != nil {
+		return model.Hostd{}, hostdError(err)
+	}
+	if r, ok := c.Config.HostdRemote.(hostdSessionRenamer); ok {
+		r.RenameSession(oldName, h.Name)
+	}
+	c.auditHostd(ctx, h.Name, "renamed host "+oldName+" to "+h.Name)
 	return *h, nil
 }
 
@@ -352,6 +425,19 @@ func (s *Server) handleUpdateHostd(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, h)
 }
 
+func (s *Server) handleRenameHostd(w http.ResponseWriter, r *http.Request) {
+	var req RenameHostdRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	h, err := s.tasks.RenameHostd(r.Context(), r.PathValue("name"), req.Name)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, h)
+}
+
 // auditHostd records a change to the hostd registry in config_audit, with
 // the person or agent who made it (ui.RequestActor). The summary names the
 // hostd and never carries its token.
@@ -389,5 +475,26 @@ func (c *HTTPClient) HostdInstall(ctx context.Context, name string) (HostdInstal
 func (c *HTTPClient) UpdateHostd(ctx context.Context, name string, req UpdateHostdRequest) (model.Hostd, error) {
 	var out model.Hostd
 	err := c.do(ctx, http.MethodPatch, "/api/hostds/"+url.PathEscape(name), req, &out)
+	return out, err
+}
+
+// RotateHostdToken is POST /api/hostds/{name}/rotate.
+func (c *HTTPClient) RotateHostdToken(ctx context.Context, name string) (IssuedHostdToken, error) {
+	var out IssuedHostdToken
+	err := c.do(ctx, http.MethodPost, "/api/hostds/"+url.PathEscape(name)+"/rotate", nil, &out)
+	return out, err
+}
+
+// RevokeHostd is POST /api/hostds/{name}/revoke.
+func (c *HTTPClient) RevokeHostd(ctx context.Context, name string) (model.Hostd, error) {
+	var out model.Hostd
+	err := c.do(ctx, http.MethodPost, "/api/hostds/"+url.PathEscape(name)+"/revoke", nil, &out)
+	return out, err
+}
+
+// RenameHostd is POST /api/hostds/{name}/rename.
+func (c *HTTPClient) RenameHostd(ctx context.Context, oldName, newName string) (model.Hostd, error) {
+	var out model.Hostd
+	err := c.do(ctx, http.MethodPost, "/api/hostds/"+url.PathEscape(oldName)+"/rename", RenameHostdRequest{Name: newName}, &out)
 	return out, err
 }

@@ -88,7 +88,8 @@ func isBaseBranchRed(ctx context.Context, store *model.Store, repo model.RepoRef
 	if relRow, err := store.GetBaseBranchRelease(ctx, repo, branch); err == nil && relRow != nil {
 		if relRow.Failing() || (relRow.Conclusion != "" &&
 			relRow.Conclusion != string(ci.ConclusionSuccess) &&
-			relRow.Conclusion != string(ci.ConclusionSkipped)) {
+			relRow.Conclusion != string(ci.ConclusionSkipped) &&
+			!relRow.Superseded()) {
 			return true
 		}
 	}

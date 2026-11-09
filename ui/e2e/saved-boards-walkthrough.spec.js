@@ -1275,6 +1275,24 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
       { ignoreCase: true },
     );
     await expect(chip).toHaveClass(/MuiChip-colorWarning/);
+
+    await page.goto(`/boards/${board.id}?f=origin:any:robot`);
+    await expect(chip).toHaveText("Origin is any of “robot” (unknown)", {
+      ignoreCase: true,
+    });
+    await expect(chip).toHaveClass(/MuiChip-colorWarning/);
+    await expect(page.locator(".board-card")).toHaveCount(0);
+
+    await page.goto(`/boards/${board.id}?f=origin:any:imported`);
+    await expect(chip).toHaveText("Origin is any of Imported issue", {
+      ignoreCase: true,
+    });
+    await expect(chip).not.toHaveClass(/MuiChip-colorWarning/);
+    await expect(
+      page.locator(".board-card", {
+        hasText: "[#42] Search results drop the last page",
+      }),
+    ).toBeVisible();
   });
 
   test("4b. Back from a reloaded task returns to the board it was opened from", async ({
@@ -1495,6 +1513,50 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
         "None of the tasks this search and these filters match is in one of these columns.",
       ),
     ).toBeVisible();
+  });
+
+  // A failed /api/boards read as an empty store once the five-second
+  // banner had gone: "No boards yet." and a New board button, on the
+  // index and on a board's own address. It says the load failed, keeps
+  // the board's URL, and Retry brings the board back.
+  test("1b. A boards load that fails says so, and Retry opens the board the URL names", async ({
+    page,
+  }) => {
+    const path = await boardPath(page, "Tree");
+    let failing = true;
+    await page.route("**/api/boards", async (route) => {
+      if (failing && route.request().method() === "GET") {
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "synthetic boards 500" }),
+        });
+        return;
+      }
+      await route.continue();
+    });
+    try {
+      await page.goto(path);
+      const failed = page.locator(".tasks-load-error");
+      await expect(failed).toContainText(
+        "The boards could not be loaded (synthetic boards 500).",
+      );
+      await expect(page.getByText("No boards yet.")).toHaveCount(0);
+      // Still there after the banner's five seconds.
+      await page.waitForTimeout(5500);
+      await expect(failed).toBeVisible();
+      expect(new URL(page.url()).pathname).toBe(path);
+
+      failing = false;
+      await failed.getByRole("button", { name: "Retry" }).click();
+      await expect(failed).toHaveCount(0);
+      await expect(
+        page.getByRole("heading", { name: "Tree", exact: true }),
+      ).toBeVisible();
+      expect(new URL(page.url()).pathname).toBe(path);
+    } finally {
+      await page.unroute("**/api/boards");
+    }
   });
 
   test("8. Deletion safety and throwaway cleanup", async ({ page }) => {
@@ -1730,5 +1792,140 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     );
     expect(offsets.length).toBeGreaterThan(3);
     expect(new Set(offsets).size).toBe(1);
+  });
+
+  // Every board request starts out titled "Add a board", so two of them
+  // waiting side by side is the ordinary case. The slots a picked-up card
+  // offers used to be named by title alone, which gave a screen reader
+  // two identical "Move here, above … in Waiting" buttons leading to
+  // different places.
+  test("3h. Kanban move slots above two same-titled cards have different names", async ({
+    page,
+  }) => {
+    const title = `WT twin ${Date.now()}`;
+    const ids = [];
+    try {
+      for (let i = 0; i < 3; i++) {
+        const t = await seedOne(page, "/api/tasks", {
+          title,
+          description: "Walkthrough twin; closed again at the end.",
+          repo: "acme/widgets",
+          approved: true,
+        });
+        ids.push(t.id);
+      }
+      await page.goto(await boardPath(page, "Board"));
+      const waiting = page.locator(".board-column", {
+        has: page.locator(".board-column-title", { hasText: /^Waiting$/ }),
+      });
+      await expect(
+        waiting.locator(".board-card", { hasText: title }),
+      ).toHaveCount(3);
+
+      await page.getByRole("button", { name: `Move task ${ids[2]}` }).click();
+      const labels = await waiting
+        .getByRole("button", { name: /^Move here/ })
+        .evaluateAll((els) => els.map((e) => e.getAttribute("aria-label")));
+      expect(labels).toContain(
+        `Move here, above task ${ids[0]}, “${title}”, in Waiting`,
+      );
+      expect(labels).toContain(
+        `Move here, above task ${ids[1]}, “${title}”, in Waiting`,
+      );
+      expect(new Set(labels).size).toBe(labels.length);
+      await page.keyboard.press("Escape");
+    } finally {
+      for (const id of ids) {
+        await page.request
+          .post(`/api/tasks/${id}/close`, {
+            data: { close_pull_request: false },
+          })
+          .catch(() => {});
+      }
+    }
+  });
+
+  // 2026-11-08 walkthrough (task 3612): folders exist so two areas can
+  // each keep a board of one name, and the handles and slots for them
+  // carried one accessible name between them.
+  test("1c. Same-named boards in two folders get distinct Move handles and slots", async ({
+    page,
+  }) => {
+    const stamp = Date.now();
+    const shared = `WT Triage ${stamp}`;
+    for (const folder of [`Ops ${stamp}`, `Zeta ${stamp}`]) {
+      await seedOne(page, "/api/boards", {
+        name: shared,
+        folder,
+        kind: "list",
+        description: "",
+        query: "",
+      });
+    }
+    const mover = await seedOne(page, "/api/boards", {
+      name: `WT Mover ${stamp}`,
+      folder: "",
+      kind: "list",
+      description: "",
+      query: "",
+    });
+
+    await page.goto("/boards");
+    await expect(
+      page.getByRole("button", { name: `Move ${shared}, in Ops ${stamp}` }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: `Move ${shared}, in Zeta ${stamp}` }),
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: `Move ${mover.name}` }).click();
+    const slotLabels = await page
+      .getByRole("button", { name: /^Move here/ })
+      .evaluateAll((els) => els.map((e) => e.getAttribute("aria-label")));
+    expect(slotLabels).toContain(`Move here, above ${shared}, in Ops ${stamp}`);
+    expect(slotLabels).toContain(
+      `Move here, above ${shared}, in Zeta ${stamp}`,
+    );
+    expect(new Set(slotLabels).size).toBe(slotLabels.length);
+    await page.keyboard.press("Escape");
+  });
+
+  // 2026-11-08 walkthrough (task 3612): a dashboard scoped to a repo and
+  // then searched offered "Keep" on a throughput panel whose report the
+  // search does not change.
+  test("6f. A scoped dashboard offers Keep on its throughput panel only when the report would change", async ({
+    page,
+  }) => {
+    const dash = await seedOne(page, "/api/boards", {
+      name: `WT Scoped Dash ${Date.now()}`,
+      folder: "",
+      kind: "panels",
+      description: "",
+      query: "f=repo:any:acme/widgets",
+      panels: [
+        { kind: "list", title: "Queue", width: "half", orderKey: 1000 },
+        {
+          kind: "metrics",
+          title: "Throughput 7d",
+          range: "7d",
+          width: "half",
+          orderKey: 2000,
+        },
+      ],
+    });
+    const metricsKeep = page.getByRole("button", {
+      name: "Keep this narrowing on “Throughput 7d”",
+    });
+
+    await page.goto(`/boards/${dash.id}?f=repo:any:acme/widgets&q=retry`);
+    await expect(
+      page.getByRole("button", { name: "Keep this narrowing on “Queue”" }),
+    ).toBeVisible();
+    await expect(metricsKeep).toHaveCount(0);
+
+    await page.goto(
+      `/boards/${dash.id}?f=repo:any:acme/widgets&f=author:any:ada`,
+    );
+    await expect(metricsKeep).toBeVisible();
   });
 });

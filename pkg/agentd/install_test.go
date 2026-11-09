@@ -16,11 +16,17 @@ package agentd
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/ai-on-gke/grain/pkg/hostd"
 )
 
 // fakeHome is a home directory with agy on $PATH, a token in the
@@ -160,5 +166,78 @@ func TestInstallRefusesBadFlags(t *testing.T) {
 		if code := install(args, &out, &errOut); code != 2 {
 			t.Errorf("install %q = %d, want 2 (%s)", args, code, errOut.String())
 		}
+	}
+}
+
+func TestInstallJoinHandshake(t *testing.T) {
+	h := newFakeHome(t)
+	t.Setenv(TokenEnv, "")
+	p := pathsFor(h.home)
+
+	var submitted hostd.JoinSubmitRequest
+	var replay hostd.NonceReplayCache
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/hostd/join":
+			if err := json.NewDecoder(r.Body).Decode(&submitted); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			pub, err := hostd.VerifyJoinSubmit(submitted, time.Now().UTC(), &replay)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusUnauthorized)
+				return
+			}
+			nonce := "0123456789abcdef0123456789abcdef"
+			code := hostd.DerivePairingCode("hjr_agentd1", nonce, submitted.PublicKey, submitted.Hostname)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(hostd.JoinSubmitResponse{
+				ID:             "hjr_agentd1",
+				ServerNonce:    nonce,
+				PairingCode:    code,
+				KeyFingerprint: hostd.KeyFingerprint(pub),
+				EnrolledBy:     "someone@example.com",
+				ExpiresAt:      time.Now().UTC().Add(24 * time.Hour),
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/hostd/join/hjr_agentd1/poll":
+			var poll hostd.JoinPollRequest
+			_ = json.NewDecoder(r.Body).Decode(&poll)
+			if err := hostd.VerifyJoinPoll("hjr_agentd1", submitted.PublicKey, poll, time.Now().UTC(), &replay); err != nil {
+				http.Error(w, err.Error(), http.StatusUnauthorized)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(hostd.JoinPollResponse{
+				Status:    "accepted",
+				Name:      "agentd-laptop",
+				Token:     "ghd_agentd_keybound_token",
+				ExpiresAt: time.Now().UTC().Add(30 * 24 * time.Hour),
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	var out, errOut bytes.Buffer
+	if code := install([]string{"-server", ts.URL, "-join", "ghe_sharedcode123"}, &out, &errOut); code != 0 {
+		t.Fatalf("install -join = %d: %s", code, errOut.String())
+	}
+	if submitted.EnrollmentCode != "ghe_sharedcode123" || len(submitted.CLIs) == 0 || submitted.CLIs[0] != "agy" {
+		t.Fatalf("submitted = %+v, want enrollment code and agy CLI", submitted)
+	}
+	keyInfo, err := os.Stat(p.Key)
+	if err != nil || keyInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("key file %s stat = %v, %v; want mode 0600", p.Key, keyInfo, err)
+	}
+	tokBytes, err := os.ReadFile(p.Token)
+	if err != nil || strings.TrimSpace(string(tokBytes)) != "ghd_agentd_keybound_token" {
+		t.Fatalf("token file = %q, %v", tokBytes, err)
+	}
+	unit, err := os.ReadFile(filepath.Join(p.UnitDir, UnitName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(unit), "-key-file "+p.Key) {
+		t.Fatalf("unit missing -key-file %s:\n%s", p.Key, unit)
 	}
 }

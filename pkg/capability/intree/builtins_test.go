@@ -77,8 +77,8 @@ func TestEveryInTreeServerIsRegisteredUnderItsCanonicalID(t *testing.T) {
 	if _, ok := Lookup("model-proxy"); !ok {
 		t.Error("the model-proxy CLI builder is not registered")
 	}
-	if b, _ := BuiltinNamed("config-map"); !b.NeedsConfig {
-		t.Errorf("config-map = %+v, want needs-config", b)
+	if b, _ := BuiltinNamed("config-map"); b.NeedsConfig {
+		t.Errorf("config-map = %+v, want NeedsConfig=false (serves built-in bootstrap playbooks out of the box)", b)
 	}
 	if _, ok := Lookup("skill"); !ok {
 		t.Error("legacy skill CLI builder is not registered")
@@ -244,33 +244,6 @@ func TestAHandAddedEntryIsAdoptedAndItsOldIDStillResolves(t *testing.T) {
 	out[CanonicalID("gcp")] = cfg
 	if again, _ := EnsureBuiltins(out); again[CanonicalID("gcp")].Notice != "" {
 		t.Error("a dismissed notice came back")
-	}
-}
-
-func TestGCPOverlapWarnsOnAccountsTheInProcessProviderMintsFrom(t *testing.T) {
-	pool := []string{"grain-sb-agent-0@grain-sandbox-dev.iam.gserviceaccount.com", "grain-sb-agent-1@grain-sandbox-dev.iam.gserviceaccount.com"}
-	shared := protocol.ServerConfig{Command: "grain", Args: []string{"capability", "gcp"}, Config: map[string]any{"permission_sets": []any{
-		map[string]any{"name": "sandbox-agent", "accounts": []any{"grain-sb-agent-1@grain-sandbox-dev.iam.gserviceaccount.com"}},
-		map[string]any{"name": "own", "accounts": []any{"trial-0@grain-sandbox-dev.iam.gserviceaccount.com"}},
-		map[string]any{"name": "created"},
-	}}}
-	w := GCPOverlapWarnings(shared, pool)
-	if len(w) != 1 || !strings.Contains(w[0], `"sandbox-agent"`) || !strings.Contains(w[0], "grain-sb-agent-1@") {
-		t.Errorf("warnings = %q, want one for sandbox-agent", w)
-	}
-	// The old flags migrate to a set over the same pool.
-	flags := protocol.ServerConfig{Command: "grain", Args: []string{"capability", "gcp", "-project", "grain-sandbox-dev", "-account", "grain-sb-agent-0@grain-sandbox-dev.iam.gserviceaccount.com*10"}}
-	if w := GCPOverlapWarnings(flags, pool); len(w) != 1 {
-		t.Errorf("flag-configured warnings = %q, want one", w)
-	}
-	separate := protocol.ServerConfig{Command: "grain", Args: []string{"capability", "gcp"}, Config: map[string]any{"permission_sets": []any{
-		map[string]any{"name": "trial", "accounts": []any{"trial-0@grain-sandbox-dev.iam.gserviceaccount.com"}},
-	}}}
-	if w := GCPOverlapWarnings(separate, pool); len(w) != 0 {
-		t.Errorf("separate accounts warned: %q", w)
-	}
-	if w := GCPOverlapWarnings(shared, nil); len(w) != 0 {
-		t.Errorf("no in-process pool warned: %q", w)
 	}
 }
 

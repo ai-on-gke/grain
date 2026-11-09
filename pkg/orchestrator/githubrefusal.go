@@ -15,7 +15,10 @@
 package orchestrator
 
 import (
+	"context"
 	"fmt"
+	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -201,7 +204,19 @@ func holdRefusedMerge(client github.Client, e queueEntry, detail github.PullRequ
 			return true
 		}
 		count, _ := unresolvedReviewThreads(client, e.task, ref)
-		return count > 0
+		if count == 0 {
+			return false
+		}
+		// The run sent back for these threads has finished and left some
+		// open: ask once more, so the refusal it earns is handed to a
+		// person (refusedMerge) rather than waited on in silence. Once,
+		// though: after that refusal is handed to a person (Escalated),
+		// the threads still being open is waited on like any other
+		// unresolved conversation, not asked about again on every poll.
+		if !r.SentBack.IsZero() && !r.Escalated && e.obs != nil && e.obs.CompletedAt != nil && e.obs.CompletedAt.After(r.SentBack) {
+			return false
+		}
+		return true
 	}
 	if r.Exhausted(now) {
 		return true
@@ -323,6 +338,113 @@ func unresolvedThreadsSummary(req github.MergeRequirements) string {
 func unresolvedThreadsNote(r forge.MergeRefusal, ref model.PullRequestRef, prURL string) string {
 	return fmt.Sprintf("%s on %s (%s). Resolve them on GitHub and grain merges on its own, or press \"Retry merge\" once resolved.",
 		unresolvedThreadsSummary(r.Requirements), ref, reviewPage(ref, prURL))
+}
+
+// unresolvedThreadsSentBackNote is the row while the task is back with an
+// agent to deal with the review conversations GitHub refused the merge for.
+func unresolvedThreadsSentBackNote(r forge.MergeRefusal, ref model.PullRequestRef, prURL string) string {
+	return fmt.Sprintf("%s on %s (%s): sent back to the task to fix or answer and resolve them; "+
+		"grain merges it on its own once they are resolved.",
+		unresolvedThreadsSummary(r.Requirements), ref, reviewPage(ref, prURL))
+}
+
+// sendBackForUnresolvedThreads puts task back in the queue to deal with
+// the unresolved review conversations GitHub refused to merge ref for,
+// with every one of them listed -- thread ID, first comment ID, author,
+// path:line and body -- so the run needs nothing else to find them. It
+// reports false, having done nothing, where the threads could not be read
+// or none is open, and for a task held on its own review's questions
+// (whose owner answers those first, reviewquestions.go).
+//
+// Threads grain opened itself for a review task's findings (relayed or
+// draft reviews) are left out: those follow their owner's decision
+// (resolveHandledRelayedThreads), and one still open after it is one a
+// person spoke in, which no agent of grain's resolves. Where those are all
+// that is open, nothing is sent and the refusal goes to a person as before.
+//
+// Each thread's first comment is recorded as a LinkReviewThread, as the
+// review-thread relay records the ones it sends a run for, so the relay
+// does not send a second run about the same threads.
+func sendBackForUnresolvedThreads(ctx context.Context, store *model.Store, client github.Client,
+	task model.Task, ref model.PullRequestRef, r forge.MergeRefusal, now time.Time) (bool, error) {
+
+	if _, held := model.ReviewQuestionsOf(task); held {
+		return false, nil
+	}
+	all, ok := listUnresolvedThreads(client, ref)
+	if !ok {
+		return false, nil
+	}
+	grainOwn := map[int]bool{}
+	drafts := map[int]bool{}
+	for _, l := range task.Links {
+		switch l.Kind {
+		case model.LinkRelayedReviewThread:
+			if rt, ok := model.ParseRelayedReviewThread(l.Target); ok {
+				grainOwn[rt.CommentID] = true
+			}
+		case model.LinkDraftReview:
+			if id, err := strconv.Atoi(l.Target); err == nil && id != 0 {
+				drafts[id] = true
+			}
+		}
+	}
+	var threads []relayThread
+	for _, th := range all {
+		if grainOwn[th.Comment.ID] || (th.Comment.ReviewID != 0 && drafts[th.Comment.ReviewID]) {
+			continue
+		}
+		threads = append(threads, th)
+	}
+	if len(threads) == 0 {
+		return false, nil
+	}
+	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+		recorded := map[string]bool{}
+		for _, l := range t.Links {
+			if l.Kind == model.LinkReviewThread {
+				recorded[l.Target] = true
+			}
+		}
+		for _, th := range threads {
+			id := strconv.Itoa(th.Comment.ID)
+			if th.Comment.ID != 0 && !recorded[id] {
+				recorded[id] = true
+				t.Links = append(t.Links, model.Link{Kind: model.LinkReviewThread, Target: id})
+			}
+		}
+		return nil
+	}); err != nil {
+		return false, fmt.Errorf("orchestrator: recording the review threads on %s: %w", task.ID, err)
+	}
+	if err := queueComment(ctx, store, task.ID, unresolvedThreadsSendBackComment(ref, r, threads), now); err != nil {
+		return false, err
+	}
+	if err := store.ObserveField(ctx, task.ID, now, func(o *model.Observation) {
+		o.CompletedAt = nil
+		o.RetryRequestedAt = &now
+	}); err != nil {
+		return false, fmt.Errorf("orchestrator: queueing %s for its unresolved review threads: %w", task.ID, err)
+	}
+	log.Printf("orchestrator: GitHub refused to merge %s over %d unresolved review thread(s); sending %s another run",
+		ref, len(threads), task.ID)
+	return true, nil
+}
+
+// unresolvedThreadsSendBackComment is what the run sent back for
+// unresolved review conversations reads first.
+func unresolvedThreadsSendBackComment(ref model.PullRequestRef, r forge.MergeRefusal, threads []relayThread) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "GitHub refused to merge %s because review conversations on it are unresolved (%s):\n\n> %s\n\n"+
+		"This is not a setting anybody has to change: the merge queue has sent this task back to deal with "+
+		"%s, and merges %s on its own once every thread is resolved. %s %s still open:\n\n",
+		ref, unresolvedThreadsSummary(r.Requirements), refusalLine(r.Reason, 400),
+		pronounFor(len(threads)), ref, countOf(len(threads), "thread"), isAre(len(threads)))
+	writeRelayThreads(&b, threads)
+	b.WriteString(reviewThreadsHowTo)
+	b.WriteString(" If every thread is resolved and nothing needed changing, finish without pushing; " +
+		"a run that ends with threads still open hands the merge to a person.")
+	return b.String()
 }
 
 // refusalComment is what the task's thread is told when the queue hands a

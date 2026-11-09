@@ -60,6 +60,7 @@ const (
 
 	frameStaged    byte = 'Y' // JSON StageReply: the answer to OpStage
 	frameListening byte = 'N' // JSON Listening: the answer to OpListen
+	frameRenewed   byte = 'T' // JSON RenewReply: the answer to OpRenew
 )
 
 // ProtocolVersion is the hostd protocol this build speaks, and
@@ -124,6 +125,19 @@ type Hello struct {
 	// one: what a codex run there links to in place of a login the
 	// daemon holds.
 	CodexAuth string `json:"codex_auth,omitempty"`
+	// Logins are the agent CLIs (LoginCodex, LoginClaude,
+	// LoginAntigravity) with a login of their own on hostd's machine, as
+	// the user hostd runs as: what a model connection with ambient
+	// credentials placed on this hostd spends (loginsUnder). Set by
+	// hostd alone, local or remote; an older hostd says nothing, which
+	// is "not known", not "none".
+	Logins []string `json:"logins,omitempty"`
+	// AgentsOnly is set by a host agent that runs agent CLIs and nothing
+	// else (grain-agentd, Server.AgentsOnly): its allowlist has no
+	// capabilities: and may not have any, so a run: host capability
+	// server placed on it needs a `grain host` instead. An older build
+	// says nothing, which is "not known".
+	AgentsOnly bool `json:"agents_only,omitempty"`
 }
 
 // ThisHello is this build's Hello; build is its version string.
@@ -231,6 +245,9 @@ const (
 	// OpCarry is the first frame of a stream hostd opens to the daemon:
 	// a connection made to the OpListen listener whose ID it names.
 	OpCarry Op = "carry"
+	// OpRenew silently renews a connected host's 30-day credential in-band
+	// over its active mux session, signed by the host's Ed25519 private key.
+	OpRenew Op = "renew"
 )
 
 // Request is the daemon's first frame.
@@ -267,6 +284,8 @@ type Request struct {
 	Inode uint64 `json:"inode,omitempty"`
 	// Stage is OpStage's operation.
 	Stage *StageOp `json:"stage,omitempty"`
+	// Renew is OpRenew's Ed25519 proof-of-possession payload.
+	Renew *RenewProof `json:"renew,omitempty"`
 }
 
 // SocketOwner is the answer to OpSocketOwner: the pid holding Request.Inode

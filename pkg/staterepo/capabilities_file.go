@@ -40,10 +40,12 @@ package staterepo
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -282,6 +284,10 @@ func referencedGCPAccountNames(cat *model.CapabilityCatalogue) []string {
 // secrets held by reference, scope sets that resolve, and everything the
 // catalogue checks of itself (model.CapabilityCatalogue.Validate).
 func (d *capabilitiesDoc) validateWithGCPSets(configuredSets []string, gcpServerIDs map[string]bool) (*model.CapabilityCatalogue, error) {
+	return d.validateDoc(configuredSets, gcpServerIDs, true)
+}
+
+func (d *capabilitiesDoc) validateDoc(configuredSets []string, gcpServerIDs map[string]bool, checkDefaults bool) (*model.CapabilityCatalogue, error) {
 	var errs []string
 	if d.Servers != nil {
 		for i, s := range *d.Servers {
@@ -317,13 +323,102 @@ func (d *capabilitiesDoc) validateWithGCPSets(configuredSets []string, gcpServer
 	// One-release compatibility (schema 109): accept old-form gcp#gcp-key
 	// arguments in settings/capabilities.yml during state-repo import/check.
 	model.RewriteGCPKeyCatalogue(cat, configuredSets, gcpServerIDs, nil)
-	if err := cat.Validate(); err != nil {
+	// One-release compatibility (schema 122-123): strip retired priority-dispatch,
+	// durable and console entries from settings/capabilities.yml with a deprecation
+	// warning so check passes before the next export rewrites them.
+	stripRetiredAdmissionFromCatalogue(cat)
+	stripRetiredHostingFromCatalogue(cat)
+	toValidate := cat
+	if !checkDefaults && cat != nil {
+		cp := *cat
+		cp.Defaults = model.CatalogueDefaults{}
+		toValidate = &cp
+	}
+	if err := toValidate.Validate(); err != nil {
 		errs = append(errs, err.Error())
 	}
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("staterepo: %s: %s", CapabilitiesPath, strings.Join(errs, "; "))
 	}
 	return cat, nil
+}
+
+func stripRetiredAdmissionFromCatalogue(cat *model.CapabilityCatalogue) {
+	if cat == nil {
+		return
+	}
+	for _, retired := range []string{model.PriorityDispatchCapability, model.DurableCapability} {
+		if _, has := cat.InProcess[retired]; has {
+			delete(cat.InProcess, retired)
+			log.Printf("staterepo: %s: in_process.%s is deprecated and ignored; admission is now a task setting", CapabilitiesPath, retired)
+		}
+	}
+	if kept, adm, matched := model.ExtractLegacyAdmissionStrings(cat.Defaults.Task); len(matched) > 0 {
+		log.Printf("staterepo: %s: defaults.task contains deprecated admission capability (%s); set default_admission to %q instead",
+			CapabilitiesPath, strings.Join(matched, ", "), adm)
+		cat.Defaults.Task = kept
+	}
+	if kept, adm, matched := model.ExtractLegacyAdmissionStrings(cat.Defaults.CI); len(matched) > 0 {
+		log.Printf("staterepo: %s: defaults.ci contains deprecated admission capability (%s -> %q), which does not apply to CI",
+			CapabilitiesPath, strings.Join(matched, ", "), adm)
+		cat.Defaults.CI = kept
+	}
+	for r, rd := range cat.Defaults.Repos {
+		changed := false
+		if kept, adm, matched := model.ExtractLegacyAdmissionStrings(rd.Task); len(matched) > 0 {
+			log.Printf("staterepo: %s: defaults.repos[%s].task contains deprecated admission capability (%s); set repo default_admission to %q instead",
+				CapabilitiesPath, r, strings.Join(matched, ", "), adm)
+			rd.Task = kept
+			changed = true
+		}
+		if kept, adm, matched := model.ExtractLegacyAdmissionStrings(rd.CI); len(matched) > 0 {
+			log.Printf("staterepo: %s: defaults.repos[%s].ci contains deprecated admission capability (%s -> %q), which does not apply to CI",
+				CapabilitiesPath, r, strings.Join(matched, ", "), adm)
+			rd.CI = kept
+			changed = true
+		}
+		if changed {
+			cat.Defaults.Repos[r] = rd
+		}
+	}
+}
+
+func stripRetiredHostingFromCatalogue(cat *model.CapabilityCatalogue) {
+	if cat == nil {
+		return
+	}
+	if _, has := cat.InProcess[model.ConsoleCapability]; has {
+		delete(cat.InProcess, model.ConsoleCapability)
+		log.Printf("staterepo: %s: in_process.%s is deprecated and ignored; hosting is now a task setting", CapabilitiesPath, model.ConsoleCapability)
+	}
+	if kept, host, matched := model.ExtractLegacyHostingStrings(cat.Defaults.Task); len(matched) > 0 {
+		log.Printf("staterepo: %s: defaults.task contains deprecated hosting capability (%s); set default_hosting to %q instead",
+			CapabilitiesPath, strings.Join(matched, ", "), host)
+		cat.Defaults.Task = kept
+	}
+	if kept, host, matched := model.ExtractLegacyHostingStrings(cat.Defaults.CI); len(matched) > 0 {
+		log.Printf("staterepo: %s: defaults.ci contains deprecated hosting capability (%s -> %q), which does not apply to CI",
+			CapabilitiesPath, strings.Join(matched, ", "), host)
+		cat.Defaults.CI = kept
+	}
+	for r, rd := range cat.Defaults.Repos {
+		changed := false
+		if kept, host, matched := model.ExtractLegacyHostingStrings(rd.Task); len(matched) > 0 {
+			log.Printf("staterepo: %s: defaults.repos[%s].task contains deprecated hosting capability (%s); set repo default_hosting to %q instead",
+				CapabilitiesPath, r, strings.Join(matched, ", "), host)
+			rd.Task = kept
+			changed = true
+		}
+		if kept, host, matched := model.ExtractLegacyHostingStrings(rd.CI); len(matched) > 0 {
+			log.Printf("staterepo: %s: defaults.repos[%s].ci contains deprecated hosting capability (%s -> %q), which does not apply to CI",
+				CapabilitiesPath, r, strings.Join(matched, ", "), host)
+			rd.CI = kept
+			changed = true
+		}
+		if changed {
+			cat.Defaults.Repos[r] = rd
+		}
+	}
 }
 
 // mcpServers is the servers section as grain_config.mcp_servers.
@@ -760,6 +855,65 @@ const capabilitiesHeader = `# grain's capability catalogue (design/design/config
 // is consistent with itself, and admits every grant a template or a
 // schedule in this dump carries.
 func checkCapabilities(dir string) error {
+	return checkCapabilitiesDir(dir, true)
+}
+
+// checkCapabilitiesBeforeMigration validates settings/capabilities.yml's syntax,
+// secret references, server definitions, scope sets and restriction blocks
+// before Import runs ApplyDataMigrations on an older-schema dump. Defaults,
+// template grants and schedule grants are checked after Import via
+// checkMigratedCapabilities so data migrations (such as 121 and 128) can rewrite
+// or drop pre-upgrade grants first.
+func checkCapabilitiesBeforeMigration(dir string) error {
+	return checkCapabilitiesDir(dir, false)
+}
+
+// checkMigratedCapabilities exports db's migrated configuration to a temporary
+// directory and runs checkCapabilities on it, ensuring an upgraded dump produces
+// a state repository that passes grain state check.
+func checkMigratedCapabilities(ctx context.Context, db *sql.DB, scratch string) error {
+	rows, err := db.QueryContext(ctx, "SELECT `capability_policy` FROM `grain_config` WHERE `capability_policy` != ''")
+	if err != nil {
+		return fmt.Errorf("staterepo: reading migrated capability_policy: %w", err)
+	}
+	hasCatalogue := false
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			rows.Close()
+			return fmt.Errorf("staterepo: scanning migrated capability_policy: %w", err)
+		}
+		if pol, err := model.DecodeCapabilityPolicy(raw); err == nil && pol.Catalogue != nil {
+			hasCatalogue = true
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("staterepo: iterating migrated capability_policy: %w", err)
+	}
+	rows.Close()
+	if !hasCatalogue {
+		return nil
+	}
+	base := ""
+	if scratch != "" {
+		if err := os.MkdirAll(scratch, 0o700); err == nil {
+			base = scratch
+		}
+	}
+	postDir, err := os.MkdirTemp(base, "grain-migrated-caps-*")
+	if err != nil {
+		return fmt.Errorf("staterepo: preparing migrated capability check dir: %w", err)
+	}
+	defer os.RemoveAll(postDir)
+	if err := ExportConfig(ctx, db, postDir); err != nil {
+		return err
+	}
+	return checkCapabilities(postDir)
+}
+
+func checkCapabilitiesDir(dir string, checkGrants bool) error {
 	doc, err := readCapabilitiesDoc(dir)
 	if err != nil || doc == nil {
 		return err
@@ -797,8 +951,8 @@ func checkCapabilities(dir string) error {
 	if !hasExplicitSets && len(configuredSets) == 0 {
 		configuredSets = referencedGCPAccountNames(doc.catalogue(nil))
 	}
-	cat, err := doc.validateWithGCPSets(configuredSets, serverIDs)
-	if err != nil {
+	cat, err := doc.validateDoc(configuredSets, serverIDs, checkGrants)
+	if err != nil || !checkGrants {
 		return err
 	}
 	var errs []string
@@ -822,7 +976,7 @@ func checkCapabilities(dir string) error {
 			id := fmt.Sprint(g[kind.parent])
 			owner := byID[id]
 			capability, _ := textOf(g["capability"])
-			if rewritten, changed, missing := model.RewriteGCPKeyGrant(capability, configuredSets, serverIDs); changed && missing == "" {
+			if rewritten, changed, _ := model.RewriteGCPKeyGrant(capability, configuredSets, serverIDs); changed {
 				capability = rewritten
 			}
 			gc := model.GrantContext{Kind: model.CatalogueKindTask, Grants: []string{capability}}

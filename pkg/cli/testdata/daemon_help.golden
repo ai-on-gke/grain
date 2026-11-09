@@ -87,6 +87,8 @@ Usage of grain daemon:
     	database connection string / DSN or path; for sqlite defaults to <data-dir>/store
   -default-target-repo string
     	owner/name a task created through the UI/API with no repo of its own targets
+  -deployment-owner string
+    	human email address that owns this deployment for RBAC (IsDeploymentOwner) and holds an immutable grain/operator floor on the access allowlist regardless of the OS user the daemon runs as ($GRAIN_DEPLOYMENT_OWNER when unset)
   -disable-native-sandboxes
     	select sandbox backend "none": run the control plane only -- no sandbox is created, so no task runs (for tests and walkthroughs)
   -disable-self-upgrade
@@ -285,22 +287,24 @@ Usage of grain daemon:
     	one argument of the command the UI's reboot-host button runs -- repeat for every argument. Defaults to sudo systemctl reboot.
   -registry-auth-mode string
     	credential mode for registry heartbeats: "token" (secret registry-registration-token, -registry-token-file, or $GRAIN_REGISTRY_TOKEN) or "oidc" (ID token for -registry-oidc-audience) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
+  -registry-connect
+    	supervise an outbound wss://<registry-host>/api/entries/<name>/connect tunnel and serve accepted mux streams in-process behind the hub assertion verifier gate ($GRAIN_REGISTRY_CONNECT; requires -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url)
   -registry-display-name string
-    	human-readable display name advertised in the registry directory (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
+    	human-readable display name advertised in the hub directory (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
   -registry-entry string
-    	entry name this daemon registers and heartbeats as in the grain registry ($GRAIN_REGISTRY_ENTRY) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
+    	entry name this daemon registers and heartbeats as in the Grain Hub ($GRAIN_REGISTRY_ENTRY) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
   -registry-host-kind string
-    	connected entry host kind advertised to the registry: "workstation", "kubernetes", or "other" (defaults to the active sandbox backend) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
+    	connected entry host kind advertised to the hub: "workstation", "kubernetes", or "other" (defaults to the active sandbox backend) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
   -registry-listed
-    	include this connected entry in default registry directory listings (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) (default true)
+    	include this connected entry in default hub directory listings (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that) (default true)
   -registry-oidc-audience string
     	OIDC ID token audience when -registry-auth-mode=oidc (defaults to -registry-url) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
   -registry-purpose string
-    	short description of this grain deployment's purpose in the registry directory (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
+    	short description of this grain deployment's purpose in the hub directory (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
   -registry-token-file string
     	fallback file holding a grc_... registration credential when secret registry-registration-token is unset ($GRAIN_REGISTRY_TOKEN is also consulted)
   -registry-url string
-    	base URL of the grain registry this daemon self-registers with ($GRAIN_REGISTRY_URL; empty disables heartbeats) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
+    	base URL of the Grain Hub this daemon self-registers with ($GRAIN_REGISTRY_URL; empty disables heartbeats) (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)
   -relay-audience string
     	removed: the rendezvous relay is gone. The daemon refuses to start with this set
   -relay-auth-token-file string
@@ -394,7 +398,7 @@ Usage of grain daemon:
   -ui-registry-issuer string
     	the exact issuer URL a signed X-Grain-Registry-Assertion must carry for the UI/API to accept the identity in it (e.g. "https://grain.example.com"); defaults to $GRAIN_REGISTRY_ISSUER. All three of -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url must be set to enable the "registry" IdentityVerifier
   -ui-registry-keys-url string
-    	where the registry's ES256 signing keys are published as a JWK set (e.g. "https://grain.example.com/.well-known/jwks.json"); defaults to $GRAIN_REGISTRY_KEYS_URL
+    	where the hub's ES256 signing keys are published as a JWK set (e.g. "https://grain.example.com/.well-known/jwks.json"); defaults to $GRAIN_REGISTRY_KEYS_URL
   -ui-require-iap
     	accept the access code (bearer or grain_access cookie) only from loopback with no forwarding or proxy headers, and serve no "Enter access code" page, so network callers sign in through IAP alone (docs/access-code.md); needs -ui-iap-audience or $GRAIN_IAP_AUDIENCE. Defaults to $GRAIN_REQUIRE_IAP
   -ui-require-verifier string

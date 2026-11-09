@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Fragment, useRef, useState } from "react";
+import { Fragment, useMemo, useRef, useState } from "react";
 import {
   Autocomplete,
   Box,
@@ -131,6 +131,13 @@ export default function SearchSelect({
   const [inner, setInner] = useState(
     defaultValue !== undefined ? defaultValue : multiple ? [] : "",
   );
+  // Bumped whenever a controlled single value reports a new choice: a
+  // caller that declines it (Settings' Section picker, when "Discard
+  // unsaved changes?" is cancelled) leaves value as it was, and MUI only
+  // puts the box's text back to the chosen label when value changes. A
+  // fresh copy of the kept option is that change, so the declined row's
+  // label is not left in the box (2026-11-08 settings walkthrough).
+  const [syncSeq, setSyncSeq] = useState(0);
   const rawCurrent = value !== undefined ? value : inner;
   const current = multiple
     ? Array.isArray(rawCurrent)
@@ -161,8 +168,15 @@ export default function SearchSelect({
 
   const choose = (next) => {
     if (value === undefined) setInner(next);
+    else if (!multiple && next !== current) setSyncSeq((n) => n + 1);
     onChange?.(next);
   };
+
+  const foundSingle = multiple ? null : optionOf(current);
+  const singleValue = useMemo(
+    () => (foundSingle && syncSeq > 0 ? { ...foundSingle } : foundSingle),
+    [foundSingle?.value, foundSingle?.label, syncSeq],
+  );
 
   return (
     <Autocomplete
@@ -173,7 +187,7 @@ export default function SearchSelect({
       value={
         multiple
           ? current.map((v) => byValue.get(v)).filter(Boolean)
-          : optionOf(current)
+          : singleValue
       }
       disabled={disabled}
       getOptionDisabled={getOptionDisabled}

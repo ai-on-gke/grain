@@ -1329,6 +1329,9 @@ func decodeRecurrence(path, id string, node *yaml.Node, row map[string]any) erro
 				return fail(err.Error())
 			}
 			r := model.Recurrence{Kind: model.RecurrenceGitRef, GitRef: &trig}
+			if err := r.Validate(); err != nil {
+				return fail(err.Error())
+			}
 			row["recurrence_kind"] = r.StoredKind()
 			return nil
 		}
@@ -1344,6 +1347,9 @@ func decodeRecurrence(path, id string, node *yaml.Node, row map[string]any) erro
 			return fail(err.Error())
 		}
 		r := model.Recurrence{Kind: model.RecurrenceGitHubWorkflowRun, GitHubWorkflowRun: &trig}
+		if err := r.Validate(); err != nil {
+			return fail(err.Error())
+		}
 		row["recurrence_kind"] = r.StoredKind()
 		return nil
 	}

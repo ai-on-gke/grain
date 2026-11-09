@@ -1,0 +1,11 @@
+{
+  "mode": "daily",
+  "pickerBefore": "On each release (recommended)",
+  "writes": [
+    "PUT /api/settings {\"autoUpgradeOn\":\"daily\",\"autoUpgradeChannel\":\"latest\",\"autoUpgradeTime\":\"03:00\"}"
+  ],
+  "pickerAfterReload": "Once a day",
+  "autoUpgradeOn": "daily",
+  "autoUpgradeChannel": "latest",
+  "ok": true
+}

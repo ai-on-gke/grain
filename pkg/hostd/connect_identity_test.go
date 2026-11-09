@@ -56,3 +56,15 @@ func TestIDTokenEmail(t *testing.T) {
 		t.Errorf("IDTokenEmail(garbage) = %q", got)
 	}
 }
+
+func TestDelegatedIdentityNeverOwnsAHostd(t *testing.T) {
+	id := ConnectIdentity{
+		Remote:      true,
+		Principal:   "hostd-owner@proj.iam.gserviceaccount.com",
+		DelegatedBy: "slack-bot@proj.iam.gserviceaccount.com",
+	}
+	got := ownerRefusal(id, "ws-1", "hostd-owner@proj.iam.gserviceaccount.com", false)
+	if !strings.Contains(got, "delegated identity") {
+		t.Fatalf("ownerRefusal(delegated) = %q, want refusal naming delegated identity", got)
+	}
+}

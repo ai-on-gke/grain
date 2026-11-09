@@ -1,0 +1,71 @@
+ok   http://127.0.0.1:4257/ desktop light status=200 title="Grain Registry" doc=1440/1440
+ok   http://127.0.0.1:4257/ desktop dark status=200 title="Grain Registry" doc=1440/1440
+ok   http://127.0.0.1:4257/ phone light status=200 title="Grain Registry" doc=390/390
+ok   http://127.0.0.1:4257/ phone dark status=200 title="Grain Registry" doc=390/390
+ok   http://127.0.0.1:4257/directory desktop light status=200 title="Grain Registry" doc=1440/1440
+ok   http://127.0.0.1:4257/directory desktop dark status=200 title="Grain Registry" doc=1440/1440
+ok   http://127.0.0.1:4257/directory phone light status=200 title="Grain Registry" doc=390/390
+ok   http://127.0.0.1:4257/directory phone dark status=200 title="Grain Registry" doc=390/390
+ok   http://127.0.0.1:4257/new desktop light status=200 title="Grain Registry" doc=1440/1440
+ok   http://127.0.0.1:4257/new desktop dark status=200 title="Grain Registry" doc=1440/1440
+ok   http://127.0.0.1:4257/new phone light status=200 title="Grain Registry" doc=390/390
+ok   http://127.0.0.1:4257/new phone dark status=200 title="Grain Registry" doc=390/390
+ok   http://127.0.0.1:4257/entries/payments-staging desktop light status=200 title="Grain Registry" doc=1440/1440
+ok   http://127.0.0.1:4257/entries/payments-staging desktop dark status=200 title="Grain Registry" doc=1440/1440
+ok   http://127.0.0.1:4257/entries/payments-staging phone light status=200 title="Grain Registry" doc=390/390
+ok   http://127.0.0.1:4257/entries/payments-staging phone dark status=200 title="Grain Registry" doc=390/390
+ok   http://127.0.0.1:4257/entries/alice-workstation desktop light status=200 title="Grain Registry" doc=1440/1440
+ok   http://127.0.0.1:4257/entries/alice-workstation desktop dark status=200 title="Grain Registry" doc=1440/1440
+ok   http://127.0.0.1:4257/entries/alice-workstation phone light status=200 title="Grain Registry" doc=390/390
+ok   http://127.0.0.1:4257/entries/alice-workstation phone dark status=200 title="Grain Registry" doc=390/390
+ok   http://127.0.0.1:4257/admin desktop light status=200 title="Grain Registry" doc=1440/1440
+ok   http://127.0.0.1:4257/admin desktop dark status=200 title="Grain Registry" doc=1440/1440
+ok   http://127.0.0.1:4257/admin phone light status=200 title="Grain Registry" doc=390/390
+ok   http://127.0.0.1:4257/admin phone dark status=200 title="Grain Registry" doc=390/390
+ok   http://127.0.0.1:4257/status desktop light status=200 title="Grain Registry" doc=1440/1440
+ok   http://127.0.0.1:4257/status desktop dark status=200 title="Grain Registry" doc=1440/1440
+ok   http://127.0.0.1:4257/status phone light status=200 title="Grain Registry" doc=390/390
+ok   http://127.0.0.1:4257/status phone dark status=200 title="Grain Registry" doc=390/390
+ok   http://127.0.0.1:4256/ desktop light status=200 title="Grain Registry" doc=1440/1440
+ok   http://127.0.0.1:4256/ desktop dark status=200 title="Grain Registry" doc=1440/1440
+ok   http://127.0.0.1:4256/ phone light status=200 title="Grain Registry" doc=390/390
+ok   http://127.0.0.1:4256/ phone dark status=200 title="Grain Registry" doc=390/390
+ok   http://127.0.0.1:4256/directory desktop light status=200 title="Grain Registry" doc=1440/1440
+ok   http://127.0.0.1:4256/directory desktop dark status=200 title="Grain Registry" doc=1440/1440
+ok   http://127.0.0.1:4256/directory phone light status=200 title="Grain Registry" doc=390/390
+ok   http://127.0.0.1:4256/directory phone dark status=200 title="Grain Registry" doc=390/390
+ok   http://127.0.0.1:4256/entries/conn-alice desktop light status=200 title="Grain Registry" doc=1440/1440
+ok   http://127.0.0.1:4256/entries/conn-alice desktop dark status=200 title="Grain Registry" doc=1440/1440
+ok   http://127.0.0.1:4256/entries/conn-alice phone light status=200 title="Grain Registry" doc=390/390
+ok   http://127.0.0.1:4256/entries/conn-alice phone dark status=200 title="Grain Registry" doc=390/390
+ok   http://127.0.0.1:4256/entries/bob-ws desktop light status=200 title="Grain Registry" doc=1440/1440
+ok   http://127.0.0.1:4256/entries/bob-ws desktop dark status=200 title="Grain Registry" doc=1440/1440
+ok   http://127.0.0.1:4256/entries/bob-ws phone light status=200 title="Grain Registry" doc=390/390
+ok   http://127.0.0.1:4256/entries/bob-ws phone dark status=200 title="Grain Registry" doc=390/390
+ok   http://127.0.0.1:4256/status desktop light status=200 title="Grain Registry" doc=1440/1440
+ok   http://127.0.0.1:4256/status desktop dark status=200 title="Grain Registry" doc=1440/1440
+ok   http://127.0.0.1:4256/status phone light status=200 title="Grain Registry" doc=390/390
+ok   http://127.0.0.1:4256/status phone dark status=200 title="Grain Registry" doc=390/390
+ok   http://127.0.0.1:4256/admin desktop light status=200 title="Grain Registry" doc=1440/1440
+ok   http://127.0.0.1:4256/admin desktop dark status=200 title="Grain Registry" doc=1440/1440
+ok   http://127.0.0.1:4256/admin phone light status=200 title="Grain Registry" doc=390/390
+ok   http://127.0.0.1:4256/admin phone dark status=200 title="Grain Registry" doc=390/390
+0 flagged page renders
+ok   http://127.0.0.1:4255/ desktop light status=503 title="conn-alice is offline" doc=1440/1440
+ok   http://127.0.0.1:4255/ desktop dark status=503 title="conn-alice is offline" doc=1440/1440
+ok   http://127.0.0.1:4255/ phone light status=503 title="conn-alice is offline" doc=390/390
+ok   http://127.0.0.1:4255/ phone dark status=503 title="conn-alice is offline" doc=390/390
+ok   http://127.0.0.1:4258/ desktop light status=404 title="nope not found" doc=1440/1440
+ok   http://127.0.0.1:4258/ desktop dark status=404 title="nope not found" doc=1440/1440
+ok   http://127.0.0.1:4258/ phone light status=404 title="nope not found" doc=390/390
+ok   http://127.0.0.1:4258/ phone dark status=404 title="nope not found" doc=390/390
+0 flagged page renders
+ok   http://127.0.0.1:4255/ desktop light status=200 title="grain" doc=1440/1440
+ok   http://127.0.0.1:4255/ desktop dark status=200 title="grain" doc=1440/1440
+ok   http://127.0.0.1:4255/ phone light status=200 title="grain" doc=390/390
+ok   http://127.0.0.1:4255/ phone dark status=200 title="grain" doc=390/390
+ok   http://127.0.0.1:4255/settings/registry desktop light status=200 title="grain" doc=1440/1440
+ok   http://127.0.0.1:4255/settings/registry desktop dark status=200 title="grain" doc=1440/1440
+ok   http://127.0.0.1:4255/settings/registry phone light status=200 title="grain" doc=390/390
+ok   http://127.0.0.1:4255/settings/registry phone dark status=200 title="grain" doc=390/390
+0 flagged page renders

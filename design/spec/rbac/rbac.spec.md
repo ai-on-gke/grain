@@ -420,7 +420,6 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 | `POST /api/external-agents/tokens/{id}/revoke` | `capabilities:admin` | `writer` | `writer` MAY revoke only own token; `admin` may revoke any (`RB-14`). |
 | `DELETE /api/external-agents/tokens/{id}` | `capabilities:admin` | `writer` | `writer` MAY delete only own token; `admin` may delete any (`RB-14`). |
 | `POST /api/external-agents/tokens/revoke-all` | `capabilities:admin` | `admin` | Emergency deployment-wide kill switch (`admin` only). |
-| `POST /api/capabilities/{id}/check` | `capabilities:read` | `admin` | Actively probes upstream capability server/credential. |
 | `GET /api/capability-servers/gchat-usage` | `capabilities:read` | `admin` | Admin capability-server usage inspection. |
 | `GET /api/capability-servers/host-entries` | `capabilities:read` | `admin` | Lists host-script entries on host. |
 | `GET /api/capability-servers/usage` | `capabilities:read` | `admin` | Lists cross-deployment capability server usage. |
@@ -438,7 +437,7 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 | `PUT /api/capability-policy` | `capabilities:admin` | `admin` | Updates capability policy. |
 | `PUT /api/api-scope-sets` | `capabilities:admin` | `admin` | Creates/updates declared API scope set. |
 | `POST /api/api-scope-sets/delete` | `capabilities:admin` | `admin` | Deletes declared API scope set. |
-| `GET /api/hostds` | `capabilities:read` | `admin` | Lists registered `grain hostd` instances. |
+| `GET /api/hostds` | `capabilities:read` | `admin` | Lists registered `grain host` instances. |
 | `POST /api/hostds` | `capabilities:admin` | `admin` | Registers `hostd` and mints `ghd_…` token (``RB-9`.4`, `RB-14`). |
 | `PATCH /api/hostds/{name}` | `capabilities:admin` | `admin` | Updates `hostd` owner/metadata. |
 | `GET /api/hostds/{name}/install` | `capabilities:read` | `admin` | Shows a registered `hostd`'s install instructions again (`ui.RegisterHostdInstall`); never its token. |
@@ -463,6 +462,7 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 | `GET /api/persistent-sandboxes` | `sandboxes:read` | `reader` | Persistent sandboxes status list. |
 | `GET /api/metrics` | `deployment:read` | `reader` | Deployment throughput/latency/quota metrics (`/metrics`). |
 | `GET /api/unmatched-failures` | `deployment:read` | `reader` | Unmatched CI/run failure summary. |
+| `GET /api/usage` | `deployment:read` | `reader` | Token usage, budgets and the sustainable-concurrency estimate per connection and model. |
 | `GET /api/upgrade` | `deployment:read` | `reader` | Current build version and scheduled-upgrade status. |
 | `GET /api/upgrade/targets` | `deployment:read` | `reader` | Upgrade channel/target status. |
 | `GET /api/upgrade/release-notes` | `deployment:read` | `reader` | Upgrade release notes. |
@@ -476,6 +476,7 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 | `GET /api/deployment` | `settings:read` | `admin` | Full deployment backend & connection config (`Settings → Models / Git`). |
 | `PUT /api/deployment` | `settings:write` | `admin` | Updates deployment backends/connections. |
 | `PUT /api/settings` | `settings:write` | `admin` | Updates `grain_config` (`configMode` requires human `admin`, `SC-2`). |
+| `PUT /api/usage/settings` | `settings:write` | `admin` | Replaces the token usage settings: concurrency mode, automatic cap floor, retention and connection budgets. |
 | `POST /api/settings` | `settings:write` | `admin` | Legacy settings update alias (`admin`). |
 | `POST /api/settings/plan` | `settings:read` | `admin` | Previews `grain_config` mutation plan. |
 | `PUT /api/settings/cli-run` | `settings:write` | `admin` | Updates CLI run placement settings. |
@@ -563,10 +564,10 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 
 2. **`grain` CLI subcommands (`pkg/cli/main.go`):**
    - **HTTP-backed task/API commands** authenticate as the caller (IAP OIDC, `gma_…` token, or local `local-api-token` break-glass) and inherit the permission of the underlying HTTP routes:
-     - `reader`: `grain whoami`, `grain list`, `grain get`, `grain config`, `grain metrics`, `grain failures`, `grain health`, `grain sandbox-budget`, `grain ci list|show|watch|log|artifact|faults|cache` (read), `grain declarations check` (local file lint), `grain release list|get`, `grain release-notes` (read), `grain hostds list` (`admin` on server).
+     - `reader`: `grain whoami`, `grain list`, `grain get`, `grain config`, `grain metrics`, `grain failures`, `grain health`, `grain sandbox-budget`, `grain ci list|show|watch|log|artifact|faults|cache` (read), `grain declarations check` (local file lint), `grain release list|get`, `grain release-notes` (read), `grain host list` (`admin` on server).
      - `writer`: `grain create` (`admin` if `-approve` with `IsAdminOnlyGrant`), `grain update`, `grain approve` (`admin` if task holds `IsAdminOnlyGrant`), `grain withdraw`, `grain defer`, `grain undefer`, `grain capability` (`admin` for `IsAdminOnlyGrant`), `grain comment`, `grain close` / `delete`, `grain reopen`, `grain retry`, `grain retry-merge`, `grain run-now`, `grain pause`, `grain resume`, `grain ci run|cancel`, `grain quarantine`, `grain notify`, `grain release` (operational cut/promote/approve), `grain login --issue-token` (own `writer`-bounded `gma_` token).
-     - `admin`: `grain users list|add|set-role|remove` *(new)*, `grain force-merge`, `grain settings`, `grain default-model`, `grain repo`, `grain git-connections`, `grain git-ambient`, `grain gcp-key`, `grain capability-servers`, `grain hostds register|set-owner|rotate|revoke`, `grain sandbox` (recreate/probe), `grain broadcast`.
-   - **Host-filesystem / process commands** (`grain daemon`, `grain controller`, `grain setup`, `grain init`, `grain hostd`, `grain runhost`, `grain mcpserver`, `grain secrets`, `grain connections`, `grain backup`, `grain export`, `grain import`, `grain state`, `grain sync`, `grain db`, `grain upgrade-postgres`, `grain access-code`) run directly against local host files/databases; accessing them requires OS/container shell access (`kubectl exec` / root), which is break-glass `admin` (`RB-6`).
+     - `admin`: `grain users list|add|set-role|remove` *(new)*, `grain force-merge`, `grain settings`, `grain default-model`, `grain repo`, `grain git-connections`, `grain git-ambient`, `grain gcp-key`, `grain capability-servers`, `grain host register|set-owner|rotate|revoke`, `grain sandbox` (recreate/probe), `grain broadcast`.
+   - **Host-filesystem / process commands** (`grain daemon`, `grain controller`, `grain setup`, `grain init`, `grain host`, `grain runhost`, `grain mcpserver`, `grain secrets`, `grain connections`, `grain backup`, `grain export`, `grain import`, `grain state`, `grain sync`, `grain db`, `grain upgrade-postgres`, `grain access-code`) run directly against local host files/databases; accessing them requires OS/container shell access (`kubectl exec` / root), which is break-glass `admin` (`RB-6`).
 
 ---
 
@@ -599,9 +600,9 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
      - `POST /api/external-agents/tokens/{id}/rotate`, `/revoke`, and `DELETE /api/external-agents/tokens/{id}`: permitted to a `writer` if and only if `token.Owner.ID == caller.ID` (and on `rotate`, the token's stored scopes remain `writer`-covered); accessing another user's token ID MUST return `404 Not Found` (avoiding enumeration of other users' token IDs) or `403 Forbidden`.
    - **Minting and lifecycle by `admin`:** An `admin` MAY view, mint (up to `admin` scopes, subject to `AU-11` requiring human/explicit SA for dangerous scopes), rotate, revoke, or delete any `gma_` token, and MAY call `POST /api/external-agents/tokens/revoke-all`.
    - **Runtime execution (`POST /mcp` and `/api/*` with `Bearer gma_…`):** `RequestActor(ctx)` sets `Actor = {agent, "external:" + tok.Name, external-token}` and `OnBehalfOf = &tok.Owner`. Every request enforces `RB-13` against `tok.Owner`'s current RBAC role, and `tools/list` on `POST /mcp` omits tools whose route requires a role above `tok.Owner`'s current role.
-3. **`grain hostd` tokens (`/api/hostds*`):**
+3. **`grain host` tokens (`/api/hostds*`):**
    - Only `RoleAdmin` MAY list, register (`POST /api/hostds`), update owner (`PATCH /api/hostds/{name}`), rotate, or revoke `ghd_…` tokens.
-   - Note that `hostd.Owner` (`AU-18`) is the identity that the remote `grain hostd` process itself authenticates as at `GET /api/hostd/connect` (often a dedicated `serviceAccount:` or workstation owner); that `Owner` MUST pass admission (`resolvePrincipalRole != RoleNone`, so a `reader` or `writer` workstation owner or `serviceAccount:...=reader` can connect their admin-registered `hostd` tunnel without needing `RoleAdmin` across the UI/API!).
+   - Note that `hostd.Owner` (`AU-18`) is the identity that the remote `grain host` process itself authenticates as at `GET /api/hostd/connect` (often a dedicated `serviceAccount:` or workstation owner); that `Owner` MUST pass admission (`resolvePrincipalRole != RoleNone`, so a `reader` or `writer` workstation owner or `serviceAccount:...=reader` can connect their admin-registered `hostd` tunnel without needing `RoleAdmin` across the UI/API!).
 
 ### 4.3 Autonomous runs, schedules, and `oncall` {#RB-15}
 

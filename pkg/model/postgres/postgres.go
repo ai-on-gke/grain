@@ -103,7 +103,7 @@ func Open(cfg Config) (*sql.DB, error) {
 	}
 
 	rawConnector := stdlib.GetConnector(*connConfig)
-	wrappedConnector := newAdaptedConnector(rawConnector)
+	wrappedConnector := newAdaptedConnector(rawConnector, cfg)
 	db := sql.OpenDB(wrappedConnector)
 
 	maxOpen := cfg.MaxOpenConns
@@ -334,4 +334,17 @@ func (cfg Config) SanitizedDSN() string {
 	}
 	u.RawQuery = reQueryPassword.ReplaceAllString(u.RawQuery, "${1}******")
 	return u.String()
+}
+
+// ConfigFromDB returns the Config a *sql.DB was opened with when it was
+// created by Open.
+func ConfigFromDB(db *sql.DB) (Config, bool) {
+	if db == nil {
+		return Config{}, false
+	}
+	d, ok := db.Driver().(*adaptedDriver)
+	if !ok {
+		return Config{}, false
+	}
+	return d.cfg, true
 }

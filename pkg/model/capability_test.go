@@ -547,3 +547,14 @@ func TestCapabilityRegistryDynamicProvider(t *testing.T) {
 		t.Fatalf("ResolveGrants(dynamic-foo) = %+v", resolved)
 	}
 }
+
+// ProtocolMode is four octal digits whichever form a provider wrote:
+// package-publish's helper is "0755", most placements "600" (F5 in
+// docs/test-runs/2026-11-04-capabilities.md).
+func TestPlacementProtocolMode(t *testing.T) {
+	for mode, want := range map[string]string{"": "0600", "600": "0600", "0600": "0600", "755": "0755", "0755": "0755", "4755": "4755", "x": "0x"} {
+		if got := (Placement{Mode: mode}).ProtocolMode(); got != want {
+			t.Errorf("ProtocolMode(%q) = %q, want %q", mode, got, want)
+		}
+	}
+}

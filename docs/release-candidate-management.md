@@ -143,18 +143,25 @@ towards.
 qualification, or that a person rejects, is dropped and a later run cuts
 `vX.Y.0-rc.(N+1)` of the same minor from a newer LKG commit:
 
-- **Holding `rc.(N+1)` until blockers land (`grain/rc-hold`).** When
-  `vX.Y.0-rc.N` is confirmed red, the release reconciler raises
-  `pipeline.rc-failed:vX.Y.0-rc.N` to wake the pipeline steward
-  (`docs/pipeline-steward.md`), which titles its fix and revert tasks
-  `[rc-blocker vX.Y.0-rc.N] ...`. While any open task carries that marker,
-  the reconciler keeps check run `grain/rc-hold` (`in_progress`) on the red
-  rc's commit — the floor Phase 2 cuts `rc.(N+1)` after — and completes it
-  (`success`) once every blocker has landed (`neutral` if superseded). Before
-  cutting `rc.(N+1)` (`next_n > 1`), Phase 2 reads
+- **Holding `rc.(N+1)` until triage and blockers complete (`grain/rc-hold`).** When
+  `vX.Y.0-rc.N` (`N < RELEASE_MAX_RC_ATTEMPTS`) is confirmed red, the release
+  reconciler raises `pipeline.rc-failed:vX.Y.0-rc.N` to wake the pipeline steward
+  (`docs/pipeline-steward.md`) and immediately posts check run `grain/rc-hold`
+  (`in_progress`, "triage pending") on the red rc's commit — the floor Phase 2
+  cuts `rc.(N+1)` after — before posting the completed
+  `grain/release-qualification` failure. The steward titles its fix and revert
+  tasks `[rc-blocker vX.Y.0-rc.N] ...`. While triage is pending (up to `1h`,
+  `model.ReleaseHoldTriageGrace` / `GRAIN_RC_HOLD_GRACE`) or any open task
+  carries that marker, the reconciler keeps `grain/rc-hold` `in_progress`, and
+  completes it once every blocker has landed (`success`), when the steward
+  triages `vX.Y.0-rc.N` with no blocker or a person clears the notification
+  (`success`), when the triage window elapses with no blocker (`neutral`), or if
+  superseded (`neutral`). Before cutting `rc.(N+1)` (`next_n > 1`), Phase 2 reads
   `commits/<floor>/check-runs?check_name=grain%2Frc-hold&filter=all` (or
-  `RELEASE_HOLD_CHECKS_JSON` in tests): if `RELEASE_QUALIFICATION_APP` is unset
-  it refuses rather than trust another app's check run, and if the newest check
+  `RELEASE_HOLD_CHECKS_JSON` in tests): if `RELEASE_QUALIFICATION_APP` (the
+  environment, else `scripts/release.conf`) is unset it refuses rather than
+  trust another app's check run; if it is explicitly `none` no check run is
+  trusted, so nothing holds; and if the newest check
   run from `RELEASE_QUALIFICATION_APP` is not `completed`, Phase 2 cuts nothing, logs
   `phase 2: vX.Y.0-rc.(N+1) is held by grain/rc-hold on <floor>: <summary>`,
   emits `rc_held=vX.Y.0-rc.(N+1)` and exits 0. No check run from
@@ -197,7 +204,13 @@ which case it is dropped without qualifying):
    `.grain/suites/release-qualification.yml` against the rc and posts check
    run `grain/release-qualification` on its commit. Only a check run created
    by `RELEASE_QUALIFICATION_APP` (grain's own GitHub App) counts; same-named
-   check runs from any other app are ignored.
+   check runs from any other app are ignored, and with no
+   `RELEASE_QUALIFICATION_APP` configured none is trusted and the rc never
+   passes. With `RELEASE_QUALIFICATION_APP` set explicitly to `none` (in the
+   environment or `scripts/release.conf`), as for a forge connection that is a
+   personal access token rather than a GitHub App (which cannot post check
+   runs), Stage 2 is skipped (`SKIPPED grain/release-qualification`) and Stage
+   1 alone qualifies the rc. It is never `none` by default.
 
 A first product failure of any Stage 1 job or Stage 2 item gets one retry on
 the same rc (`flake`); cancelled, timed-out or capacity-starved runs are
@@ -371,7 +384,8 @@ only re-stamp the daemon images with the release name and retag.
 
 - **Daemon and sandbox images** are published to Docker Hub under `docker.io/grainai/*`
   (`grain`, `sandbox`, `sandbox-base`, `sandbox-k8s`, `sandbox-k8s-base`, with
-  `docker.io/grainai/registry` reserved for the future `grain-registry` image).
+  and `docker.io/grainai/registry`, the `grain-registry` image, which `promote`
+  and `rc` rebuild and stamp alongside `grain`).
   `docker.io/grainai/grain` is the core build (`./cmd/grain`, the
   `oss` install track). A wrapper distribution's
   build is published beside it under its own image name and install track
@@ -379,6 +393,11 @@ only re-stamp the daemon images with the release name and retag.
 - **What the tags mean:** `latest` is the last promoted release and never
   `main`'s head. `main` is the head of `main`. `candidate`/`rc` is the
   current rc. `vX.Y.Z` is one release, kept forever by `cmd/ghcr-prune`.
+  A staged `vX.Y.Z-pending` build is kept whatever its age until the same
+  version also carries `vX.Y.Z-rejected` (`discard-pending`); approving it
+  retags it `vX.Y.Z`, which is kept from then on. `latest`, `vX.Y.Z`,
+  `sha-<short>` and signature tags are kept the same way on the base
+  packages (`sandbox-base`, `guest-base`) as on every other image.
 - **`latest` follows the git tag.** `.grain/workflows/promote.yml`
   (`scripts/release-images.sh promote`) publishes the release the git
   `latest` tag names, as `vX.Y.Z` and `latest`. It runs on every `release`

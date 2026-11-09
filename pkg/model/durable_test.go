@@ -23,34 +23,44 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// durable is a person's to grant and implies priority dispatch, in the
+// durable admission is a person's to set and implies priority dispatch, in the
 // Task predicate and in the store's own SQL twin alike.
 func TestDurableImpliesPriorityDispatchAndIsAPersonsToGrant(t *testing.T) {
 	t.Parallel()
 	if !model.IsPersonOnlyGrant(model.DurableCapability) {
-		t.Fatal("durable is not a person-only grant")
+		t.Fatal("durable input alias is not a person-only grant")
 	}
-	parent := model.Task{ID: "steward", Grants: []model.Grant{
-		{Capability: model.DurableCapability, Via: model.GrantByGrain},
-		{Capability: "self-debug", Via: model.GrantByGrain}}}
-	child := model.Task{Grants: []model.Grant{
+	parent := model.Task{
+		ID:        "steward",
+		Admission: model.AdmissionDurable,
+		Grants:    []model.Grant{{Capability: "self-debug", Via: model.GrantByGrain}},
+	}
+	child := model.Task{
+		Admission: model.AdmissionDurable,
+		Grants:    []model.Grant{{Capability: "self-debug", Via: model.GrantByLabel}},
+	}
+	if why := model.PersonOnlyProposalSettings(child, parent); why == "" {
+		t.Fatal("PersonOnlyProposalSettings(durable) = empty, want person-only hold")
+	}
+	legacyChild := model.Task{Grants: []model.Grant{
 		{Capability: model.DurableCapability, Via: model.GrantByLabel},
 		{Capability: "self-debug", Via: model.GrantByLabel}}}
-	if got := model.EscalatedCapabilities(child, parent); !slices.Equal(got, []string{model.DurableCapability}) {
+	if got := model.EscalatedCapabilities(legacyChild, parent); !slices.Equal(got, []string{model.DurableCapability}) {
 		t.Fatalf("EscalatedCapabilities = %v, want durable alone", got)
 	}
-	tmpl := model.Template{ID: "durable-worker", Grants: []model.Grant{{Capability: model.DurableCapability}}}
+	tmpl := model.Template{ID: "durable-worker", Admission: model.AdmissionDurable}
 	if err := model.TemplateWithinTask(parent, tmpl); err == nil {
-		t.Fatal("an agent holding durable may file from a template granting it")
+		t.Fatal("an agent holding durable admission may file from a template setting durable")
 	}
-	durable := model.Task{Grants: []model.Grant{{Capability: model.DurableCapability}}}
+	durable := model.Task{Admission: model.AdmissionDurable}
 	if !durable.IsDurable() || !durable.HasPriorityDispatch() {
 		t.Fatalf("a durable task: IsDurable = %v, HasPriorityDispatch = %v, want both true",
 			durable.IsDurable(), durable.HasPriorityDispatch())
 	}
-	priority := model.Task{Grants: []model.Grant{{Capability: model.PriorityDispatchCapability}}}
-	if priority.IsDurable() {
-		t.Fatal("priority-dispatch alone reads as durable")
+	priority := model.Task{Admission: model.AdmissionBypass}
+	if priority.IsDurable() || !priority.HasPriorityDispatch() {
+		t.Fatalf("bypass task: IsDurable = %v, HasPriorityDispatch = %v, want false, true",
+			priority.IsDurable(), priority.HasPriorityDispatch())
 	}
 
 	store, ctx := open(t)
@@ -74,7 +84,7 @@ func durableTestTask(id string, durable bool) model.Task {
 		Approval: &model.Attribution{Actor: human},
 	}
 	if durable {
-		tk.Grants = []model.Grant{{Capability: model.DurableCapability, Via: model.GrantByLabel}}
+		tk.Admission = model.AdmissionDurable
 	}
 	return tk
 }
@@ -153,5 +163,21 @@ func TestSuspensionResumeAtAndSuspensionsInARow(t *testing.T) {
 	}
 	if streak, err := store.FailureStreak(ctx, "d"); err != nil || (streak != nil && streak.Count != 0) {
 		t.Fatalf("FailureStreak after suspensions = %+v, %v; want no count", streak, err)
+	}
+
+	// The agent's own resume_later time is its deferral's to keep, which
+	// a message, a CI verdict or Undefer ends sooner: it holds nothing here.
+	started := at.Add(4 * time.Hour)
+	if err := store.StartRun(ctx, model.Run{ID: "d-5", TaskID: "d", Attempt: 5, StartedAt: started}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	wake := started.Add(19 * time.Hour)
+	if err := store.Suspend(ctx, model.Suspension{RunID: "d-5", Kind: model.SuspendRequested,
+		ResumeOn: model.ResumeOn{At: &wake, Message: true}.JSON(), ResumeAt: &wake,
+		CreatedAt: started.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.SuspensionResumeAt(ctx, "d"); err != nil || got != nil {
+		t.Fatalf("SuspensionResumeAt after a resume_later = %v, %v; want nil", got, err)
 	}
 }

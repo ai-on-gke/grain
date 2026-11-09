@@ -56,9 +56,10 @@ var errSandboxCLIUnwired = errors.New("this daemon's UI/API server is not runnin
 type sandboxCLIGate struct{}
 
 var (
-	_ gitproxy.CLIActions            = sandboxCLIGate{}
-	_ gitproxy.CLITaskActions        = sandboxCLIGate{}
-	_ gitproxy.CLIGitHubCheckActions = sandboxCLIGate{}
+	_ gitproxy.CLIActions             = sandboxCLIGate{}
+	_ gitproxy.CLITaskActions         = sandboxCLIGate{}
+	_ gitproxy.CLIGitHubCheckActions  = sandboxCLIGate{}
+	_ gitproxy.CLIReviewThreadActions = sandboxCLIGate{}
 )
 
 func (sandboxCLIGate) actions() (ui.SandboxCLIActions, error) {
@@ -115,6 +116,14 @@ func (g sandboxCLIGate) ResolveReviewThread(ctx context.Context, taskID, threadI
 		return gitproxy.CLIActionResult{}, err
 	}
 	return a.ResolveReviewThread(ctx, taskID, threadID, commentID)
+}
+
+func (g sandboxCLIGate) ListReviewThreads(ctx context.Context, taskID string, unresolvedOnly bool) (gitproxy.CLIActionResult, error) {
+	a, err := g.actions()
+	if err != nil {
+		return gitproxy.CLIActionResult{}, err
+	}
+	return a.ListReviewThreads(ctx, taskID, unresolvedOnly)
 }
 
 func (g sandboxCLIGate) RevertInfo(ctx context.Context, taskID, target string, anyTask bool) (gitproxy.RevertInfo, error) {
@@ -211,12 +220,38 @@ func (a waitCreditAdapter) CreditCLIWait(ctx context.Context, taskID string, blo
 // as. The tool's own checks -- the comment or thread must belong to that
 // pull request -- are what keep an ID from elsewhere from being acted on.
 func (o *PullRequestOpener) reviewTool(ctx context.Context, taskID, name string, args map[string]any) (string, bool, error) {
-	task, err := o.Store.GetTask(ctx, taskID)
+	scope, err := o.reviewScope(ctx, taskID)
 	if err != nil {
 		return "", false, err
 	}
+	for _, tool := range mcp.NewPullRequestTools(o.Client, nil, scope) {
+		if tool.Name == name {
+			res := tool.Handler(ctx, args)
+			return res.Text, res.IsError, nil
+		}
+	}
+	return "", false, fmt.Errorf("this daemon has no %s", name)
+}
+
+// ThreadsForTask is ui.PullRequestThreadLister's listing: the review
+// threads on taskID's own pull request, for `grain pr threads`.
+func (o *PullRequestOpener) ThreadsForTask(ctx context.Context, taskID string, unresolvedOnly bool) (string, bool, error) {
+	scope, err := o.reviewScope(ctx, taskID)
+	if err != nil {
+		return "", false, err
+	}
+	res := mcp.ReviewThreadsText(o.Client, scope, unresolvedOnly)
+	return res.Text, res.IsError, nil
+}
+
+// reviewScope is the pull request scope taskID's own mcpserver would have.
+func (o *PullRequestOpener) reviewScope(ctx context.Context, taskID string) (mcp.PullRequestScope, error) {
+	task, err := o.Store.GetTask(ctx, taskID)
+	if err != nil {
+		return mcp.PullRequestScope{}, err
+	}
 	if task == nil || task.Target == nil {
-		return "", false, fmt.Errorf("task %s has no repository of its own", taskID)
+		return mcp.PullRequestScope{}, fmt.Errorf("task %s has no repository of its own", taskID)
 	}
 	scope := mcp.PullRequestScope{Owner: task.Target.Owner, Repo: task.Target.Name, Branch: task.BranchName()}
 	if o.Store != nil {
@@ -230,13 +265,7 @@ func (o *PullRequestOpener) reviewTool(ctx context.Context, taskID, name string,
 	if pr := model.TaskPullRequest(*task); pr != nil && (pr.Repo.Same(*task.Target) || model.IsUpstreamRepoFor(*task.Target, pr.Repo)) {
 		scope.PullRequestNumber = pr.Number
 	}
-	for _, tool := range mcp.NewPullRequestTools(o.Client, nil, scope) {
-		if tool.Name == name {
-			res := tool.Handler(ctx, args)
-			return res.Text, res.IsError, nil
-		}
-	}
-	return "", false, fmt.Errorf("this daemon has no %s", name)
+	return scope, nil
 }
 
 // ReplyForTask is ui.PullRequestReviewActions' reply.
@@ -276,6 +305,15 @@ func (PullRequestGate) ResolveForTask(ctx context.Context, taskID, threadID stri
 		return "", false, errNoGitHubClientYet
 	}
 	return opener.ResolveForTask(ctx, taskID, threadID, commentID)
+}
+
+// ThreadsForTask is the same gate for ui.PullRequestThreadLister.
+func (PullRequestGate) ThreadsForTask(ctx context.Context, taskID string, unresolvedOnly bool) (string, bool, error) {
+	opener := LivePullRequests.Load()
+	if opener == nil {
+		return "", false, errNoGitHubClientYet
+	}
+	return opener.ThreadsForTask(ctx, taskID, unresolvedOnly)
 }
 
 // GitHubPullRequestReader is ui.PullRequestCheckReader.

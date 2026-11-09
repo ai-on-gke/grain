@@ -17,6 +17,7 @@ import { PageHeaderActions, PageHeaderPageActions } from "./PageHeader.jsx";
 import { boardKindLabel } from "../boards.js";
 import AppIcon from "./AppIcon.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
+import AccessGate from "./AccessGate.jsx";
 
 // BoardPage is one saved board: its name and what it is for, the two
 // buttons that change it, and the view itself underneath
@@ -76,21 +77,25 @@ export default function BoardPage({
                 className="board-page-actions"
                 sx={{ ml: "auto" }}
               >
-                <Button
-                  size="small"
-                  startIcon={<AppIcon name="edit" size={15} />}
-                  onClick={() => onEditBoard(board)}
-                >
-                  Edit board
-                </Button>
-                <Button
-                  size="small"
-                  variant="contained"
-                  startIcon={<AppIcon name="add" size={16} />}
-                  onClick={onNewBoard}
-                >
-                  New board
-                </Button>
+                <AccessGate scope="tasks:write">
+                  <Button
+                    size="small"
+                    startIcon={<AppIcon name="edit" size={15} />}
+                    onClick={() => onEditBoard(board)}
+                  >
+                    Edit board
+                  </Button>
+                </AccessGate>
+                <AccessGate scope="tasks:write">
+                  <Button
+                    size="small"
+                    variant="contained"
+                    startIcon={<AppIcon name="add" size={16} />}
+                    onClick={onNewBoard}
+                  >
+                    New board
+                  </Button>
+                </AccessGate>
               </Stack>
             </PageHeaderPageActions>
           </PageHeaderActions>

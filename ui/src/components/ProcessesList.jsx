@@ -64,6 +64,17 @@ import ItemGlyph from "./ItemGlyph.jsx";
 import { DeclaredChip } from "./Declared.jsx";
 import LastWorkflowRun from "./LastWorkflowRun.jsx";
 import ChipStrip from "./ChipStrip.jsx";
+import AccessGate from "./AccessGate.jsx";
+import { canAccess } from "../access.js";
+
+// KIND_WRITE_SCOPE is the scope creating each kind of process needs
+// (pkg/ui/route_scopes.go: POST /api/schedules, /api/templates,
+// /api/suites).
+const KIND_WRITE_SCOPE = {
+  schedule: "schedules:write",
+  template: "templates:write",
+  suite: "suites:write",
+};
 
 const DECLARATIONS_DOC =
   "https://github.com/ai-on-gke/grain/blob/main/docs/declarations.md";
@@ -240,6 +251,12 @@ export default function ProcessesList({
     setRunning(null);
   }, [resetSeq]);
 
+  // The kinds the signed-in person's role may create (access.js): the
+  // New menu offers only those, and is refused outright with none.
+  const creatable = CREATABLE_KINDS.filter((k) =>
+    canAccess(config, KIND_WRITE_SCOPE[k]),
+  );
+
   return (
     <main className="processes-page">
       <ListHeader
@@ -248,26 +265,38 @@ export default function ProcessesList({
         count={visible.length}
         action={
           <>
-            <Button
-              variant="contained"
-              size="small"
-              sx={{ ml: "auto" }}
-              aria-haspopup={onlyKind ? undefined : "menu"}
-              onClick={(e) =>
-                onlyKind ? setCreating(onlyKind) : setNewMenu(e.currentTarget)
+            <AccessGate
+              scope={
+                onlyKind
+                  ? KIND_WRITE_SCOPE[onlyKind]
+                  : creatable.length > 0
+                    ? KIND_WRITE_SCOPE[creatable[0]]
+                    : KIND_WRITE_SCOPE[CREATABLE_KINDS[0]]
               }
+              config={config}
+              wrapperStyle={{ marginLeft: "auto" }}
             >
-              {onlyKind
-                ? `+ New ${processKind(onlyKind).chip.toLowerCase()}`
-                : "+ New"}
-            </Button>
+              <Button
+                variant="contained"
+                size="small"
+                sx={{ ml: "auto" }}
+                aria-haspopup={onlyKind ? undefined : "menu"}
+                onClick={(e) =>
+                  onlyKind ? setCreating(onlyKind) : setNewMenu(e.currentTarget)
+                }
+              >
+                {onlyKind
+                  ? `+ New ${processKind(onlyKind).chip.toLowerCase()}`
+                  : "+ New"}
+              </Button>
+            </AccessGate>
             <Menu
               anchorEl={newMenu}
               open={!!newMenu}
               onClose={() => setNewMenu(null)}
               MenuListProps={{ "data-testid": "new-process-kind" }}
             >
-              {CREATABLE_KINDS.map((k) => (
+              {creatable.map((k) => (
                 <MenuItem
                   key={k}
                   onClick={() => {
@@ -401,14 +430,19 @@ export default function ProcessesList({
             count={suiteRuns.length}
             action={
               suites.length > 0 ? (
-                <Button
-                  variant="outlined"
-                  size="small"
-                  sx={{ ml: "auto" }}
-                  onClick={() => setRunning(true)}
+                <AccessGate
+                  scope="suites:write"
+                  wrapperStyle={{ marginLeft: "auto" }}
                 >
-                  + Run
-                </Button>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    sx={{ ml: "auto" }}
+                    onClick={() => setRunning(true)}
+                  >
+                    + Run
+                  </Button>
+                </AccessGate>
               ) : null
             }
             style={{ marginTop: "1.5rem" }}
@@ -523,7 +557,11 @@ export default function ProcessesList({
           config={config}
           onClose={() => onOpenTemplate(null)}
           onSaved={() =>
-            Promise.all([onRefreshTemplates?.(), onRefreshSchedules?.()])
+            Promise.all([
+              onRefreshTemplates?.(),
+              onRefreshSchedules?.(),
+              onRefreshSuites?.(),
+            ])
           }
           // New Task has nowhere to fill a template's input fields, so
           // one that declares them was opened on a form whose filing
@@ -804,26 +842,30 @@ function ProcessRow({
       </span>
       <span className="process-actions">
         {r.kind === "template" && (
-          <Button
-            size="small"
-            onClick={(e) => {
-              e.stopPropagation();
-              onUse();
-            }}
-          >
-            Use…
-          </Button>
+          <AccessGate scope="tasks:write" repo={r.repo}>
+            <Button
+              size="small"
+              onClick={(e) => {
+                e.stopPropagation();
+                onUse();
+              }}
+            >
+              Use…
+            </Button>
+          </AccessGate>
         )}
         {r.kind === "suite" && (
-          <Button
-            size="small"
-            onClick={(e) => {
-              e.stopPropagation();
-              onRun();
-            }}
-          >
-            Run…
-          </Button>
+          <AccessGate scope="suites:write" repo={r.repo}>
+            <Button
+              size="small"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRun();
+              }}
+            >
+              Run…
+            </Button>
+          </AccessGate>
         )}
       </span>
     </div>

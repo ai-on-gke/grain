@@ -44,7 +44,10 @@ type AuthWhoamiResponse struct {
 
 	Authenticated bool `json:"authenticated"`
 	// Principal is "human:<id>", "agent:external:<name>" or "operator".
-	Principal string `json:"principal,omitempty"`
+	Principal  string `json:"principal,omitempty"`
+	Actor      string `json:"actor,omitempty"`
+	OnBehalfOf string `json:"onBehalfOf,omitempty"`
+	Via        string `json:"via,omitempty"`
 	// The rest describe an external agent credential (gma_...).
 	TokenID        string     `json:"tokenId,omitempty"`
 	Owner          string     `json:"owner,omitempty"`
@@ -103,6 +106,11 @@ func (s *Server) handleAuthWhoami(w http.ResponseWriter, r *http.Request) {
 		resp.ResolvedScopes, resp.Repos, resp.ExpiresAt = view.ResolvedScopes, view.Repos, view.ExpiresAt
 	} else if p, ok := PrincipalFromContext(r.Context()); ok && p.Kind == model.PrincipalHuman && p.ID != "" {
 		resp.Authenticated, resp.Principal = true, "human:"+p.ID
+		if del := delegatedIdentityFromContext(r.Context()); del != nil {
+			resp.Actor = "service:" + del.AppEmail
+			resp.OnBehalfOf = "user:" + del.PersonEmail
+			resp.Via = del.ViaLabel
+		}
 	} else if singleTenantTrusted(r) {
 		resp.Authenticated, resp.Principal = true, "operator"
 	}

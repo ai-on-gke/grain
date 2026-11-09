@@ -1322,14 +1322,19 @@ func TestTheCLIWrapperTalksToTheDeploymentItInstalled(t *testing.T) {
 	// the list is not empty by accident but by this deployment's own
 	// first cycle, so a wrapper pointed at some other deployment's data
 	// directory would be answering with that one's sessions.
+	//
+	// grain's own system schedules are the deployment's too: the memory
+	// agent fires daily at the quiet hour (model.SystemScheduleRecurrence),
+	// and a job that happens to run across it finds the task it filed.
 	var tasks []struct {
 		ConsoleSession string `json:"consoleSession"`
+		Scheduled      bool   `json:"scheduled"`
 	}
 	if err := json.Unmarshal([]byte(body), &tasks); err != nil {
 		t.Fatalf("`grain -json list` printed %q: %v", body, err)
 	}
 	for _, task := range tasks {
-		if task.ConsoleSession == "" {
+		if task.ConsoleSession == "" && !task.Scheduled {
 			t.Fatalf("a fresh deployment already has a task nobody filed as a standing session: %s", body)
 		}
 	}

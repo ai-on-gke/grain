@@ -40,16 +40,24 @@ import (
 // scope does not reach) is the caller's, since a review takes neither
 // from its template.
 func TemplateWithinTask(acting Task, tmpl Template) error {
-	held := make([]string, len(acting.Grants))
-	for i, g := range acting.Grants {
-		held[i] = g.Capability
+	if adm := NormalizeAdmission(tmpl.Admission); adm.AtLeast(AdmissionBypass) {
+		return fmt.Errorf("template %s sets admission %s, which only a person may give", tmpl.ID, adm)
+	}
+	held := make([]string, 0, len(acting.Grants))
+	for _, g := range acting.Grants {
+		held = append(held, CanonicalLegacyGrants(g.Capability)...)
 	}
 	for _, g := range tmpl.Grants {
 		if IsPersonOnlyGrant(g.Capability) {
 			return fmt.Errorf("template %s grants %s, which only a person may give", tmpl.ID, g.Capability)
 		}
-		if !slices.Contains(held, g.Capability) {
-			return fmt.Errorf("template %s grants %s, which the agent's own task does not hold", tmpl.ID, g.Capability)
+		for _, needed := range CanonicalLegacyGrants(g.Capability) {
+			if IsPersonOnlyGrant(needed) {
+				return fmt.Errorf("template %s grants %s, which only a person may give", tmpl.ID, g.Capability)
+			}
+			if !slices.Contains(held, needed) {
+				return fmt.Errorf("template %s grants %s, which the agent's own task does not hold", tmpl.ID, g.Capability)
+			}
 		}
 	}
 	for _, w := range tmpl.Writes {
@@ -100,7 +108,7 @@ func ReviewTemplateRefusedNote(proposer, asked, fallback string, why error) stri
 // dangerous capability (db-write, self-repair), or a capability-server reference whose
 // method or arguments require a person (protocol.GrantByPerson).
 func IsDangerousGrant(name string) bool {
-	s := strings.TrimSpace(name)
+	s := strings.TrimSpace(StoredGrantSpelling(name))
 	if s == "db-write" || s == "self-repair" {
 		return true
 	}
@@ -114,6 +122,13 @@ func IsDangerousGrant(name string) bool {
 		if spec, err := CapabilityGrantSpec(s); err == nil {
 			if ref, err := protocol.ParseRef(spec.Capability); err == nil {
 				return protocol.GrantKindOf(protocol.Grant{Ref: ref, Args: spec.With}) == protocol.GrantByPerson
+			}
+		}
+	}
+	if repl := CanonicalLegacyGrants(s); !(len(repl) == 1 && repl[0] == s) {
+		for _, c := range repl {
+			if c != s && IsDangerousGrant(c) {
+				return true
 			}
 		}
 	}
@@ -136,4 +151,20 @@ func ReviewGrants(grants []Grant, reviewed Task) (kept []Grant, dropped []string
 		kept = append(kept, g)
 	}
 	return kept, dropped
+}
+
+// ReviewAdmission is the admission level a review of reviewed is filed with
+// when its review template asks for tmplAdmission: capped to reviewed's own
+// admission if tmplAdmission exceeds it, since raising admission above
+// standard is person-only.
+func ReviewAdmission(tmplAdmission Admission, reviewed Task) (Admission, bool) {
+	want := NormalizeAdmission(tmplAdmission)
+	if !want.AtLeast(AdmissionBypass) {
+		return AdmissionStandard, false
+	}
+	held := NormalizeAdmission(reviewed.Admission)
+	if held.AtLeast(want) {
+		return want, false
+	}
+	return held, true
 }

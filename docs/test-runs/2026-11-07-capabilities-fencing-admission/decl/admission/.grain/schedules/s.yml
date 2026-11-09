@@ -1,0 +1,5 @@
+name: Admission schedule
+template: t
+daily:
+  at: "03:00"
+admission: bypass

@@ -72,8 +72,7 @@ jobs:
     # further 2 for the agents and the mke2fs, on four cores. The
     # allowance is for a slow mirror rather than for the usual case, so
     # that a job that really is stuck is failed here, by a number a reader
-    # of this file can see. (It also stays under grain CI's own 36-minute
-    # job timeout, for as long as .grain/workflows/guest-suites.yml runs.)
+    # of this file can see.
     timeout-minutes: 30
     env:
       # Through the environment rather than spliced into the scripts.

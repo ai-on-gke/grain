@@ -214,7 +214,13 @@ func reconcileConsoleSession(ctx context.Context, deps Deps, session model.Conso
 		// task with a fresh conversation, and the closed one keeps its
 		// record.
 		if task != nil && (obs == nil || obs.ClosedAt == nil) {
-			return updateConsoleSession(ctx, deps, session, *task, obs, running[task.ID], now)
+			// A run's row is finished before its result has been turned
+			// into what it implies (InFlight.Busy): its answer is not on
+			// the task yet, and parking in that window posts the resting
+			// line above the answer, so the next park cannot reuse it and
+			// posts a second one.
+			live := running[task.ID] || (deps.Runs != nil && deps.Runs.Busy(task.ID))
+			return updateConsoleSession(ctx, deps, session, *task, obs, live, now)
 		}
 		// The conversation that ended. The replacement is told where it
 		// came from and is handed that thread's standing summary --
@@ -700,6 +706,7 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 	configTitle := model.ConsoleSessionTitle(session)
 	configNetwork := consoleSessionNetworkAccess(deps, session)
 	configModel := strings.TrimSpace(session.Model)
+	configHosting := model.NormalizeHosting(session.Hosting)
 	stateRepo := deps.Config.settingsRepo()
 
 	if !hasPrev {
@@ -712,6 +719,7 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 			Title:           configTitle,
 			TasksApproved:   session.TasksApproved,
 			KeepRunning:     session.KeepRunning,
+			Hosting:         session.Hosting,
 			GoogleChatSpace: session.GoogleChatSpace,
 		}
 	}
@@ -723,6 +731,10 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 	keepRunning := task.KeepRunning
 	if !hasPrev || session.KeepRunning != prev.KeepRunning {
 		keepRunning = session.KeepRunning
+	}
+	hosting := model.NormalizeHosting(task.Hosting)
+	if !hasPrev || configHosting != model.NormalizeHosting(prev.Hosting) {
+		hosting = configHosting
 	}
 	effectiveSession := session
 	effectiveSession.Title = title
@@ -798,6 +810,7 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 		Title:           configTitle,
 		TasksApproved:   session.TasksApproved,
 		KeepRunning:     session.KeepRunning,
+		Hosting:         session.Hosting,
 		GoogleChatSpace: session.GoogleChatSpace,
 		OfferedDefaults: offeredDefaults,
 		AutoReads:       autoReads,
@@ -830,8 +843,10 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 		taskLinks = []model.Link{}
 	}
 	if task.Title == title && task.Body == body && task.NetworkAccess == network &&
+		task.Admission == model.AdmissionDurable &&
+		model.NormalizeHosting(task.Hosting) == hosting &&
 		task.Model == chosenModel && task.KeepRunning == keepRunning &&
-		slices.Equal(task.Grants, grants) &&
+		slices.EqualFunc(task.Grants, grants, model.Grant.Equal) &&
 		slices.Equal(taskReads, reads) &&
 		slices.Equal(taskWrites, writes) &&
 		slices.Equal(taskLinks, links) {
@@ -843,9 +858,26 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 	if stale, err := sessionStale(); err != nil || stale {
 		return err
 	}
+	// Checked again inside the write, against the task as it stands
+	// there: sessionStale above reads the configuration in a transaction
+	// of its own, so an operator's edit (ui.UpdateConsoleSession) landing
+	// between that check and this write -- its configuration first, then
+	// the task, then the snapshot -- would otherwise be overwritten here
+	// with grants worked out from the task before it. And once that edit
+	// has recorded its snapshot, the next sync reads the capability the
+	// task lost as one an operator removed from the task and never puts
+	// it back. A task that moved since it was read is left for the next
+	// cycle to work out again from what it holds now.
+	moved := false
 	if err := deps.Store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+		if consoleSessionTaskMoved(*t, task) {
+			moved = true
+			return errConsoleSessionTaskMoved
+		}
 		t.Title = title
 		t.Body = body
+		t.Admission = model.AdmissionDurable
+		t.Hosting = hosting
 		t.Grants = grants
 		t.NetworkAccess = network
 		t.KeepRunning = keepRunning
@@ -858,9 +890,42 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 		}
 		return nil
 	}); err != nil {
+		if moved && errors.Is(err, errConsoleSessionTaskMoved) {
+			return nil
+		}
 		return err
 	}
 	return record()
+}
+
+// errConsoleSessionTaskMoved aborts syncConsoleSessionTask's task write
+// when the task changed after the sync read it (consoleSessionTaskMoved).
+var errConsoleSessionTaskMoved = errors.New("console session task changed since it was read")
+
+// consoleSessionTaskMoved reports whether fresh -- the session task as
+// read inside syncConsoleSessionTask's write -- differs from read, the
+// task that sync worked its grants, reads, writes and the rest out
+// from, in anything the sync reads or writes.
+func consoleSessionTaskMoved(fresh, read model.Task) bool {
+	return fresh.Title != read.Title ||
+		fresh.Body != read.Body ||
+		fresh.NetworkAccess != read.NetworkAccess ||
+		fresh.Model != read.Model ||
+		fresh.KeepRunning != read.KeepRunning ||
+		model.NormalizeHosting(fresh.Hosting) != model.NormalizeHosting(read.Hosting) ||
+		fresh.AutoApproveProposals != read.AutoApproveProposals ||
+		!slices.EqualFunc(fresh.Grants, read.Grants, sameConsoleSessionGrant) ||
+		!slices.Equal(fresh.Reads, read.Reads) ||
+		!slices.Equal(fresh.Writes, read.Writes) ||
+		!slices.Equal(fresh.Links, read.Links) ||
+		!slices.Equal(fresh.Tags, read.Tags)
+}
+
+func sameConsoleSessionGrant(a, b model.Grant) bool {
+	if a.Capability != b.Capability || a.Via != b.Via || (a.Folder == nil) != (b.Folder == nil) {
+		return false
+	}
+	return a.Folder == nil || slices.Equal(a.Folder.Path, b.Folder.Path)
 }
 
 func storedConsoleSession(ctx context.Context, store *model.Store, id string) (model.ConsoleSession, bool, error) {
@@ -895,6 +960,7 @@ func consoleSessionEqual(a, b model.ConsoleSession) bool {
 		a.NetworkAccess == b.NetworkAccess &&
 		a.TasksApproved == b.TasksApproved &&
 		a.KeepRunning == b.KeepRunning &&
+		model.NormalizeHosting(a.Hosting) == model.NormalizeHosting(b.Hosting) &&
 		a.GoogleChatSpace == b.GoogleChatSpace &&
 		a.Model == b.Model &&
 		(a.ReadsAll == nil) == (b.ReadsAll == nil) &&
@@ -911,6 +977,7 @@ func consoleSessionSnapshotEqual(a, b model.ConsoleSessionConfigSnapshot) bool {
 		a.Title == b.Title &&
 		a.TasksApproved == b.TasksApproved &&
 		a.KeepRunning == b.KeepRunning &&
+		model.NormalizeHosting(a.Hosting) == model.NormalizeHosting(b.Hosting) &&
 		a.GoogleChatSpace == b.GoogleChatSpace &&
 		slices.Equal(a.Capabilities, b.Capabilities) &&
 		slices.Equal(a.Reads, b.Reads) &&
@@ -931,11 +998,16 @@ func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSessi
 		}
 	}
 
-	out := make([]model.Grant, 0, len(current)+len(session.Capabilities)+1)
-	out = append(out, model.Grant{Capability: model.DurableCapability, Via: model.GrantByGrain})
-	seen := map[string]bool{model.DurableCapability: true}
+	out := make([]model.Grant, 0, len(current)+len(session.Capabilities))
+	seen := map[string]bool{}
 
 	for _, g := range current {
+		if _, isLegacyAdm := model.LegacyAdmissionAlias(g.Capability); isLegacyAdm {
+			continue
+		}
+		if _, isLegacyHost := model.LegacyHostingAlias(g.Capability); isLegacyHost {
+			continue
+		}
 		if g.Capability == "" || seen[g.Capability] {
 			continue
 		}
@@ -973,6 +1045,12 @@ func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSessi
 
 	for _, name := range session.Capabilities {
 		name = strings.TrimSpace(name)
+		if _, isLegacyAdm := model.LegacyAdmissionAlias(name); isLegacyAdm {
+			continue
+		}
+		if _, isLegacyHost := model.LegacyHostingAlias(name); isLegacyHost {
+			continue
+		}
 		if name == "" || seen[name] {
 			continue
 		}

@@ -27,11 +27,11 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
-	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
@@ -98,16 +98,45 @@ func TestTheDirectorIsFiledOnTheFirstCycleAndParkedOnItsOwnOpening(t *testing.T)
 	if len(director.Reads) != 1 || director.Reads[0].Name != "grain-home" {
 		t.Errorf("Reads = %v, want the state repository", director.Reads)
 	}
-	if director.NetworkAccess != model.NetworkOpen {
-		t.Errorf("NetworkAccess = %q, want open by default", director.NetworkAccess)
+	if director.NetworkAccess != model.NetworkNone {
+		t.Errorf("NetworkAccess = %q, want none by default on a deployment whose sandboxes isolate (director-capabilities.spec.md §3.1.6)", director.NetworkAccess)
+	}
+	if !model.ConsoleSessionQueuesProposals(model.DefaultConsoleSessions(), director) {
+		t.Error("the shipped director does not queue its routine proposals by default (director-capabilities.spec.md §3.1.5)")
+	}
+	if !strings.Contains(director.Body, "filed approved") {
+		t.Error("the shipped director's body does not tell it its tasks are filed approved")
 	}
 	var grants []string
 	for _, g := range director.Grants {
 		grants = append(grants, g.Capability)
 	}
 	slices.Sort(grants)
-	if !slices.Equal(grants, []string{model.ConsoleSessionCIReadGrant, "api:deployment:read", "api:self-debug", "bootstrap-playbooks", "durable", model.GrainHealthGrant, model.GrainJournalGrant, model.GrainSourceGrant}) {
-		t.Errorf("Grants = %v, want the shipped default set plus durable", grants)
+	if director.Admission != model.AdmissionDurable {
+		t.Errorf("Admission = %q, want %q", director.Admission, model.AdmissionDurable)
+	}
+	wantGrants := []string{
+		model.ConsoleSessionCIReadGrant,
+		"api:deployment:read",
+		"api:self-debug",
+		"api:task-admin",
+		"api:capabilities:read",
+		"api:capabilities:detach",
+		"api:settings:read",
+		"api:repos:read",
+		"api:releases:read",
+		"api:schedules:read",
+		"api:templates:read",
+		"api:suites:read",
+		"api:dispatch:read",
+		model.BootstrapPlaybooksGrant,
+		model.GrainHealthGrant,
+		model.GrainJournalGrant,
+		model.GrainSourceGrant,
+	}
+	slices.Sort(wantGrants)
+	if !slices.Equal(grants, wantGrants) {
+		t.Errorf("Grants = %v, want the shipped default set (%v)", grants, wantGrants)
 	}
 	goal, err := store.TaskGoal(ctx, director.ID)
 	if err != nil {
@@ -631,7 +660,7 @@ func TestChangingASessionsCapabilitiesReachesItsTask(t *testing.T) {
 			Title:         "Director",
 			Capabilities:  []string{model.GrainSourceGrant, "self-repair"},
 			NetworkAccess: model.NetworkOpen,
-			TasksApproved: true,
+			TasksApproved: false,
 		}}
 	})
 	runSessions(t, store, baseTime.Add(time.Minute))
@@ -645,14 +674,35 @@ func TestChangingASessionsCapabilitiesReachesItsTask(t *testing.T) {
 		grants = append(grants, g.Capability)
 	}
 	slices.Sort(grants)
-	if !slices.Equal(grants, []string{model.ConsoleSessionCIReadGrant, "durable", model.GrainSourceGrant, "self-repair"}) {
-		t.Errorf("Grants = %v, want what the settings now say plus durable and the session defaults", grants)
+	if updated.Admission != model.AdmissionDurable {
+		t.Errorf("Admission = %q, want %q", updated.Admission, model.AdmissionDurable)
+	}
+	if !slices.Equal(grants, []string{model.ConsoleSessionCIReadGrant, model.GrainSourceGrant, "self-repair"}) {
+		t.Errorf("Grants = %v, want what the settings now say plus the session defaults", grants)
 	}
 	if updated.NetworkAccess != model.NetworkOpen {
 		t.Errorf("NetworkAccess = %q, want the configured one", updated.NetworkAccess)
 	}
-	if !strings.Contains(updated.Body, "filed approved") {
-		t.Error("the body still tells the session its tasks wait for approval, after the setting said otherwise")
+	if !strings.Contains(updated.Body, "waits for a person to approve it") {
+		t.Error("the body still tells the session its tasks are filed approved, after the setting turned TasksApproved off")
+	}
+
+	settings(t, store, func(cfg *model.Config) {
+		cfg.ConsoleSessions = []model.ConsoleSession{{
+			ID:            model.DirectorSessionID,
+			Title:         "Director",
+			Capabilities:  []string{model.GrainSourceGrant, "self-repair"},
+			NetworkAccess: model.NetworkOpen,
+			TasksApproved: true,
+		}}
+	})
+	runSessions(t, store, baseTime.Add(2*time.Minute))
+	reapproved, err := store.GetTask(ctx, director.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(reapproved.Body, "filed approved") {
+		t.Error("the body still tells the session its tasks wait for approval, after the setting turned TasksApproved back on")
 	}
 }
 
@@ -708,31 +758,34 @@ func TestADeploymentThatConfiguresNoSessionsGetsNone(t *testing.T) {
 	}
 }
 
-// What a session proposes waits for a person, like every other
-// proposal -- unless this deployment has deliberately said otherwise
-// about that session, in the pane the chat is in.
+// The shipped director queues its routine proposals by default
+// (director-capabilities.spec.md §3.1.5), while a session whose deployment
+// turns TasksApproved off waits for a person, and any capability escalation
+// still waits for a person.
 func TestWhatASessionProposesWaitsUnlessTheDeploymentSaysOtherwise(t *testing.T) {
 	t.Parallel()
+	boolPtr := func(b bool) *bool { return &b }
 	for _, tc := range []struct {
 		name     string
-		approved bool
+		approved *bool
 		caps     []any
 		want     model.State
 	}{
-		{"the default", false, nil, model.StateProposed},
-		{"a deployment that trusts its director", true, nil, model.StateQueued},
-		{"asking for a capability the session holds", true, []any{model.GrainSourceGrant}, model.StateQueued},
+		{"the shipped default", nil, nil, model.StateQueued},
+		{"a deployment that turns TasksApproved off", boolPtr(false), nil, model.StateProposed},
+		{"a deployment that explicitly sets TasksApproved true", boolPtr(true), nil, model.StateQueued},
+		{"asking for a capability the session holds", nil, []any{model.GrainSourceGrant}, model.StateQueued},
 		// grain#2409: the trust is in what the session may queue, not in
 		// what it may grant -- a capability it never held waits for a person.
-		{"asking for a capability the session lacks", true, []any{"self-repair"}, model.StateProposed},
+		{"asking for a capability the session lacks", nil, []any{"self-repair"}, model.StateProposed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store, ctx := openStore(t)
 			_, client := newSim(t, "acme", "widgets", "main")
-			if tc.approved {
+			if tc.approved != nil {
 				settings(t, store, func(cfg *model.Config) {
 					sessions := model.DefaultConsoleSessions()
-					sessions[0].TasksApproved = true
+					sessions[0].TasksApproved = *tc.approved
 					cfg.ConsoleSessions = sessions
 				})
 			}
@@ -1124,7 +1177,7 @@ func TestASessionsAnswerIsStampedAfterTheReplyItAnswers(t *testing.T) {
 		Framework: orchestrator.StaticFramework(textAnswer("the answer")),
 		Config: orchestrator.Config{
 			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities: orchestrator.SessionTestRegistry(durable.New()),
+			Capabilities: orchestrator.SessionTestRegistry(),
 		},
 		MaxWorkers: 1,
 	}
@@ -1506,7 +1559,7 @@ func TestSessionSandboxReusedWithinIdleTTLFallbackAndReclaimedAfterTTL(t *testin
 		MaxWorkers: 2,
 		Config: orchestrator.Config{
 			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
+			Capabilities:          orchestrator.SessionTestRegistry(),
 			SessionSandboxIdleTTL: 30 * time.Minute,
 		},
 	}
@@ -1606,7 +1659,7 @@ func TestParkedSessionSandboxIsReclaimedOnAShortenedTTL(t *testing.T) {
 		MaxWorkers: 2,
 		Config: orchestrator.Config{
 			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities: orchestrator.SessionTestRegistry(durable.New()),
+			Capabilities: orchestrator.SessionTestRegistry(),
 		},
 	}
 
@@ -1661,7 +1714,7 @@ func TestClosingOrPausingSessionReleasesWarmSandbox(t *testing.T) {
 				MaxWorkers: 2,
 				Config: orchestrator.Config{
 					StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-					Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
+					Capabilities:          orchestrator.SessionTestRegistry(),
 					SessionSandboxIdleTTL: 30 * time.Minute,
 				},
 			}
@@ -1742,7 +1795,7 @@ func TestSessionWarmSandboxCapacityEvictionEvictsOldestIdleFirst(t *testing.T) {
 		MaxWorkers: 2,
 		Config: orchestrator.Config{
 			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
+			Capabilities:          orchestrator.SessionTestRegistry(),
 			SessionSandboxIdleTTL: 30 * time.Minute,
 		},
 	}
@@ -1802,10 +1855,23 @@ func TestInProcessSessionContinuationKeepsRunAliveAcrossTurns(t *testing.T) {
 		onTurn: func(turn int, cfg agent.RunConfig) (*agent.Result, error) {
 			seenPrompts = append(seenPrompts, cfg.ContinuePrompt)
 			if turn == 1 {
-				// While the run is about to enter its in-process idle wait after turn 1,
-				// post the human's second message shortly after.
+				// Once the run is parked in its in-process idle wait after
+				// turn 1 -- it marks the question pending when it has relayed
+				// the answer and found nothing new -- post the human's second
+				// message. Behind a fixed 80ms sleep and a 350ms TTL, a
+				// loaded -race runner could post after the wait had already
+				// expired and ended the run on one turn.
 				go func() {
-					time.Sleep(80 * time.Millisecond)
+					for {
+						o, err := store.GetObservation(ctx, director.ID)
+						if err == nil && o != nil && o.PendingQuestionCommentID != nil {
+							break
+						}
+						if ctx.Err() != nil {
+							return
+						}
+						time.Sleep(time.Millisecond)
+					}
 					// A message from another task's run arrives first: it does
 					// not wake the session, but the turn a person's message
 					// wakes is told it too, as not a human's.
@@ -1837,9 +1903,13 @@ func TestInProcessSessionContinuationKeepsRunAliveAcrossTurns(t *testing.T) {
 		Framework:  orchestrator.StaticFramework(ag),
 		MaxWorkers: 1,
 		Config: orchestrator.Config{
-			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
-			SessionSandboxIdleTTL: 350 * time.Millisecond,
+			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+			Capabilities: orchestrator.SessionTestRegistry(),
+			// The message wakes the wait the moment it lands
+			// (Store.CommentAdded), so this only bounds the idle wait after
+			// turn 2 that ends the run, and need only outlast a loaded
+			// runner's posting of the message after turn 1.
+			SessionSandboxIdleTTL: 2 * time.Second,
 			WaitForSessionReply:   true,
 			CancelPollInterval:    20 * time.Millisecond,
 		},
@@ -1854,6 +1924,9 @@ func TestInProcessSessionContinuationKeepsRunAliveAcrossTurns(t *testing.T) {
 	// Both turns must have executed inside a single dispatch (1 sandbox acquire, 1 run row, 2 framework.Run calls).
 	if len(ag.configs) != 2 {
 		t.Fatalf("framework.Run calls = %d, want 2 (turn 1 + in-process continuation)", len(ag.configs))
+	}
+	if sbx.acquires != 1 {
+		t.Fatalf("sandbox acquires = %d, want 1 (turn 2 served by the live run's sandbox)", sbx.acquires)
 	}
 	for _, want := range []string{
 		"the run of another task (task other-task), not a human",
@@ -1899,22 +1972,40 @@ func TestInProcessSessionContinuationKeepsRunAliveAcrossTurns(t *testing.T) {
 type delayedAcquireSandboxes struct {
 	inner        orchestrator.Sandboxes
 	acquireDelay time.Duration
+	acquires     atomic.Int32
 }
 
 func (d *delayedAcquireSandboxes) Acquire(ctx context.Context, name string, shape orchestrator.Shape) (orchestrator.Sandbox, error) {
+	d.acquires.Add(1)
 	if d.acquireDelay > 0 {
 		time.Sleep(d.acquireDelay)
 	}
 	return d.inner.Acquire(ctx, name, shape)
 }
 
+// sessionTurnMeasurement is what one TestMeasureSessionTurnLatencyBeforeAndAfter
+// pass saw: the wall-clock latency it logs, and the structural signals that
+// latency comes from.
+type sessionTurnMeasurement struct {
+	latency       time.Duration
+	acquires      int
+	runs          int
+	frameworkRuns int
+	reused        bool
+}
+
 // Not t.Parallel: it compares wall-clock latencies measured one after the
-// other, and under the package's parallel -race load the scheduling jitter
+// other, and under the package's parallel load the scheduling jitter
 // between those runs can exceed the 200ms the comparisons rest on. Each
 // latency is also the best of a few runs, so one descheduled run cannot
-// decide the comparison on its own.
+// decide the comparison on its own. What makes each path faster is
+// asserted structurally on every build -- a cold turn acquires a sandbox
+// for each run, a warm one reuses the first run's, and an in-process one
+// serves both turns from a single run -- while the latency comparisons
+// themselves are left to non-race builds (raceEnabled), where a warm
+// dispatch measured 1.73s against a cold one's 1.2-1.5s.
 func TestMeasureSessionTurnLatencyBeforeAndAfter(t *testing.T) {
-	measure := func(name string, idleTTL time.Duration, inProcess bool, acquireDelay time.Duration) time.Duration {
+	measure := func(name string, idleTTL time.Duration, inProcess bool, acquireDelay time.Duration) sessionTurnMeasurement {
 		store, ctx := openStore(t)
 		settings(t, store, func(cfg *model.Config) {
 			cfg.SessionSandboxIdleTTL = idleTTL
@@ -1942,8 +2033,20 @@ func TestMeasureSessionTurnLatencyBeforeAndAfter(t *testing.T) {
 					firstToolCallAt = time.Now()
 				}
 				if turn == 1 && inProcess {
+					// Not until the run is parked in its idle wait (it
+					// marks the question pending then), so the message
+					// cannot miss a wait a loaded runner let expire.
 					go func() {
-						time.Sleep(30 * time.Millisecond)
+						for {
+							o, err := store.GetObservation(ctx, director.ID)
+							if err == nil && o != nil && o.PendingQuestionCommentID != nil {
+								break
+							}
+							if ctx.Err() != nil {
+								return
+							}
+							time.Sleep(time.Millisecond)
+						}
 						messagePostedAt = time.Now()
 						_, _ = store.AddComment(ctx, model.Comment{
 							TaskID:    director.ID,
@@ -1967,7 +2070,7 @@ func TestMeasureSessionTurnLatencyBeforeAndAfter(t *testing.T) {
 			MaxWorkers: 1,
 			Config: orchestrator.Config{
 				StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-				Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
+				Capabilities:          orchestrator.SessionTestRegistry(),
 				SessionSandboxIdleTTL: idleTTL,
 				WaitForSessionReply:   inProcess,
 				CancelPollInterval:    5 * time.Millisecond,
@@ -1987,29 +2090,64 @@ func TestMeasureSessionTurnLatencyBeforeAndAfter(t *testing.T) {
 				t.Fatalf("%s turn 2: %v", name, err)
 			}
 		}
-		d := firstToolCallAt.Sub(messagePostedAt)
-		t.Logf("%s: time from message to first tool call = %v", name, d)
-		return d
+		if len(ag.configs) != 2 || firstToolCallAt.IsZero() {
+			t.Fatalf("%s: framework.Run calls = %d, want 2 (turn 2 reached)", name, len(ag.configs))
+		}
+		runs, err := store.Runs(ctx, director.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := sessionTurnMeasurement{
+			latency:       firstToolCallAt.Sub(messagePostedAt),
+			acquires:      int(sbx.acquires.Load()),
+			runs:          len(runs),
+			frameworkRuns: len(ag.configs),
+			reused:        ag.configs[1].SandboxReused,
+		}
+		t.Logf("%s: time from message to first tool call = %v (acquires=%d runs=%d reused=%v)",
+			name, m.latency, m.acquires, m.runs, m.reused)
+		return m
 	}
 
-	best := func(name string, idleTTL time.Duration, inProcess bool, acquireDelay time.Duration) time.Duration {
-		var min time.Duration
-		for i := range 3 {
-			if d := measure(name, idleTTL, inProcess, acquireDelay); i == 0 || d < min {
-				min = d
+	// Under -race only one pass each: the latencies are logged, not compared.
+	passes := 3
+	if raceEnabled {
+		passes = 1
+	}
+	best := func(name string, idleTTL time.Duration, inProcess bool, acquireDelay time.Duration) sessionTurnMeasurement {
+		var min sessionTurnMeasurement
+		for i := range passes {
+			if m := measure(name, idleTTL, inProcess, acquireDelay); i == 0 || m.latency < min.latency {
+				min = m
 			}
 		}
 		return min
 	}
 	cold := best("before (cold sandbox acquire + setup)", -1*time.Second, false, 200*time.Millisecond)
 	warm := best("after (warm sandbox reuse)", 30*time.Minute, false, 200*time.Millisecond)
-	inProc := best("after (in-process session continuation)", 350*time.Millisecond, true, 200*time.Millisecond)
+	inProc := best("after (in-process session continuation)", time.Second, true, 200*time.Millisecond)
 
-	if warm >= cold {
-		t.Errorf("warm sandbox reuse (%v) was not faster than cold sandbox acquire (%v)", warm, cold)
+	if cold.acquires != 2 || cold.runs != 2 || cold.reused {
+		t.Errorf("cold path: acquires=%d runs=%d reused=%v, want a fresh sandbox for each of 2 runs",
+			cold.acquires, cold.runs, cold.reused)
 	}
-	if inProc >= warm {
-		t.Errorf("in-process continuation (%v) was not faster than warm dispatch (%v)", inProc, warm)
+	if warm.acquires != 1 || warm.runs != 2 || !warm.reused {
+		t.Errorf("warm path: acquires=%d runs=%d reused=%v, want turn 2's run to reuse turn 1's sandbox with no new acquire",
+			warm.acquires, warm.runs, warm.reused)
+	}
+	if inProc.acquires != 1 || inProc.runs != 1 || inProc.frameworkRuns != 2 {
+		t.Errorf("in-process path: acquires=%d runs=%d framework.Run calls=%d, want both turns served by one run on one sandbox",
+			inProc.acquires, inProc.runs, inProc.frameworkRuns)
+	}
+
+	if raceEnabled {
+		return
+	}
+	if warm.latency >= cold.latency {
+		t.Errorf("warm sandbox reuse (%v) was not faster than cold sandbox acquire (%v)", warm.latency, cold.latency)
+	}
+	if inProc.latency >= warm.latency {
+		t.Errorf("in-process continuation (%v) was not faster than warm dispatch (%v)", inProc.latency, warm.latency)
 	}
 }
 
@@ -2041,7 +2179,7 @@ func TestSessionSandboxNotReusedWhenTheTaskChangedBetweenTurns(t *testing.T) {
 		MaxWorkers: 2,
 		Config: orchestrator.Config{
 			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
+			Capabilities:          orchestrator.SessionTestRegistry(),
 			SessionSandboxIdleTTL: 30 * time.Minute,
 		},
 	}
@@ -2117,7 +2255,7 @@ func TestWarmSessionSandboxReleasedWhenItsGrantsChange(t *testing.T) {
 		MaxWorkers: 2,
 		Config: orchestrator.Config{
 			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
+			Capabilities:          orchestrator.SessionTestRegistry(),
 			SessionSandboxIdleTTL: 30 * time.Minute,
 		},
 	}
@@ -2221,7 +2359,10 @@ func TestActiveConsoleSessionOperatorEditsPreservedAcrossReconciles(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, wantCap := range append(caps, "priority-dispatch", model.DurableCapability) {
+	if updated.Admission != model.AdmissionDurable {
+		t.Errorf("active session task Admission = %q after reconcile, want %q", updated.Admission, model.AdmissionDurable)
+	}
+	for _, wantCap := range caps {
 		if !slices.ContainsFunc(updated.Grants, func(g model.Grant) bool { return g.Capability == wantCap }) {
 			t.Errorf("active session task Grants = %v after reconcile, missing operator grant %q", updated.Grants, wantCap)
 		}
@@ -2348,7 +2489,7 @@ func TestActiveConsoleSessionPermissionChangesApplyImmediatelyToProposals(t *tes
 		MaxWorkers: 1,
 		Config: orchestrator.Config{
 			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities: orchestrator.SessionTestRegistry(durable.New()),
+			Capabilities: orchestrator.SessionTestRegistry(),
 		},
 	}
 	if err := orchestrator.RunCycle(ctx, deps, t1.Add(time.Second)); err != nil {
@@ -2410,7 +2551,7 @@ func TestFirstReplyWakesConsoleSessionRestingWithRequestedSuspension(t *testing.
 		})),
 		Config: orchestrator.Config{
 			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities: orchestrator.SessionTestRegistry(durable.New()),
+			Capabilities: orchestrator.SessionTestRegistry(),
 		},
 		MaxWorkers: 1,
 	}
@@ -2517,7 +2658,7 @@ func TestUIEditsWithStateRepoUnlockedPersistAcrossOrchestratorAndStateRepoCycles
 	client.Now = func() time.Time { return baseTime }
 
 	// Edit console_sessions, default_capabilities, repo_config, schedules, and templates via UI client while settings_locked is false (default).
-	capID := ui.OfferedCapabilities()[0].ID
+	capID := model.GitHubSandboxRepoGrant
 	if _, err := client.UpdateSettings(ctx, ui.UpdateSettingsRequest{
 		DefaultCapabilities: &[]string{capID},
 	}); err != nil {
@@ -2684,4 +2825,300 @@ func TestConsoleSessionSnapshotSurvivesARestart(t *testing.T) {
 	if hasWrite(synced.Writes, "acme", "infra") {
 		t.Errorf("Writes = %v after a restart, kept acme/infra the declaration dropped while the daemon was down", synced.Writes)
 	}
+}
+
+// director-capabilities.spec.md §4.2 (G9), for a proposal replayed at the
+// end of the director's run: one carrying its target repository's
+// default capability reference unchanged is queued on the director's
+// permission, with a note naming the default and its repository; one
+// where the director typed that reference with other arguments still
+// waits for a person -- ui.CreateTask's rule for the identical call
+// filed live.
+func TestDirectorProposalCarryingItsTargetsDefaultReferenceIsQueuedAtTheEndOfARun(t *testing.T) {
+	t.Parallel()
+	const seeded = `https://caps.example/host-script#host-script={"script":"autoscaler"}`
+	const typed = `https://caps.example/host-script#host-script={"script":"elsewhere"}`
+	for _, tc := range []struct {
+		name string
+		caps []any
+		want model.State
+		note string
+	}{
+		{"seeded unchanged", nil, model.StateQueued, "from the default capabilities of `acme/widgets`"},
+		{"typed with other arguments", []any{typed}, model.StateProposed, "this proposal asked for `https://caps.example/host-script"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store, ctx := openStore(t)
+			_, client := newSim(t, "acme", "widgets", "main")
+			settings(t, store, func(cfg *model.Config) {
+				sessions := model.DefaultConsoleSessions()
+				sessions[0].TasksApproved = true
+				cfg.ConsoleSessions = sessions
+			})
+			repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+			if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: repo, DefaultCapabilities: []string{seeded}}); err != nil {
+				t.Fatal(err)
+			}
+			runSessions(t, store, baseTime)
+			director := sessionTasks(t, store)[0]
+
+			args := map[string]any{"title": "follow-up on widgets", "body": "as discussed", "repo": "acme/widgets"}
+			if tc.caps != nil {
+				args["capabilities"] = tc.caps
+			}
+			result := toolResult(agent.ToolCall{Name: "propose_task", Arguments: args})
+			if err := orchestrator.ProcessResult(ctx, store, client, director, result,
+				director.ID+"-1", baseTime); err != nil {
+				t.Fatalf("ProcessResult: %v", err)
+			}
+			all, err := store.ListTasks(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var proposal *model.Task
+			for i := range all {
+				if all[i].ID != director.ID {
+					proposal = &all[i]
+				}
+			}
+			if proposal == nil {
+				t.Fatal("the director proposed a task and nothing was filed")
+			}
+			state, err := store.State(ctx, proposal.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state != tc.want {
+				t.Errorf("the proposal reads %q, want %q (body: %q)", state, tc.want, proposal.Body)
+			}
+			if !strings.Contains(proposal.Body, tc.note) {
+				t.Errorf("body = %q, want it to say %q", proposal.Body, tc.note)
+			}
+			if !slices.ContainsFunc(proposal.Grants, func(g model.Grant) bool {
+				return g.Via == model.GrantByDefault && strings.Contains(g.Capability, "autoscaler")
+			}) {
+				t.Errorf("grants = %+v, want the repository's default kept", proposal.Grants)
+			}
+		})
+	}
+}
+
+func TestShippedDirectorTasksApprovedStickyOverridesAcrossReconciles(t *testing.T) {
+	t.Parallel()
+
+	t.Run("active-task tag override stays sticky over shipped default", func(t *testing.T) {
+		t.Parallel()
+		store, ctx := openStore(t)
+		_, simClient := newSim(t, "acme", "widgets", "main")
+		settings(t, store, func(cfg *model.Config) {
+			cfg.TargetRepos = []string{"acme/widgets"}
+			// Leave cfg.ConsoleSessions == nil so DefaultConsoleSessions() (TasksApproved: true) governs.
+		})
+		runSessions(t, store, baseTime)
+		director := sessionTasks(t, store)[0]
+
+		client := ui.NewClient(ui.Config{
+			Actor:        ui.DefaultActor("alice"),
+			Capabilities: ui.OfferedCapabilities(),
+			// State repo configured so grain_config is read-only and active-task overrides
+			// rely on ConsoleSessionTasksUnapprovedTag / ConsoleSessionTasksApprovedTag.
+			StateRepoRef: func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+		}, store)
+
+		// 1. Shipped default queues live proposals directly.
+		firstLive, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+			Title:       "Default queued proposal",
+			Description: "Should queue automatically.",
+			Repo:        "acme/widgets",
+			ProposedBy:  director.ID,
+		})
+		if err != nil {
+			t.Fatalf("CreateTask (default): %v", err)
+		}
+		if firstLive.State != model.StateQueued {
+			t.Fatalf("default director live proposal state = %q, want %q", firstLive.State, model.StateQueued)
+		}
+
+		// 2. Operator unticks TasksApproved on the active session while grain_config is locked.
+		off := false
+		listed, err := client.UpdateConsoleSession(ctx, model.DirectorSessionID, ui.UpdateConsoleSessionRequest{
+			TasksApproved: &off,
+		})
+		if err != nil {
+			t.Fatalf("UpdateConsoleSession(TasksApproved=false): %v", err)
+		}
+		if len(listed) != 1 || listed[0].TasksApproved {
+			t.Fatalf("ListConsoleSessions after disabling TasksApproved = %+v, want TasksApproved=false", listed)
+		}
+
+		// Editing another active-session field (with TasksApproved nil) and running reconciles
+		// must keep ConsoleSessionTasksUnapprovedTag, Body, and proposal gating sticky.
+		caps := []string{model.GrainSourceGrant, "api:self-debug"}
+		if _, err := client.UpdateConsoleSession(ctx, model.DirectorSessionID, ui.UpdateConsoleSessionRequest{
+			Capabilities: &caps,
+		}); err != nil {
+			t.Fatalf("UpdateConsoleSession(Capabilities): %v", err)
+		}
+		runSessions(t, store, baseTime.Add(time.Minute))
+		runSessions(t, store, baseTime.Add(2*time.Minute))
+
+		afterDisable, err := store.GetTask(ctx, director.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Contains(afterDisable.Tags, model.ConsoleSessionTasksUnapprovedTag) {
+			t.Errorf("director tags = %v, missing %q", afterDisable.Tags, model.ConsoleSessionTasksUnapprovedTag)
+		}
+		if model.ConsoleSessionQueuesProposals(model.DefaultConsoleSessions(), *afterDisable) {
+			t.Error("ConsoleSessionQueuesProposals = true after operator disabled TasksApproved")
+		}
+		if !strings.Contains(afterDisable.Body, "waits for a person to approve it") {
+			t.Errorf("director Body lost unapproved override:\n%s", afterDisable.Body)
+		}
+
+		heldLive, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+			Title:       "Held live proposal",
+			Description: "Must wait for operator approval.",
+			Repo:        "acme/widgets",
+			ProposedBy:  director.ID,
+		})
+		if err != nil {
+			t.Fatalf("CreateTask (disabled): %v", err)
+		}
+		if heldLive.State != model.StateProposed {
+			t.Errorf("disabled director live proposal state = %q, want %q", heldLive.State, model.StateProposed)
+		}
+
+		relayRes := toolResult(agent.ToolCall{
+			Name: "propose_task",
+			Arguments: map[string]any{
+				"title": "Held relay proposal",
+				"body":  "End-of-run relay must also wait.",
+				"repo":  "acme/widgets",
+			},
+		})
+		if err := orchestrator.ProcessResult(ctx, store, simClient, *afterDisable, relayRes,
+			director.ID+"-relay", baseTime.Add(3*time.Minute)); err != nil {
+			t.Fatalf("ProcessResult (disabled): %v", err)
+		}
+		all, err := store.ListTasks(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var relayed *model.Task
+		for i := range all {
+			if all[i].Title == "Held relay proposal" {
+				relayed = &all[i]
+				break
+			}
+		}
+		if relayed == nil {
+			t.Fatal("expected 'Held relay proposal' to be filed")
+		}
+		relayedState, err := store.State(ctx, relayed.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if relayedState != model.StateProposed {
+			t.Errorf("disabled director relayed proposal state = %q, want %q", relayedState, model.StateProposed)
+		}
+
+		// 3. Re-enabling via UpdateTask flips the tag to ConsoleSessionTasksApprovedTag and stays sticky.
+		on := true
+		if _, err := client.UpdateTask(ctx, director.ID, ui.UpdateTaskRequest{
+			AutoApproveProposals: &on,
+		}); err != nil {
+			t.Fatalf("UpdateTask(AutoApproveProposals=true): %v", err)
+		}
+		runSessions(t, store, baseTime.Add(4*time.Minute))
+		afterReenable, err := store.GetTask(ctx, director.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Contains(afterReenable.Tags, model.ConsoleSessionTasksApprovedTag) ||
+			slices.Contains(afterReenable.Tags, model.ConsoleSessionTasksUnapprovedTag) {
+			t.Errorf("director tags after re-enable = %v, want only %q", afterReenable.Tags, model.ConsoleSessionTasksApprovedTag)
+		}
+		if !strings.Contains(afterReenable.Body, "filed approved") {
+			t.Errorf("director Body did not restore filed-approved guidance:\n%s", afterReenable.Body)
+		}
+		reenabledLive, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+			Title:       "Re-enabled live proposal",
+			Description: "Should queue again.",
+			Repo:        "acme/widgets",
+			ProposedBy:  director.ID,
+		})
+		if err != nil {
+			t.Fatalf("CreateTask (re-enabled): %v", err)
+		}
+		if reenabledLive.State != model.StateQueued {
+			t.Errorf("re-enabled director live proposal state = %q, want %q", reenabledLive.State, model.StateQueued)
+		}
+	})
+
+	t.Run("saved ConsoleSessions row with TasksApproved false stays sticky across reconciles and replacement", func(t *testing.T) {
+		t.Parallel()
+		store, ctx := openStore(t)
+		settings(t, store, func(cfg *model.Config) {
+			cfg.TargetRepos = []string{"acme/widgets"}
+			sessions := model.DefaultConsoleSessions()
+			sessions[0].TasksApproved = false
+			cfg.ConsoleSessions = sessions
+		})
+		runSessions(t, store, baseTime)
+		first := sessionTasks(t, store)[0]
+		if !strings.Contains(first.Body, "waits for a person to approve it") {
+			t.Errorf("saved TasksApproved=false director Body = %q, want waiting-for-person guidance", first.Body)
+		}
+
+		client := ui.NewClient(ui.Config{
+			Actor:        ui.DefaultActor("alice"),
+			Capabilities: ui.OfferedCapabilities(),
+		}, store)
+
+		p1, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+			Title:       "Saved false proposal 1",
+			Description: "Must wait.",
+			Repo:        "acme/widgets",
+			ProposedBy:  first.ID,
+		})
+		if err != nil {
+			t.Fatalf("CreateTask 1: %v", err)
+		}
+		if p1.State != model.StateProposed {
+			t.Errorf("saved TasksApproved=false proposal 1 state = %q, want %q", p1.State, model.StateProposed)
+		}
+
+		// Close and replace the conversation ("Start a fresh chat"); replacement must inherit saved false, not shipped true.
+		closeSession(t, store, first.ID, baseTime.Add(time.Minute))
+		runSessions(t, store, baseTime.Add(2*time.Minute))
+
+		replacementID, err := store.TaskIDWithTag(ctx, model.ConsoleSessionTag(model.DirectorSessionID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if replacementID == "" || replacementID == first.ID {
+			t.Fatalf("replacement task id = %q, want new task != %q", replacementID, first.ID)
+		}
+		replacement, err := store.GetTask(ctx, replacementID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(replacement.Body, "waits for a person to approve it") {
+			t.Errorf("replacement task Body = %q, want saved TasksApproved=false preserved", replacement.Body)
+		}
+		p2, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+			Title:       "Saved false proposal 2",
+			Description: "Must still wait after fresh chat.",
+			Repo:        "acme/widgets",
+			ProposedBy:  replacementID,
+		})
+		if err != nil {
+			t.Fatalf("CreateTask 2: %v", err)
+		}
+		if p2.State != model.StateProposed {
+			t.Errorf("saved TasksApproved=false proposal 2 state = %q, want %q", p2.State, model.StateProposed)
+		}
+	})
 }

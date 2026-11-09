@@ -40,8 +40,7 @@ func dispatchStandingOf(ctx context.Context, q querier, taskID string, runNow *t
 		"SELECT `t`.`order_key`, "+priorityDispatchTaskSQL+", "+directorTaskSQL+", "+
 			"EXISTS (SELECT 1 FROM `task_tag` AS `rt` WHERE `rt`.`task_id` = `t`.`id` AND `rt`.`tag` LIKE ?) "+
 			"FROM `task` AS `t` WHERE `t`.`id` = ?",
-		append(append(priorityDispatchArgs(), string(ReasonConsoleSession), ConsoleSessionTagPrefix+"%"),
-			baseRepairBranchTagPrefix+"%", taskID)...).
+		string(ReasonConsoleSession), ConsoleSessionTagPrefix+"%", baseRepairBranchTagPrefix+"%", taskID).
 		Scan(&st.OrderKey, &st.PriorityDispatch, &st.Session, &st.FixesBaseBranch)
 	if errors.Is(err, sql.ErrNoRows) {
 		return st, nil
@@ -302,16 +301,34 @@ func (s *Store) FailedOverModels(ctx context.Context, taskID string) ([]string, 
 // time, has already been resumed, or there is none. dispatch.Cycle holds
 // a task until then: it is how a durable task's setup suspension waits
 // out its backoff without a strike to back off from.
+//
+// The agent's own suspension (SuspendRequested) is never held here, at
+// whatever time it names. Its at is a wake condition, and the task's
+// deferral already carries it (ui.Client.ResumeLater, ParkUntil): what
+// ends that deferral early -- a post under message: true
+// (WakeOnMessage), a CI verdict, a task closing, a person's Undefer --
+// is the condition being met, and the task is to run then. Holding it
+// to the at here as well kept a woken task queued, skipped every cycle,
+// until the time it had only named as a fallback.
+//
+// That suspension is left open rather than marked resumed: the run that
+// starts next resumes it (resumeSuspensionsTx), and until then an open
+// requested suspension with its deferral cleared is how a console
+// session, or a goal task, reads "woken and waiting to be dispatched".
 func (s *Store) SuspensionResumeAt(ctx context.Context, taskID string) (*time.Time, error) {
+	var kind string
 	var resumeAt sql.NullTime
 	err := s.db.QueryRowContext(ctx,
-		"SELECT `resume_at` FROM `task_suspension` WHERE `task_id` = ? AND `resumed_at` IS NULL "+
-			"ORDER BY `created_at` DESC, `run_id` DESC LIMIT 1", taskID).Scan(&resumeAt)
+		"SELECT `kind`, `resume_at` FROM `task_suspension` WHERE `task_id` = ? AND `resumed_at` IS NULL "+
+			"ORDER BY `created_at` DESC, `run_id` DESC LIMIT 1", taskID).Scan(&kind, &resumeAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("reading when task %s may resume: %w", taskID, err)
+	}
+	if SuspensionKind(kind) == SuspendRequested {
+		return nil, nil
 	}
 	return timePtr(resumeAt), nil
 }

@@ -40,6 +40,10 @@ type ConnectIdentity struct {
 	// Via is the verifier that vouched for Principal ("iap", or a
 	// wrapper's proxy).
 	Via string
+	// DelegatedBy is the delegating service-account email when the request
+	// arrived on behalf of Principal; any non-empty value is refused by
+	// ownerRefusal (AU-25.4).
+	DelegatedBy string
 }
 
 type connectIdentityKey struct{}
@@ -64,7 +68,11 @@ func ownerRefusal(id ConnectIdentity, name, owner string, shared bool) string {
 	if !id.Remote {
 		return ""
 	}
-	setOwner := fmt.Sprintf("set it in Settings → Hostds, `grain hostds set-owner %s <email>`, or PATCH /api/hostds/%s {\"owner\": \"<email>\"}", name, name)
+	if id.DelegatedBy != "" {
+		return fmt.Sprintf("hostd %q dialed in via a delegated identity (%s acting for %s): a remote hostd must connect directly as its owner, never via delegation",
+			name, id.DelegatedBy, id.Principal)
+	}
+	setOwner := fmt.Sprintf("set it in Settings → Hosts, `grain host set-owner %s <email>`, or PATCH /api/hostds/%s {\"owner\": \"<email>\"}", name, name)
 	if shared {
 		setOwner = "start the daemon with -hostd-token-owner=<email>, or register this hostd in the hostd registry (/api/hostds) with an owner"
 	}

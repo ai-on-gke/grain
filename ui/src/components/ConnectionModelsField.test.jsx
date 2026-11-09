@@ -18,6 +18,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import api from "../api.js";
 import ConnectionModelsField from "./ConnectionModelsField.jsx";
 import { optionValues } from "../searchSelectTesting.js";
+import { TimeZoneProvider } from "../TimeZoneContext.jsx";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
 
@@ -83,5 +84,33 @@ describe("ConnectionModelsField", () => {
     await user.clear(input);
     await user.type(input, "co41");
     expect(optionValues(input)).toEqual(["claude-opus-4-1"]);
+  });
+
+  // StoredDiscovery printed refreshedAt in the browser's own zone even when
+  // Settings → Preferences chose another (2026-11-08 settings walkthrough).
+  it("prints when the provider's model list was last refreshed in this browser's chosen time zone", async () => {
+    const refreshedAt = "2026-11-08T03:15:00Z";
+    api.mockResolvedValue({
+      available: true,
+      models: [{ id: "gemini-2.5-pro" }],
+    });
+    render(
+      <TimeZoneProvider zone="Asia/Tokyo">
+        <ConnectionModelsField
+          backend={{
+            id: "conn-1",
+            framework: "antigravity",
+            discovered: { refreshedAt, models: ["gemini-2.5-pro"] },
+          }}
+          onChange={() => {}}
+        />
+      </TimeZoneProvider>,
+    );
+    const inTokyo = new Date(refreshedAt).toLocaleString(undefined, {
+      timeZone: "Asia/Tokyo",
+    });
+    expect(
+      await screen.findByText(`Provider's list last refreshed ${inTokyo}.`),
+    ).toBeInTheDocument();
   });
 });

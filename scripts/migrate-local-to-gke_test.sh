@@ -320,6 +320,73 @@ migrate
 check "no secrets.key is refused" 1 "no secrets.key"
 truth "and the daemon was not touched" test -f "$work/stub/units/grain-daemon.service.active"
 
+# local_postgres turns the fresh install into one whose store is the local
+# PostgreSQL server setup.sh provisions (docs/database.md): its unit, the
+# password beside its cluster, /etc/grain/postgres.env read by the
+# daemon's unit, and db-config.json naming 127.0.0.1 -- with the SQLite
+# store it was migrated from still in place, as setup.sh leaves it.
+local_postgres() {
+  local h="$work/host" d="$work/host/var/lib/grain/data"
+  mkdir -p "$d/postgres"
+  echo 16 >"$d/postgres/PG_VERSION"
+  echo "0123abcd" >"$d/secrets/postgres-password"
+  touch "$d/.postgres-migrated"
+  printf 'GRAIN_DB_DRIVER=postgres\nGRAIN_DB_DSN=postgres://grain:0123abcd@127.0.0.1:5433/grain?sslmode=disable\n' \
+    >"$h/etc/grain/postgres.env"
+  echo '{"driver":"postgres","dsn":"postgres://grain@127.0.0.1:5433/grain?sslmode=disable\u0026connect_timeout=5","passwordSecret":"database-password"}' \
+    >"$d/db-config.json"
+  cat >"$sysd/grain-postgres.service" <<'UNIT'
+[Service]
+Environment=GRAIN_POSTGRES_IMAGE=mirror.example.com/library/postgres:16-bookworm
+Environment=GRAIN_POSTGRES_PORT=5433
+ExecStart=/usr/bin/docker run --name grain-postgres --rm --network host postgres -c listen_addresses=127.0.0.1 -c port=5433
+UNIT
+  sed -i "s|^User=grain\$|User=grain\nRequires=grain-postgres.service\nEnvironmentFile=$h/etc/grain/postgres.env|" \
+    "$sysd/grain-daemon.service"
+  touch "$work/stub/units/grain-postgres.service.active"
+}
+
+fresh
+local_postgres
+migrate
+check "a store on the local Postgres server is refused" 1 "store is the local PostgreSQL server (grain-postgres.service" \
+  "names 127.0.0.1:5433" "Nothing was changed" "pg_dump" "setup.sh --db-dsn" "docs/database.md"
+truth "and the daemon was not stopped" test -f "$work/stub/units/grain-daemon.service.active"
+truth "nor the Postgres server" test -f "$work/stub/units/grain-postgres.service.active"
+lacks "nothing was stopped" "$(calls)" "systemctl"
+lacks "nothing was applied to the cluster" "$(calls)" "kubectl"
+truth "and no backup was taken" test -z "$(ls "$work/host/backups")"
+
+fresh
+local_postgres
+migrate --dry-run
+check "a dry run on the local Postgres server is refused too" 1 "store is the local PostgreSQL server"
+
+# Only the password left behind, and only db-config.json saying where the
+# store is: still the local server.
+fresh
+local_postgres
+rm "$sysd/grain-postgres.service" "$work/host/etc/grain/postgres.env"
+sed -i '/^EnvironmentFile=/d' "$sysd/grain-daemon.service"
+echo '{"driver":"postgres","dsn":"postgres://grain@localhost/grain"}' >"$work/host/var/lib/grain/data/db-config.json"
+migrate --dry-run
+check "the local server is found by its password and db-config.json" 1 \
+  "store is the local PostgreSQL server" "db-config.json names localhost:5432"
+
+# Moved onto a server the cluster can reach (setup.sh --db-dsn), with the
+# old unit left behind: migrated like any external Postgres.
+fresh
+local_postgres
+sed -i '/^EnvironmentFile=/d; /^Requires=/d' "$sysd/grain-daemon.service"
+sed -i 's|-default-target-repo ai-on-gke/grain|-default-target-repo ai-on-gke/grain -db-driver postgres -db-dsn postgres://grain:pw@db.example.internal:5432/grain|' \
+  "$sysd/grain-daemon.service"
+echo '{"driver":"postgres","dsn":"host=db.example.internal port=5432 dbname=grain user=grain"}' \
+  >"$work/host/var/lib/grain/data/db-config.json"
+migrate --dry-run
+check "a store moved off the local server migrates" 0 "grain-postgres.service is installed but is not the store" \
+  "store: Postgres at db.example.internal:5432" "make sure the cluster can reach it" "Stage 5b: readiness"
+lacks "and is not taken for SQLite" "$out" "store: SQLite"
+
 fresh
 touch "$work/host/var/lib/grain/kubeconfig"
 status=0
@@ -448,6 +515,32 @@ fresh
 migrate --print-manifest --node-selector cloud.google.com/gke-nodepool=granule
 check "--print-manifest renders the manifest" 0 "kind: Deployment" "- -k8s-node-selector=cloud.google.com/gke-nodepool=granule" \
   "secretName: grain-migration" "- -hostd-token-file=/etc/grain-secrets/hostd-token"
+
+# A setup.sh container install from release assets: the unit runs
+# ${GRAIN_IMAGE} out of /etc/grain/image.env, which names a local grain/*
+# ref no cluster can pull. Without --mirror that stops the migration before
+# anything is touched; with it both images are pushed there and run.
+fresh
+mkdir -p "$work/host/etc/grain"
+echo "GRAIN_IMAGE=grain/grain:sha-0123456789ab" >"$work/host/etc/grain/image.env"
+cat >"$sysd/grain-daemon.service" <<'UNIT'
+[Service]
+EnvironmentFile=/etc/grain/image.env
+ExecStart=/usr/bin/docker run --name grain-daemon ${GRAIN_IMAGE} daemon \
+  -data-dir /var/lib/grain/data -granule-sandboxes \
+  -sandbox-image grain/guest:sha-0123456789ab -default-target-repo ai-on-gke/grain
+UNIT
+migrate --dry-run
+check "a release-asset host needs --mirror" 1 "release-asset image only this host has: pass --mirror"
+truth "and the daemon was not touched" test -f "$work/stub/units/grain-daemon.service.active"
+migrate --dry-run --mirror registry.example/proj/grain/
+check "--mirror renames both release-asset images" 0 \
+  "controller image: registry.example/proj/grain/grain:sha-0123456789ab" \
+  "sandbox image:    registry.example/proj/grain/guest:sha-0123456789ab" \
+  "+ docker push registry.example/proj/grain/grain:sha-0123456789ab" \
+  "+ docker push registry.example/proj/grain/guest:sha-0123456789ab"
+truth "the shared daemon/transfer image is pushed once" \
+  test "$(grep -c '^+ docker push registry.example/proj/grain/grain:' <<<"$out")" = 1
 
 echo
 if [ "$failures" -gt 0 ]; then

@@ -35,9 +35,7 @@ func writeDeclaration(t *testing.T, stateDir, name, decl string, scripts ...stri
 		t.Fatal(err)
 	}
 	for _, s := range scripts {
-		if err := os.WriteFile(filepath.Join(dir, "scripts", s), []byte("#!/bin/sh\n# grain: "+s+"\necho "+s+"\n"), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		writeExecutableStub(t, filepath.Join(dir, "scripts", s), "#!/bin/sh\n# grain: "+s+"\necho "+s+"\n")
 	}
 }
 

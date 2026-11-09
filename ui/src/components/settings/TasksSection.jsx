@@ -13,29 +13,20 @@
 // limitations under the License.
 
 import {
-  Alert,
   Box,
-  Button,
   Checkbox,
-  Chip,
-  FormControl,
   FormControlLabel,
   FormHelperText,
-  InputLabel,
   Link,
-  ListItemText,
-  MenuItem,
-  Select,
   Stack,
   TextField,
   Typography,
 } from "@mui/material";
-import { isApiGrant, withoutApiRows } from "../../apiGrants.js";
+import { isApiGrant } from "../../apiGrants.js";
 import { isCapabilityRef } from "../../capabilityArgs.js";
 import GrantsPicker from "../GrantsPicker.jsx";
 import ReadOnlyGrants from "../ReadOnlyGrants.jsx";
 import { localGrantHandlers } from "../capabilityMethods.js";
-import { LEGACY_CAPABILITIES_HINT, capabilityRows } from "../../state.js";
 import { legacyValues } from "../../taskAttributes.js";
 import SettingsCard from "./SettingsCard.jsx";
 
@@ -144,25 +135,25 @@ export default function TasksSection({
   const readOnly = Boolean(s.readOnly);
   const defaultCapabilities = settings.defaultCapabilities || [];
   // The defaults are one list holding all three kinds a task's own
-  // capabilities do: the legacy in-process ids, edited with the
-  // checklist, and the agent API's grants and capability server methods
-  // (with their with: arguments), edited with GrantsPicker -- the same
-  // split the new-task form, the template and the schedule editors make.
-  const legacyDefaults = defaultCapabilities.filter(
-    (id) => !isCapabilityRef(id) && !isApiGrant(id),
-  );
+  // capabilities do: held bare capability ids, and the agent API's grants
+  // and capability server methods (with their with: arguments), shown and
+  // edited with GrantsPicker.
+  const isBareGrant = (id) => !isCapabilityRef(id) && !isApiGrant(id);
+  const legacyDefaults = defaultCapabilities.filter(isBareGrant);
   const apiDefaults = defaultCapabilities.filter(isApiGrant);
-  const refDefaults = defaultCapabilities.filter(isCapabilityRef);
-  const capabilityChoices = withoutApiRows(
-    capabilityRows(
-      (settings.capabilities || []).filter((c) => c.grantable !== false),
-      legacyDefaults,
-    ),
+  const refDefaults = defaultCapabilities.filter(
+    (id) => isCapabilityRef(id) && !isApiGrant(id),
   );
-  const methodDefaults = localGrantHandlers(refDefaults, (refs) =>
-    saveChoice({
-      defaultCapabilities: [...legacyDefaults, ...apiDefaults, ...refs],
-    }),
+  const methodDefaults = localGrantHandlers(
+    [...legacyDefaults, ...refDefaults],
+    (rest) =>
+      saveChoice({
+        defaultCapabilities: [
+          ...rest.filter(isBareGrant),
+          ...apiDefaults,
+          ...rest.filter(isCapabilityRef),
+        ],
+      }),
   );
 
   return (
@@ -217,75 +208,11 @@ export default function TasksSection({
           sx={{ display: "flex", mt: 1 }}
         />
 
-        <FormControl
-          fullWidth
-          margin="normal"
-          size="small"
+        <Box
+          data-testid="default-grants"
           data-setting-id="defaultCapabilities"
+          sx={{ mt: 1 }}
         >
-          <InputLabel id="settings-default-capabilities-label">
-            Default legacy capabilities
-          </InputLabel>
-          <Select
-            labelId="settings-default-capabilities-label"
-            label="Default legacy capabilities"
-            multiple
-            value={legacyDefaults}
-            onChange={(e) => {
-              const next = e.target.value;
-              saveChoice({
-                defaultCapabilities: [...next, ...apiDefaults, ...refDefaults],
-              });
-            }}
-            renderValue={(selected) => (
-              <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-                {selected.map((id) => {
-                  const cap = capabilityChoices.find((c) => c.id === id);
-                  return (
-                    <Chip
-                      key={id}
-                      size="small"
-                      label={cap ? cap.name || cap.id : id}
-                    />
-                  );
-                })}
-              </Box>
-            )}
-          >
-            {capabilityChoices.length === 0 && (
-              <MenuItem disabled>
-                None configured &mdash; the rows under Settings → Legacy
-                capabilities are where a capability is set up
-              </MenuItem>
-            )}
-            {capabilityChoices.map((c) => (
-              <MenuItem key={c.id} value={c.id} title={c.description}>
-                <Checkbox
-                  checked={defaultCapabilities.includes(c.id)}
-                  size="small"
-                />
-                <ListItemText
-                  primary={c.name || c.id}
-                  secondary={
-                    c.retired
-                      ? c.description
-                      : c.buildDefault
-                        ? "on by default for this build"
-                        : null
-                  }
-                />
-              </MenuItem>
-            ))}
-          </Select>
-          <FormHelperText>
-            attached to every new task as it is filed, whichever repo it targets
-            -- whoever files one can untick any of these on the new-task form,
-            and any of them can be detached from a task afterwards. Tasks
-            already filed keep what they were filed with. An individual repo can
-            add more of its own, on the repos page. {LEGACY_CAPABILITIES_HINT}
-          </FormHelperText>
-        </FormControl>
-        <Box data-testid="default-grants" sx={{ mt: 1 }}>
           <Typography variant="subtitle2" component="h3" sx={{ mb: 0.5 }}>
             Default grants
           </Typography>
@@ -321,39 +248,6 @@ export default function TasksSection({
             form as sections of its own, to be edited or removed there.
           </FormHelperText>
         </Box>
-        {/* A capability this build turns on by default
-              (ui.CapabilityStatus.BuildDefault) is seeded only into a
-              fresh install's defaults: grain never adds one to a stored
-              configuration, so a deployment that predates the build,
-              or whose operator took it out, is told here and offered
-              the one click instead. */}
-        {capabilityChoices
-          .filter((c) => c.buildDefault && !defaultCapabilities.includes(c.id))
-          .map((c) => (
-            <Alert
-              key={`build-default-${c.id}`}
-              severity="info"
-              sx={{ mt: 1 }}
-              action={
-                readOnly ? null : (
-                  <Button
-                    color="inherit"
-                    size="small"
-                    onClick={() => {
-                      const next = [...defaultCapabilities, c.id];
-                      saveChoice({ defaultCapabilities: next });
-                    }}
-                  >
-                    Add to defaults
-                  </Button>
-                )
-              }
-            >
-              {c.name || c.id} is on by default for this build, and is not in
-              this deployment&apos;s defaults -- either it was installed before
-              this build, or somebody took it out.
-            </Alert>
-          ))}
       </SettingsCard>
       <SettingsCard title="Backlog & follow-up limits" anchor="backlog">
         <FormControlLabel

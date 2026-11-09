@@ -102,7 +102,12 @@ func ClassifyMergeRefusal(err error) RefusalKind {
 		return RefusalApproval
 	case has("all comments must be resolved", "all conversations must be resolved",
 		"conversation resolution", "conversations must be resolved",
-		"review threads must be resolved", "unresolved review"):
+		// GitHub's ruleset wording since 2026: "Repository rule violations
+		// found: A conversation must be resolved before this pull request
+		// can be merged." It names a rule ("rule violation") as well, so it
+		// has to be placed here, before the catch-all rule case below.
+		"conversation must be resolved", "comments must be resolved",
+		"review threads must be resolved", "unresolved review", "unresolved conversation"):
 		return RefusalUnresolvedThreads
 	case has("rule violation", "repository rule", "protected branch", "signed", "signature",
 		"linear history", "merge commits are not allowed", "merge method", "not allowed",

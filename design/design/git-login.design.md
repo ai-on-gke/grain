@@ -66,7 +66,7 @@ The CLI provides `grain git-login` (not `grain login`, which signs the CLI in to
 Each credential's host metadata (`<name>.host.json`, `gitproxy.CredentialHost`) stores an optional `Author` field:
 
 - When `AddTeamGitConnection` receives `SignAs: true` and an explicit `Author`, it records that trimmed `Author` directly on `CredentialHost`.
-- When `SignAs: true` is set and `Author` is empty, the daemon queries the credential's GitHub identity (`CredentialGitIdentityWithin`, backed by `GET /user`) and records the user's GitHub display name (`id.Name`, falling back to `id.Login` when display name is unset, excluding `*[bot]` accounts) in `CredentialHost.Author`.
+- When `SignAs: true` is set and `Author` is empty, the daemon queries the credential owner's GitHub identity (`CredentialOwnerIdentityWithin`, backed by `GET /user`) and records the user's GitHub display name (`id.Name`, falling back to `id.Login` when display name is unset, excluding `*[bot]` accounts) in `CredentialHost.Author`. This is deliberately not the commit identity (`CredentialGitIdentity`), which prefers the host account's `git config user.name`/`user.email` where ambient logins are available: the signature must name whoever owns the token, not whoever runs the daemon.
 - `gitproxy.CredentialSet.AuthorOf(name)` returns the recorded author for a credential, and `credentialTokenSource.AuthorSignature(owner, repo)` resolves the active connection for `(host, owner, repo)` and returns its author to `github.GitHubClient`.
 
 ### Explicit pull request body signature {#GL-4}

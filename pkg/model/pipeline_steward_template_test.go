@@ -48,6 +48,8 @@ func TestPipelineStewardIsToldHowToTriageARedReleaseCandidate(t *testing.T) {
 		"start the title with `" + model.RCBlockerMarker("<rc_tag>") + "` exactly",
 		"`at_front: true`",
 		"check run `" + model.ReleaseHoldCheckName + "` in progress",
+		"while triage is pending",
+		"name `<rc_tag>` in your closing report",
 		"`rc.(N+1)` is not cut",
 		"`release/vX.Y.Z`",
 		"`branch: release/vX.Y.Z`",

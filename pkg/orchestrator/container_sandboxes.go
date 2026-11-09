@@ -244,7 +244,25 @@ func (c *ContainerSandboxes) runArgs(name string, resolved Shape, srcVolume stri
 	if srcVolume != "" {
 		args = append(args, grainSourceMountArgs(srcVolume)...)
 	}
-	return append(args, "--workdir", c.cfg.Workspace, c.CurrentImage(), "sleep", "infinity")
+	image := c.CurrentImage()
+	if releaseAssetImageRef(image) {
+		// docker run pulls a missing image by default, and this name
+		// would be pulled from Docker Hub's grain/ namespace.
+		args = append(args, "--pull=never")
+	}
+	return append(args, "--workdir", c.cfg.Workspace, image, "sleep", "infinity")
+}
+
+// releaseAssetImageRef reports whether image is the local tag a release
+// asset's `docker load` leaves behind (images.json's "ref", such as
+// grain/guest:sha-0123456789ab; docs/release-assets.md). It names no
+// registry host, so Docker reads it as docker.io/grain/..., a Docker Hub
+// namespace this project does not control: such an image is only ever
+// loaded, never pulled, and a container is not started from it if it has
+// gone from the local image store.
+func releaseAssetImageRef(image string) bool {
+	first, _, ok := strings.Cut(strings.TrimSpace(image), "/")
+	return ok && first == "grain"
 }
 
 func (c *ContainerSandboxes) create(ctx context.Context, name string, shape Shape, srcVolume string) error {

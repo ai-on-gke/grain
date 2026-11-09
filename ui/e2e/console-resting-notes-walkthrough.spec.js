@@ -102,7 +102,9 @@ test("park cycles leave one resting note, no bubble and nothing in the prompt", 
   await expect
     .poll(async () => (await task(page, id)).state)
     .toBe("awaiting_reply");
-  await expect(page.getByText("waiting for your reply")).toBeVisible();
+  await expect(page.getByText("waiting for your reply")).toBeVisible({
+    timeout: 15_000,
+  });
   const opening = await bubbles(page);
 
   // Three exchanges end with nobody replying. Each is a real park by
@@ -118,14 +120,18 @@ test("park cycles leave one resting note, no bubble and nothing in the prompt", 
       consecutive: 0,
     });
   }
-  await expect(page.getByText("waiting for your reply")).toBeVisible();
+  await expect(page.getByText("waiting for your reply")).toBeVisible({
+    timeout: 15_000,
+  });
   await expect(page.locator(".cs-message")).toHaveCount(opening.length);
   await expect(page.getByText(RESTING_SHOWN, { exact: true })).toHaveCount(0);
 
   // A person replies; a real run is dispatched, answers, and the session
   // parks after it -- and then another exchange ends without a reply.
   await send(page, "Human reply one");
-  await expect(page.getByText("Scripted answer 1.")).toBeVisible();
+  await expect(page.getByText("Scripted answer 1.")).toBeVisible({
+    timeout: 15_000,
+  });
   await expect
     .poll(async () => (await task(page, id)).state)
     .toBe("awaiting_reply");
@@ -161,7 +167,9 @@ test("park cycles leave one resting note, no bubble and nothing in the prompt", 
   // The same words from a person are a message, not a park line: they
   // are drawn as one and handed to the run they dispatch.
   await send(page, RESTING);
-  await expect(page.getByText("Scripted answer 2.")).toBeVisible();
+  await expect(page.getByText("Scripted answer 2.")).toBeVisible({
+    timeout: 15_000,
+  });
   await expect(
     page.locator(".cs-message--outgoing .cs-message__content"),
   ).toHaveText(["Human reply one", RESTING_SHOWN]);

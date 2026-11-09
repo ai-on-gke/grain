@@ -235,7 +235,7 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 	stopCrediting := cfg.RunWaitCredits.register(task.ID, clock)
 	stopCancelling := cfg.TaskCancellers.register(task.ID, cancelRun)
 	defer stopCancelling()
-	checkRunStopped(ctx, store, task.ID, runID, cancelRun)
+	checkTaskClosed(ctx, store, task.ID, runID, cancelRun)
 	watcherDone := make(chan struct{})
 	go func() {
 		defer close(watcherDone)
@@ -521,13 +521,7 @@ func registerAdoptedRecreation(ctx context.Context, deps Deps, task model.Task, 
 		credentialIdentity: deps.CredentialGitIdentity,
 		unrestorable:       unrestorable,
 	}
-	hasSandboxCap := false
-	for _, capName := range unrestorable {
-		if capName != model.DurableCapability && capName != model.PriorityDispatchCapability {
-			hasSandboxCap = true
-			break
-		}
-	}
+	hasSandboxCap := len(unrestorable) > 0
 	degraded := func() bool {
 		return rec.wasRecreated() && (hasSandboxCap || !isUnisolated(deps.Sandboxes))
 	}

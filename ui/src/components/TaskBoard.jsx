@@ -51,6 +51,8 @@ import {
   ListEmpty,
   ListHeader,
   RowLink,
+  TasksLoadError,
+  tasksLoadFailed,
 } from "./ListPrimitives.jsx";
 import NarrowingBar from "./NarrowingBar.jsx";
 import {
@@ -58,6 +60,7 @@ import {
   MoveSlot,
   MovingBar,
   gapsOf,
+  taskSlotName,
   usePickup,
 } from "./ReorderPickup.jsx";
 import BoardColumnsOverlay from "./BoardColumnsOverlay.jsx";
@@ -101,6 +104,9 @@ import StateDot from "./StateDot.jsx";
 // first would be one landmark too many (grain/task-1253).
 export default function TaskBoard({
   tasks,
+  tasksLoaded = true,
+  tasksError = null,
+  onRetry,
   config,
   narrowing,
   onNarrow,
@@ -112,6 +118,13 @@ export default function TaskBoard({
   onShownChange,
   fixedColumns = null,
   landmark = true,
+  // countFloor: as TaskList's -- closed tasks still to be paged in make
+  // the board's count, and a closed column's, a floor.
+  countFloor = false,
+  // footer is the closed-tasks pager (ClosedTasksMore), drawn only on a
+  // board with a column closed tasks land in: on any other, paging them
+  // in on scroll would read every page for cards nobody can see.
+  footer = null,
 }) {
   // The columns this browser last saved, or the default board
   // (board.js). Held here rather than in App: nothing outside this view
@@ -150,6 +163,8 @@ export default function TaskBoard({
   // so a board with no "Closed" column never offers a repo only closed
   // tasks carry.
   const covered = new Set(boardStates(columns));
+  // Only a board with a column closed tasks land in counts any of them.
+  const boardFloor = countFloor && covered.has("closed");
   const onBoardTasks = tasks.filter((t) => covered.has(t.state));
 
   const attributes = attributesFor(config);
@@ -331,12 +346,13 @@ export default function TaskBoard({
       }
     : undefined;
 
+  const tasksFailed = tasksLoadFailed(tasks, tasksLoaded, tasksError);
   const Root = landmark ? "main" : "div";
   return (
     <Root className={landmark ? "board" : "board task-view"}>
       <ListHeader
         title="Board"
-        count={shown}
+        count={tasksFailed ? null : boardFloor ? `${shown}+` : shown}
         action={
           fixedColumns ? null : (
             <Button
@@ -349,7 +365,7 @@ export default function TaskBoard({
           )
         }
       />
-      {tasks.length > 0 && (
+      {!tasksFailed && tasks.length > 0 && (
         <NarrowingBar
           tasks={onBoardTasks}
           config={config}
@@ -362,7 +378,7 @@ export default function TaskBoard({
           the toolbar, with the number of tasks it comes to -- so a board
           whose "Closed" column somebody removed doesn't quietly look
           like a deployment with fewer tasks in it than it has. */}
-      {hidden > 0 && (
+      {!tasksFailed && hidden > 0 && (
         <Typography
           variant="caption"
           color="text.secondary"
@@ -379,7 +395,7 @@ export default function TaskBoard({
         </Typography>
       )}
 
-      {pickedIds && (
+      {!tasksFailed && pickedIds && (
         <MovingBar
           count={pickedIds.length}
           nowhere={pickedGaps === 0}
@@ -387,169 +403,181 @@ export default function TaskBoard({
         />
       )}
 
-      <div className="board-columns">
-        {columns.map((c) => {
-          const columnCards = cards.get(c.id);
-          const allSelected =
-            columnCards.length > 0 &&
-            columnCards.every((t) => selected.has(t.id));
-          // The cards a pick-up in *this* column can land between, and
-          // the gaps between them worth offering. Every other column
-          // renders exactly as it did: nothing was picked up there, and
-          // a card cannot move to it.
-          const lifted = pickedColumn === c.id ? pickedIds : null;
-          const kept = lifted
-            ? columnCards.filter((t) => !lifted.includes(t.id))
-            : columnCards;
-          const gapBefore = new Map(kept.map((t, i) => [t.id, i]));
-          const gaps = lifted
-            ? new Set(
-                gapsOf(
-                  columnCards.map((t) => t.id),
-                  lifted,
-                ),
-              )
-            : null;
-          return (
-            <section key={c.id} className="board-column">
-              <header className="board-column-header">
-                {onSelectAll && columnCards.length > 0 && (
-                  <Checkbox
-                    size="small"
-                    checked={allSelected}
-                    onChange={(e) => toggleColumn(c.id, e.target.checked)}
-                    inputProps={{
-                      "aria-label": `Select every task in ${c.title}`,
-                    }}
-                  />
-                )}
-                <span className="board-column-title">{c.title}</span>
-                <span className="count">{columnCards.length}</span>
-              </header>
-              <ul className="board-column-cards">
-                {columnCards.map((t) => (
-                  <Fragment key={t.id}>
-                    {lifted &&
-                      gapBefore.has(t.id) &&
-                      gaps.has(gapBefore.get(t.id)) && (
-                        <MoveSlot
-                          label={`Move here, above ${t.title}, in ${c.title}`}
-                          onMove={() => {
-                            moveTo(lifted, kept, gapBefore.get(t.id));
-                            cancelPickup();
-                          }}
-                        />
-                      )}
-                    <li
-                      className={
-                        overId === t.id &&
-                        dragIds &&
-                        dragColumn === c.id &&
-                        !dragIds.includes(t.id)
-                          ? "board-drop-target"
-                          : undefined
-                      }
-                      draggable={movable(t)}
-                      onDragStart={() => movable(t) && startDrag(c.id, t)}
-                      onDragEnd={endDrag}
-                      onDragOver={(e) => {
-                        if (
-                          !dragIds ||
-                          dragColumn !== c.id ||
-                          dragIds.includes(t.id)
-                        )
-                          return;
-                        e.preventDefault();
-                        setOverId(t.id);
-                      }}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        dropOn(c.id, t.id);
-                      }}
-                    >
-                      <BoardCard
-                        t={t}
-                        byId={byId}
-                        config={config}
-                        fields={fields}
-                        onOpenTask={onOpenTask}
-                        selected={selected}
-                        onToggleSelect={handleToggleSelect}
-                        draggable={movable(t)}
-                        dragging={dragIds?.includes(t.id) ?? false}
-                        picked={lifted?.includes(t.id) ?? false}
-                        // A column of one has nowhere to move its own card to.
-                        canMove={columnCards.length > 1}
-                        onPickUp={() => togglePickup(blockFor(c.id, t), c.id)}
-                        // A fixed-state column normally says enough on its
-                        // own.
-                        showState={
-                          c.states.length > 1 ||
-                          (t.state === "queued" &&
-                            Boolean(t.activityBySetup && t.activity)) ||
-                          // A blocked card stays in its own state's column
-                          // (it is still queued or proposed) but wears the
-                          // blocked oval there, since that is the one thing
-                          // the column heading cannot say for it.
-                          isBlockedWaiting(t)
-                        }
+      {tasksFailed ? (
+        <TasksLoadError error={tasksError} onRetry={onRetry} />
+      ) : (
+        <>
+          <div className="board-columns">
+            {columns.map((c) => {
+              const columnCards = cards.get(c.id);
+              const allSelected =
+                columnCards.length > 0 &&
+                columnCards.every((t) => selected.has(t.id));
+              // The cards a pick-up in *this* column can land between, and
+              // the gaps between them worth offering. Every other column
+              // renders exactly as it did: nothing was picked up there, and
+              // a card cannot move to it.
+              const lifted = pickedColumn === c.id ? pickedIds : null;
+              const kept = lifted
+                ? columnCards.filter((t) => !lifted.includes(t.id))
+                : columnCards;
+              const gapBefore = new Map(kept.map((t, i) => [t.id, i]));
+              const gaps = lifted
+                ? new Set(
+                    gapsOf(
+                      columnCards.map((t) => t.id),
+                      lifted,
+                    ),
+                  )
+                : null;
+              return (
+                <section key={c.id} className="board-column">
+                  <header className="board-column-header">
+                    {onSelectAll && columnCards.length > 0 && (
+                      <Checkbox
+                        size="small"
+                        checked={allSelected}
+                        onChange={(e) => toggleColumn(c.id, e.target.checked)}
+                        inputProps={{
+                          "aria-label": `Select every task in ${c.title}`,
+                        }}
                       />
-                    </li>
-                  </Fragment>
-                ))}
-                {lifted && gaps.has(kept.length) && (
-                  <MoveSlot
-                    label={`Move here, to the end of ${c.title}`}
-                    onMove={() => {
-                      moveTo(lifted, kept, kept.length);
-                      cancelPickup();
-                    }}
-                  />
-                )}
-                {reorderEnabled && dragIds && dragColumn === c.id && (
-                  <li
-                    className={`board-drop-end${overId === `__end__${c.id}` ? " board-drop-target" : ""}`}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      setOverId(`__end__${c.id}`);
-                    }}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      dropOn(c.id, null);
-                    }}
-                  />
-                )}
-              </ul>
-              {columnCards.length === 0 && (
-                <p className="board-column-empty">
-                  {c.states.length === 0
-                    ? "No states in this column."
-                    : "Nothing here."}
-                </p>
-              )}
-            </section>
-          );
-        })}
-      </div>
+                    )}
+                    <span className="board-column-title">{c.title}</span>
+                    <span className="count">
+                      {columnCards.length}
+                      {countFloor && c.states.includes("closed") ? "+" : ""}
+                    </span>
+                  </header>
+                  <ul className="board-column-cards">
+                    {columnCards.map((t) => (
+                      <Fragment key={t.id}>
+                        {lifted &&
+                          gapBefore.has(t.id) &&
+                          gaps.has(gapBefore.get(t.id)) && (
+                            <MoveSlot
+                              label={`Move here, above ${taskSlotName(t)}, in ${c.title}`}
+                              onMove={() => {
+                                moveTo(lifted, kept, gapBefore.get(t.id));
+                                cancelPickup();
+                              }}
+                            />
+                          )}
+                        <li
+                          className={
+                            overId === t.id &&
+                            dragIds &&
+                            dragColumn === c.id &&
+                            !dragIds.includes(t.id)
+                              ? "board-drop-target"
+                              : undefined
+                          }
+                          draggable={movable(t)}
+                          onDragStart={() => movable(t) && startDrag(c.id, t)}
+                          onDragEnd={endDrag}
+                          onDragOver={(e) => {
+                            if (
+                              !dragIds ||
+                              dragColumn !== c.id ||
+                              dragIds.includes(t.id)
+                            )
+                              return;
+                            e.preventDefault();
+                            setOverId(t.id);
+                          }}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            dropOn(c.id, t.id);
+                          }}
+                        >
+                          <BoardCard
+                            t={t}
+                            byId={byId}
+                            config={config}
+                            fields={fields}
+                            onOpenTask={onOpenTask}
+                            selected={selected}
+                            onToggleSelect={handleToggleSelect}
+                            draggable={movable(t)}
+                            dragging={dragIds?.includes(t.id) ?? false}
+                            picked={lifted?.includes(t.id) ?? false}
+                            // A column of one has nowhere to move its own card to.
+                            canMove={columnCards.length > 1}
+                            onPickUp={() =>
+                              togglePickup(blockFor(c.id, t), c.id)
+                            }
+                            // A fixed-state column normally says enough on its
+                            // own.
+                            showState={
+                              c.states.length > 1 ||
+                              (t.state === "queued" &&
+                                Boolean(t.activityBySetup && t.activity)) ||
+                              // A blocked card stays in its own state's column
+                              // (it is still queued or proposed) but wears the
+                              // blocked oval there, since that is the one thing
+                              // the column heading cannot say for it.
+                              isBlockedWaiting(t)
+                            }
+                          />
+                        </li>
+                      </Fragment>
+                    ))}
+                    {lifted && gaps.has(kept.length) && (
+                      <MoveSlot
+                        label={`Move here, to the end of ${c.title}`}
+                        onMove={() => {
+                          moveTo(lifted, kept, kept.length);
+                          cancelPickup();
+                        }}
+                      />
+                    )}
+                    {reorderEnabled && dragIds && dragColumn === c.id && (
+                      <li
+                        className={`board-drop-end${overId === `__end__${c.id}` ? " board-drop-target" : ""}`}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          setOverId(`__end__${c.id}`);
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          dropOn(c.id, null);
+                        }}
+                      />
+                    )}
+                  </ul>
+                  {columnCards.length === 0 && (
+                    <p className="board-column-empty">
+                      {c.states.length === 0
+                        ? "No states in this column."
+                        : "Nothing here."}
+                    </p>
+                  )}
+                </section>
+              );
+            })}
+          </div>
 
-      {columns.length === 0 && (
-        <ListEmpty>
-          This board has no columns. Add one with “Columns”.
-        </ListEmpty>
+          {columns.length === 0 && (
+            <ListEmpty>
+              This board has no columns. Add one with “Columns”.
+            </ListEmpty>
+          )}
+          {columns.length > 0 && shown === 0 && (
+            <ListEmpty>
+              {/* Tasks the narrowing matches but no column collects are
+                  counted in the note above: "No tasks match" would be
+                  false of them (a board whose one column is "Talking",
+                  narrowed to awaiting_submit, said both at once). */}
+              {isNarrowed(narrowing)
+                ? hidden > 0
+                  ? "None of the tasks this search and these filters match is in one of these columns."
+                  : "No tasks match this search and these filters."
+                : "No tasks in any of these columns."}
+            </ListEmpty>
+          )}
+        </>
       )}
-      {columns.length > 0 && shown === 0 && (
-        <ListEmpty>
-          {/* Tasks the narrowing matches but no column collects are
-              counted in the note above: "No tasks match" would be
-              false of them (a board whose one column is "Talking",
-              narrowed to awaiting_submit, said both at once). */}
-          {isNarrowed(narrowing)
-            ? hidden > 0
-              ? "None of the tasks this search and these filters match is in one of these columns."
-              : "No tasks match this search and these filters."
-            : "No tasks in any of these columns."}
-        </ListEmpty>
-      )}
+      {covered.has("closed") && footer}
 
       {editing && (
         <BoardColumnsOverlay

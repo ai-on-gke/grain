@@ -105,7 +105,7 @@ func (s *Server) principalRefusalAdvice(r *http.Request, id VerifiedIdentity) st
 		var names []string
 		if entries, err := s.effectiveAllowedPrincipals(r.Context()); err == nil {
 			for _, e := range entries {
-				if e.Prefix == "serviceAccount" {
+				if e.Prefix == "serviceAccount" || e.Prefix == "delegate" {
 					continue
 				}
 				if n := e.Prefix + ":" + e.Value; n != entry {
@@ -200,6 +200,67 @@ func (s *Server) writePrincipalRefusedPage(w http.ResponseWriter, r *http.Reques
 	if err := principalRefusalPage.Execute(w, page); err != nil {
 		fmt.Fprintln(w, "not allowed")
 	}
+}
+
+type delegateRefusal struct {
+	PersonEmail, AppEmail, Label, Verifier string
+}
+
+var delegateRefusalPage = template.Must(template.New("delegate-refused").Parse(`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>grain: delegating app not allowed</title>
+<style>
+body { font-family: system-ui, sans-serif; display: flex; min-height: 100vh; margin: 0; align-items: center; justify-content: center; background: #f5f5f5; }
+main { background: #fff; padding: 2rem; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.15); max-width: 30rem; width: 100%; box-sizing: border-box; }
+h1 { font-size: 1.25rem; margin: 0 0 1rem; }
+p { color: #444; font-size: .9rem; overflow-wrap: anywhere; }
+.who { color: #000; font-size: 1rem; }
+</style>
+</head>
+<body>
+<main>
+<h1>Not allowed on this grain</h1>
+<p class="who" id="refused-delegate">{{.Label}} is not allowed to act for people on this grain</p>
+<p id="refused-principal">Signed in as <strong>{{.PersonEmail}}</strong> via <code>{{.AppEmail}}</code> (verified by {{.Verifier}}).</p>
+<p id="refused-advice">To let this delegating app act for admitted users on this deployment, an allowed user or access-code holder can add <code>delegate:{{.AppEmail}}</code> with a reason under Settings -&gt; Access, or run: <code>grain access allow delegate:{{.AppEmail}} --reason &lt;why&gt;</code></p>
+</main>
+</body>
+</html>
+`))
+
+// writeDelegateRefused answers a request from an admitted person whose
+// delegating app (Via.Email) has no matching delegate: entry on the allowlist
+// (AU-24.3): a browser navigation gets the refusal page naming the delegating
+// app with no access-code form, and an API call gets 403 JSON with
+// code="delegate_not_allowed".
+func writeDelegateRefused(w http.ResponseWriter, r *http.Request, de *delegateNotAllowedError) {
+	if browserNavigation(r) {
+		label := de.label
+		if label == "" {
+			label = model.DelegateLabelForEmail(de.appEmail)
+		}
+		page := delegateRefusal{
+			PersonEmail: de.personEmail,
+			AppEmail:    de.appEmail,
+			Label:       label,
+			Verifier:    de.verifier,
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusForbidden)
+		if err := delegateRefusalPage.Execute(w, page); err != nil {
+			fmt.Fprintln(w, "delegating app not allowed")
+		}
+		return
+	}
+	writeJSON(w, http.StatusForbidden, map[string]any{
+		"error":         de.Error(),
+		"code":          "delegate_not_allowed",
+		"delegatingApp": de.appEmail,
+	})
 }
 
 // writeAssertionRefused answers a request whose signed identity header

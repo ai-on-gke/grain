@@ -462,7 +462,7 @@ jobs:
     #     by anything this job runs. That is what the `!` line is for;
     #     drop it and a stale capture passes.
     #   - README.md (the `*.md` glob does not cross `/`, so it is
-    #     top-level markdown only and pkg/capability/bootstrap's embedded
+    #     top-level markdown only and pkg/playbooks' embedded
     #     playbooks stay in) and the two licence files.
     #
     # Everything else stays in, including terraform/ and .github/, which
@@ -532,7 +532,7 @@ jobs:
       - &fill-the-npm-cache
         name: Fill the npm cache from the registry
         infrastructure: true
-        run: ./scripts/warm-npm-cache.sh ui
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-registry
 
       # Before `go build`: pkg/ui go:embeds pkg/ui/static, which is
       # written by the frontend build, so nothing Go here compiles
@@ -597,6 +597,8 @@ jobs:
       - LICENSE
       - NOTICE
       - ui/**
+      - ui-registry/**
+      - ui-shared/**
     sandbox:
       cpus: 8
       memory-mb: 16384
@@ -632,6 +634,8 @@ jobs:
       - LICENSE
       - NOTICE
       - ui/**
+      - ui-registry/**
+      - ui-shared/**
       - "!ui/src/state.js"
       - "!ui/src/taskAttributes.js"
     sandbox:
@@ -653,22 +657,26 @@ jobs:
             ./pkg/granule/... ./pkg/grit/... ./pkg/gritapi/... ./pkg/hostd/... ./pkg/hostinit/... ./pkg/hostscriptcli/... ./pkg/whererun/... ./pkg/workflows/... \
             ./pkg/hosttop/... ./pkg/iapreconciler/... ./pkg/installtrack/... ./pkg/jwks/... \
             ./pkg/k8s/... ./pkg/kubectlgate/... ./pkg/lifecycle/... ./pkg/localexec/... ./pkg/mcp/... \
-            ./pkg/metrics/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/nsclient/... ./pkg/objectstore/... ./pkg/pkgcache/... \
+            ./pkg/metrics/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/nsclient/... ./pkg/objectstore/... ./pkg/pkgcache/... ./pkg/playbooks/... \
             ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/redact/... ./pkg/registry/... ./pkg/registryauth/... \
             ./pkg/releaseapproval/... ./pkg/releasenotes/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
             ./pkg/sandboxaccess/... ./pkg/sandboxaddr/... ./pkg/sandboxcli/... ./pkg/sandboximage/... ./pkg/schedulefilter/... ./pkg/secrets/... \
             ./pkg/secretsrepo/... ./pkg/statemachine/... ./pkg/sysstat/... \
-            ./pkg/systemlog/... ./pkg/treeid/... ./pkg/trustboundary/... ./pkg/tunnel/... ./pkg/upgrade/... \
+            ./pkg/systemlog/... ./pkg/treeid/... ./pkg/trustboundary/... ./pkg/tunnel/... ./pkg/upgrade/... ./pkg/usage/... \
             ./pkg/version/... ./pkg/webauth/... ./tests/bench/...
 
   # The vendored granule tree's own tests. third_party/granule is a module
   # of its own (github.com/gke-labs/granule), so none of the four shards
   # above reaches it -- their `./...` stops at its go.mod -- and until
   # this job the only thing that ran `go test` in it was somebody doing it
-  # by hand. pkg/forward/forward_test.go's refusal of Open frames for targets
-  # outside the mux's specs (grain/task-944) is the test that made that
-  # matter: its guest-side half, GuestListeners.Serve with -L specs, is
-  # not exercised by anything in pkg/granule.
+  # by hand. pkg/guestforward is the port-forward mux grain runs into every
+  # kubernetes-granule guest, and its guest-side half -- ServeAgent's
+  # loopback-only listeners, listener cap and listeners that die with
+  # their session -- is not exercised by anything in pkg/granule, whose
+  # TestForwardKubectlRefusesOpenOutsideRemotePorts covers the controller
+  # side. The legacy pkg/forward, whose Open-frame refusal (grain/task-944)
+  # first made this job matter, is gone: grain stopped using it, and the
+  # b2fda8b re-vendor dropped it.
   #
   # The whole module, `./...`, with nothing excluded: every test that
   # needs more than an unprivileged process skips itself, and on a CI
@@ -856,7 +864,7 @@ jobs:
     # a job keyed on the files it reads has to name the script its own
     # first step is, or a change to that script is a cache hit and this
     # job never re-runs against it.
-    paths: [ui/**, Makefile, scripts/warm-npm-cache.sh]
+    paths: [ui/**, ui-registry/**, ui-shared/**, Makefile, scripts/warm-npm-cache.sh]
     sandbox:
       cpus: 8
       memory-mb: 16384
@@ -880,6 +888,10 @@ jobs:
         # rather than on a busy box. Measured across 190 files / 2963 tests:
         # 260s (~4m20s) at four workers on eight vCPU.
         run: npm test -- --maxWorkers=4
+
+      - name: Test registry frontend
+        working-directory: ui-registry
+        run: npm ci && npm test -- --maxWorkers=4
 
   # The Playwright suite, against a real pkg/ui.Server (`grain demo`) --
   # Makefile's test-e2e target, which builds the frontend, downloads

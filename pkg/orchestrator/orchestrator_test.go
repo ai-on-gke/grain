@@ -16,6 +16,7 @@ package orchestrator_test
 
 import (
 	"context"
+	"encoding/json"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -187,6 +188,63 @@ func newSim(t *testing.T, owner, repo, branch string) (*githubsim.Sim, *github.R
 	// head out of the queue.
 	sim.PullRequestBase = githubsim.UniquePullRequestBase()
 	return sim, github.NewClient(sim, nil)
+}
+
+type multiSimTransport struct {
+	sims []*githubsim.Sim
+}
+
+func (m *multiSimTransport) Request(method, path string, headers map[string]string, body []byte) (github.ApiResponse, error) {
+	if path == "/graphql" {
+		var req struct {
+			Variables map[string]any `json:"variables"`
+		}
+		if json.Unmarshal(body, &req) == nil {
+			owner, _ := req.Variables["owner"].(string)
+			repo, _ := req.Variables["repo"].(string)
+			for _, sim := range m.sims {
+				if strings.EqualFold(sim.Owner, owner) && strings.EqualFold(sim.Repo, repo) {
+					return sim.Request(method, path, headers, body)
+				}
+			}
+		}
+	}
+	if rest, ok := strings.CutPrefix(path, "/repos/"); ok {
+		if idx := strings.IndexByte(rest, '?'); idx >= 0 {
+			rest = rest[:idx]
+		}
+		parts := strings.SplitN(rest, "/", 3)
+		if len(parts) >= 2 {
+			for _, sim := range m.sims {
+				if strings.EqualFold(sim.Owner, parts[0]) && strings.EqualFold(sim.Repo, parts[1]) {
+					return sim.Request(method, path, headers, body)
+				}
+			}
+		}
+	}
+	return m.sims[0].Request(method, path, headers, body)
+}
+
+// newMultiSim wires one github.RESTClient across several simulated
+// repositories; requests for an unconfigured repository fall through to the
+// first Sim and panic in mustOwn as a single-repo Sim does.
+func newMultiSim(t *testing.T, branch string, repos ...model.RepoRef) (map[model.RepoRef]*githubsim.Sim, *github.RESTClient) {
+	t.Helper()
+	orchestrator.LogToTest(t)
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	dir := t.TempDir()
+	byRepo := make(map[model.RepoRef]*githubsim.Sim, len(repos))
+	sims := make([]*githubsim.Sim, 0, len(repos))
+	for _, r := range repos {
+		bare := copySeededBareRepo(t, filepath.Join(dir, r.Owner+"-"+r.Name+".git"), branch)
+		sim := githubsim.New(r.Owner, r.Name, bare, branch)
+		sim.PullRequestBase = githubsim.UniquePullRequestBase()
+		byRepo[r] = sim
+		sims = append(sims, sim)
+	}
+	return byRepo, github.NewClient(&multiSimTransport{sims: sims}, nil)
 }
 
 // pushBranch pushes an empty commit on branch straight to bare, standing

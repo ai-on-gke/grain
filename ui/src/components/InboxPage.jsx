@@ -16,6 +16,7 @@ import { useEffect, useRef, useState } from "react";
 import { Alert, Button, CircularProgress, TextField } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import api from "../api.js";
+import AccessGate from "./AccessGate.jsx";
 import LinkedNote from "../linkedNote.jsx";
 import { linkTaskRefs, taskRefFromHref } from "../taskRefs.js";
 import {
@@ -45,12 +46,13 @@ import {
 } from "../alerts.js";
 import {
   ackNotification,
+  approveReleaseLabel,
   investigateNotification,
   notificationSentence,
   decideRelease,
   pendingReleaseOf,
 } from "../notifications.js";
-import { formatTime } from "../time.js";
+import { formatMoment } from "../time.js";
 import { useTimeZone } from "../TimeZoneContext.jsx";
 import { ListEmpty, ListHeader } from "./ListPrimitives.jsx";
 import Markdown from "./Markdown.jsx";
@@ -706,25 +708,30 @@ function StateSyncGroup({ failure, onOpenConfigRepo }) {
   );
 }
 
-// ReleaseSoak is what a soak-era pending release's Approve needs said
-// beside it: how long it soaked, and when that was under the minimum,
-// the SHORT SOAK warning -- approving it then accepts the short soak
-// (short_soak_ok), which the approve job otherwise refuses. Releases the
-// qualification-driven train stages (vX.Y.Z, minor or patch) write
-// "Qualification: PASS" instead, so release.soak and release.shortSoak
-// are null and nothing is rendered beside Approve.
+// ReleaseSoak is what a pending release's Approve needs said beside it:
+// for a soak-era release, how long it soaked and the SHORT SOAK warning
+// when under the minimum (short_soak_ok); for a release carrying breaking
+// changes outside a RELEASE_MAJOR major bump, the BREAKING warning
+// (allow_breaking), which the approve job otherwise refuses.
 function ReleaseSoak({ release }) {
-  if (!release.soak && !release.shortSoak) return null;
+  if (!release.soak && !release.shortSoak && !release.breaking) return null;
+  const tooltip = [release.shortSoak, release.breaking]
+    .filter(Boolean)
+    .join("\n");
   return (
     <span
       className="inbox-release-soak"
       data-testid="inbox-release-soak"
-      title={release.shortSoak || undefined}
+      title={tooltip || undefined}
     >
       {release.shortSoak && (
         <span className="inbox-release-short-soak">SHORT SOAK</span>
       )}
-      {release.soak || "no recorded soak"}
+      {release.breaking && (
+        <span className="inbox-release-short-soak">BREAKING</span>
+      )}
+      {(release.soak || release.shortSoak) &&
+        (release.soak || "no recorded soak")}
     </span>
   );
 }
@@ -790,51 +797,61 @@ function NotificationsGroup({
                 </Alert>
               </div>
               <div className="inbox-actions">
-                {pendingReleaseOf(n) && (
-                  <>
-                    <ReleaseSoak release={pendingReleaseOf(n)} />
-                    <Button
-                      size="small"
-                      variant="contained"
-                      color={
-                        pendingReleaseOf(n).shortSoak ? "warning" : "primary"
-                      }
-                      disabled={busy !== null}
-                      onClick={() => act(n, "approve")}
-                    >
-                      {pendingReleaseOf(n).shortSoak
-                        ? "Approve short soak"
-                        : "Approve"}
-                    </Button>
+                {(() => {
+                  const release = pendingReleaseOf(n);
+                  if (!release) return null;
+                  return (
+                    <>
+                      <ReleaseSoak release={release} />
+                      <Button
+                        size="small"
+                        variant="contained"
+                        color={
+                          release.shortSoak || release.breaking
+                            ? "warning"
+                            : "primary"
+                        }
+                        disabled={busy !== null}
+                        onClick={() => act(n, "approve")}
+                      >
+                        {approveReleaseLabel(release)}
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        color="error"
+                        disabled={busy !== null}
+                        onClick={() => act(n, "reject")}
+                      >
+                        Reject
+                      </Button>
+                    </>
+                  );
+                })()}
+                {!n.ackedAt && (
+                  <AccessGate scope="notifications:write">
                     <Button
                       size="small"
                       variant="outlined"
-                      color="error"
                       disabled={busy !== null}
-                      onClick={() => act(n, "reject")}
+                      onClick={() => act(n, "ack")}
                     >
-                      Reject
+                      Acknowledge
                     </Button>
-                  </>
+                  </AccessGate>
                 )}
-                {!n.ackedAt && (
+                {/* POST .../investigate files the task, or finds the one
+                    already filed: tasks:write either way. */}
+                <AccessGate scope="tasks:write">
                   <Button
                     size="small"
                     variant="outlined"
                     disabled={busy !== null}
-                    onClick={() => act(n, "ack")}
+                    onClick={() => act(n, "investigate")}
                   >
-                    Acknowledge
+                    {n.investigationTaskId ? "Investigation" : "Investigate"}
                   </Button>
-                )}
-                <Button
-                  size="small"
-                  variant="outlined"
-                  disabled={busy !== null}
-                  onClick={() => act(n, "investigate")}
-                >
-                  {n.investigationTaskId ? "Investigation" : "Investigate"}
-                </Button>
+                </AccessGate>
                 {n.taskId && onOpenTask && (
                   <Button
                     size="small"
@@ -849,7 +866,7 @@ function NotificationsGroup({
             <p className="inbox-note">
               {notificationSentence(n)}{" "}
               <span className="inbox-note-meta">
-                {n.subject} · since {formatTime(n.raisedAt, zone)}
+                {n.subject} · since {formatMoment(n.raisedAt, zone)}
                 {n.ackedAt ? " · acknowledged" : ""}
               </span>
             </p>
@@ -891,6 +908,37 @@ function groupTasks(tasks) {
 // Nothing is offered on a group of one: the row's own button is already
 // under the reader's cursor, and a header full of "Approve all (1)"
 // teaches everybody to click past the confirm that matters.
+// inboxActionScope is the role scope the request behind one of a row's
+// answers needs (pkg/ui's roleScopeOf for POST /api/tasks/{id}<post>), or
+// null for an answer that only reads -- opening the task, or a link out.
+// AccessGate disables the button for a role without it and says why,
+// rather than leaving a grain/viewer an Approve whose click ends in a 403
+// toast (docs/test-runs/2026-11-07-rbac-roles.md F6).
+export function inboxActionScope(action) {
+  if (action.open || action.href) return null;
+  if (action.forceMerge) return "merge:force";
+  switch (action.post) {
+    case "/approve":
+      return "tasks:admin";
+    case "/run-now":
+      return "dispatch:write";
+    case "/retry-merge":
+      return "merge:write";
+    default:
+      return "tasks:write";
+  }
+}
+
+// gated wraps a row's button in AccessGate when its answer writes.
+function gated(scope, repo, config, button) {
+  if (!scope) return button;
+  return (
+    <AccessGate key={button.key} scope={scope} repo={repo} config={config}>
+      {button}
+    </AccessGate>
+  );
+}
+
 function bulkActions(group, rows) {
   return (group.actions || []).filter((a) => a.bulk && rows.length >= 2);
 }
@@ -1043,16 +1091,21 @@ export default function InboxPage({
             hint={group.hint}
             actions={
               bulk.length > 0
-                ? bulk.map((action) => (
-                    <Button
-                      key={action.bulk.label}
-                      size="small"
-                      variant="outlined"
-                      onClick={() => runAll(rows, action)}
-                    >
-                      {action.bulk.label} ({rows.length})
-                    </Button>
-                  ))
+                ? bulk.map((action) =>
+                    gated(
+                      inboxActionScope(action),
+                      rows.map((t) => t.repo).filter(Boolean),
+                      config,
+                      <Button
+                        key={action.bulk.label}
+                        size="small"
+                        variant="outlined"
+                        onClick={() => runAll(rows, action)}
+                      >
+                        {action.bulk.label} ({rows.length})
+                      </Button>,
+                    ),
+                  )
                 : null
             }
           >
@@ -1084,19 +1137,23 @@ export default function InboxPage({
                         {t.changelists?.length > 0 && t.clSubmit && (
                           <BehindBadge submit={t.clSubmit} />
                         )}
-                        {group.reply && (
-                          <Button
-                            size="small"
-                            variant={
-                              replyTo === t.id ? "outlined" : "contained"
-                            }
-                            onClick={() =>
-                              setReplyTo(replyTo === t.id ? null : t.id)
-                            }
-                          >
-                            {replyTo === t.id ? "Cancel" : "Reply"}
-                          </Button>
-                        )}
+                        {group.reply &&
+                          gated(
+                            "tasks:write",
+                            t.repo,
+                            config,
+                            <Button
+                              size="small"
+                              variant={
+                                replyTo === t.id ? "outlined" : "contained"
+                              }
+                              onClick={() =>
+                                setReplyTo(replyTo === t.id ? null : t.id)
+                              }
+                            >
+                              {replyTo === t.id ? "Cancel" : "Reply"}
+                            </Button>,
+                          )}
                         {[
                           ...(group.controls?.(t) || []),
                           ...(group.actions || []),
@@ -1120,28 +1177,33 @@ export default function InboxPage({
                                 {action.label}
                               </Button>
                             ) : (
-                              <Button
-                                key={action.label}
-                                size="small"
-                                variant={action.variant || "outlined"}
-                                color={action.color}
-                                title={action.title}
-                                // `open` is the third kind of answer a row can
-                                // carry, beside a link out and a request: the
-                                // task's own pane, for a wait whose next step
-                                // is reading rather than doing.
-                                onClick={() =>
-                                  action.open
-                                    ? onOpenTask(t.id)
-                                    : action.forceMerge
-                                      ? promptForceMerge(t, (fn) =>
-                                          onAct(fn, t.id),
-                                        )
-                                      : run(t, action)
-                                }
-                              >
-                                {action.label}
-                              </Button>
+                              gated(
+                                inboxActionScope(action),
+                                t.repo,
+                                config,
+                                <Button
+                                  key={action.label}
+                                  size="small"
+                                  variant={action.variant || "outlined"}
+                                  color={action.color}
+                                  title={action.title}
+                                  // `open` is the third kind of answer a row can
+                                  // carry, beside a link out and a request: the
+                                  // task's own pane, for a wait whose next step
+                                  // is reading rather than doing.
+                                  onClick={() =>
+                                    action.open
+                                      ? onOpenTask(t.id)
+                                      : action.forceMerge
+                                        ? promptForceMerge(t, (fn) =>
+                                            onAct(fn, t.id),
+                                          )
+                                        : run(t, action)
+                                  }
+                                >
+                                  {action.label}
+                                </Button>,
+                              )
                             ),
                           )}
                       </div>

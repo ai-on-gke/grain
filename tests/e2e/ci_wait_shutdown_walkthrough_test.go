@@ -134,7 +134,7 @@ var (
 // blocked side by side, are credited for the time they waited once.
 func TestACIWaitAcrossADaemonRestartResumesToTheVerdict(t *testing.T) {
 	if testing.Short() {
-		t.Skip("walks a CI run of 20s jobs across a daemon restart")
+		t.Skip("walks a CI run across a daemon restart")
 	}
 	grain := buildGrainCLI(t)
 	dataDir, sandboxDir := t.TempDir(), t.TempDir()
@@ -145,17 +145,28 @@ func TestACIWaitAcrossADaemonRestartResumesToTheVerdict(t *testing.T) {
 	run(t, upstream, "git", "-C", bare, "config", "http.receivepack", "true")
 	seed := filepath.Join(t.TempDir(), "seed")
 	run(t, upstream, "git", "clone", "-q", bare, seed)
+	// Each job runs until the test opens its gate, after the restart,
+	// rather than for a fixed time: on a loaded runner the walk up to the
+	// stop can take longer than any fixed job would, and a job that
+	// finished first would answer the waits before the daemon stopped
+	// under them. The jobs are host sandbox steps, so they see the
+	// test's own directory. They also give up once that directory is
+	// gone, so a step runner the test leaves behind does not outlive it.
+	gateDir := t.TempDir()
+	gate := filepath.Join(gateDir, "release")
+	t.Cleanup(func() { _ = os.WriteFile(gate, nil, 0o644) })
+	step := fmt.Sprintf(`until [ -e %s ] || [ ! -d %s ]; do sleep 0.1; done`, gate, gateDir)
 	mustWriteFile(t, filepath.Join(seed, ".grain", "workflows", "ci.yml"), `name: ci
 on: [push]
 jobs:
   a:
     capabilities: []
     steps:
-      - run: sleep 20
+      - run: '`+step+`'
   b:
     capabilities: []
     steps:
-      - run: sleep 20
+      - run: '`+step+`'
 `)
 	run(t, seed, "git", "add", "-A")
 	run(t, seed, "git", "-c", "user.email=s@e", "-c", "user.name=s", "commit", "-q", "-m", "workflow")
@@ -205,8 +216,14 @@ jobs:
 	// run-job's; on a loaded runner the stop below could land between the
 	// two, and the run-job would answer with its own run rather than
 	// following the full one. So wait for the supersession itself.
+	//
+	// Neither this wait nor the next is what the walk is about, and the
+	// jobs hold until the gate opens, so both are bounded generously: on a
+	// go e2e runner shared with tests/deploy under -race, starting the
+	// full run and its two sandboxes took longer than the 10s and 12s
+	// these were once held to.
 	var supersededRunID string
-	waitUntil(t, "the full run to supersede the run-job's", 10*time.Second, func() bool {
+	waitUntil(t, "the full run to supersede the run-job's", 90*time.Second, func() bool {
 		runs, _, err := c.ListCIRuns(context.Background(), "acme/widgets")
 		if err != nil {
 			return false
@@ -220,7 +237,7 @@ jobs:
 		return false
 	})
 	waitStopStart := time.Now()
-	waitUntil(t, "the superseding run's jobs to start their detached step runners", 12*time.Second, func() bool {
+	waitUntil(t, "the superseding run's jobs to start their detached step runners", 90*time.Second, func() bool {
 		runs, _, err := c.ListCIRuns(context.Background(), "acme/widgets")
 		if err != nil {
 			return false
@@ -260,7 +277,8 @@ jobs:
 	waitUntil(t, "both waits to answer the shutdown", 5*time.Second, func() bool {
 		return agent.done("wait.1") && agent.done("runjob.1")
 	})
-	t.Logf("both waits answered %s after the stop began", time.Since(stopped).Round(time.Millisecond))
+	answered := time.Now()
+	t.Logf("both waits answered %s after the stop began", answered.Sub(stopped).Round(time.Millisecond))
 	wait1, runjob1 := agent.output(t, "wait.1"), agent.output(t, "runjob.1")
 	m := resumeRE.FindStringSubmatch(wait1)
 	if !strings.Contains(wait1, "is still running") || m == nil {
@@ -273,14 +291,16 @@ jobs:
 
 	// (3) The interrupted run's ledger holds its two overlapping waits
 	// once: no more than the time from the first (run-job, started 2s
-	// before the wait) starting to the stop. Counted per wait it would be
-	// about twice that.
+	// before the wait) starting to their answer. Counted per wait it would
+	// be about twice that. Each wait is credited up to the moment it
+	// answers, and on a loaded runner that comes seconds after the stop
+	// began, so the bound runs to the answer rather than to the stop.
 	store := readStore(t, dataDir)
 	credits, err := store.RunWaitCredits(context.Background())
 	if err != nil || len(credits) != 1 {
 		t.Fatalf("wait credit after the stop = %+v, %v; want the interrupted run's", credits, err)
 	}
-	if limit := stopped.Sub(started) + 2*time.Second + time.Second; credits[0].Blocked > limit {
+	if limit := answered.Sub(started) + 2*time.Second + time.Second; credits[0].Blocked > limit {
 		t.Errorf("interrupted run %s blocked %s for two overlapping waits, want no more than ~%s",
 			credits[0].RunID, credits[0].Blocked, limit)
 	}
@@ -289,6 +309,23 @@ jobs:
 	// verdict once the adopted jobs finish.
 	cfg.UiAddr = strings.TrimPrefix(first.base, "http://")
 	startDaemon(t, cfg)
+	// The jobs finish once both resumed waits have been started against
+	// the restarted daemon, so it is the adopted jobs' verdict they carry.
+	// The two are left blocked side by side for a while first, so that
+	// their overlap being credited once is told apart from it being
+	// credited per wait by more than the seconds each is rounded to, or
+	// than the spread between their starts on a loaded runner.
+	waitUntil(t, "the agent's resumed waits to start", 90*time.Second, func() bool {
+		_, werr := os.Stat(filepath.Join(agent.dir, "wait.2"))
+		_, rerr := os.Stat(filepath.Join(agent.dir, "runjob.2"))
+		return werr == nil && rerr == nil
+	})
+	time.Sleep(6 * time.Second)
+	if agent.done("wait.2") || agent.done("runjob.2") {
+		t.Fatalf("a resumed wait answered before the jobs finished: wait %q, run-job %q",
+			agent.output(t, "wait.2"), agent.output(t, "runjob.2"))
+	}
+	mustWriteFile(t, gate, "")
 	waitUntil(t, "the resumed waits to report", 3*time.Minute, func() bool {
 		return agent.done("wait.2") && agent.done("runjob.2")
 	})
@@ -299,12 +336,26 @@ jobs:
 	if !strings.Contains(runjob2, "grain CI passed") || !strings.Contains(runjob2, "): b\n") {
 		t.Errorf("resumed grain ci run-job b answered %q, want b passed", runjob2)
 	}
+	// Credited once, the run's credit is the span the two waits covered
+	// together: short of the sum of what each waited by their overlap,
+	// several seconds here. Credited per wait it would be that sum. Each
+	// figure is rounded to the second, hence the margin.
+	waited := map[string]int{}
+	used := map[string]int{}
 	for name, out := range map[string]string{"wait": wait2, "run-job": runjob2} {
 		if m := creditRE.FindStringSubmatch(out); m != nil {
-			waited, _ := strconv.Atoi(m[1])
-			used, _ := strconv.Atoi(m[2])
-			if used > waited+1 {
-				t.Errorf("resumed %s waited %ds and reports %ds of credit used, want the overlap counted once", name, waited, used)
+			waited[name], _ = strconv.Atoi(m[1])
+			used[name], _ = strconv.Atoi(m[2])
+		}
+	}
+	if len(used) == 2 {
+		t.Logf("resumed waits: the wait waited %ds and reports %ds of credit used, the run-job %ds and %ds",
+			waited["wait"], used["wait"], waited["run-job"], used["run-job"])
+		both := waited["wait"] + waited["run-job"]
+		for name, u := range used {
+			if u+2 > both {
+				t.Errorf("resumed %s reports %ds of credit used where the wait and the run-job waited %ds and %ds side by side, want their overlap counted once",
+					name, u, waited["wait"], waited["run-job"])
 			}
 		}
 	}

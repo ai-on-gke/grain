@@ -46,7 +46,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
-	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/github/githubsim"
@@ -1008,7 +1007,7 @@ func runItem2(ctx context.Context, outDir string) error {
 		}, nil
 	}}
 
-	registry := model.NewCapabilityRegistry(bootstrap.New(), durable.New())
+	registry := model.NewCapabilityRegistry(durable.New())
 	deps := orchestrator.Deps{
 		Store:      store,
 		Client:     ghClient,

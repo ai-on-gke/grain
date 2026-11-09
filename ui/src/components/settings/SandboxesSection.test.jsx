@@ -533,4 +533,33 @@ describe("SandboxesSection", () => {
       );
     });
   });
+
+  // Blanking Disk floor minimum (MiB) saved 0 -- "no minimum" -- while its
+  // placeholder promised the 5120 MiB default (2026-11-08 connections and
+  // infrastructure settings walkthrough).
+  it("resets a blank disk floor minimum to its default rather than to 0", () => {
+    const onIntBlur = vi.fn(() => () => {});
+    const s = {
+      settings: {
+        sandboxBackend: "container",
+        sandboxDiskFloorMinMb: 2048,
+        sandboxDiskFloorMinMbDefault: 5120,
+      },
+      saveChoice: vi.fn(),
+      onTextBlur: () => () => {},
+      onIntBlur,
+      onFloatBlur: () => () => {},
+      onEnterKey: () => {},
+      markDirty: () => {},
+    };
+    render(<SandboxesSection s={s} />);
+    expect(screen.getByLabelText("Disk floor minimum (MiB)")).toHaveAttribute(
+      "placeholder",
+      "5120",
+    );
+    expect(onIntBlur).toHaveBeenCalledWith("sandboxDiskFloorMinMb", {
+      defaultVal: undefined,
+      emptyVal: 5120,
+    });
+  });
 });

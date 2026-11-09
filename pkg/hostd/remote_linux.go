@@ -18,10 +18,17 @@ package hostd
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/tunnel/mux"
 )
+
+// DefaultRenewInterval is how often a connected key-bound host silently
+// renews its 30-day credential over its active session.
+const DefaultRenewInterval = 12 * time.Hour
 
 // A session that lasted this long was a working one: the next reconnect
 // starts again from the shortest backoff.
@@ -89,6 +96,15 @@ func (s *Server) remoteSession(ctx context.Context) error {
 	defer stop()
 	s.logf("hostd: connected to the controller (hostd protocol %d, build %s)", ProtocolVersion, s.Build)
 	ctx = context.WithValue(ctx, sessionKey{}, m)
+	renewCtx, cancelRenew := context.WithCancel(ctx)
+	defer cancelRenew()
+	if len(s.RenewKey) == ed25519.PrivateKeySize {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.renewLoop(renewCtx, m)
+		}()
+	}
 	for {
 		st, err := m.AcceptStream()
 		if err != nil {
@@ -100,5 +116,93 @@ func (s *Server) remoteSession(ctx context.Context) error {
 			defer st.Close()
 			s.serveConn(ctx, st)
 		}()
+	}
+}
+
+func (s *Server) renewLoop(ctx context.Context, m *mux.Mux) {
+	every := s.RenewInterval
+	if every <= 0 {
+		every = DefaultRenewInterval
+	}
+	// The first renewal is due RenewInterval after the credential was last
+	// issued, not after this connection opened: a ticker started afresh on
+	// every connection never fires for a host that reconnects more often
+	// than RenewInterval (a daemon upgraded or restarted twice a day), and
+	// its 30-day credential would run out while it was connected.
+	wait := s.renewDue(every, time.Now())
+	for {
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-m.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		if err := s.renewOnce(ctx, m); err != nil && ctx.Err() == nil {
+			s.logf("hostd: silent credential renewal deferred: %v", err)
+		}
+		wait = every
+	}
+}
+
+// renewDue is how long from now until this host's credential is due a
+// silent renewal: every after it was last issued or renewed (RenewedAt,
+// else the first connection), or at once when that has already passed.
+func (s *Server) renewDue(every time.Duration, now time.Time) time.Duration {
+	s.renewMu.Lock()
+	defer s.renewMu.Unlock()
+	if s.renewedAt.IsZero() {
+		s.renewedAt = s.RenewedAt
+		if s.renewedAt.IsZero() || s.renewedAt.After(now) {
+			s.renewedAt = now
+		}
+	}
+	return max(s.renewedAt.Add(every).Sub(now), 0)
+}
+
+func (s *Server) renewOnce(ctx context.Context, m *mux.Mux) error {
+	var curTok string
+	if s.CurrentToken != nil {
+		curTok = s.CurrentToken()
+	}
+	proof, err := SignRenewProof(s.RenewName, curTok, s.RenewKey, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	st, err := m.OpenStream(rctx)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	_ = st.SetDeadline(time.Now().Add(10 * time.Second))
+	if err := writeJSON(st, frameRequest, Request{Op: OpRenew, Renew: &proof}); err != nil {
+		return err
+	}
+	typ, payload, err := readFrame(st)
+	if err != nil {
+		return err
+	}
+	switch typ {
+	case frameRenewed:
+		var rep RenewReply
+		if err := json.Unmarshal(payload, &rep); err != nil || rep.Token == "" {
+			return fmt.Errorf("malformed renew reply")
+		}
+		s.renewMu.Lock()
+		s.renewedAt = time.Now()
+		s.renewMu.Unlock()
+		if s.OnTokenRenewed != nil {
+			s.OnTokenRenewed(rep.Token, rep.ExpiresAt)
+		}
+		return nil
+	case frameRefused:
+		return refusal(payload)
+	default:
+		return fmt.Errorf("unexpected renew frame %q", typ)
 	}
 }

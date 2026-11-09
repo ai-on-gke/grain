@@ -80,8 +80,12 @@ sudo \
   ./scripts/setup.sh
 ```
 
-A new deployment runs the last promoted release, the `latest` channel
-(`docker.io/grainai/grain:latest`, the core build). On a machine an
+A new deployment runs the last promoted release, the `latest` channel, the
+core build -- installed from the assets of GitHub's latest release on this
+repository (`images.json` and `docker save` tarballs, checksum-verified and
+`docker load`ed; [docs/release-assets.md](docs/release-assets.md)), so the
+host needs no registry or registry credential. Set `GRAIN_IMAGE` to pull a
+registry image instead (`docker.io/grainai/grain`). On a machine an
 edition's install track claims (`pkg/installtrack`, where an edition linked
 into grain registers its track) the installer pulls that edition's build
 instead. The images are published with the same tags, and
@@ -351,40 +355,41 @@ up by `grain init` instead is removed by hand: see
 
 Back up `/var/lib/grain/data` (`GRAIN_DATA_DIR`), and never
 `/var/lib/grain/scratch` (`GRAIN_SANDBOX_DIR`): everything in it is a run's
-working space or a cache that grain rebuilds. Stop the daemon, or use
-`grain backup` below, for a consistent copy of a SQLite store.
+working space or a cache that grain rebuilds.
 
 On the local PostgreSQL server (the default for a new install), the cluster in
-`data/postgres` is part of that directory. Copy it with both
-`grain-daemon.service` and `grain-postgres.service` stopped, or take an online
-dump with
-`sudo docker exec grain-postgres sh -c 'PGPASSWORD=$(cat /run/grain/postgres-password) exec pg_dump -U grain -d grain -Fc' > grain.dump`.
-`grain backup` covers SQLite only. [docs/database.md](docs/database.md#backups)
-has the restore steps, and covers upgrading the PostgreSQL image, which is a
-separate, explicit step.
+`data/postgres` is part of that directory: copy it only with both
+`grain-daemon.service` and `grain-postgres.service` stopped, take a standalone
+online dump with
+`sudo docker exec grain-postgres sh -c 'PGPASSWORD=$(cat /run/grain/postgres-password) exec pg_dump -U grain -d grain -Fc' > grain.dump`,
+or use `grain backup` below. On a SQLite store, stop `grain-daemon.service`
+before copying `data/store`, or use `grain backup` below.
+[docs/database.md](docs/database.md#backups) has the restore steps, and covers
+upgrading the PostgreSQL image, which is a separate, explicit step.
 
-Grain can also upload a credential-free backup of its SQLite database and
-controller-local `grain/config` repository to either Google Drive or a Google
-Cloud Storage (GCS) bucket. For Drive, enable the Drive API for the Google
-identity Grain runs as and share the destination folder with that identity.
-For GCS, grant that identity permission to create objects in the destination
-bucket (for example, `roles/storage.objectCreator`). Application Default
-Credentials are used unless a credential JSON file is named explicitly.
+Grain can also upload a credential-free backup of its database (PostgreSQL or
+SQLite) and controller-local `grain/config` repository to either Google Drive
+or a Google Cloud Storage (GCS) bucket. For Drive, enable the Drive API for the
+Google identity Grain runs as and share the destination folder with that
+identity. For GCS, grant that identity permission to create objects in the
+destination bucket (for example, `roles/storage.objectCreator`). Application
+Default Credentials are used unless a credential JSON file is named explicitly.
 
-Run a backup by hand on the controller, with the daemon stopped. `grain
-backup` refuses while a daemon holds the data directory, and says so with
-the `sudo systemctl stop grain-daemon.service` to run first. A running
-daemon makes its own backups on the schedule below:
+Run a backup by hand on the controller, with the daemon stopped (use `sudo` on
+a `setup.sh` host so the CLI can read `/etc/grain/postgres.env` and the data
+directory). `grain backup` refuses while a daemon holds the data directory or
+database lock, and says so with the `sudo systemctl stop grain-daemon.service`
+to run first. A running daemon makes its own backups on the schedule below:
 
 ```bash
 # Google Drive
-grain backup \
+sudo grain backup \
   -data-dir /var/lib/grain/data \
   -google-drive-folder <folder-id> \
   -google-credentials-file /path/to/google-credentials.json
 
 # Google Cloud Storage
-grain backup \
+sudo grain backup \
   -data-dir /var/lib/grain/data \
   -gcs-bucket <bucket-name> \
   -google-credentials-file /path/to/google-credentials.json
@@ -397,11 +402,13 @@ To schedule the same operation in the daemon, add
 bucket is set it is used instead of Drive. An interval of `0`, the default,
 disables scheduled backups.
 
-Each ZIP contains an online-consistent `database/grain.db` snapshot and a
-restorable `config/config-repo.bundle` with the config repository's branches,
-tags, and history. It does not contain `data-dir/secrets`, Google credential
-files, Git remote configuration, or any historical `secrets.enc` object; the
-temporary bundle export removes that path from every commit.
+Each ZIP contains an online-consistent database snapshot (`database/grain.dump`
+from `pg_dump -Fc` on PostgreSQL, or `database/grain.db` from `VACUUM INTO` on
+SQLite), `manifest.json`, and a restorable `config/config-repo.bundle` with the
+config repository's branches, tags, and history. It does not contain
+`data-dir/secrets`, database passwords, Google credential files, Git remote
+configuration, or any historical `secrets.enc` object; the temporary bundle
+export removes that path from every commit.
 
 ## Remote hosts
 

@@ -53,7 +53,10 @@ The cheapest source available is used first:
    ones in that answer are recorded with no call of their own. For concluded
    workflow runs on deployments whose webhook gateway GitHub cannot reach
    (such as a workstation behind an identity-aware reverse proxy), the `github-ci-tails` reconciler
-   also polls `GET /repos/{o}/{r}/actions/runs?status=completed` with ETag
+   also polls `GET /repos/{o}/{r}/actions/runs?status=completed` (plus
+   `?branch=<base>&status=completed` for each tracked base or schedule branch so
+   slow base-branch releases and scheduled workflows are not buried behind faster
+   PR runs) with ETag
    (`If-None-Match` / `304 Not Modified`) and skips polling when the hourly
    GitHub budget is low (`github.BudgetLow`). Concluded runs from webhooks
    and polling are deduplicated by `(repo, run_id, attempt)`.

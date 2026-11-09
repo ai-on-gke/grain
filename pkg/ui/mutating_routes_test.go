@@ -175,6 +175,34 @@ func registerHostd(t *testing.T, client *ui.Client, _ sender) string {
 	return "ws-1"
 }
 
+func registerEnrollmentCode(t *testing.T, client *ui.Client, _ sender) string {
+	t.Helper()
+	if _, _, err := client.Store.CreateHostEnrollmentCode(context.Background(), model.HostEnrollmentCode{Name: "team-invite"}); err != nil {
+		t.Fatalf("creating enrollment code: %v", err)
+	}
+	return "team-invite"
+}
+
+func registerPendingHostJoin(t *testing.T, client *ui.Client, _ sender) string {
+	t.Helper()
+	ctx := context.Background()
+	_, raw, err := client.Store.CreateHostEnrollmentCode(ctx, model.HostEnrollmentCode{Name: "pending-invite"})
+	if err != nil {
+		t.Fatalf("creating enrollment code: %v", err)
+	}
+	jr, err := client.Store.CreateHostJoinRequest(ctx, model.HostJoinRequest{
+		PublicKey:  "ed25519:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		Hostname:   "devbox-1",
+		OS:         "linux",
+		Arch:       "amd64",
+		EnrolledBy: "alice@example.com",
+	}, raw, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("creating pending join request: %v", err)
+	}
+	return jr.ID
+}
+
 // registerRevokedHostd puts hostd ws-1 in the registry, revoked, as what
 // deleting a hostd acts on.
 func registerRevokedHostd(t *testing.T, client *ui.Client, s sender) string {
@@ -622,10 +650,40 @@ var attributedRoutes = map[string]attributedRoute{
 		agentGrants: []string{"api:capabilities:admin"},
 		recorded:    lastConfigAudit,
 	},
+	"POST /api/hostds/enrollment-codes": {
+		body:     `{"name":"team-hosts"}`,
+		recorded: lastConfigAudit,
+	},
+	"POST /api/hostds/enrollment-codes/{name}/rotate": {
+		setup:    registerEnrollmentCode,
+		path:     "/api/hostds/enrollment-codes/{id}/rotate",
+		recorded: lastConfigAudit,
+	},
+	"POST /api/hostds/enrollment-codes/{name}/revoke": {
+		setup:    registerEnrollmentCode,
+		path:     "/api/hostds/enrollment-codes/{id}/revoke",
+		recorded: lastConfigAudit,
+	},
+	"POST /api/hostds/pending/{id}/accept": {
+		setup:    registerPendingHostJoin,
+		body:     `{"name":"devbox-1"}`,
+		recorded: lastConfigAudit,
+	},
+	"POST /api/hostds/pending/{id}/reject": {
+		setup:    registerPendingHostJoin,
+		recorded: lastConfigAudit,
+	},
 	"PATCH /api/hostds/{name}": {
 		setup:       registerHostd,
 		path:        "/api/hostds/{id}",
 		body:        `{"owner":"bob@example.com"}`,
+		agentGrants: []string{"api:capabilities:admin"},
+		recorded:    lastConfigAudit,
+	},
+	"POST /api/hostds/{name}/rename": {
+		setup:       registerHostd,
+		path:        "/api/hostds/{id}/rename",
+		body:        `{"name":"ws-2"}`,
 		agentGrants: []string{"api:capabilities:admin"},
 		recorded:    lastConfigAudit,
 	},
@@ -700,6 +758,11 @@ var attributedRoutes = map[string]attributedRoute{
 		agentGrants: []string{"api:settings:write"},
 		recorded:    lastConfigAudit,
 	},
+	"PUT /api/usage/settings": {
+		body:        `{"mode":"auto","minWorkers":2}`,
+		agentGrants: []string{"api:settings:write"},
+		recorded:    lastConfigAudit,
+	},
 	"PUT /api/repos/{owner}/{name}/merge-on-green": {
 		path:        "/api/repos/acme/widgets/merge-on-green",
 		body:        `{"enabled":true}`,
@@ -739,10 +802,15 @@ var neverAttributedRoutes = map[string]bool{
 	// and nothing is written that names them.
 	"POST /api/auth/access-code": true,
 	"POST /api/auth/logout":      true,
+	// Self-authenticating Ed25519 host handshake and silent credential
+	// renewal protocol endpoints; operator approval is attributed on
+	// POST /api/hostds/pending/{id}/accept and .../reject.
+	"POST /api/hostd/join":           true,
+	"POST /api/hostd/join/{id}/poll": true,
+	"POST /api/hostd/renew":          true,
 	// Checks, tests and previews: they report what a change would do and
 	// write nothing.
 	"POST /api/agent-keys/{framework}/check": true,
-	"POST /api/capabilities/{id}/check":      true,
 	"POST /api/capability-grants/check":      true,
 	"POST /api/capability-policy/preview":    true,
 	"POST /api/capability-servers/test":      true,

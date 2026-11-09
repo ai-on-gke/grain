@@ -1,0 +1,65 @@
+== Actions repo acme/widgets ==
+
+$ /home/debian/bin/grain release rollback -repo acme/widgets -to v2.3.0 -reason v2.4.0 drops queued widgets on restart (#4242) v2.4.0
+rolling back v2.4.0: promote-release is tagging v2.4.0-retracted and moving latest back to v2.3.0
+dispatched acme/widgets's promote-release.yml on main to roll back v2.4.0 (at c7da47041a30), signed for debian
+[exit 0]
+
+$ /home/debian/bin/grain release rollback -repo acme/widgets -to v2.3.0 -reason v2.4.0 drops queued widgets on restart (#4242) v2.4.0
+grain: v2.4.0 rollback was already started: debian dispatched promote-release.yml for it at 2026-11-07T05:17:09Z; watch that run rather than starting another
+[exit 2]
+-- agent (20, api:release-manager) through the sandbox proxy stub:
+
+$ env GRAIN_SERVER=http://127.0.0.1:18083 /home/debian/bin/grain release rollback -repo acme/widgets -reason agent says so v2.4.0
+grain: only a person may roll back a release: "20" is an agent, and a release is rolled back by a person, never by an agent or a schedule
+[exit 3]
+
+$ curl -s -w \n[http %{http_code}]\n -H Authorization: Bearer <access-code> -H Content-Type: application/json -H X-Grain-Acting-Task: 20 -X POST -d {"repo":"acme/widgets","to":"v2.3.0","reason":"agent says so"} http://127.0.0.1:18082/api/releases/v2.4.0/rollback
+{"error":"only a person may roll back a release: \"20\" is an agent, and a release is rolled back by a person, never by an agent or a schedule"}
+
+[http 403]
+[exit 0]
+-- what the sim was sent:
+1 rollback dispatch(es)
+ref: main inputs: {"approval": "Z3JhaW4tcmVsZWFz...", "approval_signature": "MEYCIQCboTuIabrX...", "decision": "rollback", "reason": "v2.4.0 drops queued widgets on restart (#4242)", "rollback_to": "v2.3.0", "version": "v2.4.0"}
+grain-release-approval/v1
+repo: acme/widgets
+version: v2.4.0
+decision: rollback
+commit: c7da47041a303ff4f2bed13a71b9b5eaa253ff9a
+approver: debian
+short_soak_ok: false
+allow_breaking: false
+rollback_to: v2.3.0
+reason_sha256: 7ed88a3158fbf63362ad4333fc23dc3eeb9b5448b37cffb0b0c1503526e5ffff
+issued: 1794028629
+expires: 1794029529
+sha256(reason input) = 7ed88a3158fbf63362ad4333fc23dc3eeb9b5448b37cffb0b0c1503526e5ffff matches record: True | equals sha256(the reason given): True
+
+== grain CI repo acme/gadgets ==
+
+$ /home/debian/bin/grain release rollback -repo acme/gadgets -to v1.0.0 -reason v2.4.0 drops queued widgets on restart (#4242) v1.1.0
+rolling back v1.1.0: promote-release is tagging v1.1.0-retracted and moving latest back to v1.0.0
+started run fake-ci-1: acme/gadgets at main
+  .grain/workflows/promote-release.yml:rollback
+
+follow it with "grain ci watch fake-ci-1", read it with "grain ci show fake-ci-1",
+or cancel it with "grain ci cancel fake-ci-1"
+[exit 0]
+
+$ curl -s -w \n[http %{http_code}]\n -H Authorization: Bearer <access-code> -H Content-Type: application/json -X POST -d {"repo":"acme/gadgets","reason":"UI path: v2.4.0 drops queued widgets on restart (#4242)"} http://127.0.0.1:18082/api/releases/v1.1.0/rollback
+{"version":"v1.1.0","approve":false,"rollback":true,"rollbackReason":"UI path: v2.4.0 drops queued widgets on restart (#4242)","run":{"id":"fake-ci-2","key":"","repo":"acme/gadgets","ref":"main","event":"workflow_dispatch","requestedBy":"debian","startedAt":"2026-11-07T05:17:09.288207836Z","jobs":[{"workflow":"","workflowPath":".grain/workflows/promote-release.yml","jobId":".grain/workflows/promote-release.yml:rollback","name":".grain/workflows/promote-release.yml:rollback","key":"","steps":null}]}}
+
+[http 202]
+[exit 0]
+-- agent (20) through the sandbox proxy stub:
+
+$ env GRAIN_SERVER=http://127.0.0.1:18083 /home/debian/bin/grain release rollback -repo acme/gadgets -reason agent says so v1.1.0
+grain: only a person may roll back a release: "20" is an agent, and a release is rolled back by a person, never by an agent or a schedule
+[exit 3]
+
+$ curl -s -w \n[http %{http_code}]\n -H Authorization: Bearer <access-code> -H Content-Type: application/json -H X-Grain-Acting-Task: 20 -X POST -d {"repo":"acme/gadgets","reason":"agent says so"} http://127.0.0.1:18082/api/releases/v1.1.0/rollback
+{"error":"only a person may roll back a release: \"20\" is an agent, and a release is rolled back by a person, never by an agent or a schedule"}
+
+[http 403]
+[exit 0]

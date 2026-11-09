@@ -46,6 +46,7 @@ import { DAY, RANGES, normalizeView } from "./gantt.js";
 import {
   DEFAULT_REPORT_WINDOW,
   hasAbsoluteSpan,
+  reportPath,
   reportScope,
   reportWindow,
 } from "./report.js";
@@ -508,16 +509,35 @@ export function panelReportNarrowing(panel, fallback) {
 // this panel is not narrowed by, and offering to keep that here would
 // file a task to write a query that changes nothing the reader can see.
 // Narrowed to a repo, it is, and the offer is real.
-export function panelUsesNarrowing(panel, narrowing) {
+//
+// `baseline` is the narrowing the dashboard opens on (its board's own
+// query, or the deployment's default). A dashboard already scoped to
+// acme/widgets and then searched for "retry" is still asking the report
+// exactly what it asked before: the repo came from the board, the search
+// is dropped, and a panel whose own `range` overrides any span the
+// toolbar names ignores that too. So the question is whether the report
+// this panel would fetch differs from the one it fetches on the board's
+// own question -- the same reportPath MetricsPanel keys its fetch on --
+// not merely whether the narrowing carries a scope at all (2026-11-08
+// saved-boards walkthrough, task 3612).
+function metricsQuestion(panel, narrowing) {
+  const scope = reportScope(narrowing);
+  return reportPath({ scope, window: panelMetricsWindow(panel, scope) });
+}
+
+export function panelUsesNarrowing(panel, narrowing, baseline = NO_NARROWING) {
   if (panel?.kind !== "metrics") return true;
   const scope = reportScope(narrowing);
-  return Boolean(
+  if (!(
     scope.repos.length ||
     scope.authors.length ||
     scope.within ||
     scope.since ||
-    scope.until,
-  );
+    scope.until
+  )) {
+    return false;
+  }
+  return metricsQuestion(panel, narrowing) !== metricsQuestion(panel, baseline);
 }
 
 // panelView is what a panel is a small copy of -- one of App's own

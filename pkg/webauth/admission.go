@@ -261,6 +261,30 @@ var ErrCallerUnauthenticated = errors.New("webauth: caller unauthenticated")
 // ErrCallerForbidden indicates that the authenticated caller is not admitted.
 var ErrCallerForbidden = errors.New("webauth: caller forbidden")
 
+// AuthenticateIdentity verifies the caller's front-door identity without requiring
+// human domain admission or static catalog-reader membership (used when evaluating
+// per-entry `connected_principal` or `DelegationPolicy.AuthorizeOnBehalfOf`).
+func (a *Admitter) AuthenticateIdentity(r *http.Request) (*Caller, error) {
+	caller, err := a.verifier.Authenticate(r)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrCallerUnauthenticated, err)
+	}
+	email := NormalizeIdentityEmail(caller.Email)
+	if email == "" {
+		return nil, fmt.Errorf("%w: empty caller email", ErrCallerUnauthenticated)
+	}
+	kind := caller.Kind
+	if kind == "" {
+		kind = PrincipalKindForEmail(email)
+	}
+	return &Caller{
+		Email:        email,
+		Subject:      caller.Subject,
+		HostedDomain: caller.HostedDomain,
+		Kind:         kind,
+	}, nil
+}
+
 // Admit verifies the request caller and computes their AdmittedCaller record.
 func (a *Admitter) Admit(r *http.Request) (*AdmittedCaller, error) {
 	caller, err := a.verifier.Authenticate(r)

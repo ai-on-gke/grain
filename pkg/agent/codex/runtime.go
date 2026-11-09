@@ -28,7 +28,7 @@ import (
 // add tools that are not environment-backed. Updating this pin requires
 // reviewing the tool registry and running the credential-free hostile
 // tool probes for both direct-tool and Code Mode model profiles.
-const ReviewedCLIVersion = "0.166.0"
+const ReviewedCLIVersion = "0.167.0"
 
 // validateRuntime asks the binary what version it is -- through the
 // Host, so that the copy being checked is the copy that will run rather

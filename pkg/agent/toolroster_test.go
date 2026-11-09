@@ -48,7 +48,6 @@ func TestPublishedToolNamesNamesEveryToolTheServerCanRegister(t *testing.T) {
 		"read_grain_metrics",
 		"read_grain_log",
 		"read_deployment_health", "read_deployment_state",
-		"list_bootstrap_playbooks", "read_bootstrap_playbook",
 		"list_issues", "read_issue",
 	} {
 		if !slices.Contains(names, want) {

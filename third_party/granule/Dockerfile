@@ -50,7 +50,7 @@ ARG GUEST_DISTRO=debian
 # GUEST_SUITE only applies when GUEST_DISTRO=debian. Any suite
 # debootstrap can bootstrap works; bullseye, bookworm and trixie are the
 # ones built and checked -- weekly, each of them built and packed by
-# .grain/workflows/guest-suites.yml, which is where that claim is kept
+# .github/workflows/guest-suites.yml, which is where that claim is kept
 # true and what a suite added here has to be added to. What a new suite
 # is liable to change out from under this build is which packages
 # --variant=minbase installs, so the guest-rootfs-debian stage names the
@@ -284,7 +284,7 @@ RUN mkdir -p /out/shims/bin /out/shims/usr/bin /out/shims/usr/local/bin \
 # first nameserver is a router or appliance that may well answer on 443,
 # and nobody asked for an unauthenticated connection to it. grain's own
 # callers (deploy/publish-images.sh in a grain sandbox, and the
-# .grain/workflows builds that reach these stages) pass it. build-kernel
+# CI builds that reach these stages) pass it. build-kernel
 # does the same for its source tarball.
 #
 # GITHUB_PROXY is declared in fetch-chv and fetch-kernel-source only, so a

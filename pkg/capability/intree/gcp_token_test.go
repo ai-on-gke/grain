@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -122,9 +123,18 @@ func TestGCPTokenModeGrantPlacesAnExternalAccountAndNoKey(t *testing.T) {
 	if about := placement(t, resp, gcpAboutPath(GCPKeyPath)).Content; !strings.Contains(about, "service_account: "+testOrgSA) || !strings.Contains(about, "no key exists") {
 		t.Errorf("about = %s", about)
 	}
-	if !strings.Contains(placement(t, resp, resp.Setup).Content, "gcloud auth login --cred-file=") {
-		t.Errorf("setup does not sign gcloud in with the config")
+	// gcloud is pointed at the config, not signed in with it: `gcloud auth
+	// login --cred-file` introspects the impersonated token against STS,
+	// which answers {"active": false} for a token it did not issue.
+	setup := placement(t, resp, resp.Setup).Content
+	if !strings.Contains(setup, "gcloud config set auth/credential_file_override '"+GCPKeyPath+"' --quiet") ||
+		!strings.Contains(setup, "gcloud config set project ") {
+		t.Errorf("setup does not point gcloud at the config:\n%s", setup)
 	}
+	if strings.Contains(setup, "auth login") {
+		t.Errorf("setup still runs gcloud auth login, which fails STS introspection:\n%s", setup)
+	}
+	assertSetupKeepsStderr(t, setup)
 
 	// A client library reading the placed config, as ADC would, gets the
 	// impersonated account's token from the forwarded listener.
@@ -237,5 +247,203 @@ func TestGCPExistingAccountSetsArePersonGranted(t *testing.T) {
 	org2 := protocol.Grant{Ref: protocol.Ref{CapabilityID: ps2.ID, Method: "gcp-key"}, Args: validated(t, ps2, "gcp-key", map[string]any{"permission_set": "org"})}
 	if protocol.GrantKindOf(org2) != protocol.GrantCovered {
 		t.Error("person_granted: false still reserves the set")
+	}
+}
+
+// assertSetupKeepsStderr fails if any gcloud command in an activate.sh
+// discards its stderr: that is the only account of why setup failed that
+// the task's conversation gets (CapabilitySetupError's output tail).
+func assertSetupKeepsStderr(t *testing.T, script string) {
+	t.Helper()
+	for _, line := range strings.Split(script, "\n") {
+		if !strings.HasPrefix(line, "gcloud ") {
+			continue
+		}
+		if strings.Contains(line, "2>") || strings.Contains(line, "&>") {
+			t.Errorf("setup line discards stderr: %q", line)
+		}
+		if !strings.Contains(line, "--quiet") {
+			t.Errorf("setup line is not --quiet: %q", line)
+		}
+	}
+}
+
+// runActivate runs an activate.sh under sh with a stand-in gcloud first on
+// PATH that logs its arguments and, when failArg names one of them, fails
+// the way gcloud does: a message on stderr and status 1.
+func runActivate(t *testing.T, script, failArg string) (log, output string, err error) {
+	t.Helper()
+	if _, lookErr := exec.LookPath("sh"); lookErr != nil {
+		t.Skip("no sh")
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "gcloud.log")
+	fake := "#!/bin/sh\n" +
+		"echo \"$*\" >> " + shellQuote(logPath) + "\n" +
+		"echo 'Updated property.'\n" +
+		"case \"$*\" in *" + failArg + "*) echo 'ERROR: (gcloud) fake failure for " + failArg + "' >&2; exit 1;; esac\n"
+	if err := os.WriteFile(filepath.Join(dir, "gcloud"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	scriptPath := filepath.Join(dir, "activate.sh")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", scriptPath)
+	cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	logged, _ := os.ReadFile(logPath)
+	return string(logged), string(out), err
+}
+
+func TestGCPActivateScriptsRunAndReportFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name, script, want string
+	}{
+		{"token", gcpTokenActivateScript(GCPKeyPath, "grain-test-proj"),
+			"config set auth/credential_file_override " + GCPKeyPath + " --quiet\nconfig set project grain-test-proj --quiet\n"},
+		{"key", gcpKeyActivateScript(GCPKeyPath, "grain-test-proj"),
+			"auth activate-service-account --key-file=" + GCPKeyPath + " --quiet\nconfig set project grain-test-proj --quiet\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assertSetupKeepsStderr(t, tc.script)
+			log, out, err := runActivate(t, tc.script, "no-such-arg")
+			if err != nil {
+				t.Fatalf("activate.sh failed: %v\n%s", err, out)
+			}
+			if log != tc.want {
+				t.Errorf("gcloud ran\n%s\nwant\n%s", log, tc.want)
+			}
+			if strings.Contains(out, "Updated property") {
+				t.Errorf("stdout was not discarded: %q", out)
+			}
+			// A failing gcloud stops the script, and what it said on stderr
+			// is what setup's output carries.
+			log, out, err = runActivate(t, tc.script, "project")
+			if err == nil {
+				t.Fatalf("activate.sh succeeded although gcloud config set project failed")
+			}
+			if !strings.Contains(out, "fake failure for project") {
+				t.Errorf("gcloud's stderr was not kept: output = %q", out)
+			}
+			if strings.Count(log, "\n") != 2 {
+				t.Errorf("gcloud ran\n%s", log)
+			}
+		})
+	}
+}
+
+func TestGCPTokenModeIntrospectAndRealGcloud(t *testing.T) {
+	ps, cloud := existingGCP(t, map[string]any{"credential": "token"})
+	resp := mint(t, ps, "gcp-key", "e7-gcloud-0", map[string]any{"permission_set": "org"})
+	if resp.Status != protocol.StatusOK || len(resp.Ports) != 1 {
+		t.Fatalf("mint = %+v", resp)
+	}
+	var cfg struct {
+		TokenURL         string            `json:"token_url"`
+		TokenInfoURL     string            `json:"token_info_url"`
+		CredentialSource map[string]string `json:"credential_source"`
+	}
+	rawCfg := placement(t, resp, GCPKeyPath).Content
+	if err := json.Unmarshal([]byte(rawCfg), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	wantInfo := "http://127.0.0.1:" + strconv.Itoa(resp.Ports[0].HostPort) + "/runs/e7-gcloud-0/introspect"
+	if cfg.TokenInfoURL != wantInfo {
+		t.Fatalf("token_info_url = %q, want %q", cfg.TokenInfoURL, wantInfo)
+	}
+	subject := placement(t, resp, cfg.CredentialSource["file"]).Content
+	status, exBody := exchange(t, cfg.TokenURL, subject)
+	if status != http.StatusOK {
+		t.Fatalf("exchange = %d %v", status, exBody)
+	}
+	mintedTok, _ := exBody["access_token"].(string)
+	if mintedTok == "" {
+		t.Fatalf("missing access_token in %v", exBody)
+	}
+
+	iResp, err := http.PostForm(cfg.TokenInfoURL, url.Values{"token": {mintedTok}, "token_type_hint": {"access_token"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var iBody map[string]any
+	json.NewDecoder(iResp.Body).Decode(&iBody)
+	iResp.Body.Close()
+	if iResp.StatusCode != http.StatusOK || iBody["active"] != true || iBody["username"] != testOrgSA {
+		t.Fatalf("introspect = %d %v, want 200 active=true username=%s", iResp.StatusCode, iBody, testOrgSA)
+	}
+
+	// RFC 7662 §2.2: a token the endpoint does not recognise -- never
+	// minted, or minted for another attempt -- is {"active": false} with
+	// 200, and nothing else about it.
+	assertInactive(t, "introspect(unknown)", cfg.TokenInfoURL, "not-a-minted-token")
+	otherAttempt := strings.Replace(cfg.TokenInfoURL, "/runs/e7-gcloud-0/", "/runs/e7-other-0/", 1)
+	assertInactive(t, "introspect(another attempt's path)", otherAttempt, mintedTok)
+
+	if gcloudPath, err := exec.LookPath("gcloud"); err == nil {
+		dir := t.TempDir()
+		subjLocal := filepath.Join(dir, "subject")
+		credLocal := filepath.Join(dir, "cred.json")
+		actLocal := filepath.Join(dir, "activate.sh")
+		if err := os.WriteFile(subjLocal, []byte(subject), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		rewrittenCfg := strings.ReplaceAll(rawCfg, cfg.CredentialSource["file"], subjLocal)
+		if err := os.WriteFile(credLocal, []byte(rewrittenCfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		act := strings.ReplaceAll(placement(t, resp, resp.Setup).Content, GCPKeyPath, credLocal)
+		if err := os.WriteFile(actLocal, []byte(act), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		env := append(os.Environ(),
+			"HOME="+dir,
+			"CLOUDSDK_CONFIG="+filepath.Join(dir, ".config", "gcloud"),
+			"CLOUDSDK_CORE_DISABLE_USAGE_REPORTING=true",
+			"HTTPS_PROXY=http://127.0.0.1:1",
+			"HTTP_PROXY=http://127.0.0.1:1",
+			"NO_PROXY=127.0.0.1,localhost",
+		)
+		setupCmd := exec.Command("/bin/sh", actLocal)
+		setupCmd.Env = env
+		if out, err := setupCmd.CombinedOutput(); err != nil {
+			t.Fatalf("activate.sh failed: %v\n%s", err, out)
+		}
+		printCmd := exec.Command(gcloudPath, "auth", "print-access-token")
+		printCmd.Env = env
+		out, err := printCmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("gcloud auth print-access-token failed: %v\n%s", err, out)
+		}
+		if got := strings.TrimSpace(string(out)); !strings.Contains(got, testOrgSA) {
+			t.Fatalf("gcloud auth print-access-token = %q, want token for %s", got, testOrgSA)
+		}
+	}
+
+	if cloud.LiveKeys() != 0 || cloud.Calls["CreateKey"] != 0 {
+		t.Fatalf("token-mode grant created keys: %v", cloud.Calls)
+	}
+	if _, err := ps.Release(context.Background(), "gcp-key", "e7-gcloud-0"); err != nil {
+		t.Fatal(err)
+	}
+	assertInactive(t, "introspect after release", cfg.TokenInfoURL, mintedTok)
+}
+
+// assertInactive posts token to an introspection endpoint and wants RFC
+// 7662's answer for a token it does not recognise: 200 and exactly
+// {"active": false}.
+func assertInactive(t *testing.T, what, endpoint, token string) {
+	t.Helper()
+	resp, err := http.PostForm(endpoint, url.Values{"token": {token}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("%s: decoding the answer: %v", what, err)
+	}
+	if resp.StatusCode != http.StatusOK || len(body) != 1 || body["active"] != false {
+		t.Fatalf("%s = %d %v, want 200 {\"active\": false}", what, resp.StatusCode, body)
 	}
 }

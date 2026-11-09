@@ -87,11 +87,11 @@ const APIToolPrefix = "api_"
 // its handler name, method and path.
 var routeDocs = map[string]string{
 	"PUT /api/settings":                                                    "Change deployment settings: only the fields given are changed, the rest keep their values.",
+	"PUT /api/usage/settings":                                              "Replace the token usage settings: the concurrency mode (advisory, auto or off), the automatic cap's floor, per-run usage retention and the connection budgets.",
 	"POST /api/settings":                                                   "Change deployment settings, as PUT /api/settings does: only the fields given are changed.",
 	"POST /api/settings/plan":                                              "Preview a settings change without saving it: what the given fields would change, and what it would take to apply.",
 	"PUT /api/settings/cli-run":                                            "Set the per-framework settings for agent CLI runs, keyed by framework.",
-	"POST /api/registry/heartbeat":                                         "Trigger an immediate registration and heartbeat step against the configured grain registry, returning the updated registry snapshot.",
-	"POST /api/capabilities/{id}/check":                                    "Check that a capability's credential works, by making one request to the service it is for; stores nothing.",
+	"POST /api/registry/heartbeat":                                         "Trigger an immediate registration and heartbeat step against the configured Grain Hub, returning the updated hub snapshot.",
 	"GET /api/tasks":                                                       "List tasks and their state, queue position and pull request. Narrow with repo, state, q, limit, cursor and fields=summary (default page " + fmt.Sprint(listPageLarge) + ", with truncated and nextCursor).",
 	"GET /api/pipeline/changes":                                            "Read what changed in the pipeline since a cursor: task transitions, merge-queue states, stalls, base-branch verdicts, merge-batch results and the deployment's dispatch being blocked or unblocked (kind dispatch), oldest first, with the cursor to read on from.",
 	"GET /api/sandboxes":                                                   "Read the deployment's health: dispatchBlocked first -- every condition under which nothing is dispatched (a git proxy that failed to bind, a reconcile loop that died), each with its error, since when and a remedy; absent while dispatching -- then the sandbox pool, host pressure, daemon restarts, state-repo sync and the other checks.",
@@ -100,7 +100,7 @@ var routeDocs = map[string]string{
 	"POST /api/tasks/reorder":                                              "Move tasks in the queue: ids (in order) go after afterId and before beforeId; give only beforeId as the first queued task to move them to the front.",
 	"GET /api/tasks/{id}":                                                  "Read one task in full: its fields, grants, conversation and runs.",
 	"PATCH /api/tasks/{id}":                                                "Edit a task's title, description, priority, base branch, auto-merge or grants -- the same edit the task page makes.",
-	"POST /api/tasks/{id}/capabilities":                                    "Attach a capability to a task or detach one (attach false), with its arguments; replace swaps a grant out for another.",
+	"POST /api/tasks/{id}/capabilities":                                    "Attach a capability to a task or detach one (attach false), with its arguments; replace swaps a grant out for another. Under capabilities:detach alone, only attach false without replace, never on a standing session.",
 	"POST /api/tasks/{id}/depends-on":                                      "Make a task wait on another task (attach true), or stop waiting on it (attach false).",
 	"POST /api/tasks/{id}/approve":                                         "Approve a proposed task, which puts it in the queue.",
 	"POST /api/tasks/{id}/withdraw-approval":                               "Take a queued task back out of the queue, leaving it a proposal again without closing it.",
@@ -151,7 +151,7 @@ var routeDocs = map[string]string{
 	"PUT /api/release-notes":                                               "Write the release notes for a week (period; the week just ended without one).",
 	"POST /api/repos":                                                      "Add a repository to the deployment's targets.",
 	"DELETE /api/repos/{owner}/{name}":                                     "Remove a repository from the deployment's targets.",
-	"PUT /api/repos/{owner}/{name}/ci-capabilities":                        "Set the capabilities a repository's grain CI jobs are granted.",
+	"PUT /api/repos/{owner}/{name}/ci-capabilities":                        "Set the capabilities a repository's grain CI jobs are granted. Under capabilities:detach alone, only a subset of the stored list.",
 	"PUT /api/repos/{owner}/{name}/release":                                "Turn a repository's release workflow on or off, and set the jobs that judge its base branches and are dispatched after a merge.",
 	"PUT /api/repos/{owner}/{name}/release-secrets/{secret}":               "Set the value of one of a repository's release secrets.",
 	"DELETE /api/repos/{owner}/{name}/release-secrets/{secret}":            "Delete one of a repository's release secrets.",
@@ -162,7 +162,7 @@ var routeDocs = map[string]string{
 	"POST /api/releases/{version}/rollback":                                "Roll back a promoted trunk release (vX.Y.Z), tagging vX.Y.Z-retracted and re-pointing latest to an earlier release. Only a person may; an agent is refused.",
 	"POST /api/repos/{owner}/{name}/base-branch-runs":                      "Start a grain CI run of one of a repository's base branches.",
 	"PUT /api/repos/{owner}/{name}/work-ownership":                         "Set who owns a repository's work: its default, or one work item's override.",
-	"PUT /api/repos/{owner}/{name}/capabilities":                           "Set the capabilities every task on a repository is granted by default.",
+	"PUT /api/repos/{owner}/{name}/capabilities":                           "Set the capabilities every task on a repository is granted by default. Under capabilities:detach alone, only a subset of the stored list.",
 	"PUT /api/repos/{owner}/{name}/prompt-extension":                       "Set the text added to every agent prompt for work on a repository.",
 	"PUT /api/repos/{owner}/{name}/setup-command":                          "Set the command a sandbox runs to set up a repository's checkout.",
 	"PUT /api/repos/{owner}/{name}/declarations":                           "Set whether grain reads a repository's own declarations from its tree.",
@@ -250,7 +250,8 @@ var routeDocs = map[string]string{
 	"PUT /api/deployment/repos/{owner}/{name}/git-connection":              "Set which git connection a repository is reached through.",
 	"POST /api/deployment/broadcast":                                       "Post a comment to every active task (running_only: only those with a run in flight).",
 	"POST /api/hostds":                                                     "Register a remote host; its token is shown once, in the answer.",
-	"PATCH /api/hostds/{name}":                                             "Set a host's owner or labels.",
+	"PATCH /api/hostds/{name}":                                             "Set a host's owner, labels, or capacity.",
+	"POST /api/hostds/{name}/rename":                                       "Rename a registered host.",
 	"GET /api/hostds/{name}/install":                                       "Show how to install a registered host on its machine again; never its token.",
 	"POST /api/hostds/{name}/rotate":                                       "Retire a host's token and mint a new one, shown once in the answer.",
 	"POST /api/hostds/{name}/revoke":                                       "Revoke a host and every token it has.",
@@ -290,7 +291,7 @@ var routeDocs = map[string]string{
 	"PUT /api/gcp-keys/{name}":                                             "Create or replace a named GCP key.",
 	"DELETE /api/gcp-keys/{name}":                                          "Delete a named GCP key.",
 	"PUT /api/github-tokens/{name}":                                        "Set a named GitHub token.",
-	"DELETE /api/github-tokens/{name}":                                     "Delete a named GitHub token; refused while a git connection still names it.",
+	"DELETE /api/github-tokens/{name}":                                     "Delete a named GitHub token; refused while a git connection or capability grant still names it.",
 	"PUT /api/secrets/{secret}/{key}":                                      "Set one key of a secret; the value is stored and never shown back.",
 	"DELETE /api/secrets/{secret}/{key}":                                   "Delete one key of a secret.",
 	"DELETE /api/secrets/{secret}":                                         "Delete a secret and every key in it.",
@@ -346,6 +347,7 @@ var routeDocs = map[string]string{
 // a route with none takes no body.
 var routeBodies = map[string]any{
 	"PUT /api/settings":             UpdateSettingsRequest{},
+	"PUT /api/usage/settings":       model.UsageSettings{},
 	"POST /api/settings":            UpdateSettingsRequest{},
 	"POST /api/settings/plan":       UpdateSettingsRequest{},
 	"PUT /api/settings/cli-run":     updateCLIRunSettingsRequest{},
@@ -424,6 +426,7 @@ var routeBodies = map[string]any{
 	"POST /api/deployment/broadcast":                                    BroadcastTeamRequest{},
 	"POST /api/hostds":                                                  CreateHostdRequest{},
 	"PATCH /api/hostds/{name}":                                          UpdateHostdRequest{},
+	"POST /api/hostds/{name}/rename":                                    RenameHostdRequest{},
 	"PUT /api/agent-keys/{framework}":                                   setAgentKeyRequest{},
 	"PUT /api/agent-backends/{id}/credential":                           setAgentKeyRequest{},
 	"PUT /api/agent-backends/{id}/codex-auth":                           setAgentKeyRequest{},
@@ -549,7 +552,7 @@ var routeQueries = map[string]map[string]string{
 	"GET /api/capability-servers/host-entries": listObjectQueryDocs("allowlist entry name", listPageMedium, nil),
 	"GET /api/api-scope-sets":                  listObjectQueryDocs("scope set name or source", listPageSmall, nil),
 	"GET /api/api-scope-sets/usage":            listQueryDocs("scope set name", listPageLarge, nil),
-	"GET /api/notifications":                   listQueryDocs("subject or title", listPageLarge, map[string]string{"open": "1 for only notifications not yet cleared.", "after": "Only notifications after this id.", "family": "Only this family (the subject before its first ':')."}),
+	"GET /api/notifications":                   listQueryDocs("subject or title", listPageLarge, map[string]string{"open": "1 for only notifications not yet cleared.", "after": "Only notifications after this id.", "family": "Only this family (the subject before its first ':').", "fields": "list for each body cut to its first line, as the UI's lists draw it (a pending release's is kept whole)."}),
 	"GET /api/memory": listQueryDocs("repository, author or text", listPageTiny, map[string]string{
 		"repo": "Only this repository's (owner/name) standing memory; given empty, only the deployment's own.",
 	}),
@@ -691,6 +694,11 @@ var routeFieldDocs = map[string]map[string]string{
 		"kind":       "The host's kind, \"github\" or \"git\" (a plain git host, checked by reading its repositories rather than its API).",
 		"scope":      "What to check access to: an owner/name repository, an owner (its target repositories on this host), or empty for every target repository on the host.",
 		"source":     "For an ambient login, which tool is asked for the token: \"gh\", \"git\" or \"auto\".",
+	},
+	"PUT /api/console-sessions/{id}": {
+		"capabilities":         "The session's whole capability list, replacing what it holds. Send expectCapabilities with it, or a change somebody else made since you read the session is undone.",
+		"expectCapabilities":   "The capabilities list you read the session holding (GET /api/console-sessions) and computed capabilities from. If the session no longer holds exactly that set, the call is refused with 409 code \"stale\" and changes nothing; read it again and redo the change.",
+		"adoptShippedDefaults": "true adds the shipped defaults the session lacks (missingShippedDefaults) to what it holds now, keeping everything else. Send it instead of capabilities, never with it.",
 	},
 }
 
@@ -1009,7 +1017,7 @@ func AgentAPITools(client *HTTPClient, taskID string, grants []string) []mcp.Too
 	}
 	var tools []mcp.Tool
 	for _, route := range AgentAPIRoutes() {
-		if !set.Has(route.Scope) && !tasksAdminAllowsTaskPatch(set, route.Pattern) {
+		if !set.Has(route.Scope) && !tasksAdminAllowsTaskPatch(set, route.Pattern) && !capabilitiesDetachAllowsRoute(set, route.Pattern) {
 			continue
 		}
 		tools = append(tools, route.tool(client, taskID))
@@ -1258,14 +1266,18 @@ func (r APIRoute) externalTool(s *Server, tok *model.ExternalAgentToken) mcp.Too
 }
 
 // externalCall dispatches r in-process on s on behalf of the external agent
-// credential tok, running through s.ServeHTTP and agentAPIGate so the same
-// scope, repository, rail, and audit checks apply as on HTTP requests.
+// credential tok, running through s.ServeHTTP, roleGate, and agentAPIGate so
+// the same role, scope, repository, rail, and audit checks apply as on HTTP
+// requests.
 func (r APIRoute) externalCall(ctx context.Context, s *Server, tok *model.ExternalAgentToken, args map[string]any) (string, error) {
 	if s == nil {
 		return "", fmt.Errorf("this server is not initialized")
 	}
 	if tok == nil {
 		return "", fmt.Errorf("missing external agent credential")
+	}
+	if err := s.authorizeMCPRoleScope(ctx, r.Pattern); err != nil {
+		return "", err
 	}
 	rc, err := r.buildCall(args)
 	if err != nil {
@@ -1277,6 +1289,9 @@ func (r APIRoute) externalCall(ctx context.Context, s *Server, tok *model.Extern
 		return "", fmt.Errorf("reason is required: %s is destructive", r.Pattern)
 	}
 	if expect, ok := expectation(args); ok && r.takesExpect() {
+		if err := s.authorizeMCPRoleCall(ctx, r.Pattern, rc); err != nil {
+			return "", err
+		}
 		id := rc.params["id"]
 		detail, err := getTaskAsExternal(ctx, s, tok, id)
 		if err != nil {

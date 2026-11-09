@@ -62,7 +62,8 @@ func runDemoReconcile(ctx context.Context, store *model.Store, releases github.C
 }
 
 // demoReconcileCycle is one cycle of runDemoReconcile: "declarations",
-// "github-events", "github-ci-tails", "releases", "issue-imports", then
+// "github-events", "github-ci-tails", "releases", "issue-imports",
+// "release-pending", then
 // "suites", in the order orchestrator.Reconcilers runs them, each error
 // named after its reconciler as orchestrator.RunCycle names it.
 func demoReconcileCycle(ctx context.Context, store *model.Store, releases github.Client, now time.Time) error {
@@ -104,6 +105,14 @@ func demoReconcileCycle(ctx context.Context, store *model.Store, releases github
 		// a repository with it switched on imports at its interval here
 		// as it does on a daemon, not only on "Import issues now".
 		if err := runDemoReconcilers(ctx, orchestrator.Deps{Store: store, Client: releases}, now, "issue-imports"); err != nil {
+			errs = append(errs, err)
+		}
+		// A -pending tag on a repository that releases from GitHub
+		// Actions raises release.pending as the daemon's own reconciler
+		// does (orchestrator.reconcileReleasePending, at most every 10
+		// minutes per repository), so a walkthrough can seed one in the
+		// sim and Approve it from the Inbox.
+		if err := runDemoReconcilers(ctx, orchestrator.Deps{Store: store, Client: releases}, now, "release-pending"); err != nil {
 			errs = append(errs, err)
 		}
 	}

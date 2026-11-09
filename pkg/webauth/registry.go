@@ -405,11 +405,61 @@ func validateRegistryTokenWithClient(ctx context.Context, client *http.Client, t
 	if lifetime <= 0 || lifetime > registryMaxLifetime {
 		return nil, fmt.Errorf("invalid registry JWT lifetime %s (must be in (0, %s])", lifetime, registryMaxLifetime)
 	}
-	if len(bytes.TrimSpace(claims.Act)) > 0 {
-		return nil, errors.New("registry JWT carries reserved act claim, which is not supported until delegated-identity verification is enabled")
+	if _, err := IdentityFromRegistryClaims(claims); err != nil {
+		return nil, err
 	}
 
 	return claims, nil
+}
+
+type registryActClaim struct {
+	Sub    string `json:"sub"`
+	Kind   string `json:"kind"`
+	App    string `json:"app,omitempty"`
+	Grant  string `json:"grant,omitempty"`
+	Access string `json:"access"`
+}
+
+func parseRegistryActClaim(raw json.RawMessage, rawTopKind PrincipalKind, topEmail, topSub, jti string) (*DelegatingApp, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return nil, nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &obj); err != nil || obj == nil {
+		return nil, errors.New("registry JWT act claim must be a JSON object")
+	}
+	if _, hasNested := obj["act"]; hasNested {
+		return nil, errors.New("registry JWT carries nested act.act claim: chained delegation is not supported")
+	}
+	var act registryActClaim
+	if err := json.Unmarshal(trimmed, &act); err != nil {
+		return nil, fmt.Errorf("malformed registry JWT act claim: %w", err)
+	}
+	if strings.TrimSpace(act.Kind) != string(PrincipalService) {
+		return nil, fmt.Errorf("registry JWT act claim: act.kind %q must be %q", act.Kind, PrincipalService)
+	}
+	actEmail := NormalizeIdentityEmail(act.Sub)
+	if actEmail == "" || !strings.Contains(actEmail, "@") || PrincipalKindForEmail(actEmail) != PrincipalService {
+		return nil, fmt.Errorf("registry JWT act claim: act.sub %q must be a service account email", act.Sub)
+	}
+	access := strings.TrimSpace(act.Access)
+	if access != "" && access != "read" && access != "write" {
+		return nil, fmt.Errorf("registry JWT act claim: act.access %q must be \"read\" or \"write\"", act.Access)
+	}
+	if rawTopKind != PrincipalHuman {
+		return nil, fmt.Errorf("registry JWT carrying act claim requires top-level kind %q, got %q", PrincipalHuman, rawTopKind)
+	}
+	if PrincipalKindForEmail(topEmail) != PrincipalHuman || (topSub != "" && PrincipalKindForEmail(topSub) != PrincipalHuman) {
+		return nil, fmt.Errorf("registry JWT carrying act claim requires human top-level subject, got %q", topEmail)
+	}
+	return &DelegatingApp{
+		Email:  actEmail,
+		Name:   strings.TrimSpace(act.App),
+		Grant:  strings.TrimSpace(act.Grant),
+		Access: access,
+		JTI:    strings.TrimSpace(jti),
+	}, nil
 }
 
 // IdentityFromRegistryClaims extracts and normalizes the VerifiedIdentity from
@@ -417,9 +467,6 @@ func validateRegistryTokenWithClient(ctx context.Context, client *http.Client, t
 func IdentityFromRegistryClaims(claims *RegistryClaims) (VerifiedIdentity, error) {
 	if claims == nil {
 		return VerifiedIdentity{}, errors.New("nil registry claims")
-	}
-	if len(bytes.TrimSpace(claims.Act)) > 0 {
-		return VerifiedIdentity{}, errors.New("registry JWT carries reserved act claim, which is not supported until delegated-identity verification is enabled")
 	}
 	if claims.EmailVerified != nil && !*claims.EmailVerified {
 		return VerifiedIdentity{}, errors.New("registry token email_verified is false")
@@ -431,6 +478,9 @@ func IdentityFromRegistryClaims(claims *RegistryClaims) (VerifiedIdentity, error
 	}
 	if email == "" {
 		email = sub
+	}
+	if sub == "" {
+		sub = email
 	}
 	if email == "" {
 		return VerifiedIdentity{}, errors.New("no email or subject found in verified registry token claims")
@@ -451,9 +501,18 @@ func IdentityFromRegistryClaims(claims *RegistryClaims) (VerifiedIdentity, error
 	default:
 		return VerifiedIdentity{}, fmt.Errorf("unsupported registry principal kind %q", claims.Kind)
 	}
+	via, err := parseRegistryActClaim(claims.Act, rawKind, email, sub, claims.ID)
+	if err != nil {
+		return VerifiedIdentity{}, err
+	}
+	if via != nil && via.RequestID == "" {
+		via.RequestID = strings.TrimSpace(claims.RequestID)
+	}
 	return VerifiedIdentity{
 		Email: email,
+		Sub:   sub,
 		Kind:  kind,
+		Via:   via,
 	}, nil
 }
 
@@ -636,6 +695,11 @@ func (v *RegistryVerifier) VerifyRequest(r *http.Request) (VerifiedIdentity, boo
 	id, err := IdentityFromRegistryClaims(claims)
 	if err != nil {
 		return VerifiedIdentity{}, false, err
+	}
+	if id.Via != nil {
+		if hdrRID := strings.TrimSpace(r.Header.Get("X-Grain-Request-Id")); hdrRID != "" {
+			id.Via.RequestID = hdrRID
+		}
 	}
 	return id, true, nil
 }

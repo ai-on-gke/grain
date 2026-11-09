@@ -319,6 +319,59 @@ func TestASuiteCannotNameATemplateThisRepoDoesNotDeclare(t *testing.T) {
 	}
 }
 
+// A suite's `qualification:` stanza travels beside it to the sync,
+// as the file wrote it; a suite without one has none.
+func TestASuiteDeclaresItselfAReleaseGate(t *testing.T) {
+	declared := load(t, map[string]string{
+		".grain/templates/smoke.yml": "title: Smoke the edition\n",
+		".grain/suites/edition-qualification.yml": `
+templates: [smoke]
+mode: until-clean
+max-passes: 1
+qualification:
+  check: grain/edition-qualification
+  candidate: synced-release
+  stage1: { status: grain/edition-qualification }
+`,
+		".grain/suites/sweep.yml": "templates: [smoke]\n",
+	})
+	if len(declared.Suites) != 2 {
+		t.Fatalf("declared %d suites, want 2", len(declared.Suites))
+	}
+	byPath := map[string]model.DeclaredSuiteFile{}
+	for _, f := range declared.Suites {
+		byPath[f.Path] = f
+	}
+	got := byPath[".grain/suites/edition-qualification.yml"].Qualification
+	want := model.SuiteQualification{Check: "grain/edition-qualification", Candidate: model.CandidateSyncedRelease,
+		Stage1Status: "grain/edition-qualification"}
+	if got == nil || *got != want {
+		t.Errorf("qualification = %+v, want %+v", got, want)
+	}
+	if q := byPath[".grain/suites/sweep.yml"].Qualification; q != nil {
+		t.Errorf("a suite with no stanza has qualification %+v, want none", q)
+	}
+}
+
+func TestABadQualificationStanzaIsRefused(t *testing.T) {
+	for stanza, want := range map[string]string{
+		"qualification:\n  candidate: nightly-tags\n":                     "candidate",
+		"qualification:\n  stage1: { workflow: nightly, status: ci }\n":   "not both",
+		"qualification:\n  stage1: {}\n":                                  "stage1",
+		"qualification:\n  checks: grain/x\n":                             "checks",
+		"qualification:\n  upstream: example.com/acme/core\n":             "only read",
+		"qualification:\n  candidate: synced-release\n  upstream: nope\n": "upstream",
+	} {
+		msg := loadErr(t, map[string]string{
+			".grain/templates/smoke.yml": "title: Smoke\n",
+			".grain/suites/gate.yml":     "templates: [smoke]\n" + stanza,
+		})
+		if !strings.Contains(msg, want) {
+			t.Errorf("%q: error = %q, want it to mention %q", stanza, msg, want)
+		}
+	}
+}
+
 func TestScheduleFiresADeclaredTemplateOnACadence(t *testing.T) {
 	declared := load(t, map[string]string{
 		".grain/templates/nightly.yml": "title: Bump dependencies\n",
@@ -794,8 +847,179 @@ trigger:
 	if msg := loadErr(t, files); !strings.Contains(msg, "grain's own configuration") {
 		t.Fatalf("watching grain/config: error = %q", msg)
 	}
+	// A retired per-team alias is refused too, as POST /api/schedules
+	// refuses it (docs/test-runs/2026-11-07-releases-upgrades-ci.md, Bug F5).
+	files[".grain/schedules/sync.yml"] = "template: sync\ntrigger:\n  git_ref:\n    repo: grain/config-alpha\n    ref: refs/heads/main\n"
+	if msg := loadErr(t, files); !strings.Contains(msg, "grain/config-alpha not found: only grain/config exists") {
+		t.Fatalf("watching retired grain/config-alpha: error = %q", msg)
+	}
 	files[".grain/schedules/sync.yml"] = "trigger:\n  git_ref:\n    repo: upstream/core\n    ref: refs/tags/latest\n"
 	if msg := loadErr(t, files); !strings.Contains(msg, "needs a `template:`") {
 		t.Fatalf("no template: error = %q", msg)
+	}
+}
+
+func TestDeclaredAdmissionAndLegacyCapabilityAliases(t *testing.T) {
+	declared := load(t, map[string]string{
+		".grain/templates/urgent.yml": "title: Urgent\nadmission: bypass\n",
+		".grain/templates/legacy.yml": "title: Legacy\ncapabilities:\n  - priority-dispatch\n  - durable\n",
+		".grain/schedules/urgent.yml": "template: urgent\nevery:\n  hours: 2\nadmission: durable\n",
+		".grain/schedules/legacy.yml": "template: legacy\nevery:\n  hours: 4\ncapabilities:\n  - priority-dispatch\n",
+	})
+	tmpls := map[string]model.Template{}
+	for _, f := range declared.Templates {
+		tmpls[f.Template.Name] = f.Template
+	}
+	if tmpls["urgent"].Admission != model.AdmissionBypass {
+		t.Errorf("urgent template Admission = %q, want %q", tmpls["urgent"].Admission, model.AdmissionBypass)
+	}
+	if tmpls["legacy"].Admission != model.AdmissionDurable {
+		t.Errorf("legacy template Admission = %q, want %q", tmpls["legacy"].Admission, model.AdmissionDurable)
+	}
+	if len(tmpls["legacy"].Grants) != 0 {
+		t.Errorf("legacy template Grants = %+v, want none", tmpls["legacy"].Grants)
+	}
+	scheds := map[string]model.Schedule{}
+	for _, f := range declared.Schedules {
+		scheds[f.Schedule.Title] = f.Schedule
+	}
+	if scheds["urgent"].Admission != model.AdmissionDurable {
+		t.Errorf("urgent schedule Admission = %q, want %q", scheds["urgent"].Admission, model.AdmissionDurable)
+	}
+	if scheds["legacy"].Admission != model.AdmissionBypass || len(scheds["legacy"].Grants) != 0 {
+		t.Errorf("legacy schedule = (%q, %+v), want (bypass, empty grants)", scheds["legacy"].Admission, scheds["legacy"].Grants)
+	}
+
+	if msg := loadErr(t, map[string]string{
+		".grain/templates/bad.yml": "title: Bad\nadmission: turbo\n",
+	}); !strings.Contains(msg, "admission") {
+		t.Errorf("invalid template admission error = %q, want mention of admission", msg)
+	}
+	if msg := loadErr(t, map[string]string{
+		".grain/settings.yml": "default-admission: bypass\n",
+	}); !strings.Contains(msg, "default-admission") {
+		t.Errorf("repo default-admission error = %q, want refusal of default-admission", msg)
+	}
+}
+
+func TestDeclaredHostingAndLegacyCapabilityAlias(t *testing.T) {
+	declared := load(t, map[string]string{
+		".grain/templates/shell.yml":  "title: Shell\nhosting: console\n",
+		".grain/templates/legacy.yml": "title: Legacy\ncapabilities:\n  - console\n",
+		".grain/schedules/shell.yml":  "template: shell\nevery:\n  hours: 2\nhosting: console\n",
+		".grain/schedules/legacy.yml": "template: legacy\nevery:\n  hours: 4\ncapabilities:\n  - console\n",
+	})
+	tmpls := map[string]model.Template{}
+	for _, f := range declared.Templates {
+		tmpls[f.Template.Name] = f.Template
+	}
+	if tmpls["shell"].Hosting != model.HostingConsole {
+		t.Errorf("shell template Hosting = %q, want %q", tmpls["shell"].Hosting, model.HostingConsole)
+	}
+	if tmpls["legacy"].Hosting != model.HostingConsole || len(tmpls["legacy"].Grants) != 0 {
+		t.Errorf("legacy template = (%q, %+v), want (console, empty grants)", tmpls["legacy"].Hosting, tmpls["legacy"].Grants)
+	}
+	scheds := map[string]model.Schedule{}
+	for _, f := range declared.Schedules {
+		scheds[f.Schedule.Title] = f.Schedule
+	}
+	if scheds["shell"].Hosting != model.HostingConsole {
+		t.Errorf("shell schedule Hosting = %q, want %q", scheds["shell"].Hosting, model.HostingConsole)
+	}
+	if scheds["legacy"].Hosting != model.HostingConsole || len(scheds["legacy"].Grants) != 0 {
+		t.Errorf("legacy schedule = (%q, %+v), want (console, empty grants)", scheds["legacy"].Hosting, scheds["legacy"].Grants)
+	}
+
+	if msg := loadErr(t, map[string]string{
+		".grain/templates/bad.yml": "title: Bad\nhosting: ssh\n",
+	}); !strings.Contains(msg, "hosting") {
+		t.Errorf("invalid template hosting error = %q, want mention of hosting", msg)
+	}
+	if msg := loadErr(t, map[string]string{
+		".grain/suites/nightly.yml":  "name: Nightly\ntemplates: [shell]\n",
+		".grain/templates/shell.yml": "title: Shell\n",
+		".grain/schedules/bad.yml":   "suite: nightly\nbase: main\nevery:\n  hours: 24\nhosting: console\n",
+	}); !strings.Contains(msg, "hosting") {
+		t.Errorf("suite schedule hosting error = %q, want refusal of hosting", msg)
+	}
+	if msg := loadErr(t, map[string]string{
+		".grain/settings.yml": "default-hosting: console\n",
+	}); !strings.Contains(msg, "default-hosting") {
+		t.Errorf("repo default-hosting error = %q, want refusal of default-hosting", msg)
+	}
+}
+
+// A .grain template or schedule that declares `capabilities: [grain-ci]` (or
+// its canonical grain#ci ref) wants read-only CI access to its own declaring
+// repository: grain#ci itself is stripped by applyGrainCIGrant on a
+// ci_mode: github repository and refused by CreateTask.
+func TestDeclaredGrainCICapabilityMapsToRepoScopedCIRead(t *testing.T) {
+	want := model.APIGrantPrefix + "ci-read@" + repo.String()
+	for _, entry := range []string{"grain-ci", model.GrainCIRef, model.GrainCIGrant} {
+		declared := load(t, map[string]string{
+			".grain/templates/train.yml": "title: Run train\ncapabilities:\n  - '" + entry + "'\n",
+			".grain/schedules/train.yml": "template: train\nevery:\n  minutes: 20\ncapabilities:\n  - '" + entry + "'\n",
+		})
+		if len(declared.Templates) != 1 || len(declared.Templates[0].Template.Grants) != 1 ||
+			declared.Templates[0].Template.Grants[0].Capability != want {
+			t.Errorf("template(%q) grants = %+v, want [{Capability:%s}]", entry, declared.Templates[0].Template.Grants, want)
+		}
+		if len(declared.Schedules) != 1 || len(declared.Schedules[0].Schedule.Grants) != 1 ||
+			declared.Schedules[0].Schedule.Grants[0].Capability != want {
+			t.Errorf("schedule(%q) grants = %+v, want [{Capability:%s}]", entry, declared.Schedules[0].Schedule.Grants, want)
+		}
+	}
+
+	// Malformed capability-reference JSON is still rejected at parse time.
+	if msg := loadErr(t, map[string]string{
+		".grain/templates/train.yml": "title: Run train\ncapabilities:\n  - 'https://grain.dev/capabilities/grain#ci={bad'\n",
+	}); msg == "" {
+		t.Fatal("malformed grain#ci capability ref loaded without error")
+	}
+}
+
+// repo#target (and repo#read / repo#write carrying a base) are task-request
+// projections rather than capability grants: CreateTask refuses them, so a
+// declaration naming one could never file a task. Refusing them here moves
+// that verdict to `grain declarations check` and the declaration sync
+// (docs/test-runs/2026-11-09-store-upgrades-128-129.md, O3).
+func TestDeclaredCapabilitiesRefuseRepoTargetAndRequestFieldShapes(t *testing.T) {
+	targetMessage := "always target the declaring repository (" + repo.String() + "), and its base is `base:`"
+	for _, entry := range []string{
+		"  - '" + model.RepoTargetRef + `={"repo":"acme/widgets","base":"main"}'` + "\n",
+		"  - '" + model.RepoTargetRef + "'\n",
+		"  - capability: " + model.RepoTargetRef + "\n    with:\n      repo: acme/widgets\n      base: main\n",
+	} {
+		for _, baseLine := range []string{"", "base: main\n"} {
+			msg := loadErr(t, map[string]string{
+				".grain/templates/t.yml": "title: Mixed\n" + baseLine + "capabilities:\n" + entry,
+			})
+			if !strings.Contains(msg, model.RepoTargetRef) || !strings.Contains(msg, targetMessage) {
+				t.Errorf("template(%s%s): error = %q, want %s and %q", baseLine, entry, msg, model.RepoTargetRef, targetMessage)
+			}
+		}
+		schedMsg := loadErr(t, map[string]string{
+			".grain/templates/t.yml": "title: Plain\n",
+			".grain/schedules/s.yml": "template: t\nevery:\n  hours: 6\ncapabilities:\n" + entry,
+		})
+		if !strings.Contains(schedMsg, model.RepoTargetRef) || !strings.Contains(schedMsg, targetMessage) {
+			t.Errorf("schedule(%s): error = %q, want %s and %q", entry, schedMsg, model.RepoTargetRef, targetMessage)
+		}
+	}
+
+	for _, tc := range []struct {
+		entry string
+		want  string
+	}{
+		{model.RepoWriteRef + `={"repo":"acme/other","base":"release"}`, "always lands on its default branch"},
+		{model.RepoWriteRef + `={"repo":"acme/other","base":""}`, "always lands on its default branch"},
+		{model.RepoReadRef + `={"repo":"acme/other","base":"main"}`, "takes only `repo: <owner>/<repo>`, not `base`"},
+	} {
+		msg := loadErr(t, map[string]string{
+			".grain/templates/t.yml": "title: Mixed\ncapabilities:\n  - '" + tc.entry + "'\n",
+		})
+		if !strings.Contains(msg, tc.want) {
+			t.Errorf("template(%q): error = %q, want %q", tc.entry, msg, tc.want)
+		}
 	}
 }

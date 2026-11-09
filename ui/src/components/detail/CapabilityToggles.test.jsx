@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import DetailOverlay from "../DetailOverlay.jsx";
 import api from "../../api.js";
-import { chooseOption, removeOption } from "../../searchSelectTesting.js";
 import { resetDetailMocks, baseTask, config } from "./testFixtures.js";
 
 vi.mock("../../api.js", () => ({ default: vi.fn().mockResolvedValue(null) }));
@@ -26,94 +25,48 @@ vi.mock("../../attachments.js", () => ({ default: vi.fn() }));
 describe("DetailOverlay capabilities", () => {
   afterEach(resetDetailMocks);
 
-  it("toggles a capability via the capabilities select", async () => {
-    // act must run its mutate callback synchronously, the same as the
-    // real App.jsx does -- the callback closes over the change event's
-    // selection, computed from the task's current capabilities, which
-    // would otherwise be stale by the time a deferred `act.mock.calls`
-    // invocation (as the other assertions in this file use) ran it.
+  it("edits https://grain.dev/capabilities/api# grants in GrantsPicker, with no legacy checklist", async () => {
     const act = vi.fn((mutate) => mutate());
     const user = userEvent.setup();
-    render(
-      <DetailOverlay
-        task={baseTask}
-        tasks={[]}
-        config={config}
-        onClose={() => {}}
-        onOpenTask={() => {}}
-        act={act}
-      />,
-    );
-
-    await chooseOption(
-      user,
-      screen.getByLabelText("Legacy capabilities"),
-      "Web search",
-    );
-
-    expect(api).toHaveBeenCalledWith("/api/tasks/12/capabilities", {
-      method: "POST",
-      body: JSON.stringify({ id: "web-search", attach: true }),
-    });
-  });
-
-  // A capability the picker stopped listing since the task was granted
-  // it ("scratch-repo", renamed to github-sandbox in
-  // bwsalmon/agents#612) still needs a row of its own, or the chip for
-  // it has nothing to untick and the grant -- which fails every run of
-  // the task holding it -- can never be removed.
-  it("offers a row for a granted capability the picker no longer lists", async () => {
-    const act = vi.fn((mutate) => mutate());
-    const user = userEvent.setup();
-    const task = { ...baseTask, capabilities: ["scratch-repo"] };
+    const refGrant =
+      'https://grain.dev/capabilities/api#ci:read={"repo":"acme/widgets"}';
+    const task = {
+      ...baseTask,
+      capabilities: ["web-search", refGrant],
+    };
     render(
       <DetailOverlay
         task={task}
         tasks={[]}
-        config={config}
+        config={{
+          ...config,
+          capabilities: [
+            ...(config.capabilities || []),
+            { id: "api:ci:read", summary: "Read CI", description: "Read CI" },
+          ],
+        }}
         onClose={() => {}}
         onOpenTask={() => {}}
         act={act}
       />,
     );
 
-    await chooseOption(
-      user,
-      screen.getByLabelText("Legacy capabilities"),
-      "scratch-repo",
+    expect(screen.queryByLabelText("Legacy capabilities")).toBeNull();
+    const grants = screen.getByTestId("task-12-grants");
+    const apiLine = within(grants).getByLabelText(
+      "api:ci:read on acme/widgets",
     );
-
+    await user.click(within(apiLine).getByRole("button", { name: /remove/i }));
     expect(api).toHaveBeenCalledWith("/api/tasks/12/capabilities", {
       method: "POST",
-      body: JSON.stringify({ id: "scratch-repo", attach: false }),
+      body: JSON.stringify({ id: refGrant, attach: false }),
     });
-  });
 
-  // Its chip takes a grant off as well as its row does.
-  it("detaches a capability from its chip", async () => {
-    const act = vi.fn((mutate) => mutate());
-    const user = userEvent.setup();
-    const task = { ...baseTask, capabilities: ["scratch-repo"] };
-    render(
-      <DetailOverlay
-        task={task}
-        tasks={[]}
-        config={config}
-        onClose={() => {}}
-        onOpenTask={() => {}}
-        act={act}
-      />,
-    );
-
-    await removeOption(
-      user,
-      screen.getByLabelText("Legacy capabilities"),
-      "scratch-repo",
-    );
-
+    const bareLine = within(grants).getByLabelText("web-search");
+    await user.click(within(bareLine).getByRole("button", { name: /remove/i }));
     expect(api).toHaveBeenCalledWith("/api/tasks/12/capabilities", {
       method: "POST",
-      body: JSON.stringify({ id: "scratch-repo", attach: false }),
+      body: JSON.stringify({ grant: "web-search", attach: false }),
     });
   });
 });

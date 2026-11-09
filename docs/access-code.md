@@ -19,11 +19,12 @@ from IAP's signed assertion instead
 (`design/design/authentication.design.md`). Which credentials the
 network listener takes depends on two settings:
 
-| Mode | Set | The access code | An IAP assertion |
+| Mode | Set | The access code | A signed proxy assertion |
 | --- | --- | --- | --- |
 | **No IAP** | neither | accepted from anywhere, as below | not checked (logged and ignored) |
 | **IAP, code still accepted** | `-ui-iap-audience` | accepted from anywhere | verified, and its person is signed in |
 | **IAP required** | `-ui-iap-audience` and `-ui-require-iap` | only over loopback with no forwarding headers ([break-glass](#break-glass-over-loopback)) | verified, and its person is signed in |
+| **Hub required** | `-ui-registry-{issuer,audience,keys-url}` and `-ui-require-verifier=registry` | only over loopback with no forwarding headers ([break-glass SSH](#break-glass-ssh-on-registry-hosted-instances)) | `X-Grain-Registry-Assertion` verified, and its person is signed in |
 
 - **No IAP.** Local and standalone deployments. Everything on this page
   applies as written.
@@ -54,8 +55,38 @@ network listener takes depends on two settings:
   two together with a name other than `iap` are refused. It closes the
   network listener to the access code the same way, and the daemon
   refuses to start unless an `IdentityVerifier` of that name is active
-  (for `iap`, an IAP audience; otherwise one a wrapper build registered).
+  (for `iap`, an IAP audience; for `registry`, all three of
+  `-ui-registry-issuer`, `-ui-registry-audience` and
+  `-ui-registry-keys-url`; otherwise one a wrapper build registered).
   Any active verifier's assertion still signs its caller in.
+- **Behind the Grain Hub (`-ui-require-verifier=registry`).**
+  Core ships a built-in `registry` verifier ([`docs/registry.md`](registry.md))
+  alongside `iap`, active when `-ui-registry-issuer`
+  (`GRAIN_REGISTRY_ISSUER`), `-ui-registry-audience`
+  (`GRAIN_REGISTRY_AUDIENCE`) and `-ui-registry-keys-url`
+  (`GRAIN_REGISTRY_KEYS_URL`) are all set. It verifies the short-lived
+  ES256 `X-Grain-Registry-Assertion` JWT that `grain-registry` signs on
+  every proxied request to `https://<name>.<instance-domain>/`, checking
+  the signature against the hub's JWKS
+  (`https://<registry-host>/.well-known/jwks.json`), exact `iss`
+  equality, single-audience `aud` equality
+  (`https://<name>.<instance-domain>`), and `exp`/`iat`/`nbf` bounds.
+  Its `AccessCodeWins()` is `false`: a verified hub assertion always
+  takes precedence over the access code, and an invalid assertion fails
+  closed with `401`. Hosted VM instances created by the hub run with
+  `-ui-require-verifier=registry`, closing the network listener to the
+  access code while keeping unforwarded loopback open for break-glass SSH
+  ([Break-glass SSH on registry-hosted instances](#break-glass-ssh-on-registry-hosted-instances)).
+  On external `connected` grains running `-registry-connect`, streams
+  arriving over the outbound `/api/entries/<name>/connect` tunnel are
+  served in-process over a `MuxListener` (`RemoteAddr` is
+  `stream-<id>-remote`, never `127.0.0.1`) behind a mandatory
+  tunnel-ingress gate that unconditionally requires a valid
+  `X-Grain-Registry-Assertion` and never accepts `grain_access` cookies,
+  `X-Grain-Access-Code` or bearer access codes over the tunnel -- even if
+  a workstation daemon omits `-ui-require-verifier=registry` on its local
+  `127.0.0.1` TCP listener so local CLI commands can still use the access
+  code directly.
 
 Neither flag stops a wrapper build's own `IdentityVerifier` that declares
 the access code wins over it (`AccessCodeWins()`, as a verifier behind an
@@ -68,15 +99,71 @@ sandbox (the git and API proxy, `grain mcpserver`) work as before.
 
 ### Break-glass over loopback
 
-With `-ui-require-iap` the code is still accepted from `127.0.0.1` or
-`::1` when the request carries none of `X-Forwarded-For`, `Forwarded`,
-`X-Real-Ip`, IAP's headers or any registered verifier's headers. A proxy
-on the same host therefore cannot relay somebody's code in. That leaves
-a way in which does not depend on IAP, from the daemon's own host:
+With `-ui-require-iap` or `-ui-require-verifier=<name>` (including
+`-ui-require-verifier=registry`) the code is still accepted from
+`127.0.0.1` or `::1` when the request carries none of `X-Forwarded-For`,
+`Forwarded`, `X-Real-Ip`, IAP's headers (`X-Goog-IAP-JWT-Assertion`),
+`X-Grain-Registry-Assertion` or any registered verifier's headers. A
+proxy on the same host therefore cannot relay somebody's code in. That
+leaves a way in which does not depend on IAP or the hub proxy, from
+the daemon's own host:
 
 ```bash
 kubectl -n grain exec deploy/grain -- env GRAIN_SERVER=http://127.0.0.1:8080 GRAIN_DATA_DIR=/data grain list
 ```
+
+### Break-glass SSH on registry-hosted instances
+
+Hosted VM instances provisioned by `grain-registry` (`kind = instance`,
+[`docs/registry.md`](registry.md)) run with
+`-ui-require-verifier=registry` and have no external IP address, so the
+access code is never accepted over `https://<name>.<instance-domain>/` or
+over the VPC listener when proxy headers are present.
+
+When break-glass SSH is enabled (`compute.ssh_break_glass: true` in the
+hub configuration, the default, and `-allow-ssh` on the entry), the
+hub grants the entry's accountable human `owner` (`user:<owner>`)
+conditional OS Login administrator and IAP TCP-forwarding bindings
+(`roles/compute.osAdminLogin` and `roles/iap.tunnelResourceAccessor`) on
+that instance VM (`<vm-prefix><name>`). The owner can open a shell on the
+VM through IAP TCP forwarding without exposing a public SSH port:
+
+```bash
+gcloud compute ssh <vm-name> \
+  --project <instances-project> \
+  --zone <zone> \
+  --tunnel-through-iap
+```
+
+From inside that SSH session (or over an unforwarded local SSH port
+tunnel `-L 8080:127.0.0.1:8080`), requests hit `http://127.0.0.1:8080`
+directly over loopback with no proxy or verifier headers, where the
+daemon accepts the access code:
+
+```bash
+# On the instance VM:
+grain access-code
+grain access list
+grain access allow user:alice@example.com --reason "restore owner sign-in"
+```
+
+Because hosted VMs are disposable and replaced on upgrades, shape
+resizes and VM recoveries, `grain-instance-init` persists the instance's
+break-glass access code (`local-api-token`) in Google Cloud Secret
+Manager under the instance's isolated secret prefix
+(`grain-inst-<name>-local-api-token`) and materializes it into
+`/run/grain-secrets` (`0700` `tmpfs`) before `grain-daemon` starts.
+Replacing the VM therefore preserves the break-glass access code until
+you rotate it.
+
+Break-glass SSH stays bound to the entry's individual accountable
+`owner` (not pooled across `owner_group` by default) so root shell access
+remains individually attributable; when ownership is transferred
+(`grain registry transfer` / `grain registry accept-transfer`), the
+hub revokes the previous owner's SSH bindings and grants them to the
+new owner. Deployments that forbid shell access to hosted VMs can disable
+break-glass SSH across the hub (`compute.ssh_break_glass: false`) or
+per entry (`grain registry update -allow-ssh=false <name>`).
 
 ## Who is let in
 
@@ -141,9 +228,13 @@ the database (`allowed_principal`).
 - **Routes outside the scope table:** the SPA's static pages are served
   to every admitted caller, and so are sign-in, `GET /api/config` and
   `whoami`. Event streams, console terminals and file downloads are
-  ordinary scoped routes. `/api/mcp`, `/mcp`, persistent sandboxes'
-  `/staging/` services and a run's own plumbing routes are refused to
-  every role that does not hold every scope.
+  ordinary scoped routes. `/api/mcp` and `/mcp` admit any signed-in role
+  and check each tool call against the caller's role using the scope and
+  repository rules of the route that tool maps to (filtering tool
+  discovery and `grain_filing_context` to the role's scopes and naming
+  the missing scope on a refused call). Persistent sandboxes' `/staging/`
+  services and a run's own plumbing routes are refused to every role that
+  does not hold every scope.
 - **Live changes (no restart):** Adding or removing an entry takes
   effect immediately. Manage the list in **Settings → Access → Allowed
   users and groups** (`/settings/access#allowed-principals`), over the
@@ -229,8 +320,13 @@ never changes the code.
 
 Behind IAP, the browser signs in through IAP's Google sign-in, and
 grain shows no code page to a caller whose assertion verifies. With
-`-ui-require-iap` there is no code page at all. The rest of this
-section is how the code works where it is accepted.
+`-ui-require-iap` there is no code page at all. A browser whose request
+carries a verified assertion that posts the code anyway gets a `403`
+saying that its IAP sign-in, not the code, decides its role, and no
+cookie. The code is not checked, so the refusal does not say whether it
+was right. To use the code, run it over loopback ([Break-glass over
+loopback](#break-glass-over-loopback)). The rest of this section is how
+the code works where it is accepted.
 
 A request to a single-tenant daemon that carries no valid code gets a
 minimal **Enter access code** page (`401`) and never the app. An API
@@ -299,11 +395,17 @@ same answer as any other wrong code.
 ### A host dialing in
 
 The daemon serves `GET /api/hostd/connect` without the access code. A
-`grain host -server` on another machine upgrades it and presents its
-host token, which says which host it is (the host registry,
-`/api/hostds`, or the deprecated shared `-hostd-token-file`). A bearer
-on that route (the host token, or an IAP token) is never counted as an
-access-code guess.
+`grain host -server` or `grain-agentd -server` on another machine upgrades
+it and presents its host credential (`ghd_...`), which says which host it is
+(the host registry in **Settings → Hosts** / `/api/hostds`, or the deprecated
+shared `-hostd-token-file`). Hosts enrolled via `--join` or migrated with
+`rekey` also sign every `/api/hostd/connect` request with their Ed25519
+private key (`X-Grain-Hostd-Timestamp`, `X-Grain-Hostd-Nonce`,
+`X-Grain-Hostd-Signature`, bounded to a 5-minute replay cache), so a copied
+credential without the host's private key is refused; their 30-day credentials
+renew silently while connected (`OpRenew` and `POST /api/hostd/renew`). A
+bearer on that route (the host credential, or an IAP token) is never counted
+as an access-code guess.
 
 What else the host needs depends on how it reaches the daemon:
 
@@ -329,25 +431,27 @@ What else the host needs depends on how it reaches the daemon:
   of a daemon that has no identity verifier configured. The co-located
   host at `/run/grain-hostd/hostd.sock` does not dial in at all.
 
-Set the owner when you register the host (Settings → Hosts,
-`grain host register -owner <email> <name>`, or `POST /api/hostds`),
-or later (`grain host set-owner <name> <email>`, or `PATCH
-/api/hostds/{name}`). For the shared token, use `-hostd-token-owner`.
-Start the host with `-iap-audience <IAP client ID>` so that it sends an
-ID token from its service account or its user's login. At startup it
-logs the email that token names, which is the owner the daemon expects.
+Set the owner automatically by enrolling with `--join <enrollment-code>` from
+**Settings → Hosts → Invite hosts** (the verified enrolling identity becomes
+the host's owner once the deployment owner accepts its join request), or set it on a legacy per-host token (**Settings → Hosts**,
+`grain host register -owner <email> <name>`, `POST /api/hostds`,
+`grain host set-owner <name> <email>`, or `PATCH /api/hostds/{name}`). For
+the shared token, use `-hostd-token-owner`. Start the host with
+`-iap-audience <IAP client ID>` so that it sends an ID token from its service
+account or its user's login. At startup it logs the email that token names,
+which is the owner the daemon expects.
 
-`GET /api/hostd/install.sh`, the script that sets such a host up
-(Settings → Hosts shows the command when it issues a token), is served
-without the access code too: the machine fetching it holds no credential
-yet, and the script carries none. It holds the daemon's URL as the
-request reached it, and reads the host token on the machine itself, from
-stdin or `$GRAIN_HOSTD_TOKEN`. The daemon's release and the image it runs
-are filled in only for a caller the gate would let through elsewhere (the
-access code or its session, or an admitted identity); anybody else's copy
-leaves them blank and refuses to guess a version. The command Settings →
-Hosts shows passes them as `--release` and `--image`; add
-`--iap-audience` for a host that dials in through IAP.
+`GET /hostd/install` (and `GET /api/hostd/install.sh`), `POST /api/hostd/join`,
+`POST /api/hostd/join/{id}/poll`, and `POST /api/hostd/renew` are served
+without the access code too: an enrolling host signs its join and poll
+requests with its generated Ed25519 keypair, presents a shared `ghe_...`
+enrollment code (which grants nothing except filing a pending join request)
+plus a verified enrolling identity (from the proxy `IdentityVerifier`,
+`ui.RegisterHostJoinVerifier`, or a GitHub device-flow token verified
+server-side), and waits for the deployment owner to accept it. For
+legacy per-host token installs, the script reads the token on the machine
+itself from stdin or `$GRAIN_HOSTD_TOKEN`; `--release` and `--image` are
+filled in only for an admitted caller or passed on the command line.
 
 The remote executor routes that were open the same way, including the
 executor bootstrap routes (`executorBootstrapRoute`), were removed with

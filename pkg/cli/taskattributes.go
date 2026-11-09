@@ -189,11 +189,21 @@ var taskStates = []model.State{
 // taskOrigins is every way a task can come to exist, and what the origin
 // attribute calls each -- the same set the UI's own Origin menu offers,
 // read off the same fields. A task carrying more than one marker is
-// reported as the most specific of them, which is why the order below is
-// the order taskOrigin tests them in: a merge fix is always generated
-// from another task, so calling it "proposed" would say the less
-// specific of two true things.
-var taskOrigins = []string{"hand", "external", "proposed", "schedule", "suite", "fix", "review"}
+// reported as the most specific of them, which is why the order below
+// runs from least to most specific (with schedule and suite together),
+// the reverse of the order taskOrigin tests them in: a merge fix is
+// always generated from another task, so calling it "proposed" would say
+// the less specific of two true things.
+var taskOrigins = []string{"hand", "external", "proposed", "imported", "schedule", "suite", "fix", "review"}
+
+// taskAdmissions is every admission a task can have (model.Admission), in
+// its own rank order -- standard < bypass < durable -- which is what
+// `-sort admission` orders by and what a typo is answered with.
+var taskAdmissions = []string{
+	string(model.AdmissionStandard),
+	string(model.AdmissionBypass),
+	string(model.AdmissionDurable),
+}
 
 func taskOrigin(t ui.Task) string {
 	switch {
@@ -207,6 +217,8 @@ func taskOrigin(t ui.Task) string {
 		return "schedule"
 	case t.SuiteRun:
 		return "suite"
+	case t.Imported:
+		return "imported"
 	case t.GeneratedFrom != "":
 		return "proposed"
 	// An external agent's credential files as the deployment's person
@@ -356,6 +368,20 @@ var builtinAttributes = attributeSet{
 			return []string{"off"}
 		},
 		order: []string{"on", "off"},
+	},
+	{
+		// How the task is admitted past the queue (ui.Task.Admission,
+		// model.Admission). A row with none is from a server older than
+		// the setting, and was run as standard work.
+		id:  "admission",
+		typ: typeEnum,
+		values: func(t ui.Task) []string {
+			if t.Admission == "" {
+				return []string{string(model.AdmissionStandard)}
+			}
+			return []string{t.Admission}
+		},
+		order: taskAdmissions,
 	},
 	{
 		// Held for a person's decision (ui.Task.HumanReviewHold), by the

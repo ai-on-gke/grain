@@ -14,7 +14,7 @@
 
 import { expect, test } from "./fixtures.js";
 
-// Settings → Registry (/settings/registry): three cards covering live
+// Settings → Hub (/settings/registry): three cards covering live
 // connected-entry status & advertised scopes (#registry-status), catalog
 // metadata & registration credential (#registry-config), and scope override
 // rules (#registry-scopes). Verifies alignment, right-slot placement on
@@ -26,9 +26,7 @@ for (const [name, viewport] of [
   ["desktop", DESKTOP],
   ["phone", PHONE],
 ]) {
-  test(`the registry settings section fits a ${name} screen`, async ({
-    page,
-  }) => {
+  test(`the hub settings section fits a ${name} screen`, async ({ page }) => {
     const pageErrors = [];
     page.on("pageerror", (err) => pageErrors.push(String(err)));
 

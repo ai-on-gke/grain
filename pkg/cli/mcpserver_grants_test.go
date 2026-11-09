@@ -44,29 +44,13 @@ func toolNames(tools []mcp.Tool) []string {
 	return names
 }
 
-// The bootstrap-playbooks grant needs no source checkout: the playbooks
-// are embedded in this binary, so the grant's name is the only thing
-// that has to reach this process.
-func TestGrantedToolsServesThePlaybooksForTheBootstrapGrant(t *testing.T) {
-	t.Parallel()
-	names := toolNames(grantedTools(daemon.GrantNames{"bootstrap-playbooks"}, "", "", ""))
-	for _, want := range []string{"list_bootstrap_playbooks", "read_bootstrap_playbook"} {
-		if !slices.Contains(names, want) {
-			t.Errorf("grantedTools = %v, want %s among them", names, want)
-		}
-	}
-	if slices.Contains(names, "read_grain_log") {
-		t.Errorf("grantedTools = %v, want nothing of grain-log's for a task without that grant", names)
-	}
-}
-
-// A task holding both grants at once gets both sets.
+// A task holding multiple grants at once gets every set.
 func TestGrantedToolsServesEveryGrantsTools(t *testing.T) {
 	t.Parallel()
-	names := toolNames(grantedTools(daemon.GrantNames{"grain-log", "bootstrap-playbooks"}, "", secretsDirWithAKey(t), "1"))
+	names := toolNames(daemon.GrantedDaemonTools(daemon.GrantNames{"grain-log", "deployment-health"}, "", secretsDirWithAKey(t), "/state", "1", nil))
 	for _, want := range []string{
 		"read_grain_log",
-		"list_bootstrap_playbooks", "read_bootstrap_playbook",
+		"read_deployment_health", "read_deployment_state",
 	} {
 		if !slices.Contains(names, want) {
 			t.Errorf("grantedTools = %v, want %s among them", names, want)
@@ -96,34 +80,6 @@ func TestDeploymentDiagnosticsRequireTheirOwnGrant(t *testing.T) {
 		if !slices.Contains(with, name) {
 			t.Errorf("deployment-health tools = %v, want %s", with, name)
 		}
-	}
-}
-
-// A playbook really is readable through the tool the grant hands over --
-// the end of the road that starts at a human attaching the label.
-func TestTheBootstrapGrantsToolsReadAnEmbeddedPlaybook(t *testing.T) {
-	t.Parallel()
-	tools := grantedTools(daemon.GrantNames{"bootstrap-playbooks"}, "", "", "")
-	var list, read mcp.Tool
-	for _, tool := range tools {
-		switch tool.Name {
-		case "list_bootstrap_playbooks":
-			list = tool
-		case "read_bootstrap_playbook":
-			read = tool
-		}
-	}
-	if list.Handler == nil || read.Handler == nil {
-		t.Fatalf("grantedTools = %v, want both playbook tools", toolNames(tools))
-	}
-	listed := list.Handler(context.Background(), nil)
-	if listed.IsError || strings.TrimSpace(listed.Text) == "" {
-		t.Fatalf("list_bootstrap_playbooks = %+v, want the embedded playbook names", listed)
-	}
-	name := strings.Split(listed.Text, "\n")[0]
-	body := read.Handler(context.Background(), map[string]any{"name": name})
-	if body.IsError || strings.TrimSpace(body.Text) == "" {
-		t.Fatalf("read_bootstrap_playbook(%q) = %+v, want the playbook's own markdown", name, body)
 	}
 }
 
@@ -243,13 +199,13 @@ func TestTheGrantFlagCollectsEveryName(t *testing.T) {
 	var grants daemon.GrantNames
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.Var(&grants, "grant", "")
-	if err := fs.Parse([]string{"-grant", "self-debug", "-grant", "bootstrap-playbooks"}); err != nil {
+	if err := fs.Parse([]string{"-grant", "self-debug", "-grant", "read-issues"}); err != nil {
 		t.Fatal(err)
 	}
-	if want := (daemon.GrantNames{"self-debug", "bootstrap-playbooks"}); !slices.Equal(grants, want) {
+	if want := (daemon.GrantNames{"self-debug", "read-issues"}); !slices.Equal(grants, want) {
 		t.Fatalf("-grant collected %v, want %v", grants, want)
 	}
-	if !grants.Has("bootstrap-playbooks") || grants.Has("self-repair") {
+	if !grants.Has("read-issues") || grants.Has("self-repair") {
 		t.Errorf("grants.has misread %v", grants)
 	}
 }

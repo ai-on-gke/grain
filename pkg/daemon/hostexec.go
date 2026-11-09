@@ -580,11 +580,12 @@ func remoteHostdHost(h *agent.HostdHost, remote *hostd.HostdCarrier) error {
 // a wedged hostd costs a resolution seconds rather than a dispatch.
 const hostdOffersTimeout = 3 * time.Second
 
-// hostdUnreachableTTL bounds how long a failed Offers dial is remembered
-// across resolutions while the socket or remote session is unchanged, so
-// polling GET /api/upgrade or Settings behind an unreachable grain hostd
-// waits out the dial timeout at most once per interval rather than on
-// every read.
+// hostdUnreachableTTL bounds how long a failed Offers dial is trusted
+// across resolutions while the socket or remote session is unchanged.
+// Past it the failure is still served (stale-while-revalidate) while one
+// background probe refreshes it, so polling GET /api/upgrade or Settings
+// behind an unreachable or hung grain hostd waits out the dial timeout
+// only on the very first read, never again once a failure is known.
 const hostdUnreachableTTL = 15 * time.Second
 
 var hostdOffersNow = time.Now
@@ -600,8 +601,22 @@ type hostdCacheTarget struct {
 type hostdTargetState struct {
 	socketPresent   bool
 	socketModUnixNs int64
+	socketInfo      os.FileInfo
 	remoteConnected bool
 	remoteSessions  int
+}
+
+func (a hostdTargetState) sameAs(b hostdTargetState) bool {
+	if a.socketPresent != b.socketPresent ||
+		a.socketModUnixNs != b.socketModUnixNs ||
+		a.remoteConnected != b.remoteConnected ||
+		a.remoteSessions != b.remoteSessions {
+		return false
+	}
+	if a.socketPresent && !os.SameFile(a.socketInfo, b.socketInfo) {
+		return false
+	}
+	return true
 }
 
 func currentHostdTargetState(exec HostExecutor) hostdTargetState {
@@ -621,6 +636,7 @@ func currentHostdTargetState(exec HostExecutor) hostdTargetState {
 	if info, err := os.Stat(exec.Socket); err == nil {
 		out.socketPresent = true
 		out.socketModUnixNs = info.ModTime().UnixNano()
+		out.socketInfo = info
 	}
 	return out
 }
@@ -632,11 +648,18 @@ type hostdOffersProbe struct {
 	err     error
 	aborted bool
 	at      time.Time
+	// stale is the expired failure, for the same target state, that this
+	// probe runs in the background to refresh. Until it finishes, callers
+	// are answered with stale rather than waiting on a hung hostd.
+	stale *hostdOffersProbe
 }
 
 type hostdUnreachableCache struct {
 	mu      sync.Mutex
 	targets map[hostdCacheTarget]*hostdOffersProbe
+	// refreshing counts background probes still in flight, so tests can
+	// let them finish before swapping hostdOffersNow back.
+	refreshing sync.WaitGroup
 }
 
 var sharedHostdUnreachableCache = &hostdUnreachableCache{
@@ -644,15 +667,19 @@ var sharedHostdUnreachableCache = &hostdUnreachableCache{
 }
 
 func resetHostdUnreachableCache() {
+	sharedHostdUnreachableCache.refreshing.Wait()
 	sharedHostdUnreachableCache.mu.Lock()
 	sharedHostdUnreachableCache.targets = map[hostdCacheTarget]*hostdOffersProbe{}
 	sharedHostdUnreachableCache.mu.Unlock()
 }
 
 // queryHostdOffers asks exec's hostd what it offers, coalescing concurrent
-// probes and reusing an unreachable answer for hostdUnreachableTTL until
-// the socket file or remote session changes. A reachable hostd is not
-// cached across calls, so edits to /etc/grain/hostd.yaml show up at once.
+// probes and reusing an unreachable answer until the socket file or remote
+// session changes. An unreachable answer older than hostdUnreachableTTL is
+// still returned at once while a background probe refreshes it, so only a
+// caller with no failure to go on ever waits out timeout. A reachable
+// hostd is not cached across calls, so edits to /etc/grain/hostd.yaml
+// show up at once.
 func queryHostdOffers(ctx context.Context, exec HostExecutor, timeout time.Duration) ([]hostd.Offer, error) {
 	target := hostdCacheTarget{socket: exec.Socket, remote: exec.Remote, name: exec.Hostd}
 	cache := sharedHostdUnreachableCache
@@ -662,17 +689,37 @@ func queryHostdOffers(ctx context.Context, exec HostExecutor, timeout time.Durat
 
 		cache.mu.Lock()
 		probe, ok := cache.targets[target]
-		reuse := false
-		if ok && probe.state == curState {
+		var serve *hostdOffersProbe // a known failure to answer with now
+		wait := false               // coalesce onto probe in flight
+		if ok && probe.state.sameAs(curState) {
 			select {
 			case <-probe.done:
-				reuse = probe.err != nil && !probe.aborted && now.Sub(probe.at) < hostdUnreachableTTL
+				if probe.err != nil && !probe.aborted {
+					serve = probe
+					if now.Sub(probe.at) >= hostdUnreachableTTL {
+						refresh := &hostdOffersProbe{
+							state: curState,
+							done:  make(chan struct{}),
+							stale: probe,
+						}
+						cache.targets[target] = refresh
+						cache.refreshing.Add(1)
+						go func() {
+							defer cache.refreshing.Done()
+							cache.run(context.WithoutCancel(ctx), exec, target, refresh, timeout)
+						}()
+					}
+				}
 			default:
-				reuse = true
+				if probe.stale != nil {
+					serve = probe.stale
+				} else {
+					wait = true
+				}
 			}
 		}
 		leader := false
-		if !reuse {
+		if serve == nil && !wait {
 			probe = &hostdOffersProbe{
 				state: curState,
 				done:  make(chan struct{}),
@@ -682,23 +729,12 @@ func queryHostdOffers(ctx context.Context, exec HostExecutor, timeout time.Durat
 		}
 		cache.mu.Unlock()
 
+		if serve != nil {
+			return serve.offers, serve.err
+		}
 		if leader {
-			octx, cancel := context.WithTimeout(ctx, timeout)
-			offers, err := exec.hostdClient().Offers(octx)
-			cancel()
-			aborted := err != nil && ctx.Err() != nil
-			if err == nil || aborted {
-				cache.mu.Lock()
-				if cache.targets[target] == probe {
-					delete(cache.targets, target)
-				}
-				cache.mu.Unlock()
-			}
-			probe.offers, probe.err = offers, err
-			probe.aborted = aborted
-			probe.at = hostdOffersNow()
-			close(probe.done)
-			return offers, err
+			cache.run(ctx, exec, target, probe, timeout)
+			return probe.offers, probe.err
 		}
 
 		select {
@@ -714,6 +750,27 @@ func queryHostdOffers(ctx context.Context, exec HostExecutor, timeout time.Durat
 			return nil, ctx.Err()
 		}
 	}
+}
+
+// run dials exec's hostd for probe, which is cache's entry for target,
+// and records the answer. A success, or a dial cut short by ctx rather
+// than by timeout, is dropped from the cache: only an unreachable answer
+// is remembered.
+func (cache *hostdUnreachableCache) run(ctx context.Context, exec HostExecutor, target hostdCacheTarget, probe *hostdOffersProbe, timeout time.Duration) {
+	octx, cancel := context.WithTimeout(ctx, timeout)
+	offers, err := exec.hostdClient().Offers(octx)
+	cancel()
+	aborted := err != nil && ctx.Err() != nil
+	cache.mu.Lock()
+	if (err == nil || aborted) && cache.targets[target] == probe {
+		delete(cache.targets, target)
+	}
+	probe.offers, probe.err = offers, err
+	probe.aborted = aborted
+	probe.at = hostdOffersNow()
+	probe.stale = nil
+	cache.mu.Unlock()
+	close(probe.done)
 }
 
 type hostdSocketEntry struct {

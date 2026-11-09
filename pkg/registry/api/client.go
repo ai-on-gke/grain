@@ -92,6 +92,12 @@ func IsRateLimited(err error) bool {
 	return errors.As(err, &ae) && ae.StatusCode == http.StatusTooManyRequests
 }
 
+// IsServiceUnavailable reports whether err is an HTTP 503 APIError.
+func IsServiceUnavailable(err error) bool {
+	var ae *APIError
+	return errors.As(err, &ae) && ae.StatusCode == http.StatusServiceUnavailable
+}
+
 func parseAPIError(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBytes))
 	ae := &APIError{
@@ -393,6 +399,9 @@ func (c *Client) Directory(ctx context.Context, q DirectoryQuery) (*DirectoryRes
 	if q.Kind != "" {
 		vals.Set("kind", string(q.Kind))
 	}
+	if q.HostKind != "" {
+		vals.Set("host_kind", string(q.HostKind))
+	}
 	if q.Owner != "" {
 		vals.Set("owner", q.Owner)
 	}
@@ -432,14 +441,29 @@ func (c *Client) ListEntries(ctx context.Context, q ListEntriesQuery) ([]Entry, 
 	if q.Owner != "" {
 		vals.Set("owner", q.Owner)
 	}
+	if q.OwnerGroup != "" {
+		vals.Set("owner_group", q.OwnerGroup)
+	}
 	if q.Kind != "" {
 		vals.Set("kind", string(q.Kind))
 	}
 	if q.Status != "" {
 		vals.Set("status", string(q.Status))
 	}
+	if q.Listed != nil {
+		vals.Set("listed", strconv.FormatBool(*q.Listed))
+	}
+	if q.Conflict != nil {
+		vals.Set("conflict", strconv.FormatBool(*q.Conflict))
+	}
 	if q.IncludeDeleted {
 		vals.Set("include_deleted", "true")
+	}
+	if q.All {
+		vals.Set("all", "true")
+	}
+	if q.Mine {
+		vals.Set("mine", "true")
 	}
 	var out ListEntriesResponse
 	if err := c.doJSON(ctx, http.MethodGet, "/api/entries", vals, nil, &out); err != nil {
@@ -487,11 +511,20 @@ func (c *Client) SetScopes(ctx context.Context, name string, scopes []ScopeInput
 	return &out, nil
 }
 
-// Heartbeat sends POST /api/entries/<name>/heartbeat.
+// Heartbeat sends PUT /api/entries/<name>/heartbeat.
 func (c *Client) Heartbeat(ctx context.Context, name string, req HeartbeatRequest) (*HeartbeatResponse, error) {
 	var out HeartbeatResponse
 	path := "/api/entries/" + url.PathEscape(name) + "/heartbeat"
-	if err := c.doJSON(ctx, http.MethodPost, path, nil, req, &out); err != nil {
+	if err := c.doJSON(ctx, http.MethodPut, path, nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// InstanceStatus fetches GET /api/registry/status from a grain instance.
+func (c *Client) InstanceStatus(ctx context.Context) (*InstanceStatusResponse, error) {
+	var out InstanceStatusResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/api/registry/status", nil, nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -543,6 +576,26 @@ func (c *Client) RestoreEntry(ctx context.Context, name string) (*Entry, error) 
 	return &out, nil
 }
 
+// StopEntry sends POST /api/entries/<name>/stop to halt a hosted instance while keeping externalized state.
+func (c *Client) StopEntry(ctx context.Context, name string) (*Entry, error) {
+	var out Entry
+	path := "/api/entries/" + url.PathEscape(name) + "/stop"
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, struct{}{}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// StartEntry sends POST /api/entries/<name>/start to wake a stopped hosted instance.
+func (c *Client) StartEntry(ctx context.Context, name string) (*Entry, error) {
+	var out Entry
+	path := "/api/entries/" + url.PathEscape(name) + "/start"
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, struct{}{}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // DeleteEntry sends DELETE /api/entries/<name>.
 func (c *Client) DeleteEntry(ctx context.Context, name string, req DeleteEntryRequest) error {
 	path := "/api/entries/" + url.PathEscape(name)
@@ -564,6 +617,166 @@ func (c *Client) AcceptTransfer(ctx context.Context, name string) (*Entry, error
 	var out Entry
 	path := "/api/entries/" + url.PathEscape(name) + "/transfer/accept"
 	if err := c.doJSON(ctx, http.MethodPost, path, nil, struct{}{}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Status fetches GET /api/status.
+func (c *Client) Status(ctx context.Context) (*StatusResponse, error) {
+	var out StatusResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/api/status", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// AdminSummary fetches GET /api/admin/summary.
+func (c *Client) AdminSummary(ctx context.Context) (*AdminSummaryResponse, error) {
+	var out AdminSummaryResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/api/admin/summary", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SetOwnerDisabled sends POST /api/admin/owners/<email>.
+func (c *Client) SetOwnerDisabled(ctx context.Context, email string, disabled bool) (*OwnerQuotaSummary, error) {
+	var out OwnerQuotaSummary
+	path := "/api/admin/owners/" + url.PathEscape(email)
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, SetOwnerDisabledRequest{Disabled: disabled}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SetQuota sends PUT /api/admin/quotas/<email>.
+func (c *Client) SetQuota(ctx context.Context, email string, req SetQuotaRequest) (*OwnerQuotaSummary, error) {
+	var out OwnerQuotaSummary
+	path := "/api/admin/quotas/" + url.PathEscape(email)
+	if err := c.doJSON(ctx, http.MethodPut, path, nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ResetQuota sends DELETE /api/admin/quotas/<email> to remove a custom quota override.
+func (c *Client) ResetQuota(ctx context.Context, email string) (*OwnerQuotaSummary, error) {
+	var out OwnerQuotaSummary
+	path := "/api/admin/quotas/" + url.PathEscape(email)
+	if err := c.doJSON(ctx, http.MethodDelete, path, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ResolveScopeConflict sends POST /api/admin/conflicts/resolve.
+func (c *Client) ResolveScopeConflict(ctx context.Context, req ResolveConflictRequest) error {
+	return c.doJSON(ctx, http.MethodPost, "/api/admin/conflicts/resolve", nil, req, nil)
+}
+
+// SetSQLInstanceDraining sends POST /api/admin/sql-instances/<name>.
+func (c *Client) SetSQLInstanceDraining(ctx context.Context, name string, draining bool) (*SQLInstanceStatus, error) {
+	var out SQLInstanceStatus
+	path := "/api/admin/sql-instances/" + url.PathEscape(name)
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, SetSQLInstanceDrainingRequest{Draining: draining}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// DeleteOrphanVM sends DELETE /api/admin/orphans/<zone>/<instanceID>.
+func (c *Client) DeleteOrphanVM(ctx context.Context, zone, instanceID string) error {
+	path := "/api/admin/orphans/" + url.PathEscape(zone) + "/" + url.PathEscape(instanceID)
+	return c.doJSON(ctx, http.MethodDelete, path, nil, nil, nil)
+}
+
+// DisconnectTunnel sends DELETE /api/admin/tunnels/<name>.
+func (c *Client) DisconnectTunnel(ctx context.Context, name string) error {
+	path := "/api/admin/tunnels/" + url.PathEscape(name)
+	return c.doJSON(ctx, http.MethodDelete, path, nil, nil, nil)
+}
+
+// PurgeEntry sends POST /api/admin/entries/<name>/purge.
+func (c *Client) PurgeEntry(ctx context.Context, name string, req HardPurgeRequest) (*Entry, error) {
+	var out Entry
+	path := "/api/admin/entries/" + url.PathEscape(name) + "/purge"
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ForceTransfer sends POST /api/admin/entries/<name>/transfer.
+func (c *Client) ForceTransfer(ctx context.Context, name string, req TransferRequest) (*Entry, error) {
+	req.Force = true
+	var out Entry
+	path := "/api/admin/entries/" + url.PathEscape(name) + "/transfer"
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ListDelegatingApps sends GET /api/admin/delegating-apps (admin only).
+func (c *Client) ListDelegatingApps(ctx context.Context) ([]DelegatingApp, error) {
+	var out ListDelegatingAppsResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/api/admin/delegating-apps", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Apps, nil
+}
+
+// CreateDelegatingApp sends POST /api/admin/delegating-apps (admin only).
+func (c *Client) CreateDelegatingApp(ctx context.Context, req CreateDelegatingAppRequest) (*DelegatingApp, error) {
+	var out DelegatingApp
+	if err := c.doJSON(ctx, http.MethodPost, "/api/admin/delegating-apps", nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SetDelegatingAppDisabled sends PATCH /api/admin/delegating-apps/<name> (admin only).
+func (c *Client) SetDelegatingAppDisabled(ctx context.Context, name string, disabled bool) (*DelegatingApp, error) {
+	var out DelegatingApp
+	path := "/api/admin/delegating-apps/" + url.PathEscape(name)
+	if err := c.doJSON(ctx, http.MethodPatch, path, nil, SetDelegatingAppDisabledRequest{Disabled: disabled}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ListDelegationGrants sends GET /api/delegation-grants: the signed-in
+// person's own grants, including revoked ones when includeRevoked is set.
+func (c *Client) ListDelegationGrants(ctx context.Context, includeRevoked bool) ([]DelegationGrant, error) {
+	var q url.Values
+	if includeRevoked {
+		q = url.Values{"include_revoked": {"true"}}
+	}
+	var out ListDelegationGrantsResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/api/delegation-grants", q, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Grants, nil
+}
+
+// CreateDelegationGrant sends POST /api/delegation-grants, granting (or
+// updating the signed-in person's live grant to) a delegating app.
+func (c *Client) CreateDelegationGrant(ctx context.Context, req CreateDelegationGrantRequest) (*DelegationGrant, error) {
+	var out DelegationGrant
+	if err := c.doJSON(ctx, http.MethodPost, "/api/delegation-grants", nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// RevokeDelegationGrant sends DELETE /api/delegation-grants/<ref>, where ref is
+// a grant ID (`dlg_...`) or the name of an app the signed-in person has a
+// live grant to.
+func (c *Client) RevokeDelegationGrant(ctx context.Context, ref string) (*DelegationGrant, error) {
+	var out DelegationGrant
+	path := "/api/delegation-grants/" + url.PathEscape(ref)
+	if err := c.doJSON(ctx, http.MethodDelete, path, nil, nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

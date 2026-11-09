@@ -20,6 +20,7 @@ import AccessSection, {
   validatePrincipalEntry,
 } from "./AccessSection.jsx";
 import api from "../../api.js";
+import { TimeZoneProvider } from "../../TimeZoneContext.jsx";
 
 vi.mock("../../api.js", () => ({ default: vi.fn() }));
 
@@ -294,6 +295,62 @@ describe("validatePrincipalEntry", () => {
     expect(validatePrincipalEntry("user:not-an-email").error).toMatch(
       /valid email/,
     );
+  });
+  // Allowed-principal and service-account rows printed addedAt in UTC
+  // regardless of the time zone chosen under Settings → Preferences, and
+  // RoleChip rendered a <div> inside the caller-role <p> (2026-11-08
+  // settings walkthrough).
+  it("prints added times in this browser's chosen time zone and keeps RoleChip inline", async () => {
+    const addedAt = "2026-11-06T08:01:00Z";
+    api.mockResolvedValue({
+      entries: [
+        {
+          entry: "user:alice@example.com",
+          role: "grain/operator",
+          addedBy: "bob@example.com",
+          addedAt,
+        },
+        {
+          entry: "serviceAccount:ci@proj.iam.gserviceaccount.com",
+          role: "grain/viewer",
+          reason: "CI reader",
+          addedBy: "bob@example.com",
+          addedAt,
+        },
+      ],
+    });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      render(
+        <TimeZoneProvider zone="Asia/Tokyo">
+          {section({
+            config: {
+              authenticated: true,
+              actor: "user:dana@example.com",
+              authMethod: "iap",
+              access: { role: "grain/viewer", full: false, scopes: [] },
+            },
+          })}
+        </TimeZoneProvider>,
+      );
+      const inTokyo = new Date(addedAt).toLocaleString(undefined, {
+        timeZone: "Asia/Tokyo",
+      });
+      const userRow = await screen.findByTestId(
+        "principal-row-user:alice@example.com",
+      );
+      expect(userRow).toHaveTextContent(inTokyo);
+      const saRow = screen.getByTestId(
+        "principal-row-serviceAccount:ci@proj.iam.gserviceaccount.com",
+      );
+      expect(saRow).toHaveTextContent(inTokyo);
+
+      const ownRole = screen.getByTestId("access-own-role");
+      expect(ownRole.querySelector("div")).toBeNull();
+      expect(errSpy).not.toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 });
 

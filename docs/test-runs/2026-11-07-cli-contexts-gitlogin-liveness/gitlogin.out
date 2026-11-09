@@ -1,0 +1,42 @@
+### expired_token (stub answers: expired)
+$ env GRAIN_TOKEN=BEFD-5JHV-6FP4-34MX-SQ3Z-QJAF-LJMF-7LP4 timeout 60 /home/debian/bin/grain --server http://127.0.0.1:4291 git-login -web -host 127.0.0.1:4294 -base-url http://127.0.0.1:4294 -scope acme/widgets
+    ! First copy your one-time code: WDJB-MJHT
+    - Open http://127.0.0.1:4294/login/device in your browser to authorize Grain...
+      (Could not open browser automatically: exec: "xdg-open,x-www-browser,www-browser": executable file not found in $PATH)
+    grain: the GitHub device code expired before authorization completed; run `grain git-login` again
+    -> exit=1
+    poll: {"answer":"expired","gap_s":null,"grant_type_ok":true}
+### access_denied (stub answers: denied)
+$ env GRAIN_TOKEN=BEFD-5JHV-6FP4-34MX-SQ3Z-QJAF-LJMF-7LP4 timeout 60 /home/debian/bin/grain --server http://127.0.0.1:4291 git-login -web -host 127.0.0.1:4295 -base-url http://127.0.0.1:4295 -scope acme/widgets
+    ! First copy your one-time code: WDJB-MJHT
+    - Open http://127.0.0.1:4295/login/device in your browser to authorize Grain...
+      (Could not open browser automatically: exec: "xdg-open,x-www-browser,www-browser": executable file not found in $PATH)
+    grain: GitHub authorization was cancelled in the browser
+    -> exit=1
+    poll: {"answer":"denied","gap_s":null,"grant_type_ok":true}
+### pending -> slow_down -> pending -> success (stub answers: pending,slow_down,pending,token)
+$ env GRAIN_TOKEN=BEFD-5JHV-6FP4-34MX-SQ3Z-QJAF-LJMF-7LP4 timeout 60 /home/debian/bin/grain --server http://127.0.0.1:4291 git-login -web -host 127.0.0.1:4296 -base-url http://127.0.0.1:4296 -scope acme/widgets
+    ! First copy your one-time code: WDJB-MJHT
+    - Open http://127.0.0.1:4296/login/device in your browser to authorize Grain...
+      (Could not open browser automatically: exec: "xdg-open,x-www-browser,www-browser": executable file not found in $PATH)
+    Authenticated to 127.0.0.1:4296 as bsalmon: this deployment now clones, pushes, and signs new pull requests and comments as "Signed by bsalmon (via Grain)".
+    -> exit=0
+    poll: {"answer":"pending","gap_s":null,"grant_type_ok":true}
+    poll: {"answer":"slow_down","gap_s":1,"grant_type_ok":true}
+    poll: {"answer":"pending","gap_s":3,"grant_type_ok":true}
+    poll: {"answer":"token","gap_s":3,"grant_type_ok":true}
+    other: {"path":"/api/v3/user","auth":"token gho_wa..."}
+    other: {"path":"/api/v3/user","auth":"token gho_wa..."}
+### success with an explicit -author (stub answers: token)
+$ env GRAIN_TOKEN=BEFD-5JHV-6FP4-34MX-SQ3Z-QJAF-LJMF-7LP4 timeout 60 /home/debian/bin/grain --server http://127.0.0.1:4291 git-login -web -host 127.0.0.1:4297 -base-url http://127.0.0.1:4297 -scope acme/widgets -author Dana Example
+    ! First copy your one-time code: WDJB-MJHT
+    - Open http://127.0.0.1:4297/login/device in your browser to authorize Grain...
+      (Could not open browser automatically: exec: "xdg-open,x-www-browser,www-browser": executable file not found in $PATH)
+    Authenticated to 127.0.0.1:4297 as Dana Example: this deployment now clones, pushes, and signs new pull requests and comments as "Signed by Dana Example (via Grain)".
+    -> exit=0
+    poll: {"answer":"token","gap_s":null,"grant_type_ok":true}
+== what the deployment stored (token never echoed)
+### deployment git connections
+$ sh -c env GRAIN_TOKEN=BEFD-5JHV-6FP4-34MX-SQ3Z-QJAF-LJMF-7LP4 /home/debian/bin/grain --server http://127.0.0.1:4291 -json deployment 2>/dev/null | jq -c '.gitConnections // .git // empty' | head -c 2000
+    -> exit=0
+    ok: the delegated token is not readable back

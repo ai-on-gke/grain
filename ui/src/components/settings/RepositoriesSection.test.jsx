@@ -211,6 +211,70 @@ describe("RepositoriesSection", () => {
     expect(box).not.toBeChecked();
   });
 
+  // 2026-11-07 walkthrough: the switch stayed live where the repo's own
+  // Merge queue tab draws it disabled, and the API's refusal was
+  // swallowed, so a click simply sprang back with no word why.
+  it("disables the bypass where the repo page does: config-repo only, or not the repo's admin", async () => {
+    routeApi();
+    const { unmount } = render(
+      <RepositoriesSection
+        config={{ ...config, configRepoOnly: true }}
+        tasks={[]}
+      />,
+    );
+    const label =
+      "acme/widgets: Base-branch repair PRs may merge without a human when their CI is green";
+    expect(
+      await within(row("acme/widgets")).findByText("main, candidate"),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText(label)).toBeDisabled();
+    unmount();
+
+    routeApi();
+    render(
+      <RepositoriesSection
+        config={{ ...config, adminScoped: true, adminRepos: ["acme/gadgets"] }}
+        tasks={[]}
+      />,
+    );
+    expect(
+      await within(row("acme/widgets")).findByText("main, candidate"),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText(label)).toBeDisabled();
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText(
+          "acme/gadgets: Base-branch repair PRs may merge without a human when their CI is green",
+        ),
+      ).not.toBeDisabled(),
+    );
+  });
+
+  it("says why when the bypass write is refused", async () => {
+    routeApi();
+    const routed = api.getMockImplementation();
+    const refusal = Object.assign(new Error("forbidden"), { status: 403 });
+    api.mockImplementation((path, opts) =>
+      opts && path.endsWith("/base-repair-bypasses-human-gates")
+        ? Promise.reject(refusal)
+        : routed(path, opts),
+    );
+    vi.stubGlobal("confirm", vi.fn().mockReturnValue(true));
+    onTestFinished(() => vi.unstubAllGlobals());
+    const showError = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <RepositoriesSection config={config} tasks={[]} showError={showError} />,
+    );
+    const box = await screen.findByLabelText(
+      "acme/widgets: Base-branch repair PRs may merge without a human when their CI is green",
+    );
+    await waitFor(() => expect(box).not.toBeDisabled());
+    await user.click(box);
+    await waitFor(() => expect(showError).toHaveBeenCalledWith(refusal));
+    expect(box).not.toBeChecked();
+  });
+
   it("says when no connection lists the repository", () => {
     expect(connectionText(null, "acme/widgets")).toBe("…");
     expect(connectionText(false, "acme/widgets")).toBe("Unknown");

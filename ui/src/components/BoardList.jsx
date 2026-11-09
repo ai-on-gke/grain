@@ -124,6 +124,28 @@ export default function BoardList({
   };
 
   const sections = boardSections(boards);
+  // What a handle and a slot call a board. Its name, when that is
+  // unique -- and otherwise its name and where it is filed: folders exist
+  // so that two areas can each keep a "Triage", and two buttons both
+  // named "Move here, above Triage" leading into different folders are
+  // one name for two different moves (2026-11-08 saved-boards
+  // walkthrough, task 3612). The id breaks the last tie, two boards of
+  // one name in one folder.
+  const nameCounts = new Map();
+  const pairCounts = new Map();
+  for (const b of boards) {
+    nameCounts.set(b.name, (nameCounts.get(b.name) || 0) + 1);
+    const pair = `${b.folder || ""}\0${b.name}`;
+    pairCounts.set(pair, (pairCounts.get(pair) || 0) + 1);
+  }
+  const boardLabel = (board, folder) => {
+    if ((nameCounts.get(board.name) || 0) <= 1) return board.name;
+    const where = folder ? `in ${folder}` : "outside every folder";
+    if ((pairCounts.get(`${folder}\0${board.name}`) || 0) > 1) {
+      return `${board.name} (${board.id}), ${where}`;
+    }
+    return `${board.name}, ${where}`;
+  };
   // Where the picked-up board is allowed to land, as the keys the slots
   // below are looked up by. Its own place is not among them: a slot that
   // promises a move and writes nothing reads as a broken button.
@@ -190,13 +212,14 @@ export default function BoardList({
             ) : null}
             {section.boards.map((board) => {
               const id = board.id;
+              const qualified = boardLabel(board, folder);
               const handle =
                 enabled && handles ? (
                   <MoveHandle
                     label={
                       pickedId === id
-                        ? `Stop moving ${board.name}`
-                        : `Move ${board.name}`
+                        ? `Stop moving ${qualified}`
+                        : `Move ${qualified}`
                     }
                     picked={pickedId === id}
                     landed={landedId === id}
@@ -211,7 +234,7 @@ export default function BoardList({
                 <Fragment key={id}>
                   {slot(
                     { folder, beforeId: id },
-                    `Move here, above ${board.name}`,
+                    `Move here, above ${qualified}`,
                   )}
                   <li
                     className={overClass(`board:${id}`)}

@@ -7,8 +7,8 @@ the host's `kvm` group held as a supplementary group, and has no
 namespace either. This page lists what the runtime has to give it, what
 granule does in that setup, and what does not work.
 
-`test/rootless-vm.sh` checks all of it on a real VM. Grain CI runs it as the
-`rootless-vm` job in `.grain/workflows/rootless-vm.yml`. It covers two setups:
+`test/rootless-vm.sh` checks all of it on a real VM. CI runs it as the
+`rootless-vm` job in `.github/workflows/ci.yml`. It covers two setups:
 
 * **unshare**: `unshare --user --map-root-user --net --mount`. Container
   root is the caller's own uid, and `/dev/kvm` comes through the caller's

@@ -59,6 +59,7 @@ import {
   issueUrl,
   relativeAge,
   repoActivity,
+  repoPageRow,
   repoRows,
   repoTargetable,
   repoTasks,
@@ -452,6 +453,12 @@ describe("internalPullRequestUrl", () => {
       internalPullRequestUrl("acme/widgets", "grain/task-12", "release/v1"),
     ).toBe("/repos/acme/widgets/compare/release/v1...grain/task-12");
   });
+
+  it("escapes what a branch name can carry and a path cannot", () => {
+    expect(internalPullRequestUrl("acme/widgets", "fix/#123", "main")).toBe(
+      "/repos/acme/widgets/compare/main...fix/%23123",
+    );
+  });
 });
 
 describe("repoUrl", () => {
@@ -621,7 +628,7 @@ describe("capabilityRows", () => {
   it("leaves out a capability this deployment has not configured", () => {
     const listing = [
       ...offered,
-      { id: "console", name: "Console", ready: false },
+      { id: "github-sandbox", name: "GitHub sandbox", ready: false },
     ];
     expect(capabilityRows(listing, [])).toEqual(offered);
   });
@@ -1423,6 +1430,47 @@ describe("repoRows", () => {
 });
 
 // The dot the repos list draws ahead of a repo's name (grain/task-327).
+describe("repoPageRow", () => {
+  // docs/test-runs/2026-11-07-repository-release-memory-ui.md,
+  // observation 2: a repo removed from a restricted deployment's
+  // targetRepos leaves the Repos list (repoRows' rule), but its own page
+  // still counts the work filed against it rather than reading "0 tasks
+  // filed here" over a queued task.
+  it("counts the tasks still targeting a repo that is off the list", () => {
+    const config = { targetRepos: ["acme/widgets"] };
+    const tasks = [
+      { repo: "acme/gadgets", state: "queued", blocked: false },
+      { repo: "Acme/Gadgets", state: "running", blocked: true },
+      { repo: "acme/gadgets", state: "queued", consoleSession: "director" },
+      { repo: "acme/widgets", state: "queued", blocked: false },
+    ];
+    expect(repoRows(config, tasks).map((r) => r.repo)).toEqual([
+      "acme/widgets",
+    ]);
+    expect(repoPageRow(config, tasks, "acme/gadgets")).toEqual({
+      repo: "acme/gadgets",
+      total: 2,
+      counts: { queued: 1, running: 1 },
+      blocked: 1,
+      configured: false,
+      defaults: false,
+      offList: true,
+    });
+  });
+
+  it("is the repo's own repoRows row wherever it has one", () => {
+    const config = { targetRepos: ["acme/widgets"] };
+    const tasks = [{ repo: "acme/widgets", state: "queued", blocked: false }];
+    expect(repoPageRow(config, tasks, "Acme/Widgets")).toEqual(
+      repoRows(config, tasks)[0],
+    );
+  });
+
+  it("says nothing is off the list on an unrestricted deployment", () => {
+    expect(repoPageRow({}, [], "acme/gadgets").offList).toBe(false);
+  });
+});
+
 describe("repoActivity", () => {
   const row = (counts) => ({
     repo: "acme/widgets",

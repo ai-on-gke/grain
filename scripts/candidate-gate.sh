@@ -77,10 +77,15 @@
 #                 numeric id: grain's own forge connection) created
 #                 counts; one of the same name from any other app -- an
 #                 Actions workflow with checks: write, another installed
-#                 app -- is reported as IGNORED and never judged, and with
-#                 CHECK_QUALIFICATION_APP unset no check run is trusted at
-#                 all (exit 64). Only judged once Stage 1 passes; without
-#                 --checks-json it is PENDING;
+#                 app -- is reported as IGNORED and never judged. With
+#                 CHECK_QUALIFICATION_APP "none", set explicitly (a
+#                 deployment whose forge connection is no GitHub App, and
+#                 so posts no check run) Stage 2 is SKIPPED and no check
+#                 run is read at all: Stage 1 alone qualifies the RC.
+#                 With CHECK_QUALIFICATION_APP empty or unset no check run
+#                 is trusted at all (exit 64): an unconfigured gate never
+#                 passes. Otherwise only judged once Stage 1 passes;
+#                 without --checks-json it is PENDING;
 #       never     TAG, and the release it would become, are not in
 #                 RELEASE_NEVER_PROMOTE (scripts/release.conf).
 #     Every job (and the check run) is judged on its attempts in order:
@@ -96,6 +101,14 @@
 #               failure once CHECK_QUALIFICATION_MAX_FLAKES (2) other
 #               jobs have already failed once -- three independent red
 #               jobs are systemic, not coincidence.
+#     except the check run, whose newest attempt is its verdict: grain
+#     posts failure only once an item has failed its own retry inside
+#     Stage 2 (model.DecideReleaseQualification) and never re-runs a
+#     completed failure, so a failure is confirmed red the first time; a
+#     neutral conclusion is an infrastructure stall
+#     (pipeline.release-infra-stalled), which grain re-qualifies as a new
+#     check run on the same commit once the stall is acknowledged or
+#     cleared.
 #
 #     Prints "<PASS|FAIL|PENDING|INFRA> <job>: ..." per job, a
 #     "RERUN <stage> <job> <flake|infra>" line for each job the train is to
@@ -132,6 +145,9 @@ CHECK_QUALIFICATION_CHECK="${CHECK_QUALIFICATION_CHECK-grain/release-qualificati
 # The GitHub App (slug or numeric id) whose CHECK_QUALIFICATION_CHECK is
 # trusted: grain's own forge connection, which posts it. Anything else
 # that can write check runs on the repository can post one by that name.
+# "none" -- only ever as an explicit setting, never a default -- skips
+# Stage 2: no check run is trusted, so none is read, and Stage 1 alone
+# qualifies the RC. Empty or unset trusts nothing and fails closed.
 CHECK_QUALIFICATION_APP="${CHECK_QUALIFICATION_APP-}"
 CHECK_QUALIFICATION_MAX_FLAKES="${CHECK_QUALIFICATION_MAX_FLAKES:-2}"
 CHECK_QUALIFICATION_INFRA_STALL="${CHECK_QUALIFICATION_INFRA_STALL:-3}"
@@ -478,13 +494,16 @@ check_qualification() {
     done < <(jq -r '.[].id' <<< "$names")
   fi
 
-  # Stage 2: the agent suite's check run, once Stage 1 is clean.
-  if [ "${#failed[@]}" -gt 0 ] || [ "${#pending[@]}" -gt 0 ] || [ "${#infra[@]}" -gt 0 ]; then
+  # Stage 2: the agent suite's check run, once Stage 1 is clean -- unless
+  # no app is trusted to post it, when no check run is read at all.
+  if [ "$CHECK_QUALIFICATION_APP" = none ]; then
+    echo "SKIPPED $CHECK_QUALIFICATION_CHECK: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)"
+  elif [ "${#failed[@]}" -gt 0 ] || [ "${#pending[@]}" -gt 0 ] || [ "${#infra[@]}" -gt 0 ]; then
     echo "PENDING $CHECK_QUALIFICATION_CHECK: waits for Stage 1 (nightly.yml) to pass"
   elif [ -z "$checks" ]; then
     wait_for "$CHECK_QUALIFICATION_CHECK" "no check run listing was given"
   elif [ -z "$CHECK_QUALIFICATION_APP" ]; then
-    die "CHECK_QUALIFICATION_APP is unset, so no $CHECK_QUALIFICATION_CHECK check run can be trusted: set it to the slug or id of the GitHub App grain posts it as"
+    die "CHECK_QUALIFICATION_APP is unset, so no $CHECK_QUALIFICATION_CHECK check run can be trusted: set it to the slug or id of the GitHub App grain posts it as, or to none to qualify on Stage 1 alone"
   else
     local foreign
     foreign="$(jq -r --arg rc "$rc" --arg check "$CHECK_QUALIFICATION_CHECK" --arg app "$CHECK_QUALIFICATION_APP" "$JQ_CHECK_RUN"'
@@ -503,7 +522,23 @@ check_qualification() {
     else
       while IFS=$'\t' read -r stage job attempts; do
         [ -n "$job" ] || continue
-        judge "$stage" "$job" "$attempts"
+        case "${attempts##*,}" in
+          failure)
+            # grain already re-ran each failing item once before it
+            # concluded failure, and re-runs nothing after: confirmed.
+            fail "$job" "failed ($attempts): grain concludes failure only once an item has failed its own retry, so it is confirmed red"
+            ;;
+          success) pass "$job" "passed ($attempts)" ;;
+          pending) wait_for "$job" "still running ($attempts)" ;;
+          infra)
+            # grain concludes neutral only once a Stage 2 item has used all
+            # of its own infrastructure re-runs (pipeline.release-infra-stalled).
+            echo "INFRA $job: cancelled, timed out or starved of capacity ($attempts); re-run, not red; stalled after Stage 2's infra re-runs"
+            infra+=("$job")
+            rerun "$stage" "$job" infra
+            ;;
+          *) judge "$stage" "$job" "$attempts" ;;
+        esac
       done <<< "$table"
     fi
   fi

@@ -78,23 +78,15 @@ test.describe("Walkthrough: Auto-Saving Repo Pane & Sidebar Release Stamp (docs/
       const newSetupCmd = "npm install --legacy-peer-deps && make build";
       await setupInput.fill(newSetupCmd);
 
-      // 2. Modify Default Capabilities (multi-select triggers onChange auto-save)
-      const capsSelect = page.getByRole("combobox", {
-        name: "Default capabilities",
-      });
-      await expect(capsSelect).toBeVisible();
-      await capsSelect.click();
-      // Select "Bootstrap playbooks" from capabilities menu list. Not GCP
-      // key or Self debug: the demo makes those deployment defaults, which
-      // every repo has on whatever it says, so choosing one here would
-      // prove nothing saved.
-      const playbooksOption = page.getByRole("option", {
-        name: "Bootstrap playbooks",
-        exact: true,
-      });
-      await expect(playbooksOption).toBeVisible();
-      await playbooksOption.click();
-      await page.keyboard.press("Escape"); // Close select dropdown
+      // 2. Add a default grant (GrantsPicker saves each change as it is made)
+      const defaultGrants = page.getByTestId("repo-default-grants");
+      await defaultGrants.getByRole("button", { name: "Add grant…" }).click();
+      const menu = page.getByRole("menu", { name: "Grants to add" });
+      const apiRow = menu.locator(".api-grant-row").first();
+      const addedGrant = await apiRow.getAttribute("data-api-grant");
+      expect(addedGrant).toBeTruthy();
+      await apiRow.click();
+      if (await menu.isVisible()) await page.keyboard.press("Escape");
 
       // 3. Modify Prompt Extension
       const promptInput = page.locator('textarea[name="repoPromptExtension"]');
@@ -149,9 +141,7 @@ test.describe("Walkthrough: Auto-Saving Repo Pane & Sidebar Release Stamp (docs/
         `/api/repos/${targetRepo}/capabilities`,
       );
       expect(capsRes.ok()).toBe(true);
-      expect((await capsRes.json()).defaultCapabilities).toContain(
-        "bootstrap-playbooks",
-      );
+      expect((await capsRes.json()).defaultCapabilities).toContain(addedGrant);
     });
   });
 });

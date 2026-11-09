@@ -42,12 +42,14 @@ import (
 )
 
 const (
-	// RegistryURLEnv, RegistryEntryEnv, and RegistryTokenEnv allow container
-	// and Kubernetes deployments to configure registry self-registration via
-	// environment variables when flags are omitted.
-	RegistryURLEnv   = "GRAIN_REGISTRY_URL"
-	RegistryEntryEnv = "GRAIN_REGISTRY_ENTRY"
-	RegistryTokenEnv = "GRAIN_REGISTRY_TOKEN"
+	// RegistryURLEnv, RegistryEntryEnv, RegistryTokenEnv, and RegistryConnectEnv
+	// allow container and Kubernetes deployments to configure registry
+	// self-registration and the outbound tunnel via environment variables when
+	// flags are omitted.
+	RegistryURLEnv     = "GRAIN_REGISTRY_URL"
+	RegistryEntryEnv   = "GRAIN_REGISTRY_ENTRY"
+	RegistryTokenEnv   = "GRAIN_REGISTRY_TOKEN"
+	RegistryConnectEnv = "GRAIN_REGISTRY_CONNECT"
 
 	defaultRegistryRequestTimeout = 10 * time.Second
 	defaultRegistryMinInterval    = 2 * time.Second
@@ -123,6 +125,7 @@ type RegistryManager struct {
 	mu                       sync.Mutex
 	registered               bool
 	syncedMetaKey            string
+	syncedCfg                model.RegistryConfig
 	registryStatus           api.EntryStatus
 	lastHeartbeatAt          *time.Time
 	lastAttemptAt            *time.Time
@@ -218,8 +221,30 @@ func (m *RegistryManager) SetTunnelConnector(tc RegistryTunnelConnector) {
 	}
 	m.tunnelMu.Lock()
 	m.tunnelConnector = tc
+	running := m.tunnelRunCtx != nil
 	m.tunnelMu.Unlock()
-	m.Trigger()
+	if running {
+		m.Trigger()
+	}
+}
+
+// HasTunnelConnector reports whether a RegistryTunnelConnector is attached.
+func (m *RegistryManager) HasTunnelConnector() bool {
+	if m == nil {
+		return false
+	}
+	m.tunnelMu.Lock()
+	defer m.tunnelMu.Unlock()
+	return m.tunnelConnector != nil
+}
+
+// InvalidateOIDCCache clears any cached OIDC ID token so the next heartbeat or
+// tunnel dial mints a fresh token.
+func (m *RegistryManager) InvalidateOIDCCache() {
+	if m == nil {
+		return
+	}
+	m.invalidateOIDCCache()
 }
 
 // Trigger wakes the background heartbeat loop asynchronously. Safe to call from
@@ -431,6 +456,10 @@ func (m *RegistryManager) loadInputs(ctx context.Context) (registryStepInputs, e
 		targetRepos = stored.TargetRepos
 	}
 	dcfg.Registry = regCfg
+	m.mu.Lock()
+	m.lastObservedCfg = regCfg
+	m.lastObservedRepos = slices.Clone(targetRepos)
+	m.mu.Unlock()
 
 	var stateRepo model.RepoRef
 	if m.opts.StateRepo != nil {
@@ -486,6 +515,7 @@ func (m *RegistryManager) step(parentCtx context.Context) (time.Duration, error)
 		m.mu.Lock()
 		m.registered = false
 		m.syncedMetaKey = ""
+		m.syncedCfg = model.RegistryConfig{}
 		m.registryStatus = ""
 		m.nextHeartbeatAt = nil
 		m.heartbeatIntervalSeconds = 0
@@ -548,9 +578,10 @@ func (m *RegistryManager) step(parentCtx context.Context) (time.Duration, error)
 	if inputs.regCfg.EffectiveAuthMode() == model.RegistryAuthOIDC {
 		m.mu.Lock()
 		alreadySynced := m.syncedMetaKey == metaKey
+		prevCfg := m.syncedCfg
 		m.mu.Unlock()
 		if !alreadySynced {
-			if syncErr := m.syncConnectedEntryMetadata(reqCtx, client, inputs.regCfg, inputs.hostKind, scopeInputs); syncErr != nil {
+			if syncErr := m.syncConnectedEntryMetadata(reqCtx, client, inputs.regCfg, prevCfg, inputs.hostKind, scopeInputs); syncErr != nil {
 				if api.IsUnauthorized(syncErr) {
 					m.invalidateOIDCCache()
 				}
@@ -558,15 +589,21 @@ func (m *RegistryManager) step(parentCtx context.Context) (time.Duration, error)
 			}
 			m.mu.Lock()
 			m.syncedMetaKey = metaKey
+			m.syncedCfg = inputs.regCfg
 			m.registered = true
 			m.mu.Unlock()
 		}
 	}
 
+	// Only send HostKind on heartbeats when explicitly configured on the daemon
+	// (e.g. -registry-host-kind or settings.registry.host_kind). When unset, the
+	// daemon's inferred kind is used only at initial entry creation so heartbeats
+	// never override a host_kind declared earlier via `grain registry register`
+	// or `grain registry update`.
 	hbReq := api.HeartbeatRequest{
 		GrainVersion:       inputs.grainVersion,
 		GrainCommit:        inputs.grainCommit,
-		HostKind:           inputs.hostKind,
+		HostKind:           inputs.regCfg.HostKind,
 		Health:             inputs.health,
 		HealthDetail:       inputs.healthDetail,
 		ActiveTasks:        inputs.activeTasks,
@@ -581,6 +618,7 @@ func (m *RegistryManager) step(parentCtx context.Context) (time.Duration, error)
 		if createErr := m.createConnectedEntry(reqCtx, client, inputs.regCfg, inputs.hostKind, scopeInputs); createErr == nil {
 			m.mu.Lock()
 			m.syncedMetaKey = metaKey
+			m.syncedCfg = inputs.regCfg
 			m.registered = true
 			m.mu.Unlock()
 			resp, err = client.Heartbeat(reqCtx, inputs.regCfg.Entry, hbReq)
@@ -592,6 +630,7 @@ func (m *RegistryManager) step(parentCtx context.Context) (time.Duration, error)
 		if api.IsUnauthorized(err) {
 			m.invalidateOIDCCache()
 		}
+		m.ensureTunnel(parentCtx, inputs, initialTok, tokenSource)
 		return m.recordFailure(err), err
 	}
 
@@ -624,28 +663,42 @@ func (m *RegistryManager) step(parentCtx context.Context) (time.Duration, error)
 	return delay, nil
 }
 
-func (m *RegistryManager) syncConnectedEntryMetadata(ctx context.Context, client *api.Client, cfg model.RegistryConfig, hostKind api.HostKind, scopes []api.ScopeInput) error {
-	dn := cfg.DisplayName
-	purpose := cfg.Purpose
-	ownerGroup := cfg.OwnerGroup
-	listed := cfg.Listed
-	tags := slices.Clone(cfg.Tags)
-	if tags == nil {
-		tags = []string{}
+func (m *RegistryManager) syncConnectedEntryMetadata(ctx context.Context, client *api.Client, cfg, prevCfg model.RegistryConfig, inferredHostKind api.HostKind, scopes []api.ScopeInput) error {
+	sameTarget := prevCfg.URL == cfg.URL && strings.EqualFold(prevCfg.Entry, cfg.Entry)
+	var upd api.UpdateEntryRequest
+	if cfg.DisplayName != "" || (sameTarget && prevCfg.DisplayName != "") {
+		dn := cfg.DisplayName
+		upd.DisplayName = &dn
 	}
-	_, err := client.UpdateEntry(ctx, cfg.Entry, api.UpdateEntryRequest{
-		DisplayName: &dn,
-		Purpose:     &purpose,
-		HostKind:    &hostKind,
-		OwnerGroup:  &ownerGroup,
-		Listed:      &listed,
-		Tags:        &tags,
-	})
+	if cfg.Purpose != "" || (sameTarget && prevCfg.Purpose != "") {
+		purpose := cfg.Purpose
+		upd.Purpose = &purpose
+	}
+	if cfg.HostKind != "" {
+		hk := cfg.HostKind
+		upd.HostKind = &hk
+	}
+	if cfg.OwnerGroup != "" || (sameTarget && prevCfg.OwnerGroup != "") {
+		ownerGroup := cfg.OwnerGroup
+		upd.OwnerGroup = &ownerGroup
+	}
+	if cfg.Listed || (sameTarget && prevCfg.Listed) {
+		listed := cfg.Listed
+		upd.Listed = &listed
+	}
+	if len(cfg.Tags) > 0 || (sameTarget && len(prevCfg.Tags) > 0) {
+		tags := slices.Clone(cfg.Tags)
+		if tags == nil {
+			tags = []string{}
+		}
+		upd.Tags = &tags
+	}
+	_, err := client.UpdateEntry(ctx, cfg.Entry, upd)
 	if err == nil {
 		return nil
 	}
 	if api.IsNotFound(err) {
-		return m.createConnectedEntry(ctx, client, cfg, hostKind, scopes)
+		return m.createConnectedEntry(ctx, client, cfg, inferredHostKind, scopes)
 	}
 	return err
 }
@@ -795,7 +848,7 @@ func (m *RegistryManager) resolveCredential(ctx context.Context, dcfg Config, re
 		return tok, "env", nil
 	}
 
-	return "", "", fmt.Errorf("no registry registration credential configured: run 'grain registry register %s' or set secret %s in Settings",
+	return "", "", fmt.Errorf("no hub registration credential configured: run 'grain registry register %s' or set secret %s in Settings",
 		regCfg.Entry, secrets.RegistryRegistrationTokenSecret)
 }
 
@@ -1009,7 +1062,7 @@ func (m *RegistryManager) ensureTunnel(parentCtx context.Context, inputs registr
 		defer close(done)
 		if err := tc.RunTunnel(tunCtx, c); err != nil && !errors.Is(err, context.Canceled) {
 			redactedErr, _ := (*redact.Redactor)(nil).Text(err.Error())
-			m.opts.Logf("grain daemon: registry tunnel (%s) stopped: %s", c.Entry, redactedErr)
+			m.opts.Logf("grain daemon: hub tunnel (%s) stopped: %s", c.Entry, redactedErr)
 		}
 	}(connCfg)
 }

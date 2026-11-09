@@ -28,9 +28,6 @@ import (
 	"path/filepath"
 
 	"github.com/ai-on-gke/grain/pkg/daemon"
-
-	"github.com/ai-on-gke/grain/pkg/model/postgres"
-	grainsqlite "github.com/ai-on-gke/grain/pkg/model/sqlite"
 )
 
 const backupUsage = `usage: grain backup -data-dir DIR [flags]
@@ -65,6 +62,8 @@ func backupExitCode(err error) int {
 	return 1
 }
 
+var newBackupService = daemon.BackupService
+
 func runBackup(ctx context.Context, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("grain backup", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -87,40 +86,32 @@ func runBackup(ctx context.Context, args []string, out io.Writer) error {
 	if err := daemon.RefuseWhileDaemonAttached(ctx, "grain backup", *dataDir, nil, false); err != nil {
 		return err
 	}
+	driver, dsn, err := daemon.ResolveDatabase(*dataDir)
+	if err != nil {
+		return err
+	}
 	var db *sql.DB
-	isPostgres := false
-	if os.Getenv("GRAIN_DB_DRIVER") == "postgres" || os.Getenv("GRAIN_POSTGRES_URL") != "" || os.Getenv("DATABASE_URL") != "" {
-		var err error
-		db, err = daemon.OpenRawDB(*dataDir)
-		if err != nil {
-			return fmt.Errorf("opening database: %w", err)
-		}
-		isPostgres = true
-	} else if saved, _ := postgres.ReadDatabaseConfig(*dataDir); saved != nil && saved.Driver == "postgres" {
-		var err error
-		db, err = daemon.OpenRawDB(*dataDir)
-		if err != nil {
-			return fmt.Errorf("opening database: %w", err)
-		}
-		isPostgres = true
-	} else {
+	isPostgres := driver == "postgres"
+	if !isPostgres && dsn == "" {
 		databasePath := filepath.Join(*dataDir, "store", "grain.db")
 		if _, err := os.Stat(databasePath); err != nil {
 			return fmt.Errorf("finding database %s: %w", databasePath, err)
 		}
-		var err error
-		db, err = grainsqlite.Open(grainsqlite.DefaultConfig(filepath.Join(*dataDir, "store")))
-		if err != nil {
-			return fmt.Errorf("opening database: %w", err)
-		}
+	}
+	db, err = daemon.OpenRawDB(*dataDir)
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
 	}
 	defer db.Close()
 	if err := daemon.RefuseWhileDaemonAttached(ctx, "grain backup", "", db, isPostgres); err != nil {
 		return err
 	}
-	service, destination, err := daemon.BackupService(ctx, *gcsBucket, *folderID, *credentialsFile)
+	service, destination, err := newBackupService(ctx, *gcsBucket, *folderID, *credentialsFile)
 	if err != nil {
 		return err
+	}
+	if isPostgres && dsn != "" {
+		service.PostgresDSN = dsn
 	}
 	result, err := service.Run(ctx, db, daemon.StateRepoDir(*dataDir))
 	if err != nil {

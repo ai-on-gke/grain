@@ -107,8 +107,12 @@ for (const [name, viewport] of [
 }
 
 for (const [section, label] of [
-  ["tasks", "Default legacy capabilities"],
   ["general", "Upgrade automatically"],
+  // Registry drew its locked cards in a bare disabled fieldset, which a
+  // MUI Select does not obey (2026-11-07 settings walkthrough).
+  ["registry", "Credential source"],
+  ["registry", "Host kind"],
+  ["registry", "Rule"],
 ]) {
   test(`a locked ${section} card's ${label} select is out of reach of the keyboard`, async ({
     page,
@@ -138,14 +142,122 @@ test("an unlocked card's select still opens from the keyboard", async ({
 }) => {
   await page.setViewportSize(DESKTOP);
   await withConfig(page, { configRepoOnly: false, settingsLocked: false });
-  await page.goto("/settings/tasks");
+  await page.goto("/settings/general");
   const select = page
     .getByTestId("settings-section")
-    .getByRole("combobox", { name: "Default legacy capabilities" });
+    .getByRole("combobox", { name: "Upgrade automatically" });
   await expect(select).toBeVisible();
   await expect(select).not.toHaveAttribute("aria-disabled", "true");
   await select.focus();
   await page.keyboard.press("ArrowDown");
   await expect(page.getByRole("listbox")).toBeVisible();
   await page.keyboard.press("Escape");
+});
+
+// A save refused because the setting lives in the config repository
+// (409 config_managed_externally, as a real daemon with settings locked
+// answers a page opened before the lock) handed showError only its
+// message: no refusal dialog, no Create Config PR, and the whole patch in
+// a toast (2026-11-07 settings walkthrough). The body is the one that
+// daemon sent, so the shared demo store is not locked under other specs.
+test("a setting refused for the config repo opens the refusal dialog", async ({
+  page,
+}) => {
+  await page.setViewportSize(DESKTOP);
+  const patch =
+    "diff --git a/tables/grain_config.json b/tables/grain_config.json\n" +
+    "--- a/tables/grain_config.json\n+++ b/tables/grain_config.json\n" +
+    '@@ -1 +1 @@\n-  "autoMergeByDefault": true\n+  "autoMergeByDefault": false\n';
+  await page.route("**/api/settings", async (route) => {
+    if (route.request().method() === "GET") return route.fallback();
+    await route.fulfill({
+      status: 409,
+      json: {
+        error:
+          "this setting is not written directly: configuration is managed in this deployment's config repository grain/config (main). Commit this change to tables/grain_config.json instead:\n\n" +
+          patch,
+        code: "config_managed_externally",
+        repo: "grain/config",
+        remote: "",
+        branch: "main",
+        internal: true,
+        url: "/repos/grain/config",
+        path: ["tables/grain_config.json"],
+        change: [{ path: "tables/grain_config.json", patch }],
+        docs: "https://github.com/ai-on-gke/grain/blob/main/docs/external-config-repo.md",
+      },
+    });
+  });
+  await page.goto("/settings/tasks");
+  const box = page.locator("input[name=autoMergeByDefault]");
+  await expect(box).toBeVisible();
+  const before = await box.isChecked();
+  await box.click();
+
+  const dialog = page.getByTestId("config-refusal-dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("tables/grain_config.json");
+  await expect(
+    dialog.getByRole("button", { name: "Create Config PR" }),
+  ).toBeVisible();
+  await expect(page.getByText("diff --git", { exact: false })).toHaveCount(
+    await dialog.getByText("diff --git", { exact: false }).count(),
+  );
+  await expect(page.getByTestId("settings-status")).toHaveText(
+    "Couldn't save Auto-merge new tasks by default",
+  );
+  await expect(
+    page.getByRole("button", { name: "Retry", exact: true }),
+  ).toHaveCount(0);
+  await expect(box).toBeChecked({ checked: before });
+});
+
+// Deployment credentials (Settings → Capabilities, formerly Legacy
+// capabilities) wrapped its GitHub and GCP config fields in a bare
+// <Box component="fieldset" disabled> instead of <ReadOnlyFieldset>, leaving
+// githubInsecureHttp without [data-settings-readonly] dimming when locked
+// (docs/test-runs/2026-11-08-user-system-settings.md).
+test("a locked Deployment credentials card dims config fields via ReadOnlyFieldset while keeping secrets editable", async ({
+  page,
+}) => {
+  await withConfig(page, { configRepoOnly: true, settingsLocked: true });
+  for (const viewport of [DESKTOP, PHONE]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/settings/credentials");
+    // The retired address opens Capabilities at the card it stands for.
+    await expect(page).toHaveURL(/\/settings\/capabilities#credentials$/);
+
+    const card = page.getByTestId("deployment-credentials");
+    const box = card.locator("input[name=githubInsecureHttp]");
+    await expect(box).toBeDisabled();
+    expect(
+      await box.evaluate((el) =>
+        Boolean(el.closest("[data-settings-readonly]")),
+      ),
+    ).toBe(true);
+    expect(
+      await box.evaluate(
+        (el) => getComputedStyle(el.closest(".MuiCheckbox-root")).opacity,
+      ),
+    ).toBe("0.5");
+
+    const otherSecrets = card.locator("#other-secrets");
+    await expect(otherSecrets).toBeVisible();
+    expect(
+      await otherSecrets.evaluate((el) =>
+        Boolean(el.closest("[data-settings-readonly]")),
+      ),
+    ).toBe(false);
+
+    const cardRect = await card.boundingBox();
+    expect(cardRect.x).toBeGreaterThanOrEqual(0);
+    expect(cardRect.x + cardRect.width).toBeLessThanOrEqual(viewport.width);
+    expect(
+      await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth -
+          document.documentElement.clientWidth,
+      ),
+    ).toBe(0);
+  }
 });

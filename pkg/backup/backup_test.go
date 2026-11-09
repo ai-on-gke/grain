@@ -102,7 +102,8 @@ func TestRunBacksUpDatabaseAndCurrentConfigWithoutCredentials(t *testing.T) {
 	if err := json.Unmarshal(files["manifest.json"], &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest.FormatVersion != FormatVersion || manifest.CreatedAt != at || manifest.ConfigHead == "" {
+	if manifest.FormatVersion != FormatVersion || manifest.CreatedAt != at || manifest.ConfigHead == "" ||
+		manifest.Database != "database/grain.db" || manifest.DatabaseDriver != "sqlite" {
 		t.Fatalf("manifest = %+v", manifest)
 	}
 	assertSnapshotRow(t, files["database/grain.db"])

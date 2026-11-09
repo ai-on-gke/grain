@@ -265,8 +265,12 @@ func baseGreenReading(ctx context.Context, store *model.Store, g model.TaskGoal,
 		}
 		if rel != nil {
 			if p, behind := model.BaseBranchPublishingOf(*rel, now); behind {
+				failing := fmt.Sprintf("%d release(s) failing", p.Failures)
+				if p.Failures == 0 {
+					failing = "every release since was superseded by a newer merge before it published"
+				}
 				return goalReading{measure: measure,
-					evidence: fmt.Sprintf("%s, but it has published nothing since (%d release(s) failing)", evidence, p.Failures)}, nil
+					evidence: fmt.Sprintf("%s, but it has published nothing since (%s)", evidence, failing)}, nil
 			}
 			if rel.Commit != "" {
 				evidence += ", release published at " + shortSHA(rel.Commit)

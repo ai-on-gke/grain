@@ -23,6 +23,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -68,13 +69,13 @@ func TestCreateTemplateAcceptsCapabilitiesAndReads(t *testing.T) {
 	c, _, ctx := testClient(t)
 	tmpl, err := c.CreateTemplate(ctx, ui.CreateTemplateRequest{
 		Name: "x", Title: "x",
-		Capabilities: []string{"read-issues"},
+		Capabilities: []string{"github-sandbox"},
 		Reads:        []string{"acme/shared-lib"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tmpl.Capabilities) != 1 || tmpl.Capabilities[0] != "read-issues" {
+	if len(tmpl.Capabilities) != 1 || tmpl.Capabilities[0] != model.GitHubSandboxRepoGrant {
 		t.Errorf("capabilities = %v, want [gemini-key]", tmpl.Capabilities)
 	}
 	if len(tmpl.Reads) != 1 || tmpl.Reads[0] != "acme/shared-lib" {
@@ -550,4 +551,98 @@ func TestUpdateTemplateRefreshesItsSchedulesStraightAway(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), `"Rotate api-token (v2)"`) {
 		t.Errorf("DeleteTemplate = %v, want a refusal naming the schedule by its current title", err)
 	}
+}
+
+func TestFilingUnboundTemplateDropsTargetRepoFromReadsAndWrites(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+
+	tmpl, err := c.CreateTemplate(ctx, ui.CreateTemplateRequest{
+		Name:   "Cross-repo audit",
+		Title:  "Audit cross-repo interfaces",
+		Reads:  []string{"ACME/Widgets", "acme/gadgets"},
+		Writes: []ui.WriteTarget{{Repo: "ACME/Widgets", Base: "main"}, {Repo: "acme/gadgets", Base: "main"}},
+	})
+	if err != nil {
+		t.Fatalf("CreateTemplate: %v", err)
+	}
+
+	// Before a repo is chosen, the unbound preview retains both reads.
+	unbound, err := c.TemplateComposition(ctx, tmpl.ID, "", "main", nil, true)
+	if err != nil {
+		t.Fatalf("TemplateComposition(unbound): %v", err)
+	}
+	unboundReads := composedValues(unbound, "reads")
+	if len(unboundReads) != 2 {
+		t.Fatalf("unbound preview reads = %v, want both repos", unboundReads)
+	}
+
+	// Once acme/widgets is chosen on main, both Reads and Writes drop the
+	// redundant target entry in the preview and when filing.
+	targeted, err := c.TemplateComposition(ctx, tmpl.ID, "acme/widgets", "main", nil, true)
+	if err != nil {
+		t.Fatalf("TemplateComposition(acme/widgets): %v", err)
+	}
+	if got := composedValues(targeted, "reads"); len(got) != 1 || got[0] != "acme/gadgets" {
+		t.Fatalf("targeted preview reads = %v, want [acme/gadgets]", got)
+	}
+	if got := composedValues(targeted, "writes"); len(got) != 1 || !strings.HasPrefix(got[0], "acme/gadgets") {
+		t.Fatalf("targeted preview writes = %v, want [acme/gadgets ...]", got)
+	}
+
+	filedExplicit, err := c.CreateTask(ctx, ui.CreateTaskRequest{
+		TemplateID: tmpl.ID,
+		Repo:       "acme/widgets",
+		Base:       "main",
+		Approved:   true,
+	})
+	if err != nil {
+		t.Fatalf("CreateTask with explicit Repo: %v", err)
+	}
+	if len(filedExplicit.Reads) != 1 || filedExplicit.Reads[0] != "acme/gadgets" {
+		t.Errorf("filedExplicit.Reads = %v, want [acme/gadgets]", filedExplicit.Reads)
+	}
+	if len(filedExplicit.Writes) != 1 || filedExplicit.Writes[0].Repo != "acme/gadgets" {
+		t.Errorf("filedExplicit.Writes = %+v, want [acme/gadgets@main]", filedExplicit.Writes)
+	}
+
+	// Omitting Repo falls back to DefaultTarget (acme/widgets) and drops the
+	// redundant read as well.
+	filedDefault, err := c.CreateTask(ctx, ui.CreateTaskRequest{
+		TemplateID: tmpl.ID,
+		Base:       "main",
+		Approved:   true,
+	})
+	if err != nil {
+		t.Fatalf("CreateTask with DefaultTarget: %v", err)
+	}
+	if len(filedDefault.Reads) != 1 || filedDefault.Reads[0] != "acme/gadgets" {
+		t.Errorf("filedDefault.Reads = %v, want [acme/gadgets]", filedDefault.Reads)
+	}
+	if len(filedDefault.Writes) != 1 || filedDefault.Writes[0].Repo != "acme/gadgets" {
+		t.Errorf("filedDefault.Writes = %+v, want [acme/gadgets@main]", filedDefault.Writes)
+	}
+
+	// Explicitly passing the target among Reads on the request itself is still refused.
+	_, err = c.CreateTask(ctx, ui.CreateTaskRequest{
+		TemplateID: tmpl.ID,
+		Repo:       "acme/widgets",
+		Reads:      []string{"acme/widgets"},
+	})
+	var ve *ui.ValidationError
+	if !errors.As(err, &ve) {
+		t.Errorf("explicit duplicate Reads error = %v, want ValidationError", err)
+	}
+}
+
+func composedValues(comp ui.Composition, field string) []string {
+	if len(comp.Tasks) == 0 {
+		return nil
+	}
+	for _, f := range comp.Tasks[0].Fields {
+		if f.Name == field {
+			return f.Values
+		}
+	}
+	return nil
 }

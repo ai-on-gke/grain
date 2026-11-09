@@ -76,6 +76,13 @@ func preDockerHubReleaseRepo(t *testing.T) (string, map[string]string) {
 // Hub carries.
 func releaseRepoWith(t *testing.T, dockerfile string, dockerHub bool) (string, map[string]string) {
 	t.Helper()
+	return releaseRepoWithFiles(t, dockerfile, dockerHub, nil)
+}
+
+// releaseRepoWithFiles is releaseRepoWith with more files, by path, in
+// every release's tree.
+func releaseRepoWithFiles(t *testing.T, dockerfile string, dockerHub bool, extra map[string]string) (string, map[string]string) {
+	t.Helper()
 	dir := t.TempDir()
 	git := func(args ...string) string {
 		t.Helper()
@@ -104,6 +111,9 @@ func releaseRepoWith(t *testing.T, dockerfile string, dockerHub bool) (string, m
 	}
 	if dockerHub {
 		files["scripts/release-image-repos.sh"] = "RELEASE_IMAGE_REGISTRY_DEFAULT=\"docker.io\"\n"
+	}
+	for name, body := range extra {
+		files[name] = body
 	}
 	for name, body := range files {
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
@@ -333,10 +343,14 @@ func TestPromoteRebuildsTheGrainImageWithTheReleaseStamped(t *testing.T) {
 		// The release's own Dockerfile, given the ARG it predates.
 		"ARG RELEASE=\n" + oldMakeBuild + " RELEASE=${RELEASE}\n",
 		"push docker.io/grainai/grain:v1.5.0",
-		"buildx imagetools create --tag docker.io/grainai/grain:latest docker.io/grainai/grain:v1.5.0",
+		// The stamped release is a single-platform manifest `docker push`
+		// wrote, so the retags carbon-copy it (--prefer-index=false) rather
+		// than wrapping it in a new index under another digest
+		// (docs/test-runs/2026-11-07-releases-upgrades-ci.md, Bug F4).
+		"buildx imagetools create --tag docker.io/grainai/grain:latest docker.io/grainai/grain:v1.5.0 --prefer-index=false",
 		// The candidate's build is replaced under its sha- tag by the
 		// stamped release, so cmd/ghcr-prune keeps that tag with vX.Y.Z.
-		"buildx imagetools create --tag docker.io/grainai/grain:sha-" + short + " docker.io/grainai/grain:v1.5.0",
+		"buildx imagetools create --tag docker.io/grainai/grain:sha-" + short + " docker.io/grainai/grain:v1.5.0 --prefer-index=false",
 	} {
 		containsRun(t, docker, want)
 	}

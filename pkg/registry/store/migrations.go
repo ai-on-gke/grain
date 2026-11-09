@@ -182,10 +182,183 @@ CREATE INDEX IF NOT EXISTS tunnel_sessions_replica_idx
     ON registry.tunnel_sessions (replica_id);
 `,
 	},
+	{
+		version: 2,
+		name:    "tunnel_and_routing_extensions",
+		upSQL: `
+ALTER TABLE registry.entries
+    ADD COLUMN IF NOT EXISTS connected_principal TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS host_kind TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS last_disconnect_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS last_disconnect_reason TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE registry.tunnel_sessions
+    ADD COLUMN IF NOT EXISTS cred_id UUID;
+`,
+	},
+	{
+		version: 3,
+		name:    "catalog_metadata_scopes_and_heartbeats",
+		upSQL: `
+ALTER TABLE registry.entries
+    ADD COLUMN IF NOT EXISTS pending_owner TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS replace_step TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS target_version TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS allow_ssh BOOLEAN NOT NULL DEFAULT TRUE,
+    ADD COLUMN IF NOT EXISTS ship_logs BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS grain_commit TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS health_state TEXT NOT NULL DEFAULT 'ok',
+    ADD COLUMN IF NOT EXISTS health_detail TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS awaiting_reply_tasks INT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS active_sessions INT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS has_reported_scopes BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS reserved_until TIMESTAMPTZ;
+
+ALTER TABLE registry.entry_scopes
+    ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE,
+    ADD COLUMN IF NOT EXISTS inactive_reason TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS conflict_with TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+CREATE INDEX IF NOT EXISTS entry_scopes_conflict_idx
+    ON registry.entry_scopes (repo, conflict_with) WHERE conflict_with <> '';
+
+ALTER TABLE registry.entry_credentials
+    ADD COLUMN IF NOT EXISTS label TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS created_by TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+`,
+	},
+	{
+		version: 4,
+		name:    "delegating_apps_and_grants",
+		upSQL: `
+CREATE TABLE IF NOT EXISTS registry.delegating_apps (
+    name                  TEXT PRIMARY KEY,
+    principal             TEXT NOT NULL UNIQUE,
+    display_name          TEXT NOT NULL,
+    description           TEXT NOT NULL DEFAULT '',
+    homepage              TEXT NOT NULL DEFAULT '',
+    owner                 TEXT NOT NULL REFERENCES registry.owners(email),
+    owner_group           TEXT NOT NULL DEFAULT '',
+    max_access            TEXT NOT NULL DEFAULT 'write' CHECK (max_access IN ('read', 'write')),
+    max_grant_ttl_seconds BIGINT NOT NULL DEFAULT 7776000,
+    require_subject_token BOOLEAN NOT NULL DEFAULT FALSE,
+    redirect_uris         JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_by            TEXT NOT NULL,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    disabled_at           TIMESTAMPTZ,
+    disabled_by           TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS registry.delegation_grants (
+    id           TEXT PRIMARY KEY,
+    app          TEXT NOT NULL REFERENCES registry.delegating_apps(name) ON DELETE CASCADE,
+    person       TEXT NOT NULL,
+    entries      JSONB NOT NULL DEFAULT '[]'::jsonb,
+    access       TEXT NOT NULL CHECK (access IN ('read', 'write')),
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at   TIMESTAMPTZ NOT NULL,
+    revoked_at   TIMESTAMPTZ,
+    revoked_by   TEXT NOT NULL DEFAULT '',
+    last_used_at TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS delegation_grants_live_idx
+    ON registry.delegation_grants (app, person) WHERE revoked_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS delegation_grants_person_idx
+    ON registry.delegation_grants (person) WHERE revoked_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS registry.delegation_usage (
+    grant_id TEXT NOT NULL REFERENCES registry.delegation_grants(id) ON DELETE CASCADE,
+    name     TEXT NOT NULL,
+    day      DATE NOT NULL,
+    reads    BIGINT NOT NULL DEFAULT 0,
+    writes   BIGINT NOT NULL DEFAULT 0,
+    last_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (grant_id, name, day)
+);
+
+ALTER TABLE registry.audit_log
+    ADD COLUMN IF NOT EXISTS via TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS grant_id TEXT NOT NULL DEFAULT '';
+`,
+	},
+	{
+		version: 5,
+		name:    "fleet_upgrades_and_stop_start",
+		upSQL: `
+ALTER TABLE registry.entries
+    DROP CONSTRAINT IF EXISTS entries_lifecycle_state_check;
+
+ALTER TABLE registry.entries
+    ADD CONSTRAINT entries_lifecycle_state_check
+    CHECK (lifecycle_state IN (
+        'creating', 'running', 'replacing', 'stopping', 'stopped', 'deleting', 'deleted', 'failed',
+        'PROVISIONING', 'ACTIVE', 'STOPPING', 'STOPPED', 'DEPROVISIONING', 'DELETED', 'FAILED'
+    ));
+
+ALTER TABLE registry.entries
+    ADD COLUMN IF NOT EXISTS auto_upgrade TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS auto_wake BOOLEAN NOT NULL DEFAULT TRUE,
+    ADD COLUMN IF NOT EXISTS upgrade_available TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS stopped_at TIMESTAMPTZ;
+`,
+	},
+	{
+		version: 6,
+		name:    "transfer_expiry_and_admin_recovery",
+		upSQL: `
+ALTER TABLE registry.entries
+    ADD COLUMN IF NOT EXISTS transfer_expires_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS purged_at           TIMESTAMPTZ;
+
+ALTER TABLE registry.leases
+    ADD COLUMN IF NOT EXISTS acquired_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ADD COLUMN IF NOT EXISTS renewed_at  TIMESTAMPTZ NOT NULL DEFAULT now();
+`,
+	},
+	{
+		version: 7,
+		name:    "custom_boot_disk_gb",
+		upSQL: `
+ALTER TABLE registry.entries
+    ADD COLUMN IF NOT EXISTS boot_disk_gb INT;
+`,
+	},
 }
 
+// migrateLockKey is the pg_advisory_lock key every grain-registry replica takes
+// before touching the registry schema ("grnreg" in ASCII), so replicas that
+// start together against one database apply each migration exactly once.
+const migrateLockKey int64 = 0x67726e726567
+
 // Migrate applies all pending registry schema migrations inside the `registry` PostgreSQL schema.
+//
+// Replicas of one registry share a database and normally start at the same
+// time (a Deployment rollout), so Migrate holds a session-level advisory lock
+// for its whole run: without it two replicas both see a migration as pending
+// and race on CREATE ... IF NOT EXISTS, and the loser exits with
+// `duplicate key value violates unique constraint "pg_type_typname_nsp_index"`.
 func Migrate(ctx context.Context, db *sql.DB) error {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquiring migration connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, migrateLockKey); err != nil {
+		return fmt.Errorf("taking registry migration lock: %w", err)
+	}
+	defer func() {
+		_, _ = conn.ExecContext(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, migrateLockKey)
+	}()
+	return migrateLocked(ctx, conn)
+}
+
+func migrateLocked(ctx context.Context, db *sql.Conn) error {
 	if _, err := db.ExecContext(ctx, `CREATE SCHEMA IF NOT EXISTS registry`); err != nil {
 		return fmt.Errorf("creating registry schema: %w", err)
 	}

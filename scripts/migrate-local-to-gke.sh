@@ -26,11 +26,16 @@
 # last run stopped, and a stage whose work is already done says so and
 # moves on.
 #
-# This keeps the store as it is -- SQLite on the grain-data PVC, or the
-# Postgres the local daemon already uses -- and copies the whole data
-# directory, so the controller that comes up in the cluster is the same
-# deployment with the same history, secrets and state repository, and
-# only the place it runs has changed.
+# This keeps the store as it is -- SQLite on the grain-data PVC, or a
+# Postgres server the cluster can reach that the local daemon already
+# uses -- and copies the whole data directory, so the controller that
+# comes up in the cluster is the same deployment with the same history,
+# secrets and state repository, and only the place it runs has changed.
+# A host whose store is the local PostgreSQL server setup.sh provisions
+# (grain-postgres.service on 127.0.0.1) is refused before anything is
+# touched, with the steps that move its store somewhere the cluster can
+# reach: the controller cannot reach this host's loopback, and that
+# server's files are not a consistent copy while it runs.
 #
 # Tested by scripts/migrate-local-to-gke_test.sh (stubbed kubectl,
 # systemctl, gcloud, docker, curl and grain), run in CI by
@@ -58,6 +63,8 @@ PROVISION=false
 NAMESPACE="grain"
 IMAGE=""
 SANDBOX_IMAGE=""
+MIRROR=""
+MIRROR_PUSHES=()
 TARGET_REPO=""
 NODE_SELECTOR=""
 MANIFEST="${REPO_ROOT}/deploy/kubernetes/grain-granule.yaml"
@@ -83,6 +90,10 @@ DAEMON_UNIT=grain-daemon.service
 # file is in /etc/systemd/system, which is where setup.sh installs it.
 ASIDE_SUFFIX=.pre-gke
 HOSTD_UNIT=grain-hostd.service
+# POSTGRES_UNIT is the local PostgreSQL server scripts/setup.sh
+# provisions beside the daemon (docs/database.md, "The local server").
+# A host whose store is that server is refused: see local_postgres_store.
+POSTGRES_UNIT=grain-postgres.service
 FORWARD_UNIT=grain-gke-forward.service
 # MODEL_UNIT is the grain model-server unit an earlier version of this
 # script installed beside hostd; remote executors are retired, and
@@ -117,6 +128,11 @@ What runs there:
                             docker.io/grainai/grain:main)
   --sandbox-image <ref>     Packed guest image for -k8s-granule-image (default:
                             the local daemon's -sandbox-image)
+  --mirror <registry/path>  A registry the cluster pulls from. A host installed
+                            from release assets (docs/release-assets.md) runs
+                            local grain/* refs only it has; with --mirror they
+                            are tagged <registry/path>/<image>:<tag> and pushed
+                            there first, and the cluster runs those
   --target-repo <owner/name>
                             -default-target-repo (default: the local daemon's)
   --node-selector <k=v>     -k8s-node-selector for the nested-virt pool
@@ -225,6 +241,8 @@ parse_args() {
       --namespace=*) NAMESPACE="${1#*=}" ;;
       --image) IMAGE="$2"; shift ;;
       --image=*) IMAGE="${1#*=}" ;;
+      --mirror) MIRROR="$2"; shift ;;
+      --mirror=*) MIRROR="${1#*=}" ;;
       --sandbox-image) SANDBOX_IMAGE="$2"; shift ;;
       --sandbox-image=*) SANDBOX_IMAGE="${1#*=}" ;;
       --target-repo) TARGET_REPO="$2"; shift ;;
@@ -361,12 +379,52 @@ resolve_local_daemon() {
     # daemon subcommand is the container's image.
     IMAGE="$(awk '{ for (i = 1; i <= NF; i++) if ($i == "daemon") { print $(i-1); exit } }' <<<"${exec}")"
     [[ "${IMAGE}" == */* ]] || IMAGE=""
+    # setup.sh's unit runs ${GRAIN_IMAGE} out of its EnvironmentFile, so
+    # the image is that file's last GRAIN_IMAGE= line, read as data --
+    # which on a host installed from release assets is a local grain/*
+    # ref only it has, for mirror_release_refs to push.
+    if [[ -z "${IMAGE}" && -f "${GRAIN_ETC_DIR}/image.env" ]]; then
+      IMAGE="$(sed -n 's/^[[:space:]]*GRAIN_IMAGE=//p' "${GRAIN_ETC_DIR}/image.env" | tail -n1 | tr -d "\"'")"
+      [[ "${IMAGE}" =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ && "${IMAGE}" == */* ]] || IMAGE=""
+    fi
   fi
   IMAGE="${IMAGE:-${DEFAULT_IMAGE}}"
   TRANSFER_IMAGE="${TRANSFER_IMAGE:-${IMAGE}}"
   [[ -n "${SANDBOX_IMAGE}" ]] || SANDBOX_IMAGE="$(flag_value "${exec}" sandbox-image)"
   [[ -n "${SANDBOX_IMAGE}" ]] || SANDBOX_IMAGE="$(flag_value "${exec}" k8s-granule-image)"
   [[ -n "${TARGET_REPO}" ]] || TARGET_REPO="$(flag_value "${exec}" default-target-repo)"
+  mirror_release_refs
+}
+
+# mirror_release_refs renames each image that is a release asset's local
+# ref (grain/<image>:<tag>, which a cluster would resolve on Docker Hub)
+# into MIRROR, recording the push push_mirrored_images makes; with no
+# MIRROR such a ref stops the migration, naming the flag.
+mirror_release_refs() {
+  local var ref
+  MIRROR_PUSHES=()
+  for var in IMAGE SANDBOX_IMAGE TRANSFER_IMAGE; do
+    ref="${!var}"
+    case "${ref}" in
+      grain/*:*)
+        [[ -n "${MIRROR}" ]] ||
+          die "${var} is ${ref}, a release-asset image only this host has: pass --mirror <registry/path> the cluster can pull from"
+        printf -v "${var}" '%s' "${MIRROR%/}/${ref#grain/}"
+        # IMAGE and TRANSFER_IMAGE are usually the same ref: push it once.
+        [[ " ${MIRROR_PUSHES[*]+"${MIRROR_PUSHES[*]}"} " == *" ${ref}=${!var} "* ]] ||
+          MIRROR_PUSHES+=("${ref}=${!var}")
+        ;;
+    esac
+  done
+}
+
+# push_mirrored_images pushes what mirror_release_refs renamed.
+push_mirrored_images() {
+  local pair
+  for pair in ${MIRROR_PUSHES[@]+"${MIRROR_PUSHES[@]}"}; do
+    run docker tag "${pair%%=*}" "${pair#*=}"
+    run docker push "${pair#*=}"
+  done
 }
 
 hostd_user() {
@@ -401,6 +459,145 @@ controller_url() {
   fi
 }
 
+# --- The store ------------------------------------------------------------
+
+# dsn_host_port DSN sets DSN_HOST and DSN_PORT from a PostgreSQL DSN, in
+# URL form (postgres://user:pass@host:port/db?host=...&port=...) or
+# key/value form (host=... port=...). DSN_HOST is empty where the DSN
+# names no host -- libpq's default, the local Unix socket -- and DSN_PORT
+# is 5432 where it names no port.
+dsn_host_port() {
+  local dsn="$1" rest authority query="" kv
+  local -a kvs=()
+  DSN_HOST=""
+  DSN_PORT=""
+  case "${dsn}" in
+    postgres://* | postgresql://*)
+      rest="${dsn#*://}"
+      authority="${rest%%[/?]*}"
+      [[ "${rest}" == *\?* ]] && query="${rest#*\?}"
+      authority="${authority##*@}"
+      if [[ "${authority}" == \[* ]]; then
+        DSN_HOST="${authority%%]*}"
+        DSN_HOST="${DSN_HOST#[}"
+        [[ "${authority}" == *\]:* ]] && DSN_PORT="${authority##*]:}"
+      else
+        DSN_HOST="${authority%%:*}"
+        [[ "${authority}" == *:* ]] && DSN_PORT="${authority#*:}"
+      fi
+      IFS='&' read -ra kvs <<<"${query}"
+      ;;
+    *)
+      read -ra kvs <<<"${dsn}"
+      ;;
+  esac
+  for kv in "${kvs[@]}"; do
+    kv="${kv//\'/}"
+    case "${kv}" in
+      host=*) DSN_HOST="${kv#host=}" ;;
+      hostaddr=*) [[ -n "${DSN_HOST}" ]] || DSN_HOST="${kv#hostaddr=}" ;;
+      port=*) DSN_PORT="${kv#port=}" ;;
+    esac
+  done
+  DSN_PORT="${DSN_PORT:-5432}"
+}
+
+# is_loopback HOST: HOST is only reachable from this host -- empty (the
+# default socket), a socket directory, localhost, 127.0.0.0/8 or ::1.
+is_loopback() {
+  case "$1" in
+    "" | /* | %2[Ff]* | localhost | 127.* | ::1 | 0:0:0:0:0:0:0:1) return 0 ;;
+  esac
+  return 1
+}
+
+# db_config_value KEY prints KEY's string value in db-config.json -- with
+# jq where there is one, else from the single-line or indented JSON the
+# daemon writes, undoing the \u0026 Go's encoder writes for '&'.
+db_config_value() {
+  local file="${DATA_DIR}/db-config.json"
+  [[ -f "${file}" ]] || return 0
+  if command -v jq >/dev/null 2>&1; then
+    jq -r --arg k "$1" '.[$k] // empty' "${file}" 2>/dev/null && return 0
+  fi
+  sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" "${file}" | head -n1 |
+    sed 's/\\u0026/\&/g'
+}
+
+# daemon_env_file_dsn prints the GRAIN_DB_DSN of the EnvironmentFile=
+# grain-daemon.service reads its store from (/etc/grain/postgres.env when
+# its store is the local server), or nothing.
+daemon_env_file_dsn() {
+  local file env
+  file="$(unit_file "${DAEMON_UNIT}")"
+  [[ -n "${file}" ]] || return 0
+  while IFS= read -r env; do
+    env="${env#-}"
+    [[ -r "${env}" ]] || continue
+    sed -n 's/^GRAIN_DB_DSN=//p' "${env}" | tail -n1 | sed "s/^[\"']//; s/[\"']\$//"
+  done < <(sed -n 's/^EnvironmentFile=//p' "${file}")
+}
+
+# local_postgres_store prints why this host's store is the local
+# PostgreSQL server setup.sh provisions, or nothing when it is not.
+#
+# A host is one setup.sh provisioned that server on when it has the
+# server's unit or the password that lives with its data -- the same test
+# setup.sh's existing_store_kind makes. Its store is that server when the
+# DSN the daemon runs with (its -db-dsn, its EnvironmentFile's
+# GRAIN_DB_DSN) or the one db-config.json records -- which is what the
+# cluster controller opens -- names loopback on the server's port, or
+# when nothing names a store at all. A host moved onto another server
+# (setup.sh --db-dsn) with the old unit left behind is not refused.
+local_postgres_store() {
+  local unit="${SYSTEMD_DIR}/${POSTGRES_UNIT}" password="${DATA_DIR}/secrets/postgres-password"
+  [[ -f "${unit}" || -f "${password}" ]] || return 0
+  local port="" what
+  [[ -f "${unit}" ]] && port="$(sed -n 's/^Environment=GRAIN_POSTGRES_PORT=//p' "${unit}" | tail -n1)"
+  port="${port:-5432}"
+  local -a sources=() dsns=()
+  local dsn
+  dsn="$(flag_value "$(unit_execstart "${DAEMON_UNIT}")" db-dsn)"
+  [[ -n "${dsn}" ]] && { sources+=("${DAEMON_UNIT}'s -db-dsn"); dsns+=("${dsn}"); }
+  dsn="$(daemon_env_file_dsn | tail -n1)"
+  [[ -n "${dsn}" ]] && { sources+=("${DAEMON_UNIT}'s EnvironmentFile (GRAIN_DB_DSN)"); dsns+=("${dsn}"); }
+  dsn="$(db_config_value dsn)"
+  [[ -n "${dsn}" ]] && { sources+=("${DATA_DIR}/db-config.json"); dsns+=("${dsn}"); }
+  if [[ "${#dsns[@]}" -eq 0 ]]; then
+    what="$([[ -f "${unit}" ]] && printf '%s is installed' "${unit}" || printf '%s exists' "${password}")"
+    printf '%s and no DSN names another store\n' "${what}"
+    return 0
+  fi
+  local i
+  for i in "${!dsns[@]}"; do
+    dsn_host_port "${dsns[$i]}"
+    if is_loopback "${DSN_HOST}" && [[ "${DSN_PORT}" == "${port}" ]]; then
+      printf '%s names %s:%s\n' "${sources[$i]}" "${DSN_HOST:-<local socket>}" "${DSN_PORT}"
+      return 0
+    fi
+  done
+}
+
+# refuse_local_postgres REASON stops a migration of a host whose store is
+# the local PostgreSQL server, before anything is changed, saying how to
+# move the store somewhere the cluster controller can reach.
+refuse_local_postgres() {
+  die "this host's store is the local PostgreSQL server (${POSTGRES_UNIT}, data in ${DATA_DIR}/postgres): $1.
+  This script cannot carry it to the cluster. The controller there has no server at
+  this host's 127.0.0.1, so it would fail to open its store or start on an empty one,
+  and the server's files copied while ${POSTGRES_UNIT} runs are not a consistent copy.
+  Nothing was changed. Move the store to a PostgreSQL server the cluster can reach
+  (Cloud SQL: docs/cloudsql-postgres.md) with the daemon stopped, then run this again:
+    sudo systemctl stop ${DAEMON_UNIT}
+    sudo docker exec grain-postgres sh -c 'PGPASSWORD=\$(cat /run/grain/postgres-password) exec pg_dump -U grain -d grain -Fc' > /root/grain.dump
+    pg_restore -d 'postgres://USER:PASSWORD@HOST:5432/grain' --no-owner /root/grain.dump
+    sudo ./scripts/setup.sh --db-dsn 'postgres://USER:PASSWORD@HOST:5432/grain?sslmode=require'
+    sudo grain db check -data-dir ${DATA_DIR}
+    sudo systemctl disable --now ${POSTGRES_UNIT}
+  docs/database.md (\"Moving a store\") has the details. Keep ${DATA_DIR}/postgres until the
+  cluster controller has run on the new server for a while."
+}
+
 # --- Stage 1: preflight ---------------------------------------------------
 
 preflight() {
@@ -414,7 +611,21 @@ preflight() {
   done
   [[ -d "${DATA_DIR}" ]] || die "no local data directory at ${DATA_DIR} (pass --data-dir)"
 
-  if [[ -f "${DATA_DIR}/store/grain.db" ]]; then
+  local local_pg
+  local_pg="$(local_postgres_store)"
+  [[ -z "${local_pg}" ]] || refuse_local_postgres "${local_pg}"
+  if [[ -f "${SYSTEMD_DIR}/${POSTGRES_UNIT}" ]]; then
+    log "  ${POSTGRES_UNIT} is installed but is not the store: leaving it alone"
+  fi
+
+  # db-config.json first: a store moved from SQLite to Postgres leaves
+  # store/grain.db where it was, and the daemon opens what db-config.json
+  # records.
+  if [[ "$(db_config_value driver)" == "postgres" ]]; then
+    dsn_host_port "$(db_config_value dsn)"
+    log "  store: Postgres at ${DSN_HOST:-<local socket>}:${DSN_PORT}, recorded in ${DATA_DIR}/db-config.json"
+    warn "the cluster controller opens the same Postgres: make sure the cluster can reach it before cutting over"
+  elif [[ -f "${DATA_DIR}/store/grain.db" ]]; then
     log "  store: SQLite at ${DATA_DIR}/store/grain.db (copied to the grain-data PVC)"
   elif [[ -f "${DATA_DIR}/db-config.json" ]]; then
     log "  store: Postgres recorded in ${DATA_DIR}/db-config.json"
@@ -459,6 +670,7 @@ preflight() {
   [[ -n "${SANDBOX_IMAGE}" ]] || die "no packed guest image for -k8s-granule-image: pass --sandbox-image"
   [[ -n "${TARGET_REPO}" ]] || die "no default target repository: pass --target-repo owner/name"
   [[ -f "${MANIFEST}" ]] || die "no manifest at ${MANIFEST}"
+  push_mirrored_images
   log "  controller image: ${IMAGE}"
   log "  sandbox image:    ${SANDBOX_IMAGE}"
   log "  target repo:      ${TARGET_REPO}"

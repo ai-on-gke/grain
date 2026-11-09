@@ -25,6 +25,14 @@ import {
 
 export const SettingsReadOnlyContext = createContext(false);
 
+// SettingsRoleRefusalContext is why the signed-in person's role may not
+// change the open section -- "Needs settings:write, which your role
+// grain/viewer does not grant." (access.js) -- or "" when it may. A
+// refused section is read-only whatever else is true of it, its cards'
+// "stays usable in external mode" parts included, and each card says
+// why when hovered.
+export const SettingsRoleRefusalContext = createContext("");
+
 // SettingsCard is one card of a Settings section: what used to be a
 // sub-heading of a System tab ("CI queue", "Sandbox budget"), with an
 // anchor so /settings/ci#ci-queue scrolls to it
@@ -40,7 +48,10 @@ export default function SettingsCard({
   allowInExternalMode = false,
   children,
 }) {
-  const readOnly = useContext(SettingsReadOnlyContext) && !allowInExternalMode;
+  const roleRefusal = useContext(SettingsRoleRefusalContext);
+  const readOnly =
+    (useContext(SettingsReadOnlyContext) && !allowInExternalMode) ||
+    Boolean(roleRefusal);
   return (
     <Paper
       variant="outlined"
@@ -55,7 +66,9 @@ export default function SettingsCard({
           {title}
         </Typography>
       )}
-      <ReadOnlyFieldset disabled={readOnly}>{children}</ReadOnlyFieldset>
+      <ReadOnlyFieldset disabled={readOnly} title={roleRefusal || undefined}>
+        {children}
+      </ReadOnlyFieldset>
     </Paper>
   );
 }
@@ -68,7 +81,10 @@ const INERT_IN_READ_ONLY = ".MuiSelect-select, .MuiChip-deletable";
 // card wraps itself in, and what a card that stays usable in external
 // mode wraps round the parts of it the API still refuses there (a model
 // connection's own fields, beside its credential).
-export function ReadOnlyFieldset({ disabled = true, children }) {
+//
+// `title` is the tooltip the whole of it wears: why it is read-only,
+// where that is the signed-in person's role.
+export function ReadOnlyFieldset({ disabled = true, title, children }) {
   const ref = useRef(null);
   // A Select's box and a deletable chip are focusable elements of MUI's
   // own, which a disabled fieldset does not reach: say they are disabled
@@ -109,6 +125,7 @@ export function ReadOnlyFieldset({ disabled = true, children }) {
       component="fieldset"
       disabled
       data-settings-readonly
+      title={title}
       // ...and the keys that would open a Select or delete a chip are
       // stopped before MUI sees them, should one still hold focus.
       onKeyDownCapture={(evt) => {

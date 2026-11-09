@@ -17,6 +17,7 @@ package policy
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -162,6 +163,8 @@ func TestRetiredSelfDebugInAPolicyBindsWhatItBecame(t *testing.T) {
 	}
 }
 
+func strconvQuote(s string) string { return strconv.Quote(s) }
+
 func TestCheckCapabilityPatterns(t *testing.T) {
 	cases := []struct {
 		rules, grant string
@@ -223,6 +226,47 @@ func TestCheckCapabilityPatterns(t *testing.T) {
 		{"deny: [\"" + model.RepoReadRef + "\"]", "repo-read:acme/widgets", "forbids capability"},
 		{"allow: [repo-read:acme/*]", model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "widgets"}), ""},
 		{"allow: [repo-read:acme/*]", model.RepoWriteGrant(model.RepoRef{Owner: "acme", Name: "widgets"}), "does not allow capability"},
+		// Exact capability-reference grants (ref=<json>) bind only those
+		// arguments, while bootstrap-playbooks denies every config-map and
+		// skill alias selecting the bootstrap playbooks.
+		{`allow: [` + strconvQuote(model.BootstrapPlaybooksGrant) + `]`, model.BootstrapPlaybooksGrant, ""},
+		{`allow: [` + strconvQuote(model.BootstrapPlaybooksGrant) + `]`, model.ConfigMapRef + `={"config_maps": ["bootstrap"]}`, ""},
+		{`allow: [` + strconvQuote(model.BootstrapPlaybooksGrant) + `]`, "bootstrap-playbooks", ""},
+		{`allow: [` + strconvQuote(model.BootstrapPlaybooksGrant) + `]`, model.ConfigMapRef, "does not allow capability"},
+		{`allow: [` + strconvQuote(model.BootstrapPlaybooksGrant) + `]`, model.ConfigMapRef + "={}", "does not allow capability"},
+		{`allow: [` + strconvQuote(model.BootstrapPlaybooksGrant) + `]`, model.ConfigMapRef + `={"secrets":["prod"]}`, "does not allow capability"},
+		{`allow: [` + strconvQuote(model.BootstrapPlaybooksGrant) + `]`, model.ConfigMapRef + `={"config_maps":["BOOTSTRAP"]}`, "does not allow capability"},
+		{`allow: [bootstrap-playbooks]`, model.ConfigMapRef + `={"config_maps": ["bootstrap"]}`, ""},
+		{`allow: [bootstrap-playbooks]`, model.ConfigMapRef + `={"secrets":["prod"]}`, "does not allow capability"},
+		{`allow: [` + strconvQuote(model.GrainSourceGrant) + `]`, model.GrainSourceGrant, ""},
+		{`allow: [` + strconvQuote(model.GrainSourceGrant) + `]`, model.GrainSourceRef, ""},
+		{`deny: [bootstrap-playbooks]`, model.BootstrapPlaybooksGrant, "forbids capability"},
+		{`deny: [bootstrap-playbooks]`, model.SkillCapabilityServerID + `#config-map={"config_maps":["bootstrap"]}`, "forbids capability"},
+		{`deny: [bootstrap-playbooks]`, model.SkillCapabilityServerID + `#skill={"skills":["bootstrap"]}`, "forbids capability"},
+		{`deny: [bootstrap-playbooks]`, model.ConfigMapCapabilityServerID + `#skill={"skills":["bootstrap"]}`, "forbids capability"},
+		{`deny: [boot*]`, model.SkillCapabilityServerID + `#skill={"skills":["bootstrap"]}`, "forbids capability"},
+		{`deny: [` + strconvQuote(model.BootstrapPlaybooksGrant) + `]`, model.SkillCapabilityServerID + `#skill={"skills":["bootstrap"]}`, "forbids capability"},
+		{`deny: [` + strconvQuote(model.ConfigMapRef+`={"secrets":["prod"]}`) + `]`, model.BootstrapPlaybooksGrant, ""},
+		// Case-insensitive https:// scheme/method on ref=<json>, while preserving JSON value case.
+		{`deny: [` + strconvQuote(`HTTPS://GRAIN.DEV/CAPABILITIES/CONFIG-MAP#CONFIG-MAP={"secrets":["prod"]}`) + `]`, model.ConfigMapRef + `={"secrets":["prod"]}`, "forbids capability"},
+		{`deny: [` + strconvQuote(`HTTPS://GRAIN.DEV/CAPABILITIES/CONFIG-MAP#CONFIG-MAP={"secrets":["prod"]}`) + `]`, model.ConfigMapRef + `={"secrets":["PROD"]}`, ""},
+		{`allow: [` + strconvQuote(`HTTPS://GRAIN.DEV/CAPABILITIES/CONFIG-MAP#CONFIG-MAP={"config_maps":["bootstrap"]}`) + `]`, model.BootstrapPlaybooksGrant, ""},
+		{`allow: [` + strconvQuote(`HTTPS://GRAIN.DEV/CAPABILITIES/CONFIG-MAP#CONFIG-MAP={"config_maps":["bootstrap"]}`) + `]`, model.ConfigMapRef + `={"config_maps":["BOOTSTRAP"]}`, "does not allow capability"},
+		// Unnormalized methodless shorthand, unnamed #skill, and skill/config-map server aliases cannot bypass deny rules.
+		{`deny: [` + strconvQuote(model.ConfigMapRef) + `]`, model.ConfigMapCapabilityServerID + `={"secrets":["prod"]}`, "forbids capability"},
+		{`deny: [` + strconvQuote(model.ConfigMapRef) + `]`, model.SkillCapabilityServerID + `#config-map={"secrets":["prod"]}`, "forbids capability"},
+		{`deny: [` + strconvQuote(model.ConfigMapRef+`={"secrets":["prod"]}`) + `]`, model.ConfigMapCapabilityServerID + `={"secrets":["prod"]}`, "forbids capability"},
+		{`deny: [` + strconvQuote(model.ConfigMapRef+`={"secrets":["prod"]}`) + `]`, model.SkillCapabilityServerID + `#config-map={"secrets":["prod"]}`, "forbids capability"},
+		{`deny: [` + strconvQuote(model.ConfigMapRef+`={"secrets":["prod"]}`) + `]`, model.ConfigMapCapabilityServerID + `={"config_maps":["bootstrap"]}`, ""},
+		{`deny: [bootstrap-playbooks]`, model.SkillCapabilityServerID + `#config-map={"secrets":["prod"]}`, "forbids capability"},
+		{`deny: [bootstrap-playbooks]`, model.ConfigMapCapabilityServerID + `={"config_maps":["bootstrap"]}`, "forbids capability"},
+		{`deny: [bootstrap-playbooks]`, model.SkillCapabilityServerID + `#skill`, "forbids capability"},
+		{`deny: [bootstrap-playbooks]`, model.ConfigMapCapabilityServerID + `#skill`, "forbids capability"},
+		{`deny: [bootstrap-playbooks]`, model.SkillCapabilityServerID, "forbids capability"},
+		{`deny: [bootstrap-playbooks]`, model.SkillCapabilityServerID + `#skill={"skills":["ops"]}`, ""},
+		{`deny: [` + strconvQuote(model.BootstrapPlaybooksGrant) + `]`, model.SkillCapabilityServerID + `#skill`, "forbids capability"},
+		{`deny: [` + strconvQuote(model.BootstrapPlaybooksGrant) + `]`, model.SkillCapabilityServerID + `#skill={"skills":["ops"]}`, ""},
+		{`deny: [` + strconvQuote(model.SkillCapabilityServerID+"#*") + `]`, model.ConfigMapRef + `={"secrets":["prod"]}`, "forbids capability"},
 	}
 	for _, c := range cases {
 		p := mustParse(t, "repos: [acme/widgets, other/widgets, ai-on-gke/grain]\ncapabilities:\n  "+c.rules+"\n")
@@ -322,18 +366,20 @@ func TestEmptyPolicyFailsClosed(t *testing.T) {
 
 func TestParseRejects(t *testing.T) {
 	for _, src := range []string{
-		"repo: [acme/widgets]\n",                     // misspelt key
-		"repos: [widgets]\n",                         // not owner/name
-		"repos: [a/b/c/d]\n",                         // too many segments
-		"repos: [\"acme/[\"]\n",                      // bad pattern
-		"repos: [acme/w]\nnetwork: [x]\n",            // unknown access
-		"repos: acme/widgets\n",                      // not a list
-		"capabilities:\n  deny: [\"gcp-key:[\"]\n",   // bad parameter pattern
-		"capabilities:\n  allow: [\"[\"]\n",          // bad family pattern
-		"capabilities:\n  deny: [\"repo-write:\"]\n", // empty parameter
-		"capabilities:\n  deny: [\":x\"]\n",          // empty family
-		"repos: [acme/w]\n---\nrepos: [evil/x]\n",    // a second document (GSA1-14)
-		"---\nrepos: [acme/w]\n---\n{}\n",            // likewise, however small
+		"repo: [acme/widgets]\n",                                              // misspelt key
+		"repos: [widgets]\n",                                                  // not owner/name
+		"repos: [a/b/c/d]\n",                                                  // too many segments
+		"repos: [\"acme/[\"]\n",                                               // bad pattern
+		"repos: [acme/w]\nnetwork: [x]\n",                                     // unknown access
+		"repos: acme/widgets\n",                                               // not a list
+		"capabilities:\n  deny: [\"gcp-key:[\"]\n",                            // bad parameter pattern
+		"capabilities:\n  allow: [\"[\"]\n",                                   // bad family pattern
+		"capabilities:\n  deny: [\"repo-write:\"]\n",                          // empty parameter
+		"capabilities:\n  deny: [\":x\"]\n",                                   // empty family
+		"capabilities:\n  allow: [\"" + model.ConfigMapRef + "=not-json\"]\n", // bad inline JSON args
+		"capabilities:\n  deny: [\"HTTPS://grain.dev/capabilities/config-map#config-map=not-json\"]\n", // bad inline JSON args with uppercase scheme
+		"repos: [acme/w]\n---\nrepos: [evil/x]\n",                                                      // a second document (GSA1-14)
+		"---\nrepos: [acme/w]\n---\n{}\n",                                                              // likewise, however small
 	} {
 		if _, err := Parse([]byte(src)); err == nil {
 			t.Errorf("Parse(%q) succeeded, want an error", src)
@@ -422,5 +468,60 @@ func TestAllowNamedSandboxAgentPatternRefusesUnnamedGCPKey(t *testing.T) {
 	}
 	if err := p.CheckClaims(model.Task{Grants: []model.Grant{{Capability: model.GCPKeyRef + `={"account":"default"}`}}}, ""); err == nil || !strings.Contains(err.Error(), "permission_set") {
 		t.Errorf("account=default CheckClaims = %v, want refusal naming permission_set", err)
+	}
+}
+
+func TestGitHubCredentialLegacyRulesMatchRepoCredential(t *testing.T) {
+	releaseGrant := model.RepoCredentialGrant("release-bot")
+	docsGrant := model.RepoCredentialGrant("docs-bot")
+
+	denyOne := mustParse(t, "capabilities:\n  deny: [github-credential:release-bot]\n")
+	if err := denyOne.CheckClaims(model.Task{Grants: []model.Grant{{Capability: releaseGrant}}}, ""); err == nil {
+		t.Errorf("deny [github-credential:release-bot] admitted %s", releaseGrant)
+	}
+	if err := denyOne.CheckClaims(model.Task{Grants: []model.Grant{{Capability: docsGrant}}}, ""); err != nil {
+		t.Errorf("deny [github-credential:release-bot] refused unrelated %s: %v", docsGrant, err)
+	}
+	if err := denyOne.CheckClaims(model.Task{Grants: []model.Grant{{Capability: model.RepoCredentialRef}}}, ""); err == nil {
+		t.Errorf("deny [github-credential:release-bot] admitted unnamed %s", model.RepoCredentialRef)
+	}
+
+	denyWild := mustParse(t, "capabilities:\n  deny: ['github-credential:*']\n")
+	if err := denyWild.CheckClaims(model.Task{Grants: []model.Grant{{Capability: docsGrant}}}, ""); err == nil {
+		t.Errorf("deny [github-credential:*] admitted %s", docsGrant)
+	}
+
+	allowOne := mustParse(t, "capabilities:\n  allow: [github-credential:release-bot]\n")
+	if err := allowOne.CheckClaims(model.Task{Grants: []model.Grant{{Capability: releaseGrant}}}, ""); err != nil {
+		t.Errorf("allow [github-credential:release-bot] refused %s: %v", releaseGrant, err)
+	}
+	if err := allowOne.CheckClaims(model.Task{Grants: []model.Grant{{Capability: docsGrant}}}, ""); err == nil {
+		t.Errorf("allow [github-credential:release-bot] admitted unrelated %s", docsGrant)
+	}
+	for _, unnamed := range []string{model.RepoCredentialRef, model.RepoCredentialRef + "={}"} {
+		if err := allowOne.CheckClaims(model.Task{Grants: []model.Grant{{Capability: unnamed}}}, ""); err == nil {
+			t.Errorf("allow [github-credential:release-bot] admitted unnamed %s", unnamed)
+		}
+	}
+}
+
+func TestGitHubSandboxLegacyRulesMatchSandboxRepo(t *testing.T) {
+	sandboxGrant := model.GitHubSandboxRepoGrant
+	readIssuesGrant := model.GitHubReadIssuesGrant
+
+	denySandbox := mustParse(t, "capabilities:\n  deny: [github-sandbox]\n")
+	if err := denySandbox.CheckClaims(model.Task{Grants: []model.Grant{{Capability: sandboxGrant}}}, ""); err == nil {
+		t.Errorf("deny [github-sandbox] admitted %s", sandboxGrant)
+	}
+	if err := denySandbox.CheckClaims(model.Task{Grants: []model.Grant{{Capability: readIssuesGrant}}}, ""); err != nil {
+		t.Errorf("deny [github-sandbox] refused unrelated %s: %v", readIssuesGrant, err)
+	}
+
+	allowSandbox := mustParse(t, "capabilities:\n  allow: [github-sandbox]\n")
+	if err := allowSandbox.CheckClaims(model.Task{Grants: []model.Grant{{Capability: sandboxGrant}}}, ""); err != nil {
+		t.Errorf("allow [github-sandbox] refused %s: %v", sandboxGrant, err)
+	}
+	if err := allowSandbox.CheckClaims(model.Task{Grants: []model.Grant{{Capability: readIssuesGrant}}}, ""); err == nil {
+		t.Errorf("allow [github-sandbox] admitted unrelated %s", readIssuesGrant)
 	}
 }

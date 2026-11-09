@@ -312,7 +312,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		"-ui-registry-audience, and -ui-registry-keys-url must be set to enable the \"registry\" IdentityVerifier")
 	uiRegistryAudience := fs.String("ui-registry-audience", "", "the single audience URL a signed X-Grain-Registry-Assertion must carry "+
 		"(e.g. \"https://<name>.<instance-domain>\"); defaults to $GRAIN_REGISTRY_AUDIENCE")
-	uiRegistryKeysURL := fs.String("ui-registry-keys-url", "", "where the registry's ES256 signing keys are published as a JWK set "+
+	uiRegistryKeysURL := fs.String("ui-registry-keys-url", "", "where the hub's ES256 signing keys are published as a JWK set "+
 		"(e.g. \"https://grain.example.com/.well-known/jwks.json\"); defaults to $GRAIN_REGISTRY_KEYS_URL")
 	uiRequireIAP := fs.Bool("ui-require-iap", false, "accept the access code (bearer or grain_access cookie) only from loopback with no forwarding "+
 		"or proxy headers, and serve no \"Enter access code\" page, so network callers sign in through IAP alone (docs/access-code.md); "+
@@ -322,6 +322,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		"(or through a verifier that declares AccessCodeWins), and serve no \"Enter access code\" page (-ui-require-iap is an alias for -ui-require-verifier=iap). "+
 		"Defaults to $GRAIN_REQUIRE_VERIFIER")
 	uiAllowedPrincipals := fs.String("ui-allowed-principals", "", ui.AllowedPrincipalsUsage)
+	deploymentOwner := fs.String("deployment-owner", "", "human email address that owns this deployment for RBAC (IsDeploymentOwner) and holds an immutable grain/operator floor on the access allowlist regardless of the OS user the daemon runs as ($"+ui.DeploymentOwnerEnv+" when unset)")
 	uiCloudIdentityEndpoint := fs.String("ui-cloud-identity-endpoint", "", "resolve allowed group: entries against this Cloud Identity API base URL "+
 		"(a test stand-in) rather than "+ui.DefaultCloudIdentityEndpoint+"; defaults to $GRAIN_CLOUD_IDENTITY_ENDPOINT")
 	uiOpen := fs.Bool("ui-open", false, "open the UI in the system's default browser once it's listening")
@@ -1133,6 +1134,11 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			*managementURL = env
 		}
 	}
+	if !passed["deployment-owner"] {
+		if env := strings.TrimSpace(os.Getenv(ui.DeploymentOwnerEnv)); env != "" {
+			*deploymentOwner = env
+		}
+	}
 	if !passed["object-store"] {
 		if env := strings.TrimSpace(os.Getenv("GRAIN_OBJECT_STORE")); env != "" {
 			*objectStoreURI = env
@@ -1254,6 +1260,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		UiRequireVerifier:       strings.TrimSpace(*uiRequireVerifier),
 		UiRequireIAP:            *uiRequireIAP,
 		UiAllowedPrincipals:     ui.SplitAllowedPrincipals(*uiAllowedPrincipals),
+		DeploymentOwner:         strings.TrimSpace(*deploymentOwner),
 		UiCloudIdentityEndpoint: strings.TrimSpace(*uiCloudIdentityEndpoint),
 		GeminiAPIKeyFile:        *geminiAPIKeyFile,
 		MaxAgentTurns:           *maxAgentTurns,

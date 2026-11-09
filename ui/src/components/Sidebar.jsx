@@ -59,7 +59,10 @@ import CustomizeSidebarOverlay from "./CustomizeSidebarOverlay.jsx";
 import { NEW_SESSION_ID } from "./NewSessionPage.jsx";
 import AppIcon, { NavGlyph } from "./AppIcon.jsx";
 import GrainMark from "./GrainMark.jsx";
+import AccessGate from "./AccessGate.jsx";
+import { useAccess } from "../AccessContext.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
+import { tasksLoadFailed } from "./ListPrimitives.jsx";
 import UnbackedStateDot, { stateDot } from "./UnbackedStateDot.jsx";
 import { verifiedUserEmail } from "./settings/AccessSection.jsx";
 import { whoamiParts } from "../principal.js";
@@ -300,8 +303,8 @@ function FooterItem({ kind, label, active, onClick, children }) {
   );
 }
 
-// SignedInRow is the phone's stand-in for the header rail's email badge
-// (PageHeader.jsx's GlobalButtons): who the deployment's identity
+// SignedInRow is the phone's form of the desktop footer's user tile and
+// Log out button (settings-panel design §4.3): who the deployment's identity
 // verifier says this browser is, as a row that opens Settings -> Access,
 // and Log out under it rather than behind a menu -- the drawer is
 // already the menu. Log out sits below the address, not beside it: in
@@ -606,6 +609,9 @@ export default function Sidebar({
   // daemon too old to have the route, and then there is no tile.
   whoami = null,
   tasks,
+  tasksLoaded = true,
+  tasksError = null,
+  onRetryTasks,
   // The closed and merged tasks the server counts that tasks does not
   // hold yet (closedTasks.js's unseenClosed): closed work is paged in, so
   // without them the Closed, Merged and Tasks counts would stop at the
@@ -752,7 +758,35 @@ export default function Sidebar({
   }
   merged += unseenClosed?.merged || 0;
   taskCount += (unseenClosed?.closed || 0) + (unseenClosed?.merged || 0);
+  const tasksFailed =
+    taskCount === 0 && tasksLoadFailed(tasks, tasksLoaded, tasksError);
+  const tasksFailedTitle = tasksError
+    ? `Tasks could not be loaded (${tasksError}) — click to retry`
+    : "Tasks could not be loaded — click to retry";
+  // tasksStale is a failing poll with a list already held: the views go
+  // on drawing the last list read -- which is right -- but on a
+  // mid-session /api/tasks outage nothing anywhere said it had stopped
+  // being refreshed once the five-second banner faded (2026-11-07
+  // walkthrough §10 item 4). The rail says so beside its count, and the
+  // next poll that answers takes it away.
+  const tasksStale = !tasksFailed && tasksLoaded && !!tasksError;
+  const tasksNote = tasksFailed
+    ? "could not be loaded"
+    : tasksStale
+      ? "not refreshing"
+      : null;
+  const tasksTitle = tasksFailed
+    ? tasksFailedTitle
+    : tasksStale
+      ? `Tasks could not be refreshed (${tasksError}); showing the last list read — click to retry`
+      : undefined;
   const repoCount = repoRows(config, tasks).length;
+  // Filing a task needs tasks:write: a role without it sees New task
+  // disabled, with the reason, rather than a form whose Create ends in a
+  // 403 (docs/test-runs/2026-11-07-rbac-roles.md F7).
+  const { reason: accessReason } = useAccess(config);
+  const fileWhy = accessReason("tasks:write");
+  const canFile = !fileWhy;
   // time.Time's zero value is still a non-empty string on the wire, so
   // FinishedAt cannot distinguish a live run here. Conclusion is CI's
   // canonical completion signal: its zero value means the run is pending.
@@ -1005,19 +1039,25 @@ export default function Sidebar({
             className="header-split-button"
             sx={{ my: 0.2 }}
           >
-            <Button
-              aria-label="+ New task"
-              onClick={onOpenNewTask}
-              startIcon={<AppIcon name="add" size={16} />}
-              sx={{
-                flex: "1 1 auto",
-                minWidth: 0,
-                whiteSpace: "nowrap",
-                "& .MuiButton-startIcon": { mr: 0.5, ml: 0 },
-              }}
+            <AccessGate
+              scope="tasks:write"
+              config={config}
+              wrapperStyle={{ flex: "1 1 auto", minWidth: 0 }}
             >
-              New task
-            </Button>
+              <Button
+                aria-label="+ New task"
+                onClick={onOpenNewTask}
+                startIcon={<AppIcon name="add" size={16} />}
+                sx={{
+                  flex: "1 1 auto",
+                  minWidth: 0,
+                  whiteSpace: "nowrap",
+                  "& .MuiButton-startIcon": { mr: 0.5, ml: 0 },
+                }}
+              >
+                New task
+              </Button>
+            </AccessGate>
             <Button
               aria-label="Create options"
               aria-controls={createMenuOpen ? "create-options-menu" : undefined}
@@ -1053,6 +1093,8 @@ export default function Sidebar({
         }}
       >
         <MenuItem
+          disabled={!canFile}
+          title={canFile ? undefined : fileWhy}
           onClick={() => {
             setCreateMenuAnchor(null);
             onOpenNewTask?.();
@@ -1075,7 +1117,12 @@ export default function Sidebar({
           <ListItemText>New session</ListItemText>
         </MenuItem>
         {onNewBoard && (
+          // Filing a board is filing a task (boards.js), so a role that
+          // cannot file one is refused here exactly as on "New task"
+          // above -- not offered a form whose submit it cannot press.
           <MenuItem
+            disabled={!canFile}
+            title={canFile ? undefined : fileWhy}
             onClick={() => {
               setCreateMenuAnchor(null);
               onNewBoard();
@@ -1210,9 +1257,11 @@ export default function Sidebar({
                 <ListItemButton
                   key={`pinned-view-tasks-${idx}`}
                   selected={view === "tasks" && stateFilter === "all"}
+                  title={tasksTitle}
                   onClick={() => {
                     if (onSetView("tasks") === false) return;
                     onSetFilter("all");
+                    if (tasksNote) onRetryTasks?.();
                   }}
                   sx={{ borderRadius: 1.5, py: 0.6, px: 0.9 }}
                 >
@@ -1221,21 +1270,36 @@ export default function Sidebar({
                   </span>
                   <ListItemText
                     primary="Tasks"
-                    sx={{ ml: 1 }}
+                    secondary={tasksNote}
+                    sx={{ ml: 1, my: tasksNote ? 0 : undefined }}
                     primaryTypographyProps={{
                       noWrap: true,
                       fontSize: "0.85rem",
                       fontWeight: 500,
                     }}
+                    secondaryTypographyProps={{
+                      noWrap: true,
+                      fontSize: "0.68rem",
+                      color: "warning.main",
+                    }}
                   />
-                  <RailCount
-                    value={taskCount}
-                    color={
-                      view === "tasks" && stateFilter === "all"
-                        ? "primary"
-                        : "text.secondary"
-                    }
-                  />
+                  {tasksFailed ? (
+                    <WarningAmberIcon
+                      color="warning"
+                      className="rail-count"
+                      aria-hidden="true"
+                      sx={{ fontSize: "0.95rem", ml: 0.5 }}
+                    />
+                  ) : (
+                    <RailCount
+                      value={taskCount}
+                      color={
+                        view === "tasks" && stateFilter === "all"
+                          ? "primary"
+                          : "text.secondary"
+                      }
+                    />
+                  )}
                 </ListItemButton>
               );
             }
@@ -1535,8 +1599,10 @@ export default function Sidebar({
             >
               <ListItemButton
                 selected={view === "tasks" && stateFilter === "all"}
+                title={tasksTitle}
                 onClick={() => {
                   selectState("all");
+                  if (tasksNote) onRetryTasks?.();
                 }}
                 sx={{ borderRadius: 1.5, py: 0.6, px: 0.9 }}
               >
@@ -1545,22 +1611,37 @@ export default function Sidebar({
                 </span>
                 <ListItemText
                   primary="Tasks"
-                  sx={{ ml: 1 }}
+                  secondary={tasksNote}
+                  sx={{ ml: 1, my: tasksNote ? 0 : undefined }}
                   primaryTypographyProps={{
                     noWrap: true,
                     fontSize: "0.85rem",
                     fontWeight: 500,
                   }}
+                  secondaryTypographyProps={{
+                    noWrap: true,
+                    fontSize: "0.68rem",
+                    color: "warning.main",
+                  }}
                 />
-                <RailCount
-                  value={taskCount}
-                  color={
-                    view === "tasks" && stateFilter === "all"
-                      ? "primary"
-                      : "text.secondary"
-                  }
-                  sx={{ fontVariantNumeric: "tabular-nums" }}
-                />
+                {tasksFailed ? (
+                  <WarningAmberIcon
+                    color="warning"
+                    className="rail-count"
+                    aria-hidden="true"
+                    sx={{ fontSize: "0.95rem", ml: 0.5 }}
+                  />
+                ) : (
+                  <RailCount
+                    value={taskCount}
+                    color={
+                      view === "tasks" && stateFilter === "all"
+                        ? "primary"
+                        : "text.secondary"
+                    }
+                    sx={{ fontVariantNumeric: "tabular-nums" }}
+                  />
+                )}
               </ListItemButton>
 
               <Box

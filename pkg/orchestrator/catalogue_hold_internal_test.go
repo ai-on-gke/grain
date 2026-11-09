@@ -36,8 +36,11 @@ func TestCatalogueHoldRejudgesAtDispatch(t *testing.T) {
 	if err := store.PutTask(ctx, task); err != nil {
 		t.Fatal(err)
 	}
-	if held := catalogueHold(ctx, deps); held != nil {
-		t.Fatal("a deployment with no catalogue has a catalogue hold")
+	if why := catalogueHold(ctx, deps)(task.ID); why != "" {
+		t.Fatalf("a deployment with no catalogue holds an ordinary task: %q", why)
+	}
+	if why := catalogueHold(ctx, deps)("no-such-task"); why != "" {
+		t.Fatalf("a deployment with no catalogue holds a task it cannot read: %q", why)
 	}
 	setCat := func(repos model.Patterns) {
 		t.Helper()
@@ -65,6 +68,62 @@ func TestCatalogueHoldRejudgesAtDispatch(t *testing.T) {
 	}
 	if wait, _ := store.GrantWaitOf(ctx, task.ID); wait != nil {
 		t.Fatalf("wait %+v left behind", wait)
+	}
+}
+
+// The director is held at dispatch for a grant grain's built-in Tier 3
+// floor refuses it (director-capabilities.spec.md G7), with no
+// settings/capabilities.yml at all as with one that tries to admit it,
+// and an ordinary task holding the same grant is not.
+func TestCatalogueHoldAppliesTheDirectorFloor(t *testing.T) {
+	for name, cat := range map[string]*model.CapabilityCatalogue{
+		"nil":   nil,
+		"empty": {},
+		"widening": {APIScopes: model.CatalogueAPIScopes{RawScopes: map[string]model.CapabilityRestrictions{
+			"merge:force": {Kinds: model.Patterns{model.CatalogueKindDirector, model.CatalogueKindTask}},
+		}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store, ctx := openTreeStore(t)
+			if err := store.UpdateConfig(ctx, func(c *model.Config) error {
+				c.CapabilityPolicy.Catalogue = cat
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			deps := Deps{Store: store}
+			director := model.Task{ID: "director-task", Title: "Director", Interactive: true,
+				Origin: model.Origin{Reason: model.ReasonConsoleSession},
+				Tags:   []string{model.ConsoleSessionTag(model.DirectorSessionID)},
+				Grants: []model.Grant{{Capability: "self-debug", Via: model.GrantByGrain}, {Capability: "api:merge:force", Via: model.GrantByGrain}}}
+			plain := model.Task{ID: "plain", Title: "t", Target: &widgets,
+				Grants: []model.Grant{{Capability: "api:merge:force", Via: model.GrantByLabel}}}
+			for _, task := range []model.Task{director, plain} {
+				if err := store.PutTask(ctx, task); err != nil {
+					t.Fatal(err)
+				}
+			}
+			why := catalogueHold(ctx, deps)(director.ID)
+			if !strings.Contains(why, "built-in director floor") || !strings.Contains(why, "merge:force") {
+				t.Fatalf("hold = %q, want the built-in floor naming merge:force", why)
+			}
+			if wait, err := store.GrantWaitOf(ctx, director.ID); err != nil || wait == nil || wait.Capability != model.CatalogueWaitCapability {
+				t.Fatalf("wait = %+v (%v), want a catalogue wait", wait, err)
+			}
+			if why := catalogueHold(ctx, deps)(plain.ID); why != "" {
+				t.Fatalf("an ordinary task holding api:merge:force is held: %q", why)
+			}
+			director.Grants = director.Grants[:1]
+			if err := store.PutTask(ctx, director); err != nil {
+				t.Fatal(err)
+			}
+			if why := catalogueHold(ctx, deps)(director.ID); why != "" {
+				t.Fatalf("hold = %q after the grant was removed", why)
+			}
+			if wait, _ := store.GrantWaitOf(ctx, director.ID); wait != nil {
+				t.Fatalf("wait %+v left behind", wait)
+			}
+		})
 	}
 }
 

@@ -295,11 +295,13 @@ func TestCheckCapabilityGrants(t *testing.T) {
 		map[string]any{"grant": grantTestCap + `#key={"account":"dev","scopes":["all"]}`},
 		map[string]any{"grant": "https://capabilities.example.com/retired#old"},
 		map[string]any{"grant": "gcp-key"},
+		map[string]any{"grant": "read-issues"},
+		map[string]any{"grant": "self-debug"},
 	}}, &out)
-	if code != 200 || len(out) != 5 {
+	if code != 200 || len(out) != 7 {
 		t.Fatalf("%d %+v", code, out)
 	}
-	if out[0].Recorded != grantTestCap+`#key={"account":"prod","scopes":["all"]}` || out[0].Error != "" || out[0].Changed {
+	if out[0].Recorded != grantTestCap+`#key={"account":"prod","scopes":["all"]}` || out[0].Error != "" || out[0].Changed || len(out[0].AliasOf) != 0 {
 		t.Errorf("a fresh grant: %+v", out[0])
 	}
 	if !out[1].Changed || out[1].Error != "" {
@@ -311,8 +313,49 @@ func TestCheckCapabilityGrants(t *testing.T) {
 	if !out[3].Unchecked {
 		t.Errorf("a grant of an unattached server: %+v", out[3])
 	}
-	if out[4].Recorded != model.GCPKeySandboxAgentGrant || out[4].Error != "" {
+	if out[4].Recorded != model.GCPKeySandboxAgentGrant || out[4].Error != "" || !slices.Equal(out[4].AliasOf, []string{model.GCPKeySandboxAgentGrant}) {
 		t.Errorf("retired gcp-key alias: %+v", out[4])
+	}
+	if out[5].Recorded != model.GitHubReadIssuesGrant || out[5].Error != "" || !slices.Equal(out[5].AliasOf, []string{model.GitHubReadIssuesGrant}) {
+		t.Errorf("retired read-issues alias: %+v", out[5])
+	}
+	if out[6].Error != "" || !slices.Equal(out[6].AliasOf, model.SelfDebugGrants()) {
+		t.Errorf("retired self-debug multi-grant alias: %+v", out[6])
+	}
+}
+
+func TestReadIssuesInputAliasRecordsGitHubReadIssuesGrant(t *testing.T) {
+	_, client := grantTestServer(t)
+	ctx := context.Background()
+	task, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title:        "with legacy read-issues alias",
+		Capabilities: &[]string{"read-issues"},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask with read-issues alias: %v", err)
+	}
+	if len(task.Capabilities) != 1 || task.Capabilities[0] != model.GitHubReadIssuesGrant {
+		t.Fatalf("CreateTask capabilities = %v, want [%s]", task.Capabilities, model.GitHubReadIssuesGrant)
+	}
+	if err := client.SetCapability(ctx, task.ID, "read-issues", false); err != nil {
+		t.Fatalf("detaching via read-issues alias: %v", err)
+	}
+	afterDetach, err := client.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(afterDetach.Capabilities) != 0 {
+		t.Fatalf("after detach via alias: %v, want empty", afterDetach.Capabilities)
+	}
+	if err := client.SetCapability(ctx, task.ID, "read-issues", true); err != nil {
+		t.Fatalf("attaching via read-issues alias: %v", err)
+	}
+	afterAttach, err := client.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(afterAttach.Capabilities) != 1 || afterAttach.Capabilities[0] != model.GitHubReadIssuesGrant {
+		t.Fatalf("after attach via alias: %v, want [%s]", afterAttach.Capabilities, model.GitHubReadIssuesGrant)
 	}
 }
 
@@ -324,7 +367,7 @@ func TestCheckCapabilityGrantsJudgesTheCatalogueForASubject(t *testing.T) {
 	setCatalogue(t, context.Background(), client.Store, &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
 		"gcp-key": {Restrictions: &model.CapabilityRestrictions{Repos: []string{"acme/widgets"}}},
 	}})
-	grants := []any{map[string]any{"grant": "gcp-key"}, map[string]any{"grant": "read-issues"}}
+	grants := []any{map[string]any{"grant": "gcp-key"}, map[string]any{"grant": "bootstrap-playbooks"}}
 	for _, tc := range []struct {
 		name    string
 		subject any
@@ -504,6 +547,37 @@ func TestSetCapabilityGrantRefusesAGrantThePolicyDenies(t *testing.T) {
 	code := postJSON(t, ts, "POST", "/api/tasks/"+task.ID+"/capabilities", map[string]any{"capability": grantTestCap + "#viewer", "attach": true}, &out)
 	if msg, _ := out["error"].(string); code != 400 || !strings.Contains(msg, "capability policy denies") {
 		t.Fatalf("attaching a denied grant: %d %v", code, out)
+	}
+}
+
+// The listing for a repository's CI capabilities names no trigger event,
+// since the list grants to every job the repository runs: a method whose
+// own server hands it only to release jobs is not refused there, as it
+// was when the listing judged an event-less run and the picker disabled
+// every release method (2026-11-09 repository walkthrough). A task is
+// still refused it.
+func TestCapabilityMethodsForCIDoNotRefuseAnEventGatedMethod(t *testing.T) {
+	ts, _ := grantTestServer(t)
+	t.Cleanup(model.RegisterCIGrantRule(grantTestCap+"#key", model.CIGrantRule{Events: []string{"release"}, RepoGranted: true}))
+	refusal := func(path string) string {
+		t.Helper()
+		var methods []ui.CapabilityMethod
+		if code := postJSON(t, ts, "GET", path, nil, &methods); code != 200 {
+			t.Fatalf("GET %s: %d", path, code)
+		}
+		for _, m := range methods {
+			if m.Method == "key" {
+				return m.PolicyRefusal
+			}
+		}
+		t.Fatalf("GET %s listed no key method", path)
+		return ""
+	}
+	if got := refusal("/api/capability-methods?repo=acme/widgets&kind=ci"); got != "" {
+		t.Errorf("acme/widgets CI: %q, want the release-only method offered", got)
+	}
+	if got := refusal("/api/capability-methods?repo=acme/widgets&kind=task"); !strings.Contains(got, "CI capability") {
+		t.Errorf("acme/widgets task: %q, want the CI-only refusal", got)
 	}
 }
 

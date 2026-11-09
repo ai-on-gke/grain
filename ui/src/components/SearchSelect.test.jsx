@@ -147,3 +147,35 @@ describe("SearchSelect multiple", () => {
     expect(onSubmit).toHaveBeenCalledWith([]);
   });
 });
+
+// Settings' Section picker declines a choice when "Discard unsaved
+// changes?" is cancelled; the box used to keep the declined row's label
+// while the page stayed put (2026-11-08 settings walkthrough).
+describe("SearchSelect single", () => {
+  it("puts the kept option's label back when a controlled caller declines onChange", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <SearchSelect
+        label="Section"
+        value="agents"
+        onChange={onChange}
+        options={[
+          { value: "agents", label: "Agents" },
+          { value: "general", label: "General" },
+          { value: "models", label: "Models" },
+        ]}
+      />,
+    );
+    const box = screen.getByRole("combobox", { name: "Section" });
+    expect(box).toHaveValue("Agents");
+
+    await chooseOption(user, box, "general");
+    expect(onChange).toHaveBeenCalledWith("general");
+    expect(box).toHaveValue("Agents");
+
+    await chooseOption(user, box, "models");
+    expect(onChange).toHaveBeenCalledWith("models");
+    expect(box).toHaveValue("Agents");
+  });
+});

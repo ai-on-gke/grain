@@ -1990,4 +1990,121 @@ describe("Sidebar sections this browser hides", () => {
       DEFAULT_HIDDEN_SECTIONS,
     );
   });
+
+  it("tells failed task reads from zero tasks on both the main and pinned Tasks rail entries", async () => {
+    localStorage.setItem(
+      "grain.pinned",
+      JSON.stringify([{ kind: "view", id: "tasks" }]),
+    );
+    const onRetryTasks = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <Sidebar
+        {...baseProps}
+        config={null}
+        tasks={[]}
+        tasksLoaded={false}
+        tasksError="synthetic tasks 500"
+        onRetryTasks={onRetryTasks}
+      />,
+    );
+
+    const taskButtons = screen.getAllByRole("button", { name: /^Tasks/ });
+    expect(taskButtons).toHaveLength(2);
+    for (const btn of taskButtons) {
+      expect(btn).toHaveTextContent("Tasks");
+      expect(btn).toHaveTextContent("could not be loaded");
+      expect(btn).not.toHaveTextContent("0");
+      expect(btn).toHaveAttribute(
+        "title",
+        "Tasks could not be loaded (synthetic tasks 500) — click to retry",
+      );
+    }
+
+    await user.click(taskButtons[0]);
+    expect(onRetryTasks).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <Sidebar
+        {...baseProps}
+        config={null}
+        tasks={[]}
+        tasksLoaded={true}
+        tasksError={null}
+      />,
+    );
+    for (const btn of screen.getAllByRole("button", { name: /^Tasks/ })) {
+      expect(btn).not.toHaveTextContent("could not be loaded");
+      expect(btn).toHaveTextContent("0");
+    }
+
+    rerender(
+      <Sidebar
+        {...baseProps}
+        config={null}
+        tasks={tasks}
+        tasksLoaded={true}
+        tasksError="synthetic tasks 500"
+      />,
+    );
+    for (const btn of screen.getAllByRole("button", { name: /^Tasks/ })) {
+      expect(btn).not.toHaveTextContent("could not be loaded");
+      // A mid-session outage: the last list stays drawn and counted, and
+      // the rail says it is no longer being refreshed (2026-11-07
+      // walkthrough §10 item 4).
+      expect(btn).toHaveTextContent("not refreshing");
+      expect(btn).toHaveAttribute(
+        "title",
+        "Tasks could not be refreshed (synthetic tasks 500); showing the last list read — click to retry",
+      );
+    }
+
+    rerender(
+      <Sidebar
+        {...baseProps}
+        config={null}
+        tasks={tasks}
+        tasksLoaded={true}
+        tasksError={null}
+      />,
+    );
+    for (const btn of screen.getAllByRole("button", { name: /^Tasks/ })) {
+      expect(btn).not.toHaveTextContent("not refreshing");
+      expect(btn).not.toHaveAttribute("title");
+    }
+  });
+
+  // 2026-11-08 saved-boards walkthrough (task 3612): New task in the
+  // create menu was refused to a viewer and New board right under it
+  // was not.
+  it("refuses New board in Create options alongside New task for a role without tasks:write", async () => {
+    const user = userEvent.setup();
+    render(
+      <Sidebar
+        {...baseProps}
+        config={{
+          access: {
+            role: "grain/viewer",
+            roles: ["grain/viewer"],
+            full: false,
+            scopes: ["boards:read", "tasks:read"],
+          },
+        }}
+        tasks={tasks}
+        onNewBoard={() => {}}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Create options" }));
+    expect(screen.getByRole("menuitem", { name: "New task" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(screen.getByRole("menuitem", { name: "New board" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(
+      screen.getByRole("menuitem", { name: "New session" }),
+    ).not.toHaveAttribute("aria-disabled", "true");
+  });
 });

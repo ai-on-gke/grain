@@ -17,7 +17,6 @@ package daemon
 import (
 	"context"
 	"log"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -349,9 +348,7 @@ func TestWithHostCapacityKeepsKnownClusterReadingOnFailedOrEmptyRead(t *testing.
 func writeFakeKubectlFailing(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "kubectl")
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho 'Unable to connect to the server' >&2\nexit 1\n"), 0o755); err != nil {
-		t.Fatalf("writing fake kubectl: %v", err)
-	}
+	writeExecutableStub(t, bin, "#!/bin/sh\necho 'Unable to connect to the server' >&2\nexit 1\n")
 	return bin
 }
 

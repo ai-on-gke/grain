@@ -18,6 +18,7 @@ package hostd
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -58,6 +59,9 @@ type Server struct {
 	Logf func(format string, args ...any)
 	// Build is this hostd's version, for Hello.
 	Build string
+	// AgentsOnly says, in Hello, that this host agent runs agent CLIs
+	// only (grain-agentd).
+	AgentsOnly bool
 	// CurrentLink is the installer's current link hostd was started
 	// through (CurrentLinkFor), for Hello's Running and Current; "" for
 	// none.
@@ -76,6 +80,21 @@ type Server struct {
 	// RemoteMinBackoff and RemoteMaxBackoff bound the wait between
 	// reconnects to Remote: 1s and defaultRemoteMaxBackoff (5s) when zero.
 	RemoteMinBackoff, RemoteMaxBackoff time.Duration
+	// RenewName, RenewKey, RenewInterval, CurrentToken, and OnTokenRenewed
+	// silently renew this host's 30-day key-bound credential over the live
+	// mux session while connected (DefaultRenewInterval when RenewInterval <= 0).
+	RenewName      string
+	RenewKey       ed25519.PrivateKey
+	RenewInterval  time.Duration
+	CurrentToken   func() string
+	OnTokenRenewed func(token string, expiresAt time.Time)
+	// RenewedAt is when the credential CurrentToken returns was issued --
+	// its token file's modification time -- so that a restarted host
+	// agent renews on its credential's schedule rather than RenewInterval
+	// after it started. Zero counts from the first connection. Either
+	// way the schedule outlives a reconnect: a host whose connection drops
+	// more often than RenewInterval still renews (renewDue).
+	RenewedAt time.Time
 	// StageRoot is where OpStage may write on this machine, for a run a
 	// daemon reaches over Remote: "~/.grain/hostd-stage" under hostd's
 	// home when empty (stageRoot). It should be a directory nothing else
@@ -98,6 +117,11 @@ type Server struct {
 
 	uid uint32
 	wg  sync.WaitGroup
+
+	// renewMu guards renewedAt: when this host's credential was last
+	// issued or renewed, across every connection this Server makes.
+	renewMu   sync.Mutex
+	renewedAt time.Time
 
 	mu    sync.Mutex
 	procs map[string]*proc
@@ -570,6 +594,8 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 		h.Cutover = !h.Draining && s.CuttingOver()
 		h.Capacity, h.Labels = a.Capacity, a.Labels
 		describeCopies(ctx, &h, s.CurrentLink)
+		h.Logins = ambientLogins()
+		h.AgentsOnly = s.AgentsOnly
 		if sessionMux(ctx) != nil {
 			s.describeRemote(&h)
 		}
@@ -676,7 +702,7 @@ func (s *Server) env() []string {
 }
 
 func (s *Server) refuse(conn net.Conn, reason string) {
-	reason = strings.TrimPrefix(reason, "hostd refused: ")
+	reason = strings.TrimPrefix(reason, refusedPrefix)
 	s.logf("hostd: refused: %s", reason)
 	_ = writeJSON(conn, frameRefused, Refusal{Reason: reason})
 }

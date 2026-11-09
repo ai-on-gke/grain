@@ -85,6 +85,8 @@ func applyHiddenFormDefaults(req *CreateTaskRequest, form *model.NewTaskForm) er
 			req.AgentBackendID = formString(def)
 		case "networkAccess":
 			req.NetworkAccess = formString(def)
+		case "hosting":
+			req.Hosting = formString(def)
 		case "nothingNeededAction":
 			req.NothingNeededAction = formString(def)
 		case "reviewTemplateId":

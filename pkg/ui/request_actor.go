@@ -16,8 +16,10 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -34,6 +36,7 @@ import (
 
 type requestSourceContextKey struct{}
 type operatorActorContextKey struct{}
+type onBehalfOfContextKey struct{}
 
 // withRequestSource records how serveHTTP admitted a request that names
 // nobody: the access code, break-glass over loopback, or in-process.
@@ -49,6 +52,18 @@ func withOperatorActor(ctx context.Context, p model.Principal) context.Context {
 		return ctx
 	}
 	return context.WithValue(ctx, operatorActorContextKey{}, p)
+}
+
+// withOnBehalfOf records who the agent the gate admitted acts for (spec
+// §2.4). Only agentAPIGate calls it, with what agentOnBehalfOf read from
+// the store: nothing a caller sends -- a header, a body field -- ever
+// reaches it, so an agent cannot claim a person (§6.2). nil leaves ctx
+// as it was.
+func withOnBehalfOf(ctx context.Context, p *model.Principal) context.Context {
+	if p == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, onBehalfOfContextKey{}, *p)
 }
 
 // operatorActor is the deployment's own actor withOperatorActor recorded,
@@ -73,18 +88,38 @@ func operatorActor(ctx context.Context) model.Principal {
 //     admitted the request by (access-code, loopback), or in-process for
 //     a caller that never went through serveHTTP at all.
 //
-// OnBehalfOf is the owner of the external agent credential the request
-// presented (model.ExternalAgentToken.Owner,
-// design/spec/external-cli/external-cli.spec.md#XC-14), and nil
-// otherwise until spec §2.4 lands.
+// OnBehalfOf is the person an agent or delegated service principal acts
+// for: a delegated registry caller's person (AU-26), an external agent
+// credential's owner (model.ExternalAgentToken.Owner, #XC-14), or the
+// person the agent API gate derived from grain's own records
+// (withOnBehalfOf, spec §2.4), and nil for anybody else.
 func RequestActor(ctx context.Context) model.Attribution {
 	if p, ok := PrincipalFromContext(ctx); ok {
+		if del := delegatedIdentityFromContext(ctx); del != nil &&
+			p.Kind == model.PrincipalHuman && p.Source == model.SourceRegistry && strings.EqualFold(p.ID, del.PersonEmail) {
+			return model.Attribution{
+				Actor:      model.Principal{Kind: model.PrincipalService, ID: del.AppEmail, Source: model.SourceRegistry},
+				OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: del.PersonEmail, Source: model.SourceRegistry},
+			}
+		}
 		if p.Kind == model.PrincipalAgent && p.Source == model.SourceExternalToken {
 			if tok := externalTokenFromContext(ctx); tok != nil {
 				return model.Attribution{Actor: p, OnBehalfOf: tok.OwnerPrincipal()}
 			}
 		}
-		return model.Attribution{Actor: p}
+		who := model.Attribution{Actor: p}
+		if p.Kind == model.PrincipalAgent {
+			if b, ok := ctx.Value(onBehalfOfContextKey{}).(model.Principal); ok && b.Kind == model.PrincipalHuman && b.Verified() {
+				who.OnBehalfOf = &b
+			}
+		}
+		return who
+	}
+	if del := delegatedIdentityFromContext(ctx); del != nil {
+		return model.Attribution{
+			Actor:      model.Principal{Kind: model.PrincipalService, ID: del.AppEmail, Source: model.SourceRegistry},
+			OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: del.PersonEmail, Source: model.SourceRegistry},
+		}
 	}
 	op := operatorActor(ctx)
 	op.Source = model.SourceInProcess
@@ -190,4 +225,107 @@ func (c *Client) requestPersonOrTrustedOperator(ctx context.Context) string {
 		return requestPerson(ctx)
 	}
 	return c.requestPersonOrOperator(ctx)
+}
+
+// DeploymentOwnerEnv is the environment variable fallback for -deployment-owner.
+const DeploymentOwnerEnv = "GRAIN_DEPLOYMENT_OWNER"
+
+// NormalizeDeploymentOwner validates and normalizes -deployment-owner
+// ($GRAIN_DEPLOYMENT_OWNER) to a lowercase human email address
+// ("alice@example.com"). An optional "user:" prefix is accepted and stripped;
+// empty input returns ("", nil).
+func NormalizeDeploymentOwner(raw string) (string, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", nil
+	}
+	if prefix, rest, ok := strings.Cut(s, ":"); ok {
+		if !strings.EqualFold(strings.TrimSpace(prefix), "user") {
+			return "", fmt.Errorf("invalid -deployment-owner %q: must be a user email address, not %s:", raw, strings.TrimSpace(prefix))
+		}
+		s = strings.TrimSpace(rest)
+	}
+	s = strings.ToLower(s)
+	local, domain, ok := strings.Cut(s, "@")
+	if !ok || local == "" || domain == "" || strings.ContainsAny(s, " \t\r\n,") || strings.Contains(domain, "@") || !strings.Contains(domain, ".") {
+		return "", fmt.Errorf("invalid -deployment-owner %q: must be an email address", raw)
+	}
+	if strings.HasSuffix(domain, ".gserviceaccount.com") {
+		return "", fmt.Errorf("invalid -deployment-owner %q: must be a human user email address, not a service account", raw)
+	}
+	return s, nil
+}
+
+// explicitDeploymentOwnerEmail returns the normalized -deployment-owner
+// ($GRAIN_DEPLOYMENT_OWNER) email when configured, or "" otherwise.
+func (c *Client) explicitDeploymentOwnerEmail() string {
+	if c == nil {
+		return ""
+	}
+	raw := strings.TrimSpace(c.Config.DeploymentOwner)
+	if raw == "" {
+		raw = strings.TrimSpace(os.Getenv(DeploymentOwnerEnv))
+	}
+	owner, err := NormalizeDeploymentOwner(raw)
+	if err != nil {
+		return ""
+	}
+	return owner
+}
+
+// deploymentOwnerEmail returns the explicit -deployment-owner email when set,
+// else the deployment's own actor's email when Config.Actor names an email
+// address.
+func (c *Client) deploymentOwnerEmail() string {
+	if owner := c.explicitDeploymentOwnerEmail(); owner != "" {
+		return owner
+	}
+	if c != nil {
+		if owner := c.operatorPerson(); strings.Contains(owner, "@") {
+			return strings.ToLower(owner)
+		}
+	}
+	return ""
+}
+
+// IsDeploymentOwner reports whether ctx acts as the deployment owner:
+//
+//   - Never an agent or service account.
+//   - Never a verified session holding a limited RBAC role (even one granted
+//     capabilities:admin).
+//   - An un-named trusted caller (the deployment access code, loopback
+//     break-glass, or an in-process Client call) acts as the deployment owner.
+//   - A verified human holding full owner access (grain/operator, role.Full)
+//     is the deployment owner when neither -deployment-owner nor Config.Actor
+//     names an email address (the default OS account), or when their verified
+//     email matches -deployment-owner (or Config.Actor when -deployment-owner
+//     is unset).
+func (c *Client) IsDeploymentOwner(ctx context.Context) bool {
+	if c == nil {
+		return false
+	}
+	if role := accessRoleFromContext(ctx); role != nil && !role.Full {
+		return false
+	}
+	p, named := PrincipalFromContext(ctx)
+	if !named {
+		return true
+	}
+	if p.Kind != model.PrincipalHuman {
+		return false
+	}
+	if owner := c.deploymentOwnerEmail(); owner != "" {
+		return strings.EqualFold(strings.TrimSpace(p.ID), owner)
+	}
+	return true
+}
+
+func (c *Client) requireDeploymentOwner(ctx context.Context, action string) error {
+	if c.IsDeploymentOwner(ctx) {
+		return nil
+	}
+	if owner := c.deploymentOwnerEmail(); owner != "" {
+		return &ForbiddenError{err: fmt.Errorf("only the deployment owner (%s) may %s", owner, action)}
+	}
+	return &ForbiddenError{err: fmt.Errorf("only the deployment owner may %s", action)}
 }

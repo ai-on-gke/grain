@@ -1346,7 +1346,19 @@ export function issueUrl(ref) {
 // Leave an undeclared base out: the server resolves it from the
 // repository, so this works for repos whose default branch is not `main`.
 export function internalPullRequestUrl(repo, branch, base = "") {
-  return `/repos/${repo}/compare/${base ? `${base}...${branch}` : branch}`;
+  const head = comparisonRefSegment(branch);
+  return `/repos/${repo}/compare/${base ? `${comparisonRefSegment(base)}...${head}` : head}`;
+}
+
+// comparisonRefSegment is one ref as a compare path spells it: its "/"
+// left literal, the way github.com's compare URLs write a branch name,
+// and everything else a path cannot carry escaped. Git allows "#", "?"
+// and "%" in a branch name (fix/#123 is a common one), and written
+// plainly the first two end the path: the page opened in-app, but a
+// reload or a shared link compared fix/ instead (2026-11-09 repository
+// walkthrough). paths.js decodes each ref on the way back in.
+export function comparisonRefSegment(ref) {
+  return encodeURIComponent(ref).replace(/%2F/gi, "/");
 }
 
 // repoUrl turns "owner/name" or "host/owner/name" -- the way a repo is
@@ -1428,8 +1440,7 @@ export const RETIRED_CAPABILITY_HINT =
 // everywhere with a warning under it (capabilityUnavailableHint). That
 // is a row nobody can do anything useful with in the pane they are
 // standing in: ticking it files work that fails to dispatch, and the fix
-// is on Settings > Legacy capabilities either way, which is the one pane that
-// still lists every capability with its own reason for not being ready.
+// is on Settings > Capabilities either way, under Deployment credentials.
 // So a picker hides it instead of explaining it.
 //
 // Already-selected ids survive the filter, for the reason capabilityRows
@@ -1450,20 +1461,10 @@ export function configuredCapabilities(offered, selected) {
   return (offered || []).filter((c) => c.ready !== false || held.has(c.id));
 }
 
-// NO_CAPABILITIES_HINT is what a picker says when configuredCapabilities
-// has left it with nothing at all: a deployment that has configured none
-// of them, which is a perfectly ordinary state for a new one. An empty
-// menu reads as a broken pane, and the pane that is not empty -- the one
-// listing every capability with what it still needs -- is worth naming.
-export const NO_CAPABILITIES_HINT =
-  "None configured -- set one up in Settings > Legacy capabilities";
-
-// LEGACY_CAPABILITIES_HINT sits under every in-process capability
-// checklist: those ids are being converted to capability server methods
-// or api scopes (design/design/unified-grants.design.md), so new access belongs
-// under Grants rather than here.
-export const LEGACY_CAPABILITIES_HINT =
-  "Legacy in-process capabilities, each being converted to a server method or API scope. Add new access under Grants.";
+// NO_CAPABILITIES_HINT is what the repo CI-capabilities picker says when
+// configuredCapabilities has left it with nothing at all. An empty menu reads as a broken pane, so it
+// says where access is granted instead.
+export const NO_CAPABILITIES_HINT = "None offered -- grant access under Grants";
 
 // capabilityRows is the listing any capability picker has to be built
 // from: the rows this build offers and this deployment has configured
@@ -1535,7 +1536,7 @@ export function capabilityUnavailableHint(c) {
   const needs = c.needs || [];
   const gap =
     needs.length > 0 ? ` -- needs ${needs.join(", ")}` : " on this deployment";
-  return `Not ready${gap}. A task holding this will fail to dispatch until that is set (Settings > Legacy capabilities).`;
+  return `Not ready${gap}. A task holding this will fail to dispatch until that is set (Settings > Capabilities).`;
 }
 
 // unionCapabilities composes the two layers of default capabilities the
@@ -1770,6 +1771,46 @@ export function repoRows(config, tasks) {
     if (t.blocked) entry.blocked += 1;
   }
   return [...byRepo.values()].sort((a, b) => a.repo.localeCompare(b.repo));
+}
+
+// repoPageRow is the row a repo's own page reads its counts from: its
+// repoRows row where it has one, and otherwise a row counting the tasks
+// that target it anyway. The second case is a repo that has fallen off
+// a restricted deployment's targetRepos with work still filed against
+// it -- repoRows rightly leaves it off the Repos list (a task never
+// raises a row of its own there), but someone who comes back to the
+// repo's page by URL or from one of those tasks is asking about the
+// repo itself, and reading "0 tasks filed here" over live queued work
+// hid it from them. `offList` marks that case so the page can say why
+// the repo is not on the list while its tasks are.
+//
+// A repo nothing here knows about at all -- a hand-typed URL -- gets
+// the same empty row it always did, so the page's forms still work.
+export function repoPageRow(config, tasks, repo) {
+  const key = repoKey(repo);
+  const listed = repoRows(config, tasks).find((r) => repoKey(r.repo) === key);
+  if (listed) return listed;
+  const row = {
+    repo,
+    total: 0,
+    counts: {},
+    blocked: 0,
+    configured: false,
+    defaults: false,
+    // Only a restricted deployment can leave a repo with tasks off the
+    // list; an unrestricted one raises a row for every task's repo.
+    offList: (config?.targetRepos || []).length > 0,
+  };
+  for (const t of tasks || []) {
+    if (repoKey(t.repo) !== key || !t.repo) continue;
+    // Left out for the reason repoRows leaves it out: the task list the
+    // count links to hides a session's task.
+    if (t.consoleSession || t.interactive) continue;
+    row.total += 1;
+    row.counts[t.state] = (row.counts[t.state] || 0) + 1;
+    if (t.blocked) row.blocked += 1;
+  }
+  return row;
 }
 
 // repoActivity is one repoRows row read as a single status, for the dot

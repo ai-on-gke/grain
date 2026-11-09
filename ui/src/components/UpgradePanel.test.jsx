@@ -24,6 +24,7 @@ import UpgradePanel, {
 import api from "../api.js";
 import { optionValues } from "../searchSelectTesting.js";
 import { fetchUpgradeTargets } from "../upgradeTargets.js";
+import { TimeZoneProvider } from "../TimeZoneContext.jsx";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
 // The branch field's drop-down (grain/task-1914), answered apart from
@@ -591,6 +592,45 @@ describe("UpgradePanel", () => {
     expect(screen.queryByText(/Now running/)).not.toBeInTheDocument();
   });
 
+  // 2026-11-08 deployment-operations walkthrough (task 3617): `grain demo
+  // -upgrade-image` -- an image-mode upgrader whose ref file cannot be
+  // read -- left Settings → Upgrade with no version anywhere on it, while
+  // the externally managed pane beside it already fell back to the build
+  // GET /api/config's `version` names.
+  it("falls back to the build this UI was served by when the daemon names nothing running", async () => {
+    api.mockResolvedValue({ enabled: true, mode: "image", phase: "" });
+    render(
+      <UpgradePanel
+        showError={() => {}}
+        version={{ release: "v3.2.0-dev", commit: "46d27f7eb7630000" }}
+      />,
+    );
+
+    expect(await screen.findByText(/Now running/)).toHaveTextContent(
+      "Now running 46d27f7",
+    );
+    expect(screen.getByTitle("46d27f7eb7630000")).toBeInTheDocument();
+  });
+
+  it("prefers what the daemon says is running over the build", async () => {
+    api.mockResolvedValue({
+      enabled: true,
+      mode: "image",
+      phase: "",
+      running: { image: "docker.io/grainai/grain:main" },
+    });
+    render(
+      <UpgradePanel
+        showError={() => {}}
+        version={{ release: "v3.2.0-dev", commit: "46d27f7eb7630000" }}
+      />,
+    );
+
+    expect(await screen.findByText(/Now running/)).toHaveTextContent(
+      "Now running docker.io/grainai/grain:main",
+    );
+  });
+
   it("submits the entered branch and shows the resulting status", async () => {
     api
       .mockResolvedValueOnce({ enabled: true, phase: "", branch: "" })
@@ -826,6 +866,30 @@ describe("UpgradePanel", () => {
     );
     expect(screen.getByText(/1120-1/).closest("li")).toHaveTextContent(
       /lost: run 1120-1 \(the Director session\) on claude/,
+    );
+  });
+
+  // LastRestart printed report.at in the browser's own zone even when
+  // Settings → Preferences chose another (2026-11-08 settings walkthrough).
+  it("prints the last restart time in this browser's chosen time zone", async () => {
+    const at = "2026-11-08T02:30:00Z";
+    api.mockResolvedValue({
+      enabled: true,
+      mode: "image",
+      phase: "",
+      lastRestart: { at, adopted: [], lost: [] },
+    });
+    const { container } = render(
+      <TimeZoneProvider zone="Asia/Tokyo">
+        <UpgradePanel showError={() => {}} />
+      </TimeZoneProvider>,
+    );
+    await screen.findByText(/Last restart/);
+    const inTokyo = new Date(at).toLocaleString(undefined, {
+      timeZone: "Asia/Tokyo",
+    });
+    expect(container.querySelector(".upgrade-last-restart")).toHaveTextContent(
+      `Last restart (${inTokyo}):`,
     );
   });
 
@@ -1867,6 +1931,25 @@ describe("AutoUpgradeSettings", () => {
     await user.type(time, "04:30");
     expect(onSave).not.toHaveBeenCalled();
     await user.tab();
+    expect(onSave).toHaveBeenCalledWith({ autoUpgradeTime: "04:30" });
+  });
+
+  it("saves a new time of day on Enter, as every Settings box does", async () => {
+    const onSave = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <AutoUpgradeSettings
+        settings={{
+          ...settings,
+          autoUpgradeOn: "daily",
+          autoUpgradeChannel: "latest",
+        }}
+        onSave={onSave}
+      />,
+    );
+    const time = screen.getByLabelText(/time of day/i);
+    await user.clear(time);
+    await user.type(time, "04:30{Enter}");
     expect(onSave).toHaveBeenCalledWith({ autoUpgradeTime: "04:30" });
   });
 

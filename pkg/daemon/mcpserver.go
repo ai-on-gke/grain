@@ -31,12 +31,10 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability"
-	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
-	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfrepair"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/ci"
@@ -1219,7 +1217,7 @@ func formatMessageBody(m ui.Message) string {
 		attLines = append(attLines, fmt.Sprintf("- ./%s", orchestrator.AttachmentPath(a.ID, a.Filename)))
 	}
 	body := m.Body
-	if m.Author != "" && strings.TrimSpace(body) != "" {
+	if m.Author != "" && m.AuthorKind != string(model.PrincipalAutomation) && strings.TrimSpace(body) != "" {
 		body = fmt.Sprintf("[%s]: %s", m.Author, body)
 	}
 	if len(attLines) == 0 {
@@ -1227,7 +1225,7 @@ func formatMessageBody(m ui.Message) string {
 	}
 	attSection := "Files attached to this message are available in the sandbox:\n" + strings.Join(attLines, "\n")
 	if strings.TrimSpace(body) == "" {
-		if m.Author != "" {
+		if m.Author != "" && m.AuthorKind != string(model.PrincipalAutomation) {
 			return fmt.Sprintf("[%s]\n%s", m.Author, attSection)
 		}
 		return attSection
@@ -1236,7 +1234,7 @@ func formatMessageBody(m ui.Message) string {
 }
 
 // daemonAddenda implements mcp.AddendaReader by asking a running "grain
-// daemon" what a person has said on this run's task since a given
+// daemon" what has been added to this run's task conversation since a given
 // comment -- the same REST hop daemonStatus, daemonWaitCredit and
 // daemonChat above make, and literally the same read as daemonChat's own
 // poll (pkg/ui's /api/tasks/{id}/messages, ui.Client.MessagesSince), with
@@ -1247,15 +1245,15 @@ func formatMessageBody(m ui.Message) string {
 // holding a transport into a sandbox, and a run in a sandbox reaches
 // neither. What differs from chat is only who is waiting for whom --
 // chat is the run asking a person a question and blocking on the answer,
-// and this is a person interrupting a run that asked nothing.
+// and this is a mid-run entry reaching a run that asked nothing.
 //
-// Human-authored comments, and other tasks' runs' messages to this one's
-// agent (ui.Client.AddendaSince, POST /api/tasks/{id}/agent-messages),
-// which is that read's own rule rather than anything decided here:
-// grain's own automation posts on a task for reasons that are not
-// somebody telling the run to do something differently, and reading
-// those back to a run mid-turn would spend its context on notices about
-// itself.
+// Human-authored comments, other tasks' runs' messages to this one's agent
+// (POST /api/tasks/{id}/agent-messages), and grain's own mid-run notices
+// aimed at the live run (model.CLThreadsPrincipal and
+// model.CapabilityChangePrincipal), which is ui.Client.AddendaSince's own
+// rule rather than anything decided here: unrelated automation comments stay
+// out so they do not spend the run's context on notices about itself, while
+// AuthorKind travels through so pkg/mcp introduces each speaker accurately.
 type daemonAddenda struct {
 	client    *ui.HTTPClient
 	taskID    string
@@ -1278,7 +1276,11 @@ func (d daemonAddenda) Addenda(ctx context.Context, after int64) ([]mcp.Addendum
 	}
 	addenda := make([]mcp.Addendum, 0, len(messages))
 	for _, message := range messages {
-		addenda = append(addenda, mcp.Addendum{ID: message.ID, Body: formatMessageBody(message)})
+		addenda = append(addenda, mcp.Addendum{
+			ID:         message.ID,
+			AuthorKind: message.AuthorKind,
+			Body:       formatMessageBody(message),
+		})
 	}
 	return addenda, nil
 }
@@ -1485,9 +1487,9 @@ func (g GrantNames) Has(name string) bool { return slices.Contains(g, name) }
 // hook, say -- rather than by any tool of this process.
 var servedGrants = []string{
 	grainserver.LegacySelfDebug, grainserver.SourceRef, grainserver.SourceGrant,
-	grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant, bootstrap.CapabilityName,
+	grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant,
 	grainserver.LegacyGrainCI, grainserver.CIRef, grainserver.CIGrant, deploymenthealth.CapabilityName, grainserver.HealthRef, grainserver.HealthGrant,
-	readissues.CapabilityName,
+	grainserver.LegacyReadIssues, grainserver.ReadIssuesRef, grainserver.ReadIssuesGrant,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
 	grainserver.SQLRef, grainserver.SQLRef + "={}", grainserver.SQLReadGrant, grainserver.SQLWriteGrant,
 	selfrepair.CapabilityName, grainserver.HostExecRef, grainserver.HostExecGrant,
@@ -1501,6 +1503,9 @@ func warnUnknownGrants(grants GrantNames) {
 		}
 		if grainserver.IsInProcessGrant(name) {
 			continue
+		}
+		if model.IsBootstrapPlaybooksGrant(name) {
+			continue // the bootstrap map, or its retired bare alias: src://playbooks and `grain playbooks` read it
 		}
 		if model.APIAliasPreset(name) != "" {
 			continue // bare alias for an api preset (served by grain-controller on POST /api/mcp)
@@ -1533,9 +1538,6 @@ func GrantedDaemonTools(grants GrantNames, srcDir, secretsDir, stateDir, taskID 
 			reader = daemonDeploymentHealth{client: client}
 		}
 		tools = append(tools, deploymenthealth.Tools(deploymenthealth.Config{TaskID: taskID, StateDir: stateDir, Reader: reader, Redact: redact})...)
-	}
-	if grants.Has(bootstrap.CapabilityName) {
-		tools = append(tools, bootstrap.PlaybookTools()...)
 	}
 	if grainserver.HasSQL(grants) {
 		var executor dbaccess.DBExecutor
@@ -1986,11 +1988,11 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 	var grants GrantNames
 	fs.Var(&grants, "grant",
 		"name of a capability grant this run's task holds, whose tools this server should serve; "+
-			"repeat the flag for each. \"self-debug\" serves the four task readers and read_grain_metrics "+
-			"over -server, along with the api:self-debug preset tools (api:tasks:read and api:deployment:read); "+
+			"repeat the flag for each. \"api:self-debug\" (api:tasks:read and api:deployment:read; the retired "+
+			"\"self-debug\" reads as it) serves the four task readers, read_pipeline_changes and read_grain_metrics "+
+			"over -server; "+
 			"\"grain-log\" serves read_grain_log over this host's journal, "+
-			"redacted with -grain-secrets-dir; \"bootstrap-playbooks\" serves list_bootstrap_playbooks/"+
-			"read_bootstrap_playbook off the playbooks embedded in this binary. Passed "+
+			"redacted with -grain-secrets-dir. Passed "+
 			"by a Framework from the grants on the run's own task (agent.RunConfig.Grants, "+
 			"agent.GrantArgs).")
 	grainSrcDir := fs.String("grain-src-dir", "",
@@ -2403,7 +2405,7 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 				MayReadAllCI:     mayReadAllCI,
 				AllowedRepos:     allowedCIRepos,
 				MayReadSrc:       grainserver.HasSource(grants),
-				MayReadPlaybooks: grants.Has(bootstrap.CapabilityName) || grainserver.HasSource(grants),
+				MayReadPlaybooks: model.HasBootstrapPlaybooks(grants) || grainserver.HasSource(grants),
 				MayReadAllTasks:  apiGrants.Allows("tasks:read", ""),
 				TaskReadRepos:    taskReadRepos,
 				MayReadFullConfig: grainserver.HasSource(grants) ||
@@ -2454,7 +2456,7 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 	}
 
 	registry.Register(GrantedDaemonTools(grants, *grainSrcDir, *grainSecretsDir, *grainStateDir, *taskID, client)...)
-	if grants.Has(readissues.CapabilityName) {
+	if grainserver.HasReadIssues(grants) {
 		registry.Register(issueTools(*dataDir, *githubHost, *githubInsecureHTTP, *prRepo, *prCredential)...)
 	}
 	// The task readers, read_pipeline_changes and read_grain_metrics are

@@ -20,9 +20,12 @@ import HostdsSection, {
   deletedLines,
   installCommand,
   installLines,
+  inviteLines,
   parseLabels,
+  parseNonNegativeInt,
 } from "./HostdsSection.jsx";
 import api from "../../api.js";
+import { TimeZoneProvider } from "../../TimeZoneContext.jsx";
 
 vi.mock("../../api.js", () => ({ default: vi.fn() }));
 
@@ -52,6 +55,23 @@ describe("HostdsSection", () => {
     const local = screen.getByTestId("hostd-row-local");
     expect(within(local).queryByText("Rotate")).toBeNull();
     expect(within(local).queryByText("Revoke")).toBeNull();
+  });
+
+  // "Last check-in" printed an unlabelled UTC slice whatever time zone
+  // this browser chose (2026-11-08 settings walkthrough).
+  it("prints a host's last check-in in this browser's chosen time zone", async () => {
+    const seen = "2026-11-03T05:00:00Z";
+    api.mockResolvedValueOnce([LOCAL, { ...WS, last_seen_at: seen }]);
+    render(
+      <TimeZoneProvider zone="Asia/Tokyo">
+        <HostdsSection showError={vi.fn()} />
+      </TimeZoneProvider>,
+    );
+    const row = await screen.findByTestId("hostd-row-ws-1");
+    const inTokyo = new Date(seen).toLocaleString(undefined, {
+      timeZone: "Asia/Tokyo",
+    });
+    expect(row).toHaveTextContent(`Last check-in ${inTokyo}`);
   });
 
   it("shows who a hostd connected as, and a remote hostd with no owner", async () => {
@@ -202,6 +222,107 @@ describe("HostdsSection", () => {
     });
   });
 
+  it("renders shared --join snippet, a pending request without a pairing code, accept, and rename", async () => {
+    const codeView = {
+      name: "default",
+      code: "ghe_11223344556677889900aabbccddeeff0011223344556677",
+      uses: 1,
+      default_capacity: 4,
+      default_labels: { pool: "eng" },
+    };
+    const pendingReq = {
+      id: "hjr_123",
+      enrollment_code: "default",
+      hostname: "devbox.corp",
+      suggested_name: "devbox",
+      os: "linux",
+      arch: "amd64",
+      clis: ["claude", "codex"],
+      version: "v2.4.0",
+      local_user: "alice",
+      key_fingerprint: "SHA256:abcdef0123456789abcdef0123456789",
+      enrolled_by: "alice@example.com",
+      default_labels: { pool: "eng" },
+      default_capacity: 4,
+      pairing_code: "7K9M-2P4Q",
+    };
+    api.mockImplementation(async (path, opts) => {
+      if (path === "/api/hostds" && !opts) {
+        return [
+          LOCAL,
+          {
+            name: "devbox",
+            owner: "alice@example.com",
+            capacity: 4,
+            labels: { pool: "eng" },
+            key_fingerprint: "SHA256:abcdef0123456789abcdef0123456789",
+            enrollment_code: "default",
+            connection: null,
+          },
+        ];
+      }
+      if (path === "/api/hostds/enrollment-codes" && !opts) return [codeView];
+      if (path === "/api/hostds/pending" && !opts) return [pendingReq];
+      return {};
+    });
+
+    render(<HostdsSection showError={vi.fn()} />);
+    const snippet = await screen.findByTestId("invite-hosts-snippet");
+    expect(snippet).toHaveTextContent(
+      `/hostd/install | sh -s -- --join ${codeView.code}`,
+    );
+    // The pairing code is skipped for now: the verified enrolling person
+    // is what the owner checks before accepting.
+    const pendingCard = screen.getByTestId("pending-host-hjr_123");
+    expect(pendingCard).toHaveTextContent("alice@example.com");
+    expect(pendingCard).not.toHaveTextContent("7K9M-2P4Q");
+    expect(screen.queryByTestId("pending-pairing-code-hjr_123")).toBeNull();
+
+    await userEvent.clear(screen.getByLabelText("Host name"));
+    await userEvent.type(screen.getByLabelText("Host name"), "alice-box");
+    await userEvent.click(screen.getByRole("button", { name: "Accept" }));
+    expect(api).toHaveBeenCalledWith("/api/hostds/pending/hjr_123/accept", {
+      method: "POST",
+      body: JSON.stringify({
+        name: "alice-box",
+        labels: { pool: "eng" },
+        capacity: 4,
+      }),
+    });
+
+    const row = await screen.findByTestId("hostd-row-devbox");
+    expect(within(row).getByText("cap=4")).toBeInTheDocument();
+    expect(within(row).getByText("via default")).toBeInTheDocument();
+
+    await userEvent.click(within(row).getByRole("button", { name: "Rename" }));
+    const renameInput = within(row).getByLabelText("New host name");
+    await userEvent.clear(renameInput);
+    await userEvent.type(renameInput, "devbox-2");
+    await userEvent.click(within(row).getByRole("button", { name: "Save" }));
+    expect(api).toHaveBeenCalledWith("/api/hostds/devbox/rename", {
+      method: "POST",
+      body: JSON.stringify({ name: "devbox-2" }),
+    });
+
+    // A host that is not revoked offers no Delete: revoke it first.
+    expect(within(row).queryByRole("button", { name: "Delete" })).toBeNull();
+  });
+
+  it("hides enrollment codes cleanly when caller is not deployment owner", async () => {
+    const showError = vi.fn();
+    api.mockImplementation(async (path) => {
+      if (path === "/api/hostds") return [LOCAL];
+      const err = new Error("only the deployment owner may view codes");
+      err.status = 403;
+      throw err;
+    });
+    render(<HostdsSection showError={showError} />);
+    expect(
+      await screen.findByTestId("invite-hosts-owner-only"),
+    ).toHaveTextContent("deployment owner");
+    expect(showError).not.toHaveBeenCalled();
+  });
+
   it("offers Delete on revoked hostds only, behind a confirmation", async () => {
     const REVOKED = {
       ...WS,
@@ -224,7 +345,11 @@ describe("HostdsSection", () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false);
     await userEvent.click(within(row).getByText("Delete"));
     expect(confirm).toHaveBeenCalledTimes(1);
-    expect(api).toHaveBeenCalledTimes(1);
+    // The section also reads the enrollment codes and pending requests;
+    // what matters is that nothing was deleted.
+    expect(api.mock.calls.some(([, opts]) => opts?.method === "DELETE")).toBe(
+      false,
+    );
 
     confirm.mockReturnValueOnce(true);
     api.mockResolvedValueOnce({
@@ -278,6 +403,93 @@ describe("HostdsSection", () => {
     await screen.findByTestId("hostd-row-ws-1");
     expect(screen.queryByTestId("hostds-delete-revoked")).toBeNull();
   });
+
+  // Clearing Capacity in Hosts Edit or Pending Accept omitted body.capacity,
+  // leaving an existing capacity or enrollment code default_capacity intact;
+  // non-integer text like "abc" became NaN -> null in JSON; and showError's
+  // banner stayed up after the next attempt succeeded (task 3463).
+  it("clears blanked host capacities to 0, rejects non-integers, and dismisses resolved errors", async () => {
+    const showError = vi.fn();
+    const dismissError = vi.fn();
+    const pendingReq = {
+      id: "hjr_cap",
+      enrollment_code: "workstations",
+      hostname: "devbox.example.com",
+      suggested_name: "devbox-cap",
+      os: "linux",
+      arch: "amd64",
+      key_fingerprint: "SHA256:abcdef0123456789abcdef0123456789",
+      enrolled_by: "carol@example.com",
+      default_labels: { os: "linux" },
+      default_capacity: 4,
+    };
+    let currentCap = 6;
+    api.mockImplementation(async (path, opts) => {
+      if (path === "/api/hostds" && !opts) {
+        return [LOCAL, { ...WS, capacity: currentCap }];
+      }
+      if (path === "/api/hostds/enrollment-codes" && !opts) {
+        return [{ name: "default", code: "ghe_1234", uses: 0 }];
+      }
+      if (path === "/api/hostds/pending" && !opts) return [pendingReq];
+      if (path === "/api/hostds/ws-1" && opts?.method === "PATCH") {
+        currentCap = JSON.parse(opts.body).capacity;
+        return {};
+      }
+      return {};
+    });
+
+    render(<HostdsSection showError={showError} dismissError={dismissError} />);
+    const row = await screen.findByTestId("hostd-row-ws-1");
+    expect(within(row).getByText("cap=6")).toBeInTheDocument();
+
+    await userEvent.click(within(row).getByRole("button", { name: "Edit" }));
+    const capInput = within(row).getByLabelText("Capacity");
+    expect(capInput).toHaveValue("6");
+
+    // Non-integer input is refused client-side without calling PATCH.
+    await userEvent.clear(capInput);
+    await userEvent.type(capInput, "abc");
+    await userEvent.click(within(row).getByRole("button", { name: "Save" }));
+    expect(showError).toHaveBeenCalledTimes(1);
+    expect(showError.mock.calls[0][0].message).toBe(
+      'capacity "abc" must be a non-negative whole number',
+    );
+    expect(api.mock.calls.some(([, opts]) => opts?.method === "PATCH")).toBe(
+      false,
+    );
+
+    // Clearing Capacity to blank sends capacity: 0 and dismisses the error.
+    await userEvent.clear(capInput);
+    await userEvent.click(within(row).getByRole("button", { name: "Save" }));
+    expect(api).toHaveBeenCalledWith("/api/hostds/ws-1", {
+      method: "PATCH",
+      body: JSON.stringify({
+        owner: "alice@example.com",
+        labels: { os: "linux" },
+        capacity: 0,
+      }),
+    });
+    expect(dismissError).toHaveBeenCalledWith(
+      'capacity "abc" must be a non-negative whole number',
+    );
+    expect(within(row).queryByText("cap=6")).toBeNull();
+
+    // Clearing Host capacity on a pending request sends capacity: 0 so
+    // default_capacity (4) is overridden rather than inherited.
+    const pendingCap = screen.getByLabelText("Host capacity");
+    expect(pendingCap).toHaveValue("4");
+    await userEvent.clear(pendingCap);
+    await userEvent.click(screen.getByRole("button", { name: "Accept" }));
+    expect(api).toHaveBeenCalledWith("/api/hostds/pending/hjr_cap/accept", {
+      method: "POST",
+      body: JSON.stringify({
+        name: "devbox-cap",
+        labels: { os: "linux" },
+        capacity: 0,
+      }),
+    });
+  });
 });
 
 describe("hostd helpers", () => {
@@ -322,6 +534,16 @@ describe("hostd helpers", () => {
   it("parses labels and refuses one with no value", () => {
     expect(parseLabels(" a=1, b=2 ")).toEqual({ a: "1", b: "2" });
     expect(() => parseLabels("a")).toThrow();
+  });
+  it("parses non-negative whole numbers and rejects non-integers", () => {
+    expect(parseNonNegativeInt("  ", "capacity")).toBeUndefined();
+    expect(parseNonNegativeInt("", "capacity", 0)).toBe(0);
+    expect(parseNonNegativeInt(" 12 ", "capacity")).toBe(12);
+    for (const bad of ["abc", "-1", "1.5", "5x"]) {
+      expect(() => parseNonNegativeInt(bad, "max uses")).toThrow(
+        `max uses "${bad}" must be a non-negative whole number`,
+      );
+    }
   });
   it("says a revoked or never-connected hostd plainly", () => {
     expect(connectionText({ name: "x", revoked_at: "t" })).toBe("Revoked");

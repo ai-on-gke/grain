@@ -1,0 +1,32 @@
+== /settings/capabilities @ 1440px: 11 matching line(s)
+   Deprecated: bare gcp-key and gcp-key:<name> in-process grants were retired onto https://grain.dev/capabilities/gcp#gcp-key permission sets. They remain readable as aliases for one release; update .grain declarations and external configs to gcp#gcp-key.
+   Deprecated: the in-process claude-proxy, openai-proxy and gemini-proxy grants were retired onto https://grain.dev/capabilities/model-proxy#model-proxy {vendor}, which forwards with the same team connection. They remain readable as aliases for one release; update .grain declarations and external configs to model-proxy#model-proxy.
+   Deprecated: the in-process gemini-key grant was retired onto https://grain.dev/capabilities/gcp#gemini-key, which mints with the same gcp-key-minter secret. It remains readable as an alias for one release; update .grain declarations and external configs to gcp#gemini-key.
+   Deprecated: the in-process image-signing, registry-push and package-publish grants were retired onto the in-process https://grain.dev/capabilities/release server's methods of the same names, which place the same files on the same CI events. They remain readable as aliases for one release; update .grain declarations, repository CI capabilities and external configs to release#<method>.
+   Deprecated: the in-process grain-ci grant was retired onto https://grain.dev/capabilities/grain#ci, which a repository's CI Mode still grants. It remains readable as an alias for one release; update .grain declarations and external configs to grain#ci.
+   Deprecated: the in-process bootstrap-playbooks grant was retired onto https://grain.dev/capabilities/config-map#config-map {"config_maps":["bootstrap"]}, which places the same embedded runbooks in /home/debian/.config-map/bootstrap. It remains readable as an alias for one release; update .grain declarations and external configs to config-map#config-map.
+   in-process
+   https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"claude"} — configured (retired in_process.claude-proxy → move to servers (https://grain.dev/capabilities/model-proxy#model-proxy))
+   https://grain.dev/capabilities/gcp#gcp-key — configured (retired in_process.gcp-key → move to servers (https://grain.dev/capabilities/gcp#gcp-key))
+   https://grain.dev/capabilities/gcp#gemini-key={} — configured (retired in_process.gemini-key → move to servers (https://grain.dev/capabilities/gcp#gemini-key))
+   image-signing — disabled (in_process.image-signing)
+== /settings/models @ 1440px: 3 matching line(s)
+   custom command
+   removed
+   custom command connections were removed in v3.2.0; replace it with an Antigravity, Claude or Codex connection
+== /settings/capabilities @ 390px: 11 matching line(s)
+   Deprecated: bare gcp-key and gcp-key:<name> in-process grants were retired onto https://grain.dev/capabilities/gcp#gcp-key permission sets. They remain readable as aliases for one release; update .grain declarations and external configs to gcp#gcp-key.
+   Deprecated: the in-process claude-proxy, openai-proxy and gemini-proxy grants were retired onto https://grain.dev/capabilities/model-proxy#model-proxy {vendor}, which forwards with the same team connection. They remain readable as aliases for one release; update .grain declarations and external configs to model-proxy#model-proxy.
+   Deprecated: the in-process gemini-key grant was retired onto https://grain.dev/capabilities/gcp#gemini-key, which mints with the same gcp-key-minter secret. It remains readable as an alias for one release; update .grain declarations and external configs to gcp#gemini-key.
+   Deprecated: the in-process image-signing, registry-push and package-publish grants were retired onto the in-process https://grain.dev/capabilities/release server's methods of the same names, which place the same files on the same CI events. They remain readable as aliases for one release; update .grain declarations, repository CI capabilities and external configs to release#<method>.
+   Deprecated: the in-process grain-ci grant was retired onto https://grain.dev/capabilities/grain#ci, which a repository's CI Mode still grants. It remains readable as an alias for one release; update .grain declarations and external configs to grain#ci.
+   Deprecated: the in-process bootstrap-playbooks grant was retired onto https://grain.dev/capabilities/config-map#config-map {"config_maps":["bootstrap"]}, which places the same embedded runbooks in /home/debian/.config-map/bootstrap. It remains readable as an alias for one release; update .grain declarations and external configs to config-map#config-map.
+   in-process
+   https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"claude"} — configured (retired in_process.claude-proxy → move to servers (https://grain.dev/capabilities/model-proxy#model-proxy))
+   https://grain.dev/capabilities/gcp#gcp-key — configured (retired in_process.gcp-key → move to servers (https://grain.dev/capabilities/gcp#gcp-key))
+   https://grain.dev/capabilities/gcp#gemini-key={} — configured (retired in_process.gemini-key → move to servers (https://grain.dev/capabilities/gcp#gemini-key))
+   image-signing — disabled (in_process.image-signing)
+== /settings/models @ 390px: 3 matching line(s)
+   custom command
+   removed
+   custom command connections were removed in v3.2.0; replace it with an Antigravity, Claude or Codex connection

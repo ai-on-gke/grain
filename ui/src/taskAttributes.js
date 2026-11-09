@@ -134,13 +134,21 @@ export const NONE_LABEL_FALLBACK = "Not set";
 
 const ORIGIN_LABELS = {
   hand: "Filed by hand",
+  external: "Filed by an external agent",
   proposed: "Proposed by an agent",
+  imported: "Imported issue",
   schedule: "Scheduled",
   suite: "Suite run",
-  imported: "Imported issue",
-  external: "Filed by an external agent",
   fix: "Merge fix",
   review: "Review",
+};
+
+// ADMISSION_LABELS names each admission value the way the task pane's
+// Admission select does (detail/Actions.jsx).
+const ADMISSION_LABELS = {
+  standard: "Standard",
+  bypass: "Bypass queue",
+  durable: "Durable",
 };
 
 // EXTERNAL_AGENT_PREFIX is model.ExternalAgentPrincipalPrefix: the
@@ -300,7 +308,14 @@ export const ATTRIBUTES = [
     // the other repos its work may land in are attributes of their own,
     // below ("reads" and "writes"); a task that only reads a repo is not
     // one of that repo's tasks under any of them.
-    values: one((t) => t.repo),
+    //
+    // Compared without case, as GitHub names a repo and as a repo's own
+    // page finds its tasks (state.js's repoKey): /repos/ACME/legacy-service
+    // linked to `repo:any:ACME/legacy-service`, which matched none of the
+    // tasks it had just counted, filed as acme/legacy-service (2026-11-08
+    // walkthrough, F2).
+    values: one((t) => (t.repo ? String(t.repo).toLowerCase() : t.repo)),
+    expand: (v) => [v === NONE ? NONE : String(v).toLowerCase()],
     noneLabel: "No repo",
     glyphOf: (v) => (v === NONE ? null : "repos"),
   },
@@ -412,11 +427,15 @@ export const ATTRIBUTES = [
       "hand",
       "external",
       "proposed",
+      "imported",
       "schedule",
       "suite",
       "fix",
       "review",
     ],
+    // Every value originOf returns, so `origin:any:robot` says it
+    // matches nothing rather than reading as a real origin.
+    closed: true,
     labelOf: (v) => ORIGIN_LABELS[v] || v,
     // The same two figures the rows carry: a task filed by a schedule
     // wears the hourglass on its own chip (TaskList/TaskBoard), so the
@@ -438,6 +457,22 @@ export const ATTRIBUTES = [
     // nothing rather than reading as "Off" (labelOf's other branch).
     closed: true,
     labelOf: (v) => (v === "on" ? "On" : "Off"),
+  },
+  {
+    // How the task is admitted past the queue (model.Admission, the
+    // task pane's Admission select): ordinary queued work, past the
+    // worker limit, or that plus no wall-clock deadline. Every row of
+    // GET /api/tasks carries one; a row from a server older than the
+    // setting has none and is standard, which is what it was run as.
+    id: "admission",
+    label: "Admission",
+    type: TYPE_ENUM,
+    values: (t) => [t.admission || "standard"],
+    order: ["standard", "bypass", "durable"],
+    // Every value model.ValidAdmission accepts, so `admission:any:bogus`
+    // says it matches nothing rather than reading as a real admission.
+    closed: true,
+    labelOf: (v) => ADMISSION_LABELS[v] || v,
   },
   {
     // Held for a person's decision (humanReviewHold), by the categories

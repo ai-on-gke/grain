@@ -37,7 +37,7 @@ func TestReleaseTrainShellSuites(t *testing.T) {
 			t.Skipf("%s not on PATH: %v", tool, err)
 		}
 	}
-	for _, suite := range []string{"candidate-gate_test.sh", "release-from-trunk_test.sh", "release-patch_test.sh", "release-notes_test.sh", "release-train-actions_test.sh"} {
+	for _, suite := range []string{"candidate-gate_test.sh", "release-from-trunk_test.sh", "release-patch_test.sh", "release-notes_test.sh", "release-train-actions_test.sh", "release-train-task_test.sh", "release-assets_test.sh"} {
 		t.Run(suite, func(t *testing.T) {
 			cmd := exec.Command("bash", filepath.Join(repoRoot(t), "scripts", suite))
 			out, err := cmd.CombinedOutput()
@@ -156,7 +156,7 @@ func TestReleaseImagesDiscardRCMarksWithoutMovingTheChannel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discard-rc --dry-run failed: %v\n%s", err, out)
 	}
-	containsRun(t, out, "would tag docker.io/grainai/{grain,sandbox,sandbox-k8s}:v1.6.0-rc.1 as v1.6.0-rc.1-discarded, and leave candidate and rc where they are")
+	containsRun(t, out, "would tag docker.io/grainai/{grain,sandbox,sandbox-k8s,registry}:v1.6.0-rc.1 as v1.6.0-rc.1-discarded, and leave candidate and rc where they are")
 	if docker != "" {
 		t.Errorf("a dry run asked docker for something:\n%s", docker)
 	}

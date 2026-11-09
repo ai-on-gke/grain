@@ -232,6 +232,10 @@ func configureGitHubSimDemoWith(dir string, cfg ui.Config, repo model.RepoRef, s
 		cfg.GitHubCalls = ghCalls
 	}
 	sim := githubsim.New(repo.Owner, repo.Name, bare, demoGitHubSimDefaultBranch)
+	// promote-release.yml is in the repository's .github/workflows, as it
+	// is in a real one, so an Inbox Approve or a rollback can dispatch it
+	// before it has ever run (pkg/ui/release_approval_github.go).
+	sim.WorkflowFiles = []string{"promote-release.yml"}
 	// Seed an open issue, a comment, and a review comment on the first PR number
 	// (sim.PullRequestBase defaults to 9000) so `grain issue list|read` and
 	// `grain pr reply|resolve` have realistic simulated records in `grain demo`.
@@ -275,6 +279,7 @@ func configureGitHubSimDemoWith(dir string, cfg ui.Config, repo model.RepoRef, s
 	})
 	cfg.GitHubBranches = client
 	cfg.GitHubForkPullRequests = client
+	cfg.GitHubDefaultBranches = client
 	prReader := demoPullRequests{repo: repo, client: client}
 	if prev, ok := cfg.GitHubPullRequests.(demoPullRequests); ok {
 		prReader.store = prev.store
@@ -398,6 +403,48 @@ func (p demoPullRequests) BranchExists(owner, name, branch string) (bool, error)
 		return false, fmt.Errorf("the simulated GitHub only has %s, not %s/%s", p.repo, owner, name)
 	}
 	return p.client.BranchExists(owner, name, branch)
+}
+
+// The release forge (ui.Client.releaseForge): the sim's -pending and
+// release tags, and the promote-release.yml dispatch an Inbox Approve or
+// a rollback sends, held to the one repo the sim stands for as
+// BranchExists is. Without these the demo had no forge a release could be
+// approved through (docs/test-runs/2026-11-04-release-approval.md, F2).
+var (
+	_ github.ReleaseTagReader   = demoPullRequests{}
+	_ github.WorkflowDispatcher = demoPullRequests{}
+)
+
+func (p demoPullRequests) releaseClient(owner, name string) (*github.RESTClient, error) {
+	rest, ok := p.client.(*github.RESTClient)
+	if !ok || !p.repo.Same(model.RepoRef{Owner: owner, Name: name}) {
+		return nil, fmt.Errorf("the simulated GitHub only has %s, not %s/%s", p.repo, owner, name)
+	}
+	return rest, nil
+}
+
+func (p demoPullRequests) ListMatchingTags(owner, name, prefix string) ([]github.TagRef, error) {
+	rest, err := p.releaseClient(owner, name)
+	if err != nil {
+		return nil, err
+	}
+	return rest.ListMatchingTags(owner, name, prefix)
+}
+
+func (p demoPullRequests) GetAnnotatedTag(owner, name, sha string) (*github.AnnotatedTag, error) {
+	rest, err := p.releaseClient(owner, name)
+	if err != nil {
+		return nil, err
+	}
+	return rest.GetAnnotatedTag(owner, name, sha)
+}
+
+func (p demoPullRequests) DispatchWorkflow(owner, name, workflow, ref string, inputs map[string]string) error {
+	rest, err := p.releaseClient(owner, name)
+	if err != nil {
+		return err
+	}
+	return rest.DispatchWorkflow(owner, name, workflow, ref, inputs)
 }
 
 // demoGitHubSimComparer is the daemon's GitHub comparison held to the

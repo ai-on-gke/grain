@@ -99,6 +99,7 @@ var apiScopes = []APIScopeInfo{
 	{Scope: "connections:read", Description: "Read git connections and model backends"},
 	{Scope: "connections:write", Description: "Change git connections and model backends", Dangerous: true},
 	{Scope: "capabilities:read", Description: "Read capability servers and policy, and check grants"},
+	{Scope: "capabilities:detach", Description: "Remove grants from a task (never a standing session's) and narrow a repository's default or CI capabilities, with a reason"},
 	{Scope: "capabilities:admin", Description: "Change capability servers, policy and any task's or repository's grants", Dangerous: true},
 	{Scope: "secrets:read", Description: "List secrets, keys and tokens by name (never their values)"},
 	{Scope: "secrets:write", Description: "Set and delete secrets, keys and tokens", Dangerous: true},
@@ -260,6 +261,35 @@ const (
 	ModelProxyCapabilityServerID = "https://grain.dev/capabilities/model-proxy"
 	ModelProxyMethod             = "model-proxy"
 	ModelProxyRef                = ModelProxyCapabilityServerID + "#" + ModelProxyMethod
+
+	// ConfigMapCapabilityServerID is the canonical capability_id of the
+	// built-in config-map server (and SkillCapabilityServerID its legacy
+	// skill alias). BootstrapPlaybooksGrant selects its built-in bootstrap
+	// map (formerly bootstrap-playbooks).
+	ConfigMapCapabilityServerID = "https://grain.dev/capabilities/config-map"
+	SkillCapabilityServerID     = "https://grain.dev/capabilities/skill"
+	ConfigMapMethod             = "config-map"
+	ConfigMapRef                = ConfigMapCapabilityServerID + "#" + ConfigMapMethod
+	BootstrapPlaybooksGrant     = ConfigMapRef + `={"config_maps":["bootstrap"]}`
+
+	// GitHubCapabilityServerID is the canonical capability_id of the
+	// in-process github server (design/design/unified-grants.design.md §1, §4),
+	// answered by grain itself with the run's team git credential.
+	GitHubCapabilityServerID = "https://grain.dev/capabilities/github"
+
+	// GitHubReadIssuesMethod lets a task read GitHub issues and comments on
+	// the repositories its run may reach (formerly read-issues).
+	GitHubReadIssuesMethod = "read-issues"
+	GitHubReadIssuesRef    = GitHubCapabilityServerID + "#" + GitHubReadIssuesMethod
+	GitHubReadIssuesGrant  = GitHubReadIssuesRef + "={}"
+
+	// GitHubSandboxRepoMethod provisions a private, single-use GitHub sandbox
+	// repository for a run via this deployment's GitHub App and places a token
+	// scoped to only that repository (formerly github-sandbox).
+	LegacyGitHubSandboxCapability = "github-sandbox"
+	GitHubSandboxRepoMethod       = "sandbox-repo"
+	GitHubSandboxRepoRef          = GitHubCapabilityServerID + "#" + GitHubSandboxRepoMethod
+	GitHubSandboxRepoGrant        = GitHubSandboxRepoRef + "={}"
 )
 
 // ModelProxyVendors are the vendors the model-proxy server proxies, in
@@ -459,6 +489,38 @@ func HasGrainCI(grants []string) bool {
 	return slices.ContainsFunc(grants, IsGrainCIGrant)
 }
 
+// IsGitHubReadIssuesGrant reports whether grant names github#read-issues
+// (recorded or bare) or the retired bare read-issues alias.
+func IsGitHubReadIssuesGrant(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if s == "read-issues" {
+		return true
+	}
+	return CapabilityGrantRef(s) == GitHubReadIssuesRef
+}
+
+// HasGitHubReadIssues reports whether any grant in grants opens
+// github#read-issues.
+func HasGitHubReadIssues(grants []string) bool {
+	return slices.ContainsFunc(grants, IsGitHubReadIssuesGrant)
+}
+
+// IsGitHubSandboxRepoGrant reports whether grant names github#sandbox-repo
+// (recorded or bare) or the retired bare github-sandbox alias.
+func IsGitHubSandboxRepoGrant(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if s == LegacyGitHubSandboxCapability {
+		return true
+	}
+	return CapabilityGrantRef(s) == GitHubSandboxRepoRef
+}
+
+// HasGitHubSandboxRepo reports whether any grant in grants opens
+// github#sandbox-repo.
+func HasGitHubSandboxRepo(grants []string) bool {
+	return slices.ContainsFunc(grants, IsGitHubSandboxRepoGrant)
+}
+
 // ParseGrainSQLGrant reports whether grant names grain#sql (recorded or bare)
 // or the retired bare db-read / db-write aliases, and whether it allows writes.
 func ParseGrainSQLGrant(grant string) (ok bool, write bool) {
@@ -504,6 +566,184 @@ func HasGrainSQLWrite(grants []string) bool {
 	return slices.ContainsFunc(grants, IsGrainSQLWriteGrant)
 }
 
+func stringSliceField(with map[string]any, key string) ([]string, bool) {
+	raw, ok := with[key]
+	if !ok {
+		return nil, false
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return nil, true
+	}
+	out := make([]string, 0, len(items))
+	for _, v := range items {
+		s, ok := v.(string)
+		if !ok {
+			return nil, true
+		}
+		out = append(out, s)
+	}
+	return out, true
+}
+
+func configMapSelectsBootstrap(with map[string]any) bool {
+	cms, hasCM := stringSliceField(with, "config_maps")
+	_, hasSec := with["secrets"]
+	keys, hasKeys := stringSliceField(with, "keys")
+	hasBootstrapKey := false
+	for _, k := range keys {
+		if strings.HasPrefix(k, "bootstrap/") {
+			hasBootstrapKey = true
+			break
+		}
+	}
+	if hasCM || hasSec {
+		return slices.Contains(cms, "bootstrap") && (!hasKeys || hasBootstrapKey)
+	}
+	return hasKeys && hasBootstrapKey
+}
+
+// IsBootstrapPlaybooksGrant reports whether grant names the bootstrap playbooks
+// via config-map#config-map (or its legacy skill alias, including methodless
+// shorthand before server normalization) or the retired bare
+// bootstrap-playbooks alias.
+func IsBootstrapPlaybooksGrant(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if strings.EqualFold(s, "bootstrap-playbooks") {
+		return true
+	}
+	if len(s) >= len("https://") && strings.EqualFold(s[:len("https://")], "https://") {
+		s = "https://" + s[len("https://"):]
+	}
+	if !IsCapabilityRef(s) {
+		return false
+	}
+	spec, err := CapabilityGrantSpec(s)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(spec.Capability) {
+	case ConfigMapRef, ConfigMapCapabilityServerID, SkillCapabilityServerID + "#" + ConfigMapMethod:
+		return configMapSelectsBootstrap(spec.With)
+	case ConfigMapCapabilityServerID + "#skill", SkillCapabilityServerID + "#skill":
+		skills, ok := stringSliceField(spec.With, "skills")
+		return ok && slices.Contains(skills, "bootstrap")
+	case SkillCapabilityServerID:
+		if _, hasSkills := spec.With["skills"]; hasSkills {
+			skills, ok := stringSliceField(spec.With, "skills")
+			return ok && slices.Contains(skills, "bootstrap")
+		}
+		return configMapSelectsBootstrap(spec.With)
+	}
+	return false
+}
+
+// BootstrapSkillSetUnnamed reports whether grant is an unnormalized #skill (or
+// methodless skill) capability-server grant that omits "skills", leaving its
+// selection to the server's default ("all", which includes "bootstrap" whenever
+// the server serves the bootstrap playbooks). Once normalized, "skills" is
+// explicit so unrelated skill directories are no longer flagged.
+func BootstrapSkillSetUnnamed(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if len(s) >= len("https://") && strings.EqualFold(s[:len("https://")], "https://") {
+		s = "https://" + s[len("https://"):]
+	}
+	if !IsCapabilityRef(s) {
+		return false
+	}
+	spec, err := CapabilityGrantSpec(s)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(spec.Capability) {
+	case ConfigMapCapabilityServerID + "#skill", SkillCapabilityServerID + "#skill":
+		_, hasSkills := spec.With["skills"]
+		return !hasSkills
+	case SkillCapabilityServerID:
+		for _, k := range []string{"skills", "config_maps", "secrets", "keys"} {
+			if _, ok := spec.With[k]; ok {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// IsEmbeddedBootstrapOnlyGrant reports whether grant is a config-map or skill
+// capability reference whose arguments select exclusively the stateless
+// embedded bootstrap playbooks (no operator config maps and no secrets).
+func IsEmbeddedBootstrapOnlyGrant(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if !IsCapabilityRef(s) {
+		return false
+	}
+	spec, err := CapabilityGrantSpec(s)
+	if err != nil {
+		return false
+	}
+	switch spec.Capability {
+	case ConfigMapRef, SkillCapabilityServerID + "#" + ConfigMapMethod:
+		// Anything but a well-formed config_maps/keys/secrets string list
+		// -- a field the classifier does not know, or a list holding a
+		// non-string the mint would skip past to the strings beside it --
+		// is not provably bootstrap-only.
+		for field := range spec.With {
+			switch field {
+			case "config_maps", "keys", "secrets":
+			default:
+				return false
+			}
+		}
+		secs, hasSecs := stringSliceField(spec.With, "secrets")
+		if hasSecs && (secs == nil || len(secs) > 0) {
+			return false
+		}
+		cms, hasCM := stringSliceField(spec.With, "config_maps")
+		keys, hasKeys := stringSliceField(spec.With, "keys")
+		if !hasCM && !hasKeys {
+			return false
+		}
+		if (hasCM && cms == nil) || (hasKeys && keys == nil) {
+			return false
+		}
+		for _, cm := range cms {
+			if cm != "bootstrap" {
+				return false
+			}
+		}
+		for _, k := range keys {
+			if !strings.HasPrefix(k, "bootstrap/") {
+				return false
+			}
+		}
+		return (hasCM && len(cms) > 0) || (hasKeys && len(keys) > 0)
+	case ConfigMapCapabilityServerID + "#skill", SkillCapabilityServerID + "#skill":
+		for field := range spec.With {
+			if field != "skills" {
+				return false
+			}
+		}
+		skills, hasSkills := stringSliceField(spec.With, "skills")
+		if !hasSkills || len(skills) == 0 {
+			return false
+		}
+		for _, sk := range skills {
+			if sk != "bootstrap" {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// HasBootstrapPlaybooks reports whether any grant in grants opens the bootstrap
+// playbooks.
+func HasBootstrapPlaybooks(grants []string) bool {
+	return slices.ContainsFunc(grants, IsBootstrapPlaybooksGrant)
+}
+
 // legacyGrantReplacements are the bare capabilities converted to api or
 // capability-server grants (design/design/unified-grants.design.md §4) whose
 // in-process provider is gone: each is written as its replacement wherever a
@@ -539,6 +779,16 @@ var legacyGrantReplacements = map[string]string{
 	// Retired by schema migration 103 onto the gcp server's gemini-key,
 	// which mints with the same gcp-key-minter secret.
 	"gemini-key": GCPGeminiKeyGrant,
+	// Retired by schema migration 118 onto the built-in config-map server's
+	// bootstrap map.
+	"bootstrap-playbooks": BootstrapPlaybooksGrant,
+	// Retired by schema migration 121 onto the in-process github server's
+	// read-issues method, which reads with the same team git credential.
+	"read-issues": GitHubReadIssuesGrant,
+	// Retired by schema migration 124 onto the in-process github server's
+	// sandbox-repo method, which provisions the same private sandbox repo
+	// and scoped installation token via this deployment's GitHub App.
+	LegacyGitHubSandboxCapability: GitHubSandboxRepoGrant,
 }
 
 // legacyGrantMultiReplacements maps retired bare capabilities that split into
@@ -595,6 +845,9 @@ func legacyGrantReplacement(name string) (string, bool) {
 		if validLegacyGCPKeyParam(keyName) {
 			return GCPKeyServerGrant(keyName), true
 		}
+	}
+	if credName, ok := LegacyGitCredentialName(name); ok && ValidGitCredentialName(credName) {
+		return RepoCredentialGrant(credName), true
 	}
 	registeredLegacyAliasesMu.RLock()
 	defer registeredLegacyAliasesMu.RUnlock()
@@ -697,17 +950,23 @@ func IsDangerousAPIScope(scope APIScope) bool {
 
 // sandboxModelOnlyScopes are non-dangerous scopes that remain model-only
 // (never reachable via the sandbox proxy credential / X-Grain-Channel: sandbox-cli).
+//
+// capabilities:detach is model-only so that removing a grant is always a
+// reasoned MCP tool call the transcript records, never something a script
+// in the sandbox does (director-capabilities.spec.md §3.1.2).
 var sandboxModelOnlyScopes = map[APIScope]bool{
-	"dispatch:write":  true,
-	"repos:write":     true,
-	"sessions:write":  true,
-	"teams:broadcast": true,
+	"capabilities:detach": true,
+	"dispatch:write":      true,
+	"repos:write":         true,
+	"sessions:write":      true,
+	"teams:broadcast":     true,
 }
 
 // IsSandboxDeniedAPIScope reports whether scope is refused on the sandbox
 // proxy channel (X-Grain-Channel: sandbox-cli): every Dangerous scope, plus
-// model-only scopes (dispatch:write, repos:write, sessions:write,
-// teams:broadcast, and any deployment:* scope other than deployment:read).
+// model-only scopes (capabilities:detach, dispatch:write, repos:write,
+// sessions:write, teams:broadcast, and any deployment:* scope other than
+// deployment:read).
 func IsSandboxDeniedAPIScope(scope APIScope) bool {
 	if scope == "" || scope == APIScopeInternal {
 		return true
@@ -802,8 +1061,20 @@ func (g APIGrant) OutsideRepoLimit() error {
 // not an api grant at all; err is set for one that is, but names no
 // scope or preset of the vocabulary, or a repository that does not
 // parse.
+//
+// An api reference (https://grain.dev/capabilities/api#<what>, with an
+// optional {repo}) reads as the api:<what>[@repo] it stands for
+// (CanonicalGrant); g.Name is name as given.
 func ParseAPIGrant(name string) (g APIGrant, ok bool, err error) {
-	rest, isAPI := strings.CutPrefix(strings.TrimSpace(name), APIGrantPrefix)
+	spelled := strings.TrimSpace(name)
+	if _, isRef := apiMethodOf(CapabilityGrantRef(spelled)); isRef {
+		legacy, legal := LegacyGrantString(CanonicalGrant(spelled))
+		if !legal {
+			return APIGrant{}, true, fmt.Errorf("api grant %q: takes no argument but repo", name)
+		}
+		spelled = legacy
+	}
+	rest, isAPI := strings.CutPrefix(spelled, APIGrantPrefix)
 	if !isAPI {
 		return APIGrant{}, false, nil
 	}
@@ -906,6 +1177,40 @@ func apiGrantsOf(names []string, sandboxChannel bool) APIGrantSet {
 
 // Empty reports whether the set grants nothing.
 func (s APIGrantSet) Empty() bool { return len(s.all) == 0 && len(s.scopes) == 0 }
+
+// Intersect returns the grant set holding only scopes and repositories that
+// both s and other allow (AU-25.1).
+func (s APIGrantSet) Intersect(other APIGrantSet) APIGrantSet {
+	out := APIGrantSet{scopes: map[APIScope][]string{}, all: map[APIScope]bool{}}
+	for _, info := range APIScopes() {
+		sc := info.Scope
+		if !s.Has(sc) || !other.Has(sc) {
+			continue
+		}
+		if s.Allows(sc, "") && other.Allows(sc, "") {
+			out.all[sc] = true
+			continue
+		}
+		if s.Allows(sc, "") {
+			out.scopes[sc] = other.Repos(sc)
+			continue
+		}
+		if other.Allows(sc, "") {
+			out.scopes[sc] = s.Repos(sc)
+			continue
+		}
+		var common []string
+		for _, r := range s.Repos(sc) {
+			if other.Allows(sc, r) {
+				common = append(common, r)
+			}
+		}
+		if len(common) > 0 {
+			out.scopes[sc] = common
+		}
+	}
+	return out
+}
 
 // Has reports whether the set grants scope for at least one repository.
 func (s APIGrantSet) Has(scope APIScope) bool {

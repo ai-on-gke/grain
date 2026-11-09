@@ -61,7 +61,7 @@ describe("settingLabel", () => {
   });
 
   // A link to a setting lands on the field itself, not the top of its
-  // card: Legacy capabilities' GitHub host sits a screen below the card's
+  // card: Deployment credentials' GitHub host sits a screen below the card's
   // top, so Health's "Saved, not applied until restart" link to it used
   // to open the section with the field out of sight (2026-11-01
   // deployment-operations walkthrough).
@@ -79,10 +79,10 @@ describe("settingLabel", () => {
       href: "/settings/ci#ciJobsPerRun",
     });
     expect(settingLocation("githubHost")).toEqual({
-      section: "credentials",
+      section: "capabilities",
       anchor: "credentials",
       target: "githubHost",
-      href: "/settings/credentials#githubHost",
+      href: "/settings/capabilities#githubHost",
     });
     // A card names no setting key.
     expect(settingLocation("card:general:about")).toBeNull();

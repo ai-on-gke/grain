@@ -1,0 +1,18 @@
+GET /api/v3/repos/ai-on-gke/grain/releases/tags/sha-29b2f80e5ac3
+POST /api/v3/repos/ai-on-gke/grain/releases
+POST /api/uploads/repos/ai-on-gke/grain/releases/1001/assets?name=grain-image.tar.gz
+POST /api/uploads/repos/ai-on-gke/grain/releases/1001/assets?name=grain-image.tar.gz.sha256
+POST /api/uploads/repos/ai-on-gke/grain/releases/1001/assets?name=guest-image.tar.gz
+POST /api/uploads/repos/ai-on-gke/grain/releases/1001/assets?name=guest-image.tar.gz.sha256
+POST /api/uploads/repos/ai-on-gke/grain/releases/1001/assets?name=k8s-sandbox-image.tar.gz
+POST /api/uploads/repos/ai-on-gke/grain/releases/1001/assets?name=k8s-sandbox-image.tar.gz.sha256
+POST /api/uploads/repos/ai-on-gke/grain/releases/1001/assets?name=images.json
+GET /api/v3/repos/ai-on-gke/grain/releases/1001/assets
+GET /api/v3/repos/ai-on-gke/grain/releases/tags/sha-29b2f80e5ac3
+GET /api/v3/repos/ai-on-gke/grain/releases/1001/assets
+GET /api/v3/repos/ai-on-gke/grain/releases/tags/channel-main
+POST /api/v3/repos/ai-on-gke/grain/releases
+PATCH /api/v3/repos/ai-on-gke/grain/git/refs/tags/channel-main {"sha":"29b2f80e5ac3b5e527e7eca86a3b5d2f82fbc69f","force":true}
+POST /api/uploads/repos/ai-on-gke/grain/releases/1009/assets?name=images.json.next
+PATCH /api/v3/repos/ai-on-gke/grain/releases/assets/1010 {"name":"images.json"}
+GET /api/v3/repos/ai-on-gke/grain/releases/1009/assets

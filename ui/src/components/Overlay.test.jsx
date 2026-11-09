@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
+import { Dialog, Popover } from "@mui/material";
 import { describe, expect, it, vi } from "vitest";
 import Overlay, { DISCARD_PROMPT } from "./Overlay.jsx";
 
@@ -309,6 +311,84 @@ describe("Overlay", () => {
       dirty = true;
       unmount();
       expect(unload().defaultPrevented).toBe(false);
+    });
+
+    it("ignores an Escape originating inside an open MUI Popover", async () => {
+      const onClose = vi.fn();
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+      function PaneWithPopover() {
+        const [anchor, setAnchor] = useState(null);
+        return (
+          <Overlay onClose={onClose} pane animate={false} isDirty={() => true}>
+            <button type="button" onClick={(e) => setAnchor(e.currentTarget)}>
+              Open popover
+            </button>
+            <Popover
+              open={Boolean(anchor)}
+              anchorEl={anchor}
+              onClose={() => setAnchor(null)}
+            >
+              <input aria-label="Popover search" autoFocus />
+            </Popover>
+          </Overlay>
+        );
+      }
+
+      render(<PaneWithPopover />);
+      await userEvent.click(
+        screen.getByRole("button", { name: "Open popover" }),
+      );
+      const popInput = await screen.findByLabelText("Popover search");
+      // Even if Escape bubbles out of the popover before ModalManager promotes
+      // it, Overlay leaves the keypress to the popover rather than asking
+      // DISCARD_PROMPT or closing the pane.
+      fireEvent.keyDown(popInput, { key: "Escape" });
+      expect(confirm).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
+      confirm.mockRestore();
+    });
+
+    it("still closes on Escape when an unmounted button drops focus to body, unless another modal sits above it", async () => {
+      const onClose = vi.fn();
+      function StepPane({ withTopModal = false }) {
+        const [step, setStep] = useState(1);
+        return (
+          <>
+            <Overlay onClose={onClose} pane animate={false}>
+              {step === 1 ? (
+                <button type="button" onClick={() => setStep(2)}>
+                  Continue
+                </button>
+              ) : (
+                <p>Step two</p>
+              )}
+            </Overlay>
+            {withTopModal && (
+              <Dialog open transitionDuration={0}>
+                <p>Confirmation above pane</p>
+              </Dialog>
+            )}
+          </>
+        );
+      }
+
+      const { rerender } = render(<StepPane withTopModal={false} />);
+      await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+      expect(screen.getByText("Step two")).toBeInTheDocument();
+      expect(document.activeElement).toBe(document.body);
+
+      // With another modal open on top of Overlay, Escape on body does not
+      // close the underlying Overlay.
+      rerender(<StepPane withTopModal />);
+      document.activeElement?.blur?.();
+      await userEvent.keyboard("{Escape}");
+      expect(onClose).not.toHaveBeenCalled();
+
+      // Once this Overlay is the topmost modal, Escape on body closes it.
+      rerender(<StepPane withTopModal={false} />);
+      document.activeElement?.blur?.();
+      await userEvent.keyboard("{Escape}");
+      expect(onClose).toHaveBeenCalledTimes(1);
     });
   });
 });

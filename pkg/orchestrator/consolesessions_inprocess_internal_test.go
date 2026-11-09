@@ -155,13 +155,30 @@ func TestInProcessSessionIdleWaitFollowsAChangedStoredTTL(t *testing.T) {
 			cfg.inProcessSessionWait = true
 			cfg.sessionIdleTTLStored = tc.stored
 
-			// The operator shortens the TTL once the session is idle.
+			// The operator shortens the TTL once the session is idle. The
+			// write is retried rather than dropped: under -race with the
+			// package's tests in parallel a single write can fail on a busy
+			// store, and a dropped write left the wait on the dispatched TTL
+			// (CI failure on #818: "idle wait lasted 3.08s").
+			updateErr := make(chan error, 1)
 			go func() {
 				time.Sleep(100 * time.Millisecond)
-				_ = store.UpdateConfig(ctx, func(c *model.Config) error {
-					c.SessionSandboxIdleTTL = 200 * time.Millisecond
-					return nil
-				})
+				var err error
+				for attempt := 0; attempt < 20; attempt++ {
+					if err = store.UpdateConfig(ctx, func(c *model.Config) error {
+						c.SessionSandboxIdleTTL = 200 * time.Millisecond
+						return nil
+					}); err == nil {
+						break
+					}
+					time.Sleep(20 * time.Millisecond)
+				}
+				updateErr <- err
+			}()
+			defer func() {
+				if err := <-updateErr; err != nil {
+					t.Errorf("shortening the stored TTL: %v", err)
+				}
 			}()
 			fw := &countingTurns{}
 			first := &agent.Result{FinalText: "first answer", ResumableSession: "sess-1"}

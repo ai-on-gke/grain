@@ -198,6 +198,9 @@ frontend:
 	find pkg/ui/static -mindepth 1 -not -name '.gitignore' -not -name '.gitkeep' \
 		-not -name 'placeholder.html' -delete
 	cd ui && npm ci --omit=dev && npm run build
+	find pkg/registry/server/static -mindepth 1 -not -name '.gitignore' -not -name '.gitkeep' \
+		-not -name 'placeholder.html' -delete
+	cd ui-registry && npm ci --omit=dev && npm run build
 
 # BUILDVCS is passed explicitly rather than left to `go build`'s default
 # (which is this same `auto`) so that turning it off is a documented word
@@ -313,6 +316,7 @@ container-build: builder
 test: frontend
 	go test -race -timeout 30m ./...
 	cd ui && { [ -x node_modules/.bin/vitest ] || npm ci; } && npm test
+	cd ui-registry && { [ -x node_modules/.bin/vitest ] || npm ci; } && npm test
 
 # The same suite, turned up: what .github/workflows/nightly.yml runs
 # while nobody is waiting for it.
@@ -388,6 +392,7 @@ playwright-browsers:
 
 test-e2e-suite:
 	cd ui && { [ -x node_modules/.bin/playwright ] || npm ci; } && npm run test:e2e $${PLAYWRIGHT_PROJECT:+-- --project="$$PLAYWRIGHT_PROJECT"}
+	cd ui-registry && { [ -x node_modules/.bin/playwright ] || npm ci; } && npm run test:e2e $${PLAYWRIGHT_PROJECT:+-- --project="$$PLAYWRIGHT_PROJECT"}
 
 test-e2e: frontend playwright-browsers test-e2e-suite
 
@@ -652,6 +657,7 @@ fmt:
 # be pure waste.
 fmt-frontend:
 	cd ui && { [ -x node_modules/.bin/prettier ] || npm ci; } && npm run format:check
+	cd ui-registry && { [ -x node_modules/.bin/prettier ] || npm ci; } && npm run format:check && npx prettier --check ../ui-shared
 
 clean:
 	rm -rf $(BIN) $(CONTAINER_CACHE)

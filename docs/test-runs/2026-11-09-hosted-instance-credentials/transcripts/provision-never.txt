@@ -1,0 +1,23 @@
+config /tmp/hic/registry.yaml is valid
+### SA_DELAY=-1: grain registry create walk-never
+  created hosted instance entry walk-never (state=creating, shape=n2-standard-2, url=https://walk-never.grain-user.test)
+  t+0s: state=creating status_detail=
+  t+6s: state=creating status_detail=waiting for service account gi-walk-never@made-up-proj.iam.gserviceaccount.com to propagate before creating the GCE instance (attempt 1 failed, retrying in 5s): gcp compute: inserting instance grain-vm-walk-never in us-central1-a: GCE operation op-1 failed (EXTERNAL_RESOURCE_NOT_FOUND): The resource 'gi-walk-never@made-up-proj.iam.gserviceaccount.com' of type 'serviceAccount' was not found.
+  t+16s: state=creating status_detail=waiting for service account gi-walk-never@made-up-proj.iam.gserviceaccount.com to propagate before creating the GCE instance (attempt 2 failed, retrying in 10s): gcp compute: inserting instance grain-vm-walk-never in us-central1-a: GCE operation op-2 failed (EXTERNAL_RESOURCE_NOT_FOUND): The resource 'gi-walk-never@made-up-proj.iam.gserviceaccount.com' of type 'serviceAccount' was not found.
+  t+31s: state=creating status_detail=waiting for service account gi-walk-never@made-up-proj.iam.gserviceaccount.com to propagate before creating the GCE instance (attempt 3 failed, retrying in 20s): gcp compute: inserting instance grain-vm-walk-never in us-central1-a: GCE operation op-3 failed (EXTERNAL_RESOURCE_NOT_FOUND): The resource 'gi-walk-never@made-up-proj.iam.gserviceaccount.com' of type 'serviceAccount' was not found.
+  t+57s: state=creating status_detail=waiting for service account gi-walk-never@made-up-proj.iam.gserviceaccount.com to propagate before creating the GCE instance (attempt 4 failed, retrying in 30s): gcp compute: inserting instance grain-vm-walk-never in us-central1-a: GCE operation op-4 failed (EXTERNAL_RESOURCE_NOT_FOUND): The resource 'gi-walk-never@made-up-proj.iam.gserviceaccount.com' of type 'serviceAccount' was not found.
+  t+91s: state=creating status_detail=waiting for service account gi-walk-never@made-up-proj.iam.gserviceaccount.com to propagate before creating the GCE instance (attempt 5 failed, retrying in 30s): gcp compute: inserting instance grain-vm-walk-never in us-central1-a: GCE operation op-5 failed (EXTERNAL_RESOURCE_NOT_FOUND): The resource 'gi-walk-never@made-up-proj.iam.gserviceaccount.com' of type 'serviceAccount' was not found.
+  t+122s: state=creating status_detail=waiting for service account gi-walk-never@made-up-proj.iam.gserviceaccount.com to propagate before creating the GCE instance (attempt 6 failed, retrying in 5.050977962s): gcp compute: inserting instance grain-vm-walk-never in us-central1-a: GCE operation op-6 failed (EXTERNAL_RESOURCE_NOT_FOUND): The resource 'gi-walk-never@made-up-proj.iam.gserviceaccount.com' of type 'serviceAccount' was not found.
+  t+132s: state=failed status_detail=creating GCE instance failed: service account gi-walk-never@made-up-proj.iam.gserviceaccount.com was still not visible to the compute provider after retrying for 2m0s: gcp compute: inserting instance grain-vm-walk-never in us-central1-a: GCE operation op-7 failed (EXTERNAL_RESOURCE_NOT_FOUND): The resource 'gi-walk-never@made-up-proj.iam.gserviceaccount.com' of type 'serviceAccount' was not found.
+### grain registry show walk-never
+  Name:        walk-never
+  URL:         https://walk-never.grain-user.test
+  Kind:        instance (host_kind=registry-vm)
+  State:       failed (status=offline, listed=false)
+  Owner:       alice@example.com
+  Shape:       n2-standard-2
+### stub: Compute inserts, Secret Manager versions, SA creations
+  instance inserts (all walks so far): 17
+  projects/made-up-proj/secrets/grain-inst-walk-never-db-password: 1 version(s)
+### tenant role on the TLS pool
+  gi-walk-never@made-up-proj.iam|t

@@ -18,6 +18,7 @@ package hostd
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"net"
 	"time"
@@ -39,6 +40,12 @@ type Server struct {
 
 	Remote                             func(ctx context.Context) (net.Conn, error)
 	RemoteMinBackoff, RemoteMaxBackoff time.Duration
+	RenewName                          string
+	RenewKey                           ed25519.PrivateKey
+	RenewInterval                      time.Duration
+	CurrentToken                       func() string
+	OnTokenRenewed                     func(token string, expiresAt time.Time)
+	RenewedAt                          time.Time
 
 	Builtins       []BuiltinEntry
 	BuiltinCommand string

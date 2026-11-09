@@ -1,0 +1,147 @@
+=== unlisted privacy
+$ [bob@beta.test @ 4251] grain registry update -unlisted bob-ws
+    updated entry bob-ws (state=running, listed=false)
+    (exit 0)
+$ [alice@alpha.test @ 4261] grain registry directory
+    conn-alice                         online    other         owner=alice@alpha.test       https://conn-alice.grain-user.test
+    (exit 0)
+$ [alice@alpha.test @ 4261] grain registry route beta/svc
+    no matching grain entries for beta/svc 
+    (exit 0)
+$ [alice@alpha.test @ 4261] grain registry show bob-ws
+    grain: registry API 403 (forbidden): caller does not have permission to view this entry
+    (exit 1)
+$ [carol@alpha.test @ 4261] grain registry directory
+    conn-alice                         online    other         owner=alice@alpha.test       https://conn-alice.grain-user.test
+    (exit 0)
+$ [carol@alpha.test @ 4261] grain registry route beta/svc
+    no matching grain entries for beta/svc 
+    (exit 0)
+$ [carol@alpha.test @ 4261] grain registry show bob-ws
+    grain: registry API 403 (forbidden): caller does not have permission to view this entry
+    (exit 1)
+$ [root@alpha.test @ 4261] grain registry directory
+    conn-alice                         online    other         owner=alice@alpha.test       https://conn-alice.grain-user.test
+    (exit 0)
+$ [root@alpha.test @ 4261] grain registry route beta/svc
+    no matching grain entries for beta/svc 
+    (exit 0)
+$ [root@alpha.test @ 4261] grain registry show bob-ws
+    Name:        bob-ws
+    URL:         https://bob-ws.grain-user.test
+    Kind:        connected (host_kind=other)
+    State:       running (status=offline, listed=false)
+    Display:     Bob WS
+    Purpose:     beta tenant
+    Owner:       bob@beta.test
+    Version:     v0.0.0-20261107200333-ada3fc6fed09 (ada3fc6fed09cee0d842990887764674ad88e294)
+    Tunnel:      connected=false
+    Scopes:
+      beta/svc                   /                role=primary   source=declared active=true
+    (exit 0)
+$ [bob@beta.test @ 4261] grain registry show bob-ws
+    Name:        bob-ws
+    URL:         https://bob-ws.grain-user.test
+    Kind:        connected (host_kind=other)
+    State:       running (status=offline, listed=false)
+    Display:     Bob WS
+    Purpose:     beta tenant
+    Owner:       bob@beta.test
+    Version:     v0.0.0-20261107200333-ada3fc6fed09 (ada3fc6fed09cee0d842990887764674ad88e294)
+    Tunnel:      connected=false
+    Scopes:
+      beta/svc                   /                role=primary   source=declared active=true
+    (exit 0)
+=== scopes (owner vs other tenant)
+$ [alice@alpha.test @ 4251] grain registry scopes -set alpha/app:services/api:primary -set alpha/lib:secondary conn-alice
+    updated declared scopes on conn-alice (2 effective scopes)
+    (exit 0)
+$ [bob@beta.test @ 4251] grain registry scopes -set alpha/app conn-alice
+    grain: registry API 403 (forbidden): caller "bob@beta.test" is not authorized to manage entry "conn-alice"
+    (exit 1)
+$ [bob@beta.test @ 4251] grain registry scopes -set alpha/app bob-ws
+    updated declared scopes on bob-ws (1 effective scopes)
+    (exit 0)
+$ [alice@alpha.test @ 4261] grain registry route alpha/app services/api
+    Primary: conn-alice (online, https://conn-alice.grain-user.test, prefix="services/api")
+      conn-alice               role=primary   status=online   prefix=services/api       source=declared https://conn-alice.grain-user.test
+    (exit 0)
+=== rotate-credential (other tenant refused, owner rotates with overlap)
+$ [bob@beta.test @ 4251] grain registry rotate-credential conn-alice
+    grain: registry API 403 (forbidden): caller "bob@beta.test" is not authorized to manage entry "conn-alice"
+    (exit 1)
+$ [alice@alpha.test @ 4251] grain registry rotate-credential -label walk-rotation -overlap 1h -token-file /tmp/grwalk/conn-alice.rotated.token conn-alice
+    rotated credential 3e024778-30ef-491d-8f7e-1b0efe06d1f8 for conn-alice
+    registration token written to /tmp/grwalk/conn-alice.rotated.token
+    outbound tunnel config snippet:
+      grain daemon -registry-url http://127.0.0.1:4251 -registry-entry conn-alice -registry-token-file /tmp/grwalk/conn-alice.rotated.token -registry-connect \
+        -ui-require-verifier=registry -ui-registry-issuer=grain-registry -ui-registry-audience=https://conn-alice.grain-user.test -ui-registry-keys-url=http://127.0.0.1:4251/.well-known/jwks.json
+    (exit 0)
+=== two-step transfer bob-ws -> carol
+$ [alice@alpha.test @ 4251] grain registry transfer -to carol@alpha.test bob-ws
+    grain: registry API 403 (forbidden): caller "alice@alpha.test" is not authorized to manage entry "bob-ws"
+    (exit 1)
+$ [bob@beta.test @ 4251] grain registry transfer -to carol@alpha.test bob-ws
+    offered ownership transfer of bob-ws to carol@alpha.test
+    (exit 0)
+$ [alice@alpha.test @ 4251] grain registry accept-transfer bob-ws
+    grain: registry API 403 (forbidden): only the named pending transfer recipient may accept this transfer
+    (exit 1)
+$ [carol@alpha.test @ 4251] grain registry accept-transfer bob-ws
+    accepted ownership transfer of bob-ws (owner=carol@alpha.test)
+    (exit 0)
+$ [carol@alpha.test @ 4251] grain registry show bob-ws
+    Name:        bob-ws
+    URL:         https://bob-ws.grain-user.test
+    Kind:        connected (host_kind=other)
+    State:       running (status=offline, listed=false)
+    Display:     Bob WS
+    Purpose:     beta tenant
+    Owner:       carol@alpha.test
+    Version:     v0.0.0-20261107200333-ada3fc6fed09 (ada3fc6fed09cee0d842990887764674ad88e294)
+    Tunnel:      connected=false
+    Scopes:
+      alpha/app                  /                role=primary   source=declared active=true
+    (exit 0)
+$ [bob@beta.test @ 4251] grain registry show bob-ws
+    grain: registry API 403 (forbidden): caller does not have permission to view this entry
+    (exit 1)
+=== unregister URL validation (must refuse before minting any OIDC token)
+$ grain registry unregister -standalone -oidc -registry-url 'http://registry.example.com' conn-alice
+    grain: refusing insecure http:// registry URL "http://registry.example.com" for non-loopback host
+$ grain registry unregister -standalone -oidc -registry-url 'ftp://registry.example.com' conn-alice
+    grain: registry URL "ftp://registry.example.com" must use https:// (or http:// on loopback)
+$ grain registry unregister -standalone -oidc -registry-url 'https://user:pw@registry.example.com' conn-alice
+    grain: registry URL must not include userinfo credentials
+$ grain registry unregister -standalone -oidc -registry-url 'https://registry.example.com/x?y=1#frag' conn-alice
+    grain: registry URL must not include query parameters or fragments
+    gcloud invoked: never
+=== delete / restore
+$ [bob@beta.test @ 4251] grain registry delete -yes carol-gone
+    grain: registry API 404 (not_found): entry "carol-gone" not found
+    (exit 1)
+$ [alice@alpha.test @ 4251] grain registry delete -yes bob-ws
+    grain: registry API 403 (forbidden): caller "alice@alpha.test" is not authorized to manage entry "bob-ws"
+    (exit 1)
+$ [carol@alpha.test @ 4251] grain registry delete -yes bob-ws
+    deleted entry bob-ws
+    (exit 0)
+$ [carol@alpha.test @ 4251] grain registry list -include-deleted
+    bob-ws                   connected  deleted    offline   listed=false owner=carol@alpha.test         https://bob-ws.grain-user.test
+    (exit 0)
+$ [alice@alpha.test @ 4251] grain registry restore bob-ws
+    grain: registry API 403 (forbidden): caller "alice@alpha.test" is not authorized to manage entry "bob-ws"
+    (exit 1)
+$ [carol@alpha.test @ 4251] grain registry restore bob-ws
+    restored entry bob-ws (state=running)
+    (exit 0)
+$ [carol@alpha.test @ 4251] grain registry list
+    bob-ws                   connected  running    offline   listed=false owner=carol@alpha.test         https://bob-ws.grain-user.test
+    (exit 0)
+=== create (compute.provider: none)
+$ [alice@alpha.test @ 4251] grain registry create -name alice-vm -shape standard
+    grain: registry API 400 (invalid_argument): lookup shape "standard": sql: no rows in result set
+    (exit 1)
+$ [mallory@evil.test @ 4251] grain registry list
+    grain: registry API 403 (forbidden): webauth: caller forbidden: domain "evil.test" is not in allowed_domains
+    (exit 1)

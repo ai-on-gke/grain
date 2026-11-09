@@ -96,6 +96,11 @@ func (c *Client) latestSessionHumanSender(ctx context.Context, sessionTaskID str
 		return nil
 	}
 	for i := len(comments) - 1; i >= 0; i-- {
+		if h := attributedHuman(comments[i].Author); h != nil && strings.TrimSpace(h.ID) != "" {
+			if _, nerr := model.NormalizeTaskOwner(h.ID); nerr == nil {
+				return h
+			}
+		}
 		actor := comments[i].Author.Actor
 		if (actor.Kind == model.PrincipalHuman || actor.Kind == model.PrincipalService) && strings.TrimSpace(actor.ID) != "" {
 			if _, nerr := model.NormalizeTaskOwner(actor.ID); nerr == nil {

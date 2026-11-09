@@ -92,21 +92,30 @@ type ConsoleSession struct {
 	// NetworkAccess is the session's sandbox's reach, as a task-level
 	// override (Task.NetworkAccess): "" for this deployment's own
 	// default, NetworkNone for a session that may not reach the internet
-	// at all. The director ships NetworkOpen -- see DefaultConsoleSessions.
+	// at all. The director ships NetworkNone, which
+	// ConsoleSessionNetworkAccess resolves to NetworkOpen on a backend
+	// that cannot isolate -- see DefaultConsoleSessions.
 	NetworkAccess NetworkAccess
 	// TasksApproved is whether a task this session proposes is filed
 	// approved (queued, dispatchable by the next cycle) or proposed
-	// (waiting for a person). False -- approval required -- is the
-	// default and the shipped answer: a chat is a fast way to ask for a
-	// lot of work, and a director that could queue its own tasks would
-	// be one conversation away from spending a day of this deployment's
-	// capacity on a misunderstanding. An operator who trusts theirs can
-	// turn it on.
+	// (waiting for a person). False -- approval required -- is the zero
+	// value for a newly created session; the shipped director
+	// (DefaultConsoleSessions) turns it on by default
+	// (director-capabilities.spec.md §3.1.5), bounded per conversation
+	// turn by AutoSubmitLimits.TurnFanOut and held whenever a proposal
+	// escalates grants/repos, targets grain/config, or asks for
+	// hold_for_approval. An operator can turn it off or on in the session
+	// row or on the active task (ConsoleSessionTasksUnapprovedTag /
+	// ConsoleSessionTasksApprovedTag).
 	TasksApproved bool
 	// KeepRunning restarts the session's underlying task immediately when
 	// its run exits without asking a question, rather than parking it to
 	// wait for the next message.
 	KeepRunning bool `json:"keepRunning,omitempty"`
+	// Hosting says whether the session's task runs unattended or opens an
+	// interactive terminal console attached to its sandbox (Task.Hosting).
+	// Empty means unattended.
+	Hosting Hosting `json:"hosting,omitempty"`
 	// Reads is the repos this session is granted read-only access to
 	// (Task.Reads). The session's sandbox may clone or fetch from them,
 	// but never push commits directly.
@@ -299,7 +308,10 @@ func (t Task) IsConsoleSession() bool {
 // core registered as on by default for the build
 // (pkg/capability.Registration.DefaultOn, which calls
 // RegisterDefaultConsoleSessionCapability). DefaultConsoleSessions
-// grants them to the director alongside core's own four.
+// grants them to the director alongside core's own four. The value is
+// whether the capability needs egress from the sandbox itself
+// (RegisterDefaultConsoleSessionEgressCapability), which keeps the
+// shipped director's NetworkAccess open on that build.
 var (
 	registeredDefaultCapabilitiesMu sync.RWMutex
 	registeredDefaultCapabilities   = map[string]bool{}
@@ -310,15 +322,51 @@ var (
 // called. pkg/capability.RegisterProvider calls it for each Registration
 // with DefaultOn set, so a build that turns a capability on by default
 // for new tasks also turns it on by default for the director.
+//
+// id is taken to be served from grain's side of the sandbox boundary --
+// on the controller, the session host, or a port grain publishes to
+// sandboxes -- so it works under the director's shipped NetworkNone. A
+// capability that needs the sandbox to reach the internet itself
+// registers through RegisterDefaultConsoleSessionEgressCapability
+// instead.
 func RegisterDefaultConsoleSessionCapability(id string) (unregister func()) {
+	return registerDefaultConsoleSessionCapability(id, false)
+}
+
+// RegisterDefaultConsoleSessionEgressCapability is
+// RegisterDefaultConsoleSessionCapability for a capability that only
+// works when the sandbox it is materialized in can reach the internet
+// (pkg/capability.Registration.SandboxEgress). While one is registered,
+// DefaultConsoleSessions ships the director with NetworkOpen rather than
+// NetworkNone, so the build's own default capability is not granted to a
+// session that cannot use it (director-capabilities.spec.md §3.1.6).
+func RegisterDefaultConsoleSessionEgressCapability(id string) (unregister func()) {
+	return registerDefaultConsoleSessionCapability(id, true)
+}
+
+func registerDefaultConsoleSessionCapability(id string, egress bool) (unregister func()) {
 	registeredDefaultCapabilitiesMu.Lock()
 	defer registeredDefaultCapabilitiesMu.Unlock()
-	registeredDefaultCapabilities[id] = true
+	registeredDefaultCapabilities[id] = registeredDefaultCapabilities[id] || egress
 	return func() {
 		registeredDefaultCapabilitiesMu.Lock()
 		defer registeredDefaultCapabilitiesMu.Unlock()
 		delete(registeredDefaultCapabilities, id)
 	}
+}
+
+// defaultConsoleSessionCapabilitiesNeedEgress reports whether any
+// capability the build registered as on by default needs the sandbox to
+// reach the internet (RegisterDefaultConsoleSessionEgressCapability).
+func defaultConsoleSessionCapabilitiesNeedEgress() bool {
+	registeredDefaultCapabilitiesMu.RLock()
+	defer registeredDefaultCapabilitiesMu.RUnlock()
+	for _, egress := range registeredDefaultCapabilities {
+		if egress {
+			return true
+		}
+	}
+	return false
 }
 
 func defaultConsoleSessionCapabilities() []string {
@@ -338,17 +386,21 @@ func defaultConsoleSessionCapabilities() []string {
 // DefaultConsoleSessions is what a deployment that has never configured
 // any gets: the director, and nothing else.
 //
-// Its capabilities are the "look at this deployment and explain it"
-// set -- the source checkout this host runs from and every task's record
-// (grain#source and api:self-debug, once self-debug), the
-// journal it writes (grain-log), bounded host and state diagnostics
-// (deployment-health), and the runbooks for setting a
-// deployment up (bootstrap-playbooks), which is the capability whose own
-// description already says it is for walking whoever is on the other end
-// of a chat through one -- plus whatever capabilities this build
-// registers as on by default (RegisterDefaultConsoleSessionCapability,
-// e.g. corp-research on the Google build). Read access to the state
-// repository comes with
+// Its capabilities are the Tier 1 day-to-day set
+// (design/spec/director/director-capabilities.spec.md §3.1): the source
+// checkout this host runs from and every task's record (grain#source and
+// api:self-debug, once self-debug), the journal it writes (grain#journal,
+// once grain-log), bounded host and state diagnostics (api:deployment:read
+// and grain#health, once deployment-health), the runbooks for setting a
+// deployment up (config-map#config-map={"config_maps":["bootstrap"]}, once
+// bootstrap-playbooks), and the non-dangerous agent API grants for backlog,
+// CI, merge-queue and read-only configuration/hygiene work (api:task-admin,
+// api:capabilities:read, api:capabilities:detach, api:settings:read,
+// api:repos:read, api:releases:read, api:schedules:read, api:templates:read,
+// api:suites:read, api:dispatch:read) -- plus whatever capabilities this
+// build registers as on by default
+// (RegisterDefaultConsoleSessionCapability, e.g. corp#research on wrapper
+// builds). Read access to the state repository comes with
 // the task rather than from a grant (orchestrator.consoleSessionTask),
 // since that is grain's own database as text and it is what "what is
 // this deployment actually doing" is answered out of. So, for every
@@ -356,23 +408,81 @@ func defaultConsoleSessionCapabilities() []string {
 // the deployment works in, and CI read (ConsoleSessionDefaultGrants) --
 // see console_session_reach.go.
 //
-// Deliberately not granted, and both are one tick away in the UI for an
-// operator who wants them: self-repair, which lets a run change things
-// on grain's own host, and which is the one capability here that can
-// break the deployment it is holding a conversation with; and memory,
-// which writes the standing instructions every later run is given.
+// Deliberately not granted, and left as opt-in Tier 2 grants in the UI for
+// an operator who wants them: dangerous scopes (api:tasks:admin,
+// api:capabilities:admin, api:self-upgrade, api:deployment-ops), grain#host-exec
+// (once self-repair), which lets a run change things on grain's own host,
+// and api:memory, which writes the standing instructions every later run is
+// given.
 //
-// NetworkOpen because the shipped host-directory sandbox cannot honour
-// NetworkNone: it runs on the host's own network stack, and correctly
-// refuses to pretend that network is absent. A deployment with an
-// isolating backend can close the director in the same pane the
+// Writes names grain/config (ConfigRepo), and nothing else, so the
+// director is offered propose_config_change: its /home/debian/grain-state
+// checkout may push candidate branches under ConfigProposalBranchPrefix
+// (never the default branch -- the git proxy admits nothing else), each
+// validated, classified by the trust boundary and landed only on a
+// person's approval of its pinned head. That write is not passed on to
+// the work the director files: a proposal that targets or writes
+// grain/config always waits for a person (ConfigRepoProposalHold),
+// whatever TasksApproved says (director-capabilities spec §3.1.3).
+//
+// TasksApproved is true (director-capabilities.spec.md §3.1.5): the
+// director's job is filing the work the operator asked for in the rail, and
+// what auto-queueing may set going is bounded per conversation turn by
+// AutoSubmitLimits.TurnFanOut, held by AutoApprovalRefusal whenever a
+// proposal asks for ungranted capabilities/reads/writes, person-only grants
+// or grain/config (ConfigRepoProposalHold), subject to catalogue
+// requires_person rules and hold_for_approval: true, and never given
+// autoMerge. Existing deployments with a saved ConsoleSessions row keep what
+// they saved (ConsoleSessionsOr), and an operator override on the active
+// task (ConsoleSessionTasksUnapprovedTag / ConsoleSessionTasksApprovedTag)
+// stays sticky across reconciles.
+//
+// NetworkNone (director-capabilities.spec.md §3.1.6): the director reads
+// untrusted text -- repository bodies, CI logs, transcripts -- and
+// everything it needs is reached through grain itself rather than the
+// internet. Its state-repository checkout (/home/debian/grain-state) and
+// every repository ReadsAll gives it clone through the git proxy; the
+// in-sandbox grain CLI talks to the same proxy (sandboxcli's
+// GRAIN_SANDBOX_PROXY); api_* tools and run-grant capabilities such as
+// corp#research run on grain's side, not in the sandbox; and the
+// isolating backends' NetworkNone firewall still admits the gateway's
+// sandbox service ports and the git proxy (granuleIsolationRuleset), so
+// egress would only be an exfiltration path. On a backend that cannot
+// isolate a sandbox's network -- the host-directory and container
+// backends -- ConsoleSessionNetworkAccess resolves this to NetworkOpen
+// when the session's task is filed and synced, so that the backend does
+// not refuse every exchange. A build that registers a default-on
+// capability needing egress from the sandbox itself
+// (RegisterDefaultConsoleSessionEgressCapability) ships NetworkOpen
+// instead. An operator can reopen the director in the same pane the
 // capabilities are in.
 func DefaultConsoleSessions() []ConsoleSession {
-	caps := []string{APIGrantPrefix + "self-debug", GrainSourceGrant, GrainJournalGrant, "api:deployment:read", GrainHealthGrant, "bootstrap-playbooks"}
+	caps := []string{
+		APIGrantPrefix + "self-debug",
+		GrainSourceGrant,
+		GrainJournalGrant,
+		APIGrantPrefix + "deployment:read",
+		GrainHealthGrant,
+		BootstrapPlaybooksGrant,
+		APIGrantPrefix + "task-admin",
+		APIGrantPrefix + "capabilities:read",
+		APIGrantPrefix + "capabilities:detach",
+		APIGrantPrefix + "settings:read",
+		APIGrantPrefix + "repos:read",
+		APIGrantPrefix + "releases:read",
+		APIGrantPrefix + "schedules:read",
+		APIGrantPrefix + "templates:read",
+		APIGrantPrefix + "suites:read",
+		APIGrantPrefix + "dispatch:read",
+	}
 	for _, id := range defaultConsoleSessionCapabilities() {
 		if !slices.Contains(caps, id) {
 			caps = append(caps, id)
 		}
+	}
+	network := NetworkNone
+	if defaultConsoleSessionCapabilitiesNeedEgress() {
+		network = NetworkOpen
 	}
 	return []ConsoleSession{{
 		ID:    DirectorSessionID,
@@ -381,8 +491,29 @@ func DefaultConsoleSessions() []ConsoleSession {
 		// Named as strings rather than through each capability package's
 		// own CapabilityName: those packages import this one.
 		Capabilities:  caps,
-		NetworkAccess: NetworkOpen,
+		NetworkAccess: network,
+		TasksApproved: true,
+		Writes:        []WriteTarget{{Repo: ConfigRepo()}},
 	}}
+}
+
+// MissingShippedConsoleSessionCapabilities returns the capabilities in
+// DefaultConsoleSessions for session id that are absent from held, in their
+// shipped order. It returns nil for any session id that grain does not ship
+// by default, or when every shipped default is already in held.
+func MissingShippedConsoleSessionCapabilities(id string, held []string) []string {
+	def, ok := ConsoleSessionByID(DefaultConsoleSessions(), id)
+	if !ok {
+		return nil
+	}
+	var missing []string
+	for _, capID := range def.Capabilities {
+		if capID == "" || slices.Contains(held, capID) || slices.Contains(missing, capID) {
+			continue
+		}
+		missing = append(missing, capID)
+	}
+	return missing
 }
 
 // ConsoleSessionsOr is how every reader takes Config.ConsoleSessions:
@@ -451,9 +582,12 @@ func DecodeConsoleSessions(stored string) ([]ConsoleSession, error) {
 // same task), and a named network access has to be one grain can
 // actually build a sandbox for.
 //
-// It says nothing about the capability ids -- ui.UpdateSettings checks
-// those against the capabilities this build actually offers, which this
-// package cannot see.
+// It says nothing else about the capability ids -- ui.UpdateSettings
+// checks those against the capabilities this build actually offers,
+// which this package cannot see -- except that the director session may
+// not name one grain's built-in Tier 3 floor refuses it
+// (DirectorFloorRefusal): saving it would only leave the director held
+// at dispatch.
 func ValidateConsoleSessions(sessions []ConsoleSession) error {
 	seen := map[string]bool{}
 	for _, s := range sessions {
@@ -471,8 +605,18 @@ func ValidateConsoleSessions(sessions []ConsoleSession) error {
 		if s.NetworkAccess != "" && !ValidNetworkAccess(s.NetworkAccess) {
 			return fmt.Errorf("console session %q asks for network access %q, which is not one grain knows", id, s.NetworkAccess)
 		}
+		if !ValidOptionalHosting(s.Hosting) {
+			return fmt.Errorf("console session %q asks for hosting %q, which is not one grain knows", id, s.Hosting)
+		}
 		if !validConsoleSessionTitleSource(s.TitleSource) {
 			return fmt.Errorf("console session %q has title source %q, which is not one grain knows", id, s.TitleSource)
+		}
+		if id == DirectorSessionID {
+			for _, capID := range s.Capabilities {
+				if r := DirectorFloorRefusal(capID, CatalogueKindDirector); r != nil {
+					return fmt.Errorf("console session %q: %s", id, r.Reason)
+				}
+			}
 		}
 	}
 	return nil
@@ -815,6 +959,10 @@ func DirectorSessionBody(stateRepo RepoRef, session ConsoleSession) string {
 		"(docs/agent-api.md) -- `api:task-admin` " +
 		"to edit, reorder, retry and close tasks and re-run their CI, `api:ci-read` to read CI " +
 		"logs, `api:release-manager` to run schedules and cut and promote release candidates. " +
+		"When stopping or closing a task, pass an `expect` state precondition (such as " +
+		"`expect: {\"state\": \"running\"}`) so a task whose state moved since you read it is " +
+		"left alone, and always pass an explicit `reason` (`reason` on `grain_invoke` and the " +
+		"close body, `--reason` on `grain api`) saying why. " +
 		"When you need one you do not hold, ask the person for that grant by name; never try to " +
 		"grant it yourself. Scopes marked dangerous (secrets, settings, connections, capability " +
 		"admin, force-merge, task admin, deployment) only a person can grant, and every call " +
@@ -823,14 +971,16 @@ func DirectorSessionBody(stateRepo RepoRef, session ConsoleSession) string {
 	b.WriteString("**File work rather than doing it.** propose_task is your main instrument: " +
 		"anything that means changing a repository, running a long job, or spending a sandbox " +
 		"belongs in a task, described well enough that whoever picks it up needs nothing from " +
-		"this conversation. ")
+		"this conversation. Always pass `hold_for_approval: true` on destructive, irreversible, " +
+		"or surprising `propose_task` calls so a person reviews them before they run. ")
 	if session.QueuesProposals() {
 		b.WriteString("This deployment has said your tasks are filed approved, so what you " +
-			"file is queued and will be dispatched -- file carefully, and say in the chat what " +
-			"you have just set going. That is a ceiling, not an order: pass hold_for_approval " +
-			"on any proposal the person should look at before it runs, and it is filed " +
-			"unapproved for them instead. Say in the chat which you held and which you let " +
-			"queue -- propose_task's result tells you which happened.\n\n")
+			"file without `hold_for_approval: true` is queued and will be dispatched -- file " +
+			"carefully, and say in the chat what you have just set going. That is a ceiling, " +
+			"not an order: pass `hold_for_approval: true` on any other proposal the person " +
+			"should look at before it runs, and it is filed unapproved for them instead. Say in " +
+			"the chat which you held and which you let queue -- propose_task's result tells you " +
+			"which happened.\n\n")
 	} else {
 		b.WriteString("What you file waits for a person to approve it, which is the point: " +
 			"say in the chat what you filed and why, so they can decide.\n\n")
@@ -878,7 +1028,8 @@ type FileConsoleSessionOptions struct {
 }
 
 // ConsoleSessionGrants returns the session's configured capabilities as
-// GrantByGrain grants, always including DurableCapability.
+// GrantByGrain grants. Its admission is AdmissionDurable by construction
+// (unified-grants.design.md §4.1), set on the task rather than granted.
 //
 // session.Capabilities is the single source of truth for what capabilities a
 // standing session holds: build-level DefaultOn capabilities seed
@@ -892,12 +1043,17 @@ type FileConsoleSessionOptions struct {
 // holds GrantByDefault without its Capabilities naming them, unless it
 // declines them (ConsoleSession.DeclinedDefaults).
 func ConsoleSessionGrants(session ConsoleSession) []Grant {
-	grants := make([]Grant, 0, len(session.Capabilities)+1+len(consoleSessionDefaultGrants))
-	grants = append(grants, Grant{Capability: DurableCapability, Via: GrantByGrain})
-	seen := map[string]bool{DurableCapability: true}
+	grants := make([]Grant, 0, len(session.Capabilities)+len(consoleSessionDefaultGrants))
+	seen := map[string]bool{}
 	for _, name := range session.Capabilities {
 		name = strings.TrimSpace(name)
 		if name == "" || seen[name] {
+			continue
+		}
+		if _, legacy := LegacyAdmissionAlias(name); legacy {
+			continue
+		}
+		if _, legacy := LegacyHostingAlias(name); legacy {
 			continue
 		}
 		seen[name] = true
@@ -922,6 +1078,52 @@ func ConsoleSessionNetworkAccess(session ConsoleSession, networkIsolates bool) N
 	return NetworkOpen
 }
 
+// DirectorNetworkAccess is the network the shipped Director
+// (DefaultConsoleSessions) is filed with on a backend that does or does
+// not isolate a sandbox's network (ConsoleSessionNetworkAccess).
+func DirectorNetworkAccess(networkIsolates bool) NetworkAccess {
+	for _, s := range DefaultConsoleSessions() {
+		if s.ID == DirectorSessionID {
+			return ConsoleSessionNetworkAccess(s, networkIsolates)
+		}
+	}
+	return NetworkNone
+}
+
+// DirectorPolicyCapabilities is every capability the shipped Director is
+// granted (DefaultConsoleSessions, by way of ConsoleSessionGrants), as
+// local policy's capabilities.allow names it: a capability reference
+// carrying narrowing arguments keeps its canonical =<json> arguments so
+// a starter policy admits only that grant (for example the built-in
+// bootstrap config map, without opening operator config maps or
+// secrets), while one with empty arguments is named by its reference
+// alone. It is read from the running binary, so a capability a
+// linked-in package registers for the Director is among them.
+func DirectorPolicyCapabilities() []string {
+	var out []string
+	for _, s := range DefaultConsoleSessions() {
+		if s.ID != DirectorSessionID {
+			continue
+		}
+		for _, g := range ConsoleSessionGrants(s) {
+			c := g.Capability
+			if IsCapabilityRef(c) {
+				if spec, err := CapabilityGrantSpec(c); err == nil && len(spec.With) > 0 {
+					if enc, err := EncodeCapabilityGrant(spec); err == nil {
+						c = enc
+					}
+				} else {
+					c = CapabilityGrantRef(c)
+				}
+			}
+			if !slices.Contains(out, c) {
+				out = append(out, c)
+			}
+		}
+	}
+	return out
+}
+
 // ConsoleSessionConfigSnapshot records the static ConsoleSession config values
 // last applied to a console session task, so syncConsoleSessionTask can distinguish
 // config changes in grain_config from operator edits made directly on the active
@@ -935,6 +1137,7 @@ type ConsoleSessionConfigSnapshot struct {
 	Title           string
 	TasksApproved   bool
 	KeepRunning     bool
+	Hosting         Hosting `json:",omitempty"`
 	GoogleChatSpace string
 	// OfferedDefaults is the ConsoleSessionDefaultGrants this task has
 	// already been given once. A default named here that the task no
@@ -1028,6 +1231,8 @@ func FileConsoleSessionTask(ctx context.Context, store *Store, session ConsoleSe
 			Reason:      ReasonConsoleSession,
 		},
 		Binding:       BindingDirective,
+		Admission:     AdmissionDurable,
+		Hosting:       NormalizeHosting(session.Hosting),
 		Grants:        ConsoleSessionGrants(session),
 		Tags:          []string{ConsoleSessionTag(session.ID)},
 		Interactive:   true,

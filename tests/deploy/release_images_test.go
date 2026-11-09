@@ -306,7 +306,7 @@ func TestReleaseImagesDryRun(t *testing.T) {
 			}
 			containsRun(t, out, "[dry-run]")
 			containsRun(t, out, "repository: bwsalmon/grain")
-			containsRun(t, out, "phase 'all': would build and publish")
+			containsRun(t, out, "phase 'all': would build and publish docker.io/grainai/sandbox:sha-0123456, docker.io/grainai/sandbox-k8s:sha-0123456, docker.io/grainai/grain:sha-0123456 and docker.io/grainai/registry:sha-0123456 to docker.io")
 			containsRun(t, out, "grain=docker.io/grainai/grain:sha-0123456")
 			containsRun(t, out, "registry=docker.io/grainai/registry:sha-0123456")
 			containsRun(t, out, "docker.io/grainai/grain:sha-0123456 from ./cmd/grain (install track oss)")
@@ -525,13 +525,13 @@ func mapKeys(m map[string]string) []string {
 	return keys
 }
 
-// Every phase that publishes names the daemon image beside the shared
-// sandbox images, and the push publishes and moves the branch tag of all
-// three.
+// Every phase that publishes names the daemon and registry images beside
+// the shared sandbox images, and the push publishes and moves the branch
+// tag of every one of them.
 func TestReleaseImagesDryRunPushNamesDaemonAndSandboxImages(t *testing.T) {
 	for phase, want := range map[string]string{
-		"build": "would build docker.io/grainai/sandbox:sha-0123456, docker.io/grainai/sandbox-k8s:sha-0123456 and docker.io/grainai/grain:sha-0123456",
-		"push":  "would publish and sign docker.io/grainai/grain:sha-0123456 to docker.io, and move the main tags of all three",
+		"build": "would build docker.io/grainai/sandbox:sha-0123456, docker.io/grainai/sandbox-k8s:sha-0123456, docker.io/grainai/grain:sha-0123456 and docker.io/grainai/registry:sha-0123456",
+		"push":  "would publish and sign docker.io/grainai/grain:sha-0123456 and docker.io/grainai/registry:sha-0123456 to docker.io, and move the main tags of the sandbox, sandbox-k8s, grain and registry images",
 	} {
 		t.Run(phase, func(t *testing.T) {
 			out, docker, err := releaseImagesRunArgs(t, []string{"--dry-run", phase}, map[string]string{"GRAIN_CI": "true"})

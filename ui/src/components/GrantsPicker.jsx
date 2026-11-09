@@ -51,8 +51,10 @@ import {
   groupApiRows,
   isApiGrant,
   splitApiGrant,
+  storedApiGrant,
 } from "../apiGrants.js";
 import {
+  builtinServerName,
   describeGrant,
   hasArguments,
   initialValue,
@@ -83,16 +85,18 @@ import { pickerAllows, pickerDisplay, sortByDisplay } from "../newTaskForm.js";
 // at once; one with a required argument still to fill in is a draft
 // section here until it passes, and is granted then.
 //
-// It is a UI over the storage each kind has today, not a new model: both
-// kinds live in the task's capabilities list, an api grant as its name and
-// a method grant as its reference string. `grants` is that list (anything
-// else in it -- the legacy in-process ids -- is ignored here, and is the
-// checklist's beside it). Where a change lands is the caller's:
+// It is a UI over the storage each kind has today, not a new model: all
+// grants live in the task's capabilities list -- an api grant as its name,
+// a method grant as its reference string, and any bare capability id an
+// older store or declaration still holds as a read-only line that names
+// what retired alias it became and lets the person remove it. Where a
+// change lands is the caller's:
 // onApiChange(next) with the whole new list of api grants,
 // onSubmit(spec, replacing) with spec {capability, with} and replacing the
-// method grant being edited (or null), and onRemove(grant) for a method
-// grant. onSubmit and onRemove may reject; an error carrying `fields` (the
-// server's field errors) is shown against the arguments it names.
+// method grant being edited (or null), and onRemove(grant) for a method or
+// held bare capability grant. onSubmit and onRemove may reject; an error
+// carrying `fields` (the server's field errors) is shown against the
+// arguments it names.
 //
 // A method grant carries the warning states it always has: a method no
 // attached server offers any more, arguments the server's current schema
@@ -172,11 +176,24 @@ export default function GrantsPicker({
   helpText = "",
 }) {
   const all = grants || [];
+  const bareHeld = useMemo(
+    () =>
+      all.filter(
+        (id) => Boolean(id) && !isCapabilityRef(id) && !isApiGrant(id),
+      ),
+    [all],
+  );
   const apiHeld = useMemo(() => all.filter(isApiGrant), [all]);
-  const refs = useMemo(() => all.filter(isCapabilityRef), [all]);
+  const refs = useMemo(
+    () => all.filter((id) => isCapabilityRef(id) && !isApiGrant(id)),
+    [all],
+  );
   const offered = config?.capabilities || [];
   const { presets, areas } = groupApiRows(offered);
-  const apiRowOf = (id) => offered.find((c) => c.id === splitApiGrant(id)[0]);
+  const apiRowOf = (id) => {
+    const [target] = splitApiGrant(id);
+    return offered.find((c) => splitApiGrant(c.id)[0] === target);
+  };
   const repos = config?.targetRepos || [];
 
   const [methods, setMethods] = useState(null);
@@ -190,6 +207,8 @@ export default function GrantsPicker({
   const [drafts, setDrafts] = useState([]);
   const [error, setError] = useState("");
   const listRef = useRef(null);
+  const addButtonRef = useRef(null);
+  const restoreFocus = useRef(false);
   const popoverAction = useRef(null);
   // Reposition synchronously before paint when filtering or method loading
   // shrinks a viewport-clamped menu: MUI's own Popover repositions in a
@@ -275,11 +294,12 @@ export default function GrantsPicker({
     });
   }, [absentKey, load]);
 
-  const refsKey = refs.join("\n");
+  const toCheck = useMemo(() => [...bareHeld, ...refs], [bareHeld, refs]);
+  const toCheckKey = toCheck.join("\n");
   useEffect(() => {
-    if (refs.length === 0) return undefined;
+    if (toCheck.length === 0) return undefined;
     let current = true;
-    checkGrants(refs.map((grant) => ({ grant })))
+    checkGrants(toCheck.map((grant) => ({ grant })))
       .then((res) => {
         if (!current || !Array.isArray(res)) return;
         const out = {};
@@ -291,7 +311,7 @@ export default function GrantsPicker({
       current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refsKey]);
+  }, [toCheckKey]);
 
   const byRef = useMemo(() => {
     const m = {};
@@ -353,15 +373,99 @@ export default function GrantsPicker({
 
   const toggleApi = (row) => {
     const id = apiGrantId(row.id, apiRepo);
-    onApiChange(
-      apiHeld.includes(id) ? apiHeld.filter((s) => s !== id) : [...apiHeld, id],
-    );
+    const held = apiHeld.some((s) => storedApiGrant(s) === id);
+    const rest = apiHeld.filter((s) => storedApiGrant(s) !== id);
+    onApiChange(held ? rest : [...rest, id]);
   };
+
+  const closeMenu = useCallback((focusButton = false) => {
+    if (focusButton) restoreFocus.current = true;
+    setAnchor(null);
+  }, []);
+
+  useEffect(() => {
+    if (!anchor && restoreFocus.current) {
+      restoreFocus.current = false;
+      addButtonRef.current?.focus();
+    }
+  }, [anchor]);
+
+  // Keep Escape for the open popover even before MUI's ModalManager effect
+  // has promoted it above the surrounding Overlay/SidePanel, or when focus
+  // slipped off the menu's items onto body. Bubble phase so an open
+  // SearchSelect listbox inside the popover still takes the first Escape.
+  const menuOpen = Boolean(anchor);
+  useLayoutEffect(() => {
+    if (!menuOpen) return undefined;
+    const onKeyDown = (e) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      e.preventDefault();
+      closeMenu(true);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [menuOpen, closeMenu]);
 
   const openMenu = (evt) => {
     setQuery("");
     setAnchor(evt.currentTarget);
     load(true);
+  };
+
+  const shortAlias = (g) => {
+    if (isApiGrant(g)) {
+      const [, limit] = splitApiGrant(g);
+      return `api:${apiShortName(g)}${limit ? ` on ${limit}` : ""}`;
+    }
+    if (isCapabilityRef(g)) {
+      const { ref, with: w, raw } = parseGrant(g);
+      if (raw === undefined) {
+        const { capability, method } = splitRef(ref);
+        const builtin = builtinServerName(capability);
+        if (builtin && method) {
+          const hasArgs = w && Object.keys(w).length > 0;
+          return hasArgs
+            ? `${builtin}#${method}=${JSON.stringify(w)}`
+            : `${builtin}#${method}`;
+        }
+      }
+    }
+    return g;
+  };
+
+  const bareLine = (id) => {
+    const check = checks[id];
+    const aliasOf = Array.isArray(check?.aliasOf) ? check.aliasOf : [];
+    const row = offered.find((c) => c.id === id);
+    let ariaLabel = id;
+    let caption = row?.summary || row?.description || "";
+    let tip = row?.description ? `${id}\n${row.description}` : id;
+    let badge = null;
+    if (aliasOf.length > 0) {
+      const short = aliasOf.map(shortAlias).join(" + ");
+      ariaLabel = `${id} (retired alias)`;
+      caption = `Retired alias of ${short}`;
+      tip = `Retired alias of ${aliasOf.join(" and ")}. Remove it, or replace it with ${aliasOf.length > 1 ? "those grants" : "that grant"}.\n\n${id}`;
+      badge = { label: "retired alias", color: "info" };
+    } else if (check?.error) {
+      ariaLabel = `${id} (no longer offered)`;
+      caption = "No longer offered";
+      tip = `${check.error}. Remove this grant.\n\n${id}`;
+      badge = { label: "no longer offered", color: "warning" };
+    }
+    return (
+      <GrantLine
+        key={id}
+        grant={id}
+        kind="capability"
+        label={id}
+        ariaLabel={ariaLabel}
+        tip={tip}
+        caption={caption}
+        badge={badge}
+        onRemove={disabled ? undefined : () => removeMethod(id)}
+      />
+    );
   };
 
   const apiLine = (id) => {
@@ -608,7 +712,10 @@ export default function GrantsPicker({
   const shownMethods = sortByDisplay(
     formCapabilities,
     (methods || []).filter(
-      (m) => formOffers(m.ref) && matches(m.ref, m.method, m.description),
+      (m) =>
+        !isApiGrant(m.ref) &&
+        formOffers(m.ref) &&
+        matches(m.ref, m.method, m.description),
     ),
     (m) => m.ref,
   );
@@ -621,8 +728,9 @@ export default function GrantsPicker({
     });
 
   const apiItem = (row) => {
+    const id = apiGrantId(row.id, apiRepo);
     const name = row.displayLabel || apiShortName(row.id);
-    const held = apiHeld.includes(apiGrantId(row.id, apiRepo));
+    const held = apiHeld.some((s) => storedApiGrant(s) === id);
     return (
       <MenuItem
         key={row.id}
@@ -772,7 +880,10 @@ export default function GrantsPicker({
                       ? { target: "_blank", rel: "noreferrer" }
                       : {})}
                     onClick={(e) => e.stopPropagation()}
-                    onKeyDown={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ")
+                        e.stopPropagation();
+                    }}
                   >
                     {isCIOnly
                       ? REPO_ACCESS_DOC_LABEL
@@ -791,9 +902,10 @@ export default function GrantsPicker({
   };
 
   const anyApi = presets.length > 0 || areas.length > 0;
-  const anyMethods = (methods || []).length > 0;
-  const held = apiHeld.length + refs.length + drafts.length;
-  if (!anyApi && !anyMethods && held === 0 && !loadError && count === 0)
+  const anyMethods = (methods || []).some((m) => !isApiGrant(m.ref));
+  const held = bareHeld.length + apiHeld.length + refs.length + drafts.length;
+  const stillLoading = count > 0 && methods === null;
+  if (!anyApi && !anyMethods && held === 0 && !loadError && !stillLoading)
     return null;
 
   const regionId = `${idPrefix}-grants`;
@@ -838,6 +950,7 @@ export default function GrantsPicker({
             None granted
           </Typography>
         )}
+        {bareHeld.map(bareLine)}
         {apiHeld.map(apiLine)}
         {groups.map((group) => (
           <Box
@@ -851,10 +964,18 @@ export default function GrantsPicker({
       </Box>
       {!disabled && (
         <Button
+          ref={addButtonRef}
           size="small"
           variant="outlined"
           sx={{ mt: 0.75 }}
           onClick={openMenu}
+          onKeyDown={(e) => {
+            if (e.key === "Escape" && anchor) {
+              e.preventDefault();
+              e.stopPropagation();
+              closeMenu(true);
+            }
+          }}
           aria-haspopup="menu"
           aria-controls={anchor ? `${regionId}-menu` : undefined}
         >
@@ -863,10 +984,18 @@ export default function GrantsPicker({
       )}
       <Popover
         action={popoverAction}
-        open={Boolean(anchor)}
+        open={menuOpen}
         anchorEl={anchor}
-        onClose={() => setAnchor(null)}
+        data-open-popover={menuOpen ? "" : undefined}
+        onClose={(_event, reason) => closeMenu(reason === "escapeKeyDown")}
         transitionDuration={0}
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && !e.defaultPrevented) {
+            e.preventDefault();
+            e.stopPropagation();
+            closeMenu(true);
+          }
+        }}
         anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
         slotProps={{
           paper: {
@@ -927,6 +1056,14 @@ export default function GrantsPicker({
           {menuGroups.flatMap((g) => [
             <ListSubheader
               key={g.key}
+              // A group's title sits among the menu's items (MenuList moves
+              // focus over direct children only, so it cannot wrap them in
+              // a role="group"). As a bare <li> it was a list item with no
+              // list inside role="menu": axe's listitem and
+              // aria-required-children (2026-11-08 walkthrough, F3). A
+              // named separator is a child a menu may own.
+              role="separator"
+              aria-label={g.title}
               className={
                 g.kind === "api" && g.area ? "api-scope-area" : undefined
               }

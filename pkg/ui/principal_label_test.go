@@ -88,3 +88,29 @@ func TestPrincipalVerified(t *testing.T) {
 		}
 	}
 }
+
+func TestPrincipalLabelRendersPersonViaApp(t *testing.T) {
+	serviceActor := model.Principal{
+		Kind:   model.PrincipalService,
+		ID:     "slack-bot@proj.iam.gserviceaccount.com",
+		Source: "registry",
+	}
+	humanBehalf := model.Principal{
+		Kind:   model.PrincipalHuman,
+		ID:     "alice@example.com",
+		Source: "registry",
+	}
+
+	// Default label falls back to the local part of the service account email.
+	model.RegisterDelegateLabel("slack-bot@proj.iam.gserviceaccount.com", "")
+	if got := ui.PrincipalLabel(serviceActor, &humanBehalf); got != "alice@example.com (via slack-bot)" {
+		t.Fatalf("PrincipalLabel(default label) = %q, want %q", got, "alice@example.com (via slack-bot)")
+	}
+
+	// Explicit label on the delegate: entry overrides the local part.
+	model.RegisterDelegateLabel("slack-bot@proj.iam.gserviceaccount.com", "workspace-slack")
+	t.Cleanup(func() { model.RegisterDelegateLabel("slack-bot@proj.iam.gserviceaccount.com", "") })
+	if got := ui.PrincipalLabel(serviceActor, &humanBehalf); got != "alice@example.com (via workspace-slack)" {
+		t.Fatalf("PrincipalLabel(custom label) = %q, want %q", got, "alice@example.com (via workspace-slack)")
+	}
+}

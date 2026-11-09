@@ -339,3 +339,48 @@ func TestResolveReviewThreadReportsGitHubsRefusal(t *testing.T) {
 		t.Errorf("got %+v", res)
 	}
 }
+
+// `grain pr threads` lists each thread with the IDs its other commands
+// take -- thread ID, first comment ID -- with author, path:line, state and
+// body; --unresolved keeps only the open ones, outdated included.
+func TestReviewThreadsTextListsEveryThreadWithItsIDs(t *testing.T) {
+	all := ReviewThreadsText(reviewedPullRequest(), testScope, false)
+	if all.IsError {
+		t.Fatalf("unexpected error: %s", all.Text)
+	}
+	for _, want := range []string{
+		"Review threads on #42: 3, 2 unresolved\n",
+		"thread PRRT_a (unresolved)\n  comment 11 by @gemini-code-assist on pkg/a.go:7\n" +
+			"    Prefer errors.Is here.\n    It survives wrapping.\n" +
+			"  reply 13 by @grain-agent:\n    Switched to errors.Is.\n",
+		"thread PRRT_b (resolved)\n  comment 12 by @gemini-code-assist on pkg/b.go:3\n    Typo in the comment.\n",
+		"thread PRRT_c (unresolved, outdated)\n  comment 14 by @alice on pkg/c.go\n    Why this file?\n",
+		"grain pr resolve --thread-id",
+	} {
+		if !strings.Contains(all.Text, want) {
+			t.Errorf("listing is missing %q; got:\n%s", want, all.Text)
+		}
+	}
+
+	open := ReviewThreadsText(reviewedPullRequest(), testScope, true)
+	if open.IsError {
+		t.Fatalf("unexpected error: %s", open.Text)
+	}
+	if !strings.Contains(open.Text, "Unresolved review threads on #42: 2 of 3\n") ||
+		!strings.Contains(open.Text, "thread PRRT_a") || !strings.Contains(open.Text, "thread PRRT_c (unresolved, outdated)") {
+		t.Errorf("--unresolved left out an open thread; got:\n%s", open.Text)
+	}
+	if strings.Contains(open.Text, "PRRT_b") {
+		t.Errorf("--unresolved listed a resolved thread; got:\n%s", open.Text)
+	}
+}
+
+// A thread view the client cannot read is said, not shown as "none open".
+func TestReviewThreadsTextSaysWhenThreadsCannotBeRead(t *testing.T) {
+	client := reviewedPullRequest()
+	client.threadsErr = errors.New("graphql: 401")
+	res := ReviewThreadsText(client, testScope, true)
+	if !res.IsError || !strings.Contains(res.Text, "401") {
+		t.Errorf("want the read failure reported; got %+v", res)
+	}
+}

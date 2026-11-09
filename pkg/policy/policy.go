@@ -31,6 +31,8 @@
 package policy
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -93,7 +95,10 @@ type Policy struct {
 // family name ("gcp-key") matches the family and every parameterised
 // grant of it ("gcp-key:team-a"), "family:*" matches every parameterised
 // grant of the family, and otherwise the family and the parameter are
-// each path.Match patterns ("repo-write:acme/*").
+// each path.Match patterns ("repo-write:acme/*"). A capability reference
+// without "=" ("https://...#method") is a path.Match pattern over the
+// method regardless of arguments; one with inline JSON arguments
+// ("https://...#method={...}") matches only that exact grant.
 type CapabilityRules struct {
 	// Allow, when set, is every capability a task may be granted; a
 	// grant of anything else refuses the task.
@@ -161,11 +166,35 @@ func (p *Policy) validate() error {
 	return nil
 }
 
+// lowerCapabilityRefPrefix lowercases the reference half of an https://
+// capability grant (before any inline =<json> arguments) so capability
+// references participate in pkg/policy's case-insensitive matching while
+// keeping JSON key/value case intact.
+func lowerCapabilityRefPrefix(s string) string {
+	trimmed := strings.TrimSpace(s)
+	if len(trimmed) < len("https://") || !strings.EqualFold(trimmed[:len("https://")], "https://") {
+		return trimmed
+	}
+	ref, with, hasWith := strings.Cut(trimmed, "=")
+	ref = strings.ToLower(ref)
+	if !hasWith {
+		return ref
+	}
+	return ref + "=" + with
+}
+
 // validCapabilityPattern reports why pattern cannot be a capabilities
 // entry, or nil when it can.
 func validCapabilityPattern(pattern string) error {
-	if model.IsCapabilityRef(pattern) {
-		if _, err := path.Match(pattern, ""); err != nil {
+	norm := lowerCapabilityRefPrefix(pattern)
+	if model.IsCapabilityRef(norm) {
+		if strings.Contains(norm, "=") {
+			if err := model.CheckCapabilityGrantArgsOffline(norm); err != nil {
+				return fmt.Errorf("is not a valid capability grant: %w", err)
+			}
+			return nil
+		}
+		if _, err := path.Match(norm, ""); err != nil {
 			return fmt.Errorf("is not a valid pattern: %w", err)
 		}
 		return nil
@@ -183,16 +212,58 @@ func validCapabilityPattern(pattern string) error {
 	return nil
 }
 
+// sameCapabilityRefGrant reports whether two capability references carry
+// the same method (without regard to case) and identical JSON arguments
+// (treating a bare reference and an empty {} object as the same).
+func sameCapabilityRefGrant(a, b string) bool {
+	aSpec, err := model.CapabilityGrantSpec(lowerCapabilityRefPrefix(a))
+	if err != nil {
+		return false
+	}
+	bSpec, err := model.CapabilityGrantSpec(lowerCapabilityRefPrefix(b))
+	if err != nil {
+		return false
+	}
+	if !strings.EqualFold(aSpec.Capability, bSpec.Capability) {
+		return false
+	}
+	aWith := aSpec.With
+	if aWith == nil {
+		aWith = map[string]any{}
+	}
+	bWith := bSpec.With
+	if bWith == nil {
+		bWith = map[string]any{}
+	}
+	aJSON, err := json.Marshal(aWith)
+	if err != nil {
+		return false
+	}
+	bJSON, err := json.Marshal(bWith)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(aJSON, bJSON)
+}
+
 // capabilityMatch reports whether the capabilities entry pattern matches
 // the granted capability, as CapabilityRules describes. A parameter can
 // itself hold a slash (repo-write:owner/name), which path.Match's * does
 // not cross, so a parameter pattern of * alone matches any parameter.
 func capabilityMatch(pattern, capability string) bool {
-	pattern = strings.ToLower(strings.TrimSpace(pattern))
-	capability = strings.ToLower(strings.TrimSpace(capability))
-	// A capability reference (https://...#method, with its args after
-	// "=") is matched whole, without them: its ":" is the scheme's, not
-	// a family's parameter.
+	rawPattern := lowerCapabilityRefPrefix(pattern)
+	rawCapability := lowerCapabilityRefPrefix(capability)
+	// A capability reference pattern carrying inline =<json> arguments
+	// matches only that exact grant (preserving JSON key/value case),
+	// rather than every argument to the method.
+	if model.IsCapabilityRef(rawPattern) && strings.Contains(rawPattern, "=") {
+		return model.IsCapabilityRef(rawCapability) && sameCapabilityRefGrant(rawPattern, rawCapability)
+	}
+	pattern = strings.ToLower(rawPattern)
+	capability = strings.ToLower(rawCapability)
+	// A capability reference without "=" (https://...#method) matches the
+	// method whole, whatever its arguments: its ":" is the scheme's, not a
+	// family's parameter.
 	if model.IsCapabilityRef(pattern) || model.IsCapabilityRef(capability) {
 		ref := model.CapabilityGrantRef(capability)
 		ok, err := path.Match(pattern, ref)
@@ -463,6 +534,68 @@ func retiredAs(name string) (string, bool) {
 	return to, to != name
 }
 
+// capabilityRefAliasVariants returns capability along with its built-in
+// config-map/skill server-ID alias counterpart when applicable.
+func capabilityRefAliasVariants(capability string) []string {
+	c := lowerCapabilityRefPrefix(capability)
+	if !model.IsCapabilityRef(c) {
+		return []string{capability}
+	}
+	ref, with, hasWith := strings.Cut(c, "=")
+	id, method, hasHash := strings.Cut(ref, "#")
+	suffix := ""
+	if hasHash {
+		suffix = "#" + method
+	}
+	args := ""
+	if hasWith {
+		args = "=" + with
+	}
+	switch id {
+	case model.SkillCapabilityServerID:
+		return []string{c, model.ConfigMapCapabilityServerID + suffix + args}
+	case model.ConfigMapCapabilityServerID:
+		return []string{c, model.SkillCapabilityServerID + suffix + args}
+	default:
+		return []string{c}
+	}
+}
+
+// deniesCapabilityRefVariant checks whether pattern denies capabilityRef
+// directly or via an unnormalized methodless shorthand (https://... without
+// #<method>, where the server resolves the omitted method).
+func deniesCapabilityRefVariant(pattern, capabilityRef string) bool {
+	if capabilityMatch(pattern, capabilityRef) {
+		return true
+	}
+	c := lowerCapabilityRefPrefix(capabilityRef)
+	p := lowerCapabilityRefPrefix(pattern)
+	if !model.IsCapabilityRef(c) || !model.IsCapabilityRef(p) {
+		return false
+	}
+	cRef, cWith, cHasWith := strings.Cut(c, "=")
+	if strings.Contains(cRef, "#") {
+		return false
+	}
+	pRef := model.CapabilityGrantRef(p)
+	pID, pMethod, pHasHash := strings.Cut(pRef, "#")
+	if !pHasHash || pMethod == "" {
+		return false
+	}
+	if !strings.Contains(p, "=") {
+		ok, err := path.Match(pID, cRef)
+		return pID == cRef || (err == nil && ok)
+	}
+	if strings.ContainsAny(pMethod, "*?[") {
+		return false
+	}
+	synth := cRef + "#" + pMethod
+	if cHasWith {
+		synth += "=" + cWith
+	}
+	return capabilityMatch(p, synth)
+}
+
 // deniesCapability is matchesCapability for Deny, which also reads a
 // retired bare name, on either side, as the grant it became: a policy
 // file on this machine is not rewritten by the schema migration that
@@ -470,6 +603,7 @@ func retiredAs(name string) (string, bool) {
 // deny it names must not stop applying when that happens. The retired
 // name denies the whole method it became, whatever the arguments.
 func deniesCapability(patterns []string, capability string) bool {
+	capability = lowerCapabilityRefPrefix(capability)
 	if matchesCapability(patterns, capability) {
 		return true
 	}
@@ -482,10 +616,21 @@ func deniesCapability(patterns []string, capability string) bool {
 			return true
 		}
 	}
+	if (model.IsBootstrapPlaybooksGrant(capability) || model.BootstrapSkillSetUnnamed(capability)) &&
+		(matchesCapability(patterns, "bootstrap-playbooks") || matchesCapability(patterns, model.BootstrapPlaybooksGrant)) {
+		return true
+	}
+	if cred, ok := model.ParseRepoCredentialGrant(capability); ok {
+		if matchesCapability(patterns, model.GitCredentialCapabilityPrefix+cred) {
+			return true
+		}
+	}
 	unnamedGCPKey := model.GCPKeySetUnnamed(capability)
+	unnamedRepoCred := repoCredentialUnnamed(capability)
 	if to, ok := retiredAs(capability); ok {
 		capability = to
 	}
+	variants := capabilityRefAliasVariants(capability)
 	for _, pattern := range patterns {
 		trimmedPattern := strings.ToLower(strings.TrimSpace(pattern))
 		if strings.HasPrefix(trimmedPattern, "gcp-key:") {
@@ -499,11 +644,22 @@ func deniesCapability(patterns []string, capability string) bool {
 			}
 			continue
 		}
+		if strings.HasPrefix(trimmedPattern, model.GitCredentialCapabilityPrefix) {
+			if unnamedRepoCred {
+				return true
+			}
+			if to, ok := retiredAs(trimmedPattern); ok && strings.EqualFold(to, strings.TrimSpace(capability)) {
+				return true
+			}
+			continue
+		}
 		if to, ok := retiredAs(pattern); ok && model.IsCapabilityRef(to) {
 			pattern = model.CapabilityGrantRef(to)
 		}
-		if capabilityMatch(pattern, capability) {
-			return true
+		for _, v := range variants {
+			if deniesCapabilityRefVariant(pattern, v) {
+				return true
+			}
 		}
 	}
 	// A glob that matched a retired name (deny: [git-*]) matched it
@@ -513,8 +669,17 @@ func deniesCapability(patterns []string, capability string) bool {
 			continue
 		}
 		for _, to := range model.CanonicalLegacyGrants(old) {
-			if becameCapability(to, capability) {
-				return true
+			for _, v := range variants {
+				if becameCapability(to, v) {
+					return true
+				}
+				// Methodless shorthand on the server to became may resolve to to's method.
+				if model.IsCapabilityRef(to) && model.IsCapabilityRef(v) && !strings.Contains(model.CapabilityGrantRef(v), "#") {
+					toID, _, _ := strings.Cut(model.CapabilityGrantRef(to), "#")
+					if strings.EqualFold(toID, model.CapabilityGrantRef(v)) {
+						return true
+					}
+				}
 			}
 		}
 	}
@@ -532,6 +697,21 @@ func becameCapability(to, capability string) bool {
 	return strings.EqualFold(strings.TrimSpace(to), strings.TrimSpace(capability))
 }
 
+// repoCredentialUnnamed reports whether capability is a repo#credential or
+// methodless repo server reference that does not name a valid credential
+// argument yet.
+func repoCredentialUnnamed(capability string) bool {
+	s := strings.TrimSpace(capability)
+	if !model.IsCapabilityRef(s) {
+		return false
+	}
+	if _, ok := model.ParseRepoCredentialGrant(s); ok {
+		return false
+	}
+	ref := strings.ToLower(model.CapabilityGrantRef(s))
+	return ref == strings.ToLower(model.RepoCredentialRef) || ref == strings.ToLower(model.RepoCapabilityServerID)
+}
+
 // allowsCapability is matchesCapability for Allow, which also admits
 // exactly the grant (or each of the grants) a retired bare name in it
 // became -- arguments and all, so an allow written for git-push-any-ref admits its repo#write
@@ -540,7 +720,7 @@ func allowsCapability(patterns []string, capability string) bool {
 	if matchesCapability(patterns, capability) {
 		return true
 	}
-	want := strings.TrimSpace(capability)
+	want := lowerCapabilityRefPrefix(capability)
 	if set, ok := model.ParseGCPKeyServerGrant(want); ok {
 		if set == model.GCPKeyDefaultPermissionSet {
 			if matchesCapability(patterns, "gcp-key") {
@@ -553,12 +733,22 @@ func allowsCapability(patterns []string, capability string) bool {
 			return true
 		}
 	}
+	if cred, ok := model.ParseRepoCredentialGrant(capability); ok {
+		if matchesCapability(patterns, model.GitCredentialCapabilityPrefix+cred) {
+			return true
+		}
+	}
 	if to, ok := retiredAs(want); ok {
 		want = to
+		if matchesCapability(patterns, want) {
+			return true
+		}
 	}
 	for _, pattern := range patterns {
-		if to, ok := retiredAs(pattern); ok && to == want {
-			return true
+		if to, ok := retiredAs(pattern); ok {
+			if to == want || (model.IsCapabilityRef(to) && model.IsCapabilityRef(want) && sameCapabilityRefGrant(to, want)) {
+				return true
+			}
 		}
 		// A name retired into several grants (self-debug became
 		// api:self-debug and grain#source; deployment-health
@@ -573,8 +763,9 @@ func allowsCapability(patterns []string, capability string) bool {
 
 func (p *Policy) checkCapabilities(task model.Task) error {
 	for _, g := range task.Grants {
-		if model.IsCapabilityRef(g.Capability) {
-			if err := model.CheckCapabilityGrantArgsOffline(g.Capability); err != nil {
+		norm := lowerCapabilityRefPrefix(g.Capability)
+		if model.IsCapabilityRef(norm) {
+			if err := model.CheckCapabilityGrantArgsOffline(norm); err != nil {
 				return err
 			}
 		}

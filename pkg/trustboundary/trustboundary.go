@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v17"
+const Version = "trust-boundary/v26"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -81,6 +81,84 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v26 adds what the security review of task 3597 (task 3624) found beside
+// scripts/build-cli.sh: the workstation CLI installer (pkg/ui/cli_install.sh,
+// served unauthenticated at GET /cli/install.sh to be piped into sh, and
+// pkg/ui/cli_install.go, whose cliInstallRoute exempts it from the
+// single-tenant access code) to setup-scripts, beside its hostd
+// counterpart; and the helpers the release builds and workflows run or
+// source (scripts/buildvcs.sh, scripts/configure-dockerhub-auth.sh, which
+// promote.yml and publish-release.yml run with DOCKER_PAT, and
+// scripts/release-image-repos.sh, which names the published image
+// repositories) to release-machinery.
+//
+// v25 adds what the 2026-11-08 second security review of main (task 3584,
+// finding 1) found unclassified (capabilities-secrets):
+// pkg/model/canonical_grant.go, new in #927 (unified grants slice 2), which
+// maps …/api#<scope> references to and from api:<scope>[@repo] for
+// ParseAPIGrant (so APIGrantsOf and every agent-API authorization),
+// IsDangerousGrant, GrantsSubsetOf, EscalatedCapabilities,
+// CapabilityPolicy.Permits and the catalogue, and whose SplitRequestGrants
+// turns a request's grants: list into a task's Repo/Base, Reads and Writes
+// -- a one-line change there could make a dangerous scope read as safe to
+// all of them at once; and pkg/model/auto_submit.go (SelfApproved,
+// EscalatedCapabilities), the same shape and unclassified since before.
+//
+// v24 adds scripts/build-cli.sh to release-machinery (task 3597, filed by
+// task 3580): promote.yml, publish-release.yml and release-train-assets.yml
+// build the grain-<os>-<arch>.tar.gz archives and checksums.txt with it in a
+// contents: read job and publish them as assets on every vX.Y.Z and
+// vX.Y.Z-rc.N release, where GET /cli/install.sh installs them on
+// workstations.
+//
+// v23 adds what the 2026-11-08 security review of main (task 3329,
+// finding 1) found #885's v22 left out (auth-routes): the human-review
+// hold (pkg/model/human_review_hold.go, pkg/ui/human_review.go), whose
+// ReleaseHumanReviewHold refuses agent and automation principals -- the
+// rule that an agent may raise a human-review hold but never release it,
+// which the security hold's raiseHumanOnlyReview and raiseFindingsReview
+// rely on; the director's Tier 3 floor (pkg/model/director_floor.go,
+// WithinDirectorFloor and DirectorFloorRefusal), which the gate, the MCP
+// endpoint and staterepo/validate_pr.go apply; and pkg/ui/on_behalf_of.go
+// (agentOnBehalfOf), attribution only today, classified so a change that
+// makes it authorize is reviewed.
+//
+// v22 adds grain-registry's front door (task 3479, found in the security
+// review of task 3284): pkg/webauth/, which verifies Cloud IAP JWTs and
+// X-Grain-Registry-Assertion ES256 JWTs, admits domains, groups and
+// service principals, and runs the proxy-auth Fetch-Metadata/Origin CSRF
+// checks (auth-routes); and pkg/registry/ with cmd/grain-registry/, which
+// verify front-door IAP assertions, decide entry visibility and
+// X-Grain-On-Behalf-Of delegation, sign X-Grain-Registry-Assertion JWTs,
+// strip edge credentials and IAP cookies before forwarding over tunnels,
+// and authenticate grc_ entry credentials (credential-proxy, beside the
+// rendezvous relay, the other remote-access edge).
+//
+// v21 adds what release assets brought onto the boundary (task 2990,
+// reviewed by task 3039): scripts/release-assets.sh, which publishes,
+// re-points and prunes every release's images with a contents: write
+// token, and .github/workflows/release-train-assets.yml, which runs it on
+// the release train's tag pushes (release-machinery); and
+// scripts/install-grain.sh, which loads a release's image and installs
+// the binary out of it (setup-scripts).
+//
+// v20 adds the external-agent owner-trust policy and the gma_ bearer
+// token model and lifecycle handlers (pkg/model/owner_trust.go,
+// pkg/model/external_agent_token.go, and pkg/ui/external_agents.go) to
+// auth-routes (task 3026): whose external agents skip a person's
+// approval on an unapproved filing, and gma_ token scope resolution,
+// ownership, authentication, issuance and rotation.
+//
+// v19 adds the embedded bootstrap playbooks moved out of pkg/capability/
+// (pkg/playbooks/, task 3148) and the capability reference/policy,
+// catalogue and template-grant admission files
+// (pkg/model/capability_ref.go, pkg/model/capability_catalogue.go, and
+// pkg/model/template_grants.go) to capabilities-secrets (task 3388).
+//
+// v18 adds host enrollment codes, pending pairing-code handshakes and
+// deployment-owner request checks (pkg/model/host_enroll.go,
+// pkg/ui/request_actor.go, and pkg/ui/host_enroll.go) to auth-routes.
 //
 // v17 added the authorization-bearing files the 2026-11-05 nightly
 // security review found unclassified (finding 2, task 3168) to
@@ -197,9 +275,9 @@ var Categories = []Category{
 	{
 		ID:          "auth-routes",
 		Description: "authentication, principals, request guards and the UI/API route table",
-		prefixes:    []string{"pkg/access/", "pkg/iapreconciler/", "pkg/policy/", "pkg/jwks/"},
+		prefixes:    []string{"pkg/access/", "pkg/iapreconciler/", "pkg/policy/", "pkg/jwks/", "pkg/webauth/"},
 		files: []string{
-			"pkg/ui/server.go", "pkg/ui/principal.go", "pkg/ui/access.go",
+			"pkg/ui/server.go", "pkg/ui/principal.go", "pkg/ui/request_actor.go", "pkg/ui/access.go",
 			"pkg/ui/accesscode.go", "pkg/ui/single_tenant.go",
 			"pkg/ui/allowlist.go", "pkg/ui/verifier.go",
 			"pkg/ui/auth.go", "pkg/ui/agent_keys.go", "pkg/ui/github_tokens.go",
@@ -213,9 +291,9 @@ var Categories = []Category{
 			// The hostd registry: whether a dialing hostd is local or must
 			// present its owner's identity, token -> hostd/owner, revocation,
 			// and which hostd a run is routed to.
-			"pkg/ui/hostd_connect.go", "pkg/ui/hostds.go", "pkg/ui/connection_hostd.go",
+			"pkg/ui/hostd_connect.go", "pkg/ui/hostds.go", "pkg/ui/host_enroll.go", "pkg/ui/connection_hostd.go",
 			"pkg/daemon/hostd_registry.go", "pkg/daemon/hostd_route.go",
-			"pkg/daemon/hostexec.go", "pkg/model/hostd.go",
+			"pkg/daemon/hostexec.go", "pkg/model/hostd.go", "pkg/model/host_enroll.go",
 			// messagesSince's human-only filter is what makes the answer a
 			// host-exec confirmation reads a person's.
 			"pkg/ui/messages.go",
@@ -239,6 +317,12 @@ var Categories = []Category{
 			// the deny/includes resolution every role and every agent's
 			// api:<set> grant expands through.
 			"pkg/model/api_scope_set.go",
+			// Which external-agent owners skip a person's approval on an
+			// unapproved filing (OwnerTrusted, OwnerTrustedForTask), and
+			// gma_ bearer token scope resolution, ownership, authentication,
+			// issuance and rotation.
+			"pkg/model/owner_trust.go", "pkg/model/external_agent_token.go",
+			"pkg/ui/external_agents.go",
 			// Which repositories' parked questions, secret requests,
 			// proposals and notifications a gma_ token reads through
 			// GET /api/inbox (inboxReadable), and its replies (CheckReply).
@@ -251,12 +335,22 @@ var Categories = []Category{
 			// -ui-addr one and the loopback approval-callback one -- and
 			// the HostGuard in front of each.
 			"pkg/daemon/ui_server.go",
+			// The human-review hold: an agent or automation principal may
+			// raise one but never release it (ReleaseHumanReviewHold,
+			// RequestHumanReview), which the security hold relies on.
+			"pkg/model/human_review_hold.go", "pkg/ui/human_review.go",
+			// The director's Tier 3 floor (WithinDirectorFloor,
+			// DirectorFloorRefusal) the gate, /api/mcp and validate_pr apply.
+			"pkg/model/director_floor.go",
+			// Which person an agent's call is attributed to
+			// (agentOnBehalfOf): attribution only, kept that way by review.
+			"pkg/ui/on_behalf_of.go",
 		},
 	},
 	{
 		ID:          "capabilities-secrets",
 		Description: "capability grants, secret storage and the cloud identities credentials are minted from",
-		prefixes:    []string{"pkg/capability/", "pkg/secrets/", "pkg/secretsrepo/", "pkg/gcpsetup/", "pkg/redact/"},
+		prefixes:    []string{"pkg/capability/", "pkg/playbooks/", "pkg/secrets/", "pkg/secretsrepo/", "pkg/gcpsetup/", "pkg/redact/"},
 		files: []string{
 			// Running a command on grain's own host once a person approves.
 			"pkg/daemon/mcpserver_hostexec.go",
@@ -272,6 +366,26 @@ var Categories = []Category{
 			// Which CI events may be handed signing and publishing
 			// capabilities, read by all three of their enforcers.
 			"pkg/model/ci_grant_rule.go",
+			// Capability reference parsing and policy admission
+			// (CapabilityPolicy.Permits, UncoveredCapabilityRefs), catalogue
+			// grant validation (CapabilityCatalogue.ValidateGrants), and
+			// dangerous-grant and template escalation checks
+			// (IsDangerousGrant, TemplateWithinTask, ReviewGrants).
+			"pkg/model/capability_ref.go", "pkg/model/capability_catalogue.go",
+			"pkg/model/template_grants.go",
+			// The …/api#<scope> reference <-> api:<scope>[@repo] mapping
+			// every grant comparison reads through (CanonicalGrant,
+			// LegacyGrantString, StoredGrantSpelling, CanonicalGrantKey)
+			// -- ParseAPIGrant, IsDangerousGrant, GrantsSubsetOf,
+			// CapabilityPolicy.Permits and the catalogue all ask it first
+			// -- and SplitRequestGrants, which turns a request's grants:
+			// list into a task's Repo/Base, Reads and Writes.
+			"pkg/model/canonical_grant.go",
+			// Which capabilities a proposal asked for beyond its
+			// proposer's (EscalatedCapabilities), the check that holds it
+			// for a person, and the self-approval bounds (SelfApproved,
+			// AutoSubmitLimit) on how far a proposal tree auto-submits.
+			"pkg/model/auto_submit.go",
 		},
 	},
 	{
@@ -292,6 +406,10 @@ var Categories = []Category{
 		prefixes: []string{
 			"pkg/gitproxy/", "pkg/modelproxy/", "pkg/pkgcache/", "pkg/relay/", "pkg/tunnel/",
 			"cmd/grain-relay/", "cmd/grain-connect/",
+			// grain-registry: the IAP front door, entry visibility and
+			// on-behalf-of delegation, the assertion signer, the edge
+			// credential stripping before a tunnel, and grc_ credentials.
+			"pkg/registry/", "cmd/grain-registry/",
 		},
 	},
 	{
@@ -360,9 +478,19 @@ var Categories = []Category{
 			// version every published image is tagged with, and the host
 			// setup the publishing job sources.
 			"scripts/patch-tag-guard.sh", "scripts/build-version.sh", "scripts/grain-ci-host.sh",
+			// The VCS-stamp flag every release binary and image is built
+			// with, the Docker Hub login the publishing jobs run with
+			// DOCKER_PAT, and the registry and repository names every
+			// image is published under.
+			"scripts/buildvcs.sh", "scripts/configure-dockerhub-auth.sh", "scripts/release-image-repos.sh",
 			// The rc's Actions housekeeping: re-running qualification jobs
 			// and cancelling a dropped rc's runs.
 			"scripts/release-train-actions.sh", ".github/workflows/rc-qualification.yml",
+			// Release assets (docs/release-assets.md): the publisher every
+			// assets job runs with contents: write, the CLI archive builder
+			// whose output it publishes on every release, and the workflow
+			// that runs them on the release train's tag pushes.
+			"scripts/release-assets.sh", "scripts/build-cli.sh", ".github/workflows/release-train-assets.yml",
 			".grain/workflows/release.yml", ".github/workflows/release.yml",
 			".grain/workflows/promote.yml", ".github/workflows/promote.yml",
 			".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",
@@ -432,9 +560,15 @@ var Categories = []Category{
 		Description: "setup scripts run with the deployment's own privileges",
 		files: []string{
 			"scripts/setup.sh",
+			// Loads a release's image and installs the binary out of it.
+			"scripts/install-grain.sh",
 			// Served unauthenticated and run as root on every hostd machine,
 			// and the route that renders it and decides who sees what.
 			"pkg/ui/hostd_install.sh", "pkg/ui/hostd_install.go",
+			// Served unauthenticated and piped into sh on operator and
+			// developer workstations, and the route that renders it and
+			// exempts it from the single-tenant access code.
+			"pkg/ui/cli_install.sh", "pkg/ui/cli_install.go",
 		},
 	},
 }

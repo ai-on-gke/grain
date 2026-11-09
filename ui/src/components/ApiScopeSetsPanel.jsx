@@ -164,7 +164,7 @@ export function ScopeSetRow({ set, readOnly, onEdit, onDelete }) {
   );
 }
 
-export default function ApiScopeSetsPanel({ showError, readOnly }) {
+export default function ApiScopeSetsPanel({ showError, readOnly, onSaved }) {
   const [data, setData] = useState(null);
   const [form, setForm] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -224,6 +224,7 @@ export default function ApiScopeSetsPanel({ showError, readOnly }) {
       });
       setData(got);
       setForm(null);
+      await onSaved?.();
     } catch (err) {
       showError?.(err);
     } finally {
@@ -260,6 +261,7 @@ export default function ApiScopeSetsPanel({ showError, readOnly }) {
           body: JSON.stringify({ name: set.name }),
         }),
       );
+      await onSaved?.();
     } catch (err) {
       showError?.(err);
     } finally {

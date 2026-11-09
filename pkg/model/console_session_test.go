@@ -29,15 +29,66 @@ func TestADeploymentThatHasNeverChosenGetsTheDirector(t *testing.T) {
 		t.Fatalf("ConsoleSessionsOr(nil) = %v, want exactly the director", sessions)
 	}
 	director := sessions[0]
-	if director.TasksApproved {
-		t.Error("the director files approved tasks by default: a chat is a fast way to ask for a lot of work")
+	if !director.TasksApproved {
+		t.Error("the shipped director does not file approved tasks by default (director-capabilities.spec.md §3.1.5)")
 	}
-	if director.NetworkAccess != model.NetworkOpen {
-		t.Errorf("NetworkAccess = %q, want open: the shipped host sandbox cannot enforce none",
+	if director.NetworkAccess != model.NetworkNone {
+		t.Errorf("NetworkAccess = %q, want none: the director reads untrusted text and reaches everything it needs through grain (director-capabilities.spec.md §3.1.6)",
 			director.NetworkAccess)
 	}
 	if slices.ContainsFunc(director.Capabilities, model.IsGrainHostExecGrant) {
 		t.Error("the director ships holding self-repair, which can break the deployment it is talking about")
+	}
+}
+
+// The shipped none is what the director asks for; what it gets turns on
+// the backend. Host-directory and container sandboxes cannot withhold a
+// network, and refuse a run that asks them to, so there the session's
+// task is filed open; an isolating backend (granule) honours none. An
+// operator's explicit open is never narrowed.
+func TestTheShippedDirectorIsClosedOnlyWhereTheBackendCanCloseIt(t *testing.T) {
+	director := model.DefaultConsoleSessions()[0]
+	if got := model.ConsoleSessionNetworkAccess(director, true); got != model.NetworkNone {
+		t.Errorf("on an isolating backend the shipped director resolves to %q, want none", got)
+	}
+	if got := model.ConsoleSessionNetworkAccess(director, false); got != model.NetworkOpen {
+		t.Errorf("on a backend that cannot isolate the shipped director resolves to %q, want open (the backend would refuse none)", got)
+	}
+	director.NetworkAccess = model.NetworkOpen
+	for _, isolates := range []bool{true, false} {
+		if got := model.ConsoleSessionNetworkAccess(director, isolates); got != model.NetworkOpen {
+			t.Errorf("an operator's open director resolves to %q with isolates=%v, want open", got, isolates)
+		}
+	}
+	director.NetworkAccess = ""
+	if got := model.ConsoleSessionNetworkAccess(director, false); got != "" {
+		t.Errorf("a director left on the deployment default resolves to %q, want the default (\"\")", got)
+	}
+}
+
+// A build whose own default-on capability needs the sandbox to reach the
+// internet ships the director open, so the session is not granted a
+// capability it could never use (§3.1.6); one served from grain's side
+// of the boundary leaves it closed.
+func TestADefaultOnCapabilityNeedingSandboxEgressKeepsTheDirectorOpen(t *testing.T) {
+	unregisterHostSide := model.RegisterDefaultConsoleSessionCapability("zz-host-side")
+	t.Cleanup(unregisterHostSide)
+	if got := model.DefaultConsoleSessions()[0].NetworkAccess; got != model.NetworkNone {
+		t.Fatalf("with only a grain-side default capability the director ships %q, want none", got)
+	}
+
+	unregisterEgress := model.RegisterDefaultConsoleSessionEgressCapability("zz-needs-egress")
+	director := model.DefaultConsoleSessions()[0]
+	if director.NetworkAccess != model.NetworkOpen {
+		t.Errorf("with a default capability needing sandbox egress the director ships %q, want open", director.NetworkAccess)
+	}
+	if !slices.Contains(director.Capabilities, "zz-needs-egress") {
+		t.Errorf("Capabilities = %v, want the egress capability granted like any other default", director.Capabilities)
+	}
+
+	unregisterEgress()
+	if got := model.DefaultConsoleSessions()[0].NetworkAccess; got != model.NetworkNone {
+		t.Errorf("after the egress capability unregisters the director ships %q, want none again", got)
 	}
 }
 
@@ -377,5 +428,180 @@ func TestIsConsoleSessionMatchesDirectorTaskSQL(t *testing.T) {
 		if tc.task.IsConsoleSession() {
 			t.Errorf("%s: IsConsoleSession() = true, want false", tc.name)
 		}
+	}
+}
+
+func TestDefaultConsoleSessionsShipsTier1Capabilities(t *testing.T) {
+	sessions := model.DefaultConsoleSessions()
+	if len(sessions) != 1 || sessions[0].ID != model.DirectorSessionID {
+		t.Fatalf("DefaultConsoleSessions() = %v, want single director session", sessions)
+	}
+	director := sessions[0]
+	wantTier1 := []string{
+		"api:self-debug",
+		model.GrainSourceGrant,
+		model.GrainJournalGrant,
+		"api:deployment:read",
+		model.GrainHealthGrant,
+		model.BootstrapPlaybooksGrant,
+		"api:task-admin",
+		"api:capabilities:read",
+		"api:capabilities:detach",
+		"api:settings:read",
+		"api:repos:read",
+		"api:releases:read",
+		"api:schedules:read",
+		"api:templates:read",
+		"api:suites:read",
+		"api:dispatch:read",
+	}
+	for _, want := range wantTier1 {
+		if !slices.Contains(director.Capabilities, want) {
+			t.Errorf("DefaultConsoleSessions()[0].Capabilities = %v, missing Tier 1 grant %q", director.Capabilities, want)
+		}
+	}
+	for _, capID := range director.Capabilities {
+		if model.IsPersonOnlyGrant(capID) {
+			t.Errorf("DefaultConsoleSessions() ships person-only grant %q", capID)
+		}
+		if refusal := model.DirectorFloorRefusal(capID, model.CatalogueKindDirector); refusal != nil {
+			t.Errorf("DefaultConsoleSessions() ships grant %q refused by director floor: %v", capID, refusal)
+		}
+	}
+	if err := model.ValidateConsoleSessions(sessions); err != nil {
+		t.Errorf("ValidateConsoleSessions(DefaultConsoleSessions()) = %v, want nil", err)
+	}
+
+	if missing := model.MissingShippedConsoleSessionCapabilities(model.DirectorSessionID, director.Capabilities); len(missing) != 0 {
+		t.Errorf("MissingShippedConsoleSessionCapabilities(complete director) = %v, want empty", missing)
+	}
+	legacySaved := []string{
+		"api:self-debug",
+		model.GrainSourceGrant,
+		model.GrainJournalGrant,
+		"api:deployment:read",
+		model.GrainHealthGrant,
+		model.BootstrapPlaybooksGrant,
+	}
+	missing := model.MissingShippedConsoleSessionCapabilities(model.DirectorSessionID, legacySaved)
+	wantMissing := wantTier1[len(legacySaved):]
+	for _, want := range wantMissing {
+		if !slices.Contains(missing, want) {
+			t.Errorf("MissingShippedConsoleSessionCapabilities(legacy saved) = %v, missing %q", missing, want)
+		}
+	}
+	if other := model.MissingShippedConsoleSessionCapabilities("chat-1", nil); other != nil {
+		t.Errorf("MissingShippedConsoleSessionCapabilities(non-shipped session) = %v, want nil", other)
+	}
+}
+
+func TestDirectorSessionBodyInstructsExpectReasonsAndHoldForApproval(t *testing.T) {
+	repo := model.RepoRef{Owner: "acme", Name: "grain-home"}
+	for _, tasksApproved := range []bool{false, true} {
+		session := model.ConsoleSession{
+			ID:            model.DirectorSessionID,
+			TasksApproved: tasksApproved,
+		}
+		body := model.DirectorSessionBody(repo, session)
+		for _, want := range []string{
+			"`expect`",
+			`{"state": "running"}`,
+			"`reason`",
+			"`--reason`",
+			"`hold_for_approval: true`",
+			"destructive",
+			"irreversible",
+			"surprising",
+		} {
+			if !strings.Contains(body, want) {
+				t.Errorf("TasksApproved=%v: DirectorSessionBody missing %q:\n%s", tasksApproved, want, body)
+			}
+		}
+	}
+}
+
+func TestShippedDirectorTasksApprovedAndStickyOperatorOverrides(t *testing.T) {
+	shipped := model.DefaultConsoleSessions()
+	if len(shipped) != 1 || shipped[0].ID != model.DirectorSessionID {
+		t.Fatalf("DefaultConsoleSessions() = %v, want single director session", shipped)
+	}
+	director := shipped[0]
+	if !director.TasksApproved || !director.QueuesProposals() {
+		t.Fatalf("shipped director TasksApproved=%v QueuesProposals()=%v, want both true",
+			director.TasksApproved, director.QueuesProposals())
+	}
+
+	directorTask := func(tags ...string) model.Task {
+		return model.Task{
+			Origin:      model.Origin{Reason: model.ReasonConsoleSession},
+			Interactive: true,
+			Tags:        append([]string{model.ConsoleSessionTag(model.DirectorSessionID)}, tags...),
+		}
+	}
+
+	// 1. Fresh deployment (nil ConsoleSessions) uses the shipped default.
+	if !model.ConsoleSessionQueuesProposals(model.ConsoleSessionsOr(nil), directorTask()) {
+		t.Error("ConsoleSessionQueuesProposals(ConsoleSessionsOr(nil), directorTask) = false, want true")
+	}
+
+	// 2. Active-task tag overrides (ConsoleSessionTasksUnapprovedTag / ConsoleSessionTasksApprovedTag)
+	// take precedence over the shipped TasksApproved: true default, even if AutoApproveProposals is set.
+	unapprovedTask := directorTask(model.ConsoleSessionTasksUnapprovedTag)
+	unapprovedTask.AutoApproveProposals = true
+	if model.ConsoleSessionQueuesProposals(shipped, unapprovedTask) {
+		t.Error("ConsoleSessionTasksUnapprovedTag failed to override shipped TasksApproved: true")
+	}
+	if !model.ConsoleSessionQueuesProposals(shipped, directorTask(model.ConsoleSessionTasksApprovedTag)) {
+		t.Error("ConsoleSessionTasksApprovedTag on shipped director returned false, want true")
+	}
+
+	// 3. Saved ConsoleSessions rows with TasksApproved: false (explicit or omitted in JSON) stay sticky.
+	for _, tc := range []struct {
+		name string
+		raw  string
+	}{
+		{
+			name: "explicit false",
+			raw:  `[{"ID":"director","Title":"Director","Capabilities":["api:self-debug"],"TasksApproved":false}]`,
+		},
+		{
+			name: "omitted field",
+			raw:  `[{"ID":"director","Title":"Director","Capabilities":["api:self-debug"]}]`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decoded, err := model.DecodeConsoleSessions(tc.raw)
+			if err != nil {
+				t.Fatalf("DecodeConsoleSessions: %v", err)
+			}
+			effective := model.ConsoleSessionsOr(decoded)
+			if len(effective) != 1 || effective[0].TasksApproved || effective[0].QueuesProposals() {
+				t.Fatalf("saved row after ConsoleSessionsOr = %+v, want TasksApproved=false", effective)
+			}
+			if model.ConsoleSessionQueuesProposals(effective, directorTask()) {
+				t.Error("saved row with TasksApproved=false queued proposals without an override tag")
+			}
+			// Operator tag on the active task still overrides the saved false row in either direction.
+			if !model.ConsoleSessionQueuesProposals(effective, directorTask(model.ConsoleSessionTasksApprovedTag)) {
+				t.Error("ConsoleSessionTasksApprovedTag failed to override saved TasksApproved=false")
+			}
+			alsoUnapproved := directorTask(model.ConsoleSessionTasksUnapprovedTag)
+			alsoUnapproved.AutoApproveProposals = true
+			if model.ConsoleSessionQueuesProposals(effective, alsoUnapproved) {
+				t.Error("ConsoleSessionTasksUnapprovedTag failed to hold saved session when AutoApproveProposals=true")
+			}
+
+			encoded, err := model.EncodeConsoleSessions(effective)
+			if err != nil {
+				t.Fatalf("EncodeConsoleSessions: %v", err)
+			}
+			roundTrip, err := model.DecodeConsoleSessions(encoded)
+			if err != nil {
+				t.Fatalf("round-trip DecodeConsoleSessions: %v", err)
+			}
+			if roundTrip[0].TasksApproved {
+				t.Error("round-trip Encode/Decode flipped saved TasksApproved=false to true")
+			}
+		})
 	}
 }

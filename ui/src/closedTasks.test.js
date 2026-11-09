@@ -15,10 +15,16 @@
 import { describe, expect, it } from "vitest";
 import {
   closedPagePath,
+  closedPartial,
+  markSearchHits,
   mergeClosedPage,
   mergeTaskLists,
   readPage,
+  repoClosedCount,
+  searchKey,
+  stateFilterAdmitsClosed,
   unseenClosed,
+  withClosedCount,
 } from "./closedTasks.js";
 
 describe("closedTasks", () => {
@@ -106,5 +112,99 @@ describe("closedTasks", () => {
       { id: "1", state: "queued" },
       { id: "2", state: "closed" },
     ]);
+  });
+
+  it("asks the server to search closed work, or one repo's, by name", () => {
+    expect(closedPagePath("", { search: "flaky test" })).toBe(
+      "/api/tasks?state=closed&limit=200&cursor=&search=flaky%20test",
+    );
+    expect(closedPagePath("9.1", { repo: "acme/widgets", limit: 1 })).toBe(
+      "/api/tasks?state=closed&limit=1&cursor=9.1&repo=acme%2Fwidgets",
+    );
+    expect(searchKey("  Flaky ")).toBe("flaky");
+  });
+
+  it("keeps what a search found findable through a refresh of the same row", () => {
+    const found = markSearchHits(
+      [{ id: "7", title: "x", closedAt: "2026-01-01T00:00:00Z" }],
+      "deadlock",
+    );
+    const held = mergeClosedPage([], found);
+    expect(held[0].searchHit).toBe("deadlock");
+    // The newest page's refresh carries the same row with no mark.
+    const same = mergeClosedPage(held, [
+      { id: "7", title: "x", closedAt: "2026-01-01T00:00:00Z" },
+    ]);
+    expect(same).toBe(held);
+    const retitled = mergeClosedPage(held, [
+      { id: "7", title: "y", closedAt: "2026-01-01T00:00:00Z" },
+    ]);
+    expect(retitled[0]).toMatchObject({ title: "y", searchHit: "deadlock" });
+  });
+
+  it("calls the closed tasks partial until every one the server counts is held", () => {
+    const held = [{ id: "1" }, { id: "2" }];
+    expect(
+      closedPartial({
+        answered: false,
+        totals: null,
+        held: [],
+        nextCursor: "",
+      }),
+    ).toBe(true);
+    expect(
+      closedPartial({
+        answered: true,
+        totals: { total: 5 },
+        held,
+        nextCursor: "",
+      }),
+    ).toBe(true);
+    expect(
+      closedPartial({
+        answered: true,
+        totals: { total: 2 },
+        held,
+        nextCursor: "x",
+      }),
+    ).toBe(false);
+    // An older server sends no totals: a next page is all there is to go on.
+    expect(
+      closedPartial({ answered: true, totals: null, held, nextCursor: "x" }),
+    ).toBe(true);
+    expect(
+      closedPartial({ answered: true, totals: null, held, nextCursor: "" }),
+    ).toBe(false);
+  });
+
+  it("only pages closed work in for a rail entry a closed task can be in", () => {
+    for (const f of ["all", "blocked", "closed", "merged", undefined]) {
+      expect(stateFilterAdmitsClosed(f)).toBe(true);
+    }
+    for (const f of ["running", "queued", "asked"]) {
+      expect(stateFilterAdmitsClosed(f)).toBe(false);
+    }
+  });
+
+  it("puts the server's closed count into a repo row and moves its total by the difference", () => {
+    expect(repoClosedCount(null)).toBe(null);
+    expect(repoClosedCount({ total: 40, merged: 30, sessions: 3 })).toBe(37);
+    const row = {
+      repo: "acme/widgets",
+      total: 12,
+      counts: { running: 2, closed: 10 },
+    };
+    expect(withClosedCount(row, null)).toBe(row);
+    expect(withClosedCount(row, 10)).toBe(row);
+    expect(withClosedCount(row, 37)).toMatchObject({
+      total: 39,
+      counts: { running: 2, closed: 37 },
+    });
+    expect(
+      withClosedCount({ ...row, total: 2, counts: { running: 2 } }, 0),
+    ).toMatchObject({
+      total: 2,
+      counts: { running: 2 },
+    });
   });
 });

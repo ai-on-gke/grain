@@ -48,7 +48,9 @@ import (
 	"github.com/ai-on-gke/grain/pkg/sandboxaddr"
 	"github.com/ai-on-gke/grain/pkg/sandboximage"
 	"github.com/ai-on-gke/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
+	"github.com/ai-on-gke/grain/pkg/usage"
 )
 
 // LocalAuditPath is where a deployment keeps its local audit log of
@@ -257,6 +259,15 @@ func Run(ctx context.Context, cfg Config) error {
 		log.Printf("grain daemon: %v", err)
 	}
 	cfg.HostdHub = newHostdHub(cfg, store)
+	// Host work nothing places goes to the default host; where that is
+	// the only host there is, it is written down -- now, and on every
+	// grain/config import (model.MigrateImplicitHostPlacement).
+	if p, ok := cfg.implicitHostPlacement(); ok {
+		staterepo.SetImplicitHostPlacement(&p)
+		if _, err := store.MigrateImplicitHostPlacement(ctx, p); err != nil {
+			log.Printf("grain daemon: placing host work on the only host: %v", err)
+		}
+	}
 
 	// Run hosts (pkg/runhost), when this deployment asks for them. Built
 	// here, as soon as the store is, because every framework built below
@@ -624,6 +635,9 @@ func Run(ctx context.Context, cfg Config) error {
 		k8sInstance := k8sInstanceLabel(ctx, store)
 		k8sKubeconfig := EffectiveK8sKubeconfig(cfg)
 		k8sImage := startImage
+		if err := refuseLocalOnlyPodImage(k8sImage, "-k8s-sandbox-image"); err != nil {
+			return err
+		}
 		k8sWorkspace := EffectiveK8sWorkspace(cfg)
 		cpuOvercommit, memOvercommit := cfg.overcommitRatios()
 		sandboxes = orchestrator.NewK8sSandboxes(orchestrator.K8sConfig{
@@ -662,6 +676,9 @@ func Run(ctx context.Context, cfg Config) error {
 		k8sInstance := k8sInstanceLabel(ctx, store)
 		k8sKubeconfig := EffectiveK8sKubeconfig(cfg)
 		k8sGranuleImage := startImage
+		if err := refuseLocalOnlyPodImage(k8sGranuleImage, "-k8s-granule-image"); err != nil {
+			return err
+		}
 		k8sWorkspace := EffectiveK8sWorkspace(cfg)
 		var forwardedPortsFunc func() []int
 		if EffectiveK8sGitProxyHost(cfg) == "127.0.0.1" {
@@ -860,7 +877,7 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	}
 
-	capabilityServers, hostdCapabilityServers := startCapabilityServers(ctx, store, secretStore, cfg.DataDir, cfg.capabilityHostd(), gcpKeyPool(cfg))
+	capabilityServers, hostdCapabilityServers := startCapabilityServers(ctx, store, secretStore, cfg.DataDir, cfg.capabilityHostd())
 	live := NewLiveConfig(store, sandboxes, cfg, githubCredentials).
 		WithSandboxImages(sandboxImages, stockSandboxImage, sandboxImageLabels()).
 		WithCapabilityServers(capabilityServers).
@@ -882,7 +899,6 @@ func Run(ctx context.Context, cfg Config) error {
 		},
 	})
 	live.WithRegistry(registryMgr)
-	go registryMgr.Run(ctx)
 	if cfg.ObjectStore != nil && cfg.ciArtifacts == nil {
 		cfg.ciArtifacts = CiArtifactStore(cfg, live.ciStorageBounds)
 	}
@@ -1086,6 +1102,7 @@ func Run(ctx context.Context, cfg Config) error {
 			cfg.restartGaps.Down(upgrade.ServiceAPI)
 			stopWithGrace(stopUI)
 		}()
+		go registryMgr.Run(ctx)
 
 		done := make(chan struct{})
 		go func() {
@@ -1128,6 +1145,7 @@ func Run(ctx context.Context, cfg Config) error {
 		return nil
 	}
 
+	go registryMgr.Run(ctx)
 	err = runDaemon(ctx, cfg, store, sandboxes, transcriptDir, live, sandboxFabric, pkgCache, actionsCache, forbidden,
 		stateRepoHooksFor(stateManager), upgrader, secretStore)
 	if lost := writerLockLost.Load(); lost != nil {
@@ -1298,6 +1316,15 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			log.Printf("grain daemon: restored %d usage-limit pause(s) from before this restart", n)
 		}
 		cancelRestore()
+		// Token accounting learns a window's capacity from the usage it
+		// had consumed when its provider refused it (usage.LearnFromPause).
+		agentPause.SetOnOpen(func(p model.UsageLimitPause, at time.Time) {
+			learnCtx, cancelLearn := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancelLearn()
+			if err := usage.LearnFromPause(learnCtx, store, p, at); err != nil {
+				log.Printf("grain daemon: learning %s/%s's budget from its usage-limit pause: %v", p.Connection, p.Model, err)
+			}
+		})
 	}
 	buildFramework := pool.Build
 	// Bounded rather than given ctx itself: this probe exists to log a
@@ -1832,9 +1859,13 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		TeamHasAgentBackend: teamHasAgentBackend(cfg, store),
 		MaxWorkers:          cfg.MaxWorkers,
 		MaxMergers:          cfg.MaxMergers,
-		Budget:              cfg.Budget(),
-		AgentShape:          cfg.AgentShape(),
-		Ledger:              cfg.Ledger,
+		// The automatic worker cap from the remaining provider budget,
+		// which only lowers MaxWorkers when the operator opted in
+		// (usage mode "auto", docs/connections-and-models.md).
+		UsageCap:   usageCapFor(store),
+		Budget:     cfg.Budget(),
+		AgentShape: cfg.AgentShape(),
+		Ledger:     cfg.Ledger,
 		// And the one part of that budget a startup reading cannot give:
 		// what the volume has left right now. Called once a cycle, so a
 		// dispatch onto a filling disk is deferred on the tick the disk
@@ -2066,4 +2097,12 @@ func sandboxGrainBinary() string {
 		exe = resolved
 	}
 	return orchestrator.SandboxGrainBinaryBeside(exe)
+}
+
+// usageCapFor is orchestrator.Deps.UsageCap for store: nil without one.
+func usageCapFor(store *model.Store) func(context.Context, time.Time, int) int {
+	if store == nil {
+		return nil
+	}
+	return (&usage.Cap{Store: store}).Workers
 }

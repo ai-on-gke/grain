@@ -1,0 +1,8 @@
+run 6fc4c43d2a3b567f push conclusion: success warning: None
+job publish success | error: None | warning: None
+  step echo "event: $GRAIN_CI_EVENT" success
+   | event: push
+   | ls: cannot access '/home/debian/.package-publish-*': No such file or directory
+   | ls: cannot access '/home/debian/.docker/config.json': No such file or directory
+   | ls: cannot access '/home/debian/.grain/bin/docker-credential-grain': No such file or directory
+   | 

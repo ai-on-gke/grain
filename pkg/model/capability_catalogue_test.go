@@ -661,3 +661,40 @@ func TestCatalogueGCPKeyAccountOverrideAndUnnamedGrants(t *testing.T) {
 		t.Fatal("GCPKeySandboxAgentGrant bypassed disabled in_process.gcp-key:sandbox-agent")
 	}
 }
+
+// TestCatalogueRetiredGitHubSandboxBindsSandboxRepo: a catalogue saved
+// before github-sandbox was retired onto github#sandbox-repo (schema
+// migration 124) keeps its in_process.github-sandbox entry, which the
+// migration does not rewrite. Disabling or restricting it must keep
+// binding the method in every spelling a task, template or workflow can
+// carry -- recorded, bare reference, other JSON spacing and the
+// methodless server shorthand -- for task and CI runs alike.
+func TestCatalogueRetiredGitHubSandboxBindsSandboxRepo(t *testing.T) {
+	spellings := []string{
+		model.GitHubSandboxRepoGrant,
+		model.GitHubSandboxRepoRef,
+		model.GitHubSandboxRepoRef + "={ }",
+		model.GitHubCapabilityServerID,
+	}
+	disabled := &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
+		"github-sandbox": {Enabled: boolp(false)},
+	}}
+	restricted := &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
+		"github-sandbox": {Restrictions: &model.CapabilityRestrictions{Repos: model.Patterns{"acme/*"}}},
+	}}
+	for _, g := range spellings {
+		for _, kind := range []string{"task", "ci"} {
+			_, err := disabled.ValidateGrants(model.GrantContext{Repo: repo("acme/widgets"), Kind: kind, Grants: []string{g}})
+			var refusal *model.GrantRefusal
+			if !errors.As(err, &refusal) || !strings.Contains(err.Error(), "in_process.github-sandbox") {
+				t.Errorf("%s %s: ValidateGrants under disabled in_process.github-sandbox = %v, want a refusal naming it", kind, g, err)
+			}
+			if _, err := restricted.ValidateGrants(model.GrantContext{Repo: repo("other/x"), Kind: kind, Grants: []string{g}}); err == nil {
+				t.Errorf("%s %s: admitted on other/x past in_process.github-sandbox's repos restriction", kind, g)
+			}
+			if _, err := restricted.ValidateGrants(model.GrantContext{Repo: repo("acme/widgets"), Kind: kind, Grants: []string{g}}); err != nil {
+				t.Errorf("%s %s: refused on acme/widgets, which in_process.github-sandbox admits: %v", kind, g, err)
+			}
+		}
+	}
+}

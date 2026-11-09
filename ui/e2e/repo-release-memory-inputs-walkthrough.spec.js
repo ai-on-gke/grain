@@ -89,31 +89,11 @@ test.describe("Repository Settings, Releases, and Memory Views Inputs Walkthroug
     }
 
     await page.getByRole("tab", { name: "Agents" }).click();
-    // 1.4 Default capabilities picker and chip inputs
-    const defaultCapsSelect = page.getByRole("combobox", {
-      name: /default capabilities/i,
-    });
-    await expect(defaultCapsSelect).toBeVisible();
-    // Toggle Bootstrap playbooks and toggle it back: every spec file a worker runs
-    // shares one demo store, and repository_release_memory_walkthrough.spec.js
-    // turns this same capability on and expects its chip afterwards.
-    const selfDebugChip = defaultCapsSelect
-      .locator(".MuiChip-root")
-      .filter({ hasText: /Bootstrap playbooks/i });
-    const option = page.getByRole("option", { name: /Bootstrap playbooks/i });
-    const toggleSelfDebug = async () => {
-      await defaultCapsSelect.click();
-      await option.click();
-      await page.keyboard.press("Escape");
-    };
-    await defaultCapsSelect.click();
-    const selfDebugWasOn =
-      (await option.getAttribute("aria-selected")) === "true";
-    await page.keyboard.press("Escape");
-    await toggleSelfDebug();
-    await expect(selfDebugChip).toHaveCount(selfDebugWasOn ? 0 : 1);
-    await toggleSelfDebug();
-    await expect(selfDebugChip).toHaveCount(selfDebugWasOn ? 1 : 0);
+    // 1.4 Default grants: GrantsPicker alone, no legacy checklist
+    await expect(page.getByTestId("repo-default-grants")).toBeVisible();
+    await expect(
+      page.getByRole("combobox", { name: /default capabilities/i }),
+    ).toHaveCount(0);
 
     // 1.5 System prompt extension and setup command auto-save on blur
     const promptInput = page.getByLabel(

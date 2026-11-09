@@ -334,6 +334,22 @@ type Pause struct {
 	// being lifted at once cannot reach the store in the wrong order
 	// (persist re-reads each window under it).
 	persistMu sync.Mutex
+	// onOpen is told of every window that opens where none was in force
+	// (SetOnOpen) -- how token accounting learns a window's capacity
+	// from the usage it had consumed when its provider refused it.
+	onOpen func(model.UsageLimitPause, time.Time)
+}
+
+// SetOnOpen has p call fn, on a goroutine of its own, with every pause
+// that opens where no pause on the same scope was in force. It is told
+// nothing of a pause being extended. nil stops the calls.
+func (p *Pause) SetOnOpen(fn func(model.UsageLimitPause, time.Time)) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.onOpen = fn
+	p.mu.Unlock()
 }
 
 // PauseStore is where a Pause keeps its windows across a restart --
@@ -634,6 +650,10 @@ func (p *Pause) BeginWindow(now time.Time, scope PauseScope, limit *agent.UsageL
 	}
 	p.windows[key] = window
 	defer p.persist(key)
+	if onOpen := p.onOpen; onOpen != nil && (!held || !current.until.After(now)) {
+		opened := window.view()
+		go onOpen(opened, now)
+	}
 	cancels := make(map[string]context.CancelCauseFunc, len(p.live))
 	for runID, run := range p.live {
 		if window.coversRun(run.scope) {

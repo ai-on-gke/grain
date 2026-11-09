@@ -291,8 +291,12 @@ func (u *Upgrader) validateReleaseRepositoryLocked(repo string) error {
 		return nil
 	}
 	slices.Sort(allowed)
+	allowed = slices.Compact(allowed)
+	if len(allowed) == 0 {
+		return fmt.Errorf("release repository %q is not one this deployment may upgrade from: none is configured for this image repository (set one with the daemon's -upgrade-release-repo flag)", repo)
+	}
 	return fmt.Errorf("release repository %q is not one this deployment may upgrade from; allowed are %s (set another with the daemon's -upgrade-release-repo flag)",
-		repo, strings.Join(slices.Compact(allowed), ", "))
+		repo, strings.Join(allowed, ", "))
 }
 
 func (u *Upgrader) applyImageSourceOverrideLocked(ov ImageSourceOverride) {
@@ -594,12 +598,16 @@ func hostNameOnly(h string) string {
 // ReleaseTagsForBranch returns the GitHub release tag candidate(s) for a target
 // branch, channel, or version, ordered from preferred to legacy fallback.
 //
-// Moving branch channels map to `channel-<tag>` (for example `channel-main` and
-// `channel-candidate`), avoiding the git ref ambiguity created when a release
-// tag named `main` shadows branch `main`. If `channel-<tag>` is 404 on a
-// repository still using pre-channel tag names, the caller may query `<tag>`
-// through the same REST `/releases/tags/<tag>` endpoint (never via git ref
-// resolution).
+// Moving branch channels map to `channel-<relTag>` (for example `channel-main`,
+// `channel-candidate`, and `channel-rc-v3.2`), avoiding the git ref ambiguity
+// created when a release tag named `main` shadows branch `main`. Slashes in
+// branch names map to `-` rather than TagForBranch's `..` because GitHub / GHES
+// release tags are backed by git refs (`refs/tags/<tag>`), where
+// `git-check-ref-format` forbids `..`; local Docker tags still use
+// TagForBranch's `..` so ChannelForRef can invert them. If `channel-<relTag>`
+// is 404 on a repository still using pre-channel tag names, the caller may
+// query `<relTag>` through the same REST `/releases/tags/<tag>` endpoint (never
+// via git ref resolution).
 func ReleaseTagsForBranch(branch string) ([]string, error) {
 	branch = strings.TrimSpace(branch)
 	if err := validateBranch(branch); err != nil {
@@ -615,10 +623,11 @@ func ReleaseTagsForBranch(branch string) ([]string, error) {
 	if len(tag) > maxTagLen {
 		return nil, fmt.Errorf("branch %q makes a %d-character tag, over the %d-character limit", branch, len(tag), maxTagLen)
 	}
-	if strings.HasPrefix(tag, "channel-") {
-		return []string{tag}, nil
+	if !strings.Contains(branch, "/") && strings.HasPrefix(branch, "channel-") {
+		return []string{branch}, nil
 	}
-	return []string{"channel-" + tag, tag}, nil
+	relTag := strings.ReplaceAll(branch, "/", "-")
+	return []string{"channel-" + relTag, relTag}, nil
 }
 
 // ReleaseRepositoryForImage maps a container image repository to the GitHub
@@ -1125,6 +1134,7 @@ func (u *Upgrader) resolveRelease(ctx context.Context, branch string) (*resolved
 		found = true
 		break
 	}
+	requiredAsset := requiredReleaseAsset(cfg)
 	if !found {
 		tried := strings.Join(candidates, ", ")
 		var notFound error
@@ -1134,7 +1144,7 @@ func (u *Upgrader) resolveRelease(ctx context.Context, branch string) (*resolved
 		} else {
 			notFound = fmt.Errorf("%w: no release tagged %s on %s/%s/%s", errNoReleaseImageAssets, tried, host, owner, repo)
 		}
-		if !u.releaseAssetsOnly() || strings.TrimSpace(cfg.Asset) != "" {
+		if !u.releaseAssetsOnly() {
 			return nil, notFound
 		}
 		newest, ok := u.newestPublishedRelease(ctx, res, cfg, candidates[0])
@@ -1145,12 +1155,13 @@ func (u *Upgrader) resolveRelease(ctx context.Context, branch string) (*resolved
 			return nil, notPublishedError(candidates[0], res, newest)
 		}
 		res.tag, res.release = newest.TagName, newest
-	} else if _, ok := res.findAsset(cfg.ManifestAsset); !ok && strings.TrimSpace(cfg.Asset) == "" {
-		// A release with no manifest: a moving one mid-swap (images.json.next
-		// is up and images.json not yet back), or a release that was tagged
-		// without being published. A deployment that loads release assets
-		// and nothing else stays on the last release that was published.
-		swapping := isMovingReleaseTag(res.tag) && countAssets(res.release, cfg.ManifestAsset+".next") > 0
+	} else if _, ok := res.findAsset(requiredAsset); !ok {
+		// A release with no manifest (or configured single asset): a moving
+		// one mid-swap (images.json.next is up and images.json not yet
+		// back), or a release that was tagged without being published. A
+		// deployment that loads release assets and nothing else stays on
+		// the last release that was published.
+		swapping := strings.TrimSpace(cfg.Asset) == "" && isMovingReleaseTag(res.tag) && countAssets(res.release, cfg.ManifestAsset+".next") > 0
 		if !swapping && u.releaseAssetsOnly() {
 			if newest, ok := u.newestPublishedRelease(ctx, res, cfg, candidates[0]); ok {
 				if !moving {
@@ -1305,24 +1316,35 @@ func pickPublishedRelease(published []githubRelease, preferVersion bool) (github
 	return published[0], true
 }
 
+// requiredReleaseAsset returns the asset name a release must carry to count as
+// published on this deployment: the explicit single-tarball Asset override when
+// set, otherwise ManifestAsset (images.json).
+func requiredReleaseAsset(cfg ReleaseAssetsConfig) string {
+	if explicit := strings.TrimSpace(cfg.Asset); explicit != "" {
+		return explicit
+	}
+	return cfg.ManifestAsset
+}
+
 // newestPublishedRelease is the release a target with nothing to load
 // falls back to (a moving one) or is refused in favour of (an immutable
 // one): the newest published release on the repository, preferring a
 // promoted, non-prerelease vX.Y.Z when target is latest or itself a
 // version. false when the releases cannot be listed or none is published.
 func (u *Upgrader) newestPublishedRelease(ctx context.Context, res *resolvedRelease, cfg ReleaseAssetsConfig, target string) (githubRelease, bool) {
+	required := requiredReleaseAsset(cfg)
 	preferVersion := target == "latest" || versionTag.MatchString(target)
 	releases, err := res.listReleases(ctx, func(read []githubRelease) bool {
 		// The forge lists newest first: stop paging once what has been
 		// read holds the release this would pick.
-		rel, ok := pickPublishedRelease(publishedReleases(read, cfg.ManifestAsset), preferVersion)
+		rel, ok := pickPublishedRelease(publishedReleases(read, required), preferVersion)
 		return ok && (!preferVersion || !rel.Prerelease && versionTag.MatchString(rel.TagName))
 	})
 	if err != nil {
 		log.Printf("upgrade: listing published releases on %s/%s/%s: %v", res.host, res.owner, res.repo, err)
 		return githubRelease{}, false
 	}
-	return pickPublishedRelease(publishedReleases(releases, cfg.ManifestAsset), preferVersion)
+	return pickPublishedRelease(publishedReleases(releases, required), preferVersion)
 }
 
 // notPublishedError refuses an immutable release that carries no image
@@ -2019,6 +2041,7 @@ func (u *Upgrader) listReleaseTags(ctx context.Context) ([]string, error) {
 	// publishing: Targets, LatestRelease and the automatic upgrade all
 	// read this list.
 	publishedOnly := u.releaseAssetsOnly()
+	requiredAsset := requiredReleaseAsset(cfg)
 	var tags []string
 	seen := map[string]bool{}
 	add := func(t string) {
@@ -2032,7 +2055,7 @@ func (u *Upgrader) listReleaseTags(ctx context.Context) ([]string, error) {
 			continue
 		}
 		tag := strings.TrimSpace(rel.TagName)
-		if publishedOnly && (versionTag.MatchString(tag) || candidateTag.MatchString(tag)) && countAssets(rel, cfg.ManifestAsset) == 0 {
+		if publishedOnly && (versionTag.MatchString(tag) || candidateTag.MatchString(tag)) && countAssets(rel, requiredAsset) == 0 {
 			continue
 		}
 		if ch, ok := strings.CutPrefix(tag, "channel-"); ok && ch != "" {

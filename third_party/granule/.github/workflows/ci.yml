@@ -1,11 +1,9 @@
 name: CI
 
-# The GitHub Actions port of .grain/workflows/ci.yml, rootless-vm.yml and
-# sandbox-access-vm.yml, on GitHub-hosted ubuntu-latest runners. Grain CI
-# reads only .grain/workflows while that directory has workflows in it, so
-# this file and those run side by side until the deployment's CI setting
-# moves to GitHub; keep the two in step until then. docs/github-actions-ci.md
-# says what maps to what, and what the operator has to set.
+# The per-PR checks, on GitHub-hosted ubuntu-latest runners. This file
+# replaced grain CI's .grain/workflows/ci.yml, rootless-vm.yml and
+# sandbox-access-vm.yml; docs/github-actions-ci.md says what maps to what,
+# and what the operator has to set.
 #
 # The two KVM jobs were files of their own only because grain gives a job
 # that names a runner a container with no /dev/kvm. A hosted runner has a

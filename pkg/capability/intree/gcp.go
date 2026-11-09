@@ -362,10 +362,7 @@ func newGCPMethod(m *gcpsets.Manager, now func() time.Time, report string, token
 				script := "/home/debian/.gcp-key/" + attemptID + "/activate.sh"
 				resp.Placements = append(resp.Placements, protocol.Placement{
 					Path: script, Mode: "0700",
-					Content: "#!/bin/sh\nset -eu\n" +
-						"command -v gcloud >/dev/null 2>&1 || exit 0\n" +
-						"gcloud auth activate-service-account --key-file=" + shellQuote(keyPath) + " >/dev/null 2>&1\n" +
-						"gcloud config set project " + shellQuote(ps.Project) + " >/dev/null 2>&1\n",
+					Content: gcpKeyActivateScript(keyPath, ps.Project),
 				})
 				resp.Setup = script
 			}
@@ -381,8 +378,8 @@ func newGCPMethod(m *gcpsets.Manager, now func() time.Time, report string, token
 // gcpTokenResponse is a token-mode grant's placements: the
 // external_account config where a key would go, the per-attempt token it
 // presents, the .about file, an ID-token helper, the forward to this
-// server's listener, and -- for a primary grant -- gcloud signed in with
-// the config.
+// server's listener, and -- for a primary grant -- gcloud pointed at the
+// config (gcpTokenActivateScript).
 func gcpTokenResponse(tokens *gcpTokens, attemptID, set string, lease gcpsets.Lease, ps *gcpsets.PermissionSet, deadline time.Time, keyPath string, primary bool) (*protocol.MintResponse, error) {
 	secret, err := tokens.grant(attemptID, set, lease.Account, deadline)
 	if err != nil {
@@ -413,18 +410,45 @@ func gcpTokenResponse(tokens *gcpTokens, attemptID, set string, lease gcpsets.Le
 			set, lease.Account, ps.Project, roles, keyPath, idScript, aboutPath),
 	}
 	if primary && keyPath == GCPKeyPath {
-		resp.PromptSection += " gcloud is logged in with it, the project selected, and GOOGLE_APPLICATION_CREDENTIALS-style clients find it there."
+		resp.PromptSection += " gcloud uses it (auth/credential_file_override) with the project selected, and GOOGLE_APPLICATION_CREDENTIALS-style clients find it there."
 		script := dir + "/activate.sh"
 		resp.Placements = append(resp.Placements, protocol.Placement{
 			Path: script, Mode: "0700",
-			Content: "#!/bin/sh\nset -eu\n" +
-				"command -v gcloud >/dev/null 2>&1 || exit 0\n" +
-				"gcloud auth login --cred-file=" + shellQuote(keyPath) + " --quiet >/dev/null 2>&1\n" +
-				"gcloud config set project " + shellQuote(ps.Project) + " >/dev/null 2>&1\n",
+			Content: gcpTokenActivateScript(keyPath, ps.Project),
 		})
 		resp.Setup = script
 	}
 	return resp, nil
+}
+
+// gcpKeyActivateScript is a key-mode primary grant's setup script: gcloud
+// activates the service-account key and selects the project. Only stdout
+// is discarded -- a failing command's stderr is what the attempt's
+// CapabilitySetupError quotes, so silencing it would leave the task told
+// nothing but "(no output)".
+func gcpKeyActivateScript(keyPath, project string) string {
+	return "#!/bin/sh\nset -eu\n" +
+		"command -v gcloud >/dev/null 2>&1 || exit 0\n" +
+		"gcloud auth activate-service-account --key-file=" + shellQuote(keyPath) + " --quiet >/dev/null\n" +
+		"gcloud config set project " + shellQuote(project) + " --quiet >/dev/null\n"
+}
+
+// gcpTokenActivateScript is a token-mode primary grant's setup script. It
+// points gcloud at the external_account config with
+// auth/credential_file_override rather than `gcloud auth login
+// --cred-file`: login introspects the access token it is handed against
+// sts.googleapis.com, and an iamcredentials-minted service-account token
+// (which is what the token endpoint exchanges the subject token for) is
+// not an STS-issued one, so STS answers {"active": false} and login exits
+// 1 -- failing every token-mode primary grant's setup. The override has
+// gcloud read the config for each command and refresh through the token
+// endpoint, with no introspection. stderr is kept for the reason
+// gcpKeyActivateScript gives.
+func gcpTokenActivateScript(keyPath, project string) string {
+	return "#!/bin/sh\nset -eu\n" +
+		"command -v gcloud >/dev/null 2>&1 || exit 0\n" +
+		"gcloud config set auth/credential_file_override " + shellQuote(keyPath) + " --quiet >/dev/null\n" +
+		"gcloud config set project " + shellQuote(project) + " --quiet >/dev/null\n"
 }
 
 // NewGCP builds the gcp server configured by cfg.Fallback alone, with no
@@ -496,10 +520,21 @@ func init() {
 			var accounts listFlag
 			fs.Var(&accounts, "account", "deprecated: an old fixed pool, [name=]email[*count] (repeatable)")
 			listen := fs.String("listen", "127.0.0.1:"+strconv.Itoa(DefaultGCPTokenPort), "the loopback address of the data-plane listener token-mode permission sets' grants fetch access tokens from")
+			fake := fs.String("fake-cloud", "", "test only: connect to an in-memory GCP (gcpfake) built from this JSON fixture instead of Google")
 			if err := fs.Parse(args); err != nil {
 				return nil, err
 			}
 			cfg := GCPConfig{Log: logger, Env: env, Listen: listenAddr(env, *listen)}
+			if *fake != "" {
+				cloud, now, err := loadGCPFake(*fake)
+				if err != nil {
+					return nil, err
+				}
+				cfg.Connector, cfg.Now = cloud, now
+				if logger != nil {
+					logger.Printf("gcp: -fake-cloud %s: every admin connects to an in-memory fake GCP; nothing reaches Google", *fake)
+				}
+			}
 			var legacy []gcpsets.LegacyAccount
 			for _, v := range accounts {
 				a, err := parseGCPAccount(v)

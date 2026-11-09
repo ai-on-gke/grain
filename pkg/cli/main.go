@@ -178,9 +178,9 @@ func Main() {
 			runHostCmd(args[1:])
 			return
 		case "host":
-			// grain host list|register|install|set-owner is the host
-			// registry, a task-CLI command (cmdHostds); anything else
-			// runs the host agent on this machine.
+			// grain host list|pending|accept|... is the host registry, a
+			// task-CLI command (cmdHostds); anything else runs the host
+			// agent on this machine.
 			if len(args) < 2 || !hostRegistryVerb(args[1]) {
 				hostdCmd(args[1:])
 				return
@@ -283,17 +283,6 @@ func canonicalCommand(cmd string) string {
 	return cmd
 }
 
-// hostRegistryVerb reports whether word, after "grain host", names one of
-// the host registry's subcommands (cmdHostds) rather than starting the
-// host agent, whose arguments are all flags.
-func hostRegistryVerb(word string) bool {
-	switch word {
-	case "list", "ls", "register", "create", "install", "set-owner", "help":
-		return true
-	}
-	return false
-}
-
 // runTaskCLI runs the task CLI and says how it ended (errors.go): the
 // exit code, and on stderr either a sentence or, under -json, the one
 // {"error": ...} object -- with whatever the flag package or a command
@@ -392,6 +381,8 @@ Global flags (before or after the command; -flag and --flag are the same):
 Commands:
   login <url> [flags] / logout [<ctx>] / whoami   sign in to a deployment as a named context, and say as whom
   context list|use|show|delete         the named contexts ($XDG_CONFIG_HOME/grain/config.json)
+  skill install|status [flags]         install or check the workstation SKILL.md guide (and with -mcp, register grain mcp)
+  mcp [--context <name>]               speak external coordination MCP over stdin/stdout (13 tools; see mcp_external.go)
   list [flags]                         list the tasks in play -- closed and deferred ones are left
                                        out unless -closed/-deferred or a filter naming that state
                                        asks for them (-filter attribute:comparison:value narrows the
@@ -405,7 +396,8 @@ Commands:
                                        -field name=value sets one of the fields this deployment
                                        declares, repeatably -- "grain create -h" lists them)
   update <id> [flags]                  edit a task's title or fields, -field name=value included
-  approve <id>                         accept a proposed task (proposed -> queued)
+  approve [-reason r] <id>             accept a proposed task (proposed -> queued); an external agent
+                                       credential (gma_) must give -reason
   withdraw <id>                        withdraw a queued task's approval (queued -> proposed)
   defer [-until <date>] <id>           put a task aside without closing it (proposed/queued -> deferred);
                                        deferred tasks are hidden from task lists until asked for, and
@@ -428,7 +420,7 @@ Commands:
                                        withdrawn if anything else is pushed before the merge
   pr adopt|review|status <pr>          adopt (-mode review-only|finish), review (-design) or report on
                                        (-threads) a pull request grain did not open (see prcmd.go)
-  run-now <id>                         start a run of this task next, ahead of the queue and whatever
+  run-now [-reason r] <id>             start a run of this task next, ahead of the queue and whatever
                                        its state says -- including sending a finished or merging task
                                        back to an agent for more work on its own branch
   config                               show the capabilities this deployment offers
@@ -447,6 +439,8 @@ Commands:
   failures [-window 7d] [-suspect]     what runs said when they failed for a reason grain could not
                                        name -- the instrument over its own provider-refusal markers
                                        (see failures.go)
+  usage [-mode auto] [-budget c/m=n/5h] token usage, budget, reset and burn rate per connection and model,
+                                       and the workers the remaining budget sustains (see usage_cmd.go)
   health                               the counters a layer built on grain keeps in the daemon, by
                                        section, since it started (-json: all of GET /api/sandboxes;
                                        see health.go)
@@ -495,11 +489,13 @@ Commands:
   gcp-key list|get|set|delete          manage this deployment's GCP service-account keys
   capability-servers list|add|remove|enable|disable|bind-secret
                                        manage this deployment's capability servers (mcpServers)
-  host list|register|install|set-owner|delete|delete-revoked
-                                       the host registry: register a host with its owner, the identity
-                                       it dials in through IAP as, and print how to install it
-  registry status|register|unregister  self-register this deployment with a grain registry and inspect
-                                       heartbeats and self-reported scopes (Settings -> Registry)
+  host list|pending|accept|reject|invite|codes|rename|update|revoke|delete|delete-revoked|rekey
+                                       hosts (Settings -> Hosts): invite hosts with one shared enrollment
+                                       snippet, accept or reject the hosts that join, and manage hosts
+  host register|install|set-owner      the legacy host registry: register a host with its owner, the
+                                       identity it dials in through IAP as, and print how to install it
+  registry status|register|unregister  self-register this deployment with a Grain Hub and inspect
+                                       heartbeats and self-reported scopes (Settings -> Hub)
   access list|allow|deny               the allowed users and groups list (Settings -> Access): who may
                                        sign in through IAP or another identity verifier
   broadcast [-all] <message...>        send a notice to all running task agents (or with -all, all active tasks)
@@ -646,7 +642,11 @@ func runCLI(args []string) error {
 		connect:     *connectTimeout,
 		call:        *callTimeout,
 	}
-	return explainDaemonError(dispatchCLI(ctx, c, out, fs, sel, rest), target)
+	err = explainDaemonError(dispatchCLI(ctx, c, out, fs, sel, rest), target)
+	if err == nil {
+		warnIfCommandSkillStale(rest[0], sel)
+	}
+	return err
 }
 
 // dispatchCLI runs one task-CLI command against c.
@@ -655,6 +655,10 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 	switch cmd {
 	case "context", "whoami", "login", "logout":
 		return dispatchSignIn(ctx, c, out, sel, cmd, cmdArgs)
+	case "skill":
+		return cmdSkill(ctx, c, out, sel, cmdArgs)
+	case "mcp":
+		return cmdMCP(ctx, c, fs, sel, cmdArgs)
 	case "list":
 		return cmdList(ctx, c, out, cmdArgs)
 	case "get", "show":
@@ -695,6 +699,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdMetrics(ctx, c, out, cmdArgs)
 	case "failures":
 		return cmdFailures(ctx, c, out, cmdArgs)
+	case "usage":
+		return cmdUsage(ctx, c, out, cmdArgs)
 	case "health":
 		return cmdHealth(ctx, c, out, cmdArgs)
 	case "pause":

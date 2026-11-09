@@ -24,9 +24,8 @@
 // the real gcpkey/geminikey providers -- those need real GCP/Gemini
 // credentials this sandbox should not assume it has. It is attached to the
 // task through the real CLI's `capability <id> <cap> attach`, under the one
-// capability ID (bootstrap-playbooks) cmd/grain/main.go's ui.OfferedCapabilities
-// allow-list accepts that needs no such credential, exactly the way an
-// operator would toggle it on -- the orchestrator.Config.Capabilities
+// capability ID (github-sandbox) cmd/grain/main.go's ui.OfferedCapabilities
+// allow-list accepts, exactly the way an operator would toggle it on -- the orchestrator.Config.Capabilities
 // registry that actually resolves and materializes it, by contrast, is
 // this test's own, so nothing here ever calls out to GCP or Gemini.
 package e2e
@@ -154,34 +153,41 @@ func TestCLIAttachedCapabilityIsMaterializedAppliedAndRevokedThroughRunCycle(t *
 
 	// Step 1: file the task, then attach a capability to it, both through
 	// the real CLI binary -- not a seeded store row and not a hand-built
-	// Grant -- the way an operator actually would. bootstrap-playbooks is the
+	// Grant -- the way an operator actually would. github-sandbox is the
 	// capability ID because it is on cmd/grain/main.go's own
-	// ui.OfferedCapabilities allow-list and needs no real credential; the
-	// registry that actually resolves and materializes it below is this
-	// test's own, never the real one a deployment would wire up for it.
+	// ui.OfferedCapabilities allow-list; the GitHub App credential its real
+	// provider needs is never asked for, because the registry that actually
+	// resolves and materializes it below is this test's own, never the real
+	// one a deployment would wire up for it.
 	storeDir := t.TempDir()
-	created := runCLIStore(t, bin, storeDir,
-		"-json",
-		"create",
-		"-title", "add a NOTES entry",
-		"-body", "please add a line to NOTES.md",
-		"-repo", owner+"/"+repoName,
-		"-approve",
-	)
+	const capabilityID = "test-capability"
 	var task ui.Task
-	if err := json.Unmarshal([]byte(created), &task); err != nil {
-		t.Fatalf("parsing grain create -json output: %v\n%s", err, created)
-	}
-	if task.ID == "" {
-		t.Fatalf("grain create did not return a task id: %s", created)
-	}
-
-	const capabilityID = "bootstrap-playbooks"
-	attached := runCLIStore(t, bin, storeDir, "-json", "capability", task.ID, capabilityID, "attach")
 	var afterAttach ui.Task
-	if err := json.Unmarshal([]byte(attached), &afterAttach); err != nil {
-		t.Fatalf("parsing grain capability attach -json output: %v\n%s", err, attached)
-	}
+	withStore(t, storeDir, func(store *model.Store, _ context.Context) {
+		srvURL := newTestServer(t, accessCodeServer(ui.NewClient(ui.Config{
+			Actor:        ui.DefaultActor("operator"),
+			Capabilities: []ui.Capability{{ID: capabilityID, Name: "Test capability"}},
+		}, store)))
+		created := runCLI(t, bin,
+			"-server", srvURL,
+			"-json",
+			"create",
+			"-title", "add a NOTES entry",
+			"-body", "please add a line to NOTES.md",
+			"-repo", owner+"/"+repoName,
+			"-approve",
+		)
+		if err := json.Unmarshal([]byte(created), &task); err != nil {
+			t.Fatalf("parsing grain create -json output: %v\n%s", err, created)
+		}
+		if task.ID == "" {
+			t.Fatalf("grain create did not return a task id: %s", created)
+		}
+		attached := runCLI(t, bin, "-server", srvURL, "-json", "capability", task.ID, capabilityID, "attach")
+		if err := json.Unmarshal([]byte(attached), &afterAttach); err != nil {
+			t.Fatalf("parsing grain capability attach -json output: %v\n%s", err, attached)
+		}
+	})
 	attachedOK := false
 	for _, c := range afterAttach.Capabilities {
 		if c == capabilityID {
@@ -201,7 +207,7 @@ func TestCLIAttachedCapabilityIsMaterializedAppliedAndRevokedThroughRunCycle(t *
 	remote := "http://" + githubHost + "/" + owner + "/" + repoName + ".git"
 	sandboxes := credentialed(t, remote)
 
-	const placementPath = "/secrets/bootstrap-playbooks-token"
+	const placementPath = "/secrets/github-sandbox-token"
 	const placementContent = "sh-sh-sh-e2e"
 	provider := &testCapabilityProvider{name: capabilityID, path: placementPath, content: placementContent}
 

@@ -71,3 +71,12 @@ func SetCloudIdentityTimeoutForTest(t *testing.T, d time.Duration) {
 	restore := webauth.SetCloudIdentityTimeout(d)
 	t.Cleanup(restore)
 }
+
+// SetCLIInstallReleaseForTest makes release the daemon release GET
+// /cli/install.sh pins for the rest of t, since a test binary carries no
+// version stamp.
+func SetCLIInstallReleaseForTest(t *testing.T, release string) {
+	prev := cliInstallRelease
+	cliInstallRelease = func() string { return release }
+	t.Cleanup(func() { cliInstallRelease = prev })
+}

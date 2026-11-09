@@ -16,7 +16,7 @@ This document lists every setting a Grain deployment has. That covers the deploy
    - 3.1 Models & sandboxes → Models
    - 3.2 Models & sandboxes → Sandboxes
    - 3.3 Models & sandboxes → Executors (removed)
-   - 3.4 Secrets & access → Legacy capabilities
+   - 3.4 Capabilities → Deployment credentials (was Secrets & access → Legacy capabilities)
    - 3.5 Secrets & access → Access
    - 3.6 System / Operations → Upgrade
    - 3.7 System / Operations → Caches
@@ -173,11 +173,13 @@ These apply to the `kubernetes` and `kubernetes-granule` backends. Every field e
 
 ### 3.3 Models & sandboxes → Executors (removed)
 
-Removed with remote executors: `grain hostd` is grain's only host agent, and a remote one dials in with the daemon's `-hostd-token-file` token (a startup flag, §10), set up under Models → *Where each agent CLI runs*. `/settings/executors` and its old `/admin` and `/system` links open Models. Schema 87 dropped `executor_token`.
+Removed with remote executors: `grain host` is grain's only host agent, and a remote one dials in with the daemon's `-hostd-token-file` token (a startup flag, §10), set up under Models → *Where each agent CLI runs*. `/settings/executors` and its old `/admin` and `/system` links open Models. Schema 87 dropped `executor_token`.
 
-### 3.4 Secrets & access → Legacy capabilities (`/settings/credentials#credentials`)
+### 3.4 Capabilities → Deployment credentials (`/settings/capabilities#credentials`)
 
-Component: `CredentialsSection.jsx`. The aliases `/settings/secrets` and `/settings/legacy-capabilities` resolve here. Surface: **config-managed** (the secret values themselves are never in the config repo).
+Component: `CredentialsSection.jsx`, a card drawn at the foot of Settings → Capabilities. It was the Secrets & access → Legacy capabilities tab (section id `credentials`) until that tab was retired with the last in-process capability (task 2876); `/settings/credentials`, `/settings/secrets` and `/settings/legacy-capabilities` resolve to Capabilities, keeping any `#hash`; with none, they open this card (`#credentials`, and `#other-secrets` for `/settings/secrets`) and the corrected address carries that anchor. Settings → Git's read-only note links to `/settings/capabilities#credentials` the same way. Surface: **config-managed** (the secret values themselves are never in the config repo).
+
+Role gating: the card follows its own write routes, not Capabilities' `capabilities:admin`. The GitHub host and GCP fields save through `PUT /api/settings` and follow `settings:write`. The secrets list and form write through `/api/secrets` and follow `secrets:write` (`pkg/ui/route_scopes.go`). So a role holding `capabilities:admin` without those scopes sees the refused part read-only, with the card saying which scope it needs. A role holding `settings:write` and `secrets:write` without `capabilities:admin` can use the whole card, while the capability servers, capability policy and API scope sets stay read-only and the page's note names only those (`CapabilitiesSection` clears the section's refusal for this card; 2026-11-08 deployment credentials walkthrough, F5). Being read-only for every role (external mode, the config-repo lock on the fields) applies regardless.
 
 | UI label | API key | Column | Type, default, validation | Applies |
 | --- | --- | --- | --- | --- |
@@ -496,7 +498,7 @@ This file is re-read per request and never exported (`pkg/staterepo/settings.go`
 - Caches: `-package-cache-dir` and its upstream mirror flags, `-actions-cache-dir`
 - Upgrade and power: §3.6
 - Backups: `-backup-interval`, `-backup-gcs-bucket`, `-backup-google-drive-folder`, `-backup-google-credentials-file`
-- Policy: `-policy` (`grain_policy.yml`; see [`docs/local-policy.md`](../../../docs/local-policy.md)), `-local-scripts`, `-local-scripts-env-file`
+- Policy: `-policy` (`grain_policy.yml`; see [`docs/local-policy.md`](../../../docs/local-policy.md)), `-local-scripts`
 - Deprecated or removed: `-max-mergers` and `-max-ci-jobs` are ignored. `-cli-image`, `-cli-image-file` and `-cli-container-engine` are ignored. `-tunnel-*` and `-relay-*` refuse to start.
 
 `-flag-names` and each flag's help text are the authoritative flag reference.

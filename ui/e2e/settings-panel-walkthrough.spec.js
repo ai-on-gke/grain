@@ -115,8 +115,9 @@ test("edits one setting in each section, and every one survives a reload", async
     await expect(
       page.getByRole("link", { name: "acme/widgets" }).first(),
     ).toBeVisible();
-    // Legacy capabilities
-    await section(page, "credentials", "Legacy capabilities");
+    // Capabilities, whose Deployment credentials card was the retired
+    // Legacy capabilities tab.
+    await section(page, "capabilities", "Capabilities");
     await commitBox(page, "GCP project", "walkthrough-project");
     // Engine, CI, Sandboxes, Caches
     await section(page, "engine", "Engine");
@@ -158,7 +159,7 @@ test("edits one setting in each section, and every one survives a reload", async
     await expect(page.getByLabel("Max unreviewed follow-up depth")).toHaveValue(
       "4",
     );
-    await page.goto("/settings/credentials");
+    await page.goto("/settings/capabilities");
     await expect(page.getByLabel("GCP project", { exact: true })).toHaveValue(
       "walkthrough-project",
     );
@@ -202,7 +203,11 @@ test("every old path lands where §3.5 says, and Back skips it", async ({
     ["/admin/engine", "/settings/engine"],
     ["/admin/sandbox", "/settings/sandboxes"],
     ["/admin/executors", "/settings/hostds"],
-    ["/admin/integrations", "/settings/credentials"],
+    ["/admin/integrations", "/settings/capabilities"],
+    // The retired Legacy capabilities tab and its aliases.
+    ["/settings/credentials", "/settings/capabilities"],
+    ["/settings/legacy-capabilities", "/settings/capabilities"],
+    ["/settings/secrets", "/settings/capabilities"],
     ["/admin/state", "/settings/config-repo"],
     ["/admin/upgrade", "/settings/upgrade"],
     ["/system/upgrade", "/settings/upgrade"],
@@ -223,7 +228,7 @@ test("every old path lands where §3.5 says, and Back skips it", async ({
     ["/system/engine", "/settings/engine"],
     ["/system/sandbox", "/settings/sandboxes"],
     ["/system/executors", "/settings/hostds"],
-    ["/system/integrations", "/settings/credentials"],
+    ["/system/integrations", "/settings/capabilities"],
     ["/system/state", "/settings/config-repo"],
     ["/system/nonsense", "/system"],
     ["/settings", "/settings/models"],

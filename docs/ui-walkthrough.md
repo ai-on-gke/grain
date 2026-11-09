@@ -28,7 +28,7 @@ a template in `.grain/templates/`:
 | `ui-walkthrough-repos.yml` | Repos, the repo page's tabs and Settings → Repositories, the merge queue and base-gate warnings, comparing branches, releases and release trains |
 | `ui-walkthrough-automation.yml` | Processes: schedules, templates, suites, suite runs and triggers -- including declared rows |
 | `ui-walkthrough-settings.yml` | Settings' layout, filter, save and config-repo lock model; Preferences, Access, General, Config repo (and its browser), Models, Agents, Memory and Tasks |
-| `ui-walkthrough-infrastructure.yml` | Settings' connections and infrastructure sections: Git, Capabilities (servers, policy, API scope sets), Legacy capabilities, Engine, CI, Sandboxes, Caches |
+| `ui-walkthrough-infrastructure.yml` | Settings' connections and infrastructure sections: Git, Hosts, Capabilities (servers, policy, API scope sets, deployment credentials), Engine, CI, Sandboxes, Caches |
 | `ui-walkthrough-operations.yml` | System and its tabs (Health, Logs, Sandboxes, Caches, Top, Pipeline, Metrics, Power), Settings → Upgrade, the CI page, the alerts bell and the standing banners |
 | `ui-walkthrough-shell.yml` | The shared shell -- page header rail, phone bar and drawer, collapsible nav rail, banners -- at desktop/tablet/phone widths, and the live session and task-chat surfaces |
 

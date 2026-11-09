@@ -381,6 +381,7 @@ func TestEveryVariableTheInstallerReadsHasADefault(t *testing.T) {
 	// out of the unit's own EnvironmentFile, and the other by the `sh`
 	// inside the deployment image that image_run hands a script to.
 	elsewhere := map[string]bool{
+		"GRAIN_EXTRA_DAEMON_ARGS":     true,
 		"GRAIN_EXTRA_DOCKER_RUN_ARGS": true,
 		"GRAIN_TARGET_URL":            true,
 	}
@@ -688,7 +689,7 @@ func TestTheCLIWrappersReplaceASymlinkRatherThanWritingThroughIt(t *testing.T) {
 // Both halves are asserted: the wrapper's container, which is where a
 // `grain` invocation on this host actually runs, and the profile script,
 // which is what a shell (and anything reading $GRAIN_DATA_DIR out here,
-// like pkg/capability/bootstrap's playbooks) gets.
+// like pkg/playbooks) gets.
 func TestTheCLIIsToldWhereThisDeploymentsStateLives(t *testing.T) {
 	text := setupText(t)
 
@@ -1950,7 +1951,14 @@ func TestTheInstallerNeedsNothingOnTheHostButDockerAndSystemd(t *testing.T) {
 	// optional rather than required -- host_git_version answers nothing
 	// on a host with no git, and the conversion then says what to run
 	// instead -- so it adds nothing to what a host must have.
-	hostGitFuncs := map[string]bool{"host_git_version": true, "rewrite_refs_as_files": true, "convert_reftable_repo": true}
+	//
+	// And installing from release assets (docs/release-assets.md) is a
+	// download from github.com before any image exists to run one in. It
+	// is optional too: with no curl on the host install_release_assets
+	// falls back to pulling the registry image, and manifest_field reads
+	// images.json with awk where there is no jq.
+	hostGitFuncs := map[string]bool{"host_git_version": true, "rewrite_refs_as_files": true, "convert_reftable_repo": true,
+		"install_release_assets": true, "manifest_field": true}
 	inHostGit := false
 
 	inImage := false
@@ -3289,11 +3297,17 @@ func TestBothImagesPinTheSameAgentCLIs(t *testing.T) {
 		"CODEX_CLI_SHA256_ARM64",
 		"CODEX_CODE_MODE_HOST_SHA256_AMD64",
 		"CODEX_CODE_MODE_HOST_SHA256_ARM64",
+		"CODEX_CLI_NPM_VERSION",
+		"CODEX_CLI_NPM_SHA256_AMD64",
+		"CODEX_CLI_NPM_SHA256_ARM64",
 	} {
 		want, got := buildArgDefault(t, "Dockerfile", daemon, arg), buildArgDefault(t, "Dockerfile.k8s-sandbox", sandbox, arg)
 		if want != got {
 			t.Errorf("Dockerfile pins %s=%s and Dockerfile.k8s-sandbox pins %s=%s; a deployment's daemon and its sandboxes must not be on two different CLIs, so bump both in the same commit", arg, want, arg, got)
 		}
+	}
+	if codexVer, npmVer := buildArgDefault(t, "Dockerfile", daemon, "CODEX_CLI_VERSION"), buildArgDefault(t, "Dockerfile", daemon, "CODEX_CLI_NPM_VERSION"); codexVer != "rust-v"+npmVer {
+		t.Errorf("Dockerfile pins CODEX_CLI_VERSION=%s and CODEX_CLI_NPM_VERSION=%s; bump CODEX_CLI_NPM_VERSION and CODEX_CLI_NPM_SHA256_{AMD64,ARM64} (from https://registry.npmjs.org/@openai/codex/-/codex-<ver>-linux-{x64,arm64}.tgz) alongside CODEX_CLI_VERSION", codexVer, npmVer)
 	}
 
 	// And the pin only means anything if the build fetches the artifact
@@ -3323,6 +3337,11 @@ func TestBothImagesPinTheSameAgentCLIs(t *testing.T) {
 			`= "$CLAUDE_CLI_VERSION"`,
 			`echo "$sha256  /tmp/codex.tar.gz" | sha256sum -c -`,
 			`echo "$host_sha256  /tmp/codex-code-mode-host.tar.gz" | sha256sum -c -`,
+			"api.github.com/repos/openai/codex/releases/tags/${CODEX_CLI_VERSION}",
+			"Accept: application/octet-stream",
+			"rm -f /tmp/codex-release.json",
+			"registry.npmjs.org/@openai/codex/-/codex-${CODEX_CLI_NPM_VERSION}-linux-${npm_arch}.tgz",
+			`echo "$npm_sha256  /tmp/codex-npm.tgz" | sha256sum -c -`,
 		} {
 			if !strings.Contains(code, want) {
 				t.Errorf("%s does not run %s", file.name, want)
@@ -3338,6 +3357,7 @@ func TestBothImagesPinTheSameAgentCLIs(t *testing.T) {
 			"$CLAUDE_CLI_SHA256_AMD64", "$CLAUDE_CLI_SHA256_ARM64",
 			"$CODEX_CLI_SHA256_AMD64", "$CODEX_CLI_SHA256_ARM64",
 			"$CODEX_CODE_MODE_HOST_SHA256_AMD64", "$CODEX_CODE_MODE_HOST_SHA256_ARM64",
+			"$CODEX_CLI_NPM_SHA256_AMD64", "$CODEX_CLI_NPM_SHA256_ARM64",
 		} {
 			if !strings.Contains(code, digest) {
 				t.Errorf("%s never checks %s", file.name, digest)
@@ -3345,20 +3365,71 @@ func TestBothImagesPinTheSameAgentCLIs(t *testing.T) {
 		}
 	}
 
-	// Every download here forces IPv4 and retries, which is a property of
-	// the *line* and so is lost by anyone who rewrites one -- this test's
-	// own change nearly took it off two of them, resolving a conflict
-	// with the commit that had just added it. CI's build host has no
-	// IPv6 route, so an AAAA-first fetch spends a connect on an
-	// unreachable address; the Granulefile forces IPv4 for the same
-	// reason (TestTheGuestBuildRidesOutASlowArchive).
-	for _, line := range strings.Split(stripComments(sandbox), "\n") {
-		if !strings.Contains(line, "curl -") {
+	// Every download in both Dockerfiles forces IPv4 and retries with
+	// exponential backoff, which is a property of the *line* and so is lost
+	// by anyone who rewrites one -- this test's own change nearly took it
+	// off two of them, resolving a conflict with the commit that had just
+	// added it. CI's build host has no IPv6 route, so an AAAA-first fetch
+	// spends a connect on an unreachable address; the Granulefile forces
+	// IPv4 for the same reason (TestTheGuestBuildRidesOutASlowArchive).
+	// And none of them may pass --retry-delay: curl disables exponential
+	// backoff whenever a fixed delay is set, turning `--retry 3
+	// --retry-delay 2` into a 6s retry window that fails a whole release
+	// build on a multi-minute GitHub Releases 504 brownout.
+	for _, file := range []struct{ name, text string }{{"Dockerfile", daemon}, {"Dockerfile.k8s-sandbox", sandbox}} {
+		for _, line := range strings.Split(stripComments(file.text), "\n") {
+			if !strings.Contains(line, "curl -") {
+				continue
+			}
+			if !strings.Contains(line, "curl -4 ") || !strings.Contains(line, "--retry-all-errors") || !strings.Contains(line, "--retry-max-time") {
+				t.Errorf("%s runs a curl that does not force IPv4 and retry with --retry-max-time: %s", file.name, strings.TrimSpace(line))
+			}
+			if strings.Contains(line, "--retry-delay") {
+				t.Errorf("%s runs a curl with --retry-delay, which disables curl's exponential backoff: %s", file.name, strings.TrimSpace(line))
+			}
+		}
+	}
+}
+
+func TestGitHubWorkflowReleaseDownloadsBackOffExponentially(t *testing.T) {
+	for _, name := range []string{"release.yml", "promote.yml", "release-train.yml"} {
+		content := stripComments(read(t, ".github", "workflows", name))
+		contains(t, content, "gcr.io/projectsigstore/cosign:v2.4.1@sha256:")
+		for _, line := range strings.Split(content, "\n") {
+			if !strings.Contains(line, "curl ") || strings.Contains(line, "curl -fsSIL") {
+				continue
+			}
+			if !strings.Contains(line, "curl -4 ") || !strings.Contains(line, "--retry-all-errors") || !strings.Contains(line, "--retry-max-time") {
+				t.Errorf(".github/workflows/%s runs a binary download curl without -4, --retry-max-time and --retry-all-errors: %s", name, strings.TrimSpace(line))
+			}
+			if strings.Contains(line, "--retry-delay") {
+				t.Errorf(".github/workflows/%s runs a curl with --retry-delay, disabling exponential backoff: %s", name, strings.TrimSpace(line))
+			}
+		}
+	}
+
+	testsWorkflow := stripComments(read(t, ".github", "workflows", "tests.yml"))
+	lintInstall := between(t, testsWorkflow, "- name: Install shellcheck and actionlint", "- name: Lint GitHub Actions workflows")
+	if strings.Contains(lintInstall, "| sudo tar") {
+		t.Error(".github/workflows/tests.yml pipes curl straight into sudo tar in Install shellcheck and actionlint; stage the archive to a file first so retries do not feed truncated bytes to tar")
+	}
+	contains(t, lintInstall, "docker.io/koalaman/shellcheck:v0.9.0@sha256:")
+	contains(t, lintInstall, "github.com/rhysd/actionlint/cmd/actionlint@v1.7.4")
+	var curls int
+	for _, line := range strings.Split(lintInstall, "\n") {
+		if !strings.Contains(line, "curl ") {
 			continue
 		}
-		if !strings.Contains(line, "curl -4 ") || !strings.Contains(line, "--retry-all-errors") {
-			t.Errorf("Dockerfile.k8s-sandbox runs a curl that does not force IPv4 and retry: %s", strings.TrimSpace(line))
+		curls++
+		if !strings.Contains(line, "curl -4 ") || !strings.Contains(line, "--retry-all-errors") || !strings.Contains(line, "--retry-max-time") {
+			t.Errorf(".github/workflows/tests.yml lint install runs curl without -4, --retry-max-time and --retry-all-errors: %s", strings.TrimSpace(line))
 		}
+		if strings.Contains(line, "--retry-delay") {
+			t.Errorf(".github/workflows/tests.yml lint install runs curl with --retry-delay, disabling exponential backoff: %s", strings.TrimSpace(line))
+		}
+	}
+	if curls != 2 {
+		t.Errorf("expected 2 curl downloads in Install shellcheck and actionlint, got %d", curls)
 	}
 }
 
@@ -4067,28 +4138,20 @@ func TestABranchTagAndItsCommitTagAreOneManifest(t *testing.T) {
 	contains(t, script, `push_image "$target"`)
 }
 
-// The job that can delete images is a job no branch push can reach, it
-// deletes only when it is told to, and it is not part of anything a host
-// runs.
-//
-// It holds package-publish, which is the capability that deletes a
-// package version -- strictly worse in the wrong hands than the one
-// build-artifacts.yml holds to publish, and the same argument that file
-// makes about push-vs-pull_request applies with more force. What keeps
-// it out of reach is the trigger: workflow_dispatch needs write access
-// to the repository. This job declares no cron, so the trusted schedules
-// package-publish answers do not reach it either; automated pruning runs
-// on release in release.yml instead.
-//
-// The dry-run default is the other half. Deleting a package version
-// cannot be undone, so the command deletes only when passed -apply, and
-// a human dispatching this to see what it would do must not have to
-// remember that.
+// Deleting images is CI's job alone: the release workflow's prune step
+// holds DOCKER_PAT, and package-publish is a CI-only capability that is
+// never placed in a task sandbox. The weekly prune-packages template is
+// therefore an audit -- a dry run of the plan against the live registry
+// and a read of the release prune step's logs -- and declares the
+// CI-read scope that reading those logs needs rather than a credential
+// it would never be given.
 func TestThePruneJobIsDeliberateAndOutOfBranchReach(t *testing.T) {
 	prune := stripComments(pruneTemplate(t))
 
 	contains(t, prune, "name: Prune GHCR packages")
 	contains(t, prune, "cmd/ghcr-prune")
+	contains(t, prune, `capabilities: ["api:ci-read@ai-on-gke/grain"]`)
+	contains(t, prune, "Prune old package versions")
 
 	// And it is a maintenance tool, not the deployment's: nothing on a host runs
 	// it, so it stays out of the binaries `make build` produces and out
@@ -4212,7 +4275,7 @@ func TestPrivateInfrastructureOrgPoliciesAreConfigured(t *testing.T) {
 	contains(t, iam, `constraint = "constraints/sql.restrictPublicIp"`)
 	contains(t, iam, "var.enforce_private_infrastructure_policies ? 1 : 0")
 
-	playbook := read(t, "pkg", "capability", "bootstrap", "playbooks", "gcp-capabilities.md")
+	playbook := read(t, "pkg", "playbooks", "gcp-capabilities.md")
 	contains(t, playbook, "-target=google_project_organization_policy.restrict_public_endpoints")
 	contains(t, playbook, "-target=google_project_organization_policy.no_external_ip")
 	contains(t, playbook, "-target=google_project_organization_policy.restrict_public_ip")
@@ -4236,7 +4299,7 @@ func TestCloudSQLCapabilityIsConfigured(t *testing.T) {
 	instance := read(t, "deploy", "terraform", "gcp", "instance.tf")
 	contains(t, instance, "var.agent_can_manage_cloud_sql")
 
-	playbook := read(t, "pkg", "capability", "bootstrap", "playbooks", "gcp-capabilities.md")
+	playbook := read(t, "pkg", "playbooks", "gcp-capabilities.md")
 	contains(t, playbook, "-target=google_project_iam_member.agent_cloud_sql")
 	contains(t, playbook, "-target=google_project_service.sqladmin")
 }

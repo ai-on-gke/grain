@@ -39,6 +39,7 @@
 package servers
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -166,7 +167,8 @@ type Options struct {
 	// command is resolved under (protocol.DialOptions.ConfigRoot).
 	ConfigRoot string
 	// Stderr, when set, gives each stdio server somewhere for its
-	// diagnostics; nil discards them.
+	// diagnostics, written one whole line per Write with the secrets it
+	// was started with scrubbed; nil discards them.
 	Stderr func(id string) io.Writer
 	// RefreshInterval and RetryInterval default to DefaultRefreshInterval
 	// and DefaultRetryInterval.
@@ -193,8 +195,8 @@ type Options struct {
 	// Now defaults to time.Now.
 	Now func() time.Time
 	// ProbeWarnings, when set, adds warnings to what Probe found for an
-	// entry -- the gcp server's sets overlapping the in-process gcp-key
-	// provider's accounts (intree.GCPOverlapWarnings).
+	// entry: things worth telling whoever pressed Test that do not stop
+	// the server attaching (ProbeResult.Warnings, which Settings shows).
 	ProbeWarnings func(id string, cfg protocol.ServerConfig) []string
 	// OnDrop, when set, is told of a server that fell out of use: one
 	// that was attached -- before a config change, a reconfigure or a
@@ -565,14 +567,14 @@ func (r *Registry) Sync(ctx context.Context, servers map[string]protocol.ServerC
 // attach connects one entry, keeping the failure -- scrubbed of every
 // secret value the attempt resolved -- when it does not.
 func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerConfig) {
-	var resolved []string
+	resolved := &resolvedSecrets{}
 	lookup := func(name string) (string, bool) {
 		if r.opts.Secrets == nil {
 			return "", false
 		}
 		v, ok := r.opts.Secrets(name)
 		if ok && v != "" {
-			resolved = append(resolved, v)
+			resolved.add(v)
 		}
 		return v, ok
 	}
@@ -584,12 +586,14 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 	r.mu.RUnlock()
 	opts := protocol.DialOptions{ConfigRoot: r.opts.ConfigRoot, Hostd: r.opts.Hostd, Identity: identity, Managed: r.opts.Managed}
 	if r.opts.Stderr != nil {
-		opts.Stderr = r.opts.Stderr(id)
+		if w := r.opts.Stderr(id); w != nil {
+			opts.Stderr = &scrubbedLines{w: w, secrets: resolved}
+		}
 	}
 	server, err := r.opts.Attach(ctx, id, cfg, lookup, opts)
 	now := r.opts.Now()
 	if err != nil {
-		msg := Scrub(err.Error(), resolved)
+		msg := Scrub(err.Error(), resolved.values())
 		var schema map[string]any
 		var ce *protocol.ConfigureError
 		isConfigure := errors.As(err, &ce)
@@ -877,7 +881,7 @@ type ProbeResult struct {
 // set. extra resolves secrets ahead of the store, for a credential typed
 // into the form and not saved yet.
 func (r *Registry) Probe(ctx context.Context, id string, cfg protocol.ServerConfig, extra protocol.SecretLookup) ProbeResult {
-	var resolved []string
+	resolved := &resolvedSecrets{}
 	var ephemeral *probeManaged
 	if r.opts.Managed != nil {
 		ephemeral = &probeManaged{existing: r.opts.Secrets, values: map[string]string{}}
@@ -895,7 +899,7 @@ func (r *Registry) Probe(ctx context.Context, id string, cfg protocol.ServerConf
 			v, ok = r.opts.Secrets(name)
 		}
 		if ok && v != "" {
-			resolved = append(resolved, v)
+			resolved.add(v)
 		}
 		return v, ok
 	}
@@ -911,7 +915,7 @@ func (r *Registry) Probe(ctx context.Context, id string, cfg protocol.ServerConf
 	opts := protocol.DialOptions{ConfigRoot: r.opts.ConfigRoot, Hostd: r.opts.Hostd, Identity: r.opts.Identity(), Stderr: stderr, Managed: managed}
 	if r.opts.Stderr != nil {
 		if w := r.opts.Stderr(id); w != nil {
-			opts.Stderr = io.MultiWriter(stderr, w)
+			opts.Stderr = io.MultiWriter(stderr, &scrubbedLines{w: w, secrets: resolved})
 		}
 	}
 	cfg.Disabled = false
@@ -933,7 +937,7 @@ func (r *Registry) Probe(ctx context.Context, id string, cfg protocol.ServerConf
 		if out := strings.TrimSpace(stderr.String()); out != "" {
 			msg += "; its stderr: " + out
 		}
-		res.Error = Scrub(msg, resolved)
+		res.Error = Scrub(msg, resolved.values())
 		var ce *protocol.ConfigureError
 		if errors.As(err, &ce) {
 			res.ConfigSchema = protocol.OperatorSchema(ce.Schema)
@@ -979,6 +983,60 @@ func (r *Registry) HostCapabilityEntries(ctx context.Context) ([]string, error) 
 const probeStderrMax = 2 << 10
 
 // tailBuffer keeps the last max bytes written to it.
+// resolvedSecrets are the secret values one attach or probe resolved:
+// added while the server starts, read by its stderr as the process
+// writes it.
+type resolvedSecrets struct {
+	mu sync.Mutex
+	v  []string
+}
+
+func (s *resolvedSecrets) add(v string) {
+	s.mu.Lock()
+	s.v = append(s.v, v)
+	s.mu.Unlock()
+}
+
+func (s *resolvedSecrets) values() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.v...)
+}
+
+// scrubbedLines hands w a stdio server's stderr one whole line per Write,
+// every secret value the server was started with replaced as Scrub does,
+// so Options.Stderr can log each line as it is.
+type scrubbedLines struct {
+	w       io.Writer
+	secrets *resolvedSecrets
+	mu      sync.Mutex
+	partial []byte
+}
+
+func (s *scrubbedLines) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.partial = append(s.partial, p...)
+	for {
+		i := bytes.IndexByte(s.partial, '\n')
+		if i < 0 {
+			break
+		}
+		line := string(s.partial[:i])
+		s.partial = s.partial[i+1:]
+		_, _ = io.WriteString(s.w, Scrub(line, s.secrets.values())+"\n")
+	}
+	if len(s.partial) > maxStderrLine {
+		// A line that never ends is cut rather than held.
+		_, _ = io.WriteString(s.w, Scrub(string(s.partial), s.secrets.values())+"\n")
+		s.partial = s.partial[:0]
+	}
+	return len(p), nil
+}
+
+// maxStderrLine bounds how much of one unfinished stderr line is held.
+const maxStderrLine = 16 << 10
+
 type tailBuffer struct {
 	max int
 	mu  sync.Mutex

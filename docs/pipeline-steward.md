@@ -143,13 +143,12 @@ itself.
 | `api:dispatch-control` | Pause and resume dispatch, run a task now |
 | `api:ci-read` | Read CI runs, logs, merge batches and base-branch gates |
 | `self-debug` | `list_grain_tasks`, `read_grain_task` and the other task readers |
-| `priority-dispatch` | Dispatched the way a console session is, so a congested pipeline can't starve it (below) |
-| `durable` | No deadline or wait cap; rests on its goal between wakes |
+
+Its **admission** is `durable` (a task setting, not a grant: [capabilities.md](capabilities.md#admission-durable-formerly-durable)). That includes `bypass`, so it is dispatched the way a console session is and a congested pipeline can't starve it (below), and it has no deadline or wait cap and rests on its goal between wakes. Before schema migration 122 these were the `priority-dispatch` and `durable` grants.
 
 `query_merge_queue` needs no grant, because every run has it.
 
-Apart from `priority-dispatch` and `durable`, it gets nothing that only a
-person may grant: no `merge:force` (it escalates a force-merge instead of
+Apart from its admission, it gets nothing that only a person may give: no `merge:force` (it escalates a force-merge instead of
 performing one), no `capabilities:admin`, `settings:write` or
 `secrets:write`, and no `deployment:*`.
 `TestThePipelineStewardHoldsTheDocumentedPresetsAndNothingDangerous`
@@ -191,14 +190,14 @@ setup. It then sat queued for more than 13 hours behind a full worker
 pool, directors and merge-queue tasks. While it was queued every firing
 was held, so nothing managed the pipeline all day.
 
-`priority-dispatch` (`docs/capabilities.md`) gives it the admission
-console sessions get. It starts with every worker busy, ahead of
+Its `bypass` admission, which `durable` includes (`docs/capabilities.md`),
+gives it the admission console sessions get. It starts with every worker busy, ahead of
 merge-queue repairs and ordinary work. It passes any pause but an
 upgrade's own hold, and it is never parked behind a red branch's
 repair. A connection's concurrency limit doesn't hold it, and a setup
 failure is retried within two minutes. It still needs room in the
-sandbox budget. Only a person may grant `priority-dispatch` to any
-other task. The steward's template carries it by construction, and a
+sandbox budget. Only a person may raise any other task's admission
+above `standard`. The steward's template sets it by construction, and a
 standing task filed before the template did is given it at its next
 wake.
 
@@ -226,7 +225,9 @@ A red release candidate is split the way
 [`design/playbook/releases.playbook.md`](../design/playbook/releases.playbook.md)
 §12 splits it. What a rule can decide is the reconciler's. It judges the
 candidate red after its one flake retry, raises the notifications above,
-counts the attempts, and holds the next candidate while blockers are open.
+counts the attempts, and posts check run `grain/rc-hold` in progress as soon
+as qualification fails so the next candidate is held across the train's
+20-minute ticks while triage runs and while blockers remain open.
 What takes judgement is the steward's. Woken by
 `pipeline.rc-failed:vX.Y.Z-rc.N`, it:
 
@@ -234,18 +235,28 @@ What takes judgement is the steward's. Woken by
    from the newest promoted release (and, from `rc.2` on, the range new
    since the previous candidate), and the failing items. The steward
    names the suspect merge and its evidence, and files nothing for a
-   failure that reads as infrastructure or a flake.
+   failure that reads as infrastructure or a flake (naming
+   `vX.Y.Z-rc.N` in its closing report so the reconciler completes the
+   triage-pending hold).
 2. **Files the fix or the revert at the front of the queue**
    (`propose_task` with `at_front: true` and a `main` target; a priority
-   above its own would wait for a person). Every such task's title starts
-   `[rc-blocker vX.Y.Z-rc.N]` (`model.RCBlockerMarker`). That title links
-   it to the hold. While any task with it is open, the reconciler keeps
-   check run `grain/rc-hold` in progress on the red candidate's commit,
-   which is the floor the train cuts `rc.(N+1)` after; Phase 2 reads that
-   check run and cuts nothing (`rc_held=vX.Y.Z-rc.(N+1)`) until it
-   completes. The reconciler completes the check once every blocker has
-   landed, so the steward has no hold to lift. If `main` is red too, the
-   base-branch repair is the fix and the steward files no other: the train
+   above its own would wait for a person). As soon as qualification concludes
+   failure on `rc.N` (`N < RELEASE_MAX_RC_ATTEMPTS`), the reconciler posts
+   check run `grain/rc-hold` in progress ("triage pending") on the red
+   candidate's commit -- the floor the train cuts `rc.(N+1)` after -- before
+   posting the completed `grain/release-qualification` failure; Phase 2 reads
+   that check run and cuts nothing (`rc_held=vX.Y.Z-rc.(N+1)`) until it
+   completes. Every fix or revert task's title starts
+   `[rc-blocker vX.Y.Z-rc.N]` (`model.RCBlockerMarker`). While any task with
+   it is open, the reconciler keeps `grain/rc-hold` in progress (updating its
+   summary to name the blockers) past the triage window. The reconciler
+   completes the check once every blocker has landed, when the steward's
+   closing report names `vX.Y.Z-rc.N` with no blocker filed, when a person
+   clears `pipeline.rc-failed:vX.Y.Z-rc.N` with no open blocker, or after the
+   triage grace window (`1h`, `model.ReleaseHoldTriageGrace`, overridable via
+   `GRAIN_RC_HOLD_GRACE`) elapses with no blocker filed, so the steward has no
+   hold to lift. If `main` is red too, the base-branch repair is the fix and
+   the steward files no other (naming `vX.Y.Z-rc.N` in its report): the train
    cuts only known-good commits, so a red `main` already holds it.
 3. **Converges `rc.3` on `release/vX.Y.Z` when trunk churn broke `rc.2`.**
    The train makes `release/vX.Y.Z` from `rc.2`'s commit and cuts `rc.3`
@@ -267,7 +278,9 @@ What takes judgement is the steward's. Woken by
 On `pipeline.flake-budget` it proposes one de-flake task for the item. On
 `pipeline.release-infra-stalled` it names the failing runner, quota or
 credential in a notification a person can act on. The candidate stays
-qualifying, and an infrastructure verdict never counts against it.
+qualifying, an infrastructure verdict never counts against it, and
+acknowledging or clearing `pipeline.release-infra-stalled` after repair
+starts a fresh Stage 2 qualification attempt if Stage 2 concluded `neutral`.
 
 ## What it is told
 

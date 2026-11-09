@@ -12,7 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Alert, Button, Link, TextField, Typography } from "@mui/material";
+import {
+  Alert,
+  Button,
+  Checkbox,
+  FormControlLabel,
+  Link,
+  TextField,
+  Typography,
+} from "@mui/material";
 import SettingsCard, { MultilineSetting } from "./SettingsCard.jsx";
 import {
   DEFAULT_GIT_IDENTITY_EMAIL,
@@ -43,7 +51,7 @@ export function taskBranchSuggestion(settings) {
 
 // AgentsSection is Settings → Agents (design/design/settings-panel.design.md
 // §3.2). `s` is the page's useSettingsSection().
-export default function AgentsSection({ s }) {
+export default function AgentsSection({ s, onSection }) {
   const { settings, saveChoice, onTextBlur, onIntBlur, onEnterKey } = s;
   return (
     <>
@@ -141,6 +149,33 @@ export default function AgentsSection({ s }) {
             Boxes here saved into a field PUT /api/settings ignores,
             so they answered 200 and came back empty on a reload. */}
       </SettingsCard>
+      <SettingsCard title="External agents" anchor="external-agents">
+        <FormControlLabel
+          control={
+            <Checkbox
+              name="externalAgentApi"
+              data-setting-id="externalAgentApi"
+              checked={!!settings.externalAgentApi}
+              onChange={(evt) =>
+                saveChoice({ externalAgentApi: evt.target.checked })
+              }
+            />
+          }
+          label={
+            <>
+              Accept external agents
+              <span className="hint">
+                off (default): only people signed in to this deployment and its
+                own runs reach its API. On: a coding agent or the grain CLI on a
+                workstation can sign in with a scoped gma_ token (
+                <code>grain login --issue-token</code>, Settings &rarr; CLI) and
+                use the /mcp endpoint, within the scope set its token was minted
+                for.
+              </span>
+            </>
+          }
+        />
+      </SettingsCard>
       <SettingsCard title="Commit identity" anchor="commit-identity">
         <Typography
           variant="body2"
@@ -149,8 +184,25 @@ export default function AgentsSection({ s }) {
         >
           Agents commit as the account the git credential they push with acts as
           -- a token&apos;s owner, a GitHub App&apos;s bot account -- which{" "}
-          <Link href="/settings/git">Settings &rarr; Git</Link> shows. A
-          credential that names nobody commits as grain&apos;s own,{" "}
+          <Link
+            href="/settings/git"
+            onClick={(evt) => {
+              if (
+                !onSection ||
+                evt.button !== 0 ||
+                evt.metaKey ||
+                evt.ctrlKey ||
+                evt.shiftKey ||
+                evt.altKey
+              )
+                return;
+              evt.preventDefault();
+              onSection("git");
+            }}
+          >
+            Settings &rarr; Git
+          </Link>{" "}
+          shows. A credential that names nobody commits as grain&apos;s own,{" "}
           {DEFAULT_GIT_IDENTITY_NAME} &lt;
           {DEFAULT_GIT_IDENTITY_EMAIL}&gt;.
         </Typography>

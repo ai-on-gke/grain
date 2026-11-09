@@ -1,0 +1,12 @@
+name: IPv6 e2e review
+base: main
+# Files a system:workflow-review:e2e-ipv6 triage task for every red,
+# timed-out or startup_failure run of .github/workflows/e2e-ipv6.yml on
+# main. It replaces the review grain filed from
+# .grain/workflows/e2e-ipv6.yml's daily 03:30 schedule.
+trigger:
+  github_workflow_run:
+    workflow: e2e-ipv6.yml
+    conclusions: [failure, timed_out, startup_failure]
+    branches: [main]
+overlap: skip

@@ -1,0 +1,68 @@
+== task 6 "Deploy widgets with org-deploy" (proposed by task 5): state proposed, approved false, proposed/unapproved
+capabilities: ["https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"org-deploy\"}"]
+Follow-up that needs the parent's gcp set.
+
+---
+
+grain: this proposal asked for `https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"org-deploy"}`, which task 5, which proposed it, does not hold itself. It was filed holding them, so it waits for a person rather than being queued automatically: approving it grants those capabilities as well as the work. Remove them from the task first if it should go ahead without them.
+
+== task 8 "Deploy widgets with org-deploy" (proposed by task 7): state proposed, approved false, proposed/unapproved
+capabilities: ["https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"org-deploy\"}"]
+Follow-up that needs the parent's gcp set.
+
+---
+
+grain: this proposal asked for `https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"org-deploy"}`, which task 7, which proposed it, does not hold itself. It was filed holding them, so it waits for a person rather than being queued automatically: approving it grants those capabilities as well as the work. Remove them from the task first if it should go ahead without them.
+
+== task 9 "Deploy widgets with org-deploy, as held" (proposed by task 7): state proposed, approved false, proposed/unapproved
+capabilities: ["https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"org-deploy\",\"primary\":true}"]
+The same, spelled as the parent holds it.
+
+---
+
+grain: this proposal asked for `https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"org-deploy","primary":true}`, which task 7, which proposed it, does not hold itself. It was filed holding them, so it waits for a person rather than being queued automatically: approving it grants those capabilities as well as the work. Remove them from the task first if it should go ahead without them.
+
+== task 10 "No capabilities" (proposed by task 7): state proposed, approved false, proposed/unapproved
+capabilities: []
+A control: asks for nothing.
+
+== task 12 "Deploy widgets with org-deploy" (proposed by task 11): state proposed, approved false, proposed/unapproved
+capabilities: ["https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"org-deploy\"}"]
+Follow-up that needs the parent's gcp set.
+
+---
+
+grain: this proposal asked for `https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"org-deploy"}`, which task 11, which proposed it, does not hold itself. It was filed holding them, so it waits for a person rather than being queued automatically: approving it grants those capabilities as well as the work. Remove them from the task first if it should go ahead without them.
+
+== task 13 "Deploy widgets with org-deploy, as held" (proposed by task 11): state proposed, approved false, proposed/unapproved
+capabilities: ["https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"org-deploy\",\"primary\":true}"]
+The same, spelled as the parent holds it.
+
+---
+
+grain: this proposal asked for `https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"org-deploy","primary":true}`, which task 11, which proposed it, does not hold itself. It was filed holding them, so it waits for a person rather than being queued automatically: approving it grants those capabilities as well as the work. Remove them from the task first if it should go ahead without them.
+
+== task 14 "No capabilities" (proposed by task 11): state awaiting_reply, approved true, awaiting_reply/answered
+capabilities: []
+A control: asks for nothing.
+
+== task 19 "Deploy widgets with org-deploy" (proposed by task 18): state proposed, approved false, proposed/unapproved
+capabilities: ["https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"org-deploy\"}"]
+Follow-up that needs the parent's gcp set.
+
+---
+
+grain: this proposal asked for `https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"org-deploy"}`, which only a person may grant: no task passes it on to work it proposes, task 18, which proposed it, included, whether or not it holds it itself. It was filed holding them, so it waits for a person rather than being queued automatically: approving it grants those capabilities as well as the work. Remove them from the task first if it should go ahead without them.
+
+== task 20 "Deploy widgets with org-deploy, as held" (proposed by task 18): state proposed, approved false, proposed/unapproved
+capabilities: ["https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"org-deploy\",\"primary\":true}"]
+The same, spelled as the parent holds it.
+
+---
+
+grain: this proposal asked for `https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"org-deploy","primary":true}`, which only a person may grant: no task passes it on to work it proposes, task 18, which proposed it, included, whether or not it holds it itself. It was filed holding them, so it waits for a person rather than being queued automatically: approving it grants those capabilities as well as the work. Remove them from the task first if it should go ahead without them.
+
+== task 21 "No capabilities" (proposed by task 18): state awaiting_reply, approved true, awaiting_reply/answered
+capabilities: []
+A control: asks for nothing.
+

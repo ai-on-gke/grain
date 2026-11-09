@@ -15,11 +15,21 @@
 package daemon
 
 import (
+	"bufio"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,7 +39,12 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/registry/api"
 	"github.com/ai-on-gke/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/tunnel/mux"
+	"github.com/ai-on-gke/grain/pkg/tunnel/wsupgrade"
+	"github.com/ai-on-gke/grain/pkg/ui"
 	"github.com/ai-on-gke/grain/pkg/version"
+	"github.com/ai-on-gke/grain/pkg/webauth"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 type fakeRegistryServer struct {
@@ -114,7 +129,7 @@ func newFakeRegistryServer(t *testing.T) (*fakeRegistryServer, *httptest.Server)
 		_ = json.NewEncoder(w).Encode(api.Entry{Name: name, Kind: api.KindConnected})
 	})
 
-	mux.HandleFunc("POST /api/entries/{name}/heartbeat", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("PUT /api/entries/{name}/heartbeat", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
 		f.mu.Lock()
 		f.authHeaders = append(f.authHeaders, r.Header.Get("Authorization"))
@@ -785,7 +800,7 @@ func TestRegistryManagerRotatesStaticTokenTunnelAndRedactsTunnelErrors(t *testin
 		logMu.Lock()
 		joined := strings.Join(logged, "\n")
 		logMu.Unlock()
-		if strings.Contains(joined, "registry tunnel (edge-grain) stopped") {
+		if strings.Contains(joined, "hub tunnel (edge-grain) stopped") {
 			if strings.Contains(joined, "grc_second_static_token_654321") {
 				t.Fatalf("tunnel stop log leaked grc_ token:\n%s", joined)
 			}
@@ -794,4 +809,580 @@ func TestRegistryManagerRotatesStaticTokenTunnelAndRedactsTunnelErrors(t *testin
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("timed out waiting for redacted tunnel stop log")
+}
+
+func TestCheckRegistryConnectFailsClosedWithoutVerifierFlags(t *testing.T) {
+	t.Parallel()
+	if err := CheckRegistryConnect(Config{RegistryConnect: false}); err != nil {
+		t.Fatalf("CheckRegistryConnect(false) = %v, want nil", err)
+	}
+	if err := CheckRegistryConnect(Config{RegistryConnect: true}); err == nil ||
+		!strings.Contains(err.Error(), "-ui-registry-issuer") ||
+		!strings.Contains(err.Error(), "-ui-registry-audience") ||
+		!strings.Contains(err.Error(), "-ui-registry-keys-url") {
+		t.Fatalf("CheckRegistryConnect(missing all) = %v, want missing flags error", err)
+	}
+	if err := CheckRegistryConnect(Config{
+		RegistryConnect:  true,
+		UiRegistryIssuer: "https://grain.example.com",
+	}); err == nil || !strings.Contains(err.Error(), "-ui-registry-audience") {
+		t.Fatalf("CheckRegistryConnect(partial) = %v, want missing audience error", err)
+	}
+	if err := CheckRegistryConnect(Config{
+		RegistryConnect:    true,
+		UiRegistryIssuer:   "https://grain.example.com",
+		UiRegistryAudience: "https://my-grain.grain.example.com",
+		UiRegistryKeysURL:  "https://grain.example.com/.well-known/jwks.json",
+	}); err != nil {
+		t.Fatalf("CheckRegistryConnect(complete) = %v, want nil", err)
+	}
+}
+
+func TestRegistryTunnelSupervisorBackoffAndStableReset(t *testing.T) {
+	t.Parallel()
+	sup := NewRegistryTunnelSupervisor(RegistryTunnelSupervisorOptions{
+		Handler:       http.NotFoundHandler(),
+		BaseBackoff:   250 * time.Millisecond,
+		MaxBackoff:    30 * time.Second,
+		AuthBackoff:   60 * time.Second,
+		MaxRetryAfter: 5 * time.Minute,
+		DisableJitter: true,
+	})
+
+	// 1. Exponential progression: 250ms -> 500ms -> 1s -> ... -> 30s cap.
+	wantSeq := []time.Duration{
+		250 * time.Millisecond,
+		500 * time.Millisecond,
+		1 * time.Second,
+		2 * time.Second,
+		4 * time.Second,
+		8 * time.Second,
+		16 * time.Second,
+		30 * time.Second,
+		30 * time.Second,
+	}
+	for i, want := range wantSeq {
+		if got := sup.ComputeBackoff(i+1, fmt.Errorf("dial error")); got != want {
+			t.Errorf("ComputeBackoff(failures=%d) = %s, want %s", i+1, got, want)
+		}
+	}
+
+	// 2. With ±25% jitter enabled, backoff stays within [0.75*base, 1.25*base].
+	jitterSup := NewRegistryTunnelSupervisor(RegistryTunnelSupervisorOptions{
+		Handler:        http.NotFoundHandler(),
+		BaseBackoff:    250 * time.Millisecond,
+		MaxBackoff:     30 * time.Second,
+		JitterFraction: 0.25,
+	})
+	for i := 0; i < 20; i++ {
+		d := jitterSup.ComputeBackoff(1, fmt.Errorf("dial error"))
+		if d < 187*time.Millisecond || d > 313*time.Millisecond {
+			t.Fatalf("jittered base backoff = %s, out of 250ms ±25%%", d)
+		}
+	}
+
+	// 3. 401/403 enforce >= 60s backoff; 429/503 honour Retry-After (capped at 5m).
+	for _, code := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		d := sup.ComputeBackoff(1, &api.APIError{StatusCode: code, Message: "denied"})
+		if d < 60*time.Second {
+			t.Errorf("ComputeBackoff(%d) = %s, want >= 60s", code, d)
+		}
+	}
+	if d := sup.ComputeBackoff(1, &api.APIError{StatusCode: http.StatusTooManyRequests, RetryAfter: 45 * time.Second}); d != 45*time.Second {
+		t.Errorf("ComputeBackoff(429 Retry-After=45s) = %s, want 45s", d)
+	}
+	if d := sup.ComputeBackoff(1, &api.APIError{StatusCode: http.StatusServiceUnavailable, RetryAfter: 10 * time.Minute}); d != 5*time.Minute {
+		t.Errorf("ComputeBackoff(503 Retry-After=10m) = %s, want 5m cap", d)
+	}
+
+	// 4. Verify stable session (>= StableSession) resets consecutive failure count,
+	// and 401 triggers OnUnauthorized.
+	var dialAttempt atomic.Int32
+	var unauthorizedCalls atomic.Int32
+	registryTLS := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := dialAttempt.Add(1)
+		switch n {
+		case 1:
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"expired oidc token"}`))
+		case 2:
+			wsConn, err := wsupgrade.Upgrade(w, r, http.Header{
+				api.HeaderTunnelSession:   []string{"sess-stable"},
+				api.HeaderConnectProtocol: []string{api.ConnectProtocolVersion},
+			})
+			if err != nil {
+				return
+			}
+			m := mux.NewMux(wsConn, mux.Config{IsServer: true})
+			time.Sleep(45 * time.Millisecond)
+			_ = m.Close()
+		default:
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+	}))
+	defer registryTLS.Close()
+
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(registryTLS.Certificate())
+
+	connectedCh := make(chan string, 2)
+	runSup := NewRegistryTunnelSupervisor(RegistryTunnelSupervisorOptions{
+		Handler:        http.NotFoundHandler(),
+		BaseBackoff:    10 * time.Millisecond,
+		MaxBackoff:     100 * time.Millisecond,
+		AuthBackoff:    15 * time.Millisecond,
+		StableSession:  25 * time.Millisecond,
+		DisableJitter:  true,
+		TLSConfig:      &tls.Config{RootCAs: rootPool},
+		OnUnauthorized: func() { unauthorizedCalls.Add(1) },
+		OnSessionStart: func(id string) {
+			select {
+			case connectedCh <- id:
+			default:
+			}
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		_ = runSup.RunTunnel(ctx, api.ConnectConfig{
+			BaseURL:           registryTLS.URL,
+			Entry:             "alice",
+			RegistrationToken: "grc_test_token_12345",
+		})
+	}()
+
+	select {
+	case id := <-connectedCh:
+		if id != "sess-stable" {
+			t.Fatalf("connected session = %q, want sess-stable", id)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for stable session after initial 401")
+	}
+	if unauthorizedCalls.Load() != 1 {
+		t.Fatalf("OnUnauthorized calls = %d, want 1", unauthorizedCalls.Load())
+	}
+}
+
+func TestRegistryTunnelSupervisorConnectServeAndGracefulRotation(t *testing.T) {
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
+
+	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	byteLen := (ecKey.PublicKey.Curve.Params().BitSize + 7) / 8
+	xBytes := ecKey.PublicKey.X.FillBytes(make([]byte, byteLen))
+	yBytes := ecKey.PublicKey.Y.FillBytes(make([]byte, byteLen))
+
+	jwksSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"keys": []map[string]string{
+				{
+					"kty": "EC",
+					"crv": "P-256",
+					"alg": "ES256",
+					"use": "sig",
+					"kid": "reg-key-1",
+					"x":   base64.RawURLEncoding.EncodeToString(xBytes),
+					"y":   base64.RawURLEncoding.EncodeToString(yBytes),
+				},
+			},
+		})
+	}))
+	defer jwksSrv.Close()
+
+	// Simulated grain-registry serving /api/entries/alice/connect over TLS.
+	var sessionSeq atomic.Int32
+	type acceptedSession struct {
+		id  string
+		mux *mux.Mux
+	}
+	sessionsCh := make(chan acceptedSession, 4)
+
+	registryTLS := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/entries/alice/connect":
+			if r.Header.Get(api.HeaderConnectProtocol) != api.ConnectProtocolVersion ||
+				r.Header.Get(api.HeaderEntry) != "alice" ||
+				r.Header.Get(api.HeaderRegistryToken) != "grc_live_tunnel_secret" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			seq := sessionSeq.Add(1)
+			sessID := fmt.Sprintf("sess-%d", seq)
+			wsConn, err := wsupgrade.Upgrade(w, r, http.Header{
+				api.HeaderTunnelSession:   []string{sessID},
+				api.HeaderConnectProtocol: []string{api.ConnectProtocolVersion},
+			})
+			if err != nil {
+				return
+			}
+			m := mux.NewMux(wsConn, mux.Config{
+				IsServer:         true,
+				PingInterval:     5 * time.Second,
+				PingTimeout:      5 * time.Second,
+				MaxBufferedBytes: 1 << 20,
+			})
+			sessionsCh <- acceptedSession{id: sessID, mux: m}
+			<-m.Done()
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer registryTLS.Close()
+
+	// Forward HTTP CONNECT proxy for HTTPS_PROXY verification.
+	var proxyConnects atomic.Int32
+	proxyLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen proxy: %v", err)
+	}
+	defer proxyLn.Close()
+	go func() {
+		for {
+			c, err := proxyLn.Accept()
+			if err != nil {
+				return
+			}
+			go func(clientConn net.Conn) {
+				defer clientConn.Close()
+				br := bufio.NewReader(clientConn)
+				req, err := http.ReadRequest(br)
+				if err != nil || req.Method != http.MethodConnect {
+					return
+				}
+				proxyConnects.Add(1)
+				up, err := net.Dial("tcp", req.Host)
+				if err != nil {
+					_, _ = clientConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+					return
+				}
+				defer up.Close()
+				_, _ = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+				done := make(chan struct{}, 2)
+				cp := wsupgrade.BufferedConn(clientConn, br)
+				go func() { _, _ = io.Copy(up, cp); done <- struct{}{} }()
+				go func() { _, _ = io.Copy(cp, up); done <- struct{}{} }()
+				<-done
+			}(c)
+		}
+	}()
+
+	// Configure a grain UI server with local access code AND registry verifier.
+	dataDir := t.TempDir()
+	store, db, err := OpenStore("sqlite", "", dataDir)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	cfg := model.DefaultConfig()
+	cfg.TargetRepos = []string{"acme/widgets", model.ConfigRepo().String()}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatalf("PutConfig: %v", err)
+	}
+
+	const (
+		issuer     = "https://grain.example.com"
+		audience   = "https://alice.grain.example.com"
+		accessCode = "local-access-code-xyz"
+	)
+
+	uiClient := ui.NewClient(ui.Config{
+		LocalAPIToken:     accessCode,
+		RegistryIssuer:    issuer,
+		RegistryAudience:  audience,
+		RegistryKeysURL:   jwksSrv.URL,
+		AllowedPrincipals: []string{"user:alice@example.com"},
+	}, store)
+	uiSrv := ui.NewServerWithClient(uiClient)
+
+	// Wrap RegistryTunnelHandler so we can also pause one slow request on sess-1
+	// across the graceful session rotation boundary.
+	slowEntered := make(chan struct{})
+	slowRelease := make(chan struct{})
+	baseTunnelHandler := uiSrv.RegistryTunnelHandler()
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/registry/status" && r.URL.Query().Get("slow") == "1" {
+			// Still goes through the full RegistryTunnelHandler verifier gate first!
+			rec := httptest.NewRecorder()
+			baseTunnelHandler.ServeHTTP(rec, r)
+			if rec.Code != http.StatusOK {
+				w.WriteHeader(rec.Code)
+				_, _ = w.Write(rec.Body.Bytes())
+				return
+			}
+			close(slowEntered)
+			<-slowRelease
+			for k, vals := range rec.Header() {
+				for _, v := range vals {
+					w.Header().Add(k, v)
+				}
+			}
+			w.WriteHeader(rec.Code)
+			_, _ = w.Write(rec.Body.Bytes())
+			return
+		}
+		baseTunnelHandler.ServeHTTP(w, r)
+	})
+
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(registryTLS.Certificate())
+	proxyURL, _ := url.Parse("http://" + proxyLn.Addr().String())
+
+	rotatedCh := make(chan string, 2)
+	sup := NewRegistryTunnelSupervisor(RegistryTunnelSupervisorOptions{
+		Handler:         handler,
+		BaseBackoff:     20 * time.Millisecond,
+		MaxBackoff:      100 * time.Millisecond,
+		MaxSessionAge:   180 * time.Millisecond,
+		DrainTimeout:    2 * time.Second,
+		DisableJitter:   true,
+		TLSConfig:       &tls.Config{RootCAs: rootPool},
+		Proxy:           http.ProxyURL(proxyURL),
+		OnSessionRotate: func(oldID, newID string) { rotatedCh <- oldID + "->" + newID },
+	})
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	supDone := make(chan struct{})
+	go func() {
+		defer close(supDone)
+		_ = sup.RunTunnel(runCtx, api.ConnectConfig{
+			BaseURL:           registryTLS.URL,
+			Entry:             "alice",
+			RegistrationToken: "grc_live_tunnel_secret",
+		})
+	}()
+
+	// Wait for session 1.
+	var sess1 acceptedSession
+	select {
+	case sess1 = <-sessionsCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for sess-1")
+	}
+	defer sess1.mux.Close()
+	if proxyConnects.Load() < 1 {
+		t.Fatalf("expected HTTPS_PROXY CONNECT to be used, got %d", proxyConnects.Load())
+	}
+
+	mintAssertion := func() string {
+		now := time.Now()
+		claims := webauth.RegistryClaims{
+			RegisteredClaims: jwt.RegisteredClaims{
+				Issuer:    issuer,
+				Audience:  jwt.ClaimStrings{audience},
+				Subject:   "alice@example.com",
+				IssuedAt:  jwt.NewNumericDate(now.Add(-5 * time.Second)),
+				NotBefore: jwt.NewNumericDate(now.Add(-5 * time.Second)),
+				ExpiresAt: jwt.NewNumericDate(now.Add(55 * time.Second)),
+				ID:        "jti-1",
+			},
+			Email:     "alice@example.com",
+			Kind:      webauth.PrincipalHuman,
+			RequestID: "req_1",
+		}
+		tok := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
+		tok.Header["kid"] = "reg-key-1"
+		s, err := tok.SignedString(ecKey)
+		if err != nil {
+			t.Fatalf("SignedString: %v", err)
+		}
+		return s
+	}
+
+	clientForMux := func(m *mux.Mux) *http.Client {
+		return &http.Client{
+			Timeout: 3 * time.Second,
+			Transport: &http.Transport{
+				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					return m.OpenStream(ctx)
+				},
+			},
+		}
+	}
+	c1 := clientForMux(sess1.mux)
+	assertion := mintAssertion()
+
+	// 1. Tunnel request without X-Grain-Registry-Assertion or with access code is rejected (401)
+	// even on open routes (/api/config).
+	unauthReq, _ := http.NewRequest(http.MethodGet, "http://alice.grain.example.com/api/config", nil)
+	unauthReq.Header.Set("X-Grain-Access-Code", accessCode)
+	unauthResp, err := c1.Do(unauthReq)
+	if err != nil {
+		t.Fatalf("c1.Do(unauth /api/config): %v", err)
+	}
+	_ = unauthResp.Body.Close()
+	if unauthResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("tunnel /api/config with access code and no assertion = %d, want 401", unauthResp.StatusCode)
+	}
+
+	// 2. Start an in-flight slow request on sess-1 with a valid assertion before rotation triggers.
+	slowErrCh := make(chan error, 1)
+	go func() {
+		req, _ := http.NewRequest(http.MethodGet, "http://alice.grain.example.com/api/registry/status?slow=1", nil)
+		req.Header.Set(ui.RegistryAssertionHeader, assertion)
+		resp, err := c1.Do(req)
+		if err != nil {
+			slowErrCh <- err
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			slowErrCh <- fmt.Errorf("slow status = %d", resp.StatusCode)
+			return
+		}
+		var st api.InstanceStatusResponse
+		if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
+			slowErrCh <- err
+			return
+		}
+		if len(st.Scopes) != 1 || st.Scopes[0].Repo != "acme/widgets" {
+			slowErrCh <- fmt.Errorf("unexpected scopes: %+v", st.Scopes)
+			return
+		}
+		slowErrCh <- nil
+	}()
+
+	select {
+	case <-slowEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for slow request to enter handler on sess-1")
+	}
+
+	// 3. Wait for proactive session rotation to dial sess-2 while sess-1 is still draining!
+	var sess2 acceptedSession
+	select {
+	case sess2 = <-sessionsCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for proactive rotation to dial sess-2")
+	}
+	defer sess2.mux.Close()
+
+	select {
+	case rot := <-rotatedCh:
+		if rot != "sess-1->sess-2" {
+			t.Fatalf("rotation event = %q, want sess-1->sess-2", rot)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for OnSessionRotate callback")
+	}
+
+	// 4. Verify new requests on sess-2 are served while sess-1's slow request is still in-flight!
+	c2 := clientForMux(sess2.mux)
+	req2, _ := http.NewRequest(http.MethodGet, "http://alice.grain.example.com/api/registry/status", nil)
+	req2.Header.Set(ui.RegistryAssertionHeader, assertion)
+	resp2, err := c2.Do(req2)
+	if err != nil {
+		t.Fatalf("c2.Do on rotated sess-2: %v", err)
+	}
+	_ = resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("sess-2 GET /api/registry/status = %d, want 200", resp2.StatusCode)
+	}
+
+	// 5. Release the slow request on sess-1 and verify it drains and completes cleanly!
+	close(slowRelease)
+	select {
+	case err := <-slowErrCh:
+		if err != nil {
+			t.Fatalf("in-flight request on sess-1 failed during graceful rotation drain: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for in-flight request on sess-1 to finish draining")
+	}
+
+	cancel()
+	<-supDone
+}
+
+func TestRegistryManagerPreservesRemoteMetadataAndHostKindWhenUnsetLocally(t *testing.T) {
+	t.Parallel()
+	fake, srv := newFakeRegistryServer(t)
+	fake.mu.Lock()
+	fake.entries["conn-alice"] = api.CreateEntryRequest{
+		Name:        "conn-alice",
+		Kind:        api.KindConnected,
+		HostKind:    api.HostKindOther,
+		DisplayName: "Alice",
+		Purpose:     "API",
+	}
+	fake.mu.Unlock()
+
+	dataDir := t.TempDir()
+	store, db, err := OpenStore("sqlite", "", dataDir)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	// OIDC mode with unset DisplayName, Purpose, and HostKind while LiveConfig
+	// infers HostKindWorkstation: neither PATCH nor Heartbeat may overwrite
+	// existing remote metadata or CLI-declared HostKind.
+	cfg := model.DefaultConfig()
+	cfg.Registry = model.RegistryConfig{
+		URL:      srv.URL,
+		Entry:    "conn-alice",
+		AuthMode: model.RegistryAuthOIDC,
+	}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatalf("PutConfig: %v", err)
+	}
+
+	mgr := NewRegistryManager(RegistryManagerOptions{
+		Store:      store,
+		HTTPClient: srv.Client(),
+		LiveConfig: func() Config { return Config{HostSandboxes: true} },
+		OIDCTokenSource: func(_ context.Context, _ string) (string, time.Time, error) {
+			return "oidc-jwt", time.Now().Add(10 * time.Minute), nil
+		},
+		JitterFraction: -1,
+	})
+
+	if _, err := mgr.TriggerHeartbeat(ctx); err != nil {
+		t.Fatalf("TriggerHeartbeat: %v", err)
+	}
+
+	fake.mu.Lock()
+	updates := append([]api.UpdateEntryRequest(nil), fake.updates...)
+	hbs := append([]api.HeartbeatRequest(nil), fake.heartbeats...)
+	fake.mu.Unlock()
+
+	if len(updates) != 1 {
+		t.Fatalf("expected 1 initial OIDC PATCH, got %d", len(updates))
+	}
+	if updates[0].DisplayName != nil || updates[0].Purpose != nil || updates[0].HostKind != nil || updates[0].Listed != nil {
+		t.Fatalf("OIDC PATCH with unset local metadata would overwrite remote values: %+v", updates[0])
+	}
+	if len(hbs) != 1 || hbs[0].HostKind != "" {
+		t.Fatalf("heartbeat sent HostKind=%q when local config left host_kind unset, want empty", hbs[0].HostKind)
+	}
+
+	// Explicitly configuring HostKind on the daemon sends it on both PATCH and Heartbeat.
+	cfg.Registry.HostKind = api.HostKindKubernetes
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatalf("PutConfig explicit host_kind: %v", err)
+	}
+	if _, err := mgr.TriggerHeartbeat(ctx); err != nil {
+		t.Fatalf("TriggerHeartbeat with explicit host_kind: %v", err)
+	}
+
+	fake.mu.Lock()
+	lastUpd := fake.updates[len(fake.updates)-1]
+	lastHB := fake.heartbeats[len(fake.heartbeats)-1]
+	fake.mu.Unlock()
+	if lastUpd.HostKind == nil || *lastUpd.HostKind != api.HostKindKubernetes {
+		t.Fatalf("expected explicit HostKind=kubernetes in PATCH, got %+v", lastUpd.HostKind)
+	}
+	if lastHB.HostKind != api.HostKindKubernetes {
+		t.Fatalf("expected explicit HostKind=kubernetes in Heartbeat, got %q", lastHB.HostKind)
+	}
 }

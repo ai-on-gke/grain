@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
 	"github.com/ai-on-gke/grain/pkg/capability/portforward"
@@ -111,8 +112,10 @@ func WithCICapabilityServers(service *ci.Service, servers func() orchestrator.Ca
 func ciCapabilityRefs(ids []string, event ci.Event, trustedSchedule, withholdEventGated bool) []model.Grant {
 	var out []model.Grant
 	for _, id := range ids {
-		c := model.CanonicalLegacyGrant(id)
-		if rule, ok := model.CIGrantRuleFor(c); ok && (withholdEventGated || !rule.Admits(string(event), trustedSchedule)) {
+		// A bare or case-varied spelling of a method with a CI grant
+		// rule is the <ref>={} grant the repository's list records.
+		c := model.CanonicalCIGrant(id)
+		if rule, ok := model.CIGrantRuleFor(c); ok && ((rule.IsEventGated() && withholdEventGated) || !rule.Admits(string(event), trustedSchedule)) {
 			continue
 		}
 		if model.IsCapabilityRef(c) && !model.IsGrainCIGrant(c) && !model.IsRepoAccessGrant(c) {
@@ -281,10 +284,26 @@ func (g *CiGrantReservations) mintCIPass(ctx context.Context, req ci.SandboxRequ
 	if g.Servers != nil {
 		servers = g.Servers()
 	}
-	if servers == nil {
-		return nil, time.Time{}, &protocol.RefusedError{Reason: "this deployment attaches no capability servers, so it cannot grant a capability reference"}
+	// In-process servers -- core's own and every server a build
+	// contributes methods to through capability.Register, the release
+	// server's image-signing, registry-push and package-publish among
+	// them -- are not in the attached registry, which tracks mcp_servers
+	// only. grainserver.Lookup serves them first and falls back to the
+	// registry for the rest, as the agent task's half does
+	// (orchestrator.mintCapabilityPass); without it every in-process
+	// reference a job held was refused as "not configured in mcpServers"
+	// (docs/test-runs/2026-11-04-capabilities.md, F4).
+	var base protocol.Lookup
+	if servers != nil {
+		base = servers.Lookup
+	} else {
+		for _, ref := range refs {
+			if !grainserver.IsInProcessGrant(ref.Capability) {
+				return nil, time.Time{}, &protocol.RefusedError{Reason: "this deployment attaches no capability servers, so it cannot grant a capability reference"}
+			}
+		}
 	}
-	lookup := servers.Lookup
+	lookup := grainserver.Lookup(base)
 	grants, err := model.CapabilityGrants(refs, lookup)
 	if err != nil {
 		return nil, time.Time{}, &protocol.TransientError{Grant: "capabilities", Err: err}
@@ -306,6 +325,24 @@ func (g *CiGrantReservations) mintCIPass(ctx context.Context, req ci.SandboxRequ
 		}
 	}
 	configured, _ = intree.EnsureBuiltins(configured)
+	normalizedCaps := make([]string, 0, len(grants))
+	for _, grant := range grants {
+		normalizedCaps = append(normalizedCaps, model.RecordedCapabilityGrant(grant))
+	}
+	normalizedReq := req
+	if normalizedReq.Repo == "" && repo.Owner != "" {
+		normalizedReq.Repo = repo.String()
+	}
+	normalizedReq.Capabilities = normalizedCaps
+	if err := ciPolicyRefusal(g.Policy, normalizedReq, g.Log); err != nil {
+		return nil, time.Time{}, err
+	}
+	if err := CheckCIJobCatalogue(policy.Catalogue, normalizedReq); err != nil {
+		if g.Log != nil {
+			g.Log("grain ci: %s: %s job %s refused by settings/capabilities.yml: %v", normalizedReq.Repo, req.Event, req.Name, err)
+		}
+		return nil, time.Time{}, fmt.Errorf("the capability catalogue refuses this CI job: %w", err)
+	}
 	subject := model.CapabilitySubject{Repo: &repo, Kind: model.CapabilityRunCI, Event: string(req.Event), Untrusted: req.Untrusted,
 		TrustedSchedule: req.TrustedSchedule}
 	for _, grant := range grants {

@@ -1,0 +1,80 @@
+################ alice@alpha.test via http://127.0.0.1:4251
+  list                       conn-alice               connected  running    offline   listed=true  owner=alice@alpha.test         https://conn-alice.grain-user.test|
+  list -all                  grain: registry API 403 (forbidden): only admins may list all entries|
+  directory                  Bob WS (bob-ws)                    offline   other         owner=bob@beta.test          https://bob-ws.grain-user.test|conn-alice                         offline   other         owner=alice@alpha.test       https://conn-
+  directory -repo alpha/app  conn-alice                         offline   other         owner=alice@alpha.test       https://conn-alice.grain-user.test|
+  directory -repo beta/svc   Bob WS (bob-ws)                    offline   other         owner=bob@beta.test          https://bob-ws.grain-user.test|
+  route alpha/app            Primary: conn-alice (offline, https://conn-alice.grain-user.test, prefix="")|  conn-alice               role=primary   status=offline  prefix=/                  source=declared https://conn-alice.grain-user.test|
+  route beta/svc             Primary: bob-ws (offline, https://bob-ws.grain-user.test, prefix="")|  bob-ws                   role=primary   status=offline  prefix=/                  source=declared https://bob-ws.grain-user.test|
+  show conn-alice            Name:        conn-alice|URL:         https://conn-alice.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=offline, listed=true)|Owner:       alice@alpha.test|Version:     v0.0.0-202611
+  show bob-ws                Name:        bob-ws|URL:         https://bob-ws.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=offline, listed=true)|Display:     Bob WS|Purpose:     beta tenant|Owner:       bob@be
+################ alice@alpha.test via http://127.0.0.1:4261
+  list                       conn-alice               connected  running    offline   listed=true  owner=alice@alpha.test         https://conn-alice.grain-user.test|
+  list -all                  grain: registry API 403 (forbidden): only admins may list all entries|
+  directory                  Bob WS (bob-ws)                    offline   other         owner=bob@beta.test          https://bob-ws.grain-user.test|conn-alice                         offline   other         owner=alice@alpha.test       https://conn-
+  directory -repo alpha/app  conn-alice                         offline   other         owner=alice@alpha.test       https://conn-alice.grain-user.test|
+  directory -repo beta/svc   Bob WS (bob-ws)                    offline   other         owner=bob@beta.test          https://bob-ws.grain-user.test|
+  route alpha/app            Primary: conn-alice (offline, https://conn-alice.grain-user.test, prefix="")|  conn-alice               role=primary   status=offline  prefix=/                  source=declared https://conn-alice.grain-user.test|
+  route beta/svc             Primary: bob-ws (offline, https://bob-ws.grain-user.test, prefix="")|  bob-ws                   role=primary   status=offline  prefix=/                  source=declared https://bob-ws.grain-user.test|
+  show conn-alice            Name:        conn-alice|URL:         https://conn-alice.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=offline, listed=true)|Owner:       alice@alpha.test|Version:     v0.0.0-202611
+  show bob-ws                Name:        bob-ws|URL:         https://bob-ws.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=offline, listed=true)|Display:     Bob WS|Purpose:     beta tenant|Owner:       bob@be
+################ carol@alpha.test via http://127.0.0.1:4251
+  list                       no registry entries found|
+  list -all                  grain: registry API 403 (forbidden): only admins may list all entries|
+  directory                  Bob WS (bob-ws)                    offline   other         owner=bob@beta.test          https://bob-ws.grain-user.test|conn-alice                         offline   other         owner=alice@alpha.test       https://conn-
+  directory -repo alpha/app  conn-alice                         offline   other         owner=alice@alpha.test       https://conn-alice.grain-user.test|
+  directory -repo beta/svc   Bob WS (bob-ws)                    offline   other         owner=bob@beta.test          https://bob-ws.grain-user.test|
+  route alpha/app            Primary: conn-alice (offline, https://conn-alice.grain-user.test, prefix="")|  conn-alice               role=primary   status=offline  prefix=/                  source=declared https://conn-alice.grain-user.test|
+  route beta/svc             Primary: bob-ws (offline, https://bob-ws.grain-user.test, prefix="")|  bob-ws                   role=primary   status=offline  prefix=/                  source=declared https://bob-ws.grain-user.test|
+  show conn-alice            Name:        conn-alice|URL:         https://conn-alice.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=offline, listed=true)|Owner:       alice@alpha.test|Version:     v0.0.0-202611
+  show bob-ws                Name:        bob-ws|URL:         https://bob-ws.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=offline, listed=true)|Display:     Bob WS|Purpose:     beta tenant|Owner:       bob@be
+################ carol@alpha.test via http://127.0.0.1:4261
+  list                       no registry entries found|
+  list -all                  grain: registry API 403 (forbidden): only admins may list all entries|
+  directory                  Bob WS (bob-ws)                    offline   other         owner=bob@beta.test          https://bob-ws.grain-user.test|conn-alice                         offline   other         owner=alice@alpha.test       https://conn-
+  directory -repo alpha/app  conn-alice                         offline   other         owner=alice@alpha.test       https://conn-alice.grain-user.test|
+  directory -repo beta/svc   Bob WS (bob-ws)                    offline   other         owner=bob@beta.test          https://bob-ws.grain-user.test|
+  route alpha/app            Primary: conn-alice (offline, https://conn-alice.grain-user.test, prefix="")|  conn-alice               role=primary   status=offline  prefix=/                  source=declared https://conn-alice.grain-user.test|
+  route beta/svc             Primary: bob-ws (offline, https://bob-ws.grain-user.test, prefix="")|  bob-ws                   role=primary   status=offline  prefix=/                  source=declared https://bob-ws.grain-user.test|
+  show conn-alice            Name:        conn-alice|URL:         https://conn-alice.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=offline, listed=true)|Owner:       alice@alpha.test|Version:     v0.0.0-202611
+  show bob-ws                Name:        bob-ws|URL:         https://bob-ws.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=offline, listed=true)|Display:     Bob WS|Purpose:     beta tenant|Owner:       bob@be
+################ bob@beta.test via http://127.0.0.1:4251
+  list                       bob-ws                   connected  running    offline   listed=true  owner=bob@beta.test            https://bob-ws.grain-user.test|
+  list -all                  grain: registry API 403 (forbidden): only admins may list all entries|
+  directory                  Bob WS (bob-ws)                    offline   other         owner=bob@beta.test          https://bob-ws.grain-user.test|conn-alice                         offline   other         owner=alice@alpha.test       https://conn-
+  directory -repo alpha/app  conn-alice                         offline   other         owner=alice@alpha.test       https://conn-alice.grain-user.test|
+  directory -repo beta/svc   Bob WS (bob-ws)                    offline   other         owner=bob@beta.test          https://bob-ws.grain-user.test|
+  route alpha/app            Primary: conn-alice (offline, https://conn-alice.grain-user.test, prefix="")|  conn-alice               role=primary   status=offline  prefix=/                  source=declared https://conn-alice.grain-user.test|
+  route beta/svc             Primary: bob-ws (offline, https://bob-ws.grain-user.test, prefix="")|  bob-ws                   role=primary   status=offline  prefix=/                  source=declared https://bob-ws.grain-user.test|
+  show conn-alice            Name:        conn-alice|URL:         https://conn-alice.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=offline, listed=true)|Owner:       alice@alpha.test|Version:     v0.0.0-202611
+  show bob-ws                Name:        bob-ws|URL:         https://bob-ws.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=offline, listed=true)|Display:     Bob WS|Purpose:     beta tenant|Owner:       bob@be
+################ bob@beta.test via http://127.0.0.1:4261
+  list                       bob-ws                   connected  running    offline   listed=true  owner=bob@beta.test            https://bob-ws.grain-user.test|
+  list -all                  grain: registry API 403 (forbidden): only admins may list all entries|
+  directory                  Bob WS (bob-ws)                    offline   other         owner=bob@beta.test          https://bob-ws.grain-user.test|conn-alice                         offline   other         owner=alice@alpha.test       https://conn-
+  directory -repo alpha/app  conn-alice                         offline   other         owner=alice@alpha.test       https://conn-alice.grain-user.test|
+  directory -repo beta/svc   Bob WS (bob-ws)                    offline   other         owner=bob@beta.test          https://bob-ws.grain-user.test|
+  route alpha/app            Primary: conn-alice (offline, https://conn-alice.grain-user.test, prefix="")|  conn-alice               role=primary   status=offline  prefix=/                  source=declared https://conn-alice.grain-user.test|
+  route beta/svc             Primary: bob-ws (offline, https://bob-ws.grain-user.test, prefix="")|  bob-ws                   role=primary   status=offline  prefix=/                  source=declared https://bob-ws.grain-user.test|
+  show conn-alice            Name:        conn-alice|URL:         https://conn-alice.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=offline, listed=true)|Owner:       alice@alpha.test|Version:     v0.0.0-202611
+  show bob-ws                Name:        bob-ws|URL:         https://bob-ws.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=offline, listed=true)|Display:     Bob WS|Purpose:     beta tenant|Owner:       bob@be
+################ root@alpha.test via http://127.0.0.1:4251
+  list                       no registry entries found|
+  list -all                  bob-ws                   connected  running    offline   listed=true  owner=bob@beta.test            https://bob-ws.grain-user.test|conn-alice               connected  running    offline   listed=true  owner=alice@alpha.
+  directory                  Bob WS (bob-ws)                    offline   other         owner=bob@beta.test          https://bob-ws.grain-user.test|conn-alice                         offline   other         owner=alice@alpha.test       https://conn-
+  directory -repo alpha/app  conn-alice                         offline   other         owner=alice@alpha.test       https://conn-alice.grain-user.test|
+  directory -repo beta/svc   Bob WS (bob-ws)                    offline   other         owner=bob@beta.test          https://bob-ws.grain-user.test|
+  route alpha/app            Primary: conn-alice (offline, https://conn-alice.grain-user.test, prefix="")|  conn-alice               role=primary   status=offline  prefix=/                  source=declared https://conn-alice.grain-user.test|
+  route beta/svc             Primary: bob-ws (offline, https://bob-ws.grain-user.test, prefix="")|  bob-ws                   role=primary   status=offline  prefix=/                  source=declared https://bob-ws.grain-user.test|
+  show conn-alice            Name:        conn-alice|URL:         https://conn-alice.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=offline, listed=true)|Owner:       alice@alpha.test|Version:     v0.0.0-202611
+  show bob-ws                Name:        bob-ws|URL:         https://bob-ws.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=offline, listed=true)|Display:     Bob WS|Purpose:     beta tenant|Owner:       bob@be
+################ root@alpha.test via http://127.0.0.1:4261
+  list                       no registry entries found|
+  list -all                  bob-ws                   connected  running    offline   listed=true  owner=bob@beta.test            https://bob-ws.grain-user.test|conn-alice               connected  running    offline   listed=true  owner=alice@alpha.
+  directory                  Bob WS (bob-ws)                    offline   other         owner=bob@beta.test          https://bob-ws.grain-user.test|conn-alice                         offline   other         owner=alice@alpha.test       https://conn-
+  directory -repo alpha/app  conn-alice                         offline   other         owner=alice@alpha.test       https://conn-alice.grain-user.test|
+  directory -repo beta/svc   Bob WS (bob-ws)                    offline   other         owner=bob@beta.test          https://bob-ws.grain-user.test|
+  route alpha/app            Primary: conn-alice (offline, https://conn-alice.grain-user.test, prefix="")|  conn-alice               role=primary   status=offline  prefix=/                  source=declared https://conn-alice.grain-user.test|
+  route beta/svc             Primary: bob-ws (offline, https://bob-ws.grain-user.test, prefix="")|  bob-ws                   role=primary   status=offline  prefix=/                  source=declared https://bob-ws.grain-user.test|
+  show conn-alice            Name:        conn-alice|URL:         https://conn-alice.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=offline, listed=true)|Owner:       alice@alpha.test|Version:     v0.0.0-202611
+  show bob-ws                Name:        bob-ws|URL:         https://bob-ws.grain-user.test|Kind:        connected (host_kind=other)|State:       running (status=offline, listed=true)|Display:     Bob WS|Purpose:     beta tenant|Owner:       bob@be

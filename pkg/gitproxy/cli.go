@@ -66,6 +66,7 @@ var cliRouteTools = map[string]string{
 	"pr/open":           "open_pull_request",
 	"pr/reply":          "reply_to_pull_request_comment",
 	"pr/resolve":        "resolve_review_thread",
+	"pr/threads":        "list_review_threads",
 	"pr/review-comment": "add_review_comment",
 	"revert-info":       "revert_task",
 	"status":            "update_status",
@@ -183,7 +184,7 @@ func (p *GitProxy) serveCLIRoute(w http.ResponseWriter, r *http.Request, scope n
 		p.serveBranchStatus(w, scope, "", base, "the base branch")
 	case route == "issues" || strings.HasPrefix(route, "issues/"):
 		if !scope.MayReadIssues {
-			cliError(w, namespace.RefuseCapability("grain issue", "read-issues"))
+			cliError(w, namespace.RefuseCapability("grain issue", model.GitHubReadIssuesRef))
 			return
 		}
 		p.serveIssues(w, r, scope, strings.TrimPrefix(strings.TrimPrefix(route, "issues"), "/"))

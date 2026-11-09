@@ -133,6 +133,17 @@ export default function Overlay({
   // Cancel button calls onClose directly and is not asked: that is
   // already somebody saying "throw it away".
   const handleClose = (event, reason) => {
+    // An Escape from inside an open popover or popper (GrantsPicker's
+    // "Add grant…" menu, a Select's menu, an Autocomplete list) belongs to
+    // that popup, not the pane or dialog behind it.
+    if (
+      reason === "escapeKeyDown" &&
+      ((event?.target instanceof Element &&
+        event.target.closest(".MuiPopover-root, .MuiPopper-root")) ||
+        document.querySelector("[data-open-popover]"))
+    ) {
+      return;
+    }
     const blurred = reason === "escapeKeyDown" ? blurFocusedField() : null;
     if (isDirty?.() && !window.confirm(DISCARD_PROMPT)) {
       // Staying: put focus back in the field Escape blurred. Left on
@@ -153,12 +164,42 @@ export default function Overlay({
     if (!guarded) return undefined;
     return guardLeaving(() => Boolean(latestIsDirty.current?.()));
   }, [guarded]);
+  // When a button inside the dialog disables or unmounts itself (such as
+  // "Continue" on New connection), the browser drops activeElement to
+  // <body>. MUI's Dialog listens for Escape on its own root rather than
+  // document, so an Escape fired on <body> never reaches onClose. Catch it
+  // here whenever this Overlay is the topmost open modal and nothing open
+  // above it (a Popper or custom popover) should take the key instead.
+  const paperRef = useRef(null);
+  const latestHandleClose = useRef(handleClose);
+  latestHandleClose.current = handleClose;
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      const modal = paperRef.current?.closest(".MuiModal-root");
+      if (!modal) return;
+      if (event.target instanceof Node && modal.contains(event.target)) {
+        return;
+      }
+      const openModals = document.querySelectorAll(
+        '.MuiModal-root:not(.MuiModal-hidden):not([aria-hidden="true"])',
+      );
+      if (openModals[openModals.length - 1] !== modal) return;
+      if (document.querySelector(".MuiPopper-root, [data-open-popover]")) {
+        return;
+      }
+      event.preventDefault();
+      latestHandleClose.current(event, "escapeKeyDown");
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
   if (pane) {
     return (
       <Dialog
         open
         onClose={handleClose}
-        PaperProps={{ "aria-label": label }}
+        PaperProps={{ ref: paperRef, "aria-label": label }}
         transitionDuration={transitionDuration}
         fullScreen
         scroll="paper"
@@ -234,7 +275,7 @@ export default function Overlay({
     <Dialog
       open
       onClose={handleClose}
-      PaperProps={{ "aria-label": label }}
+      PaperProps={{ ref: paperRef, "aria-label": label }}
       transitionDuration={transitionDuration}
       maxWidth={wide ? "md" : "sm"}
       fullWidth

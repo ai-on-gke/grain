@@ -115,7 +115,7 @@ type CreateTaskRequest struct {
 	DependsOn       []string      `json:"dependsOn,omitempty"`
 	Priority        int           `json:"priority,omitempty"`
 	ExternalRef     string        `json:"externalRef,omitempty"`
-	Designs         []ContextRef  `json:"designs,omitempty"`
+	Designs         DesignRefs    `json:"designs,omitempty"`
 	Context         []ContextRef  `json:"context,omitempty"`
 	HoldForApproval bool          `json:"holdForApproval,omitempty"`
 	FiledVia        string        `json:"-"`
@@ -126,13 +126,14 @@ type Task struct {
 	ID              string           `json:"id"`
 	Title           string           `json:"title"`
 	Body            string           `json:"body,omitempty"`
+	Description     string           `json:"description,omitempty"`
 	State           string           `json:"state"`
 	Repo            string           `json:"repo,omitempty"`
 	Branch          string           `json:"branch,omitempty"`
 	PRURL           string           `json:"prUrl,omitempty"`
 	Priority        int              `json:"priority,omitempty"`
 	ExternalRef     string           `json:"externalRef,omitempty"`
-	Designs         []ContextRef     `json:"designs,omitempty"`
+	Designs         DesignRefs       `json:"designs,omitempty"`
 	Context         []ContextRef     `json:"context,omitempty"`
 	ContextManifest *ContextManifest `json:"contextManifest,omitempty"`
 	Reads           []string         `json:"reads,omitempty"`
@@ -152,7 +153,7 @@ type TaskPatch struct {
 	State       *string       `json:"state,omitempty"`
 	Priority    *int          `json:"priority,omitempty"`
 	ExternalRef *string       `json:"externalRef,omitempty"`
-	Designs     *[]ContextRef `json:"designs,omitempty"`
+	Designs     *DesignRefs   `json:"designs,omitempty"`
 	Context     *[]ContextRef `json:"context,omitempty"`
 }
 
@@ -201,6 +202,14 @@ type RefSummary struct {
 	ExternalRef string           `json:"externalRef"`
 	Counts      RefRollupCounts  `json:"counts"`
 	Tasks       []RefTaskSummary `json:"tasks"`
+	// Total, ByState, PullRequests and OpenQuestions are the fields grain's
+	// GET /api/refs/{ref}/summary actually answers with (model.RefSummary);
+	// UnmarshalJSON derives Counts from them when the daemon sends no
+	// "counts" object (see wire.go).
+	Total         int               `json:"total,omitempty"`
+	ByState       map[string]int    `json:"byState,omitempty"`
+	PullRequests  *RefPullRequests  `json:"pullRequests,omitempty"`
+	OpenQuestions []RefOpenQuestion `json:"openQuestions,omitempty"`
 }
 
 // IntegrationEvent is a structured lifecycle event emitted by GET /api/events.

@@ -115,6 +115,10 @@ permissions:
 env:
   GOFLAGS: -mod=readonly
   RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO }}
+  # A promoted commit whose release run a newer merge superseded has no
+  # sha- images: release-images.sh dispatches release.yml with
+  # commit=<sha> to build, test and publish it, and waits (grain/task-3334).
+  RELEASE_ON_DEMAND_BUILD: dispatch
 
 jobs:
   approve:
@@ -284,8 +288,11 @@ jobs:
     needs: [approve]
     if: inputs.decision == 'approve' || inputs.decision == ''
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Room for an on-demand release build (release.yml's 120 minutes).
+    timeout-minutes: 180
     permissions:
+      # actions: write dispatches release.yml for an on-demand build.
+      actions: write
       contents: read
       packages: write
       id-token: write
@@ -413,6 +420,8 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Publish the last promoted release as latest
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [ "${DRY_RUN}" = "true" ]; then
@@ -420,6 +429,36 @@ jobs:
           else
             bash ./scripts/release-images.sh promote
           fi
+
+  # The approved release as GitHub release assets (scripts/release-assets.sh,
+  # release-asset contract v2, docs/release-assets.md): vX.Y.0 gets copies of
+  # its commit's sha-<12 hex> tarballs and images.json, and GitHub's
+  # latest-release marker when the git tag latest names it. Its own job, so
+  # `contents: write` sits beside nothing but release-assets.sh.
+  assets:
+    name: publish the promoted release's assets
+    needs: [approve, promote]
+    if: inputs.decision == 'approve' || inputs.decision == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    concurrency:
+      group: ${{ github.workflow }}-assets-${{ inputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Publish the promoted release's assets
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          # Off main, dry_run is enforced, as in every job here.
+          DRY_RUN: ${{ inputs.dry_run || github.ref != 'refs/heads/main' }}
+          RELEASE_ASSETS_DIR: ${{ runner.temp }}/release-assets
+        run: bash ./scripts/release-assets.sh promote
 
   reject:
     name: reject the pending release
@@ -518,6 +557,15 @@ jobs:
           GRAIN_API_TOKEN: ${{ secrets.GRAIN_API_TOKEN }}
           RELEASE_IMAGES: ${{ vars.RELEASE_IMAGES }}
         run: bash ./scripts/release-from-trunk.sh reject "$GRAIN_CI_RELEASE_VERSION"
+
+      - name: Mark the rejected release in release assets
+        # The vX.Y.Z-rejected pointer release (docs/release-assets.md): a
+        # record, so a failure here leaves the rejection itself standing.
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run || github.ref != 'refs/heads/main' }}
+        run: bash ./scripts/release-assets.sh discard-pending "$GRAIN_CI_RELEASE_VERSION"
 
   rollback:
     name: roll a promoted release back
@@ -628,3 +676,16 @@ jobs:
           # where a newline in it could set a variable for later steps.
           RELEASE_ROLLBACK_REASON: ${{ inputs.reason }}
         run: bash ./scripts/release-from-trunk.sh rollback --bad "$GRAIN_CI_RELEASE_VERSION"
+
+      - name: Retract the release in release assets and re-point latest
+        # The vX.Y.Z-retracted pointer release, then GitHub's latest-release
+        # marker moved onto the release the git tag latest now names.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run || github.ref != 'refs/heads/main' }}
+          RELEASE_ASSETS_DIR: ${{ runner.temp }}/release-assets
+        run: |
+          set -euo pipefail
+          bash ./scripts/release-assets.sh retract "$GRAIN_CI_RELEASE_VERSION" ||
+            echo "::warning::could not publish the ${GRAIN_CI_RELEASE_VERSION}-retracted release-asset marker"
+          bash ./scripts/release-assets.sh promote

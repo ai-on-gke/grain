@@ -647,9 +647,7 @@ for ((i=0; i<${#args[@]}; i++)); do
 done
 exit 0
 `
-	if err := os.WriteFile(kubectlPath, []byte(kubectlScript), 0o755); err != nil {
-		t.Fatalf("writing fake kubectl: %v", err)
-	}
+	writeExecutableStub(t, kubectlPath, kubectlScript)
 
 	workflowYAML := `name: tests
 on: push
@@ -1014,9 +1012,7 @@ func newTrustRootSandboxes(t *testing.T, sandboxRoot string, failCAUpdate *atomi
 	binDir := t.TempDir()
 	writeExec := func(name, body string) {
 		p := filepath.Join(binDir, name)
-		if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
-			t.Fatalf("writing %s: %v", p, err)
-		}
+		writeExecutableStub(t, p, body)
 	}
 	writeExec("id", "#!/bin/sh\nif [ \"${1:-}\" = \"-u\" ]; then echo 0; exit 0; fi\nexec /usr/bin/id \"$@\"\n")
 	writeExec("update-ca-certificates", "#!/bin/sh\nset -eu\nif [ \"${GRAIN_TEST_FAIL_CA_UPDATE:-}\" = \"1\" ]; then echo \"simulated update-ca-certificates failure\" >&2; exit 1; fi\nmkdir -p \"$GRAIN_TEST_ROOTFS/etc/ssl/certs\"\ncat \"$GRAIN_TEST_ROOTFS\"/usr/local/share/ca-certificates/*.crt > \"$GRAIN_TEST_ROOTFS/etc/ssl/certs/ca-certificates.crt\"\n")

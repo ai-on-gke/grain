@@ -156,7 +156,8 @@ func (c *Client) checkAccessItem(ctx context.Context, task model.Task, it model.
 		if ciOnlyCapability(view.Grant) {
 			return fail(fmt.Errorf("%s", model.CIOnlyRefusal(view.Grant)))
 		}
-		if cat, err := c.capabilityCatalogue(ctx); err == nil && cat != nil {
+		// A nil catalogue still applies the built-in director floor.
+		if cat, err := c.capabilityCatalogue(ctx); err == nil {
 			verdict, err := cat.ValidateGrants(c.taskGrantContext(ctx, task, []string{view.Grant}))
 			if err != nil {
 				return fail(err)
@@ -255,6 +256,9 @@ func (c *Client) pendingAccessFor(ctx context.Context, task model.Task, obs *mod
 // pendingAccessToDecide is the request task id is parked on, refusing a
 // caller that is not a person.
 func (c *Client) pendingAccessToDecide(ctx context.Context, id, verb string) (*model.Task, *model.Observation, error) {
+	if isDelegatedRequest(ctx) {
+		return nil, nil, forbiddenCodeErrorf("requires_person", "only a person acting directly may %s an access request", verb)
+	}
 	if c.requestActor(ctx).Actor.Kind != model.PrincipalHuman {
 		return nil, nil, forbiddenErrorf("only a person may %s an access request", verb)
 	}

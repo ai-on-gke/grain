@@ -1,0 +1,183 @@
+[
+  {
+    "id": "ui3.0",
+    "desc": "director now lacks the shipped default https://grain.dev/capabilities/grain#source={}",
+    "ok": true,
+    "got": [
+      "https://grain.dev/capabilities/grain#source={}"
+    ]
+  },
+  {
+    "id": "ui3.1",
+    "desc": "tabB shows the Adopt shipped defaults banner",
+    "ok": true,
+    "got": null
+  },
+  {
+    "id": "ui3.2",
+    "desc": "tabA added api:tasks:read",
+    "ok": true,
+    "got": {
+      "puts": [
+        200
+      ]
+    }
+  },
+  {
+    "id": "ui3.3",
+    "desc": "tabB's Adopt sends adoptShippedDefaults:true and no list",
+    "ok": true,
+    "got": {
+      "adoptShippedDefaults": true
+    }
+  },
+  {
+    "id": "ui3.4",
+    "desc": "after tabB's Adopt: https://grain.dev/capabilities/grain#source={} back AND tabA's api:tasks:read kept",
+    "ok": true,
+    "got": [
+      "api:capabilities:detach",
+      "api:capabilities:read",
+      "api:ci-read",
+      "api:deployment:read",
+      "api:dispatch:read",
+      "api:releases:read",
+      "api:repos:read",
+      "api:schedules:read",
+      "api:self-debug",
+      "api:settings:read",
+      "api:suites:read",
+      "api:task-admin",
+      "api:tasks:read",
+      "api:templates:read",
+      "https://grain.dev/capabilities/config-map#config-map={\"config_maps\":[\"bootstrap\"]}",
+      "https://grain.dev/capabilities/grain#health={}",
+      "https://grain.dev/capabilities/grain#journal={}",
+      "https://grain.dev/capabilities/grain#source={}"
+    ]
+  },
+  {
+    "id": "ui3.5",
+    "desc": "tabA (its copy predating tabB's Adopt) added api:tasks:write",
+    "ok": true,
+    "got": {
+      "puts": [
+        409,
+        200
+      ]
+    }
+  },
+  {
+    "id": "ui3.6",
+    "desc": "a stale save is refused 409 and retried once automatically (200), never failing outright",
+    "ok": true,
+    "got": {
+      "tabA": [
+        409,
+        200
+      ],
+      "tabB": [
+        200
+      ]
+    }
+  },
+  {
+    "id": "ui3.7",
+    "desc": "after tabB's retry: api:tasks:from-template added, tabA's api:tasks:read and api:tasks:write kept, shipped defaults kept",
+    "ok": true,
+    "got": [
+      "api:capabilities:detach",
+      "api:capabilities:read",
+      "api:ci-read",
+      "api:deployment:read",
+      "api:dispatch:read",
+      "api:releases:read",
+      "api:repos:read",
+      "api:schedules:read",
+      "api:self-debug",
+      "api:settings:read",
+      "api:suites:read",
+      "api:task-admin",
+      "api:tasks:from-template",
+      "api:tasks:read",
+      "api:tasks:write",
+      "api:templates:read",
+      "https://grain.dev/capabilities/config-map#config-map={\"config_maps\":[\"bootstrap\"]}",
+      "https://grain.dev/capabilities/grain#health={}",
+      "https://grain.dev/capabilities/grain#journal={}",
+      "https://grain.dev/capabilities/grain#source={}"
+    ]
+  },
+  {
+    "id": "ui3.8",
+    "desc": "double conflict: both of tabB's PUTs refused 409, no third try",
+    "ok": true,
+    "got": {
+      "puts": [
+        409,
+        409
+      ],
+      "sneaked": [
+        200,
+        200
+      ]
+    }
+  },
+  {
+    "id": "ui3.9",
+    "desc": "double conflict: the refusal is shown in tabB",
+    "ok": true,
+    "got": "this console session was changed by somebody else after you opened it (console session director); reload it to see what they saved, then make your change again"
+  },
+  {
+    "id": "ui3.10",
+    "desc": "double conflict: tabB's api:merge:write not saved, nothing tabA or the REST writer saved is lost",
+    "ok": true,
+    "got": {
+      "before": [
+        "api:capabilities:detach",
+        "api:capabilities:read",
+        "api:ci-read",
+        "api:deployment:read",
+        "api:dispatch:read",
+        "api:releases:read",
+        "api:repos:read",
+        "api:schedules:read",
+        "api:self-debug",
+        "api:settings:read",
+        "api:suites:read",
+        "api:task-admin",
+        "api:tasks:from-template",
+        "api:tasks:read",
+        "api:tasks:write",
+        "api:templates:read",
+        "https://grain.dev/capabilities/config-map#config-map={\"config_maps\":[\"bootstrap\"]}",
+        "https://grain.dev/capabilities/grain#health={}",
+        "https://grain.dev/capabilities/grain#journal={}",
+        "https://grain.dev/capabilities/grain#source={}"
+      ],
+      "after": [
+        "api:capabilities:detach",
+        "api:capabilities:read",
+        "api:ci-read",
+        "api:deployment:read",
+        "api:dispatch:read",
+        "api:releases:read",
+        "api:repos:read",
+        "api:schedules:read",
+        "api:self-debug",
+        "api:settings:read",
+        "api:suites:read",
+        "api:task-admin",
+        "api:tasks:from-template",
+        "api:tasks:read",
+        "api:tasks:write",
+        "api:templates:read",
+        "https://grain.dev/capabilities/config-map#config-map={\"config_maps\":[\"bootstrap\"]}",
+        "https://grain.dev/capabilities/grain#health={}",
+        "https://grain.dev/capabilities/grain#journal={}",
+        "https://grain.dev/capabilities/grain#source={}"
+      ]
+    }
+  }
+]

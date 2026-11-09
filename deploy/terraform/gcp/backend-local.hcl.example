@@ -4,7 +4,7 @@
 # where a hand-created VM's own data disk already exists and Terraform
 # is applied from that VM itself, targeted at a subset of this module's
 # resources -- bwsalmon/agents#620's bootstrap playbooks
-# (pkg/capability/bootstrap/playbooks/) use exactly this, never the
+# (pkg/playbooks/) use exactly this, never the
 # GCS backend, since state is meant to live alongside the rest of this
 # deployment's own state on the data volume rather than in a bucket a
 # hand-created VM may have no standing credential to reach.

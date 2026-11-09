@@ -63,9 +63,7 @@ cat <<'EOF'
              "conditions": [{"type": "Ready", "status": "True"}]}}]}
 EOF
 `
-	if err := os.WriteFile(kubectl, []byte(script), 0o755); err != nil {
-		t.Fatalf("writing fake kubectl: %v", err)
-	}
+	writeExecutableStub(t, kubectl, script)
 	sb := orchestrator.NewK8sGranuleSandboxes(orchestrator.K8sGranuleConfig{
 		Image:   "example/granule",
 		Kubectl: kubectl,
@@ -126,9 +124,7 @@ if [ -e '` + failing + `' ]; then
 fi
 cat '` + nodes + `'
 `
-	if err := os.WriteFile(kubectl, []byte(script), 0o755); err != nil {
-		t.Fatalf("writing fake kubectl: %v", err)
-	}
+	writeExecutableStub(t, kubectl, script)
 	setNodes = func(n int) {
 		t.Helper()
 		items := make([]string, n)

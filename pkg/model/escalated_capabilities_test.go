@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -57,6 +58,59 @@ func TestCapabilityEscalationNoteNamesEachCapability(t *testing.T) {
 	}
 }
 
+// grain/task-3411: a person-granted set (a gcp permission set over an
+// existing service account, x-grain-person-granted in its server's
+// schema) is held for a person even when the proposer holds the very same
+// grant -- and the note says so, rather than that the proposer does not
+// hold it. Walked live in docs/test-runs/2026-11-08-gcp-token-mode-containers.md,
+// where the old note told the person deciding that task 9 "does not hold
+// itself" the set it was running with.
+func TestPersonGrantedEscalationIsNotSaidToBeUnheld(t *testing.T) {
+	const id = "https://caps.example/walk-gcp"
+	protocol.NotePersonGrantedArgs(id, map[string]*protocol.MethodInfo{"gcp-key": {ArgsSchema: map[string]any{
+		"properties": map[string]any{"permission_set": map[string]any{
+			"enum": []any{"sandbox-agent", "org-deploy"}, "default": "sandbox-agent",
+			protocol.PersonGrantedArgKey: []any{"org-deploy"},
+		}},
+	}}})
+	t.Cleanup(func() { protocol.NotePersonGrantedArgs(id, map[string]*protocol.MethodInfo{"gcp-key": {}}) })
+	held := id + `#gcp-key={"permission_set":"org-deploy","primary":true}`
+	covered := id + `#gcp-key={"permission_set":"sandbox-agent","primary":true}`
+	parent := model.Task{ID: "9", Grants: []model.Grant{
+		{Capability: held, Via: model.GrantByLabel},
+		{Capability: covered, Via: model.GrantByLabel},
+	}}
+	child := model.Task{Grants: []model.Grant{
+		{Capability: held, Via: model.GrantByLabel},
+		{Capability: covered, Via: model.GrantByLabel},
+		{Capability: "self-debug", Via: model.GrantByLabel},
+	}}
+	escalated := model.EscalatedCapabilities(child, parent)
+	if !slices.Contains(escalated, held) || slices.Contains(escalated, covered) {
+		t.Fatalf("EscalatedCapabilities = %v, want the person-granted set (held by its parent) and not the covered one", escalated)
+	}
+	if !model.IsPersonOnlyGrant(held) || model.IsPersonOnlyGrant(covered) {
+		t.Errorf("IsPersonOnlyGrant: want %s and not %s", held, covered)
+	}
+	note := model.ProposalEscalationNote("9", child, escalated)
+	personal := "this proposal asked for `" + held + "`, which only a person may grant"
+	if !strings.Contains(note, personal) || !strings.Contains(note, "whether or not task 9, which proposed it, holds it") {
+		t.Errorf("note = %q, want the held person-granted set explained as a person's to grant", note)
+	}
+	if strings.Contains(note, held+"`, which task 9, which proposed it, does not hold itself") ||
+		strings.Contains(note, "`self-debug`, `"+held) {
+		t.Errorf("note = %q, says task 9 does not hold a set it holds", note)
+	}
+	if !strings.Contains(note, "this proposal asked for `self-debug`, which task 9, which proposed it, does not hold itself") {
+		t.Errorf("note = %q, want self-debug still named as one task 9 does not hold", note)
+	}
+	refusal := model.AutoApprovalRefusal(child, parent, false, nil)
+	if !strings.Contains(refusal, "it asks for `"+held+"`, which only a person may grant, whether or not your task holds it") ||
+		!strings.Contains(refusal, "it asks for `self-debug`, which your task does not hold") {
+		t.Errorf("refusal = %q, want the person-granted set and self-debug each explained as what it is", refusal)
+	}
+}
+
 // grain/task-1983: a capability reference seeded on a proposal from this
 // deployment's defaults is still an escalation when its proposer does not
 // hold it, but it is told apart from one the proposal asked for -- and a
@@ -91,7 +145,7 @@ func TestSeededDefaultReferenceIsReportedAsADefault(t *testing.T) {
 		strings.Contains(note, "asked for `https://caps.example/host-script") {
 		t.Errorf("note = %q, want the asked reference and the seeded default each explained as what it is", note)
 	}
-	refusal := model.AutoApprovalRefusal(child, bare, true)
+	refusal := model.AutoApprovalRefusal(child, bare, true, nil)
 	if !strings.Contains(refusal, "default capability `https://caps.example/host-script") ||
 		strings.Contains(refusal, "asks for `https://caps.example/host-script") {
 		t.Errorf("refusal = %q, want the seeded reference named as a default", refusal)
@@ -101,19 +155,19 @@ func TestSeededDefaultReferenceIsReportedAsADefault(t *testing.T) {
 		ID:           model.DirectorSessionID,
 		Capabilities: []string{"self-debug", "corp-research", ref, "self-debug", ""},
 	}
-	seeded := model.Task{ID: "9", Grants: model.ConsoleSessionGrants(seededSession)}
+	seeded := model.Task{ID: "9", Admission: model.AdmissionDurable, Grants: model.ConsoleSessionGrants(seededSession)}
 	if got := model.EscalatedCapabilities(model.Task{Grants: child.Grants[:2]}, seeded); len(got) != 0 {
 		t.Errorf("EscalatedCapabilities against a session holding the defaults = %v, want none", got)
 	}
-	if refusal := model.AutoApprovalRefusal(model.Task{Grants: child.Grants[:2]}, seeded, true); refusal != "" {
+	if refusal := model.AutoApprovalRefusal(model.Task{Grants: child.Grants[:2]}, seeded, true, nil); refusal != "" {
 		t.Errorf("AutoApprovalRefusal against a session holding the defaults = %q, want none", refusal)
 	}
 	var vias []model.GrantSource
 	for _, g := range seeded.Grants {
 		vias = append(vias, g.Via)
 	}
-	want := []model.GrantSource{model.GrantByGrain, model.GrantByGrain, model.GrantByGrain, model.GrantByGrain, model.GrantByDefault}
+	want := []model.GrantSource{model.GrantByGrain, model.GrantByGrain, model.GrantByGrain, model.GrantByDefault}
 	if !slices.Equal(vias, want) {
-		t.Errorf("session grants = %+v, want durable and each configured capability once by grain, then the session defaults", seeded.Grants)
+		t.Errorf("session grants = %+v, want each configured capability once by grain, then the session defaults", seeded.Grants)
 	}
 }

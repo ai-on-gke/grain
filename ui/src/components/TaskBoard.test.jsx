@@ -1017,7 +1017,7 @@ describe("TaskBoard", () => {
         // A card only ever moves within its own column -- a task's
         // state is derived, not set -- so "Running" offers nothing.
         expect(slots().map((b) => b.getAttribute("aria-label"))).toEqual([
-          "Move here, above First, in Waiting",
+          "Move here, above task 1, “First”, in Waiting",
           "Move here, to the end of Waiting",
         ]);
         expect(
@@ -1033,7 +1033,7 @@ describe("TaskBoard", () => {
         await user.click(screen.getByRole("button", { name: "Move task 3" }));
         await user.click(
           screen.getByRole("button", {
-            name: "Move here, above Second, in Waiting",
+            name: "Move here, above task 2, “Second”, in Waiting",
           }),
         );
 
@@ -1056,6 +1056,30 @@ describe("TaskBoard", () => {
         expect(onReorder).toHaveBeenCalledWith([1], 3, null);
       });
 
+      // Two board requests both start out titled "Add a board": the
+      // slots above them used to share one name, so a screen reader
+      // offered two identical buttons leading to different places.
+      it("names the card a slot sits above by its id, not by its title alone", async () => {
+        const user = userEvent.setup();
+        const twins = [
+          { id: 5, title: "Add a board", state: "queued", capabilities: [] },
+          { id: 6, title: "Add a board", state: "queued", capabilities: [] },
+          { id: 7, title: "", state: "queued", capabilities: [] },
+          { id: 8, title: "Last", state: "queued", capabilities: [] },
+        ];
+        renderBoard({ tasks: twins, onReorder: vi.fn() });
+
+        await user.click(screen.getByRole("button", { name: "Move task 8" }));
+
+        const labels = slots().map((b) => b.getAttribute("aria-label"));
+        expect(labels).toEqual([
+          "Move here, above task 5, “Add a board”, in Waiting",
+          "Move here, above task 6, “Add a board”, in Waiting",
+          "Move here, above task 7, in Waiting",
+        ]);
+        expect(new Set(labels).size).toBe(labels.length);
+      });
+
       it("picks up the whole selection when the card is part of one", async () => {
         const onReorder = vi.fn();
         const user = userEvent.setup();
@@ -1064,7 +1088,7 @@ describe("TaskBoard", () => {
         await user.click(screen.getByRole("button", { name: "Move task 3" }));
         await user.click(
           screen.getByRole("button", {
-            name: "Move here, above Second, in Waiting",
+            name: "Move here, above task 2, “Second”, in Waiting",
           }),
         );
 
@@ -1147,5 +1171,34 @@ describe("TaskBoard", () => {
     expect(onShownChange).toHaveBeenLastCalledWith(new Set([1, 2, 3]));
     await userEvent.type(screen.getByRole("textbox"), "Answer");
     expect(onShownChange).toHaveBeenLastCalledWith(new Set([3]));
+  });
+
+  it("tells failed task reads from an empty board and keeps held cards across transient failures", async () => {
+    const onRetry = vi.fn();
+    const user = userEvent.setup();
+    renderBoard({
+      tasks: [],
+      tasksLoaded: false,
+      tasksError: "synthetic tasks 500",
+      onRetry,
+    });
+    expect(screen.queryByText("No tasks in any of these columns.")).toBeNull();
+    expect(screen.queryByText("Nothing here.")).toBeNull();
+    expect(document.querySelector(".content-header .count")).toBeNull();
+    expect(
+      screen.getByText("The tasks could not be loaded (synthetic tasks 500)."),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+
+    document.body.innerHTML = "";
+    renderBoard({
+      tasks,
+      tasksLoaded: true,
+      tasksError: "synthetic tasks 500",
+    });
+    expect(screen.queryByText(/The tasks could not be loaded/)).toBeNull();
+    expect(screen.getByText("Fix the thing")).toBeInTheDocument();
   });
 });

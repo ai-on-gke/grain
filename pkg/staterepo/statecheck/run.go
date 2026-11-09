@@ -35,6 +35,10 @@ type Options struct {
 	// the effective-scope diff APIScopeSets prints. Nil prints no diff;
 	// empty is a base that declared no sets.
 	PreviousAPIScopeSets []byte
+	// DataDir is the local daemon data directory when known, allowing
+	// deployment-specific state checks (external state repo and encrypted
+	// secrets backup repo) to refuse forbidden git_ref schedules.
+	DataDir string
 }
 
 // Run is the whole of `grain state check`: it loads dir into a database
@@ -92,6 +96,9 @@ func Run(ctx context.Context, out io.Writer, dir string, opts Options) error {
 		fmt.Fprintf(out, "  %-28s %d\n", t, report.Rows[t])
 	}
 	if err := CustomFields(ctx, db); err != nil {
+		return err
+	}
+	if err := GitRefSchedules(ctx, db, opts.DataDir); err != nil {
 		return err
 	}
 	unusable, err := UnusableCustomFieldValues(ctx, db)

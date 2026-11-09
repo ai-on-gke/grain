@@ -112,11 +112,6 @@ func main() {
 		if err := runCp(os.Args[2:]); err != nil {
 			log.Fatalf("%v", err)
 		}
-	case "forward":
-		log.SetPrefix("granule: forward: ")
-		if err := runForward(os.Args[2:]); err != nil {
-			log.Fatalf("%v", err)
-		}
 	case "forward-stdio":
 		log.SetPrefix("granule: forward-stdio: ")
 		if err := runForwardStdio(os.Args[2:]); err != nil {
@@ -725,26 +720,6 @@ func runExec(args []string) error {
 		}
 		return guestexec.Run(ctx, cfg, opts.Command, os.Stdin, os.Stdout, os.Stderr)
 	})
-}
-
-// runForward bridges a multiplexed TCP port-forwarding session between this
-// container's stdin/stdout and the guest agent over vsock.
-func runForward(args []string) error {
-	opts, err := guestexec.ParseForwardArgs(args)
-	if errors.Is(err, flag.ErrHelp) {
-		fmt.Println(guestexec.ForwardUsage)
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	cfg, err := guestexec.FromEnv()
-	if err != nil {
-		return err
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-	return guestexec.Forward(ctx, cfg, opts.Remotes, os.Stdin, os.Stdout)
 }
 
 // runReady answers one question about this container's own VM -- is the

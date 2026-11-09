@@ -206,7 +206,7 @@ func (a Admission) refusalWords() string {
 // warning rather than as routine queueing.
 func logRefusal(taskID string, priority bool, admission Admission) {
 	if priority {
-		log.Printf("dispatch: WARNING: priority-dispatch task %s (a console session or a priority-dispatch holder) refused admission by %s",
+		log.Printf("dispatch: WARNING: priority-dispatch task %s (a console session or a bypass- or durable-admission task) refused admission by %s",
 			taskID, admission.refusalWords())
 		return
 	}
@@ -313,27 +313,68 @@ func retryBackoff(streakCount int) time.Duration {
 // A suspension that names when its task may restart (model.Suspension's
 // ResumeAt -- a durable task's setup suspension, which waits out
 // maxSetupRetryBackoff with no strike to back off from) holds the task
-// until then as well.
-func retryEligible(ctx context.Context, store *model.Store, taskID string, now time.Time, priority bool) (bool, error) {
+// until then as well, and heldUntil names that time when it is what
+// holds the task, so the cycle can say so rather than call it a backoff.
+func retryEligible(ctx context.Context, store *model.Store, taskID string, now time.Time,
+	priority bool) (eligible bool, heldUntil *time.Time, err error) {
 	resumeAt, err := store.SuspensionResumeAt(ctx, taskID)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if resumeAt != nil && now.Before(*resumeAt) {
-		return false, nil
+		return false, resumeAt, nil
 	}
 	streak, err := store.FailureStreak(ctx, taskID)
 	if err != nil {
-		return false, fmt.Errorf("checking %s's failure streak: %w", taskID, err)
+		return false, nil, fmt.Errorf("checking %s's failure streak: %w", taskID, err)
 	}
 	if streak == nil || streak.BackoffCount == 0 {
-		return true, nil
+		return true, nil, nil
 	}
 	backoff := retryBackoff(streak.BackoffCount)
 	if priority && streak.LastOutcome == model.SetupFailedOutcome && backoff > maxSetupRetryBackoff {
 		backoff = maxSetupRetryBackoff
 	}
-	return !now.Before(streak.LastFinishedAt.Add(backoff)), nil
+	return !now.Before(streak.LastFinishedAt.Add(backoff)), nil, nil
+}
+
+// heldBySuspensionWhy is what a task its latest suspension holds until
+// until waits on, as the dispatch log and its grant wait both say it.
+func heldBySuspensionWhy(until time.Time) string {
+	return "held until " + until.UTC().Format(time.RFC3339) + " by its suspension"
+}
+
+// setSuspensionWait records that taskID's suspension holds it until
+// until (model.SuspensionWaitCapability), over any wait an earlier cycle
+// left but the two a dispatch hold records and keeps for itself
+// (heldForTeamSetup, heldForPendingBranch): a task this holds is not
+// reaching admission, so no other wait is current.
+func setSuspensionWait(ctx context.Context, store *model.Store, taskID string, until, at time.Time) {
+	if store == nil || taskID == "" {
+		return
+	}
+	if existing, err := store.GrantWaitOf(ctx, taskID); err == nil && existing != nil &&
+		(existing.Capability == model.TeamSetupWaitCapability || existing.Capability == model.BranchWaitCapability) {
+		return
+	}
+	_ = store.SetGrantWait(ctx, model.GrantWait{
+		TaskID:     taskID,
+		Capability: model.SuspensionWaitCapability,
+		Resource:   heldBySuspensionWhy(until),
+		WaitingAt:  at,
+	})
+}
+
+// clearSuspensionWait takes setSuspensionWait's wait away once the
+// suspension no longer holds taskID.
+func clearSuspensionWait(ctx context.Context, store *model.Store, taskID string) {
+	if store == nil || taskID == "" {
+		return
+	}
+	if existing, err := store.GrantWaitOf(ctx, taskID); err == nil && existing != nil &&
+		existing.Capability == model.SuspensionWaitCapability {
+		_ = store.ClearGrantWait(ctx, taskID)
+	}
 }
 
 // runNowEligible is retryEligible for a run-now request, and it applies
@@ -760,7 +801,7 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 				}
 				reason := capacityReasonFor(limits, live, req.Merger, true, want)
 				setQuotaWait(ctx, store, req.TaskID, reason, now)
-				log.Printf("dispatch: WARNING: priority-dispatch task %s (a console session or a priority-dispatch holder) skipped: no sandbox -- %s",
+				log.Printf("dispatch: WARNING: priority-dispatch task %s (a console session or a bypass- or durable-admission task) skipped: no sandbox -- %s",
 					req.TaskID, reason)
 				continue
 			}
@@ -895,10 +936,16 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 		priority := priorities[candidate]
 		merger := mergers[candidate]
 
-		eligible, err := retryEligible(ctx, store, candidate, now, priority)
+		eligible, heldUntil, err := retryEligible(ctx, store, candidate, now, priority)
 		if err != nil {
 			return out, fmt.Errorf("dispatch: %w", err)
 		}
+		if heldUntil != nil {
+			setSuspensionWait(ctx, store, candidate, *heldUntil, now)
+			log.Printf("dispatch: candidate %s skipped: %s", candidate, heldBySuspensionWhy(*heldUntil))
+			continue
+		}
+		clearSuspensionWait(ctx, store, candidate)
 		if !eligible {
 			clearQuotaWait(ctx, store, candidate)
 			log.Printf("dispatch: candidate %s skipped: backing off after failed run", candidate)
@@ -942,7 +989,7 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 				}
 				reason := capacityReasonFor(limits, live, merger, true, want)
 				setQuotaWait(ctx, store, candidate, reason, now)
-				log.Printf("dispatch: WARNING: priority-dispatch task %s (a console session or a priority-dispatch holder) skipped: no sandbox -- %s",
+				log.Printf("dispatch: WARNING: priority-dispatch task %s (a console session or a bypass- or durable-admission task) skipped: no sandbox -- %s",
 					candidate, reason)
 				continue
 			}
@@ -990,7 +1037,7 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 				reason := capacityReasonFor(limits, live, merger, priority, want)
 				setQuotaWait(ctx, store, candidate, reason, now)
 				if priority {
-					log.Printf("dispatch: WARNING: priority-dispatch task %s (a console session or a priority-dispatch holder) skipped: at capacity during start -- %s: %v",
+					log.Printf("dispatch: WARNING: priority-dispatch task %s (a console session or a bypass- or durable-admission task) skipped: at capacity during start -- %s: %v",
 						candidate, reason, err)
 				} else {
 					log.Printf("dispatch: candidate %s skipped: at capacity during start -- %v", candidate, err)

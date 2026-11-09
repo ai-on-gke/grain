@@ -24,6 +24,7 @@ import {
   RowLink,
 } from "./ListPrimitives.jsx";
 import ChipStrip from "./ChipStrip.jsx";
+import AccessGate from "./AccessGate.jsx";
 
 // BoardsPage is the list of saved dashboards: what boards this
 // deployment has, filed under their folders, and -- the part this page
@@ -95,12 +96,21 @@ function Row({ board, handle, dragging, picked, onOpen }) {
   );
 }
 
+// `loadError` is why /api/boards last failed, null once it answers.
+// With no boards to show it takes the empty state's place: "No boards
+// yet." and its New board button are an answer about the store, and a
+// list that never arrived is no answer at all -- read as one, it sent
+// the reader off to request a board that already exists (the same
+// mistake TasksLoadError keeps the task views from making).
 export default function BoardsPage({
   boards,
   onOpenBoard,
   onNewBoard,
   onMoveBoard,
+  loadError = null,
+  onRetry,
 }) {
+  const loadFailed = loadError !== null && boards.length === 0;
   return (
     // role="main": this page is the shell's content, and without the
     // landmark a screen reader's "jump to main" found nothing on it while
@@ -109,18 +119,20 @@ export default function BoardsPage({
     <div className="main-column" role="main">
       <ListHeader
         title="Boards"
-        count={boards.length}
+        count={loadFailed ? null : boards.length}
         icon={<ItemGlyph kind="boards" size={20} />}
         action={
-          <Button
-            size="small"
-            variant="contained"
-            startIcon={<AppIcon name="add" size={16} />}
-            sx={{ ml: "auto" }}
-            onClick={() => onNewBoard()}
-          >
-            New board
-          </Button>
+          <AccessGate scope="tasks:write" wrapperStyle={{ marginLeft: "auto" }}>
+            <Button
+              size="small"
+              variant="contained"
+              startIcon={<AppIcon name="add" size={16} />}
+              sx={{ ml: "auto" }}
+              onClick={() => onNewBoard()}
+            >
+              New board
+            </Button>
+          </AccessGate>
         }
       />
       <Typography
@@ -141,8 +153,9 @@ export default function BoardsPage({
         Boards are made by asking for one: <strong>New board</strong> opens a
         task, already written, that an agent picks up and turns into a pull
         request against this deployment&apos;s state. Say what you want to see
-        in it -- or narrow the task list first and click New board there, and
-        the narrowing you are looking at comes along as the board&apos;s own.
+        in it -- or narrow the task list first and pick New board from the menu
+        beside New task, and the narrowing you are looking at comes along as the
+        board&apos;s own.
       </Typography>
       {boards.length > 0 && (
         <Typography
@@ -156,7 +169,18 @@ export default function BoardsPage({
         </Typography>
       )}
 
-      {boards.length === 0 ? (
+      {loadFailed ? (
+        <div className="empty tasks-load-error" role="alert">
+          <span className="tasks-load-error-text">
+            {`The boards could not be loaded (${loadError}).`}
+          </span>
+          {onRetry && (
+            <Button size="small" variant="outlined" onClick={onRetry}>
+              Retry
+            </Button>
+          )}
+        </div>
+      ) : boards.length === 0 ? (
         <ListEmpty>
           {/* A span rather than a div: ListEmpty's own element is a
               paragraph, and a block inside one is invalid markup. */}
@@ -170,9 +194,11 @@ export default function BoardsPage({
             }}
           >
             <span>No boards yet.</span>
-            <Button variant="contained" onClick={() => onNewBoard()}>
-              New board
-            </Button>
+            <AccessGate scope="tasks:write">
+              <Button variant="contained" onClick={() => onNewBoard()}>
+                New board
+              </Button>
+            </AccessGate>
           </Box>
         </ListEmpty>
       ) : (

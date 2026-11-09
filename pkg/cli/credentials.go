@@ -157,6 +157,13 @@ func (s credentialStore) store(name, secret string) (string, error) {
 	}
 	if s.keyring != nil {
 		if err := s.keyring.set(name, secret); err == nil {
+			// A file an earlier login fell back to (no keyring then, or
+			// a locked one) would otherwise go on holding the old
+			// secret on disk, readable by anything running as this
+			// account, after the keyring took over.
+			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return "", fmt.Errorf("removing the old credential file for context %s: %w", name, err)
+			}
 			return "keyring:" + keyringService + "/" + name, nil
 		}
 	}
@@ -209,9 +216,14 @@ func (s credentialStore) load(locator string) (string, error) {
 }
 
 // delete removes context name's secret wherever it is kept; one that is
-// not there is already deleted.
+// not there is already deleted. A secret in a keyring this session cannot
+// reach is refused rather than forgotten: dropping the locator would
+// leave the secret in the keyring with nothing left that names it.
 func (s credentialStore) delete(name, locator string) error {
-	if strings.HasPrefix(locator, "keyring:") && s.keyring != nil {
+	if strings.HasPrefix(locator, "keyring:") {
+		if err := s.keyringReachable(name, locator); err != nil {
+			return err
+		}
 		_ = s.keyring.delete(name)
 	}
 	path, err := credentialFile(name)
@@ -222,4 +234,18 @@ func (s credentialStore) delete(name, locator string) error {
 		return err
 	}
 	return nil
+}
+
+// keyringReachable is nil when locator is not a keyring's or this session
+// can reach the keyring it names, and otherwise the error `grain logout`
+// stops on before revoking or forgetting anything.
+func (s credentialStore) keyringReachable(name, locator string) error {
+	if !strings.HasPrefix(locator, "keyring:") || s.keyring != nil {
+		return nil
+	}
+	return &cliError{exit: exitAuth, code: "credential_unavailable",
+		fix: "grain logout " + name + " (from a session that reaches the OS keyring)",
+		err: fmt.Errorf("the credential for context %s is in the OS keyring, which this session cannot reach, "+
+			"so signing out here would leave it there: run grain logout %s from a session that reaches the keyring "+
+			"(or clear it with: secret-tool clear service %s account %s)", name, name, keyringService, name)}
 }

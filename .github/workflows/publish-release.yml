@@ -33,7 +33,15 @@
 #      release and tagged :vX.Y.0, and :latest when the git tag latest is on
 #      it;
 #   3. the GitHub Release, its body written by scripts/release-notes.sh
-#      from the newest earlier vX.Y.Z.
+#      from the newest earlier vX.Y.Z;
+#   4. scripts/release-assets.sh promote vX.Y.0: that release's assets --
+#      copies of the commit's sha-<12 hex> tarballs and images.json
+#      (docs/release-assets.md);
+#   5. scripts/release-assets.sh cli-publish vX.Y.0: the grain CLI archives
+#      GET /cli/install.sh fetches and their checksums.txt, which the cli
+#      job builds from the tag with scripts/build-cli.sh, holding nothing
+#      but `contents: read`, and which are published only once publish
+#      has verified the tag as the train's.
 #
 # It runs on nothing but that tag push: no dispatch, no schedule.
 
@@ -50,14 +58,20 @@ permissions:
 env:
   GOFLAGS: -mod=readonly
   RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO }}
+  # A promoted commit whose release run a newer merge superseded has no
+  # sha- images: release-images.sh dispatches release.yml with
+  # commit=<sha> to build, test and publish it, and waits (grain/task-3334).
+  RELEASE_ON_DEMAND_BUILD: dispatch
 
 jobs:
   publish:
     name: publish the release the train made
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Room for an on-demand release build (release.yml's 120 minutes).
+    timeout-minutes: 180
     permissions:
-      actions: read
+      # write, not read: an on-demand build dispatches release.yml.
+      actions: write
       checks: read
       contents: write
       packages: write
@@ -65,6 +79,8 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref_name }}
       cancel-in-progress: false
+    outputs:
+      train: ${{ steps.verify.outputs.train }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -73,6 +89,10 @@ jobs:
           persist-credentials: false
 
       - name: Setup Node.js
+        # setup-node v4 caches nothing unless `cache:` is set (the implicit
+        # package-manager cache zizmor warns about arrived in v5), and this
+        # step sets none.
+        # zizmor: ignore[cache-poisoning]
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
@@ -162,6 +182,7 @@ jobs:
         if: steps.verify.outputs.train == 'true'
         env:
           RELEASE_VERSION: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
         run: bash ./scripts/release-images.sh promote "${RELEASE_VERSION}"
 
       - name: Write the release notes and the GitHub Release
@@ -188,3 +209,98 @@ jobs:
           fi
           gh release create "${RELEASE_VERSION}" --verify-tag --title "${RELEASE_VERSION}" \
             --notes-file "${RUNNER_TEMP}/body.md" --latest="$latest"
+
+      # The same release as GitHub release assets (scripts/release-assets.sh,
+      # release-asset contract v2, docs/release-assets.md): copies of the
+      # commit's sha-<12 hex> tarballs and an images.json on the vX.Y.0
+      # release just written, marked GitHub's latest release when the git
+      # tag latest names it. A release missing any asset fails the run.
+      - name: Publish the release's assets
+        if: steps.verify.outputs.train == 'true'
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_ASSETS_DIR: ${{ runner.temp }}/release-assets
+        run: bash ./scripts/release-assets.sh promote "${RELEASE_VERSION}"
+
+  # The release's grain CLI, built from the tag (scripts/build-cli.sh) with
+  # the version its daemon reports. It publishes nothing: cli-assets does,
+  # and only for a tag publish verified as the train's.
+  cli:
+    name: build the release's grain CLI
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build the grain CLI
+        env:
+          RELEASE: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! [[ "${RELEASE}" =~ ^v[0-9]+\.[0-9]+\.0$ ]]; then
+            echo "publish-release: ${RELEASE@Q} is not a vX.Y.0 release" >&2
+            exit 1
+          fi
+          bash ./scripts/build-cli.sh "${RUNNER_TEMP}/release-cli"
+          bash ./scripts/release-assets.sh cli-validate "${RUNNER_TEMP}/release-cli"
+
+      - name: Hand the archives to cli-assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: grain-cli
+          path: |
+            ${{ runner.temp }}/release-cli/*.tar.gz
+            ${{ runner.temp }}/release-cli/checksums.txt
+          if-no-files-found: error
+          retention-days: 1
+
+  # Puts what cli built on the vX.Y.0 release publish wrote: the archives,
+  # then checksums.txt (scripts/release-assets.sh cli-publish). A release
+  # that already carries checksums.txt is left as it is.
+  cli-assets:
+    name: publish the release's grain CLI
+    needs: [publish, cli]
+    if: needs.publish.outputs.train == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    # One group per release, shared by promote.yml, publish-release.yml and
+    # release-train-assets.yml (concurrency groups span a repository's
+    # workflows): cli-publish replaces archives left without checksums.txt,
+    # so two runs uploading to the same release at once could leave one
+    # run's archive beside the other's checksums.txt.
+    concurrency:
+      group: grain-cli-assets-${{ github.ref_name }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch the archives cli built
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: grain-cli
+          path: ${{ runner.temp }}/release-cli
+
+      - name: Publish the grain CLI
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash ./scripts/release-assets.sh cli-publish "${RELEASE_VERSION}" "${RUNNER_TEMP}/release-cli"

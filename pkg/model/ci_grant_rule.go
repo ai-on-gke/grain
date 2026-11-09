@@ -38,12 +38,18 @@ const (
 // SupportsTrustedSchedule decided, carried by the reference now that no
 // provider stands behind it.
 //
-// It is grain's rule, not the deployment's. A reference with one is
-// CI-only -- no task or process run is ever granted it, whatever the
-// capability policy says -- and handed to a CI job only on Events (and
-// on the schedule run grain itself fired, when TrustedSchedule); a job
-// of any other event is not handed it at all, as the provider's gate
-// skipped it. CapabilityPolicy.Permits refuses it beyond the rule before
+// It is grain's rule, not the deployment's. A rule is CI-only unless it
+// sets TaskGrantable: no task or process run is ever granted it, whatever
+// the capability policy says. That default is fail-closed on purpose --
+// before TaskGrantable existed, declaring any rule at all made a method
+// CI-only, so a rule written to that contract (in core or a layer built
+// on it) stays CI-only rather than silently becoming a task grant. A rule
+// that gates on CI Events or TrustedSchedule is CI-only even with
+// TaskGrantable set, since a task has no event for the gate to admit.
+// When Events or TrustedSchedule is set, it is handed to a CI job only
+// on Events (and on the schedule run grain itself fired, when
+// TrustedSchedule); a job of any other event is not handed it at all, as
+// the provider's gate skipped it. CapabilityPolicy.Permits refuses it beyond the rule before
 // any policy rule is read, so a policy can only narrow it further.
 //
 // RepoGranted is the provider's label rule: the repository's CI
@@ -51,16 +57,40 @@ const (
 // job's own declaration only narrows what that list provides, as it
 // narrows every other deployment grant -- rather than the declaration
 // granting it, as it does other capability references.
+//
+// TaskGrantable marks a reference that may also be granted to tasks,
+// templates, schedules and console sessions (such as github#sandbox-repo,
+// whose retired provider had CIOnly false) -- unless the rule is
+// event-gated, which keeps it CI-only (IsCIOnly).
 type CIGrantRule struct {
 	Events          []string
 	TrustedSchedule bool
 	RepoGranted     bool
+	TaskGrantable   bool
+}
+
+// IsEventGated reports whether r restricts which CI trigger events may
+// receive the grant: whenever it names Events or TrustedSchedule. A rule
+// naming neither admits every event; there is no separate opt-out to
+// forget.
+func (r CIGrantRule) IsEventGated() bool {
+	return len(r.Events) > 0 || r.TrustedSchedule
+}
+
+// IsCIOnly reports whether r restricts the grant to CI jobs alone: every
+// rule that does not opt in with TaskGrantable, and every event-gated
+// rule, because tasks have no CI trigger event.
+func (r CIGrantRule) IsCIOnly() bool {
+	return !r.TaskGrantable || r.IsEventGated()
 }
 
 // Admits reports whether a CI job of event, trustedSchedule being
 // whether it is the schedule run grain fired from a workflow's cron
 // (ci.Request.TrustedSchedule), is handed the grant.
 func (r CIGrantRule) Admits(event string, trustedSchedule bool) bool {
+	if !r.IsEventGated() {
+		return true
+	}
 	if slices.Contains(r.Events, event) {
 		return true
 	}
@@ -84,7 +114,13 @@ func (r CIGrantRule) describe() string {
 
 var (
 	ciGrantRulesMu sync.RWMutex
-	ciGrantRules   = map[string]CIGrantRule{}
+	ciGrantRules   = map[string]CIGrantRule{
+		// github#sandbox-repo (formerly github-sandbox) may be granted to
+		// tasks and, for CI jobs, is granted by the repository's
+		// ci_capabilities list on every event rather than by a job's own
+		// declaration alone.
+		GitHubSandboxRepoRef: {RepoGranted: true, TaskGrantable: true},
+	}
 )
 
 // RegisterCIGrantRule declares rule for the capability reference ref
@@ -107,19 +143,85 @@ func RegisterCIGrantRule(ref string, rule CIGrantRule) (unregister func()) {
 	}
 }
 
-// CIGrantRuleFor is the rule declared for the reference grant names, in
-// any spelling: recorded, bare reference, or a retired name an alias
-// rewrites to one (CanonicalLegacyGrant). False when none is.
-func CIGrantRuleFor(grant string) (CIGrantRule, bool) {
-	c := CanonicalLegacyGrant(grant)
+// ciGrantRuleLookup is the declared reference and rule grant names, in
+// any spelling: recorded (<ref>={...}), bare (<ref>), with the server ID
+// in another case, methodless shorthand on a server that declares a rule
+// for exactly one method, or a retired name an alias rewrites to one.
+func ciGrantRuleLookup(grant string) (string, CIGrantRule, bool) {
+	trimmed := strings.TrimSpace(grant)
+	c := CanonicalLegacyGrant(trimmed)
+	if c == trimmed && !IsCapabilityRef(c) {
+		c = CanonicalLegacyGrant(strings.ToLower(trimmed))
+	}
 	if !IsCapabilityRef(c) {
-		return CIGrantRule{}, false
+		return "", CIGrantRule{}, false
 	}
 	ref := CapabilityGrantRef(c)
 	ciGrantRulesMu.RLock()
 	defer ciGrantRulesMu.RUnlock()
-	rule, ok := ciGrantRules[ref]
+	if rule, ok := ciGrantRules[ref]; ok {
+		return ref, rule, true
+	}
+	if serverID, method, hasFrag := strings.Cut(ref, "#"); hasFrag {
+		// Server IDs are matched without regard to case (as
+		// capability policy and catalogue rules match them); method
+		// names are not.
+		for k, rule := range ciGrantRules {
+			kServer, kMethod, ok := strings.Cut(k, "#")
+			if ok && strings.EqualFold(kServer, serverID) && kMethod == method {
+				return k, rule, true
+			}
+		}
+		return "", CIGrantRule{}, false
+	}
+	// Methodless shorthand names the server's only method -- binding
+	// only when the server declares a rule for exactly one.
+	var matchedRef string
+	var matched CIGrantRule
+	count := 0
+	for k, rule := range ciGrantRules {
+		kServer, _, ok := strings.Cut(k, "#")
+		if ok && strings.EqualFold(kServer, ref) {
+			matchedRef, matched = k, rule
+			count++
+		}
+	}
+	if count == 1 {
+		return matchedRef, matched, true
+	}
+	return "", CIGrantRule{}, false
+}
+
+// CIGrantRuleFor is the rule declared for the reference grant names, in
+// any spelling: recorded, bare reference, the server ID in another case,
+// methodless shorthand on a server with one rule-bearing method, or a
+// retired name an alias rewrites to one (CanonicalLegacyGrant). False
+// when none is. Binding every spelling is what keeps a case-varied or
+// shorthand grant from slipping past CIGrantRuleRefusal,
+// CapabilityPolicy.Permits and IsRepoGrantedCIGrant.
+func CIGrantRuleFor(grant string) (CIGrantRule, bool) {
+	_, rule, ok := ciGrantRuleLookup(grant)
 	return rule, ok
+}
+
+// CanonicalCIGrant normalizes a CI capability spelling for matching a
+// workflow's declaration or a stored grant against the repository's CI
+// capabilities list: retired bare aliases are rewritten by
+// CanonicalLegacyGrant, and a bare, case-varied or methodless reference
+// to a method with a declared CIGrantRule and no arguments becomes its
+// recorded <ref>={}. Any other grant is returned as CanonicalLegacyGrant
+// leaves it.
+func CanonicalCIGrant(grant string) string {
+	c := CanonicalLegacyGrant(strings.TrimSpace(grant))
+	ref, _, ok := ciGrantRuleLookup(c)
+	if !ok {
+		return c
+	}
+	_, args, hasArgs := strings.Cut(c, "=")
+	if !hasArgs || strings.TrimSpace(args) == "{}" {
+		return ref + "={}"
+	}
+	return c
 }
 
 // IsRepoGrantedCIGrant reports whether grant is a capability reference a
@@ -138,16 +240,19 @@ func CIGrantRuleRefusal(grant string, s CapabilitySubject) string {
 		return ""
 	}
 	if s.Kind != CapabilityRunCI {
+		if !rule.IsCIOnly() {
+			return ""
+		}
 		return CIGrantRuleCIOnlyRefusal(grant, rule)
 	}
-	if !rule.Admits(s.Event, s.TrustedSchedule) {
-		event := s.Event
-		if event == "" {
-			event = "unnamed"
+	if !s.AnyEvent && !rule.Admits(s.Event, s.TrustedSchedule) {
+		run := "a run with no trigger event"
+		if s.Event != "" {
+			run = fmt.Sprintf("a %s run", s.Event)
 		}
-		return fmt.Sprintf("%s is handed only to a CI job of %s, and this is a %s run: that rule is grain's own, "+
+		return fmt.Sprintf("%s is handed only to a CI job of %s, and this is %s: that rule is grain's own, "+
 			"declared by the capability's server, and no capability policy rule can widen it",
-			CapabilityGrantRef(CanonicalLegacyGrant(grant)), rule.describe(), event)
+			CapabilityGrantRef(CanonicalLegacyGrant(grant)), rule.describe(), run)
 	}
 	return ""
 }

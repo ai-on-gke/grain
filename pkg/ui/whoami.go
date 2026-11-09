@@ -40,6 +40,7 @@ func wirePrincipal(p model.Principal) WirePrincipal {
 type WhoamiResponse struct {
 	Actor      WirePrincipal  `json:"actor"`
 	OnBehalfOf *WirePrincipal `json:"onBehalfOf"`
+	Via        string         `json:"via,omitempty"`
 	// Source duplicates Actor.Source for the UI's convenience.
 	Source string `json:"source"`
 	// Verified is model.Principal.Verified for Actor (spec §1.1.4).
@@ -54,8 +55,12 @@ type WhoamiResponse struct {
 // whoami is who the request in r acts as, as GET /api/whoami reports it.
 func whoami(r *http.Request) WhoamiResponse {
 	who := RequestActor(r.Context())
+	actor := wirePrincipal(who.Actor)
+	if who.OnBehalfOf != nil {
+		actor.Label = PrincipalLabel(who.Actor, who.OnBehalfOf)
+	}
 	resp := WhoamiResponse{
-		Actor:    wirePrincipal(who.Actor),
+		Actor:    actor,
 		Source:   string(who.Actor.Source),
 		Verified: who.Actor.Verified(),
 		Allowed:  true,
@@ -64,11 +69,19 @@ func whoami(r *http.Request) WhoamiResponse {
 		w := wirePrincipal(*b)
 		resp.OnBehalfOf = &w
 	}
+	if del := delegatedIdentityFromContext(r.Context()); del != nil && who.Actor.Kind == model.PrincipalService && who.Actor.Source == model.SourceRegistry {
+		resp.Via = del.ViaLabel
+	}
 	return resp
 }
 
 func (s *Server) handleWhoami(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, whoami(r))
+	resp := whoami(r)
+	if s.tasks != nil && s.tasks.Store != nil && resp.Actor.Kind == string(model.PrincipalAgent) && resp.Actor.Source == string(model.SourceSession) {
+		who := RequestActor(r.Context())
+		resp.Actor.Label = sessionLabel(who.Actor, who.OnBehalfOf, s.tasks.sessionTitles(r.Context()))
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // Who is how c's author reads in a transcript: its AuthorLabel, and when
@@ -80,7 +93,7 @@ func (c Comment) Who() string {
 	if who == "" {
 		who, behalf = c.Author, c.OnBehalfOf
 	}
-	if behalf != "" && !strings.HasSuffix(who, " for "+behalf) {
+	if behalf != "" && !strings.HasSuffix(who, " for "+behalf) && !strings.HasPrefix(who, behalf+" (via ") {
 		who += " on behalf of " + behalf
 	}
 	return who
@@ -126,6 +139,7 @@ func (s *Server) handleGetConfigAudit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	title := s.tasks.sessionTitles(r.Context())
 	out := make([]ConfigAuditView, 0, len(entries))
 	for _, e := range entries {
 		view := ConfigAuditView{
@@ -134,7 +148,7 @@ func (s *Server) handleGetConfigAudit(w http.ResponseWriter, r *http.Request) {
 			Actor:       e.By.ID,
 			ActorKind:   string(e.By.Kind),
 			ActorSource: string(e.By.Source),
-			ActorLabel:  PrincipalLabel(e.By, e.OnBehalfOf),
+			ActorLabel:  sessionLabel(e.By, e.OnBehalfOf, title),
 			Surface:     e.Surface,
 			Summary:     e.Summary,
 		}

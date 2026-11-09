@@ -40,7 +40,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
@@ -139,7 +138,6 @@ func PublishedToolNames() []string {
 	// wants: the names.
 	add(grainlog.Tools(grainlog.Config{}))
 	add(deploymenthealth.Tools(deploymenthealth.Config{}))
-	add(bootstrap.PlaybookTools())
 	add(dbaccess.Tools(dbaccess.Config{AllowWrite: true}))
 	add(selfrepair.ConfirmedHostCommandTools(nil))
 

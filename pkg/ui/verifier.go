@@ -66,11 +66,18 @@ func verifierUnavailable(err error) bool {
 	return errors.As(err, &u) && u.Unavailable()
 }
 
+// DelegatingApp describes the service principal that forwarded a request on
+// behalf of a person through the registry (`act` claim in a registry JWT,
+// design/design/authentication.design.md §6, AU-22).
+type DelegatingApp = webauth.DelegatingApp
+
 // VerifiedIdentity is the authenticated caller an IdentityVerifier extracted
 // from a signed proxy header.
 type VerifiedIdentity struct {
 	Email string              // the principal's ID
+	Sub   string              // normalized subject, when distinct or verified
 	Kind  model.PrincipalKind // human or service
+	Via   *DelegatingApp      // non-nil when the request is delegated on behalf of Email
 }
 
 type registeredVerifier struct {
@@ -313,9 +320,19 @@ func (v *registryVerifier) Verify(r *http.Request) (VerifiedIdentity, bool, erro
 	if err != nil || !ok {
 		return VerifiedIdentity{}, ok, err
 	}
+	var via *DelegatingApp
+	if id.Via != nil {
+		cp := *id.Via
+		if cp.RequestID == "" {
+			cp.RequestID = strings.TrimSpace(r.Header.Get("X-Grain-Request-Id"))
+		}
+		via = &cp
+	}
 	return VerifiedIdentity{
 		Email: id.Email,
+		Sub:   id.Sub,
 		Kind:  model.PrincipalKind(id.Kind),
+		Via:   via,
 	}, true, nil
 }
 
@@ -379,75 +396,20 @@ func verifyCallerNow(r *http.Request) callerVerification {
 	if r == nil {
 		return callerVerification{}
 	}
+	if isRegistryTunnelRequest(r) {
+		return verifyRegistryTunnelCaller(r)
+	}
 	for _, v := range activeVerifiers(r.Context()) {
 		headers := v.Headers()
 		header := firstPresentHeader(r, headers)
 		if len(headers) > 0 && header == "" {
 			continue
 		}
-		id, ok, err := v.Verify(r)
-		if len(headers) == 0 && !ok && err == nil {
+		cv, matched := verifyWithVerifier(r, v, header)
+		if !matched {
 			continue
 		}
-		if err != nil {
-			if v.Name() != string(AuthMethodIAP) {
-				logRefusedVerifierHeader(v.Name(), header, err)
-			}
-			return callerVerification{
-				present:        true,
-				verifier:       v,
-				method:         AuthMethod(v.Name()),
-				accessCodeWins: verifierAccessCodeWins(v),
-				err:            err,
-			}
-		}
-		if !ok {
-			err = fmt.Errorf("verifier %q did not accept present %s header", v.Name(), header)
-			if v.Name() != string(AuthMethodIAP) {
-				logRefusedVerifierHeader(v.Name(), header, err)
-			}
-			return callerVerification{
-				present:        true,
-				verifier:       v,
-				method:         AuthMethod(v.Name()),
-				accessCodeWins: verifierAccessCodeWins(v),
-				err:            err,
-			}
-		}
-		email := normalizeIdentityEmail(id.Email)
-		if email == "" {
-			err = fmt.Errorf("verifier %q returned an empty identity email", v.Name())
-			logRefusedVerifierHeader(v.Name(), header, err)
-			return callerVerification{
-				present:        true,
-				verifier:       v,
-				method:         AuthMethod(v.Name()),
-				accessCodeWins: verifierAccessCodeWins(v),
-				err:            err,
-			}
-		}
-		kind := id.Kind
-		if kind == "" {
-			kind = principalKindForEmail(email)
-		}
-		if kind != model.PrincipalHuman && kind != model.PrincipalService {
-			err = fmt.Errorf("verifier %q returned unsupported principal kind %q", v.Name(), kind)
-			logRefusedVerifierHeader(v.Name(), header, err)
-			return callerVerification{
-				present:        true,
-				verifier:       v,
-				method:         AuthMethod(v.Name()),
-				accessCodeWins: verifierAccessCodeWins(v),
-				err:            err,
-			}
-		}
-		return callerVerification{
-			present:        true,
-			verifier:       v,
-			id:             VerifiedIdentity{Email: email, Kind: kind},
-			method:         AuthMethod(v.Name()),
-			accessCodeWins: verifierAccessCodeWins(v),
-		}
+		return cv
 	}
 
 	// No active verifier claimed the request. If an IAP or registry assertion
@@ -462,6 +424,136 @@ func verifyCallerNow(r *http.Request) callerVerification {
 		logIgnoredIdentityHeader(r)
 	}
 	return callerVerification{}
+}
+
+func verifyWithVerifier(r *http.Request, v IdentityVerifier, header string) (callerVerification, bool) {
+	headers := v.Headers()
+	id, ok, err := v.Verify(r)
+	if len(headers) == 0 && !ok && err == nil {
+		return callerVerification{}, false
+	}
+	if err != nil {
+		if v.Name() != string(AuthMethodIAP) {
+			logRefusedVerifierHeader(v.Name(), header, err)
+		}
+		return callerVerification{
+			present:        true,
+			verifier:       v,
+			method:         AuthMethod(v.Name()),
+			accessCodeWins: verifierAccessCodeWins(v),
+			err:            err,
+		}, true
+	}
+	if !ok {
+		err = fmt.Errorf("verifier %q did not accept present %s header", v.Name(), header)
+		if v.Name() != string(AuthMethodIAP) {
+			logRefusedVerifierHeader(v.Name(), header, err)
+		}
+		return callerVerification{
+			present:        true,
+			verifier:       v,
+			method:         AuthMethod(v.Name()),
+			accessCodeWins: verifierAccessCodeWins(v),
+			err:            err,
+		}, true
+	}
+	email := normalizeIdentityEmail(id.Email)
+	if email == "" {
+		err = fmt.Errorf("verifier %q returned an empty identity email", v.Name())
+		logRefusedVerifierHeader(v.Name(), header, err)
+		return callerVerification{
+			present:        true,
+			verifier:       v,
+			method:         AuthMethod(v.Name()),
+			accessCodeWins: verifierAccessCodeWins(v),
+			err:            err,
+		}, true
+	}
+	kind := id.Kind
+	if kind == "" {
+		kind = principalKindForEmail(email)
+	}
+	if kind != model.PrincipalHuman && kind != model.PrincipalService {
+		err = fmt.Errorf("verifier %q returned unsupported principal kind %q", v.Name(), kind)
+		logRefusedVerifierHeader(v.Name(), header, err)
+		return callerVerification{
+			present:        true,
+			verifier:       v,
+			method:         AuthMethod(v.Name()),
+			accessCodeWins: verifierAccessCodeWins(v),
+			err:            err,
+		}, true
+	}
+	return callerVerification{
+		present:        true,
+		verifier:       v,
+		id:             VerifiedIdentity{Email: email, Sub: id.Sub, Kind: kind, Via: id.Via},
+		method:         AuthMethod(v.Name()),
+		accessCodeWins: verifierAccessCodeWins(v),
+	}, true
+}
+
+type registryTunnelContextKey struct{}
+
+func withRegistryTunnelRequest(ctx context.Context) context.Context {
+	return context.WithValue(ctx, registryTunnelContextKey{}, true)
+}
+
+func isRegistryTunnelRequest(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	ok, _ := r.Context().Value(registryTunnelContextKey{}).(bool)
+	return ok
+}
+
+// verifyRegistryTunnelCaller verifies r strictly through the active "registry"
+// IdentityVerifier (X-Grain-Registry-Assertion). Missing assertions or
+// unconfigured verifiers fail closed.
+func verifyRegistryTunnelCaller(r *http.Request) callerVerification {
+	if r == nil {
+		return callerVerification{
+			present: true,
+			method:  AuthMethodRegistry,
+			err:     errors.New(errVerifierRequired(string(AuthMethodRegistry))),
+		}
+	}
+	var regVerifier IdentityVerifier
+	for _, v := range activeVerifiers(r.Context()) {
+		if v.Name() == string(AuthMethodRegistry) {
+			regVerifier = v
+			break
+		}
+	}
+	if regVerifier == nil {
+		err := errors.New("no registry IdentityVerifier is configured (-ui-registry-issuer, -ui-registry-audience, -ui-registry-keys-url)")
+		logRefusedVerifierHeader(string(AuthMethodRegistry), RegistryAssertionHeader, err)
+		return callerVerification{
+			present: true,
+			method:  AuthMethodRegistry,
+			err:     err,
+		}
+	}
+	header := firstPresentHeader(r, regVerifier.Headers())
+	if len(regVerifier.Headers()) > 0 && header == "" {
+		return callerVerification{
+			present:  true,
+			verifier: regVerifier,
+			method:   AuthMethodRegistry,
+			err:      errors.New(errVerifierRequired(string(AuthMethodRegistry))),
+		}
+	}
+	cv, matched := verifyWithVerifier(r, regVerifier, header)
+	if !matched {
+		return callerVerification{
+			present:  true,
+			verifier: regVerifier,
+			method:   AuthMethodRegistry,
+			err:      errors.New(errVerifierRequired(string(AuthMethodRegistry))),
+		}
+	}
+	cv.accessCodeWins = false
+	return cv
 }
 
 func logRefusedVerifierHeader(verifierName, header string, err error) {

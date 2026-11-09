@@ -170,6 +170,10 @@ type Task struct {
 	// immediately restarts the task when its run exits rather than completing
 	// or parking it.
 	KeepRunning bool `json:"keepRunning,omitempty"`
+	// Admission is model.Task.Admission: "standard", "bypass" or "durable".
+	Admission string `json:"admission"`
+	// Hosting is model.Task.Hosting: "unattended" or "console".
+	Hosting string `json:"hosting"`
 	// NoPort is model.Task.NoPort: this task's change is not ported to
 	// its repository's other paired branches.
 	NoPort bool `json:"noPort,omitempty"`
@@ -639,7 +643,8 @@ func oomRetryActivity(at time.Time) *model.RunActivity {
 func grantWaitActivity(wait model.GrantWait) *model.RunActivity {
 	if wait.Capability == model.ModelWaitCapability || wait.Capability == model.TeamSetupWaitCapability ||
 		wait.Capability == model.BranchWaitCapability || wait.Capability == model.PolicyWaitCapability ||
-		wait.Capability == model.QuotaWaitCapability || wait.Capability == model.ChangeTargetWaitCapability {
+		wait.Capability == model.QuotaWaitCapability || wait.Capability == model.ChangeTargetWaitCapability ||
+		wait.Capability == model.SuspensionWaitCapability {
 		// The resource is already the whole sentence: "no enabled
 		// connection serves model X", "all connections serving X are busy",
 		// 'team "x" has no GitHub credential for o/r -- ...'. One that
@@ -758,6 +763,9 @@ type TaskDetail struct {
 	// agents#445: "show attempts and their status, in order, in the task
 	// view").
 	Attempts []Attempt `json:"attempts,omitempty"`
+	// Usage is every attempt's Usage summed: what the task has spent at
+	// its providers so far. Nil when no attempt reported any.
+	Usage *TaskUsage `json:"usage,omitempty"`
 	// Transitions is model.Transitions' own projection: every point the
 	// record lets this task's state be pinned to a time, oldest first
 	// (bwsalmon/agents#452 -- "show the state transitions for the task").
@@ -951,6 +959,10 @@ type Transition struct {
 	OnBehalfOfOwner     string `json:"onBehalfOfOwner,omitempty"`
 	OldOwner            string `json:"oldOwner,omitempty"`
 	NewOwner            string `json:"newOwner,omitempty"`
+	OldAdmission        string `json:"oldAdmission,omitempty"`
+	NewAdmission        string `json:"newAdmission,omitempty"`
+	OldHosting          string `json:"oldHosting,omitempty"`
+	NewHosting          string `json:"newHosting,omitempty"`
 	Reason              string `json:"reason,omitempty"`
 	Detail              string `json:"detail,omitempty"`
 }
@@ -979,6 +991,18 @@ func transitionFromWithAttempt(t model.Transition, proposingAttempt int) Transit
 		if oldOwn, newOwn, ok := model.ParseOwnerChangeReason(t.Reason); ok {
 			out.OldOwner = oldOwn
 			out.NewOwner = newOwn
+		}
+	}
+	if t.State == model.TransitionAdmissionChanged {
+		if oldAdm, newAdm, ok := model.ParseAdmissionChangeReason(t.Reason); ok {
+			out.OldAdmission = string(oldAdm)
+			out.NewAdmission = string(newAdm)
+		}
+	}
+	if t.State == model.TransitionHostingChanged {
+		if oldH, newH, ok := model.ParseHostingChangeReason(t.Reason); ok {
+			out.OldHosting = string(oldH)
+			out.NewHosting = string(newH)
 		}
 	}
 	if t.By != nil {
@@ -1069,6 +1093,10 @@ type Attempt struct {
 	AgentStartedAt    *time.Time      `json:"agentStartedAt,omitempty"`
 	FirstTurnAt       *time.Time      `json:"firstTurnAt,omitempty"`
 	Startup           *AttemptStartup `json:"startup,omitempty"`
+	// Usage is what this attempt spent at its model provider, as its
+	// CLI reported it (model.RunUsage); nil for an attempt whose CLI
+	// reported none, or one recorded before grain kept them.
+	Usage *model.RunUsage `json:"usage,omitempty"`
 }
 
 // AttemptStartup is the per-phase startup breakdown of one attempt
@@ -1135,6 +1163,8 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 		NetworkAccess:        string(t.NetworkAccess),
 		NothingNeededAction:  string(t.NothingNeededAction),
 		KeepRunning:          t.KeepRunning,
+		Admission:            string(model.NormalizeAdmission(t.Admission)),
+		Hosting:              string(model.NormalizeHosting(t.Hosting)),
 		NoPort:               t.NoPort,
 		FixesBaseBranch:      model.FixesBaseBranch(t),
 		GrainBaseRepair:      model.GrainBaseRepair(t),
@@ -1808,6 +1838,15 @@ type configResponse struct {
 	// Filtered to what this build offers, the same as DefaultCapabilities
 	// above and for the same reason.
 	RepoDefaultCapabilities map[string][]string `json:"repoDefaultCapabilities,omitempty"`
+	// DefaultAdmission and RepoDefaultAdmissions are the same two layers
+	// for the admission setting (model.Config.DefaultAdmission,
+	// model.RepoConfig.DefaultAdmission): the new-task form's starting
+	// admission, the higher of the two winning. Only repos that set one
+	// appear in the map.
+	DefaultAdmission      string            `json:"defaultAdmission,omitempty"`
+	RepoDefaultAdmissions map[string]string `json:"repoDefaultAdmissions,omitempty"`
+	DefaultHosting        string            `json:"defaultHosting,omitempty"`
+	RepoDefaultHostings   map[string]string `json:"repoDefaultHostings,omitempty"`
 	// PromptExtension mirrors model.Config.PromptExtension -- this
 	// deployment's own standing instructions for every run -- read from
 	// the store the same way AgentFramework above is.
@@ -2169,6 +2208,8 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		resp.DefaultModel = cfg.EffectiveDefaultModel()
 		resp.Models = allDistinctModels(*cfg)
 		resp.NetworkAccess = string(model.NormalizeNetworkAccess(cfg.NetworkAccess))
+		resp.DefaultAdmission = string(cfg.DefaultAdmission)
+		resp.DefaultHosting = string(cfg.DefaultHosting)
 		resp.PromptExtension = cfg.PromptExtension
 		// Filtered to what this build actually offers, the same way
 		// (*Client).defaultCapabilities filters before granting -- the
@@ -2216,6 +2257,18 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		if !rc.Work.Empty() || len(rc.ReleaseSecrets) > 0 ||
 			len(rc.BaseBranchCIJobs) > 0 || len(rc.PostMergeDispatchJobs) > 0 {
 			resp.ReposWithReleaseSettings = append(resp.ReposWithReleaseSettings, rc.Repo.String())
+		}
+		if rc.DefaultAdmission != "" {
+			if resp.RepoDefaultAdmissions == nil {
+				resp.RepoDefaultAdmissions = make(map[string]string, len(repoConfigs))
+			}
+			resp.RepoDefaultAdmissions[rc.Repo.String()] = string(rc.DefaultAdmission)
+		}
+		if rc.DefaultHosting != "" {
+			if resp.RepoDefaultHostings == nil {
+				resp.RepoDefaultHostings = make(map[string]string, len(repoConfigs))
+			}
+			resp.RepoDefaultHostings[rc.Repo.String()] = string(rc.DefaultHosting)
 		}
 		var ids []string
 		for _, id := range rc.DefaultCapabilities {
@@ -2303,7 +2356,83 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if authenticated || singleTenantTrusted(r) {
 		resp.InstallTrackSignals = det.Signals
 	}
+	if call, ok := agentCallFromContext(r.Context()); ok {
+		narrowConfigForAgentCall(&resp, call)
+	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func narrowConfigForAgentCall(resp *configResponse, call agentCall) {
+	if !call.grants.Allows("settings:read", "") {
+		resp.Deployment = nil
+		resp.PromptExtension = ""
+		resp.NewTaskForm = nil
+	}
+	if call.grants.Allows("settings:read", "") || call.grants.Allows("deployment:read", "") {
+		return
+	}
+	repoAllowed := func(repo string) bool {
+		repo = strings.TrimSpace(repo)
+		return repo != "" && (call.grants.Allows("settings:read", repo) || call.grants.Allows("deployment:read", repo))
+	}
+	filterRepos := func(in []string) []string {
+		if len(in) == 0 {
+			return nil
+		}
+		var out []string
+		for _, r := range in {
+			if repoAllowed(r) {
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+	resp.TargetRepos = filterRepos(resp.TargetRepos)
+	if resp.DefaultTarget != "" && !repoAllowed(resp.DefaultTarget) {
+		resp.DefaultTarget = ""
+	}
+	if resp.ConfigRepo != "" && !repoAllowed(resp.ConfigRepo) {
+		resp.ConfigRepo = ""
+	}
+	if resp.ExternalConfigRepo != "" && !repoAllowed(resp.ExternalConfigRepo) {
+		resp.ExternalConfigRepo = ""
+		resp.ExternalConfigBranch = ""
+	}
+	resp.ReposWithWorkflows = filterRepos(resp.ReposWithWorkflows)
+	resp.ReposWithCICapabilities = filterRepos(resp.ReposWithCICapabilities)
+	resp.ReposWithPromptExtension = filterRepos(resp.ReposWithPromptExtension)
+	resp.ReposWithSetupCommand = filterRepos(resp.ReposWithSetupCommand)
+	resp.ReposWithReleaseSettings = filterRepos(resp.ReposWithReleaseSettings)
+	for repo := range resp.RepoDefaultAdmissions {
+		if !repoAllowed(repo) {
+			delete(resp.RepoDefaultAdmissions, repo)
+		}
+	}
+	if len(resp.RepoDefaultAdmissions) == 0 {
+		resp.RepoDefaultAdmissions = nil
+	}
+	for repo := range resp.RepoDefaultHostings {
+		if !repoAllowed(repo) {
+			delete(resp.RepoDefaultHostings, repo)
+		}
+	}
+	if len(resp.RepoDefaultHostings) == 0 {
+		resp.RepoDefaultHostings = nil
+	}
+	for repo := range resp.RepoDefaultCapabilities {
+		if !repoAllowed(repo) {
+			delete(resp.RepoDefaultCapabilities, repo)
+		}
+	}
+	if len(resp.RepoDefaultCapabilities) == 0 {
+		resp.RepoDefaultCapabilities = nil
+	}
+	if resp.StateRepoSyncFailure != nil && (resp.StateRepoSyncFailure.Repo == "" || !repoAllowed(resp.StateRepoSyncFailure.Repo)) {
+		resp.StateRepoSyncFailure = nil
+	}
+	resp.InstallTrackSignals = nil
+	resp.DispatchBlocked = nil
+	resp.InstallNotice = nil
 }
 
 // handleListTasks answers the live task list -- every task not closed,
@@ -3059,7 +3188,28 @@ func writeClientError(w http.ResponseWriter, err error) {
 	}
 	var fe *ForbiddenError
 	if errors.As(err, &fe) {
+		if len(fe.body) > 0 {
+			out := make(map[string]any, len(fe.body)+2)
+			for k, v := range fe.body {
+				out[k] = v
+			}
+			out["error"] = fe.Error()
+			if fe.code != "" {
+				out["code"] = fe.code
+			}
+			writeJSON(w, http.StatusForbidden, out)
+			return
+		}
+		if fe.code != "" {
+			writeJSON(w, http.StatusForbidden, apierror.Response{Error: fe.Error(), Code: fe.code})
+			return
+		}
 		writeError(w, http.StatusForbidden, err)
+		return
+	}
+	var ue *UnprocessableError
+	if errors.As(err, &ue) {
+		writeError(w, http.StatusUnprocessableEntity, err)
 		return
 	}
 	var ecre *externalConfigRepoError

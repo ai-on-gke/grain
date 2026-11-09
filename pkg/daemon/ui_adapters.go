@@ -66,6 +66,20 @@ func (a SandboxHealthAdapter) SandboxCount() int {
 	return reporter.SandboxCount()
 }
 
+// IsolatesNetwork reports whether the underlying sandbox backend can withhold
+// the internet from a run (orchestrator.NetworkIsolator), matching
+// orchestrator.sandboxesIsolateNetwork: true when Inner is nil so a UI with no
+// backend to speak for keeps what was configured, and otherwise Inner's own
+// IsolatesNetwork answer (false on HostSandboxes, ContainerSandboxes, and
+// plain K8sSandboxes).
+func (a SandboxHealthAdapter) IsolatesNetwork() bool {
+	if a.Inner == nil {
+		return true
+	}
+	iso, ok := a.Inner.(orchestrator.NetworkIsolator)
+	return ok && iso.IsolatesNetwork()
+}
+
 func (a SandboxHealthAdapter) Health(ctx context.Context) []ui.SandboxSnapshot {
 	reporter, ok := a.Inner.(interface {
 		Health(context.Context) []orchestrator.SandboxHealth
@@ -294,116 +308,6 @@ func (a cycleTimesAdapter) CycleTimes() metrics.CycleHistory {
 	return out
 }
 
-// capabilityCheckAdapter is ui.Config.CapabilityChecks over this
-// deployment's own capability providers: it authenticates as one
-// capability's standing credential and makes the one cheap, harmless
-// call that capability's provider offers as proof the credential still
-// works (model.CredentialChecker).
-//
-// It rebuilds the providers per call, out of capabilityProviders and the
-// live configuration, rather than holding a registry of its own. Two
-// reasons, both about answering for what this deployment is doing right
-// now: capabilityProviders is the one place a provider's deployment
-// configuration is assembled, so a check made through it cannot drift
-// from the mint a dispatch would make; and the answer follows a settings
-// change immediately, where a registry captured at startup would go on
-// checking the project an operator has since replaced. Construction
-// touches no network -- every provider here builds its client at call
-// time -- so the cost is a handful of structs per button press.
-//
-// The credential resolver is the daemon's own secrets store, the same
-// one orchestrator.Config.Credentials resolves a real Materialize
-// through. A named GitHub token is the one capability whose standing
-// credential is not in there at all -- it is an operator's file under
-// secrets/github -- so its provider is built holding the credential
-// ladder instead (capabilityProviders' own githubCredentials argument),
-// and this resolver goes unused by it. Nothing here reads a value back
-// out to the caller either way: material goes into a provider, and what
-// comes back is a sentence about what the far end said.
-type CapabilityCheckAdapter struct {
-	Live  *LiveConfig
-	Creds model.CredentialResolver
-}
-
-func (a CapabilityCheckAdapter) CheckCapability(ctx context.Context, id string) (ui.CapabilityCheckResult, error) {
-	registry := newCapabilityRegistryWithStore(
-		a.Live.store,
-		CapabilityProviders(a.Live.Current(), a.Live.store, ModelProxies, a.Live.GitHubTokens(), a.Live.gitHubCredentialSource())...)
-	provider, ok := registry.Lookup(id)
-	if !ok {
-		// An answer about this deployment rather than a fault:
-		// capabilityProviders registers gcp-key and gemini-key only once
-		// a GCP project (and, for gcp-key, an agent service account) is
-		// set, so the honest reply is that there is nothing configured
-		// here to check -- which is what the pane's own "Needs:" line
-		// beside this already says.
-		//
-		// Which of the two unconfigured deployments this is, though, has
-		// to be told apart before saying so. The registry above is built
-		// out of what this process is *running* with, and the pane
-		// asking the question reports what the store *holds*: a setting
-		// saved but not yet adopted registers no provider here while
-		// every field for it is filled in over there, and answering
-		// "it is not configured" then sends an operator to a pane where
-		// their own project is already typed in and the badge beside it
-		// says Ready. That deployment exists and is not a race: settings
-		// are adopted by the reconcile loop (liveConfig.refresh), and a
-		// process whose loop never came up (reconcilerDown) keeps this
-		// UI serving a configuration nothing is reading.
-		return ui.CapabilityCheckResult{}, a.unregistered(ctx, id)
-	}
-	checker, ok := provider.(model.CredentialChecker)
-	if !ok {
-		return ui.CapabilityCheckResult{}, fmt.Errorf("capability %q has no credential to test", id)
-	}
-	check, err := checker.CheckCredential(ctx, a.Creds)
-	// The result is carried out even alongside an error: Credentials is
-	// filled in from the provider's own Requires before the call is
-	// made, and a refusal's whole remedy is "replace what is in that
-	// secret" -- see ui.CapabilityCheck.Credentials.
-	return ui.CapabilityCheckResult{Credentials: check.Credentials, Detail: check.Detail}, err
-}
-
-// unregistered is the sentence a check gets for a capability this
-// process has no provider for. A known configuration-gated provider
-// names each blank setting; an unknown capability keeps a generic
-// no-provider answer.
-//
-// A deployment that has been configured but has not adopted its stored
-// settings is told that first, because the remedy is the opposite kind
-// of thing: nothing to fill in, and a daemon to restart (or a dead
-// reconcile loop to fix), which no amount of re-reading Settings would
-// have suggested.
-func (a CapabilityCheckAdapter) unregistered(ctx context.Context, id string) error {
-	if stored, ok := a.Live.storedConfig(ctx); ok {
-		registry := newCapabilityRegistryWithStore(
-			a.Live.store,
-			CapabilityProviders(stored, a.Live.store, ModelProxies, a.Live.GitHubTokens(), a.Live.gitHubCredentialSource())...)
-		if _, found := registry.Lookup(id); found {
-			return fmt.Errorf(
-				"this deployment is configured for %q, but the daemon serving this check has not "+
-					"applied that configuration and so registers no provider for it, which is also "+
-					"how a task granted it would fail: settings are applied by the reconcile loop, "+
-					"once per poll interval, so either it was saved a moment ago or that loop is not "+
-					"running (Status) and this deployment needs restarting", id)
-		}
-	}
-	missing := missingCapabilityProviderConfig(a.Live.Current(), id)
-	switch len(missing) {
-	case 1:
-		return fmt.Errorf(
-			"this deployment has no active provider for %q, so there is nothing to test: "+
-				"the %s setting is blank; set it in Settings -> Capabilities", id, missing[0])
-	case 2:
-		return fmt.Errorf(
-			"this deployment has no active provider for %q, so there is nothing to test: "+
-				"the %s and %s settings are blank; set them in Settings -> Capabilities",
-			id, missing[0], missing[1])
-	}
-	return fmt.Errorf(
-		"this deployment registers no provider for %q, so there is nothing to test", id)
-}
-
 // agentKeyCheckAdapter is ui.Config.AgentKeyChecks over this
 // deployment's own agent credentials: it resolves the credential a run
 // with that framework would be dispatched with, and asks the vendor that
@@ -413,8 +317,7 @@ func (a CapabilityCheckAdapter) unregistered(ctx context.Context, id string) err
 // database first and then whatever -gemini-api-key-file /
 // -claude-oauth-token-file / -openai-api-key-file names -- and reads the
 // key files off the live configuration rather than off a copy taken at
-// startup, for the same reason capabilityCheckAdapter above rebuilds its
-// providers per call: the answer has to be about what the *next*
+// startup: the answer has to be about what the *next*
 // dispatch would authenticate with, not about what this process was
 // started with. A deployment seeded by file and a deployment configured
 // from the UI are therefore both testable, and a key pasted into

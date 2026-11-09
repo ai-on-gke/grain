@@ -176,3 +176,85 @@ describe("TemplateOverlay keep running", () => {
     expect(sentBody("PATCH")).toMatchObject({ keepRunning: false });
   });
 });
+
+// Admission (model.Template.Admission) is a column on templates as on
+// tasks, and a template that declared one showed nowhere in this form
+// (2026-11-07 walkthrough).
+describe("TemplateOverlay admission", () => {
+  afterEach(() => api.mockReset());
+
+  it("sends no admission on a new template left standard", async () => {
+    api.mockResolvedValue(saved);
+    const onSaved = overlay(null);
+    fireEvent.submit(
+      screen.getByRole("textbox", { name: "Name" }).closest("form"),
+    );
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(sentBody("POST")).not.toHaveProperty("admission");
+  });
+
+  it("reads a saved admission back and sends a change on an edit", async () => {
+    api.mockResolvedValue(saved);
+    const onSaved = overlay({ ...saved, admission: "bypass" });
+    const select = screen.getByRole("combobox", { name: "Admission" });
+    expect(select).toHaveTextContent("Bypass queue");
+    fireEvent.mouseDown(select);
+    fireEvent.click(await screen.findByRole("option", { name: "Durable" }));
+    fireEvent.submit(
+      screen.getByRole("textbox", { name: "Name" }).closest("form"),
+    );
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(sentBody("PATCH")).toMatchObject({ admission: "durable" });
+  });
+
+  it("does not resend an unchanged admission", async () => {
+    api.mockResolvedValue(saved);
+    const onSaved = overlay({ ...saved, admission: "durable" });
+    fireEvent.submit(
+      screen.getByRole("textbox", { name: "Name" }).closest("form"),
+    );
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(sentBody("PATCH")).not.toHaveProperty("admission");
+  });
+});
+
+// Hosting (model.Template.Hosting) is a column on templates as on tasks,
+// the setting that replaced the console capability
+// (design/design/unified-grants.design.md §4.1).
+describe("TemplateOverlay hosting", () => {
+  afterEach(() => api.mockReset());
+
+  it("sends no hosting on a new template left unattended", async () => {
+    api.mockResolvedValue(saved);
+    const onSaved = overlay(null);
+    fireEvent.submit(
+      screen.getByRole("textbox", { name: "Name" }).closest("form"),
+    );
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(sentBody("POST")).not.toHaveProperty("hosting");
+  });
+
+  it("reads a saved hosting back and sends a change on an edit", async () => {
+    api.mockResolvedValue(saved);
+    const onSaved = overlay({ ...saved, hosting: "console" });
+    const select = screen.getByRole("combobox", { name: "Hosting" });
+    expect(select).toHaveTextContent("Interactive console");
+    fireEvent.mouseDown(select);
+    fireEvent.click(await screen.findByRole("option", { name: "Unattended" }));
+    fireEvent.submit(
+      screen.getByRole("textbox", { name: "Name" }).closest("form"),
+    );
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(sentBody("PATCH")).toMatchObject({ hosting: "unattended" });
+  });
+
+  it("does not resend an unchanged hosting", async () => {
+    api.mockResolvedValue(saved);
+    const onSaved = overlay({ ...saved, hosting: "console" });
+    fireEvent.submit(
+      screen.getByRole("textbox", { name: "Name" }).closest("form"),
+    );
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(sentBody("PATCH")).not.toHaveProperty("hosting");
+  });
+});

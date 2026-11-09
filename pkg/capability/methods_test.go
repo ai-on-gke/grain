@@ -104,6 +104,7 @@ func TestRegisterMethodRefusesABadMethod(t *testing.T) {
 		"duplicate":        {Server: capabilitytest.MethodServer, Spec: capabilitytest.MethodSpec(capabilitytest.MethodName)},
 		"core grain":       {Server: model.GrainCapabilityServerID, Spec: capabilitytest.MethodSpec("extra")},
 		"core repo":        {Server: model.RepoCapabilityServerID, Spec: capabilitytest.MethodSpec("extra")},
+		"core github":      {Server: model.GitHubCapabilityServerID, Spec: capabilitytest.MethodSpec("extra")},
 		"no server":        {Spec: capabilitytest.MethodSpec("extra")},
 		"bad method name":  {Server: capabilitytest.MethodServer, Spec: capabilitytest.MethodSpec("Not A Method")},
 		"core alias taken": {Server: capabilitytest.MethodServer, Spec: capabilitytest.MethodSpec("extra"), Aliases: []string{"self-repair"}},
@@ -129,5 +130,57 @@ func TestRegisterMethodRefusesABadMethod(t *testing.T) {
 	}()
 	if got := model.CanonicalLegacyGrant("zz-first"); got != "zz-first" {
 		t.Errorf("CanonicalLegacyGrant(zz-first) = %q after a refused registration, want it as it is", got)
+	}
+}
+
+// A default-on capability that needs the sandbox to reach the internet
+// says so in its registration, and the shipped director then stays open
+// on that build (director-capabilities.spec.md §3.1.6); one that does
+// not leaves it closed. Both the method and the provider seam carry it.
+func TestADefaultOnCapabilityNeedingSandboxEgressKeepsTheDirectorOpen(t *testing.T) {
+	if got := model.DefaultConsoleSessions()[0].NetworkAccess; got != model.NetworkNone {
+		t.Fatalf("before anything registers, the director ships %q, want none", got)
+	}
+	unregisterGrainSide := capability.Register(capability.Method{
+		Server:    capabilitytest.MethodServer,
+		Spec:      capabilitytest.MethodSpec("grainside"),
+		DefaultOn: true,
+	})
+	t.Cleanup(unregisterGrainSide)
+	if got := model.DefaultConsoleSessions()[0].NetworkAccess; got != model.NetworkNone {
+		t.Errorf("with a grain-side default-on method the director ships %q, want none", got)
+	}
+
+	for name, register := range map[string]func() func(){
+		"method": func() func() {
+			return capability.Register(capability.Method{
+				Server:        capabilitytest.MethodServer,
+				Spec:          capabilitytest.MethodSpec("egress"),
+				DefaultOn:     true,
+				SandboxEgress: true,
+			})
+		},
+		"egress without DefaultOn": func() func() {
+			return capability.Register(capability.Method{
+				Server:        capabilitytest.MethodServer,
+				Spec:          capabilitytest.MethodSpec("egress-off"),
+				SandboxEgress: true,
+			})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			unregister := register()
+			want := model.NetworkOpen
+			if name == "egress without DefaultOn" {
+				want = model.NetworkNone
+			}
+			if got := model.DefaultConsoleSessions()[0].NetworkAccess; got != want {
+				t.Errorf("the director ships %q, want %q", got, want)
+			}
+			unregister()
+			if got := model.DefaultConsoleSessions()[0].NetworkAccess; got != model.NetworkNone {
+				t.Errorf("after unregistering the director ships %q, want none", got)
+			}
+		})
 	}
 }

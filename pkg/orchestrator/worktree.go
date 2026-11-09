@@ -252,8 +252,8 @@ func identityTrailers(task model.Task) []string {
 	if requester := requestedBy(task); requester != "" {
 		out = append(out, "Requested-by: "+requester)
 	}
-	if a := task.Approval; a != nil && namesAPerson(a.Actor) {
-		out = append(out, "Approved-by: "+strings.TrimSpace(a.Actor.ID))
+	if approver := approvedBy(task.Approval); approver != "" {
+		out = append(out, "Approved-by: "+approver)
 	}
 	return out
 }
@@ -262,11 +262,30 @@ func identityTrailers(task model.Task) []string {
 // (identityTrailers).
 func requestedBy(task model.Task) string {
 	requester := strings.TrimSpace(task.Creator)
-	if requester == "" {
+	lowerReq := strings.ToLower(requester)
+	if requester == "" || strings.HasSuffix(lowerReq, ".gserviceaccount.com") || strings.HasPrefix(lowerReq, "serviceaccount:") {
 		return ""
 	}
-	filer := task.Origin.Attribution.Actor
-	if filer.Kind != model.PrincipalHuman && filer.Kind != model.PrincipalService {
+	attr := task.Origin.Attribution
+	filer := attr.Actor
+	if filer.Kind == model.PrincipalService {
+		if attr.OnBehalfOf != nil && namesAPerson(*attr.OnBehalfOf) && strings.EqualFold(requester, strings.TrimSpace(attr.OnBehalfOf.ID)) {
+			return requester
+		}
+		return ""
+	}
+	if filer.Kind != model.PrincipalHuman {
+		// An agent filing on behalf of the requester names them only when
+		// somebody verified who that is. An external agent credential
+		// whose owner the shared access code or loopback merely typed
+		// (model.ExternalAgentToken.OwnerSource) files with Creator set to
+		// that owner and OnBehalfOf recorded with the unverified source:
+		// that is the `grain create -author` case above, not a verified
+		// requester, so it gets no Requested-by: either.
+		if b := attr.OnBehalfOf; b != nil && b.Kind == model.PrincipalHuman && !b.Verified() &&
+			strings.EqualFold(requester, strings.TrimSpace(b.ID)) {
+			return ""
+		}
 		return requester
 	}
 	if !strings.EqualFold(requester, strings.TrimSpace(filer.ID)) || !namesAPerson(filer) {
@@ -275,19 +294,32 @@ func requestedBy(task model.Task) string {
 	return requester
 }
 
+func approvedBy(a *model.Attribution) string {
+	if a == nil {
+		return ""
+	}
+	if a.Actor.Kind == model.PrincipalService {
+		if a.OnBehalfOf != nil && namesAPerson(*a.OnBehalfOf) {
+			return strings.TrimSpace(a.OnBehalfOf.ID)
+		}
+		return ""
+	}
+	if namesAPerson(a.Actor) {
+		return strings.TrimSpace(a.Actor.ID)
+	}
+	return ""
+}
+
 // namesAPerson reports whether p may be named in a commit trailer: a
-// verified person or service account, or the operator fallback (a human
-// with one of the sources nobody in particular is behind, or none, for
-// a row written before sources existed).
+// verified human principal, or the operator fallback (a human with one of
+// the sources nobody in particular is behind, or none, for a row written
+// before sources existed). Service principals never name a person (AU-26.4).
 func namesAPerson(p model.Principal) bool {
-	if strings.TrimSpace(p.ID) == "" {
+	if p.Kind != model.PrincipalHuman || strings.TrimSpace(p.ID) == "" {
 		return false
 	}
 	if p.Verified() {
 		return true
-	}
-	if p.Kind != model.PrincipalHuman {
-		return false
 	}
 	switch p.Source {
 	case "", model.SourceAccessCode, model.SourceLoopback, model.SourceInProcess:

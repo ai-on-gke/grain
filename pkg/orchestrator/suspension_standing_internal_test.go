@@ -97,11 +97,11 @@ var standingCases = []standingCase{
 			t.Fatal(err)
 		}
 	}},
-	{name: "priority-dispatch", workers: 1, give: func(t *testing.T, ctx context.Context, store *model.Store, tk *model.Task) {
-		tk.Grants = append(tk.Grants, model.Grant{Capability: model.PriorityDispatchCapability, Via: model.GrantByLabel})
+	{name: "bypass", workers: 1, give: func(t *testing.T, ctx context.Context, store *model.Store, tk *model.Task) {
+		tk.Admission = model.AdmissionBypass
 	}},
 	{name: "durable", workers: 1, give: func(t *testing.T, ctx context.Context, store *model.Store, tk *model.Task) {
-		tk.Grants = append(tk.Grants, model.Grant{Capability: model.DurableCapability, Via: model.GrantByLabel})
+		tk.Admission = model.AdmissionDurable
 	}},
 	{name: "front-of-backlog", workers: 2, give: func(t *testing.T, ctx context.Context, store *model.Store, tk *model.Task) {
 		tk.OrderKey = -1
@@ -119,7 +119,7 @@ var standingCases = []standingCase{
 		tk.Origin.Reason = model.ReasonConsoleSession
 		tk.Tags = append(tk.Tags, model.ConsoleSessionTag(model.DirectorSessionID))
 		tk.Interactive = true
-		tk.Grants = append(tk.Grants, model.Grant{Capability: model.DurableCapability, Via: model.GrantByGrain})
+		tk.Admission = model.AdmissionDurable
 		if err := store.SetTaskGoal(ctx, tk.ID, model.GoalDecl{Kind: model.GoalPersonCloses}, model.PrincipalString(model.ConsoleSessionPrincipal), standingNow); err != nil {
 			t.Fatal(err)
 		}
@@ -209,7 +209,7 @@ func keepsStanding(t *testing.T, sc standingCase, end ending) {
 	}
 	sc.give(t, ctx, store, &subject)
 	if end.raisedBy != "" && !subject.IsDurable() {
-		subject.Grants = append(subject.Grants, model.Grant{Capability: model.DurableCapability, Via: model.GrantByLabel})
+		subject.Admission = model.AdmissionDurable
 	}
 	if err := store.PutTask(ctx, subject); err != nil {
 		t.Fatal(err)

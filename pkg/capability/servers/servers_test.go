@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -531,7 +532,7 @@ func TestARunHostBuiltinThatNeverStartedIsRetried(t *testing.T) {
 	attach := func(ctx context.Context, id string, cfg protocol.ServerConfig, _ protocol.SecretLookup, _ protocol.DialOptions) (*protocol.Server, error) {
 		calls++
 		if !entryThere {
-			return nil, errors.New(`hostd refused: no capabilities entry "grain-gcp"`)
+			return nil, errors.New(`the host agent refused: no capabilities entry "grain-gcp"`)
 		}
 		return protocol.NewServer(ctx, id, &fakeCaller{methods: []string{"gcp-key"}})
 	}
@@ -549,5 +550,51 @@ func TestARunHostBuiltinThatNeverStartedIsRetried(t *testing.T) {
 	r.Sync(ctx, cfg)
 	if st := r.Statuses()[0]; st.State != Attached || calls != 2 {
 		t.Fatalf("after the entry appeared: %+v (%d attaches), want attached on the retry", st, calls)
+	}
+}
+
+// syncWriter collects what a server's stderr is handed, one Write each.
+type syncWriter struct {
+	mu     sync.Mutex
+	writes []string
+}
+
+func (w *syncWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.writes = append(w.writes, string(p))
+	return len(p), nil
+}
+
+// A stdio server's stderr reaches Options.Stderr a whole line per Write
+// with every secret it was started with scrubbed -- the daemon logs each
+// one as it is, so the gcp server's audit lines are kept (2026-11-08 gcp
+// token-mode walk: they were discarded) and a server that prints its own
+// credential does not put it in the daemon's log.
+func TestAStdioServersStderrIsHandedOverInScrubbedLines(t *testing.T) {
+	h := newHarness()
+	w := &syncWriter{}
+	var gotID string
+	attach := func(ctx context.Context, id string, cfg protocol.ServerConfig, secrets protocol.SecretLookup, opts protocol.DialOptions) (*protocol.Server, error) {
+		resolved, err := cfg.Resolve(secrets)
+		if err != nil {
+			return nil, err
+		}
+		if opts.Stderr == nil {
+			t.Fatal("the server was given no stderr")
+		}
+		fmt.Fprintf(opts.Stderr, "gcp: starting with %s\ngcp: audit: attempt a-1: ", resolved.Env["TOKEN"])
+		fmt.Fprint(opts.Stderr, "granted access tokens\n")
+		return h.attach(ctx, id, cfg, secrets, opts)
+	}
+	r := New(Options{Attach: attach, Secrets: func(string) (string, bool) { return "hunter2-very-secret", true },
+		Stderr: func(id string) io.Writer { gotID = id; return w }})
+	r.Sync(context.Background(), map[string]protocol.ServerConfig{gcp: {Command: "grain", Env: map[string]string{"TOKEN": "$secret:tok"}}})
+	if st := r.Statuses()[0]; st.State != Attached {
+		t.Fatalf("status = %+v", st)
+	}
+	want := []string{"gcp: starting with [redacted]\n", "gcp: audit: attempt a-1: granted access tokens\n"}
+	if gotID != gcp || strings.Join(w.writes, "|") != strings.Join(want, "|") {
+		t.Errorf("stderr of %q = %q, want %q", gotID, w.writes, want)
 	}
 }

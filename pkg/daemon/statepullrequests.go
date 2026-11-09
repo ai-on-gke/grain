@@ -39,22 +39,26 @@ type StateRepoPullRequestClient struct {
 }
 
 var (
-	_ github.Client             = (*StateRepoPullRequestClient)(nil)
-	_ github.MergeQueuer        = (*StateRepoPullRequestClient)(nil)
-	_ github.MergeRulesReader   = (*StateRepoPullRequestClient)(nil)
-	_ github.DiffReader         = (*StateRepoPullRequestClient)(nil)
-	_ github.FileReader         = (*StateRepoPullRequestClient)(nil)
-	_ github.ReviewSubmitter    = (*StateRepoPullRequestClient)(nil)
-	_ github.TagLister          = (*StateRepoPullRequestClient)(nil)
-	_ github.ReleaseTagReader   = (*StateRepoPullRequestClient)(nil)
-	_ github.WorkflowDispatcher = (*StateRepoPullRequestClient)(nil)
-	_ github.CollaboratorReader = (*StateRepoPullRequestClient)(nil)
-	_ github.ReactionPoster     = (*StateRepoPullRequestClient)(nil)
-	_ github.CheckRunWriter     = (*StateRepoPullRequestClient)(nil)
-	_ github.CallerLabeler      = (*StateRepoPullRequestClient)(nil)
-	_ github.JobLogTailer       = (*StateRepoPullRequestClient)(nil)
-	_ github.WorkflowRunsReader = (*StateRepoPullRequestClient)(nil)
-	_ github.ActionsReader      = (*StateRepoPullRequestClient)(nil)
+	_ github.Client                   = (*StateRepoPullRequestClient)(nil)
+	_ github.MergeQueuer              = (*StateRepoPullRequestClient)(nil)
+	_ github.MergeRulesReader         = (*StateRepoPullRequestClient)(nil)
+	_ github.DiffReader               = (*StateRepoPullRequestClient)(nil)
+	_ github.FileReader               = (*StateRepoPullRequestClient)(nil)
+	_ github.ReviewSubmitter          = (*StateRepoPullRequestClient)(nil)
+	_ github.TagLister                = (*StateRepoPullRequestClient)(nil)
+	_ github.ReleaseTagReader         = (*StateRepoPullRequestClient)(nil)
+	_ github.WorkflowDispatcher       = (*StateRepoPullRequestClient)(nil)
+	_ github.CollaboratorReader       = (*StateRepoPullRequestClient)(nil)
+	_ github.ReactionPoster           = (*StateRepoPullRequestClient)(nil)
+	_ github.CheckRunWriter           = (*StateRepoPullRequestClient)(nil)
+	_ github.CallerLabeler            = (*StateRepoPullRequestClient)(nil)
+	_ github.JobLogTailer             = (*StateRepoPullRequestClient)(nil)
+	_ github.WorkflowRunsReader       = (*StateRepoPullRequestClient)(nil)
+	_ github.BranchWorkflowRunsReader = (*StateRepoPullRequestClient)(nil)
+	_ github.ActionsReader            = (*StateRepoPullRequestClient)(nil)
+	_ github.CommitStatusReader       = (*StateRepoPullRequestClient)(nil)
+	_ github.PathCommitLister         = (*StateRepoPullRequestClient)(nil)
+	_ github.GitOnlySource            = (*StateRepoPullRequestClient)(nil)
 
 	_ orchestrator.ReleaseQualificationForge = (*StateRepoPullRequestClient)(nil)
 )
@@ -1125,6 +1129,17 @@ func (c *StateRepoPullRequestClient) CompletedWorkflowRuns(owner, name string, l
 	return reader.CompletedWorkflowRuns(owner, name, limit)
 }
 
+func (c *StateRepoPullRequestClient) CompletedBranchWorkflowRuns(owner, name, branch string, limit int) ([]github.WorkflowRun, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil, nil
+	}
+	reader, ok := c.Client.(github.BranchWorkflowRunsReader)
+	if !ok {
+		return nil, nil
+	}
+	return reader.CompletedBranchWorkflowRuns(owner, name, branch, limit)
+}
+
 func (c *StateRepoPullRequestClient) ListWorkflowRunJobs(owner, name string, runID int64) ([]github.WorkflowRunJob, error) {
 	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
 		return nil, nil
@@ -1459,6 +1474,45 @@ func (c *StateRepoPullRequestClient) ListTags(owner, name string) ([]github.Tag,
 		return nil, nil
 	}
 	return lister.ListTags(owner, name)
+}
+
+// CommitStatuses is the wrapped client's own, as ListTags is: what the
+// release-qualification reconciler reads a status-declared Stage 1 from.
+func (c *StateRepoPullRequestClient) CommitStatuses(owner, name, ref string) ([]github.CommitStatus, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil, nil
+	}
+	reader, ok := c.Client.(github.CommitStatusReader)
+	if !ok {
+		return nil, nil
+	}
+	return reader.CommitStatuses(owner, name, ref)
+}
+
+// ListPathCommits is the wrapped client's own, as ListTags is: what the
+// release-qualification reconciler finds a go.mod sync with.
+func (c *StateRepoPullRequestClient) ListPathCommits(owner, name, ref, filePath string) ([]github.Commit, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil, nil
+	}
+	lister, ok := c.Client.(github.PathCommitLister)
+	if !ok {
+		return nil, nil
+	}
+	return lister.ListPathCommits(owner, name, ref, filePath)
+}
+
+// GitOnly is the wrapped client's GitOnlySource answer, so reconcilers
+// behind StateRepoPullRequestClient (such as release-pending) skip
+// git-only credentials and plain-git hosts rather than polling a forge API.
+func (c *StateRepoPullRequestClient) GitOnly(owner, name string) string {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return ""
+	}
+	if src, ok := c.Client.(github.GitOnlySource); ok {
+		return src.GitOnly(owner, name)
+	}
+	return ""
 }
 
 // ListMatchingTags is the wrapped client's own, as ListTags is: what the

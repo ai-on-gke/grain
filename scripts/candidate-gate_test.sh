@@ -379,15 +379,35 @@ check "check-qualification: an optional job that was skipped is ignored, a requi
 lacks "check-qualification: the skipped optional job is not judged" "real KVM"
 
 qualify "$green1" "$(checks_file q-c-flake failure)"
-check "check-qualification: Stage 2's first failure gets one retry" 2 \
-  "RERUN qualification grain/release-qualification flake"
+# grain concludes grain/release-qualification failure only once an item
+# has failed its own retry, and never re-runs a completed candidate: its
+# first failure is confirmed red, not a flake to wait on
+# (docs/test-runs/2026-11-04-release-train.md, finding 1).
+check "check-qualification: Stage 2's failure is confirmed red at once" 1 \
+  "FAIL grain/release-qualification: failed (failure): grain concludes failure only once an item has failed its own retry" \
+  "Qualification: FAIL"
+lacks "check-qualification: Stage 2's failure asks for no re-run" "RERUN qualification"
 qualify "$green1" "$(checks_file q-c-flake2 failure success)"
-check "check-qualification: Stage 2 passing on its retry qualifies" 0 "passed on its one retry" "Qualification: PASS"
+check "check-qualification: Stage 2's newest attempt is its verdict" 0 "PASS grain/release-qualification: passed (failure,success)" "Qualification: PASS"
 qualify "$green1" "$(checks_file q-c-red failure failure)"
-check "check-qualification: Stage 2 failing its retry is red" 1 "FAIL grain/release-qualification: failed again on its retry"
+check "check-qualification: Stage 2 failing twice is red" 1 "FAIL grain/release-qualification: failed (failure,failure)"
 qualify "$green1" "$(checks_file q-c-infra neutral)"
 check "check-qualification: a neutral (INFRA) Stage 2 verdict is re-run" 3 \
+  "stalled after Stage 2's infra re-runs" \
   "RERUN qualification grain/release-qualification infra" "Qualification: INFRA"
+qualify "$green1" "$(checks_file q-c-infra-retry neutral in_progress)"
+check "check-qualification: a fresh Stage 2 attempt in progress after neutral is pending" 2 \
+  "PENDING grain/release-qualification: still running (infra,pending)" "Qualification: PENDING"
+lacks "check-qualification: a running Stage 2 retry is neither stalled nor asking for a re-run" "RERUN qualification"
+qualify "$green1" "$(checks_file q-c-infra-pass neutral success)"
+check "check-qualification: a fresh Stage 2 attempt passing after neutral qualifies the RC" 0 \
+  "PASS grain/release-qualification: passed (infra,success)" "Qualification: PASS"
+qualify "$green1" "$(checks_file q-c-infra-fail neutral failure)"
+check "check-qualification: a fresh Stage 2 attempt failing after neutral is confirmed red" 1 \
+  "FAIL grain/release-qualification: failed (infra,failure)" "Qualification: FAIL"
+qualify "$green1" "$(checks_file q-c-prior-red-pending failure failure in_progress)"
+check "check-qualification: Stage 2's newest attempt is pending even after earlier check runs on the commit failed" 2 \
+  "PENDING grain/release-qualification: still running (failure,failure,pending)" "Qualification: PENDING"
 
 # Only grain's own app's check run qualifies: a same-named one from an
 # Actions workflow (checks: write), another app, or no app at all is
@@ -403,16 +423,37 @@ check "check-qualification: foreign successes do not override grain's own pendin
   "PENDING grain/release-qualification: still running"
 qualify "$green1" "$(checks_file q-c-foreign3 failure actions:success failure)"
 check "check-qualification: a foreign success between grain's failures is no retry pass" 1 \
-  "FAIL grain/release-qualification: failed again on its retry"
+  "FAIL grain/release-qualification: failed (failure,failure)"
 CHECK_QUALIFICATION_APP=42 qualify "$green1" "$(checks_file q-c-appid actions:failure success)"
 check "check-qualification: CHECK_QUALIFICATION_APP may name the app by id" 0 \
   "PASS grain/release-qualification: passed" "Qualification: PASS"
 CHECK_QUALIFICATION_APP=42 qualify "$green1" "$(checks_file q-c-numslug 42:success)"
 check "check-qualification: an app id is never matched against another app's slug" 2 \
   "IGNORED grain/release-qualification: 1 from 42, not 42" "Qualification: PENDING"
+# With no app configured (empty or unset) no check run is trusted, and the
+# gate fails closed rather than qualify on Stage 1 alone.
 CHECK_QUALIFICATION_APP='' qualify "$green1" "$(checks_file q-c-noapp success)"
 check "check-qualification: with no app configured no check run is trusted" 64 "CHECK_QUALIFICATION_APP is unset"
 lacks "check-qualification: an unconfigured gate never passes" "Qualification: PASS"
+lacks "check-qualification: an unconfigured gate never skips Stage 2" "SKIPPED grain/release-qualification"
+unset CHECK_QUALIFICATION_APP
+qualify "$green1" "$(checks_file q-c-unset success)"
+export CHECK_QUALIFICATION_APP=grain-test
+check "check-qualification: an unset CHECK_QUALIFICATION_APP trusts no check run" 64 "CHECK_QUALIFICATION_APP is unset"
+lacks "check-qualification: an unset gate never passes" "Qualification: PASS"
+# With CHECK_QUALIFICATION_APP=none, set explicitly (a forge connection that
+# is no GitHub App posts no check run), Stage 2 is skipped and no check run --
+# grain's-looking, foreign or app-less -- is read: Stage 1 qualifies alone.
+CHECK_QUALIFICATION_APP=none qualify "$green1" "$(checks_file q-c-none failure actions:success noapp:success)"
+check "check-qualification: CHECK_QUALIFICATION_APP=none skips Stage 2" 0 \
+  "SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)" "Qualification: PASS $tag."
+lacks "check-qualification: CHECK_QUALIFICATION_APP=none judges no check run" "grain/release-qualification: failed"
+CHECK_QUALIFICATION_APP=none qualify "$green1"
+check "check-qualification: CHECK_QUALIFICATION_APP=none needs no check run listing" 0 \
+  "SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none" "Qualification: PASS $tag."
+mapfile -t red < <(stage1_run success 100 1 "$recent" "state repository soak=failure")
+CHECK_QUALIFICATION_APP=none qualify "$(jobs_file q-none-red "${red[@]}" "$(gh_job "state repository soak" failure 101 1 $((recent + 600)))")"
+check "check-qualification: CHECK_QUALIFICATION_APP=none still needs Stage 1" 1 "Qualification: FAIL"
 
 RELEASE_NEVER_PROMOTE="v1.14.0 v3.1.0" qualify "$green1" "$(checks_file q-never success)"
 check "check-qualification: RELEASE_NEVER_PROMOTE fails an otherwise green RC" 1 "FAIL never: RELEASE_NEVER_PROMOTE (v1.14.0 v3.1.0) names v3.1.0"

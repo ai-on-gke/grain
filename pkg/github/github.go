@@ -421,11 +421,26 @@ type StaticToken struct {
 
 func (s StaticToken) TokenFor(owner, repo string) *string { return s.Token }
 
-// GitOnlySource is a TokenSource that can say a repository has no forge
-// API credential at all -- one reached with an SSH key and nothing paired
-// to it (gitproxy.GitOnlyReason). GitOnly is that sentence, or "".
+// GitOnlySource is a TokenSource or Client that can say a repository has no
+// forge API credential at all -- one reached with an SSH key and nothing
+// paired to it (gitproxy.GitOnlyReason), or on a plain git host with no
+// forge API. GitOnly is that sentence, or "".
 type GitOnlySource interface {
 	GitOnly(owner, repo string) string
+}
+
+var _ GitOnlySource = (*RESTClient)(nil)
+
+// GitOnly reports why owner/repo has no forge API credential (GitOnlySource),
+// or "".
+func (c *RESTClient) GitOnly(owner, repo string) string {
+	if c == nil {
+		return ""
+	}
+	if src, ok := c.Tokens.(GitOnlySource); ok {
+		return src.GitOnly(owner, repo)
+	}
+	return ""
 }
 
 // GitBranchSource is a TokenSource that can read a repository's branch
@@ -441,10 +456,8 @@ type GitBranchSource interface {
 // only: said plainly rather than as the 401 or 404 an unauthenticated
 // call would come back with.
 func (c *RESTClient) gitOnly(owner, repo string) error {
-	if src, ok := c.Tokens.(GitOnlySource); ok {
-		if reason := src.GitOnly(owner, repo); reason != "" {
-			return errors.New(reason)
-		}
+	if reason := c.GitOnly(owner, repo); reason != "" {
+		return errors.New(reason)
 	}
 	return nil
 }
@@ -1632,13 +1645,19 @@ type RESTClient struct {
 	// in the process-wide ledger (budget.go). Empty is Unattributed; As
 	// and WithCaller make a labelled copy.
 	Caller string
+
+	// completedRunsETags caches the last ETag seen per (owner, repo, branch,
+	// limit) for CompletedWorkflowRuns across As / WithCaller shallow copies
+	// of this client, without keying a process-wide map by a Transport heap
+	// address (%p) that the garbage collector can reuse for a later fake.
+	completedRunsETags *sync.Map
 }
 
 // NewClient returns a RESTClient. tokens may be nil, meaning every
 // request goes out unauthenticated -- a fine, deliberate credential shape
 // for a public repo, not an error case.
 func NewClient(transport Transport, tokens TokenSource) *RESTClient {
-	return &RESTClient{Transport: transport, Tokens: tokens}
+	return &RESTClient{Transport: transport, Tokens: tokens, completedRunsETags: &sync.Map{}}
 }
 
 func (c *RESTClient) headers(owner, repo string, jsonBody bool) map[string]string {
@@ -3897,6 +3916,9 @@ type WorkflowRun struct {
 	RunAttempt int        `json:"run_attempt"`
 	StartedAt  *time.Time `json:"run_started_at"`
 	UpdatedAt  *time.Time `json:"updated_at"`
+	// DisplayTitle is the run's own name (a workflow's `run-name`), which
+	// is how an on-demand release build of one commit names itself.
+	DisplayTitle string `json:"display_title,omitempty"`
 }
 
 // WorkflowRunJob is one job of a GitHub Actions workflow run returned by
@@ -3921,6 +3943,16 @@ type WorkflowRunsReader interface {
 }
 
 var _ WorkflowRunsReader = (*RESTClient)(nil)
+
+// BranchWorkflowRunsReader is the optional WorkflowRunsReader extension for
+// polling completed workflow runs on one branch (?branch=<branch>&status=completed),
+// so a busy repository's pull-request runs cannot push a slow base-branch
+// release or scheduled workflow out of the page.
+type BranchWorkflowRunsReader interface {
+	CompletedBranchWorkflowRuns(owner, repo, branch string, limit int) ([]WorkflowRun, error)
+}
+
+var _ BranchWorkflowRunsReader = (*RESTClient)(nil)
 
 // WorkflowRunRerunner is the optional Client capability for asking GitHub
 // Actions to run a concluded run's failed jobs again, as a new attempt of
@@ -3951,24 +3983,40 @@ func (c *RESTClient) RerunFailedJobs(owner, repo string, runID int64) error {
 	return nil
 }
 
-// completedRunsETags caches the last ETag seen per (Transport, owner, repo) for
-// CompletedWorkflowRuns so unchanged polls cost 304 Not Modified. Keyed in a
-// package-level sync.Map because RESTClient.As makes a shallow copy of RESTClient.
-var completedRunsETags sync.Map
-
 // CompletedWorkflowRuns returns the most recent completed workflow runs in
 // owner/repo (up to limit), sending If-None-Match when an ETag was previously
 // observed and returning (nil, nil) on 304 Not Modified or 404.
 func (c *RESTClient) CompletedWorkflowRuns(owner, repo string, limit int) ([]WorkflowRun, error) {
+	return c.completedWorkflowRuns(owner, repo, "", limit)
+}
+
+// CompletedBranchWorkflowRuns returns the most recent completed workflow runs
+// on branch in owner/repo (up to limit), sending If-None-Match when an ETag was
+// previously observed and returning (nil, nil) on 304 Not Modified or 404.
+func (c *RESTClient) CompletedBranchWorkflowRuns(owner, repo, branch string, limit int) ([]WorkflowRun, error) {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return nil, nil
+	}
+	return c.completedWorkflowRuns(owner, repo, branch, limit)
+}
+
+func (c *RESTClient) completedWorkflowRuns(owner, repo, branch string, limit int) ([]WorkflowRun, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
 	endpoint := fmt.Sprintf("/repos/%s/%s/actions/runs?status=completed&per_page=%d", owner, repo, limit)
+	if branch != "" {
+		endpoint = fmt.Sprintf("/repos/%s/%s/actions/runs?branch=%s&status=completed&per_page=%d",
+			owner, repo, url.QueryEscape(branch), limit)
+	}
 	headers := c.headers(owner, repo, false)
-	cacheKey := fmt.Sprintf("%p/%s/%s/%d", c.Transport, strings.ToLower(owner), strings.ToLower(repo), limit)
-	if etag, ok := completedRunsETags.Load(cacheKey); ok {
-		if s, ok := etag.(string); ok && s != "" {
-			headers["If-None-Match"] = s
+	cacheKey := fmt.Sprintf("%s/%s/%s/%d", strings.ToLower(owner), strings.ToLower(repo), branch, limit)
+	if c.completedRunsETags != nil {
+		if etag, ok := c.completedRunsETags.Load(cacheKey); ok {
+			if s, ok := etag.(string); ok && s != "" {
+				headers["If-None-Match"] = s
+			}
 		}
 	}
 	resp, err := c.request("GET", endpoint, headers, nil)
@@ -3982,10 +4030,12 @@ func (c *RESTClient) CompletedWorkflowRuns(owner, repo string, limit int) ([]Wor
 	default:
 		return nil, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
 	}
-	if etag := strings.TrimSpace(resp.Headers["ETag"]); etag != "" {
-		completedRunsETags.Store(cacheKey, etag)
-	} else if etag := strings.TrimSpace(resp.Headers["Etag"]); etag != "" {
-		completedRunsETags.Store(cacheKey, etag)
+	if c.completedRunsETags != nil {
+		if etag := strings.TrimSpace(resp.Headers["ETag"]); etag != "" {
+			c.completedRunsETags.Store(cacheKey, etag)
+		} else if etag := strings.TrimSpace(resp.Headers["Etag"]); etag != "" {
+			c.completedRunsETags.Store(cacheKey, etag)
+		}
 	}
 	var data struct {
 		WorkflowRuns []struct {
@@ -4620,35 +4670,46 @@ type TagLister interface {
 
 var _ TagLister = (*RESTClient)(nil)
 
-// ListTags returns owner/repo's most recent tags, one page of them.
+// ListTags returns every one of owner/repo's tags.
 //
 // GET /repos/{owner}/{repo}/tags answers each tag with the commit it
 // points at already peeled, which is the sha a check run is posted on,
-// so an annotated tag costs no second read. One page, deliberately: the
-// caller only ever wants the newest candidate, and this runs on a timer.
+// so an annotated tag costs no second read.
+//
+// Every page of them, not the first alone: a repository whose release
+// train has cut a few dozen versions -- each an rc.N or three, their
+// -discarded markers, a -pending and the release -- is past the first
+// hundred, and GitHub does not promise them newest version first (a name
+// order puts v3.9.0's tags ahead of v3.10.0-rc.1's), so one page alone
+// could miss the newest release candidate, or the -discarded marker that
+// drops it.
 func (c *RESTClient) ListTags(owner, repo string) ([]Tag, error) {
-	resp, err := c.get(owner, repo, fmt.Sprintf("/repos/%s/%s/tags?per_page=100", owner, repo))
-	if err != nil {
-		return nil, err
-	}
-	if resp.Status == 404 {
-		return nil, nil
-	}
-	if resp.Status != 200 {
-		return nil, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
-	}
-	var data []struct {
-		Name   string `json:"name"`
-		Commit struct {
-			SHA string `json:"sha"`
-		} `json:"commit"`
-	}
-	if err := json.Unmarshal(resp.Body, &data); err != nil {
-		return nil, err
-	}
-	tags := make([]Tag, 0, len(data))
-	for _, t := range data {
-		tags = append(tags, Tag{Name: t.Name, SHA: t.Commit.SHA})
+	tags := []Tag{}
+	path := fmt.Sprintf("/repos/%s/%s/tags?per_page=100", owner, repo)
+	for path != "" {
+		resp, err := c.get(owner, repo, path)
+		if err != nil {
+			return nil, err
+		}
+		if resp.Status == 404 {
+			return nil, nil
+		}
+		if resp.Status != 200 {
+			return nil, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+		}
+		var data []struct {
+			Name   string `json:"name"`
+			Commit struct {
+				SHA string `json:"sha"`
+			} `json:"commit"`
+		}
+		if err := json.Unmarshal(resp.Body, &data); err != nil {
+			return nil, err
+		}
+		for _, t := range data {
+			tags = append(tags, Tag{Name: t.Name, SHA: t.Commit.SHA})
+		}
+		path = nextPagePath(resp.Headers["Link"])
 	}
 	return tags, nil
 }

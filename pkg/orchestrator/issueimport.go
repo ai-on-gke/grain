@@ -59,7 +59,7 @@ const (
 var issueImportPolled sync.Map
 
 func issueImportKey(store *model.Store, repo model.RepoRef) string {
-	return fmt.Sprintf("%p|%s", store, strings.ToLower(repo.String()))
+	return fmt.Sprintf("%d|%s", store.ID(), strings.ToLower(repo.String()))
 }
 
 // reconcileIssueImports runs ImportIssues for every repository whose

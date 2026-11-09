@@ -48,7 +48,7 @@ Write routing is enforced centrally in `pkg/ui/config_refusal.go` (`configRepoFo
 | **Bootstrap (`Models`, `Sandboxes`)** | UI/API + config PR (`SyncAfterWrite`) | **UI/API** (lock-exempt; `SyncAfterWrite`) + config PR | External config PR (`409` on API) | **Yes** (`tables/grain_config.json`, without secrets) |
 | **Bootstrap host-local (model credentials)** | UI/API | **UI/API** (lock-exempt) | **UI/API** (host-local) | **Never** (`<data-dir>/secrets`) |
 | **Config-managed (`General`, `Git`, `Repositories`, `Tasks`, `Agents`, `Capabilities`, `CI`, `Memory`, `Caches`, `Engine`, `Boards`, `Processes`)** | UI/API + config PR (`SyncAfterWrite`) | `grain/config` PR only (`409` on API) | External config PR only (`409` on API) | **Yes** (`settings/*.yml`, `tables/*.json`, `memory/**`, `scripts/**`, `workflows/**`) |
-| **Write-only secrets (`Legacy capabilities`, git tokens/keys, capability secrets)** | UI / `request_secret` | **UI / `request_secret`** | **UI / `request_secret`** | **Never** (`<data-dir>/secrets`; `$secret:<name>` refs only) |
+| **Write-only secrets (`Capabilities` → `Deployment credentials`, git tokens/keys, capability secrets)** | UI / `request_secret` | **UI / `request_secret`** | **UI / `request_secret`** | **Never** (`<data-dir>/secrets`; `$secret:<name>` refs only) |
 | **Access & Browser preferences (`Access`, `Preferences`)** | Local UI/API or `localStorage` | **Local** UI/API or `localStorage` | **Local** UI/API or `localStorage` | **Never** |
 | **Repository-declared (`.grain/` in target repo)** | Target-repo PR overrides | Target-repo PR overrides | Target-repo PR overrides | Derived cache only; target repo's default branch wins |
 
@@ -62,7 +62,7 @@ Covers the `"config-managed"` nav group (`General`, `Git` credential metadata/bi
 
 ### Secrets, access, and browser preferences
 
-Secret values (`Legacy capabilities` / `CredentialsSection`, model API keys, git tokens/SSH keys, capability server secrets, `gcp_key` material) enter via `allowInExternalMode` UI cards or `request_secret`, live encrypted in `<data-dir>/secrets`, and are referenced in `grain/config` solely as `$secret:<name>`, `<secret>/<key>`, or credential IDs. `Access` (`GRAIN_ACCESS_CODE`, IAP) and `Preferences` (`localStorage`) never touch `grain/config`.
+Secret values (`Capabilities` → `Deployment credentials` / `CredentialsSection`, model API keys, git tokens/SSH keys, capability server secrets, `gcp_key` material) enter via `allowInExternalMode` UI cards or `request_secret`, live encrypted in `<data-dir>/secrets`, and are referenced in `grain/config` solely as `$secret:<name>`, `<secret>/<key>`, or credential IDs. `Access` (`GRAIN_ACCESS_CODE`, IAP) and `Preferences` (`localStorage`) never touch `grain/config`.
 
 ### Repository-declared authority (`.grain/` — `pkg/repodecl`)
 

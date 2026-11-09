@@ -86,7 +86,7 @@ var PipelineStewardAPIPresets = []string{"task-admin", "dispatch-control", "ci-r
 //     and each notification it subscribes to (Store.wakeStandingTask,
 //     Store.WakeRestingTask) rather than one per firing. The handover it
 //     writes each wake is what it remembers, cursor included.
-//   - Durable (DurableCapability), with goal pipeline-healthy: on_met
+//   - Admission durable (AdmissionDurable), with goal pipeline-healthy: on_met
 //     rest, on_limit notify. A wake that ends rests the task on its goal
 //     rather than completing it; no deadline or wait cap ends a wake, and
 //     it is never held behind max_workers.
@@ -98,17 +98,18 @@ var PipelineStewardAPIPresets = []string{"task-admin", "dispatch-control", "ci-r
 //     nothing resolves.
 //   - NothingNeededAck, so a wake that ends on nothing_needed leaves the
 //     task open to be woken again rather than closing it.
-//   - The grants: the presets above, what self-debug became
+//   - The grants: the presets above, and what self-debug became
 //     (api:self-debug for the task readers and read_pipeline_changes, and
-//     grain#source), durable, and priority-dispatch
-//     (PriorityDispatchCapability), so that a congested pipeline -- the
-//     thing this job exists to unstick -- cannot starve it of a worker,
-//     park it behind a red branch's repair or hold it behind a pause it
-//     may itself have to lift. Those last two are grants only a person
-//     may otherwise give; grain gives them here by construction.
+//     grain#source). Its admission, durable (which includes bypass, what
+//     the retired priority-dispatch grant gave), means a congested
+//     pipeline -- the thing this job exists to unstick -- cannot starve it
+//     of a worker, park it behind a red branch's repair or hold it behind
+//     a pause it may itself have to lift. Only a person may otherwise
+//     raise a task's admission above standard; grain sets it here by
+//     construction (unified-grants.design.md §4.1).
 //     query_merge_queue needs no grant; every run has it.
 func pipelineStewardTemplate(stateRepo RepoRef) *Template {
-	grants := make([]Grant, 0, len(PipelineStewardAPIPresets)+4)
+	grants := make([]Grant, 0, len(PipelineStewardAPIPresets)+2)
 	for _, preset := range PipelineStewardAPIPresets {
 		grants = append(grants, Grant{Capability: APIGrantPrefix + preset, Via: GrantByGrain})
 	}
@@ -117,14 +118,13 @@ func pipelineStewardTemplate(stateRepo RepoRef) *Template {
 	for _, g := range SelfDebugGrants() {
 		grants = append(grants, Grant{Capability: g, Via: GrantByGrain})
 	}
-	grants = append(grants, Grant{Capability: PriorityDispatchCapability, Via: GrantByGrain})
-	grants = append(grants, Grant{Capability: DurableCapability, Via: GrantByGrain})
 	t := &Template{
 		ID:                  PipelineStewardTemplateID,
 		Name:                "Pipeline steward",
 		Title:               "Pipeline steward",
 		Body:                pipelineStewardBody(),
 		NetworkAccess:       NetworkOpen,
+		Admission:           AdmissionDurable,
 		NothingNeededAction: NothingNeededAck,
 		Grants:              grants,
 		Goal:                PipelineStewardGoal(),
@@ -247,16 +247,20 @@ func writeRedRCSection(b *strings.Builder) {
 	b.WriteString("1. **Triage `<floor>..<rc_sha>`.** Read the failing items' tasks and logs the " +
 		"notification names, then `git log --first-parent` over the range it gives (from `rc.2` on, " +
 		"start with its \"new since\" range). Name the merge you suspect and the evidence for it. A " +
-		"failure that reads as infrastructure or a flake is not a regression, so file nothing for it.\n")
-	b.WriteString("2. **File the fix or the revert, high priority.** For each suspect, `propose_task` a " +
+		"failure that reads as infrastructure or a flake is not a regression, so file nothing for it " +
+		"and name `<rc_tag>` in your closing report so grain completes the triage hold.\n")
+	b.WriteString("2. **File the fix or the revert, high priority.** As soon as qualification fails, " +
+		"grain posts check run `" + ReleaseHoldCheckName + "` in progress on the red candidate's commit " +
+		"while triage is pending, so `rc.(N+1)` is not cut before your wake finishes. For each suspect, `propose_task` a " +
 		"revert, or a fix where a revert would lose more than it saves. Target `main`, pass " +
 		"`at_front: true` (a priority above your own waits for a person), and start the title with `" +
-		marker + "` exactly. That title is the hold. While any task with it is open, grain keeps check " +
+		marker + "` exactly. That title keeps the hold. While any task with it is open, grain keeps check " +
 		"run `" + ReleaseHoldCheckName + "` in progress on the red candidate's commit, so `rc.(N+1)` is " +
-		"not cut onto a tree you know is broken. It completes by itself once they have all landed, so " +
+		"not cut onto a tree you know is broken. It completes by itself once they have all landed (or when " +
+		"your closing report names `<rc_tag>` with no blocker filed, or the triage window elapses), so " +
 		"there is nothing to lift. An open task that already fixes the cause holds nothing unless its " +
 		"title has the marker: message it and name it in your report. If `main` is red too, the " +
-		"base-branch repair is the fix. Do not file another; a red `main` already stops the train " +
+		"base-branch repair is the fix. Do not file another; name `<rc_tag>` in your report, since a red `main` already stops the train " +
 		"cutting.\n")
 	b.WriteString("3. **`rc.2` red: decide whether trunk churn broke it.** Compare its failure with " +
 		"`rc.1`'s (`pipeline.rc-failed:vX.Y.Z-rc.1`). The train cuts `rc.3` from `release/vX.Y.Z`, " +
@@ -278,7 +282,9 @@ func writeRedRCSection(b *strings.Builder) {
 		"(a quarantine entry is a person's review), unless one is already open. " +
 		"`pipeline.release-infra-stalled:<rc_tag>` is a candidate still qualifying while an item keeps " +
 		"failing on infrastructure. Read that item's last runs, name the runner, quota or credential " +
-		"that is failing in a `grain notify` a person can act on, and file no code fix for it.\n\n")
+		"that is failing in a `grain notify` a person can act on, and file no code fix for it; once " +
+		"the infrastructure is repaired, acknowledging or clearing `pipeline.release-infra-stalled:<rc_tag>` " +
+		"starts a fresh Stage 2 qualification attempt if Stage 2 had concluded `neutral`.\n\n")
 }
 
 // UsesToolBudget reports whether t's runs are durable judgement wakes,

@@ -75,7 +75,7 @@ The bootstrap set is exactly what `clearBootstrap` (`pkg/ui/config_bootstrap.go`
 - **CLI run locations:** `cliRun`.
 - **The lock:** `settingsLocked`.
 
-Every other `grain_config` field is non-bootstrap. Notably **not** bootstrap: `sessionSandboxIdleTtl` (drawn in Sandboxes), `pollInterval` / `maxMergesPerRepo` / `mergeBatchSize` / `mergeGatherWindow` (Engine), all cache settings (Caches), `githubHost` / `githubInsecureHttp` / `gcp*` / `iap*` (drawn in Legacy capabilities), `gitConnections` / `gitCredential`, `externalAgentApi`, `timeZone`. See §4 for where the UI disagrees.
+Every other `grain_config` field is non-bootstrap. Notably **not** bootstrap: `sessionSandboxIdleTtl` (drawn in Sandboxes), `pollInterval` / `maxMergesPerRepo` / `mergeBatchSize` / `mergeGatherWindow` (Engine), all cache settings (Caches), `githubHost` / `githubInsecureHttp` / `gcp*` / `iap*` (`githubHost`, `githubInsecureHttp`, and `gcp*` drawn in Capabilities → Deployment credentials), `gitConnections` / `gitCredential`, `externalAgentApi`, `timeZone`. See §4 for where the UI disagrees.
 
 ### 2.5 `directConfigWrites` opt-out {#SM-5}
 
@@ -90,7 +90,7 @@ Every other `grain_config` field is non-bootstrap. Notably **not** bootstrap: `s
 2.6.1. **Settings page** (`SettingsPage.jsx`):
 - `external = externalConfigRepo != "" && section ∉ NOT_CONFIG` where `NOT_CONFIG = {config-repo, preferences, upgrade}`. In external mode every other section renders read-only (a disabled fieldset through `SettingsReadOnlyContext`) under the "Configuration is read-only and managed in …" banner.
 - `lockedInUI` is `settings.settingsLocked` once `GET /api/settings` has loaded, otherwise `config.configRepoOnly || config.settingsLocked`; `configManaged = (lockedInUI || external) && isConfigRepoSection(section)`. Only the sections in `CONFIG_REPO_SECTION_PATHS` — **General, Git, Repositories, Tasks, Agents, Capabilities, CI, Memory** — render read-only when locked, with a `ConfigManagedNotice` linking `/config?path=…` for each path.
-- A `SettingsCard` with `allowInExternalMode` escapes the read-only context: *Legacy capabilities* (its deployment-wide fieldset still honours `readOnly`), *Capability servers* (the panel draws its own read-only form from `readOnly`), *Task fields* (display-only), and *Settings lock* (only while `!external`, so the lock can be turned off from a locked General section; disabled when `GET /api/config` reports neither `configRepo` nor `externalConfigRepo`).
+- A `SettingsCard` with `allowInExternalMode` escapes the read-only context: *Deployment credentials* on Capabilities (its deployment-wide fieldset still honours `readOnly`), *Capability servers* (the panel draws its own read-only form from `readOnly`), *Task fields* (display-only), and *Settings lock* (only while `!external`, so the lock can be turned off from a locked General section; disabled when `GET /api/config` reports neither `configRepo` nor `externalConfigRepo`).
 - The settings search marks a hit "Read-only: in the config repo" when its section is a config-repo section and `configRepoOnly`.
 
 2.6.2. **Repo page** (`RepoPage.jsx`): `configRepoOnly = config.configRepoOnly || config.settingsLocked`; every configuration control is disabled with the config-repo notice as its `aria-describedby`. Operational actions (add a branch, import issues, manual release, base-branch run) are gated only by repo-admin rights (`adminReadOnly`).
@@ -144,7 +144,7 @@ Every other `grain_config` field is non-bootstrap. Notably **not** bootstrap: `s
 | **Composed entities**: templates, schedules, suites, qualifications, boards, custom fields, API scope sets, standing / persistent sandboxes, `repo_workflow` (guard **S**) | P, R, A | P, R, A (synced); C | C only. P / R / A get 409. The UI is not lock-aware for boards and processes (D-4). An open console session's live task row stays writable (D-5). | C only. P / R / A get 409. |
 | ↳ **Memory** (`memory/**`; no guard) | P, R, A (`memory:write`) | P, R, A; C | P, R, A (the UI renders it read-only, D-3); C | P, R, A, until the next import replaces them (D-3); C |
 | ↳ **Repository declarations** (`.grain/settings.yml`, …) | A PR on the target repository, in every mode, by whoever may write that repository. These are composed with the operator's value, never written through Grain's settings API (§2.8, D-13). | ← | ← | ← |
-| **Secrets** (`<data-dir>/secrets`: agent keys, connection credentials, tokens, `PUT /api/secrets/…`; no guard) | P, R, A (`secrets:write` / `connections:write`, person-granted). Never C: not exported. | same | same (except D-6, D-7) | P (D-9, fixed: Legacy capabilities, Capability servers, model-connection credentials and executor join tokens stay usable; Git's token controls point to Legacy capabilities), R, A. Capability-server bindings get 409 before the value is stored (§2.7.2). Never C. |
+| **Secrets** (`<data-dir>/secrets`: agent keys, connection credentials, tokens, `PUT /api/secrets/…`; no guard) | P, R, A (`secrets:write` / `connections:write`, person-granted). Never C: not exported. | same | same (except D-6, D-7) | P (D-9, fixed: Deployment credentials on Capabilities, Capability servers, model-connection credentials and executor join tokens stay usable; Git's token controls point to Capabilities), R, A. Capability-server bindings get 409 before the value is stored (§2.7.2). Never C. |
 | **`<data-dir>/state-repo.json`** (host-local, not in the database) | — (`POST /api/state-repo/remote` answers 501). Operator: edit the file, or `grain state repo <url>`. | `remote` / `branch` / `tokenFile`: P (Config repo page), R, A (`settings:write`) via `POST /api/state-repo/remote`, which calls no config guard; operator CLI or file. `directConfigWrites`, `noWorkflow`, `postCheck`, `checkImage`, `localOnlyAcknowledged`: operator file edit only. Never C. | same | same: `POST /api/state-repo/remote` with `"none": true` is how a deployment leaves external mode. |
 | **Browser preferences** (`localStorage`: theme, time zone, timeline order, sidebar) | P, in that browser only | same | same | same. Never read-only (`NOT_CONFIG`). |
 
@@ -196,15 +196,15 @@ Settings → Executors and its executor tokens were removed with remote executor
 | External agent tokens | Write-only — `POST /api/external-agents/tokens`, `…/{id}/rotate`, `…/{id}/revoke`, `…/revoke-all`, `DELETE …/{id}` | No — runtime credential | Unlocked (Secret; —) | No | `capabilities:admin`. |
 | External agent API on/off `externalAgentApi` | No — API only (`PUT /api/settings`) | Yes — `tables/grain_config.json` | Locked (G) / — | Yes | |
 
-### 3.4 Legacy capabilities / secrets (`/settings/credentials`)
+### 3.4 Deployment credentials / secrets (`/settings/capabilities#credentials`, formerly the Legacy capabilities tab)
 
 | Setting / entity | UI (unlocked) | Config repo | Locked: server / UI | External | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Secret values (`<secret>/<key>`) | Write-only — Legacy capabilities; `PUT /api/secrets/{secret}/{key}`, `DELETE /api/secrets/{secret}[/{key}]`, `PUT /api/tasks/{id}/secret` (`request_secret`) | No — secret material; config holds only `$secret:<name>` / `<secret>/<key>` references | Unlocked (Secret; —) / editable | No | `secrets:write`. `statecheck` rejects raw credentials in config PRs. |
+| Secret values (`<secret>/<key>`) | Write-only — Capabilities → Deployment credentials; `PUT /api/secrets/{secret}/{key}`, `DELETE /api/secrets/{secret}[/{key}]`, `PUT /api/tasks/{id}/secret` (`request_secret`) | No — secret material; config holds only `$secret:<name>` / `<secret>/<key>` references | Unlocked (Secret; —) / editable | No | `secrets:write`. `statecheck` rejects raw credentials in config PRs. |
 | GitHub tokens | Write-only — `PUT`/`DELETE /api/github-tokens/{name}` | No — secret material | Unlocked (Secret; —) | No | Setting the first token also records a default git credential, only when `settingsWritable` (not external). |
 | GCP keys (metadata + key material) | Write-only — `POST /api/gcp-keys`, `PUT`/`DELETE /api/gcp-keys/{name}` | Metadata Yes — `tables/gcp_key.json`; material No | Unlocked (Bootstrap; B·u) / editable | Yes | Never auto-merges. |
-| GitHub host `githubHost`, `githubInsecureHttp` | Yes — Legacy capabilities → deployment-wide; `PUT /api/settings` | Yes — `tables/grain_config.json` | **Locked** (G) / **read-only** | Yes | D-2 (fixed). |
-| GCP project / SA `gcpProject`, `gcpServiceAccountEmail`, `gcpServiceAccountCount` | Yes — Legacy capabilities; `PUT /api/settings` | Yes — `tables/grain_config.json` | **Locked** (G) / **read-only** | Yes | D-2 (fixed). |
+| GitHub host `githubHost`, `githubInsecureHttp` | Yes — Capabilities → Deployment credentials; `PUT /api/settings` | Yes — `tables/grain_config.json` | **Locked** (G) / **read-only** | Yes | D-2 (fixed). |
+| GCP project / SA `gcpProject`, `gcpServiceAccountEmail`, `gcpServiceAccountCount` | Yes — Capabilities → Deployment credentials; `PUT /api/settings` | Yes — `tables/grain_config.json` | **Locked** (G) / **read-only** | Yes | D-2 (fixed). |
 | IAP `iapBackendService`, `iapResource` | No — API only (`PUT /api/settings`) | Yes — `tables/grain_config.json` | Locked (G) | Yes | Triggers an IAP sync. |
 | Legacy capability catalogue entries (`settings.capabilities`) | Yes — Legacy capabilities panel (secrets bound to them) | Yes — `settings/capabilities.yml` | Secret parts Unlocked; entries Locked (S) | Yes | |
 
@@ -319,7 +319,7 @@ Every per-repo setter goes through `putRepoConfig` (class **S** on `repo_config`
 | Rotate managed token | Action — `POST /api/capability-servers/rotate-managed` | No — secret material | Unlocked (Secret; —) | No | |
 | Capability policy | Yes — Capabilities → policy; `PUT /api/capability-policy` | Yes — `settings/capabilities.yml` (over `grain_config.capability_policy`) | Locked (S) / read-only | Yes | |
 | API scope sets | Yes — Capabilities → API scope sets; `PUT /api/api-scope-sets`, `POST /api/api-scope-sets/delete` | Yes — `tables/api_scope_set.json` / `settings/capabilities.yml` | Locked (S) / read-only | Yes | Validated by `statecheck.APIScopeSets`. |
-| Tests, previews, grant checks | Action — `POST /api/capability-servers/{test,test-script,gchat-test}`, `/api/capability-policy/preview`, `/api/capability-grants/check`, `/api/capabilities/{id}/check` | No — action | Unlocked (Action) | No | |
+| Tests, previews, grant checks | Action — `POST /api/capability-servers/{test,test-script,gchat-test}`, `/api/capability-policy/preview`, `/api/capability-grants/check` | No — action | Unlocked (Action) | No | |
 
 ### 3.17 CI (`/settings/ci`)
 

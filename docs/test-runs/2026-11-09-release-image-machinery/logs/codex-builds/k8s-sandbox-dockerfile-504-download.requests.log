@@ -1,0 +1,11 @@
+mode=504-download GET github.com/openai/codex/releases/download/rust-v0.166.0/codex-x86_64-unknown-linux-musl.tar.gz accept="*/*" auth=false -> 504
+mode=504-download GET github.com/openai/codex/releases/download/rust-v0.166.0/codex-x86_64-unknown-linux-musl.tar.gz accept="*/*" auth=false -> 504
+mode=504-download GET github.com/openai/codex/releases/download/rust-v0.166.0/codex-x86_64-unknown-linux-musl.tar.gz accept="*/*" auth=false -> 504
+mode=504-download GET api.github.com/repos/openai/codex/releases/tags/rust-v0.166.0 accept="application/vnd.github+json" auth=false -> 200
+mode=504-download GET api.github.com/repos/openai/codex/releases/assets/101 accept="application/octet-stream" auth=false -> 302
+mode=504-download GET release-assets.githubusercontent.com/github-production-release-asset/101 accept="application/octet-stream" auth=false -> 200
+mode=504-download GET github.com/openai/codex/releases/download/rust-v0.166.0/codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz accept="*/*" auth=false -> 504
+mode=504-download GET github.com/openai/codex/releases/download/rust-v0.166.0/codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz accept="*/*" auth=false -> 504
+mode=504-download GET github.com/openai/codex/releases/download/rust-v0.166.0/codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz accept="*/*" auth=false -> 504
+mode=504-download GET api.github.com/repos/openai/codex/releases/assets/102 accept="application/octet-stream" auth=false -> 302
+mode=504-download GET release-assets.githubusercontent.com/github-production-release-asset/102 accept="application/octet-stream" auth=false -> 200

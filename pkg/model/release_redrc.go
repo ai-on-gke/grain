@@ -34,12 +34,24 @@ import (
 // (FamilyReleaseEscalated) instead of being fixed and cut again.
 const ReleaseMaxRCAttempts = 3
 
-// ReleaseHoldCheckName is the check run the reconciler keeps on a red
-// candidate's commit while blockers linked to it are open: in progress
-// while rc.(N+1) is held, completed once every blocker has landed. The
-// failed candidate's commit is the floor the train cuts rc.(N+1) after,
-// so it is where the train (scripts/release-from-trunk.sh) reads the hold.
+// ReleaseHoldCheckName is the check run the reconciler posts on a red
+// candidate's commit as soon as qualification concludes failure: in
+// progress while pipeline.rc-failed awaits triage (up to
+// ReleaseHoldTriageGrace, unless the pipeline steward finishes triaging it
+// with no blocker) and while any blocker linked to it is open, and
+// completed once triage needs no blocker, the triage window elapses, or
+// every blocker has landed. The failed candidate's commit is the floor the
+// train cuts rc.(N+1) after, so it is where the train
+// (scripts/release-from-trunk.sh) reads the hold.
 const ReleaseHoldCheckName = "grain/rc-hold"
+
+// ReleaseHoldTriageGrace is how long grain/rc-hold holds rc.(N+1) while
+// pipeline.rc-failed:<rc_tag> awaits triage, before any task titled
+// RCBlockerMarker(rc_tag) exists: long enough to cover the release train's
+// 20-minute cadence while the pipeline steward or a person files blockers,
+// and bounded so an untriaged candidate does not wedge the train forever.
+// Overridable with GRAIN_RC_HOLD_GRACE.
+const ReleaseHoldTriageGrace = time.Hour
 
 // RCBlockerMarker is what a task's title carries to hold the candidate
 // after rcTag until it lands: `[rc-blocker vX.Y.Z-rc.N]`, naming the red
@@ -140,4 +152,19 @@ func (s *Store) OpenTasksTitled(ctx context.Context, marker string) ([]string, e
 		return nil, fmt.Errorf("listing the open tasks titled %s: %w", marker, err)
 	}
 	return out, nil
+}
+
+// HasTasksTitled reports whether any task, open or closed, carries marker in
+// its title: once at least one RCBlockerMarker task has been filed for a red
+// candidate, closing every open one means its blockers have landed rather
+// than that triage is still pending.
+func (s *Store) HasTasksTitled(ctx context.Context, marker string) (bool, error) {
+	var n int
+	if err := s.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM `task` WHERE instr(`title`, ?) > 0",
+		marker,
+	).Scan(&n); err != nil {
+		return false, fmt.Errorf("counting the tasks titled %s: %w", marker, err)
+	}
+	return n > 0, nil
 }

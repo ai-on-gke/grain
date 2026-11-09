@@ -314,8 +314,12 @@ func TestBuiltinCapabilityServersAreListedDisableOnlyAndGrantNothing(t *testing.
 			t.Errorf("row %d = %+v, want built-in %s", i, list[i], b.Name)
 		}
 		if intree.BuiltinConfigSchema(b.Name) != nil {
-			if list[i].Status == nil || list[i].Status.State != servers.NeedsConfig || list[i].Status.ConfigSchema == nil {
-				t.Errorf("configurable built-in %s status = %+v, want NeedsConfig with ConfigSchema", b.Name, list[i].Status)
+			wantState := servers.Pending
+			if b.NeedsConfig {
+				wantState = servers.NeedsConfig
+			}
+			if list[i].Status == nil || list[i].Status.State != wantState || list[i].Status.ConfigSchema == nil {
+				t.Errorf("configurable built-in %s status = %+v, want %s with ConfigSchema", b.Name, list[i].Status, wantState)
 			}
 		}
 	}

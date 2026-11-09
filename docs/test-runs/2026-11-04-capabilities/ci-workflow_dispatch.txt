@@ -1,0 +1,14 @@
+run 629b26781b174eb5 workflow_dispatch conclusion: success warning: None
+job publish success | error: None | warning: None
+  step echo "event: $GRAIN_CI_EVENT" success
+   | event: workflow_dispatch
+   | -rw------- 1 debian debian   50 Nov  7 04:01 /home/debian/.docker/config.json
+   | -rwxr-xr-x 1 debian debian 1423 Nov  7 04:01 /home/debian/.grain/bin/docker-credential-grain
+   | -rw------- 1 debian debian   86 Nov  7 04:01 /home/debian/.package-publish-refresh-token
+   | -rw------- 1 debian debian   24 Nov  7 04:01 /home/debian/.package-publish-refresh-url
+   | -rw------- 1 debian debian    7 Nov  7 04:01 /home/debian/.package-publish-registry
+   | -rw------- 1 debian debian   30 Nov  7 04:01 /home/debian/.package-publish-token
+   | -rw------- 1 debian debian   14 Nov  7 04:01 /home/debian/.package-publish-username
+   | refresh url: http://10.240.0.1:43997
+   | refresh token: gpp_06<cut>
+   | 

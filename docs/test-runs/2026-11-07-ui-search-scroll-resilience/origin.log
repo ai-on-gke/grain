@@ -1,0 +1,28 @@
+narrowing origin:any:imported (1440) {"chips":["origin is any of imported issue"],"warningChips":0,"warningTitles":[],"rows":1}
+narrowing origin:any:schedule (1440) {"chips":["origin is any of scheduled"],"warningChips":0,"warningTitles":[],"rows":0}
+narrowing origin:any:proposed (1440) {"chips":["origin is any of proposed by an agent"],"warningChips":0,"warningTitles":[],"rows":4}
+narrowing origin:any:external (1440) {"chips":["origin is any of filed by an external agent"],"warningChips":0,"warningTitles":[],"rows":0}
+narrowing origin:any:hand,imported,proposed,schedule,suite,fix,review,external (1440) {"chips":["origin is any of “hand,imported,proposed,schedule,suite,fix,review,external” (unknown)"],"warningChips":1,"warningTitles":["“hand,imported,proposed,schedule,suite,fix,review,external” is not a value Origin has, so it matches no task"],"rows":0}
+narrowing origin:any:bogus (1440) {"chips":["origin is any of “bogus” (unknown)"],"warningChips":1,"warningTitles":["“bogus” is not a value Origin has, so it matches no task"],"rows":0}
+narrowing origin:any:mcp (1440) {"chips":["origin is any of “mcp” (unknown)"],"warningChips":1,"warningTitles":["“mcp” is not a value Origin has, so it matches no task"],"rows":0}
+narrowing owner:any:me (1440) {"chips":["owner is any of me (debian)"],"warningChips":0,"warningTitles":[],"rows":17}
+narrowing externalRef:any:CA-9012 (1440) {"chips":["external ref is any of ca-9012"],"warningChips":0,"warningTitles":[],"rows":0}
+narrowing externalRef:filled (1440) {"chips":["state is none of deferred, closed"],"warningChips":0,"warningTitles":[],"rows":16}
+narrowing humanReview:any:security (1440) {"chips":["human review is any of security"],"warningChips":0,"warningTitles":[],"rows":0}
+narrowing humanReview:any:product_decision (1440) {"chips":["human review is any of “product_decision” (unknown)"],"warningChips":1,"warningTitles":["“product_decision” is not a value Human review has, so it matches no task"],"rows":0}
+narrowing admission:any:durable (1440) {"chips":["unknown condition: admission"],"warningChips":1,"warningTitles":["“admission” is not an attribute here, so this condition is not applied"],"rows":18}
+saved board grouped by origin (1440) {"status":201,"warningChips":1,"rows":0}
+narrowing origin:any:imported (390) {"chips":["origin is any of imported issue"],"warningChips":0,"warningTitles":[],"rows":1}
+narrowing origin:any:schedule (390) {"chips":["origin is any of scheduled"],"warningChips":0,"warningTitles":[],"rows":0}
+narrowing origin:any:proposed (390) {"chips":["origin is any of proposed by an agent"],"warningChips":0,"warningTitles":[],"rows":4}
+narrowing origin:any:external (390) {"chips":["origin is any of filed by an external agent"],"warningChips":0,"warningTitles":[],"rows":0}
+narrowing origin:any:hand,imported,proposed,schedule,suite,fix,review,external (390) {"chips":["origin is any of “hand,imported,proposed,schedule,suite,fix,review,external” (unknown)"],"warningChips":1,"warningTitles":["“hand,imported,proposed,schedule,suite,fix,review,external” is not a value Origin has, so it matches no task"],"rows":0}
+narrowing origin:any:bogus (390) {"chips":["origin is any of “bogus” (unknown)"],"warningChips":1,"warningTitles":["“bogus” is not a value Origin has, so it matches no task"],"rows":0}
+narrowing origin:any:mcp (390) {"chips":["origin is any of “mcp” (unknown)"],"warningChips":1,"warningTitles":["“mcp” is not a value Origin has, so it matches no task"],"rows":0}
+narrowing owner:any:me (390) {"chips":["owner is any of me (debian)"],"warningChips":0,"warningTitles":[],"rows":17}
+narrowing externalRef:any:CA-9012 (390) {"chips":["external ref is any of ca-9012"],"warningChips":0,"warningTitles":[],"rows":0}
+narrowing externalRef:filled (390) {"chips":["state is none of deferred, closed"],"warningChips":0,"warningTitles":[],"rows":16}
+narrowing humanReview:any:security (390) {"chips":["human review is any of security"],"warningChips":0,"warningTitles":[],"rows":0}
+narrowing humanReview:any:product_decision (390) {"chips":["human review is any of “product_decision” (unknown)"],"warningChips":1,"warningTitles":["“product_decision” is not a value Human review has, so it matches no task"],"rows":0}
+narrowing admission:any:durable (390) {"chips":["unknown condition: admission"],"warningChips":1,"warningTitles":["“admission” is not an attribute here, so this condition is not applied"],"rows":18}
+saved board grouped by origin (390) {"status":201,"warningChips":1,"rows":0}

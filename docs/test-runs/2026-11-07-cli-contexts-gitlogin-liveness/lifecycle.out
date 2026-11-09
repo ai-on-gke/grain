@@ -1,0 +1,382 @@
+== operator turns on externalAgentApi; the workstation mints a gma_ token
+    PUT /api/config -> 200
+### login --issue-token
+$ env GRAIN_TOKEN=C0DE-TEST-CCCC-0000 /home/debian/bin/grain login http://127.0.0.1:43569 --name c --issue-token --expires 1d
+    signed in to http://127.0.0.1:43569 as context c (external-token)
+    -> exit=0
+### whoami
+$ /home/debian/bin/grain whoami
+    context: c
+    server: http://127.0.0.1:43569
+    principal: agent:external:cli-debuerreotype-c-to5m8m
+    owner: console-rest-e2e-operator
+    scope set: grain/external-dev
+    scopes: ci:read, ci:write, deployment:read, merge:write, repos:read, sandboxes:read, tasks:read, tasks:write, templates:read
+    expires: 2026-11-08T22:53:10Z
+    -> exit=0
+== scripted turns for T1: ask_question, then request_secret, then request_access, then finish
+    script-runs -> 204
+== file T1, and T2 depending on it
+### create without -repo (external caller)
+$ /home/debian/bin/grain create -title no repo -body x
+    grain: external:cli-debuerreotype-c-to5m8m has no calling task context: POST /api/tasks requires an explicit repo (or noRepo: true)
+    -> exit=3
+### create T1
+$ /home/debian/bin/grain -json create -repo acme/widgets -title T1 external loop -body external loop
+    {
+      "id": "2",
+      "title": "T1 external loop",
+      "description": "external loop",
+      "author": "external:cli-debuerreotype-c-to5m8m",
+      "authorKind": "agent",
+      "authorSource": "external-token",
+      "authorLabel": "external agent cli-debuerreotype-c-to5m8m for console-rest-e2e-operator",
+      "state": "proposed",
+      "repo": "acme/widgets",
+      "branch": "grain/task-2",
+      "priority": 5,
+      "autoMerge": false,
+      "autoApproveProposals": false,
+      "interactive": false,
+      "admission": "standard",
+      "hosting": "unattended",
+      "owner": "console-rest-e2e-operator",
+      "creator": "console-rest-e2e-operator",
+      "capabilities": [],
+      "createdAt": "2026-11-07T22:53:10.531035303Z",
+      "blocked": false,
+      "reason": {
+        "reason": "proposed/unapproved",
+        "class": "awaiting a person",
+        "control": "Approve"
+      }
+    }
+    -> exit=0
+### create T2 -depends-on T1
+$ /home/debian/bin/grain create -repo acme/widgets -title T2 waits on T1 -body after T1 -depends-on 2
+    3 T2 waits on T1
+    state:      proposed
+    reason:     proposed/unapproved [Approve]
+    owner:      console-rest-e2e-operator
+    repo:       acme/widgets
+    depends on: 2 (proposed)
+    priority:   5
+    auto-merge: false
+    
+    after T1
+    -> exit=0
+    T1=2 T2=3
+### an agent cannot approve its own filing
+$ /home/debian/bin/grain approve 3
+    grain: external:cli-debuerreotype-c-to5m8m holds no api grant for scope tasks:admin, which POST /api/tasks/{id}/approve needs
+    -> exit=3
+### operator approves T1 (access code)
+$ env GRAIN_TOKEN=C0DE-TEST-CCCC-0000 /home/debian/bin/grain --server http://127.0.0.1:43569 approve 2
+    2 T1 external loop
+    state:      queued
+    reason:     queued/ready (a worker slot (max_workers) and a sandbox) [Run now]
+    owner:      console-rest-e2e-operator
+    repo:       acme/widgets
+    priority:   5
+    auto-merge: false
+    
+    external loop
+    -> exit=0
+### operator approves T2 (access code)
+$ env GRAIN_TOKEN=C0DE-TEST-CCCC-0000 /home/debian/bin/grain --server http://127.0.0.1:43569 approve 3
+    3 T2 waits on T1
+    state:      queued
+    reason:     queued/blocked_on_task (the task it depends on closing)
+    owner:      console-rest-e2e-operator
+    repo:       acme/widgets
+    depends on: 2 (running)
+    priority:   5
+    auto-merge: false
+    
+    after T1
+    -> exit=0
+### list -json T2 blocked
+$ sh -c /home/debian/bin/grain -json list | jq -c '.[] | select(.id=="3") | {id,state,dependsOn,blocked,reason,statusReason}'
+    {"id":"3","state":"queued","dependsOn":["2"],"blocked":true,"reason":{"reason":"queued/blocked_on_task","class":"driven","resource":"the task it depends on closing","driver":"reconcileDispatch"},"statusReason":null}
+    -> exit=0
+### list shows the dependency
+$ sh -c /home/debian/bin/grain list | grep -E '^(2|3) '
+    2      running         acme/widgets             T1 external loop
+    3      queued          acme/widgets             T2 waits on T1 (waits on 2)
+    -> exit=0
+### show T2 shows depends_on
+$ sh -c /home/debian/bin/grain show 3 | head -20
+    3 T2 waits on T1
+    state:      queued
+    reason:     queued/blocked_on_task (the task it depends on closing)
+    owner:      console-rest-e2e-operator
+    repo:       acme/widgets
+    depends on: 2 (running)
+    priority:   5
+    auto-merge: false
+    
+    after T1
+    filed by:        external agent cli-debuerreotype-c-to5m8m for console-rest-e2e-operator
+    
+    history:
+      -> proposed        2026-11-07T22:53:10Z by external agent cli-debuerreotype-c-to5m8m for console-rest-e2e-operator
+      -> queued          2026-11-07T22:53:10Z
+    -> exit=0
+### show T2 -json depends_on
+$ sh -c /home/debian/bin/grain -json show 3 | jq -c '{id,state,dependsOn,depends_on,blockedBy}'
+    {"id":"3","state":"queued","dependsOn":["2"],"depends_on":null,"blockedBy":["2"]}
+    -> exit=0
+### record.md for T2 (consolerestserver serves no namespace; see demo run)
+$ sh -c /home/debian/bin/grain fs read task://3/record.md | head -30
+    grain: the service is temporarily unavailable (ref 4ff1194e0438)
+    -> exit=0
+== T1 parks on ask_question; grain wait wakes on it
+### wait T1 --until awaiting-reply
+$ timeout 60 /home/debian/bin/grain wait 2 -until awaiting-reply
+    2	awaiting_reply
+      question: Should the retry budget be 3 or 5?
+    -> exit=0
+### show T1 liveness
+$ sh -c /home/debian/bin/grain show 2 | head -12
+    2 T1 external loop
+    state:      awaiting_reply
+    reason:     awaiting_reply/question [Reply]
+    owner:      console-rest-e2e-operator
+    repo:       acme/widgets
+    priority:   5
+    auto-merge: false
+    
+    external loop
+    filed by:        external agent cli-debuerreotype-c-to5m8m for console-rest-e2e-operator
+    suspended session: scripted-session-2 (antigravity, left by 2-1 at 2026-11-07T22:53:10Z)
+                       this task's next run resumes it instead of starting from nothing
+    -> exit=0
+### inbox
+$ /home/debian/bin/grain inbox
+    question     #1 Director -- I'm here.  /tasks/1
+    question     #2 T1 external loop -- Which retry budget should T1 use?  /tasks/2
+    -> exit=0
+### inbox -json (T1 item)
+$ sh -c /home/debian/bin/grain -json inbox | jq -c '.' | head -c 1500
+    {"items":[{"kind":"question","task":"1","title":"Director","summary":"I'm here.","path":"/tasks/1"},{"kind":"question","task":"2","title":"T1 external loop","repo":"acme/widgets","summary":"Which retry budget should T1 use?","path":"/tasks/2"}]}
+    -> exit=0
+### inbox -repo acme/other (nothing of acme/widgets may leak in)
+$ /home/debian/bin/grain inbox -repo acme/other
+    grain: nothing in the inbox
+    -> exit=0
+### reply T1
+$ /home/debian/bin/grain reply 2 Use 5.
+    2 T1 external loop
+    state:      queued
+    reason:     queued/ready (a worker slot (max_workers) and a sandbox) [Run now]
+    owner:      console-rest-e2e-operator
+    repo:       acme/widgets
+    priority:   5
+    auto-merge: false
+    
+    external loop
+    -> exit=0
+== T1 parks on request_secret
+### wait T1 (secret)
+$ timeout 60 /home/debian/bin/grain wait 2 -until awaiting-reply
+    2	awaiting_reply
+      question: The deploy step needs a key. **This run asked for the secret `widgets-deploy-key`.** Set it in the box on this task: the value goes straight into grain's enc...
+      secret requested: widgets-deploy-key (set it on /tasks/2)
+    -> exit=0
+### show T1 liveness (secret)
+$ sh -c /home/debian/bin/grain show 2 | head -12
+    2 T1 external loop
+    state:      awaiting_reply
+    reason:     awaiting_reply/question [Reply]
+    owner:      console-rest-e2e-operator
+    repo:       acme/widgets
+    priority:   5
+    auto-merge: false
+    
+    external loop
+    filed by:        external agent cli-debuerreotype-c-to5m8m for console-rest-e2e-operator
+    waiting on secret: widgets-deploy-key (stored as widgets-deploy-key/value, not set)
+                       set it in this task's pane in the UI -- that stores the value and queues the task again
+    -> exit=0
+### inbox -kind secret
+$ /home/debian/bin/grain inbox -kind secret
+    secret       #2 T1 external loop -- set widgets-deploy-key in the encrypted secret input  /tasks/2
+    -> exit=0
+### reply cannot set a secret
+$ /home/debian/bin/grain reply 2 here is the key: s3cr3t-value
+    grain: grain server: task 2 is parked on a secret request (widgets-deploy-key), not a question: set it in the encrypted secret input on /tasks/2 -- grain reply never posts a credential into a conversation (409 Conflict)
+    -> exit=2
+### show T1 after a plain reply to a secret request
+$ sh -c /home/debian/bin/grain show 2 | head -6
+    2 T1 external loop
+    state:      awaiting_reply
+    reason:     awaiting_reply/question [Reply]
+    owner:      console-rest-e2e-operator
+    repo:       acme/widgets
+    priority:   5
+    -> exit=0
+== the agent's gma_ token cannot set the secret; the operator sets it in the task's secret box
+### PUT /api/tasks/T1/secret with the gma_ token
+$ sh -c curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'Authorization: Bearer '$(cat /tmp/grain-life.ypUAqm/.config/grain/credentials/c) -H 'Content-Type: application/json' http://127.0.0.1:43569/api/tasks/2/secret -d '{"value":"s3cr3t-value"}'; echo
+    403
+    -> exit=0
+    operator PUT /api/tasks/T1/secret -> 200
+== T1 parks on request_access
+### wait T1 (access)
+$ timeout 60 /home/debian/bin/grain wait 2 -until awaiting-reply
+    2	awaiting_reply
+      question: T1 reads acme/other. **This run asked for more access:** - read acme/other Grant or deny it in the card on this task. Granting applies the chosen items to th...
+    -> exit=0
+### show T1 (access)
+$ sh -c /home/debian/bin/grain show 2 | head -12
+    2 T1 external loop
+    state:      awaiting_reply
+    reason:     awaiting_reply/access_request [Grant]
+    owner:      console-rest-e2e-operator
+    repo:       acme/widgets
+    priority:   5
+    auto-merge: false
+    
+    external loop
+    filed by:        external agent cli-debuerreotype-c-to5m8m for console-rest-e2e-operator
+    suspended session: scripted-session-2 (antigravity, left by 2-3 at 2026-11-07T22:53:11Z)
+                       this task's next run resumes it instead of starting from nothing
+    -> exit=0
+### inbox (access)
+$ /home/debian/bin/grain inbox
+    question     #1 Director -- I'm here.  /tasks/1
+    question     #2 T1 external loop -- Grant read on acme/other  /tasks/2
+    -> exit=0
+### reply cannot grant access
+$ /home/debian/bin/grain reply 2 granted, go ahead
+    grain: grain server: task 2 is parked on a config-change or access request, not a question: decide it on /tasks/2 (409 Conflict)
+    -> exit=2
+### the agent's token cannot grant its own access request
+$ sh -c curl -s -w ' %{http_code}' -X POST -H 'Authorization: Bearer '$(cat /tmp/grain-life.ypUAqm/.config/grain/credentials/c) -H 'Content-Type: application/json' http://127.0.0.1:43569/api/tasks/2/access-request/grant -d '{}'; echo
+    {"error":"POST /api/tasks/{id}/access-request/grant is not part of the agent API (docs/agent-api.md)"}
+     403
+    -> exit=0
+    operator POST access-request/grant -> 200
+### wait T1 (after the grant, the closing comment)
+$ timeout 60 /home/debian/bin/grain wait 2 -until awaiting-reply
+    2	awaiting_reply
+      T1 done.
+    -> exit=0
+### show T1 (answered)
+$ sh -c /home/debian/bin/grain show 2 | head -4
+    2 T1 external loop
+    state:      awaiting_reply
+    reason:     awaiting_reply/answered [Reply]
+    owner:      console-rest-e2e-operator
+    -> exit=0
+### operator closes T1 (access code)
+$ env GRAIN_TOKEN=C0DE-TEST-CCCC-0000 /home/debian/bin/grain --server http://127.0.0.1:43569 close 2
+    2 T1 external loop
+    state:      closed
+    reason:     closed/closed [Reopen]
+    owner:      console-rest-e2e-operator
+    repo:       acme/widgets
+    reads:      acme/other
+    priority:   5
+    auto-merge: false
+    
+    external loop
+    -> exit=0
+### wait T1 closed
+$ timeout 30 /home/debian/bin/grain wait 2
+    2	closed	completed
+      T1 done.
+    -> exit=0
+### T2 dispatches once T1 closed (its default scripted turn parks it answered)
+$ timeout 90 /home/debian/bin/grain wait 3 -until closed,awaiting-reply
+    3	awaiting_reply
+      Scripted answer 1.
+    -> exit=0
+### show T2
+$ sh -c /home/debian/bin/grain show 3 | head -5
+    3 T2 waits on T1
+    state:      awaiting_reply
+    reason:     awaiting_reply/answered [Reply]
+    owner:      console-rest-e2e-operator
+    repo:       acme/widgets
+    -> exit=0
+### list -closed T1/T2
+$ sh -c /home/debian/bin/grain list -closed | grep -E '^(2|3) '
+    3      awaiting_reply  acme/widgets             T2 waits on T1
+    2      closed          acme/widgets             T1 external loop
+    -> exit=0
+== inbox scoping: repo-less items stay out of a -repo filter
+### inbox (all)
+$ /home/debian/bin/grain inbox
+    question     #1 Director -- I'm here.  /tasks/1
+    question     #3 T2 waits on T1 -- reply to run it again, or acknowledge to close it  /tasks/3
+    -> exit=0
+### inbox -repo acme/widgets
+$ /home/debian/bin/grain inbox -repo acme/widgets
+    question     #3 T2 waits on T1 -- reply to run it again, or acknowledge to close it  /tasks/3
+    -> exit=0
+== a token limited to acme/other cannot wait on, read or reply to an acme/widgets task
+### login --name other --repos acme/other (login makes it current)
+$ env GRAIN_TOKEN=C0DE-TEST-CCCC-0000 /home/debian/bin/grain login http://127.0.0.1:43569 --name other --issue-token --repos acme/other --expires 1d
+    signed in to http://127.0.0.1:43569 as context other (external-token)
+    -> exit=0
+### context use c
+$ /home/debian/bin/grain context use c
+    using context c (http://127.0.0.1:43569)
+    -> exit=0
+### whoami --context other
+$ /home/debian/bin/grain --context other whoami
+    context: other
+    server: http://127.0.0.1:43569
+    principal: agent:external:cli-debuerreotype-other-to5m8o
+    owner: console-rest-e2e-operator
+    scope set: grain/external-dev
+    scopes: ci:read@acme/other, ci:write@acme/other, deployment:read@acme/other, merge:write@acme/other, repos:read@acme/other, sandboxes:read@acme/other, tasks:read@acme/other, tasks:write@acme/other, templates:read@acme/other
+    repos: acme/other
+    expires: 2026-11-08T22:53:12Z
+    -> exit=0
+### wait --context other on T1
+$ timeout 30 /home/debian/bin/grain --context other wait 2
+    grain: external:cli-debuerreotype-other-to5m8o holds tasks:read, but not on acme/widgets
+    -> exit=3
+### -json wait --context other on T1
+$ timeout 30 /home/debian/bin/grain --context other -json wait 2
+    {"error":{"code":"forbidden","message":"external:cli-debuerreotype-other-to5m8o holds tasks:read, but not on acme/widgets"}}
+    -> exit=3
+### show --context other T1
+$ /home/debian/bin/grain --context other show 2
+    grain: external:cli-debuerreotype-other-to5m8o holds tasks:read, but not on acme/widgets
+    -> exit=3
+### logs --context other T1
+$ /home/debian/bin/grain --context other logs 2
+    grain: external:cli-debuerreotype-other-to5m8o holds tasks:read, but not on acme/widgets
+    -> exit=3
+### inbox --context other
+$ /home/debian/bin/grain --context other inbox
+    grain: nothing in the inbox
+    -> exit=0
+== wait boundaries
+### wait on an unknown task
+$ timeout 30 /home/debian/bin/grain wait 999999
+    grain: no task 999999
+    -> exit=2
+### -json wait on an unknown task
+$ timeout 30 /home/debian/bin/grain -json wait 999999
+    {"error":{"code":"not_found","message":"no task 999999"}}
+    -> exit=2
+== logs
+### logs T1
+$ sh -c /home/debian/bin/grain logs 2 | tail -20
+    grain: #2 attempt 4 finished: succeeded
+    done
+    -> exit=0
+### logs T1 -attempt 1 -tail 5
+$ /home/debian/bin/grain logs 2 -attempt 1 -tail 5
+    asked
+    grain: #2 attempt 1 finished: succeeded
+    -> exit=0
+### logs unknown task
+$ /home/debian/bin/grain logs 999999
+    grain: no task 999999
+    -> exit=2
+LIFE-DONE

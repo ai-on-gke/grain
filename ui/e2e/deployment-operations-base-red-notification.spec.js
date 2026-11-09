@@ -30,6 +30,10 @@ import { alertRow, openAlerts } from "./alerts.js";
 // repair sentence and taskId added to it, as it writes them when a repair
 // is open.
 test.use({ demoArgs: ["-github-sim", "-fake-ci", "-base-branch-ci"] });
+
+// OPEN_LIST is the open list the bell polls: fields=list, each body cut
+// to the first line it draws (notifications.js's useOpenNotifications).
+const OPEN_LIST = /\/api\/notifications\?open=1&fields=list$/;
 test.setTimeout(120_000);
 
 test("the red-base alert reads as text and opens its repair", async ({
@@ -39,7 +43,7 @@ test("the red-base alert reads as text and opens its repair", async ({
     data: { branch: "main" },
   });
   expect(red.status(), await red.text()).toBe(200);
-  await page.route(/\/api\/notifications\?open=1$/, async (route) => {
+  await page.route(OPEN_LIST, async (route) => {
     const res = await route.fetch({
       headers: { ...route.request().headers(), "if-none-match": "" },
     });
@@ -68,7 +72,7 @@ test("the red-base alert reads as text and opens its repair", async ({
     await row.getByRole("button", { name: "Open #1" }).click();
     await expect(page).toHaveURL(/\/tasks\/1$/);
   } finally {
-    await page.unroute(/\/api\/notifications\?open=1$/);
+    await page.unroute(OPEN_LIST);
     const green = await page.request.post("/api/e2e/base-branch/green", {
       data: { branch: "main" },
     });

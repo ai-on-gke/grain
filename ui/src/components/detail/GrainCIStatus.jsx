@@ -14,6 +14,7 @@
 
 import { Alert, Box, Button, Link } from "@mui/material";
 import api from "../../api.js";
+import AccessGate from "../AccessGate.jsx";
 import { pullRequestUrl } from "../../state.js";
 import {
   faultDetail,
@@ -245,23 +246,27 @@ function RerunCI({ t, act }) {
     );
   return (
     <Box sx={{ mt: 1, display: "flex", gap: 1, flexWrap: "wrap" }}>
-      <Button
-        size="small"
-        variant="outlined"
-        title="Run grain CI's complete suite on this task's branch again and record it as this task's verdict."
-        onClick={() => start({})}
-      >
-        Re-run CI
-      </Button>
-      {ci.conclusion !== "cancelled" && (
+      <AccessGate scope="ci:write" repo={t.repo}>
         <Button
           size="small"
           variant="outlined"
-          title="Run only the jobs that did not pass again, bypassing the cache."
-          onClick={() => start({ recheck: true, recheckFailed: true })}
+          title="Run grain CI's complete suite on this task's branch again and record it as this task's verdict."
+          onClick={() => start({})}
         >
-          Re-run failed jobs
+          Re-run CI
         </Button>
+      </AccessGate>
+      {ci.conclusion !== "cancelled" && (
+        <AccessGate scope="ci:write" repo={t.repo}>
+          <Button
+            size="small"
+            variant="outlined"
+            title="Run only the jobs that did not pass again, bypassing the cache."
+            onClick={() => start({ recheck: true, recheckFailed: true })}
+          >
+            Re-run failed jobs
+          </Button>
+        </AccessGate>
       )}
     </Box>
   );

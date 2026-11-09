@@ -60,11 +60,11 @@ Any other command, including `mcpserver`, `capability` and the agent hooks, runs
 | Scheme | Holds | Needs |
 |---|---|---|
 | `ci://<owner>/<repo>/<run>/<job>/[attempts/<k>/]<step>.log`, `…/artifacts/<job>/<name>` | grain CI runs and GitHub Actions runs (`gha:` ids; one `job.log` per job) | `https://grain.dev/capabilities/grain#ci` (formerly `grain-ci`, retired in schema migration 96) for the task's own repo, `ci-read` for others |
-| `src://…` | the daemon's own source; `src://core/…` for core under a layered build; `src://playbooks/…` | `self-debug`, or `bootstrap-playbooks` for playbooks |
-| `task://<id>/record.md`, `prompt.md`, `transcript.md`, `attempts/<n>/…` | task records | the run's own task, or `self-debug`/`tasks:read` for others |
+| `src://…` | the daemon's own source; `src://core/…` for core under a layered build; `src://playbooks/…` | `…/grain#source` (formerly `self-debug`), or `…/config-map#config-map={"config_maps":["bootstrap"]}` (formerly `bootstrap-playbooks`, retired in schema migration 118) for playbooks |
+| `task://<id>/record.md`, `prompt.md`, `transcript.md`, `attempts/<n>/…` | task records | the run's own task, or `tasks:read` (in `api:self-debug`) for others |
 | `config://…` | the deployment's state repository (grain/config) | as the namespace grants |
 | `memory://<key>` | memory documents | `memory` |
-| `deploy://grain.log[/<source>]`, `health`, `metrics[/<section>]`, `merge-queue`, `pipeline-changes` | deployment state | `…/grain#journal` (formerly `grain-log`, retired in schema migration 80), `…/grain#health` (with `api:deployment:read`, formerly `deployment-health`, retired in schema migration 81), `self-debug` |
+| `deploy://grain.log[/<source>]`, `health`, `metrics[/<section>]`, `merge-queue`, `pipeline-changes` | deployment state | `…/grain#journal` (formerly `grain-log`, retired in schema migration 80), `…/grain#health` (with `api:deployment:read`, formerly `deployment-health`, retired in schema migration 81), `api:deployment:read` (in `api:self-debug`) for metrics and pipeline changes |
 
 The schemes and their grants are the namespace's to define ([`grain-namespace.design.md`](../../design/grain-namespace.design.md)). This CLI only forwards.
 
@@ -321,6 +321,7 @@ Usage: `grain ci retrigger [--jobs j1,j2 | --all] [--commit <sha>] [--workflow <
 | `pr open` | `POST /cli/pr/open {}`: opens or updates the pull request from the branch's commit messages |
 | `pr reply <body \| --file f>` | `POST /cli/pr/reply {"body", "comment_id"?}` |
 | `pr resolve` | `POST /cli/pr/resolve {"thread_id"?, "comment_id"?}`. Missing both: `grain pr resolve: missing --thread-id <id> or --comment-id <id>: name the thread`, status 2 |
+| `pr threads [--unresolved]` | `GET /cli/pr/threads[?unresolved=1]`: every review thread on the task's own pull request -- thread ID, first comment ID, author, path:line, resolved/outdated, body and replies -- or only the unresolved ones (outdated included). Needs no CI grant |
 | `pr review-comment <body \| --file f>` | `POST /cli/pr/review-comment {"body", "path"?, "line"?}`. Given one of `--path`/`--line` without the other: `give both --path and --line to attach a comment to a line, or neither for a general remark` |
 
 `--file -` reads stdin. `--comment-id` and `--line` must be positive: `--<flag> must be a positive integer`. A missing body gets `missing <body> (or --file)`, status 2.
@@ -363,6 +364,14 @@ Usage: `grain pr resolve (--thread-id <id> | --comment-id <id>)`
 |---|---|
 | `--thread-id` | string |
 | `--comment-id` | string |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain pr threads -->
+Usage: `grain pr threads [--unresolved]`
+
+| Flag | Type |
+|---|---|
+| `--unresolved` | bool |
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain pr review-comment -->
@@ -466,7 +475,7 @@ Usage: `grain notify --subject <key> --title <one-line> [--body <md> | --file <f
 
 | Command | Behaviour |
 |---|---|
-| `task list` | `GET /cli/tasks` with the filters. Takes no positionals (`task list: unexpected argument "<x>": …`). `--limit` must be positive (`task list: --limit "<v>" is not a positive number`). **Needs** `tasks:read` or `self-debug` for tasks other than the run's own |
+| `task list` | `GET /cli/tasks` with the filters. Takes no positionals (`task list: unexpected argument "<x>": …`). `--limit` must be positive (`task list: --limit "<v>" is not a positive number`). **Needs** `tasks:read` (or the `api:self-debug` preset) for tasks other than the run's own |
 | `task read <id>` | reads `task://<id>/record.md` |
 | `task prompt <id>` / `task transcript <id>` | reads `task://<id>/[attempts/<n>/]prompt.md` / `transcript.md`. `transcript` reports the file's size on stderr |
 | `task wait <id>…` | `POST /cli/tasks/wait {"ids", "until", "timeout_seconds"}`. Prints `Task wait (<status>, waited <d>…):` and the summary. When not settled, it adds how to keep waiting and how to park. `--park` or `--resume-at` is refused: `parking a task ends the run and is a model-only control operation: call the wait_for_task (park: true) or resume_later MCP tool instead` |
@@ -693,10 +702,10 @@ Usage: `grain quarantine <package> <test-name> --reason <why> [--ttl 30d] [--no-
 
 ### 6.1 `grain metrics`, `grain health`, `grain log`, `grain playbooks` {#CLI-103}
 
-- `grain metrics [<section>]` reads `deploy://metrics[/<section>]` with `window`, `since` and `until`. `--repo` and `--author` may be repeated. **Needs** `self-debug`.
+- `grain metrics [<section>]` reads `deploy://metrics[/<section>]` with `window`, `since` and `until`. `--repo` and `--author` may be repeated. **Needs** `api:deployment:read` (or the `api:self-debug` preset).
 - `grain health` reads `deploy://health`. **Needs** `…/grain#health` (formerly `deployment-health`).
 - `grain log [<source> | --source s]` reads `deploy://grain.log[/<source>]`. `--since`/`--until` spans are resolved to RFC 3339 instants relative to now. `--priority`/`--min-priority` become `min_priority`, and `--max-lines`/`--lines`/`-n` become `max_lines`. A zero count is refused: `grain log: <flag> "0" is not a count of entries: it takes a positive integer`. **Needs** `…/grain#journal` (formerly `grain-log`).
-- `grain playbooks` prints one playbook name per line (`src://playbooks`, with `.md` dropped). `grain playbooks <name>` reads it. **Needs** `bootstrap-playbooks`.
+- `grain playbooks` prints one playbook name per line (`src://playbooks`, with `.md` dropped). `grain playbooks <name>` reads it. **Needs** `…/config-map#config-map={"config_maps":["bootstrap"]}` (formerly `bootstrap-playbooks`).
 
 <!-- BEGIN GENERATED FLAGS: grain metrics -->
 Usage: `grain metrics [<section>] [--window 7d | --since <date> [--until <date>]] [--repo owner/name]... [--author <a>]...`

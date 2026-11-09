@@ -198,6 +198,13 @@ func ResetIAPConfig() {
 	refusedVerifiersMu.Lock()
 	clear(refusedVerifiersLogged)
 	refusedVerifiersMu.Unlock()
+	// The once-per-principal refusal log (logRefusedPrincipal,
+	// logRefusedDelegate) is package state too: without clearing it, a
+	// second run of a test (-count=2) or an earlier test under -shuffle has
+	// already spent the "once" and the refusal is never logged.
+	refusedPrincipalsMu.Lock()
+	clear(refusedPrincipalsLogged)
+	refusedPrincipalsMu.Unlock()
 }
 
 // VerifyIAPToken validates an IAP JWT assertion and returns the authenticated user email/identity.

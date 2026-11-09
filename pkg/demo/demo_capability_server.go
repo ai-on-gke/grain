@@ -335,6 +335,21 @@ func configureCapabilityServerDemo(ctx context.Context, stored *model.Config, lo
 	}
 	figmaEntry.Builtin = intree.FigmaName
 	stored.MCPServers[intree.CanonicalID(intree.FigmaName)] = figmaEntry
+
+	// The config-map server too, in-process and unconfigured: every
+	// standing session holds its bootstrap grant, and editing a session's
+	// grants looks each one up in this registry, so without it no edit
+	// saves. Settings configures it like the daemon's own.
+	configMap, err := intree.NewConfigMap(intree.ConfigMapConfig{})
+	if err != nil {
+		return nil, err
+	}
+	configMapEntry, err := serveDemoCapability(ctx, configMap.CapabilityServer)
+	if err != nil {
+		return nil, err
+	}
+	configMapEntry.Builtin = "config-map"
+	stored.MCPServers[intree.CanonicalID("config-map")] = configMapEntry
 	opts := servers.Options{Secrets: lookup, Hostd: hostdClient}
 	if identity != nil {
 		opts.Identity = servers.StoreIdentity(identity, nil)

@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { isApiGrant, withoutApiRows } from "../apiGrants.js";
+import AccessGate from "./AccessGate.jsx";
+import { isApiGrant } from "../apiGrants.js";
 import GrantsPicker from "./GrantsPicker.jsx";
-import GrantChip from "./GrantChip.jsx";
 import { checkGrants, localGrantHandlers } from "./capabilityMethods.js";
 import { isCapabilityRef } from "../capabilityArgs.js";
 import { Fragment, useEffect, useRef, useState } from "react";
@@ -38,18 +38,12 @@ import {
   Typography,
 } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
-import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import api from "../api.js";
 import AppIcon from "./AppIcon.jsx";
 import { PRIORITY_REFUSAL, taskPriority, wholeNumber } from "../wholeNumber.js";
-import { useHeldIds } from "../useHeldIds.js";
 import fileToAttachment from "../attachments.js";
 import {
   branchesInUse,
-  capabilityRows,
-  capabilityUnavailableHint,
-  LEGACY_CAPABILITIES_HINT,
-  NO_CAPABILITIES_HINT,
   defaultCapabilitiesFor,
   connectionLabel,
   connectionsServingModels,
@@ -82,15 +76,13 @@ import NoGitConnectionNotice from "./NoGitConnectionNotice.jsx";
 import SearchSelect from "./SearchSelect.jsx";
 import SidePanel from "./SidePanel.jsx";
 import TaskPicker from "./TaskPicker.jsx";
+import { parseForkHead } from "../forkHead.js";
 import { clearTaskDraft, loadTaskDraft, saveTaskDraft } from "../taskDraft.js";
 import { templateLabeler } from "../templateLabels.js";
 import {
   ADVANCED_ORDER,
   NEW_TASK_FORM_FIELDS,
-  pickerAllows,
-  pickerDisplay,
   resolveNewTaskForm,
-  sortByDisplay,
 } from "../newTaskForm.js";
 
 export default function NewTaskOverlay({
@@ -154,10 +146,24 @@ export default function NewTaskOverlay({
   const openingRepo = defaultRepo || (formNoRepo ? "" : formRepoDefault) || "";
   const openingDefault = (id) => openingForm.fields[id].default;
   // formEdited is every field somebody has changed in this form -- or
-  // that a restored draft holds -- which a change of repo or template
-  // leaves alone when it re-applies the configured defaults (below), the
-  // way baseEdited and capabilitiesEdited do for their own fields.
-  const formEdited = useRef(new Set(draft ? Object.keys(draft) : []));
+  // had changed when its draft was saved -- which a change of repo or
+  // template leaves alone when it re-applies the configured defaults
+  // (below), the way baseEdited and capabilitiesEdited do for their own
+  // fields. A draft records that set as `edited`, because it saves every
+  // field, typed or not: seeding from all its keys marked an untouched
+  // Task priority edited, so a title left in the form made "New task
+  // from this template" keep the 5 the draft held and file it over the
+  // template's own priority (2026-11-08 intake walkthrough). A draft
+  // saved before `edited` was recorded falls back to all its keys.
+  const formEdited = useRef(
+    new Set(
+      draft
+        ? Array.isArray(draft.edited)
+          ? draft.edited
+          : Object.keys(draft)
+        : [],
+    ),
+  );
   const edit = (id, set) => (value) => {
     formEdited.current.add(id);
     set(value);
@@ -420,48 +426,28 @@ export default function NewTaskOverlay({
       return draft.capabilities;
     return capabilityDefaultsFor(openingRepo);
   });
-  // The rows the picker below is drawn from: what this deployment has
-  // configured, plus anything already ticked -- a default it cannot
-  // honour is still shown, and still warned about, because a pre-ticked
-  // grant needs a row to be unticked from (capabilityRows, state.js).
-  //
-  // Capability server grants (with their with: arguments) and the agent
-  // API's grants (apiGrants.js) are kept in the same list, and edited
-  // together by GrantsPicker below the checklist rather than as rows of
-  // it; the checklist is only the legacy in-process ids.
-  const capabilityIds = capabilities.filter(
-    (id) => !isCapabilityRef(id) && !isApiGrant(id),
-  );
+  // Capability server grants (with their with: arguments), the agent API's
+  // grants (apiGrants.js), and any held bare capability id are kept in the
+  // same list and shown by GrantsPicker below, where a bare id can be
+  // removed or left as it is.
+  const isBareGrant = (id) => !isCapabilityRef(id) && !isApiGrant(id);
+  const capabilityIds = capabilities.filter(isBareGrant);
   const apiIds = capabilities.filter(isApiGrant);
-  const capabilityRefs = capabilities.filter(isCapabilityRef);
-  const heldCapabilityIds = useHeldIds(capabilityIds);
-  // settings/new-task-form.yml's capabilities.offered and .hidden narrow
-  // what is offered (one already ticked is kept, to be unticked), and
-  // .display relabels and orders it.
-  const formCapabilities = taskForm.capabilities;
-  const capabilityOptions = sortByDisplay(
-    formCapabilities,
-    withoutApiRows(capabilityRows(config?.capabilities, heldCapabilityIds))
-      .filter(
-        (c) =>
-          pickerAllows(formCapabilities, c.id) || capabilityIds.includes(c.id),
-      )
-      .map((c) => {
-        const d = pickerDisplay(formCapabilities, c.id);
-        return d
-          ? {
-              ...c,
-              name: d.label || c.name,
-              description: d.description || c.description,
-            }
-          : c;
-      }),
-    (c) => c.id,
+  const capabilityRefs = capabilities.filter(
+    (id) => isCapabilityRef(id) && !isApiGrant(id),
   );
-  const methodGrants = localGrantHandlers(capabilityRefs, (refs) => {
-    capabilitiesEdited.current = true;
-    setCapabilities([...capabilityIds, ...apiIds, ...refs]);
-  });
+  const formCapabilities = taskForm.capabilities;
+  const methodGrants = localGrantHandlers(
+    [...capabilityIds, ...capabilityRefs],
+    (rest) => {
+      capabilitiesEdited.current = true;
+      setCapabilities([
+        ...rest.filter(isBareGrant),
+        ...apiIds,
+        ...rest.filter(isCapabilityRef),
+      ]);
+    },
+  );
   // capabilitiesEdited is Base branch's baseEdited above, for the same
   // reason: picking a different repo re-seeds this picker from that
   // repo's own defaults, and must not do so over a choice somebody has
@@ -671,6 +657,12 @@ export default function NewTaskOverlay({
   // the browser's own min/step message or to the server's JSON decoder.
   const priorityInvalid =
     String(priority).trim() !== "" && Number.isNaN(taskPriority(priority));
+  // A Base branch typed as a fork head label but malformed: BranchField
+  // already says what is wrong with it, in the server's own words, and
+  // the server refuses it, so Create task waits for it to be fixed
+  // rather than offering a submit that can only come back refused.
+  const forkHeadInvalid =
+    !changeTarget && (noRepo || !newBranch) && !!parseForkHead(base)?.error;
   // customFields is this deployment's own fields (grain/task-53), held
   // as state rather than read off the form at submit for the reason
   // capabilities above is: an enum is a <Select> and a boolean a
@@ -808,6 +800,7 @@ export default function NewTaskOverlay({
         atFront,
         priority,
         customFields,
+        edited: [...formEdited.current],
       });
     } else {
       clearTaskDraft();
@@ -1650,80 +1643,6 @@ export default function NewTaskOverlay({
   );
   const grantsNode = (
     <>
-      <FormControl fullWidth margin="normal" size="small">
-        <SearchSelect
-          multiple
-          label="Legacy capabilities"
-          inputProps={{ "data-testid": "new-task-capabilities" }}
-          value={capabilityIds}
-          onChange={(next) => {
-            capabilitiesEdited.current = true;
-            setCapabilities([...next, ...apiIds, ...capabilityRefs]);
-          }}
-          noOptionsText={
-            capabilityOptions.length === 0 ? NO_CAPABILITIES_HINT : "No matches"
-          }
-          options={capabilityOptions.map((c) => {
-            const refused = catalogueRefusals[c.id] || "";
-            const unavailable = refused || capabilityUnavailableHint(c);
-            return {
-              value: c.id,
-              label: c.name,
-              // One the catalogue refuses here is not offered, but one
-              // already ticked stays enabled: its own row is the only
-              // way to untick it.
-              disabled: Boolean(refused) && !capabilityIds.includes(c.id),
-              title: unavailable
-                ? `${c.description}\n\n${unavailable}`
-                : c.description,
-              secondary: unavailable ? (
-                <Box component="span" sx={{ color: "warning.main" }}>
-                  {unavailable}
-                </Box>
-              ) : null,
-            };
-          })}
-          renderChip={(o, props) => (
-            <GrantChip
-              grant={o.value}
-              config={config}
-              {...props}
-              // Marked by its border and icon, its label left at full
-              // contrast: warning-coloured text on a light chip is too
-              // faint to read at this size.
-              {...(catalogueRefusals[o.value]
-                ? {
-                    note: catalogueRefusals[o.value],
-                    variant: "outlined",
-                    icon: <WarningAmberIcon fontSize="small" color="warning" />,
-                    sx: { borderColor: "warning.main" },
-                    ariaSuffix: " (refused here)",
-                    "data-catalogue-refused": "true",
-                  }
-                : {})}
-            />
-          )}
-        />
-        {defaultCapabilitiesFor(config, noRepo ? "" : repo).length > 0 && (
-          <FormHelperText>
-            Pre-ticked ones are the defaults for this repo -- this
-            deployment&apos;s (Settings &gt; Tasks), plus anything the repo
-            itself adds (Repos &gt; Capabilities). Untick any this task should
-            not have.
-          </FormHelperText>
-        )}
-        {refusedGrants.length > 0 && (
-          <FormHelperText
-            data-testid="new-task-catalogue-refused"
-            sx={{ color: "warning.main" }}
-          >
-            {capabilitiesEdited.current
-              ? `settings/capabilities.yml refuses ${refusedGrants.join(", ")} on ${noRepo ? "a task with no repo" : policyTarget}: untick ${refusedGrants.length === 1 ? "it" : "them"}, or the task will not be filed.`
-              : `settings/capabilities.yml refuses ${refusedGrants.join(", ")} on ${noRepo ? "a task with no repo" : policyTarget}, so ${refusedGrants.length === 1 ? "that default is" : "those defaults are"} left off this task.`}
-          </FormHelperText>
-        )}
-        <FormHelperText>{LEGACY_CAPABILITIES_HINT}</FormHelperText>
-      </FormControl>
       <GrantsPicker
         config={config}
         grants={capabilities}
@@ -1739,6 +1658,23 @@ export default function NewTaskOverlay({
         label={F.grants.label || undefined}
         helpText={F.grants.helpText || undefined}
       />
+      {defaultCapabilitiesFor(config, noRepo ? "" : repo).length > 0 && (
+        <FormHelperText>
+          Grants already listed are the defaults for this repo -- this
+          deployment&apos;s (Settings &gt; Tasks), plus anything the repo itself
+          adds (Repos &gt; Capabilities). Remove any this task should not have.
+        </FormHelperText>
+      )}
+      {refusedGrants.length > 0 && (
+        <FormHelperText
+          data-testid="new-task-catalogue-refused"
+          sx={{ color: "warning.main" }}
+        >
+          {capabilitiesEdited.current
+            ? `settings/capabilities.yml refuses ${refusedGrants.join(", ")} on ${noRepo ? "a task with no repo" : policyTarget}: remove ${refusedGrants.length === 1 ? "it" : "them"}, or the task will not be filed.`
+            : `settings/capabilities.yml refuses ${refusedGrants.join(", ")} on ${noRepo ? "a task with no repo" : policyTarget}, so ${refusedGrants.length === 1 ? "that default is" : "those defaults are"} left off this task.`}
+        </FormHelperText>
+      )}
     </>
   );
   const modelNode = (
@@ -2378,20 +2314,27 @@ export default function NewTaskOverlay({
           ) : (
             <span />
           )}
-          <Button
-            type="submit"
-            variant="contained"
-            onClick={markSubmitAttempt}
-            disabled={
-              submitting ||
-              priorityInvalid ||
-              (!title.trim() && !pickedTemplate) ||
-              (!noRepo && !repo.trim() && !pickedTemplate?.repo) ||
-              (!noRepo && newBranch && !newBranchName.trim())
-            }
+          <AccessGate
+            scope="tasks:write"
+            repo={noRepo ? undefined : repo.trim() || undefined}
+            config={config}
           >
-            Create task
-          </Button>
+            <Button
+              type="submit"
+              variant="contained"
+              onClick={markSubmitAttempt}
+              disabled={
+                submitting ||
+                priorityInvalid ||
+                forkHeadInvalid ||
+                (!title.trim() && !pickedTemplate) ||
+                (!noRepo && !repo.trim() && !pickedTemplate?.repo) ||
+                (!noRepo && newBranch && !newBranchName.trim())
+              }
+            >
+              Create task
+            </Button>
+          </AccessGate>
         </Stack>
       }
     >

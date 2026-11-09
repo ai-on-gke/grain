@@ -1212,6 +1212,7 @@ export default function CapabilityServersPanel({
   readOnly,
   selected: selectedProp,
   onSelect,
+  onChanged,
 }) {
   const [servers, setServers] = useState(null);
   // The open server, by capability_id, or "" for the list. Held by the
@@ -1321,6 +1322,10 @@ export default function CapabilityServersPanel({
       invalidateCapabilityMethods();
       setServers(Array.isArray(data) ? data : []);
       refreshUsage();
+      // A server's own secrets are made, renamed and deleted with it:
+      // whatever lists them (Deployment credentials' Other secrets) reads
+      // them again rather than go on naming a server that is gone.
+      onChanged?.();
       return true;
     } catch (err) {
       showError(err);
@@ -1849,6 +1854,7 @@ export default function CapabilityServersPanel({
                 onSaved={(data) => {
                   setServers(Array.isArray(data) ? data : []);
                   setConfiguring(null);
+                  onChanged?.();
                 }}
               />
             )}
@@ -1997,10 +2003,14 @@ export default function CapabilityServersPanel({
           </Link>
         </Typography>
         <Alert severity="info" data-testid="capability-servers-vs-legacy">
-          This is grain&apos;s current capability system. The older capabilities
-          built into grain itself, granted by a bare name such as{" "}
-          <code>gcp-key</code>, and their credentials are on{" "}
-          <Link href="/settings/credentials">Legacy capabilities</Link>.
+          This is grain&apos;s capability system. The older capabilities built
+          into grain itself, granted by a bare name such as <code>gcp-key</code>
+          , have all been retired onto these servers&apos; methods; the GitHub
+          host, GCP settings and secrets they used are under{" "}
+          <Link href="/settings/capabilities#credentials">
+            Deployment credentials
+          </Link>
+          .
         </Alert>
       </Box>
       <Glossary />

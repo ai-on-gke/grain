@@ -31,7 +31,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
-	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -108,7 +107,7 @@ func newDeliveryWorld(t *testing.T) *deliveryWorld {
 		CycleTimes: orchestrator.NewCycleTimes(10),
 		Config: orchestrator.Config{
 			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities: model.NewCapabilityRegistry(durable.New()),
+			Capabilities: model.NewCapabilityRegistry(),
 			// Warm retention on, as a deployment runs it: each new turn's
 			// run is handed the sandbox the session's first run built.
 			SessionSandboxIdleTTL: 30 * time.Minute,

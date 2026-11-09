@@ -43,8 +43,14 @@ func TestValidationAndScopeHelpers(t *testing.T) {
 	if api.EntryKind("redirect").Valid() {
 		t.Fatal("redirect kind must not be valid in v1")
 	}
-	if api.EntryState("stopped").Valid() || api.EntryState("stopping").Valid() {
-		t.Fatal("stopped/stopping states must not be valid in v1")
+	if !api.StateStopping.Valid() || !api.StateStopped.Valid() {
+		t.Fatal("stopped/stopping states must be valid in step 17")
+	}
+	if !api.AutoUpgradeOff.Valid() || !api.AutoUpgradeNotify.Valid() || !api.AutoUpgradeMinor.Valid() {
+		t.Fatal("off/notify/minor auto_upgrade policies must be valid")
+	}
+	if api.AutoUpgradePolicy("major").Valid() {
+		t.Fatal("unexpected valid AutoUpgradePolicy for major")
 	}
 
 	for _, okName := range []string{"alice", "payments-prod-01", "a1b"} {
@@ -115,7 +121,7 @@ func TestClientAuthHeadersEndpointsAndErrors(t *testing.T) {
 				CanCreate: true,
 				Quota:     api.QuotaUsage{QuotaUnitsUsed: 1, QuotaUnitsLimit: 4, ConnectedLimit: 5},
 			})
-		case r.Method == http.MethodPost && r.URL.Path == "/api/entries/alice/heartbeat":
+		case r.Method == http.MethodPut && r.URL.Path == "/api/entries/alice/heartbeat":
 			if r.Header.Get(api.HeaderAuth) != api.AuthModeToken {
 				t.Errorf("X-Grain-Auth = %q, want token", r.Header.Get(api.HeaderAuth))
 			}
@@ -155,6 +161,18 @@ func TestClientAuthHeadersEndpointsAndErrors(t *testing.T) {
 				Path:       r.URL.Query().Get("path"),
 				Primary:    &cand,
 				Candidates: []api.RouteCandidate{cand},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/entries/alice-vm/stop":
+			_ = json.NewEncoder(w).Encode(api.Entry{
+				Name:  "alice-vm",
+				Kind:  api.KindInstance,
+				State: api.StateStopping,
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/entries/alice-vm/start":
+			_ = json.NewEncoder(w).Encode(api.Entry{
+				Name:  "alice-vm",
+				Kind:  api.KindInstance,
+				State: api.StateCreating,
 			})
 		default:
 			w.Header().Set("Retry-After", "7")
@@ -219,6 +237,15 @@ func TestClientAuthHeadersEndpointsAndErrors(t *testing.T) {
 	_, err = cli.GetEntry(context.Background(), "rate-limited")
 	if !api.IsRateLimited(err) || !errors.As(err, &ae) || ae.RetryAfter != 7*time.Second {
 		t.Fatalf("rate limit err = %v (RetryAfter=%v), want 429 with 7s", err, ae.RetryAfter)
+	}
+
+	stopped, err := cli.StopEntry(context.Background(), "alice-vm")
+	if err != nil || stopped.State != api.StateStopping {
+		t.Fatalf("StopEntry = (%+v, %v), want state=stopping", stopped, err)
+	}
+	started, err := cli.StartEntry(context.Background(), "alice-vm")
+	if err != nil || started.State != api.StateCreating {
+		t.Fatalf("StartEntry = (%+v, %v), want state=creating", started, err)
 	}
 }
 

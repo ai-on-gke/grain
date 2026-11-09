@@ -1,0 +1,110 @@
+== 2026-11-07T03:45:22Z fake agy run, pwd=/home/debian/rd/d/state/agent-sessions/antigravity/4/grain-run/workspace HOME=/home/debian/rd/d/state/agent-sessions/antigravity/4
+== args: --input-format stream-json --output-format stream-json --dangerously-skip-permissions --disable-slash-commands --print-timeout 24h0m0s --model fake-model --log-file /home/debian/rd/d/state/agent-sessions/antigravity/4/grain-run/agy-diagnostic-1922742455.log
+== env (GRAIN_*, *_PROXY*, GOOGLE_*, CLOUDSDK_*; values of secrets cut)
+GOOGLE_API_KEY=
+GRAIN_LOCAL_API_TOKEN_FILE=<cut>
+== ls -la $HOME
+total 20
+drwx------ 4 debian debian 4096 Nov  7 03:45 .
+drwx------ 4 debian debian 4096 Nov  7 03:45 ..
+drwx------ 4 debian debian 4096 Nov  7 03:45 .gemini
+-rw------- 1 debian debian   21 Nov  7 03:45 .grain-last-used
+drwx------ 3 debian debian 4096 Nov  7 03:45 grain-run
+== agent config files under $HOME/.gemini
+~/.gemini/antigravity-cli/settings.json
+~/.gemini/config/mcp_config.json
+~/.gemini/config/hooks.json
+== sandbox container: grain-sandbox-4-1 (grain-sbx:walk)
+-- ls -l ~/.gemini-proxy-*
+-rw------- 1 debian debian 82 Nov  7 03:45 /home/debian/.gemini-proxy-token
+-rw------- 1 debian debian 24 Nov  7 03:45 /home/debian/.gemini-proxy-url
+url: http://10.240.0.1:33441
+token: 139590<cut> (81 chars)
+-- GET <url>/v1beta/models with the placed token
+{
+  "error": {
+    "code": 400,
+    "message": "API key not valid. Please pass a valid API key.",
+    "status": "INVALID_ARGUMENT",
+    "details": [
+      {
+        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+        "reason": "API_KEY_INVALID",
+        "domain": "googleapis.com",
+        "metadata": {
+          "service": "generativelanguage.googleapis.com"
+        }
+      },
+      {
+        "@type": "type.googleapis.com/google.rpc.LocalizedMessage",
+        "locale": "en-US",
+        "message": "API key not valid. Please pass a valid API key."
+      },
+      {
+        "@type": "type.googleapis.com/google.rpc.DebugInfo",
+        "detail": "Invalid API key: walk-key-B-not-real"
+      }
+    ]
+  }
+}
+
+HTTP 400
+
+-- the same with a wrong token
+HTTP 401
+== 2026-11-07T03:45:23Z done
+== 2026-11-07T03:45:23Z fake agy run, pwd=/home/debian/rd/d/state/agent-sessions/antigravity/4/grain-run/workspace HOME=/home/debian/rd/d/state/agent-sessions/antigravity/4
+== args: --input-format stream-json --output-format stream-json --dangerously-skip-permissions --disable-slash-commands --print-timeout 24h0m0s --model fake-model --conversation fake-agy-walk --log-file /home/debian/rd/d/state/agent-sessions/antigravity/4/grain-run/agy-diagnostic-3897326748.log
+== env (GRAIN_*, *_PROXY*, GOOGLE_*, CLOUDSDK_*; values of secrets cut)
+GOOGLE_API_KEY=
+GRAIN_LOCAL_API_TOKEN_FILE=<cut>
+== ls -la $HOME
+total 20
+drwx------ 4 debian debian 4096 Nov  7 03:45 .
+drwx------ 4 debian debian 4096 Nov  7 03:45 ..
+drwx------ 4 debian debian 4096 Nov  7 03:45 .gemini
+-rw------- 1 debian debian   21 Nov  7 03:45 .grain-last-used
+drwx------ 3 debian debian 4096 Nov  7 03:45 grain-run
+== agent config files under $HOME/.gemini
+~/.gemini/antigravity-cli/settings.json
+~/.gemini/config/mcp_config.json
+~/.gemini/config/hooks.json
+== sandbox container: grain-sandbox-4-1 (grain-sbx:walk)
+-- ls -l ~/.gemini-proxy-*
+-rw------- 1 debian debian 82 Nov  7 03:45 /home/debian/.gemini-proxy-token
+-rw------- 1 debian debian 24 Nov  7 03:45 /home/debian/.gemini-proxy-url
+url: http://10.240.0.1:33441
+token: 139590<cut> (81 chars)
+-- GET <url>/v1beta/models with the placed token
+{
+  "error": {
+    "code": 400,
+    "message": "API key not valid. Please pass a valid API key.",
+    "status": "INVALID_ARGUMENT",
+    "details": [
+      {
+        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+        "reason": "API_KEY_INVALID",
+        "domain": "googleapis.com",
+        "metadata": {
+          "service": "generativelanguage.googleapis.com"
+        }
+      },
+      {
+        "@type": "type.googleapis.com/google.rpc.LocalizedMessage",
+        "locale": "en-US",
+        "message": "API key not valid. Please pass a valid API key."
+      },
+      {
+        "@type": "type.googleapis.com/google.rpc.DebugInfo",
+        "detail": "Invalid API key: walk-key-B-not-real"
+      }
+    ]
+  }
+}
+
+HTTP 400
+
+-- the same with a wrong token
+HTTP 401
+== 2026-11-07T03:45:23Z done

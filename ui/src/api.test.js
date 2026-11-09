@@ -243,6 +243,69 @@ describe("api", () => {
     expect(unreachableReason(err)).not.toMatch(/Failed to fetch/);
   });
 
+  // grain/task-3619: a daemon that accepts the connection and never
+  // answers leaves fetch waiting forever, so the caller that asked for
+  // a bound gets an unreachable error at it instead.
+  it("gives up on a request asked with a timeout, as unreachable", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn(
+        (_path, init) =>
+          new Promise((_resolve, reject) => {
+            init.signal.addEventListener("abort", () =>
+              reject(new DOMException("aborted", "AbortError")),
+            );
+          }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const asked = api("/api/config", { timeout: 10_000 }).catch((e) => e);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(fetchMock.mock.calls[0][1].signal.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const err = await asked;
+      expect(isUnreachable(err)).toBe(true);
+      expect(err.timedOut).toBe(true);
+      expect(err.sentAt).toBeInstanceOf(Date);
+      expect(unreachableReason(err)).toMatch(/cannot be reached/);
+      expect(unreachableReason(err)).toMatch(/10 seconds/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves a request with a timeout that answers in time alone", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({
+          ok: true,
+          status: 200,
+          headers: new Map([["Content-Type", "application/json"]]),
+          json: () => Promise.resolve({ ok: 1 }),
+        }),
+      );
+      await expect(api("/api/config", { timeout: 10_000 })).resolves.toEqual({
+        ok: 1,
+      });
+      // Nothing left to fire: the timer went with the answer.
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not count an abort of the caller's own as a timeout", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new DOMException("aborted", "AbortError")),
+    );
+    const err = await api("/api/config", { timeout: 10_000 }).catch((e) => e);
+    expect(err.name).toBe("AbortError");
+    expect(isUnreachable(err)).toBe(false);
+  });
+
   it.each([502, 503, 504])(
     "marks a %d from a gateway in front of the daemon as unreachable",
     async (status) => {

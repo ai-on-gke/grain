@@ -14,54 +14,76 @@
 
 package model
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
-func TestGitCredentialOverrideFindsItsOwnGrant(t *testing.T) {
+func TestGitCredentialOverrideFindsCanonicalAndLegacyGrant(t *testing.T) {
 	grants := []Grant{
 		{Capability: "gemini-key", Via: GrantByFolder},
 		GitCredentialGrant("workflow"),
 	}
-	name, ok := gitCredentialOverride(grants)
+	name, ok, err := GitCredentialOverride(grants)
+	if err != nil {
+		t.Fatalf("GitCredentialOverride canonical: %v", err)
+	}
 	if !ok || name != "workflow" {
 		t.Errorf("name=%q ok=%v, want %q true", name, ok, "workflow")
+	}
+
+	legacyGrants := []Grant{
+		{Capability: "github-credential:release-bot", Via: GrantByLabel},
+	}
+	name, ok, err = GitCredentialOverride(legacyGrants)
+	if err != nil {
+		t.Fatalf("GitCredentialOverride legacy: %v", err)
+	}
+	if !ok || name != "release-bot" {
+		t.Errorf("legacy name=%q ok=%v, want %q true", name, ok, "release-bot")
 	}
 }
 
 func TestGitCredentialOverrideIgnoresUnrelatedGrants(t *testing.T) {
 	grants := []Grant{{Capability: "gemini-key", Via: GrantByFolder}}
-	if _, ok := gitCredentialOverride(grants); ok {
-		t.Error("an unrelated capability should not be read as an override")
+	if _, ok, err := GitCredentialOverride(grants); err != nil || ok {
+		t.Errorf("an unrelated capability should not be read as an override (ok=%v err=%v)", ok, err)
 	}
 }
 
 func TestGitCredentialOverrideIsAbsentWithNoGrants(t *testing.T) {
-	if _, ok := gitCredentialOverride(nil); ok {
-		t.Error("no grants at all should not be read as an override")
+	if _, ok, err := GitCredentialOverride(nil); err != nil || ok {
+		t.Errorf("no grants at all should not be read as an override (ok=%v err=%v)", ok, err)
 	}
 }
 
-func TestGitCredentialOverridePicksOneWinnerDeterministically(t *testing.T) {
-	// Two named tokens on one task: the proxy uses one of them rather
-	// than refusing, and which one follows the order the grants arrive
-	// in -- Store.GitCredentialOverride reads them sorted by capability
-	// id, so the same task resolves the same way on every request.
-	grants := []Grant{
-		GitCredentialGrant("bot-two"),
-		GitCredentialGrant("release-bot"),
-	}
-	name, ok := gitCredentialOverride(grants)
-	if !ok || name != "bot-two" {
-		t.Errorf("name=%q ok=%v, want %q true", name, ok, "bot-two")
+func TestGitCredentialOverrideRefusesConflictingGrants(t *testing.T) {
+	for _, grants := range [][]Grant{
+		{GitCredentialGrant("bot-two"), GitCredentialGrant("release-bot")},
+		{{Capability: "github-credential:bot-two", Via: GrantByLabel}, GitCredentialGrant("release-bot")},
+		{{Capability: "github-credential:bot-two", Via: GrantByLabel}, {Capability: "github-credential:release-bot", Via: GrantByLabel}},
+	} {
+		_, _, err := GitCredentialOverride(grants)
+		if !errors.Is(err, ErrConflictingGitCredentials) {
+			t.Errorf("GitCredentialOverride(%v) = %v, want ErrConflictingGitCredentials", grants, err)
+		}
 	}
 }
 
 func TestGitCredentialCapabilityRoundTrips(t *testing.T) {
 	id := GitCredentialCapability("release-bot")
-	if id != "github-credential:release-bot" {
-		t.Errorf("GitCredentialCapability = %q, want %q", id, "github-credential:release-bot")
+	want := `https://grain.dev/capabilities/repo#credential={"credential":"release-bot"}`
+	if id != want {
+		t.Errorf("GitCredentialCapability = %q, want %q", id, want)
 	}
 	if name, ok := GitCredentialName(id); !ok || name != "release-bot" {
 		t.Errorf("GitCredentialName(%q) = %q, %v, want %q true", id, name, ok, "release-bot")
+	}
+	if name, ok := GitCredentialName("github-credential:release-bot"); !ok || name != "release-bot" {
+		t.Errorf("GitCredentialName(legacy) = %q, %v, want %q true", name, ok, "release-bot")
+	}
+	if got := CanonicalLegacyGrant("github-credential:release-bot"); got != want {
+		t.Errorf("CanonicalLegacyGrant(github-credential:release-bot) = %q, want %q", got, want)
 	}
 	if _, ok := GitCredentialName("gemini-key"); ok {
 		t.Error("an ordinary capability id should not read as a named GitHub token")
@@ -471,6 +493,28 @@ func TestWritesBesidesDropsTheRepoTheTaskIsFiledAgainst(t *testing.T) {
 	}
 }
 
+func TestReadsBesidesDropsTheRepoTheTaskIsFiledAgainst(t *testing.T) {
+	widgets := RepoRef{Owner: "acme", Name: "widgets"}
+	reads := []RepoRef{
+		{Owner: "ACME", Name: "Widgets"},
+		{Owner: "acme", Name: "gadgets"},
+	}
+	got := ReadsBesides(reads, widgets)
+	if len(got) != 1 || got[0].Name != "gadgets" {
+		t.Fatalf("ReadsBesides = %+v, want only acme/gadgets", got)
+	}
+	// An unbound preview (zero RepoRef) keeps every read intact.
+	if got := ReadsBesides(reads, RepoRef{}); len(got) != 2 {
+		t.Errorf("ReadsBesides(unbound) = %+v, want both entries", got)
+	}
+	if got := ReadsBesides(reads, RepoRef{Owner: "acme", Name: "elsewhere"}); len(got) != 2 {
+		t.Errorf("ReadsBesides(elsewhere) = %+v, want both entries", got)
+	}
+	if got := ReadsBesides([]RepoRef{widgets}, widgets); got != nil {
+		t.Errorf("ReadsBesides(only target) = %+v, want nil", got)
+	}
+}
+
 // ParseRepo's own gate: a paste that is not owner/name is either
 // normalised to it or refused here, because nothing downstream of this
 // function looks at a RepoRef again before building a clone URL out of
@@ -660,5 +704,107 @@ func TestRepoAccessGrantCarriesItsEventGate(t *testing.T) {
 	}
 	if RepoAccessAdmitsCIEvent("package-publish", "release", false) {
 		t.Error("a capability that is not repository access was admitted")
+	}
+}
+
+// AlignDefaultBases respells a base only where it and the parent's write
+// target for the same repository name one branch -- one of them "" and
+// the other that repository's default -- so a parent filed with an
+// explicit `base: main` reaches a proposal that named no base, and
+// nothing else changes (task 3411's live walk).
+func TestAlignDefaultBasesReadsEmptyAndTheDefaultBranchAsOne(t *testing.T) {
+	widgets := &RepoRef{Owner: "acme", Name: "widgets"}
+	docs := &RepoRef{Owner: "acme", Name: "docs"}
+	state := &RepoRef{Owner: "acme", Name: "widgets-state"}
+	defaults := map[string]string{"acme/widgets": "main", "acme/docs": "trunk", "acme/widgets-state": "main"}
+	asked := map[string]int{}
+	defaultBranch := func(r RepoRef) string {
+		asked[r.String()]++
+		return defaults[r.String()]
+	}
+	parent := Task{
+		Target: widgets, Base: "main", AutoApproveProposals: true,
+		Writes: []WriteTarget{{Repo: *docs}, {Repo: *state, Base: "deploy"}},
+	}
+
+	for _, tc := range []struct {
+		name     string
+		child    Task
+		wantBase string
+		want     bool
+	}{
+		{"no base on the parent's repo, whose default is the parent's base",
+			Task{Target: widgets}, "main", true},
+		{"the parent's base named explicitly", Task{Target: widgets, Base: "main"}, "main", true},
+		{"another branch of the parent's repo", Task{Target: widgets, Base: "dev"}, "dev", false},
+		{"the default branch named explicitly where the write target left it empty",
+			Task{Target: docs, Base: "trunk"}, "", true},
+		{"a branch that is not the default where the write target left it empty",
+			Task{Target: docs, Base: "main"}, "main", false},
+		{"no base where the write target named a branch that is not the default",
+			Task{Target: state}, "", false},
+	} {
+		got := AlignDefaultBases(tc.child, parent, defaultBranch)
+		if got.Base != tc.wantBase {
+			t.Errorf("%s: Base = %q, want %q", tc.name, got.Base, tc.wantBase)
+		}
+		if lands := LandsWhereGranted(got, parent); lands != tc.want {
+			t.Errorf("%s: LandsWhereGranted after aligning = %v, want %v", tc.name, lands, tc.want)
+		}
+		if submits := AutoSubmits(got, parent); submits != tc.want {
+			t.Errorf("%s: AutoSubmits after aligning = %v, want %v", tc.name, submits, tc.want)
+		}
+	}
+
+	// The child's own Writes are aligned the same way, so a proposal
+	// handing on the parent's default-branch write target is not read as
+	// minting a new one -- and the slice it came with is left alone.
+	writes := []WriteTarget{{Repo: *widgets}}
+	child := Task{Target: widgets, Writes: writes}
+	got := AlignDefaultBases(child, parent, defaultBranch)
+	if len(UngrantedWrites(got, parent)) != 0 || !AutoSubmits(got, parent) {
+		t.Errorf("aligned writes = %+v, ungranted %+v", got.Writes, UngrantedWrites(got, parent))
+	}
+	if writes[0].Base != "" {
+		t.Errorf("AlignDefaultBases rewrote the caller's Writes slice: %+v", writes)
+	}
+
+	// Unresolvable -- no resolver, or a repository it cannot answer
+	// for -- compares as written and withholds, as before.
+	if got := AlignDefaultBases(Task{Target: widgets}, parent, nil); got.Base != "" || AutoSubmits(got, parent) {
+		t.Errorf("with no resolver: Base %q, AutoSubmits %v", got.Base, AutoSubmits(got, parent))
+	}
+	unknown := func(RepoRef) string { return "" }
+	if got := AlignDefaultBases(Task{Target: widgets}, parent, unknown); got.Base != "" {
+		t.Errorf("with an unresolvable default: Base %q, want \"\"", got.Base)
+	}
+
+	// Nothing to resolve asks nothing: a base already matching, or a
+	// repository the parent was never given.
+	asked = map[string]int{}
+	AlignDefaultBases(Task{Target: widgets, Base: "main"}, parent, defaultBranch)
+	AlignDefaultBases(Task{Target: &RepoRef{Owner: "acme", Name: "elsewhere"}}, parent, defaultBranch)
+	if len(asked) != 0 {
+		t.Errorf("asked for default branches it did not need: %v", asked)
+	}
+}
+
+// AutoSubmitRefusedOnLanding is the one refusal no other note explains:
+// the parent may queue its proposals, the child asks for nothing more,
+// and only the branch it lands on is wrong.
+func TestAutoSubmitRefusedOnLanding(t *testing.T) {
+	widgets := &RepoRef{Owner: "acme", Name: "widgets"}
+	parent := Task{Target: widgets, Base: "release/1.0", AutoApproveProposals: true}
+	if !AutoSubmitRefusedOnLanding(Task{Target: widgets}, parent) {
+		t.Error("a proposal on another branch was not reported as refused on landing")
+	}
+	if AutoSubmitRefusedOnLanding(Task{Target: widgets, Base: "release/1.0"}, parent) {
+		t.Error("a proposal on the parent's own branch was reported as refused")
+	}
+	if AutoSubmitRefusedOnLanding(Task{Target: widgets}, Task{Target: widgets, Base: "release/1.0"}) {
+		t.Error("a parent with no permission to queue proposals was reported as refusing on landing")
+	}
+	if AutoSubmitRefusedOnLanding(Task{Target: widgets, Grants: []Grant{{Capability: "x"}}}, parent) {
+		t.Error("a proposal escalating a capability was reported as refused on landing alone")
 	}
 }

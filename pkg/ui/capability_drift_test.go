@@ -29,12 +29,9 @@ package ui
 // rather than repeating a third list.
 
 import (
-	"context"
-	"errors"
 	"slices"
 	"testing"
 
-	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -60,11 +57,10 @@ func TestOfferedCapabilitiesCoversEveryShippedCapability(t *testing.T) {
 	t.Parallel()
 	offered, shipped := capabilityIDs(), catalogIDs()
 	for _, id := range shipped {
-		// Except the ones no task may hold: those are shipped, granted
-		// and reported on, and their absence from the picker is the
-		// point rather than the drift this test is about
-		// (TestCIOnlyCapabilitiesAreNotOfferedToTasks below).
-		if ciOnlyCapability(id) {
+		// Except the ones no task may hold, or retired providers kept in
+		// capabilityProviderCatalog for Settings' secret status/check while
+		// tasks grant their capability-server method instead.
+		if ciOnlyCapability(id) || model.CanonicalLegacyGrant(id) != id {
 			continue
 		}
 		if !slices.Contains(offered, id) {
@@ -164,91 +160,6 @@ func TestOfferedCapabilitiesNamesMatchSettingsDisplayNames(t *testing.T) {
 		}
 		if c.Name != want {
 			t.Errorf("capability %q: picker name %q, Settings name %q -- one capability, two names", c.ID, c.Name, want)
-		}
-	}
-}
-
-// The third drift of the same kind, and the one grain/task-172 is about:
-// a capability that resolves a standing credential -- one an operator
-// pasted once, which every later mint authenticates as -- but ships no
-// way to test it. Settings can only ever say **Ready** for such a
-// capability, meaning "the secret is set", while the key inside it may
-// have been deleted or rotated away at the far end months ago. Every
-// capability with a Requires entry is one that can fail that way, so
-// every one of them owes a model.CredentialChecker.
-func TestEveryCapabilityWithAStandingCredentialCanBeChecked(t *testing.T) {
-	t.Parallel()
-	for _, p := range capabilityProviderCatalog() {
-		spec := p.Spec()
-		if len(spec.Requires) == 0 {
-			continue
-		}
-		if !capabilityCheckable(spec.Name) {
-			t.Errorf("capability %q resolves the standing credential(s) %v but implements no "+
-				"model.CredentialChecker: Settings can report it Ready and nothing on any pane "+
-				"can see whether what is in those secrets still works", spec.Name, spec.Requires)
-		}
-	}
-}
-
-// The same bar, held to the one listing on this pane that is not
-// capabilityProviderCatalog: a named GitHub token (githubTokenStatuses).
-// Those rows are deliberately not in the catalog -- which tokens exist
-// is an operator's own files, not a property of this build -- so the
-// test above cannot see them, and for a while nothing could: they
-// reported Ready by construction, and a token revoked or rotated at
-// GitHub's end went stale with nothing on any pane able to say so
-// (grain/task-189).
-//
-// Two halves, because the drift can happen in either: the provider grain
-// builds for a named token has to implement model.CredentialChecker, and
-// the row this package builds for that same token has to report itself
-// Checkable, or the pane offers no button to reach the check through.
-func TestEveryNamedGitHubTokenRowCanBeChecked(t *testing.T) {
-	t.Parallel()
-	if _, ok := any(githubtoken.New("release-bot", githubtoken.Config{})).(model.CredentialChecker); !ok {
-		t.Fatal("githubtoken.Provider implements no model.CredentialChecker: a named token's row can " +
-			"only ever say Ready, and nothing on any pane can see whether GitHub still accepts it")
-	}
-	c := &Client{Config: Config{
-		Capabilities:     append(OfferedCapabilities(), GitHubTokenCapabilities([]string{"release-bot"})...),
-		CapabilityChecks: unreachedChecker{},
-	}}
-	var rows int
-	for _, status := range c.capabilityStatuses(model.Config{}, nil) {
-		if _, ok := model.GitCredentialName(status.ID); !ok {
-			continue
-		}
-		rows++
-		if !status.Checkable {
-			t.Errorf("named token %q reports Checkable false, so Settings offers no way to test a "+
-				"credential it reports Ready by construction", status.ID)
-		}
-	}
-	if rows != 1 {
-		t.Fatalf("built %d named-token rows, want one -- the listing this test is about is missing", rows)
-	}
-}
-
-// unreachedChecker satisfies Config.CapabilityChecks without being a
-// place a check could actually go: what the tests above need from it is
-// that this deployment *has* one (the nil-means-unavailable contract),
-// not what it would answer.
-type unreachedChecker struct{}
-
-func (unreachedChecker) CheckCapability(ctx context.Context, id string) (CapabilityCheckResult, error) {
-	return CapabilityCheckResult{}, errors.New("no check should have been made")
-}
-
-// The other direction: a capability with nothing standing behind it must
-// not offer a check, since there would be nothing for one to authenticate
-// as and the button would only ever produce a confusing failure.
-func TestCapabilitiesWithNoCredentialOfferNoCheck(t *testing.T) {
-	t.Parallel()
-	for _, p := range capabilityProviderCatalog() {
-		spec := p.Spec()
-		if len(spec.Requires) == 0 && capabilityCheckable(spec.Name) {
-			t.Errorf("capability %q needs no credential but ships a credential check", spec.Name)
 		}
 	}
 }

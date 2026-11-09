@@ -1,0 +1,61 @@
+=== two-step transfer of conn-alice (live tunnel) to carol
+$ [alice@example.com @ 4251] grain registry transfer -to carol@example.com conn-alice
+    offered ownership transfer of conn-alice to carol@example.com
+    (exit 0)
+$ [alice@example.com @ 4251] grain registry transfer -cancel conn-alice
+    cancelled the pending ownership transfer of conn-alice
+    (exit 0)
+$ [carol@example.com @ 4251] grain registry accept-transfer conn-alice
+    grain: registry API 403 (forbidden): only the named pending transfer recipient may accept this transfer
+    (exit 1)
+$ [alice@example.com @ 4251] grain registry transfer -to carol@example.com conn-alice
+    offered ownership transfer of conn-alice to carol@example.com
+    (exit 0)
+  sql> select pending_owner, transfer_expires_at > now() + interval '6 days' as seven_day_expiry from registry.entries where name='conn-alice'
+    carol@example.com|t
+  sql> update registry.entries set transfer_expires_at = now() - interval '1 minute' where name='conn-alice'
+    UPDATE 1
+$ [carol@example.com @ 4261] grain registry accept-transfer conn-alice
+    grain: registry API 409 (conflict): registry store: conflict: ownership transfer offer to carol@example.com expired at 2026-11-08T23:23:25Z
+    (exit 1)
+$ [carol@example.com @ 4261] grain registry show conn-alice
+    Name:        conn-alice
+    URL:         https://conn-alice.grain-user.test
+    Kind:        connected (host_kind=workstation)
+    State:       running (status=online, listed=true)
+    Owner:       alice@example.com
+    PendingTransfer: carol@example.com
+    Version:     v0.0.0-20261108231252-48bc55694a2b+dirty (48bc55694a2bf917659b1265a4051504b3458777)
+    Tunnel:      connected=true
+    (exit 0)
+--- fresh offer + accept (tunnel and grc_ credential must go)
+$ [alice@example.com @ 4251] grain registry transfer -to carol@example.com conn-alice
+    offered ownership transfer of conn-alice to carol@example.com
+    (exit 0)
+  before accept: 200
+$ [carol@example.com @ 4261] grain registry accept-transfer conn-alice
+    accepted ownership transfer of conn-alice (owner=carol@example.com)
+    (exit 0)
+  old grc_ heartbeat after accept: 401 {"error":"invalid or revoked credential","code":"unauthenticated"}
+  carol (new owner) via tunnel after accept: 503 {"code":"entry_offline","disconnect_reason":"ownership transferred","display_name":"","entry":"conn-alice","error":"entry_offline","host_kind":"workstation","last_seen_at":"2026-11-08T23:24:23Z","last
+  registry tunnel state: ownership transferred at 2026-11-08 23:24:25.342497+00
+  alice via tunnel after accept: 403 {"error":"caller \"alice@example.com\" does not have access to \"conn-alice\"","code":"forbidden"}
+  daemon log:
+    2026/11/08 23:24:17 grain daemon: registry tunnel (conn-alice) connected (session=15)
+    2026/11/08 23:24:21 grain daemon: registry tunnel (conn-alice) connected (session=16)
+    2026/11/08 23:24:25 grain daemon: registry heartbeat failed (attempt 1, retrying in 910ms): registry API 401 (unauthenticated): invalid or revoked credential
+--- admin force-transfer
+$ [bob@example.com @ 4251] POST /api/admin/entries/conn-alice/transfer {"to":"alice@example.com"}
+    HTTP 403
+    {"error":"admin privileges required","code":"forbidden"}
+
+$ [root@example.com @ 4251] POST /api/admin/entries/conn-alice/transfer {"to":"alice@example.com"}
+    HTTP 200
+    {"name":"conn-alice","url":"https://conn-alice.grain-user.test","kind":"connected","state":"running","status":"offline","health":"ok","owner":"alice@example.com","listed":true,"allow_ssh":true,"ship_logs":false,"auto_wake":true,"grain_version":"v0.0.0-20261108231252-48bc55694a2b+dirty","grain_commit":"48bc55694a2bf917659b1265a4051504b3458777","host_kind":"workstation","active_tasks":0,"awaiting_reply_tasks":1,"queue_depth":0,"active_sessions":0,"tunnel_connected":false,"last_heartbeat_at":"2026-11-08T23:24:23.94578Z","last_seen_at":"2026-11-08T23:24:25.349155741Z","heartbeat_age_seconds":7,"cr
+  sql> select owner_email, pending_owner, transfer_expires_at from registry.entries where name='conn-alice'
+    alice@example.com||
+  sql> select actor_email, action, entry_name from registry.audit_log where action like '%transfer%' order by at desc limit 4
+    root@example.com|admin_entry_force_transfer|conn-alice
+    carol@example.com|entry_transfer_accept|conn-alice
+    alice@example.com|entry_transfer_offer|conn-alice
+    alice@example.com|entry_transfer_offer|conn-alice

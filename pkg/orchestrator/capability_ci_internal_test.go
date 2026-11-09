@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"math/rand/v2"
 	"net"
 	"net/http/httptest"
 	"os"
@@ -94,12 +95,7 @@ func TestMaterializeCIPassReachesEachEndpointFromInsideTheSandbox(t *testing.T) 
 
 	base := ciEndpointPortBase
 	t.Cleanup(func() { ciEndpointPortBase = base })
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	ciEndpointPortBase = ln.Addr().(*net.TCPAddr).Port
-	ln.Close()
+	ciEndpointPortBase = freePortPairBelowEphemeral(t)
 
 	// The sandbox runs each guest forwarder it is asked to, here, from
 	// the script and token grain placed for it.
@@ -310,4 +306,31 @@ func TestMaterializeCIPassRoutesSandboxToolsThroughTheProxy(t *testing.T) {
 	if _, ok := registry.Servers(gitproxy.CapSandboxKey("ci-job-1-retry")); ok {
 		t.Error("the job's tools are still on the proxy after it closed")
 	}
+}
+
+// freePortPairBelowEphemeral returns a port p such that p and p+1 are both
+// free on 127.0.0.1, chosen below Linux's ephemeral range (32768-60999).
+// A port the kernel handed out for "127.0.0.1:0" and that was then closed
+// is in that range, so any other test's listener or outgoing connection
+// in this package can be given it again before the guest forwarder binds
+// it ("Address already in use"). Below the range only an explicit bind can
+// take it.
+func freePortPairBelowEphemeral(t *testing.T) int {
+	t.Helper()
+	for range 200 {
+		p := 20000 + rand.IntN(12000)
+		a, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(p)))
+		if err != nil {
+			continue
+		}
+		b, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(p+1)))
+		a.Close()
+		if err != nil {
+			continue
+		}
+		b.Close()
+		return p
+	}
+	t.Fatal("no free pair of loopback ports below the ephemeral range")
+	return 0
 }

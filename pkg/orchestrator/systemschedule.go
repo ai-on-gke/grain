@@ -39,6 +39,19 @@ import (
 // work nights can move it.
 const systemScheduleTimeOfDay = 3 * 60
 
+// systemScheduleFirstFiringGrace is the least time a freshly seeded
+// system schedule waits before it first comes due (firstSystemFiring).
+//
+// A deployment installed at 02:59 UTC would otherwise dispatch its memory
+// agent a minute later, over a record of one minute, and take a worker
+// slot from whatever its operator started it to run. The same is true of
+// a daemon a test starts: TestDaemonRestartKeepsAWarmSessionSandboxOnlyUnderItsRecordedKeys
+// runs one with a single worker slot, and on a CI run that crossed 03:00
+// the memory agent's task took that slot and the test's own task waited
+// for it until the test timed out. An hour is longer than any test that
+// starts a daemon is allowed to run, so none of them can meet a firing.
+const systemScheduleFirstFiringGrace = time.Hour
+
 // reconcileSystemSchedules makes sure a deployment with a state
 // repository has a schedule row for every standing job grain ships
 // (model.SystemTemplates) -- today, the nightly memory agent, the weekly
@@ -75,7 +88,7 @@ const systemScheduleTimeOfDay = 3 * 60
 // It runs before "schedule" in Reconcilers() so a row seeded on this
 // cycle is considered for firing on this same cycle -- which costs
 // nothing in practice (a fresh schedule's first firing is its cadence's
-// next occurrence, never now: model.Schedule.NextRunAt's own rule) and
+// first occurrence an hour or more away, never now: firstSystemFiring) and
 // keeps the two in the order the reader expects.
 func reconcileSystemSchedules(ctx context.Context, deps Deps, now time.Time) error {
 	if deps.Store == nil {
@@ -197,8 +210,9 @@ func seedSystemSchedule(ctx context.Context, deps Deps, tmpl model.Template,
 		// is not a request to run it (ui.Client.CreateSchedule's own doc
 		// comment), and a deployment that started at four in the
 		// afternoon should not spend its first cycle dispatching a
-		// memory agent over a record of nothing.
-		NextRunAt: recurrence.Next(now, loc),
+		// memory agent over a record of nothing -- nor, for the same
+		// reason, a cycle in its first hour (firstSystemFiring).
+		NextRunAt: firstSystemFiring(recurrence, now, loc),
 		CreatedAt: now,
 	}
 	if tmpl.ID == model.MemoryAgentTemplateID {
@@ -222,6 +236,25 @@ func seedSystemSchedule(ctx context.Context, deps Deps, tmpl model.Template,
 	log.Printf("orchestrator: seeded schedule %s (%s), first due %s",
 		sched.ID, tmpl.Name, sched.NextRunAt.In(loc).Format(time.RFC3339))
 	return nil
+}
+
+// firstSystemFiring is the first occurrence of recurrence that is at
+// least systemScheduleFirstFiringGrace after now: the cadence's own next
+// occurrence, unless that falls inside the grace, in which case the one
+// after it (repeated, for a cadence shorter than the grace). A nightly
+// job seeded at 02:59:50 first fires at 03:00 the next day, not ten
+// seconds later.
+func firstSystemFiring(recurrence model.Recurrence, now time.Time, loc *time.Location) time.Time {
+	earliest := now.Add(systemScheduleFirstFiringGrace)
+	next := recurrence.Next(now, loc)
+	for next.Before(earliest) {
+		after := recurrence.Next(next, loc)
+		if !after.After(next) {
+			break
+		}
+		next = after
+	}
+	return next
 }
 
 // resyncSystemSchedule writes this build's template back over the

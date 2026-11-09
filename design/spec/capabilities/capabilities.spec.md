@@ -1,10 +1,10 @@
 # Grain Capability Architecture & Control-Plane Protocol Specification
 
-**Specifies:** [`capabilities.design.md`](../../design/capabilities.design.md), the one-page overview of capabilities; [`unified-grants.design.md`](../../design/unified-grants.design.md) covers the one grant shape and the retirement of the legacy in-process capabilities.
+**Specifies:** [`capabilities.design.md`](../../design/capabilities.design.md), the one-page overview of capabilities; [`gcp-access.design.md`](../../design/gcp-access.design.md), keyless GCP capability access (`credential: token` and `credential: key`); [`unified-grants.design.md`](../../design/unified-grants.design.md) covers the one grant shape and the retirement of the legacy in-process capabilities.
 
-**Status:** Normative, and implemented on `main` for capability servers. The protocol of §2–§5 is in `pkg/capability/protocol`. Built-in stdio servers are in `pkg/capability/intree` (`grain capability <name>`: `gcp`, `git`, `gchat`, `host-script`, `config-map`, `figma`, registered on every deployment under `https://grain.dev/capabilities/<name>`). In-process servers are `…/grain` and `…/repo` (`pkg/capability/grainserver`), plus `…/release` (`pkg/capability/release`), `…/model-proxy` (`pkg/capability/modelproxy`) and any an edition contributes through `capability.Register` (`pkg/capability/methods.go`). The attach loop is `pkg/capability/servers` and `pkg/daemon/capability_servers.go`; a `run: host` server is started through `grain hostd` (`pkg/daemon/capability_servers_hostd.go`). Grants of capability references are accepted wherever a `capabilities:` list is (recorded as `<ref>` or `<ref>={json args}` strings, normalized at creation and again at admission: `pkg/model/capability_ref.go`), checked against the catalogue and `grain_config.capability_policy` (§4.2.2), and minted for agent task runs at admission (`pkg/orchestrator/capability_pass.go`) and for `.grain/workflows` CI jobs at their grant admission, before the job's sandbox is built (`pkg/daemon/ci_capability_pass.go`; a job's references are granted by declaring them, not by the repository's CI capabilities, and an untrusted run's are denied unless a policy rule opts them in). A minted pass is materialized into the agent run's sandbox before the agent starts (`pkg/orchestrator/capability_materialize.go`, `capability_endpoints.go`) and into a CI job's after its checkout and before its first step, its endpoints forwarded over the capability port relay and listed in `/home/debian/.grain/mcp.json` (`pkg/orchestrator/capability_ci.go`). What is not this architecture yet: a few legacy in-process providers (`model.CapabilityProvider`, granted by a bare name) are still registered by `daemon.CapabilityProviders` -- `self-debug`, `bootstrap-playbooks`, `read-issues`, `github-sandbox`, the named GitHub tokens `github-credential:<name>`, the CI alias `release-gate-read`, and `console`, `priority-dispatch` and `durable` -- and are retired one by one as [`unified-grants.design.md` §4](../../design/unified-grants.design.md#4-retiring-the-in-process-capabilities) lists. Grain's own API is granted as `api:<scope>` rather than under a `…/api` reference (unified-grants slices 2–4), and a task's extra repository reads and writes are still stored in their own tables rather than as `…/repo#read` and `…/repo#write` grants (unified-grants slices 2–5; a task's own `Target`/`Base` stays on `task.target_*`/`task.base`, cloned by grain into `work/` through `pkg/gitproxy` and projected as `…/repo#target`, while `…/git#git-repo` serves standalone external-repository grants, §6.3).
+**Status:** Normative, and implemented on `main` for capability servers. The protocol of §2–§5 is in `pkg/capability/protocol`. Built-in stdio servers are in `pkg/capability/intree` (`grain capability <name>`: `gcp`, `git`, `gchat`, `host-script`, `config-map`, `figma`, registered on every deployment under `https://grain.dev/capabilities/<name>`). In-process servers are `…/grain`, `…/github` and `…/repo` (`pkg/capability/grainserver`), plus `…/release` (`pkg/capability/release`), `…/model-proxy` (`pkg/capability/modelproxy`) and any an edition contributes through `capability.Register` (`pkg/capability/methods.go`). The attach loop is `pkg/capability/servers` and `pkg/daemon/capability_servers.go`; a `run: host` server is started through `grain host` (`pkg/daemon/capability_servers_hostd.go`). Grants of capability references are accepted wherever a `capabilities:` list is (recorded as `<ref>` or `<ref>={json args}` strings, normalized at creation and again at admission: `pkg/model/capability_ref.go`), checked against the catalogue and `grain_config.capability_policy` (§4.2.2), and minted for agent task runs at admission (`pkg/orchestrator/capability_pass.go`) and for `.grain/workflows` CI jobs at their grant admission, before the job's sandbox is built (`pkg/daemon/ci_capability_pass.go`; a job's references are granted by declaring them, not by the repository's CI capabilities, and an untrusted run's are denied unless a policy rule opts them in). A minted pass is materialized into the agent run's sandbox before the agent starts (`pkg/orchestrator/capability_materialize.go`, `capability_endpoints.go`) and into a CI job's after its checkout and before its first step, its endpoints forwarded over the capability port relay and listed in `/home/debian/.grain/mcp.json` (`pkg/orchestrator/capability_ci.go`). What is not this architecture yet: one non-credential legacy in-process provider (`model.CapabilityProvider`, granted by a bare name) is still registered by `daemon.CapabilityProviders` -- the CI alias `release-gate-read` -- and is retired as [`unified-grants.design.md` §4](../../design/unified-grants.design.md#4-retiring-the-in-process-capabilities) lists. Grain's own API is granted as `api:<scope>` rather than under a `…/api` reference (unified-grants slices 2–4), and a task's extra repository reads and writes are still stored in their own tables rather than as `…/repo#read` and `…/repo#write` grants (unified-grants slices 2–5; a task's own `Target`/`Base` stays on `task.target_*`/`task.base`, cloned by grain into `work/` through `pkg/gitproxy` and projected as `…/repo#target`, while `…/git#git-repo` serves standalone external-repository grants, §6.3).
 
-Capabilities are how Grain equips an isolated sandbox VM or CI container with external access and tools for the duration of a single attempt: a configured Capability Server mints temporary credentials and files into the sandbox filesystem (`placements` — a leased cloud key, an API token, a `.git-credentials` entry, or a static skill/playbook; §6.1, §6.4), exposes an attempt-scoped MCP toolset to the agent and CI container (`mcp_endpoint` at `/runs/<attempt_id>/mcp`; §6.2), bridges authenticated host-side proxies and tunnels such as a Git proxy, a model proxy, or a database tunnel into sandbox loopback (`ports`; §6.3), runs setup commands inside the sandbox before the agent starts — an optional `setup_root` command that checks a standalone primary repository out into an otherwise empty root working directory, and per-grant `setup` commands that clone additional repositories beside it or activate what was placed (§5.5, §6.3) — and tells the agent what was provisioned and how to use it (`prompt_section`). Every stateful resource is revoked by `release_<method>` when the attempt ends, or expires at `deadline` if that call never arrives.
+Capabilities are how Grain equips an isolated sandbox VM or CI container with external access and tools for the duration of a single attempt: a configured Capability Server mints temporary credentials and files into the sandbox filesystem (`placements` — a leased cloud credential, an API token, a `.git-credentials` entry, or a static skill/playbook; §6.1, §6.4), exposes an attempt-scoped MCP toolset to the agent and CI container (`mcp_endpoint` at `/runs/<attempt_id>/mcp`; §6.2), bridges authenticated host-side proxies and tunnels such as a Git proxy, a model proxy, a cloud token broker, or a database tunnel into sandbox loopback (`ports`; §6.1, §6.3), runs setup commands inside the sandbox before the agent starts — an optional `setup_root` command that checks a standalone primary repository out into an otherwise empty root working directory, and per-grant `setup` commands that clone additional repositories beside it or activate what was placed (§5.5, §6.1, §6.3) — and tells the agent what was provisioned and how to use it (`prompt_section`). Every stateful resource is revoked by `release_<method>` when the attempt ends, or expires at `deadline` if that call never arrives.
 
 This document specifies how Grain deployments configure and connect to Capability MCP servers in `grain/config` (and through the Settings UI and CLI) following Antigravity (`agy`)'s `mcpServers` specification shape ([`docs/agy-surface.md`](../../../docs/agy-surface.md)) — using **stdio** (`command`, `args`, `env`) for in-tree `grain` capabilities and `grain/config` capability plugins, and **HTTP** (`serverUrl`, `headers`) for external capability servers, with sensitive `env` and `headers` values resolved from Grain's encrypted secrets store (§3) — how tasks, standing processes, and `.grain/workflows` CI jobs request capability grants (`<capability_id>[#<method>]` with optional `with:` arguments; §2), how Grain discovers capability schemas (`mint_<method>`) and teardown tools (`release_<method>`) via `tools/list`, validates arguments, mints one grant-scoped resource per `attempt_id` (`tools/call` on `mint_<method>` with `{attempt_id, deadline, args}`; §4), materializes `placements`, `mcp_endpoint` (wired into the active agent CLI — `agy`, `claude`, `codex`, or custom — in that CLI's native format, and into CI containers), `ports`, `setup_root`, `setup`, and `prompt_section` (§5), and releases each grant when the attempt finishes (`tools/call` on `release_<method>` with `{attempt_id}`).
 
@@ -40,7 +40,7 @@ The design this specifies is [`capabilities.design.md`](../../design/capabilitie
 : The canonical `https://` URL (without query or fragment) that names a Capability Server in Grain's `mcpServers` configuration and in capability references (for example, `https://github.com/my-org/capabilities/cloud`; grain's own servers use `https://grain.dev/capabilities/<name>`, such as `https://grain.dev/capabilities/gcp`). It is an opaque lookup key: Grain never connects to the `capability_id` URL itself (§3.2.1).
 
 **Capability Method (`#<method>`)**
-: A named capability referenced as `<capability_id>[#<method>]` (for example, `gcp-key`, `git-repo`, `model-proxy`, `self-debug`, or `skill`) and advertised by a Capability Server in `tools/list` as a mint tool named **`mint_<method>`** whose `inputSchema` accepts `{attempt_id, deadline, args}`; `inputSchema.properties.args` is the schema of the method's `with:` arguments. A stateful method also advertises a teardown tool **`release_<method>`** accepting `{attempt_id}`; a stateless method MAY omit it (§4.1.2).
+: A named capability referenced as `<capability_id>[#<method>]` (for example, `gcp-key`, `git-repo`, `model-proxy`, `diagnostics`, or `skill`) and advertised by a Capability Server in `tools/list` as a mint tool named **`mint_<method>`** whose `inputSchema` accepts `{attempt_id, deadline, args}`; `inputSchema.properties.args` is the schema of the method's `with:` arguments. A stateful method also advertises a teardown tool **`release_<method>`** accepting `{attempt_id}`; a stateless method MAY omit it (§4.1.2).
 
 **Grant (`{capability, with}`)**
 : An authorization permitting a task, standing process, template, schedule, or CI job to invoke one `<capability_id>#<method>` with one validated argument object (`args`).
@@ -127,7 +127,7 @@ The design this specifies is [`capabilities.design.md`](../../design/capabilitie
 
 ### 2.1 Grammar of `<capability_id>[#<method>]`
 
-2.1.1. In a Grainfile or task configuration, a capability reference is `<capability_id>[#<method>]` (for example, `https://github.com/ai-on-gke/grain/capabilities/gcp#gcp-key`, or bare `https://github.com/ai-on-gke/grain/capabilities/self-debug`) and MUST conform to:
+2.1.1. In a Grainfile or task configuration, a capability reference is `<capability_id>[#<method>]` (for example, `https://github.com/ai-on-gke/grain/capabilities/gcp#gcp-key`, or bare `https://github.com/my-org/capabilities/diagnostics`) and MUST conform to:
 
 ```abnf
 capability-ref = capability-id [ "#" method-name ]
@@ -141,10 +141,10 @@ DIGIT          = %x30-39 ; 0-9
 
 2.1.2. `<capability_id>` MUST be a valid `https://` URL with a non-empty host and at least one non-empty path segment, MUST NOT contain a query string, fragment, userinfo, or `.` / `..` segments, and MUST NOT end with `/`. Grain compares `capability_id`s byte-for-byte with no normalization: it is a lookup key into `mcpServers` (§3.1), not an address.
 
-2.1.3. `<method>` MUST match `^[a-z0-9][a-z0-9_-]{0,62}$`. Because tool names carry the verb prefixes `mint_` and `release_` (§4.1.2), every conforming `<method>` maps unambiguously to `mint_<method>` and `release_<method>` (a method named `github-release` maps to `mint_github-release` and `release_github-release`).
+2.1.3. `<method>` MUST match `^[a-z0-9][a-z0-9_:-]{0,62}$`. The `:` is there so grain's in-process agent API server can name each scope as itself (`https://grain.dev/capabilities/api#ci:write`); an external server SHOULD NOT use it, since some MCP clients refuse it in a tool name. Because tool names carry the verb prefixes `mint_` and `release_` (§4.1.2), every conforming `<method>` maps unambiguously to `mint_<method>` and `release_<method>` (a method named `github-release` maps to `mint_github-release` and `release_github-release`).
 
 2.1.4. **Single-Method Shorthand Resolution.** When `#<method>` is omitted:
-1. If the attached server advertises `mint_<method>` where `<method>` equals the final path segment of `<capability_id>` (`…/self-debug` → `mint_self-debug`), the reference resolves to `<capability_id>#<that-segment>`.
+1. If the attached server advertises `mint_<method>` where `<method>` equals the final path segment of `<capability_id>` (`…/diagnostics` → `mint_diagnostics`), the reference resolves to `<capability_id>#<that-segment>`.
 2. Otherwise, if the server advertises exactly one `mint_<method>` tool, the reference resolves to that method.
 3. Otherwise the reference MUST be rejected with a validation error listing the server's advertised `#<method>` names.
 
@@ -159,10 +159,10 @@ DIGIT          = %x30-39 ; 0-9
 
 ```yaml
 capabilities:
-  - https://github.com/ai-on-gke/grain/capabilities/self-debug
-  - capability: https://github.com/ai-on-gke/grain/capabilities/gcp#gcp-key
+  - https://github.com/my-org/capabilities/diagnostics
+  - capability: https://grain.dev/capabilities/gcp#gcp-key
     with:
-      account: infra-staging
+      permission_set: infra-staging
   - capability: https://github.com/ai-on-gke/grain/capabilities/github#git-repo
     with:
       repo: bwsalmon/grain
@@ -188,7 +188,7 @@ capabilities:
 
 2.3.3. **Multi-instance grants and `attempt_id` assignment.** A run MAY hold several grants for one `<capability_id>#<method>` with different normalized `args` (two `#git-repo` grants for two repositories — one with `root: true` for the root working directory and the other with `root: false`, §5.5.2; `#gcp-key` with `{permission_set: "staging"}` and `{permission_set: "prod", primary: false}`), and grants across several methods of one server. Deduplicated grants are indexed `0, 1, …` in declaration order, and the grant at index `i` is minted with `attempt_id` `<deployment>-<task>-<attempt>-<i>`.
 
-2.3.4. **Sub-task privilege containment.** When an agent proposes a child task via `propose_task`, a child grant is covered by the parent if and only if some parent grant has the same `capability` and deep-equal normalized `args` — the parent's `args` as **recorded at the parent's admission**, the child's as normalized against the schema current when the child is filed. A child requesting any uncovered capability or argument MUST NOT inherit auto-approval or auto-merge and MUST be parked as unapproved for human approval. Two exceptions are declared by a server linked into the build, never by a remote one: a method marked person-granted (`protocol.RequirePersonGrant`, e.g. a workspace server's `#submit`) is covered by nothing, and a method with a grant policy (`protocol.SetGrantPolicy`) is judged by the grant's `args` -- `GrantByAgent` grants are covered without a parent grant (they are scoped to the task they are granted to, like a task's own branch: a `#workspace` grant with no `workspace:`), `GrantByPerson` grants by nothing (a `#workspace` grant naming a workspace). If a server's schema change alters the normalization of an existing grant (a changed `default`), the grant is no longer covered by anything recorded earlier and requires approval again. A reference a child carries only because the deployment's `default_capabilities` seeds it on every new task is judged the same way, and the note on such a child names it as a default its proposer does not hold rather than as something it asked for; a new standing chat session is seeded with the deployment's `default_capabilities` in its own `Capabilities` at creation (`ui.Client.CreateConsoleSession`), so its proposals are covered for them unless an operator removes one from the session.
+2.3.4. **Sub-task privilege containment.** When an agent proposes a child task via `propose_task`, a child grant is covered by the parent if and only if some parent grant has the same `capability` and deep-equal normalized `args` — the parent's `args` as **recorded at the parent's admission**, the child's as normalized against the schema current when the child is filed. A child requesting any uncovered capability or argument MUST NOT inherit auto-approval or auto-merge and MUST be parked as unapproved for human approval. Any capability server MAY also mark specific argument values as person-granted in `inputSchema.properties.args.properties.<arg>` via the annotation keyword `"x-grain-person-granted": [<values...>]` (`protocol.PersonGrantedArgKey`, recorded at `tools/list` discovery by `protocol.NotePersonGrantedArgs`): a grant selecting one of those values (explicitly, or implicitly when `args` omits `<arg>` and the property's `default` is listed) resolves to `GrantByPerson` and is covered by nothing (§6.1.1). Two additional exceptions are declared by a server linked into the build, never by a remote one: a method marked person-granted (`protocol.RequirePersonGrant`, e.g. a workspace server's `#submit`) is covered by nothing, and a method with a grant policy (`protocol.SetGrantPolicy`) is judged by the grant's `args` -- `GrantByAgent` grants are covered without a parent grant (they are scoped to the task they are granted to, like a task's own branch: a `#workspace` grant with no `workspace:`), `GrantByPerson` grants by nothing (a `#workspace` grant naming a workspace). If a server's schema change alters the normalization of an existing grant (a changed `default`), the grant is no longer covered by anything recorded earlier and requires approval again. A reference a child carries only because the deployment's `default_capabilities` seeds it on every new task is judged the same way, and the note on such a child names it as a default its proposer does not hold rather than as something it asked for -- except on a proposal from the director while it may queue its own work, where a default seeded unchanged from the child's own target repository or the deployment, that is not person-granted and that the catalogue neither refuses nor marks `requires_person`, is not an escalation (design/spec/director/director-capabilities.spec.md §4.2); a new standing chat session is seeded with the deployment's `default_capabilities` in its own `Capabilities` at creation (`ui.Client.CreateConsoleSession`), so its proposals are covered for them unless an operator removes one from the session.
 
 ---
 
@@ -206,7 +206,7 @@ An operator configures Capability Servers in the deployment's state repository (
    - `args` (`string[]`, OPTIONAL, default `[]`): Arguments passed to `command`.
    - `env` (`object` of `string -> string`, OPTIONAL, default `{}`): Environment variables injected into the server process (with sensitive values referenced via `$secret:<name>` and resolved from Grain's encrypted secrets store at runtime; §3.1.2).
    - `disabled` (`boolean`, OPTIONAL, default `false`): Whether the server is disabled (`enable` / `disable`). When `true`, Grain does not attach to the server or admit grants referencing its `capability_id`.
-   - `run` (`string`, OPTIONAL): `"host"` starts the server on the bare machine through `grain hostd`, for a daemon that runs in the release container ([`design/design/cli-run-location.design.md`](../../design/cli-run-location.design.md), "Behind grain hostd"). `command` then names a `capabilities:` entry on hostd's allowlist (`/etc/grain/hostd.yaml`; letters, digits, `-`, `_` and `.`), never a path: the allowlist says what that entry runs. The entry MUST be among hostd's offers (`hostd.Client.Offers`, kind `capability`), or the attach fails saying hostd is absent or does not offer it. `args` are refused by hostd unless the entry sets `extra_args: true`, and each `env` name must be one the entry's `env:` accepts. stdio is carried over hostd's socket. Where the host executor is not grain hostd (the bare machine, Kubernetes, a container with no hostd) the server fails to attach.
+   - `run` (`string`, OPTIONAL): `"host"` starts the server on the bare machine through `grain host`, for a daemon that runs in the release container ([`design/design/cli-run-location.design.md`](../../design/cli-run-location.design.md), "Behind grain hostd"). `command` then names a `capabilities:` entry on hostd's allowlist (`/etc/grain/hostd.yaml`; letters, digits, `-`, `_` and `.`), never a path: the allowlist says what that entry runs. The entry MUST be among hostd's offers (`hostd.Client.Offers`, kind `capability`), or the attach fails saying hostd is absent or does not offer it. `args` are refused by hostd unless the entry sets `extra_args: true`, and each `env` name must be one the entry's `env:` accepts. stdio is carried over hostd's socket. Where the host executor is not grain host (the bare machine, Kubernetes, a container with no hostd) the server fails to attach.
 
 2. **HTTP Transport — for external capability servers:**
    - `serverUrl` (`string`, REQUIRED): The HTTP(S) URL of the external Capability Server's control-plane MCP endpoint (for example, `"http://127.0.0.1:9802/mcp"` or `"https://cap.example.com/mcp"`).
@@ -266,7 +266,7 @@ Because `grain/config` is exported as plain text in Git, secret values in `env` 
 
 3.2.3. **Root credential isolation per server.** Root credentials (cloud IAM minter keys, Workload Identity bindings, GitHub App private keys, personal access tokens, vendor API keys, registry publish tokens, signing keys) MUST be scoped to the individual Capability Server that uses them — either injected solely into that server's resolved `env` / `headers` from Grain's encrypted secrets store (§3.1.2) or held in an external HTTP server's own environment. Grain MUST NOT expose one capability server's secrets to another server or pass root credentials in control-plane JSON-RPC arguments.
 
-3.2.4. **Sandbox unreachability of the control plane.** No sandbox (VM, container, or local host sandbox) may reach a Capability Server's control-plane stdio pipes or HTTP `serverUrl` directly. A sandbox backend that cannot guarantee this (a local host sandbox sharing the daemon's network namespace when a loopback HTTP Capability Server or `ports` listener is attached) MUST NOT run attempts holding capability grants. Grain implements this in `mintCapabilityPass` (`pkg/orchestrator/capability_pass.go`): grants from servers other than in-process ones are refused on the unisolated `host` backend and on a `container` backend whose open-network fence is off (`OpenNetworkUnfenced`); in-process grants, which open no listener, are still minted there.
+3.2.4. **Sandbox unreachability of the control plane.** No sandbox (VM, container, or local host sandbox) may reach a Capability Server's control-plane stdio pipes or HTTP `serverUrl` directly. A sandbox backend that cannot guarantee this (a local host sandbox sharing the daemon's network namespace when a loopback HTTP Capability Server or `ports` listener is attached) MUST NOT run attempts holding capability grants. Grain implements this in `mintCapabilityPass` (`pkg/orchestrator/capability_pass.go`): grants from servers other than in-process ones are refused on the unisolated `host` backend and on a `container` backend whose open-network fence is off (`OpenNetworkUnfenced`); in-process grants, which open no listener, are still minted there. So is a `…/config-map#config-map` (or legacy `…/skill`) grant whose arguments select only the built-in `bootstrap` map (`model.IsEmbeddedBootstrapOnlyGrant`: no other map, no secret, nothing malformed): on an unisolated or unfenced backend it is minted straight from the binary's in-process embedded bootstrap server (`grainserver.Lookup(nil)`, never dialing an attached server's control plane or reading a host skill directory), and both admission (`onlyInProcessOrEmbeddedBootstrap`) and commandless materialization (`onlyEmbeddedBootstrapPlacements`, `intree.EmbeddedBootstrapPlacements`) refuse any pass where such a grant carries a non-in-process `mcp_endpoint`, `ports`, `setup`, or any placement that is not, byte for byte, one of the embedded playbooks at its own path.
 
 3.2.5. **Leased secrets held by Grain.** Grain caches each grant's `placements`, `mcp_endpoint`, `ports`, `setup_root`, and `setup` for the attempt's lifetime so they can be re-materialized after `recreate_sandbox` (§5.1.3, §5.5.5). That cache MUST be held in memory (or encrypted at rest), MUST never be logged, MUST be excluded from state exports, and MUST be discarded when the attempt's grants are released.
 
@@ -286,7 +286,7 @@ Every Capability Server — whether connected over **stdio** (`command`, `args`,
 ### 4.0 Grain as an MCP Client
 
 4.0.1. Grain behaves as a standard MCP client across both configured transports (§3.1): it sends `initialize` followed by `notifications/initialized` before other requests, and follows `nextCursor` until `tools/list` is exhausted.
-- **Stdio (`command`):** Grain spawns the configured `command` with `args` and resolved `env` (§3.1.1–§3.1.3) and exchanges newline-delimited JSON-RPC 2.0 messages over the child's stdin/stdout pipes. A `run: host` (or `run: hostd`) server is started by `grain hostd` instead -- the one its entry's `hostd` names (a hostd's name, a `k=v` selector, or `{"labels": {...}}`), or the default hostd -- and the same messages travel over hostd's socket.
+- **Stdio (`command`):** Grain spawns the configured `command` with `args` and resolved `env` (§3.1.1–§3.1.3) and exchanges newline-delimited JSON-RPC 2.0 messages over the child's stdin/stdout pipes. A `run: host` (or `run: hostd`) server is started by `grain host` instead -- the one its entry's `hostd` names (a hostd's name, a `k=v` selector, or `{"labels": {...}}`), or the default hostd -- and the same messages travel over hostd's socket.
 - An HTTP server running on the host is reachable from a daemon in the release container at the same `serverUrl` (for example `http://127.0.0.1:9802/mcp`): the container runs with host networking (`scripts/setup.sh`, `docker_run_args`), so it needs no `run:`.
 - **Streamable HTTP (`serverUrl`):** Grain sends `POST` requests to `serverUrl` carrying the server's resolved `headers` (§3.1.1–§3.1.3), `Accept: application/json, text/event-stream`, and `MCP-Protocol-Version`, honours an `Mcp-Session-Id` the server assigns, and accepts both plain JSON and SSE-framed responses. HTTP servers SHOULD serve the control plane statelessly (FastMCP `stateless_http=True`, or the TypeScript SDK transport without session management); a stateful server also works.
 
@@ -303,7 +303,7 @@ Every Capability Server — whether connected over **stdio** (`command`, `args`,
 4.1.2. **Verb-prefixed tool registration.**
 - Every tool whose `name` is `mint_<method>` advertises capability `<method>`.
 - Every tool whose `name` is `release_<method>` advertises the teardown hook for `<method>`.
-- A stateful method (anything leasing credentials, registering routes, or authorizing listeners) MUST register both tools; a stateless method returning only `placements`, setup commands (§5.5), and `prompt_section` (`mint_skill`, `mint_bootstrap-playbooks`) MAY omit `release_<method>`, and Grain treats its teardown as a no-op.
+- A stateful method (anything leasing credentials, registering routes, or authorizing listeners) MUST register both tools; a stateless method returning only `placements`, setup commands (§5.5), and `prompt_section` (`mint_skill`, `mint_config-map`) MAY omit `release_<method>`, and Grain treats its teardown as a no-op.
 - A `mint_` tool whose suffix does not match `^[a-z0-9][a-z0-9_-]{0,62}$`, a duplicate `mint_<method>`, or a `release_<method>` without its `mint_<method>` is a discovery error: Grain MUST refuse to attach the server and report the offending tool name.
 
 ```json
@@ -502,7 +502,7 @@ and the server returns `{"status": "ok"}`, optionally with the grant's audit (§
 
 4.5.8. **Credential sources.** A capability server describes each credential it acts with by its **source**, and SHOULD use these two words for them in its configuration schema, its Test report and its documentation:
 - **configured** — a credential the operator stored in Grain's secret store and handed to the server through a secret field (§4.5.2) or a `$secret:` binding in `env`/`headers` (§3.1.2): a service-account key, a workload-identity config, a token, a webhook URL.
-- **ambient** — no credential is stored: the server acts as whatever identity its own process already has where it runs. In the container that is the container's Application Default Credentials or metadata identity; for a `run: host` server started by `grain hostd` it is the identity of the account hostd runs as — on a workstation, the user's own corp identity.
+- **ambient** — no credential is stored: the server acts as whatever identity its own process already has where it runs. In the container that is the container's Application Default Credentials or metadata identity; for a `run: host` server started by `grain host` it is the identity of the account hostd runs as — on a workstation, the operator's own local identity (for example, `user:operator@example.com`).
 A server offering both names the choice per credential (`credential_source: configured | ambient`), refuses a configured credential that is missing and an ambient one that carries a stored value, and reports, when it is configured, which identity each ambient credential resolved to. Neither word names a network or a company: the same server and the same source behave alike wherever it runs.
 
 ```json
@@ -593,12 +593,12 @@ After `initialize` and `tools/list` succeed on each granted `mcp_endpoint`, Grai
 ```json
 {
   "mcpServers": {
-    "self-debug": { "type": "http", "url": "http://127.0.0.1:38017/runs/e1010c47-175-2-0/mcp" }
+    "diagnostics": { "type": "http", "url": "http://127.0.0.1:38017/runs/e1010c47-175-2-0/mcp" }
   }
 }
 ```
 
-Remote model executors, which once hosted this proxy listener away from the controller, have been removed ([`docs/executors-removed.md`](../../../docs/executors-removed.md)); an agent CLI run under `grain hostd` reaches the proxy the same way as one in the controller, and the rules of §5.2.2 apply unchanged.
+Remote model executors, which once hosted this proxy listener away from the controller, have been removed ([`docs/executors-removed.md`](../../../docs/executors-removed.md)); an agent CLI run under `grain host` reaches the proxy the same way as one in the controller, and the rules of §5.2.2 apply unchanged.
 
 5.2.5. **Release.** When the attempt finishes and `release_<method>` is called (or `deadline` plus grace passes), the server MUST unregister `/runs/<attempt_id>/mcp` so no late or leaked process can invoke the tools; after `recreate_sandbox`, Grain re-points the proxy at the same still-active path (§4.4.3).
 
@@ -609,7 +609,7 @@ Under the sandbox-first agent surface, capability tools on `/runs/<attempt_id>/m
   2. A capability method's `mint_<method>` entry in control-plane `tools/list` (§4.1) MAY declare `"annotations": {"mcpDelivery": "sandbox" | "model_only"}` (or `"x-grain-mcp-delivery"`) as the default for all tools served on its `/runs/<attempt_id>/mcp` endpoint.
   3. **Precedence and fail-closed default:** An explicit per-tool `modelOnly` boolean wins; otherwise the method's `mcpDelivery` applies; otherwise **`modelOnly` defaults to `true` for external capability servers**. Existing external capability servers therefore remain strictly model-only on the host MCP channel until the capability author explicitly opts a tool (`"modelOnly": false`) or method (`"mcpDelivery": "sandbox"`) into sandbox CLI delivery.
 - **Sandbox proxy & CI unification:** For tools with `modelOnly: false`, Grain exposes `POST http://127.0.0.1:9728/cap/<name>/mcp` inside the sandbox (authenticated by the per-attempt sandbox token and audited with the acting task and attempt) and writes `/home/debian/.grain/mcp.json` in both agent sandboxes and `.grain/workflows` CI sandboxes. Any `tools/call` on `/cap/<name>/mcp` naming a `modelOnly: true` tool MUST be rejected by the proxy with HTTP `403` before reaching the capability server (and CI jobs, which have no model channel, can only invoke `modelOnly: false` tools). `prompt_section` (§5.4) is the primary way a sandbox-delivered capability tells the agent which `grain cap <name> <tool>` commands it unlocked.
-- **Built-in tool-serving capabilities and dangerous scopes:** Grain's own tool-serving capabilities (`self-debug`, non-dangerous `api:<scope>` grants, `grain-log`, `deployment-health`, `bootstrap-playbooks`, `memory`, `release-notes`, `read-issues`, `quarantine-test`, `db-read`) are delivered as scopes on the per-attempt sandbox CLI credential (`grain ls/read/grep`, `grain api`, `grain log`, `grain health`, `grain memory`, …) and revoked when the attempt ends. Any grant carrying a **dangerous** scope (`Dangerous: true` in `pkg/model/agent_api.go`: `tasks:admin`, `merge:force`, `settings:write`, `connections:write`, `secrets:write`, `capabilities:admin`, `deployment:upgrade/restart/reboot`, or a `RequiresPerson` scope set) or host/queue control (`self-upgrade`, `self-repair`, `db-write`, and the `dispatch:write` and `teams:broadcast` scopes that replaced `dispatch-control`, `pipeline-control` and `team-broadcast`) stays strictly model-only and is never placed on the sandbox credential.
+- **Built-in tool-serving capabilities and dangerous scopes:** Grain's own tool-serving capabilities (`…/grain#source` and the `api:self-debug` preset, formerly `self-debug`; non-dangerous `api:<scope>` grants including the `api:memory`, `api:release-notes` and `api:test-quarantine` presets that replaced `memory`, `release-notes` and `test-quarantine`; `…/grain#journal` and `…/grain#health`, formerly `grain-log` and `deployment-health`; `…/config-map#config-map` `{"config_maps":["bootstrap"]}`, formerly `bootstrap-playbooks`; `…/github#read-issues`, formerly `read-issues`; and `…/grain#sql` with `write: false`, formerly `db-read`) are delivered as scopes on the per-attempt sandbox CLI credential (`grain ls/read/grep`, `grain api`, `grain log`, `grain health`, `grain memory`, …) and revoked when the attempt ends. Any grant carrying a **dangerous** scope (`Dangerous: true` in `pkg/model/agent_api.go`: `tasks:admin`, `merge:force`, `settings:write`, `connections:write`, `secrets:write`, `capabilities:admin`, `deployment:upgrade/restart/reboot`, or a `RequiresPerson` scope set) or host/queue control (`api:self-upgrade`, `…/grain#host-exec` (formerly `self-repair`), `…/grain#sql` with `write: true` (formerly `db-write`), the `dispatch:write` and `teams:broadcast` scopes that replaced `dispatch-control`, `pipeline-control` and `team-broadcast`, and the non-dangerous `capabilities:detach`) stays strictly model-only and is never placed on the sandbox credential.
 - **Testing:** `POST /api/capability-servers/test` reports each discovered method's resolved delivery mode (`sandbox` vs. `model_only`), the default for the tools its endpoint serves; a per-attempt tool's own `modelOnly` is only seen once a grant is minted, and `grain cap list` shows its resolution. Inside a sandbox, capability authors verify discovery and execution with `grain cap list`, `grain cap <name> <tool> --help`, and `grain cap <name> <tool> --json '{...}'`.
 
 ### 5.3 `ports` (Sandbox Port Mappings)
@@ -663,27 +663,177 @@ Every capability combines the primitives of §4–§5 into one of four patterns.
 
 ### 6.1 Leased Cloud Credential (`#gcp-key` → `mint_gcp-key` + `release_gcp-key`)
 
-- `mint_gcp-key({attempt_id: "e1010c47-175-2-0", deadline, args: {permission_set: "staging", primary: true}})` mints a short-lived IAM key for `staging`, records `attempt_id → key_name` with a timer at `deadline`, and returns a `placements` entry for `/home/debian/.gcp-service-account.json` (`mode: "0600"`) plus a `prompt_section`; it MAY add a `setup` command (a placed `0700` script that runs `gcloud auth activate-service-account` against the key, §5.5) so the CLI is signed in before the agent starts. If the service account is at its key limit it returns `{"status": "resource_exhausted", "retry_after": "2026-10-19T21:05:30Z"}` and the run stays queued without booting. A `deadline` past the key's maximum lifetime returns `refused`.
-- `release_gcp-key({attempt_id})` deletes the recorded key and returns `{"status": "ok"}`.
+The built-in `gcp` capability server (`https://grain.dev/capabilities/gcp#gcp-key`, implemented in `pkg/capability/gcpsets` and `pkg/capability/intree/gcp.go` / `gcp_token.go`; design in [`gcp-access.design.md`](../../design/gcp-access.design.md)) provisions short-lived GCP credentials for a named permission set using one of two credential modes: **keyless token mode** (`credential: "token"`, the default for existing service accounts) or **key mode** (`credential: "key"`, used by managed service-account pools and opt-in existing-account sets).
 
-### 6.2 Attempt-Scoped MCP Toolset (`#self-debug` → `mint_self-debug` + `release_self-debug`)
+#### 6.1.1 Method Schema, Permission-Set Modes, and Person-Granted Gating {#CAP-1}
 
-- `mint_self-debug({attempt_id: "e1010c47-175-2-0", deadline, args: {}})` mounts a per-attempt MCP toolset at `/runs/e1010c47-175-2-0/mcp` and returns:
+1. **`mint_gcp-key` argument schema.** When at least one permission set is configured via `configure` (§4.5), the server advertises `mint_gcp-key` and `release_gcp-key` with `inputSchema.properties.args`:
+   ```json
+   {
+     "type": "object",
+     "additionalProperties": false,
+     "properties": {
+       "permission_set": {
+         "type": "string",
+         "title": "Permission set",
+         "enum": ["staging", "org-deploy"],
+         "default": "staging",
+         "x-grain-person-granted": ["org-deploy"]
+       },
+       "primary": {
+         "type": "boolean",
+         "default": true,
+         "description": "Place the key at ~/.gcp-service-account.json and activate it; false places it at ~/.gcp-keys/<set>.json only, for a task's second set."
+       }
+     }
+   }
+   ```
+   - `permission_set` MUST enumerate the configured sets in configured order, with `default` set to the first configured set so an argument-less grant selects it. The removed legacy arguments `account` and `activate` (retired in schema migration 109) MUST be rejected by `additionalProperties: false`.
+   - `x-grain-person-granted` (`protocol.PersonGrantedArgKey`, §2.3.4) MUST list every configured permission set whose `person_granted` flag is `true` (and is omitted when none is).
+   - `primary` (`default: true`) selects the primary placement path (`/home/debian/.gcp-service-account.json`, or a migrated set's `key_path`) and CLI activation script when `true`, or `/home/debian/.gcp-keys/<set>.json` without CLI activation when `false`, allowing a single attempt to hold grants of multiple permission sets without colliding (§2.3.3, §5.1.2).
+
+2. **Permission-set credential modes in `configure`.** Each entry in `config.permission_sets` operates in one of two shapes:
+   - **Existing service account (`service_account: "<id>@<project>.iam.gserviceaccount.com"` or `"<project>@appspot.gserviceaccount.com"`):**
+     - MUST be mutually exclusive with `pool_max`, `adopt_legacy`, `accounts`, and `resource_scope`.
+     - The service account's home project MUST belong to the set's `admin.projects`; `project` (the project `gcloud` selects) defaults to that home project when omitted.
+     - `credential` MUST be `"token"` (`gcpsets.CredentialToken`) or `"key"` (`gcpsets.CredentialKey`), defaulting to **`"token"`** when omitted (`PermissionSet.TokenMode()`).
+     - `person_granted` defaults to **`true`** when `service_account` is set (`false` otherwise), reserving grants of the set to human operators (`GrantByPerson`) unless an operator explicitly sets `person_granted: false`.
+     - The server MUST NOT create, modify, or delete `service_account` and MUST NOT add or remove any IAM policy bindings on or for it; `roles` (when present) are checked read-only by `configure`'s diagnostic report and are not bounded by `admin.role_ceiling`.
+   - **Managed service-account pool (`service_account` omitted):** creates on-demand service accounts `<account_prefix>-<grainDeploymentId>-<set>-<n>@<project>.iam.gserviceaccount.com` up to `pool_max` (default `3`, `1..99`) marked with `[grain-gcp-key deployment=<id> instance=<prefix> set=<set>]`, reconciles `roles` on `project` (or `resource_scope: "buckets/<name>"`) bounded by `admin.role_ceiling`, and always operates in **key mode** (as do migrated fixed-pool sets carrying `accounts`). `max_lease` defaults to `24h` (`gcpsets.DefaultMaxLease`) across all sets.
+
+**Pinned by:**
+- `pkg/capability/gcpsets/existing_test.go`: `TestExistingAccountConfig`, `TestReportForAnExistingAccount`
+- `pkg/capability/intree/gcp_token_test.go`: `TestGCPExistingAccountSetsArePersonGranted`
+- `pkg/capability/gcpsets/gcpsets_test.go`: `TestConfigValidationForBothCredentialSources`, `TestASetCannotExceedItsAdminsRoleCeiling`, `TestSetNamesAreTheEnumInOrder`
+
+#### 6.1.2 Token Mode (`credential: "token"`) Placement, Port, and Data-Plane Contract {#CAP-2}
+
+1. **Control-plane `mint_gcp-key` behavior and pre-flight check.** For a permission set where `TokenMode()` is `true`:
+   - The server MUST NOT call `iam.serviceAccountKeys.create` or place any private key material.
+   - After validating `attempt_id` (`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`) and verifying `deadline <= now + max_lease`, the server MUST verify that the set's `admin` can impersonate `service_account` by calling `projects/-/serviceAccounts/<email>:generateAccessToken` (`scope: ["https://www.googleapis.com/auth/cloud-platform"]`, `lifetime: "60s"`), discarding the probe token, and recording the lease `(attempt_id -> {set, account, secret, deadline})`.
+   - The per-attempt `secret` MUST be 32 cryptographically random bytes encoded as 64 lowercase hex characters. An idempotent repeat or renewal `mint_gcp-key` for the same `(attempt_id, set, account)` (§4.3.5) MUST preserve the existing `secret` while updating `deadline`, so the secret file already placed in a running sandbox remains valid.
+
+2. **Loopback listener and `ports` forward.**
+   - Once at least one token-mode permission set is configured, `grain capability gcp` MUST bind an HTTP data-plane listener on loopback — `127.0.0.1:4252` by default (`intree.DefaultGCPTokenPort = 4252`, overridable via `-listen <loopback-ip>:<port>`; when `GRAIN_CAPABILITY_PROBE=1` is set in the environment per §3.1.3, the server binds `127.0.0.1:0` so probes never collide with an attached instance). Non-loopback `-listen` addresses MUST be rejected.
+   - `mint_gcp-key` MUST return `ports: [{"host_port": <listen_port>}]` (`sandbox_port` defaults to `host_port`, i.e. `4252` by default; §5.3.1), which Grain bridges into the sandbox over the capability port relay after verifying host-side socket ownership (§5.3.2).
+
+3. **`placements` and `setup` contract.** Let `<key_path>` be `/home/debian/.gcp-service-account.json` when `primary` is `true` (or `ps.KeyPath` if set on a migrated set) and `/home/debian/.gcp-keys/<set>.json` when `primary` is `false`, and let `<about_path>` replace `<key_path>`'s `.json` suffix with `.about`. `mint_gcp-key` MUST return:
+   - `<key_path>` (`mode: "0600"`): Workload Identity `external_account` JSON configuration read natively by `gcloud`, Application Default Credentials (ADC), and Google Cloud client libraries:
+     ```json
+     {
+       "type": "external_account",
+       "audience": "//grain.dev/capabilities/gcp/permission-sets/<set>",
+       "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+       "token_url": "http://127.0.0.1:4252/runs/<attempt_id>/token",
+       "credential_source": {
+         "file": "/home/debian/.gcp-token/<attempt_id>/<set>.token"
+       },
+       "universe_domain": "googleapis.com"
+     }
+     ```
+   - `/home/debian/.gcp-token/<attempt_id>/<set>.token` (`mode: "0600"`): the 64-hex-character per-attempt `secret`.
+   - `/home/debian/.gcp-token/<attempt_id>/<set>-id-token` (`mode: "0700"`): a POSIX `#!/bin/sh` helper script (`id-token AUDIENCE`) that exits `2` unless passed exactly one argument and executes:
+     ```sh
+     exec curl -fsS -G -H "Authorization: Bearer $(cat '/home/debian/.gcp-token/<attempt_id>/<set>.token')" \
+       --data-urlencode "audience=$1" 'http://127.0.0.1:4252/runs/<attempt_id>/id-token'
+     ```
+   - `<about_path>` (`mode: "0644"`): non-secret metadata naming `permission_set`, `service_account`, `project`, optional `roles`, `key: <key_path>`, `credential: short-lived access tokens by impersonation (no key exists); <key_path> is an external_account config`, and `id_token: /home/debian/.gcp-token/<attempt_id>/<set>-id-token AUDIENCE`.
+   - When `primary` is `true` and `<key_path>` is `/home/debian/.gcp-service-account.json`: `/home/debian/.gcp-token/<attempt_id>/activate.sh` (`mode: "0700"`) plus `setup: "/home/debian/.gcp-token/<attempt_id>/activate.sh"`, which exits `0` when `gcloud` is absent and otherwise runs `gcloud config set auth/credential_file_override /home/debian/.gcp-service-account.json --quiet` and `gcloud config set project <project> --quiet`. It **MUST NOT** run `gcloud auth login --cred-file`, whose STS token introspection rejects the impersonated access token (`{"active": false}`), and **MUST NOT** discard stderr, so a failure's reason reaches the setup-failure comment.
+   - `prompt_section`: instructs the agent that `<key_path>` is an `external_account` credential config (not a private key) yielding short-lived refreshed access tokens until the attempt ends, and documents `/home/debian/.gcp-token/<attempt_id>/<set>-id-token AUDIENCE` and `<about_path>`.
+
+4. **Data-plane HTTP endpoints (`127.0.0.1:4252`).**
+   - **`POST /runs/<attempt_id>/token` (RFC 8693 Token Exchange):**
+     - Reads an `application/x-www-form-urlencoded` request body bounded to 64 KiB (`http.MaxBytesReader`) and extracts `subject_token`.
+     - Verifies `attempt_id` exists in active token grants and compares `subject_token` against `attempts[attempt_id].secret` in constant time (`subtle.ConstantTimeCompare`).
+     - Verifies the permission set is still configured in `token` mode for the exact `service_account` recorded on the grant, computes `remaining = min(deadline - now, max_lease)` (refusing when `deadline <= now`), caps `lifetime = min(roundToSecond(remaining) + 1s, 3600s)` (`gcpsets.MaxTokenLifetime = 1h`), and calls `projects/-/serviceAccounts/<email>:generateAccessToken` with `scope: ["https://www.googleapis.com/auth/cloud-platform"]`.
+     - Responds `200 OK` with `Content-Type: application/json` and `Cache-Control: no-store`:
+       ```json
+       {
+         "access_token": "<ya29...>",
+         "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
+         "token_type": "Bearer",
+         "expires_in": 3600
+       }
+       ```
+       where `expires_in` is `max(int((expireTime - now).Seconds()), 1)`.
+   - **`GET /runs/<attempt_id>/id-token?audience=<aud>` (OIDC ID Token Broker):**
+     - Extracts `<secret>` from `Authorization: Bearer <secret>` and verifies `(attempt_id, <secret>)` in constant time.
+     - Requires a non-empty `audience` query parameter, verifies the grant's `deadline` has not passed and the set still targets the grant's `service_account`, and calls `projects/-/serviceAccounts/<email>:generateIdToken` with `audience` and `includeEmail: true`.
+     - Responds `200 OK` with `Content-Type: text/plain`, `Cache-Control: no-store`, and the raw signed JWT body.
+
+5. **Teardown (`release_gcp-key`) and concurrency.**
+   - `release_gcp-key({attempt_id})` MUST immediately delete `attempt_id` from both the data-plane broker table and `Manager.leases` and return `{"status": "ok"}`. Subsequent `/token` or `/id-token` calls for `attempt_id` fail immediately with `401 Unauthorized`; any access token or ID token already issued before release cannot be revoked upstream at Google Cloud and remains valid until its bounded expiry (at most `min(deadline, mint_time + 1h)` for access tokens, `mint_time + 1h` for ID tokens).
+   - No per-account key cap applies in `token` mode; any number of attempts may hold the permission set concurrently.
+
+**Pinned by:**
+- `pkg/capability/intree/gcp_token_test.go`: `TestGCPTokenModeGrantPlacesAnExternalAccountAndNoKey`
+- `pkg/capability/gcpsets/existing_test.go`: `TestExistingAccountTokenModeMintsNoKey`
+- `pkg/capability/gcpsets/iamcredentials_test.go`: `TestGoogleCloudImpersonatesThroughIAMCredentials`
+
+#### 6.1.3 Key Mode (`credential: "key"`) Placement and Reaper Contract {#CAP-3}
+
+1. **Mint and placements.** For managed-pool sets, migrated `accounts` sets, and existing-account sets configured with `credential: "key"`:
+   - `mint_gcp-key({attempt_id, deadline, args: {permission_set, primary}})` selects the set's account with the fewest user-managed keys below `gcpsets.KeysPerAccount` (`10`) — creating the next account up to `pool_max` on managed-pool sets when all existing accounts are full — calls `iam.projects.serviceAccounts.keys.create`, records `attempt_id -> {set, account, key_id, deadline}`, and returns no `ports`.
+   - Places the service-account private key JSON at `<key_path>` (`mode: "0600"`), `<about_path>` (`mode: "0644"`), and (when `primary: true` at `/home/debian/.gcp-service-account.json`) `/home/debian/.gcp-key/<attempt_id>/activate.sh` (`mode: "0700"`, running `gcloud auth activate-service-account --key-file=/home/debian/.gcp-service-account.json --quiet` and `gcloud config set project <project> --quiet`, discarding stdout only) as `setup`.
+2. **Release and background reaper.**
+   - `release_gcp-key({attempt_id})` deletes `projects/<project>/serviceAccounts/<account>/keys/<key_id>` (`404 NOT_FOUND` treated as idempotent success), removes the lease, and returns `{"status": "ok"}`.
+   - Every `ReapInterval` (`10m`), `Manager.Reap` sweeps keys not held by an active lease whose `CreatedAt + max_lease + Grace` (`Grace = 5m`) is in the past **exclusively** on service accounts carrying this installation's ownership marker (or `adopt_legacy: true` accounts). The reaper MUST NEVER delete keys on existing (`service_account`) or migrated (`accounts`) service accounts.
+
+**Pinned by:**
+- `pkg/capability/intree/gcp_token_test.go`: `TestGCPKeyModeGrantOverAnExistingAccount`
+- `pkg/capability/gcpsets/existing_test.go`: `TestExistingAccountKeyModeMintsAndReleasesOnlyKeys`
+- `pkg/capability/gcpsets/gcpsets_test.go`: `TestMintCreatesReusesAndReleases`, `TestThePoolAbsorbsTheKeyQuota`, `TestTheReaperDeletesOnlyUnheldKeysPastTheirLease`
+
+#### 6.1.4 Control-Plane and Data-Plane Error Contracts {#CAP-4}
+
+1. **Control-plane `mint_gcp-key` responses:**
+
+   | Condition | `mint_gcp-key` Result | Behaviour |
+   | :--- | :--- | :--- |
+   | Unsafe `attempt_id`, unknown `permission_set`, or `deadline > now + max_lease` | `{"status": "refused", "reason": "..."}` | Run is refused before sandbox boot (§4.3.4). |
+   | Admin credentials missing or unparseable (`CredentialMissing`), or rejected by OAuth with `invalid_grant`, `invalid_rapt`, `unauthorized_client`, or `invalid_client` (`CredentialExpired`) | `{"status": "refused", "reason": "..."}` | Refuses with operator remediation steps (never echoing secret material) and evicts the cached admin `Cloud` client so re-login or secret rotation recovers on the next call. |
+   | Upstream Google Cloud IAM `403 PERMISSION_DENIED` (for example, admin lacks `iam.serviceAccounts.getAccessToken` in token mode or `iam.serviceAccountKeys.create` in key mode) | `{"status": "refused", "reason": "..."}` | Names the admin, permission set, and project/account, directing the operator to Settings → Capabilities → Test. |
+   | Key-mode account(s) all hold `10` keys (`KeysPerAccount`) and `pool_max` (or `1` for an existing SA in key mode) is reached | `{"status": "resource_exhausted", "reason": "...", "retry_after": "<RFC3339>"}` | `retry_after` is the earliest held lease deadline for the set (or `now + 1m`); Grain leaves the run queued without booting (§4.2.3.3). |
+   | Admin token fetch cancelled or timed out twice (`TokenTimeout = 20s`, `CredentialTimeout`), missing token listener, or upstream 5xx / network failure | MCP tool error / transient error | Treated as a transient capability failure and retried under §4.2.4. |
+
+2. **Data-plane HTTP responses on `127.0.0.1:4252` (RFC 6749 §5.2 JSON body `{"error": "<code>", "error_description": "<desc>"}` unless noted):**
+
+   | Condition | HTTP Status | `error` Code | Notes |
+   | :--- | :--- | :--- | :--- |
+   | Path not matching `/runs/<attempt_id>/token` or `/runs/<attempt_id>/id-token`, or unsafe `attempt_id` | `404 Not Found` | *(plain text)* | Standard `http.NotFound`. |
+   | Request method other than `POST` on `/runs/<attempt_id>/token` | `405 Method Not Allowed` | `"invalid_request"` | `"POST the token exchange"`. |
+   | Non-form or > 64 KiB body on `/token`, or missing/empty `audience` query parameter on `/id-token` | `400 Bad Request` | `"invalid_request"` | Quoted by ADC / SDK error messages. |
+   | Missing, wrong, or already-released per-attempt token (`subject_token` or `Bearer`) | `401 Unauthorized` | `"invalid_grant"` | `"this grant's token is unknown or released"`; prevents cross-attempt and post-release replay. |
+   | Grant `deadline` has passed, permission set removed, set no longer in `token` mode, or `set.ServiceAccount` changed away from the granted account (`*gcpsets.Refusal`) | `401 Unauthorized` | `"invalid_grant"` | `error_description` carries `Refusal.Reason`; ends token refreshes for the grant. |
+   | `gcp` server has no active `Manager` (`current == nil`) | `503 Service Unavailable` | `"temporarily_unavailable"` | `"the gcp server is not configured"`. |
+   | Upstream `generateAccessToken` / `generateIdToken` failure (IAM revocation mid-run, quota/rate limit, expired admin credentials, or 5xx/network error) | `502 Bad Gateway` | `"temporarily_unavailable"` | Logs `gcp: audit:` failure line; evicts cached admin client on `CredentialError`. |
+
+**Pinned by:**
+- `pkg/capability/intree/gcp_token_test.go`: `TestGCPTokenModeGrantPlacesAnExternalAccountAndNoKey`
+- `pkg/capability/gcpsets/existing_test.go`: `TestExistingAccountTokenModeMintsNoKey`
+- `pkg/capability/gcpsets/gcpsets_test.go`: `TestMintRefusesUnknownSetsAndLongDeadlines`, `TestThePoolAbsorbsTheKeyQuota`
+- `pkg/capability/gcpsets/token_test.go`: `TestACancelledTokenFetchIsRetriedOnce`, `TestExpiredAmbientCredentialsSayWhatToRun`, `TestMissingAmbientCredentialsSayWhatToRun`
+
+### 6.2 Attempt-Scoped MCP Toolset (`#diagnostics` → `mint_diagnostics` + `release_diagnostics`)
+
+- `mint_diagnostics({attempt_id: "e1010c47-175-2-0", deadline, args: {}})` mounts a per-attempt MCP toolset at `/runs/e1010c47-175-2-0/mcp` and returns:
   ```json
   { "status": "ok", "mcp_endpoint": "/runs/e1010c47-175-2-0/mcp",
     "prompt_section": "Host diagnostic tools are available on this grant's MCP server." }
   ```
-  Grain proxies the endpoint, learns the server name (`self-debug`) and tool list from `initialize` and `tools/list`, wires the server into the active agent CLI's native per-run configuration (`agy`, `claude`, `codex`, or custom) or CI `mcp.json` (§5.2.4), and names it in the attribution block.
-- `release_self-debug({attempt_id})` unregisters the path and returns `{"status": "ok"}`.
+  Grain proxies the endpoint, learns the server name (`diagnostics`) and tool list from `initialize` and `tools/list`, wires the server into the active agent CLI's native per-run configuration (`agy`, `claude`, `codex`, or custom) or CI `mcp.json` (§5.2.4), and names it in the attribution block.
+- `release_diagnostics({attempt_id})` unregisters the path and returns `{"status": "ok"}`.
+
+> **Implementation note (non-normative).** `diagnostics` is an illustrative external server. grain's own diagnostic grants are not this pattern: the retired in-process `self-debug` provider became the `api:self-debug` preset (task, metrics and pipeline readers over grain's REST API) plus `https://grain.dev/capabilities/grain#source` (grain's source checkout as `grain-src/` and `src://`), both answered inside the daemon with no `mcp_endpoint` (schema migration 115; [`unified-grants.design.md` §4](../../design/unified-grants.design.md#4-retiring-the-in-process-capabilities)).
 
 ### 6.3 Authenticated Proxy Port and Working Tree (`#git-repo` / `#model-proxy`)
 
 - `mint_git-repo({attempt_id: "e1010c47-175-2-0", deadline, args: {repo: "bwsalmon/grain", mode: "write", base: "main", branch: "grain/task-214", root: true}})` (with strict allowlist patterns on every argument; `root` is a boolean defaulting to `true`) authorizes a per-attempt token on its `git-proxy` data-plane listener (`host_port: 9728`, distinct from its `/mcp` port and owned by the same service) and returns `ports: [{"host_port": 9728, "sandbox_port": 9728}]`, two `placements` under a per-grant directory — the token in `/home/debian/.git-repo/e1010c47-175-2-0/credentials` (`mode: "0600"`; per grant, so two grants never collide on one `.git-credentials`, §5.1.2) and a clone script in `/home/debian/.git-repo/e1010c47-175-2-0/setup.sh` (`mode: "0700"`) that runs `git clone -c credential.helper="store --file=/home/debian/.git-repo/e1010c47-175-2-0/credentials" http://127.0.0.1:9728/bwsalmon/grain` and checks `branch` out on top of `base` — and, because `root` is `true`, `setup_root: "/home/debian/.git-repo/e1010c47-175-2-0/setup.sh"`: the script clones into its `cwd`, the root working directory, and the agent starts inside the checkout (§5.5). It MAY also return an `mcp_endpoint` for pull-request tools.
-- **Additional repositories** are the same method with `root: false`: `mint_git-repo({attempt_id: "e1010c47-175-2-1", deadline, args: {repo: "bwsalmon/silo", mode: "read", root: false}})` returns the same shape of `ports` and `placements` but `setup` instead of `setup_root`, and its script clones into `/home/debian/repos/bwsalmon/silo`, outside the root working directory, which its `prompt_section` names. A run therefore holds one `root: true` grant and any number of `root: false` grants (§2.3.3) without contending for `setup_root` (§5.5.2); a run holding two `root: true` grants is refused before it boots, naming both; a run with no `root: true` grant starts in an empty root working directory. This is how the standalone `git` capability server (`grain capability git`) checks external repositories out into a sandbox (`root: true` when the run has no `Target` checkout of its own, `root: false` for additional checkouts under `/home/debian/repos/<owner>/<repo>`). A task's own `Target` repository and its team-authenticated repository reads and writes stay served by Grain's own git proxy (`…/repo#target`, `#read`, `#write`; [`unified-grants.design.md`](../../design/unified-grants.design.md) §1, Q2).
+- **Additional repositories** are the same method with `root: false`: `mint_git-repo({attempt_id: "e1010c47-175-2-1", deadline, args: {repo: "bwsalmon/silo", mode: "read", root: false}})` returns the same shape of `ports` and `placements` but `setup` instead of `setup_root`, and its script clones into `/home/debian/repos/bwsalmon/silo`, outside the root working directory, which its `prompt_section` names. A run therefore holds one `root: true` grant and any number of `root: false` grants (§2.3.3) without contending for `setup_root` (§5.5.2); a run holding two `root: true` grants is refused before it boots, naming both; a run with no `root: true` grant starts in an empty root working directory. This is how the standalone `git` capability server (`grain capability git`) checks external repositories out into a sandbox (`root: true` when the run has no `Target` checkout of its own, `root: false` for additional checkouts under `/home/debian/repos/<owner>/<repo>`). A task's own `Target` repository, its per-task credential override (`…/repo#credential`), and its team-authenticated repository reads and writes stay served by Grain's own git proxy (`…/repo#target`, `#read`, `#write`, `#credential`; [`unified-grants.design.md`](../../design/unified-grants.design.md) §1, §4, Q2).
 - `release_git-repo({attempt_id})` revokes the token and the MCP route and returns `{"status": "ok"}`. `mint_model-proxy` / `release_model-proxy` (`args: {vendor: <enum>}`) follow the same shape on `9729`, with no setup command.
 
 ### 6.4 Stateless Skill / Playbook (`#skill` → `mint_skill`, no `release_skill`)
 
 - `mint_skill({attempt_id, deadline, args: {}})` returns `placements` for `/home/debian/.skills/<skill>/SKILL.md` and helper scripts (`mode: "0644"`) and a `prompt_section` pointing at the index. Nothing is allocated server-side, so `release_skill` is omitted from `tools/list` and teardown is a no-op. The reserved-path and size rules of §5.1.2 apply, and an attached skill server is trusted as §1.3.1 describes.
 
-> **Implementation note (non-normative).** grain's own `grain capability skill` server is now internal and is no longer registered as a built-in; the built-in `config-map` server (`https://grain.dev/capabilities/config-map`, `pkg/capability/intree/skill.go`) follows this pattern for operator-configured files and secrets, and an existing `…/skill` entry is migrated to it with `…/skill` kept as an alias (`intree.EnsureBuiltins`). `bootstrap-playbooks` is still a legacy in-process provider, planned to move to `https://grain.dev/capabilities/grain#playbooks` ([`unified-grants.design.md` §4](../../design/unified-grants.design.md#4-retiring-the-in-process-capabilities)).
+> **Implementation note (non-normative).** grain's own `grain capability skill` server is now internal and is no longer registered as a built-in; the built-in `config-map` server (`https://grain.dev/capabilities/config-map`, `pkg/capability/intree/skill.go`) follows this pattern for operator-configured files and secrets as well as the embedded `bootstrap` playbooks map (`{"config_maps":["bootstrap"]}`, replacing the retired `bootstrap-playbooks` provider in schema migration 118; [`unified-grants.design.md` §4](../../design/unified-grants.design.md#4-retiring-the-in-process-capabilities)), and an existing `…/skill` entry is migrated to it with `…/skill` kept as an alias (`intree.EnsureBuiltins`).

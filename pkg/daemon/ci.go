@@ -1151,7 +1151,25 @@ func ciWithheldCapabilityNotes(reg *model.CapabilityRegistry, event ci.Event, tr
 			}
 			continue
 		}
-		if implicitCapabilities || reg == nil || grainci.IsGrant(id) || model.IsCapabilityRef(id) || model.IsRepoAccessGrant(id) {
+		if implicitCapabilities || grainci.IsGrant(id) || model.IsRepoAccessGrant(id) {
+			continue
+		}
+		// A reference whose in-process server holds its own event rule --
+		// the release server's three methods, which migration 101 rewrote
+		// image-signing, registry-push and package-publish to, and the
+		// bare names aliased to them -- is withheld by that rule
+		// (ciCapabilityRefs), and says so as the retired provider did.
+		// Without this a push job declaring release#package-publish ran
+		// with no files and no word why
+		// (docs/test-runs/2026-11-04-capabilities.md, F6).
+		if rule, ok := model.CIGrantRuleFor(model.CanonicalLegacyGrant(id)); ok {
+			if withholdEventGated || !rule.Admits(string(event), trustedSchedule) {
+				notes = append(notes, fmt.Sprintf("capability %s is %s", id,
+					ciEventGateWithheldClause(event, trustedSchedule, withholdEventGated, ciRuleAllowedEvents(rule))))
+			}
+			continue
+		}
+		if reg == nil || model.IsCapabilityRef(id) {
 			continue
 		}
 		provider, ok := reg.LookupFor(id, true)
@@ -1168,6 +1186,30 @@ func ciWithheldCapabilityNotes(reg *model.CapabilityRegistry, event ci.Event, tr
 		}
 	}
 	return notes
+}
+
+// ciRuleAllowedEvents is ciProviderAllowedEvents for a reference's
+// CIGrantRule: the events it is released on, in the same words.
+func ciRuleAllowedEvents(rule model.CIGrantRule) string {
+	var parts []string
+	for _, ev := range []ci.Event{ci.EventRelease, ci.EventManual, ci.EventSchedule} {
+		if slices.Contains(rule.Events, string(ev)) {
+			parts = append(parts, string(ev))
+		}
+	}
+	if rule.TrustedSchedule && !slices.Contains(rule.Events, string(ci.EventSchedule)) {
+		parts = append(parts, "grain's scheduled")
+	}
+	switch len(parts) {
+	case 0:
+		return "trusted CI runs"
+	case 1:
+		return parts[0] + " runs"
+	case 2:
+		return parts[0] + " and " + parts[1] + " runs"
+	default:
+		return strings.Join(parts[:len(parts)-1], ", ") + ", and " + parts[len(parts)-1] + " runs"
+	}
 }
 
 func ciProviderAllowedEvents(events model.CIEventCapability, provider model.CapabilityProvider) string {

@@ -182,8 +182,17 @@ jobs:
           fi
           if ! command -v cosign >/dev/null 2>&1; then
             cosign_version="v2.4.1"
-            curl -fsSL "https://github.com/sigstore/cosign/releases/download/${cosign_version}/cosign-linux-amd64" \
-              -o /usr/local/bin/cosign
+            if ! curl -4 -fsSL --max-time 60 --retry 2 --retry-max-time 45 --retry-connrefused --retry-all-errors \
+              "https://github.com/sigstore/cosign/releases/download/${cosign_version}/cosign-linux-amd64" \
+              -o /usr/local/bin/cosign; then
+              rm -f /usr/local/bin/cosign
+              cosign_image="gcr.io/projectsigstore/cosign:v2.4.1@sha256:b03690aa52bfe94054187142fba24dc54137650682810633901767d8a3e15b31"
+              docker pull "$cosign_image"
+              cid="$(docker create "$cosign_image")"
+              docker cp "$cid:/ko-app/cosign" /usr/local/bin/cosign
+              docker rm "$cid" >/dev/null
+              echo "6255c3c7146a8f1c3e71d542a9bc21412da7c23a2561adce02381bdbebaff413  /usr/local/bin/cosign" | sha256sum -c -
+            fi
             chmod +x /usr/local/bin/cosign
           fi
           key_file="${RUNNER_TEMP}/image-signing.key"

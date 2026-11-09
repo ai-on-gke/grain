@@ -149,6 +149,110 @@ func TestHostdsRegisterAndInstallPrintTheDaemonsLines(t *testing.T) {
 	}
 }
 
+func TestHostEnrollmentAndLifecycleCLI(t *testing.T) {
+	var accepted ui.AcceptHostJoinRequest
+	var createdCode ui.CreateHostEnrollmentCodeRequest
+	var rejectedID, renamedTo, revokedName, deletedName string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/hostds/pending":
+			_ = json.NewEncoder(w).Encode([]ui.PendingHostJoinView{{
+				ID:             "hjr_abc123",
+				EnrollmentCode: "default",
+				Hostname:       "dev-box",
+				SuggestedName:  "dev-box",
+				OS:             "linux",
+				Arch:           "amd64",
+				CLIs:           []string{"claude", "codex"},
+				KeyFingerprint: "SHA256:testfp",
+				EnrolledBy:     "alice@example.com",
+				LocalUser:      "alice",
+				PairingCode:    "K7M9-P3W4",
+			}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/hostds/pending/hjr_abc123/accept":
+			_ = json.NewDecoder(r.Body).Decode(&accepted)
+			_ = json.NewEncoder(w).Encode(model.Hostd{Name: accepted.Name, Owner: "alice@example.com", KeyFingerprint: "SHA256:testfp"})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/hostds/pending/hjr_rej/reject":
+			rejectedID = "hjr_rej"
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/hostds/enrollment-codes":
+			_ = json.NewDecoder(r.Body).Decode(&createdCode)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(ui.HostEnrollmentCodeView{
+				HostEnrollmentCode: model.HostEnrollmentCode{Name: createdCode.Name},
+				Code:               "ghe_testcode123",
+				Install:            &ui.HostdInstall{Lines: []string{"curl -fsSL https://grain.example.com/hostd/install | sh -s -- --join ghe_testcode123"}},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/hostds/dev-box/rename":
+			var body ui.RenameHostdRequest
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			renamedTo = body.Name
+			_ = json.NewEncoder(w).Encode(model.Hostd{Name: body.Name})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/hostds/box-2/revoke":
+			revokedName = "box-2"
+			_ = json.NewEncoder(w).Encode(model.Hostd{Name: "box-2"})
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/hostds/box-2":
+			deletedName = "box-2"
+			_ = json.NewEncoder(w).Encode(ui.DeletedHostd{Name: "box-2"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	c := ui.NewHTTPClient(srv.URL)
+	ctx := context.Background()
+
+	out, err := captureStdoutCLI(t, func() error {
+		return cmdHostds(ctx, c, &printer{}, []string{"pending"})
+	})
+	// No pairing code for now: pending names the verified enrolling person.
+	if err != nil || strings.Contains(out, "K7M9-P3W4") || !strings.Contains(out, "alice@example.com") {
+		t.Fatalf("pending = %q, %v", out, err)
+	}
+
+	if _, err := captureStdoutCLI(t, func() error {
+		return cmdHostds(ctx, c, &printer{}, []string{"accept", "-name", "dev-box", "-labels", "gpu=h100,zone=us", "-capacity", "4", "hjr_abc123"})
+	}); err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	if accepted.Name != "dev-box" || accepted.Capacity == nil || *accepted.Capacity != 4 || accepted.Labels == nil || (*accepted.Labels)["gpu"] != "h100" {
+		t.Fatalf("accepted payload = %+v", accepted)
+	}
+
+	if _, err := captureStdoutCLI(t, func() error {
+		return cmdHostds(ctx, c, &printer{}, []string{"reject", "hjr_rej"})
+	}); err != nil || rejectedID != "hjr_rej" {
+		t.Fatalf("reject = %q, %v", rejectedID, err)
+	}
+
+	invOut, err := captureStdoutCLI(t, func() error {
+		return cmdHostds(ctx, c, &printer{}, []string{"invite", "-name", "eng", "-expires", "168h", "-max-uses", "10", "-allow", "group:eng@example.com"})
+	})
+	if err != nil || createdCode.Name != "eng" || createdCode.MaxUses != 10 || !strings.Contains(invOut, "--join ghe_testcode123") {
+		t.Fatalf("invite = %q, %+v, %v", invOut, createdCode, err)
+	}
+
+	if _, err := captureStdoutCLI(t, func() error {
+		return cmdHostds(ctx, c, &printer{}, []string{"rename", "dev-box", "box-2"})
+	}); err != nil || renamedTo != "box-2" {
+		t.Fatalf("rename = %q, %v", renamedTo, err)
+	}
+	if _, err := captureStdoutCLI(t, func() error {
+		return cmdHostds(ctx, c, &printer{}, []string{"revoke", "box-2"})
+	}); err != nil || revokedName != "box-2" {
+		t.Fatalf("revoke = %q, %v", revokedName, err)
+	}
+	if _, err := captureStdoutCLI(t, func() error {
+		return cmdHostds(ctx, c, &printer{}, []string{"delete", "box-2"})
+	}); err != nil || deletedName != "box-2" {
+		t.Fatalf("delete = %q, %v", deletedName, err)
+	}
+	if !isHostdRegistryVerb([]string{"pending"}) || !isHostdRegistryVerb([]string{"accept", "hjr_1"}) || isHostdRegistryVerb([]string{"-server", "https://x"}) {
+		t.Fatal("isHostdRegistryVerb classification mismatch")
+	}
+}
+
 // `grain hostds delete` sends DELETE /api/hostds/<name> and passes the
 // daemon's refusal of a live hostd through; `grain hostds
 // delete-revoked` posts the bulk action.

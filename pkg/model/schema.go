@@ -557,17 +557,85 @@ import "strconv"
 // entry settings (registry URL, entry name, auth mode, catalog metadata, and
 // scope overrides) for daemon self-registration and heartbeating
 // (design/design/registry.design.md).
-const SchemaVersion = 116
+//
+// 117 adds shared host enrollment codes (`host_enrollment_code`), pending
+// join requests (`host_join_request`), key-bound host metadata
+// on `hostd` (`public_key`, `key_fingerprint`, `enrollment_code`, `capacity`,
+// `hostname`, `os`, `arch`, `clis`, `version`, `local_user`, `last_seen_at`),
+// and 30-day credential expiry on `hostd_token` (`expires_at`).
+//
+// 118 rewrites stored `bootstrap-playbooks` grants across the grant tables,
+// deployment and repository default/CI capabilities, console sessions, and
+// capability_policy to `https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}`.
+//
+// 119 adds `label` and `last_used_at` to `allowed_principal` for `delegate:`
+// entries (model.AllowedPrincipal.Label and LastUsedAt,
+// design/design/authentication.design.md §6).
+//
+// 120 rewrites stored `github-credential:<name>` grants across the grant
+// tables, deployment and repository default/CI capabilities, console sessions,
+// and capability_policy to `https://grain.dev/capabilities/repo#credential={"credential":"<name>"}`.
+// 121 changes no table: it retires the in-process `read-issues` provider
+// onto the in-process `github` server's `#read-issues` method: stored
+// `read-issues` grants across tasks, templates, schedules,
+// `default_capabilities`, `ci_capabilities`, `console_sessions` and
+// `capability_policy` become
+// `https://grain.dev/capabilities/github#read-issues={}`.
+// 122 adds `admission` to `task`, `template` and `schedule` and
+// `default_admission` to `grain_config` and `repo_config`, moving stored
+// `priority-dispatch` and `durable` grants into the setting and dropping
+// catalogue and policy entries for both names.
+// 123 adds `hosting` to `task`, `template` and `schedule` and
+// `default_hosting` to `grain_config` and `repo_config`, moving stored
+// `console` grants into the setting (ConsoleSession.Hosting included) and
+// dropping catalogue and policy entries for `console`.
+// 124 changes no table: it retires the in-process `github-sandbox` provider
+// onto the in-process `github` server's `#sandbox-repo` method: stored
+// `github-sandbox` grants across tasks, templates, schedules,
+// `default_capabilities`, `ci_capabilities`, `console_sessions` and
+// `capability_policy` become
+// `https://grain.dev/capabilities/github#sandbox-repo={}`.
+// 125 changes no table: it rewrites `grain-ci` in
+// `grain_config`.`capability_policy` -- its rules and its catalogue's task,
+// CI and per-repository defaults -- to
+// `https://grain.dev/capabilities/grain#ci={}`, which migration 96 did
+// everywhere else a grant is stored (grain_ci_policy_migration.go).
+// 126 adds `external_agent_token`.`owner_source`
+// (model.ExternalAgentToken.OwnerSource): how the issuer who set a
+// credential's owner was established, so an owner named under the shared
+// access code is not reported as a verified on-behalf-of
+// (operator-attribution spec §6.3, external-cli spec #XC-14).
+// 127 changes no table: it runs migration 109's gcp#gcp-key rewrite again,
+// which now rewrites an `account` naming an unconfigured permission set to
+// `permission_set` (with a note) where 109 once kept it as written, a grant
+// every state-repository check refused (gcp_key_args_migration.go).
+// 128 changes no table: it drops default, template and schedule grants that
+// the deployment's capability catalogue disables (with a note on affected
+// templates and schedules), so a store saved before API policy writes checked
+// defaults exports a state repository that passes grain state check
+// (catalogue_disabled_migration.go).
+// 129 changes no table: it rewrites retired capability names in
+// `task_grant_wait` (including `github-sandbox`) that earlier
+// rewriteLegacyGrantsMulti migrations left under their retired names
+// (legacy_grant_migration.go).
+// 130 adds token accounting (tokenusage.go): `task_run_usage`, one row per
+// run that reported its provider usage; `usage_capacity`, the usage a
+// (connection, model) window had consumed when its provider refused it;
+// and `usage_setting`, the operator's budgets and concurrency mode.
+const SchemaVersion = 130
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
-// `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
-// through a verified identity (model.AllowedPrincipal).
+// `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
+// `delegate:<email>` entry admitted through a verified identity
+// (model.AllowedPrincipal).
 const allowedPrincipalTable = `CREATE TABLE IF NOT EXISTS ` + "`allowed_principal`" + ` (
-  ` + "`entry`" + `    TEXT     NOT NULL PRIMARY KEY,
-  ` + "`added_by`" + ` TEXT     NOT NULL DEFAULT '',
-  ` + "`added_at`" + ` DATETIME NOT NULL,
-  ` + "`reason`" + `   TEXT     NOT NULL DEFAULT '',
-  ` + "`role`" + `     TEXT     NOT NULL DEFAULT 'grain/operator'
+  ` + "`entry`" + `        TEXT     NOT NULL PRIMARY KEY,
+  ` + "`added_by`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`added_at`" + `     DATETIME NOT NULL,
+  ` + "`reason`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`role`" + `         TEXT     NOT NULL DEFAULT 'grain/operator',
+  ` + "`label`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`last_used_at`" + ` DATETIME NULL
 )`
 
 // allowedPrincipalMigrationTable records the one-time startup migration off
@@ -696,14 +764,25 @@ const sandboxAccessTable = `CREATE TABLE IF NOT EXISTS ` + "`sandbox_access`" + 
 )`
 
 // hostdTable and hostdTokenTable are the hostd registry (model.Hostd),
-// named once for Tables and for the migration that adds them.
+// named once for Tables and for the migrations that build them.
 const hostdTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd`" + ` (
-  ` + "`name`" + `       TEXT     NOT NULL,
-  ` + "`owner`" + `      TEXT     NOT NULL DEFAULT '',
-  ` + "`labels`" + `     TEXT     NOT NULL DEFAULT '',
-  ` + "`created_by`" + ` TEXT     NOT NULL DEFAULT '',
-  ` + "`created_at`" + ` DATETIME NOT NULL,
-  ` + "`revoked_at`" + ` DATETIME NULL,
+  ` + "`name`" + `            TEXT     NOT NULL,
+  ` + "`owner`" + `           TEXT     NOT NULL DEFAULT '',
+  ` + "`labels`" + `          TEXT     NOT NULL DEFAULT '',
+  ` + "`created_by`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`created_at`" + `      DATETIME NOT NULL,
+  ` + "`revoked_at`" + `      DATETIME NULL,
+  ` + "`public_key`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`key_fingerprint`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`enrollment_code`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`capacity`" + `        INTEGER  NOT NULL DEFAULT 0,
+  ` + "`hostname`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`os`" + `              TEXT     NOT NULL DEFAULT '',
+  ` + "`arch`" + `            TEXT     NOT NULL DEFAULT '',
+  ` + "`clis`" + `            TEXT     NOT NULL DEFAULT '',
+  ` + "`version`" + `         TEXT     NOT NULL DEFAULT '',
+  ` + "`local_user`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`last_seen_at`" + `    DATETIME NULL,
   PRIMARY KEY (` + "`name`" + `)
 )`
 
@@ -733,8 +812,56 @@ const hostdTokenTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd_token`" + ` (
   ` + "`hostd`" + `      TEXT     NOT NULL,
   ` + "`prefix`" + `     TEXT     NOT NULL DEFAULT '',
   ` + "`created_at`" + ` DATETIME NOT NULL,
+  ` + "`expires_at`" + ` DATETIME NULL,
   ` + "`revoked_at`" + ` DATETIME NULL,
   PRIMARY KEY (` + "`token_hash`" + `)
+)`
+
+// hostEnrollmentCodeTable and hostJoinRequestTable back shared host enrollment
+// snippets and the pending pairing-code join handshake (model.HostEnrollmentCode,
+// model.HostJoinRequest). Both stay local (staterepo.LocalTables).
+const hostEnrollmentCodeTable = `CREATE TABLE IF NOT EXISTS ` + "`host_enrollment_code`" + ` (
+  ` + "`name`" + `               TEXT     NOT NULL,
+  ` + "`code_hash`" + `          TEXT     NOT NULL,
+  ` + "`code_value`" + `         TEXT     NOT NULL DEFAULT '',
+  ` + "`prefix`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`default_labels`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`default_capacity`" + `   INTEGER  NOT NULL DEFAULT 0,
+  ` + "`allowed_principals`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`max_uses`" + `           INTEGER  NOT NULL DEFAULT 0,
+  ` + "`uses`" + `               INTEGER  NOT NULL DEFAULT 0,
+  ` + "`expires_at`" + `         DATETIME NULL,
+  ` + "`created_by`" + `         TEXT     NOT NULL DEFAULT '',
+  ` + "`created_at`" + `         DATETIME NOT NULL,
+  ` + "`rotated_at`" + `         DATETIME NULL,
+  ` + "`revoked_at`" + `         DATETIME NULL,
+  PRIMARY KEY (` + "`name`" + `)
+)`
+
+const hostJoinRequestTable = `CREATE TABLE IF NOT EXISTS ` + "`host_join_request`" + ` (
+  ` + "`id`" + `                TEXT     NOT NULL,
+  ` + "`enrollment_code`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`rekey_hostd`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`public_key`" + `        TEXT     NOT NULL,
+  ` + "`key_fingerprint`" + `   TEXT     NOT NULL,
+  ` + "`server_nonce`" + `      TEXT     NOT NULL,
+  ` + "`hostname`" + `          TEXT     NOT NULL DEFAULT '',
+  ` + "`os`" + `                TEXT     NOT NULL DEFAULT '',
+  ` + "`arch`" + `              TEXT     NOT NULL DEFAULT '',
+  ` + "`clis`" + `              TEXT     NOT NULL DEFAULT '',
+  ` + "`version`" + `           TEXT     NOT NULL DEFAULT '',
+  ` + "`local_user`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`enrolled_by`" + `       TEXT     NOT NULL,
+  ` + "`default_labels`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`default_capacity`" + `  INTEGER  NOT NULL DEFAULT 0,
+  ` + "`created_at`" + `        DATETIME NOT NULL,
+  ` + "`expires_at`" + `        DATETIME NOT NULL,
+  ` + "`accepted_at`" + `       DATETIME NULL,
+  ` + "`accepted_by`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`accepted_name`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`accepted_labels`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`accepted_capacity`" + ` INTEGER  NOT NULL DEFAULT 0,
+  PRIMARY KEY (` + "`id`" + `)
 )`
 
 // externalAgentTokenTable and externalAgentTokenSequenceTable are named
@@ -755,6 +882,7 @@ const externalAgentTokenTable = `CREATE TABLE IF NOT EXISTS ` + "`external_agent
   ` + "`last_used_at`" + `   DATETIME NULL,
   ` + "`created_by`" + `     TEXT     NOT NULL DEFAULT '',
   ` + "`owner`" + `          TEXT     NOT NULL DEFAULT '',
+  ` + "`owner_source`" + `   TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `),
   UNIQUE (` + "`token_hash`" + `)
 )`
@@ -923,6 +1051,8 @@ var Tables = []string{
   ` + "`proposer_task_id`" + `      TEXT     NOT NULL DEFAULT '',
   ` + "`proposer_run_id`" + `       TEXT     NOT NULL DEFAULT '',
   ` + "`external_ref`" + `          TEXT     NOT NULL DEFAULT '',
+  ` + "`admission`" + `             TEXT     NOT NULL DEFAULT 'standard',
+  ` + "`hosting`" + `               TEXT     NOT NULL DEFAULT 'unattended',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_external_ref`" + ` ON ` + "`task`" + ` (` + "`external_ref`" + `, ` + "`id`" + `)`,
@@ -1916,6 +2046,8 @@ var Tables = []string{
   ` + "`created_at`" + `            DATETIME NOT NULL,
   ` + "`every_n_minutes`" + `       INTEGER  NULL,
   ` + "`keep_running`" + `          INTEGER  NOT NULL DEFAULT 0,
+  ` + "`admission`" + `             TEXT     NOT NULL DEFAULT '',
+  ` + "`hosting`" + `               TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2034,6 +2166,8 @@ var Tables = []string{
   ` + "`reviewers`" + `          TEXT NOT NULL DEFAULT '',
   ` + "`priority`" + `           INTEGER NOT NULL DEFAULT 0,
   ` + "`keep_running`" + `       INTEGER NOT NULL DEFAULT 0,
+  ` + "`admission`" + `          TEXT NOT NULL DEFAULT '',
+  ` + "`hosting`" + `            TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2520,6 +2654,8 @@ var Tables = []string{
   ` + "`owner_trust`" + `                  TEXT    NOT NULL DEFAULT '',
   ` + "`auto_grant_context_reads`" + `     TEXT    NOT NULL DEFAULT '',
   ` + "`registry`" + `                     TEXT    NOT NULL DEFAULT '',
+  ` + "`default_admission`" + `            TEXT    NOT NULL DEFAULT '',
+  ` + "`default_hosting`" + `              TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -3273,6 +3409,8 @@ var Tables = []string{
   ` + "`issue_import_approved`" + `    INTEGER NOT NULL DEFAULT 0,
   ` + "`issue_import_interval_seconds`" + ` INTEGER NOT NULL DEFAULT 0,
   ` + "`upstream_repo`" + `            TEXT NOT NULL DEFAULT '',
+  ` + "`default_admission`" + `        TEXT NOT NULL DEFAULT '',
+  ` + "`default_hosting`" + `          TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `)
 )`,
 
@@ -3366,6 +3504,23 @@ var Tables = []string{
   ` + "`allow_force`" + `  INTEGER NOT NULL DEFAULT 0,
   ` + "`allow_delete`" + ` INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`id`" + `, ` + "`pattern`" + `)
+)`,
+
+	// A declared suite's `qualification:` stanza (model.SuiteQualification):
+	// one row per suite whose file has one, keyed by the declaration's id,
+	// written by the same sync that writes repo_declaration and deleted
+	// with it -- beside the provenance rather than on the suite row, for
+	// repo_declaration_push's reason: it is only ever what the
+	// repository's default branch says. Grain's own record, not settings.
+	// Needs no SchemaVersion bump, for repo_workflow's own reason.
+	`CREATE TABLE IF NOT EXISTS ` + "`repo_declaration_qualification`" + ` (
+  ` + "`id`" + `              TEXT NOT NULL,
+  ` + "`check_name`" + `      TEXT NOT NULL DEFAULT '',
+  ` + "`candidate`" + `       TEXT NOT NULL DEFAULT '',
+  ` + "`stage1_workflow`" + ` TEXT NOT NULL DEFAULT '',
+  ` + "`stage1_status`" + `   TEXT NOT NULL DEFAULT '',
+  ` + "`upstream`" + `        TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (` + "`id`" + `)
 )`,
 
 	// One row per repository grain reads declarations from
@@ -3565,6 +3720,26 @@ var Tables = []string{
   ` + "`updated_by_id`" + `   TEXT NOT NULL DEFAULT '',
   ` + "`updated_by_source`" + ` TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`period`" + `)
+)`,
+
+	// The promote-release.yml dispatch a person started for a pending GitHub
+	// Actions release (model.ReleaseApprovalDecision), keyed by
+	// (owner, name, version, commit) so the release-pending watcher does not
+	// re-raise release.pending for a commit already approved from the CLI or
+	// API, and DecideRelease refuses a second dispatch while the first is
+	// outstanding. Grain's own runtime record, like base_branch_release.
+	// Needs no SchemaVersion bump: Init's CREATE TABLE IF NOT EXISTS creates
+	// it on every database.
+	`CREATE TABLE IF NOT EXISTS ` + "`release_approval`" + ` (
+  ` + "`owner`" + `      TEXT     NOT NULL,
+  ` + "`name`" + `       TEXT     NOT NULL,
+  ` + "`version`" + `    TEXT     NOT NULL,
+  ` + "`commit`" + `     TEXT     NOT NULL,
+  ` + "`decision`" + `   TEXT     NOT NULL,
+  ` + "`workflow`" + `   TEXT     NOT NULL,
+  ` + "`decided_by`" + ` TEXT     NOT NULL,
+  ` + "`decided_at`" + ` DATETIME NOT NULL,
+  PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `, ` + "`version`" + `, ` + "`commit`" + `)
 )`,
 
 	// A repo's qualification setup -- bwsalmon/agents#518's two switches:
@@ -4122,6 +4297,15 @@ var Tables = []string{
 
 	hostdTable,
 	hostdTokenTable,
+	hostEnrollmentCodeTable,
+	hostJoinRequestTable,
+
+	// Token accounting (tokenusage.go, schema 129).
+	taskRunUsageTable,
+	taskRunUsageFinishedIndex,
+	taskRunUsageTaskIndex,
+	usageCapacityTable,
+	usageSettingTable,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`secret_resolution_audit`" + ` (
   ` + "`id`" + `          INTEGER PRIMARY KEY AUTOINCREMENT,

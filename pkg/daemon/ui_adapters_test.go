@@ -94,3 +94,26 @@ func TestSandboxBudgetPoolsIncludeTheVMMHeadroom(t *testing.T) {
 		t.Fatalf("Pools = %+v, want one pool charged the same %d MiB as CommittedMemoryMB", report.Pools, report.CommittedMemoryMB)
 	}
 }
+
+// ContainerSandboxes and plain K8sSandboxes apply a shape (SandboxShapeIgnored
+// is false) yet still cannot withhold a network, so console-session routes ask
+// SandboxHealthAdapter.IsolatesNetwork rather than !SandboxShapeIgnored.
+func TestSandboxHealthAdapterCarriesNetworkIsolation(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		inner orchestrator.Sandboxes
+		want  bool
+	}{
+		"nil":         {nil, true},
+		"disabled":    {orchestrator.NewDisabledSandboxes(), true},
+		"granule":     {orchestrator.NewGranuleSandboxes(orchestrator.GranuleConfig{}), true},
+		"k8s-granule": {orchestrator.NewK8sGranuleSandboxes(orchestrator.K8sGranuleConfig{}), true},
+		"container":   {orchestrator.NewContainerSandboxes(orchestrator.ContainerConfig{}), false},
+		"k8s":         {orchestrator.NewK8sSandboxes(orchestrator.K8sConfig{}), false},
+		"host":        {orchestrator.NewHostSandboxes(t.TempDir()), false},
+	} {
+		if got := (daemon.SandboxHealthAdapter{Inner: tc.inner}).IsolatesNetwork(); got != tc.want {
+			t.Errorf("%s: IsolatesNetwork() = %v, want %v", name, got, tc.want)
+		}
+	}
+}

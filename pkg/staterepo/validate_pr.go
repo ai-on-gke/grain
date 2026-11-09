@@ -166,6 +166,16 @@ func CheckDispatchLiveness(ctx context.Context, db *sql.DB) ([]string, error) {
 			out = append(out, msg)
 		}
 	}
+	// A director session naming a grant grain's built-in Tier 3 floor
+	// refuses would be held at dispatch (orchestrator.catalogueHold)
+	// whatever settings/capabilities.yml says.
+	if director != nil {
+		for _, capID := range director.Capabilities {
+			if r := model.DirectorFloorRefusal(capID, model.CatalogueKindDirector); r != nil {
+				out = append(out, fmt.Sprintf("console_sessions.%s: %s, so dispatch would hold the director", model.DirectorSessionID, r.Reason))
+			}
+		}
+	}
 	return out, nil
 }
 

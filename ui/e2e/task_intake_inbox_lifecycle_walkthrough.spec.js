@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
-import { chooseOption, chosenValues } from "./searchSelect.js";
+import { chooseOption } from "./searchSelect.js";
 
 // The first test triages the inbox rows `grain demo` seeds -- one in
 // each of its four groups -- and approves and answers two of them, so it
@@ -783,87 +783,6 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     await expect(form).toBeHidden();
     expect(filed).toHaveLength(1);
     expect(filed[0].postDataJSON()).toMatchObject({ title, sandboxCpus: 2 });
-  });
-
-  // 2026-10-26 intake walkthrough: a demo with -github-sim pre-ticked
-  // Gemini key while saying it was not ready. Unticking it took its row
-  // out of the open menu, so it could not be ticked again, and focus fell
-  // out of the list. The row now stays for as long as the form is open.
-  // gemini-key and self-debug are retired, so this uses bootstrap-playbooks,
-  // which this file's demo has ready: the real /api/config is read and only
-  // that row's readiness is rewritten.
-  test("keeps an unticked unready capability in the open menu", async ({
-    page,
-  }) => {
-    await page.route("**/api/config", async (route) => {
-      // A poll the page has already given up on disposes its response;
-      // there is nobody left to answer then.
-      try {
-        const response = await route.fetch();
-        const config = JSON.parse(await response.text());
-        config.capabilities = (config.capabilities || []).map((c) =>
-          c.id === "bootstrap-playbooks"
-            ? { ...c, ready: false, needs: ["a GCP project"] }
-            : c,
-        );
-        config.defaultCapabilities = [
-          ...new Set([
-            ...(config.defaultCapabilities || []),
-            "bootstrap-playbooks",
-          ]),
-        ];
-        await route.fulfill({ response, json: config });
-      } catch {
-        await route.abort().catch(() => {});
-      }
-    });
-    const filed = [];
-    page.on("request", (req) => {
-      if (
-        req.method() === "POST" &&
-        new URL(req.url()).pathname === "/api/tasks"
-      )
-        filed.push(req);
-    });
-    await page.goto("/new");
-    const form = page.getByRole("dialog", { name: "New task" });
-    const discard = page.getByRole("button", { name: /discard draft/i });
-    if (await discard.isVisible()) await discard.click();
-    const title = `Re-ticked capability ${Date.now()}`;
-    await form.getByLabel("Title").fill(title);
-    await chooseOption(form.getByRole("combobox", { name: /^Repos/ }), {
-      label: "No repo (standalone task -- nothing to check out)",
-    });
-
-    const capabilities = form.getByRole("combobox", {
-      name: "Legacy capabilities",
-    });
-    await expect
-      .poll(() => chosenValues(capabilities))
-      .toContain("bootstrap-playbooks");
-    await capabilities.click();
-    const row = page.getByRole("option", { name: /Bootstrap playbooks/ });
-    await expect(row).toContainText(/Not ready/);
-    await row.click();
-    await expect(row).toBeVisible();
-    await expect(row).toHaveAttribute("aria-selected", "false");
-    // The list stays open, and the keys stay with the box.
-    await expect(capabilities).toBeFocused();
-    await row.click();
-    await expect(row).toHaveAttribute("aria-selected", "true");
-    await page.keyboard.press("Escape");
-    await expect(page.getByRole("listbox")).toBeHidden();
-    await expect(form).toBeVisible();
-    await expect
-      .poll(() => chosenValues(capabilities))
-      .toContain("bootstrap-playbooks");
-
-    await form.getByRole("button", { name: "Create task" }).click();
-    await expect(form).toBeHidden();
-    expect(filed).toHaveLength(1);
-    expect(filed[0].postDataJSON().capabilities).toContain(
-      "bootstrap-playbooks",
-    );
   });
 
   // grain/task-1625: a selection outlives the view it was made in.

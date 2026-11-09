@@ -200,7 +200,7 @@ func (c *Client) PublishReplies(ctx context.Context, id, by string) (change.Publ
 	}
 	change.RememberPublish(task.ID, res)
 	// Like Sync, the press is the person's, so it is in the conversation.
-	if _, err := c.Store.AddComment(ctx, model.Comment{TaskID: task.ID, Author: model.Attribution{Actor: c.requestActor(ctx).Actor},
+	if _, err := c.Store.AddComment(ctx, model.Comment{TaskID: task.ID, Author: c.requestActor(ctx),
 		Body: publishedNote(res), CreatedAt: c.now()}); err != nil {
 		return change.PublishResult{}, err
 	}
@@ -285,7 +285,7 @@ func (c *Client) MailChange(ctx context.Context, id, by string, req MailChangeRe
 	if res.Message != "" {
 		body += " " + res.Message
 	}
-	if _, err := c.Store.AddComment(ctx, model.Comment{TaskID: task.ID, Author: model.Attribution{Actor: c.requestActor(ctx).Actor},
+	if _, err := c.Store.AddComment(ctx, model.Comment{TaskID: task.ID, Author: c.requestActor(ctx),
 		Body: body, CreatedAt: c.now()}); err != nil {
 		return change.Result{}, err
 	}

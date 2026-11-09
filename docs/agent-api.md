@@ -71,6 +71,16 @@ A grant is one capability name per scope or preset:
 | `api:ci:write@bwsalmon/grain` | a scope or preset on one repository only |
 | `api:ops/triage` | a [scope set](#scope-sets)'s resolved scopes |
 
+Each scope and preset is also a method of grain's in-process capability
+server `https://grain.dev/capabilities/api`
+([unified-grants.design.md](../design/design/unified-grants.design.md) §1):
+`https://grain.dev/capabilities/api#ci:write` with `{repo: bwsalmon/grain}`
+is the same grant as `api:ci:write@bwsalmon/grain`, and every check that
+reads grants (admission, the proposal and approval rules, the capability
+policy) reads the two as one. `GET /api/capability-methods` lists the
+server. For now grain still records the `api:` spelling, so a reference
+sent in is stored as the `api:` name it stands for.
+
 A template, schedule or task can also write the grant as the `api`
 capability with arguments, which is the same thing spelled for a
 declaration:
@@ -177,7 +187,7 @@ every `DELETE`.
 |---|---|---|
 | `tasks:read` | read tasks, conversations, transcripts, trees | |
 | `tasks:write` | file, edit, comment on, reorder, defer, pause, resume, retry, stop, close and reopen tasks | |
-| `tasks:admin` | approve proposed tasks, recreate sandboxes, edit numeric task `priority` (`PATCH /api/tasks/{id}` with `{"priority": <int>}` only) | yes |
+| `tasks:admin` | approve proposed tasks (never its own proposals or a task held for a person: see [Self-protection rails](#self-protection-rails)), recreate sandboxes, edit numeric task `priority` (`PATCH /api/tasks/{id}` with `{"priority": <int>}` only) | yes |
 | `tasks:from-template` | file a task from a repository's own declared template (`POST /api/tasks/from-template`); an agent's call also needs `tasks:write`, since it is served as `POST /api/tasks` | |
 | `merge:write` | open pull requests for tasks, retry their merges | |
 | `merge:force` | force-merge past the gate | yes |
@@ -215,6 +225,7 @@ every `DELETE`.
 | `connections:read` | read git connections and model backends | |
 | `connections:write` | change them | yes |
 | `capabilities:read` | read capability servers and policy, check grants | |
+| `capabilities:detach` | remove grants only: detach one from a task (`POST /api/tasks/{id}/capabilities` with `attach: false`, no `replace`) or narrow a repository's `defaultCapabilities` / `ciCapabilities` to a subset of what is stored; every call needs a reason, it never touches a standing session's task, and it is model-only (never on the sandbox channel). See *Detaching grants* under [Policy](#policy) | |
 | `capabilities:admin` | change capability servers, policy, and any task's or repository's grants | yes |
 | `secrets:read` | list secrets, keys and tokens by name, never their values | |
 | `secrets:write` | set and delete secrets, keys and tokens | yes |
@@ -566,9 +577,12 @@ Actions job's log when given a `gha:` run id. `grain ci wait` and
   - a `propose_task` asking for one is filed for a person to approve,
     even when the proposer holds it (`model.EscalatedCapabilities`).
 
-  The `priority-dispatch` capability (`docs/capabilities.md`) is held to
-  the same three rules (`model.IsPersonOnlyGrant`), because it lets a
-  task jump the dispatch queue.
+  A task's `admission` above `standard` (`bypass` or `durable`, the
+  setting that replaced the `priority-dispatch` and `durable` grants,
+  `docs/capabilities.md`) is held to the same three rules, because it
+  lets a task jump the dispatch queue: an agent's request setting it is
+  refused, and an agent-filed task or `propose_task` asking for it waits
+  for a person.
 - **No escalation through the API.** A run can't use any route to grant
   a capability its own task doesn't hold. Any body field named like
   `capabilities`, `defaultCapabilities`, `ciCapabilities` or `grants`
@@ -613,6 +627,31 @@ Actions job's log when given a `gha:` run id. `grain ci wait` and
   (`pkg/orchestrator/finish.go`). A follow-up from a priority-9 task
   that should run as urgently has to ask for 9 itself, which it may do
   without a person's approval because 9 is not above its parent's.
+- **Detaching grants (`capabilities:detach`).**
+  `capabilities:detach` lets an agent such as the director clean up
+  stale or over-broad grants without holding the dangerous
+  `capabilities:admin` (director-capabilities.spec.md §3.1.2). It
+  reaches three `capabilities:admin` routes, and only to remove:
+  - `POST /api/tasks/{id}/capabilities` with `"attach": false` spelled
+    out and no `replace` (naming the grant by `id`, `grant`, or
+    `capability` with its `with`);
+  - `PUT /api/repos/{owner}/{name}/capabilities` whose
+    `defaultCapabilities` list, and
+    `PUT /api/repos/{owner}/{name}/ci-capabilities` whose
+    `ciCapabilities` list, names only entries already stored on that
+    field (an empty list clears it). The body may carry nothing else.
+
+  Every call needs a non-empty reason (`X-Grain-Acting-Reason`; the
+  generated tool's `reason`). A call on a task for which
+  `IsConsoleSession()` holds is refused, whether it is another standing
+  session or the caller's own. An attach, a `replace`, a list naming
+  anything the row does not already hold, or any other route still needs
+  `capabilities:admin`. The scope is not dangerous, so a person need not
+  grant it, but it is sandbox-denied: `grain api` from inside a sandbox
+  (`X-Grain-Channel: sandbox-cli`) cannot spend it, so every detach is a
+  reasoned MCP tool call in the transcript. A repository-limited grant
+  (`api:capabilities:detach@owner/name`) reaches that repository's
+  tasks and lists only.
 - **Edits to grants go through the existing policy.** Approval rules,
   `capability_policy.go` and the proposal trust gate apply to api grants
   exactly as they apply to any other capability.
@@ -638,6 +677,36 @@ Actions job's log when given a `gha:` run id. `grain ci wait` and
   parks the session or acts on its run. It reaches the session the same
   way whether it is sent through the agent API, `grain task message` or
   `grain mcpserver`'s `message_task`.
+- **Approving its own work, or a person's.** Even holding a person's
+  `api:tasks:admin` or `api:dispatch-control` (`dispatch:write`), a run
+  always files work unapproved (`approved: true` is refused) and can't
+  approve (`POST /api/tasks/{id}/approve`, `api_approve_task`, or
+  `POST /api/tasks/{id}/run-now`, `api_run_now`, on an unapproved task):
+  - a task in its own proposal lineage: one it proposed or filed over the
+    API, or one proposed by any task down that chain, however many hops;
+  - a task held for a person: one filed with `hold_for_approval`
+    (`hold-requested` tag, recorded whether or not its proposer's
+    permission would have queued it), targeting or writing `grain/config`, or
+    targeting a change target that requires a person's approval; one
+    carrying a repository-declared `push:` set or ungranted `autoMerge`;
+    one holding a grant `settings/capabilities.yml` marks `requires_person`,
+    or a person-only grant (a dangerous api scope, a capability method
+    only a person may grant); or one setting `keep_running` or an
+    `admission` above `standard` (`bypass` or `durable`, which replaced the
+    `priority-dispatch` and `durable` grants), whoever filed it, or asking
+    for a capability, write target, read or priority its own proposer
+    doesn't hold.
+
+  The refusal is a 403 naming the chain or the holds. Once a task is
+  approved, `run-now` still jumps it ahead of the queue under
+  `dispatch:write`, and any other unapproved task outside the run's lineage
+  and held for nobody is still approved under `tasks:admin` (or approved
+  and started by `run-now` under `dispatch:write` when within the caller's
+  grants). A person approves either kind as before
+  (design/spec/director/director-capabilities.spec.md §3.3 item 3, G8).
+  An external agent credential is held to the same rail, with its own
+  filings as its lineage (see
+  [Routes without calling-task context](#routes-without-calling-task-context)).
 - **Upgrade holds.** A run honours them. It can't lift a dispatch pause
   someone else took. It can't upgrade, restart or reboot while an upgrade
   check holds dispatch for another task.
@@ -815,7 +884,7 @@ daemon, serving six tools whatever the caller holds:
 | `grain_explore_scope(scope?, tool?, view?, includeAliases?)` | With no arguments, the scope groups the caller is authorized for; with a group or scope (or `all`), the routes under it; with `tool`, only the routes a word finds -- in tool names, paths, scopes and descriptions -- which is far cheaper than a whole group. The answer shrinks to fit one page (below). |
 | `grain_invoke(tool, arguments, reason?)` | Runs one route. `arguments` carries the path parameters by name, `query`, `body` (or the body's fields directly) and, on task mutations, `expect` (`state`, `title_prefix`, `kind`), which reads the task first and refuses the call if the record disagrees. A destructive or dangerous route needs `reason`. A `tool` that names no route is answered with the nearest names the caller may use (`did you mean api_get_log_lines?`). |
 | `grain_filing_context(repo?)` | `targetRepos`, `anyRepoAllowed`, `defaultRepo`, templates, boards, custom fields and grantable capabilities, each part served only to a caller holding the scope of the route that serves the same data. A key is absent only when the caller lacks that scope; a list the caller may read is `[]` when empty, never `null`. |
-| `grain_submit_task(...)` | `POST /api/tasks`; `approve` defaults to false, so the task lands proposed. |
+| `grain_submit_task(...)` | `POST /api/tasks`; `approve` defaults to false, so the task lands proposed. `grants` is forwarded as sent, so a mixed request (`capabilities` beside `grants`, `reads`/`writes` beside repository grants, `repo`/`base`/`no_repo` beside `repo#target`) is refused with the route's own reason. |
 | `grain_list_tasks(repo?, state?, q?, limit?, summary?)` | Compact summary rows by default. |
 | `grain_get_task(id, view?)` | A ~1 KB summary by default; `conversation` pages comments, `full` is the whole record. |
 
@@ -888,7 +957,11 @@ Who the caller is decides what `grain_explore_scope` shows and
 - A person, or a BYO harness on their behalf, authenticates as for any
   other route -- the IAP identity, the access code as a bearer token, or
   the access code in `X-Grain-Access-Code` when an upstream proxy owns
-  `Authorization` -- and reaches every route that is not internal.
+  `Authorization` -- and reaches every non-internal route their role
+  allows (every non-internal route for the access code or
+  `grain/operator`; limited roles see and invoke only the scopes and
+  repositories their role covers, with refusals naming the missing
+  scope).
 
 Every `grain_invoke` re-enters the route table through the same gate
 the REST call would, so the attribution, audit row and rails are the
@@ -937,11 +1010,12 @@ every turn; `/mcp` suits a client that wants each route as its own tool.
 
 ### Enabling the endpoint
 
-`POST /mcp` is **off by default**. Enable it in Settings
-(`PUT /api/settings` with `{"externalAgentApi": true}`, or the
-`external_agent_api` parameter in `grain_config`). When disabled, every
-external agent request is refused with `403 Forbidden` even if it
-presents a valid token.
+`POST /mcp` is **off by default**. Enable it under
+[Settings → Agents → External agents](/settings/agents#external-agents)
+(**Accept external agents**), via `PUT /api/settings` with
+`{"externalAgentApi": true}`, or via the `external_agent_api` parameter in
+`grain_config`. When disabled, every external agent request is refused with
+`403 Forbidden` even if it presents a valid token.
 
 ### Per-agent credentials
 
@@ -970,10 +1044,24 @@ Each external agent is issued its own scoped bearer token (`gma_<hex>`):
   request rate limit (`rateLimit`, requests per minute, default `60`), and
   an in-flight concurrency cap (`maxConcurrent`, default `8`).
 - **Owner**: the person the credential acts on behalf of (`owner`). It
-  defaults to the person issuing it; an operator may name somebody else.
-  A self-service credential (`"selfService": true`, what
-  `grain login --issue-token` mints) belongs to its caller only, and an
+  defaults to the verified person issuing it (signed in through IAP or a
+  registered verifier); an operator may name somebody else. The shared
+  access code, break-glass loopback and the in-process CLI are nobody in
+  particular, so a credential they issue without naming an owner acts on
+  behalf of nobody -- never the deployment's own actor -- and an owner
+  they do name is recorded as named by them (`ownerSource`), so its calls
+  show that owner as unverified. A self-service credential
+  (`"selfService": true`, what `grain login --issue-token` mints) belongs
+  to its verified caller only (to nobody under the access code), and an
   agent issuing one can pass on only the owner it acts for itself.
+  A credential never does more than its owner's current role allows: it
+  is refused once the owner is moved to a narrower role. While IAP, the
+  registry or another identity verifier is configured, it is also
+  refused once its owner is on no entry of the allowed users and groups
+  list, because they were removed (`grain access deny`) or never added.
+  With no verifier the list admits nobody, so it does not limit a
+  credential there. A credential issued without an owner acts for the
+  deployment's local account and is never refused for being unlisted.
   `grain/external-dev` (the default for a workstation agent) and
   `grain/external-read` (a read-only observer) are the built-in scope
   sets for these credentials; neither holds a dangerous scope.
@@ -1045,6 +1133,67 @@ through `agentAPIGate`:
   `keepRunning`, or a priority above the default still waits for a
   person.
 
+### Following work from a workstation
+
+The host `grain` CLI — installed from [Settings → CLI](/settings/cli) via
+`curl -fsSL <origin>/cli/install.sh | sh` (`GET /cli/install.sh`, which
+verifies the release archive against `checksums.txt`) and signed in with
+`grain login` — is the external agent's own client
+([external-cli.spec.md](../design/spec/external-cli/external-cli.spec.md),
+`design/spec/cli/host.spec.md` CLI-65 and CLI-110 for every flag). Besides
+filing and reading tasks, it follows what an agent filed without polling
+task by task:
+
+- `grain inbox [-repo R] [-kind question|secret|notification|merge-held|proposal]`
+  (`GET /api/inbox`, `tasks:read`) lists what the UI Inbox would show on the
+  repositories the credential reads: parked questions and secret requests,
+  warning and critical notifications, merge-held pull requests and
+  unapproved proposals, each with its root-relative UI path.
+- `grain wait <id...> [-until closed|merged|awaiting-reply|ci-done|any[,...]]`
+  re-issues `GET /api/tasks/wait` (`tasks:read`), which holds one call for
+  at most 60 seconds. It exits `0` when a condition is met, `1` when
+  `-until merged` meets a task that closed unmerged (or `-until closed` a
+  failed one), and `5` when `-timeout` (default `30m`) runs out, printing
+  the `grain wait` line that carries on. An external caller earns no wait
+  credit.
+- `grain reply <id> [<body...> | -body-file F]` (`POST /api/tasks/{id}/reply`,
+  `tasks:write`) answers the question a run parked on. It is refused with
+  exit `2`, posting nothing, when no `ask_question` is parked, and when the
+  task waits on a `request_secret`, whose value only the encrypted input on
+  `/tasks/<id>` takes. `grain comment` posts a general note either way.
+- `grain logs <id> [-attempt N] [-tail N] [-follow]` prints an attempt's
+  activity and transcript, and with `-follow` streams it until the attempt
+  ends.
+- `GET /api/refs/{ref}/summary` rolls up every readable task carrying one
+  external work reference (`externalRef`, set with `grain create
+  -external-ref CA-204` and inherited by the tasks it spawns): counts by
+  state, CI checks passed, open questions and pull requests.
+  `grain list -external-ref CA-204` lists the tasks themselves.
+- `GET /api/events` (`tasks:read`) is an ordered, cursor-resumable feed of
+  `task.state`, `task.question`, `task.comment` and `task.ci` events
+  ([integration-events.design.md](../design/design/integration-events.design.md)).
+  It answers a JSON page (`?since=<event id>`, `limit` 1 to 500, default
+  100; `since=now` starts at the head), long-polls with `&wait=<seconds>`
+  (at most 25), or streams Server-Sent Events (`Accept: text/event-stream`
+  or `?stream=1`, resuming from `Last-Event-ID`). `?repo=` and
+  `?types=` narrow it; without `?repo=` it answers only the repositories
+  the caller reads. Events carry ids, one-line summaries, external
+  references and attribution, never comment bodies, prompts, transcripts
+  or CI logs, and the store keeps the latest 10,000.
+
+`grain skill install [-jetski|-claude|-codex|-gemini|-dir D] [-project]`
+writes a `SKILL.md` for the active context into the coding agent's skill
+directory: the CLI guide built into the binary, plus the deployment's
+repositories, templates and the caller's scopes, and never a token or
+secret. `grain skill status` says whether it is `installed`, `stale` or
+`missing`, and other commands print a one-line note on stderr when it is
+stale. `grain mcp` is an optional local stdio MCP server for agents that
+prefer tools to a shell: thirteen tools (`propose_task`,
+`list_grain_tasks`, `wait_for_task`, `reply_to_task`, `grain_inbox`, ...)
+that run the same client code as the CLI verbs, with `wait_for_task`
+answering at least every 90 seconds so an MCP client never times out.
+`grain skill install -mcp` registers it in the agent's MCP configuration.
+
 ### Routes without calling-task context
 
 Because an external agent is not a running grain task and has no sandbox
@@ -1057,7 +1206,8 @@ task" behave as follows:
 | `PUT /api/tasks/{id}/session-title` (`api_set_task_session_title`) | Excluded from `tools/list` and refused by `agentAPIGate` (renames the calling run's own standing chat session). |
 | `/api/console/*` and `/api/console-sessions*` | Excluded from `tools/list` and refused by `agentAPIGate` (bound to in-grain sandbox consoles and session tasks). |
 | `POST /api/tasks` (`api_create_task`) | Requires an explicit target in the request body (`repo`, a `templateId` with a target, or `noRepo: true`) because there is no calling task from which to inherit a default repository. |
-| Self-protection on `/api/tasks/{id}/*` | No task ID matches `external:<name>`, so an external agent with the required scope and repository grant can stop, close, retry, pause, or reorder any task in its allowed repositories while still honouring standing-session ownership, pause ownership, and upgrade holds. |
+| Self-protection on `/api/tasks/{id}/*` | No task ID matches `external:<name>`, so an external agent with the required scope and repository grant can stop, close, retry, pause, or reorder any task in its allowed repositories while still honouring standing-session ownership, pause ownership, and upgrade holds. Approval is the exception: see the next row. |
+| Approving: `POST /api/tasks/{id}/approve` (`api_approve`) and `POST /api/tasks/{id}/run-now` (`api_run_now`) on an unapproved task | The G8 approval rail ([Self-protection rails](#self-protection-rails)) applies to external credentials too, owned or not. An owned credential is its owner's delegate, not its owner, so it never stands in for the person a hold waits for. It is refused (403) a task in its own lineage: one the credential filed (the task's origin names `external:<name>`), or one proposed down the chain of a task it filed. It is also refused a task held for a person: `hold_for_approval`, targeting or writing `grain/config` or a person-held change target, a declared `push:` set, `autoMerge`, a `requires_person` or person-only grant, `keep_running`, an `admission` above `standard`, or a capability, write, read or priority its in-grain proposer doesn't hold. This applies whoever filed the task, a person included. `run-now`'s implicit approval is an approval, so on an unapproved task it needs `tasks:admin` as well as `dispatch:write` and asks the same questions, a reason included (`X-Grain-Acting-Reason`, `grain_invoke`'s `reason`, `grain approve`/`grain run-now -reason`): approve is destructive under `tasks:admin`, so neither approves without one. That is `tasks:admin` on the task's repository, or, for a task with no repository, `tasks:admin` on every repository: a credential holding `tasks:admin` only for some repositories approves neither way a task that names none. Approve and `run-now` therefore give the same answer for any unapproved task, over REST, `POST /mcp` and `POST /api/mcp`'s `grain_invoke`. Any other unapproved task is approved under `tasks:admin`, and an approved task is still jumped ahead by `run-now` under `dispatch:write` alone. Owner-trust approval at filing is unchanged. A person approves the rest. |
 | Single-repo collection reads (`GET /api/tasks`, `GET /api/ci/runs`, `GET /api/ci/workflows`, `GET /api/merge-batches`, `GET /api/pipeline/changes`, `GET /api/memory/documents`, `GET /api/memory/documents/{name}`, `GET /api/suite-runs`, `GET /api/ci/faults`) | When a credential is restricted to a single repository and omits `?repo=`, the query filter defaults automatically to that repository, and the answer holds nothing outside it. A credential restricted to several repositories names one in `?repo=` on each read. |
 | External configuration repository (`409 config_managed_externally`) | Works unchanged: when the deployment's configuration lives in an external git repository, configuration-writing tools return `409 Conflict` (`code: "config_managed_externally"`) with the rehearsed git patch to commit. |
 

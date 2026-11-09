@@ -29,7 +29,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
-	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -114,7 +113,7 @@ func TestConsoleSessionHasNo8hDeadline(t *testing.T) {
 		t.Fatalf("GetTask(%s): %v", id, err)
 	}
 	if !director.IsDurable() {
-		t.Fatalf("director session task grants = %+v, want %q", director.Grants, model.DurableCapability)
+		t.Fatalf("director session task admission = %q, want %q", director.Admission, model.AdmissionDurable)
 	}
 	goal, err := store.TaskGoal(ctx, id)
 	if err != nil || goal == nil || goal.Kind != model.GoalPersonCloses {
@@ -234,7 +233,7 @@ func TestConsoleSessionRestartMidExchangeResumesSameConversation(t *testing.T) {
 		MaxWorkers: 1,
 		Config: Config{
 			AgentFramework: model.AgentFrameworkClaude,
-			Capabilities:   SessionTestRegistry(durable.New()),
+			Capabilities:   SessionTestRegistry(),
 		},
 	}
 	if err := RunCycle(ctx, deps, restarted.Add(time.Second)); err != nil {
@@ -303,7 +302,7 @@ func TestConsoleSessionAddingCapabilityMidConversationRestartsAndResumes(t *test
 			AgentFramework:     model.AgentFrameworkClaude,
 			TaskCancellers:     cancellers,
 			CapabilityRestarts: restarts,
-			Capabilities:       SessionTestRegistry(durable.New()),
+			Capabilities:       SessionTestRegistry(),
 		},
 	}
 
@@ -464,7 +463,7 @@ func TestConsoleSessionUsageLimitResumesOnAnotherConnection(t *testing.T) {
 			AgentFramework: model.AgentFrameworkClaude,
 			Pause:          pause,
 			Now:            func() time.Time { return now },
-			Capabilities:   SessionTestRegistry(durable.New()),
+			Capabilities:   SessionTestRegistry(),
 		},
 	}
 

@@ -40,12 +40,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability"
-	"github.com/ai-on-gke/grain/pkg/capability/durable"
-	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
-	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
-	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
@@ -120,145 +115,20 @@ type Capability struct {
 	Summary   string   `json:"summary,omitempty"`
 }
 
-// OfferedCapabilities is every capability a human can attach to a task,
-// and -- because grantsFor and SetCapability reject an id with no row
-// here as "unknown capability" before a model.Grant is ever written --
-// the only route by which any capability is ever granted at all. It
-// started as labels.py's _STYLES table, human-toggled rows only; it is
-// now kept in step with the set of providers grain ships instead, which
-// is what capabilityCatalog (capability_status.go) enumerates and what
-// TestOfferedCapabilitiesCoversEveryShippedCapability holds to.
+// OfferedCapabilities is the bare in-process capabilities a human can
+// attach to a task, the rows Config.Capabilities starts from before the
+// api presets (APICapabilities) are added to it.
 //
-// That drift is why this comment is longer than the table. gcp-key and
-// github-sandbox both had providers pkg/cli/daemon.go registered and
-// no row here, so no task on any deployment, however configured, could
-// ask for either: gcp-key's symptom was that no sandbox ever got
-// gcpkey.SandboxKeyPath, with nothing refused, logged or failed
-// anywhere, because model.ResolveGrants was never reached (an
-// ungrantable capability is rejected a step earlier than a
-// misconfigured one). The reverse drift was here too: "scratch-repo" is
-// v1's label name for what v2's provider calls github-sandbox, so
-// ticking it wrote a grant no provider answers to and
-// prepareCapabilities failed the dispatch outright. The row below
-// carries the provider's own id.
-//
-// The name is Offered, not Default, because this is what a picker may
-// show, not what a task starts with: the second question -- gcp-key,
-// which v1 minted for every sandbox unconditionally
-// (grain/automation/gcp_keys.py) -- is model.Config.DefaultCapabilities,
-// a per-deployment subset of these ids that (*Client).CreateTask seeds
-// every new task's Grants from, plus model.RepoConfig.
-// DefaultCapabilities, the same thing per repo. A row here is what makes
-// an id eligible for either set (UpdateSettings and
-// SetRepoDefaultCapabilities both validate against this listing), so
-// this stays the one gate every grant passes through.
-//
-// What this listing is *not* is every capability grain ships: the
-// CI-only ones (model.CapabilitySpec.CIOnly -- registry-push and
-// package-publish) are deliberately absent, which is why the drift test
-// above compares against the catalog minus those. They were offered
-// here once, with a description ending "Grain CI makes it available
-// only to post-merge release workflows" -- a hint to whoever read the
-// row, and no kind of guard against ticking it. Ticking it was worth
-// nothing at best and a live package-write token in a task's sandbox at
-// worst, since the release gate that sentence describes is applied on
-// the CI path and nowhere else (grain/task-382). A capability that can
-// only be honoured for a CI job is granted where CI capabilities are
-// granted -- per repository, on the repos page -- and not from a
-// picker whose every other row attaches to a task.
-//
-// Seeding at creation rather than granting at dispatch is what settles
-// the failure mode v1 needed a local `except` for. v1 minted per
-// dispatch and swallowed the failure, so a broken minter degraded one
-// sandbox silently; prepareCapabilities (pkg/orchestrator/run.go) treats
-// a refused resolve or a failed materialize as no dispatch at all, and
-// an always-grant set read at dispatch would have turned an expired
-// minter credential into a standing veto on every task in the
-// deployment. A seeded grant needs no separate policy for that: it is an
-// ordinary grant on an ordinary task, so it fails that one task loudly
-// -- and it can be taken off the task, or out of the default set, by
-// whoever is looking at the failure.
+// It is empty: every legacy in-process provider grain shipped was
+// retired onto a capability server method, an api preset or a task
+// setting (docs/capabilities.md), and the seam an edition used to
+// contribute one, capability.RegisterProvider, went with them (task
+// 2876). Capability-server methods are offered from the servers'
+// catalogues instead. It stays so that every caller building a
+// Config keeps one place to start from.
 func OfferedCapabilities() []Capability {
-	offered := []Capability{
-		// No gemini-key row: it was retired onto the gcp server's
-		// gcp#gemini-key (schema migration 103), which is offered with
-		// the other capability-server methods.
-		// No self-debug row: it was retired onto the api:self-debug
-		// preset and the grain server's grain#source method (schema
-		// migration 115), which are offered with the other api presets
-		// and capability-server methods.
-	}
-	// Capabilities contributed from outside core
-	// (capability.RegisterProvider) come first, where the
-	// deployment-level ones begin.
-	for _, r := range capability.Registered() {
-		offered = append(offered, Capability{ID: r.ID, Name: r.Name, Description: r.Description})
-	}
-	offered = append(offered, []Capability{
-		{ID: prioritydispatch.CapabilityName, Name: "Priority dispatch",
-			Description: prioritydispatch.Description},
-		{ID: durable.CapabilityName, Name: "Durable",
-			Description: durable.Description},
-		{ID: "bootstrap-playbooks", Name: "Bootstrap playbooks",
-			Description: "Let this task read grain's own bootstrap playbooks -- the runbooks for setting up GCP service accounts, the primary GitHub connection, CloudRun-based IAP access, and test repos -- so it can walk whoever is on the other end of this chat through one of them"},
-		{ID: "github-sandbox", Name: "GitHub sandbox",
-			Description: "Create a private, single-use GitHub sandbox repo for this task to work in instead of /repo"},
-		{ID: "console", Name: "Interactive console",
-			Description: "Run this task's agent CLI on a terminal in the UI, and keep it running until somebody closes it -- everything else about the task is unchanged, including the pull request its branch becomes"},
-		// Not grain#ci: nobody attaches it by hand. A repository's CI
-		// Mode is the switch, and grain grants grain#ci to that
-		// repository's tasks itself (pkg/capability/grainci's package
-		// doc). Every place a capability is chosen refuses it with
-		// grainci.Refusal, by way of capabilityRefusal.
-		{ID: readissues.CapabilityName, Name: "Read issues",
-			Description: "Let this task read issues and comments from GitHub"},
-	}...)
-	// No row for the model proxies: claude-proxy, openai-proxy and
-	// gemini-proxy were retired onto the in-process model-proxy server's
-	// model-proxy {vendor} (schema migration 100), which is offered with the
-	// other capability-server methods.
-	return offered
+	return []Capability{}
 }
-
-// GitHubTokenCapabilities is one row per named GitHub token this
-// deployment has configured beyond its default one
-// (gitproxy.CredentialSet.ExtraNames), for a caller to append to
-// OfferedCapabilities above -- grain/task-117.
-//
-// These are the one part of the picker that is not a fixed list: which
-// tokens exist is an operator's own files under secrets/github, read
-// once at startup like the rest of that ladder, so this is handed the
-// names rather than reading anything itself. Everything downstream
-// treats them as ordinary capabilities, which is the whole point of
-// giving each token an id (model.GitCredentialCapability) instead of a
-// second, token-shaped picker: they can be defaulted deployment-wide or
-// per repo, attached and detached per task, and reported on Settings'
-// Capabilities tab, with no code that knows about tokens in particular.
-//
-// A task holding two of them still only pushes with one -- the git proxy
-// picks a winner (model's own gitCredentialOverride) rather than
-// refusing -- so the picker deliberately does not try to make them
-// mutually exclusive.
-func GitHubTokenCapabilities(names []string) []Capability {
-	out := make([]Capability, 0, len(names))
-	for _, name := range names {
-		if name == "" {
-			continue
-		}
-		out = append(out, Capability{
-			ID:          model.GitCredentialCapability(name),
-			Name:        GitHubTokenDisplayName(name),
-			Description: githubtoken.Description(name),
-		})
-	}
-	return out
-}
-
-// GitHubTokenDisplayName is what a named token is called on screen, in
-// both listings that show one: the per-task picker's own row
-// (GitHubTokenCapabilities) and Settings' Capabilities tab
-// (capabilityStatuses).
-func GitHubTokenDisplayName(name string) string { return "GitHub token: " + name }
 
 // Config is what a Client needs to know about the deployment it fronts.
 //
@@ -267,6 +137,11 @@ func GitHubTokenDisplayName(name string) string { return "GitHub token: " + name
 // replaces them is Actor -- who a task created here is attributed to,
 // which a GitHub issue used to answer with its own opening account.
 type Config struct {
+	// OfferedGitCredentials lists the named GitHub credentials under
+	// secrets/github this process started with (non-nil when a credential
+	// ladder is configured, even if empty; nil when unconfigured). Used by
+	// Settings -> GitHub tokens and per-client repo#credential validation.
+	OfferedGitCredentials []string
 	// LocalScriptApprovals is where a run's local-script calls wait for a
 	// person (LocalScriptApprovals). nil gives the server one of its own,
 	// which is all a single daemon needs: the runs that post to it and
@@ -423,32 +298,22 @@ type Config struct {
 	// filed with one as its branch is resolved to that pull request
 	// (forkhead.go). nil refuses such a task with a message saying so.
 	GitHubForkPullRequests ForkPullRequests
+	// GitHubDefaultBranches is that client asked which branch a
+	// repository's default is, so a proposal filed live with no base and
+	// a proposer filed with an explicit `base: main` read as landing on
+	// the one branch they do (model.AlignDefaultBases). nil, or a
+	// repository it cannot answer for, compares bases as written -- the
+	// proposal is filed for a person rather than queued.
+	GitHubDefaultBranches DefaultBranchReader
 	// GitHubCredentialAvailable answers through that client's own token source,
 	// including a deployment-wide posting credential when one is configured.
 	GitHubCredentialAvailable func(owner, repo string) bool
-	// CapabilityChecks, when set, is what POST /api/capabilities/{id}/
-	// check calls to test one capability's standing credential -- cmd/
-	// grain/daemon.go's own adapter over the same providers a dispatch
-	// resolves through. It is what turns Settings' **Ready** badge from
-	// "this deployment is configured for that" into something a human
-	// can hold against the far end, which is the only thing that knows
-	// whether the key inside a set secret still works (see
-	// Client.CheckCapability).
-	//
-	// nil means this UI was not handed one (`grain demo`'s throwaway UI,
-	// or any UI not colocated with a daemon holding the credentials),
-	// and the route answers 404 while CapabilityStatus.Checkable reports
-	// false so no pane offers a button that could not work -- the same
-	// nil-means-unavailable contract Secrets, Reboot and Credentials
-	// above already give.
-	CapabilityChecks CapabilityChecker
 	// AgentKeyChecks, when set, is what POST /api/agent-keys/{framework}/
 	// check calls to test one agent framework's own credential against
 	// the vendor that issued it -- pkg/cli/daemon.go's own adapter over
 	// the same secrets store and key files a dispatch reads a credential
-	// from. It is to the "set"/"not set" chip on Settings' Agents tab
-	// what CapabilityChecks above is to **Ready**: presence is the whole
-	// of what a pane reading grain's own store can see, and a key revoked
+	// from. The "set"/"not set" chip on Settings' Agents tab is the
+	// whole of what a pane reading grain's own store can see, and a key revoked
 	// at the far end leaves every stored fact unchanged (see
 	// Client.CheckAgentKey).
 	//
@@ -471,8 +336,8 @@ type Config struct {
 	// nil means this UI was not handed one (`grain demo`'s throwaway UI,
 	// or any UI not colocated with a daemon that has the binary), and
 	// the route answers "not available" while the field stays free text
-	// -- the same nil-means-unavailable contract Secrets, Reboot,
-	// Credentials and CapabilityChecks above already give. A lister that
+	// -- the same nil-means-unavailable contract Secrets, Reboot and
+	// Credentials above already give. A lister that
 	// is wired but fails is a different answer, reported rather than
 	// hidden; see agentModelsResponse.
 	AgentModels AgentModelLister
@@ -525,6 +390,17 @@ type Config struct {
 	// another machine dialing in to /api/hostd/connect (hostd.Remote,
 	// which checks the hostd token itself); nil refuses them.
 	HostdRemote http.Handler
+	// LocalHostdLogins, when set, is the agent CLI logins on the machine
+	// of the co-located grain hostd (model.LocalHostd), from its hello,
+	// and whether it said: what the host pickers show beside "local". A
+	// dialing-in hostd's come with its session (hostd.RemotePeer.Logins).
+	LocalHostdLogins func(ctx context.Context) ([]string, bool)
+	// AmbientNeedsHost, when set, reports whether a connection of
+	// framework would start its CLI through grain hostd, with stored as
+	// Settings -> Models' run locations: where it would, a connection
+	// with ambient credentials has to name its host
+	// (model.CheckAmbientPlacement). Nil refuses no ambient connection.
+	AmbientNeedsHost func(framework string, stored map[string]model.CLIRunSetting) bool
 	// Upgrader is set only when this deployment was told how it
 	// upgrades itself: which image to pull per branch
 	// (pkg/cli/daemon.go's -upgrade-image, the shape scripts/setup.sh
@@ -1192,6 +1068,12 @@ type Config struct {
 	DBDSN string
 	// DataDir is the root data directory of the grain installation.
 	DataDir string
+	// ReleaseApprovalDir is where the release-approval signing key
+	// (pkg/releaseapproval.KeyFile) is kept, when it is not DataDir: the
+	// demo, which has no data directory, keeps one in its throwaway
+	// store's directory so an Inbox Approve over -github-sim can sign
+	// its record.
+	ReleaseApprovalDir string
 	// SourceDB is the raw *sql.DB backing this store, which a task's
 	// database access queries (task_db.go).
 	SourceDB *sql.DB
@@ -1225,6 +1107,12 @@ type Config struct {
 	// (-ui-allowed-principals). When empty, defaults to $GRAIN_ALLOWED_PRINCIPALS,
 	// or the deployment owner (Actor) plus provisioned service accounts.
 	AllowedPrincipals []string
+	// DeploymentOwner is -deployment-owner ($GRAIN_DEPLOYMENT_OWNER): the
+	// human email address that owns this deployment for RBAC
+	// (IsDeploymentOwner, requireDeploymentOwner) and holds an immutable
+	// grain/operator floor on the access allowlist, regardless of the OS
+	// account the daemon runs as.
+	DeploymentOwner string
 	// ProvisionedServiceAccounts lists daemon-owned GCP service accounts grain
 	// itself provisions for this deployment (never gcp-key sandbox agent
 	// accounts), included in the default allowlist when AllowedPrincipals is unset.

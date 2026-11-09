@@ -260,7 +260,7 @@ test("adds, tests, configures, edits, grants, denies by policy and removes a cap
   // Removing it goes back to the list, which no longer has it, and the
   // demo server's row still opens its page.
   await expect(
-    page.getByRole("list", { name: "Capability servers" }),
+    page.getByRole("list", { name: "Capability servers", exact: true }),
   ).toBeVisible();
   await expect(serverRow(page, NEW)).toHaveCount(0);
   await openServer(page, DEMO);
@@ -290,7 +290,10 @@ test("lists the built-in capability servers first, full width, badged and disabl
   page,
 }) => {
   await page.goto("/settings/capabilities#capability-servers");
-  const list = page.getByRole("list", { name: "Capability servers" });
+  const list = page.getByRole("list", {
+    name: "Capability servers",
+    exact: true,
+  });
   await expect(list).toBeVisible();
   const rows = list.locator("[data-capability-server-row]");
   await expect(rows.first()).toHaveAttribute("data-builtin-row", /.+/);
@@ -402,12 +405,12 @@ test("configures the built-in config-map server with config maps and secret maps
 }) => {
   await page.goto("/settings/capabilities#capability-servers");
   await page
-    .getByRole("list", { name: "Capability servers" })
+    .getByRole("list", { name: "Capability servers", exact: true })
     .locator('[data-builtin-row="config-map"]')
     .click();
   const cmCard = page.locator('[data-builtin="config-map"]');
   await expect(cmCard.getByTestId("capability-server-state")).toHaveText(
-    "needs configuring",
+    "attached",
   );
   await cmCard.getByRole("button", { name: "Edit server settings" }).click();
   const cmForm = cmCard.getByTestId("capability-server-config");
@@ -548,7 +551,7 @@ test("stops reading the list once nothing is left attaching", async ({
   });
   await page.goto("/settings/capabilities#capability-servers");
   await expect(
-    page.getByRole("list", { name: "Capability servers" }),
+    page.getByRole("list", { name: "Capability servers", exact: true }),
   ).toBeVisible();
   await page.waitForTimeout(14000);
   const settled = reads;

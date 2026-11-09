@@ -18,12 +18,12 @@
 //
 // They were once restricted to admin teams (grain/task-1557). Since the
 // single-tenant reset (docs/single-tenant-reset.md, stage 4) every task
-// may be granted any of them, and this package is only the one place
-// cmd/grain's capabilityProviders and pkg/ui's catalog build them from.
+// may be granted any of them. Every one of them has since been retired
+// onto a capability server method or an api preset; what is left here is
+// TeamScoped, the list of those methods once held team-scoped.
 package admincaps
 
 import (
-	"github.com/ai-on-gke/grain/pkg/capability"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -50,17 +50,4 @@ func IsTeamScoped(id string) bool {
 		}
 	}
 	return false
-}
-
-// Providers builds every host- or deployment-level provider that needs
-// no deployment configuration. Core's own are all retired onto capability
-// servers (self-debug, the last, onto api:self-debug and grain#source). gcp-key and package-publish are built by
-// the caller, which has their other settings. Every capability registered
-// with capability.RegisterProvider follows core's.
-func Providers() []model.CapabilityProvider {
-	var providers []model.CapabilityProvider
-	for _, r := range capability.Registered() {
-		providers = append(providers, r.New())
-	}
-	return providers
 }

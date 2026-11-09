@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useLayoutEffect, useMemo } from "react";
 import { CssBaseline, ThemeProvider, useMediaQuery } from "@mui/material";
 import {
   darkTheme,
@@ -47,7 +47,7 @@ function ResolvedThemeProvider({ children }) {
   // style.css keys its own custom properties (state dots, badges, the
   // task list layout -- pieces MUI has no primitive for) off this
   // attribute rather than duplicating MUI's palette choice in JS.
-  useEffect(() => {
+  useLayoutEffect(() => {
     document.documentElement.dataset.theme = resolvedMode;
   }, [resolvedMode]);
 

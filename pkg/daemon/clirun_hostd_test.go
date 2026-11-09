@@ -32,8 +32,10 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/agent/codex"
+	"github.com/ai-on-gke/grain/pkg/capability/servers"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/ui"
 	"github.com/ai-on-gke/grain/pkg/whererun"
 )
 
@@ -251,9 +253,7 @@ func TestAgyModelListerUsesHostdWhenAgyRunsOnHostAndContainerOtherwise(t *testin
 		"--help) echo '  --effort  Reasoning effort for the current CLI session (low|medium|high)' ;;\n" +
 		"models) printf 'Fetching available models...\\ngemini-3.1-pro-high\\tGemini 3.1 Pro (High)\\n' ;;\n" +
 		"esac\n"
-	if err := os.WriteFile(hostAgy, []byte(hostScript), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	writeExecutableStub(t, hostAgy, hostScript)
 
 	// The container's own agy has no ambient corp login: when asked under
 	// ambient auth it refuses with "Please sign in", and when given an API
@@ -273,9 +273,7 @@ func TestAgyModelListerUsesHostdWhenAgyRunsOnHostAndContainerOtherwise(t *testin
 		"  printf 'Fetching available models...\\ngemini-3.8-flash-low\\tGemini 3.8 Flash (Low)\\n'\n" +
 		"  ;;\n" +
 		"esac\n"
-	if err := os.WriteFile(containerAgy, []byte(containerScript), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	writeExecutableStub(t, containerAgy, containerScript)
 
 	allowPath := filepath.Join(dir, "hostd.yaml")
 	allowYAML := fmt.Sprintf("clis:\n  agy:\n    path: %s\n    paths_under: [%s]\n    cwd_under: [%s]\n    env: [HOME, AGY_CLI_DISABLE_AUTO_UPDATE, GEMINI_API_KEY, GOOGLE_API_KEY]\n",
@@ -593,9 +591,7 @@ func TestBuildCodexFrameworkDetachedSharesAuthFileAndDefersMCPServer(t *testing.
 		t.Fatal(err)
 	}
 	fakeCodex := filepath.Join(t.TempDir(), "codex")
-	if err := os.WriteFile(fakeCodex, []byte("#!/bin/sh\n"+`if [ "$1 $2" = "debug models" ]; then echo '{"models":[{"slug":"gpt-test"}]}'; exit 0; fi`+"\necho 'codex-cli "+codex.ReviewedCLIVersion+"'\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeExecutableStub(t, fakeCodex, "#!/bin/sh\n"+`if [ "$1 $2" = "debug models" ]; then echo '{"models":[{"slug":"gpt-test"}]}'; exit 0; fi`+"\necho 'codex-cli "+codex.ReviewedCLIVersion+"'\n")
 	allowlist := fmt.Sprintf("clis:\n  codex-detached:\n    path: %s\n    env: [CODEX_HOME, CODEX_EXEC_SERVER_URL, OPENAI_API_KEY]\n    paths_under: [%%[2]s, %s, %s]\n    cwd_under: [%%[2]s, %s]\n# %%[1]s\n", fakeCodex, dataDir, os.TempDir(), os.TempDir())
 	socket := startTestHostd(t, allowlist)
 	t.Setenv("TMPDIR", t.TempDir())
@@ -697,8 +693,8 @@ func TestUnreachableHostdIsDialedAtMostOncePerInterval(t *testing.T) {
 		clockMu.Unlock()
 	}
 	t.Cleanup(func() {
-		hostdOffersNow = prevNow
 		resetHostdUnreachableCache()
+		hostdOffersNow = prevNow
 	})
 
 	dir, err := os.MkdirTemp("", "hostd-dead")
@@ -751,9 +747,11 @@ func TestUnreachableHostdIsDialedAtMostOncePerInterval(t *testing.T) {
 		t.Fatalf("resolutions within hostdUnreachableTTL dialed hostd %d times, want still 1", got)
 	}
 
-	// Once the interval elapses, the next resolution dials again.
+	// Once the interval elapses, the next resolution dials again -- in
+	// the background, answering with the expired failure meanwhile.
 	advance(hostdUnreachableTTL)
 	_ = cfg.ResolveCLIRuns(ctx)
+	sharedHostdUnreachableCache.refreshing.Wait()
 	if got := dials.Load(); got != 2 {
 		t.Fatalf("resolution after hostdUnreachableTTL dialed hostd %d times, want 2", got)
 	}
@@ -814,5 +812,250 @@ func TestUnreachableHostdIsDialedAtMostOncePerInterval(t *testing.T) {
 
 	if r := absentCfg.ResolveCLIRun(ctx, model.AgentFrameworkAntigravity); r.Err != "" || r.Via != ViaHostd {
 		t.Fatalf("after hostd started on %s, agy resolved %+v, want reachable host via hostd", absentSock, r)
+	}
+}
+
+// Past hostdUnreachableTTL, a poll behind a hung grain hostd (its socket
+// still there, nothing answering: the SIGSTOP shape) is answered at once
+// with the failure already known while one background probe refreshes it,
+// rather than waiting out hostdOffersTimeout behind that probe.
+func TestExpiredUnreachableHostdIsServedStaleWhileAProbeHangs(t *testing.T) {
+	resetHostdUnreachableCache()
+	var clockMu sync.Mutex
+	now := time.Date(2026, 11, 8, 4, 0, 0, 0, time.UTC)
+	prevNow := hostdOffersNow
+	hostdOffersNow = func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return now
+	}
+	advance := func(d time.Duration) {
+		clockMu.Lock()
+		now = now.Add(d)
+		clockMu.Unlock()
+	}
+	t.Cleanup(func() {
+		resetHostdUnreachableCache()
+		hostdOffersNow = prevNow
+	})
+
+	dir, err := os.MkdirTemp("", "hostd-hung")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "hung.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Until hang is set the peer hangs up at once, so the first failure is
+	// learned quickly; after it, connections are held open unanswered.
+	var hang atomic.Bool
+	var dials atomic.Int32
+	held := make(chan net.Conn, 4)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			dials.Add(1)
+			if hang.Load() {
+				held <- conn
+				continue
+			}
+			_ = conn.Close()
+		}
+	}()
+	var heldConns []net.Conn
+	t.Cleanup(func() {
+		ln.Close()
+		for _, c := range heldConns {
+			c.Close()
+		}
+	})
+
+	ctx := context.Background()
+	cfg := withExecutor(Config{HostdSocket: sock, AgyRun: model.CLIRunHost}, inContainer, nil)
+	first := cfg.ResolveCLIRun(ctx, model.AgentFrameworkAntigravity)
+	if first.Err == "" || dials.Load() != 1 {
+		t.Fatalf("first resolution = %+v after %d dials, want an error after 1", first, dials.Load())
+	}
+
+	hang.Store(true)
+	advance(hostdUnreachableTTL + time.Second)
+
+	// The first poll past the TTL starts the refresh and does not wait on it.
+	start := time.Now()
+	r := cfg.ResolveCLIRun(ctx, model.AgentFrameworkAntigravity)
+	if took := time.Since(start); took > 200*time.Millisecond {
+		t.Fatalf("poll past hostdUnreachableTTL took %s behind a hung hostd, want the known failure at once", took)
+	}
+	if r.Err != first.Err {
+		t.Fatalf("poll past hostdUnreachableTTL = %q, want the known failure %q", r.Err, first.Err)
+	}
+	select {
+	case c := <-held:
+		heldConns = append(heldConns, c)
+	case <-time.After(5 * time.Second):
+		t.Fatal("no background probe dialed hostd after the TTL expired")
+	}
+
+	// While that probe is still hung, further polls and status reads are
+	// answered at once too, and start no second probe.
+	start = time.Now()
+	if r := cfg.ResolveCLIRun(ctx, model.AgentFrameworkAntigravity); r.Err != first.Err {
+		t.Fatalf("poll during the refresh = %q, want the known failure %q", r.Err, first.Err)
+	}
+	if st := cfg.HostExecutorStatus(ctx); st.Hostd == nil || st.Hostd.Reachable {
+		t.Fatalf("HostExecutorStatus during the refresh = %+v, want unreachable", st.Hostd)
+	}
+	if took := time.Since(start); took > 200*time.Millisecond {
+		t.Fatalf("polls during the refresh took %s, want the known failure at once", took)
+	}
+	if got := dials.Load(); got != 2 {
+		t.Fatalf("polls during the refresh dialed hostd %d times, want 2 (one refresh)", got)
+	}
+
+	// Once the hung probe fails (here its peer finally hangs up), its
+	// failure is the fresh one: polls within the next TTL dial nothing.
+	for _, c := range heldConns {
+		c.Close()
+	}
+	sharedHostdUnreachableCache.refreshing.Wait()
+	advance(hostdUnreachableTTL / 2)
+	if r := cfg.ResolveCLIRun(ctx, model.AgentFrameworkAntigravity); r.Err == "" {
+		t.Fatalf("poll after the refresh failed = %+v, want unreachable", r)
+	}
+	if got := dials.Load(); got != 2 {
+		t.Fatalf("poll within the refreshed TTL dialed hostd %d times, want still 2", got)
+	}
+}
+
+// HostCapabilityEntries (used by GET /api/capability-servers/host-entries)
+// shares queryHostdOffers' stale-while-revalidate cache so polling behind a
+// hung host agent returns in <200ms with one background probe, and replacing
+// the socket inode invalidates the cache immediately even if mtime matches.
+func TestHostCapabilityEntriesUsesStaleWhileRevalidateAndDetectsSameMtimeInodeReplacement(t *testing.T) {
+	resetHostdUnreachableCache()
+	var clockMu sync.Mutex
+	now := time.Date(2026, 11, 8, 5, 0, 0, 0, time.UTC)
+	prevNow := hostdOffersNow
+	hostdOffersNow = func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return now
+	}
+	advance := func(d time.Duration) {
+		clockMu.Lock()
+		now = now.Add(d)
+		clockMu.Unlock()
+	}
+	t.Cleanup(func() {
+		resetHostdUnreachableCache()
+		hostdOffersNow = prevNow
+	})
+
+	dir, err := os.MkdirTemp("", "hostd-cap-entries")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "host.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origInfo, err := os.Stat(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var hang atomic.Bool
+	var dials atomic.Int32
+	held := make(chan net.Conn, 4)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			dials.Add(1)
+			if hang.Load() {
+				held <- conn
+				continue
+			}
+			_ = conn.Close()
+		}
+	}()
+	var heldConns []net.Conn
+	t.Cleanup(func() {
+		ln.Close()
+		for _, c := range heldConns {
+			c.Close()
+		}
+	})
+
+	ctx := context.Background()
+	cfg := withExecutor(Config{HostdSocket: sock}, inContainer, nil)
+	base := servers.New(servers.Options{Hostd: cfg.capabilityHostd()})
+	h := newHostdCapabilityServers(ctx, base, servers.Options{Hostd: cfg.capabilityHostd()}, nil)
+	live := NewLiveConfig(nil, nil, cfg, nil).WithCapabilityServers(base).withHostdCapabilityServers(h)
+	prober, ok := capabilityServerStatuses(live).(ui.CapabilityServerProber)
+	if !ok {
+		t.Fatal("capabilityServerStatuses does not implement CapabilityServerProber")
+	}
+
+	if _, err := prober.HostCapabilityEntries(ctx); err == nil || dials.Load() != 1 {
+		t.Fatalf("first HostCapabilityEntries err = %v after %d dials, want error after 1", err, dials.Load())
+	}
+
+	hang.Store(true)
+	advance(hostdUnreachableTTL + time.Second)
+
+	start := time.Now()
+	if _, err := prober.HostCapabilityEntries(ctx); err == nil {
+		t.Fatal("HostCapabilityEntries past TTL = nil error, want cached failure")
+	}
+	if took := time.Since(start); took > 200*time.Millisecond {
+		t.Fatalf("HostCapabilityEntries past TTL took %s behind hung socket, want <200ms", took)
+	}
+	select {
+	case c := <-held:
+		heldConns = append(heldConns, c)
+	case <-time.After(5 * time.Second):
+		t.Fatal("no background probe dialed hostd after TTL expiry")
+	}
+	start = time.Now()
+	if _, err := prober.HostCapabilityEntries(ctx); err == nil {
+		t.Fatal("HostCapabilityEntries during refresh = nil error")
+	}
+	if took := time.Since(start); took > 200*time.Millisecond || dials.Load() != 2 {
+		t.Fatalf("during refresh took=%s dials=%d, want <200ms and 2 dials", took, dials.Load())
+	}
+	for _, c := range heldConns {
+		c.Close()
+	}
+	heldConns = nil
+	sharedHostdUnreachableCache.refreshing.Wait()
+
+	// Replace the socket with a live hostd at the exact same path AND reset
+	// its mtime to origInfo.ModTime(): inode comparison (os.SameFile) must
+	// invalidate the unreachable entry immediately within the TTL.
+	_ = ln.Close()
+	_ = os.Remove(sock)
+	liveSock := startTestHostd(t, "capabilities:\n  walk-cap:\n    command: %[1]s\n")
+	if err := os.Symlink(liveSock, sock); err != nil {
+		// Wait: os.Stat follows symlinks, so a symlink to liveSock has liveSock's
+		// own inode and we can set liveSock's mtime to origInfo.ModTime()!
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(liveSock, origInfo.ModTime(), origInfo.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := prober.HostCapabilityEntries(ctx)
+	if err != nil || !slices.Equal(entries, []string{"walk-cap"}) {
+		t.Fatalf("HostCapabilityEntries after same-mtime inode swap = (%v, %v), want ([walk-cap], nil)", entries, err)
 	}
 }

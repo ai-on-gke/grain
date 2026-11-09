@@ -433,25 +433,32 @@ func TestCLICapabilityAttachAndDetachControlWhatARealDispatchMaterializes(t *tes
 	sandboxes := credentialed(t, remote)
 
 	storeDir := t.TempDir()
-	cap := &countingCapability{name: "read-issues"}
+	const capabilityID = "test-capability"
+	cap := &countingCapability{name: capabilityID}
 	cfg := orchestrator.Config{Capabilities: model.NewCapabilityRegistry(cap)}
 
 	// Task A: attached through the real CLI verb, left attached, and
 	// actually dispatched -- the capability must be materialized once and
 	// revoked once by the time its run finishes.
-	createdA := runCLIStore(t, bin, storeDir, "-json", "create",
-		"-title", "uses a capability", "-body", "...", "-repo", owner+"/"+repoName, "-approve")
 	var taskA ui.Task
-	if err := json.Unmarshal([]byte(createdA), &taskA); err != nil {
-		t.Fatalf("parsing grain create -json output: %v\n%s", err, createdA)
-	}
-	attached := runCLIStore(t, bin, storeDir, "-json", "capability", taskA.ID, "read-issues", "attach")
 	var attachedTask ui.Task
-	if err := json.Unmarshal([]byte(attached), &attachedTask); err != nil {
-		t.Fatalf("parsing grain capability attach -json output: %v\n%s", err, attached)
-	}
-	if len(attachedTask.Capabilities) != 1 || attachedTask.Capabilities[0] != "read-issues" {
-		t.Fatalf("capabilities after attach = %+v, want [read-issues]", attachedTask.Capabilities)
+	withStore(t, storeDir, func(store *model.Store, _ context.Context) {
+		srvURL := newTestServer(t, accessCodeServer(ui.NewClient(ui.Config{
+			Actor:        ui.DefaultActor("operator"),
+			Capabilities: []ui.Capability{{ID: capabilityID, Name: "Test capability"}},
+		}, store)))
+		createdA := runCLI(t, bin, "-server", srvURL, "-json", "create",
+			"-title", "uses a capability", "-body", "...", "-repo", owner+"/"+repoName, "-approve")
+		if err := json.Unmarshal([]byte(createdA), &taskA); err != nil {
+			t.Fatalf("parsing grain create -json output: %v\n%s", err, createdA)
+		}
+		attached := runCLI(t, bin, "-server", srvURL, "-json", "capability", taskA.ID, capabilityID, "attach")
+		if err := json.Unmarshal([]byte(attached), &attachedTask); err != nil {
+			t.Fatalf("parsing grain capability attach -json output: %v\n%s", err, attached)
+		}
+	})
+	if len(attachedTask.Capabilities) != 1 || attachedTask.Capabilities[0] != capabilityID {
+		t.Fatalf("capabilities after attach = %+v, want [%s]", attachedTask.Capabilities, capabilityID)
 	}
 
 	deps := orchestrator.Deps{
@@ -480,18 +487,24 @@ func TestCLICapabilityAttachAndDetachControlWhatARealDispatchMaterializes(t *tes
 	// SetCapability's own doc comment says detaching is what a second
 	// grants write is for, and the point here is that a detached grant
 	// leaves no trace on the run at all, not even a Materialize call.
-	createdB := runCLIStore(t, bin, storeDir, "-json", "create",
-		"-title", "never actually uses a capability", "-body", "...", "-repo", owner+"/"+repoName, "-approve")
 	var taskB ui.Task
-	if err := json.Unmarshal([]byte(createdB), &taskB); err != nil {
-		t.Fatalf("parsing grain create -json output: %v\n%s", err, createdB)
-	}
-	runCLIStore(t, bin, storeDir, "-json", "capability", taskB.ID, "read-issues", "attach")
-	detached := runCLIStore(t, bin, storeDir, "-json", "capability", taskB.ID, "read-issues", "detach")
 	var detachedTask ui.Task
-	if err := json.Unmarshal([]byte(detached), &detachedTask); err != nil {
-		t.Fatalf("parsing grain capability detach -json output: %v\n%s", err, detached)
-	}
+	withStore(t, storeDir, func(store *model.Store, _ context.Context) {
+		srvURL := newTestServer(t, accessCodeServer(ui.NewClient(ui.Config{
+			Actor:        ui.DefaultActor("operator"),
+			Capabilities: []ui.Capability{{ID: capabilityID, Name: "Test capability"}},
+		}, store)))
+		createdB := runCLI(t, bin, "-server", srvURL, "-json", "create",
+			"-title", "never actually uses a capability", "-body", "...", "-repo", owner+"/"+repoName, "-approve")
+		if err := json.Unmarshal([]byte(createdB), &taskB); err != nil {
+			t.Fatalf("parsing grain create -json output: %v\n%s", err, createdB)
+		}
+		runCLI(t, bin, "-server", srvURL, "-json", "capability", taskB.ID, capabilityID, "attach")
+		detached := runCLI(t, bin, "-server", srvURL, "-json", "capability", taskB.ID, capabilityID, "detach")
+		if err := json.Unmarshal([]byte(detached), &detachedTask); err != nil {
+			t.Fatalf("parsing grain capability detach -json output: %v\n%s", err, detached)
+		}
+	})
 	if len(detachedTask.Capabilities) != 0 {
 		t.Fatalf("capabilities after detach = %+v, want none", detachedTask.Capabilities)
 	}

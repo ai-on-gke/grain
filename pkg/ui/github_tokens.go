@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -187,6 +188,11 @@ func (c *Client) gitHubTokens(ctx context.Context) []gitHubTokenInfo {
 	}
 	present := credentials.Names()
 	offered := map[string]bool{}
+	for _, name := range c.Config.OfferedGitCredentials {
+		if name != "" {
+			offered[name] = true
+		}
+	}
 	for _, capability := range c.Config.Capabilities {
 		if name, ok := model.GitCredentialName(capability.ID); ok {
 			offered[name] = true
@@ -224,12 +230,101 @@ func (c *Client) gitHubTokens(ctx context.Context) []gitHubTokenInfo {
 			}
 		}
 		if !(info.Present && credentials.IsAmbient(name)) {
-			info.Capability = model.GitCredentialCapability(name)
+			info.Capability = model.RepoCredentialGrant(name)
 			info.NeedsRestart = info.Present != info.Offered
 		}
 		out = append(out, info)
 	}
 	return out
+}
+
+func matchesNamedGitCredentialGrant(grant, name string) bool {
+	cred, ok := model.GitCredentialName(grant)
+	return ok && cred == name
+}
+
+// gitCredentialGrantHolders lists everything in the store holding a capability
+// grant selecting the named git credential -- matching both canonical
+// https://grain.dev/capabilities/repo#credential={"credential":"<name>"} and
+// legacy github-credential:<name> -- across unsettled tasks, templates,
+// schedules, deployment/repository default and CI capabilities, console
+// sessions, catalogue defaults, and Settings workflows.
+func (c *Client) gitCredentialGrantHolders(ctx context.Context, name string) ([]string, error) {
+	if c.Store == nil {
+		return nil, nil
+	}
+	match := func(grant string) bool {
+		return matchesNamedGitCredentialGrant(grant, name)
+	}
+	holders, err := c.grantHolders(ctx, match)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var out []string
+	add := func(label string) {
+		if label == "" || seen[label] {
+			return
+		}
+		seen[label] = true
+		out = append(out, label)
+	}
+	for _, h := range holders {
+		switch h.Kind {
+		case "task":
+			add("task " + h.ID)
+		case "template":
+			add("template " + h.ID)
+		case "schedule":
+			add("schedule " + h.ID)
+		case "default":
+			if h.ID == "deployment" {
+				add("deployment default capabilities")
+			} else {
+				add("repository " + h.ID + " default capabilities")
+			}
+		case "workflow":
+			add("workflow " + h.ID)
+		default:
+			add(h.Kind + " " + h.ID)
+		}
+	}
+	cfg, err := c.Store.GetConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if cfg != nil {
+		for _, cs := range cfg.ConsoleSessions {
+			if slices.ContainsFunc(cs.Capabilities, match) {
+				label := cs.ID
+				if label == "" {
+					label = cs.Title
+				}
+				add("console session " + label)
+			}
+		}
+		if cat := cfg.CapabilityPolicy.Catalogue; cat != nil {
+			if slices.ContainsFunc(cat.Defaults.Task, match) || slices.ContainsFunc(cat.Defaults.CI, match) {
+				add("catalogue default capabilities")
+			}
+			for repo, rd := range cat.Defaults.Repos {
+				if slices.ContainsFunc(rd.Task, match) || slices.ContainsFunc(rd.CI, match) {
+					add("catalogue defaults for " + repo)
+				}
+			}
+		}
+	}
+	repoConfigs, err := c.Store.ListRepoConfigs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, rc := range repoConfigs {
+		if slices.ContainsFunc(rc.CICapabilities, match) {
+			add("repository " + rc.Repo.String() + " CI capabilities")
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // handleListGitHubTokens answers GET /api/github-tokens: the
@@ -330,6 +425,17 @@ func (s *Server) handleDeleteGitHubToken(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, fmt.Errorf(
 			"the deployment's git connections %q still name %q: repoint or remove them first, "+
 				"or every repo they cover fails its next push", scopes, name))
+		return
+	}
+	holders, err := s.tasks.gitCredentialGrantHolders(r.Context(), name)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if len(holders) > 0 {
+		writeError(w, http.StatusBadRequest, fmt.Errorf(
+			"credential %q is still in use by capability grants (%s): detach or update them first",
+			name, strings.Join(holders, ", ")))
 		return
 	}
 	if err := credentials.Remove(name); err != nil {

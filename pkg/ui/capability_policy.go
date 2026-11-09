@@ -99,9 +99,19 @@ func (c *Client) SetCapabilityPolicy(ctx context.Context, p model.CapabilityPoli
 	if err := c.checkSettingsWritable(ctx, "grain_config"); err != nil {
 		return err
 	}
+	var repoConfigs []model.RepoConfig
+	if p.Catalogue != nil {
+		var err error
+		repoConfigs, err = c.Store.ListRepoConfigs(ctx)
+		if err != nil {
+			return err
+		}
+	}
 	return c.Store.UpdateConfig(ctx, func(cfg *model.Config) error {
 		if p.Catalogue == nil {
 			p.Catalogue = cfg.CapabilityPolicy.Catalogue
+		} else if err := validateCataloguePolicySave(p.Catalogue, cfg.MCPServers, cfg.DefaultCapabilities, repoConfigs); err != nil {
+			return err
 		}
 		cfg.CapabilityPolicy = p
 		return nil

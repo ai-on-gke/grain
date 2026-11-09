@@ -41,8 +41,9 @@ func TestInProcessCapabilityServersAreListedWithTheirMethods(t *testing.T) {
 		byID[s.ID] = s
 	}
 	for id, want := range map[string]struct{ name, method string }{
-		grainserver.ID:     {"grain", grainserver.HostExecMethod},
-		grainserver.RepoID: {"repo", grainserver.RepoWriteMethod},
+		grainserver.ID:       {"grain", grainserver.HostExecMethod},
+		grainserver.RepoID:   {"repo", grainserver.RepoWriteMethod},
+		grainserver.GitHubID: {"github", grainserver.ReadIssuesMethod},
 	} {
 		s, ok := byID[id]
 		if !ok {

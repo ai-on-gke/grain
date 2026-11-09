@@ -328,11 +328,12 @@ func OpenStateRepo(ctx context.Context, dataDir string) (*staterepo.Repo, error)
 		return nil, err
 	}
 	repo, err := staterepo.Open(ctx, staterepo.Config{
-		Dir:     StateRepoDir(dataDir),
-		DataDir: dataDir,
-		Remote:  settings.Remote,
-		Branch:  settings.Branch,
-		Token:   RepoToken(dataDir, settings.Remote, settings.TokenFile),
+		Dir:        StateRepoDir(dataDir),
+		DataDir:    dataDir,
+		Remote:     settings.Remote,
+		Branch:     settings.Branch,
+		Token:      RepoToken(dataDir, settings.Remote, settings.TokenFile),
+		SSHKeyFile: settings.SSHKeyFile,
 		// grain's own commits, attributed to grain: a reviewer of a
 		// settings diff should be able to tell at a glance which changes
 		// the daemon exported and which a human or an agent proposed.
@@ -364,7 +365,7 @@ func OpenStateRepo(ctx context.Context, dataDir string) (*staterepo.Repo, error)
 }
 
 func loadStateRepo(ctx context.Context, dataDir string, repo *staterepo.Repo, db *sql.DB, migrated storeMigration) error {
-	if settings, err := staterepo.LoadSettings(dataDir); err == nil && strings.TrimSpace(settings.Remote) != "" {
+	if settings, err := staterepo.LoadSettings(dataDir); err == nil && settings.IsExternal() {
 		return staterepo.LoadExternal(ctx, repo, db, model.SchemaVersion)
 	}
 	err := staterepo.Load(ctx, repo, db, model.SchemaVersion)
@@ -743,7 +744,7 @@ const stateSyncInterval = 30 * time.Second
 // instead of exiting with the error
 // (docs/test-runs/2026-10-15-k8s-run-hosts-sandboxes.md, F3).
 func startStateSync(ctx context.Context, sync, syncAll func(context.Context) (bool, error), nudge <-chan struct{}) (stop func()) {
-	loopCtx, cancel := context.WithCancel(ctx)
+	loopCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)

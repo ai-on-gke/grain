@@ -54,7 +54,7 @@ go test -v ./pkg/dockervm/... ./pkg/dockercli/...
 - Verify container stop timeout and graceful shutdown handling.
 
 ### 4. IPv6 End to End (docker and kind)
-`test/run-nightly-suite.sh` stage 5 runs `test/e2e-ipv6.sh docker kind` when the host has a usable `/dev/kvm`, docker, kind and kubectl. `.grain/workflows/e2e-ipv6.yml` also runs it every night on its own. Read its `PASS`/`FAIL`/`SKIP` lines. Treat a `FAIL` on a check that passed the night before as a regression in netshim's IPv6 derivation or in the guest scripts (`granule-configure-ip6`, `granule-configure-routes`, `granule-configure-dns`). Don't treat it as an infrastructure flake unless the failing line is a cluster or network that never came up. Run GKE (`.grain/workflows/e2e-ipv6-gke.yml`) only if a human asks for it.
+`test/run-nightly-suite.sh` stage 5 runs `test/e2e-ipv6.sh docker kind` when the host has a usable `/dev/kvm`, docker, kind and kubectl. `.github/workflows/e2e-ipv6.yml` also runs it every night on its own, on GitHub Actions. Read its `PASS`/`FAIL`/`SKIP` lines. Treat a `FAIL` on a check that passed the night before as a regression in netshim's IPv6 derivation or in the guest scripts (`granule-configure-ip6`, `granule-configure-routes`, `granule-configure-dns`). Don't treat it as an infrastructure flake unless the failing line is a cluster or network that never came up. Run GKE (`.github/workflows/e2e-ipv6-gke.yml`) only if a human asks for it.
 
 ## Evaluation & Reporting Criteria
 1. **Manifest Validity**: Confirm all Kubernetes manifests conform to standard Kubernetes v1 Pod schemas.

@@ -311,23 +311,23 @@ func TestUpdateSettingsRoundTripsDefaultCapabilities(t *testing.T) {
 
 	// Repeated deliberately: a picker can produce a duplicate, and this
 	// is a set.
-	defaults := []string{"bootstrap-playbooks", "bootstrap-playbooks"}
+	defaults := []string{"github-sandbox", "github-sandbox"}
 	saved, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &defaults})
 	if err != nil {
 		t.Fatalf("setting default capabilities: %v", err)
 	}
-	if !reflect.DeepEqual(saved.DefaultCapabilities, []string{"bootstrap-playbooks"}) {
+	if !reflect.DeepEqual(saved.DefaultCapabilities, []string{model.GitHubSandboxRepoGrant}) {
 		t.Fatalf("DefaultCapabilities = %v, want [self-debug] with the repeat dropped", saved.DefaultCapabilities)
 	}
 	read, err = c.GetSettings(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"bootstrap-playbooks"}) {
+	if !reflect.DeepEqual(read.DefaultCapabilities, []string{model.GitHubSandboxRepoGrant}) {
 		t.Fatalf("DefaultCapabilities = %v after a re-read, want [self-debug]", read.DefaultCapabilities)
 	}
 	for _, status := range read.Capabilities {
-		if want := status.ID == "bootstrap-playbooks"; status.Default != want {
+		if want := status.ID == model.GitHubSandboxRepoGrant || status.ID == "github-sandbox"; status.Default != want {
 			t.Errorf("capability %s: Default = %t, want %t", status.ID, status.Default, want)
 		}
 	}
@@ -392,30 +392,30 @@ func TestUpdateSettingsAcceptsDroppingARetiredDefaultCapability(t *testing.T) {
 	// it can only be one that had a row when it was chosen and lost it to
 	// an upgrade since (OfferedCapabilities' own "scratch-repo", now
 	// github-sandbox).
-	putDefaultCapabilities(t, ctx, store, "bootstrap-playbooks", "scratch-repo")
+	putDefaultCapabilities(t, ctx, store, "github-sandbox", "scratch-repo")
 
 	read, err := c.GetSettings(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"bootstrap-playbooks", "scratch-repo"}) {
+	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"github-sandbox", "scratch-repo"}) {
 		t.Fatalf("DefaultCapabilities = %v, want it reported as stored: an operator can only clear one they can see",
 			read.DefaultCapabilities)
 	}
 
-	kept := []string{"bootstrap-playbooks"}
+	kept := []string{"github-sandbox"}
 	saved, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &kept})
 	if err != nil {
 		t.Fatalf("dropping a retired default capability: %v", err)
 	}
-	if !reflect.DeepEqual(saved.DefaultCapabilities, []string{"bootstrap-playbooks"}) {
+	if !reflect.DeepEqual(saved.DefaultCapabilities, []string{model.GitHubSandboxRepoGrant}) {
 		t.Fatalf("DefaultCapabilities = %v, want [self-debug] with the retired id gone", saved.DefaultCapabilities)
 	}
 	read, err = c.GetSettings(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"bootstrap-playbooks"}) {
+	if !reflect.DeepEqual(read.DefaultCapabilities, []string{model.GitHubSandboxRepoGrant}) {
 		t.Fatalf("DefaultCapabilities = %v after a re-read, want [self-debug]: the retired id is gone for good",
 			read.DefaultCapabilities)
 	}
@@ -432,14 +432,11 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
 		t.Fatal(err)
 	}
-	deployment := []string{"read-issues"}
+	deployment := []string{"github-sandbox"}
 	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &deployment}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"bootstrap-playbooks"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/gadgets", []string{"bootstrap-playbooks", "read-issues"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/gadgets", []string{"github-sandbox"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -451,23 +448,39 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 	for _, status := range read.Capabilities {
 		byID[status.ID] = status
 	}
-	if got := byID["read-issues"]; !got.Default {
-		t.Errorf("gemini-key Default = false, want true: the deployment defaults it")
+	if got := byID["github-sandbox"]; !got.Default {
+		t.Errorf("github-sandbox Default = false, want true: the deployment defaults it")
 	}
 	// Reported even though the deployment already defaults it: dropping
 	// the deployment-wide entry leaves acme/gadgets' own standing.
-	if got := byID["read-issues"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets"}) {
-		t.Errorf("gemini-key DefaultRepos = %v, want [acme/gadgets]", got)
+	if got := byID["github-sandbox"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets"}) {
+		t.Errorf("github-sandbox DefaultRepos = %v, want [acme/gadgets]", got)
 	}
-	if got := byID["bootstrap-playbooks"]; got.Default {
-		t.Errorf("self-debug Default = true, want false: no task outside those two repos is filed with it")
+	if got := byID["image-signing"].DefaultRepos; len(got) != 0 {
+		t.Errorf("image-signing DefaultRepos = %v, want none", got)
+	}
+
+	empty := []string{}
+	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &empty}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"github-sandbox"}); err != nil {
+		t.Fatal(err)
+	}
+	read, err = c.GetSettings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID = map[string]ui.CapabilityStatus{}
+	for _, status := range read.Capabilities {
+		byID[status.ID] = status
+	}
+	if got := byID["github-sandbox"]; got.Default {
+		t.Errorf("github-sandbox Default = true, want false: no task outside those two repos is filed with it")
 	}
 	// Sorted by repo, the order Store.ListRepoConfigs returns.
-	if got := byID["bootstrap-playbooks"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets", "acme/widgets"}) {
-		t.Errorf("self-debug DefaultRepos = %v, want [acme/gadgets acme/widgets]", got)
-	}
-	if got := byID["github-sandbox"].DefaultRepos; len(got) != 0 {
-		t.Errorf("github-sandbox DefaultRepos = %v, want none", got)
+	if got := byID["github-sandbox"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets", "acme/widgets"}) {
+		t.Errorf("github-sandbox DefaultRepos = %v, want [acme/gadgets acme/widgets]", got)
 	}
 }
 
@@ -478,7 +491,7 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 func TestSettingsReportsRepoDefaultsBeforeAnythingIsSaved(t *testing.T) {
 	t.Parallel()
 	c, _, ctx := testClient(t)
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"bootstrap-playbooks"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"github-sandbox"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -490,7 +503,7 @@ func TestSettingsReportsRepoDefaultsBeforeAnythingIsSaved(t *testing.T) {
 		t.Fatalf("Configured = true, want false: no settings row was ever saved")
 	}
 	for _, status := range read.Capabilities {
-		if status.ID != "bootstrap-playbooks" {
+		if status.ID != "github-sandbox" {
 			continue
 		}
 		if !reflect.DeepEqual(status.DefaultRepos, []string{"acme/widgets"}) {

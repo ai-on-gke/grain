@@ -348,6 +348,14 @@ type CLITaskActions interface {
 	ListAPIRoutes(ctx context.Context, callerTaskID string, grants []string, scopeFilter string) ([]CLIAPIRoute, error)
 }
 
+// CLIReviewThreadActions is an optional extension of CLIActions: the
+// review threads on a task's own pull request (grain pr threads), each
+// with the IDs grain pr reply and grain pr resolve take. A read of the
+// task's own pull request, so it needs no CI grant.
+type CLIReviewThreadActions interface {
+	ListReviewThreads(ctx context.Context, taskID string, unresolvedOnly bool) (CLIActionResult, error)
+}
+
 // CLIGitHubCheckActions is an optional extension of CLIActions for tasks whose
 // repository gates on GitHub check runs (ci_mode: "github") rather than
 // Grain CI. When UsesGitHubChecks reports true for a task, /cli/ci/wait polls
@@ -390,6 +398,7 @@ var cliActionRoutes = map[string]string{
 	"pr/open":           http.MethodPost,
 	"pr/reply":          http.MethodPost,
 	"pr/resolve":        http.MethodPost,
+	"pr/threads":        http.MethodGet,
 	"pr/review-comment": http.MethodPost,
 	"status":            http.MethodPost,
 	"handover":          http.MethodPost,
@@ -491,6 +500,19 @@ func (p *GitProxy) serveCLIAction(w http.ResponseWriter, r *http.Request, scope 
 			return true
 		}
 		res, err := p.CLIActions.ResolveReviewThread(r.Context(), scope.TaskIDStr, strings.TrimSpace(req.ThreadID), req.CommentID)
+		writeActionResult(w, res, err)
+	case route == "pr/threads":
+		lister, ok := p.CLIActions.(CLIReviewThreadActions)
+		if !ok {
+			http.Error(w, "this deployment's sandbox proxy cannot list review threads: use pull_request_status", http.StatusNotImplemented)
+			return true
+		}
+		unresolved := false
+		switch strings.ToLower(r.URL.Query().Get("unresolved")) {
+		case "1", "true", "yes":
+			unresolved = true
+		}
+		res, err := lister.ListReviewThreads(r.Context(), scope.TaskIDStr, unresolved)
 		writeActionResult(w, res, err)
 	case route == "pr/review-comment":
 		p.serveReviewComment(w, r, scope)

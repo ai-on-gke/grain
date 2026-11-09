@@ -1,0 +1,19 @@
+{
+  "alert": "Release v3.4.0 was retracted. v3.4.1 has been published to fix forward from it. This deployment is staying on v3.4.0: it will never downgrade on its own. Moving back to latest (v3.2.1) is only safe if the database schema has not changed since then — an older release may not read a schema v3.4.0 migrated to. Upgrading forward is the safe move. upgrade to v3.4.1 move back to latest (v3.2.1)",
+  "latestButton": "move back to latest (v3.2.1)",
+  "latestUpgradeRequest": {
+    "branch": "latest",
+    "afterTasksFinish": false
+  },
+  "newerButton": "upgrade to v3.4.1",
+  "newerUpgradeRequest": {
+    "branch": "v3.4.1",
+    "afterTasksFinish": false
+  },
+  "newerUpgradeResponse": {
+    "status": 202,
+    "phase": "running",
+    "branch": "v3.4.1"
+  },
+  "dialogs": []
+}

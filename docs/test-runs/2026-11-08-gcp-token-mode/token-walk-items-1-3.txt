@@ -1,0 +1,24 @@
+== task 21 filed by the person with https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"ext-deploy"} and approved at 02:33:58
+== 02:34:15 task 21: awaiting_reply failed 
+== 02:34:18 the run's container is gone: 
+== after release, attempt grain-21-1-0: the saved per-attempt token at http://127.0.0.1:4252/runs/grain-21-1-0/token (from the host)
+{"error":"invalid_grant","error_description":"this grant's token is unknown or released"}
+ HTTP 401
+== attempt 1's capability audit
+{
+    "records": []
+}
+== the gcp server's audit lines since 2026/11/08 02:33:58
+2026/11/08 02:34:04 grain daemon: capability server https://grain.dev/capabilities/gcp: gcp: audit: attempt grain-21-1-0: permission set ext-deploy: granted access tokens for deployer@walk-proj.iam.gserviceaccount.com until 2026-11-08T06:19:04Z
+2026/11/08 02:34:09 orchestrator: capability https://grain.dev/capabilities/gcp#gcp-key (grain-21-1-0): setup /home/debian/.gcp-token/grain-21-1-0/activate.sh succeeded, 0 bytes of output
+2026/11/08 02:34:09 grain daemon: capability server https://grain.dev/capabilities/gcp: gcp: audit: attempt grain-21-1-0: permission set ext-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T03:34:09Z
+2026/11/08 02:34:09 grain daemon: capability server https://grain.dev/capabilities/gcp: gcp: audit: attempt grain-21-1-0: permission set ext-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T03:34:09Z
+2026/11/08 02:34:09 grain daemon: capability server https://grain.dev/capabilities/gcp: gcp: audit: attempt grain-21-1-0: permission set ext-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T03:34:09Z
+2026/11/08 02:34:10 grain daemon: capability server https://grain.dev/capabilities/gcp: gcp: audit: attempt grain-21-1-0: permission set ext-deploy: minted an ID token for deployer@walk-proj.iam.gserviceaccount.com, audience "https://walk.example/aud"
+2026/11/08 02:34:10 grain daemon: capability server https://grain.dev/capabilities/gcp: gcp: audit: attempt grain-21-1-0: permission set ext-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T06:19:05Z
+2026/11/08 02:34:10 grain daemon: capability server https://grain.dev/capabilities/gcp: gcp: audit: attempt grain-21-1-0: permission set ext-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T06:19:05Z
+2026/11/08 02:34:10 grain daemon: capability server https://grain.dev/capabilities/gcp: gcp: audit: attempt grain-21-1-0: permission set ext-deploy: an access token for deployer@walk-proj.iam.gserviceaccount.com failed: permission set ext-deploy: the grant's deadline 2026-11-08T06:19:04Z has passed
+2026/11/08 02:34:10 grain daemon: capability server https://grain.dev/capabilities/gcp: gcp: audit: attempt grain-21-1-0: permission set ext-deploy: an access token for deployer@walk-proj.iam.gserviceaccount.com failed: permission set ext-deploy: the grant's deadline 2026-11-08T06:19:04Z has passed
+2026/11/08 02:34:10 grain daemon: capability server https://grain.dev/capabilities/gcp: gcp: audit: attempt grain-21-1-0: permission set ext-deploy: an ID token for deployer@walk-proj.iam.gserviceaccount.com failed: permission set ext-deploy: the grant's deadline 2026-11-08T06:19:04Z has passed
+2026/11/08 02:34:10 grain daemon: capability server https://grain.dev/capabilities/gcp: gcp: audit: attempt grain-21-1-0: permission set ext-deploy: minted an access token for deployer@walk-proj.iam.gserviceaccount.com, expiring 2026-11-08T03:34:10Z
+== proposals task 21 filed

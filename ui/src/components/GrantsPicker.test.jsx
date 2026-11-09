@@ -16,6 +16,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import GrantsPicker from "./GrantsPicker.jsx";
+import Overlay from "./Overlay.jsx";
 import {
   capabilityMethods,
   invalidateCapabilityMethods,
@@ -246,9 +247,12 @@ describe("GrantsPicker", () => {
         onRemove={vi.fn()}
       />,
     );
-    // Held grants are one list of sections; the legacy id is not among them.
+    // Held grants are one list of sections, bare capability ids included.
     const held = screen.getByTestId("grant-grants");
-    expect(within(held).queryByText(/gcp-key/)).toBeNull();
+    expect(within(held).getByLabelText("gcp-key")).toHaveAttribute(
+      "data-grant-kind",
+      "capability",
+    );
     expect(
       within(held).getByLabelText("api:tasks:admin (dangerous)"),
     ).toBeTruthy();
@@ -796,5 +800,308 @@ describe("GrantsPicker", () => {
       expect(api).toHaveBeenCalledWith("/api/capability-methods"),
     );
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  // grain/task-3527: Escape inside an open "Add grant…" popover must close
+  // only the popover and return focus to "Add grant…", without asking
+  // DISCARD_PROMPT or closing the surrounding template/schedule Overlay pane
+  // until a second Escape is pressed.
+  it("closes only the Add grant… popover on Escape inside an Overlay pane, then lets the next Escape close the pane", async () => {
+    const denied = {
+      ...hostScript,
+      policyRefusal: "denied by capability policy rule 1",
+    };
+    serve({ current: [denied, gcpKey] });
+    const onClose = vi.fn();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const user = userEvent.setup();
+    let dirty = false;
+
+    render(
+      <Overlay
+        label="Edit template"
+        onClose={onClose}
+        pane
+        animate={false}
+        isDirty={() => dirty}
+      >
+        <GrantsPicker
+          grants={[]}
+          config={{
+            capabilityMethods: 2,
+            capabilities: [
+              {
+                id: "api:tasks:read",
+                area: "tasks",
+                summary: "Read tasks",
+              },
+            ],
+            targetRepos: ["acme/widgets"],
+          }}
+          onApiChange={vi.fn()}
+          onSubmit={vi.fn()}
+          onRemove={vi.fn()}
+          runKind="process"
+        />
+      </Overlay>,
+    );
+
+    // 1. Clean pane: first Escape closes only the popover and focuses Add grant…;
+    // second Escape closes the pane.
+    const addBtn = await screen.findByRole("button", { name: "Add grant…" });
+    await user.click(addBtn);
+    expect(
+      await screen.findByRole("menu", { name: "Grants to add" }),
+    ).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu", { name: "Grants to add" })).toBeNull();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(addBtn).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledTimes(1);
+    onClose.mockClear();
+
+    // 2. Dirty pane with nested SearchSelect listbox open: first Escape closes
+    // the repo listbox, second Escape closes Add grant… without prompting,
+    // third Escape asks DISCARD_PROMPT.
+    dirty = true;
+    await user.click(addBtn);
+    expect(
+      await screen.findByRole("menu", { name: "Grants to add" }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByLabelText("Grain API grants apply to"));
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(
+      screen.getByRole("menu", { name: "Grants to add" }),
+    ).toBeInTheDocument();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu", { name: "Grants to add" })).toBeNull();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(addBtn).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+    confirm.mockClear();
+
+    // 3. Focus on the policy link inside a disabled MenuItem: Escape still
+    // closes the popover and restores focus to Add grant… without prompting.
+    await user.click(addBtn);
+    const menu = await screen.findByRole("menu", { name: "Grants to add" });
+    const policyLink = within(menu).getByRole("link", {
+      name: "Settings → Capabilities",
+    });
+    policyLink.focus();
+    expect(policyLink).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu", { name: "Grants to add" })).toBeNull();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(addBtn).toHaveFocus();
+
+    confirm.mockRestore();
+  });
+
+  it("leaves https://grain.dev/capabilities/api methods out of the method group and owns held api references", async () => {
+    const apiMethod = {
+      ref: "https://grain.dev/capabilities/api#ci:read",
+      capability: "https://grain.dev/capabilities/api",
+      method: "ci:read",
+      description: "Read CI",
+      args: {
+        type: "object",
+        properties: { repo: { type: "string" } },
+      },
+    };
+    serve({ current: [apiMethod, hostScript] });
+    const onApiChange = vi.fn();
+    const onSubmit = vi.fn();
+    const onRemove = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <GrantsPicker
+        grants={[
+          "https://grain.dev/capabilities/api#tasks:admin",
+          'https://grain.dev/capabilities/api#ci:read={"repo":"acme/widgets"}',
+        ]}
+        config={config}
+        onApiChange={onApiChange}
+        onSubmit={onSubmit}
+        onRemove={onRemove}
+      />,
+    );
+
+    expect(
+      screen.getByLabelText("api:tasks:admin (dangerous)"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("api:ci:read on acme/widgets"),
+    ).toBeInTheDocument();
+    // Held api references must not be rendered a second time as method grants
+    // or sent to POST /api/capability-grants/check.
+    expect(screen.queryByLabelText(/grain\.dev ›/)).toBeNull();
+    expect(
+      api.mock.calls.filter(([p]) => p === "/api/capability-grants/check"),
+    ).toHaveLength(0);
+
+    await user.click(screen.getByRole("button", { name: "Add grant…" }));
+    const menu = await screen.findByRole("menu", { name: "Grants to add" });
+    await within(menu).findByText("host-script");
+    expect(
+      menu.querySelector(
+        '[data-method="https://grain.dev/capabilities/api#ci:read"]',
+      ),
+    ).toBeNull();
+
+    const adminItem = within(menu).getByRole("menuitemcheckbox", {
+      name: "tasks:admin",
+    });
+    expect(adminItem).toHaveAttribute("aria-checked", "true");
+    await user.click(adminItem);
+    expect(onApiChange).toHaveBeenLastCalledWith([
+      'https://grain.dev/capabilities/api#ci:read={"repo":"acme/widgets"}',
+    ]);
+    expect(onRemove).not.toHaveBeenCalled();
+  });
+
+  // docs/test-plans/2026-11-09.md §1 item 3: when GET
+  // /api/capability-methods lists nothing but grain's own api
+  // references, they are not a generic method group, so the menu says
+  // there is nothing to grant -- and a picker with nothing to offer and
+  // nothing held is not drawn at all.
+  it("says there is nothing to grant when api references are the only methods", async () => {
+    const apiOnly = [
+      "https://grain.dev/capabilities/api#tasks:read",
+      "https://grain.dev/capabilities/api#ci-read",
+    ].map((ref) => ({
+      ref,
+      capability: "https://grain.dev/capabilities/api",
+      method: ref.split("#")[1],
+      args: null,
+    }));
+    serve({ current: apiOnly });
+    const user = userEvent.setup();
+    const { container, rerender } = render(
+      <GrantsPicker
+        grants={["https://grain.dev/capabilities/api#tasks:read"]}
+        config={{ capabilityMethods: 2 }}
+        onApiChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onRemove={vi.fn()}
+      />,
+    );
+    await user.click(await screen.findByRole("button", { name: "Add grant…" }));
+    const menu = await screen.findByRole("menu", { name: "Grants to add" });
+    expect(within(menu).getByText("Nothing to grant")).toBeInTheDocument();
+    expect(menu.querySelectorAll(".method-grant-row")).toHaveLength(0);
+    await user.keyboard("{Escape}");
+
+    rerender(
+      <GrantsPicker
+        grants={[]}
+        config={{ capabilityMethods: 2 }}
+        onApiChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onRemove={vi.fn()}
+      />,
+    );
+    await waitFor(() =>
+      expect(container.querySelector('[role="group"]')).toBeNull(),
+    );
+  });
+
+  it("renders a held bare capability id as a read-only GrantLine naming its retired alias and removes it", async () => {
+    api.mockImplementation(async (path, opts) => {
+      if (path.split("?")[0] === "/api/capability-methods") return [];
+      if (path === "/api/capability-grants/check") {
+        return JSON.parse(opts.body).grants.map(({ grant }) => {
+          if (grant === "self-debug") {
+            return {
+              grant,
+              aliasOf: [
+                "api:self-debug",
+                "https://grain.dev/capabilities/grain#source={}",
+              ],
+            };
+          }
+          if (grant === "read-issues") {
+            return {
+              grant,
+              recorded: "https://grain.dev/capabilities/github#read-issues={}",
+              aliasOf: ["https://grain.dev/capabilities/github#read-issues={}"],
+            };
+          }
+          return { grant, error: `capability "${grant}" is not offered` };
+        });
+      }
+      throw new Error(`unexpected ${path}`);
+    });
+    const onRemove = vi.fn().mockResolvedValue();
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <GrantsPicker
+        grants={["self-debug", "read-issues", "gone-bare"]}
+        config={{}}
+        onApiChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onRemove={onRemove}
+      />,
+    );
+
+    const selfDebug = await screen.findByLabelText(
+      "self-debug (retired alias)",
+    );
+    expect(selfDebug).toHaveAttribute("data-grant", "self-debug");
+    expect(selfDebug).toHaveAttribute("data-grant-kind", "capability");
+    expect(selfDebug.querySelector("input")).toBeNull();
+    expect(
+      within(selfDebug).getByText(
+        "Retired alias of api:self-debug + grain#source",
+      ),
+    ).toBeInTheDocument();
+    expect(within(selfDebug).getByText("retired alias")).toBeInTheDocument();
+
+    const readIssues = screen.getByLabelText("read-issues (retired alias)");
+    expect(
+      within(readIssues).getByText("Retired alias of github#read-issues"),
+    ).toBeInTheDocument();
+
+    const gone = screen.getByLabelText("gone-bare (no longer offered)");
+    expect(within(gone).getByText("No longer offered")).toBeInTheDocument();
+
+    await user.click(
+      within(selfDebug).getByRole("button", {
+        name: "Remove self-debug (retired alias)",
+      }),
+    );
+    expect(onRemove).toHaveBeenCalledWith("self-debug");
+
+    rerender(
+      <GrantsPicker
+        grants={["self-debug"]}
+        config={{}}
+        disabled
+        onApiChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onRemove={onRemove}
+      />,
+    );
+    const readOnlyLine = await screen.findByLabelText(
+      "self-debug (retired alias)",
+    );
+    expect(
+      within(readOnlyLine).queryByRole("button", { name: /remove/i }),
+    ).toBeNull();
   });
 });

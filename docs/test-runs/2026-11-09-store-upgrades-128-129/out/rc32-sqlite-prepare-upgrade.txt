@@ -1,0 +1,3 @@
+2026/11/09 04:33:34 capability catalogue migration: schedule sched-1: dropped disabled grant "https://grain.dev/capabilities/github#read-issues={}" (capability https://grain.dev/capabilities/github#read-issues={} is disabled in settings/capabilities.yml (in_process.read-issues, the capability it replaced))
+rehearsed: 85 rows across 26 tables migrate from schema 119 into 129
+prepared 119 129 /home/debian/walk2/rc32-sqlite/prepared/schema-upgrade

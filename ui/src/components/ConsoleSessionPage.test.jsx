@@ -469,6 +469,46 @@ describe("ConsoleSessionPage", () => {
     expect(JSON.parse(options.body)).toEqual({ networkAccess: "open" });
   });
 
+  // On a backend that cannot withhold a network (-host-sandboxes) the
+  // session's task is filed with egress whatever the select says, and
+  // the API reports it as effectiveNetworkAccess
+  // (docs/test-runs/2026-11-07-director-agent-api.md, finding 1).
+  it("warns when the backend cannot withhold the session's network", async () => {
+    const props = {
+      task: task(),
+      capabilities,
+      networkAccessOptions: ["open", "none"],
+      act: vi.fn(),
+      onSaved: vi.fn(),
+      showError: vi.fn(),
+    };
+    const { rerender } = render(
+      <ConsoleSessionPage
+        {...props}
+        session={session({ networkAccess: "none" })}
+      />,
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /Director capabilities/ }),
+    );
+    expect(
+      screen.queryByTestId("session-network-not-isolated"),
+    ).not.toBeInTheDocument();
+
+    rerender(
+      <ConsoleSessionPage
+        {...props}
+        session={session({
+          networkAccess: "none",
+          effectiveNetworkAccess: "open",
+        })}
+      />,
+    );
+    expect(
+      screen.getByTestId("session-network-not-isolated"),
+    ).toHaveTextContent(/cannot withhold a run's network/);
+  });
+
   // Configured, but the cycle that files its task has not run yet: a
   // wait, said out loud, rather than an empty chat window that swallows
   // whatever is typed into it.
@@ -972,5 +1012,176 @@ describe("ConsoleSessionPage", () => {
     expect(
       screen.queryByRole("button", { name: "Apply now" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("offers a one-click Adopt shipped defaults action when a saved session lacks shipped defaults", async () => {
+    api.mockClear();
+    const onSaved = vi.fn();
+    const { rerender } = render(
+      <ConsoleSessionPage
+        session={session({
+          capabilities: ["self-debug", "api:tasks:admin"],
+          missingShippedDefaults: ["api:task-admin", "api:settings:read"],
+        })}
+        task={task()}
+        capabilities={capabilities}
+        act={vi.fn()}
+        onSaved={onSaved}
+        showError={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /Director capabilities/ }),
+    );
+    const banner = screen.getByTestId("adopt-shipped-defaults-banner");
+    expect(banner).toHaveTextContent("api:task-admin");
+    expect(banner).toHaveTextContent("api:settings:read");
+
+    await userEvent.click(
+      within(banner).getByRole("button", { name: "Adopt shipped defaults" }),
+    );
+    // The pane names no list: the server adds what is missing to what
+    // the session holds when the request lands, so a grant another tab
+    // made since this one read the session is not put back
+    // (2026-11-07 director agent API walkthrough, finding 4).
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith("/api/console-sessions/director", {
+        method: "PUT",
+        body: JSON.stringify({ adoptShippedDefaults: true }),
+      }),
+    );
+    expect(onSaved).toHaveBeenCalled();
+
+    rerender(
+      <ConsoleSessionPage
+        session={session({
+          capabilities: [
+            "self-debug",
+            "api:tasks:admin",
+            "api:task-admin",
+            "api:settings:read",
+          ],
+          missingShippedDefaults: [],
+        })}
+        task={task()}
+        capabilities={capabilities}
+        act={vi.fn()}
+        onSaved={onSaved}
+        showError={vi.fn()}
+      />,
+    );
+    expect(
+      screen.queryByTestId("adopt-shipped-defaults-banner"),
+    ).not.toBeInTheDocument();
+  });
+
+  // A tick box saves the whole list, so it says which list it was
+  // computed from; when the server refuses that as stale (another tab
+  // changed the grants since), the pane reads the session again and
+  // makes the same change to what it holds now instead of putting its
+  // old copy back.
+  it("sends what it read with a tick and retries a stale save on a fresh read", async () => {
+    api.mockReset();
+    const stale = Object.assign(new Error("changed by somebody else"), {
+      status: 409,
+      code: "stale",
+    });
+    let puts = 0;
+    api.mockImplementation(async (path, opts) => {
+      if (path === "/api/console-sessions/director" && opts?.method === "PUT") {
+        puts += 1;
+        if (puts === 1) throw stale;
+        return {};
+      }
+      if (path === "/api/console-sessions") {
+        return {
+          sessions: [
+            { id: "director", capabilities: ["self-debug", "api:tasks:read"] },
+          ],
+        };
+      }
+      return {};
+    });
+    const onSaved = vi.fn();
+    const showError = vi.fn();
+    render(
+      <ConsoleSessionPage
+        session={session()}
+        task={task()}
+        capabilities={capabilities}
+        act={vi.fn()}
+        onSaved={onSaved}
+        showError={showError}
+      />,
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /Director capabilities/ }),
+    );
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: /Self repair/ }),
+    );
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+
+    const bodies = api.mock.calls
+      .filter(
+        ([p, o]) =>
+          p === "/api/console-sessions/director" && o?.method === "PUT",
+      )
+      .map(([, o]) => JSON.parse(o.body));
+    expect(bodies).toEqual([
+      {
+        capabilities: ["self-debug", "self-repair"],
+        expectCapabilities: ["self-debug"],
+      },
+      {
+        capabilities: ["self-debug", "api:tasks:read", "self-repair"],
+        expectCapabilities: ["self-debug", "api:tasks:read"],
+      },
+    ]);
+    expect(showError).not.toHaveBeenCalled();
+    api.mockReset();
+    api.mockImplementation(async () => ({}));
+  });
+
+  it("shows a second stale refusal and re-reads rather than overwriting", async () => {
+    api.mockReset();
+    const stale = Object.assign(new Error("changed by somebody else"), {
+      status: 409,
+      code: "stale",
+    });
+    api.mockImplementation(async (path, opts) => {
+      if (opts?.method === "PUT") throw stale;
+      if (path === "/api/console-sessions") {
+        return { sessions: [{ id: "director", capabilities: [] }] };
+      }
+      return {};
+    });
+    const onSaved = vi.fn();
+    const showError = vi.fn();
+    render(
+      <ConsoleSessionPage
+        session={session()}
+        task={task()}
+        capabilities={capabilities}
+        act={vi.fn()}
+        onSaved={onSaved}
+        showError={showError}
+      />,
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /Director capabilities/ }),
+    );
+    await userEvent.click(screen.getByRole("checkbox", { name: /Self debug/ }));
+    await waitFor(() => expect(showError).toHaveBeenCalledWith(stale));
+    expect(onSaved).toHaveBeenCalled();
+    const puts = api.mock.calls.filter(([, o]) => o?.method === "PUT");
+    expect(puts).toHaveLength(2);
+    expect(JSON.parse(puts[1][1].body)).toEqual({
+      capabilities: [],
+      expectCapabilities: [],
+    });
+    api.mockReset();
+    api.mockImplementation(async () => ({}));
   });
 });

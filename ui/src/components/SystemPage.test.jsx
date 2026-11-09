@@ -18,6 +18,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { collectAlerts } from "../alerts.js";
 import api from "../api.js";
 import SystemPage, { SYSTEM_TABS } from "./SystemPage.jsx";
+import UnbackedStateDot, { stateDot } from "./UnbackedStateDot.jsx";
 
 vi.mock("../api.js", () => ({ default: vi.fn(() => Promise.resolve({})) }));
 
@@ -171,13 +172,13 @@ describe("SystemPage", () => {
     });
     expect(githubPendingLink).toHaveAttribute(
       "href",
-      "/settings/credentials#githubHost",
+      "/settings/capabilities#githubHost",
     );
     await user.click(pollPendingLink);
     expect(onOpenSettings).toHaveBeenCalledWith("engine", "pollInterval");
     onOpenSettings.mockClear();
     await user.click(githubPendingLink);
-    expect(onOpenSettings).toHaveBeenCalledWith("credentials", "githubHost");
+    expect(onOpenSettings).toHaveBeenCalledWith("capabilities", "githubHost");
     await user.click(within(pendingRow).getByRole("button", { name: "Power" }));
     expect(onTab).toHaveBeenCalledWith("power");
 
@@ -302,5 +303,37 @@ describe("SystemPage", () => {
     expect(screen.getByTestId("overcommit-adjustments")).toHaveTextContent(
       /CPU 2\.50× → 2\.75× — CPU pressure calm and pool saturated/,
     );
+  });
+
+  it("renders the config-repo reset dot inline-block and decorative beside the Health reset sentence", () => {
+    render(
+      <SystemPage
+        config={{ stateRepoResetNotice: true }}
+        alerts={[]}
+        tab=""
+        onTab={() => {}}
+        showError={vi.fn()}
+      />,
+    );
+    const alert = screen.getByTestId("health-config-repo");
+    expect(alert).toHaveTextContent(
+      "A merged change reset settings on this deployment.",
+    );
+    expect(
+      within(alert).queryByRole("img", { name: /reset settings/i }),
+    ).toBeNull();
+    const dot = alert.querySelector('span[aria-hidden="true"][title]');
+    expect(dot).not.toBeNull();
+    expect(getComputedStyle(dot)).toMatchObject({ display: "inline-block" });
+
+    const standalone = render(
+      <UnbackedStateDot {...stateDot({ stateRepoResetNotice: true })} />,
+    );
+    const labelled = within(standalone.container).getByRole("img", {
+      name: "A merged change reset settings on this deployment",
+    });
+    expect(getComputedStyle(labelled)).toMatchObject({
+      display: "inline-block",
+    });
   });
 });

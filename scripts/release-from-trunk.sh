@@ -182,9 +182,14 @@
 #                            grain/release-qualification and grain/rc-hold as:
 #                            only its check runs qualify an rc or lift a hold,
 #                            never same-named ones from an Actions workflow or
-#                            another app; unset, neither check run is trusted
-#                            and the train stops (candidate-gate.sh's
-#                            CHECK_QUALIFICATION_APP)
+#                            another app. "none", set explicitly here or in
+#                            scripts/release.conf (a forge connection that
+#                            is no GitHub App posts no check run), trusts
+#                            neither: Stage 1 alone qualifies an rc and no
+#                            grain/rc-hold holds the next. Empty here falls
+#                            back to scripts/release.conf; unset in both, no
+#                            check run is trusted and the train fails closed
+#                            (candidate-gate.sh's CHECK_QUALIFICATION_APP)
 #   RELEASE_IMAGES           the image publisher (bash scripts/release-images.sh);
 #                            "off" publishes nothing
 #   RELEASE_NOTES_TASK       "off" files no release-notes task
@@ -213,7 +218,8 @@
 #                            GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL are
 #                            unset; never written to the checkout's config
 #   RELEASE_MAJOR, RELEASE_FLOOR_MINOR, RELEASE_NEVER_PROMOTE,
-#   RELEASE_MIN_INTERVAL_MINUTES, RELEASE_MAX_RC_ATTEMPTS, RELEASE_AUTO_PROMOTE
+#   RELEASE_MIN_INTERVAL_MINUTES, RELEASE_MAX_RC_ATTEMPTS, RELEASE_AUTO_PROMOTE,
+#   RELEASE_QUALIFICATION_APP
 #                            override scripts/release.conf as main has it
 set -euo pipefail
 
@@ -601,6 +607,12 @@ esac
 github_token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 github_api="${RELEASE_GITHUB_API_URL:-${GITHUB_API_URL:-https://api.github.com}}"
 github_repo="${RELEASE_GITHUB_REPO:-${GITHUB_REPOSITORY:-${GRAIN_CI_REPO:-ai-on-gke/grain}}}"
+# The App trusted for grain/release-qualification and grain/rc-hold, from
+# the environment or else scripts/release.conf as main has it. "none" --
+# only ever an explicit setting, never a default -- trusts no check run:
+# Stage 1 alone qualifies, and nothing holds. Empty in both trusts nothing
+# and fails closed, so an unconfigured deployment never promotes on Stage 1.
+qualification_app="${RELEASE_QUALIFICATION_APP:-$(conf_value RELEASE_QUALIFICATION_APP)}"
 github_get() { # github_get <path> <out>
   curl -fsS --max-time 60 -H "Authorization: Bearer $github_token" -H "Accept: application/vnd.github+json" \
     "${github_api%/}/repos/$github_repo/$1" -o "$2"
@@ -639,7 +651,7 @@ github_runs() { # github_runs <out> <branch>
 qual_checks=""
 qualification_json() {
   local id app_id=""
-  [[ ! "${RELEASE_QUALIFICATION_APP:-}" =~ ^[0-9]+$ ]] || app_id="&app_id=$RELEASE_QUALIFICATION_APP"
+  [[ ! "$qualification_app" =~ ^[0-9]+$ ]] || app_id="&app_id=$qualification_app"
   if [ -n "${RELEASE_QUALIFICATION_RUNS_JSON:-}" ]; then
     gate_json RELEASE_QUALIFICATION_RUNS_JSON "" "$work/qual-runs.json"
   elif [ "$ci_source" = github ]; then
@@ -656,7 +668,9 @@ qualification_json() {
   else
     gate_json RELEASE_QUALIFICATION_RUNS_JSON "/api/ci/runs?repo=${GRAIN_CI_REPO:-ai-on-gke/grain}&ref=$1&limit=200" "$work/qual-runs.json"
   fi
-  if [ -n "${RELEASE_QUALIFICATION_CHECKS_JSON:-}" ]; then
+  if [ "$qualification_app" = none ]; then
+    say "RELEASE_QUALIFICATION_APP=none, so no grain/release-qualification check run is read for $1: Stage 1 alone qualifies it"
+  elif [ -n "${RELEASE_QUALIFICATION_CHECKS_JSON:-}" ]; then
     gate_json RELEASE_QUALIFICATION_CHECKS_JSON "" "$work/qual-checks.json"
     qual_checks="$work/qual-checks.json"
   elif [ -n "$github_token" ]; then
@@ -672,19 +686,24 @@ qualification_json() {
 
 # rc_hold_summary <floor_sha>: if the newest grain/rc-hold check run on
 # floor_sha from RELEASE_QUALIFICATION_APP is not completed, prints its
-# summary; otherwise prints nothing. No check at all means no hold; an unset
-# RELEASE_QUALIFICATION_APP refuses rather than trust another app's check run.
+# summary; otherwise prints nothing. No check at all means no hold, and so
+# does an explicit RELEASE_QUALIFICATION_APP=none: no app is trusted to post
+# one. An empty one refuses rather than trust another app's check run.
 rc_hold_summary() {
   local app_id="" hold_checks="" pages page n flooded=false
-  [[ ! "${RELEASE_QUALIFICATION_APP:-}" =~ ^[0-9]+$ ]] || app_id="&app_id=$RELEASE_QUALIFICATION_APP"
+  if [ "$qualification_app" = none ]; then
+    say "RELEASE_QUALIFICATION_APP=none, so no grain/rc-hold check run on ${1:0:12} is trusted; not waiting on one" >&2
+    return 0
+  fi
+  [[ ! "$qualification_app" =~ ^[0-9]+$ ]] || app_id="&app_id=$qualification_app"
   if [ -n "${RELEASE_HOLD_CHECKS_JSON:-}" ]; then
-    [ -n "${RELEASE_QUALIFICATION_APP:-}" ] ||
-      die "RELEASE_QUALIFICATION_APP is unset, so no grain/rc-hold check run can be trusted: set it to the slug or id of the GitHub App grain posts it as"
+    [ -n "$qualification_app" ] ||
+      die "RELEASE_QUALIFICATION_APP is unset, so no grain/rc-hold check run can be trusted: set it to the slug or id of the GitHub App grain posts it as, or to none in scripts/release.conf"
     gate_json RELEASE_HOLD_CHECKS_JSON "" "$work/hold-checks.json"
     hold_checks="$work/hold-checks.json"
   elif [ -n "$github_token" ]; then
-    [ -n "${RELEASE_QUALIFICATION_APP:-}" ] ||
-      die "RELEASE_QUALIFICATION_APP is unset, so no grain/rc-hold check run can be trusted: set it to the slug or id of the GitHub App grain posts it as"
+    [ -n "$qualification_app" ] ||
+      die "RELEASE_QUALIFICATION_APP is unset, so no grain/rc-hold check run can be trusted: set it to the slug or id of the GitHub App grain posts it as, or to none in scripts/release.conf"
     pages="${RELEASE_GITHUB_PAGES:-3}"
     : > "$work/hold-checks.jsonl"
     flooded=true
@@ -706,7 +725,7 @@ rc_hold_summary() {
     return 0
   fi
   # shellcheck disable=SC2016 # jq, not shell
-  jq -r --arg sha "${1,,}" --arg app "${RELEASE_QUALIFICATION_APP:-}" --argjson flooded "$flooded" '
+  jq -r --arg sha "${1,,}" --arg app "$qualification_app" --argjson flooded "$flooded" '
     def epoch:
       if . == null or . == "" then 0
       else sub("\\.[0-9]+"; "")
@@ -889,7 +908,7 @@ if [ "$mode" = verify ]; then
   fi
   qualification_json "$from_rc" "$sha"
   q_status=0
-  q_out="$(CHECK_QUALIFICATION_APP="${RELEASE_QUALIFICATION_APP:-}" bash "$scripts_dir/candidate-gate.sh" check-qualification --rc-tag "$from_rc" --rc-sha "$sha" \
+  q_out="$(CHECK_QUALIFICATION_APP="$qualification_app" bash "$scripts_dir/candidate-gate.sh" check-qualification --rc-tag "$from_rc" --rc-sha "$sha" \
     --runs-json "$work/qual-runs.json" ${qual_checks:+--checks-json "$qual_checks"} 2>&1)" || q_status=$?
   printf '%s\n' "$q_out" | sed 's/^/  /'
   [ "$q_status" = 0 ] || die "verify: $from_rc does not pass qualification now (check-qualification exited $q_status); $version is not published"
@@ -1108,7 +1127,7 @@ if [ -n "$rc" ]; then
     say "phase 1: $rc (${rc_sha:0:12}) is in qualification; asking the qualification gate"
     qualification_json "$rc" "$rc_sha"
     q_status=0
-    q_out="$(CHECK_QUALIFICATION_APP="${RELEASE_QUALIFICATION_APP:-}" bash "$scripts_dir/candidate-gate.sh" check-qualification --rc-tag "$rc" --rc-sha "$rc_sha" \
+    q_out="$(CHECK_QUALIFICATION_APP="$qualification_app" bash "$scripts_dir/candidate-gate.sh" check-qualification --rc-tag "$rc" --rc-sha "$rc_sha" \
       --runs-json "$work/qual-runs.json" ${qual_checks:+--checks-json "$qual_checks"} 2>&1)" || q_status=$?
     printf '%s\n' "$q_out" | sed 's/^/  /'
     case "$q_status" in
@@ -1296,4 +1315,8 @@ push "refs/tags/$new_rc" || die "could not push $new_rc; candidate was not moved
 push --force "$lkg:refs/heads/candidate" || die "pushed $new_rc, but could not move candidate onto it"
 emit rc_tag "$new_rc"
 images rc "$new_rc" || die "cut $new_rc and moved candidate, but could not publish its images: run \`release-images.sh rc $new_rc\`"
-say "phase 2: $new_rc is cut and candidate is on it; nightly.yml qualifies it (Stage 1), then grain/release-qualification (Stage 2)"
+if [ "$qualification_app" = none ]; then
+  say "phase 2: $new_rc is cut and candidate is on it; nightly.yml qualifies it (Stage 1) alone: RELEASE_QUALIFICATION_APP=none skips grain/release-qualification (Stage 2)"
+else
+  say "phase 2: $new_rc is cut and candidate is on it; nightly.yml qualifies it (Stage 1), then grain/release-qualification (Stage 2)"
+fi

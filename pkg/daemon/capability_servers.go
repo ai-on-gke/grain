@@ -18,7 +18,10 @@ import (
 	"context"
 	"fmt"
 	"github.com/ai-on-gke/grain/pkg/change"
+	"io"
 	"log"
+	"regexp"
+	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
@@ -66,11 +69,7 @@ const capabilityServerPrincipal = "capability-servers"
 // grain/config change or a Settings save reaches it on the next tick.
 // Each one is handed over with grain's in-tree servers registered in it
 // (registerBuiltinCapabilityServers), and the first is written back.
-//
-// gcpPool is the accounts the in-process gcp-key provider mints from
-// (gcpkey.PoolEmails of the deployment's gcp settings): Test on a gcp
-// server warns when one of its permission sets shares them.
-func startCapabilityServers(ctx context.Context, store *model.Store, secretStore *secrets.Store, dataDir string, hostdClient *hostd.Client, gcpPool []string) (*servers.Registry, *hostdCapabilityServers) {
+func startCapabilityServers(ctx context.Context, store *model.Store, secretStore *secrets.Store, dataDir string, hostdClient *hostd.Client) (*servers.Registry, *hostdCapabilityServers) {
 	var lookup func(name string) (string, bool)
 	if secretStore != nil {
 		auditCtx := secrets.WithPrincipal(context.Background(), capabilityServerPrincipal)
@@ -87,12 +86,10 @@ func startCapabilityServers(ctx context.Context, store *model.Store, secretStore
 		ConfigRoot: StateRepoDir(dataDir),
 		Hostd:      hostdClient,
 		Logf:       logf,
-		ProbeWarnings: func(_ string, cfg protocol.ServerConfig) []string {
-			if cfg.Builtin != "gcp" && intree.InTreeName(cfg) != "gcp" {
-				return nil
-			}
-			return intree.GCPOverlapWarnings(cfg, gcpPool)
-		},
+		// A stdio server's own log is this one's: the gcp server's
+		// "gcp: audit: ..." lines, the only record of each grant and token
+		// it mints, were discarded here (2026-11-08 gcp token-mode walk).
+		Stderr: capabilityServerStderr,
 	}
 	if store != nil {
 		// A server that falls out of use says so where people look, not
@@ -196,12 +193,6 @@ func externalConfigRepo(dataDir string) bool {
 	return err == nil && settings.Remote != ""
 }
 
-// gcpKeyPool returns nil now that the in-process gcp-key provider is retired
-// onto https://grain.dev/capabilities/gcp#gcp-key.
-func gcpKeyPool(_ Config) []string {
-	return nil
-}
-
 // capabilityServerStatuses is live's registry as the UI reads it: a nil
 // interface, not a typed nil, when there is none.
 func capabilityServerStatuses(live *LiveConfig) ui.CapabilityServerStatuses {
@@ -286,4 +277,26 @@ func capabilityServerAlertsOnHostd(ctx context.Context, store *model.Store, host
 		}
 	}
 	return onDrop, onAttach
+}
+
+// serverLogStamp is the date and time a server's own log.Logger puts
+// before each line, which this log already puts before it.
+var serverLogStamp = regexp.MustCompile(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(\.\d+)? `)
+
+// capabilityServerStderr is servers.Options.Stderr: each line a stdio
+// capability server writes to its stderr, already scrubbed of its
+// secrets, logged as the server's.
+func capabilityServerStderr(id string) io.Writer {
+	return capabilityServerLog{id: id, logf: log.Printf}
+}
+
+type capabilityServerLog struct {
+	id   string
+	logf func(format string, args ...any)
+}
+
+func (l capabilityServerLog) Write(p []byte) (int, error) {
+	line := serverLogStamp.ReplaceAllString(strings.TrimRight(string(p), "\r\n"), "")
+	l.logf("grain daemon: capability server %s: %s", l.id, line)
+	return len(p), nil
 }

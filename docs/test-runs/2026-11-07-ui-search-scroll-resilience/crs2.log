@@ -1,0 +1,606 @@
+2026/11/07 22:45:05 orchestrator: filed task 1 for the director console session
+grain console rest e2e serving at http://127.0.0.1:35465
+2026/11/07 22:45:21 dispatch: candidate 8 skipped: no longer ready
+2026/11/07 22:45:21 dispatch: candidate 9 skipped: no longer ready
+2026/11/07 22:45:21 orchestrator: task 4: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:21 orchestrator: run 4-1 (task 4): orchestrator: run 4-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:21 dispatch: candidate 47 skipped: no longer ready
+2026/11/07 22:45:21 dispatch: candidate 48 skipped: no longer ready
+2026/11/07 22:45:21 orchestrator: task 42: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:21 dispatch: candidate 66 skipped: no longer ready
+2026/11/07 22:45:21 orchestrator: run 42-1 (task 42): orchestrator: run 42-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:21 orchestrator: task 67: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:21 orchestrator: task 75: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:21 orchestrator: run 75-1 (task 75): orchestrator: run 75-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:21 orchestrator: run 67-1 (task 67): orchestrator: run 67-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:21 dispatch: candidate 80 skipped: no longer ready
+2026/11/07 22:45:21 dispatch: candidate 85 skipped: no longer ready
+2026/11/07 22:45:21 orchestrator: task 93: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:21 orchestrator: run 93-1 (task 93): orchestrator: run 93-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:22 dispatch: candidate 107 skipped: no longer ready
+2026/11/07 22:45:22 dispatch: candidate 128 skipped: no longer ready
+2026/11/07 22:45:22 dispatch: candidate 129 skipped: no longer ready
+2026/11/07 22:45:22 dispatch: candidate 131 skipped: no longer ready
+2026/11/07 22:45:22 dispatch: candidate 132 skipped: no longer ready
+2026/11/07 22:45:22 orchestrator: task 127: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:22 dispatch: candidate 146 skipped: no longer ready
+2026/11/07 22:45:22 orchestrator: run 127-1 (task 127): orchestrator: run 127-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:22 dispatch: candidate 147 skipped: no longer ready
+2026/11/07 22:45:22 dispatch: candidate 159 skipped: no longer ready
+2026/11/07 22:45:22 dispatch: candidate 160 skipped: no longer ready
+2026/11/07 22:45:22 dispatch: candidate 175 skipped: no longer ready
+2026/11/07 22:45:22 dispatch: candidate 181 skipped: no longer ready
+2026/11/07 22:45:22 orchestrator: task 168: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:23 orchestrator: run 168-1 (task 168): orchestrator: run 168-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:23 dispatch: candidate 185 skipped: no longer ready
+2026/11/07 22:45:23 dispatch: candidate 187 skipped: no longer ready
+2026/11/07 22:45:23 dispatch: candidate 202 skipped: no longer ready
+2026/11/07 22:45:23 dispatch: candidate 200 skipped: no longer ready
+2026/11/07 22:45:23 dispatch: candidate 204 skipped: no longer ready
+2026/11/07 22:45:23 orchestrator: task 197: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:23 orchestrator: run 197-1 (task 197): orchestrator: run 197-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:23 dispatch: candidate 222 skipped: no longer ready
+2026/11/07 22:45:23 orchestrator: task 218: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:23 dispatch: candidate 232 skipped: no longer ready
+2026/11/07 22:45:23 orchestrator: run 218-1 (task 218): orchestrator: run 218-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:23 dispatch: candidate 238 skipped: no longer ready
+2026/11/07 22:45:23 dispatch: candidate 239 skipped: no longer ready
+2026/11/07 22:45:23 dispatch: candidate 254 skipped: no longer ready
+2026/11/07 22:45:24 dispatch: candidate 263 skipped: no longer ready
+2026/11/07 22:45:24 dispatch: candidate 265 skipped: no longer ready
+2026/11/07 22:45:24 dispatch: candidate 266 skipped: no longer ready
+2026/11/07 22:45:24 dispatch: candidate 275 skipped: no longer ready
+2026/11/07 22:45:24 dispatch: candidate 282 skipped: no longer ready
+2026/11/07 22:45:24 dispatch: candidate 283 skipped: no longer ready
+2026/11/07 22:45:24 orchestrator: task 281: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:24 orchestrator: run 281-1 (task 281): orchestrator: run 281-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:24 dispatch: candidate 309 skipped: no longer ready
+2026/11/07 22:45:24 dispatch: candidate 310 skipped: no longer ready
+2026/11/07 22:45:24 orchestrator: task 319: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:24 orchestrator: run 319-1 (task 319): orchestrator: run 319-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:25 orchestrator: task 334: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:25 dispatch: candidate 341 skipped: no longer ready
+2026/11/07 22:45:25 dispatch: candidate 344 skipped: no longer ready
+2026/11/07 22:45:25 dispatch: candidate 348 skipped: no longer ready
+2026/11/07 22:45:25 dispatch: candidate 349 skipped: no longer ready
+2026/11/07 22:45:25 dispatch: candidate 377 skipped: no longer ready
+2026/11/07 22:45:25 dispatch: candidate 378 skipped: no longer ready
+2026/11/07 22:45:25 dispatch: candidate 379 skipped: no longer ready
+2026/11/07 22:45:25 orchestrator: task 376: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:25 orchestrator: run 376-1 (task 376): orchestrator: run 376-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:26 orchestrator: task 403: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:26 orchestrator: run 403-1 (task 403): orchestrator: run 403-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:26 dispatch: candidate 411 skipped: no longer ready
+2026/11/07 22:45:26 orchestrator: task 412: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:26 orchestrator: run 412-1 (task 412): orchestrator: run 412-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:26 dispatch: candidate 427 skipped: no longer ready
+2026/11/07 22:45:26 orchestrator: task 431: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:26 dispatch: candidate 450 skipped: no longer ready
+2026/11/07 22:45:26 dispatch: candidate 458 skipped: no longer ready
+2026/11/07 22:45:27 orchestrator: run 431-1 (task 431): orchestrator: run 431-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:27 dispatch: candidate 470 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:45:27 orchestrator: task 468: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:27 orchestrator: run 468-1 (task 468): orchestrator: run 468-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:27 dispatch: candidate 484 skipped: no longer ready
+2026/11/07 22:45:27 dispatch: candidate 486 skipped: no longer ready
+2026/11/07 22:45:27 orchestrator: task 470: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:27 dispatch: candidate 510 skipped: no longer ready
+2026/11/07 22:45:27 dispatch: candidate 513 skipped: no longer ready
+2026/11/07 22:45:27 orchestrator: run 470-1 (task 470): orchestrator: run 470-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:27 dispatch: candidate 519 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:45:28 dispatch: candidate 523 skipped: no longer ready
+2026/11/07 22:45:28 dispatch: candidate 524 skipped: no longer ready
+2026/11/07 22:45:28 dispatch: candidate 536 skipped: no longer ready
+2026/11/07 22:45:28 dispatch: candidate 540 skipped: no longer ready
+2026/11/07 22:45:28 dispatch: candidate 541 skipped: no longer ready
+2026/11/07 22:45:28 orchestrator: task 519: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:28 orchestrator: task 515: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:28 orchestrator: run 515-1 (task 515): orchestrator: run 515-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:28 dispatch: candidate 562 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:45:28 dispatch: candidate 563 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:45:28 dispatch: candidate 564 skipped: no longer ready
+2026/11/07 22:45:28 orchestrator: run 519-1 (task 519): orchestrator: run 519-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:28 dispatch: candidate 563 skipped: no longer ready
+2026/11/07 22:45:28 dispatch: candidate 565 skipped: no longer ready
+2026/11/07 22:45:28 dispatch: candidate 567 skipped: no longer ready
+2026/11/07 22:45:28 orchestrator: task 562: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:28 orchestrator: run 562-1 (task 562): orchestrator: run 562-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:28 dispatch: candidate 582 skipped: no longer ready
+2026/11/07 22:45:29 dispatch: candidate 597 skipped: no longer ready
+2026/11/07 22:45:29 orchestrator: task 595: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:29 orchestrator: run 595-1 (task 595): orchestrator: run 595-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:29 dispatch: candidate 608 skipped: no longer ready
+2026/11/07 22:45:29 dispatch: candidate 612 skipped: no longer ready
+2026/11/07 22:45:29 dispatch: candidate 615 skipped: no longer ready
+2026/11/07 22:45:29 orchestrator: task 609: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:29 orchestrator: task 611: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:29 orchestrator: run 609-1 (task 609): orchestrator: run 609-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:29 orchestrator: run 611-1 (task 611): orchestrator: run 611-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:30 orchestrator: task 647: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:30 orchestrator: run 647-1 (task 647): orchestrator: run 647-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:30 orchestrator: task 681: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:30 dispatch: candidate 695 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:45:30 orchestrator: run 681-1 (task 681): orchestrator: run 681-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:31 orchestrator: task 692: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:31 orchestrator: run 692-1 (task 692): orchestrator: run 692-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:31 dispatch: candidate 703 skipped: no longer ready
+2026/11/07 22:45:31 dispatch: candidate 705 skipped: no longer ready
+2026/11/07 22:45:31 dispatch: candidate 704 skipped: no longer ready
+2026/11/07 22:45:31 dispatch: candidate 723 skipped: no longer ready
+2026/11/07 22:45:31 dispatch: candidate 722 skipped: no longer ready
+2026/11/07 22:45:31 orchestrator: task 735: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:31 orchestrator: run 735-1 (task 735): orchestrator: run 735-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:32 orchestrator: task 739: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:32 dispatch: candidate 754 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:45:32 dispatch: candidate 756 skipped: no longer ready
+2026/11/07 22:45:32 orchestrator: task 729: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:32 orchestrator: run 729-1 (task 729): orchestrator: run 729-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:32 dispatch: candidate 767 skipped: no longer ready
+2026/11/07 22:45:32 dispatch: candidate 769 skipped: no longer ready
+2026/11/07 22:45:32 dispatch: candidate 770 skipped: no longer ready
+2026/11/07 22:45:32 dispatch: candidate 773 skipped: no longer ready
+2026/11/07 22:45:32 dispatch: candidate 782 skipped: no longer ready
+2026/11/07 22:45:32 dispatch: candidate 783 skipped: no longer ready
+2026/11/07 22:45:32 dispatch: candidate 784 skipped: no longer ready
+2026/11/07 22:45:32 orchestrator: task 781: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:33 dispatch: candidate 794 skipped: no longer ready
+2026/11/07 22:45:33 dispatch: candidate 796 skipped: no longer ready
+2026/11/07 22:45:33 dispatch: candidate 803 skipped: no longer ready
+2026/11/07 22:45:33 dispatch: candidate 804 skipped: no longer ready
+2026/11/07 22:45:33 dispatch: candidate 815 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:45:33 dispatch: candidate 824 skipped: no longer ready
+2026/11/07 22:45:33 orchestrator: run 781-1 (task 781): orchestrator: run 781-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:33 dispatch: candidate 826 skipped: no longer ready
+2026/11/07 22:45:33 dispatch: candidate 828 skipped: no longer ready
+2026/11/07 22:45:33 orchestrator: task 801: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:33 orchestrator: run 801-1 (task 801): orchestrator: run 801-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:33 dispatch: candidate 844 skipped: no longer ready
+2026/11/07 22:45:33 dispatch: candidate 845 skipped: no longer ready
+2026/11/07 22:45:34 dispatch: candidate 862 skipped: no longer ready
+2026/11/07 22:45:34 dispatch: candidate 877 skipped: no longer ready
+2026/11/07 22:45:34 dispatch: candidate 878 skipped: no longer ready
+2026/11/07 22:45:34 dispatch: candidate 879 skipped: no longer ready
+2026/11/07 22:45:35 dispatch: candidate 903 skipped: no longer ready
+2026/11/07 22:45:35 dispatch: candidate 900 skipped: no longer ready
+2026/11/07 22:45:35 dispatch: candidate 905 skipped: no longer ready
+2026/11/07 22:45:35 orchestrator: task 892: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:35 dispatch: candidate 923 skipped: no longer ready
+2026/11/07 22:45:35 dispatch: candidate 924 skipped: no longer ready
+2026/11/07 22:45:35 dispatch: candidate 928 skipped: no longer ready
+2026/11/07 22:45:35 dispatch: candidate 926 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:45:35 dispatch: candidate 939 skipped: no longer ready
+2026/11/07 22:45:35 orchestrator: task 888: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:35 orchestrator: run 888-1 (task 888): orchestrator: run 888-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:36 orchestrator: task 941: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:36 orchestrator: run 941-1 (task 941): orchestrator: run 941-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:36 dispatch: candidate 966 skipped: no longer ready
+2026/11/07 22:45:36 dispatch: candidate 968 skipped: no longer ready
+2026/11/07 22:45:36 dispatch: candidate 971 skipped: no longer ready
+2026/11/07 22:45:36 dispatch: candidate 991 skipped: no longer ready
+2026/11/07 22:45:36 dispatch: candidate 996 skipped: no longer ready
+2026/11/07 22:45:37 dispatch: candidate 1018 skipped: no longer ready
+2026/11/07 22:45:37 dispatch: candidate 1019 skipped: no longer ready
+2026/11/07 22:45:37 orchestrator: task 997: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:37 dispatch: candidate 1029 skipped: no longer ready
+2026/11/07 22:45:37 orchestrator: run 997-1 (task 997): orchestrator: run 997-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:37 dispatch: candidate 1033 skipped: no longer ready
+2026/11/07 22:45:37 dispatch: candidate 1034 skipped: no longer ready
+2026/11/07 22:45:38 dispatch: candidate 1051 skipped: no longer ready
+2026/11/07 22:45:38 dispatch: candidate 1067 skipped: no longer ready
+2026/11/07 22:45:38 dispatch: candidate 1070 skipped: no longer ready
+2026/11/07 22:45:38 orchestrator: task 1053: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:38 orchestrator: run 1053-1 (task 1053): orchestrator: run 1053-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:38 dispatch: candidate 1079 skipped: no longer ready
+2026/11/07 22:45:38 dispatch: candidate 1082 skipped: no longer ready
+2026/11/07 22:45:38 dispatch: candidate 1081 skipped: no longer ready
+2026/11/07 22:45:38 dispatch: candidate 1083 skipped: no longer ready
+2026/11/07 22:45:39 dispatch: candidate 1103 skipped: no longer ready
+2026/11/07 22:45:39 orchestrator: task 1101: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:39 dispatch: candidate 1115 skipped: no longer ready
+2026/11/07 22:45:39 dispatch: candidate 1117 skipped: no longer ready
+2026/11/07 22:45:39 dispatch: candidate 1120 skipped: no longer ready
+2026/11/07 22:45:39 orchestrator: run 1101-1 (task 1101): orchestrator: run 1101-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:39 orchestrator: task 1118: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:39 orchestrator: run 1118-1 (task 1118): orchestrator: run 1118-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:39 dispatch: candidate 1132 skipped: no longer ready
+2026/11/07 22:45:40 dispatch: candidate 1133 skipped: no longer ready
+2026/11/07 22:45:40 dispatch: candidate 1137 skipped: no longer ready
+2026/11/07 22:45:40 dispatch: candidate 1138 skipped: no longer ready
+2026/11/07 22:45:40 orchestrator: task 1122: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:40 orchestrator: run 1122-1 (task 1122): orchestrator: run 1122-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:40 dispatch: candidate 1167 skipped: no longer ready
+2026/11/07 22:45:40 orchestrator: task 1164: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:40 orchestrator: run 1164-1 (task 1164): orchestrator: run 1164-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:40 dispatch: candidate 1178 skipped: no longer ready
+2026/11/07 22:45:40 dispatch: candidate 1181 skipped: no longer ready
+2026/11/07 22:45:40 dispatch: candidate 1195 skipped: no longer ready
+2026/11/07 22:45:40 dispatch: candidate 1197 skipped: no longer ready
+2026/11/07 22:45:41 orchestrator: task 1176: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:41 dispatch: candidate 1203 skipped: no longer ready
+2026/11/07 22:45:41 dispatch: candidate 1221 skipped: no longer ready
+2026/11/07 22:45:41 dispatch: candidate 1220 skipped: no longer ready
+2026/11/07 22:45:41 dispatch: candidate 1222 skipped: no longer ready
+2026/11/07 22:45:41 dispatch: candidate 1232 skipped: no longer ready
+2026/11/07 22:45:41 dispatch: candidate 1243 skipped: no longer ready
+2026/11/07 22:45:42 dispatch: candidate 1250 skipped: no longer ready
+2026/11/07 22:45:42 dispatch: candidate 1253 skipped: no longer ready
+2026/11/07 22:45:42 dispatch: candidate 1265 skipped: no longer ready
+2026/11/07 22:45:42 dispatch: candidate 1266 skipped: no longer ready
+2026/11/07 22:45:42 orchestrator: task 1256: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:42 orchestrator: task 1276: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:42 orchestrator: run 1276-1 (task 1276): orchestrator: run 1276-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:43 dispatch: candidate 1300 skipped: no longer ready
+2026/11/07 22:45:43 dispatch: candidate 1301 skipped: no longer ready
+2026/11/07 22:45:43 dispatch: candidate 1312 skipped: no longer ready
+2026/11/07 22:45:43 dispatch: candidate 1323 skipped: no longer ready
+2026/11/07 22:45:43 dispatch: candidate 1324 skipped: no longer ready
+2026/11/07 22:45:44 dispatch: candidate 1340 skipped: no longer ready
+2026/11/07 22:45:44 dispatch: candidate 1347 skipped: no longer ready
+2026/11/07 22:45:44 dispatch: candidate 1358 skipped: no longer ready
+2026/11/07 22:45:44 dispatch: candidate 1363 skipped: no longer ready
+2026/11/07 22:45:44 dispatch: candidate 1364 skipped: no longer ready
+2026/11/07 22:45:44 dispatch: candidate 1366 skipped: no longer ready
+2026/11/07 22:45:45 dispatch: candidate 1395 skipped: no longer ready
+2026/11/07 22:45:45 dispatch: candidate 1396 skipped: no longer ready
+2026/11/07 22:45:45 dispatch: candidate 1416 skipped: no longer ready
+2026/11/07 22:45:45 dispatch: candidate 1419 skipped: no longer ready
+2026/11/07 22:45:45 orchestrator: task 1414: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:45 orchestrator: run 1414-1 (task 1414): orchestrator: run 1414-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:46 dispatch: candidate 1455 skipped: no longer ready
+2026/11/07 22:45:46 dispatch: candidate 1457 skipped: no longer ready
+2026/11/07 22:45:46 dispatch: candidate 1458 skipped: no longer ready
+2026/11/07 22:45:47 dispatch: candidate 1507 skipped: no longer ready
+2026/11/07 22:45:47 dispatch: candidate 1515 skipped: no longer ready
+2026/11/07 22:45:47 dispatch: candidate 1518 skipped: no longer ready
+2026/11/07 22:45:47 orchestrator: task 1486: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:47 orchestrator: run 1486-1 (task 1486): orchestrator: run 1486-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:47 dispatch: candidate 1534 skipped: no longer ready
+2026/11/07 22:45:47 dispatch: candidate 1537 skipped: no longer ready
+2026/11/07 22:45:48 orchestrator: task 1531: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:48 orchestrator: task 1532: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:48 orchestrator: run 1531-1 (task 1531): orchestrator: run 1531-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:48 dispatch: candidate 1556 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:45:48 orchestrator: run 1532-1 (task 1532): orchestrator: run 1532-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:48 dispatch: candidate 1558 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:45:48 dispatch: candidate 1559 skipped: no longer ready
+2026/11/07 22:45:48 dispatch: candidate 1568 skipped: no longer ready
+2026/11/07 22:45:48 dispatch: candidate 1572 skipped: no longer ready
+2026/11/07 22:45:48 orchestrator: task 1556: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:48 orchestrator: run 1556-1 (task 1556): orchestrator: run 1556-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:48 orchestrator: task 1565: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:48 orchestrator: run 1565-1 (task 1565): orchestrator: run 1565-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:49 dispatch: candidate 1587 skipped: no longer ready
+2026/11/07 22:45:49 dispatch: candidate 1588 skipped: no longer ready
+2026/11/07 22:45:50 dispatch: candidate 1636 skipped: no longer ready
+2026/11/07 22:45:50 dispatch: candidate 1637 skipped: no longer ready
+2026/11/07 22:45:50 dispatch: candidate 1646 skipped: no longer ready
+2026/11/07 22:45:50 dispatch: candidate 1655 skipped: no longer ready
+2026/11/07 22:45:50 dispatch: candidate 1659 skipped: no longer ready
+2026/11/07 22:45:50 dispatch: candidate 1662 skipped: no longer ready
+2026/11/07 22:45:51 dispatch: candidate 1679 skipped: no longer ready
+2026/11/07 22:45:51 dispatch: candidate 1682 skipped: no longer ready
+2026/11/07 22:45:51 orchestrator: task 1680: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:51 orchestrator: run 1680-1 (task 1680): orchestrator: run 1680-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:51 orchestrator: task 1670: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:51 orchestrator: run 1670-1 (task 1670): orchestrator: run 1670-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:51 dispatch: candidate 1689 skipped: no longer ready
+2026/11/07 22:45:51 dispatch: candidate 1694 skipped: no longer ready
+2026/11/07 22:45:51 dispatch: candidate 1695 skipped: no longer ready
+2026/11/07 22:45:52 dispatch: candidate 1709 skipped: no longer ready
+2026/11/07 22:45:52 dispatch: candidate 1710 skipped: no longer ready
+2026/11/07 22:45:52 dispatch: candidate 1711 skipped: no longer ready
+2026/11/07 22:45:52 dispatch: candidate 1728 skipped: no longer ready
+2026/11/07 22:45:52 dispatch: candidate 1730 skipped: no longer ready
+2026/11/07 22:45:52 dispatch: candidate 1729 skipped: no longer ready
+2026/11/07 22:45:52 dispatch: candidate 1748 skipped: no longer ready
+2026/11/07 22:45:53 dispatch: candidate 1760 skipped: no longer ready
+2026/11/07 22:45:53 orchestrator: task 1756: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:53 dispatch: candidate 1783 skipped: no longer ready
+2026/11/07 22:45:53 dispatch: candidate 1785 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:45:53 orchestrator: task 1749: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:53 orchestrator: run 1749-1 (task 1749): orchestrator: run 1749-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:53 dispatch: candidate 1792 skipped: no longer ready
+2026/11/07 22:45:54 orchestrator: run 1756-1 (task 1756): orchestrator: run 1756-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:54 dispatch: candidate 1799 skipped: no longer ready
+2026/11/07 22:45:54 dispatch: candidate 1807 skipped: no longer ready
+2026/11/07 22:45:54 dispatch: candidate 1832 skipped: no longer ready
+2026/11/07 22:45:55 dispatch: candidate 1852 skipped: no longer ready
+2026/11/07 22:45:55 dispatch: candidate 1854 skipped: no longer ready
+2026/11/07 22:45:55 dispatch: candidate 1880 skipped: no longer ready
+2026/11/07 22:45:56 dispatch: candidate 1908 skipped: no longer ready
+2026/11/07 22:45:56 dispatch: candidate 1909 skipped: no longer ready
+2026/11/07 22:45:56 orchestrator: task 1904: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:56 orchestrator: run 1904-1 (task 1904): orchestrator: run 1904-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:56 dispatch: candidate 1934 skipped: no longer ready
+2026/11/07 22:45:56 dispatch: candidate 1935 skipped: no longer ready
+2026/11/07 22:45:56 dispatch: candidate 1938 skipped: no longer ready
+2026/11/07 22:45:57 dispatch: candidate 1947 skipped: no longer ready
+2026/11/07 22:45:57 dispatch: candidate 1953 skipped: no longer ready
+2026/11/07 22:45:57 dispatch: candidate 1954 skipped: no longer ready
+2026/11/07 22:45:57 dispatch: candidate 1980 skipped: no longer ready
+2026/11/07 22:45:57 orchestrator: task 1973: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:57 orchestrator: task 1975: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:57 orchestrator: run 1973-1 (task 1973): orchestrator: run 1973-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:57 orchestrator: run 1975-1 (task 1975): orchestrator: run 1975-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:58 dispatch: candidate 1997 skipped: no longer ready
+2026/11/07 22:45:58 orchestrator: task 1983: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:58 orchestrator: run 1983-1 (task 1983): orchestrator: run 1983-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:58 dispatch: candidate 2038 skipped: no longer ready
+2026/11/07 22:45:58 orchestrator: task 2004: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:58 orchestrator: run 2004-1 (task 2004): orchestrator: run 2004-1: orchestrator: task closed while its run was still live
+2026/11/07 22:45:59 dispatch: candidate 2056 skipped: no longer ready
+2026/11/07 22:45:59 dispatch: candidate 2058 skipped: no longer ready
+2026/11/07 22:45:59 dispatch: candidate 2075 skipped: no longer ready
+2026/11/07 22:45:59 dispatch: candidate 2077 skipped: no longer ready
+2026/11/07 22:45:59 orchestrator: task 2076: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:45:59 orchestrator: run 2076-1 (task 2076): orchestrator: run 2076-1: orchestrator: task closed while its run was still live
+2026/11/07 22:46:00 dispatch: candidate 2104 skipped: no longer ready
+2026/11/07 22:46:00 orchestrator: task 2105: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:00 orchestrator: run 2105-1 (task 2105): orchestrator: run 2105-1: orchestrator: task closed while its run was still live
+2026/11/07 22:46:00 dispatch: candidate 2125 skipped: no longer ready
+2026/11/07 22:46:00 dispatch: candidate 2128 skipped: no longer ready
+2026/11/07 22:46:00 orchestrator: task 2123: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:00 dispatch: candidate 2148 skipped: no longer ready
+2026/11/07 22:46:01 dispatch: candidate 2161 skipped: no longer ready
+2026/11/07 22:46:01 dispatch: candidate 2164 skipped: no longer ready
+2026/11/07 22:46:01 dispatch: candidate 2196 skipped: no longer ready
+2026/11/07 22:46:01 dispatch: candidate 2198 skipped: no longer ready
+2026/11/07 22:46:02 dispatch: candidate 2211 skipped: no longer ready
+2026/11/07 22:46:02 dispatch: candidate 2215 skipped: no longer ready
+2026/11/07 22:46:02 dispatch: candidate 2227 skipped: no longer ready
+2026/11/07 22:46:02 dispatch: candidate 2230 skipped: no longer ready
+2026/11/07 22:46:03 dispatch: candidate 2261 skipped: no longer ready
+2026/11/07 22:46:03 dispatch: candidate 2262 skipped: no longer ready
+2026/11/07 22:46:03 orchestrator: task 2263: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:03 dispatch: candidate 2296 skipped: no longer ready
+2026/11/07 22:46:03 orchestrator: run 2263-1 (task 2263): orchestrator: run 2263-1: orchestrator: task closed while its run was still live
+2026/11/07 22:46:03 dispatch: candidate 2297 skipped: no longer ready
+2026/11/07 22:46:04 dispatch: candidate 2319 skipped: no longer ready
+2026/11/07 22:46:04 dispatch: candidate 2341 skipped: no longer ready
+2026/11/07 22:46:04 dispatch: candidate 2342 skipped: no longer ready
+2026/11/07 22:46:04 dispatch: candidate 2358 skipped: no longer ready
+2026/11/07 22:46:04 dispatch: candidate 2361 skipped: no longer ready
+2026/11/07 22:46:04 dispatch: candidate 2360 skipped: no longer ready
+2026/11/07 22:46:05 dispatch: candidate 2378 skipped: no longer ready
+2026/11/07 22:46:05 dispatch: candidate 2384 skipped: no longer ready
+2026/11/07 22:46:05 dispatch: candidate 2403 skipped: no longer ready
+2026/11/07 22:46:06 dispatch: candidate 2424 skipped: no longer ready
+2026/11/07 22:46:06 dispatch: candidate 2426 skipped: no longer ready
+2026/11/07 22:46:06 dispatch: candidate 2427 skipped: no longer ready
+2026/11/07 22:46:06 dispatch: candidate 2447 skipped: no longer ready
+2026/11/07 22:46:06 dispatch: candidate 2448 skipped: no longer ready
+2026/11/07 22:46:06 dispatch: candidate 2468 skipped: no longer ready
+2026/11/07 22:46:07 dispatch: candidate 2490 skipped: no longer ready
+2026/11/07 22:46:07 dispatch: candidate 2491 skipped: no longer ready
+2026/11/07 22:46:07 dispatch: candidate 2492 skipped: no longer ready
+2026/11/07 22:46:07 dispatch: candidate 2519 skipped: no longer ready
+2026/11/07 22:46:07 dispatch: candidate 2520 skipped: no longer ready
+2026/11/07 22:46:07 dispatch: candidate 2521 skipped: no longer ready
+2026/11/07 22:46:08 dispatch: candidate 2539 skipped: no longer ready
+2026/11/07 22:46:08 dispatch: candidate 2540 skipped: no longer ready
+2026/11/07 22:46:08 dispatch: candidate 2560 skipped: no longer ready
+2026/11/07 22:46:08 orchestrator: task 2557: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:09 dispatch: candidate 2581 skipped: no longer ready
+2026/11/07 22:46:09 dispatch: candidate 2586 skipped: no longer ready
+2026/11/07 22:46:09 dispatch: candidate 2587 skipped: no longer ready
+2026/11/07 22:46:09 dispatch: candidate 2615 skipped: no longer ready
+2026/11/07 22:46:09 dispatch: candidate 2614 skipped: no longer ready
+2026/11/07 22:46:10 dispatch: candidate 2634 skipped: no longer ready
+2026/11/07 22:46:10 orchestrator: task 2630: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:10 dispatch: candidate 2659 skipped: no longer ready
+2026/11/07 22:46:10 dispatch: candidate 2674 skipped: no longer ready
+2026/11/07 22:46:10 dispatch: candidate 2673 skipped: no longer ready
+2026/11/07 22:46:11 orchestrator: task 2671: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:11 dispatch: candidate 2691 skipped: no longer ready
+2026/11/07 22:46:11 orchestrator: run 2671-1 (task 2671): orchestrator: run 2671-1: orchestrator: task closed while its run was still live
+2026/11/07 22:46:11 dispatch: candidate 2693 skipped: no longer ready
+2026/11/07 22:46:12 dispatch: candidate 2715 skipped: no longer ready
+2026/11/07 22:46:12 dispatch: candidate 2734 skipped: no longer ready
+2026/11/07 22:46:12 dispatch: candidate 2746 skipped: no longer ready
+2026/11/07 22:46:12 dispatch: candidate 2762 skipped: no longer ready
+2026/11/07 22:46:12 dispatch: candidate 2789 skipped: no longer ready
+2026/11/07 22:46:13 dispatch: candidate 2806 skipped: no longer ready
+2026/11/07 22:46:13 dispatch: candidate 2822 skipped: no longer ready
+2026/11/07 22:46:13 dispatch: candidate 2826 skipped: no longer ready
+2026/11/07 22:46:13 dispatch: candidate 2824 skipped: no longer ready
+2026/11/07 22:46:13 dispatch: candidate 2825 skipped: no longer ready
+2026/11/07 22:46:13 dispatch: candidate 2829 skipped: no longer ready
+2026/11/07 22:46:14 dispatch: candidate 2850 skipped: no longer ready
+2026/11/07 22:46:14 dispatch: candidate 2856 skipped: no longer ready
+2026/11/07 22:46:14 dispatch: candidate 2858 skipped: no longer ready
+2026/11/07 22:46:15 dispatch: candidate 2903 skipped: no longer ready
+2026/11/07 22:46:15 dispatch: candidate 2930 skipped: no longer ready
+2026/11/07 22:46:16 dispatch: candidate 2975 skipped: no longer ready
+2026/11/07 22:46:16 dispatch: candidate 2977 skipped: no longer ready
+2026/11/07 22:46:16 dispatch: candidate 2976 skipped: no longer ready
+2026/11/07 22:46:17 dispatch: candidate 3003 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:17 dispatch: candidate 3004 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:17 orchestrator: task 3000: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:17 orchestrator: task 3002: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:17 dispatch: candidate 3003 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:17 dispatch: candidate 3004 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:17 dispatch: candidate 3005 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:17 dispatch: skipped 35 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:17 dispatch: candidate 3005 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:17 dispatch: candidate 3006 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:17 dispatch: candidate 3007 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:17 dispatch: skipped 33 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:17 orchestrator: task 3003: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:17 orchestrator: task 3004: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:17 dispatch: candidate 3005 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:17 dispatch: candidate 3006 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:17 dispatch: candidate 3007 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:17 dispatch: skipped 33 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:17 dispatch: candidate 3007 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:17 dispatch: candidate 3008 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:17 dispatch: candidate 3009 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:17 dispatch: skipped 31 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:17 orchestrator: task 3005: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:17 orchestrator: task 3006: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:17 dispatch: candidate 3007 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:17 dispatch: candidate 3008 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:17 dispatch: candidate 3009 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:17 dispatch: skipped 31 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:17 dispatch: candidate 3009 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:17 dispatch: candidate 3011 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:17 dispatch: candidate 3010 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:18 dispatch: skipped 29 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:18 orchestrator: task 3007: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:18 orchestrator: task 3008: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:18 dispatch: candidate 3009 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:18 dispatch: candidate 3011 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:18 dispatch: candidate 3010 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:18 dispatch: skipped 29 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:18 dispatch: candidate 3010 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:18 dispatch: candidate 3012 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:18 dispatch: candidate 3013 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:18 dispatch: skipped 27 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:18 orchestrator: task 3009: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:18 orchestrator: task 3011: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:18 dispatch: candidate 3010 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:18 dispatch: candidate 3012 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:18 dispatch: candidate 3013 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:18 dispatch: skipped 27 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:18 dispatch: candidate 3013 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:18 dispatch: candidate 3015 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:18 dispatch: candidate 3016 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:18 dispatch: skipped 25 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:18 orchestrator: task 3012: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:18 orchestrator: task 3010: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:18 dispatch: candidate 3013 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:18 dispatch: candidate 3015 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:18 dispatch: candidate 3016 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:18 dispatch: skipped 25 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:18 dispatch: candidate 3016 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:18 dispatch: candidate 3014 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:18 dispatch: candidate 3018 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:19 dispatch: skipped 23 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:19 orchestrator: task 3013: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:19 orchestrator: task 3015: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:19 dispatch: candidate 3016 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:19 dispatch: candidate 3014 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:19 dispatch: candidate 3018 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:19 dispatch: skipped 23 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:19 dispatch: candidate 3018 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:19 dispatch: candidate 3017 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:19 dispatch: candidate 3020 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:19 dispatch: skipped 21 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:19 orchestrator: task 3016: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:19 orchestrator: task 3014: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:19 dispatch: candidate 3018 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:19 dispatch: candidate 3017 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:19 dispatch: candidate 3020 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:19 dispatch: skipped 21 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:19 dispatch: candidate 3020 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:19 dispatch: candidate 3021 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:19 dispatch: candidate 3022 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:19 dispatch: skipped 19 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:19 orchestrator: task 3018: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:19 orchestrator: task 3017: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:19 dispatch: candidate 3020 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:19 dispatch: candidate 3021 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:19 dispatch: candidate 3022 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:19 dispatch: skipped 19 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:19 dispatch: candidate 3022 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:19 dispatch: candidate 3023 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:19 dispatch: candidate 3025 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:19 dispatch: skipped 17 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:20 orchestrator: task 3020: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:20 orchestrator: task 3021: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:20 dispatch: candidate 3022 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:20 dispatch: candidate 3023 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:20 dispatch: candidate 3025 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:20 dispatch: skipped 17 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:20 dispatch: candidate 3025 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:20 dispatch: candidate 3024 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:20 dispatch: candidate 3026 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:20 dispatch: skipped 15 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:20 orchestrator: task 3022: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:20 orchestrator: task 3023: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:20 dispatch: candidate 3025 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:20 dispatch: candidate 3024 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:20 dispatch: candidate 3026 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:20 dispatch: skipped 15 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:20 dispatch: candidate 3026 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:20 dispatch: candidate 3030 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:20 dispatch: candidate 3029 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:20 dispatch: skipped 13 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:20 orchestrator: task 3025: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:20 orchestrator: task 3024: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:20 dispatch: candidate 3026 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:20 dispatch: candidate 3030 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:20 dispatch: candidate 3029 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:20 dispatch: skipped 13 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:20 dispatch: candidate 3029 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:20 dispatch: candidate 3028 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:20 dispatch: candidate 3027 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:20 dispatch: skipped 11 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:20 orchestrator: task 3026: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:20 orchestrator: task 3030: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:20 dispatch: candidate 3029 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:20 dispatch: candidate 3028 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:20 dispatch: candidate 3027 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:20 dispatch: skipped 11 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:21 dispatch: candidate 3027 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:21 dispatch: candidate 3031 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:21 dispatch: candidate 3032 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:21 dispatch: skipped 9 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:21 orchestrator: task 3029: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:21 orchestrator: task 3028: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:21 dispatch: candidate 3027 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:21 dispatch: candidate 3031 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:21 dispatch: candidate 3032 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:21 dispatch: skipped 9 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:21 dispatch: candidate 3032 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:21 dispatch: candidate 3035 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:21 dispatch: candidate 3033 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:21 dispatch: skipped 7 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:21 orchestrator: task 3027: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:21 orchestrator: task 3031: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:21 dispatch: candidate 3035 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:21 dispatch: candidate 3033 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:21 dispatch: candidate 3034 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:21 dispatch: skipped 6 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:21 orchestrator: task 3032: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:21 dispatch: candidate 3033 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:21 dispatch: candidate 3034 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:21 dispatch: candidate 3037 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:21 dispatch: skipped 5 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:21 orchestrator: task 3035: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:21 dispatch: candidate 3035 skipped: backing off after failed run
+2026/11/07 22:46:21 dispatch: candidate 3034 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:21 dispatch: candidate 3037 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:21 dispatch: candidate 3036 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:21 dispatch: skipped 4 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:21 orchestrator: task 3033: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:21 dispatch: candidate 3037 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:21 dispatch: candidate 3036 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:21 dispatch: candidate 3038 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:21 dispatch: skipped 3 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:21 orchestrator: task 3034: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:21 dispatch: candidate 3036 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:21 dispatch: candidate 3038 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:21 dispatch: candidate 3040 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:21 dispatch: skipped 2 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:21 orchestrator: task 3037: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:22 dispatch: candidate 3038 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:22 dispatch: candidate 3040 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:22 dispatch: candidate 3039 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:22 dispatch: skipped 1 additional candidates: no capacity for worker/merger
+2026/11/07 22:46:22 orchestrator: task 3036: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:22 dispatch: candidate 3040 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:22 dispatch: candidate 3039 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:22 dispatch: candidate 3041 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:22 orchestrator: task 3038: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:22 dispatch: candidate 3039 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:22 dispatch: candidate 3041 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:22 orchestrator: task 3040: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:22 dispatch: candidate 3041 skipped: no capacity for worker/merger -- 2 worker runs are live of the 2 this cycle allows
+2026/11/07 22:46:22 orchestrator: task 3039: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:46:22 orchestrator: task 3041: naming the credential acme/widgets is pushed with for its run's GitHub reads: the deployment has no GitHub credential -- set one in Settings -> Git (/settings/git)
+2026/11/07 22:50:39 grain api: operator (access code) (access-code) changed boards: POST /api/boards
+2026/11/07 22:50:39 grain api: operator (access code) (access-code) changed boards: POST /api/boards
+2026/11/07 22:51:33 grain api: operator (access code) (access-code) changed board:board-1: DELETE /api/boards/board-1
+2026/11/07 22:51:33 grain api: operator (access code) (access-code) changed board:board-2: DELETE /api/boards/board-2
+2026/11/07 22:51:35 grain api: operator (access code) (access-code) changed boards: POST /api/boards
+2026/11/07 22:51:35 grain api: operator (access code) (access-code) changed boards: POST /api/boards

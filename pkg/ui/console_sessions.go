@@ -17,6 +17,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -66,16 +67,32 @@ type ConsoleSessionSetting struct {
 	// Capabilities are the capability ids this session's task is granted
 	// -- what the pane's own tick boxes read and write.
 	Capabilities []string `json:"capabilities"`
+	// MissingShippedDefaults lists the shipped Tier 1 capabilities
+	// (model.DefaultConsoleSessions) that a saved console_sessions row for
+	// this session lacks and that this deployment offers and permits on the
+	// session. Empty when console_sessions has never been saved or when all
+	// shipped defaults are already held.
+	MissingShippedDefaults []string `json:"missingShippedDefaults,omitempty"`
 	// NetworkAccess is "" for the deployment's own default, or one of
 	// model.NetworkAccesses().
 	NetworkAccess string `json:"networkAccess,omitempty"`
+	// EffectiveNetworkAccess is the network this session's runs are
+	// actually given when that is not NetworkAccess: "open" when the
+	// session asks for "none" on a sandbox backend that cannot withhold a
+	// network (sandboxesIsolateNetwork false, e.g. -host-sandboxes), where
+	// orchestrator.reconcileConsoleSessions files the session's task with
+	// egress whatever is chosen. "" when the setting is what runs get, so
+	// the pane warns only when its select would otherwise say something
+	// untrue.
+	EffectiveNetworkAccess string `json:"effectiveNetworkAccess,omitempty"`
 	// TasksApproved is whether tasks this session proposes are filed
 	// approved rather than waiting for a person. False is the default --
 	// see model.ConsoleSession's own doc comment on why.
 	TasksApproved bool `json:"tasksApproved"`
 	// KeepRunning is whether the session's task immediately restarts when
 	// its run exits rather than parking until the next message.
-	KeepRunning bool `json:"keepRunning"`
+	KeepRunning bool   `json:"keepRunning"`
+	Hosting     string `json:"hosting,omitempty"`
 	// Reads is every repo this session may read but never push to --
 	// model.ConsoleSession.Reads, rendered as owner/name strings, and,
 	// on a session whose task is open, every repo that task reads
@@ -171,6 +188,7 @@ type UpdateConsoleSessionRequest struct {
 	TasksApproved    *bool          `json:"tasksApproved"`
 	KeepRunning      *bool          `json:"keepRunning,omitempty"`
 	KeepRunningSnake *bool          `json:"keep_running,omitempty"`
+	Hosting          *string        `json:"hosting,omitempty"`
 	Reads            *[]string      `json:"reads"`
 	Writes           *[]WriteTarget `json:"writes"`
 	GoogleChatSpace  *string        `json:"googleChatSpace"`
@@ -182,6 +200,24 @@ type UpdateConsoleSessionRequest struct {
 	// setting rather than a task edit -- the next cycle resolves the
 	// session's reads from it -- so it needs writable settings.
 	ReadsAll *bool `json:"readsAll"`
+	// AdoptShippedDefaults adds the shipped Tier 1 grants the session
+	// lacks (ConsoleSessionSetting.MissingShippedDefaults) to what it
+	// holds when the request is served, keeping everything else it
+	// holds. It is the pane's Adopt shipped defaults button, and it is
+	// resolved here rather than by the caller because a caller's copy
+	// of the held set may be stale: a tab that read the session before
+	// another tab granted it something, then sent held plus missing, put
+	// back the old set and lost that grant (2026-11-07 director agent
+	// API walkthrough, finding 4). Exclusive with Capabilities.
+	AdoptShippedDefaults bool `json:"adoptShippedDefaults,omitempty"`
+	// ExpectCapabilities is the held set (ConsoleSessionSetting.
+	// Capabilities) the caller computed Capabilities from. Given, the
+	// edit is refused with a 409 coded "stale" (staleEditError),
+	// changing nothing, when the session no longer holds exactly that
+	// set -- somebody else changed its grants after the caller read
+	// them -- so a whole-list save cannot silently undo their change.
+	// Order does not matter. Only valid alongside Capabilities.
+	ExpectCapabilities *[]string `json:"expectCapabilities,omitempty"`
 
 	// renameByAgent marks a Title written by the session's own agent
 	// (RenameConsoleSessionOfTask) rather than by a person: it is
@@ -218,6 +254,7 @@ type CreateConsoleSessionRequest struct {
 	TasksApproved    bool          `json:"tasksApproved,omitempty"`
 	KeepRunning      bool          `json:"keepRunning,omitempty"`
 	KeepRunningSnake *bool         `json:"keep_running,omitempty"`
+	Hosting          string        `json:"hosting,omitempty"`
 	Reads            []string      `json:"reads,omitempty"`
 	Writes           []WriteTarget `json:"writes,omitempty"`
 	GoogleChatSpace  string        `json:"googleChatSpace,omitempty"`
@@ -308,6 +345,10 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 		networkAccess := string(s.NetworkAccess)
 		tasksApproved := s.TasksApproved
 		keepRunning := s.KeepRunning
+		hosting := ""
+		if model.NormalizeHosting(s.Hosting) == model.HostingConsole {
+			hosting = string(model.HostingConsole)
+		}
 		googleChatSpace := s.GoogleChatSpace
 		modelChoice := s.Model
 		reads := make([]string, 0, len(s.Reads))
@@ -341,7 +382,9 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 				if len(openTask.Grants) > 0 {
 					capabilities = make([]string, 0, len(openTask.Grants))
 					for _, g := range openTask.Grants {
-						if g.Capability == "" || g.Capability == model.DurableCapability {
+						_, legacyAdm := model.LegacyAdmissionAlias(g.Capability)
+						_, legacyHost := model.LegacyHostingAlias(g.Capability)
+						if g.Capability == "" || legacyAdm || legacyHost {
 							continue
 						}
 						if g.Via == model.GrantByDefault && !slices.Contains(s.Capabilities, g.Capability) &&
@@ -354,12 +397,17 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 					}
 				}
 				if openTask.NetworkAccess != "" || prev.NetworkAccess != openTask.NetworkAccess {
-					if !(s.NetworkAccess == model.NetworkNone && c.Config.SandboxShapeIgnored && openTask.NetworkAccess == model.NetworkOpen) {
+					if !(s.NetworkAccess == model.NetworkNone && !c.sandboxesIsolateNetwork() && openTask.NetworkAccess == model.NetworkOpen) {
 						networkAccess = string(openTask.NetworkAccess)
 					}
 				}
 				tasksApproved = model.ConsoleSessionQueuesProposals(sessions, *openTask)
 				keepRunning = openTask.KeepRunning
+				if model.NormalizeHosting(openTask.Hosting) == model.HostingConsole {
+					hosting = string(model.HostingConsole)
+				} else {
+					hosting = ""
+				}
 				if openTask.Reads != nil || len(s.Reads) == 0 {
 					stateRepo := c.stateRepoRef()
 					reads = make([]string, 0, len(openTask.Reads))
@@ -405,24 +453,80 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 		if team == "" {
 			team = model.DefaultTeamID
 		}
+		var missingShippedDefaults []string
+		if cfg.ConsoleSessions != nil {
+			missing, err := c.missingShippedSessionDefaults(ctx, s.ID, capabilities, openTask)
+			if err != nil {
+				return nil, err
+			}
+			missingShippedDefaults = missing
+		}
+		var effectiveNetwork string
+		if model.NetworkAccess(networkAccess) == model.NetworkNone && !c.sandboxesIsolateNetwork() {
+			effectiveNetwork = string(model.NetworkOpen)
+		}
 		out = append(out, ConsoleSessionSetting{
-			ID:              s.ID,
-			Title:           title,
-			Team:            team,
-			TaskID:          taskID,
-			Capabilities:    capabilities,
-			NetworkAccess:   networkAccess,
-			TasksApproved:   tasksApproved,
-			KeepRunning:     keepRunning,
-			Reads:           reads,
-			ReadsAll:        s.ReadsAllRepos(),
-			AutoReads:       autoReads,
-			Writes:          writes,
-			GoogleChatSpace: googleChatSpace,
-			Model:           modelChoice,
-			Crowded:         crowded,
-			CrowdedNote:     note,
+			ID:                     s.ID,
+			Title:                  title,
+			Team:                   team,
+			TaskID:                 taskID,
+			Capabilities:           capabilities,
+			MissingShippedDefaults: missingShippedDefaults,
+			NetworkAccess:          networkAccess,
+			EffectiveNetworkAccess: effectiveNetwork,
+			TasksApproved:          tasksApproved,
+			KeepRunning:            keepRunning,
+			Hosting:                hosting,
+			Reads:                  reads,
+			ReadsAll:               s.ReadsAllRepos(),
+			AutoReads:              autoReads,
+			Writes:                 writes,
+			GoogleChatSpace:        googleChatSpace,
+			Model:                  modelChoice,
+			Crowded:                crowded,
+			CrowdedNote:            note,
 		})
+	}
+	return out, nil
+}
+
+// missingShippedSessionDefaults returns the shipped default capabilities
+// (model.DefaultConsoleSessions) missing from a saved console session's
+// held capabilities, filtered to grants this deployment actually offers
+// and permits on the session's task so "Adopt shipped defaults" never
+// proposes a grant UpdateConsoleSession would refuse.
+func (c *Client) missingShippedSessionDefaults(ctx context.Context, sessionID string, held []string, openTask *model.Task) ([]string, error) {
+	candidates := model.MissingShippedConsoleSessionCapabilities(sessionID, held)
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	var checkTask func(capID string) error
+	if openTask != nil {
+		policy, configured, err := c.capabilityPolicyFor(ctx)
+		if err != nil {
+			return nil, err
+		}
+		checkTask = func(capID string) error {
+			if model.IsCapabilityRef(capID) {
+				subject := model.CapabilitySubject{Repo: openTask.Target, Kind: model.CapabilityRunTask}
+				if err := policy.Permits(capID, subject, configured); err != nil {
+					return err
+				}
+			}
+			return c.catalogueEditRefusal(ctx, *openTask, capID)
+		}
+	}
+	var out []string
+	for _, capID := range candidates {
+		if _, ok := c.capabilityByID(capID); !ok {
+			continue
+		}
+		if checkTask != nil {
+			if err := checkTask(capID); err != nil {
+				continue
+			}
+		}
+		out = append(out, capID)
 	}
 	return out, nil
 }
@@ -480,7 +584,88 @@ func (c *Client) consoleSessionCrowding(ctx context.Context, taskID string) (boo
 // new capabilities onto it on the next cycle
 // (orchestrator.syncConsoleSessionTask), which is the same one-writer
 // discipline every other setting follows.
+//
+// Edits are served one at a time (consoleSessionEditMu), and an edit
+// that names what it was computed from -- adoptShippedDefaults, or
+// capabilities with expectCapabilities -- is resolved against the
+// session as it is listed now (resolveConsoleSessionCapabilityEdit),
+// inside that one-at-a-time section, so no other edit can land between
+// that read and this write.
 func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req UpdateConsoleSessionRequest) ([]ConsoleSessionSetting, error) {
+	c.consoleSessionEditMu.Lock()
+	defer c.consoleSessionEditMu.Unlock()
+	if req.AdoptShippedDefaults || req.ExpectCapabilities != nil {
+		resolved, err := c.resolveConsoleSessionCapabilityEdit(ctx, id, req)
+		if err != nil {
+			return nil, err
+		}
+		req = resolved
+	}
+	return c.updateConsoleSession(ctx, id, req)
+}
+
+// resolveConsoleSessionCapabilityEdit turns an edit that depends on what
+// the session holds into a plain Capabilities edit, reading what it
+// holds the way GET /api/console-sessions lists it -- which is what the
+// pane read, and what MissingShippedDefaults is measured against.
+//
+// adoptShippedDefaults becomes held plus the missing shipped defaults;
+// expectCapabilities is checked against held and refused, as a
+// staleEditError, when the two differ as sets. With nothing missing,
+// adopting is left a no-op rather than a save of held, which would also
+// decline any session default held does not list.
+func (c *Client) resolveConsoleSessionCapabilityEdit(ctx context.Context, id string, req UpdateConsoleSessionRequest) (UpdateConsoleSessionRequest, error) {
+	if req.AdoptShippedDefaults && req.Capabilities != nil {
+		return req, validationErrorf("adoptShippedDefaults and capabilities are exclusive: adopting adds the missing shipped defaults to what the session holds now, so send one or the other")
+	}
+	if req.ExpectCapabilities != nil && req.Capabilities == nil {
+		return req, validationErrorf("expectCapabilities is the held set capabilities was computed from, so it needs capabilities alongside it")
+	}
+	listed, err := c.ListConsoleSessions(ctx)
+	if err != nil {
+		return req, err
+	}
+	i := slices.IndexFunc(listed, func(s ConsoleSessionSetting) bool { return s.ID == id })
+	if i < 0 {
+		// updateConsoleSession says why: not configured, or settings
+		// read-only.
+		return req, nil
+	}
+	current := listed[i]
+	if req.ExpectCapabilities != nil && !sameCapabilitySet(*req.ExpectCapabilities, current.Capabilities) {
+		return req, &staleEditError{Kind: "console session", ID: id}
+	}
+	if req.AdoptShippedDefaults {
+		req.AdoptShippedDefaults = false
+		if len(current.MissingShippedDefaults) > 0 {
+			next := slices.Clone(current.Capabilities)
+			for _, capID := range current.MissingShippedDefaults {
+				if !slices.Contains(next, capID) {
+					next = append(next, capID)
+				}
+			}
+			req.Capabilities = &next
+		}
+	}
+	return req, nil
+}
+
+// sameCapabilitySet reports whether a and b name the same capabilities,
+// in any order and ignoring repeats and surrounding space.
+func sameCapabilitySet(a, b []string) bool {
+	set := func(ids []string) map[string]bool {
+		out := make(map[string]bool, len(ids))
+		for _, id := range ids {
+			if id = strings.TrimSpace(id); id != "" {
+				out[id] = true
+			}
+		}
+		return out
+	}
+	return maps.Equal(set(a), set(b))
+}
+
+func (c *Client) updateConsoleSession(ctx context.Context, id string, req UpdateConsoleSessionRequest) ([]ConsoleSessionSetting, error) {
 	cfg, err := c.consoleSessionConfig(ctx)
 	if err != nil {
 		return nil, err
@@ -558,13 +743,28 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 		}
 		session.Team = team
 	}
+	var chosenHosting *model.Hosting
+	if req.Hosting != nil {
+		h, err := model.ParseOptionalHosting(*req.Hosting)
+		if err != nil {
+			return nil, validationErrorf("%v", err)
+		}
+		if h == model.HostingUnattended {
+			h = ""
+		}
+		chosenHosting = &h
+	}
+	var legacyHosting model.Hosting
+	var hadLegacyHosting bool
 	if req.Capabilities != nil {
 		// Rejected rather than skipped, and duplicates dropped, for
 		// UpdateSettings' own reasons about defaultCapabilities: this is
 		// somebody choosing a set, in front of the thing it applies to.
 		seen := map[string]bool{}
 		ids := make([]string, 0, len(*req.Capabilities))
-		for _, rawCap := range *req.Capabilities {
+		capsWithoutLegacy, _, _ := extractLegacyAdmissionCaps("console session "+id, *req.Capabilities)
+		capsWithoutLegacy, legacyHosting, hadLegacyHosting = extractLegacyHostingCaps("console session "+id, capsWithoutLegacy)
+		for _, rawCap := range capsWithoutLegacy {
 			normalizedIDs, err := c.normalizeCapabilityIDs(rawCap)
 			if err != nil {
 				return nil, err
@@ -623,6 +823,12 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 		session.KeepRunning = *req.KeepRunning
 	} else if req.KeepRunningSnake != nil {
 		session.KeepRunning = *req.KeepRunningSnake
+	}
+	if chosenHosting != nil {
+		session.Hosting = *chosenHosting
+	}
+	if hadLegacyHosting {
+		session.Hosting = model.MaxHosting(session.Hosting, legacyHosting)
 	}
 	if req.Reads != nil {
 		reads, err := c.parseReads(*req.Reads)
@@ -739,9 +945,9 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 						return err
 					}
 				}
-				newGrants := make([]model.Grant, 0, len(session.Capabilities)+1)
-				newGrants = append(newGrants, model.Grant{Capability: model.DurableCapability, Via: model.GrantByGrain})
-				seen := map[string]bool{model.DurableCapability: true}
+				newGrants := make([]model.Grant, 0, len(session.Capabilities))
+				seen := map[string]bool{}
+				t.Admission = model.AdmissionDurable
 				for _, capID := range session.Capabilities {
 					if capID == "" || seen[capID] {
 						continue
@@ -756,7 +962,7 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 				t.Grants = newGrants
 			}
 			if req.NetworkAccess != nil {
-				t.NetworkAccess = model.ConsoleSessionNetworkAccess(session, !c.Config.SandboxShapeIgnored)
+				t.NetworkAccess = model.ConsoleSessionNetworkAccess(session, c.sandboxesIsolateNetwork())
 			}
 			if req.TasksApproved != nil {
 				t.AutoApproveProposals = *req.TasksApproved
@@ -808,7 +1014,12 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 			if req.KeepRunning != nil || req.KeepRunningSnake != nil {
 				t.KeepRunning = session.KeepRunning
 			}
-			t.Body = model.DirectorSessionBody(stateRepo, session)
+			if chosenHosting != nil || hadLegacyHosting {
+				t.Hosting = model.NormalizeHosting(session.Hosting)
+			}
+			effective := session
+			effective.TasksApproved = model.ConsoleSessionQueuesProposals(sessions, *t)
+			t.Body = model.DirectorSessionBody(stateRepo, effective)
 			return nil
 		}); err != nil {
 			return nil, err
@@ -818,11 +1029,12 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 				Capabilities:    session.Capabilities,
 				Reads:           session.Reads,
 				Writes:          session.Writes,
-				NetworkAccess:   model.ConsoleSessionNetworkAccess(session, !c.Config.SandboxShapeIgnored),
+				NetworkAccess:   model.ConsoleSessionNetworkAccess(session, c.sandboxesIsolateNetwork()),
 				Model:           strings.TrimSpace(session.Model),
 				Title:           model.ConsoleSessionTitle(session),
 				TasksApproved:   session.TasksApproved,
 				KeepRunning:     session.KeepRunning,
+				Hosting:         session.Hosting,
 				GoogleChatSpace: session.GoogleChatSpace,
 				OfferedDefaults: model.ConsoleSessionDefaultGrants(),
 				AutoReads:       autoReads,
@@ -850,15 +1062,20 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 			if req.KeepRunning == nil && req.KeepRunningSnake == nil {
 				prevKeepRunning = openTask.KeepRunning
 			}
+			prevHosting := origSession.Hosting
+			if chosenHosting == nil && !hadLegacyHosting {
+				prevHosting = openTask.Hosting
+			}
 			if err := model.RecordSyncedConsoleSession(ctx, c.Store, openTask.ID, model.ConsoleSessionConfigSnapshot{
 				Capabilities:    prevCaps,
 				Reads:           prevReads,
 				Writes:          prevWrites,
-				NetworkAccess:   model.ConsoleSessionNetworkAccess(origSession, !c.Config.SandboxShapeIgnored),
+				NetworkAccess:   model.ConsoleSessionNetworkAccess(origSession, c.sandboxesIsolateNetwork()),
 				Model:           strings.TrimSpace(origSession.Model),
 				Title:           model.ConsoleSessionTitle(origSession),
 				TasksApproved:   origSession.TasksApproved,
 				KeepRunning:     prevKeepRunning,
+				Hosting:         prevHosting,
 				GoogleChatSpace: origSession.GoogleChatSpace,
 				OfferedDefaults: consoleSessionHeldDefaults(openTask.Grants),
 			}); err != nil {
@@ -878,7 +1095,9 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 func consoleSessionGrainCapabilities(grants []model.Grant) []string {
 	caps := make([]string, 0, len(grants))
 	for _, g := range grants {
-		if g.Via != model.GrantByGrain || g.Capability == "" || g.Capability == model.DurableCapability {
+		_, legacyAdm := model.LegacyAdmissionAlias(g.Capability)
+		_, legacyHost := model.LegacyHostingAlias(g.Capability)
+		if g.Via != model.GrantByGrain || g.Capability == "" || legacyAdm || legacyHost {
 			continue
 		}
 		if !slices.Contains(caps, g.Capability) {
@@ -918,14 +1137,30 @@ func (c *Client) ensureConsoleSessionSnapshot(ctx context.Context, task model.Ta
 		Capabilities:    prevCaps,
 		Reads:           task.Reads,
 		Writes:          task.Writes,
-		NetworkAccess:   model.ConsoleSessionNetworkAccess(session, !c.Config.SandboxShapeIgnored),
+		NetworkAccess:   model.ConsoleSessionNetworkAccess(session, c.sandboxesIsolateNetwork()),
 		Model:           strings.TrimSpace(session.Model),
 		Title:           model.ConsoleSessionTitle(session),
 		TasksApproved:   session.TasksApproved,
 		KeepRunning:     task.KeepRunning,
+		Hosting:         task.Hosting,
 		GoogleChatSpace: session.GoogleChatSpace,
 		OfferedDefaults: consoleSessionHeldDefaults(task.Grants),
 	})
+}
+
+// sandboxesIsolateNetwork reports whether this deployment's sandbox backend can
+// honour model.NetworkNone, matching orchestrator.sandboxesIsolateNetwork.
+// ContainerSandboxes and plain K8sSandboxes apply a shape (SandboxShapeIgnored
+// is false) yet still cannot withhold a network, while DisabledSandboxes skips
+// shape (SandboxShapeIgnored is true) yet preserves configured NetworkNone
+// (IsolatesNetwork is true), so Config.Sandboxes (daemon.SandboxHealthAdapter)
+// is asked first when it answers; !SandboxShapeIgnored is the fallback for
+// callers and tests that configure no Sandboxes handle.
+func (c *Client) sandboxesIsolateNetwork() bool {
+	if iso, ok := c.Config.Sandboxes.(interface{ IsolatesNetwork() bool }); ok {
+		return iso.IsolatesNetwork()
+	}
+	return !c.Config.SandboxShapeIgnored
 }
 
 // consoleSessionHeldDefaults is the model.ConsoleSessionDefaultGrants a
@@ -1041,11 +1276,23 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 		}
 	}
 
+	sessionHosting, err := model.ParseOptionalHosting(req.Hosting)
+	if err != nil {
+		return "", nil, validationErrorf("%v", err)
+	}
+	if sessionHosting == model.HostingUnattended {
+		sessionHosting = ""
+	}
 	var caps []string
 	if req.Capabilities != nil {
+		capsWithoutLegacy, _, _ := extractLegacyAdmissionCaps("console session "+id, req.Capabilities)
+		capsWithoutLegacy, legacyHosting, hadLegacyHosting := extractLegacyHostingCaps("console session "+id, capsWithoutLegacy)
+		if hadLegacyHosting {
+			sessionHosting = model.MaxHosting(sessionHosting, legacyHosting)
+		}
 		seen := map[string]bool{}
-		caps = make([]string, 0, len(req.Capabilities))
-		for _, rawCap := range req.Capabilities {
+		caps = make([]string, 0, len(capsWithoutLegacy))
+		for _, rawCap := range capsWithoutLegacy {
 			normalizedIDs, err := c.normalizeCapabilityIDs(rawCap)
 			if err != nil {
 				return "", nil, err
@@ -1136,6 +1383,7 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 		NetworkAccess:   access,
 		TasksApproved:   req.TasksApproved,
 		KeepRunning:     req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake),
+		Hosting:         sessionHosting,
 		Reads:           reads,
 		Writes:          writes,
 		GoogleChatSpace: strings.TrimSpace(req.GoogleChatSpace),
@@ -1154,7 +1402,7 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 	}
 	taskID, err := model.FileConsoleSessionTask(ctx, c.Store, newSession, model.FileConsoleSessionOptions{
 		StateRepo:       c.stateRepoRef(),
-		NetworkIsolates: !c.Config.SandboxShapeIgnored,
+		NetworkIsolates: c.sandboxesIsolateNetwork(),
 		Now:             now,
 	})
 	if err != nil {
@@ -1169,7 +1417,7 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 		// makes, so it lifts the opening park the task was filed on and
 		// queues the session's first exchange exactly as a message typed
 		// into an existing session would.
-		by := model.Attribution{Actor: c.requestActor(ctx).Actor}
+		by := c.requestActor(ctx)
 		if err := c.addAttributedComment(ctx, taskID, message, attachments, by, now, true); err != nil {
 			return "", nil, err
 		}
@@ -1221,6 +1469,7 @@ func (c *Client) stopAndCloseConsoleSessionTask(ctx context.Context, taskID stri
 		if err != nil {
 			return err
 		}
+		finishedAny := false
 		for i := range runs {
 			if runs[i].FinishedAt != nil {
 				continue
@@ -1228,6 +1477,10 @@ func (c *Client) stopAndCloseConsoleSessionTask(ctx context.Context, taskID stri
 			if err := c.Store.FinishRun(ctx, runs[i].ID, now, "cancelled", "cancelled by user"); err != nil {
 				return err
 			}
+			finishedAny = true
+		}
+		if finishedAny && c.Config.TaskCanceller != nil {
+			c.Config.TaskCanceller.CancelTask(ctx, taskID)
 		}
 	}
 	obs, err := c.Store.GetObservation(ctx, taskID)
@@ -1235,13 +1488,24 @@ func (c *Client) stopAndCloseConsoleSessionTask(ctx context.Context, taskID stri
 		return err
 	}
 	if obs == nil || obs.ClosedAt == nil {
-		if err := c.Store.ObserveClose(ctx, taskID, now, c.requestActor(ctx).Actor, reason, func(o *model.Observation) {
-			o.ClosedAt = &now
+		who := c.requestActor(ctx)
+		changed := false
+		if err := c.Store.ObserveField(ctx, taskID, now, func(o *model.Observation) {
+			if o.ClosedAt == nil {
+				o.ClosedAt = &now
+				changed = true
+			}
 			o.PendingQuestionCommentID = nil
 			o.PendingSecret = ""
 			o.PendingAccess = nil
 		}); err != nil {
 			return err
+		}
+		if changed {
+			c.recordTaskEvent(ctx, model.TaskEvent{
+				TaskID: taskID, Kind: model.TaskEventClosed, At: now,
+				By: who.Actor, OnBehalfOf: who.OnBehalfOf, Reason: reason,
+			})
 		}
 	}
 	if reset && !slices.Contains(task.Tags, model.ConsoleSessionResetTag) {
@@ -1286,7 +1550,7 @@ func (c *Client) RestartConsoleSession(ctx context.Context, id string, req Resta
 	}
 	if _, err := model.FileConsoleSessionTask(ctx, c.Store, session, model.FileConsoleSessionOptions{
 		StateRepo:            c.stateRepoRef(),
-		NetworkIsolates:      !c.Config.SandboxShapeIgnored,
+		NetworkIsolates:      c.sandboxesIsolateNetwork(),
 		PreviousTaskID:       previous,
 		CarryHandoverSummary: req.CarryHandover && previous != "",
 		Now:                  c.now(),

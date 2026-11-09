@@ -19,7 +19,7 @@ import "slices"
 // GKESandboxClusterTemplateID names the built-in interactive template
 // that walks a person through setting up an off-cluster GKE sandbox
 // cluster and attaching it to this deployment: the gke-sandbox-cluster
-// bootstrap playbook (pkg/capability/bootstrap/playbooks), driven as a
+// bootstrap playbook (pkg/playbooks), driven as a
 // live chat.
 //
 // Unlike every other system template it backs no schedule. It is filed
@@ -111,7 +111,7 @@ func gkeSandboxClusterTemplate() *Template {
 			// Named as strings rather than through each capability
 			// package's own CapabilityName: those packages import this
 			// one.
-			{Capability: "bootstrap-playbooks", Via: GrantByLabel},
+			{Capability: BootstrapPlaybooksGrant, Via: GrantByLabel},
 			{Capability: GrainHostExecGrant, Via: GrantByLabel},
 		},
 	}
@@ -124,8 +124,8 @@ const gkeSandboxClusterBody = "Walk me through setting up a GKE Standard sandbox
 	"- Zone or region: {{location}}\n" +
 	"- Cluster name: {{cluster}}\n" +
 	"- Machine type: {{machine_type}}\n\n" +
-	"Follow the `gke-sandbox-cluster` bootstrap playbook (read it with " +
-	"read_bootstrap_playbook before you do anything else), in this order:\n\n" +
+	"Follow the `gke-sandbox-cluster` bootstrap playbook (read " +
+	"`/home/debian/.config-map/bootstrap/gke-sandbox-cluster.md` before you do anything else), in this order:\n\n" +
 	"1. In one message, confirm the four values above, ask for any that are blank, and ask " +
 	"for the node pool name and pool size the playbook also needs. Do not run anything " +
 	"until I have answered.\n" +

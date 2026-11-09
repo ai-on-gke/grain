@@ -1,0 +1,19 @@
+[
+  {
+    "id": 1,
+    "subject": "pipeline.rc-failed:v3.3.0-rc.1",
+    "family": "pipeline.rc-failed",
+    "severity": "warning",
+    "title": "Release candidate v3.3.0-rc.1 of ai-on-gke/grain failed qualification",
+    "body": "`v3.3.0-rc.1` (55cf8c54caec) of ai-on-gke/grain failed Stage 2 qualification (grain/release-qualification): attempt 1 of RELEASE_MAX_RC_ATTEMPTS (3).\n\nCommits to triage: `c6004bc95553bd1e329f7fe62da0e18aeb711a48..55cf8c54caeca60a735d96d360c58c63c18be29a` (everything since v3.2.0).\n\nQualification:\n- repo:template:ai-on-gke:grain:qualification-mergequeue: fail (task 9, attempt 2) -- task 9 opened a pull request\n- repo:template:ai-on-gke:grain:qualification-ci-diagnostics: fail (task 10, attempt 2) -- task 10 proposed a follow-up task\n- repo:template:ai-on-gke:grain:qualification-base-triage: pass (task 11, attempt 2)\n- repo:template:ai-on-gke:grain:qualification-system-smoke: not started\n- confirmed red after 1 retry: repo:template:ai-on-gke:grain:qualification-mergequeue, repo:template:ai-on-gke:grain:qualification-ci-diagnostics\n\nThe train tags v3.3.0-rc.1-discarded and cuts v3.3.0-rc.2 from the next known-good commit after it. Title each fix or revert that must land first `[rc-blocker v3.3.0-rc.1] ...`: while any such task is open, check run grain/rc-hold on 55cf8c54caec holds v3.3.0-rc.2.",
+    "repo": "ai-on-gke/grain",
+    "raisedBy": "automation:release-qualification",
+    "raisedAt": "2026-11-07T15:51:31Z",
+    "lastRaisedAt": "2026-11-07T15:51:31Z",
+    "raiseCount": 1,
+    "actions": [
+      "investigate"
+    ],
+    "delivered": {}
+  }
+]

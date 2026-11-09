@@ -622,8 +622,8 @@ var Migrations = []Migration{
 		Version:     92,
 		Description: "add the hostd registry (hostd, hostd_token), with the co-located hostd as local",
 		Statements: []string{
-			hostdTable,
-			hostdTokenTable,
+			schema92HostdTable,
+			schema92HostdTokenTable,
 		},
 		Up: ensureLocalHostd,
 	},
@@ -813,7 +813,146 @@ var Migrations = []Migration{
 			"ALTER TABLE `grain_config` ADD COLUMN `registry` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version:     117,
+		Description: "add host enrollment codes, pending join requests, key-bound host metadata and 30-day credential expiry",
+		Statements: []string{
+			"ALTER TABLE `hostd` ADD COLUMN `public_key` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `key_fingerprint` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `enrollment_code` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `capacity` INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE `hostd` ADD COLUMN `hostname` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `os` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `arch` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `clis` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `version` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `local_user` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `hostd` ADD COLUMN `last_seen_at` DATETIME NULL",
+			"ALTER TABLE `hostd_token` ADD COLUMN `expires_at` DATETIME NULL",
+			hostEnrollmentCodeTable,
+			hostJoinRequestTable,
+		},
+	},
+	{
+		Version:     118,
+		Description: "rewrite stored bootstrap-playbooks grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/config-map#config-map={\"config_maps\":[\"bootstrap\"]} (the in-process bootstrap-playbooks is retired)",
+		Up:          migrateBootstrapPlaybooksGrants,
+	},
+	{
+		Version:     119,
+		Description: "add allowed_principal.label and allowed_principal.last_used_at for delegate: entries (design/design/authentication.design.md §6)",
+		Statements: []string{
+			"ALTER TABLE `allowed_principal` ADD COLUMN `label` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `allowed_principal` ADD COLUMN `last_used_at` DATETIME NULL",
+		},
+	},
+	{
+		Version:     120,
+		Description: "rewrite stored github-credential:<name> grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/repo#credential={\"credential\":\"<name>\"} (the in-process github-credential:<name> providers are retired)",
+		Up:          migrateGitHubCredentialGrants,
+	},
+	{
+		Version:     121,
+		Description: "rewrite stored read-issues grants, repo_config.ci_capabilities and capability_policy included, to https://grain.dev/capabilities/github#read-issues={} (the in-process capability is retired)",
+		Up:          migrateReadIssuesGrants,
+	},
+	{
+		Version:     122,
+		Description: "replace priority-dispatch and durable grants with the admission setting on tasks, templates, schedules and defaults",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `admission` TEXT NOT NULL DEFAULT 'standard'",
+			"ALTER TABLE `template` ADD COLUMN `admission` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `schedule` ADD COLUMN `admission` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `grain_config` ADD COLUMN `default_admission` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `repo_config` ADD COLUMN `default_admission` TEXT NOT NULL DEFAULT ''",
+		},
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			return MigrateAdmissionFromGrants(ctx, tx, false)
+		},
+	},
+	{
+		Version:     123,
+		Description: "replace console grants with the hosting setting on tasks, templates, schedules, console sessions and defaults",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `hosting` TEXT NOT NULL DEFAULT 'unattended'",
+			"ALTER TABLE `template` ADD COLUMN `hosting` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `schedule` ADD COLUMN `hosting` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `grain_config` ADD COLUMN `default_hosting` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `repo_config` ADD COLUMN `default_hosting` TEXT NOT NULL DEFAULT ''",
+		},
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			return MigrateHostingFromGrants(ctx, tx, false)
+		},
+	},
+	{
+		Version:     124,
+		Description: "rewrite stored github-sandbox grants, repo_config.ci_capabilities and capability_policy included, to https://grain.dev/capabilities/github#sandbox-repo={} (the in-process capability is retired)",
+		Up:          migrateGitHubSandboxGrants,
+	},
+	{
+		Version:     125,
+		Description: "rewrite grain-ci in the capability policy's rules and catalogue defaults to https://grain.dev/capabilities/grain#ci={} (migration 96 rewrote every other stored grain-ci grant)",
+		Up:          migrateGrainCIPolicy,
+	},
+	{
+		Version:     126,
+		Description: "add external_agent_token.owner_source, how the issuer who set a credential's owner was established (an owner named under the access code is not a verified on-behalf-of)",
+		Statements: []string{
+			"ALTER TABLE `external_agent_token` ADD COLUMN `owner_source` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version: 127,
+		Description: "rewrite the gcp#gcp-key grants migration 109 kept as written (an \"account\" naming an unconfigured permission set) " +
+			"to permission_set, so the state repository a store exports loads again",
+		Up: MigrateGCPKeyGrantArgs,
+	},
+	{
+		Version: 128,
+		Description: "drop default, template and schedule grants that the deployment's capability catalogue disables, " +
+			"noting affected templates and schedules so the state repository a store exports loads again",
+		Up: MigrateCatalogueDisabledGrants,
+	},
+	{
+		Version: 129,
+		Description: "rewrite retired capability names in task_grant_wait (such as github-sandbox) " +
+			"that earlier rewriteLegacyGrantsMulti migrations left under their retired names",
+		Up: migrateRetiredGrantWaits,
+	},
+	{
+		Version:     130,
+		Description: "add task_run_usage, usage_capacity and usage_setting for per-run token accounting and connection budgets (tokenusage.go)",
+		Statements: []string{
+			taskRunUsageTable,
+			taskRunUsageFinishedIndex,
+			taskRunUsageTaskIndex,
+			usageCapacityTable,
+			usageSettingTable,
+		},
+	},
 }
+
+// schema92HostdTable and schema92HostdTokenTable are hostd and hostd_token as
+// schema 92 created them, frozen so migration 92 followed by migration 117's
+// ALTER TABLE statements runs cleanly from any earlier baseline.
+const schema92HostdTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd`" + ` (
+  ` + "`name`" + `       TEXT     NOT NULL,
+  ` + "`owner`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`labels`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`created_by`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`created_at`" + ` DATETIME NOT NULL,
+  ` + "`revoked_at`" + ` DATETIME NULL,
+  PRIMARY KEY (` + "`name`" + `)
+)`
+
+const schema92HostdTokenTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd_token`" + ` (
+  ` + "`token_hash`" + ` TEXT     NOT NULL,
+  ` + "`hostd`" + `      TEXT     NOT NULL,
+  ` + "`prefix`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`created_at`" + ` DATETIME NOT NULL,
+  ` + "`revoked_at`" + ` DATETIME NULL,
+  PRIMARY KEY (` + "`token_hash`" + `)
+)`
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as
 // schemas before 95 wrote it, with the default captured for replacing.

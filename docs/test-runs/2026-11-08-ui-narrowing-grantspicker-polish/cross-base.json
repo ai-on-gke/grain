@@ -1,0 +1,361 @@
+{
+  "label": "base",
+  "steps": [
+    {
+      "name": "template",
+      "status": 201,
+      "id": "template-6",
+      "priority": 8,
+      "hosting": "console"
+    },
+    {
+      "name": "schedule",
+      "status": 201,
+      "id": "sched-5"
+    },
+    {
+      "name": "draft over template keeps the template's priority 1440-light",
+      "ok": true,
+      "priority": "8",
+      "help": "task priority task priority default 8, from the template; higher numbers run first",
+      "title": "Draft walk title"
+    },
+    {
+      "name": "template's console hosting shown 1440-light",
+      "ok": true
+    },
+    {
+      "name": "Create task held on bad::head, released on forkuser:feat 1440-light",
+      "ok": true,
+      "heldBad": true,
+      "okFixed": true,
+      "msg": [
+        "\"bad::head\" has more than one ':': a fork head is <owner>:<branch>"
+      ]
+    },
+    {
+      "name": "New Task no overflow 1440-light",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "axe new task 1440-light",
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "template-backed schedule previews console hosting 1440-light",
+      "ok": true,
+      "preview": "Hosting interactive console from the template"
+    },
+    {
+      "name": "axe schedule pane 1440-light",
+      "ok": false,
+      "violations": [
+        "definition-list:1"
+      ]
+    },
+    {
+      "name": "viewer move handles 1440-light",
+      "ok": true,
+      "list": 0,
+      "listEnabled": 0,
+      "kanban": 0,
+      "kanbanEnabled": 0,
+      "sample": [
+        null,
+        null
+      ]
+    },
+    {
+      "name": "developer move handles 1440-light",
+      "ok": true,
+      "list": 16,
+      "listEnabled": 16,
+      "kanban": 16,
+      "kanbanEnabled": 15,
+      "sample": [
+        "Move task 1",
+        "Move task 1"
+      ]
+    },
+    {
+      "name": "operator move handles 1440-light",
+      "ok": true,
+      "list": 16,
+      "listEnabled": 16,
+      "kanban": 16,
+      "kanbanEnabled": 15,
+      "sample": [
+        "Move task 1",
+        "Move task 1"
+      ]
+    },
+    {
+      "name": "/boards load failure says so, not \"No boards yet\" 1440-light",
+      "ok": true,
+      "text": "The boards could not be loaded (boards store unavailable).\nretry"
+    },
+    {
+      "name": "/boards failure no overflow 1440-light",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "/boards Retry recovers 1440-light",
+      "ok": true,
+      "rows": 4
+    },
+    {
+      "name": "axe boards 1440-light",
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "draft over template keeps the template's priority 1440-dark",
+      "ok": true,
+      "priority": "8",
+      "help": "task priority task priority default 8, from the template; higher numbers run first",
+      "title": "Draft walk title"
+    },
+    {
+      "name": "template's console hosting shown 1440-dark",
+      "ok": true
+    },
+    {
+      "name": "Create task held on bad::head, released on forkuser:feat 1440-dark",
+      "ok": true,
+      "heldBad": true,
+      "okFixed": true,
+      "msg": [
+        "\"bad::head\" has more than one ':': a fork head is <owner>:<branch>"
+      ]
+    },
+    {
+      "name": "New Task no overflow 1440-dark",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "template-backed schedule previews console hosting 1440-dark",
+      "ok": true,
+      "preview": "Hosting interactive console from the template"
+    },
+    {
+      "name": "viewer move handles 1440-dark",
+      "ok": true,
+      "list": 0,
+      "listEnabled": 0,
+      "kanban": 0,
+      "kanbanEnabled": 0,
+      "sample": [
+        null,
+        null
+      ]
+    },
+    {
+      "name": "developer move handles 1440-dark",
+      "ok": true,
+      "list": 16,
+      "listEnabled": 16,
+      "kanban": 16,
+      "kanbanEnabled": 15,
+      "sample": [
+        "Move task 1",
+        "Move task 1"
+      ]
+    },
+    {
+      "name": "operator move handles 1440-dark",
+      "ok": true,
+      "list": 16,
+      "listEnabled": 16,
+      "kanban": 16,
+      "kanbanEnabled": 15,
+      "sample": [
+        "Move task 1",
+        "Move task 1"
+      ]
+    },
+    {
+      "name": "/boards load failure says so, not \"No boards yet\" 1440-dark",
+      "ok": true,
+      "text": "The boards could not be loaded (boards store unavailable).\nretry"
+    },
+    {
+      "name": "/boards failure no overflow 1440-dark",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "/boards Retry recovers 1440-dark",
+      "ok": true,
+      "rows": 4
+    },
+    {
+      "name": "draft over template keeps the template's priority 390-light",
+      "ok": true,
+      "priority": "8",
+      "help": "task priority task priority default 8, from the template; higher numbers run first",
+      "title": "Draft walk title"
+    },
+    {
+      "name": "template's console hosting shown 390-light",
+      "ok": true
+    },
+    {
+      "name": "Create task held on bad::head, released on forkuser:feat 390-light",
+      "ok": true,
+      "heldBad": true,
+      "okFixed": true,
+      "msg": [
+        "\"bad::head\" has more than one ':': a fork head is <owner>:<branch>"
+      ]
+    },
+    {
+      "name": "New Task no overflow 390-light",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "template-backed schedule previews console hosting 390-light",
+      "ok": true,
+      "preview": "Hosting interactive console from the template"
+    },
+    {
+      "name": "viewer move handles 390-light",
+      "ok": true,
+      "list": 0,
+      "listEnabled": 0,
+      "kanban": 0,
+      "kanbanEnabled": 0,
+      "sample": [
+        null,
+        null
+      ]
+    },
+    {
+      "name": "developer move handles 390-light",
+      "ok": true,
+      "list": 16,
+      "listEnabled": 16,
+      "kanban": 16,
+      "kanbanEnabled": 15,
+      "sample": [
+        "Move task 1",
+        "Move task 1"
+      ]
+    },
+    {
+      "name": "operator move handles 390-light",
+      "ok": true,
+      "list": 16,
+      "listEnabled": 16,
+      "kanban": 16,
+      "kanbanEnabled": 15,
+      "sample": [
+        "Move task 1",
+        "Move task 1"
+      ]
+    },
+    {
+      "name": "/boards load failure says so, not \"No boards yet\" 390-light",
+      "ok": true,
+      "text": "The boards could not be loaded (boards store unavailable).\nretry"
+    },
+    {
+      "name": "/boards failure no overflow 390-light",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "/boards Retry recovers 390-light",
+      "ok": true,
+      "rows": 4
+    },
+    {
+      "name": "draft over template keeps the template's priority 390-dark",
+      "ok": true,
+      "priority": "8",
+      "help": "task priority task priority default 8, from the template; higher numbers run first",
+      "title": "Draft walk title"
+    },
+    {
+      "name": "template's console hosting shown 390-dark",
+      "ok": true
+    },
+    {
+      "name": "Create task held on bad::head, released on forkuser:feat 390-dark",
+      "ok": true,
+      "heldBad": true,
+      "okFixed": true,
+      "msg": [
+        "\"bad::head\" has more than one ':': a fork head is <owner>:<branch>"
+      ]
+    },
+    {
+      "name": "New Task no overflow 390-dark",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "template-backed schedule previews console hosting 390-dark",
+      "ok": true,
+      "preview": "Hosting interactive console from the template"
+    },
+    {
+      "name": "viewer move handles 390-dark",
+      "ok": true,
+      "list": 0,
+      "listEnabled": 0,
+      "kanban": 0,
+      "kanbanEnabled": 0,
+      "sample": [
+        null,
+        null
+      ]
+    },
+    {
+      "name": "developer move handles 390-dark",
+      "ok": true,
+      "list": 16,
+      "listEnabled": 16,
+      "kanban": 16,
+      "kanbanEnabled": 15,
+      "sample": [
+        "Move task 1",
+        "Move task 1"
+      ]
+    },
+    {
+      "name": "operator move handles 390-dark",
+      "ok": true,
+      "list": 16,
+      "listEnabled": 16,
+      "kanban": 16,
+      "kanbanEnabled": 15,
+      "sample": [
+        "Move task 1",
+        "Move task 1"
+      ]
+    },
+    {
+      "name": "/boards load failure says so, not \"No boards yet\" 390-dark",
+      "ok": true,
+      "text": "The boards could not be loaded (boards store unavailable).\nretry"
+    },
+    {
+      "name": "/boards failure no overflow 390-dark",
+      "ok": true,
+      "overflow": 0
+    },
+    {
+      "name": "/boards Retry recovers 390-dark",
+      "ok": true,
+      "rows": 4
+    }
+  ],
+  "failures": [
+    "axe schedule pane 1440-light"
+  ]
+}

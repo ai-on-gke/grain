@@ -99,4 +99,4 @@ throughput over memory headroom can still set `CHV_DISK_DIRECT=off`.
 Each figure is from a single run, or two runs for `oom-pagecache.sh`. To
 measure again, run `benchmarks/storage/gce-bench.sh --disk-direct`, either by
 hand or as the on-demand `disk-direct` job in
-`.grain/workflows/disk-direct-benchmark.yml`.
+`.github/workflows/disk-direct-benchmark.yml`.

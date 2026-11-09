@@ -211,11 +211,8 @@ type Request struct {
 	// is pkg/guestforward's multiplexed protocol, with the agent as its
 	// guest end, until either side hangs up. Every other field must be
 	// left empty. It is how `granule forward` reaches a guest (see the
-	// shim's forward-stdio mode). When ForwardSpecs is non-empty, the
-	// legacy pkg/forward protocol binds those guest-side (-R) specs
-	// before answering OK.
-	Forward      bool     `json:"forward,omitempty"`
-	ForwardSpecs []string `json:"forward_specs,omitempty"`
+	// shim's forward-stdio mode).
+	Forward bool `json:"forward,omitempty"`
 }
 
 // FeatureDirEnv is the feature name an agent reports in Response.Features
@@ -273,7 +270,7 @@ func (r Request) RequiredFeatures() []string {
 	if r.Container || len(r.Argv) > 0 {
 		need = append(need, FeatureContainer)
 	}
-	if r.Forward || len(r.ForwardSpecs) > 0 {
+	if r.Forward {
 		need = append(need, FeatureForward)
 	}
 	return need

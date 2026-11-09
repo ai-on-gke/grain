@@ -24,6 +24,7 @@ import api from "../api.js";
 import { REFRESH_MS, RunList, StartRunForm } from "./CIPage.jsx";
 import { NavGlyph } from "./AppIcon.jsx";
 import { useTimeZone } from "../TimeZoneContext.jsx";
+import AccessGate from "./AccessGate.jsx";
 
 // RepoRuns is one repo's own grain CI runs, on that repo's page
 // (grain/task-351).
@@ -108,9 +109,11 @@ export default function RepoRuns({ repo, onOpenRun, showError }) {
           CI runs
         </Typography>
         {data?.enabled && (
-          <Button size="small" onClick={() => setStarting((v) => !v)}>
-            {starting ? "Close" : "Start a run"}
-          </Button>
+          <AccessGate scope="ci:write" repo={repo}>
+            <Button size="small" onClick={() => setStarting((v) => !v)}>
+              {starting ? "Close" : "Start a run"}
+            </Button>
+          </AccessGate>
         )}
       </Box>
       {/* Said here rather than left to be inferred from an empty list:

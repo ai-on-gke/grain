@@ -19,14 +19,35 @@
 # verification suites (`tests/container` and `tests/installer` across host,
 # trixie, and hostmode) against the built image before publishing, and then
 # pushes the `sha-<short>`, branch (`main`, `candidate`), and release tags to
-# GHCR (`ghcr.io/bwsalmon/grain/*`).
+# Docker Hub (`docker.io/grainai/*`).
+#
+# The same tested images are also published as assets on this repository's
+# own GitHub releases (scripts/release-assets.sh, release-asset contract v2,
+# docs/release-assets.md): `images` re-stamps and packages them, and the
+# `assets` job -- the only one holding `contents: write`, running no build
+# or test code -- uploads them to `sha-<12 hex>`, moves `channel-<branch>`
+# forward onto it, and prunes old `sha-` releases.
 #
 # On non-main / PR refs, `dry_run` defaults to and is enforced as `true`: a
 # `docker` wrapper intercepts `login`, `push`, and `buildx imagetools create`
 # so all images and stamped `sandbox-image` labels are built and tested
 # byte-for-byte identically without pushing any tags to the registry.
+#
+# On demand (grain/task-3334): the images job keeps one run in flight and
+# one pending per branch, so a burst of merges cancels every pending run
+# but the newest -- superseded, not failed: the newest commit contains the
+# others and is what gets published. The commits in between have no
+# `sha-<short>` images, so `workflow_dispatch` with `commit: <sha>` builds,
+# tests and publishes exactly that commit through this same job, checked
+# out at it. scripts/release-images.sh dispatches it when a promotion, rc
+# or pending release needs a commit that has none
+# (RELEASE_ON_DEMAND_BUILD=dispatch). The `on-demand` job refuses a commit
+# that is not on main, candidate, rc/v* or release/v*, and skips the build
+# of one whose images already exist, which is what makes a repeated
+# dispatch harmless.
 
 name: release
+run-name: ${{ inputs.commit && format('release {0} (on demand)', inputs.commit) || '' }}
 
 on:
   push:
@@ -39,30 +60,130 @@ on:
         required: false
         default: false
         type: boolean
+      commit:
+        description: "Build, test and publish this commit (a full sha on main, candidate, rc/v* or release/v*) rather than the ref's head: what a promotion of a superseded commit dispatches"
+        required: false
+        default: ""
+        type: string
 
+# Each job names what it needs: `images` publishes (packages: write) and
+# authenticates to Google Cloud (id-token: write) but cannot write to the
+# repository (contents: read); `assets` writes release assets (contents:
+# write) and runs nothing `images` built; `on-demand` only reads.
 permissions:
   contents: read
-  packages: write
-  id-token: write
 
 env:
   GOFLAGS: -mod=readonly
   RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO }}
 
 jobs:
+  on-demand:
+    name: resolve on-demand commit
+    if: github.event_name == 'workflow_dispatch' && inputs.commit != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Reads git history and the public registry, nothing else: none of the
+    # workflow's packages: write or id-token: write.
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+      branch: ${{ steps.check.outputs.branch }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Refuse a commit off the release branches, and skip one already published
+        id: check
+        env:
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
+            echo "::error::on-demand commit builds must be dispatched on a branch (such as main), not tag ref '${GITHUB_REF}'"
+            exit 1
+          fi
+          if ! [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::commit must be a full 40-character sha, not '$COMMIT'"
+            exit 1
+          fi
+          if ! git cat-file -e "${COMMIT}^{commit}" 2>/dev/null; then
+            echo "::error::$COMMIT is not a commit of this repository"
+            exit 1
+          fi
+          on=""
+          while IFS= read -r ref; do
+            [ -n "$ref" ] || continue
+            if git merge-base --is-ancestor "$COMMIT" "$ref"; then
+              on="${ref#refs/remotes/origin/}"
+              break
+            fi
+          done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/main refs/remotes/origin/candidate 'refs/remotes/origin/rc/v*' 'refs/remotes/origin/release/v*')
+          if [ -z "$on" ]; then
+            echo "::error::refusing to build $COMMIT on demand: it is on none of main, candidate, rc/v* or release/v*"
+            exit 1
+          fi
+          # shellcheck source=/dev/null
+          . ./scripts/release-image-repos.sh
+          repo="${RELEASE_IMAGE_REPO:-$RELEASE_IMAGE_REPO_DEFAULT}"
+          root="${RELEASE_IMAGE_REGISTRY_DEFAULT}/${repo,,}"
+          short="${COMMIT:0:7}"
+          images=(sandbox sandbox-k8s grain)
+          names="sandbox,sandbox-k8s,grain"
+          if git cat-file -e "${COMMIT}:Dockerfile.registry" 2>/dev/null &&
+             git show "${COMMIT}:scripts/release-images.sh" 2>/dev/null | grep -q '^build_registry_image()'; then
+            images+=(registry)
+            names="sandbox,sandbox-k8s,grain,registry"
+          fi
+          build=false
+          for image in "${images[@]}"; do
+            if ! docker buildx imagetools inspect "$root/$image:sha-$short" >/dev/null 2>&1; then
+              build=true
+            fi
+          done
+          if [ "$build" = true ]; then
+            echo "$COMMIT is on $on and has no published $root/{$names}:sha-$short: building it"
+          else
+            echo "$COMMIT already has $root/{$names}:sha-$short published: nothing to build"
+          fi
+          {
+            echo "build=$build"
+            echo "branch=$on"
+          } >> "$GITHUB_OUTPUT"
+
   images:
     name: release images
+    needs: [on-demand]
+    # A push, release or plain dispatch skips `on-demand` and builds the
+    # ref's head as it always has; an on-demand dispatch builds only when
+    # the commit was accepted and is not already published.
+    if: ${{ !cancelled() && (needs.on-demand.result == 'skipped' || (needs.on-demand.result == 'success' && needs.on-demand.outputs.build == 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    outputs:
+      # Whether this commit packaged release assets for the `assets` job.
+      assets: ${{ steps.assets_support.outputs.supported }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
     concurrency:
-      group: ${{ github.workflow }}-images-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/candidate' }}
+      # An on-demand build is a group of its own, so it neither cancels nor
+      # is cancelled by the branch's runs, and a second dispatch of the same
+      # commit waits behind the first (and then finds it published).
+      group: ${{ github.workflow }}-images-${{ inputs.commit && format('commit-{0}', inputs.commit) || github.ref }}
+      cancel-in-progress: ${{ inputs.commit == '' && github.ref != 'refs/heads/main' && github.ref != 'refs/heads/candidate' }}
     env:
       RELEASE_IMAGES_STATE: /tmp/release-images.env
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ inputs.commit }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -125,11 +246,19 @@ jobs:
         env:
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
           GH_REF_NAME: ${{ github.head_ref || github.ref_name }}
+          ON_DEMAND_BRANCH: ${{ needs.on-demand.outputs.branch }}
         run: |
           set -euo pipefail
           case "${GITHUB_REF:-}" in
-            refs/heads/main|refs/heads/candidate|refs/heads/rc/v*|refs/heads/release/v*|refs/tags/v*)
+            refs/heads/main|refs/heads/candidate|refs/heads/rc/v*|refs/heads/release/v*)
               is_release_ref=true
+              ;;
+            refs/tags/v*)
+              if [ -n "${ON_DEMAND_BRANCH:-}" ]; then
+                is_release_ref=false
+              else
+                is_release_ref=true
+              fi
               ;;
             *)
               is_release_ref=false
@@ -142,13 +271,17 @@ jobs:
           elif [ -z "$dry_run" ]; then
             dry_run="false"
           fi
+          ref_name="${ON_DEMAND_BRANCH:-${GH_REF_NAME}}"
           {
             echo "GRAIN_CI_REPO=${GITHUB_REPOSITORY}"
-            echo "GRAIN_CI_COMMIT=${GITHUB_SHA}"
-            echo "GRAIN_CI_REF=${GH_REF_NAME}"
+            # HEAD rather than GITHUB_SHA: an on-demand run checks out the
+            # commit it was asked for, not the dispatching ref's head, and
+            # ON_DEMAND_BRANCH names the release branch it sits on.
+            echo "GRAIN_CI_COMMIT=$(git rev-parse HEAD)"
+            echo "GRAIN_CI_REF=${ref_name}"
             echo "DRY_RUN=${dry_run}"
           } >> "$GITHUB_ENV"
-          echo "Resolved GRAIN_CI_REF=${GH_REF_NAME} DRY_RUN=${dry_run}"
+          echo "Resolved GRAIN_CI_REF=${ref_name} DRY_RUN=${dry_run}"
 
           if [ "${dry_run}" = "true" ]; then
             wrapper_dir="${RUNNER_TEMP}/dry-run-docker-bin"
@@ -224,8 +357,17 @@ jobs:
           fi
           if ! command -v cosign >/dev/null 2>&1; then
             cosign_version="v2.4.1"
-            curl -fsSL "https://github.com/sigstore/cosign/releases/download/${cosign_version}/cosign-linux-amd64" \
-              -o /usr/local/bin/cosign
+            if ! curl -4 -fsSL --max-time 60 --retry 2 --retry-max-time 45 --retry-connrefused --retry-all-errors \
+              "https://github.com/sigstore/cosign/releases/download/${cosign_version}/cosign-linux-amd64" \
+              -o /usr/local/bin/cosign; then
+              rm -f /usr/local/bin/cosign
+              cosign_image="gcr.io/projectsigstore/cosign:v2.4.1@sha256:b03690aa52bfe94054187142fba24dc54137650682810633901767d8a3e15b31"
+              docker pull "$cosign_image"
+              cid="$(docker create "$cosign_image")"
+              docker cp "$cid:/ko-app/cosign" /usr/local/bin/cosign
+              docker rm "$cid" >/dev/null
+              echo "6255c3c7146a8f1c3e71d542a9bc21412da7c23a2561adce02381bdbebaff413  /usr/local/bin/cosign" | sha256sum -c -
+            fi
             chmod +x /usr/local/bin/cosign
           fi
           key_file="${RUNNER_TEMP}/image-signing.key"
@@ -325,6 +467,61 @@ jobs:
             exit 1
           fi
 
+      # Release assets (scripts/release-assets.sh, release-asset contract
+      # v2, docs/release-assets.md): the images just tested, re-stamped
+      # with the local refs a `docker load` of the release's tarballs
+      # leaves behind, saved as gzip tarballs with images.json, and handed
+      # to the `assets` job -- which alone holds `contents: write`, so no
+      # build or test step here ever runs beside a token that can write
+      # to the repository.
+      #
+      # An on-demand build of a commit from before release assets (a
+      # rollback to an older release whose sha- images were pruned) has no
+      # `release-images.sh assets` or release-assets.sh: it skips these
+      # steps and the `assets` job, and still publishes its registry
+      # images below, as it did before release assets existed.
+      - name: Check this commit can package release assets
+        id: assets_support
+        env:
+          INPUT_COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          # release-assets.sh and `release-images.sh assets` arrived together.
+          if [ -f scripts/release-assets.sh ]; then
+            echo "supported=true" >> "$GITHUB_OUTPUT"
+          elif [ -n "${INPUT_COMMIT:-}" ]; then
+            echo "::notice::${INPUT_COMMIT:0:12} predates release assets: publishing registry images only"
+            echo "supported=false" >> "$GITHUB_OUTPUT"
+          else
+            # Only an on-demand build of an older commit may skip them.
+            echo "scripts/release-assets.sh is missing: this commit cannot publish release assets" >&2
+            exit 1
+          fi
+
+      - name: Build the release-asset images
+        if: steps.assets_support.outputs.supported == 'true'
+        env:
+          RELEASE_ASSETS_STATE: /tmp/release-assets-images.env
+        run: bash ./scripts/release-images.sh assets
+
+      - name: Package the images as release assets
+        if: steps.assets_support.outputs.supported == 'true'
+        env:
+          RELEASE_IMAGES_STATE: /tmp/release-assets-images.env
+          RELEASE_ASSETS_DIR: /tmp/release-assets
+        run: bash ./scripts/release-assets.sh package
+
+      - name: Hand the release assets to the publish job
+        if: steps.assets_support.outputs.supported == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-assets
+          path: /tmp/release-assets
+          if-no-files-found: error
+          # Already gzip: compressing again only costs time.
+          compression-level: 0
+          retention-days: 1
+
       - name: Publish the images
         run: |
           set -euo pipefail
@@ -337,6 +534,9 @@ jobs:
           fi
 
       - name: Prune old package versions
+        # Never prune from an older commit checked out on demand: its
+        # cmd/ghcr-prune may predate newer package names (such as registry).
+        if: inputs.commit == ''
         continue-on-error: true
         env:
           DOCKER_PAT: ${{ secrets.DOCKER_PAT }}
@@ -348,4 +548,123 @@ jobs:
             go run ./cmd/ghcr-prune -apply=false || true
           else
             go run ./cmd/ghcr-prune -apply=true
+          fi
+
+  assets:
+    name: release assets
+    needs: [on-demand, images]
+    # Only once `images` built, tested and packaged this commit.
+    if: ${{ !cancelled() && needs.images.result == 'success' && needs.images.outputs.assets == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # The only job holding a token that writes to the repository, and it
+    # runs nothing but scripts/release-assets.sh on what `images` packaged:
+    # no npm, no go test, no suite.
+    permissions:
+      contents: write
+    concurrency:
+      group: ${{ github.workflow }}-assets-${{ inputs.commit && format('commit-{0}', inputs.commit) || github.ref }}
+      cancel-in-progress: false
+    env:
+      RELEASE_ASSETS_DIR: /tmp/release-assets
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.commit || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Receive the release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-assets
+          path: /tmp/release-assets
+
+      - name: Resolve the releases and dry-run mode
+        env:
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          INPUT_COMMIT: ${{ inputs.commit }}
+          GH_REF_NAME: ${{ github.head_ref || github.ref_name }}
+          ON_DEMAND_BRANCH: ${{ needs.on-demand.outputs.branch }}
+        run: |
+          set -euo pipefail
+          # Worked out here from the event, not read from anything the
+          # build job wrote: what this job publishes, and where, is not
+          # the build's to say.
+          case "${GITHUB_REF:-}" in
+            refs/heads/main|refs/heads/candidate|refs/heads/rc/v*|refs/heads/release/v*) is_release_ref=true ;;
+            refs/tags/v*) if [ -n "${ON_DEMAND_BRANCH:-}" ]; then is_release_ref=false; else is_release_ref=true; fi ;;
+            *) is_release_ref=false ;;
+          esac
+          dry_run="${INPUT_DRY_RUN:-}"
+          if [ "$is_release_ref" != "true" ] && [ "${GITHUB_EVENT_NAME:-}" != "release" ]; then
+            dry_run="true"
+          elif [ -z "$dry_run" ]; then
+            dry_run="false"
+          fi
+          commit="$(git rev-parse HEAD)"
+          if [ -n "${INPUT_COMMIT:-}" ] && [ "$commit" != "$INPUT_COMMIT" ]; then
+            echo "checked out $commit, not the $INPUT_COMMIT this run was asked to publish" >&2
+            exit 1
+          fi
+          # The manifest must be this commit's: the build job cannot have
+          # this job publish another one.
+          manifest_commit="$(jq -r .commit /tmp/release-assets/images.json)"
+          if [ "$manifest_commit" != "$commit" ]; then
+            echo "the packaged images.json names $manifest_commit, not $commit" >&2
+            exit 1
+          fi
+          releases="sha-${commit:0:12}"
+          # A branch's moving release is channel-<branch>, '/' as '-';
+          # never the bare branch name. A release event, or an on-demand
+          # build of an older commit, publishes its sha- release only.
+          ref_name="${ON_DEMAND_BRANCH:-${GH_REF_NAME}}"
+          case "${GITHUB_REF:-}" in
+            refs/heads/*) [ -n "${INPUT_COMMIT:-}" ] || releases="$releases channel-${ref_name//\//-}" ;;
+          esac
+          {
+            echo "DRY_RUN=${dry_run}"
+            echo "RELEASES=${releases}"
+          } >> "$GITHUB_ENV"
+          echo "Publishing ${releases} (DRY_RUN=${dry_run})"
+
+      - name: Publish the release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # RELEASES comes from $GITHUB_ENV, written by the step before.
+          # shellcheck disable=SC2153
+          read -r -a releases <<< "$RELEASES"
+          args=()
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "Dry-run mode enabled: planning the release writes without making them"
+            args+=(--dry-run)
+          fi
+          bash ./scripts/release-assets.sh validate /tmp/release-assets
+          bash ./scripts/release-assets.sh "${args[@]}" publish "${releases[@]}"
+          {
+            echo "### Release assets"
+            for r in "${releases[@]}"; do
+              echo "- ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${r}"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Prune old sha- releases
+        # Retention (docs/release-assets.md): the newest RELEASE_RETAIN_SHA
+        # sha- releases, plus every one a channel, train release or GitHub's
+        # latest release points at; vX.Y.Z holds copies and is never
+        # pruned. A failure here leaves extra releases, never a missing one.
+        if: inputs.commit == ''
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_RETAIN_SHA: ${{ vars.RELEASE_RETAIN_SHA || '50' }}
+        run: |
+          set -euo pipefail
+          if [ "${DRY_RUN}" = "true" ]; then
+            bash ./scripts/release-assets.sh --dry-run prune
+          else
+            bash ./scripts/release-assets.sh prune
           fi

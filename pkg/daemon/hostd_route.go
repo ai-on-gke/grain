@@ -313,24 +313,29 @@ type hostdCapacityEntry struct {
 	at       time.Time
 }
 
-// hostdCapacity is how many runs at once r's hostd takes (its
-// allowlist's capacity:, Hello.Capacity), 0 for no limit. A hostd that
-// does not answer is not limited here: its run fails on its own.
+// hostdCapacity is how many runs at once r's hostd takes (its registry
+// capacity and allowlist capacity:, Hello.Capacity), 0 for no limit.
 func (p *AgentPool) hostdCapacity(ctx context.Context, r hostdRoute) int {
 	if r.Name == "" {
 		return 0
 	}
+	var regCap int
+	if p.Store != nil {
+		if h, err := p.Store.GetHostd(ctx, r.Name); err == nil && h != nil && h.Capacity > 0 {
+			regCap = h.Capacity
+		}
+	}
 	p.mu.Lock()
 	if e, ok := p.hostdCapacities[r.Name]; ok && time.Since(e.at) < hostdCapacityTTL {
 		p.mu.Unlock()
-		return e.capacity
+		return combineHostdCapacities(regCap, e.capacity)
 	}
 	p.mu.Unlock()
 	hctx, cancel := context.WithTimeout(hostd.ForDisplay(ctx), hostdLabelsTimeout)
 	defer cancel()
 	hello, err := r.Exec.hostdClient().Hello(hctx)
 	if err != nil {
-		return 0
+		return regCap
 	}
 	p.mu.Lock()
 	if p.hostdCapacities == nil {
@@ -338,7 +343,20 @@ func (p *AgentPool) hostdCapacity(ctx context.Context, r hostdRoute) int {
 	}
 	p.hostdCapacities[r.Name] = hostdCapacityEntry{capacity: hello.Capacity, at: time.Now()}
 	p.mu.Unlock()
-	return hello.Capacity
+	return combineHostdCapacities(regCap, hello.Capacity)
+}
+
+func combineHostdCapacities(a, b int) int {
+	if a > 0 && b > 0 {
+		if a < b {
+			return a
+		}
+		return b
+	}
+	if a > 0 {
+		return a
+	}
+	return b
 }
 
 // hostdFullLocked is the capacity error a run on r would meet now, or

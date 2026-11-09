@@ -21,6 +21,7 @@ import (
 	"log"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
@@ -39,6 +40,15 @@ func newHostdHub(cfg Config, store *model.Store) *hostd.Remote {
 	}
 	if store != nil {
 		hub.Resolve = registryResolver(store)
+		hub.ResolveCredential = registryCredentialResolver(store)
+		hub.Renew = func(ctx context.Context, name, currentToken string) (string, time.Time, error) {
+			return store.RenewHostdCredential(ctx, name, currentToken, time.Now().UTC())
+		}
+		hub.OnCheckin = func(ctx context.Context, peer hostd.RemotePeer) {
+			cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			_ = store.RecordHostdCheckin(cctx, peer.Name, peer.Host, "", "", nil, peer.Build, "", time.Now().UTC())
+		}
 		hub.OnChange = hostdConnectionNotifier(store, hub)
 	}
 	return hub
@@ -56,22 +66,71 @@ func hostdDisconnectedSubject(name string) string { return "hostd-disconnected:"
 // (runhost.Hostd.ReattachTimeout). Nothing moves to another hostd.
 // A hostd that connects is also rid of the CLIs it still runs for
 // finished runs (releaseFinishedHostdRuns) when hub is set.
+//
+// Each change is written from its own goroutine, so a connect's clear --
+// which first waits on releaseFinishedHostdRuns asking the hostd for its
+// processes -- could land after the raise of a drop that followed it at
+// once, leaving a hostd that is away with no notification saying so.
+// Every change therefore takes the next sequence number for its hostd as
+// it is reported, and a write is made, under that hostd's lock, only by
+// the latest change: one overtaken by a later change leaves the
+// notification to it.
 func hostdConnectionNotifier(store *model.Store, hub *hostd.Remote) func(name string, connected bool) {
+	var release func(ctx context.Context, name string)
+	if hub != nil {
+		release = func(ctx context.Context, name string) {
+			releaseFinishedHostdRuns(ctx, store, hostd.Client{Dial: hub.Dialer(name), Build: daemonBuild()}, name)
+		}
+	}
+	return hostdConnectionNotifierReleasing(store, release)
+}
+
+// hostdConnectionNotifierReleasing is hostdConnectionNotifier with the
+// connect-time release of finished runs as a func (nil for none), so a
+// test can hold a connect's clear back behind it.
+func hostdConnectionNotifierReleasing(store *model.Store, release func(ctx context.Context, name string)) func(name string, connected bool) {
+	var mu sync.Mutex
+	seqs := map[string]uint64{}
+	locks := map[string]*sync.Mutex{}
+	report := func(name string) (uint64, *sync.Mutex) {
+		mu.Lock()
+		defer mu.Unlock()
+		seqs[name]++
+		if locks[name] == nil {
+			locks[name] = &sync.Mutex{}
+		}
+		return seqs[name], locks[name]
+	}
+	latest := func(name string, seq uint64) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return seqs[name] == seq
+	}
 	return func(name string, connected bool) {
+		seq, lock := report(name)
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			subject := hostdDisconnectedSubject(name)
 			if connected {
-				if hub != nil {
-					releaseFinishedHostdRuns(ctx, store, hostd.Client{Dial: hub.Dialer(name), Build: daemonBuild()}, name)
+				if release != nil {
+					release(ctx, name)
 				}
-				if _, err := store.ClearNotification(ctx, subject, "automation:hostd"); err != nil {
-					log.Printf("grain daemon: clearing %s: %v", subject, err)
+				lock.Lock()
+				if latest(name, seq) {
+					if _, err := store.ClearNotification(ctx, subject, "automation:hostd"); err != nil {
+						log.Printf("grain daemon: clearing %s: %v", subject, err)
+					}
 				}
+				lock.Unlock()
 				// Tasks parked waiting for it are admitted on the next
 				// cycle; wake it rather than wait out -poll-interval.
 				wakeCycle()
+				return
+			}
+			lock.Lock()
+			defer lock.Unlock()
+			if !latest(name, seq) {
 				return
 			}
 			if h, err := store.GetHostd(ctx, name); err == nil && h != nil && h.Revoked() {
@@ -133,16 +192,36 @@ func releaseFinishedHostdRuns(ctx context.Context, store *model.Store, c hostd.C
 // registryResolver names a hostd token from the registry: the live hostd
 // it belongs to, and that hostd's owner.
 func registryResolver(store *model.Store) func(ctx context.Context, token string) (string, string, bool, error) {
+	resolve := registryCredentialResolver(store)
 	return func(ctx context.Context, token string) (string, string, bool, error) {
+		cred, ok, err := resolve(ctx, token)
+		if !ok || err != nil {
+			return "", "", false, err
+		}
+		return cred.Name, cred.Owner, true, nil
+	}
+}
+
+func registryCredentialResolver(store *model.Store) func(ctx context.Context, token string) (hostd.ResolvedCredential, bool, error) {
+	return func(ctx context.Context, token string) (hostd.ResolvedCredential, bool, error) {
 		h, err := store.HostdForToken(ctx, token)
 		if err != nil || h == nil {
-			return "", "", false, err
+			return hostd.ResolvedCredential{}, false, err
 		}
 		if h.Name == model.LocalHostd {
 			// local is the socket's; nothing dials in as it.
-			return "", "", false, nil
+			return hostd.ResolvedCredential{}, false, nil
 		}
-		return h.Name, h.Owner, true, nil
+		var exp time.Time
+		if h.TokenExpiresAt != nil {
+			exp = *h.TokenExpiresAt
+		}
+		return hostd.ResolvedCredential{
+			Name:      h.Name,
+			Owner:     h.Owner,
+			PublicKey: h.PublicKey,
+			ExpiresAt: exp,
+		}, true, nil
 	}
 }
 

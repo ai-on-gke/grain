@@ -50,8 +50,16 @@ export function forgetETags() {
 // rejection -- a 500, a 403, a validation error, `notGrain` below -- is
 // the daemon (or something that can at least speak for it) answering,
 // which is a different problem with a different fix.
+//
+// A request asked with a `timeout` (api() below) that ran past it
+// counts as well: a daemon that accepts the connection and then never
+// answers -- deadlocked, stopped, or behind a proxy holding the socket
+// open -- is as out of reach as one that refuses it, and without a
+// bound on the wait the request never rejects at all, so nothing could
+// ever say so (grain/task-3619).
 export function isUnreachable(err) {
   if (!err || err.notGrain) return false;
+  if (err.timedOut) return true;
   if (typeof err.status === "number") {
     return err.status === 502 || err.status === 503 || err.status === 504;
   }
@@ -86,6 +94,9 @@ export const RESTARTING_REASON =
 // put on screen, and a bare "502 Bad Gateway" names the symptom without
 // saying what it means.
 export function unreachableReason(err) {
+  if (err?.timedOut) {
+    return `This deployment cannot be reached: it accepted the connection but sent no answer within ${Math.round(err.timeoutMs / 1000)} seconds.`;
+  }
   if (typeof err?.status === "number")
     return gatewayUnreachableReason(err.status);
   return NETWORK_UNREACHABLE_REASON;
@@ -105,7 +116,39 @@ export function unreachableReason(err) {
 // shared per path -- a second caller of the same path, wanting the body
 // and holding no copy of its own, must not be handed somebody else's
 // "you already have this".
+//
+// `timeout: ms` bounds the whole exchange, body included: past it the
+// request is aborted and api() throws an error isUnreachable counts as
+// one, carrying `timedOut`, `timeoutMs` and `sentAt` (when it was
+// asked, which is when the silence began). Opt-in, and only for a read
+// whose answer is expected promptly -- never a long poll the daemon
+// holds open on purpose, nor a mutation, whose abort would leave its
+// outcome unknown.
 export default async function api(path, opts) {
+  const { timeout, ...rest } = opts || {};
+  if (!timeout) return request(path, rest);
+  const controller = new AbortController();
+  const sentAt = new Date();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeout);
+  try {
+    return await request(path, { ...rest, signal: controller.signal });
+  } catch (err) {
+    if (!timedOut) throw err;
+    const late = new Error(`${path} sent no answer within ${timeout}ms`);
+    late.timedOut = true;
+    late.timeoutMs = timeout;
+    late.sentAt = sentAt;
+    throw late;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function request(path, opts) {
   // headers is taken out of init so the caller's own are merged into
   // ours below rather than replacing them wholesale in the Object.assign
   // that builds the request -- which would drop the Content-Type and the

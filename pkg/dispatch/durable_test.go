@@ -30,7 +30,7 @@ import (
 
 func durableTask(id string) model.Task {
 	tk := task(id, true)
-	tk.Grants = []model.Grant{{Capability: model.DurableCapability, Via: model.GrantByLabel}}
+	tk.Admission = model.AdmissionDurable
 	return tk
 }
 

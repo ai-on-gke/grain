@@ -23,12 +23,17 @@ package ui_test
 // refused by name, with the switch that works.
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"testing/fstest"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/repodecl"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -180,5 +185,51 @@ func TestSessionQueuesProposalAgainstGrainCIRepoWithoutHoldingGrainCI(t *testing
 	asSession := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalAgent, ID: sessionTaskID})
 	if err := c.RunNow(asSession, unapproved.ID); err != nil {
 		t.Errorf("RunNow by session on grain-CI task failed: %v", err)
+	}
+}
+
+// Regression for task 3060: filing a task from .grain/templates/release-train.yml
+// (or any .grain template that still writes `capabilities: [grain-ci]`) on a
+// ci_mode: github repository must succeed without CreateTask refusing a copied
+// grain#ci grant, and must hand the task repo-scoped api:ci-read@<repo>.
+func TestDeclaredTemplateWithCIReadOrLegacyGrainCIFilesOnGitHubModeRepo(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	repo := model.GrainSourceRepo()
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: repo, CIMode: model.CIModeGitHub}); err != nil {
+		t.Fatal(err)
+	}
+	trainYAML, err := os.ReadFile(filepath.Join("..", "..", ".grain", "templates", "release-train.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	declared, err := repodecl.Load(fstest.MapFS{
+		".grain/templates/release-train.yml": {Data: trainYAML},
+		".grain/templates/legacy-ci.yml":     {Data: []byte("title: Legacy CI reader\ncapabilities: [grain-ci]\nbody: read CI\n")},
+	}, repo)
+	if err != nil {
+		t.Fatalf("repodecl.Load: %v", err)
+	}
+	now := time.Date(2026, 11, 7, 5, 0, 0, 0, time.UTC)
+	if _, err := store.SyncRepoDeclarations(ctx, repo, strings.Repeat("a", 40), declared, now, time.UTC); err != nil {
+		t.Fatalf("SyncRepoDeclarations: %v", err)
+	}
+	wantCap := model.APIGrantPrefix + "ci-read@" + repo.String()
+	for _, stem := range []string{"release-train", "legacy-ci"} {
+		tmplID := model.RepoDeclaredID(model.DeclaredTemplate, repo, stem)
+		task, err := c.CreateTask(ctx, ui.CreateTaskRequest{
+			TemplateID: tmplID,
+			Repo:       repo.String(),
+			Approved:   true,
+		})
+		if err != nil {
+			t.Fatalf("CreateTask from %s on ci_mode: github repo: %v", stem, err)
+		}
+		if !slices.Contains(task.Capabilities, wantCap) {
+			t.Errorf("%s task capabilities = %v, want %q", stem, task.Capabilities, wantCap)
+		}
+		if slices.Contains(task.Capabilities, grainci.Grant) {
+			t.Errorf("%s task capabilities = %v, must not hold %q on ci_mode: github", stem, task.Capabilities, grainci.Grant)
+		}
 	}
 }

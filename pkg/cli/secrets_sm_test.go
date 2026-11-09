@@ -481,3 +481,91 @@ func TestSecretsCLISecretManagerLifecycleAndRedaction(t *testing.T) {
 		t.Errorf("list after delete = %q, want %q", afterDel, "no secrets set")
 	}
 }
+
+// A key the catalogue lists but Secret Manager no longer holds (deleted out of
+// band) is marked by `grain secrets list` and left out of redaction rather
+// than failing it, until `grain secrets delete` reconciles the two (task 3577).
+func TestSecretsCLIListMarksKeysGoneFromSecretManager(t *testing.T) {
+	fake, srv := newFakeCLISecretManager(t, "987654321", "grain-inst-alice-", "sm-test-token")
+	prefix := "projects/987654321/secrets/grain-inst-alice-"
+
+	t.Setenv(secrets.SecretManagerEndpointEnv, srv.URL)
+	t.Setenv(secrets.SecretManagerTokenEnv, "sm-test-token")
+	t.Setenv("GRAIN_SECRETS_BACKEND", secrets.BackendSecretManager)
+	t.Setenv("GRAIN_SECRETS_SM_PREFIX", prefix)
+	t.Setenv("GRAIN_DB_DRIVER", "")
+	t.Setenv("GRAIN_DB_DSN", "")
+	t.Setenv("GRAIN_POSTGRES_URL", "")
+	t.Setenv("DATABASE_URL", "")
+
+	dataDir := t.TempDir()
+	for _, kv := range []struct{ key, val string }{{"a", "multi-a-value"}, {"b", "multi-b-value"}} {
+		f := filepath.Join(t.TempDir(), kv.key)
+		if err := os.WriteFile(f, []byte(kv.val), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := captureSecretsStdout(t, func() error {
+			return runSecrets([]string{"-data-dir", dataDir, "set", "-value-file", f, "multi", kv.key})
+		}); err != nil {
+			t.Fatalf("set multi/%s: %v", kv.key, err)
+		}
+	}
+	// Delete multi/b's Secret Manager secret out of band: the one whose
+	// latest version holds multi-b-value.
+	fake.mu.Lock()
+	for id, versions := range fake.secrets {
+		for _, v := range versions {
+			if string(v) == "multi-b-value" {
+				delete(fake.secrets, id)
+			}
+		}
+	}
+	fake.mu.Unlock()
+
+	listOut, err := captureSecretsStdout(t, func() error {
+		return runSecrets([]string{"-data-dir", dataDir, "list"})
+	})
+	if err != nil {
+		t.Fatalf("runSecrets list: %v", err)
+	}
+	if want := "multi: a, b (missing in Secret Manager)"; strings.TrimSpace(listOut) != want {
+		t.Fatalf("list output = %q, want %q", listOut, want)
+	}
+
+	catStore, db, err := daemon.OpenStore("sqlite", "", dataDir)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	smStore, err := daemon.OpenSecretsForConfig(daemon.Config{
+		DataDir:         dataDir,
+		SecretsBackend:  secrets.BackendSecretManager,
+		SecretsSMPrefix: prefix,
+	}, catStore)
+	if err != nil {
+		db.Close()
+		t.Fatalf("OpenSecretsForConfig: %v", err)
+	}
+	known, err := daemon.KnownSecretValuesFromStore(context.Background(), smStore)
+	_ = db.Close()
+	if err != nil {
+		t.Fatalf("KnownSecretValuesFromStore with multi/b gone upstream = %v, want multi/a and no error", err)
+	}
+	if len(known) != 1 || known[0].Value != "multi-a-value" {
+		t.Fatalf("KnownSecretValuesFromStore = %+v, want only multi-a-value", known)
+	}
+
+	if _, err := captureSecretsStdout(t, func() error {
+		return runSecrets([]string{"-data-dir", dataDir, "delete", "multi", "b"})
+	}); err != nil {
+		t.Fatalf("delete multi b: %v", err)
+	}
+	listOut, err = captureSecretsStdout(t, func() error {
+		return runSecrets([]string{"-data-dir", dataDir, "list"})
+	})
+	if err != nil {
+		t.Fatalf("runSecrets list after delete: %v", err)
+	}
+	if want := "multi: a"; strings.TrimSpace(listOut) != want {
+		t.Fatalf("list output after delete = %q, want %q", listOut, want)
+	}
+}

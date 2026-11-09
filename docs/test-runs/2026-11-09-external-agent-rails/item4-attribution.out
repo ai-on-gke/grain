@@ -1,0 +1,52 @@
+PASS	4.0	owner sources	alice-typed|alice@example.com|access-code alice-iap|alice@example.com|iap
+task 2 as the UI reads it: {"creator":"alice@example.com","author":"external:alice-typed","authorKind":"agent","authorLabel":"external agent alice-typed","owner":"alice@example.com","approvedBy":"bob@example.com","approvedByLabel":"bob@example.com"}
+task 3 as the UI reads it: {"creator":"alice@example.com","author":"external:alice-iap","authorKind":"agent","authorLabel":"external agent alice-iap for alice@example.com","owner":"alice@example.com","approvedBy":"bob@example.com","approvedByLabel":"bob@example.com"}
+go: downloading modernc.org/sqlite v1.57.0
+go: downloading golang.org/x/mod v0.41.0
+go: downloading gopkg.in/yaml.v3 v3.0.1
+go: downloading golang.org/x/sys v0.48.0
+go: downloading github.com/golang-jwt/jwt/v5 v5.3.0
+go: downloading golang.org/x/oauth2 v0.37.0
+go: downloading google.golang.org/api v0.264.0
+go: downloading cloud.google.com/go/compute/metadata v0.9.0
+go: downloading golang.org/x/net v0.60.0
+go: downloading golang.org/x/crypto v0.57.0
+go: downloading golang.org/x/term v0.46.0
+go: downloading modernc.org/libc v1.74.4
+go: downloading cloud.google.com/go/auth v0.18.2
+go: downloading cloud.google.com/go/auth/oauth2adapt v0.2.8
+go: downloading github.com/googleapis/gax-go/v2 v2.17.0
+go: downloading google.golang.org/grpc v1.83.2
+go: downloading github.com/google/s2a-go v0.1.9
+go: downloading go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.64.0
+go: downloading github.com/google/uuid v1.6.0
+go: downloading google.golang.org/protobuf v1.36.12
+go: downloading github.com/googleapis/enterprise-certificate-proxy v0.3.11
+go: downloading google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa
+go: downloading github.com/felixge/httpsnoop v1.0.4
+go: downloading go.opentelemetry.io/otel v1.44.0
+go: downloading go.opentelemetry.io/otel/metric v1.44.0
+go: downloading go.opentelemetry.io/otel/trace v1.44.0
+go: downloading golang.org/x/text v0.42.0
+go: downloading github.com/go-logr/logr v1.4.3
+go: downloading github.com/go-logr/stdr v1.2.2
+go: downloading go.opentelemetry.io/auto/sdk v1.2.1
+go: downloading github.com/cespare/xxhash/v2 v2.3.0
+go: downloading modernc.org/memory v1.11.0
+go: downloading github.com/dustin/go-humanize v1.0.1
+go: downloading modernc.org/mathutil v1.7.1
+go: downloading github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec
+2	Approved-by: bob@example.com
+3	Requested-by: alice@example.com | Approved-by: bob@example.com
+pushed commit trailers, task 2:
+Approved-by: bob@example.com
+pushed commit trailers, task 3:
+Requested-by: alice@example.com
+Approved-by: bob@example.com
+PASS	4.1	unverified owner: no Requested-by	
+PASS	4.2	unverified owner: Approved-by bob	Approved-by: bob@example.com
+PASS	4.3	verified owner: Requested-by alice	Requested-by: alice@example.com
+Approved-by: bob@example.com
+PASS	4.4	verified owner: Approved-by bob	Requested-by: alice@example.com
+Approved-by: bob@example.com
+FAILS=0

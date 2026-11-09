@@ -70,7 +70,8 @@ func (c *Client) Pause(ctx context.Context, id string, opts PauseOptions) error 
 	if err != nil {
 		return err
 	}
-	actor := c.requestActor(ctx).Actor
+	who := c.requestActor(ctx)
+	actor := who.Actor
 	if existing != nil {
 		if actor.Kind == model.PrincipalAgent && !existing.PausedBy.Same(actor) {
 			return forbiddenErrorf("task %s was paused by %s; only they may change or lift that pause",
@@ -112,12 +113,12 @@ func (c *Client) Pause(ctx context.Context, id string, opts PauseOptions) error 
 	// session (pkg/mcp's addenda deliver a person's comments on the run's
 	// next tool result); everything else is grain's own note, so that it
 	// is never mistaken for a reply a parked task was waiting on.
-	body := fmt.Sprintf("Paused by %s.", PrincipalLabel(actor, nil))
+	body := fmt.Sprintf("Paused by %s.", PrincipalLabel(actor, who.OnBehalfOf))
 	author := model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}}
 	switch {
 	case state == model.StateRunning && !opts.Immediate:
 		body = model.PauseMessage(c.pauseGrace())
-		author = model.Attribution{Actor: actor}
+		author = who
 	case state == model.StateRunning:
 		body += " The run in progress is being stopped now; whatever it had not pushed is gone."
 	}
@@ -144,7 +145,8 @@ func (c *Client) Resume(ctx context.Context, id string) error {
 	if task == nil {
 		return &NotFoundError{ID: id}
 	}
-	actor := c.requestActor(ctx).Actor
+	who := c.requestActor(ctx)
+	actor := who.Actor
 	if actor.Kind == model.PrincipalAgent {
 		existing, err := c.Store.GetPause(ctx, id)
 		if err != nil {
@@ -163,7 +165,7 @@ func (c *Client) Resume(ctx context.Context, id string) error {
 	if _, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID:    id,
 		Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}},
-		Body:      fmt.Sprintf("Resumed by %s. %s", PrincipalLabel(actor, nil), model.ResumedNote(*lifted, PrincipalLabel(lifted.PausedBy, nil), now)),
+		Body:      fmt.Sprintf("Resumed by %s. %s", PrincipalLabel(actor, who.OnBehalfOf), model.ResumedNote(*lifted, PrincipalLabel(lifted.PausedBy, nil), now)),
 		CreatedAt: now,
 	}); err != nil {
 		return err

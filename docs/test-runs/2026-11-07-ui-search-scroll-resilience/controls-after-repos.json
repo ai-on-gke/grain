@@ -1,0 +1,107 @@
+{
+  "label": "after",
+  "steps": [
+    {
+      "name": "repos add 500 (1440)",
+      "posts": 1,
+      "during": {
+        "fieldDisabled": true,
+        "buttonBusy": "true",
+        "spinner": 1,
+        "caption": "Adding acme/walk-500…"
+      },
+      "after": {
+        "fieldValue": "acme/walk-500",
+        "fieldDisabled": false,
+        "buttonBusy": "false",
+        "errorShown": "This deployment allows only acme/widgets. A task filed against any other repo is parked instead of dispatched until that repo is added here; removing this one allows any repo again."
+      },
+      "preserved": true
+    },
+    {
+      "name": "repos add 409 (1440)",
+      "posts": 1,
+      "during": {
+        "fieldDisabled": true,
+        "buttonBusy": "true",
+        "spinner": 1,
+        "caption": "Adding acme/walk-409…"
+      },
+      "after": {
+        "fieldValue": "acme/walk-409",
+        "fieldDisabled": false,
+        "buttonBusy": "false",
+        "errorShown": "This deployment allows only acme/widgets. A task filed against any other repo is parked instead of dispatched until that repo is added here; removing this one allows any repo again."
+      },
+      "preserved": true
+    },
+    {
+      "name": "repos add 200 (1440)",
+      "posts": 1,
+      "during": {
+        "fieldDisabled": true,
+        "buttonBusy": "true",
+        "spinner": 1,
+        "caption": "Adding acme/walk-200…"
+      },
+      "after": {
+        "fieldValue": "",
+        "fieldDisabled": false,
+        "buttonBusy": "false",
+        "errorShown": "This deployment allows only acme/widgets. A task filed against any other repo is parked instead of dispatched until that repo is added here; removing this one allows any repo again."
+      },
+      "preserved": false
+    },
+    {
+      "name": "repos add 500 (390)",
+      "posts": 1,
+      "during": {
+        "fieldDisabled": true,
+        "buttonBusy": "true",
+        "spinner": 1,
+        "caption": "Adding acme/walk-500…"
+      },
+      "after": {
+        "fieldValue": "acme/walk-500",
+        "fieldDisabled": false,
+        "buttonBusy": "false",
+        "errorShown": "This deployment allows only acme/widgets. A task filed against any other repo is parked instead of dispatched until that repo is added here; removing this one allows any repo again."
+      },
+      "preserved": true
+    },
+    {
+      "name": "repos add 409 (390)",
+      "posts": 1,
+      "during": {
+        "fieldDisabled": true,
+        "buttonBusy": "true",
+        "spinner": 1,
+        "caption": "Adding acme/walk-409…"
+      },
+      "after": {
+        "fieldValue": "acme/walk-409",
+        "fieldDisabled": false,
+        "buttonBusy": "false",
+        "errorShown": "This deployment allows only acme/widgets. A task filed against any other repo is parked instead of dispatched until that repo is added here; removing this one allows any repo again."
+      },
+      "preserved": true
+    },
+    {
+      "name": "repos add 200 (390)",
+      "posts": 1,
+      "during": {
+        "fieldDisabled": true,
+        "buttonBusy": "true",
+        "spinner": 1,
+        "caption": "Adding acme/walk-200…"
+      },
+      "after": {
+        "fieldValue": "",
+        "fieldDisabled": false,
+        "buttonBusy": "false",
+        "errorShown": "This deployment allows only acme/widgets. A task filed against any other repo is parked instead of dispatched until that repo is added here; removing this one allows any repo again."
+      },
+      "preserved": false
+    }
+  ]
+}

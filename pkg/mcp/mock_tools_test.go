@@ -20,6 +20,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // escapeHatchText returns each escape hatch's description and the
@@ -617,5 +619,223 @@ func TestProposeTaskRefusesAReviewGrant(t *testing.T) {
 	}
 	if got := sink.ProposedTasks(); len(got) != 0 {
 		t.Errorf("ProposedTasks() = %+v, want none", got)
+	}
+}
+
+func TestProposeTaskAcceptsUnifiedGrantsAndRefusesMixedSpellings(t *testing.T) {
+	sink := &MockSink{}
+	tool := toolNamed(t, NewMockTools(sink, nil), "propose_task")
+
+	res := tool.Handler(context.Background(), map[string]any{
+		"title": "child with unified grants",
+		"body":  "exercise slice 2 grants on propose_task",
+		"grants": []any{
+			map[string]any{"capability": "https://grain.dev/capabilities/api#tasks:read", "with": map[string]any{"repo": "acme/app"}},
+			map[string]any{"capability": "https://grain.dev/capabilities/repo#target", "with": map[string]any{"repo": "acme/app", "base": "release"}},
+			map[string]any{"capability": "https://grain.dev/capabilities/repo#read", "with": map[string]any{"repo": "acme/docs"}},
+			map[string]any{"capability": "https://grain.dev/capabilities/repo#write", "with": map[string]any{"repo": "acme/site", "base": "main"}},
+		},
+	})
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Text)
+	}
+	got := sink.ProposedTasks()
+	if len(got) != 1 {
+		t.Fatalf("ProposedTasks() = %+v, want 1", got)
+	}
+	p := got[0]
+	if p.Repo != "acme/app" || p.Branch != "release" {
+		t.Errorf("Repo, Branch = %q, %q, want acme/app, release", p.Repo, p.Branch)
+	}
+	if len(p.Capabilities) != 1 || p.Capabilities[0] != "api:tasks:read@acme/app" {
+		t.Errorf("Capabilities = %v, want [api:tasks:read@acme/app]", p.Capabilities)
+	}
+	if len(p.Reads) != 1 || p.Reads[0] != "acme/docs" {
+		t.Errorf("Reads = %v, want [acme/docs]", p.Reads)
+	}
+	if len(p.Writes) != 1 || p.Writes[0] != (WriteTarget{Repo: "acme/site", Base: "main"}) {
+		t.Errorf("Writes = %v, want [{acme/site main}]", p.Writes)
+	}
+
+	for _, bad := range []map[string]any{
+		{
+			"title": "mix caps", "body": "b",
+			"capabilities": []any{"api:ci:read"},
+			"grants":       []any{map[string]any{"capability": "https://grain.dev/capabilities/api#tasks:read"}},
+		},
+		{
+			"title": "mix empty grants", "body": "b",
+			"capabilities": []any{"api:ci:read"},
+			"grants":       []any{},
+		},
+		{
+			"title": "mix repo", "body": "b", "repo": "acme/app",
+			"grants": []any{map[string]any{"capability": "https://grain.dev/capabilities/repo#target", "with": map[string]any{"repo": "acme/app", "base": "main"}}},
+		},
+		{
+			"title": "mix branch", "body": "b", "branch": "develop",
+			"grants": []any{map[string]any{"capability": "https://grain.dev/capabilities/repo#target", "with": map[string]any{"repo": "acme/app", "base": "main"}}},
+		},
+		{
+			"title": "mix reads", "body": "b", "reads": []any{},
+			"grants": []any{map[string]any{"capability": "https://grain.dev/capabilities/repo#read", "with": map[string]any{"repo": "acme/docs"}}},
+		},
+		{
+			"title": "mix writes", "body": "b", "writes": []any{},
+			"grants": []any{map[string]any{"capability": "https://grain.dev/capabilities/repo#write", "with": map[string]any{"repo": "acme/site", "base": "main"}}},
+		},
+	} {
+		r := tool.Handler(context.Background(), bad)
+		if !r.IsError {
+			t.Errorf("expected error for %v, got %+v", bad["title"], r)
+		}
+	}
+}
+
+func TestProposeTaskTargetRefusalNamesSentField(t *testing.T) {
+	t.Cleanup(model.RegisterChangeTarget(model.ChangeTargetRegistration{Kind: testChangeTargetKind}))
+
+	sink := &MockSink{}
+	tool := toolNamed(t, NewMockTools(sink, nil), "propose_task")
+	target := map[string]any{
+		"capability": "https://grain.dev/capabilities/repo#target",
+		"with":       map[string]any{"repo": "acme/app", "base": "main"},
+	}
+
+	for _, tc := range []struct {
+		name  string
+		extra map[string]any
+		want  string
+	}{
+		{"repo", map[string]any{"repo": "acme/app"}, "the request's repo field both name the task's repository"},
+		{"branch", map[string]any{"branch": "develop"}, "the request's branch field both name the task's repository"},
+		{"no_repo", map[string]any{"no_repo": true}, "the request's no_repo field both name the task's repository"},
+		{"change target", map[string]any{testChangeTargetKind: map[string]any{}}, "the request's " + testChangeTargetKind + " field both name the task's repository"},
+		{"repo and branch", map[string]any{"repo": "acme/app", "branch": "develop"}, "the request's repo and branch fields both name the task's repository"},
+	} {
+		args := map[string]any{
+			"title":  "mix " + tc.name,
+			"body":   "b",
+			"grants": []any{target},
+		}
+		for k, v := range tc.extra {
+			args[k] = v
+		}
+		res := tool.Handler(context.Background(), args)
+		if !res.IsError || !strings.Contains(res.Text, tc.want) {
+			t.Errorf("%s: got %+v, want error containing %q", tc.name, res, tc.want)
+		}
+	}
+	if got := sink.ProposedTasks(); len(got) != 0 {
+		t.Errorf("ProposedTasks() = %+v, want none recorded", got)
+	}
+}
+
+func TestProposeTaskRefusesUndeclaredArgumentsAndSuggestsNearest(t *testing.T) {
+	sink := &MockSink{}
+	mockTool := toolNamed(t, NewMockTools(sink, nil), "propose_task")
+	filerCalled := false
+	liveTool := NewLiveProposalTools(&MockSink{}, nil, "3750", filerFunc(func(context.Context, ProposedTask, string) (FiledProposal, error) {
+		filerCalled = true
+		return FiledProposal{ID: "99"}, nil
+	}))[0]
+
+	target := map[string]any{
+		"capability": "https://grain.dev/capabilities/repo#target",
+		"with":       map[string]any{"repo": "acme/widgets", "base": "main"},
+	}
+
+	for _, tc := range []struct {
+		name      string
+		extra     map[string]any
+		wantSub   []string
+		forbidSub string
+	}{
+		{
+			name:    "base alone",
+			extra:   map[string]any{"base": "release/v3.2.0"},
+			wantSub: []string{`"base"`, `"branch"`},
+		},
+		{
+			name:    "base alongside repo#target (walkthrough O2)",
+			extra:   map[string]any{"base": "main", "grants": []any{target}},
+			wantSub: []string{`"base"`, `"branch"`},
+		},
+		{
+			name:    "description synonym",
+			extra:   map[string]any{"description": "extra prose"},
+			wantSub: []string{`"description"`, `"body"`},
+		},
+		{
+			name:    "fields synonym",
+			extra:   map[string]any{"fields": map[string]any{"k": "v"}},
+			wantSub: []string{`"fields"`, `"template_fields"`},
+		},
+		{
+			name:    "camelCase noRepo",
+			extra:   map[string]any{"noRepo": true},
+			wantSub: []string{`"noRepo"`, `"no_repo"`},
+		},
+		{
+			name:    "capabilities typo",
+			extra:   map[string]any{"capabilites": []any{"api:ci-read"}},
+			wantSub: []string{`"capabilites"`, `"capabilities"`},
+		},
+		{
+			name:    "singular read",
+			extra:   map[string]any{"read": []any{"acme/docs"}},
+			wantSub: []string{`"read"`, `"reads"`},
+		},
+		{
+			name:    "writes entry with branch instead of base",
+			extra:   map[string]any{"writes": []any{map[string]any{"repo": "acme/site", "branch": "main"}}},
+			wantSub: []string{"writes[0]", `"branch"`, `"base"`},
+		},
+		{
+			name:      "unrelated unknown argument gets no bogus suggestion",
+			extra:     map[string]any{"xyzzy_nonsense": 1},
+			wantSub:   []string{`"xyzzy_nonsense"`},
+			forbidSub: "did you mean",
+		},
+	} {
+		args := map[string]any{"title": "follow-up", "body": "details"}
+		for k, v := range tc.extra {
+			args[k] = v
+		}
+		for label, tool := range map[string]Tool{"mock": mockTool, "live": liveTool} {
+			res := tool.Handler(context.Background(), args)
+			if !res.IsError {
+				t.Errorf("%s (%s): succeeded with %q, want error", tc.name, label, res.Text)
+				continue
+			}
+			for _, sub := range tc.wantSub {
+				if !strings.Contains(res.Text, sub) {
+					t.Errorf("%s (%s): error = %q, want substring %q", tc.name, label, res.Text, sub)
+				}
+			}
+			if tc.forbidSub != "" && strings.Contains(res.Text, tc.forbidSub) {
+				t.Errorf("%s (%s): error = %q, did not want %q", tc.name, label, res.Text, tc.forbidSub)
+			}
+		}
+	}
+
+	if got := sink.ProposedTasks(); len(got) != 0 {
+		t.Errorf("ProposedTasks() = %+v, want none recorded", got)
+	}
+	if filerCalled {
+		t.Error("live ProposalFiler was called on a refused propose_task request")
+	}
+
+	// Every property advertised in InputSchema (including registered change-target kinds) is accepted.
+	t.Cleanup(model.RegisterChangeTarget(model.ChangeTargetRegistration{Kind: testChangeTargetKind}))
+	toolWithCT := toolNamed(t, NewMockTools(&MockSink{}, nil), "propose_task")
+	props, ok := toolWithCT.InputSchema["properties"].(map[string]any)
+	if !ok || len(props) == 0 {
+		t.Fatalf("InputSchema properties = %T %v", toolWithCT.InputSchema["properties"], toolWithCT.InputSchema["properties"])
+	}
+	for name := range props {
+		if err := ValidateProposeTaskArgs(map[string]any{name: nil}); err != nil {
+			t.Errorf("ValidateProposeTaskArgs rejected declared schema property %q: %v", name, err)
+		}
 	}
 }

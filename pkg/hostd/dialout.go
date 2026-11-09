@@ -17,6 +17,7 @@ package hostd
 import (
 	"bufio"
 	"context"
+	"crypto/ed25519"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -57,8 +58,13 @@ type Dialer struct {
 	Server string
 	// Token is this hostd's token, which names it to the controller (a
 	// registry token from /api/hostds, or the deprecated shared
-	// -hostd-token-file one).
-	Token string
+	// -hostd-token-file one). TokenFunc, when set, overrides Token on each
+	// dial so silent credential renewals take effect across reconnects.
+	Token     string
+	TokenFunc func() string
+	// PrivateKey, when set, signs each upgrade request with this host's
+	// Ed25519 private key so a key-bound credential cannot be used without it.
+	PrivateKey ed25519.PrivateKey
 	// Name, when set, is the registry hostd this one says it is: the
 	// controller refuses it unless Token is that hostd's.
 	Name string
@@ -154,14 +160,25 @@ func (d Dialer) upgrade(ctx context.Context, raw net.Conn, u *url.URL) (net.Conn
 		}
 		idToken = strings.TrimSpace(strings.TrimPrefix(idToken, "Bearer "))
 	}
-	if d.Token != "" {
-		req.Header.Set(TokenHeader, d.Token)
+	tok := d.Token
+	if d.TokenFunc != nil {
+		if cur := strings.TrimSpace(d.TokenFunc()); cur != "" {
+			tok = cur
+		}
+	}
+	if tok != "" {
+		req.Header.Set(TokenHeader, tok)
+	}
+	if len(d.PrivateKey) == ed25519.PrivateKeySize && tok != "" {
+		if err := SetConnectHeaders(req, tok, d.PrivateKey, time.Now().UTC()); err != nil {
+			return nil, fmt.Errorf("hostd: signing the connection proof: %w", err)
+		}
 	}
 	switch {
 	case idToken != "":
 		req.Header.Set("Authorization", "Bearer "+idToken)
-	case d.Token != "":
-		req.Header.Set("Authorization", "Bearer "+d.Token)
+	case tok != "":
+		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 	if dl, ok := ctx.Deadline(); ok {
 		_ = raw.SetDeadline(dl)

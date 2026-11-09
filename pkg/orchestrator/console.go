@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
-	consolecap "github.com/ai-on-gke/grain/pkg/capability/console"
 	"github.com/ai-on-gke/grain/pkg/console"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -48,9 +47,9 @@ func (c Config) maxConsoleRuntime() time.Duration {
 // consoleDispatch decides how this run is driven, and is the whole of
 // what an interactive task changes about a dispatch.
 //
-// A task without the console grant is returned exactly as it arrived:
+// A task with unattended hosting is returned exactly as it arrived:
 // the framework runOne built and the deployment's own config. One with
-// it is wrapped so that its run is a session on a pseudo-terminal
+// console hosting is wrapped so that its run is a session on a pseudo-terminal
 // (console.Framework), and given the longer clock a session lives on.
 // Nothing else differs -- the sandbox, the checkout, the capabilities,
 // the branch and the pull request its commits become are all the same
@@ -64,7 +63,7 @@ func (c Config) maxConsoleRuntime() time.Duration {
 // through a task alone that somebody meant to sit with, and they would
 // find out afterwards.
 func consoleDispatch(framework agent.Framework, task model.Task, runID string, cfg Config) (agent.Framework, Config, error) {
-	if !consolecap.Granted(task.Grants) {
+	if !task.HasConsole() {
 		return framework, cfg, nil
 	}
 	if cfg.Consoles == nil {

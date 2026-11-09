@@ -217,6 +217,13 @@ func TestHostdInstallScriptRefusesAnUnknownVersion(t *testing.T) {
 	if !strings.Contains(string(script), `[ -n "$RELEASE" ] || die "this copy of the script does not know the daemon's version`) {
 		t.Error("the script no longer refuses to install without the daemon's version")
 	}
+	// --join is no exception: the invite snippet says --release or
+	// --any-version itself (defaultHostInviteInstall), in sight.
+	for _, line := range strings.Split(string(script), "\n") {
+		if strings.Contains(line, "ANY_VERSION=1") && !strings.Contains(line, "--any-version)") {
+			t.Errorf("the script turns --any-version on by itself: %q", strings.TrimSpace(line))
+		}
+	}
 	out, err := exec.Command("sh", path, "--help").CombinedOutput()
 	if err != nil {
 		t.Fatalf("--help: %v\n%s", err, out)
@@ -329,6 +336,8 @@ func TestHostdInstallScriptRefusesUnsafeInputs(t *testing.T) {
 		{name: "non-hex sha256", args: []string{"--name", "box", "--user", "hostd", "--sha256", strings.Repeat("z", 64)}, want: "64-digit hex SHA-256"},
 		{name: "leading hyphen iap-audience", args: []string{"--name", "box", "--user", "hostd", "--iap-audience", "-bad"}, want: "leading '-'"},
 		{name: "leading hyphen ca-file", args: []string{"--name", "box", "--user", "hostd", "--ca-file", "-bad"}, want: "leading '-'"},
+		{name: "leading hyphen join", args: []string{"--join", "-bad", "--user", "hostd"}, want: "not a valid enrollment code"},
+		{name: "shell metachar join", args: []string{"--join", "ghe_abc;id", "--user", "hostd"}, want: "not a valid enrollment code"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cmd := exec.Command("sh", append([]string{scriptPath}, tc.args...)...)
@@ -412,6 +421,27 @@ func TestHostdInstallOrigin(t *testing.T) {
 		r.Host = host
 		if got := hostdInstallOrigin(r); got != want {
 			t.Errorf("Host %q: hostdInstallOrigin = %q, want %q", host, got, want)
+		}
+	}
+}
+
+// TestDefaultHostInviteInstall: the shared --join line, which -- like the
+// per-host one -- names the daemon's release, or says --any-version when
+// the daemon cannot, rather than leaving the script to skip the check.
+func TestDefaultHostInviteInstall(t *testing.T) {
+	for _, tc := range []struct {
+		c    HostdInstallContext
+		want []string
+	}{
+		{c: HostdInstallContext{Origin: "https://grain.example.com", JoinCode: "ghe_abc"},
+			want: []string{"curl -fsSL https://grain.example.com/hostd/install | sh -s -- --join ghe_abc --any-version"}},
+		{c: HostdInstallContext{Origin: "https://grain.example.com", JoinCode: "ghe_abc", Release: "v1.2.3", Image: "registry.example.com/grain:v1.2.3"},
+			want: []string{"curl -fsSL https://grain.example.com/hostd/install | sh -s -- --join ghe_abc --release v1.2.3 --image registry.example.com/grain:v1.2.3"}},
+		{c: HostdInstallContext{JoinCode: "ghe_abc"}},
+		{c: HostdInstallContext{Origin: "https://grain.example.com"}},
+	} {
+		if got := defaultHostInviteInstall(tc.c); strings.Join(got.Lines, "\n") != strings.Join(tc.want, "\n") || got.Note != "" {
+			t.Errorf("defaultHostInviteInstall(%+v) = %+v, want %q", tc.c, got, tc.want)
 		}
 	}
 }

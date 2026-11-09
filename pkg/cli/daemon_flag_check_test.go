@@ -108,11 +108,9 @@ func TestCheckConfigRefusesWhatCannotBeRepairedWithoutARestart(t *testing.T) {
 		{"no interval to reconcile at", func(c *daemon.Config) { c.PollInterval = 0 }, "-poll-interval must be positive"},
 		{"a negative interval", func(c *daemon.Config) { c.PollInterval = -time.Second }, "-poll-interval must be positive"},
 		{"negative mergers", func(c *daemon.Config) { c.MaxMergers = -1 }, "-max-mergers cannot be negative"},
-		{"backup-interval on postgres", func(c *daemon.Config) {
-			c.DbDriver = "postgres"
-			c.DbDSN = "postgres://localhost/grain"
-			c.BackupInterval = time.Hour
-		}, "-backup-interval requires SQLite"},
+		{"negative backup-interval", func(c *daemon.Config) {
+			c.BackupInterval = -time.Minute
+		}, "-backup-interval cannot be negative"},
 		// The CI cache's bounds: 0 in any of them is "grain's own
 		// default" and is allowed (see below), so only a number that
 		// cannot mean a bound at all is refused.
@@ -176,6 +174,17 @@ func TestCheckConfigAllowsPostgresWithNoDSNWhenEmbeddedAvailable(t *testing.T) {
 	cfg.DbDSN = ""
 	if err := checkConfig(cfg); err != nil {
 		t.Fatalf("checkConfig should allow postgres with empty DSN when embedded postgres is available: %v", err)
+	}
+}
+
+func TestCheckConfigAllowsScheduledBackupsOnPostgres(t *testing.T) {
+	t.Parallel()
+	cfg := startable()
+	cfg.DbDriver = "postgres"
+	cfg.DbDSN = "postgres://localhost/grain"
+	cfg.BackupInterval = 24 * time.Hour
+	if err := checkConfig(cfg); err != nil {
+		t.Fatalf("checkConfig should allow -backup-interval on postgres: %v", err)
 	}
 }
 

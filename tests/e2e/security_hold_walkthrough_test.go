@@ -552,13 +552,13 @@ func TestCapabilityEscalatedProposalsWalkthrough(t *testing.T) {
 			t.Fatalf("%s filed %d proposals, want 2", parent, len(proposals))
 		}
 		for _, p := range proposals {
-			escalated := strings.Contains(p.Title, "read-issues")
+			escalated := strings.Contains(p.Title, model.GitHubReadIssuesGrant)
 			st := w.state(p.ID)
-			noted := strings.Contains(p.Body, model.CapabilityEscalationNote(parent, []string{"read-issues"}))
+			noted := strings.Contains(p.Body, model.CapabilityEscalationNote(parent, []string{model.GitHubReadIssuesGrant}))
 			switch {
 			case escalated && (st != model.StateProposed || !noted):
 				t.Errorf("escalated proposal %q: state=%s noted=%v body=%q", p.Title, st, noted, p.Body)
-			case escalated && !holds(p, "read-issues"):
+			case escalated && !holds(p, model.GitHubReadIssuesGrant):
 				t.Errorf("escalated proposal %q was filed without the capability it asked for: %+v", p.Title, p.Grants)
 			case !escalated && (st != model.StateQueued || strings.Contains(p.Body, "grain: this proposal asked for")):
 				t.Errorf("plain proposal %q: state=%s body=%q", p.Title, st, p.Body)
@@ -570,15 +570,15 @@ func TestCapabilityEscalatedProposalsWalkthrough(t *testing.T) {
 		t.Parallel()
 		w := newHoldWorld(t, false)
 		parent := w.create("auto-merging parent", true, []string{})
-		if holds(parent, "read-issues") {
-			t.Fatalf("the parent holds read-issues already: %+v", parent.Grants)
+		if holds(parent, model.GitHubReadIssuesGrant) {
+			t.Fatalf("the parent holds github#read-issues already: %+v", parent.Grants)
 		}
 		w.setScript(func(task model.Task) []antigravity.Step {
 			if task.ID != parent.ID {
 				return []antigravity.Step{finalText("nothing to do")}
 			}
 			steps := w.changeScript(task, "echo 'typo' >> docs/guide.md")
-			return append([]antigravity.Step{propose("read-issues"), propose()}, steps...)
+			return append([]antigravity.Step{propose(model.GitHubReadIssuesGrant), propose()}, steps...)
 		})
 		w.cycle()
 		check(t, w, parent.ID)
@@ -601,7 +601,7 @@ func TestCapabilityEscalatedProposalsWalkthrough(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		for _, caps := range [][]string{{"read-issues"}, {}} {
+		for _, caps := range [][]string{{model.GitHubReadIssuesGrant}, {}} {
 			if _, err := w.ui.CreateTask(w.ctx, ui.CreateTaskRequest{
 				Title: fmt.Sprintf("follow-up needing %v", caps), Description: "split out", Repo: "acme/widgets",
 				ProposedBy: session.ID, Capabilities: &caps,
@@ -633,7 +633,7 @@ func TestCapabilityEscalatedProposalsWalkthrough(t *testing.T) {
 			if task.ID != session.ID {
 				return []antigravity.Step{finalText("nothing to do")}
 			}
-			return []antigravity.Step{propose("read-issues"), propose(), finalText("filed two follow-ups")}
+			return []antigravity.Step{propose(model.GitHubReadIssuesGrant), propose(), finalText("filed two follow-ups")}
 		})
 		// The session reconciler adopts the tagged task and parks it
 		// awaiting a message, as a standing chat is; a person's message is

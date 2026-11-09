@@ -1,0 +1,28 @@
+{
+  "task": [
+    "api:ci-read@acme/widgets",
+    "api:tasks:read",
+    "self-debug"
+  ],
+  "template": [
+    "api:ci-read@acme/widgets",
+    "api:tasks:read",
+    "self-debug"
+  ],
+  "schedule": [
+    "api:ci-read@acme/widgets",
+    "api:tasks:read",
+    "self-debug"
+  ],
+  "defaults": [
+    "self-debug",
+    "api:tasks:read"
+  ],
+  "repoDefaults": [
+    "self-debug",
+    "api:ci-read@acme/widgets"
+  ],
+  "repoCI": [
+    "release-gate-read"
+  ]
+}

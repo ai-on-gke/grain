@@ -785,3 +785,53 @@ func TestOffDefaultHostRepoDeclarationsKeepTheirHost(t *testing.T) {
 		t.Errorf("DeclaringRepos after ForgetRepo = %+v, %v, want empty", repos, err)
 	}
 }
+
+func TestSyncRepoDeclarationsCanonicalizesLegacyGrants(t *testing.T) {
+	t.Parallel()
+	store, _ := sqlitetest.Open(t)
+	ctx := context.Background()
+	now := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
+
+	tmpl := declaredTemplate("bootstrap-ops", "Bootstrap ops")
+	tmpl.Template.Grants = []model.Grant{
+		{Capability: "bootstrap-playbooks", Via: model.GrantByLabel},
+		{Capability: model.BootstrapPlaybooksGrant, Via: model.GrantByLabel},
+		{Capability: "self-debug", Via: model.GrantByLabel},
+	}
+	sched := declaredSchedule("bootstrap-nightly", "bootstrap-ops", everySixHours())
+	sched.Schedule.Grants = []model.Grant{
+		{Capability: "bootstrap-playbooks", Via: model.GrantByLabel},
+	}
+	declared := model.RepoDeclarations{
+		Templates: []model.DeclaredTemplateFile{tmpl},
+		Schedules: []model.DeclaredScheduleFile{sched},
+	}
+	if _, err := store.SyncRepoDeclarations(ctx, declaring, "abc123", declared, now, time.UTC); err != nil {
+		t.Fatalf("SyncRepoDeclarations: %v", err)
+	}
+
+	gotTmpl, err := store.GetTemplate(ctx, tmpl.Template.ID)
+	if err != nil || gotTmpl == nil {
+		t.Fatalf("GetTemplate: %v, %v", gotTmpl, err)
+	}
+	var tmplCaps []string
+	for _, g := range gotTmpl.Grants {
+		tmplCaps = append(tmplCaps, g.Capability)
+	}
+	wantTmplCaps := []string{
+		"api:self-debug",
+		model.BootstrapPlaybooksGrant,
+		model.GrainSourceGrant,
+	}
+	if !reflect.DeepEqual(tmplCaps, wantTmplCaps) {
+		t.Errorf("template grants = %v, want %v", tmplCaps, wantTmplCaps)
+	}
+
+	gotSched, err := store.GetSchedule(ctx, sched.Schedule.ID)
+	if err != nil || gotSched == nil {
+		t.Fatalf("GetSchedule: %v, %v", gotSched, err)
+	}
+	if len(gotSched.Grants) != 1 || gotSched.Grants[0].Capability != model.BootstrapPlaybooksGrant {
+		t.Errorf("schedule grants = %+v, want [%s]", gotSched.Grants, model.BootstrapPlaybooksGrant)
+	}
+}

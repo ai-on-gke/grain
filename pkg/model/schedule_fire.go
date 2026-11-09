@@ -611,9 +611,9 @@ func (s *Store) fireTaskSchedule(ctx context.Context, sched Schedule, now time.T
 // is saved.
 func (sc *Schedule) syncTemplateCache(tmpl Template) {
 	sc.Title, sc.Body = tmpl.FilledTitleBody()
-	sc.AutoMerge, sc.Reads, sc.Writes, sc.Grants, sc.CustomFields, sc.NetworkAccess, sc.NothingNeededAction, sc.KeepRunning =
+	sc.AutoMerge, sc.Reads, sc.Writes, sc.Grants, sc.CustomFields, sc.NetworkAccess, sc.NothingNeededAction, sc.KeepRunning, sc.Admission, sc.Hosting =
 		tmpl.AutoMerge, tmpl.Reads, tmpl.Writes,
-		tmpl.Grants, tmpl.CustomFields, tmpl.NetworkAccess, tmpl.NothingNeededAction, tmpl.KeepRunning
+		tmpl.Grants, tmpl.CustomFields, tmpl.NetworkAccess, tmpl.NothingNeededAction, tmpl.KeepRunning, tmpl.Admission, tmpl.Hosting
 	// Model is not part of that cache: it is the schedule's own
 	// choice, which beats the template's (Schedule.Model), and
 	// copying the template's over it would erase that choice.

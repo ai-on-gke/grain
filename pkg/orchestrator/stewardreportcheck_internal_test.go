@@ -132,7 +132,7 @@ func TestCheckAndRecordStewardReportRaisesMismatchAndRegressionNotifications(t *
 		Binding:    model.BindingDirective,
 		CreatedAt:  &now,
 		ApprovedAt: &now,
-		Grants:     []model.Grant{{Capability: model.DurableCapability, Via: model.GrantByGrain}},
+		Admission:  model.AdmissionDurable,
 	}
 	if err := store.PutTask(ctx, steward); err != nil {
 		t.Fatalf("PutTask steward: %v", err)
@@ -403,7 +403,7 @@ func TestStewardProcessResultRelaysAndChecksFiledCommentOnIssueOverFinalText(t *
 		Binding:    model.BindingDirective,
 		CreatedAt:  &now,
 		ApprovedAt: &now,
-		Grants:     []model.Grant{{Capability: model.DurableCapability, Via: model.GrantByGrain}},
+		Admission:  model.AdmissionDurable,
 	}
 	if err := store.PutTask(ctx, steward); err != nil {
 		t.Fatalf("PutTask steward: %v", err)

@@ -1,0 +1,8 @@
+mode=tampered-npm GET github.com/openai/codex/releases/download/rust-v0.166.0/codex-x86_64-unknown-linux-musl.tar.gz accept="*/*" auth=false -> 504
+mode=tampered-npm GET github.com/openai/codex/releases/download/rust-v0.166.0/codex-x86_64-unknown-linux-musl.tar.gz accept="*/*" auth=false -> 504
+mode=tampered-npm GET github.com/openai/codex/releases/download/rust-v0.166.0/codex-x86_64-unknown-linux-musl.tar.gz accept="*/*" auth=false -> 504
+mode=tampered-npm GET api.github.com/repos/openai/codex/releases/tags/rust-v0.166.0 accept="application/vnd.github+json" auth=false -> 504
+mode=tampered-npm GET api.github.com/repos/openai/codex/releases/tags/rust-v0.166.0 accept="application/vnd.github+json" auth=false -> 504
+mode=tampered-npm GET api.github.com/repos/openai/codex/releases/tags/rust-v0.166.0 accept="application/vnd.github+json" auth=false -> 504
+mode=tampered-npm GET api.github.com/repos/openai/codex/releases/tags/rust-v0.166.0 accept="application/vnd.github+json" auth=false -> 504
+mode=tampered-npm GET registry.npmjs.org/@openai/codex/-/codex-0.166.0-linux-x64.tgz accept="*/*" auth=false -> 200

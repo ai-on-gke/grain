@@ -49,7 +49,7 @@ With no chapter named, everything but `cleanup` runs in that order.
 - **`--dry-run`**. Prints every line of every chapter and runs none of
   them. It needs no docker, no KVM, no registry credential and no
   cluster, and it makes nothing -- which is why CI runs it (the "demo
-  script dry run" step in `.grain/workflows/ci.yml`). Rehearse in this
+  script dry run" step in `.github/workflows/ci.yml`). Rehearse in this
   mode: it is how you check that a chapter still says what you think
   before you say it to a room.
 

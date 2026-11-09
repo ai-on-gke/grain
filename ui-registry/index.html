@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- The grain mark, the same files and order as ../ui/index.html (see
+     the comments there): PNG fallback first, then the SVG, both light
+     until HubMark in src/App.jsx swaps them for the resolved theme. They
+     are ../ui/public, which vite.config.js uses as this app's publicDir. -->
+    <link
+      id="favicon-png"
+      rel="icon"
+      type="image/png"
+      sizes="128x128"
+      href="/grain-mark-light.png"
+    />
+    <link
+      id="favicon"
+      rel="icon"
+      type="image/svg+xml"
+      href="/grain-mark-light.svg"
+    />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <title>Grain Hub</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

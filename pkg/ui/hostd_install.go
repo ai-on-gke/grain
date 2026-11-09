@@ -28,8 +28,12 @@ import (
 )
 
 // hostdInstallPath is the bootstrap script a machine registering as a
-// remote grain hostd runs (Settings -> Hostds shows the command).
-const hostdInstallPath = "/api/hostd/install.sh"
+// remote grain hostd runs; hostdInstallShortPath is the shorter URL shown
+// in Settings -> Hosts -> Invite hosts.
+const (
+	hostdInstallPath      = "/api/hostd/install.sh"
+	hostdInstallShortPath = "/hostd/install"
+)
 
 //go:embed hostd_install.sh
 var hostdInstallScript string
@@ -64,7 +68,7 @@ func hostdInstallRoute(r *http.Request) bool {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return false
 	}
-	return r.URL.Path == hostdInstallPath
+	return r.URL.Path == hostdInstallPath || r.URL.Path == hostdInstallShortPath
 }
 
 // handleHostdInstallScript serves hostd_install.sh with this daemon's
@@ -155,6 +159,10 @@ type HostdInstallContext struct {
 	Release string
 	// Image is the image the daemon runs; "" when it cannot say.
 	Image string
+	// JoinCode is set when rendering the shared "Invite hosts" enrollment
+	// snippet (--join <code>) for the deployment owner; "" for per-host
+	// install instructions.
+	JoinCode string
 }
 
 // HostdInstallInstructions is what Settings -> Hostds and `grain hostds`
@@ -219,6 +227,57 @@ func defaultHostdInstall(c HostdInstallContext) HostdInstallInstructions {
 		cmd += " --image " + c.Image
 	}
 	return HostdInstallInstructions{Lines: []string{cmd}}
+}
+
+// defaultHostInviteInstall builds the shared enrollment command shown in
+// Settings -> Hosts -> Invite hosts.
+func defaultHostInviteInstall(c HostdInstallContext) HostdInstallInstructions {
+	if c.Origin == "" || c.JoinCode == "" {
+		return HostdInstallInstructions{}
+	}
+	cmd := "curl -fsSL " + c.Origin + hostdInstallShortPath + " | sh -s -- --join " + c.JoinCode
+	// As defaultHostdInstall: the script installs only the daemon's own
+	// release unless the command it is given says otherwise, in sight.
+	if c.Release != "" {
+		cmd += " --release " + c.Release
+	} else {
+		cmd += " --any-version"
+	}
+	if c.Image != "" {
+		cmd += " --image " + c.Image
+	}
+	return HostdInstallInstructions{Lines: []string{cmd}}
+}
+
+// hostInviteInstallFor renders the shared "Invite hosts" command for joinCode
+// using a registered HostdInstallProvider when present or defaultHostInviteInstall.
+func (s *Server) hostInviteInstallFor(r *http.Request, joinCode string) *HostdInstall {
+	out := s.hostdInstallInfo()
+	c := HostdInstallContext{
+		Origin:   hostdInstallOrigin(r),
+		Release:  out.Release,
+		Image:    out.Image,
+		JoinCode: joinCode,
+	}
+	inst := defaultHostInviteInstall(c)
+	if f := registeredHostdInstall(); f != nil && joinCode != "" {
+		if got := f(c); len(got.Lines) > 0 {
+			lines := append([]string(nil), got.Lines...)
+			hasJoin := false
+			for _, l := range lines {
+				if strings.Contains(l, joinCode) || strings.Contains(l, "--join") {
+					hasJoin = true
+					break
+				}
+			}
+			if !hasJoin {
+				lines[len(lines)-1] += " --join " + joinCode
+			}
+			inst = HostdInstallInstructions{Lines: lines, Note: got.Note}
+		}
+	}
+	out.Lines, out.Note = inst.Lines, inst.Note
+	return out
 }
 
 // hostdInstallOrigin is the URL r reached this daemon at, or "" when it

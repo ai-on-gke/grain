@@ -251,6 +251,7 @@ type Config struct {
 	// UiRequireVerifier = "iap".
 	UiRequireIAP            bool
 	UiAllowedPrincipals     []string
+	DeploymentOwner         string
 	UiCloudIdentityEndpoint string
 	UiOpen                  bool
 	Actor                   string
@@ -896,8 +897,11 @@ type Config struct {
 	// grain registry (model.Config.Registry, design/design/registry.design.md).
 	// RegistryTokenFile is the optional flags-only path to a registration
 	// credential file when secret registry-registration-token is not set.
+	// RegistryConnect (-registry-connect / $GRAIN_REGISTRY_CONNECT) enables
+	// the outbound tunnel supervisor dialing wss://<registry-host>/api/entries/<name>/connect.
 	Registry          model.RegistryConfig
 	RegistryTokenFile string
+	RegistryConnect   bool
 }
 
 // limits is the sandbox pool this deployment is rationing right now --
@@ -1272,8 +1276,17 @@ func (c Config) logStoreOverrides(mc model.Config) {
 	warn("k8s-priority-class-interactive", c.K8sPriorityClasses.Interactive, mc.K8sPriorityClassInteractive)
 	warn("k8s-priority-class-agent", c.K8sPriorityClasses.Agent, mc.K8sPriorityClassAgent)
 	warn("k8s-priority-class-ci", c.K8sPriorityClasses.CI, mc.K8sPriorityClassCI)
-	warn("registry-url", c.Registry.URL, mc.Registry.URL)
-	warn("registry-entry", c.Registry.Entry, mc.Registry.Entry)
+	// 'grain settings' has no registry flags: the stored registry target
+	// moves with 'grain registry register' (which retargets, re-mints and
+	// clears the old credential) or Settings -> Registry, so say that
+	// rather than send an operator to a command that cannot do it.
+	warnRegistry := func(flag string, flagVal, storedVal string) {
+		if flagVal != "" && flagVal != storedVal {
+			log.Printf("loadConfig: ignoring -%s=%v, stored config already has %v -- use 'grain registry register -registry-url <url> -entry <name>' or Settings -> Hub to change it", flag, flagVal, storedVal)
+		}
+	}
+	warnRegistry("registry-url", c.Registry.URL, mc.Registry.URL)
+	warnRegistry("registry-entry", c.Registry.Entry, mc.Registry.Entry)
 }
 
 // limits is this configuration's whole sandbox pool, as everything that

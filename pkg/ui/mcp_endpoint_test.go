@@ -370,7 +370,7 @@ func TestControllerMCPExternalTokenIgnoresActingTaskHeader(t *testing.T) {
 	enableExternalAgentAPI(t, client.Store)
 	seedAPITask(t, client, "30", "acme/widgets", "api:settings:read", "api:tasks:read")
 
-	humanCtx := ui.WithPrincipal(context.Background(), model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	humanCtx := ui.WithPrincipal(context.Background(), model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com", Source: model.SourceIAP})
 	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
 		Name:     "byo-harness",
 		ScopeSet: "grain/ci-read",
@@ -768,7 +768,7 @@ func TestControllerMCPGetTaskPreservesOwnerAttributionAndFiledVia(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	humanCtx := ui.WithPrincipal(context.Background(), model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	humanCtx := ui.WithPrincipal(context.Background(), model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com", Source: model.SourceIAP})
 	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
 		Name:     "alice-mcp",
 		ScopeSet: "grain/external-dev",
@@ -827,5 +827,75 @@ func TestControllerMCPGetTaskPreservesOwnerAttributionAndFiledVia(t *testing.T) 
 	}
 	if want := "external agent alice-mcp for alice@example.com (agent) (from codex-cli/0.9.2 session=mcp-99):"; !strings.Contains(convView, want) {
 		t.Errorf("grain_get_task conversation missing %q:\n%s", want, convView)
+	}
+}
+
+// grain_submit_task once dropped grants: it copied the arguments it knew
+// into its POST /api/tasks body and grants was not one of them, so a grants
+// list was silently left off the task it filed, and a mixed request that
+// REST and grain_invoke refuse was filed anyway (2026-11-09 store-upgrades
+// walkthrough, item 3). It forwards grants as sent now: the control is
+// filed holding its grant, and every refused shape is refused with the
+// route's own reason and files nothing.
+func TestControllerMCPSubmitTaskForwardsGrants(t *testing.T) {
+	t.Parallel()
+	srv, client, code := newSingleTenantControllerMCPServer(t)
+	if _, err := client.AddTargetRepo(context.Background(), "acme/widgets"); err != nil {
+		t.Fatal(err)
+	}
+	headers := map[string]string{ui.AccessCodeHeader: code}
+	ctx := context.Background()
+
+	text, isErr := callControllerTool(t, srv, headers, ui.ToolGrainSubmitTask, map[string]any{
+		"title": "grants only", "repo": "acme/widgets", "grants": []any{"api:ci-read"},
+	})
+	if isErr {
+		t.Fatalf("grain_submit_task with grants failed: %s", text)
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(text), &created); err != nil {
+		t.Fatalf("decoding submit response: %v (%s)", err, text)
+	}
+	got, err := client.GetTask(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(got.Capabilities, "api:ci-read") {
+		t.Fatalf("task filed with grants [api:ci-read] holds %v", got.Capabilities)
+	}
+
+	target := map[string]any{"capability": model.RepoTargetRef, "with": map[string]any{"repo": "acme/widgets", "base": "main"}}
+	read := map[string]any{"capability": model.RepoReadRef, "with": map[string]any{"repo": "acme/widgets"}}
+	for _, tc := range []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{"capabilities beside grants: []", map[string]any{"repo": "acme/widgets", "capabilities": []any{"api:ci-read"}, "grants": []any{}}, "grants and capabilities both name capability grants"},
+		{"reads: [] beside grants", map[string]any{"repo": "acme/widgets", "reads": []any{}, "grants": []any{read}}, "and reads both name read access"},
+		{"base beside repo#target", map[string]any{"base": "main", "grants": []any{target}}, "both name the task's repository"},
+		{"no_repo beside repo#target", map[string]any{"no_repo": true, "grants": []any{target}}, "both name the task's repository"},
+	} {
+		before, err := client.ListTasks(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		args := map[string]any{"title": tc.name}
+		for k, v := range tc.args {
+			args[k] = v
+		}
+		text, isErr := callControllerTool(t, srv, headers, ui.ToolGrainSubmitTask, args)
+		if !isErr || !strings.Contains(text, tc.want) {
+			t.Errorf("%s: grain_submit_task = isError %v %q, want refused with %q", tc.name, isErr, text, tc.want)
+		}
+		after, err := client.ListTasks(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(after) != len(before) {
+			t.Errorf("%s: a refused request filed a task (%d tasks, then %d)", tc.name, len(before), len(after))
+		}
 	}
 }

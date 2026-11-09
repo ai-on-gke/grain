@@ -139,18 +139,24 @@ func (s *Server) parseDockerTarget(path string, query url.Values) (registryURL s
 // serveDocker answers one request under /v2/ from a dockerd that has
 // been pointed here as a registry mirror.
 func (s *Server) serveDocker(w http.ResponseWriter, r *http.Request) {
-	registryURL, client, subpath, isPing := s.parseDockerTarget(r.URL.Path, r.URL.Query())
+	registryURL, client, escapedSubpath, isPing := s.parseDockerTarget(r.URL.EscapedPath(), r.URL.Query())
 	if isPing {
 		s.dockerPing(w)
 		return
 	}
-	if strings.Contains(subpath, "..") {
+	subpath, unescapeErr := url.PathUnescape(escapedSubpath)
+	if unescapeErr != nil || strings.Contains(subpath, "..") || strings.Contains(escapedSubpath, "..") || strings.Contains(r.URL.Path, "..") {
 		s.refuse(w, r, http.StatusBadRequest, "grain's package cache will not follow a path containing \"..\".")
 		return
 	}
+	if s.restrictedClient(r) && r.Method != http.MethodGet && r.Method != http.MethodHead {
+		s.refuse(w, r, http.StatusForbidden,
+			fmt.Sprintf("grain's package cache serves a sandbox with no network reads only -- GET and HEAD on container registries, and not %s %s.", r.Method, r.URL.Path))
+		return
+	}
 
-	upstream := strings.TrimSuffix(registryURL, "/") + dockerAPIPrefix + subpath
-	if strings.HasSuffix(r.URL.Path, "/") && !strings.HasSuffix(upstream, "/") {
+	upstream := strings.TrimSuffix(registryURL, "/") + dockerAPIPrefix + escapedSubpath
+	if strings.HasSuffix(r.URL.EscapedPath(), "/") && !strings.HasSuffix(upstream, "/") {
 		upstream += "/"
 	}
 	q := r.URL.Query()
@@ -176,7 +182,7 @@ func (s *Server) serveDocker(w http.ResponseWriter, r *http.Request) {
 	var fallbackURL string
 	var fallbackClient *http.Client
 	if registryURL == s.dockerRegistry() || strings.Contains(registryURL, "registry-1.docker.io") || strings.Contains(registryURL, "docker.io") {
-		fallbackURL = s.dockerScheme() + "://mirror.gcr.io" + dockerAPIPrefix + subpath
+		fallbackURL = s.dockerScheme() + "://mirror.gcr.io" + dockerAPIPrefix + escapedSubpath
 		if encoded := q.Encode(); encoded != "" {
 			fallbackURL += "?" + encoded
 		}
@@ -196,14 +202,29 @@ func (s *Server) serveDocker(w http.ResponseWriter, r *http.Request) {
 // serveDockerDirect answers a direct request against an intercepted OCI registry domain.
 func (s *Server) serveDockerDirect(w http.ResponseWriter, r *http.Request, registryURL string, client *http.Client) {
 	path := r.URL.Path
-	if strings.Contains(path, "..") {
+	escapedPath := r.URL.EscapedPath()
+	if strings.Contains(path, "..") || strings.Contains(escapedPath, "..") {
 		s.refuse(w, r, http.StatusBadRequest, "grain's package cache will not follow a path containing \"..\".")
 		return
 	}
+	if s.restrictedClient(r) && r.Method != http.MethodGet && r.Method != http.MethodHead {
+		s.refuse(w, r, http.StatusForbidden,
+			fmt.Sprintf("grain's package cache serves a sandbox with no network reads only -- GET and HEAD on container registries, and not %s %s.", r.Method, path))
+		return
+	}
 
-	upstream := strings.TrimSuffix(registryURL, "/") + "/" + strings.TrimPrefix(path, "/")
+	upstream := strings.TrimSuffix(registryURL, "/") + "/" + strings.TrimPrefix(escapedPath, "/")
 	if r.URL.RawQuery != "" {
 		upstream += "?" + r.URL.RawQuery
+	}
+
+	if strings.HasPrefix(strings.TrimLeft(path, "/"), "artifacts-uploads/") {
+		if !s.restrictedClient(r) && isArtifactRegistryUpload(r.Host, escapedPath) {
+			s.proxyDocker(w, r, upstream)
+			return
+		}
+		s.refuse(w, r, http.StatusNotFound, "grain's package cache mirrors OCI registries: requests must start with /v2/.")
+		return
 	}
 
 	if isDockerAuthEndpoint(path, r.URL.Query()) {
@@ -211,7 +232,7 @@ func (s *Server) serveDockerDirect(w http.ResponseWriter, r *http.Request, regis
 		return
 	}
 
-	if !strings.HasPrefix(path, "/v2") {
+	if !strings.HasPrefix(path, "/v2") || !strings.HasPrefix(escapedPath, "/v2") {
 		s.refuse(w, r, http.StatusNotFound, "grain's package cache mirrors OCI registries: requests must start with /v2/.")
 		return
 	}
@@ -220,8 +241,16 @@ func (s *Server) serveDockerDirect(w http.ResponseWriter, r *http.Request, regis
 		s.dockerPing(w)
 		return
 	}
+	if !strings.HasPrefix(path, "/v2/") || !strings.HasPrefix(escapedPath, "/v2/") {
+		s.refuse(w, r, http.StatusNotFound, "grain's package cache mirrors OCI registries: requests must start with /v2/.")
+		return
+	}
 
 	if isDockerDirectWrite(r.Method, trimmed) {
+		if s.restrictedClient(r) {
+			s.refuse(w, r, http.StatusNotFound, "grain's package cache mirrors OCI registries for image pulls only on a sandbox with no network.")
+			return
+		}
 		s.proxyDocker(w, r, upstream)
 		return
 	}
@@ -229,7 +258,7 @@ func (s *Server) serveDockerDirect(w http.ResponseWriter, r *http.Request, regis
 	var fallbackURL string
 	var fallbackClient *http.Client
 	if registryURL == s.dockerRegistry() || strings.Contains(registryURL, "registry-1.docker.io") || strings.Contains(registryURL, "docker.io") {
-		fallbackURL = s.dockerScheme() + "://mirror.gcr.io/" + strings.TrimPrefix(path, "/")
+		fallbackURL = s.dockerScheme() + "://mirror.gcr.io/" + strings.TrimPrefix(escapedPath, "/")
 		if r.URL.RawQuery != "" {
 			fallbackURL += "?" + r.URL.RawQuery
 		}
@@ -300,11 +329,39 @@ func isDockerDirectWrite(method, subpath string) bool {
 	return false
 }
 
+// isArtifactRegistryUpload reports whether a request targets Google Artifact
+// Registry's blob upload session endpoint (/artifacts-uploads/... on *.pkg.dev),
+// returned in the Location header of POST /v2/.../blobs/uploads/.
+func isArtifactRegistryUpload(host, path string) bool {
+	h := strings.TrimSuffix(hostKey(host), ".")
+	return len(h) > len(".pkg.dev") && strings.HasSuffix(h, ".pkg.dev") && strings.HasPrefix(path, "/artifacts-uploads/")
+}
+
+// internalProxyHeaders are headers consumed by grain/grit's own package-cache
+// authentication and trust classification that must never be forwarded to
+// external upstream registries.
+var internalProxyHeaders = map[string]bool{
+	"grit-job-token":   true,
+	"grit-cache-trust": true,
+}
+
 // copyProxyRequestHeaders copies client request headers to the proxied upstream request,
-// excluding hop-by-hop headers.
+// excluding hop-by-hop and internal package-cache authentication headers.
 func copyProxyRequestHeaders(dst *http.Request, src *http.Request) {
+	var connHop map[string]bool
+	for _, v := range src.Header.Values("Connection") {
+		for _, token := range strings.Split(v, ",") {
+			if token = strings.ToLower(strings.TrimSpace(token)); token != "" {
+				if connHop == nil {
+					connHop = make(map[string]bool)
+				}
+				connHop[token] = true
+			}
+		}
+	}
 	for name, values := range src.Header {
-		if hopByHop[strings.ToLower(name)] {
+		lower := strings.ToLower(name)
+		if hopByHop[lower] || internalProxyHeaders[lower] || connHop[lower] {
 			continue
 		}
 		for _, v := range values {
@@ -346,7 +403,7 @@ func (s *Server) proxyDocker(w http.ResponseWriter, r *http.Request, upstreamURL
 	// translate this to a 401 challenge with Www-Authenticate so OCI clients (like docker daemon)
 	// can perform OAuth2/token authentication against /token and retry with a Bearer token.
 	if resp.StatusCode == http.StatusForbidden && resp.Header.Get("Www-Authenticate") == "" {
-		if u, err := url.Parse(upstreamURL); err == nil && (s.isGHCRRegistry(u.Host) || s.isGHCRRegistry(r.Host)) {
+		if u, err := url.Parse(upstreamURL); err == nil && s.isGHCRRegistry(u.Host) {
 			owner, repo, ok := extractDockerRepo(r.URL.Path, r.URL.Query())
 			if !ok {
 				owner, repo, ok = extractDockerRepo(u.Path, u.Query())
@@ -375,22 +432,27 @@ func (s *Server) proxyDocker(w http.ResponseWriter, r *http.Request, upstreamURL
 
 // isGHCRRegistry reports whether host matches GitHub Container Registry.
 func (s *Server) isGHCRRegistry(host string) bool {
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
+	trimmed := strings.TrimSpace(host)
+	if s.ghcrRegistryURL != "" {
+		if u, err := url.Parse(s.ghcrRegistryURL); err == nil && u.Host != "" {
+			if strings.EqualFold(trimmed, u.Host) {
+				return true
+			}
+			reqHost, reqPort, reqErr := net.SplitHostPort(trimmed)
+			cfgHost, cfgPort, cfgErr := net.SplitHostPort(u.Host)
+			if reqErr != nil {
+				reqHost = trimmed
+			}
+			if cfgErr != nil {
+				cfgHost = u.Host
+			}
+			if (reqErr != nil || cfgErr != nil || reqPort == cfgPort) && strings.EqualFold(reqHost, cfgHost) {
+				return true
+			}
+		}
 	}
-	host = strings.ToLower(strings.TrimSpace(host))
-	if host == "ghcr.io" {
-		return true
-	}
-	ghcrHost := hostOnly(s.ghcrRegistry())
-	if ghcrHost != "" && host == ghcrHost {
-		return true
-	}
-	defaultHost := hostOnly(DefaultGHCRRegistry)
-	if defaultHost != "" && host == defaultHost {
-		return true
-	}
-	return false
+	h := strings.TrimSuffix(hostKey(trimmed), ".")
+	return h == "ghcr.io" || h == hostOnly(DefaultGHCRRegistry)
 }
 
 // extractRepoFromScope extracts owner and repo from OCI scope parameter(s).
@@ -475,15 +537,8 @@ func (s *Server) autoAuthDocker(req *http.Request, origReq *http.Request, upstre
 		return
 	}
 
-	// Check if the target is GHCR
-	isGHCR := s.isGHCRRegistry(u.Host) ||
-		s.isGHCRRegistry(origReq.Host) ||
-		origReq.URL.Query().Get("service") == "ghcr.io" ||
-		origReq.URL.Query().Get("ns") == "ghcr.io" ||
-		u.Query().Get("service") == "ghcr.io" ||
-		strings.HasPrefix(origReq.URL.Path, "/v2/ghcr") ||
-		strings.EqualFold(origReq.Host, "ghcr.io")
-	if !isGHCR {
+	// Never send GitHub credentials to an upstream host other than GHCR.
+	if !s.isGHCRRegistry(u.Host) {
 		return
 	}
 
@@ -781,7 +836,7 @@ func (a *dockerAuth) fetchToken(req *http.Request, challenge map[string]string) 
 	if err != nil {
 		return "", err
 	}
-	if a.credentials != nil && (strings.EqualFold(a.host, "ghcr.io") || strings.Contains(strings.ToLower(a.host), "ghcr")) {
+	if a.credentials != nil && strings.TrimSuffix(hostKey(a.host), ".") == "ghcr.io" && strings.TrimSuffix(hostKey(realm.Host), ".") == "ghcr.io" {
 		if owner, repo, ok := extractRepoFromScope(query); ok {
 			baseRepo := repo
 			if i := strings.Index(repo, "/"); i > 0 {

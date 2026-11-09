@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { isApiGrant, withoutApiRows } from "../apiGrants.js";
+import { isApiGrant } from "../apiGrants.js";
 import GrantsPicker from "./GrantsPicker.jsx";
 import { localGrantHandlers } from "./capabilityMethods.js";
 import { isCapabilityRef } from "../capabilityArgs.js";
@@ -22,19 +22,15 @@ import {
   Box,
   Button,
   Checkbox,
-  FormControl,
   FormControlLabel,
-  FormHelperText,
   MenuItem,
   Stack,
   TextField,
   Typography,
 } from "@mui/material";
 import api from "../api.js";
-import { useHeldIds } from "../useHeldIds.js";
 import { CustomFieldInputs, initialFieldValues } from "./CustomFields.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
-import SearchSelect from "./SearchSelect.jsx";
 import ModelPicker from "./ModelPicker.jsx";
 import { DeclaredFields, DeclaredNotice } from "./Declared.jsx";
 import Overlay from "./Overlay.jsx";
@@ -49,12 +45,10 @@ import BranchField from "./BranchField.jsx";
 import RepoField from "./RepoField.jsx";
 import { taskPriority, wholeNumber } from "../wholeNumber.js";
 import WriteReposField from "./WriteReposField.jsx";
-import {
-  configuredCapabilities,
-  LEGACY_CAPABILITIES_HINT,
-  NO_CAPABILITIES_HINT,
-  targetableRepos,
-} from "../state.js";
+import { targetableRepos } from "../state.js";
+import AccessGate from "./AccessGate.jsx";
+import AdmissionField from "./AdmissionField.jsx";
+import HostingField from "./HostingField.jsx";
 
 // TemplateOverlay is a template's own sub page (bwsalmon/agents#545):
 // "+ New" on the Processes page (ProcessesList) opens this blank, and clicking
@@ -105,24 +99,23 @@ function TemplateOverlay({
   const [capabilities, setCapabilities] = useState(
     template?.capabilities || [],
   );
-  // What this deployment has configured, plus whatever this template
-  // already names: an unconfigured capability is not a choice worth
-  // offering here, and one already on the template needs its row to be
-  // unticked from (configuredCapabilities, state.js).
-  // Capability server grants, with their with: arguments, and the agent
-  // API's grants (apiGrants.js) share the list and are edited together
-  // by GrantsPicker rather than the legacy checklist.
-  const capabilityIds = capabilities.filter(
-    (id) => !isCapabilityRef(id) && !isApiGrant(id),
-  );
+  // Capability server grants, with their with: arguments, the agent API's
+  // grants (apiGrants.js), and any held bare capability id share the list
+  // and are shown together by GrantsPicker.
+  const isBareGrant = (id) => !isCapabilityRef(id) && !isApiGrant(id);
+  const capabilityIds = capabilities.filter(isBareGrant);
   const apiIds = capabilities.filter(isApiGrant);
-  const capabilityRefs = capabilities.filter(isCapabilityRef);
-  const heldCapabilityIds = useHeldIds(capabilityIds);
-  const capabilityOptions = withoutApiRows(
-    configuredCapabilities(config?.capabilities, heldCapabilityIds),
+  const capabilityRefs = capabilities.filter(
+    (id) => isCapabilityRef(id) && !isApiGrant(id),
   );
-  const methodGrants = localGrantHandlers(capabilityRefs, (refs) =>
-    setCapabilities([...capabilityIds, ...apiIds, ...refs]),
+  const methodGrants = localGrantHandlers(
+    [...capabilityIds, ...capabilityRefs],
+    (rest) =>
+      setCapabilities([
+        ...rest.filter(isBareGrant),
+        ...apiIds,
+        ...rest.filter(isCapabilityRef),
+      ]),
   );
   // reads is state for the reason capabilities is: its picker
   // (ReadOnlyReposField) is a search box, not a form field submit could
@@ -158,6 +151,12 @@ function TemplateOverlay({
   // (ui.CreateTemplateRequest.Model); "" leaves it to the deployment's
   // default.
   const [chosenModel, setChosenModel] = useState(template?.model || "");
+  // The admission every task this template files starts at
+  // (model.Template.Admission); "" on the wire is standard.
+  const [admission, setAdmission] = useState(template?.admission || "standard");
+  // How every task this template files is hosted (model.Template.Hosting);
+  // "" on the wire is unattended.
+  const [hosting, setHosting] = useState(template?.hosting || "unattended");
 
   // Whether leaving now would lose an edit: the text boxes are read off
   // the form, and the pickers above keep their answers in state.
@@ -168,6 +167,8 @@ function TemplateOverlay({
     customFields,
     fields,
     chosenModel,
+    admission,
+    hosting,
   });
   const [stale, setStale] = useState(null);
   // Held from when the pane opened, ScheduleOverlay's openedRevision.
@@ -209,6 +210,15 @@ function TemplateOverlay({
       ...(chosenModel !== (template?.model || "")
         ? { model: chosenModel }
         : {}),
+      // Only when it changed, for the model's reason above: raising it
+      // is gated for a limited role (ui's grant gate reads `admission`),
+      // so a save that only resends the saved value must not ask.
+      ...(admission !== (template?.admission || "standard")
+        ? { admission }
+        : {}),
+      // Only when it changed, as admission: absent leaves the saved
+      // hosting alone (ui.UpdateTemplateRequest.Hosting).
+      ...(hosting !== (template?.hosting || "unattended") ? { hosting } : {}),
       reads,
       writes,
       reviewers: (data.get("reviewers") || "")
@@ -456,6 +466,12 @@ function TemplateOverlay({
             title="Immediately restart every task this template files when its run exits, instead of completing or parking it."
             sx={{ display: "flex" }}
           />
+          <AdmissionField
+            value={admission}
+            onChange={setAdmission}
+            noun="template"
+          />
+          <HostingField value={hosting} onChange={setHosting} noun="template" />
           <TextField
             select
             name="networkAccess"
@@ -495,30 +511,10 @@ function TemplateOverlay({
             onChange={setChosenModel}
             helperText="the model every task this template files asks for. A task filed from it can still choose its own."
           />
-          <FormControl fullWidth margin="normal" size="small">
-            <SearchSelect
-              multiple
-              label="Legacy capabilities"
-              value={capabilityIds}
-              onChange={(next) =>
-                setCapabilities([...next, ...apiIds, ...capabilityRefs])
-              }
-              noOptionsText={
-                capabilityOptions.length === 0
-                  ? NO_CAPABILITIES_HINT
-                  : "No matches"
-              }
-              options={capabilityOptions.map((c) => ({
-                value: c.id,
-                label: c.name,
-                title: c.description,
-              }))}
-            />
-            <FormHelperText>{LEGACY_CAPABILITIES_HINT}</FormHelperText>
-          </FormControl>
           <GrantsPicker
             config={config}
             grants={capabilities}
+            disabled={locked}
             onApiChange={(next) =>
               setCapabilities([...capabilityIds, ...next, ...capabilityRefs])
             }
@@ -542,23 +538,37 @@ function TemplateOverlay({
           direction="row"
           justifyContent={isNew ? "flex-end" : "space-between"}
           alignItems="center"
-          sx={{ mt: 2 }}
+          sx={{ mt: 2, flexWrap: "wrap", gap: 1 }}
         >
           {!isNew && (
-            <Button color="error" onClick={remove} disabled={locked}>
-              Delete
-            </Button>
-          )}
-          <Stack direction="row" spacing={1}>
-            {!isNew && onNewTask && (
-              <Button onClick={() => onNewTask(template)}>
-                New task from this template
+            <AccessGate scope="templates:write" repo={repo}>
+              <Button color="error" onClick={remove} disabled={locked}>
+                Delete
               </Button>
+            </AccessGate>
+          )}
+          <Stack
+            direction="row"
+            spacing={1}
+            alignItems="center"
+            sx={{ ml: "auto", flexWrap: "wrap", rowGap: 1 }}
+          >
+            {!isNew && onNewTask && (
+              <AccessGate scope="tasks:write" repo={repo}>
+                <Button
+                  onClick={() => onNewTask(template)}
+                  sx={{ whiteSpace: "nowrap" }}
+                >
+                  New task from this template
+                </Button>
+              </AccessGate>
             )}
             <Button onClick={onClose}>{locked ? "Close" : "Cancel"}</Button>
-            <Button type="submit" variant="contained" disabled={locked}>
-              {isNew ? "Add template" : "Save"}
-            </Button>
+            <AccessGate scope="templates:write" repo={repo}>
+              <Button type="submit" variant="contained" disabled={locked}>
+                {isNew ? "Add template" : "Save"}
+              </Button>
+            </AccessGate>
           </Stack>
         </Stack>
       </form>

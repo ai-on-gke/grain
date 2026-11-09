@@ -16,6 +16,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import api from "../../api.js";
 import RegistrySection from "./RegistrySection.jsx";
+import { TimeZoneProvider } from "../../TimeZoneContext.jsx";
 
 vi.mock("../../api.js", () => ({
   default: vi.fn(),
@@ -105,6 +106,86 @@ describe("RegistrySection", () => {
       expect(api).toHaveBeenCalledWith("/api/registry/heartbeat", {
         method: "POST",
       }),
+    );
+  });
+
+  // A locked Registry drew its config-managed cards in a bare disabled
+  // fieldset, which a MUI Select does not obey: its selects stayed in the
+  // tab order, unmarked, and still opened and saved (2026-11-07 settings
+  // walkthrough). ReadOnlyFieldset takes them out of reach.
+  it("keeps locked selects out of reach of the keyboard", async () => {
+    api.mockResolvedValue({ enabled: false, state: "disabled" });
+    const saveChoice = vi.fn();
+    const s = {
+      configLocked: true,
+      settings: {
+        registry: {
+          url: "https://registry.example.com",
+          entry: "acme",
+          authMode: "token",
+        },
+      },
+      saveChoice,
+      onEnterKey: () => {},
+      reloadSettings: vi.fn(),
+      showError: vi.fn(),
+      onSaved: vi.fn(),
+    };
+    const { container } = render(<RegistrySection s={s} />);
+    const selects = await waitFor(() => {
+      const found = container.querySelectorAll(".MuiSelect-select");
+      expect(found.length).toBeGreaterThan(0);
+      return found;
+    });
+    await waitFor(() => {
+      for (const el of selects) {
+        expect(el).toHaveAttribute("aria-disabled", "true");
+        expect(el).toHaveAttribute("tabindex", "-1");
+      }
+    });
+    fireEvent.keyDown(selects[0], { key: "ArrowDown" });
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(saveChoice).not.toHaveBeenCalled();
+  });
+
+  // "Last heartbeat" printed a raw ISO UTC timestamp whatever time zone
+  // this browser chose (2026-11-08 settings walkthrough).
+  it("prints the last heartbeat in this browser's chosen time zone", async () => {
+    const hb = "2026-11-05T07:50:00Z";
+    api.mockResolvedValue({
+      enabled: true,
+      state: "connected",
+      lastHeartbeatAt: hb,
+      heartbeatIntervalSeconds: 15,
+      health: "ok",
+      activeTasks: 0,
+      awaitingReplyTasks: 0,
+    });
+    const s = {
+      settings: {
+        registry: {
+          url: "https://registry.grain.example.com",
+          entry: "acme-widgets",
+        },
+      },
+      saveChoice: vi.fn(),
+      onEnterKey: () => {},
+      reloadSettings: vi.fn(),
+      showError: vi.fn(),
+      onSaved: vi.fn(),
+    };
+    render(
+      <TimeZoneProvider zone="Asia/Tokyo">
+        <RegistrySection s={s} />
+      </TimeZoneProvider>,
+    );
+    const inTokyo = new Date(hb).toLocaleString(undefined, {
+      timeZone: "Asia/Tokyo",
+    });
+    await screen.findByText(
+      new RegExp(
+        `Last heartbeat ${inTokyo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
+      ),
     );
   });
 });

@@ -1,0 +1,3 @@
+{"step":"both","title":"Ease off polling between reconcile cycles","status":200,"cardCount":0,"body":""}
+{"step":"both","title":"Remind every run to run the unit tests","status":200,"cardCount":0,"body":""}
+{"step":"both","repo":{"pollInterval":"30s","head":"bf8a4c71e353b3176c881e8683efa5e131b88803","pendingRestart":null,"pollOnMain":"\"poll_interval_ms\": 30000","promptOnMain":"\"prompt_extension\": \"Run the unit tests before you push.\""}}

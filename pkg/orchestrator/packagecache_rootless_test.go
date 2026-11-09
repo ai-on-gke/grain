@@ -15,9 +15,8 @@
 package orchestrator
 
 import (
-	"bytes"
 	"context"
-	"log"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -44,19 +43,16 @@ func resetNoRootNotedForTest(t *testing.T) {
 	})
 }
 
-// captureLog redirects the standard logger for the rest of the test.
-func captureLog(t *testing.T) *bytes.Buffer {
+// captureLog collects what the standard logger says for the rest of the
+// test, through the package's test router (logToTest) rather than a
+// bytes.Buffer swapped in with log.SetOutput: the journal is safe to read
+// while a goroutine left over from an earlier test is still logging, and
+// nothing has to be put back afterwards.
+func captureLog(t *testing.T) fmt.Stringer {
 	t.Helper()
+	journal := logToTest(t)
 	resetNoRootNotedForTest(t)
-	var buf bytes.Buffer
-	prev, flags := log.Writer(), log.Flags()
-	log.SetOutput(&buf)
-	log.SetFlags(0)
-	t.Cleanup(func() {
-		log.SetOutput(prev)
-		log.SetFlags(flags)
-	})
-	return &buf
+	return journal
 }
 
 // The walkthrough on kind (task 1836) found every k8s-container dispatch

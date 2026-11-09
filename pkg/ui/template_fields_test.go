@@ -25,6 +25,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -107,7 +108,7 @@ func TestCreateTaskFromATemplateFillsInTheHoles(t *testing.T) {
 	tmpl, err := c.CreateTemplate(ctx, ui.CreateTemplateRequest{
 		Name: "Deploy", Title: "Deploy {{service}} to {{environment}}",
 		Description:  "Deploy {{service}}, then watch it.",
-		Capabilities: []string{"read-issues"},
+		Capabilities: []string{"github-sandbox"},
 		Reads:        []string{"acme/shared-lib"},
 		AutoMerge:    true,
 		Fields: []ui.TemplateField{
@@ -138,7 +139,7 @@ func TestCreateTaskFromATemplateFillsInTheHoles(t *testing.T) {
 	if !task.AutoMerge {
 		t.Errorf("autoMerge = false, want the template's")
 	}
-	if len(task.Capabilities) != 1 || task.Capabilities[0] != "read-issues" {
+	if len(task.Capabilities) != 1 || task.Capabilities[0] != model.GitHubSandboxRepoGrant {
 		t.Errorf("capabilities = %v, want the template's", task.Capabilities)
 	}
 	if len(task.Reads) != 1 || task.Reads[0] != "acme/shared-lib" {

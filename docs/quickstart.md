@@ -50,17 +50,27 @@ sha256sum ~/.local/bin/grain         # record it beside $PINNED
 grain version
 ```
 
-`scripts/install-grain.sh` does the same in one command, and refuses to
-install an image whose signature does not verify when you give it a key:
+`scripts/install-grain.sh` does it in one command. By default it installs
+from the release's GitHub release assets instead
+([docs/release-assets.md](release-assets.md)): it downloads `images.json` and
+the `grain-image.tar.gz` tarball it names, checks the tarball against the
+manifest's sha256 and its `.sha256` sidecar, `docker load`s it and checks the
+loaded image ID, so no registry is involved. With `-image` it pulls from the
+registry as above, and refuses an image whose signature does not verify when
+you give it a key:
 
 ```sh
-scripts/install-grain.sh -version v1.9.0 -key cosign.pub
+scripts/install-grain.sh -version v1.9.0                     # release assets
+scripts/install-grain.sh -version v1.9.0 -image docker.io/grainai/grain -key cosign.pub
 ```
 
 If `~/.local/bin` is not on your `PATH`, add it. Without docker, copy the
-binary off any machine that has it. To build from source instead (macOS
-included), use `make dist-cli`. It writes `bin/dist/grain-<os>-<arch>.tar.gz`
-and a `checksums.txt` to check them against.
+binary off any machine that has it. Every `vX.Y.Z` release also carries
+`grain-<os>-<arch>.tar.gz` archives for Linux and macOS and a
+`checksums.txt` (docs/release-assets.md, "The grain CLI"), which a running
+daemon's `curl -fsSL <origin>/cli/install.sh | sh` installs. To build from
+source instead, use `make dist-cli`. It writes the same
+`bin/dist/grain-<os>-<arch>.tar.gz` and `checksums.txt`.
 
 ## 2. Get a sandbox and a model CLI ready
 
@@ -157,7 +167,7 @@ capabilities:
     - "https://grain.dev/capabilities/grain#journal"
     - "api:deployment:read"
     - "https://grain.dev/capabilities/grain#health"
-    - "bootstrap-playbooks"
+    - 'https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}'
     - "api:ci-read"
 network: ["open"]
 allow_external_on_host_sandboxes: false

@@ -15,7 +15,7 @@
 import { isApiGrant, withoutApiRows } from "../apiGrants.js";
 import GrantsPicker from "./GrantsPicker.jsx";
 import { localGrantHandlers } from "./capabilityMethods.js";
-import { isCapabilityRef } from "../capabilityArgs.js";
+import { isStaleEdit } from "./StaleEdit.jsx";
 import { useEffect, useState } from "react";
 import { PageHeaderActions, useInPageHeader } from "./PageHeader.jsx";
 import {
@@ -121,7 +121,29 @@ export function liveRunKey(task) {
 // RUN_FIXED is every session field a run takes on when it starts and
 // keeps for its whole life; the rest of the pane (the Google Chat space,
 // whether its tasks are filed approved) is read as it is needed.
-const RUN_FIXED = ["capabilities", "reads", "writes", "networkAccess", "model"];
+const RUN_FIXED = [
+  "capabilities",
+  "adoptShippedDefaults",
+  "reads",
+  "writes",
+  "networkAccess",
+  "model",
+];
+
+// replacing is the edit a picker that hands back a whole slice of the
+// held list makes -- GrantsPicker's api:* grants, or its capability
+// server methods: what it took out of the slice it was shown, and what
+// it put in. Applied as that difference rather than as the slice, so an
+// entry somebody else added to the same slice since the pane read it is
+// kept when the save is retried on what the session holds now.
+function replacing(shown, next) {
+  const removed = shown.filter((c) => !next.includes(c));
+  const added = next.filter((c) => !shown.includes(c));
+  return (current) => [
+    ...current.filter((c) => !removed.includes(c) && !added.includes(c)),
+    ...added,
+  ];
+}
 
 export default function ConsoleSessionPage({
   session,
@@ -195,27 +217,84 @@ export default function ConsoleSessionPage({
     }
   };
 
-  // methodGrants saves the session's capability server grants as
-  // GrantsPicker changes them, keeping everything else it holds.
+  // saveCapabilities saves a change to what the session holds, which the
+  // PUT takes as the whole list. edit turns a held list into the list to
+  // save, and the list it was given goes along as expectCapabilities:
+  // the server refuses the save as stale (409 "stale") if the session no
+  // longer holds exactly that -- another tab, or the agent API, changed
+  // its grants after this pane read them -- rather than letting this
+  // pane's old copy put the old set back over theirs (2026-11-07
+  // director agent API walkthrough, finding 4). On that refusal the pane
+  // reads the session again and makes the same edit to what it holds
+  // now, once; a second refusal is shown.
+  const saveCapabilities = async (edit, key) => {
+    setSaving(key);
+    const keyAtSave = runKey;
+    const put = (current) =>
+      api(`/api/console-sessions/${session.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          capabilities: edit(current),
+          expectCapabilities: current,
+        }),
+      });
+    try {
+      try {
+        await put(session.capabilities || []);
+      } catch (err) {
+        if (!isStaleEdit(err)) throw err;
+        const fresh = await api("/api/console-sessions");
+        const row = (fresh?.sessions || []).find((s) => s.id === session.id);
+        if (!row) throw err;
+        await put(row.capabilities || []);
+      }
+      if (keyAtSave) {
+        setStaleRuns((prev) => ({ ...prev, [session.id]: keyAtSave }));
+      }
+      await onSaved();
+    } catch (err) {
+      showError(err);
+      if (isStaleEdit(err)) await onSaved();
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const legacyBoxes = withoutApiRows(
+    configuredCapabilities(capabilities, session?.capabilities),
+  );
+  // methodGrants saves the session's capability server grants (and any
+  // bare capability id not offered as a checkbox above) as GrantsPicker
+  // changes them, keeping everything else it holds.
+  const isPickerNonApi = (id) =>
+    !isApiGrant(id) && !legacyBoxes.some((c) => c.id === id);
   const methodGrants = localGrantHandlers(
-    (session?.capabilities || []).filter(isCapabilityRef),
+    (session?.capabilities || []).filter(isPickerNonApi),
     (refs) =>
-      save(
-        {
-          capabilities: [
-            ...(session.capabilities || []).filter((c) => !isCapabilityRef(c)),
-            ...refs,
-          ],
-        },
+      saveCapabilities(
+        replacing((session.capabilities || []).filter(isPickerNonApi), refs),
         "methods",
       ),
   );
 
+  // toggle is a tick box: what the click means -- on, or off -- is
+  // decided by the box as it was drawn, and applied to whatever the
+  // session holds when the save lands.
   const toggle = async (id) => {
-    const next = held.has(id)
-      ? (session.capabilities || []).filter((c) => c !== id)
-      : [...(session.capabilities || []), id];
-    await save({ capabilities: next }, id);
+    const on = !held.has(id);
+    await saveCapabilities((current) => {
+      const rest = current.filter((c) => c !== id);
+      return on ? [...rest, id] : rest;
+    }, id);
+  };
+
+  // Adopt shipped defaults names no list at all: the server adds the
+  // missing shipped defaults to what the session holds when the request
+  // is served (UpdateConsoleSessionRequest.AdoptShippedDefaults), so a
+  // grant made in another tab since this one read the session stays.
+  const missingShipped = session?.missingShippedDefaults || [];
+  const adoptShippedDefaults = async () => {
+    await save({ adoptShippedDefaults: true }, "adoptShippedDefaults");
   };
 
   const restart = async (carryHandover = false) => {
@@ -366,14 +445,50 @@ export default function ConsoleSessionPage({
             ? "A run is open on this session now. Capabilities, repository access, network access and the model are fixed when a run starts, so a change saved here reaches the agent when its next run starts -- after this one ends, or once you stop it."
             : "No run is open on this session, so a change saved here takes effect on the next message you send."}
         </Typography>
+        {missingShipped.length > 0 && (
+          <Alert
+            severity="info"
+            data-testid="adopt-shipped-defaults-banner"
+            sx={{
+              mb: 1.5,
+              alignItems: "flex-start",
+              flexWrap: { xs: "wrap", sm: "nowrap" },
+              "& .MuiAlert-message": {
+                minWidth: 0,
+                flex: "1 1 14rem",
+                overflowWrap: "anywhere",
+              },
+              "& .MuiAlert-action": {
+                pt: { xs: 0.5, sm: 0 },
+                pl: { xs: 0, sm: 2 },
+                ml: { xs: 0, sm: "auto" },
+              },
+            }}
+            action={
+              <Button
+                size="small"
+                variant="outlined"
+                color="inherit"
+                disabled={saving === "adoptShippedDefaults"}
+                onClick={adoptShippedDefaults}
+              >
+                Adopt shipped defaults
+              </Button>
+            }
+          >
+            Saved session lacks{" "}
+            {missingShipped.length === 1
+              ? "1 shipped Tier 1 grant"
+              : `${missingShipped.length} shipped Tier 1 grants`}{" "}
+            ({missingShipped.join(", ")}).
+          </Alert>
+        )}
         {/* Only what this deployment has configured, plus whatever this
         session already holds -- a box that cannot be reached by
         ticking it is not an offer, and one already ticked has to
         stay so it can be turned off (configuredCapabilities,
         state.js). */}
-        {withoutApiRows(
-          configuredCapabilities(capabilities, session.capabilities),
-        ).map((c) => (
+        {legacyBoxes.map((c) => (
           <FormControlLabel
             key={c.id}
             control={
@@ -409,15 +524,12 @@ export default function ConsoleSessionPage({
         is saved as it is made, like the boxes above. */}
         <GrantsPicker
           config={{ ...config, capabilities }}
-          grants={session.capabilities || []}
+          grants={(session.capabilities || []).filter(
+            (id) => !legacyBoxes.some((c) => c.id === id),
+          )}
           onApiChange={(next) =>
-            save(
-              {
-                capabilities: [
-                  ...(session.capabilities || []).filter((c) => !isApiGrant(c)),
-                  ...next,
-                ],
-              },
+            saveCapabilities(
+              replacing((session.capabilities || []).filter(isApiGrant), next),
               "api",
             )
           }
@@ -524,6 +636,22 @@ export default function ConsoleSessionPage({
             </option>
           ))}
         </TextField>
+        {session.effectiveNetworkAccess &&
+          session.effectiveNetworkAccess !==
+            (session.networkAccess || "open") && (
+            <Alert
+              severity="warning"
+              data-testid="session-network-not-isolated"
+              sx={{
+                mt: 1,
+                "& .MuiAlert-message": { overflowWrap: "anywhere" },
+              }}
+            >
+              This deployment&apos;s sandboxes cannot withhold a run&apos;s
+              network, so this session&apos;s runs are given egress (outbound
+              internet) whatever is chosen here.
+            </Alert>
+          )}
       </Box>
 
       {/* Which model the session's agent runs on (model.ConsoleSession.

@@ -673,7 +673,12 @@ var singleTenantOpenRoutes = map[string]string{
 	"GET /api/auth/logout":               "signing out",
 	"GET /api/auth/whoami":               "a CLI asking how it may sign in, which names nobody (external-cli.spec.md#XC-8)",
 	"GET /api/hostd/connect":             "a grain hostd dialing in, with the hostd token",
+	"POST /api/hostd/join":               "an enrolling host submitting its Ed25519-signed join request",
+	"POST /api/hostd/join/{id}/poll":     "an enrolling host polling with its Ed25519 signature to claim its credential",
+	"POST /api/hostd/renew":              "a connected host renewing its 30-day key-bound credential",
 	"GET /api/hostd/install.sh":          "the script that installs a grain hostd, which holds no secret",
+	"GET /hostd/install":                 "the short URL for the host install script, which holds no secret",
+	"GET /cli/install.sh":                "the script that installs the grain CLI on a workstation, which holds no secret (external-cli.spec.md#XC-32)",
 }
 
 // singleTenantGatedPublicRoutes are the public routes a single-tenant

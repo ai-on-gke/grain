@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import GitSection from "./GitSection.jsx";
+import { SettingsReadOnlyContext } from "./SettingsCard.jsx";
 import api from "../../api.js";
 
 vi.mock("../../api.js", () => ({ default: vi.fn() }));
@@ -46,5 +47,28 @@ describe("GitSection", () => {
       await screen.findByText(/Could not load the deployment's connections/),
     ).toHaveTextContent("boom");
     expect(screen.queryByTestId("git-connections-list")).toBeNull();
+  });
+
+  // 2026-11-08 connections walkthrough: the read-only note's link opened
+  // Capabilities at its top, some six screens above the Deployment
+  // credentials card it names, because it asked for the section alone.
+  it("opens Capabilities at its Deployment credentials card from the read-only note", async () => {
+    api.mockImplementation((path) =>
+      path === "/api/deployment"
+        ? Promise.resolve({ id: "default", gitConnections: [] })
+        : Promise.resolve([]),
+    );
+    const onSection = vi.fn();
+    render(
+      <SettingsReadOnlyContext.Provider value={true}>
+        <GitSection showError={vi.fn()} onSection={onSection} />
+      </SettingsReadOnlyContext.Provider>,
+    );
+    const link = (await screen.findByTestId("git-secret-note")).querySelector(
+      "a",
+    );
+    expect(link).toHaveAttribute("href", "/settings/capabilities#credentials");
+    fireEvent.click(link);
+    expect(onSection).toHaveBeenCalledWith("capabilities", "credentials");
   });
 });

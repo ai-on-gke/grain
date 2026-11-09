@@ -34,11 +34,48 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
+
+const apiVersion = "2022-11-28"
+
+type api struct{ transport github.Transport }
+
+func (a api) get(token, path string) (github.ApiResponse, error) {
+	return a.transport.Request("GET", path, map[string]string{
+		"Accept":               "application/vnd.github+json",
+		"User-Agent":           "grain-automation",
+		"X-GitHub-Api-Version": apiVersion,
+		"Authorization":        "token " + token,
+	}, nil)
+}
+
+type coreLimit struct {
+	Limit     int
+	Remaining int
+}
+
+func headerValue(headers map[string]string, name string) string {
+	if headers == nil {
+		return ""
+	}
+	if v, ok := headers[name]; ok {
+		return v
+	}
+	if v, ok := headers[http.CanonicalHeaderKey(name)]; ok {
+		return v
+	}
+	for k, v := range headers {
+		if strings.EqualFold(k, name) {
+			return v
+		}
+	}
+	return ""
+}
 
 // MaxProbedRepos bounds how many repos one Probe looks up, for the same
 // reason maxCheckedRepos bounds a Settings check: every repo is another

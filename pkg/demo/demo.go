@@ -23,17 +23,20 @@ package demo
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"log"
 	"maps"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/change"
@@ -141,6 +144,10 @@ type Options struct {
 	// ExternalConfigBranch is its branch, "main" when empty.
 	ExternalConfigRepo   string
 	ExternalConfigBranch string
+	// ConfigChange is -config-change (demo_config_change.go): a real,
+	// throwaway grain/config and two tasks parked on proposal branches
+	// of it, so the config-change card's Approve & Apply and Reject work.
+	ConfigChange bool
 	// Qualification is -qualification (demo_qualification.go): a release
 	// candidate whose qualification run waits for approval.
 	Qualification bool
@@ -283,6 +290,12 @@ func Run(opts Options) error {
 		RequireVerifier:   opts.RequireVerifier,
 		RequireIAP:        opts.RequireIAP,
 		AllowedPrincipals: opts.AllowedPrincipals,
+		// The co-located host reports agent CLI logins of its own, as a
+		// real one's hello does (hostd.Hello.Logins), so the host
+		// pickers in Settings show what an ambient connection spends.
+		LocalHostdLogins: func(context.Context) ([]string, bool) {
+			return []string{hostd.LoginAntigravity, hostd.LoginClaude}, true
+		},
 	}
 	if opts.CloudIdentityEndpoint != "" {
 		cfg.GroupChecker = ui.NewCloudIdentityGroupChecker(ui.WithCloudIdentityEndpoint(opts.CloudIdentityEndpoint))
@@ -292,6 +305,9 @@ func Run(opts Options) error {
 	if err != nil {
 		return err
 	}
+	// An ambient connection whose CLI goes through the demo's grain
+	// hostd names its host, as on a deployment.
+	cfg.AmbientNeedsHost = runCfg.CLIRunsThroughHostd
 	demoSandboxCfg := runCfg
 	if demoSandboxCfg.SandboxBackend() == "" {
 		demoSandboxCfg.ContainerSandboxes = true
@@ -318,12 +334,23 @@ func Run(opts Options) error {
 	if err != nil {
 		return fmt.Errorf("grain demo: creating a throwaway store: %v", err)
 	}
+	// Throwaway means gone when the demo is: its store, secrets key and
+	// -config-change's grain/config were left in the temp directory by
+	// every demo that was stopped (docs/test-runs/
+	// 2026-11-09-demo-config-change.md, finding 3).
+	defer os.RemoveAll(dir)
+	removeOnSignal(dir)
 	db, err := sqlite.Open(sqlite.DefaultConfig(dir))
 	if err != nil {
 		return fmt.Errorf("grain demo: opening the throwaway store: %v", err)
 	}
 	defer db.Close()
 	cfg.SourceDB, cfg.DBDriver = db, "sqlite"
+	// The release-approval signing key: a deployment keeps it in its
+	// data directory, which a demo has none of, so an Inbox Approve or a
+	// rollback over -github-sim answered 500
+	// (docs/test-runs/2026-11-04-release-approval.md, F3).
+	cfg.ReleaseApprovalDir = dir
 
 	// The one piece of this demo that is not a row in the store: the
 	// System pane's Logs tab, which reads ui.Config.Logs rather than
@@ -404,7 +431,7 @@ func Run(opts Options) error {
 	storedCfg.DefaultModel = "gemini-2.5-pro"
 	storedCfg.GCPProject = "grain-sandbox-dev"
 	storedCfg.GCPServiceAccountEmail = "grain-sb-agent-0@grain-sandbox-dev.iam.gserviceaccount.com"
-	storedCfg.DefaultCapabilities = append(model.SelfDebugGrants(), "read-issues")
+	storedCfg.DefaultCapabilities = append(model.SelfDebugGrants(), model.GitHubReadIssuesGrant)
 	storedCfg.TargetRepos = []string{"acme/widgets"}
 	// The deployment's git connection to the fake credential above, as
 	// `grain connections import` would record it.
@@ -499,10 +526,8 @@ func Run(opts Options) error {
 		client, _ := cfg.GitHubBranches.(github.Client)
 		baseBranch = configureBaseBranchDemo(store, repo, cfg.CI.(*demoFakeCI), client)
 	}
-	// Stand-ins for what sits outside grain (demo_scenarios.go): a
-	// credential's issuer, on every demo; a fresh install's missing
-	// setup and a provider's usage limit, on request.
-	cfg.CapabilityChecks = demoCapabilityChecks{}
+	// Stand-ins for what sits outside grain (demo_scenarios.go): a fresh
+	// install's missing setup and a provider's usage limit, on request.
 	// -staging: two staging environments for the rail's Staging group
 	// (demo_persistent_sandboxes.go). Off by default, where System ->
 	// Sandboxes says it has no sandbox backend to report on.
@@ -600,6 +625,22 @@ func Run(opts Options) error {
 		// Only now, past every seed above: the seeds write configuration
 		// through the same client guard this turns into a refusal.
 		cfg.StateRepo = newExternalConfigRepo(opts.ExternalConfigRepo, opts.ExternalConfigBranch)
+		// And which repository that is, in owner/name form, the way a
+		// daemon wires both from one state manager (daemon's
+		// ui_server.go, StateRepoRef: settingsRepo). Without it
+		// /api/config named no configRepo and the config repository's
+		// own page offered to remove it (2026-11-08 walkthrough, task
+		// 3613).
+		if ref, ok := newExternalConfigRepo(opts.ExternalConfigRepo, opts.ExternalConfigBranch).ref(); ok {
+			cfg.StateRepoRef = func() model.RepoRef { return ref }
+		}
+	}
+	if opts.ConfigChange {
+		// Past every seed too, so grain/config is exported from the
+		// demo's finished configuration.
+		if err := configureConfigChangeDemo(ctx, dir, db, store, &cfg); err != nil {
+			return fmt.Errorf("grain demo: -config-change: %v", err)
+		}
 	}
 	ghCalls.enableLive()
 	var simClient github.Client
@@ -1435,6 +1476,7 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		return err
 	}
 	dt.Interactive = true
+	dt.Admission = model.AdmissionDurable
 	dt.Tags = append(dt.Tags, model.ConsoleSessionTag(model.DirectorSessionID))
 	dt.Grants = model.ConsoleSessionGrants(model.ConsoleSession{ID: model.DirectorSessionID})
 	dt.Origin = model.Origin{
@@ -1635,6 +1677,9 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		return err
 	}
 	if err := seedDemoAudit(ctx, store, ago); err != nil {
+		return err
+	}
+	if err := seedDemoTokenUsage(ctx, store, now); err != nil {
 		return err
 	}
 	if err := seedDemoMemory(ctx, store, cfg, ago); err != nil {
@@ -2141,6 +2186,33 @@ func seedDemoHostds(ctx context.Context, store *model.Store) error {
 	}
 	if _, err := store.RevokeHostd(ctx, "old-laptop"); err != nil {
 		return fmt.Errorf("seeding a revoked hostd: %w", err)
+	}
+	if _, err := store.EnsureDefaultHostEnrollmentCode(ctx, "operator"); err != nil {
+		return fmt.Errorf("seeding default host enrollment code: %w", err)
+	}
+	wsCode, wsRaw, err := store.CreateHostEnrollmentCode(ctx, model.HostEnrollmentCode{
+		Name:              "workstations",
+		CreatedBy:         "operator",
+		DefaultLabels:     map[string]string{"os": "linux", "pool": "workstation"},
+		DefaultCapacity:   4,
+		AllowedPrincipals: []string{"group:eng@example.com"},
+	})
+	if err != nil {
+		return fmt.Errorf("seeding workstations host enrollment code: %w", err)
+	}
+	if pub, _, err := ed25519.GenerateKey(nil); err == nil && wsCode != nil && wsRaw != "" {
+		encPub := hostd.PublicKeyString(pub)
+		_, _ = store.CreateHostJoinRequest(ctx, model.HostJoinRequest{
+			PublicKey:      encPub,
+			KeyFingerprint: hostd.KeyFingerprint(pub),
+			Hostname:       "devbox-carol.example.com",
+			OS:             "linux",
+			Arch:           "amd64",
+			CLIs:           []string{"claude", "codex"},
+			Version:        "v2.4.0",
+			LocalUser:      "carol",
+			EnrolledBy:     "carol@example.com",
+		}, wsRaw, time.Now().UTC())
 	}
 	return nil
 }
@@ -2891,4 +2963,33 @@ func processDemoGitHubWebhooks(ctx context.Context, store *model.Store, events o
 		GitHubEvents: events,
 	}
 	return runDemoReconcilers(ctx, deps, now, "github-events", "takeovers")
+}
+
+// removeOnSignal removes dir when the demo is interrupted or terminated --
+// how a demo is stopped, since it serves until then -- and then lets the
+// signal end the process as it would have, exit status and all. A signal
+// the demo was started ignoring (SIGINT, for a job a shell put in the
+// background) is left ignored: catching it would remove the directory
+// from under a demo the re-raised signal then does not stop.
+func removeOnSignal(dir string) {
+	var watch []os.Signal
+	for _, sig := range []os.Signal{os.Interrupt, syscall.SIGTERM} {
+		if !signal.Ignored(sig) {
+			watch = append(watch, sig)
+		}
+	}
+	if len(watch) == 0 {
+		return
+	}
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, watch...)
+	go func() {
+		sig := <-sigs
+		_ = os.RemoveAll(dir)
+		signal.Stop(sigs)
+		if p, err := os.FindProcess(os.Getpid()); err == nil && p.Signal(sig) == nil {
+			return
+		}
+		os.Exit(1)
+	}()
 }

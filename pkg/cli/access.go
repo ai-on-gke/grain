@@ -27,21 +27,24 @@ import (
 const accessUsage = `usage: grain access <list|allow|role|deny> [args]
 
   list
-  allow [--role <set>] [--reason <why>] <user:<email>|group:<email>|serviceAccount:<email>>
+  allow [--role <set>] [--reason <why>] [--label <name>] <user:<email>|group:<email>|serviceAccount:<email>|delegate:<email>>
   role  [--reason <why>] <entry> <set>
-  deny  <user:<email>|group:<email>|serviceAccount:<email>>
+  deny  <user:<email>|group:<email>|serviceAccount:<email>|delegate:<email>>
 
-Manage the allowed users and groups list (Settings -> Access): who may
-sign in when authenticated by Cloud IAP or another registered
+Manage the allowed users, groups and delegating apps list (Settings -> Access):
+who may sign in when authenticated by Cloud IAP or another registered
 IdentityVerifier, and with what role. A role is an API scope set
 (docs/agent-api.md, "Scope sets"): grain/operator (everything, the
-default), grain/contributor, grain/viewer, or one the deployment declares.
+default for user:/group:/serviceAccount:), grain/delegated (the default for
+delegate:), grain/contributor, grain/viewer, or one the deployment declares.
 Adding an existing entry is a no-op; 'role' changes an entry's role.
 
 A role holding a dangerous scope -- grain/operator among them -- is
 assigned only with the access code, and needs --reason. A serviceAccount:
-entry always needs --reason; accounts whose keys grain hands to tasks
-(the gcp-key pools) are always refused, whatever their role.`
+or delegate: entry always needs --reason; for delegate:, --label sets an
+optional short identifier matching [a-z][a-z0-9-]{0,31}. Accounts whose keys
+grain hands to tasks (the gcp-key pools) are always refused, whatever their
+role.`
 
 // cmdAccess is `grain access`: manage the verified-identity allowlist
 // through /api/access/principals.
@@ -83,6 +86,9 @@ func cmdAccess(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 				if p.Reason != "" {
 					line += "\t" + p.Reason
 				}
+				if p.Label != "" {
+					line += "\tlabel=" + p.Label
+				}
 				fmt.Println(line)
 			}
 		}
@@ -92,16 +98,17 @@ func cmdAccess(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 		return nil
 	case "allow", "add":
 		fs := flag.NewFlagSet("grain access allow", flag.ContinueOnError)
-		reason := fs.String("reason", "", "why the entry is added (required for serviceAccount: and for a role with a dangerous scope)")
-		role := fs.String("role", "", "the scope set the entry's sessions are held to (default grain/operator)")
+		reason := fs.String("reason", "", "why the entry is added (required for serviceAccount:, delegate:, and for a role with a dangerous scope)")
+		role := fs.String("role", "", "the scope set the entry's sessions are held to (default grain/operator, or grain/delegated for delegate:)")
+		label := fs.String("label", "", "optional short label ([a-z][a-z0-9-]{0,31}) for a delegate: entry (such as planning-app)")
 		rest, err := parseArgs(fs, subArgs)
 		if err != nil {
 			return err
 		}
 		if len(rest) != 1 {
-			return errors.New("usage: grain access allow [--role <set>] [--reason <why>] <user:<email>|group:<email>|serviceAccount:<email>>")
+			return errors.New("usage: grain access allow [--role <set>] [--reason <why>] [--label <name>] <user:<email>|group:<email>|serviceAccount:<email>|delegate:<email>>")
 		}
-		resp, err := c.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: rest[0], Reason: *reason, Role: *role})
+		resp, err := c.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: rest[0], Reason: *reason, Role: *role, Label: *label})
 		if err != nil {
 			return err
 		}

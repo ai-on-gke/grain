@@ -55,6 +55,14 @@ func migrateModelProxyGrants(ctx context.Context, tx *sql.Tx) error {
 // catalogue's task and CI defaults, the deployment's and each
 // repository's, are renamed as every other stored list is.
 func rewritePolicyRenames(ctx context.Context, tx *sql.Tx, renames map[string][]string, ruleRef string) error {
+	return rewritePolicyRenamesOpt(ctx, tx, renames, ruleRef, false)
+}
+
+func rewritePolicyRenamesDenyOnly(ctx context.Context, tx *sql.Tx, renames map[string][]string, ruleRef string) error {
+	return rewritePolicyRenamesOpt(ctx, tx, renames, ruleRef, true)
+}
+
+func rewritePolicyRenamesOpt(ctx context.Context, tx *sql.Tx, renames map[string][]string, ruleRef string, denyOnly bool) error {
 	var stored string
 	err := tx.QueryRowContext(ctx, "SELECT `capability_policy` FROM `grain_config` WHERE `id` = 1").Scan(&stored)
 	if err == sql.ErrNoRows || (err == nil && strings.TrimSpace(stored) == "") {
@@ -71,6 +79,9 @@ func rewritePolicyRenames(ctx context.Context, tx *sql.Tx, renames map[string][]
 	}
 	changed := false
 	for i := range policy.Rules {
+		if denyOnly && !policy.Rules[i].Deny {
+			continue
+		}
 		if _, ok := renames[strings.TrimSpace(policy.Rules[i].Capability)]; ok {
 			policy.Rules[i].Capability = ruleRef
 			changed = true

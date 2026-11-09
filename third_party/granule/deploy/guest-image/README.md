@@ -14,7 +14,7 @@ doesn't set `CHV_DISK_IMAGE` (see `pkg/config`). `GUEST_DISTRO`
   `acpid`, `udev`, `kmod` and `e2fsprogs`. `GUEST_SUITE` (default
   `bookworm`) picks the Debian suite; `bullseye`, `bookworm` and `trixie`
   are the ones built and checked -- weekly, by
-  `.grain/workflows/guest-suites.yml`, which builds and packs each of
+  `.github/workflows/guest-suites.yml`, which builds and packs each of
   them so that a suite moving out from under this recipe is found
   without anybody passing the build arg by hand. That workflow is where
   the list above is kept honest: a suite added to it here is added to

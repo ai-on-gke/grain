@@ -387,6 +387,11 @@ type TaskWaitState struct {
 	PendingSecret string      `json:"pendingSecret,omitempty"`
 	CI            *TaskWaitCI `json:"ci,omitempty"`
 	Revision      string      `json:"revision"`
+
+	// liveAttempt is whether the task has a run that has not finished.
+	// Not reported: it is what keeps until=awaiting-reply from waking on
+	// a question a run is still in the middle of parking on.
+	liveAttempt bool
 }
 
 // TasksWaitResponse is GET /api/tasks/wait's body. Met is whether one of
@@ -577,15 +582,22 @@ func (c *Client) taskWaitState(ctx context.Context, id string, now time.Time) (T
 			}
 		}
 	}
-	attempts, err := c.Store.Attempts(ctx, id)
+	runs, err := c.Store.Runs(ctx, id)
 	if err != nil {
 		return st, err
+	}
+	attempts := len(runs)
+	for _, r := range runs {
+		if r.FinishedAt == nil {
+			st.liveAttempt = true
+		}
 	}
 	ci := ""
 	if st.CI != nil {
 		ci = st.CI.RunID + "/" + st.CI.Conclusion
 	}
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%t|%t|%s|%s|%s|%d", st.State, st.Closed, st.Merged, st.Outcome, ci, pendingQ, attempts)))
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%t|%t|%s|%s|%s|%d|%t",
+		st.State, st.Closed, st.Merged, st.Outcome, ci, pendingQ, attempts, st.liveAttempt)))
 	st.Revision = hex.EncodeToString(sum[:])[:16]
 	return st, nil
 }
@@ -617,8 +629,17 @@ func tasksWaitMet(condition string, tasks []TaskWaitState, since, revision strin
 		}
 		return all, false
 	case WaitUntilAwaitingReply:
+		// Parked, not merely asking. A run's question comment and its
+		// PendingQuestionCommentID are written while the run is still
+		// finishing (orchestrator.relayParkingCalls, or the chat tool
+		// mid-run), and the state, observation and runs are separate
+		// reads, so a question can be seen beside a state that is still
+		// running or queued. Waking then hands the caller a task a reply
+		// may yet be refused on. Only the derived awaiting_reply with no
+		// attempt left live counts; the commit that finishes the run or
+		// sets the marker wakes the wait again to see it.
 		for _, t := range tasks {
-			if t.Question != "" || t.PendingSecret != "" || t.State == model.StateAwaitingReply {
+			if t.State == model.StateAwaitingReply && !t.liveAttempt {
 				return true, false
 			}
 		}

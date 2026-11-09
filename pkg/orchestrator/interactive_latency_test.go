@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
-	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/metrics"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -135,7 +134,7 @@ func TestInteractiveInitialStartupLatencyAndBreakdown(t *testing.T) {
 		MaxWorkers: 2,
 		Config: orchestrator.Config{
 			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities:          model.NewCapabilityRegistry(durable.New()),
+			Capabilities:          model.NewCapabilityRegistry(),
 			GrainSourceDir:        grainSrc,
 			PackageCache:          func(context.Context) string { return "http://10.9.0.1:41234" },
 			SessionSandboxIdleTTL: 30 * time.Minute,
@@ -336,7 +335,7 @@ func TestInteractiveSubsequentTurnLatencyAndWarmReuse(t *testing.T) {
 			MaxWorkers: 2,
 			Config: orchestrator.Config{
 				StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-				Capabilities:          model.NewCapabilityRegistry(durable.New()),
+				Capabilities:          model.NewCapabilityRegistry(),
 				PackageCache:          func(context.Context) string { return "http://10.9.0.1:41234" },
 				SandboxGrainBinary:    fakeGrainBin,
 				SessionSandboxIdleTTL: 30 * time.Minute,
@@ -374,7 +373,7 @@ func TestInteractiveSubsequentTurnLatencyAndWarmReuse(t *testing.T) {
 			}
 			elapsed := turnFirstToolAt.Sub(turnStartAt)
 			t.Logf("across-run turn %d latency (message -> warm RunDispatchCycle -> agent tool call): %v", turn, elapsed)
-			if elapsed >= time.Second {
+			if !raceEnabled && elapsed >= time.Second {
 				t.Errorf("turn %d warm-reuse latency = %v, want < 1s", turn, elapsed)
 			}
 			if !ag.configs[turn-1].SandboxReused {
@@ -402,7 +401,7 @@ func TestInteractiveSubsequentTurnLatencyAndWarmReuse(t *testing.T) {
 		runSessions(t, store, baseTime)
 		director := sessionTasks(t, store)[0]
 
-		sbx := orchestrator.NewHostSandboxes(t.TempDir())
+		sbx := &countingSandboxes{inner: orchestrator.NewHostSandboxes(t.TempDir())}
 		var msgSentAt [4]time.Time
 		var turnReachedAt [4]time.Time
 		ag := &recordingSessionAgent{
@@ -450,8 +449,8 @@ func TestInteractiveSubsequentTurnLatencyAndWarmReuse(t *testing.T) {
 			MaxWorkers: 1,
 			Config: orchestrator.Config{
 				StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-				Capabilities:          model.NewCapabilityRegistry(durable.New()),
-				SessionSandboxIdleTTL: time.Second,
+				Capabilities:          model.NewCapabilityRegistry(),
+				SessionSandboxIdleTTL: 2 * time.Second,
 				WaitForSessionReply:   true,
 				CancelPollInterval:    5 * time.Millisecond,
 			},
@@ -462,13 +461,33 @@ func TestInteractiveSubsequentTurnLatencyAndWarmReuse(t *testing.T) {
 		if err := orchestrator.RunDispatchCycle(ctx, deps, t1.Add(time.Second)); err != nil {
 			t.Fatalf("RunDispatchCycle: %v", err)
 		}
+		// What makes a subsequent exchange fast is that it is served by the
+		// live run: three framework.Run calls in one dispatch, on the one
+		// sandbox acquired for turn 1, with no new run or acquire between.
+		if len(ag.configs) != 3 {
+			t.Fatalf("framework.Run calls = %d, want 3 (turn 1 + two in-process continuations)", len(ag.configs))
+		}
+		if sbx.acquires != 1 {
+			t.Errorf("sandbox acquires = %d, want 1 (follow-ups served by the live run's sandbox)", sbx.acquires)
+		}
+		runs, err := store.Runs(ctx, director.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(runs) != 1 {
+			t.Errorf("recorded runs = %d, want 1 (every exchange served by the same live attempt)", len(runs))
+		}
 		for turn := 2; turn <= 3; turn++ {
 			if turnReachedAt[turn].IsZero() {
 				t.Fatalf("turn %d was never reached", turn)
 			}
+			if ag.configs[turn-1].ResumeSession != "sess-inproc-1" {
+				t.Errorf("turn %d ResumeSession = %q, want sess-inproc-1", turn, ag.configs[turn-1].ResumeSession)
+			}
 			d := turnReachedAt[turn].Sub(msgSentAt[turn])
 			t.Logf("in-process turn %d latency (store.AddComment -> agent turn %d): %v", turn, turn, d)
-			if d >= 250*time.Millisecond {
+			// Not under -race: see raceEnabled.
+			if !raceEnabled && d >= 250*time.Millisecond {
 				t.Errorf("in-process turn %d latency = %v, want < 250ms (< 1s ceiling)", turn, d)
 			}
 		}

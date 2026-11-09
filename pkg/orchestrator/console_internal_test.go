@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
-	consolecap "github.com/ai-on-gke/grain/pkg/capability/console"
 	"github.com/ai-on-gke/grain/pkg/console"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -41,8 +40,8 @@ func (terminalFramework) TerminalCommand(context.Context, agent.RunConfig) (*age
 	return &agent.TerminalCommand{Path: "cat"}, nil
 }
 
-func consoleTask(grants ...model.Grant) model.Task {
-	return model.Task{ID: "task-1", Title: "pair on the flake", Grants: grants}
+func consoleTask(hosting model.Hosting) model.Task {
+	return model.Task{ID: "task-1", Title: "pair on the flake", Hosting: hosting}
 }
 
 // The ordinary task: nothing about its dispatch changes, and no session
@@ -50,25 +49,25 @@ func consoleTask(grants ...model.Grant) model.Task {
 func TestConsoleDispatchLeavesAnOrdinaryTaskAlone(t *testing.T) {
 	t.Parallel()
 	framework := terminalFramework{}
-	got, cfg, err := consoleDispatch(framework, consoleTask(), "run-1", Config{})
+	got, cfg, err := consoleDispatch(framework, consoleTask(model.HostingUnattended), "run-1", Config{})
 	if err != nil {
 		t.Fatalf("consoleDispatch: %v", err)
 	}
 	if _, wrapped := got.(*console.Framework); wrapped {
-		t.Fatal("a task without the console grant was dispatched as a console run")
+		t.Fatal("a task with unattended hosting was dispatched as a console run")
 	}
 	if cfg.MaxRunRuntime != 0 {
 		t.Fatalf("MaxRunRuntime = %v, want the deployment's own", cfg.MaxRunRuntime)
 	}
 }
 
-// A task holding the grant is driven as a session, and gets the longer
+// A task with console hosting is driven as a session, and gets the longer
 // clock a session lives on rather than an unattended run's.
 func TestConsoleDispatchWrapsAGrantedTask(t *testing.T) {
 	t.Parallel()
 	cfg := Config{Consoles: console.NewManager()}
 	got, cfg, err := consoleDispatch(terminalFramework{},
-		consoleTask(model.Grant{Capability: consolecap.CapabilityName}), "run-1", cfg)
+		consoleTask(model.HostingConsole), "run-1", cfg)
 	if err != nil {
 		t.Fatalf("consoleDispatch: %v", err)
 	}
@@ -86,7 +85,7 @@ func TestConsoleDispatchHonoursTheConfiguredConsoleRuntime(t *testing.T) {
 	t.Parallel()
 	cfg := Config{Consoles: console.NewManager(), MaxConsoleRuntime: 3 * time.Hour, MaxRunRuntime: time.Hour}
 	_, cfg, err := consoleDispatch(terminalFramework{},
-		consoleTask(model.Grant{Capability: consolecap.CapabilityName}), "run-1", cfg)
+		consoleTask(model.HostingConsole), "run-1", cfg)
 	if err != nil {
 		t.Fatalf("consoleDispatch: %v", err)
 	}
@@ -100,7 +99,7 @@ func TestConsoleDispatchHonoursTheConfiguredConsoleRuntime(t *testing.T) {
 // smaller version of what was asked for.
 func TestConsoleDispatchRefusesWhatItCannotServe(t *testing.T) {
 	t.Parallel()
-	granted := consoleTask(model.Grant{Capability: consolecap.CapabilityName})
+	granted := consoleTask(model.HostingConsole)
 
 	if _, _, err := consoleDispatch(terminalFramework{}, granted, "run-1", Config{}); err == nil {
 		t.Fatal("a deployment with no session manager dispatched a console task anyway")

@@ -22,33 +22,79 @@ package orchestrator_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
-	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	"github.com/ai-on-gke/grain/pkg/capability/capabilitytest"
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
-	"github.com/ai-on-gke/grain/pkg/capability/readissues"
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
+	"github.com/ai-on-gke/grain/pkg/capability/intree"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
+type staticCapabilityServers map[string]*protocol.Server
+
+func (s staticCapabilityServers) Lookup(id string) (*protocol.Server, error) {
+	if srv, ok := s[id]; ok {
+		return srv, nil
+	}
+	return nil, os.ErrNotExist
+}
+
+type countingCapabilityServers struct {
+	inner    orchestrator.CapabilityServers
+	onLookup func(string)
+}
+
+func (c countingCapabilityServers) Lookup(id string) (*protocol.Server, error) {
+	if c.onLookup != nil {
+		c.onLookup(id)
+	}
+	return c.inner.Lookup(id)
+}
+
+// unfencedSandboxes hides Unisolated() so isUnisolated is false while
+// OpenNetworkUnfenced reports an unfenced container bridge (§3.2.4).
+type unfencedSandboxes struct {
+	inner orchestrator.Sandboxes
+}
+
+func (u unfencedSandboxes) Acquire(ctx context.Context, name string, shape orchestrator.Shape) (orchestrator.Sandbox, error) {
+	return u.inner.Acquire(ctx, name, shape)
+}
+
+func (u unfencedSandboxes) OpenNetworkUnfenced(context.Context) string {
+	return "container sandbox fence is off"
+}
+
 // grantCapturingFramework records what one run was told about its own
 // grants, then finishes the way toolCapturingFramework does.
 type grantCapturingFramework struct {
-	mu        sync.Mutex
-	grants    []string
-	sourceDir string
+	mu          sync.Mutex
+	grants      []string
+	sourceDir   string
+	sandboxRoot string
+	prompt      string
+	onRun       func(agent.RunConfig)
 }
 
 func (f *grantCapturingFramework) Run(_ context.Context, cfg agent.RunConfig) (*agent.Result, error) {
 	f.mu.Lock()
-	f.grants, f.sourceDir = cfg.Grants, cfg.GrainSourceDir
+	f.grants, f.sourceDir, f.sandboxRoot, f.prompt = cfg.Grants, cfg.GrainSourceDir, cfg.SandboxRoot, cfg.Prompt
+	onRun := f.onRun
 	f.mu.Unlock()
+	if onRun != nil {
+		onRun(cfg)
+	}
 	return toolResult(agent.ToolCall{Name: "comment_on_issue", Arguments: map[string]any{"comment": "done"}}), nil
 }
 
@@ -95,21 +141,158 @@ func TestRunCycleTellsASelfDebugTaskItHoldsTheGrant(t *testing.T) {
 	}
 }
 
-// The bootstrap-playbooks grant travels the same road, which is the
-// whole point of there being one road: its playbooks are embedded in the
-// binary the forked mcpserver is, so the name of the grant is everything
-// that has to reach it.
-func TestRunCycleTellsABootstrapTaskItHoldsTheGrant(t *testing.T) {
+// Bootstrap playbooks are served by the config-map server's built-in
+// bootstrap map: they place the embedded markdown files on HostSandboxes,
+// add the prompt guidance and grain playbooks bullet, and still refuse
+// operator-configured config-map entries on unisolated host sandboxes.
+func TestRunCycleMaterializesBootstrapPlaybooksOnHostSandboxes(t *testing.T) {
 	t.Parallel()
-	grants := []model.Grant{{Capability: "bootstrap-playbooks", Via: model.GrantByLabel}}
-	held, sourceDir := runWithGrants(t, grants, "/usr/local/share/grain/src")
-	if !slices.Contains(held, "bootstrap-playbooks") {
-		t.Errorf("RunConfig.Grants = %v, want the bootstrap-playbooks grant among them", held)
+	store, ctx := openStore(t)
+	_, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	task := filedTask(t, ctx, store, "t-boot", repo)
+	task.Grants = []model.Grant{{Capability: model.BootstrapPlaybooksGrant, Via: model.GrantByGrain}}
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatal(err)
 	}
-	// Where grain's source lives is self-debug's to know, and this task
-	// does not hold that grant.
-	if sourceDir != "" {
-		t.Errorf("RunConfig.GrainSourceDir = %q, want it withheld from a task without self-debug", sourceDir)
+
+	extraRoot := t.TempDir()
+	extraDir := filepath.Join(extraRoot, "operator-map")
+	if err := os.MkdirAll(extraDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(extraDir, "SKILL.md"), []byte("# Operator skill\nnope\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cm, err := intree.NewConfigMap(intree.ConfigMapConfig{Dir: extraRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmSrv, err := protocol.NewServer(ctx, model.ConfigMapCapabilityServerID, cm.InProcessCaller())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lookup := staticCapabilityServers{model.ConfigMapCapabilityServerID: cmSrv}
+
+	framework := &grantCapturingFramework{
+		onRun: func(cfg agent.RunConfig) {
+			if raw, err := os.ReadFile(filepath.Join(cfg.SandboxRoot, ".config-map", "bootstrap", "gcp-capabilities.md")); err != nil || len(raw) == 0 {
+				t.Errorf("reading placed bootstrap playbook in HostSandboxes: err=%v len=%d", err, len(raw))
+			}
+		},
+	}
+	sandboxes := orchestrator.NewHostSandboxes(t.TempDir())
+	deps := orchestrator.Deps{
+		Store: store, Client: client, Sandboxes: sandboxes,
+		Framework:         orchestrator.StaticFramework(framework),
+		CapabilityServers: lookup,
+		CapabilityPasses:  orchestrator.NewCapabilityPasses(),
+		MaxWorkers:        1,
+	}
+	// Even if an external server is attached under config-map, an unisolated
+	// HostSandboxes run serves embedded bootstrap grants (both #config-map and
+	// #skill) straight from the binary without dialing the external server's
+	// control plane (§3.2.4).
+	externalDialed := false
+	countingLookup := countingCapabilityServers{
+		inner:    lookup,
+		onLookup: func(string) { externalDialed = true },
+	}
+	deps.CapabilityServers = countingLookup
+
+	if err := orchestrator.RunCycle(ctx, deps, baseTime); err != nil {
+		t.Fatal(err)
+	}
+	if externalDialed {
+		t.Errorf("HostSandboxes dialed the external config-map server for an embedded-bootstrap-only grant")
+	}
+	for _, want := range []string{
+		"/home/debian/.config-map/bootstrap",
+		"run_host_command",
+		"`grain playbooks [<name>]`",
+	} {
+		if !strings.Contains(framework.prompt, want) {
+			t.Errorf("prompt missing %q:\n%s", want, framework.prompt)
+		}
+	}
+
+	// Legacy skill#skill={"skills":["bootstrap"]} normalizes onto config-map#skill
+	// and places the embedded SKILL.md and playbooks on HostSandboxes as well.
+	skillTask := filedTask(t, ctx, store, "t-boot-skill", repo)
+	skillTask.Grants = []model.Grant{{
+		Capability: `https://grain.dev/capabilities/skill#skill={"skills":["bootstrap"]}`,
+		Via:        model.GrantByGrain,
+	}}
+	if err := store.PutTask(ctx, skillTask); err != nil {
+		t.Fatal(err)
+	}
+	framework.onRun = func(cfg agent.RunConfig) {
+		if raw, err := os.ReadFile(filepath.Join(cfg.SandboxRoot, ".skills", "bootstrap", "SKILL.md")); err != nil || len(raw) == 0 {
+			t.Errorf("reading placed bootstrap SKILL.md in HostSandboxes: err=%v len=%d", err, len(raw))
+		}
+	}
+	if err := orchestrator.RunCycle(ctx, deps, baseTime.Add(1)); err != nil {
+		t.Fatal(err)
+	}
+	if externalDialed {
+		t.Errorf("HostSandboxes dialed the external skill/config-map server for skill#skill bootstrap grant")
+	}
+
+	// Operator-configured config-map entries remain refused on HostSandboxes.
+	refused := filedTask(t, ctx, store, "t-op-map", repo)
+	refused.Grants = []model.Grant{{
+		Capability: `https://grain.dev/capabilities/config-map#config-map={"config_maps":["operator-map"]}`,
+		Via:        model.GrantByLabel,
+	}}
+	if err := store.PutTask(ctx, refused); err != nil {
+		t.Fatal(err)
+	}
+	if err := orchestrator.RunCycle(ctx, deps, baseTime.Add(2)); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.State(ctx, refused.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state != model.StateAwaitingReply {
+		t.Errorf("operator config-map task state on HostSandboxes = %q, want %q", state, model.StateAwaitingReply)
+	}
+
+	// An unfenced container backend (isUnisolated == false, OpenNetworkUnfenced != "")
+	// likewise serves embedded bootstrap grants in-process without dialing an
+	// attached external server, and still refuses operator config maps.
+	unfencedDeps := deps
+	unfencedDeps.Sandboxes = unfencedSandboxes{inner: orchestrator.NewHostSandboxes(t.TempDir())}
+	unfencedBoot := filedTask(t, ctx, store, "t-unfenced-boot", repo)
+	unfencedBoot.Grants = []model.Grant{{Capability: model.BootstrapPlaybooksGrant, Via: model.GrantByGrain}}
+	if err := store.PutTask(ctx, unfencedBoot); err != nil {
+		t.Fatal(err)
+	}
+	framework.onRun = func(cfg agent.RunConfig) {
+		if raw, err := os.ReadFile(filepath.Join(cfg.SandboxRoot, ".config-map", "bootstrap", "gcp-capabilities.md")); err != nil || len(raw) == 0 {
+			t.Errorf("reading placed bootstrap playbook in unfenced sandbox: err=%v len=%d", err, len(raw))
+		}
+	}
+	if err := orchestrator.RunCycle(ctx, unfencedDeps, baseTime.Add(3)); err != nil {
+		t.Fatal(err)
+	}
+	if externalDialed {
+		t.Errorf("unfenced backend dialed the external config-map server for an embedded-bootstrap-only grant")
+	}
+
+	unfencedRefused := filedTask(t, ctx, store, "t-unfenced-op-map", repo)
+	unfencedRefused.Grants = []model.Grant{{
+		Capability: `https://grain.dev/capabilities/config-map#config-map={"config_maps":["operator-map"]}`,
+		Via:        model.GrantByLabel,
+	}}
+	if err := store.PutTask(ctx, unfencedRefused); err != nil {
+		t.Fatal(err)
+	}
+	if err := orchestrator.RunCycle(ctx, unfencedDeps, baseTime.Add(4)); err != nil {
+		t.Fatal(err)
+	}
+	if unfencedState, err := store.State(ctx, unfencedRefused.ID); err != nil || unfencedState != model.StateAwaitingReply {
+		t.Errorf("operator config-map task state on unfenced backend = %q (%v), want %q", unfencedState, err, model.StateAwaitingReply)
 	}
 }
 
@@ -153,15 +336,17 @@ func TestRunCycleTellsADeploymentHealthTaskItHoldsTheGrant(t *testing.T) {
 	}
 }
 
-// Read-issues is also a tool-only grant. It must reach the subprocess
-// Framework's Grants so the forked mcpserver starts with -grant read-issues
-// and registers the list_issues and read_issue tools.
+// github#read-issues (and its retired read-issues alias) is a tool-only grant.
+// It must reach the subprocess Framework's Grants so the forked mcpserver
+// starts with -grant and registers the list_issues and read_issue tools.
 func TestRunCycleTellsAReadIssuesTaskItHoldsTheGrant(t *testing.T) {
 	t.Parallel()
-	grants := []model.Grant{{Capability: readissues.CapabilityName, Via: model.GrantByLabel}}
-	held, _ := runWithGrants(t, grants, "/usr/local/share/grain/src")
-	if !slices.Contains(held, readissues.CapabilityName) {
-		t.Errorf("RunConfig.Grants = %v, want the %s grant among them", held, readissues.CapabilityName)
+	for _, grant := range []string{model.GitHubReadIssuesGrant, grainserver.LegacyReadIssues} {
+		grants := []model.Grant{{Capability: grant, Via: model.GrantByLabel}}
+		held, _ := runWithGrants(t, grants, "/usr/local/share/grain/src")
+		if !slices.Contains(held, grant) {
+			t.Errorf("RunConfig.Grants = %v, want the %s grant among them", held, grant)
+		}
 	}
 }
 
@@ -181,9 +366,9 @@ func TestRunCycleForwardsAllKnownToolGrants(t *testing.T) {
 		model.GrainHealthGrant,
 		model.GrainSQLReadGrant,
 		model.GrainSQLWriteGrant,
-		bootstrap.CapabilityName,
 		grainci.Grant,
-		readissues.CapabilityName,
+		grainserver.LegacyReadIssues,
+		model.GitHubReadIssuesGrant,
 	}
 
 	for _, grant := range allToolGrants {
@@ -202,11 +387,11 @@ func TestRunCycleForwardsAllKnownToolGrants(t *testing.T) {
 func TestRunCycleCarriesEveryToolGrantATaskHolds(t *testing.T) {
 	t.Parallel()
 	grants := []model.Grant{
-		{Capability: "bootstrap-playbooks", Via: model.GrantByLabel},
+		{Capability: model.GitHubReadIssuesGrant, Via: model.GrantByLabel},
 		{Capability: "self-debug", Via: model.GrantByLabel},
 	}
 	held, _ := runWithGrants(t, grants, "/usr/local/share/grain/src")
-	for _, want := range []string{"self-debug", "bootstrap-playbooks"} {
+	for _, want := range []string{"self-debug", model.GitHubReadIssuesGrant} {
 		if !slices.Contains(held, want) {
 			t.Errorf("RunConfig.Grants = %v, want %s among them", held, want)
 		}
@@ -239,20 +424,6 @@ func TestRunCycleTellsAnOrdinaryTaskNothingAboutItsGrants(t *testing.T) {
 	}
 	if sourceDir != "" {
 		t.Errorf("RunConfig.GrainSourceDir = %q, want it withheld from a task without the grant", sourceDir)
-	}
-}
-
-// A capability registered from outside core as a run grant travels to the
-// run like the core ones above, and only while it is registered. Not
-// parallel: the registration is process-wide (capabilitytest.Register).
-func TestRunCycleForwardsARegisteredRunGrant(t *testing.T) {
-	grants := []model.Grant{{Capability: capabilitytest.ID, Via: model.GrantByLabel}}
-	if held, _ := runWithGrants(t, grants, ""); slices.Contains(held, capabilitytest.ID) {
-		t.Fatalf("RunConfig.Grants = %v before %s is registered, want it absent", held, capabilitytest.ID)
-	}
-	capabilitytest.Register(t)
-	if held, _ := runWithGrants(t, grants, ""); !slices.Contains(held, capabilitytest.ID) {
-		t.Errorf("RunConfig.Grants = %v, want the registered %s among them", held, capabilitytest.ID)
 	}
 }
 

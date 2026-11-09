@@ -150,18 +150,14 @@ async function expectCapabilityDisclosure(page) {
   await expect(
     page.getByRole("heading", { name: "What it may reach" }),
   ).toBeVisible();
-  await expect(
-    page.getByRole("checkbox", { name: /Bootstrap playbooks/ }),
-  ).toBeVisible();
+  await expect(page.getByRole("button", { name: /Add grant/ })).toBeVisible();
   await expect(
     page.getByLabel(/What it may reach on the internet/),
   ).toBeVisible();
   await page
     .getByRole("button", { name: "Hide Director capabilities" })
     .click();
-  await expect(
-    page.getByRole("checkbox", { name: /Bootstrap playbooks/ }),
-  ).toBeHidden();
+  await expect(page.getByRole("button", { name: /Add grant/ })).toBeHidden();
 }
 
 // Sections 1 and 7 of docs/test-plans/2026-09-13.md. This is deliberately
@@ -538,7 +534,12 @@ test("Console session lifecycle controls, backing-task redirects, and session Wo
   await expect.poll(async () => sessionTaskID(page, "triage")).toBeTruthy();
   const triageTaskId = await sessionTaskID(page, "triage");
   expect(triageTaskId).not.toBe(directorTaskId);
-  await expect(page.getByText("waiting for your reply")).toBeVisible();
+  // The new session's task has to be dispatched and park before the page
+  // can say it is waiting; under the full suite's load that outlasts the
+  // default 5s (as in console-resting-notes-walkthrough.spec.js).
+  await expect(page.getByText("waiting for your reply")).toBeVisible({
+    timeout: 15_000,
+  });
 
   // Navigate directly to /tasks/<directorTaskId> and /tasks/<triageTaskId>
   // at both desktop (1280x800) and phone (390x844) viewports.
@@ -835,4 +836,187 @@ test("Console session lifecycle controls, backing-task redirects, and session Wo
   expect(recreatedDirectorTask.comments.some((c) => Boolean(c.handover))).toBe(
     false,
   );
+});
+
+test("Saved Director row offers one-click Adopt shipped defaults cleanly on desktop and phone", async ({
+  page,
+}) => {
+  // Seed a pre-G1 saved director row lacking the newly shipped Tier 1 grants.
+  const seedRes = await page.request.put("/api/console-sessions/director", {
+    data: {
+      capabilities: ["api:self-debug", "api:deployment:read"],
+    },
+  });
+  expect(seedRes.ok()).toBeTruthy();
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/session/director");
+  await expect(page).toHaveURL(/\/session\/director$/);
+
+  await page
+    .getByRole("button", { name: "Edit Director capabilities" })
+    .click();
+
+  const fieldset = page.locator("fieldset", {
+    has: page.locator("legend", { hasText: "What it may reach" }),
+  });
+  const banner = page.getByTestId("adopt-shipped-defaults-banner");
+  const adoptBtn = banner.getByRole("button", {
+    name: "Adopt shipped defaults",
+  });
+  await expect(banner).toBeVisible();
+  await expect(adoptBtn).toBeVisible();
+
+  // Verify layout containment at desktop (1440x900) and phone (390x844).
+  for (const viewport of [
+    { width: 1440, height: 900 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await adoptBtn.scrollIntoViewIfNeeded();
+    const fsBox = await fieldset.boundingBox();
+    const bannerBox = await banner.boundingBox();
+    const btnBox = await adoptBtn.boundingBox();
+    expect(fsBox).not.toBeNull();
+    expect(bannerBox).not.toBeNull();
+    expect(btnBox).not.toBeNull();
+    expect(bannerBox.x).toBeGreaterThanOrEqual(fsBox.x - 1);
+    expect(bannerBox.x + bannerBox.width).toBeLessThanOrEqual(
+      fsBox.x + fsBox.width + 2,
+    );
+    expect(btnBox.x).toBeGreaterThanOrEqual(bannerBox.x - 1);
+    expect(btnBox.x + btnBox.width).toBeLessThanOrEqual(
+      bannerBox.x + bannerBox.width + 2,
+    );
+    expect(btnBox.y).toBeGreaterThanOrEqual(bannerBox.y - 1);
+    expect(btnBox.y + btnBox.height).toBeLessThanOrEqual(
+      bannerBox.y + bannerBox.height + 2,
+    );
+  }
+
+  // Click "Adopt shipped defaults" and verify Tier 1 grants are persisted and banner disappears.
+  await adoptBtn.click();
+  await expect(banner).toHaveCount(0);
+
+  const res = await page.request.get("/api/console-sessions");
+  expect(res.ok()).toBeTruthy();
+  const body = await res.json();
+  const director = body.sessions.find((s) => s.id === "director");
+  expect(director).toBeTruthy();
+  expect(director.missingShippedDefaults || []).toEqual([]);
+  for (const grant of [
+    "api:task-admin",
+    "api:capabilities:read",
+    "api:capabilities:detach",
+    "api:settings:read",
+    "api:repos:read",
+    "api:releases:read",
+    "api:schedules:read",
+    "api:templates:read",
+    "api:suites:read",
+    "api:dispatch:read",
+  ]) {
+    expect(director.capabilities).toContain(grant);
+  }
+});
+
+// The 2026-11-07 director agent API walkthrough, finding 4: a pane that
+// read the director before another tab granted it something used to
+// save its old list plus the missing defaults on Adopt, dropping that
+// grant. The pane now sends only {adoptShippedDefaults: true}, which the
+// server resolves against what the session holds when it lands; a tick
+// box sends the list it read as expectCapabilities, and retries on a
+// fresh read when the server says that list is stale.
+test("Adopt shipped defaults and grant edits keep a grant another tab made since", async ({
+  page,
+}) => {
+  const read = async () => {
+    const res = await page.request.get("/api/console-sessions");
+    expect(res.ok()).toBeTruthy();
+    return (await res.json()).sessions.find((s) => s.id === "director");
+  };
+  const before = (await read()).capabilities;
+  try {
+    // Tab A reads the director while it lacks the Tier 1 grants.
+    const seeded = ["api:self-debug", "api:deployment:read"];
+    expect(
+      (
+        await page.request.put("/api/console-sessions/director", {
+          data: { capabilities: seeded },
+        })
+      ).ok(),
+    ).toBeTruthy();
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/session/director");
+    await page
+      .getByRole("button", { name: "Edit Director capabilities" })
+      .click();
+    const banner = page.getByTestId("adopt-shipped-defaults-banner");
+    await expect(banner).toBeVisible();
+
+    // Tab B grants api:tasks:read.
+    expect(
+      (
+        await page.request.put("/api/console-sessions/director", {
+          data: {
+            capabilities: [...seeded, "api:tasks:read"],
+            expectCapabilities: seeded,
+          },
+        })
+      ).ok(),
+    ).toBeTruthy();
+
+    // Tab A adopts: the request names no list, and tab B's grant stays.
+    const adoptPut = page.waitForRequest(
+      (req) =>
+        req.method() === "PUT" &&
+        req.url().endsWith("/api/console-sessions/director"),
+    );
+    await banner
+      .getByRole("button", { name: "Adopt shipped defaults" })
+      .click();
+    expect((await adoptPut).postDataJSON()).toEqual({
+      adoptShippedDefaults: true,
+    });
+    await expect(banner).toHaveCount(0);
+    const adopted = await read();
+    expect(adopted.missingShippedDefaults || []).toEqual([]);
+    expect(adopted.capabilities).toContain("api:tasks:read");
+    expect(adopted.capabilities).toContain("api:task-admin");
+
+    // Removing a grant in the pane carries the list it was computed
+    // from, and a grant tab B makes meanwhile survives it.
+    expect(
+      (
+        await page.request.put("/api/console-sessions/director", {
+          data: {
+            capabilities: [...adopted.capabilities, "api:tasks:admin"],
+            expectCapabilities: adopted.capabilities,
+          },
+        })
+      ).ok(),
+    ).toBeTruthy();
+    const removePut = page.waitForRequest(
+      (req) =>
+        req.method() === "PUT" &&
+        req.url().endsWith("/api/console-sessions/director"),
+    );
+    await page
+      .getByTestId("session-director-grants")
+      .getByRole("button", { name: /^Remove api:deployment:read/ })
+      .click();
+    const removal = (await removePut).postDataJSON();
+    expect(removal.expectCapabilities).toContain("api:deployment:read");
+    expect(removal.capabilities).not.toContain("api:deployment:read");
+    await expect
+      .poll(async () => (await read()).capabilities)
+      .not.toContain("api:deployment:read");
+    const after = (await read()).capabilities;
+    expect(after).toContain("api:tasks:admin");
+    expect(after).toContain("api:tasks:read");
+  } finally {
+    await page.request.put("/api/console-sessions/director", {
+      data: { capabilities: before },
+    });
+  }
 });

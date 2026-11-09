@@ -774,7 +774,8 @@ var capabilitiesAdminBodies = map[string]struct {
 	// A hostd's registry row grants a task nothing: which hostd a run
 	// goes to is the task's own pin or selector, not this.
 	"CreateHostdRequest": {reflect.TypeFor[CreateHostdRequest](), nil, []string{"name", "owner", "labels"}},
-	"UpdateHostdRequest": {reflect.TypeFor[UpdateHostdRequest](), nil, []string{"owner", "labels"}},
+	"UpdateHostdRequest": {reflect.TypeFor[UpdateHostdRequest](), nil, []string{"owner", "labels", "capacity"}},
+	"RenameHostdRequest": {reflect.TypeFor[RenameHostdRequest](), nil, []string{"name"}},
 }
 
 // capabilitiesAdminBodylessRoutes are capabilities:admin routes that act by URL
@@ -1147,6 +1148,7 @@ var agentAPISingleReadRoutes = map[string]bool{
 	"GET /api/templates/{id}/composition":                            true,
 	"GET /api/upgrade":                                               true,
 	"GET /api/upgrade/release-notes":                                 true,
+	"GET /api/usage":                                                 true,
 }
 
 func hasBoundingQueryParam(q map[string]string) bool {

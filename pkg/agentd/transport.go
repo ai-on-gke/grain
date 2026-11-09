@@ -16,6 +16,7 @@ package agentd
 
 import (
 	"context"
+	"crypto/ed25519"
 	"flag"
 	"fmt"
 	"net"
@@ -41,6 +42,11 @@ type DialConfig struct {
 	// (hostd.TokenHeader); Name the registry name it expects to be, if
 	// any; Host this machine's hostname; Build this binary's build.
 	Token, Name, Host, Build string
+	// TokenFunc, when set, returns the latest silently renewed credential.
+	TokenFunc func() string
+	// PrivateKey, when set, signs each upgrade request with this host's
+	// Ed25519 private key.
+	PrivateKey ed25519.PrivateKey
 	// IAPAudience is -iap-audience, which a transport may ignore.
 	IAPAudience string
 	// StateDir is grain-agentd's own state directory (-state-dir); a
@@ -150,7 +156,15 @@ func dialerFor(ctx context.Context, cfg DialConfig) (func(context.Context) (net.
 		}
 		return dial, closeFn, nil
 	}
-	d := &hostd.Dialer{Server: cfg.Server.String(), Token: cfg.Token, Name: cfg.Name, Host: cfg.Host, Build: cfg.Build}
+	d := &hostd.Dialer{
+		Server:     cfg.Server.String(),
+		Token:      cfg.Token,
+		TokenFunc:  cfg.TokenFunc,
+		PrivateKey: cfg.PrivateKey,
+		Name:       cfg.Name,
+		Host:       cfg.Host,
+		Build:      cfg.Build,
+	}
 	if cfg.IAPAudience != "" {
 		d.IDToken = hostd.NewIAPTokenProvider(cfg.IAPAudience).Token
 	}

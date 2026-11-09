@@ -138,7 +138,9 @@ test.describe("A template's Use… preview on a phone", () => {
       }));
       expect(widths.scroll).toBeLessThanOrEqual(widths.client);
       const rowBox = await row.boundingBox();
-      const source = await row.locator(":scope > .MuiChip-root").boundingBox();
+      const source = await row
+        .locator(":scope > dd > .MuiChip-root")
+        .boundingBox();
       expect(source.x + source.width).toBeLessThanOrEqual(
         rowBox.x + rowBox.width + 1,
       );
@@ -156,6 +158,51 @@ test.describe("A template's Use… preview on a phone", () => {
     } finally {
       await page.request.delete(`/api/templates/${id}`);
     }
+  });
+});
+
+// A template pane's footer at 390px (2026-11-08 walkthrough, task 3614):
+// with no wrap and no gap, Delete sat flush against "New task from this
+// template" (0px between them), which broke onto two lines and stretched
+// Cancel and Save to its 61px height. Each button is one line tall now,
+// and no two of them touch.
+test.describe("A template pane's footer on a phone", () => {
+  test.use({ viewport: PHONE, hasTouch: true, isMobile: true });
+
+  test("keeps each button one line tall and apart from the next", async ({
+    page,
+  }) => {
+    await page.goto("/processes/templates/template-1");
+    const pane = page.getByRole("dialog");
+    const names = ["Delete", "New task from this template", "Cancel", "Save"];
+    const boxes = [];
+    for (const name of names) {
+      const button = pane.getByRole("button", { name, exact: true });
+      await expect(button).toBeVisible();
+      boxes.push({ name, ...(await button.boundingBox()) });
+    }
+    const paneBox = await pane.boundingBox();
+    for (const b of boxes) {
+      expect(b.height, `${b.name} is ${b.height}px tall`).toBeLessThan(44);
+      expect(b.x).toBeGreaterThanOrEqual(paneBox.x - 1);
+      expect(b.x + b.width).toBeLessThanOrEqual(paneBox.x + paneBox.width + 1);
+    }
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) {
+        const [a, b] = [boxes[i], boxes[j]];
+        const sameLine = a.y < b.y + b.height && b.y < a.y + a.height;
+        if (!sameLine) continue;
+        const gap = Math.max(b.x - (a.x + a.width), a.x - (b.x + b.width));
+        expect(
+          gap,
+          `${a.name} and ${b.name} are ${gap}px apart`,
+        ).toBeGreaterThanOrEqual(4);
+      }
+    }
+    const form = pane.locator("form");
+    expect(
+      await form.evaluate((el) => el.scrollWidth - el.clientWidth),
+    ).toBeLessThanOrEqual(1);
   });
 });
 

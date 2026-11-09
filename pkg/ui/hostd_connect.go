@@ -87,7 +87,10 @@ func (s *Server) hostdConnectIdentity(r *http.Request) (hostd.ConnectIdentity, i
 			}
 			return hostd.ConnectIdentity{}, http.StatusUnauthorized, fmt.Errorf("its identity did not verify: %v", cv.err)
 		}
-		if !s.isRegisteredHostdServiceOwner(r.Context(), cv.id) {
+		if cv.id.Via != nil {
+			return hostd.ConnectIdentity{}, http.StatusForbidden, fmt.Errorf("a remote hostd cannot connect via a delegated identity (%s acting for %s): connect directly as the hostd's owner", cv.id.Via.Email, cv.id.Email)
+		}
+		if !s.isRegisteredHostdOwner(r.Context(), cv.id) {
 			if err := s.checkAllowedPrincipal(r.Context(), cv.id); err != nil {
 				return hostd.ConnectIdentity{}, http.StatusForbidden, err
 			}
@@ -101,17 +104,17 @@ func (s *Server) hostdConnectIdentity(r *http.Request) (hostd.ConnectIdentity, i
 	return hostd.ConnectIdentity{Remote: true}, 0, nil
 }
 
-// isRegisteredHostdServiceOwner reports whether id is a non-pool GCP service
-// account explicitly set as the owner of an active hostd row (Settings ->
-// Hostds). Admitting it here lets a remote hostd dial /api/hostd/connect
-// (where hostd.Remote still requires its per-hostd token and matches its
-// owner) without granting UI/API access.
-func (s *Server) isRegisteredHostdServiceOwner(ctx context.Context, id VerifiedIdentity) bool {
-	if id.Kind != model.PrincipalService || s.tasks == nil || s.tasks.Store == nil {
+// isRegisteredHostdOwner reports whether id is a human or non-pool GCP service
+// account set as the owner of an active hostd row (Settings -> Hosts). Admitting
+// it here lets a remote host enrolled via --join dial /api/hostd/connect (where
+// hostd.Remote still requires its key-bound credential and matches its owner)
+// without granting UI/API sign-in access.
+func (s *Server) isRegisteredHostdOwner(ctx context.Context, id VerifiedIdentity) bool {
+	if (id.Kind != model.PrincipalService && id.Kind != model.PrincipalHuman) || s.tasks == nil || s.tasks.Store == nil {
 		return false
 	}
 	email := normalizeIdentityEmail(id.Email)
-	if email == "" || s.tasks.gcpKeyPoolSet(ctx)[email] {
+	if email == "" || (id.Kind == model.PrincipalService && s.tasks.gcpKeyPoolSet(ctx)[email]) {
 		return false
 	}
 	rows, err := s.tasks.Store.ListHostds(ctx)

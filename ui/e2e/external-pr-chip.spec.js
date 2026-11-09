@@ -86,6 +86,23 @@ for (const viewport of [
   });
 }
 
+test("the task list's row names the external pull request too", async ({
+  page,
+}) => {
+  const id = await fileOnForkHead(page);
+  await page.goto(`/?q=${encodeURIComponent("contributor's typo")}`);
+  const row = page
+    .locator(".task-row")
+    .filter({ has: page.locator(".task-number", { hasText: id }) });
+  await expect(row).toHaveCount(1);
+  const chip = row.getByTestId("task-external-pr-chip");
+  await expect(chip).toHaveText(REF);
+  await expect(chip).toHaveClass(/MuiChip-outlined/);
+  // Not a link of its own: clicking it opens the task, as the row does.
+  await chip.click();
+  await expect(page).toHaveURL(new RegExp(`/tasks/${id}$`));
+});
+
 test("a task on an ordinary base has no external pull request chip", async ({
   page,
 }) => {

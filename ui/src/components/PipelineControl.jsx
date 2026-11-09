@@ -18,7 +18,7 @@ import CampaignIcon from "@mui/icons-material/Campaign";
 import { resumeCancelsUpgrade, scheduledUpgradeHold } from "../alerts.js";
 import api from "../api.js";
 import { useTimeZone } from "../TimeZoneContext.jsx";
-import { formatTime } from "../time.js";
+import { formatMoment } from "../time.js";
 import NotifyRunningDialog from "./NotifyRunningDialog.jsx";
 
 // PipelineControl is the operator's switch for the deployment-wide
@@ -74,7 +74,7 @@ export default function PipelineControl({
     }
   }
 
-  const since = pause.since ? ` since ${formatTime(pause.since, zone)}` : "";
+  const since = pause.since ? ` since ${formatMoment(pause.since, zone)}` : "";
   const reasonText = pause.reason ? ` Reason: ${pause.reason}` : "";
   // Who paused it, as the server labels them (operator-attribution spec
   // §4): the verified email, or "operator (access code)".

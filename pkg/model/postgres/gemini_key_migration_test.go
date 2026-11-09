@@ -209,7 +209,7 @@ func TestMigration103WithoutAProjectOnlyRewritesGrants(t *testing.T) {
 	cfg.CapabilityPolicy = model.CapabilityPolicy{
 		Rules: []model.CapabilityPolicyRule{{Capability: "gemini-key", Repos: []string{"acme/*"}, Deny: true}},
 		Catalogue: &model.CapabilityCatalogue{Defaults: model.CatalogueDefaults{
-			Task: []string{"bootstrap-playbooks", "gemini-key"},
+			Task: []string{"release-gate-read", "gemini-key"},
 		}},
 	}
 	if err := store.PutConfig(ctx, cfg); err != nil {
@@ -235,7 +235,7 @@ func TestMigration103WithoutAProjectOnlyRewritesGrants(t *testing.T) {
 	if r := got.CapabilityPolicy.Rules; len(r) != 1 || r[0].Capability != model.GCPGeminiKeyRef || !r[0].Deny {
 		t.Errorf("rules = %+v, want gemini-key's deny on %s", r, model.GCPGeminiKeyRef)
 	}
-	if want := []string{"bootstrap-playbooks", model.GCPGeminiKeyGrant}; !slices.Equal(got.CapabilityPolicy.Catalogue.Defaults.Task, want) {
+	if want := []string{"release-gate-read", model.GCPGeminiKeyGrant}; !slices.Equal(got.CapabilityPolicy.Catalogue.Defaults.Task, want) {
 		t.Errorf("catalogue task defaults = %v, want %v", got.CapabilityPolicy.Catalogue.Defaults.Task, want)
 	}
 }
@@ -273,7 +273,7 @@ func TestStateRepoImportRetiresGeminiKey(t *testing.T) {
 	src, srcDB, ctx := openStore(t)
 	cfg := model.DefaultConfig()
 	cfg.GCPProject = "acme-ai"
-	cfg.DefaultCapabilities = []string{"gemini-key", "bootstrap-playbooks"}
+	cfg.DefaultCapabilities = []string{"gemini-key", "release-gate-read"}
 	if err := src.PutConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +301,7 @@ func TestStateRepoImportRetiresGeminiKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{model.GCPGeminiKeyGrant, "bootstrap-playbooks"}; !slices.Equal(got.DefaultCapabilities, want) {
+	if want := []string{model.GCPGeminiKeyGrant, "release-gate-read"}; !slices.Equal(got.DefaultCapabilities, want) {
 		t.Errorf("default capabilities = %v, want %v", got.DefaultCapabilities, want)
 	}
 	repo, err := dst.GetRepoConfig(ctx, widgets)

@@ -88,7 +88,7 @@ with its canonical ID, `https://grain.dev/capabilities/<name>`.
 After them come grain's **in-process** servers, which run inside the daemon
 rather than as a subprocess and have no `mcpServers` entry:
 `https://grain.dev/capabilities/grain` (`#ci`, `#health`, `#host-exec`,
-`#journal`, `#sql`), `https://grain.dev/capabilities/repo` (`#read`,
+`#journal`, `#source`, `#sql`), `https://grain.dev/capabilities/repo` (`#credential`, `#read`,
 `#write`), `https://grain.dev/capabilities/release` (`#image-signing`,
 `#package-publish`, `#registry-push`; CI only),
 `https://grain.dev/capabilities/model-proxy` (`#model-proxy`), and any
@@ -212,24 +212,31 @@ Settings → Tasks, and each repository's) that grant one of its methods
 detaches the server; once removed, those grants are refused at admission
 until they are changed or the server is added back under the same ID.
 
-## Legacy capabilities
+## Deployment credentials (formerly Legacy capabilities)
 
-**Settings → Legacy capabilities** is a different thing: the capabilities built
-into grain itself before capability servers, each granted by a bare name such
-as `github-sandbox` or `self-debug` and handed over by grain directly rather than by a
-server ([ci-capabilities.md](ci-capabilities.md)). Most have been retired onto
-server methods (`gcp-key` onto `…/gcp#gcp-key`, the model proxies onto
-`…/model-proxy`, `grain-log` onto `…/grain#journal`, and so on). What is
-left is listed in
-[unified-grants.design.md §4](../design/design/unified-grants.design.md#4-retiring-the-in-process-capabilities). That tab lists them one
-full-width row each, with **Ready** or **Not ready** and chips such as **CI
-only** and **Default**, each explaining itself as a tooltip. A row opens the
-capability's page: what it is short of, its own credentials, and **Test
-credential** where it holds a standing one. Under the list, **Deployment-wide
-settings** holds the GitHub host and the GCP project and service accounts that
-several of them read, and the secrets no capability claims. Which capabilities
+**Settings → Legacy capabilities** listed the capabilities built into grain
+itself before capability servers, each granted by a bare name such as
+`github-sandbox` or `read-issues` and handed over by grain directly rather than
+by a server. Every one has been retired onto a server method, an api preset or
+a task setting (`gcp-key` onto `…/gcp#gcp-key`, the model proxies onto
+`…/model-proxy`, `grain-log` onto `…/grain#journal`, `self-debug` onto the
+`api:self-debug` preset plus `…/grain#source`, `read-issues` onto
+`…/github#read-issues`, `github-sandbox` onto `…/github#sandbox-repo`, and so
+on -- [unified-grants.design.md §4](../design/design/unified-grants.design.md#4-retiring-the-in-process-capabilities)),
+its bare name kept as a one-release alias, and the tab went with them. What
+was still useful on it is the **Deployment credentials** card at the foot of
+this page: the GitHub host, the GCP project and service accounts migrated
+`gcp-key` and `gemini-key` pools were seeded from, and every stored secret —
+with the ones a capability server uses listed with that server and any remaining
+secrets (including stored `github-app`, `registry-push`, `cosign-key` and
+`cosign-password` secrets from retired in-process capabilities) kept visible and
+deletable under **Other secrets**. The tab's old addresses
+(`/settings/credentials`, `/settings/legacy-capabilities`, `/settings/secrets`,
+`/admin/integrations`) resolve to Settings → Capabilities. Which capabilities
 every new task starts with is chosen in **Settings → Tasks**, under **Default
-capabilities**.
+grants** (a Grants picker; the empty **Default legacy capabilities** menu
+beside it is removed, and a bare id the defaults already hold is kept as it
+is when they are saved).
 
 ## The API behind these pages
 

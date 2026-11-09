@@ -120,6 +120,7 @@ var toolActivityNotes = map[string]string{
 	"base_branch_status":            "checking CI on the base branch",
 	"reply_to_pull_request_comment": "answering a review comment on its pull request",
 	"resolve_review_thread":         "resolving a review thread on its pull request",
+	"list_review_threads":           "reading the review threads on its pull request",
 	"get_ci_log":                    "reading a CI log",
 	"get_ci_artifact":               "downloading a CI artifact",
 	"list_ci_runs":                  "looking through recent CI runs",
@@ -169,14 +170,12 @@ var toolActivityNotes = map[string]string{
 	"query_merge_queue":          "checking the merge queue",
 
 	// The remaining grant-gated tools (pkg/capability).
-	"read_grain_log":           "reading grain's log",
-	"list_bootstrap_playbooks": "looking through the bootstrap playbooks",
-	"read_bootstrap_playbook":  "reading a bootstrap playbook",
-	"read_deployment_health":   "checking this deployment's health",
-	"read_deployment_state":    "reading this deployment's state",
-	"run_host_command":         "waiting to be allowed to run a command on the host",
-	"list_issues":              "looking through GitHub issues",
-	"read_issue":               "reading a GitHub issue",
+	"read_grain_log":         "reading grain's log",
+	"read_deployment_health": "checking this deployment's health",
+	"read_deployment_state":  "reading this deployment's state",
+	"run_host_command":       "waiting to be allowed to run a command on the host",
+	"list_issues":            "looking through GitHub issues",
+	"read_issue":             "reading a GitHub issue",
 
 	// The db-read and db-write grants (pkg/capability/dbaccess).
 	"query_grain_db":   "querying grain database",

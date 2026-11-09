@@ -25,6 +25,7 @@ import {
   Typography,
 } from "@mui/material";
 import api from "../../api.js";
+import AccessGate from "../AccessGate.jsx";
 import GrantChip from "../GrantChip.jsx";
 
 // PendingAccess is what a run's request_access call turns into for the
@@ -248,24 +249,32 @@ export default function PendingAccess({ t, act }) {
           flexWrap="wrap"
           sx={{ mt: 1 }}
         >
-          <Button
-            type="button"
-            variant="contained"
-            color="success"
-            disabled={busy || chosen.length === 0}
-            onClick={() => decide("grant", all ? {} : { items: chosen })}
-          >
-            {all ? "Grant all" : `Grant ${chosen.length} of ${items.length}`}
-          </Button>
-          <Button
-            type="button"
-            variant="outlined"
-            color="error"
-            disabled={busy}
-            onClick={() => setDenying(true)}
-          >
-            Deny
-          </Button>
+          {/* Both answers are POST /api/tasks/{id}/access-request/...,
+              which a role needs capabilities:admin for (pkg/ui
+              humanRouteScopes): a viewer or contributor sees the
+              request, and is not offered an answer the server refuses. */}
+          <AccessGate scope="capabilities:admin" repo={t.repo}>
+            <Button
+              type="button"
+              variant="contained"
+              color="success"
+              disabled={busy || chosen.length === 0}
+              onClick={() => decide("grant", all ? {} : { items: chosen })}
+            >
+              {all ? "Grant all" : `Grant ${chosen.length} of ${items.length}`}
+            </Button>
+          </AccessGate>
+          <AccessGate scope="capabilities:admin" repo={t.repo}>
+            <Button
+              type="button"
+              variant="outlined"
+              color="error"
+              disabled={busy}
+              onClick={() => setDenying(true)}
+            >
+              Deny
+            </Button>
+          </AccessGate>
         </Stack>
       )}
     </Alert>

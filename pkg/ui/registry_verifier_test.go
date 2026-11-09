@@ -318,3 +318,147 @@ func TestRegistryIdentityVerifierEndToEnd(t *testing.T) {
 		t.Fatalf("unforwarded loopback access code under RequireVerifier=registry: status = %d, want 200 (%s)", wLoopCode.Code, wLoopCode.Body.String())
 	}
 }
+
+func TestRegistryVerifierExposesPersonAndDelegatingApp(t *testing.T) {
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
+
+	ecKey, _, _, jwksSrv := newRegistryJWKSServer(t)
+	const (
+		issuer   = "https://grain.example.com"
+		audience = "https://my-grain.grain.example.com"
+	)
+
+	now := time.Now().Truncate(time.Second)
+	claims := ui.RegistryClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    issuer,
+			Subject:   "alice@example.com",
+			Audience:  jwt.ClaimStrings{audience},
+			IssuedAt:  jwt.NewNumericDate(now.Add(-5 * time.Second)),
+			NotBefore: jwt.NewNumericDate(now.Add(-5 * time.Second)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(55 * time.Second)),
+			ID:        "reg-jti-42",
+		},
+		Kind:      webauth.PrincipalHuman,
+		RequestID: "r_01hj9x",
+		Act: json.RawMessage(`{
+			"sub": "slack-bot@proj.iam.gserviceaccount.com",
+			"kind": "service",
+			"app": "slack-bot",
+			"grant": "dg_01hj",
+			"access": "write"
+		}`),
+	}
+	tok := signRegistryES256(t, ecKey, "reg-key-1", claims)
+
+	verifier := webauth.NewRegistryVerifier(
+		webauth.WithRegistryIssuer(issuer),
+		webauth.WithRegistryAudience(audience),
+		webauth.WithRegistryKeysURL(jwksSrv.URL),
+	)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+	r.Header.Set(ui.RegistryAssertionHeader, tok)
+	id, err := verifier.Verify(r)
+	if err != nil {
+		t.Fatalf("verifier.Verify: %v", err)
+	}
+	if id.Email != "alice@example.com" || id.Sub != "alice@example.com" || id.Kind != webauth.PrincipalHuman {
+		t.Fatalf("VerifiedIdentity = %+v, want human alice@example.com", id)
+	}
+	if id.Via == nil {
+		t.Fatal("id.Via == nil, want DelegatingApp")
+	}
+	wantVia := webauth.DelegatingApp{
+		Email:     "slack-bot@proj.iam.gserviceaccount.com",
+		Name:      "slack-bot",
+		Grant:     "dg_01hj",
+		Access:    "write",
+		JTI:       "reg-jti-42",
+		RequestID: "r_01hj9x",
+	}
+	if *id.Via != wantVia {
+		t.Fatalf("id.Via = %+v, want %+v", *id.Via, wantVia)
+	}
+
+	// Default access when omitted is "write"; explicit "read" is preserved.
+	claimsRead := claims
+	claimsRead.Act = json.RawMessage(`{"sub":"slack-bot@proj.iam.gserviceaccount.com","kind":"service","access":"read"}`)
+	rRead := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+	rRead.Header.Set(ui.RegistryAssertionHeader, signRegistryES256(t, ecKey, "reg-key-1", claimsRead))
+	idRead, err := verifier.Verify(rRead)
+	if err != nil || idRead.Via == nil || idRead.Via.Access != "read" {
+		t.Fatalf("verifier.Verify(read) = %+v, %v; want Via.Access=read", idRead, err)
+	}
+}
+
+func TestRegistryVerifierRefusesMalformedOrNestedAct(t *testing.T) {
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
+
+	ecKey, _, _, jwksSrv := newRegistryJWKSServer(t)
+	const (
+		issuer     = "https://grain.example.com"
+		audience   = "https://my-grain.grain.example.com"
+		accessCode = "test-access-code-secret-123456"
+	)
+
+	srv, client := testServer(t)
+	client.Config.Actor = ui.DefaultActor("owner@example.com")
+	client.Config.RegistryIssuer = issuer
+	client.Config.RegistryAudience = audience
+	client.Config.RegistryKeysURL = jwksSrv.URL
+	client.Config.AllowedPrincipals = []string{"user:alice@example.com"}
+	ui.SetAccessCodeForTest(srv, accessCode)
+	if _, err := client.AllowPrincipal(r503Ctx(t), ui.AllowPrincipalRequest{
+		Entry:  "delegate:slack-bot@proj.iam.gserviceaccount.com",
+		Role:   "grain/delegated",
+		Reason: "slack bot",
+	}); err != nil {
+		t.Fatalf("AllowPrincipal: %v", err)
+	}
+
+	now := time.Now().Truncate(time.Second)
+	mkClaims := func(sub string, kind model.PrincipalKind, act string) ui.RegistryClaims {
+		return ui.RegistryClaims{
+			RegisteredClaims: jwt.RegisteredClaims{
+				Issuer:    issuer,
+				Subject:   sub,
+				Audience:  jwt.ClaimStrings{audience},
+				IssuedAt:  jwt.NewNumericDate(now.Add(-5 * time.Second)),
+				NotBefore: jwt.NewNumericDate(now.Add(-5 * time.Second)),
+				ExpiresAt: jwt.NewNumericDate(now.Add(55 * time.Second)),
+				ID:        "reg-jti-bad",
+			},
+			Kind: webauth.PrincipalKind(kind),
+			Act:  json.RawMessage(act),
+		}
+	}
+
+	cases := map[string]ui.RegistryClaims{
+		"non-object-string":    mkClaims("alice@example.com", model.PrincipalHuman, `"slack-bot@proj.iam.gserviceaccount.com"`),
+		"non-object-array":     mkClaims("alice@example.com", model.PrincipalHuman, `["slack-bot@proj.iam.gserviceaccount.com"]`),
+		"null-act":             mkClaims("alice@example.com", model.PrincipalHuman, `null`),
+		"missing-act-sub":      mkClaims("alice@example.com", model.PrincipalHuman, `{"kind":"service"}`),
+		"act-sub-not-email":    mkClaims("alice@example.com", model.PrincipalHuman, `{"sub":"slack-bot","kind":"service"}`),
+		"act-kind-human":       mkClaims("alice@example.com", model.PrincipalHuman, `{"sub":"bob@example.com","kind":"human"}`),
+		"outer-kind-service":   mkClaims("ci@proj.iam.gserviceaccount.com", model.PrincipalService, `{"sub":"slack-bot@proj.iam.gserviceaccount.com","kind":"service"}`),
+		"nested-act-in-act":    mkClaims("alice@example.com", model.PrincipalHuman, `{"sub":"slack-bot@proj.iam.gserviceaccount.com","kind":"service","act":{"sub":"other@proj.iam.gserviceaccount.com","kind":"service"}}`),
+		"self-delegation":      mkClaims("slack-bot@proj.iam.gserviceaccount.com", model.PrincipalHuman, `{"sub":"Slack-Bot@proj.iam.gserviceaccount.com","kind":"service"}`),
+		"unknown-access-value": mkClaims("alice@example.com", model.PrincipalHuman, `{"sub":"slack-bot@proj.iam.gserviceaccount.com","kind":"service","access":"admin"}`),
+	}
+
+	for name, c := range cases {
+		tok := signRegistryES256(t, ecKey, "reg-key-1", c)
+		r := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+		r.RemoteAddr = "127.0.0.1:4242"
+		r.Header.Set(ui.RegistryAssertionHeader, tok)
+		r.Header.Set("Authorization", "Bearer "+accessCode)
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, r)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("case %s: status = %d, want 401 (%s)", name, w.Code, w.Body.String())
+		}
+	}
+}

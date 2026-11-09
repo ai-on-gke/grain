@@ -131,11 +131,29 @@ test("a local script's call is approved from the task pane and denied from the i
     { width: 390, height: 844 },
   ]) {
     await page.setViewportSize(viewport);
-    const cardBox = await row.boundingBox();
-    const stdinBox = await row.locator(".local-script-stdin").boundingBox();
-    const denyBox = await row
-      .getByRole("button", { name: "Deny" })
-      .boundingBox();
+    // The phone layout is a React re-render behind a media query
+    // (phone.js), which lands some time after the resize: wait for App to
+    // say it has switched, then take all three boxes from one layout.
+    // Three boundingBox() calls in a row straddled that re-render (and
+    // the rail's transition after it) on a busy runner, comparing a card
+    // from one layout with a preview from the next -- the walkthrough's
+    // flake in rc.1's nightly.
+    await expect(page.locator(":root")).toHaveAttribute(
+      "data-phone",
+      viewport.width < 600 ? "true" : "false",
+    );
+    const [cardBox, stdinBox, denyBox] = await row.evaluate((card) =>
+      [
+        card,
+        card.querySelector(".local-script-stdin"),
+        [...card.querySelectorAll("button")].find(
+          (b) => b.textContent.trim() === "Deny",
+        ),
+      ].map((el) => {
+        const r = el.getBoundingClientRect();
+        return { x: r.x, y: r.y, width: r.width, height: r.height };
+      }),
+    );
     expect(stdinBox.x).toBeGreaterThanOrEqual(cardBox.x);
     expect(stdinBox.x + stdinBox.width).toBeLessThanOrEqual(
       cardBox.x + cardBox.width,

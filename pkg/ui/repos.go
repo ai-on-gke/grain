@@ -323,6 +323,12 @@ type RepoDefaults struct {
 	// (*Client).defaultCapabilities' own answer, for this repo, rather
 	// than a second computation of it that could drift.
 	EffectiveDefaultCapabilities []string `json:"effectiveDefaultCapabilities"`
+	DefaultAdmission             string   `json:"defaultAdmission"`
+	DeploymentDefaultAdmission   string   `json:"deploymentDefaultAdmission"`
+	EffectiveDefaultAdmission    string   `json:"effectiveDefaultAdmission"`
+	DefaultHosting               string   `json:"defaultHosting"`
+	DeploymentDefaultHosting     string   `json:"deploymentDefaultHosting"`
+	EffectiveDefaultHosting      string   `json:"effectiveDefaultHosting"`
 	// PromptExtension is this repo's own standing instructions for a run
 	// working in it -- model.RepoConfig.PromptExtension, exactly as
 	// stored, and the only one of the three fields below that a PUT to
@@ -604,6 +610,8 @@ type SetRepoSettingsRequest struct {
 	// default, observe.
 	MergeRecheck        *string   `json:"mergeRecheck,omitempty"`
 	DefaultCapabilities *[]string `json:"defaultCapabilities,omitempty"`
+	DefaultAdmission    *string   `json:"defaultAdmission,omitempty"`
+	DefaultHosting      *string   `json:"defaultHosting,omitempty"`
 	CICapabilities      *[]string `json:"ciCapabilities,omitempty"`
 	PromptExtension     *string   `json:"promptExtension,omitempty"`
 	RepairTemplateID    *string   `json:"repairTemplateID,omitempty"`
@@ -724,6 +732,8 @@ func (c *Client) repoDefaults(ctx context.Context, repo model.RepoRef) (RepoDefa
 	if stored != nil {
 		out.IssueImport = repoIssueImportOf(stored.IssueImport)
 		out.DefaultCapabilities = stored.DefaultCapabilities
+		out.DefaultAdmission = string(stored.DefaultAdmission)
+		out.DefaultHosting = string(stored.DefaultHosting)
 		out.CICapabilities = stored.CICapabilities
 		out.PromptExtension = stored.PromptExtension
 		out.RepairTemplateID = stored.RepairTemplateID
@@ -765,10 +775,26 @@ func (c *Client) repoDefaults(ctx context.Context, repo model.RepoRef) (RepoDefa
 	if err != nil {
 		return RepoDefaults{}, err
 	}
+	var deploymentAdmission model.Admission
+	var deploymentHosting model.Hosting
 	if cfg != nil {
 		out.DeploymentDefaultCapabilities = cfg.DefaultCapabilities
 		out.DeploymentPromptExtension = cfg.PromptExtension
+		deploymentAdmission = cfg.DefaultAdmission
+		deploymentHosting = cfg.DefaultHosting
 	}
+	out.DeploymentDefaultAdmission = string(model.NormalizeAdmission(deploymentAdmission))
+	effAdm := model.NormalizeAdmission(deploymentAdmission)
+	if stored != nil {
+		effAdm = model.NormalizeAdmission(model.MaxAdmission(effAdm, stored.DefaultAdmission))
+	}
+	out.EffectiveDefaultAdmission = string(effAdm)
+	out.DeploymentDefaultHosting = string(model.NormalizeHosting(deploymentHosting))
+	effHosting := model.NormalizeHosting(deploymentHosting)
+	if stored != nil {
+		effHosting = model.NormalizeHosting(model.MaxHosting(effHosting, stored.DefaultHosting))
+	}
+	out.EffectiveDefaultHosting = string(effHosting)
 	// The same composition dispatch itself applies, with no task layer:
 	// what a run here is told when nothing overrides it
 	// (model.PromptExtensionFor).
@@ -821,11 +847,24 @@ func (c *Client) SetRepoDefaultCapabilities(ctx context.Context, repo string, id
 	if err != nil {
 		return RepoDefaults{}, validationErrorf("repo: %v", err)
 	}
-	clean, err := c.cleanRepoDefaultCapabilities(ids)
+	capsWithoutLegacy, legacyAdm, hadLegacy := extractLegacyAdmissionCaps("repo "+parsed.String()+" defaultCapabilities", ids)
+	capsWithoutLegacy, legacyHosting, hadLegacyHosting := extractLegacyHostingCaps("repo "+parsed.String()+" defaultCapabilities", capsWithoutLegacy)
+	clean, err := c.cleanRepoDefaultCapabilities(capsWithoutLegacy)
 	if err != nil {
 		return RepoDefaults{}, err
 	}
-	return c.putRepoConfig(ctx, parsed, func(rc *model.RepoConfig) { rc.DefaultCapabilities = clean })
+	if err := c.validateCatalogueRepoDefaults(ctx, parsed, clean, nil); err != nil {
+		return RepoDefaults{}, err
+	}
+	return c.putRepoConfig(ctx, parsed, func(rc *model.RepoConfig) {
+		rc.DefaultCapabilities = clean
+		if hadLegacy {
+			rc.DefaultAdmission = model.MaxAdmission(rc.DefaultAdmission, legacyAdm)
+		}
+		if hadLegacyHosting {
+			rc.DefaultHosting = model.MaxHosting(rc.DefaultHosting, legacyHosting)
+		}
+	})
 }
 
 func (c *Client) cleanRepoDefaultCapabilities(ids []string) ([]string, error) {
@@ -1079,16 +1118,42 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 		}
 	}
 	var defaultCaps []string
+	var legacyAdmission model.Admission
+	var hadLegacyAdmission bool
+	var legacyHosting model.Hosting
+	var hadLegacyHosting bool
 	if req.DefaultCapabilities != nil {
-		if defaultCaps, err = c.cleanRepoDefaultCapabilities(*req.DefaultCapabilities); err != nil {
+		var capsWithoutLegacy []string
+		capsWithoutLegacy, legacyAdmission, hadLegacyAdmission = extractLegacyAdmissionCaps("repo "+parsed.String()+" defaultCapabilities", *req.DefaultCapabilities)
+		capsWithoutLegacy, legacyHosting, hadLegacyHosting = extractLegacyHostingCaps("repo "+parsed.String()+" defaultCapabilities", capsWithoutLegacy)
+		if defaultCaps, err = c.cleanRepoDefaultCapabilities(capsWithoutLegacy); err != nil {
 			return RepoDefaults{}, err
 		}
+	}
+	var chosenDefaultAdmission *model.Admission
+	if req.DefaultAdmission != nil {
+		adm, err := model.ParseOptionalAdmission(*req.DefaultAdmission)
+		if err != nil {
+			return RepoDefaults{}, validationErrorf("defaultAdmission: %v", err)
+		}
+		chosenDefaultAdmission = &adm
+	}
+	var chosenDefaultHosting *model.Hosting
+	if req.DefaultHosting != nil {
+		h, err := model.ParseOptionalHosting(*req.DefaultHosting)
+		if err != nil {
+			return RepoDefaults{}, validationErrorf("defaultHosting: %v", err)
+		}
+		chosenDefaultHosting = &h
 	}
 	var ciCaps []string
 	if req.CICapabilities != nil {
 		if ciCaps, err = c.cleanRepoCICapabilities(*req.CICapabilities); err != nil {
 			return RepoDefaults{}, err
 		}
+	}
+	if err := c.validateCatalogueRepoDefaults(ctx, parsed, defaultCaps, ciCaps); err != nil {
+		return RepoDefaults{}, err
 	}
 	var unfixable []string
 	if req.UnfixableChecks != nil {
@@ -1147,6 +1212,18 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 		}
 		if req.DefaultCapabilities != nil {
 			rc.DefaultCapabilities = defaultCaps
+		}
+		if chosenDefaultAdmission != nil {
+			rc.DefaultAdmission = *chosenDefaultAdmission
+		}
+		if hadLegacyAdmission {
+			rc.DefaultAdmission = model.MaxAdmission(rc.DefaultAdmission, legacyAdmission)
+		}
+		if chosenDefaultHosting != nil {
+			rc.DefaultHosting = *chosenDefaultHosting
+		}
+		if hadLegacyHosting {
+			rc.DefaultHosting = model.MaxHosting(rc.DefaultHosting, legacyHosting)
 		}
 		if req.CICapabilities != nil {
 			rc.CICapabilities = ciCaps
@@ -1662,12 +1739,16 @@ func (c *Client) ciCapabilityIDs() []string {
 		if !spec.SupportsCI() {
 			continue
 		}
-		if _, offered := c.capabilityByID(spec.Name); offered || spec.CIOnly {
+		_, offered := c.capabilityByID(spec.Name)
+		if !offered {
+			_, offered = c.capabilityByID(model.CanonicalLegacyGrant(spec.Name))
+		}
+		if offered || spec.CIOnly {
 			// A provider retired onto a method with a CI rule (the
 			// release server's) is offered as the grant it became,
 			// which is what its stored rows were rewritten to.
 			if _, ok := model.CIGrantRuleFor(spec.Name); ok {
-				ids = append(ids, model.CanonicalLegacyGrant(spec.Name))
+				ids = append(ids, model.CanonicalCIGrant(spec.Name))
 				continue
 			}
 			ids = append(ids, spec.Name)
@@ -1686,6 +1767,9 @@ func (c *Client) SetRepoCICapabilities(ctx context.Context, repo string, ids []s
 	if err != nil {
 		return RepoDefaults{}, err
 	}
+	if err := c.validateCatalogueRepoDefaults(ctx, parsed, nil, clean); err != nil {
+		return RepoDefaults{}, err
+	}
 	return c.putRepoConfig(ctx, parsed, func(rc *model.RepoConfig) { rc.CICapabilities = clean })
 }
 
@@ -1695,9 +1779,11 @@ func (c *Client) cleanRepoCICapabilities(ids []string) ([]string, error) {
 	for _, id := range ids {
 		canonicalID := id
 		if _, ok := model.CIGrantRuleFor(id); ok {
-			// The release server's methods, in either spelling: granted
-			// by this list, recorded as the method (schema 101).
-			canonicalID = model.CanonicalLegacyGrant(strings.TrimSpace(id))
+			// Methods declaring a CI grant rule (the release server's,
+			// schema 101, and github#sandbox-repo, 124) in any spelling --
+			// retired name, bare or case-varied reference: granted by this
+			// list, recorded as <ref>={}.
+			canonicalID = model.CanonicalCIGrant(id)
 		} else if target, ok := model.RepoReadTarget(id); ok {
 			canonicalID = model.RepoReadCapability(target)
 		} else if target, ok := model.RepoWriteTarget(id); ok {
@@ -1714,6 +1800,9 @@ func (c *Client) cleanRepoCICapabilities(ids []string) ([]string, error) {
 			}
 			if _, ok := c.capabilityByID(normalized); !ok {
 				return nil, validationErrorf("ciCapabilities: %s", capabilityRefusal(normalized))
+			}
+			if model.CapabilityGrantRef(normalized) == model.RepoCredentialRef {
+				return nil, validationErrorf("ciCapabilities: capability %q is not supported for CI", id)
 			}
 			canonicalID = normalized
 		} else if !slices.Contains(allowed, id) {

@@ -19,9 +19,11 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/registry/api"
 	"gopkg.in/yaml.v3"
 )
 
@@ -45,6 +47,9 @@ const (
 	DefaultInstanceQuotaUnits         = 2
 	DefaultConnectedQuota             = 20
 	DefaultGroupsCacheTTL             = 5 * time.Minute
+	DefaultComputeDrainTimeout        = 5 * time.Minute
+	DefaultComputeHealthTimeout       = 5 * time.Minute
+	DefaultComputeStatusPollInterval  = 15 * time.Second
 )
 
 var (
@@ -104,12 +109,26 @@ type SigningConfig struct {
 	JWTTTL     time.Duration `yaml:"jwt_ttl"`
 }
 
-// CatalogConfig configures entry heartbeat and status thresholds.
+// ScopeOwnerRule restricts which entry owners or co-owning groups may hold an
+// active primary scope on a repository (`<owner>/<repo>`) or org/host prefix
+// (`<prefix>/*`, such as `alpha/*` or `github.com/alpha/*`).
+//
+// When `catalog.scope_owners` is empty or no rule matches a repository, any
+// admitted entry manager may claim non-overlapping primary scopes on that
+// repository (first-registered wins across listed entries).
+type ScopeOwnerRule struct {
+	Repo       string   `yaml:"repo"`
+	Principals []string `yaml:"principals"`
+}
+
+// CatalogConfig configures entry heartbeat, status thresholds, and optional
+// primary-scope repository ownership rules.
 type CatalogConfig struct {
-	HeartbeatInterval time.Duration `yaml:"heartbeat_interval"`
-	DegradedAfter     time.Duration `yaml:"degraded_after"`
-	OfflineAfter      time.Duration `yaml:"offline_after"`
-	CacheTTL          time.Duration `yaml:"cache_ttl"`
+	HeartbeatInterval time.Duration    `yaml:"heartbeat_interval"`
+	DegradedAfter     time.Duration    `yaml:"degraded_after"`
+	OfflineAfter      time.Duration    `yaml:"offline_after"`
+	CacheTTL          time.Duration    `yaml:"cache_ttl"`
+	ScopeOwners       []ScopeOwnerRule `yaml:"scope_owners,omitempty"`
 }
 
 // TunnelConfig configures the outbound `grain connect` tunnel listener and replica routing.
@@ -119,6 +138,8 @@ type TunnelConfig struct {
 	SelfAddr             string        `yaml:"self_addr"`
 	ReplicaHeartbeat     time.Duration `yaml:"replica_heartbeat"`
 	ReplicaTTL           time.Duration `yaml:"replica_ttl"`
+	ReconnectGrace       time.Duration `yaml:"reconnect_grace"`
+	DrainTimeout         time.Duration `yaml:"drain_timeout"`
 	MaxConcurrentStreams int           `yaml:"max_concurrent_streams"`
 	MaxBufferedBytes     int           `yaml:"max_buffered_bytes"`
 }
@@ -130,19 +151,40 @@ type DatabaseConfig struct {
 
 // ComputeConfig configures hosted VM provisioning.
 type ComputeConfig struct {
-	Provider      string            `yaml:"provider"`
-	Project       string            `yaml:"project"`
-	Region        string            `yaml:"region"`
-	Zones         []string          `yaml:"zones"`
-	Network       string            `yaml:"network"`
-	Subnetwork    string            `yaml:"subnetwork"`
-	BootImage     string            `yaml:"boot_image"`
-	VMPrefix      string            `yaml:"vm_prefix"`
-	SAPrefix      string            `yaml:"sa_prefix"`
-	SSHBreakGlass *bool             `yaml:"ssh_break_glass"`
-	Labels        map[string]string `yaml:"labels"`
-	DefaultShape  string            `yaml:"default_shape"`
-	Shapes        []Shape           `yaml:"shapes"`
+	Provider          string   `yaml:"provider"`
+	Project           string   `yaml:"project"`
+	Region            string   `yaml:"region"`
+	Zones             []string `yaml:"zones"`
+	Network           string   `yaml:"network"`
+	Subnetwork        string   `yaml:"subnetwork"`
+	BootImage         string   `yaml:"boot_image"`
+	StartupScript     string   `yaml:"startup_script,omitempty"`
+	StartupScriptFile string   `yaml:"startup_script_file,omitempty"`
+	VMPrefix          string   `yaml:"vm_prefix"`
+	SAPrefix          string   `yaml:"sa_prefix"`
+	RegistryID        string   `yaml:"registry_id,omitempty"`
+	SSHBreakGlass     *bool    `yaml:"ssh_break_glass"`
+	BindProjectIAM    *bool    `yaml:"bind_project_iam,omitempty"`
+	// GrantSelfActAs has the gce provider grant the registry's own principal
+	// roles/iam.serviceAccountUser on each per-instance service account it
+	// creates, so it can attach that account to the instance's VM. Defaults
+	// to true; set false when actAs on the instance accounts is granted out
+	// of band.
+	GrantSelfActAs *bool `yaml:"grant_self_act_as,omitempty"`
+	// SelfPrincipal overrides the IAM principal GrantSelfActAs grants
+	// ("serviceAccount:<email>", "principal://...", "user:<email>"). Empty
+	// means detect it from the registry's Application Default Credentials.
+	SelfPrincipal         string            `yaml:"self_principal,omitempty"`
+	Labels                map[string]string `yaml:"labels"`
+	DefaultShape          string            `yaml:"default_shape"`
+	Shapes                []Shape           `yaml:"shapes"`
+	DrainTimeout          time.Duration     `yaml:"drain_timeout,omitempty"`
+	HealthTimeout         time.Duration     `yaml:"health_timeout,omitempty"`
+	StatusPollInterval    time.Duration     `yaml:"status_poll_interval,omitempty"`
+	AutoUpgrade           string            `yaml:"auto_upgrade,omitempty"`
+	TargetVersion         string            `yaml:"target_version,omitempty"`
+	MaintenanceWindow     string            `yaml:"maintenance_window,omitempty"`
+	MaxConcurrentUpgrades int               `yaml:"max_concurrent_upgrades,omitempty"`
 }
 
 // SQLInstanceConfig describes a shared Cloud SQL instance in the registry's pool.
@@ -155,12 +197,15 @@ type SQLInstanceConfig struct {
 
 // InstanceSQLConfig configures the pool of Cloud SQL instances for hosted VMs.
 type InstanceSQLConfig struct {
-	SQLInstances []SQLInstanceConfig `yaml:"sql_instances"`
+	SQLInstances     []SQLInstanceConfig `yaml:"sql_instances"`
+	AdminDSNTemplate string              `yaml:"admin_dsn_template,omitempty"`
+	CloudSQLAdmin    *bool               `yaml:"cloud_sql_admin,omitempty"`
 }
 
-// InstanceStateConfig configures retention for deleted instance databases.
+// InstanceStateConfig configures retention and GCS storage for hosted VMs.
 type InstanceStateConfig struct {
 	DBRetentionPeriod time.Duration `yaml:"db_retention_period"`
+	GCSBucket         string        `yaml:"gcs_bucket,omitempty"`
 }
 
 // SecretsConfig configures Secret Manager prefix isolation for hosted VMs.
@@ -176,11 +221,15 @@ type ObservabilityConfig struct {
 
 // ConfigReposConfig configures optional per-instance Git config repositories.
 type ConfigReposConfig struct {
-	Provider     string `yaml:"provider"`
-	GitHubOrg    string `yaml:"github_org"`
-	RepoPrefix   string `yaml:"repo_prefix"`
-	AppID        int64  `yaml:"app_id"`
-	Installation int64  `yaml:"installation_id"`
+	Provider       string `yaml:"provider"`
+	GitHubOrg      string `yaml:"github_org"`
+	RepoPrefix     string `yaml:"repo_prefix"`
+	AppID          int64  `yaml:"app_id"`
+	Installation   int64  `yaml:"installation_id"`
+	PrivateKeyFile string `yaml:"private_key_file,omitempty"`
+	PrivateKeyPEM  string `yaml:"private_key_pem,omitempty"`
+	KeySecret      string `yaml:"key_secret,omitempty"`
+	APIBaseURL     string `yaml:"api_base_url,omitempty"`
 }
 
 // QuotaOverride specifies custom quota limits for a specific user or group.
@@ -202,7 +251,7 @@ type QuotasConfig struct {
 func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("reading registry config %s: %w", path, err)
+		return nil, fmt.Errorf("reading hub config %s: %w", path, err)
 	}
 	return ParseConfig(data)
 }
@@ -275,6 +324,12 @@ func (c *Config) ApplyDefaults() {
 	if c.Tunnel.ReplicaTTL == 0 {
 		c.Tunnel.ReplicaTTL = DefaultTunnelReplicaTTL
 	}
+	if c.Tunnel.ReconnectGrace == 0 {
+		c.Tunnel.ReconnectGrace = 2 * time.Second
+	}
+	if c.Tunnel.DrainTimeout == 0 {
+		c.Tunnel.DrainTimeout = 30 * time.Second
+	}
 	if c.Tunnel.MaxConcurrentStreams == 0 {
 		c.Tunnel.MaxConcurrentStreams = DefaultTunnelMaxConcurrentStreams
 	}
@@ -294,6 +349,33 @@ func (c *Config) ApplyDefaults() {
 		v := true
 		c.Compute.SSHBreakGlass = &v
 	}
+	if c.Compute.BindProjectIAM == nil {
+		v := true
+		c.Compute.BindProjectIAM = &v
+	}
+	if c.Compute.GrantSelfActAs == nil {
+		v := true
+		c.Compute.GrantSelfActAs = &v
+	}
+	if c.InstanceSQL.CloudSQLAdmin == nil {
+		v := true
+		c.InstanceSQL.CloudSQLAdmin = &v
+	}
+	if c.Compute.DrainTimeout == 0 {
+		c.Compute.DrainTimeout = DefaultComputeDrainTimeout
+	}
+	if c.Compute.HealthTimeout == 0 {
+		c.Compute.HealthTimeout = DefaultComputeHealthTimeout
+	}
+	if c.Compute.StatusPollInterval == 0 {
+		c.Compute.StatusPollInterval = DefaultComputeStatusPollInterval
+	}
+	if strings.TrimSpace(c.Compute.AutoUpgrade) == "" {
+		c.Compute.AutoUpgrade = string(api.AutoUpgradeOff)
+	}
+	if c.Compute.MaxConcurrentUpgrades == 0 {
+		c.Compute.MaxConcurrentUpgrades = 1
+	}
 	if c.InstanceState.DBRetentionPeriod == 0 {
 		c.InstanceState.DBRetentionPeriod = DefaultDBRetentionPeriod
 	}
@@ -302,6 +384,9 @@ func (c *Config) ApplyDefaults() {
 	}
 	if strings.TrimSpace(c.ConfigRepos.Provider) == "" {
 		c.ConfigRepos.Provider = "none"
+	}
+	if strings.TrimSpace(c.ConfigRepos.RepoPrefix) == "" {
+		c.ConfigRepos.RepoPrefix = "grain-cfg-"
 	}
 	if c.Quotas.DefaultInstanceUnits == 0 {
 		c.Quotas.DefaultInstanceUnits = DefaultInstanceQuotaUnits
@@ -419,6 +504,26 @@ func (c *Config) ValidateWithResolver(resolver any) error {
 	if c.Catalog.CacheTTL < 0 {
 		return errors.New("config: catalog.cache_ttl must not be negative")
 	}
+	seenScopeOwnerRepos := make(map[string]bool, len(c.Catalog.ScopeOwners))
+	for i, rule := range c.Catalog.ScopeOwners {
+		pattern, err := normalizeScopeOwnerRepoPattern(rule.Repo)
+		if err != nil {
+			return fmt.Errorf("config: catalog.scope_owners[%d].repo: %w", i, err)
+		}
+		if seenScopeOwnerRepos[pattern] {
+			return fmt.Errorf("config: duplicate catalog.scope_owners repo pattern %q", pattern)
+		}
+		seenScopeOwnerRepos[pattern] = true
+		if len(rule.Principals) == 0 {
+			return fmt.Errorf("config: catalog.scope_owners[%d].principals (%s) must be non-empty", i, pattern)
+		}
+		normPrincipals, err := normalizeUserOrGroupList(resolver, fmt.Sprintf("catalog.scope_owners[%d].principals", i), rule.Principals)
+		if err != nil {
+			return err
+		}
+		c.Catalog.ScopeOwners[i].Repo = pattern
+		c.Catalog.ScopeOwners[i].Principals = normPrincipals
+	}
 
 	// Tunnel validation
 	if c.Tunnel.ReplicaHeartbeat <= 0 {
@@ -446,6 +551,19 @@ func (c *Config) ValidateWithResolver(resolver any) error {
 	}
 	if !prefixRe.MatchString(c.Compute.SAPrefix) {
 		return fmt.Errorf("config: compute.sa_prefix %q must match %s", c.Compute.SAPrefix, prefixRe.String())
+	}
+	policy := api.AutoUpgradePolicy(strings.ToLower(strings.TrimSpace(c.Compute.AutoUpgrade)))
+	if !policy.Valid() {
+		return fmt.Errorf("config: compute.auto_upgrade %q must be one of off, notify, or minor", c.Compute.AutoUpgrade)
+	}
+	c.Compute.AutoUpgrade = string(policy)
+	if c.Compute.MaxConcurrentUpgrades <= 0 {
+		return errors.New("config: compute.max_concurrent_upgrades must be > 0")
+	}
+	if strings.TrimSpace(c.Compute.MaintenanceWindow) != "" {
+		if _, _, err := ParseMaintenanceWindow(c.Compute.MaintenanceWindow); err != nil {
+			return fmt.Errorf("config: compute.maintenance_window: %w", err)
+		}
 	}
 	if c.Compute.Provider != "none" {
 		if strings.TrimSpace(c.Compute.Project) == "" {
@@ -589,4 +707,142 @@ func isValidEmail(email string) bool {
 	}
 	domain := email[at+1:]
 	return !strings.Contains(domain, "@") && strings.Contains(domain, ".")
+}
+
+func normalizeScopeOwnerRepoPattern(raw string) (string, error) {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	if s == "" {
+		return "", errors.New("repo pattern is required")
+	}
+	if strings.HasSuffix(s, "/*") {
+		prefix := strings.TrimSuffix(s, "/*")
+		if prefix == "" || strings.ContainsAny(prefix, " \t\r\n*?#\\") {
+			return "", fmt.Errorf("invalid repo wildcard pattern %q (expected <owner>/* or <host>/<owner>/*)", raw)
+		}
+		for _, seg := range strings.Split(prefix, "/") {
+			if seg == "" || seg == "." || seg == ".." {
+				return "", fmt.Errorf("invalid repo wildcard pattern %q: invalid segment %q", raw, seg)
+			}
+		}
+		return prefix + "/*", nil
+	}
+	if strings.Contains(s, "*") {
+		return "", fmt.Errorf("invalid repo pattern %q (wildcards are only supported as trailing \"/*\")", raw)
+	}
+	return api.NormalizeRepo(s)
+}
+
+// MatchScopeOwnerRule returns the most-specific ScopeOwnerRule matching repo:
+// an exact `<owner>/<repo>` rule wins over `<prefix>/*` rules, and longer
+// `<prefix>/*` rules win over shorter ones.
+//
+// Repository identifiers are free-form, so the same repository can be claimed
+// as `acme/billing` or host-qualified as `github.com/acme/billing`, and
+// /api/route matches whichever form a caller queries. A rule written in the
+// bare `<owner>/...` form therefore also governs host-qualified claims of the
+// same path (`<host>/<owner>/...`, where the first segment contains a dot);
+// otherwise `acme/*` could be sidestepped by claiming `github.com/acme/billing`.
+// Rules naming the host-qualified form are consulted first, so an operator can
+// still give one host's copy of a repository its own principals.
+func MatchScopeOwnerRule(rules []ScopeOwnerRule, repo string) (*ScopeOwnerRule, bool) {
+	if len(rules) == 0 {
+		return nil, false
+	}
+	normRepo, err := api.NormalizeRepo(repo)
+	if err != nil {
+		normRepo = strings.ToLower(strings.TrimSpace(repo))
+	}
+	forms := []string{normRepo}
+	if host, rest, ok := strings.Cut(normRepo, "/"); ok && strings.Contains(host, ".") && strings.Contains(rest, "/") {
+		forms = append(forms, rest)
+	}
+	for _, form := range forms {
+		for i := range rules {
+			if rules[i].Repo == form {
+				return &rules[i], true
+			}
+		}
+	}
+	for _, form := range forms {
+		var bestPrefix *ScopeOwnerRule
+		bestPrefixLen := -1
+		for i := range rules {
+			pat := rules[i].Repo
+			if !strings.HasSuffix(pat, "/*") {
+				continue
+			}
+			prefix := strings.TrimSuffix(pat, "/*")
+			if strings.HasPrefix(form, prefix+"/") && len(prefix) > bestPrefixLen {
+				bestPrefix = &rules[i]
+				bestPrefixLen = len(prefix)
+			}
+		}
+		if bestPrefix != nil {
+			return bestPrefix, true
+		}
+	}
+	return nil, false
+}
+
+// ParseMaintenanceWindow parses a UTC maintenance window in "HH:MM-HH:MM" format
+// into start and end minutes since 00:00 UTC. End may be <= start for windows
+// wrapping across midnight (or equal to 24:00 as 1440).
+func ParseMaintenanceWindow(spec string) (startMinute, endMinute int, err error) {
+	spec = strings.TrimSpace(spec)
+	parts := strings.Split(spec, "-")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("invalid maintenance window %q: expected HH:MM-HH:MM", spec)
+	}
+	startMinute, err = parseClockHHMM(parts[0], false)
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid maintenance window start %q: %w", parts[0], err)
+	}
+	endMinute, err = parseClockHHMM(parts[1], true)
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid maintenance window end %q: %w", parts[1], err)
+	}
+	return startMinute, endMinute, nil
+}
+
+func parseClockHHMM(s string, allow2400 bool) (int, error) {
+	s = strings.TrimSpace(s)
+	if allow2400 && s == "24:00" {
+		return 24 * 60, nil
+	}
+	hm := strings.Split(s, ":")
+	if len(hm) != 2 || len(hm[0]) != 2 || len(hm[1]) != 2 {
+		return 0, fmt.Errorf("expected HH:MM")
+	}
+	h, err := strconv.Atoi(hm[0])
+	if err != nil || h < 0 || h > 23 {
+		return 0, fmt.Errorf("hour out of range 00..23")
+	}
+	m, err := strconv.Atoi(hm[1])
+	if err != nil || m < 0 || m > 59 {
+		return 0, fmt.Errorf("minute out of range 00..59")
+	}
+	return h*60 + m, nil
+}
+
+// InMaintenanceWindow reports whether UTC timestamp t falls inside the
+// "HH:MM-HH:MM" window spec. An empty spec matches all times.
+func InMaintenanceWindow(spec string, t time.Time) bool {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return true
+	}
+	startMin, endMin, err := ParseMaintenanceWindow(spec)
+	if err != nil {
+		return false
+	}
+	if startMin == endMin {
+		return true
+	}
+	u := t.UTC()
+	cur := u.Hour()*60 + u.Minute()
+	if startMin < endMin {
+		return cur >= startMin && cur < endMin
+	}
+	// Overnight window wrapping past 00:00 UTC (for example "22:00-04:00").
+	return cur >= startMin || cur < endMin
 }

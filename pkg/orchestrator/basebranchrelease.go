@@ -1058,6 +1058,11 @@ func recordGitHubBaseBranchRelease(ctx context.Context, deps Deps, run Concluded
 	if !isGitHubBaseBranch(deps, run.Repo, branch) {
 		return nil
 	}
+	if isOnDemandGitHubReleaseRun(deps, run, branch) {
+		log.Printf("orchestrator: GitHub release run %d on %s is an on-demand build of one commit, not a release of %s: not recording it",
+			run.RunID, run.Repo, branch)
+		return nil
+	}
 
 	existing, err := deps.Store.GetBaseBranchRelease(ctx, run.Repo, branch)
 	if err != nil {
@@ -1080,14 +1085,39 @@ func recordGitHubBaseBranchRelease(ctx context.Context, deps Deps, run Concluded
 	if run.CompletedAt != nil && !run.CompletedAt.IsZero() {
 		finished = *run.CompletedAt
 	}
+	runIDStr := strconv.FormatInt(run.RunID, 10)
+	attempt := max(1, run.Attempt)
+	if existing != nil && existing.Conclusion != "" {
+		if existing.RunID == runIDStr && attempt <= existing.AttemptsMade() {
+			return nil
+		}
+		// Ignore a late-arriving older run when the row already carries a
+		// later verdict, so an older cancellation or failure cannot re-open a
+		// streak that a newer success closed (a superseded row is a queued run
+		// replaced before running, not a verdict).
+		if !existing.Superseded() && !existing.StartedAt.IsZero() && started.Before(existing.StartedAt) {
+			return nil
+		}
+	}
 
 	row.Commit = run.HeadSHA
-	row.RunID = strconv.FormatInt(run.RunID, 10)
-	row.Attempts = max(1, run.Attempt)
+	row.RunID = runIDStr
+	row.Attempts = attempt
 	row.StartedAt = started
 	row.FinishedAt = &finished
 	row.Conclusion = string(conclusion)
 	row.Detail = gitHubWorkflowRunDetail(run, jobs)
+	if conclusion == ci.ConclusionCancelled {
+		// Superseded by a newer merge's release: normal, not a failure
+		// (releasesuperseded.go).
+		if by, ok := supersedingGitHubReleaseRun(ctx, deps, run, branch); ok {
+			return recordSupersededGitHubRelease(ctx, deps, existing, row, run, by)
+		}
+	}
+	if existing != nil && existing.Superseded() && !existing.StartedAt.IsZero() &&
+		started.Before(existing.StartedAt) && finished.Before(existing.StartedAt) {
+		return nil
+	}
 	if conclusion == ci.ConclusionFailure {
 		if retried, err := retryInfraGitHubBaseBranchRelease(ctx, deps, &row, run, jobs); err != nil || retried {
 			return err

@@ -1,0 +1,63 @@
+# gcp token mode in a real container sandbox (2026-11-08)
+
+Task 3414 walked the same item in parallel ([2026-11-08-gcp-token-mode.md](2026-11-08-gcp-token-mode.md), #897) and found F1's note bug too. Its fix of `CapabilityEscalationNote` is the one on `main`. This branch kept the other half of F1, `AutoApprovalRefusal`, which #897 did not change.
+
+Task 3411 walks the one item of [`docs/test-plans/2026-11-04.md`](../test-plans/2026-11-04.md) §8 ("What is NOT proved") that task 3074 could only re-run as unit tests: **item 3, gcp token mode** ([2026-11-04-capabilities.md](2026-11-04-capabilities.md), "Item 3" and the first follow-up). It is walked here on a real `grain daemon` with container sandboxes, against a gcp capability server backed by `gcpfake`.
+
+Build: `main` at `46ab9012`, plus this branch's fix for F1 (the daemon was restarted on the fixed build for the last run).
+
+## Setup
+
+- **The daemon and its stubs come from 2026-11-04.** It is a real `grain daemon` with `-container-sandboxes -container-sandbox-image grain-sbx:walk` ([`Dockerfile.walk-sandbox`](2026-11-04-capabilities/Dockerfile.walk-sandbox), `cmd/grain-sandbox` as `/usr/local/bin/grain`), `-container-git-proxy-host 10.240.0.1` and `-github-host 127.0.0.1:4250 -github-insecure-http`. GitHub is [`simhost.go`](2026-11-04-capabilities/simhost.go) over a one-commit `acme/widgets`, and the connections `ag-a`/`ag-b` come from [`setup-daemon.sh`](2026-11-04-capabilities/setup-daemon.sh).
+  - `nftables` was installed so that container sandboxes are fenced (`container sandboxes are fenced off from this host … by a per-container nftables chain`). An unfenced container refuses every external grant.
+- **The gcp server is [`gcpwalk.go`](2026-11-08-gcp-token-mode-containers/gcpwalk.go).** It runs grain's own `intree.NewConfigurableGCP(intree.GCPConfig{Connector: gcpfake.New(), Listen: "127.0.0.1:4252", …})`, served over Streamable HTTP with a bearer token, the way `pkg/demo/demo_capability_server.go` serves the demo's.
+  - `gcpfake` holds the existing account `deployer@walk-proj.iam.gserviceaccount.com`, bound to `roles/run.admin`.
+  - **The clock can be advanced.** A real run's grant deadline is at least 1 h 45 m away (`orchestrator.capabilityDeadline`: dispatch + 1 h setup allowance + max runtime + 45 m wait credit), and a set's `max_lease` bounds that deadline instead of shortening it (O1). So the server and `gcpfake` read a walk clock that a control port (`POST /advance?by=…`) moves forward. That stands in for "a short deadline".
+- **The server is registered under grain's canonical id.** [`setup-gcp.sh`](2026-11-08-gcp-token-mode-containers/setup-gcp.sh) sends `PUT /api/capability-servers` with `https://grain.dev/capabilities/gcp`, `serverUrl`, the `Authorization` header, `builtin: gcp` and one set:
+
+  ```json
+  {"name": "org-deploy", "service_account": "deployer@walk-proj.iam.gserviceaccount.com",
+   "roles": ["roles/run.admin"], "credential": "token"}
+  ```
+
+  The server attached with `gcp-key`, and the set is reserved to a person (`x-grain-person-granted: ["org-deploy"]`, [`gcp-server-status.json`](2026-11-08-gcp-token-mode-containers/gcp-server-status.json)). The token data plane came up on `127.0.0.1:4252`.
+- **The task.** The operator (the daemon's local API token) filed `acme/widgets` tasks on `ag-a` with `gcp#gcp-key={"permission_set":"org-deploy"}`. The API normalizes the grant to `{"permission_set":"org-deploy","primary":true}`. Filed by the operator, the task is still `proposed/unapproved`, so the operator approved it (`POST /api/tasks/{id}/approve`).
+- **The probe.** As in 2026-11-04, the agent CLI is [`fake-agy.sh`](2026-11-08-gcp-token-mode-containers/fake-agy.sh) and runs on the host. Its probe [`step-gcp-token.sh`](2026-11-08-gcp-token-mode-containers/step-gcp-token.sh) looks into the run's container with `docker exec` and makes STS exchanges from inside it with [`exchange.sh`](2026-11-08-gcp-token-mode-containers/exchange.sh). It calls `propose_task` through the run's own grain MCP server with [`mcp-propose.py`](2026-11-08-gcp-token-mode-containers/mcp-propose.py), which is 2026-11-04's `mcp-call.py` with a different call.
+  - This copy of fake-agy also prints agy `tool` steps for the probe's MCP calls into the run's stream (O3).
+
+## Outcome
+
+| Step | Result |
+|---|---|
+| Grant placement | **Pass.** `~/.gcp-service-account.json` (0600) is an `external_account` config: audience `//grain.dev/capabilities/gcp/permission-sets/org-deploy`, `token_url` `http://127.0.0.1:4252/runs/grain-5-1-0/token`, and `credential_source.file` pointing at a 64-character subject token under `~/.gcp-token/grain-5-1-0/` (0600). There is also an ID-token helper (0700), `activate.sh` (it exits 0, since the image has no gcloud) and `.about`, which says "short-lived access tokens by impersonation (no key exists)". Nothing under `~` contains `private_key` or `client_email`. |
+| Exchange at the forwarded listener | **Pass.** From inside the container, the config's `token_url` (the run's forward of the server's 4252) gave HTTP 200, `access_token tok-6-deployer@…`, `expires_in 3599`. A wrong subject token got 401 `invalid_grant` "this grant's token is unknown or released". The ID-token helper printed a token for `https://walk.example`. |
+| Refresh to the deadline | **Pass.** Grant deadline `06:07:59Z`. With the walk clock advanced to +30 m, +1 h 30 m and +2 h 30 m, every refresh got a fresh token for 3599 s (gcpfake was asked for 1 h each time). At +3 h 30 m (`05:53Z`) the token was cut to the deadline (`expires_in 893`, a 14 m 54 s lifetime). At +4 h 30 m, past the deadline, both the exchange and the ID token were refused: 401 `permission set org-deploy: the grant's deadline 2026-11-08T06:07:59Z has passed`, logged as an audit failure. With the clock wound back, the exchange worked again, so the refusal came from the deadline and not from the token. |
+| Revoke at release | **Pass.** Run 5 ended with the clock back at real time, before the deadline. From the host, run 5's subject token at `…/runs/grain-5-1-0/token` then got 401 `this grant's token is unknown or released`. |
+| `propose_task` with the person-granted set | **Pass (it is held), after one fix (F1).** Every proposal carrying `org-deploy` was filed `proposed/unapproved`. That held for both spellings, the bare one and the parent's exact normalized grant. It also held from a parent with `autoApproveProposals: true` whose control proposal (no capabilities) was auto-approved and ran in the same batch. The note on each held proposal said the parent "does not hold itself" the set it was running with (F1, fixed). |
+
+Logs: [`run-5-probe.log`](2026-11-08-gcp-token-mode-containers/run-5-probe.log) (run 5, the steps above, plus the host's after-release exchange), [`gcpwalk.log`](2026-11-08-gcp-token-mode-containers/gcpwalk.log) (the server's audit lines for every run), [`proposals.txt`](2026-11-08-gcp-token-mode-containers/proposals.txt) (every proposal and its note) and [`parents.txt`](2026-11-08-gcp-token-mode-containers/parents.txt).
+
+## Findings
+
+| # | Finding | Status |
+|---|---|---|
+| F1 | **A held person-granted proposal said its proposer did not hold the grant.** `model.CapabilityEscalationNote` explained every escalated capability as one "which task N, which proposed it, does not hold itself". A person-granted grant is escalated *whether or not* the proposer holds it (`protocol.Covers` never covers `GrantByPerson`), so for the gcp set the note was false. Task 9's note named `{"permission_set":"org-deploy","primary":true}`, byte for byte the grant its parent task 7 ran with. The person deciding was told the work asks for authority its proposer never had, when the real reason is that only a person may hand that set on. The live API path's refusal (`model.AutoApprovalRefusal`, "which your task does not hold") had the same flaw. So did dangerous scopes and `priority-dispatch`, all of which `IsPersonOnlyGrant` covers: [2026-10-26](2026-10-26-task-pause-suspensions-priority-dispatch.md) row (c) records the same false sentence for a task that held `priority-dispatch`. That row comes from the run-now refusal in `pkg/ui`, which this change does not touch. | **Fixed.** The note is fixed on `main` by #897 (task 3414's walk), in its own words. This branch fixes `AutoApprovalRefusal` (`pkg/model/hold_for_approval.go`). Before the merge with `main`, both functions here put grants that `IsPersonOnlyGrant` reports (which includes capability references their server reserves to a person) in a sentence of their own: "… which only a person may grant: no task passes it on to work it proposes, task N, which proposed it, included, whether or not it holds it itself". Everything else keeps the old wording. Regression: `TestPersonGrantedEscalationIsNotSaidToBeUnheld` fails without the fix, on both the note and the refusal. Live after the fix: tasks 19 and 20 in [`proposals.txt`](2026-11-08-gcp-token-mode-containers/proposals.txt). |
+| O1 | **`max_lease` bounds the whole grant, not each token.** A token-mode set with `max_lease: 20m` refuses every run: `admission refused by capability pass -- … deadline 2026-11-08T06:00:15Z is past permission set org-deploy's max_lease of 20m0s` ([`max-lease-refusal.txt`](2026-11-08-gcp-token-mode-containers/max-lease-refusal.txt)). This is `Manager.Mint`'s rule for key mode applied to token mode, so a set's `max_lease` must be at least about 1 h 45 m + max runtime for any run to get it. Each token is capped separately at 1 h (`MaxTokenLifetime`). The refused task was parked as `awaiting_reply/question` (task 2). | Noted. Consistent with the schema's "Longest a key may live", but the form gives no hint that token mode reads it the same way. |
+| O2 | **A parent filed with an explicit `base` never self-approves its proposals.** A `propose_task` without `base` is filed with `base` empty. `model.LandsWhereGranted` compares that to the parent's write target `main` and finds no match, so `AutoSubmits` is false even with `autoApproveProposals`. Task 7 (`base: "main"`) had its control proposal (task 10, no capabilities) left unapproved with no note saying why. Task 11, filed the same way without `base`, had its control (task 14) auto-approved. | Filed as a follow-up. It is outside this item; the walk used a base-less parent for the auto-approve check. |
+| O3 | **Harness: a probe's own MCP calls never reach the run's result unless the stream reports them.** `antigravity.parseTranscriptWithRecorded` attaches the MCP server's recorded calls only to `tool` steps in agy's stream-json. 2026-11-04's fake-agy emits none, so run 4's `propose_task` was "Recorded" by the MCP server and then never filed. That is right for a real agy, which reports each call it makes. The fix belongs in the walk's fake-agy: this copy prints the probe's calls as `tool` steps, and run 5 onwards filed them. | Harness only. |
+| O4 | `grain mcpserver` prints `-grant "https://grain.dev/capabilities/gcp#gcp-key=…" names no capability this binary serves tools for (known: …); this run gets no tools from it` for every external capability reference (`warnUnknownGrants` knows only in-process grants). The sentence is true, but it reads like a misconfiguration on every run that holds an operator's server grant, and the grant's material is placed by the daemon, not by this process. | Noted. |
+| O5 | The image's `python3-minimal` has no `json` module, so the probe reads the placed config with `sed`. There is no google-auth client in the image either, so the exchange is the STS form a client would post (`grant_type` token-exchange, `audience`, `subject_token_type` from the config), made with curl. | Noted. |
+
+## Runs
+
+| Task | Parent setup | What happened |
+|---|---|---|
+| 2 | `max_lease: 20m` | Refused at admission (O1) |
+| 3 | | Probe did not parse (`in` is a shell keyword). Mint, placement and setup succeeded |
+| 4 | | Placement and ID token passed, then `python3-minimal` had no `json` module (O5). `propose_task` was recorded but not filed (O3) |
+| 5 | `base: main` | **The walk above.** Proposal → task 6, held, with the false note |
+| 7 | `base: main`, `autoApproveProposals` | Proposals 8 (bare), 9 (as held) and 10 (control) were all held. 10 was held because of O2 |
+| 11 | no base, `autoApproveProposals` | 12 and 13 held, both with the false note. Control 14 was auto-approved and ran, and filed 15–17 (the probe ran in it too), which the auto-submit depth limit held |
+| 18 | as 11, on the fixed build | 19 and 20 held, with the corrected note (F1). Control 21 auto-approved |
+
+Not walked: `gcloud auth login --cred-file` (the image has no gcloud), and a real google-auth client reading the config (O5).

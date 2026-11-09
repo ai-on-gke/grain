@@ -93,6 +93,61 @@ const (
 	RepoReadRef    = RepoCapabilityServerID + "#" + RepoReadMethod
 )
 
+// The repo server's #credential method: per-task git credential override
+// selecting secrets/github/<name> (formerly github-credential:<name>).
+const (
+	RepoCredentialMethod     = "credential"
+	RepoCredentialRef        = RepoCapabilityServerID + "#" + RepoCredentialMethod
+	GitCredentialNamePattern = "^[A-Za-z0-9_-]+$"
+)
+
+// ValidGitCredentialName reports whether name is a valid named git credential
+// stem under secrets/github (matching gitproxy.ValidCredentialName and
+// githubtoken.ValidName): non-empty [A-Za-z0-9_-]+ and not "anonymous".
+func ValidGitCredentialName(name string) bool {
+	if name == "" || name == "anonymous" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// RepoCredentialGrant is the recorded grant selecting the named git credential:
+// https://grain.dev/capabilities/repo#credential={"credential":"<name>"}.
+func RepoCredentialGrant(name string) string {
+	data, err := json.Marshal(map[string]any{"credential": name})
+	if err != nil {
+		panic(fmt.Sprintf("model: encoding %s's credential: %v", RepoCredentialRef, err))
+	}
+	return RepoCredentialRef + "=" + string(data)
+}
+
+// ParseRepoCredentialGrant returns the credential name a repo#credential grant
+// selects, and false for any other capability string (including malformed
+// repo#credential arguments).
+func ParseRepoCredentialGrant(grant string) (string, bool) {
+	s := strings.TrimSpace(grant)
+	if !IsCapabilityRef(s) || CapabilityGrantRef(s) != RepoCredentialRef {
+		return "", false
+	}
+	spec, err := CapabilityGrantSpec(s)
+	if err != nil || spec.Capability != RepoCredentialRef || len(spec.With) != 1 {
+		return "", false
+	}
+	name, ok := spec.With["credential"].(string)
+	if !ok || !ValidGitCredentialName(name) {
+		return "", false
+	}
+	return name, true
+}
+
 // RepoReadCapabilityPrefix and RepoWriteCapabilityPrefix are the retired
 // bare spellings of CI repository access, repo-read:<owner>/<repo> and
 // repo-write:<owner>/<repo>. They are read as RepoReadGrant and

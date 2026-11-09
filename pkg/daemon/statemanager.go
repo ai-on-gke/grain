@@ -222,6 +222,7 @@ func (m *StateManager) reconcileRepo(ctx context.Context) (staterepo.Settings, b
 	if settings == m.lastSettings {
 		return settings, false, nil
 	}
+	m.repo.SetSSHKeyFile(settings.SSHKeyFile)
 	if err := m.repo.ConfigureMirror(ctx, settings.Remote, settings.Branch, RepoToken(m.dataDir, settings.Remote, settings.TokenFile)); err != nil {
 		return settings, false, err
 	}
@@ -283,7 +284,7 @@ func (m *StateManager) cycle(ctx context.Context, all bool, note string) (bool, 
 		m.noteOutcome(err)
 		return false, err
 	}
-	if strings.TrimSpace(settings.Remote) != "" {
+	if settings.IsExternal() {
 		applied, applyErr := staterepo.SyncExternal(ctx, m.repo, m.db, changed || all)
 		m.lastErr = applyErr
 		m.syncSecrets(ctx)
@@ -690,6 +691,9 @@ func (m *StateManager) externalConfigRepo(lock bool) (remote, branch string) {
 	}
 	if m.dataDir != "" {
 		if settings, err := staterepo.LoadSettings(m.dataDir); err == nil {
+			if settings.IsMirror() {
+				return "", ""
+			}
 			remote = strings.TrimSpace(settings.Remote)
 			branch = strings.TrimSpace(settings.Branch)
 			if branch == "" && remote != "" {
@@ -872,13 +876,17 @@ func (m *StateManager) status(ctx context.Context) ui.StateRepoStatus {
 		Dir:                m.repo.Dir(),
 		BuildSchemaVersion: model.SchemaVersion,
 	}
-	if state, err := staterepo.LoadSettings(m.dataDir); err == nil && state != m.lastSettings {
-		out.Remote = state.Remote
-		if state.Branch != "" {
-			out.Branch = state.Branch
+	mirror := false
+	if state, err := staterepo.LoadSettings(m.dataDir); err == nil {
+		mirror = state.IsMirror()
+		if state != m.lastSettings {
+			out.Remote = state.Remote
+			if state.Branch != "" {
+				out.Branch = state.Branch
+			}
 		}
 	}
-	if strings.TrimSpace(out.Remote) != "" {
+	if strings.TrimSpace(out.Remote) != "" && !mirror {
 		out.Mode = "external"
 		if owner, name, ok := repoFromRemote(out.Remote); ok {
 			out.Repository = owner + "/" + name

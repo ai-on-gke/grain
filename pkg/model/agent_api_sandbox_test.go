@@ -26,6 +26,7 @@ func TestSandboxDeniedAPIScopes(t *testing.T) {
 		denied bool
 	}{
 		// Model-only, though not dangerous.
+		{"capabilities:detach", true},
 		{"dispatch:write", true},
 		{"repos:write", true},
 		{"sessions:write", true},
@@ -40,6 +41,7 @@ func TestSandboxDeniedAPIScopes(t *testing.T) {
 		{APIScopeInternal, true},
 		{"", true},
 		// Reachable from the sandbox.
+		{"capabilities:read", false},
 		{"deployment:read", false},
 		{"sandboxes:read", false},
 		{"dispatch:read", false},

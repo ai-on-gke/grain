@@ -56,7 +56,7 @@ func TestContributedMethodServer(t *testing.T) {
 			t.Errorf("status = %+v", s)
 		}
 	}
-	if want := []string{grainserver.ID, grainserver.RepoID, capabilitytest.MethodServer}; !slices.Equal(ids, want) {
+	if want := []string{grainserver.ID, grainserver.RepoID, grainserver.GitHubID, grainserver.APIID, capabilitytest.MethodServer}; !slices.Equal(ids, want) {
 		t.Errorf("Statuses() = %v, want %v", ids, want)
 	}
 

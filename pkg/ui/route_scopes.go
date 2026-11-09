@@ -69,7 +69,6 @@ var routeScopes = map[string]APIScope{
 	"GET /api/registry":                                                    "settings:read",
 	"POST /api/registry/heartbeat":                                         "settings:write",
 	"GET /api/registry/status":                                             "deployment:read",
-	"POST /api/capabilities/{id}/check":                                    "capabilities:read",
 	"GET /api/tasks":                                                       "tasks:read",
 	"GET /api/tasks/states":                                                "tasks:read",
 	"GET /api/tasks/wait":                                                  "tasks:read",
@@ -332,6 +331,8 @@ var routeScopes = map[string]APIScope{
 	"/staging/{name}/{path...}":                                            "internal",
 	"GET /api/metrics":                                                     "deployment:read",
 	"GET /api/unmatched-failures":                                          "deployment:read",
+	"GET /api/usage":                                                       "deployment:read",
+	"PUT /api/usage/settings":                                              "settings:write",
 	"GET /api/pause":                                                       "dispatch:read",
 	"DELETE /api/pause":                                                    "dispatch:write",
 	"GET /api/console":                                                     "sessions:read",
@@ -374,11 +375,24 @@ var routeScopes = map[string]APIScope{
 	"DELETE /api/external-agents/tokens/{id}":                              "capabilities:admin",
 	"POST /api/external-agents/tokens/revoke-all":                          "capabilities:admin",
 	"GET /api/hostd/connect":                                               "internal",
+	"POST /api/hostd/join":                                                 "internal",
+	"POST /api/hostd/join/{id}/poll":                                       "internal",
+	"POST /api/hostd/renew":                                                "internal",
 	"GET /api/hostd/install.sh":                                            "internal",
+	"GET /hostd/install":                                                   "internal",
+	"GET /cli/install.sh":                                                  "internal",
 	"GET /api/hostds":                                                      "capabilities:read",
 	"POST /api/hostds":                                                     "capabilities:admin",
+	"GET /api/hostds/enrollment-codes":                                     "internal",
+	"POST /api/hostds/enrollment-codes":                                    "internal",
+	"POST /api/hostds/enrollment-codes/{name}/rotate":                      "internal",
+	"POST /api/hostds/enrollment-codes/{name}/revoke":                      "internal",
+	"GET /api/hostds/pending":                                              "internal",
+	"POST /api/hostds/pending/{id}/accept":                                 "internal",
+	"POST /api/hostds/pending/{id}/reject":                                 "internal",
 	"PATCH /api/hostds/{name}":                                             "capabilities:admin",
 	"GET /api/hostds/{name}/install":                                       "capabilities:read",
+	"POST /api/hostds/{name}/rename":                                       "capabilities:admin",
 	"POST /api/hostds/{name}/rotate":                                       "capabilities:admin",
 	"POST /api/hostds/{name}/revoke":                                       "capabilities:admin",
 	"DELETE /api/hostds/{name}":                                            "capabilities:admin",
@@ -389,4 +403,33 @@ var routeScopes = map[string]APIScope{
 	"DELETE /api/access/principals/{entry}":                                "access:write",
 	"POST /api/mcp":                                                        "internal",
 	"POST /mcp":                                                            "internal",
+}
+
+// capabilitiesDetachRoutes are the capabilities:admin routes the narrower,
+// non-dangerous capabilities:detach scope also reaches -- but only for a
+// body that removes and never adds (capabilitiesDetachBodyAllowed), with a
+// reason, and never on a standing session's task
+// (director-capabilities.spec.md §3.1.2, gap G6):
+//
+//   - POST /api/tasks/{id}/capabilities with "attach": false and no
+//     "replace";
+//   - PUT /api/repos/{owner}/{name}/capabilities and
+//     PUT /api/repos/{owner}/{name}/ci-capabilities whose list is a subset
+//     of the one already stored (storedFieldGrants).
+//
+// The routes keep capabilities:admin in routeScopes: that is still the
+// scope that may attach, replace or widen through them.
+var capabilitiesDetachRoutes = map[string]bool{
+	"POST /api/tasks/{id}/capabilities":             true,
+	"PUT /api/repos/{owner}/{name}/capabilities":    true,
+	"PUT /api/repos/{owner}/{name}/ci-capabilities": true,
+}
+
+// capabilitiesDetachAllowsRoute reports whether set may reach pattern
+// through capabilities:detach alone: what lists the route as a tool for a
+// holder of capabilities:detach, and what the gate then holds to a
+// detach-only body. Which repository, and the body, are the gate's to
+// check once they are known (Server.capabilitiesDetachAllowed).
+func capabilitiesDetachAllowsRoute(set APIGrantSet, pattern string) bool {
+	return capabilitiesDetachRoutes[pattern] && set.Has("capabilities:detach")
 }

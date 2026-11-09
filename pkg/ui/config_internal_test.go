@@ -434,7 +434,7 @@ func TestInternalModeEditsSyncToStateRepoAndPersistAcrossReconcileCycles(t *test
 	srv := ui.NewServerWithClient(client)
 
 	// 1. Edit default_capabilities via PUT /api/config and PUT /api/settings.
-	capID := ui.OfferedCapabilities()[0].ID
+	capID := model.GitHubSandboxRepoGrant
 	rec := do(t, srv, http.MethodPut, "/api/config", `{"default_capabilities":["`+capID+`"]}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT /api/config default_capabilities: %d %s", rec.Code, rec.Body)

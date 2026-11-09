@@ -45,6 +45,19 @@ import StateDot from "./StateDot.jsx";
 import { identifierField } from "../identifierField.js";
 import { repoApiRoot } from "../repoApi.js";
 import { templateLabeler } from "../templateLabels.js";
+import { guardLeaving, leavingLosesEdits } from "../unsavedEdits.js";
+import { ConfigManagedNotice } from "./ConfigRepoLink.jsx";
+import { DISCARD_PROMPT } from "./Overlay.jsx";
+
+// QUALIFICATION_CONFIG_PATHS are the config repo files a repository's
+// qualification plan is kept in when settings are config-repo only: the
+// API refuses PutQualificationPlan then (checkSettingsWritable on
+// qualification_config and qualification_item), so the editor is drawn
+// read-only under a notice linking them.
+const QUALIFICATION_CONFIG_PATHS = [
+  "tables/qualification_config.json",
+  "tables/qualification_item.json",
+];
 
 // POLL_INTERVAL_MS mirrors App.jsx's own poll: a candidate can move
 // through "cutting"/"promoting", a release through
@@ -400,16 +413,33 @@ export default function RepoReleases({
     }
   };
 
+  // savePlan answers whether the plan was saved, so the editor knows
+  // to take what it sent as its new baseline -- and to keep the reader's
+  // edits on screen when the server refused them.
   const savePlan = async (payload) => {
     try {
       await api(`${root}/qualification-plan`, {
         method: "PUT",
         body: JSON.stringify(payload),
       });
-      await refresh();
     } catch (err) {
       showError(err);
+      return false;
     }
+    await refresh();
+    return true;
+  };
+
+  // leave is the pane's own ways out -- "← repo" and a gate's "Open
+  // repository settings" -- asking first when the qualification plan
+  // holds an edit nobody has saved. App's rail, Back and its other page
+  // openers (openRepoPage, which "Go to CI Mode" goes through) already
+  // ask through the same leavingLosesEdits; onBack did not, and dropped
+  // a half-edited plan without a word
+  // (docs/test-runs/2026-11-07-repository-release-memory-ui.md).
+  const leave = () => {
+    if (leavingLosesEdits() && !window.confirm(DISCARD_PROMPT)) return;
+    onBack?.();
   };
 
   const approveQualification = async (candidateId) => {
@@ -433,7 +463,7 @@ export default function RepoReleases({
         now that the repo list's rows carry no buttons of their own
         (grain/task-111) -- so it names that repo rather than the
         list two steps up. */}
-      <Button onClick={onBack} sx={{ mb: 1, ml: -0.9 }}>
+      <Button onClick={leave} sx={{ mb: 1, ml: -0.9 }}>
         &larr; {repo}
       </Button>
       {/* Headed by the ring the repo's own page is (RepoPage.jsx,
@@ -505,6 +535,14 @@ export default function RepoReleases({
     (tmpl) => !tmpl.system && (!tmpl.repo || tmpl.repo === repo),
   );
 
+  // The plan is a repo setting: PutQualificationPlan refuses anyone but
+  // one of repo's admins, and refuses everybody when settings live in
+  // the config repo. Either way the editor shows the plan read-only
+  // rather than offer a Save that can only fail.
+  const configRepoOnly = Boolean(config?.configRepoOnly);
+  const planReadOnly =
+    manageRefused || configRepoOnly || !repoAdministered(config, repo);
+
   const unjudgedGates = baseBranchGates.filter(
     (g) => g.repo === repo && !g.judged,
   );
@@ -535,7 +573,7 @@ export default function RepoReleases({
                   Go to CI Mode
                 </Button>
               ) : onBack ? (
-                <Button color="inherit" size="small" onClick={onBack}>
+                <Button color="inherit" size="small" onClick={leave}>
                   Open repository settings
                 </Button>
               ) : null
@@ -783,10 +821,17 @@ export default function RepoReleases({
         </p>
         {/* The server half of that refusal is ui.Client.PutQualificationPlan;
             the name belongs here, not in a sentence an operator reads. */}
+        {configRepoOnly && (
+          <ConfigManagedNotice
+            what={`${repo}'s qualification plan`}
+            paths={QUALIFICATION_CONFIG_PATHS}
+          />
+        )}
         <QualificationPlanEditor
           plan={qualificationPlan}
           templates={qualifiableTemplates}
           onSave={savePlan}
+          readOnly={planReadOnly}
         />
       </Box>
     </main>
@@ -945,16 +990,71 @@ export function withoutDanglingDependencies(items) {
 // only ever picks which template, how many times, and what it waits on,
 // the same "template takes over the content fields" split ScheduleOverlay's
 // own picker already draws.
-function QualificationPlanEditor({ plan, templates, onSave }) {
-  const [requireApproval, setRequireApproval] = useState(plan.requireApproval);
-  const [autoPromote, setAutoPromote] = useState(plan.autoPromote);
-  const [items, setItems] = useState(
-    plan.items.map((it) => ({
+//
+// The form keeps its own copy of the plan, so it follows the plan it is
+// given -- the pane's poll, or a save's answer -- only while that copy
+// holds nothing unsaved: a poll every few seconds must not wipe an edit
+// in progress, but after a save the form shows what was saved (blank
+// rows dropped, a cleared Repeat as 1) rather than what was typed. While
+// it holds an edit, leaving the page asks first (guardLeaving).
+//
+// readOnly draws the plan with every control disabled, for a reader the
+// API would refuse the save (not one of repo's admins, or settings kept
+// in the config repo).
+export function planFormState(plan) {
+  return {
+    requireApproval: Boolean(plan.requireApproval),
+    autoPromote: Boolean(plan.autoPromote),
+    items: (plan.items || []).map((it) => ({
       templateId: it.templateId,
       repeat: it.repeat,
       dependsOn: it.dependsOn || [],
     })),
+  };
+}
+
+function planFormKey({ requireApproval, autoPromote, items }) {
+  return JSON.stringify([
+    requireApproval,
+    autoPromote,
+    items.map((it) => [it.templateId, String(it.repeat), it.dependsOn]),
+  ]);
+}
+
+function QualificationPlanEditor({
+  plan,
+  templates,
+  onSave,
+  readOnly = false,
+}) {
+  const initial = planFormState(plan);
+  const [requireApproval, setRequireApproval] = useState(
+    initial.requireApproval,
   );
+  const [autoPromote, setAutoPromote] = useState(initial.autoPromote);
+  const [items, setItems] = useState(initial.items);
+  const [saving, setSaving] = useState(false);
+  // baseline is the plan the form last took on, as planFormKey writes
+  // it; the form is dirty while what it shows differs from that.
+  const baseline = useRef(planFormKey(initial));
+  const dirty =
+    planFormKey({ requireApproval, autoPromote, items }) !== baseline.current;
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty && !readOnly;
+
+  const takeOn = useCallback((next) => {
+    const state = planFormState(next);
+    baseline.current = planFormKey(state);
+    setRequireApproval(state.requireApproval);
+    setAutoPromote(state.autoPromote);
+    setItems(state.items);
+  }, []);
+
+  useEffect(() => {
+    if (!dirtyRef.current) takeOn(plan);
+  }, [plan, takeOn]);
+
+  useEffect(() => guardLeaving(() => dirtyRef.current), []);
 
   // An item's "Depends on" can only offer the templates the plan's other
   // items name, so a dependency on a template no item names any more is
@@ -991,7 +1091,12 @@ function QualificationPlanEditor({ plan, templates, onSave }) {
           dependsOn: it.dependsOn || [],
         })),
     };
-    await onSave(payload);
+    setSaving(true);
+    try {
+      if ((await onSave(payload)) !== false) takeOn(payload);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const templateLabel = templateLabeler(templates);
@@ -1006,6 +1111,7 @@ function QualificationPlanEditor({ plan, templates, onSave }) {
         control={
           <Checkbox
             checked={requireApproval}
+            disabled={readOnly}
             onChange={(e) => setRequireApproval(e.target.checked)}
           />
         }
@@ -1016,6 +1122,7 @@ function QualificationPlanEditor({ plan, templates, onSave }) {
         control={
           <Checkbox
             checked={autoPromote}
+            disabled={readOnly}
             onChange={(e) => setAutoPromote(e.target.checked)}
           />
         }
@@ -1056,6 +1163,7 @@ function QualificationPlanEditor({ plan, templates, onSave }) {
                 shrinkLabel
                 placeholder="Choose a template"
                 value={it.templateId}
+                disabled={readOnly}
                 sx={{ flex: 2 }}
                 onChange={(next) => updateItem(i, { templateId: next })}
                 options={[
@@ -1079,6 +1187,7 @@ function QualificationPlanEditor({ plan, templates, onSave }) {
                 type="number"
                 inputProps={{ min: 1 }}
                 value={it.repeat}
+                disabled={readOnly}
                 onChange={(e) => updateItem(i, { repeat: e.target.value })}
                 size="small"
                 sx={{ width: 90 }}
@@ -1092,6 +1201,7 @@ function QualificationPlanEditor({ plan, templates, onSave }) {
                 labelId={`qualification-dependson-label-${i}`}
                 label="Depends on"
                 multiple
+                disabled={readOnly}
                 value={it.dependsOn}
                 onChange={(e) => updateItem(i, { dependsOn: e.target.value })}
                 renderValue={(selected) => (
@@ -1132,7 +1242,12 @@ function QualificationPlanEditor({ plan, templates, onSave }) {
               </Select>
             </FormControl>
             <Stack direction="row" justifyContent="flex-end" sx={{ mt: 0.5 }}>
-              <Button size="small" color="error" onClick={() => removeItem(i)}>
+              <Button
+                size="small"
+                color="error"
+                disabled={readOnly}
+                onClick={() => removeItem(i)}
+              >
                 Remove
               </Button>
             </Stack>
@@ -1145,11 +1260,16 @@ function QualificationPlanEditor({ plan, templates, onSave }) {
           size="small"
           variant="outlined"
           onClick={addItem}
-          disabled={templates.length === 0}
+          disabled={readOnly || templates.length === 0}
         >
           Add item
         </Button>
-        <Button size="small" type="submit" variant="contained">
+        <Button
+          size="small"
+          type="submit"
+          variant="contained"
+          disabled={readOnly || saving}
+        >
           Save qualification plan
         </Button>
       </Stack>

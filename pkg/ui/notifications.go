@@ -195,7 +195,7 @@ func (c *Client) liveRunKey(ctx context.Context, taskID string) string {
 			}
 		}
 	}
-	return fmt.Sprintf("%p/%s", c.Store, key)
+	return fmt.Sprintf("%d/%s", c.Store.ID(), key)
 }
 
 func (c *Client) raise(ctx context.Context, req RaiseNotificationRequest, raisedBy string) (NotificationRaiseResponse, error) {
@@ -458,7 +458,9 @@ func (s *Server) handleRaiseNotification(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// handleListNotifications answers GET /api/notifications?open=1&after=&family=.
+// handleListNotifications answers GET /api/notifications?open=1&after=&family=,
+// and ?fields=list for the bodies cut to what a list draws
+// (listNotificationBody).
 func (s *Server) handleListNotifications(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := model.NotificationFilter{Family: strings.TrimSpace(q.Get("family"))}
@@ -487,7 +489,36 @@ func (s *Server) handleListNotifications(w http.ResponseWriter, r *http.Request)
 	notifications = filterList(notifications, func(n model.Notification) bool {
 		return list.matches(n.Subject, n.Title)
 	})
+	if strings.EqualFold(strings.TrimSpace(q.Get("fields")), "list") {
+		for i := range notifications {
+			notifications[i].Body = listNotificationBody(notifications[i])
+		}
+	}
 	writeList(w, notifications, list)
+}
+
+// pendingReleaseFamily is the release train's "approve this release"
+// notification family, whose body the UI reads more of than its first
+// line (ui/src/notifications.js's pendingReleaseOf: the Soak, SHORT SOAK
+// and BREAKING CHANGES lines).
+const pendingReleaseFamily = "release.pending"
+
+// listNotificationBody is n's body as a polled list needs it: the UI's
+// bell and Inbox draw one line under the title (notifications.js's
+// notificationSentence: the trimmed body's first line), so that line is
+// all the open list -- polled every few seconds by every tab -- carries,
+// rather than every open notification's whole body every time. A pending
+// release keeps its body, which the UI reads its soak from; they are one
+// per release and short.
+func listNotificationBody(n model.Notification) string {
+	if n.Family == pendingReleaseFamily || model.NotificationFamily(n.Subject) == pendingReleaseFamily {
+		return n.Body
+	}
+	body := strings.TrimSpace(n.Body)
+	if i := strings.IndexByte(body, '\n'); i >= 0 {
+		body = strings.TrimSpace(body[:i])
+	}
+	return body
 }
 
 // handleAckNotification answers POST /api/notifications/{id}/ack.

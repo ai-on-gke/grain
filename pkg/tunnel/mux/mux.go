@@ -73,14 +73,19 @@ const (
 	// maxUnseenPeerIDs bounds how many peer stream ids below the highest one
 	// seen are remembered as not yet seen; see Mux.claimPeerID.
 	maxUnseenPeerIDs = 1 << 14
+
+	// defaultMaxPeerStreamViolations is the default number of rejected
+	// peer-initiated stream attempts tolerated before closing the session.
+	defaultMaxPeerStreamViolations = 16
 )
 
 var (
-	ErrSessionClosed = errors.New("tunnel mux: session closed")
-	ErrStreamClosed  = errors.New("tunnel mux: stream closed")
-	ErrStreamReset   = errors.New("tunnel mux: stream reset by peer")
-	ErrFrameTooLarge = errors.New("tunnel mux: frame payload exceeds max size")
-	ErrBufferFull    = errors.New("tunnel mux: stream receive buffer full")
+	ErrSessionClosed       = errors.New("tunnel mux: session closed")
+	ErrStreamClosed        = errors.New("tunnel mux: stream closed")
+	ErrStreamReset         = errors.New("tunnel mux: stream reset by peer")
+	ErrFrameTooLarge       = errors.New("tunnel mux: frame payload exceeds max size")
+	ErrBufferFull          = errors.New("tunnel mux: stream receive buffer full")
+	ErrPeerStreamViolation = errors.New("tunnel mux: peer-initiated stream violation limit exceeded")
 	// ErrTimeout is a Stream's deadline passing. It is a net.Error whose
 	// Timeout is true, and os.ErrDeadlineExceeded to errors.Is, as a
 	// net.Conn's is: net/http's server aborts its background read
@@ -114,6 +119,18 @@ type Config struct {
 	// MaxStreams caps the streams open on the session at once; a peer stream
 	// beyond it is reset. Defaults to 1024 if <= 0.
 	MaxStreams int
+
+	// MaxPeerInitiatedStreams caps the number of peer-initiated streams.
+	// When DisallowPeerInitiatedStreams is true (or MaxPeerInitiatedStreams < 0,
+	// or MaxPeerInitiatedStreams == 0 with OnPeerStreamRejected or
+	// MaxPeerStreamViolations set), the peer may not initiate any streams (0):
+	// any peer-initiated stream frame is rejected immediately with FrameReset,
+	// OnPeerStreamRejected is invoked, and the session is terminated once
+	// rejected attempts exceed MaxPeerStreamViolations (default 16).
+	MaxPeerInitiatedStreams      int
+	DisallowPeerInitiatedStreams bool
+	MaxPeerStreamViolations      int
+	OnPeerStreamRejected         func(streamID uint32)
 
 	// MaxBufferedBytes caps the received bytes not yet read across all of the
 	// session's streams; the stream whose data would exceed it is reset.
@@ -180,6 +197,12 @@ type Mux struct {
 	maxBuffered int64
 	buffered    atomic.Int64 // received bytes not yet read, across streams
 
+	disallowPeerStreams     atomic.Bool
+	maxPeerStreams          atomic.Int64
+	maxPeerStreamViolations int
+	rejectedPeerStreams     atomic.Int64
+	onPeerStreamRejected    func(streamID uint32)
+
 	// negotiated is closed once the peer's first frame has been read, at which
 	// point peerFlowControl says whether the peer announced flow control.
 	negotiated      chan struct{}
@@ -205,6 +228,10 @@ func NewMux(rwc io.ReadWriteCloser, cfg Config) *Mux {
 	if maxBuffered <= 0 {
 		maxBuffered = defaultMaxBuffered
 	}
+	maxViolations := cfg.MaxPeerStreamViolations
+	if maxViolations <= 0 {
+		maxViolations = defaultMaxPeerStreamViolations
+	}
 
 	startID, peerStartID := uint32(2), uint32(1)
 	if cfg.IsServer {
@@ -212,21 +239,29 @@ func NewMux(rwc io.ReadWriteCloser, cfg Config) *Mux {
 	}
 
 	m := &Mux{
-		rwc:          rwc,
-		isServer:     cfg.IsServer,
-		streams:      make(map[uint32]*Stream),
-		nextID:       startID,
-		peerNextID:   peerStartID,
-		peerUnseen:   make(map[uint32]struct{}),
-		acceptCh:     make(chan *Stream, 256),
-		doneCh:       make(chan struct{}),
-		pingInterval: pingInterval,
-		pingTimeout:  pingTimeout,
-		negotiated:   make(chan struct{}),
-		pongWake:     make(chan struct{}, 1),
-		ctrlCh:       make(chan ctrlFrame, ctrlQueueLen),
-		maxStreams:   maxStreams,
-		maxBuffered:  int64(maxBuffered),
+		rwc:                     rwc,
+		isServer:                cfg.IsServer,
+		streams:                 make(map[uint32]*Stream),
+		nextID:                  startID,
+		peerNextID:              peerStartID,
+		peerUnseen:              make(map[uint32]struct{}),
+		acceptCh:                make(chan *Stream, 256),
+		doneCh:                  make(chan struct{}),
+		pingInterval:            pingInterval,
+		pingTimeout:             pingTimeout,
+		negotiated:              make(chan struct{}),
+		pongWake:                make(chan struct{}, 1),
+		ctrlCh:                  make(chan ctrlFrame, ctrlQueueLen),
+		maxStreams:              maxStreams,
+		maxBuffered:             int64(maxBuffered),
+		maxPeerStreamViolations: maxViolations,
+		onPeerStreamRejected:    cfg.OnPeerStreamRejected,
+	}
+	if cfg.DisallowPeerInitiatedStreams || cfg.MaxPeerInitiatedStreams < 0 ||
+		(cfg.MaxPeerInitiatedStreams == 0 && (cfg.OnPeerStreamRejected != nil || cfg.MaxPeerStreamViolations > 0)) {
+		m.disallowPeerStreams.Store(true)
+	} else if cfg.MaxPeerInitiatedStreams > 0 {
+		m.maxPeerStreams.Store(int64(cfg.MaxPeerInitiatedStreams))
 	}
 	m.lastPongTime.Store(time.Now().UnixNano())
 
@@ -275,6 +310,12 @@ func (m *Mux) OpenStream(ctx context.Context) (*Stream, error) {
 
 // AcceptStream waits for and returns the next stream opened by the peer.
 func (m *Mux) AcceptStream() (*Stream, error) {
+	return m.AcceptStreamContext(context.Background())
+}
+
+// AcceptStreamContext waits for and returns the next stream opened by the peer,
+// or returns ctx.Err() if ctx is cancelled before a stream arrives.
+func (m *Mux) AcceptStreamContext(ctx context.Context) (*Stream, error) {
 	select {
 	case s, ok := <-m.acceptCh:
 		if !ok {
@@ -283,6 +324,8 @@ func (m *Mux) AcceptStream() (*Stream, error) {
 		return s, nil
 	case <-m.doneCh:
 		return nil, m.getCloseErr()
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
 
@@ -327,6 +370,31 @@ func (m *Mux) CloseWithError(err error) error {
 // Done returns a channel that is closed when the multiplexer session is closed.
 func (m *Mux) Done() <-chan struct{} {
 	return m.doneCh
+}
+
+// ActiveStreams returns the number of currently open streams on the session.
+func (m *Mux) ActiveStreams() int {
+	m.streamsMu.RLock()
+	defer m.streamsMu.RUnlock()
+	return len(m.streams)
+}
+
+// RejectedPeerStreams returns the number of peer-initiated stream attempts
+// rejected by MaxPeerInitiatedStreams enforcement.
+func (m *Mux) RejectedPeerStreams() int64 {
+	return m.rejectedPeerStreams.Load()
+}
+
+// SetMaxPeerInitiatedStreams dynamically sets the cap on peer-initiated streams.
+// Passing 0 or a negative value disallows all peer-initiated streams.
+func (m *Mux) SetMaxPeerInitiatedStreams(max int) {
+	if max <= 0 {
+		m.disallowPeerStreams.Store(true)
+		m.maxPeerStreams.Store(0)
+	} else {
+		m.disallowPeerStreams.Store(false)
+		m.maxPeerStreams.Store(int64(max))
+	}
 }
 
 func (m *Mux) getCloseErr() error {
@@ -582,6 +650,21 @@ func (m *Mux) handleFrame(frameType byte, streamID uint32, payload []byte) {
 	stream, exists := m.streams[streamID]
 	if !exists {
 		isPeerInitiated := (m.isServer && streamID%2 == 0) || (!m.isServer && streamID%2 == 1)
+		if isPeerInitiated && m.disallowPeerStreams.Load() {
+			m.streamsMu.Unlock()
+			if frameType == FrameReset {
+				return
+			}
+			n := m.rejectedPeerStreams.Add(1)
+			if m.onPeerStreamRejected != nil {
+				m.onPeerStreamRejected(streamID)
+			}
+			m.queueReset(streamID)
+			if int(n) > m.maxPeerStreamViolations {
+				m.CloseWithError(ErrPeerStreamViolation)
+			}
+			return
+		}
 		// Any frame marks a peer id as used, so a stream the peer reset
 		// before sending anything is not left among the unseen ones.
 		isNew := isPeerInitiated && m.claimPeerID(streamID)
@@ -590,7 +673,8 @@ func (m *Mux) handleFrame(frameType byte, streamID uint32, payload []byte) {
 				m.streamsMu.Unlock()
 				return
 			}
-			if len(m.streams) >= m.maxStreams {
+			peerCap := int(m.maxPeerStreams.Load())
+			if len(m.streams) >= m.maxStreams || (peerCap > 0 && len(m.streams) >= peerCap) {
 				m.streamsMu.Unlock()
 				m.queueReset(streamID)
 				return

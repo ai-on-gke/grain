@@ -97,6 +97,40 @@ func TestStateRepoPullRequestClientServesRawDiffs(t *testing.T) {
 	}
 }
 
+type stubGitOnlyTokens map[string]string
+
+func (s stubGitOnlyTokens) TokenFor(owner, repo string) *string { return nil }
+func (s stubGitOnlyTokens) GitOnly(owner, repo string) string   { return s[owner+"/"+repo] }
+
+// StateRepoPullRequestClient wraps the daemon's RESTClient on every
+// reconcile cycle (alongside github.WithCaller), so it must forward
+// GitOnlySource for release-pending to skip SSH-only and plain-git hosts.
+func TestStateRepoPullRequestClientForwardsGitOnly(t *testing.T) {
+	t.Parallel()
+	tokens := stubGitOnlyTokens{
+		"acme/sshonly":               "SSH credential covers git only",
+		"git.example.com/acme/plain": "plain git host with no forge API",
+	}
+	var client github.Client = &StateRepoPullRequestClient{
+		Client: github.NewClient(&github.FakeTransport{}, tokens),
+	}
+	client = github.WithCaller(client, "release-pending")
+
+	src, ok := client.(github.GitOnlySource)
+	if !ok {
+		t.Fatal("StateRepoPullRequestClient hides github.GitOnlySource")
+	}
+	if got := src.GitOnly("acme", "sshonly"); !strings.Contains(got, "SSH credential") {
+		t.Errorf("GitOnly(acme/sshonly) = %q, want SSH git-only reason", got)
+	}
+	if got := src.GitOnly("git.example.com/acme", "plain"); !strings.Contains(got, "plain git host") {
+		t.Errorf("GitOnly(git.example.com/acme/plain) = %q, want plain-git reason", got)
+	}
+	if got := src.GitOnly("acme", "widgets"); got != "" {
+		t.Errorf("GitOnly(acme/widgets) = %q, want empty", got)
+	}
+}
+
 // End to end through the wrapper: a change cleared by a review, whose head
 // then moves on in a file off the list, keeps its clearance and merges
 // without a second review.

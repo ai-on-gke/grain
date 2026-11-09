@@ -35,6 +35,9 @@ import (
 	"text/template"
 
 	"golang.org/x/term"
+
+	"github.com/ai-on-gke/grain/pkg/hostd"
+	"github.com/ai-on-gke/grain/pkg/version"
 )
 
 // UnitName is the systemd --user unit install writes.
@@ -103,7 +106,8 @@ func install(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet(Program+" install", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	server := fs.String("server", "", "the grain daemon's URL as this machine reaches it (required)")
-	name := fs.String("name", "", "this hostd's registry name (Settings -> Hostds); optional")
+	joinCode := fs.String("join", strings.TrimSpace(os.Getenv(JoinCodeEnv)), "enroll via an enrollment code from Settings -> Hosts -> Invite hosts ($"+JoinCodeEnv+")")
+	name := fs.String("name", "", "this host's registry name (Settings -> Hosts); optional")
 	iapAudience := fs.String("iap-audience", "", "the OAuth client ID of the IAP in front of the daemon, for an IAP URL")
 	noStart := fs.Bool("no-start", false, "write everything, but do not enable or start the service")
 	registerTransportFlags(fs)
@@ -144,30 +148,8 @@ func install(args []string, stdout, stderr io.Writer) int {
 		step("installed %s", p.Bin)
 	}
 
-	// 2. The token.
-	if err := os.MkdirAll(filepath.Dir(p.Token), 0o700); err != nil {
-		fmt.Fprintln(stderr, Program+" install: "+err.Error())
-		return 1
-	}
-	_ = os.Chmod(filepath.Dir(p.Token), 0o700)
-	token := strings.TrimSpace(os.Getenv(TokenEnv))
-	if token == "" {
-		if have, _ := readTokenFile(p.Token); have != "" {
-			step("keeping the token in %s (set %s to replace it)", p.Token, TokenEnv)
-		} else if token, err = promptToken(); err != nil {
-			fmt.Fprintln(stderr, Program+" install: "+err.Error())
-			return 2
-		}
-	}
-	if token != "" {
-		if err := writeFileAtomic(p.Token, []byte(token+"\n"), 0o600); err != nil {
-			fmt.Fprintln(stderr, Program+" install: writing the token: "+err.Error())
-			return 1
-		}
-		step("wrote the token to %s (mode 0600)", p.Token)
-	}
-
-	// 3. The allowlist.
+	// 2. The allowlist (prepared before enrollment so any -join request
+	// reports the configured agent CLIs).
 	if _, err := os.Stat(p.Allowlist); errors.Is(err, os.ErrNotExist) {
 		if err := os.MkdirAll(p.Stage, 0o700); err != nil {
 			fmt.Fprintln(stderr, Program+" install: "+err.Error())
@@ -176,6 +158,10 @@ func install(args []string, stdout, stderr io.Writer) int {
 		agy := findAgy(home, executable)
 		if agy == "" {
 			fmt.Fprintf(stderr, "%s install: no agent CLI found (looked for agy on $PATH and in ~/.local/bin); write %s by hand\n", Program, p.Allowlist)
+			return 1
+		}
+		if err := os.MkdirAll(filepath.Dir(p.Allowlist), 0o700); err != nil {
+			fmt.Fprintln(stderr, Program+" install: "+err.Error())
 			return 1
 		}
 		if err := writeFileAtomic(p.Allowlist, []byte(defaultAllowlist(p.Stage, *server, agy)), 0o644); err != nil {
@@ -191,8 +177,8 @@ func install(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	// 4. A registered transport's own preparation, done now so the first
-	// start does not spend its time on it.
+	// 3. A registered transport's own preparation, done now so enrollment
+	// or the first start can use it immediately.
 	unit := unitConfig{Bin: p.Bin, Server: *server, Name: *name, IAPAudience: *iapAudience,
 		Token: p.Token, Allowlist: p.Allowlist, StateDir: p.StateDir}
 	if t := transportFor(u); t != nil && t.Prepare != nil {
@@ -203,6 +189,55 @@ func install(args []string, stdout, stderr io.Writer) int {
 		}
 		unit.Extra = extra
 		step("prepared %s for %s", t.Name, u.Host)
+	}
+
+	// 4. The credential: enroll with -join (generating an Ed25519 keypair +
+	// SAS pairing code handshake) or fall back to a per-host token.
+	if err := os.MkdirAll(filepath.Dir(p.Token), 0o700); err != nil {
+		fmt.Fprintln(stderr, Program+" install: "+err.Error())
+		return 1
+	}
+	_ = os.Chmod(filepath.Dir(p.Token), 0o700)
+	if strings.TrimSpace(*joinCode) != "" {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+		defer stop()
+		var idTok func(context.Context) (string, error)
+		if *iapAudience != "" {
+			idTok = hostd.NewIAPTokenProvider(*iapAudience).Token
+		}
+		res, err := hostd.Enroll(ctx, hostd.EnrollOptions{
+			ServerURL: *server,
+			JoinCode:  strings.TrimSpace(*joinCode),
+			KeyPath:   p.Key,
+			TokenPath: p.Token,
+			CLIs:      allowlistOrDetectedCLIs(p.Allowlist, owners()),
+			Version:   version.Get().Release,
+			IDToken:   idTok,
+			Out:       stdout,
+		})
+		if err != nil {
+			fmt.Fprintln(stderr, Program+" install: "+err.Error())
+			return 1
+		}
+		unit.Key = p.Key
+		step("enrolled as %s (key %s); saved credential to %s (mode 0600)", res.Name, res.KeyFingerprint, p.Token)
+	} else {
+		token := strings.TrimSpace(os.Getenv(TokenEnv))
+		if token == "" {
+			if have, _ := readTokenFile(p.Token); have != "" {
+				step("keeping the token in %s (set %s to replace it)", p.Token, TokenEnv)
+			} else if token, err = promptToken(); err != nil {
+				fmt.Fprintln(stderr, Program+" install: "+err.Error())
+				return 2
+			}
+		}
+		if token != "" {
+			if err := writeFileAtomic(p.Token, []byte(token+"\n"), 0o600); err != nil {
+				fmt.Fprintln(stderr, Program+" install: writing the token: "+err.Error())
+				return 1
+			}
+			step("wrote the token to %s (mode 0600)", p.Token)
+		}
 	}
 
 	// 5. The unit.
@@ -264,7 +299,7 @@ func readTokenFile(path string) (string, error) {
 // capabilities section.
 func defaultAllowlist(stage, server, agyPath string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# %s's allowlist: the agent CLIs the grain daemon at\n# %s may start on this machine, as you. hostd re-reads it on\n# every request. %s runs agent CLIs only: capabilities: stays empty.\n", Program, server, Program)
+	fmt.Fprintf(&b, "# %s's allowlist: the agent CLIs the grain daemon at\n# %s may start on this machine, as you. %s re-reads it on\n# every request. %s runs agent CLIs only: capabilities: stays empty.\n", Program, server, Program, Program)
 	b.WriteString("clis:\n")
 	fmt.Fprintf(&b, "  agy:\n    path: %s\n    paths_under: [%s]\n    cwd_under: [%s]\n", agyPath, stage, stage)
 	b.WriteString("    env: [HOME, AGY_CLI_DISABLE_AUTO_UPDATE, GEMINI_API_KEY, GOOGLE_API_KEY]\n")
@@ -274,13 +309,17 @@ func defaultAllowlist(stage, server, agyPath string) string {
 }
 
 type unitConfig struct {
-	Bin, Server, Name, IAPAudience, Token, Allowlist, StateDir string
+	Bin, Server, Name, IAPAudience, Token, Key, Allowlist, StateDir string
 	// Extra are a transport's own flags (Transport.Prepare).
 	Extra []string
 }
 
 func (u unitConfig) args() []string {
-	a := []string{"-server", u.Server, "-token-file", u.Token, "-allowlist", u.Allowlist, "-state-dir", u.StateDir}
+	a := []string{"-server", u.Server, "-token-file", u.Token}
+	if u.Key != "" {
+		a = append(a, "-key-file", u.Key)
+	}
+	a = append(a, "-allowlist", u.Allowlist, "-state-dir", u.StateDir)
 	if u.Name != "" {
 		a = append(a, "-name", u.Name)
 	}
@@ -328,7 +367,7 @@ func renderUnit(u unitConfig) (string, error) {
 func promptToken() (string, error) {
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
-		return "", fmt.Errorf("no terminal to ask for the hostd token on: set %s", TokenEnv)
+		return "", fmt.Errorf("no terminal to ask for the host token on: set %s", TokenEnv)
 	}
 	defer tty.Close()
 	fd := int(tty.Fd())
@@ -347,7 +386,7 @@ func promptToken() (string, error) {
 			}
 		}()
 	}
-	fmt.Fprint(tty, "Paste this hostd's token (Settings -> Hostds), then Enter: ")
+	fmt.Fprint(tty, "Paste this host's token (Settings -> Hosts), then Enter: ")
 	b, err := term.ReadPassword(fd)
 	fmt.Fprintln(tty)
 	if err != nil {

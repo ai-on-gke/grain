@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import api from "./api.js";
-import { formatDateTime, formatTime } from "./time.js";
+import { formatDateTime, formatMoment, formatTime } from "./time.js";
 import { hasGitCredential } from "./gitConnections.js";
 import { redBaseRepairSentence, waitingBaseRepair } from "./state.js";
 import { forceMergeOffered } from "./taskWrites.js";
@@ -238,7 +238,7 @@ export async function resumePipeline(pause) {
 // question an operator asks next, and the answer is not obvious: pausing
 // stops the queue being drained, it does not cancel work under way.
 export function pipelinePauseMessage(pause, zone = "") {
-  const since = pause?.since ? ` since ${formatTime(pause.since, zone)}` : "";
+  const since = pause?.since ? ` since ${formatMoment(pause.since, zone)}` : "";
   const reason = pause?.reason ? ` — ${pause.reason}` : "";
   const waiting = pause?.untilTask
     ? ` It lifts itself when task ${pause.untilTask} finishes.`
@@ -264,10 +264,18 @@ export function pipelinePauseTitle(pause) {
     : "Deployment paused";
 }
 
+// admissionBypasses is Task.HasPriorityDispatch for the browser: a task
+// whose admission is bypass or durable (durable includes bypass).
+export function admissionBypasses(t) {
+  return t?.admission === "bypass" || t?.admission === "durable";
+}
+
 // heldForRunNow is whether task t is waiting only because of the pause:
 // the deployment is paused under a pause Run now passes, and t is queued
 // -- one the queue would otherwise pick up -- and not already asked for,
-// individually paused, exempt by priority-dispatch / standing session,
+// individually paused, exempt by its admission (bypass or durable, the
+// task setting that replaced the priority-dispatch and durable grants,
+// unified-grants.design.md §4.1) / standing session,
 // or the task the pause itself is waiting on. A blocked task is not
 // waiting only for the pause -- lifting it would not start the task
 // either -- so it says "blocked", not this.
@@ -278,7 +286,7 @@ export function heldForRunNow(pause, t) {
     t.paused ||
     t.blocked ||
     t.consoleSession ||
-    (t.capabilities || []).includes("priority-dispatch") ||
+    admissionBypasses(t) ||
     pause.untilTask === t.id
   ) {
     return false;

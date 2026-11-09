@@ -205,6 +205,10 @@ const SORTS = {
 // box filters what is already added and is not part of the form.
 export default function RepoList({
   tasks,
+  // closedPartial is useClosedTasks' partial: some closed tasks are not
+  // paged in yet, so every row's closed and total counts are floors, and
+  // say so ("12+"); a repo's own page asks the server for its count.
+  closedPartial = false,
   config,
   onOpenRepo,
   onOpenSettings,
@@ -729,7 +733,7 @@ export default function RepoList({
                     key={s}
                     size="small"
                     className={`badge badge-${s}`}
-                    label={`${STATE_LABELS[s] || s} ${count}`}
+                    label={`${STATE_LABELS[s] || s} ${count}${closedPartial && s === "closed" ? "+" : ""}`}
                   />
                 ))}
                 {defaultsOnly && (
@@ -746,7 +750,8 @@ export default function RepoList({
                 color="text.secondary"
                 whiteSpace="nowrap"
               >
-                {r.total} task{r.total === 1 ? "" : "s"}
+                {r.total}
+                {closedPartial ? "+" : ""} task{r.total === 1 ? "" : "s"}
               </Typography>
             </div>
           );

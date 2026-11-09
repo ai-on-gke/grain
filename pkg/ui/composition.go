@@ -192,6 +192,16 @@ func composedTaskFrom(c model.Composition, modelFallbackSource string, modelFall
 			Name: "keepRunning", Values: []string{onOff(true)}, Source: string(c.Sources.KeepRunning),
 		})
 	}
+	if adm := model.NormalizeAdmission(c.Admission); adm != model.AdmissionStandard {
+		fields = append(fields, ComposedField{
+			Name: "admission", Values: []string{string(adm)}, Source: string(c.Sources.Admission),
+		})
+	}
+	if hosting := model.NormalizeHosting(c.Hosting); hosting != model.HostingUnattended {
+		fields = append(fields, ComposedField{
+			Name: "hosting", Values: []string{string(hosting)}, Source: string(c.Sources.Hosting),
+		})
+	}
 	// Only a template sets a priority other than the default
 	// (model.Template.Priority; an inline schedule's firing always takes
 	// model.DefaultTaskPriority), and only one that does is worth a row:
@@ -293,6 +303,52 @@ func (c *Client) DraftScheduleComposition(ctx context.Context, req CreateSchedul
 	sched, _, _, err := c.scheduleFromRequest(ctx, req)
 	if err != nil {
 		return Composition{}, err
+	}
+	// A template-backed schedule may carry an admission of its own that
+	// raises its template's -- a repository's declared schedule can say
+	// `admission:` beside `template:` (docs/declarations.md), and its
+	// firings are composed with it (model.ComposeScheduleTask).
+	// scheduleFromRequest copies the template's content and nothing
+	// else, so the schedule pane's preview of such a schedule said
+	// "bypass, from the template" over a firing that files "durable,
+	// from the schedule" (2026-11-07 walkthrough). Applied here, to the
+	// preview alone: CreateSchedule still refuses an admission sent
+	// alongside a template (refuseIgnoredScheduleContent).
+	if sched.TemplateID != nil && sched.SuiteID == nil {
+		adm, err := model.ParseOptionalAdmission(req.Admission)
+		if err != nil {
+			return Composition{}, validationErrorf("%v", err)
+		}
+		sched.Admission = model.MaxAdmission(sched.Admission, adm)
+		// Hosting the same way: `hosting: console` beside `template:`
+		// raises the template's, and the preview left it out altogether
+		// while the stored schedule's composition and its firings said
+		// "console, from the schedule" (2026-11-08 walkthrough).
+		hosting, err := model.ParseOptionalHosting(req.Hosting)
+		if err != nil {
+			return Composition{}, validationErrorf("%v", err)
+		}
+		sched.Hosting = model.MaxHosting(sched.Hosting, hosting)
+		// Capabilities the same way: a repository's declared schedule can
+		// declare `capabilities:` alongside `template:` (docs/declarations.md),
+		// and model.ComposeScheduleTask files them beside the template's
+		// own, as the stored schedule's composition says -- the preview
+		// dropped them (2026-11-08 walkthrough, task 3614).
+		if len(req.Capabilities) > 0 {
+			caps, legacyAdm, hadLegacy := extractLegacyAdmissionCaps("schedule", req.Capabilities)
+			if hadLegacy {
+				sched.Admission = model.MaxAdmission(sched.Admission, legacyAdm)
+			}
+			caps, legacyHosting, hadLegacyHosting := extractLegacyHostingCaps("schedule", caps)
+			if hadLegacyHosting {
+				sched.Hosting = model.MaxHosting(sched.Hosting, legacyHosting)
+			}
+			extra, err := c.grantsFor(caps, model.GrantByLabel)
+			if err != nil {
+				return Composition{}, err
+			}
+			sched.Grants = append(append([]model.Grant(nil), sched.Grants...), extra...)
+		}
 	}
 	return c.compositionOfSchedule(ctx, sched, "this schedule")
 }

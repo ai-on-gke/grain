@@ -52,11 +52,25 @@ const (
 	PrincipalService PrincipalKind = "service"
 )
 
+// DelegatingApp describes the service principal that forwarded a request on
+// behalf of a person through the registry (`act` claim in a registry JWT,
+// design/design/authentication.design.md §6, AU-22).
+type DelegatingApp struct {
+	Email     string
+	Name      string
+	Grant     string
+	Access    string
+	JTI       string
+	RequestID string
+}
+
 // VerifiedIdentity is an authenticated caller extracted from a signed proxy
 // assertion header.
 type VerifiedIdentity struct {
 	Email string
+	Sub   string
 	Kind  PrincipalKind
+	Via   *DelegatingApp
 }
 
 // IAPAssertionHeader is the HTTP request header holding the Google Cloud IAP JWT assertion.

@@ -173,6 +173,8 @@ func TestReleaseMachineryClearsOnSecurityReview(t *testing.T) {
 		".grain/workflows/release.yml", ".github/workflows/release.yml",
 		".grain/workflows/promote.yml", ".github/workflows/promote.yml",
 		".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",
+		"scripts/release-assets.sh", "scripts/build-cli.sh", ".github/workflows/release-train-assets.yml",
+		"scripts/buildvcs.sh", "scripts/configure-dockerhub-auth.sh", "scripts/release-image-repos.sh",
 	} {
 		if !containsString(trigger.Paths, p) {
 			t.Errorf("the release-machinery trigger does not hold %s (paths %v)", p, trigger.Paths)
@@ -310,7 +312,7 @@ func TestPublishReleaseVerifiesBeforeItPublishes(t *testing.T) {
 	// -- runs only for a tag verify passed as the train's: a vX.Y.0 with no
 	// Promoted-From (verify's exit 4) publishes nothing, since the train's
 	// grant can push one on any commit of main.
-	for _, step := range strings.Split(text, "- name: ")[1:] {
+	for _, step := range strings.Split(namedJob(t, text, "publish"), "- name: ")[1:] {
 		name := strings.SplitN(step, "\n", 2)[0]
 		switch name {
 		case "Checkout", "Setup Node.js", "Setup Go", "Verify the release is the train's, from a qualified rc":
@@ -318,6 +320,111 @@ func TestPublishReleaseVerifiesBeforeItPublishes(t *testing.T) {
 		}
 		if !strings.Contains(step, "if: steps.verify.outputs.train == 'true'") {
 			t.Errorf("publish-release.yml step %q runs for a tag verify did not pass as the train's", name)
+		}
+	}
+	// The grain CLI is built by a job that can write nothing, and published
+	// by one that runs only for a tag publish verified.
+	contains(t, text, "outputs:\n      train: ${{ steps.verify.outputs.train }}")
+	build := namedJob(t, text, "cli")
+	contains(t, build, "contents: read")
+	contains(t, build, "scripts/build-cli.sh")
+	if strings.Contains(build, "write") || strings.Contains(build, "secrets.") || strings.Contains(build, "github.token") {
+		t.Errorf("publish-release.yml's cli job, which runs build-cli.sh, holds a write permission or a token:\n%s", build)
+	}
+	publishCLI := namedJob(t, text, "cli-assets")
+	contains(t, publishCLI, "needs: [publish, cli]")
+	contains(t, publishCLI, "if: needs.publish.outputs.train == 'true'")
+	contains(t, publishCLI, "release-assets.sh cli-publish")
+	// The step loop above reads the publish job alone, so hold every other
+	// job to the same rule: besides publish and cli (which can write
+	// nothing), a job runs only once publish has verified the tag as the
+	// train's.
+	jobs := text[strings.Index(text, "\njobs:\n"):]
+	for _, key := range workflowJobKey.FindAllString(jobs, -1) {
+		job := strings.TrimSuffix(strings.TrimSpace(key), ":")
+		if job == "publish" || job == "cli" {
+			continue
+		}
+		body := namedJob(t, text, job)
+		if !strings.Contains(body, "needs.publish.outputs.train == 'true'") {
+			t.Errorf("publish-release.yml job %q runs for a tag verify did not pass as the train's", job)
+		}
+	}
+}
+
+// Every vX.Y.Z and vX.Y.Z-rc.N release carries the grain CLI that GET
+// /cli/install.sh fetches (pkg/ui/cli_install.sh): each workflow that
+// publishes one builds scripts/build-cli.sh's archives in a job holding
+// only `contents: read`, stamped with the release, and uploads them with
+// release-assets.sh cli-publish from a job that waits for the release
+// itself to be published.
+func TestEveryPublishedReleaseGetsItsGrainCLI(t *testing.T) {
+	for file, releaseJob := range map[string]string{
+		"promote.yml":              "assets",
+		"publish-release.yml":      "publish",
+		"release-train-assets.yml": "publish",
+	} {
+		text := stripComments(read(t, ".github", "workflows", file))
+		build := namedJob(t, text, "cli")
+		if !strings.Contains(build, "contents: read") || strings.Contains(build, "write") ||
+			strings.Contains(build, "secrets.") || strings.Contains(build, "github.token") {
+			t.Errorf("%s: the cli job, which runs build-cli.sh, must hold contents: read and no token:\n%s", file, build)
+		}
+		for _, want := range []string{"scripts/build-cli.sh", "release-assets.sh cli-validate", "RELEASE: ", "name: grain-cli"} {
+			if !strings.Contains(build, want) {
+				t.Errorf("%s: the cli job does not say %q", file, want)
+			}
+		}
+		publish := namedJob(t, text, "cli-assets")
+		for _, want := range []string{"contents: write", "needs: [", releaseJob, "name: grain-cli", "release-assets.sh", "cli-publish"} {
+			if !strings.Contains(publish, want) {
+				t.Errorf("%s: the cli-assets job does not say %q", file, want)
+			}
+		}
+		// One concurrency group per release across the three workflows, so
+		// no two runs upload the same release's CLI at once.
+		if !strings.Contains(publish, "group: grain-cli-assets-${{ ") {
+			t.Errorf("%s: the cli-assets job does not queue in the shared grain-cli-assets-<release> group", file)
+		}
+		if strings.Contains(publish, "build-cli.sh") || strings.Contains(publish, "setup-go") {
+			t.Errorf("%s: the cli-assets job, which holds contents: write, builds something", file)
+		}
+	}
+}
+
+// Regression for task 3060: ai-on-gke/grain runs with ci_mode: github, where
+// applyGrainCIGrant strips grain#ci (`grain-ci`) from scheduled and suite
+// compositions and CreateTask refuses it when copied from a template. Every
+// release and qualification template whose body calls `grain ci` or
+// `list_ci_runs` / `get_ci_log` must carry repo-scoped api:ci-read@ai-on-gke/grain.
+func TestReleaseAndQualificationTemplatesHoldScopedCIRead(t *testing.T) {
+	decl := declarations(t)
+	want := model.APIGrantPrefix + "ci-read@" + model.GrainSourceRepo().String()
+	need := map[string]bool{
+		".grain/templates/release-train.yml":                false,
+		".grain/templates/release-watchdog.yml":             false,
+		".grain/templates/release-process-review.yml":       false,
+		".grain/templates/qualification-ci-diagnostics.yml": false,
+	}
+	for _, tmpl := range decl.Templates {
+		if _, ok := need[tmpl.Path]; !ok {
+			continue
+		}
+		need[tmpl.Path] = true
+		var caps []string
+		for _, g := range tmpl.Template.Grants {
+			caps = append(caps, g.Capability)
+			if model.IsGrainCIGrant(g.Capability) {
+				t.Errorf("%s carries %q, which applyGrainCIGrant strips on ci_mode: github", tmpl.Path, g.Capability)
+			}
+		}
+		if !containsString(caps, want) {
+			t.Errorf("%s grants = %v, want %q", tmpl.Path, caps, want)
+		}
+	}
+	for path, seen := range need {
+		if !seen {
+			t.Errorf("%s is not declared", path)
 		}
 	}
 }

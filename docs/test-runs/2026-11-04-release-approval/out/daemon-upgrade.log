@@ -1,0 +1,77 @@
+2026/11/07 04:37:26 grain daemon: serving the UI/API on http://127.0.0.1:18090 as debian
+2026/11/07 04:38:46 orchestrator: release v3.1.0 is published; upgrading to it once it has stood for 1h0m0s
+2026/11/07 04:39:06 orchestrator: release v3.1.0 is published, and this deployment already runs it
+2026/11/07 04:48:56 orchestrator: release v3.2.0 is published; upgrading to it once it has stood for 1h0m0s
+2026/11/07 04:59:06 orchestrator: release v3.2.1 is published; upgrading to it once it has stood for 1h0m0s
+2026/11/07 05:00:56 orchestrator: release v3.2.1 is published -- scheduled the automatic upgrade to v3.2.1
+2026/11/07 05:00:56 orchestrator: holding the queue until this deployment is idle, then upgrading to v3.2.1 (this deployment is already idle)
+2026/11/07 05:00:56 upgrade: v3.2.1: requested
+2026/11/07 05:00:56 orchestrator: this deployment is idle -- starting the upgrade to v3.2.1 scheduled by auto-upgrade
+2026/11/07 05:00:56 upgrade: v3.2.1: starting: pulling from localhost:5000/grain and pointing /home/debian/d1/image.env at it (45m0s to do it in)
+2026/11/07 05:00:56 orchestrator: holding the queue while this deployment upgrades to v3.2.1
+2026/11/07 05:00:57 upgrade: v3.2.1: step 1/8 pull image: done in 815ms: pulled localhost:5000/grain:v3.2.1@sha256:9c6bde1ed2a0d4a1edde03395b93642ff35eef2c97eb9c16127cd5fd95f2cc41
+2026/11/07 05:00:57 upgrade: v3.2.1: step 2/8 signature: skipped: no signature verification configured (-upgrade-verify-cmd): running whatever the registry serves for this tag, whoever published it
+2026/11/07 05:00:57 upgrade: v3.2.1: health check: running: docker run --rm localhost:5000/grain:v3.2.1@sha256:9c6bde1ed2a0d4a1edde03395b93642ff35eef2c97eb9c16127cd5fd95f2cc41 schema-version
+2026/11/07 05:00:58 upgrade: v3.2.1: health check: 119
+2026/11/07 05:00:59 upgrade: v3.2.1: step 3/8 health check: done in 2s: the pulled image runs
+2026/11/07 05:01:00 upgrade: v3.2.1: step 4/8 unit flags: done in 1s: localhost:5000/grain:v3.2.1@sha256:9c6bde1ed2a0d4a1edde03395b93642ff35eef2c97eb9c16127cd5fd95f2cc41 accepts all 9 flags this deployment was started with
+2026/11/07 05:01:00 upgrade: v3.2.1: step 5/8 sandbox image: skipped: this deployment runs no sandbox containers
+2026/11/07 05:01:01 upgrade: v3.2.1: step 6/8 schema: done in 1s: unchanged: both builds are at schema 119
+2026/11/07 05:01:02 upgrade: v3.2.1: step 7/8 record image: done in 262ms: /home/debian/d1/image.env now names localhost:5000/grain:v3.2.1@sha256:9c6bde1ed2a0d4a1edde03395b93642ff35eef2c97eb9c16127cd5fd95f2cc41
+2026/11/07 05:01:02 upgrade: v3.2.1: succeeded in 5s: pulled localhost:5000/grain:v3.2.1@sha256:9c6bde1ed2a0d4a1edde03395b93642ff35eef2c97eb9c16127cd5fd95f2cc41; restarting
+2026/11/07 05:01:02 upgrade: v3.2.1: step 8/8 restart: done in 10ms
+2026-11-07T05:01:02Z daemon exited (0)
+2026/11/07 05:01:03 grain daemon: serving the UI/API on http://127.0.0.1:18090 as debian
+2026/11/07 05:11:06 orchestrator: release v3.3.0 is published; upgrading to it once it has stood for 1h0m0s
+2026/11/07 05:11:56 orchestrator: release v3.3.0 is published -- scheduled the automatic upgrade to v3.3.0
+2026/11/07 05:11:56 orchestrator: holding the queue until this deployment is idle, then upgrading to v3.3.0 (this deployment is already idle)
+2026/11/07 05:11:56 upgrade: v3.3.0: requested
+2026/11/07 05:11:56 orchestrator: this deployment is idle -- starting the upgrade to v3.3.0 scheduled by auto-upgrade
+2026/11/07 05:11:56 upgrade: v3.3.0: starting: pulling from localhost:5000/grain and pointing /home/debian/d1/image.env at it (45m0s to do it in)
+2026/11/07 05:11:56 orchestrator: holding the queue while this deployment upgrades to v3.3.0
+2026/11/07 05:11:57 upgrade: v3.3.0: step 1/8 pull image: done in 1s: pulled localhost:5000/grain:v3.3.0@sha256:c84d716c1bd45bc6d56968b7c6baee174805cb7bbfa616368c0e395106757857
+2026/11/07 05:11:57 upgrade: v3.3.0: step 2/8 signature: skipped: no signature verification configured (-upgrade-verify-cmd): running whatever the registry serves for this tag, whoever published it
+2026/11/07 05:11:57 upgrade: v3.3.0: health check: running: docker run --rm localhost:5000/grain:v3.3.0@sha256:c84d716c1bd45bc6d56968b7c6baee174805cb7bbfa616368c0e395106757857 schema-version
+2026/11/07 05:11:58 upgrade: v3.3.0: health check: schema-version: simulated health-check failure (broken release image)
+2026/11/07 05:11:59 orchestrator: the upgrade to v3.3.0 is over -- the pipeline is picking work up again
+2026/11/07 05:11:59 upgrade: v3.3.0: step 3/8 health check: failed after 2s: health check failed on the pulled image, leaving this deployment on the image it already runs: docker run --rm localhost:5000/grain:v3.3.0@sha256:c84d716c1bd45bc6d56968b7c6baee174805cb7bbfa616368c0e395106757857 schema-version: exit status 1: schema-version: simulated health-check failure (broken release image)
+2026/11/07 05:11:59 upgrade: v3.3.0: failed after 3s: health check failed on the pulled image, leaving this deployment on the image it already runs: docker run --rm localhost:5000/grain:v3.3.0@sha256:c84d716c1bd45bc6d56968b7c6baee174805cb7bbfa616368c0e395106757857 schema-version: exit status 1: schema-version: simulated health-check failure (broken release image)
+2026/11/07 05:12:06 orchestrator: raised notification upgrade.failed:v3.3.0 (warning): Automatic upgrade to v3.3.0 failed at health check
+2026/11/07 05:21:06 orchestrator: release v3.4.0 is published; upgrading to it once it has stood for 1h0m0s
+2026/11/07 05:21:26 orchestrator: release v3.4.0 is published -- scheduled the automatic upgrade to v3.4.0
+2026/11/07 05:21:26 orchestrator: holding the queue until this deployment is idle, then upgrading to v3.4.0 (this deployment is already idle)
+2026/11/07 05:21:26 upgrade: v3.4.0: requested
+2026/11/07 05:21:26 orchestrator: this deployment is idle -- starting the upgrade to v3.4.0 scheduled by auto-upgrade
+2026/11/07 05:21:26 upgrade: v3.4.0: starting: pulling from localhost:5000/grain and pointing /home/debian/d1/image.env at it (45m0s to do it in)
+2026/11/07 05:21:26 orchestrator: holding the queue while this deployment upgrades to v3.4.0
+2026/11/07 05:21:27 upgrade: v3.4.0: step 1/8 pull image: done in 785ms: pulled localhost:5000/grain:v3.4.0@sha256:99c03f3d81ed86470330d4a9848f55688b866adffca388d9af72e4ce93c554b7
+2026/11/07 05:21:27 upgrade: v3.4.0: step 2/8 signature: skipped: no signature verification configured (-upgrade-verify-cmd): running whatever the registry serves for this tag, whoever published it
+2026/11/07 05:21:27 upgrade: v3.4.0: health check: running: docker run --rm localhost:5000/grain:v3.4.0@sha256:99c03f3d81ed86470330d4a9848f55688b866adffca388d9af72e4ce93c554b7 schema-version
+2026/11/07 05:21:28 upgrade: v3.4.0: health check: 119
+2026/11/07 05:21:28 upgrade: v3.4.0: step 3/8 health check: done in 2s: the pulled image runs
+2026/11/07 05:21:30 upgrade: v3.4.0: step 4/8 unit flags: done in 2s: localhost:5000/grain:v3.4.0@sha256:99c03f3d81ed86470330d4a9848f55688b866adffca388d9af72e4ce93c554b7 accepts all 9 flags this deployment was started with
+2026/11/07 05:21:30 upgrade: v3.4.0: step 5/8 sandbox image: skipped: this deployment runs no sandbox containers
+2026/11/07 05:21:32 upgrade: v3.4.0: step 6/8 schema: done in 1s: unchanged: both builds are at schema 119
+2026/11/07 05:21:32 upgrade: v3.4.0: step 7/8 record image: done in 343ms: /home/debian/d1/image.env now names localhost:5000/grain:v3.4.0@sha256:99c03f3d81ed86470330d4a9848f55688b866adffca388d9af72e4ce93c554b7
+2026/11/07 05:21:32 upgrade: v3.4.0: succeeded in 6s: pulled localhost:5000/grain:v3.4.0@sha256:99c03f3d81ed86470330d4a9848f55688b866adffca388d9af72e4ce93c554b7; restarting
+2026/11/07 05:21:32 upgrade: v3.4.0: step 8/8 restart: done in 11ms
+2026-11-07T05:21:32Z daemon exited (0)
+2026/11/07 05:21:33 grain daemon: serving the UI/API on http://127.0.0.1:18090 as debian
+2026/11/07 05:21:34 orchestrator: cleared notification upgrade.failed:v3.3.0
+2026/11/07 05:21:34 orchestrator: release v3.4.1 is published; upgrading to it once it has stood for 1h0m0s
+2026/11/07 05:23:21 upgrade: v3.4.1: requested
+2026/11/07 05:23:21 upgrade: v3.4.1: starting: pulling from localhost:5000/grain and pointing /home/debian/d1/image.env at it (45m0s to do it in)
+2026/11/07 05:23:21 orchestrator: holding the queue while this deployment upgrades to v3.4.1
+2026/11/07 05:23:22 upgrade: v3.4.1: step 1/8 pull image: done in 944ms: pulled localhost:5000/grain:v3.4.1@sha256:56729fe26e63f69ccf50cb7c681bb196cc68be039751ea438bcd20b0092f4b79
+2026/11/07 05:23:22 upgrade: v3.4.1: step 2/8 signature: skipped: no signature verification configured (-upgrade-verify-cmd): running whatever the registry serves for this tag, whoever published it
+2026/11/07 05:23:22 upgrade: v3.4.1: health check: running: docker run --rm localhost:5000/grain:v3.4.1@sha256:56729fe26e63f69ccf50cb7c681bb196cc68be039751ea438bcd20b0092f4b79 schema-version
+2026/11/07 05:23:23 upgrade: v3.4.1: health check: 119
+2026/11/07 05:23:23 upgrade: v3.4.1: step 3/8 health check: done in 2s: the pulled image runs
+2026/11/07 05:23:25 upgrade: v3.4.1: step 4/8 unit flags: done in 2s: localhost:5000/grain:v3.4.1@sha256:56729fe26e63f69ccf50cb7c681bb196cc68be039751ea438bcd20b0092f4b79 accepts all 9 flags this deployment was started with
+2026/11/07 05:23:25 upgrade: v3.4.1: step 5/8 sandbox image: skipped: this deployment runs no sandbox containers
+2026/11/07 05:23:27 upgrade: v3.4.1: step 6/8 schema: done in 2s: unchanged: both builds are at schema 119
+2026/11/07 05:23:27 upgrade: v3.4.1: step 7/8 record image: done in 174ms: /home/debian/d1/image.env now names localhost:5000/grain:v3.4.1@sha256:56729fe26e63f69ccf50cb7c681bb196cc68be039751ea438bcd20b0092f4b79
+2026/11/07 05:23:27 upgrade: v3.4.1: succeeded in 6s: pulled localhost:5000/grain:v3.4.1@sha256:56729fe26e63f69ccf50cb7c681bb196cc68be039751ea438bcd20b0092f4b79; restarting
+2026/11/07 05:23:27 upgrade: v3.4.1: step 8/8 restart: done in 11ms
+2026-11-07T05:23:27Z daemon exited (0)
+2026/11/07 05:23:28 grain daemon: serving the UI/API on http://127.0.0.1:18090 as debian

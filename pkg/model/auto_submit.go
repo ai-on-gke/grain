@@ -88,9 +88,22 @@ func SelfApproved(t Task) bool {
 // the work an agent identified is not wrong for the tree having got deep,
 // and a human reading a proposal that explains itself loses nothing. The
 // limit costs a click, never the work.
+//
+// TurnFanOut is the third bound, and the one a standing console
+// session's own permission (ConsoleSession.TasksApproved) is measured
+// against rather than the other two: how many proposals a session may
+// queue on that permission in one conversation turn -- since the last
+// thing a person said in its chat (Store.ExceededSessionTurnLimit). Per
+// turn rather than per task, because a session's task lives as long as
+// the conversation does and every turn is a person asking afresh; but
+// bounded, because a chat is a fast way to ask for a lot of work, and
+// an agent that misread one message should not be able to fill the
+// queue from it. Over it, the proposal is filed for a person with
+// AutoSubmitLimitNote, exactly as one over Depth or FanOut is.
 type AutoSubmitLimits struct {
-	Depth  int
-	FanOut int
+	Depth      int
+	FanOut     int
+	TurnFanOut int
 }
 
 const (
@@ -106,12 +119,21 @@ const (
 	// the cost of guessing low is a click on the sixth rather than lost
 	// work.
 	DefaultAutoSubmitFanOut = 5
+	// DefaultConsoleSessionTurnFanOut is AutoSubmitLimits.TurnFanOut
+	// for a deployment that has not chosen one (there is no setting for
+	// it yet). Ten is above what splitting one request into pieces takes
+	// -- a person asking the director to file "one task per failing
+	// test" rarely means more -- and well below what a session looping
+	// on its own output produces; the eleventh costs a click, not the
+	// work.
+	DefaultConsoleSessionTurnFanOut = 10
 )
 
 // DefaultAutoSubmitLimits is the pair a deployment that has never chosen
 // runs with.
 func DefaultAutoSubmitLimits() AutoSubmitLimits {
-	return AutoSubmitLimits{Depth: DefaultAutoSubmitDepth, FanOut: DefaultAutoSubmitFanOut}
+	return AutoSubmitLimits{Depth: DefaultAutoSubmitDepth, FanOut: DefaultAutoSubmitFanOut,
+		TurnFanOut: DefaultConsoleSessionTurnFanOut}
 }
 
 // Resolved fills in whichever half was left unset with its default. A
@@ -130,6 +152,9 @@ func (l AutoSubmitLimits) Resolved() AutoSubmitLimits {
 	}
 	if l.FanOut <= 0 {
 		l.FanOut = DefaultAutoSubmitFanOut
+	}
+	if l.TurnFanOut <= 0 {
+		l.TurnFanOut = DefaultConsoleSessionTurnFanOut
 	}
 	return l
 }
@@ -164,6 +189,10 @@ const (
 	// AutoSubmitFanOutReached is a proposer that has already
 	// self-approved as many proposals as the fan-out allows.
 	AutoSubmitFanOutReached AutoSubmitLimit = "fan-out"
+	// AutoSubmitTurnFanOutReached is a standing console session that has
+	// already queued as many proposals on its own permission in this
+	// conversation turn as AutoSubmitLimits.TurnFanOut allows.
+	AutoSubmitTurnFanOutReached AutoSubmitLimit = "turn-fan-out"
 )
 
 // AutoSubmitLimitNote is how a proposal filed over one of those bounds
@@ -186,6 +215,14 @@ func AutoSubmitLimitNote(proposer string, limit AutoSubmitLimit, limits AutoSubm
 	case AutoSubmitFanOutReached:
 		why = fmt.Sprintf("task %s has already had %d proposals queued that way, which is "+
 			"the limit", proposer, limits.FanOut)
+	case AutoSubmitTurnFanOutReached:
+		return fmt.Sprintf("\n\n---\n\ngrain: task %s, which proposed this, is a standing session "+
+			"this deployment lets queue its own work, so this would normally have been queued "+
+			"without anybody approving it. It is waiting for you instead because the session has "+
+			"already queued %d proposals since the last message a person sent it, which is the "+
+			"limit for one conversation turn. Nothing about the work was changed and nothing is "+
+			"wrong with it -- the limit is there so one message cannot fill the queue with work "+
+			"nobody looked at. Approve it if it should go ahead.", proposer, limits.TurnFanOut)
 	default:
 		return ""
 	}
@@ -214,7 +251,16 @@ func AutoSubmitLimitNote(proposer string, limit AutoSubmitLimit, limits AutoSubm
 // check for the approvals that do not go through AutoSubmits -- a
 // standing session's (ConsoleSession.TasksApproved) -- and the list
 // CapabilityEscalationNote puts in front of whoever decides.
+//
+// A proposal from the director has a narrower answer: the defaults it
+// carries seeded unchanged from its own target repository or the
+// deployment are not escalations (ProposalEscalations,
+// director-capabilities.spec.md §4.2), which the filing paths ask for
+// with the seeding source this function does not know.
 func EscalatedCapabilities(child, parent Task) []string {
+	// Read through CanonicalGrant into the stored spelling, so an api
+	// reference and today's api:<scope> are one grant here.
+	child.Grants, parent.Grants = storedGrantSpellings(child.Grants), storedGrantSpellings(parent.Grants)
 	held := make(map[string]bool, len(parent.Grants))
 	for _, g := range parent.Grants {
 		held[g.Capability] = true
@@ -256,15 +302,37 @@ func EscalatedCapabilities(child, parent Task) []string {
 // it asked for capabilities its proposer does not hold
 // (EscalatedCapabilities), so that approving the work is visibly also
 // approving those grants rather than doing so silently. "" for none.
+//
+// A grant only a person may give (IsPersonOnlyGrant: a person-granted
+// gcp set, a dangerous api scope) is escalated whether or not the
+// proposer holds it, so it is not said to be one the proposer lacks: the
+// 2026-11-08 gcp token-mode walk's proposal, from a task a person had
+// given exactly that set, read "which task 5 ... does not hold itself".
 func CapabilityEscalationNote(proposer string, caps []string) string {
-	if len(caps) == 0 {
-		return ""
+	var personOnly, ungranted []string
+	for _, c := range caps {
+		if IsPersonOnlyGrant(c) {
+			personOnly = append(personOnly, c)
+		} else {
+			ungranted = append(ungranted, c)
+		}
 	}
-	return fmt.Sprintf("\n\n---\n\ngrain: this proposal asked for %s, which task %s, "+
-		"which proposed it, does not hold itself. It was filed holding them, so it waits for "+
-		"a person rather than being queued automatically: approving it grants those "+
-		"capabilities as well as the work. Remove them from the task first if it should go "+
-		"ahead without them.", "`"+strings.Join(caps, "`, `")+"`", proposer)
+	var note string
+	if len(personOnly) > 0 {
+		note += fmt.Sprintf("\n\n---\n\ngrain: this proposal asked for %s, which only a person may "+
+			"grant: an agent cannot pass it on, whether or not task %s, which proposed it, holds it. "+
+			"It was filed holding it, so it waits for a person rather than being queued "+
+			"automatically: approving it grants that as well as the work. Remove it from the task "+
+			"first if it should go ahead without it.", "`"+strings.Join(personOnly, "`, `")+"`", proposer)
+	}
+	if len(ungranted) > 0 {
+		note += fmt.Sprintf("\n\n---\n\ngrain: this proposal asked for %s, which task %s, "+
+			"which proposed it, does not hold itself. It was filed holding them, so it waits for "+
+			"a person rather than being queued automatically: approving it grants those "+
+			"capabilities as well as the work. Remove them from the task first if it should go "+
+			"ahead without them.", "`"+strings.Join(ungranted, "`, `")+"`", proposer)
+	}
+	return note
 }
 
 // SeededEscalations splits caps -- EscalatedCapabilities(child, ...) --

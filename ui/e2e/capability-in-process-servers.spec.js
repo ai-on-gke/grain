@@ -23,9 +23,11 @@ import { expect, test } from "./fixtures.js";
 
 const GRAIN = "https://grain.dev/capabilities/grain";
 const REPO = "https://grain.dev/capabilities/repo";
+const GITHUB = "https://grain.dev/capabilities/github";
 const HOST_EXEC = `${GRAIN}#host-exec={}`;
 const SQL_WRITE = `${GRAIN}#sql={"write":true}`;
 const PUSH_ANY = `${REPO}#write={"force":true,"refs":["refs/heads/*","refs/tags/*"]}`;
+const READ_ISSUES = `${GITHUB}#read-issues={}`;
 
 const VIEWPORTS = [
   ["desktop", { width: 1440, height: 900 }],
@@ -73,7 +75,7 @@ test("lists the in-process grain and repo servers with their methods and holders
         title: "E2E retag the release branch",
         description: "d",
         repo: "acme/widgets",
-        capabilities: [PUSH_ANY],
+        capabilities: [PUSH_ANY, "read-issues"],
       },
     });
     expect(task.ok()).toBeTruthy();
@@ -88,6 +90,7 @@ test("lists the in-process grain and repo servers with their methods and holders
         for (const [id, short] of [
           [GRAIN, "grain"],
           [REPO, "repo"],
+          [GITHUB, "github"],
         ]) {
           const r = row(page, id);
           await expect(r).toHaveAttribute("data-in-process-row", short);
@@ -175,6 +178,20 @@ test("lists the in-process grain and repo servers with their methods and holders
         await expect(
           repoCard.getByTestId("capability-server-methods"),
         ).toContainText("write");
+
+        // The github server's page lists read-issues and names the task
+        // whose bare read-issues alias was recorded as github#read-issues={}.
+        await page.getByTestId("capability-servers-back").click();
+        await row(page, GITHUB).click();
+        const ghCard = page.locator(`[data-capability-server="${GITHUB}"]`);
+        await expect(
+          ghCard.locator(`[data-holder="task:${made.task}"]`),
+        ).toContainText(READ_ISSUES);
+        await expect(
+          ghCard.getByTestId("capability-server-methods"),
+        ).toContainText("read-issues");
+        const ghBox = await ghCard.boundingBox();
+        expect(ghBox.x + ghBox.width).toBeLessThanOrEqual(viewport.width);
       }
     }
   } finally {
@@ -185,6 +202,9 @@ test("lists the in-process grain and repo servers with their methods and holders
     if (made.task) {
       await request.post(`/api/tasks/${made.task}/capabilities`, {
         data: { capability: PUSH_ANY, attach: false },
+      });
+      await request.post(`/api/tasks/${made.task}/capabilities`, {
+        data: { capability: READ_ISSUES, attach: false },
       });
     }
   }

@@ -184,6 +184,11 @@ test("words repo#read as CI-only, not as denied by the capability policy", async
   page,
   request,
 }, testInfo) => {
+  // Four passes (desktop and phone, light and dark), each loading two
+  // pages, opening two grant menus and taking two screenshots: about 23s
+  // on an idle machine, which a busy CI runner pushed past the default
+  // 30s with nothing wrong on the page.
+  test.setTimeout(90_000);
   const listing = await (await request.get("/api/capability-methods")).json();
   const read = listing.find((m) => m.ref === REPO_READ);
   expect(read?.policy).toEqual({ task: "ci_only", process: "ci_only" });

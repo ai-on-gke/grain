@@ -19,8 +19,10 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -112,10 +114,16 @@ func TestViewerRoleReadsButIsRefusedWrites(t *testing.T) {
 	if rec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPatch, "/api/tasks/1", `{"title":"renamed"}`, hdr); rec.Code != http.StatusForbidden {
 		t.Fatalf("viewer PATCH as task 2: %d %s, want 403", rec.Code, rec.Body)
 	}
-	// Limited roles never reach the MCP endpoint, whose tools dispatch to
-	// many routes.
-	if code, _ := h.call("viv@example.com", http.MethodPost, "/api/mcp", `{}`); code != http.StatusForbidden {
-		t.Fatalf("viewer POST /api/mcp: %d, want 403", code)
+	// Over POST /api/mcp, a viewer can call read tools and is refused write
+	// tools with the missing scope named.
+	if out, isErr := callControllerTool(t, h.srv, h.as("viv@example.com"), ui.ToolGrainListTasks, nil); isErr || !strings.Contains(out, `"id":"1"`) {
+		t.Fatalf("viewer grain_list_tasks: isErr=%v out=%s", isErr, out)
+	}
+	if out, isErr := callControllerTool(t, h.srv, h.as("viv@example.com"), ui.ToolGrainInvoke, map[string]any{
+		"tool":      "api_add_comment",
+		"arguments": map[string]any{"id": "1", "body": map[string]any{"body": "nope"}},
+	}); !isErr || !strings.Contains(out, "tasks:write") || !strings.Contains(out, "role grain/viewer") {
+		t.Fatalf("viewer grain_invoke api_add_comment: isErr=%v out=%s, want refusal naming tasks:write and role grain/viewer", isErr, out)
 	}
 
 	got := h.access(t, "viv@example.com")
@@ -125,6 +133,22 @@ func TestViewerRoleReadsButIsRefusedWrites(t *testing.T) {
 	for _, sc := range got.Scopes {
 		if model.IsDangerousAPIScope(sc) || !strings.HasSuffix(string(sc), ":read") {
 			t.Errorf("grain/viewer reports %s", sc)
+		}
+	}
+}
+
+// A config change is decided under settings:write, as any other change to
+// this deployment's settings is: a viewer is refused both decisions before
+// the task is even read, whatever commit they name
+// (docs/test-runs/2026-11-09-demo-config-change.md, finding 2).
+func TestViewerRoleIsRefusedConfigChangeDecisions(t *testing.T) {
+	h := newRoleHarness(t)
+	h.allow(t, "user:viv@example.com", "grain/viewer")
+	seedAPITask(t, h.client, "1", "acme/widgets")
+	for _, verb := range []string{"approve", "reject"} {
+		code, body := h.call("viv@example.com", http.MethodPost, "/api/tasks/1/config-change/"+verb, `{"headSha":"abc"}`)
+		if code != http.StatusForbidden || !strings.Contains(body, "settings:write") || !strings.Contains(body, "role grain/viewer") {
+			t.Errorf("viewer POST config-change/%s: %d %s, want 403 naming settings:write and the role", verb, code, body)
 		}
 	}
 }
@@ -215,8 +239,11 @@ func TestAFailedLookupOfAGroupWhoseRoleDeniesRefuses(t *testing.T) {
 	// A group whose role denies is not: leaving its veto out would give
 	// dee the secrets:read it withholds, so dee is refused instead.
 	h.allow(t, "group:contractors@example.com", "contractors")
-	if code, body := h.call("dee@example.com", http.MethodGet, "/api/deployment/secret-audit", ""); code != http.StatusForbidden || !strings.Contains(body, "contractors@example.com") {
-		t.Fatalf("GET secret-audit with a denying group's lookup failing: %d %s, want 403 naming the group", code, body)
+	if code, body := h.call("dee@example.com", http.MethodGet, "/api/deployment/secret-audit", ""); code != http.StatusForbidden ||
+		!strings.Contains(body, "contractors@example.com") ||
+		!strings.Contains(body, "group membership lookup unavailable") ||
+		strings.Contains(body, "cloud identity unavailable") {
+		t.Fatalf("GET secret-audit with a denying group's lookup failing: %d %s, want generic 403 naming the group without underlying error", code, body)
 	}
 }
 
@@ -582,6 +609,28 @@ func TestStandingWorkAndFromTemplateHoldLimitedRolesToTheirScopes(t *testing.T) 
 		t.Fatal(err)
 	}
 
+	// Admission above standard replaced the priority-dispatch and durable
+	// grants, which a limited role could not hand out: a template or
+	// schedule carrying the setting is refused it the same way.
+	bypassID := model.RepoDeclaredID(model.DeclaredTemplate, model.RepoRef{Owner: "acme", Name: "widgets"}, "urgent")
+	if err := h.client.Store.PutTemplate(ctx, model.Template{
+		ID:        bypassID,
+		Name:      "urgent",
+		Title:     "urgent",
+		Admission: model.AdmissionBypass,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.client.Store.PutSchedule(ctx, model.Schedule{
+		ID:         "sched-durable",
+		Title:      "durable",
+		Target:     model.RepoRef{Owner: "acme", Name: "widgets"},
+		Admission:  model.AdmissionDurable,
+		Recurrence: model.Recurrence{Kind: model.RecurrenceEveryNHours, EveryNHours: 24},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	for _, tc := range []struct {
 		name    string
 		method  string
@@ -589,6 +638,9 @@ func TestStandingWorkAndFromTemplateHoldLimitedRolesToTheirScopes(t *testing.T) 
 		body    string
 		wantKey string
 	}{
+		{"fromTemplateBypassAdmission", http.MethodPost, "/api/tasks/from-template", `{"repo":"acme/widgets","template":"urgent"}`, model.PriorityDispatchCapability},
+		{"runDurableSchedule", http.MethodPost, "/api/schedules/sched-durable/run", `{}`, model.DurableCapability},
+		{"createTemplateAdmission", http.MethodPost, "/api/templates", `{"name":"t","title":"t","admission":"durable"}`, "admission"},
 		{"fromTemplateApproved", http.MethodPost, "/api/tasks/from-template", `{"repo":"acme/widgets","template":"deploy","approved":true}`, "template"},
 		{"fromTemplatePrivGrant", http.MethodPost, "/api/tasks/from-template", `{"repo":"acme/widgets","template":"deploy"}`, "template"},
 		{"createTemplateAutoMerge", http.MethodPost, "/api/templates", `{"name":"t","title":"t","autoMerge":true}`, "autoMerge"},
@@ -608,5 +660,615 @@ func TestStandingWorkAndFromTemplateHoldLimitedRolesToTheirScopes(t *testing.T) 
 	if code, body := h.call("vetoed@example.com", http.MethodPost, "/api/tasks",
 		`{"repo":"acme/widgets","title":"leak","capabilities":["api:secrets:read"]}`); code != http.StatusForbidden || !strings.Contains(body, "capabilities") {
 		t.Fatalf("vetoed role granting denied scope = %d %s, want 403 naming capabilities", code, body)
+	}
+}
+
+func TestMCPPerToolRoleChecks(t *testing.T) {
+	ctx := context.Background()
+	installScopeSets(t,
+		model.APIScopeSet{
+			Name:    "widgets-contrib",
+			Scopes:  []string{"tasks:read", "tasks:write", "templates:read"},
+			Repos:   []string{"acme/widgets"},
+			Version: 1,
+		},
+		model.APIScopeSet{
+			Name:    "ci-only",
+			Scopes:  []string{"ci:read"},
+			Version: 1,
+		},
+	)
+
+	h := newRoleHarness(t)
+	h.allow(t, "user:viv@example.com", "grain/viewer")
+	h.allow(t, "user:connie@example.com", "grain/contributor")
+	h.allow(t, "user:walt@example.com", "widgets-contrib")
+	h.allow(t, "user:ned@example.com", "ci-only")
+
+	seedAPITask(t, h.client, "1", "acme/widgets")
+	seedAPITask(t, h.client, "2", "acme/gadgets")
+	seedAPITask(t, h.client, "3", "acme/widgets", "api:task-admin")
+
+	if err := h.client.Store.PutTemplate(ctx, model.Template{
+		ID:     "tmpl-widgets",
+		Name:   "widgets-tmpl",
+		Title:  "widgets",
+		Target: &model.RepoRef{Owner: "acme", Name: "widgets"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.client.Store.PutTemplate(ctx, model.Template{
+		ID:     "tmpl-gadgets",
+		Name:   "gadgets-tmpl",
+		Title:  "gadgets",
+		Target: &model.RepoRef{Owner: "acme", Name: "gadgets"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. grain/viewer on POST /api/mcp: read tools succeed, write/admin tools
+	// are omitted from discovery and refused on invocation naming the missing scope.
+	exploreOut, isErr := callControllerTool(t, h.srv, h.as("viv@example.com"), ui.ToolGrainExploreScope, map[string]any{
+		"scope": "all",
+		"view":  "index",
+	})
+	if isErr {
+		t.Fatalf("viewer grain_explore_scope: %s", exploreOut)
+	}
+	if !strings.Contains(exploreOut, "api_list_tasks") || !strings.Contains(exploreOut, "api_get_settings") {
+		t.Fatalf("viewer explore missing read tools: %s", exploreOut)
+	}
+	for _, writeTool := range []string{"api_add_comment", "api_create_task", "api_update_settings", "api_approve", "api_delete_board"} {
+		if strings.Contains(exploreOut, writeTool) {
+			t.Errorf("viewer explore leaked unauthorized tool %q: %s", writeTool, exploreOut)
+		}
+	}
+
+	if out, isErr := callControllerTool(t, h.srv, h.as("viv@example.com"), ui.ToolGrainGetTask, map[string]any{"id": "1"}); isErr || !strings.Contains(out, "Task 1") {
+		t.Fatalf("viewer grain_get_task: isErr=%v out=%s", isErr, out)
+	}
+	if out, isErr := callControllerTool(t, h.srv, h.as("viv@example.com"), ui.ToolGrainFilingContext, nil); isErr || !strings.Contains(out, "templates") {
+		t.Fatalf("viewer grain_filing_context: isErr=%v out=%s", isErr, out)
+	}
+	if out, isErr := callControllerTool(t, h.srv, h.as("viv@example.com"), ui.ToolGrainInvoke, map[string]any{
+		"tool": "api_get_settings",
+	}); isErr {
+		t.Fatalf("viewer grain_invoke api_get_settings: %s", out)
+	}
+
+	if out, isErr := callControllerTool(t, h.srv, h.as("viv@example.com"), ui.ToolGrainSubmitTask, map[string]any{
+		"title": "attempt write",
+		"repo":  "acme/widgets",
+	}); !isErr || !strings.Contains(out, "tasks:write") || !strings.Contains(out, "role grain/viewer") {
+		t.Fatalf("viewer grain_submit_task: isErr=%v out=%s, want refusal naming tasks:write and role grain/viewer", isErr, out)
+	}
+
+	for _, tc := range []struct {
+		tool      string
+		args      map[string]any
+		wantScope string
+	}{
+		{
+			tool: "api_add_comment",
+			args: map[string]any{
+				"id":     "1",
+				"body":   map[string]any{"body": "hello"},
+				"expect": map[string]any{"state": "closed"},
+			},
+			wantScope: "tasks:write",
+		},
+		{
+			tool:      "api_update_settings",
+			args:      map[string]any{"body": map[string]any{}},
+			wantScope: "settings:write",
+		},
+		{
+			tool:      "api_approve",
+			args:      map[string]any{"id": "1"},
+			wantScope: "tasks:admin",
+		},
+		{
+			tool:      "api_delete_board",
+			args:      map[string]any{"id": "b1"},
+			wantScope: "boards:write",
+		},
+	} {
+		out, isErr := callControllerTool(t, h.srv, h.as("viv@example.com"), ui.ToolGrainInvoke, map[string]any{
+			"tool":      tc.tool,
+			"arguments": tc.args,
+		})
+		if !isErr || !strings.Contains(out, tc.wantScope) || !strings.Contains(out, "role grain/viewer") {
+			t.Errorf("viewer grain_invoke %s: isErr=%v out=%s, want refusal naming %s and role grain/viewer", tc.tool, isErr, out, tc.wantScope)
+		}
+		if strings.Contains(out, "expect:") {
+			t.Errorf("viewer grain_invoke %s leaked expect check before role check: %s", tc.tool, out)
+		}
+	}
+
+	// X-Grain-Acting-Task cannot widen a viewer's role on POST /api/mcp.
+	actingHdr := h.as("viv@example.com")
+	actingHdr[ui.ActingTaskHeader] = "3"
+	if out, isErr := callControllerTool(t, h.srv, actingHdr, ui.ToolGrainInvoke, map[string]any{
+		"tool":      "api_add_comment",
+		"arguments": map[string]any{"id": "1", "body": map[string]any{"body": "escalate"}},
+	}); !isErr || !strings.Contains(out, "tasks:write") || !strings.Contains(out, "role grain/viewer") {
+		t.Fatalf("viewer + acting task 3 api_add_comment: isErr=%v out=%s", isErr, out)
+	}
+
+	// 2. Repo-limited and contributor escalations over POST /api/mcp.
+	if out, isErr := callControllerTool(t, h.srv, h.as("walt@example.com"), ui.ToolGrainGetTask, map[string]any{"id": "1"}); isErr {
+		t.Fatalf("widgets-contrib grain_get_task(1): %s", out)
+	}
+	if out, isErr := callControllerTool(t, h.srv, h.as("walt@example.com"), ui.ToolGrainGetTask, map[string]any{"id": "2"}); !isErr || !strings.Contains(out, "acme/gadgets") {
+		t.Fatalf("widgets-contrib grain_get_task(2): isErr=%v out=%s, want 403 naming acme/gadgets", isErr, out)
+	}
+	if out, isErr := callControllerTool(t, h.srv, h.as("walt@example.com"), ui.ToolGrainInvoke, map[string]any{
+		"tool": "api_add_comment",
+		"arguments": map[string]any{
+			"id":     "2",
+			"body":   map[string]any{"body": "wrong repo"},
+			"expect": map[string]any{"state": "closed"},
+		},
+	}); !isErr || !strings.Contains(out, "acme/gadgets") || strings.Contains(out, "expect:") {
+		t.Fatalf("widgets-contrib api_add_comment on acme/gadgets with expect: isErr=%v out=%s", isErr, out)
+	}
+	fcOut, isErr := callControllerTool(t, h.srv, h.as("walt@example.com"), ui.ToolGrainFilingContext, nil)
+	if isErr {
+		t.Fatalf("widgets-contrib grain_filing_context: %s", fcOut)
+	}
+	if !strings.Contains(fcOut, "tmpl-widgets") || strings.Contains(fcOut, "tmpl-gadgets") || strings.Contains(fcOut, `"boards"`) || strings.Contains(fcOut, `"capabilities"`) {
+		t.Fatalf("widgets-contrib grain_filing_context leaked out-of-scope sections/repos: %s", fcOut)
+	}
+
+	if out, isErr := callControllerTool(t, h.srv, h.as("ned@example.com"), ui.ToolGrainFilingContext, nil); !isErr || !strings.Contains(out, "tasks:read") || !strings.Contains(out, "role ci-only") {
+		t.Fatalf("ci-only grain_filing_context: isErr=%v out=%s, want refusal naming tasks:read and role ci-only", isErr, out)
+	}
+
+	if out, isErr := callControllerTool(t, h.srv, h.as("connie@example.com"), ui.ToolGrainSubmitTask, map[string]any{
+		"title":   "approved task",
+		"repo":    "acme/widgets",
+		"approve": true,
+	}); !isErr || !strings.Contains(out, "tasks:admin") {
+		t.Fatalf("contributor grain_submit_task(approve=true): isErr=%v out=%s, want tasks:admin refusal", isErr, out)
+	}
+	if out, isErr := callControllerTool(t, h.srv, h.as("connie@example.com"), ui.ToolGrainSubmitTask, map[string]any{
+		"title":   "proposed task",
+		"repo":    "acme/widgets",
+		"approve": false,
+	}); isErr || !strings.Contains(out, `"approved":false`) {
+		t.Fatalf("contributor grain_submit_task(approve=false): isErr=%v out=%s", isErr, out)
+	}
+
+	// 3. POST /mcp behind IAP with a viewer session and a wider gma_ token:
+	// tools/list filters out write tools, read calls succeed, write calls fail
+	// naming the missing scope and role.
+	enableExternalAgentAPI(t, h.client.Store)
+	h.allow(t, "user:operator@example.com", "grain/operator") // behind IAP a token works only while its owner is listed
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	issued, err := h.client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+		Name:     "contrib-bot",
+		ScopeSet: "grain/contributor",
+		Owner:    "operator@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mcpHeaders := h.as("viv@example.com")
+	mcpHeaders["Authorization"] = "Bearer " + issued.Token
+
+	listRec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, "/mcp",
+		`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`, mcpHeaders)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("viewer POST /mcp tools/list: %d %s", listRec.Code, listRec.Body.String())
+	}
+	listBody := listRec.Body.String()
+	if !strings.Contains(listBody, "api_list_tasks") || strings.Contains(listBody, "api_add_comment") {
+		t.Fatalf("viewer POST /mcp tools/list = %s, want api_list_tasks without api_add_comment", listBody)
+	}
+
+	readRec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, "/mcp",
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"api_list_tasks","arguments":{}}}`, mcpHeaders)
+	if readRec.Code != http.StatusOK || strings.Contains(readRec.Body.String(), `"isError":true`) || !strings.Contains(readRec.Body.String(), `\"id\":\"2\"`) {
+		t.Fatalf("viewer POST /mcp api_list_tasks: %d %s", readRec.Code, readRec.Body.String())
+	}
+
+	writeRec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, "/mcp",
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"api_add_comment","arguments":{"id":"1","body":{"body":"nope"}}}}`, mcpHeaders)
+	if writeRec.Code != http.StatusOK || !strings.Contains(writeRec.Body.String(), `"isError":true`) ||
+		!strings.Contains(writeRec.Body.String(), "tasks:write") || !strings.Contains(writeRec.Body.String(), "role grain/viewer") {
+		t.Fatalf("viewer POST /mcp api_add_comment: %d %s, want tool error naming tasks:write and role grain/viewer", writeRec.Code, writeRec.Body.String())
+	}
+}
+
+// TestExternalTokenCannotExceedItsOwnersCurrentRole: a gma_ token issued
+// while its owner held grain/operator is refused once the owner is moved to
+// grain/viewer, on REST and both MCP endpoints, and works again within the
+// owner's role (docs/test-runs/2026-11-07-rbac-roles.md F2).
+func TestExternalTokenCannotExceedItsOwnersCurrentRole(t *testing.T) {
+	ctx := context.Background()
+	h := newRoleHarness(t)
+	enableExternalAgentAPI(t, h.client.Store)
+	h.allow(t, "user:olivia@example.com", model.DefaultAccessRole)
+	issued, err := h.client.CreateExternalAgentToken(ctx, ui.CreateExternalAgentTokenRequest{
+		Name: "olivia-laptop", ScopeSet: model.DefaultAccessRole, Owner: "olivia@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bearer := map[string]string{"Authorization": "Bearer " + issued.Token, "Content-Type": "application/json"}
+	file := func(path string) int {
+		body := `{"title":"gma filing","description":"x","noRepo":true}`
+		if path != "/api/tasks" {
+			body = `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`
+		}
+		return serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, path, body, bearer).Code
+	}
+	if code := file("/api/tasks"); code != http.StatusCreated {
+		t.Fatalf("token of an operator owner filing = %d, want 201", code)
+	}
+	if _, _, _, err := h.client.Store.SetAllowedPrincipalRole(ctx, "user:olivia@example.com", "grain/viewer"); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/api/tasks", "/mcp", "/api/mcp"} {
+		rec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, path, `{"title":"x","description":"x","noRepo":true}`, bearer)
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "wider than its owner's current role") {
+			t.Fatalf("POST %s with a downgraded owner's operator token = %d %s, want 403 naming the owner's role", path, rec.Code, rec.Body.String())
+		}
+	}
+
+	narrow, err := h.client.CreateExternalAgentToken(ctx, ui.CreateExternalAgentTokenRequest{
+		Name: "olivia-reader", ScopeSet: "grain/viewer", Owner: "olivia@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bearer["Authorization"] = "Bearer " + narrow.Token
+	if code := file("/mcp"); code != http.StatusOK {
+		t.Fatalf("viewer token of a viewer owner on /mcp = %d, want 200", code)
+	}
+	if code := file("/api/tasks"); code != http.StatusForbidden {
+		t.Fatalf("viewer token filing = %d, want 403", code)
+	}
+
+	// A group lookup that fails cannot narrow an owner whose own user:
+	// entry's role has no deny: contributor's token still files.
+	h.allow(t, "user:gus@example.com", "grain/contributor")
+	h.allow(t, "group:readers@example.com", "grain/viewer")
+	h.client.Config.GroupChecker = groupCheckerFunc(func(context.Context, string, string) (bool, error) {
+		return false, errors.New("cloud identity unreachable")
+	})
+	gus, err := h.client.CreateExternalAgentToken(ctx, ui.CreateExternalAgentTokenRequest{
+		Name: "gus-laptop", ScopeSet: "grain/contributor", Owner: "gus@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bearer["Authorization"] = "Bearer " + gus.Token
+	if code := file("/api/tasks"); code != http.StatusCreated {
+		t.Fatalf("contributor token of a contributor owner, group lookup down = %d, want 201 (no deny to miss)", code)
+	}
+
+	// A token issued without an owner acts for the deployment's local
+	// account, which is no email address and so in no group: a group
+	// lookup that fails leaves it working (ui/e2e/external-agent-filer.spec.js).
+	unowned, err := h.client.CreateExternalAgentToken(ctx, ui.CreateExternalAgentTokenRequest{
+		Name: "widgets-writer", Scopes: []string{"tasks:write"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bearer["Authorization"] = "Bearer " + unowned.Token
+	if code := file("/api/tasks"); code != http.StatusCreated {
+		t.Fatalf("unowned token, group lookup down = %d, want 201", code)
+	}
+
+	// An owner with an email address and no entry of their own, whose only
+	// possible match is the group that cannot be looked up, is refused.
+	ghost, err := h.client.CreateExternalAgentToken(ctx, ui.CreateExternalAgentTokenRequest{
+		Name: "hal-laptop", Scopes: []string{"tasks:write"}, Owner: "hal@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bearer["Authorization"] = "Bearer " + ghost.Token
+	rec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, "/api/tasks", `{"title":"x","description":"x","noRepo":true}`, bearer)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "cannot be checked") {
+		t.Fatalf("token of an owner only a failed group lookup could match = %d %s, want 403", rec.Code, rec.Body.String())
+	}
+}
+
+// A gma_ token stops working once its owner is removed from the allowlist,
+// and never works for an owner the list does not match, while a verifier
+// admits people by that list; with no verifier the list admits nobody and
+// such a token works as before (docs/test-runs/2026-11-07-rbac-roles.md O4).
+func TestExternalTokenOfAnUnlistedOwnerIsRefusedBehindAVerifier(t *testing.T) {
+	ctx := context.Background()
+	h := newRoleHarness(t)
+	enableExternalAgentAPI(t, h.client.Store)
+	h.allow(t, "user:olivia@example.com", "grain/contributor")
+	issue := func(name, owner string) map[string]string {
+		t.Helper()
+		issued, err := h.client.CreateExternalAgentToken(ctx, ui.CreateExternalAgentTokenRequest{
+			Name: name, ScopeSet: "grain/contributor", Owner: owner,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return map[string]string{"Authorization": "Bearer " + issued.Token, "Content-Type": "application/json"}
+	}
+	file := func(bearer map[string]string) *httptest.ResponseRecorder {
+		return serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, "/api/tasks", `{"title":"gma filing","description":"x","noRepo":true}`, bearer)
+	}
+	olivia := issue("olivia-laptop", "olivia@example.com")
+	stranger := issue("sam-laptop", "sam@example.com")
+	unowned, err := h.client.CreateExternalAgentToken(ctx, ui.CreateExternalAgentTokenRequest{
+		Name: "widgets-writer", Scopes: []string{"tasks:write"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := map[string]string{"Authorization": "Bearer " + unowned.Token, "Content-Type": "application/json"}
+
+	if rec := file(olivia); rec.Code != http.StatusCreated {
+		t.Fatalf("token of a listed owner = %d %s, want 201", rec.Code, rec.Body)
+	}
+	if _, _, err := h.client.Store.RemoveAllowedPrincipal(ctx, "user:olivia@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	for name, bearer := range map[string]map[string]string{"removed owner": olivia, "never-listed owner": stranger} {
+		for _, path := range []string{"/api/tasks", "/mcp", "/api/mcp"} {
+			rec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, path, `{"title":"x","description":"x","noRepo":true}`, bearer)
+			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "holds no role on this deployment") {
+				t.Fatalf("POST %s with a %s's token behind IAP = %d %s, want 403 naming the missing role", path, name, rec.Code, rec.Body)
+			}
+		}
+	}
+	if rec := file(local); rec.Code != http.StatusCreated {
+		t.Fatalf("unowned token (the local account) behind IAP = %d %s, want 201", rec.Code, rec.Body)
+	}
+
+	// No verifier: a single-user or access-code deployment, whose token
+	// owners were never on the list.
+	ui.ResetIAPConfig()
+	for name, bearer := range map[string]map[string]string{"removed owner": olivia, "never-listed owner": stranger, "local account": local} {
+		if rec := file(bearer); rec.Code != http.StatusCreated {
+			t.Fatalf("%s's token with no verifier = %d %s, want 201", name, rec.Code, rec.Body)
+		}
+	}
+}
+
+// Behind a verifier whose assertion beats the access code, signing in by
+// code is refused with the reason rather than answered 200 with a cookie
+// that is then never used (docs/test-runs/2026-11-07-rbac-roles.md F1).
+func TestAccessCodeSignInBehindIAPSaysTheVerifiedRoleApplies(t *testing.T) {
+	h := newRoleHarness(t)
+	h.allow(t, "user:vic@example.com", "grain/viewer")
+	for _, c := range []struct{ name, contentType, body string }{
+		{"json", "application/json", `{"code":"` + testAccessCode + `"}`},
+		{"form", "application/x-www-form-urlencoded", url.Values{"code": {testAccessCode}}.Encode()},
+	} {
+		hdrs := h.as("vic@example.com")
+		hdrs["Content-Type"] = c.contentType
+		rec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, "/api/auth/access-code", c.body, hdrs)
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "vic@example.com") ||
+			!strings.Contains(rec.Body.String(), "the access code does not change it") {
+			t.Fatalf("%s sign-in by code behind IAP = %d %s, want 403 saying the IAP role applies", c.name, rec.Code, rec.Body)
+		}
+		for _, ck := range rec.Result().Cookies() {
+			if ck.Name == ui.AccessCookieName && ck.Value != "" {
+				t.Fatalf("%s sign-in by code behind IAP set %s", c.name, ui.AccessCookieName)
+			}
+		}
+	}
+	// Without an assertion the code still signs in.
+	rec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, "/api/auth/access-code", `{"code":"`+testAccessCode+`"}`,
+		map[string]string{"Content-Type": "application/json"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("sign-in by code without an assertion = %d %s, want 200", rec.Code, rec.Body)
+	}
+}
+
+// A limited role approves a stored task -- POST /api/tasks/{id}/approve, or
+// POST /api/tasks/{id}/run-now on one with no approval yet -- only with
+// tasks:admin on its repository and only when the role could have filed it
+// approved itself, over REST, POST /api/mcp's grain_invoke and POST /mcp
+// behind a verified session carrying a wider gma_ token.
+func TestLimitedRoleApprovalIsHeldToTasksAdminAndTheRolesCeiling(t *testing.T) {
+	ctx := context.Background()
+	installScopeSets(t,
+		model.APIScopeSet{
+			Name:    "dispatcher",
+			Scopes:  []string{"tasks:read", "tasks:write", "dispatch:read", "dispatch:write"},
+			Version: 1,
+		},
+		model.APIScopeSet{
+			Name:    "widgets-admin",
+			Scopes:  []string{"tasks:read", "tasks:write", "tasks:admin", "dispatch:read", "dispatch:write"},
+			Repos:   []string{"acme/widgets"},
+			Version: 1,
+		},
+	)
+	h := newRoleHarness(t)
+	enableExternalAgentAPI(t, h.client.Store)
+	h.allow(t, "user:dee@example.com", "dispatcher")
+	h.allow(t, "user:wade@example.com", "widgets-admin")
+	h.allow(t, "user:operator@example.com", "grain/operator")
+
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	gadgets := model.RepoRef{Owner: "acme", Name: "gadgets"}
+	seed := func(id string, edit func(*model.Task)) string {
+		t.Helper()
+		task := model.Task{ID: id, Intent: model.IntentImplement, Title: "task " + id, Target: &widgets}
+		if edit != nil {
+			edit(&task)
+		}
+		if err := h.client.Store.PutTask(ctx, task); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	approved := func(task *model.Task) {
+		task.Approval = &model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"}}
+	}
+	actions := []struct{ route, tool string }{{"approve", "api_approve"}, {"run-now", "api_run_now"}}
+	n := 0
+	next := func() string { n++; return "9" + strconv.Itoa(1000 + n)[1:] }
+
+	defaultReviewID := model.DefaultReviewTemplateID(widgets)
+	for _, tmpl := range []model.Template{
+		{
+			ID:     "heavy-review",
+			Name:   "heavy review",
+			Title:  "heavy review",
+			Writes: []model.WriteTarget{{Repo: gadgets}},
+			Reads:  []model.RepoRef{gadgets},
+			Grants: []model.Grant{{Capability: "api:tasks:write", Via: model.GrantByLabel}},
+		},
+		{
+			ID:     "gadgets-write-review",
+			Name:   "gadgets write review",
+			Title:  "gadgets write review",
+			Writes: []model.WriteTarget{{Repo: gadgets}},
+		},
+		{
+			ID:    "gadgets-read-review",
+			Name:  "gadgets read review",
+			Title: "gadgets read review",
+			Reads: []model.RepoRef{gadgets},
+		},
+		{
+			ID:     defaultReviewID,
+			Name:   "default review",
+			Title:  "default review",
+			Writes: []model.WriteTarget{{Repo: gadgets}},
+			Reads:  []model.RepoRef{gadgets},
+			Grants: []model.Grant{{Capability: "api:tasks:write", Via: model.GrantByLabel}},
+		},
+	} {
+		if err := h.client.Store.PutTemplate(ctx, tmpl); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Control: filing a task naming heavy-review is refused on POST /api/tasks
+	// for the same role, so filing and approving enforce the same ceiling.
+	if code, body := h.call("wade@example.com", http.MethodPost, "/api/tasks",
+		`{"title":"t","body":"b","repo":"acme/widgets","reviewTemplateId":"heavy-review"}`); code != http.StatusForbidden ||
+		!strings.Contains(body, "reviewTemplateId") || !strings.Contains(body, "widgets-admin") {
+		t.Fatalf("widgets-admin POST /api/tasks with heavy-review: %d %s, want 403 naming reviewTemplateId and the role", code, body)
+	}
+
+	// dispatch:write without tasks:admin runs an approved task now but
+	// cannot approve one by running it.
+	for _, surface := range []string{"rest", "api-mcp"} {
+		id := seed(next(), nil)
+		var out string
+		var refused bool
+		if surface == "rest" {
+			code, body := h.call("dee@example.com", http.MethodPost, "/api/tasks/"+id+"/run-now", `{}`)
+			out, refused = body, code == http.StatusForbidden
+		} else {
+			out, refused = callControllerTool(t, h.srv, h.as("dee@example.com"), ui.ToolGrainInvoke, map[string]any{
+				"tool": "api_run_now", "arguments": map[string]any{"id": id}, "reason": "testing the role ceiling",
+			})
+		}
+		if !refused || !strings.Contains(out, "tasks:admin") || !strings.Contains(out, "dispatcher") {
+			t.Errorf("%s: dispatcher run-now on unapproved task %s: refused=%v %s, want refusal naming tasks:admin and the role", surface, id, refused, out)
+		}
+		if task, err := h.client.Store.GetTask(ctx, id); err != nil || task == nil || task.Approval != nil {
+			t.Errorf("%s: task %s was approved by a refused run-now: %+v %v", surface, id, task, err)
+		}
+	}
+	okID := seed(next(), approved)
+	if code, body := h.call("dee@example.com", http.MethodPost, "/api/tasks/"+okID+"/run-now", `{}`); code == http.StatusForbidden {
+		t.Errorf("dispatcher run-now on approved task: %d %s, want it let through on dispatch:write", code, body)
+	}
+
+	// tasks:admin on the repository approves a plain task or one naming the
+	// repository's own default review template by either route.
+	for _, a := range actions {
+		id := seed(next(), nil)
+		if code, body := h.call("wade@example.com", http.MethodPost, "/api/tasks/"+id+"/"+a.route, `{}`); code == http.StatusForbidden {
+			t.Errorf("widgets-admin %s on a plain task: %d %s, want it allowed", a.route, code, body)
+		}
+		defID := seed(next(), func(t *model.Task) { t.ReviewTemplateID = defaultReviewID })
+		if code, body := h.call("wade@example.com", http.MethodPost, "/api/tasks/"+defID+"/"+a.route, `{}`); code >= 300 {
+			t.Errorf("widgets-admin %s on task naming default review template: %d %s, want 2xx", a.route, code, body)
+		}
+		if task, err := h.client.Store.GetTask(ctx, defID); err != nil || task == nil || task.Approval == nil {
+			t.Errorf("widgets-admin %s on task %s naming default review template did not approve it: %+v %v", a.route, defID, task, err)
+		}
+	}
+
+	// ... but not one carrying what the role could not have filed approved.
+	ceilings := []struct {
+		name, want string
+		edit       func(*model.Task)
+	}{
+		{"autoMerge", "autoMerge", func(t *model.Task) { t.AutoMerge = true }},
+		{"keepRunning", "keepRunning", func(t *model.Task) { t.KeepRunning = true }},
+		{"durable", model.DurableCapability, func(t *model.Task) { t.Admission = model.AdmissionDurable }},
+		{"dangerousGrant", "api:settings:write", func(t *model.Task) {
+			t.Grants = []model.Grant{{Capability: "api:settings:write", Via: model.GrantByLabel}}
+		}},
+		{"writes", "acme/gadgets", func(t *model.Task) { t.Writes = []model.WriteTarget{{Repo: gadgets}} }},
+		{"reads", "acme/gadgets", func(t *model.Task) { t.Reads = []model.RepoRef{gadgets} }},
+		{"reviewTemplateId", "reviewTemplateId", func(t *model.Task) { t.ReviewTemplateID = "heavy-review" }},
+		{"reviewTemplateWrites", "reviewTemplateId", func(t *model.Task) { t.ReviewTemplateID = "gadgets-write-review" }},
+		{"reviewTemplateReads", "reviewTemplateId", func(t *model.Task) { t.ReviewTemplateID = "gadgets-read-review" }},
+	}
+	for _, c := range ceilings {
+		for _, a := range actions {
+			for _, surface := range []string{"rest", "api-mcp"} {
+				id := seed(next(), c.edit)
+				var out string
+				var refused bool
+				if surface == "rest" {
+					code, body := h.call("wade@example.com", http.MethodPost, "/api/tasks/"+id+"/"+a.route, `{}`)
+					out, refused = body, code == http.StatusForbidden
+				} else {
+					out, refused = callControllerTool(t, h.srv, h.as("wade@example.com"), ui.ToolGrainInvoke, map[string]any{
+						"tool": a.tool, "arguments": map[string]any{"id": id}, "reason": "testing the role ceiling",
+					})
+				}
+				if !refused || !strings.Contains(out, c.want) || !strings.Contains(out, "widgets-admin") {
+					t.Errorf("%s %s %s: refused=%v %s, want refusal naming %s and the role", surface, a.route, c.name, refused, out, c.want)
+				}
+				if task, err := h.client.Store.GetTask(ctx, id); err != nil || task == nil || task.Approval != nil {
+					t.Errorf("%s %s %s: task %s was approved: %+v %v", surface, a.route, c.name, id, task, err)
+				}
+			}
+		}
+	}
+
+	// A verified dispatcher session carrying an operator's gma_ token holding
+	// tasks:admin is held to the session's role, on REST and on POST /mcp.
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	issued, err := h.client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+		Name:   "operator-admin",
+		Scopes: []string{"tasks:read", "tasks:write", "tasks:admin", "dispatch:read", "dispatch:write"},
+		Owner:  "operator@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	withToken := h.as("dee@example.com")
+	withToken["Authorization"] = "Bearer " + issued.Token
+	withToken[ui.ActingReasonHeader] = "testing the role ceiling"
+	for _, a := range actions {
+		id := seed(next(), nil)
+		rec := serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, "/api/tasks/"+id+"/"+a.route, `{}`, withToken)
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "tasks:admin") {
+			t.Errorf("REST %s as dispatcher with an admin token: %d %s, want 403 naming tasks:admin", a.route, rec.Code, rec.Body.String())
+		}
+		id = seed(next(), nil)
+		rec = serveFrom(h.srv, "203.0.113.10:443", http.MethodPost, "/mcp",
+			`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"`+a.tool+`","arguments":{"id":"`+id+`"}}}`, withToken)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"isError":true`) || !strings.Contains(rec.Body.String(), "tasks:admin") {
+			t.Errorf("POST /mcp %s as dispatcher with an admin token: %d %s, want a tool error naming tasks:admin", a.tool, rec.Code, rec.Body.String())
+		}
+		if task, err := h.client.Store.GetTask(ctx, id); err != nil || task == nil || task.Approval != nil {
+			t.Errorf("POST /mcp %s: task %s was approved: %+v %v", a.tool, id, task, err)
+		}
 	}
 }

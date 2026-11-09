@@ -1,0 +1,12 @@
+name: Guest suites review
+base: main
+# Files a system:workflow-review:guest-suites triage task for every red,
+# timed-out or startup_failure run of .github/workflows/guest-suites.yml
+# on main. It replaces the review grain filed from
+# .grain/workflows/guest-suites.yml's weekly schedule.
+trigger:
+  github_workflow_run:
+    workflow: guest-suites.yml
+    conclusions: [failure, timed_out, startup_failure]
+    branches: [main]
+overlap: skip

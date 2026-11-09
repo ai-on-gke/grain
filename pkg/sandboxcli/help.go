@@ -51,6 +51,7 @@ CI & PULL REQUEST (scoped to this task's repository and branch):
                                          Reply to an inline review comment, or post a top-level PR comment
   grain pr resolve (--thread-id <id> | --comment-id <id>)
                                          Mark a review conversation on this branch's pull request resolved
+  grain pr threads [--unresolved]        List the review threads on this branch's pull request with their IDs
   grain pr review-comment <body|--file f> [--path <file> --line <N>]
                                          Record a review finding (relayed when the run finishes)
   grain merge-queue                      Merge queue batches, queued PRs and held gates
@@ -98,7 +99,7 @@ TASKS, CAPABILITIES & AGENT API (shown to every run; the proxy refuses what this
   grain health                           This deployment's health (deployment-health)
   grain log [--source daemon|dmesg] [--since <t>] [--until <t>] [--priority <p>] [--contains <s>] [--lines N]
                                          grain's own log, redacted (grain-log)
-  grain playbooks [<name>]               Bootstrap playbooks (bootstrap-playbooks)
+  grain playbooks [<name>]               Bootstrap playbooks (config-map bootstrap)
   grain issue list | grain issue read <n>
                                          GitHub issues (read-issues)
   grain db query <sql>                   Read-only query on grain's database (db-read)
@@ -272,7 +273,15 @@ var sandboxCommandHelp = map[string]string{
 		"Post on GitHub on this branch's own pull request: in an inline review comment's thread\n" +
 		"with --comment-id (grain pr status lists them), or as a top-level comment without.\n",
 	"pr resolve": "grain pr resolve (--thread-id <id> | --comment-id <id>)\n\n" +
-		"Mark a review conversation on this branch's own pull request resolved.\n",
+		"Mark a review conversation on this branch's own pull request resolved.\n" +
+		"grain pr threads --unresolved lists the IDs of those still open.\n",
+	"pr threads": "grain pr threads [--unresolved]\n\n" +
+		"List the review threads on this branch's own pull request, one per conversation: its\n" +
+		"thread ID (for grain pr resolve --thread-id), the ID of the comment that opened it (for\n" +
+		"grain pr reply --comment-id), its author, path:line, whether it is resolved or outdated,\n" +
+		"and the comment with its replies. --unresolved lists only the open ones, outdated ones\n" +
+		"included -- the set a branch requiring conversation resolution will not merge past.\n" +
+		"Needs no CI grant.\n",
 	"pr review-comment": "grain pr review-comment <body|--file f> [--path <file> --line <N>]\n\n" +
 		"Record one review finding, as add_review_comment does: on a line with --path and --line,\n" +
 		"or a general remark without. They are relayed together when this run finishes.\n",
@@ -328,12 +337,12 @@ var sandboxCommandHelp = map[string]string{
 		"  --contains        only entries containing this text (plain, case-insensitive)\n" +
 		"  --lines N, -n N   the latest N entries, one a line (alias --max-lines; default 200, at most 1000)\n" +
 		"  --tail N          the last N BYTES of what that returns\n",
-	"playbooks":  "grain playbooks [<name>]\n\nList the bootstrap playbooks by name, one per line, or print one (src://playbooks; the name\nis taken with or without its .md). Needs bootstrap-playbooks.\n",
-	"issue list": "grain issue list [--repo owner/name] [--label <l>] [--limit N]\n\nGitHub issues. Needs read-issues.\n",
-	"issue read": "grain issue read <number> [--repo owner/name] [--comments]\n\nOne GitHub issue. Needs read-issues.\n",
+	"playbooks":  "grain playbooks [<name>]\n\nList the bootstrap playbooks by name, one per line, or print one (src://playbooks; the name\nis taken with or without its .md). Needs https://grain.dev/capabilities/config-map#config-map={\"config_maps\":[\"bootstrap\"]}.\n",
+	"issue list": "grain issue list [--repo owner/name] [--label <l>] [--limit N]\n\nGitHub issues. Needs https://grain.dev/capabilities/github#read-issues (formerly read-issues).\n",
+	"issue read": "grain issue read <number> [--repo owner/name] [--comments]\n\nOne GitHub issue. Needs https://grain.dev/capabilities/github#read-issues (formerly read-issues).\n",
 	"db query":   "grain db query <sql>\n\nA read-only SQL query on grain's database. Needs db-read.\n",
 	"ci":         "grain ci (list | show | checks | log | test-history | artifact | wait | run-job | retrigger) ...\n\nRun 'grain ci <command> --help' for each.\n",
-	"pr":         "grain pr (status | base-status | open | reply | resolve | review-comment)\n",
+	"pr":         "grain pr (status | base-status | open | reply | resolve | threads | review-comment)\n",
 	"task":       "grain task (list | read | prompt | transcript | wait | message | propose) ...\n",
 	"issue":      "grain issue (list | read) ...\n",
 	"db":         "grain db query <sql>\n",

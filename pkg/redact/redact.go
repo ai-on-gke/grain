@@ -163,9 +163,19 @@ func (r *Redactor) Redact(lines []string) ([]string, int) {
 // a certificate or a public key is not secret, and cutting one would
 // redact the evidence of a TLS failure along with nothing worth hiding.
 var (
-	pemBegin = regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`)
-	pemEnd   = regexp.MustCompile(`-----END [A-Z ]*PRIVATE KEY-----`)
+	pemBegin             = regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`)
+	pemEnd               = regexp.MustCompile(`-----END [A-Z ]*PRIVATE KEY-----`)
+	hostEnrollmentCodeRE = regexp.MustCompile(`\bghe_[0-9a-f]{32,}\b`)
 )
+
+// RedactHostEnrollmentCodes replaces any shared host enrollment code (ghe_...)
+// in text before it is persisted in a task title, task body, or comment.
+func RedactHostEnrollmentCodes(s string) string {
+	if !strings.Contains(s, "ghe_") {
+		return s
+	}
+	return hostEnrollmentCodeRE.ReplaceAllString(s, "[redacted: host enrollment code]")
+}
 
 // maxPEMBlockLines is how many lines after a private key's BEGIN line
 // Redact will cut while waiting for its END. A 4096-bit RSA key is about
@@ -265,11 +275,14 @@ var patterns = []pattern{
 	// (pkg/secrets' key file), the one value whose loss is unrecoverable.
 	{"age secret key", regexp.MustCompile(`\bAGE-SECRET-KEY-1[0-9A-Za-z]{20,}`), "[redacted: age secret key]"},
 	// A token minted for a CI job's api grants (pkg/capability/ciapi),
-	// the release gate's before it (rg_), external agent tokens (gma_), and
-	// per-entry connected registry tokens (grc_).
+	// the release gate's before it (rg_), external agent tokens (gma_),
+	// per-entry connected registry tokens (grc_), host enrollment codes
+	// (ghe_) and remote host credentials (ghd_).
 	{"ci api token", regexp.MustCompile(`\b(?:ga|rg)_[0-9a-f]{16}_[0-9a-f]{64}\b`), "[redacted: ci api token]"},
 	{"external agent token", regexp.MustCompile(`\bgma_[0-9a-f]{32,}\b`), "[redacted: external agent token]"},
 	{"registry token", regexp.MustCompile(`\bgrc_[A-Za-z0-9_-]{16,}`), "[redacted: registry token]"},
+	{"host enrollment code", hostEnrollmentCodeRE, "[redacted: host enrollment code]"},
+	{"host credential", regexp.MustCompile(`\bghd_[0-9a-f]{32,}\b`), "[redacted: host credential]"},
 	// A signed token, which carries its own claims and is worth cutting
 	// whether or not this host minted it.
 	{"jwt", regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`), "[redacted: jwt]"},

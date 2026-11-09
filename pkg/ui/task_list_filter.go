@@ -199,12 +199,16 @@ func (q taskListQuery) matches(t Task) bool {
 		}
 	}
 	if q.search != "" {
-		// The title, the id and the description: the live list no longer
-		// carries descriptions, so this is where a search over them is
-		// answered.
+		// The title, the id, the external reference and the description:
+		// the live list no longer carries descriptions, so this is where a
+		// search over them is answered. The external reference ("CA-204")
+		// is what somebody pasting a ticket's name into the search box is
+		// reaching for, and the UI's own search box matches it on the
+		// tasks it holds (ui/src/taskFilters.js's matchesFilters).
 		needle := strings.ToLower(q.search)
 		if !strings.Contains(strings.ToLower(t.Title), needle) &&
 			!strings.Contains(strings.ToLower(t.Description), needle) &&
+			!strings.Contains(strings.ToLower(t.ExternalRef), needle) &&
 			t.ID != strings.TrimPrefix(q.search, "#") {
 			return false
 		}

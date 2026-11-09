@@ -95,9 +95,15 @@ func TestNewReviewThreadsOnAPullRequestSendOneRun(t *testing.T) {
 	if s := stateOf(t, ctx, store, task.ID); s != model.StateQueued {
 		t.Fatalf("state = %q, want %q", s, model.StateQueued)
 	}
+	// Its note leads with the new thread, and lists the first one -- never
+	// resolved -- beneath it as still open: the merge waits on both.
 	bodies = commentBodies(t, ctx, store, task.ID)
-	if note := bodies[len(bodies)-1]; !strings.Contains(note, "Rename this.") || strings.Contains(note, "never ends") {
-		t.Errorf("the second run's note is not about the new thread alone:\n%s", note)
+	note = bodies[len(bodies)-1]
+	newPart, oldPart, split := strings.Cut(note, "from before")
+	if !split || !strings.Contains(newPart, "1 new review thread") || !strings.Contains(newPart, "Rename this.") ||
+		strings.Contains(newPart, "never ends") || !strings.Contains(oldPart, "never ends") ||
+		!strings.Contains(oldPart, "thread `thread-501`") {
+		t.Errorf("the second run's note should lead with the new thread and list the open older one after it:\n%s", note)
 	}
 
 	// Every thread is recorded, so none is sent twice.
@@ -132,5 +138,46 @@ func TestAResolvedReviewThreadSendsNoRun(t *testing.T) {
 	}
 	if s := stateOf(t, ctx, store, task.ID); s != model.StateCompleted {
 		t.Fatalf("state = %q, want %q", s, model.StateCompleted)
+	}
+}
+
+// Five comments in one bot review are five threads, and the run is told
+// about all five -- including one GitHub calls outdated (REST gives it no
+// line), which GitHub's conversation-resolution rule still counts. That
+// one used to be recorded and dropped, so the task fixed four and the
+// merge was refused over the fifth (task 3016, comment 234726).
+func TestAReviewOfFiveBotCommentsRelaysAllFive(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	task := completedTask(t, ctx, store, sim, client, "t1", repo, true, "")
+	number := sim.PullRequests[0].Number
+	line := func(n int) *int { return &n }
+	sim.ReviewComments = map[int][]github.ReviewComment{number: {
+		{ID: 234726, User: "code-review[bot]", Body: "This runs in a subshell, so the exit is lost.", Path: "scripts/run.sh", ReviewID: 9},
+		{ID: 234727, User: "code-review[bot]", Body: "In conjunction with fixing the subshell issue, quote this.", Path: "scripts/run.sh", Line: line(14), ReviewID: 9},
+		{ID: 234728, User: "code-review[bot]", Body: "Unused variable.", Path: "scripts/run.sh", Line: line(20), ReviewID: 9},
+		{ID: 234729, User: "code-review[bot]", Body: "Missing error check.", Path: "pkg/a/a.go", Line: line(3), ReviewID: 9},
+		{ID: 234730, User: "code-review[bot]", Body: "Typo in comment.", Path: "pkg/a/a.go", Line: line(8), ReviewID: 9},
+	}}
+	if err := orchestrator.SyncReviewThreads(ctx, store, client, baseTime.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if s := stateOf(t, ctx, store, task.ID); s != model.StateQueued {
+		t.Fatalf("state = %q, want %q", s, model.StateQueued)
+	}
+	bodies := commentBodies(t, ctx, store, task.ID)
+	note := bodies[len(bodies)-1]
+	if !strings.Contains(note, "5 new review threads") {
+		t.Errorf("the note does not count five threads:\n%s", note)
+	}
+	for _, id := range []int{234726, 234727, 234728, 234729, 234730} {
+		if !strings.Contains(note, "comment "+strconv.Itoa(id)) || !strings.Contains(note, "thread `thread-"+strconv.Itoa(id)+"`") {
+			t.Errorf("the note lacks comment %d with its thread ID:\n%s", id, note)
+		}
+	}
+	if !strings.Contains(note, "scripts/run.sh (outdated)") || !strings.Contains(note, "subshell, so the exit is lost") {
+		t.Errorf("the outdated thread is not listed with its path and body:\n%s", note)
 	}
 }

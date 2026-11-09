@@ -43,7 +43,7 @@ const (
 var NewTaskFormFieldIDs = []string{
 	"title", "description", "attachments", "customFields", "repo", "newBranch", "base",
 	"writes", "reads", "autoMerge", "noPort", "fixesBaseBranch", "grants", "legacyCapabilities",
-	"model", "dependsOn", "agentBackendId", "networkAccess", "nothingNeededAction",
+	"admission", "hosting", "model", "dependsOn", "agentBackendId", "networkAccess", "nothingNeededAction",
 	"reviewTemplateId", "promptExtension", "sandboxShape", "approved", "atFront",
 }
 
@@ -377,7 +377,7 @@ func (c *CapabilityCatalogue) Defines(g string) bool {
 	if c == nil {
 		return false
 	}
-	g = strings.TrimSpace(g)
+	g = strings.TrimSpace(StoredGrantSpelling(g))
 	switch {
 	case IsCapabilityRef(g):
 		ref := CapabilityGrantRef(g)

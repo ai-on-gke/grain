@@ -27,6 +27,8 @@ import { parsePath } from "./paths.js";
 import {
   NO_NARROWING,
   NONE,
+  admitsState,
+  closedServerFilters,
   defaultFilters,
   defaultNarrowing,
   defaultSortFor,
@@ -187,6 +189,17 @@ describe("operatorsFor", () => {
 });
 
 describe("matchesFilters", () => {
+  it("searches the external reference beside the title and id", () => {
+    // 2026-11-07 walkthrough: typing a ticket's reference found nothing.
+    const ref = task({ title: "deep work", externalRef: "CA-9012" });
+    const other = task({ title: "other work", externalRef: "CA-77" });
+    expect(matchesFilters(ref, [], "ca-9012", config)).toBe(true);
+    expect(matchesFilters(other, [], "ca-9012", config)).toBe(false);
+    expect(matchesFilters(task({ title: "no ref" }), [], "ca-", config)).toBe(
+      false,
+    );
+  });
+
   it("matches any of the values named, and none of them", () => {
     const widgets = task({ repo: "acme/widgets" });
     const gadgets = task({ repo: "acme/gadgets" });
@@ -856,15 +869,22 @@ describe("describing a narrowing", () => {
         values: ["asked", "awaiting_reply", NONE],
       }),
     ).toEqual([]);
-    // An origin's order is only how it sorts ("imported" is not in it),
-    // and an open vocabulary takes any value.
+    // Origin's order is every value originOf returns, so "imported" is
+    // known and a value outside it says so.
     expect(
       unknownValues(attr("origin"), {
         attr: "origin",
         op: "any",
-        values: ["imported"],
+        values: ["imported", "robot"],
       }),
-    ).toEqual([]);
+    ).toEqual(["robot"]);
+    expect(
+      describeCondition(
+        attr("origin"),
+        { attr: "origin", op: "any", values: ["imported", "robot"] },
+        config,
+      ),
+    ).toBe("Origin is any of Imported issue, “robot” (unknown)");
     expect(
       unknownValues(attr("repo"), {
         attr: "repo",
@@ -1668,17 +1688,46 @@ describe("attributesFor", () => {
 });
 
 describe("originOf", () => {
-  it("names the one thing that put a task in the list", () => {
-    expect(originOf(task({}))).toBe("hand");
-    expect(originOf(task({ generatedFrom: "7" }))).toBe("proposed");
-    expect(originOf(task({ scheduled: true }))).toBe("schedule");
-    expect(originOf(task({ suiteRun: true }))).toBe("suite");
-    expect(originOf(task({ imported: true }))).toBe("imported");
-    expect(originOf(task({ author: "external:w", authorKind: "agent" }))).toBe(
+  it("names the one thing that put a task in the list, in the attribute's closed order", () => {
+    const cases = [
+      [task({}), "hand"],
+      [task({ author: "external:w", authorKind: "agent" }), "external"],
+      [task({ generatedFrom: "7" }), "proposed"],
+      [task({ imported: true }), "imported"],
+      [task({ imported: true, generatedFrom: "7" }), "imported"],
+      [task({ scheduled: true }), "schedule"],
+      [task({ suiteRun: true }), "suite"],
+      [task({ stacked: true, generatedFrom: "7" }), "fix"],
+      [task({ stacked: true, review: true }), "review"],
+    ];
+    for (const [t, want] of cases) {
+      expect(originOf(t)).toBe(want);
+      expect(attr("origin").order).toContain(want);
+    }
+    const oneOfEach = [
+      task({ id: "review", stacked: true, review: true }),
+      task({ id: "imported", imported: true }),
+      task({ id: "hand" }),
+      task({ id: "schedule", scheduled: true }),
+      task({ id: "proposed", generatedFrom: "7" }),
+      task({ id: "fix", stacked: true, generatedFrom: "7" }),
+      task({ id: "suite", suiteRun: true }),
+      task({ id: "external", author: "external:w", authorKind: "agent" }),
+    ];
+    expect(
+      sortTasks(oneOfEach, [{ attr: "origin", dir: "asc" }], attrs, config).map(
+        (t) => t.id,
+      ),
+    ).toEqual([
+      "hand",
       "external",
-    );
-    expect(originOf(task({ stacked: true, generatedFrom: "7" }))).toBe("fix");
-    expect(originOf(task({ stacked: true, review: true }))).toBe("review");
+      "proposed",
+      "imported",
+      "schedule",
+      "suite",
+      "fix",
+      "review",
+    ]);
   });
 });
 
@@ -1900,5 +1949,232 @@ describe("defaultSortFor", () => {
         config,
       ),
     ).toBe(false);
+  });
+});
+
+describe("closed work the server searched", () => {
+  it("matches a task the server found for this very text, and only that text", () => {
+    const t = {
+      id: "41",
+      title: "Fix the parser",
+      state: "closed",
+      searchHit: "deadlock",
+    };
+    expect(matchesFilters(t, [], "deadlock", null)).toBe(true);
+    expect(matchesFilters(t, [], "livelock", null)).toBe(false);
+    expect(
+      matchesFilters({ ...t, searchHit: undefined }, [], "deadlock", null),
+    ).toBe(false);
+  });
+
+  it("says whether a narrowing's State conditions let a closed task through", () => {
+    expect(admitsState(defaultNarrowing(null), null, "closed")).toBe(false);
+    expect(admitsState(NO_NARROWING, null, "closed")).toBe(true);
+    const repoOnly = {
+      ...NO_NARROWING,
+      filters: [{ attr: "repo", op: "any", values: ["acme/widgets"] }],
+    };
+    expect(admitsState(repoOnly, null, "closed")).toBe(true);
+    const closedOnly = {
+      ...NO_NARROWING,
+      filters: [{ attr: "state", op: "any", values: ["closed"] }],
+    };
+    expect(admitsState(closedOnly, null, "closed")).toBe(true);
+    expect(admitsState(closedOnly, null, "queued")).toBe(false);
+  });
+
+  it("picks out the owner and external reference the server can answer over closed work", () => {
+    const with_ = (...filters) => ({ ...NO_NARROWING, filters });
+    const none = { owner: "", externalRef: "" };
+    expect(closedServerFilters(NO_NARROWING, null)).toEqual(none);
+    expect(
+      closedServerFilters(
+        with_(
+          { attr: "state", op: "any", values: ["closed"] },
+          { attr: "owner", op: "any", values: ["Someone@Example.com"] },
+        ),
+        null,
+      ),
+    ).toEqual({ owner: "someone@example.com", externalRef: "" });
+    expect(
+      closedServerFilters(
+        with_({ attr: "externalRef", op: "any", values: ["CA-9012"] }),
+        null,
+      ),
+    ).toEqual({ owner: "", externalRef: "CA-9012" });
+    // "me" is the viewer, as the list reads it.
+    expect(
+      closedServerFilters(with_({ attr: "owner", op: "any", values: ["me"] }), {
+        viewerOwner: "user:Alice@example.com",
+      }),
+    ).toEqual({ owner: "alice@example.com", externalRef: "" });
+    // ...and is nobody until GET /api/config has said who that is: the
+    // list must not ask for owner=operator (expand's fallback) first.
+    expect(
+      closedServerFilters(
+        with_({ attr: "owner", op: "any", values: ["me"] }),
+        null,
+      ),
+    ).toEqual(none);
+    expect(
+      closedServerFilters(
+        with_(
+          { attr: "owner", op: "any", values: ["Me"] },
+          { attr: "externalRef", op: "any", values: ["INC-99"] },
+        ),
+        null,
+      ),
+    ).toEqual({ owner: "", externalRef: "INC-99" });
+    // A loaded config with no viewer still reads "me" as "operator".
+    expect(
+      closedServerFilters(
+        with_({ attr: "owner", op: "any", values: ["me"] }),
+        {},
+      ),
+    ).toEqual({ owner: "operator", externalRef: "" });
+    // Anything the server's one exact value cannot answer stays the
+    // client's: several values, another comparison, "Not set", or a
+    // second condition on the same attribute.
+    for (const filters of [
+      [
+        {
+          attr: "owner",
+          op: "any",
+          values: ["a@example.com", "b@example.com"],
+        },
+      ],
+      [{ attr: "owner", op: "none", values: ["a@example.com"] }],
+      [{ attr: "owner", op: "has", values: ["alice"] }],
+      [{ attr: "externalRef", op: "any", values: [NONE] }],
+      [{ attr: "externalRef", op: "filled", values: [] }],
+      [
+        { attr: "externalRef", op: "any", values: ["CA-1"] },
+        { attr: "externalRef", op: "none", values: ["CA-2"] },
+      ],
+    ]) {
+      expect(closedServerFilters(with_(...filters), null)).toEqual(none);
+    }
+  });
+});
+
+// Admission (model.Admission) as a narrowing attribute: every row of
+// GET /api/tasks carries one, and a link naming it was read as an
+// unknown condition and not applied (2026-11-07 walkthrough, F5).
+// A repo is named without case (GitHub's, and state.js's repoKey): the
+// count link /repos/ACME/legacy-service draws is `repo:any:ACME/
+// legacy-service`, and it matched none of the tasks the page had just
+// counted (2026-11-08 walkthrough, F2).
+describe("the repo attribute", () => {
+  const legacy = task({ id: "7", repo: "acme/legacy-service" });
+  const widgets = task({ id: "8", repo: "acme/widgets" });
+  const none = task({ id: "9", repo: "" });
+  it("matches a repo whatever case the condition or the task spells it in", () => {
+    for (const v of [
+      "ACME/legacy-service",
+      "Acme/Legacy-Service",
+      "acme/legacy-service",
+    ]) {
+      const cond = { attr: "repo", op: "any", values: [v] };
+      expect(matches(legacy, cond)).toBe(true);
+      expect(matches(widgets, cond)).toBe(false);
+      expect(matches(none, cond)).toBe(false);
+    }
+    expect(
+      matches(task({ repo: "Acme/Widgets" }), {
+        attr: "repo",
+        op: "any",
+        values: ["acme/widgets"],
+      }),
+    ).toBe(true);
+    expect(
+      matches(widgets, { attr: "repo", op: "none", values: ["ACME/Widgets"] }),
+    ).toBe(false);
+    // "No repo" still means no repo.
+    expect(matches(none, { attr: "repo", op: "any", values: [NONE] })).toBe(
+      true,
+    );
+    expect(matches(legacy, { attr: "repo", op: "any", values: [NONE] })).toBe(
+      false,
+    );
+  });
+});
+
+describe("the admission attribute", () => {
+  const durable = task({ id: "1", admission: "durable" });
+  const bypass = task({ id: "2", admission: "bypass" });
+  const standard = task({ id: "3", admission: "standard" });
+  // A row from a server older than the setting, run as standard work.
+  const older = task({ id: "4" });
+
+  it("is a known, closed enum over the three admissions", () => {
+    const a = attr("admission");
+    expect(a).toBeDefined();
+    expect(a.type).toBe("enum");
+    expect(a.closed).toBe(true);
+    expect(a.order).toEqual(["standard", "bypass", "durable"]);
+    expect(ATTRIBUTES.map((x) => x.id)).toContain("admission");
+    const read = (query) => parsePath("/", `?${query}`).narrowing.filters;
+    expect(unknownConditions(read("f=admission:any:durable"), attrs)).toEqual(
+      [],
+    );
+  });
+
+  it("matches the tasks admitted that way, reading none as standard", () => {
+    const any = (...values) => ({ attr: "admission", op: "any", values });
+    expect(matches(durable, any("durable"))).toBe(true);
+    expect(matches(bypass, any("durable"))).toBe(false);
+    expect(matches(standard, any("standard"))).toBe(true);
+    expect(matches(older, any("standard"))).toBe(true);
+    expect(matches(older, any("bypass", "durable"))).toBe(false);
+    const none = { attr: "admission", op: "none", values: ["standard"] };
+    expect(matches(bypass, none)).toBe(true);
+    expect(matches(older, none)).toBe(false);
+  });
+
+  it("does not offer 'is empty', since every task has one", () => {
+    expect(operatorsFor(attr("admission"))).not.toContain("empty");
+  });
+
+  it("offers its values in rank order, named as the task pane names them", () => {
+    expect(
+      optionsFor(attr("admission"), [durable, standard, bypass], config).map(
+        (o) => [o.value, o.label],
+      ),
+    ).toEqual([
+      ["standard", "Standard"],
+      ["bypass", "Bypass queue"],
+      ["durable", "Durable"],
+    ]);
+  });
+
+  it("sorts by rank rather than by spelling", () => {
+    const ids = (dir) =>
+      sortTasks(
+        [standard, durable, bypass],
+        [{ attr: "admission", dir }],
+        attrs,
+        config,
+      ).map((t) => t.id);
+    expect(ids("asc")).toEqual(["3", "2", "1"]);
+    expect(ids("desc")).toEqual(["1", "2", "3"]);
+  });
+
+  it("marks a value it does not have, the way origin:any:robot is", () => {
+    const cond = {
+      attr: "admission",
+      op: "any",
+      values: ["durable", "bogus"],
+    };
+    expect(unknownValues(attr("admission"), cond)).toEqual(["bogus"]);
+    expect(describeCondition(attr("admission"), cond, config)).toBe(
+      "Admission is any of Durable, “bogus” (unknown)",
+    );
+    expect(
+      unknownValues(attr("admission"), {
+        attr: "admission",
+        op: "any",
+        values: ["standard", "bypass", "durable"],
+      }),
+    ).toEqual([]);
   });
 });

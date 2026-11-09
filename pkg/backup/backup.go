@@ -15,11 +15,12 @@
 // Package backup creates portable, credential-free snapshots of a Grain
 // installation and sends them to a configured destination.
 //
-// A backup contains the live SQLite database and a restorable bundle of the
-// controller-local grain/config repository. It deliberately does not walk the
-// data directory: credentials live under data-dir/secrets. Before bundling the
-// repository, its refs are exported through a temporary bare repository with
-// legacy secrets.enc paths removed from every commit.
+// A backup contains an online-consistent snapshot of the live database
+// (PostgreSQL via pg_dump -Fc, or SQLite via VACUUM INTO) and a restorable
+// bundle of the controller-local grain/config repository. It deliberately does
+// not walk the data directory: credentials live under data-dir/secrets. Before
+// bundling the repository, its refs are exported through a temporary bare
+// repository with legacy secrets.enc paths removed from every commit.
 package backup
 
 import (
@@ -36,6 +37,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ai-on-gke/grain/pkg/model/postgres"
 )
 
 const (
@@ -70,6 +73,10 @@ type Result struct {
 // Service creates and uploads one backup.
 type Service struct {
 	Destination Destination
+	// PostgresDSN is optional. When snapshotting a PostgreSQL store and empty,
+	// the connection configuration db was opened with by pkg/model/postgres.Open
+	// is used.
+	PostgresDSN string
 	// TempDir is optional. Empty uses the operating system's temporary
 	// directory. Temporary material is mode 0700 and removed after each run.
 	TempDir string
@@ -106,8 +113,8 @@ func (s Service) Run(ctx context.Context, db *sql.DB, configRepo string) (Result
 		return Result{}, fmt.Errorf("backup: protecting temporary directory: %w", err)
 	}
 
-	databasePath := filepath.Join(dir, "grain.db")
-	if err := snapshotDatabase(ctx, db, databasePath); err != nil {
+	databasePath, archiveDBName, driverName, err := snapshotDatabase(ctx, db, s.PostgresDSN, dir)
+	if err != nil {
 		return Result{}, err
 	}
 
@@ -118,11 +125,12 @@ func (s Service) Run(ctx context.Context, db *sql.DB, configRepo string) (Result
 	}
 
 	manifest := Manifest{
-		FormatVersion: FormatVersion,
-		CreatedAt:     created,
-		Database:      "database/grain.db",
-		ConfigRepo:    "config/config-repo.bundle",
-		ConfigHead:    head,
+		FormatVersion:  FormatVersion,
+		CreatedAt:      created,
+		Database:       archiveDBName,
+		DatabaseDriver: driverName,
+		ConfigRepo:     "config/config-repo.bundle",
+		ConfigHead:     head,
 	}
 	archivePath := filepath.Join(dir, name)
 	if err := writeArchive(archivePath, databasePath, configPath, manifest); err != nil {
@@ -150,14 +158,19 @@ func (s Service) Run(ctx context.Context, db *sql.DB, configRepo string) (Result
 
 // Manifest is stored as manifest.json at the root of every archive.
 type Manifest struct {
-	FormatVersion int       `json:"formatVersion"`
-	CreatedAt     time.Time `json:"createdAt"`
-	Database      string    `json:"database"`
-	ConfigRepo    string    `json:"configRepository"`
-	ConfigHead    string    `json:"configHead"`
+	FormatVersion  int       `json:"formatVersion"`
+	CreatedAt      time.Time `json:"createdAt"`
+	Database       string    `json:"database"`
+	DatabaseDriver string    `json:"databaseDriver,omitempty"`
+	ConfigRepo     string    `json:"configRepository"`
+	ConfigHead     string    `json:"configHead"`
 }
 
-// ErrPostgresNotSupported is returned when database snapshotting is attempted on Postgres.
+// ErrPostgresNotSupported was returned before PostgreSQL snapshots were
+// implemented.
+//
+// Deprecated: PostgreSQL stores are now snapshotted with pg_dump; Run no
+// longer returns this error.
 var ErrPostgresNotSupported = errors.New("backup: database snapshotting is not supported on Postgres (VACUUM INTO requires SQLite; use pg_dump or database-native backups)")
 
 func isPostgres(ctx context.Context, db *sql.DB) bool {
@@ -166,19 +179,24 @@ func isPostgres(ctx context.Context, db *sql.DB) bool {
 	return err == nil
 }
 
-func snapshotDatabase(ctx context.Context, db *sql.DB, destination string) error {
+func snapshotDatabase(ctx context.Context, db *sql.DB, postgresDSN, dir string) (localPath, archiveName, driver string, err error) {
 	if isPostgres(ctx, db) {
-		return ErrPostgresNotSupported
+		localPath = filepath.Join(dir, "grain.dump")
+		if err := postgres.Dump(ctx, db, postgresDSN, localPath); err != nil {
+			return "", "", "", fmt.Errorf("backup: snapshotting database: %w", err)
+		}
+		return localPath, "database/grain.dump", "postgres", nil
 	}
+	localPath = filepath.Join(dir, "grain.db")
 	// VACUUM INTO is SQLite's online backup primitive: it reads one
 	// consistent snapshot while writers continue through WAL and produces a
 	// self-contained database rather than copying grain.db without its WAL.
 	// SQLite parameters are not accepted in VACUUM's filename position.
-	quoted := "'" + strings.ReplaceAll(destination, "'", "''") + "'"
+	quoted := "'" + strings.ReplaceAll(localPath, "'", "''") + "'"
 	if _, err := db.ExecContext(ctx, "VACUUM INTO "+quoted); err != nil {
-		return fmt.Errorf("backup: snapshotting database: %w", err)
+		return "", "", "", fmt.Errorf("backup: snapshotting database: %w", err)
 	}
-	return nil
+	return localPath, "database/grain.db", "sqlite", nil
 }
 
 func archiveConfigRepo(ctx context.Context, repo, destination string) (string, error) {
@@ -288,7 +306,7 @@ func writeArchive(destination, databasePath, configPath string, manifest Manifes
 		name string
 		path string
 	}{
-		{"database/grain.db", databasePath},
+		{manifest.Database, databasePath},
 		{"config/config-repo.bundle", configPath},
 	} {
 		if err := addFile(z, file.name, file.path); err != nil {

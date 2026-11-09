@@ -52,6 +52,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	listenAddr := fs.String("listen", envOrDefault("PLC_STUDIO_LISTEN", ":4285"), "HTTP listen address")
 	registryURL := fs.String("registry-url", os.Getenv("GRAIN_REGISTRY_URL"), "Grain Registry base URL")
 	grainURL := fs.String("grain-url", os.Getenv("GRAIN_URL"), "Default Grain daemon base URL")
+	grainToken := fs.String("grain-token", os.Getenv("GRAIN_TOKEN"), "Bearer token sent to the -grain-url daemon only (an access code or an external-agent token; $GRAIN_TOKEN)")
 	requireAuth := fs.Bool("require-auth", false, "Require verified caller identity on /api/studio/* endpoints")
 	defaultUser := fs.String("default-user", os.Getenv("PLC_STUDIO_DEFAULT_USER"), "Fallback caller email when running locally without an auth proxy")
 
@@ -69,6 +70,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	client := grainclient.New(grainclient.Config{
 		RegistryURL: *registryURL,
 		GrainURL:    *grainURL,
+		GrainToken:  *grainToken,
 		ClientName:  grainclient.ClientPLCStudio,
 		Perf:        recorder,
 	})

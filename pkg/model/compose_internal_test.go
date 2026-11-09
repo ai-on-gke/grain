@@ -29,7 +29,7 @@ func TestAdjustGrainCIGrantDoesNotWriteIntoTheDeclaration(t *testing.T) {
 	if len(got) != 2 || got[1].Capability != GrainCIGrant {
 		t.Fatalf("adjustGrainCIGrant(..., true) = %+v, want self-debug then grain#ci", got)
 	}
-	if spare := backing[:2][1]; spare != (Grant{}) {
+	if spare := backing[:2][1]; !spare.Equal(Grant{}) {
 		t.Fatalf("adjustGrainCIGrant wrote %+v into the declaration's spare capacity", spare)
 	}
 
@@ -153,5 +153,66 @@ func TestWorkflowReviewCompositionGrantsRepoScopedCIReadWithoutGrainCI(t *testin
 	}
 	if _, ok := scheduleReviewsWorkflowRun(ordinary, nil); ok {
 		t.Fatal("ordinary daily schedule reported as workflow-run review")
+	}
+}
+
+// A template or schedule that asks for grain-ci, filed against a repository
+// grain CI does not gate (ci_mode: github), loses grain#ci -- it would gate
+// merges there -- but keeps read access to that repository's CI through
+// api:ci-read@<repo>, so `grain ci list` / `grain ci checks` still answer.
+// This is what starved the scheduled release train on ai-on-gke/grain.
+func TestApplyGrainCIGrantKeepsCIReadForARequestedGrainCI(t *testing.T) {
+	repo := RepoRef{Owner: "acme", Name: "widgets"}
+	tmpl := Template{
+		ID:     "tmpl-train",
+		Name:   "Release train",
+		Grants: []Grant{{Capability: "grain-ci", Via: GrantByLabel}, {Capability: "self-debug", Via: GrantByLabel}},
+	}
+	id := tmpl.ID
+	sched := Schedule{ID: "sched-train", Title: "Release train", Target: repo, TemplateID: &id,
+		Recurrence: Recurrence{Kind: RecurrenceDaily}}
+	comp := ComposeScheduleTask(sched, &tmpl)
+	applyGrainCIGrant(&comp, false)
+
+	want := []Grant{{Capability: "self-debug", Via: GrantByLabel}, {Capability: "api:ci-read@acme/widgets", Via: GrantByGrain}}
+	if len(comp.Grants) != len(want) || !comp.Grants[0].Equal(want[0]) || !comp.Grants[1].Equal(want[1]) {
+		t.Fatalf("Grants = %+v, want %+v", comp.Grants, want)
+	}
+	if len(comp.GrantSources) != 2 || comp.GrantSources[1] != comp.GrantSources[0] || comp.GrantSources[1] == "" {
+		t.Errorf("GrantSources = %v, want the ci-read grant credited to the declaring layer", comp.GrantSources)
+	}
+	if tmpl.Grants[0].Capability != "grain-ci" || len(tmpl.Grants) != 2 {
+		t.Errorf("template's own grants were rewritten: %+v", tmpl.Grants)
+	}
+
+	// Applying it again (or to a declaration already holding ci:read on
+	// the repository) adds no duplicate.
+	applyGrainCIGrant(&comp, false)
+	if len(comp.Grants) != 2 {
+		t.Errorf("second apply: Grants = %+v, want no duplicate", comp.Grants)
+	}
+	held := ComposeScheduleTask(Schedule{ID: "s", Title: "t", Target: repo, Grants: []Grant{
+		{Capability: "grain-ci", Via: GrantByLabel}, {Capability: "api:ci-read@acme/widgets", Via: GrantByLabel},
+	}}, nil)
+	applyGrainCIGrant(&held, false)
+	if len(held.Grants) != 1 || held.Grants[0].Capability != "api:ci-read@acme/widgets" || held.Grants[0].Via != GrantByLabel {
+		t.Errorf("held.Grants = %+v, want only the declared api:ci-read@acme/widgets", held.Grants)
+	}
+
+	// A grain#ci attached only as a repo or deployment default asked for
+	// nothing: stripping it leaves no CI read behind.
+	defaulted := ComposeScheduleTask(Schedule{ID: "d", Title: "t", Target: repo, Grants: []Grant{
+		{Capability: GrainCIGrant, Via: GrantByDefault},
+	}}, nil)
+	applyGrainCIGrant(&defaulted, false)
+	if len(defaulted.Grants) != 0 {
+		t.Errorf("defaulted.Grants = %+v, want none", defaulted.Grants)
+	}
+
+	// With no target there is no repository to scope the read to.
+	untargeted := Composition{Grants: []Grant{{Capability: "grain-ci", Via: GrantByLabel}}}
+	applyGrainCIGrant(&untargeted, false)
+	if len(untargeted.Grants) != 0 {
+		t.Errorf("untargeted.Grants = %+v, want none", untargeted.Grants)
 	}
 }

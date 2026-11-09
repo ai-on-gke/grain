@@ -57,6 +57,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 			return runValidate(ctx, args[1:], stdout, stderr)
 		case "serve":
 			return runServe(ctx, args[1:], stdout, stderr)
+		case "demo":
+			return runDemo(ctx, args[1:], stdout, stderr)
 		case "help", "--help", "-h":
 			printUsage(stdout)
 			return nil
@@ -123,7 +125,7 @@ func runVersion(args []string, stdout, stderr io.Writer) error {
 func runValidate(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("grain-registry validate", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	cfgPath := fs.String("config", "", "path to registry YAML config file")
+	cfgPath := fs.String("config", "", "path to the hub YAML config file")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -164,7 +166,7 @@ func ParseConfigWithResolver(data []byte, resolver any) (*Config, error) {
 	var cfg Config
 	dec := newStrictYAMLDecoder(expanded)
 	if err := dec.Decode(&cfg); err != nil {
-		return nil, fmt.Errorf("parsing registry config YAML: %w", err)
+		return nil, fmt.Errorf("parsing hub config YAML: %w", err)
 	}
 	cfg.ApplyDefaults()
 	if err := cfg.ValidateWithResolver(resolver); err != nil {
@@ -180,7 +182,7 @@ func newStrictYAMLDecoder(expanded string) interface{ Decode(any) error } {
 func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("grain-registry", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	cfgPath := fs.String("config", os.Getenv("GRAIN_REGISTRY_CONFIG"), "path to registry YAML config file")
+	cfgPath := fs.String("config", os.Getenv("GRAIN_REGISTRY_CONFIG"), "path to the hub YAML config file")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -198,7 +200,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	}
 	var cfg Config
 	if err := yamlStrictDecoder(os.ExpandEnv(string(rawBytes))).Decode(&cfg); err != nil {
-		return fmt.Errorf("parsing registry config YAML: %w", err)
+		return fmt.Errorf("parsing hub config YAML: %w", err)
 	}
 	cfg.ApplyDefaults()
 
@@ -227,6 +229,26 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		return err
 	}
 
+	var compute Compute
+	var resources InstanceResources
+	if strings.TrimSpace(cfg.Compute.Provider) != "none" {
+		compute, err = BuildCompute(ctx, cfg.Compute)
+		if err != nil {
+			return err
+		}
+		resources, err = BuildInstanceResources(ctx, cfg)
+		if err != nil {
+			return err
+		}
+	}
+	var configRepos ConfigRepos
+	if strings.TrimSpace(cfg.ConfigRepos.Provider) != "" && strings.TrimSpace(cfg.ConfigRepos.Provider) != "none" {
+		configRepos, err = BuildConfigRepos(ctx, cfg.ConfigRepos)
+		if err != nil {
+			return err
+		}
+	}
+
 	var st *store.Store
 	var isDisabled webauth.DisabledChecker
 	if strings.TrimSpace(cfg.Database.URL) != "" {
@@ -237,6 +259,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 			DefaultUnitsQuota: cfg.Quotas.DefaultInstanceUnits,
 			DefaultConnQuota:  cfg.Quotas.DefaultConnected,
 			ReservationPeriod: cfg.Quotas.ReservationPeriod,
+			DBRetentionPeriod: cfg.InstanceState.DBRetentionPeriod,
 		})
 		if err != nil {
 			return err
@@ -247,6 +270,12 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 			return err
 		}
 		isDisabled = st.IsOwnerDisabled
+		if sa, ok := delegation.(interface{ SetStore(*store.Store) }); ok {
+			sa.SetStore(st)
+		}
+		if resStore, ok := resources.(interface{ SetStore(*store.Store) }); ok {
+			resStore.SetStore(st)
+		}
 	}
 
 	admitter, err := webauth.NewAdmitter(webauth.AdmissionConfig{
@@ -263,18 +292,53 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		return err
 	}
 
+	replicaID := "replica-" + uuid.NewString()[:8]
+	peerAddr := cfg.Tunnel.SelfAddr
+	if peerAddr == "" {
+		peerAddr = cfg.Tunnel.PeerListen
+	}
+
 	srv, err := NewServer(ServerOptions{
-		Config:     cfg,
-		Store:      st,
-		Admitter:   admitter,
-		Groups:     groups,
-		Delegation: delegation,
-		Signer:     signer,
-		Transport:  transport,
-		Metrics:    NewMetrics(),
+		Config:      cfg,
+		Store:       st,
+		Admitter:    admitter,
+		Groups:      groups,
+		Delegation:  delegation,
+		Signer:      signer,
+		Transport:   transport,
+		Compute:     compute,
+		Resources:   resources,
+		ConfigRepos: configRepos,
+		Metrics:     NewMetrics(),
+		ReplicaID:   replicaID,
+		PeerAddr:    peerAddr,
 	})
 	if err != nil {
 		return err
+	}
+
+	var rec BackgroundReconciler
+	if st != nil {
+		var hostCache ReconcilerHostCache
+		if srv.Router() != nil {
+			hostCache = srv.Router().HostCache()
+		}
+		rec, err = BuildReconciler(ReconcilerBuildOptions{
+			Config:      cfg,
+			Store:       st,
+			Compute:     compute,
+			Resources:   resources,
+			ConfigRepos: configRepos,
+			Signer:      signer,
+			HostCache:   hostCache,
+			HolderID:    replicaID,
+		})
+		if err != nil {
+			return err
+		}
+		if rec != nil {
+			srv.SetOrphanProvider(rec)
+		}
 	}
 
 	mainLn, err := net.Listen("tcp", cfg.Listen)
@@ -292,13 +356,21 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		defer jwksLn.Close()
 	}
 
-	replicaID := "replica-" + uuid.NewString()[:8]
-	if st != nil {
-		peerAddr := cfg.Tunnel.SelfAddr
-		if peerAddr == "" {
-			peerAddr = cfg.Tunnel.PeerListen
+	var peerLn net.Listener
+	if cfg.Tunnel.PeerListen != "" && cfg.Tunnel.PeerListen != cfg.Listen && cfg.Tunnel.PeerListen != cfg.JWKSListen {
+		peerLn, err = net.Listen("tcp", cfg.Tunnel.PeerListen)
+		if err != nil {
+			return fmt.Errorf("listening on peer address %s: %w", cfg.Tunnel.PeerListen, err)
 		}
-		_ = st.UpsertReplica(ctx, replicaID, peerAddr)
+		defer peerLn.Close()
+		if cfg.Tunnel.SelfAddr == "" {
+			srv.Router().SetPeerAddr(peerLn.Addr().String())
+		}
+	}
+
+	srv.StartBackground(ctx)
+	if rec != nil {
+		rec.Start(ctx)
 	}
 
 	mainHTTPSrv := &http.Server{
@@ -308,12 +380,19 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	var jwksHTTPSrv *http.Server
 	if jwksLn != nil {
 		jwksHTTPSrv = &http.Server{
-			Handler:           srv.JWKSHandler(),
+			Handler:           srv.PublicHandler(),
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+	}
+	var peerHTTPSrv *http.Server
+	if peerLn != nil {
+		peerHTTPSrv = &http.Server{
+			Handler:           srv.PeerHandler(),
 			ReadHeaderTimeout: 10 * time.Second,
 		}
 	}
 
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 	go func() {
 		if err := mainHTTPSrv.Serve(mainLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- fmt.Errorf("main server: %w", err)
@@ -326,17 +405,27 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 			}
 		}()
 	}
+	if peerHTTPSrv != nil {
+		go func() {
+			if err := peerHTTPSrv.Serve(peerLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				errCh <- fmt.Errorf("peer server: %w", err)
+			}
+		}()
+	}
 
-	fmt.Fprintf(stdout, "grain-registry listening on %s (jwks: %s)\n", mainLn.Addr().String(), cfg.JWKSListen)
+	fmt.Fprintf(stdout, "grain-registry listening on %s (jwks: %s, peer: %s)\n", mainLn.Addr().String(), cfg.JWKSListen, cfg.Tunnel.PeerListen)
 
 	select {
 	case <-ctx.Done():
-		srv.SetDraining(true)
-		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		srv.BeginDrain(shutCtx)
 		_ = mainHTTPSrv.Shutdown(shutCtx)
 		if jwksHTTPSrv != nil {
 			_ = jwksHTTPSrv.Shutdown(shutCtx)
+		}
+		if peerHTTPSrv != nil {
+			_ = peerHTTPSrv.Shutdown(shutCtx)
 		}
 		if st != nil {
 			_ = st.DeleteReplica(shutCtx, replicaID)

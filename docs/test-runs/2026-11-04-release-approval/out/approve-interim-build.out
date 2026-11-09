@@ -1,0 +1,69 @@
+== second press on v2.4.1 ==
+
+$ /home/debian/bin/grain release approve -repo acme/widgets v2.4.1
+grain: v2.4.1 was already answered: debian dispatched promote-release.yml for it at 2026-11-07T05:02:32Z; watch that run rather than starting another
+[exit 2]
+
+$ curl -s -w \n[http %{http_code}]\n -H Authorization: Bearer <access-code> -H Content-Type: application/json -X POST -d {} http://127.0.0.1:18080/api/repos/acme/widgets/pending-releases/v2.4.1/approve
+{"error":"v2.4.1 was already answered: debian dispatched promote-release.yml for it at 2026-11-07T05:02:32Z; watch that run rather than starting another"}
+
+[http 400]
+[exit 0]
+== an agent (20, api:release-manager) ==
+
+$ env GRAIN_SERVER=http://127.0.0.1:18081 /home/debian/bin/grain release approve -repo acme/widgets v2.5.0
+grain: only a person may approve a release: "20" is a agent, and a release is made official by a person, never by an agent or a schedule
+[exit 3]
+
+$ curl -s -w \n[http %{http_code}]\n -H Authorization: Bearer <access-code> -H Content-Type: application/json -H X-Grain-Acting-Task: 20 -X POST -d {} http://127.0.0.1:18080/api/repos/acme/widgets/pending-releases/v2.5.0/approve
+{"error":"only a person may approve a release: \"20\" is a agent, and a release is made official by a person, never by an agent or a schedule"}
+
+[http 403]
+[exit 0]
+== a person's CLI approve of v2.6.0 (-allow-breaking passes through) ==
+
+$ /home/debian/bin/grain release approve -repo acme/widgets -allow-breaking v2.6.0
+approved v2.6.0, breaking changes accepted: promote-release is tagging it and moving latest onto it
+dispatched acme/widgets's promote-release.yml on main for v2.6.0 (v2.6.0-pending at 90526bbeb4ec), signed for debian
+[exit 0]
+
+== what the sim was sent ==
+3 dispatch(es) of promote-release.yml
+[0] ref=main inputs={"approval": "Z3JhaW4tcmVs...", "approval_signature": "MEYCIQC/a9xJ...", "decision": "rollback", "reason": "v2.4.0 drops queued widgets on restart (#4242)", "rollback_to": "v2.3.0", "version": "v2.4.0"}
+    signature: Verified OK
+    grain-release-approval/v1
+    repo: acme/widgets
+    version: v2.4.0
+    decision: rollback
+    commit: 90526bbeb4ec6edb70d23810cd327ebf98a53d97
+    approver: debian
+    short_soak_ok: false
+    allow_breaking: false
+    rollback_to: v2.3.0
+    reason_sha256: 7ed88a3158fbf63362ad4333fc23dc3eeb9b5448b37cffb0b0c1503526e5ffff
+    issued: 1794027108
+    expires: 1794028008
+[1] ref=main inputs={"allow_breaking": "false", "approval": "Z3JhaW4tcmVs...", "approval_signature": "MEYCIQC95ZxP...", "decision": "approve", "short_soak_ok": "false", "version": "v2.4.1"}
+    signature: Verified OK
+    grain-release-approval/v1
+    repo: acme/widgets
+    version: v2.4.1
+    decision: approve
+    commit: 90526bbeb4ec6edb70d23810cd327ebf98a53d97
+    approver: debian
+    short_soak_ok: false
+    allow_breaking: false
+    issued: 1794027752
+    expires: 1794028652
+[2] ref=main inputs={"allow_breaking": "true", "approval": "Z3JhaW4tcmVs...", "approval_signature": "MEQCIHC43xd9...", "decision": "approve", "short_soak_ok": "false", "version": "v2.6.0"}
+    signature: Verified OK
+    grain-release-approval/v1
+    repo: acme/widgets
+    version: v2.6.0
+    decision: approve
+    commit: 90526bbeb4ec6edb70d23810cd327ebf98a53d97
+    approver: debian
+    short_soak_ok: false
+    allow_breaking: true
+    issued: 1794027778
+    expires: 1794028678

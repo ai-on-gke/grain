@@ -18,6 +18,7 @@ import api from "../../api.js";
 import { useTimeZone } from "../../TimeZoneContext.jsx";
 import { useTimelineOrder } from "../../TimelineOrderContext.jsx";
 import { formatDateTime } from "../../time.js";
+import { formatTokens } from "../settings/UsageCard.jsx";
 import fileToAttachment from "../../attachments.js";
 import {
   STATE_LABELS,
@@ -95,6 +96,31 @@ const PR_EVENT_LABELS = {
 // The verb follows the outcome: a run somebody cancelled, one grain
 // paused for want of agent budget, or one the provider had no capacity
 // for, did not give up on anything.
+// usageLine is a run's or a task's token usage in one line: billable
+// tokens (input, output and cache writes), then the breakdown.
+function usageLine(u) {
+  const billable =
+    u.billable ??
+    (u.inputTokens || 0) + (u.outputTokens || 0) + (u.cacheWriteTokens || 0);
+  let line = `${formatTokens(billable)} tokens (${formatTokens(u.inputTokens)} in, ${formatTokens(u.outputTokens)} out`;
+  if (u.cacheReadTokens) line += `, ${formatTokens(u.cacheReadTokens)} cached`;
+  line += ")";
+  if (u.costUsd) line += ` · $${u.costUsd.toFixed(2)}`;
+  return line;
+}
+
+function usageTitle(u) {
+  return [
+    `${u.inputTokens || 0} input tokens`,
+    `${u.outputTokens || 0} output tokens`,
+    `${u.cacheReadTokens || 0} read from cache`,
+    `${u.cacheWriteTokens || 0} written to cache`,
+    u.costUsd ? `$${u.costUsd} reported by the provider` : "",
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+
 function setupBreadcrumb(a) {
   if (!a.setupNote || !a.finishedAt) return null;
   const stopped =
@@ -160,8 +186,28 @@ const AUTO_MERGE_STEPS = {
   human_review_released: "Human-review hold released",
 };
 
+// ADMISSION_LABELS names each admission value the way the task pane's
+// Admission select does (detail/Actions.jsx).
+const ADMISSION_LABELS = {
+  standard: "Standard",
+  bypass: "Bypass queue",
+  durable: "Durable",
+};
+
+// HOSTING_LABELS names each hosting value the way the task pane's
+// Hosting select does (detail/Actions.jsx).
+const HOSTING_LABELS = {
+  unattended: "Unattended",
+  console: "Interactive console",
+};
+
 function isSettingOrAuditStep(state) {
-  return Boolean(AUTO_MERGE_STEPS[state]) || state === "owner_changed";
+  return (
+    Boolean(AUTO_MERGE_STEPS[state]) ||
+    state === "owner_changed" ||
+    state === "admission_changed" ||
+    state === "hosting_changed"
+  );
 }
 
 function renderTaskRefLink(taskId, label, onOpenTask, testId) {
@@ -329,8 +375,30 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
       tr.state === "owner_changed" && (tr.oldOwner || tr.newOwner)
         ? `from ${tr.oldOwner || "?"} to ${tr.newOwner || "?"}`
         : "";
-    const shownDetail = ownerTransferDetail || tr.detail || "";
-    const shownReason = tr.state === "owner_changed" ? "" : tr.reason || "";
+    // A change to the admission setting (model.TaskEventAdmissionChanged,
+    // unified-grants.design.md §4.1) says the old and new values.
+    const admissionDetail =
+      tr.state === "admission_changed" && (tr.oldAdmission || tr.newAdmission)
+        ? `from ${ADMISSION_LABELS[tr.oldAdmission] || tr.oldAdmission || "?"} to ${ADMISSION_LABELS[tr.newAdmission] || tr.newAdmission || "?"}`
+        : "";
+    // A change to the hosting setting (model.TaskEventHostingChanged,
+    // unified-grants.design.md §4.1) says the old and new values.
+    const hostingDetail =
+      tr.state === "hosting_changed" && (tr.oldHosting || tr.newHosting)
+        ? `from ${HOSTING_LABELS[tr.oldHosting] || tr.oldHosting || "?"} to ${HOSTING_LABELS[tr.newHosting] || tr.newHosting || "?"}`
+        : "";
+    const shownDetail =
+      ownerTransferDetail ||
+      admissionDetail ||
+      hostingDetail ||
+      tr.detail ||
+      "";
+    const shownReason =
+      tr.state === "owner_changed" ||
+      tr.state === "admission_changed" ||
+      tr.state === "hosting_changed"
+        ? ""
+        : tr.reason || "";
     return {
       key: `transition-${tr.state}-${i}`,
       at,
@@ -359,9 +427,13 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
               ? "Reopened"
               : tr.state === "owner_changed"
                 ? "Owner changed"
-                : AUTO_MERGE_STEPS[tr.state] ||
-                  STATE_LABELS[tr.state] ||
-                  tr.state}
+                : tr.state === "admission_changed"
+                  ? "Admission changed"
+                  : tr.state === "hosting_changed"
+                    ? "Hosting changed"
+                    : AUTO_MERGE_STEPS[tr.state] ||
+                      STATE_LABELS[tr.state] ||
+                      tr.state}
           </div>
           {/* Who proposed, closed, reopened, or transferred it, why, and
               what the step did (model.TaskEvent). */}
@@ -500,6 +572,17 @@ function timelineEvents(t, zone, now = Date.now(), onOpenTask = null) {
             <div className="timeline-meta">
               {a.capabilityAuditCount} capability audit record
               {a.capabilityAuditCount === 1 ? "" : "s"}
+            </div>
+          )}
+          {/* What it spent at its provider, as its CLI reported it
+              (ui.Attempt.Usage, docs/connections-and-models.md). */}
+          {a.usage && (
+            <div
+              className="timeline-meta timeline-attempt-usage"
+              data-testid="attempt-usage"
+              title={usageTitle(a.usage)}
+            >
+              {usageLine(a.usage)}
             </div>
           )}
           {/* Marked as grain's own words, the same way the live phrase
@@ -839,6 +922,16 @@ export default function Timeline({ t, act, showError, onOpenTask }) {
           history behind it, so the heading says what the feed is again
           -- for every task alike. */}
       <h3>Timeline</h3>
+      {t.usage && (
+        <div
+          className="timeline-meta timeline-task-usage"
+          data-testid="task-usage"
+          title={usageTitle(t.usage)}
+        >
+          {usageLine(t.usage)} across {t.usage.runs} run
+          {t.usage.runs === 1 ? "" : "s"}
+        </div>
+      )}
       {newestFirst && composer}
       {ordered.length > 0 && (
         <ul className="timeline-list">

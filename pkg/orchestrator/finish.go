@@ -1643,6 +1643,11 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 	if err != nil {
 		return err
 	}
+	// Which branch each repository's default is, asked of the forge at
+	// most once per repository for the batch, so a proposal that named no
+	// base and a parent filed with `base: main` read as the one branch
+	// they are (model.AlignDefaultBases).
+	defaultBranch := proposalDefaultBranches(client)
 
 	// Local `id` of a propose_task call -> the task id it was filed
 	// under, filled in as each proposal lands so only earlier calls are
@@ -1669,7 +1674,50 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		catalogue = catalogueCfg.CapabilityPolicy.Catalogue
 		autoGrantContextReads = catalogueCfg.AutoGrantContextReads
 	}
-	for _, p := range proposals {
+	for _, rawP := range proposals {
+		if err := mcp.ValidateProposeTaskArgs(rawP); err != nil {
+			log.Printf("orchestrator: skipping proposed task with invalid arguments: %v", err)
+			continue
+		}
+		p := rawP
+		if rawP["grants"] != nil {
+			decoded, hasGrants, gErr := model.DecodeRawRequestGrants(rawP["grants"], mcp.ProposeTaskGrantSpelling(rawP))
+			if gErr != nil {
+				log.Printf("orchestrator: skipping proposed task with invalid grants: %v", gErr)
+				continue
+			}
+			if ct, _ := mcp.ProposedChangeTarget(rawP); ct != nil && len(decoded.Writes) > 0 {
+				log.Printf("orchestrator: skipping proposed task with invalid grants: %s cannot be combined with writes", ct.Kind)
+				continue
+			}
+			if hasGrants {
+				p = make(map[string]any, len(rawP)+4)
+				for k, v := range rawP {
+					p[k] = v
+				}
+				if decoded.Capabilities != nil {
+					p["capabilities"] = decoded.Capabilities
+				}
+				if len(decoded.Reads) > 0 {
+					readStrs := make([]string, len(decoded.Reads))
+					for i, r := range decoded.Reads {
+						readStrs[i] = r.String()
+					}
+					p["reads"] = readStrs
+				}
+				if len(decoded.Writes) > 0 {
+					writeMaps := make([]any, len(decoded.Writes))
+					for i, w := range decoded.Writes {
+						writeMaps[i] = map[string]any{"repo": w.Repo.String(), "base": w.Base}
+					}
+					p["writes"] = writeMaps
+				}
+				if decoded.Target != nil {
+					p["repo"] = decoded.Target.Repo.String()
+					p["branch"] = decoded.Target.Base
+				}
+			}
+		}
 		title, _ := p["title"].(string)
 		body, _ := p["body"].(string)
 		var tmplID string
@@ -1755,6 +1803,28 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		noPort, _ := p["no_port"].(bool)
 		keepRunning, keepRunningSet := p["keep_running"].(bool)
 		fixesBase, _ := p["fixes_base_branch"].(bool)
+		var explicitAdmission, tmplAdmission, legacyAdmission model.Admission
+		var hasExplicitAdmission bool
+		var droppedAdmission string
+		if v, ok := p["admission"].(string); ok && strings.TrimSpace(v) != "" {
+			if parsed, perr := model.ParseAdmission(v); perr != nil {
+				droppedAdmission = strings.TrimSpace(v)
+			} else {
+				explicitAdmission = parsed
+				hasExplicitAdmission = true
+			}
+		}
+		var explicitHosting, tmplHosting, legacyHosting model.Hosting
+		var hasExplicitHosting bool
+		var droppedHosting string
+		if v, ok := p["hosting"].(string); ok && strings.TrimSpace(v) != "" {
+			if parsed, perr := model.ParseHosting(v); perr != nil {
+				droppedHosting = strings.TrimSpace(v)
+			} else {
+				explicitHosting = parsed
+				hasExplicitHosting = true
+			}
+		}
 		priority := model.DefaultTaskPriority
 		var hasExplicitPriority bool
 		if v, ok := p["priority"]; ok {
@@ -1807,17 +1877,23 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 				if !keepRunningSet {
 					keepRunning = comp.KeepRunning
 				}
+				if !hasExplicitAdmission && comp.Admission != "" {
+					tmplAdmission = comp.Admission
+				}
+				if !hasExplicitHosting && comp.Hosting != "" {
+					tmplHosting = comp.Hosting
+				}
 			}
 		}
 
 		if title == "" || body == "" {
 			continue
 		}
-		key := mcp.ProposalKeyArgs(task.ID, p)
+		key := mcp.ProposalKeyArgs(task.ID, rawP)
 		if existing, err := store.TaskWithTag(ctx, key); err != nil {
 			return fmt.Errorf("orchestrator: finding already-filed proposed task %q: %w", title, err)
 		} else if existing != nil {
-			if local, _ := p["id"].(string); local != "" {
+			if local, _ := rawP["id"].(string); local != "" {
 				if _, taken := filed[local]; !taken {
 					filed[local] = existing.ID
 				}
@@ -1850,6 +1926,14 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		if err != nil {
 			return fmt.Errorf("orchestrator: resolving default capabilities for proposed task %q: %w", title, err)
 		}
+		defaultAdmission, err := defaultTaskAdmission(ctx, store, target)
+		if err != nil {
+			return fmt.Errorf("orchestrator: resolving default admission for proposed task %q: %w", title, err)
+		}
+		defaultHosting, err := defaultTaskHosting(ctx, store, target)
+		if err != nil {
+			return fmt.Errorf("orchestrator: resolving default hosting for proposed task %q: %w", title, err)
+		}
 		// A {capability, with} entry the run wrote is read as the
 		// grant string it stands for; one that does not parse is
 		// dropped here, as a non-string entry always was, since the
@@ -1857,6 +1941,16 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		capabilities, _ := model.CapabilityEntries(p["capabilities"])
 		for _, cap := range capabilities {
 			cap = strings.TrimSpace(cap)
+			if aliasAdm, isLegacyAdm := model.LegacyAdmissionAlias(cap); isLegacyAdm {
+				log.Printf("orchestrator: deprecated capability %q on proposed task %q; use admission=%q instead", cap, title, aliasAdm)
+				legacyAdmission = model.MaxAdmission(legacyAdmission, aliasAdm)
+				continue
+			}
+			if aliasHost, isLegacyHost := model.LegacyHostingAlias(cap); isLegacyHost {
+				log.Printf("orchestrator: deprecated capability %q on proposed task %q; use hosting=%q instead", cap, title, aliasHost)
+				legacyHosting = model.MaxHosting(legacyHosting, aliasHost)
+				continue
+			}
 			// A review grant is grain's to give, on a review it files
 			// itself (SyncCLReviews); the live call refused it too.
 			if model.GrantNamesReviewOf(cap) {
@@ -1869,6 +1963,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			// here would otherwise file a proposal against a non-grain
 			// repo holding a grant its proposer was given by grain, and
 			// so unapproved (model.EscalatedCapabilities).
+			cap = model.StoredGrantSpelling(cap)
 			if cap == "" || grainci.IsGrant(cap) {
 				continue
 			}
@@ -1896,6 +1991,38 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		if droppedNetAccess != "" {
 			body += droppedNetworkAccessNote(droppedNetAccess)
 		}
+		if droppedAdmission != "" {
+			body += fmt.Sprintf("\n\n_grain could not use this proposal's admission (%q): want standard, bypass or durable._", droppedAdmission)
+		}
+		if droppedHosting != "" {
+			body += fmt.Sprintf("\n\n_grain could not use this proposal's hosting (%q): want unattended or console._", droppedHosting)
+		}
+		proposalAdmission := defaultAdmission
+		var askedAdmission model.Admission
+		if tmplAdmission != "" {
+			proposalAdmission = tmplAdmission
+			askedAdmission = model.MaxAdmission(askedAdmission, tmplAdmission)
+		}
+		if hasExplicitAdmission {
+			proposalAdmission = explicitAdmission
+			askedAdmission = model.MaxAdmission(askedAdmission, explicitAdmission)
+		}
+		if legacyAdmission != "" {
+			proposalAdmission = model.MaxAdmission(proposalAdmission, legacyAdmission)
+			askedAdmission = model.MaxAdmission(askedAdmission, legacyAdmission)
+		}
+		proposalAdmission = model.NormalizeAdmission(proposalAdmission)
+		proposalHosting := defaultHosting
+		if tmplHosting != "" {
+			proposalHosting = tmplHosting
+		}
+		if hasExplicitHosting {
+			proposalHosting = explicitHosting
+		}
+		if legacyHosting != "" {
+			proposalHosting = model.MaxHosting(proposalHosting, legacyHosting)
+		}
+		proposalHosting = model.NormalizeHosting(proposalHosting)
 		// Whether the task this proposal replaces may be closed is
 		// decided before the proposal is written and the close is done
 		// after it: the note belongs in the body a human approves, and
@@ -1987,6 +2114,8 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			Target:              target,
 			Binding:             model.BindingDirective,
 			Base:                base,
+			Admission:           proposalAdmission,
+			Hosting:             proposalHosting,
 			Priority:            priority,
 			Interactive:         interactive,
 			Grants:              grants,
@@ -2090,11 +2219,22 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 				needsPersonWhy += "; " + why
 			}
 		}
-		// keep_running, or a priority above this task's own: settings only
-		// a person may give a task (model.PersonOnlyProposalSettings), so
-		// filed as asked, for a person, saying which -- ui.CreateTask's
-		// rule for the identical call filed live.
-		if why := model.PersonOnlyProposalSettings(proposal, task); why != "" {
+		permissionProposal := proposal
+		if !model.NormalizeAdmission(askedAdmission).AtLeast(model.AdmissionBypass) {
+			permissionProposal.Admission = model.AdmissionStandard
+		}
+		// Where the proposal lands, spelled as this task's own write
+		// targets spell it wherever the two name the same default branch
+		// -- for the permission checks below only; the proposal is filed
+		// with the base the call gave it.
+		aligned := model.AlignDefaultBases(proposal, task, defaultBranch)
+		permissionProposal.Base, permissionProposal.Writes = aligned.Base, aligned.Writes
+		// admission above standard, keep_running, or a priority above this
+		// task's own: settings only a person may give a task
+		// (model.PersonOnlyProposalSettings), so filed as asked, for a
+		// person, saying which -- ui.CreateTask's rule for the identical
+		// call filed live.
+		if why := model.PersonOnlyProposalSettings(permissionProposal, task); why != "" {
 			proposal.Body += fmt.Sprintf("\n\n_Filed for a person to approve: %s._", why)
 			if needsPersonWhy == "" {
 				needsPersonWhy = why
@@ -2147,6 +2287,20 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 				}
 			}
 		}
+		// A proposal that targets or writes grain/config waits for a
+		// person whatever this task holds (model.ConfigRepoProposalHold)
+		// -- ui.CreateTask's rule for the identical call filed live. A
+		// session holding grain/config in its Writes for
+		// propose_config_change would otherwise pass that write on to a
+		// child its own permission queues.
+		if why := model.ConfigRepoProposalHold(proposal); why != "" {
+			proposal.Body += fmt.Sprintf("\n\n_Filed for a person to approve: %s._", why)
+			if needsPersonWhy == "" {
+				needsPersonWhy = why
+			} else {
+				needsPersonWhy += "; " + why
+			}
+		}
 		// Scheduled for later: filed deferred with the wake time the
 		// call asked for, so reconcileWake picks it back up then and not
 		// before -- ui.CreateTask's rule for the identical call filed
@@ -2169,22 +2323,41 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// other proposal is filed for a human to decide on, which is
 		// propose_task's whole contract.
 		//
-		// The session is not bounded here and the tasks below it are.
-		// Its permission is not a run's inherited one but a person
-		// sitting in front of the chat: every task it files is one
-		// somebody just asked for in a message, so a cap on how many
-		// would be a cap on how much a human may ask for in a day. What
-		// that person cannot see is what the work they asked for goes
-		// on to queue for itself, so a session-queued task counts as a
-		// level of self-approved work like any other
-		// (model.SelfApproved) and everything below it is bounded
-		// exactly as an auto-merge job's proposals are.
+		// The session is not bounded by depth or lifetime fan-out, and
+		// the tasks below it are. Its permission is not a run's
+		// inherited one but a person sitting in front of the chat:
+		// every task it files is one somebody just asked for in a
+		// message, so a cap over the session's life would be a cap on
+		// how much a human may ask for in a day. What bounds it instead
+		// is per conversation turn (model.AutoSubmitLimits.TurnFanOut,
+		// counted since the last message a person sent it): one message
+		// is still a fast way to ask for a lot of work, so past that
+		// many the rest are filed for a person, with
+		// model.AutoSubmitLimitNote saying why. What that person cannot
+		// see is what the work they asked for goes on to queue for
+		// itself, so a session-queued task counts as a level of
+		// self-approved work like any other (model.SelfApproved) and
+		// everything below it is bounded exactly as an auto-merge job's
+		// proposals are.
 		//
 		// Neither reaches a proposal that asked for a capability this task
 		// does not hold (model.EscalatedCapabilities): it is filed holding
 		// it, for a person, with a note saying so -- ui.CreateTask's rule
 		// for the identical call filed live.
-		escalated := model.EscalatedCapabilities(proposal, task)
+		//
+		// A director this deployment lets queue its own work is not
+		// escalating by carrying its proposal's target repository's or
+		// this deployment's defaults unchanged
+		// (model.ProposalEscalations, director-capabilities.spec.md
+		// §4.2): those are filed with the note that names them instead.
+		var seeding *model.ProposalSeeding
+		if approved && model.IsDirectorTask(task) {
+			if seeding, err = proposalSeeding(ctx, store, target, catalogue, proposal); err != nil {
+				return fmt.Errorf("orchestrator: resolving the default capabilities seeded on proposed task %q: %w", title, err)
+			}
+		}
+		escalated, admittedDefaults := model.ProposalEscalations(proposal, task, approved, seeding)
+		proposal.Body += model.SeededDefaultsNote(task.ID, admittedDefaults)
 		// Write targets the run asked for that this task was never given
 		// are filed as asked -- a person may well agree the work belongs
 		// there too -- but they keep it from being queued or merging on
@@ -2192,7 +2365,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// the person deciding is told which ones they are. That holds
 		// for a session's approval as much as for AutoSubmits, for the
 		// reason escalated capabilities do.
-		ungranted := model.UngrantedWrites(proposal, task)
+		ungranted := model.UngrantedWrites(aligned, task)
 		if len(ungranted) > 0 {
 			proposal.Body += model.UngrantedWritesNote(task.ID, ungranted)
 		}
@@ -2216,13 +2389,20 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// (AutoSubmits knows nothing of keep_running or priority).
 		heldByRun, _ := p["hold_for_approval"].(bool)
 		hold := heldByRun || needsPersonWhy != ""
+		if heldByRun {
+			// The run asked for a person whatever its permission covers
+			// (model.HoldRequestedTag), which the agent approval rail
+			// reads; HeldForApprovalTag below says only whether that
+			// request changed the outcome.
+			proposal.Tags = append(proposal.Tags, model.HoldRequestedTag)
+		}
 		// A fixture on this task's own qualification scratch branch is
 		// within a permission of its own (model.ScratchFixture): this
 		// task may push that branch itself, so the fixture is queued, and
 		// merges there, on that -- bounded like any other self-approved
 		// proposal.
 		scratch := model.ScratchFixture(proposal, task, pushesScratch)
-		selfApproves := scratch || model.AutoSubmits(proposal, task)
+		selfApproves := scratch || model.AutoSubmits(permissionProposal, task)
 		switch {
 		case len(escalated) > 0:
 			proposal.Body += model.ProposalEscalationNote(task.ID, proposal, escalated)
@@ -2234,8 +2414,16 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		case hold:
 			// Waiting for a person anyway; nothing was held back.
 		case approved:
-			proposal.Approval = &model.Attribution{Actor: consoleSessionPrincipal}
-			proposal.ApprovedAt = &now
+			limit, err := store.ExceededSessionTurnLimit(ctx, task.ID, limits)
+			if err != nil {
+				return fmt.Errorf("orchestrator: bounding the session's approval of proposed task %q: %w", title, err)
+			}
+			if limit == model.AutoSubmitWithinLimits {
+				proposal.Approval = &model.Attribution{Actor: consoleSessionPrincipal}
+				proposal.ApprovedAt = &now
+			} else {
+				proposal.Body += model.AutoSubmitLimitNote(task.ID, limit, limits)
+			}
 		case selfApproves:
 			limit, err := store.ExceededAutoSubmitLimit(ctx, task.ID, limits)
 			if err != nil {
@@ -2251,10 +2439,17 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 				// it can be told they are now the bound.
 				proposal.Body += model.AutoSubmitLimitNote(task.ID, limit, limits)
 			}
+		case proposal.ChangeTarget == nil && model.AutoSubmitRefusedOnLanding(permissionProposal, task):
+			// This task may queue its proposals, and this one asks for
+			// nothing that permission does not cover -- it only lands on
+			// a branch the permission does not reach. Nothing above says
+			// so, and a proposal left unapproved with no word on why
+			// reads as grain having forgotten it (task 3411's live walk).
+			proposal.Body += otherBranchQueueNote(task, proposal)
 		}
 		asked := proposedAutoMerge(p, task) &&
 			model.GrantsSubsetOf(proposal.Grants, task.Grants)
-		proposal.AutoMerge = asked && model.LandsWhereGranted(proposal, task)
+		proposal.AutoMerge = asked && model.LandsWhereGranted(aligned, task)
 		if scratch {
 			// Merging into the scratch branch is what the fixture is for,
 			// whatever this task's own auto-merge says about its default
@@ -2422,6 +2617,87 @@ func defaultTaskGrants(ctx context.Context, store *model.Store, target *model.Re
 		}
 	}
 	return grants, nil
+}
+
+// defaultTaskAdmission is the admission a task filed against target (nil:
+// no repository) starts at: the higher of the repository's and the
+// deployment's default_admission, else standard.
+func defaultTaskAdmission(ctx context.Context, store *model.Store, target *model.RepoRef) (model.Admission, error) {
+	cfg, err := store.GetConfig(ctx)
+	if err != nil {
+		return model.AdmissionStandard, err
+	}
+	adm := model.AdmissionStandard
+	if cfg != nil && cfg.DefaultAdmission != "" {
+		adm = cfg.DefaultAdmission
+	}
+	if target != nil {
+		repoCfg, err := store.GetRepoConfig(ctx, *target)
+		if err != nil {
+			return model.AdmissionStandard, err
+		}
+		if repoCfg != nil {
+			// Composed by union with the deployment's, as
+			// defaultTaskGrants composes the default capability lists
+			// this replaced: the higher wins.
+			adm = model.MaxAdmission(adm, repoCfg.DefaultAdmission)
+		}
+	}
+	return model.NormalizeAdmission(adm), nil
+}
+
+// defaultTaskHosting is the hosting a task filed against target (nil:
+// no repository) starts at: the higher of the repository's and the
+// deployment's default_hosting, else unattended.
+func defaultTaskHosting(ctx context.Context, store *model.Store, target *model.RepoRef) (model.Hosting, error) {
+	cfg, err := store.GetConfig(ctx)
+	if err != nil {
+		return model.HostingUnattended, err
+	}
+	host := model.HostingUnattended
+	if cfg != nil && cfg.DefaultHosting != "" {
+		host = cfg.DefaultHosting
+	}
+	if target != nil {
+		repoCfg, err := store.GetRepoConfig(ctx, *target)
+		if err != nil {
+			return model.HostingUnattended, err
+		}
+		if repoCfg != nil {
+			host = model.MaxHosting(host, repoCfg.DefaultHosting)
+		}
+	}
+	return model.NormalizeHosting(host), nil
+}
+
+// proposalSeeding is the seeding source a director's proposal filed
+// against target (nil: no repository) is measured against
+// (model.ProposalSeeding, director-capabilities.spec.md §4.2): the two
+// layers defaultTaskGrants reads, kept apart and spelled as it spells
+// them, and catalogue judging proposal in its own context --
+// ui.Client.proposalSeeding's answer for the identical call filed live.
+func proposalSeeding(ctx context.Context, store *model.Store, target *model.RepoRef,
+	catalogue *model.CapabilityCatalogue, proposal model.Task) (*model.ProposalSeeding, error) {
+	cfg, err := store.GetConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seeding := &model.ProposalSeeding{Catalogue: catalogue, GrantContext: model.TaskGrantContext(proposal)}
+	if cfg != nil {
+		seeding.DeploymentDefaults = append([]string(nil), cfg.DefaultCapabilities...)
+	}
+	if target != nil {
+		repo := *target
+		seeding.Target = &repo
+		repoCfg, err := store.GetRepoConfig(ctx, *target)
+		if err != nil {
+			return nil, err
+		}
+		if repoCfg != nil {
+			seeding.RepoDefaults = append([]string(nil), repoCfg.DefaultCapabilities...)
+		}
+	}
+	return seeding, nil
 }
 
 // newestFirst is model.Config.NewestFirst, read fresh from the store --
@@ -2894,6 +3170,39 @@ func otherBranchAutoMergeNote(task, proposal model.Task) string {
 		task.ID, landingBranch(task), landingBranch(proposal))
 }
 
+// otherBranchQueueNote is model.OtherBranchQueueNote, which
+// ui.Client.CreateTask appends to the identical proposal filed live.
+func otherBranchQueueNote(task, proposal model.Task) string {
+	return model.OtherBranchQueueNote(task, proposal)
+}
+
+// proposalDefaultBranches is relayProposedTasks' answer to which branch a
+// repository's default is (model.AlignDefaultBases), asked of client at
+// most once per repository and remembered for the batch. "" -- for a
+// repository the forge cannot answer for, or with no client at all --
+// leaves a base as written, so the permission checks still withhold.
+func proposalDefaultBranches(client github.Client) func(model.RepoRef) string {
+	if client == nil {
+		return nil
+	}
+	known := map[string]string{}
+	return func(repo model.RepoRef) string {
+		key := strings.ToLower(repo.String())
+		if def, ok := known[key]; ok {
+			return def
+		}
+		def, err := client.DefaultBranch(repo.Owner, repo.Name)
+		if err != nil {
+			log.Printf("orchestrator: reading %s's default branch to judge a proposal's base: %v "+
+				"-- comparing bases as written", repo, err)
+			def = ""
+		}
+		def = strings.TrimSpace(def)
+		known[key] = def
+		return def
+	}
+}
+
 // changeTargetAutoMergeNote is otherBranchAutoMergeNote for a proposal
 // with a change target: it would have inherited auto-merge, and has no
 // pull request for it to apply to.
@@ -2916,16 +3225,7 @@ func changeTargetAutoMergeNote(task, proposal model.Task) string {
 // names the note reads as though grain refused an inheritance between
 // two identical things.
 func landingBranch(task model.Task) string {
-	if task.Target == nil {
-		if task.Base != "" {
-			return "`" + task.Base + "`"
-		}
-		return "its repository's default branch"
-	}
-	if task.Base != "" {
-		return fmt.Sprintf("`%s` in `%s`", task.Base, task.Target)
-	}
-	return fmt.Sprintf("the default branch of `%s`", task.Target)
+	return model.LandingBranch(task)
 }
 
 // argStrings reads a tool argument that should have arrived as an array

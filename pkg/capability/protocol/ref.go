@@ -22,9 +22,15 @@ import (
 	"strings"
 )
 
-// methodPattern is the grammar of a method name (§2.1.3), and of an MCP
-// server name an mcp_endpoint reports (§5.2.3).
-var methodPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
+// methodPattern is the grammar of a method name (§2.1.3). It admits ":"
+// so that grain's in-process api server can name each agent API scope
+// as itself (https://grain.dev/capabilities/api#ci:write,
+// design/design/unified-grants.design.md §1).
+var methodPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_:-]{0,62}$`)
+
+// serverNamePattern is the grammar of an MCP server name an mcp_endpoint
+// reports (§5.2.3): a method name without ":".
+var serverNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 
 // attemptIDPattern is the grammar of an attempt_id (§1.2).
 var attemptIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)

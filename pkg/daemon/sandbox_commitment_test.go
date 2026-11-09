@@ -20,7 +20,6 @@
 package daemon
 
 import (
-	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -32,9 +31,7 @@ func writeFakeClusterKubectl(t *testing.T, jsonOut string) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "kubectl")
 	script := "#!/bin/sh\ncat <<'EOF'\n" + jsonOut + "\nEOF\n"
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
-		t.Fatalf("writing fake kubectl: %v", err)
-	}
+	writeExecutableStub(t, bin, script)
 	return bin
 }
 

@@ -37,6 +37,20 @@ async function directorTaskID(request) {
 }
 
 async function fakeLiveRun(page, taskID) {
+  await fakeRunningTask(page, taskID);
+  const cancels = [];
+  await page.route(/\/api\/console-sessions\/director(\/cancel)?$/, (route) => {
+    const method = route.request().method();
+    if (method === "GET") return route.fallback();
+    if (route.request().url().endsWith("/cancel")) cancels.push(method);
+    return route.fulfill({ status: 200, json: {} });
+  });
+  return cancels;
+}
+
+// fakeRunningTask answers taskID's detail as running with an open
+// attempt, leaving every other request to the demo.
+async function fakeRunningTask(page, taskID) {
   await page.route(new RegExp(`/api/tasks/${taskID}$`), async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     const headers = { ...route.request().headers() };
@@ -60,14 +74,6 @@ async function fakeLiveRun(page, taskID) {
       }),
     });
   });
-  const cancels = [];
-  await page.route(/\/api\/console-sessions\/director(\/cancel)?$/, (route) => {
-    const method = route.request().method();
-    if (method === "GET") return route.fallback();
-    if (route.request().url().endsWith("/cancel")) cancels.push(method);
-    return route.fulfill({ status: 200, json: {} });
-  });
-  return cancels;
 }
 
 for (const [name, size] of Object.entries(SIZES)) {
@@ -85,7 +91,15 @@ for (const [name, size] of Object.entries(SIZES)) {
     const panel = page.locator("#director-capabilities-content");
     await expect(panel).toContainText("A run is open on this session now");
 
-    await panel.getByRole("checkbox").first().click();
+    // Core offers no bare capability to tick, so the grant saved is an
+    // agent API one, added from GrantsPicker's own menu.
+    await panel
+      .getByTestId("session-director-grants")
+      .getByRole("button", { name: "Add grant…" })
+      .click();
+    const menu = page.getByRole("menu", { name: "Grants to add" });
+    await menu.locator(".api-grant-row").first().click();
+    if (await menu.isVisible()) await page.keyboard.press("Escape");
     const banner = page.locator(".console-session-pending");
     await expect(banner).toBeVisible();
     await expect(banner).toContainText("does not have it");
@@ -214,5 +228,58 @@ test("active session parameters and permissions remain editable in ConsoleSessio
         },
       });
     }
+  }
+});
+
+// The same, with the save reaching grain demo: removing a grant from the
+// director is saved -- every session holds the built-in config-map's
+// bootstrap grant, which the demo's registry must carry for the save's
+// re-check of it to pass (task 3586) -- and Apply now stops the run.
+test("saves a grant removed from a session during a live run", async ({
+  page,
+  request,
+}) => {
+  const removed = "api:capabilities:detach";
+  const before = (
+    await (await request.get("/api/console-sessions")).json()
+  ).sessions.find((s) => s.id === "director");
+  expect(before.capabilities).toContain(removed);
+  await fakeRunningTask(page, before.taskId);
+  const cancels = [];
+  await page.route(/\/api\/console-sessions\/director\/cancel$/, (route) => {
+    cancels.push(route.request().method());
+    return route.fulfill({ status: 200, json: {} });
+  });
+  try {
+    await page.setViewportSize(SIZES.desktop);
+    await page.goto("/session/director");
+    await page
+      .getByRole("button", { name: "Edit Director capabilities" })
+      .click();
+    const saved = page.waitForResponse(
+      (r) =>
+        r.request().method() === "PUT" &&
+        /\/api\/console-sessions\/director$/.test(r.url()),
+    );
+    await page.getByRole("button", { name: `Remove ${removed}` }).click();
+    expect((await saved).status()).toBe(200);
+    const { sessions } = await (
+      await request.get("/api/console-sessions")
+    ).json();
+    expect(
+      sessions.find((s) => s.id === "director").capabilities,
+    ).not.toContain(removed);
+
+    const banner = page.locator(".console-session-pending");
+    await expect(banner).toBeVisible();
+    await banner.getByRole("button", { name: "Apply now" }).click();
+    await expect.poll(() => cancels).toEqual(["POST"]);
+    await expect(banner).toHaveCount(0);
+  } finally {
+    // The worker's demo server is shared: put the grant back.
+    const restored = await request.put("/api/console-sessions/director", {
+      data: { capabilities: before.capabilities },
+    });
+    expect(restored.ok()).toBe(true);
   }
 });

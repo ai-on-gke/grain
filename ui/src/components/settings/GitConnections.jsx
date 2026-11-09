@@ -29,7 +29,7 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import api from "../../api.js";
 import SearchSelect from "../SearchSelect.jsx";
 import {
@@ -72,6 +72,7 @@ export default function GitConnections({
   deployment,
   onDeploymentChanged,
   showError,
+  dismissError,
   deploymentGitName,
   deploymentGitEmail,
   canManageTokens = true,
@@ -99,6 +100,7 @@ export default function GitConnections({
         deployment={deployment}
         onChanged={onDeploymentChanged}
         showError={showError}
+        dismissError={dismissError}
         readOnly={!canManageTokens}
         onConnections={setConnections}
       />
@@ -321,6 +323,7 @@ function GitConnectionsList({
   deployment,
   onChanged,
   showError,
+  dismissError,
   readOnly = false,
   onConnections,
 }) {
@@ -355,6 +358,25 @@ function GitConnectionsList({
   const [testingCred, setTestingCred] = useState(null);
   const [testResult, setTestResult] = useState(null);
   const [actionError, setActionError] = useState(null);
+  // A refused save or remove is said twice: in actionError here and in
+  // the shell's banner (showError). The banner used to stay up for its
+  // five seconds after the next attempt succeeded, so the row just saved
+  // sat under "the private key will not parse"; what it was raised for is
+  // kept, so a success -- or Cancel -- takes it down (App's dismissError
+  // leaves a later, unrelated banner alone).
+  const raisedRef = useRef(null);
+  const raise = (err) => {
+    const message = err?.message || String(err);
+    setActionError(message);
+    raisedRef.current = String(message);
+    showError?.(err);
+  };
+  const settle = () => {
+    setActionError(null);
+    if (raisedRef.current === null) return;
+    dismissError?.(raisedRef.current);
+    raisedRef.current = null;
+  };
 
   useEffect(() => {
     let active = true;
@@ -459,11 +481,11 @@ function GitConnectionsList({
           method: "DELETE",
         },
       );
+      settle();
       setReload((n) => n + 1);
       await onChanged?.();
     } catch (err) {
-      setActionError(err?.message || String(err));
-      showError?.(err);
+      raise(err);
     } finally {
       setBusy(false);
     }
@@ -471,7 +493,7 @@ function GitConnectionsList({
 
   const resetNewConnectionForm = () => {
     setAdding(false);
-    setActionError(null);
+    settle();
     setHost("");
     setKind("github");
     setAuthType("pat");
@@ -523,8 +545,7 @@ function GitConnectionsList({
       setReload((n) => n + 1);
       await onChanged?.();
     } catch (err) {
-      setActionError(err?.message || String(err));
-      showError?.(err);
+      raise(err);
     } finally {
       setBusy(false);
     }

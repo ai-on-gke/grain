@@ -63,6 +63,15 @@ type Remote struct {
 	// token belongs to, ok false for a token that names none (never
 	// minted, rotated away, or its hostd revoked).
 	Resolve func(ctx context.Context, token string) (name, owner string, ok bool, err error)
+	// ResolveCredential, when set, extends Resolve with the host's bound
+	// Ed25519 public key ("" for legacy per-host tokens) so ServeHTTP can
+	// enforce proof-of-possession on every connection.
+	ResolveCredential func(ctx context.Context, token string) (ResolvedCredential, bool, error)
+	// Renew, when set, silently extends a connected host's credential for
+	// another 30-day window over OpRenew.
+	Renew func(ctx context.Context, name, currentToken string) (newToken string, expiresAt time.Time, err error)
+	// OnCheckin, when set, records check-in metadata when a host connects.
+	OnCheckin func(ctx context.Context, peer RemotePeer)
 	// Default is the hostd Dial reaches; SharedName's when "" and Token is
 	// set.
 	Default string
@@ -72,6 +81,8 @@ type Remote struct {
 	OnChange func(name string, connected bool)
 	// now is time.Now, or a test's clock for refusal's rate limit.
 	now func() time.Time
+
+	replay NonceReplayCache
 
 	mu       sync.Mutex
 	cur      map[string]*remoteSession
@@ -114,6 +125,13 @@ type RemotePeer struct {
 	Build    string `json:"build,omitempty"`
 	Protocol string `json:"protocol,omitempty"`
 	Addr     string `json:"addr,omitempty"`
+	// Logins are the agent CLI logins on the hostd's machine, from the
+	// hello the daemon asks it for once it has connected (Hello.Logins,
+	// learnLogins). LoginsKnown says that hello was answered, so an
+	// empty list reads as "none" rather than "not asked yet" or "a hostd
+	// too old to say".
+	Logins      []string `json:"logins,omitempty"`
+	LoginsKnown bool     `json:"loginsKnown,omitempty"`
 }
 
 // RemoteStatus is Settings' view of a hostd that dials in.
@@ -128,10 +146,20 @@ type RemoteStatus struct {
 	Sessions int `json:"sessions"`
 }
 
+// ResolvedCredential describes the registry host a credential belongs to.
+type ResolvedCredential struct {
+	Name      string
+	Owner     string
+	PublicKey string
+	ExpiresAt time.Time
+}
+
 type remoteSession struct {
-	m       *mux.Mux
-	peer    RemotePeer
-	carries carryRegistry
+	r         *Remote
+	m         *mux.Mux
+	peer      RemotePeer
+	publicKey string
+	carries   carryRegistry
 }
 
 func (r *Remote) sharedName() string {
@@ -167,23 +195,43 @@ func (r *Remote) Authorize(token string) bool {
 // Identify is the hostd token belongs to: the shared token's, or the
 // registry's. ok is false for a token that names none.
 func (r *Remote) Identify(ctx context.Context, token string) (name, owner string, ok bool, err error) {
+	cred, ok, err := r.IdentifyCredential(ctx, token)
+	if !ok || err != nil {
+		return "", "", false, err
+	}
+	return cred.Name, cred.Owner, true, nil
+}
+
+// IdentifyCredential resolves token to its host name, owner, and optional
+// bound Ed25519 public key.
+func (r *Remote) IdentifyCredential(ctx context.Context, token string) (ResolvedCredential, bool, error) {
 	if r == nil || token == "" {
-		return "", "", false, nil
+		return ResolvedCredential{}, false, nil
 	}
 	if r.Authorize(token) {
-		return r.sharedName(), strings.ToLower(strings.TrimSpace(r.SharedOwner)), true, nil
+		return ResolvedCredential{
+			Name:  r.sharedName(),
+			Owner: strings.ToLower(strings.TrimSpace(r.SharedOwner)),
+		}, true, nil
 	}
-	if r.Resolve == nil {
-		return "", "", false, nil
+	var cred ResolvedCredential
+	var ok bool
+	var err error
+	switch {
+	case r.ResolveCredential != nil:
+		cred, ok, err = r.ResolveCredential(ctx, token)
+	case r.Resolve != nil:
+		cred.Name, cred.Owner, ok, err = r.Resolve(ctx, token)
+	default:
+		return ResolvedCredential{}, false, nil
 	}
-	name, owner, ok, err = r.Resolve(ctx, token)
-	if ok && r.Token != "" && name == r.sharedName() {
+	if ok && r.Token != "" && cred.Name == r.sharedName() {
 		// The shared token's hostd holds this name: a registry hostd by
 		// it would take over that hostd's session, and work sent to it
 		// would not be checked against the registry's revocation.
-		return "", "", false, fmt.Errorf("registry host %q has the name -hostd-token-name gives the shared token's host; rename one of them", name)
+		return ResolvedCredential{}, false, fmt.Errorf("registry host %q has the name -hostd-token-name gives the shared token's host; rename one of them", cred.Name)
 	}
-	return name, owner, ok, err
+	return cred, ok, err
 }
 
 // SharedTokenName is the hostd the deprecated shared token names, "" when
@@ -213,6 +261,10 @@ func (r *Remote) logf(format string, args ...any) {
 // Serve runs conn as the session to the hostd peer.Name until it drops
 // or ctx is done, replacing any session that same hostd had before it.
 func (r *Remote) Serve(ctx context.Context, conn net.Conn, peer RemotePeer) {
+	r.serveWithKey(ctx, conn, peer, "")
+}
+
+func (r *Remote) serveWithKey(ctx context.Context, conn net.Conn, peer RemotePeer, publicKey string) {
 	if peer.Name == "" {
 		peer.Name = r.sharedName()
 	}
@@ -222,7 +274,7 @@ func (r *Remote) Serve(ctx context.Context, conn net.Conn, peer RemotePeer) {
 		PingTimeout:  15 * time.Second,
 	})
 	defer m.Close()
-	sess := &remoteSession{m: m, peer: peer}
+	sess := &remoteSession{r: r, m: m, peer: peer, publicKey: publicKey}
 	r.mu.Lock()
 	if r.cur == nil {
 		r.cur = map[string]*remoteSession{}
@@ -244,6 +296,10 @@ func (r *Remote) Serve(ctx context.Context, conn net.Conn, peer RemotePeer) {
 	}
 	r.logf("grain daemon: grain hostd %s on %s (build %s) connected from %s", peer.Name, peer.Host, peer.Build, peer.Addr)
 	go sess.acceptCarries()
+	go r.learnLogins(ctx, sess)
+	if r.OnCheckin != nil {
+		r.OnCheckin(ctx, peer)
+	}
 	if r.OnChange != nil {
 		r.OnChange(peer.Name, true)
 	}
@@ -252,18 +308,19 @@ func (r *Remote) Serve(ctx context.Context, conn net.Conn, peer RemotePeer) {
 	case <-m.Done():
 	}
 	r.mu.Lock()
-	dropped := r.cur[peer.Name] == sess
+	name := sess.peer.Name
+	dropped := r.cur[name] == sess
 	if dropped {
-		delete(r.cur, peer.Name)
-		st := r.last[peer.Name]
+		delete(r.cur, name)
+		st := r.last[name]
 		st.Connected = false
 		st.Since = time.Now()
-		r.last[peer.Name] = st
+		r.last[name] = st
 	}
 	r.mu.Unlock()
-	r.logf("grain daemon: grain hostd %s on %s disconnected", peer.Name, peer.Host)
+	r.logf("grain daemon: grain hostd %s on %s disconnected", name, sess.peer.Host)
 	if dropped && r.OnChange != nil {
-		r.OnChange(peer.Name, false)
+		r.OnChange(name, false)
 	}
 }
 
@@ -300,6 +357,44 @@ func (r *Remote) dialSession(ctx context.Context, name string) (*remoteSession, 
 // Dialer is DialHostd for name, in Client.Dial's shape.
 func (r *Remote) Dialer(name string) func(context.Context) (net.Conn, error) {
 	return func(ctx context.Context) (net.Conn, error) { return r.DialHostd(ctx, name) }
+}
+
+// IsConnected reports whether name currently holds an active mux session.
+func (r *Remote) IsConnected(name string) bool {
+	if r == nil || name == "" {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.cur[name] != nil
+}
+
+// RenameSession moves any live or cached status entry from oldName to newName.
+func (r *Remote) RenameSession(oldName, newName string) {
+	if r == nil || oldName == "" || newName == "" || oldName == newName {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if sess, ok := r.cur[oldName]; ok {
+		delete(r.cur, oldName)
+		sess.peer.Name = newName
+		r.cur[newName] = sess
+	}
+	if st, ok := r.last[oldName]; ok {
+		delete(r.last, oldName)
+		st.Name = newName
+		r.last[newName] = st
+	}
+}
+
+// ReplayCache exposes Remote's nonce replay cache for HTTP endpoints such as
+// POST /api/hostd/renew.
+func (r *Remote) ReplayCache() *NonceReplayCache {
+	if r == nil {
+		return nil
+	}
+	return &r.replay
 }
 
 // Disconnect closes the live session of the hostd named name, if one is
@@ -442,7 +537,8 @@ func hostOf(req *http.Request) string {
 // hostd until it drops.
 func (r *Remote) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	tok := RequestToken(req)
-	name, owner, ok, err := r.Identify(req.Context(), tok)
+	cred, ok, err := r.IdentifyCredential(req.Context(), tok)
+	name, owner := cred.Name, cred.Owner
 	if err != nil {
 		r.logf("grain daemon: looking up a grain hostd's token: %v", err)
 		http.Error(w, "host agent: this controller could not check that host token", http.StatusServiceUnavailable)
@@ -456,6 +552,17 @@ func (r *Remote) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		r.logRefused(req, "token", why)
 		http.Error(w, "host agent: this controller does not take that host token", http.StatusUnauthorized)
 		return
+	}
+	if strings.TrimSpace(cred.PublicKey) != "" {
+		now := time.Now
+		if r.now != nil {
+			now = r.now
+		}
+		if err := VerifyConnectHeaders(req, tok, cred.PublicKey, now(), &r.replay); err != nil {
+			r.logRefused(req, "key\x00"+name, fmt.Sprintf("key-bound host %q failed proof-of-possession: %v", name, err))
+			http.Error(w, "host agent: "+err.Error(), http.StatusUnauthorized)
+			return
+		}
 	}
 	if claimed := strings.TrimSpace(req.Header.Get(NameHeader)); claimed != "" && claimed != name {
 		r.logRefused(req, "name\x00"+name+"\x00"+claimed, fmt.Sprintf("it calls itself host %q, but its token is host %q's", claimed, name))
@@ -497,7 +604,7 @@ func (r *Remote) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if brw.Reader.Buffered() > 0 {
 		c = &bufferedConn{Conn: conn, r: io.MultiReader(brw.Reader, conn)}
 	}
-	r.Serve(req.Context(), c, RemotePeer{
+	r.serveWithKey(req.Context(), c, RemotePeer{
 		Name:      name,
 		Owner:     owner,
 		Principal: id.Principal,
@@ -505,5 +612,34 @@ func (r *Remote) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		Build:     req.Header.Get(BuildHeader),
 		Protocol:  req.Header.Get(ProtocolHeader),
 		Addr:      req.RemoteAddr,
-	})
+	}, cred.PublicKey)
+}
+
+// learnLoginsTimeout bounds the hello learnLogins asks.
+const learnLoginsTimeout = 10 * time.Second
+
+// learnLogins asks the hostd that just connected over sess for its hello
+// and keeps the agent CLI logins it reports (Hello.Logins) in its
+// status, for Settings' host pickers. It changes nothing a run reads,
+// and a hostd that does not answer -- or one too old to say -- simply
+// shows none known.
+func (r *Remote) learnLogins(ctx context.Context, sess *remoteSession) {
+	ctx, cancel := context.WithTimeout(ctx, learnLoginsTimeout)
+	defer cancel()
+	c := Client{Dial: func(ctx context.Context) (net.Conn, error) { return sess.m.OpenStream(ctx) }}
+	h, err := c.Hello(ForDisplay(ctx))
+	if err != nil || h.Protocol < 2 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// Under the lock: a rename (RenameSession) moves the session to its
+	// new name, and a newer session from the same hostd replaces it.
+	name := sess.peer.Name
+	if r.cur[name] != sess {
+		return
+	}
+	st := r.last[name]
+	st.Logins, st.LoginsKnown = append([]string(nil), h.Logins...), true
+	r.last[name] = st
 }

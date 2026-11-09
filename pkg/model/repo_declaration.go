@@ -256,6 +256,12 @@ type DeclaredTemplateFile struct {
 type DeclaredSuiteFile struct {
 	Path  string
 	Suite Suite
+	// Qualification is the file's `qualification:` stanza, nil for none.
+	// It travels beside the suite for Push's reason on a template: the
+	// sync writes it next to the provenance row
+	// (`repo_declaration_qualification`), and nothing a settings export or
+	// a UI edit writes can reach it.
+	Qualification *SuiteQualification
 }
 
 type DeclaredScheduleFile struct {

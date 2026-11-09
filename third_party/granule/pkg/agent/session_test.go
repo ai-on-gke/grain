@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -16,7 +15,6 @@ import (
 	"time"
 
 	"github.com/gke-labs/granule/pkg/execwire"
-	"github.com/gke-labs/granule/pkg/forward"
 )
 
 // result is what a client sees for one session.
@@ -1184,97 +1182,5 @@ func TestACommandForAnOrdinaryAccountRunsUnderItsOwnShell(t *testing.T) {
 	a := &account{Name: "debian", Shell: "/bin/bash"}
 	if got := a.commandShell(); got != "/bin/bash" {
 		t.Errorf("commandShell() = %q, want /bin/bash", got)
-	}
-}
-
-func TestForwardSessionTunnelsGuestPortToHost(t *testing.T) {
-	backendLn, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer backendLn.Close()
-	go func() {
-		conn, err := backendLn.Accept()
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-		_, _ = io.Copy(conn, conn)
-	}()
-
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	guestPort := probe.Addr().(*net.TCPAddr).Port
-	_ = probe.Close()
-
-	specStr := fmt.Sprintf("127.0.0.1:%d:%s", guestPort, backendLn.Addr().String())
-	spec, err := forward.ParseSpec(forward.RemoteToLocal, specStr)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	client, server := net.Pipe()
-	defer client.Close()
-	defer server.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	serverDone := make(chan error, 1)
-	go func() {
-		serverDone <- Serve(ctx, server)
-	}()
-
-	req := execwire.Request{
-		Forward:      true,
-		ForwardSpecs: []string{specStr},
-	}
-	if err := execwire.WriteRequest(client, req); err != nil {
-		t.Fatal(err)
-	}
-	br := bufio.NewReader(client)
-	resp, err := execwire.ReadResponse(br)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !resp.OK {
-		t.Fatalf("Serve refused forward: %s", resp.Error)
-	}
-
-	clientDone := make(chan error, 1)
-	go func() {
-		clientDone <- forward.RunClient(ctx, br, client, []forward.Spec{spec}, nil)
-	}()
-
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", guestPort), 5*time.Second)
-	if err != nil {
-		t.Fatalf("dialing forwarded guest port: %v", err)
-	}
-	defer conn.Close()
-
-	const msg = "hello over agent forward"
-	if _, err := conn.Write([]byte(msg)); err != nil {
-		t.Fatal(err)
-	}
-	got := make([]byte, len(msg))
-	if _, err := io.ReadFull(conn, got); err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != msg {
-		t.Fatalf("got %q, want %q", got, msg)
-	}
-
-	cancel()
-	_ = client.Close()
-	_ = server.Close()
-	<-clientDone
-	<-serverDone
-}
-
-func TestForwardSessionRefusesInvalidSpecs(t *testing.T) {
-	if resp := serveOne(t, execwire.Request{Forward: true, ForwardSpecs: []string{"not-a-spec"}}); resp.OK {
-		t.Fatal("expected refusal for invalid forward spec")
 	}
 }

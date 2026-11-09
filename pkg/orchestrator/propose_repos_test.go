@@ -57,7 +57,6 @@ func (f *proposeRepoCapturingFramework) seen() []string {
 func TestRunCycleTellsARunWhichReposAProposalMayName(t *testing.T) {
 	t.Parallel()
 	store, ctx := openStore(t)
-	_, client := newSim(t, "acme", "widgets", "main")
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	filedTask(t, ctx, store, "t1", repo)
 
@@ -65,6 +64,7 @@ func TestRunCycleTellsARunWhichReposAProposalMayName(t *testing.T) {
 	// exactly the one a run cannot discover from its own sandbox, and the
 	// case the whole list exists for.
 	elsewhere := model.RepoRef{Owner: "acme", Name: "docs"}
+	_, client := newMultiSim(t, "main", repo, elsewhere)
 	// With defaults of its own, since a RepoConfig carrying nothing is
 	// deleted rather than stored (Store.PutRepoConfig).
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{

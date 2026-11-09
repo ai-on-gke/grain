@@ -237,6 +237,11 @@ var notSettings = []string{
 	"suite_run_task",
 	"release",
 	"release_candidate",
+	// Which promote-release.yml dispatch a person started for a pending
+	// GitHub Actions release (model.ReleaseApprovalDecision): grain's runtime
+	// note of what was answered so the watcher does not re-raise it and
+	// Approve does not dispatch twice, never a setting a PR proposes.
+	"release_approval",
 	// Whether this deployment is picking new work up
 	// (model.PipelinePause). It is a decision somebody made -- an
 	// operator taking the deployment out of service, or grain holding
@@ -351,6 +356,14 @@ var notSettings = []string{
 	// deployment dispatching onto a key that never refused it, and
 	// exporting them would churn the state repository on every limit.
 	"usage_limit_pause",
+	// Token accounting (model/tokenusage.go): what each run spent, what
+	// a provider's refusals taught grain about a window's size, and the
+	// operator's budgets and concurrency mode. Runtime state like the
+	// pauses above: per-run rows churn on every run, and a learned
+	// capacity belongs to the credential this deployment met it on.
+	"task_run_usage",
+	"usage_capacity",
+	"usage_setting",
 	// Memory is written by agents while runs are live, so it remains
 	// outside SettingsTables even though its Markdown representation is
 	// imported separately when a repository change arrives.
@@ -389,6 +402,8 @@ var notSettings = []string{
 	// of row again: re-read from the repository's default branch by every
 	// sync, and never a setting anybody proposes.
 	"repo_declaration_push",
+	// A declared suite's `qualification:` stanza, for the same reason.
+	"repo_declaration_qualification",
 	// A repository's path triggers (grain/task-1712) are the same kind
 	// of row as repo_declaration -- re-read from the repository by the
 	// next poll -- and the cursor beside them is grain's note of how far
@@ -415,12 +430,15 @@ var notSettings = []string{
 	// repo declarative settings.
 	"external_agent_token",
 	"external_agent_token_sequence",
-	// The hostd registry (model.Hostd) and its tokens' digests: hostds
-	// are created, rotated and revoked in Settings -> Hostds and minted
-	// a token there, not declared; hostd_token is never exported at all
-	// (LocalTables).
+	// The hostd registry (model.Hostd), its tokens' digests, shared
+	// enrollment codes and pending join requests: hosts are invited,
+	// accepted and revoked in Settings -> Hosts rather than declared in
+	// state, and hostd_token, host_enrollment_code and host_join_request
+	// are never exported at all (LocalTables).
 	"hostd",
 	"hostd_token",
+	"host_enrollment_code",
+	"host_join_request",
 	// Verified-identity sign-in access (model.AllowedPrincipal) and its
 	// one-time flag migration record: managed live in Settings -> Access
 	// and `grain access`, and intentionally kept out of `grain/config` so

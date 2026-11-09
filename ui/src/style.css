@@ -2391,7 +2391,23 @@ html[data-phone="true"] .gantt-body {
 .panel-keep:hover {
   text-decoration: underline;
 }
-.panel-keep + .panel-open {
+/* Refused for a role without tasks:write (AccessGate): the same word,
+   muted, in the same place -- the gate's wrapper takes the auto margin
+   over so neither it nor "Open" beside it moves. */
+.panel-keep:disabled {
+  color: var(--text-muted);
+  opacity: 0.55;
+  cursor: default;
+  text-decoration: none;
+}
+.panel-header > .access-gate {
+  margin-left: auto;
+}
+.panel-header > .access-gate > .panel-keep {
+  margin-left: 0;
+}
+.panel-keep + .panel-open,
+.panel-header > .access-gate + .panel-open {
   margin-left: 0;
 }
 /* ...and on a finger, the same link with a target under it. "Open" set
@@ -2431,6 +2447,14 @@ html[data-phone="true"] .gantt-body {
     padding: 0 0.9rem;
     margin-top: -0.6rem;
     margin-bottom: -0.6rem;
+  }
+  .panel-header > .access-gate {
+    margin-top: -0.6rem;
+    margin-bottom: -0.6rem;
+  }
+  .panel-header > .access-gate > .panel-keep {
+    margin-top: 0;
+    margin-bottom: 0;
   }
   .panel-open {
     margin-right: -0.9rem;
@@ -2642,8 +2666,8 @@ html[data-phone="true"] .gantt-body {
   flex: none;
   padding-right: 1.75rem;
 }
-/* A pending release's soak beside its Approve (InboxPage's ReleaseSoak),
-   with the SHORT SOAK warning when it was under the minimum. */
+/* A pending release's soak or breaking-change warning beside its Approve
+   (InboxPage's ReleaseSoak), with SHORT SOAK and BREAKING chips. */
 .inbox-release-soak {
   display: inline-flex;
   align-items: center;
@@ -2723,6 +2747,22 @@ html[data-phone="true"] .gantt-body {
 .empty {
   color: var(--text-tertiary);
   padding: 1.5rem 1.75rem;
+}
+.tasks-load-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  margin: 0;
+}
+.tasks-load-error-text {
+  overflow-wrap: anywhere;
+}
+.panel-body .tasks-load-error,
+:root[data-phone="true"] .panel-body .tasks-load-error {
+  padding: 0.9rem;
 }
 .hidden {
   display: none !important;
@@ -3100,6 +3140,18 @@ html[data-phone="true"] .gantt-body {
    over a run's life, and the mode phrase is what goes. */
 .suite-run-row .template-name {
   min-width: var(--list-title-min);
+}
+/* ...and the chip strip a floor of one whole chip. It shrinks in
+   proportion with the name and the hints beside it, and once it was
+   narrower than its first chip there was no second line to drop that
+   chip onto, so it was cut inside its own pill instead: 23px of
+   "succeeded" at 620px and 10px of "failed" on a phone, where the
+   status is what the row is read for (2026-11-08 walkthrough). The
+   strip's min-content is its widest chip still laid out -- ChipStrip
+   takes the wrapped ones out -- so the status always reads whole and
+   only the chips after it give way. e2e/narrow.spec.js measures it. */
+.suite-run-row .chips {
+  min-width: min-content;
 }
 /* ...which leaves this hint the one .template-title in the tree that
    keeps a flex item's own default (grain/task-431). Everywhere else the
@@ -5286,4 +5338,10 @@ a.committed-context-sha:hover {
 .committed-context-file-source {
   font-size: 0.71rem;
   color: var(--accent);
+}
+
+/* AccessGate's wrapper around a refused control: the control fills it,
+   as it fills the slot it would have taken ungated (AccessGate.jsx). */
+.access-gate > * {
+  flex-grow: 1;
 }

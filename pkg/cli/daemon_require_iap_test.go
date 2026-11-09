@@ -365,3 +365,28 @@ func TestCheckConfigRegistryVerifierFlagsAndEnv(t *testing.T) {
 		t.Fatalf("parseDemoFlags = %+v", demoOpts)
 	}
 }
+
+func TestDaemonDeploymentOwnerFlagAndEnv(t *testing.T) {
+	t.Setenv("GRAIN_DEPLOYMENT_OWNER", "env-owner@example.com")
+	cfg, _, _, err := parseDaemonArgs([]string{"-data-dir", t.TempDir()})
+	if err != nil {
+		t.Fatalf("parseDaemonArgs with GRAIN_DEPLOYMENT_OWNER: %v", err)
+	}
+	if cfg.DeploymentOwner != "env-owner@example.com" {
+		t.Fatalf("cfg.DeploymentOwner = %q, want env-owner@example.com", cfg.DeploymentOwner)
+	}
+
+	cfgFlag, _, _, err := parseDaemonArgs([]string{"-data-dir", t.TempDir(), "-deployment-owner=flag-owner@example.com"})
+	if err != nil {
+		t.Fatalf("parseDaemonArgs with -deployment-owner: %v", err)
+	}
+	if cfgFlag.DeploymentOwner != "flag-owner@example.com" {
+		t.Fatalf("cfgFlag.DeploymentOwner = %q, want flag-owner@example.com", cfgFlag.DeploymentOwner)
+	}
+
+	bad := startable()
+	bad.DeploymentOwner = "not-an-email"
+	if err := checkConfig(bad); err == nil || !strings.Contains(err.Error(), "-deployment-owner") {
+		t.Fatalf("checkConfig(invalid -deployment-owner) = %v, want -deployment-owner error", err)
+	}
+}

@@ -27,6 +27,7 @@ import api from "../api.js";
 import AppIcon from "./AppIcon.jsx";
 import { identifierField } from "../identifierField.js";
 import { serverPath } from "./CapabilityServersPanel.jsx";
+import { ReadOnlyFieldset } from "./settings/SettingsCard.jsx";
 
 // bwsalmon/agents#357: this pane can set and delete secrets on a server
 // this UI shares a host with, and report which ones exist, but it never
@@ -36,19 +37,17 @@ import { serverPath } from "./CapabilityServersPanel.jsx";
 // that could only ever 404.
 //
 // grain/task-110: this was the whole Secrets tab, a flat list of every
-// secret in the store with a three-box form under it. Everything grain
-// itself resolves now sits with whatever uses it instead -- each backend's
-// credential on the Models & connections tab and each capability's own beside it on the
-// Capabilities tab (SecretField) -- because a name and a key with nothing
-// saying what wants them is not something an operator can act on.
+// secret in the store with a three-box form under it. Credentials with a
+// dedicated field sit with whatever uses them -- each backend's credential
+// under Settings -> Models and the hub token under Settings -> Hub.
 //
-// What is left is this: the remainder, on the foot of the Capabilities
-// tab. `claimed` names the secrets a control elsewhere on the pane
-// already owns, and they are filtered out here rather than shown twice.
-// The free-form form stays, so a credential this build has no field for
-// -- a minter renamed through gcpkey.Config.MinterCredential, anything a
-// future capability reads -- is still settable from the UI rather than
-// only from `grain secrets set` on the host.
+// What is left is this: the remainder, on the Deployment credentials card at
+// the foot of Settings -> Capabilities. `claimed` names the secrets a control
+// elsewhere in Settings already owns, and they are filtered out here rather
+// than shown twice. The free-form form stays, so credentials with no dedicated
+// field -- github-app, gcp-key-minter, release signing/push credentials, or
+// anything a custom capability reads -- remain visible, settable and deletable
+// from the UI rather than only from `grain secrets` on the host.
 //
 // grain/task-2263: GET /api/secrets says which capability servers use
 // each secret (capabilityServers) -- their $secret: references, and the
@@ -57,7 +56,23 @@ import { serverPath } from "./CapabilityServersPanel.jsx";
 // there and no Delete, which would break the server. One grain made for
 // a server that no configured server uses any more (orphaned: left by a
 // rename) stays in Other secrets, labelled, so it can still be deleted.
-export default function SecretsPanel({ showError, claimed, onSecretsChanged }) {
+// refreshKey reads the store again whenever it changes: the capability
+// servers card above bumps it when a server's own secrets may have changed.
+// readOnly draws the list's deletes and the set form disabled, with
+// readOnlyReason as their tooltip: for a role without secrets:write,
+// which every PUT and DELETE below needs (pkg/ui/route_scopes.go). The
+// Deployment credentials card follows Capabilities' capabilities:admin,
+// so that alone did not stop a role holding it without secrets:write
+// from being offered buttons the server refused with 403 (2026-11-08
+// deployment credentials walkthrough).
+export default function SecretsPanel({
+  showError,
+  claimed,
+  onSecretsChanged,
+  refreshKey,
+  readOnly = false,
+  readOnlyReason,
+}) {
   const [resp, setResp] = useState(null);
 
   const refresh = useCallback(async () => {
@@ -71,7 +86,7 @@ export default function SecretsPanel({ showError, claimed, onSecretsChanged }) {
 
   useEffect(() => {
     refresh();
-  }, [refresh]);
+  }, [refresh, refreshKey]);
 
   // Both deletes are confirmed first: nothing here can read a value
   // back, so a stray press -- or Backspace on a focused key chip, which
@@ -154,16 +169,18 @@ export default function SecretsPanel({ showError, claimed, onSecretsChanged }) {
   const others = listed.filter((s) => !s.capabilityServers?.length);
 
   return (
-    <Box id="other-secrets" sx={{ mt: 3 }}>
+    <Box id="other-secrets" sx={{ mt: 3, scrollMarginTop: 16 }}>
       <Typography variant="subtitle2">Other secrets</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-        Everything in this deployment&apos;s secrets store that nothing above
+        Everything in this deployment&apos;s secrets store that nothing else
         claims -- backend credentials are set on each connection under Settings
-        &rarr; Models, each capability&apos;s own beside it here, and each
+        &rarr; Models, the hub token under Settings &rarr; Hub, and each
         capability server&apos;s own on its page under{" "}
-        <Link href="/settings/capabilities">Settings &rarr; Capabilities</Link>.
-        Names and keys only, never values: a secret can be set, replaced and
-        deleted from here, and never read back.
+        <Link href="/settings/capabilities#capability-servers">
+          Capability servers
+        </Link>{" "}
+        above. Names and keys only, never values: a secret can be set, replaced
+        and deleted from here, and never read back.
       </Typography>
       {!resp.enabled && (
         <Alert severity="info" sx={{ mb: 2 }}>
@@ -174,7 +191,10 @@ export default function SecretsPanel({ showError, claimed, onSecretsChanged }) {
         </Alert>
       )}
       {resp.enabled && (
-        <>
+        <ReadOnlyFieldset
+          disabled={Boolean(readOnly)}
+          title={readOnlyReason || undefined}
+        >
           {serverSecrets.length > 0 && (
             <>
               <Typography variant="body2" sx={{ fontWeight: 500 }}>
@@ -238,7 +258,9 @@ export default function SecretsPanel({ showError, claimed, onSecretsChanged }) {
                       key={key}
                       size="small"
                       label={key}
-                      onDelete={() => deleteKey(s.name, key)}
+                      onDelete={
+                        readOnly ? undefined : () => deleteKey(s.name, key)
+                      }
                       deleteIcon={
                         <span
                           title={`delete ${s.name}/${key}`}
@@ -307,7 +329,7 @@ export default function SecretsPanel({ showError, claimed, onSecretsChanged }) {
               </Button>
             </Stack>
           </form>
-        </>
+        </ReadOnlyFieldset>
       )}
     </Box>
   );

@@ -702,6 +702,25 @@ func refusedMerge(ctx context.Context, store *model.Store, client github.Client,
 	refusal, _ := forge.ClassifyLastMergeRefusal(forgeRef(ref), headSHA, kind, req)
 	// What GitHub's rules say has just been read: the wait's first poll.
 	forge.NoteMergeRefusalPolled(forgeRef(ref), now)
+	// Unresolved review conversations are the task's to deal with, not a
+	// setting a person has to change: the first time, the task is sent
+	// back with every open thread listed, and the merge is asked for
+	// again once they are resolved (holdRefusedMerge). Only a run that
+	// comes back with threads still open is handed to a person.
+	if kind == github.RefusalUnresolvedThreads && refusal.SentBack.IsZero() {
+		sent, err := sendBackForUnresolvedThreads(ctx, store, client, task, ref, refusal, now)
+		if err != nil {
+			return errors.Join(err, merge)
+		}
+		if sent {
+			forge.MarkMergeRefusalSentBack(forgeRef(ref), now)
+			status := queueStatus{state: mergeStateRepairQueued, note: unresolvedThreadsSentBackNote(refusal, ref, detail.HTMLURL)}
+			if err := setMergeQueueState(ctx, store, obs, task.ID, status, now); err != nil {
+				return errors.Join(err, merge)
+			}
+			return merge
+		}
+	}
 	status := refusalStatus(refusal, ref, detail.HTMLURL)
 	if err := setMergeQueueState(ctx, store, obs, task.ID, status, now); err != nil {
 		return errors.Join(err, merge)

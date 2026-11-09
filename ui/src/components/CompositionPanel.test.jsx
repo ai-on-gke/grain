@@ -116,6 +116,51 @@ describe("CompositionPanel", () => {
     expect(screen.getByText("leave for acknowledgement")).toBeInTheDocument();
   });
 
+  // The admission row (ui.ComposedField "admission") reads the way the
+  // task pane's Admission select does, not as its wire name (2026-11-07
+  // walkthrough: "admission bypass").
+  it("names the admission row and its value in words", async () => {
+    api.mockResolvedValue({
+      kind: "task",
+      tasks: [
+        {
+          templateId: "template-1",
+          templateName: "Bump",
+          title: "Bump",
+          fields: [field("admission", "template", ["bypass"])],
+        },
+      ],
+    });
+    render(<CompositionPanel path="/api/templates/template-1/composition" />);
+
+    expect(await screen.findByText("Admission")).toBeInTheDocument();
+    expect(screen.queryByText("admission")).not.toBeInTheDocument();
+    expect(screen.getByText("bypass queue")).toBeInTheDocument();
+    expect(screen.queryByText("bypass")).not.toBeInTheDocument();
+  });
+
+  // So does hosting, the way HostingField words it (2026-11-08
+  // walkthrough: a declared schedule's `hosting: console`).
+  it("names the hosting row and its value in words", async () => {
+    api.mockResolvedValue({
+      kind: "task",
+      tasks: [
+        {
+          templateId: "template-1",
+          templateName: "Pair",
+          title: "Pair",
+          fields: [field("hosting", "schedule", ["console"])],
+        },
+      ],
+    });
+    render(<CompositionPanel path="/api/schedules/sched-1/composition" />);
+
+    expect(await screen.findByText("Hosting")).toBeInTheDocument();
+    expect(screen.queryByText("hosting")).not.toBeInTheDocument();
+    expect(screen.getByText("interactive console")).toBeInTheDocument();
+    expect(screen.getByText("from the schedule")).toBeInTheDocument();
+  });
+
   it("pairs each capability group with its own source when values come from multiple layers", async () => {
     api.mockResolvedValue({
       kind: "task",

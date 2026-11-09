@@ -121,10 +121,10 @@ The runner automatically categorizes failures into:
 
 Two places run it unattended:
 
-- [`.grain/workflows/e2e-ipv6.yml`](../.grain/workflows/e2e-ipv6.yml) runs `docker kind` every night at 03:30 UTC, after the 02:00 suite. It builds the alpine guest from the tree under test.
+- [`.github/workflows/e2e-ipv6.yml`](../.github/workflows/e2e-ipv6.yml) runs `docker kind` every night at 03:30 UTC, after the 02:00 suite. It builds the alpine guest from the tree under test.
 - Stage 5 of `test/run-nightly-suite.sh` (step 5.4) runs the same two targets when the host has a usable `/dev/kvm`, docker, kind and kubectl. Otherwise it prints `SKIP` with the reason.
 
-GKE runs only through [`.grain/workflows/e2e-ipv6-gke.yml`](../.grain/workflows/e2e-ipv6-gke.yml), dispatched by hand. A scheduled run gets no GCP key, and the run costs a two-node cluster for about half an hour. GKE has no IPv6-only stack type, so there is no v6-only GKE run.
+GKE runs only through [`.github/workflows/e2e-ipv6-gke.yml`](../.github/workflows/e2e-ipv6-gke.yml), dispatched by hand. It needs the GCP variables in docs/github-actions-ci.md, and the run costs a two-node cluster for about half an hour. GKE has no IPv6-only stack type, so there is no v6-only GKE run.
 
 The docker daemon needs no `"ipv6": true` or `"ip6tables": true` in `daemon.json`. `--ipv6` on a user-defined network is enough, and ip6tables is on by default from docker 27. A daemon that has ip6tables turned off fails the `-p [::]` checks.
 

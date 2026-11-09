@@ -84,3 +84,56 @@ test("saving a memory document empty asks before it deletes it", async ({
   expect(docs.map((d) => d.name)).toContain("release-checklist");
   await expect(text).toHaveValue("   ");
 });
+
+// docs/test-runs/2026-11-07-repository-release-memory-ui.md, observation
+// 2: removing a repo from the target list takes it off the Repos list,
+// but a task filed there is still queued against it -- and the repo's
+// own page used to read "0 tasks filed here" over it.
+test("a removed repo's page still counts the tasks that target it", async ({
+  page,
+  request,
+}) => {
+  // A repo no other spec touches: specs share a worker's demo store, and
+  // acme/gadgets picks up tasks of its own from them.
+  const repo = "acme/removed-with-work";
+  let taskID = "";
+  try {
+    expect((await request.post("/api/repos", { data: { repo } })).ok()).toBe(
+      true,
+    );
+    const created = await request.post("/api/tasks", {
+      data: { title: "Left behind on a removed repo", repo },
+    });
+    expect(created.ok()).toBe(true);
+    taskID = (await created.json()).id;
+
+    await page.goto(`/repos/${repo}`);
+    await expect(
+      page.getByRole("link", { name: "1 task filed here" }),
+    ).toBeVisible();
+
+    await page.goto(`/repos/${repo}#advanced`);
+    page.once("dialog", (d) => d.accept());
+    await page.getByRole("button", { name: "Remove", exact: true }).click();
+    await expect(page).toHaveURL(/\/repos$/);
+    await expect(
+      page.locator(".repo-list-name").filter({ hasText: repo }),
+    ).toHaveCount(0);
+
+    await page.goto(`/repos/${repo}`);
+    const link = page.getByRole("link", {
+      name: "1 task still targets this repo, which is no longer on the target list",
+    });
+    await expect(link).toBeVisible();
+    await link.click();
+    await expect(page).toHaveURL(/f=repo:any:acme\/removed-with-work/);
+    await expect(
+      page.locator(".task-list .task-row", {
+        hasText: "Left behind on a removed repo",
+      }),
+    ).toHaveCount(1);
+  } finally {
+    if (taskID) await request.delete(`/api/tasks/${taskID}`);
+    await request.delete(`/api/repos/${repo}`);
+  }
+});

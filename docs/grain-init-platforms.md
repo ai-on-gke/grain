@@ -153,10 +153,24 @@ installation id and state repository; only the place the controller
 runs has changed.
 
 This script keeps the store the local daemon already has: SQLite moves
-onto the `grain-data` PVC, and a Postgres recorded in `db-config.json`
-is reached from the cluster instead. It copies the whole data directory
-so the in-cluster controller comes up with all existing checkouts,
-history and configuration intact.
+onto the `grain-data` PVC, and a Postgres server recorded in
+`db-config.json` is reached from the cluster instead. It copies the whole
+data directory so the in-cluster controller comes up with all existing
+checkouts, history and configuration intact.
+
+The script refuses a host whose store is the local PostgreSQL server that
+`scripts/setup.sh` provisions (`grain-postgres.service` on 127.0.0.1; see
+[database.md](database.md)). The controller in the cluster can't reach a
+server on this host's loopback, and that server's files copied while it
+runs aren't a consistent copy. The refusal comes before anything is
+stopped or changed, and it prints the steps to move the store first. Stop
+the daemon, `pg_dump` the local server, `pg_restore` into a server the
+cluster can reach (such as Cloud SQL, see
+[cloudsql-postgres.md](cloudsql-postgres.md)), re-run
+`setup.sh --db-dsn` with that server, disable `grain-postgres.service`,
+and then run the script again. A host that has already moved off the
+local server is migrated like any other Postgres host, even if the old
+unit is still installed.
 
 ```sh
 sudo scripts/migrate-local-to-gke.sh --dry-run \
@@ -169,7 +183,8 @@ The stages are below. Every one is idempotent, so a re-run after a
 failure picks up where the last run stopped:
 
 1. **Preflight.** The data directory must hold `store/grain.db` or
-   `db-config.json`, and `secrets/secrets.key`. It warns when
+   `db-config.json`, and `secrets/secrets.key`. A store on the local
+   PostgreSQL server is refused (above). It warns when
    `installation-id` or `state-repo` is missing. `grain-hostd.service`
    and its allowlist must exist. The controller image, the packed
    guest for `-k8s-granule-image` and the default target repository

@@ -1,0 +1,3374 @@
+[
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "1440",
+    "scheme": "light",
+    "page": "/",
+    "url": "/",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "+ New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "1440",
+    "scheme": "light",
+    "page": "/boards",
+    "url": "/boards",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "+ New task",
+        "New board"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "1440",
+    "scheme": "light",
+    "page": "/boards/@first",
+    "url": "/boards/board-2",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "+ New task",
+        "New board"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "1440",
+    "scheme": "light",
+    "page": "/tasks/@first",
+    "url": "/tasks/2",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 9,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "+ New task",
+        "Edit",
+        "Approve",
+        "Defer",
+        "Run now"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "1440",
+    "scheme": "light",
+    "page": "/@bulk",
+    "url": "/",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "+ New task",
+        "Approve",
+        "Defer"
+      ]
+    },
+    "bulk": "6 selectable rows offered",
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "1440",
+    "scheme": "light",
+    "page": "/new",
+    "url": "/new",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 5,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "+ New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "1440",
+    "scheme": "light",
+    "page": "/inbox",
+    "url": "/inbox",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "+ New task",
+        "Approve all (5)",
+        "Approve",
+        "Defer",
+        "Decline",
+        "Approve",
+        "Defer",
+        "Decline",
+        "Approve",
+        "Defer",
+        "Decline",
+        "Approve",
+        "Defer",
+        "Decline",
+        "Approve",
+        "Defer",
+        "Decline"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "1440",
+    "scheme": "light",
+    "page": "/repos",
+    "url": "/repos",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "+ New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "1440",
+    "scheme": "light",
+    "page": "/processes",
+    "url": "/processes",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "+ New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "1440",
+    "scheme": "light",
+    "page": "/settings",
+    "url": "/settings",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "+ New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "1440",
+    "scheme": "light",
+    "page": "/settings/access",
+    "url": "/settings/access",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "+ New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "1440",
+    "scheme": "light",
+    "page": "/system",
+    "url": "/system",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "+ New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "1440",
+    "scheme": "dark",
+    "page": "/",
+    "url": "/",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "+ New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "1440",
+    "scheme": "dark",
+    "page": "/boards",
+    "url": "/boards",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "+ New task",
+        "New board"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "1440",
+    "scheme": "dark",
+    "page": "/boards/@first",
+    "url": "/boards/board-2",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "+ New task",
+        "New board"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "1440",
+    "scheme": "dark",
+    "page": "/tasks/@first",
+    "url": "/tasks/2",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 9,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "+ New task",
+        "Edit",
+        "Approve",
+        "Defer",
+        "Run now"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "1440",
+    "scheme": "dark",
+    "page": "/@bulk",
+    "url": "/",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "+ New task",
+        "Approve",
+        "Defer"
+      ]
+    },
+    "bulk": "6 selectable rows offered",
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "1440",
+    "scheme": "dark",
+    "page": "/new",
+    "url": "/new",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 5,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "+ New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "1440",
+    "scheme": "dark",
+    "page": "/inbox",
+    "url": "/inbox",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "+ New task",
+        "Approve all (5)",
+        "Approve",
+        "Defer",
+        "Decline",
+        "Approve",
+        "Defer",
+        "Decline",
+        "Approve",
+        "Defer",
+        "Decline",
+        "Approve",
+        "Defer",
+        "Decline",
+        "Approve",
+        "Defer",
+        "Decline"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "1440",
+    "scheme": "dark",
+    "page": "/repos",
+    "url": "/repos",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "+ New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "1440",
+    "scheme": "dark",
+    "page": "/processes",
+    "url": "/processes",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "+ New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "1440",
+    "scheme": "dark",
+    "page": "/settings",
+    "url": "/settings",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "+ New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "1440",
+    "scheme": "dark",
+    "page": "/settings/access",
+    "url": "/settings/access",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "+ New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "1440",
+    "scheme": "dark",
+    "page": "/system",
+    "url": "/system",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "+ New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "390",
+    "scheme": "light",
+    "page": "/",
+    "url": "/",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 11,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "390",
+    "scheme": "light",
+    "page": "/boards",
+    "url": "/boards",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 7,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "New task",
+        "New board"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "390",
+    "scheme": "light",
+    "page": "/boards/@first",
+    "url": "/boards/board-2",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "New task",
+        "New board"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "390",
+    "scheme": "light",
+    "page": "/tasks/@first",
+    "url": "/tasks/2",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 9,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "New task",
+        "Edit",
+        "Approve",
+        "Defer",
+        "Run now"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "390",
+    "scheme": "light",
+    "page": "/@bulk",
+    "url": "/",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "New task",
+        "Approve",
+        "Defer"
+      ]
+    },
+    "bulk": "6 selectable rows offered",
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "390",
+    "scheme": "light",
+    "page": "/new",
+    "url": "/new",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 5,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "390",
+    "scheme": "light",
+    "page": "/inbox",
+    "url": "/inbox",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "New task",
+        "Approve all (5)",
+        "Approve",
+        "Defer",
+        "Decline",
+        "Approve",
+        "Defer",
+        "Decline",
+        "Approve",
+        "Defer",
+        "Decline",
+        "Approve",
+        "Defer",
+        "Decline",
+        "Approve",
+        "Defer",
+        "Decline"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "390",
+    "scheme": "light",
+    "page": "/repos",
+    "url": "/repos",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 11,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "390",
+    "scheme": "light",
+    "page": "/processes",
+    "url": "/processes",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "390",
+    "scheme": "light",
+    "page": "/settings",
+    "url": "/settings",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "390",
+    "scheme": "light",
+    "page": "/settings/access",
+    "url": "/settings/access",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 8,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "390",
+    "scheme": "light",
+    "page": "/system",
+    "url": "/system",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "390",
+    "scheme": "dark",
+    "page": "/",
+    "url": "/",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 11,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "390",
+    "scheme": "dark",
+    "page": "/boards",
+    "url": "/boards",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 7,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "New task",
+        "New board"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "390",
+    "scheme": "dark",
+    "page": "/boards/@first",
+    "url": "/boards/board-2",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "New task",
+        "New board"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "390",
+    "scheme": "dark",
+    "page": "/tasks/@first",
+    "url": "/tasks/2",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 9,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "New task",
+        "Edit",
+        "Approve",
+        "Defer",
+        "Run now"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "390",
+    "scheme": "dark",
+    "page": "/@bulk",
+    "url": "/",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "New task",
+        "Approve",
+        "Defer"
+      ]
+    },
+    "bulk": "6 selectable rows offered",
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "390",
+    "scheme": "dark",
+    "page": "/new",
+    "url": "/new",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 5,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "390",
+    "scheme": "dark",
+    "page": "/inbox",
+    "url": "/inbox",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "New task",
+        "Approve all (5)",
+        "Approve",
+        "Defer",
+        "Decline",
+        "Approve",
+        "Defer",
+        "Decline",
+        "Approve",
+        "Defer",
+        "Decline",
+        "Approve",
+        "Defer",
+        "Decline",
+        "Approve",
+        "Defer",
+        "Decline"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "390",
+    "scheme": "dark",
+    "page": "/repos",
+    "url": "/repos",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 11,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "390",
+    "scheme": "dark",
+    "page": "/processes",
+    "url": "/processes",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "390",
+    "scheme": "dark",
+    "page": "/settings",
+    "url": "/settings",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "390",
+    "scheme": "dark",
+    "page": "/settings/access",
+    "url": "/settings/access",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 8,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "vic@example.com",
+    "label": "viewer",
+    "principal": "human:vic@example.com",
+    "roles": [
+      "grain/viewer"
+    ],
+    "viewport": "390",
+    "scheme": "dark",
+    "page": "/system",
+    "url": "/system",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [],
+      "disabled": [
+        "New task"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "1440",
+    "scheme": "light",
+    "page": "/",
+    "url": "/",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "+ New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "1440",
+    "scheme": "light",
+    "page": "/boards",
+    "url": "/boards",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "+ New task",
+        "New board"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "1440",
+    "scheme": "light",
+    "page": "/boards/@first",
+    "url": "/boards/board-2",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "+ New task",
+        "New board"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "1440",
+    "scheme": "light",
+    "page": "/tasks/@first",
+    "url": "/tasks/2",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 9,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "+ New task",
+        "Edit",
+        "Defer"
+      ],
+      "disabled": [
+        "Approve",
+        "Run now"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "1440",
+    "scheme": "light",
+    "page": "/@bulk",
+    "url": "/",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "+ New task",
+        "Defer"
+      ],
+      "disabled": [
+        "Approve"
+      ]
+    },
+    "bulk": "6 selectable rows offered",
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "1440",
+    "scheme": "light",
+    "page": "/new",
+    "url": "/new",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 5,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "+ New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "1440",
+    "scheme": "light",
+    "page": "/inbox",
+    "url": "/inbox",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "+ New task",
+        "Defer",
+        "Decline",
+        "Defer",
+        "Decline",
+        "Defer",
+        "Decline",
+        "Defer",
+        "Decline",
+        "Defer",
+        "Decline"
+      ],
+      "disabled": [
+        "Approve all (5)",
+        "Approve",
+        "Approve",
+        "Approve",
+        "Approve",
+        "Approve"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "1440",
+    "scheme": "light",
+    "page": "/repos",
+    "url": "/repos",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "+ New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "1440",
+    "scheme": "light",
+    "page": "/processes",
+    "url": "/processes",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "+ New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "1440",
+    "scheme": "light",
+    "page": "/settings",
+    "url": "/settings",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "+ New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "1440",
+    "scheme": "light",
+    "page": "/settings/access",
+    "url": "/settings/access",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "+ New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "1440",
+    "scheme": "light",
+    "page": "/system",
+    "url": "/system",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "+ New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "1440",
+    "scheme": "dark",
+    "page": "/",
+    "url": "/",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "+ New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "1440",
+    "scheme": "dark",
+    "page": "/boards",
+    "url": "/boards",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "+ New task",
+        "New board"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "1440",
+    "scheme": "dark",
+    "page": "/boards/@first",
+    "url": "/boards/board-2",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "+ New task",
+        "New board"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "1440",
+    "scheme": "dark",
+    "page": "/tasks/@first",
+    "url": "/tasks/2",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 9,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "+ New task",
+        "Edit",
+        "Defer"
+      ],
+      "disabled": [
+        "Approve",
+        "Run now"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "1440",
+    "scheme": "dark",
+    "page": "/@bulk",
+    "url": "/",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "+ New task",
+        "Defer"
+      ],
+      "disabled": [
+        "Approve"
+      ]
+    },
+    "bulk": "6 selectable rows offered",
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "1440",
+    "scheme": "dark",
+    "page": "/new",
+    "url": "/new",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 5,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "+ New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "1440",
+    "scheme": "dark",
+    "page": "/inbox",
+    "url": "/inbox",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "+ New task",
+        "Defer",
+        "Decline",
+        "Defer",
+        "Decline",
+        "Defer",
+        "Decline",
+        "Defer",
+        "Decline",
+        "Defer",
+        "Decline"
+      ],
+      "disabled": [
+        "Approve all (5)",
+        "Approve",
+        "Approve",
+        "Approve",
+        "Approve",
+        "Approve"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "1440",
+    "scheme": "dark",
+    "page": "/repos",
+    "url": "/repos",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "+ New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "1440",
+    "scheme": "dark",
+    "page": "/processes",
+    "url": "/processes",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "+ New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "1440",
+    "scheme": "dark",
+    "page": "/settings",
+    "url": "/settings",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "+ New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "1440",
+    "scheme": "dark",
+    "page": "/settings/access",
+    "url": "/settings/access",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "+ New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "1440",
+    "scheme": "dark",
+    "page": "/system",
+    "url": "/system",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "+ New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "390",
+    "scheme": "light",
+    "page": "/",
+    "url": "/",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 11,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "390",
+    "scheme": "light",
+    "page": "/boards",
+    "url": "/boards",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 7,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "New task",
+        "New board"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "390",
+    "scheme": "light",
+    "page": "/boards/@first",
+    "url": "/boards/board-2",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "New task",
+        "New board"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "390",
+    "scheme": "light",
+    "page": "/tasks/@first",
+    "url": "/tasks/2",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 9,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "New task",
+        "Edit",
+        "Defer"
+      ],
+      "disabled": [
+        "Approve",
+        "Run now"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "390",
+    "scheme": "light",
+    "page": "/@bulk",
+    "url": "/",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "New task",
+        "Defer"
+      ],
+      "disabled": [
+        "Approve"
+      ]
+    },
+    "bulk": "6 selectable rows offered",
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "390",
+    "scheme": "light",
+    "page": "/new",
+    "url": "/new",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 5,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "390",
+    "scheme": "light",
+    "page": "/inbox",
+    "url": "/inbox",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "New task",
+        "Defer",
+        "Decline",
+        "Defer",
+        "Decline",
+        "Defer",
+        "Decline",
+        "Defer",
+        "Decline",
+        "Defer",
+        "Decline"
+      ],
+      "disabled": [
+        "Approve all (5)",
+        "Approve",
+        "Approve",
+        "Approve",
+        "Approve",
+        "Approve"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "390",
+    "scheme": "light",
+    "page": "/repos",
+    "url": "/repos",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 11,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "390",
+    "scheme": "light",
+    "page": "/processes",
+    "url": "/processes",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "390",
+    "scheme": "light",
+    "page": "/settings",
+    "url": "/settings",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "390",
+    "scheme": "light",
+    "page": "/settings/access",
+    "url": "/settings/access",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 8,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "390",
+    "scheme": "light",
+    "page": "/system",
+    "url": "/system",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "390",
+    "scheme": "dark",
+    "page": "/",
+    "url": "/",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 11,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "390",
+    "scheme": "dark",
+    "page": "/boards",
+    "url": "/boards",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 7,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "New task",
+        "New board"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "390",
+    "scheme": "dark",
+    "page": "/boards/@first",
+    "url": "/boards/board-2",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "New task",
+        "New board"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "390",
+    "scheme": "dark",
+    "page": "/tasks/@first",
+    "url": "/tasks/2",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 9,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "New task",
+        "Edit",
+        "Defer"
+      ],
+      "disabled": [
+        "Approve",
+        "Run now"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "390",
+    "scheme": "dark",
+    "page": "/@bulk",
+    "url": "/",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "New task",
+        "Defer"
+      ],
+      "disabled": [
+        "Approve"
+      ]
+    },
+    "bulk": "6 selectable rows offered",
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "390",
+    "scheme": "dark",
+    "page": "/new",
+    "url": "/new",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 5,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "390",
+    "scheme": "dark",
+    "page": "/inbox",
+    "url": "/inbox",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "New task",
+        "Defer",
+        "Decline",
+        "Defer",
+        "Decline",
+        "Defer",
+        "Decline",
+        "Defer",
+        "Decline",
+        "Defer",
+        "Decline"
+      ],
+      "disabled": [
+        "Approve all (5)",
+        "Approve",
+        "Approve",
+        "Approve",
+        "Approve",
+        "Approve"
+      ]
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "390",
+    "scheme": "dark",
+    "page": "/repos",
+    "url": "/repos",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 11,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "390",
+    "scheme": "dark",
+    "page": "/processes",
+    "url": "/processes",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "390",
+    "scheme": "dark",
+    "page": "/settings",
+    "url": "/settings",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "390",
+    "scheme": "dark",
+    "page": "/settings/access",
+    "url": "/settings/access",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 8,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  },
+  {
+    "who": "dana@example.com",
+    "label": "contributor",
+    "principal": "human:dana@example.com",
+    "roles": [
+      "grain/contributor"
+    ],
+    "viewport": "390",
+    "scheme": "dark",
+    "page": "/system",
+    "url": "/system",
+    "status": 200,
+    "errors": [],
+    "forbidden": [],
+    "toast": [],
+    "overflow": 0,
+    "shift": {
+      "d": 0,
+      "key": ""
+    },
+    "keys": {
+      "distinct": 12,
+      "offscreen": 0
+    },
+    "writes": {
+      "enabled": [
+        "New task"
+      ],
+      "disabled": []
+    },
+    "bulk": null,
+    "consoleErrors": []
+  }
+]

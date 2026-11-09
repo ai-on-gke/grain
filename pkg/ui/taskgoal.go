@@ -55,7 +55,8 @@ func (c *Client) SetGoal(ctx context.Context, id string, goal model.GoalDecl) er
 	if err != nil {
 		return err
 	}
-	actor := c.requestActor(ctx).Actor
+	who := c.requestActor(ctx)
+	actor := who.Actor
 	now := c.now()
 	if err := c.Store.SetTaskGoal(ctx, id, goal, model.PrincipalString(actor), now); err != nil {
 		return err
@@ -67,7 +68,7 @@ func (c *Client) SetGoal(ctx context.Context, id string, goal model.GoalDecl) er
 		}
 	}
 	_, err = c.Store.AddComment(ctx, model.Comment{
-		TaskID: id, Author: model.Attribution{Actor: actor}, CreatedAt: now,
+		TaskID: id, Author: who, CreatedAt: now,
 		Body: fmt.Sprintf("Set this task's goal: %s (on met: %s, at its progress limit: %s).",
 			goalWords(goal), goal.OnMet, goal.OnLimit),
 	})
@@ -91,7 +92,8 @@ func (c *Client) ClearGoal(ctx context.Context, id string) error {
 	if err := c.Store.ClearTaskGoal(ctx, id); err != nil {
 		return err
 	}
-	actor := c.requestActor(ctx).Actor
+	who := c.requestActor(ctx)
+	actor := who.Actor
 	now := c.now()
 	_, _ = c.Store.ClearNotification(ctx, model.NotificationSubject(model.FamilyNoProgress, id), model.PrincipalString(actor))
 	if task.DeferredAt != nil && deferredByGoal(ctx, c.Store, id, *goal) {
@@ -100,7 +102,7 @@ func (c *Client) ClearGoal(ctx context.Context, id string) error {
 		}
 	}
 	_, err = c.Store.AddComment(ctx, model.Comment{
-		TaskID: id, Author: model.Attribution{Actor: actor}, CreatedAt: now,
+		TaskID: id, Author: who, CreatedAt: now,
 		Body: fmt.Sprintf("Removed this task's goal (%s).", goalWords(goal.Decl())),
 	})
 	return err

@@ -272,6 +272,27 @@ describe("parsePath", () => {
     });
   });
 
+  it("escapes a ref's # and ? so a reload compares the same branch", () => {
+    // Written plainly, "#" began the fragment: the page opened in-app,
+    // but reloading it compared fix/ (2026-11-09 repository walkthrough).
+    const path = buildPath({
+      view: "repos",
+      repo: "acme/widgets",
+      repoComparison: { base: "release/1.0", head: "fix/#123-what?" },
+    });
+    expect(path).toBe(
+      "/repos/acme/widgets/compare/release/1.0...fix/%23123-what%3F",
+    );
+    const url = new URL(path, "http://grain.test");
+    expect(url.hash).toBe("");
+    expect(url.search).toBe("");
+    expect(parsePath(url.pathname)).toEqual({
+      view: "repos",
+      repo: "acme/widgets",
+      repoComparison: { base: "release/1.0", head: "fix/#123-what?" },
+    });
+  });
+
   it("falls back to the repo page for a comparison naming no head", () => {
     expect(parsePath("/repos/acme/widgets/compare")).toEqual({
       view: "repos",
@@ -559,18 +580,28 @@ describe("parsePath", () => {
       view: "settings",
       settingsSection: "git",
     });
-    expect(parsePath("/settings/legacy-capabilities")).toEqual({
-      view: "settings",
-      settingsSection: "credentials",
-    });
-    // The retired Settings -> Executors lands on what replaced it.
+    // The retired Settings -> Legacy capabilities tab (section id
+    // credentials) and its aliases land on Capabilities, which holds its
+    // Deployment credentials card now.
+    for (const old of [
+      "/settings/legacy-capabilities",
+      "/settings/credentials",
+      "/settings/secrets",
+    ]) {
+      expect(parsePath(old)).toEqual({
+        view: "settings",
+        settingsSection: "capabilities",
+      });
+    }
+    // The retired Settings -> Executors and /settings/hosts land on Hosts.
     expect(parsePath("/settings/executors")).toEqual({
       view: "settings",
       settingsSection: "hostds",
     });
-    expect(
-      buildPath({ view: "settings", settingsSection: "credentials" }),
-    ).toBe("/settings/credentials");
+    expect(parsePath("/settings/hosts")).toEqual({
+      view: "settings",
+      settingsSection: "hostds",
+    });
     expect(parsePath("/system")).toEqual({ view: "system", systemTab: "" });
     // Kept rather than folded into "": on a phone the bare /system is
     // the list of tabs (App folds it back on a wider screen).
@@ -598,7 +629,7 @@ describe("parsePath", () => {
     ["/admin/engine", "/settings/engine"],
     ["/admin/sandbox", "/settings/sandboxes"],
     ["/admin/executors", "/settings/hostds"],
-    ["/admin/integrations", "/settings/credentials"],
+    ["/admin/integrations", "/settings/capabilities"],
     ["/admin/state", "/settings/config-repo"],
     ["/admin/upgrade", "/settings/upgrade"],
     ["/admin/logs", "/system/logs"],
@@ -619,7 +650,7 @@ describe("parsePath", () => {
     ["/system/engine", "/settings/engine"],
     ["/system/sandbox", "/settings/sandboxes"],
     ["/system/executors", "/settings/hostds"],
-    ["/system/integrations", "/settings/credentials"],
+    ["/system/integrations", "/settings/capabilities"],
     ["/system/state", "/settings/config-repo"],
     ["/system/Agents", "/settings/agents"],
     // Upgrade was a System tab until it moved into Settings: a bookmark
@@ -1286,7 +1317,6 @@ describe("buildPath", () => {
       "/settings/memory",
       "/settings/config-repo",
       "/settings/capabilities",
-      "/settings/credentials",
       "/settings/preferences",
       "/system",
       "/settings/upgrade",
