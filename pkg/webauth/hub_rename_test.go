@@ -15,8 +15,12 @@
 package webauth
 
 import (
+	"context"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -42,5 +46,69 @@ func TestHubAssertionReadsTheNewHeaderAndThePreRenameOne(t *testing.T) {
 	h := (&RegistryVerifier{}).Headers()
 	if !slices.Contains(h, "X-Grain-Hub-Assertion") || !slices.Contains(h, "X-Grain-Registry-Assertion") {
 		t.Fatalf("RegistryVerifier.Headers() = %v, want both names", h)
+	}
+}
+
+// A pre-rename grain-registry strips only X-Grain-Registry-Assertion and sets
+// only X-Grain-Registry-Assertion, while a post-rename grain-hub strips both
+// and sets both headers to the identical JWT. VerifyRequest accepts either
+// header alone and accepts both when identical, and refuses requests where the
+// two headers carry different values (for example a smuggled
+// X-Grain-Hub-Assertion arriving through an un-upgraded grain-registry) or
+// where either header has multiple distinct values.
+func TestRegistryVerifierRefusesConflictingHubAndRegistryAssertions(t *testing.T) {
+	v := &RegistryVerifier{
+		audience: "https://alpha.grain.example.com",
+		validator: func(_ context.Context, tok, _ string) (*RegistryClaims, error) {
+			switch tok {
+			case "alice-jwt":
+				return &RegistryClaims{Email: "alice@example.com", Kind: PrincipalHuman}, nil
+			case "mallory-jwt":
+				return &RegistryClaims{Email: "mallory@example.com", Kind: PrincipalHuman}, nil
+			default:
+				return nil, errors.New("invalid token")
+			}
+		},
+	}
+
+	// Pre-rename hub: only X-Grain-Registry-Assertion is set.
+	rOld := httptest.NewRequest(http.MethodGet, "https://alpha.grain.example.com/api/tasks", nil)
+	rOld.Header.Set(RegistryAssertionHeader, "mallory-jwt")
+	if id, ok, err := v.VerifyRequest(rOld); err != nil || !ok || id.Email != "mallory@example.com" {
+		t.Fatalf("VerifyRequest(old header) = (%+v, %v, %v), want mallory@example.com", id, ok, err)
+	}
+
+	// Future hub: only X-Grain-Hub-Assertion is set.
+	rNew := httptest.NewRequest(http.MethodGet, "https://alpha.grain.example.com/api/tasks", nil)
+	rNew.Header.Set(HubAssertionHeader, "alice-jwt")
+	if id, ok, err := v.VerifyRequest(rNew); err != nil || !ok || id.Email != "alice@example.com" {
+		t.Fatalf("VerifyRequest(new header) = (%+v, %v, %v), want alice@example.com", id, ok, err)
+	}
+
+	// Post-rename hub during transition: both headers carry the identical JWT.
+	rSame := httptest.NewRequest(http.MethodGet, "https://alpha.grain.example.com/api/tasks", nil)
+	rSame.Header.Set(HubAssertionHeader, "alice-jwt")
+	rSame.Header.Set(RegistryAssertionHeader, "alice-jwt")
+	if id, ok, err := v.VerifyRequest(rSame); err != nil || !ok || id.Email != "alice@example.com" {
+		t.Fatalf("VerifyRequest(identical both headers) = (%+v, %v, %v), want alice@example.com", id, ok, err)
+	}
+
+	// Smuggled X-Grain-Hub-Assertion past a pre-rename grain-registry that set
+	// X-Grain-Registry-Assertion for the real caller: must fail closed.
+	rSmuggled := httptest.NewRequest(http.MethodGet, "https://alpha.grain.example.com/api/tasks", nil)
+	rSmuggled.Header.Set(HubAssertionHeader, "alice-jwt")
+	rSmuggled.Header.Set(RegistryAssertionHeader, "mallory-jwt")
+	if id, ok, err := v.VerifyRequest(rSmuggled); err == nil || ok || !strings.Contains(err.Error(), "conflicting") {
+		t.Fatalf("VerifyRequest(conflicting headers) = (%+v, %v, %v), want conflicting headers error", id, ok, err)
+	}
+
+	// Multiple distinct values on a single assertion header must also fail closed.
+	for _, hdr := range []string{HubAssertionHeader, RegistryAssertionHeader} {
+		rMulti := httptest.NewRequest(http.MethodGet, "https://alpha.grain.example.com/api/tasks", nil)
+		rMulti.Header.Add(hdr, "alice-jwt")
+		rMulti.Header.Add(hdr, "mallory-jwt")
+		if id, ok, err := v.VerifyRequest(rMulti); err == nil || ok {
+			t.Fatalf("VerifyRequest(multiple %s) = (%+v, %v, %v), want error", hdr, id, ok, err)
+		}
 	}
 }
