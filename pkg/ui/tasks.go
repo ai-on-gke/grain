@@ -497,6 +497,15 @@ type Task struct {
 	// Run now was pressed on it would be telling the operator to press
 	// it again (alerts.js's heldForRunNow).
 	RunNowAt *time.Time `json:"runNowAt,omitempty"`
+	// RunNowStale is RunNowAt no newer than the start of a run of this
+	// task (model.Store.RunNowStale): a run was started for the request
+	// and gave it back without doing the work, so dispatch holds it to
+	// the retry backoff or the suspension's resume time rather than
+	// starting it on the next cycle. The pane keeps Run now offered for
+	// such a request -- pressing it re-stamps the request, which starts
+	// at once (Client.RunNow) -- and says what holds the task rather than
+	// promising the next cycle.
+	RunNowStale bool `json:"runNowStale,omitempty"`
 	// TurnStopped is true for an awaiting_reply task parked on the
 	// comment a person posts by stopping its turn (Client.Stop) rather
 	// than on a question its agent asked -- the "Stopped by you" case of

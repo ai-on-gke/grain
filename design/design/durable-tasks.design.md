@@ -416,7 +416,7 @@ Standing is five things, captured as `model.DispatchStanding` at
 
 | Standing | Where it lives | How a suspension keeps it |
 |---|---|---|
-| run now | `task_observation.run_now_at` | `startRun` already copies it onto `task_run.run_now_at` (task 837 / task-pause work). `Store.Suspend` restores it in the same transaction unless a newer request exists (`Store.RestoreRunNow`), for **every** suspension kind. |
+| run now | `task_observation.run_now_at` | `startRun` already copies it onto `task_run.run_now_at` (task 837 / task-pause work). `Store.Suspend` restores it in the same transaction unless a newer request exists (`settleRunNow`), for every kind that stopped the run before it could do the work (`SuspensionKind.KeepsRunNow`). A kind in which the agent ran its turn (`requested`, `deadline`, `idle`, `context`) spent the request: the run was the one asked for. |
 | priority dispatch / durable | the task's `admission` setting | Derived from the setting, never spent. A suspension must not touch it. A person lowering the setting is the one case where standing changes. |
 | front of backlog | `order_key` | Never written by a run. `Store.Suspend` must not write it. |
 | fixes base branch | `fixes_base_branch` mark | Never written by a run. Same rule. |

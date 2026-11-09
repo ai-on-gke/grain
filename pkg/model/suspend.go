@@ -85,8 +85,9 @@ func standingJSON(st DispatchStanding) (string, error) {
 // run's outcome (SuspensionKind.Outcome), its suspend_kind, the
 // task_suspension row, the failure streak (which a suspension does not
 // move) and the Run now request the run spent (settleRunNow, which puts
-// it back for every kind) are all one transaction, so no crash can leave
-// a suspended run whose task has lost its standing.
+// it back for the kinds SuspensionKind.KeepsRunNow names) are all one
+// transaction, so no crash can leave a suspended run whose task has lost
+// its standing.
 //
 // It writes nothing a run never writes: not task.order_key, not the
 // base-branch repair mark, not the task's grants (DT-3). s.Standing is
