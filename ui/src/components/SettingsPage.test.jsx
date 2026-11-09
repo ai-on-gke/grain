@@ -159,7 +159,7 @@ describe("SettingsPage", () => {
       "Memory pressure target (%), Sandboxes",
     ]);
     await user.click(results[0]);
-    expect(onSection).toHaveBeenCalledWith("sandboxes");
+    expect(onSection).toHaveBeenCalledWith("sandboxes", "sandboxOvercommit");
     // The groups are back once a pick is made.
     expect(screen.getByTestId("settings-nav-general")).toBeInTheDocument();
   });
@@ -624,7 +624,7 @@ describe("SettingsPage", () => {
     expect(screen.queryByTestId("external-config-repo-banner")).toBeNull();
     expect(api).not.toHaveBeenCalledWith("/api/settings");
     await user.click(screen.getByTestId("upgrade-check-settings-link"));
-    expect(onSection).toHaveBeenCalledWith("general");
+    expect(onSection).toHaveBeenCalledWith("general", "updates");
   });
 
   it("marks the Memory section dirty in the header and nav when a memory note is edited", async () => {
@@ -1343,5 +1343,64 @@ describe("SettingsPage", () => {
         "settings/capabilities.yml",
       ]);
     });
+  });
+
+  it("passes cross-section filter picks to onSection without overwriting history, while updating same-section hashes in place", async () => {
+    const user = userEvent.setup();
+    window.history.replaceState(null, "", "/settings/engine");
+    const replaceSpy = vi.spyOn(window.history, "replaceState");
+    try {
+      const { onSection } = setup({ section: "engine" });
+      await screen.findByLabelText("Poll interval");
+
+      await user.type(screen.getByLabelText("Filter settings"), "house style");
+      await user.click(screen.getAllByTestId("settings-result")[0]);
+      expect(onSection).toHaveBeenCalledWith("agents", "promptExtension");
+      expect(replaceSpy).not.toHaveBeenCalled();
+
+      onSection.mockClear();
+      await user.type(
+        screen.getByLabelText("Filter settings"),
+        "Max worker agents",
+      );
+      await user.click(screen.getAllByTestId("settings-result")[0]);
+      expect(onSection).not.toHaveBeenCalled();
+      expect(window.location.hash).toBe("#maxWorkers");
+    } finally {
+      replaceSpy.mockRestore();
+      window.history.replaceState(null, "", "/");
+    }
+  });
+
+  it("reveals and highlights the parent card when filtering for a conditionally hidden setting", async () => {
+    const user = userEvent.setup();
+    setup({ section: "general" });
+    await screen.findByLabelText("Environment name");
+
+    await user.type(
+      screen.getByLabelText("Filter settings"),
+      "Automatic upgrade time of day",
+    );
+    await user.click(screen.getAllByTestId("settings-result")[0]);
+
+    const updatesCard = document.getElementById("updates");
+    expect(updatesCard).not.toBeNull();
+    expect(updatesCard).toHaveClass("setting-highlight");
+  });
+
+  it("exits an open section item subpage when clicking the section nav or picking a same-section filter match", async () => {
+    const user = userEvent.setup();
+    const { onSection } = setup({
+      section: "config-repo",
+      item: "tables/grain_config.json",
+    });
+
+    await user.click(screen.getByTestId("settings-nav-config-repo"));
+    expect(onSection).toHaveBeenCalledWith("config-repo");
+
+    onSection.mockClear();
+    await user.type(screen.getByLabelText("Filter settings"), "state repo");
+    await user.click(screen.getAllByTestId("settings-result")[0]);
+    expect(onSection).toHaveBeenCalledWith("config-repo", "config-repo");
   });
 });
