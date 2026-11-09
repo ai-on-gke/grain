@@ -619,3 +619,73 @@ func TestProposeTaskRefusesAReviewGrant(t *testing.T) {
 		t.Errorf("ProposedTasks() = %+v, want none", got)
 	}
 }
+
+func TestProposeTaskAcceptsUnifiedGrantsAndRefusesMixedSpellings(t *testing.T) {
+	sink := &MockSink{}
+	tool := toolNamed(t, NewMockTools(sink, nil), "propose_task")
+
+	res := tool.Handler(context.Background(), map[string]any{
+		"title": "child with unified grants",
+		"body":  "exercise slice 2 grants on propose_task",
+		"grants": []any{
+			map[string]any{"capability": "https://grain.dev/capabilities/api#tasks:read", "with": map[string]any{"repo": "acme/app"}},
+			map[string]any{"capability": "https://grain.dev/capabilities/repo#target", "with": map[string]any{"repo": "acme/app", "base": "release"}},
+			map[string]any{"capability": "https://grain.dev/capabilities/repo#read", "with": map[string]any{"repo": "acme/docs"}},
+			map[string]any{"capability": "https://grain.dev/capabilities/repo#write", "with": map[string]any{"repo": "acme/site", "base": "main"}},
+		},
+	})
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Text)
+	}
+	got := sink.ProposedTasks()
+	if len(got) != 1 {
+		t.Fatalf("ProposedTasks() = %+v, want 1", got)
+	}
+	p := got[0]
+	if p.Repo != "acme/app" || p.Branch != "release" {
+		t.Errorf("Repo, Branch = %q, %q, want acme/app, release", p.Repo, p.Branch)
+	}
+	if len(p.Capabilities) != 1 || p.Capabilities[0] != "api:tasks:read@acme/app" {
+		t.Errorf("Capabilities = %v, want [api:tasks:read@acme/app]", p.Capabilities)
+	}
+	if len(p.Reads) != 1 || p.Reads[0] != "acme/docs" {
+		t.Errorf("Reads = %v, want [acme/docs]", p.Reads)
+	}
+	if len(p.Writes) != 1 || p.Writes[0] != (WriteTarget{Repo: "acme/site", Base: "main"}) {
+		t.Errorf("Writes = %v, want [{acme/site main}]", p.Writes)
+	}
+
+	for _, bad := range []map[string]any{
+		{
+			"title": "mix caps", "body": "b",
+			"capabilities": []any{"api:ci:read"},
+			"grants":       []any{map[string]any{"capability": "https://grain.dev/capabilities/api#tasks:read"}},
+		},
+		{
+			"title": "mix empty grants", "body": "b",
+			"capabilities": []any{"api:ci:read"},
+			"grants":       []any{},
+		},
+		{
+			"title": "mix repo", "body": "b", "repo": "acme/app",
+			"grants": []any{map[string]any{"capability": "https://grain.dev/capabilities/repo#target", "with": map[string]any{"repo": "acme/app", "base": "main"}}},
+		},
+		{
+			"title": "mix branch", "body": "b", "branch": "develop",
+			"grants": []any{map[string]any{"capability": "https://grain.dev/capabilities/repo#target", "with": map[string]any{"repo": "acme/app", "base": "main"}}},
+		},
+		{
+			"title": "mix reads", "body": "b", "reads": []any{},
+			"grants": []any{map[string]any{"capability": "https://grain.dev/capabilities/repo#read", "with": map[string]any{"repo": "acme/docs"}}},
+		},
+		{
+			"title": "mix writes", "body": "b", "writes": []any{},
+			"grants": []any{map[string]any{"capability": "https://grain.dev/capabilities/repo#write", "with": map[string]any{"repo": "acme/site", "base": "main"}}},
+		},
+	} {
+		r := tool.Handler(context.Background(), bad)
+		if !r.IsError {
+			t.Errorf("expected error for %v, got %+v", bad["title"], r)
+		}
+	}
+}
