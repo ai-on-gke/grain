@@ -191,6 +191,14 @@ func (c *Client) ApproveConfigChange(ctx context.Context, id string, decision Co
 	}
 	merged, err := manager.MergeConfigChange(ctx, *pending)
 	if err != nil {
+		// Store a 422 refusal back on the parked proposal so subsequent reads
+		// and reloads stop reporting the proposal-time "Schema valid" verdict
+		// and stop offering Approve & Apply for a commit that no longer merges
+		// cleanly or passes validation against today's base branch.
+		var invalid *ConfigPullRequestInvalid
+		if errors.As(err, &invalid) {
+			c.recordInvalidConfigChange(ctx, id, pending.HeadSHA, invalid)
+		}
 		return err
 	}
 	// Applied before the session hears of it, so the turn it wakes into
@@ -224,6 +232,33 @@ func (c *Client) RejectConfigChange(ctx context.Context, id string, decision Con
 		reason = "no reason given"
 	}
 	return c.decideConfigChange(ctx, id, fmt.Sprintf("Rejected config change (%s): %s", shortSHA(pending.HeadSHA), reason))
+}
+
+// recordInvalidConfigChange replaces a parked proposal's stored validation
+// with what MergeConfigChange just refused it with, if the task is still
+// parked on that commit.
+func (c *Client) recordInvalidConfigChange(ctx context.Context, id, headSHA string, invalid *ConfigPullRequestInvalid) {
+	reason := invalid.Error()
+	if invalid.Err != nil {
+		reason = invalid.Err.Error()
+	}
+	v := model.ConfigChangeValidation{
+		OK:       false,
+		Error:    reason,
+		Stale:    true,
+		Warnings: invalid.Validation.Check.Warnings,
+		Liveness: invalid.Validation.Liveness,
+	}
+	if err := c.Store.ObserveField(ctx, id, c.now(), func(o *model.Observation) {
+		if o.PendingConfigChange == nil || o.PendingConfigChange.HeadSHA != headSHA {
+			return
+		}
+		updated := *o.PendingConfigChange
+		updated.Validation = v
+		o.PendingConfigChange = &updated
+	}); err != nil {
+		log.Printf("ui: task %s: recording refused config change (%s): %v", id, shortSHA(headSHA), err)
+	}
 }
 
 // decideConfigChange posts the decision -- the person's own comment,

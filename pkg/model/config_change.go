@@ -59,6 +59,9 @@ type ConfigChangeValidation struct {
 	OK bool `json:"ok"`
 	// Error is why it did not pass, empty when it did.
 	Error string `json:"error,omitempty"`
+	// Stale is a change whose proposal-time validation no longer holds
+	// against the base branch when approving was tried (422).
+	Stale bool `json:"stale,omitempty"`
 	// Warnings do not refuse the change but a reviewer should read them.
 	Warnings []string `json:"warnings,omitempty"`
 	// Liveness lists what would stop dispatch if this merged.
