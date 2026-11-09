@@ -1240,6 +1240,12 @@ compute:
   # startup_script_file: /etc/grain-registry/instance-startup.sh
   # startup_script: "#!/bin/sh\n..."
   # bind_project_iam: true
+  # The registry grants itself roles/iam.serviceAccountUser on each gi-*
+  # account it creates so it can attach it to the VM (see "IAM the registry
+  # needs" below). Turn off when actAs is granted out of band; set
+  # self_principal when the registry's own principal cannot be detected.
+  # grant_self_act_as: true
+  # self_principal: serviceAccount:grain-registry@grain-instances-prod.iam.gserviceaccount.com
   vm_prefix: grain-
   sa_prefix: gi-
   ssh_break_glass: true
@@ -1311,3 +1317,137 @@ quotas:
   default_connected: 20
   reservation_period: 720h
 ```
+
+### IAM the registry needs
+
+For each hosted instance, the `gce` provider creates a service account
+`<sa_prefix><name>` (`gi-<name>@<compute.project>.iam.gserviceaccount.com`)
+and then creates the VM running as that account. GCE accepts an
+`instances.insert` that attaches a service account only when the caller
+holds `iam.serviceAccounts.actAs` on that account, so between those two
+steps the registry grants its own principal `roles/iam.serviceAccountUser`
+on the new account. It makes the grant through the account's own IAM
+policy (`projects/<p>/serviceAccounts/<email>:getIamPolicy` and then
+`:setIamPolicy`), not the project's. That way the registry can act as the
+accounts it created and as no other.
+
+The service-account part of the registry's IAM in `compute.project` is:
+
+| Need | Grant |
+|------|-------|
+| Create, look up and delete the `gi-*` accounts | `roles/iam.serviceAccountCreator`, `roles/iam.serviceAccountViewer`, `roles/iam.serviceAccountDeleter` |
+| Grant itself actAs on each new account | `iam.serviceAccounts.getIamPolicy` and `iam.serviceAccounts.setIamPolicy` (the custom role below) |
+| Create, stop and delete the VMs | `roles/compute.instanceAdmin.v1` |
+
+It does **not** need `roles/iam.serviceAccountUser` on the project. No
+predefined role holds the two policy permissions without far more besides
+(`roles/iam.serviceAccountAdmin` holds them, along with everything the
+creator, viewer and deleter roles hold), so grant them through a custom role:
+
+```bash
+PROJECT=grain-instances-prod   # compute.project
+PRINCIPAL='serviceAccount:grain-registry@grain-hub-prod.iam.gserviceaccount.com'  # see "The registry's principal"
+
+gcloud iam roles create grainRegistryInstanceSAPolicy --project="${PROJECT}" \
+  --title="grain-registry: instance service account policies" \
+  --description="Lets grain-registry grant itself actAs on the per-instance service accounts it creates" \
+  --permissions=iam.serviceAccounts.get,iam.serviceAccounts.getIamPolicy,iam.serviceAccounts.setIamPolicy \
+  --stage=GA
+
+for role in roles/iam.serviceAccountCreator roles/iam.serviceAccountViewer roles/iam.serviceAccountDeleter \
+    "projects/${PROJECT}/roles/grainRegistryInstanceSAPolicy"; do
+  gcloud projects add-iam-policy-binding "${PROJECT}" \
+    --member="${PRINCIPAL}" --role="${role}" --condition=None
+done
+```
+
+**Scope of that grant: there is no way to limit it to `gi-*`.** An IAM
+condition on the resource name (for example
+`resource.name.startsWith("projects/<p>/serviceAccounts/gi-")`) looks like
+it should do that, but service accounts are not among the resources IAM
+evaluates resource attributes for. The
+[resource attributes reference](https://cloud.google.com/iam/docs/conditions-resource-attributes)
+lists the services whose resources "recognize" `resource.name`,
+`resource.type` and `resource.service`, and `iam.googleapis.com` is not one
+of them. "Other services and resource types do not recognize resource
+attributes." That explains why a project-level
+`roles/iam.serviceAccountUser` binding conditioned on `gi-*` never let the
+registry attach an instance account: the condition never matches, whatever
+form the resource name takes (`projects/-/serviceAccounts/<uniqueId>` or
+otherwise). For the same reason the docs give no support for conditioning
+`setIamPolicy` that way, so this page does not recommend it. Two
+consequences follow:
+
+- A project-level grant of `iam.serviceAccounts.setIamPolicy` covers every
+  service account in the project. Holding `setIamPolicy` on an account is
+  as strong as holding `actAs` on it, because the holder can grant itself
+  `roles/iam.serviceAccountUser` there. That is exactly what the registry
+  does for the `gi-*` accounts. The custom role keeps the registry from
+  acting as other accounts *implicitly*, and it leaves an audit-log entry
+  (`SetIamPolicy` on the account) for every account the registry gives
+  itself, but it is not a hard boundary.
+- The boundary that does hold is the project. Put hosted VMs and their
+  `gi-*` accounts in a project of their own (`compute.project`; see
+  `deploy/test/registry-sandbox`'s `--hosted-project`) that contains no
+  service account you would not let the registry act as: no admin accounts
+  and no Terraform deployers. The project's default Compute Engine account
+  counts too, so disable it or strip its roles. With that layout, the
+  project-level grant above reaches only accounts the registry owns anyway.
+
+#### Turning the grant off
+
+Set `compute.grant_self_act_as: false` when something else grants the
+registry `iam.serviceAccounts.actAs` on each instance account. The registry
+then makes no `getIamPolicy` or `setIamPolicy` calls and does not need the
+custom role. If actAs is missing, instance creation retries for two minutes
+and then fails with GCE's `SERVICE_ACCOUNT_ACCESS_DENIED`.
+
+#### The registry's principal
+
+The binding names the identity the registry's Application Default
+Credentials authenticate as. Unless `compute.self_principal` is set, the
+registry works it out on first use:
+
+| Where the registry runs | Detected principal |
+|---|---|
+| Service account key file, or ADC impersonating a service account | `serviceAccount:<client email / impersonated email>` |
+| GCE VM, or GKE Workload Identity with the Kubernetes service account bound to a Google service account | `serviceAccount:<metadata server's default account>` |
+| GKE Workload Identity without a Google service account (the metadata server reports `<project>.svc.id.goog`) | `principal://iam.googleapis.com/projects/<project-number>/locations/global/workloadIdentityPools/<project>.svc.id.goog/subject/ns/<namespace>/sa/<ksa>`, read from the metadata server's project number and the `sub` claim of the pod's mounted service account token |
+| Anything else (for example `gcloud auth application-default login`) | the email `oauth2.googleapis.com/tokeninfo` reports for the access token (`user:` or `serviceAccount:`) |
+
+When detection cannot work (for example, the pod's service account token is
+not mounted), provisioning fails with a status_reason that points at
+`compute.self_principal`. Set it to the principal's IAM form, as you would
+in `gcloud ... --member`:
+
+```yaml
+compute:
+  self_principal: principal://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/grain-hub-prod.svc.id.goog/subject/ns/grain-hub/sa/grain-registry
+```
+
+A bare `<name>@<project>.iam.gserviceaccount.com` is accepted as shorthand
+for `serviceAccount:<email>`. GCE's own error names the principal it saw:
+`User: 'grain-hub/grain-registry (grain-hub-prod.svc.id.goog)'` is the
+Workload Identity principal for namespace `grain-hub` and Kubernetes service
+account `grain-registry`.
+
+#### What an instance's status_reason says
+
+- **While a new account or binding propagates.** GCP can take a minute or
+  so before Compute sees a new account (`EXTERNAL_RESOURCE_NOT_FOUND`) or a
+  new binding on it (`SERVICE_ACCOUNT_ACCESS_DENIED`). The entry stays
+  `creating` with
+  `waiting for service account <sa>, and the registry's permission to attach it, to propagate ...`,
+  and the reconciler retries the insert with backoff (5s, 10s, 20s, then
+  every 30s) for up to two minutes before failing the entry.
+- **When IAM refuses the grant.** Provisioning fails at once with
+  `provisioning instance resources failed: gcp iam: the registry (<principal>) is missing iam.serviceAccounts.setIamPolicy on service account <sa> ...`
+  (or `getIamPolicy`), which names the custom role above as the fix. The
+  entry does not go on to GCE's less specific error.
+
+#### On delete
+
+The binding is part of the instance account's own IAM policy, so it is
+deleted along with the account at final purge. Nothing else needs cleaning
+up. Fence-on-delete (the retention window) keeps the account, and the binding
+with it.
