@@ -3337,6 +3337,9 @@ func TestBothImagesPinTheSameAgentCLIs(t *testing.T) {
 			`= "$CLAUDE_CLI_VERSION"`,
 			`echo "$sha256  /tmp/codex.tar.gz" | sha256sum -c -`,
 			`echo "$host_sha256  /tmp/codex-code-mode-host.tar.gz" | sha256sum -c -`,
+			"api.github.com/repos/openai/codex/releases/tags/${CODEX_CLI_VERSION}",
+			"Accept: application/octet-stream",
+			"rm -f /tmp/codex-release.json",
 			"registry.npmjs.org/@openai/codex/-/codex-${CODEX_CLI_NPM_VERSION}-linux-${npm_arch}.tgz",
 			`echo "$npm_sha256  /tmp/codex-npm.tgz" | sha256sum -c -`,
 		} {
