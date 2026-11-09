@@ -873,6 +873,106 @@ func NewLiveProposalTools(sink *MockSink, proposeRepos []string, parent string, 
 	return []Tool{proposeTaskTool(sink, proposeRepos, parent, filer)}
 }
 
+func proposeTaskProperties(proposeRepos []string) map[string]any {
+	return withProposeChangeTargetProperties(map[string]any{
+		"id":     map[string]any{"type": "string"},
+		"title":  map[string]any{"type": "string"},
+		"body":   map[string]any{"type": "string"},
+		"branch": map[string]any{"type": "string"},
+		"repo": map[string]any{
+			"type":        "string",
+			"description": "owner/name of target repository (defaults to yours)." + proposalRepoSentence(proposeRepos),
+		},
+		"custom_fields": map[string]any{
+			"type": "object",
+			"additionalProperties": map[string]any{
+				"anyOf": []any{
+					map[string]any{"type": "string"},
+					map[string]any{
+						"type":  "array",
+						"items": map[string]any{"type": "string"},
+					},
+				},
+			},
+		},
+		"depends_on": map[string]any{
+			"type":  "array",
+			"items": map[string]any{"type": "string"},
+		},
+		"supersedes": map[string]any{
+			"type": "string",
+			"description": "ID of a task in the same repository that has never been dispatched " +
+				"to replace; a dispatched task is left open.",
+		},
+		"auto_merge": map[string]any{"type": "boolean"},
+		"reads": map[string]any{
+			"type":  "array",
+			"items": map[string]any{"type": "string"},
+		},
+		"designs": map[string]any{
+			"type":  "array",
+			"items": map[string]any{"type": "string"},
+		},
+		"writes": map[string]any{
+			"type": "array",
+			"items": map[string]any{
+				"type":                 "object",
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"repo": map[string]any{"type": "string"},
+					"base": map[string]any{"type": "string"},
+				},
+				"required": []string{"repo"},
+			},
+		},
+		"review_template_id": map[string]any{"type": "string"},
+		"sandbox_cpus":       map[string]any{"type": "integer"},
+		"sandbox_memory_mb":  map[string]any{"type": "integer"},
+		"sandbox_disk_gb":    map[string]any{"type": "integer"},
+		"network_access": map[string]any{
+			"type": "string",
+			"enum": networkAccessEnum(),
+		},
+		"goal": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"kind":     map[string]any{"type": "string", "enum": []string{"base-green", "pr-merged", "tasks-closed", "person-closes", "pipeline-healthy", "cl-submitted"}},
+				"spec":     map[string]any{"type": "object"},
+				"on_met":   map[string]any{"type": "string", "enum": []string{"close", "rest"}},
+				"on_limit": map[string]any{"type": "string", "enum": []string{"hold", "notify"}},
+			},
+			"required": []string{"kind"},
+		},
+		"nothing_needed_action": map[string]any{
+			"type": "string",
+			"enum": []any{"close", "ack"},
+		},
+		"keep_running":      map[string]any{"type": "boolean"},
+		"no_port":           map[string]any{"type": "boolean"},
+		"fixes_base_branch": map[string]any{"type": "boolean"},
+		"origin":            map[string]any{"type": "string"},
+		"no_repo":           map[string]any{"type": "boolean"},
+		"at_front":          map[string]any{"type": "boolean"},
+		"priority": map[string]any{
+			"type":        "integer",
+			"description": "1 or more (default 5; higher runs first). Not inherited from your task",
+		},
+		"template_id": map[string]any{"type": "string"},
+		"template_fields": map[string]any{
+			"type": "object",
+			"additionalProperties": map[string]any{
+				"type": "string",
+			},
+		},
+		"capabilities":      map[string]any{"type": "array", "items": map[string]any{}},
+		"grants":            map[string]any{"type": "array", "items": map[string]any{}},
+		"model":             map[string]any{"type": "string"},
+		"agent_framework":   map[string]any{"type": "string"},
+		"not_before":        map[string]any{"type": "string"},
+		"hold_for_approval": map[string]any{"type": "boolean"},
+	})
+}
+
 func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer ProposalFiler) Tool {
 	filing := "Each proposal is filed as a real task once this run finishes"
 	if filer != nil {
@@ -890,106 +990,13 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 		InputSchema: map[string]any{
 			"type":                 "object",
 			"additionalProperties": false,
-			"properties": withProposeChangeTargetProperties(map[string]any{
-				"id":     map[string]any{"type": "string"},
-				"title":  map[string]any{"type": "string"},
-				"body":   map[string]any{"type": "string"},
-				"branch": map[string]any{"type": "string"},
-				"repo": map[string]any{
-					"type":        "string",
-					"description": "owner/name of target repository (defaults to yours)." + proposalRepoSentence(proposeRepos),
-				},
-				"custom_fields": map[string]any{
-					"type": "object",
-					"additionalProperties": map[string]any{
-						"anyOf": []any{
-							map[string]any{"type": "string"},
-							map[string]any{
-								"type":  "array",
-								"items": map[string]any{"type": "string"},
-							},
-						},
-					},
-				},
-				"depends_on": map[string]any{
-					"type":  "array",
-					"items": map[string]any{"type": "string"},
-				},
-				"supersedes": map[string]any{
-					"type": "string",
-					"description": "ID of a task in the same repository that has never been dispatched " +
-						"to replace; a dispatched task is left open.",
-				},
-				"auto_merge": map[string]any{"type": "boolean"},
-				"reads": map[string]any{
-					"type":  "array",
-					"items": map[string]any{"type": "string"},
-				},
-				"designs": map[string]any{
-					"type":  "array",
-					"items": map[string]any{"type": "string"},
-				},
-				"writes": map[string]any{
-					"type": "array",
-					"items": map[string]any{
-						"type":                 "object",
-						"additionalProperties": false,
-						"properties": map[string]any{
-							"repo": map[string]any{"type": "string"},
-							"base": map[string]any{"type": "string"},
-						},
-						"required": []string{"repo"},
-					},
-				},
-				"review_template_id": map[string]any{"type": "string"},
-				"sandbox_cpus":       map[string]any{"type": "integer"},
-				"sandbox_memory_mb":  map[string]any{"type": "integer"},
-				"sandbox_disk_gb":    map[string]any{"type": "integer"},
-				"network_access": map[string]any{
-					"type": "string",
-					"enum": networkAccessEnum(),
-				},
-				"goal": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"kind":     map[string]any{"type": "string", "enum": []string{"base-green", "pr-merged", "tasks-closed", "person-closes", "pipeline-healthy", "cl-submitted"}},
-						"spec":     map[string]any{"type": "object"},
-						"on_met":   map[string]any{"type": "string", "enum": []string{"close", "rest"}},
-						"on_limit": map[string]any{"type": "string", "enum": []string{"hold", "notify"}},
-					},
-					"required": []string{"kind"},
-				},
-				"nothing_needed_action": map[string]any{
-					"type": "string",
-					"enum": []any{"close", "ack"},
-				},
-				"keep_running":      map[string]any{"type": "boolean"},
-				"no_port":           map[string]any{"type": "boolean"},
-				"fixes_base_branch": map[string]any{"type": "boolean"},
-				"origin":            map[string]any{"type": "string"},
-				"no_repo":           map[string]any{"type": "boolean"},
-				"at_front":          map[string]any{"type": "boolean"},
-				"priority": map[string]any{
-					"type":        "integer",
-					"description": "1 or more (default 5; higher runs first). Not inherited from your task",
-				},
-				"template_id": map[string]any{"type": "string"},
-				"template_fields": map[string]any{
-					"type": "object",
-					"additionalProperties": map[string]any{
-						"type": "string",
-					},
-				},
-				"capabilities":      map[string]any{"type": "array", "items": map[string]any{}},
-				"grants":            map[string]any{"type": "array", "items": map[string]any{}},
-				"model":             map[string]any{"type": "string"},
-				"agent_framework":   map[string]any{"type": "string"},
-				"not_before":        map[string]any{"type": "string"},
-				"hold_for_approval": map[string]any{"type": "boolean"},
-			}),
-			"required": []string{"title", "body"},
+			"properties":           proposeTaskProperties(proposeRepos),
+			"required":             []string{"title", "body"},
 		},
 		Handler: func(ctx context.Context, args map[string]any) Result {
+			if err := ValidateProposeTaskArgs(args); err != nil {
+				return Result{Text: err.Error(), IsError: true}
+			}
 			title, hasTitle := argString(args, "title")
 			body, hasBody := argString(args, "body")
 			templateID, _ := argString(args, "template_id")
@@ -1013,14 +1020,6 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 			var atFront *bool
 			if front, ok := argBool(args, "at_front"); ok {
 				atFront = &front
-			} else if pos, ok := argString(args, "position"); ok {
-				if pos == "front" {
-					front := true
-					atFront = &front
-				} else if pos == "end" {
-					front := false
-					atFront = &front
-				}
 			}
 			supersedes, _ := argString(args, "supersedes")
 			reviewTemplateID, _ := argString(args, "review_template_id")
@@ -1079,12 +1078,7 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 			}
 			reads := argStringSlice(args, "reads")
 			writes := argWrites(args, "writes")
-			decodedGrants, hasGrants, err := model.DecodeRawRequestGrants(args["grants"], model.GrantSpelling{
-				Capabilities: args["capabilities"] != nil,
-				Reads:        args["reads"] != nil,
-				Writes:       args["writes"] != nil,
-				Target:       strings.TrimSpace(repo) != "" || strings.TrimSpace(branch) != "" || noRepo || changeTarget != nil,
-			})
+			decodedGrants, hasGrants, err := model.DecodeRawRequestGrants(args["grants"], ProposeTaskGrantSpelling(args))
 			if err != nil {
 				return Result{Text: err.Error(), IsError: true}
 			}

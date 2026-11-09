@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -75,6 +76,21 @@ func TestCreateTaskRequestGrants(t *testing.T) {
 		var req CreateTaskRequest
 		if err := json.Unmarshal([]byte(body), &req); err == nil {
 			t.Errorf("CreateTaskRequest accepted %s", body)
+		}
+	}
+
+	for _, tc := range []struct {
+		body string
+		want string
+	}{
+		{`{"repo":"acme/widgets","grants":[{"capability":"https://grain.dev/capabilities/repo#target","with":{"repo":"acme/x","base":""}}]}`, "the request's repo field"},
+		{`{"base":"develop","grants":[{"capability":"https://grain.dev/capabilities/repo#target","with":{"repo":"acme/x","base":"main"}}]}`, "the request's base field"},
+		{`{"noRepo":true,"grants":[{"capability":"https://grain.dev/capabilities/repo#target","with":{"repo":"acme/x","base":"main"}}]}`, "the request's noRepo field"},
+	} {
+		var req CreateTaskRequest
+		err := json.Unmarshal([]byte(tc.body), &req)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("Unmarshal(%s) = %v, want substring %q", tc.body, err, tc.want)
 		}
 	}
 }
