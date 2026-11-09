@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build ignore
+
 // Command fake_upstreams runs controllable local HTTP servers for:
 //  1. Google Cloud Secret Manager REST API (-sm-addr)
 //  2. Google Cloud Storage JSON/Multipart API (-gcs-addr)

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build ignore
+
 // Command walk_hostexec_probe drives 8 concurrent HTTP clients polling a live
 // `grain daemon` every 1s across 40s while its unix-socket `grain host` is
 // SIGSTOPped, recording per-endpoint latency distributions and sampling both
