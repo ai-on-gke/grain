@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"syscall"
@@ -125,11 +126,21 @@ func (c Client) oneShot(ctx context.Context, req Request, want byte, out any) er
 	if dl, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(dl)
 	}
+	stop := context.AfterFunc(ctx, func() {
+		_ = conn.SetDeadline(time.Unix(1, 0))
+	})
+	defer stop()
 	if err := writeJSON(conn, frameRequest, req); err != nil {
+		if errors.Is(err, os.ErrDeadlineExceeded) && errors.Is(ctx.Err(), context.Canceled) {
+			return ctx.Err()
+		}
 		return err
 	}
 	typ, payload, err := readFrame(conn)
 	if err != nil {
+		if errors.Is(err, os.ErrDeadlineExceeded) && errors.Is(ctx.Err(), context.Canceled) {
+			return ctx.Err()
+		}
 		return err
 	}
 	switch typ {
@@ -237,11 +248,21 @@ func (c Client) Offers(ctx context.Context) ([]Offer, error) {
 	if dl, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(dl)
 	}
+	stop := context.AfterFunc(ctx, func() {
+		_ = conn.SetDeadline(time.Unix(1, 0))
+	})
+	defer stop()
 	if err := writeJSON(conn, frameRequest, Request{Op: OpList}); err != nil {
+		if errors.Is(err, os.ErrDeadlineExceeded) && errors.Is(ctx.Err(), context.Canceled) {
+			return nil, ctx.Err()
+		}
 		return nil, err
 	}
 	typ, payload, err := readFrame(conn)
 	if err != nil {
+		if errors.Is(err, os.ErrDeadlineExceeded) && errors.Is(ctx.Err(), context.Canceled) {
+			return nil, ctx.Err()
+		}
 		return nil, err
 	}
 	switch typ {

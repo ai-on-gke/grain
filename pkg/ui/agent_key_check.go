@@ -118,8 +118,7 @@ var errAgentKeyCheckUnavailable = errors.New(
 // binary installed, and answer two questions at once -- leaving nobody
 // sure which half failed.
 //
-// **On demand, not on a timer**, for the reasons CheckCapability's own
-// doc comment sets out at length: a poll would be a request to somebody
+// **On demand, not on a timer**: a poll would be a request to somebody
 // else's API per framework forever whether or not anybody is looking,
 // and would make the chip beside the field change with nobody touching
 // Settings.
@@ -156,8 +155,7 @@ func (c *Client) CheckAgentKey(ctx context.Context, framework string) (AgentKeyC
 
 // handleCheckAgentKey answers POST /api/agent-keys/{framework}/check.
 //
-// POST for a call that stores nothing, exactly as handleCheckCapability
-// is: it is not a read of state grain holds, it is grain going and
+// POST for a call that stores nothing: it is not a read of state grain holds, it is grain going and
 // making a request to a third party, which is not something a browser, a
 // proxy or a prefetch may be free to repeat on its own.
 //

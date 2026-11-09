@@ -148,8 +148,16 @@ func TestGrainLoginIssueTokenSelfServiceNonAdminAndLogoutRevokes(t *testing.T) {
 	if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "--issue-token") {
 		t.Errorf("login with the access code = %v, want a refusal pointing at --issue-token", err)
 	}
+	// Nor is an access code piped to --token-stdin beside --issue-token:
+	// that combination is refused rather than storing the code.
+	loginStdin = strings.NewReader(testAccessCode + "\n")
+	t.Cleanup(func() { loginStdin = os.Stdin })
+	err = runCLI([]string{"login", ts.URL, "--name", "piped", "--auth", "access-code", "--issue-token", "--token-stdin"})
+	if exitOf(err) != exitUsage || !strings.Contains(err.Error(), "grain -token CODE login "+ts.URL+" --issue-token") {
+		t.Errorf("login --issue-token --token-stdin = %v, want a usage refusal naming the -token form", err)
+	}
 	cfg, _ = loadContexts()
-	for _, n := range []string{"ops", "elsewhere", "ac"} {
+	for _, n := range []string{"ops", "elsewhere", "ac", "piped"} {
 		if _, ok := cfg.Contexts[n]; ok {
 			t.Errorf("a refused login left context %q", n)
 		}
@@ -195,5 +203,61 @@ func TestGrainLoginIssueTokenSelfServiceNonAdminAndLogoutRevokes(t *testing.T) {
 	err = runCLI([]string{"--context", "old", "whoami"})
 	if exitOf(err) != exitAuth || !strings.Contains(fmt.Sprint(err), "token for context old expired on 2026-01-02: run grain login --refresh") {
 		t.Errorf("whoami with an expired token = %v", err)
+	}
+}
+
+// TestGrainLoginRefusesFlagsItWouldIgnore: --refresh beside --token-stdin,
+// and --scope-set/--repos/--expires without --issue-token, used to be
+// dropped silently (docs/test-runs/2026-11-09-external-agent-rails.md,
+// F3). Each is a usage refusal with its own code that leaves the
+// contexts file byte-for-byte as it was and rotates nothing.
+func TestGrainLoginRefusesFlagsItWouldIgnore(t *testing.T) {
+	ts, _ := loginServer(t)
+	if err := runCLI([]string{"login", ts.URL, "--name", "team", "--auth", "test-sso", "--issue-token"}); err != nil {
+		t.Fatal(err)
+	}
+	path, _ := contextConfigPath()
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginStdin = strings.NewReader("gma_notarealtoken\n")
+	t.Cleanup(func() { loginStdin = os.Stdin })
+	for _, tc := range []struct {
+		args []string
+		code string
+	}{
+		{[]string{"login", "--refresh", "--token-stdin", "--name", "team"}, "token_stdin_refresh"},
+		{[]string{"login", ts.URL, "--name", "fresh", "--auth", "test-sso", "--scope-set", "grain/viewer"}, "needs_issue_token"},
+		{[]string{"login", ts.URL, "--name", "fresh", "--auth", "test-sso", "--repos", "acme/widgets"}, "needs_issue_token"},
+		{[]string{"login", "--refresh", "--name", "team", "--expires", "7d"}, "needs_issue_token"},
+	} {
+		err := runCLI(tc.args)
+		_, code, _ := classifyError(err)
+		if exitOf(err) != exitUsage || code != tc.code {
+			t.Errorf("grain %s = %v (%s), want exit %d code %s", strings.Join(tc.args, " "), err, code, exitUsage, tc.code)
+		}
+	}
+	if after, _ := os.ReadFile(path); string(after) != string(before) {
+		t.Errorf("a refused login changed %s:\n%s\nwant\n%s", path, after, before)
+	}
+}
+
+// A server URL carrying userinfo (http://user:pass@host) is kept as given
+// in config.json (0600), but `grain login` never prints the password back
+// (docs/test-runs/2026-11-08-cli-install-skill-mcp.md).
+func TestGrainLoginDoesNotEchoURLUserinfo(t *testing.T) {
+	ts, _ := loginServer(t)
+	withUserinfo := strings.Replace(ts.URL, "http://", "http://u5er:pa55w0rd@", 1)
+	out := captureStdout(t, func() {
+		if err := runCLI([]string{"login", withUserinfo, "--name", "team", "--auth", "test-sso", "--issue-token", "--expires", "7d"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if strings.Contains(out, "pa55w0rd") || strings.Contains(out, "u5er") {
+		t.Fatalf("login printed the URL's userinfo: %q", out)
+	}
+	if !strings.Contains(out, "signed in to "+ts.URL+" as context team") {
+		t.Fatalf("login output = %q, want the scrubbed server URL", out)
 	}
 }

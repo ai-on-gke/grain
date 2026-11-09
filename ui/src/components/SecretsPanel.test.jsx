@@ -333,4 +333,32 @@ describe("SecretsPanel", () => {
     ).toBeNull();
     expect(api).toHaveBeenCalledTimes(2);
   });
+
+  // 2026-11-08 deployment credentials walkthrough: a role without
+  // secrets:write was offered Delete secret, key deletes and Set secret,
+  // each refused by the server with 403.
+  it("draws its controls disabled, saying why, when readOnly", async () => {
+    api.mockResolvedValueOnce({
+      enabled: true,
+      secrets: [{ name: "github-app", keys: ["app-id"] }],
+    });
+    const { container } = render(
+      <SecretsPanel
+        showError={() => {}}
+        readOnly
+        readOnlyReason="Needs secrets:write, which your role grain/viewer does not grant."
+      />,
+    );
+    expect(await screen.findByText("github-app")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Delete secret" }),
+    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Set secret" })).toBeDisabled();
+    expect(screen.getByLabelText("Secret")).toBeDisabled();
+    expect(container.querySelector(".MuiChip-deletable")).toBeNull();
+    expect(container.querySelector("[data-settings-readonly]")).toHaveAttribute(
+      "title",
+      "Needs secrets:write, which your role grain/viewer does not grant.",
+    );
+  });
 });

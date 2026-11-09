@@ -27,10 +27,17 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/dispatch"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/objectstore"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/redact"
 	"github.com/ai-on-gke/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // failingPutStore refuses every Put while fail is set.
@@ -236,5 +243,187 @@ func TestUnflushedRawStreamDefersToALiveFile(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(unflushed, "run-2")); !os.IsNotExist(err) {
 		t.Fatalf("stale kept stream not dropped: %v", err)
+	}
+}
+
+// When FlushRunEnd fails closed (because Secret Manager returns 503/403 or the
+// object store returns 503), RunDispatch must NOT fall back to writing the
+// unredacted narrative into SQLite task_run.transcript; instead both raw
+// stream and narrative are staged on disk and uploaded redacted once healthy.
+func TestRunDispatchWithFailedTranscriptFlushNeverLeaksSecretsToSQLiteAndRetriesNarrative(t *testing.T) {
+	ctx := context.Background()
+	const secretVal = "sm-active-token-value-9988776655"
+	for _, tc := range []struct {
+		name            string
+		smStatus        int
+		failObjectStore bool
+	}{
+		{name: "secretmanager 503", smStatus: http.StatusServiceUnavailable},
+		{name: "secretmanager 403", smStatus: http.StatusForbidden},
+		{name: "object store 503", smStatus: http.StatusOK, failObjectStore: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var smCode atomic.Int32
+			smCode.Store(int32(tc.smStatus))
+			const prefix = "projects/123456789/secrets/grain-inst-alice-"
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				code := int(smCode.Load())
+				if code != http.StatusOK {
+					http.Error(w, `{"error":{"message":"upstream unavailable"}}`, code)
+					return
+				}
+				if r.Method == http.MethodGet && r.URL.Path == "/v1/"+prefix+"active-token/versions/latest:access" {
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"name":    prefix + "active-token/versions/1",
+						"payload": map[string]string{"data": base64.StdEncoding.EncodeToString([]byte(secretVal))},
+					})
+					return
+				}
+				http.Error(w, `{"error":{"code":404,"status":"NOT_FOUND"}}`, http.StatusNotFound)
+			}))
+			t.Cleanup(srv.Close)
+
+			cat := secrets.NewMemoryCatalogue()
+			if err := cat.PutSecretEntry(ctx, secrets.CatalogueEntry{
+				SecretName: "active-token", Key: "value", SMSecret: "grain-inst-alice-active-token",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			secStore := secrets.OpenSecretManager(secrets.SecretManagerConfig{
+				Prefix:     prefix,
+				Catalogue:  cat,
+				Endpoint:   srv.URL,
+				HTTPClient: srv.Client(),
+				Token:      func(context.Context) (string, error) { return "tok", nil },
+			})
+
+			db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(t.TempDir(), "db")))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			modelStore := model.New(db)
+			if err := modelStore.Init(ctx); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
+			if err := modelStore.PutTask(ctx, model.Task{
+				ID: "task-sec", Title: "Check fail-closed redaction", Body: "Run", CreatedAt: &now,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := modelStore.StartRun(ctx, model.Run{
+				ID: "run-sec-1", TaskID: "task-sec", Sandbox: "run-sec-1", Attempt: 1, StartedAt: now,
+			}, model.Limits{}); err != nil {
+				t.Fatal(err)
+			}
+			task, err := modelStore.GetTask(ctx, "task-sec")
+			if err != nil || task == nil {
+				t.Fatalf("GetTask: %v", err)
+			}
+
+			mem := objectstore.NewMemory()
+			objStore := &failingPutStore{Store: mem}
+			objStore.fail.Store(tc.failObjectStore)
+
+			dataDir := t.TempDir()
+			liveDir := filepath.Join(dataDir, "state", "transcripts")
+			if err := os.MkdirAll(liveDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			cacheDir := filepath.Join(dataDir, "cache", "transcripts")
+			tStore, err := NewTranscriptObjectStore(objStore, cacheDir, liveDir,
+				transcriptObjectRedactor(Config{DataDir: dataDir}, secStore))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			fw := testAgentFunc(func(_ context.Context, cfg agent.RunConfig) (*agent.Result, error) {
+				line := `{"type":"assistant","message":{"content":[{"type":"text","text":"printed ` + secretVal + `"}]}}` + "\n"
+				if err := os.WriteFile(cfg.TranscriptPath, []byte(line), 0o600); err != nil {
+					return nil, err
+				}
+				return &agent.Result{
+					FinalText:  "Done",
+					Transcript: "Final narrative echoed " + secretVal,
+					ToolCalls:  []agent.ToolCall{{Name: "nothing_needed", Arguments: map[string]any{"reason": "done"}}},
+				}, nil
+			})
+			orchCfg := orchestrator.Config{
+				TranscriptDir:  liveDir,
+				TranscriptSink: tStore,
+				Now:            func() time.Time { return now.Add(time.Minute) },
+			}
+			if _, err := orchestrator.RunDispatch(ctx, modelStore, fw, orchCfg, *task,
+				dispatch.Dispatch{TaskID: "task-sec", RunID: "run-sec-1", Attempt: 1},
+				nil, t.TempDir(), "", nil, now); err != nil {
+				t.Fatalf("RunDispatch: %v", err)
+			}
+
+			dbTranscript, exists, err := modelStore.RunTranscript(ctx, "task-sec", 1)
+			if err != nil || !exists {
+				t.Fatalf("RunTranscript = (%q, %v, %v)", dbTranscript, exists, err)
+			}
+			if dbTranscript != "" {
+				t.Fatalf("SQLite task_run.transcript stored unredacted fallback %q, want empty", dbTranscript)
+			}
+			if _, ok := mem.Bytes("transcripts/run-sec-1.jsonl"); ok {
+				t.Fatal("uploaded .jsonl despite failure")
+			}
+			if _, ok := mem.Bytes("transcripts/run-sec-1.md"); ok {
+				t.Fatal("uploaded .md despite failure")
+			}
+			uiClient := ui.NewClient(ui.Config{
+				LiveTranscripts:     LiveTranscriptDirWithStore(liveDir, tStore),
+				ArchivedTranscripts: tStore,
+			}, modelStore)
+			duringOutage, err := uiClient.AttemptTranscript(ctx, "task-sec", 1)
+			if err != nil || strings.Contains(duringOutage, secretVal) {
+				t.Fatalf("AttemptTranscript during outage = (%q, %v), must never leak secret", duringOutage, err)
+			}
+			for _, staged := range []string{"run-sec-1", "run-sec-1.md"} {
+				if _, err := os.Stat(filepath.Join(liveDir+".unflushed", staged)); err != nil {
+					t.Fatalf("expected %s staged in unflushedDir: %v", staged, err)
+				}
+			}
+
+			// Restore upstream health and verify a fresh TranscriptObjectStore
+			// (as after a daemon restart) redacts and uploads both files.
+			smCode.Store(http.StatusOK)
+			objStore.fail.Store(false)
+			restartedStore, err := NewTranscriptObjectStore(objStore, cacheDir, liveDir,
+				transcriptObjectRedactor(Config{DataDir: dataDir}, secStore))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := restartedStore.SyncChanged(ctx); err != nil {
+				t.Fatalf("SyncChanged after recovery: %v", err)
+			}
+			for _, key := range []string{"transcripts/run-sec-1.jsonl", "transcripts/run-sec-1.md"} {
+				b, ok := mem.Bytes(key)
+				if !ok {
+					t.Fatalf("expected %s uploaded on retry", key)
+				}
+				if strings.Contains(string(b), secretVal) {
+					t.Fatalf("%s leaked secret: %s", key, b)
+				}
+				if !strings.Contains(string(b), "[redacted:") {
+					t.Fatalf("%s missing redaction marker: %s", key, b)
+				}
+			}
+			for _, staged := range []string{"run-sec-1", "run-sec-1.md"} {
+				if _, err := os.Stat(filepath.Join(liveDir+".unflushed", staged)); !os.IsNotExist(err) {
+					t.Fatalf("expected %s removed after retry: %v", staged, err)
+				}
+			}
+			recoveredUI := ui.NewClient(ui.Config{
+				LiveTranscripts:     LiveTranscriptDirWithStore(liveDir, restartedStore),
+				ArchivedTranscripts: restartedStore,
+			}, modelStore)
+			gotAfter, err := recoveredUI.AttemptTranscript(ctx, "task-sec", 1)
+			if err != nil || strings.Contains(gotAfter, secretVal) || !strings.Contains(gotAfter, "[redacted:") {
+				t.Fatalf("AttemptTranscript after recovery = (%q, %v), want redacted narrative", gotAfter, err)
+			}
+		})
 	}
 }

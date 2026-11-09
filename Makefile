@@ -90,7 +90,7 @@ MAIN_grain-registry ?= ./cmd/grain-registry
 # The same for bin/grain-agentd: a build that registers a transport or
 # host-tool grants of its own (pkg/agentd) names its own main here.
 MAIN_grain-agentd ?= ./cmd/grain-agentd
-LDFLAGS := $(strip \
+LDFLAGS := $(strip -s -w \
 	$(if $(RELEASE),-X github.com/ai-on-gke/grain/pkg/version.Release=$(RELEASE),) \
 	$(if $(EDITION),-X github.com/ai-on-gke/grain/pkg/version.Edition=$(EDITION),) \
 	$(if $(SANDBOX_IMAGE),-X github.com/ai-on-gke/grain/pkg/daemon.DefaultSandboxImage=$(SANDBOX_IMAGE),) \
@@ -242,7 +242,7 @@ frontend:
 # CGO_ENABLED alone: `go test -race` requires it (the race detector is a
 # cgo library), and nothing about testing this module ships anywhere.
 $(CMDS) $(EXTRA_CMDS):
-	CGO_ENABLED=0 go build -buildvcs=$$(./scripts/buildvcs.sh $(BUILDVCS)) -ldflags "$(LDFLAGS)" -o $(BIN)/$@ $(or $(MAIN_$@),./cmd/$@)
+	CGO_ENABLED=0 go build -buildvcs=$$(./scripts/buildvcs.sh $(BUILDVCS)) -trimpath -ldflags "$(LDFLAGS)" -o $(BIN)/$@ $(or $(MAIN_$@),./cmd/$@)
 
 cli: grain
 

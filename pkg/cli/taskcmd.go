@@ -476,6 +476,7 @@ const dependsOnFlagUsage = "task this one must wait on before it is dispatched -
 
 func cmdApprove(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain approve", flag.ContinueOnError)
+	reason := fs.String("reason", "", "why: sent as X-Grain-Acting-Reason, which an external agent credential (gma_) must give to approve")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -486,6 +487,7 @@ func cmdApprove(ctx context.Context, c *ui.HTTPClient, out *printer, args []stri
 	if err != nil {
 		return err
 	}
+	c.ActingReason = *reason
 	if err := c.Approve(ctx, id); err != nil {
 		return err
 	}

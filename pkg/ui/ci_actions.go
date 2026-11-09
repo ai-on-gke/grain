@@ -628,7 +628,13 @@ func (c *Client) actionsRunDetail(ctx context.Context, repo model.RepoRef, runID
 			return detail{run: run, jobs: jobs}, err
 		})
 		if err == nil && d.run != nil {
-			return actionsRunWithJobs(repo, *d.run, d.jobs), d.jobs, nil
+			run := actionsRunWithJobs(repo, *d.run, d.jobs)
+			if c.Store != nil && len(run.Actions.FailedJobs) > 0 {
+				if recorded, ok := c.recordedActionsRunByID(ctx, repo, runID); ok {
+					foldRecordedTails(&run, recorded)
+				}
+			}
+			return run, d.jobs, nil
 		}
 		forgeErr = err
 	} else {
@@ -667,6 +673,43 @@ func (c *Client) recordedActionsRunByID(ctx context.Context, repo model.RepoRef,
 		}
 	}
 	return recordedActionsRun(repo, runID, jobs)
+}
+
+// foldRecordedTails puts the failing log tail grain recorded of each of
+// run's failed jobs (recordedActionsRun) on that job's failing step: the
+// forge's account of a run has its steps' verdicts but none of their
+// output, and the tail is where a failed test's name is
+// (`grain ci test-history`, `grain ci show`).
+func foldRecordedTails(run *ci.Run, recorded ci.Run) {
+	tails := map[string]ci.StepRun{}
+	for _, job := range recorded.Jobs {
+		if job.Conclusion == ci.ConclusionFailure && len(job.Steps) > 0 && job.Steps[0].Output != "" {
+			tails[job.Name] = job.Steps[0]
+		}
+	}
+	for i := range run.Jobs {
+		job := &run.Jobs[i]
+		tail, ok := tails[job.Name]
+		if !ok || job.Conclusion != ci.ConclusionFailure {
+			continue
+		}
+		at := -1
+		for j, st := range job.Steps {
+			if st.Output != "" {
+				at = -2
+				break
+			}
+			if st.Name == tail.Name || (at == -1 && st.Conclusion == ci.ConclusionFailure) {
+				at = j
+			}
+		}
+		switch {
+		case at >= 0:
+			job.Steps[at].Output = tail.Output
+		case at == -1:
+			job.Steps = append(job.Steps, tail)
+		}
+	}
 }
 
 // actionsRunWithJobs is a forge run and its jobs as one run in full.
@@ -864,6 +907,15 @@ func (a actionsExternalRuns) FindExternalRunsCounted(ctx context.Context, f ci.R
 	return a.c.listActionsRunsCounted(ctx, repo, f, limit)
 }
 
+var _ ci.ExternalRunsRepos = actionsExternalRuns{}
+
+// ServesRepo reports whether repoText's Actions runs are listed: its CI
+// is GitHub Actions (actionsListedFor).
+func (a actionsExternalRuns) ServesRepo(ctx context.Context, repoText string) bool {
+	repo, err := a.c.parseRepo(repoText)
+	return err == nil && a.c.actionsListedFor(ctx, repo)
+}
+
 func (a actionsExternalRuns) ExternalRun(ctx context.Context, id string) (ci.Run, bool, error) {
 	repoText, runID, ok := ParseActionsRunID(id)
 	if !ok {
@@ -1051,7 +1103,7 @@ func (s *Server) handleGetActionsRun(w http.ResponseWriter, r *http.Request, id 
 // Actions run. Listed only: an Actions artifact downloads as a zip from
 // a redirect, sometimes gigabytes, and is fetched from its run's page
 // rather than through grain.
-func (s *Server) handleListActionsArtifacts(w http.ResponseWriter, r *http.Request, id string) {
+func (s *Server) handleListActionsArtifacts(w http.ResponseWriter, r *http.Request, id string, list listQuery) {
 	repoText, runID, ok := ParseActionsRunID(id)
 	if !ok {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("%q is not a GitHub Actions run id", id))
@@ -1087,7 +1139,7 @@ func (s *Server) handleListActionsArtifacts(w http.ResponseWriter, r *http.Reque
 		}
 		out = append(out, ci.Artifact{Run: id, Name: a.Name, Bytes: a.Bytes, CollectedAt: a.CreatedAt, Note: note})
 	}
-	writeJSON(w, http.StatusOK, CIRunArtifactsResponse{Enabled: true, Available: true, Artifacts: out})
+	writeCIRunArtifacts(w, true, true, out, list)
 }
 
 // actionsArtifactNote is why an Actions artifact is listed and not served.

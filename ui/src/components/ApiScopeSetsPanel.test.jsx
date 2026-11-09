@@ -93,8 +93,9 @@ describe("ApiScopeSetsPanel", () => {
     ).toBeTruthy();
   });
 
-  it("writes a new set through PUT /api/api-scope-sets", async () => {
+  it("writes a new set through PUT /api/api-scope-sets and calls onSaved", async () => {
     const calls = [];
+    const onSaved = vi.fn();
     api.mockImplementation(async (path, opts) => {
       calls.push([
         `${opts?.method || "GET"} ${path}`,
@@ -102,7 +103,7 @@ describe("ApiScopeSetsPanel", () => {
       ]);
       return { sets: [BUILTIN] };
     });
-    render(<ApiScopeSetsPanel showError={() => {}} />);
+    render(<ApiScopeSetsPanel showError={() => {}} onSaved={onSaved} />);
     const user = userEvent.setup();
     await user.click(
       await screen.findByRole("button", { name: "New scope set" }),
@@ -121,6 +122,7 @@ describe("ApiScopeSetsPanel", () => {
       deny: ["tasks:admin"],
       scopes: [],
     });
+    expect(onSaved).toHaveBeenCalledTimes(1);
   });
 
   it("names what holds a set before removing it, and Cancel keeps it", async () => {
@@ -150,7 +152,8 @@ describe("ApiScopeSetsPanel", () => {
         ];
       return { sets: [BUILTIN, TRIAGE] };
     });
-    render(<ApiScopeSetsPanel showError={() => {}} />);
+    const onSaved = vi.fn();
+    render(<ApiScopeSetsPanel showError={() => {}} onSaved={onSaved} />);
     const user = userEvent.setup();
     const row = await screen.findByTestId("api-scope-set-ops/triage");
     await user.click(within(row).getByRole("button", { name: "Remove" }));
@@ -171,6 +174,7 @@ describe("ApiScopeSetsPanel", () => {
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(calls).not.toContain("POST /api/api-scope-sets/delete");
+    expect(onSaved).not.toHaveBeenCalled();
 
     await user.click(within(row).getByRole("button", { name: "Remove" }));
     await user.click(
@@ -179,6 +183,7 @@ describe("ApiScopeSetsPanel", () => {
       }),
     );
     expect(calls).toContain("POST /api/api-scope-sets/delete");
+    expect(onSaved).toHaveBeenCalledTimes(1);
   });
 
   it("still confirms when the usage cannot be read", async () => {

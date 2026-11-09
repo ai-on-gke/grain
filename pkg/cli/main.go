@@ -396,7 +396,8 @@ Commands:
                                        -field name=value sets one of the fields this deployment
                                        declares, repeatably -- "grain create -h" lists them)
   update <id> [flags]                  edit a task's title or fields, -field name=value included
-  approve <id>                         accept a proposed task (proposed -> queued)
+  approve [-reason r] <id>             accept a proposed task (proposed -> queued); an external agent
+                                       credential (gma_) must give -reason
   withdraw <id>                        withdraw a queued task's approval (queued -> proposed)
   defer [-until <date>] <id>           put a task aside without closing it (proposed/queued -> deferred);
                                        deferred tasks are hidden from task lists until asked for, and
@@ -419,7 +420,7 @@ Commands:
                                        withdrawn if anything else is pushed before the merge
   pr adopt|review|status <pr>          adopt (-mode review-only|finish), review (-design) or report on
                                        (-threads) a pull request grain did not open (see prcmd.go)
-  run-now <id>                         start a run of this task next, ahead of the queue and whatever
+  run-now [-reason r] <id>             start a run of this task next, ahead of the queue and whatever
                                        its state says -- including sending a finished or merging task
                                        back to an agent for more work on its own branch
   config                               show the capabilities this deployment offers
@@ -438,6 +439,8 @@ Commands:
   failures [-window 7d] [-suspect]     what runs said when they failed for a reason grain could not
                                        name -- the instrument over its own provider-refusal markers
                                        (see failures.go)
+  usage [-mode auto] [-budget c/m=n/5h] token usage, budget, reset and burn rate per connection and model,
+                                       and the workers the remaining budget sustains (see usage_cmd.go)
   health                               the counters a layer built on grain keeps in the daemon, by
                                        section, since it started (-json: all of GET /api/sandboxes;
                                        see health.go)
@@ -459,7 +462,7 @@ Commands:
                                        block until a run has a verdict (-timeout, default 30m), with each
                                        failing job and any shared fault: exit 0 green, 1 red, 5 timed out
   ci retrigger <run-id> [-jobs j1,j2]  rerun a run's failed jobs (or -jobs) once, bypassing the job cache
-  ci test-history <test> [-repo r] [-limit N]
+  ci test-history <test> [-repo r] [-limit N] [-provider grain|github-actions]
                                        pass, fail and flake history of one test across recent runs
   merge-queue [-repo owner/name]       queued pull requests, the batches and CI testing them, and held
                                        merge gates (deploy://merge-queue; see mergequeue.go)
@@ -491,8 +494,8 @@ Commands:
                                        snippet, accept or reject the hosts that join, and manage hosts
   host register|install|set-owner      the legacy host registry: register a host with its owner, the
                                        identity it dials in through IAP as, and print how to install it
-  registry status|register|unregister  self-register this deployment with a grain registry and inspect
-                                       heartbeats and self-reported scopes (Settings -> Registry)
+  registry status|register|unregister  self-register this deployment with a Grain Hub and inspect
+                                       heartbeats and self-reported scopes (Settings -> Hub)
   access list|allow|deny               the allowed users and groups list (Settings -> Access): who may
                                        sign in through IAP or another identity verifier
   broadcast [-all] <message...>        send a notice to all running task agents (or with -all, all active tasks)
@@ -696,6 +699,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdMetrics(ctx, c, out, cmdArgs)
 	case "failures":
 		return cmdFailures(ctx, c, out, cmdArgs)
+	case "usage":
+		return cmdUsage(ctx, c, out, cmdArgs)
 	case "health":
 		return cmdHealth(ctx, c, out, cmdArgs)
 	case "pause":

@@ -1282,7 +1282,7 @@ func (c Config) logStoreOverrides(mc model.Config) {
 	// rather than send an operator to a command that cannot do it.
 	warnRegistry := func(flag string, flagVal, storedVal string) {
 		if flagVal != "" && flagVal != storedVal {
-			log.Printf("loadConfig: ignoring -%s=%v, stored config already has %v -- use 'grain registry register -registry-url <url> -entry <name>' or Settings -> Registry to change it", flag, flagVal, storedVal)
+			log.Printf("loadConfig: ignoring -%s=%v, stored config already has %v -- use 'grain registry register -registry-url <url> -entry <name>' or Settings -> Hub to change it", flag, flagVal, storedVal)
 		}
 	}
 	warnRegistry("registry-url", c.Registry.URL, mc.Registry.URL)

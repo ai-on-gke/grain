@@ -166,6 +166,16 @@ func TestAccessAllowDelegateCLI(t *testing.T) {
 		parsed.Entries[0].Label != "slack-bot" {
 		t.Fatalf("expected 1 delegate entry at grain/delegated with label slack-bot, got %+v", parsed.Entries)
 	}
+
+	// The plain-text list shows the label too, not only -json.
+	textOut, err := runAccessCLI(t, ts.URL, code, "access", "list")
+	if err != nil {
+		t.Fatalf("grain access list: %v", err)
+	}
+	if !strings.Contains(textOut, "delegate:slack-bot@proj.iam.gserviceaccount.com\tgrain/delegated") ||
+		!strings.Contains(textOut, "\tlabel=slack-bot") {
+		t.Fatalf("access list text output = %q, want the delegate entry with label=slack-bot", textOut)
+	}
 }
 
 func TestAccessAllowHelpDocumentsLabelRule(t *testing.T) {

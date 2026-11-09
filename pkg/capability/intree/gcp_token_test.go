@@ -332,3 +332,118 @@ func TestGCPActivateScriptsRunAndReportFailures(t *testing.T) {
 		})
 	}
 }
+
+func TestGCPTokenModeIntrospectAndRealGcloud(t *testing.T) {
+	ps, cloud := existingGCP(t, map[string]any{"credential": "token"})
+	resp := mint(t, ps, "gcp-key", "e7-gcloud-0", map[string]any{"permission_set": "org"})
+	if resp.Status != protocol.StatusOK || len(resp.Ports) != 1 {
+		t.Fatalf("mint = %+v", resp)
+	}
+	var cfg struct {
+		TokenURL         string            `json:"token_url"`
+		TokenInfoURL     string            `json:"token_info_url"`
+		CredentialSource map[string]string `json:"credential_source"`
+	}
+	rawCfg := placement(t, resp, GCPKeyPath).Content
+	if err := json.Unmarshal([]byte(rawCfg), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	wantInfo := "http://127.0.0.1:" + strconv.Itoa(resp.Ports[0].HostPort) + "/runs/e7-gcloud-0/introspect"
+	if cfg.TokenInfoURL != wantInfo {
+		t.Fatalf("token_info_url = %q, want %q", cfg.TokenInfoURL, wantInfo)
+	}
+	subject := placement(t, resp, cfg.CredentialSource["file"]).Content
+	status, exBody := exchange(t, cfg.TokenURL, subject)
+	if status != http.StatusOK {
+		t.Fatalf("exchange = %d %v", status, exBody)
+	}
+	mintedTok, _ := exBody["access_token"].(string)
+	if mintedTok == "" {
+		t.Fatalf("missing access_token in %v", exBody)
+	}
+
+	iResp, err := http.PostForm(cfg.TokenInfoURL, url.Values{"token": {mintedTok}, "token_type_hint": {"access_token"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var iBody map[string]any
+	json.NewDecoder(iResp.Body).Decode(&iBody)
+	iResp.Body.Close()
+	if iResp.StatusCode != http.StatusOK || iBody["active"] != true || iBody["username"] != testOrgSA {
+		t.Fatalf("introspect = %d %v, want 200 active=true username=%s", iResp.StatusCode, iBody, testOrgSA)
+	}
+
+	// RFC 7662 §2.2: a token the endpoint does not recognise -- never
+	// minted, or minted for another attempt -- is {"active": false} with
+	// 200, and nothing else about it.
+	assertInactive(t, "introspect(unknown)", cfg.TokenInfoURL, "not-a-minted-token")
+	otherAttempt := strings.Replace(cfg.TokenInfoURL, "/runs/e7-gcloud-0/", "/runs/e7-other-0/", 1)
+	assertInactive(t, "introspect(another attempt's path)", otherAttempt, mintedTok)
+
+	if gcloudPath, err := exec.LookPath("gcloud"); err == nil {
+		dir := t.TempDir()
+		subjLocal := filepath.Join(dir, "subject")
+		credLocal := filepath.Join(dir, "cred.json")
+		actLocal := filepath.Join(dir, "activate.sh")
+		if err := os.WriteFile(subjLocal, []byte(subject), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		rewrittenCfg := strings.ReplaceAll(rawCfg, cfg.CredentialSource["file"], subjLocal)
+		if err := os.WriteFile(credLocal, []byte(rewrittenCfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		act := strings.ReplaceAll(placement(t, resp, resp.Setup).Content, GCPKeyPath, credLocal)
+		if err := os.WriteFile(actLocal, []byte(act), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		env := append(os.Environ(),
+			"HOME="+dir,
+			"CLOUDSDK_CONFIG="+filepath.Join(dir, ".config", "gcloud"),
+			"CLOUDSDK_CORE_DISABLE_USAGE_REPORTING=true",
+			"HTTPS_PROXY=http://127.0.0.1:1",
+			"HTTP_PROXY=http://127.0.0.1:1",
+			"NO_PROXY=127.0.0.1,localhost",
+		)
+		setupCmd := exec.Command("/bin/sh", actLocal)
+		setupCmd.Env = env
+		if out, err := setupCmd.CombinedOutput(); err != nil {
+			t.Fatalf("activate.sh failed: %v\n%s", err, out)
+		}
+		printCmd := exec.Command(gcloudPath, "auth", "print-access-token")
+		printCmd.Env = env
+		out, err := printCmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("gcloud auth print-access-token failed: %v\n%s", err, out)
+		}
+		if got := strings.TrimSpace(string(out)); !strings.Contains(got, testOrgSA) {
+			t.Fatalf("gcloud auth print-access-token = %q, want token for %s", got, testOrgSA)
+		}
+	}
+
+	if cloud.LiveKeys() != 0 || cloud.Calls["CreateKey"] != 0 {
+		t.Fatalf("token-mode grant created keys: %v", cloud.Calls)
+	}
+	if _, err := ps.Release(context.Background(), "gcp-key", "e7-gcloud-0"); err != nil {
+		t.Fatal(err)
+	}
+	assertInactive(t, "introspect after release", cfg.TokenInfoURL, mintedTok)
+}
+
+// assertInactive posts token to an introspection endpoint and wants RFC
+// 7662's answer for a token it does not recognise: 200 and exactly
+// {"active": false}.
+func assertInactive(t *testing.T, what, endpoint, token string) {
+	t.Helper()
+	resp, err := http.PostForm(endpoint, url.Values{"token": {token}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("%s: decoding the answer: %v", what, err)
+	}
+	if resp.StatusCode != http.StatusOK || len(body) != 1 || body["active"] != false {
+		t.Fatalf("%s = %d %v, want 200 {\"active\": false}", what, resp.StatusCode, body)
+	}
+}

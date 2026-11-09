@@ -68,14 +68,14 @@ owner_group="$(jq -r '.GRAIN_OWNER_GROUP // empty' <<<"${cfg_json}")"
 sql_ip="$(jq -r '.GRAIN_SQL_PRIVATE_IP // empty' <<<"${cfg_json}")"
 db_name="$(jq -r '.GRAIN_DB_NAME // empty' <<<"${cfg_json}")"
 db_user="$(jq -r '.GRAIN_DB_USER // empty' <<<"${cfg_json}")"
-db_pw="$(jq -r '.GRAIN_DB_PASSWORD // empty' <<<"${cfg_json}")"
+db_pw_secret="$(jq -r '.GRAIN_DB_PASSWORD_SECRET // .db_password_secret // empty' <<<"${cfg_json}")"
 daemon_image="$(jq -r '.GRAIN_DAEMON_IMAGE // empty' <<<"${cfg_json}")"
 
 if [[ -z "${daemon_image}" ]]; then
   daemon_image="${DEFAULT_DAEMON_IMAGE}"
 fi
 
-if [[ -z "${entry_name}" || -z "${registry_url}" || -z "${jwks_url}" || -z "${instance_domain}" || -z "${owner_email}" || -z "${sql_ip}" || -z "${db_name}" || -z "${db_user}" || -z "${db_pw}" ]]; then
+if [[ -z "${entry_name}" || -z "${registry_url}" || -z "${jwks_url}" || -z "${instance_domain}" || -z "${owner_email}" || -z "${sql_ip}" || -z "${db_name}" || -z "${db_user}" || -z "${db_pw_secret}" ]]; then
   echo "grain-hosted-vm-reconcile: incomplete grain-config metadata on hosted VM" >&2
   exit 1
 fi
@@ -103,13 +103,34 @@ install -d -m 0700 -o "${uid}" -g "${gid}" /var/lib/grain/sandboxes
 install -d -m 0755 -o "${uid}" -g "${gid}" /var/lib/granule
 install -d -m 0700 /etc/grain-daemon
 
+# The registry keeps the database password out of grain-config (GCE metadata
+# is readable by anyone with compute.instances.get) and names the Secret
+# Manager secret holding it instead; read it with this VM's own token.
+# Transient failures (429/5xx, refused connections) are retried; anything
+# else fails closed before daemon.env is written.
+sm_token="$(curl -fsSL -H "${META_HDR}" "${META_URL}/instance/service-accounts/default/token" | jq -r '.access_token')"
+if ! db_pw_json="$(curl -fsSL --retry 5 --retry-delay 2 --retry-connrefused \
+  -H @<(printf 'Authorization: Bearer %s\n' "${sm_token}") \
+  "https://secretmanager.googleapis.com/v1/${db_pw_secret#/}/versions/latest:access")"; then
+  echo "grain-hosted-vm-reconcile: reading database password secret ${db_pw_secret} from Secret Manager failed" >&2
+  exit 1
+fi
+unset sm_token
+db_pw="$(jq -r '.payload.data // empty' <<<"${db_pw_json}" | base64 -d | tr -d '\r\n')"
+unset db_pw_json
+if [[ -z "${db_pw}" ]]; then
+  echo "grain-hosted-vm-reconcile: database password secret ${db_pw_secret} is empty or unreadable" >&2
+  exit 1
+fi
+
 enc_user="$(printf '%s' "${db_user}" | jq -sRr @uri)"
 enc_pw="$(printf '%s' "${db_pw}" | jq -sRr @uri)"
+unset db_pw
 
 umask 077
 cat > /etc/grain-daemon/daemon.env <<ENV_EOF
 GRAIN_DB_DRIVER=postgres
-GRAIN_DB_DSN=postgres://${enc_user}:${enc_pw}@${sql_ip}:5432/${db_name}?sslmode=disable
+GRAIN_DB_DSN=postgres://${enc_user}:${enc_pw}@${sql_ip}:5432/${db_name}?sslmode=require
 ENV_EOF
 chmod 0600 /etc/grain-daemon/daemon.env
 

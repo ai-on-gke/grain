@@ -977,3 +977,49 @@ func TestDeclaredGrainCICapabilityMapsToRepoScopedCIRead(t *testing.T) {
 		t.Fatal("malformed grain#ci capability ref loaded without error")
 	}
 }
+
+// repo#target (and repo#read / repo#write carrying a base) are task-request
+// projections rather than capability grants: CreateTask refuses them, so a
+// declaration naming one could never file a task. Refusing them here moves
+// that verdict to `grain declarations check` and the declaration sync
+// (docs/test-runs/2026-11-09-store-upgrades-128-129.md, O3).
+func TestDeclaredCapabilitiesRefuseRepoTargetAndRequestFieldShapes(t *testing.T) {
+	targetMessage := "always target the declaring repository (" + repo.String() + "), and its base is `base:`"
+	for _, entry := range []string{
+		"  - '" + model.RepoTargetRef + `={"repo":"acme/widgets","base":"main"}'` + "\n",
+		"  - '" + model.RepoTargetRef + "'\n",
+		"  - capability: " + model.RepoTargetRef + "\n    with:\n      repo: acme/widgets\n      base: main\n",
+	} {
+		for _, baseLine := range []string{"", "base: main\n"} {
+			msg := loadErr(t, map[string]string{
+				".grain/templates/t.yml": "title: Mixed\n" + baseLine + "capabilities:\n" + entry,
+			})
+			if !strings.Contains(msg, model.RepoTargetRef) || !strings.Contains(msg, targetMessage) {
+				t.Errorf("template(%s%s): error = %q, want %s and %q", baseLine, entry, msg, model.RepoTargetRef, targetMessage)
+			}
+		}
+		schedMsg := loadErr(t, map[string]string{
+			".grain/templates/t.yml": "title: Plain\n",
+			".grain/schedules/s.yml": "template: t\nevery:\n  hours: 6\ncapabilities:\n" + entry,
+		})
+		if !strings.Contains(schedMsg, model.RepoTargetRef) || !strings.Contains(schedMsg, targetMessage) {
+			t.Errorf("schedule(%s): error = %q, want %s and %q", entry, schedMsg, model.RepoTargetRef, targetMessage)
+		}
+	}
+
+	for _, tc := range []struct {
+		entry string
+		want  string
+	}{
+		{model.RepoWriteRef + `={"repo":"acme/other","base":"release"}`, "always lands on its default branch"},
+		{model.RepoWriteRef + `={"repo":"acme/other","base":""}`, "always lands on its default branch"},
+		{model.RepoReadRef + `={"repo":"acme/other","base":"main"}`, "takes only `repo: <owner>/<repo>`, not `base`"},
+	} {
+		msg := loadErr(t, map[string]string{
+			".grain/templates/t.yml": "title: Mixed\ncapabilities:\n  - '" + tc.entry + "'\n",
+		})
+		if !strings.Contains(msg, tc.want) {
+			t.Errorf("template(%q): error = %q, want %q", tc.entry, msg, tc.want)
+		}
+	}
+}

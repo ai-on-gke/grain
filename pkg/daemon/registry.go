@@ -848,7 +848,7 @@ func (m *RegistryManager) resolveCredential(ctx context.Context, dcfg Config, re
 		return tok, "env", nil
 	}
 
-	return "", "", fmt.Errorf("no registry registration credential configured: run 'grain registry register %s' or set secret %s in Settings",
+	return "", "", fmt.Errorf("no hub registration credential configured: run 'grain registry register %s' or set secret %s in Settings",
 		regCfg.Entry, secrets.RegistryRegistrationTokenSecret)
 }
 
@@ -1062,7 +1062,7 @@ func (m *RegistryManager) ensureTunnel(parentCtx context.Context, inputs registr
 		defer close(done)
 		if err := tc.RunTunnel(tunCtx, c); err != nil && !errors.Is(err, context.Canceled) {
 			redactedErr, _ := (*redact.Redactor)(nil).Text(err.Error())
-			m.opts.Logf("grain daemon: registry tunnel (%s) stopped: %s", c.Entry, redactedErr)
+			m.opts.Logf("grain daemon: hub tunnel (%s) stopped: %s", c.Entry, redactedErr)
 		}
 	}(connCfg)
 }

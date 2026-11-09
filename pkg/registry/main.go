@@ -125,7 +125,7 @@ func runVersion(args []string, stdout, stderr io.Writer) error {
 func runValidate(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("grain-registry validate", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	cfgPath := fs.String("config", "", "path to registry YAML config file")
+	cfgPath := fs.String("config", "", "path to the hub YAML config file")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -166,7 +166,7 @@ func ParseConfigWithResolver(data []byte, resolver any) (*Config, error) {
 	var cfg Config
 	dec := newStrictYAMLDecoder(expanded)
 	if err := dec.Decode(&cfg); err != nil {
-		return nil, fmt.Errorf("parsing registry config YAML: %w", err)
+		return nil, fmt.Errorf("parsing hub config YAML: %w", err)
 	}
 	cfg.ApplyDefaults()
 	if err := cfg.ValidateWithResolver(resolver); err != nil {
@@ -182,7 +182,7 @@ func newStrictYAMLDecoder(expanded string) interface{ Decode(any) error } {
 func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("grain-registry", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	cfgPath := fs.String("config", os.Getenv("GRAIN_REGISTRY_CONFIG"), "path to registry YAML config file")
+	cfgPath := fs.String("config", os.Getenv("GRAIN_REGISTRY_CONFIG"), "path to the hub YAML config file")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -200,7 +200,7 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 	}
 	var cfg Config
 	if err := yamlStrictDecoder(os.ExpandEnv(string(rawBytes))).Decode(&cfg); err != nil {
-		return fmt.Errorf("parsing registry config YAML: %w", err)
+		return fmt.Errorf("parsing hub config YAML: %w", err)
 	}
 	cfg.ApplyDefaults()
 

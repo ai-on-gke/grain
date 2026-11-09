@@ -71,15 +71,15 @@ const registryUsage = `usage: grain registry <subcommand> [args]
   stop              [-registry-url <url>] <name>
   start             [-registry-url <url>] <name>
   transfer          [-registry-url <url>] -to <email> [-owner-group <group>]
-                    [-clear-owner-group] <name>
+                    [-clear-owner-group] <name> | -cancel <name>
   accept-transfer   [-registry-url <url>] <name>
   delegating-apps   list | create -principal <sa-email> [flags] <name> | disable <name> | enable <name>
-                    (registry admins; see grain registry delegating-apps help)
+                    (hub admins; see grain registry delegating-apps help)
   grants            list [-include-revoked] | create -entry <name|*>... [-access <read|write>]
                     [-ttl <duration>] <app> | revoke <grant-id|app>
 
 Self-registration, directory discovery, path routing, and control-plane management
-for a grain registry (Settings -> Registry; design/design/registry.design.md).`
+for a Grain Hub (Settings -> Hub; design/design/registry.design.md).`
 
 // registryHTTPClient and registryOIDCToken are seams for unit tests so tests
 // never touch the network or host gcloud/ADC credentials.
@@ -105,9 +105,9 @@ func registerRegistryFlags(fs *flag.FlagSet) registryDaemonFlags {
 	const seedNote = " (seeds stored configuration on first use; edit in Settings or with 'grain registry' after that)"
 	return registryDaemonFlags{
 		url: fs.String("registry-url", "",
-			"base URL of the grain registry this daemon self-registers with ($"+daemon.RegistryURLEnv+"; empty disables heartbeats)"+seedNote),
+			"base URL of the Grain Hub this daemon self-registers with ($"+daemon.RegistryURLEnv+"; empty disables heartbeats)"+seedNote),
 		entry: fs.String("registry-entry", "",
-			"entry name this daemon registers and heartbeats as in the grain registry ($"+daemon.RegistryEntryEnv+")"+seedNote),
+			"entry name this daemon registers and heartbeats as in the Grain Hub ($"+daemon.RegistryEntryEnv+")"+seedNote),
 		authMode: fs.String("registry-auth-mode", "",
 			"credential mode for registry heartbeats: \"token\" (secret "+secrets.RegistryRegistrationTokenSecret+", -registry-token-file, or $"+daemon.RegistryTokenEnv+") or \"oidc\" (ID token for -registry-oidc-audience)"+seedNote),
 		oidcAudience: fs.String("registry-oidc-audience", "",
@@ -115,15 +115,15 @@ func registerRegistryFlags(fs *flag.FlagSet) registryDaemonFlags {
 		tokenFile: fs.String("registry-token-file", "",
 			"fallback file holding a grc_... registration credential when secret "+secrets.RegistryRegistrationTokenSecret+" is unset ($"+daemon.RegistryTokenEnv+" is also consulted)"),
 		displayName: fs.String("registry-display-name", "",
-			"human-readable display name advertised in the registry directory"+seedNote),
+			"human-readable display name advertised in the hub directory"+seedNote),
 		purpose: fs.String("registry-purpose", "",
-			"short description of this grain deployment's purpose in the registry directory"+seedNote),
+			"short description of this grain deployment's purpose in the hub directory"+seedNote),
 		hostKind: fs.String("registry-host-kind", "",
-			"connected entry host kind advertised to the registry: \"workstation\", \"kubernetes\", or \"other\" (defaults to the active sandbox backend)"+seedNote),
+			"connected entry host kind advertised to the hub: \"workstation\", \"kubernetes\", or \"other\" (defaults to the active sandbox backend)"+seedNote),
 		listed: fs.Bool("registry-listed", true,
-			"include this connected entry in default registry directory listings"+seedNote),
+			"include this connected entry in default hub directory listings"+seedNote),
 		connect: fs.Bool("registry-connect", false,
-			"supervise an outbound wss://<registry-host>/api/entries/<name>/connect tunnel and serve accepted mux streams in-process behind the registry assertion verifier gate ($"+daemon.RegistryConnectEnv+"; requires -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url)"),
+			"supervise an outbound wss://<registry-host>/api/entries/<name>/connect tunnel and serve accepted mux streams in-process behind the hub assertion verifier gate ($"+daemon.RegistryConnectEnv+"; requires -ui-registry-issuer, -ui-registry-audience, and -ui-registry-keys-url)"),
 	}
 }
 
@@ -251,23 +251,23 @@ func cmdRegistryStatus(ctx context.Context, c *ui.HTTPClient, out *printer, args
 
 func cmdRegistryRegister(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain registry register", flag.ContinueOnError)
-	regURLFlag := fs.String("registry-url", "", "base URL of the grain registry ($"+daemon.RegistryURLEnv+")")
-	entryFlag := fs.String("entry", "", "entry name in the grain registry ($"+daemon.RegistryEntryEnv+"; or positional <entry>)")
-	regTokenFlag := fs.String("registry-token", "", "bearer token for authenticating to the registry ($"+daemon.RegistryTokenEnv+")")
+	regURLFlag := fs.String("registry-url", "", "base URL of the Grain Hub ($"+daemon.RegistryURLEnv+")")
+	entryFlag := fs.String("entry", "", "entry name in the Grain Hub ($"+daemon.RegistryEntryEnv+"; or positional <entry>)")
+	regTokenFlag := fs.String("registry-token", "", "bearer token for authenticating to the hub ($"+daemon.RegistryTokenEnv+")")
 	oidcFlag := fs.Bool("oidc", false, "use OIDC ID tokens for registration and daemon heartbeats instead of minting a grc_... token")
-	oidcAudFlag := fs.String("oidc-audience", "", "OIDC ID token audience for the registry (defaults to -registry-url)")
+	oidcAudFlag := fs.String("oidc-audience", "", "OIDC ID token audience for the hub (defaults to -registry-url)")
 	mintToken := fs.Bool("mint-token", false, "mint a fresh grc_... registration credential for this connected entry")
 	rotateToken := fs.Bool("rotate-token", false, "rotate an existing connected entry's grc_... registration credential")
-	displayName := fs.String("display-name", "", "human-readable display name in the registry directory")
+	displayName := fs.String("display-name", "", "human-readable display name in the hub directory")
 	purpose := fs.String("purpose", "", "short description of this grain's purpose")
 	hostKind := fs.String("host-kind", "", "connected entry host kind: \"workstation\", \"kubernetes\", or \"other\"")
 	connectedPrincipal := fs.String("connected-principal", "", "optional workload service account email authorized to connect on behalf of this entry")
-	listed := fs.Bool("listed", true, "include this entry in default registry directory listings")
+	listed := fs.Bool("listed", true, "include this entry in default hub directory listings")
 	ownerGroup := fs.String("owner-group", "", "optional group principal that co-owns this entry")
 	tagsFlag := fs.String("tags", "", "comma-separated catalog tags")
 	var scopeFlags multiStringFlag
 	fs.Var(&scopeFlags, "scope", "declared repository scope <owner/repo>[:<path_prefix>[:<primary|secondary>]] (repeatable)")
-	standalone := fs.Bool("standalone", false, "register on the registry without writing settings or secrets to a local grain daemon")
+	standalone := fs.Bool("standalone", false, "register on the hub without writing settings or secrets to a local grain daemon")
 	tokenFile := fs.String("token-file", "", "with -standalone, write a minted grc_... token to this file (mode 0600) instead of printing it")
 
 	rest, err := parseArgs(fs, args)
@@ -619,13 +619,13 @@ func upsertConnectedEntry(
 
 func cmdRegistryUnregister(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain registry unregister", flag.ContinueOnError)
-	regURLFlag := fs.String("registry-url", "", "base URL of the grain registry ($"+daemon.RegistryURLEnv+")")
-	entryFlag := fs.String("entry", "", "entry name in the grain registry ($"+daemon.RegistryEntryEnv+"; or positional <entry>)")
-	regTokenFlag := fs.String("registry-token", "", "bearer token for deleting the entry on the registry ($"+daemon.RegistryTokenEnv+")")
+	regURLFlag := fs.String("registry-url", "", "base URL of the Grain Hub ($"+daemon.RegistryURLEnv+")")
+	entryFlag := fs.String("entry", "", "entry name in the Grain Hub ($"+daemon.RegistryEntryEnv+"; or positional <entry>)")
+	regTokenFlag := fs.String("registry-token", "", "bearer token for deleting the entry on the hub ($"+daemon.RegistryTokenEnv+")")
 	oidcFlag := fs.Bool("oidc", false, "authenticate remote entry deletion with an OIDC ID token")
-	oidcAudFlag := fs.String("oidc-audience", "", "OIDC ID token audience for the registry (defaults to -registry-url)")
-	keepRemote := fs.Bool("keep-remote", false, "clear the daemon's local registry settings and credential without deleting the entry on the registry")
-	standalone := fs.Bool("standalone", false, "delete the entry on the registry without contacting a local grain daemon")
+	oidcAudFlag := fs.String("oidc-audience", "", "OIDC ID token audience for the hub (defaults to -registry-url)")
+	keepRemote := fs.Bool("keep-remote", false, "clear the daemon's local hub settings and credential without deleting the entry on the hub")
+	standalone := fs.Bool("standalone", false, "delete the entry on the hub without contacting a local grain daemon")
 
 	rest, err := parseArgs(fs, args)
 	if err != nil {
@@ -711,9 +711,9 @@ func cmdRegistryUnregister(ctx context.Context, c *ui.HTTPClient, out *printer, 
 	}
 	switch {
 	case *standalone:
-		fmt.Printf("deleted registry entry %s from %s\n", entryName, regURL)
+		fmt.Printf("deleted hub entry %s from %s\n", entryName, regURL)
 	case remoteDeleted:
-		fmt.Printf("unregistered %s from %s and cleared local registry settings\n", entryName, regURL)
+		fmt.Printf("unregistered %s from %s and cleared local hub settings\n", entryName, regURL)
 	case entryName != "":
 		fmt.Printf("disconnected %s locally (remote entry kept on %s)\n", entryName, regURL)
 	default:
@@ -753,11 +753,11 @@ func printRegistrySnapshot(out *printer, snap model.RegistrySnapshot) {
 		return
 	}
 	if !snap.Enabled {
-		fmt.Println("Registry: disabled (run 'grain registry register -registry-url <url> <entry>' or configure in Settings -> Registry)")
+		fmt.Println("Hub: disabled (run 'grain registry register -registry-url <url> <entry>' or configure in Settings -> Hub)")
 		return
 	}
 	fmt.Printf("State:       %s\n", snap.State)
-	fmt.Printf("Registry:    %s\n", snap.Config.URL)
+	fmt.Printf("Hub:         %s\n", snap.Config.URL)
 	fmt.Printf("Entry:       %s (host_kind=%s, listed=%t)\n", snap.Config.Entry, snap.EffectiveHostKind, snap.Config.Listed)
 	if snap.Config.DisplayName != "" {
 		fmt.Printf("Display:     %s\n", snap.Config.DisplayName)

@@ -15,6 +15,7 @@
 import React from "react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
+  cleanup,
   render,
   screen,
   fireEvent,
@@ -702,28 +703,50 @@ function renderApp(initialPath = "/") {
   );
 }
 
-describe("Grain Registry UI", () => {
+describe("Grain Hub UI", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("brands the header and favicon with the grain mark for the resolved theme", async () => {
+    globalThis.fetch = createFetchMock();
+    const svg = document.createElement("link");
+    svg.id = "favicon";
+    const png = document.createElement("link");
+    png.id = "favicon-png";
+    document.head.append(svg, png);
+    try {
+      localStorage.setItem("grain.themeMode", "dark");
+      const { container } = renderApp("/");
+      const brand = screen.getByRole("button", { name: "Grain Hub" });
+      const mark = container.querySelector(".reg-brand img.reg-brand-mark");
+      expect(brand).toContainElement(mark);
+      expect(mark).toHaveAttribute("src", "/grain-mark-dark.svg");
+      await waitFor(() => {
+        expect(svg.getAttribute("href")).toBe("/grain-mark-dark.svg");
+      });
+      expect(png.getAttribute("href")).toBe("/grain-mark-dark.png");
+    } finally {
+      localStorage.removeItem("grain.themeMode");
+      svg.remove();
+      png.remove();
+    }
   });
 
   it("renders My entries view with quota summary, pending transfer banner, and delete confirmation modal", async () => {
     globalThis.fetch = createFetchMock();
     renderApp("/");
 
+    // Quota summary and entries load from separate /api/me and /api/entries?mine=1 fetches
+    const quotaRegion = screen.getByLabelText("Personal quota usage");
     await waitFor(() => {
       expect(
         screen.getByRole("heading", { name: "My Entries" }),
       ).toBeInTheDocument();
+      expect(quotaRegion).toHaveTextContent("3 / 8");
+      expect(quotaRegion).toHaveTextContent("2 / 20");
+      expect(screen.getByText(/offered transfer of/i)).toBeInTheDocument();
     });
-
-    // Quota summary
-    const quotaRegion = screen.getByLabelText("Personal quota usage");
-    expect(quotaRegion).toHaveTextContent("3 / 8");
-    expect(quotaRegion).toHaveTextContent("2 / 20");
-
-    // Pending incoming transfer banner
-    expect(screen.getByText(/offered transfer of/i)).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Accept transfer" }),
     ).toBeInTheDocument();
@@ -778,9 +801,9 @@ describe("Grain Registry UI", () => {
     });
   });
 
-  it("renders Create / Register view defaulting to connected with -registry-connect snippet and mints token", async () => {
+  it("renders Create / Register view with ?kind=connected, -registry-connect snippet, and mints token", async () => {
     globalThis.fetch = createFetchMock();
-    renderApp("/new");
+    renderApp("/new?kind=connected");
 
     await waitFor(() => {
       expect(
@@ -895,22 +918,22 @@ describe("Grain Registry UI", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByRole("heading", { name: "Registry Administration" }),
+        screen.getByRole("heading", { name: "Hub Administration" }),
       ).toBeInTheDocument();
+      expect(
+        screen.getAllByText("registry-us-central1-a-01").length,
+      ).toBeGreaterThan(0);
     });
-    expect(
-      screen.getAllByText("registry-us-central1-a-01").length,
-    ).toBeGreaterThan(0);
     expect(screen.getAllByText("alice-workstation").length).toBeGreaterThan(0);
 
     // Switch to Status view via nav
     fireEvent.click(screen.getByRole("button", { name: "Status" }));
     await waitFor(() => {
       expect(
-        screen.getByRole("heading", { name: "Registry Service Status" }),
+        screen.getByRole("heading", { name: "Hub Service Status" }),
       ).toBeInTheDocument();
+      expect(screen.getByText("*.grain.example.com")).toBeInTheDocument();
     });
-    expect(screen.getByText("*.grain.example.com")).toBeInTheDocument();
     expect(screen.getAllByText("v0.14.2").length).toBeGreaterThan(0);
   });
 
@@ -925,7 +948,7 @@ describe("Grain Registry UI", () => {
           }),
           { status: 200 },
         ),
-      "GET /api/entries?mine=1&include_deleted=true": () =>
+      "GET /api/entries?mine=1": () =>
         new Response(
           JSON.stringify({
             entries: [
@@ -970,7 +993,7 @@ describe("Grain Registry UI", () => {
           { status: 200 },
         ),
     });
-    renderApp("/new");
+    renderApp("/new?kind=connected");
     await waitFor(() => {
       expect(
         screen.getAllByText(
@@ -1146,6 +1169,22 @@ describe("Grain Registry UI", () => {
       fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
       expect(calls).toEqual([]);
 
+      // Escape cancels too: the dialog opens with focus on Cancel, Escape
+      // closes it without a request, and focus returns to the Stop button.
+      const stopButton = screen.getByRole("button", {
+        name: "Stop platform-vm",
+      });
+      stopButton.focus();
+      fireEvent.click(stopButton);
+      dialog = await screen.findByRole("dialog");
+      expect(
+        within(dialog).getByRole("button", { name: "Cancel" }),
+      ).toHaveFocus();
+      fireEvent.keyDown(document.activeElement, { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(stopButton).toHaveFocus();
+      expect(calls).toEqual([]);
+
       fireEvent.click(screen.getByRole("button", { name: "Stop platform-vm" }));
       dialog = await screen.findByRole("dialog");
       fireEvent.click(
@@ -1315,15 +1354,11 @@ describe("Grain Registry UI", () => {
       screen.getByRole("button", { name: "Apps acting for you" }),
     );
 
+    const grantsSection = await screen.findByTestId("person-grants-section");
     await waitFor(() => {
-      expect(
-        screen.getByRole("heading", { name: "Apps acting for you" }),
-      ).toBeInTheDocument();
+      expect(grantsSection).toHaveTextContent("planner");
+      expect(grantsSection).toHaveTextContent("dlg_a1b2c3d4e5f60001");
     });
-
-    const grantsSection = screen.getByTestId("person-grants-section");
-    expect(grantsSection).toHaveTextContent("planner");
-    expect(grantsSection).toHaveTextContent("dlg_a1b2c3d4e5f60001");
     expect(grantsSection).not.toHaveTextContent("legacy-chat");
 
     // Toggle include_revoked -> GET /api/delegation-grants?include_revoked=true
@@ -1379,11 +1414,27 @@ describe("Grain Registry UI", () => {
       ttl_seconds: 7 * 86400,
     });
 
-    // Revoke active grant by ID -> DELETE /api/delegation-grants/<id>
+    // Revoke active grant by ID -> ConfirmDialog (Escape cancels and restores
+    // focus; confirming sends DELETE /api/delegation-grants/<id>).
     const revokeButtons = within(grantsSection).getAllByRole("button", {
       name: "Revoke",
     });
+    revokeButtons[0].focus();
     fireEvent.click(revokeButtons[0]);
+    let revokeDialog = await screen.findByRole("dialog");
+    expect(revokeDialog).toHaveTextContent(/Revoke consent for triage-bot\?/i);
+    expect(
+      within(revokeDialog).getByRole("button", { name: "Cancel" }),
+    ).toHaveFocus();
+    fireEvent.keyDown(document.activeElement, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(revokeButtons[0]).toHaveFocus();
+
+    fireEvent.click(revokeButtons[0]);
+    revokeDialog = await screen.findByRole("dialog");
+    fireEvent.click(
+      within(revokeDialog).getByRole("button", { name: "Revoke grant" }),
+    );
 
     await waitFor(() => {
       expect(
@@ -1440,12 +1491,11 @@ describe("Grain Registry UI", () => {
     await waitFor(() => {
       expect(screen.getByText(/Hosted VM \(instance\)/i)).toBeInTheDocument();
     });
-    fireEvent.click(
-      screen.getByRole("button", { name: /Hosted VM \(instance\)/i }),
-    );
 
     const diskInput = await screen.findByLabelText("Boot disk size (GB)");
-    expect(diskInput).toHaveValue(100);
+    await waitFor(() => {
+      expect(diskInput).toHaveValue(100);
+    });
 
     fireEvent.change(screen.getByLabelText("VM Shape"), {
       target: { value: "small" },
@@ -1472,5 +1522,259 @@ describe("Grain Registry UI", () => {
       expect(capturedReplaceBody).not.toBeNull();
     });
     expect(capturedReplaceBody.boot_disk_gb).toBe(250);
+  });
+
+  it("hides soft-deleted entries from My entries and drops a row as soon as it is deleted", async () => {
+    const listUrls = [];
+    globalThis.fetch = createFetchMock({
+      "GET /api/entries?mine=1": (url) => {
+        listUrls.push(url);
+        return new Response(
+          JSON.stringify({
+            entries: [
+              sampleEntries[0],
+              sampleEntries[1],
+              { ...sampleEntries[2], name: "old-deleted", state: "deleted" },
+            ],
+          }),
+          { status: 200 },
+        );
+      },
+    });
+    renderApp("/");
+
+    await screen.findByText("Platform Core VM (platform-vm)");
+    expect(listUrls).toEqual(["/api/entries?mine=1"]);
+    expect(screen.queryByText(/old-deleted/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Restore" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete" })[0]);
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent(/removes it from your entries/i);
+    fireEvent.change(within(dialog).getByLabelText(/Type .* to confirm/i), {
+      target: { value: "platform-vm" },
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Delete entry" }),
+    );
+
+    await screen.findByText("Deleted platform-vm.");
+    expect(
+      screen.queryByText("Platform Core VM (platform-vm)"),
+    ).not.toBeInTheDocument();
+    expect(listUrls).toHaveLength(1);
+  });
+
+  it("defaults Create / Register to a hosted VM with an editable random name", async () => {
+    let createdBody = null;
+    globalThis.fetch = createFetchMock({
+      "POST /api/entries": async (_url, init) => {
+        createdBody = JSON.parse(init.body);
+        return new Response(
+          JSON.stringify({
+            entry: {
+              name: createdBody.name,
+              url: `https://${createdBody.name}.grain.example.com`,
+              kind: createdBody.kind,
+              state: "creating",
+            },
+          }),
+          { status: 202 },
+        );
+      },
+    });
+    renderApp("/new");
+
+    await screen.findByLabelText("Boot disk size (GB)");
+    const cards = within(
+      screen.getByRole("radiogroup", { name: "Entry kind" }),
+    ).getAllByRole("button");
+    expect(cards[0]).toHaveTextContent(/Hosted VM \(instance\)/);
+    expect(cards[0]).toHaveClass("reg-mode-card-active");
+    expect(
+      screen.queryByRole("button", { name: "Choose custom name" }),
+    ).not.toBeInTheDocument();
+
+    const nameInput = screen.getByLabelText(/Entry subdomain name/i);
+    expect(nameInput.tagName).toBe("INPUT");
+    const initial = nameInput.value;
+    expect(initial).toMatch(/^grain-[0-9a-f]{6}$/);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Generate another random name" }),
+    );
+    expect(nameInput.value).toMatch(/^grain-[0-9a-f]{6}$/);
+
+    fireEvent.change(nameInput, { target: { value: "my-own-vm" } });
+    await waitFor(() => {
+      expect(screen.getByTestId("name-availability-status")).toHaveTextContent(
+        "free",
+      );
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Create hosted VM$/i }),
+    );
+    await waitFor(() => {
+      expect(createdBody).not.toBeNull();
+    });
+    expect(createdBody.kind).toBe("instance");
+    expect(createdBody.name).toBe("my-own-vm");
+  });
+
+  it("pre-fills a random name for connected mode and falls back to connected when no shapes are configured", async () => {
+    globalThis.fetch = createFetchMock();
+    renderApp("/new?kind=connected");
+    await screen.findByRole("button", { name: "Register connected entry" });
+    expect(screen.getByLabelText(/Entry subdomain name/i).value).toMatch(
+      /^grain-[0-9a-f]{6}$/,
+    );
+    cleanup();
+
+    globalThis.fetch = createFetchMock({
+      "GET /api/shapes": () =>
+        new Response(JSON.stringify({ shapes: [] }), { status: 200 }),
+    });
+    renderApp("/new");
+    await screen.findByRole("button", { name: "Register connected entry" });
+    expect(
+      screen.queryByRole("button", { name: /^Create hosted VM$/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("confirms Hard purge on Admin and credential Revoke on Entry Detail with keyboard focus and Escape", async () => {
+    const purgeCalls = [];
+    const revokeCredCalls = [];
+    const deletedEntry = {
+      ...sampleEntries[0],
+      name: "retired-vm",
+      state: "deleted",
+      status: "offline",
+      deleted_at: "2026-11-08T00:00:00Z",
+      db_purge_after: "2026-11-15T00:00:00Z",
+    };
+    const connectedWithCred = {
+      ...sampleEntries[1],
+      credentials: [
+        {
+          credential_id: "cred-live-01",
+          label: "laptop-tunnel",
+          created_by: "alice@example.com",
+          created_at: "2026-11-01T00:00:00Z",
+        },
+      ],
+    };
+
+    globalThis.fetch = createFetchMock({
+      "GET /api/entries?all=1&include_deleted=true": () =>
+        new Response(
+          JSON.stringify({ entries: [...sampleEntries, deletedEntry] }),
+          { status: 200 },
+        ),
+      "POST /api/admin/entries/retired-vm/purge": async (_url, init) => {
+        const body = JSON.parse(init.body || "{}");
+        purgeCalls.push(body);
+        deletedEntry.purged_at = "2026-11-09T00:00:00Z";
+        return new Response(JSON.stringify(deletedEntry), { status: 200 });
+      },
+      "GET /api/entries/alice-workstation": () =>
+        new Response(JSON.stringify(connectedWithCred), { status: 200 }),
+      "DELETE /api/entries/alice-workstation/credentials/cred-live-01":
+        async () => {
+          revokeCredCalls.push("cred-live-01");
+          connectedWithCred.credentials[0].revoked_at = "2026-11-09T00:00:00Z";
+          return new Response(null, { status: 204 });
+        },
+    });
+
+    // 1. Admin Hard purge confirmation: Cancel focused, Tab cycles, Escape cancels, confirm purges.
+    const { unmount } = renderApp("/admin");
+    const purgeBtn = await screen.findByRole("button", { name: "Hard purge" });
+    purgeBtn.focus();
+    fireEvent.click(purgeBtn);
+    let dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("Hard purge retired-vm?");
+    const cancelBtn = within(dialog).getByRole("button", { name: "Cancel" });
+    expect(cancelBtn).toHaveFocus();
+    fireEvent.keyDown(document.activeElement, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(purgeBtn).toHaveFocus();
+    expect(purgeCalls).toEqual([]);
+
+    fireEvent.click(purgeBtn);
+    dialog = await screen.findByRole("dialog");
+    fireEvent.click(
+      within(dialog).getByLabelText(/Release the 30-day name reservation/i),
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Hard purge" }));
+    await screen.findByText(/Hard-purged retained resources for retired-vm\./);
+    expect(purgeCalls).toEqual([
+      { confirm: "retired-vm", force: true, release_reservation: false },
+    ]);
+    unmount();
+
+    // 2. Entry Detail credential Revoke confirmation: Cancel focused, Escape cancels, confirm revokes.
+    renderApp("/entries/alice-workstation");
+    const revokeBtn = await screen.findByRole("button", { name: "Revoke" });
+    revokeBtn.focus();
+    fireEvent.click(revokeBtn);
+    dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("Revoke registration credential?");
+    expect(
+      within(dialog).getByRole("button", { name: "Cancel" }),
+    ).toHaveFocus();
+    fireEvent.keyDown(document.activeElement, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(revokeBtn).toHaveFocus();
+    expect(revokeCredCalls).toEqual([]);
+
+    fireEvent.click(revokeBtn);
+    dialog = await screen.findByRole("dialog");
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Revoke credential" }),
+    );
+    await screen.findByText("Revoked credential cred-live-01.");
+    expect(revokeCredCalls).toEqual(["cred-live-01"]);
+  });
+
+  it("renders a creating instance's service-account propagation status_detail in My Entries and Entry Detail", async () => {
+    const propDetail =
+      "waiting for service account gi-late-vm@acme-prod.iam.gserviceaccount.com to propagate before creating the GCE instance (attempt 1 failed, retrying in 5s)";
+    const creatingEntry = {
+      ...sampleEntries[0],
+      name: "late-vm",
+      display_name: "Late VM",
+      state: "creating",
+      status: "offline",
+      status_detail: propDetail,
+      health_detail: "previous probe ok",
+    };
+
+    globalThis.fetch = createFetchMock({
+      "GET /api/entries?mine=1": () =>
+        new Response(JSON.stringify({ entries: [creatingEntry] }), {
+          status: 200,
+        }),
+      "GET /api/entries/late-vm": () =>
+        new Response(JSON.stringify(creatingEntry), { status: 200 }),
+    });
+
+    const { unmount } = renderApp("/");
+    expect(
+      await screen.findByTestId("status-detail-late-vm"),
+    ).toHaveTextContent(propDetail);
+    unmount();
+
+    renderApp("/entries/late-vm");
+    const banner = await screen.findByTestId("lifecycle-status-banner");
+    expect(banner).toHaveTextContent("Provisioning instance:");
+    expect(banner).toHaveTextContent(propDetail);
+    expect(screen.getByTestId("entry-status-detail")).toHaveTextContent(
+      propDetail,
+    );
+    expect(screen.getByTestId("entry-health-detail")).toHaveTextContent(
+      "previous probe ok",
+    );
   });
 });

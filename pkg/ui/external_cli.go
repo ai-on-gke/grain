@@ -141,7 +141,10 @@ type InboxItem struct {
 
 // InboxResponse is GET /api/inbox's body.
 type InboxResponse struct {
-	Items []InboxItem `json:"items"`
+	Items      []InboxItem `json:"items"`
+	Total      int         `json:"total,omitempty"`
+	Truncated  bool        `json:"truncated,omitempty"`
+	NextCursor string      `json:"nextCursor,omitempty"`
 }
 
 // handleInbox answers GET /api/inbox?repo=&kind=: the questions and
@@ -149,6 +152,11 @@ type InboxResponse struct {
 // notifications, pull requests held at a gate that needs a person, and
 // unapproved proposals -- only on repositories the caller may read.
 func (s *Server) handleInbox(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageLarge)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	q := r.URL.Query()
 	kind := strings.TrimSpace(q.Get("kind"))
 	if kind != "" && !slices.Contains(InboxKinds, kind) {
@@ -165,11 +173,19 @@ func (s *Server) handleInbox(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
-	out := InboxResponse{Items: []InboxItem{}}
+	filtered := make([]InboxItem, 0, len(items))
 	for _, it := range items {
-		if kind == "" || it.Kind == kind {
-			out.Items = append(out.Items, it)
+		if (kind == "" || it.Kind == kind) && list.matches(it.Task, it.Title, it.Repo, it.Summary, it.Subject, it.PR) {
+			filtered = append(filtered, it)
 		}
+	}
+	out := InboxResponse{Items: filtered}
+	if list.Paged {
+		page := pageOf(filtered, list)
+		out.Items = page.Items
+		out.Total = page.Total
+		out.Truncated = page.Truncated
+		out.NextCursor = page.NextCursor
 	}
 	w.Header().Set("Cache-Control", "no-cache")
 	writeJSON(w, http.StatusOK, out)

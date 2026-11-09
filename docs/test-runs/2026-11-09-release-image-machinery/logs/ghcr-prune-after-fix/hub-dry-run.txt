@@ -1,0 +1,206 @@
+grain: 47 versions
+sandbox: 47 versions
+sandbox-base: 55 versions
+sandbox-k8s: 47 versions
+
+keeping 144 versions:
+  keep   grain        latest,sha-8a740f9,v3.1.0 2026-10-30 -- "latest" is the name every deployment resolves
+  keep   grain        sha256-321d3cc21e7a38acf993a73eaec2bdb365bef75c868de23dfe2117382455a7aa.sig 2026-10-30 -- signs sha256:321d3cc21e7a38acf993a73eaec2bdb365bef75c868de23dfe2117382455a7aa, which this run keeps
+  keep   grain        sha-15cbf18          2026-11-02 -- "sha-15cbf18" is one of the 30 newest builds
+  keep   grain        sha-25eb40c          2026-11-02 -- "sha-25eb40c" is one of the 30 newest builds
+  keep   grain        sha-e71674c          2026-11-02 -- "sha-e71674c" is one of the 30 newest builds
+  keep   grain        sha-5d9598d          2026-11-02 -- "sha-5d9598d" is one of the 30 newest builds
+  keep   grain        sha-5abcd61          2026-11-02 -- "sha-5abcd61" is one of the 30 newest builds
+  keep   grain        sha-03d9264          2026-11-03 -- "sha-03d9264" is one of the 30 newest builds
+  keep   grain        sha-644dbda          2026-11-03 -- "sha-644dbda" is one of the 30 newest builds
+  keep   grain        sha-a6360c1          2026-11-03 -- "sha-a6360c1" is one of the 30 newest builds
+  keep   grain        sha-8fc5bcf          2026-11-03 -- "sha-8fc5bcf" is one of the 30 newest builds
+  keep   grain        sha-8e7371a          2026-11-03 -- "sha-8e7371a" is one of the 30 newest builds
+  keep   grain        sha-6f5ca0a          2026-11-03 -- "sha-6f5ca0a" is one of the 30 newest builds
+  keep   grain        sha-5089b49          2026-11-04 -- "sha-5089b49" is one of the 30 newest builds
+  keep   grain        sha-ec9bf3e          2026-11-04 -- "sha-ec9bf3e" is one of the 30 newest builds
+  keep   grain        sha-2290ffc          2026-11-04 -- "sha-2290ffc" is one of the 30 newest builds
+  keep   grain        sha-77c047d          2026-11-04 -- "sha-77c047d" is one of the 30 newest builds
+  keep   grain        sha-58d0ef0          2026-11-04 -- "sha-58d0ef0" is one of the 30 newest builds
+  keep   grain        grain..098073e4..task-3733-walkthrough-codex-504-fallback,sha-1234abc 2026-11-04 -- "grain..098073e4..task-3733-walkthrough-codex-504-fallback" is a branch that still exists, and this is the build it names
+  keep   grain        sha-27cd534          2026-11-04 -- "sha-27cd534" is one of the 30 newest builds
+  keep   grain        v3.2.0-pending       2026-11-05 -- "v3.2.0-pending" is a staged release nobody has approved or rejected yet
+  keep   grain        sha-34260b8          2026-11-05 -- "sha-34260b8" is one of the 30 newest builds
+  keep   grain        sha-98e8bdc          2026-11-05 -- "sha-98e8bdc" is one of the 30 newest builds
+  keep   grain        sha-5dd6b89          2026-11-05 -- "sha-5dd6b89" is one of the 30 newest builds
+  keep   grain        sha-1bef82b          2026-11-05 -- "sha-1bef82b" is one of the 30 newest builds
+  keep   grain        sha-59af644          2026-11-05 -- "sha-59af644" is one of the 30 newest builds
+  keep   grain        sha-41859e3          2026-11-05 -- "sha-41859e3" is one of the 30 newest builds
+  keep   grain        release..v3.2.0,sha-0a1b2c3 2026-11-06 -- "release..v3.2.0" is a branch that still exists, and this is the build it names
+  keep   grain        sha-9708332          2026-11-06 -- "sha-9708332" is one of the 30 newest builds
+  keep   grain        candidate,rc,v3.2.0-rc.2 2026-11-06 -- "candidate" is a branch that still exists, and this is the build it names
+  keep   grain        sha-0402646          2026-11-06 -- "sha-0402646" is one of the 30 newest builds
+  keep   grain        sha-89df505          2026-11-06 -- "sha-89df505" is one of the 30 newest builds
+  keep   grain        sha-9bd8269          2026-11-06 -- "sha-9bd8269" is one of the 30 newest builds
+  keep   grain        main,sha-a59d1e4     2026-11-09 -- pushed 1h ago, inside the 48h window
+  keep   grain        sha256-a835f53f762175177ceb9416d7e5c5eff636233b3bbe4d28274c49e5c9b637c9.sig 2026-11-09 -- signs sha256:a835f53f762175177ceb9416d7e5c5eff636233b3bbe4d28274c49e5c9b637c9, which this run keeps
+  keep   sandbox      latest,sha-8a740f9,v3.1.0 2026-10-30 -- "latest" is the name every deployment resolves
+  keep   sandbox      sha256-eb7dec338b91f3ef1159ff467f32fccdb0daeee71403457b459f309b1bb9c026.sig 2026-10-30 -- signs sha256:eb7dec338b91f3ef1159ff467f32fccdb0daeee71403457b459f309b1bb9c026, which this run keeps
+  keep   sandbox      sha-15cbf18          2026-11-02 -- "sha-15cbf18" is one of the 30 newest builds
+  keep   sandbox      sha-25eb40c          2026-11-02 -- "sha-25eb40c" is one of the 30 newest builds
+  keep   sandbox      sha-e71674c          2026-11-02 -- "sha-e71674c" is one of the 30 newest builds
+  keep   sandbox      sha-5d9598d          2026-11-02 -- "sha-5d9598d" is one of the 30 newest builds
+  keep   sandbox      sha-5abcd61          2026-11-02 -- "sha-5abcd61" is one of the 30 newest builds
+  keep   sandbox      sha-03d9264          2026-11-03 -- "sha-03d9264" is one of the 30 newest builds
+  keep   sandbox      sha-644dbda          2026-11-03 -- "sha-644dbda" is one of the 30 newest builds
+  keep   sandbox      sha-a6360c1          2026-11-03 -- "sha-a6360c1" is one of the 30 newest builds
+  keep   sandbox      sha-8fc5bcf          2026-11-03 -- "sha-8fc5bcf" is one of the 30 newest builds
+  keep   sandbox      sha-8e7371a          2026-11-03 -- "sha-8e7371a" is one of the 30 newest builds
+  keep   sandbox      sha-6f5ca0a          2026-11-03 -- "sha-6f5ca0a" is one of the 30 newest builds
+  keep   sandbox      sha-5089b49          2026-11-04 -- "sha-5089b49" is one of the 30 newest builds
+  keep   sandbox      sha-ec9bf3e          2026-11-04 -- "sha-ec9bf3e" is one of the 30 newest builds
+  keep   sandbox      sha-2290ffc          2026-11-04 -- "sha-2290ffc" is one of the 30 newest builds
+  keep   sandbox      sha-77c047d          2026-11-04 -- "sha-77c047d" is one of the 30 newest builds
+  keep   sandbox      sha-58d0ef0          2026-11-04 -- "sha-58d0ef0" is one of the 30 newest builds
+  keep   sandbox      grain..098073e4..task-3733-walkthrough-codex-504-fallback,sha-1234abc 2026-11-04 -- "grain..098073e4..task-3733-walkthrough-codex-504-fallback" is a branch that still exists, and this is the build it names
+  keep   sandbox      sha-27cd534          2026-11-04 -- "sha-27cd534" is one of the 30 newest builds
+  keep   sandbox      v3.2.0-pending       2026-11-05 -- "v3.2.0-pending" is a staged release nobody has approved or rejected yet
+  keep   sandbox      sha-34260b8          2026-11-05 -- "sha-34260b8" is one of the 30 newest builds
+  keep   sandbox      sha-98e8bdc          2026-11-05 -- "sha-98e8bdc" is one of the 30 newest builds
+  keep   sandbox      sha-5dd6b89          2026-11-05 -- "sha-5dd6b89" is one of the 30 newest builds
+  keep   sandbox      sha-1bef82b          2026-11-05 -- "sha-1bef82b" is one of the 30 newest builds
+  keep   sandbox      sha-59af644          2026-11-05 -- "sha-59af644" is one of the 30 newest builds
+  keep   sandbox      sha-41859e3          2026-11-05 -- "sha-41859e3" is one of the 30 newest builds
+  keep   sandbox      release..v3.2.0,sha-0a1b2c3 2026-11-06 -- "release..v3.2.0" is a branch that still exists, and this is the build it names
+  keep   sandbox      sha-9708332          2026-11-06 -- "sha-9708332" is one of the 30 newest builds
+  keep   sandbox      candidate,rc,v3.2.0-rc.2 2026-11-06 -- "candidate" is a branch that still exists, and this is the build it names
+  keep   sandbox      sha-0402646          2026-11-06 -- "sha-0402646" is one of the 30 newest builds
+  keep   sandbox      sha-89df505          2026-11-06 -- "sha-89df505" is one of the 30 newest builds
+  keep   sandbox      sha-9bd8269          2026-11-06 -- "sha-9bd8269" is one of the 30 newest builds
+  keep   sandbox      main,sha-a59d1e4     2026-11-09 -- pushed 1h ago, inside the 48h window
+  keep   sandbox      sha256-7cad552de77c7e489a6437c15228179e5225058856548b24afc2abfd5c27163e.sig 2026-11-09 -- signs sha256:7cad552de77c7e489a6437c15228179e5225058856548b24afc2abfd5c27163e, which this run keeps
+  keep   sandbox-base latest,sha-8a740f9,v3.1.0 2026-10-30 -- "latest" is the name every deployment resolves
+  keep   sandbox-base sha256-ff7fa48adbda4df2506c20958af8fb2dccd531056e6c5caf0db39c1957f6b9c9.sig 2026-10-30 -- signs sha256:ff7fa48adbda4df2506c20958af8fb2dccd531056e6c5caf0db39c1957f6b9c9, which this run keeps
+  keep   sandbox-base 5cf989d3841e1222     2026-10-31 -- "5cf989d3841e1222" is one of the 5 newest granule base caches
+  keep   sandbox-base 83782f4d67e81e1b     2026-11-02 -- "83782f4d67e81e1b" is one of the 5 newest granule base caches
+  keep   sandbox-base sha-15cbf18          2026-11-02 -- "sha-15cbf18" is one of the 30 newest builds
+  keep   sandbox-base sha-25eb40c          2026-11-02 -- "sha-25eb40c" is one of the 30 newest builds
+  keep   sandbox-base sha-e71674c          2026-11-02 -- "sha-e71674c" is one of the 30 newest builds
+  keep   sandbox-base sha-5d9598d          2026-11-02 -- "sha-5d9598d" is one of the 30 newest builds
+  keep   sandbox-base sha-5abcd61          2026-11-02 -- "sha-5abcd61" is one of the 30 newest builds
+  keep   sandbox-base sha-03d9264          2026-11-03 -- "sha-03d9264" is one of the 30 newest builds
+  keep   sandbox-base sha-644dbda          2026-11-03 -- "sha-644dbda" is one of the 30 newest builds
+  keep   sandbox-base sha-a6360c1          2026-11-03 -- "sha-a6360c1" is one of the 30 newest builds
+  keep   sandbox-base sha-8fc5bcf          2026-11-03 -- "sha-8fc5bcf" is one of the 30 newest builds
+  keep   sandbox-base sha-8e7371a          2026-11-03 -- "sha-8e7371a" is one of the 30 newest builds
+  keep   sandbox-base sha-6f5ca0a          2026-11-03 -- "sha-6f5ca0a" is one of the 30 newest builds
+  keep   sandbox-base sha-5089b49          2026-11-04 -- "sha-5089b49" is one of the 30 newest builds
+  keep   sandbox-base a1372c7b1509f805     2026-11-04 -- "a1372c7b1509f805" is one of the 5 newest granule base caches
+  keep   sandbox-base sha-ec9bf3e          2026-11-04 -- "sha-ec9bf3e" is one of the 30 newest builds
+  keep   sandbox-base sha-2290ffc          2026-11-04 -- "sha-2290ffc" is one of the 30 newest builds
+  keep   sandbox-base sha-77c047d          2026-11-04 -- "sha-77c047d" is one of the 30 newest builds
+  keep   sandbox-base sha-58d0ef0          2026-11-04 -- "sha-58d0ef0" is one of the 30 newest builds
+  keep   sandbox-base grain..098073e4..task-3733-walkthrough-codex-504-fallback,sha-1234abc 2026-11-04 -- "grain..098073e4..task-3733-walkthrough-codex-504-fallback" is a branch that still exists, and this is the build it names
+  keep   sandbox-base sha-27cd534          2026-11-04 -- "sha-27cd534" is one of the 30 newest builds
+  keep   sandbox-base v3.2.0-pending       2026-11-05 -- "v3.2.0-pending" is a staged release nobody has approved or rejected yet
+  keep   sandbox-base sha-34260b8          2026-11-05 -- "sha-34260b8" is one of the 30 newest builds
+  keep   sandbox-base sha-98e8bdc          2026-11-05 -- "sha-98e8bdc" is one of the 30 newest builds
+  keep   sandbox-base sha-5dd6b89          2026-11-05 -- "sha-5dd6b89" is one of the 30 newest builds
+  keep   sandbox-base sha-1bef82b          2026-11-05 -- "sha-1bef82b" is one of the 30 newest builds
+  keep   sandbox-base sha-59af644          2026-11-05 -- "sha-59af644" is one of the 30 newest builds
+  keep   sandbox-base sha-41859e3          2026-11-05 -- "sha-41859e3" is one of the 30 newest builds
+  keep   sandbox-base release..v3.2.0,sha-0a1b2c3 2026-11-06 -- "release..v3.2.0" is a branch that still exists, and this is the build it names
+  keep   sandbox-base sha-9708332          2026-11-06 -- "sha-9708332" is one of the 30 newest builds
+  keep   sandbox-base 5268da882e93db0d     2026-11-06 -- "5268da882e93db0d" is one of the 5 newest granule base caches
+  keep   sandbox-base candidate,rc,v3.2.0-rc.2 2026-11-06 -- "candidate" is a branch that still exists, and this is the build it names
+  keep   sandbox-base sha-0402646          2026-11-06 -- "sha-0402646" is one of the 30 newest builds
+  keep   sandbox-base sha-89df505          2026-11-06 -- "sha-89df505" is one of the 30 newest builds
+  keep   sandbox-base sha-9bd8269          2026-11-06 -- "sha-9bd8269" is one of the 30 newest builds
+  keep   sandbox-base 6e17049b224180c1,main,sha-a59d1e4 2026-11-09 -- pushed 1h ago, inside the 48h window
+  keep   sandbox-base sha256-e2b9269d27c1f1e766b00af77e889a5008981cf943c9b1539d05391bf603c88c.sig 2026-11-09 -- signs sha256:e2b9269d27c1f1e766b00af77e889a5008981cf943c9b1539d05391bf603c88c, which this run keeps
+  keep   sandbox-k8s  latest,sha-8a740f9,v3.1.0 2026-10-30 -- "latest" is the name every deployment resolves
+  keep   sandbox-k8s  sha256-68786c56ae2e39e981d43b95b2b8a0aa8407b32b12bdae190d17f04be01935f1.sig 2026-10-30 -- signs sha256:68786c56ae2e39e981d43b95b2b8a0aa8407b32b12bdae190d17f04be01935f1, which this run keeps
+  keep   sandbox-k8s  sha-15cbf18          2026-11-02 -- "sha-15cbf18" is one of the 30 newest builds
+  keep   sandbox-k8s  sha-25eb40c          2026-11-02 -- "sha-25eb40c" is one of the 30 newest builds
+  keep   sandbox-k8s  sha-e71674c          2026-11-02 -- "sha-e71674c" is one of the 30 newest builds
+  keep   sandbox-k8s  sha-5d9598d          2026-11-02 -- "sha-5d9598d" is one of the 30 newest builds
+  keep   sandbox-k8s  sha-5abcd61          2026-11-02 -- "sha-5abcd61" is one of the 30 newest builds
+  keep   sandbox-k8s  sha-03d9264          2026-11-03 -- "sha-03d9264" is one of the 30 newest builds
+  keep   sandbox-k8s  sha-644dbda          2026-11-03 -- "sha-644dbda" is one of the 30 newest builds
+  keep   sandbox-k8s  sha-a6360c1          2026-11-03 -- "sha-a6360c1" is one of the 30 newest builds
+  keep   sandbox-k8s  sha-8fc5bcf          2026-11-03 -- "sha-8fc5bcf" is one of the 30 newest builds
+  keep   sandbox-k8s  sha-8e7371a          2026-11-03 -- "sha-8e7371a" is one of the 30 newest builds
+  keep   sandbox-k8s  sha-6f5ca0a          2026-11-03 -- "sha-6f5ca0a" is one of the 30 newest builds
+  keep   sandbox-k8s  sha-5089b49          2026-11-04 -- "sha-5089b49" is one of the 30 newest builds
+  keep   sandbox-k8s  sha-ec9bf3e          2026-11-04 -- "sha-ec9bf3e" is one of the 30 newest builds
+  keep   sandbox-k8s  sha-2290ffc          2026-11-04 -- "sha-2290ffc" is one of the 30 newest builds
+  keep   sandbox-k8s  sha-77c047d          2026-11-04 -- "sha-77c047d" is one of the 30 newest builds
+  keep   sandbox-k8s  sha-58d0ef0          2026-11-04 -- "sha-58d0ef0" is one of the 30 newest builds
+  keep   sandbox-k8s  grain..098073e4..task-3733-walkthrough-codex-504-fallback,sha-1234abc 2026-11-04 -- "grain..098073e4..task-3733-walkthrough-codex-504-fallback" is a branch that still exists, and this is the build it names
+  keep   sandbox-k8s  sha-27cd534          2026-11-04 -- "sha-27cd534" is one of the 30 newest builds
+  keep   sandbox-k8s  v3.2.0-pending       2026-11-05 -- "v3.2.0-pending" is a staged release nobody has approved or rejected yet
+  keep   sandbox-k8s  sha-34260b8          2026-11-05 -- "sha-34260b8" is one of the 30 newest builds
+  keep   sandbox-k8s  sha-98e8bdc          2026-11-05 -- "sha-98e8bdc" is one of the 30 newest builds
+  keep   sandbox-k8s  sha-5dd6b89          2026-11-05 -- "sha-5dd6b89" is one of the 30 newest builds
+  keep   sandbox-k8s  sha-1bef82b          2026-11-05 -- "sha-1bef82b" is one of the 30 newest builds
+  keep   sandbox-k8s  sha-59af644          2026-11-05 -- "sha-59af644" is one of the 30 newest builds
+  keep   sandbox-k8s  sha-41859e3          2026-11-05 -- "sha-41859e3" is one of the 30 newest builds
+  keep   sandbox-k8s  release..v3.2.0,sha-0a1b2c3 2026-11-06 -- "release..v3.2.0" is a branch that still exists, and this is the build it names
+  keep   sandbox-k8s  sha-9708332          2026-11-06 -- "sha-9708332" is one of the 30 newest builds
+  keep   sandbox-k8s  candidate,rc,v3.2.0-rc.2 2026-11-06 -- "candidate" is a branch that still exists, and this is the build it names
+  keep   sandbox-k8s  sha-0402646          2026-11-06 -- "sha-0402646" is one of the 30 newest builds
+  keep   sandbox-k8s  sha-89df505          2026-11-06 -- "sha-89df505" is one of the 30 newest builds
+  keep   sandbox-k8s  sha-9bd8269          2026-11-06 -- "sha-9bd8269" is one of the 30 newest builds
+  keep   sandbox-k8s  main,sha-a59d1e4     2026-11-09 -- pushed 1h ago, inside the 48h window
+  keep   sandbox-k8s  sha256-29964c2e33c32d30b299101f7e190e9c8d528c082f0c3f67e17bc07ba634066a.sig 2026-11-09 -- signs sha256:29964c2e33c32d30b299101f7e190e9c8d528c082f0c3f67e17bc07ba634066a, which this run keeps
+
+would delete 52 versions:
+  delete grain        sha256-283bb9deef02e6843abfb538efa1eca70801bd8a701c3f98191e123496339247.sig 2026-10-27 -- signs sha256:283bb9deef02e6843abfb538efa1eca70801bd8a701c3f98191e123496339247, which is not kept
+  delete grain        grain..098073e4..task-3600-old,sha-dead001 2026-10-31 -- no live tag: grain..098073e4..task-3600-old (8d), sha-dead001 (8d)
+  delete grain        sha-f78be38          2026-10-31 -- no live tag: sha-f78be38 (8d)
+  delete grain        sha256-f35c420a2ed9c23b200dc6902437128ff9b13bb80c8f852bac750384a3747ebc.sig 2026-10-31 -- signs sha256:f35c420a2ed9c23b200dc6902437128ff9b13bb80c8f852bac750384a3747ebc, which is not kept
+  delete grain        sha-6f28b6f          2026-11-01 -- no live tag: sha-6f28b6f (8d)
+  delete grain        sha-c083589          2026-11-01 -- no live tag: sha-c083589 (7d)
+  delete grain        sha-9377c49          2026-11-01 -- no live tag: sha-9377c49 (7d)
+  delete grain        sha-0f857ee          2026-11-01 -- no live tag: sha-0f857ee (7d)
+  delete grain        sha-d154bec          2026-11-01 -- no live tag: sha-d154bec (7d)
+  delete grain        sha-e9a6b46          2026-11-01 -- no live tag: sha-e9a6b46 (7d)
+  delete grain        sha-93ff1d8          2026-11-02 -- no live tag: sha-93ff1d8 (7d)
+  delete grain        v3.2.0-rc.1,v3.2.0-rc.1-discarded 2026-11-03 -- no live tag: v3.2.0-rc.1 (5d), v3.2.0-rc.1-discarded (5d)
+  delete sandbox      sha256-283bb9deef02e6843abfb538efa1eca70801bd8a701c3f98191e123496339247.sig 2026-10-27 -- signs sha256:283bb9deef02e6843abfb538efa1eca70801bd8a701c3f98191e123496339247, which is not kept
+  delete sandbox      grain..098073e4..task-3600-old,sha-dead001 2026-10-31 -- no live tag: grain..098073e4..task-3600-old (8d), sha-dead001 (8d)
+  delete sandbox      sha-f78be38          2026-10-31 -- no live tag: sha-f78be38 (8d)
+  delete sandbox      sha256-cef471543fa833fa6b188c369013edfa8d2e17a82cf7a28de77499c22a1e5865.sig 2026-10-31 -- signs sha256:cef471543fa833fa6b188c369013edfa8d2e17a82cf7a28de77499c22a1e5865, which is not kept
+  delete sandbox      sha-6f28b6f          2026-11-01 -- no live tag: sha-6f28b6f (8d)
+  delete sandbox      sha-c083589          2026-11-01 -- no live tag: sha-c083589 (7d)
+  delete sandbox      sha-9377c49          2026-11-01 -- no live tag: sha-9377c49 (7d)
+  delete sandbox      sha-0f857ee          2026-11-01 -- no live tag: sha-0f857ee (7d)
+  delete sandbox      sha-d154bec          2026-11-01 -- no live tag: sha-d154bec (7d)
+  delete sandbox      sha-e9a6b46          2026-11-01 -- no live tag: sha-e9a6b46 (7d)
+  delete sandbox      sha-93ff1d8          2026-11-02 -- no live tag: sha-93ff1d8 (7d)
+  delete sandbox      v3.2.0-rc.1,v3.2.0-rc.1-discarded 2026-11-03 -- no live tag: v3.2.0-rc.1 (5d), v3.2.0-rc.1-discarded (5d)
+  delete sandbox-base 5dcd8cc4d50e5de1     2026-10-23 -- no live tag: 5dcd8cc4d50e5de1 (17d)
+  delete sandbox-base 49f30e02d4f320ed     2026-10-25 -- no live tag: 49f30e02d4f320ed (15d)
+  delete sandbox-base c2462b78f595926c     2026-10-27 -- no live tag: c2462b78f595926c (13d)
+  delete sandbox-base sha256-283bb9deef02e6843abfb538efa1eca70801bd8a701c3f98191e123496339247.sig 2026-10-27 -- signs sha256:283bb9deef02e6843abfb538efa1eca70801bd8a701c3f98191e123496339247, which is not kept
+  delete sandbox-base 228927803ace7c24     2026-10-29 -- no live tag: 228927803ace7c24 (11d)
+  delete sandbox-base grain..098073e4..task-3600-old,sha-dead001 2026-10-31 -- no live tag: grain..098073e4..task-3600-old (8d), sha-dead001 (8d)
+  delete sandbox-base sha-f78be38          2026-10-31 -- no live tag: sha-f78be38 (8d)
+  delete sandbox-base sha256-bd2c2da9b2613e34ea4202b860433e839d5daf06314f65b380b3830f30145011.sig 2026-10-31 -- signs sha256:bd2c2da9b2613e34ea4202b860433e839d5daf06314f65b380b3830f30145011, which is not kept
+  delete sandbox-base sha-6f28b6f          2026-11-01 -- no live tag: sha-6f28b6f (8d)
+  delete sandbox-base sha-c083589          2026-11-01 -- no live tag: sha-c083589 (7d)
+  delete sandbox-base sha-9377c49          2026-11-01 -- no live tag: sha-9377c49 (7d)
+  delete sandbox-base sha-0f857ee          2026-11-01 -- no live tag: sha-0f857ee (7d)
+  delete sandbox-base sha-d154bec          2026-11-01 -- no live tag: sha-d154bec (7d)
+  delete sandbox-base sha-e9a6b46          2026-11-01 -- no live tag: sha-e9a6b46 (7d)
+  delete sandbox-base sha-93ff1d8          2026-11-02 -- no live tag: sha-93ff1d8 (7d)
+  delete sandbox-base v3.2.0-rc.1,v3.2.0-rc.1-discarded 2026-11-03 -- no live tag: v3.2.0-rc.1 (5d), v3.2.0-rc.1-discarded (5d)
+  delete sandbox-k8s  sha256-283bb9deef02e6843abfb538efa1eca70801bd8a701c3f98191e123496339247.sig 2026-10-27 -- signs sha256:283bb9deef02e6843abfb538efa1eca70801bd8a701c3f98191e123496339247, which is not kept
+  delete sandbox-k8s  grain..098073e4..task-3600-old,sha-dead001 2026-10-31 -- no live tag: grain..098073e4..task-3600-old (8d), sha-dead001 (8d)
+  delete sandbox-k8s  sha-f78be38          2026-10-31 -- no live tag: sha-f78be38 (8d)
+  delete sandbox-k8s  sha256-1fe23ed36ba9fd849039844232cf71abdce31ce7c8c666e4738ca0f3f5729cda.sig 2026-10-31 -- signs sha256:1fe23ed36ba9fd849039844232cf71abdce31ce7c8c666e4738ca0f3f5729cda, which is not kept
+  delete sandbox-k8s  sha-6f28b6f          2026-11-01 -- no live tag: sha-6f28b6f (8d)
+  delete sandbox-k8s  sha-c083589          2026-11-01 -- no live tag: sha-c083589 (7d)
+  delete sandbox-k8s  sha-9377c49          2026-11-01 -- no live tag: sha-9377c49 (7d)
+  delete sandbox-k8s  sha-0f857ee          2026-11-01 -- no live tag: sha-0f857ee (7d)
+  delete sandbox-k8s  sha-d154bec          2026-11-01 -- no live tag: sha-d154bec (7d)
+  delete sandbox-k8s  sha-e9a6b46          2026-11-01 -- no live tag: sha-e9a6b46 (7d)
+  delete sandbox-k8s  sha-93ff1d8          2026-11-02 -- no live tag: sha-93ff1d8 (7d)
+  delete sandbox-k8s  v3.2.0-rc.1,v3.2.0-rc.1-discarded 2026-11-03 -- no live tag: v3.2.0-rc.1 (5d), v3.2.0-rc.1-discarded (5d)
+
+::notice title=ghcr-prune::dry run: 52 versions would be deleted, 144 kept

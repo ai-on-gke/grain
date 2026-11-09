@@ -18,7 +18,9 @@ Under an operator's pause (or an agent's), `dispatch.Cycle` starts:
   the next cycle. A request is spent by the run it starts, unless that
   run ends without doing the work -- setup-failed, paused on a usage
   limit, out of provider capacity, interrupted, or OOM-killed
-  (`model.RunNowSurvives`). Then it is put back with its original
+  (`model.RunNowSurvives`, `model.SuspensionKind.KeepsRunNow`). A run
+  that stops itself with `resume_later` or a `wait_for_task` park did the
+  work it was asked for and spends the request. Then it is put back with its original
   timestamp, the task's conversation says "Run now kept", and the task
   goes ahead of the queue again once the same retry backoff a ready task
   would wait has passed. A setup failure that reaches the failure cap

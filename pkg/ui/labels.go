@@ -308,29 +308,12 @@ type Config struct {
 	// GitHubCredentialAvailable answers through that client's own token source,
 	// including a deployment-wide posting credential when one is configured.
 	GitHubCredentialAvailable func(owner, repo string) bool
-	// CapabilityChecks, when set, is what POST /api/capabilities/{id}/
-	// check calls to test one capability's standing credential -- cmd/
-	// grain/daemon.go's own adapter over the same providers a dispatch
-	// resolves through. It is what turns Settings' **Ready** badge from
-	// "this deployment is configured for that" into something a human
-	// can hold against the far end, which is the only thing that knows
-	// whether the key inside a set secret still works (see
-	// Client.CheckCapability).
-	//
-	// nil means this UI was not handed one (`grain demo`'s throwaway UI,
-	// or any UI not colocated with a daemon holding the credentials),
-	// and the route answers 404 while CapabilityStatus.Checkable reports
-	// false so no pane offers a button that could not work -- the same
-	// nil-means-unavailable contract Secrets, Reboot and Credentials
-	// above already give.
-	CapabilityChecks CapabilityChecker
 	// AgentKeyChecks, when set, is what POST /api/agent-keys/{framework}/
 	// check calls to test one agent framework's own credential against
 	// the vendor that issued it -- pkg/cli/daemon.go's own adapter over
 	// the same secrets store and key files a dispatch reads a credential
-	// from. It is to the "set"/"not set" chip on Settings' Agents tab
-	// what CapabilityChecks above is to **Ready**: presence is the whole
-	// of what a pane reading grain's own store can see, and a key revoked
+	// from. The "set"/"not set" chip on Settings' Agents tab is the
+	// whole of what a pane reading grain's own store can see, and a key revoked
 	// at the far end leaves every stored fact unchanged (see
 	// Client.CheckAgentKey).
 	//
@@ -353,8 +336,8 @@ type Config struct {
 	// nil means this UI was not handed one (`grain demo`'s throwaway UI,
 	// or any UI not colocated with a daemon that has the binary), and
 	// the route answers "not available" while the field stays free text
-	// -- the same nil-means-unavailable contract Secrets, Reboot,
-	// Credentials and CapabilityChecks above already give. A lister that
+	// -- the same nil-means-unavailable contract Secrets, Reboot and
+	// Credentials above already give. A lister that
 	// is wired but fails is a different answer, reported rather than
 	// hidden; see agentModelsResponse.
 	AgentModels AgentModelLister

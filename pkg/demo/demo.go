@@ -30,11 +30,13 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/change"
@@ -142,15 +144,13 @@ type Options struct {
 	// ExternalConfigBranch is its branch, "main" when empty.
 	ExternalConfigRepo   string
 	ExternalConfigBranch string
+	// ConfigChange is -config-change (demo_config_change.go): a real,
+	// throwaway grain/config and two tasks parked on proposal branches
+	// of it, so the config-change card's Approve & Apply and Reject work.
+	ConfigChange bool
 	// Qualification is -qualification (demo_qualification.go): a release
 	// candidate whose qualification run waits for approval.
 	Qualification bool
-	// LegacyCapability is -legacy-capability: offer LegacyCapabilityID, a
-	// made-up catalogue row with no provider behind it. Core offers no
-	// legacy capability any more (ui.OfferedCapabilities is empty), so
-	// without it the Legacy capabilities pickers still drawn on the task
-	// forms have no row to show or exercise.
-	LegacyCapability bool
 	// SecretsStore is -secrets-store (demo_qualification.go): a real
 	// secrets store in the demo's throwaway directory.
 	SecretsStore bool
@@ -297,13 +297,6 @@ func Run(opts Options) error {
 			return []string{hostd.LoginAntigravity, hostd.LoginClaude}, true
 		},
 	}
-	if opts.LegacyCapability {
-		cfg.Capabilities = append([]ui.Capability{{
-			ID:          LegacyCapabilityID,
-			Name:        LegacyCapabilityName,
-			Description: "A made-up legacy capability this demo offers, with nothing behind it",
-		}}, cfg.Capabilities...)
-	}
 	if opts.CloudIdentityEndpoint != "" {
 		cfg.GroupChecker = ui.NewCloudIdentityGroupChecker(ui.WithCloudIdentityEndpoint(opts.CloudIdentityEndpoint))
 	}
@@ -341,6 +334,12 @@ func Run(opts Options) error {
 	if err != nil {
 		return fmt.Errorf("grain demo: creating a throwaway store: %v", err)
 	}
+	// Throwaway means gone when the demo is: its store, secrets key and
+	// -config-change's grain/config were left in the temp directory by
+	// every demo that was stopped (docs/test-runs/
+	// 2026-11-09-demo-config-change.md, finding 3).
+	defer os.RemoveAll(dir)
+	removeOnSignal(dir)
 	db, err := sqlite.Open(sqlite.DefaultConfig(dir))
 	if err != nil {
 		return fmt.Errorf("grain demo: opening the throwaway store: %v", err)
@@ -527,10 +526,8 @@ func Run(opts Options) error {
 		client, _ := cfg.GitHubBranches.(github.Client)
 		baseBranch = configureBaseBranchDemo(store, repo, cfg.CI.(*demoFakeCI), client)
 	}
-	// Stand-ins for what sits outside grain (demo_scenarios.go): a
-	// credential's issuer, on every demo; a fresh install's missing
-	// setup and a provider's usage limit, on request.
-	cfg.CapabilityChecks = demoCapabilityChecks{}
+	// Stand-ins for what sits outside grain (demo_scenarios.go): a fresh
+	// install's missing setup and a provider's usage limit, on request.
 	// -staging: two staging environments for the rail's Staging group
 	// (demo_persistent_sandboxes.go). Off by default, where System ->
 	// Sandboxes says it has no sandbox backend to report on.
@@ -636,6 +633,13 @@ func Run(opts Options) error {
 		// 3613).
 		if ref, ok := newExternalConfigRepo(opts.ExternalConfigRepo, opts.ExternalConfigBranch).ref(); ok {
 			cfg.StateRepoRef = func() model.RepoRef { return ref }
+		}
+	}
+	if opts.ConfigChange {
+		// Past every seed too, so grain/config is exported from the
+		// demo's finished configuration.
+		if err := configureConfigChangeDemo(ctx, dir, db, store, &cfg); err != nil {
+			return fmt.Errorf("grain demo: -config-change: %v", err)
 		}
 	}
 	ghCalls.enableLive()
@@ -1673,6 +1677,9 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		return err
 	}
 	if err := seedDemoAudit(ctx, store, ago); err != nil {
+		return err
+	}
+	if err := seedDemoTokenUsage(ctx, store, now); err != nil {
 		return err
 	}
 	if err := seedDemoMemory(ctx, store, cfg, ago); err != nil {
@@ -2958,9 +2965,31 @@ func processDemoGitHubWebhooks(ctx context.Context, store *model.Store, events o
 	return runDemoReconcilers(ctx, deps, now, "github-events", "takeovers")
 }
 
-// LegacyCapabilityID and LegacyCapabilityName are -legacy-capability's
-// made-up catalogue row (Options.LegacyCapability).
-const (
-	LegacyCapabilityID   = "example-legacy"
-	LegacyCapabilityName = "Example legacy capability"
-)
+// removeOnSignal removes dir when the demo is interrupted or terminated --
+// how a demo is stopped, since it serves until then -- and then lets the
+// signal end the process as it would have, exit status and all. A signal
+// the demo was started ignoring (SIGINT, for a job a shell put in the
+// background) is left ignored: catching it would remove the directory
+// from under a demo the re-raised signal then does not stop.
+func removeOnSignal(dir string) {
+	var watch []os.Signal
+	for _, sig := range []os.Signal{os.Interrupt, syscall.SIGTERM} {
+		if !signal.Ignored(sig) {
+			watch = append(watch, sig)
+		}
+	}
+	if len(watch) == 0 {
+		return
+	}
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, watch...)
+	go func() {
+		sig := <-sigs
+		_ = os.RemoveAll(dir)
+		signal.Stop(sigs)
+		if p, err := os.FindProcess(os.Getpid()); err == nil && p.Signal(sig) == nil {
+			return
+		}
+		os.Exit(1)
+	}()
+}

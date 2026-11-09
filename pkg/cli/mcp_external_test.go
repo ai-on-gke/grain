@@ -453,3 +453,41 @@ func TestGrainMCPStdioToolsCallSharedClientAndSliceWaitForTask(t *testing.T) {
 func nilFlagSet() *flag.FlagSet {
 	return flag.NewFlagSet("grain", flag.ContinueOnError)
 }
+
+// A stdio MCP client ends a session by closing the server's stdin; that is
+// a clean exit for `grain mcp`, not an error it prints and exits 1 on
+// (docs/test-runs/2026-11-08-cli-install-skill-mcp.md).
+func TestServeExternalMCPTreatsClosedStdinAsCleanExit(t *testing.T) {
+	c := ui.NewHTTPClient("http://127.0.0.1:1")
+	for name, in := range map[string]string{
+		"empty session":          "",
+		"after a request":        `{"jsonrpc":"2.0","id":1,"method":"ping"}` + "\n",
+		"unterminated last line": `{"jsonrpc":"2.0","id":1,"method":"ping"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var out strings.Builder
+			if err := serveExternalMCP(context.Background(), c, strings.NewReader(in), &out); err != nil {
+				t.Fatalf("serveExternalMCP at end of input = %v, want nil", err)
+			}
+			if in != "" && !strings.Contains(out.String(), `"id":1`) {
+				t.Fatalf("ping was not answered before EOF: %q", out.String())
+			}
+		})
+	}
+}
+
+// ci_log builds ci://<repo>/<run>/<job>/log from its arguments; a segment
+// that could step out of that path, even percent-encoded, is refused
+// before anything is sent.
+func TestIsSafeCIURISegmentRefusesTraversal(t *testing.T) {
+	for _, ok := range []string{"91190", "gha:acme:widgets:91190", "test", "go-unit_1.2"} {
+		if !isSafeCIURISegment(ok) {
+			t.Errorf("isSafeCIURISegment(%q) = false, want true", ok)
+		}
+	}
+	for _, bad := range []string{"", ".", "..", "../x", "a/b", `a\b`, "a?b", "a#b", "%2e%2e%2fsecret", "%2e%2e", "x%2fy", "a\nb", "a\x00b"} {
+		if isSafeCIURISegment(bad) {
+			t.Errorf("isSafeCIURISegment(%q) = true, want false", bad)
+		}
+	}
+}

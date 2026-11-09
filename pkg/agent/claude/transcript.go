@@ -45,6 +45,19 @@ type rawEvent struct {
 	// passes back as --resume so an attempt after a transient refusal
 	// picks the conversation up rather than starting the task again.
 	SessionID string `json:"session_id"`
+	// Usage and TotalCostUSD are the terminal result event's own
+	// account of what the exec spent (agent.TokenUsage).
+	Usage        *rawUsage `json:"usage"`
+	TotalCostUSD float64   `json:"total_cost_usd"`
+}
+
+// rawUsage is the usage block of claude's terminal result event -- the
+// Messages API's own usage fields, summed over the exec's turns.
+type rawUsage struct {
+	InputTokens              int64 `json:"input_tokens"`
+	OutputTokens             int64 `json:"output_tokens"`
+	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
 }
 
 type rawMessage struct {
@@ -253,6 +266,16 @@ func parseEvents(stdout string) *parsedEvents {
 			p.sawResult = true
 			p.resultText = ev.Result
 			p.numTurns += ev.NumTurns
+			// Every result event is one exec's spend, and a capture
+			// holds one per exec (retry.go): they add up.
+			if ev.Usage != nil || ev.TotalCostUSD != 0 {
+				u := agent.TokenUsage{CostUSD: ev.TotalCostUSD, Turns: ev.NumTurns}
+				if ev.Usage != nil {
+					u.InputTokens, u.OutputTokens = ev.Usage.InputTokens, ev.Usage.OutputTokens
+					u.CacheReadTokens, u.CacheWriteTokens = ev.Usage.CacheReadInputTokens, ev.Usage.CacheCreationInputTokens
+				}
+				p.result.Usage = p.result.Usage.Add(u)
+			}
 			// The last result event is what the run ended as. A single
 			// capture used to hold exactly one, so clearing these was a
 			// no-op; it holds one per attempt now that Framework.Run

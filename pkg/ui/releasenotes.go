@@ -372,12 +372,20 @@ func releaseNoteFrom(n model.ReleaseNote) ReleaseNote {
 
 // handleListReleaseNotes answers GET /api/release-notes.
 func (s *Server) handleListReleaseNotes(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageMedium)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	notes, err := s.tasks.ListReleaseNotes(r.Context())
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, notes)
+	notes = filterList(notes, func(n ReleaseNote) bool {
+		return list.matches(n.Period, n.Title, n.UpdatedBy)
+	})
+	writeList(w, notes, list)
 }
 
 // handlePutReleaseNote answers PUT /api/release-notes, with the week in

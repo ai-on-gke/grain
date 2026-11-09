@@ -342,15 +342,44 @@ expect "stage 2 red" "outputs the verdict" grep -qxF "qualification=fail" "$work
 expect "stage 2 red" "asks for no Stage 2 re-run" not grep -q "qualification_rerun=" "$work/train.out"
 expect "stage 2 red" "a dry run pushes no discard tag" eq "$(remote_tag v2.3.0-rc.1-discarded)" ""
 
-# --- confirmed red: dropped, rc.2 cut ---
+# --- confirmed red in Stage 1: dropped, and rc.2 waits a run for grain/rc-hold ---
+# Phase 1 drops rc.1 on a red nightly.yml, and grain has posted no
+# grain/rc-hold on it yet (it reads the same red Stage 1 within a minute):
+# Phase 2 of the same run cuts nothing rather than race grain to it.
 qualification fail "$c3"
 runs "$c3" "$c4"
 : > "$work/images.log"
-train
+: > "$work/train.out"
+train RELEASE_TRAIN_OUTPUT="$work/train.out"
 expect "red" "exits 0" eq "$status" 0
 expect "red" "marks rc.1 discarded" eq "$(remote_tag v2.3.0-rc.1-discarded)" "$c3"
-expect "red" "cuts rc.2 of the same minor on main" eq "$(remote_tag v2.3.0-rc.2)" "$c4"
-expect "red" "discards then publishes" images_were "discard-rc v2.3.0-rc.1|rc v2.3.0-rc.2"
+expect "red" "cuts no rc.2 in the run that dropped rc.1" eq "$(remote_tag v2.3.0-rc.2)" ""
+expect "red" "says rc.2 waits for grain/rc-hold" \
+  has "phase 2: v2.3.0-rc.2 waits for the next run: v2.3.0-rc.1 was dropped just now and grain has posted no grain/rc-hold on ${c3:0:12} yet"
+expect "red" "emits rc_held=v2.3.0-rc.2" grep -qxF "rc_held=v2.3.0-rc.2" "$work/train.out"
+expect "red" "only marks rc.1 discarded" images_were "discard-rc v2.3.0-rc.1"
+
+# The next run: grain has posted the triage-pending hold for the red Stage 1,
+# so rc.2 is held on it.
+rc_hold held "$c3" "v2.3.0-rc.1 failed qualification; v2.3.0-rc.2 is held while pipeline.rc-failed:v2.3.0-rc.1 awaits triage (up to 1h) or tasks titled [rc-blocker v2.3.0-rc.1] remain open."
+: > "$work/images.log"
+: > "$work/train.out"
+train RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "red, stage 1 hold" "exits 0" eq "$status" 0
+expect "red, stage 1 hold" "holds rc.2 on grain/rc-hold" \
+  has "phase 2: v2.3.0-rc.2 is held by grain/rc-hold on ${c3:0:12}: v2.3.0-rc.1 failed qualification"
+expect "red, stage 1 hold" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
+expect "red, stage 1 hold" "publishes nothing" images_were ""
+
+# Triaged: the hold completes and the run after cuts rc.2. With no hold at
+# all on a later run than the drop (grain down), it cuts too: absent stops
+# only the run that dropped the rc.
+rc_hold none
+: > "$work/images.log"
+train
+expect "red, later run" "exits 0" eq "$status" 0
+expect "red, later run" "cuts rc.2 of the same minor on main" eq "$(remote_tag v2.3.0-rc.2)" "$c4"
+expect "red, later run" "publishes rc.2" images_were "rc v2.3.0-rc.2"
 out="$(git -C "$work/remote.git" for-each-ref --format='%(contents)' refs/tags/v2.3.0-rc.1-discarded)"
 expect "red" "the discard tag records the failing job" has "upgrade-test: failed again on its retry"
 
@@ -644,6 +673,10 @@ for app_setting in none conf-none; do
   expect "rc-hold, app $app_setting" "cuts rc.2" eq "$(remote_tag v2.3.0-rc.2)" "$c3"
   expect "rc-hold, app $app_setting" "publishes rc.2" images_were "rc v2.3.0-rc.2"
   expect "rc-hold, app $app_setting" "emits no rc_held" no_line '^rc_held=' "$work/train.out"
+  # The cut's own summary says Stage 2 is skipped rather than promising it
+  # (docs/test-runs/2026-11-09-release-image-machinery.md).
+  expect "rc-hold, app $app_setting" "says Stage 1 alone qualifies rc.2" has "nightly.yml qualifies it (Stage 1) alone: RELEASE_QUALIFICATION_APP=none skips grain/release-qualification (Stage 2)"
+  expect "rc-hold, app $app_setting" "promises no Stage 2" not has "then grain/release-qualification (Stage 2)"
 done
 
 # --- a same-named check run from another app qualifies nothing ---
@@ -1332,7 +1365,10 @@ runs "$c2" "$c3"
 train RELEASE_PUSH_GRANT=train
 expect "auto cycle, red" "exits 0" eq "$status" 0
 expect "auto cycle, red" "drops rc.1" eq "$(remote_tag v2.3.0-rc.1-discarded)" "$c2"
-expect "auto cycle, red" "cuts rc.2 on the next green commit" eq "$(remote_tag v2.3.0-rc.2)" "$c3"
+expect "auto cycle, red" "waits a run for grain/rc-hold before rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
+: > "$work/images.log"
+train RELEASE_PUSH_GRANT=train
+expect "auto cycle, red" "cuts rc.2 on the next green commit a run later" eq "$(remote_tag v2.3.0-rc.2)" "$c3"
 expect "auto cycle, red" "releases nothing" eq "$(remote_tag v2.3.0)" ""
 expect "auto cycle, red" "leaves latest on v2.1.0" eq "$(remote_tag latest)" "$c0"
 qualification pass "$c3"

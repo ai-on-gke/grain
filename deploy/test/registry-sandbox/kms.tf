@@ -39,10 +39,14 @@ resource "google_project_iam_member" "vm_log_writer" {
 }
 
 locals {
+  # No roles/iam.serviceAccountUser: the registry grants itself that role on
+  # each per-instance service account it creates (compute.grant_self_act_as,
+  # default true) through roles/iam.serviceAccountAdmin's
+  # iam.serviceAccounts.setIamPolicy, so it never needs actAs project-wide.
+  # See docs/registry.md, "IAM the registry needs".
   hosted_vm_registry_roles = toset([
     "roles/compute.instanceAdmin.v1",
     "roles/iam.serviceAccountAdmin",
-    "roles/iam.serviceAccountUser",
     "roles/secretmanager.admin",
     "roles/cloudsql.client",
   ])

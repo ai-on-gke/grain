@@ -758,6 +758,11 @@ var attributedRoutes = map[string]attributedRoute{
 		agentGrants: []string{"api:settings:write"},
 		recorded:    lastConfigAudit,
 	},
+	"PUT /api/usage/settings": {
+		body:        `{"mode":"auto","minWorkers":2}`,
+		agentGrants: []string{"api:settings:write"},
+		recorded:    lastConfigAudit,
+	},
 	"PUT /api/repos/{owner}/{name}/merge-on-green": {
 		path:        "/api/repos/acme/widgets/merge-on-green",
 		body:        `{"enabled":true}`,
@@ -806,7 +811,6 @@ var neverAttributedRoutes = map[string]bool{
 	// Checks, tests and previews: they report what a change would do and
 	// write nothing.
 	"POST /api/agent-keys/{framework}/check": true,
-	"POST /api/capabilities/{id}/check":      true,
 	"POST /api/capability-grants/check":      true,
 	"POST /api/capability-policy/preview":    true,
 	"POST /api/capability-servers/test":      true,

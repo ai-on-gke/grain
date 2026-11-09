@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -823,7 +824,7 @@ func TestWhatASessionProposesWaitsUnlessTheDeploymentSaysOtherwise(t *testing.T)
 			if state != tc.want {
 				t.Fatalf("the proposal reads %q, want %q", state, tc.want)
 			}
-			noted := strings.Contains(proposal.Body, "`self-repair`")
+			noted := strings.Contains(proposal.Body, "`"+model.GrainHostExecGrant+"`")
 			if want := slices.Contains(tc.caps, any("self-repair")); noted != want {
 				t.Errorf("escalation note in body = %v, want %v: %q", noted, want, proposal.Body)
 			}
@@ -1835,11 +1836,37 @@ func TestSessionWarmSandboxCapacityEvictionEvictsOldestIdleFirst(t *testing.T) {
 	}
 }
 
+// inProcessExchangeIdleTTL is the session idle TTL the in-process
+// continuation tests store while their turns are exchanged. Turn 1's wait
+// has to outlast the test's own GetObservation + AddComment before the next
+// message lands, which under -race -shuffle=on with the package's parallel
+// tests contending on SQLite has taken 4-8s -- past the 1-2s these tests
+// used to wait, ending the run on turn 1. The wait after the final turn is
+// not left to run this out: that turn calls endInProcessSessionWait.
+const inProcessExchangeIdleTTL = 30 * time.Second
+
+// endInProcessSessionWait is called from a session's final turn: it
+// shortens the stored session idle TTL, which an in-process wait re-reads
+// every CancelPollInterval when its Config.SessionSandboxIdleTTL came from
+// the store, so the wait after this turn ends at once and the run with it.
+// Only for a deps.Config that leaves SessionSandboxIdleTTL unset.
+func endInProcessSessionWait(t *testing.T, ctx context.Context, store *model.Store) {
+	cfg, err := store.GetConfig(ctx)
+	if err != nil || cfg == nil {
+		t.Errorf("reading settings to end the session's wait: %v", err)
+		return
+	}
+	cfg.SessionSandboxIdleTTL = time.Millisecond
+	if err := store.PutConfig(ctx, *cfg); err != nil {
+		t.Errorf("shortening the session idle TTL to end the session's wait: %v", err)
+	}
+}
+
 func TestInProcessSessionContinuationKeepsRunAliveAcrossTurns(t *testing.T) {
 	t.Parallel()
 	store, ctx := openStore(t)
 	settings(t, store, func(cfg *model.Config) {
-		cfg.SessionSandboxIdleTTL = 30 * time.Minute
+		cfg.SessionSandboxIdleTTL = inProcessExchangeIdleTTL
 		cfg.ConsoleSessions = []model.ConsoleSession{{
 			ID: model.DirectorSessionID, Title: "Director",
 			Capabilities: []string{}, NetworkAccess: model.NetworkOpen,
@@ -1853,11 +1880,27 @@ func TestInProcessSessionContinuationKeepsRunAliveAcrossTurns(t *testing.T) {
 	ag := &recordingSessionAgent{
 		onTurn: func(turn int, cfg agent.RunConfig) (*agent.Result, error) {
 			seenPrompts = append(seenPrompts, cfg.ContinuePrompt)
+			if turn == 2 {
+				endInProcessSessionWait(t, ctx, store)
+			}
 			if turn == 1 {
-				// While the run is about to enter its in-process idle wait after turn 1,
-				// post the human's second message shortly after.
+				// Once the run is parked in its in-process idle wait after
+				// turn 1 -- it marks the question pending when it has relayed
+				// the answer and found nothing new -- post the human's second
+				// message. Behind a fixed 80ms sleep and a 350ms TTL, a
+				// loaded -race runner could post after the wait had already
+				// expired and ended the run on one turn.
 				go func() {
-					time.Sleep(80 * time.Millisecond)
+					for {
+						o, err := store.GetObservation(ctx, director.ID)
+						if err == nil && o != nil && o.PendingQuestionCommentID != nil {
+							break
+						}
+						if ctx.Err() != nil {
+							return
+						}
+						time.Sleep(time.Millisecond)
+					}
 					// A message from another task's run arrives first: it does
 					// not wake the session, but the turn a person's message
 					// wakes is told it too, as not a human's.
@@ -1889,11 +1932,13 @@ func TestInProcessSessionContinuationKeepsRunAliveAcrossTurns(t *testing.T) {
 		Framework:  orchestrator.StaticFramework(ag),
 		MaxWorkers: 1,
 		Config: orchestrator.Config{
-			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities:          orchestrator.SessionTestRegistry(),
-			SessionSandboxIdleTTL: 350 * time.Millisecond,
-			WaitForSessionReply:   true,
-			CancelPollInterval:    20 * time.Millisecond,
+			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+			Capabilities: orchestrator.SessionTestRegistry(),
+			// SessionSandboxIdleTTL is left to the stored setting
+			// (inProcessExchangeIdleTTL), which turn 2 shortens to end the
+			// run (endInProcessSessionWait).
+			WaitForSessionReply: true,
+			CancelPollInterval:  20 * time.Millisecond,
 		},
 	}
 
@@ -1906,6 +1951,9 @@ func TestInProcessSessionContinuationKeepsRunAliveAcrossTurns(t *testing.T) {
 	// Both turns must have executed inside a single dispatch (1 sandbox acquire, 1 run row, 2 framework.Run calls).
 	if len(ag.configs) != 2 {
 		t.Fatalf("framework.Run calls = %d, want 2 (turn 1 + in-process continuation)", len(ag.configs))
+	}
+	if sbx.acquires != 1 {
+		t.Fatalf("sandbox acquires = %d, want 1 (turn 2 served by the live run's sandbox)", sbx.acquires)
 	}
 	for _, want := range []string{
 		"the run of another task (task other-task), not a human",
@@ -1951,22 +1999,40 @@ func TestInProcessSessionContinuationKeepsRunAliveAcrossTurns(t *testing.T) {
 type delayedAcquireSandboxes struct {
 	inner        orchestrator.Sandboxes
 	acquireDelay time.Duration
+	acquires     atomic.Int32
 }
 
 func (d *delayedAcquireSandboxes) Acquire(ctx context.Context, name string, shape orchestrator.Shape) (orchestrator.Sandbox, error) {
+	d.acquires.Add(1)
 	if d.acquireDelay > 0 {
 		time.Sleep(d.acquireDelay)
 	}
 	return d.inner.Acquire(ctx, name, shape)
 }
 
+// sessionTurnMeasurement is what one TestMeasureSessionTurnLatencyBeforeAndAfter
+// pass saw: the wall-clock latency it logs, and the structural signals that
+// latency comes from.
+type sessionTurnMeasurement struct {
+	latency       time.Duration
+	acquires      int
+	runs          int
+	frameworkRuns int
+	reused        bool
+}
+
 // Not t.Parallel: it compares wall-clock latencies measured one after the
-// other, and under the package's parallel -race load the scheduling jitter
+// other, and under the package's parallel load the scheduling jitter
 // between those runs can exceed the 200ms the comparisons rest on. Each
 // latency is also the best of a few runs, so one descheduled run cannot
-// decide the comparison on its own.
+// decide the comparison on its own. What makes each path faster is
+// asserted structurally on every build -- a cold turn acquires a sandbox
+// for each run, a warm one reuses the first run's, and an in-process one
+// serves both turns from a single run -- while the latency comparisons
+// themselves are left to non-race builds (raceEnabled), where a warm
+// dispatch measured 1.73s against a cold one's 1.2-1.5s.
 func TestMeasureSessionTurnLatencyBeforeAndAfter(t *testing.T) {
-	measure := func(name string, idleTTL time.Duration, inProcess bool, acquireDelay time.Duration) time.Duration {
+	measure := func(name string, idleTTL time.Duration, inProcess bool, acquireDelay time.Duration) sessionTurnMeasurement {
 		store, ctx := openStore(t)
 		settings(t, store, func(cfg *model.Config) {
 			cfg.SessionSandboxIdleTTL = idleTTL
@@ -1987,6 +2053,9 @@ func TestMeasureSessionTurnLatencyBeforeAndAfter(t *testing.T) {
 		ag := &recordingSessionAgent{
 			onTurn: func(turn int, cfg agent.RunConfig) (*agent.Result, error) {
 				if turn == 2 {
+					if inProcess {
+						endInProcessSessionWait(t, ctx, store)
+					}
 					// Simulate the agent's first tool call on turn 2.
 					if len(cfg.Tools) > 0 {
 						_ = cfg.Tools[0].Handler(ctx, map[string]any{"path": "."})
@@ -1994,8 +2063,20 @@ func TestMeasureSessionTurnLatencyBeforeAndAfter(t *testing.T) {
 					firstToolCallAt = time.Now()
 				}
 				if turn == 1 && inProcess {
+					// Not until the run is parked in its idle wait (it
+					// marks the question pending then), so the message
+					// cannot miss a wait a loaded runner let expire.
 					go func() {
-						time.Sleep(30 * time.Millisecond)
+						for {
+							o, err := store.GetObservation(ctx, director.ID)
+							if err == nil && o != nil && o.PendingQuestionCommentID != nil {
+								break
+							}
+							if ctx.Err() != nil {
+								return
+							}
+							time.Sleep(time.Millisecond)
+						}
 						messagePostedAt = time.Now()
 						_, _ = store.AddComment(ctx, model.Comment{
 							TaskID:    director.ID,
@@ -2025,6 +2106,11 @@ func TestMeasureSessionTurnLatencyBeforeAndAfter(t *testing.T) {
 				CancelPollInterval:    5 * time.Millisecond,
 			},
 		}
+		if inProcess {
+			// The stored setting, read live, so turn 2 can end the wait
+			// (endInProcessSessionWait).
+			deps.Config.SessionSandboxIdleTTL = 0
+		}
 
 		t1 := baseTime.Add(time.Minute)
 		replyToSession(t, store, director.ID, t1)
@@ -2039,29 +2125,64 @@ func TestMeasureSessionTurnLatencyBeforeAndAfter(t *testing.T) {
 				t.Fatalf("%s turn 2: %v", name, err)
 			}
 		}
-		d := firstToolCallAt.Sub(messagePostedAt)
-		t.Logf("%s: time from message to first tool call = %v", name, d)
-		return d
+		if len(ag.configs) != 2 || firstToolCallAt.IsZero() {
+			t.Fatalf("%s: framework.Run calls = %d, want 2 (turn 2 reached)", name, len(ag.configs))
+		}
+		runs, err := store.Runs(ctx, director.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := sessionTurnMeasurement{
+			latency:       firstToolCallAt.Sub(messagePostedAt),
+			acquires:      int(sbx.acquires.Load()),
+			runs:          len(runs),
+			frameworkRuns: len(ag.configs),
+			reused:        ag.configs[1].SandboxReused,
+		}
+		t.Logf("%s: time from message to first tool call = %v (acquires=%d runs=%d reused=%v)",
+			name, m.latency, m.acquires, m.runs, m.reused)
+		return m
 	}
 
-	best := func(name string, idleTTL time.Duration, inProcess bool, acquireDelay time.Duration) time.Duration {
-		var min time.Duration
-		for i := range 3 {
-			if d := measure(name, idleTTL, inProcess, acquireDelay); i == 0 || d < min {
-				min = d
+	// Under -race only one pass each: the latencies are logged, not compared.
+	passes := 3
+	if raceEnabled {
+		passes = 1
+	}
+	best := func(name string, idleTTL time.Duration, inProcess bool, acquireDelay time.Duration) sessionTurnMeasurement {
+		var min sessionTurnMeasurement
+		for i := range passes {
+			if m := measure(name, idleTTL, inProcess, acquireDelay); i == 0 || m.latency < min.latency {
+				min = m
 			}
 		}
 		return min
 	}
 	cold := best("before (cold sandbox acquire + setup)", -1*time.Second, false, 200*time.Millisecond)
 	warm := best("after (warm sandbox reuse)", 30*time.Minute, false, 200*time.Millisecond)
-	inProc := best("after (in-process session continuation)", 350*time.Millisecond, true, 200*time.Millisecond)
+	inProc := best("after (in-process session continuation)", inProcessExchangeIdleTTL, true, 200*time.Millisecond)
 
-	if warm >= cold {
-		t.Errorf("warm sandbox reuse (%v) was not faster than cold sandbox acquire (%v)", warm, cold)
+	if cold.acquires != 2 || cold.runs != 2 || cold.reused {
+		t.Errorf("cold path: acquires=%d runs=%d reused=%v, want a fresh sandbox for each of 2 runs",
+			cold.acquires, cold.runs, cold.reused)
 	}
-	if inProc >= warm {
-		t.Errorf("in-process continuation (%v) was not faster than warm dispatch (%v)", inProc, warm)
+	if warm.acquires != 1 || warm.runs != 2 || !warm.reused {
+		t.Errorf("warm path: acquires=%d runs=%d reused=%v, want turn 2's run to reuse turn 1's sandbox with no new acquire",
+			warm.acquires, warm.runs, warm.reused)
+	}
+	if inProc.acquires != 1 || inProc.runs != 1 || inProc.frameworkRuns != 2 {
+		t.Errorf("in-process path: acquires=%d runs=%d framework.Run calls=%d, want both turns served by one run on one sandbox",
+			inProc.acquires, inProc.runs, inProc.frameworkRuns)
+	}
+
+	if raceEnabled {
+		return
+	}
+	if warm.latency >= cold.latency {
+		t.Errorf("warm sandbox reuse (%v) was not faster than cold sandbox acquire (%v)", warm.latency, cold.latency)
+	}
+	if inProc.latency >= warm.latency {
+		t.Errorf("in-process continuation (%v) was not faster than warm dispatch (%v)", inProc.latency, warm.latency)
 	}
 }
 

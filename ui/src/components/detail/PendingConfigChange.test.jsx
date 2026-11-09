@@ -16,6 +16,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import PendingConfigChange from "./PendingConfigChange.jsx";
+import { AccessConfigProvider } from "../../AccessContext.jsx";
 import api from "../../api.js";
 
 vi.mock("../../api.js", () => ({ default: vi.fn().mockResolvedValue(null) }));
@@ -41,8 +42,15 @@ const pending = (over = {}) => ({
   ...over,
 });
 
-// act runs what it is handed, the way DetailOverlay's does.
-const act = vi.fn(async (fn) => fn());
+// act runs what it is handed and swallows a rejection, the way App's does.
+const act = vi.fn(async (fn) => {
+  try {
+    await fn();
+    return true;
+  } catch {
+    return false;
+  }
+});
 
 describe("PendingConfigChange", () => {
   afterEach(() => {
@@ -128,5 +136,97 @@ describe("PendingConfigChange", () => {
     expect(
       screen.getByRole("button", { name: "Approve & Apply" }),
     ).toBeDisabled();
+  });
+
+  it("replaces Schema valid and disables Approve & Apply after a 422 refusal, including on reload", async () => {
+    const user = userEvent.setup();
+    const conflict =
+      "the change conflicts with the current main: rebase it onto origin/main and propose it again";
+    const err = new Error(
+      `the config change does not pass validation: ${conflict}`,
+    );
+    err.status = 422;
+    err.validation = {
+      check: { SchemaVersion: 0, Rows: null, Warnings: null },
+    };
+    api.mockRejectedValueOnce(err);
+
+    const { rerender } = render(
+      <PendingConfigChange
+        t={{ id: "42", pendingConfigChange: pending() }}
+        act={act}
+      />,
+    );
+    expect(screen.getByTestId("config-change-validation")).toHaveTextContent(
+      "Schema valid",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Approve & Apply" }));
+
+    const banner = screen.getByTestId("config-change-validation");
+    expect(banner).not.toHaveTextContent("Schema valid");
+    expect(banner).not.toHaveTextContent("Dry-run apply succeeded");
+    expect(banner).toHaveTextContent("Stored validation no longer holds");
+    expect(banner).toHaveTextContent(conflict);
+    expect(banner).toHaveTextContent("Reject");
+    expect(
+      screen.getByRole("button", { name: "Approve & Apply" }),
+    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Reject" })).not.toBeDisabled();
+
+    // After a reload, the server's persisted stale validation renders the
+    // same state without needing local refusal state.
+    rerender(
+      <PendingConfigChange
+        t={{
+          id: "42",
+          pendingConfigChange: pending({
+            validation: { ok: false, stale: true, error: conflict },
+          }),
+        }}
+        act={act}
+      />,
+    );
+    expect(screen.getByTestId("config-change-validation")).toHaveTextContent(
+      "Stored validation no longer holds",
+    );
+    expect(
+      screen.getByRole("button", { name: "Approve & Apply" }),
+    ).toBeDisabled();
+  });
+
+  it("offers a role without settings:write neither decision, and says why", async () => {
+    const user = userEvent.setup();
+    const viewer = {
+      access: {
+        role: "grain/viewer",
+        roles: ["grain/viewer"],
+        full: false,
+        scopes: ["settings:read", "tasks:read"],
+      },
+    };
+    render(
+      <AccessConfigProvider config={viewer}>
+        <PendingConfigChange
+          t={{ id: "42", pendingConfigChange: pending() }}
+          act={act}
+        />
+      </AccessConfigProvider>,
+    );
+    const approve = screen.getByRole("button", { name: "Approve & Apply" });
+    const reject = screen.getByRole("button", { name: "Reject" });
+    expect(approve).toBeDisabled();
+    expect(reject).toBeDisabled();
+    expect(approve.closest("[data-access-denied]")).toHaveAttribute(
+      "data-access-denied",
+      "settings:write",
+    );
+    await user.hover(reject.closest("[data-access-denied]"));
+    expect(
+      await screen.findByText(
+        "Needs settings:write, which your role grain/viewer does not grant.",
+      ),
+    ).toBeInTheDocument();
+    expect(api).not.toHaveBeenCalled();
   });
 });

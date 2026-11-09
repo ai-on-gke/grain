@@ -21,14 +21,9 @@ import {
   removeOption,
 } from "./searchSelect.js";
 
-// -legacy-capability registers example-legacy, a made-up provider with
-// nothing to mint, so the Legacy capabilities pickers have a row: every
-// legacy provider core shipped has been retired onto a server method.
-test.use({ demoArgs: ["-legacy-capability"] });
-
 // Layout of SearchSelect's multiple mode (src/components/SearchSelect.jsx)
-// where it replaced a <Select multiple>: the Legacy capabilities pickers
-// on the new-task form and the task pane, and a suite's Templates. At
+// where it replaced a <Select multiple>: the narrowing bar's value
+// picker on the task list, and a suite's Templates. At
 // desktop and phone widths the chips sit inside the box, every row's
 // checkbox sits in front of its label, the open list stays on screen,
 // and Escape closes the list without closing the pane around it.
@@ -62,8 +57,9 @@ async function rowsLookRight(box, width) {
     const row = rows.nth(i);
     const r = await row.boundingBox();
     const check = await row.locator(".search-select-check").boundingBox();
+    // A glyphed row (a repo's) labels itself with GlyphLabel instead.
     const text = await row
-      .locator(".MuiListItemText-primary")
+      .locator(".MuiListItemText-primary, .glyph-label")
       .first()
       .boundingBox();
     within(check, r);
@@ -76,12 +72,22 @@ for (const [label, size] of [
   ["desktop", { width: 1440, height: 900 }],
   ["phone", { width: 390, height: 844 }],
 ]) {
-  test(`the new-task Legacy capabilities picker is searched and chipped (${label})`, async ({
+  test(`the narrowing bar's value picker is searched and chipped (${label})`, async ({
     page,
   }) => {
     await page.setViewportSize(size);
-    await page.goto("/new");
-    const box = page.getByRole("combobox", { name: "Legacy capabilities" });
+    await page.goto("/");
+    await expect(page.locator(".task-row").first()).toBeVisible();
+    await page
+      .getByRole("button", { name: /^Filter/ })
+      .first()
+      .click();
+    await page
+      .getByRole("button", { name: /^(Filter by…|Add filter)$/ })
+      .click();
+    await page.getByRole("menuitem", { name: "Repo" }).click();
+    const row = page.locator(".narrowing-row").last();
+    const box = row.locator(".narrowing-values").getByRole("combobox");
     await box.scrollIntoViewIfNeeded();
     const before = await chosenValues(box);
 
@@ -95,82 +101,22 @@ for (const [label, size] of [
     await expect(box).toHaveAttribute("aria-expanded", "true");
     await page.keyboard.press("Escape");
     await expect(box).toHaveAttribute("aria-expanded", "false");
-    await expect(page.getByRole("heading", { name: "New task" })).toBeVisible();
+    await expect(box).toBeVisible();
 
     expect(await chosenValues(box)).toEqual([...before, ...wanted]);
     const field = await inputBase(box).boundingBox();
     for (const chip of await chips(box).all()) {
       within(await chip.boundingBox(), field);
     }
-    const form = page.locator("form", {
-      has: page.getByRole("button", { name: "Create task" }),
-    });
     expect(
-      await form.evaluate((el) => el.scrollWidth - el.clientWidth),
-    ).toBeLessThanOrEqual(1);
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
 
     await removeOption(box, wanted[0]);
     expect(await chosenValues(box)).toEqual([...before, ...wanted.slice(1)]);
-    await page.getByRole("button", { name: "Discard draft" }).click();
-  });
-
-  test(`the task pane's Legacy capabilities picker attaches from its list and detaches from its chip (${label})`, async ({
-    page,
-    request,
-  }) => {
-    await page.setViewportSize(size);
-    const created = await request.post("/api/tasks", {
-      data: {
-        title: `E2E multi select ${label} ${Date.now()}`,
-        repo: "acme/widgets",
-        capabilities: ["example-legacy"],
-      },
-    });
-    expect(created.ok()).toBeTruthy();
-    const task = await created.json();
-    await page.goto(`/tasks/${task.id}`);
-    const box = page.getByRole("combobox", { name: "Legacy capabilities" });
-    await box.scrollIntoViewIfNeeded();
-    await expect.poll(() => chosenValues(box)).toEqual(["example-legacy"]);
-    within(
-      await chips(box).first().boundingBox(),
-      await inputBase(box).boundingBox(),
-    );
-    await box.click();
-    await rowsLookRight(box, size.width);
-    await page.keyboard.press("Escape");
-    await expect(box).toHaveAttribute("aria-expanded", "false");
-    await expect(box).toBeVisible();
-
-    const dir = process.env.SHOTS_DIR;
-    if (dir) {
-      await box.click();
-      for (const theme of ["light", "dark"]) {
-        await page.evaluate(
-          (t) => localStorage.setItem("grain.themeMode", t),
-          theme,
-        );
-        await page.emulateMedia({ colorScheme: theme });
-        await page.waitForTimeout(200);
-        await page.screenshot({
-          path: `${dir}/task-pane-capabilities-${label}-${theme}.png`,
-        });
-      }
-      await page.evaluate(() => localStorage.removeItem("grain.themeMode"));
-      await page.emulateMedia({ colorScheme: "light" });
-      await page.keyboard.press("Escape");
-    }
-
-    const detached = page.waitForResponse(
-      (r) =>
-        r.url().endsWith(`/api/tasks/${task.id}/capabilities`) &&
-        r.request().method() === "POST",
-    );
-    await removeOption(box, "example-legacy");
-    expect(JSON.parse((await detached).request().postData())).toEqual({
-      id: "example-legacy",
-      attach: false,
-    });
+    await row.getByRole("button", { name: /^Remove filter/ }).click();
   });
 
   test(`a suite's Templates picker shows its glyph and title line (${label})`, async ({

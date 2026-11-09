@@ -469,16 +469,27 @@ func (s *Server) handleListBranches(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
+	list, err := parseListQuery(r, listPageMedium)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	branches, err := s.tasks.ListBranches(r.Context(), repo)
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, branches)
+	branches = filterList(branches, func(b Branch) bool { return list.matches(b.Name) })
+	writeList(w, branches, list)
 }
 
 func (s *Server) handleListGitHubBranches(w http.ResponseWriter, r *http.Request) {
 	repo, err := s.parseRepoPath(r)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	list, err := parseListQuery(r, listPageMedium)
 	if err != nil {
 		writeClientError(w, err)
 		return
@@ -497,7 +508,8 @@ func (s *Server) handleListGitHubBranches(w http.ResponseWriter, r *http.Request
 		writeError(w, status, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, names)
+	names = filterList(names, func(name string) bool { return list.matches(name) })
+	writeList(w, names, list)
 }
 
 func (s *Server) handleCompareBranches(w http.ResponseWriter, r *http.Request) {

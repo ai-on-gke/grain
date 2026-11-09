@@ -263,23 +263,17 @@ test.describe("user and system settings walkthrough regressions", () => {
   });
 
   // The retired Settings → Legacy capabilities tab was still what Tasks'
-  // empty Default legacy capabilities menu pointed at.
-  test("Tasks' empty Default legacy capabilities menu points at Grants", async ({
-    page,
-  }) => {
+  // empty Default legacy capabilities menu pointed at; that always-empty
+  // menu is gone, and default grants are GrantsPicker's alone.
+  test("Tasks draws no Default legacy capabilities menu", async ({ page }) => {
     await page.goto("/settings/tasks");
-    await page
-      .locator('[data-setting-id="defaultCapabilities"] [role="combobox"]')
-      .click();
-    const empty = page.getByRole("option", {
-      name: "None offered -- grant access under Grants",
-    });
-    await expect(empty).toBeVisible();
-    await expect(empty).toHaveAttribute("aria-disabled", "true");
+    await expect(page.getByTestId("default-grants")).toBeVisible();
+    await expect(
+      page.getByRole("combobox", { name: "Default legacy capabilities" }),
+    ).toHaveCount(0);
     await expect(page.getByText(/Settings → Legacy capabilities/i)).toHaveCount(
       0,
     );
-    await page.keyboard.press("Escape");
   });
 
   // Agents → Commit identity and CLI → Sign in reloaded the whole app and
@@ -365,5 +359,103 @@ test.describe("user and system settings walkthrough regressions", () => {
         return (after.agentBackends || []).map((b) => b.id);
       })
       .toEqual(beforeIds);
+  });
+
+  // 2026-11-09 walkthrough: SettingsPage.pick() rewrote window.location via
+  // replaceState before App's URL sync effect ran, making App see samePage
+  // and overwrite the previous section instead of pushing history.
+  test("cross-section filter navigation pushes browser history on desktop and phone", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+    await page.getByTestId("top-bar-settings").click();
+    await expect(page).toHaveURL(/\/settings\/models$/);
+
+    await page.keyboard.press("/");
+    const filter = page.getByRole("textbox", { name: "Filter settings" });
+    await expect(filter).toBeFocused();
+    await filter.fill("house style");
+    await page.getByTestId("settings-result").first().click();
+    await expect(page).toHaveURL(/\/settings\/agents#promptExtension$/);
+
+    await page.goBack();
+    await expect(page).toHaveURL(/\/settings\/models$/);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/settings");
+    await expect(page.getByTestId("settings-nav")).toBeVisible();
+    await page.getByRole("textbox", { name: "Filter settings" }).fill("turns");
+    await page.getByTestId("settings-result").first().click();
+    await expect(page).toHaveURL(/\/settings\/agents#maxAgentTurns$/);
+
+    await page.goBack();
+    await expect(page).toHaveURL(/\/settings$/);
+    await expect(page.getByTestId("settings-nav")).toBeVisible();
+  });
+
+  // 2026-11-09 walkthrough: filtering for a conditionally hidden field
+  // (autoUpgradeTime while autoUpgradeOn is "off") left its parent card
+  // (#updates) below the fold with no focus and no highlight.
+  test("filtering for a conditionally hidden setting scrolls and highlights its parent card", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 500 });
+    await page.goto("/settings/models");
+    await page.keyboard.press("/");
+    await page
+      .getByRole("textbox", { name: "Filter settings" })
+      .fill("Automatic upgrade time of day");
+    await page.getByTestId("settings-result").first().click();
+    await expect(page).toHaveURL(/\/settings\/general#autoUpgradeTime$/);
+
+    const updates = page.locator("#updates");
+    await expect(updates).toHaveClass(/setting-highlight/);
+    await expect
+      .poll(async () => {
+        const box = await updates.boundingBox();
+        return Boolean(box && box.y < 500 && box.y + box.height > 0);
+      })
+      .toBe(true);
+  });
+
+  // 2026-11-09 walkthrough: while viewing a section's item subpage
+  // (/settings/capabilities/<server>), clicking Capabilities in the section
+  // nav or picking a same-section filter match did not clear item.
+  test("clicking the active section nav or a same-section filter match exits an open capability server subpage", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/settings/capabilities");
+    const serverLink = page
+      .getByText(/capabilities\.demo\.grain\.example\/cloud/i)
+      .first();
+    await expect(serverLink).toBeVisible();
+    await serverLink.click();
+    await expect(page).toHaveURL(
+      /\/settings\/capabilities\/https%3A%2F%2Fcapabilities\.demo\.grain\.example%2Fcloud$/,
+    );
+    await expect(page.getByTestId("capability-servers-back")).toBeVisible();
+
+    await page.getByTestId("settings-nav-capabilities").click();
+    await expect(page).toHaveURL(/\/settings\/capabilities$/);
+    await expect(page.getByTestId("capability-servers-back")).toHaveCount(0);
+    await expect(
+      page.getByRole("list", { name: "Capability servers" }),
+    ).toBeVisible();
+
+    await serverLink.click();
+    await expect(page).toHaveURL(
+      /\/settings\/capabilities\/https%3A%2F%2Fcapabilities\.demo\.grain\.example%2Fcloud$/,
+    );
+    await expect(page.getByTestId("capability-servers-back")).toBeVisible();
+    await page.keyboard.press("/");
+    await page
+      .getByRole("textbox", { name: "Filter settings" })
+      .fill("GitHub host");
+    await page.getByTestId("settings-result").first().click();
+    await expect(page).toHaveURL(/\/settings\/capabilities#githubHost$/);
+    await expect(page.getByTestId("capability-servers-back")).toHaveCount(0);
+    await expect(page.locator("input[name=githubHost]")).toBeFocused();
   });
 });

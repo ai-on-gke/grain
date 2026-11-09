@@ -1387,3 +1387,45 @@ func TestAPreConversionStoreUpgradesEveryRetiredGrantAtOnce(t *testing.T) {
 		noneRetired(what, got)
 	}
 }
+
+func TestMigrationRewritesRetiredGrantWaits(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		from int
+	}{
+		{"from_123_rewriteLegacyGrantsMulti", 123},
+		{"from_128_migrateRetiredGrantWaits", 128},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, db, ctx := openStore(t)
+			now := time.Now().UTC().Format(time.RFC3339Nano)
+			if _, err := db.ExecContext(ctx,
+				"INSERT INTO `task_grant_wait` (`task_id`, `capability`, `resource`, `waiting_at`) VALUES ('w1', 'github-sandbox', 'GitHub App rate limit', ?), ('w2', 'console', 'slot', ?)",
+				now, now); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = ? WHERE `id` = 1", tc.from); err != nil {
+				t.Fatal(err)
+			}
+			if err := model.New(db).Init(ctx); err != nil {
+				t.Fatalf("Init from %d: %v", tc.from, err)
+			}
+			var gotCap string
+			if err := db.QueryRowContext(ctx, "SELECT `capability` FROM `task_grant_wait` WHERE `task_id` = 'w1'").Scan(&gotCap); err != nil {
+				t.Fatalf("reading w1 grant wait: %v", err)
+			}
+			if gotCap != model.GitHubSandboxRepoGrant {
+				t.Errorf("w1 capability = %q, want %q", gotCap, model.GitHubSandboxRepoGrant)
+			}
+			var count int
+			if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM `task_grant_wait` WHERE `task_id` = 'w2'").Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			if tc.from == 128 && count != 0 {
+				t.Errorf("w2 console wait survived migration 129: count = %d", count)
+			}
+		})
+	}
+}

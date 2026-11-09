@@ -48,9 +48,23 @@ export default function CredentialsSection({ s, claimedSecrets, secretsSeq }) {
     reloadSettings,
     showError,
     onSaved,
-    readOnly,
   } = s;
+  // What is read-only whatever the role (external mode, a config-managed
+  // section); the page's s.readOnly also folds in Capabilities' own
+  // capabilities:admin, which this card does not follow.
+  const readOnly = s.readOnlyForAnyRole ?? s.readOnly;
   const { restartRequired, restartHint, restartChip } = settingHints(settings);
+  // The card sits on Capabilities, but its fields save through PUT
+  // /api/settings (settings:write) and its secrets through /api/secrets
+  // (secrets:write), so each part follows its own scope rather than
+  // Capabilities' capabilities:admin (CapabilitiesSection clears the
+  // section's refusal for it): a role holding capabilities:admin alone is
+  // not offered controls the server refuses with 403, and one holding
+  // settings:write and secrets:write without it is not refused controls
+  // the server allows (2026-11-08 deployment credentials walkthrough).
+  const settingsRefusal = s.settingsWriteRefusal || "";
+  const secretsRefusal = s.secretsWriteRefusal || "";
+  const cardRefusals = [settingsRefusal, secretsRefusal].filter(Boolean);
   const handleSecretsChanged = async () => {
     await reloadSettings();
     await onSaved?.();
@@ -67,6 +81,22 @@ export default function CredentialsSection({ s, claimedSecrets, secretsSeq }) {
         aria-label="Deployment-wide settings"
         data-testid="deployment-credentials"
       >
+        {cardRefusals.length > 0 && (
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            data-testid="credentials-read-only"
+            sx={{ mb: 1 }}
+          >
+            {settingsRefusal && secretsRefusal
+              ? "Read-only for you."
+              : settingsRefusal
+                ? "The GitHub host and GCP settings are read-only for you."
+                : "Secrets are read-only for you."}{" "}
+            {cardRefusals.join(" ")} An operator can change your role in
+            Settings &rarr; Access.
+          </Typography>
+        )}
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
           Settings shared across the deployment -- the GitHub host grain talks
           to, and the GCP project and legacy service-account pool seeded onto
@@ -80,9 +110,14 @@ export default function CredentialsSection({ s, claimedSecrets, secretsSeq }) {
               (settings-mutability.spec.md D-2). The secrets below stay
               writable either way. */}
           <ReadOnlyFieldset
-            disabled={Boolean(readOnly) || Boolean(s.configLocked)}
+            disabled={
+              Boolean(readOnly) ||
+              Boolean(s.configLocked) ||
+              Boolean(settingsRefusal)
+            }
+            title={settingsRefusal || undefined}
           >
-            {!readOnly && s.configLocked && (
+            {!readOnly && !settingsRefusal && s.configLocked && (
               <ConfigManagedNotice
                 what="The GitHub host and GCP settings"
                 paths={["tables/grain_config.json"]}
@@ -214,6 +249,8 @@ export default function CredentialsSection({ s, claimedSecrets, secretsSeq }) {
             refreshKey={secretsSeq}
             showError={showError}
             onSecretsChanged={handleSecretsChanged}
+            readOnly={Boolean(secretsRefusal)}
+            readOnlyReason={secretsRefusal}
           />
         </>
       </Box>

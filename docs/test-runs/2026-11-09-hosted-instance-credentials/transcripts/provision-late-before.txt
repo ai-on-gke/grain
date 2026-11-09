@@ -1,0 +1,20 @@
+config /tmp/hic/registry.yaml is valid
+### SA_DELAY=20: grain registry create walk-before
+  created hosted instance entry walk-before (state=creating, shape=n2-standard-2, url=https://walk-before.grain-user.test)
+  t+0s: state=creating status_detail=
+  t+7s: state=creating status_detail=waiting for service account gi-walk-before@made-up-proj.iam.gserviceaccount.com to propagate before creating the GCE instance (attempt 1 failed, retrying in 5s): gcp compute: inserting instance grain-vm-walk-before in us-central1-a: GCE operation op-1 failed (EXTERNAL_RESOURCE_NOT_FOUND): The resource 'gi-walk-before@made-up-proj.iam.gserviceaccount.com' of type 'serviceAccount' was not found.
+  t+17s: state=creating status_detail=waiting for service account gi-walk-before@made-up-proj.iam.gserviceaccount.com to propagate before creating the GCE instance (attempt 2 failed, retrying in 10s): gcp compute: inserting instance grain-vm-walk-before in us-central1-a: GCE operation op-2 failed (EXTERNAL_RESOURCE_NOT_FOUND): The resource 'gi-walk-before@made-up-proj.iam.gserviceaccount.com' of type 'serviceAccount' was not found.
+  t+31s: state=running status_detail=
+### grain registry show walk-before
+  Name:        walk-before
+  URL:         https://walk-before.grain-user.test
+  Kind:        instance (host_kind=registry-vm)
+  State:       running (status=online, listed=false)
+  Owner:       alice@example.com
+  Shape:       n2-standard-2
+  Version:     v3.2.0-walk ()
+### stub: Compute inserts, Secret Manager versions, SA creations
+  instance inserts (all walks so far): 10
+  projects/made-up-proj/secrets/grain-inst-walk-before-db-password: 3 version(s)
+### tenant role on the TLS pool
+  gi-walk-before@made-up-proj.iam|t

@@ -175,11 +175,11 @@ test.describe("Task Intake, Detail Edit, and Filter Inputs Verification Walkthro
     await dueDateInput.fill("2026-11-20");
     await expect(dueDateInput).toHaveValue("2026-11-20");
 
-    // 1.9 Capabilities toggles: Select dropdown multi-select
-    const capabilitiesCombobox = page.getByRole("combobox", {
-      name: /^Legacy capabilities/i,
-    });
-    await expect(capabilitiesCombobox).toBeVisible();
+    // 1.9 Grants: one GrantsPicker, with no legacy checklist beside it
+    await expect(page.getByTestId("new-task-grants")).toBeVisible();
+    await expect(
+      page.getByRole("combobox", { name: /^Legacy capabilities/i }),
+    ).toHaveCount(0);
 
     // 1.10 Auto-merge checkbox & noPort checkbox
     const autoMergeCheckbox = page.getByRole("checkbox", {
@@ -394,15 +394,10 @@ test.describe("Task Intake, Detail Edit, and Filter Inputs Verification Walkthro
         .filter({ hasText: "Operator audit verification comment text." }),
     ).toBeVisible();
 
-    // 2.6 Capabilities attach/detach in detail view
-    const capCombobox = page.getByRole("combobox", {
-      name: /^Legacy capabilities/i,
-    });
-    if (await capCombobox.isVisible()) {
-      await capCombobox.click();
-      // Menu should show available capabilities
-      await page.keyboard.press("Escape");
-    }
+    // 2.6 Grants in the detail view: GrantsPicker alone
+    await expect(
+      page.getByRole("combobox", { name: /^Legacy capabilities/i }),
+    ).toHaveCount(0);
   });
 
   // =========================================================================

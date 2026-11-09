@@ -419,6 +419,11 @@ func (s *Server) handleMessageTaskAgent(w http.ResponseWriter, r *http.Request) 
 // hand a chat turn every message ever posted and let it read the oldest
 // as this turn's reply.
 func (s *Server) handleListTaskMessages(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageSmall)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	var after int64
 	if raw := r.URL.Query().Get("after"); raw != "" {
 		parsed, err := strconv.ParseInt(raw, 10, 64)
@@ -457,8 +462,11 @@ func (s *Server) handleListTaskMessages(w http.ResponseWriter, r *http.Request) 
 				writeClientError(w, err)
 				return
 			}
+			messages = filterList(messages, func(m Message) bool {
+				return list.matches(m.Author, m.Body, m.Summary)
+			})
 			if len(messages) > 0 || waitCtx.Err() != nil {
-				writeJSON(w, http.StatusOK, messages)
+				writeList(w, messages, list)
 				return
 			}
 			select {
@@ -473,7 +481,10 @@ func (s *Server) handleListTaskMessages(w http.ResponseWriter, r *http.Request) 
 		writeClientError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, messages)
+	messages = filterList(messages, func(m Message) bool {
+		return list.matches(m.Author, m.Body, m.Summary)
+	})
+	writeList(w, messages, list)
 }
 
 // deliveredRequest is POST /api/tasks/{id}/delivered's body: the last

@@ -1014,7 +1014,7 @@ cli_publish() {
     id="$(jq -r .id "$scratch/release")"
     upload_base="$(jq -r '.upload_url | sub("\\{.*$"; "")' "$scratch/release")"
     asset_list "$id" > "$scratch/existing"
-  elif [ "$dry_run" = true ] && [ -z "$token" ]; then
+  elif [ "$dry_run" = true ]; then
     say "[dry-run] would upload the grain CLI to $release, which promote or train-tag publishes"
     id=dry-run
     : > "$scratch/existing"

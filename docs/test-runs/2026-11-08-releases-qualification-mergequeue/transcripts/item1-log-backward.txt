@@ -1,0 +1,5 @@
+GET /api/v3/repos/ai-on-gke/grain/releases/tags/sha-b27f0fb538b0
+GET /api/v3/repos/ai-on-gke/grain/releases/1024/assets
+GET /api/v3/repos/ai-on-gke/grain/releases/tags/channel-main
+GET /api/v3/repos/ai-on-gke/grain/releases/1009/assets
+GET /api/v3/repos/ai-on-gke/grain/releases/assets/1010

@@ -111,6 +111,7 @@ func ContinueResult(first, next *Result, block StopBlock) *Result {
 		return &merged
 	}
 	merged.FinalText = next.FinalText
+	merged.Usage = first.Usage.Add(next.Usage)
 	merged.ToolCalls = append(append([]ToolCall(nil), first.ToolCalls...), next.ToolCalls...)
 	merged.Transcript = joinTranscript(merged.Transcript, next.Transcript)
 	merged.StopBlocks = append(merged.StopBlocks, next.StopBlocks...)

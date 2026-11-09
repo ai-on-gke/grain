@@ -1,0 +1,86 @@
+=== -disk-gb bounds (CLI and server)
+$ [alice@example.com @ 4261] grain registry create -name alice-vmb -shape standard -disk-gb 20
+    created hosted instance entry alice-vmb (state=creating, shape=standard, url=https://alice-vmb.grain-user.test)
+    (exit 0)
+$ [carol@example.com @ 4251] grain registry create -name carol-vmb -shape standard -disk-gb 19
+    grain: boot_disk_gb must be between 20 and 4000 GB (got 19)
+    (exit 1)
+$ [carol@example.com @ 4251] grain registry create -name carol-vmb -shape standard -disk-gb 4001
+    grain: boot_disk_gb must be between 20 and 4000 GB (got 4001)
+    (exit 1)
+$ [carol@example.com @ 4251] POST /api/entries {"name":"carol-vmb","kind":"instance","shape":"standard","boot_disk_gb":19}
+    HTTP 400
+    {"error":"boot_disk_gb must be between 20 and 4000 GB (got 19)","code":"invalid_argument"}
+
+$ [carol@example.com @ 4251] POST /api/entries {"name":"carol-vmb","kind":"instance","shape":"standard","boot_disk_gb":4001}
+    HTTP 400
+    {"error":"boot_disk_gb must be between 20 and 4000 GB (got 4001)","code":"invalid_argument"}
+
+$ [carol@example.com @ 4251] grain registry create -name carol-vmb -shape standard -disk-gb 4000
+    created hosted instance entry carol-vmb (state=creating, shape=standard, url=https://carol-vmb.grain-user.test)
+    (exit 0)
+$ [carol@example.com @ 4261] grain registry create -name carolvm2b -shape standard
+    grain: registry API 403 (quota_exceeded): registry store: quota exceeded: instance quota units 2 + 1 exceeds limit 2
+    (exit 1)
+  sql> select name, lifecycle_state, boot_disk_gb from registry.entries where name in ('alice-vmb','carol-vmb','carolvm2b') order by name
+    alice-vmb|creating|20
+    carol-vmb|creating|4000
+  sql> update registry.entries set lifecycle_state='running' where name in ('alice-vmb','carol-vmb')
+    UPDATE 2
+$ [alice@example.com @ 4251] grain registry resize -disk-gb 19 alice-vmb
+    grain: boot_disk_gb must be between 20 and 4000 GB (got 19)
+    (exit 1)
+$ [alice@example.com @ 4251] grain registry resize -disk-gb 4001 alice-vmb
+    grain: boot_disk_gb must be between 20 and 4000 GB (got 4001)
+    (exit 1)
+$ [alice@example.com @ 4251] POST /api/entries/alice-vmb/replace {"boot_disk_gb":4001}
+    HTTP 400
+    {"error":"boot_disk_gb must be between 20 and 4000 GB (got 4001)","code":"invalid_argument"}
+
+$ [alice@example.com @ 4251] grain registry resize -disk-gb 200 alice-vmb
+    initiated resize/replace for alice-vmb to shape standard (state=replacing, step=draining)
+    (exit 0)
+$ [alice@example.com @ 4251] grain registry resize -disk-gb 200 conn-alice
+    grain: registry API 400 (invalid_entry_kind): only kind="instance" entries can be resized or replaced
+    (exit 1)
+  sql> select name, lifecycle_state, boot_disk_gb from registry.entries where name='alice-vmb'
+    alice-vmb|replacing|200
+=== stop / start
+  sql> update registry.entries set lifecycle_state='running', replace_step='' where name='alice-vmb'
+    UPDATE 1
+$ [bob@example.com @ 4251] grain registry stop alice-vmb
+    grain: registry API 403 (forbidden): caller "bob@example.com" is not authorized to manage entry "alice-vmb"
+    (exit 1)
+$ [alice@example.com @ 4251] grain registry stop conn-alice
+    grain: registry API 400 (invalid_entry_kind): only kind="instance" entries can be stopped
+    (exit 1)
+$ [alice@example.com @ 4251] grain registry start conn-alice
+    grain: registry API 400 (invalid_entry_kind): only kind="instance" entries can be started
+    (exit 1)
+$ [alice@example.com @ 4251] grain registry stop alice-vmb
+    requested stop for alice-vmb (state=stopping)
+    (exit 0)
+$ [alice@example.com @ 4261] grain registry show alice-vmb
+    Name:        alice-vmb
+    URL:         https://alice-vmb.grain-user.test
+    Kind:        instance (host_kind=registry-vm)
+    State:       stopping (status=offline, listed=false)
+    Owner:       alice@example.com
+    Shape:       standard
+    (exit 0)
+$ [alice@example.com @ 4251] grain registry stop alice-vmb
+    requested stop for alice-vmb (state=stopping)
+    (exit 0)
+  sql> update registry.entries set lifecycle_state='stopped', stopped_at=now() where name='alice-vmb'
+    UPDATE 1
+$ [alice@example.com @ 4261] grain registry list
+    alice-vm                 instance   creating   offline   listed=false owner=alice@example.com        https://alice-vm.grain-user.test
+    alice-vmb                instance   stopped    offline   listed=false owner=alice@example.com        https://alice-vmb.grain-user.test
+    conn-alice               connected  running    offline   listed=true  owner=alice@example.com        https://conn-alice.grain-user.test
+    (exit 0)
+$ [alice@example.com @ 4251] grain registry start alice-vmb
+    requested start for alice-vmb (state=creating)
+    (exit 0)
+$ [alice@example.com @ 4261] grain registry start alice-vmb
+    requested start for alice-vmb (state=creating)
+    (exit 0)

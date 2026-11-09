@@ -107,7 +107,6 @@ for (const [name, viewport] of [
 }
 
 for (const [section, label] of [
-  ["tasks", "Default legacy capabilities"],
   ["general", "Upgrade automatically"],
   // Registry drew its locked cards in a bare disabled fieldset, which a
   // MUI Select does not obey (2026-11-07 settings walkthrough).
@@ -143,10 +142,10 @@ test("an unlocked card's select still opens from the keyboard", async ({
 }) => {
   await page.setViewportSize(DESKTOP);
   await withConfig(page, { configRepoOnly: false, settingsLocked: false });
-  await page.goto("/settings/tasks");
+  await page.goto("/settings/general");
   const select = page
     .getByTestId("settings-section")
-    .getByRole("combobox", { name: "Default legacy capabilities" });
+    .getByRole("combobox", { name: "Upgrade automatically" });
   await expect(select).toBeVisible();
   await expect(select).not.toHaveAttribute("aria-disabled", "true");
   await select.focus();

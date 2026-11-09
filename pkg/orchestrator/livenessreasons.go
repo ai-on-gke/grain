@@ -239,6 +239,10 @@ const (
 	taskReasonBlocked     = "queued/blocked_on_task"
 	taskReasonUsagePaused = "queued/usage_limit_paused"
 	taskReasonLocalPolicy = "queued/held_by_local_policy"
+	// Held by its latest suspension's own resume time
+	// (model.SuspensionWaitCapability): a setup suspension waiting out
+	// its backoff, which dispatch passes over until then.
+	taskReasonHeldBySuspension = "queued/held_by_suspension"
 	// Nothing is dispatched on this deployment at all: a condition the
 	// daemon recorded against itself (pkg/dispatchcondition) -- the git
 	// proxy failed to bind, the reconcile loop gave up -- and not
@@ -304,6 +308,12 @@ var taskReasons = map[string]reasonLiveness{
 	// says so every cycle, so the escalation is the resource's. The
 	// resource TaskReason gives names the refusal and the file, off the
 	// wait dispatch recorded.
+	// Held by its suspension's resume time: a named time, which dispatch
+	// passes on the first cycle after. "Run now" made since the run that
+	// suspended is started straight away (dispatch.runNowEligible).
+	taskReasonHeldBySuspension: {class: livenessDriven, driver: "reconcileDispatch",
+		resource:   "its suspension's resume time",
+		escalation: stallToPerson, control: "Run now"},
 	taskReasonLocalPolicy: {class: livenessAwaitingExternal,
 		resource:   "an edit to this machine's local policy file allowing it",
 		escalation: stallToResource},
@@ -499,6 +509,8 @@ func taskReasonOf(t model.Task, state model.State, obs *model.Observation, openD
 			return taskReasonUsagePaused
 		case hold == holdLocalPolicy:
 			return taskReasonLocalPolicy
+		case hold == holdSuspension:
+			return taskReasonHeldBySuspension
 		}
 		return taskReasonReady
 	case model.StateRunning:
@@ -625,6 +637,8 @@ func TaskReason(t model.Task, state model.State, obs *model.Observation, openDep
 		r.Resource = localPolicyResource(wait.Resource, policyFile)
 	case taskReasonDispatchBlocked:
 		r.Resource = dispatchBlockedResource(dispatchBlocked)
+	case taskReasonHeldBySuspension:
+		r.Resource = wait.Resource
 	}
 	return r
 }
@@ -644,6 +658,9 @@ const (
 	holdNone queuedHold = iota
 	holdUsagePaused
 	holdLocalPolicy
+	// holdSuspension is a task its latest suspension's resume time holds
+	// (model.SuspensionWaitCapability, dispatch's setSuspensionWait).
+	holdSuspension
 	// holdDispatchBlocked is not read off a wait: it is the deployment's
 	// own condition (TaskReason's dispatchBlocked), and holds every
 	// queued task alike.
@@ -652,13 +669,17 @@ const (
 
 // queuedHoldOf is the hold wait records: a usage-limit pause
 // (usageLimitWait), a local-policy refusal (model.PolicyWaitCapability,
-// which heldByPolicy clears once the policy allows the task), or neither.
+// which heldByPolicy clears once the policy allows the task), a
+// suspension's resume time (model.SuspensionWaitCapability, which
+// dispatch clears once it has passed), or none of them.
 func queuedHoldOf(wait *model.GrantWait) queuedHold {
 	switch {
 	case usageLimitWait(wait):
 		return holdUsagePaused
 	case wait != nil && wait.Capability == model.PolicyWaitCapability:
 		return holdLocalPolicy
+	case wait != nil && wait.Capability == model.SuspensionWaitCapability:
+		return holdSuspension
 	}
 	return holdNone
 }

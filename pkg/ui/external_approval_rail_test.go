@@ -202,3 +202,107 @@ func TestExternalAgentApprovalRailHoldsInTheClient(t *testing.T) {
 		t.Errorf("Client.RunNow(942) as external:rails-ext: %v, want it approved and run", err)
 	}
 }
+
+// run-now's implicit approval asks for exactly the tasks:admin the
+// approve route's own scope check does. For a task with no repository
+// that is tasks:admin on every repository: a credential holding
+// dispatch:write everywhere but tasks:admin only for acme/widgets is
+// refused both routes, over REST and over POST /api/mcp's grain_invoke,
+// and the task stays proposed (2026-11-08 second review, finding 3). A
+// credential holding both scopes everywhere is granted both.
+func TestExternalAgentRunNowOnANoRepoTaskNeedsUnlimitedTasksAdmin(t *testing.T) {
+	srv, client := testServer(t)
+	enableExternalAgentAPI(t, client.Store)
+	mint := func(name string, scopes ...string) string {
+		t.Helper()
+		issued, err := client.CreateExternalAgentToken(context.Background(), ui.CreateExternalAgentTokenRequest{
+			Name: name, Scopes: scopes, Owner: "alice@example.com",
+		})
+		if err != nil {
+			t.Fatalf("minting credential %s: %v", name, err)
+		}
+		return issued.Token
+	}
+	noRepo := func(task *model.Task) { task.Target = nil }
+
+	mixed := mint("mixed", "tasks:read", "dispatch:write", "tasks:admin@acme/widgets")
+	railTask(t, client, "950", "", noRepo)
+	if code, body := externalTaskAction(t, srv, mixed, "950", "approve"); code != http.StatusForbidden || !strings.Contains(body, "tasks:admin") {
+		t.Errorf("approve on a no-repository task under tasks:admin@acme/widgets: %d %s, want 403 naming tasks:admin", code, body)
+	}
+	if code, body := externalTaskAction(t, srv, mixed, "950", "run-now"); code != http.StatusForbidden || !strings.Contains(body, "tasks:admin") {
+		t.Errorf("run-now on an unapproved no-repository task under tasks:admin@acme/widgets: %d %s, want 403 naming tasks:admin", code, body)
+	}
+	if out, isErr := externalMCPTaskAction(t, srv, mixed, "api_approve", "950"); !isErr || !strings.Contains(out, "tasks:admin") {
+		t.Errorf("POST /api/mcp grain_invoke api_approve on a no-repository task under tasks:admin@acme/widgets: isErr=%v %s, want refusal naming tasks:admin", isErr, out)
+	}
+	if out, isErr := externalMCPTaskAction(t, srv, mixed, "api_run_now", "950"); !isErr || !strings.Contains(out, "tasks:admin") {
+		t.Errorf("POST /api/mcp grain_invoke api_run_now on an unapproved no-repository task under tasks:admin@acme/widgets: isErr=%v %s, want refusal naming tasks:admin", isErr, out)
+	}
+	wantProposed(t, client, "950")
+
+	admin := mint("admin", "tasks:read", "dispatch:write", "tasks:admin")
+	railTask(t, client, "951", "", noRepo)
+	railTask(t, client, "952", "", noRepo)
+	railTask(t, client, "953", "", noRepo)
+	railTask(t, client, "954", "", noRepo)
+	if code, body := externalTaskAction(t, srv, admin, "951", "approve"); code != http.StatusOK {
+		t.Errorf("approve on a no-repository task under unlimited tasks:admin: %d %s, want 200", code, body)
+	}
+	if code, body := externalTaskAction(t, srv, admin, "952", "run-now"); code != http.StatusOK {
+		t.Errorf("run-now on an unapproved no-repository task under unlimited tasks:admin: %d %s, want 200", code, body)
+	}
+	wantQueued(t, client, "952")
+	if out, isErr := externalMCPTaskAction(t, srv, admin, "api_approve", "953"); isErr {
+		t.Errorf("POST /api/mcp grain_invoke api_approve on a no-repository task under unlimited tasks:admin: %s, want it approved", out)
+	}
+	if out, isErr := externalMCPTaskAction(t, srv, admin, "api_run_now", "954"); isErr {
+		t.Errorf("POST /api/mcp grain_invoke api_run_now on an unapproved no-repository task under unlimited tasks:admin: %s, want it approved and run", out)
+	}
+	wantQueued(t, client, "954")
+}
+
+// run-now's implicit approval asks for the reason approve does: approve
+// is destructive under tasks:admin and refused without one, and run-now
+// on an unapproved task used to approve it with none
+// (docs/test-runs/2026-11-09-external-agent-rails.md, F1). Run-now of an
+// approved task approves nothing and still needs no reason.
+func TestExternalAgentRunNowApprovalNeedsAReasonAsApproveDoes(t *testing.T) {
+	srv, client := testServer(t)
+	enableExternalAgentAPI(t, client.Store)
+	token := railCredential(t, client, "reasonless", "tasks:read", "dispatch:write", "tasks:admin")
+	for _, id := range []string{"960", "961", "962", "963", "964"} {
+		railTask(t, client, id, "", nil)
+	}
+	bare := func(id, action string) (int, string) {
+		rec := fileAsExternal(t, srv, token, "/api/tasks/"+id+"/"+action, `{}`, nil)
+		return rec.Code, rec.Body.String()
+	}
+	if code, body := bare("960", "approve"); code != http.StatusForbidden || !strings.Contains(body, "give a reason") {
+		t.Errorf("approve without a reason: %d %s, want 403 asking for a reason", code, body)
+	}
+	if code, body := bare("960", "run-now"); code != http.StatusForbidden || !strings.Contains(body, "give a reason") {
+		t.Errorf("run-now of an unapproved task without a reason: %d %s, want 403 asking for a reason", code, body)
+	}
+	out, isErr := callControllerTool(t, srv, map[string]string{"Authorization": "Bearer " + token}, ui.ToolGrainInvoke, map[string]any{
+		"tool": "api_run_now", "arguments": map[string]any{"id": "961"},
+	})
+	if !isErr || !strings.Contains(out, "give a reason") {
+		t.Errorf("grain_invoke api_run_now of an unapproved task without a reason: isErr=%v %s, want a refusal asking for a reason", isErr, out)
+	}
+	wantProposed(t, client, "960")
+	wantProposed(t, client, "961")
+
+	if code, body := externalTaskAction(t, srv, token, "962", "run-now"); code != http.StatusOK {
+		t.Errorf("run-now of an unapproved task with a reason: %d %s, want 200", code, body)
+	}
+	if code, body := externalTaskAction(t, srv, token, "963", "approve"); code != http.StatusOK {
+		t.Errorf("approve with a reason: %d %s, want 200", code, body)
+	}
+	if rec := do(t, srv, http.MethodPost, "/api/tasks/964/approve", ""); rec.Code != http.StatusOK {
+		t.Fatalf("a person approving task 964: %d %s", rec.Code, rec.Body.String())
+	}
+	if code, body := bare("964", "run-now"); code != http.StatusOK {
+		t.Errorf("run-now of an approved task without a reason: %d %s, want 200", code, body)
+	}
+}

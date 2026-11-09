@@ -800,7 +800,7 @@ func TestRegistryManagerRotatesStaticTokenTunnelAndRedactsTunnelErrors(t *testin
 		logMu.Lock()
 		joined := strings.Join(logged, "\n")
 		logMu.Unlock()
-		if strings.Contains(joined, "registry tunnel (edge-grain) stopped") {
+		if strings.Contains(joined, "hub tunnel (edge-grain) stopped") {
 			if strings.Contains(joined, "grc_second_static_token_654321") {
 				t.Fatalf("tunnel stop log leaked grc_ token:\n%s", joined)
 			}

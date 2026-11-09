@@ -84,6 +84,10 @@ type HTTPClient struct {
 	ContextToken func(ctx context.Context) (string, error)
 	// User is the optional identity to send in proxy identity headers (e.g. X-Forwarded-User).
 	User string
+	// ActingReason, when set, is sent as X-Grain-Acting-Reason: the
+	// reason the agent API gate asks an external agent credential for
+	// on a destructive route (`grain approve -reason`).
+	ActingReason string
 	// RetryPolicy is how long a call waits out a daemon that is not
 	// answering. nil means DefaultRetryPolicy; &NoRetry is one attempt.
 	RetryPolicy *RetryPolicy
@@ -137,6 +141,9 @@ func (c *HTTPClient) prepareRequest(ctx context.Context, req *http.Request) erro
 	}
 	if c.User != "" {
 		req.Header.Set("X-Forwarded-User", c.User)
+	}
+	if reason := strings.TrimSpace(c.ActingReason); reason != "" {
+		req.Header.Set(ActingReasonHeader, strings.NewReplacer("\r", " ", "\n", " ").Replace(reason))
 	}
 	if req.Header.Get("User-Agent") == "" {
 		req.Header.Set("User-Agent", "grain-cli")
@@ -667,6 +674,48 @@ func (c *HTTPClient) do(ctx context.Context, method, path string, body, out any)
 	return nil
 }
 
+// doList reads a GET collection route that answers a person with a bare
+// JSON array and an agent credential with a ListPage[T], paging through
+// nextCursor when truncated.
+func doList[T any](c *HTTPClient, ctx context.Context, path string) ([]T, error) {
+	var all []T
+	cursor := ""
+	for {
+		u := path
+		if cursor != "" {
+			sep := "?"
+			if strings.Contains(u, "?") {
+				sep = "&"
+			}
+			u += sep + "cursor=" + url.QueryEscape(cursor)
+		}
+		var raw json.RawMessage
+		if err := c.do(ctx, http.MethodGet, u, nil, &raw); err != nil {
+			return nil, err
+		}
+		trimmed := bytes.TrimSpace(raw)
+		if len(trimmed) > 0 && trimmed[0] == '[' {
+			var list []T
+			if err := json.Unmarshal(trimmed, &list); err != nil {
+				return nil, fmt.Errorf("decoding response from GET %s: %w", u, err)
+			}
+			return list, nil
+		}
+		var page ListPage[T]
+		if err := json.Unmarshal(trimmed, &page); err != nil {
+			return nil, fmt.Errorf("decoding response from GET %s: %w", u, err)
+		}
+		all = append(all, page.Items...)
+		if !page.Truncated || page.NextCursor == "" {
+			if all == nil {
+				all = []T{}
+			}
+			return all, nil
+		}
+		cursor = page.NextCursor
+	}
+}
+
 // httpError reads a {"error": "..."} body (writeError's own shape) and
 // maps the status back to the same error type writeClientError derived
 // it from -- 404 to NotFoundError, 400 to ValidationError, 403 to
@@ -697,6 +746,13 @@ func (c *HTTPClient) statusError(resp *http.Response, plainText bool) error {
 	}
 	if resp.StatusCode == http.StatusUnauthorized && IsLoopbackURL(c.BaseURL) {
 		message += loopbackUnauthorizedHint()
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		// The external-agent rate limit says when the bucket refills;
+		// a caller (an agent reading the CLI's error) should hear it.
+		if after, err := strconv.Atoi(strings.TrimSpace(resp.Header.Get("Retry-After"))); err == nil && after > 0 {
+			message += fmt.Sprintf("; retry in %ds", after)
+		}
 	}
 	if resp.StatusCode == http.StatusBadRequest {
 		lower := strings.ToLower(string(body))
@@ -1101,27 +1157,19 @@ func (c *HTTPClient) TaskMessages(ctx context.Context, id string, after int64) (
 // TaskMessagesWait is TaskMessages with an optional server-side long-poll wait
 // so a chat turn wakes immediately when a human posts a reply.
 func (c *HTTPClient) TaskMessagesWait(ctx context.Context, id string, after int64, wait time.Duration) ([]Message, error) {
-	var messages []Message
 	path := "/api/tasks/" + id + "/messages?after=" + strconv.FormatInt(after, 10)
 	if ms := wait.Milliseconds(); ms > 0 {
 		path += "&wait_ms=" + strconv.FormatInt(ms, 10)
 	}
-	if err := c.do(ctx, http.MethodGet, path, nil, &messages); err != nil {
-		return nil, err
-	}
-	return messages, nil
+	return doList[Message](c, ctx, path)
 }
 
 // TaskAddenda is Client.AddendaSince over the wire: what a person has
 // said on id since after, plus what other tasks' runs have sent its
 // agent (GET /api/tasks/{id}/messages?agents=true).
 func (c *HTTPClient) TaskAddenda(ctx context.Context, id string, after int64) ([]Message, error) {
-	var messages []Message
 	path := "/api/tasks/" + id + "/messages?agents=true&after=" + strconv.FormatInt(after, 10)
-	if err := c.do(ctx, http.MethodGet, path, nil, &messages); err != nil {
-		return nil, err
-	}
-	return messages, nil
+	return doList[Message](c, ctx, path)
 }
 
 // RecordDelivered is Client.RecordDelivered over the wire: the run
@@ -1237,11 +1285,7 @@ func (c *HTTPClient) ClusterStats(ctx context.Context, period string) (ClusterSt
 // (pkg/cli/mcpserver.go's daemonMemory, behind the memory capability):
 // the rows are the daemon's and the run holds no database.
 func (c *HTTPClient) ListMemoryDocuments(ctx context.Context) ([]MemoryDocument, error) {
-	var docs []MemoryDocument
-	if err := c.do(ctx, http.MethodGet, "/api/memory/documents", nil, &docs); err != nil {
-		return nil, err
-	}
-	return docs, nil
+	return doList[MemoryDocument](c, ctx, "/api/memory/documents")
 }
 
 // GetMemoryDocument is Client.GetMemoryDocument over the wire: one named
@@ -1397,11 +1441,7 @@ func (c *HTTPClient) SkillDeploymentConfig(ctx context.Context) (SkillDeployment
 
 // ListTemplates reads GET /api/templates.
 func (c *HTTPClient) ListTemplates(ctx context.Context) ([]Template, error) {
-	var list []Template
-	if err := c.do(ctx, http.MethodGet, "/api/templates", nil, &list); err != nil {
-		return nil, err
-	}
-	return list, nil
+	return doList[Template](c, ctx, "/api/templates")
 }
 
 func (c *HTTPClient) GetSettings(ctx context.Context) (Settings, error) {
@@ -1443,29 +1483,12 @@ func (c *HTTPClient) PlanSettings(ctx context.Context, req UpdateSettingsRequest
 	return settings, nil
 }
 
-// CheckCapability is Client.CheckCapability over the wire: authenticate
-// as one capability's standing credential, make one cheap and harmless
-// call with it, and report what came back.
-//
-// Its caller is `grain settings -check-capability` (cmd/grain/main.go).
-// The question -- "is the credential this deployment holds still one the
-// far end accepts?" -- is asked from a shell on the host at least as
-// often as from a browser, and a host shell is where somebody reading a
-// failed task's error is usually already standing.
-func (c *HTTPClient) CheckCapability(ctx context.Context, id string) (CapabilityCheck, error) {
-	var check CapabilityCheck
-	if err := c.do(ctx, http.MethodPost, "/api/capabilities/"+url.PathEscape(id)+"/check", nil, &check); err != nil {
-		return CapabilityCheck{}, err
-	}
-	return check, nil
-}
-
 // CheckAgentKey is Client.CheckAgentKey over the wire: authenticate as
 // one framework's stored credential, list what it can see, and report
 // what the vendor said.
 //
 // Its caller is `grain settings -check-agent-key` (cmd/grain/main.go),
-// for the same reason -check-capability exists beside it: "why did every
+// because "why did every
 // run today fail to authenticate" is asked from a shell on the host at
 // least as often as from a browser, and a host shell is where whoever is
 // reading the failed run's error is already standing.
@@ -2328,11 +2351,7 @@ func (c *HTTPClient) LiftAgentPause(ctx context.Context, lift AgentPauseLift) (s
 
 // ListGCPKeys is GET /api/gcp-keys.
 func (c *HTTPClient) ListGCPKeys(ctx context.Context) ([]model.GCPKey, error) {
-	var keys []model.GCPKey
-	if err := c.do(ctx, http.MethodGet, "/api/gcp-keys", nil, &keys); err != nil {
-		return nil, err
-	}
-	return keys, nil
+	return doList[model.GCPKey](c, ctx, "/api/gcp-keys")
 }
 
 // GetGCPKey is GET /api/gcp-keys/{name}.

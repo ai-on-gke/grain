@@ -161,19 +161,19 @@ func (s *Server) RegistryTunnelHandler() http.Handler {
 			r = r.WithContext(WithIAPConfig(r.Context(), cfg))
 		}
 		if strings.TrimSpace(r.Header.Get(AccessCodeHeader)) != "" {
-			writeError(w, http.StatusUnauthorized, errors.New("X-Grain-Access-Code is not accepted over the registry tunnel"))
+			writeError(w, http.StatusUnauthorized, errors.New("X-Grain-Access-Code is not accepted over the hub tunnel"))
 			return
 		}
 		if c, err := r.Cookie(AccessCookieName); err == nil && c != nil && strings.TrimSpace(c.Value) != "" {
-			writeError(w, http.StatusUnauthorized, errors.New("grain_access cookies are not accepted over the registry tunnel"))
+			writeError(w, http.StatusUnauthorized, errors.New("grain_access cookies are not accepted over the hub tunnel"))
 			return
 		}
 		if presentsApprovalCallbackToken(r) {
-			writeError(w, http.StatusUnauthorized, errors.New("local script approval tokens are not accepted over the registry tunnel"))
+			writeError(w, http.StatusUnauthorized, errors.New("local script approval tokens are not accepted over the hub tunnel"))
 			return
 		}
 		if _, ok := bearerToken(r); ok && !presentsExternalAgentToken(r) {
-			writeError(w, http.StatusUnauthorized, errors.New("bearer access codes are not accepted over the registry tunnel"))
+			writeError(w, http.StatusUnauthorized, errors.New("bearer access codes are not accepted over the hub tunnel"))
 			return
 		}
 		cv := verifyRegistryTunnelCaller(r)
@@ -386,7 +386,6 @@ func (s *Server) routes() {
 	s.route("GET /api/registry", s.handleGetRegistry)
 	s.route("POST /api/registry/heartbeat", s.handleTriggerRegistryHeartbeat)
 	s.route("GET /api/registry/status", s.handleGetRegistryInstanceStatus)
-	s.route("POST /api/capabilities/{id}/check", s.handleCheckCapability)
 	s.route("GET /api/tasks", s.handleListTasks)
 	s.route("GET /api/tasks/states", s.handleTaskStates)
 	s.route("GET /api/tasks/wait", s.handleTasksWait)
@@ -738,6 +737,8 @@ func (s *Server) routes() {
 	// What failed runs said when grain could not name why -- the
 	// instrument over its own refusal markers (pkg/ui/unmatched.go).
 	s.route("GET /api/unmatched-failures", s.handleListUnmatchedFailures)
+	s.route("GET /api/usage", s.handleGetUsage)
+	s.route("PUT /api/usage/settings", s.handlePutUsageSettings)
 
 	s.route("GET /api/pause", s.handleGetAgentPause)
 	s.route("DELETE /api/pause", s.handleLiftAgentPause)

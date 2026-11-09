@@ -997,26 +997,31 @@ func (s *Server) handleGetEntries(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		isManager := caller.IsAdmin
 		if !caller.IsAdmin || mineOnly {
-			isOwnerOrPending := strings.EqualFold(e.OwnerEmail, caller.Email) ||
-				(e.PendingOwner != "" && strings.EqualFold(e.PendingOwner, caller.Email))
-			if !isOwnerOrPending {
-				if normalizeGroupSpec(e.OwnerGroup) == "" {
-					continue
-				}
+			isOwner := strings.EqualFold(e.OwnerEmail, caller.Email)
+			isPending := e.PendingOwner != "" && strings.EqualFold(e.PendingOwner, caller.Email)
+			inOwnerGroup := false
+			if !isOwner && normalizeGroupSpec(e.OwnerGroup) != "" {
 				ok, err := s.isGroupMember(r.Context(), e.OwnerGroup, caller.Email)
 				if err != nil {
 					w.Header().Set("Retry-After", "5")
 					writeJSONError(w, http.StatusServiceUnavailable, "unavailable", "authorization lookup temporarily unavailable")
 					return
 				}
-				if !ok {
-					continue
-				}
+				inOwnerGroup = ok
+			}
+			isManager = caller.IsAdmin || isOwner || inOwnerGroup
+			if !isOwner && !isPending && !inOwnerGroup {
+				continue
 			}
 		}
 
 		apiEntry := s.enrichAPIEntry(r.Context(), e, caller.IsAdmin)
+		if !isManager && !caller.IsAdmin {
+			apiEntry.Credentials = nil
+			apiEntry.StatusDetail = ""
+		}
 		if statusFilter != "" && !strings.EqualFold(string(apiEntry.Status), statusFilter) && !strings.EqualFold(string(apiEntry.State), statusFilter) {
 			continue
 		}
@@ -1053,7 +1058,7 @@ func (s *Server) handleCreateEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !caller.CanCreate && !caller.IsAdmin {
-		writeJSONError(w, http.StatusForbidden, "forbidden", "caller is not permitted to create registry entries")
+		writeJSONError(w, http.StatusForbidden, "forbidden", "caller is not permitted to create hub entries")
 		return
 	}
 	if s.store == nil {
@@ -1200,7 +1205,17 @@ func (s *Server) handleGetEntry(w http.ResponseWriter, r *http.Request) {
 	isPendingOwner := entry.PendingOwner != "" && strings.EqualFold(entry.PendingOwner, caller.Email)
 
 	if !isManager && !isPendingOwner {
-		if !entry.Listed || entry.LifecycleState == api.StateDeleted || entry.DeletedAt != nil {
+		// Somebody else's deleted entry is gone as far as this caller is
+		// concerned: answer 404 rather than 403, so `grain registry register`
+		// goes on to claim a name whose reservation has lapsed or been
+		// released instead of stopping at "permission to view", and so the
+		// tombstone's existence is not disclosed (GET /api/names reports
+		// reservations).
+		if entry.LifecycleState == api.StateDeleted || entry.DeletedAt != nil {
+			writeJSONError(w, http.StatusNotFound, "not_found", fmt.Sprintf("entry %q not found", name))
+			return
+		}
+		if !entry.Listed {
 			writeJSONError(w, http.StatusForbidden, "forbidden", "caller does not have permission to view this entry")
 			return
 		}
@@ -1543,6 +1558,10 @@ func (s *Server) handleUpgradeEntry(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if entry.Kind != api.KindInstance {
+		writeJSONError(w, http.StatusBadRequest, "invalid_entry_kind", "only kind=\"instance\" entries can be upgraded")
+		return
+	}
 
 	var req api.UpgradeEntryRequest
 	if r.Body != nil && r.Body != http.NoBody {
@@ -1577,6 +1596,14 @@ func (s *Server) handleReplaceEntry(w http.ResponseWriter, r *http.Request) {
 	name := strings.ToLower(strings.TrimSpace(r.PathValue("name")))
 	entry, ok := s.loadAndAuthorizeManagedEntry(w, r, caller, name, false)
 	if !ok {
+		return
+	}
+
+	// Shapes, boot disks and VM replacement only mean something for hosted
+	// instances: a connected entry's grain runs on its owner's machine, and
+	// putting it into "replacing" stops the registry routing to its tunnel.
+	if entry.Kind != api.KindInstance {
+		writeJSONError(w, http.StatusBadRequest, "invalid_entry_kind", "only kind=\"instance\" entries can be resized or replaced")
 		return
 	}
 
@@ -1771,7 +1798,7 @@ func (s *Server) handleOfferTransfer(w http.ResponseWriter, r *http.Request) {
 
 	if req.Force {
 		if !caller.IsAdmin {
-			writeJSONError(w, http.StatusForbidden, "forbidden", "only registry admins may force-transfer entry ownership")
+			writeJSONError(w, http.StatusForbidden, "forbidden", "only hub admins may force-transfer entry ownership")
 			return
 		}
 		if targetOwner == "" {

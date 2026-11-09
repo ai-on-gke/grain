@@ -13,44 +13,19 @@
 // limitations under the License.
 
 import { useState } from "react";
-import { Alert, Box, Button, FormControl, FormHelperText } from "@mui/material";
+import { Alert, Button } from "@mui/material";
 import api from "../../api.js";
-import { isCapabilityRef } from "../../capabilityArgs.js";
-import {
-  isApiGrant,
-  isLegacyApiGrant,
-  withoutApiRows,
-} from "../../apiGrants.js";
+import { isLegacyApiGrant } from "../../apiGrants.js";
 import GrantsPicker from "../GrantsPicker.jsx";
-import SearchSelect from "../SearchSelect.jsx";
-import {
-  LEGACY_CAPABILITIES_HINT,
-  NO_CAPABILITIES_HINT,
-  capabilityRows,
-  capabilityUnavailableHint,
-} from "../../state.js";
 
 export default function CapabilityToggles({ t, config, act }) {
-  const capabilities = config?.capabilities || [];
   const held = t.capabilities || [];
-  // Capability server grants, with their arguments, and the agent API's
-  // grants (apiGrants.js) are GrantsPicker's below, one chip list; the
-  // checklist is the legacy in-process ids.
-  const selected = held.filter((id) => !isCapabilityRef(id) && !isApiGrant(id));
+  // Capability server grants, with their arguments, the agent API's grants
+  // (apiGrants.js), and any bare capability id an older store still holds
+  // are GrantsPicker's below, one list.
   const apiSelected = held.filter(isLegacyApiGrant);
   const [capabilitiesChanged, setCapabilitiesChanged] = useState(false);
   const [restarting, setRestarting] = useState(false);
-  // A task can hold a grant the picker no longer offers -- a capability
-  // renamed or dropped since it was attached ("scratch-repo", now
-  // github-sandbox, bwsalmon/agents#612). capabilityRows (state.js)
-  // gives it a row of its own purely to be turned off; without one it is
-  // a chip nothing can untick, and a grant no provider is registered for
-  // fails every run of the task holding it. SetCapability (pkg/ui,
-  // client.go) is the other half -- it validates on attach only, so the
-  // detach this row sends is accepted. The same call is what leaves an
-  // unconfigured capability off the list altogether unless this task
-  // already holds it (configuredCapabilities, state.js).
-  const rows = withoutApiRows(capabilityRows(capabilities, selected));
 
   const grantPath = `/api/tasks/${t.id}/capabilities`;
   const noteChange = () => {
@@ -81,7 +56,6 @@ export default function CapabilityToggles({ t, config, act }) {
       t.id,
     );
 
-  const handleChange = (e) => applyChange(selected, e.target.value);
   const applyChange = (before, next) => {
     const added = next.filter((id) => !before.includes(id));
     const removed = before.filter((id) => !next.includes(id));
@@ -112,35 +86,7 @@ export default function CapabilityToggles({ t, config, act }) {
 
   return (
     <fieldset>
-      <legend>Legacy capabilities</legend>
-      <FormControl fullWidth size="small">
-        <SearchSelect
-          multiple
-          placeholder="None"
-          inputProps={{ "aria-label": "Legacy capabilities" }}
-          value={selected}
-          onChange={(next) => applyChange(selected, next)}
-          noOptionsText={
-            rows.length === 0 ? NO_CAPABILITIES_HINT : "No matches"
-          }
-          options={rows.map((c) => {
-            const unavailable = capabilityUnavailableHint(c);
-            return {
-              value: c.id,
-              label: c.name,
-              title: unavailable
-                ? `${c.description}\n\n${unavailable}`
-                : c.description,
-              secondary: unavailable ? (
-                <Box component="span" sx={{ color: "warning.main" }}>
-                  {unavailable}
-                </Box>
-              ) : null,
-            };
-          })}
-        />
-        <FormHelperText>{LEGACY_CAPABILITIES_HINT}</FormHelperText>
-      </FormControl>
+      <legend>Access</legend>
       <GrantsPicker
         config={config}
         grants={held}

@@ -1,4 +1,4 @@
-# The grain registry
+# The Grain Hub
 
 A grain deployment is single-tenant ([`docs/access-code.md`](access-code.md)).
 Across an engineering organization, running many single-tenant grains
@@ -17,12 +17,12 @@ raises two operational problems:
    that grain is online, and which person and team are accountable for
    it.
 
-The **grain registry** (`cmd/grain-registry`, container image
+The **Grain Hub** (`cmd/grain-registry`, container image
 `docker.io/grainai/registry`,
 [`design/design/registry.design.md`](../design/design/registry.design.md))
 solves both in one service:
 
-- **As a host and reverse proxy**, the registry serves its own UI and
+- **As a host and reverse proxy**, the hub serves its own UI and
   control-plane API at `https://<registry-host>/` (for example
   `https://grain.example.com/`) and routes each registered entry at
   `https://<name>.<instance-domain>/` (for example
@@ -31,11 +31,11 @@ solves both in one service:
   - **Hosted instances (`kind = instance`)** are stateless, replaceable
     single-tenant GCE VMs whose durable state lives in a shared Cloud
     SQL for PostgreSQL pool, Google Cloud Secret Manager, a per-instance
-    Git configuration repository, and Cloud Storage. The registry routes
+    Git configuration repository, and Cloud Storage. The hub routes
     to each hosted VM directly over the private VPC (`backend_url`,
     `http://<internal-ip>:8080`).
   - **Connected entries (`kind = connected`)** are self-registered
-    grains that the registry did not provision -- running on developer
+    grains that the hub did not provision -- running on developer
     workstations, in inbound-blocked dev environments, or on Kubernetes
     clusters -- that push periodic heartbeats and dial an outbound
     multiplexed WebSocket tunnel
@@ -70,7 +70,7 @@ solves both in one service:
 
 ### Separate registrable domains
 
-The registry's control plane (`host`, e.g. `grain.example.com`) and
+The hub's control plane (`host`, e.g. `grain.example.com`) and
 entry subdomains (`*.<instance-domain>`, e.g. `*.grain-user.com`) live
 on separate registrable domains. Putting entries on `<instance-domain>`
 prevents a grain subdomain from sharing origin cookies with
@@ -82,13 +82,13 @@ start if `host` equals or is a subdomain of `instance_domain`.
 Both `instance` VMs and outbound-tunnelled `connected` grains share the
 exact same reverse-proxy authentication pipeline:
 
-1. **Edge caller verification (`FrontIdentity`).** The registry verifies
+1. **Edge caller verification (`FrontIdentity`).** The hub verifies
    the caller's edge assertion (such as `X-Goog-IAP-JWT-Assertion` behind
    IAP), normalizes the caller's email and principal kind (`human` vs
    `service`), and checks that the caller is admitted by
    `auth.allowed_domains` (or `auth.service_principals` for catalog and
    service calls) and is not a disabled owner.
-2. **Pre-strip CSRF check.** Before stripping cookies, the registry
+2. **Pre-strip CSRF check.** Before stripping cookies, the hub
    enforces same-origin CSRF verification (`Sec-Fetch-Site` / `Origin`
    against the target host) on state-changing requests (`POST`, `PUT`,
    `PATCH`, `DELETE`).
@@ -100,18 +100,18 @@ exact same reverse-proxy authentication pipeline:
    - `Forwarded`, `X-Forwarded-*`, `X-Real-Ip`;
    - `__Host-GCP_IAP_AUTH_TOKEN_*` and `GCP_IAAP_AUTH_TOKEN_*` cookies;
    - `Authorization: Bearer <jwt>` when `<jwt>` is an OIDC token minted
-     for the registry's edge/IAP audience or `https://<registry-host>`
+     for the hub's edge/IAP audience or `https://<registry-host>`
      (leaving grain-scoped bearer credentials such as external-agent
      `gma_…` tokens intact).
    On responses from the grain, the proxy strips `Domain` attributes from
    `Set-Cookie` headers so every cookie set by an entry stays host-only
    on `<name>.<instance-domain>`.
-4. **Short-lived, single-audience ES256 assertion.** The registry signs
+4. **Short-lived, single-audience ES256 assertion.** The hub signs
    an ES256 JWT (`X-Grain-Registry-Assertion`) with a **60-second TTL**
    (cached per `(caller, entry)` on the serving replica for **30
    seconds**) and public verification keys published at
    `https://<registry-host>/.well-known/jwks.json`:
-   - `iss`: the fixed string `grain-registry` (not the registry's URL)
+   - `iss`: the fixed string `grain-registry` (not the hub's URL)
    - `aud`: `["https://<name>.<instance-domain>"]` (strictly one
      entry's origin, so a token captured on `alice.<instance-domain>` is
      rejected by `bob.<instance-domain>`)
@@ -128,7 +128,7 @@ exact same reverse-proxy authentication pipeline:
    -ui-registry-keys-url=https://grain.example.com/.well-known/jwks.json
    -ui-require-verifier=registry
    ```
-   The registry only identifies *who* is calling and routes the request
+   The hub only identifies *who* is calling and routes the request
    to the entry; the grain's own **Settings → Access** allowlist
    (`allowed_principal`) and RBAC roles decide whether that caller is
    admitted to the grain and what they may do there.
@@ -140,13 +140,13 @@ service account such as a planning board or an issue triager — may call
 `https://<name>.<instance-domain>/…` on behalf of a person by sending
 `X-Grain-On-Behalf-Of: user:<email>`, but only while that person holds a
 live **consent grant** to the app covering `<name>` (or `"*"`). The
-registry still checks the person's own access to the entry, so a grant
+hub still checks the person's own access to the entry, so a grant
 never reaches further than the person could; a `read` grant also refuses
 anything but `GET`/`HEAD`. (The default `static` policy refuses every
 on-behalf-of request.)
 
-**Registering an app (registry admins).** Only callers in `auth.admins`
-can create, list, disable, or enable apps (from the Registry UI's
+**Registering an app (hub admins).** Only callers in `auth.admins`
+can create, list, disable, or enable apps (from the Hub UI's
 **Admin → Delegating Apps** section at `/admin#delegating-apps`, the API,
 or the CLI):
 
@@ -157,7 +157,7 @@ or the CLI):
 | `PATCH /api/admin/delegating-apps/<name>` `{"disabled": true\|false}` | `grain registry delegating-apps disable\|enable <name>` | Stop (or resume) the app acting for anyone; its grants are kept |
 
 `principal` is the service account the app calls as. Give the bare email
-or `serviceAccount:<email>`: the registry stores and matches the
+or `serviceAccount:<email>`: the hub stores and matches the
 `serviceAccount:` form either way, and refuses anything that is not a
 `*.gserviceaccount.com` account (a person's email could never present as
 a machine caller, so such an app would only ever read as
@@ -173,7 +173,7 @@ grain registry delegating-apps create -principal planner@my-proj.iam.gserviceacc
 ```
 
 **Granting consent (any person).** These routes act only for the signed-in
-person (from the Registry UI's **Apps acting for you** screen at `/grants`,
+person (from the Hub UI's **Apps acting for you** screen at `/grants`,
 the API, or the CLI); service accounts are refused.
 
 | Route | CLI | Effect |
@@ -188,7 +188,7 @@ is required: entry names, or `"*"` for every entry you can reach.
 exceeds_max_access`); `ttl_seconds` defaults to 30 days and is capped at
 the app's `max_grant_ttl_seconds`. A disabled app takes no new grants
 (`403 app_disabled`). Grants are only ever your own: a body whose
-`person` names anyone else is refused with `403` — registry admins
+`person` names anyone else is refused with `403` — hub admins
 included — and somebody else's grant ID answers `404`, exactly like one
 that does not exist. Every create, disable, enable, grant, and revoke is
 recorded in `registry.audit_log`.
@@ -198,13 +198,13 @@ recorded in `registry.audit_log`.
 ## 2. Hosted Instances (`kind = instance`)
 
 A hosted `instance` entry is a single-tenant grain controller VM managed
-by the registry reconciler in a dedicated GCP instance project and VPC.
+by the hub reconciler in a dedicated GCP instance project and VPC.
 
 ### Creating a hosted instance
 
 Any admitted human user in `auth.allowed_domains` (or matching
 `auth.creators` when configured) may create a hosted instance from the
-registry UI (`/new`), the API (`POST /api/entries`), or the CLI:
+hub UI (`/new`), the API (`POST /api/entries`), or the CLI:
 
 ```bash
 grain registry create \
@@ -223,6 +223,12 @@ grain registry create \
   naming friction and squatting on common words. You can also pass a
   custom DNS label (`[a-z][a-z0-9-]{1,30}[a-z0-9]`, no `--`, not in the
   reserved name list).
+- **The UI defaults to a hosted VM.** `/new` opens on the Hosted VM
+  form (`/new?kind=connected` opens the connected-entry form instead),
+  with the name field pre-filled with a random `grain-<6hex>` name that
+  you can type over or regenerate; availability is checked as you type.
+  When the hub has no VM shapes configured, the form falls back to
+  registering a connected entry.
 - **Weighted shapes and custom boot disks.** Each shape (`small`,
   `standard`, `large`, etc.) specifies machine type, default boot disk size,
   and an integer quota weight (`quota_units`) charged against the owner's
@@ -251,19 +257,19 @@ services:
 | State | Backing service | Per-instance isolation |
 | --- | --- | --- |
 | Tasks, runs, comments, attachments, CI verdicts, merge queue, settings and memory tables, webhook replay cursor | **Shared Cloud SQL for PostgreSQL pool** (`instance_sql.sql_instances`) | Dedicated database `grain_<name_with_underscores>` and IAM database role `gi-<slug>@<project>.iam` with `PUBLIC` access revoked and per-role connection limits |
-| Model keys, Git credentials, capability secrets, `request_secret` values, config-repo deploy key, break-glass `local-api-token` | **Google Cloud Secret Manager** (`secrets.secret_prefix`, default `grain-inst-`) | Secrets stored under `grain-inst-<name>-<item>`. The VM's service account holds conditional IAM prefix bindings (`resource.name.startsWith(".../secrets/grain-inst-<name>-")`) with `secrets.list` omitted so no VM can enumerate sibling secret names |
+| Model keys, Git credentials, capability secrets, `request_secret` values, config-repo deploy key, break-glass `local-api-token`, and the database password when `instance_sql.cloud_sql_admin: false` (`grain-inst-<name>-db-password`) | **Google Cloud Secret Manager** (`secrets.secret_prefix`, default `grain-inst-`) | Secrets stored under `grain-inst-<name>-<item>`. The VM's service account holds conditional IAM prefix bindings (`resource.name.startsWith(".../secrets/grain-inst-<name>-")`) with `secrets.list` omitted so no VM can enumerate sibling secret names |
 | Declarative `grain/config` repository (`settings/*.yml`, `tables/*.json`, `memory/**`, Git history and open config PRs) | **Per-instance configuration repository** (`config_repos.provider: github` or `none`) | Dedicated private repository (`<github_org>/<repo_prefix><name>`) accessed via a repository-scoped `ed25519` SSH deploy key stored in Secret Manager (`grain-inst-<name>-config-repo-key`) |
 | Agent transcripts, CI artifacts, archived durable session bundles | **Google Cloud Storage** (`instance_state.gcs_bucket`) | Object prefix `gs://<bucket>/instances/<name>/` isolated by GCS Managed Folder / prefix IAM bindings for `gi-<slug>@` |
 
 ### Direct VPC routing and `backend_url`
 
-The registry reverse-proxies traffic for `kind = instance` directly over
+The hub reverse-proxies traffic for `kind = instance` directly over
 the `grain-instances` VPC to the entry's stored `backend_url`
 (`http://<internal-ip>:8080` in the first version). Storing
 `backend_url` as a full scheme-qualified URL and keeping caller
 authentication strictly on the `X-Grain-Registry-Assertion` JWT keeps
-direct VPC routing stateless across registry replicas (1 hop from any
-registry pod, zero registry credentials stored on the VM) while allowing
+direct VPC routing stateless across hub replicas (1 hop from any
+hub pod, zero hub credentials stored on the VM) while allowing
 per-instance TLS (`https://…`) to be enabled later without changing the
 data model or authentication contract.
 
@@ -337,21 +343,24 @@ Hosted instances move through a narrow state machine:
     `720h`). During that 30-day hold, the former owner can reuse the
     name, and no other user can claim it until both `reserved_until` has
     expired and the instance has been purged.
+  - Deleted entries drop out of **My entries** in the hub UI as
+    soon as they are deleted. Hub admins still see them on the
+    Admin page, where they can restore or purge them.
 
 ---
 
 ## 3. Connected Grains and the Outbound Tunnel (`kind = connected`)
 
-A `connected` entry is any grain controller that the registry did not
+A `connected` entry is any grain controller that the hub did not
 provision -- running on a developer workstation behind a corporate
 proxy, inside an inbound-blocked development environment or capsule, on
 a host whose IP address changes, or on a Kubernetes cluster -- that
 registers itself in the catalog, reports health and repository scopes via
-heartbeats, and dials an outbound multiplexed tunnel to the registry so
+heartbeats, and dials an outbound multiplexed tunnel to the hub so
 `https://<name>.<instance-domain>/` routes to it with zero inbound
 network ports open.
 
-> **No redirect entries in v1.** The first version of the registry supports
+> **No redirect entries in v1.** The first version of the hub supports
 > `kind = "instance"` (direct VPC proxy) and `kind = "connected"`
 > (outbound tunnel). External deployments that want a `*.<instance-domain>`
 > address and catalog listing connect via `-registry-connect`. (`kind`
@@ -359,7 +368,7 @@ network ports open.
 > redirect or link-only entries can be added later without changing
 > ownership, reservations, or the catalog model.)
 
-### Authenticating a `connected` grain to the registry
+### Authenticating a `connected` grain to the hub
 
 A `connected` grain authenticates both its periodic heartbeats
 (`PUT /api/entries/<name>/heartbeat`) and its outbound tunnel
@@ -368,7 +377,7 @@ A `connected` grain authenticates both its periodic heartbeats
 
 1. **Per-entry registration token (`-registry-auth-mode=token`, default
    when a token is minted).** When a `connected` entry is created or its
-   credential is rotated, the registry mints a `grc_<256-bit-base64url>`
+   credential is rotated, the hub mints a `grc_<256-bit-base64url>`
    token, returns the plaintext once, and stores only `SHA-256(token)`
    and a 4-character hint in `entry_credentials`.
    - On the grain, the token lives in the secret store under
@@ -395,7 +404,7 @@ A `connected` grain authenticates both its periodic heartbeats
      credential.
 2. **OIDC / `FrontIdentity` (`-registry-auth-mode=oidc`).** When the
    grain daemon runs under a workload identity or user credential that
-   traverses the registry's `FrontIdentity` edge -- matching the entry's
+   traverses the hub's `FrontIdentity` edge -- matching the entry's
    `connected_principal` (for example
    `serviceAccount:grain@team-proj.iam.gserviceaccount.com`), `owner`,
    or a verified member of `owner_group` -- it mints OIDC ID tokens for
@@ -405,9 +414,9 @@ A `connected` grain authenticates both its periodic heartbeats
 ### Registering a `connected` grain
 
 From a machine running a local `grain daemon`, `grain registry register`
-reserves the entry on the registry, stores the minted `grc_…` token in
+reserves the entry on the hub, stores the minted `grc_…` token in
 the local daemon's secret store (`registry-registration-token`), updates
-the daemon's stored **Settings → Registry** configuration, and triggers
+the daemon's stored **Settings → Hub** configuration, and triggers
 an immediate heartbeat:
 
 ```bash
@@ -439,7 +448,7 @@ Each `connected` entry counts against the owner's `max_connected` cap
 (default `20`), consuming zero VM instance quota units. To remove the
 registration, run `grain registry unregister [<entry>]` (pass
 `-keep-remote` to clear the local daemon's settings without deleting the
-registry entry).
+hub entry).
 
 **Metadata and `host_kind` precedence.** When `grain registry register`
 connects a local daemon to an existing entry (for example, one reserved
@@ -451,7 +460,7 @@ order:
    `-host-kind`, `-owner-group`, `-listed`, `-tags`, `-scope`).
 2. **Explicitly configured local daemon `Registry` settings** already set
    for the same `(registry_url, entry)`.
-3. **Existing remote registry entry values** (`GET /api/entries/<name>`),
+3. **Existing remote hub entry values** (`GET /api/entries/<name>`),
    which are preserved and adopted into the local daemon's settings
    whenever the corresponding CLI flags are omitted.
 4. **Daemon runtime host inference** (`workstation`, `kubernetes`, or
@@ -489,11 +498,11 @@ How the outbound tunnel operates:
    multiplexed stream session (`pkg/tunnel/mux`) with 15-second
    keepalive pings and per-stream 1 MiB receive windows.
 2. **One-way stream initiation (`MaxPeerInitiatedStreams = 0`).** Only
-   the registry opens streams (odd stream IDs) to forward incoming HTTP,
+   the hub opens streams (odd stream IDs) to forward incoming HTTP,
    SSE, and upgraded WebSocket or `/api/hostd/connect` requests to the
    grain. Any stream frame initiated by the grain (even stream ID) is
    immediately reset with `FrameReset`, so a compromised connected host
-   can never open connections back into the registry pod, Cloud SQL, or
+   can never open connections back into the hub pod, Cloud SQL, or
    the `grain-instances` VPC.
 3. **In-process `MuxListener` and mandatory verifier gate.** On the
    grain, accepted `mux` streams are served in-process over a
@@ -504,13 +513,13 @@ How the outbound tunnel operates:
    `X-Grain-Access-Code`, and bearer access codes are unconditionally
    rejected on tunnel streams. A developer workstation can therefore
    bind its local TCP listener to `127.0.0.1:4242` for local CLI use
-   while guaranteeing that traffic arriving from the registry tunnel is
-   always authenticated by a verified registry JWT. Starting
+   while guaranteeing that traffic arriving from the hub tunnel is
+   always authenticated by a verified hub JWT. Starting
    `-registry-connect` without `-ui-registry-issuer`,
    `-ui-registry-audience`, and `-ui-registry-keys-url` fails closed at
    startup.
 4. **Multi-replica HA and `:8082` peer forwarding.** When a tunnel terminates
-   on registry replica `B`, replica `B` records a monotonically
+   on hub replica `B`, replica `B` records a monotonically
    increasing fencing token (`tunnel_sessions.session_id`) and its
    cluster-internal peer address (`<pod-ip>:8082`) in PostgreSQL and
    broadcasts `NOTIFY registry_tunnels`. If a visitor request for
@@ -521,7 +530,7 @@ How the outbound tunnel operates:
    with a short-lived `X-Registry-Peer-Auth` token
    (`aud = "urn:grain:registry:peer"`) and `X-Registry-Hop: 1`.
 5. **Graceful drains, `2 s` reconnect grace, and 23-hour rotation.**
-   During a rolling registry restart (`SIGTERM`), draining pods mark
+   During a rolling hub restart (`SIGTERM`), draining pods mark
    `/healthz` not-ready and close idle tunnels staggered over `0..5 s`
    so connected grains redial onto healthy pods within `250 ms ± 25%`.
    Incoming requests arriving within `5 s` of a disconnect wait up to
@@ -557,7 +566,7 @@ configured repositories or `WorkOwnership` settings change):
 }
 ```
 
-The registry updates the entry's health, task counts, build stamps, and
+The hub updates the entry's health, task counts, build stamps, and
 `reported` scopes, and responds with
 `{status, next_heartbeat_seconds, scope_conflicts}`. Check a grain's
 live registration state, last heartbeat timestamp, and any scope
@@ -602,7 +611,7 @@ repository scopes used by the directory and work router.
 - **`listed`**: controls catalog visibility. Newly created hosted
   instances default to `listed = false` so personal and experimental
   grains stay visible **only** to their `owner`, verified `owner_group`
-  members, and registry `admins`. Setting `listed = true` publishes the
+  members, and hub `admins`. Setting `listed = true` publishes the
   entry into `GET /api/directory` and `GET /api/route`.
 
 ### Repository scopes (`repo`, `path_prefix`, `role`)
@@ -628,9 +637,9 @@ to lowercase) under a normalized repo-relative directory prefix
 ### How self-reported (`reported`) and registry-declared (`declared`) scopes combine
 
 To prevent stale directory entries and avoid maintaining repository lists
-in two places, the registry combines scopes self-reported by the running
+in two places, the hub combines scopes self-reported by the running
 grain (`source = "reported"`) with optional overrides declared in the
-registry (`source = "declared"`):
+hub (`source = "declared"`):
 
 1. **What a grain self-reports (`source = "reported"`).** For every
    repository configured on the grain **excluding** its own
@@ -703,7 +712,7 @@ or is a path-segment ancestor of the other (`a == b`, `a == ""`,
 
 Overlap is enforced in two ways:
 
-1. **Synchronous registry API/CLI writes (`409 Conflict`).** Creating a
+1. **Synchronous hub API/CLI writes (`409 Conflict`).** Creating a
    listed entry (`POST /api/entries` with `listed = true`), flipping an
    entry from unlisted to listed (`PATCH /api/entries/<name>`), or
    updating declared scopes (`PUT /api/entries/<name>/scopes`) on a
@@ -722,7 +731,7 @@ Overlap is enforced in two ways:
    `HeartbeatResponse.scope_conflicts`, surfaced in
    `grain registry status` and `grain registry show`, and excluded from
    `/api/directory` and `/api/route`. When the incumbent deletes,
-   unlists, or drops that primary scope, the registry automatically
+   unlists, or drops that primary scope, the hub automatically
    promotes the earliest non-overlapping contender.
 
 ### Who may claim a `primary` scope (`catalog.scope_owners`)
@@ -743,7 +752,7 @@ disjoint `primary` prefix (for example claiming `acme/app` or
 multi-team / multi-domain fleets via `catalog.scope_owners`:
 
 1. **Default self-service mode (`catalog.scope_owners` omitted).** In a
-   single-team or single-organization registry where every admitted user in
+   single-team or single-organization hub where every admitted user in
    `auth.allowed_domains` is trusted to register team grains without manual
    approval, any entry manager can claim non-overlapping `primary` scopes
    (first-registered wins across listed entries, with admin override via
@@ -751,7 +760,7 @@ multi-team / multi-domain fleets via `catalog.scope_owners`:
    self-registration from `RepoConfig` heartbeats without requiring GitHub
    admin tokens on the registry.
 2. **Per-repository / per-organization ownership verification
-   (`catalog.scope_owners`).** Multi-team or multi-domain registries can
+   (`catalog.scope_owners`).** Multi-team or multi-domain hubs can
    bind repository patterns (`<owner>/<repo>` or `<prefix>/*`) to allowed
    `user:<email>` and `group:<email>` principals. When multiple rules could
    match a repository, an **exact `<owner>/<repo>` rule overrides the
@@ -788,7 +797,7 @@ multi-team / multi-domain fleets via `catalog.scope_owners`:
      scopes on that entry to `secondary`.
    - **Existing claims are re-checked at startup:** primaries stored before
      a rule applied (the policy newly added, or a rule tightened) are not
-     grandfathered. Each registry replica re-evaluates every entry's
+     grandfathered. Each hub replica re-evaluates every entry's
      `primary` scopes when it starts and demotes the unauthorized ones to
      `secondary` (audited as `entry_scope_owner_demote`). A `GroupResolver`
      error during that sweep leaves the claim as it is rather than demoting
@@ -802,7 +811,7 @@ multi-team / multi-domain fleets via `catalog.scope_owners`:
 
 Every entry has a single accountable human **`owner`** (`user:<email>`)
 and an optional **`owner_group`** (`group:<email>`), resolved through
- the registry's `GroupResolver` (Cloud Identity or static group config,
+ the hub's `GroupResolver` (Cloud Identity or static group config,
 cached for 5 minutes; if the group directory is unreachable, group
 checks fail closed with `503` + `Retry-After: 5` while direct `owner`
 and `admin` checks continue working).
@@ -823,7 +832,7 @@ and `admin` checks continue working).
 - **Who may set or change `owner_group`.** Attaching or changing
   `owner_group` requires `owner` (who must belong to the target group,
   unless an admin), an existing `owner_group` member who is also a
-  member of the new target group, or a registry admin. This prevents a
+  member of the new target group, or a hub admin. This prevents a
   user from attaching an unrelated team's group to an entry.
 
 ### Personal quota attribution
@@ -842,10 +851,10 @@ individual `entries.owner`**, never pooled across or divided among
 
 When an `owner_group` co-manager deletes or shrinks an entry, the freed
 quota returns to `entries.owner`. When an `owner_group` co-manager
-resizes an instance upward or restores a deleted instance, the registry
+resizes an instance upward or restores a deleted instance, the hub
 checks `entries.owner`'s available quota and records both `actor` and
 `quota_owner` in `audit_log`. If `entries.owner` has no free quota, a
-group peer can transfer `owner` to themselves first. Registry admins can
+group peer can transfer `owner` to themselves first. Hub admins can
 configure per-user or per-group quota overrides in `quotas.overrides` or
 via the admin API.
 
@@ -988,7 +997,7 @@ grant**. Route consumers MUST pair `/api/route` with caller/target
 authorization appropriate to how they dispatch work:
 
 - **Interactive users and delegated apps (`X-Grain-On-Behalf-Of`):** the
-  registry refuses to mint a delegated `act` assertion unless the signed-in
+  hub refuses to mint a delegated `act` assertion unless the signed-in
   person holds an active consent grant (`delegation_grants.entries`)
   covering the specific target entry (`403 no_grant`), and the target grain
   independently enforces its own `allowed_principal` and `delegate:` rules.
@@ -998,7 +1007,7 @@ authorization appropriate to how they dispatch work:
   planners, webhook routers, or bots that dispatch work directly as a
   service principal or external agent token without per-entry human consent
   MUST NOT blindly send sensitive repository work or secrets to an
-  arbitrary route result unless **either** (a) the registry enforces
+  arbitrary route result unless **either** (a) the hub enforces
   `catalog.scope_owners` for those repositories, **or** (b) the caller
   checks `matched_scope.role == "primary"` and verifies the candidate's
   `owner` / `owner_group` against its own trusted allowlist before
@@ -1105,14 +1114,14 @@ for machine-readable JSON output on every subcommand.
 
 | Command | Purpose |
 | --- | --- |
-| `grain registry status` | Show the local daemon's connected-entry registration state, registry URL, last heartbeat, active/awaiting task counts, advertised scopes, and any `scope_conflicts` |
+| `grain registry status` | Show the local daemon's connected-entry registration state, hub URL, last heartbeat, active/awaiting task counts, advertised scopes, and any `scope_conflicts` |
 | `grain registry directory [flags] [<query>]` | Search listed grains in `GET /api/directory` (`-q`, `-repo`, `-tag`, `-status`, `-kind`, `-host-kind`, `-owner`, `-limit`) |
 | `grain registry route [flags] [<repo> [<path>]]` | Resolve ranked candidate grains for a repository and path via `GET /api/route` (`-repo`, `-path`, `-include-offline`) |
 | `grain registry list [flags]` | List entries owned by you or your `owner_group` (`-all` for admins; `-owner`, `-owner-group`, `-kind`, `-status`, `-listed`, `-conflict`, `-include-deleted`) |
 | `grain registry show <name>` | Show full entry details, tunnel connection state, version, `reported` and `declared` scopes, `scope_conflicts`, and credential metadata |
 | `grain registry create [flags] [<name>]` | Provision a hosted `instance` VM (`-name`, `-shape`, `-disk-gb`, `-zone`, `-display-name`, `-purpose`, `-owner-group`, `-listed`, `-tags`, `-allow-ssh`, `-ship-logs`, `-scope`) |
 | `grain registry register [flags] [<entry>]` | Reserve or update a `connected` entry, configure the local daemon (unless `-standalone`), and optionally mint/rotate a `grc_…` token (`-mint-token`, `-rotate-token`, `-oidc`, `-token-file`) |
-| `grain registry unregister [flags] [<entry>]` | Unregister a `connected` entry from the registry (unless `-keep-remote`) and clear the local daemon's registry settings and stored token |
+| `grain registry unregister [flags] [<entry>]` | Unregister a `connected` entry from the hub (unless `-keep-remote`) and clear the local daemon's hub settings and stored token |
 | `grain registry update [flags] <name>` | Edit catalog metadata, `owner_group`, `listed`/`unlisted`, `tags`, `host_kind`, `connected_principal`, `shape`, `allow_ssh`, or `ship_logs` |
 | `grain registry scopes [-set <repo[:prefix[:role]]>]... [-clear] <name>` | View or replace `declared` repository scope overrides on `<name>` |
 | `grain registry rotate-credential [flags] <name>` | Mint a replacement `grc_…` token for a `connected` entry (`-overlap`, `-revoke-previous`, `-cred-id`, `-label`, `-token-file`) |
@@ -1123,8 +1132,9 @@ for machine-readable JSON output on every subcommand.
 | `grain registry start <name>` | Start a stopped hosted `instance` again |
 | `grain registry restore <name>` | Restore a soft-deleted hosted `instance` whose retention window (`purge_after`) has not expired |
 | `grain registry transfer -to <email> [-owner-group <group>] [-clear-owner-group] <name>` | Offer a two-step accountable `owner` transfer to `<email>` |
+| `grain registry transfer -cancel <name>` | Withdraw the entry's pending transfer offer (before it is accepted or expires) |
 | `grain registry accept-transfer <name>` | Accept a pending ownership transfer offered to you |
-| `grain registry delegating-apps list\|create\|disable\|enable` | Registry admins: manage the service accounts allowed to act on people's behalf ([Delegated access](#delegated-access-delegating-apps-and-consent-grants)) |
+| `grain registry delegating-apps list\|create\|disable\|enable` | Hub admins: manage the service accounts allowed to act on people's behalf ([Delegated access](#delegated-access-delegating-apps-and-consent-grants)) |
 | `grain registry grants list\|create\|revoke` | Grant, list, or revoke your own consent for a delegating app to act for you |
 
 ---
@@ -1133,7 +1143,7 @@ for machine-readable JSON output on every subcommand.
 
 ### Binary, listeners, and container image
 
-The registry ships as `cmd/grain-registry` (published to
+The hub ships as `cmd/grain-registry` (published to
 `docker.io/grainai/registry`):
 
 ```bash
@@ -1150,7 +1160,7 @@ grain-registry version --json
 Each `grain-registry` replica runs three HTTP listeners:
 
 - **`listen` (default `:8080`, `grain-registry` Service behind IAP):**
-  serves the registry UI (`/`), JSON API (`/api/…`), OIDC-authenticated
+  serves the hub UI (`/`), JSON API (`/api/…`), OIDC-authenticated
   `/api/entries/{name}/heartbeat` and `/api/entries/{name}/connect`, and
   wildcard subdomain routing (`Host: <name>.<instance-domain>`).
 - **`jwks_listen` (default `:8081`, `grain-registry-public` Service
@@ -1239,6 +1249,12 @@ compute:
   # startup_script_file: /etc/grain-registry/instance-startup.sh
   # startup_script: "#!/bin/sh\n..."
   # bind_project_iam: true
+  # The registry grants itself roles/iam.serviceAccountUser on each gi-*
+  # account it creates so it can attach it to the VM (see "IAM the registry
+  # needs" below). Turn off when actAs is granted out of band; set
+  # self_principal when the registry's own principal cannot be detected.
+  # grant_self_act_as: true
+  # self_principal: serviceAccount:grain-registry@grain-instances-prod.iam.gserviceaccount.com
   vm_prefix: grain-
   sa_prefix: gi-
   ssh_break_glass: true
@@ -1266,6 +1282,19 @@ compute:
 instance_sql:
   # Default true (Cloud SQL IAM database auth + Admin API); set false for
   # direct TCP over private_ip when Cloud SQL Admin API is unavailable.
+  # With false, each instance's role is a built-in password user: the
+  # registry generates a fresh password on every provision, stores it in
+  # Secret Manager as `<secret_prefix><name>-db-password` (never in the
+  # VM's `grain-config` metadata, which anyone with compute.instances.get
+  # can read), and the VM fetches it at boot with its own service account
+  # and connects with `sslmode=require`. When `compute.bind_project_iam` is
+  # false, the registry grants the VM's service account secretAccessor on
+  # that one secret. grain-config is only written when a VM is created, so
+  # a hosted instance provisioned by an older registry still carries its
+  # password (and an `sslmode=disable` DSN) in metadata until it is
+  # replaced: `grain registry upgrade <name>` (or
+  # `POST /api/entries/<name>/replace`) re-provisions it, which rotates the
+  # password and moves it into Secret Manager.
   # cloud_sql_admin: true
   sql_instances:
     - name: grain-inst-sql-0
@@ -1297,3 +1326,137 @@ quotas:
   default_connected: 20
   reservation_period: 720h
 ```
+
+### IAM the registry needs
+
+For each hosted instance, the `gce` provider creates a service account
+`<sa_prefix><name>` (`gi-<name>@<compute.project>.iam.gserviceaccount.com`)
+and then creates the VM running as that account. GCE accepts an
+`instances.insert` that attaches a service account only when the caller
+holds `iam.serviceAccounts.actAs` on that account, so between those two
+steps the registry grants its own principal `roles/iam.serviceAccountUser`
+on the new account. It makes the grant through the account's own IAM
+policy (`projects/<p>/serviceAccounts/<email>:getIamPolicy` and then
+`:setIamPolicy`), not the project's. That way the registry can act as the
+accounts it created and as no other.
+
+The service-account part of the registry's IAM in `compute.project` is:
+
+| Need | Grant |
+|------|-------|
+| Create, look up and delete the `gi-*` accounts | `roles/iam.serviceAccountCreator`, `roles/iam.serviceAccountViewer`, `roles/iam.serviceAccountDeleter` |
+| Grant itself actAs on each new account | `iam.serviceAccounts.getIamPolicy` and `iam.serviceAccounts.setIamPolicy` (the custom role below) |
+| Create, stop and delete the VMs | `roles/compute.instanceAdmin.v1` |
+
+It does **not** need `roles/iam.serviceAccountUser` on the project. No
+predefined role holds the two policy permissions without far more besides
+(`roles/iam.serviceAccountAdmin` holds them, along with everything the
+creator, viewer and deleter roles hold), so grant them through a custom role:
+
+```bash
+PROJECT=grain-instances-prod   # compute.project
+PRINCIPAL='serviceAccount:grain-registry@grain-hub-prod.iam.gserviceaccount.com'  # see "The registry's principal"
+
+gcloud iam roles create grainRegistryInstanceSAPolicy --project="${PROJECT}" \
+  --title="grain-registry: instance service account policies" \
+  --description="Lets grain-registry grant itself actAs on the per-instance service accounts it creates" \
+  --permissions=iam.serviceAccounts.get,iam.serviceAccounts.getIamPolicy,iam.serviceAccounts.setIamPolicy \
+  --stage=GA
+
+for role in roles/iam.serviceAccountCreator roles/iam.serviceAccountViewer roles/iam.serviceAccountDeleter \
+    "projects/${PROJECT}/roles/grainRegistryInstanceSAPolicy"; do
+  gcloud projects add-iam-policy-binding "${PROJECT}" \
+    --member="${PRINCIPAL}" --role="${role}" --condition=None
+done
+```
+
+**Scope of that grant: there is no way to limit it to `gi-*`.** An IAM
+condition on the resource name (for example
+`resource.name.startsWith("projects/<p>/serviceAccounts/gi-")`) looks like
+it should do that, but service accounts are not among the resources IAM
+evaluates resource attributes for. The
+[resource attributes reference](https://cloud.google.com/iam/docs/conditions-resource-attributes)
+lists the services whose resources "recognize" `resource.name`,
+`resource.type` and `resource.service`, and `iam.googleapis.com` is not one
+of them. "Other services and resource types do not recognize resource
+attributes." That explains why a project-level
+`roles/iam.serviceAccountUser` binding conditioned on `gi-*` never let the
+registry attach an instance account: the condition never matches, whatever
+form the resource name takes (`projects/-/serviceAccounts/<uniqueId>` or
+otherwise). For the same reason the docs give no support for conditioning
+`setIamPolicy` that way, so this page does not recommend it. Two
+consequences follow:
+
+- A project-level grant of `iam.serviceAccounts.setIamPolicy` covers every
+  service account in the project. Holding `setIamPolicy` on an account is
+  as strong as holding `actAs` on it, because the holder can grant itself
+  `roles/iam.serviceAccountUser` there. That is exactly what the registry
+  does for the `gi-*` accounts. The custom role keeps the registry from
+  acting as other accounts *implicitly*, and it leaves an audit-log entry
+  (`SetIamPolicy` on the account) for every account the registry gives
+  itself, but it is not a hard boundary.
+- The boundary that does hold is the project. Put hosted VMs and their
+  `gi-*` accounts in a project of their own (`compute.project`; see
+  `deploy/test/registry-sandbox`'s `--hosted-project`) that contains no
+  service account you would not let the registry act as: no admin accounts
+  and no Terraform deployers. The project's default Compute Engine account
+  counts too, so disable it or strip its roles. With that layout, the
+  project-level grant above reaches only accounts the registry owns anyway.
+
+#### Turning the grant off
+
+Set `compute.grant_self_act_as: false` when something else grants the
+registry `iam.serviceAccounts.actAs` on each instance account. The registry
+then makes no `getIamPolicy` or `setIamPolicy` calls and does not need the
+custom role. If actAs is missing, instance creation retries for two minutes
+and then fails with GCE's `SERVICE_ACCOUNT_ACCESS_DENIED`.
+
+#### The registry's principal
+
+The binding names the identity the registry's Application Default
+Credentials authenticate as. Unless `compute.self_principal` is set, the
+registry works it out on first use:
+
+| Where the registry runs | Detected principal |
+|---|---|
+| Service account key file, or ADC impersonating a service account | `serviceAccount:<client email / impersonated email>` |
+| GCE VM, or GKE Workload Identity with the Kubernetes service account bound to a Google service account | `serviceAccount:<metadata server's default account>` |
+| GKE Workload Identity without a Google service account (the metadata server reports `<project>.svc.id.goog`) | `principal://iam.googleapis.com/projects/<project-number>/locations/global/workloadIdentityPools/<project>.svc.id.goog/subject/ns/<namespace>/sa/<ksa>`, read from the metadata server's project number and the `sub` claim of the pod's mounted service account token |
+| Anything else (for example `gcloud auth application-default login`) | the email `oauth2.googleapis.com/tokeninfo` reports for the access token (`user:` or `serviceAccount:`) |
+
+When detection cannot work (for example, the pod's service account token is
+not mounted), provisioning fails with a status_reason that points at
+`compute.self_principal`. Set it to the principal's IAM form, as you would
+in `gcloud ... --member`:
+
+```yaml
+compute:
+  self_principal: principal://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/grain-hub-prod.svc.id.goog/subject/ns/grain-hub/sa/grain-registry
+```
+
+A bare `<name>@<project>.iam.gserviceaccount.com` is accepted as shorthand
+for `serviceAccount:<email>`. GCE's own error names the principal it saw:
+`User: 'grain-hub/grain-registry (grain-hub-prod.svc.id.goog)'` is the
+Workload Identity principal for namespace `grain-hub` and Kubernetes service
+account `grain-registry`.
+
+#### What an instance's status_reason says
+
+- **While a new account or binding propagates.** GCP can take a minute or
+  so before Compute sees a new account (`EXTERNAL_RESOURCE_NOT_FOUND`) or a
+  new binding on it (`SERVICE_ACCOUNT_ACCESS_DENIED`). The entry stays
+  `creating` with
+  `waiting for service account <sa>, and the registry's permission to attach it, to propagate ...`,
+  and the reconciler retries the insert with backoff (5s, 10s, 20s, then
+  every 30s) for up to two minutes before failing the entry.
+- **When IAM refuses the grant.** Provisioning fails at once with
+  `provisioning instance resources failed: gcp iam: the registry (<principal>) is missing iam.serviceAccounts.setIamPolicy on service account <sa> ...`
+  (or `getIamPolicy`), which names the custom role above as the fix. The
+  entry does not go on to GCE's less specific error.
+
+#### On delete
+
+The binding is part of the instance account's own IAM policy, so it is
+deleted along with the account at final purge. Nothing else needs cleaning
+up. Fence-on-delete (the retention window) keeps the account, and the binding
+with it.

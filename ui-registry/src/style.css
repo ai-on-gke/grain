@@ -73,20 +73,10 @@ body {
 }
 
 .reg-brand-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
-  background: var(--accent);
-  color: #ffffff;
-  font-weight: 800;
-  font-size: 13px;
-}
-
-:root[data-theme="dark"] .reg-brand-mark {
-  color: #0b0f19;
+  display: block;
+  flex: none;
+  width: 28px;
+  height: 28px;
 }
 
 .reg-nav {
@@ -175,6 +165,27 @@ body {
   background: var(--accent-bg);
   border-color: var(--accent-border);
   color: var(--text);
+}
+
+.reg-banner-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.reg-status-detail {
+  margin-top: 4px;
+  min-width: 22ch;
+  max-width: 38ch;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.reg-detail-line {
+  overflow-wrap: anywhere;
 }
 
 .reg-card {
@@ -374,6 +385,21 @@ body {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 14px;
+}
+
+.reg-input-with-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.reg-input-with-action .gs-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.reg-input-with-action .gs-btn {
+  flex: 0 0 auto;
 }
 
 .reg-mode-picker {

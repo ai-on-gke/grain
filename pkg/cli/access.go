@@ -86,6 +86,9 @@ func cmdAccess(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 				if p.Reason != "" {
 					line += "\t" + p.Reason
 				}
+				if p.Label != "" {
+					line += "\tlabel=" + p.Label
+				}
 				fmt.Println(line)
 			}
 		}

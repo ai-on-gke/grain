@@ -3741,6 +3741,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		end := classifyRunEnd(ctx, store, cfg, task, d.RunID, result, runErr, context.Cause(agentCtx),
 			credited, runScope, agentStartedAt)
 		end = applySandboxOOM(ctx, store, cfg, task, d.RunID, end)
+		recordRunUsage(ctx, store, task.ID, d.RunID, runScope, result, agentStartedAt, cfg.now())
 		if end.suspend == model.SuspendContext {
 			session := resumableSession
 			if session == "" {
@@ -5180,23 +5181,23 @@ func recordRunEnd(ctx, finishCtx context.Context, store *model.Store, cfg Config
 		// the run (GSA1-12).
 		transcript, _ = mcp.SandboxEnvRedactor(cfg.sandboxEnv).Text(result.Transcript)
 	}
-	savedToObjectStore := false
-	if cfg.TranscriptSink != nil && (rawTranscriptPath != "" || (finishErr == nil && transcript != "")) {
-		narrative := ""
-		if finishErr == nil {
-			narrative = transcript
+	if cfg.TranscriptSink != nil {
+		if rawTranscriptPath != "" || (finishErr == nil && transcript != "") {
+			narrative := ""
+			if finishErr == nil {
+				narrative = transcript
+			}
+			if _, sinkErr := cfg.TranscriptSink.FlushRunEnd(finishCtx, runID, rawTranscriptPath, narrative); sinkErr != nil {
+				log.Printf("orchestrator: run %s: flushing transcript to object store: %v", runID, sinkErr)
+			}
 		}
-		saved, sinkErr := cfg.TranscriptSink.FlushRunEnd(finishCtx, runID, rawTranscriptPath, narrative)
-		if sinkErr != nil {
-			log.Printf("orchestrator: run %s: flushing transcript to object store: %v", runID, sinkErr)
-		}
-		savedToObjectStore = saved
-	}
-	if finishErr == nil && transcript != "" && !savedToObjectStore {
+	} else if finishErr == nil && transcript != "" {
 		// A separate write, after FinishRun's own -- see
 		// Store.SetRunTranscript's own doc comment on why (bwsalmon/
 		// agents#446). Skipped once finishErr is already non-nil, or when
-		// TranscriptSink already persisted the narrative to the object store.
+		// TranscriptSink owns persisting the narrative to the object store
+		// (falling back to SQLite when FlushRunEnd fails closed would store
+		// narrative before TranscriptSink's secret-store redactor ran).
 		finishErr = store.SetRunTranscript(finishCtx, runID, transcript)
 	}
 	// The run's own census, from the one place it exists: agent.Result,

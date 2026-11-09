@@ -28,7 +28,10 @@
 //	             which is the cache that keeps most commits from booting
 //	             a VM for nine minutes
 //	guest-base   <hash>, one per vendored granule tree: the granule base
-//	             image that guest cache is built on top of
+//	             image that guest cache is built on top of. On Docker Hub
+//	             (sandbox-base) it also carries the same sha-<short>,
+//	             branch, `latest`, v<x>.<y>.<z> and signature names as
+//	             the other packages, and those are read the same way
 //
 // Nothing deleted any of it. This command is what the scheduled
 // prune-packages.yml runs.
@@ -59,6 +62,10 @@
 //   - v<x>.<y>.<z> -- always. A promoted release, retagged from its
 //     sha- build when `latest` moves onto it (.grain/workflows/promote.yml):
 //     what an operator pins to stay on, or roll back to, a release.
+//   - v<x>.<y>.<z>-pending -- until a person decides. The stamped build
+//     release-images.sh `pending` stages for approval, which `promote`
+//     only retags; once rejected it also carries v<x>.<y>.<z>-rejected
+//     and is held by the window alone.
 //   - a branch tag -- while that branch still exists on the remote. It
 //     is what pkg/upgrade's TagForBranch pulls when an operator upgrades
 //     onto a branch, and what setup.sh pulls for GRAIN_REF. Since

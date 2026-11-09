@@ -884,12 +884,53 @@ func TestTheDockerfileCarriesEveryBinaryGrainShellsOutTo(t *testing.T) {
 	// CAP_NET_BIND_SERVICE reaches a non-root process in a container only
 	// through a file capability -- --cap-add alone grants it nothing, so
 	// the default -ui-addr (port 80), and the package cache's 53, 443 and
-	// 80, would all fail to bind without this.
-	contains(t, text, "setcap cap_net_bind_service=+ep /usr/local/bin/grain")
+	// 80, would all fail to bind without this. Set on /src/bin/grain in the
+	// build stage before COPY so the runtime image does not copy up the
+	// grain binary into a second layer.
+	contains(t, text, "setcap cap_net_bind_service=+ep /src/bin/grain")
+	contains(t, text, "COPY --from=build /src/bin/grain /usr/local/bin/grain")
 	// The entrypoint is the binary, so `docker run <image> schema-version`
 	// runs the CLI -- which is how setup.sh's own wrapper and pkg/upgrade's
 	// image health check both invoke it.
 	contains(t, text, `"/usr/local/bin/grain"]`)
+}
+
+func TestTheDaemonImageAvoidsDuplicateCapabilityLayersAndUnusedDefaultCluster(t *testing.T) {
+	code := stripComments(read(t, "Dockerfile"))
+	runtime := code[strings.LastIndex(code, "\nFROM "):]
+
+	// Running setcap on /usr/local/bin/grain after COPY copies the entire
+	// binary into a second OCI layer (~75-105MB duplicated). Keep the setcap
+	// in the build stage before COPY, and setcap /usr/sbin/nft in the single
+	// runtime apt layer.
+	absent(t, runtime, "setcap cap_net_bind_service=+ep /usr/local/bin/grain")
+	if got := strings.Count(runtime, "apt-get install"); got != 2 {
+		t.Errorf("runtime stage runs apt-get install %d times, want 2 (base packages + PGDG postgresql-16 in one RUN)", got)
+	}
+
+	// postgresql-common's postinst otherwise creates a 38MB unused cluster at
+	// /var/lib/postgresql/16/main; embedded clusters initdb under <data-dir>/postgres.
+	contains(t, runtime, "create_main_cluster = false")
+
+	// Go binaries compiled for the daemon image strip DWARF and symbol tables
+	// (-s -w) and build paths (-trimpath) while keeping .gopclntab and .go.buildinfo.
+	makefile := stripComments(read(t, "Makefile"))
+	contains(t, makefile, "$(strip -s -w")
+	contains(t, makefile, " -trimpath ")
+	for _, target := range []string{"/out/granule", "/out/github-webhook", "/out/grain-sandbox"} {
+		found := false
+		for _, line := range strings.Split(code, "\n") {
+			if strings.Contains(line, "go build") && strings.Contains(line, target) {
+				found = true
+				if !strings.Contains(line, "-trimpath") || !strings.Contains(line, "-s -w") {
+					t.Errorf("Dockerfile builds %s without -trimpath and -s -w: %q", target, strings.TrimSpace(line))
+				}
+			}
+		}
+		if !found {
+			t.Errorf("Dockerfile has no go build line for %s", target)
+		}
+	}
 }
 
 // The privileged ports this daemon binds are not only the UI's.
@@ -3337,6 +3378,9 @@ func TestBothImagesPinTheSameAgentCLIs(t *testing.T) {
 			`= "$CLAUDE_CLI_VERSION"`,
 			`echo "$sha256  /tmp/codex.tar.gz" | sha256sum -c -`,
 			`echo "$host_sha256  /tmp/codex-code-mode-host.tar.gz" | sha256sum -c -`,
+			"api.github.com/repos/openai/codex/releases/tags/${CODEX_CLI_VERSION}",
+			"Accept: application/octet-stream",
+			"rm -f /tmp/codex-release.json",
 			"registry.npmjs.org/@openai/codex/-/codex-${CODEX_CLI_NPM_VERSION}-linux-${npm_arch}.tgz",
 			`echo "$npm_sha256  /tmp/codex-npm.tgz" | sha256sum -c -`,
 		} {
@@ -4135,28 +4179,20 @@ func TestABranchTagAndItsCommitTagAreOneManifest(t *testing.T) {
 	contains(t, script, `push_image "$target"`)
 }
 
-// The job that can delete images is a job no branch push can reach, it
-// deletes only when it is told to, and it is not part of anything a host
-// runs.
-//
-// It holds package-publish, which is the capability that deletes a
-// package version -- strictly worse in the wrong hands than the one
-// build-artifacts.yml holds to publish, and the same argument that file
-// makes about push-vs-pull_request applies with more force. What keeps
-// it out of reach is the trigger: workflow_dispatch needs write access
-// to the repository. This job declares no cron, so the trusted schedules
-// package-publish answers do not reach it either; automated pruning runs
-// on release in release.yml instead.
-//
-// The dry-run default is the other half. Deleting a package version
-// cannot be undone, so the command deletes only when passed -apply, and
-// a human dispatching this to see what it would do must not have to
-// remember that.
+// Deleting images is CI's job alone: the release workflow's prune step
+// holds DOCKER_PAT, and package-publish is a CI-only capability that is
+// never placed in a task sandbox. The weekly prune-packages template is
+// therefore an audit -- a dry run of the plan against the live registry
+// and a read of the release prune step's logs -- and declares the
+// CI-read scope that reading those logs needs rather than a credential
+// it would never be given.
 func TestThePruneJobIsDeliberateAndOutOfBranchReach(t *testing.T) {
 	prune := stripComments(pruneTemplate(t))
 
 	contains(t, prune, "name: Prune GHCR packages")
 	contains(t, prune, "cmd/ghcr-prune")
+	contains(t, prune, `capabilities: ["api:ci-read@ai-on-gke/grain"]`)
+	contains(t, prune, "Prune old package versions")
 
 	// And it is a maintenance tool, not the deployment's: nothing on a host runs
 	// it, so it stays out of the binaries `make build` produces and out

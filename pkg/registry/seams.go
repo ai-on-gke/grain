@@ -73,6 +73,15 @@ type InstanceStatus struct {
 	Labels     map[string]string
 }
 
+// ErrServiceAccountNotReady is wrapped by a Compute provider's CreateInstance error when the
+// instance's own service account is not yet usable by the compute service: not yet visible
+// (GCE's EXTERNAL_RESOURCE_NOT_FOUND on a just-created account), or not yet attachable because
+// the registry's actAs grant on it has not applied (GCE's SERVICE_ACCOUNT_ACCESS_DENIED).
+// Newly created service accounts and IAM bindings are eventually consistent -- GCP documents up
+// to about 60s before other services see them -- so the reconciler retries the creation with
+// backoff instead of failing the entry outright.
+var ErrServiceAccountNotReady = errors.New("instance service account is not yet visible to the compute provider")
+
 // Compute provisions and manages hosted VM instances.
 type Compute interface {
 	CreateInstance(ctx context.Context, spec InstanceSpec) (*InstanceHandle, error)
@@ -100,10 +109,23 @@ type InstanceResourceBundle struct {
 	SQLPrivateIP        string
 	DatabaseName        string
 	DatabaseUser        string
-	DatabasePassword    string
-	SecretPrefix        string
-	GCSBucket           string
-	GCSManagedFolder    string
+	// DatabasePassword is a generated password for DatabaseUser when the
+	// provider could not store it itself. It never reaches the VM: GCE
+	// instance metadata is readable by anyone with compute.instances.get,
+	// so the reconciler moves it into Secret Manager (SecretWriter, suffix
+	// DatabasePasswordSecretSuffix) and clears it before the VM's
+	// grain-config is built. Providers should prefer setting
+	// DatabasePasswordSecret directly.
+	DatabasePassword string
+	// DatabasePasswordSecret is the Secret Manager resource name
+	// (`projects/<p>/secrets/<prefix>db-password`) whose latest version
+	// holds DatabaseUser's password. The VM reads it at boot with its own
+	// service account; it is the only form of the password grain-config
+	// carries.
+	DatabasePasswordSecret string
+	SecretPrefix           string
+	GCSBucket              string
+	GCSManagedFolder       string
 }
 
 // InstanceResources provisions per-instance IAM identities, databases, and secret prefixes.
@@ -119,6 +141,11 @@ type InstanceResources interface {
 type SecretWriter interface {
 	PutSecret(ctx context.Context, entryName, secretSuffix string, payload []byte) (string, error)
 }
+
+// DatabasePasswordSecretSuffix is the SecretWriter suffix a generated
+// per-instance database password is stored under
+// (`<secret_prefix><entryName>-db-password`).
+const DatabasePasswordSecretSuffix = "db-password"
 
 // ConfigRepoBundle describes a provisioned backing Git repository for an instance's state.
 type ConfigRepoBundle struct {

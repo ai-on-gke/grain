@@ -261,3 +261,19 @@ func TestPullRequestReviewDesignAndStatusThreads(t *testing.T) {
 		t.Errorf("merge queue = %q, want held: review", report.MergeQueue)
 	}
 }
+
+// A pull request GitHub has no record of is the caller's mistake, not
+// grain failing: adopt and status say not-found (the routes answer 404)
+// rather than a 500 (docs/test-runs/2026-11-08-cli-install-skill-mcp.md).
+func TestAdoptPullRequestOfAMissingPullRequestIsNotFound(t *testing.T) {
+	t.Parallel()
+	f := newTakeoverFixture(t, "alice")
+	missing := model.PullRequestRef{Repo: f.repo, Number: f.pr + 1000}
+	_, err := orchestrator.AdoptPullRequest(f.ctx, f.deps, model.AdoptPullRequestInput{PR: missing, Requester: adoptOperator, Approved: true}, baseTime)
+	if !errors.Is(err, model.ErrPullRequestNotFound) {
+		t.Fatalf("AdoptPullRequest(%s) = %v, want ErrPullRequestNotFound", missing, err)
+	}
+	if _, err := orchestrator.PullRequestStatusOf(f.ctx, f.deps, missing, false); !errors.Is(err, model.ErrPullRequestNotFound) {
+		t.Fatalf("PullRequestStatusOf(%s) = %v, want ErrPullRequestNotFound", missing, err)
+	}
+}

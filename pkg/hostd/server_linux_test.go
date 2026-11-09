@@ -262,6 +262,76 @@ func TestRunRefusesAPeerRunningAsAnotherUser(t *testing.T) {
 	}
 }
 
+func TestClientOffersAndHelloUnblockOnContextCancelWithoutDeadline(t *testing.T) {
+	dir, err := os.MkdirTemp("", "hostd-cancel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "hung.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var held []net.Conn
+	var mu sync.Mutex
+	accepted := make(chan struct{}, 4)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			held = append(held, conn)
+			mu.Unlock()
+			accepted <- struct{}{}
+		}
+	}()
+	t.Cleanup(func() {
+		_ = ln.Close()
+		mu.Lock()
+		for _, c := range held {
+			_ = c.Close()
+		}
+		mu.Unlock()
+	})
+
+	client := Client{Socket: sock}
+	for _, tc := range []struct {
+		name string
+		call func(context.Context) error
+	}{
+		{name: "Offers", call: func(ctx context.Context) error { _, err := client.Offers(ctx); return err }},
+		{name: "Hello", call: func(ctx context.Context) error { _, err := client.Hello(ctx); return err }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() { done <- tc.call(ctx) }()
+			select {
+			case <-accepted:
+			case <-time.After(3 * time.Second):
+				t.Fatal("client never dialed socket")
+			}
+			time.Sleep(20 * time.Millisecond)
+			cancelAt := time.Now()
+			cancel()
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("%s err = %v, want context.Canceled", tc.name, err)
+				}
+				if took := time.Since(cancelAt); took > 250*time.Millisecond {
+					t.Fatalf("%s took %s after cancel, want <250ms", tc.name, took)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatalf("%s hung after context cancellation without a deadline", tc.name)
+			}
+		})
+	}
+}
+
 // pidAlive reports whether pid still exists and is not a zombie.
 func pidAlive(pid int) bool {
 	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))

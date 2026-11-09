@@ -461,7 +461,10 @@ func isSafeCIURISegment(s string) bool {
 	if s == "" || s == "." || s == ".." {
 		return false
 	}
-	return !strings.ContainsAny(s, "/\\?#\r\n\x00")
+	// '%' too: "%2e%2e%2f" is "../" once the daemon decodes the path. The
+	// daemon refuses that traversal itself, but this guard is the client's
+	// own line and should not lean on it; no run or job id holds a '%'.
+	return !strings.ContainsAny(s, "/\\?#%\r\n\x00")
 }
 
 // loadMCPAttachments confines attachment file reads in `grain mcp` to regular

@@ -53,6 +53,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { flushSync } from "react-dom";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App, {
@@ -841,6 +842,40 @@ describe("App", () => {
       expect(
         screen.queryByRole("button", { name: "Open navigation" }),
       ).toBeNull();
+    });
+
+    it("updates data-phone in the same commit as the shell when the viewport crosses the breakpoint", async () => {
+      let phone = false;
+      const listeners = new Set();
+      window.matchMedia = (query) => ({
+        get matches() {
+          return query === PHONE_QUERY && phone;
+        },
+        media: query,
+        addEventListener: (_type, fn) => listeners.add(fn),
+        removeEventListener: (_type, fn) => listeners.delete(fn),
+        addListener: (fn) => listeners.add(fn),
+        removeListener: (fn) => listeners.delete(fn),
+      });
+
+      setupApi();
+      render(<App />);
+      await screen.findByText("Fix bug");
+      expect(document.documentElement.dataset.phone).toBe("false");
+
+      // flushSync commits DOM mutations and useLayoutEffect without
+      // flushing passive useEffect hooks: data-phone must already match
+      // PhoneNav before paint rather than a passive effect later.
+      act(() => {
+        flushSync(() => {
+          phone = true;
+          for (const fn of listeners) fn({ matches: true });
+        });
+        expect(
+          screen.getByRole("button", { name: "Open navigation" }),
+        ).toBeInTheDocument();
+        expect(document.documentElement.dataset.phone).toBe("true");
+      });
     });
   });
 

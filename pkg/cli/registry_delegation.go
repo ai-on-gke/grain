@@ -31,7 +31,7 @@ import (
 // `delegation_policy: consent` reads: the service accounts registered to act
 // on people's behalf, and each person's consent to one of them.
 
-const registryDelegatingAppsUsage = `usage: grain registry delegating-apps <subcommand> [args]   (registry admins only)
+const registryDelegatingAppsUsage = `usage: grain registry delegating-apps <subcommand> [args]   (hub admins only)
 
   list     [-registry-url <url>]
   create   [-registry-url <url>] -principal <service-account-email> [-display-name <text>]
@@ -43,7 +43,7 @@ const registryDelegatingAppsUsage = `usage: grain registry delegating-apps <subc
 
 A delegating app is a service account that may call grains on behalf of the
 people who grant it consent (auth.delegation_policy: consent). -principal takes
-the bare service-account email or serviceAccount:<email>; the registry stores
+the bare service-account email or serviceAccount:<email>; the hub stores
 the serviceAccount: form either way.`
 
 const registryGrantsUsage = `usage: grain registry grants <subcommand> [args]

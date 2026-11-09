@@ -90,9 +90,17 @@ func resolveMCPClient(c *ui.HTTPClient, parentFS *flag.FlagSet, sel selectedCont
 	return c, nil
 }
 
+// serveExternalMCP answers JSON-RPC on in/out until the client closes in.
+// A closed stdin is how every stdio MCP client (Claude Code, Codex, Gemini
+// CLI, Jetski) ends a session, so it is a clean exit rather than an error:
+// reported as one, `grain mcp` printed "grain: EOF" and exited 1 at the end
+// of every session, which a client shows as its server having crashed.
 func serveExternalMCP(ctx context.Context, c *ui.HTTPClient, in io.Reader, out io.Writer) error {
 	reg := newExternalMCPRegistry(c)
-	return mcp.Serve(ctx, reg, bufio.NewReader(in), bufio.NewWriter(out))
+	if err := mcp.Serve(ctx, reg, bufio.NewReader(in), bufio.NewWriter(out)); !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
 }
 
 func newExternalMCPRegistry(c *ui.HTTPClient) *mcp.Registry {

@@ -356,6 +356,14 @@ var notSettings = []string{
 	// deployment dispatching onto a key that never refused it, and
 	// exporting them would churn the state repository on every limit.
 	"usage_limit_pause",
+	// Token accounting (model/tokenusage.go): what each run spent, what
+	// a provider's refusals taught grain about a window's size, and the
+	// operator's budgets and concurrency mode. Runtime state like the
+	// pauses above: per-run rows churn on every run, and a learned
+	// capacity belongs to the credential this deployment met it on.
+	"task_run_usage",
+	"usage_capacity",
+	"usage_setting",
 	// Memory is written by agents while runs are live, so it remains
 	// outside SettingsTables even though its Markdown representation is
 	// imported separately when a repository change arrives.

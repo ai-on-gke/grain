@@ -113,15 +113,6 @@ func CapabilityProviders(cfg Config, _ *model.Store, _ map[string]*modelproxy.En
 	return providers
 }
 
-// missingCapabilityProviderConfig is the deployment configuration that
-// gates a provider above. Keep the diagnosis for an absent provider on
-// this same predicate: if registration gains a prerequisite, a credential
-// check must name the same prerequisite. No provider has one since
-// gemini-key was retired onto the gcp server (schema migration 103).
-func missingCapabilityProviderConfig(Config, string) []string {
-	return nil
-}
-
 // gitHubCredentialLadder loads dataDir's GitHub credential ladder -- the
 // names capabilityProviders above turns into providers and startUIServer
 // into picker rows (ExtraNames), the credentials the Settings pane

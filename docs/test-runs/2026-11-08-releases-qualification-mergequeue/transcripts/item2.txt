@@ -1,0 +1,95 @@
+=== 2A. candidate-gate.sh check-qualification: unset vs none ===
+ok   gate, app unset: exits 64 (fails closed)
+ok   gate, app unset: says why
+    | Qualification of v3.2.0-rc.1 (11f1adbb6703).
+    | PASS cmd-grain-stress: passed (success)
+    | PASS go-long: passed (success)
+    | PASS installer-variants: passed (success)
+ok   gate, app none, green nightly: exits 0
+ok   gate, app none, green nightly: skips Stage 2
+    | Qualification of v3.2.0-rc.1 (11f1adbb6703).
+    | PASS cmd-grain-stress: passed (success)
+    | PASS go-long: passed (success)
+    | PASS installer-variants: passed (success)
+    | PASS loadtest: passed (success)
+    | PASS long-sim: passed (success)
+ok   gate, app none, red nightly: does not qualify
+    | Qualification of v3.2.0-rc.1 (11f1adbb6703).
+    | PASS cmd-grain-stress: passed (success)
+    | PASS go-long: passed (success)
+    | PASS installer-variants: passed (success)
+    | PASS loadtest: passed (success)
+    | PASS long-sim: passed (success)
+=== 2B. release-from-trunk.sh: rc.1 qualifies on nightly alone with none and promotes ===
+ok   train, app unset: exits 1
+ok   train, app unset: says why
+ok   train, app unset: promotes nothing
+    | release-from-trunk: fetching origin's main, candidate and tags
+    | release-from-trunk: major 3 (floor minor 2); newest promoted release v3.1.0; next minor v3.2.0; notes from v3.1.0
+    | release-from-trunk: phase 1: v3.2.0-rc.1 (ccbbd978d05d) is in qualification; asking the qualification gate
+    |   Qualification of v3.2.0-rc.1 (ccbbd978d05d).
+ok   train, app none, green: exits 0
+ok   train, app none, green: skips Stage 2
+ok   train, app none, green: qualifies rc.1
+ok   train, app none, green: promotes v3.2.0 on rc.1's commit
+    images: promote v3.2.0
+    | release-from-trunk: major 3 (floor minor 2); newest promoted release v3.1.0; next minor v3.2.0; notes from v3.1.0
+    |   PASS cmd-grain-stress: passed (success)
+    |   PASS go-long: passed (success)
+    |   PASS installer-variants: passed (success)
+    |   PASS loadtest: passed (success)
+    |   PASS long-sim: passed (success)
+    |   PASS long-term-test: passed (success)
+    |   PASS merge-stress: passed (success)
+--- conf-none: release.conf says RELEASE_QUALIFICATION_APP=none, environment unset
+ok   train, conf none, green: promotes v3.2.0
+--- red nightly with none
+ok   train, app none, red: promotes nothing
+ok   train, app none, red: stages nothing pending
+    | release-from-trunk: phase 1: v3.2.0-rc.1 (8d850df77a9a) is in qualification; asking the qualification gate
+    |   Qualification of v3.2.0-rc.1 (8d850df77a9a).
+    |   FAIL upgrade-test: failed again on its retry (failure,failure): confirmed red
+    |   Qualification: FAIL v3.2.0-rc.1 (upgrade-test).
+    | release-from-trunk: phase 1: v3.2.0-rc.1 failed qualification; dropping it
+=== 2C. Stage-2 failure on rc.1, train ticks before any [rc-blocker] task: triage-pending hold ===
+ok   rc-hold, triage pending: exits 0
+ok   rc-hold, triage pending: burns no rc.2
+ok   rc-hold, triage pending: says rc.2 is held (triage pending)
+ok   rc-hold, triage pending: emits rc_held=v3.2.0-rc.2
+    rc.1-discarded=f63a289482ea candidate=f63a289482ea images: discard-rc v3.2.0-rc.1
+    | release-from-trunk: phase 1: v3.2.0-rc.1 (f63a289482ea) is in qualification; asking the qualification gate
+    | release-from-trunk: phase 1: v3.2.0-rc.1 failed qualification; dropping it
+    | release-from-trunk: phase 2: v3.2.0-rc.2 is held by grain/rc-hold on f63a289482ea: v3.2.0-rc.1 failed qualification; v3.2.0-rc.2 is held while pipeline.rc-failed:v3.2.0-rc.1 awaits triage (up to 1h) or tasks titled [rc-blocker v3.2.0-rc.1] remain open.
+    | release-from-trunk: output rc_held=v3.2.0-rc.2
+--- second tick, hold still in progress: still no rc.2
+ok   rc-hold, second tick: still burns no rc.2
+--- steward triages with no blocker: grain completes the hold
+ok   rc-hold, completed: exits 0
+ok   rc-hold, completed: cuts rc.2 on c3
+ok   rc-hold, completed: emits no rc_held
+--- same race, hold check run forged by another app: not trusted, train refuses to be held by it but also does not trust its completion
+ok   rc-hold, forged completion: burns no rc.2
+=== 2D. neutral Stage 2 (infra stall) re-qualifies rc.1 in place as attempt #2 ===
+ok   neutral: exits 0
+ok   neutral: cuts no rc.2
+ok   neutral: stages nothing
+    |   Qualification of v3.2.0-rc.1 (d0e07bd0c840).
+    |   INFRA grain/release-qualification: cancelled, timed out or starved of capacity (infra); re-run, not red; stalled after Stage 2's infra re-runs
+    |   RERUN qualification grain/release-qualification infra
+    |   Qualification: INFRA v3.2.0-rc.1 (grain/release-qualification).
+ok   neutral, #2 in progress: waits (PENDING), no rc.2
+ok   neutral, #2 in progress: is still qualifying rc.1
+    |   Qualification of v3.2.0-rc.1 (d0e07bd0c840).
+    |   PENDING grain/release-qualification: still running (infra,pending)
+    |   Qualification: PENDING v3.2.0-rc.1 (grain/release-qualification).
+ok   neutral, #2 success: qualifies rc.1 on the same commit
+ok   neutral, #2 success: stages v3.2.0-pending on rc.1's commit
+ok   neutral, #2 success: burned no rc.2
+    |   Qualification of v3.2.0-rc.1 (d0e07bd0c840).
+    |   PASS grain/release-qualification: passed (infra,success)
+    |   Qualification: PASS v3.2.0-rc.1.
+ok   neutral, #2 failure: does not qualify
+ok   neutral, #2 failure: stages nothing
+ok   hygiene: checkout .git/config unchanged
+ok   hygiene: no tag created in the checkout
+item2: 36/36 passed, 0 failed

@@ -26,6 +26,7 @@ import {
 } from "@mui/material";
 import Sparkline from "./Sparkline.jsx";
 import TaskLink from "./detail/TaskLink.jsx";
+import { useReturnFocus } from "./ListPrimitives.jsx";
 import { buildPath } from "../paths.js";
 import { stateNarrowing } from "../report.js";
 import { countOf, hoursOf } from "./SandboxLifetimePanel.jsx";
@@ -615,7 +616,11 @@ export function PromptsSection({ report, onOpenTask }) {
                 {prompts.heaviest.map((task) => (
                   <TableRow key={task.taskId}>
                     <TableCell>
-                      <TaskLink id={task.taskId} onOpenTask={onOpenTask}>
+                      <TaskLink
+                        id={task.taskId}
+                        onOpenTask={onOpenTask}
+                        returnFocus="report:prompts"
+                      >
                         task {task.taskId}
                       </TaskLink>
                     </TableCell>
@@ -1479,43 +1484,60 @@ export function BacklogSection({ report, onOpenTask, scope, onOpen }) {
             gap: 0.7,
           }}
         >
-          {displayCounts(backlog).map(({ state, count }) => {
-            const listed = stateNarrowing(scope, state);
-            return (
-              <Chip
-                key={state}
-                size="small"
-                variant="outlined"
-                component="a"
-                clickable
-                href={buildPath({ view: "tasks", narrowing: listed })}
-                onClick={(e) => {
-                  if (!onOpen || !isPlainClick(e)) return;
-                  e.preventDefault();
-                  onOpen({ view: "tasks", narrowing: listed });
-                }}
-                icon={
-                  <span
-                    className={`dot dot-${state}`}
-                    style={{ marginLeft: 8 }}
-                  />
-                }
-                label={`${STATE_LABELS[state] || state} ${count}`}
-              />
-            );
-          })}
+          {displayCounts(backlog).map(({ state, count }) => (
+            <BacklogCount
+              key={state}
+              state={state}
+              count={count}
+              scope={scope}
+              onOpen={onOpen}
+            />
+          ))}
         </Box>
       )}
       {oldestTaskId && (
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
           Oldest waiting task:{" "}
-          <TaskLink id={oldestTaskId} onOpenTask={onOpenTask}>
+          <TaskLink
+            id={oldestTaskId}
+            onOpenTask={onOpenTask}
+            returnFocus="report:backlog"
+          >
             task {oldestTaskId}
           </TaskLink>
           , waiting {formatSeconds(report.backlog.oldestQueuedSeconds)}.
         </Typography>
       )}
     </>
+  );
+}
+
+// BacklogCount is one of the backlog's counts: a chip that is a link
+// into the task list narrowed to the report's scope and that state,
+// remembering itself so Back from that list puts focus on it again
+// (useReturnFocus) rather than on <body> -- the report fetches itself
+// again on the way back, so nothing else would.
+function BacklogCount({ state, count, scope, onOpen }) {
+  const listed = stateNarrowing(scope, state);
+  const href = buildPath({ view: "tasks", narrowing: listed });
+  const [ref, remember] = useReturnFocus(href, `report:backlog:${state}`);
+  return (
+    <Chip
+      ref={ref}
+      size="small"
+      variant="outlined"
+      component="a"
+      clickable
+      href={href}
+      onClick={(e) => {
+        if (!onOpen || !isPlainClick(e)) return;
+        e.preventDefault();
+        remember();
+        onOpen({ view: "tasks", narrowing: listed });
+      }}
+      icon={<span className={`dot dot-${state}`} style={{ marginLeft: 8 }} />}
+      label={`${STATE_LABELS[state] || state} ${count}`}
+    />
   );
 }
 

@@ -143,6 +143,62 @@ func TestLiveProposalWithNoBaseFromAParentFiledOnTheDefaultBranchIsQueued(t *tes
 	}
 }
 
+// A live proposal held only because it lands off its auto-merge parent's
+// branch says so, as the end-of-run relay's identical proposal does
+// (model.OtherBranchQueueNote) -- the relay skips one filed live, so the
+// note is CreateTask's to write. One on the parent's branch is queued with
+// no note (docs/test-runs/2026-11-08-attribution-external-rails.md F2).
+func TestLiveProposalHeldOnlyForItsBranchSaysWhy(t *testing.T) {
+	client, _, ctx := testClient(t)
+	client.Config.GitHubDefaultBranches = fakeDefaultBranches{"acme/widgets": "trunk"}
+	// AutoMerge on each proposal is what the daemon's propose_task passes
+	// for an auto-merge parent (pkg/daemon/mcpserver.go); CreateTask caps it.
+	onRelease, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "release fixer", Approved: true, Repo: "acme/widgets", Base: "release/v1", AutoMerge: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "on trunk", Description: "do it", ProposedBy: onRelease.ID, AutoMerge: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held.State != model.StateProposed || held.AutoMerge {
+		t.Errorf("state = %s, autoMerge = %v, want proposed without auto-merge", held.State, held.AutoMerge)
+	}
+	if !strings.Contains(held.Description, "grain: task "+onRelease.ID+", which proposed this, may queue") ||
+		!strings.Contains(held.Description, "`release/v1` in `acme/widgets`") ||
+		!strings.Contains(held.Description, "the default branch of `acme/widgets`") {
+		t.Errorf("description = %q, want the [grain] note naming release/v1 and the default branch", held.Description)
+	}
+
+	onTrunk, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "trunk fixer", Approved: true, Repo: "acme/widgets", Base: "trunk", AutoMerge: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "also trunk", Description: "do it", ProposedBy: onTrunk.ID, AutoMerge: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued.State != model.StateQueued || !queued.AutoMerge || queued.Base != "" {
+		t.Errorf("state = %s, autoMerge = %v, base = %q, want queued with auto-merge and base \"\"", queued.State, queued.AutoMerge, queued.Base)
+	}
+	if strings.Contains(queued.Description, "may queue the work it splits out") {
+		t.Errorf("description = %q, want no landing note on a queued proposal", queued.Description)
+	}
+
+	// hold_for_approval says why itself; the landing note is not added on top.
+	asked, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "held anyway", Description: "do it", ProposedBy: onRelease.ID, HoldForApproval: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(asked.Description, "may queue the work it splits out") {
+		t.Errorf("description = %q, want no landing note on a hold_for_approval proposal", asked.Description)
+	}
+}
+
 // And a task nobody trusted with an unreviewed merge passes on neither
 // half of it, which is the ordinary case and the one that keeps
 // propose_task's contract intact for every deployment that never turns
@@ -302,6 +358,31 @@ func TestAutoSubmittedProposalInheritanceAndCapabilities(t *testing.T) {
 	if strings.Contains(piece.Description, "grain: this proposal asked for") {
 		t.Errorf("body = %q: a proposal asking for nothing new carries an escalation note", piece.Description)
 	}
+
+	// Even when the parent itself holds a non-reference person-only grant
+	// (self-upgrade -> api:self-upgrade), a proposal asking for it must wait for
+	// a person and must not inherit auto-merge.
+	upgradeParent, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "upgrade parent", Approved: true, AutoMerge: true,
+		Capabilities: &[]string{"self-upgrade"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	heldPersonOnly, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "upgrade child", ProposedBy: upgradeParent.ID, AutoMerge: true,
+		Capabilities: &[]string{"self-upgrade"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if heldPersonOnly.State != model.StateProposed || heldPersonOnly.AutoMerge {
+		t.Errorf("person-only proposal from holder: state=%s autoMerge=%v, want proposed and autoMerge=false",
+			heldPersonOnly.State, heldPersonOnly.AutoMerge)
+	}
+	if !strings.Contains(heldPersonOnly.Description, "only a person may grant") {
+		t.Errorf("body = %q, want person-only escalation note", heldPersonOnly.Description)
+	}
 }
 
 // grain#2409: a standing session trusted to queue its own work is not
@@ -358,6 +439,31 @@ func TestSessionProposalAskingForACapabilityItsSessionLacksWaitsForAPerson(t *te
 	}
 	if !strings.Contains(filed.Description, "`"+model.GrainHostExecGrant+"`") {
 		t.Errorf("body = %q, want a note naming self-repair", filed.Description)
+	}
+
+	// Even when a repository's default_capabilities seeds a non-reference
+	// person-only grant (self-upgrade -> api:self-upgrade), a queueing
+	// director session must not auto-queue the proposal.
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:                repo,
+		DefaultCapabilities: []string{"self-upgrade"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seededPersonOnly, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "targets repo with person-only default", Description: "d",
+		Repo: repo.String(), ProposedBy: session.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seededPersonOnly.State != model.StateProposed || seededPersonOnly.AutoMerge {
+		t.Errorf("session proposal with person-only default: state=%s autoMerge=%v, want proposed and autoMerge=false",
+			seededPersonOnly.State, seededPersonOnly.AutoMerge)
+	}
+	if !strings.Contains(seededPersonOnly.Description, "`api:self-upgrade`") {
+		t.Errorf("body = %q, want escalation note naming api:self-upgrade", seededPersonOnly.Description)
 	}
 }
 

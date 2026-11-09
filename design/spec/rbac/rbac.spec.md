@@ -420,7 +420,6 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 | `POST /api/external-agents/tokens/{id}/revoke` | `capabilities:admin` | `writer` | `writer` MAY revoke only own token; `admin` may revoke any (`RB-14`). |
 | `DELETE /api/external-agents/tokens/{id}` | `capabilities:admin` | `writer` | `writer` MAY delete only own token; `admin` may delete any (`RB-14`). |
 | `POST /api/external-agents/tokens/revoke-all` | `capabilities:admin` | `admin` | Emergency deployment-wide kill switch (`admin` only). |
-| `POST /api/capabilities/{id}/check` | `capabilities:read` | `admin` | Actively probes upstream capability server/credential. |
 | `GET /api/capability-servers/gchat-usage` | `capabilities:read` | `admin` | Admin capability-server usage inspection. |
 | `GET /api/capability-servers/host-entries` | `capabilities:read` | `admin` | Lists host-script entries on host. |
 | `GET /api/capability-servers/usage` | `capabilities:read` | `admin` | Lists cross-deployment capability server usage. |
@@ -463,6 +462,7 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 | `GET /api/persistent-sandboxes` | `sandboxes:read` | `reader` | Persistent sandboxes status list. |
 | `GET /api/metrics` | `deployment:read` | `reader` | Deployment throughput/latency/quota metrics (`/metrics`). |
 | `GET /api/unmatched-failures` | `deployment:read` | `reader` | Unmatched CI/run failure summary. |
+| `GET /api/usage` | `deployment:read` | `reader` | Token usage, budgets and the sustainable-concurrency estimate per connection and model. |
 | `GET /api/upgrade` | `deployment:read` | `reader` | Current build version and scheduled-upgrade status. |
 | `GET /api/upgrade/targets` | `deployment:read` | `reader` | Upgrade channel/target status. |
 | `GET /api/upgrade/release-notes` | `deployment:read` | `reader` | Upgrade release notes. |
@@ -476,6 +476,7 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 | `GET /api/deployment` | `settings:read` | `admin` | Full deployment backend & connection config (`Settings → Models / Git`). |
 | `PUT /api/deployment` | `settings:write` | `admin` | Updates deployment backends/connections. |
 | `PUT /api/settings` | `settings:write` | `admin` | Updates `grain_config` (`configMode` requires human `admin`, `SC-2`). |
+| `PUT /api/usage/settings` | `settings:write` | `admin` | Replaces the token usage settings: concurrency mode, automatic cap floor, retention and connection budgets. |
 | `POST /api/settings` | `settings:write` | `admin` | Legacy settings update alias (`admin`). |
 | `POST /api/settings/plan` | `settings:read` | `admin` | Previews `grain_config` mutation plan. |
 | `PUT /api/settings/cli-run` | `settings:write` | `admin` | Updates CLI run placement settings. |

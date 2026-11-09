@@ -1346,7 +1346,19 @@ export function issueUrl(ref) {
 // Leave an undeclared base out: the server resolves it from the
 // repository, so this works for repos whose default branch is not `main`.
 export function internalPullRequestUrl(repo, branch, base = "") {
-  return `/repos/${repo}/compare/${base ? `${base}...${branch}` : branch}`;
+  const head = comparisonRefSegment(branch);
+  return `/repos/${repo}/compare/${base ? `${comparisonRefSegment(base)}...${head}` : head}`;
+}
+
+// comparisonRefSegment is one ref as a compare path spells it: its "/"
+// left literal, the way github.com's compare URLs write a branch name,
+// and everything else a path cannot carry escaped. Git allows "#", "?"
+// and "%" in a branch name (fix/#123 is a common one), and written
+// plainly the first two end the path: the page opened in-app, but a
+// reload or a shared link compared fix/ instead (2026-11-09 repository
+// walkthrough). paths.js decodes each ref on the way back in.
+export function comparisonRefSegment(ref) {
+  return encodeURIComponent(ref).replace(/%2F/gi, "/");
 }
 
 // repoUrl turns "owner/name" or "host/owner/name" -- the way a repo is
@@ -1449,19 +1461,10 @@ export function configuredCapabilities(offered, selected) {
   return (offered || []).filter((c) => c.ready !== false || held.has(c.id));
 }
 
-// NO_CAPABILITIES_HINT is what a picker says when configuredCapabilities
-// has left it with nothing at all -- which, with every in-process
-// capability core shipped retired onto a capability server method, is
-// what core always offers. An empty menu reads as a broken pane, so it
+// NO_CAPABILITIES_HINT is what the repo CI-capabilities picker says when
+// configuredCapabilities has left it with nothing at all. An empty menu reads as a broken pane, so it
 // says where access is granted instead.
 export const NO_CAPABILITIES_HINT = "None offered -- grant access under Grants";
-
-// LEGACY_CAPABILITIES_HINT sits under every in-process capability
-// checklist: those ids are being converted to capability server methods
-// or api scopes (design/design/unified-grants.design.md), so new access belongs
-// under Grants rather than here.
-export const LEGACY_CAPABILITIES_HINT =
-  "Legacy in-process capabilities, each being converted to a server method or API scope. Add new access under Grants.";
 
 // capabilityRows is the listing any capability picker has to be built
 // from: the rows this build offers and this deployment has configured

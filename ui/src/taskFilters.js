@@ -561,6 +561,19 @@ export function closedServerFilters(narrowing, config) {
     if (cond.op !== "any" || (cond.values || []).length !== 1) continue;
     const [value] = cond.values;
     if (value === NONE || String(value).trim() === "") continue;
+    // "me" is the viewer, which only GET /api/config says. Before it has
+    // answered, expand reads "me" as its fallback "operator", and the
+    // list asked the server for owner=operator -- somebody else's closed
+    // work, or nothing -- on every cold load of an `owner:any:me` link,
+    // then asked again once the viewer was known (2026-11-08
+    // walkthrough, F1). Wait for the viewer instead.
+    if (
+      !config &&
+      id === "owner" &&
+      String(value).trim().toLowerCase() === "me"
+    ) {
+      continue;
+    }
     const wanted = attr.expand ? attr.expand(value, config) : [value];
     if (wanted.length !== 1 || !String(wanted[0]).trim()) continue;
     out[id] = String(wanted[0]).trim();

@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -54,10 +55,37 @@ type ReleaseApprovalDecision struct {
 	DecidedAt time.Time
 }
 
+const releaseApprovalFailedPrefix = "failed:"
+
+// Failed reports whether the dispatched promote-release run ended in failure
+// without promoting or rejecting the release. A failed decision no longer
+// holds the commit -- the pending release is raised again with the run's
+// failure, and a person may dispatch again without waiting out
+// ReleaseApprovalHold.
+func (d ReleaseApprovalDecision) Failed() bool {
+	return strings.HasPrefix(d.Decision, releaseApprovalFailedPrefix)
+}
+
+// DecisionVerb returns the underlying decision ("approve" or "reject"),
+// stripping any failure marker.
+func (d ReleaseApprovalDecision) DecisionVerb() string {
+	return strings.TrimPrefix(d.Decision, releaseApprovalFailedPrefix)
+}
+
+// MarkFailed returns a copy of d marked as failed. DecidedAt is preserved so
+// watchPendingReleases still ignores the notification clear that accompanied
+// this dispatch.
+func (d ReleaseApprovalDecision) MarkFailed() ReleaseApprovalDecision {
+	if !d.Failed() {
+		d.Decision = releaseApprovalFailedPrefix + d.Decision
+	}
+	return d
+}
+
 // ActiveAt reports whether d still holds its (Repo, Version, Commit) at
-// now -- within ReleaseApprovalHold of DecidedAt.
+// now -- unfailed and within ReleaseApprovalHold of DecidedAt.
 func (d ReleaseApprovalDecision) ActiveAt(now time.Time) bool {
-	return now.Sub(d.DecidedAt) < ReleaseApprovalHold
+	return !d.Failed() && now.Sub(d.DecidedAt) < ReleaseApprovalHold
 }
 
 // GetReleaseApprovalDecision reads what a person last dispatched for repo's

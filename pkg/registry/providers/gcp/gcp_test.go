@@ -45,6 +45,20 @@ type fakeGCEState struct {
 	mu        sync.Mutex
 	instances map[string]map[string]any // key: project/zone/name
 	disks     map[string]map[string]any // key: project/zone/name
+	// insertOpErrors queues failed-operation responses for instances.insert: each POST pops
+	// the first one and answers with a DONE operation carrying that error instead of creating
+	// the instance.
+	insertOpErrors []fakeGCEOpError
+	insertAttempts int
+	// canActAs, when set, is GCE's iam.serviceAccounts.actAs check: an insert whose
+	// service account it rejects fails with SERVICE_ACCOUNT_ACCESS_DENIED, as GCE does
+	// when the caller lacks roles/iam.serviceAccountUser on that account.
+	canActAs func(saEmail string) bool
+}
+
+type fakeGCEOpError struct {
+	Code    string
+	Message string
 }
 
 func newFakeGCEServer(t *testing.T) (*httptest.Server, *fakeGCEState) {
@@ -90,6 +104,42 @@ func newFakeGCEServer(t *testing.T) (*httptest.Server, *fakeGCEState) {
 					}
 					name, _ := body["name"].(string)
 					key := proj + "/" + zone + "/" + name
+					st.insertAttempts++
+					if len(st.insertOpErrors) > 0 {
+						opErr := st.insertOpErrors[0]
+						st.insertOpErrors = st.insertOpErrors[1:]
+						_ = json.NewEncoder(w).Encode(map[string]any{
+							"kind":   "compute#operation",
+							"name":   "op-failed-insert",
+							"status": "DONE",
+							"error": map[string]any{
+								"errors": []any{map[string]any{"code": opErr.Code, "message": opErr.Message}},
+							},
+						})
+						return
+					}
+					if st.canActAs != nil {
+						saEmail := ""
+						if sas, ok := body["serviceAccounts"].([]any); ok && len(sas) > 0 {
+							if sa, ok := sas[0].(map[string]any); ok {
+								saEmail, _ = sa["email"].(string)
+							}
+						}
+						if !st.canActAs(saEmail) {
+							_ = json.NewEncoder(w).Encode(map[string]any{
+								"kind":   "compute#operation",
+								"name":   "op-denied-insert",
+								"status": "DONE",
+								"error": map[string]any{
+									"errors": []any{map[string]any{
+										"code":    "SERVICE_ACCOUNT_ACCESS_DENIED",
+										"message": "The user does not have access to service account '" + saEmail + "'. User: 'grain-hub/grain-registry (test-proj.svc.id.goog)'. Ask a project owner to grant you the iam.serviceAccountUser role on the service account.",
+									}},
+								},
+							})
+							return
+						}
+					}
 					if _, exists := st.instances[key]; exists {
 						w.WriteHeader(http.StatusConflict)
 						_ = json.NewEncoder(w).Encode(map[string]any{
@@ -399,8 +449,40 @@ type fakeGCPControlPlane struct {
 	sqlUsers        map[string]map[string]bool // sqlInstance -> userName -> exists
 	secrets         map[string][][]byte        // secretID -> versions
 	secretLabels    map[string]map[string]string
+	secretPolicies  map[string]iamPolicy // secretID -> secret-level IAM policy
 	managedFolders  map[string]iamPolicy
 	objects         map[string][]byte
+
+	// Service accounts' own IAM policies (email -> policy) and the knobs the
+	// self-actAs tests turn: etags are "etag-<n>" and a setIamPolicy carrying a
+	// stale one is answered 409, as IAM does.
+	saPolicies       map[string]iamPolicy
+	saPolicySerial   int
+	saGetIAMCalls    int
+	saSetIAMCalls    int
+	saRefuseGetIAM   bool // answer serviceAccounts.getIamPolicy 403
+	saRefuseSetIAM   bool // answer serviceAccounts.setIamPolicy 403
+	saGetIAMNotFound int  // answer this many getIamPolicy calls 404 (account not visible yet)
+	// saConcurrentWrites makes this many setIamPolicy calls lose a race: just before
+	// each, another writer adds its own binding and bumps the etag.
+	saConcurrentWrites int
+}
+
+// canActAs reports whether principal holds roles/iam.serviceAccountUser on saEmail
+// through that account's own IAM policy.
+func (cp *fakeGCPControlPlane) canActAs(principal, saEmail string) bool {
+	cp.mu.Lock()
+	defer cp.mu.Unlock()
+	if !cp.serviceAccounts[saEmail] {
+		return false
+	}
+	pol := cp.saPolicies[saEmail]
+	return pol.hasUnconditionalMember(roleServiceAccountUser, principal)
+}
+
+func (cp *fakeGCPControlPlane) nextSAEtag() string {
+	cp.saPolicySerial++
+	return fmt.Sprintf("etag-%d", cp.saPolicySerial)
 }
 
 func newFakeGCPControlPlaneServer(t *testing.T) (*httptest.Server, *fakeGCPControlPlane) {
@@ -411,8 +493,10 @@ func newFakeGCPControlPlaneServer(t *testing.T) (*httptest.Server, *fakeGCPContr
 		sqlUsers:        make(map[string]map[string]bool),
 		secrets:         make(map[string][][]byte),
 		secretLabels:    make(map[string]map[string]string),
+		secretPolicies:  make(map[string]iamPolicy),
 		managedFolders:  make(map[string]iamPolicy),
 		objects:         make(map[string][]byte),
+		saPolicies:      make(map[string]iamPolicy),
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -420,6 +504,69 @@ func newFakeGCPControlPlaneServer(t *testing.T) (*httptest.Server, *fakeGCPContr
 		defer cp.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		path := r.URL.Path
+
+		// 0. A service account's own IAM policy: /v1/projects/{p}/serviceAccounts/{email}:getIamPolicy | :setIamPolicy
+		if strings.HasPrefix(path, "/v1/projects/") && strings.Contains(path, "/serviceAccounts/") &&
+			(strings.HasSuffix(path, ":getIamPolicy") || strings.HasSuffix(path, ":setIamPolicy")) && r.Method == http.MethodPost {
+			colon := strings.LastIndex(path, ":")
+			email, method := path[strings.LastIndex(path, "/")+1:colon], path[colon+1:]
+			writeErr := func(code int, status, msg string) {
+				w.WriteHeader(code)
+				_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"code": code, "status": status, "message": msg}})
+			}
+			if method == "getIamPolicy" {
+				cp.saGetIAMCalls++
+				if cp.saRefuseGetIAM {
+					writeErr(http.StatusForbidden, "PERMISSION_DENIED", "Permission 'iam.serviceAccounts.getIamPolicy' denied on resource (or it may not exist).")
+					return
+				}
+				if cp.saGetIAMNotFound > 0 || !cp.serviceAccounts[email] {
+					if cp.saGetIAMNotFound > 0 {
+						cp.saGetIAMNotFound--
+					}
+					writeErr(http.StatusNotFound, "NOT_FOUND", "Unknown service account")
+					return
+				}
+				pol, ok := cp.saPolicies[email]
+				if !ok {
+					pol = iamPolicy{Etag: cp.nextSAEtag()}
+					cp.saPolicies[email] = pol
+				}
+				_ = json.NewEncoder(w).Encode(pol)
+				return
+			}
+			cp.saSetIAMCalls++
+			if cp.saRefuseSetIAM {
+				writeErr(http.StatusForbidden, "PERMISSION_DENIED", "Permission 'iam.serviceAccounts.setIamPolicy' denied on resource (or it may not exist).")
+				return
+			}
+			if !cp.serviceAccounts[email] {
+				writeErr(http.StatusNotFound, "NOT_FOUND", "Unknown service account")
+				return
+			}
+			if cp.saConcurrentWrites > 0 {
+				cp.saConcurrentWrites--
+				cur := cp.saPolicies[email]
+				cur.Bindings = append(cur.Bindings, iamBinding{
+					Role:    "roles/iam.serviceAccountTokenCreator",
+					Members: []string{fmt.Sprintf("user:concurrent-%d@example.com", cp.saPolicySerial)},
+				})
+				cur.Etag = cp.nextSAEtag()
+				cp.saPolicies[email] = cur
+			}
+			var req struct {
+				Policy iamPolicy `json:"policy"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if req.Policy.Etag != cp.saPolicies[email].Etag {
+				writeErr(http.StatusConflict, "ABORTED", "There were concurrent policy changes. Please retry the whole read-modify-write with exponential backoff.")
+				return
+			}
+			req.Policy.Etag = cp.nextSAEtag()
+			cp.saPolicies[email] = req.Policy
+			_ = json.NewEncoder(w).Encode(req.Policy)
+			return
+		}
 
 		// 1. IAM Service Accounts: /v1/projects/{p}/serviceAccounts...
 		if strings.HasPrefix(path, "/v1/projects/") && strings.Contains(path, "/serviceAccounts") {
@@ -445,9 +592,28 @@ func newFakeGCPControlPlaneServer(t *testing.T) (*httptest.Server, *fakeGCPContr
 				return
 			case http.MethodDelete:
 				delete(cp.serviceAccounts, email)
+				// The account's own policy, and so any actAs binding on it, goes with it.
+				delete(cp.saPolicies, email)
 				_ = json.NewEncoder(w).Encode(map[string]any{})
 				return
 			}
+		}
+
+		// 1b. Secret Manager secret-level IAM policy: /v1/projects/{p}/secrets/{s}:setIamPolicy
+		if strings.HasPrefix(path, "/v1/projects/") && strings.Contains(path, "/secrets/") && strings.HasSuffix(path, ":setIamPolicy") {
+			trimmed := strings.TrimSuffix(path, ":setIamPolicy")
+			secretID := trimmed[strings.LastIndex(trimmed, "/")+1:]
+			if _, ok := cp.secrets[secretID]; !ok {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			var req struct {
+				Policy iamPolicy `json:"policy"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			cp.secretPolicies[secretID] = req.Policy
+			_ = json.NewEncoder(w).Encode(req.Policy)
+			return
 		}
 
 		// 2. Cloud Resource Manager project IAM policy: /v1/projects/{p}:getIamPolicy | :setIamPolicy
@@ -759,6 +925,7 @@ func TestGCPInstanceResourcesAndPostgresIsolation(t *testing.T) {
 			SAPrefix:      "grain-sa-",
 			SSHBreakGlass: &sshAllow,
 			RegistryID:    "grain.example.com",
+			SelfPrincipal: testSelfPrincipal,
 		},
 		Secrets: registry.SecretsConfig{
 			Project:      "test-proj",
@@ -820,6 +987,9 @@ func TestGCPInstanceResourcesAndPostgresIsolation(t *testing.T) {
 	aliceBundle, err := res.Provision(ctx, aliceSpec)
 	if err != nil {
 		t.Fatalf("Provision alice-vm: %v", err)
+	}
+	if !cp.canActAs(testSelfPrincipal, aliceBundle.ServiceAccountEmail) {
+		t.Fatalf("Provision did not grant the registry %s on %s", roleServiceAccountUser, aliceBundle.ServiceAccountEmail)
 	}
 	if _, err := st.UpdateInstancePlacement(ctx, aliceEntry.ID, aliceEntry.Version, "grain-vm-alice-vm", "10.128.0.10", "http://10.128.0.10:8080", aliceBundle.ServiceAccountEmail, aliceBundle.SQLInstance, aliceBundle.DatabaseName, aliceBundle.SecretPrefix); err != nil {
 		t.Fatalf("UpdateInstancePlacement alice-vm: %v", err)
@@ -1001,6 +1171,13 @@ func TestGCPInstanceResourcesAndPostgresIsolation(t *testing.T) {
 	}
 	if dbCount != 0 {
 		t.Fatal("expected grain_alice_vm database to be dropped on Teardown(retainDB=false)")
+	}
+
+	cp.mu.Lock()
+	_, aliceSAPolicyExists := cp.saPolicies[aliceBundle.ServiceAccountEmail]
+	cp.mu.Unlock()
+	if aliceSAPolicyExists {
+		t.Fatal("expected the registry's actAs binding on alice-vm's service account to go with the account on purge")
 	}
 
 	cp.mu.Lock()

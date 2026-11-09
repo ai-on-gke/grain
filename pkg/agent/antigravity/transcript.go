@@ -102,6 +102,27 @@ type rawResult struct {
 	Response       string `json:"response"`
 	Error          string `json:"error"`
 	NumTurns       int    `json:"num_turns"`
+	// Usage is the result event's account of what the exec spent
+	// (agent.TokenUsage). Like Gemini's own usage metadata, its
+	// input_tokens includes cache_read_tokens.
+	Usage *rawUsage `json:"usage"`
+}
+
+type rawUsage struct {
+	InputTokens     int64 `json:"input_tokens"`
+	OutputTokens    int64 `json:"output_tokens"`
+	ThinkingTokens  int64 `json:"thinking_tokens"`
+	CacheReadTokens int64 `json:"cache_read_tokens"`
+}
+
+// tokenUsage is u as agent.TokenUsage, with the cached part of the input
+// moved out of InputTokens and thinking counted as output.
+func (u rawUsage) tokenUsage(turns int) agent.TokenUsage {
+	input := u.InputTokens - u.CacheReadTokens
+	if input < 0 {
+		input = u.InputTokens
+	}
+	return agent.TokenUsage{InputTokens: input, CacheReadTokens: u.CacheReadTokens, OutputTokens: u.OutputTokens + u.ThinkingTokens, Turns: turns}
 }
 
 // Step types and states this parser acts on. Anything else is carried
@@ -305,6 +326,10 @@ func parseEventsWithRecorded(stdout string, recorded []mcp.ToolCallRecord) *pars
 				continue
 			}
 			p.noteConversation(ev.Result.ConversationID)
+			// One result event per exec of agy, each that exec's spend.
+			if ev.Result.Usage != nil {
+				p.result.Usage = p.result.Usage.Add(ev.Result.Usage.tokenUsage(ev.Result.NumTurns))
+			}
 			p.sawResult = true
 			resumedTurnCompleted := strings.EqualFold(strings.TrimSpace(ev.Result.Status), stateError) &&
 				p.lastStepDoneResponse && strings.TrimSpace(ev.Result.Response) != ""

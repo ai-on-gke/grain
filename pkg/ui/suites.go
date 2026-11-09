@@ -663,12 +663,20 @@ func suiteRunTaskIDs(run model.SuiteRun) []string {
 // --- handlers ------------------------------------------------------------
 
 func (s *Server) handleListSuites(w http.ResponseWriter, r *http.Request) {
+	page, err := parseListQuery(r, listPageLarge)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	list, err := s.tasks.ListSuites(r.Context())
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, list)
+	list = filterList(list, func(st Suite) bool {
+		return page.matches(st.ID, st.Name)
+	})
+	writeList(w, list, page)
 }
 
 func (s *Server) handleCreateSuite(w http.ResponseWriter, r *http.Request) {
@@ -710,12 +718,21 @@ func (s *Server) handleDeleteSuite(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListSuiteRuns(w http.ResponseWriter, r *http.Request) {
-	list, err := s.tasks.ListSuiteRuns(r.Context())
+	list, err := parseListQuery(r, listPageLarge)
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, list)
+	runs, err := s.tasks.ListSuiteRuns(r.Context())
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	if repo := strings.TrimSpace(r.URL.Query().Get("repo")); repo != "" {
+		runs = filterList(runs, func(run SuiteRun) bool { return strings.EqualFold(run.Repo, repo) })
+	}
+	runs = filterList(runs, func(run SuiteRun) bool { return list.matches(run.SuiteName, run.SuiteID) })
+	writeList(w, runs, list)
 }
 
 func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {

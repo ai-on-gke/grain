@@ -153,7 +153,9 @@ type StateRepoTree struct {
 	Head    string           `json:"head,omitempty"`
 	// Truncated is a repository holding more files than one listing
 	// carries.
-	Truncated bool `json:"truncated,omitempty"`
+	Truncated  bool   `json:"truncated,omitempty"`
+	Total      int    `json:"total,omitempty"`
+	NextCursor string `json:"nextCursor,omitempty"`
 }
 
 // StateRepoFile is one file of the exported configuration as a reader
@@ -432,6 +434,11 @@ const (
 // still a pull request against grain/config, which is the deployment's
 // own model and what the pane says.
 func (s *Server) handleListStateRepoFiles(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageDefault)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	if s.tasks.Config.StateRepo == nil {
 		writeError(w, http.StatusNotImplemented, apierror.Public("this deployment's UI does not manage a state repository"))
 		return
@@ -440,6 +447,16 @@ func (s *Server) handleListStateRepoFiles(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
+	}
+	if list.Paged {
+		matched := filterList(tree.Entries, func(e StateRepoEntry) bool {
+			return list.matches(e.Path)
+		})
+		page := pageOf(matched, list)
+		tree.Entries = page.Items
+		tree.Total = page.Total
+		tree.Truncated = tree.Truncated || page.Truncated
+		tree.NextCursor = page.NextCursor
 	}
 	writeJSON(w, http.StatusOK, tree)
 }

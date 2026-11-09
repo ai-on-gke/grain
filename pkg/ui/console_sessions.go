@@ -161,10 +161,13 @@ type ConsoleSessionSettingsResponse struct {
 	// unconfigured capability would go on being tickable here after the
 	// rest of the app stopped offering them (configuredCapabilities,
 	// ui/src/state.js).
-	Capabilities []Capability `json:"capabilities"`
+	Capabilities []Capability `json:"capabilities,omitempty"`
 	// NetworkAccessOptions is model.NetworkAccesses() as strings, for
 	// the same reason Settings carries it.
-	NetworkAccessOptions []string `json:"networkAccessOptions"`
+	NetworkAccessOptions []string `json:"networkAccessOptions,omitempty"`
+	Total                int      `json:"total,omitempty"`
+	Truncated            bool     `json:"truncated,omitempty"`
+	NextCursor           string   `json:"nextCursor,omitempty"`
 }
 
 // UpdateConsoleSessionRequest is PUT /api/console-sessions/{id}: the
@@ -1651,9 +1654,27 @@ func (c *Client) DeleteConsoleSession(ctx context.Context, id string) error {
 
 // handleListConsoleSessions is GET /api/console-sessions.
 func (s *Server) handleListConsoleSessions(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageTiny)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	sessions, err := s.tasks.ListConsoleSessions(r.Context())
 	if err != nil {
 		writeClientError(w, err)
+		return
+	}
+	if list.Paged {
+		matched := filterList(sessions, func(cs ConsoleSessionSetting) bool {
+			return list.matches(cs.ID, cs.Title, cs.TaskID, cs.Team)
+		})
+		page := pageOf(matched, list)
+		writeJSON(w, http.StatusOK, ConsoleSessionSettingsResponse{
+			Sessions:   page.Items,
+			Total:      page.Total,
+			Truncated:  page.Truncated,
+			NextCursor: page.NextCursor,
+		})
 		return
 	}
 	// The same two readings GET /api/config's own capability listing is

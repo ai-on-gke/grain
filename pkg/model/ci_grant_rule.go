@@ -245,14 +245,14 @@ func CIGrantRuleRefusal(grant string, s CapabilitySubject) string {
 		}
 		return CIGrantRuleCIOnlyRefusal(grant, rule)
 	}
-	if !rule.Admits(s.Event, s.TrustedSchedule) {
-		event := s.Event
-		if event == "" {
-			event = "unnamed"
+	if !s.AnyEvent && !rule.Admits(s.Event, s.TrustedSchedule) {
+		run := "a run with no trigger event"
+		if s.Event != "" {
+			run = fmt.Sprintf("a %s run", s.Event)
 		}
-		return fmt.Sprintf("%s is handed only to a CI job of %s, and this is a %s run: that rule is grain's own, "+
+		return fmt.Sprintf("%s is handed only to a CI job of %s, and this is %s: that rule is grain's own, "+
 			"declared by the capability's server, and no capability policy rule can widen it",
-			CapabilityGrantRef(CanonicalLegacyGrant(grant)), rule.describe(), event)
+			CapabilityGrantRef(CanonicalLegacyGrant(grant)), rule.describe(), run)
 	}
 	return ""
 }

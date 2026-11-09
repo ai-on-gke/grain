@@ -151,20 +151,30 @@ type DatabaseConfig struct {
 
 // ComputeConfig configures hosted VM provisioning.
 type ComputeConfig struct {
-	Provider              string            `yaml:"provider"`
-	Project               string            `yaml:"project"`
-	Region                string            `yaml:"region"`
-	Zones                 []string          `yaml:"zones"`
-	Network               string            `yaml:"network"`
-	Subnetwork            string            `yaml:"subnetwork"`
-	BootImage             string            `yaml:"boot_image"`
-	StartupScript         string            `yaml:"startup_script,omitempty"`
-	StartupScriptFile     string            `yaml:"startup_script_file,omitempty"`
-	VMPrefix              string            `yaml:"vm_prefix"`
-	SAPrefix              string            `yaml:"sa_prefix"`
-	RegistryID            string            `yaml:"registry_id,omitempty"`
-	SSHBreakGlass         *bool             `yaml:"ssh_break_glass"`
-	BindProjectIAM        *bool             `yaml:"bind_project_iam,omitempty"`
+	Provider          string   `yaml:"provider"`
+	Project           string   `yaml:"project"`
+	Region            string   `yaml:"region"`
+	Zones             []string `yaml:"zones"`
+	Network           string   `yaml:"network"`
+	Subnetwork        string   `yaml:"subnetwork"`
+	BootImage         string   `yaml:"boot_image"`
+	StartupScript     string   `yaml:"startup_script,omitempty"`
+	StartupScriptFile string   `yaml:"startup_script_file,omitempty"`
+	VMPrefix          string   `yaml:"vm_prefix"`
+	SAPrefix          string   `yaml:"sa_prefix"`
+	RegistryID        string   `yaml:"registry_id,omitempty"`
+	SSHBreakGlass     *bool    `yaml:"ssh_break_glass"`
+	BindProjectIAM    *bool    `yaml:"bind_project_iam,omitempty"`
+	// GrantSelfActAs has the gce provider grant the registry's own principal
+	// roles/iam.serviceAccountUser on each per-instance service account it
+	// creates, so it can attach that account to the instance's VM. Defaults
+	// to true; set false when actAs on the instance accounts is granted out
+	// of band.
+	GrantSelfActAs *bool `yaml:"grant_self_act_as,omitempty"`
+	// SelfPrincipal overrides the IAM principal GrantSelfActAs grants
+	// ("serviceAccount:<email>", "principal://...", "user:<email>"). Empty
+	// means detect it from the registry's Application Default Credentials.
+	SelfPrincipal         string            `yaml:"self_principal,omitempty"`
 	Labels                map[string]string `yaml:"labels"`
 	DefaultShape          string            `yaml:"default_shape"`
 	Shapes                []Shape           `yaml:"shapes"`
@@ -241,7 +251,7 @@ type QuotasConfig struct {
 func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("reading registry config %s: %w", path, err)
+		return nil, fmt.Errorf("reading hub config %s: %w", path, err)
 	}
 	return ParseConfig(data)
 }
@@ -342,6 +352,10 @@ func (c *Config) ApplyDefaults() {
 	if c.Compute.BindProjectIAM == nil {
 		v := true
 		c.Compute.BindProjectIAM = &v
+	}
+	if c.Compute.GrantSelfActAs == nil {
+		v := true
+		c.Compute.GrantSelfActAs = &v
 	}
 	if c.InstanceSQL.CloudSQLAdmin == nil {
 		v := true

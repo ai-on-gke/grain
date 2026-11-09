@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { isApiGrant, isLegacyApiGrant, withoutApiRows } from "../apiGrants.js";
+import { isApiGrant, isLegacyApiGrant } from "../apiGrants.js";
 import GrantsPicker from "./GrantsPicker.jsx";
 import { localGrantHandlers } from "./capabilityMethods.js";
 import { isCapabilityRef } from "../capabilityArgs.js";
@@ -32,7 +32,6 @@ import {
   Typography,
 } from "@mui/material";
 import api from "../api.js";
-import { useHeldIds } from "../useHeldIds.js";
 import CompositionPanel from "./CompositionPanel.jsx";
 import { CustomFieldInputs, initialFieldValues } from "./CustomFields.jsx";
 import { useTimeZone } from "../TimeZoneContext.jsx";
@@ -56,13 +55,7 @@ import WriteReposField from "./WriteReposField.jsx";
 import LastWorkflowRun from "./LastWorkflowRun.jsx";
 import { useUnsavedEdits } from "../unsavedEdits.js";
 import { templateLabeler } from "../templateLabels.js";
-import {
-  configuredCapabilities,
-  LEGACY_CAPABILITIES_HINT,
-  NO_CAPABILITIES_HINT,
-  defaultRepoChoice,
-  targetableRepos,
-} from "../state.js";
+import { defaultRepoChoice, targetableRepos } from "../state.js";
 import AccessGate from "./AccessGate.jsx";
 import AdmissionField from "./AdmissionField.jsx";
 import HostingField from "./HostingField.jsx";
@@ -340,23 +333,21 @@ function ScheduleOverlay({
   const [capabilities, setCapabilities] = useState(
     schedule?.capabilities || [],
   );
-  // What this deployment has configured, plus whatever this schedule
-  // already names -- configuredCapabilities (state.js) has why an
-  // unconfigured one is left off and a chosen one is not.
-  // Capability server grants, with their with: arguments, and the agent
-  // API's grants (apiGrants.js) share the list and are edited together
-  // by GrantsPicker rather than the legacy checklist.
-  const capabilityIds = capabilities.filter(
-    (id) => !isCapabilityRef(id) && !isApiGrant(id),
-  );
+  // Capability server grants, with their with: arguments, the agent API's
+  // grants (apiGrants.js), and any held bare capability id share the list
+  // and are shown together by GrantsPicker.
+  const isBareGrant = (id) => !isCapabilityRef(id) && !isApiGrant(id);
+  const capabilityIds = capabilities.filter(isBareGrant);
   const apiIds = capabilities.filter(isLegacyApiGrant);
   const capabilityRefs = capabilities.filter(isCapabilityRef);
-  const heldCapabilityIds = useHeldIds(capabilityIds);
-  const capabilityOptions = withoutApiRows(
-    configuredCapabilities(config?.capabilities, heldCapabilityIds),
-  );
-  const methodGrants = localGrantHandlers(capabilityRefs, (refs) =>
-    setCapabilities([...capabilityIds, ...apiIds, ...refs]),
+  const methodGrants = localGrantHandlers(
+    [...capabilityIds, ...capabilityRefs],
+    (rest) =>
+      setCapabilities([
+        ...rest.filter(isBareGrant),
+        ...apiIds,
+        ...rest.filter(isCapabilityRef),
+      ]),
   );
   // reads is state for the reason capabilities is: its picker
   // (ReadOnlyReposField) is a search box, not a form field submit could
@@ -1162,30 +1153,10 @@ function ScheduleOverlay({
                 <MenuItem value="close">Close</MenuItem>
                 <MenuItem value="ack">Leave for acknowledgement</MenuItem>
               </TextField>
-              <FormControl fullWidth margin="normal" size="small">
-                <SearchSelect
-                  multiple
-                  label="Legacy capabilities"
-                  value={capabilityIds}
-                  onChange={(next) =>
-                    setCapabilities([...next, ...apiIds, ...capabilityRefs])
-                  }
-                  noOptionsText={
-                    capabilityOptions.length === 0
-                      ? NO_CAPABILITIES_HINT
-                      : "No matches"
-                  }
-                  options={capabilityOptions.map((c) => ({
-                    value: c.id,
-                    label: c.name,
-                    title: c.description,
-                  }))}
-                />
-                <FormHelperText>{LEGACY_CAPABILITIES_HINT}</FormHelperText>
-              </FormControl>
               <GrantsPicker
                 config={config}
                 grants={capabilities}
+                disabled={!!declaredIn}
                 onApiChange={(next) =>
                   setCapabilities([
                     ...capabilityIds,

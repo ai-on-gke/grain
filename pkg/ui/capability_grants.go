@@ -164,6 +164,10 @@ type GrantCheck struct {
 	// filing a task holding it would be refused, or the grant dropped
 	// when it is only a default. Empty when no subject was named.
 	CatalogueRefusal string `json:"catalogueRefusal,omitempty"`
+	// AliasOf is the canonical grant(s) a retired bare capability name
+	// became (model.CanonicalLegacyGrants), normalized as a task records
+	// them. Empty when Grant is not a retired alias.
+	AliasOf []string `json:"aliasOf,omitempty"`
 }
 
 // CheckCapabilityGrants normalizes each grant against its server, the
@@ -177,57 +181,91 @@ func (c *Client) CheckCapabilityGrants(ctx context.Context, grants []GrantReques
 		if err != nil {
 			return nil, err
 		}
-		check := GrantCheck{Grant: s}
-		if c := model.CanonicalLegacyGrant(s); c != s {
-			s = c
+		repl := model.CanonicalLegacyGrants(s)
+		if len(repl) > 1 {
+			check := GrantCheck{Grant: s, AliasOf: make([]string, 0, len(repl))}
+			for _, r := range repl {
+				rc := c.checkSingleCapabilityGrant(r, "", lookup)
+				if rc.Recorded != "" {
+					check.AliasOf = append(check.AliasOf, rc.Recorded)
+				} else {
+					check.AliasOf = append(check.AliasOf, r)
+				}
+				if rc.Error != "" && check.Error == "" {
+					check.Error, check.Fields = rc.Error, rc.Fields
+				}
+				if rc.Unchecked {
+					check.Unchecked = true
+				}
+			}
+			out = append(out, check)
+			continue
 		}
-		if !model.IsCapabilityRef(s) {
-			if _, ok := c.capabilityByID(s); !ok {
-				check.Error = capabilityRefusal(s)
+		isAlias := len(repl) == 1 && repl[0] != s
+		target := s
+		reqGrant := req.Grant
+		if isAlias {
+			target = repl[0]
+			reqGrant = ""
+		}
+		check := c.checkSingleCapabilityGrant(target, reqGrant, lookup)
+		check.Grant = s
+		if isAlias {
+			if check.Recorded != "" {
+				check.AliasOf = []string{check.Recorded}
 			} else {
-				check.Recorded = s
+				check.AliasOf = []string{target}
 			}
-			out = append(out, check)
-			continue
-		}
-		grantLookup := lookup
-		if grantLookup == nil && grainserver.IsInProcessGrant(s) {
-			grantLookup = grainserver.LookupWithRepoCredentials(nil, c.configuredGitCredentials())
-		}
-		if grantLookup != nil {
-			if _, err := grantLookup(protocolCapabilityID(s)); err != nil {
-				check.Unchecked = true
-			}
-		} else {
-			check.Unchecked = true
-		}
-		if check.Unchecked {
-			if err := model.CheckCapabilityGrantArgsOffline(s); err != nil {
-				check.Error, check.Fields = err.Error(), grantFieldErrors(err)
-			} else {
-				check.Recorded = s
-			}
-			out = append(out, check)
-			continue
-		}
-		names, err := model.NormalizeCapabilityNames([]string{s}, grantLookup)
-		if err != nil {
-			check.Error, check.Fields = err.Error(), grantFieldErrors(err)
-			out = append(out, check)
-			continue
-		}
-		check.Recorded = names[0]
-		if spec, err := model.CapabilityGrantSpec(check.Recorded); err == nil {
-			check.Args = spec.With
-		}
-		// Only a grant handed back as a task recorded it can have changed;
-		// {capability, with} is a new grant being written.
-		if ref, err := protocol.ParseRef(model.CapabilityGrantRef(s)); err == nil && req.Grant != "" && ref.Method != "" && strings.Contains(s, "=") {
-			check.Changed = check.Recorded != s
 		}
 		out = append(out, check)
 	}
 	return out, nil
+}
+
+func (c *Client) checkSingleCapabilityGrant(s, reqGrant string, lookup protocol.Lookup) GrantCheck {
+	check := GrantCheck{Grant: s}
+	if !model.IsCapabilityRef(s) {
+		if _, ok := c.capabilityByID(s); !ok {
+			check.Error = capabilityRefusal(s)
+		} else {
+			check.Recorded = s
+		}
+		return check
+	}
+	grantLookup := lookup
+	if grantLookup == nil && grainserver.IsInProcessGrant(s) {
+		grantLookup = grainserver.LookupWithRepoCredentials(nil, c.configuredGitCredentials())
+	}
+	if grantLookup != nil {
+		if _, err := grantLookup(protocolCapabilityID(s)); err != nil {
+			check.Unchecked = true
+		}
+	} else {
+		check.Unchecked = true
+	}
+	if check.Unchecked {
+		if err := model.CheckCapabilityGrantArgsOffline(s); err != nil {
+			check.Error, check.Fields = err.Error(), grantFieldErrors(err)
+		} else {
+			check.Recorded = s
+		}
+		return check
+	}
+	names, err := model.NormalizeCapabilityNames([]string{s}, grantLookup)
+	if err != nil {
+		check.Error, check.Fields = err.Error(), grantFieldErrors(err)
+		return check
+	}
+	check.Recorded = names[0]
+	if spec, err := model.CapabilityGrantSpec(check.Recorded); err == nil {
+		check.Args = spec.With
+	}
+	// Only a grant handed back as a task recorded it can have changed;
+	// {capability, with} is a new grant being written.
+	if ref, err := protocol.ParseRef(model.CapabilityGrantRef(s)); err == nil && reqGrant != "" && ref.Method != "" && strings.Contains(s, "=") {
+		check.Changed = check.Recorded != s
+	}
+	return check
 }
 
 // protocolCapabilityID is the capability_id a grant string names, without
@@ -339,6 +377,11 @@ type grantCheckSubject struct {
 // (CapabilityMethod.PolicyRefusal), which is what a picker for a task on
 // that repository offers it by.
 func (s *Server) handleListCapabilityMethods(w http.ResponseWriter, r *http.Request) {
+	list, err := parseListQuery(r, listPageSmall)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
 	methods := s.tasks.ListCapabilityMethods(r.Context())
 	q := r.URL.Query()
 	if kind := strings.TrimSpace(q.Get("kind")); kind != "" {
@@ -348,7 +391,14 @@ func (s *Server) handleListCapabilityMethods(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusBadRequest, fmt.Errorf("kind %q is not task, process or ci", kind))
 			return
 		}
-		subject := model.CapabilitySubject{Kind: kind}
+		// A listing names a run kind and a repository, never a CI job's
+		// trigger event: the CI capabilities picker grants to every job
+		// the repository runs, so an event-gated rule (release#registry-
+		// push, for release jobs) is not a refusal of the whole list.
+		// Judged as an event-less run it was, and the picker disabled
+		// every release method with "this is a unnamed run" (2026-11-09
+		// repository walkthrough).
+		subject := model.CapabilitySubject{Kind: kind, AnyEvent: kind == model.CapabilityRunCI}
 		if repo := strings.TrimSpace(q.Get("repo")); repo != "" {
 			ref, err := model.ParseRepo(repo)
 			if err != nil {
@@ -364,7 +414,10 @@ func (s *Server) handleListCapabilityMethods(w http.ResponseWriter, r *http.Requ
 		}
 		methods = marked
 	}
-	writeJSON(w, http.StatusOK, methods)
+	methods = filterList(methods, func(m CapabilityMethod) bool {
+		return list.matches(m.Ref, m.Capability, m.Method, m.Description)
+	})
+	writeList(w, methods, list)
 }
 
 func (s *Server) handleCheckCapabilityGrants(w http.ResponseWriter, r *http.Request) {

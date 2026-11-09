@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { isApiGrant, isLegacyApiGrant, withoutApiRows } from "../apiGrants.js";
+import { isLegacyApiGrant, withoutApiRows } from "../apiGrants.js";
 import GrantsPicker from "./GrantsPicker.jsx";
 import { localGrantHandlers } from "./capabilityMethods.js";
-import { isCapabilityRef } from "../capabilityArgs.js";
 import { isStaleEdit } from "./StaleEdit.jsx";
 import { useEffect, useState } from "react";
 import { PageHeaderActions, useInPageHeader } from "./PageHeader.jsx";
@@ -261,13 +260,19 @@ export default function ConsoleSessionPage({
     }
   };
 
-  // methodGrants saves the session's capability server grants as
-  // GrantsPicker changes them, keeping everything else it holds.
+  const legacyBoxes = withoutApiRows(
+    configuredCapabilities(capabilities, session?.capabilities),
+  );
+  // methodGrants saves the session's capability server grants (and any
+  // bare capability id not offered as a checkbox above) as GrantsPicker
+  // changes them, keeping everything else it holds.
+  const isPickerNonApi = (id) =>
+    !isLegacyApiGrant(id) && !legacyBoxes.some((c) => c.id === id);
   const methodGrants = localGrantHandlers(
-    (session?.capabilities || []).filter(isCapabilityRef),
+    (session?.capabilities || []).filter(isPickerNonApi),
     (refs) =>
       saveCapabilities(
-        replacing((session.capabilities || []).filter(isCapabilityRef), refs),
+        replacing((session.capabilities || []).filter(isPickerNonApi), refs),
         "methods",
       ),
   );
@@ -483,9 +488,7 @@ export default function ConsoleSessionPage({
         ticking it is not an offer, and one already ticked has to
         stay so it can be turned off (configuredCapabilities,
         state.js). */}
-        {withoutApiRows(
-          configuredCapabilities(capabilities, session.capabilities),
-        ).map((c) => (
+        {legacyBoxes.map((c) => (
           <FormControlLabel
             key={c.id}
             control={
@@ -521,7 +524,9 @@ export default function ConsoleSessionPage({
         is saved as it is made, like the boxes above. */}
         <GrantsPicker
           config={{ ...config, capabilities }}
-          grants={session.capabilities || []}
+          grants={(session.capabilities || []).filter(
+            (id) => !legacyBoxes.some((c) => c.id === id),
+          )}
           onApiChange={(next) =>
             saveCapabilities(
               replacing(

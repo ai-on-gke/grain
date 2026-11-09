@@ -28,9 +28,12 @@ import "time"
 // counted failure, nor a success (ClassifyOutcome).
 //
 // A run suspended with any kind:
-//   - keeps its task's dispatch standing (DispatchStanding, DT-3): its Run
-//     now request is put back, and nothing a run never writes -- order
-//     key, base-branch repair mark, grants -- is touched;
+//   - keeps its task's dispatch standing (DispatchStanding, DT-3): nothing
+//     a run never writes -- order key, base-branch repair mark, grants --
+//     is touched, and the Run now request the run spent is put back for
+//     the kinds that stopped it before it could do the work
+//     (SuspensionKind.KeepsRunNow); a kind in which the agent ran its
+//     turn, resume_later's above all, spent it;
 //   - does not count towards, or break, its task's failure streak
 //     (computeStreakForTask, Store.FailureStreak);
 //   - leaves its CLI session suspended for the next run to join

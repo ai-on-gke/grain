@@ -21,6 +21,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   plugins: [react()],
+  // The hub shares the grain instance UI's public/ rather than forking it:
+  // the grain mark (grain-mark-{light,dark}.{svg,png}) and
+  // apple-touch-icon.png are copied verbatim into the build root, where
+  // index.html's icon links and the header's HubMark load them.
+  publicDir: path.resolve(__dirname, "../ui/public"),
   resolve: {
     alias: {
       "@grain/ui-shared": path.resolve(__dirname, "../ui-shared"),

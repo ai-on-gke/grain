@@ -259,7 +259,10 @@ ${zones_yaml}
       description: "64 vCPUs, 256 GB RAM, 1000 GB pd-balanced — Massive parallel builds, large monorepos, and fleet sandbox execution (28,000 IOPS)"
 instance_sql:
   cloud_sql_admin: false
-  admin_dsn_template: "postgres://postgres:${enc_sql_admin_pw}@${sql_private_ip}:5432/{database}?sslmode=disable"
+  # The pool VM serves TLS (sql-startup.sh). This connection carries the
+  # pool superuser password and every hosted instance's generated role
+  # password (ALTER ROLE ... PASSWORD), so it must not cross the VPC in clear.
+  admin_dsn_template: "postgres://postgres:${enc_sql_admin_pw}@${sql_private_ip}:5432/{database}?sslmode=require"
   sql_instances:
     - name: ${sql_instance_name_json}
       connection_name: ${sql_connection_name_json}

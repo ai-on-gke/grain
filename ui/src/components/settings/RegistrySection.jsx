@@ -64,7 +64,7 @@ function originLabel(origin) {
   }
 }
 
-// RegistrySection is Settings -> Registry (design/design/registry.design.md,
+// RegistrySection is Settings -> Hub (design/design/registry.design.md,
 // "Connected entries"): live connection and heartbeat state, advertised scopes,
 // registration credential secret, and owner-managed catalog metadata.
 export default function RegistrySection({ s }) {
@@ -175,7 +175,7 @@ export default function RegistrySection({ s }) {
   return (
     <>
       <SettingsCard
-        title="Registry connection"
+        title="Hub connection"
         anchor="registry-status"
         allowInExternalMode
       >
@@ -224,7 +224,7 @@ export default function RegistrySection({ s }) {
 
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>
           {!enabled
-            ? "Configure a registry URL and entry name below (or run 'grain registry register') so this daemon self-registers as a connected entry and heartbeats its version, health, task counts, and repository scopes."
+            ? "Configure a hub URL and entry name below (or run 'grain registry register') so this daemon self-registers as a connected entry and heartbeats its version, health, task counts, and repository scopes."
             : snapshot?.lastHeartbeatAt
               ? `Last heartbeat ${formatDateTime(snapshot.lastHeartbeatAt, zone)}${snapshot.heartbeatIntervalSeconds ? ` (every ${snapshot.heartbeatIntervalSeconds}s)` : ""} · health ${snapshot.health || "ok"} · ${snapshot.activeTasks ?? 0} active, ${snapshot.awaitingReplyTasks ?? 0} awaiting reply`
               : "Waiting for first heartbeat…"}
@@ -246,7 +246,7 @@ export default function RegistrySection({ s }) {
             sx={{ mt: 1.5 }}
             data-testid="registry-scope-conflicts"
           >
-            Scope conflict reported by registry:{" "}
+            Scope conflict reported by the hub:{" "}
             {conflicts
               .map(
                 (c) =>
@@ -330,7 +330,7 @@ export default function RegistrySection({ s }) {
         <ReadOnlyFieldset disabled={locked}>
           {!readOnly && s.configLocked && (
             <ConfigManagedNotice
-              what="Registry connection and catalog settings"
+              what="Hub connection and catalog settings"
               paths={["tables/grain_config.json"]}
             />
           )}
@@ -339,8 +339,8 @@ export default function RegistrySection({ s }) {
             key={`registryUrl-${reg.url || ""}`}
             name="registryUrl"
             data-setting-id="registryUrl"
-            label="Registry URL"
-            helperText="Base https:// URL of the grain registry (leave empty together with Entry name to disable self-registration)."
+            label="Hub URL"
+            helperText="Base https:// URL of the Grain Hub (leave empty together with Entry name to disable self-registration)."
             defaultValue={reg.url || ""}
             onBlur={onRegistryTextBlur("url")}
             onKeyDown={onEnterKey}
@@ -355,7 +355,7 @@ export default function RegistrySection({ s }) {
             name="registryEntry"
             data-setting-id="registryEntry"
             label="Entry name"
-            helperText="Unique 3..32 lowercase DNS label for this grain in the registry directory (e.g. acme-widgets)."
+            helperText="Unique 3..32 lowercase DNS label for this grain in the hub directory (e.g. acme-widgets)."
             defaultValue={reg.entry || ""}
             onBlur={onRegistryTextBlur("entry")}
             onKeyDown={onEnterKey}
@@ -377,7 +377,7 @@ export default function RegistrySection({ s }) {
               label="Credential source"
               value={authMode}
               onChange={(evt) => updateRegistry({ authMode: evt.target.value })}
-              helperText="How heartbeats authenticate to the registry."
+              helperText="How heartbeats authenticate to the hub."
               fullWidth
             >
               <MenuItem value="token">
@@ -411,7 +411,7 @@ export default function RegistrySection({ s }) {
             data-setting-id="registryOidcAudience"
             label="OIDC audience"
             disabled={locked || authMode !== "oidc"}
-            helperText="Target audience when Credential source is OIDC ID token (defaults to Registry URL when blank)."
+            helperText="Target audience when Credential source is OIDC ID token (defaults to Hub URL when blank)."
             defaultValue={reg.oidcAudience || ""}
             onBlur={onRegistryTextBlur("oidcAudience")}
             onKeyDown={onEnterKey}
@@ -426,7 +426,7 @@ export default function RegistrySection({ s }) {
             name="registryDisplayName"
             data-setting-id="registryDisplayName"
             label="Display name"
-            helperText="Human-readable title shown on this grain's card in the registry directory."
+            helperText="Human-readable title shown on this grain's card in the hub directory."
             defaultValue={reg.displayName || ""}
             onBlur={onRegistryTextBlur("displayName")}
             onKeyDown={onEnterKey}
@@ -462,7 +462,7 @@ export default function RegistrySection({ s }) {
             }
             label={
               <>
-                Listed in registry directory{" "}
+                Listed in hub directory{" "}
                 <span className="hint">
                   when off, this grain stays addressable by name and route
                   queries for its owners but is omitted from default directory
@@ -478,9 +478,9 @@ export default function RegistrySection({ s }) {
           Registration credential
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
-          Minted by <code>grain registry register</code> (or rotated in the
-          registry) and stored encrypted in this daemon&apos;s secret store;
-          never exported to <code>grain/config</code>.
+          Minted by <code>grain registry register</code> (or rotated in the hub)
+          and stored encrypted in this daemon&apos;s secret store; never
+          exported to <code>grain/config</code>.
         </Typography>
         <SecretField
           secret={{
@@ -504,8 +504,8 @@ export default function RegistrySection({ s }) {
             Scopes come automatically from Settings → Repositories and each
             repo&apos;s work ownership (<code>on</code> → <code>primary</code>,{" "}
             <code>off</code> → <code>secondary</code>). Add a rule here only to
-            narrow a repo to a path prefix, exclude a repo from registry
-            routing, or advertise an extra scope.
+            narrow a repo to a path prefix, exclude a repo from hub routing, or
+            advertise an extra scope.
           </Typography>
 
           {rules.length > 0 && (

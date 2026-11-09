@@ -229,6 +229,99 @@ A run that names no model at all passes no effort either: the effort pairs
 with a model, so a run left to the provider's default model gets the
 provider's default effort.
 
+### Token usage and budgets
+
+A usage-limit pause says a model is refused *now*. Token accounting says how
+fast work is spending each connection's budget, and how much is left, so the
+operator can size `max_workers` and order the default model list before the
+provider refuses anything.
+
+**What is recorded.** Every run whose CLI reports usage writes one row to
+`task_run_usage`: input, output, cache-read and cache-write tokens, the
+provider's own cost where it gives one, and the turns they cover. The row is
+keyed by the task and run, the connection that owns the credential (the same
+connection a pause would be filed under), the model, the framework and the
+host. The sources are:
+
+- **claude:** the usage block and `total_cost_usd` on each terminal `result`
+  event of `--output-format stream-json`.
+- **codex:** the `usage` on each `turn.completed` event of `codex exec --json`.
+  Its `input_tokens` includes `cached_input_tokens`, so grain moves the cached
+  part into cache reads.
+- **Antigravity (agy):** the `usage` on each `result` event (`input_tokens`,
+  `output_tokens`, `thinking_tokens`, `cache_read_tokens`). Thinking counts as
+  output, and cache reads come out of the input.
+
+A run that re-execs its CLI, or is resumed for the stop rule or a session
+turn, sums the usage of every exec. A run whose CLI reports nothing writes no
+row. The model proxy does not report usage yet. Rows are kept for 30 days by
+default (`retentionDays`) and pruned hourly.
+
+The task page shows each attempt's tokens on its timeline entry and the task's
+total above the timeline (`attempts[].usage` and `usage` on the task detail).
+
+**Billable tokens.** Budgets are counted in *billable* tokens: input + output +
+cache writes. Cache reads are left out, because every provider grain drives
+discounts them heavily.
+
+**Budgets.** For each connection and model (or a whole connection, with no
+model), the report shows:
+
+- **Limit:** the operator's configured budget, if there is one. Otherwise the
+  *learned* capacity (marked `~`). When a usage-limit pause opens on a
+  connection, grain records the billable tokens the window had consumed before
+  the refusal as that window's capacity, along with the reset time the pause
+  carries (`usage_capacity`). A later limit hit replaces the estimate.
+- **Window and used:** the budget's window (or the learned one, else 5h).
+  Used counts the runs that finished inside the window, and only since the
+  last known reset if one has passed inside it.
+- **Left, reset, burn rate and run-out time.** The reset is the pause's end, a
+  learned reset still ahead, or (for a rolling window) when the oldest usage
+  in it ages out. The burn rate is billable tokens per hour over the last
+  hour. Run-out is when the remaining budget is gone at that rate.
+- **Sustains:** how many concurrent runs the remaining budget supports until
+  the reset. That is remaining ÷ (the scope's tokens per worker-hour × hours
+  to the reset, or the window when no reset is known). Tokens per worker-hour
+  comes from the scope's own recent runs. A paused scope sustains 0.
+
+The deployment estimate adds up each connection's figure: its
+connection-wide scope where that has a limit, else the sum of its models. If
+any connection in use has no known limit, nothing bounds the estimate and it
+is reported as unbounded.
+
+Configure budgets with `grain usage -budget connection[/model]=tokens/window`
+(repeatable, replacing every budget; for example
+`-budget claude-1/opus=2000000/5h`), or with `PUT /api/usage/settings`
+(`{"budgets":[{"connection":"claude-1","model":"opus","tokens":2000000,"window":"5h"}]}`).
+
+**Advisory and automatic concurrency.** The default mode is `advisory`. Grain
+computes the estimate and says so ("at this rate cloudtop-antigravity's
+opus-5.5-high budget runs out in ~2h; sustainable ≈ 4 workers"), and dispatch
+is unchanged. It also warns when a model on the default list will run out
+before its reset, and names the next model on the list, so the fallback order
+can be planned.
+
+The opt-in `auto` mode (`grain usage -mode auto`, or the Concurrency field in
+Settings → Models) also lowers the effective worker cap to the estimate.
+The cap is recomputed at most once a minute and held within
+[`minWorkers` (default 1), `max_workers`]. `max_workers` stays the ceiling:
+the cap never exceeds it, and never goes below one. When the estimate is
+unbounded, or cannot be computed, dispatch runs under `max_workers`. After a
+reset the window's usage stops counting, so the cap recovers. `off` computes
+no estimate.
+
+**No regressions.** Pauses stay the source of truth for "refused now". An
+estimate never stops a run the provider would accept, unless `auto` is on,
+and even then it only lowers the number of concurrent runs.
+
+**Where to see it.** Settings → Models → *Token usage and budgets* shows the
+per-connection/model table (used, limit, left, reset, burn rate, sustains),
+the deployment rollup, the advisory and the warnings, and sets the mode.
+`grain usage` prints the same, and `GET /api/usage` returns it as JSON
+(`deployment:read`). The settings (`usage_setting`), learned capacities and
+per-run rows are runtime state, so they are not exported to the state
+repository.
+
 ### The default model
 
 Grain never picks a team's default model on its own, and has no model name

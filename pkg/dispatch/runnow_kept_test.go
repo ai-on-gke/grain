@@ -78,9 +78,6 @@ func TestRunNowSurvivesARunThatDidNotDoTheWork(t *testing.T) {
 		{model.CapacityOutcome, "out of capacity"},
 		{model.InterruptedOutcome, "interrupted"},
 		{model.OOMOutcome, "OOM-killed"},
-		// A park is the agent's own suspension (requested), which keeps
-		// the request as every suspension does.
-		{model.ParkedOutcome, "was suspended (requested)"},
 	} {
 		t.Run(tc.outcome, func(t *testing.T) {
 			store, ctx := open(t)
@@ -116,8 +113,10 @@ func TestRunNowSurvivesARunThatDidNotDoTheWork(t *testing.T) {
 }
 
 func TestRunNowIsSpentByARunOfTheTask(t *testing.T) {
+	// A park (resume_later, wait_for_task) is the agent's own suspension:
+	// the run was the one asked for, so it spends the request too.
 	for _, outcome := range []string{"succeeded", "failed", model.NothingNeededOutcome,
-		model.EnvironmentOutcome, "no_action"} {
+		model.ParkedOutcome, model.EnvironmentOutcome, "no_action"} {
 		t.Run(outcome, func(t *testing.T) {
 			store, ctx := open(t)
 			d := startRequested(t, ctx, store)
@@ -306,5 +305,61 @@ func TestRunNowFreshRequestSkipsBackoff(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].TaskID != "t0" {
 		t.Fatalf("dispatched %+v, want t0 at once on a fresh request", got)
+	}
+}
+
+// Task 3557: a Run now starts a run, and the run stops itself with
+// resume_later. That run was the one asked for, so the request is spent:
+// no stamp is left standing, older than the run, to disable the button
+// and hold the task to the park's resume time; no "Run now kept" note
+// says otherwise; and the park's own deferral is what holds the task.
+func TestRunNowIsSpentByARunThatSuspendsWithResumeLater(t *testing.T) {
+	store, ctx := open(t)
+	d := startRequested(t, ctx, store)
+	called := now.Add(time.Minute)
+	wake := now.Add(2 * time.Hour)
+	if err := store.SetDeferred(ctx, "t2", &called, &wake, called); err != nil {
+		t.Fatal(err)
+	}
+	when := model.ResumeOn{At: &wake, Message: true}
+	if err := store.Suspend(ctx, model.Suspension{RunID: d.RunID, Kind: model.SuspendRequested,
+		Detail: model.RequestedDetail("waiting on a deploy", when), ResumeOn: when.JSON(),
+		ResumeAt: &wake, CreatedAt: now.Add(2 * time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if at := runNowAt(t, ctx, store, "t2"); at != nil {
+		t.Fatalf("RunNowAt after resume_later = %v, want the request spent", at)
+	}
+	if notes := keptNotes(t, ctx, store, "t2"); len(notes) != 0 {
+		t.Fatalf("notes = %q, want no Run now kept note for the task's own run", notes)
+	}
+	if stale, err := store.RunNowStale(ctx); err != nil || stale["t2"] {
+		t.Fatalf("RunNowStale = %v, %v; want t2 not stale", stale, err)
+	}
+	got, err := dispatch.Cycle(ctx, store, model.Limits{Workers: 1}, now.Add(3*time.Minute))
+	if err != nil || len(got) != 1 || got[0].TaskID != "t0" {
+		t.Fatalf("cycle while t2 is parked dispatched %+v, %v; want the backlog's t0", got, err)
+	}
+
+	// Asking again after that is a new request, started at once.
+	requestRunNow(t, ctx, store, "t2", now.Add(4*time.Minute))
+	got, err = dispatch.Cycle(ctx, store, model.Limits{Workers: 2}, now.Add(4*time.Minute))
+	if err != nil || len(got) == 0 || got[0].TaskID != "t2" {
+		t.Fatalf("cycle after a fresh Run now dispatched %+v, %v; want t2 first", got, err)
+	}
+}
+
+// A request a run gave back (here a setup failure) is no newer than that
+// run's start: RunNowStale says so, which is what keeps the button
+// offered.
+func TestRunNowStaleNamesARequestARunGaveBack(t *testing.T) {
+	store, ctx := open(t)
+	d := startRequested(t, ctx, store)
+	if err := store.FinishRun(ctx, d.RunID, now.Add(time.Second), "setup-failed", ""); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := store.RunNowStale(ctx)
+	if err != nil || !stale["t2"] {
+		t.Fatalf("RunNowStale = %v, %v; want t2 stale", stale, err)
 	}
 }

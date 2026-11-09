@@ -497,6 +497,15 @@ type Task struct {
 	// Run now was pressed on it would be telling the operator to press
 	// it again (alerts.js's heldForRunNow).
 	RunNowAt *time.Time `json:"runNowAt,omitempty"`
+	// RunNowStale is RunNowAt no newer than the start of a run of this
+	// task (model.Store.RunNowStale): a run was started for the request
+	// and gave it back without doing the work, so dispatch holds it to
+	// the retry backoff or the suspension's resume time rather than
+	// starting it on the next cycle. The pane keeps Run now offered for
+	// such a request -- pressing it re-stamps the request, which starts
+	// at once (Client.RunNow) -- and says what holds the task rather than
+	// promising the next cycle.
+	RunNowStale bool `json:"runNowStale,omitempty"`
 	// TurnStopped is true for an awaiting_reply task parked on the
 	// comment a person posts by stopping its turn (Client.Stop) rather
 	// than on a question its agent asked -- the "Stopped by you" case of
@@ -643,7 +652,8 @@ func oomRetryActivity(at time.Time) *model.RunActivity {
 func grantWaitActivity(wait model.GrantWait) *model.RunActivity {
 	if wait.Capability == model.ModelWaitCapability || wait.Capability == model.TeamSetupWaitCapability ||
 		wait.Capability == model.BranchWaitCapability || wait.Capability == model.PolicyWaitCapability ||
-		wait.Capability == model.QuotaWaitCapability || wait.Capability == model.ChangeTargetWaitCapability {
+		wait.Capability == model.QuotaWaitCapability || wait.Capability == model.ChangeTargetWaitCapability ||
+		wait.Capability == model.SuspensionWaitCapability {
 		// The resource is already the whole sentence: "no enabled
 		// connection serves model X", "all connections serving X are busy",
 		// 'team "x" has no GitHub credential for o/r -- ...'. One that
@@ -762,6 +772,9 @@ type TaskDetail struct {
 	// agents#445: "show attempts and their status, in order, in the task
 	// view").
 	Attempts []Attempt `json:"attempts,omitempty"`
+	// Usage is every attempt's Usage summed: what the task has spent at
+	// its providers so far. Nil when no attempt reported any.
+	Usage *TaskUsage `json:"usage,omitempty"`
 	// Transitions is model.Transitions' own projection: every point the
 	// record lets this task's state be pinned to a time, oldest first
 	// (bwsalmon/agents#452 -- "show the state transitions for the task").
@@ -1089,6 +1102,10 @@ type Attempt struct {
 	AgentStartedAt    *time.Time      `json:"agentStartedAt,omitempty"`
 	FirstTurnAt       *time.Time      `json:"firstTurnAt,omitempty"`
 	Startup           *AttemptStartup `json:"startup,omitempty"`
+	// Usage is what this attempt spent at its model provider, as its
+	// CLI reported it (model.RunUsage); nil for an attempt whose CLI
+	// reported none, or one recorded before grain kept them.
+	Usage *model.RunUsage `json:"usage,omitempty"`
 }
 
 // AttemptStartup is the per-phase startup breakdown of one attempt
@@ -2439,6 +2456,15 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	if q.owner != "" {
 		q.owner = s.tasks.resolveOwnerFilter(r.Context(), q.owner)
 	}
+	if isAgentListCaller(r) && !r.URL.Query().Has("fields") {
+		q.paged = true
+		if !r.URL.Query().Has("limit") {
+			q.limit = listPageLarge
+		} else if q.limit > listPageMax {
+			q.limit = listPageMax
+		}
+		narrowed = true
+	}
 	if narrowed {
 		s.handleFilteredTaskList(w, r, q)
 		return
@@ -2468,16 +2494,21 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 
 // TaskStatesResponse is the paginated response for GET /api/tasks/states.
 type TaskStatesResponse struct {
-	States  map[string]model.State `json:"states"`
-	Cursor  string                 `json:"cursor,omitempty"`
-	HasMore bool                   `json:"hasMore,omitempty"`
+	States     map[string]model.State `json:"states"`
+	Cursor     string                 `json:"cursor,omitempty"`
+	NextCursor string                 `json:"nextCursor,omitempty"`
+	HasMore    bool                   `json:"hasMore,omitempty"`
+	Truncated  bool                   `json:"truncated,omitempty"`
 }
 
 func (s *Server) handleTaskStates(w http.ResponseWriter, r *http.Request) {
 	limit := 1000
+	if isAgentListCaller(r) {
+		limit = 250
+	}
 	if l := r.URL.Query().Get("limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
-			limit = parsed
+			limit = min(parsed, listPageMax)
 		}
 	}
 	cursor := r.URL.Query().Get("cursor")
@@ -2492,9 +2523,11 @@ func (s *Server) handleTaskStates(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, TaskStatesResponse{
-		States:  states,
-		Cursor:  nextCursor,
-		HasMore: nextCursor != "",
+		States:     states,
+		Cursor:     nextCursor,
+		NextCursor: nextCursor,
+		HasMore:    nextCursor != "",
+		Truncated:  nextCursor != "",
 	})
 }
 

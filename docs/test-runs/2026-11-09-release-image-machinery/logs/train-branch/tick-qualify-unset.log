@@ -1,0 +1,21 @@
+release-from-trunk: fetching origin's main, candidate and tags
+release-from-trunk: major 3 (floor minor 0); newest promoted release v3.1.1; next minor v3.2.0; notes from v3.1.1
+release-from-trunk: phase 1: v3.2.0-rc.3 (cba7d44bb42b) is in qualification; asking the qualification gate
+  Qualification of v3.2.0-rc.3 (cba7d44bb42b).
+  PASS cmd-grain-stress: passed (success)
+  PASS go-long: passed (success)
+  PASS installer-variants: passed (success)
+  PASS loadtest: passed (success)
+  PASS long-sim: passed (success)
+  PASS long-term-test: passed (success)
+  PASS merge-stress: passed (success)
+  PASS postgres-stress: passed (success)
+  PASS scalability: passed (success)
+  PASS staterepo-soak: passed (success)
+  PASS tunnel-stress: passed (success)
+  PASS ui-e2e-long: passed (success)
+  PASS upgrade-test: passed (success)
+  PASS vulns: passed (success)
+  candidate-gate.sh: CHECK_QUALIFICATION_APP is unset, so no grain/release-qualification check run can be trusted: set it to the slug or id of the GitHub App grain posts it as, or to none to qualify on Stage 1 alone
+release-from-trunk: the qualification gate could not judge v3.2.0-rc.3 (exit 64)
+exit=1 images=[] remote-tags-after=[v3.2.0-rc.1 v3.2.0-rc.1-discarded v3.2.0-rc.2 v3.2.0-rc.2-discarded v3.2.0-rc.3]

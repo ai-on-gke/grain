@@ -923,8 +923,85 @@ func (s *Server) roleStandingTargetEscalation(ctx context.Context, r *http.Reque
 				return s.checkRoleSuite(ctx, *suite, "suite", a.grants, a.set, allowedRepo, scope, repo, opts)
 			}
 		}
+	case "POST /api/tasks/{id}/approve", "POST /api/tasks/{id}/run-now":
+		if s.tasks != nil && s.tasks.Store != nil {
+			task, err := s.tasks.Store.GetTask(ctx, model.NormalizeTaskID(r.PathValue("id")))
+			if err != nil || task == nil || task.Approval != nil {
+				// Running an approved task now is dispatch:write alone.
+				return nil
+			}
+			return s.roleApprovalWithin(ctx, a, *task, allowedRepo, normalize)
+		}
 	case "POST /api/suite-runs":
 		// suiteId in the body is already checked by filingEscalation.
+	}
+	return nil
+}
+
+// roleApprovalWithin refuses a limited role approving stored task -- by
+// POST /api/tasks/{id}/approve, or POST /api/tasks/{id}/run-now on a task
+// with no approval yet (Client.RunNow approves it first) -- unless the role
+// could have filed task approved itself: it needs tasks:admin on task's
+// repository, and every grant, setting, write, read and review template task
+// carries must be one filingEscalation would have let it set on POST /api/tasks.
+func (s *Server) roleApprovalWithin(ctx context.Context, a *accessRole, task model.Task,
+	allowedRepo func(APIScope, string) bool, normalize func(string) (string, error)) error {
+	repo := taskRepo(&task)
+	if !a.allows("tasks:admin", repo) {
+		if repo == "" {
+			return fmt.Errorf("%s cannot approve task %s: approving work needs tasks:admin", a.label(), task.ID)
+		}
+		return fmt.Errorf("%s cannot approve task %s: approving work needs tasks:admin on %s", a.label(), task.ID, repo)
+	}
+	if task.AutoMerge {
+		return fmt.Errorf("%s cannot approve task %s (autoMerge): auto-merge requires an unlimited role (grain/operator)",
+			a.label(), task.ID)
+	}
+	if task.KeepRunning {
+		return fmt.Errorf("%s cannot approve task %s (keepRunning): keepRunning requires an unlimited role (grain/operator)",
+			a.label(), task.ID)
+	}
+	if why := model.ConfigRepoProposalHold(task); why != "" {
+		return fmt.Errorf("%s cannot approve task %s: %s, which requires an unlimited role (grain/operator)", a.label(), task.ID, why)
+	}
+	if needs, why := model.ChangeTargetNeedsPersonApproval(task.ChangeTarget); needs {
+		return fmt.Errorf("%s cannot approve task %s: %s, which requires an unlimited role (grain/operator)", a.label(), task.ID, why)
+	}
+	if s.networkAccessWidens(ctx, "", string(task.NetworkAccess)) {
+		return fmt.Errorf("%s cannot approve task %s (networkAccess): widening networkAccess past this deployment's default requires an unlimited role (grain/operator)",
+			a.label(), task.ID)
+	}
+	for _, g := range task.Grants {
+		if err := roleGrantRefusal(a, "capabilities", g.Capability, normalize); err != nil {
+			return err
+		}
+	}
+	if name := admissionGrantName(task.Admission); name != "" {
+		if err := roleGrantRefusal(a, "admission", name, normalize); err != nil {
+			return err
+		}
+	}
+	for _, w := range task.Writes {
+		if !allowedRepo("tasks:write", w.Repo.String()) {
+			return fmt.Errorf("%s cannot approve task %s (writes): role does not hold tasks:write on %s",
+				a.label(), task.ID, w.Repo)
+		}
+	}
+	for _, rd := range task.Reads {
+		if !allowedRepo("tasks:read", rd.String()) {
+			return fmt.Errorf("%s cannot approve task %s (reads): role does not hold tasks:read on %s",
+				a.label(), task.ID, rd)
+		}
+	}
+	if id := strings.TrimSpace(task.ReviewTemplateID); id != "" &&
+		!(task.Target != nil && id == model.DefaultReviewTemplateID(*task.Target)) {
+		if tmpl := s.gateTemplate(ctx, id); tmpl != nil &&
+			!(task.Target != nil && tmpl.ID == model.DefaultReviewTemplateID(*task.Target)) {
+			if err := roleTemplateWithin(a, "reviewTemplateId", *tmpl, allowedRepo, normalize); err != nil {
+				why := strings.TrimPrefix(err.Error(), a.label()+" cannot set reviewTemplateId: ")
+				return fmt.Errorf("%s cannot approve task %s (reviewTemplateId): %s", a.label(), task.ID, why)
+			}
+		}
 	}
 	return nil
 }

@@ -14,10 +14,6 @@
 
 import { expect, test } from "./fixtures.js";
 
-// -legacy-capability registers example-legacy, a made-up provider with
-// nothing to mint, so the Legacy capabilities pickers have a row: every
-// legacy provider core shipped has been retired onto a server method.
-test.use({ demoArgs: ["-legacy-capability"] });
 import { chooseOption } from "./searchSelect.js";
 
 // The grain API half of the task pane's Grants picker (GrantsPicker.jsx)
@@ -113,11 +109,10 @@ test("lists the API presets before every scope, with what each preset grants", a
   await expect(menu.locator(".method-grant-row")).toHaveCount(0);
   await page.keyboard.press("Escape");
 
-  // The legacy Capabilities list no longer carries them.
-  await page.getByRole("combobox", { name: "Legacy capabilities" }).click();
-  await expect(page.getByRole("option").first()).toBeVisible();
-  await expect(page.getByRole("option", { name: /^API/ })).toHaveCount(0);
-  await page.keyboard.press("Escape");
+  // There is no legacy Capabilities list to carry them.
+  await expect(
+    page.getByRole("combobox", { name: "Legacy capabilities" }),
+  ).toHaveCount(0);
 });
 
 test("grants a scope limited to one repository via with: {repo}", async ({

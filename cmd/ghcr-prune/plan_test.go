@@ -327,11 +327,25 @@ func TestClassifyReadsTheTagsThisRepositoryActuallyPublishes(t *testing.T) {
 		{"guest-base", "0123456789abcdef", KindBase},
 		{"grain/guest-base", "0123456789abcdef", KindBase},
 		{"bwsalmon/grain/guest-base", "0123456789abcdef", KindBase},
-		// guest-base has no `latest` and no branch tags: it is a cache
-		// and nothing else. A tag on it that is not a hash is still
-		// treated as a name someone may be using.
-		{"guest-base", "latest", KindBranch},
-		{"grain/guest-base", "latest", KindBranch},
+		{"sandbox-base", "0123456789abcdef", KindBase},
+		{"grainai/sandbox-base", "0123456789abcdef", KindBase},
+		// A bare hex tag is a cache key only on a base package.
+		{"sandbox", "0123456789abcdef", KindBranch},
+		// The base packages are published with every other name too
+		// (scripts/release-images.sh), and those read as they do on
+		// any package: sandbox-base:latest is not a dead branch.
+		{"sandbox-base", "latest", KindShared},
+		{"guest-base", "latest", KindShared},
+		{"grain/guest-base", "latest", KindShared},
+		{"sandbox-base", "v3.1.0", KindRelease},
+		{"guest-base", "v3.1.0", KindRelease},
+		{"sandbox-base", "sha-8a740f9", KindCommit},
+		{"guest-base", "sha-8a740f9", KindCommit},
+		{"sandbox-base", "sha256-" + strings.Repeat("c", 64) + ".sig", KindSignature},
+		{"sandbox-base", "main", KindBranch},
+		{"sandbox-base", "candidate", KindBranch},
+		{"sandbox-base", "release..v3.2.0", KindBranch},
+		{"sandbox-base", "v3.2.0-rc.1", KindBranch},
 		{"guest", "some-hand-made-name", KindBranch},
 		{"grain", "v1.5.0", KindRelease},
 		{"k8s-sandbox", "v1.12.3", KindRelease},
@@ -414,6 +428,102 @@ func TestDeployedTagsReadsImageReferences(t *testing.T) {
 	for tag := range want {
 		if !got[tag] {
 			t.Fatalf("deployedTags = %v, want %v", got, want)
+		}
+	}
+}
+
+// sandbox-base is published beside grain, sandbox and sandbox-k8s with
+// the same names (scripts/release-images.sh): Task 3571's dry run
+// against Docker Hub planned to delete the promoted
+// `sandbox-base:latest,sha-8a740f9,v3.1.0` 54 hours after promotion
+// while keeping the grain, sandbox and sandbox-k8s versions with the
+// same tags, because every non-hash tag on a base package read as a
+// branch nobody has. Each of those names keeps a base version exactly
+// as it keeps any other package's, and the cache keys are still ranked
+// and pruned as before.
+func TestABasePackageKeepsTheNamesEveryOtherPackageKeeps(t *testing.T) {
+	signed := "sha256:" + strings.Repeat("a", 64)
+	sig := strings.Replace(signed, ":", "-", 1) + ".sig"
+	for _, pkg := range []string{"sandbox-base", "guest-base"} {
+		t.Run(pkg, func(t *testing.T) {
+			versions := []Version{
+				{Package: pkg, ID: 1, Digest: signed, Tags: []string{"latest", "sha-8a740f9", "v3.1.0"}, Created: hoursAgo(54)},
+				{Package: pkg, ID: 2, Digest: "sha256:s1", Tags: []string{sig}, Created: hoursAgo(54)},
+				{Package: pkg, ID: 3, Tags: []string{"v3.0.0", "sha-0000001"}, Created: daysAgo(300)},
+				// Commits: the -keep-commits (3) newest -- 8a740f9 and these
+				// two -- survive the window; the fourth is superseded.
+				{Package: pkg, ID: 4, Tags: []string{"sha-1111111"}, Created: daysAgo(10)},
+				{Package: pkg, ID: 5, Tags: []string{"sha-2222222"}, Created: daysAgo(11)},
+				{Package: pkg, ID: 6, Tags: []string{"sha-3333333"}, Created: daysAgo(12)},
+				// Live branch heads survive; a deleted branch's does not.
+				{Package: pkg, ID: 7, Tags: []string{"main", "sha-4444444"}, Created: daysAgo(13)},
+				{Package: pkg, ID: 8, Tags: []string{"release..v3.2.0", "sha-5555555"}, Created: daysAgo(14)},
+				{Package: pkg, ID: 9, Tags: []string{"gone-branch", "sha-6666666"}, Created: daysAgo(15)},
+				// Cache keys: the -keep-bases newest survive, the rest go.
+				{Package: pkg, ID: 10, Tags: []string{"1111111111111111"}, Created: daysAgo(20)},
+				{Package: pkg, ID: 11, Tags: []string{"2222222222222222"}, Created: daysAgo(21)},
+				{Package: pkg, ID: 12, Tags: []string{"3333333333333333"}, Created: daysAgo(22)},
+			}
+			branches := map[string]bool{"main": true, "release..v3.2.0": true}
+			p := policy()
+			p.KeepFor = 48 * time.Hour // the deployed window
+			for _, id := range []int64{1, 2, 3, 4, 5, 7, 8, 10, 11} {
+				if d := decide(t, versions, branches, p, id); !d.Keep {
+					t.Errorf("%s version %d was deleted: %s", pkg, id, d.Reason)
+				}
+			}
+			for _, id := range []int64{6, 9, 12} {
+				if d := decide(t, versions, branches, p, id); d.Keep {
+					t.Errorf("%s version %d should be pruned and was kept: %s", pkg, id, d.Reason)
+				}
+			}
+			// Version 3 is held by its release tag alone: without it,
+			// sha-0000001 is one more superseded commit.
+			versions[2].Tags = []string{"sha-0000001"}
+			if d := decide(t, versions, branches, p, 3); d.Keep {
+				t.Errorf("%s: a superseded commit outside the rank and window was kept: %s", pkg, d.Reason)
+			}
+		})
+	}
+}
+
+// A staged release (vX.Y.Z-pending) waits for a person, and a person may
+// take longer than the window: v3.2.0-pending was staged at 03:13 UTC on
+// 2026-11-09 and, read as a branch tag, would have been deletable from
+// 2026-11-11 03:13 whether or not anybody had looked at it, leaving
+// `promote v3.2.0` to rebuild what it was meant only to retag. It is kept
+// until it is rejected (discard-pending's vX.Y.Z-rejected on the same
+// version); approval retags the same version vX.Y.Z, which keeps it anyway.
+func TestAStagedReleaseOutlivesTheWindowUntilItIsRejected(t *testing.T) {
+	p := policy()
+	p.KeepFor = 48 * time.Hour
+	p.KeepCommits = 1
+	versions := []Version{
+		{Package: "grain", ID: 1, Digest: "sha256:p1", Tags: []string{"v3.2.0-pending"}, Created: hoursAgo(96)},
+		{Package: "grain", ID: 2, Digest: "sha256:p2", Tags: []string{"v3.1.2-pending", "v3.1.2-rejected"}, Created: hoursAgo(96)},
+		{Package: "grain", ID: 3, Digest: "sha256:p3", Tags: []string{"v3.1.3-rejected"}, Created: hoursAgo(96)},
+		{Package: "sandbox", ID: 4, Digest: "sha256:p4", Tags: []string{"sha-cba7d44", "v3.2.0-pending"}, Created: hoursAgo(96)},
+		{Package: "grain", ID: 5, Digest: "sha256:p5", Tags: []string{"sha-ffe6755", "main"}, Created: hoursAgo(1)},
+	}
+	branches := map[string]bool{"main": true}
+	for _, id := range []int64{1, 4} {
+		if d := decide(t, versions, branches, p, id); !d.Keep || !strings.Contains(d.Reason, "staged release") {
+			t.Errorf("version %d is a staged release nobody has decided on and must be kept: keep=%v %s", id, d.Keep, d.Reason)
+		}
+	}
+	for _, id := range []int64{2, 3} {
+		if d := decide(t, versions, branches, p, id); d.Keep {
+			t.Errorf("version %d is a rejected staged release past the window and should go: %s", id, d.Reason)
+		}
+	}
+	for tag, want := range map[string]TagKind{
+		"v3.2.0-pending":      KindPending,
+		"v3.2.0-rejected":     KindBranch,
+		"v3.2.0-rc.1-pending": KindBranch,
+		"3.2.0-pending":       KindBranch,
+	} {
+		if got := classify("grain", tag); got != want {
+			t.Errorf("classify(grain, %q) = %v, want %v", tag, got, want)
 		}
 	}
 }

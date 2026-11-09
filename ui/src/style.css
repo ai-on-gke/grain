@@ -2666,8 +2666,8 @@ html[data-phone="true"] .gantt-body {
   flex: none;
   padding-right: 1.75rem;
 }
-/* A pending release's soak beside its Approve (InboxPage's ReleaseSoak),
-   with the SHORT SOAK warning when it was under the minimum. */
+/* A pending release's soak or breaking-change warning beside its Approve
+   (InboxPage's ReleaseSoak), with SHORT SOAK and BREAKING chips. */
 .inbox-release-soak {
   display: inline-flex;
   align-items: center;
@@ -2685,6 +2685,54 @@ html[data-phone="true"] .gantt-body {
   font-weight: 600;
   font-size: 0.7rem;
   letter-spacing: 0.02em;
+}
+.inbox-release-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.15rem 1rem;
+  padding: 0 1.75rem 0.35rem 3.6rem;
+  color: var(--text-secondary);
+}
+.inbox-release-options .MuiFormControlLabel-root {
+  margin-left: -0.35rem;
+  margin-right: 0;
+}
+.inbox-release-options .MuiFormControlLabel-label {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+.inbox-release-failure {
+  padding: 0 1.75rem 0.55rem 3.6rem;
+  overflow-wrap: anywhere;
+}
+.inbox-release-remedy {
+  margin-top: 0.3rem;
+}
+.inbox-release-key-actions {
+  margin-top: 0.45rem;
+}
+.inbox-approval-key-box {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.inbox-approval-key-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+.inbox-approval-key {
+  margin: 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 /* The one row on this page that is not a task (InboxPage's
    base_branch_gate group): a base branch nothing is judging. It stands
@@ -4403,6 +4451,8 @@ fieldset legend {
 :root[data-phone="true"] .inbox-group-header,
 :root[data-phone="true"] .inbox-gate,
 :root[data-phone="true"] .inbox-note,
+:root[data-phone="true"] .inbox-release-options,
+:root[data-phone="true"] .inbox-release-failure,
 :root[data-phone="true"] .inbox-responder,
 :root[data-phone="true"] .template-row,
 :root[data-phone="true"] .process-kinds,

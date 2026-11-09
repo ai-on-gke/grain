@@ -125,7 +125,11 @@
 # Before an rc.(N+1) (next_n > 1), the grain/rc-hold check run on the
 # dropped rc's commit (the floor) must be completed or absent: while open
 # `[rc-blocker vM.Y.Z-rc.N]` tasks keep it in progress, the train cuts
-# nothing (rc_held= in RELEASE_TRAIN_OUTPUT).
+# nothing (rc_held= in RELEASE_TRAIN_OUTPUT). Absent counts as no hold only
+# on a later run than the one that dropped the rc: a run whose Phase 1 has
+# just dropped it, with no grain/rc-hold posted on it yet, cuts nothing
+# (rc_held= too), so grain -- which posts the triage-pending hold for a red
+# Stage 1 or Stage 2 alike -- is never raced to it.
 # No new known-good commit cuts nothing: main red for a week ships
 # nothing and `latest` stands. Before an rc.1:
 #   - at least RELEASE_MIN_INTERVAL_MINUTES must have passed since the
@@ -689,8 +693,12 @@ qualification_json() {
 # summary; otherwise prints nothing. No check at all means no hold, and so
 # does an explicit RELEASE_QUALIFICATION_APP=none: no app is trusted to post
 # one. An empty one refuses rather than trust another app's check run.
+# When the listing was read and grain's app has posted no grain/rc-hold on
+# floor_sha at all, it leaves $work/hold-absent behind (it runs in a
+# command substitution, so a file is how Phase 2 learns that).
 rc_hold_summary() {
-  local app_id="" hold_checks="" pages page n flooded=false
+  local app_id="" hold_checks="" pages page n flooded=false result
+  rm -f "$work/hold-absent"
   if [ "$qualification_app" = none ]; then
     say "RELEASE_QUALIFICATION_APP=none, so no grain/rc-hold check run on ${1:0:12} is trusted; not waiting on one" >&2
     return 0
@@ -725,7 +733,7 @@ rc_hold_summary() {
     return 0
   fi
   # shellcheck disable=SC2016 # jq, not shell
-  jq -r --arg sha "${1,,}" --arg app "$qualification_app" --argjson flooded "$flooded" '
+  result="$(jq -r --arg sha "${1,,}" --arg app "$qualification_app" --argjson flooded "$flooded" '
     def epoch:
       if . == null or . == "" then 0
       else sub("\\.[0-9]+"; "")
@@ -746,12 +754,19 @@ rc_hold_summary() {
         | select(from_app) ]
     | if length == 0 and $flooded then error("all fetched grain/rc-hold pages were from other apps") else . end
     | sort_by([(.id // 0), ((.started_at // .startedAt) | epoch)])
-    | last // empty
-    | select((.status // "") != "completed")
-    | ([.output.summary, .output.title, .status]
-        | map(select(type == "string") | gsub("[\\r\\n]+"; " ") | sub("^\\s+"; "") | sub("\\s+$"; "") | select(length > 0))
-        | first // "in_progress")
-  ' "$hold_checks" || die "could not parse grain/rc-hold check runs on ${1:0:12}"
+    | if length == 0 then "@absent" else
+        last
+        | select((.status // "") != "completed")
+        | ([.output.summary, .output.title, .status]
+            | map(select(type == "string") | gsub("[\\r\\n]+"; " ") | sub("^\\s+"; "") | sub("\\s+$"; "") | select(length > 0))
+            | first // "in_progress")
+      end
+  ' "$hold_checks")" || die "could not parse grain/rc-hold check runs on ${1:0:12}"
+  if [ "$result" = "@absent" ]; then
+    : > "$work/hold-absent"
+  elif [ -n "$result" ]; then
+    printf '%s\n' "$result"
+  fi
 }
 
 # File the release-notes task for a promotion, through the gate's one
@@ -1107,6 +1122,7 @@ fi
 
 floor=""
 next_n=1
+dropped_rc=""
 rc="$(rc_tags "$target" | tail -n 1)"
 if [ -n "$rc" ]; then
   rc_sha="$(commit_of "$rc")"
@@ -1189,6 +1205,7 @@ if [ -n "$rc" ]; then
         images discard-rc "$rc" || die "could not mark $rc's images discarded (its -discarded tag is pushed)"
         emit discarded_rc "$rc"
         emit qualification fail
+        dropped_rc="$rc"
         floor="$rc_sha"
         next_n=$((n + 1))
         ;;
@@ -1258,6 +1275,20 @@ if [ -n "$floor" ] && [ "$next_n" -gt 1 ]; then
     emit rc_held "$new_rc"
     exit 0
   fi
+  # Phase 1 dropped the rc in this very run, and grain has not posted its
+  # hold yet: grain posts grain/rc-hold (triage pending) within a minute of
+  # reading the red verdict -- Stage 1's or Stage 2's -- so rather than cut
+  # rc.(N+1) seconds after the drop, before the pipeline steward has heard
+  # of it, this run waits and the next one reads the hold. A hold that never
+  # comes (grain down) delays the cut by one run, not for ever.
+  if [ -n "$dropped_rc" ] && [ -e "$work/hold-absent" ]; then
+    held_n="$next_n"
+    while commit_of "$target-rc.$held_n" >/dev/null; do held_n=$((held_n + 1)); done
+    new_rc="$target-rc.$held_n"
+    say "phase 2: $new_rc waits for the next run: $dropped_rc was dropped just now and grain has posted no grain/rc-hold on ${floor:0:12} yet, so its triage is not skipped"
+    emit rc_held "$new_rc"
+    exit 0
+  fi
 fi
 
 # A minimum interval between releases (playbook section 7).
@@ -1315,4 +1346,8 @@ push "refs/tags/$new_rc" || die "could not push $new_rc; candidate was not moved
 push --force "$lkg:refs/heads/candidate" || die "pushed $new_rc, but could not move candidate onto it"
 emit rc_tag "$new_rc"
 images rc "$new_rc" || die "cut $new_rc and moved candidate, but could not publish its images: run \`release-images.sh rc $new_rc\`"
-say "phase 2: $new_rc is cut and candidate is on it; nightly.yml qualifies it (Stage 1), then grain/release-qualification (Stage 2)"
+if [ "$qualification_app" = none ]; then
+  say "phase 2: $new_rc is cut and candidate is on it; nightly.yml qualifies it (Stage 1) alone: RELEASE_QUALIFICATION_APP=none skips grain/release-qualification (Stage 2)"
+else
+  say "phase 2: $new_rc is cut and candidate is on it; nightly.yml qualifies it (Stage 1), then grain/release-qualification (Stage 2)"
+fi

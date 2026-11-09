@@ -1,0 +1,10 @@
+NOTICE:  database "registry_lockprobe" does not exist, skipping
+t+1s: healthz x=000 y=000 waiting on advisory lock: 2
+t+2s: healthz x=000 y=000 waiting on advisory lock: 2
+t+3s: healthz x=000 y=000 waiting on advisory lock: 2
+lock released at 23:31:42.146125
+both healthy after 3661ms
+schema_migrations: 7 rows, 7 distinct, max 7
+replica logs:
+    grain-registry listening on 127.0.0.1:4292 (jwks: 127.0.0.1:4293, peer: 127.0.0.1:4294)
+    grain-registry listening on 127.0.0.1:4296 (jwks: 127.0.0.1:4297, peer: 127.0.0.1:4298)

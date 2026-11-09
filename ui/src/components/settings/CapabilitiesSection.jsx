@@ -17,7 +17,10 @@ import { Alert } from "@mui/material";
 import CapabilityServersPanel from "../CapabilityServersPanel.jsx";
 import CapabilityPolicyEditor from "../CapabilityPolicyEditor.jsx";
 import ApiScopeSetsPanel from "../ApiScopeSetsPanel.jsx";
-import SettingsCard, { SettingsReadOnlyContext } from "./SettingsCard.jsx";
+import SettingsCard, {
+  SettingsReadOnlyContext,
+  SettingsRoleRefusalContext,
+} from "./SettingsCard.jsx";
 import CredentialsSection from "./CredentialsSection.jsx";
 
 // CapabilitiesSection is Settings → Capabilities: the capability-server
@@ -44,7 +47,11 @@ export default function CapabilitiesSection({
   // (2026-11-08 connections walkthrough: a removed server's secret stayed
   // listed, linking to the gone server, until a reload).
   const [secretsSeq, setSecretsSeq] = useState(0);
-  const serversChanged = useCallback(() => setSecretsSeq((n) => n + 1), []);
+  const onSaved = s?.onSaved;
+  const serversChanged = useCallback(() => {
+    setSecretsSeq((n) => n + 1);
+    onSaved?.();
+  }, [onSaved]);
   return (
     <>
       <Alert
@@ -156,20 +163,29 @@ export default function CapabilitiesSection({
         <CapabilityPolicyEditor
           showError={effectiveShowError}
           readOnly={effectiveReadOnly}
+          onSaved={onSaved}
         />
       </SettingsCard>
       <SettingsCard title="API scope sets" anchor="api-scope-sets">
         <ApiScopeSetsPanel
           showError={effectiveShowError}
           readOnly={effectiveReadOnly}
+          onSaved={onSaved}
         />
       </SettingsCard>
+      {/* The Deployment credentials card writes through PUT /api/settings
+          and /api/secrets, not the capabilities:admin routes above, so the
+          section's refusal does not reach it: it holds its fields to
+          settings:write and its secrets to secrets:write itself
+          (2026-11-08 deployment credentials walkthrough, F5). */}
       {s?.settings && (
-        <CredentialsSection
-          s={s}
-          claimedSecrets={claimedSecrets}
-          secretsSeq={secretsSeq}
-        />
+        <SettingsRoleRefusalContext.Provider value="">
+          <CredentialsSection
+            s={s}
+            claimedSecrets={claimedSecrets}
+            secretsSeq={secretsSeq}
+          />
+        </SettingsRoleRefusalContext.Provider>
       )}
     </>
   );

@@ -84,7 +84,7 @@ Kinds:
 | Remote executors: connected list, join tokens | Executors (`executors`), `ConnectedExecutors`, `ExecutorsPanel` | `/admin/executors` | `GET /api/executors`, `GET`/`POST /api/executors/tokens`, `POST .../{id}/revoke`, `DELETE .../{id}` | D (tokens) and S (connected list) |
 | GitHub host | Integrations & Auth (`integrations`) | `/admin/integrations` | `/api/settings` (`githubHost`) | D |
 | GCP project, service account email, account count | `integrations`, "GCP" | `/admin/integrations` | `/api/settings` | D |
-| Capabilities and their credentials (gcp-key, gemini-key, GitHub tokens, agent keys) | `integrations`, `CapabilitiesPanel` | `/admin/integrations` | `POST /api/capabilities/{id}/check`, `/api/gcp-keys*`, `/api/github-tokens*`, `/api/agent-keys*`, `/api/codex-auth` | D |
+| Capabilities and their credentials (gcp-key, gemini-key, GitHub tokens, agent keys) | `integrations`, `CapabilitiesPanel` | `/admin/integrations` | `/api/gcp-keys*`, `/api/github-tokens*`, `/api/agent-keys*`, `/api/codex-auth` | D |
 | Secrets | `integrations`, `SecretsPanel` | `/admin/integrations` | `GET /api/secrets`, `PUT`/`DELETE /api/secrets/{secret}[/{key}]` | D |
 | Config repo (state repo, secrets repo and key, sync, reset notice) | Config repo (`state`), `StateRepoPanel` | `/admin/state` | `GET /api/state-repo`, `POST /api/state-repo/{sync,secrets-key,secrets-repo,reset-notice}`, `GET /api/state-repo/file[s]` | D |
 | Upgrade check mode, "upgrade check pauses the pipeline" | Upgrade (`upgrade`), `UpgradePanel` | `/admin/upgrade` | `/api/settings` (`upgradeCheckMode`, `upgradeCheckPausesPipeline`) | D |

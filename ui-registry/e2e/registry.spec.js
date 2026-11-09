@@ -78,7 +78,25 @@ test("serves embedded ui-registry under strict CSP and walks through all views w
     page.getByRole("heading", { name: "Create or Register a Grain Entry" }),
   ).toBeVisible();
 
+  // Hosted VM is the default; the name field is pre-filled with a random
+  // name and directly editable.
+  await expect(
+    page.getByRole("button", { name: /Hosted VM \(instance\)/ }),
+  ).toHaveClass(/reg-mode-card-active/);
   const nameInput = page.getByLabel(/Entry subdomain name/i);
+  await expect(nameInput).toHaveValue(/^grain-[0-9a-f]{6}$/);
+  // The regenerate button sits on the input's row, to its right.
+  const regen = page.getByRole("button", {
+    name: "Generate another random name",
+  });
+  const [ib, rb] = [await nameInput.boundingBox(), await regen.boundingBox()];
+  expect(rb.x).toBeGreaterThanOrEqual(ib.x + ib.width);
+  expect(Math.abs(ib.y + ib.height / 2 - (rb.y + rb.height / 2))).toBeLessThan(
+    2,
+  );
+  await page
+    .getByRole("button", { name: /Self-registered grain \(connected\)/ })
+    .click();
   await nameInput.fill("e2e-workstation");
   await expect(page.getByTestId("name-availability-status")).toHaveText("free");
   await expect(page.getByText(/-registry-entry e2e-workstation/)).toBeVisible();
@@ -97,11 +115,10 @@ test("serves embedded ui-registry under strict CSP and walks through all views w
   await page.getByRole("button", { name: "Rotate token" }).click();
   await expect(page.getByTestId("rotated-token-banner")).toContainText("grc_");
 
-  // 4b. Hosted VM creation with custom boot disk size (/new?kind=instance)
-  await page.goto(`${demo.url}/new?kind=instance`);
+  // 4b. Hosted VM creation (the /new default) with custom boot disk size
+  await page.goto(`${demo.url}/new`);
   const createDiskInput = page.getByLabel(/Boot disk size \(GB\)/i);
   await expect(createDiskInput).toHaveValue("100");
-  await page.getByRole("button", { name: "Choose custom name" }).click();
   await page.getByLabel(/Entry subdomain name/i).fill("e2e-hosted-vm");
   await expect(page.getByTestId("name-availability-status")).toHaveText("free");
   await createDiskInput.fill("250");
@@ -129,11 +146,15 @@ test("serves embedded ui-registry under strict CSP and walks through all views w
   await grantsSection.getByLabel("Include revoked grants").check();
   await expect(grantsSection).toContainText("dlg_a1b2c3d4e5f60000");
 
-  // Revoke triage-bot grant and re-grant consent
+  // Revoke triage-bot grant (confirming in ConfirmDialog) and re-grant consent
   const triageRow = grantsSection.locator("tr", {
     hasText: "dlg_a1b2c3d4e5f60002",
   });
   await triageRow.getByRole("button", { name: "Revoke" }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Revoke grant" })
+    .click();
   await expect(
     page.getByText(/Revoked consent grant dlg_a1b2c3d4e5f60002/i),
   ).toBeVisible();
@@ -152,7 +173,7 @@ test("serves embedded ui-registry under strict CSP and walks through all views w
   // 6. Admin (/admin) + Delegating Apps controls
   await page.getByRole("button", { name: "Admin" }).click();
   await expect(
-    page.getByRole("heading", { name: "Registry Administration" }),
+    page.getByRole("heading", { name: "Hub Administration" }),
   ).toBeVisible();
   await expect(
     page.getByText("registry-us-central1-a-01").first(),
@@ -188,7 +209,7 @@ test("serves embedded ui-registry under strict CSP and walks through all views w
   // 7. Status (/status)
   await page.getByRole("button", { name: "Status" }).click();
   await expect(
-    page.getByRole("heading", { name: "Registry Service Status" }),
+    page.getByRole("heading", { name: "Hub Service Status" }),
   ).toBeVisible();
   await expect(page.getByText("*.grain.example.com")).toBeVisible();
 
@@ -382,6 +403,205 @@ test("lays out delegation screens without overflow or misalignment at desktop an
         ).toBeLessThanOrEqual(6);
       }
 
+      await context.close();
+    }
+  }
+});
+
+test("brands the hub header and favicon with the grain mark in light and dark", async ({
+  browser,
+}) => {
+  for (const [theme, width] of [
+    ["light", 1440],
+    ["dark", 1440],
+    ["light", 390],
+    ["dark", 390],
+  ]) {
+    const context = await browser.newContext({
+      colorScheme: theme,
+      viewport: { width, height: 844 },
+    });
+    await context.addInitScript(
+      ([k, v]) => localStorage.setItem(k, v),
+      ["grain.themeMode", theme],
+    );
+    const page = await context.newPage();
+    await page.goto(demo.url);
+    await expect(page).toHaveTitle("Grain Hub");
+
+    const brand = page.getByRole("button", { name: "Grain Hub" });
+    await expect(brand).toBeVisible();
+    const mark = brand.locator("img.reg-brand-mark");
+    await expect(mark).toHaveAttribute("src", `/grain-mark-${theme}.svg`);
+    // Loaded, not a broken image: the file is ui/public's, copied in by
+    // vite's publicDir, and served by the embedded static handler.
+    await expect
+      .poll(() => mark.evaluate((img) => img.complete && img.naturalWidth))
+      .toBeGreaterThan(0);
+    const box = await mark.boundingBox();
+    expect(Math.round(box.width)).toBe(28);
+    expect(Math.round(box.height)).toBe(28);
+    // The mark sits beside the name, centred on it, inside the top bar.
+    const label = await brand.getByText("Grain Hub").boundingBox();
+    expect(box.x + box.width).toBeLessThanOrEqual(label.x);
+    expect(
+      Math.abs(box.y + box.height / 2 - (label.y + label.height / 2)),
+    ).toBeLessThanOrEqual(1);
+    const bar = await page.locator(".reg-topbar").boundingBox();
+    expect(box.y).toBeGreaterThanOrEqual(bar.y);
+    expect(box.y + box.height).toBeLessThanOrEqual(bar.y + bar.height);
+    expect(box.x).toBeGreaterThanOrEqual(0);
+
+    await expect(page.locator("link#favicon")).toHaveAttribute(
+      "href",
+      `/grain-mark-${theme}.svg`,
+    );
+    for (const asset of [
+      `/grain-mark-${theme}.svg`,
+      `/grain-mark-${theme}.png`,
+      "/apple-touch-icon.png",
+    ]) {
+      const res = await page.request.get(`${demo.url}${asset}`);
+      expect(res.status(), asset).toBe(200);
+    }
+    await context.close();
+  }
+});
+
+test("focuses Cancel, traps Tab, cancels on Escape, and restores focus across every ConfirmDialog at desktop and phone in light and dark", async ({
+  browser,
+}) => {
+  const viewports = [
+    { name: "desktop", width: 1440, height: 900, isMobile: false },
+    { name: "phone", width: 390, height: 844, isMobile: true },
+  ];
+  const themes = ["light", "dark"];
+
+  // Helper that exercises opening a confirmation dialog from `opener`, checks
+  // initial focus on Cancel, viewport fit, Tab + Shift+Tab staying inside the
+  // dialog, Escape closing without mutating state, and focus returning to `opener`.
+  async function assertDialogKeyboardContract(page, vp, opener, expectedTitle) {
+    await opener.scrollIntoViewIfNeeded();
+    await opener.focus();
+    await page.evaluate(() => {
+      document.activeElement?.setAttribute("data-test-opener", "1");
+    });
+    await opener.click();
+
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText(expectedTitle);
+
+    const box = await dialog.boundingBox();
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(vp.width + 1);
+
+    const cancelBtn = dialog.getByRole("button", { name: "Cancel" });
+    await expect(cancelBtn).toBeFocused();
+
+    // Press Tab 4 times and Shift+Tab 2 times: focus must always stay inside the dialog.
+    for (const key of ["Tab", "Tab", "Tab", "Tab", "Shift+Tab", "Shift+Tab"]) {
+      await page.keyboard.press(key);
+      const inside = await dialog.evaluate((el) =>
+        el.contains(document.activeElement),
+      );
+      expect(inside, `${expectedTitle} (${vp.name}) ${key}`).toBe(true);
+    }
+
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+
+    const returnedToOpener = await page.evaluate(
+      () => document.activeElement?.getAttribute("data-test-opener") === "1",
+    );
+    expect(returnedToOpener, `${expectedTitle} (${vp.name}) focus return`).toBe(
+      true,
+    );
+    await page.evaluate(() => {
+      document
+        .querySelectorAll("[data-test-opener]")
+        .forEach((el) => el.removeAttribute("data-test-opener"));
+    });
+  }
+
+  for (const vp of viewports) {
+    for (const theme of themes) {
+      const context = await browser.newContext({
+        viewport: { width: vp.width, height: vp.height },
+        colorScheme: theme,
+        isMobile: vp.isMobile,
+        hasTouch: vp.isMobile,
+      });
+      await context.addInitScript(
+        ([k, v]) => localStorage.setItem(k, v),
+        ["grain.themeMode", theme],
+      );
+      const page = await context.newPage();
+      const pageErrors = [];
+      page.on("pageerror", (err) => pageErrors.push(err.message));
+
+      // 1. My Entries (/): Stop and Delete confirmations
+      await page.goto(demo.url);
+      await assertDialogKeyboardContract(
+        page,
+        vp,
+        page.getByRole("button", { name: "Stop platform-vm" }),
+        "Stop platform-vm?",
+      );
+      const platformRow = page
+        .locator("tr", { hasText: "platform-vm" })
+        .first();
+      await assertDialogKeyboardContract(
+        page,
+        vp,
+        platformRow.getByRole("button", { name: "Delete" }),
+        "Delete platform-vm?",
+      );
+
+      // 2. Entry Detail (/entries/platform-vm): Stop instance and Delete entry...
+      await page.goto(`${demo.url}/entries/platform-vm`);
+      await assertDialogKeyboardContract(
+        page,
+        vp,
+        page.getByRole("button", { name: "Stop instance" }),
+        "Stop platform-vm?",
+      );
+      await assertDialogKeyboardContract(
+        page,
+        vp,
+        page.getByRole("button", { name: "Delete entry..." }),
+        "Delete platform-vm?",
+      );
+
+      // 3. Entry Detail (/entries/alice-workstation): Revoke credential confirmation
+      await page.goto(`${demo.url}/entries/alice-workstation`);
+      await assertDialogKeyboardContract(
+        page,
+        vp,
+        page.getByRole("button", { name: "Revoke" }).first(),
+        "Revoke registration credential?",
+      );
+
+      // 4. Apps acting for you (/grants): Revoke consent grant confirmation
+      await page.goto(`${demo.url}/grants`);
+      const grantsSection = page.getByTestId("person-grants-section");
+      await assertDialogKeyboardContract(
+        page,
+        vp,
+        grantsSection.getByRole("button", { name: "Revoke" }).first(),
+        "Revoke consent for",
+      );
+
+      // 5. Admin (/admin): Hard purge confirmation
+      await page.goto(`${demo.url}/admin`);
+      await assertDialogKeyboardContract(
+        page,
+        vp,
+        page.getByRole("button", { name: "Hard purge" }).first(),
+        "Hard purge alice-sandbox-old?",
+      );
+
+      expect(pageErrors).toEqual([]);
       await context.close();
     }
   }

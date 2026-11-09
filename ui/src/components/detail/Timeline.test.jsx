@@ -216,6 +216,61 @@ describe("DetailOverlay timeline", () => {
     );
   });
 
+  // Each attempt that reported token usage says what it spent, and the
+  // task's total sits above the timeline (ui.Attempt.Usage, TaskDetail.Usage).
+  it("shows each attempt's token usage and the task's total", () => {
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          usage: {
+            runs: 1,
+            inputTokens: 12000,
+            outputTokens: 3000,
+            cacheReadTokens: 400000,
+            cacheWriteTokens: 0,
+            billable: 15000,
+            costUsd: 0.42,
+          },
+          attempts: [
+            {
+              number: 1,
+              startedAt: "2026-08-28T12:00:00Z",
+              finishedAt: "2026-08-28T12:10:00Z",
+              outcome: "succeeded",
+              usage: {
+                runId: "r1",
+                inputTokens: 12000,
+                outputTokens: 3000,
+                cacheReadTokens: 400000,
+                cacheWriteTokens: 0,
+                costUsd: 0.42,
+              },
+            },
+            {
+              number: 2,
+              startedAt: "2026-08-28T13:00:00Z",
+              outcome: "failed",
+            },
+          ],
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+    const lines = screen.getAllByTestId("attempt-usage");
+    expect(lines).toHaveLength(1);
+    expect(lines[0].textContent).toBe(
+      "15k tokens (12k in, 3.0k out, 400k cached) · $0.42",
+    );
+    expect(screen.getByTestId("task-usage").textContent).toBe(
+      "15k tokens (12k in, 3.0k out, 400k cached) · $0.42 across 1 run",
+    );
+  });
+
   // A run on a hostd since deleted from the registry keeps the name it
   // recorded, marked deleted.
   it("marks an attempt's hostd that has since been deleted", () => {

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -421,11 +422,46 @@ func (h *hostdCapabilityServers) statuses() []servers.Status {
 	return out
 }
 
+func offeredCapabilityNames(offers []hostd.Offer) []string {
+	var out []string
+	for _, o := range offers {
+		if o.Kind == hostd.KindCapability {
+			out = append(out, o.Name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (h *hostdCapabilityServers) defaultHostCapabilityEntries(ctx context.Context) ([]string, error) {
+	if h != nil && h.live != nil {
+		exec := h.live().hostExecutor()
+		if exec.Kind == HostExecutorHostd {
+			offers, err := queryHostdOffers(hostd.ForDisplay(ctx), exec, hostdOffersTimeout)
+			if err != nil {
+				return nil, fmt.Errorf("asking the host agent what it offers: %w", err)
+			}
+			return offeredCapabilityNames(offers), nil
+		}
+		if h.opts.Hostd == nil {
+			return nil, servers.ErrNoHostd
+		}
+	}
+	if h == nil || h.base == nil {
+		return nil, servers.ErrNoHostd
+	}
+	octx, cancel := context.WithTimeout(hostd.ForDisplay(ctx), hostdOffersTimeout)
+	defer cancel()
+	return h.base.HostCapabilityEntries(octx)
+}
+
 func (h *hostdCapabilityServers) probe(ctx context.Context, id string, cfg protocol.ServerConfig, extra protocol.SecretLookup) servers.ProbeResult {
 	if h == nil || h.live == nil {
 		return servers.ProbeResult{ID: id, Methods: []servers.MethodDetail{}, Error: servers.ErrNoHostd.Error()}
 	}
-	route, err := resolveHostdSelector(hostd.ForDisplay(ctx), h.live(), h.store, string(cfg.Hostd))
+	rctx, cancel := context.WithTimeout(hostd.ForDisplay(ctx), hostdOffersTimeout)
+	route, err := resolveHostdSelector(rctx, h.live(), h.store, string(cfg.Hostd))
+	cancel()
 	if err != nil {
 		return servers.ProbeResult{ID: id, Methods: []servers.MethodDetail{}, Error: err.Error()}
 	}
@@ -440,7 +476,9 @@ func (h *hostdCapabilityServers) hostCapabilityEntries(ctx context.Context, sele
 	if h == nil || h.live == nil {
 		return nil, false, servers.ErrNoHostd
 	}
-	route, err := resolveHostdSelector(hostd.ForDisplay(ctx), h.live(), h.store, selector)
+	octx, cancel := context.WithTimeout(hostd.ForDisplay(ctx), hostdOffersTimeout)
+	defer cancel()
+	route, err := resolveHostdSelector(octx, h.live(), h.store, selector)
 	if err != nil {
 		var w *HostdWaitError
 		if errors.As(err, &w) {
@@ -448,15 +486,11 @@ func (h *hostdCapabilityServers) hostCapabilityEntries(ctx context.Context, sele
 		}
 		return nil, true, err
 	}
-	client := route.Exec.hostdClient()
-	opts := h.opts
-	opts.Hostd = &client
-	opts.OnDrop, opts.OnAttach, opts.OnClear = nil, nil, nil
-	entries, err := servers.New(opts).HostCapabilityEntries(ctx)
+	offers, err := queryHostdOffers(octx, route.Exec, hostdOffersTimeout)
 	if err != nil {
-		return nil, true, err
+		return nil, true, fmt.Errorf("asking the host agent what it offers: %w", err)
 	}
-	return entries, true, nil
+	return offeredCapabilityNames(offers), true, nil
 }
 
 // hostAgentsOnly reports whether the connected host selector names says,
@@ -466,11 +500,13 @@ func (h *hostdCapabilityServers) hostAgentsOnly(ctx context.Context, selector st
 	if h == nil || h.live == nil {
 		return false
 	}
-	route, err := resolveHostdSelector(hostd.ForDisplay(ctx), h.live(), h.store, selector)
+	octx, cancel := context.WithTimeout(hostd.ForDisplay(ctx), hostdOffersTimeout)
+	defer cancel()
+	route, err := resolveHostdSelector(octx, h.live(), h.store, selector)
 	if err != nil {
 		return false
 	}
-	hello, err := route.Exec.hostdClient().Hello(hostd.ForDisplay(ctx))
+	hello, err := route.Exec.hostdClient().Hello(octx)
 	return err == nil && hello.AgentsOnly
 }
 
@@ -531,6 +567,15 @@ func (r placedStatusRegistry) Probe(ctx context.Context, id string, cfg protocol
 		return r.placed.probe(ctx, id, cfg, extra)
 	}
 	return r.Registry.Probe(ctx, id, cfg, extra)
+}
+
+func (r placedStatusRegistry) HostCapabilityEntries(ctx context.Context) ([]string, error) {
+	if r.placed != nil {
+		return r.placed.defaultHostCapabilityEntries(ctx)
+	}
+	octx, cancel := context.WithTimeout(hostd.ForDisplay(ctx), hostdOffersTimeout)
+	defer cancel()
+	return r.Registry.HostCapabilityEntries(octx)
 }
 
 func (r placedStatusRegistry) HostCapabilityEntriesFor(ctx context.Context, selector string) ([]string, bool, error) {

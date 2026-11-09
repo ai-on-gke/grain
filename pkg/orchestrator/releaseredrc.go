@@ -103,8 +103,9 @@ func superseded(tags map[string]string, rc model.RCTag) bool {
 // initial triage-pending grain/rc-hold check run on q's commit before the
 // completed qualification verdict goes up, and raises
 // pipeline.release-escalated for its version when it was the last attempt.
-// lines are the failing summary.
-func (q *rcQualification) raiseRCFailed(ctx context.Context, tags map[string]string, rc model.RCTag, lines []string) error {
+// stage says which stage failed it, Stage 2 (stage2Failure) or Stage 1
+// (stage1Failure); lines are the failing summary.
+func (q *rcQualification) raiseRCFailed(ctx context.Context, tags map[string]string, rc model.RCTag, stage rcFailure, lines []string) error {
 	subject := model.NotificationSubject(model.FamilyRCFailed, q.rcTag)
 	escalate := rc.RC >= model.ReleaseMaxRCAttempts
 	grace := releaseHoldGrace()
@@ -112,7 +113,7 @@ func (q *rcQualification) raiseRCFailed(ctx context.Context, tags map[string]str
 		Subject:  subject,
 		Severity: model.NotificationWarning,
 		Title:    fmt.Sprintf("Release candidate %s of %s failed qualification", q.rcTag, q.repo),
-		Body:     rcFailedBody(q.repo, q.check, tags, rc, q.sha, lines, escalate, grace),
+		Body:     rcFailedBody(q.repo, stage, tags, rc, q.sha, lines, escalate, grace),
 		Repo:     q.repo.String(),
 		RaisedBy: releaseQualificationNotifier,
 		Actions:  []string{"investigate"},
@@ -141,10 +142,27 @@ func (q *rcQualification) raiseRCFailed(ctx context.Context, tags map[string]str
 	}, q.now)
 }
 
-func rcFailedBody(repo model.RepoRef, check string, tags map[string]string, rc model.RCTag, sha string, lines []string, escalate bool, grace time.Duration) string {
+// rcFailure is which stage of qualification failed a candidate: what
+// pipeline.rc-failed says it failed, and the heading of its failing lines.
+type rcFailure struct {
+	what    string
+	heading string
+}
+
+// stage2Failure is a red grain/release-qualification verdict (check).
+func stage2Failure(check string) rcFailure {
+	return rcFailure{what: fmt.Sprintf("Stage 2 qualification (%s)", check), heading: "Qualification"}
+}
+
+// stage1Failure is a red Stage 1 run (workflow or status, by name).
+func stage1Failure(name string) rcFailure {
+	return rcFailure{what: fmt.Sprintf("Stage 1 qualification (%s)", name), heading: fmt.Sprintf("Stage 1 (%s)", name)}
+}
+
+func rcFailedBody(repo model.RepoRef, stage rcFailure, tags map[string]string, rc model.RCTag, sha string, lines []string, escalate bool, grace time.Duration) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "`%s` (%s) of %s failed Stage 2 qualification (%s): attempt %d of RELEASE_MAX_RC_ATTEMPTS (%d).\n\n",
-		rc, shortSHA(sha), repo, check, rc.RC, model.ReleaseMaxRCAttempts)
+	fmt.Fprintf(&b, "`%s` (%s) of %s failed %s: attempt %d of RELEASE_MAX_RC_ATTEMPTS (%d).\n\n",
+		rc, shortSHA(sha), repo, stage.what, rc.RC, model.ReleaseMaxRCAttempts)
 	if name, floor, ok := model.ReleaseFloor(tags, rc); ok {
 		fmt.Fprintf(&b, "Commits to triage: `%s..%s` (everything since %s).\n", floor, sha, name)
 	} else {
@@ -153,7 +171,7 @@ func rcFailedBody(repo model.RepoRef, check string, tags map[string]string, rc m
 	if name, prev, ok := model.PreviousCandidate(tags, rc); ok {
 		fmt.Fprintf(&b, "New since %s: `%s..%s`.\n", name, prev, sha)
 	}
-	b.WriteString("\nQualification:\n")
+	b.WriteString("\n" + stage.heading + ":\n")
 	for _, l := range lines {
 		b.WriteString("- " + l + "\n")
 	}
@@ -333,35 +351,45 @@ func (q *rcQualification) noteFlakeRetries(ctx context.Context, rerun []string, 
 		if len(h) == 0 || h[len(h)-1].Result != model.ItemFail {
 			continue
 		}
-		redRCMu.Lock()
-		key := redRCKey(q.store, q.repo.String(), item)
-		var kept []time.Time
-		for _, at := range redRCFlakes[key] {
-			if q.now.Sub(at) < model.FlakeBudgetWindow {
-				kept = append(kept, at)
-			}
-		}
-		kept = append(kept, q.now)
-		redRCFlakes[key] = kept
-		redRCMu.Unlock()
-		if len(kept) < model.FlakeBudgetRetries {
-			continue
-		}
-		errs = append(errs, ensurePipelineNotification(ctx, q.store, model.Notification{
-			Subject:  model.NotificationSubject(model.FamilyFlakeBudget, q.repo.String()+":"+item),
-			Severity: model.NotificationWarning,
-			Title:    fmt.Sprintf("Release qualification item %s of %s is flaking", item, q.repo),
-			Body: fmt.Sprintf("%s failed and was retried %d times in the last %s of release qualification, most "+
-				"recently on %s (%s). A flake retry is spent per candidate, so a flaky item makes red candidates "+
-				"out of healthy ones: de-flake it, or quarantine what it tests.", item, len(kept),
-				humanDuration(model.FlakeBudgetWindow), q.rcTag, h[len(h)-1].Reason),
-			Repo:       q.repo.String(),
-			RaisedBy:   releaseQualificationNotifier,
-			Actions:    []string{"investigate"},
-			ClearsWhen: &model.NotificationClear{Kind: model.ClearsOnTTL, TTL: model.FlakeBudgetWindow.String()},
-		}, q.now))
+		errs = append(errs, q.spendFlakeRetry(ctx, item, fmt.Sprintf("Release qualification item %s of %s is flaking", item, q.repo),
+			"release qualification", h[len(h)-1].Reason))
 	}
 	return errors.Join(errs...)
+}
+
+// spendFlakeRetry records one flake retry of target -- a Stage 2 item, or
+// a Stage 1 job -- on q's candidate, and raises
+// pipeline.flake-budget:<repo>:<target> once target has spent
+// FlakeBudgetRetries of them inside FlakeBudgetWindow. where says what
+// retried it, reason what the failure was.
+func (q *rcQualification) spendFlakeRetry(ctx context.Context, target, title, where, reason string) error {
+	redRCMu.Lock()
+	key := redRCKey(q.store, q.repo.String(), target)
+	var kept []time.Time
+	for _, at := range redRCFlakes[key] {
+		if q.now.Sub(at) < model.FlakeBudgetWindow {
+			kept = append(kept, at)
+		}
+	}
+	kept = append(kept, q.now)
+	redRCFlakes[key] = kept
+	redRCMu.Unlock()
+	if len(kept) < model.FlakeBudgetRetries {
+		return nil
+	}
+	return ensurePipelineNotification(ctx, q.store, model.Notification{
+		Subject:  model.NotificationSubject(model.FamilyFlakeBudget, q.repo.String()+":"+target),
+		Severity: model.NotificationWarning,
+		Title:    title,
+		Body: fmt.Sprintf("%s failed and was retried %d times in the last %s of %s, most "+
+			"recently on %s (%s). A flake retry is spent per candidate, so a flaky one makes red candidates "+
+			"out of healthy ones: de-flake it, or quarantine what it tests.", target, len(kept),
+			humanDuration(model.FlakeBudgetWindow), where, q.rcTag, reason),
+		Repo:       q.repo.String(),
+		RaisedBy:   releaseQualificationNotifier,
+		Actions:    []string{"investigate"},
+		ClearsWhen: &model.NotificationClear{Kind: model.ClearsOnTTL, TTL: model.FlakeBudgetWindow.String()},
+	}, q.now)
 }
 
 // releaseHoldGrace is how long grain/rc-hold waits for triage before any

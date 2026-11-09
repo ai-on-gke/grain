@@ -211,7 +211,7 @@ func TestRegistryCLIRegisterStatusUnregister(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	if !strings.Contains(outText, "Registry: disabled") {
+	if !strings.Contains(outText, "Hub: disabled") {
 		t.Fatalf("initial status = %q, want disabled", outText)
 	}
 
@@ -1127,5 +1127,145 @@ func TestRegistryRegisterPreservesStandaloneMetadataAndCLIHostKind(t *testing.T)
 	}
 	if gotUpdated.HostKind != api.HostKindOther || gotUpdatedHB.HostKind != api.HostKindOther {
 		t.Fatalf("explicit -host-kind override not applied: entry=%q hb=%q, want other", gotUpdated.HostKind, gotUpdatedHB.HostKind)
+	}
+}
+
+// TestRegistryCLITransferCancel covers `grain registry transfer -cancel`: it
+// posts {"cancel": true} with no target, and refuses to be combined with -to.
+func TestRegistryCLITransferCancel(t *testing.T) {
+	ctx := context.Background()
+	var (
+		mu     sync.Mutex
+		bodies []api.TransferRequest
+	)
+	regSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/entries/team-vm/transfer" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		var req api.TransferRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		mu.Lock()
+		bodies = append(bodies, req)
+		mu.Unlock()
+		entry := api.Entry{Name: "team-vm", Kind: api.KindInstance, State: api.StateRunning}
+		if !req.Cancel {
+			entry.PendingOwner = req.To
+		}
+		_ = json.NewEncoder(w).Encode(entry)
+	}))
+	defer regSrv.Close()
+	prevClient := registryHTTPClient
+	prevOIDC := registryOIDCToken
+	registryHTTPClient = regSrv.Client()
+	registryOIDCToken = func(ctx context.Context, registryURL, audience string) (string, error) {
+		return "oidc-test-token", nil
+	}
+	t.Cleanup(func() {
+		registryHTTPClient = prevClient
+		registryOIDCToken = prevOIDC
+	})
+	run := func(args ...string) (string, error) {
+		t.Helper()
+		full := append([]string{"transfer", "-registry-url", regSrv.URL}, args...)
+		var err error
+		stdout := captureStdout(t, func() {
+			err = cmdRegistry(ctx, nil, &printer{}, full)
+		})
+		return stdout, err
+	}
+
+	got, err := run("-cancel", "team-vm")
+	if err != nil {
+		t.Fatalf("registry transfer -cancel: %v", err)
+	}
+	if want := "cancelled the pending ownership transfer of team-vm"; !strings.Contains(got, want) {
+		t.Fatalf("registry transfer -cancel printed %q, want %q", got, want)
+	}
+	if _, err := run("-cancel", "-to", "bob@example.com", "team-vm"); err == nil || !strings.Contains(err.Error(), "takes no -to") {
+		t.Fatalf("registry transfer -cancel -to = %v, want a usage refusal", err)
+	}
+	if _, err := run("team-vm"); err == nil || !strings.Contains(err.Error(), "-cancel") {
+		t.Fatalf("registry transfer without -to = %v, want an error naming -cancel", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 1 || !bodies[0].Cancel || bodies[0].To != "" || bodies[0].NewOwner != "" {
+		t.Fatalf("transfer requests = %+v, want exactly one {cancel: true} with no target", bodies)
+	}
+}
+
+// TestRegistryCLIListAndShowPrintStatusDetail covers the 2026-11-09 walkthrough
+// fix: plain-text `grain registry list` and `grain registry show` print an
+// entry's `status_detail` (such as a service-account propagation retry reason
+// while `creating` or a failure reason when `failed`), plus `replace_step`,
+// `health_detail`, and `boot_disk_gb` on `show`.
+func TestRegistryCLIListAndShowPrintStatusDetail(t *testing.T) {
+	ctx := context.Background()
+	const propReason = "waiting for service account gi-late-vm@acme-prod.iam.gserviceaccount.com to propagate before creating the GCE instance (attempt 1 failed, retrying in 5s)"
+	entry := api.Entry{
+		Name:         "late-vm",
+		URL:          "https://late-vm.grain.example.com",
+		Kind:         api.KindInstance,
+		HostKind:     api.HostKindRegistryVM,
+		State:        api.StateCreating,
+		Status:       api.StatusOffline,
+		StatusDetail: propReason,
+		HealthDetail: "boot probe pending",
+		ReplaceStep:  api.ReplaceStepCreatingVM,
+		Owner:        "alice@example.com",
+		Listed:       true,
+		Shape:        "n2-standard-2",
+		BootDiskGB:   120,
+	}
+	regSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/entries":
+			_ = json.NewEncoder(w).Encode(api.ListEntriesResponse{Entries: []api.Entry{entry}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/entries/late-vm":
+			_ = json.NewEncoder(w).Encode(entry)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer regSrv.Close()
+	prevClient := registryHTTPClient
+	prevOIDC := registryOIDCToken
+	registryHTTPClient = regSrv.Client()
+	registryOIDCToken = func(ctx context.Context, registryURL, audience string) (string, error) {
+		return "oidc-test-token", nil
+	}
+	t.Cleanup(func() {
+		registryHTTPClient = prevClient
+		registryOIDCToken = prevOIDC
+	})
+
+	var listErr error
+	listOut := captureStdout(t, func() {
+		listErr = cmdRegistry(ctx, nil, &printer{}, []string{"list", "-registry-url", regSrv.URL})
+	})
+	if listErr != nil {
+		t.Fatalf("grain registry list: %v", listErr)
+	}
+	if !strings.Contains(listOut, "detail="+propReason) {
+		t.Fatalf("grain registry list output missing detail=%q:\n%s", propReason, listOut)
+	}
+
+	var showErr error
+	showOut := captureStdout(t, func() {
+		showErr = cmdRegistry(ctx, nil, &printer{}, []string{"show", "-registry-url", regSrv.URL, "late-vm"})
+	})
+	if showErr != nil {
+		t.Fatalf("grain registry show: %v", showErr)
+	}
+	for _, want := range []string{
+		"Step:        creating_vm",
+		"Detail:      " + propReason,
+		"Health:      boot probe pending",
+		"Disk:        120 GB",
+	} {
+		if !strings.Contains(showOut, want) {
+			t.Fatalf("grain registry show output missing %q:\n%s", want, showOut)
+		}
 	}
 }

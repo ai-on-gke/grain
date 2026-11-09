@@ -28,6 +28,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/forkhead"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
@@ -1674,7 +1675,50 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		catalogue = catalogueCfg.CapabilityPolicy.Catalogue
 		autoGrantContextReads = catalogueCfg.AutoGrantContextReads
 	}
-	for _, p := range proposals {
+	for _, rawP := range proposals {
+		if err := mcp.ValidateProposeTaskArgs(rawP); err != nil {
+			log.Printf("orchestrator: skipping proposed task with invalid arguments: %v", err)
+			continue
+		}
+		p := rawP
+		if rawP["grants"] != nil {
+			decoded, hasGrants, gErr := model.DecodeRawRequestGrants(rawP["grants"], mcp.ProposeTaskGrantSpelling(rawP))
+			if gErr != nil {
+				log.Printf("orchestrator: skipping proposed task with invalid grants: %v", gErr)
+				continue
+			}
+			if ct, _ := mcp.ProposedChangeTarget(rawP); ct != nil && len(decoded.Writes) > 0 {
+				log.Printf("orchestrator: skipping proposed task with invalid grants: %s cannot be combined with writes", ct.Kind)
+				continue
+			}
+			if hasGrants {
+				p = make(map[string]any, len(rawP)+4)
+				for k, v := range rawP {
+					p[k] = v
+				}
+				if decoded.Capabilities != nil {
+					p["capabilities"] = decoded.Capabilities
+				}
+				if len(decoded.Reads) > 0 {
+					readStrs := make([]string, len(decoded.Reads))
+					for i, r := range decoded.Reads {
+						readStrs[i] = r.String()
+					}
+					p["reads"] = readStrs
+				}
+				if len(decoded.Writes) > 0 {
+					writeMaps := make([]any, len(decoded.Writes))
+					for i, w := range decoded.Writes {
+						writeMaps[i] = map[string]any{"repo": w.Repo.String(), "base": w.Base}
+					}
+					p["writes"] = writeMaps
+				}
+				if decoded.Target != nil {
+					p["repo"] = decoded.Target.Repo.String()
+					p["branch"] = decoded.Target.Base
+				}
+			}
+		}
 		title, _ := p["title"].(string)
 		body, _ := p["body"].(string)
 		var tmplID string
@@ -1846,11 +1890,11 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		if title == "" || body == "" {
 			continue
 		}
-		key := mcp.ProposalKeyArgs(task.ID, p)
+		key := mcp.ProposalKeyArgs(task.ID, rawP)
 		if existing, err := store.TaskWithTag(ctx, key); err != nil {
 			return fmt.Errorf("orchestrator: finding already-filed proposed task %q: %w", title, err)
 		} else if existing != nil {
-			if local, _ := p["id"].(string); local != "" {
+			if local, _ := rawP["id"].(string); local != "" {
 				if _, taken := filed[local]; !taken {
 					filed[local] = existing.ID
 				}
@@ -1920,21 +1964,25 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			// here would otherwise file a proposal against a non-grain
 			// repo holding a grant its proposer was given by grain, and
 			// so unapproved (model.EscalatedCapabilities).
-			if cap == "" || grainci.IsGrant(cap) {
-				continue
-			}
-			found := false
-			for _, g := range grants {
-				if g.Capability == cap {
-					found = true
-					break
+			//
+			// Retired one-release aliases expand via CanonicalLegacyGrants
+			// and canonical api#* references normalize via StoredGrantSpelling,
+			// matching ui.Client.creationGrants so a relayed proposal stores
+			// the exact same grant set as its live twin.
+			for _, expanded := range expandProposalGrant(cap) {
+				found := false
+				for _, g := range grants {
+					if g.Capability == expanded {
+						found = true
+						break
+					}
 				}
-			}
-			if !found {
-				grants = append(grants, model.Grant{
-					Capability: cap,
-					Via:        model.GrantByLabel,
-				})
+				if !found {
+					grants = append(grants, model.Grant{
+						Capability: expanded,
+						Via:        model.GrantByLabel,
+					})
+				}
 			}
 		}
 		customFields, droppedFields, err := proposedCustomFields(ctx, store, p)
@@ -2557,12 +2605,13 @@ func defaultTaskGrants(ctx context.Context, store *model.Store, target *model.Re
 	seen := make(map[string]bool, len(ids))
 	grants := make([]model.Grant, 0, len(ids))
 	for _, id := range ids {
-		id = strings.TrimSpace(id)
-		if id == "" || seen[id] || grainci.IsGrant(id) {
-			continue
+		for _, expanded := range expandProposalGrant(id) {
+			if seen[expanded] {
+				continue
+			}
+			seen[expanded] = true
+			grants = append(grants, model.Grant{Capability: expanded, Via: model.GrantByDefault})
 		}
-		seen[id] = true
-		grants = append(grants, model.Grant{Capability: id, Via: model.GrantByDefault})
 	}
 	if target != nil {
 		usesGrainCI, err := store.RepoUsesGrainCI(ctx, *target)
@@ -2640,7 +2689,7 @@ func proposalSeeding(ctx context.Context, store *model.Store, target *model.Repo
 	}
 	seeding := &model.ProposalSeeding{Catalogue: catalogue, GrantContext: model.TaskGrantContext(proposal)}
 	if cfg != nil {
-		seeding.DeploymentDefaults = append([]string(nil), cfg.DefaultCapabilities...)
+		seeding.DeploymentDefaults = expandProposalGrantNames(cfg.DefaultCapabilities)
 	}
 	if target != nil {
 		repo := *target
@@ -2650,10 +2699,52 @@ func proposalSeeding(ctx context.Context, store *model.Store, target *model.Repo
 			return nil, err
 		}
 		if repoCfg != nil {
-			seeding.RepoDefaults = append([]string(nil), repoCfg.DefaultCapabilities...)
+			seeding.RepoDefaults = expandProposalGrantNames(repoCfg.DefaultCapabilities)
 		}
 	}
 	return seeding, nil
+}
+
+// expandProposalGrant expands retired one-release capability aliases via
+// model.CanonicalLegacyGrants, rewrites api#* references to stored api:<scope>
+// form via model.StoredGrantSpelling, and normalizes in-process capability
+// references to recorded form, matching ui.Client.normalizeCapabilityIDs.
+// grain-ci / grain#ci is omitted so the target repository's CI Mode decides it.
+func expandProposalGrant(cap string) []string {
+	cap = strings.TrimSpace(cap)
+	if cap == "" || grainci.IsGrant(cap) {
+		return nil
+	}
+	expanded := model.CanonicalLegacyGrants(cap)
+	out := make([]string, 0, len(expanded))
+	for _, part := range expanded {
+		part = model.StoredGrantSpelling(part)
+		if part == "" || grainci.IsGrant(part) {
+			continue
+		}
+		if model.IsCapabilityRef(part) && grainserver.IsInProcessGrant(part) {
+			if names, err := model.NormalizeCapabilityNames([]string{part}, grainserver.Lookup(nil)); err == nil && len(names) == 1 {
+				part = names[0]
+			}
+		}
+		out = append(out, part)
+	}
+	return out
+}
+
+func expandProposalGrantNames(ids []string) []string {
+	seen := make(map[string]bool, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		for _, expanded := range expandProposalGrant(id) {
+			if seen[expanded] {
+				continue
+			}
+			seen[expanded] = true
+			out = append(out, expanded)
+		}
+	}
+	return out
 }
 
 // newestFirst is model.Config.NewestFirst, read fresh from the store --
@@ -3126,22 +3217,10 @@ func otherBranchAutoMergeNote(task, proposal model.Task) string {
 		task.ID, landingBranch(task), landingBranch(proposal))
 }
 
-// otherBranchQueueNote is what a human approving the proposal reads when
-// the task that proposed it may queue its proposals unreviewed
-// (AutoMerge or AutoApproveProposals) and this one was filed for them
-// anyway, for the one reason no other note covers: it lands on a branch
-// that permission does not reach (model.AutoSubmitRefusedOnLanding).
-// Attributed to grain, like otherBranchAutoMergeNote, and naming both
-// branches for the same reason it does.
+// otherBranchQueueNote is model.OtherBranchQueueNote, which
+// ui.Client.CreateTask appends to the identical proposal filed live.
 func otherBranchQueueNote(task, proposal model.Task) string {
-	granted := landingBranch(task)
-	if len(task.Writes) > 0 {
-		granted += " (or one of the write targets it declares)"
-	}
-	return fmt.Sprintf("\n\n---\n\ngrain: task %s, which proposed this, may queue the work it splits "+
-		"out without review, but only work landing on %s. This task lands on %s instead, so "+
-		"it was filed for a person to approve. Approve it if it belongs there.",
-		task.ID, granted, landingBranch(proposal))
+	return model.OtherBranchQueueNote(task, proposal)
 }
 
 // proposalDefaultBranches is relayProposedTasks' answer to which branch a
@@ -3193,16 +3272,7 @@ func changeTargetAutoMergeNote(task, proposal model.Task) string {
 // names the note reads as though grain refused an inheritance between
 // two identical things.
 func landingBranch(task model.Task) string {
-	if task.Target == nil {
-		if task.Base != "" {
-			return "`" + task.Base + "`"
-		}
-		return "its repository's default branch"
-	}
-	if task.Base != "" {
-		return fmt.Sprintf("`%s` in `%s`", task.Base, task.Target)
-	}
-	return fmt.Sprintf("the default branch of `%s`", task.Target)
+	return model.LandingBranch(task)
 }
 
 // argStrings reads a tool argument that should have arrived as an array

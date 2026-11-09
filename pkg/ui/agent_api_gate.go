@@ -627,8 +627,14 @@ var agentRepoDefaultRoutes = map[string]bool{
 	"GET /api/ci/runs":                 true,
 	"GET /api/ci/workflows":            true,
 	"GET /api/merge-batches":           true,
+	"GET /api/base-branch-gates":       true,
 	"GET /api/pipeline/changes":        true,
+	"GET /api/memory":                  true,
 	"GET /api/memory/documents/{name}": true,
+	"GET /api/memory/documents":        true,
+	"GET /api/templates":               true,
+	"GET /api/suite-runs":              true,
+	"GET /api/ci/faults":               true,
 }
 
 // sandboxChannelGuard enforces the additional restrictions required when an
@@ -841,13 +847,19 @@ func (s *Server) agentApprovalRail(ctx context.Context, acting *model.Task, targ
 //     person-only grant, keep_running or admission above standard, or an
 //     escalation past its in-grain proposer;
 //   - on run-now, the credential holds dispatch:write but not tasks:admin
-//     on the task's repository: run-now's implicit approval is an
-//     approval, so it asks for the scope the approve route does, and the
-//     two routes agree on every unapproved task.
+//     on the task's repository -- or, for a task with no repository, not
+//     tasks:admin on every repository: run-now's implicit approval is an
+//     approval, so it asks for exactly the scope the approve route's own
+//     scope check does (set.Allows("tasks:admin", repo)), and the two
+//     routes agree on every unapproved task. tasks:admin held only for
+//     some repositories never approves a task that names none;
+//   - on run-now, the call gives no reason (X-Grain-Acting-Reason):
+//     approve is destructive under tasks:admin and refused without one,
+//     so the implicit approval asks for it too.
 //
 // An already-approved target passes run-now straight through, as it does
 // for a task's run, so dispatch:write still jumps queued work ahead.
-func (s *Server) externalApprovalRail(ctx context.Context, principal string, set APIGrantSet, repo, target string, onlyIfUnapproved bool) error {
+func (s *Server) externalApprovalRail(ctx context.Context, principal string, set APIGrantSet, repo, target, reason string, onlyIfUnapproved bool) error {
 	id := model.NormalizeTaskID(target)
 	task, err := s.tasks.Store.GetTask(ctx, id)
 	if err != nil {
@@ -856,10 +868,15 @@ func (s *Server) externalApprovalRail(ctx context.Context, principal string, set
 	if task == nil || (onlyIfUnapproved && task.Approval != nil) {
 		return nil
 	}
-	if onlyIfUnapproved && !set.Allows("tasks:admin", repo) && !(repo == "" && set.Has("tasks:admin")) {
+	if onlyIfUnapproved && !set.Allows("tasks:admin", repo) {
 		return fmt.Errorf("%s cannot run task %s now: it is not approved, and run-now would approve it first, which "+
 			"an external agent credential may only do under tasks:admin -- approve it under tasks:admin, or a person "+
 			"approves it (docs/agent-api.md)", principal, task.ID)
+	}
+	if onlyIfUnapproved && reason == "" {
+		return fmt.Errorf("%s cannot run task %s now without a reason: it is not approved, and run-now would approve it "+
+			"first, which is destructive (scope tasks:admin) as POST /api/tasks/{id}/approve is: give a reason "+
+			"(X-Grain-Acting-Reason, grain_invoke's reason, grain run-now -reason)", principal, task.ID)
 	}
 	return s.tasks.externalApprovalRefusal(ctx, principal, *task)
 }
@@ -2716,6 +2733,14 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	if err != nil {
 		return call, fmt.Errorf("external agent %q has invalid grants: %w", tok.Name, err)
 	}
+	if role := accessRoleFromContext(ctx); role != nil && !role.Full {
+		// A token presented inside a verified session never reaches past
+		// that session's role (resolveMCPCallerAccess narrows it the same
+		// way), so the multi-scope checks below -- externalApprovalRail's
+		// tasks:admin, a task PATCH's capabilities:admin, tasks:admin and
+		// capabilities:detach -- read the narrower of the two.
+		set = set.Intersect(role.set).Without(role.deny)
+	}
 	call.grants = set
 	adminPatch := tasksAdminAllowsTaskPatch(set, pattern)
 	detach := capabilitiesDetachAllowsRoute(set, pattern)
@@ -2802,7 +2827,7 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	if (IsDangerousAPIScope(scope) || method == http.MethodDelete) && call.reason == "" {
 		return call, fmt.Errorf("%s is destructive (scope %s): give a reason", pattern, scope)
 	}
-	if err := s.externalAgentRails(ctx, tok, set, call.repo, pattern, method, scope, call.targetTask, body); err != nil {
+	if err := s.externalAgentRails(ctx, tok, set, call.repo, pattern, method, scope, call.targetTask, call.reason, body); err != nil {
 		return call, err
 	}
 	if err := agentGrantEscalationFrom(held, pattern, body, s.storedFieldGrants(ctx, pattern, call.repo), s.tasks.normalizeCapabilityID); err != nil {
@@ -2963,7 +2988,7 @@ func (s *Server) externalAgentCallRepo(ctx context.Context, r *http.Request, pat
 	return "", nil, nil
 }
 
-func (s *Server) externalAgentRails(ctx context.Context, tok *model.ExternalAgentToken, set APIGrantSet, repo, pattern, method string, scope APIScope, target string, body []byte) error {
+func (s *Server) externalAgentRails(ctx context.Context, tok *model.ExternalAgentToken, set APIGrantSet, repo, pattern, method string, scope APIScope, target, reason string, body []byte) error {
 	if method == http.MethodGet {
 		return nil
 	}
@@ -2983,7 +3008,7 @@ func (s *Server) externalAgentRails(ctx context.Context, tok *model.ExternalAgen
 		}
 	}
 	if (pattern == approveTaskRoute || pattern == runNowTaskRoute) && target != "" {
-		if err := s.externalApprovalRail(ctx, principal, set, repo, target, pattern == runNowTaskRoute); err != nil {
+		if err := s.externalApprovalRail(ctx, principal, set, repo, target, reason, pattern == runNowTaskRoute); err != nil {
 			return err
 		}
 	}

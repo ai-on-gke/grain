@@ -16,6 +16,7 @@ package gcp
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -219,5 +220,136 @@ func TestValidateMachineType(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "machine_type") {
 			t.Errorf("ValidateMachineType(%q) = %v, want machine_type error", mt, err)
 		}
+	}
+}
+
+func TestGCEComputeInsertWithUnpropagatedServiceAccountIsRetryable(t *testing.T) {
+	srv, state := newFakeGCEServer(t)
+	ctx := context.Background()
+
+	comp, err := NewGCECompute(ctx, registry.ComputeConfig{
+		Provider:   "gce",
+		Project:    "test-proj",
+		Region:     "us-central1",
+		Zones:      []string{"us-central1-a"},
+		VMPrefix:   "grain-vm-",
+		RegistryID: "grain.example.com",
+	},
+		WithComputeBaseURL(srv.URL+"/compute/v1"),
+		WithComputeHTTPClient(srv.Client()),
+	)
+	if err != nil {
+		t.Fatalf("NewGCECompute: %v", err)
+	}
+
+	const saEmail = "gi-hub-e2e-test1@test-proj.iam.gserviceaccount.com"
+	spec := registry.InstanceSpec{
+		Name:           "hub-e2e-test1",
+		Zone:           "us-central1-a",
+		Shape:          registry.Shape{Name: "n2-standard-2", MachineType: "n2-standard-2", BootDiskGB: 50},
+		ServiceAccount: saEmail,
+		Generation:     1,
+	}
+
+	// Compute has not seen the just-created account yet: the insert operation fails once.
+	state.mu.Lock()
+	state.insertOpErrors = []fakeGCEOpError{{
+		Code:    "EXTERNAL_RESOURCE_NOT_FOUND",
+		Message: "The resource '" + saEmail + "' of type 'serviceAccount' was not found.",
+	}}
+	state.mu.Unlock()
+
+	_, err = comp.CreateInstance(ctx, spec)
+	if err == nil {
+		t.Fatal("CreateInstance succeeded, want the EXTERNAL_RESOURCE_NOT_FOUND failure")
+	}
+	if !errors.Is(err, registry.ErrServiceAccountNotReady) {
+		t.Fatalf("CreateInstance error = %v, want it to wrap registry.ErrServiceAccountNotReady", err)
+	}
+	if !strings.Contains(err.Error(), "EXTERNAL_RESOURCE_NOT_FOUND") || !strings.Contains(err.Error(), saEmail) {
+		t.Fatalf("CreateInstance error = %v, want it to keep GCE's code and the account name", err)
+	}
+	state.mu.Lock()
+	_, leftBehind := state.instances["test-proj/us-central1-a/grain-vm-hub-e2e-test1"]
+	state.mu.Unlock()
+	if leftBehind {
+		t.Fatal("failed insert left an instance behind")
+	}
+
+	// Once the account has propagated, the retried insert goes through.
+	handle, err := comp.CreateInstance(ctx, spec)
+	if err != nil {
+		t.Fatalf("retried CreateInstance: %v", err)
+	}
+	if handle.InstanceID != "grain-vm-hub-e2e-test1" || handle.InternalIP == "" {
+		t.Fatalf("retried CreateInstance handle = %+v", handle)
+	}
+	state.mu.Lock()
+	attempts := state.insertAttempts
+	state.mu.Unlock()
+	if attempts != 2 {
+		t.Fatalf("insert attempts = %d, want 2", attempts)
+	}
+}
+
+func TestGCEComputeInsertFailuresThatAreNotServiceAccountPropagationAreNotRetryable(t *testing.T) {
+	srv, state := newFakeGCEServer(t)
+	ctx := context.Background()
+
+	comp, err := NewGCECompute(ctx, registry.ComputeConfig{
+		Provider:   "gce",
+		Project:    "test-proj",
+		Region:     "us-central1",
+		Zones:      []string{"us-central1-a"},
+		RegistryID: "grain.example.com",
+	},
+		WithComputeBaseURL(srv.URL+"/compute/v1"),
+		WithComputeHTTPClient(srv.Client()),
+	)
+	if err != nil {
+		t.Fatalf("NewGCECompute: %v", err)
+	}
+
+	state.mu.Lock()
+	state.insertOpErrors = []fakeGCEOpError{{
+		Code:    "ZONE_RESOURCE_POOL_EXHAUSTED",
+		Message: "The zone 'projects/test-proj/zones/us-central1-a' does not have enough resources available to fulfill the request.",
+	}}
+	state.mu.Unlock()
+
+	_, err = comp.CreateInstance(ctx, registry.InstanceSpec{
+		Name:           "stockout-vm",
+		Zone:           "us-central1-a",
+		Shape:          registry.Shape{Name: "n2-standard-2", MachineType: "n2-standard-2"},
+		ServiceAccount: "gi-stockout-vm@test-proj.iam.gserviceaccount.com",
+		Generation:     1,
+	})
+	if err == nil {
+		t.Fatal("CreateInstance succeeded, want the stockout failure")
+	}
+	if errors.Is(err, registry.ErrServiceAccountNotReady) {
+		t.Fatalf("CreateInstance error = %v, must not be classified as service account propagation", err)
+	}
+}
+
+func TestIsServiceAccountNotFound(t *testing.T) {
+	const sa = "gi-alice@test-proj.iam.gserviceaccount.com"
+	cases := []struct {
+		name string
+		msg  string
+		want bool
+	}{
+		{"operation error", "GCE operation op-1 failed (EXTERNAL_RESOURCE_NOT_FOUND): The resource '" + sa + "' of type 'serviceAccount' was not found.", true},
+		{"synchronous 404 naming the account", `HTTP 400: {"error":{"code":400,"message":"The resource 'projects/test-proj/serviceAccounts/` + sa + `' was not found","errors":[{"reason":"notFound"}]}}`, true},
+		{"another account", "GCE operation op-1 failed (EXTERNAL_RESOURCE_NOT_FOUND): The resource 'other@test-proj.iam.gserviceaccount.com' of type 'serviceAccount' was not found.", true},
+		{"missing image", "GCE operation op-1 failed (RESOURCE_NOT_FOUND): The resource 'projects/debian-cloud/global/images/nope' was not found", false},
+		{"quota", "GCE operation op-1 failed (QUOTA_EXCEEDED): Quota 'CPUS' exceeded.", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isServiceAccountNotFound(errors.New(tc.msg), sa); got != tc.want {
+				t.Fatalf("isServiceAccountNotFound(%q) = %v, want %v", tc.msg, got, tc.want)
+			}
+		})
 	}
 }

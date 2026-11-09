@@ -291,7 +291,7 @@ describe("RepoPage", () => {
   // (with their with: arguments) as well as the legacy ids, and its task
   // defaults api:* grants too: GrantsPicker edits those, the legacy
   // pickers the rest, and each save keeps the other's entries.
-  it("edits default and CI method grants with GrantsPicker beside the legacy pickers", async () => {
+  it("edits default and CI method grants with GrantsPicker, keeping stored bare ids", async () => {
     resetCapabilityMethodsForTest();
     const user = userEvent.setup();
     const cloudKey = {
@@ -338,11 +338,10 @@ describe("RepoPage", () => {
         ],
       },
     });
-    const legacy = await screen.findByLabelText("Default capabilities");
-    expect(legacy).toHaveTextContent("GCP key");
-    expect(legacy).not.toHaveTextContent("cloud-key");
-    expect(legacy).not.toHaveTextContent("api:tasks:read");
-    const ciLegacy = screen.getByLabelText("CI capabilities");
+    // There is no legacy default-capabilities picker any more: a stored
+    // bare id (gcp-key) is kept, untouched, when GrantsPicker saves.
+    expect(screen.queryByLabelText("Default capabilities")).toBeNull();
+    const ciLegacy = await screen.findByLabelText("CI capabilities");
     expect(ciLegacy).toHaveTextContent("OpenAI proxy");
     expect(ciLegacy).not.toHaveTextContent("cloud-key");
 
@@ -457,9 +456,9 @@ describe("RepoPage", () => {
         body: JSON.stringify({ ciCapabilities: [] }),
       },
     );
-    expect(screen.getByLabelText("Default capabilities")).toHaveTextContent(
-      "GCP key",
-    );
+    expect(
+      screen.getByText(/^A task filed against \S+ starts with:/),
+    ).toHaveTextContent("GCP key");
   });
 
   it("reports a CI capability save failure and preserves the selection", async () => {
@@ -560,7 +559,7 @@ describe("RepoPage", () => {
       screen.getByRole("link", { name: "3 tasks filed here" }),
     ).toHaveAttribute("href", "/?f=repo:any:acme/widgets");
     expect(screen.queryByText("task list")).not.toBeInTheDocument();
-    await screen.findByLabelText("Default capabilities");
+    await screen.findByText(/^A task filed against \S+ starts with:/);
   });
 
   // docs/test-runs/2026-11-07-repository-release-memory-ui.md,
@@ -580,7 +579,7 @@ describe("RepoPage", () => {
         name: "1 task still targets this repo, which is no longer on the target list",
       }),
     ).toHaveAttribute("href", "/?f=repo:any:acme/gadgets");
-    await screen.findByLabelText("Default capabilities");
+    await screen.findByText(/^A task filed against \S+ starts with:/);
   });
 
   // grain/task-47: this page is what a Repos row opens, so it is headed
@@ -592,7 +591,7 @@ describe("RepoPage", () => {
   it("follows a change to the address's hash to the tab it names", async () => {
     routeApi();
     renderPage({ tab: "agents" });
-    await screen.findByLabelText("Default capabilities");
+    await screen.findByText(/^A task filed against \S+ starts with:/);
     expect(screen.getByRole("tab", { name: "Agents" })).toHaveAttribute(
       "aria-selected",
       "true",
@@ -617,7 +616,7 @@ describe("RepoPage", () => {
     expect(
       screen.getByRole("heading", { name: "acme/widgets" }),
     ).toBeInTheDocument();
-    await screen.findByLabelText("Default capabilities");
+    await screen.findByText(/^A task filed against \S+ starts with:/);
   });
 
   // grain/task-143: the page is about a repo that lives on GitHub, and
@@ -634,7 +633,7 @@ describe("RepoPage", () => {
     expect(
       screen.getByRole("heading", { name: "acme/widgets" }),
     ).toContainElement(link);
-    await screen.findByLabelText("Default capabilities");
+    await screen.findByText(/^A task filed against \S+ starts with:/);
   });
 
   it("loads the repo's branches and capabilities on landing, with no button to press first", async () => {
@@ -754,7 +753,7 @@ describe("RepoPage", () => {
     routeApi();
     const user = userEvent.setup();
     renderPage({ tab: "branches" });
-    await screen.findByLabelText("Default capabilities");
+    await screen.findByText(/^A task filed against \S+ starts with:/);
 
     answerOnce(addingBranch, () =>
       Promise.resolve({
@@ -880,7 +879,7 @@ describe("RepoPage", () => {
     const showError = vi.fn();
     const user = userEvent.setup();
     renderPage({ tab: "branches", showError });
-    await screen.findByLabelText("Default capabilities");
+    await screen.findByText(/^A task filed against \S+ starts with:/);
 
     answerOnce(addingBranch, () =>
       Promise.reject(new Error("invalid branch name")),
@@ -972,97 +971,6 @@ describe("RepoPage", () => {
     ).toHaveTextContent("nothing -- only what whoever files it ticks");
   });
 
-  it("saves the repo's default capabilities and refreshes the config the new-task form seeds from", async () => {
-    routeApi();
-    const config = {
-      capabilities: [
-        { id: "gcp-key", name: "GCP key" },
-        { id: "gemini-key", name: "Gemini key" },
-      ],
-    };
-    const onRefreshConfig = vi.fn().mockResolvedValue(undefined);
-    const user = userEvent.setup();
-    renderPage({ config, onRefreshConfig });
-
-    await user.click(await screen.findByLabelText("Default capabilities"));
-    answerOnce(savingCapabilities, () =>
-      Promise.resolve({
-        repo: "acme/widgets",
-        defaultCapabilities: ["gcp-key"],
-        deploymentDefaultCapabilities: [],
-        effectiveDefaultCapabilities: ["gcp-key"],
-      }),
-    );
-    await user.click(await screen.findByRole("option", { name: "GCP key" }));
-    await user.keyboard("{Escape}");
-
-    expect(api).toHaveBeenCalledWith("/api/repos/acme/widgets/capabilities", {
-      method: "PUT",
-      body: JSON.stringify({ defaultCapabilities: ["gcp-key"] }),
-    });
-    expect(onRefreshConfig).toHaveBeenCalled();
-  });
-
-  // grain/task-43: the per-repo set is reported as stored too, so a
-  // capability retired since this repo named it arrives ticked with no
-  // row in config.capabilities to untick it -- and PUT rejects the whole
-  // set as "unknown capability" every time this form is saved with it
-  // still there. Its own row is the only way out.
-  it("offers a row for a stored repo default this build no longer lists", async () => {
-    routeApi({
-      caps: {
-        repo: "acme/widgets",
-        defaultCapabilities: ["gcp-key", "scratch-repo"],
-        deploymentDefaultCapabilities: [],
-        effectiveDefaultCapabilities: ["gcp-key"],
-      },
-    });
-    const config = { capabilities: [{ id: "gcp-key", name: "GCP key" }] };
-    const user = userEvent.setup();
-    renderPage({ config });
-
-    await user.click(await screen.findByLabelText("Default capabilities"));
-    const retired = await screen.findByRole("option", { name: /scratch-repo/ });
-    expect(retired).toHaveTextContent(
-      "No longer offered -- untick to remove it",
-    );
-
-    answerOnce(savingCapabilities, () =>
-      Promise.resolve({
-        repo: "acme/widgets",
-        defaultCapabilities: ["gcp-key"],
-        deploymentDefaultCapabilities: [],
-        effectiveDefaultCapabilities: ["gcp-key"],
-      }),
-    );
-    await user.click(retired);
-    await user.keyboard("{Escape}");
-
-    expect(api).toHaveBeenCalledWith("/api/repos/acme/widgets/capabilities", {
-      method: "PUT",
-      body: JSON.stringify({ defaultCapabilities: ["gcp-key"] }),
-    });
-  });
-
-  it("reports the error when saving the repo's default capabilities fails", async () => {
-    routeApi();
-    const config = { capabilities: [{ id: "gcp-key", name: "GCP key" }] };
-    const showError = vi.fn();
-    const user = userEvent.setup();
-    renderPage({ config, showError });
-    await user.click(await screen.findByLabelText("Default capabilities"));
-
-    answerOnce(savingCapabilities, () =>
-      Promise.reject(new Error("unknown capability nope")),
-    );
-    await user.click(await screen.findByRole("option", { name: "GCP key" }));
-    await user.keyboard("{Escape}");
-
-    expect(showError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "unknown capability nope" }),
-    );
-  });
-
   it("does not offer Remove for the config repo", async () => {
     routeApi();
     renderPage({
@@ -1076,7 +984,7 @@ describe("RepoPage", () => {
     expect(
       screen.queryByRole("button", { name: "Remove" }),
     ).not.toBeInTheDocument();
-    await screen.findByLabelText("Default capabilities");
+    await screen.findByText(/^A task filed against \S+ starts with:/);
   });
 
   it("only offers Remove for a repo that is on the allowlist", async () => {
@@ -1086,7 +994,7 @@ describe("RepoPage", () => {
     expect(
       screen.queryByRole("button", { name: "Remove" }),
     ).not.toBeInTheDocument();
-    await screen.findByLabelText("Default capabilities");
+    await screen.findByText(/^A task filed against \S+ starts with:/);
   });
 
   it("removes the repo after confirmation and returns to the list", async () => {
@@ -1139,7 +1047,7 @@ describe("RepoPage", () => {
       tab: "advanced",
       config: { targetRepos: ["acme/widgets", "acme/gadgets"] },
     });
-    await screen.findByLabelText("Default capabilities");
+    await screen.findByText(/^A task filed against \S+ starts with:/);
 
     await user.click(screen.getByRole("button", { name: "Remove" }));
 
@@ -1176,7 +1084,7 @@ describe("RepoPage", () => {
       config: { targetRepos: ["acme/widgets"] },
       showError,
     });
-    await screen.findByLabelText("Default capabilities");
+    await screen.findByText(/^A task filed against \S+ starts with:/);
 
     await user.click(screen.getByRole("button", { name: "Remove" }));
 
@@ -1200,7 +1108,7 @@ describe("RepoPage", () => {
       onBack,
       onRefreshConfig,
     });
-    await screen.findByLabelText("Default capabilities");
+    await screen.findByText(/^A task filed against \S+ starts with:/);
 
     await user.click(screen.getByRole("button", { name: "Remove" }));
 
@@ -1224,7 +1132,7 @@ describe("RepoPage", () => {
     renderPage({ repo: "acme/orphan", config });
 
     expect(screen.getByText(/known here only because it/)).toBeInTheDocument();
-    await screen.findByLabelText("Default capabilities");
+    await screen.findByText(/^A task filed against \S+ starts with:/);
   });
 
   // grain/task-114: a repo's own standing instructions, edited here for
@@ -2119,6 +2027,69 @@ describe("RepoPage", () => {
     ).toBeInTheDocument();
   });
 
+  it("says an import whose source could not be listed read nothing", async () => {
+    // A missing source repository used to answer "Read 0 open issues
+    // ... Some could not be imported", as if the source had no issues
+    // and some of them failed (2026-11-09 repository walkthrough).
+    routeApi({
+      upToDate: {
+        repo: "acme/widgets",
+        issueImport: {
+          enabled: true,
+          approved: false,
+          repo: "acme/gone",
+          label: "",
+          intervalSeconds: 0,
+          effectiveIntervalSeconds: 600,
+        },
+      },
+    });
+    const listing = api.getMockImplementation();
+    const answers = [
+      {
+        repo: "acme/widgets",
+        source: "acme/gone",
+        open: 0,
+        imported: [],
+        skipped: 0,
+        error:
+          "listing open issues on acme/gone: GitHub answered 404: Not Found",
+      },
+      {
+        repo: "acme/widgets",
+        source: "acme/gone",
+        open: 2,
+        imported: ["7"],
+        skipped: 0,
+        error: "filing issue #9: store is read-only",
+      },
+    ];
+    api.mockImplementation((path, opts) =>
+      opts && /\/import-issues$/.test(path)
+        ? Promise.resolve(answers.shift())
+        : listing(path, opts),
+    );
+    const user = userEvent.setup();
+    renderPage({ tab: "agents" });
+
+    const now = await screen.findByRole("button", {
+      name: "Import issues now",
+    });
+    await user.click(now);
+    const failed = await screen.findByText(
+      "Could not read the open issues on acme/gone: listing open issues on acme/gone: GitHub answered 404: Not Found",
+    );
+    expect(failed).toHaveAttribute("role", "status");
+    expect(screen.queryByText(/Read 0 open issues/)).not.toBeInTheDocument();
+
+    await user.click(now);
+    expect(
+      await screen.findByText(
+        "Read 2 open issues on acme/gone: imported 1, 0 already imported. Some could not be imported: filing issue #9: store is read-only",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("switching issue import on saves the label typed before it", async () => {
     // The first pass runs on the next cycle, so a label typed but not
     // saved has to go with the switch, or that pass reads every open
@@ -2639,10 +2610,6 @@ describe("RepoPage", () => {
         "true",
       );
       await openTab("Agents");
-      expect(screen.getByLabelText("Default capabilities")).toHaveAttribute(
-        "aria-disabled",
-        "true",
-      );
       expect(
         screen.getByLabelText("Prompt extension for acme/widgets"),
       ).toBeDisabled();

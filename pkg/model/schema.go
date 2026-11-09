@@ -614,7 +614,15 @@ import "strconv"
 // templates and schedules), so a store saved before API policy writes checked
 // defaults exports a state repository that passes grain state check
 // (catalogue_disabled_migration.go).
-const SchemaVersion = 128
+// 129 changes no table: it rewrites retired capability names in
+// `task_grant_wait` (including `github-sandbox`) that earlier
+// rewriteLegacyGrantsMulti migrations left under their retired names
+// (legacy_grant_migration.go).
+// 130 adds token accounting (tokenusage.go): `task_run_usage`, one row per
+// run that reported its provider usage; `usage_capacity`, the usage a
+// (connection, model) window had consumed when its provider refused it;
+// and `usage_setting`, the operator's budgets and concurrency mode.
+const SchemaVersion = 130
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -4291,6 +4299,13 @@ var Tables = []string{
 	hostdTokenTable,
 	hostEnrollmentCodeTable,
 	hostJoinRequestTable,
+
+	// Token accounting (tokenusage.go, schema 129).
+	taskRunUsageTable,
+	taskRunUsageFinishedIndex,
+	taskRunUsageTaskIndex,
+	usageCapacityTable,
+	usageSettingTable,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`secret_resolution_audit`" + ` (
   ` + "`id`" + `          INTEGER PRIMARY KEY AUTOINCREMENT,

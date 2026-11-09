@@ -601,8 +601,22 @@ type hostdCacheTarget struct {
 type hostdTargetState struct {
 	socketPresent   bool
 	socketModUnixNs int64
+	socketInfo      os.FileInfo
 	remoteConnected bool
 	remoteSessions  int
+}
+
+func (a hostdTargetState) sameAs(b hostdTargetState) bool {
+	if a.socketPresent != b.socketPresent ||
+		a.socketModUnixNs != b.socketModUnixNs ||
+		a.remoteConnected != b.remoteConnected ||
+		a.remoteSessions != b.remoteSessions {
+		return false
+	}
+	if a.socketPresent && !os.SameFile(a.socketInfo, b.socketInfo) {
+		return false
+	}
+	return true
 }
 
 func currentHostdTargetState(exec HostExecutor) hostdTargetState {
@@ -622,6 +636,7 @@ func currentHostdTargetState(exec HostExecutor) hostdTargetState {
 	if info, err := os.Stat(exec.Socket); err == nil {
 		out.socketPresent = true
 		out.socketModUnixNs = info.ModTime().UnixNano()
+		out.socketInfo = info
 	}
 	return out
 }
@@ -676,7 +691,7 @@ func queryHostdOffers(ctx context.Context, exec HostExecutor, timeout time.Durat
 		probe, ok := cache.targets[target]
 		var serve *hostdOffersProbe // a known failure to answer with now
 		wait := false               // coalesce onto probe in flight
-		if ok && probe.state == curState {
+		if ok && probe.state.sameAs(curState) {
 			select {
 			case <-probe.done:
 				if probe.err != nil && !probe.aborted {

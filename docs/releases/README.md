@@ -25,37 +25,47 @@ Each file has:
 
 ## How they are written
 
-Releases are made from `main` by the release train
-(`.grain/workflows/release-train.yml`, running
-`scripts/release-from-trunk.sh`; `docs/release-candidate-management.md`).
-When a release candidate `vX.Y.0-rc.N` passes its staging soak, the train
-stages it as `vX.Y.0-pending` and files a task from
-`.grain/templates/release-notes.yml`. That task:
+Releases go out continuously from `main` by the release train
+(`.grain/schedules/release-train.yml` running `scripts/release-train-task.sh`
+and `scripts/release-from-trunk.sh`; `design/playbook/releases.playbook.md`).
+When a release candidate `vX.Y.0-rc.N` passes two-stage qualification
+(`nightly.yml` and `grain/release-qualification`), the train promotes `vX.Y.0`
+and moves `latest` automatically -- or stages `vX.Y.0-pending` when a person
+must approve (a major bump, breaking changes, or `RELEASE_AUTO_PROMOTE=false`).
+
+Grain's outbound `release-notes` reconciler (`pkg/orchestrator/releasenotes.go`)
+watches the repository's release tags and, whenever a promoted `vX.Y.Z` tag
+(or a staged `vX.Y.Z-pending` tag) has no `docs/releases/vX.Y.Z.md` on `main`
+and no open task, files one task from `.grain/templates/release-notes.yml`.
+That task:
 
 - drafts the Highlights from what landed since the previous release;
-- runs `scripts/release-notes.sh vX.Y.0 <previous> 'vX.Y.0-pending^{commit}' <highlights>`;
-- opens a pull request for `docs/releases/vX.Y.0.md` against `main`, which
-  merges on its own.
+- runs `scripts/release-notes.sh vX.Y.Z <previous> '<to-ref>^{commit}' <highlights>`;
+- opens a pull request for `docs/releases/vX.Y.Z.md` against `main`, which
+  merges automatically on green CI (`auto-merge: true`).
 
-This happens before a person approves the release. The operator
-notification for `vX.Y.0` links to the task, so whoever approves can read
-the notes first.
+For a staged `-pending` release, the operator notification in the Inbox quotes
+`docs/releases/vX.Y.Z.md` once merged so whoever approves can read the notes
+first.
 
-- The previous release is the newest `vX.Y.0` that `RELEASE_NEVER_PROMOTE`
-  in `scripts/release.conf` does not name, so notes never run from a
-  placeholder tag.
-- The lists cover `main`'s first-parent history between the two releases.
-  There are no back-merges and no ports to account for, because every
-  release is a commit on `main`.
-- If a file for the release is already on `main`, the task leaves it as it
-  is. Notes written or edited by hand are never overwritten.
-- If the pending release is rejected before the task runs, the task writes
+- The previous release is the newest earlier `vX.Y.Z` that is neither
+  retracted (`-retracted`) nor named by `RELEASE_NEVER_PROMOTE` in
+  `scripts/release.conf`, so notes never run from a placeholder or retracted
+  tag.
+- The lists cover first-parent history between the two releases.
+- If a file for the release is already on `main`, both the reconciler and the
+  task leave it as it is. Notes written or edited by hand are never
+  overwritten. Historical releases older than the newest `docs/releases/vX.Y.Z.md`
+  already on `main` (such as `v3.0.0`–`v3.0.2`, folded into `v3.1.0.md`) are
+  left alone too, while a new hotfix patch on an already-documented minor line
+  still gets its own task.
+- If a pending release is rejected before the task runs, the task writes
   nothing. Notes for a rejected release that already merged stay until a
-  later rc of the same minor is approved, and that release's task leaves
-  them as they are. Edit them in a normal pull request.
+  later rc of the same version is promoted, and that release leaves them as
+  they are. Edit them in a normal pull request.
 - To correct a release's notes, edit its file in a normal pull request.
-- A patch release (`vX.Y.Z`, `release/vX.Y.Z`) has notes written by hand,
-  listing only the picked fixes.
+- A patch release (`vX.Y.Z`, `release/vX.Y.Z`) may also have notes written by
+  hand before or after tagging, listing the picked fixes.
 
 Releases up to `v2.4.0` were promoted by the legacy evening cut, which wrote
 their notes itself and back-merged `candidate` into `main`. Its owed-ports

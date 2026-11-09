@@ -122,18 +122,27 @@ func TestSplitRequestGrants(t *testing.T) {
 		t.Errorf("Target = %v", got.Target)
 	}
 
-	// Both spellings of one kind are refused rather than merged.
+	// Both spellings of one kind are refused rather than merged, and target
+	// refusals name the field(s) the request actually sent.
 	for _, tc := range []struct {
 		g      Grant
 		legacy GrantSpelling
+		want   string
 	}{
-		{Grant{Capability: "api:ci:read"}, GrantSpelling{Capabilities: true}},
-		{Grant{Capability: RepoReadRef, With: json.RawMessage(`{"repo":"a/b"}`)}, GrantSpelling{Reads: true}},
-		{Grant{Capability: RepoWriteRef, With: json.RawMessage(`{"repo":"a/b","base":""}`)}, GrantSpelling{Writes: true}},
-		{Grant{Capability: RepoTargetRef, With: json.RawMessage(`{"repo":"a/b","base":""}`)}, GrantSpelling{Target: true}},
+		{Grant{Capability: "api:ci:read"}, GrantSpelling{Capabilities: true}, "and capabilities both name capability grants"},
+		{Grant{Capability: RepoReadRef, With: json.RawMessage(`{"repo":"a/b"}`)}, GrantSpelling{Reads: true}, "and reads both name read access"},
+		{Grant{Capability: RepoWriteRef, With: json.RawMessage(`{"repo":"a/b","base":""}`)}, GrantSpelling{Writes: true}, "and writes both name write targets"},
+		{Grant{Capability: RepoTargetRef, With: json.RawMessage(`{"repo":"a/b","base":""}`)}, GrantSpelling{Target: true}, "the request's repo field both name the task's repository"},
+		{Grant{Capability: RepoTargetRef, With: json.RawMessage(`{"repo":"a/b","base":""}`)}, GrantSpelling{TargetFields: []string{"branch"}}, "the request's branch field both name the task's repository"},
+		{Grant{Capability: RepoTargetRef, With: json.RawMessage(`{"repo":"a/b","base":""}`)}, GrantSpelling{TargetFields: []string{"base"}}, "the request's base field both name the task's repository"},
+		{Grant{Capability: RepoTargetRef, With: json.RawMessage(`{"repo":"a/b","base":""}`)}, GrantSpelling{TargetFields: []string{"no_repo"}}, "the request's no_repo field both name the task's repository"},
+		{Grant{Capability: RepoTargetRef, With: json.RawMessage(`{"repo":"a/b","base":""}`)}, GrantSpelling{TargetFields: []string{"repo", "branch"}}, "the request's repo and branch fields both name the task's repository"},
 	} {
-		if _, err := SplitRequestGrants([]Grant{tc.g}, tc.legacy); err == nil {
+		_, err := SplitRequestGrants([]Grant{tc.g}, tc.legacy)
+		if err == nil {
 			t.Errorf("SplitRequestGrants(%s, %+v) merged both spellings", tc.g.Key(), tc.legacy)
+		} else if !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("SplitRequestGrants(%s, %+v) = %q, want substring %q", tc.g.Key(), tc.legacy, err.Error(), tc.want)
 		}
 	}
 	// A kind sent only once is fine beside another kind's old spelling.

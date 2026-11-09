@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { accessCode } from "./accesscode.js";
 import { expect, test } from "./fixtures.js";
 import { chooseOption } from "./searchSelect.js";
 
@@ -19,7 +24,7 @@ import { chooseOption } from "./searchSelect.js";
 // design/design/unified-grants.design.md) on the task pane, at desktop and phone
 // widths: the held grants are one stack of sections inside it -- a grant
 // with nothing to set on a single line -- "Add grant…" sits under it,
-// the legacy checklist above it, and the menu stays on screen.
+// with no legacy checklist beside it, and the menu stays on screen.
 
 const KEY = "https://grain.dev/capabilities/cloud-key#cloud-key";
 // grain demo's own capability server's method with arguments.
@@ -29,7 +34,7 @@ for (const [label, size] of [
   ["desktop", { width: 1440, height: 900 }],
   ["phone", { width: 390, height: 844 }],
 ]) {
-  test(`grants are one stack of sections under the legacy checklist (${label})`, async ({
+  test(`grants are one stack of sections (${label})`, async ({
     page,
     request,
   }) => {
@@ -105,11 +110,10 @@ for (const [label, size] of [
     const addBox = await add.boundingBox();
     expect(addBox.y).toBeGreaterThanOrEqual(held.y + held.height - 0.5);
 
-    // The legacy checklist is a separate control above the section.
-    const legacy = await page
-      .getByRole("combobox", { name: "Legacy capabilities" })
-      .boundingBox();
-    expect(legacy.y + legacy.height).toBeLessThanOrEqual(box.y);
+    // There is no legacy checklist beside it any more.
+    await expect(
+      page.getByRole("combobox", { name: "Legacy capabilities" }),
+    ).toHaveCount(0);
 
     // The menu opens on screen.
     await add.click();
@@ -149,3 +153,140 @@ test("one search on the new task overlay reaches both an API scope and a server 
   ).toBeVisible();
   await expect(held.locator(`[data-grant^="${KEY}"]`)).toHaveCount(0);
 });
+
+async function startSeededBareServer(dataDir) {
+  const helper = process.env.GRAIN_E2E_DEFAULTS_BIN;
+  if (!helper) throw new Error("GRAIN_E2E_DEFAULTS_BIN is unset");
+  const proc = spawn(
+    helper,
+    [
+      "-addr",
+      "127.0.0.1:0",
+      "-data-dir",
+      dataDir,
+      "-seed-bare-grant",
+      "1=self-debug",
+      "-seed-bare-grant",
+      "1=api:tasks:read",
+    ],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+  let output = "";
+  const url = await new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () =>
+        reject(new Error(`defaults server did not start. Output:\n${output}`)),
+      60_000,
+    );
+    const finish = (fn, value) => {
+      clearTimeout(timer);
+      fn(value);
+    };
+    const read = (chunk) => {
+      output += chunk;
+      const match = output.match(
+        /defaults server at (http:\/\/127\.0\.0\.1:\d+)/,
+      );
+      if (match) finish(resolve, match[1]);
+    };
+    proc.stdout.on("data", read);
+    proc.stderr.on("data", read);
+    proc.on("error", (err) => finish(reject, err));
+    proc.on("exit", (code, signal) =>
+      finish(
+        reject,
+        new Error(
+          `defaults server exited (code ${code}, signal ${signal}). Output:\n${output}`,
+        ),
+      ),
+    );
+  });
+  return {
+    url,
+    async stop() {
+      const stopped = new Promise((resolve) => proc.once("exit", resolve));
+      proc.kill("SIGKILL");
+      await stopped;
+    },
+  };
+}
+
+for (const [label, size] of [
+  ["desktop", { width: 1440, height: 900 }],
+  ["phone", { width: 390, height: 844 }],
+]) {
+  test(`task pane shows a held bare capability id as a removable GrantLine (${label})`, async ({
+    page,
+  }) => {
+    const dataDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "grain-bare-grant-"),
+    );
+    const server = await startSeededBareServer(dataDir);
+    try {
+      await page.setViewportSize(size);
+      await page.goto(`${server.url}/tasks/1`);
+
+      const section = page.getByTestId("task-1-grants");
+      await section.scrollIntoViewIfNeeded();
+      const bareLine = section.locator('.grant-line[data-grant="self-debug"]');
+      await expect(bareLine).toBeVisible();
+      await expect(bareLine).toContainText(
+        "Retired alias of api:self-debug + grain#source",
+      );
+      await expect(
+        bareLine.getByText("retired alias", { exact: true }),
+      ).toBeVisible();
+
+      const sectionBox = await section.boundingBox();
+      const lineBox = await bareLine.boundingBox();
+      expect(lineBox.x).toBeGreaterThanOrEqual(sectionBox.x - 0.5);
+      expect(lineBox.x + lineBox.width).toBeLessThanOrEqual(
+        sectionBox.x + sectionBox.width + 0.5,
+      );
+      expect(lineBox.height).toBeLessThanOrEqual(44);
+      expect(sectionBox.x + sectionBox.width).toBeLessThanOrEqual(size.width);
+
+      const labelBox = await bareLine.locator(".grant-label").boundingBox();
+      const badgeBox = await bareLine.locator(".grant-badge").boundingBox();
+      expect(
+        Math.abs(
+          badgeBox.y + badgeBox.height / 2 - (labelBox.y + labelBox.height / 2),
+        ),
+      ).toBeLessThan(4);
+
+      const removeBtn = bareLine.getByRole("button", {
+        name: "Remove self-debug (retired alias)",
+      });
+      const removeBox = await removeBtn.boundingBox();
+      expect(removeBox.y).toBeGreaterThanOrEqual(lineBox.y - 0.5);
+      expect(removeBox.y + removeBox.height).toBeLessThanOrEqual(
+        lineBox.y + lineBox.height + 0.5,
+      );
+      expect(removeBox.x + removeBox.width).toBeGreaterThan(
+        lineBox.x + lineBox.width - 48,
+      );
+
+      await removeBtn.click();
+      await expect(bareLine).toHaveCount(0);
+
+      await page.reload();
+      const reloaded = page.getByTestId("task-1-grants");
+      await expect(
+        reloaded.locator('.grant-line[data-grant="api:tasks:read"]'),
+      ).toBeVisible();
+      await expect(
+        reloaded.locator('.grant-line[data-grant="self-debug"]'),
+      ).toHaveCount(0);
+
+      const detailRes = await fetch(`${server.url}/api/tasks/1`, {
+        headers: { Authorization: `Bearer ${accessCode()}` },
+      });
+      expect(detailRes.ok).toBeTruthy();
+      const detail = await detailRes.json();
+      expect(detail.capabilities).toEqual(["api:tasks:read"]);
+    } finally {
+      await server.stop();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+}

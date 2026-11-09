@@ -688,8 +688,7 @@ type Settings struct {
 	CodexAuthJSONSet    bool `json:"codexAuthJSONSet"`
 	// AgentKeyChecksEnabled is whether this deployment can go and ask the
 	// vendor whether one of those credentials still works
-	// (Config.AgentKeyChecks, POST /api/agent-keys/{framework}/check) --
-	// CapabilityStatus.Checkable's own role for the Capabilities tab,
+	// (Config.AgentKeyChecks, POST /api/agent-keys/{framework}/check),
 	// reported once here because the answer is the same for all three
 	// frameworks. False means no pane should offer a button that could
 	// only ever 404.

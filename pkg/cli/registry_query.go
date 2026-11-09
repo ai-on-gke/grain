@@ -61,9 +61,9 @@ type registryTargetFlags struct {
 
 func bindRegistryTargetFlags(fs *flag.FlagSet) registryTargetFlags {
 	return registryTargetFlags{
-		url:          fs.String("registry-url", "", "base URL of the grain registry ($"+daemon.RegistryURLEnv+")"),
-		token:        fs.String("registry-token", "", "bearer token for authenticating to the registry ($"+daemon.RegistryTokenEnv+")"),
-		oidcAudience: fs.String("oidc-audience", "", "OIDC ID token audience for the registry (defaults to -registry-url)"),
+		url:          fs.String("registry-url", "", "base URL of the Grain Hub ($"+daemon.RegistryURLEnv+")"),
+		token:        fs.String("registry-token", "", "bearer token for authenticating to the hub ($"+daemon.RegistryTokenEnv+")"),
+		oidcAudience: fs.String("oidc-audience", "", "OIDC ID token audience for the hub (defaults to -registry-url)"),
 	}
 }
 
@@ -186,7 +186,7 @@ func printConnectedConfigSnippet(registryURL, entryName, entryURL, tokenFile str
 func cmdRegistryList(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain registry list", flag.ContinueOnError)
 	tf := bindRegistryTargetFlags(fs)
-	all := fs.Bool("all", false, "list all entries across the registry (admin only)")
+	all := fs.Bool("all", false, "list all entries across the hub (admin only)")
 	owner := fs.String("owner", "", "filter by owner email")
 	ownerGroup := fs.String("owner-group", "", "filter by co-owning group")
 	kind := fs.String("kind", "", "filter by entry kind: instance or connected")
@@ -234,7 +234,7 @@ func cmdRegistryList(ctx context.Context, c *ui.HTTPClient, out *printer, args [
 		return nil
 	}
 	if len(entries) == 0 {
-		fmt.Println("no registry entries found")
+		fmt.Println("no hub entries found")
 		return nil
 	}
 	for _, e := range entries {
@@ -242,8 +242,12 @@ func cmdRegistryList(ctx context.Context, c *ui.HTTPClient, out *printer, args [
 		if urlStr == "" {
 			urlStr = "-"
 		}
-		fmt.Printf("%-24s %-10s %-10s %-9s listed=%-5t owner=%-24s %s\n",
+		line := fmt.Sprintf("%-24s %-10s %-10s %-9s listed=%-5t owner=%-24s %s",
 			e.Name, e.Kind, e.State, e.Status, e.Listed, e.Owner, urlStr)
+		if detail := strings.Join(strings.Fields(e.StatusDetail), " "); detail != "" {
+			line += "  detail=" + detail
+		}
+		fmt.Println(line)
 	}
 	return nil
 }
@@ -399,6 +403,15 @@ func cmdRegistryShow(ctx context.Context, c *ui.HTTPClient, out *printer, args [
 	}
 	fmt.Printf("Kind:        %s (host_kind=%s)\n", entry.Kind, entry.HostKind)
 	fmt.Printf("State:       %s (status=%s, listed=%t)\n", entry.State, entry.Status, entry.Listed)
+	if entry.ReplaceStep != "" {
+		fmt.Printf("Step:        %s\n", entry.ReplaceStep)
+	}
+	if detail := strings.TrimSpace(entry.StatusDetail); detail != "" {
+		fmt.Printf("Detail:      %s\n", detail)
+	}
+	if hDetail := strings.TrimSpace(entry.HealthDetail); hDetail != "" && hDetail != strings.TrimSpace(entry.StatusDetail) {
+		fmt.Printf("Health:      %s\n", hDetail)
+	}
 	if entry.DisplayName != "" {
 		fmt.Printf("Display:     %s\n", entry.DisplayName)
 	}
@@ -414,6 +427,9 @@ func cmdRegistryShow(ctx context.Context, c *ui.HTTPClient, out *printer, args [
 	}
 	if entry.Shape != "" {
 		fmt.Printf("Shape:       %s\n", entry.Shape)
+	}
+	if entry.BootDiskGB > 0 {
+		fmt.Printf("Disk:        %d GB\n", entry.BootDiskGB)
 	}
 	if entry.GrainVersion != "" {
 		fmt.Printf("Version:     %s (%s)\n", entry.GrainVersion, entry.GrainCommit)
