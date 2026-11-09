@@ -1,0 +1,114 @@
+grain: 49 versions
+guest-base: 57 versions
+
+keeping 78 versions:
+  keep   grain        <untagged>           2026-10-19 -- untagged: left alone (it may be part of a tagged image)
+  keep   grain        <untagged>           2026-10-19 -- untagged: left alone (it may be part of a tagged image)
+  keep   grain        latest,v3.1.0,sha-8a740f9 2026-10-30 -- "latest" is the name every deployment resolves
+  keep   grain        sha256-38fe623e5a8488427a5d8d001723488da281bc5d7ab716b002947dae18e54239.sig 2026-10-30 -- signs sha256:38fe623e5a8488427a5d8d001723488da281bc5d7ab716b002947dae18e54239, which this run keeps
+  keep   grain        sha-15cbf18          2026-11-02 -- "sha-15cbf18" is one of the 30 newest builds
+  keep   grain        sha-25eb40c          2026-11-02 -- "sha-25eb40c" is one of the 30 newest builds
+  keep   grain        sha-e71674c          2026-11-02 -- "sha-e71674c" is one of the 30 newest builds
+  keep   grain        sha-5d9598d          2026-11-02 -- "sha-5d9598d" is one of the 30 newest builds
+  keep   grain        sha-5abcd61          2026-11-02 -- "sha-5abcd61" is one of the 30 newest builds
+  keep   grain        sha-03d9264          2026-11-03 -- "sha-03d9264" is one of the 30 newest builds
+  keep   grain        sha-644dbda          2026-11-03 -- "sha-644dbda" is one of the 30 newest builds
+  keep   grain        sha-a6360c1          2026-11-03 -- "sha-a6360c1" is one of the 30 newest builds
+  keep   grain        sha-8fc5bcf          2026-11-03 -- "sha-8fc5bcf" is one of the 30 newest builds
+  keep   grain        sha-8e7371a          2026-11-03 -- "sha-8e7371a" is one of the 30 newest builds
+  keep   grain        sha-6f5ca0a          2026-11-03 -- "sha-6f5ca0a" is one of the 30 newest builds
+  keep   grain        sha-5089b49          2026-11-04 -- "sha-5089b49" is one of the 30 newest builds
+  keep   grain        sha-ec9bf3e          2026-11-04 -- "sha-ec9bf3e" is one of the 30 newest builds
+  keep   grain        sha-2290ffc          2026-11-04 -- "sha-2290ffc" is one of the 30 newest builds
+  keep   grain        sha-77c047d          2026-11-04 -- "sha-77c047d" is one of the 30 newest builds
+  keep   grain        sha-58d0ef0          2026-11-04 -- "sha-58d0ef0" is one of the 30 newest builds
+  keep   grain        grain..098073e4..task-3733-walkthrough-codex-504-fallback,sha-1234abc 2026-11-04 -- "grain..098073e4..task-3733-walkthrough-codex-504-fallback" is a branch that still exists, and this is the build it names
+  keep   grain        sha-27cd534          2026-11-04 -- "sha-27cd534" is one of the 30 newest builds
+  keep   grain        v3.2.0-pending       2026-11-05 -- "v3.2.0-pending" is a staged release nobody has approved or rejected yet
+  keep   grain        sha-34260b8          2026-11-05 -- "sha-34260b8" is one of the 30 newest builds
+  keep   grain        sha-98e8bdc          2026-11-05 -- "sha-98e8bdc" is one of the 30 newest builds
+  keep   grain        sha-5dd6b89          2026-11-05 -- "sha-5dd6b89" is one of the 30 newest builds
+  keep   grain        sha-1bef82b          2026-11-05 -- "sha-1bef82b" is one of the 30 newest builds
+  keep   grain        sha-59af644          2026-11-05 -- "sha-59af644" is one of the 30 newest builds
+  keep   grain        sha-41859e3          2026-11-05 -- "sha-41859e3" is one of the 30 newest builds
+  keep   grain        release..v3.2.0,sha-0a1b2c3 2026-11-06 -- "release..v3.2.0" is a branch that still exists, and this is the build it names
+  keep   grain        sha-9708332          2026-11-06 -- "sha-9708332" is one of the 30 newest builds
+  keep   grain        v3.2.0-rc.2,candidate,rc 2026-11-06 -- "candidate" is a branch that still exists, and this is the build it names
+  keep   grain        sha-0402646          2026-11-06 -- "sha-0402646" is one of the 30 newest builds
+  keep   grain        sha-89df505          2026-11-06 -- "sha-89df505" is one of the 30 newest builds
+  keep   grain        sha-9bd8269          2026-11-06 -- "sha-9bd8269" is one of the 30 newest builds
+  keep   grain        main,sha-a59d1e4     2026-11-09 -- pushed 1h ago, inside the 48h window
+  keep   grain        sha256-10ce33b76fff04823c0019fa617475cdc51ca968021ceb1bffb935d4ed9678f9.sig 2026-11-09 -- signs sha256:10ce33b76fff04823c0019fa617475cdc51ca968021ceb1bffb935d4ed9678f9, which this run keeps
+  keep   guest-base   <untagged>           2026-10-19 -- untagged: left alone (it may be part of a tagged image)
+  keep   guest-base   <untagged>           2026-10-19 -- untagged: left alone (it may be part of a tagged image)
+  keep   guest-base   latest,v3.1.0,sha-8a740f9 2026-10-30 -- "latest" is the name every deployment resolves
+  keep   guest-base   sha256-cc44a1d2e75197bdf1bb846b90c6ffa8b9071b9bbe448010a493a481e4be3628.sig 2026-10-30 -- signs sha256:cc44a1d2e75197bdf1bb846b90c6ffa8b9071b9bbe448010a493a481e4be3628, which this run keeps
+  keep   guest-base   5cf989d3841e1222     2026-10-31 -- "5cf989d3841e1222" is one of the 5 newest granule base caches
+  keep   guest-base   83782f4d67e81e1b     2026-11-02 -- "83782f4d67e81e1b" is one of the 5 newest granule base caches
+  keep   guest-base   sha-15cbf18          2026-11-02 -- "sha-15cbf18" is one of the 30 newest builds
+  keep   guest-base   sha-25eb40c          2026-11-02 -- "sha-25eb40c" is one of the 30 newest builds
+  keep   guest-base   sha-e71674c          2026-11-02 -- "sha-e71674c" is one of the 30 newest builds
+  keep   guest-base   sha-5d9598d          2026-11-02 -- "sha-5d9598d" is one of the 30 newest builds
+  keep   guest-base   sha-5abcd61          2026-11-02 -- "sha-5abcd61" is one of the 30 newest builds
+  keep   guest-base   sha-03d9264          2026-11-03 -- "sha-03d9264" is one of the 30 newest builds
+  keep   guest-base   sha-644dbda          2026-11-03 -- "sha-644dbda" is one of the 30 newest builds
+  keep   guest-base   sha-a6360c1          2026-11-03 -- "sha-a6360c1" is one of the 30 newest builds
+  keep   guest-base   sha-8fc5bcf          2026-11-03 -- "sha-8fc5bcf" is one of the 30 newest builds
+  keep   guest-base   sha-8e7371a          2026-11-03 -- "sha-8e7371a" is one of the 30 newest builds
+  keep   guest-base   sha-6f5ca0a          2026-11-03 -- "sha-6f5ca0a" is one of the 30 newest builds
+  keep   guest-base   sha-5089b49          2026-11-04 -- "sha-5089b49" is one of the 30 newest builds
+  keep   guest-base   a1372c7b1509f805     2026-11-04 -- "a1372c7b1509f805" is one of the 5 newest granule base caches
+  keep   guest-base   sha-ec9bf3e          2026-11-04 -- "sha-ec9bf3e" is one of the 30 newest builds
+  keep   guest-base   sha-2290ffc          2026-11-04 -- "sha-2290ffc" is one of the 30 newest builds
+  keep   guest-base   sha-77c047d          2026-11-04 -- "sha-77c047d" is one of the 30 newest builds
+  keep   guest-base   sha-58d0ef0          2026-11-04 -- "sha-58d0ef0" is one of the 30 newest builds
+  keep   guest-base   grain..098073e4..task-3733-walkthrough-codex-504-fallback,sha-1234abc 2026-11-04 -- "grain..098073e4..task-3733-walkthrough-codex-504-fallback" is a branch that still exists, and this is the build it names
+  keep   guest-base   sha-27cd534          2026-11-04 -- "sha-27cd534" is one of the 30 newest builds
+  keep   guest-base   v3.2.0-pending       2026-11-05 -- "v3.2.0-pending" is a staged release nobody has approved or rejected yet
+  keep   guest-base   sha-34260b8          2026-11-05 -- "sha-34260b8" is one of the 30 newest builds
+  keep   guest-base   sha-98e8bdc          2026-11-05 -- "sha-98e8bdc" is one of the 30 newest builds
+  keep   guest-base   sha-5dd6b89          2026-11-05 -- "sha-5dd6b89" is one of the 30 newest builds
+  keep   guest-base   sha-1bef82b          2026-11-05 -- "sha-1bef82b" is one of the 30 newest builds
+  keep   guest-base   sha-59af644          2026-11-05 -- "sha-59af644" is one of the 30 newest builds
+  keep   guest-base   sha-41859e3          2026-11-05 -- "sha-41859e3" is one of the 30 newest builds
+  keep   guest-base   release..v3.2.0,sha-0a1b2c3 2026-11-06 -- "release..v3.2.0" is a branch that still exists, and this is the build it names
+  keep   guest-base   sha-9708332          2026-11-06 -- "sha-9708332" is one of the 30 newest builds
+  keep   guest-base   5268da882e93db0d     2026-11-06 -- "5268da882e93db0d" is one of the 5 newest granule base caches
+  keep   guest-base   v3.2.0-rc.2,candidate,rc 2026-11-06 -- "candidate" is a branch that still exists, and this is the build it names
+  keep   guest-base   sha-0402646          2026-11-06 -- "sha-0402646" is one of the 30 newest builds
+  keep   guest-base   sha-89df505          2026-11-06 -- "sha-89df505" is one of the 30 newest builds
+  keep   guest-base   sha-9bd8269          2026-11-06 -- "sha-9bd8269" is one of the 30 newest builds
+  keep   guest-base   main,sha-a59d1e4,6e17049b224180c1 2026-11-09 -- pushed 1h ago, inside the 48h window
+  keep   guest-base   sha256-28b2ac2511e0274faf9c1c25de35633a9b25b63fcd7a6faf1130ea57cb41aa89.sig 2026-11-09 -- signs sha256:28b2ac2511e0274faf9c1c25de35633a9b25b63fcd7a6faf1130ea57cb41aa89, which this run keeps
+
+would delete 28 versions:
+  delete grain        sha256-283bb9deef02e6843abfb538efa1eca70801bd8a701c3f98191e123496339247.sig 2026-10-27 -- signs sha256:283bb9deef02e6843abfb538efa1eca70801bd8a701c3f98191e123496339247, which is not kept
+  delete grain        grain..098073e4..task-3600-old,sha-dead001 2026-10-31 -- no live tag: grain..098073e4..task-3600-old (8d), sha-dead001 (8d)
+  delete grain        sha-f78be38          2026-10-31 -- no live tag: sha-f78be38 (8d)
+  delete grain        sha256-d58e8494cb673540c417c47c4a262add487fe893eb3481282f38ba955792160c.sig 2026-10-31 -- signs sha256:d58e8494cb673540c417c47c4a262add487fe893eb3481282f38ba955792160c, which is not kept
+  delete grain        sha-6f28b6f          2026-11-01 -- no live tag: sha-6f28b6f (8d)
+  delete grain        sha-c083589          2026-11-01 -- no live tag: sha-c083589 (7d)
+  delete grain        sha-9377c49          2026-11-01 -- no live tag: sha-9377c49 (7d)
+  delete grain        sha-0f857ee          2026-11-01 -- no live tag: sha-0f857ee (7d)
+  delete grain        sha-d154bec          2026-11-01 -- no live tag: sha-d154bec (7d)
+  delete grain        sha-e9a6b46          2026-11-01 -- no live tag: sha-e9a6b46 (7d)
+  delete grain        sha-93ff1d8          2026-11-02 -- no live tag: sha-93ff1d8 (7d)
+  delete grain        v3.2.0-rc.1,v3.2.0-rc.1-discarded 2026-11-03 -- no live tag: v3.2.0-rc.1 (5d), v3.2.0-rc.1-discarded (5d)
+  delete guest-base   5dcd8cc4d50e5de1     2026-10-23 -- no live tag: 5dcd8cc4d50e5de1 (17d)
+  delete guest-base   49f30e02d4f320ed     2026-10-25 -- no live tag: 49f30e02d4f320ed (15d)
+  delete guest-base   c2462b78f595926c     2026-10-27 -- no live tag: c2462b78f595926c (13d)
+  delete guest-base   sha256-283bb9deef02e6843abfb538efa1eca70801bd8a701c3f98191e123496339247.sig 2026-10-27 -- signs sha256:283bb9deef02e6843abfb538efa1eca70801bd8a701c3f98191e123496339247, which is not kept
+  delete guest-base   228927803ace7c24     2026-10-29 -- no live tag: 228927803ace7c24 (11d)
+  delete guest-base   grain..098073e4..task-3600-old,sha-dead001 2026-10-31 -- no live tag: grain..098073e4..task-3600-old (8d), sha-dead001 (8d)
+  delete guest-base   sha-f78be38          2026-10-31 -- no live tag: sha-f78be38 (8d)
+  delete guest-base   sha256-d864d03a536c39f2563183f359b02050f1d57e2229c8b330196391c4e079fb84.sig 2026-10-31 -- signs sha256:d864d03a536c39f2563183f359b02050f1d57e2229c8b330196391c4e079fb84, which is not kept
+  delete guest-base   sha-6f28b6f          2026-11-01 -- no live tag: sha-6f28b6f (8d)
+  delete guest-base   sha-c083589          2026-11-01 -- no live tag: sha-c083589 (7d)
+  delete guest-base   sha-9377c49          2026-11-01 -- no live tag: sha-9377c49 (7d)
+  delete guest-base   sha-0f857ee          2026-11-01 -- no live tag: sha-0f857ee (7d)
+  delete guest-base   sha-d154bec          2026-11-01 -- no live tag: sha-d154bec (7d)
+  delete guest-base   sha-e9a6b46          2026-11-01 -- no live tag: sha-e9a6b46 (7d)
+  delete guest-base   sha-93ff1d8          2026-11-02 -- no live tag: sha-93ff1d8 (7d)
+  delete guest-base   v3.2.0-rc.1,v3.2.0-rc.1-discarded 2026-11-03 -- no live tag: v3.2.0-rc.1 (5d), v3.2.0-rc.1-discarded (5d)
+
+::notice title=ghcr-prune::dry run: 28 versions would be deleted, 78 kept
