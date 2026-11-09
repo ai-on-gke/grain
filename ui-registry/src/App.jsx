@@ -12,7 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ConfirmDialog,
   CopyBlock,
@@ -663,8 +669,14 @@ function MyEntriesView({ me, onNavigateEntry, onNavigateNew, onRefreshMe }) {
     setLoading(true);
     setError("");
     try {
-      const res = await fetchEntries({ mine: "1", include_deleted: "true" });
-      setEntries(Array.isArray(res && res.entries) ? res.entries : []);
+      // Soft-deleted entries are hidden here; restoring one within its
+      // 30-day hold is an admin action on the Admin page.
+      const res = await fetchEntries({ mine: "1" });
+      setEntries(
+        Array.isArray(res && res.entries)
+          ? res.entries.filter((e) => e && e.state !== "deleted")
+          : [],
+      );
     } catch (err) {
       setError(err.message || "Failed to load entries");
     } finally {
@@ -710,18 +722,6 @@ function MyEntriesView({ me, onNavigateEntry, onNavigateNew, onRefreshMe }) {
     }
   };
 
-  const handleQuickRestore = async (name) => {
-    setError("");
-    try {
-      await restoreEntry(name);
-      setActionNotice(`Restored ${name}.`);
-      await loadEntries();
-      if (onRefreshMe) onRefreshMe();
-    } catch (err) {
-      setError(err.message || "Failed to restore entry");
-    }
-  };
-
   const handleConfirmStop = async () => {
     if (!stopTarget) return;
     const name = stopTarget.name;
@@ -749,13 +749,14 @@ function MyEntriesView({ me, onNavigateEntry, onNavigateNew, onRefreshMe }) {
 
   const handleConfirmDelete = async () => {
     if (!deleteTarget) return;
+    const name = deleteTarget.name;
     setError("");
     try {
-      await deleteEntry(deleteTarget.name, deleteConfirmText);
-      setActionNotice(`Deleted ${deleteTarget.name}.`);
+      await deleteEntry(name, deleteConfirmText);
+      setEntries((prev) => prev.filter((e) => e.name !== name));
+      setActionNotice(`Deleted ${name}.`);
       setDeleteTarget(null);
       setDeleteConfirmText("");
-      await loadEntries();
       if (onRefreshMe) onRefreshMe();
     } catch (err) {
       setError(err.message || "Failed to delete entry");
@@ -992,26 +993,16 @@ function MyEntriesView({ me, onNavigateEntry, onNavigateNew, onRefreshMe }) {
                       Start
                     </button>
                   ) : null}
-                  {e.state === "deleted" ? (
-                    <button
-                      type="button"
-                      className="gs-btn gs-btn-sm gs-btn-primary"
-                      onClick={() => handleQuickRestore(e.name)}
-                    >
-                      Restore
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="gs-btn gs-btn-sm gs-btn-danger"
-                      onClick={() => {
-                        setDeleteTarget(e);
-                        setDeleteConfirmText("");
-                      }}
-                    >
-                      Delete
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    className="gs-btn gs-btn-sm gs-btn-danger"
+                    onClick={() => {
+                      setDeleteTarget(e);
+                      setDeleteConfirmText("");
+                    }}
+                  >
+                    Delete
+                  </button>
                 </div>
               ),
             },
@@ -1041,8 +1032,10 @@ function MyEntriesView({ me, onNavigateEntry, onNavigateNew, onRefreshMe }) {
       >
         <p>
           Deleting <strong>{deleteTarget?.name}</strong> stops routing traffic
-          and reserves the name for 30 days so it can be restored before
-          permanent purge.
+          and removes it from your entries. Its name stays reserved for you for
+          30 days, and a hosted instance can still be restored (
+          <code>grain registry restore</code> or a registry admin) until its
+          retained data is purged.
         </p>
         <div className="reg-field">
           <label className="reg-label" htmlFor="confirm-delete-input">
@@ -1064,19 +1057,19 @@ function MyEntriesView({ me, onNavigateEntry, onNavigateNew, onRefreshMe }) {
 function CreateRegisterView({
   me,
   shapes,
+  shapesLoaded,
   defaultShape,
   onCreated,
   onNavigateEntry,
 }) {
+  // Creating a hosted VM is the default; ?kind=connected selects
+  // registering a self-hosted daemon instead.
   const initialKind =
     typeof window !== "undefined" &&
-    new URLSearchParams(window.location.search).get("kind") === "instance"
-      ? "instance"
-      : "connected";
+    new URLSearchParams(window.location.search).get("kind") === "connected"
+      ? "connected"
+      : "instance";
   const [kind, setKind] = useState(initialKind);
-  const [useCustomName, setUseCustomName] = useState(
-    initialKind !== "instance",
-  );
   const [name, setName] = useState(() => makeRandomEntryName());
   const [availability, setAvailability] = useState(null);
   const [displayName, setDisplayName] = useState("");
@@ -1128,15 +1121,16 @@ function CreateRegisterView({
     }
   };
 
-  const handleKindChange = (nextKind) => {
-    setKind(nextKind);
-    if (nextKind === "instance") {
-      setUseCustomName(false);
-      setName(makeRandomEntryName());
-    } else {
-      setUseCustomName(true);
+  // A registry with no VM shapes cannot create hosted instances, so the
+  // form falls back to registering a connected daemon once shapes load.
+  const fellBackRef = useRef(false);
+  useEffect(() => {
+    if (fellBackRef.current || !shapesLoaded) return;
+    fellBackRef.current = true;
+    if (kind === "instance" && (!shapes || shapes.length === 0)) {
+      setKind("connected");
     }
-  };
+  }, [shapesLoaded, shapes, kind]);
 
   useEffect(() => {
     const trimmed = name.trim().toLowerCase();
@@ -1270,11 +1264,26 @@ function CreateRegisterView({
         <button
           type="button"
           className={
+            kind === "instance"
+              ? "reg-mode-card reg-mode-card-active"
+              : "reg-mode-card"
+          }
+          onClick={() => setKind("instance")}
+        >
+          <div className="reg-mode-title">Hosted VM (instance)</div>
+          <div className="reg-mode-desc">
+            Provision a dedicated GCE VM and Cloud SQL database managed by the
+            hub and routed over private VPC HTTP.
+          </div>
+        </button>
+        <button
+          type="button"
+          className={
             kind === "connected"
               ? "reg-mode-card reg-mode-card-active"
               : "reg-mode-card"
           }
-          onClick={() => handleKindChange("connected")}
+          onClick={() => setKind("connected")}
         >
           <div className="reg-mode-title">
             Self-registered grain (connected)
@@ -1283,21 +1292,6 @@ function CreateRegisterView({
             Connect an existing workstation, Kubernetes pod, or server daemon
             over an outbound WebSocket-mux tunnel (
             <code>-registry-connect</code>). No inbound firewall port required.
-          </div>
-        </button>
-        <button
-          type="button"
-          className={
-            kind === "instance"
-              ? "reg-mode-card reg-mode-card-active"
-              : "reg-mode-card"
-          }
-          onClick={() => handleKindChange("instance")}
-        >
-          <div className="reg-mode-title">Hosted VM (instance)</div>
-          <div className="reg-mode-desc">
-            Provision a dedicated GCE VM and Cloud SQL database managed by the
-            hub and routed over private VPC HTTP.
           </div>
         </button>
       </div>
@@ -1314,33 +1308,26 @@ function CreateRegisterView({
             <label className="reg-label" htmlFor="entry-name-input">
               Entry subdomain name
             </label>
-            {kind === "instance" && !useCustomName ? (
-              <div className="reg-actions-row">
-                <span className="gs-badge gs-badge-vm reg-mono">{name}</span>
-                <button
-                  type="button"
-                  className="gs-btn gs-btn-sm"
-                  onClick={() => setName(makeRandomEntryName())}
-                >
-                  Generate another random name
-                </button>
-                <button
-                  type="button"
-                  className="gs-btn gs-btn-sm"
-                  onClick={() => setUseCustomName(true)}
-                >
-                  Choose custom name
-                </button>
-              </div>
-            ) : (
+            <div className="reg-input-with-action">
               <input
                 id="entry-name-input"
-                className="gs-input"
+                className="gs-input reg-mono"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="e.g. team-platform"
+                spellCheck={false}
+                autoComplete="off"
               />
-            )}
+              <button
+                type="button"
+                className="gs-btn gs-btn-sm"
+                aria-label="Generate another random name"
+                title="Generate another random name"
+                onClick={() => setName(makeRandomEntryName())}
+              >
+                Regenerate
+              </button>
+            </div>
             <div className="reg-hint">
               URL:{" "}
               <span className="reg-mono">
@@ -4602,6 +4589,7 @@ export default function App() {
   const [me, setMe] = useState(null);
   const [shapes, setShapes] = useState([]);
   const [defaultShape, setDefaultShape] = useState("medium");
+  const [shapesLoaded, setShapesLoaded] = useState(false);
 
   const navigate = useCallback((path) => {
     if (typeof window !== "undefined") {
@@ -4630,7 +4618,8 @@ export default function App() {
           setDefaultShape(res.default_shape);
         }
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setShapesLoaded(true));
   }, []);
 
   useEffect(() => {
@@ -4741,6 +4730,7 @@ export default function App() {
           <CreateRegisterView
             me={me}
             shapes={shapes}
+            shapesLoaded={shapesLoaded}
             defaultShape={defaultShape}
             onCreated={loadMeAndShapes}
             onNavigateEntry={onNavigateEntry}

@@ -147,9 +147,11 @@ func (w *holdWorld) clearedAtA(task model.Task) string {
 	// hold, the director floor and on_behalf_of.go to auth-routes,
 	// task 3329; v24 only adds scripts/build-cli.sh to
 	// release-machinery, task 3597; v25 only adds canonical_grant.go and
-	// auto_submit.go to capabilities-secrets, task 3644).
-	if trustboundary.Version != "trust-boundary/v25" {
-		w.t.Fatalf("this walkthrough is about trust-boundary/v25, the build has %s", trustboundary.Version)
+	// auto_submit.go to capabilities-secrets, task 3644; v26 only adds the
+	// CLI installer to setup-scripts and the release helper scripts to
+	// release-machinery, task 3625).
+	if trustboundary.Version != "trust-boundary/v26" {
+		w.t.Fatalf("this walkthrough is about trust-boundary/v26, the build has %s", trustboundary.Version)
 	}
 	if w.merged(branch) {
 		w.t.Fatal("merged before the pull request read mergeable")

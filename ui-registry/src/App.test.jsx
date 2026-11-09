@@ -15,6 +15,7 @@
 import React from "react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
+  cleanup,
   render,
   screen,
   fireEvent,
@@ -803,9 +804,9 @@ describe("Grain Hub UI", () => {
     });
   });
 
-  it("renders Create / Register view defaulting to connected with -registry-connect snippet and mints token", async () => {
+  it("renders Create / Register view with ?kind=connected, -registry-connect snippet, and mints token", async () => {
     globalThis.fetch = createFetchMock();
-    renderApp("/new");
+    renderApp("/new?kind=connected");
 
     await waitFor(() => {
       expect(
@@ -950,7 +951,7 @@ describe("Grain Hub UI", () => {
           }),
           { status: 200 },
         ),
-      "GET /api/entries?mine=1&include_deleted=true": () =>
+      "GET /api/entries?mine=1": () =>
         new Response(
           JSON.stringify({
             entries: [
@@ -995,7 +996,7 @@ describe("Grain Hub UI", () => {
           { status: 200 },
         ),
     });
-    renderApp("/new");
+    renderApp("/new?kind=connected");
     await waitFor(() => {
       expect(
         screen.getAllByText(
@@ -1481,9 +1482,6 @@ describe("Grain Hub UI", () => {
     await waitFor(() => {
       expect(screen.getByText(/Hosted VM \(instance\)/i)).toBeInTheDocument();
     });
-    fireEvent.click(
-      screen.getByRole("button", { name: /Hosted VM \(instance\)/i }),
-    );
 
     const diskInput = await screen.findByLabelText("Boot disk size (GB)");
     expect(diskInput).toHaveValue(100);
@@ -1513,5 +1511,124 @@ describe("Grain Hub UI", () => {
       expect(capturedReplaceBody).not.toBeNull();
     });
     expect(capturedReplaceBody.boot_disk_gb).toBe(250);
+  });
+
+  it("hides soft-deleted entries from My entries and drops a row as soon as it is deleted", async () => {
+    const listUrls = [];
+    globalThis.fetch = createFetchMock({
+      "GET /api/entries?mine=1": (url) => {
+        listUrls.push(url);
+        return new Response(
+          JSON.stringify({
+            entries: [
+              sampleEntries[0],
+              sampleEntries[1],
+              { ...sampleEntries[2], name: "old-deleted", state: "deleted" },
+            ],
+          }),
+          { status: 200 },
+        );
+      },
+    });
+    renderApp("/");
+
+    await screen.findByText("Platform Core VM (platform-vm)");
+    expect(listUrls).toEqual(["/api/entries?mine=1"]);
+    expect(screen.queryByText(/old-deleted/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Restore" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete" })[0]);
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent(/removes it from your entries/i);
+    fireEvent.change(within(dialog).getByLabelText(/Type .* to confirm/i), {
+      target: { value: "platform-vm" },
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Delete entry" }),
+    );
+
+    await screen.findByText("Deleted platform-vm.");
+    expect(
+      screen.queryByText("Platform Core VM (platform-vm)"),
+    ).not.toBeInTheDocument();
+    expect(listUrls).toHaveLength(1);
+  });
+
+  it("defaults Create / Register to a hosted VM with an editable random name", async () => {
+    let createdBody = null;
+    globalThis.fetch = createFetchMock({
+      "POST /api/entries": async (_url, init) => {
+        createdBody = JSON.parse(init.body);
+        return new Response(
+          JSON.stringify({
+            entry: {
+              name: createdBody.name,
+              url: `https://${createdBody.name}.grain.example.com`,
+              kind: createdBody.kind,
+              state: "creating",
+            },
+          }),
+          { status: 202 },
+        );
+      },
+    });
+    renderApp("/new");
+
+    await screen.findByLabelText("Boot disk size (GB)");
+    const cards = within(
+      screen.getByRole("radiogroup", { name: "Entry kind" }),
+    ).getAllByRole("button");
+    expect(cards[0]).toHaveTextContent(/Hosted VM \(instance\)/);
+    expect(cards[0]).toHaveClass("reg-mode-card-active");
+    expect(
+      screen.queryByRole("button", { name: "Choose custom name" }),
+    ).not.toBeInTheDocument();
+
+    const nameInput = screen.getByLabelText(/Entry subdomain name/i);
+    expect(nameInput.tagName).toBe("INPUT");
+    const initial = nameInput.value;
+    expect(initial).toMatch(/^grain-[0-9a-f]{6}$/);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Generate another random name" }),
+    );
+    expect(nameInput.value).toMatch(/^grain-[0-9a-f]{6}$/);
+
+    fireEvent.change(nameInput, { target: { value: "my-own-vm" } });
+    await waitFor(() => {
+      expect(screen.getByTestId("name-availability-status")).toHaveTextContent(
+        "free",
+      );
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Create hosted VM$/i }),
+    );
+    await waitFor(() => {
+      expect(createdBody).not.toBeNull();
+    });
+    expect(createdBody.kind).toBe("instance");
+    expect(createdBody.name).toBe("my-own-vm");
+  });
+
+  it("pre-fills a random name for connected mode and falls back to connected when no shapes are configured", async () => {
+    globalThis.fetch = createFetchMock();
+    renderApp("/new?kind=connected");
+    await screen.findByRole("button", { name: "Register connected entry" });
+    expect(screen.getByLabelText(/Entry subdomain name/i).value).toMatch(
+      /^grain-[0-9a-f]{6}$/,
+    );
+    cleanup();
+
+    globalThis.fetch = createFetchMock({
+      "GET /api/shapes": () =>
+        new Response(JSON.stringify({ shapes: [] }), { status: 200 }),
+    });
+    renderApp("/new");
+    await screen.findByRole("button", { name: "Register connected entry" });
+    expect(
+      screen.queryByRole("button", { name: /^Create hosted VM$/i }),
+    ).not.toBeInTheDocument();
   });
 });

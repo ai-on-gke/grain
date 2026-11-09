@@ -366,6 +366,21 @@ body {
   gap: 14px;
 }
 
+.reg-input-with-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.reg-input-with-action .gs-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.reg-input-with-action .gs-btn {
+  flex: 0 0 auto;
+}
+
 .reg-mode-picker {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));

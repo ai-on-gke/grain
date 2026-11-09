@@ -78,7 +78,25 @@ test("serves embedded ui-registry under strict CSP and walks through all views w
     page.getByRole("heading", { name: "Create or Register a Grain Entry" }),
   ).toBeVisible();
 
+  // Hosted VM is the default; the name field is pre-filled with a random
+  // name and directly editable.
+  await expect(
+    page.getByRole("button", { name: /Hosted VM \(instance\)/ }),
+  ).toHaveClass(/reg-mode-card-active/);
   const nameInput = page.getByLabel(/Entry subdomain name/i);
+  await expect(nameInput).toHaveValue(/^grain-[0-9a-f]{6}$/);
+  // The regenerate button sits on the input's row, to its right.
+  const regen = page.getByRole("button", {
+    name: "Generate another random name",
+  });
+  const [ib, rb] = [await nameInput.boundingBox(), await regen.boundingBox()];
+  expect(rb.x).toBeGreaterThanOrEqual(ib.x + ib.width);
+  expect(Math.abs(ib.y + ib.height / 2 - (rb.y + rb.height / 2))).toBeLessThan(
+    2,
+  );
+  await page
+    .getByRole("button", { name: /Self-registered grain \(connected\)/ })
+    .click();
   await nameInput.fill("e2e-workstation");
   await expect(page.getByTestId("name-availability-status")).toHaveText("free");
   await expect(page.getByText(/-registry-entry e2e-workstation/)).toBeVisible();
@@ -97,11 +115,10 @@ test("serves embedded ui-registry under strict CSP and walks through all views w
   await page.getByRole("button", { name: "Rotate token" }).click();
   await expect(page.getByTestId("rotated-token-banner")).toContainText("grc_");
 
-  // 4b. Hosted VM creation with custom boot disk size (/new?kind=instance)
-  await page.goto(`${demo.url}/new?kind=instance`);
+  // 4b. Hosted VM creation (the /new default) with custom boot disk size
+  await page.goto(`${demo.url}/new`);
   const createDiskInput = page.getByLabel(/Boot disk size \(GB\)/i);
   await expect(createDiskInput).toHaveValue("100");
-  await page.getByRole("button", { name: "Choose custom name" }).click();
   await page.getByLabel(/Entry subdomain name/i).fill("e2e-hosted-vm");
   await expect(page.getByTestId("name-availability-status")).toHaveText("free");
   await createDiskInput.fill("250");
