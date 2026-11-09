@@ -82,6 +82,13 @@ const ChangeTargetWaitCapability = "change-target"
 // its Resource is the whole sentence saying why.
 const QuotaWaitCapability = "quota"
 
+// SuspensionWaitCapability is the GrantWait capability a queued task held
+// by its latest suspension's own resume time (Store.SuspensionResumeAt --
+// a setup suspension waiting out its backoff) is recorded under by
+// dispatch.Cycle, so its row says what holds it rather than reading
+// ready. Its Resource is the whole sentence, the time included.
+const SuspensionWaitCapability = "suspension"
+
 // ModelSetting is the deployment's own configuration for one model: what it is
 // asked for whichever connection ends up serving it.
 type ModelSetting struct {

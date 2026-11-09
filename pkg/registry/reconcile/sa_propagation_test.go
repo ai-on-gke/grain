@@ -38,6 +38,9 @@ type saNotReadyCompute struct {
 	mu       sync.Mutex
 	failures int
 	calls    int
+	// accessDenied fails the way GCE does while the registry's just-made actAs grant on
+	// the account has not applied yet, instead of the account not being visible.
+	accessDenied bool
 }
 
 func (c *saNotReadyCompute) CreateInstance(ctx context.Context, spec registry.InstanceSpec) (*registry.InstanceHandle, error) {
@@ -47,7 +50,12 @@ func (c *saNotReadyCompute) CreateInstance(ctx context.Context, spec registry.In
 	if c.failures > 0 {
 		c.failures--
 	}
+	accessDenied := c.accessDenied
 	c.mu.Unlock()
+	if fail && accessDenied {
+		return nil, fmt.Errorf("gcp compute: inserting instance grain-vm-%s in %s: GCE operation op-1 failed (SERVICE_ACCOUNT_ACCESS_DENIED): The user does not have access to service account '%s'. (%w)",
+			spec.Name, spec.Zone, spec.ServiceAccount, registry.ErrServiceAccountNotReady)
+	}
 	if fail {
 		return nil, fmt.Errorf("gcp compute: inserting instance grain-vm-%s in %s: GCE operation op-1 failed (EXTERNAL_RESOURCE_NOT_FOUND): The resource '%s' of type 'serviceAccount' was not found. (%w)",
 			spec.Name, spec.Zone, spec.ServiceAccount, registry.ErrServiceAccountNotReady)
@@ -195,6 +203,29 @@ func TestReconcilerRetriesVMCreationWhileServiceAccountPropagates(t *testing.T) 
 	}
 	if got.GCEInstanceID != "grain-vm-hub-e2e-test1" || got.StatusReason != "" {
 		t.Fatalf("after retried insert: gce_instance_id = %q, status_reason = %q", got.GCEInstanceID, got.StatusReason)
+	}
+}
+
+func TestReconcilerRetriesVMCreationWhileActAsGrantPropagates(t *testing.T) {
+	compute := &saNotReadyCompute{fakeCompute: newFakeCompute(""), failures: 2, accessDenied: true}
+	f := newSAPropagationFixture(t, compute, "gce")
+
+	got := f.runOnce(t)
+	if got.LifecycleState != api.StateCreating {
+		t.Fatalf("after refused insert: state = %q (reason %q), want creating", got.LifecycleState, got.StatusReason)
+	}
+	if !strings.Contains(got.StatusReason, "permission to attach it") || !strings.Contains(got.StatusReason, "SERVICE_ACCOUNT_ACCESS_DENIED") {
+		t.Fatalf("after refused insert: status_reason = %q, want it to explain the actAs propagation wait", got.StatusReason)
+	}
+	for i := 0; i < 60 && got.LifecycleState == api.StateCreating; i++ {
+		*f.now = f.now.Add(time.Second)
+		got = f.runOnce(t)
+	}
+	if got.LifecycleState != api.StateRunning || got.StatusReason != "" {
+		t.Fatalf("after the grant applied: state = %q, status_reason = %q, want running", got.LifecycleState, got.StatusReason)
+	}
+	if n := compute.createCalls(); n != 3 {
+		t.Fatalf("CreateInstance calls = %d, want 3", n)
 	}
 }
 
