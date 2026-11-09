@@ -13,7 +13,14 @@
 // limitations under the License.
 
 import { useEffect, useRef, useState } from "react";
-import { Alert, Button, CircularProgress, TextField } from "@mui/material";
+import {
+  Alert,
+  Button,
+  Checkbox,
+  CircularProgress,
+  FormControlLabel,
+  TextField,
+} from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import api from "../api.js";
 import AccessGate from "./AccessGate.jsx";
@@ -47,10 +54,12 @@ import {
 import {
   ackNotification,
   approveReleaseLabel,
+  decideRelease,
+  fetchReleaseApprovalKey,
   investigateNotification,
   notificationSentence,
-  decideRelease,
   pendingReleaseOf,
+  pendingReleaseSentence,
 } from "../notifications.js";
 import { formatMoment } from "../time.js";
 import { useTimeZone } from "../TimeZoneContext.jsx";
@@ -735,11 +744,265 @@ function ReleaseSoak({ release }) {
     </span>
   );
 }
+// PendingReleaseItem is one staged vX.Y.Z-pending release awaiting a
+// person's Approve or Reject under "Asked: approve a release". It carries
+// the allow_breaking and short_soak_ok options in place and surfaces any
+// failed promote-release.yml dispatch (with GET /api/release-approval-key
+// when GRAIN_RELEASE_APPROVAL_KEY is missing or mismatched) so the person
+// is never told a release succeeded when promotion failed.
+function PendingReleaseItem({ n, config, onChanged, showError }) {
+  const zone = useTimeZone();
+  const release = pendingReleaseOf(n);
+  const [busy, setBusy] = useState(null);
+  const [allowBreakingOverride, setAllowBreakingOverride] = useState(null);
+  const [shortSoakOverride, setShortSoakOverride] = useState(null);
+  const [approvalKey, setApprovalKey] = useState(null);
+  const [loadingKey, setLoadingKey] = useState(false);
+  const [copiedKey, setCopiedKey] = useState(false);
+
+  const effectiveAllowBreaking =
+    allowBreakingOverride !== null
+      ? allowBreakingOverride
+      : Boolean(release.breaking);
+  const effectiveShortSoakOk =
+    shortSoakOverride !== null ? shortSoakOverride : Boolean(release.shortSoak);
+
+  const decide = async (approve) => {
+    setBusy(approve ? "approve" : "reject");
+    try {
+      const ok = await decideRelease(release, approve, {
+        shortSoakOk: effectiveShortSoakOk,
+        allowBreaking: effectiveAllowBreaking,
+      });
+      if (!ok) return;
+      await onChanged?.();
+    } catch (err) {
+      showError?.(err.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const loadApprovalKey = async () => {
+    setLoadingKey(true);
+    try {
+      const data = await fetchReleaseApprovalKey();
+      setApprovalKey(data || null);
+    } catch (err) {
+      showError?.(err.message);
+    } finally {
+      setLoadingKey(false);
+    }
+  };
+
+  const copyApprovalKey = async () => {
+    if (!approvalKey?.publicKey || !navigator.clipboard?.writeText) return;
+    try {
+      await navigator.clipboard.writeText(approvalKey.publicKey);
+      setCopiedKey(true);
+    } catch {
+      // The key stays selectable in the pre block below if clipboard fails.
+    }
+  };
+
+  const failure = release.dispatchFailure;
+
+  return (
+    <li
+      className="inbox-item"
+      data-testid="inbox-pending-release"
+      data-severity={n.severity}
+    >
+      <div className="inbox-line">
+        <div className="inbox-gate">
+          <Alert
+            severity={muiSeverity(n.severity)}
+            variant="outlined"
+            sx={{ py: 0, px: 1, border: 0, alignItems: "center" }}
+          >
+            <strong>{n.title}</strong>
+          </Alert>
+        </div>
+        <div className="inbox-actions">
+          <ReleaseSoak release={release} />
+          <AccessGate
+            scope="releases:write"
+            repo={release.repo}
+            config={config}
+          >
+            <Button
+              size="small"
+              variant="contained"
+              color={
+                effectiveShortSoakOk || effectiveAllowBreaking
+                  ? "warning"
+                  : "primary"
+              }
+              disabled={busy !== null}
+              onClick={() => decide(true)}
+            >
+              {approveReleaseLabel({
+                shortSoak: effectiveShortSoakOk,
+                breaking: effectiveAllowBreaking,
+              })}
+            </Button>
+          </AccessGate>
+          <AccessGate
+            scope="releases:write"
+            repo={release.repo}
+            config={config}
+          >
+            <Button
+              size="small"
+              variant="outlined"
+              color="error"
+              disabled={busy !== null}
+              onClick={() => decide(false)}
+            >
+              Reject
+            </Button>
+          </AccessGate>
+        </div>
+      </div>
+      {failure && (
+        <div
+          className="inbox-release-failure"
+          data-testid="inbox-release-dispatch-failure"
+        >
+          <Alert severity="error">
+            <div>
+              <strong>Last promote-release.yml dispatch failed</strong> (
+              {failure.runUrl ? (
+                <a href={failure.runUrl} target="_blank" rel="noreferrer">
+                  {failure.runId}
+                </a>
+              ) : (
+                failure.runId
+              )}
+              ): {failure.message}
+            </div>
+            {failure.remedy && (
+              <div className="inbox-release-remedy">{failure.remedy}</div>
+            )}
+            {failure.needsApprovalKey && (
+              <div className="inbox-release-key-actions">
+                {!approvalKey ? (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    color="inherit"
+                    disabled={loadingKey}
+                    onClick={loadApprovalKey}
+                  >
+                    Show approval key
+                  </Button>
+                ) : (
+                  <div className="inbox-approval-key-box">
+                    <div className="inbox-approval-key-header">
+                      <span>
+                        Repository variable{" "}
+                        <code>
+                          {approvalKey.variable || "GRAIN_RELEASE_APPROVAL_KEY"}
+                        </code>{" "}
+                        (from <code>GET /api/release-approval-key</code>):
+                      </span>
+                      {navigator.clipboard?.writeText && (
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          color="inherit"
+                          onClick={copyApprovalKey}
+                        >
+                          {copiedKey ? "Copied" : "Copy key"}
+                        </Button>
+                      )}
+                    </div>
+                    <pre className="inbox-approval-key">
+                      {approvalKey.publicKey}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            )}
+          </Alert>
+        </div>
+      )}
+      <div className="inbox-release-options">
+        <FormControlLabel
+          control={
+            <Checkbox
+              size="small"
+              checked={effectiveAllowBreaking}
+              disabled={busy !== null}
+              onChange={(e) => setAllowBreakingOverride(e.target.checked)}
+              inputProps={{
+                "aria-label": `Allow breaking changes for ${release.version}`,
+              }}
+            />
+          }
+          label="Allow breaking changes"
+        />
+        <FormControlLabel
+          control={
+            <Checkbox
+              size="small"
+              checked={effectiveShortSoakOk}
+              disabled={busy !== null}
+              onChange={(e) => setShortSoakOverride(e.target.checked)}
+              inputProps={{
+                "aria-label": `Allow short soak for ${release.version}`,
+              }}
+            />
+          }
+          label="Allow short soak"
+        />
+      </div>
+      <p className="inbox-note">
+        {pendingReleaseSentence(n)}{" "}
+        <span className="inbox-note-meta">
+          {release.repo} · {n.subject} · since {formatMoment(n.raisedAt, zone)}
+        </span>
+      </p>
+    </li>
+  );
+}
+
+// PendingReleasesGroup lists staged vX.Y.Z-pending releases under "Asked",
+// expanded by default rather than folded inside Notifications: the approve
+// and reject routes refuse agents, so only a person's answer moves a
+// pending release along.
+function PendingReleasesGroup({ notifications, config, onChanged, showError }) {
+  if (!notifications || notifications.length === 0) return null;
+  return (
+    <CollapsibleInboxGroup
+      key="pending-releases"
+      sectionId="pending-releases"
+      title="Asked: approve a release"
+      count={notifications.length}
+      testId="inbox-pending-releases"
+      hint="A release candidate passed qualification and is staged as vX.Y.Z-pending. Only a person may approve or reject it — agents are refused — and it stays here until answered."
+    >
+      <ul className="task-list">
+        {notifications.map((n) => (
+          <PendingReleaseItem
+            key={n.id}
+            n={n}
+            config={config}
+            onChanged={onChanged}
+            showError={showError}
+          />
+        ))}
+      </ul>
+    </CollapsibleInboxGroup>
+  );
+}
+
 // NotificationsGroup is the open operator notifications
 // (notifications.js, design/design/durable-tasks.design.md DT-5), above the task
 // rows: one row each, with what a person can do about it. An
 // acknowledged one stays here, marked, until whatever raised it clears
 // it; acknowledging only takes it out of the alerts bell's count.
+// Pending releases live in PendingReleasesGroup under "Asked" instead.
 function NotificationsGroup({
   notifications,
   onChanged,
@@ -753,10 +1016,6 @@ function NotificationsGroup({
     setBusy(`${n.id}:${kind}`);
     try {
       if (kind === "ack") await ackNotification(n);
-      if (kind === "approve" || kind === "reject") {
-        if (!(await decideRelease(pendingReleaseOf(n), kind === "approve")))
-          return;
-      }
       if (kind === "investigate") {
         const id = await investigateNotification(n);
         if (id) onOpenTask?.(id);
@@ -797,37 +1056,6 @@ function NotificationsGroup({
                 </Alert>
               </div>
               <div className="inbox-actions">
-                {(() => {
-                  const release = pendingReleaseOf(n);
-                  if (!release) return null;
-                  return (
-                    <>
-                      <ReleaseSoak release={release} />
-                      <Button
-                        size="small"
-                        variant="contained"
-                        color={
-                          release.shortSoak || release.breaking
-                            ? "warning"
-                            : "primary"
-                        }
-                        disabled={busy !== null}
-                        onClick={() => act(n, "approve")}
-                      >
-                        {approveReleaseLabel(release)}
-                      </Button>
-                      <Button
-                        size="small"
-                        variant="outlined"
-                        color="error"
-                        disabled={busy !== null}
-                        onClick={() => act(n, "reject")}
-                      >
-                        Reject
-                      </Button>
-                    </>
-                  );
-                })()}
                 {!n.ackedAt && (
                   <AccessGate scope="notifications:write">
                     <Button
@@ -997,6 +1225,12 @@ export default function InboxPage({
   const groups = groupTasks(waiting);
   const [localScripts, reloadLocalScripts] = usePendingLocalScripts();
   const syncFailure = config?.stateRepoSyncFailure || null;
+  const pendingReleases = notifications.filter(
+    (n) => pendingReleaseOf(n) !== null,
+  );
+  const operatorNotifications = notifications.filter(
+    (n) => pendingReleaseOf(n) === null,
+  );
 
   // act wraps App's own runner so a row's button can say what it did
   // before firing: the confirm is here rather than in onAct because only
@@ -1065,7 +1299,7 @@ export default function InboxPage({
           </ListEmpty>
         )}
       <NotificationsGroup
-        notifications={notifications}
+        notifications={operatorNotifications}
         onChanged={onNotificationsChanged}
         onOpenTask={onOpenTask}
         showError={showError}
@@ -1079,6 +1313,12 @@ export default function InboxPage({
         onAct={onAct}
         onOpenTask={onOpenTask}
         reload={reloadLocalScripts}
+      />
+      <PendingReleasesGroup
+        notifications={pendingReleases}
+        config={config}
+        onChanged={onNotificationsChanged}
+        showError={showError}
       />
       {groups.map(({ group, tasks: rows }) => {
         const bulk = bulkActions(group, rows);

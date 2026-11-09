@@ -121,7 +121,11 @@ import AccessDenied from "./components/AccessDenied.jsx";
 import DisconnectedBanner from "./components/DisconnectedBanner.jsx";
 import { InstallNoticeBanner } from "./components/InstallNotice.jsx";
 import AlertsButton from "./components/AlertsButton.jsx";
-import { notificationAlerts, useOpenNotifications } from "./notifications.js";
+import {
+  notificationAlerts,
+  pendingReleaseOf,
+  useOpenNotifications,
+} from "./notifications.js";
 import { collectAlerts, sortAlerts } from "./alerts.js";
 import NewSessionPage, {
   NEW_SESSION_ID,
@@ -3748,7 +3752,12 @@ function AppContent({ onReload = () => window.location.reload() }) {
       tasksError={tasksError}
       onRetryTasks={retryTasks}
       unseenClosed={closedTasks.unseen}
-      notificationCount={notifications.length}
+      notificationCount={
+        notifications.filter((n) => pendingReleaseOf(n) === null).length
+      }
+      pendingReleaseCount={
+        notifications.filter((n) => pendingReleaseOf(n) !== null).length
+      }
       schedules={schedules}
       templates={templates}
       suites={suites}
