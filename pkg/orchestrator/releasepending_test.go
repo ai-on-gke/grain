@@ -46,7 +46,10 @@ type fixtureForge struct {
 	tags       map[string]fixtureTag // name -> tag
 	files      map[string]string     // path on main -> contents
 	dispatches []map[string]any      // each dispatch's body
-	reads      int                   // matching-refs reads
+	runs       []map[string]any      // workflow_runs served for promote-release.yml
+	jobsByRun  map[string][]map[string]any
+	logsByJob  map[string]string
+	reads      int // matching-refs reads
 }
 
 type fixtureTag struct {
@@ -59,6 +62,9 @@ var (
 	tagObjectPath    = regexp.MustCompile(`^/repos/([^/]+/[^/]+)/git/tags/(.+)$`)
 	contentsPath     = regexp.MustCompile(`^/repos/([^/]+/[^/]+)/contents/([^?]+)\?ref=main$`)
 	dispatchPath     = regexp.MustCompile(`^/repos/([^/]+/[^/]+)/actions/workflows/([^/]+)/dispatches$`)
+	workflowRunsPath = regexp.MustCompile(`^/repos/([^/]+/[^/]+)/actions/workflows/([^/?]+)/runs\b`)
+	runJobsPath      = regexp.MustCompile(`^/repos/([^/]+/[^/]+)/actions/runs/([0-9]+)/jobs\b`)
+	jobLogsPath      = regexp.MustCompile(`^/repos/([^/]+/[^/]+)/actions/jobs/([0-9]+)/logs$`)
 )
 
 func (f *fixtureForge) Request(method, path string, _ map[string]string, body []byte) (github.ApiResponse, error) {
@@ -114,6 +120,26 @@ func (f *fixtureForge) Request(method, path string, _ map[string]string, body []
 		}
 		f.dispatches = append(f.dispatches, req)
 		return github.ApiResponse{Status: http.StatusNoContent}, nil
+	case method == "GET" && workflowRunsPath.MatchString(path):
+		m := workflowRunsPath.FindStringSubmatch(path)
+		if m[1] != f.repo || m[2] != "promote-release.yml" || len(f.runs) == 0 {
+			return notFound, nil
+		}
+		return jsonResp(map[string]any{"total_count": len(f.runs), "workflow_runs": f.runs})
+	case method == "GET" && runJobsPath.MatchString(path):
+		m := runJobsPath.FindStringSubmatch(path)
+		if m[1] != f.repo {
+			return notFound, nil
+		}
+		jobs := f.jobsByRun[m[2]]
+		return jsonResp(map[string]any{"total_count": len(jobs), "jobs": jobs})
+	case method == "GET" && jobLogsPath.MatchString(path):
+		m := jobLogsPath.FindStringSubmatch(path)
+		text, ok := f.logsByJob[m[2]]
+		if m[1] != f.repo || !ok {
+			return notFound, nil
+		}
+		return github.ApiResponse{Status: http.StatusOK, Body: []byte(text)}, nil
 	}
 	return notFound, nil
 }
@@ -863,5 +889,126 @@ func TestACLIApprovalBeforeTheWatcherPollsNeitherRaisesNorDispatchesAgain(t *tes
 	}
 	if open, err := store.OpenNotification(ctx, subject); err != nil || open != nil {
 		t.Fatalf("watcher re-raised %s after human dismiss: %+v (err %v)", subject, open, err)
+	}
+}
+
+// If a person's Approve dispatches promote-release.yml and that workflow run
+// fails (for example, GRAIN_RELEASE_APPROVAL_KEY unset on the repository), the
+// watcher polls at releasePendingActivePollInterval, re-raises release.pending
+// with the failure and GET /api/release-approval-key remediation, and unblocks
+// a fresh Approve without waiting out ReleaseApprovalHold.
+func TestAFailedPromoteReleaseDispatchReRaisesWithTheFailureAndUnblocksRetry(t *testing.T) {
+	resetReleaseWatch(t)
+	ctx := context.Background()
+	store := openTestStoreForOrchestrator(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	cfg := model.DefaultConfig()
+	cfg.TargetRepos = []string{repo.String()}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: repo, CIMode: model.CIModeGitHub}); err != nil {
+		t.Fatal(err)
+	}
+
+	commit := strings.Repeat("d", 40)
+	forge := &fixtureForge{
+		repo: repo.String(),
+		tags: map[string]fixtureTag{
+			"v3.2.0-pending": {commit: commit, message: "Release v3.2.0 pending approval\n\nQualification: PASS"},
+		},
+		jobsByRun: map[string][]map[string]any{},
+		logsByJob: map[string]string{},
+	}
+	client := github.NewClient(forge, nil)
+	deps := Deps{Store: store, Client: client}
+
+	now := time.Now().UTC().Truncate(time.Second)
+	dataDir := t.TempDir()
+	person := model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com"}
+	uic := ui.NewClient(ui.Config{Actor: person, DataDir: dataDir, GitHubPullRequests: client}, store)
+	uic.Now = func() time.Time { return now }
+
+	subject := model.NotificationSubject(model.FamilyReleasePending, "v3.2.0")
+
+	// 1. Initial poll raises release.pending:v3.2.0.
+	if err := reconcileReleasePending(ctx, deps, now); err != nil {
+		t.Fatalf("initial reconcileReleasePending: %v", err)
+	}
+	if open, _ := store.OpenNotification(ctx, subject); open == nil {
+		t.Fatalf("expected %s open before approval", subject)
+	}
+
+	// 2. Person approves v3.2.0: dispatches promote-release.yml and clears the open item.
+	now = now.Add(2 * time.Second)
+	if _, err := uic.DecideRelease(ui.WithPrincipal(ctx, person), repo.String(), "v3.2.0", true,
+		ui.ReleaseApproval{AllowBreaking: true}); err != nil {
+		t.Fatalf("DecideRelease: %v", err)
+	}
+	if open, _ := store.OpenNotification(ctx, subject); open != nil {
+		t.Fatalf("%s still open immediately after dispatch: %+v", subject, open)
+	}
+
+	// 3. promote-release.yml run 42577215514 fails on missing GRAIN_RELEASE_APPROVAL_KEY.
+	startedAt := now.Add(time.Second).Format(time.RFC3339)
+	updatedAt := now.Add(4 * time.Second).Format(time.RFC3339)
+	forge.mu.Lock()
+	forge.runs = []map[string]any{{
+		"id":             int64(42577215514),
+		"name":           "promote-release",
+		"path":           ".github/workflows/promote-release.yml",
+		"head_branch":    "main",
+		"event":          "workflow_dispatch",
+		"status":         "completed",
+		"conclusion":     "failure",
+		"html_url":       "https://github.com/acme/widgets/actions/runs/42577215514",
+		"run_started_at": startedAt,
+		"updated_at":     updatedAt,
+	}}
+	forge.jobsByRun["42577215514"] = []map[string]any{{
+		"id":         int64(9001),
+		"run_id":     int64(42577215514),
+		"name":       "approve the pending release",
+		"status":     "completed",
+		"conclusion": "failure",
+	}}
+	forge.logsByJob["9001"] = "2026-11-09T07:00:03.0000000Z ##[group]Run Refuse anybody but a person\n" +
+		"2026-11-09T07:00:04.0000000Z verify-release-approval: refused: the repository variable GRAIN_RELEASE_APPROVAL_KEY is not set, so no approval from grain's Inbox can be verified: set it to the deployment's key (`grain release approval-key`)\n" +
+		"2026-11-09T07:00:04.1000000Z ##[error]Process completed with exit code 1.\n"
+	forge.mu.Unlock()
+
+	// 4. Within releasePendingActivePollInterval (not 10m / 24h), the item is
+	// re-raised with the failed run id, refusal message, and GET /api/release-approval-key.
+	now = now.Add(releasePendingActivePollInterval)
+	if err := reconcileReleasePending(ctx, deps, now); err != nil {
+		t.Fatalf("reconcileReleasePending after failed dispatch: %v", err)
+	}
+	open, err := store.OpenNotification(ctx, subject)
+	if err != nil || open == nil {
+		t.Fatalf("failed dispatch did not re-raise %s: %+v (err %v)", subject, open, err)
+	}
+	if open.Severity != model.NotificationCritical {
+		t.Errorf("severity = %q, want %q", open.Severity, model.NotificationCritical)
+	}
+	for _, want := range []string{
+		"DISPATCH FAILED (gha:acme:widgets:42577215514):",
+		"verify-release-approval: refused: the repository variable GRAIN_RELEASE_APPROVAL_KEY is not set",
+		"GET /api/release-approval-key",
+		"https://github.com/acme/widgets/actions/runs/42577215514",
+	} {
+		if !strings.Contains(open.Body, want) {
+			t.Errorf("re-raised body missing %q:\n%s", want, open.Body)
+		}
+	}
+
+	// 5. After setting the variable, the person can immediately approve again
+	// without waiting out ReleaseApprovalHold.
+	now = now.Add(10 * time.Second)
+	if _, err := uic.DecideRelease(ui.WithPrincipal(ctx, person), repo.String(), "v3.2.0", true,
+		ui.ReleaseApproval{AllowBreaking: true}); err != nil {
+		t.Fatalf("re-approving after failed dispatch: %v", err)
+	}
+	if d := forge.dispatched(); len(d) != 2 {
+		t.Fatalf("dispatched %d times after retry, want 2", len(d))
 	}
 }

@@ -56,11 +56,20 @@ import (
 
 const (
 	// releasePendingPollInterval is how often one repository's tags are
-	// read: one matching-refs call, and a tag object per newly pending
-	// release.
+	// read when no recent approval or rejection is in flight: one
+	// matching-refs call, and a tag object per newly pending release.
 	releasePendingPollInterval = 10 * time.Minute
+	// releasePendingActivePollInterval is how often a repository's tags and
+	// promote-release.yml runs are checked right after a person approves or
+	// rejects a pending release, so a failed workflow_dispatch surfaces in
+	// the Inbox within seconds rather than after releasePendingPollInterval.
+	releasePendingActivePollInterval = 5 * time.Second
+	// releaseApprovalWatchWindow is how long after a person's answer
+	// releasePendingActivePollInterval stays in effect while the decision has
+	// neither promoted the tag nor failed.
+	releaseApprovalWatchWindow = 15 * time.Minute
 	// releasePendingAnswerHold is how long a person's answer keeps the
-	// notification down while the -pending tag outlives it.
+	// notification down while the -pending tag outlives an unfailed run.
 	releasePendingAnswerHold = model.ReleaseApprovalHold
 	// releasePendingNotesLimit bounds the release notes quoted in the body.
 	releasePendingNotesLimit = 3000
@@ -105,6 +114,7 @@ func reconcileReleasePending(ctx context.Context, deps Deps, now time.Time) erro
 		return nil // a forge connection that cannot read tags raises nothing
 	}
 	files, _ := deps.Client.(github.FileReader)
+	actionsReader, _ := deps.Client.(github.ActionsReader)
 	configs, err := deps.Store.ListRepoConfigs(ctx)
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading repo configs: %w", err)
@@ -160,22 +170,41 @@ func reconcileReleasePending(ctx context.Context, deps Deps, now time.Time) erro
 		if !actions {
 			continue
 		}
+		interval := releasePendingPollInterval
+		if hasRecentActiveReleaseDecision(ctx, deps.Store, repo, now) {
+			interval = releasePendingActivePollInterval
+		}
 		key := releasePendingKey(deps.Store, repo)
-		if last, ok := releasePendingPolled.Load(key); ok && now.Sub(last.(time.Time)) < releasePendingPollInterval {
+		if last, ok := releasePendingPolled.Load(key); ok && now.Sub(last.(time.Time)) < interval {
 			continue
 		}
 		releasePendingPolled.Store(key, now)
-		if err := watchPendingReleases(ctx, deps.Store, tags, files, repo, now); err != nil {
+		if err := watchPendingReleases(ctx, deps.Store, tags, files, actionsReader, repo, now); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
 }
 
+// hasRecentActiveReleaseDecision reports whether repo has an unfailed
+// release-approval dispatch within releaseApprovalWatchWindow of now.
+func hasRecentActiveReleaseDecision(ctx context.Context, store *model.Store, repo model.RepoRef, now time.Time) bool {
+	decisions, err := store.ListReleaseApprovalDecisions(ctx, repo)
+	if err != nil {
+		return false
+	}
+	for _, d := range decisions {
+		if !d.Failed() && now.Sub(d.DecidedAt) < releaseApprovalWatchWindow {
+			return true
+		}
+	}
+	return false
+}
+
 // watchPendingReleases raises and clears release.pending for repo from
-// its tags as they stand now.
+// its tags and any failed promote-release.yml run as they stand now.
 func watchPendingReleases(ctx context.Context, store *model.Store, tags github.ReleaseTagReader,
-	files github.FileReader, repo model.RepoRef, now time.Time) error {
+	files github.FileReader, actions github.ActionsReader, repo model.RepoRef, now time.Time) error {
 	refs, err := tags.ListMatchingTags(repo.StoredOwner(), repo.Name, "v")
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading %s's release tags: %w", repo, github.Readable(err))
@@ -198,9 +227,33 @@ func watchPendingReleases(ctx context.Context, store *model.Store, tags github.R
 		return fmt.Errorf("orchestrator: reading %s's release decisions: %w", repo, err)
 	}
 	var errs []error
+	dispatchFailures := map[string]*promoteReleaseFailure{}
+	if actions != nil {
+		for version, tag := range pending {
+			if released[version] {
+				continue
+			}
+			idx := activeDecisionIndexForTag(tags, repo, version, tag, decisions, now)
+			if idx < 0 {
+				continue
+			}
+			d := decisions[idx]
+			failure := checkPromoteReleaseFailure(actions, repo, version, d)
+			if failure == nil {
+				continue
+			}
+			failed := d.MarkFailed()
+			if err := store.PutReleaseApprovalDecision(ctx, failed); err != nil {
+				errs = append(errs, fmt.Errorf("orchestrator: marking %s %s decision failed: %w", repo, version, err))
+				continue
+			}
+			decisions[idx] = failed
+			dispatchFailures[version] = failure
+		}
+	}
 	// Clear what is answered: an open notification about this repository
 	// whose release is tagged, whose -pending tag is gone, or whose staged
-	// commit already has an active dispatched decision.
+	// commit already has an active (unfailed) dispatched decision.
 	for _, n := range all {
 		if n.ClearedAt != nil || n.Repo != repo.String() {
 			continue
@@ -220,14 +273,17 @@ func watchPendingReleases(ctx context.Context, store *model.Store, tags github.R
 			errs = append(errs, err)
 		}
 	}
-	// Raise what waits.
+	// Raise what waits (and attach any failed dispatch details to it).
 	for version, tag := range pending {
 		if released[version] {
 			continue
 		}
 		subject := model.NotificationSubject(model.FamilyReleasePending, version)
+		failure := dispatchFailures[version]
 		if open := openBySubject(all, subject); open != nil {
-			continue // raised already, by this or by the train's own run
+			if failure == nil || strings.Contains(open.Body, failure.Header()) {
+				continue // raised already, by this or by the train's own run
+			}
 		}
 		commit, message, err := peelPendingTag(tags, repo, tag)
 		if err != nil {
@@ -237,11 +293,24 @@ func watchPendingReleases(ctx context.Context, store *model.Store, tags github.R
 		if releaseCommitAnswered(decisions, all, repo, version, commit, now) {
 			continue
 		}
+		if failure == nil && actions != nil {
+			if fd := failedDecisionForCommit(decisions, version, commit); fd != nil {
+				failure = checkPromoteReleaseFailure(actions, repo, version, *fd)
+			}
+		}
+		severity := model.NotificationWarning
+		title := version + " is ready to promote"
+		body := pendingReleaseBody(files, repo, version, message)
+		if failure != nil {
+			severity = model.NotificationCritical
+			title = fmt.Sprintf("%s is ready to promote (%s dispatch failed)", version, failure.DecisionVerb)
+			body = failure.FormatBlock(repo) + "\n" + body
+		}
 		n := model.Notification{
 			Subject:  subject,
-			Severity: model.NotificationWarning,
-			Title:    version + " is ready to promote",
-			Body:     pendingReleaseBody(files, repo, version, message),
+			Severity: severity,
+			Title:    title,
+			Body:     body,
 			Repo:     repo.String(),
 			RaisedBy: releasePendingNotifier,
 			Actions:  model.ReleasePendingActions,
@@ -286,10 +355,11 @@ func peelPendingTag(tags github.ReleaseTagReader, repo model.RepoRef, tag github
 	return at.Commit, at.Message, nil
 }
 
-// activeDecisionForTag returns an active stored decision matching tag's
-// commit, peeling tag only when version has an active decision on repo.
-func activeDecisionForTag(tags github.ReleaseTagReader, repo model.RepoRef, version string, tag github.TagRef,
-	decisions []model.ReleaseApprovalDecision, now time.Time) *model.ReleaseApprovalDecision {
+// activeDecisionIndexForTag returns the index of an active stored decision
+// matching tag's commit, peeling tag only when version has an active decision
+// on repo, or -1 if none.
+func activeDecisionIndexForTag(tags github.ReleaseTagReader, repo model.RepoRef, version string, tag github.TagRef,
+	decisions []model.ReleaseApprovalDecision, now time.Time) int {
 	hasActiveForVersion := false
 	for i := range decisions {
 		if decisions[i].Version == version && decisions[i].ActiveAt(now) {
@@ -298,14 +368,36 @@ func activeDecisionForTag(tags github.ReleaseTagReader, repo model.RepoRef, vers
 		}
 	}
 	if !hasActiveForVersion {
-		return nil
+		return -1
 	}
 	commit, _, err := peelPendingTag(tags, repo, tag)
 	if err != nil {
-		return nil
+		return -1
 	}
 	for i := range decisions {
 		if decisions[i].Version == version && decisions[i].Commit == commit && decisions[i].ActiveAt(now) {
+			return i
+		}
+	}
+	return -1
+}
+
+// activeDecisionForTag returns an active stored decision matching tag's
+// commit, peeling tag only when version has an active decision on repo.
+func activeDecisionForTag(tags github.ReleaseTagReader, repo model.RepoRef, version string, tag github.TagRef,
+	decisions []model.ReleaseApprovalDecision, now time.Time) *model.ReleaseApprovalDecision {
+	idx := activeDecisionIndexForTag(tags, repo, version, tag, decisions, now)
+	if idx < 0 {
+		return nil
+	}
+	return &decisions[idx]
+}
+
+// failedDecisionForCommit returns the failed decision recorded for (version,
+// commit), if any.
+func failedDecisionForCommit(decisions []model.ReleaseApprovalDecision, version, commit string) *model.ReleaseApprovalDecision {
+	for i := range decisions {
+		if decisions[i].Version == version && decisions[i].Commit == commit && decisions[i].Failed() {
 			return &decisions[i]
 		}
 	}
@@ -383,4 +475,200 @@ func pendingReleaseBody(files github.FileReader, repo model.RepoRef, version, ta
 	}
 	fmt.Fprintf(&b, "Release notes (%s):\n\n%s\n", notesPath, text)
 	return b.String()
+}
+
+var (
+	actionsTimestampPrefix = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+`)
+	anyReleaseVersionToken = regexp.MustCompile(`\bv[0-9]+\.[0-9]+\.[0-9]+\b`)
+)
+
+type promoteReleaseFailure struct {
+	RunRef           string
+	HTMLURL          string
+	DecisionVerb     string
+	Reason           string
+	NeedsApprovalKey bool
+}
+
+func (f *promoteReleaseFailure) Header() string {
+	return fmt.Sprintf("DISPATCH FAILED (%s): %s", f.RunRef, f.Reason)
+}
+
+func (f *promoteReleaseFailure) FormatBlock(repo model.RepoRef) string {
+	var b strings.Builder
+	b.WriteString(f.Header() + "\n")
+	if f.NeedsApprovalKey {
+		fmt.Fprintf(&b, "Remedy: set the repository variable GRAIN_RELEASE_APPROVAL_KEY on %s to the publicKey from GET /api/release-approval-key (or `grain release approval-key`), then approve or reject again.\n", repo)
+	}
+	if f.HTMLURL != "" {
+		fmt.Fprintf(&b, "Run URL: %s\n", f.HTMLURL)
+	}
+	return b.String()
+}
+
+// checkPromoteReleaseFailure inspects repo's recent promote-release.yml runs
+// after d.DecidedAt and reports a failure when the dispatched run concluded
+// unsuccessfully without promoting or dropping version.
+func checkPromoteReleaseFailure(actions github.ActionsReader, repo model.RepoRef, version string,
+	d model.ReleaseApprovalDecision) *promoteReleaseFailure {
+	workflow := d.Workflow
+	if workflow == "" {
+		workflow = "promote-release.yml"
+	}
+	runs, err := actions.ListActionsRuns(repo.StoredOwner(), repo.Name, github.ActionsRunsQuery{
+		Workflow: workflow,
+		Branch:   "main",
+		Since:    d.DecidedAt.Add(-time.Minute),
+		Limit:    10,
+	})
+	if err != nil || len(runs) == 0 {
+		return nil
+	}
+	cutoff := d.DecidedAt.Add(-5 * time.Second)
+	for _, r := range runs {
+		if r.Event != "" && r.Event != "workflow_dispatch" {
+			continue
+		}
+		if r.StartedAt != nil && r.StartedAt.Before(cutoff) && (r.UpdatedAt == nil || r.UpdatedAt.Before(d.DecidedAt)) {
+			continue
+		}
+		if mentionsDifferentVersion(r.DisplayTitle, version) {
+			continue
+		}
+		if r.Status != "completed" {
+			return nil // the newest dispatch run is still in progress
+		}
+		switch r.Conclusion {
+		case "", "success", "neutral", "skipped":
+			return nil
+		}
+		jobs, _ := actions.ListActionsJobs(repo.StoredOwner(), repo.Name, r.ID)
+		reason := ""
+		needsKey := false
+		wrongVersion := false
+		for _, j := range jobs {
+			if j.Conclusion == "" || j.Conclusion == "success" || j.Conclusion == "neutral" || j.Conclusion == "skipped" {
+				continue
+			}
+			if mentionsDifferentVersion(j.Name, version) {
+				wrongVersion = true
+				break
+			}
+			logText, _ := actions.ActionsJobLog(repo.StoredOwner(), repo.Name, j.ID)
+			if mentionsDifferentVersionInPromoteLog(logText, version) {
+				wrongVersion = true
+				break
+			}
+			if strings.Contains(logText, "GRAIN_RELEASE_APPROVAL_KEY") {
+				needsKey = true
+			}
+			if extracted := extractPromoteReleaseReason(logText); extracted != "" {
+				reason = extracted
+				break
+			}
+			if reason == "" && j.Name != "" {
+				reason = fmt.Sprintf("job %q ended with %s", j.Name, j.Conclusion)
+			}
+		}
+		if wrongVersion {
+			continue
+		}
+		if reason == "" {
+			reason = fmt.Sprintf("%s ended with %s", workflow, r.Conclusion)
+		}
+		if strings.Contains(reason, "GRAIN_RELEASE_APPROVAL_KEY") {
+			needsKey = true
+		}
+		return &promoteReleaseFailure{
+			RunRef:           fmt.Sprintf("gha:%s:%s:%d", repo.StoredOwner(), repo.Name, r.ID),
+			HTMLURL:          r.HTMLURL,
+			DecisionVerb:     d.DecisionVerb(),
+			Reason:           reason,
+			NeedsApprovalKey: needsKey,
+		}
+	}
+	return nil
+}
+
+func mentionsDifferentVersion(text, version string) bool {
+	if text == "" || strings.Contains(text, version) {
+		return false
+	}
+	return anyReleaseVersionToken.MatchString(text)
+}
+
+func mentionsDifferentVersionInPromoteLog(logText, version string) bool {
+	if logText == "" || strings.Contains(logText, version) {
+		return false
+	}
+	for _, line := range strings.Split(logText, "\n") {
+		if strings.Contains(line, "promote-release:") || strings.Contains(line, "verify-release-approval:") ||
+			strings.Contains(line, "EXPECT_VERSION") {
+			if anyReleaseVersionToken.MatchString(line) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func extractPromoteReleaseReason(logText string) string {
+	if strings.TrimSpace(logText) == "" {
+		return ""
+	}
+	var cleaned []string
+	for _, raw := range strings.Split(logText, "\n") {
+		line := strings.TrimSpace(strings.TrimRight(raw, "\r"))
+		line = actionsTimestampPrefix.ReplaceAllString(line, "")
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "##[group]") || strings.HasPrefix(line, "##[endgroup]") ||
+			strings.HasPrefix(line, "##[command]") {
+			continue
+		}
+		cleaned = append(cleaned, line)
+	}
+	stripErr := func(s string) string {
+		return strings.TrimSpace(strings.TrimPrefix(s, "##[error]"))
+	}
+	capLen := func(s string) string {
+		if len(s) > 400 {
+			return s[:400] + "…"
+		}
+		return s
+	}
+	for _, line := range cleaned {
+		s := stripErr(line)
+		if idx := strings.Index(s, "verify-release-approval: refused:"); idx >= 0 {
+			return capLen(s[idx:])
+		}
+	}
+	for _, line := range cleaned {
+		s := stripErr(line)
+		if strings.Contains(s, "RELEASE_ALLOW_BREAKING") || strings.Contains(s, "carries breaking changes") ||
+			strings.Contains(s, "short_soak_ok") || strings.Contains(s, "SHORT SOAK") {
+			return capLen(s)
+		}
+	}
+	for _, line := range cleaned {
+		s := stripErr(line)
+		if (strings.HasPrefix(s, "promote-release:") && !strings.Contains(s, "approved ") && !strings.Contains(s, "in grain's Inbox")) ||
+			strings.Contains(s, "release-from-trunk: ERROR:") || strings.Contains(s, "refused:") {
+			return capLen(s)
+		}
+	}
+	for _, line := range cleaned {
+		if after, ok := strings.CutPrefix(line, "##[error]"); ok {
+			s := strings.TrimSpace(after)
+			if s != "" && !strings.HasPrefix(s, "Process completed with exit code") {
+				return capLen(s)
+			}
+		}
+	}
+	for i := len(cleaned) - 1; i >= 0; i-- {
+		s := stripErr(cleaned[i])
+		if s != "" && !strings.HasPrefix(s, "Process completed with exit code") {
+			return capLen(s)
+		}
+	}
+	return ""
 }
