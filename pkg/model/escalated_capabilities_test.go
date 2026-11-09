@@ -171,3 +171,106 @@ func TestSeededDefaultReferenceIsReportedAsADefault(t *testing.T) {
 		t.Errorf("session grants = %+v, want each configured capability once by grain, then the session defaults", seeded.Grants)
 	}
 }
+
+// EscalatedCapabilities, AgentEscalatedCapabilities and GrantsSubsetOf treat a
+// parent holding canonical api:self-debug + grain#source={} and a proposal
+// asking for bare self-debug (and the reverse) consistently, while refusing a
+// partial parent that holds only one half of the 1-to-many expansion.
+func TestEscalatedCapabilitiesTreatsBareAliasesAndCanonicalGrantsConsistently(t *testing.T) {
+	t.Parallel()
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	label := func(caps ...string) []model.Grant {
+		out := make([]model.Grant, len(caps))
+		for i, c := range caps {
+			out[i] = model.Grant{Capability: c, Via: model.GrantByLabel}
+		}
+		return out
+	}
+
+	canonicalSelfDebug := label("api:self-debug", model.GrainSourceGrant)
+	canonicalRefSelfDebug := label("https://grain.dev/capabilities/api#self-debug", model.GrainSourceGrant)
+	bareSelfDebug := label("self-debug")
+
+	// 1. Canonical parent covers bare child.
+	canonParent := model.Task{ID: "parent", Target: &repo, AutoMerge: true, Grants: canonicalSelfDebug}
+	bareChild := model.Task{ID: "child", Target: &repo, Grants: bareSelfDebug}
+	if got := model.EscalatedCapabilities(bareChild, canonParent); len(got) != 0 {
+		t.Errorf("canonical parent vs bare self-debug child: EscalatedCapabilities = %v, want none", got)
+	}
+	if got := model.AgentEscalatedCapabilities(bareChild, canonParent); len(got) != 0 {
+		t.Errorf("canonical parent vs bare self-debug child: AgentEscalatedCapabilities = %v, want none", got)
+	}
+	if !model.GrantsSubsetOf(bareChild.Grants, canonParent.Grants) {
+		t.Error("canonical parent vs bare self-debug child: GrantsSubsetOf = false, want true")
+	}
+	if !model.AutoSubmits(bareChild, canonParent) {
+		t.Error("canonical parent vs bare self-debug child: AutoSubmits = false, want true")
+	}
+
+	// 2. Bare parent covers canonical child (both api:self-debug and api#self-debug spellings).
+	bareParent := model.Task{ID: "parent", Target: &repo, AutoMerge: true, Grants: bareSelfDebug}
+	for name, grants := range map[string][]model.Grant{
+		"stored api:self-debug": canonicalSelfDebug,
+		"canonical api#ref":     canonicalRefSelfDebug,
+	} {
+		canonChild := model.Task{ID: "child", Target: &repo, Grants: grants}
+		if got := model.EscalatedCapabilities(canonChild, bareParent); len(got) != 0 {
+			t.Errorf("bare parent vs %s child: EscalatedCapabilities = %v, want none", name, got)
+		}
+		if got := model.AgentEscalatedCapabilities(canonChild, bareParent); len(got) != 0 {
+			t.Errorf("bare parent vs %s child: AgentEscalatedCapabilities = %v, want none", name, got)
+		}
+		if !model.GrantsSubsetOf(canonChild.Grants, bareParent.Grants) {
+			t.Errorf("bare parent vs %s child: GrantsSubsetOf = false, want true", name)
+		}
+		if !model.AutoSubmits(canonChild, bareParent) {
+			t.Errorf("bare parent vs %s child: AutoSubmits = false, want true", name)
+		}
+	}
+
+	// 3. Partial parent holding only one half of self-debug does NOT cover bare self-debug.
+	for name, partialGrants := range map[string][]model.Grant{
+		"only api:self-debug": label("api:self-debug"),
+		"only grain#source":   label(model.GrainSourceGrant),
+	} {
+		partialParent := model.Task{ID: "parent", Target: &repo, AutoMerge: true, Grants: partialGrants}
+		if got := model.EscalatedCapabilities(bareChild, partialParent); !slices.Equal(got, []string{"self-debug"}) {
+			t.Errorf("%s parent vs bare self-debug child: EscalatedCapabilities = %v, want [self-debug]", name, got)
+		}
+		if model.GrantsSubsetOf(bareChild.Grants, partialParent.Grants) {
+			t.Errorf("%s parent vs bare self-debug child: GrantsSubsetOf = true, want false", name)
+		}
+		if model.AutoSubmits(bareChild, partialParent) {
+			t.Errorf("%s parent vs bare self-debug child: AutoSubmits = true, want false", name)
+		}
+	}
+
+	// 4. 1-to-1 non-dangerous aliases (gcp-key, memory) match in both directions,
+	// while person-only self-repair / grain#host-exec={} always escalates in both directions.
+	for _, pair := range []struct {
+		bare, canonical string
+	}{
+		{"gcp-key", model.GCPKeySandboxAgentGrant},
+		{"memory", "api:memory"},
+	} {
+		pCanon := model.Task{Grants: label(pair.canonical)}
+		cBare := model.Task{Grants: label(pair.bare)}
+		if got := model.EscalatedCapabilities(cBare, pCanon); len(got) != 0 || !model.GrantsSubsetOf(cBare.Grants, pCanon.Grants) {
+			t.Errorf("canonical %s parent vs bare %s child: escalated=%v subset=%v",
+				pair.canonical, pair.bare, got, model.GrantsSubsetOf(cBare.Grants, pCanon.Grants))
+		}
+		if got := model.EscalatedCapabilities(pCanon, cBare); len(got) != 0 || !model.GrantsSubsetOf(pCanon.Grants, cBare.Grants) {
+			t.Errorf("bare %s parent vs canonical %s child: escalated=%v subset=%v",
+				pair.bare, pair.canonical, got, model.GrantsSubsetOf(pCanon.Grants, cBare.Grants))
+		}
+	}
+
+	pHostExec := model.Task{Grants: label(model.GrainHostExecGrant)}
+	cSelfRepair := model.Task{Grants: label("self-repair")}
+	if got := model.EscalatedCapabilities(cSelfRepair, pHostExec); !slices.Equal(got, []string{"self-repair"}) {
+		t.Errorf("person-only bare self-repair must escalate even when parent holds grain#host-exec: got %v", got)
+	}
+	if got := model.EscalatedCapabilities(pHostExec, cSelfRepair); !slices.Equal(got, []string{model.GrainHostExecGrant}) {
+		t.Errorf("person-only grain#host-exec must escalate even when parent holds bare self-repair: got %v", got)
+	}
+}

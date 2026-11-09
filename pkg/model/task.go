@@ -648,22 +648,62 @@ type Grant struct {
 //
 // Both sides are read through CanonicalGrant into the spelling slice 2
 // stores (StoredGrantSpelling), so an api reference and the api:<scope>
-// it stands for compare equal.
+// it stands for compare equal, and retired one-release aliases match
+// the canonical grant(s) they became (CanonicalLegacyGrants) in either
+// direction.
 func GrantsSubsetOf(grants, allowed []Grant) bool {
 	grants, allowed = storedGrantSpellings(grants), storedGrantSpellings(allowed)
-	have := make(map[string]bool, len(allowed))
-	for _, g := range allowed {
-		have[g.Capability] = true
-	}
+	have := heldNonRefGrants(allowed)
 	for _, g := range grants {
 		if IsCapabilityRef(g.Capability) {
 			continue
 		}
-		if !have[g.Capability] {
+		if !nonRefGrantCovered(g.Capability, have, allowed) {
 			return false
 		}
 	}
 	return len(UncoveredCapabilityRefs(grants, allowed)) == 0
+}
+
+// heldNonRefGrants returns the non-reference grant names covered by grants,
+// including the non-reference canonical grants any retired bare capability in
+// grants expanded into. Assumes grants has passed through storedGrantSpellings.
+func heldNonRefGrants(grants []Grant) map[string]bool {
+	have := make(map[string]bool, len(grants))
+	for _, g := range grants {
+		have[g.Capability] = true
+		for _, c := range CanonicalLegacyGrants(g.Capability) {
+			c = StoredGrantSpelling(c)
+			if !IsCapabilityRef(c) {
+				have[c] = true
+			}
+		}
+	}
+	return have
+}
+
+// nonRefGrantCovered reports whether capability (already in StoredGrantSpelling
+// and not a capability reference) is covered by parent: either held directly in
+// have, or a retired alias whose canonical replacement grants are every one
+// covered by have and UncoveredCapabilityRefs(..., parent).
+func nonRefGrantCovered(capability string, have map[string]bool, parent []Grant) bool {
+	if have[capability] {
+		return true
+	}
+	repl := CanonicalLegacyGrants(capability)
+	if len(repl) == 0 || (len(repl) == 1 && StoredGrantSpelling(repl[0]) == capability) {
+		return false
+	}
+	var refs []Grant
+	for _, c := range repl {
+		c = StoredGrantSpelling(c)
+		if IsCapabilityRef(c) {
+			refs = append(refs, Grant{Capability: c})
+		} else if !have[c] {
+			return false
+		}
+	}
+	return len(refs) == 0 || len(UncoveredCapabilityRefs(refs, parent)) == 0
 }
 
 // SameBranch reports whether two tasks' work lands in the same place:

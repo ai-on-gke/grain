@@ -258,27 +258,43 @@ func AutoSubmitLimitNote(proposer string, limit AutoSubmitLimit, limits AutoSubm
 // director-capabilities.spec.md §4.2), which the filing paths ask for
 // with the seeding source this function does not know.
 func EscalatedCapabilities(child, parent Task) []string {
+	return escalatedCapabilities(child, parent, true)
+}
+
+// AgentEscalatedCapabilities is EscalatedCapabilities for an agent approving
+// an unapproved task rather than proposing one: every non-default capability
+// child holds that parent does not cover, regardless of Via.
+func AgentEscalatedCapabilities(child, parent Task) []string {
+	return escalatedCapabilities(child, parent, false)
+}
+
+func escalatedCapabilities(child, parent Task, labelOnly bool) []string {
 	// Read through CanonicalGrant into the stored spelling, so an api
-	// reference and today's api:<scope> are one grant here.
+	// reference and today's api:<scope> are one grant here, and treat
+	// retired bare aliases and their canonical expansions consistently in
+	// both directions.
 	child.Grants, parent.Grants = storedGrantSpellings(child.Grants), storedGrantSpellings(parent.Grants)
-	held := make(map[string]bool, len(parent.Grants))
-	for _, g := range parent.Grants {
-		held[g.Capability] = true
-	}
+	held := heldNonRefGrants(parent.Grants)
 	var out []string
 	listed := map[string]bool{}
 	for _, g := range child.Grants {
 		if IsCapabilityRef(g.Capability) || listed[g.Capability] {
 			continue
 		}
+		if labelOnly {
+			if g.Via != GrantByLabel {
+				continue
+			}
+		} else if g.Via == GrantByDefault {
+			continue
+		}
 		// A dangerous api scope, or priority-dispatch, is a person's to
 		// grant, never an agent's (IsPersonOnlyGrant, docs/agent-api.md):
 		// a proposal asking for one is an escalation even when its
 		// proposer holds it.
-		if g.Via != GrantByLabel || (held[g.Capability] && !IsPersonOnlyGrant(g.Capability)) {
+		if nonRefGrantCovered(g.Capability, held, parent.Grants) && !IsPersonOnlyGrant(g.Capability) {
 			continue
 		}
-		held[g.Capability] = true
 		listed[g.Capability] = true
 		out = append(out, g.Capability)
 	}
