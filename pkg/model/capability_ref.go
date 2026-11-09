@@ -605,6 +605,12 @@ type CapabilitySubject struct {
 	// TrustedSchedule is a CI run grain itself fired from a workflow's
 	// cron (ci.Request.TrustedSchedule), which a CIGrantRule may admit.
 	TrustedSchedule bool
+	// AnyEvent is a CI job whose trigger event is not known yet: the
+	// picker for a repository's CI capabilities, which grants to every
+	// job the repository runs. An event-gated CIGrantRule admits some of
+	// those, so it is not judged here; it still is at the job, which
+	// never sets this.
+	AnyEvent bool
 }
 
 // Validate reports a rule that can never match as written.

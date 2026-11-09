@@ -57,6 +57,7 @@ import {
   isLegacyInteractiveClause,
 } from "./taskFilters.js";
 import { REPORT_WINDOWS } from "./report.js";
+import { comparisonRefSegment } from "./state.js";
 import {
   oldAdminDestination,
   settingsSectionFor,
@@ -323,8 +324,9 @@ function stateFilterFromQuery(params) {
 // branch name carries "/" of its own (grain/task-12 is the shape grain
 // gives them). "..." cannot appear in one -- git refuses consecutive dots
 // in a ref name -- so it is a separator nothing can be mistaken for.
-// A ref is decoded on the way in and written plainly on the way out: a
-// branch name's "/" is a literal slash here, the way github.com's own
+// A ref is decoded on the way in and written with only its "/" left
+// plain on the way out (state.js comparisonRefSegment): a branch name's
+// "/" is a literal slash here, the way github.com's own
 // compare URLs spell it, but a link written by something that escaped it
 // (%2F -- which is what the query form this replaces always produced)
 // names the same branch and must open the same page.
@@ -344,9 +346,10 @@ function comparisonFromRefs(refs) {
 }
 
 function comparisonRefs(comparison) {
+  const head = comparisonRefSegment(comparison.head);
   return comparison.base
-    ? `${comparison.base}...${comparison.head}`
-    : comparison.head;
+    ? `${comparisonRefSegment(comparison.base)}...${head}`
+    : head;
 }
 
 // Before that page existed the same comparison was the repo page itself
