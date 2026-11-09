@@ -83,17 +83,17 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 		}
 		fmt.Println()
 	}
-	hasRegistryIssue := h.Registry != nil && (h.Registry.LastError != "" || len(h.Registry.ScopeConflicts) > 0)
-	if hasRegistryIssue {
-		fmt.Printf("registry (%s @ %s): %s\n", h.Registry.Entry, h.Registry.URL, h.Registry.State)
-		if h.Registry.LastError != "" {
-			if h.Registry.ConsecutiveFailures > 0 {
-				fmt.Printf("  last error (%d failure(s)): %s\n", h.Registry.ConsecutiveFailures, h.Registry.LastError)
+	hasHubIssue := h.Hub != nil && (h.Hub.LastError != "" || len(h.Hub.ScopeConflicts) > 0)
+	if hasHubIssue {
+		fmt.Printf("registry (%s @ %s): %s\n", h.Hub.Entry, h.Hub.URL, h.Hub.State)
+		if h.Hub.LastError != "" {
+			if h.Hub.ConsecutiveFailures > 0 {
+				fmt.Printf("  last error (%d failure(s)): %s\n", h.Hub.ConsecutiveFailures, h.Hub.LastError)
 			} else {
-				fmt.Printf("  last error: %s\n", h.Registry.LastError)
+				fmt.Printf("  last error: %s\n", h.Hub.LastError)
 			}
 		}
-		for _, c := range h.Registry.ScopeConflicts {
+		for _, c := range h.Hub.ScopeConflicts {
 			scope := c.Repo
 			if c.PathPrefix != "" {
 				scope += "/" + c.PathPrefix
@@ -109,7 +109,7 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 		}
 	}
 	if len(h.Counters) == 0 {
-		if !hasRegistryIssue && len(h.CapabilityServers) == 0 {
+		if !hasHubIssue && len(h.CapabilityServers) == 0 {
 			fmt.Println("no counters: nothing on this daemon registers any")
 		}
 		return

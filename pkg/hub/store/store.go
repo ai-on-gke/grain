@@ -1298,7 +1298,7 @@ func (s *Store) CreateEntry(ctx context.Context, in CreateEntryInput) (*EntryRow
 	ownerGroup := strings.ToLower(strings.TrimSpace(in.OwnerGroup))
 	hostKind := strings.TrimSpace(in.HostKind)
 	if hostKind == "" && in.Kind == api.KindInstance {
-		hostKind = string(api.HostKindRegistryVM)
+		hostKind = string(api.HostKindHubVM)
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)

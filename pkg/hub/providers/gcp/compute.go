@@ -40,7 +40,7 @@ import (
 const (
 	defaultComputeBaseURL = "https://compute.googleapis.com/compute/v1"
 	cloudPlatformScope    = "https://www.googleapis.com/auth/cloud-platform"
-	defaultRegistryID     = "grain-registry"
+	defaultHubID          = "grain-registry"
 	InstanceHTTPPort      = 8080
 )
 
@@ -69,11 +69,11 @@ func WithComputeBaseURL(baseURL string) ComputeOption {
 	}
 }
 
-// WithComputeRegistryID overrides the `grain-registry` label value enforced on VMs and disks.
-func WithComputeRegistryID(id string) ComputeOption {
+// WithComputeHubID overrides the `grain-registry` label value enforced on VMs and disks.
+func WithComputeHubID(id string) ComputeOption {
 	return func(c *GCECompute) {
 		if v := strings.TrimSpace(id); v != "" {
-			c.registryID = v
+			c.hubID = v
 		}
 	}
 }
@@ -100,7 +100,7 @@ type GCECompute struct {
 	bootImage     string
 	startupScript string
 	vmPrefix      string
-	registryID    string
+	hubID         string
 	labels        map[string]string
 	baseURL       string
 	httpClient    *http.Client
@@ -200,7 +200,7 @@ func NewGCECompute(ctx context.Context, cfg hub.ComputeConfig, opts ...ComputeOp
 		regID = strings.TrimSpace(cfg.Labels["grain-registry"])
 	}
 	if regID == "" {
-		regID = defaultRegistryID
+		regID = defaultHubID
 	}
 
 	labelsCopy := make(map[string]string, len(cfg.Labels))
@@ -218,7 +218,7 @@ func NewGCECompute(ctx context.Context, cfg hub.ComputeConfig, opts ...ComputeOp
 		bootImage:     strings.TrimSpace(cfg.BootImage),
 		startupScript: startupScript,
 		vmPrefix:      vmPrefix,
-		registryID:    regID,
+		hubID:         regID,
 		labels:        labelsCopy,
 		baseURL:       defaultComputeBaseURL,
 		pollInterval:  50 * time.Millisecond,
@@ -280,8 +280,8 @@ func (c *GCECompute) verifyInstanceLabels(inst *gceInstance, expectedEntry strin
 	if inst.Labels != nil {
 		gotReg = inst.Labels["grain-registry"]
 	}
-	if gotReg != c.registryID {
-		return fmt.Errorf("%w: instance %q label grain-registry=%q does not match %q", ErrOutOfScope, inst.Name, gotReg, c.registryID)
+	if gotReg != c.hubID {
+		return fmt.Errorf("%w: instance %q label grain-registry=%q does not match %q", ErrOutOfScope, inst.Name, gotReg, c.hubID)
 	}
 	if inst.Labels != nil {
 		if gotEntry := inst.Labels["grain-entry"]; gotEntry != "" {
@@ -458,7 +458,7 @@ func (c *GCECompute) CreateInstance(ctx context.Context, spec hub.InstanceSpec) 
 	for k, v := range spec.Labels {
 		labels[k] = v
 	}
-	labels["grain-registry"] = c.registryID
+	labels["grain-registry"] = c.hubID
 	labels["grain-entry"] = spec.Name
 	labels["grain-generation"] = gen
 	labels["grain-managed"] = "true"
@@ -509,7 +509,7 @@ func (c *GCECompute) CreateInstance(ctx context.Context, spec hub.InstanceSpec) 
 	metaItems := []gceMetadataItem{
 		{Key: "enable-oslogin", Value: "TRUE"},
 		{Key: "block-project-ssh-keys", Value: "TRUE"},
-		{Key: "grain-registry", Value: c.registryID},
+		{Key: "grain-registry", Value: c.hubID},
 		{Key: "grain-entry", Value: spec.Name},
 		{Key: "grain-generation", Value: gen},
 		{Key: "grain-config", Value: envJSON},
@@ -713,7 +713,7 @@ func (c *GCECompute) sweepStragglerDisks(ctx context.Context, zone, entryName st
 		if !strings.HasPrefix(d.Name, c.vmPrefix) || d.Labels == nil {
 			continue
 		}
-		if d.Labels["grain-registry"] != c.registryID || d.Labels["grain-entry"] != entryName {
+		if d.Labels["grain-registry"] != c.hubID || d.Labels["grain-entry"] != entryName {
 			continue
 		}
 		delDiskURL := fmt.Sprintf("%s/projects/%s/zones/%s/disks/%s",
@@ -798,7 +798,7 @@ func (c *GCECompute) ListInstances(ctx context.Context) ([]hub.InstanceStatus, e
 			if !strings.HasPrefix(inst.Name, c.vmPrefix) || inst.Labels == nil {
 				continue
 			}
-			if inst.Labels["grain-registry"] != c.registryID {
+			if inst.Labels["grain-registry"] != c.hubID {
 				continue
 			}
 			ip := extractInternalIP(inst)

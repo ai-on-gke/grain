@@ -29,11 +29,11 @@ const (
 	plcModulePrefix = "github.com/ai-on-gke/grain/grain-plc"
 )
 
-// registryAllowed lists the only packages in this Go module that
+// hubAllowed lists the only packages in this Go module that
 // cmd/grain-hub, pkg/hub/..., and pkg/webauth may import (directly
 // or transitively). Everything else in the grain daemon, sandbox, agent, and
 // orchestrator trees is off-limits by default (hub.design.md §Import-boundary test).
-var registryAllowed = []string{
+var hubAllowed = []string{
 	"cmd/grain-hub",
 	"cmd/grain-hub/...",
 	"cmd/grain-registry",
@@ -50,10 +50,10 @@ var registryAllowed = []string{
 	"pkg/apierror",
 }
 
-// registryAPIAllowed lists the only packages in this module that
+// hubAPIAllowed lists the only packages in this module that
 // pkg/hub/api may import (directly or transitively). External non-stdlib
 // modules are also forbidden in pkg/hub/api.
-var registryAPIAllowed = []string{
+var hubAPIAllowed = []string{
 	"pkg/hub/api",
 	"pkg/tunnel/wsupgrade",
 	"pkg/tunnel/mux",
@@ -106,7 +106,7 @@ func matchesPattern(rel string, patterns []string) bool {
 	return false
 }
 
-func isRegistryOwnedPackage(rel string) bool {
+func isHubOwnedPackage(rel string) bool {
 	return matchesPattern(rel, []string{
 		"cmd/grain-hub",
 		"cmd/grain-hub/...",
@@ -116,7 +116,7 @@ func isRegistryOwnedPackage(rel string) bool {
 	})
 }
 
-func checkRegistryIsolation(deps []string) []string {
+func checkHubIsolation(deps []string) []string {
 	var forbidden []string
 	seen := map[string]bool{}
 	for _, pkg := range deps {
@@ -124,7 +124,7 @@ func checkRegistryIsolation(deps []string) []string {
 		if !ok {
 			continue
 		}
-		if !matchesPattern(rel, registryAllowed) && !seen[rel] {
+		if !matchesPattern(rel, hubAllowed) && !seen[rel] {
 			seen[rel] = true
 			forbidden = append(forbidden, rel)
 		}
@@ -138,20 +138,20 @@ type pkgImports struct {
 	imports    []string
 }
 
-// registryInternalsTestOnlyCallers are packages outside the registry that
+// hubInternalsTestOnlyCallers are packages outside the registry that
 // may import its internals because they are not daemon or CLI code at all:
 // tests/security holds every server's trust boundaries as tests (its only
 // non-test file is doc.go), and the registry's consent surface is one of
 // them, so it stands up a real pkg/hub Server over pkg/hub/store.
-var registryInternalsTestOnlyCallers = map[string]bool{
+var hubInternalsTestOnlyCallers = map[string]bool{
 	"tests/security": true,
 }
 
-func checkNonRegistryPackagesOnlyImportAPI(pkgs []pkgImports) []string {
+func checkNonHubPackagesOnlyImportAPI(pkgs []pkgImports) []string {
 	var violations []string
 	for _, p := range pkgs {
 		callerRel, ok := strings.CutPrefix(p.importPath, modulePrefix)
-		if !ok || isRegistryOwnedPackage(callerRel) || registryInternalsTestOnlyCallers[callerRel] {
+		if !ok || isHubOwnedPackage(callerRel) || hubInternalsTestOnlyCallers[callerRel] {
 			continue
 		}
 		for _, imp := range p.imports {
@@ -159,7 +159,7 @@ func checkNonRegistryPackagesOnlyImportAPI(pkgs []pkgImports) []string {
 			if !ok {
 				continue
 			}
-			if isRegistryOwnedPackage(impRel) && impRel != "pkg/hub/api" {
+			if isHubOwnedPackage(impRel) && impRel != "pkg/hub/api" {
 				violations = append(violations, callerRel+" -> "+impRel)
 			}
 		}
@@ -173,7 +173,7 @@ type depInfo struct {
 	standard   bool
 }
 
-func checkRegistryAPIPurity(deps []depInfo) []string {
+func checkHubAPIPurity(deps []depInfo) []string {
 	var forbidden []string
 	for _, d := range deps {
 		if d.standard {
@@ -185,7 +185,7 @@ func checkRegistryAPIPurity(deps []depInfo) []string {
 			forbidden = append(forbidden, d.importPath)
 			continue
 		}
-		if !matchesPattern(rel, registryAPIAllowed) {
+		if !matchesPattern(rel, hubAPIAllowed) {
 			forbidden = append(forbidden, rel)
 		}
 	}
@@ -207,7 +207,7 @@ func checkNoGrainPLCImports(pkgs []pkgImports) []string {
 	return violations
 }
 
-func checkGrainPLCImportsOnlyRegistryAPI(deps []string) []string {
+func checkGrainPLCImportsOnlyHubAPI(deps []string) []string {
 	var forbidden []string
 	seen := map[string]bool{}
 	for _, pkg := range deps {
@@ -218,7 +218,7 @@ func checkGrainPLCImportsOnlyRegistryAPI(deps []string) []string {
 		if !ok {
 			continue
 		}
-		if !matchesPattern(rel, registryAPIAllowed) && !seen[rel] {
+		if !matchesPattern(rel, hubAPIAllowed) && !seen[rel] {
 			seen[rel] = true
 			forbidden = append(forbidden, rel)
 		}
@@ -227,7 +227,7 @@ func checkGrainPLCImportsOnlyRegistryAPI(deps []string) []string {
 	return forbidden
 }
 
-func TestRegistryDoesNotImportDaemonPackages(t *testing.T) {
+func TestHubDoesNotImportDaemonPackages(t *testing.T) {
 	roots := []string{"./pkg/hub/...", "./pkg/hubenv/...", "./pkg/webauth/..."}
 	for _, cmdDir := range []string{"grain-hub", "grain-registry"} {
 		if info, err := os.Stat(filepath.Join(repoRootDir(t), "cmd", cmdDir)); err == nil && info.IsDir() {
@@ -236,7 +236,7 @@ func TestRegistryDoesNotImportDaemonPackages(t *testing.T) {
 	}
 	args := append([]string{"-deps", "-test=false"}, roots...)
 	deps := runGoList(t, args...)
-	if bad := checkRegistryIsolation(deps); len(bad) > 0 {
+	if bad := checkHubIsolation(deps); len(bad) > 0 {
 		t.Fatalf("registry/webauth packages transitively import forbidden grain packages:\n\t%s\n\n"+
 			"cmd/grain-hub, cmd/grain-registry, pkg/hub/..., pkg/hubenv, and pkg/webauth must remain isolated from daemon/sandbox/model packages "+
 			"(design/design/hub.design.md §Import-boundary test).",
@@ -244,7 +244,7 @@ func TestRegistryDoesNotImportDaemonPackages(t *testing.T) {
 	}
 }
 
-func TestNonRegistryPackagesImportOnlyRegistryAPI(t *testing.T) {
+func TestNonHubPackagesImportOnlyHubAPI(t *testing.T) {
 	lines := runGoList(t, "-f", `{{.ImportPath}}|{{join .Imports ","}},{{join .TestImports ","}},{{join .XTestImports ","}}`, "./...")
 	var pkgs []pkgImports
 	for _, line := range lines {
@@ -263,14 +263,14 @@ func TestNonRegistryPackagesImportOnlyRegistryAPI(t *testing.T) {
 		}
 		pkgs = append(pkgs, pkgImports{importPath: pkgPath, imports: imps})
 	}
-	if bad := checkNonRegistryPackagesOnlyImportAPI(pkgs); len(bad) > 0 {
+	if bad := checkNonHubPackagesOnlyImportAPI(pkgs); len(bad) > 0 {
 		t.Fatalf("packages outside cmd/grain-hub and pkg/hub/... import internal registry packages:\n\t%s\n\n"+
 			"Daemon and CLI packages may import pkg/hub/api only.",
 			strings.Join(bad, "\n\t"))
 	}
 }
 
-func TestRegistryAPIDependsOnlyOnStdlibAndLeafPackages(t *testing.T) {
+func TestHubAPIDependsOnlyOnStdlibAndLeafPackages(t *testing.T) {
 	lines := runGoList(t, "-deps", "-test=false", "-f", "{{.ImportPath}} {{.Standard}}", "./pkg/hub/api")
 	var deps []depInfo
 	for _, line := range lines {
@@ -283,7 +283,7 @@ func TestRegistryAPIDependsOnlyOnStdlibAndLeafPackages(t *testing.T) {
 			standard:   fields[1] == "true",
 		})
 	}
-	if bad := checkRegistryAPIPurity(deps); len(bad) > 0 {
+	if bad := checkHubAPIPurity(deps); len(bad) > 0 {
 		t.Fatalf("pkg/hub/api depends on forbidden non-stdlib or sibling packages:\n\t%s\n\n"+
 			"pkg/hub/api must depend only on stdlib, pkg/tunnel/wsupgrade, pkg/tunnel/mux, and pkg/apierror.",
 			strings.Join(bad, "\n\t"))
@@ -323,13 +323,13 @@ func TestCoreNeverImportsGrainPLC(t *testing.T) {
 	}
 }
 
-func TestGrainPLCImportsOnlyRegistryAPI(t *testing.T) {
+func TestGrainPLCImportsOnlyHubAPI(t *testing.T) {
 	plcDir := filepath.Join(repoRootDir(t), "grain-plc")
 	if info, err := os.Stat(filepath.Join(plcDir, "go.mod")); err != nil || info.IsDir() {
 		t.Fatalf("grain-plc/go.mod not found at %s: %v", plcDir, err)
 	}
 	deps := runGoListInDir(t, plcDir, "-deps", "-test=false", "./...")
-	if bad := checkGrainPLCImportsOnlyRegistryAPI(deps); len(bad) > 0 {
+	if bad := checkGrainPLCImportsOnlyHubAPI(deps); len(bad) > 0 {
 		t.Fatalf("grain-plc packages transitively import forbidden core grain packages:\n\t%s\n\n"+
 			"grain-plc/ may import only pkg/hub/api (and its allowed leaf dependencies) from github.com/ai-on-gke/grain.",
 			strings.Join(bad, "\n\t"))
@@ -359,14 +359,14 @@ func TestBoundaryCheckersCatchViolations(t *testing.T) {
 		"pkg/tunnelvision",
 		"pkg/registry2",
 	} {
-		got := checkRegistryIsolation([]string{modulePrefix + "pkg/hub/server", modulePrefix + forbidden})
+		got := checkHubIsolation([]string{modulePrefix + "pkg/hub/server", modulePrefix + forbidden})
 		if len(got) != 1 || got[0] != forbidden {
-			t.Errorf("checkRegistryIsolation(%q) = %v, want [%s]", forbidden, got, forbidden)
+			t.Errorf("checkHubIsolation(%q) = %v, want [%s]", forbidden, got, forbidden)
 		}
 	}
 
 	// 2. Non-registry -> registry internals catches server/store/reconcile/providers/root while allowing pkg/hub/api.
-	reverse := checkNonRegistryPackagesOnlyImportAPI([]pkgImports{
+	reverse := checkNonHubPackagesOnlyImportAPI([]pkgImports{
 		{
 			importPath: modulePrefix + "pkg/daemon",
 			imports: []string{
@@ -420,7 +420,7 @@ func TestBoundaryCheckersCatchViolations(t *testing.T) {
 	}
 
 	// 3. pkg/hub/api purity catches sibling packages, pkg/webauth, and external modules.
-	purity := checkRegistryAPIPurity([]depInfo{
+	purity := checkHubAPIPurity([]depInfo{
 		{importPath: "net/http", standard: true},
 		{importPath: modulePrefix + "pkg/tunnel/mux", standard: false},
 		{importPath: modulePrefix + "pkg/tunnel/wsupgrade", standard: false},
@@ -463,7 +463,7 @@ func TestBoundaryCheckersCatchViolations(t *testing.T) {
 	}
 
 	// 5. grain-plc -> core check allows pkg/hub/api and leaf deps while catching internal core packages.
-	plcCoreForbidden := checkGrainPLCImportsOnlyRegistryAPI([]string{
+	plcCoreForbidden := checkGrainPLCImportsOnlyHubAPI([]string{
 		plcModulePrefix + "/pkg/grainclient",
 		modulePrefix + "pkg/hub/api",
 		modulePrefix + "pkg/tunnel/wsupgrade",

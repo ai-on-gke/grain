@@ -49,9 +49,9 @@ import (
 //   - one person cannot see or revoke another's grant, and a probe for
 //     somebody else's grant ID reads exactly like a missing one.
 
-type securityRegistryFrontIdentity struct{}
+type securityHubFrontIdentity struct{}
 
-func (securityRegistryFrontIdentity) Authenticate(r *http.Request) (*webauth.Caller, error) {
+func (securityHubFrontIdentity) Authenticate(r *http.Request) (*webauth.Caller, error) {
 	email := strings.TrimSpace(r.Header.Get("X-Test-Email"))
 	if email == "" {
 		return nil, errors.New("unauthenticated")
@@ -59,17 +59,17 @@ func (securityRegistryFrontIdentity) Authenticate(r *http.Request) (*webauth.Cal
 	return &webauth.Caller{Email: email, Subject: "sub:" + email}, nil
 }
 
-type securityRegistryGroups struct{}
+type securityHubGroups struct{}
 
-func (securityRegistryGroups) IsMember(context.Context, string, string) (bool, error) {
+func (securityHubGroups) IsMember(context.Context, string, string) (bool, error) {
 	return false, nil
 }
 
-func (securityRegistryGroups) NormalizeGroup(raw string) (string, error) {
+func (securityHubGroups) NormalizeGroup(raw string) (string, error) {
 	return strings.ToLower(strings.TrimSpace(raw)), nil
 }
 
-const securityRegistryYAML = `
+const securityHubYAML = `
 host: registry.example.com
 instance_domain: instances.example.com
 auth:
@@ -104,9 +104,9 @@ instance_sql:
       max_databases: 50
 `
 
-// startSecurityRegistryPostgres starts a throwaway Postgres for one test, or
+// startSecurityHubPostgres starts a throwaway Postgres for one test, or
 // skips when the binaries are missing (unless GRAIN_REQUIRE_POSTGRES=1).
-func startSecurityRegistryPostgres(t *testing.T) string {
+func startSecurityHubPostgres(t *testing.T) string {
 	t.Helper()
 	if envURL := strings.TrimSpace(os.Getenv("GRAIN_TEST_POSTGRES_URL")); envURL != "" {
 		return envURL
@@ -171,21 +171,21 @@ func startSecurityRegistryPostgres(t *testing.T) string {
 	return dsn
 }
 
-func newSecurityRegistry(t *testing.T) (http.Handler, *store.Store, *hub.ConsentDelegationPolicy) {
+func newSecurityHub(t *testing.T) (http.Handler, *store.Store, *hub.ConsentDelegationPolicy) {
 	t.Helper()
 	ctx := context.Background()
-	st, err := store.Open(ctx, startSecurityRegistryPostgres(t), store.DefaultThresholds())
+	st, err := store.Open(ctx, startSecurityHubPostgres(t), store.DefaultThresholds())
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { st.Close() })
-	cfg, err := hub.ParseConfig([]byte(securityRegistryYAML))
+	cfg, err := hub.ParseConfig([]byte(securityHubYAML))
 	if err != nil {
 		t.Fatalf("ParseConfig: %v", err)
 	}
 	admitter, err := webauth.NewAdmitter(webauth.AdmissionConfig{
-		Verifier:          securityRegistryFrontIdentity{},
-		Groups:            securityRegistryGroups{},
+		Verifier:          securityHubFrontIdentity{},
+		Groups:            securityHubGroups{},
 		AllowedDomains:    cfg.Auth.AllowedDomains,
 		Admins:            cfg.Auth.Admins,
 		ServicePrincipals: cfg.Auth.ServicePrincipals,
@@ -205,7 +205,7 @@ func newSecurityRegistry(t *testing.T) (http.Handler, *store.Store, *hub.Consent
 		Config:     *cfg,
 		Store:      st,
 		Admitter:   admitter,
-		Groups:     securityRegistryGroups{},
+		Groups:     securityHubGroups{},
 		Signer:     signer,
 		Delegation: pol,
 	})
@@ -215,7 +215,7 @@ func newSecurityRegistry(t *testing.T) (http.Handler, *store.Store, *hub.Consent
 	return srv.Handler(), st, pol
 }
 
-func securityRegistryCall(t *testing.T, h http.Handler, method, path, email string, body any) (int, []byte) {
+func securityHubCall(t *testing.T, h http.Handler, method, path, email string, body any) (int, []byte) {
 	t.Helper()
 	var buf []byte
 	if body != nil {
@@ -236,10 +236,10 @@ func securityRegistryCall(t *testing.T, h http.Handler, method, path, email stri
 	return rec.Code, rec.Body.Bytes()
 }
 
-// TestRegistryConsentSurfaceRefusesOtherTenantsAndNonAdmins holds who may call
+// TestHubConsentSurfaceRefusesOtherTenantsAndNonAdmins holds who may call
 // each delegating-app and delegation-grant route at all.
-func TestRegistryConsentSurfaceRefusesOtherTenantsAndNonAdmins(t *testing.T) {
-	h, st, _ := newSecurityRegistry(t)
+func TestHubConsentSurfaceRefusesOtherTenantsAndNonAdmins(t *testing.T) {
+	h, st, _ := newSecurityHub(t)
 	ctx := context.Background()
 	if _, err := st.CreateDelegatingApp(ctx, store.DelegatingAppRow{
 		Name: "planner", Principal: "planner@proj.iam.gserviceaccount.com",
@@ -283,7 +283,7 @@ func TestRegistryConsentSurfaceRefusesOtherTenantsAndNonAdmins(t *testing.T) {
 			if c.person && !rt.adminOnly {
 				continue // a person's own grant routes are exercised below
 			}
-			code, body := securityRegistryCall(t, h, rt.method, rt.path, c.email, rt.body)
+			code, body := securityHubCall(t, h, rt.method, rt.path, c.email, rt.body)
 			if code != http.StatusUnauthorized && code != http.StatusForbidden {
 				t.Errorf("%s %s as %q = %d %s, want 401/403", rt.method, rt.path, c.email, code, body)
 			}
@@ -305,14 +305,14 @@ func TestRegistryConsentSurfaceRefusesOtherTenantsAndNonAdmins(t *testing.T) {
 	}
 }
 
-// TestRegistryDelegationGrantIsOnlyEverThePersonsOwn holds that a grant is
+// TestHubDelegationGrantIsOnlyEverThePersonsOwn holds that a grant is
 // consent the signed-in person gives for themselves, and cannot be made,
 // seen, or withdrawn on anybody else's behalf.
-func TestRegistryDelegationGrantIsOnlyEverThePersonsOwn(t *testing.T) {
-	h, st, pol := newSecurityRegistry(t)
+func TestHubDelegationGrantIsOnlyEverThePersonsOwn(t *testing.T) {
+	h, st, pol := newSecurityHub(t)
 	ctx := context.Background()
 	const planner = "planner@proj.iam.gserviceaccount.com"
-	if code, body := securityRegistryCall(t, h, http.MethodPost, "/api/admin/delegating-apps", "admin@example.com",
+	if code, body := securityHubCall(t, h, http.MethodPost, "/api/admin/delegating-apps", "admin@example.com",
 		api.CreateDelegatingAppRequest{Name: "planner", Principal: planner}); code != http.StatusCreated {
 		t.Fatalf("admin registering app = %d %s", code, body)
 	}
@@ -324,7 +324,7 @@ func TestRegistryDelegationGrantIsOnlyEverThePersonsOwn(t *testing.T) {
 		{"admin@example.com", "alice@example.com"},
 		{"bob@example.com", "alice@other-tenant.example"},
 	} {
-		code, body := securityRegistryCall(t, h, http.MethodPost, "/api/delegation-grants", tc.caller,
+		code, body := securityHubCall(t, h, http.MethodPost, "/api/delegation-grants", tc.caller,
 			api.CreateDelegationGrantRequest{App: "planner", Entries: []string{"*"}, Person: tc.person})
 		if code != http.StatusForbidden {
 			t.Errorf("%s granting for %s = %d %s, want 403", tc.caller, tc.person, code, body)
@@ -336,7 +336,7 @@ func TestRegistryDelegationGrantIsOnlyEverThePersonsOwn(t *testing.T) {
 
 	// Alice's own grant works, and is recorded as hers whatever the body says
 	// about anyone else (it says nothing here).
-	code, body := securityRegistryCall(t, h, http.MethodPost, "/api/delegation-grants", "alice@example.com",
+	code, body := securityHubCall(t, h, http.MethodPost, "/api/delegation-grants", "alice@example.com",
 		api.CreateDelegationGrantRequest{App: "planner", Entries: []string{"alice-vm"}, Access: "read"})
 	if code != http.StatusOK {
 		t.Fatalf("alice granting = %d %s", code, body)
@@ -351,13 +351,13 @@ func TestRegistryDelegationGrantIsOnlyEverThePersonsOwn(t *testing.T) {
 
 	// Bob sees none of it and cannot withdraw it, by ID or by app name; the
 	// answer for her grant ID is the same as for an ID that does not exist.
-	code, body = securityRegistryCall(t, h, http.MethodGet, "/api/delegation-grants?include_revoked=true", "bob@example.com", nil)
+	code, body = securityHubCall(t, h, http.MethodGet, "/api/delegation-grants?include_revoked=true", "bob@example.com", nil)
 	if code != http.StatusOK || bytes.Contains(body, []byte(grant.ID)) || bytes.Contains(body, []byte("alice@")) {
 		t.Fatalf("bob's grant list = %d %s, must not show alice's grant", code, body)
 	}
-	missingCode, missingBody := securityRegistryCall(t, h, http.MethodDelete, "/api/delegation-grants/dlg_ffffffffffffffff", "bob@example.com", nil)
+	missingCode, missingBody := securityHubCall(t, h, http.MethodDelete, "/api/delegation-grants/dlg_ffffffffffffffff", "bob@example.com", nil)
 	for _, ref := range []string{grant.ID, "planner"} {
-		code, body := securityRegistryCall(t, h, http.MethodDelete, "/api/delegation-grants/"+ref, "bob@example.com", nil)
+		code, body := securityHubCall(t, h, http.MethodDelete, "/api/delegation-grants/"+ref, "bob@example.com", nil)
 		if code != http.StatusNotFound {
 			t.Errorf("bob revoking alice's %s = %d %s, want 404", ref, code, body)
 		}

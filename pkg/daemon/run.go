@@ -882,7 +882,7 @@ func Run(ctx context.Context, cfg Config) error {
 		WithSandboxImages(sandboxImages, stockSandboxImage, sandboxImageLabels()).
 		WithCapabilityServers(capabilityServers).
 		withHostdCapabilityServers(hostdCapabilityServers)
-	registryMgr := NewRegistryManager(RegistryManagerOptions{
+	registryMgr := NewHubManager(HubManagerOptions{
 		Store:      store,
 		Secrets:    secretStore,
 		LiveConfig: live.Current,
@@ -898,7 +898,7 @@ func Run(ctx context.Context, cfg Config) error {
 			return api.HealthOK, ""
 		},
 	})
-	live.WithRegistry(registryMgr)
+	live.WithHub(registryMgr)
 	if cfg.ObjectStore != nil && cfg.ciArtifacts == nil {
 		cfg.ciArtifacts = CiArtifactStore(cfg, live.ciStorageBounds)
 	}

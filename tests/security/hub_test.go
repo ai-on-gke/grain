@@ -23,7 +23,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
-// TestRegistryTargetSettingsAreAPersonsAndAudited holds changes to registry
+// TestHubTargetSettingsAreAPersonsAndAudited holds changes to registry
 // credential targets (url, authMode, oidcAudience) to a human principal -- an
 // agent's request is refused so a run cannot redirect the daemon's registration
 // secret or mint host OIDC tokens for an attacker-chosen audience -- and
@@ -31,7 +31,7 @@ import (
 // name and ownerGroup are held the same way: in OIDC mode the daemon acts on
 // whichever entry is named with the host's identity, and ownerGroup members may
 // manage the entry like its owner.
-func TestRegistryTargetSettingsAreAPersonsAndAudited(t *testing.T) {
+func TestHubTargetSettingsAreAPersonsAndAudited(t *testing.T) {
 	ui.ResetIAPConfig()
 	t.Cleanup(ui.ResetIAPConfig)
 
@@ -61,8 +61,8 @@ func TestRegistryTargetSettingsAreAPersonsAndAudited(t *testing.T) {
 	}
 	if cfg, err := f.store.GetConfig(context.Background()); err != nil {
 		t.Fatal(err)
-	} else if cfg != nil && (cfg.Registry.URL != "" || cfg.Registry.OIDCAudience != "") {
-		t.Fatalf("refused agent saves persisted registry config: %+v", cfg.Registry)
+	} else if cfg != nil && (cfg.Hub.URL != "" || cfg.Hub.OIDCAudience != "") {
+		t.Fatalf("refused agent saves persisted registry config: %+v", cfg.Hub)
 	}
 
 	saveBody := `{"registry":{"url":"https://registry.example.com","entry":"grain-dev","authMode":"oidc","oidcAudience":"https://registry.example.com"}}`
@@ -114,8 +114,8 @@ func TestRegistryTargetSettingsAreAPersonsAndAudited(t *testing.T) {
 	}
 	if cfg, err := f.store.GetConfig(context.Background()); err != nil {
 		t.Fatal(err)
-	} else if cfg.Registry.Entry != "grain-dev" || cfg.Registry.OwnerGroup != "" {
-		t.Fatalf("refused agent saves persisted registry entry/ownerGroup: %+v", cfg.Registry)
+	} else if cfg.Hub.Entry != "grain-dev" || cfg.Hub.OwnerGroup != "" {
+		t.Fatalf("refused agent saves persisted registry entry/ownerGroup: %+v", cfg.Hub)
 	}
 	metaBody := `{"registry":{"url":"https://registry.example.com","entry":"grain-dev","authMode":"oidc","oidcAudience":"https://registry.example.com","purpose":"Updated purpose","listed":true}}`
 	if rec := serveAsAgent(t, f, http.MethodPut, "/api/settings", metaBody); rec.code != http.StatusOK {

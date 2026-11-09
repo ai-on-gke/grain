@@ -70,7 +70,7 @@ func TestARequestCaughtByADrainFollowsTheTunnel(t *testing.T) {
 	const grace = 5 * time.Second
 	newRouter := func(t *testing.T) *Router {
 		rt, err := NewRouter(RouterOptions{
-			RegistryHost:   "registry.example.com",
+			HubHost:        "registry.example.com",
 			InstanceDomain: "instances.example.com",
 			ReplicaID:      "replica-a",
 			ReconnectGrace: grace,
@@ -197,7 +197,7 @@ func TestAPeerWaitsOutAHandshakeThatHasAcquiredItsSession(t *testing.T) {
 		t.Fatalf("NewAdmitter: %v", err)
 	}
 	rt, err := NewRouter(RouterOptions{
-		RegistryHost:   "registry.example.com",
+		HubHost:        "registry.example.com",
 		InstanceDomain: "instances.example.com",
 		ReplicaID:      "replica-b",
 		ReconnectGrace: 5 * time.Second,
@@ -217,7 +217,7 @@ func TestAPeerWaitsOutAHandshakeThatHasAcquiredItsSession(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "http://peer.internal/internal/tunnel/alice-tunnel", nil)
 		req.Host = "alice-tunnel.instances.example.com"
 		req.Header.Set(HeaderPeerAuth, peerToken)
-		req.Header.Set(HeaderRegistryHop, "1")
+		req.Header.Set(HeaderHubHop, "1")
 		req.Header.Set(HeaderTargetURI, "/hello")
 		return req
 	}

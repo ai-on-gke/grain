@@ -206,7 +206,7 @@ func TestGrainInstanceInitBootsFromReconcilerMetadata(t *testing.T) {
 				"GRAIN_DEPLOYMENT_OWNER=alice@example.com",
 				"GRAIN_EXTRA_DAEMON_ARGS=-deployment-owner=alice@example.com",
 				"GRAIN_ALLOWED_PRINCIPALS=user:alice@example.com,group:eng@example.com",
-				"GRAIN_REGISTRY_ISSUER=" + hub.RegistryAssertionIssuer,
+				"GRAIN_REGISTRY_ISSUER=" + hub.HubAssertionIssuer,
 				"GRAIN_REGISTRY_AUDIENCE=https://alpha.instances.example.com",
 				"GRAIN_REGISTRY_KEYS_URL=https://registry.example.com/.well-known/jwks.json",
 				"GRAIN_REQUIRE_VERIFIER=registry",
