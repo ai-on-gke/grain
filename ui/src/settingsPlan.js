@@ -139,15 +139,15 @@ const SETTING_LABELS = {
   autoUpgradeChannel: "Automatic upgrade channel",
   autoUpgradeTime: "Automatic upgrade time of day",
   autoUpgradeOn: "Automatic upgrades",
-  registry: "Registry",
-  registryUrl: "Registry URL",
+  registry: "Hub",
+  registryUrl: "Hub URL",
   registryEntry: "Entry name",
   registryAuthMode: "Credential source",
   registryHostKind: "Host kind",
   registryOidcAudience: "OIDC audience",
   registryDisplayName: "Display name",
   registryPurpose: "Purpose",
-  registryListed: "Listed in registry directory",
+  registryListed: "Listed in hub directory",
 };
 
 // settingLabel is what to call one setting, by its JSON name.
