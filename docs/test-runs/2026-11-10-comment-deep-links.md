@@ -12,7 +12,7 @@ Built from `HEAD` (`5eeb9b92`) per shared rule 1, and checked in Chromium (Playw
 pkg/ui/access_roles.go:1031:18: undefined: s
 ```
 
-PR #1070 moved `roleApprovalWithin` onto `*Client`, and PR #1069 added a declared-push check to it that still called `s.templateDeclaredPush`. Each PR was green alone, but together they broke the build. The fix is one identifier, `c.templateDeclaredPush` (the `Server` method forwards to it anyway). It is in this branch as its own commit, because nothing in this walkthrough could be built without it. If `main` gets its own repair first, merging it is a no-op.
+PR #1070 moved `roleApprovalWithin` onto `*Client`, and PR #1069 added a declared-push check to it that still called `s.templateDeclaredPush`. Each PR was green alone, but together they broke the build. The fix is one identifier, `c.templateDeclaredPush` (the `Server` method forwards to it anyway). I committed it on this branch first, because nothing in this walkthrough could be built without it. `main` has since landed the identical change (`d6479d34`, via PR #1077), so merging `origin/main` leaves this branch with no diff of its own to `pkg/ui/access_roles.go`.
 
 ## Harnesses
 
