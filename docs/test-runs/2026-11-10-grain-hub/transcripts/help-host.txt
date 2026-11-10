@@ -1,0 +1,4 @@
+grain help hub exit=2 "Grain Hub"=1 "Grain Registry"=0 deprecation-lines=0 |   hub status|register|unregister       self-register this deployment with a Grain Hub and inspect
+grain help registry exit=2 "Grain Hub"=1 "Grain Registry"=0 deprecation-lines=0 |   hub status|register|unregister       self-register this deployment with a Grain Hub and inspect
+grain hub -h exit=0 "Grain Hub"=1 "Grain Registry"=0 deprecation-lines=0 | usage: grain hub <subcommand> [args]
+grain registry -h exit=0 "Grain Hub"=2 "Grain Registry"=1 deprecation-lines=1 | warning: 'grain registry' is deprecated and will be removed in a future release; use 'grain hub' (the Grain Re

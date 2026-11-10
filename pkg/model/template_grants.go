@@ -173,3 +173,80 @@ func ReviewAdmission(tmplAdmission Admission, reviewed Task) (Admission, bool) {
 	}
 	return held, true
 }
+
+// declaredHeldServers are the capability servers whose grants hand a task
+// credentials or code that runs outside its sandbox: a GCP key, a script
+// on a host, a GitHub credential. Each is an operator's to give, so one
+// arriving in a repository's own declaration is held for a person
+// (DeclaredGrantNeedsPerson) even where its server would let an agent
+// pass it on.
+var declaredHeldServers = map[string]bool{"gcp": true, "host-script": true, "github-credential": true}
+
+// DeclaredGrantNeedsPerson reports whether a grant written in a
+// repository's own `.grain/` declaration needs a person to accept it
+// before the work it files runs (task 3965): anybody who can merge to
+// the repository writes those files, with no grain access of their own,
+// so a declaration is not a person's grant. A dangerous or person-only
+// grant (IsDangerousGrant, IsPersonOnlyGrant) needs one, as does any
+// grant of a server in declaredHeldServers.
+func DeclaredGrantNeedsPerson(name string) bool {
+	s := strings.TrimSpace(StoredGrantSpelling(name))
+	if s == "" {
+		return false
+	}
+	if IsDangerousGrant(s) || IsPersonOnlyGrant(s) {
+		return true
+	}
+	for _, c := range append([]string{s}, CanonicalLegacyGrants(s)...) {
+		if declaredHeldServers[grantServerID(c)] {
+			return true
+		}
+	}
+	return false
+}
+
+// grantServerID is the capability server a server#method grant names, in
+// either its short ("gcp#gcp-key") or its canonical reference
+// ("https://.../gcp#gcp-key") spelling, and "" for any other grant.
+func grantServerID(grant string) string {
+	base, _, ok := strings.Cut(CapabilityGrantRef(grant), "#")
+	if !ok {
+		return ""
+	}
+	if i := strings.LastIndex(base, "/"); i >= 0 {
+		base = base[i+1:]
+	}
+	return base
+}
+
+// DeclaredFiringHold is why a firing of sched (through tmpl, nil for none)
+// composed as comp must wait for a person's approval rather than land
+// approved: each grant only a person may accept that a repository's own
+// declaration put there (DeclaredGrantNeedsPerson), and an admission
+// above standard. A schedule or template an operator wrote holds nothing
+// here -- it is a person's standing approval already -- so only a
+// repo-declared one is asked about.
+func DeclaredFiringHold(sched Schedule, tmpl *Template, comp Composition) []string {
+	declared := IsRepoDeclaredID(sched.ID) || (tmpl != nil && IsRepoDeclaredID(tmpl.ID))
+	if !declared {
+		return nil
+	}
+	var held []string
+	for _, g := range comp.Grants {
+		if DeclaredGrantNeedsPerson(g.Capability) && !slices.Contains(held, g.Capability) {
+			held = append(held, g.Capability)
+		}
+	}
+	if adm := NormalizeAdmission(comp.Admission); adm.AtLeast(AdmissionBypass) {
+		held = append(held, "admission "+string(adm))
+	}
+	return held
+}
+
+// DeclaredFiringHoldNote is the line a firing held by DeclaredFiringHold
+// carries in its body, saying why it waits and who can release it.
+func DeclaredFiringHoldNote(held []string) string {
+	return fmt.Sprintf("\n\n---\n\ngrain: filed for a person's approval rather than approved: this work comes from a "+
+		"repository's own declaration, which grants %s. Only a person may accept that grant; "+
+		"approve the task to run it with it.", strings.Join(held, ", "))
+}

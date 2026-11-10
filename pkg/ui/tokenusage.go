@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/usage"
@@ -83,6 +84,9 @@ func (c *Client) SetUsageSettings(ctx context.Context, settings model.UsageSetti
 	if err := settings.Validate(); err != nil {
 		return UsageResponse{}, validationErrorf("%v", err)
 	}
+	if err := c.checkBudgetConnections(ctx, settings); err != nil {
+		return UsageResponse{}, err
+	}
 	if err := c.Store.PutUsageSettings(ctx, settings, c.now()); err != nil {
 		return UsageResponse{}, err
 	}
@@ -95,6 +99,40 @@ func (c *Client) SetUsageSettings(ctx context.Context, settings model.UsageSetti
 		log.Printf("ui: recording the usage settings change: %v", err)
 	}
 	return c.Usage(ctx)
+}
+
+// checkBudgetConnections refuses a budget on a connection this
+// deployment does not have: usage is recorded under connection ids, so a
+// budget on a mistyped one ("claude1" for "claude-1") would never count
+// anything and would read as a limit nothing ever approaches. A budget
+// already stored on a connection since removed stays acceptable, so the
+// next change of mode or floor -- which resends every budget -- is not
+// refused for it.
+func (c *Client) checkBudgetConnections(ctx context.Context, settings model.UsageSettings) error {
+	if len(settings.Budgets) == 0 {
+		return nil
+	}
+	cfg, err := c.Store.GetConfig(ctx)
+	if err != nil {
+		return err
+	}
+	known := map[string]bool{}
+	if cfg != nil {
+		for _, b := range cfg.AgentBackends {
+			known[b.ID] = true
+		}
+	}
+	if stored, err := c.Store.UsageSettings(ctx); err == nil {
+		for _, b := range stored.Budgets {
+			known[strings.TrimSpace(b.Connection)] = true
+		}
+	}
+	for i, b := range settings.Budgets {
+		if conn := strings.TrimSpace(b.Connection); !known[conn] {
+			return validationErrorf("budget %d: no connection %q on this deployment (Settings -> Models lists their ids)", i+1, conn)
+		}
+	}
+	return nil
 }
 
 func (s *Server) handleGetUsage(w http.ResponseWriter, r *http.Request) {

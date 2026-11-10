@@ -16,6 +16,22 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import CopyButton from "./CopyButton.jsx";
 
+// fakeExecCommand stands in for document.execCommand("copy") as a
+// browser runs it: it fires a copy event whose clipboardData collects what
+// the page's listeners set, into copied.
+function fakeExecCommand(copied) {
+  return vi.fn(() => {
+    const ev = new Event("copy", { bubbles: true, cancelable: true });
+    ev.clipboardData = {
+      setData: (type, value) => {
+        copied[type] = value;
+      },
+    };
+    document.dispatchEvent(ev);
+    return true;
+  });
+}
+
 describe("CopyButton", () => {
   let writeTextMock;
 
@@ -74,7 +90,8 @@ describe("CopyButton", () => {
     writeTextMock.mockRejectedValue(
       new Error("NotAllowedError: Permission denied"),
     );
-    const execCommandFn = vi.fn().mockReturnValue(true);
+    const copied = {};
+    const execCommandFn = fakeExecCommand(copied);
     document.execCommand = execCommandFn;
 
     render(<CopyButton text="markdown snippet" label="Copy code" />);
@@ -86,6 +103,7 @@ describe("CopyButton", () => {
 
     expect(writeTextMock).toHaveBeenCalledWith("markdown snippet");
     expect(execCommandFn).toHaveBeenCalledWith("copy");
+    expect(copied["text/plain"]).toBe("markdown snippet");
     expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
 
     act(() => {
@@ -106,7 +124,8 @@ describe("CopyButton", () => {
       writable: true,
       configurable: true,
     });
-    const execCommandFn = vi.fn().mockReturnValue(true);
+    const copied = {};
+    const execCommandFn = fakeExecCommand(copied);
     document.execCommand = execCommandFn;
 
     render(<CopyButton text="fallback text" label="Copy snippet" />);
@@ -117,8 +136,35 @@ describe("CopyButton", () => {
     });
 
     expect(execCommandFn).toHaveBeenCalledWith("copy");
+    expect(copied["text/plain"]).toBe("fallback text");
     expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
     delete document.execCommand;
     vi.useRealTimers();
+  });
+
+  // Over plain HTTP there is no Clipboard API, and inside a MUI Dialog
+  // its focus trap took focus off the <textarea> the fallback used to
+  // select, so nothing was copied while the button said Copied.
+  it("says nothing was copied when the browser refuses the fallback", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      value: undefined,
+      writable: true,
+      configurable: true,
+    });
+    // A copy event that carries nothing to write to, as when the
+    // browser refuses to copy.
+    document.execCommand = vi.fn().mockReturnValue(true);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    render(<CopyButton text="refused" label="Copy link" />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Copy link" }));
+    });
+
+    expect(
+      screen.getByRole("button", { name: "Copy link" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copied" })).toBeNull();
+    delete document.execCommand;
   });
 });

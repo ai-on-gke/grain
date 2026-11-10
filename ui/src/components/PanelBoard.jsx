@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Typography } from "@mui/material";
 import api from "../api.js";
 import { STATE_LABELS } from "../state.js";
@@ -42,7 +42,11 @@ import {
   panelUsesNarrowing,
   panelTitle,
 } from "../panels.js";
-import { childRenderKeys } from "../childOrder.js";
+import {
+  childDestinationIndex,
+  childOrderSignature,
+  childRenderKeys,
+} from "../childOrder.js";
 import { panelPlaces } from "../panelOrder.js";
 import { boardNarrowing, keptQuery } from "../boards.js";
 import { reportPath, reportScope, scopeSummary } from "../report.js";
@@ -816,6 +820,28 @@ export default function PanelBoard({
   useEffect(() => cancel, [board.id, cancel]);
   const pickedKey = pickedPresent ? picked.ids[0] : null;
   const renderKeys = childRenderKeys(panels);
+  const gridRef = useRef(null);
+  const landedRef = useRef(null);
+  const orderSig = childOrderSignature(panels);
+  useEffect(() => {
+    landedRef.current = null;
+  }, [board.id]);
+  useEffect(() => {
+    if (!landedRef.current || landedRef.current.sig === orderSig) return;
+    const { to } = landedRef.current;
+    landedRef.current = null;
+    const active = document.activeElement;
+    const keepHandleFocus =
+      !active ||
+      active === document.body ||
+      (gridRef.current?.contains(active) &&
+        active.classList.contains("task-drag-handle"));
+    if (keepHandleFocus) {
+      gridRef.current
+        ?.querySelectorAll(".task-drag-handle")
+        ?.[to]?.focus({ preventScroll: true });
+    }
+  }, [orderSig]);
 
   const stop = () => {
     setDragKey(null);
@@ -826,7 +852,11 @@ export default function PanelBoard({
     stop();
   };
   const move = (beforeKey) => {
-    if (pickedKey !== null) onMovePanel(board, pickedKey, beforeKey);
+    if (pickedKey !== null) {
+      const to = childDestinationIndex(panels, pickedKey, beforeKey);
+      if (to >= 0) landedRef.current = { to, sig: orderSig };
+      onMovePanel(board, pickedKey, beforeKey);
+    }
     cancel();
   };
 
@@ -910,6 +940,7 @@ export default function PanelBoard({
         // wrapping row -- the section at the top of this file has the
         // argument.
         <div
+          ref={gridRef}
           className={`panel-grid${pickedKey !== null ? " panel-grid-arranging" : ""}`}
         >
           {panels.map((panel, i) => (

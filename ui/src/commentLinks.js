@@ -28,6 +28,14 @@ export function commentIdFromHash(hash) {
   return m ? m[1] : "";
 }
 
+// malformedCommentHash is whether hash is a #comment= fragment that names
+// no comment -- "#comment=abc", "#comment=" -- as a link truncated or
+// mistyped on its way to the address bar is.
+export function malformedCommentHash(hash) {
+  const h = String(hash || "").trim();
+  return /^#?comment=/.test(h) && !commentIdFromHash(h);
+}
+
 // commentPath is the root-relative link to comment commentId on task
 // taskId.
 export function commentPath(taskId, commentId) {

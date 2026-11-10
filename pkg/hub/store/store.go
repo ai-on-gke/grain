@@ -59,27 +59,27 @@ type ScopeClaim struct {
 
 var (
 	// ErrNotFound is returned when a requested record does not exist.
-	ErrNotFound = errors.New("registry store: not found")
+	ErrNotFound = errors.New("hub store: not found")
 
 	// ErrConflict is returned when an optimistic lock (`version`), unique name,
 	// or session_epoch check fails.
-	ErrConflict = errors.New("registry store: conflict")
+	ErrConflict = errors.New("hub store: conflict")
 
 	// ErrNameReserved is returned when a name is still within its 30-day tombstone reservation window for another owner.
-	ErrNameReserved = errors.New("registry store: entry name is reserved by a recently deleted entry")
+	ErrNameReserved = errors.New("hub store: entry name is reserved by a recently deleted entry")
 
 	// ErrPrimaryScopeConflict is returned when two entries claim primary_claim = TRUE
 	// on overlapping (repo, path_prefix) scopes.
-	ErrPrimaryScopeConflict = errors.New("registry store: overlapping primary scope claim")
+	ErrPrimaryScopeConflict = errors.New("hub store: overlapping primary scope claim")
 
 	// ErrQuotaExceeded is returned when an owner exceeds their instance units or connected entry cap.
-	ErrQuotaExceeded = errors.New("registry store: quota exceeded")
+	ErrQuotaExceeded = errors.New("hub store: quota exceeded")
 
 	// ErrInvalidCredential is returned when a `grc_` token is unknown or revoked.
-	ErrInvalidCredential = errors.New("registry store: invalid or revoked entry credential")
+	ErrInvalidCredential = errors.New("hub store: invalid or revoked entry credential")
 
 	// ErrSQLPoolExhausted is returned when all non-draining shared Cloud SQL instances have reached max_databases.
-	ErrSQLPoolExhausted = errors.New("registry store: all non-draining sql_instances have reached max_databases capacity")
+	ErrSQLPoolExhausted = errors.New("hub store: all non-draining sql_instances have reached max_databases capacity")
 
 	// ErrUnknownShape is returned when a requested instance VM shape is not configured in registry.shapes.
 	ErrUnknownShape = errors.New("unknown shape")
